@@ -24,6 +24,9 @@ internal class RecordingMachineActions(
 
     var peerActivity = 0
 
+    /** What [configReady] answers. */
+    var configLoaded = true
+
     /** Hooks that throw instead of answering: `"notePeerActivity"`, `"hasProfile"`. */
     val throwing: MutableSet<String> = mutableSetOf()
 
@@ -52,6 +55,8 @@ internal class RecordingMachineActions(
         return id in profiles
     }
     override fun hasBean(id: String) = id in beans
+    override fun configReady() = configLoaded
+
     override fun notePeerActivity() {
         maybeThrow("notePeerActivity")
         peerActivity++

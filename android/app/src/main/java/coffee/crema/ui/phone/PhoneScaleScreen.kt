@@ -1,5 +1,9 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.UNKNOWN_VALUE
+import coffee.crema.ui.awaitingHubValues
+import coffee.crema.ui.gate
+import coffee.crema.settings.Setting
 import coffee.crema.ui.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -225,8 +229,10 @@ private fun ConnectedBody(
         ) { PhIcon("timer", sizeDp = 18); Spacer(Modifier.width(6.dp)); Text("Timer") }
     }
 
-    // Dose helper — progress toward the loaded profile's dose target.
-    val pct = (weight / target).coerceIn(0.0, 1.0).toFloat()
+    // Dose helper — progress toward the loaded profile's dose target. A remote
+    // before the hub's first snapshot doesn't know it: "—", no progress.
+    val known = !ui.awaitingHubValues
+    val pct = if (known) (weight / target).coerceIn(0.0, 1.0).toFloat() else 0f
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
@@ -256,7 +262,7 @@ private fun ConnectedBody(
             ) {
                 // Nudges the next shot's dose target by +0.5 g (a transient
                 // Quick-Controls override, not a profile edit) — same seam QC uses.
-                TextButton(onClick = {
+                TextButton(enabled = ui.gate(Setting.BREW_PARAMS).editable, onClick = {
                     val active = ui.activeProfile()
                     val base = effectiveBrew(ui.brewParams, active)
                     val dose = base.dose + 0.5
@@ -269,7 +275,7 @@ private fun ConnectedBody(
                     PhIcon("plus", sizeDp = 16); Spacer(Modifier.width(4.dp)); Text("Add 0.5 g")
                 }
                 Text(
-                    fmt("Target %.1f g",  target),
+                    if (known) fmt("Target %.1f g",  target) else "Target $UNKNOWN_VALUE",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

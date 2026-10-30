@@ -8,6 +8,8 @@ import coffee.crema.ble.proxy.RelayHub
 import coffee.crema.ble.proxy.TestHubServer
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.ConfigSnapshot
+import coffee.crema.ble.proxy.Peer
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -19,11 +21,15 @@ import java.util.concurrent.CopyOnWriteArrayList
  * machine and session values all differ from P.
  */
 internal class RemoteFixture(private val store: ViewModelStore) {
-    private val secret = PairingCrypto.newSecret()
+    /** The pairing secret this remote and the hub share. */
+    val secret = PairingCrypto.newSecret()
     @Volatile var hubConfig: String = ""
 
     /** What the hub was asked to run, in order. */
     val handled = CopyOnWriteArrayList<Pair<String, String>>()
+
+    /** The edits the hub applied ([echoEdits]), in the order it applied them. */
+    val echoed = CopyOnWriteArrayList<Pair<String, String>>()
 
     /** Verbs the hub refuses. */
     val refused: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
@@ -32,6 +38,29 @@ internal class RemoteFixture(private val store: ViewModelStore) {
     lateinit var endpoint: TestHubServer
     lateinit var hub: RelayHub
 
+    /** The hub admits this remote view-only. */
+    var viewOnly = false
+
+    /** The hub applies each accepted relayed edit to its snapshot and pushes
+     *  it before replying, as a real hub does (§7.3). */
+    var echoEdits = false
+
+    /** The hub holds its replies (an edit stays pending on the remote). */
+    @Volatile var holdReplies = false
+
+    /** The hub's current snapshot, when [echoEdits] is on. */
+    @Volatile var current: ConfigSnapshot = S
+
+    /** Runs each relayed control instead of the default handler (a real
+     *  dispatcher, say). */
+    @Volatile var dispatch: (suspend (method: String, args: String) -> Result<Unit>)? = null
+
+    /** The hub holds the DE1 (its roster lists it). */
+    var hubHoldsDe1 = true
+
+    /** The NSD peers the remote sees, when the test drives them. */
+    var peers: MutableStateFlow<List<Peer>>? = null
+
     /** Restore a remote with [own] as its settings and wait for the hub's Welcome. */
     fun start(own: AppPrefs = P, onBuilt: (MainViewModel) -> Unit = {}): MainViewModel {
         val dir = VmHarness.app().filesDir
@@ -39,19 +68,10 @@ internal class RemoteFixture(private val store: ViewModelStore) {
             """{"hostId":"this-device","held":{"host-1":"$secret"},"pinnedHost":"host-1"}""",
         )
         File(dir, "beanLibrary.json").writeText(coreJson.encodeToString(BeanLibrary.serializer(), LIBRARY))
-        val (e, h) = TestHubServer.relay(
-            "host-1", "Kitchen tablet", secret,
-            clientId = { VmHarness.proxyController(vm).deviceId },
-            configSource = { hubConfig },
-            controlHandler = { method, args, _, _ ->
-                handled += method to args
-                if (method in refused) Result.failure(IllegalStateException("refused by the hub")) else Result.success(Unit)
-            },
-        )
-        endpoint = e
-        hub = h
-        writePrefs(own.copy(proxyRole = "secondary", proxyPrimaryHost = "127.0.0.1", proxyPrimaryPort = e.port))
+        serve()
+        writePrefs(own.copy(proxyRole = "secondary", proxyPrimaryHost = "127.0.0.1", proxyPrimaryPort = endpoint.port))
         vm = VmHarness.build(store)
+        peers?.let { VmHarness.proxyController(vm).overridePeers(it) }
         onBuilt(vm)
         VmHarness.idle()
         VmHarness.awaitPrefsLoaded(vm)
@@ -67,6 +87,63 @@ internal class RemoteFixture(private val store: ViewModelStore) {
     }
 
     fun kill() = runCatching { endpoint.kill() }
+
+    /** The hub restarts: the old relay is gone and a new one listens on
+     *  another port, with the same pairing, handler and snapshot source.
+     *  The remote finds it through [peers]. */
+    fun restart() {
+        kill()
+        serve()
+        peers?.value = listOf(Peer("nsd-restarted", "Kitchen tablet", "primary", holdsDe1 = false, host = "127.0.0.1", port = endpoint.port))
+    }
+
+    /** Start a relay for this remote: [endpoint] and [hub]. */
+    private fun serve() {
+        val (e, h) = TestHubServer.relay(
+            "host-1", "Kitchen tablet", secret,
+            clientId = { VmHarness.proxyController(vm).deviceId },
+            roster = { if (hubHoldsDe1) listOf(coffee.crema.ble.proxy.DeviceInfo("AA:BB", "DE1", "de1", "CONNECTED")) else emptyList() },
+            configSource = { hubConfig },
+            controlHandler = { method, args, _, _ ->
+                handled += method to args
+                while (holdReplies) kotlinx.coroutines.delay(10)
+                val custom = dispatch
+                when {
+                    custom != null -> custom(method, args)
+                    method in refused -> Result.failure(IllegalStateException("refused by the hub"))
+                    else -> {
+                        if (echoEdits) echo(method, args)
+                        Result.success(Unit)
+                    }
+                }
+            },
+            canControl = !viewOnly,
+        )
+        endpoint = e
+        hub = h
+    }
+
+    /** The hub forgets this remote: it gets a Denied (revoked). */
+    fun revoke() = hub.revoke(VmHarness.proxyController(vm).deviceId)
+
+    /** Apply a relayed edit to [current] and push it (on the hub's thread,
+     *  before the reply). One at a time, as a hub's main lane does, even
+     *  when two sessions' handlers run on different threads. */
+    @Synchronized
+    private fun echo(method: String, args: String) {
+        echoed += method to args
+        current = when (method) {
+            "setStopOnWeight" -> current.copy(stopOnWeight = args.toBoolean())
+            "setAutoTare" -> current.copy(autoTare = args.toBoolean())
+            "setQcGrind" -> current.copy(qcGrind = args.toFloat())
+            "quickAdjustBrew" -> args.split(",").let { p ->
+                current.copy(brewDoseG = p[0].toDouble(), brewYieldG = p[1].toDouble(), brewTempC = p[2].toDouble(), brewPreinfuseS = p.getOrNull(3)?.toDoubleOrNull())
+            }
+            else -> current
+        }.let { it.copy(rev = (it.rev ?: 0) + 1) }
+        hubConfig = coreJson.encodeToString(ConfigSnapshot.serializer(), current)
+        hub.pushConfig(hubConfig)
+    }
 
     companion object {
         const val PROFILE_P = "019e5fb5-63b5-7333-a2ac-34b9f4f0e604"

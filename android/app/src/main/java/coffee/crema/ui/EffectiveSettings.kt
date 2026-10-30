@@ -131,6 +131,85 @@ fun MainUiState.knownOnRemote(setting: coffee.crema.settings.Setting): Boolean {
     return when (setting.mirroredVia) {
         coffee.crema.settings.MirrorSource.NONE -> true
         coffee.crema.settings.MirrorSource.SNAPSHOT -> m.snapshot?.carries(setting) ?: false
-        coffee.crema.settings.MirrorSource.SCALE_ECHO, coffee.crema.settings.MirrorSource.NONE_AVAILABLE -> false
+        coffee.crema.settings.MirrorSource.SCALE_ECHO -> setting in scaleEchoed
+        coffee.crema.settings.MirrorSource.NONE_AVAILABLE -> false
     }
 }
+
+/** How a setting's row behaves on this device (spec §7.6). */
+enum class SettingAvailability { EDITABLE, VIA_HUB, PENDING, UNCONFIRMED, READ_ONLY, VIEW_ONLY, UNKNOWN, OFFLINE }
+
+/**
+ * The one function every settings row and Quick Controls row asks (§7.6):
+ * on a normal device or a hub, and for personal settings, EDITABLE. On a
+ * remote, a value it doesn't know is UNKNOWN; a relayed setting is VIA_HUB
+ * (PENDING while an edit awaits the hub, UNCONFIRMED when the hub never
+ * answered, OFFLINE while the link redials, VIEW_ONLY on a view-only
+ * remote); every other machine or session setting is READ_ONLY.
+ */
+fun MainUiState.availability(setting: coffee.crema.settings.Setting): SettingAvailability {
+    val m = mirror ?: return SettingAvailability.EDITABLE
+    if (setting.group == coffee.crema.settings.SettingGroup.C_PERSONAL) return SettingAvailability.EDITABLE
+    if (!knownOnRemote(setting)) return SettingAvailability.UNKNOWN
+    return when (setting.onRemote) {
+        coffee.crema.settings.OnRemote.RELAYED -> when {
+            mirrorViewOnly -> SettingAvailability.VIEW_ONLY
+            m.reconnecting || mirrorReconnecting -> SettingAvailability.OFFLINE
+            setting in m.unconfirmed -> SettingAvailability.UNCONFIRMED
+            setting in m.pending -> SettingAvailability.PENDING
+            else -> SettingAvailability.VIA_HUB
+        }
+        coffee.crema.settings.OnRemote.READ_ONLY -> SettingAvailability.READ_ONLY
+        coffee.crema.settings.OnRemote.LOCAL -> SettingAvailability.EDITABLE
+    }
+}
+
+/** Whether the row's control takes input. */
+val SettingAvailability.editable: Boolean
+    get() = this == SettingAvailability.EDITABLE || this == SettingAvailability.VIA_HUB ||
+        this == SettingAvailability.PENDING || this == SettingAvailability.UNCONFIRMED
+
+/** The line a row shows under its title on a remote, or null. */
+fun MainUiState.availabilityNote(setting: coffee.crema.settings.Setting): String? {
+    val hub = remoteHubLabel()
+    return when (availability(setting)) {
+        SettingAvailability.EDITABLE, SettingAvailability.VIA_HUB -> null
+        SettingAvailability.PENDING -> "Sending to $hub…"
+        SettingAvailability.UNCONFIRMED -> "$hub didn’t answer — this may not have been applied"
+        SettingAvailability.READ_ONLY -> "Change on $hub"
+        SettingAvailability.VIEW_ONLY -> coffee.crema.machine.RelayMachine.viewOnly(hub)
+        SettingAvailability.OFFLINE -> "Reconnecting to $hub…"
+        SettingAvailability.UNKNOWN -> when {
+            setting.mirroredVia == coffee.crema.settings.MirrorSource.NONE_AVAILABLE -> "Change on $hub"
+            mirror?.snapshot == null -> "Waiting for $hub"
+            setting.mirroredVia == coffee.crema.settings.MirrorSource.SNAPSHOT -> "Update Crema on $hub to see this here"
+            else -> "Waiting for $hub"
+        }
+    }
+}
+
+/** [this] plus the scale settings a weight-stream sample reported; the same
+ *  set when nothing new was reported (the stream runs at several Hz). */
+internal fun Set<coffee.crema.settings.Setting>.withEchoes(volume: Boolean, standby: Boolean, smoothing: Boolean, autoStop: Boolean): Set<coffee.crema.settings.Setting> {
+    val reported = listOfNotNull(
+        coffee.crema.settings.Setting.SCALE_VOLUME.takeIf { volume },
+        coffee.crema.settings.Setting.SCALE_STANDBY.takeIf { standby },
+        coffee.crema.settings.Setting.SCALE_FLOW_SMOOTHING.takeIf { smoothing },
+        coffee.crema.settings.Setting.SCALE_AUTO_STOP.takeIf { autoStop },
+    )
+    return if (reported.all { it in this }) this else this + reported
+}
+
+/** The row gate for [setting] on this device (§7.6). */
+fun MainUiState.gate(setting: coffee.crema.settings.Setting): coffee.crema.ui.components.RowGate {
+    if (mirror == null) return coffee.crema.ui.components.RowGate.Open
+    val a = availability(setting)
+    return coffee.crema.ui.components.RowGate(editable = a.editable, unknown = a == SettingAvailability.UNKNOWN, note = availabilityNote(setting))
+}
+
+/** The Reset preferences row's title: a remote resets only its own (§7.6). */
+fun resetPreferencesTitle(ui: MainUiState): String =
+    if (ui.mirror != null) "Reset this device's preferences" else "Reset preferences"
+
+/** What a readout shows for a value this device doesn't know (§7.2). */
+const val UNKNOWN_VALUE = "—"

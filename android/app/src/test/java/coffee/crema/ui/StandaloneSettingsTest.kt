@@ -23,6 +23,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /** Normal devices and hubs keep today's settings behaviour (spec §7.4, AC-16, AC-32). */
 @RunWith(RobolectricTestRunner::class)
@@ -94,6 +95,44 @@ class StandaloneSettingsTest {
             store.clear()
             VmHarness.idle()
         }
+    }
+
+    /** AC-20: a hub (and a normal device) drops a config frame: it has no
+     *  mirror slice, so nothing it shows or saves changes. */
+    @Test
+    fun `a hub drops a config frame`() {
+        for (role in listOf("primary", "normal")) {
+            val vm = build(role)
+            val shown = vm.ui.value
+            val saved = savedPrefs()
+            vm.deliverConfigForTest(coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), RemoteFixture.S))
+            VmHarness.idle()
+            assertEquals(null, VmHarness.ownState(vm).mirror, "$role: no slice")
+            assertEquals(abOf(saved), abOf(savedPrefs()), "$role: prefs.json unchanged")
+            for (e in edits) assertEquals(e.ui(shown), e.ui(vm.ui.value), "$role ${e.name} unchanged")
+            assertTrue(VmHarness.log(vm).any { "Config snapshot dropped: not a remote" in it }, role)
+            store.clear()
+            VmHarness.idle()
+        }
+    }
+
+    /** AC-27, the hub VM's half: its machine actions report config ready
+     *  only once the prefs load, so a relayed setting edit before then is
+     *  refused ("starting up") and applied after. */
+    @Test
+    fun `a hub refuses relayed config edits until its prefs load`() {
+        writePrefs(AppPrefs(idleSleepMin = 30, proxyRole = "primary"))
+        val vm = VmHarness.build(store)
+        val pc = VmHarness.proxyController(vm)
+        val early = runBlocking { pc.handleRelayedControl("setQcGrind", "14.5", "remote-1", "Phone") }
+        assertTrue(early is coffee.crema.machine.CommandOutcome.Refused && early.reason.endsWith("is starting up"), "$early")
+        VmHarness.idle()
+        VmHarness.awaitPrefsLoaded(vm)
+        assertEquals(null, vm.ui.value.qcGrind, "the early edit wasn't applied")
+        val late = runBlocking { pc.handleRelayedControl("setQcGrind", "14.5", "remote-1", "Phone") }
+        assertEquals(coffee.crema.machine.CommandOutcome.Accepted, late)
+        VmHarness.idle()
+        assertEquals(14.5f, vm.ui.value.qcGrind)
     }
 
     /** AC-16: on a hub, a reset and a restore push a snapshot to its remotes. */

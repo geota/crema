@@ -581,6 +581,14 @@ class MainActivity : ComponentActivity() {
                 ui.pendingPairing?.let { prompt ->
                     PairingDialog(prompt = prompt, onChoice = viewModel::resolvePairing)
                 }
+                // Remote → standalone (T6): take the hub's settings, or keep mine.
+                ui.adoptPrompt?.let { prompt ->
+                    AdoptDialog(
+                        prompt = prompt,
+                        onUseHub = { viewModel.resolveAdoption(useHub = true) },
+                        onKeepMine = { viewModel.resolveAdoption(useHub = false) },
+                    )
+                }
                 // A host this device pairs with couldn't prove the pairing.
                 ui.changedHost?.let { (hostId, hostName) ->
                     ChangedHostDialog(
@@ -1258,5 +1266,32 @@ private fun ChangedHostDialog(hostName: String, onForget: () -> Unit, onDismiss:
         },
         confirmButton = { TextButton(onClick = onForget) { Text("Forget host") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
+    )
+}
+
+/**
+ * A remote is leaving its hub (T6, spec §7.5): use the hub's machine and
+ * brew settings on this device from now on, or keep this device's own.
+ * Dismissing keeps mine; "Use <hub>'s" is the highlighted choice.
+ */
+@Composable
+private fun AdoptDialog(prompt: AdoptPrompt, onUseHub: () -> Unit, onKeepMine: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onKeepMine,
+        title = { Text("Use ${prompt.hubName}’s machine and brew settings on this device?") },
+        text = {
+            Column {
+                Text(
+                    if (prompt.changed == 1) "1 setting on this device differs from ${prompt.hubName}’s."
+                    else "${prompt.changed} settings on this device differ from ${prompt.hubName}’s.",
+                )
+                if (prompt.legacyUnknown > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("${prompt.legacyUnknown} settings ${prompt.hubName} doesn’t share stay as they are on this device.")
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onUseHub) { Text("Use ${prompt.hubName}’s") } },
+        dismissButton = { TextButton(onClick = onKeepMine) { Text("Keep mine") } },
     )
 }

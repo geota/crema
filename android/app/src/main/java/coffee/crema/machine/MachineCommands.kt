@@ -63,6 +63,10 @@ interface MachineActions {
 
     /** A peer used Crema to drive this machine: presence at the machine. */
     fun notePeerActivity()
+
+    /** The config is loaded: a relayed config edit can be applied and kept
+     *  (before that, the prefs load would overwrite it after the reply). */
+    fun configReady(): Boolean = true
 }
 
 /**
@@ -72,6 +76,8 @@ interface MachineActions {
 class LocalMachine(
     private val actions: MachineActions,
     private val notify: (String) -> Unit,
+    /** This device's name, for a refusal a peer shows. */
+    private val hostName: () -> String = { "The hub" },
 ) : MachineCommands {
 
     override fun execute(cmd: MachineCommand, onOutcome: (CommandOutcome) -> Unit) {
@@ -86,9 +92,15 @@ class LocalMachine(
         is MachineCommand.StateRequest -> accepted { actions.applyMachineState(cmd.request) }
         MachineCommand.CancelMaintenance -> accepted { actions.applyCancelMaintenance() }
         MachineCommand.TareScale -> accepted { actions.applyTareScale() }
-        is MachineCommand.Config -> accepted {
-            actions.showConfig(cmd)
-            actions.commitConfig(cmd)
+        // A peer's config edit before this device loaded its config would be
+        // overwritten by the load after its reply (review 17).
+        is MachineCommand.Config -> if (origin != null && !actions.configReady()) {
+            CommandOutcome.Refused("${hostName()} is starting up")
+        } else {
+            accepted {
+                actions.showConfig(cmd)
+                actions.commitConfig(cmd)
+            }
         }
         MachineCommand.RawEspresso -> accepted { actions.applyMachineState(MachineRequest.ESPRESSO) }
     }

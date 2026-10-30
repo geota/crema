@@ -44,6 +44,9 @@ import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
 import coffee.crema.ui.formatTemp
 import coffee.crema.ui.components.*
+import coffee.crema.settings.Setting
+import coffee.crema.ui.gate
+import coffee.crema.ui.resetPreferencesTitle
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.screens.cleanRow
 import coffee.crema.ui.screens.SettingsConfirmDialogs
@@ -149,14 +152,10 @@ fun PhoneSettingsScreen(
                 // Phone settings render in the dense row layout; the tablet keeps
                 // the default (roomy) — one CremaSettingsRow serves both (issue 26).
                 CompositionLocalProvider(LocalSettingsRowDense provides true) {
-                    // On a remote the machine-write rows (GHC, heater voltage, line
-                    // frequency, flow calibration) aren't relayed — they'd hit the
-                    // read-only core and go nowhere — so they're disabled + annotated
-                    // here, and the app-wide banner already names the hub (issue 10).
-                    val secondary = ui.proxyRole == "secondary"
-                    val primaryName = ui.mirroringPrimaryName
+                    // On a remote, each machine or session row gates itself
+                    // through availability() (spec §7.6): no role checks here.
                     when (current) {
-                        "machine" -> MachineSection(vm, ui.let { it }, connected, onConnect, secondary, primaryName)
+                        "machine" -> MachineSection(vm, ui.let { it }, connected, onConnect)
                         "peripherals" -> PeripheralsSection(vm, scaleConnected, ui.scaleName, ui.grinderModel, onConnect, onOpenScale = { onNav("scale") }, scaleReconnecting = ui.scaleReconnecting, ui = ui)
                         "brew" -> BrewDefaultsSection(vm, ui.let { it })
                         "water" -> WaterSection(
@@ -182,7 +181,6 @@ fun PhoneSettingsScreen(
                             vm, ui.let { it }, connected,
                             tempOffset, { tempOffset = it },
                             onApplyFlow = { confirm.pendingFlowMultiplier = it },
-                            secondary = secondary,
                         )
                         "advanced" -> AdvancedSection(
                             vm, ui.let { it }, connected, onNav,
@@ -191,7 +189,6 @@ fun PhoneSettingsScreen(
                             onStageHeaterVoltage = { confirm.pendingHeaterVoltage = it },
                             onResetPrefs = { confirm.confirmResetPrefs = true },
                             onErase = { confirm.confirmErase = true },
-                            secondary = secondary,
                         )
                         "about" -> AboutSection(vm, ui)
                     }
@@ -283,44 +280,13 @@ fun PhoneSettingsScreen(
 
 /* ───────────────────────── section bodies ──────────────────────────────── */
 
-/** A note at the top of a settings section whose machine-write controls are
- *  disabled because this device is a remote (issue 10) — the writes apply on
- *  the hub, not here. */
-@Composable
-private fun MirrorControlledNote(primaryName: String) {
-    val who = primaryName.ifBlank { "the hub" }
-    Surface(
-        shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 8.dp),
-    ) {
-        Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            PhIcon("bluetooth", sizeDp = 18)
-            Text(
-                "Connected through $who — machine settings are controlled there.",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
-
 @Composable
 private fun MachineSection(
     vm: MainViewModel,
     ui: coffee.crema.ui.MainUiState,
     connected: Boolean,
     onConnect: (String) -> Unit,
-    secondary: Boolean = false,
-    primaryName: String = "",
 ) {
-    // On a remote, machine settings live on the hub — say so up top (issue 10).
-    if (secondary) MirrorControlledNote(primaryName)
     val firmwareFlow by vm.firmware.ui.collectAsStateWithLifecycle()
     // Machine hero (proto .pst-mhero): icon + state + identity key-values.
     Column(Modifier.padding(horizontal = CremaEdge, vertical = 8.dp)) {
@@ -400,7 +366,7 @@ private fun MachineSection(
         // Fan threshold is REAL: written now + re-seeded on every connect (the
         // DE1 forgets it across power cycles, #31). Commit goes through a
         // confirm dialog — an expert setting, Decenza-style.
-        CremaSettingsRow("Fan on above", "Internal temperature that turns the case fan on. Higher = quieter idle; 0 = always on.", stacked = true) {
+        CremaSettingsRow("Fan on above", "Internal temperature that turns the case fan on. Higher = quieter idle; 0 = always on.", stacked = true, gate = ui.gate(Setting.FAN_THRESHOLD)) {
             var pendingFan by remember { mutableStateOf<Float?>(null) }
             CremaSlider(
                 value = ui.fanThresholdC,
@@ -437,7 +403,7 @@ private fun MachineSection(
     // Machine sleep: the core's idle-sleep timer (de1app "Cool down after",
     // Decenza autoSleepMinutes) and sleep-on-quit — same setting as the tablet.
     SettingsGroup("Machine sleep") {
-        IdleSleepRow(ui.idleSleepMin, vm::setIdleSleepMin, CremaStepperStyle.BareCompact)
+        IdleSleepRow(ui.idleSleepMin, vm::setIdleSleepMin, CremaStepperStyle.BareCompact, ui.gate(Setting.IDLE_SLEEP))
         // Quit ≠ background: the swipe-away signal rides a tiny service's
         // onTaskRemoved (see QuitSleep) — best-effort, idle-only, primary-only.
         CremaSettingsRow("Sleep the DE1 when you quit Crema", "Swiping Crema out of recents puts an idle machine to sleep straight away (best effort). Just switching apps never sleeps it.", last = true) {
@@ -469,6 +435,7 @@ private fun MachineSection(
                 needsConnection = !connected,
                 dot = true, dotOn = plate > 0,
                 onDot = { if (connected) vm.setCupWarmerTemp(if (plate > 0) 0 else 55) },
+                gate = ui.gate(Setting.CUP_WARMER_TEMP),
             ) {
                 CremaStepper(
                     value = plate.toDouble(), unit = "°C", step = 1.0, min = 0.0, max = 80.0,
@@ -515,7 +482,7 @@ private fun PeripheralsSection(
         }
     }
     SettingsGroup("Grinder") {
-        CremaSettingsRow("Grinder model", "Logged with shots & Visualizer uploads. Pairing isn't supported yet.", last = true) {
+        CremaSettingsRow("Grinder model", "Logged with shots & Visualizer uploads. Pairing isn't supported yet.", last = true, gate = ui?.gate(Setting.GRINDER_MODEL) ?: RowGate.Open) {
             CremaTextField(
                 value = grinderModel,
                 onValueChange = vm::setGrinderModel,
@@ -556,14 +523,15 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
         }
     }
     SettingsGroup("Shot behaviour") {
-        CremaSettingsRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") { CremaSwitch(ui.autoTare, vm::setAutoTare) }
-        CremaSettingsRow("Stop on weight", "End the shot once the target yield is reached.") { CremaSwitch(ui.stopOnWeight, vm::setStopOnWeight) }
-        CremaSettingsRow("Volume stop with scale", "Also stop at the profile's max volume while a scale is connected. Off = volume only applies without a scale.") { CremaSwitch(ui.volumeStopWithScale, vm::setVolumeStopWithScale) }
-        CremaSettingsRow("Require scale to start", "Refuse to start a shot that has a weight target while no scale is connected — instead of the default warn-and-continue.") { CremaSwitch(ui.requireScale, vm::setRequireScale) }
+        CremaSettingsRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.", gate = ui.gate(Setting.AUTO_TARE)) { CremaSwitch(ui.autoTare, vm::setAutoTare) }
+        CremaSettingsRow("Stop on weight", "End the shot once the target yield is reached.", gate = ui.gate(Setting.STOP_ON_WEIGHT)) { CremaSwitch(ui.stopOnWeight, vm::setStopOnWeight) }
+        CremaSettingsRow("Volume stop with scale", "Also stop at the profile's max volume while a scale is connected. Off = volume only applies without a scale.", gate = ui.gate(Setting.VOLUME_STOP_WITH_SCALE)) { CremaSwitch(ui.volumeStopWithScale, vm::setVolumeStopWithScale) }
+        CremaSettingsRow("Require scale to start", "Refuse to start a shot that has a weight target while no scale is connected — instead of the default warn-and-continue.", gate = ui.gate(Setting.REQUIRE_SCALE)) { CremaSwitch(ui.requireScale, vm::setRequireScale) }
         CremaSettingsRow(
             "Max shot duration", "Hard time cap — also a Brew stop condition.",
             dot = true, dotOn = ui.maxShotDurationS > 0f,
             onDot = { vm.setMaxShotDuration(if (ui.maxShotDurationS > 0f) 0f else 60f) },
+            gate = ui.gate(Setting.MAX_SHOT_DURATION),
         ) {
             val maxDur = ui.maxShotDurationS.toInt()
             CremaStepper(
@@ -572,7 +540,7 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
                 onChange = { vm.setMaxShotDuration(it.toFloat()) },
             )
         }
-        CremaSettingsRow("Group flush before each shot", "Stabilise the group temperature with a short flush.", last = true) { CremaSwitch(ui.preFlush, vm::setPreFlush) }
+        CremaSettingsRow("Group flush before each shot", "Stabilise the group temperature with a short flush.", last = true, gate = ui.gate(Setting.PRE_FLUSH)) { CremaSwitch(ui.preFlush, vm::setPreFlush) }
     }
     // Steam dials + behaviour in one place (issue 43: the QC sheet was the
     // only surface for temp / time / flow). The dials are the SAME persisted
@@ -584,6 +552,7 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
             "Steam temperature", "Steam boiler target. Off disables the steam heater entirely.",
             dot = true, dotOn = steamOn,
             onDot = { vm.setQcSteamTemp(if (steamOn) 0f else QcSteam.DEFAULT_TEMP_C.toFloat()) },
+            gate = ui.gate(Setting.QC_STEAM_TEMP),
         ) {
             CremaStepper(
                 value = (if (steamOn) ui.qcSteamTempC.toDouble() else QcSteam.DEFAULT_TEMP_C),
@@ -592,7 +561,7 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
                 onChange = { vm.setQcSteamTemp(it.toFloat()) },
             )
         }
-        CremaSettingsRow("Steam time", "How long the wand runs before stopping on its own.") {
+        CremaSettingsRow("Steam time", "How long the wand runs before stopping on its own.", gate = ui.gate(Setting.QC_STEAM_TIME)) {
             CremaStepper(
                 value = ui.qcSteamTimeS.toDouble(), unit = "s", step = 1.0,
                 min = QcSteam.MIN_TIME_S, max = QcSteam.MAX_TIME_S,
@@ -600,7 +569,7 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
                 onChange = { vm.setQcSteamTime(it.toFloat()) },
             )
         }
-        CremaSettingsRow("Steam flow", "Wand flow rate — lower for slower, gentler texturing.") {
+        CremaSettingsRow("Steam flow", "Wand flow rate — lower for slower, gentler texturing.", gate = ui.gate(Setting.QC_STEAM_FLOW)) {
             CremaStepper(
                 value = ui.qcSteamFlowMlS.toDouble(), unit = "ml/s", step = 0.1,
                 min = QcSteam.MIN_FLOW_ML_S, max = QcSteam.MAX_FLOW_ML_S,
@@ -608,9 +577,9 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
                 onChange = { vm.setQcSteamFlow(it.toFloat()) },
             )
         }
-        CremaSettingsRow("Group flush after steam", "Rinse the group head after steaming — keeps the brew path fresh if you steam before the shot. The wand's own quick purge is the machine's — see two-tap steam stop.") { CremaSwitch(ui.steamPurge, vm::setSteamPurge) }
-        CremaSettingsRow("Two-tap steam stop", "First stop tap ends steaming without the wand's auto-purge; tap again to purge. Written to the machine.") { CremaSwitch(ui.steamTwoTap, vm::setSteamTwoTap) }
-        CremaSettingsRow("Steam eco", "Idle the steam boiler cooler between sessions to save power.", last = true) { CremaSwitch(ui.steamEco, vm::setSteamEco) }
+        CremaSettingsRow("Group flush after steam", "Rinse the group head after steaming — keeps the brew path fresh if you steam before the shot. The wand's own quick purge is the machine's — see two-tap steam stop.", gate = ui.gate(Setting.STEAM_PURGE)) { CremaSwitch(ui.steamPurge, vm::setSteamPurge) }
+        CremaSettingsRow("Two-tap steam stop", "First stop tap ends steaming without the wand's auto-purge; tap again to purge. Written to the machine.", gate = ui.gate(Setting.STEAM_TWO_TAP)) { CremaSwitch(ui.steamTwoTap, vm::setSteamTwoTap) }
+        CremaSettingsRow("Steam eco", "Idle the steam boiler cooler between sessions to save power.", last = true, gate = ui.gate(Setting.STEAM_ECO)) { CremaSwitch(ui.steamEco, vm::setSteamEco) }
     }
 }
 
@@ -646,6 +615,7 @@ private fun WaterSection(
         CremaSettingsRow(
             "Refill at",
             "The level where the DE1 itself asks for water. Written to the machine; 5 mm matches de1app and Decenza.",
+            gate = ui.gate(Setting.WATER_REFILL_POINT),
         ) {
             CremaStepper(
                 value = ui.refillPointMm().toDouble(), unit = "mm", step = 1.0,
@@ -1092,9 +1062,8 @@ private fun CalibrationSection(
     connected: Boolean,
     tempOffset: Double, onTempOffset: (Double) -> Unit,
     onApplyFlow: (Float) -> Unit,
-    secondary: Boolean = false,
 ) {
-    if (secondary) MirrorControlledNote(ui.mirroringPrimaryName)
+    val flowGate = ui.gate(Setting.FLOW_MULTIPLIER)
     SettingsGroup("Sensor calibration") {
         CremaSettingsRow("Temperature", "Shift every temperature reading.", notImplemented = true) {
             CremaStepper(value = tempOffset, unit = "°C", step = 0.1, min = -5.0, max = 5.0, fmt = { fmt("%+.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = onTempOffset)
@@ -1103,13 +1072,13 @@ private fun CalibrationSection(
         val mult = flowMultiplierValue(ui.de1MachineInfo) ?: 1.0
         var flowDraft by remember(mult) { mutableStateOf(mult) }
         val flowDirty = kotlin.math.abs(flowDraft - mult) > 0.0001
-        CremaSettingsRow("Flow", "Scale the flow-meter reading. Apply commits after a typed confirm.", needsConnection = !connected) {
+        CremaSettingsRow("Flow", "Scale the flow-meter reading. Apply commits after a typed confirm.", needsConnection = !connected, gate = flowGate) {
             CremaStepper(value = flowDraft, unit = "×", step = 0.01, min = 0.13, max = 2.0, fmt = { fmt("%.2f", it) }, style = CremaStepperStyle.BareCompact, onChange = { flowDraft = it })
         }
-        CremaSettingsRow("", null) {
+        CremaSettingsRow("", null, gate = flowGate.copy(note = null)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CremaButton(onClick = { onApplyFlow(flowDraft.toFloat()) }, variant = CremaButtonVariant.Filled, enabled = connected && !secondary && flowDirty, label = "Apply")
-                CremaButton(onClick = { onApplyFlow(1.0f) }, variant = CremaButtonVariant.Outlined, enabled = connected && !secondary && kotlin.math.abs(mult - 1.0) > 0.0001, label = "Reset")
+                CremaButton(onClick = { onApplyFlow(flowDraft.toFloat()) }, variant = CremaButtonVariant.Filled, enabled = connected && flowDirty, label = "Apply")
+                CremaButton(onClick = { onApplyFlow(1.0f) }, variant = CremaButtonVariant.Outlined, enabled = connected && kotlin.math.abs(mult - 1.0) > 0.0001, label = "Reset")
             }
         }
         CremaSettingsRow("Last read", "Flow multiplier reported by the DE1.", last = true) {
@@ -1129,7 +1098,6 @@ private fun AdvancedSection(
     onStageHeaterVoltage: (String) -> Unit,
     onResetPrefs: () -> Unit,
     onErase: () -> Unit,
-    secondary: Boolean = false,
 ) {
     SettingsGroup("Telemetry") {
         // The toggle reflects the user's OVERRIDE (auto/50/60), not the resolved
@@ -1151,12 +1119,12 @@ private fun AdvancedSection(
         } else {
             "Pinned at ${ui.lineFreqOverride.toInt()} Hz — switch to Auto to let the detector run."
         }
-        CremaSettingsRow("AC mains frequency", freqSub, needsConnection = !connected, stacked = true) {
+        CremaSettingsRow("AC mains frequency", freqSub, needsConnection = !connected, stacked = true, gate = ui.gate(Setting.LINE_FREQUENCY)) {
             CremaSegmentedButton(
                 options = listOf(SegOption("auto", "Auto"), SegOption("50", "50"), SegOption("60", "60")),
                 value = freqValue,
                 onChange = { if (it == "auto") vm.setLineFrequency(0.0f) else onStageLineFreq(it) },
-                enabled = connected && !secondary,
+                enabled = connected,
                 fillWidth = true,
             )
         }
@@ -1282,20 +1250,20 @@ private fun AdvancedSection(
     SettingsGroup("Service-grade") {
         // null until the connected DE1 reports its mains voltage (raw HeaterVoltage MMR).
         val hv = heaterVoltageValue(ui.de1MachineInfo)
-        CremaSettingsRow("Mains heater voltage", "Wrong voltage damages the heater — service only.", last = true, needsConnection = !connected, stacked = true) {
+        CremaSettingsRow("Mains heater voltage", "Wrong voltage damages the heater — service only.", last = true, needsConnection = !connected, stacked = true, gate = ui.gate(Setting.HEATER_VOLTAGE)) {
             CremaSegmentedButton(
                 options = listOf(SegOption("120", "120 V"), SegOption("230", "230 V")),
                 // No segment selected until the machine reports — matches the "—" in the
                 // Machine readout above, rather than misleadingly defaulting to 230 V.
                 value = hv ?: "",
                 onChange = { if (it != hv) onStageHeaterVoltage(it) },
-                enabled = connected && !secondary,
+                enabled = connected,
                 fillWidth = true,
             )
         }
     }
     SettingsGroup("Reset") {
-        CremaSettingsRow("Reset preferences", "Restore Crema's settings to defaults.") {
+        CremaSettingsRow(resetPreferencesTitle(ui), "Restore Crema's settings to defaults.") {
             CremaButton(onClick = onResetPrefs, variant = CremaButtonVariant.Text, label = "Reset")
         }
         CremaSettingsRow("Erase all data", "Delete every profile, bean and shot.", last = true) {

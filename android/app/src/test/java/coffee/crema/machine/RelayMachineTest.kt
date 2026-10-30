@@ -22,6 +22,7 @@ class RelayMachineTest {
     private val notices = CopyOnWriteArrayList<String>()
     private var reply: ControlReply = ControlReply.Ok
     private var machineState: String? = "Idle"
+    private var viewOnly = false
 
     /** Config edits shown, and how each one's echo settled. */
     private val shown = CopyOnWriteArrayList<MachineCommand.Config>()
@@ -34,6 +35,8 @@ class RelayMachineTest {
         scope = CoroutineScope(StandardTestDispatcher(scheduler)),
         notify = { notices += it },
         log = {},
+        viewOnly = { viewOnly },
+        hubName = { "Kitchen tablet" },
     )
 
     /** Run [cmd] through the relay to completion and return its outcome. */
@@ -60,7 +63,7 @@ class RelayMachineTest {
 
         reply = ControlReply.Err("not authorized")
         run(MachineCommand.TareScale)
-        assertTrue("View-only" in notices.last(), notices.last())
+        assertEquals(RelayMachine.viewOnly("Kitchen tablet"), notices.last())
     }
 
     @Test
@@ -128,6 +131,28 @@ class RelayMachineTest {
         machineState = "Sleep"
         assertEquals(CommandOutcome.Accepted, run(MachineCommand.Wake))
         assertEquals(listOf(MachineCommandCodec.Wire("machineState", "IDLE")), sent.toList())
+    }
+
+    /** AC-23: a view-only remote sends nothing at all, Stop included. */
+    @Test
+    fun `a view-only remote sends nothing`() {
+        viewOnly = true
+        for (cmd in listOf(MachineCommand.Stop, MachineCommand.StartShot, MachineCommand.SetQc(QcField.GRIND, 14f), MachineCommand.SetStopOnWeight(true))) {
+            assertEquals(CommandOutcome.Refused(RelayMachine.viewOnly("Kitchen tablet")), run(cmd))
+        }
+        assertTrue(sent.isEmpty() && shown.isEmpty(), "sent $sent, shown $shown")
+        assertTrue(notices.all { it == "View only — Kitchen tablet hasn’t allowed changes from this device" }, "$notices")
+    }
+
+    /** AC-15 / AC-35: a machine setting is read-only on a remote. */
+    @Test
+    fun `a quick controls machine setting is refused here and nothing is sent`() {
+        for (field in QcField.entries.filter { it != QcField.GRIND }) {
+            assertEquals(CommandOutcome.Refused("Change on Kitchen tablet"), run(MachineCommand.SetQc(field, 1f)), "$field")
+        }
+        assertTrue(sent.isEmpty() && shown.isEmpty(), "sent $sent, shown $shown")
+        assertEquals(CommandOutcome.Accepted, run(MachineCommand.SetQc(QcField.GRIND, 14f)), "grind is a shot dial")
+        assertEquals(listOf(MachineCommandCodec.Wire("setQcGrind", "14.0")), sent.toList())
     }
 
     @Test

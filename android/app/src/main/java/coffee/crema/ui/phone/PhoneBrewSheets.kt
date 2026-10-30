@@ -1,6 +1,8 @@
 package coffee.crema.ui.phone
 
 import coffee.crema.ui.fmt
+import coffee.crema.settings.Setting
+import coffee.crema.ui.gate
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -82,6 +84,7 @@ fun PhoneQuickSheet(
     // tablet — no local stub.
     var steamMode by remember { mutableStateOf(SteamMode.Time) }
     var waterMode by remember { mutableStateOf(WaterMode.Volume) }
+    val brewGate = ui.gate(Setting.BREW_PARAMS)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -171,6 +174,7 @@ fun PhoneQuickSheet(
                                 presets = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 18.0, 19.0, 20.0) else listOf(3.5, 4.0, 4.5, 5.0),
                                 fmt = { fmt("%.1f", it) },
                                 onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp) else vm.setQcGrind(it.toFloat()) },
+                                gate = if (doseGrindMode == DoseGrindMode.Dose) brewGate else ui.gate(Setting.QC_GRIND),
                             )
                             // Yield | Ratio.
                             QcCell(
@@ -193,6 +197,7 @@ fun PhoneQuickSheet(
                                     if (yieldRatioMode == YieldRatioMode.Yield) vm.quickAdjustBrew(dose, it, brewTemp)
                                     else vm.quickAdjustBrew(dose, dose * it, brewTemp)
                                 },
+                                gate = brewGate,
                             )
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -203,6 +208,7 @@ fun PhoneQuickSheet(
                                 presets = listOf(90.0, 93.0, 95.0, 97.0),
                                 fmt = { fmt("%.1f", it) },
                                 onChange = { vm.quickAdjustBrew(dose, yieldOut, it) },
+                                gate = brewGate,
                             )
                             // Pre-inf | Flush (local — drives the next shot's fixed params).
                             QcCell(
@@ -237,6 +243,7 @@ fun PhoneQuickSheet(
                                     dot = steamMode == SteamMode.Temp,
                                     dotOn = ui.qcSteamTempC > 0,
                                     onDot = { vm.setQcSteamTemp(if (ui.qcSteamTempC > 0) 0f else QcSteam.DEFAULT_TEMP_C.toFloat()) },
+                                    dotGate = ui.gate(Setting.QC_STEAM_TEMP),
                                 )
                             },
                             value = when (steamMode) { SteamMode.Flow -> ui.qcSteamFlowMlS.toDouble(); SteamMode.Temp -> ui.qcSteamTempC.toDouble(); SteamMode.Time -> ui.qcSteamTimeS.toDouble() },
@@ -248,6 +255,7 @@ fun PhoneQuickSheet(
                             fmt = { if (it % 1.0 == 0.0) fmt("%.0f", it) else fmt("%.1f", it) },
                             enabled = !(steamMode == SteamMode.Temp && ui.qcSteamTempC <= 0f),
                             onChange = { when (steamMode) { SteamMode.Flow -> vm.setQcSteamFlow(it.toFloat()); SteamMode.Temp -> vm.setQcSteamTemp(it.toFloat()); SteamMode.Time -> vm.setQcSteamTime(it.toFloat()) } },
+                            gate = ui.gate(when (steamMode) { SteamMode.Flow -> Setting.QC_STEAM_FLOW; SteamMode.Temp -> Setting.QC_STEAM_TEMP; SteamMode.Time -> Setting.QC_STEAM_TIME }),
                         )
                         // Hot water — Temp | Volume, wired to the VM (tablet parity). No
                         // disable dot: 0 isn't a clean "off" here (the de1app/Decenza
@@ -269,6 +277,7 @@ fun PhoneQuickSheet(
                             presets = if (waterMode == WaterMode.Temp) listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
                             fmt = { fmt("%.0f", it) },
                             onChange = { if (waterMode == WaterMode.Temp) vm.setQcHotWaterTemp(it.toFloat()) else vm.setQcHotWaterVolume(it.toFloat()) },
+                            gate = ui.gate(if (waterMode == WaterMode.Temp) Setting.QC_HOT_WATER_TEMP else Setting.QC_HOT_WATER_VOLUME),
                         )
                     }
                 }
@@ -295,11 +304,11 @@ fun PhoneQuickSheet(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(bottom = 4.dp),
                         )
-                        ShotToggleRow("Stop on weight", ui.stopOnWeight, vm::setStopOnWeight)
-                        ShotToggleRow("Auto-tare on start", ui.autoTare, vm::setAutoTare)
-                        ShotToggleRow("Pre-flush before shot", ui.preFlush, vm::setPreFlush)
-                        ShotToggleRow("Steam purge after", ui.steamPurge, vm::setSteamPurge)
-                        ShotToggleRow("Steam eco mode", ui.steamEco, vm::setSteamEco)
+                        ShotToggleRow("Stop on weight", ui.stopOnWeight, vm::setStopOnWeight, ui.gate(Setting.STOP_ON_WEIGHT))
+                        ShotToggleRow("Auto-tare on start", ui.autoTare, vm::setAutoTare, ui.gate(Setting.AUTO_TARE))
+                        ShotToggleRow("Pre-flush before shot", ui.preFlush, vm::setPreFlush, ui.gate(Setting.PRE_FLUSH))
+                        ShotToggleRow("Steam purge after", ui.steamPurge, vm::setSteamPurge, ui.gate(Setting.STEAM_PURGE))
+                        ShotToggleRow("Steam eco mode", ui.steamEco, vm::setSteamEco, ui.gate(Setting.STEAM_ECO))
                     }
                 }
             }
@@ -318,7 +327,7 @@ fun PhoneQuickSheet(
                     onClick = vm::resetBrewParams,
                     variant = CremaButtonVariant.Tonal,
                     icon = "arrow-counter-clockwise",
-                    enabled = ui.brewParams != null,
+                    enabled = ui.brewParams != null && brewGate.editable,
                     label = "Reset",
                 )
                 Spacer(Modifier.weight(1f))
@@ -354,12 +363,14 @@ private fun QcCell(
     fmt: (Double) -> String,
     onChange: (Double) -> Unit,
     enabled: Boolean = true,
+    gate: RowGate = RowGate.Open,
 ) {
+    val fmt = gate.fmt(fmt)
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
         Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             header()
             Row(
-                Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f),
+                Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f).gated(gate),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -387,7 +398,7 @@ private fun QcCell(
                 }
                 QcRoundBtn("plus") { onChange((value + step).coerceIn(min, max)) }
             }
-            Row(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f).gated(gate), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 presets.forEach { p ->
                     val on = kotlin.math.abs(p - value) < 0.001
                     Box(
@@ -407,6 +418,7 @@ private fun QcCell(
                     }
                 }
             }
+            GateNote(gate)
         }
     }
 }
@@ -448,15 +460,20 @@ private fun ChannelGroupRow(
 
 // Shot tab: one full-width behaviour toggle row.
 @Composable
-private fun ShotToggleRow(label: String, on: Boolean, onChange: (Boolean) -> Unit) {
+private fun ShotToggleRow(label: String, on: Boolean, onChange: (Boolean) -> Unit, gate: RowGate = RowGate.Open) {
     Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Row(
-            Modifier.fillMaxWidth().clickable { onChange(!on) }.padding(horizontal = 12.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth().gated(gate).clickable { onChange(!on) }.padding(horizontal = 12.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            MiniPill(on, MaterialTheme.colorScheme.primary)
-            Text(label, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium))
+            // An unknown value (a remote before the hub's snapshot) shows "—".
+            if (gate.unknown) Text("—", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else MiniPill(on, MaterialTheme.colorScheme.primary)
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium))
+                GateNote(gate)
+            }
         }
     }
 }

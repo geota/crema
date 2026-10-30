@@ -1,6 +1,10 @@
 package coffee.crema.ui.screens
 
 import coffee.crema.ui.fmt
+import coffee.crema.settings.Setting
+import coffee.crema.ui.components.GateNotes
+import coffee.crema.ui.components.RowGate
+import coffee.crema.ui.components.gated
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +36,7 @@ import coffee.crema.ui.QcSteam
 import coffee.crema.ui.SteamMode
 import coffee.crema.ui.WaterMode
 import coffee.crema.ui.formatRatio
+import coffee.crema.ui.UNKNOWN_VALUE
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
 import androidx.compose.material3.AlertDialog
@@ -139,6 +144,9 @@ fun QuickControlsSheet(
     onSaveGrindToBean: () -> Boolean = { false },
     onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
+    /** Each machine or session control's gate (spec §7.6): on a remote the
+     *  steam, hot-water and flush steppers are read-only. */
+    gate: (Setting) -> RowGate = { RowGate.Open },
 ) {
     // Effective brew values: the transient override if set, else the active profile.
     val (dose, yieldOut, brewTemp) = effectiveBrew(brewParams, active)
@@ -162,6 +170,11 @@ fun QuickControlsSheet(
     var steamMode by remember { mutableStateOf(SteamMode.Time) }
     var waterMode by remember { mutableStateOf(WaterMode.Volume) }
     var flushMode by remember { mutableStateOf(FlushMode.Time) }
+    val steamGate = gate(when (steamMode) { SteamMode.Flow -> Setting.QC_STEAM_FLOW; SteamMode.Temp -> Setting.QC_STEAM_TEMP; SteamMode.Time -> Setting.QC_STEAM_TIME })
+    val waterGate = gate(if (waterMode == WaterMode.Temp) Setting.QC_HOT_WATER_TEMP else Setting.QC_HOT_WATER_VOLUME)
+    val flushGate = gate(if (flushMode == FlushMode.Time) Setting.QC_FLUSH_TIME else Setting.QC_FLUSH_TEMP)
+    val brewGate = gate(Setting.BREW_PARAMS)
+    val doseGrindGate = if (doseGrindMode == DoseGrindMode.Dose) brewGate else gate(Setting.QC_GRIND)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -209,7 +222,7 @@ fun QuickControlsSheet(
                     }
                     // Always visible like the web QuickSheet; enabled only once a
                     // tweak exists so it never reads as a dead control.
-                    CremaButton(onClick = onResetBrew, variant = CremaButtonVariant.Text, icon = "arrow-counter-clockwise", label = "Reset", enabled = brewParams != null)
+                    CremaButton(onClick = onResetBrew, variant = CremaButtonVariant.Text, icon = "arrow-counter-clockwise", label = "Reset", enabled = brewParams != null && brewGate.editable)
                     CremaIconButton(icon = "x", onClick = onDismiss)
                 }
             }
@@ -232,6 +245,7 @@ fun QuickControlsSheet(
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
                         items(shownProfiles, key = { "p:${it.id}" }) { p ->
                             FilterChip(
+                                modifier = Modifier.gated(gate(Setting.ACTIVE_PROFILE)),
                                 selected = p.id == activeProfileId,
                                 onClick = { onSelectProfile(p.id) },
                                 label = { Text(p.name, maxLines = 1) },
@@ -240,6 +254,7 @@ fun QuickControlsSheet(
                         }
                         items(shownBeans, key = { "b:${it.id}" }) { b ->
                             FilterChip(
+                                modifier = Modifier.gated(gate(Setting.ACTIVE_BEAN)),
                                 selected = b.id == activeBeanId,
                                 onClick = { onSelectBean(b.id) },
                                 label = { Text(b.name, maxLines = 1) },
@@ -267,6 +282,7 @@ fun QuickControlsSheet(
                         chips = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 17.0, 18.0, 19.0, 20.0) else listOf(3.8, 4.0, 4.2, 4.4, 4.6),
                         onChange = { if (doseGrindMode == DoseGrindMode.Dose) onAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else onGrind(it) },
                         style = CremaStepperStyle.Boxed,
+                        gate = doseGrindGate,
                         header = {
                             CremaSplitLabel(prefix = "", options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")), value = doseGrindMode.value, onChange = { doseGrindMode = DoseGrindMode.of(it) })
                         },
@@ -284,11 +300,12 @@ fun QuickControlsSheet(
                         enabled = stopOnWeight,
                         onChange = { onAdjustBrew(dose, it, brewTemp, preinfOverride) },
                         style = CremaStepperStyle.Boxed,
+                        gate = brewGate,
                         header = {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) })
+                                CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) }, Modifier.gated(gate(Setting.STOP_ON_WEIGHT)))
                                 Eyebrow("Yield", Modifier.weight(1f))
-                                Text(formatRatio(dose, yieldOut), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
+                                Text(if (brewGate.unknown) UNKNOWN_VALUE else formatRatio(dose, yieldOut), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
                             }
                         },
                     )
@@ -306,6 +323,7 @@ fun QuickControlsSheet(
                         chips = if (brewMode == BrewMode.Temp) listOf(88.0, 91.0, 93.0, 95.0, 97.0) else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
                         onChange = { if (brewMode == BrewMode.Temp) onAdjustBrew(dose, yieldOut, it, preinfOverride) else onAdjustBrew(dose, yieldOut, brewTemp, it) },
                         style = CremaStepperStyle.Boxed,
+                        gate = brewGate,
                         header = {
                             CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-infuse")), value = brewMode.value, onChange = { brewMode = BrewMode.of(it) })
                         },
@@ -328,6 +346,7 @@ fun QuickControlsSheet(
                         // the Steam label arms/disarms it and greys the bar; the 135 floor
                         // keeps the user out of the silent 120–134 snap-to-off band.
                         enabled = !(steamMode == SteamMode.Temp && qcSteamTempC <= 0.0),
+                        gate = steamGate,
                         header = {
                             CremaSplitLabel(
                                 prefix = "Steam",
@@ -336,6 +355,7 @@ fun QuickControlsSheet(
                                 dot = steamMode == SteamMode.Temp,
                                 dotOn = qcSteamTempC > 0,
                                 onDot = { onSteamTemp(if (qcSteamTempC > 0) 0.0 else QcSteam.DEFAULT_TEMP_C) },
+                                dotGate = gate(Setting.QC_STEAM_TEMP),
                             )
                         },
                     )
@@ -353,6 +373,7 @@ fun QuickControlsSheet(
                         chips = if (waterMode == WaterMode.Temp) listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
                         onChange = { if (waterMode == WaterMode.Temp) onHotWaterTemp(it) else onHotWaterVolume(it) },
                         style = CremaStepperStyle.Boxed,
+                        gate = waterGate,
                         header = {
                             CremaSplitLabel(prefix = "Hot water", options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")), value = waterMode.value, onChange = { waterMode = WaterMode.of(it) })
                         },
@@ -371,6 +392,7 @@ fun QuickControlsSheet(
                         chips = if (flushMode == FlushMode.Time) listOf(2.0, 4.0, 6.0, 8.0, 10.0) else listOf(88.0, 92.0, 95.0, 97.0, 99.0),
                         onChange = { if (flushMode == FlushMode.Time) onFlushTime(it) else onFlushTemp(it) },
                         style = CremaStepperStyle.Boxed,
+                        gate = flushGate,
                         header = {
                             CremaSplitLabel(prefix = "Flush", options = listOf(SplitOption("time", "Time"), SplitOption("temp", "Temp")), value = flushMode.value, onChange = { flushMode = FlushMode.of(it) })
                         },
@@ -389,6 +411,7 @@ fun QuickControlsSheet(
                             rowItems.forEach { it(Modifier.weight(1f)) }
                         }
                     }
+                    GateNotes(listOf("Dose and grind" to doseGrindGate, "Brew" to brewGate, "Steam" to steamGate, "Hot water" to waterGate, "Flush" to flushGate))
                 }
             }
 
@@ -424,11 +447,11 @@ fun QuickControlsSheet(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Eyebrow("Behavior")
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
-                        QcMiniToggle("Stop on weight", stopOnWeight, onStopOnWeight)
-                        QcMiniToggle("Auto-tare", autoTare, onAutoTare)
-                        QcMiniToggle("Pre-flush", preFlush, onPreFlush)
-                        QcMiniToggle("Steam purge", steamPurge, onSteamPurge)
-                        QcMiniToggle("Steam eco", steamEco, onSteamEco)
+                        QcMiniToggle("Stop on weight", stopOnWeight, onStopOnWeight, gate = gate(Setting.STOP_ON_WEIGHT))
+                        QcMiniToggle("Auto-tare", autoTare, onAutoTare, gate = gate(Setting.AUTO_TARE))
+                        QcMiniToggle("Pre-flush", preFlush, onPreFlush, gate = gate(Setting.PRE_FLUSH))
+                        QcMiniToggle("Steam purge", steamPurge, onSteamPurge, gate = gate(Setting.STEAM_PURGE))
+                        QcMiniToggle("Steam eco", steamEco, onSteamEco, gate = gate(Setting.STEAM_ECO))
                     }
                 }
             }
@@ -472,13 +495,15 @@ private data class ChannelGroup(
 
 // Mini pill toggle (PWA qmini-tog) — a tiny switch + label, for the chart strip.
 @Composable
-private fun QcMiniToggle(label: String, on: Boolean, onToggle: (Boolean) -> Unit, onColor: Color = MaterialTheme.colorScheme.primary) {
+private fun QcMiniToggle(label: String, on: Boolean, onToggle: (Boolean) -> Unit, onColor: Color = MaterialTheme.colorScheme.primary, gate: RowGate = RowGate.Open) {
     Row(
-        Modifier.clip(RoundedCornerShape(999.dp)).clickable { onToggle(!on) }.padding(vertical = 2.dp),
+        Modifier.gated(gate).clip(RoundedCornerShape(999.dp)).clickable { onToggle(!on) }.padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        Box(
+        // An unknown value (a remote before the hub's snapshot) shows "—".
+        if (gate.unknown) Text("—", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        else Box(
             Modifier.width(24.dp).height(14.dp).clip(RoundedCornerShape(999.dp))
                 .background(if (on) onColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)),
             contentAlignment = if (on) Alignment.CenterEnd else Alignment.CenterStart,

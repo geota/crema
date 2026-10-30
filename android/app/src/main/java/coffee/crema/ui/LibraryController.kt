@@ -220,11 +220,12 @@ class LibraryController(
 
     /** Adopt a complete custom-profile JSON into the library (newest first),
      *  refresh + persist — a hub's custom profile, which a remote adopts when
-     *  it becomes standalone (issue 05). */
-    fun adoptCustomProfile(raw: String) {
+     *  it becomes standalone (issue 05). Returns once it is on disk, so the
+     *  T6 commit never saves an `activeProfileId` that isn't (§7.5 step 5). */
+    suspend fun adoptCustomProfile(raw: String) {
         customProfilesJson = listOf(raw) + customProfilesJson
         refreshProfiles()
-        persistCustomProfiles()
+        customProfileStore.save(customProfilesJson, ++customProfilesGeneration)
     }
 
     // ── Startup loads (called from the VM's init, same order as before) ──────
@@ -323,8 +324,14 @@ class LibraryController(
     /** Persist the current custom profiles (best-effort, off the main thread). */
     private fun persistCustomProfiles() {
         val snapshot = customProfilesJson
-        scope.launch { customProfileStore.save(snapshot) }
+        // Numbered as the snapshot is taken: the store skips one that lands
+        // after a newer one (the awaited T6 adoption save, say).
+        val generation = ++customProfilesGeneration
+        scope.launch { customProfileStore.save(snapshot, generation) }
     }
+
+    /** The last custom-profile snapshot's number. */
+    private var customProfilesGeneration = 0L
 
     /**
      * Toggle a profile's Favorites star (the `pinned` flag the Quick-Controls
@@ -1355,6 +1362,13 @@ class LibraryController(
         scope.launch { library.save(lib) }
     }
 
+    /** [persistLibrary], awaited: the remote → standalone commit saves the
+     *  adopted bean before the role switch starts (spec §7.5, I3). */
+    suspend fun persistLibraryNow() {
+        val s = uiState()
+        library.save(BeanLibrary(s.beans, s.roasters, s.activeBeanId))
+    }
+
     /**
      * Find a roaster by name (case-insensitive) or mint one. Returns the roaster
      * id (null for a blank name) and the possibly-extended roaster directory.
@@ -1969,7 +1983,7 @@ class LibraryController(
         // The selections on screen: on a remote, the hub's (02 F2 — a remote
         // still records the shot it watched).
         val s = effectiveState()
-        val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
+        val profile = s.activeProfile()
         // The core classified this completion (review #40 —
         // `de1_domain::shot_disposition`, same rule on web). SkipCleaning:
         // machine maintenance runs in the DE1's Espresso state, so a

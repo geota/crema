@@ -137,7 +137,7 @@ sealed interface MachineCommand {
 }
 
 /** The Quick-Controls values a mirror may set, each with its stepper's bounds. */
-enum class QcField(private val label: String, private val range: ClosedFloatingPointRange<Double>) {
+enum class QcField(val label: String, private val range: ClosedFloatingPointRange<Double>) {
     STEAM_TIME("steam time", QcSteam.MIN_TIME_S..QcSteam.MAX_TIME_S),
     STEAM_FLOW("steam flow", QcSteam.MIN_FLOW_ML_S..QcSteam.MAX_FLOW_ML_S),
     /** 0 turns the steam heater off; otherwise the stepper's range, which

@@ -6,6 +6,7 @@ import coffee.crema.ble.proxy.DeviceInfo
 import coffee.crema.ble.proxy.Golden
 import coffee.crema.ble.proxy.MockWsServerLink
 import coffee.crema.ble.proxy.RelayHub
+import coffee.crema.machine.sentByRemotes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,7 +56,7 @@ class RelayedVerbSecondaryWireTest {
     /** Verbs the test primary refuses (a `ControlErr` back to the secondary). */
     private val refused = mutableSetOf<String>()
 
-    /** The test primary's config snapshot: an accepted `setQcSteamTime`
+    /** The test primary's config snapshot: an accepted `setQcGrind`
      *  updates it and pushes it before the reply, as a real hub does. */
     @Volatile private var hubConfig = ""
 
@@ -70,8 +71,8 @@ class RelayedVerbSecondaryWireTest {
             if (method in refused) {
                 Result.failure(IllegalStateException("refused by the test primary"))
             } else {
-                if (method == "setQcSteamTime") {
-                    hubConfig = """{"qcSteamTimeS":$args}"""
+                if (method == "setQcGrind") {
+                    hubConfig = """{"qcGrind":$args}"""
                     pushHubConfig()
                 }
                 Result.success(Unit)
@@ -109,7 +110,9 @@ class RelayedVerbSecondaryWireTest {
 
     @Test
     fun `every relayed verb leaves the secondary in its golden wire form`() {
-        val senders = RELAYED_VERB_SAMPLES.filter { it.send != null }
+        // What a remote sends (spec §2): the machine settings it doesn't are
+        // the next test's.
+        val senders = RELAYED_VERB_SAMPLES.filter { it.send != null && sentByRemotes(it) }
         for (sample in senders) {
             val before = controlTexts().size
             sample.send!!(vm)
@@ -126,6 +129,27 @@ class RelayedVerbSecondaryWireTest {
         VmHarness.idleUntil("the primary to handle every control") { handled.size == senders.size }
         assertEquals(senders.map { it.method to it.args }, handled.toList())
     }
+
+    /** AC-15: the Quick Controls machine settings (steam, hot water, flush)
+     *  are read-only on a remote: their setters put nothing on the wire. */
+    @Test
+    fun `machine settings a remote doesn't send put nothing on the wire`() {
+        val refusedHere = RELAYED_VERB_SAMPLES.filter { it.send != null && !sentByRemotes(it) }
+        assertEquals(
+            setOf("setQcSteamTime", "setQcSteamFlow", "setQcSteamTemp", "setQcHotWaterTemp", "setQcHotWaterVolume", "setQcFlushTime", "setQcFlushTemp"),
+            refusedHere.map { it.method }.toSet(),
+        )
+        for (sample in refusedHere) sample.send!!(vm)
+        vm.tareScale() // a control that is sent, so the wire has caught up
+        VmHarness.idleUntil("the tare on the wire") { controlTexts().isNotEmpty() }
+        VmHarness.idleUntil("the primary to handle it") { handled.isNotEmpty() }
+        assertEquals(listOf("tareScale" to ""), handled.toList())
+        assertEquals(1, controlTexts().size)
+    }
+
+    private fun sentByRemotes(sample: RelayedVerbSample): Boolean =
+        (coffee.crema.machine.MachineCommandCodec.decode(sample.method, sample.args) as coffee.crema.machine.MachineCommandCodec.Decoded.Valid)
+            .command.sentByRemotes()
 
     /** What a secondary keeps to itself: the debug panel's raw Espresso (a
      *  shot is relayed only as startShot), and a Wake while its view of the
@@ -162,13 +186,13 @@ class RelayedVerbSecondaryWireTest {
         // The hub answers in order (one thread), so once the refused drain
         // verb's failure is logged, the replies before it have landed too.
         refused += "tareScale"
-        vm.setQcSteamTime(30f)
+        vm.setQcGrind(14.5f)
         vm.stopShot()
         vm.tareScale()
         VmHarness.idleUntil("the drain verb's refusal") { VmHarness.log(vm).any { "Relay tareScale failed" in it } }
-        assertEquals(listOf("setQcSteamTime" to "30.0", "machineState" to "IDLE", "tareScale" to ""), handled.toList())
-        assertEquals(30f, vm.ui.value.qcSteamTimeS, "the hub's value, pushed before its reply")
-        assertEquals(12f, VmHarness.ownState(vm).qcSteamTimeS, "never written to this remote's own settings")
+        assertEquals(listOf("setQcGrind" to "14.5", "machineState" to "IDLE", "tareScale" to ""), handled.toList())
+        assertEquals(14.5f, vm.ui.value.qcGrind, "the hub's value, pushed before its reply")
+        assertEquals(null, VmHarness.ownState(vm).qcGrind, "never written to this remote's own settings")
     }
 
     private companion object {

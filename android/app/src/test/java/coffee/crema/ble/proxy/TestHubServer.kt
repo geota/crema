@@ -56,6 +56,7 @@ internal class TestHubServer private constructor() {
             configSource: () -> String = { "" },
             controlHandler: suspend (method: String, args: String, originId: String?, originName: String?) -> Result<Unit> =
                 { _, _, _, _ -> Result.success(Unit) },
+            canControl: Boolean = true,
         ): Pair<TestHubServer, RelayHub> {
             val endpoint = TestHubServer().start()
             val hub = RelayHub(
@@ -67,7 +68,7 @@ internal class TestHubServer private constructor() {
                 configSource = configSource,
                 controlHandler = controlHandler,
                 authorize = { request ->
-                    if (request.proves(secret)) PairingDecision.Allowed(canControl = true)
+                    if (request.proves(secret)) PairingDecision.Allowed(canControl = canControl)
                     else PairingDecision.Denied(DenyReason.NOT_AUTHORIZED)
                 },
                 pairingSecretFor = { id -> secret.takeIf { id == clientId() } },

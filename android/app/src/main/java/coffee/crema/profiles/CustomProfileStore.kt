@@ -9,6 +9,8 @@ import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -52,6 +54,12 @@ private data class CustomProfileLibrary(val profiles: List<JsonObject> = emptyLi
 class CustomProfileStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
+    /** One save at a time, and never an older snapshot after a newer one (like
+     *  the prefs store): a fire-and-forget save can't land after the T6
+     *  adoption's awaited one. */
+    private val saveLock = Mutex()
+    private var lastGeneration = Long.MIN_VALUE
+
     /**
      * Load the custom profiles as full-JSON strings (newest first, as stored), or
      * an empty list if absent / unreadable. Each string is a complete `CremaProfile`
@@ -62,21 +70,28 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
             .valueOrNull()?.profiles?.map { it.toString() } ?: emptyList()
     }
 
-    /** Persist the custom profiles (full-JSON strings in; best-effort). */
-    suspend fun save(profiles: List<String>) {
+    /** Persist the custom profiles (full-JSON strings in; best-effort). A
+     *  numbered snapshot older than the last one saved is skipped. */
+    suspend fun save(profiles: List<String>, generation: Long? = null) {
         withContext(Dispatchers.IO) {
-            runCatching {
-                val objs = profiles.mapNotNull {
-                    runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull()
+            saveLock.withLock {
+                if (generation != null) {
+                    if (generation < lastGeneration) return@withLock
+                    lastGeneration = generation
                 }
-                saveStore(file, json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs)))
+                runCatching {
+                    val objs = profiles.mapNotNull {
+                        runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull()
+                    }
+                    saveStore(file, json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs)))
+                }
             }
         }
     }
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {
-        withContext(Dispatchers.IO) { eraseStore(file) }
+        withContext(Dispatchers.IO) { saveLock.withLock { eraseStore(file) } }
     }
 
     private companion object {

@@ -202,6 +202,20 @@ class RelayedVerbPrimaryDispatchTest {
         assertEquals(listOf(RemoteClient("phone-1", "Phone", canControl = true)), vm.ui.value.remotes)
     }
 
+    /** AC-35, the hub half: the steam, hot-water and flush verbs newer
+     *  remotes don't send still come from older ones; the hub applies them
+     *  (the golden fixtures) and logs who changed what. */
+    @Test
+    fun `older remotes' QC machine verbs are applied and logged`() {
+        vm.setQcSteamTemp(140f)
+        VmHarness.idle()
+        assertEquals(Frame.ControlOk(1), relay(Golden.require("control/setQcSteamTemp.json")))
+        assertEquals(148f, vm.ui.value.qcSteamTempC, "applied")
+        assertTrue(VmHarness.log(vm).any { it.endsWith("Phone changed steam temperature (older Crema)") }, "${VmHarness.log(vm).take(5)}")
+        assertEquals(Frame.ControlOk(1), relay(Golden.require("control/setQcFlushTime.json")))
+        assertTrue(VmHarness.log(vm).any { it.endsWith("Phone changed flush time (older Crema)") })
+    }
+
     /** An accepted start is announced to this primary's user. */
     @Test
     fun `an accepted start is announced`() {

@@ -21,6 +21,7 @@ import java.util.concurrent.Executors
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * A session's controls reach the primary's handler one at a time, in the
@@ -74,6 +75,45 @@ class RelayHubControlOrderTest {
         sendInOrder(hub, 40) { i -> Frame.Control(i.toLong(), "setQcGrind", "$i.0") }
         assertEquals((1..40).map { "$it.0" }, handled.toList())
         assertEquals(false, overlapped, "two controls of one session ran at once")
+    }
+
+    /** AC-21, the ordering case (spec §7.3): a hub that applies a relayed
+     *  edit pushes its new snapshot before it answers, so a remote never sees
+     *  its edit accepted while it still holds the old value. */
+    @Test
+    fun `an accepted edit's config push reaches the remote before the reply`() = runBlocking {
+        var config = """{"qcGrind":10.0}"""
+        lateinit var hub: RelayHub
+        hub = RelayHub(
+            primaryId = "host-1",
+            primaryName = "Tablet",
+            roster = { emptyList() },
+            readSource = { _, _, _ -> error("unused") },
+            isSnapshotChar = { _, _ -> false },
+            controlHandler = { _, args, _, _ ->
+                config = """{"qcGrind":$args}"""
+                hub.pushConfig(config)
+                Result.success(Unit)
+            },
+            configSource = { config },
+        )
+        val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val (client, server) = InMemoryFrameLink.pair()
+            io.launch { hub.serve(server) }
+            val rx = CopyOnWriteArrayList<Frame>()
+            io.launch { client.incoming().collect { rx += it } }
+            handshake(client, rx)
+            for (i in 1..20) client.send(Frame.Control(i.toLong(), "setQcGrind", "$i.5"))
+            withTimeout(10_000) { while (rx.count { it is Frame.ControlOk } < 20) delay(5) }
+            for (i in 1..20) {
+                val push = rx.indexOfFirst { it is Frame.Config && it.json == """{"qcGrind":$i.5}""" }
+                val reply = rx.indexOfFirst { it is Frame.ControlOk && it.id == i.toLong() }
+                assertTrue(push in 0 until reply, "edit $i: push at $push, reply at $reply")
+            }
+        } finally {
+            io.cancel()
+        }
     }
 
     @Test
