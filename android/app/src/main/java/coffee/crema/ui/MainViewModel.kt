@@ -313,6 +313,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         knownSerial = UniffiDecentCore::knownSerial,
         liveSerialUnreadable = { sharing.liveSerialUnreadable() },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
+        seriesReady = { library.awaitSeries() },
         onLinked = { sharing.offerCatchUp(UploadTargetId.Decent) },
     )
 
@@ -342,6 +343,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onFillBarista = { localId, barista -> library.fillShotBarista(localId, barista) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
+        seriesReady = { library.awaitSeries() },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
         onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
         networkWatcher = coffee.crema.visualizer.DefaultNetworkWatcher(app),

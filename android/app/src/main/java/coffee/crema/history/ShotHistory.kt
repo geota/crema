@@ -11,6 +11,7 @@ import coffee.crema.core.ShotStatInput
 import coffee.crema.core.brewHistoryStats as coreBrewHistoryStats
 import coffee.crema.core.downsampleIndices
 import coffee.crema.core.historyStats as coreHistoryStats
+import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
@@ -462,8 +463,14 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
     /** Series files that already hold the in-memory series, so a save writes
      *  only new ones (a series never changes after capture, except a
-     *  curve-less stub's backfill, which starts empty). */
+     *  curve-less stub's backfill, which starts empty). Only a shot named here
+     *  is saved without its samples inline. */
     private val written = mutableSetOf<String>()
+
+    /** Shots whose series file was unreadable at load (kept aside and
+     *  reported): they show, and back up, without a curve. */
+    @Volatile var unreadableSeries: Set<String> = emptySet()
+        private set
 
     /** The stored shot ROWS, or empty when absent — without their series
      *  (see [loadSeries]), so startup can show the history and go on without
@@ -483,13 +490,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
      *  startup it runs after the rows are shown. */
     suspend fun loadSeries(ids: Collection<String>): Map<String, List<TelemetrySample>> =
         withContext(Dispatchers.IO) {
+            holdSeriesLoad?.await()
             lock.withLock {
-                ids.mapNotNull { id ->
-                    readSeries(id)?.let { series ->
-                        written += seriesFile(id).name
-                        id to series
-                    }
-                }.toMap()
+                ids.mapNotNull { id -> readSeries(id)?.let { id to it } }.toMap()
             }
         }
 
@@ -508,11 +511,21 @@ class HistoryStore(private val context: Context, private val json: Json) {
                     if (shot.samples.isEmpty() || name in written) continue
                     if (writeSeries(shot.id, shot.samples)) written += name
                 }
-                pruneSeries(shots.mapTo(HashSet()) { seriesFile(it.id).name })
+                // A pre-rename file goes only once its shot's new file holds
+                // the series (a save before the series load must not drop it).
+                pruneSeries(
+                    shots.flatMapTo(HashSet()) { shot ->
+                        val name = seriesFile(shot.id).name
+                        if (name in written) listOf(name) else listOf(name, legacySeriesFile(shot.id).name)
+                    },
+                )
+                // Only a shot whose series file is written goes without its
+                // samples; the rest stay inline until a later save writes them
+                // (a full disk must not cost a shot its curve).
                 runCatching {
                     json.encodeToString(
                         ListSerializer(StoredShot.serializer()),
-                        shots.map { if (it.samples.isEmpty()) it else it.copy(samples = emptyList()) },
+                        shots.map { if (it.samples.isNotEmpty() && seriesFile(it.id).name in written) it.copy(samples = emptyList()) else it },
                     )
                 }.onSuccess { saveStore(file, it) }
             }
@@ -527,19 +540,46 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 eraseStore(file)
                 seriesDir.listFiles()?.forEach { eraseStore(it) }
                 written.clear()
+                unreadableSeries = emptySet()
             }
         }
     }
 
-    private fun seriesFile(id: String): File =
+    private fun seriesFile(id: String): File = File(seriesDir, seriesFileName(id))
+
+    /** The name before [seriesFileName] (every other character replaced by
+     *  `_`, so `shot:1` and `shot_1` shared a file): read until the next save
+     *  writes the new one. */
+    private fun legacySeriesFile(id: String): File =
         File(seriesDir, id.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".json")
 
+    /** [id]'s series: its file, else a pre-rename file. A file that doesn't
+     *  decode is moved aside and reported ([loadStore]), and the shot is
+     *  listed in [unreadableSeries]: never read as "no curve" silently. */
     private fun readSeries(id: String): List<TelemetrySample>? {
+        val decode = { text: String -> json.decodeFromString(ListSerializer(TelemetrySample.serializer()), text) }
         val f = seriesFile(id)
-        if (!f.exists()) return null
-        return runCatching {
-            json.decodeFromString(ListSerializer(TelemetrySample.serializer()), f.readText())
-        }.getOrNull()
+        when (val outcome = loadStore(f, "shot telemetry", decode)) {
+            is SafeLoad.Loaded -> {
+                written += f.name
+                return outcome.value
+            }
+            is SafeLoad.Corrupt -> {
+                unreadableSeries = unreadableSeries + id
+                return null
+            }
+            SafeLoad.Absent -> Unit
+        }
+        val legacy = legacySeriesFile(id)
+        if (legacy.name == f.name) return null
+        return when (val outcome = loadStore(legacy, "shot telemetry", decode)) {
+            is SafeLoad.Loaded -> outcome.value
+            is SafeLoad.Corrupt -> {
+                unreadableSeries = unreadableSeries + id
+                null
+            }
+            SafeLoad.Absent -> null
+        }
     }
 
     private fun writeSeries(id: String, samples: List<TelemetrySample>): Boolean {
@@ -560,6 +600,26 @@ class HistoryStore(private val context: Context, private val json: Json) {
     }
 
     companion object {
+        /**
+         * A shot's series file name: [id] with every byte outside
+         * `[A-Za-z0-9.-]` (`_` included) written as `_XX` (UTF-8, upper hex),
+         * so two ids never share a file. A UUID id keeps its name.
+         */
+        internal fun seriesFileName(id: String): String = buildString {
+            for (b in id.toByteArray(Charsets.UTF_8)) {
+                val c = b.toInt().toChar()
+                if (b >= 0 && (c.isLetterOrDigit() && c.code < 128 || c == '.' || c == '-')) append(c)
+                else append('_').append(HEX[(b.toInt() shr 4) and 0xF]).append(HEX[b.toInt() and 0xF])
+            }
+            append(".json")
+        }
+        private const val HEX = "0123456789ABCDEF"
+
+        /** Tests set this to hold [loadSeries] until they complete it, to act
+         *  while the startup's series load is still running. Null in the app. */
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var holdSeriesLoad: kotlinx.coroutines.Deferred<Unit>? = null
+
         /** Keep the most recent N shots (matches the web cap). */
         const val MAX_SHOTS = 300
         private const val FILE_NAME = "shots.json"

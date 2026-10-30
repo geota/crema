@@ -6,6 +6,7 @@ import coffee.crema.security.SecretBox
 import coffee.crema.security.SecretCipher
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
@@ -13,9 +14,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -50,6 +54,8 @@ class VisualizerRetryQueueTest {
     private val uploadReplies = ArrayDeque<Pair<HttpStatusCode, String>>()
     private var lastReply = HttpStatusCode.OK to """{"id":"v-1"}"""
     private val uploads = mutableListOf<String>()
+    /** Each upload's JSON body, in turn. */
+    private val uploadBodies = mutableListOf<String>()
     private val deletes = mutableListOf<String>()
     private var deleteStatus = HttpStatusCode.NoContent
     /** Set: each upload waits on it (an upload in flight holds its shot). */
@@ -62,6 +68,7 @@ class VisualizerRetryQueueTest {
                 gate.await()
                 return@MockEngine respond(lastReply.second, lastReply.first, headersOf(HttpHeaders.ContentType, "application/json"))
             }
+            uploadBodies += String(req.body.toByteArray(), Charsets.UTF_8)
             val reply = uploadReplies.removeFirstOrNull() ?: lastReply
             lastReply = reply
             uploads += path
@@ -88,6 +95,7 @@ class VisualizerRetryQueueTest {
         expiredTokens: Boolean = false,
         watcher: NetworkWatcher? = null,
         keepStore: Boolean = false,
+        seriesReady: suspend () -> Unit = {},
         waits: MutableList<Long>? = null,
     ) = VisualizerSync(
         store = store,
@@ -107,6 +115,7 @@ class VisualizerRetryQueueTest {
         networkWatcher = watcher,
         // [waits] turns the timers on, each wait recorded and never ending.
         retryTimers = waits != null,
+        seriesReady = seriesReady,
         retryDelay = { ms -> waits?.add(ms); awaitCancellation() },
     ).also { s ->
         runBlocking {
@@ -398,5 +407,50 @@ class VisualizerRetryQueueTest {
         assertEquals("the 429 stopped the pass", 1, uploads.size)
         assertEquals("s2 is still due", clock, queue().single { it.shotId == "s2" }.nextAttemptAt)
         assertEquals("the next drain waits the minimum: $waits", listOf(VisualizerSync.MIN_DRAIN_DELAY_MS), waits)
+    }
+
+    /** F10 validation P1-2: a queued upload waits for the stored series to
+     *  load, then sends the shot as history holds it (with its samples). */
+    @Test
+    fun `the drain waits for the stored series and uploads them`() {
+        runBlocking {
+            store.save(
+                VisualizerState(
+                    tokens = TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000),
+                    retryQueue = listOf(QueuedUpload("s1", 1, clock)),
+                ),
+            )
+        }
+        shot("s1") // the row, before its series has loaded
+        val loaded = CompletableDeferred<Unit>()
+        val s = sync(keepStore = true, seriesReady = { loaded.await() })
+        val drain = CoroutineScope(Dispatchers.Default).async { s.drainRetryQueue() }
+        Thread.sleep(200)
+        assertTrue("nothing uploaded before the series load: $uploads", uploads.isEmpty())
+        history["s1"] = history.getValue("s1").copy(
+            samples = List(4) { n -> coffee.crema.ui.TelemetrySample(elapsedMs = n * 250L, pressure = 8f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null, dispensedVolume = 0f, resistance = null, resistanceWeight = null, setHeadTemp = 93f, setGroupPressure = 9f, setGroupFlow = 0f, frameNumber = 1) },
+        )
+        loaded.complete(Unit)
+        assertEquals(1, runBlocking { drain.await() })
+        val body = json.parseToJsonElement(uploadBodies.single()).jsonObject
+        assertEquals(4, body.getValue("elapsed").jsonArray.size)
+    }
+
+    /** F10 validation P3: a restored or re-imported shot drops its tombstone,
+     *  so a pending remote delete doesn't remove the copy it points at. */
+    @Test
+    fun `a restored shot's tombstone is forgotten and its remote delete never runs`() {
+        deleteStatus = HttpStatusCode.InternalServerError
+        val s = sync()
+        s.tombstoneShot("s1", "v-1", deleteRemote = true)
+        settle()
+        assertEquals("the delete is pending", listOf("s1"), s.shotTombstones.map { it.id })
+        val tries = deletes.size
+        s.forgetTombstones(listOf("s1"))
+        settle()
+        assertTrue(runBlocking { store.load() }.shotTombstones.isEmpty())
+        clock += 60 * 60_000
+        runBlocking { s.drainRetryQueue() }
+        assertEquals("no delete after the restore", tries, deletes.size)
     }
 }
