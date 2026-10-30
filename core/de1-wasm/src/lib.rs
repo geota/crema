@@ -13,9 +13,9 @@
 //! binding glue — so this crate opts out of the workspace's
 //! `unsafe_code = "forbid"` lint (see `Cargo.toml`).
 
-use de1_app::{CoreOutput, CremaCore, Source};
+use de1_app::{CoreOutput, CremaCore, Source, SteamHotWaterTargets};
 use de1_domain::Profile;
-use de1_protocol::{CalTarget, MachineState, MmrRegister, ShotSettings};
+use de1_protocol::{CalTarget, MachineState, MmrRegister};
 use std::cell::Cell;
 
 use wasm_bindgen::prelude::*;
@@ -3257,34 +3257,26 @@ impl CremaBridge {
         json(self.state().core.set_scale_auto_stop(mode_id))
     }
 
-    /// Write the DE1's steam / hot-water settings. The fields are passed as
-    /// individual scalars — [`de1_protocol::ShotSettings`] is not (and should
-    /// not be) wasm-bindgen-annotated, so the bridge builds it here. Returns a
-    /// JSON-encoded [`CoreOutput`] whose command applies the settings (with
-    /// the legacy hot-water volume override when a scale is connected).
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_steam_hotwater_settings(
+    /// Set the steam / hot-water targets: the core writes the combined
+    /// packet read-modify-write, keeping every field it doesn't own (see
+    /// [`de1_app::CremaCore::set_steam_hotwater_targets`]); the group target
+    /// is the effective profile's temperature. Returns a JSON-encoded
+    /// [`CoreOutput`] whose command applies them (with the legacy hot-water
+    /// volume override when a scale is connected).
+    pub fn set_steam_hotwater_targets(
         &self,
-        steam_flags: u8,
         steam_temp_c: f32,
         steam_timeout_s: f32,
         hot_water_temp_c: f32,
         hot_water_volume_ml: f32,
-        hot_water_timeout_s: f32,
-        espresso_volume_ml: f32,
-        group_temp_c: f32,
     ) -> String {
-        let settings = ShotSettings {
-            steam_flags,
+        let targets = SteamHotWaterTargets {
             steam_temp_c,
             steam_timeout_s,
             hot_water_temp_c,
             hot_water_volume_ml,
-            hot_water_timeout_s,
-            espresso_volume_ml,
-            group_temp_c,
         };
-        json(self.state().core.set_steam_hotwater_settings(settings))
+        json(self.state().core.set_steam_hotwater_targets(&targets))
     }
 
     /// Enable or disable steam eco mode (the legacy `eco_steam` setting).
@@ -4027,13 +4019,13 @@ mod tests {
         assert!(!bridge.in_replay());
     }
 
-    /// Apply representative steam / hot-water settings to `bridge`.
+    /// Apply representative steam / hot-water targets to `bridge`.
     fn set_steam_settings(bridge: &CremaBridge) -> String {
-        bridge.set_steam_hotwater_settings(0, 150.0, 120.0, 85.0, 50.0, 30.0, 36.0, 92.0)
+        bridge.set_steam_hotwater_targets(150.0, 120.0, 85.0, 50.0)
     }
 
     #[test]
-    fn set_steam_hotwater_settings_produces_a_write_command() {
+    fn set_steam_hotwater_targets_produces_a_write_command() {
         let bridge = CremaBridge::new();
         let json = set_steam_settings(&bridge);
         assert!(json.contains("\"commands\""));
