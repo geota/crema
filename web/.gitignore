@@ -10,6 +10,10 @@ build/
 # Run `pnpm wasm` once before `pnpm dev`; `pnpm build` runs it automatically.
 src/lib/wasm/
 
+# The test-seeds wasm bundle (`pnpm wasm:test`), only for the relay vitest.
+# Kept outside src/ so no app code can import it.
+.wasm-test/
+
 # PWA / Workbox generated assets
 dev-dist/
 

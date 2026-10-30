@@ -32,6 +32,9 @@ use de1_protocol::{CalTarget, MachineState, MmrRegister, ShotSettings};
 
 uniffi::setup_scaffolding!();
 
+// Relay v4 secure channel (its own module and exports; see relay.rs).
+mod relay;
+
 /// The error every fallible FFI export throws.
 ///
 /// UniFFI's bindgen cannot lower a bare `String` throw type — it panics with

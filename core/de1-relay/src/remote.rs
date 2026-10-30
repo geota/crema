@@ -143,8 +143,9 @@ impl RemoteConnection {
         self.phase
     }
 
-    /// The hub's static key, once trusted (`Paired` or `Established`); `None`
-    /// before and after a failure.
+    /// The hub's static key, once trusted: in `Paired` and `Established`. `None`
+    /// before, after a failure and after a normal close (`Closed`), so the
+    /// shell pins the key it read at `Paired`.
     pub fn peer_public_key(&self) -> Option<[u8; 32]> {
         // Only once the hub is trusted: PAIR_COMPLETE decrypted, or IK message 2
         // did. A fake hub that reached XX message 2 without the code reveals nothing.
@@ -469,10 +470,8 @@ impl RemoteConnection {
                 };
                 let lifetime = CODE_LIFETIME_MS.min(u64::from(sh.secs_left) * 1000);
                 let expires_at_ms = now_ms + lifetime;
-                step.events.push(RelayEvent::ShowCode {
-                    code: code.as_str().to_owned(),
-                    expires_at_ms,
-                });
+                // The code itself stays here; the shell reads it with `code()`.
+                step.events.push(RelayEvent::ShowCode { expires_at_ms });
                 let (state, pake_a) = pake::start_a(&code, &self.my_id, &sh.hub_id, spake_rng);
                 step.push_binary(wire::encode_pake(kind::PAKE_A, &pake_a));
                 self.code = Some(code);

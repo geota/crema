@@ -16,6 +16,18 @@ de1-domain = { path = "../de1-domain" }
 de1-protocol = { path = "../de1-protocol" }
 serde_json = { workspace = true }
 uniffi = { version = "0.32.0", features = ["cli"] }
+# Relay v4 (spec §3.5): the secure channel, OS entropy for its seeds (the
+# getrandom(2) syscall on Android; already in the lockfile through uuid), and
+# zeroize for the key and code buffers this bridge owns.
+de1-relay = { path = "../de1-relay" }
+getrandom = "0.4"
+zeroize = "1"
+
+[features]
+# The deterministic `*_for_tests` relay constructors (spec §2.11). Only the
+# host build for the JVM unit tests (cargoBuildHostCore) enables it; the APK's
+# library never does, and CI's release-symbols check proves it.
+test-seeds = ["de1-relay/test-seeds"]
 
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -4666,10 +4666,12 @@ export type RelayEvent =
 	/** Seconds left in the pairing window (or the lockout). */
 	secs_left: number;
 }}
-	/** Remote: show this code until `expires_at_ms`. */
+	/**
+	 * Remote: show the code, read from `RemoteConnection::code()`, until
+	 * `expires_at_ms`. The event itself never carries the code, so no event,
+	 * event JSON or record a bridge builds from it can leak it into a log.
+	 */
 	| { type: "ShowCode", content: {
-	/** Six ASCII digits. */
-	code: string;
 	/** When the code expires (`now_ms` clock). */
 	expires_at_ms: number;
 }}

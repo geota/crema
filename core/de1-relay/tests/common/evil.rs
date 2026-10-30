@@ -277,14 +277,12 @@ pub fn evil_pair_hub_guessing(
     }
     .encode();
     let s1 = remote.on_ws(WsIn::Binary(&sh), now);
-    let code = s1
-        .events
-        .iter()
-        .find_map(|e| match e {
-            de1_relay::RelayEvent::ShowCode { code, .. } => Some(code.clone()),
-            _ => None,
-        })
-        .unwrap();
+    assert!(
+        s1.events
+            .iter()
+            .any(|e| matches!(e, de1_relay::RelayEvent::ShowCode { .. }))
+    );
+    let code = remote.code().unwrap();
     let code = guess.map_or(code, str::to_owned);
     let pake_a = s1.send[0].bytes[1..].to_vec();
     let (state, b) = pake::start_b(
