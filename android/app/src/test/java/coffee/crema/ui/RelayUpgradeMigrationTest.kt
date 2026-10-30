@@ -170,6 +170,55 @@ class RelayUpgradeMigrationTest {
     }
 
     @Test
+    fun `SR-3a P3-2 after a re-pair a pairedDevices found again never brings the flags back`() {
+        v3("secondary")
+        val store = loadedStore()
+        migration.run(store)
+        assertTrue(store.v3Migrated)
+        store.clearUpgradeFlags() // the user paired again
+        // An older build (or a restored copy) writes pairedDevices back.
+        prefsFile.writeText(prefs("secondary"))
+        assertEquals(Outcome.MIGRATED, migration.run(store))
+        assertFalse(prefsObject().containsKey("pairedDevices"))
+        assertFalse(store.needsRepair)
+        assertFalse(loadedStore().needsRepair)
+    }
+
+    @Test
+    fun `SR-3a P3-2 a device with nothing to migrate is marked, so a later pairedDevices raises nothing`() {
+        prefsFile.writeText(prefs("secondary").replace(""","pairedDevices":[{"id":"abc","name":"Pixel","canControl":true}]""", ""))
+        val store = loadedStore()
+        assertEquals(Outcome.NOTHING_TO_MIGRATE, migration.run(store))
+        assertTrue(loadedStore().v3Migrated)
+        prefsFile.writeText(prefs("secondary"))
+        assertEquals(Outcome.MIGRATED, migration.run(store))
+        assertFalse(store.needsRepair)
+        assertFalse(prefsObject().containsKey("pairedDevices"))
+    }
+
+    @Test
+    fun `SR-3a P3-2 the prefs backup and temp copies lose pairedDevices too`() {
+        v3("secondary")
+        val bak = File(dir, "prefs.json.bak").apply { writeText(prefs("secondary")) }
+        val tmp = File(dir, "prefs.json.tmp").apply { writeText(prefs("primary")) }
+        assertEquals(Outcome.MIGRATED, migration.run(loadedStore()))
+        for (f in listOf(prefsFile, bak, tmp)) {
+            val obj = Json.parseToJsonElement(f.readText()).jsonObject
+            assertFalse("${f.name} keeps pairedDevices", obj.containsKey("pairedDevices"))
+            assertEquals("${f.name} lost other prefs", "192.168.1.20", (obj["proxyPrimaryHost"] as kotlinx.serialization.json.JsonPrimitive).content)
+        }
+        // And no new copy of the old prefs is left behind.
+        assertFalse(dir.listFiles()!!.any { it.readText().contains("pairedDevices") })
+    }
+
+    @Test
+    fun `the migration leaves no prefs backup holding pairedDevices`() {
+        v3("secondary")
+        migration.run(loadedStore())
+        assertFalse(File(dir, "prefs.json.bak").let { it.exists() && it.readText().contains("pairedDevices") })
+    }
+
+    @Test
     fun `unreadable prefs still remove the v3 files and leave prefs alone`() {
         v3("secondary")
         prefsFile.writeText("{not json")

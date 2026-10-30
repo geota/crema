@@ -403,19 +403,60 @@ class RelayKeyStoreTest {
         assertNoClearKeyOnDisk(result.keys)
     }
 
+    /** A file with pins and a saved hub but no key (hand-edited, or written by something else). */
+    private val keylessWithPins =
+        """{"v":1,"hubs":[{"id":"h1","public":"AA==","name":"t","host":"h","port":1,"pinnedAtMs":0}],""" +
+            """"remotes":[{"id":"r1","public":"AA==","name":"p","scope":"control","pairedAtMs":0}],"savedHub":"h1","v3Migrated":true}"""
+
     @Test
-    fun `AC-30 a sealing failure drops pins from a file that has no key`() {
-        // A file with pins but no self (hand-edited, or a future format): a new key
-        // that can't be sealed keeps none of them, in memory or on disk.
-        val pins = """{"v":1,"hubs":[{"id":"h1","public":"AA==","name":"t","host":"h","port":1,"pinnedAtMs":0}],""" +
-            """"remotes":[{"id":"r1","public":"AA==","name":"p","scope":"control","pairedAtMs":0}]}"""
-        storeFile.writeText(pins)
+    fun `SR-3a P3-3 a file with pins but no key resets like a loss`() {
+        storeFile.writeText(keylessWithPins)
+        val s = store()
+        val result = ready(s.load())
+        assertTrue(result.keyReset)
+        assertTrue(result.persistent)
+        assertTrue(s.hubs.isEmpty() && s.remotes.isEmpty())
+        assertNull(s.savedHub)
+        assertTrue(s.keyResetNotice)
+        assertTrue(s.v3Migrated) // the one-time migration marker survives
+        assertEquals(keylessWithPins, lostDir.listFiles()!!.single().readText())
+        val reloaded = store()
+        assertTrue(ready(reloaded.load()).keys.deviceId() == result.keys.deviceId())
+        assertTrue(reloaded.remotes.isEmpty())
+    }
+
+    @Test
+    fun `a file with no key and no pins just gets a key`() {
+        storeFile.writeText("""{"v":1,"needsRepair":true}""")
+        val s = store()
+        val result = ready(s.load())
+        assertFalse(result.keyReset)
+        assertFalse(s.keyResetNotice)
+        assertFalse(lostDir.exists())
+    }
+
+    @Test
+    fun `AC-30 a sealing failure keeps no pins from a file that has no key`() {
+        storeFile.writeText(keylessWithPins)
         cipher.sealFailure = ProviderException("keystore unusable")
         val s = store()
         assertFalse(ready(s.load()).persistent)
         assertTrue(s.hubs.isEmpty())
         assertTrue(s.remotes.isEmpty())
-        assertEquals(pins, storeFile.readText())
+        assertFalse(storeFile.exists())
+    }
+
+    @Test
+    fun `SR-3a P3-2 the v3 marker survives a key reset`() {
+        val s = store()
+        ready(s.load())
+        s.markV3Migrated()
+        s.resetKey()
+        assertTrue(store().also { it.load() }.v3Migrated)
+        keySource.key = null // definitive loss
+        val after = store()
+        assertTrue(ready(after.load()).keyReset)
+        assertTrue(after.v3Migrated)
     }
 
     // ---- pins ------------------------------------------------------------------

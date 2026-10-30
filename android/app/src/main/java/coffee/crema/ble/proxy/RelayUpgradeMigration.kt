@@ -2,7 +2,6 @@ package coffee.crema.ble.proxy
 
 import android.util.Log
 import coffee.crema.persist.SafeFile
-import coffee.crema.persist.saveStore
 import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -26,7 +25,10 @@ import kotlinx.serialization.json.jsonObject
  * It runs only when the relay store has a key loaded: when the keys are
  * unavailable this start (a transient keystore error) it changes nothing and the
  * next start retries. The flags are written before anything is deleted, so an
- * interrupted run simply runs again.
+ * interrupted run simply runs again, and with them a one-time marker
+ * (`v3Migrated`): after that, v3 leftovers are still removed but never raise the
+ * flags again. `pairedDevices` is dropped from `prefs.json` and from the `.bak`
+ * and `.tmp` copies SafeFile could restore it from.
  */
 class RelayUpgradeMigration(private val filesDir: File, private val json: Json) {
     /** What [run] did. */
@@ -46,34 +48,45 @@ class RelayUpgradeMigration(private val filesDir: File, private val json: Json) 
     private val prefsFile get() = File(filesDir, PREFS_FILE)
 
     fun run(store: RelayKeyStore): Outcome {
-        val prefs = readPrefs()
         val v3Files = listOf(pairingFile, deviceIdFile).flatMap(::copiesOf).filter(File::exists)
-        val hasPairedDevices = prefs?.containsKey(PAIRED_DEVICES) == true
-        if (v3Files.isEmpty() && !hasPairedDevices) return Outcome.NOTHING_TO_MIGRATE
+        // `prefs.json` and the copies SafeFile may restore it from: none may keep `pairedDevices`.
+        val prefsCopies = listOf(prefsFile, SafeFile.backupOf(prefsFile), File(prefsFile.path + ".tmp"))
+            .mapNotNull { f -> readJson(f)?.let { f to it } }
+        val withPairedDevices = prefsCopies.filter { (_, obj) -> obj.containsKey(PAIRED_DEVICES) }
+        if (v3Files.isEmpty() && withPairedDevices.isEmpty()) {
+            if (store.isLoaded && !store.v3Migrated) store.markV3Migrated()
+            return Outcome.NOTHING_TO_MIGRATE
+        }
         if (!store.isLoaded) return Outcome.DEFERRED
 
-        // Only real v3 pairings raise the flags: a bare `"pairedDevices": []`
-        // (an older build saving its defaults again) is just dropped, so it can't
-        // send a re-paired remote back to "Pair again".
-        val v3Paired = v3Files.isNotEmpty() || (prefs?.get(PAIRED_DEVICES) as? JsonArray)?.isNotEmpty() == true
+        val prefs = prefsCopies.firstOrNull { it.first == prefsFile }?.second
         val role = (prefs?.get(PROXY_ROLE) as? JsonPrimitive)?.takeIf { it.isString }?.content
-        if (v3Paired) store.markUpgraded(needsRepair = role == ROLE_REMOTE, upgradeNotice = role == ROLE_HUB)
+        if (!store.v3Migrated) {
+            // Only real v3 pairings raise the flags: a bare `"pairedDevices": []`
+            // (an older build saving its defaults again) is just dropped.
+            val v3Paired = v3Files.isNotEmpty() || (prefs?.get(PAIRED_DEVICES) as? JsonArray)?.isNotEmpty() == true
+            // Recorded (with the one-time marker) before anything is deleted, so an
+            // interrupted run runs again; once marked, a leftover found later (a
+            // restored `.bak`, an older build's save) is cleaned up without
+            // sending a re-paired remote back to "Pair again".
+            store.markUpgraded(needsRepair = v3Paired && role == ROLE_REMOTE, upgradeNotice = v3Paired && role == ROLE_HUB)
+        }
 
         SafeFile.erase(pairingFile)
         SafeFile.erase(deviceIdFile)
-        if (prefs != null && hasPairedDevices) {
-            val kept = JsonObject(prefs - PAIRED_DEVICES)
-            if (!saveStore(prefsFile, json.encodeToString(JsonObject.serializer(), kept))) {
-                Log.w(TAG, "couldn't drop $PAIRED_DEVICES from $PREFS_FILE; the next start retries")
-            }
+        for ((f, obj) in withPairedDevices) {
+            val kept = json.encodeToString(JsonObject.serializer(), JsonObject(obj - PAIRED_DEVICES))
+            // No new `.bak`: the old prefs would keep `pairedDevices` there.
+            runCatching { SafeFile.writeBytes(f, kept.toByteArray(Charsets.UTF_8), keepBackup = false) }
+                .onFailure { Log.w(TAG, "couldn't drop $PAIRED_DEVICES from ${f.name}; the next start retries") }
         }
         Log.i(TAG, "migrated relay v3 state (role ${role ?: "unknown"})")
         return Outcome.MIGRATED
     }
 
-    /** `prefs.json` as a JSON object (either shape keeps these keys at the top level), or null. */
-    private fun readPrefs(): JsonObject? = runCatching {
-        prefsFile.takeIf(File::exists)?.readText()?.let { json.parseToJsonElement(it).jsonObject }
+    /** [f] as a JSON object (either `prefs.json` shape keeps these keys at the top level), or null. */
+    private fun readJson(f: File): JsonObject? = runCatching {
+        f.takeIf(File::isFile)?.readText()?.let { json.parseToJsonElement(it).jsonObject }
     }.getOrNull()
 
     /** A file and the copies SafeFile may have left (`.bak`, `.tmp`, kept-aside corrupt copies). */

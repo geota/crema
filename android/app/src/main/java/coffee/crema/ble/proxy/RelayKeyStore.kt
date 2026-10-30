@@ -28,6 +28,8 @@ internal data class RelayFile(
     val needsRepair: Boolean = false,
     /** Set by the v3 migration on a hub: the one-time "pair your phones again" banner. */
     val upgradeNotice: Boolean = false,
+    /** The v3 migration has run once: v3 leftovers found later are removed but never raise the flags again. */
+    val v3Migrated: Boolean = false,
 )
 
 /** This device's key: [private] is always `sb1:`-sealed; never in clear. */
@@ -125,7 +127,7 @@ class RelayKeyStore(
         } catch (e: Exception) {
             return unavailable("store unparseable: ${e.javaClass.simpleName}")
         }
-        val self = stored.self ?: return createKey(stored, keyReset = false)
+        val self = stored.self ?: return noSelf(stored)
         when (val opened = box.openBytes(self.private)) {
             is SecretBox.OpenedBytes.Value -> {
                 val bytes = opened.bytes
@@ -148,7 +150,7 @@ class RelayKeyStore(
                 KeystoreFailure.DEFINITIVE -> {
                     Log.w(TAG, "relay key lost (${opened.reason}); starting over with a new key and no pins")
                     moveAside()
-                    createKey(RelayFile(keyResetNotice = true), keyReset = true)
+                    createKey(RelayFile(keyResetNotice = true, v3Migrated = stored.v3Migrated), keyReset = true)
                 }
             }
         }
@@ -158,6 +160,20 @@ class RelayKeyStore(
         Log.w(TAG, "relay keys unavailable this start: $reason")
         keys = null
         return RelayKeyLoad.Unavailable(reason)
+    }
+
+    /**
+     * A file without a key (hand-edited, or written by something else): its pins
+     * belong to a key this device doesn't have, so none are kept. With pins it is
+     * a reset like a definitive loss (moved aside, notice); without, just a new key.
+     */
+    private fun noSelf(stored: RelayFile): RelayKeyLoad {
+        val hadPairings = stored.hubs.isNotEmpty() || stored.remotes.isNotEmpty() || stored.savedHub != null
+        if (hadPairings) {
+            Log.w(TAG, "relay store has pins but no key; starting over with a new key and no pins")
+            moveAside()
+        }
+        return createKey(RelayFile(keyResetNotice = hadPairings, v3Migrated = stored.v3Migrated), keyReset = hadPairings)
     }
 
     /** Move the unopenable file to `relay-lost/relay-v4.json.<ms>`, kept for diagnosis. */
@@ -173,7 +189,7 @@ class RelayKeyStore(
         SafeFile.purgeCopies(file, keptAside = true)
     }
 
-    /** Generate a key; seal and write it with [base], or keep it in memory when sealing fails. */
+    /** Generate a key; seal and write it with [base] (no pins), or keep it in memory when sealing fails. */
     private fun createKey(base: RelayFile, keyReset: Boolean): RelayKeyLoad {
         val fresh = try {
             RelayKeys.generate()
@@ -191,11 +207,8 @@ class RelayKeyStore(
             private.fill(0)
         }
         keys = fresh
-        state = base.copy(
-            self = sealed?.let { RelaySelf(fresh.deviceId(), b64(fresh.publicKey()), it) },
-            hubs = if (sealed == null) emptyList() else base.hubs,
-            remotes = if (sealed == null) emptyList() else base.remotes,
-        )
+        // [base] never carries pins: a new key starts with none.
+        state = base.copy(self = sealed?.let { RelaySelf(fresh.deviceId(), b64(fresh.publicKey()), it) })
         persistent = sealed != null && write(state)
         return RelayKeyLoad.Ready(fresh, persistent = persistent, keyReset = keyReset)
     }
@@ -208,6 +221,7 @@ class RelayKeyStore(
     val keyResetNotice: Boolean get() = synchronized(lock) { state.keyResetNotice }
     val needsRepair: Boolean get() = synchronized(lock) { state.needsRepair }
     val upgradeNotice: Boolean get() = synchronized(lock) { state.upgradeNotice }
+    val v3Migrated: Boolean get() = synchronized(lock) { state.v3Migrated }
 
     /** Whether a key is loaded (false before [load], or after an [RelayKeyLoad.Unavailable]). */
     val isLoaded: Boolean get() = synchronized(lock) { keys != null }
@@ -268,11 +282,23 @@ class RelayKeyStore(
         update { s -> Unit to s.copy(keyResetNotice = false) }
     }
 
-    /** Raise the v3 migration's flags (§5.1, §6.4); never clears one already set. */
+    /**
+     * Raise the v3 migration's flags (§5.1, §6.4) and record that it ran; never
+     * clears a flag already set.
+     */
     fun markUpgraded(needsRepair: Boolean, upgradeNotice: Boolean) {
         update { s ->
-            Unit to s.copy(needsRepair = s.needsRepair || needsRepair, upgradeNotice = s.upgradeNotice || upgradeNotice)
+            Unit to s.copy(
+                needsRepair = s.needsRepair || needsRepair,
+                upgradeNotice = s.upgradeNotice || upgradeNotice,
+                v3Migrated = true,
+            )
         }
+    }
+
+    /** Record that the v3 migration has run (or had nothing to do). */
+    fun markV3Migrated() {
+        update { s -> Unit to s.copy(v3Migrated = true) }
     }
 
     fun clearUpgradeFlags() {
@@ -285,7 +311,7 @@ class RelayKeyStore(
      */
     fun resetKey(): RelayKeys? = synchronized(lock) {
         if (keys == null) return null
-        when (val result = createKey(RelayFile(), keyReset = false)) {
+        when (val result = createKey(RelayFile(v3Migrated = state.v3Migrated), keyReset = false)) {
             is RelayKeyLoad.Ready -> result.keys
             is RelayKeyLoad.Unavailable -> null
         }
