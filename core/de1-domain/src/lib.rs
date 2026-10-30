@@ -61,6 +61,7 @@ pub mod bean_import;
 pub mod bean_search;
 pub mod bean_sync;
 pub mod beanconqueror;
+pub mod bounds;
 pub mod brand;
 pub mod brew;
 pub mod brew_builtin;
@@ -153,6 +154,11 @@ pub use bean_sync::{
 pub use beanconqueror::{
     ImportDiagnostics, ImportPlan, ImportedShot, crema_to_bc_main_json,
     crema_to_bc_main_json_from_envelope, import_beanconqueror_json,
+};
+pub use bounds::{
+    BrewDefaultsBounds, ProfileEditorBounds, QuickControlBounds, STEAM_TEMP_MIN_C,
+    brew_defaults_bounds, brew_defaults_bounds_json, clamp_steam_temp, profile_editor_bounds,
+    profile_editor_bounds_json, quick_control_bounds, quick_control_bounds_json,
 };
 pub use brew::{
     BREW_METHOD_OTHER, BrewHistoryStats, BrewLogPrefill, BrewLogSeedInput, BrewLogSeeds,

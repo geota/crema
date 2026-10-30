@@ -386,6 +386,34 @@ data class BeanSyncScope (
 	val pushRoasters: Boolean
 )
 
+/// A stepper's range: `chips` lie inside `[min, max]`.
+@Serializable
+data class StepRange (
+	/// Lowest value.
+	val min: Float,
+	/// Highest value.
+	val max: Float,
+	/// Step.
+	val step: Float,
+	/// Preset chips.
+	val chips: List<Float>
+)
+
+/// Settings → Brew defaults' ranges (the seeds for new profiles).
+@Serializable
+data class BrewDefaultsBounds (
+	/// Default dose, g.
+	val doseG: StepRange,
+	/// Default ratio.
+	val ratio: StepRange,
+	/// Default brew temperature, °C.
+	val brewTempC: StepRange,
+	/// Default pre-infusion, s.
+	val preinfuseS: StepRange,
+	/// The global max shot duration, s (`0` = none).
+	val maxShotDurationS: StepRange
+)
+
 /// Summary metrics over a (filter/range-scoped) set of brews — the
 /// History stat strip once non-espresso rows exist. `None` = "no data"
 /// (render as "—").
@@ -3210,19 +3238,6 @@ data class HistoryStats (
 	val avgRating: Float? = null
 )
 
-/// A stepper's range: `chips` lie inside `[min, max]`.
-@Serializable
-data class StepRange (
-	/// Lowest value.
-	val min: Float,
-	/// Highest value.
-	val max: Float,
-	/// Step.
-	val step: Float,
-	/// Preset chips.
-	val chips: List<Float>
-)
-
 /// The hot-water steppers' ranges and the default dose, for both shells.
 @Serializable
 data class HotWaterBounds (
@@ -3509,6 +3524,32 @@ data class PreinfusionDial (
 	val adjustable: Boolean
 )
 
+/// The profile editor's ranges: applied when the user edits a field, never
+/// to rewrite a stored or imported profile.
+@Serializable
+data class ProfileEditorBounds (
+	/// A step's temperature, °C.
+	val segmentTempC: StepRange,
+	/// A pressure target, limiter or exit, bar.
+	val pressureBar: StepRange,
+	/// A flow target, limiter or exit, ml/s.
+	val flowMlS: StepRange,
+	/// A step's duration, s.
+	val segmentTimeS: StepRange,
+	/// A step's volume limit, ml (`0` = off).
+	val segmentVolumeMl: StepRange,
+	/// The limiter's range.
+	val limiterRange: StepRange,
+	/// The profile's dose, g.
+	val doseG: StepRange,
+	/// The profile's yield, g.
+	val yieldG: StepRange,
+	/// The profile's total-volume cap, ml (`0` = off).
+	val maxTotalVolumeMl: StepRange,
+	/// The tank-temperature override, °C (`0` = keep the machine's).
+	val tankTempC: StepRange
+)
+
 /// One part of a profile file that did not import.
 @Serializable
 data class ProfileFileError (
@@ -3574,6 +3615,40 @@ data class QualityLine (
 	val kind: String,
 	/// good / caution / warning / observation / verdict.
 	val lineType: String
+)
+
+/// The Quick Controls steppers' ranges (hot water excepted).
+@Serializable
+data class QuickControlBounds (
+	/// Dose, g.
+	val doseG: StepRange,
+	/// Grind setting.
+	val grind: StepRange,
+	/// Yield, g.
+	val yieldG: StepRange,
+	/// Yield-to-dose ratio (the `x` in `1:x`).
+	val ratio: StepRange,
+	/// Brew temperature, °C, outside any profile; with a profile the dial
+	/// uses [`crate::brew_temp_range`].
+	val brewTempC: StepRange,
+	/// Pre-infusion, s, outside any profile; with a profile the dial uses
+	/// [`crate::preinfusion_dial`].
+	val preinfuseS: StepRange,
+	/// Steam duration, s.
+	val steamTimeS: StepRange,
+	/// Steam flow, ml/s.
+	val steamFlowMlS: StepRange,
+	/// Steam temperature, °C, when on; `0` (off) is always allowed.
+	val steamTempC: StepRange,
+	/// Group-flush duration, s.
+	val flushTimeS: StepRange,
+	/// Group-flush temperature, °C.
+	val flushTempC: StepRange,
+	/// The yield a brew override may carry, g: the yield stepper's range
+	/// widened to what the ratio stepper reaches (`dose × ratio`, Android's
+	/// ratio mode), so an override the Quick Controls can produce is never
+	/// cut. Not a stepper; the yield stepper keeps `yield_g`.
+	val overrideYieldG: StepRange
 )
 
 /// The inclusive `[min, max]` bounds of a ranged scale setting.

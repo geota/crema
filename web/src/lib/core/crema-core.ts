@@ -437,6 +437,32 @@ export interface BeanSyncScope {
 	pushRoasters: boolean;
 }
 
+/** A stepper's range: `chips` lie inside `[min, max]`. */
+export interface StepRange {
+	/** Lowest value. */
+	min: number;
+	/** Highest value. */
+	max: number;
+	/** Step. */
+	step: number;
+	/** Preset chips. */
+	chips: number[];
+}
+
+/** Settings → Brew defaults' ranges (the seeds for new profiles). */
+export interface BrewDefaultsBounds {
+	/** Default dose, g. */
+	doseG: StepRange;
+	/** Default ratio. */
+	ratio: StepRange;
+	/** Default brew temperature, °C. */
+	brewTempC: StepRange;
+	/** Default pre-infusion, s. */
+	preinfuseS: StepRange;
+	/** The global max shot duration, s (`0` = none). */
+	maxShotDurationS: StepRange;
+}
+
 /**
  * Summary metrics over a (filter/range-scoped) set of brews — the
  * History stat strip once non-espresso rows exist. `None` = "no data"
@@ -3128,18 +3154,6 @@ export interface HistoryStats {
 	avgRating?: number;
 }
 
-/** A stepper's range: `chips` lie inside `[min, max]`. */
-export interface StepRange {
-	/** Lowest value. */
-	min: number;
-	/** Highest value. */
-	max: number;
-	/** Step. */
-	step: number;
-	/** Preset chips. */
-	chips: number[];
-}
-
 /** The hot-water steppers' ranges and the default dose, for both shells. */
 export interface HotWaterBounds {
 	/** Time mode, s. */
@@ -3451,6 +3465,33 @@ export interface PreinfusionDial {
 	adjustable: boolean;
 }
 
+/**
+ * The profile editor's ranges: applied when the user edits a field, never
+ * to rewrite a stored or imported profile.
+ */
+export interface ProfileEditorBounds {
+	/** A step's temperature, °C. */
+	segmentTempC: StepRange;
+	/** A pressure target, limiter or exit, bar. */
+	pressureBar: StepRange;
+	/** A flow target, limiter or exit, ml/s. */
+	flowMlS: StepRange;
+	/** A step's duration, s. */
+	segmentTimeS: StepRange;
+	/** A step's volume limit, ml (`0` = off). */
+	segmentVolumeMl: StepRange;
+	/** The limiter's range. */
+	limiterRange: StepRange;
+	/** The profile's dose, g. */
+	doseG: StepRange;
+	/** The profile's yield, g. */
+	yieldG: StepRange;
+	/** The profile's total-volume cap, ml (`0` = off). */
+	maxTotalVolumeMl: StepRange;
+	/** The tank-temperature override, °C (`0` = keep the machine's). */
+	tankTempC: StepRange;
+}
+
 /** One part of a profile file that did not import. */
 export interface ProfileFileError {
 	/**
@@ -3523,6 +3564,45 @@ export interface QualityLine {
 	kind: string;
 	/** good / caution / warning / observation / verdict. */
 	lineType: string;
+}
+
+/** The Quick Controls steppers' ranges (hot water excepted). */
+export interface QuickControlBounds {
+	/** Dose, g. */
+	doseG: StepRange;
+	/** Grind setting. */
+	grind: StepRange;
+	/** Yield, g. */
+	yieldG: StepRange;
+	/** Yield-to-dose ratio (the `x` in `1:x`). */
+	ratio: StepRange;
+	/**
+	 * Brew temperature, °C, outside any profile; with a profile the dial
+	 * uses [`crate::brew_temp_range`].
+	 */
+	brewTempC: StepRange;
+	/**
+	 * Pre-infusion, s, outside any profile; with a profile the dial uses
+	 * [`crate::preinfusion_dial`].
+	 */
+	preinfuseS: StepRange;
+	/** Steam duration, s. */
+	steamTimeS: StepRange;
+	/** Steam flow, ml/s. */
+	steamFlowMlS: StepRange;
+	/** Steam temperature, °C, when on; `0` (off) is always allowed. */
+	steamTempC: StepRange;
+	/** Group-flush duration, s. */
+	flushTimeS: StepRange;
+	/** Group-flush temperature, °C. */
+	flushTempC: StepRange;
+	/**
+	 * The yield a brew override may carry, g: the yield stepper's range
+	 * widened to what the ratio stepper reaches (`dose × ratio`, Android's
+	 * ratio mode), so an override the Quick Controls can produce is never
+	 * cut. Not a stepper; the yield stepper keeps `yield_g`.
+	 */
+	overrideYieldG: StepRange;
 }
 
 /**

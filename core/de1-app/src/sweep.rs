@@ -122,6 +122,8 @@ impl CremaCore {
         settings: &ConnectSweepSettings,
         now_ms: u64,
     ) -> CoreOutput {
+        // The steam and flush values inside the stepper ranges (F8).
+        let settings = &settings.within_bounds();
         self.clock = self.clock.max(ms_to_duration(now_ms));
         let mut out = CoreOutput::default();
 
@@ -656,8 +658,9 @@ mod tests {
     /// Cohort review 2026-10-25, 01 P1-2: a huge persisted timeout (a
     /// restored backup is not range-checked) panicked the sweep in
     /// `Duration::from_secs_f32`, and on web every connect then trapped. The
-    /// reviewer's JSON triggers now clamp to the setters' one-hour ceiling
-    /// (3600 s = 36000 deciseconds) like `set_espresso_warmup_timeout` does.
+    /// reviewer's JSON triggers now clamp: the warmup timeout to the setters'
+    /// one-hour ceiling (3600 s = 36000 deciseconds), the flush timeout to the
+    /// Quick-Controls range (F8: 20 s = 200 deciseconds).
     #[test]
     fn huge_persisted_timeouts_clamp_like_the_setters() {
         for json in [
@@ -667,12 +670,12 @@ mod tests {
             let mut core = CremaCore::new();
             let out = core.connect_sweep_json(json, 1_000);
             let writes = mmr_writes(&out);
-            let register = if json.contains("flush") {
-                MmrRegister::FlushTimeout
+            let expected = if json.contains("flush") {
+                (MmrRegister::FlushTimeout, 200)
             } else {
-                MmrRegister::HeaterUp2Timeout
+                (MmrRegister::HeaterUp2Timeout, 36_000)
             };
-            assert!(writes.contains(&(register, 36_000)), "{json}: {writes:?}");
+            assert!(writes.contains(&expected), "{json}: {writes:?}");
         }
         // Whole-ms rounding matches the setter: 5.1 s is 51 deciseconds, not 50.
         let mut core = CremaCore::new();
@@ -688,17 +691,58 @@ mod tests {
             writes.contains(&(MmrRegister::HeaterUp2Timeout, 51)),
             "{writes:?}"
         );
-        // Non-finite and negative values still read as zero.
+        // A non-finite flush timeout takes the default (4 s); a negative
+        // warmup still reads as zero.
         s.flush_timeout_s = f32::NAN;
         s.espresso_warmup_timeout_s = Some(-4.0);
         let writes = mmr_writes(&core.connect_sweep(&s, 0));
         assert!(
-            writes.contains(&(MmrRegister::FlushTimeout, 0)),
+            writes.contains(&(MmrRegister::FlushTimeout, 40)),
             "{writes:?}"
         );
         assert!(
             writes.contains(&(MmrRegister::HeaterUp2Timeout, 0)),
             "{writes:?}"
+        );
+    }
+
+    /// F8: the sweep writes the user's steam and flush settings inside the
+    /// Quick-Controls stepper ranges.
+    #[test]
+    fn steam_and_flush_writes_are_clamped_to_the_table() {
+        let mut core = CremaCore::new();
+        let mut s = snapshot();
+        s.steam_flow_ml_s = 9.0;
+        s.flush_timeout_s = 600.0;
+        s.flush_temp_c = 20.0;
+        let writes = mmr_writes(&core.connect_sweep(&s, 0));
+        assert!(
+            writes.contains(&(MmrRegister::SteamFlow, 300)),
+            "{writes:?}"
+        );
+        assert!(
+            writes.contains(&(MmrRegister::FlushTimeout, 200)),
+            "{writes:?}"
+        );
+        assert!(
+            writes.contains(&(MmrRegister::FlushTemp, 600)),
+            "{writes:?}"
+        );
+        let clamped = s.within_bounds();
+        assert_eq!(
+            (
+                clamped.steam_flow_ml_s,
+                clamped.flush_timeout_s,
+                clamped.flush_temp_c
+            ),
+            (3.0, 20.0, 60.0)
+        );
+        let mut low = snapshot();
+        low.steam_temp_c = 120.0;
+        assert_eq!(
+            low.within_bounds().steam_temp_c,
+            0.0,
+            "1–134 °C goes out as off"
         );
     }
 
