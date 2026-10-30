@@ -62,6 +62,10 @@ class WeightUnitPushTest {
         vm.setWeightUnit("oz")
         vm.resetPreferences()
         VmHarness.idle()
-        assertEquals("g", lcdUnit(bridge), "restore defaults reaches the core")
+        assertEquals("oz", lcdUnit(bridge), "restore defaults keeps the weight unit (F15)")
+
+        vm.eraseAll()
+        VmHarness.idle()
+        assertEquals("g", lcdUnit(bridge), "erase-all's default reaches the core")
     }
 }
