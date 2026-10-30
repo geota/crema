@@ -49,6 +49,14 @@ class NoCompatShimsTest {
         Regex("\\bPAIRED_DEVICES\\b"),
     )
 
+    /** AC-40 (R1): no `HandoffOffer` frame, decode branch or fixture. */
+    @Test
+    fun handoffOfferGone() {
+        assertNone("HandoffOffer left in main", Regex("HandoffOffer"), Regex("\"handoffOffer\""))
+        val fixtures = File("src/test/resources/proxy-golden").walkTopDown().filter { it.name == "handoffOffer.json" }.toList()
+        assertTrue("handoffOffer fixtures: $fixtures", fixtures.none { "/v4/" in it.path })
+    }
+
     @Test
     fun thePatternsMatchWhatTheyGuard() {
         assertTrue(Regex("\\bPairingRequest\\b").containsMatchIn("class PairingRequest("))

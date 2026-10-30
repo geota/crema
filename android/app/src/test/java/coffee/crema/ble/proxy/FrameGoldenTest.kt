@@ -1,6 +1,5 @@
 package coffee.crema.ble.proxy
 
-import coffee.crema.MainSources
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.elementNames
 import kotlin.test.Test
@@ -49,7 +48,6 @@ class FrameGoldenTest {
         "control.noargs" to Frame.Control(12, "tareScale"),
         "controlOk" to Frame.ControlOk(11),
         "controlErr" to Frame.ControlErr(12, "not authorized"),
-        "handoffOffer" to Frame.HandoffOffer("Kitchen tablet"),
         "notify" to Frame.Notify(addr, service, "0000a00d-0000-1000-8000-00805f9b34fb", "0712deadbeef", 123_456L),
         "notify.src" to Frame.Notify(addr, service, stateChar, "0200", 123_457L, src = "DE1_STATE"),
         "state" to Frame.State(addr, "DISCONNECTED"),
@@ -68,19 +66,6 @@ class FrameGoldenTest {
             PROXY_PROTOCOL_VERSION,
             "PROXY_PROTOCOL_VERSION changed: keep proxy-golden/v${Golden.VERSION} as the old-peer fixtures and add the new version's",
         )
-    }
-
-    /** AC-4: the retired [Frame.HandoffOffer] still round-trips (an older hub
-     *  sends it, and a v3 codec drops the link on an unknown type), but no
-     *  production code builds one: a hub never sends it. */
-    @Test
-    fun `the retired handoff offer has no production sender`() {
-        val senders = MainSources.kotlinFiles().flatMap { (path, text) ->
-            text.lines().withIndex()
-                .filter { (_, line) -> "HandoffOffer(" in line && "class HandoffOffer(" !in line }
-                .map { (i, line) -> "$path:${i + 1}: ${line.trim()}" }
-        }
-        assertEquals(emptyList(), senders, "code that builds a Frame.HandoffOffer")
     }
 
     @Test

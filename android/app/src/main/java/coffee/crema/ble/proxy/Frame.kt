@@ -205,16 +205,6 @@ sealed class Frame {
     @SerialName("controlErr")
     data class ControlErr(val id: Long, val reason: String) : Frame()
 
-    /**
-     * Retired: never sent; a remote decodes and ignores it. Older hubs (v3
-     * nightlies) still push it from their "Hand off" button. It stays in the
-     * codec because a v3 peer drops the link on a frame type it doesn't know;
-     * delete it once the codec tolerates unknown types.
-     */
-    @Serializable
-    @SerialName("handoffOffer")
-    data class HandoffOffer(val fromName: String) : Frame()
-
     // ---- Push streams (drive observe / connectionState) --------------------
 
     /**

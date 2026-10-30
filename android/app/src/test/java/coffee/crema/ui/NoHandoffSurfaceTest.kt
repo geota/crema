@@ -8,9 +8,8 @@ import kotlin.test.assertEquals
  * AC-1: hand-off, take-over and reclaim are gone from the app — the frames'
  * senders, the verb, the state machine, its timers and its UI. A scan of
  * `src/main` for every name that carried them. The retired
- * `Frame.HandoffOffer` stays decodable (a v3 codec drops the link on an
- * unknown type), so it may appear only where it is declared and where a
- * remote ignores it.
+ * `Frame.HandoffOffer` itself is gone too (relay v4 R1,
+ * [coffee.crema.NoCompatShimsTest]).
  */
 class NoHandoffSurfaceTest {
 
@@ -32,18 +31,5 @@ class NoHandoffSurfaceTest {
             }
         }
         assertEquals(emptyList(), hits)
-    }
-
-    @Test
-    fun `the retired handoff offer is only declared and ignored`() {
-        val hits = MainSources.kotlinFiles().flatMap { (path, text) ->
-            text.lines().withIndex().filter { (_, line) -> "HandoffOffer" in line }.map { (_, line) -> path to line.trim() }
-        }
-        val allowed = hits.filter { (path, line) ->
-            (path == "coffee/crema/ble/proxy/Frame.kt" && line.startsWith("data class HandoffOffer(")) ||
-                (path == "coffee/crema/ble/proxy/ProxyTransport.kt" && line.startsWith("is Frame.HandoffOffer -> Log."))
-        }
-        assertEquals(emptyList(), hits - allowed.toSet(), "HandoffOffer outside its declaration and the ignore branch")
-        assertEquals(2, allowed.size, "the declaration and the ignore branch: $hits")
     }
 }
