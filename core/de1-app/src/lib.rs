@@ -11654,8 +11654,8 @@ mod tests {
                     .collect::<Vec<f32>>()
             };
             // Inside the core's bounds but below the range: clamped to its
-            // 7 °C end (the 88 °C step stops at the 1 °C floor).
-            assert_eq!(temps_for(3.0), vec![7.0, 3.0, 1.0]);
+            // 80 °C end (the dial's minimum brew temperature).
+            assert_eq!(temps_for(3.0), vec![80.0, 76.0, 74.0]);
             // Outside the bounds, or 0: refused — the profile as saved.
             assert_eq!(temps_for(120.0), vec![94.0, 90.0, 88.0]);
             assert_eq!(temps_for(0.0), vec![94.0, 90.0, 88.0]);

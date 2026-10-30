@@ -32,7 +32,9 @@
 //! are the same state with the same fingerprint.
 
 use crate::crema_profile::{CremaProfile, ProfileSegment};
-use crate::profile_bounds::{MAX_FRAME_SECONDS, MAX_TEMPERATURE_C, MIN_TEMPERATURE_C};
+use crate::profile_bounds::{
+    MAX_FRAME_SECONDS, MAX_TEMPERATURE_C, MIN_BREW_TEMPERATURE_C, MIN_TEMPERATURE_C,
+};
 use typeshare::typeshare;
 
 /// Two override values closer than this are the same value (half the 0.1
@@ -126,8 +128,9 @@ pub fn with_derived_brew_temp(mut profile: CremaProfile) -> CremaProfile {
 
 /// The brew-temperature dial's range for `profile`: every absolute target in
 /// it shifts every step by `T − anchor` without any step leaving
-/// [`STEP_FLOOR_C`]..=[`MAX_TEMPERATURE_C`], and the ends themselves stay
-/// inside the core's temperature bounds. The anchor is always in the range (no
+/// [`STEP_FLOOR_C`]..=[`MAX_TEMPERATURE_C`], with the low end no lower than
+/// [`MIN_BREW_TEMPERATURE_C`] (the dial's minimum brew temperature) and the
+/// high end inside the core's bounds. The anchor is always in the range (no
 /// shift is always allowed, even for a profile authored outside the bounds).
 #[must_use]
 pub fn brew_temp_range(profile: &CremaProfile) -> BrewTempRange {
@@ -146,7 +149,7 @@ pub fn brew_temp_range(profile: &CremaProfile) -> BrewTempRange {
     // No steps: nothing to push out of bounds, so the bounds themselves.
     let min = lo
         .map_or(STEP_FLOOR_C, |lo| anchor + (STEP_FLOOR_C - lo))
-        .max(STEP_FLOOR_C);
+        .max(MIN_BREW_TEMPERATURE_C);
     let max = hi
         .map_or(MAX_TEMPERATURE_C, |hi| anchor + (MAX_TEMPERATURE_C - hi))
         .min(MAX_TEMPERATURE_C);
@@ -503,10 +506,10 @@ mod tests {
     fn f6_2_brew_temp_range_is_enforced_at_both_ends() {
         let p = declining();
         let r = brew_temp_range(&p);
-        // Highest step 94 may rise 6 to 100 → 94 + 6; lowest 88 may fall to
-        // the 1 °C floor → 94 − 87.
+        // Highest step 94 may rise 6 to 100 → 94 + 6; the low end stops at the
+        // dial's minimum brew temperature, 80.
         assert!(close(r.max, 100.0), "max {}", r.max);
-        assert!(close(r.min, 7.0), "min {}", r.min);
+        assert!(close(r.min, MIN_BREW_TEMPERATURE_C), "min {}", r.min);
         assert!(close(r.anchor, 94.0));
 
         let high = effective_crema_profile(
@@ -527,7 +530,7 @@ mod tests {
                 ..BrewOverrides::default()
             },
         );
-        assert_eq!(temps(&low), vec![7.0, 3.0, 1.0]);
+        assert_eq!(temps(&low), vec![80.0, 76.0, 74.0]);
         assert!(temps(&low).iter().all(|t| *t >= STEP_FLOOR_C));
         let n = normalize_brew_overrides(
             &p,
@@ -536,7 +539,7 @@ mod tests {
                 ..BrewOverrides::default()
             },
         );
-        assert_eq!(n.brew_temp, Some(7.0));
+        assert_eq!(n.brew_temp, Some(80.0));
     }
 
     /// A brew temperature of 0 or outside the core's bounds is refused, never
@@ -878,14 +881,14 @@ mod tests {
             let json = serde_json::to_string(&effective).unwrap();
             assert_eq!(fp, crate::profile_fingerprint(&json, None).unwrap());
         }
-        // 3 °C (below the range, inside the bounds) and the range's min
+        // 3 °C (below the range, inside the bounds) and the range's 80 °C min
         // upload the same bytes.
         let over = BrewOverrides {
             brew_temp: Some(3.0),
             ..BrewOverrides::default()
         };
         let at_max = BrewOverrides {
-            brew_temp: Some(7.0),
+            brew_temp: Some(80.0),
             ..BrewOverrides::default()
         };
         assert_eq!(
