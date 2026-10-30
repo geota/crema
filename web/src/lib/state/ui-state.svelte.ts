@@ -27,7 +27,7 @@ import type {
 	SubState
 } from '#lib/core/index.js';
 import type { StopReason } from '#lib/core/crema-core.js';
-import { MaintenanceFailure } from '#lib/core/crema-core.js';
+import { MaintenanceFailure, ScaleLinkDeadReason } from '#lib/core/crema-core.js';
 import type { De1State, De1Diagnostics } from '#lib/ble/de1.js';
 import { EMPTY_DE1_DIAGNOSTICS } from '#lib/ble/de1.js';
 import type { ScaleState } from '#lib/ble/scale.js';
@@ -1184,6 +1184,18 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				scaleWeight: null,
 				eventLog: appendLog(snapshot.eventLog, 'Scale stale')
+			};
+		case 'ScaleLinkDead':
+			// The app drops the link so the reconnect loop recovers it.
+			return {
+				...snapshot,
+				scaleWeight: null,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					event.content.reason === ScaleLinkDeadReason.Silent
+						? 'Scale link dead: no readings for 6 s'
+						: 'Scale link dead: three writes failed in a row'
+				)
 			};
 		case 'SawAutoZeroed':
 			return {

@@ -1464,6 +1464,13 @@ data class EventSteamEcoModeChangedInner (
 	val eco: Boolean
 )
 
+/// Generated type representing the anonymous struct variant `ScaleLinkDead` of the `Event` Rust enum
+@Serializable
+data class EventScaleLinkDeadInner (
+	/// Which rule tripped.
+	val reason: ScaleLinkDeadReason
+)
+
 /// Generated type representing the anonymous struct variant `SawAutoZeroed` of the `Event` Rust enum
 @Serializable
 data class EventSawAutoZeroedInner (
@@ -1851,6 +1858,15 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleStale")
 	object ScaleStale: Event()
+	/// The scale link looks dead: still no reading 5 s after
+	/// [`Event::ScaleStale`], or three scale writes in a row failed with no
+	/// reading in between. Emitted once per episode — a fresh reading re-arms
+	/// it. The shell drops the link at the transport (not a user disconnect)
+	/// so its reconnect loop recovers it, but only while its link still
+	/// claims ready.
+	@Serializable
+	@SerialName("ScaleLinkDead")
+	data class ScaleLinkDead(val content: EventScaleLinkDeadInner): Event()
 	/// The untared-cup guard latched a virtual zero: a heavy reading right
 	/// after first flow held still, so it was a cup landing after the tare —
 	/// every later reading this shot is netted against it and stop-at-weight
@@ -4821,6 +4837,17 @@ sealed class SawModelLoad {
 	@Serializable
 	@SerialName("Corrupt")
 	data class Corrupt(val content: SawModelLoadCorruptInner): SawModelLoad()
+}
+
+/// Why [`Event::ScaleLinkDead`] fired.
+@Serializable
+enum class ScaleLinkDeadReason(val string: String) {
+	/// No weight reading for the stale timeout plus the 5 s grace.
+	@SerialName("Silent")
+	Silent("Silent"),
+	/// Three scale writes in a row failed with no reading in between.
+	@SerialName("WritesFailing")
+	WritesFailing("WritesFailing"),
 }
 
 /// What the shell should do with a just-completed shot — decided at the

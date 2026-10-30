@@ -2220,6 +2220,13 @@ impl CremaBridge {
         self.emit(self.core().on_tick(now_ms))
     }
 
+    /// Report how one scale write the shell sent went (`ok` = it landed).
+    /// Returns a JSON-encoded [`CoreOutput`] that may carry
+    /// `Event::ScaleLinkDead`. See `CremaCore::on_scale_write_result`.
+    pub fn on_scale_write_result(&self, ok: bool) -> String {
+        self.emit(self.core().on_scale_write_result(ok))
+    }
+
     // ── Guided brew sessions (issue #10) ─────────────────────────
 
     /// Arm a guided brew session for a JSON-encoded `BrewRecipe`.
