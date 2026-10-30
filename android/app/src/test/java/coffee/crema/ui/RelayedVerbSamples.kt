@@ -2,7 +2,7 @@ package coffee.crema.ui
 
 /**
  * One relayed control as a secondary puts it on the wire. [fixture] names the
- * golden wire file `proxy-golden/v3/control/<fixture>.json`, which holds
+ * golden wire file `proxy-golden/v4/control/<fixture>.json`, which holds
  * `Frame.Control(id = 1, method, args)` as encoded; [send] is the
  * [MainViewModel] call that produces it on a secondary, or null for a form
  * only older builds send, which a primary must still accept.

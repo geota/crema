@@ -10,7 +10,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
 /**
- * Golden `control` frames for every relayed verb (`proxy-golden/v3/control/`):
+ * Golden `control` frames for every relayed verb (`proxy-golden/v4/control/`):
  * the method name and argument encoding a secondary sends and a primary
  * accepts today. A typed-command seam must keep these bytes, or secondaries
  * already in the field stop working against an updated primary.

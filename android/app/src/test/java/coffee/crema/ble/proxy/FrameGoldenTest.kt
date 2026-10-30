@@ -5,10 +5,11 @@ import kotlinx.serialization.descriptors.elementNames
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
- * Golden wire fixtures for every [Frame] type (`proxy-golden/v3/frames/`).
+ * Golden wire fixtures for every [Frame] type (`proxy-golden/v4/frames/`).
  * Each sample below must encode to its fixture byte for byte, and the fixture
  * must decode back to the sample, so any change to a frame's wire form
  * (a renamed field, a new default that now stays off the wire, a changed
@@ -103,6 +104,25 @@ class FrameGoldenTest {
         val e = assertFailsWith<SerializationException> { FrameCodec.decode(text) }
         assertTrue("pairingQr" in e.message.orEmpty(), "the error names the unknown type: ${e.message}")
         assertEquals(null, FrameCodec.decodeTolerant(text))
+    }
+
+    /** AC-45 (R6): a `Welcome` without `scope` fails to decode, so the
+     *  session closes instead of guessing a scope. */
+    @Test
+    fun welcomeScopeRequired() {
+        val text = Golden.require("frames/welcome.json").replace(",\"scope\":\"control\"", "")
+        assertTrue("scope" !in text, text)
+        assertFailsWith<SerializationException> { FrameCodec.decode(text) }
+        assertFailsWith<SerializationException> { FrameCodec.decodeTolerant(text) }
+    }
+
+    /** AC-45 (R6): an unknown scope reads as view-only, never as control. */
+    @Test
+    fun unknownScopeIsViewOnly() {
+        val text = Golden.require("frames/welcome.json").replace("\"scope\":\"control\"", "\"scope\":\"admin\"")
+        val welcome = assertIs<Frame.Welcome>(FrameCodec.decode(text))
+        assertEquals(false, welcome.grantsControl)
+        assertEquals(true, assertIs<Frame.Welcome>(FrameCodec.decode(Golden.require("frames/welcome.json"))).grantsControl)
     }
 
     /** An unknown field on a known frame is ignored (`ignoreUnknownKeys`): the

@@ -54,7 +54,7 @@ class NoCompatShimsTest {
     fun handoffOfferGone() {
         assertNone("HandoffOffer left in main", Regex("HandoffOffer"), Regex("\"handoffOffer\""))
         val fixtures = File("src/test/resources/proxy-golden").walkTopDown().filter { it.name == "handoffOffer.json" }.toList()
-        assertTrue("handoffOffer fixtures: $fixtures", fixtures.none { "/v4/" in it.path })
+        assertTrue("handoffOffer fixtures: $fixtures", fixtures.isEmpty())
     }
 
     /** AC-41 (R2): no retired-verb list; `handoff` is an unknown method and has no fixture. */
@@ -66,7 +66,15 @@ class NoCompatShimsTest {
                 coffee.crema.machine.MachineCommandCodec.Decoded.Invalid("unknown relayed control: handoff"),
         )
         val retired = File("src/test/resources/proxy-golden").walkTopDown().filter { it.isDirectory && it.name == "retired" }.toList()
-        assertTrue("control/retired fixtures: $retired", retired.none { "/v4/" in it.path })
+        assertTrue("control/retired fixtures: $retired", retired.isEmpty())
+    }
+
+    /** AC-45 (§4.9): the v3 golden fixtures are gone; v4's are the only set. */
+    @Test
+    fun v3FixturesGone() {
+        val golden = File("src/test/resources/proxy-golden")
+        assertTrue("$golden must exist (run from android/app)", golden.isDirectory)
+        assertTrue(!File(golden, "v3").exists())
     }
 
     @Test
