@@ -721,8 +721,9 @@ class ProxyController(
         runCatching {
             if (relay.savedHub != hub.id) relay.setSavedHub(hub.id)
             val pin = relay.hubs.firstOrNull { it.id == hub.id }
-            if (pin != null && (pin.host != welcomed.host || pin.port != welcomed.port)) {
-                relay.pinHub(pin.copy(host = welcomed.host, port = welcomed.port))
+            // A superseded pin the user picked proved itself: it's live again.
+            if (pin != null && (pin.host != welcomed.host || pin.port != welcomed.port || pin.superseded)) {
+                relay.pinHub(pin.copy(host = welcomed.host, port = welcomed.port, superseded = false))
             }
         }
         refreshPins()
@@ -819,7 +820,10 @@ class ProxyController(
 
     /** The pin of the hub this remote is saved to: the store's `savedHub`, or
      *  null when it has none (never paired, forgotten, or the v3 upgrade). */
-    private fun savedHubPin(): RelayHubPin? = relay.savedHub?.let { id -> relay.hubs.firstOrNull { it.id == id } }
+    private fun savedHubPin(): RelayHubPin? = relay.savedHub?.let { id -> liveHubPins().firstOrNull { it.id == id } }
+
+    /** The hub pins automatic lookups may use: every pin but a superseded one (§2.10). */
+    private fun liveHubPins(): List<RelayHubPin> = relay.hubs.filterNot { it.superseded }
 
     /** Mirror the store's pins and flags into [state]. */
     private fun refreshPins() {
@@ -1054,7 +1058,10 @@ class ProxyController(
         dialer?.cancel()
         dialerJob?.cancel()
         // The saved hub at this address, if any: pairing with a different key
-        // there means its key changed (a reset or reinstall, spec §6.3).
+        // there means its key changed (a reset or reinstall, spec §6.3), or
+        // it's another hub at that address now (DHCP). Its pin stays, a dead
+        // entry the user can forget (spec §2.10); the new hub becomes the
+        // saved one.
         val previous = savedHubPin()?.takeIf { sameAddress(it.host, host) }
         var keyChanged = false
         val d = PairingDialer(
@@ -1068,7 +1075,7 @@ class ProxyController(
                     relay.pinHub(RelayHubPin(hubId, RelayKeyStore.b64(hubKey), hubName, host, port, System.currentTimeMillis()))
                     relay.setSavedHub(hubId)
                     if (previous != null && previous.id != hubId) {
-                        relay.unpinHub(previous.id)
+                        relay.pinHub(previous.copy(superseded = true))
                         keyChanged = true
                     }
                     if (relay.needsRepair) relay.clearUpgradeFlags()
@@ -1104,6 +1111,22 @@ class ProxyController(
             return
         }
         pairWith(host, port, savedHubPin()?.name ?: _state.value.hubName.ifBlank { host })
+    }
+
+    /**
+     * Connect through the pinned hub [hubId] (Paired hubs ▸ Connect): the
+     * user's explicit pick, the only way a superseded pin is dialed (§2.10).
+     * Dials with that pin's key at its address; nothing is saved before the
+     * hub's Welcome, which also clears the superseded flag.
+     */
+    fun connectToPinnedHub(hubId: String) {
+        val pin = relay.hubs.firstOrNull { it.id == hubId } ?: return
+        if (relayKeys == null) {
+            notify(KEYS_UNAVAILABLE_COPY)
+            return
+        }
+        resetRefind()
+        applyMode("secondary", pin.host, pin.port, trust = MirrorTrust.USER_PICK, hub = pin)
     }
 
     /** Cancel the remote's pairing (the code sheet's Cancel). */
@@ -1504,7 +1527,7 @@ class ProxyController(
     fun switchToSecondary(host: String, port: Int) {
         resetRefind()
         val peer = _state.value.peers.firstOrNull { sameAddress(it.host, host) && it.port == port }
-        val pinned = relay.hubs.firstOrNull { pin ->
+        val pinned = liveHubPins().firstOrNull { pin ->
             val kid = peer?.kid
             if (kid != null) pin.id.startsWith(kid) else sameAddress(pin.host, host)
         }

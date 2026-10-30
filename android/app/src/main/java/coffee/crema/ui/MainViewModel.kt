@@ -2911,6 +2911,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Stop accepting new devices now. */
     fun closePairingWindow() = proxy.closePairingWindow()
 
+    /** Remote: connect through the pinned hub [hubId] (a superseded pin's explicit pick). */
+    fun connectToPinnedHub(hubId: String) = proxy.connectToPinnedHub(hubId)
+
     /** Remote: forget the hub [hubId] (it has to pair again). */
     fun forgetHub(hubId: String) = proxy.forgetHub(hubId)
 
@@ -2924,6 +2927,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         closeWindow = ::closePairingWindow,
         forgetRemote = ::forgetPairedDevice,
         forgetHub = ::forgetHub,
+        connectHub = ::connectToPinnedHub,
         resetKey = ::resetPairingKey,
         dismissUpgradeBanner = ::dismissUpgradeNotice,
     )
