@@ -382,8 +382,11 @@ dependencies = [
  "de1-app",
  "de1-domain",
  "de1-protocol",
+ "de1-relay",
+ "getrandom",
  "serde_json",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]
@@ -430,9 +433,12 @@ dependencies = [
  "de1-app",
  "de1-domain",
  "de1-protocol",
+ "de1-relay",
+ "getrandom",
  "serde_json",
  "uuid",
  "wasm-bindgen",
+ "zeroize",
 ]
 
 [[package]]
@@ -547,10 +553,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]

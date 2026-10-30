@@ -126,8 +126,9 @@ H → R  RECORD           inner PAIR_COMPLETE (empty)                 R: decrypt
 8. **Key confirmation and failure counting.** The hub confirms when message 3 decrypts. A message 3 that fails
    authentication after a code entry is `WrongCode`: the hub counts one failure, sends `ABORT(HANDSHAKE_FAILED)`
    and closes 4401. **This is the only event that counts.** The hub checks that it still holds the slot, reads
-   message 3 and counts the failure under one gate lock, so a concurrent close of the window can't fall between. A DH failure (low-order key), a malformed message, a
-   timeout (including after code entry), a cancel, a closed window and `reject_pairing` free the slot uncounted.
+   message 3 and counts the failure under one gate lock, so a concurrent close of the window can't fall between.
+   A DH failure (low-order key), a malformed message, a timeout (including after code entry), a cancel, a closed
+   window and `reject_pairing` free the slot uncounted.
    The remote confirms only when the `PAIR_COMPLETE` record decrypts.
 9. **Two-phase commit on the hub.** On message 3 success the hub emits `PairPending`, exposes the remote's key and
    sends nothing. The shell persists the pin, inserts it into the live `PinSet`, and calls `confirm_paired()`.
@@ -261,7 +262,7 @@ such as bidi overrides and zero-width marks, U+2028 and U+2029 removed, trimmed,
 | `PairingFailed{reason, failures, locked}` | both | a pairing attempt ended without success. Hub reasons: `WrongCode` (the only counted one), `Timeout`, `Cancelled`, `Malformed`, `HandshakeFailed`, `PeerIdMismatch`, `LowOrderKey`, or an `ABORT` reason from the remote. Remote: `NotConfirmed` once message 3 is out, otherwise `Timeout`, `Malformed`, `HandshakeFailed`, `PeerIdMismatch` |
 | `UnknownRemote{remote_id}` | hub | an unpinned remote resumed; it got `CLOSE(NOT_PAIRED)` |
 | `HubHello{hub_id, hub_name, status, secs_left}` | remote | a ServerHello arrived (advisory) |
-| `ShowCode{code, expires_at_ms}` | remote | show the code |
+| `ShowCode{expires_at_ms}` | remote | show the code, read with `code()`; the event never carries it, so no event, event JSON or bridge record can leak it |
 | `Refused{reason, authenticated}` | remote | the hub refused: `authenticated: true` for a `CLOSE` record (`Revoked`, `NotPaired`, `HubStopped`, `Protocol`, `Normal`); otherwise an `ABORT` reason, a ServerHello status, `HostMismatch`, `HubOutdated`, `HubUnverified`, `Version` or `Timeout` |
 | `Paired{peer_id, peer_name}` | both | pairing completed |
 | `Established{peer_id}` | both | hub: admitted; remote: hub authenticated (the shell says "Connected" only on the first `FRAME`) |
@@ -278,9 +279,9 @@ step, other than `Timeout` (the code expired), is a failed attempt the shell may
 ## 11. Zeroization (best effort)
 
 Wiped on drop, with a `Debug` that prints `[redacted]`: our copies of the static private key, the seed, the
-sub-seeds, the HKDF PRK and outputs, the SPAKE2 output, the psk and the code (the `Code` value, and the code
-string in a `ShowCode` event; `Debug` of a `ShowCode` never prints it). The seed's Noise copy, and the code,
-SPAKE2 and Noise generators, are dropped as soon as the handshake that needs them is built.
+sub-seeds, the HKDF PRK and outputs, the SPAKE2 output, the psk and the code (the `Code` value; no event
+carries the code). The seed's Noise copy, and the code, SPAKE2 and Noise generators, are dropped as soon as the
+handshake that needs them is built.
 
 Not wiped, and accepted (an attacker who can read process memory is out of scope):
 - snow's internal copies: its static and ephemeral private keys, the psk and chaining key in `HandshakeState`,
@@ -289,15 +290,16 @@ Not wiped, and accepted (an attacker who can read process memory is out of scope
 - the ChaCha20 generator states (`rand_chacha` 0.3 has no zeroize support; they hold derived stream keys, never
   a seed, and are dropped after use);
 - the keyed HMAC states inside `hkdf` (`hkdf`/`hmac` 0.12 and `sha2` 0.10 have no zeroize support);
-- the code string `RemoteConnection::code()` returns and any copy the shell makes of an event;
+- the code string `RemoteConnection::code()` returns, and the shell's copies of it;
 - the bytes that cross UniFFI's `RustBuffer` or wasm linear memory.
 
 ## 12. What is exposed when
 
 `peer_public_key()` returns the peer's static key only once it is trusted: on the hub in `AwaitCommit`, `Paired`
 and `Established`, on the remote in `Paired` and `Established`. `channel_binding()` returns `h` only in
-`Established`. Before that (a replayed IK message 1, a fake hub that reached XX message 2 without the code) and
-after any failure, both are `None`.
+`Established`. Before that (a replayed IK message 1, a fake hub that reached XX message 2 without the code),
+after any failure and after a normal close (`Closed`), both are `None`, so the shell reads the key when it is
+offered: at `PairPending` on the hub, at `Paired` on the remote, at `Established` on a resume.
 
 ## Implementation notes (where the code pins down or differs from the spec)
 
