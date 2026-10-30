@@ -63,6 +63,25 @@ val SyncLogEntry.entityLabel: String
         else -> "Shot"
     }
 
+/**
+ * A shot deleted here that is still on Visualizer (web's history tombstone):
+ * kept so the next pull's reconcile recognises the remote copy instead of
+ * pulling it back in, and — when the user asked for the remote copy to go
+ * too ([deleteRemote]) — so the `DELETE /shots/{id}` retries until it lands,
+ * after which the tombstone is dropped. A shot never uploaded leaves none.
+ */
+@Serializable
+data class ShotTombstone(
+    /** The deleted local shot's id. */
+    val id: String,
+    /** The remote copy's Visualizer `shot.id`. */
+    val visualizerId: String,
+    /** Unix ms of the local delete. */
+    val deletedAt: Long,
+    /** The user asked to delete the Visualizer copy too ("Also delete on Visualizer"). */
+    val deleteRemote: Boolean = false,
+)
+
 /** Everything Visualizer-related the shell persists. */
 @Serializable
 data class VisualizerState(
@@ -115,6 +134,12 @@ data class VisualizerState(
      * the web keeps the same set in `crema.visualizer.baristaPending.v1`.
      */
     val baristaPending: Set<String> = emptySet(),
+    /**
+     * Shots deleted here whose Visualizer copy still exists — see
+     * [ShotTombstone]. Not part of the history, so nothing user-visible ever
+     * reads them; only the shot reconcile and the remote delete do.
+     */
+    val shotTombstones: List<ShotTombstone> = emptyList(),
     /**
      * The stored state as read, when the keystore couldn't open a secret this
      * start ([SecretBox.Opened.Unavailable]); in memory only. Meanwhile the
