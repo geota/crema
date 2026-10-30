@@ -1597,6 +1597,22 @@ pub fn effective_profile_fingerprint(
         .map_err(crema_err)
 }
 
+/// The effective profile: the library `CremaProfile` JSON with the optional
+/// Quick Controls overrides JSON applied by the core — the profile an upload
+/// of `(profile, qc)` sends, and what "Save preset" saves. See
+/// [`de1_domain::effective_crema_profile`].
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[uniffi::export]
+pub fn effective_crema_profile(
+    profile_json: String,
+    qc_json: Option<String>,
+) -> Result<String, CremaError> {
+    de1_domain::effective_crema_profile_json(&profile_json, qc_json.as_deref()).map_err(crema_err)
+}
+
 /// The Quick Controls overrides after the core's lifecycle rule
 /// ([`de1_domain::normalize_brew_overrides`]): brew temperature clamped into
 /// the profile's range, values equal to the profile's own dropped. JSON
