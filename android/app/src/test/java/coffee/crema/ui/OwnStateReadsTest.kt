@@ -71,8 +71,6 @@ class OwnStateReadsTest {
         "LibraryController.kt" to mapOf(
             "persistLibrary" to setOf("activeBeanId"),
             "persistLibraryNow" to setOf("activeBeanId"),
-            "exportBeansLibrary" to setOf("activeBeanId"),
-            "beansLibraryJson" to setOf("activeBeanId"),
             "deleteRoaster" to setOf("activeBeanId"),
             "maybeLoadLinkedProfile" to setOf("activeProfileId"),
             // The library's own selection: a reseed after a delete or hide is

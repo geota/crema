@@ -121,7 +121,7 @@ pub use bean::{
     BREWS_REMAINING_WINDOW, Bean, BeanMix, BeanOrigin, BeanRoastType, DEFAULT_DOSE_PER_BREW_G,
     RoastBand, RoastFreshness, Roaster, ShotBean, brews_remaining_estimate, credit_remaining,
     days_off_roast, debit_remaining, duplicate_bean, duplicate_bean_json, resettle_remaining,
-    roast_band, roast_band5, roast_freshness,
+    roast_band, roast_band5, roast_freshness, set_bean_frozen, set_bean_frozen_json,
 };
 pub use bean_coerce::{coerce_bean, coerce_bean_json, coerce_roaster, coerce_roaster_json};
 pub use bean_filter::{

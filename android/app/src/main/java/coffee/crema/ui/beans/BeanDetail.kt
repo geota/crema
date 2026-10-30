@@ -137,7 +137,9 @@ fun BeanDetailContent(
         DetailGroup("Dates") {
             DetailRow("Roasted on", bean.roastedOn?.let { dateWithAge(it, days) })
             DetailRow("Opened on", bean.openedOn?.let { dateWithAge(it, openedDays) })
-            DetailRow("Frozen on", bean.frozenOn)
+            // Refreezing moves frozenOn later by the thawed days (core set_bean_frozen),
+            // so it is not always the first freeze date.
+            DetailRow("Frozen since", bean.frozenOn)
             DetailRow("Defrosted on", bean.defrostedOn)
         }
 

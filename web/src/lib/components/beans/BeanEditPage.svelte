@@ -45,6 +45,7 @@
 		roastBand5,
 		roasterMarkTone,
 		blankBean,
+		setBeanFrozen,
 		type Bean,
 		type Roaster, activateBean } from '#lib/bean/index.js';
 	import BeanImage from './BeanImage.svelte';
@@ -992,26 +993,13 @@
 						</div>
 						<div class="be-frow-r">
 							<StToggle
-								on={!!current.frozenOn}
+								on={current.frozenOn != null && current.defrostedOn == null}
 								onChange={(v) => {
-									if (v) {
-										// Flip ON — surface the date pickers with empty
-										// values so the user fills them in. (The frozenOn
-										// being non-null is what reveals the picker row,
-										// so we seed with `null` and let the user pick.)
-										//
-										// To make the `{#if current.frozenOn}` reveal
-										// trigger we seed `frozenOn` with today's date —
-										// the user can edit it. defrostedOn stays null.
-										const today = new Date().toISOString().slice(0, 10);
-										patch({ frozenOn: today, defrostedOn: null });
-									} else {
-										// Flip OFF — hide the pickers AND clear the
-										// stored dates so toggling back on starts from
-										// a clean slate rather than re-showing the
-										// previous values.
-										patch({ frozenOn: null, defrostedOn: null });
-									}
+									// Core rule: ON stamps today (or carries an earlier
+									// freeze), OFF records the defrost and keeps the
+									// freeze date, so the off-roast count doesn't jump.
+									const next = setBeanFrozen(current, v);
+									patch({ frozenOn: next.frozenOn, defrostedOn: next.defrostedOn });
 								}}
 								label="Frozen"
 							/>
@@ -1021,11 +1009,15 @@
 						<div class="be-grid2">
 							<div class="be-frow be-frow-stack">
 								<div class="be-frow-l">
-									<label class="be-frow-label" for={`${uid}-frozen-on`}>Frozen on</label>
+									<label class="be-frow-label" for={`${uid}-frozen-on`}>Frozen since</label>
+									<div class="be-frow-sub" id={`${uid}-frozen-on-sub`}>
+										Moved later by any thaw, so the off-roast count stays right.
+									</div>
 								</div>
 								<div class="be-frow-r">
 									<input
 										id={`${uid}-frozen-on`}
+										aria-describedby={`${uid}-frozen-on-sub`}
 										class="be-input be-input-date"
 										type="date"
 										value={current.frozenOn ?? ''}

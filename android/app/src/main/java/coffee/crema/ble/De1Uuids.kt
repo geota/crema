@@ -1,8 +1,15 @@
 package coffee.crema.ble
 
+import coffee.crema.core.De1SeedRead
+import coffee.crema.core.De1Subscription
+import coffee.crema.core.NotificationSource
 import coffee.crema.core.WriteTarget
+import coffee.crema.core.de1NotificationSource
+import coffee.crema.core.de1SeedReads
+import coffee.crema.core.de1Subscriptions
 import coffee.crema.core.de1Uuids
 import coffee.crema.core.de1WriteTargetUuid
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.util.UUID
 
@@ -65,4 +72,21 @@ object De1Uuids {
             de1WriteTargetUuid(target.string)
                 ?: error("No DE1 UUID for write target ${target.string}"),
         )
+
+    /**
+     * The connect-time notify subscriptions, in subscribe order (required
+     * first) — the core's table, which web's connect program reads too.
+     */
+    val SUBSCRIPTIONS: List<De1Subscription> by lazy {
+        Json.decodeFromString(ListSerializer(De1Subscription.serializer()), de1Subscriptions())
+    }
+
+    /** The connect-time seed reads, in read order — the core's table. */
+    val SEED_READS: List<De1SeedRead> by lazy {
+        Json.decodeFromString(ListSerializer(De1SeedRead.serializer()), de1SeedReads())
+    }
+
+    /** The core source a DE1 characteristic's bytes feed, or null for one not dispatched. */
+    fun sourceFor(characteristic: UUID): NotificationSource? =
+        de1NotificationSource(characteristic.toString())
 }

@@ -5,6 +5,10 @@ import kotlinx.coroutines.delay
 /** One connect-time seed read: its log label, and whether the link depends on it. */
 internal data class SeedSpec<K>(val key: K, val label: String, val required: Boolean)
 
+/** A required DE1 subscription (core table) failed: the connect fails rather than sit READY with dead notifications. */
+class RequiredSubscriptionException(name: String, cause: Throwable) :
+    IllegalStateException("DE1 $name subscribe failed", cause)
+
 /** The connect-time StateInfo read failed twice: the link is up but dead for data. */
 class HollowLinkException(cause: Throwable) : IllegalStateException(HOLLOW_LINK_STATUS, cause)
 

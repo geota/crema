@@ -58,28 +58,29 @@ data class BeanDraft(
  * field-for-field save mapping both bean editors used to inline verbatim. Blank
  * text fields collapse to null (name/mix keep the prior value instead).
  *
- * The freeze/defrost transition preserves the freeze-window history (web
- * semantics — see `MainViewModel.defrostBean`): unchecking the switch on a
- * frozen bag DEFROSTS it (stamps `defrostedOn`, keeps `frozenOn`); re-freezing
- * stamps a fresh `frozenOn`. (`isFrozen` is the same-package Bean extension.)
+ * Flipping the Frozen switch goes through the core rule ([setBeanFrozen]):
+ * unchecking DEFROSTS the bag (stamps `defrostedOn`, keeps `frozenOn`) and
+ * re-checking refreezes it, without moving days off roast. [setFrozen] is
+ * only called when the switch changed (injectable for JVM tests).
  */
-fun applyBeanEdits(b: Bean, draft: BeanDraft): Bean = b.copy(
+fun applyBeanEdits(
+    b: Bean,
+    draft: BeanDraft,
+    setFrozen: (Bean, Boolean) -> Bean = { bean, frozen -> setBeanFrozen(bean, frozen, System.currentTimeMillis()) },
+): Bean {
+    val freeze = if (draft.frozen == b.isFrozen) b else setFrozen(b, draft.frozen)
+    return applyDraft(b, draft, freeze.frozenOn, freeze.defrostedOn)
+}
+
+private fun applyDraft(b: Bean, draft: BeanDraft, frozenOn: String?, defrostedOn: String?): Bean = b.copy(
     name = draft.name.trim().ifBlank { b.name },
     roastLevel = draft.roast.toUByte(),
     mix = BeanMix.entries.firstOrNull { it.string == draft.mixSel } ?: b.mix,
     roastType = draft.roastTypeSel.ifBlank { null }?.let { v -> BeanRoastType.entries.firstOrNull { it.string == v } },
     roastedOn = draft.roasted.ifBlank { null },
     openedOn = draft.opened.ifBlank { null },
-    frozenOn = when {
-        draft.frozen && b.isFrozen -> b.frozenOn
-        draft.frozen -> java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
-        else -> b.frozenOn
-    },
-    defrostedOn = when {
-        draft.frozen -> null
-        b.isFrozen -> java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
-        else -> b.defrostedOn
-    },
+    frozenOn = frozenOn,
+    defrostedOn = defrostedOn,
     archivedAt = if (draft.archived) (b.archivedAt ?: System.currentTimeMillis()) else null,
     decaf = draft.decaf,
     favourite = draft.pinned,
