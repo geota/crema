@@ -3,8 +3,10 @@ package coffee.crema.ui
 import coffee.crema.ble.proxy.RemotePeer
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
+import coffee.crema.core.HotWaterBasis
 import coffee.crema.core.HotWaterDose
 import coffee.crema.core.HotWaterMode
+import coffee.crema.core.HotWaterTarget
 import coffee.crema.ble.proxy.Frame
 import coffee.crema.ble.proxy.Golden
 import coffee.crema.ble.proxy.InMemoryFrameLink
@@ -347,5 +349,33 @@ class RemoteEditFlowTest {
         VmHarness.idleUntil("the tare") { fixture.handled.isNotEmpty() }
         assertEquals(listOf("tareScale" to ""), fixture.handled.toList(), "no control for a QC machine setting")
         assertEquals(abOf(P), abOf(savedPrefs()))
+    }
+
+    /** AC-HW23: on a control remote the dose card is the hub's: its four rows
+     *  are READ_ONLY, an edit is refused here and sends no frame, and the
+     *  readout shows the snapshot's hotWaterTarget, not this device's math. */
+    @Test
+    fun `the hot-water dose on a remote is the hub's`() {
+        val vm = fixture.start()
+        val hubTarget = HotWaterTarget(
+            HotWaterMode.Ratio, volumeMl = 135f, basis = HotWaterBasis.TargetYield, basisG = 54f,
+            wireVolumeMl = 135f, wireTimeoutS = 60f,
+        )
+        fixture.push(base.copy(hotWaterTarget = hubTarget, qcHotWaterMode = HotWaterMode.Ratio))
+        VmHarness.idleUntil("the hub's target") { vm.ui.value.hotWaterTarget == hubTarget }
+        assertEquals("1:2.5 → 135 ml for a 54 g shot", hotWaterReadoutFor(vm.ui.value.hotWaterTarget, vm.ui.value.weightUnit, vm.ui.value.volumeUnit, vm.ui.value.qcHotWaterRatio))
+        for (s in listOf(Setting.QC_HOT_WATER_MODE, Setting.QC_HOT_WATER_TIME, Setting.QC_HOT_WATER_TIME_NO_LIMIT, Setting.QC_HOT_WATER_RATIO)) {
+            assertEquals(SettingAvailability.READ_ONLY, availability(vm, s), "$s")
+        }
+        val shown = vm.ui.value.hotWaterDose()
+        val messages = vm.ui.value.userMessages.size
+        vm.setHotWaterDose(shown.copy(mode = HotWaterMode.Volume))
+        VmHarness.idle()
+        assertEquals(shown, vm.ui.value.hotWaterDose(), "nothing shown")
+        assertEquals(listOf("Change on Kitchen tablet"), vm.ui.value.userMessages.drop(messages))
+        vm.tareScale() // a control that is sent, so the wire has caught up
+        VmHarness.idleUntil("the tare") { fixture.handled.isNotEmpty() }
+        assertEquals(listOf("tareScale" to ""), fixture.handled.toList(), "no frame for the dose")
+        assertEquals(abOf(P), abOf(savedPrefs()), "this device's own dose kept")
     }
 }

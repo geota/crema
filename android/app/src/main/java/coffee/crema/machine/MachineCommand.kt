@@ -155,7 +155,7 @@ enum class QcField(val label: String, private val range: ClosedFloatingPointRang
      *  keeps out of the band the firmware snaps to off. */
     STEAM_TEMP("steam temperature", QcSteam.MIN_TEMP_C..QcSteam.MAX_TEMP_C),
     HOT_WATER_TEMP("hot-water temperature", QcBounds.WATER_TEMP_MIN_C..QcBounds.WATER_TEMP_MAX_C),
-    /** An older remote's verb; its range is the core's volume range, read
+    /** The bare volume edit; its range is the core's volume range, read
      *  lazily (see [refusal]). */
     HOT_WATER_VOLUME("hot-water volume", 0.0..0.0),
     /** The phone's flush stepper starts at 0 (it shares the pre-infusion minimum). */

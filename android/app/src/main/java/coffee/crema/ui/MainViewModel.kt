@@ -2753,9 +2753,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // One read-modify-write packet carries these and the dose.
                     QcField.STEAM_TIME, QcField.STEAM_TEMP, QcField.HOT_WATER_TEMP -> applySteamHotWater()
                     QcField.HOT_WATER_VOLUME -> {
-                        // Only an older remote sends this verb now: its volume
-                        // switched the dose to volume mode (`applyTo`).
-                        appendLog("Hot-water volume ${cmd.value.toInt()} ml from a remote: switched to volume mode")
+                        // A bare volume edit (no remote sends one since relay v4):
+                        // it switched the dose to volume mode (`applyTo`).
+                        appendLog("Hot-water volume ${cmd.value.toInt()} ml: switched to volume mode")
                         applySteamHotWater()
                     }
                     QcField.STEAM_FLOW -> routeWrite("Set steam flow") { bridge.setSteamFlow(cmd.value) }
@@ -3799,7 +3799,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Hot-water temperature, °C (Quick Controls). Persisted; RMW write. */
     fun setQcHotWaterTemp(tempC: Float) = machine.execute(MachineCommand.SetQc(QcField.HOT_WATER_TEMP, tempC))
 
-    /** Hot-water volume, ml (Quick Controls). Persisted; RMW write. */
+    /** Hot-water volume, ml: also switches the dose to volume mode (the card
+     *  edits the whole dose with [setHotWaterDose]). Persisted; RMW write. */
     fun setQcHotWaterVolume(ml: Float) = machine.execute(MachineCommand.SetQc(QcField.HOT_WATER_VOLUME, ml))
 
     /** Flush timeout, seconds (Quick Controls). Persisted; standalone write. */
