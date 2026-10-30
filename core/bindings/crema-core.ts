@@ -3880,6 +3880,12 @@ export interface ShotBean {
 	 * stored shots decode unchanged.
 	 */
 	grinder?: string;
+	/**
+	 * The bag's free-form notes at the time of the shot — exported as the
+	 * v2 `metadata.crema.bean_notes` (the web snapshot always carried them;
+	 * the core type didn't, so every backup lost them). Additive + optional.
+	 */
+	notes?: string;
 }
 
 /**
@@ -3900,6 +3906,35 @@ export interface ShotMachine {
 	firmwareVersion?: string;
 	/** Human model name (e.g. `"DE1PRO"`, see `machine_model_name`), if known. */
 	model?: string;
+}
+
+/**
+ * What a shell knows about a finished shot that the core doesn't — handed
+ * to the core's `take_stored_shot` on `Event::ShotCompleted`.
+ */
+export interface ShotCaptureContext {
+	/** When the shot completed, Unix epoch ms — the core has no wall clock. */
+	completedAt: number;
+	/**
+	 * The id to store the shot under, or `None` to mint a fresh one (a
+	 * shell that showed the id already, e.g. Android's "Last shot" card).
+	 */
+	id?: string;
+	/** The bean snapshot the shot was pulled with, or `None`. */
+	bean?: ShotBean;
+	/** The Settings grinder model, the fallback when the bean has none. */
+	settingsGrinder?: string;
+	/** The grind dial at shot start, or `None` when it carried no value. */
+	grindDial?: number;
+	/** The barista, or `None`. */
+	barista?: string;
+	/**
+	 * The shot's tags at capture (a copy of the bean's tags today). `None`
+	 * (or `null` on the wire) = no tags.
+	 */
+	tags?: string[];
+	/** The DE1 the shot ran on, or `None` when it isn't known. */
+	machine?: ShotMachine;
 }
 
 /**
@@ -5157,6 +5192,16 @@ export enum ShotPhase {
 	Pouring = "Pouring",
 	/** Ending — flow has stopped and the group is draining. */
 	Ending = "Ending",
+}
+
+/** A shot's Visualizer privacy override — the `privacy` the upload sends. */
+export enum ShotPrivacy {
+	/** Listed publicly. */
+	Public = "public",
+	/** Reachable by link only. */
+	Unlisted = "unlisted",
+	/** Visible to the owner only. */
+	Private = "private",
 }
 
 /**
