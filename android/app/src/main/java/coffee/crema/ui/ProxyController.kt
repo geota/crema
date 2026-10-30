@@ -489,14 +489,23 @@ class ProxyController(
     /** Running while the next attempt must wait (5 s, 15 s, then 60 s). */
     private var refindBackoff: Job? = null
 
-    /** The ports NSD listed for the saved host when the re-find gave up:
-     *  only a new one resumes it. */
-    private var refindSeenAtGiveUp: Set<Int> = emptySet()
+    /** The hubs NSD listed on the saved host when the re-find gave up, as
+     *  (instance id, port): any new one resumes it, including the hub back
+     *  on its saved port under a new id. */
+    private var refindSeenAtGiveUp: Set<Pair<String, Int>> = emptySet()
+
+    /** When each port on the saved host was last tried, as a running count:
+     *  the least recently tried port goes first, so one bad advertisement
+     *  can't take every attempt. */
+    private val refindTriedAt = mutableMapOf<Int, Long>()
+    private var refindTries = 0L
 
     /** Held by the leave-remote flow (P2's frozen slice): no re-find runs. */
     private var refindHeld = false
 
-    /** Hold or release the re-find. While held it starts nothing; a release
+    /** Hold or release the re-find. While held it switches nothing: no new
+     *  attempt, no go-back from an attempt that ends (it waits for the
+     *  release), and a re-find switch already queued is dropped. A release
      *  re-checks at once. */
     fun holdRefind(hold: Boolean) {
         refindHeld = hold
@@ -510,6 +519,7 @@ class ProxyController(
         refindRefusals = 0
         refindQueued = false
         refindSeenAtGiveUp = emptySet()
+        refindTriedAt.clear()
         _state.update { it.copy(refindGaveUp = false) }
     }
 
@@ -529,10 +539,11 @@ class ProxyController(
 
     /** A port the re-find may try: on the saved host, not the current
      *  target, and only for a target pinned to a host this device paired with
-     *  (so never from a user's pick still waiting for its Welcome). */
+     *  (so never from a user's pick still waiting for its Welcome). The least
+     *  recently tried port first; never-tried ones in NSD's order. */
     private fun refindCandidate(current: RemoteSession): Peer? {
         if (pairing.pinnedHost == null || (current.trust.repin && !current.welcomed)) return null
-        return hubsOnSavedHost().firstOrNull { it.port != current.port }
+        return hubsOnSavedHost().filter { it.port != current.port }.minByOrNull { refindTriedAt[it.port] ?: 0L }
     }
 
     /** Check the re-find's conditions and, when they hold, dial a candidate
@@ -540,9 +551,11 @@ class ProxyController(
     private fun evaluateRefind() {
         val current = session ?: return
         if (_state.value.role != "secondary" || refindHeld || refindQueued || _state.value.refindGaveUp) return
-        // The handshake deadline: an attempt not welcomed in time ends.
+        // The handshake deadline: an attempt not welcomed in time ends. So
+        // does one refused while the re-find was held.
         if (current.trying) {
-            if (current.stalled) endAttempt(current, "didn't answer")
+            if (current.refused) endAttempt(current, "was refused")
+            else if (current.stalled) endAttempt(current, "didn't answer")
             return
         }
         if (refindBackoff?.isActive == true) return
@@ -555,6 +568,7 @@ class ProxyController(
         when {
             candidate != null -> {
                 appendLog("Re-find: trying ${candidate.name} at ${candidate.host}:${candidate.port}")
+                refindTriedAt[candidate.port] = ++refindTries
                 requestRefindSwitch(candidate.host, candidate.port, attempt = true, from = current)
             }
             // A refused link never redials: dial the saved target again.
@@ -573,7 +587,7 @@ class ProxyController(
     }
 
     private fun giveUpRefind() {
-        refindSeenAtGiveUp = hubsOnSavedHost().map { it.port }.toSet()
+        refindSeenAtGiveUp = hubsOnSavedHost().map { it.id to it.port }.toSet()
         appendLog("Re-find: no hub proved this device's pairing — giving up until a new one appears")
         _state.update { it.copy(refindGaveUp = true) }
     }
@@ -594,6 +608,12 @@ class ProxyController(
      *  off, and go back to the saved target now. Nothing about the attempt is
      *  saved. */
     private fun endAttempt(attempt: RemoteSession, why: String) {
+        // Held (the leave-remote prompt is open): no switch now. A refused
+        // attempt is marked, so the release ends it.
+        if (refindHeld) {
+            appendLog("Re-find: ${attempt.host}:${attempt.port} $why — held, going back on release")
+            return
+        }
         appendLog("Re-find: ${attempt.host}:${attempt.port} $why — going back")
         backOff()
         savedTarget?.let { (host, port) -> requestRefindSwitch(host, port, attempt = false, from = attempt) }
@@ -639,7 +659,10 @@ class ProxyController(
             else -> {
                 refused.refused = true
                 appendLog("Unattended session refused ($reason) — staying a remote")
-                if (refindRefusals == 0) notify(deniedMessage(reason))
+                // Never word an automatic reconnect's refusal as "forget it":
+                // the host may just be restarting.
+                val shown = if (reason == DenyReason.HOST_CHANGED) DenyReason.HOST_UNVERIFIED else reason
+                if (refindRefusals == 0) notify(deniedMessage(shown))
                 backOff()
             }
         }
@@ -671,10 +694,11 @@ class ProxyController(
         if (_state.value.hubStoppedHosting != stopped) _state.update { it.copy(hubStoppedHosting = stopped) }
     }
 
-    /** NSD changed: resume after a give-up when a new port appears on the
-     *  saved host, and re-check. */
+    /** NSD changed: resume after a give-up when a new hub appears on the
+     *  saved host (a new port, or a new instance on a known one), and
+     *  re-check. */
     private fun onPeersChanged() {
-        if (_state.value.refindGaveUp && (hubsOnSavedHost().map { it.port }.toSet() - refindSeenAtGiveUp).isNotEmpty()) {
+        if (_state.value.refindGaveUp && (hubsOnSavedHost().map { it.id to it.port }.toSet() - refindSeenAtGiveUp).isNotEmpty()) {
             appendLog("Re-find: a hub appeared on ${savedTarget?.first} — trying again")
             refindRefusals = 0
             _state.update { it.copy(refindGaveUp = false) }
@@ -1042,13 +1066,14 @@ class ProxyController(
                 refreshPinnedHub()
             },
             allowRepair = trust.allowRepair,
-            // Offer to forget a host only for a target this device chose or
-            // restored, and once per run of refusals (the saved target is
-            // dialed again after each back-off): a port the re-find dialed off
-            // an unauthenticated advertisement must not raise "forget this host".
+            // Offer to forget a host only on the user's own pick, before its
+            // first Welcome. An automatic reconnect or re-find attempt never
+            // does: a hub still loading after a restart can't prove the secret
+            // yet, and an advertisement is unauthenticated, so Forget there
+            // would drop a real pairing.
             onHostChanged = { hostId, hostName ->
-                if (!remote.attempt && refindRefusals == 0) _state.update { it.copy(changedHost = hostId to hostName) }
-                else appendLog("Re-find: $hostName at $host:$port couldn't prove the pairing this device holds for it")
+                if (remote.trust.repin && !remote.welcomed) _state.update { it.copy(changedHost = hostId to hostName) }
+                else appendLog("$hostName at $host:$port couldn't prove the pairing this device holds for it")
             },
         )
         // The VM's commands now go to this primary.
@@ -1202,6 +1227,14 @@ class ProxyController(
         trust: MirrorTrust,
         refind: RefindSwitch? = null,
     ) {
+        // A re-find switch doesn't run while the re-find is held (the
+        // leave-remote prompt is open): it is dropped, and the release
+        // re-checks. It never ran, so the mode epoch stays.
+        if (refind != null && refindHeld) {
+            appendLog("Re-find: held — dropping a queued switch")
+            refindQueued = false
+            return
+        }
         modeEpoch++
         modeSwitchProbe?.invoke(role)
         // Off the remote role nothing holds the re-find.

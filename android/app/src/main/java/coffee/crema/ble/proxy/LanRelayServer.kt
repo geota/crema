@@ -21,6 +21,8 @@ import io.ktor.server.websocket.webSocket
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -44,6 +46,9 @@ class LanRelayServer(
      *  [pingTimeoutMs] late. Tests shorten both. */
     private val pingPeriodMs: Long = PING_PERIOD_MS,
     private val pingTimeoutMs: Long = PING_TIMEOUT_MS,
+    /** Whether a port is free to bind. Tests force the race where the port
+     *  is taken after this says it's free. */
+    private val isPortFree: (Int) -> Boolean = ::portFree,
 ) {
     private val lock = Any()
     private var server: EmbeddedServer<*, *>? = null
@@ -55,7 +60,12 @@ class LanRelayServer(
      *  immediately after this returns. Throws if [stop] ran first or while
      *  starting; nothing is left listening then. */
     suspend fun start(): Int {
-        if (requestedPort != 0) {
+        // Probe the saved port with a plain bind first, so a taken port never
+        // reaches CIO; the catch below covers the race where it's taken
+        // between the probe and the start.
+        if (requestedPort != 0 && !isPortFree(requestedPort)) {
+            Log.w(TAG, "Relay port $requestedPort is taken — using an ephemeral port")
+        } else if (requestedPort != 0) {
             try {
                 return startOn(requestedPort)
             } catch (e: Exception) {
@@ -180,3 +190,13 @@ class LanRelayServer(
             ':' in name || name.split('.').let { p -> p.size == 4 && p.all { it.toIntOrNull() in 0..255 } }
     }
 }
+
+/** Whether [port] can be bound on every interface right now, the way the
+ *  relay binds it (SO_REUSEADDR, so the last run's TIME_WAIT sockets don't
+ *  count as taken). */
+private fun portFree(port: Int): Boolean = runCatching {
+    ServerSocket().use { socket ->
+        socket.reuseAddress = true
+        socket.bind(InetSocketAddress(port))
+    }
+}.isSuccess
