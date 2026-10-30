@@ -191,3 +191,18 @@ describe('pushShotToVisualizer — typed-error routing', () => {
 		expect(enqueue).not.toHaveBeenCalled();
 	});
 });
+
+describe('the as-run profile in history', () => {
+	it('carries the dialled brew temp and pre-infusion the DE1 ran (F6 history)', async () => {
+		const { asRunProfile } = await import('./shot-persistence.ts');
+		const { blankProfile } = await import('#lib/profiles/index.js');
+		const p = { ...blankProfile(), brewTemp: 92 };
+		p.segments = p.segments.map((s) => ({ ...s, temp: 92 }));
+		const ran = asRunProfile(p, { brewTemp: 94, preinfuseTarget: 5 });
+		expect(ran.segments.map((s) => s.temp)).toEqual(p.segments.map(() => 94));
+		expect(ran.brewTemp).toBe(94);
+		expect(ran.segments[0].time).toBe(5);
+		// A headless shot (no recorded params) keeps the saved profile.
+		expect(asRunProfile(p, null)).toBe(p);
+	});
+});

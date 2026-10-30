@@ -39,7 +39,11 @@ class OwnStateReadsTest {
             // Holder writes: on a remote they never reach the machine.
             "applySteamHotWater" to setOf("qcSteamTempC", "qcSteamTimeS", "qcHotWaterTempC", "qcHotWaterVolumeMl"),
             "seedMachineSettings" to setOf("activeProfileId", "connectSweepSettings()"),
-            "reuploadActiveProfile" to setOf("activeProfileId"),
+            "reuploadActiveProfile" to setOf("activeProfileId", "brewParams"),
+            // The device that owns the config (a remote shows its edits in its
+            // mirror slice): the brew override is stored normalized against
+            // its own active profile.
+            "showConfig" to setOf("activeProfileId", "brewParams"),
             // Hub only (StartShot is relayed).
             "applyStartShot" to setOf("activeProfileId", "brewParams", "requireScale", "stopOnWeight"),
             "startShotOnCoreLane" to setOf("autoTare", "brewParams", "preFlush", "stopOnWeight", "volumeStopWithScale"),
@@ -69,9 +73,12 @@ class OwnStateReadsTest {
             "persistLibraryNow" to setOf("activeBeanId"),
             "deleteRoaster" to setOf("activeBeanId"),
             "maybeLoadLinkedProfile" to setOf("activeProfileId"),
-            "refreshProfiles" to setOf("activeProfileId"),
-            "deleteProfile" to setOf("activeProfileId"),
-            "archiveBuiltinProfile" to setOf("activeProfileId"),
+            // The library's own selection: a reseed after a delete or hide is
+            // a profile change that clears this device's own override.
+            "refreshProfiles" to setOf("activeProfileId", "withActiveProfileId()"),
+            "deleteProfile" to setOf("activeProfileId", "withActiveProfileId()"),
+            "archiveBuiltinProfile" to setOf("activeProfileId", "withActiveProfileId()"),
+            "activateReseeded" to setOf("activeProfileId"),
             "deleteBean" to setOf("activeBeanId"),
             // Own-state writers (§7.4): a restore and a bean import.
             "restoreBackupFromText" to setOf("activeBeanId"),

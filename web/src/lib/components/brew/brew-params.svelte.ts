@@ -8,9 +8,12 @@
  * the user mutates a control.
  *
  * Wiring status (kept here so changes stay coherent with the orchestrator):
- *   - `dose`, `brewTemp`, `preinf` — wired as profile QC overrides, baked
- *     into the uploaded profile bytes at shot start (see `qcOverrides()`
- *     below and `BrewParamSeedKey`).
+ *   - `dose`, `brewTemp`, `preinf` — wired as profile QC overrides, applied
+ *     by the core to the uploaded profile at shot start (see `qcOverrides()`
+ *     below and `BrewParamSeedKey`). `brewTemp` is an absolute target: the
+ *     core shifts every step by its difference from the profile's own brew
+ *     temperature, inside the range {@link BrewParamState.brewTempBounds}
+ *     reports.
  *   - `yield` — wired BOTH ways: `applyShotTargetWeight` arms the core's
  *     SAW target immediately on edit, and it's also one of the four
  *     `qcOverrides()` keys baked in at shot start.
@@ -155,8 +158,55 @@ export class BrewParamState {
 			key: K,
 			value: BrewParams[K]
 		) => void,
-		private readonly qcSeed?: () => Partial<BrewParams>
+		private readonly qcSeed?: () => Partial<BrewParams>,
+		/**
+		 * Optional getter for the active profile's brew-temperature dial range
+		 * (the core's `brewTempRange`), or `null` with no active profile.
+		 */
+		private readonly brewTempRange?: () => { min: number; max: number } | null,
+		/**
+		 * Optional getter for the active profile's pre-infusion dial (the core's
+		 * `preinfusionDial`), or `null` with no active profile.
+		 */
+		private readonly preinfusionDial?: () => {
+			min: number;
+			max: number;
+			adjustable: boolean;
+		} | null
 	) {}
+
+	/**
+	 * The pre-infusion dial's bounds and whether it applies: the core's range
+	 * for the active profile (always holding its own value), else the
+	 * stepper's 0–30 s default. `adjustable` is false for a profile with no
+	 * pre-infusion segment — there is nothing to rescale.
+	 */
+	preinfusionBounds(): { min: number; max: number; adjustable: boolean } {
+		return this.preinfusionDial?.() ?? { min: 0, max: 30, adjustable: true };
+	}
+
+	/**
+	 * The brew-temperature dial's bounds: the core's range for the active
+	 * profile (no step may leave the core's temperature bounds after the
+	 * shift), else the stepper's 80–100 °C default.
+	 */
+	brewTempBounds(): { min: number; max: number } {
+		return this.brewTempRange?.() ?? { min: 80, max: 100 };
+	}
+
+	/**
+	 * How far the brew-temperature dial sits from the profile's own brew
+	 * temperature, °C (0 when not overridden) — the "+x.x °C from profile"
+	 * hint.
+	 */
+	brewTempOffset(): number {
+		return this.current.brewTemp - this.seed().brewTemp;
+	}
+
+	/** Put one seed-tracking field back to the profile's value — a dial's Reset. */
+	resetKey(key: BrewParamSeedKey): void {
+		this.set(key, this.seed()[key]);
+	}
 
 	/** Set one parameter — the steppers' `onChange`. */
 	set<K extends keyof BrewParams>(key: K, value: BrewParams[K]): void {

@@ -201,6 +201,9 @@ class RemoteSettingsTest {
         assertEquals("15", vm.ui.value.beans.first { it.id == BEAN_S }.grinderSetting, "S's dial on S's bean")
         assertEquals("", vm.ui.value.beans.first { it.id == BEAN_P }.grinderSetting)
 
+        // The startup load must not replace the saved copy (it loads the
+        // custom profiles after the prefs).
+        VmHarness.awaitStartupLoaded(vm)
         vm.saveQuickPreset("Hub dial")
         VmHarness.idle()
         val saved = vm.ui.value.profiles.firstOrNull { it.name == "Hub dial" }

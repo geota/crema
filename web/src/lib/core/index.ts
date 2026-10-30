@@ -25,6 +25,7 @@ import type { CoreOutput, ScaleCapabilities, ScaleUuids, TimedSample } from './c
 import type { CalTarget, MmrRegister } from './crema-core';
 import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
 import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core';
+import type { BrewOverrides, ProfileUploadOutput } from './crema-core';
 import { guardStoppedBridge } from './stopped-guard';
 
 /** Parse a bridge `FlashStep` JSON; `status: null` reads as "no flash". */
@@ -478,14 +479,21 @@ export interface CremaCore {
 	 */
 	scaleUuids(): Promise<ScaleUuids | undefined>;
 	/**
-	 * Start uploading `profile` to the DE1. Resolves to the initial
-	 * `CoreOutput` carrying `ProfileUploadStarted` + every BLE write
-	 * command in upload order. Subsequent progress arrives via
-	 * `ProfileUploadProgress` events on `De1FrameAck` notifications,
-	 * success via `ProfileUploadCompleted`, failure via
-	 * `ProfileUploadFailed`.
+	 * Upload the effective profile to the DE1: the library `CremaProfile`
+	 * with the Quick Controls overrides applied by the core (brew temp shifts
+	 * every step, pre-infusion rescales the leading segments, dose / yield
+	 * replace, all clamped). The only upload the shell has — the core builds
+	 * every byte from `(profile, qc)`. Resolves to the initial `CoreOutput`
+	 * (`ProfileUploadStarted` + every BLE write in upload order) and the
+	 * fingerprint of those bytes (`null` when nothing was uploaded).
+	 * Progress arrives via `ProfileUploadProgress`, success via
+	 * `ProfileUploadCompleted`, failure via `ProfileUploadFailed`.
 	 */
-	uploadProfile(profile: unknown, nowMs: number): Promise<CoreOutput>;
+	uploadCremaProfile(
+		profile: unknown,
+		qc: BrewOverrides,
+		nowMs: number
+	): Promise<{ output: CoreOutput; fingerprint: string | null }>;
 	/** Cancel an in-progress upload; emits `ProfileUploadFailed { Aborted }`. */
 	cancelProfileUpload(): Promise<CoreOutput>;
 	/**
@@ -495,7 +503,7 @@ export interface CremaCore {
 	 * running upload. `nowMs` is a `performance.now()` time.
 	 */
 	profileWriteFailed(nowMs: number, uploadId: number): Promise<CoreOutput>;
-	/** `true` from `uploadProfile` until the tail ack / failure / cancel. */
+	/** `true` from `uploadCremaProfile` until the tail ack / failure / cancel. */
 	profileUploadInProgress(): Promise<boolean>;
 	/**
 	 * Name of the profile most recently uploaded successfully — the
@@ -632,8 +640,8 @@ export interface CremaCore {
 	setWaterWarnMl(warnMl: number | undefined): Promise<void>;
 	/**
 	 * Tell the core which profile is active — `profileJson` is the wire
-	 * `Profile` JSON (`JSON.stringify(toCoreProfile(p))`, the shape
-	 * `uploadProfile` takes); `undefined` = no active profile. Latches the
+	 * `Profile` JSON (`JSON.stringify(toCoreProfile(p))`); `undefined` = no
+	 * active profile. Latches the
 	 * beverage type (`SkipCleaning` disposition) and the per-step weight
 	 * exits, so both follow the active profile even when the upload is
 	 * skipped (restore at startup, fingerprint-cache hit). Also latched by
@@ -1190,8 +1198,11 @@ async function createCore(): Promise<CremaCore> {
 			const raw = bridge.scale_uuids();
 			return raw === undefined ? undefined : (JSON.parse(raw) as ScaleUuids);
 		},
-		async uploadProfile(profile, nowMs) {
-			return parseOutput(bridge.upload_profile(JSON.stringify(profile), nowMs));
+		async uploadCremaProfile(profile, qc, nowMs) {
+			const upload = JSON.parse(
+				bridge.upload_crema_profile(JSON.stringify(profile), JSON.stringify(qc), nowMs)
+			) as ProfileUploadOutput;
+			return { output: upload.output, fingerprint: upload.fingerprint ?? null };
 		},
 		async cancelProfileUpload() {
 			return parseOutput(bridge.cancel_profile_upload());

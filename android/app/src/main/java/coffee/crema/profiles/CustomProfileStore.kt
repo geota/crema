@@ -169,6 +169,34 @@ fun patchCremaProfileJson(
     json: Json,
 ): String {
     val root = json.parseToJsonElement(baseJson).jsonObject
+    val patchedSegments = editedSegments(root, segments)
+    val patched = root.toMutableMap().apply {
+        put("source", JsonPrimitive("custom"))
+        put("name", JsonPrimitive(name))
+        put("roast", roast?.let { JsonPrimitive(it) } ?: JsonNull)
+        put("tags", JsonArray(tags.map { JsonPrimitive(it) }))
+        put("pinned", JsonPrimitive(pinned))
+        put("notes", JsonPrimitive(notes))
+        put("author", JsonPrimitive(author))
+        // beverageType: Rust CremaProfile.beverage_type is a NON-optional enum with
+        // no serde default — JsonNull AND a missing key both fail cremaProfileToWire
+        // (which would silently block shot starts). A null editor value therefore
+        // leaves the base profile's value untouched.
+        beverageType?.let { put("beverageType", JsonPrimitive(it)) }
+        put("dose", JsonPrimitive(dose))
+        put("yieldOut", JsonPrimitive(yieldOut))
+        put("brewTemp", JsonPrimitive(brewTemp))
+        put("maxTotalVolumeMl", JsonPrimitive(maxTotalVolumeMl))
+        put("preinfuseStepCount", JsonPrimitive(preinfuseStepCount))
+        put("tankTemperatureC", JsonPrimitive(tankTemperatureC))
+        put("segments", patchedSegments)
+    }
+    return json.encodeToString(JsonObject.serializer(), JsonObject(patched))
+}
+
+/** The segment array built from the editor's [segments] over [root]'s own
+ *  (see [patchCremaProfileJson]). */
+private fun editedSegments(root: JsonObject, segments: List<SegmentEdit>): JsonArray {
     val baseSegments = (root["segments"] as? JsonArray) ?: JsonArray(emptyList())
     // Build the segment array from the EDIT list so the editor can add / remove
     // segments: an existing index reuses that base segment (its tempSensor /
@@ -176,7 +204,7 @@ fun patchCremaProfileJson(
     // segment as a template and gets a fresh id + name. Removed segments simply
     // fall off the end.
     val template = baseSegments.firstOrNull() as? JsonObject
-    val patchedSegments = JsonArray(
+    return JsonArray(
         segments.mapIndexed { i, edit ->
             val baseSeg = baseSegments.getOrNull(i) as? JsonObject
             val base = baseSeg ?: template ?: JsonObject(emptyMap())
@@ -219,27 +247,16 @@ fun patchCremaProfileJson(
             JsonObject(base + overlay)
         },
     )
-    val patched = root.toMutableMap().apply {
-        put("source", JsonPrimitive("custom"))
-        put("name", JsonPrimitive(name))
-        put("roast", roast?.let { JsonPrimitive(it) } ?: JsonNull)
-        put("tags", JsonArray(tags.map { JsonPrimitive(it) }))
-        put("pinned", JsonPrimitive(pinned))
-        put("notes", JsonPrimitive(notes))
-        put("author", JsonPrimitive(author))
-        // beverageType: Rust CremaProfile.beverage_type is a NON-optional enum with
-        // no serde default — JsonNull AND a missing key both fail cremaProfileToWire
-        // (which would silently block shot starts). A null editor value therefore
-        // leaves the base profile's value untouched.
-        beverageType?.let { put("beverageType", JsonPrimitive(it)) }
-        put("dose", JsonPrimitive(dose))
-        put("yieldOut", JsonPrimitive(yieldOut))
-        put("brewTemp", JsonPrimitive(brewTemp))
-        put("maxTotalVolumeMl", JsonPrimitive(maxTotalVolumeMl))
-        put("preinfuseStepCount", JsonPrimitive(preinfuseStepCount))
-        put("tankTemperatureC", JsonPrimitive(tankTemperatureC))
-        put("segments", patchedSegments)
-    }
+}
+
+/**
+ * [baseJson] with only its segments replaced by the editor's [segments] — the
+ * profile the editor currently shows, for a core rule that needs the whole
+ * profile (the Brew temp field's shift).
+ */
+fun withEditedSegmentsJson(baseJson: String, segments: List<SegmentEdit>, json: Json): String {
+    val root = json.parseToJsonElement(baseJson).jsonObject
+    val patched = root.toMutableMap().apply { put("segments", editedSegments(root, segments)) }
     return json.encodeToString(JsonObject.serializer(), JsonObject(patched))
 }
 
@@ -278,67 +295,17 @@ fun setProfilePinnedJson(baseJson: String, pinned: Boolean, json: Json): String 
 }
 
 /**
- * Override the top-level dose / yield / brew-temp on a complete CremaProfile
- * JSON, leaving every other field (segments, limiters, …) untouched — the
- * Quick-Controls transient override baked into a shot upload (the web
- * shell's re-upload-with-overrides). Does NOT persist to the library.
- *
- * Deliberately does NOT reconcile `maxTotalVolumeMl` / segment
- * `volumeLimitMl` (or frame durations) with the new yield, even when one of
- * them would now cut the shot short of it: Quick Controls edits exactly the
- * field you're dialling and nothing else — a silent rewrite of a DIFFERENT
- * field, however well-intentioned, is a second thing to reason about on top
- * of "what does this dial do." When a stale cap or a profile's own frame
- * timing DOES end a shot short of an armed target, that surfaces instead as
- * `Event::ShotCompleted.endedWithoutTriggeringStop` (core/de1-app) — a
- * visible diagnostic signal rather than an invisible auto-fix. Go widen the
- * cap, or the frame duration, in the full segment editor
- * ([patchCremaProfileJson]) if that's what you actually want.
- *
- * When [preinf] is non-null it also caps the **leading pre-infuse segment's**
- * time (issue 15): pre-infusion isn't a separate machine setting — it's just the
- * duration of the first segment (`CremaProfile.preinfuseSeconds`,
- * `core/de1-domain` `blank_profile`), so a per-shot pre-infuse override rewrites
- * exactly that one frame. A null leaves the profile's own pre-infusion intact.
+ * Save the dialled profile as a NEW custom profile (the web shell's "Save
+ * preset"): [effectiveJson] is the core's `effectiveCremaProfile(active, qc)` —
+ * the Quick-Controls override already baked into its segments, exactly as a shot
+ * runs it — given a fresh id + source:custom + [name], unpinned. Volume caps are
+ * deliberately not reconciled with a new yield (Quick Controls edits only what
+ * it dials). Does NOT mutate the source profile.
  */
-fun overrideBrewParamsJson(
-    baseJson: String,
-    dose: Float,
-    yieldOut: Float,
-    brewTemp: Float,
-    preinf: Float? = null,
-    json: Json,
-): String {
-    val root = json.parseToJsonElement(baseJson).jsonObject.toMutableMap()
-    root["dose"] = JsonPrimitive(dose)
-    root["yieldOut"] = JsonPrimitive(yieldOut)
-    root["brewTemp"] = JsonPrimitive(brewTemp)
-    if (preinf != null) {
-        val segments = (root["segments"] as? JsonArray)?.toMutableList()
-        val first = segments?.firstOrNull() as? JsonObject
-        if (first != null) {
-            val firstMap = first.toMutableMap().apply { put("time", JsonPrimitive(preinf)) }
-            segments[0] = JsonObject(firstMap)
-            root["segments"] = JsonArray(segments)
-        }
-    }
-    return json.encodeToString(JsonObject.serializer(), JsonObject(root))
-}
-
-/**
- * Clone the active profile into a NEW custom profile carrying the Quick-Controls
- * dial values (the web shell's "Save preset"): fresh id + source:custom + the
- * given name + dose/yield/brew-temp, every segment preserved verbatim (see
- * [overrideBrewParamsJson] for why volume caps are deliberately not
- * reconciled here). Does NOT mutate the source profile.
- */
-fun quickPresetJson(baseJson: String, name: String, dose: Float, yieldOut: Float, brewTemp: Float, json: Json): String {
-    val dup = duplicatedCustomProfileJson(baseJson, json)
+fun quickPresetJson(effectiveJson: String, name: String, json: Json): String {
+    val dup = duplicatedCustomProfileJson(effectiveJson, json)
     val root = json.parseToJsonElement(dup).jsonObject.toMutableMap()
     root["name"] = JsonPrimitive(name.ifBlank { "Custom preset" })
-    root["dose"] = JsonPrimitive(dose)
-    root["yieldOut"] = JsonPrimitive(yieldOut)
-    root["brewTemp"] = JsonPrimitive(brewTemp)
     root["pinned"] = JsonPrimitive(false)
     return json.encodeToString(JsonObject.serializer(), JsonObject(root))
 }

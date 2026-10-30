@@ -68,7 +68,7 @@ class CoreTickerTest {
     fun `a stalled upload fails on the ack watchdog through the ticker alone`() = runTest {
         val bridge = CremaBridge() // the host build of the core
         bridge.onNotification(NotificationSource.DE1_MMR_READ, modelReply(1), 0uL)
-        val upload = json.decodeFromString(CoreOutput.serializer(), bridge.uploadProfile(profile, 0uL))
+        val upload = json.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(profile, 0uL))
         val writes = upload.commands.filterIsInstance<Command.WriteCharacteristic>()
         // Every write but the tail lands and is acked; the tail never returns.
         for (w in writes.dropLast(1)) {

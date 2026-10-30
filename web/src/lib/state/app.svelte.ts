@@ -41,7 +41,6 @@ import { getCaptureStore } from '#lib/capture/index.js';
 import {
 	getProfileStore,
 	profileFingerprint,
-	toCoreProfile,
 	type CremaProfile,
 	type ProfileFingerprintOverrides
 } from '#lib/profiles/index.js';
@@ -1491,7 +1490,9 @@ export class CremaApp {
 	}
 
 	/**
-	 * Upload `profile` to the DE1. The core builds the BLE writes; the
+	 * Upload the effective profile — the library `profile` with the Quick
+	 * Controls overrides `qc` applied by the core — to the DE1. The core builds
+	 * every byte (`CremaCore.uploadCremaProfile`, the shell's only upload); the
 	 * orchestrator routes each `WriteCharacteristic` through
 	 * `de1.writeCharacteristic`. Progress events (`ProfileUploadStarted` /
 	 * `ProfileUploadProgress` / `ProfileUploadCompleted` /
@@ -1499,12 +1500,16 @@ export class CremaApp {
 	 * the rest of the events use; the UI snapshot's `profileUploadProgress`
 	 * and `activeProfileName` fields reflect them.
 	 *
-	 * `profile` is the typed `Profile` (de1-domain shape) — the shell's
-	 * `lib/profiles` model converts via `toCoreProfile` before calling this.
+	 * Returns the fingerprint of the bytes uploaded (`null` when nothing was).
 	 */
-	async uploadProfile(profile: import('#lib/core/index.js').Profile): Promise<void> {
+	async uploadEffectiveProfile(
+		profile: CremaProfile,
+		qc: ProfileFingerprintOverrides = {}
+	): Promise<string | null> {
 		const now = performance.now();
-		this.applyCoreOutput(await this.core.uploadProfile(profile, now));
+		const { output, fingerprint } = await this.core.uploadCremaProfile(profile, qc, now);
+		this.applyCoreOutput(output);
+		return fingerprint;
 	}
 
 	/** Cancel an in-progress profile upload (emits ProfileUploadFailed{Aborted}). */
@@ -2109,7 +2114,9 @@ export class CremaApp {
 					ps.sync({
 						desired,
 						alreadyLoaded,
-						upload: Effect.promise(() => this.uploadProfile(toCoreProfile(profile))),
+						// The core's fingerprint of the bytes it uploaded is the
+						// one committed on completion.
+						upload: Effect.promise(() => this.uploadEffectiveProfile(profile, qc)),
 						cancel: Effect.promise(() => this.cancelProfileUpload()),
 						log: (line) => this.state.log(line),
 						background: opts.background
@@ -2433,6 +2440,11 @@ export class CremaApp {
 		}
 		try {
 			await this.runStart(start, qc);
+		} catch (e) {
+			// A start that failed brews nothing: its dial snapshot must not be
+			// recorded onto a later group-head shot.
+			this.brewParamsAtShotStart = null;
+			throw e;
 		} finally {
 			this.startSequence.end(start);
 		}

@@ -1,7 +1,6 @@
 package coffee.crema.ui
 
 import coffee.crema.profiles.SegmentEdit
-import coffee.crema.profiles.overrideBrewParamsJson
 import coffee.crema.profiles.patchCremaProfileJson
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -77,15 +76,14 @@ class ActiveProfilePushTest {
         // Startup restore / shot start: pushStopTargets → the active profile.
         pushActiveProfile(aflow, ::toWire, { core.activations += it })
         // The shot start's effective profile (a Quick-Controls dose/yield
-        // override baked in) still matches what the DE1 holds → skip.
-        val effective = overrideBrewParamsJson(aflow, 18f, 36f, 93f, json = json)
+        // override applied by the core, which keeps step weights — core test
+        // `step_weights_survive_the_overrides`) still matches what the DE1
+        // holds → skip.
         val skipped = shouldSkipProfileUpload("fp", "fp", de1Ready = true)
         if (!skipped) core.uploads++
         assertTrue(skipped)
         assertEquals(0, core.uploads, "no upload on the skip path")
         assertEquals(listOf(null, 3.6f, null), weightsOf(core.activations.single()))
-        // …and the override never drops the weight either.
-        assertEquals(listOf(null, 3.6f, null), weightsOf(toWire(effective)))
     }
 
     @Test

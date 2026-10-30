@@ -35,7 +35,8 @@ pub use de1_uuids::{
 };
 pub use error::AppError;
 pub use event::{
-    Command, CoreOutput, Event, ProfileUploadFailure, ScaleLinkDeadReason, Source, WriteTarget,
+    Command, CoreOutput, Event, ProfileUploadFailure, ProfileUploadOutput, ScaleLinkDeadReason,
+    Source, WriteTarget,
 };
 pub use firmware_flash::{
     FLASHABLE_MODELS, FirmwareFlash, FlashAction, FlashBlocker, FlashFailure, FlashPhase,
@@ -49,13 +50,14 @@ use std::time::Duration;
 use de1_domain::connect_sweep::MAX_TANK_TEMP_C;
 use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
 use de1_domain::{
-    AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AutoStop, BeverageType, BrewRecipe,
-    BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, Estimate, FlowAlgorithm, FlowEstimator,
-    LineFreqDetector, LowWaterMonitor, MAX_COUNTED_GAP_S, Profile, STOP_WEIGHT_BEFORE, ShotEvent,
-    ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StepWeightExit, StopCapture, StopConfig,
-    StopReason, StopTargets, TankLevelSmoother, TareSettleWindow, VolumeIntegrator, WaterEvent,
-    WaterMonitor, WeightSpikeGate, WeightUnit, clamp_refill_point_mm, counts_toward_water,
-    pre_shot_zero_offset, sav_counts_volume, shot_disposition, water_tank_depth_mm,
+    AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AutoStop, BeverageType, BrewOverrides, BrewRecipe,
+    BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, CremaProfile, Estimate, FlowAlgorithm,
+    FlowEstimator, LineFreqDetector, LowWaterMonitor, MAX_COUNTED_GAP_S, Profile,
+    STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor,
+    StepWeightExit, StopCapture, StopConfig, StopReason, StopTargets, TankLevelSmoother,
+    TareSettleWindow, VolumeIntegrator, WaterEvent, WaterMonitor, WeightSpikeGate, WeightUnit,
+    clamp_refill_point_mm, counts_toward_water, pre_shot_zero_offset, sav_counts_volume,
+    shot_disposition, water_tank_depth_mm,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -4625,12 +4627,92 @@ impl CremaCore {
     /// `TooManySteps` — if the profile fails validation. The wire stays
     /// quiet on a rejected profile, and an upload already in flight is left
     /// alone.
-    pub fn upload_profile(
+    ///
+    /// Crate-internal: a shell uploads only through
+    /// [`upload_crema_profile`](Self::upload_crema_profile), which builds the
+    /// bytes from the library profile and the Quick Controls overrides, so no
+    /// shell can send a profile the core did not assemble (AC-F6.6).
+    pub(crate) fn upload_profile(
         &mut self,
         profile: &Profile,
         now: Duration,
     ) -> Result<CoreOutput, AppError> {
         self.upload_profile_with(profile, now, true)
+    }
+
+    /// Upload the **effective** profile — the library `profile` with the
+    /// user's Quick Controls overrides `qc` applied
+    /// ([`de1_domain::effective_crema_profile`]: brew temperature shifts every
+    /// step, pre-infusion rescales the leading segments, dose / yield
+    /// replace, all clamped by the core) — and return its fingerprint
+    /// ([`de1_domain::effective_profile_fingerprint`]), the hash of exactly
+    /// the bytes this upload writes. The only upload entry point the shells
+    /// have; see [`upload_profile`](Self::upload_profile) for the upload
+    /// itself.
+    ///
+    /// # Errors
+    ///
+    /// As [`upload_profile`](Self::upload_profile).
+    pub fn upload_crema_profile(
+        &mut self,
+        profile: &CremaProfile,
+        qc: &BrewOverrides,
+        now: Duration,
+    ) -> Result<(CoreOutput, String), AppError> {
+        let effective = de1_domain::effective_crema_profile(profile, qc);
+        let fingerprint = effective_fingerprint(&effective);
+        let out = self.upload_profile(&de1_domain::to_wire(&effective), now)?;
+        Ok((out, fingerprint))
+    }
+
+    /// The JSON face of [`upload_crema_profile`](Self::upload_crema_profile)
+    /// both bridges export: a library `CremaProfile` JSON and an optional
+    /// `BrewOverrides` JSON (`{dose, yield, brewTemp, preinf}`; empty / `null`
+    /// = none). A malformed payload comes back as one
+    /// [`Event::DecodeError`], a rejected profile as one
+    /// [`Event::ProfileUploadFailed`]; neither writes anything.
+    pub fn upload_crema_profile_json(
+        &mut self,
+        profile_json: &str,
+        qc_json: Option<&str>,
+        now_ms: u64,
+    ) -> ProfileUploadOutput {
+        let parsed = serde_json::from_str::<CremaProfile>(profile_json)
+            .map_err(|e| format!("profile JSON parse failed: {e}"))
+            .and_then(|p| {
+                de1_domain::parse_brew_overrides(qc_json)
+                    .map(|qc| (p, qc))
+                    .map_err(|e| format!("overrides JSON parse failed: {e}"))
+            });
+        let (profile, qc) = match parsed {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                let mut output = CoreOutput::default();
+                output.events.push(Event::DecodeError { message });
+                return ProfileUploadOutput {
+                    output,
+                    fingerprint: None,
+                };
+            }
+        };
+        match self.upload_crema_profile(&profile, &qc, ms_to_duration(now_ms)) {
+            // A refusal that wrote nothing (a firmware flash holds the link)
+            // started no upload, so it has no fingerprint either.
+            Ok((output, fingerprint)) => ProfileUploadOutput {
+                output,
+                fingerprint: self.profile_upload_in_progress().then_some(fingerprint),
+            },
+            Err(err) => {
+                let mut output = CoreOutput::default();
+                output.events.push(Event::ProfileUploadFailed {
+                    reason: ProfileUploadFailure::from(err),
+                });
+                ProfileUploadOutput {
+                    output,
+                    fingerprint: None,
+                }
+            }
+        }
     }
 
     /// [`upload_profile`](Self::upload_profile), with `default_flow_limit`
@@ -5977,6 +6059,15 @@ fn assemble(
     } else {
         profile.assemble_without_default_flow_limit(encoding)
     }
+}
+
+/// The fingerprint of an already-effective profile (no overrides left to
+/// apply). Infallible in practice: a `CremaProfile` always serialises; the
+/// empty fallback never matches a real fingerprint, so it can only cost a
+/// redundant upload.
+fn effective_fingerprint(effective: &CremaProfile) -> String {
+    de1_domain::effective_profile_fingerprint(effective, &BrewOverrides::default())
+        .unwrap_or_default()
 }
 
 /// The wait before an unanswered re-upload request that went out `sent`
@@ -11641,6 +11732,111 @@ mod tests {
                 Command::WriteCharacteristic { data, .. } => data.clone(),
                 other => panic!("tail must be a characteristic write, got {other:?}"),
             }
+        }
+
+        /// The normal frames (`ShotFrame`) an upload's commands write, decoded
+        /// (extension frames and the tail, the last write, left out).
+        fn uploaded_frames(out: &CoreOutput) -> Vec<de1_protocol::ShotFrame> {
+            let mut frames: Vec<&[u8]> = out
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileFrame,
+                        data,
+                    } => Some(data.as_slice()),
+                    _ => None,
+                })
+                .collect();
+            frames.pop();
+            frames
+                .into_iter()
+                .filter(|data| !profile::is_extension_frame(data))
+                .filter_map(|data| de1_protocol::ShotFrame::decode(data).ok())
+                .collect()
+        }
+
+        /// A 94 / 90 / 88 °C library profile (anchored on its first step, 94),
+        /// with two pre-infusion segments of 2 s and 6 s.
+        fn declining_library_profile() -> de1_domain::CremaProfile {
+            let mut steps = Vec::new();
+            for (t, secs) in [(94.0, 2.0), (90.0, 6.0), (88.0, 20.0)] {
+                let mut s = step("s", Pump::Pressure, None);
+                s.temperature_c = t;
+                s.duration_seconds = secs;
+                steps.push(s);
+            }
+            let mut wire = profile("Declining", steps);
+            wire.preinfuse_step_count = 2;
+            de1_domain::from_wire(&wire)
+        }
+
+        /// AC-F6.3 / F6.6: the one shell entry point uploads the effective
+        /// profile — the brew-temp and pre-infusion overrides are in the
+        /// frames — and returns the fingerprint of those exact bytes.
+        #[test]
+        fn f6_upload_crema_profile_sends_the_effective_bytes_and_their_fingerprint() {
+            let p = declining_library_profile();
+            let qc = BrewOverrides {
+                brew_temp: Some(96.0),
+                preinf: Some(12.0),
+                ..BrewOverrides::default()
+            };
+            let mut core = CremaCore::new_with_model(1);
+            let (out, fp) = core.upload_crema_profile(&p, &qc, Duration::ZERO).unwrap();
+            let frames = uploaded_frames(&out);
+            let temps: Vec<f32> = frames.iter().map(|f| f.temperature).collect();
+            assert_eq!(temps, vec![96.0, 92.0, 90.0]);
+            let secs: Vec<f32> = frames.iter().map(|f| f.duration_seconds).collect();
+            assert_eq!(secs, vec![3.0, 9.0, 20.0]);
+
+            // The fingerprint is the effective profile's, and the bytes are
+            // exactly the effective profile's assembly.
+            let effective = de1_domain::effective_crema_profile(&p, &qc);
+            assert_eq!(
+                fp,
+                de1_domain::effective_profile_fingerprint(&p, &qc).unwrap()
+            );
+            let mut reference = CremaCore::new_with_model(1);
+            let expected = reference
+                .upload_profile(&de1_domain::to_wire(&effective), Duration::ZERO)
+                .unwrap();
+            assert_eq!(out.commands, expected.commands);
+
+            // No overrides: the saved profile's own bytes and fingerprint.
+            let mut bare = CremaCore::new_with_model(1);
+            let (bare_out, bare_fp) = bare
+                .upload_crema_profile(&p, &BrewOverrides::default(), Duration::ZERO)
+                .unwrap();
+            let bare_temps: Vec<f32> = uploaded_frames(&bare_out)
+                .iter()
+                .map(|f| f.temperature)
+                .collect();
+            assert_eq!(bare_temps, vec![94.0, 90.0, 88.0]);
+            assert_ne!(bare_fp, fp);
+        }
+
+        #[test]
+        fn upload_crema_profile_clamps_or_refuses_an_out_of_range_brew_temp() {
+            let temps_for = |brew_temp: f32| {
+                let p = declining_library_profile();
+                let qc = BrewOverrides {
+                    brew_temp: Some(brew_temp),
+                    ..BrewOverrides::default()
+                };
+                let mut core = CremaCore::new_with_model(1);
+                let (out, _) = core.upload_crema_profile(&p, &qc, Duration::ZERO).unwrap();
+                uploaded_frames(&out)
+                    .iter()
+                    .map(|f| f.temperature)
+                    .collect::<Vec<f32>>()
+            };
+            // Inside the core's bounds but below the range: clamped to its
+            // 80 °C end (the dial's minimum brew temperature).
+            assert_eq!(temps_for(3.0), vec![80.0, 76.0, 74.0]);
+            // Outside the bounds, or 0: refused — the profile as saved.
+            assert_eq!(temps_for(120.0), vec![94.0, 90.0, 88.0]);
+            assert_eq!(temps_for(0.0), vec![94.0, 90.0, 88.0]);
         }
 
         #[test]

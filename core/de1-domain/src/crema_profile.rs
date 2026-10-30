@@ -146,8 +146,10 @@ pub struct CremaProfile {
     pub dose: f32,
     /// Yield target, grams (round-trips as the wire `target_weight`).
     pub yield_out: f32,
-    /// Brew temperature, °C — a display default (the mean step temperature on
-    /// import); per-segment temps are the real control.
+    /// Brew temperature, °C — the first step's temperature, kept derived by
+    /// the core ([`crate::with_derived_brew_temp`]); per-segment temps are the
+    /// real control, and a change to it shifts every step
+    /// ([`crate::effective_crema_profile`]).
     #[serde(default)]
     pub brew_temp: f32,
     /// End the shot when the scale reaches the yield target. Shell behaviour
@@ -336,7 +338,7 @@ fn is_tea_profile(title: &str) -> bool {
 /// library metadata the wire format has no field for: roast is classified from
 /// the title + notes ([`roast_from_profile`]), tea profiles pick up a `"tea"`
 /// tag, dose / yield fall back to a neutral 18 g / 36 g, and the brew
-/// temperature is the mean step temperature rounded to the nearest 0.5 °C.
+/// temperature is the first step's (the brew-temp dial's anchor).
 #[must_use]
 pub fn from_wire(profile: &Profile) -> CremaProfile {
     let segments = profile
@@ -345,22 +347,6 @@ pub fn from_wire(profile: &Profile) -> CremaProfile {
         .enumerate()
         .map(|(i, s)| segment_from_step(s, i))
         .collect();
-
-    let temps: Vec<f32> = profile
-        .steps
-        .iter()
-        .map(|s| s.temperature_c)
-        .filter(|t| *t > 0.0)
-        .collect();
-    // `temps.len()` is a small frame count, so the f32 cast for the mean is
-    // lossless in practice — the same benign-cast `#[allow]` the rest of the
-    // crate uses (e.g. `maintenance.rs`, `volume.rs`).
-    #[allow(clippy::cast_precision_loss)]
-    let mean_temp = if temps.is_empty() {
-        92.0
-    } else {
-        temps.iter().sum::<f32>() / temps.len() as f32
-    };
 
     let mut tags = vec!["Built-in".to_string()];
     if is_tea_profile(&profile.title) {
@@ -389,7 +375,14 @@ pub fn from_wire(profile: &Profile) -> CremaProfile {
         } else {
             36.0
         },
-        brew_temp: (mean_temp * 2.0).round() / 2.0,
+        // The first step's temperature — the anchor a brew-temp change is
+        // measured from ([`crate::brew_temp_anchor`]).
+        brew_temp: profile
+            .steps
+            .first()
+            .map(|s| s.temperature_c)
+            .filter(|t| t.is_finite())
+            .unwrap_or(92.0),
         stop_on_weight: true,
         auto_tare: true,
         preinfuse_step_count: profile.preinfuse_step_count,
@@ -506,6 +499,12 @@ pub fn blank_profile(defaults: &BrewDefaults) -> CremaProfile {
     // the `preinfuse_step_count` (a count of leading segments).
     if let Some(first) = segments.first_mut() {
         first.time = defaults.preinfusion_s;
+    }
+    // Every step brews at the user's default brew temperature, so the
+    // displayed `brew_temp` is the temperature the profile actually runs at
+    // (it used to stay at the template's 92 °C whatever the default said).
+    for seg in &mut segments {
+        seg.temp = defaults.brew_temp_c;
     }
     CremaProfile {
         id: crate::new_profile_id(),
@@ -737,13 +736,13 @@ mod tests {
     }
 
     #[test]
-    fn from_wire_means_step_temperatures_to_the_half_degree() {
+    fn from_wire_takes_the_first_steps_temperature() {
         let mut a = wire_step("a", 9.0);
         a.temperature_c = 91.0;
         let mut b = wire_step("b", 9.0);
-        b.temperature_c = 94.2; // mean 92.6 → 92.5
+        b.temperature_c = 94.2;
         let p = from_wire(&wire_profile(vec![a, b]));
-        assert!(close(p.brew_temp, 92.5));
+        assert!(close(p.brew_temp, 91.0));
     }
 
     #[test]
@@ -763,6 +762,30 @@ mod tests {
         assert_eq!(p.segments.len(), 4);
         assert!(close(p.segments[0].time, 6.0)); // preinfusion_s applied
         assert!(!p.id.is_empty());
+    }
+
+    /// AC-F6.4: a blank profile brews at the default brew temperature on
+    /// every step, not the template's 92 °C.
+    #[test]
+    fn f6_4_blank_profile_uses_the_default_brew_temp_on_every_step() {
+        for brew_temp_c in [88.0, 93.0, 96.5] {
+            let p = blank_profile(&BrewDefaults {
+                brew_temp_c,
+                ..BrewDefaults::default()
+            });
+            assert!(close(p.brew_temp, brew_temp_c));
+            assert!(
+                p.segments.iter().all(|s| close(s.temp, brew_temp_c)),
+                "{:?}",
+                p.segments.iter().map(|s| s.temp).collect::<Vec<_>>()
+            );
+            let wire = to_wire(&p);
+            assert!(
+                wire.steps
+                    .iter()
+                    .all(|s| close(s.temperature_c, brew_temp_c))
+            );
+        }
     }
 
     #[test]

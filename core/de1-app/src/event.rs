@@ -933,6 +933,19 @@ pub struct CoreOutput {
     pub commands: Vec<Command>,
 }
 
+/// What [`CremaCore::upload_crema_profile_json`](crate::CremaCore::upload_crema_profile_json)
+/// returns to a shell: the upload's [`CoreOutput`] and the fingerprint of the
+/// bytes it writes (`None` when nothing was uploaded — a malformed or rejected
+/// profile, whose failure event is in `output`).
+#[typeshare]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileUploadOutput {
+    /// The upload's events and BLE writes.
+    pub output: CoreOutput,
+    /// The effective profile's fingerprint, or `None` when no upload started.
+    pub fingerprint: Option<String>,
+}
+
 #[cfg(test)]
 impl CoreOutput {
     /// The `upload_id` of the upload this output started (tests only).

@@ -663,6 +663,28 @@ export interface BrewMethodPreset {
 }
 
 /**
+ * The user's per-shot Quick Controls overrides — absolute values, each
+ * optional (absent = the profile's own value). The JSON shape the shells
+ * already pass to the fingerprint (`{dose, yield, brewTemp, preinf}`).
+ */
+export interface BrewOverrides {
+	/** Dose, grams. */
+	dose?: number;
+	/** Yield target, grams. */
+	yield?: number;
+	/**
+	 * Absolute brew temperature, °C — every step is shifted by the
+	 * difference from the profile's anchor ([`brew_temp_anchor`]).
+	 */
+	brewTemp?: number;
+	/**
+	 * Total pre-infusion time, seconds, across the leading pre-infusion
+	 * segments ([`preinfusion_seconds`]).
+	 */
+	preinf?: number;
+}
+
+/**
  * What a [`BrewStep`] is, for its icon / default label. Lowercase wire
  * spelling, like [`BeverageType`](crate::BeverageType).
  */
@@ -838,6 +860,19 @@ export interface BrewStatInput {
 	rating?: number;
 	/** The brew method; `None` = machine espresso. */
 	brewMethod?: string;
+}
+
+/** The brew-temperature dial's range for one profile, °C (inclusive). */
+export interface BrewTempRange {
+	/** Lowest absolute brew temperature the dial may reach. */
+	min: number;
+	/** Highest absolute brew temperature the dial may reach. */
+	max: number;
+	/**
+	 * The profile's own brew temperature (the anchor the shift is
+	 * measured from) — the dial's "from profile" reference.
+	 */
+	anchor: number;
 }
 
 /** The result of [`catalogue_autofill`]. */
@@ -3136,6 +3171,40 @@ export interface PhaseMarker {
 	 * "time", or "" when unknown (old data).
 	 */
 	transitionReason: string;
+}
+
+/**
+ * The pre-infusion dial for one profile: its range, the profile's own
+ * seconds ([`preinfusion_seconds`]) and whether it can be dialled at all.
+ */
+export interface PreinfusionDial {
+	/** Lowest pre-infusion, seconds (0 = off). */
+	min: number;
+	/**
+	 * Highest pre-infusion, seconds: the stepper's [`PREINFUSION_DIAL_MAX_S`],
+	 * raised to the profile's own value when that is longer.
+	 */
+	max: number;
+	/** The profile's own pre-infusion seconds — the dial's seed. */
+	seconds: number;
+	/**
+	 * `false` for a profile with no pre-infusion segment: there is nothing
+	 * to rescale, so the shells disable the dial and say why.
+	 */
+	adjustable: boolean;
+}
+
+/**
+ * What [`CremaCore::upload_crema_profile_json`](crate::CremaCore::upload_crema_profile_json)
+ * returns to a shell: the upload's [`CoreOutput`] and the fingerprint of the
+ * bytes it writes (`None` when nothing was uploaded — a malformed or rejected
+ * profile, whose failure event is in `output`).
+ */
+export interface ProfileUploadOutput {
+	/** The upload's events and BLE writes. */
+	output: CoreOutput;
+	/** The effective profile's fingerprint, or `None` when no upload started. */
+	fingerprint?: string;
 }
 
 /**

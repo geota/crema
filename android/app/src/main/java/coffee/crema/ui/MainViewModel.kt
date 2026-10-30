@@ -12,6 +12,7 @@ import android.os.BatteryManager
 import coffee.crema.core.ConnectSweepSettings
 import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
+import coffee.crema.core.ProfileUploadOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
 import coffee.crema.core.MaintenancePhase
@@ -66,11 +67,13 @@ import coffee.crema.machine.QcField
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotDisposition
 import coffee.crema.core.ShotQualityReport
-import coffee.crema.core.profileFingerprint
+import coffee.crema.core.brewTempRange
+import coffee.crema.core.effectiveProfileFingerprint
+import coffee.crema.core.normalizeBrewOverrides
+import coffee.crema.core.preinfusionDial
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.core.MachineState
-import coffee.crema.profiles.overrideBrewParamsJson
 import coffee.crema.profiles.SegmentEdit
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
@@ -1864,6 +1867,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         brewTemp, maxTotalVolumeMl, preinfuseStepCount, tankTemperatureC, segments,
     )
 
+    /** The editor's segments after its Brew temp field moved to [target]: every
+     *  step shifted by the core (Decenza `applyTemperatureToProfile`). */
+    fun editorBrewTemp(id: String, segments: List<SegmentEdit>, target: Double): List<SegmentEdit> =
+        library.editorBrewTemp(id, segments, target)
+
     /** Close the editor without saving (discards any new / duplicated draft). */
     fun cancelProfileEdit() = library.cancelProfileEdit()
 
@@ -2184,10 +2192,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (shot.doseG != null || shot.yieldTargetG != null) {
             val active = match ?: effectiveState().activeProfile()
             val dose = shot.doseG?.toDouble() ?: active?.dose?.toDouble() ?: 18.0
+            // The profile's own brew temperature as the core anchors it (its
+            // first step), so the dial-in moves no temperature it didn't record.
+            val anchor = brewDialOf(active?.id?.let { library.profileJson(it) }, json, ::brewTempRange, ::preinfusionDial)?.anchor
             quickAdjustBrew(
                 dose = dose,
                 yieldOut = shot.yieldTargetG?.toDouble() ?: active?.yieldOut?.toDouble() ?: (dose * 2),
-                brewTemp = active?.brewTemp?.toDouble() ?: 93.0,
+                brewTemp = shot.brewTempC?.toDouble() ?: anchor ?: active?.brewTemp?.toDouble() ?: 93.0,
             )
         }
         val stamp = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
@@ -2472,28 +2483,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { appendLog("Re-assert stop-on-weight failed: ${it.message}") }
         runCatching { bridge.setVolumeStopWithScale(_ui.value.volumeStopWithScale) }
             .onFailure { appendLog("Re-assert volume-stop-with-scale failed: ${it.message}") }
-        // Quick-Controls override: bake the transient dose/yield/brew-temp into the
-        // uploaded profile (the web shell's lazy re-upload-with-overrides). The
-        // library profile is untouched; only this one upload carries the override.
-        val bp = _ui.value.brewParams
-        val effectiveJson = if (bp != null) {
-            runCatching {
-                overrideBrewParamsJson(
-                    cremaJson,
-                    bp.dose.toFloat(),
-                    bp.yieldOut.toFloat(),
-                    bp.brewTemp.toFloat(),
-                    bp.preinf?.toFloat(),
-                    json,
-                )
-            }.getOrDefault(cremaJson)
-        } else {
-            cremaJson
-        }
+        // Quick-Controls override: the core applies it to the library profile at
+        // upload (brew temp shifts every step, pre-infusion rescales the leading
+        // segments, dose/yield replace). The library profile is untouched.
+        val qcJson = _ui.value.brewParams.overridesJson(json)
         // Issue 11: if the connected DE1 already holds this exact effective profile
         // (fingerprint match), skip the redundant upload and go straight to the
         // gated Espresso request. A null fingerprint (hash failure) ⇒ never skip.
-        val fingerprint = runCatching { profileFingerprint(effectiveJson, null) }.getOrNull()
+        val fingerprint = runCatching { effectiveProfileFingerprint(cremaJson, qcJson) }.getOrNull()
         if (shouldSkipProfileUpload(
                 fingerprint,
                 lastUploadedFingerprint,
@@ -2504,12 +2501,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             startSequence.proceed(start, _ui.value.preFlush)
             return
         }
-        val wireJson = runCatching { cremaProfileToWire(effectiveJson) }.getOrElse {
-            startSequence.end(start)
-            notifyUser("Can\u2019t start shot \u2014 profile conversion failed")
-            return
-        }
-        if (!startUploadOnLane(wireJson, fingerprint)) {
+        if (!startUploadOnLane(cremaJson, qcJson)) {
             startSequence.end(start)
             notifyUser("Can\u2019t start shot \u2014 profile upload failed")
             return
@@ -2541,24 +2533,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * On the core lane: start uploading [wireJson] and apply the output NOW,
-     * then record [fingerprint] as the upload in flight. The output's own
-     * events — an `Aborted` for the upload it superseded — must land before the
-     * caller marks this upload's pending state, or they clear it (cohort review
-     * 2026-10-28, #2 N2). Its acks queue behind this lane task, so the
-     * completion always sees that state. Returns whether an upload is now
-     * running (or waiting for the machine model).
+     * On the core lane: upload the effective profile — the library [cremaJson]
+     * with the Quick-Controls overrides [qcJson] applied by the core
+     * (`uploadCremaProfile`, this shell's only upload) — apply the output NOW,
+     * then record the fingerprint of the bytes it wrote as the upload in
+     * flight. The output's own events — an `Aborted` for the upload it
+     * superseded — must land before the caller marks this upload's pending
+     * state, or they clear it (cohort review 2026-10-28, #2 N2). Its acks queue
+     * behind this lane task, so the completion always sees that state. Returns
+     * whether an upload is now running (or waiting for the machine model).
      */
-    private fun startUploadOnLane(wireJson: String, fingerprint: String?): Boolean {
-        val raw = runCatching {
-            bridge.uploadProfile(wireJson, SystemClock.elapsedRealtime().toULong())
+    private fun startUploadOnLane(cremaJson: String, qcJson: String?): Boolean {
+        val upload = runCatching {
+            json.decodeFromString(
+                ProfileUploadOutput.serializer(),
+                bridge.uploadCremaProfile(cremaJson, qcJson, SystemClock.elapsedRealtime().toULong()),
+            )
         }.getOrElse {
             appendLog("Profile upload failed to start: ${it.message}")
             return false
         }
-        applyCoreOutputJson(raw)
+        applyCoreOutput(upload.output)
         if (runCatching { bridge.profileUploadInProgress() }.getOrDefault(false) != true) return false
-        pendingUploadFingerprint = fingerprint
+        pendingUploadFingerprint = upload.fingerprint
         _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
         return true
     }
@@ -2655,6 +2652,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  shows its relayed edits in its mirror slice instead ([showPending]). */
     private fun showConfig(cmd: MachineCommand.Config) {
         _ui.update { cmd.applyTo(it) }
+        // The brew override is stored normalized by the core (this device holds
+        // the machine: its own dial and a remote's relayed one alike) — brew
+        // temp clamped into the active profile's range, values back at the
+        // profile's own dropped, nothing left = no override (Decenza model).
+        if (cmd is MachineCommand.AdjustBrew) {
+            val activeJson = _ui.value.activeProfileId?.let { library.profileJson(it) }
+            _ui.update {
+                it.copy(
+                    brewParams = normalizedBrewParams(
+                        it.brewParams, activeJson, json, ::normalizeBrewOverrides, ::brewTempRange,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** The brew-temperature dial for the profile on screen (the core's range,
+     *  anchor and pre-infusion seed); `null` with no active profile. */
+    fun brewDial(): BrewDial? {
+        val s = effectiveState()
+        // On a remote the hub's copy of its custom profile wins over this
+        // library's (possibly out-of-date) one.
+        val cremaJson = s.mirroredProfileJson?.takeIf { _ui.value.mirror != null }
+            ?: s.activeProfileId?.let { library.profileJson(it) } ?: s.mirroredProfileJson
+        return brewDialOf(cremaJson, json, ::brewTempRange, ::preinfusionDial)
     }
 
     /** The rest of a config command on the device that owns the config:
@@ -3576,8 +3598,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (pendingBrew || runCatching { bridge.profileUploadInProgress() }.getOrDefault(false) == true) {
                 return@launch
             }
-            val wireJson = runCatching { cremaProfileToWire(cremaJson) }.getOrElse { return@launch }
-            startUploadOnLane(wireJson, runCatching { profileFingerprint(cremaJson, null) }.getOrNull())
+            // With the live Quick-Controls override, so the DE1 holds what the
+            // next shot runs.
+            startUploadOnLane(cremaJson, _ui.value.brewParams.overridesJson(json))
         }
     }
 
@@ -4886,6 +4909,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("JSON parse error: ${it.message}")
             return
         }
+        applyCoreOutput(output)
+    }
+
+    private fun applyCoreOutput(output: CoreOutput) {
         output.events.forEach(::applyEvent)
         // DE1 writes of one output go out IN ORDER on one coroutine (cohort
         // review 02 P2-2): a write retried after a failure must not land

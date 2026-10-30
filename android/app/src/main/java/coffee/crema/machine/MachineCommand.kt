@@ -1,6 +1,7 @@
 package coffee.crema.machine
 
 import coffee.crema.core.MachineRequest
+import coffee.crema.profiles.ProfileBounds
 import coffee.crema.ui.QcBounds
 import coffee.crema.ui.QcSteam
 
@@ -118,12 +119,15 @@ sealed interface MachineCommand {
         override fun refusal(): String? = field.refusal(value)
     }
 
-    /** The live Quick-Controls brew override, baked into the next shot's upload.
-     *  Profiles set the defaults, so the ranges are physical limits. */
+    /** The live Quick-Controls brew override, applied by the core to the next
+     *  shot's upload. Profiles set the defaults, so the ranges are physical
+     *  limits; the brew temperature's is the core's own temperature bound. The
+     *  device holding the machine then clamps it into the active profile's range
+     *  with the core (`normalizeBrewOverrides`), so no step leaves that bound. */
     data class AdjustBrew(val dose: Double, val yieldOut: Double, val brewTemp: Double, val preinf: Double?) : Config {
         override fun refusal(): String? {
             val inRange = dose.within(0.0..MAX_DOSE_G) && yieldOut.within(0.0..MAX_YIELD_G) &&
-                brewTemp.within(0.0..MAX_BREW_TEMP_C) && (preinf == null || preinf.within(0.0..MAX_PREINF_S))
+                brewTemp.within(0.0..maxBrewTempC()) && (preinf == null || preinf.within(0.0..MAX_PREINF_S))
             return if (inRange) null else "brew override out of range"
         }
     }
@@ -162,9 +166,12 @@ private val ASLEEP = setOf("Sleep", "GoingToSleep")
 private const val MAX_ID_LENGTH = 128
 private const val MAX_DOSE_G = 100.0
 private const val MAX_YIELD_G = 2_000.0
-private const val MAX_BREW_TEMP_C = 110.0
 private const val MAX_PREINF_S = 300.0
 private const val MAX_GRIND = 1_000.0
+
+/** The core's temperature ceiling (`MAX_TEMPERATURE_C`, 100 °C), the one bound
+ *  for a brew temperature on every path. */
+internal fun maxBrewTempC(): Double = ProfileBounds.INSTANCE.maxTemperatureC.toDouble()
 
 private fun idRefusal(id: String): String? = when {
     id.isEmpty() -> "an id is required"
