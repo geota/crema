@@ -13,7 +13,9 @@ import io.ktor.websocket.WebSocketSession
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -97,6 +99,9 @@ class HubPairingRequest internal constructor(
 
     /** Tick the connection now (the window was just closed: its abort goes out at once, spec §2.5). */
     suspend fun tick() = session.poke()
+
+    /** For tests: the code entered is still waiting for the remote's PAKE_A. */
+    internal val holdsPendingCode: Boolean get() = session.holdsPendingCode
 }
 
 /**
@@ -126,7 +131,7 @@ class SecureRelayAcceptor(
     private val maxSessions: Int = MAX_SESSIONS,
     private val maxUnauth: Int = MAX_UNAUTH,
     private val maxUnauthPerAddress: Int = MAX_UNAUTH_PER_ADDRESS,
-    private val clock: () -> Long = System::currentTimeMillis,
+    internal val clock: () -> Long = System::currentTimeMillis,
     /** Serves one admitted session: [RelayHub.serve] (tests record or script the link). */
     private val serve: suspend (link: FrameLink, peer: RemotePeer) -> Unit = { link, peer ->
         // Checked again once the session is listed: a Forget that ran between
@@ -225,19 +230,88 @@ class SecureRelayAcceptor(
 
         private val trust get() = acceptor.trust
 
+        /**
+         * A code the hub user entered before the remote's PAKE_A arrived: the
+         * dialog opens at the ClientHello, PAKE_A follows a moment later, and
+         * the core takes the code only once it is in (`InvalidState` before).
+         * It is applied after the next inbound message ([onInboundHandled]),
+         * and dropped when the attempt ends, is cancelled or the connection
+         * closes, or after [PAKE_A_WAIT_MS]. The pairing secret: a CharArray
+         * wiped when used or dropped, never logged.
+         */
+        private var pendingCode: CharArray? = null
+        private var pendingTimer: Job? = null
+        private val pendingLock = Any()
+
+        /** The core took a code on this connection (SPAKE2 runs once). */
+        @Volatile private var codeEntered = false
+
+        /** For tests: a code is waiting for PAKE_A. */
+        internal val holdsPendingCode: Boolean get() = synchronized(pendingLock) { pendingCode != null }
+
+        private enum class Entry { SENT, EARLY, REFUSED }
+
         internal suspend fun enterCode(code: String, canControl: Boolean): Boolean {
             val w = wire ?: return false
             this.canControl = canControl
+            return when (offer(w, code)) {
+                Entry.SENT -> true
+                Entry.EARLY -> {
+                    holdPending(code.toCharArray())
+                    true
+                }
+                Entry.REFUSED -> false
+            }
+        }
+
+        /** Give [code] to the core. EARLY: it isn't ready for a code yet (no PAKE_A). */
+        private suspend fun offer(w: RelayWire, code: String): Entry {
+            if (codeEntered) return Entry.REFUSED
             val sent = try {
                 w.callChecked { (this as HubConn).core.enterCode(code, it) }
             } catch (e: RelayFfiException) {
+                if (RelayWire.kindOf(e) == "InvalidState" && awaitingCode && !w.closed) return Entry.EARLY
                 // CodeFormat changes nothing; an ended attempt returns its Step on the next tick.
                 Log.i(TAG, "code entry refused: ${RelayWire.kindOf(e)}")
                 w.call { tick(it) }
-                return false
+                return Entry.REFUSED
             }
-            if (sent) awaitingCode = false
-            return sent
+            if (!sent) return Entry.REFUSED
+            codeEntered = true
+            awaitingCode = false
+            return Entry.SENT
+        }
+
+        private fun holdPending(code: CharArray) {
+            synchronized(pendingLock) {
+                pendingCode?.fill('\u0000')
+                pendingCode = code
+                pendingTimer?.cancel()
+                pendingTimer = scope.launch {
+                    delay(PAKE_A_WAIT_MS)
+                    if (dropPending()) {
+                        Log.i(TAG, "code entry refused: the remote's PAKE_A didn't arrive")
+                        wire?.call { tick(it) }
+                    }
+                }
+            }
+        }
+
+        /** Wipe and forget a pending code; true if there was one. */
+        private fun dropPending(): Boolean = synchronized(pendingLock) {
+            val had = pendingCode != null
+            pendingCode?.fill('\u0000')
+            pendingCode = null
+            pendingTimer?.cancel()
+            pendingTimer = null
+            had
+        }
+
+        /** After each inbound message: a pending code goes in once the core is ready for it. */
+        override suspend fun onInboundHandled() {
+            val w = wire ?: return
+            val code = synchronized(pendingLock) { pendingCode?.let { String(it) } } ?: return
+            if (offer(w, code) != Entry.EARLY) dropPending()
         }
 
         internal suspend fun poke() {
@@ -245,6 +319,7 @@ class SecureRelayAcceptor(
         }
 
         internal suspend fun cancelPairing() {
+            dropPending()
             awaitingCode = false
             wire?.call { (this as HubConn).core.cancelPairing(it) }
         }
@@ -263,11 +338,13 @@ class SecureRelayAcceptor(
                 }
                 is RelayEvent.PairPending -> commitPairing(event.content.remote_id, event.content.remote_name)
                 is RelayEvent.PairingFailed -> {
+                    dropPending()
                     awaitingCode = false
                     request?.let { trust.onPairingFailed(it, event.content.reason, event.content.failures.toInt(), event.content.locked) }
                     request = null
                 }
                 is RelayEvent.Paired -> {
+                    dropPending()
                     request?.let { trust.onPaired(it) }
                     request = null
                 }
@@ -279,6 +356,7 @@ class SecureRelayAcceptor(
         }
 
         override fun onClosed(code: Int?) {
+            dropPending()
             awaitingCode = false
             link?.ended()
             val r = request
@@ -354,6 +432,9 @@ class SecureRelayAcceptor(
     companion object {
         private const val TAG = "SecureRelayAcceptor"
         const val MAX_SESSIONS = 8
+
+        /** How long a code entered before the remote's PAKE_A waits for it. */
+        internal const val PAKE_A_WAIT_MS = 2_000L
         const val MAX_UNAUTH = 4
         const val MAX_UNAUTH_PER_ADDRESS = 2
 

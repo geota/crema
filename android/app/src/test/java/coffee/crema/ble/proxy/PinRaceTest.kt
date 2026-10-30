@@ -65,7 +65,12 @@ class PinRaceTest {
                 val code = (dialer.state.value as PairingState.ShowCode).code
                 eventually(what = "the request") { rig.trust.requests.isNotEmpty() }
                 rig.trust.requests.last().enterCode(code, canControl = false)
-                eventually(what = "the outcome") { dialer.state.value !is PairingState.ShowCode && dialer.state.value !is PairingState.Waiting }
+                try {
+                    eventually(what = "the outcome") { dialer.state.value !is PairingState.ShowCode && dialer.state.value !is PairingState.Waiting }
+                } catch (e: AssertionError) {
+                    // Seen once on CI: say where it stuck.
+                    throw AssertionError("${e.message}; state ${dialer.state.value}, requests ${rig.trust.requests.size}, failures ${rig.trust.failures}", e)
+                }
             }
             assertTrue(dialer.state.value !is PairingState.Paired, "${dialer.state.value}")
             if (prior == null) {
