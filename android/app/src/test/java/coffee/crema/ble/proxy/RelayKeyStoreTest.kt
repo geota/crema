@@ -3,6 +3,8 @@ package coffee.crema.ble.proxy
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import coffee.crema.core.RelayKeys
 import coffee.crema.security.AndroidKeystoreCipher
+import coffee.crema.security.AndroidKeystoreKeySource
+import coffee.crema.security.FakeKeystore
 import coffee.crema.security.KeystoreKeyMissingException
 import coffee.crema.security.ScriptedCipher
 import coffee.crema.security.SecretBox
@@ -235,6 +237,59 @@ class RelayKeyStoreTest {
         assertTrue(result is RelayKeyLoad.Unavailable)
         assertTrue(storeFile.isDirectory)
         assertFalse(lostDir.exists())
+    }
+
+    // ---- the real key source over a fake keystore --------------------------------
+
+    private val keystore = FakeKeystore()
+
+    private fun probedStore() = RelayKeyStore(
+        dir,
+        SecretBox(AndroidKeystoreCipher(RelayKeyStore.RELAY_ALIAS, RelayKeyStore.RELAY_AAD, AndroidKeystoreKeySource(RelayKeyStore.RELAY_ALIAS, keystore))),
+    ) { now }
+
+    @Test
+    fun `AC-30 a keystore that isn't ready (no alias listed) is transient, never a reset`() {
+        for (generateFails in listOf(false, true)) {
+            val first = probedStore()
+            val id = ready(first.load()).keys.deviceId()
+            first.pinRemote(remote("r1"))
+            val before = storeFile.readBytes()
+            val key = keystore.keys.getValue(RelayKeyStore.RELAY_ALIAS)
+
+            keystore.notReady = true
+            keystore.generateFailure = if (generateFails) ProviderException("system error") else null
+            val s = probedStore()
+            val result = s.load()
+            assertTrue("generateFails=$generateFails: $result", result is RelayKeyLoad.Unavailable)
+            assertArrayEquals(before, storeFile.readBytes())
+            assertFalse(lostDir.exists())
+            assertEquals(key, keystore.keys[RelayKeyStore.RELAY_ALIAS])
+
+            keystore.notReady = false
+            keystore.generateFailure = null
+            val retry = probedStore()
+            assertEquals(id, ready(retry.load()).keys.deviceId())
+            assertEquals(listOf("r1"), retry.remotes.map { it.id })
+            cleanUp()
+            dir.mkdirs()
+            keystore.keys.clear()
+        }
+    }
+
+    @Test
+    fun `AC-30 an alias missing from a working keystore is a definitive loss`() {
+        val first = probedStore()
+        val id = ready(first.load()).keys.deviceId()
+        first.pinRemote(remote("r1"))
+        keystore.keys.remove(RelayKeyStore.RELAY_ALIAS)
+        val s = probedStore()
+        val result = ready(s.load())
+        assertTrue(result.keyReset)
+        assertNotEquals(id, result.keys.deviceId())
+        assertTrue(s.remotes.isEmpty())
+        assertEquals(1, lostDir.listFiles()!!.size)
+        assertTrue(AndroidKeystoreKeySource.PROBE_ALIAS in keystore.keys)
     }
 
     // ---- definitive: move aside, new key, no pins ------------------------------

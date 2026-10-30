@@ -6,6 +6,7 @@ import android.util.Log
 import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.security.KeyStoreException
+import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -115,30 +116,40 @@ class SecretBox(private val cipher: SecretCipher) {
     }
 }
 
-/** Where an AES key lives: [existing] is null only when the alias is absent. */
+/** Where an AES key lives: [existing] is null only when the alias is absent from a working keystore. */
 interface SecretKeySource {
-    /** The key, or null when no key exists under the alias (a definitive loss). Throws on a keystore error. */
+    /**
+     * The key, or null when no key exists under the alias (a definitive loss).
+     * Throws on a keystore error, including a keystore that can't yet be shown to work.
+     */
     fun existing(): SecretKey?
 
     /** The key, created when absent (sealing only). */
     fun getOrCreate(): SecretKey
 }
 
-/** A non-exportable AES-256-GCM key in AndroidKeyStore under [alias]. */
-class AndroidKeystoreKeySource(private val alias: String) : SecretKeySource {
+/** The AndroidKeyStore calls [AndroidKeystoreKeySource] needs (a seam so its probe logic runs on the JVM). */
+interface KeystoreBackend {
+    fun containsAlias(alias: String): Boolean
+
+    /** The key under [alias], or null. */
+    fun getKey(alias: String): SecretKey?
+
+    /** Create a non-exportable AES-256-GCM key under [alias]. */
+    fun generate(alias: String): SecretKey
+}
+
+/** The device's AndroidKeyStore. */
+object AndroidKeyStoreBackend : KeystoreBackend {
+    private const val KEYSTORE = "AndroidKeyStore"
+
     private fun keyStore(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
 
-    override fun existing(): SecretKey? {
-        val ks = keyStore()
-        // containsAlias answers "is there a key" without conflating it with a
-        // failed lookup: a keystore error throws (transient), absence is false.
-        if (!ks.containsAlias(alias)) return null
-        return ks.getKey(alias, null) as? SecretKey
-            ?: throw KeyStoreException("alias $alias present but no secret key returned")
-    }
+    override fun containsAlias(alias: String): Boolean = keyStore().containsAlias(alias)
 
-    override fun getOrCreate(): SecretKey {
-        existing()?.let { return it }
+    override fun getKey(alias: String): SecretKey? = keyStore().getKey(alias, null) as? SecretKey
+
+    override fun generate(alias: String): SecretKey {
         val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
         gen.init(
             KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -149,9 +160,65 @@ class AndroidKeystoreKeySource(private val alias: String) : SecretKeySource {
         )
         return gen.generateKey()
     }
+}
 
-    private companion object {
-        const val KEYSTORE = "AndroidKeyStore"
+/**
+ * A non-exportable AES-256-GCM key in AndroidKeyStore under [alias].
+ *
+ * **"Absent" is only believed from a keystore proven to work.** `containsAlias`
+ * returning false could also be a keystore2 that isn't ready yet (at boot), and
+ * a definitive loss read from that would re-key the relay and drop every pin.
+ * So when [alias] looks absent, [existing] first runs a liveness probe in the
+ * same call: look up (or create) [PROBE_ALIAS], require `containsAlias(probe)`
+ * to be true, and seal and open a random block with it. Only when the probe
+ * passes, and [alias] is still absent, does it return null (a definitive loss).
+ * If the probe fails or throws, it throws [KeyStoreException]: transient, the
+ * caller keeps its data and retries later. [getOrCreate] goes through the same
+ * check, so a not-ready keystore never gets a new key written over a real one.
+ */
+class AndroidKeystoreKeySource(
+    private val alias: String,
+    private val backend: KeystoreBackend = AndroidKeyStoreBackend,
+) : SecretKeySource {
+    override fun existing(): SecretKey? {
+        if (backend.containsAlias(alias)) return present()
+        probe()
+        // The keystore works. The alias may have appeared meanwhile (it was just
+        // starting); otherwise it is really gone.
+        return if (backend.containsAlias(alias)) present() else null
+    }
+
+    override fun getOrCreate(): SecretKey = existing() ?: backend.generate(alias)
+
+    private fun present(): SecretKey = backend.getKey(alias)
+        // A listed alias without a key is not proof of loss: transient.
+        ?: throw KeyStoreException("alias $alias present but no secret key returned")
+
+    /** Throws [KeyStoreException] unless the keystore lists, returns and uses a key. */
+    private fun probe() {
+        try {
+            val key = (if (backend.containsAlias(PROBE_ALIAS)) backend.getKey(PROBE_ALIAS) else null)
+                ?: backend.generate(PROBE_ALIAS)
+            if (!backend.containsAlias(PROBE_ALIAS)) throw KeyStoreException("probe alias not listed")
+            val block = ByteArray(PROBE_BYTES).also { SecureRandom().nextBytes(it) }
+            val enc = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
+            val sealed = enc.doFinal(block)
+            val dec = Cipher.getInstance(TRANSFORMATION)
+            dec.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, enc.iv))
+            if (!dec.doFinal(sealed).contentEquals(block)) throw KeyStoreException("probe round trip mismatch")
+        } catch (e: KeyStoreException) {
+            throw KeyStoreException("keystore not ready: ${e.message}", e)
+        } catch (e: Exception) {
+            throw KeyStoreException("keystore not ready: ${e.javaClass.simpleName}", e)
+        }
+    }
+
+    companion object {
+        /** A throwaway key whose only job is proving the keystore works. */
+        const val PROBE_ALIAS = "crema.keystore.probe.v1"
+        private const val PROBE_BYTES = 16
+        private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val TAG_BITS = 128
     }
 }
 

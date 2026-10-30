@@ -39,3 +39,26 @@ class ScriptedCipher(private val inner: SecretCipher) : SecretCipher {
         return inner.open(sealed)
     }
 }
+
+/**
+ * An in-memory [KeystoreBackend] with software AES keys. [notReady] models
+ * keystore2 still starting: `containsAlias` is false for every alias and no key
+ * is returned; [generateFailure] makes key creation throw.
+ */
+class FakeKeystore : KeystoreBackend {
+    val keys = mutableMapOf<String, SecretKey>()
+    var notReady = false
+    var generateFailure: Exception? = null
+    val generated = mutableListOf<String>()
+
+    override fun containsAlias(alias: String): Boolean = !notReady && alias in keys
+
+    override fun getKey(alias: String): SecretKey? = if (notReady) null else keys[alias]
+
+    override fun generate(alias: String): SecretKey {
+        generateFailure?.let { throw it }
+        generated += alias
+        // A not-ready keystore may still hand back a key it doesn't list or keep.
+        return SoftKeySource.newKey().also { if (!notReady) keys[alias] = it }
+    }
+}

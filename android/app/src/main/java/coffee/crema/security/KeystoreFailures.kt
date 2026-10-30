@@ -23,7 +23,9 @@ class KeystoreKeyMissingException(alias: String) : GeneralSecurityException("key
  * keeps the relay off for this start and retries on the next).
  *
  * It is an allow-list. Only these exceptions, thrown directly, are definitive:
- * - [KeystoreKeyMissingException]: no key under the alias (`containsAlias` was false);
+ * - [KeystoreKeyMissingException]: no key under the alias, believed only when a
+ *   liveness probe just proved the keystore works ([AndroidKeystoreKeySource]); a
+ *   keystore that isn't ready yet throws `KeyStoreException` instead (transient);
  * - [AEADBadTagException]: the key exists but doesn't authenticate the blob (a
  *   different key under the same alias after a reinstall, a tampered blob, or a
  *   different AAD);
