@@ -384,9 +384,9 @@ class RemoteToStandaloneTest {
         val cls = current.javaClass
         val host = cls.getDeclaredMethod("getHost").invoke(current) as String
         val port = cls.getDeclaredMethod("getPort").invoke(current) as Int
-        val ctor = cls.getDeclaredConstructor(String::class.java, Int::class.javaPrimitiveType, ProxyController.MirrorTrust::class.java, Boolean::class.javaPrimitiveType)
+        val ctor = cls.getDeclaredConstructor(String::class.java, Int::class.javaPrimitiveType, ProxyController.MirrorTrust::class.java, Boolean::class.javaPrimitiveType, coffee.crema.ble.proxy.RelayHubPin::class.java)
             .apply { isAccessible = true }
-        sessionField.set(pc, ctor.newInstance(host, port + 1, ProxyController.MirrorTrust.UNATTENDED, true))
+        sessionField.set(pc, ctor.newInstance(host, port + 1, ProxyController.MirrorTrust.UNATTENDED, true, null))
         pc.refuseCurrentSessionForTest("HostMismatch", authenticated = false)
         repeat(60) {
             VmHarness.advance(100)

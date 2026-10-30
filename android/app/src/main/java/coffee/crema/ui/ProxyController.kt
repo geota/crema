@@ -488,9 +488,9 @@ class ProxyController(
         originName: String? = null,
     ): CommandOutcome = relayedCommands.dispatch(method, args, CommandOrigin(originId, originName))
 
-    /** Mirror [host]:[port] without the user picking it: the pin stays, and only
-     *  a host that proves a secret this device holds is accepted. Anything
-     *  else is refused and stays in the picker for the user. */
+    /** Mirror [host]:[port] without the user picking it, with the saved hub's
+     *  key: only that hub completes the handshake, and nothing about the
+     *  address is saved before its Welcome. */
     internal fun remirrorUnattended(host: String, port: Int) {
         applyMode("secondary", host, port, trust = MirrorTrust.UNATTENDED)
     }
@@ -505,6 +505,9 @@ class ProxyController(
         val port: Int,
         val trust: MirrorTrust,
         val attempt: Boolean,
+        /** The hub pin this session dials with: the user's pick, or the saved
+         *  hub. Its address and the saved hub change only on a Welcome. */
+        val hub: RelayHubPin?,
     ) {
         /** Not welcomed for [refindDelayMs]: since the session started, or
          *  since its link last dropped. A socket that is open but silent
@@ -532,6 +535,13 @@ class ProxyController(
      *  a re-find attempt that was welcomed. The re-find dials only this host,
      *  and a refused attempt comes back here. */
     private var savedTarget: Pair<String, Int>? = null
+
+    /** The remote target in the prefs: what this start read, or the last
+     *  welcomed session's. An address reaches the prefs, the hub pin and the
+     *  saved hub only once a session there was authenticated and welcomed
+     *  (spec §2.9: NSD and the picker are unauthenticated input). */
+    private var persistedTarget: Pair<String, Int>? =
+        proxyConfigCache.takeIf { it.host.isNotBlank() && it.port > 0 }?.let { it.host to it.port }
 
     /** Unattended refusals and unanswered attempts since the last Welcome. */
     private var refindRefusals = 0
@@ -672,22 +682,42 @@ class ProxyController(
         savedTarget?.let { (host, port) -> requestRefindSwitch(host, port, attempt = false, from = attempt) }
     }
 
-    /** A remote session was welcomed: the hub proved the pairing. A re-find
-     *  attempt becomes the saved target, persisted. */
+    /**
+     * A remote session was welcomed: the hub proved the pairing (IK with the
+     * pinned key, then `Welcome`). Only now is anything about its address
+     * saved: the dialed hub becomes the saved hub, its pin follows the
+     * address, and the target reaches the prefs. A re-find attempt becomes
+     * the saved target.
+     */
     private fun onRemoteWelcomed(welcomed: RemoteSession) {
         if (welcomed !== session) return
         welcomed.welcomed = true
-        if (welcomed.attempt && savedTarget != welcomed.target) {
-            appendLog("Re-find: reattached at ${welcomed.host}:${welcomed.port}")
+        if (savedTarget != welcomed.target) {
+            if (welcomed.attempt) appendLog("Re-find: reattached at ${welcomed.host}:${welcomed.port}")
             savedTarget = welcomed.target
-            onTargetMoved(welcomed.host, welcomed.port)
-            // The hub's pin follows it to its new port.
-            savedHubPin()?.let { pin -> runCatching { relay.pinHub(pin.copy(host = welcomed.host, port = welcomed.port)) } }
         }
+        commitWelcomedTarget(welcomed)
         refindBackoff?.cancel()
         refindBackoff = null
         refindRefusals = 0
         _state.update { it.copy(refindGaveUp = false) }
+    }
+
+    /** Save a welcomed session's hub and address (see [onRemoteWelcomed]). */
+    private fun commitWelcomedTarget(welcomed: RemoteSession) {
+        val hub = welcomed.hub ?: return
+        runCatching {
+            if (relay.savedHub != hub.id) relay.setSavedHub(hub.id)
+            val pin = relay.hubs.firstOrNull { it.id == hub.id }
+            if (pin != null && (pin.host != welcomed.host || pin.port != welcomed.port)) {
+                relay.pinHub(pin.copy(host = welcomed.host, port = welcomed.port))
+            }
+        }
+        refreshPins()
+        if (persistedTarget != welcomed.target) {
+            persistedTarget = welcomed.target
+            onTargetMoved(welcomed.host, welcomed.port)
+        }
     }
 
     /**
@@ -1170,7 +1200,12 @@ class ProxyController(
         // read-only observer from the start (preserved across session resets).
         setCoreReadOnly(role == "secondary")
         return when (role) {
-            "secondary" -> startSecondaryMode(cfg.host, cfg.port, MirrorTrust.UNATTENDED, refind = null)
+            "secondary" -> {
+                // No address saved yet (the app stopped before the picked
+                // hub's Welcome): the saved hub's last welcomed address.
+                val (host, port) = persistedTarget ?: savedHubPin()?.let { it.host to it.port } ?: (cfg.host to cfg.port)
+                startSecondaryMode(host, port, MirrorTrust.UNATTENDED, refind = null)
+            }
             "primary" -> startPrimaryMode()
             else -> normalMode()
         }
@@ -1258,12 +1293,21 @@ class ProxyController(
      *  with the hub pinned at pairing (spec §2.6). With no usable pin (never
      *  paired, the v3 upgrade, the keys unreadable) it doesn't dial: the role
      *  stays, and the status says to pair again or restart. */
-    private fun startSecondaryMode(host: String, port: Int, trust: MirrorTrust, refind: RefindSwitch?): BleTransport {
+    private fun startSecondaryMode(
+        host: String,
+        port: Int,
+        trust: MirrorTrust,
+        refind: RefindSwitch?,
+        pick: RelayHubPin? = null,
+    ): BleTransport {
         val url = "ws://$host:$port${LanRelayServer.PATH}"
         appendLog("Multi-device: SECONDARY → $url")
-        val remote = RemoteSession(host, port, trust, attempt = refind?.attempt == true)
+        val hub = pick ?: savedHubPin()
+        val remote = RemoteSession(host, port, trust, attempt = refind?.attempt == true, hub = hub)
         session = remote
-        if (!remote.attempt) savedTarget = remote.target
+        // A pinned hub picked at a new address isn't the saved target before
+        // its Welcome: a refused pick goes back to the last welcomed one.
+        if (!remote.attempt && (pick == null || savedTarget == null)) savedTarget = remote.target
         refindQueued = false
         // A child scope for everything this mode launches (the link-state + roster
         // collectors AND the ProxyTransport's own init collectors), so applyMode can
@@ -1272,7 +1316,7 @@ class ProxyController(
         val modeScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         secondaryScope = modeScope
         val keys = relayKeys
-        val hubKey = savedHubPin()?.let { runCatching { RelayKeyStore.publicKeyOf(it.public) }.getOrNull() }
+        val hubKey = hub?.let { runCatching { RelayKeyStore.publicKeyOf(it.public) }.getOrNull() }
         if (keys == null || hubKey == null || relay.needsRepair) {
             appendLog(
                 when {
@@ -1398,7 +1442,11 @@ class ProxyController(
      * Mirror the DE1 from the hub at [host]:[port] — the picker's "Connect
      * through" or Manual hub (spec §6.1). When the picked entry's `kid` matches
      * a pinned hub (or a manual address matches a pinned hub's host) the remote
-     * resumes; otherwise it pairs first ([pairWith]).
+     * resumes with that pin's key; otherwise it pairs first ([pairWith]). The
+     * `kid` and the address are unauthenticated: nothing is saved here. The
+     * pin's address, the saved hub and the prefs follow only the session's
+     * Welcome ([onRemoteWelcomed]), so an advertiser copying a pinned hub's
+     * `kid` changes nothing stored.
      */
     fun switchToSecondary(host: String, port: Int) {
         resetRefind()
@@ -1411,12 +1459,7 @@ class ProxyController(
             pairWith(host, port, peer?.name ?: host)
             return
         }
-        runCatching {
-            if (pinned.host != host || pinned.port != port) relay.pinHub(pinned.copy(host = host, port = port))
-            relay.setSavedHub(pinned.id)
-        }
-        refreshPins()
-        applyMode("secondary", host, port, trust = MirrorTrust.USER_PICK)
+        applyMode("secondary", host, port, trust = MirrorTrust.USER_PICK, hub = pinned)
     }
 
     /**
@@ -1435,6 +1478,7 @@ class ProxyController(
         reconnect: Boolean = true,
         trust: MirrorTrust = MirrorTrust.UNATTENDED,
         refind: RefindSwitch? = null,
+        hub: RelayHubPin? = null,
     ) {
         // Never move the radio while a firmware flash or its erase / reboot
         // window holds the DE1 (audit r2 H1 / r1 NOTE 8).
@@ -1453,7 +1497,7 @@ class ProxyController(
                 }
                 // Again under the lock: a switch queued behind another one may
                 // start after a flash has taken the DE1.
-                if (!refusedForFirmware(role)) applyModeLocked(role, host, port, reconnect, trust, refind)
+                if (!refusedForFirmware(role)) applyModeLocked(role, host, port, reconnect, trust, refind, hub)
                 else if (refind != null) refindQueued = false
             }
         }
@@ -1502,6 +1546,7 @@ class ProxyController(
         reconnect: Boolean,
         trust: MirrorTrust,
         refind: RefindSwitch? = null,
+        hub: RelayHubPin? = null,
     ) {
         modeSwitchProbe?.invoke(role)
         // A re-find switch doesn't run while the re-find is held (the
@@ -1534,7 +1579,7 @@ class ProxyController(
         onRoleStarting(role, refind != null)
         switchable.setDelegate(
             when (role) {
-                "secondary" -> startSecondaryMode(host, port, trust, refind)
+                "secondary" -> startSecondaryMode(host, port, trust, refind, hub)
                 "primary" -> startPrimaryMode()
                 else -> normalMode()
             },
@@ -1554,9 +1599,19 @@ class ProxyController(
         }
         // The VM mirrors role/host/port into MainUiState (with its sticky
         // rules), drops the mirror overlay, and persists the prefs. Not for a
-        // re-find switch: the role and the saved target stay, and an attempt
-        // is saved only once it is welcomed (onTargetMoved).
-        if (refind == null) onModeApplied(role, host, port)
+        // re-find switch: the role and the saved target stay. A remote's new
+        // address is saved only once it is welcomed (onTargetMoved): until
+        // then the prefs keep the last welcomed one.
+        if (refind == null) {
+            if (role == "secondary") {
+                // Nothing welcomed yet: the dialed hub's pin, whose address a
+                // pairing or an earlier Welcome proved.
+                val (savedHost, savedPort) = persistedTarget ?: (hub ?: savedHubPin())?.let { it.host to it.port } ?: ("" to 0)
+                onModeApplied(role, savedHost, savedPort)
+            } else {
+                onModeApplied(role, host, port)
+            }
+        }
         // A secondary mirrors the machine but must never drive it: make its
         // core a read-only observer so the autonomous writes it derives from
         // the mirrored stream (SAW, frame-skip) are suppressed. normal/primary
