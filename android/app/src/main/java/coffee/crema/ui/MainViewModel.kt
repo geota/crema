@@ -12,7 +12,8 @@ import android.os.BatteryManager
 import coffee.crema.core.ConnectSweepSettings
 import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
-import coffee.crema.core.ProfileUploadOutput
+import coffee.crema.core.ProfileSyncOutput
+import coffee.crema.core.ProfileSyncStatus
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
 import coffee.crema.core.MaintenancePhase
@@ -70,7 +71,6 @@ import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotDisposition
 import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.brewTempRange
-import coffee.crema.core.effectiveProfileFingerprint
 import coffee.crema.core.normalizeBrewOverrides
 import coffee.crema.core.preinfusionSeconds
 import coffee.crema.profiles.CremaProfile
@@ -168,7 +168,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val coreDispatcher = kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)
 
     /** Run [block] on the core lane, FIFO behind any queued event application.
-     *  Every write to lane-owned state (the upload-skip cache, [pendingBrew],
+     *  Every write to lane-owned state ([pendingBrew],
      *  [waterLowWarned], [maintenanceTotalLitres]) goes through here or runs
      *  on the lane already: a plain Main-thread write is not ordered against a
      *  queued lane task (cohort review 2026-10-25, Android P2-3). */
@@ -219,12 +219,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Set when [startShot] kicks off a profile upload that should be followed by an
-     * Espresso request once the upload completes (the gated start). Cleared on
-     * `ProfileUploadCompleted` (after firing Espresso), on `ProfileUploadFailed`,
-     * on the upload timeout, and on disconnect.
+     * Set when [startShot] waits for the DE1 to hold its profile before the
+     * Espresso request (the gated start): the core's profile sync is uploading
+     * it. Cleared on the matching `ProfileSyncHolds` (after firing Espresso), on
+     * `ProfileUploadFailed`, on the timeout, and on disconnect.
      */
     private var pendingBrew = false
+
+    /** The effective-profile fingerprint [pendingBrew] waits for. Lane-owned. */
+    private var pendingBrewFingerprint: String? = null
 
     /** Which start armed [pendingBrew]: its backstop and its upload's
      *  outcome act only on that start. Lane-owned, like [pendingBrew]. */
@@ -252,23 +255,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         notifyUser = ::notifyUser,
     )
 
-    /**
-     * Profile-upload-skip cache (issue 11, mirrors the web shell). The djb2
-     * fingerprint of the profile last successfully uploaded to the *currently
-     * connected* DE1 — so a re-`startShot` of the same profile skips the
-     * redundant upload and goes straight to Espresso. [pendingUploadFingerprint]
-     * holds the in-flight upload's fingerprint, committed to [lastUploadedFingerprint]
-     * on `ProfileUploadCompleted`. The cache is invalidated on any drop out of
-     * READY (the DE1 no longer holds our bytes) — without that, a skip after a
-     * power-cycle would start a shot against a stale/absent profile.
-     *
-     * NOTE: unverified — there is no DE1 simulator, so the skip→Espresso path
-     * cannot be exercised in CI/emulator. The decision is unit-tested
-     * ([shouldSkipProfileUpload]); the wiring degrades safely (a null fingerprint
-     * ⇒ never skip ⇒ the previous always-upload behaviour).
-     */
-    private var lastUploadedFingerprint: String? = null
-
     /** Whether the low-battery snackbar fired for the current scale
      *  connection (issue #29) — reset in [clearScaleSessionUi] so the next
      *  session warns again, but one connection never nags twice. */
@@ -279,7 +265,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  above the threshold (a refill), on threshold edits, and on
      *  disconnect. One dip never nags twice. */
     private var waterLowWarned = false
-    private var pendingUploadFingerprint: String? = null
 
     /** The machine's last-reported steam/hot-water settings (from
      *  `Event.ShotSettingsRead`). Used to read-modify-write QC steam/water
@@ -1471,13 +1456,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // known (it only runs on an idle machine).
             scheduleNearbySetup()
         },
-        // The DE1 no longer holds our profile — drop the upload-skip cache so
-        // the next shot re-uploads (issue 11). Without this, a skip after a
-        // reconnect would brew against a stale/absent profile.
+        // The core's profile sync forgets what this connection pushed when
+        // the link drops (`de1LinkLost` / `reset`) and uploads again after
+        // the next connect sweep.
         onDe1Dropped = {
-            // On the lane: a ProfileUploadCompleted still queued there would
-            // otherwise re-commit the fingerprint AFTER this clear.
-            onCoreLane { lastUploadedFingerprint = null }
             de1SetupDone = false
             sweepRunner.onDropped()
             idleSleep.link(false)
@@ -2261,6 +2243,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             setActiveProfile = { bridge.setActiveProfile(it) },
             log = { appendLog(it) },
         )
+        pushDesiredProfile(s)
         refreshStopTargetProjection()
     }
 
@@ -2491,47 +2474,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { appendLog("Re-assert stop-on-weight failed: ${it.message}") }
         runCatching { bridge.setVolumeStopWithScale(_ui.value.volumeStopWithScale) }
             .onFailure { appendLog("Re-assert volume-stop-with-scale failed: ${it.message}") }
-        // Quick-Controls override: the core applies it to the library profile at
-        // upload (brew temp shifts every step, pre-infusion rescales the leading
-        // segments, dose/yield replace). The library profile is untouched.
-        val qcJson = _ui.value.brewParams.overridesJson(json)
-        // Issue 11: if the connected DE1 already holds this exact effective profile
-        // (fingerprint match), skip the redundant upload and go straight to the
-        // gated Espresso request. A null fingerprint (hash failure) ⇒ never skip.
-        val fingerprint = runCatching { effectiveProfileFingerprint(cremaJson, qcJson) }.getOrNull()
-        if (shouldSkipProfileUpload(
-                fingerprint,
-                lastUploadedFingerprint,
-                _ui.value.bleState == De1BleManager.State.READY,
-            )
-        ) {
-            appendLog("Profile unchanged on DE1 (fingerprint match) — skipping re-upload")
+        // The shot's profile — the library profile with the Quick-Controls
+        // override, applied by the core — becomes the desired one. The core's
+        // profile sync uploads it unless this connection already pushed it
+        // (issue 11's skip, now the core's), and the start waits for it.
+        val status = setDesiredOnLane(cremaJson, _ui.value.brewParams.overridesJson(json)) ?: run {
+            startSequence.end(start)
+            notifyUser("Can\u2019t start shot \u2014 profile conversion failed")
+            return
+        }
+        if (status.holdsDesired()) {
+            appendLog("Profile already on the DE1 \u2014 no upload")
             startSequence.proceed(start, _ui.value.preFlush)
             return
         }
-        if (!startUploadOnLane(cremaJson, qcJson)) {
-            startSequence.end(start)
-            notifyUser("Can\u2019t start shot \u2014 profile upload failed")
-            return
-        }
-        // Set only after the upload's own output was applied: its Aborted
-        // for the upload it superseded (often the automatic re-upload) used
-        // to clear this flag and drop the start silently (#2 N2).
+        // Set after the call's own output was applied; the upload's acks and
+        // its ProfileSyncHolds queue behind this lane task.
         pendingBrew = true
         pendingBrewStart = start
-        // Backstop: if no ProfileUploadCompleted arrives, cancel the core
-        // upload (so it fails like any other: fingerprint forgotten, re-upload
-        // armed) and clear the pending brew so the UI doesn't hang in
-        // "uploading". On the core lane so pendingBrew stays single-threaded.
+        pendingBrewFingerprint = status.desired
+        // Backstop: if the DE1 does not confirm the profile in time, end the
+        // start so the UI doesn't hang in "uploading" (the core keeps retrying
+        // on its own). On the core lane so pendingBrew stays single-threaded.
         viewModelScope.launch(coreDispatcher) {
             delay(PROFILE_UPLOAD_TIMEOUT_MS)
             if (pendingBrew && pendingBrewStart === start) {
-                runCatching { applyCoreOutputJson(bridge.cancelProfileUpload()) }
                 pendingBrew = false
                 pendingBrewStart = null
+                pendingBrewFingerprint = null
                 val live = startSequence.end(start)
-                pendingUploadFingerprint = null
-                _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 // A start that was stopped, or overtaken by a group-head
                 // shot, needs no toast (mid-shot it would be wrong).
                 if (live) notifyUser("Profile upload timed out \u2014 shot not started")
@@ -2541,31 +2512,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * On the core lane: upload the effective profile — the library [cremaJson]
-     * with the Quick-Controls overrides [qcJson] applied by the core
-     * (`uploadCremaProfile`, this shell's only upload) — apply the output NOW,
-     * then record the fingerprint of the bytes it wrote as the upload in
-     * flight. The output's own events — an `Aborted` for the upload it
-     * superseded — must land before the caller marks this upload's pending
-     * state, or they clear it (cohort review 2026-10-28, #2 N2). Its acks queue
-     * behind this lane task, so the completion always sees that state. Returns
-     * whether an upload is now running (or waiting for the machine model).
+     * On the core lane: make the library [cremaJson] (null = no active
+     * profile) with the Quick-Controls overrides [qcJson] the core's desired
+     * profile (`setDesiredProfile`, this shell's only way to put a profile on
+     * the DE1) and apply the output NOW — an upload the core's profile sync
+     * started. Returns the sync's status, or null when the core can't read the
+     * profile.
      */
-    private fun startUploadOnLane(cremaJson: String, qcJson: String?): Boolean {
-        val upload = runCatching {
+    private fun setDesiredOnLane(cremaJson: String?, qcJson: String?): ProfileSyncStatus? {
+        val sync = runCatching {
             json.decodeFromString(
-                ProfileUploadOutput.serializer(),
-                bridge.uploadCremaProfile(cremaJson, qcJson, SystemClock.elapsedRealtime().toULong()),
+                ProfileSyncOutput.serializer(),
+                bridge.setDesiredProfile(cremaJson, qcJson, SystemClock.elapsedRealtime().toULong()),
             )
         }.getOrElse {
-            appendLog("Profile upload failed to start: ${it.message}")
-            return false
+            appendLog("Setting the desired profile failed: ${it.message}")
+            return null
         }
-        applyCoreOutput(upload.output)
-        if (runCatching { bridge.profileUploadInProgress() }.getOrDefault(false) != true) return false
-        pendingUploadFingerprint = upload.fingerprint
-        _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
-        return true
+        applyCoreOutput(sync.output)
+        if (sync.output.events.any { it is Event.DecodeError }) return null
+        return sync.status
+    }
+
+    /**
+     * The profile on screen — the active profile and its Quick-Controls
+     * override — as the core's desired profile. Pushed with the stop targets
+     * (select, override change, startup restore, every DE1 connect, every shot
+     * start): the core's profile sync decides when to upload. On a remote the
+     * core is a read-only mirror and never uploads.
+     */
+    private fun pushDesiredProfile(s: MainUiState = effectiveState()) {
+        val cremaJson = s.activeProfile()?.id?.let { library.profileJson(it) } ?: s.mirroredProfileJson
+        val qcJson = s.brewParams.overridesJson(json)
+        onCoreLane { setDesiredOnLane(cremaJson, qcJson) }
     }
 
     /** Scan for and connect to a DE1 — delegate of [ConnectionController.connect].
@@ -2605,6 +2584,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreLane {
             pendingBrew = false
             pendingBrewStart = null
+            pendingBrewFingerprint = null
             // Next connection's first low-water report warns afresh (#33).
             waterLowWarned = false
         }
@@ -3599,27 +3579,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         onCoreOutputJson(raw)
-    }
-
-    /**
-     * Put the active profile back on the DE1 without starting a shot — after a
-     * cold-maintenance cycle left core's 1 °C profile loaded (Decenza re-uploads
-     * on leaving its descale page). Skipped with no active profile or no link.
-     */
-    private fun reuploadActiveProfile() {
-        if (_ui.value.bleState != De1BleManager.State.READY) return
-        val cremaJson = _ui.value.activeProfileId?.let { library.profileJson(it) } ?: return
-        viewModelScope.launch(coreDispatcher) {
-            // A user's start owns the upload (it carries the Quick-Controls
-            // overrides): never displace it (#2 N2). The core asks again in
-            // 5 s if the DE1's profile is still unknown then.
-            if (pendingBrew || runCatching { bridge.profileUploadInProgress() }.getOrDefault(false) == true) {
-                return@launch
-            }
-            // With the live Quick-Controls override, so the DE1 holds what the
-            // next shot runs.
-            startUploadOnLane(cremaJson, _ui.value.brewParams.overridesJson(json))
-        }
     }
 
     /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. Persisted. */
@@ -5185,12 +5144,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 if (c.cold_workaround) {
-                    // The DE1 holds core's 1 °C profile now, not ours: the
-                    // skip-upload cache is stale, and the real profile goes
-                    // back once the cycle ends.
-                    lastUploadedFingerprint = null
-                    if (terminal) reuploadActiveProfile()
-                    // The cold profile never loaded (or was replaced), so core
+                    // The DE1 holds core's 1 °C profile now, not ours; the
+                    // core's profile sync puts the real one back once the
+                    // cycle ends. The cold profile never loaded (or was replaced), so core
                     // did not send the request (round-2 V3 #4): say so, and why,
                     // instead of going quiet.
                     if (c.phase == MaintenancePhase.Failed) notifyUser(maintenanceFailedText(c.state, c.failure))
@@ -5718,40 +5674,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ProfileUploadCompleted -> {
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile uploaded: ${event.content.title}")
-                // The DE1 now holds this profile — cache its fingerprint so an
-                // unchanged re-start skips the upload (issue 11).
-                lastUploadedFingerprint = pendingUploadFingerprint
-                pendingUploadFingerprint = null
-                // Gated start: the profile is now on the DE1. Observe the
-                // firmware's profile-download guard window, optionally pre-flush,
-                // then request Espresso (issue 15).
-                if (pendingBrew) {
+            }
+            is Event.ProfileSyncHolds -> {
+                // Gated start: the DE1 holds the start's profile now. Observe
+                // the firmware's profile-download guard window, optionally
+                // pre-flush, then request Espresso (issue 15).
+                if (pendingBrew && event.content.fingerprint == pendingBrewFingerprint) {
                     pendingBrew = false
+                    pendingBrewFingerprint = null
                     pendingBrewStart?.let { startSequence.proceed(it, _ui.value.preFlush) }
                     pendingBrewStart = null
                 }
             }
             is Event.ProfileUploadFailed -> {
-                // The start waiting on this upload is over (the user taps
-                // Coffee again).
+                // The start waiting on the DE1 is over (the user taps Coffee
+                // again); the core retries the upload on its own backoff.
                 if (pendingBrew) pendingBrewStart?.let(startSequence::end)
                 pendingBrew = false
                 pendingBrewStart = null
-                pendingUploadFingerprint = null
-                // What the DE1 holds after a failed upload is unknown: frames
-                // are slot writes with no commit step, so an interrupted upload
-                // can leave the new header's frame count over a mix of new and
-                // old frames (Decenza aa8232e6). Never skip the next upload.
-                lastUploadedFingerprint = null
+                pendingBrewFingerprint = null
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile upload failed: ${uploadFailureLabel(event.content.reason)}")
             }
-            is Event.ProfileReuploadNeeded -> {
-                // The core saw the machine Idle with an unknown profile after a
-                // failed upload: put the active profile back now, so a
-                // group-head start can't brew the mix (Decenza ReArm).
-                appendLog("Profile on the DE1 is unknown after a failed upload — re-uploading")
-                reuploadActiveProfile()
+            is Event.ProfileSyncWarning -> {
+                // The core's one non-blocking warning per streak of failed
+                // profile uploads; it keeps retrying (3 s, 10 s, then 30 s).
+                if (event.content.active) {
+                    notifyUser("Couldn\u2019t load the profile on the DE1 \u2014 retrying")
+                    appendLog("Profile upload to the DE1 failed \u2014 the core is retrying")
+                } else {
+                    appendLog("Profile upload to the DE1 recovered")
+                }
             }
             // Shot-settings-read events surface in the real screens (M5), not this
             // Phase-0 debug readout. An explicit else keeps the sealed `when`

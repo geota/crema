@@ -77,6 +77,10 @@ class ProfileWriteGenerationsTest {
          "target_weight":0.0,"dose":0.0,"author":"","beverage_type":"espresso","tank_temperature":0.0,"version":"2"}
     """.trimIndent()
 
+    /** A different dial, so N+1 is a different effective profile from N (a
+     *  title alone uploads the same bytes). */
+    private val N1_DIAL = """{"brewTemp":94}"""
+
     private fun CoreOutput.writeTargets() =
         commands.filterIsInstance<Command.WriteCharacteristic>().map { it.content.target }
 
@@ -91,6 +95,7 @@ class ProfileWriteGenerationsTest {
         // Through the host core, an immediate and a parked-then-released upload
         // both pair their header with `ProfileUploadStarted`.
         val bridge = CremaBridge()
+        bridge.settleForUploads()
         val parked = json.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(profile("P"), 0uL))
         assertTrue(WriteTarget.De1ProfileHeader !in parked.writeTargets(), "waits for the model")
         val released = json.decodeFromString(
@@ -98,7 +103,8 @@ class ProfileWriteGenerationsTest {
             bridge.onNotification(NotificationSource.DE1_MMR_READ, modelReply(1), 10uL),
         )
         assertFalse(g.unnamed(g.begin(released.writeTargets(), startedUploadId(released.events))))
-        val now = json.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(profile("N"), 20uL))
+        bridge.cancelProfileUpload()
+        val now = json.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(profile("N"), 20uL, N1_DIAL))
         assertFalse(g.unnamed(g.begin(now.writeTargets(), startedUploadId(now.events))))
     }
 
@@ -106,11 +112,13 @@ class ProfileWriteGenerationsTest {
     fun `a late failure report for a superseded upload leaves the shot start's upload running`() {
         // Round-2 verification V3 #1, through the host core: upload N's frame
         // write fails on the Main-thread batch coroutine; before it reports,
-        // a shot start on the core lane begins upload N+1. The report names N
-        // (its batch's upload id), so N+1 is not failed and the shot is not
-        // refused. The old report carried no identity and failed N+1.
+        // N ends (cancelled) and a shot start on the core lane makes N+1 the
+        // desired profile, which the core uploads. The report names N (its
+        // batch's upload id), so N+1 is not failed and the shot is not
+        // refused. An unnamed report would fail N+1.
         val bridge = CremaBridge() // the host build of the core
         bridge.onNotification(NotificationSource.DE1_MMR_READ, modelReply(1), 0uL)
+        bridge.settleForUploads()
         val g = ProfileWriteGenerations()
 
         val n = json.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(profile("N"), 0uL))
@@ -120,7 +128,8 @@ class ProfileWriteGenerationsTest {
         assertEquals(ProfileWriteGenerations.Outcome.FAILED, g.settle(batchN, false))
 
         // The shot start's upload, applied on the lane before the report lands.
-        val n1 = json.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(profile("N+1"), 10uL))
+        bridge.cancelProfileUpload()
+        val n1 = json.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(profile("N+1"), 10uL, N1_DIAL))
         val batchN1 = assertNotNull(g.begin(n1.writeTargets(), startedUploadId(n1.events)))
 
         val late = json.decodeFromString(
@@ -143,13 +152,17 @@ class ProfileWriteGenerationsTest {
         // generation still let N's ack through. The ack now names N.
         val bridge = CremaBridge()
         bridge.onNotification(NotificationSource.DE1_MMR_READ, modelReply(1), 0uL)
+        bridge.settleForUploads()
         val g = ProfileWriteGenerations()
         val n = json.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(profile("N"), 0uL))
         val batchN = assertNotNull(g.begin(n.writeTargets(), startedUploadId(n.events)))
-        val nHeader = n.commands.filterIsInstance<Command.WriteCharacteristic>().first().content.data
+        val nHeader = n.commands.filterIsInstance<Command.WriteCharacteristic>()
+            .first { it.content.target == WriteTarget.De1ProfileHeader }.content.data
             .map { it.toByte() }.toByteArray()
-        // N+1 armed on the lane; its batch has not begun, so N still "may write".
-        bridge.uploadWire(profile("N+1"), 10uL)
+        // N ends and N+1 is armed on the lane; its batch has not begun, so N
+        // still "may write".
+        bridge.cancelProfileUpload()
+        bridge.uploadWire(profile("N+1"), 10uL, N1_DIAL)
         assertTrue(g.mayWrite(batchN))
         val ackId = batchN.uploadId.takeIf { g.mayWrite(batchN) } // the VM's ackUploadId
         val late = json.decodeFromString(
