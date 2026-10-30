@@ -2245,6 +2245,26 @@ pub fn profile_bounds_json() -> String {
     de1_domain::profile_bounds::profile_bounds_json()
 }
 
+/// The Quick Controls steppers' ranges (`QuickControlBounds` JSON; hot water
+/// is `hotWaterBoundsJson`). See `de1_domain::bounds`.
+#[wasm_bindgen(js_name = quickControlBoundsJson)]
+pub fn quick_control_bounds_json() -> String {
+    de1_domain::quick_control_bounds_json()
+}
+
+/// Settings → Brew defaults' ranges (`BrewDefaultsBounds` JSON).
+#[wasm_bindgen(js_name = brewDefaultsBoundsJson)]
+pub fn brew_defaults_bounds_json() -> String {
+    de1_domain::brew_defaults_bounds_json()
+}
+
+/// The profile editor's ranges (`ProfileEditorBounds` JSON), applied when the
+/// user edits a field, never to rewrite a stored profile.
+#[wasm_bindgen(js_name = profileEditorBoundsJson)]
+pub fn profile_editor_bounds_json() -> String {
+    de1_domain::profile_editor_bounds_json()
+}
+
 /// The Crema core, exposed to the web shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell

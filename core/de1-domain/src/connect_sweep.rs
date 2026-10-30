@@ -165,6 +165,33 @@ pub struct ConnectSweepSettings {
     pub battery_percent: Option<u8>,
 }
 
+impl ConnectSweepSettings {
+    /// These settings with the steam and flush values inside the
+    /// Quick-Controls stepper ranges ([`crate::bounds`]): the sweep writes the
+    /// user's settings to the machine, so this is where they are enforced on
+    /// the way out. A steam temperature of 1–134 °C goes out as 0 (off), the
+    /// firmware's own rule. Hot water is left to [`crate::hot_water`].
+    #[must_use]
+    pub fn within_bounds(&self) -> Self {
+        let q = crate::bounds::quick_control_bounds();
+        let d = Self::default();
+        Self {
+            steam_temp_c: crate::bounds::clamp_steam_temp(self.steam_temp_c, d.steam_temp_c),
+            steam_timeout_s: q
+                .steam_time_s
+                .clamp_or(self.steam_timeout_s, d.steam_timeout_s),
+            steam_flow_ml_s: q
+                .steam_flow_ml_s
+                .clamp_or(self.steam_flow_ml_s, d.steam_flow_ml_s),
+            flush_timeout_s: q
+                .flush_time_s
+                .clamp_or(self.flush_timeout_s, d.flush_timeout_s),
+            flush_temp_c: q.flush_temp_c.clamp_or(self.flush_temp_c, d.flush_temp_c),
+            ..self.clone()
+        }
+    }
+}
+
 /// Built from the default settings bundle
 /// ([`crate::app_settings::default_common_settings`]), so a sweep with no
 /// stored settings sends the same values the shells default to.

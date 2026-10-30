@@ -340,6 +340,9 @@ impl CommonSettings {
     ///   `0..=60`, `water_refill_point_mm` to the refill range;
     ///   `idle_sleep_min` snaps to a choice;
     /// - `chart_channels` keeps the known keys ([`CHART_CHANNEL_KEYS`]), once;
+    /// - the brew defaults and the Quick-Controls values (hot water aside) are
+    ///   clamped into the stepper ranges ([`crate::bounds`]); a steam
+    ///   temperature of 1–134 °C snaps to 0 (off), as the firmware does;
     /// - a brew default or Quick-Controls value that isn't finite and `> 0`
     ///   becomes the default — except the steam temperature and the
     ///   hot-water volume, where `0` is the user's "off" and stays (only a
@@ -349,6 +352,8 @@ impl CommonSettings {
     #[must_use]
     pub fn sanitized(self) -> Self {
         let d = Self::default();
+        let q = crate::bounds::quick_control_bounds();
+        let b = crate::bounds::brew_defaults_bounds();
         let mut channels: Vec<String> = Vec::new();
         for c in self.chart_channels {
             if CHART_CHANNEL_KEYS.contains(&c.as_str()) && !channels.contains(&c) {
@@ -406,28 +411,52 @@ impl CommonSettings {
             idle_sleep_min: self
                 .idle_sleep_min
                 .map(crate::idle_sleep::snap_idle_sleep_minutes),
-            default_dose_g: positive_or(self.default_dose_g, d.default_dose_g),
-            default_ratio: positive_or(self.default_ratio, d.default_ratio),
-            default_brew_temp_c: positive_or(self.default_brew_temp_c, d.default_brew_temp_c),
-            default_preinfuse_s: if self.default_preinfuse_s.is_finite()
-                && self.default_preinfuse_s >= 0.0
-            {
-                self.default_preinfuse_s
-            } else {
-                d.default_preinfuse_s
-            },
-            qc_steam_time_s: positive_or(self.qc_steam_time_s, d.qc_steam_time_s),
-            qc_steam_flow_ml_s: positive_or(self.qc_steam_flow_ml_s, d.qc_steam_flow_ml_s),
+            // The brew defaults and the Quick-Controls values (hot water aside)
+            // also land inside the stepper ranges (F8, `crate::bounds`).
+            default_dose_g: b.dose_g.clamp_or(
+                positive_or(self.default_dose_g, d.default_dose_g),
+                d.default_dose_g,
+            ),
+            default_ratio: b.ratio.clamp_or(
+                positive_or(self.default_ratio, d.default_ratio),
+                d.default_ratio,
+            ),
+            default_brew_temp_c: b.brew_temp_c.clamp_or(
+                positive_or(self.default_brew_temp_c, d.default_brew_temp_c),
+                d.default_brew_temp_c,
+            ),
+            default_preinfuse_s: b.preinfuse_s.clamp_or(
+                non_negative_or(self.default_preinfuse_s, d.default_preinfuse_s),
+                d.default_preinfuse_s,
+            ),
+            qc_steam_time_s: q.steam_time_s.clamp_or(
+                positive_or(self.qc_steam_time_s, d.qc_steam_time_s),
+                d.qc_steam_time_s,
+            ),
+            qc_steam_flow_ml_s: q.steam_flow_ml_s.clamp_or(
+                positive_or(self.qc_steam_flow_ml_s, d.qc_steam_flow_ml_s),
+                d.qc_steam_flow_ml_s,
+            ),
             // 0 °C = steam off: the connect sweep must not heat the boiler.
-            qc_steam_temp_c: non_negative_or(self.qc_steam_temp_c, d.qc_steam_temp_c),
+            // 1–134 snaps to off too (what the firmware does with it).
+            qc_steam_temp_c: crate::bounds::clamp_steam_temp(
+                non_negative_or(self.qc_steam_temp_c, d.qc_steam_temp_c),
+                d.qc_steam_temp_c,
+            ),
             qc_hot_water_temp_c: positive_or(self.qc_hot_water_temp_c, d.qc_hot_water_temp_c),
             // 0 ml = "off" for the hot-water volume.
             qc_hot_water_volume_ml: non_negative_or(
                 self.qc_hot_water_volume_ml,
                 d.qc_hot_water_volume_ml,
             ),
-            qc_flush_time_s: positive_or(self.qc_flush_time_s, d.qc_flush_time_s),
-            qc_flush_temp_c: positive_or(self.qc_flush_temp_c, d.qc_flush_temp_c),
+            qc_flush_time_s: q.flush_time_s.clamp_or(
+                positive_or(self.qc_flush_time_s, d.qc_flush_time_s),
+                d.qc_flush_time_s,
+            ),
+            qc_flush_temp_c: q.flush_temp_c.clamp_or(
+                positive_or(self.qc_flush_temp_c, d.qc_flush_temp_c),
+                d.qc_flush_temp_c,
+            ),
             ..self
         }
     }
@@ -844,5 +873,47 @@ mod tests {
             assert_eq!(r.qc_steam_temp_c, d.qc_steam_temp_c, "{bad}");
             assert_eq!(r.qc_hot_water_volume_ml, d.qc_hot_water_volume_ml, "{bad}");
         }
+    }
+
+    #[test]
+    fn sanitize_clamps_quick_controls_into_the_table() {
+        let wild = CommonSettings {
+            qc_steam_temp_c: 120.0,
+            qc_steam_flow_ml_s: 9.0,
+            qc_steam_time_s: 600.0,
+            qc_flush_time_s: 0.5,
+            qc_flush_temp_c: 30.0,
+            default_dose_g: 50.0,
+            default_ratio: 9.0,
+            default_brew_temp_c: 70.0,
+            default_preinfuse_s: 90.0,
+            qc_hot_water_temp_c: 99.0,
+            ..default_common_settings()
+        };
+        let s = wild.sanitized();
+        assert_eq!(
+            s.qc_steam_temp_c, 0.0,
+            "1–134 °C snaps to off, as the firmware does"
+        );
+        assert_eq!((s.qc_steam_flow_ml_s, s.qc_steam_time_s), (3.0, 60.0));
+        assert_eq!((s.qc_flush_time_s, s.qc_flush_temp_c), (1.0, 60.0));
+        assert_eq!((s.default_dose_g, s.default_ratio), (30.0, 5.0));
+        assert_eq!((s.default_brew_temp_c, s.default_preinfuse_s), (80.0, 60.0));
+        assert_eq!(s.qc_hot_water_temp_c, 99.0, "hot water is not F8's");
+        let kept = CommonSettings {
+            qc_steam_temp_c: 0.0,
+            ..default_common_settings()
+        }
+        .sanitized();
+        assert_eq!(kept.qc_steam_temp_c, 0.0);
+        assert_eq!(
+            CommonSettings {
+                qc_steam_temp_c: 200.0,
+                ..default_common_settings()
+            }
+            .sanitized()
+            .qc_steam_temp_c,
+            170.0
+        );
     }
 }

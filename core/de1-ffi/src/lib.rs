@@ -1661,6 +1661,31 @@ pub fn profile_bounds_json() -> String {
     de1_domain::profile_bounds::profile_bounds_json()
 }
 
+/// The Quick Controls steppers' ranges (`QuickControlBounds` JSON; hot water
+/// is `hot_water_bounds_json`). See [`de1_domain::bounds`].
+#[uniffi::export]
+#[must_use]
+pub fn quick_control_bounds_json() -> String {
+    de1_domain::quick_control_bounds_json()
+}
+
+/// Settings → Brew defaults' ranges (`BrewDefaultsBounds` JSON). See
+/// [`de1_domain::bounds`].
+#[uniffi::export]
+#[must_use]
+pub fn brew_defaults_bounds_json() -> String {
+    de1_domain::brew_defaults_bounds_json()
+}
+
+/// The profile editor's ranges (`ProfileEditorBounds` JSON), applied when the
+/// user edits a field, never to rewrite a stored profile. See
+/// [`de1_domain::bounds`].
+#[uniffi::export]
+#[must_use]
+pub fn profile_editor_bounds_json() -> String {
+    de1_domain::profile_editor_bounds_json()
+}
+
 /// djb2 base-36 fingerprint of the effective profile — the library
 /// `CremaProfile` JSON with the optional Quick Controls overrides JSON applied
 /// — i.e. the hash of exactly the bytes `an upload of `(profile, qc)` writes. See
