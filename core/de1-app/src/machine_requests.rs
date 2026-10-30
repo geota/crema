@@ -252,6 +252,13 @@ impl CremaCore {
                 data: vec![requested_state(MachineState::Idle)],
             });
         }
+        // The pending packet goes between the Idle bounce and the pour, so
+        // "change the profile, then tap Hot water" pours the new target. It
+        // arms nothing: the stop is armed from the state notification, for
+        // every initiator.
+        if state == MachineState::HotWater {
+            self.drive_shot_settings(out, true);
+        }
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1RequestedState,
             data: vec![requested_state(state)],

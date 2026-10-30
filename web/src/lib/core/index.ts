@@ -26,6 +26,8 @@ import type { CalTarget, MmrRegister } from './crema-core';
 import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
 import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core';
 import type { BrewOverrides, ProfileSyncOutput, ProfileSyncStatus, StartShotResult } from './crema-core';
+import type { HotWaterBounds, HotWaterDose, HotWaterTarget, SteamHotWaterTargets } from './crema-core';
+import { HotWaterMode } from './crema-core';
 import type { ShotCaptureContext } from './crema-core';
 import { guardStoppedBridge } from './stopped-guard';
 
@@ -290,19 +292,6 @@ export type NotificationSource =
 	| 'De1FrameAck'
 	| 'De1HeaderAck'
 	| 'ScaleButton';
-
-/**
- * The steam / hot-water targets the shell owns in the DE1's combined settings
- * packet (cuuid_0B), the argument to {@link CremaCore.setSteamHotwaterTargets}.
- * Canonical units (°C, s, ml); the wire scaling lives in the core. The group
- * target is the core's (the effective profile's temperature).
- */
-export interface SteamHotwaterTargets {
-	steamTempC: number;
-	steamTimeoutS: number;
-	hotWaterTempC: number;
-	hotWaterVolumeMl: number;
-}
 
 /**
  * The async core facade. One instance owns one `CremaBridge`; obtain it from
@@ -828,12 +817,19 @@ export interface CremaCore {
 	/** Set the tank desired water-temperature threshold. Celsius is the canonical unit (see docs/25 §7). */
 	setTankThreshold(celsius: number): Promise<CoreOutput>;
 	/**
-	 * Set the steam / hot-water targets. The core writes the combined packet
-	 * (cuuid_0B) read-modify-write with the effective profile's group target,
-	 * keeping every field it doesn't own (the flag byte, the hot-water
-	 * timeout, the espresso volume).
+	 * Set the steam / hot-water targets and the hot-water dose. The core keeps
+	 * the combined packet (cuuid_0B) in step with them: the hot-water volume
+	 * and timeout come from the dose, the group target is the effective
+	 * profile's temperature, and the fields it doesn't own (the flag byte, the
+	 * espresso volume) are kept.
 	 */
-	setSteamHotwaterTargets(targets: SteamHotwaterTargets): Promise<CoreOutput>;
+	setSteamHotwaterTargets(targets: SteamHotWaterTargets): Promise<CoreOutput>;
+	/**
+	 * The core's resolved hot-water target (`null` until a dose is set). Read
+	 * it after an input change of the shell's own; other changes arrive as
+	 * the `HotWaterTarget` event.
+	 */
+	hotWaterTarget(): Promise<HotWaterTarget | null>;
 	/** Set the steam flow rate, ml/s. */
 	setSteamFlow(mlPerS: number): Promise<CoreOutput>;
 	/** Set the seconds of high-flow steam at the start of a steam cycle. */
@@ -980,6 +976,26 @@ export function newProfileId(): string {
 		);
 	}
 	return wasmModule.newProfileId();
+}
+
+/**
+ * The hot-water steppers' ranges, chips and default dose, from the core.
+ *
+ * @throws `Error` if the wasm module has not been loaded yet.
+ */
+export function hotWaterBounds(): HotWaterBounds {
+	if (!wasmModule) {
+		throw new Error('hotWaterBounds() called before the wasm core was loaded');
+	}
+	return JSON.parse(wasmModule.hotWaterBoundsJson()) as HotWaterBounds;
+}
+
+/**
+ * A volume-mode hot-water dose of `ml`, the other modes' values the core's
+ * defaults: what this shell sends until it has the time / ml / ratio card.
+ */
+export function volumeHotWaterDose(ml: number): HotWaterDose {
+	return { ...hotWaterBounds().defaults, mode: HotWaterMode.Volume, volumeMl: ml };
 }
 
 /**
@@ -1427,14 +1443,10 @@ async function createCore(): Promise<CremaCore> {
 			return parseOutput(bridge.set_tank_threshold(celsius));
 		},
 		async setSteamHotwaterTargets(t) {
-			return parseOutput(
-				bridge.set_steam_hotwater_targets(
-					t.steamTempC,
-					t.steamTimeoutS,
-					t.hotWaterTempC,
-					t.hotWaterVolumeMl
-				)
-			);
+			return parseOutput(bridge.set_steam_hotwater_targets(JSON.stringify(t)));
+		},
+		async hotWaterTarget() {
+			return JSON.parse(bridge.hot_water_target_json()) as HotWaterTarget | null;
 		},
 		async setSteamFlow(mlPerS) {
 			return parseOutput(bridge.set_steam_flow(mlPerS));

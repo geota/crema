@@ -25,7 +25,7 @@ private val modeJson = Json { ignoreUnknownKeys = true }
  *  practice) — matches the core's own fallback tier. */
 private val MODE_TARGET_FALLBACK = ModeTargets(
     steamTempC = 148f, steamTimeoutS = 90f,
-    hotWaterTempC = 92f, hotWaterVolumeMl = 250f, hotWaterTimeoutS = 30f,
+    hotWaterTempC = 92f, hotWaterTimeoutS = 60f,
     flushTempC = 95f, flushTimeS = 4f,
 )
 
@@ -37,13 +37,12 @@ fun modeTargets(ui: MainUiState): ModeTargets {
         machineSteamTempC = ss?.steam_temp,
         machineSteamTimeoutS = ss?.steam_timeout,
         machineHotWaterTempC = ss?.hot_water_temp,
-        machineHotWaterVolumeMl = ss?.hot_water_volume,
         machineHotWaterTimeoutS = ss?.hot_water_timeout,
         machineFlushTempDeciC = ui.de1MachineInfo[MmrRegister.FlushTemp]?.toFloat(),
         qcSteamTempC = ui.qcSteamTempC,
         qcSteamTimeS = ui.qcSteamTimeS,
         qcHotWaterTempC = ui.qcHotWaterTempC,
-        qcHotWaterVolumeMl = ui.qcHotWaterVolumeMl,
+        hotWater = ui.hotWaterTarget,
         qcFlushTempC = ui.qcFlushTempC,
         qcFlushTimeS = ui.qcFlushTimeS,
     )
@@ -65,9 +64,16 @@ fun rememberModeTargets(ui: MainUiState): ModeTargets {
     val flushDeci = ui.de1MachineInfo[MmrRegister.FlushTemp]
     return remember(
         ui.de1ShotSettings, flushDeci, ui.qcSteamTempC, ui.qcSteamTimeS,
-        ui.qcHotWaterTempC, ui.qcHotWaterVolumeMl, ui.qcFlushTempC, ui.qcFlushTimeS,
+        ui.qcHotWaterTempC, ui.hotWaterTarget, ui.qcFlushTempC, ui.qcFlushTimeS,
     ) { modeTargets(ui) }
 }
+
+/**
+ * The hot-water amount, ml: the core's resolved target (never the machine
+ * echo, which can carry the 250 ml scale backstop); the Quick Controls value
+ * until the core has one.
+ */
+fun hotWaterMl(ui: MainUiState): Float = ui.hotWaterTarget?.volumeMl ?: ui.qcHotWaterVolumeMl
 
 /** The active service mode's display label, or null when no mode is running. */
 fun modeLabel(state: MachineState?): String? = when (state) {

@@ -48,13 +48,13 @@
 			name="Hot water volume"
 			dimension="volume"
 			min={20}
-			max={500}
+			max={250}
 			step={10}
 			onChange={(v) => params.set('waterVolume', v)}
 		/>
 		<div style="height:6px"></div>
 		<QuickChipRow
-			options={[60, 120, 180, 250, 350]}
+			options={[60, 120, 180, 250]}
 			value={p.waterVolume}
 			name="Hot water volume"
 			dimension="volume"

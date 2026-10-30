@@ -23,7 +23,8 @@ import kotlin.test.assertNotNull
  * The steam / hot-water packet (cuuid_0B) through the core (core/shell fixes
  * AC-F5.2, AC-F5.3): Android passes the four Quick Controls targets and the
  * core does the read-modify-write, so the fields Android doesn't own reach the
- * DE1 unchanged and the group target is the active profile's temperature.
+ * DE1 unchanged (the hot-water timeout is Crema's now: the dose's) and the
+ * group target is the active profile's temperature.
  * Replaces the shell-side `buildSteamHotWaterSettings` tests.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -66,7 +67,7 @@ class SteamHotWaterTargetsTest {
         assertEquals(20f, s.steam_timeout, "QC steam time")
         assertEquals(80f, s.hot_water_temp, "QC water temp")
         assertEquals(150f, s.hot_water_volume, "QC water volume")
-        assertEquals(45f, s.hot_water_timeout, "machine's water timeout kept")
+        assertEquals(60f, s.hot_water_timeout, "Crema's backstop for a volume dose")
         assertEquals(220f, s.espresso_volume, "machine's espresso volume kept")
         assertEquals(profileTemp, s.group_temp, "the active profile's temperature")
     }
@@ -74,12 +75,16 @@ class SteamHotWaterTargetsTest {
     @Test
     fun `the packet keeps the machine's flag byte`() {
         val bridge = CremaBridge()
+        // The seed read, Idle, then the on-ready sweep settles the link.
         feedMachinePacket(bridge)
-        val raw = bridge.setSteamHotwaterTargets(SteamHotWaterTargets(148f, 20f, 80f, 150f))
+        bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(2, 0), 0uL)
+        bridge.connectSweep("{}", 0uL)
+        val targets = SteamHotWaterTargets(148f, 20f, 80f, volumeHotWaterDose(150f))
+        val raw = bridge.setSteamHotwaterTargets(coreJson.encodeToString(SteamHotWaterTargets.serializer(), targets))
         val packet = coreJson.decodeFromString(CoreOutput.serializer(), raw).commands
             .filterIsInstance<Command.WriteCharacteristic>()
             .single { it.content.target == WriteTarget.De1ShotSettings }
             .content.data.map { it.toInt() }
-        assertEquals(listOf(0x40, 148, 20, 80, 150, 45, 220, 88, 128), packet)
+        assertEquals(listOf(0x40, 148, 20, 80, 150, 60, 220, 88, 128), packet)
     }
 }

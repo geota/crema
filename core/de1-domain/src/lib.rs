@@ -85,6 +85,7 @@ pub mod flow;
 pub mod history;
 pub mod history_export;
 pub mod history_import;
+pub mod hot_water;
 pub mod idle_sleep;
 pub mod ids;
 pub mod maintenance;
@@ -235,10 +236,18 @@ pub use firmware_image::{
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{
     HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMachine, ShotMetadata, ShotPrivacy,
-    ShotStatInput, StoredShot, brew_ratio, history_stats,
+    ShotStatInput, StoredShot, brew_ratio, history_stats, ratio_label,
 };
 pub use history_export::{export_v2_json_shot, export_v2_json_shot_full};
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
+pub use hot_water::{
+    HOT_WATER_BACKSTOP_TIMEOUT_S, HOT_WATER_FIRMWARE, HOT_WATER_MAX_ML, HOT_WATER_MIN_ML,
+    HOT_WATER_OLD_DEFAULT_ML, HOT_WATER_STOP_ON_SCALE_ML, HOT_WATER_TIME_MIN_S, HotWaterBasis,
+    HotWaterBounds, HotWaterClamp, HotWaterContext, HotWaterDose, HotWaterFirmware, HotWaterMode,
+    HotWaterTarget, StepRange, StoredHotWater, hot_water_bounds, hot_water_bounds_json,
+    initial_hot_water_dose, initial_hot_water_dose_json, resolve_hot_water, resolve_hot_water_json,
+    sanitize_hot_water_dose,
+};
 pub use ids::{new_custom_method_id, new_profile_id, new_recipe_id, new_shot_id};
 pub use maintenance::{
     MAX_COUNTED_GAP_S, MaintenanceReadout, MaintenanceState, counts_toward_water,

@@ -30,6 +30,8 @@ import coffee.crema.core.Bean
 import coffee.crema.core.MaintenanceState
 import coffee.crema.core.WriteTarget
 import coffee.crema.core.SteamHotWaterTargets
+import coffee.crema.core.HotWaterTarget
+import kotlinx.serialization.builtins.nullable
 import coffee.crema.core.WeightUnit
 import coffee.crema.drive.DriveStore
 import coffee.crema.drive.DriveSync
@@ -2260,6 +2262,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * an input, which is the one moment it knows the picture moved.
      */
     private fun refreshStopTargetProjection() {
+        // The target yield is also the hot-water ratio's basis.
+        refreshHotWaterTarget()
         val json = runCatching { bridge.stopTargetsProjection() }.getOrNull() ?: return
         runCatching {
             val o = this.json.parseToJsonElement(json).jsonObject
@@ -2328,6 +2332,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             qcSteamTempC = p.qcSteamTempC,
             qcHotWaterTempC = p.qcHotWaterTempC,
             qcHotWaterVolumeMl = p.qcHotWaterVolumeMl,
+            qcHotWaterMode = p.qcHotWaterMode,
+            qcHotWaterTimeS = p.qcHotWaterTimeS,
+            qcHotWaterTimeNoLimit = p.qcHotWaterTimeNoLimit,
+            qcHotWaterRatio = p.qcHotWaterRatio,
             qcFlushTimeS = p.qcFlushTimeS,
             qcFlushTempC = p.qcFlushTempC,
             qcGrind = p.qcGrind,
@@ -3440,6 +3448,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         qcSteamTempC = _ui.value.qcSteamTempC,
         qcHotWaterTempC = _ui.value.qcHotWaterTempC,
         qcHotWaterVolumeMl = _ui.value.qcHotWaterVolumeMl,
+        qcHotWaterMode = _ui.value.qcHotWaterMode,
+        qcHotWaterTimeS = _ui.value.qcHotWaterTimeS,
+        qcHotWaterTimeNoLimit = _ui.value.qcHotWaterTimeNoLimit,
+        qcHotWaterRatio = _ui.value.qcHotWaterRatio,
         qcFlushTimeS = _ui.value.qcFlushTimeS,
         qcFlushTempC = _ui.value.qcFlushTempC,
         qcGrind = _ui.value.qcGrind,
@@ -3625,17 +3637,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreOutputJson(raw)
     }
 
-    /** Write the four QC steam / hot-water targets; the core does the
-     *  read-modify-write of the combined packet. */
+    /** Write the four QC steam / hot-water targets, the hot water as a
+     *  volume-mode dose; the core keeps the combined packet in step. */
     private fun applySteamHotWater() {
         val ui = _ui.value
         val targets = SteamHotWaterTargets(
             steamTempC = ui.qcSteamTempC,
             steamTimeoutS = ui.qcSteamTimeS,
             hotWaterTempC = ui.qcHotWaterTempC,
-            hotWaterVolumeMl = ui.qcHotWaterVolumeMl,
+            hotWater = volumeHotWaterDose(ui.qcHotWaterVolumeMl),
         )
-        routeWrite("Set steam/hot-water") { bridge.setSteamHotwaterTargets(targets) }
+        routeWrite("Set steam/hot-water") {
+            bridge.setSteamHotwaterTargets(json.encodeToString(SteamHotWaterTargets.serializer(), targets))
+        }
+        refreshHotWaterTarget()
+    }
+
+    /** Re-read the core's hot-water target after an input change of this
+     *  device's own: with nothing connected no output carries its
+     *  `HotWaterTarget` event. A remote shows nothing of its own core's. */
+    private fun refreshHotWaterTarget() {
+        if (_ui.value.mirror != null) return
+        val raw = runCatching { bridge.hotWaterTargetJson() }.getOrNull() ?: return
+        val target = runCatching {
+            json.decodeFromString(HotWaterTarget.serializer().nullable, raw)
+        }.getOrNull()
+        _ui.update { it.copy(hotWaterTarget = target) }
     }
 
     /** Steam timeout, seconds (Quick Controls). Persisted; RMW write. */
@@ -3995,6 +4022,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             qcSteamTempC = p.qcSteamTempC,
             qcHotWaterTempC = p.qcHotWaterTempC,
             qcHotWaterVolumeMl = p.qcHotWaterVolumeMl,
+            qcHotWaterMode = p.qcHotWaterMode,
+            qcHotWaterTimeS = p.qcHotWaterTimeS,
+            qcHotWaterTimeNoLimit = p.qcHotWaterTimeNoLimit,
+            qcHotWaterRatio = p.qcHotWaterRatio,
             qcFlushTimeS = p.qcFlushTimeS,
             qcFlushTempC = p.qcFlushTempC,
             qcGrind = p.qcGrind,
@@ -5256,6 +5287,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val left = formatTankLevel(event.content.level, s.waterLevelUnit, s.volumeUnit)
                 notifyUser("Water low — ${left.value} ${left.unit} left, refill soon")
             }
+            is Event.HotWaterTarget -> {
+                // A remote's own core is a read-only mirror: not the hub's number.
+                if (_ui.value.mirror == null) _ui.update { it.copy(hotWaterTarget = event.content.target) }
+            }
+            is Event.ShotSettingsForeignChange -> appendLog(
+                if (event.content.restored) "Steam / hot-water settings changed outside Crema: restoring them"
+                else "Steam / hot-water settings changed outside Crema again: left as they are",
+            )
             is Event.ShotSettingsRead -> {
                 // Project into UI state: the mode chips + steam / hot-water
                 // timers read the machine's own targets (web de1ShotSettings parity).
@@ -5758,6 +5797,10 @@ internal fun MainUiState.commonSettings(): CommonSettings = AppPrefs(
     qcSteamTempC = qcSteamTempC,
     qcHotWaterTempC = qcHotWaterTempC,
     qcHotWaterVolumeMl = qcHotWaterVolumeMl,
+    qcHotWaterMode = qcHotWaterMode,
+    qcHotWaterTimeS = qcHotWaterTimeS,
+    qcHotWaterTimeNoLimit = qcHotWaterTimeNoLimit,
+    qcHotWaterRatio = qcHotWaterRatio,
     qcFlushTimeS = qcFlushTimeS,
     qcFlushTempC = qcFlushTempC,
 ).toCommonSettings()

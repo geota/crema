@@ -15,9 +15,10 @@
  * the screen.
  */
 
-import { refreshStopTargetsProjection } from './ui-state.svelte';
+import { refreshStopTargetsProjection, setHotWaterTarget } from './ui-state.svelte';
 import {
 	loadCore,
+	volumeHotWaterDose,
 	type Command,
 	type CoreOutput,
 	type CremaCore
@@ -1703,6 +1704,8 @@ export class CremaApp {
 	 */
 	async refreshStopTargets(): Promise<void> {
 		await refreshStopTargetsProjection(this.core);
+		// The target yield is also the hot-water ratio's basis.
+		await this.refreshHotWaterTarget();
 	}
 
 	async applyProfileTargetWeight(grams: number): Promise<void> {
@@ -1850,11 +1853,11 @@ export class CremaApp {
 	}
 
 	/**
-	 * Write the four QC-modeled steam / hot-water fields (issue 14). The core
-	 * owns the read-modify-write of the combined cuuid_0B packet: the group
-	 * target is the effective profile's temperature, and the fields the Quick
-	 * Sheet doesn't model (flags, timeouts, espresso volume) keep their
-	 * current values.
+	 * Write the four QC-modeled steam / hot-water fields (issue 14), the hot
+	 * water as a volume-mode dose. The core keeps the combined cuuid_0B packet
+	 * in step: the group target is the effective profile's temperature, and
+	 * the fields the Quick Sheet doesn't model (flags, espresso volume) keep
+	 * their current values.
 	 */
 	async setSteamHotwater(values: {
 		steamTempC: number;
@@ -1862,7 +1865,23 @@ export class CremaApp {
 		hotWaterTempC: number;
 		hotWaterVolumeMl: number;
 	}): Promise<void> {
-		this.applyCoreOutput(await this.core.setSteamHotwaterTargets(values));
+		this.applyCoreOutput(
+			await this.core.setSteamHotwaterTargets({
+				steamTempC: values.steamTempC,
+				steamTimeoutS: values.steamTimeoutS,
+				hotWaterTempC: values.hotWaterTempC,
+				hotWater: volumeHotWaterDose(values.hotWaterVolumeMl)
+			})
+		);
+		await this.refreshHotWaterTarget();
+	}
+
+	/**
+	 * Re-read the core's hot-water target after an input change of our own:
+	 * with nothing connected no output carries its `HotWaterTarget` event.
+	 */
+	async refreshHotWaterTarget(): Promise<void> {
+		setHotWaterTarget(await this.core.hotWaterTarget());
 	}
 
 	/** Set the steam flow rate, ml/s — the Quick Sheet Steam→Flow stepper. */

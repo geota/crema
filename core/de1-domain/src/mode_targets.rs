@@ -13,8 +13,15 @@
 //! `BrewDashboard` `MODE_TARGET_SEC` / `MODE_TARGET_LABEL` /
 //! `flushTempC`; Android `ModeTargets.kt`) and drifted — review #41
 //! moves the one derivation here.
+//!
+//! The hot-water amount is not resolved here: it is the core's
+//! [`HotWaterTarget`], which the shells show as it is. The machine's echo of
+//! the hot-water volume can carry the 250 ml scale backstop, so it never
+//! feeds a display.
 
 use typeshare::typeshare;
+
+use crate::hot_water::{HOT_WATER_BACKSTOP_TIMEOUT_S, HotWaterTarget};
 
 /// Legacy de1app default steam target temperature, °C.
 pub const DEFAULT_STEAM_TEMP_C: f32 = 148.0;
@@ -22,10 +29,6 @@ pub const DEFAULT_STEAM_TEMP_C: f32 = 148.0;
 pub const DEFAULT_STEAM_TIMEOUT_S: f32 = 90.0;
 /// Legacy de1app default hot-water target temperature, °C.
 pub const DEFAULT_HOT_WATER_TEMP_C: f32 = 92.0;
-/// Legacy de1app default hot-water volume, ml.
-pub const DEFAULT_HOT_WATER_VOLUME_ML: f32 = 250.0;
-/// Legacy de1app default hot-water timeout, seconds.
-pub const DEFAULT_HOT_WATER_TIMEOUT_S: f32 = 30.0;
 /// Legacy de1app default flush temperature, °C.
 pub const DEFAULT_FLUSH_TEMP_C: f32 = 95.0;
 /// Legacy 4 s flush window, seconds.
@@ -48,8 +51,6 @@ pub struct ModeTargetInputs {
     pub machine_steam_timeout_s: Option<f32>,
     /// Machine hot-water target temperature, °C (`ShotSettingsRead.hot_water_temp`).
     pub machine_hot_water_temp_c: Option<f32>,
-    /// Machine hot-water volume, ml (`ShotSettingsRead.hot_water_volume`).
-    pub machine_hot_water_volume_ml: Option<f32>,
     /// Machine hot-water timeout, seconds (`ShotSettingsRead.hot_water_timeout`).
     pub machine_hot_water_timeout_s: Option<f32>,
     /// The machine's stored flush setpoint — the raw `FlushTemp` MMR word
@@ -62,8 +63,9 @@ pub struct ModeTargetInputs {
     pub qc_steam_time_s: Option<f32>,
     /// Quick-Controls hot-water temperature, °C.
     pub qc_hot_water_temp_c: Option<f32>,
-    /// Quick-Controls hot-water volume, ml.
-    pub qc_hot_water_volume_ml: Option<f32>,
+    /// The core's resolved hot-water target (`Event::HotWaterTarget`, or
+    /// `hot_water_target_json`); when given, the hot-water timeout is its.
+    pub hot_water: Option<HotWaterTarget>,
     /// Quick-Controls flush temperature, °C.
     pub qc_flush_temp_c: Option<f32>,
     /// Quick-Controls flush duration, seconds.
@@ -81,8 +83,6 @@ pub struct ModeTargets {
     pub steam_timeout_s: f32,
     /// Hot-water target temperature, °C.
     pub hot_water_temp_c: f32,
-    /// Hot-water volume, ml.
-    pub hot_water_volume_ml: f32,
     /// Hot-water timeout, seconds.
     pub hot_water_timeout_s: f32,
     /// Flush water temperature, °C.
@@ -98,9 +98,9 @@ fn pos_or(v: Option<f32>, fallback: f32) -> f32 {
 }
 
 /// Resolve the service-mode targets: machine → Quick Controls → legacy
-/// default, field by field (see the module docs). The hot-water timeout
-/// has no QC dial and the flush time has no machine value; each skips
-/// the missing tier.
+/// default, field by field (see the module docs). The hot-water timeout is
+/// the core's target's when given, else the machine's, else the 60 s
+/// backstop; the flush time has no machine value and skips that tier.
 #[must_use]
 pub fn resolve_mode_targets(inputs: &ModeTargetInputs) -> ModeTargets {
     ModeTargets {
@@ -116,13 +116,14 @@ pub fn resolve_mode_targets(inputs: &ModeTargetInputs) -> ModeTargets {
             inputs.machine_hot_water_temp_c,
             pos_or(inputs.qc_hot_water_temp_c, DEFAULT_HOT_WATER_TEMP_C),
         ),
-        hot_water_volume_ml: pos_or(
-            inputs.machine_hot_water_volume_ml,
-            pos_or(inputs.qc_hot_water_volume_ml, DEFAULT_HOT_WATER_VOLUME_ML),
-        ),
-        hot_water_timeout_s: pos_or(
-            inputs.machine_hot_water_timeout_s,
-            DEFAULT_HOT_WATER_TIMEOUT_S,
+        hot_water_timeout_s: inputs.hot_water.map_or_else(
+            || {
+                pos_or(
+                    inputs.machine_hot_water_timeout_s,
+                    HOT_WATER_BACKSTOP_TIMEOUT_S,
+                )
+            },
+            |t| t.wire_timeout_s,
         ),
         flush_temp_c: pos_or(
             inputs.machine_flush_temp_deci_c.map(|d| d / 10.0),
@@ -142,8 +143,7 @@ mod tests {
         assert_eq!(t.steam_temp_c, DEFAULT_STEAM_TEMP_C);
         assert_eq!(t.steam_timeout_s, DEFAULT_STEAM_TIMEOUT_S);
         assert_eq!(t.hot_water_temp_c, DEFAULT_HOT_WATER_TEMP_C);
-        assert_eq!(t.hot_water_volume_ml, DEFAULT_HOT_WATER_VOLUME_ML);
-        assert_eq!(t.hot_water_timeout_s, DEFAULT_HOT_WATER_TIMEOUT_S);
+        assert_eq!(t.hot_water_timeout_s, HOT_WATER_BACKSTOP_TIMEOUT_S);
         assert_eq!(t.flush_temp_c, DEFAULT_FLUSH_TEMP_C);
         assert_eq!(t.flush_time_s, DEFAULT_FLUSH_TIME_S);
     }
@@ -178,6 +178,33 @@ mod tests {
             ..ModeTargetInputs::default()
         });
         assert!((t.flush_temp_c - 88.3).abs() < 1e-4);
+    }
+
+    /// AC-HW18: the timeout is the core's target's, never the machine
+    /// echo's, and the echo's 250 ml backstop has no display field at all.
+    #[test]
+    fn hot_water_target_wins_over_echo() {
+        use crate::hot_water::{
+            HOT_WATER_FIRMWARE, HotWaterContext, HotWaterDose, HotWaterMode, resolve_hot_water,
+        };
+        let time = HotWaterDose {
+            mode: HotWaterMode::Time,
+            time_s: 45.0,
+            ..HotWaterDose::default()
+        };
+        let target = resolve_hot_water(&time, &HotWaterContext::default(), &HOT_WATER_FIRMWARE);
+        let t = resolve_mode_targets(&ModeTargetInputs {
+            machine_hot_water_timeout_s: Some(30.0),
+            hot_water: Some(target),
+            ..ModeTargetInputs::default()
+        });
+        assert_eq!(t.hot_water_timeout_s, 45.0);
+        // A shell's JSON carrying the old echo field is ignored.
+        let parsed: ModeTargetInputs =
+            serde_json::from_str(r#"{"machineHotWaterVolumeMl":250}"#).unwrap();
+        assert_eq!(parsed, ModeTargetInputs::default());
+        let json = serde_json::to_string(&resolve_mode_targets(&parsed)).unwrap();
+        assert!(!json.contains("hotWaterVolume"), "{json}");
     }
 
     #[test]

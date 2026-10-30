@@ -1,6 +1,10 @@
 package coffee.crema.ui
 
 import coffee.crema.core.ConnectSweepSettings
+import coffee.crema.core.HotWaterBounds
+import coffee.crema.core.HotWaterDose
+import coffee.crema.core.HotWaterMode
+import coffee.crema.core.hotWaterBoundsJson
 import coffee.crema.core.UsbChargingMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -59,7 +63,7 @@ internal fun buildConnectSweepSettings(
     steamTempC = steamTempC,
     steamTimeoutS = steamTimeoutS,
     hotWaterTempC = hotWaterTempC,
-    hotWaterVolumeMl = hotWaterVolumeMl,
+    hotWater = volumeHotWaterDose(hotWaterVolumeMl),
     steamFlowMlS = steamFlowMlS,
     flushTimeoutS = flushTimeoutS,
     flushTempC = flushTempC,
@@ -68,6 +72,18 @@ internal fun buildConnectSweepSettings(
     usbCharging = usbChargingModeOf(usbChargingMode),
     batteryPercent = batteryPercent?.coerceIn(0, 100)?.toUByte(),
 )
+
+/** The core's default hot-water dose (`hotWaterBoundsJson`), read once. */
+private val hotWaterDefaults: HotWaterDose by lazy {
+    coreJson.decodeFromString(HotWaterBounds.serializer(), hotWaterBoundsJson()).defaults
+}
+
+/**
+ * A volume-mode hot-water dose of [ml], the other modes' values the core's
+ * defaults: what this shell sends until it has the time / ml / ratio card.
+ */
+internal fun volumeHotWaterDose(ml: Float): HotWaterDose =
+    hotWaterDefaults.copy(mode = HotWaterMode.Volume, volumeMl = ml)
 
 /** [buildConnectSweepSettings] from the UI state. */
 internal fun MainUiState.connectSweepSettings(tankTempC: Float, batteryPercent: Int?): ConnectSweepSettings =

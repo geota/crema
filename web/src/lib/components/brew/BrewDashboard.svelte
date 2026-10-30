@@ -177,18 +177,25 @@
 			machineSteamTempC: ui.de1ShotSettings?.steamTemp,
 			machineSteamTimeoutS: ui.de1ShotSettings?.steamTimeout,
 			machineHotWaterTempC: ui.de1ShotSettings?.hotWaterTemp,
-			machineHotWaterVolumeMl: ui.de1ShotSettings?.hotWaterVolume,
 			machineHotWaterTimeoutS: ui.de1ShotSettings?.hotWaterTimeout,
 			machineFlushTempDeciC: machine.flushTempC ?? undefined,
 			qcSteamTempC: params.current.steamTemp,
 			qcSteamTimeS: params.current.steamTime,
 			qcHotWaterTempC: params.current.waterTemp,
-			qcHotWaterVolumeMl: params.current.waterVolume,
+			hotWater: ui.hotWaterTarget ?? undefined,
 			qcFlushTempC: params.current.flushTemp,
 			qcFlushTimeS: params.current.flushTime
 		};
 		return JSON.parse(wasmResolveModeTargets(JSON.stringify(inputs))) as ModeTargets;
 	});
+	/**
+	 * The hot-water amount: the core's resolved target (never the machine
+	 * echo, which can carry the 250 ml scale backstop); the Quick Controls
+	 * value until the core has one.
+	 */
+	// `$derived.by` for the same reason as `modeTargets`: `params` is declared
+	// later in the file.
+	const hotWaterMl = $derived.by(() => ui.hotWaterTarget?.volumeMl ?? params.current.waterVolume);
 	/** Per-mode target ceilings — the timeouts the firmware enforces. */
 	const MODE_TARGET_SEC = $derived.by<
 		Record<'steaming' | 'dispensing' | 'flushing', number>
@@ -207,7 +214,7 @@
 		Record<'steaming' | 'dispensing' | 'flushing', string>
 	>(() => ({
 		steaming: `${formatTemp(modeTargets.steamTempC, prefs.tempUnit)} · ${modeTargets.steamTimeoutS} s`,
-		dispensing: `${formatTemp(modeTargets.hotWaterTempC, prefs.tempUnit)} · ${formatVolume(modeTargets.hotWaterVolumeMl, prefs.volumeUnit)}`,
+		dispensing: `${formatTemp(modeTargets.hotWaterTempC, prefs.tempUnit)} · ${formatVolume(hotWaterMl, prefs.volumeUnit)}`,
 		flushing: `${formatTemp(modeTargets.flushTempC, prefs.tempUnit)} · ${modeTargets.flushTimeS} s`
 	}));
 	/**
@@ -306,7 +313,7 @@
 				label: 'Hot water',
 				icon: 'drop',
 				color: 'var(--mc-water)',
-				target: convertVolume(modeTargets.hotWaterVolumeMl, prefs.volumeUnit)
+				target: convertVolume(hotWaterMl, prefs.volumeUnit)
 			};
 		if (modeState === 'flushing')
 			return {

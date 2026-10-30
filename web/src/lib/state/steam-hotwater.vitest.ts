@@ -38,9 +38,9 @@ describe('steam / hot-water targets (AC-F5.2)', () => {
 			de1: { callbacks: { onState(s: string): void } };
 			applyCoreOutput(o: unknown): void;
 		};
-		internals.de1.callbacks.onState('ready');
 		// The machine reports a set flag bit and its own timeout, espresso
-		// volume and group target.
+		// volume and group target (the connect-time seed read), then Idle;
+		// the on-ready sweep settles the link and writes its packet.
 		internals.applyCoreOutput(
 			await core.onNotification(
 				'De1ShotSettings',
@@ -48,15 +48,23 @@ describe('steam / hot-water targets (AC-F5.2)', () => {
 				0
 			)
 		);
+		internals.applyCoreOutput(await core.onNotification('De1State', new Uint8Array([2, 0]), 0));
+		internals.de1.callbacks.onState('ready');
+		await vi.waitFor(() => expect(written.length).toBeGreaterThan(0));
+		written.length = 0;
 
+		// Values other than the defaults the sweep just wrote (the same bytes
+		// are never written twice).
 		await app.setSteamHotwater({
-			steamTempC: 148,
-			steamTimeoutS: 12,
-			hotWaterTempC: 80,
-			hotWaterVolumeMl: 150
+			steamTempC: 150,
+			steamTimeoutS: 20,
+			hotWaterTempC: 85,
+			hotWaterVolumeMl: 160
 		});
 		await vi.waitFor(() => expect(written).toHaveLength(1));
 
-		expect([...written[0]]).toEqual([...shotSettings([0x40, 148, 12, 80, 150, 45, 220], 88.5)]);
+		// The hot-water timeout is Crema's now (the 60 s backstop of a
+		// volume dose); the flags, espresso volume and group target are kept.
+		expect([...written[0]]).toEqual([...shotSettings([0x40, 150, 20, 85, 160, 60, 220], 88.5)]);
 	});
 });

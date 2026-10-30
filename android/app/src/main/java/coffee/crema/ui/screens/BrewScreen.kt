@@ -83,6 +83,7 @@ import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.modeLabel
 import coffee.crema.ui.modeRunningSub
 import coffee.crema.ui.modeTargetSeconds
+import coffee.crema.ui.hotWaterMl
 import coffee.crema.ui.rememberModeTargets
 import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
@@ -287,7 +288,7 @@ fun BrewScreen(
                             // A remote before the hub's first snapshot doesn't know the targets.
                             target = if (ui.awaitingHubValues) Measurement(UNKNOWN_VALUE, "") else when (ui.machineStateName) {
                                 MachineState.Steam -> convertTemp(t.steamTempC, ui.tempUnit)
-                                MachineState.HotWater -> convertVolume(t.hotWaterVolumeMl, ui.volumeUnit)
+                                MachineState.HotWater -> convertVolume(hotWaterMl(ui), ui.volumeUnit)
                                 else -> convertTemp(t.flushTempC, ui.tempUnit)
                             },
                             color = when (ui.machineStateName) {
@@ -401,6 +402,7 @@ fun BrewScreen(
                 modeElapsedMs = ui.modeElapsedMs,
                 profileUploading = ui.profileUploading,
                 targets = rememberModeTargets(ui),
+                hotWaterMl = hotWaterMl(ui),
                 targetsKnown = !ui.awaitingHubValues,
                 tempUnit = ui.tempUnit,
                 volumeUnit = ui.volumeUnit,
@@ -1829,6 +1831,8 @@ private fun BrewFoot(
     modeElapsedMs: Long,
     profileUploading: Boolean,
     targets: ModeTargets,
+    /** The hot-water amount, ml ([hotWaterMl]). */
+    hotWaterMl: Float,
     /** False on a remote before the hub's first snapshot ("—" subs). */
     targetsKnown: Boolean,
     tempUnit: String,
@@ -1895,7 +1899,7 @@ private fun BrewFoot(
                 val waterSub =
                     if (dispensing) modeRunningSub(modeElapsedMs, targets.hotWaterTimeoutS)
                     else if (!targetsKnown) UNKNOWN_VALUE
-                    else "${formatTempCompact(targets.hotWaterTempC, tempUnit)} · ${formatVolume(targets.hotWaterVolumeMl, volumeUnit)}"
+                    else "${formatTempCompact(targets.hotWaterTempC, tempUnit)} · ${formatVolume(hotWaterMl, volumeUnit)}"
                 val flushSub =
                     if (flushing) modeRunningSub(modeElapsedMs, targets.flushTimeS)
                     else if (!targetsKnown) UNKNOWN_VALUE

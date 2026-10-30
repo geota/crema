@@ -120,7 +120,7 @@ object QcBounds {
     const val WATER_TEMP_MIN_C = 40.0
     const val WATER_TEMP_MAX_C = 98.0
     const val WATER_VOL_MIN_ML = 20.0
-    const val WATER_VOL_MAX_ML = 500.0
+    const val WATER_VOL_MAX_ML = 250.0
     const val FLUSH_TIME_MIN_S = 1.0
     const val FLUSH_TIME_MAX_S = 20.0
     const val FLUSH_TEMP_MIN_C = 60.0

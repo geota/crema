@@ -56,10 +56,11 @@ impl CremaCore {
     /// [`crate::Event::FirmwareLockoutHit`], no commands); empty on a
     /// read-only mirror.
     ///
-    /// **The on-ready sweep only.** It also settles the connection for the
-    /// profile sync (the first sweep of a link generation uploads the desired
-    /// profile, see [`crate::profile_sync`]), so the shells call it only from
-    /// the link's ready transition. Re-sending the settings at any other time
+    /// **The on-ready sweep only.** It also settles the link session the
+    /// profile sync and the packet sync share (the first sweep of a link
+    /// generation uploads the desired profile, see [`crate::profile_sync`],
+    /// and lets the packet be written, see [`crate::packet_sync`]), so the
+    /// shells call it only from the link's ready transition. Re-sending the settings at any other time
     /// (a restored backup) goes through
     /// [`reapply_machine_settings`](Self::reapply_machine_settings), which
     /// leaves the sync state alone: a re-sweep while the DE1 is down must not
@@ -68,11 +69,12 @@ impl CremaCore {
         if let Some(out) = self.refuse_if_firmware_locked("connect_sweep") {
             return out;
         }
+        // Settle first, so the packet sync lets this sweep's packet through;
+        // then the settings; the desired profile goes out after them, on
+        // every connect (reaprime `initSettled`) — see `profile_sync`.
+        let newly_settled = self.settle_link();
         let mut out = self.machine_settings_writes(settings, now_ms);
-        // The connection is settled: the desired profile goes out after the
-        // settings, on every connect (reaprime `initSettled`) — see
-        // `profile_sync`.
-        self.profile_sync_settled(&mut out);
+        self.profile_sync_settled(newly_settled, &mut out);
         self.gate_read_only(out)
     }
 
@@ -80,7 +82,8 @@ impl CremaCore {
     /// machine setting Crema owns a preference for — without settling the
     /// profile sync's connection: for re-sending the settings outside the
     /// link's ready transition (a restored backup). Safe while the DE1 is
-    /// down; the sync state is untouched. Refused during a firmware flash
+    /// down: it never settles the link, so on a down link the packet is
+    /// neither written nor recorded and the sync state is untouched. Refused during a firmware flash
     /// like the sweep.
     pub fn reapply_machine_settings(
         &mut self,
@@ -173,16 +176,16 @@ impl CremaCore {
         let tank = whole_degrees(settings.tank_temp_c, MAX_TANK_TEMP_C);
         self.tank_temp_threshold_c = Some(tank);
         append(&mut out, self.set_tank_threshold(tank));
-        // The steam / hot-water packet: the user's dials, the rest kept.
-        append(
-            &mut out,
-            self.set_steam_hotwater_targets(&SteamHotWaterTargets {
-                steam_temp_c: settings.steam_temp_c,
-                steam_timeout_s: settings.steam_timeout_s,
-                hot_water_temp_c: settings.hot_water_temp_c,
-                hot_water_volume_ml: settings.hot_water_volume_ml,
-            }),
-        );
+        // The steam / hot-water packet: every sweep writes it (the record is
+        // cleared), on a settled link, once the machine leaves a flow state.
+        self.store_steam_hotwater_targets(&SteamHotWaterTargets {
+            steam_temp_c: settings.steam_temp_c,
+            steam_timeout_s: settings.steam_timeout_s,
+            hot_water_temp_c: settings.hot_water_temp_c,
+            hot_water: settings.hot_water,
+        });
+        self.shot_settings_written = None;
+        self.drive_shot_settings(&mut out, false);
         append(&mut out, self.set_steam_flow(settings.steam_flow_ml_s));
         append(
             &mut out,
@@ -295,7 +298,11 @@ mod tests {
             steam_temp_c: 150.0,
             steam_timeout_s: 90.0,
             hot_water_temp_c: 80.0,
-            hot_water_volume_ml: 150.0,
+            hot_water: de1_domain::HotWaterDose {
+                mode: de1_domain::HotWaterMode::Volume,
+                volume_ml: 150.0,
+                ..de1_domain::HotWaterDose::default()
+            },
             steam_flow_ml_s: 1.2,
             flush_timeout_s: 4.0,
             flush_temp_c: 90.0,
@@ -310,9 +317,17 @@ mod tests {
         }
     }
 
+    /// A core whose DE1 reported Idle: the packet sync waits out an unknown
+    /// state.
+    fn idle_core() -> CremaCore {
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        core
+    }
+
     #[test]
     fn the_sweep_asserts_every_owned_setting_in_order() {
-        let mut core = CremaCore::new();
+        let mut core = idle_core();
         let out = core.connect_sweep(&snapshot(), 1_000);
         assert_eq!(
             mmr_writes(&out),
@@ -364,8 +379,9 @@ mod tests {
     #[test]
     fn the_sweep_keeps_the_machines_steam_packet_fields() {
         // AC-F5.1: the sweep goes through `set_steam_hotwater_targets`, so
-        // the flag byte and the fields Crema doesn't own survive it.
-        let mut core = CremaCore::new();
+        // the flag byte and the fields Crema doesn't own survive it; the
+        // hot-water timeout is Crema's.
+        let mut core = idle_core();
         let machine = ShotSettings {
             steam_flags: 0x80,
             hot_water_timeout_s: 45.0,
@@ -387,11 +403,175 @@ mod tests {
             })
             .unwrap();
         assert_eq!(packet.steam_flags, 0x80);
-        assert_eq!(packet.hot_water_timeout_s, 45.0);
+        assert_eq!(packet.hot_water_timeout_s, 60.0);
         assert_eq!(packet.espresso_volume_ml, 220.0);
         assert_eq!(packet.group_temp_c, 88.0);
         assert_eq!(packet.steam_temp_c, 150.0);
         assert_eq!(packet.hot_water_volume_ml, 150.0);
+    }
+
+    /// The packets in an output, decoded.
+    fn packets(out: &CoreOutput) -> Vec<ShotSettings> {
+        out.commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1ShotSettings,
+                    data,
+                } => ShotSettings::decode(data).ok(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn with_dose(dose: de1_domain::HotWaterDose) -> ConnectSweepSettings {
+        ConnectSweepSettings {
+            hot_water: dose,
+            ..snapshot()
+        }
+    }
+
+    /// AC-HW9: after a drop the scale left; the reconnect's sweep writes the
+    /// packet without the backstop.
+    #[test]
+    fn sweep_after_drop_writes_current_packet() {
+        let mut core = idle_core();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.scale_reading_seen = true; // it has reported a weight
+        let first = core.connect_sweep(&snapshot(), 100);
+        assert_eq!(packets(&first)[0].hot_water_volume_ml, 250.0);
+        let _ = core.de1_link_lost();
+        core.disconnect_scale();
+        let _ = core.on_notification(Source::De1State, &[2, 0], 200);
+        let again = core.connect_sweep(&snapshot(), 300);
+        assert_eq!(packets(&again)[0].hot_water_volume_ml, 150.0);
+    }
+
+    /// AC-HW10: every connect writes, even bytes the previous generation
+    /// wrote; a second sweep on the same link writes too; F5's kept fields
+    /// survive.
+    #[test]
+    fn sweep_always_writes() {
+        let mut core = idle_core();
+        let machine = ShotSettings {
+            steam_flags: 0x40,
+            espresso_volume_ml: 220.0,
+            group_temp_c: 88.0,
+            ..ShotSettings::default()
+        };
+        let _ = core.on_notification(Source::De1ShotSettings, &machine.encode(), 50);
+        let first = packets(&core.connect_sweep(&snapshot(), 100));
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            (
+                first[0].steam_flags,
+                first[0].espresso_volume_ml,
+                first[0].group_temp_c
+            ),
+            (0x40, 220.0, 88.0)
+        );
+        assert_eq!(
+            packets(&core.connect_sweep(&snapshot(), 150)),
+            first,
+            "same link"
+        );
+        let _ = core.de1_link_lost();
+        let _ = core.on_notification(Source::De1State, &[2, 0], 200);
+        assert_eq!(
+            packets(&core.connect_sweep(&snapshot(), 300)),
+            first,
+            "next link"
+        );
+    }
+
+    /// AC-HW10: the sweep writes the resolved hot-water target.
+    #[test]
+    fn sweep_writes_hot_water_target() {
+        let mut core = idle_core();
+        core.set_profile_target_weight(Some(50.0));
+        let ratio = de1_domain::HotWaterDose::default();
+        let w = packets(&core.connect_sweep(&with_dose(ratio), 100));
+        assert_eq!(
+            (w[0].hot_water_volume_ml, w[0].hot_water_timeout_s),
+            (150.0, 60.0)
+        );
+        let time = de1_domain::HotWaterDose {
+            mode: de1_domain::HotWaterMode::Time,
+            time_s: 45.0,
+            ..ratio
+        };
+        let w = packets(&core.connect_sweep(&with_dose(time), 200));
+        assert_eq!(
+            (w[0].hot_water_volume_ml, w[0].hot_water_timeout_s),
+            (0.0, 45.0)
+        );
+    }
+
+    /// AC-HW10 (R1): an on-ready sweep settles first (its packet goes out),
+    /// and F7's profile upload comes after every settings write.
+    #[test]
+    fn on_ready_order_settle_writes_then_f7() {
+        let mut core = CremaCore::new_with_model(1);
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        let profile = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
+        let _ = core.set_desired_profile(
+            Some(&profile),
+            &de1_domain::BrewOverrides::default(),
+            std::time::Duration::ZERO,
+        );
+        let out = core.connect_sweep(&snapshot(), 100);
+        let t = targets(&out);
+        let packet = t
+            .iter()
+            .position(|t| *t == WriteTarget::De1ShotSettings)
+            .expect("the sweep's packet");
+        let header = t
+            .iter()
+            .position(|t| *t == WriteTarget::De1ProfileHeader)
+            .expect("F7 uploads on the connect");
+        assert!(packet < header);
+        let last_setting = t
+            .iter()
+            .rposition(|t| {
+                !matches!(
+                    t,
+                    WriteTarget::De1ProfileHeader | WriteTarget::De1ProfileFrame
+                )
+            })
+            .unwrap();
+        assert!(
+            last_setting < header,
+            "every setting before the upload: {t:?}"
+        );
+    }
+
+    /// AC-HW10c (R6): a re-sweep (a restore) never settles: before the
+    /// on-ready sweep it writes no packet and records nothing, and the
+    /// on-ready sweep then settles, writes the packet and F7 uploads.
+    #[test]
+    fn resweep_never_settles() {
+        let mut core = CremaCore::new_with_model(1);
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        let profile = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
+        let _ = core.set_desired_profile(
+            Some(&profile),
+            &de1_domain::BrewOverrides::default(),
+            std::time::Duration::ZERO,
+        );
+        let out = core.reapply_machine_settings(&snapshot(), 100);
+        assert!(packets(&out).is_empty());
+        assert!(!targets(&out).contains(&WriteTarget::De1ProfileHeader));
+        assert!(!core.link.settled);
+        assert!(core.shot_settings_written.is_none());
+        let out = core.connect_sweep(&snapshot(), 200);
+        assert!(core.link.settled);
+        assert_eq!(packets(&out).len(), 1);
+        assert!(targets(&out).contains(&WriteTarget::De1ProfileHeader));
+        // Once settled, a re-sweep rewrites the packet.
+        assert_eq!(
+            packets(&core.reapply_machine_settings(&snapshot(), 300)).len(),
+            1
+        );
     }
 
     #[test]
@@ -405,7 +585,8 @@ mod tests {
 
     #[test]
     fn steam_eco_is_armed_by_the_sweep() {
-        let mut core = CremaCore::new();
+        // Idle: in an unknown state the packet waits, eco's included.
+        let mut core = idle_core();
         let mut s = snapshot();
         s.steam_eco = true;
         let _ = core.connect_sweep(&s, 0);

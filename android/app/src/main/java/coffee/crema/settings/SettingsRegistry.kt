@@ -214,6 +214,12 @@ private val NONE = MirrorSource.NONE
  * `VisualizerSyncPrefs`, `DecentState`) or `Owner.name(ParamTypes)`.
  */
 val NOT_SETTINGS: Map<String, String> = mapOf(
+    // The hot-water dose (hot-water modes spec §2.6): carried with the bundle
+    // here; rows A22–A25 come with the Android hot-water card (HW-3).
+    "AppPrefs.qcHotWaterMode" to "hot-water dose, tagged in HW-3",
+    "AppPrefs.qcHotWaterTimeS" to "hot-water dose, tagged in HW-3",
+    "AppPrefs.qcHotWaterTimeNoLimit" to "hot-water dose, tagged in HW-3",
+    "AppPrefs.qcHotWaterRatio" to "hot-water dose, tagged in HW-3",
     // Maintenance counters and timestamps: measured, not chosen.
     "MaintenanceState.totalLitres" to "a counter",
     "MaintenanceState.filterBaselineLitres" to "a counter baseline",

@@ -24,6 +24,8 @@
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
+use crate::hot_water::{HotWaterMode, StoredHotWater};
+
 /// Guided-brew cue sound when the user never chose (issue #10): off.
 pub const DEFAULT_BREW_CUE_SOUND: bool = false;
 /// Guided-brew cue haptics when the user never chose (issue #10): on.
@@ -172,8 +174,24 @@ pub struct CommonSettings {
     pub qc_steam_temp_c: f32,
     /// Quick-Controls hot-water temperature, °C.
     pub qc_hot_water_temp_c: f32,
-    /// Quick-Controls hot-water volume, ml.
+    /// Quick-Controls hot-water volume, ml: the volume-mode value.
     pub qc_hot_water_volume_ml: f32,
+    /// Quick-Controls hot-water mode. `None` in settings from before the
+    /// modes: the load-time migration ([`crate::initial_hot_water_dose`])
+    /// decides, and the shells persist its result once. Like the three
+    /// fields after it, an `Option` so older blobs and backups decode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qc_hot_water_mode: Option<HotWaterMode>,
+    /// Quick-Controls hot-water time-mode seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qc_hot_water_time_s: Option<f32>,
+    /// Quick-Controls hot-water time mode pours until stopped (honoured only
+    /// when the firmware has a value for it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qc_hot_water_time_no_limit: Option<bool>,
+    /// Quick-Controls hot-water ratio: water per gram of shot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qc_hot_water_ratio: Option<f32>,
     /// Quick-Controls group-flush duration, seconds.
     pub qc_flush_time_s: f32,
     /// Quick-Controls group-flush temperature, °C.
@@ -224,6 +242,10 @@ impl Default for CommonSettings {
             qc_steam_temp_c: 148.0,
             qc_hot_water_temp_c: 80.0,
             qc_hot_water_volume_ml: 150.0,
+            qc_hot_water_mode: None,
+            qc_hot_water_time_s: None,
+            qc_hot_water_time_no_limit: None,
+            qc_hot_water_ratio: None,
             qc_flush_time_s: 4.0,
             qc_flush_temp_c: 95.0,
         }
@@ -231,6 +253,17 @@ impl Default for CommonSettings {
 }
 
 impl CommonSettings {
+    /// The stored hot-water fields, for [`crate::initial_hot_water_dose`].
+    pub fn stored_hot_water(&self) -> StoredHotWater {
+        StoredHotWater {
+            mode: self.qc_hot_water_mode,
+            volume_ml: Some(self.qc_hot_water_volume_ml),
+            time_s: self.qc_hot_water_time_s,
+            time_no_limit: self.qc_hot_water_time_no_limit,
+            ratio: self.qc_hot_water_ratio,
+        }
+    }
+
     /// Effective guided-brew cue sound: the explicit choice, else
     /// [`DEFAULT_BREW_CUE_SOUND`].
     pub fn brew_cue_sound_on(&self) -> bool {
@@ -439,7 +472,9 @@ pub fn sanitize_common_settings(blob: &serde_json::Value) -> CommonSettings {
 /// What "Restore defaults" leaves: every common setting back to the default
 /// bundle except the two facts about the user's setup it keeps, the weight
 /// unit (it matches their scale) and the mains line frequency. The idle-sleep
-/// timer gets its default explicitly.
+/// timer gets its default explicitly, and so does the hot-water dose: ratio
+/// 1:3 stored with its mode, so the next load doesn't run the never-changed
+/// rule on it.
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -457,6 +492,12 @@ pub fn reset_settings(current: &CommonSettings, line_frequency_hz: f32) -> Setti
     let mut common = default_common_settings();
     common.weight_unit = one_of(&current.weight_unit, &["g", "oz"], &common.weight_unit);
     common.idle_sleep_min = Some(crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN);
+    let dose = crate::hot_water::HotWaterDose::default();
+    common.qc_hot_water_mode = Some(dose.mode);
+    common.qc_hot_water_time_s = Some(dose.time_s);
+    common.qc_hot_water_time_no_limit = Some(dose.time_no_limit);
+    common.qc_hot_water_volume_ml = dose.volume_ml;
+    common.qc_hot_water_ratio = Some(dose.ratio);
     let line_frequency_hz = if line_frequency_hz == 50.0 || line_frequency_hz == 60.0 {
         line_frequency_hz
     } else {
@@ -516,6 +557,53 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         assert!(!json.contains("brewCueSound"), "{json}");
         assert!(!json.contains("brewCueHaptics"), "{json}");
+    }
+
+    /// AC-HW8: a blob from before the hot-water modes decodes, and the
+    /// migration follows the never-changed rule.
+    #[test]
+    fn old_blob_migrates() {
+        use crate::hot_water::{HOT_WATER_FIRMWARE, initial_hot_water_dose};
+        let fw = &HOT_WATER_FIRMWARE;
+        let c: CommonSettings =
+            serde_json::from_str(r#"{"qcHotWaterVolumeMl":150,"qcHotWaterTempC":80}"#).unwrap();
+        assert_eq!(c.qc_hot_water_mode, None);
+        let d = initial_hot_water_dose(&c.stored_hot_water(), None, fw);
+        assert_eq!((d.mode, d.ratio), (HotWaterMode::Ratio, 3.0));
+        let c: CommonSettings = serde_json::from_str(r#"{"qcHotWaterVolumeMl":200}"#).unwrap();
+        let d = initial_hot_water_dose(&c.stored_hot_water(), None, fw);
+        assert_eq!((d.mode, d.volume_ml), (HotWaterMode::Volume, 200.0));
+        // Unset fields aren't written, so an older build reads the blob as
+        // before; a set mode round-trips.
+        let json = serde_json::to_string(&CommonSettings::default()).unwrap();
+        assert!(!json.contains("qcHotWaterMode"), "{json}");
+        let set = CommonSettings {
+            qc_hot_water_mode: Some(HotWaterMode::Time),
+            qc_hot_water_time_s: Some(45.0),
+            ..CommonSettings::default()
+        };
+        let back: CommonSettings =
+            serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
+        assert_eq!(back, set);
+    }
+
+    /// AC-HW21 / AC-HW25 (the core's half): Restore defaults stores the
+    /// default dose with its mode, ratio 1:3, whatever the user had.
+    #[test]
+    fn reset_stores_the_default_hot_water_dose() {
+        let current = CommonSettings {
+            qc_hot_water_mode: Some(HotWaterMode::Time),
+            qc_hot_water_time_s: Some(90.0),
+            qc_hot_water_volume_ml: 200.0,
+            qc_hot_water_ratio: Some(2.0),
+            ..CommonSettings::default()
+        };
+        let r = reset_settings(&current, 0.0).common;
+        assert_eq!(r.qc_hot_water_mode, Some(HotWaterMode::Ratio));
+        assert_eq!(r.qc_hot_water_ratio, Some(3.0));
+        assert_eq!(r.qc_hot_water_time_s, Some(30.0));
+        assert_eq!(r.qc_hot_water_time_no_limit, Some(false));
+        assert_eq!(r.qc_hot_water_volume_ml, 150.0);
     }
 
     #[test]
@@ -712,6 +800,10 @@ mod tests {
             CommonSettings {
                 weight_unit: "oz".into(),
                 idle_sleep_min: Some(crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN),
+                qc_hot_water_mode: Some(HotWaterMode::Ratio),
+                qc_hot_water_time_s: Some(30.0),
+                qc_hot_water_time_no_limit: Some(false),
+                qc_hot_water_ratio: Some(3.0),
                 ..default_common_settings()
             }
         );

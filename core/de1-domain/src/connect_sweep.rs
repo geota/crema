@@ -20,7 +20,7 @@
 //! | steam two-tap stop | MMR `0x803850` | 0/1 | `set_heater_tweaks` |
 //! | refill point | `WaterLevels` (`cuuid_11`) | mm | `de1_send_waterlevel_settings` |
 //! | tank-temp threshold | MMR `0x80380C` | °C, 0..=45 | profile upload (de1app `de1_send_shot_frames`, Decenza `writeTankPreheatForProfile`) |
-//! | steam / hot-water | `ShotSettings` (`cuuid_0B`) | packet | `de1_send_steam_hotwater_settings` |
+//! | steam / hot-water | `ShotSettings` (`cuuid_0B`) | packet (the hot-water dose resolved by `hot_water`) | `de1_send_steam_hotwater_settings` |
 //! | steam flow | MMR `0x803828` | ml/s × 100 | crema QC |
 //! | flush timeout / temp | MMR `0x803848` / `0x803844` | × 10 | `set_heater_tweaks` / reaprime |
 //! | steam eco | re-sent `ShotSettings` | — | crema |
@@ -138,8 +138,9 @@ pub struct ConnectSweepSettings {
     pub steam_timeout_s: f32,
     /// Hot-water temperature, °C.
     pub hot_water_temp_c: f32,
-    /// Hot-water volume, ml.
-    pub hot_water_volume_ml: f32,
+    /// The hot-water dose (the core resolves the packet's volume and timeout
+    /// from it).
+    pub hot_water: crate::hot_water::HotWaterDose,
     /// Steam flow, ml/s.
     pub steam_flow_ml_s: f32,
     /// Group-flush timeout, s.
@@ -179,7 +180,11 @@ impl Default for ConnectSweepSettings {
             steam_temp_c: c.qc_steam_temp_c,
             steam_timeout_s: c.qc_steam_time_s,
             hot_water_temp_c: c.qc_hot_water_temp_c,
-            hot_water_volume_ml: c.qc_hot_water_volume_ml,
+            hot_water: crate::hot_water::initial_hot_water_dose(
+                &c.stored_hot_water(),
+                None,
+                &crate::hot_water::HOT_WATER_FIRMWARE,
+            ),
             steam_flow_ml_s: c.qc_steam_flow_ml_s,
             flush_timeout_s: c.qc_flush_time_s,
             flush_temp_c: c.qc_flush_temp_c,
@@ -209,10 +214,11 @@ mod tests {
             (d.steam_temp_c, d.steam_timeout_s, d.steam_flow_ml_s),
             (c.qc_steam_temp_c, c.qc_steam_time_s, c.qc_steam_flow_ml_s)
         );
-        assert_eq!(
-            (d.hot_water_temp_c, d.hot_water_volume_ml),
-            (c.qc_hot_water_temp_c, c.qc_hot_water_volume_ml)
-        );
+        assert_eq!(d.hot_water_temp_c, c.qc_hot_water_temp_c);
+        // The default bundle stores no hot-water mode: the never-changed
+        // rule gives the default dose, ratio 1:3 with its 150 ml value.
+        assert_eq!(d.hot_water, crate::hot_water::HotWaterDose::default());
+        assert_eq!(d.hot_water.volume_ml, c.qc_hot_water_volume_ml);
         assert_eq!(
             (d.flush_timeout_s, d.flush_temp_c),
             (c.qc_flush_time_s, c.qc_flush_temp_c)

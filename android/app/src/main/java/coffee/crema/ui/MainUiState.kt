@@ -105,6 +105,10 @@ data class MainUiState(
      *  until the first read. Drives the mode chips' target sub-labels and the
      *  steam / hot-water timers (web `ui.de1ShotSettings` parity). */
     val de1ShotSettings: EventShotSettingsReadInner? = null,
+    /** The core's resolved hot-water target (`Event.HotWaterTarget`, or a
+     *  re-read after this device's own input changes): the chips and mode
+     *  card show its amount. Null until the core has a dose. */
+    val hotWaterTarget: coffee.crema.core.HotWaterTarget? = null,
     /** Monotonic ms when the DE1 entered the current service mode (Steam /
      *  HotWater / HotWaterRinse), or null when no service mode is running. */
     val modeStartedAtMs: Long? = null,
@@ -307,6 +311,12 @@ data class MainUiState(
     val qcSteamTempC: Float = DefaultPrefs.qcSteamTempC,
     val qcHotWaterTempC: Float = DefaultPrefs.qcHotWaterTempC,
     val qcHotWaterVolumeMl: Float = DefaultPrefs.qcHotWaterVolumeMl,
+    /** The hot-water dose's mode and time / No limit / ratio values (the
+     *  volume is [qcHotWaterVolumeMl]); carried with the settings bundle. */
+    val qcHotWaterMode: coffee.crema.core.HotWaterMode? = DefaultPrefs.qcHotWaterMode,
+    val qcHotWaterTimeS: Float? = DefaultPrefs.qcHotWaterTimeS,
+    val qcHotWaterTimeNoLimit: Boolean? = DefaultPrefs.qcHotWaterTimeNoLimit,
+    val qcHotWaterRatio: Float? = DefaultPrefs.qcHotWaterRatio,
     val qcFlushTimeS: Float = DefaultPrefs.qcFlushTimeS,
     val qcFlushTempC: Float = DefaultPrefs.qcFlushTempC,
     /** Persisted Quick-Controls grinder click (issue 15); null = never dialed. */
