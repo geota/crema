@@ -16,6 +16,8 @@ import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import coffee.crema.ui.TelemetrySample
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -116,19 +118,30 @@ data class StoredShot(
      */
     val drinker: String? = null,
     /**
-     * The grinder this shot was pulled on, when the shot itself carries one —
-     * an imported or restored shot (the core wire `grinderModel`). Null for
-     * shots captured here, which use the Settings grinder at upload time.
-     * Kept so a backup round trip no longer drops it, and searched like the
-     * web. Additive.
+     * The grinder this shot was pulled on — frozen at capture by the core
+     * (F10: the bean's grinder, else the Settings grinder), or carried by an
+     * imported / restored shot. Null only for shots captured before F10,
+     * which fall back to the Settings grinder at upload time.
      */
     val grinderModel: String? = null,
     /**
-     * A downsampled telemetry slice for the History detail chart (≤
-     * [SHOT_SAMPLE_CAP] points). Empty for shots captured before this field
-     * existed (additive — older records deserialise cleanly).
+     * The shot's telemetry — the core's full record since F10 (no 200-point
+     * cut, so a re-upload reproduces Visualizer's telemetry hash). Older
+     * records carry a downsampled slice. Persisted in a per-shot series file,
+     * not in the history file ([HistoryStore]).
      */
     val samples: List<TelemetrySample> = emptyList(),
+    /** Shot-level tags — the bean's tags copied at capture (F10). */
+    val tags: List<String> = emptyList(),
+    /** The pre-infusion the shot ran, seconds (F10: the as-run value). */
+    val preinfuseTargetS: Float? = null,
+    /** Whether stop-on-weight was armed (F10, from the core). */
+    val stopOnWeight: Boolean? = null,
+    /** Whether auto-tare was armed (F10, from the core). */
+    val autoTare: Boolean? = null,
+    /** Why the core stopped the shot — the core `StopReason` name (`"Weight"`,
+     *  `"Volume"`, `"MaxTime"`, …) — or null when it ended on its own. */
+    val stopReason: String? = null,
     /**
      * Per-shot Visualizer privacy override — `"public" | "unlisted" |
      * "private"`, or null to inherit the Sharing default at upload/patch
@@ -416,22 +429,9 @@ fun brewHistoryStats(shots: List<StoredShot>): BrewHistoryStats {
     }
 }
 
-/** Max telemetry points stored per shot — enough for a faithful detail
- *  chart (mirrors the core's `STORAGE_SAMPLE_CAP`). */
+/** Max points a guided session's weight series keeps (the core's
+ *  `STORAGE_SAMPLE_CAP`). Espresso telemetry is stored whole since F10. */
 const val SHOT_SAMPLE_CAP: Int = 200
-
-/**
- * Downsample a shot's telemetry to ≤ [SHOT_SAMPLE_CAP] points so the
- * persisted history file stays small while the detail chart still reads
- * faithfully. The selection policy (every Nth, always including the last)
- * lives in the core (`de1_domain::downsample_indices`, review #42) — the
- * indices come back and the shell applies them to its own sample type.
- */
-fun downsampleForStorage(samples: List<TelemetrySample>): List<TelemetrySample> {
-    if (samples.size <= SHOT_SAMPLE_CAP) return samples
-    return downsampleIndices(samples.size.toUInt(), SHOT_SAMPLE_CAP.toUInt())
-        .map { samples[it.toInt()] }
-}
 
 /**
  * Thin a guided session's weight series to ~[SHOT_SAMPLE_CAP] samples before
@@ -453,29 +453,116 @@ fun downsampleBrewSeries(
 class HistoryStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
-    /** The stored shots, or empty when absent. An unreadable file is kept aside
-     *  and reported (see [loadStore]) rather than silently loaded as empty. */
-    suspend fun load(): List<StoredShot> = withContext(Dispatchers.IO) {
-        loadStore(file, "shot history") {
-            json.decodeFromString(ListSerializer(StoredShot.serializer()), it)
-        }.valueOrNull() ?: emptyList()
+    /** Per-shot telemetry files (F10): the full series of 300 shots is ~14 MB
+     *  of JSON, too much to rewrite on every rating edit. */
+    private val seriesDir get() = File(context.filesDir, SERIES_DIR)
+
+    /** Saves and loads run on IO and may overlap; one at a time. */
+    private val lock = Mutex()
+
+    /** Series files that already hold the in-memory series, so a save writes
+     *  only new ones (a series never changes after capture, except a
+     *  curve-less stub's backfill, which starts empty). */
+    private val written = mutableSetOf<String>()
+
+    /** The stored shot ROWS, or empty when absent — without their series
+     *  (see [loadSeries]), so startup can show the history and go on without
+     *  reading every series first. An unreadable file is kept aside and
+     *  reported (see [loadStore]) rather than silently loaded as empty. A row
+     *  saved before the split still carries its series inline; the next save
+     *  moves it out. */
+    suspend fun loadRows(): List<StoredShot> = withContext(Dispatchers.IO) {
+        lock.withLock {
+            loadStore(file, "shot history") {
+                json.decodeFromString(ListSerializer(StoredShot.serializer()), it)
+            }.valueOrNull() ?: emptyList()
+        }
+    }
+
+    /** The series of each of [ids] that has a series file, by id. On IO; at
+     *  startup it runs after the rows are shown. */
+    suspend fun loadSeries(ids: Collection<String>): Map<String, List<TelemetrySample>> =
+        withContext(Dispatchers.IO) {
+            lock.withLock {
+                ids.mapNotNull { id ->
+                    readSeries(id)?.let { series ->
+                        written += seriesFile(id).name
+                        id to series
+                    }
+                }.toMap()
+            }
+        }
+
+    /** The stored shots with their series ([loadRows] then [loadSeries]). */
+    suspend fun load(): List<StoredShot> {
+        val rows = loadRows()
+        val series = loadSeries(rows.filter { it.samples.isEmpty() }.map { it.id })
+        return rows.map { row -> series[row.id]?.let { row.copy(samples = it) } ?: row }
     }
 
     suspend fun save(shots: List<StoredShot>) {
         withContext(Dispatchers.IO) {
-            runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), shots) }
-                .onSuccess { saveStore(file, it) }
+            lock.withLock {
+                for (shot in shots) {
+                    val name = seriesFile(shot.id).name
+                    if (shot.samples.isEmpty() || name in written) continue
+                    if (writeSeries(shot.id, shot.samples)) written += name
+                }
+                pruneSeries(shots.mapTo(HashSet()) { seriesFile(it.id).name })
+                runCatching {
+                    json.encodeToString(
+                        ListSerializer(StoredShot.serializer()),
+                        shots.map { if (it.samples.isEmpty()) it else it.copy(samples = emptyList()) },
+                    )
+                }.onSuccess { saveStore(file, it) }
+            }
         }
     }
 
-    /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
+    /** Delete the store file, every copy of it and the series files (Erase all
+     *  data; final review 05 N-1). */
     suspend fun erase() {
-        withContext(Dispatchers.IO) { eraseStore(file) }
+        withContext(Dispatchers.IO) {
+            lock.withLock {
+                eraseStore(file)
+                seriesDir.listFiles()?.forEach { eraseStore(it) }
+                written.clear()
+            }
+        }
+    }
+
+    private fun seriesFile(id: String): File =
+        File(seriesDir, id.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".json")
+
+    private fun readSeries(id: String): List<TelemetrySample>? {
+        val f = seriesFile(id)
+        if (!f.exists()) return null
+        return runCatching {
+            json.decodeFromString(ListSerializer(TelemetrySample.serializer()), f.readText())
+        }.getOrNull()
+    }
+
+    private fun writeSeries(id: String, samples: List<TelemetrySample>): Boolean {
+        seriesDir.mkdirs()
+        return runCatching {
+            json.encodeToString(ListSerializer(TelemetrySample.serializer()), samples)
+        }.map { saveStore(seriesFile(id), it, keepBackup = false) }.getOrDefault(false)
+    }
+
+    /** Drop the series files of shots no longer in the history. */
+    private fun pruneSeries(keep: Set<String>) {
+        seriesDir.listFiles()?.forEach { f ->
+            if (f.name.endsWith(".json") && f.name !in keep) {
+                f.delete()
+                written.remove(f.name)
+            }
+        }
     }
 
     companion object {
         /** Keep the most recent N shots (matches the web cap). */
         const val MAX_SHOTS = 300
         private const val FILE_NAME = "shots.json"
+        private const val SERIES_DIR = "shot-series"
     }
 }

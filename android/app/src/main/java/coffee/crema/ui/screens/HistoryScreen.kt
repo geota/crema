@@ -220,7 +220,9 @@ fun HistoryScreen(
         if (uri != null) vm.importShots(uri)
     }
     var pendingExport by remember { mutableStateOf<String?>(null) }
-    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    // octet-stream keeps the suggested `.crema.jsonl` name as given: with
+    // "application/json" the storage provider appends ".json".
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val t = pendingExport; pendingExport = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
@@ -312,7 +314,7 @@ fun HistoryScreen(
                     }
                     if (ui.history.isNotEmpty()) {
                         Spacer(Modifier.width(4.dp))
-                        CremaIconButton("download-simple", { launchSave("crema-history.json", vm.shotsJson(null)) }, tone = CremaIconTone.Tonal)
+                        CremaIconButton("download-simple", { launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) }, tone = CremaIconTone.Tonal)
                         if (!sel.selecting && ui.history.size >= 2) {
                             Spacer(Modifier.width(4.dp))
                             CremaIconButton("arrows-left-right", sel::enter, tone = CremaIconTone.Tonal)
@@ -350,10 +352,10 @@ fun HistoryScreen(
                                 icon = "download-simple",
                                 label = "Export",
                                 menuHead = "Export as",
-                                onPrimary = { launchSave("crema-history.json", vm.shotsJson(null)) },
+                                onPrimary = { launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) },
                                 items = listOf(
-                                    SplitMenuItem("file-text", "All shots", "Every shot as one Crema JSON file. Re-importable in Crema.") { launchSave("crema-history.json", vm.shotsJson(null)) },
-                                    SplitMenuItem("file-code", "Current filter", "Only the ${shots.size} shot(s) matching your search and date range.") { launchSave("crema-history-filtered.json", vm.shotsJson(shots.map { it.id })) },
+                                    SplitMenuItem("file-text", "All shots", "Every shot as one Crema file. Re-importable in Crema on web and Android.") { launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) },
+                                    SplitMenuItem("file-code", "Current filter", "Only the ${shots.size} shot(s) matching your search and date range.") { launchSave("crema-history-filtered.crema.jsonl", vm.shotsJson(shots.map { it.id })) },
                                 ),
                             )
                             if (!sel.selecting) {
