@@ -465,22 +465,39 @@ class HistoryStore(private val context: Context, private val json: Json) {
      *  curve-less stub's backfill, which starts empty). */
     private val written = mutableSetOf<String>()
 
-    /** The stored shots, or empty when absent. An unreadable file is kept aside
-     *  and reported (see [loadStore]) rather than silently loaded as empty.
-     *  Each shot's series comes from its series file; a row saved before the
-     *  split still carries it inline, and the next save moves it out. */
-    suspend fun load(): List<StoredShot> = withContext(Dispatchers.IO) {
+    /** The stored shot ROWS, or empty when absent — without their series
+     *  (see [loadSeries]), so startup can show the history and go on without
+     *  reading every series first. An unreadable file is kept aside and
+     *  reported (see [loadStore]) rather than silently loaded as empty. A row
+     *  saved before the split still carries its series inline; the next save
+     *  moves it out. */
+    suspend fun loadRows(): List<StoredShot> = withContext(Dispatchers.IO) {
         lock.withLock {
-            val shots = loadStore(file, "shot history") {
+            loadStore(file, "shot history") {
                 json.decodeFromString(ListSerializer(StoredShot.serializer()), it)
             }.valueOrNull() ?: emptyList()
-            shots.map { shot ->
-                if (shot.samples.isNotEmpty()) return@map shot
-                val series = readSeries(shot.id) ?: return@map shot
-                written += seriesFile(shot.id).name
-                shot.copy(samples = series)
+        }
+    }
+
+    /** The series of each of [ids] that has a series file, by id. On IO; at
+     *  startup it runs after the rows are shown. */
+    suspend fun loadSeries(ids: Collection<String>): Map<String, List<TelemetrySample>> =
+        withContext(Dispatchers.IO) {
+            lock.withLock {
+                ids.mapNotNull { id ->
+                    readSeries(id)?.let { series ->
+                        written += seriesFile(id).name
+                        id to series
+                    }
+                }.toMap()
             }
         }
+
+    /** The stored shots with their series ([loadRows] then [loadSeries]). */
+    suspend fun load(): List<StoredShot> {
+        val rows = loadRows()
+        val series = loadSeries(rows.filter { it.samples.isEmpty() }.map { it.id })
+        return rows.map { row -> series[row.id]?.let { row.copy(samples = it) } ?: row }
     }
 
     suspend fun save(shots: List<StoredShot>) {

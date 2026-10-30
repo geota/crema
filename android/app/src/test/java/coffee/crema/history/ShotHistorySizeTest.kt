@@ -119,6 +119,11 @@ class ShotHistorySizeTest {
         assertTrue("\"elapsedMs\"" !in rowsText, "the history file holds the rows only")
         val back = HistoryStore(app, coreJson).load()
         assertEquals(shots.map { it.samples.size }, back.map { it.samples.size }, "the full series rejoined")
+        // Startup reads the rows first (no series), then the series apart.
+        val reader = HistoryStore(app, coreJson)
+        val rows = reader.loadRows()
+        assertTrue(rows.all { it.samples.isEmpty() }, "rows come without their series")
+        assertEquals(List(3) { 260 }, reader.loadSeries(rows.map { it.id }).values.map { it.size })
         // Removing a shot drops its series file.
         store.save(shots.drop(1))
         assertEquals(2, File(app.filesDir, "shot-series").listFiles().orEmpty().size)

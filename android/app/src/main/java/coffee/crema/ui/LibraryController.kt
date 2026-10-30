@@ -288,10 +288,26 @@ class LibraryController(
         ) }
     }
 
-    /** Load the persisted shot log at startup. */
+    /** Load the persisted shot log at startup: the rows now, the telemetry
+     *  series in the background (F10 — ~0.1 s for 300 shots on a desktop JVM,
+     *  more on a phone), so the startup sequence (prefs, auto-connect) never
+     *  waits on it. Until a series lands its shot shows no curve. */
     suspend fun loadHistory() {
-        val loaded = historyStore.load()
-        updateUi { it.copy(history = loaded) }
+        val rows = historyStore.loadRows()
+        updateUi { it.copy(history = rows) }
+        val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
+        if (missing.isEmpty()) return
+        scope.launch {
+            val series = historyStore.loadSeries(missing)
+            if (series.isEmpty()) return@launch
+            updateUi { st ->
+                st.copy(
+                    history = st.history.map { shot ->
+                        if (shot.samples.isEmpty()) series[shot.id]?.let { shot.copy(samples = it) } ?: shot else shot
+                    },
+                )
+            }
+        }
     }
 
     /** Load the pinned/hidden built-in overlays at startup (before the customs). */
@@ -1983,6 +1999,10 @@ class LibraryController(
             // The DE1 this ran on — frozen here so a later Decent upload (#84)
             // carries the serial the server verifies.
             machine = liveMachine(),
+            // The profile on screen, the core's last fallback name: a remote's
+            // mirror core never uploads, so it knows no profile title (on a
+            // remote the screen shows the hub's selection).
+            profileName = profile?.name,
         )
         val assembled = runCatching {
             bridge.takeStoredShot(json.encodeToString(ShotCaptureContext.serializer(), ctx))
