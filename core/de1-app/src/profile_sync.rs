@@ -452,8 +452,9 @@ impl CremaCore {
                 if self.profile_sync.failed(&tag, self.clock) {
                     out.events.push(Event::ProfileSyncWarning { active: true });
                 }
-                // A shot start waiting for it is over (the core retries).
-                self.start_on_sync_failed(out);
+                // A shot start waiting for this upload is over (the core
+                // retries); an older upload's failure is not its own.
+                self.start_on_sync_failed(&tag.fingerprint, out);
             }
             // Another upload (the cold profile) failed: the DE1 holds an
             // unknown mix, so the desired profile goes back once it can.
@@ -497,10 +498,10 @@ impl CremaCore {
                 out.events.push(Event::ProfileUploadFailed {
                     reason: crate::ProfileUploadFailure::from(err),
                 });
+                self.start_on_sync_failed(&desired.fingerprint, out);
                 if self.profile_sync.rejected(desired.fingerprint) {
                     out.events.push(Event::ProfileSyncWarning { active: true });
                 }
-                self.start_on_sync_failed(out);
             }
         }
     }

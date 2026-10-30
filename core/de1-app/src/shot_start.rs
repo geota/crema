@@ -308,6 +308,10 @@ impl CremaCore {
             });
         }
         self.starter.purge_at = None;
+        // The newer intent wins: a request still waiting out the guard (Steam
+        // tapped during an upload) would go out and then be stopped by the
+        // shot's Espresso.
+        self.drop_held_request();
         // A start is the user doing something (the idle-sleep timer).
         self.idle_sleep.note_activity();
         self.starter.start = Some(Start {
@@ -497,14 +501,13 @@ impl CremaCore {
         }
     }
 
-    /// A sync upload failed or was refused while the start waited for it.
-    pub(crate) fn start_on_sync_failed(&mut self, out: &mut CoreOutput) {
-        if self
-            .starter
-            .start
-            .as_ref()
-            .is_some_and(|s| matches!(s.phase, Phase::Syncing { .. }))
-        {
+    /// The sync upload of `fingerprint` failed or was refused: a start waiting
+    /// for that profile is over. An older upload's failure is not its own.
+    pub(crate) fn start_on_sync_failed(&mut self, fingerprint: &str, out: &mut CoreOutput) {
+        let waiting = self.starter.start.as_ref().is_some_and(
+            |s| matches!(&s.phase, Phase::Syncing { fingerprint: f, .. } if f == fingerprint),
+        );
+        if waiting {
             self.end_start(StartEnd::UploadFailed, out);
         }
     }
@@ -1060,7 +1063,64 @@ mod tests {
         core.set_start_settings(false, false, true);
         core.set_read_only(true);
         let _ = steam_session(&mut core, 10_000);
+        assert_eq!(core.starter.purge_at, None, "a mirror never arms it");
         assert!(state_writes(&core.on_tick(12_000)).is_empty());
+    }
+
+    /// Validation P3 (F16b): a start drops a request still held — Steam tapped
+    /// during an upload, then Coffee: the newer intent wins.
+    #[test]
+    fn a_start_drops_a_held_request() {
+        let mut core = connected(false);
+        let p = profile(36.0);
+        let first = core.set_desired_profile(
+            Some(&p),
+            &BrewOverrides::default(),
+            Duration::from_millis(1_500),
+        );
+        let _ = core.request_machine_state(MachineState::Steam); // held behind the upload
+        // Coffee with the dial moved: the start waits for its own profile,
+        // after the one uploading now.
+        let dialled = BrewOverrides {
+            brew_temp: Some(p.segments[0].temp + 1.0),
+            ..BrewOverrides::default()
+        };
+        let r = core.start_shot(&p, &dialled, Duration::from_millis(1_600));
+        assert!(r.accepted);
+        let done = ack(&mut core, &first, 1_700);
+        let mut writes = state_writes(&done);
+        writes.extend(state_writes(&core.on_tick(2_200)));
+        assert!(
+            !writes.contains(&requested_state(MachineState::Steam)),
+            "Steam never goes out: {writes:?}"
+        );
+    }
+
+    /// Validation P3 (F16b): a start ends only on its own upload's failure.
+    #[test]
+    fn an_older_uploads_failure_does_not_end_the_start() {
+        let mut core = connected(false);
+        let p = profile(36.0);
+        // The dial's upload is in flight when Coffee is tapped with another
+        // brew temperature: the start waits for its own profile.
+        let _ = core.set_desired_profile(
+            Some(&p),
+            &BrewOverrides::default(),
+            Duration::from_millis(1_500),
+        );
+        let dialled = BrewOverrides {
+            brew_temp: Some(p.segments[0].temp + 1.0),
+            ..BrewOverrides::default()
+        };
+        let r = core.start_shot(&p, &dialled, Duration::from_millis(1_600));
+        assert!(r.accepted);
+        let out = core.cancel_profile_upload(); // the dial's upload fails
+        assert!(
+            ends(&out).is_empty(),
+            "not the start's upload: {:?}",
+            ends(&out)
+        );
+        assert!(core.shot_starting());
     }
 
     /// AC-F16.7: a group-head start lists the checks it skipped that applied.
