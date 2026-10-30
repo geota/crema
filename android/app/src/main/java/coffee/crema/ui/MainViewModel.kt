@@ -5769,7 +5769,7 @@ private fun firmwarePowerOk(context: android.content.Context): Boolean {
 /** These UI settings as the shared [CommonSettings] (via [AppPrefs], whose
  *  mapping is the canonical one) — what [MainViewModel.pushCoreInputs] hands
  *  the core. */
-private fun MainUiState.commonSettings(): CommonSettings = AppPrefs(
+internal fun MainUiState.commonSettings(): CommonSettings = AppPrefs(
     themeMode = themeMode,
     maxShotDurationS = maxShotDurationS,
     autoTare = autoTare,

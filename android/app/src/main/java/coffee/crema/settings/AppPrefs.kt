@@ -13,6 +13,7 @@ import kotlinx.serialization.Serializable
 import coffee.crema.core.defaultCommonSettingsJson
 import coffee.crema.core.resetSettingsJson
 import coffee.crema.core.sanitizeCommonSettingsJson
+import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -41,7 +42,15 @@ private val coreSettingsJson = Json { ignoreUnknownKeys = true }
  */
 internal object CommonDefaults {
     val common: CommonSettings by lazy {
-        coreSettingsJson.decodeFromString(CommonSettings.serializer(), defaultCommonSettingsJson())
+        // The core is required to run at all; if its native library can't
+        // load, fail here with a plain reason rather than a bare link error
+        // from deep inside the first AppPrefs() construction.
+        val json = try {
+            defaultCommonSettingsJson()
+        } catch (e: Throwable) {
+            throw IllegalStateException("The Crema core (libde1_ffi) didn't load, so the settings defaults are unavailable", e)
+        }
+        coreSettingsJson.decodeFromString(CommonSettings.serializer(), json)
     }
 }
 
@@ -585,11 +594,20 @@ data class ConfigSnapshot(
  *  [AppPrefs] (decoded directly; the next save rewrites it nested). */
 internal fun decodePrefs(json: Json, text: String): AppPrefs {
     val obj = json.parseToJsonElement(text).jsonObject
-    val common = obj["common"] ?: return json.decodeFromString(AppPrefs.serializer(), text)
+    val common = obj["common"] ?: return decodeFlatPrefs(json, obj)
     // The core's sanitize first, so one wrong-typed or out-of-range field
     // can't make the whole file unreadable.
     val clean = JsonObject(obj + ("common" to json.encodeToJsonElement(CommonSettings.serializer(), sanitizeCommonSettings(common))))
     return json.decodeFromJsonElement(PersistedPrefs.serializer(), clean).toAppPrefs()
+}
+
+/** A pre-unification FLAT `prefs.json`: its shared fields (Android's names
+ *  are the canonical ones) go through the core's sanitize, the rest decode as
+ *  before, so an old file with one bad value still loads. */
+private fun decodeFlatPrefs(json: Json, obj: JsonObject): AppPrefs {
+    val commonKeys = CommonSettings.serializer().descriptor.elementNames.toSet()
+    val platform = JsonObject(obj.filterKeys { it !in commonKeys })
+    return json.decodeFromJsonElement(AppPrefs.serializer(), platform).withCommonSettings(sanitizeCommonSettings(obj))
 }
 
 /** File-backed JSON persistence for [AppPrefs] (`filesDir/prefs.json`). */

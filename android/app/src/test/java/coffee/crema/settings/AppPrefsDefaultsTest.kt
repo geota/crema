@@ -75,4 +75,15 @@ class AppPrefsDefaultsTest {
         assertEquals("primary", reset.proxyRole)
         assertTrue(mine.resetCommon(55f).second == 0f, "an invalid line frequency reads as auto")
     }
+
+    @Test
+    fun `an old flat prefs json loads sanitized`() {
+        val text = """{"themeMode":"light","fanThresholdC":400,"weightUnit":"stone","autoTare":"yes","proxyRole":"primary"}"""
+        val p = decodePrefs(json, text)
+        assertEquals("light", p.themeMode)
+        assertEquals(60f, p.fanThresholdC)
+        assertEquals("g", p.weightUnit)
+        assertEquals(true, p.autoTare)
+        assertEquals("primary", p.proxyRole, "platform fields still decode")
+    }
 }
