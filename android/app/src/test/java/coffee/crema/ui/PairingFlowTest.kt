@@ -185,12 +185,19 @@ class PairingFlowTest {
         VmHarness.persistRole("secondary", "127.0.0.1", port)
         val vm = remote()
         val oldPin = vm.ui.value.pairedHubs.single().id
+        // The hub doesn't hold the pinned key: the re-find gives up, and Pair
+        // again is offered (it never pairs by itself).
+        untilClock("the re-find's give-up") { vm.ui.value.canPairAgain() }
 
         vm.pairAgain()
         val code = shownCode(vm, attempt = 1)
         VmHarness.idleUntil("the hub's code dialog") { h.state.value.pendingPairing != null }
         h.submitPairingCode(code.code, canControl = true)
-        untilClock("the key-changed line") { hubKeyChanged(code.hubName) in vm.ui.value.userMessages }
+        try {
+            untilClock("the key-changed line") { hubKeyChanged(code.hubName) in vm.ui.value.userMessages }
+        } catch (e: IllegalStateException) {
+            throw IllegalStateException("${e.message}; messages ${vm.ui.value.userMessages.takeLast(5)}, pairing ${vm.ui.value.relayPairing}, hub ${hubLines.takeLast(5)}", e)
+        }
         val pins = vm.ui.value.pairedHubs
         assertEquals(1, pins.size, "$pins")
         assertTrue(pins.single().id != oldPin, "the old key's pin is gone")
