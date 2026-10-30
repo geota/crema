@@ -616,6 +616,31 @@ pub enum Event {
         /// Why it was refused.
         reason: crate::CalibrationRefusal,
     },
+    /// A machine state request is waiting out the firmware's profile-download
+    /// guard (a profile upload in flight, or the 500 ms after it — see
+    /// [`machine_requests`](crate::machine_requests)); it goes out on its own.
+    /// For the log; the shell need not tell the user.
+    MachineRequestHeld {
+        /// The requested state.
+        state: MachineState,
+    },
+    /// A machine state request was refused before anything was written: a
+    /// maintenance cycle needs the machine in Idle or Sleep.
+    MachineRequestRefused {
+        /// The requested state.
+        state: MachineState,
+        /// Why.
+        reason: crate::MachineRequestRefusal,
+    },
+    /// Tick the core (`on_tick`) at this time — the shell's clock, the one it
+    /// passes to `on_tick`, in ms. The earliest deadline the core is waiting
+    /// for changed; the shell keeps one one-shot timer, replaced by each
+    /// hint, cancelled on a reset, a disconnect or when the app is
+    /// backgrounded (its regular tick still covers the deadline).
+    WakeAt {
+        /// When to tick, ms.
+        at_ms: f64,
+    },
     /// A write was refused because a firmware upload is locking out other
     /// writes. v1 carries the lockout guard as a stub
     /// ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))

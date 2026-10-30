@@ -1629,6 +1629,29 @@ data class EventCalibrationRefusedInner (
 	val reason: CalibrationRefusal
 )
 
+/// Generated type representing the anonymous struct variant `MachineRequestHeld` of the `Event` Rust enum
+@Serializable
+data class EventMachineRequestHeldInner (
+	/// The requested state.
+	val state: MachineState
+)
+
+/// Generated type representing the anonymous struct variant `MachineRequestRefused` of the `Event` Rust enum
+@Serializable
+data class EventMachineRequestRefusedInner (
+	/// The requested state.
+	val state: MachineState,
+	/// Why.
+	val reason: MachineRequestRefusal
+)
+
+/// Generated type representing the anonymous struct variant `WakeAt` of the `Event` Rust enum
+@Serializable
+data class EventWakeAtInner (
+	/// When to tick, ms.
+	val at_ms: Double
+)
+
 /// Generated type representing the anonymous struct variant `FirmwareLockoutHit` of the `Event` Rust enum
 @Serializable
 data class EventFirmwareLockoutHitInner (
@@ -2033,6 +2056,26 @@ sealed class Event {
 	@Serializable
 	@SerialName("CalibrationRefused")
 	data class CalibrationRefused(val content: EventCalibrationRefusedInner): Event()
+	/// A machine state request is waiting out the firmware's profile-download
+	/// guard (a profile upload in flight, or the 500 ms after it — see
+	/// [`machine_requests`](crate::machine_requests)); it goes out on its own.
+	/// For the log; the shell need not tell the user.
+	@Serializable
+	@SerialName("MachineRequestHeld")
+	data class MachineRequestHeld(val content: EventMachineRequestHeldInner): Event()
+	/// A machine state request was refused before anything was written: a
+	/// maintenance cycle needs the machine in Idle or Sleep.
+	@Serializable
+	@SerialName("MachineRequestRefused")
+	data class MachineRequestRefused(val content: EventMachineRequestRefusedInner): Event()
+	/// Tick the core (`on_tick`) at this time — the shell's clock, the one it
+	/// passes to `on_tick`, in ms. The earliest deadline the core is waiting
+	/// for changed; the shell keeps one one-shot timer, replaced by each
+	/// hint, cancelled on a reset, a disconnect or when the app is
+	/// backgrounded (its regular tick still covers the deadline).
+	@Serializable
+	@SerialName("WakeAt")
+	data class WakeAt(val content: EventWakeAtInner): Event()
 	/// A write was refused because a firmware upload is locking out other
 	/// writes. v1 carries the lockout guard as a stub
 	/// ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
@@ -4498,6 +4541,26 @@ sealed class IdleSleepInput {
 	@Serializable
 	@SerialName("Tick")
 	object Tick: IdleSleepInput()
+}
+
+/// Generated type representing the anonymous struct variant `MachineNotIdle` of the `MachineRequestRefusal` Rust enum
+@Serializable
+data class MachineRequestRefusalMachineNotIdleInner (
+	/// The state the machine last reported.
+	val state: MachineState
+)
+
+/// Why a machine state request was refused before it reached the DE1.
+@Serializable
+sealed class MachineRequestRefusal {
+	/// A maintenance cycle needs the machine in Idle or Sleep.
+	@Serializable
+	@SerialName("MachineNotIdle")
+	data class MachineNotIdle(val details: MachineRequestRefusalMachineNotIdleInner): MachineRequestRefusal()
+	/// No machine state has been reported yet (fail closed).
+	@Serializable
+	@SerialName("MachineStateUnknown")
+	object MachineStateUnknown: MachineRequestRefusal()
 }
 
 /// DE1 top-level machine state. Discriminants match the firmware `MachineState`

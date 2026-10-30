@@ -184,7 +184,8 @@ pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use cold_maintenance::{
     COLD_MAINTENANCE_MIN_FIRMWARE_BUILD, DESCALE_SCHEDULE, DESCALE_TOTAL_SECONDS, DescaleProgress,
     DescaleTracker, MaintenanceFailure, MaintenancePhase, cold_maintenance_profile,
-    firmware_drops_cold_requests, is_machine_heating, is_maintenance_state, needs_cold_workaround,
+    firmware_drops_cold_requests, is_machine_heating, is_maintenance_state, is_run_now_state,
+    maintenance_request_allowed, maintenance_request_allowed_by_name, needs_cold_workaround,
 };
 pub use connect_sweep::{
     ConnectSweepSettings, USB_CHARGER_CHECK_INTERVAL_MS, UsbChargingMode, usb_charger_decision,

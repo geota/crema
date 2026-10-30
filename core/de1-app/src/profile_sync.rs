@@ -458,6 +458,9 @@ impl CremaCore {
             && self.profile_upload.is_none()
             && self.parked_upload.is_none()
             && self.maintenance.is_none()
+            // A request waiting out the profile-download guard goes first: a
+            // new upload would hold it again (F16).
+            && !self.request_held()
             && self.last_state.is_some_and(|s| idle_enough(s.state));
         let Some(desired) = self.profile_sync.due(self.clock, ready) else {
             return;
