@@ -441,6 +441,25 @@ const POST_SHOT_SETTLE_QUIET: Duration = Duration::from_millis(700);
 /// A weight rise smaller than this is noise, not a landing drip.
 const POST_SHOT_SETTLE_RISE_G: f32 = 0.1;
 
+/// The steam / hot-water targets the shells own in the DE1's combined
+/// settings packet (cuuid_0B), the input to
+/// [`set_steam_hotwater_targets`](CremaCore::set_steam_hotwater_targets).
+/// The group target is the core's (the effective profile's temperature);
+/// every other field (the flag byte, the hot-water timeout, the espresso
+/// volume) is the machine's, so the core keeps it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SteamHotWaterTargets {
+    /// Target steam temperature, °C (0 turns the heater off).
+    pub steam_temp_c: f32,
+    /// Steam timeout, seconds.
+    pub steam_timeout_s: f32,
+    /// Target hot-water temperature, °C.
+    pub hot_water_temp_c: f32,
+    /// Hot-water volume, ml (the user's dial; the scale override is the
+    /// core's).
+    pub hot_water_volume_ml: f32,
+}
+
 /// The headless Crema application core.
 ///
 /// One `CremaCore` tracks one machine session. The FFI bridges wrap it behind
@@ -1714,6 +1733,65 @@ impl CremaCore {
             group_temp: retained.group_temp_c,
         });
         out
+    }
+
+    /// Set the steam / hot-water targets and write the combined packet
+    /// (cuuid_0B) read-modify-write. The packet carries eight fields; the
+    /// ones in `targets` replace the current values, and the group target is
+    /// the effective desired profile's temperature (de1app and Decenza send
+    /// the profile's temperature; see
+    /// [`set_desired_profile`](Self::set_desired_profile)). Every other field
+    /// (the flag byte, the hot-water timeout, the espresso volume, and the
+    /// group target with no desired profile) is kept from the last packet
+    /// the machine reported or Crema wrote — reaprime re-reads the
+    /// characteristic before every write and keeps all fields, flags
+    /// included (`de1_controller.dart` `_writeSteamSettings`). Before any
+    /// read, the legacy defaults stand in ([`ShotSettings::default`]: flags
+    /// 0, 60 s, 200 ml, 92 °C, as de1app and Decenza send).
+    ///
+    /// The only way the shells write this packet, and what
+    /// [`connect_sweep`](Self::connect_sweep) uses. Clamps, the eco and
+    /// scale overrides and the read-back projection are
+    /// [`set_steam_hotwater_settings`](Self::set_steam_hotwater_settings)'s.
+    pub fn set_steam_hotwater_targets(&mut self, targets: &SteamHotWaterTargets) -> CoreOutput {
+        let current = self.steam_hotwater_settings.clone().unwrap_or_default();
+        let packet = ShotSettings {
+            steam_temp_c: targets.steam_temp_c,
+            steam_timeout_s: targets.steam_timeout_s,
+            hot_water_temp_c: targets.hot_water_temp_c,
+            hot_water_volume_ml: targets.hot_water_volume_ml,
+            group_temp_c: self.profile_group_temp_c().unwrap_or(current.group_temp_c),
+            ..current
+        };
+        self.set_steam_hotwater_settings(packet)
+    }
+
+    /// Re-send the steam / hot-water packet when the desired profile's group
+    /// target differs from the packet's (at wire resolution). Only once a
+    /// packet is known, read or written: before that there is nothing to
+    /// keep, and the connect sweep sends it with the right group target.
+    pub(crate) fn resend_group_target(&mut self, out: &mut CoreOutput) {
+        let (Some(current), Some(group)) = (
+            self.steam_hotwater_settings.clone(),
+            self.profile_group_temp_c(),
+        ) else {
+            return;
+        };
+        let wire = |c: f32| (c * 256.0).round();
+        if wire(current.group_temp_c) == wire(group) {
+            return;
+        }
+        let packet = ShotSettings {
+            group_temp_c: group,
+            // The user's dial, never a machine echo of the scale override.
+            hot_water_volume_ml: self
+                .user_hot_water_volume_ml
+                .unwrap_or(current.hot_water_volume_ml),
+            ..current
+        };
+        let more = self.set_steam_hotwater_settings(packet);
+        out.events.extend(more.events);
+        out.commands.extend(more.commands);
     }
 
     /// Apply the documented range clamps to a [`ShotSettings`] before it
@@ -9805,6 +9883,67 @@ mod tests {
         assert_eq!(data[4], 0, "0 (off) must not become the 250 ml override");
     }
 
+    /// The four targets a shell owns.
+    fn steam_targets() -> SteamHotWaterTargets {
+        SteamHotWaterTargets {
+            steam_temp_c: 148.0,
+            steam_timeout_s: 12.0,
+            hot_water_temp_c: 80.0,
+            hot_water_volume_ml: 150.0,
+        }
+    }
+
+    /// The machine's packet: a set flag bit and non-default values in every
+    /// field Crema doesn't own.
+    fn machine_shot_settings() -> ShotSettings {
+        ShotSettings {
+            steam_flags: 0x40,
+            steam_temp_c: 160.0,
+            steam_timeout_s: 30.0,
+            hot_water_temp_c: 90.0,
+            hot_water_volume_ml: 200.0,
+            hot_water_timeout_s: 45.0,
+            espresso_volume_ml: 220.0,
+            group_temp_c: 88.0,
+        }
+    }
+
+    #[test]
+    fn steam_hotwater_targets_keep_every_field_they_dont_own() {
+        // AC-F5.1: read-modify-write over the machine's last report.
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(
+            Source::De1ShotSettings,
+            &machine_shot_settings().encode(),
+            0,
+        );
+        let writes = shot_settings_writes(&core.set_steam_hotwater_targets(&steam_targets()));
+        assert_eq!(
+            writes,
+            vec![ShotSettings {
+                steam_flags: 0x40,
+                steam_temp_c: 148.0,
+                steam_timeout_s: 12.0,
+                hot_water_temp_c: 80.0,
+                hot_water_volume_ml: 150.0,
+                hot_water_timeout_s: 45.0,
+                espresso_volume_ml: 220.0,
+                group_temp_c: 88.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn steam_hotwater_targets_use_the_legacy_defaults_before_a_read() {
+        let mut core = CremaCore::new();
+        let w = &shot_settings_writes(&core.set_steam_hotwater_targets(&steam_targets()))[0];
+        assert_eq!(w.steam_flags, 0);
+        assert_eq!(w.hot_water_timeout_s, 60.0);
+        assert_eq!(w.espresso_volume_ml, 200.0);
+        assert_eq!(w.group_temp_c, 92.0);
+        assert_eq!(w.steam_temp_c, 148.0);
+    }
+
     #[test]
     fn set_steam_hotwater_settings_writes_the_user_volume_without_a_scale() {
         let mut core = CremaCore::new();
@@ -12820,6 +12959,111 @@ mod tests {
                 let _ = idle(&mut core, 50);
                 let after_reset = sweep(&mut core, 60);
                 assert_eq!(uploads(&after_reset), 1, "a new connection re-sends");
+            }
+
+            /// Ack an upload's header and frames; the last ack's output
+            /// (the one carrying the completion).
+            fn land(core: &mut CremaCore, commands: &[Command], now_ms: u64) -> CoreOutput {
+                ack_header(core, commands, now_ms);
+                let mut last = CoreOutput::default();
+                for c in commands {
+                    if let Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileFrame,
+                        data,
+                    } = c
+                    {
+                        last = core.on_notification(Source::De1FrameAck, data, now_ms);
+                    }
+                }
+                last
+            }
+
+            /// The machine's steam / hot-water packet: a set flag bit, its own
+            /// timeout and espresso volume, group 88 °C.
+            fn machine_packet(core: &mut CremaCore) {
+                let machine = ShotSettings {
+                    steam_flags: 0x40,
+                    hot_water_timeout_s: 45.0,
+                    espresso_volume_ml: 220.0,
+                    group_temp_c: 88.0,
+                    ..ShotSettings::default()
+                };
+                let _ = core.on_notification(Source::De1ShotSettings, &machine.encode(), 0);
+            }
+
+            fn steam_packets(out: &CoreOutput) -> Vec<ShotSettings> {
+                out.commands
+                    .iter()
+                    .filter_map(|c| match c {
+                        Command::WriteCharacteristic {
+                            target: WriteTarget::De1ShotSettings,
+                            data,
+                        } => ShotSettings::decode(data).ok(),
+                        _ => None,
+                    })
+                    .collect()
+            }
+
+            /// AC-F5.3: the steam / hot-water packet's group target is the
+            /// effective profile's temperature (de1app / Decenza send the
+            /// profile's temperature), the Quick Controls shift included; the
+            /// other fields stay the machine's.
+            #[test]
+            fn f5_3_the_steam_packet_carries_the_effective_profile_temperature() {
+                let p = library("Daily");
+                let mut core = connected();
+                machine_packet(&mut core);
+                let _ = desire(&mut core, &p, &qc(95.0), 10);
+                let targets = SteamHotWaterTargets {
+                    steam_temp_c: 150.0,
+                    steam_timeout_s: 60.0,
+                    hot_water_temp_c: 80.0,
+                    hot_water_volume_ml: 150.0,
+                };
+                let w = &steam_packets(&core.set_steam_hotwater_targets(&targets))[0];
+                assert_eq!(w.group_temp_c, 95.0);
+                assert_eq!(w.steam_flags, 0x40);
+                assert_eq!(w.hot_water_timeout_s, 45.0);
+                // The connect sweep sends the same group target.
+                let w = &steam_packets(&sweep(&mut core, 20))[0];
+                assert_eq!(w.group_temp_c, 95.0);
+                // No desired profile: the machine's group target stays.
+                let mut core = connected();
+                machine_packet(&mut core);
+                let w = &steam_packets(&core.set_steam_hotwater_targets(&targets))[0];
+                assert_eq!(w.group_temp_c, 88.0);
+            }
+
+            /// AC-F5.3: when a changed profile lands on the DE1, the packet is
+            /// re-sent with its group target (Decenza re-sends the shot
+            /// settings after every upload); an unchanged target sends nothing.
+            #[test]
+            fn f5_3_a_landed_profile_resends_the_group_target() {
+                let p = library("Daily");
+                let mut core = connected();
+                machine_packet(&mut core);
+                let _ = desire(&mut core, &p, &BrewOverrides::default(), 10);
+                let first = sweep(&mut core, 20);
+                assert_eq!(steam_packets(&first)[0].group_temp_c, 92.0);
+                let landed = land(&mut core, &first.commands, 30);
+                assert!(holds(&landed.events).is_some());
+                assert!(steam_packets(&landed).is_empty(), "already at 92 °C");
+
+                let change = desire(&mut core, &p, &qc(95.0), 40);
+                assert_eq!(uploads(&change), 1);
+                assert!(steam_packets(&change).is_empty(), "not before it lands");
+                let landed = land(&mut core, &change.commands, 50);
+                assert!(holds(&landed.events).is_some());
+                let w = steam_packets(&landed);
+                assert_eq!(w.len(), 1);
+                assert_eq!(w[0].group_temp_c, 95.0);
+                assert_eq!(w[0].steam_flags, 0x40);
+                assert_eq!(w[0].espresso_volume_ml, 220.0);
+                assert_eq!(
+                    w[0].hot_water_volume_ml,
+                    ConnectSweepSettings::default().hot_water_volume_ml,
+                    "the user's dial"
+                );
             }
 
             /// AC-F7.2: within one connection an unchanged profile is never
