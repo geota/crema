@@ -3220,6 +3220,16 @@ data class PreinfusionDial (
 	val adjustable: Boolean
 )
 
+/// One part of a profile file that did not import.
+@Serializable
+data class ProfileFileError (
+	/// The 1-based line (JSON lines) or element (JSON array) it came from;
+	/// `None` for a single-profile file.
+	val item: UInt? = null,
+	/// Why, in words a user can act on.
+	val message: String
+)
+
 /// The profile sync's state, as a shell sees it.
 @Serializable
 data class ProfileSyncStatus (
@@ -3645,7 +3655,11 @@ data class ShotBean (
 	/// after the bag's grinder is edited (issue #16; the snapshot used
 	/// to carry only the dial). Additive + optional, so pre-existing
 	/// stored shots decode unchanged.
-	val grinder: String? = null
+	val grinder: String? = null,
+	/// The bag's free-form notes at the time of the shot — exported as the
+	/// v2 `metadata.crema.bean_notes` (the web snapshot always carried them;
+	/// the core type didn't, so every backup lost them). Additive + optional.
+	val notes: String? = null
 )
 
 /// Machine identity frozen onto a [`StoredShot`] at completion — the exact
@@ -3663,6 +3677,30 @@ data class ShotMachine (
 	val firmwareVersion: String? = null,
 	/// Human model name (e.g. `"DE1PRO"`, see `machine_model_name`), if known.
 	val model: String? = null
+)
+
+/// What a shell knows about a finished shot that the core doesn't — handed
+/// to the core's `take_stored_shot` on `Event::ShotCompleted`.
+@Serializable
+data class ShotCaptureContext (
+	/// When the shot completed, Unix epoch ms — the core has no wall clock.
+	val completedAt: Long,
+	/// The id to store the shot under, or `None` to mint a fresh one (a
+	/// shell that showed the id already, e.g. Android's "Last shot" card).
+	val id: String? = null,
+	/// The bean snapshot the shot was pulled with, or `None`.
+	val bean: ShotBean? = null,
+	/// The Settings grinder model, the fallback when the bean has none.
+	val settingsGrinder: String? = null,
+	/// The grind dial at shot start, or `None` when it carried no value.
+	val grindDial: Float? = null,
+	/// The barista, or `None`.
+	val barista: String? = null,
+	/// The shot's tags at capture (a copy of the bean's tags today). `None`
+	/// (or `null` on the wire) = no tags.
+	val tags: List<String>? = null,
+	/// The DE1 the shot ran on, or `None` when it isn't known.
+	val machine: ShotMachine? = null
 )
 
 /// Everything a shot-annotation PATCH can carry, gathered by the shell
@@ -5079,6 +5117,20 @@ enum class ShotPhase(val string: String) {
 	/// Ending — flow has stopped and the group is draining.
 	@SerialName("Ending")
 	Ending("Ending"),
+}
+
+/// A shot's Visualizer privacy override — the `privacy` the upload sends.
+@Serializable
+enum class ShotPrivacy(val string: String) {
+	/// Listed publicly.
+	@SerialName("public")
+	Public("public"),
+	/// Reachable by link only.
+	@SerialName("unlisted")
+	Unlisted("unlisted"),
+	/// Visible to the owner only.
+	@SerialName("private")
+	Private("private"),
 }
 
 /// Why a steam-clog warning was raised — which threshold the telemetry tripped.

@@ -70,16 +70,15 @@ private fun MainUiState.withSnapshot(cfg: ConfigSnapshot, m: MirroredSettings): 
         qcFlushTimeS = cfg.qcFlushTimeS,
         qcFlushTempC = cfg.qcFlushTempC,
         qcGrind = cfg.qcGrind,
-        // Known only from a hub that sends them (§6.1); else this device's own.
-        steamEco = cfg.steamEco ?: steamEco,
-        steamTwoTap = cfg.steamTwoTap ?: steamTwoTap,
-        fanThresholdC = cfg.fanThresholdC ?: fanThresholdC,
-        waterRefillPointMm = cfg.waterRefillPointMm ?: waterRefillPointMm,
-        volumeStopWithScale = cfg.volumeStopWithScale ?: volumeStopWithScale,
-        requireScale = cfg.requireScale ?: requireScale,
-        preFlush = cfg.preFlush ?: preFlush,
-        steamPurge = cfg.steamPurge ?: steamPurge,
-        idleSleepMin = cfg.idleSleepMin ?: idleSleepMin,
+        steamEco = cfg.steamEco,
+        steamTwoTap = cfg.steamTwoTap,
+        fanThresholdC = cfg.fanThresholdC,
+        waterRefillPointMm = cfg.waterRefillPointMm,
+        volumeStopWithScale = cfg.volumeStopWithScale,
+        requireScale = cfg.requireScale,
+        preFlush = cfg.preFlush,
+        steamPurge = cfg.steamPurge,
+        idleSleepMin = cfg.idleSleepMin,
         // The hub's machine registers (A12, A13, A15) and its line frequency (A14).
         de1MachineInfo = de1MachineInfo + listOfNotNull(
             cfg.heaterVoltage?.let { MmrRegister.HeaterVoltage to it.toUInt() },
@@ -87,7 +86,7 @@ private fun MainUiState.withSnapshot(cfg: ConfigSnapshot, m: MirroredSettings): 
             cfg.cupWarmerTempC?.let { MmrRegister.CupWarmerTemp to it.toUInt() },
         ),
         lineFreqHz = cfg.lineFrequencyHz ?: lineFreqHz,
-        lineFreqOverride = cfg.lineFrequencyOverride ?: lineFreqOverride,
+        lineFreqOverride = cfg.lineFrequencyOverride,
     )
 }
 
@@ -187,8 +186,6 @@ fun MainUiState.availabilityNote(setting: coffee.crema.settings.Setting): String
         SettingAvailability.OFFLINE -> "Reconnecting to $hub…"
         SettingAvailability.UNKNOWN -> when {
             setting.mirroredVia == coffee.crema.settings.MirrorSource.NONE_AVAILABLE -> "Change on $hub"
-            mirror?.snapshot == null -> "Waiting for $hub"
-            setting.mirroredVia == coffee.crema.settings.MirrorSource.SNAPSHOT -> "Update Crema on $hub to see this here"
             else -> "Waiting for $hub"
         }
     }

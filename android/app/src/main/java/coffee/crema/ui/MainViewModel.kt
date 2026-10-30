@@ -48,7 +48,6 @@ import coffee.crema.settings.ConfigSnapshot
 import coffee.crema.settings.MirroredSettings
 import coffee.crema.settings.Setting
 import coffee.crema.settings.setting
-import coffee.crema.settings.PairedDevice
 import coffee.crema.visualizer.VisualizerClient
 import coffee.crema.visualizer.VisualizerStore
 import coffee.crema.visualizer.VisualizerSync
@@ -1888,7 +1887,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Restore a hidden built-in profile back to the active grid. */
     fun unarchiveBuiltinProfile(id: String) = library.unarchiveBuiltinProfile(id)
 
-    /** Export a profile's full community-v2 JSON via the system share sheet. */
+    /** Share a profile as the core's community-v2 `.json` profile file. */
     fun exportProfile(id: String) = library.exportProfile(id)
 
     /** Export a stored shot as JSON via the system share sheet. */
@@ -1912,8 +1911,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The core's shot-quality analysis over a stored shot (review #39). */
     fun analyzeShotQuality(shot: StoredShot): ShotQualityReport? = library.analyzeShotQuality(shot)
 
-    /** All profiles (built-ins + customs) as a JSON array, or null when empty. */
-    fun allProfilesJson(): String? = library.allProfilesJson()
+    /** All profiles (built-ins + customs) as the core's `.jsonl` profile file, or null when empty. */
+    fun allProfilesFile(): String? = library.allProfilesFile()
 
     /** Write export [text] to a SAF document Uri (large-payload safe). */
     fun writeTextToUri(uri: Uri, text: String) = library.writeTextToUri(uri, text)
@@ -1943,8 +1942,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Parse + apply a `crema-backup` bundle's raw text. */
     fun restoreBackupFromText(text: String, mode: RestoreMode) = library.restoreBackupFromText(text, mode)
 
-    /** Remove a stored shot from the local history. Persisted. */
-    fun deleteShot(id: String) = library.deleteShot(id)
+    /**
+     * Remove a stored shot from the local history. Persisted. A shot already
+     * on Visualizer leaves a tombstone so the next pull doesn't bring its
+     * remote copy back (web parity); [alsoOnVisualizer] deletes that copy too,
+     * retried on each sync until it lands. A shot never uploaded just goes.
+     */
+    fun deleteShot(id: String, alsoOnVisualizer: Boolean = false) {
+        val shot = _ui.value.history.firstOrNull { it.id == id } ?: return
+        library.deleteShot(id)
+        shot.visualizerId?.let { visualizer.tombstoneShot(id, it, deleteRemote = alsoOnVisualizer) }
+    }
+
+    /** Whether a shot's delete can also remove its Visualizer copy: it was
+     *  uploaded and a session is open (shot deletes aren't Premium-gated, unlike bags). */
+    fun canDeleteShotOnVisualizer(visualizerId: String?): Boolean =
+        visualizerId != null && _ui.value.visualizer.signedIn
 
     /** Import a Beanconqueror export (JSON or chunked .zip) into the library. */
     fun importBeanconquerorUri(uri: Uri) = library.importBeanconquerorUri(uri)
@@ -2791,10 +2804,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 autoTare = ui.autoTare,
                 maxShotDurationS = ui.maxShotDurationS,
                 grinderModel = ui.grinderModel,
-                weightUnit = ui.weightUnit,
-                tempUnit = ui.tempUnit,
-                pressureUnit = ui.pressureUnit,
-                volumeUnit = ui.volumeUnit,
                 qcSteamTimeS = ui.qcSteamTimeS,
                 qcSteamFlowMlS = ui.qcSteamFlowMlS,
                 qcSteamTempC = ui.qcSteamTempC,
@@ -2810,7 +2819,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 brewPreinfuseS = ui.brewParams?.preinf,
                 primaryName = deviceLabel(),
                 authority = "primary",
-                settingsSchema = 1,
                 rev = rev,
                 steamEco = ui.steamEco,
                 steamTwoTap = ui.steamTwoTap,
@@ -2884,7 +2892,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun onRoleStarting(role: String, refind: Boolean) {
         val wasRemote = _ui.value.mirror != null
-        // Any switch cancels an open T6 confirmation (a Denied, a re-find):
+        // Any switch cancels an open T6 confirmation (a refusal, a re-find):
         // nothing is adopted (spec §7.5 step 3). The dialog goes, the slice
         // unfreezes and the re-find is released, so the user can leave again.
         val cancelled = pendingLeave != null || _ui.value.mirror?.frozen == true
@@ -2902,7 +2910,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (cancelled) {
             // After this start returns: releasing the hold re-evaluates the re-find.
             viewModelScope.launch { proxy.holdRefind(false) }
-            // A Denied explains itself; still a remote, say why nothing happened.
+            // A refusal explains itself; still a remote, say why nothing happened.
             if (role == "secondary") notifyUser("Couldn't leave ${_ui.value.remoteHubLabel()} — try again")
         }
         // Leaving the remote role: the core goes back to this device's own values.
@@ -3390,7 +3398,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * 2. If that snapshot differs from this device's own adoptable values,
      *    ask ([adoptPrompt]); else go on with "keep mine".
      * 3. Commit under the mode lock, only if no other switch ran meanwhile
-     *    (a `Denied`, a re-find): adopt and save, awaited, then drop the slice,
+     *    (a refusal, a re-find): adopt and save, awaited, then drop the slice,
      *    re-push the core inputs and switch, so the first sweep writes the
      *    chosen values (I3).
      */
@@ -3411,7 +3419,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         pendingLeave = PendingLeave(next, epoch, snapshot, changes)
-        _ui.update { it.copy(adoptPrompt = AdoptPrompt(it.remoteHubLabel(), changes.size, legacyUnknownCount(snapshot))) }
+        _ui.update { it.copy(adoptPrompt = AdoptPrompt(it.remoteHubLabel(), changes.size)) }
     }
 
     /** The T6 confirmation's answer: "Use <hub>'s" ([useHub]) or "Keep mine"
@@ -3530,8 +3538,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         proxyPrimaryHost = _ui.value.proxyPrimaryHost,
         proxyPrimaryPort = _ui.value.proxyPrimaryPort,
         replayPrimary = _ui.value.replayPrimary,
-        // Relay v4 keeps the pins in relay-v4.json; prefs carry no paired devices.
-        pairedDevices = emptyList(),
     )
 
     /** [persistPrefs], awaited: the T6 commit saves the adopted values before

@@ -1,9 +1,9 @@
 /**
  * `#lib/testing/dom-stubs` — import FIRST in a vitest file that mounts a
  * component drawing charts (uPlot). jsdom has no `matchMedia`, 2D canvas,
- * `ResizeObserver`, `Path2D` or `Element.scrollTo`; these no-op stand-ins
- * let such a component mount so a test can check its wiring. NOT a test
- * file; not used by the app.
+ * `ResizeObserver`, `IntersectionObserver`, `Path2D` or `Element.scrollTo`;
+ * these no-op stand-ins let such a component mount so a test can check its
+ * wiring. NOT a test file; not used by the app.
  */
 
 if (typeof window !== 'undefined' && !window.matchMedia) {
@@ -43,6 +43,16 @@ if (!g.ResizeObserver) {
 		observe(): void {}
 		unobserve(): void {}
 		disconnect(): void {}
+	};
+}
+if (!g.IntersectionObserver) {
+	g.IntersectionObserver = class {
+		observe(): void {}
+		unobserve(): void {}
+		disconnect(): void {}
+		takeRecords(): [] {
+			return [];
+		}
 	};
 }
 if (!g.Path2D) {

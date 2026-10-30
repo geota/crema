@@ -82,9 +82,8 @@ sealed interface RelayKeyLoad {
 }
 
 /**
- * This device's relay v4 static key and pins (spec §5.1), replacing the v3
- * `PairingStore`. One instance per process ([forProcess]): two would race on
- * the file.
+ * This device's relay v4 static key and pins (spec §5.1). One instance per
+ * process ([forProcess]): two would race on the file.
  *
  * - The private key is sealed with a dedicated AndroidKeyStore key
  *   ([RELAY_ALIAS], AAD [RELAY_AAD]) through [SecretBox.wrapBytes], so it never
