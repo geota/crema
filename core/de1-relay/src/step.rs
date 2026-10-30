@@ -349,7 +349,7 @@ impl RelayError {
 /// Events for the shell (§3.4). Names are sanitized; public keys never ride
 /// in events (read `peer_public_key()`).
 #[typeshare]
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", content = "content")]
 pub enum RelayEvent {
     /// Hub: a v2/v3 remote dialled; it got the legacy denial.
@@ -400,10 +400,10 @@ pub enum RelayEvent {
         /// Seconds left in the pairing window (or the lockout).
         secs_left: u32,
     },
-    /// Remote: show this code until `expires_at_ms`.
+    /// Remote: show the code, read from `RemoteConnection::code()`, until
+    /// `expires_at_ms`. The event itself never carries the code, so no event,
+    /// event JSON or record a bridge builds from it can leak it into a log.
     ShowCode {
-        /// Six ASCII digits.
-        code: String,
         /// When the code expires (`now_ms` clock).
         #[typeshare(serialized_as = "U64")]
         expires_at_ms: u64,
@@ -439,30 +439,4 @@ pub enum RelayEvent {
         /// The `RelayError` name.
         error: String,
     },
-}
-
-impl core::fmt::Debug for RelayEvent {
-    /// Like the JSON form, except that `ShowCode` never prints the code.
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::ShowCode { expires_at_ms, .. } => f
-                .debug_struct("ShowCode")
-                .field("code", &"[redacted]")
-                .field("expires_at_ms", expires_at_ms)
-                .finish(),
-            other => match serde_json::to_string(other) {
-                Ok(json) => f.write_str(&json),
-                Err(_) => f.write_str("RelayEvent"),
-            },
-        }
-    }
-}
-
-impl Drop for RelayEvent {
-    /// Wipes the core's copy of a shown code (copies the shell makes are its own).
-    fn drop(&mut self) {
-        if let Self::ShowCode { code, .. } = self {
-            zeroize::Zeroize::zeroize(code);
-        }
-    }
 }

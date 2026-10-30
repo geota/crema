@@ -99,12 +99,13 @@ impl Watch {
     }
 }
 
-/// The pairing code the remote showed, if any.
-fn shown_code(step: &Step) -> Option<String> {
-    step.events.iter().find_map(|e| match e {
-        RelayEvent::ShowCode { code, .. } => Some(code.clone()),
-        _ => None,
-    })
+/// The pairing code a step told the shell to show (read from the remote).
+fn shown_code(step: &Step, remote: &RemoteConnection) -> Option<String> {
+    step.events
+        .iter()
+        .any(|e| matches!(e, RelayEvent::ShowCode { .. }))
+        .then(|| remote.code())
+        .flatten()
 }
 
 fn corrupt(mut m: Outgoing, pos: u16, xor: u8) -> Outgoing {
@@ -168,7 +169,7 @@ pub fn hub_ws(data: &[u8]) {
             let answer = remote.on_ws(ws(m), now);
             check_sizes(&answer);
             if code.is_none() {
-                *code = shown_code(&answer);
+                *code = shown_code(&answer, remote);
             }
             to_hub.extend(answer.send);
         }
@@ -357,7 +358,7 @@ pub fn remote_ws(data: &[u8]) {
         watch.see(&step);
         assert!(remote.buffered_for_tests() <= MAX_MESSAGE_BYTES);
         if code.is_none() {
-            code = shown_code(&step);
+            code = shown_code(&step, &remote);
         }
         for m in &step.send {
             let h = hub.on_ws(ws(m), now);

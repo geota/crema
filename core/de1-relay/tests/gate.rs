@@ -271,3 +271,52 @@ fn new_window_aborts_old_holder() {
     assert_eq!(s.send[0].bytes, vec![kind::ABORT, 4, 0]);
     assert_eq!(gate.lock().unwrap().status(reopen).failures, 0);
 }
+
+/// The gate closes (or closes and reopens) after the preflight check but before
+/// message 3 is read under the gate lock: the in-lock slot check sees the slot
+/// is gone, so a wrong code is answered as a cancel and counts nothing, never
+/// as a `WrongCode` attempt against a slot the hub no longer holds.
+#[test]
+fn gate_change_between_preflight_and_msg3_counts_nothing() {
+    for reopen in [false, true] {
+        let gate = new_gate();
+        open_gate(&gate, T0);
+        let mut link = Link::pairing(
+            &remote_keys(),
+            &hub_keys(),
+            gate.clone(),
+            new_pins(vec![]),
+            0,
+            T0,
+        );
+        link.pump();
+        let code = link.shown_code().unwrap();
+        let hook_gate = gate.clone();
+        link.hub.run_before_msg3_lock_for_tests(move || {
+            let mut g = hook_gate.lock().unwrap();
+            g.close();
+            if reopen {
+                g.open(T0).unwrap();
+            }
+        });
+        link.enter_code(&wrong_code(&code));
+        let events = link.hub_events();
+        assert!(
+            events.iter().any(|e| matches!(e, RelayEvent::PairingFailed { reason, failures: 0, .. } if reason == "Cancelled")),
+            "reopen={reopen}: {events:?}"
+        );
+        assert!(!events.iter().any(
+            |e| matches!(e, RelayEvent::PairingFailed { reason, .. } if reason == "WrongCode")
+        ));
+        let last = link.sent(Dir::ToRemote).last().unwrap().bytes.clone();
+        assert_eq!(
+            last,
+            vec![kind::ABORT, 4, 0],
+            "ABORT(CANCELLED), not HANDSHAKE_FAILED"
+        );
+        let status = gate.lock().unwrap().status(T0);
+        assert_eq!(status.failures, 0);
+        assert_eq!(status.open, reopen);
+        assert!(!status.pending);
+    }
+}

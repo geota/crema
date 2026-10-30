@@ -124,6 +124,13 @@ jobs:
             -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
             --no-daemon --stacktrace
 
+      # AC-54: the nightly APK's libde1_ffi.so and its Kotlin bindings carry no
+      # deterministic relay test constructors.
+      - name: Relay release-symbols check
+        run: |
+          scripts/relay-release-symbols-check.sh apk \
+            android/app/build/outputs/apk/nightly/app-nightly.apk android/app/build/generated/uniffi
+
       - name: Collect APK
         env:
           VERSION_NAME: ${{ steps.v.outputs.name }}

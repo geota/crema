@@ -20,6 +20,9 @@ use std::cell::Cell;
 
 use wasm_bindgen::prelude::*;
 
+// Relay v4 secure channel (its own module and exports; see relay.rs).
+mod relay;
+
 // ── Panic reporting ─────────────────────────────────────────────────
 //
 // A panic on wasm32-unknown-unknown is a trap whose only trace used to be
