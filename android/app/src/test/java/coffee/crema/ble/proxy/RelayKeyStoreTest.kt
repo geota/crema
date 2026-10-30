@@ -243,10 +243,8 @@ class RelayKeyStoreTest {
 
     private val keystore = FakeKeystore()
 
-    private fun probedStore() = RelayKeyStore(
-        dir,
-        SecretBox(AndroidKeystoreCipher(RelayKeyStore.RELAY_ALIAS, RelayKeyStore.RELAY_AAD, AndroidKeystoreKeySource(RelayKeyStore.RELAY_ALIAS, keystore))),
-    ) { now }
+    /** The production relay box ([RelayKeyStore.deviceBox]) over a fake keystore. */
+    private fun probedStore() = RelayKeyStore(dir, RelayKeyStore.deviceBox(keystore)) { now }
 
     @Test
     fun `AC-30 a keystore that isn't ready (no alias listed) is transient, never a reset`() {

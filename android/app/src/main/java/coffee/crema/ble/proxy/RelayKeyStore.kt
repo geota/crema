@@ -3,7 +3,10 @@ package coffee.crema.ble.proxy
 import android.util.Log
 import coffee.crema.core.RelayKeys
 import coffee.crema.persist.SafeFile
+import coffee.crema.security.AndroidKeyStoreBackend
 import coffee.crema.security.AndroidKeystoreCipher
+import coffee.crema.security.AndroidKeystoreKeySource
+import coffee.crema.security.KeystoreBackend
 import coffee.crema.security.KeystoreFailure
 import coffee.crema.security.SecretBox
 import java.io.File
@@ -322,8 +325,12 @@ class RelayKeyStore(
             ignoreUnknownKeys = true
         }
 
-        /** The device box for the relay key: dedicated alias and AAD (§5.1). */
-        fun deviceBox(): SecretBox = SecretBox(AndroidKeystoreCipher(RELAY_ALIAS, RELAY_AAD))
+        /**
+         * The device box for the relay key: dedicated alias and AAD (§5.1), and the
+         * strict key lookup with the liveness probe ([AndroidKeystoreKeySource]).
+         */
+        fun deviceBox(backend: KeystoreBackend = AndroidKeyStoreBackend): SecretBox =
+            SecretBox(AndroidKeystoreCipher(RELAY_ALIAS, RELAY_AAD, AndroidKeystoreKeySource(RELAY_ALIAS, backend)))
 
         internal fun b64(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
 

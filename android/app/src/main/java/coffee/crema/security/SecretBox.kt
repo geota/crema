@@ -223,15 +223,32 @@ class AndroidKeystoreKeySource(
 }
 
 /**
- * Seals with AES-256-GCM under [keys] (by default a non-exportable
- * AndroidKeyStore key under [alias]), binding [aad] as associated data when it
+ * The account-token boxes' key lookup, unchanged from before relay v4: a key
+ * that can't be found is created on seal, and is a loss on open (which
+ * [SecretBox.open] turns into signed out). No liveness probe and no strict
+ * "listed but no key" rule: those apply to the relay key only
+ * ([AndroidKeystoreKeySource]), so the token sign-in paths behave as they did.
+ */
+class LegacyKeystoreKeySource(
+    private val alias: String,
+    private val backend: KeystoreBackend = AndroidKeyStoreBackend,
+) : SecretKeySource {
+    override fun existing(): SecretKey? = backend.getKey(alias)
+
+    override fun getOrCreate(): SecretKey = existing() ?: backend.generate(alias)
+}
+
+/**
+ * Seals with AES-256-GCM under [keys] (by default the strict, probed
+ * [AndroidKeystoreKeySource] for [alias], as the relay key uses; the token boxes
+ * pass [LegacyKeystoreKeySource]), binding [aad] as associated data when it
  * is non-empty: a blob sealed under one purpose's AAD never opens under
  * another's (the relay key uses `"relay-v4 static"`). A missing key throws
  * [KeystoreKeyMissingException]; a wrong key, AAD or tampered blob throws
  * `AEADBadTagException`.
  */
 class AndroidKeystoreCipher(
-    private val alias: String = "crema.secretbox.v1",
+    private val alias: String,
     private val aad: ByteArray = ByteArray(0),
     private val keys: SecretKeySource = AndroidKeystoreKeySource(alias),
 ) : SecretCipher {
@@ -262,5 +279,12 @@ class AndroidKeystoreCipher(
 
 /** Process-wide box over the device keystore — shared by every token store. */
 object DeviceSecretBox {
-    val instance: SecretBox by lazy { SecretBox(AndroidKeystoreCipher()) }
+    /** The account tokens' alias. */
+    const val TOKEN_ALIAS = "crema.secretbox.v1"
+
+    val instance: SecretBox by lazy { create() }
+
+    /** The token box over [backend]: the token alias, no AAD, the pre-relay-v4 key handling. */
+    internal fun create(backend: KeystoreBackend = AndroidKeyStoreBackend): SecretBox =
+        SecretBox(AndroidKeystoreCipher(TOKEN_ALIAS, keys = LegacyKeystoreKeySource(TOKEN_ALIAS, backend)))
 }

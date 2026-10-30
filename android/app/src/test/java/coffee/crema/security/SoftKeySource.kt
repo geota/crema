@@ -43,19 +43,28 @@ class ScriptedCipher(private val inner: SecretCipher) : SecretCipher {
 /**
  * An in-memory [KeystoreBackend] with software AES keys. [notReady] models
  * keystore2 still starting: `containsAlias` is false for every alias and no key
- * is returned; [generateFailure] makes key creation throw.
+ * is returned; [generateFailure] makes key creation throw; [failure] makes
+ * every call throw (a keystore error).
  */
 class FakeKeystore : KeystoreBackend {
     val keys = mutableMapOf<String, SecretKey>()
     var notReady = false
     var generateFailure: Exception? = null
+    var failure: Exception? = null
     val generated = mutableListOf<String>()
 
-    override fun containsAlias(alias: String): Boolean = !notReady && alias in keys
+    override fun containsAlias(alias: String): Boolean {
+        failure?.let { throw it }
+        return !notReady && alias in keys
+    }
 
-    override fun getKey(alias: String): SecretKey? = if (notReady) null else keys[alias]
+    override fun getKey(alias: String): SecretKey? {
+        failure?.let { throw it }
+        return if (notReady) null else keys[alias]
+    }
 
     override fun generate(alias: String): SecretKey {
+        failure?.let { throw it }
         generateFailure?.let { throw it }
         generated += alias
         // A not-ready keystore may still hand back a key it doesn't list or keep.
