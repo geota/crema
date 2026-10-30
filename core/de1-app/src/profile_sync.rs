@@ -127,6 +127,13 @@ pub(crate) struct ProfileSync {
 }
 
 impl ProfileSync {
+    /// The current link generation (bumped by every drop and teardown; kept
+    /// across [`CremaCore::reset`]).
+    #[cfg(test)]
+    pub(crate) fn generation(&self) -> u32 {
+        self.generation
+    }
+
     fn status(&self) -> ProfileSyncStatus {
         ProfileSyncStatus {
             desired: self.desired.as_ref().map(|d| d.fingerprint.clone()),

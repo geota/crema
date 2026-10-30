@@ -2322,11 +2322,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ) }
         // On a remote the core keeps following the hub's values (§7.4).
         pushCoreInputs(effectiveState())
-        // Re-run the connect sweep with the restored prefs — machine registers
-        // plus the Quick-Controls steam / hot-water / flush params — so a
-        // restore takes effect without waiting for the next connect or QC edit
-        // (a no-op when disconnected or off-primary).
-        seedMachineSettings()
+        // Re-send the connect sweep's settings with the restored prefs — machine
+        // registers plus the Quick-Controls steam / hot-water / flush params —
+        // so a restore takes effect without waiting for the next connect or QC
+        // edit (its writes are a no-op when disconnected or off-primary). Not
+        // the sweep itself: only the on-ready sweep settles the link for the
+        // profile sync, and a restore while the DE1 is down must not.
+        seedMachineSettings(onReady = false)
         persistPrefs() // pushes the hub's snapshot too
     }
 
@@ -3078,7 +3080,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  without this the machine silently runs the firmware defaults (the
      *  constant-fan report, geota/crema#31). Safe to call any time — the writes
      *  route through [routeWrite], a no-op when disconnected. */
-    private fun seedMachineSettings() {
+    private fun seedMachineSettings(onReady: Boolean = true) {
         // One core-owned list (`CremaCore::connect_sweep`, web runs the same):
         // USB charger (Tablet charging setting), the user-presence feature flag
         // (FeatureFlags bit 0 — UserPresent pokes, sent on real activity by the
@@ -3096,7 +3098,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // The notification clock (elapsedRealtime), like every core
             // timestamp: wall-clock ms pushed the core's clock decades ahead
             // and every watchdog compared against the wrong epoch.
-            bridge.connectSweep(json.encodeToString(ConnectSweepSettings.serializer(), settings), SystemClock.elapsedRealtime().toULong())
+            val settingsJson = json.encodeToString(ConnectSweepSettings.serializer(), settings)
+            val now = SystemClock.elapsedRealtime().toULong()
+            // Only the link's ready transition settles the profile sync (its
+            // first sweep uploads the desired profile).
+            if (onReady) bridge.connectSweep(settingsJson, now) else bridge.reapplyMachineSettings(settingsJson, now)
         }
     }
 

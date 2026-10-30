@@ -120,17 +120,74 @@ class ShotStartOverridesTest {
         fun desired() = json.decodeFromString(ProfileSyncStatus.serializer(), bridge.profileSyncStatus()).desired
         assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "the bare profile at first")
 
+        val moved = System.nanoTime()
         vm.quickAdjustBrew(active.dose.toDouble(), active.yieldOut.toDouble(), dial.anchor + 1, null)
         VmHarness.idle()
         vm.quickAdjustBrew(active.dose.toDouble(), active.yieldOut.toDouble(), dial.anchor + 2, null)
         VmHarness.idle()
         drainCoreLane(vm)
-        assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "not while the dial moves")
+        val seenAfterMs = (System.nanoTime() - moved) / 1_000_000
+        // The debounce is real time: the check means something only when it
+        // ran well inside the 0.5 s (a loaded machine can take longer).
+        if (seenAfterMs < 300) {
+            assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "not while the dial moves")
+        }
 
         val dialled = effectiveProfileFingerprint(profileJson, vm.ui.value.brewParams.overridesJson(json))
         Thread.sleep(800) // the 0.5 s debounce, with margin
         drainCoreLane(vm)
         assertEquals(dialled, desired(), "the dialled profile once it rests")
+    }
+
+    /** Ack every profile write of [o] on [bridge], as the write executor does. */
+    private fun ackAll(bridge: CremaBridge, o: coffee.crema.core.CoreOutput) {
+        for (w in o.commands.filterIsInstance<coffee.crema.core.Command.WriteCharacteristic>()) {
+            val source = when (w.content.target) {
+                coffee.crema.core.WriteTarget.De1ProfileHeader -> coffee.crema.core.NotificationSource.DE1_HEADER_ACK
+                coffee.crema.core.WriteTarget.De1ProfileFrame -> coffee.crema.core.NotificationSource.DE1_FRAME_ACK
+                else -> continue
+            }
+            bridge.onNotification(source, w.content.data.map { it.toByte() }.toByteArray(), 0uL)
+        }
+    }
+
+    private fun out(raw: String) = json.decodeFromString(coffee.crema.core.CoreOutput.serializer(), raw)
+
+    private fun uploads(o: coffee.crema.core.CoreOutput) =
+        o.events.count { it is coffee.crema.core.Event.ProfileUploadStarted }
+
+    /** Hot-water review finding on #228: a backup restore re-sends the
+     *  connect sweep's settings. Done while the DE1 is down, it must not
+     *  settle the link, or the real reconnect skips the profile upload. */
+    @Test
+    fun `a restore while the DE1 is down does not skip the reconnect upload`() {
+        val vm = build()
+        val bridge = bridgeOf(vm)
+        drainCoreLane(vm)
+        val modelReply = ByteArray(20).also { it[1] = 0x80.toByte(); it[3] = 0x0C; it[4] = 1 }
+        val idle = byteArrayOf(2, 0)
+        // Connected: the model, an idle machine, the on-ready sweep, whose
+        // upload of the desired profile lands.
+        bridge.onNotification(coffee.crema.core.NotificationSource.DE1_MMR_READ, modelReply, 0uL)
+        bridge.onNotification(coffee.crema.core.NotificationSource.DE1_STATE, idle, 0uL)
+        val first = out(bridge.connectSweep("{}", 0uL))
+        assertEquals(1, uploads(first), "the connect uploads")
+        ackAll(bridge, first)
+        assertNotNull(json.decodeFromString(ProfileSyncStatus.serializer(), bridge.profileSyncStatus()).lastPushed)
+
+        // The DE1 goes down; a backup is restored meanwhile.
+        bridge.de1LinkLost()
+        val backup = assertNotNull(kotlinx.coroutines.runBlocking { vm.buildBackupZipBytes() })
+        kotlinx.coroutines.runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) }
+        // The restore applies on its own coroutine: wait for its notice (it
+        // re-sends the settings just before).
+        VmHarness.idleUntil("the restore") { vm.ui.value.userMessages.any { it.startsWith("Restored ") } }
+        drainCoreLane(vm)
+
+        // The real reconnect: its on-ready sweep uploads the profile.
+        bridge.onNotification(coffee.crema.core.NotificationSource.DE1_STATE, idle, 0uL)
+        val again = out(bridge.connectSweep("{}", 0uL))
+        assertEquals(1, uploads(again), "the reconnect uploads")
     }
 
     @Test

@@ -12959,6 +12959,48 @@ mod tests {
                 assert!(!core.profile_sync_status().uploading);
             }
 
+            /// A settings re-sweep while the DE1 is down (a restored backup)
+            /// must not settle the link: the real reconnect's sweep still
+            /// uploads (hot-water review finding on #228).
+            #[test]
+            fn a_restore_while_the_de1_is_down_does_not_skip_the_reconnect_upload() {
+                let p = library("Daily");
+                let mut core = connected();
+                let _ = desire(&mut core, &p, &BrewOverrides::default(), 0);
+                let first = sweep(&mut core, 10);
+                let _ = ack_every_frame(&mut core, &first.commands, 1);
+                assert!(core.profile_sync_status().holds_desired());
+
+                // The link drops; a backup restore re-sends the settings.
+                let _ = core.de1_link_lost();
+                let restore = core.reapply_machine_settings(&ConnectSweepSettings::default(), 20);
+                assert_eq!(uploads(&restore), 0, "nothing goes to a DE1 that is down");
+                assert!(
+                    !restore.commands.is_empty(),
+                    "the settings writes themselves"
+                );
+                assert_eq!(uploads(&core.on_tick(30_000)), 0);
+
+                // The real reconnect: the on-ready sweep uploads.
+                let _ = idle(&mut core, 40_000);
+                let again = sweep(&mut core, 40_010);
+                assert_eq!(uploads(&again), 1, "the reconnect uploads");
+            }
+
+            /// The link generation lives across a teardown (`reset` rebuilds the
+            /// core with `CremaCore::new`): each one starts a new generation.
+            #[test]
+            fn the_link_generation_survives_a_reset() {
+                let mut core = connected();
+                let g0 = core.profile_sync.generation();
+                let _ = core.de1_link_lost();
+                assert_eq!(core.profile_sync.generation(), g0.wrapping_add(1));
+                let _ = core.reset();
+                assert_eq!(core.profile_sync.generation(), g0.wrapping_add(2));
+                let _ = core.reset();
+                assert_eq!(core.profile_sync.generation(), g0.wrapping_add(3));
+            }
+
             #[test]
             fn no_upload_while_a_firmware_flash_holds_the_link() {
                 let p = library("Daily");

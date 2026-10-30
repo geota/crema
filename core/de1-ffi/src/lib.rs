@@ -2670,6 +2670,17 @@ impl CremaBridge {
         self.emit(out)
     }
 
+    /// The connect sweep's writes without settling the profile sync's
+    /// connection — for re-sending the settings outside the link's ready
+    /// transition (a restored backup); safe while the DE1 is down. See
+    /// [`CremaCore::reapply_machine_settings`](de1_app::CremaCore::reapply_machine_settings).
+    pub fn reapply_machine_settings(&self, settings_json: String, now_ms: u64) -> String {
+        let out = self
+            .core()
+            .reapply_machine_settings_json(&settings_json, now_ms);
+        self.emit(out)
+    }
+
     /// Feed the idle-sleep timer ("Sleep after") one input — a JSON
     /// `IdleSleepInput` (`{"type":"Tick"}`, `{"type":"Configure","content":
     /// {"minutes":60}}`, `{"type":"Activity","content":{"kind":"Touch"}}`,
