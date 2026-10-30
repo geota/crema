@@ -12,9 +12,8 @@ import coffee.crema.settings.carries
  */
 
 /** The confirmation a leaving remote shows: [changed] of its own values
- *  differ from the hub's; [legacyUnknown] adoptable settings an older hub
- *  doesn't send stay as they are. */
-data class AdoptPrompt(val hubName: String, val changed: Int, val legacyUnknown: Int)
+ *  differ from the hub's. */
+data class AdoptPrompt(val hubName: String, val changed: Int)
 
 /** The hub's value of an adoptable [setting] in [cfg]. */
 internal fun hubValue(cfg: ConfigSnapshot, setting: Setting): Any? = when (setting) {
@@ -82,9 +81,6 @@ internal fun ownValue(own: MainUiState, setting: Setting): Any? = when (setting)
 fun adoptableChanges(own: MainUiState, cfg: ConfigSnapshot): Set<Setting> =
     Setting.entries.filter { it.adoptable && cfg.carries(it) && hubValue(cfg, it) != ownValue(own, it) }.toSet()
 
-/** How many adoptable settings [cfg] doesn't carry (an older hub's). */
-fun legacyUnknownCount(cfg: ConfigSnapshot): Int = Setting.entries.count { it.adoptable && !cfg.carries(it) }
-
 /**
  * [own] with the hub's values for [changes] (pure). The active bean is taken
  * only when this library has it ([hasBean]), else cleared; the active
@@ -102,18 +98,18 @@ fun adopt(own: MainUiState, cfg: ConfigSnapshot, changes: Set<Setting>, hasBean:
             Setting.QC_HOT_WATER_VOLUME -> s.copy(qcHotWaterVolumeMl = cfg.qcHotWaterVolumeMl)
             Setting.QC_FLUSH_TIME -> s.copy(qcFlushTimeS = cfg.qcFlushTimeS)
             Setting.QC_FLUSH_TEMP -> s.copy(qcFlushTempC = cfg.qcFlushTempC)
-            Setting.STEAM_ECO -> cfg.steamEco?.let { s.copy(steamEco = it) } ?: s
-            Setting.STEAM_TWO_TAP -> cfg.steamTwoTap?.let { s.copy(steamTwoTap = it) } ?: s
-            Setting.FAN_THRESHOLD -> cfg.fanThresholdC?.let { s.copy(fanThresholdC = it) } ?: s
-            Setting.WATER_REFILL_POINT -> cfg.waterRefillPointMm?.let { s.copy(waterRefillPointMm = it) } ?: s
+            Setting.STEAM_ECO -> s.copy(steamEco = cfg.steamEco)
+            Setting.STEAM_TWO_TAP -> s.copy(steamTwoTap = cfg.steamTwoTap)
+            Setting.FAN_THRESHOLD -> s.copy(fanThresholdC = cfg.fanThresholdC)
+            Setting.WATER_REFILL_POINT -> s.copy(waterRefillPointMm = cfg.waterRefillPointMm)
             Setting.STOP_ON_WEIGHT -> s.copy(stopOnWeight = cfg.stopOnWeight)
             Setting.AUTO_TARE -> s.copy(autoTare = cfg.autoTare)
             Setting.MAX_SHOT_DURATION -> s.copy(maxShotDurationS = cfg.maxShotDurationS)
-            Setting.VOLUME_STOP_WITH_SCALE -> cfg.volumeStopWithScale?.let { s.copy(volumeStopWithScale = it) } ?: s
-            Setting.REQUIRE_SCALE -> cfg.requireScale?.let { s.copy(requireScale = it) } ?: s
-            Setting.PRE_FLUSH -> cfg.preFlush?.let { s.copy(preFlush = it) } ?: s
-            Setting.STEAM_PURGE -> cfg.steamPurge?.let { s.copy(steamPurge = it) } ?: s
-            Setting.IDLE_SLEEP -> cfg.idleSleepMin?.let { s.copy(idleSleepMin = it) } ?: s
+            Setting.VOLUME_STOP_WITH_SCALE -> s.copy(volumeStopWithScale = cfg.volumeStopWithScale)
+            Setting.REQUIRE_SCALE -> s.copy(requireScale = cfg.requireScale)
+            Setting.PRE_FLUSH -> s.copy(preFlush = cfg.preFlush)
+            Setting.STEAM_PURGE -> s.copy(steamPurge = cfg.steamPurge)
+            Setting.IDLE_SLEEP -> s.copy(idleSleepMin = cfg.idleSleepMin)
             Setting.GRINDER_MODEL -> s.copy(grinderModel = cfg.grinderModel)
             Setting.QC_GRIND -> s.copy(qcGrind = cfg.qcGrind)
             Setting.ACTIVE_PROFILE -> cfg.activeProfileId?.let { s.copy(activeProfileId = it) } ?: s

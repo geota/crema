@@ -2805,7 +2805,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 brewPreinfuseS = ui.brewParams?.preinf,
                 primaryName = deviceLabel(),
                 authority = "primary",
-                settingsSchema = 1,
                 rev = rev,
                 steamEco = ui.steamEco,
                 steamTwoTap = ui.steamTwoTap,
@@ -3406,7 +3405,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         pendingLeave = PendingLeave(next, epoch, snapshot, changes)
-        _ui.update { it.copy(adoptPrompt = AdoptPrompt(it.remoteHubLabel(), changes.size, legacyUnknownCount(snapshot))) }
+        _ui.update { it.copy(adoptPrompt = AdoptPrompt(it.remoteHubLabel(), changes.size)) }
     }
 
     /** The T6 confirmation's answer: "Use <hub>'s" ([useHub]) or "Keep mine"

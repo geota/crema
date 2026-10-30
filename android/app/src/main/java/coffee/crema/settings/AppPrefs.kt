@@ -484,32 +484,32 @@ data class ConfigSnapshot(
     /** Config owner — always `"primary"` from a primary; a secondary uses it to
      *  flag that it is viewing as a read-only mirror. */
     val authority: String = "primary",
-    // ── Settings ownership (spec §6.1). All nullable: null = the hub didn't
-    // send it (an older hub), and the remote shows it as unknown. ────────────
-    /** `1` from a hub that sends the full set below. */
-    val settingsSchema: Int? = null,
+    // ── Settings ownership (spec §6.1). Every v4 hub sends these, so they are
+    // required: a snapshot without one fails to decode and is dropped. ─────
     /** A counter from 0 the hub bumps for every snapshot it builds; a remote
      *  drops one at or below the last it applied, and resets on each Welcome. */
-    val rev: Long? = null,
-    val steamEco: Boolean? = null,
-    val steamTwoTap: Boolean? = null,
-    val fanThresholdC: Float? = null,
+    val rev: Long,
+    val steamEco: Boolean,
+    val steamTwoTap: Boolean,
+    val fanThresholdC: Float,
     /** The resolved refill point (the default when unset), raw sensor mm. */
-    val waterRefillPointMm: Float? = null,
-    /** The DE1's mains heater voltage (MMR `HeaterVoltage`). */
+    val waterRefillPointMm: Float,
+    /** The DE1's mains heater voltage (MMR `HeaterVoltage`); null until the
+     *  hub has read the register. */
     val heaterVoltage: Int? = null,
-    /** The DE1's flow calibration multiplier, decoded. */
+    /** The DE1's flow calibration multiplier, decoded; null until read. */
     val flowMultiplier: Float? = null,
-    /** The hub core's resolved line frequency, Hz, and its override (0 = auto). */
+    /** The hub core's resolved line frequency, Hz (null until it is known),
+     *  and its override (0 = auto). */
     val lineFrequencyHz: Float? = null,
-    val lineFrequencyOverride: Float? = null,
+    val lineFrequencyOverride: Float,
     /** The cup-warmer setpoint (Bengle, MMR `CupWarmerTemp`); null on other machines. */
     val cupWarmerTempC: Int? = null,
-    val volumeStopWithScale: Boolean? = null,
-    val requireScale: Boolean? = null,
-    val preFlush: Boolean? = null,
-    val steamPurge: Boolean? = null,
-    val idleSleepMin: Int? = null,
+    val volumeStopWithScale: Boolean,
+    val requireScale: Boolean,
+    val preFlush: Boolean,
+    val steamPurge: Boolean,
+    val idleSleepMin: Int,
 )
 
 /** Decode `prefs.json`'s text: the nested shape, or a pre-unification FLAT

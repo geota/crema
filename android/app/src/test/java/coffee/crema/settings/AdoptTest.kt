@@ -4,7 +4,6 @@ import coffee.crema.ui.BrewParams
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.adopt
 import coffee.crema.ui.adoptableChanges
-import coffee.crema.ui.legacyUnknownCount
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -12,9 +11,9 @@ import kotlin.test.assertEquals
 class AdoptTest {
 
     private val own = MainUiState(qcSteamTempC = 140f, stopOnWeight = false, steamEco = false, activeBeanId = "bean:p", qcGrind = 10f, themeMode = "light")
-    private val cfg = ConfigSnapshot(
+    private val cfg = v4Snapshot(own).copy(
         qcSteamTempC = 150f, stopOnWeight = true, steamEco = true, activeBeanId = "bean:s", qcGrind = 15f,
-        brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0, settingsSchema = 1,
+        brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0,
     )
 
     @Test
@@ -43,12 +42,9 @@ class AdoptTest {
         assertEquals(null, adopted.activeBeanId)
     }
 
+    /** Relay v4 R3b: a v4 snapshot carries every adoptable setting. */
     @Test
-    fun `an older hub's missing settings are neither changes nor adopted`() {
-        val legacy = cfg.copy(settingsSchema = null, steamEco = null)
-        val changes = adoptableChanges(own, legacy)
-        assertEquals(false, Setting.STEAM_ECO in changes)
-        assertEquals(false, adopt(own, legacy, changes, { true }).steamEco)
-        assertEquals(9, legacyUnknownCount(ConfigSnapshot()))
+    fun `a v4 snapshot carries every adoptable setting`() {
+        assertEquals(emptyList(), Setting.entries.filter { it.adoptable && !cfg.carries(it) })
     }
 }

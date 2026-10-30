@@ -264,7 +264,7 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
 )
 
 /** Snapshot fields that are not settings: identity and bookkeeping. */
-val SNAPSHOT_META: Set<String> = setOf("activeProfileJson", "activeBeanSummary", "primaryName", "authority", "settingsSchema", "rev")
+val SNAPSHOT_META: Set<String> = setOf("activeProfileJson", "activeBeanSummary", "primaryName", "authority", "rev")
 
 /** The setting a #203 [MachineCommand.Config] edits. Exhaustive, so a new
  *  Config subtype has to answer it. */

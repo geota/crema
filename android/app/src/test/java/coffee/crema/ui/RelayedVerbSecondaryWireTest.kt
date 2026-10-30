@@ -55,6 +55,7 @@ class RelayedVerbSecondaryWireTest {
     /** The test primary's config snapshot: an accepted `setQcGrind`
      *  updates it and pushes it before the reply, as a real hub does. */
     @Volatile private var hubConfig = ""
+    @Volatile private var hubRev = 0L
 
     private val hub: RelayHub = RelayHub(
         primaryName = "Test primary",
@@ -67,7 +68,7 @@ class RelayedVerbSecondaryWireTest {
                 Result.failure(IllegalStateException("refused by the test primary"))
             } else {
                 if (method == "setQcGrind") {
-                    hubConfig = """{"qcGrind":$args}"""
+                    hubConfig = coffee.crema.settings.v4SnapshotJson(rev = ++hubRev) { it.copy(qcGrind = args.toFloat()) }
                     pushHubConfig()
                 }
                 Result.success(Unit)

@@ -162,14 +162,13 @@ class StandaloneSettingsTest {
         assertEquals(41f, duration.maxShotDurationS)
         val freq = pushedBy("a line frequency") { vm.setLineFrequency(50f) }
         assertEquals(50f, freq.lineFrequencyOverride)
-        // A schema-1 snapshot, numbered, with the hub's own values.
+        // A v4 snapshot, numbered, with the hub's own values.
         vm.setSteamEco(true)
         vm.setPreFlush(true)
         val last = pushedBy("an edit") { vm.setIdleSleepMin(60) }
-        assertEquals(1, last.settingsSchema)
         assertEquals(listOf(true, true, 60), listOf(last.steamEco, last.preFlush, last.idleSleepMin))
         assertEquals(VmHarness.ownState(vm).fanThresholdC, last.fanThresholdC)
-        val revs = configs().map { it.rev!! }
+        val revs = configs().map { it.rev }
         assertEquals(revs.sorted(), revs, "revs only go up")
         assertEquals(revs.size, revs.toSet().size)
     }

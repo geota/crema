@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
 class MirroredSettingsTest {
 
     private val own = MainUiState(stopOnWeight = false, qcGrind = 10f, qcSteamTempC = 140f, weightUnit = "oz", themeMode = "light")
-    private val snap = ConfigSnapshot(stopOnWeight = true, qcGrind = 15f, qcSteamTempC = 150f)
+    private val snap = v4Snapshot(own).copy(stopOnWeight = true, qcGrind = 15f, qcSteamTempC = 150f)
 
     @Test
     fun `effective is the identity without a slice`() {
@@ -98,12 +98,13 @@ class MirroredSettingsTest {
         assertEquals(slice.pending, dropped.pending, "kept on screen")
     }
 
+    /** AC-42: a snapshot at or below the last applied rev is stale until a
+     *  new Welcome. Every v4 snapshot has a rev; none always applies. */
     @Test
-    fun `a snapshot at or below the last applied rev is stale, until a new Welcome`() {
+    fun staleRevDropped() {
         val slice = MirroredSettings().applied(snap.copy(rev = 5), null, null)
         assertTrue(slice.isStale(5) && slice.isStale(4))
         assertTrue(!slice.isStale(6))
-        assertTrue(!slice.isStale(null), "an older hub sends no rev")
         assertTrue(!slice.welcomed("Kitchen tablet").isStale(1), "a restarted hub counts from 0 again")
     }
 }

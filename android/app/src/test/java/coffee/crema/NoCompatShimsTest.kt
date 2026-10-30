@@ -77,6 +77,17 @@ class NoCompatShimsTest {
         assertTrue(!File(golden, "v3").exists())
     }
 
+    /** AC-42 (R3, R3b): no unit fields' deprecation set, no settings schema,
+     *  no older-hub adoption count and no "update the hub" copy. */
+    @Test
+    fun legacySnapshotGone() = assertNone(
+        "legacy snapshot handling left in main",
+        Regex("\\bSNAPSHOT_DEPRECATED\\b"),
+        Regex("\\bsettingsSchema\\b"),
+        Regex("\\blegacyUnknown"),
+        Regex("to see this here"),
+    )
+
     @Test
     fun thePatternsMatchWhatTheyGuard() {
         assertTrue(Regex("\\bPairingRequest\\b").containsMatchIn("class PairingRequest("))
