@@ -209,10 +209,12 @@ fn static_with_other_id_is_peer_id_mismatch() {
     assert!(!last.send.iter().any(|m| m.bytes[0] == kind::NOISE_HS));
 }
 
-/// Names with é, emoji and right-to-left text pair, show sanitized, and are bound.
+/// Names with é, emoji and right-to-left text pair, show sanitized (a bidi
+/// override dropped), and are bound.
 #[test]
 fn non_ascii_names_pair_and_bind() {
-    let name = "Café ☕ \u{202e}עברית";
+    let sent = "Café ☕ \u{202e}עברית";
+    let name = "Café ☕ עברית";
     let gate = new_gate();
     open_gate(&gate, T0);
     let pins = new_pins(vec![]);
@@ -225,7 +227,7 @@ fn non_ascii_names_pair_and_bind() {
         T0,
     );
     let (remote, first) =
-        RemoteConnection::pair(&remote_keys(), name, test_seed("remote-conn", 0), T0);
+        RemoteConnection::pair(&remote_keys(), sent, test_seed("remote-conn", 0), T0);
     let mut link = Link::with(hub, remote, first, gate, pins, T0);
     link.pump();
     assert!(link.hub_events().contains(&RelayEvent::PairRequest {
@@ -302,4 +304,21 @@ fn resume_hello_has_empty_name() {
     );
     let s = hub.on_ws(WsIn::Text(named.as_bytes()), T0);
     assert_eq!(s.close.unwrap().code, ws_close::PROTOCOL);
+}
+
+/// Format characters (bidi controls, zero-width marks, the BOM, tags) can't
+/// reorder or hide text in the hub's dialog; control characters neither.
+#[test]
+fn names_drop_control_and_format_characters() {
+    use de1_relay::sanitize_name;
+    assert_eq!(
+        sanitize_name("Pixel\u{202e}8 lanoisivorP"),
+        "Pixel8 lanoisivorP"
+    );
+    assert_eq!(sanitize_name("Pi\u{200b}xel\u{200d}\u{feff} 8"), "Pixel 8");
+    assert_eq!(sanitize_name("\u{2066}Phone\u{2069}\u{e0041}"), "Phone");
+    assert_eq!(sanitize_name("Sam\u{0}\u{7}\n\u{2028}'s"), "Sam's");
+    assert_eq!(sanitize_name("\u{202e}\u{200b} "), "Unnamed device");
+    assert_eq!(sanitize_name("Café ☕ 🍵 עברית"), "Café ☕ 🍵 עברית");
+    assert_eq!(sanitize_name(&"x".repeat(40)).chars().count(), 32);
 }

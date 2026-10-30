@@ -322,6 +322,17 @@ impl RemoteConnection {
                     return self.malformed("empty message");
                 };
                 match (phase, k) {
+                    // Once the session is up, only records are allowed (§4.3).
+                    (Phase::Established, kind::ABORT) => {
+                        let mut step = Step::default();
+                        self.fail(
+                            &mut step,
+                            None,
+                            ws_close::PROTOCOL,
+                            &RelayError::UnexpectedMessage,
+                        );
+                        step
+                    }
                     (_, kind::ABORT) => self.on_abort(body),
                     (Phase::AwaitHello, kind::SERVER_HELLO) => self.on_server_hello(msg, now_ms),
                     (Phase::Pake, kind::PAKE_B) => self.on_pake_b(body, now_ms),
@@ -458,7 +469,16 @@ impl RemoteConnection {
     }
 
     fn start_ik(&mut self, step: &mut Step, hub_public: [u8; 32], now_ms: u64) {
-        let prologue = noise::resume_prologue(&self.client_hello, &self.server_hello);
+        let Ok(prologue) = noise::resume_prologue(&self.client_hello, &self.server_hello) else {
+            // A ServerHello over 65 535 bytes can't be bound.
+            self.fail(
+                step,
+                Some(AbortReason::Malformed),
+                ws_close::PROTOCOL,
+                &RelayError::Malformed("prologue"),
+            );
+            return;
+        };
         let built = noise::build(
             Pattern::Resume,
             true,
@@ -499,7 +519,11 @@ impl RemoteConnection {
         let Ok(spake_key) = pake::finish(state, body, SIDE_B) else {
             return self.malformed("PAKE_B element");
         };
-        let prologue = noise::pair_prologue(&self.client_hello, &self.server_hello, &pake_a, body);
+        let Ok(prologue) =
+            noise::pair_prologue(&self.client_hello, &self.server_hello, &pake_a, body)
+        else {
+            return self.malformed("prologue");
+        };
         let psk = pake::derive_psk(&spake_key, &prologue, &self.my_id, &hub_id);
         drop(spake_key);
         #[cfg(feature = "test-seeds")]

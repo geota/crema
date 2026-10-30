@@ -243,3 +243,31 @@ fn leaked_slot_expires() {
     let s = next.on_ws(WsIn::Text(&pair_hello()), later);
     assert_eq!(status_of(&s), de1_relay::HelloStatus::AwaitingCode);
 }
+
+/// Opening a new window bumps the generation: a holder left from the old
+/// window (its lease outlived it) aborts instead of pairing into the new one.
+#[test]
+fn new_window_aborts_old_holder() {
+    let gate = new_gate();
+    open_gate(&gate, T0);
+    let mut link = Link::pairing(
+        &remote_keys(),
+        &hub_keys(),
+        gate.clone(),
+        new_pins(vec![]),
+        0,
+        T0,
+    );
+    link.pump();
+    // Code entered 1 s before the window's end: the lease runs 10 s past it.
+    let entry = T0 + PAIR_WINDOW_MS - 1_000;
+    link.now = entry;
+    link.set_tamper(Box::new(|dir, m| (dir == Dir::ToHub).then_some(m)));
+    link.enter_code(&link.shown_code().unwrap());
+    let reopen = T0 + PAIR_WINDOW_MS + 1;
+    let status = gate.lock().unwrap().open(reopen).unwrap();
+    assert!(status.open && !status.pending);
+    let s = link.hub.tick(reopen);
+    assert_eq!(s.send[0].bytes, vec![kind::ABORT, 4, 0]);
+    assert_eq!(gate.lock().unwrap().status(reopen).failures, 0);
+}

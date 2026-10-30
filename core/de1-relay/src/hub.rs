@@ -59,6 +59,9 @@ pub struct HubConnection {
     transport: Option<Transport>,
     peer_static: Option<[u8; 32]>,
     binding: Option<[u8; 32]>,
+    /// Output of a `Result` call that ended the connection and returned `Err`;
+    /// the next call (normally `tick`) returns it.
+    pending: Step,
     #[cfg(feature = "test-seeds")]
     psk_for_tests: Option<[u8; 32]>,
 }
@@ -119,6 +122,7 @@ impl HubConnection {
             transport: None,
             peer_static: None,
             binding: None,
+            pending: Step::default(),
             #[cfg(feature = "test-seeds")]
             psk_for_tests: None,
         }
@@ -235,7 +239,7 @@ impl HubConnection {
 
     fn poisoned(&mut self) -> Step {
         let mut step = Step::default();
-        self.ticket = None;
+        self.release_slot();
         step.events.push(RelayEvent::Failed {
             error: RelayError::Poisoned.name().to_owned(),
         });
@@ -248,7 +252,7 @@ impl HubConnection {
     fn preflight(&mut self, now_ms: u64) -> Option<Step> {
         self.now_ms = self.now_ms.max(now_ms);
         if self.is_terminal() {
-            return Some(Step::default());
+            return Some(core::mem::take(&mut self.pending));
         }
         if let Some(ticket) = self.ticket {
             match self.with_gate(|g| g.holds(ticket)) {
@@ -271,6 +275,59 @@ impl HubConnection {
             return Some(self.on_deadline());
         }
         None
+    }
+
+    /// Keeps a Step for the next call (see `pending`).
+    fn hold(&mut self, step: Step) {
+        let p = &mut self.pending;
+        p.send.extend(step.send);
+        p.deliver.extend(step.deliver);
+        p.events.extend(step.events);
+        if p.close.is_none() {
+            p.close = step.close;
+        }
+    }
+
+    /// For the calls that return `Result`: an attempt that has ended, or that
+    /// this call finds ended (the gate generation changed, the deadline
+    /// passed), is an `Err`, never an `Ok` without the expected output. When
+    /// this call ends it, the ABORT/close Step is held for the next call.
+    fn check_live(&mut self, now_ms: u64) -> Result<(), RelayError> {
+        self.now_ms = self.now_ms.max(now_ms);
+        if self.is_terminal() {
+            return Err(RelayError::Closed);
+        }
+        match self.preflight(now_ms) {
+            None => Ok(()),
+            Some(step) => {
+                let error = if step.events.iter().any(|e| {
+                    matches!(e, RelayEvent::Failed { error } if error == RelayError::Poisoned.name())
+                }) {
+                    RelayError::Poisoned
+                } else if step.close.as_ref().is_some_and(|c| c.code == ws_close::TIMEOUT) {
+                    RelayError::Timeout
+                } else {
+                    RelayError::PairingClosed
+                };
+                self.hold(step);
+                Err(error)
+            }
+        }
+    }
+
+    /// `check_live` without the gate check: `confirm_paired` checks the slot
+    /// itself, under the same lock as it records the success.
+    fn check_deadline(&mut self, now_ms: u64) -> Result<(), RelayError> {
+        self.now_ms = self.now_ms.max(now_ms);
+        if self.is_terminal() {
+            return Err(RelayError::Closed);
+        }
+        if self.deadline.is_some_and(|d| now_ms >= d) {
+            let step = self.on_deadline();
+            self.hold(step);
+            return Err(RelayError::Timeout);
+        }
+        Ok(())
     }
 
     fn on_deadline(&mut self) -> Step {
@@ -344,6 +401,17 @@ impl HubConnection {
                     return self.malformed("empty message");
                 };
                 match (phase, k) {
+                    // Once the session is up, only records are allowed (§4.3).
+                    (Phase::Established, kind::ABORT) => {
+                        let mut step = Step::default();
+                        self.fail(
+                            &mut step,
+                            None,
+                            ws_close::PROTOCOL,
+                            &RelayError::UnexpectedMessage,
+                        );
+                        step
+                    }
                     (_, kind::ABORT) => self.on_abort(body),
                     (Phase::AwaitCode, kind::PAKE_A) => self.on_pake_a(body),
                     (Phase::Handshake, kind::NOISE_HS) => match self.intent {
@@ -407,7 +475,10 @@ impl HubConnection {
     fn start_resume(&mut self, version: u8, now_ms: u64) -> Step {
         let mut step = Step::default();
         self.server_hello = self.server_hello(version, HelloStatus::Ready, 0).encode();
-        let prologue = noise::resume_prologue(&self.client_hello, &self.server_hello);
+        // The hub's own ServerHello and a ≤ 1 KiB ClientHello always fit.
+        let Ok(prologue) = noise::resume_prologue(&self.client_hello, &self.server_hello) else {
+            return self.malformed("prologue");
+        };
         match noise::build(
             Pattern::Resume,
             false,
@@ -482,6 +553,10 @@ impl HubConnection {
         self.release_slot();
         if was_pairing {
             self.push_pairing_failed(&mut step, reason);
+        } else {
+            step.events.push(RelayEvent::Failed {
+                error: RelayError::Aborted(abort.reason).name().to_owned(),
+            });
         }
         self.finish(&mut step, Phase::Closed, ws_close::NORMAL, reason);
         step
@@ -507,15 +582,14 @@ impl HubConnection {
     /// # Errors
     /// [`RelayError::CodeFormat`] unless `code` is exactly six ASCII digits (state
     /// unchanged, not an attempt); [`RelayError::InvalidState`] outside
-    /// `AwaitCode`, before `PAKE_A` arrived, or for a second entry.
+    /// `AwaitCode`, before `PAKE_A` arrived, or for a second entry; `Closed`,
+    /// `Timeout` or `PairingClosed` when the attempt has ended (see `confirm_paired`).
     pub fn enter_code(&mut self, code: &str, now_ms: u64) -> Result<Step, RelayError> {
         if self.spake_ran {
             return Err(RelayError::InvalidState);
         }
         let code = Code::parse(code)?;
-        if let Some(step) = self.preflight(now_ms) {
-            return Ok(step);
-        }
+        self.check_live(now_ms)?;
         if self.phase != Phase::AwaitCode {
             return Err(RelayError::InvalidState);
         }
@@ -531,8 +605,11 @@ impl HubConnection {
         let Ok(spake_key) = pake::finish(state, &pake_a, SIDE_A) else {
             return Ok(self.malformed("PAKE_A element"));
         };
-        let prologue =
-            noise::pair_prologue(&self.client_hello, &self.server_hello, &pake_a, &pake_b);
+        let Ok(prologue) =
+            noise::pair_prologue(&self.client_hello, &self.server_hello, &pake_a, &pake_b)
+        else {
+            return Ok(self.malformed("prologue"));
+        };
         let psk = pake::derive_psk(&spake_key, &prologue, &remote_id, &self.hub_id);
         drop(spake_key);
         #[cfg(feature = "test-seeds")]
@@ -708,53 +785,81 @@ impl HubConnection {
     }
 
     /// The shell stored the pin and inserted it into the live `PinSet`: send
-    /// `PAIR_COMPLETE`, record the success and close.
+    /// `PAIR_COMPLETE`, record the success and close. `Ok` means exactly that
+    /// happened; on any `Err` except a retryable `InvalidState` the shell must
+    /// roll back the pin it inserted (PROTOCOL.md §4 step 9), then apply the
+    /// next `tick()`'s Step, which carries this call's ABORT and close if it
+    /// ended the attempt.
     ///
     /// # Errors
-    /// [`RelayError::InvalidState`] outside `AwaitCommit`, or when the peer's key
-    /// isn't in the live pin set yet (the commit order of §2.4 step 9).
+    /// - [`RelayError::InvalidState`]: outside `AwaitCommit`, or the peer's key
+    ///   isn't in the live pin set yet (nothing changes; insert and retry);
+    /// - [`RelayError::Timeout`]: `PAIR_FINISH_MS` passed (`ABORT(TIMEOUT)` held);
+    /// - [`RelayError::PairingClosed`]: the gate was closed or reopened since the
+    ///   code entry (`ABORT(CANCELLED)` held);
+    /// - [`RelayError::Closed`]: the attempt had already ended (a cancel, a
+    ///   timeout, the remote's `ABORT`);
+    /// - [`RelayError::Poisoned`]: a lock was poisoned.
     pub fn confirm_paired(&mut self, now_ms: u64) -> Result<Step, RelayError> {
-        if let Some(step) = self.preflight(now_ms) {
-            return Ok(step);
-        }
+        self.check_deadline(now_ms)?;
         let (Phase::AwaitCommit, Some(peer)) = (self.phase, self.peer_static) else {
             return Err(RelayError::InvalidState);
         };
         match self.pinned(&peer) {
             Ok(true) => {}
             Ok(false) => return Err(RelayError::InvalidState),
-            Err(_) => return Ok(self.poisoned()),
+            Err(_) => {
+                let step = self.poisoned();
+                self.hold(step);
+                return Err(RelayError::Poisoned);
+            }
+        }
+        // One gate lock for "still holds the slot" and "record the success", so
+        // a concurrent close() either wins (no PAIR_COMPLETE) or comes after.
+        let ticket = self.ticket.take();
+        let committed = self.with_gate(|g| match ticket {
+            Some(t) if g.holds(t) => {
+                g.record_success(t);
+                true
+            }
+            _ => false,
+        });
+        match committed {
+            Ok(true) => {}
+            Ok(false) => {
+                let mut step = Step::default();
+                self.end_pairing(
+                    &mut step,
+                    AbortReason::Cancelled,
+                    ws_close::REFUSED,
+                    "Cancelled",
+                );
+                self.hold(step);
+                return Err(RelayError::PairingClosed);
+            }
+            Err(_) => {
+                let step = self.poisoned();
+                self.hold(step);
+                return Err(RelayError::Poisoned);
+            }
         }
         let mut step = Step::default();
-        let records = match self
+        let Some(Ok(records)) = self
             .transport
             .as_mut()
             .map(|t| t.encrypt(inner::PAIR_COMPLETE, &[], now_ms))
-        {
-            Some(Ok(records)) => records,
-            _ => {
-                self.fail(
-                    &mut step,
-                    Some(AbortReason::HandshakeFailed),
-                    ws_close::PROTOCOL,
-                    &RelayError::InvalidState,
-                );
-                return Ok(step);
-            }
+        else {
+            self.fail(
+                &mut step,
+                None,
+                ws_close::PROTOCOL,
+                &RelayError::InvalidState,
+            );
+            self.hold(step);
+            return Err(RelayError::InvalidState);
         };
         for r in records {
             step.push_binary(r);
-        }
-        let ticket = self.ticket.take();
-        if self
-            .with_gate(|g| {
-                if let Some(t) = ticket {
-                    g.record_success(t);
-                }
-            })
-            .is_err()
-        {
-            return Ok(self.poisoned());
         }
         step.events.push(RelayEvent::Paired {
             peer_id: DeviceId::of(&peer).to_hex(),
@@ -941,7 +1046,10 @@ impl HubConnection {
                 return self.transport_failed(TransportError::Protocol("PAIR_COMPLETE on resume"));
             }
             Inbound::Close(code) => {
-                self.finish(&mut step, Phase::Closed, ws_close::NORMAL, code.name());
+                step.events.push(RelayEvent::PeerClosed {
+                    reason: code.name().to_owned(),
+                });
+                self.finish(&mut step, Phase::Closed, code.ws_code(), code.name());
             }
         }
         step
@@ -981,7 +1089,7 @@ impl HubConnection {
     pub fn close(&mut self, reason: CloseReason, now_ms: u64) -> Step {
         self.now_ms = self.now_ms.max(now_ms);
         if self.is_terminal() {
-            return Step::default();
+            return core::mem::take(&mut self.pending);
         }
         let mut step = Step::default();
         if self.pairing_phase() {

@@ -156,3 +156,124 @@ fn forget_between_msg1_and_admission() {
     }));
     assert!(link.hub_delivered().is_empty() && link.remote_delivered().is_empty());
 }
+
+/// A link in `AwaitCommit` with the remote's key already in the live pin set,
+/// as the shell leaves it just before `confirm_paired`.
+fn at_commit(n: u32) -> Link {
+    let gate = new_gate();
+    open_gate(&gate, T0);
+    let mut link = Link::pairing(&remote_keys(), &hub_keys(), gate, new_pins(vec![]), n, T0);
+    link.pump();
+    link.enter_code(&link.shown_code().unwrap());
+    assert_eq!(link.hub.phase(), Phase::AwaitCommit);
+    let key = link.hub.peer_public_key().unwrap();
+    link.pins.write().unwrap().insert(key).unwrap();
+    link
+}
+
+/// After a failed `confirm_paired`, nothing confirmed the pairing: no record
+/// went to the remote, nobody emitted `Paired`, and the gate counted nothing.
+fn assert_not_confirmed(link: &Link) {
+    assert!(
+        !link
+            .sent(Dir::ToRemote)
+            .iter()
+            .any(|m| m.bytes[0] == kind::RECORD)
+    );
+    assert!(!has_event(&link.hub_events(), is_paired));
+    assert!(!has_event(&link.remote_events(), is_paired));
+    assert_ne!(link.hub.phase(), Phase::Paired);
+    assert_eq!(link.gate.lock().unwrap().status(link.now).failures, 0);
+}
+
+/// `confirm_paired` is `Ok` only when it sends `PAIR_COMPLETE`; every attempt
+/// that has ended is an `Err` (so the shell rolls back the pin it inserted),
+/// and the ABORT the call caused comes out of the next `tick`.
+#[test]
+fn confirm_errs_on_every_ended_attempt() {
+    // PAIR_FINISH_MS passed during a slow pin write.
+    let mut link = at_commit(0);
+    let late = T0 + de1_relay::PAIR_FINISH_MS;
+    assert_eq!(link.hub.confirm_paired(late), Err(RelayError::Timeout));
+    let held = link.hub.tick(late);
+    assert_eq!(held.send[0].bytes, vec![kind::ABORT, 5, 0]);
+    assert_eq!(held.close.as_ref().unwrap().code, ws_close::TIMEOUT);
+    assert!(link.hub.tick(late).is_empty(), "held once");
+    link.hub_step(held);
+    link.pump();
+    assert_not_confirmed(&link);
+
+    // The hub user closed the window meanwhile.
+    let mut link = at_commit(1);
+    link.gate.lock().unwrap().close();
+    assert_eq!(link.hub.confirm_paired(T0), Err(RelayError::PairingClosed));
+    let held = link.hub.tick(T0);
+    assert_eq!(held.send[0].bytes, vec![kind::ABORT, 4, 0]);
+    link.hub_step(held);
+    link.pump();
+    assert_not_confirmed(&link);
+
+    // ... or closed and reopened it (a new generation).
+    let mut link = at_commit(2);
+    link.gate.lock().unwrap().close();
+    open_gate(&link.gate, T0 + 1);
+    assert_eq!(
+        link.hub.confirm_paired(T0 + 1),
+        Err(RelayError::PairingClosed)
+    );
+    assert_not_confirmed(&link);
+
+    // The remote aborted while the pin was being written.
+    let mut link = at_commit(3);
+    let s = link
+        .hub
+        .on_ws(de1_relay::WsIn::Binary(&[kind::ABORT, 4, 0]), T0);
+    link.hub_step(s);
+    assert_eq!(link.hub.confirm_paired(T0), Err(RelayError::Closed));
+    assert_not_confirmed(&link);
+
+    // The hub user cancelled.
+    let mut link = at_commit(4);
+    let s = link.hub.cancel_pairing(T0);
+    link.hub_step(s);
+    assert_eq!(link.hub.confirm_paired(T0), Err(RelayError::Closed));
+    assert_not_confirmed(&link);
+
+    // A tick already timed it out.
+    let mut link = at_commit(5);
+    let s = link.hub.tick(late);
+    link.hub_step(s);
+    assert_eq!(link.hub.confirm_paired(late), Err(RelayError::Closed));
+    assert_not_confirmed(&link);
+
+    // And the success path is still Ok, with PAIR_COMPLETE.
+    let mut link = at_commit(6);
+    let s = link
+        .hub
+        .confirm_paired(T0 + de1_relay::PAIR_FINISH_MS - 1)
+        .unwrap();
+    assert_eq!(s.send.len(), 1);
+    assert_eq!(s.send[0].bytes[0], kind::RECORD);
+}
+
+/// A poisoned pin set fails the connection closed and frees the pairing slot.
+#[test]
+fn poisoned_pin_set_frees_the_slot() {
+    let link = at_commit(7);
+    let mut link = link;
+    let pins = link.pins.clone();
+    let _ = std::thread::spawn(move || {
+        let _guard = pins.write().unwrap();
+        panic!("poison the pin set");
+    })
+    .join();
+    assert!(link.pins.is_poisoned());
+    assert_eq!(link.hub.confirm_paired(T0), Err(RelayError::Poisoned));
+    let held = link.hub.tick(T0);
+    assert_eq!(held.close.as_ref().unwrap().code, ws_close::PROTOCOL);
+    assert!(held.events.contains(&RelayEvent::Failed {
+        error: "Poisoned".into()
+    }));
+    let status = link.gate.lock().unwrap().status(T0);
+    assert!(status.open && !status.pending);
+}

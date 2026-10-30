@@ -22,7 +22,7 @@ use snow::{
 };
 use subtle::ConstantTimeEq;
 
-use crate::{Seed, labels, pake::Psk, seed::SubSeed};
+use crate::{RelayError, Seed, labels, pake::Psk, seed::SubSeed};
 
 /// The pairing pattern.
 pub const XX_PARAMS: &str = "Noise_XXpsk3_25519_ChaChaPoly_SHA256";
@@ -230,11 +230,14 @@ pub(crate) fn build(
     }
 }
 
-/// `lp(x)` = 2-byte big-endian length ‖ x. Callers bound every input below 64 KiB.
-fn push_lp(out: &mut Vec<u8>, x: &[u8]) {
-    let len = u16::try_from(x.len()).unwrap_or(u16::MAX);
+/// `lp(x)` = 2-byte big-endian length ‖ x. A field that doesn't fit is an
+/// error, never truncated, so the encoding stays injective.
+fn push_lp(out: &mut Vec<u8>, x: &[u8]) -> Result<(), RelayError> {
+    let len = u16::try_from(x.len())
+        .map_err(|_| RelayError::Malformed("prologue field over 65 535 bytes"))?;
     out.extend_from_slice(&len.to_be_bytes());
-    out.extend_from_slice(&x[..usize::from(len)]);
+    out.extend_from_slice(x);
+    Ok(())
 }
 
 /// `"CremaRelay v4 pair" ‖ 0x00 ‖ lp(client_hello) ‖ lp(server_hello) ‖ lp(pake_a) ‖ lp(pake_b)`.
@@ -244,29 +247,32 @@ pub(crate) fn pair_prologue(
     server_hello: &[u8],
     pake_a: &[u8],
     pake_b: &[u8],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, RelayError> {
     let mut out = Vec::with_capacity(
         labels::PAIR_PROLOGUE.len() + 9 + client_hello.len() + server_hello.len() + 66,
     );
     out.extend_from_slice(labels::PAIR_PROLOGUE);
     out.push(0);
-    push_lp(&mut out, client_hello);
-    push_lp(&mut out, server_hello);
-    push_lp(&mut out, pake_a);
-    push_lp(&mut out, pake_b);
-    out
+    push_lp(&mut out, client_hello)?;
+    push_lp(&mut out, server_hello)?;
+    push_lp(&mut out, pake_a)?;
+    push_lp(&mut out, pake_b)?;
+    Ok(out)
 }
 
 /// `"CremaRelay v4 resume" ‖ 0x00 ‖ lp(client_hello) ‖ lp(server_hello)`.
-pub(crate) fn resume_prologue(client_hello: &[u8], server_hello: &[u8]) -> Vec<u8> {
+pub(crate) fn resume_prologue(
+    client_hello: &[u8],
+    server_hello: &[u8],
+) -> Result<Vec<u8>, RelayError> {
     let mut out = Vec::with_capacity(
         labels::RESUME_PROLOGUE.len() + 5 + client_hello.len() + server_hello.len(),
     );
     out.extend_from_slice(labels::RESUME_PROLOGUE);
     out.push(0);
-    push_lp(&mut out, client_hello);
-    push_lp(&mut out, server_hello);
-    out
+    push_lp(&mut out, client_hello)?;
+    push_lp(&mut out, server_hello)?;
+    Ok(out)
 }
 
 /// The 32-byte handshake hash, read before `into_transport_mode()` (snow's

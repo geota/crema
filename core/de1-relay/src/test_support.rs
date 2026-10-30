@@ -70,10 +70,10 @@ pub fn pair_prologue(
     pake_a: &[u8],
     pake_b: &[u8],
 ) -> Vec<u8> {
-    noise::pair_prologue(client_hello, server_hello, pake_a, pake_b)
+    noise::pair_prologue(client_hello, server_hello, pake_a, pake_b).expect("fields under 64 KiB")
 }
 
 /// The resume prologue (§2.6).
 pub fn resume_prologue(client_hello: &[u8], server_hello: &[u8]) -> Vec<u8> {
-    noise::resume_prologue(client_hello, server_hello)
+    noise::resume_prologue(client_hello, server_hello).expect("fields under 64 KiB")
 }

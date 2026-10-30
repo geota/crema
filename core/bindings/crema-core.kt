@@ -4714,6 +4714,13 @@ data class RelayEventEstablishedInner (
 	val peer_id: String
 )
 
+/// Generated type representing the anonymous struct variant `PeerClosed` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPeerClosedInner (
+	/// `Normal`, `Protocol`, … (the record's code).
+	val reason: String
+)
+
 /// Generated type representing the anonymous struct variant `Failed` of the `RelayEvent` Rust enum
 @Serializable
 data class RelayEventFailedInner (
@@ -4768,6 +4775,10 @@ sealed class RelayEvent {
 	@Serializable
 	@SerialName("Established")
 	data class Established(val content: RelayEventEstablishedInner): RelayEvent()
+	/// Hub: the remote ended an established session with an authenticated `CLOSE` record.
+	@Serializable
+	@SerialName("PeerClosed")
+	data class PeerClosed(val content: RelayEventPeerClosedInner): RelayEvent()
 	/// The connection failed for a reason no more specific event covers.
 	@Serializable
 	@SerialName("Failed")

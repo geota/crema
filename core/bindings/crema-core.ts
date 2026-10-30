@@ -4631,6 +4631,11 @@ export type RelayEvent =
 	/** The peer's device id. */
 	peer_id: string;
 }}
+	/** Hub: the remote ended an established session with an authenticated `CLOSE` record. */
+	| { type: "PeerClosed", content: {
+	/** `Normal`, `Protocol`, … (the record's code). */
+	reason: string;
+}}
 	/** The connection failed for a reason no more specific event covers. */
 	| { type: "Failed", content: {
 	/** The `RelayError` name. */

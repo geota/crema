@@ -81,8 +81,8 @@ Every binary WebSocket message is `kind u8 ‖ body`, at most 65 536 bytes in al
 `ABORT.reason`: 1 `PAIRING_CLOSED`, 2 `BUSY`, 3 `LOCKED_OUT`, 4 `CANCELLED`, 5 `TIMEOUT`, 6 `HANDSHAKE_FAILED`,
 7 `HOST_MISMATCH`, 8 `VERSION`, 9 `MALFORMED`.
 
-An unknown kind, a kind out of order for the phase, an oversize message, or a text message after the ClientHello
-ends the connection (`ABORT(MALFORMED)` and 4400 while a handshake is still in progress on that side; 4400 alone
+An unknown kind, a kind out of order for the phase (including an `ABORT` once the session is established), an
+oversize message, or a text message after the ClientHello ends the connection (`ABORT(MALFORMED)` and 4400 while a handshake is still in progress on that side; 4400 alone
 after it).
 
 ## 4. Pairing
@@ -129,11 +129,20 @@ H → R  RECORD           inner PAIR_COMPLETE (empty)                 R: decrypt
    timeout (including after code entry), a cancel, a closed window and `reject_pairing` free the slot uncounted.
    The remote confirms only when the `PAIR_COMPLETE` record decrypts.
 9. **Two-phase commit on the hub.** On message 3 success the hub emits `PairPending`, exposes the remote's key and
-   sends nothing. The shell persists the pin, inserts it into the live `PinSet`, and calls `confirm_paired()`,
-   which sends `PAIR_COMPLETE`, records the success (closing the window), emits `Paired` and closes 1000.
-   `confirm_paired()` refuses (`InvalidState`) while the key isn't in the live pin set. If the write fails the
-   shell calls `reject_pairing()`: `ABORT(CANCELLED)`, close 4403, no failure. The commit must happen within the
-   same `PAIR_FINISH_MS` (10 s) that began at code entry. The remote pins on `PAIR_COMPLETE`.
+   sends nothing. The shell persists the pin, inserts it into the live `PinSet`, and calls `confirm_paired()`.
+   - `confirm_paired()` returns `Ok` **only** when it sends `PAIR_COMPLETE`: under one gate lock it checks that the
+     connection still holds the pairing slot and records the success (closing the window); then it emits `Paired`
+     and closes 1000.
+   - Every other outcome is an `Err`: `InvalidState` while the key isn't in the live pin set (nothing changes, the
+     shell may insert and retry) or outside `AwaitCommit`; `Timeout` when `PAIR_FINISH_MS` (10 s from code entry)
+     has passed; `PairingClosed` when the gate was closed or reopened since; `Closed` when the attempt already ended
+     (a cancel, a timeout, the remote's `ABORT`); `Poisoned` for a poisoned lock. When the call itself ended the
+     attempt, its `ABORT`/close Step is held and returned by the next `tick()` (or any other call).
+   - **Rollback rule (normative):** the shell keeps the pin only if `confirm_paired()` returned `Ok`. On any `Err`
+     other than the retryable `InvalidState`, and on any `PairingFailed` after `PairPending`, it removes the key from
+     the live `PinSet` and from the store, then applies `tick()`'s Step.
+   - If the write fails the shell calls `reject_pairing()` instead: `ABORT(CANCELLED)`, close 4403, no failure.
+   - The remote pins on `PAIR_COMPLETE`.
 
 ## 5. Resume
 
@@ -149,7 +158,8 @@ R → H  RECORD           inner HEARTBEAT ("client finished", must be first)
 H → R  RECORD           FRAME Welcome, then the session
 ```
 
-- `resume_prologue = "CremaRelay v4 resume" ‖ 0x00 ‖ lp(client_hello) ‖ lp(server_hello)`.
+- `resume_prologue = "CremaRelay v4 resume" ‖ 0x00 ‖ lp(client_hello) ‖ lp(server_hello)`. In both prologues a
+  field longer than 65 535 bytes can't be encoded and is `MALFORMED` (never truncated).
 - The hub's pins are read when message 1 arrives and again at admission, never snapshotted at accept time.
 - **Admission rule.** Nothing with a side effect happens before the remote's first record decrypts as a
   `HEARTBEAT` (its keys need the remote's ephemeral and the hub's fresh one). Any other first record closes 4400.
@@ -231,8 +241,9 @@ status, a legacy denial, a failed IK message 2 and a `HOST_MISMATCH` are advisor
 
 ## 10. Events (the shell contract)
 
-Events cross as JSON `{"type": …, "content": {…}}`. Names are sanitized (control characters, U+2028 and U+2029
-removed, trimmed, at most 32 characters, blank → "Unnamed device"); keys never appear in events.
+Events cross as JSON `{"type": …, "content": {…}}`. Names are sanitized (control characters, format characters
+such as bidi overrides and zero-width marks, U+2028 and U+2029 removed, trimmed, at most 32 characters, blank →
+"Unnamed device"); keys never appear in events.
 
 | event | side | when |
 |---|---|---|
@@ -246,7 +257,8 @@ removed, trimmed, at most 32 characters, blank → "Unnamed device"); keys never
 | `Refused{reason, authenticated}` | remote | the hub refused: `authenticated: true` for a `CLOSE` record (`Revoked`, `NotPaired`, `HubStopped`, `Protocol`, `Normal`); otherwise an `ABORT` reason, a ServerHello status, `HostMismatch`, `HubOutdated`, `HubUnverified`, `Version` or `Timeout` |
 | `Paired{peer_id, peer_name}` | both | pairing completed |
 | `Established{peer_id}` | both | hub: admitted; remote: hub authenticated (the shell says "Connected" only on the first `FRAME`) |
-| `Failed{error}` | both | the connection failed for a reason no other event covers |
+| `PeerClosed{reason}` | hub | the remote ended an established session with an authenticated `CLOSE` record (`Normal`, `Protocol`, …) |
+| `Failed{error}` | both | the connection failed for a reason no other event covers; a plaintext `ABORT` after the session is established is `Failed{UnexpectedMessage}` with close 4400 |
 
 On the remote, an `ABORT` that arrives during a pairing (after the ServerHello) is reported as follows:
 `HANDSHAKE_FAILED` (the hub's wrong-code answer) or `MALFORMED` gives `PairingFailed` alone (reason
@@ -271,14 +283,22 @@ can read process memory is out of scope.
 2. **Prologue PAKE fields** are the 33-byte SPAKE2 messages, without the envelope kind byte (the spec said "each
    hello is the exact byte string sent" and left the PAKE fields implicit).
 3. **The Noise stream counter** is encoded as 8 bytes big-endian after `"noise"`.
-4. **`confirm_paired()` checks the live pin set.** It refuses with `InvalidState` until the peer's key is in it,
-   so the commit order of §4 step 9 is enforced by the core, not only by the shell.
+4. **`confirm_paired()` checks the live pin set and the slot atomically.** It refuses with `InvalidState` until the
+   peer's key is in it (the commit order of §4 step 9 is enforced by the core), checks the slot and records the
+   success under one gate lock, and returns `Err` for every outcome that doesn't send `PAIR_COMPLETE`, so the
+   shell knows to roll the pin back.
 5. **The pending slot has a lease** (the holder's own deadline), and a `HubConnection` frees its slot on drop, so
-   a connection the shell dropped without a terminal step can't keep pairing `BUSY`.
+   a connection the shell dropped without a terminal step can't keep pairing `BUSY`. Opening a new window (after
+   the old one closed or ran out) bumps the generation, so a slot holder from the old window aborts.
 6. **`enter_code` before `PAKE_A` arrived** is `InvalidState` (state unchanged); the remote sends `PAKE_A` with
-   the code's display, before a user can type it.
+   the code's display, before a user can type it. On an ended attempt it is `Err` (`Closed`, or `Timeout` /
+   `PairingClosed` when the call itself ended it, its Step held for `tick()`), as for `confirm_paired()`.
 7. **Events** use typeshare's adjacently tagged form `{"type", "content"}` (house style, as `CoreOutput`), not
    `#[serde(tag = "type")]` alone, which typeshare 1.x can't generate.
 8. **Close codes** not fixed by the spec: a cancel, a reject and a refusing ServerHello status close 4403; a
    `HOST_MISMATCH` closes 4401; a peer's `ABORT` closes 1000.
 9. **`LOCKED_OUT` ServerHello** carries the lockout's seconds left in `secs_left`.
+10. **`PeerClosed{reason}`** is a hub event the spec doesn't list: the remote's authenticated `CLOSE` record.
+11. **Names drop format characters** (Unicode Cf: bidi embeddings, overrides and isolates, zero-width spaces and
+    joiners, the BOM, soft hyphen, tag characters) as well as control characters, so a name can't reorder or hide
+    text in the hub's code dialog. Emoji sequences built with a zero-width joiner show as their parts.

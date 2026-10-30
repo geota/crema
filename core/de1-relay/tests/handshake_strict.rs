@@ -239,3 +239,84 @@ fn close_protocol_and_normal_keep_role() {
         );
     }
 }
+
+/// A plaintext ABORT once the session is established is a protocol error on
+/// either side, with an event, never a quiet close.
+#[test]
+fn abort_after_established_is_a_protocol_error() {
+    let mut link = established(&remote_keys(), &hub_keys(), 1);
+    let s = link.hub.on_ws(WsIn::Binary(&[kind::ABORT, 4, 0]), T0);
+    assert_eq!(s.close.as_ref().unwrap().code, ws_close::PROTOCOL);
+    assert!(s.send.is_empty());
+    assert!(s.events.contains(&RelayEvent::Failed {
+        error: "UnexpectedMessage".into()
+    }));
+    assert_eq!(link.hub.phase(), Phase::Failed);
+
+    let mut link = established(&remote_keys(), &hub_keys(), 1);
+    let s = link.remote.on_ws(WsIn::Binary(&[kind::ABORT, 1, 0]), T0);
+    assert_eq!(s.close.as_ref().unwrap().code, ws_close::PROTOCOL);
+    assert!(s.events.contains(&RelayEvent::Failed {
+        error: "UnexpectedMessage".into()
+    }));
+    assert!(
+        !s.events
+            .iter()
+            .any(|e| matches!(e, RelayEvent::Refused { .. }))
+    );
+    assert_eq!(link.remote.phase(), Phase::Failed);
+}
+
+/// The remote's authenticated CLOSE reaches the hub as `PeerClosed`, with the
+/// close code that goes with it.
+#[test]
+fn hub_reports_the_remotes_close() {
+    for (reason, code, wire) in [
+        (CloseReason::Normal, ws_close::NORMAL, "Normal"),
+        (CloseReason::Revoked, ws_close::REFUSED, "Revoked"),
+    ] {
+        let mut link = established(&remote_keys(), &hub_keys(), 1);
+        let s = link.remote.close(reason, T0);
+        link.remote_step(s);
+        link.pump();
+        assert!(link.hub_events().contains(&RelayEvent::PeerClosed {
+            reason: wire.into()
+        }));
+        assert_eq!(link.hub_close(), Some(code));
+    }
+    let mut link = established(&remote_keys(), &hub_keys(), 1);
+    let s = link
+        .remote
+        .send_raw_record_for_tests(0, inner::CLOSE, &[4, 0], T0)
+        .unwrap();
+    link.remote_step(s);
+    link.pump();
+    assert!(link.hub_events().contains(&RelayEvent::PeerClosed {
+        reason: "Protocol".into()
+    }));
+    assert_eq!(link.hub_close(), Some(ws_close::PROTOCOL));
+}
+
+/// A ServerHello too long to length-prefix in the prologue is refused, not
+/// truncated into it.
+#[test]
+fn oversize_server_hello_is_not_truncated_into_the_prologue() {
+    let r = remote_keys();
+    let h = hub_keys();
+    let (mut remote, _) =
+        de1_relay::RemoteConnection::resume(&r, h.public(), test_seed("remote-conn", 1), T0);
+    let sh = de1_relay::ServerHello {
+        version: 4,
+        status: de1_relay::HelloStatus::Ready,
+        hub_id: h.device_id(),
+        secs_left: 0,
+        name: "Hub".into(),
+        ext: vec![0; 65_509],
+    }
+    .encode();
+    assert_eq!(sh.len(), de1_relay::WS_MAX_MESSAGE);
+    let s = remote.on_ws(WsIn::Binary(&sh), T0);
+    assert!(!s.send.iter().any(|m| m.bytes[0] == kind::NOISE_HS));
+    assert_eq!(s.close.as_ref().unwrap().code, ws_close::PROTOCOL);
+    assert_eq!(remote.phase(), Phase::Failed);
+}

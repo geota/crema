@@ -293,7 +293,8 @@ fn replayed_pairing_fails() {
     );
     assert_eq!(hub.peer_public_key(), None);
     assert!(pins.read().unwrap().is_empty());
-    assert_eq!(hub.confirm_paired(T0), Ok(de1_relay::Step::default()));
+    // An ended attempt never confirms.
+    assert_eq!(hub.confirm_paired(T0), Err(RelayError::Closed));
 }
 
 /// `enter_code` refuses anything but six ASCII digits with `CodeFormat`, without
@@ -329,4 +330,19 @@ fn bad_code_format_is_not_an_attempt() {
     link.enter_code(&code);
     link.commit();
     assert!(has_event(&link.remote_events(), is_paired));
+}
+
+/// `enter_code` on an ended attempt is an `Err`, like `confirm_paired`.
+#[test]
+fn enter_code_on_an_ended_attempt_errs() {
+    let gate = new_gate();
+    open_gate(&gate, T0);
+    let mut link = Link::pairing(&remote_keys(), &hub_keys(), gate, new_pins(vec![]), 0, T0);
+    link.pump();
+    let code = link.shown_code().unwrap();
+    let end = link.hub.next_deadline_ms().unwrap();
+    assert_eq!(link.hub.enter_code(&code, end), Err(RelayError::Timeout));
+    let held = link.hub.tick(end);
+    assert_eq!(held.send[0].bytes, vec![kind::ABORT, 5, 0]);
+    assert_eq!(link.hub.enter_code(&code, end), Err(RelayError::Closed));
 }

@@ -96,8 +96,12 @@ impl PairingGate {
             });
         }
         if !self.window_open(now_ms) {
+            // A new window: a slot holder left over from the old one (its lease
+            // ran past the old window's end) aborts on its next call.
             self.window_until = Some(now_ms + PAIR_WINDOW_MS);
             self.failures = 0;
+            self.slot = None;
+            self.generation += 1;
         }
         Ok(self.status(now_ms))
     }

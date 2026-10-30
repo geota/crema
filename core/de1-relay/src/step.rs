@@ -429,6 +429,11 @@ pub enum RelayEvent {
         /// The peer's device id.
         peer_id: String,
     },
+    /// Hub: the remote ended an established session with an authenticated `CLOSE` record.
+    PeerClosed {
+        /// `Normal`, `Protocol`, … (the record's code).
+        reason: String,
+    },
     /// The connection failed for a reason no more specific event covers.
     Failed {
         /// The `RelayError` name.
