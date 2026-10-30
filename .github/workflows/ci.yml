@@ -244,6 +244,11 @@ jobs:
         working-directory: web
         run: pnpm check
 
+      # Unit tests (vitest). They import the wasm bundle built above.
+      - name: Unit tests (vitest)
+        working-directory: web
+        run: pnpm test
+
       - name: Build (adapter-static)
         working-directory: web
         run: pnpm build
