@@ -1943,8 +1943,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Parse + apply a `crema-backup` bundle's raw text. */
     fun restoreBackupFromText(text: String, mode: RestoreMode) = library.restoreBackupFromText(text, mode)
 
-    /** Remove a stored shot from the local history. Persisted. */
-    fun deleteShot(id: String) = library.deleteShot(id)
+    /**
+     * Remove a stored shot from the local history. Persisted. A shot already
+     * on Visualizer leaves a tombstone so the next pull doesn't bring its
+     * remote copy back (web parity); [alsoOnVisualizer] deletes that copy too,
+     * retried on each sync until it lands. A shot never uploaded just goes.
+     */
+    fun deleteShot(id: String, alsoOnVisualizer: Boolean = false) {
+        val shot = _ui.value.history.firstOrNull { it.id == id } ?: return
+        library.deleteShot(id)
+        shot.visualizerId?.let { visualizer.tombstoneShot(id, it, deleteRemote = alsoOnVisualizer) }
+    }
+
+    /** Whether a shot's delete can also remove its Visualizer copy: it was
+     *  uploaded and a session is open (shot deletes aren't Premium-gated, unlike bags). */
+    fun canDeleteShotOnVisualizer(visualizerId: String?): Boolean =
+        visualizerId != null && _ui.value.visualizer.signedIn
 
     /** Import a Beanconqueror export (JSON or chunked .zip) into the library. */
     fun importBeanconquerorUri(uri: Uri) = library.importBeanconquerorUri(uri)
