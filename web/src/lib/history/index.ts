@@ -32,7 +32,6 @@ export {
 export {
 	HistoryStore,
 	getHistoryStore,
-	type ShotCompletion,
 	type ImportExtras,
 	type ImportBeanExtras,
 	type ManualBrewInput,
