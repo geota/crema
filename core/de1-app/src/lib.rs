@@ -5943,9 +5943,6 @@ fn assemble(
     }
 }
 
-/// The wait before an unanswered re-upload request that went out `sent`
-/// times is sent again: [`PROFILE_REUPLOAD_REPEAT`] after the first send,
-/// doubling after each further one (none before the first).
 /// The fingerprint of an already-effective profile (no overrides left to
 /// apply). Infallible in practice: a `CremaProfile` always serialises; the
 /// empty fallback never matches a real fingerprint, so it can only cost a
@@ -5955,6 +5952,9 @@ fn effective_fingerprint(effective: &CremaProfile) -> String {
         .unwrap_or_default()
 }
 
+/// The wait before an unanswered re-upload request that went out `sent`
+/// times is sent again: [`PROFILE_REUPLOAD_REPEAT`] after the first send,
+/// doubling after each further one (none before the first).
 fn reupload_repeat_after(sent: u8) -> Duration {
     match sent {
         0 => Duration::ZERO,
