@@ -16,6 +16,7 @@
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
 	import { getSettingsStore, formatTemp } from '#lib/settings/index.js';
+	import { celsius_to_fahrenheit as celsiusToFahrenheit } from '#lib/wasm/de1_wasm.js';
 
 	let { params }: { params: BrewParamState } = $props();
 
@@ -31,6 +32,29 @@
 	const tempSeedLabel = $derived(formatTemp(params.seedOf('brewTemp'), prefs.tempUnit));
 	const preinfOverridden = $derived(params.isOverridden('preinf'));
 	const preinfSeedLabel = $derived(`${params.seedOf('preinf')} s`);
+	/**
+	 * The dial shows an absolute temperature; the core's range for the active
+	 * profile bounds it (no step may leave the core's temperature limits once
+	 * every step is shifted). The quick-pick chips outside it are hidden.
+	 */
+	const tempBounds = $derived(params.brewTempBounds());
+	const tempChips = $derived(
+		[88, 91, 93, 95, 97].filter((t) => t >= tempBounds.min && t <= tempBounds.max)
+	);
+	/**
+	 * "+x.x °C from profile": the dial's distance from the profile's own brew
+	 * temperature, in the user's unit (a °F offset is the converted
+	 * difference).
+	 */
+	const tempOffsetLabel = $derived.by(() => {
+		const seed = params.seedOf('brewTemp');
+		const delta =
+			prefs.tempUnit === 'F'
+				? celsiusToFahrenheit(p.brewTemp) - celsiusToFahrenheit(seed)
+				: p.brewTemp - seed;
+		const sign = delta > 0 ? '+' : '−';
+		return `${sign}${Math.abs(delta).toFixed(1)} °${prefs.tempUnit === 'F' ? 'F' : 'C'} from profile`;
+	});
 </script>
 
 <div>
@@ -55,16 +79,29 @@
 			value={p.brewTemp}
 			name="Brew temperature"
 			dimension="temp"
-			min={80}
-			max={100}
+			min={tempBounds.min}
+			max={tempBounds.max}
 			step={0.5}
 			onChange={(v) => params.set('brewTemp', v)}
 			overridden={tempOverridden}
 			overriddenTooltip="Overriding default {tempSeedLabel}"
 		/>
+		{#if tempOverridden}
+			<div class="bts-offset" role="status">
+				<span>{tempOffsetLabel}</span>
+				<button
+					type="button"
+					class="bts-reset"
+					onclick={() => params.resetKey('brewTemp')}
+					aria-label="Reset brew temperature to the profile's {tempSeedLabel}"
+				>
+					Reset
+				</button>
+			</div>
+		{/if}
 		<div style="height:6px"></div>
 		<QuickChipRow
-			options={[88, 91, 93, 95, 97]}
+			options={tempChips}
 			value={p.brewTemp}
 			name="Brew temperature"
 			dimension="temp"
@@ -106,5 +143,24 @@
 	}
 	.bts-preinf.is-off {
 		opacity: 0.4;
+	}
+	/* "+x.x °C from profile" + Reset, under the dial while it is overridden. */
+	.bts-offset {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		margin-top: 4px;
+		font-size: 11px;
+		color: var(--fg-accent);
+	}
+	.bts-reset {
+		background: none;
+		border: 0;
+		padding: 2px 4px;
+		font: inherit;
+		color: inherit;
+		text-decoration: underline;
+		cursor: pointer;
 	}
 </style>

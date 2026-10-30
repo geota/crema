@@ -362,7 +362,7 @@
 	 *   responsive). The brew dashboard's header also reads
 	 *   `activeProfile?.name` as a fallback during the upload window for
 	 *   the same instant-feedback reason.
-	 * - `app.uploadProfile(...)` ships the profile to the DE1 over BLE; on
+	 * - `app.syncActiveProfile(...)` ships the profile to the DE1 over BLE; on
 	 *   success the orchestrator emits `ProfileUploadCompleted`, which sets
 	 *   `ui.activeProfileName` so the brew page header pins to what's
 	 *   *actually* on the machine. On failure the field stays at the prior
@@ -379,7 +379,7 @@
 		const profile = store.get(id);
 		const app = ctx().app;
 		if (profile && app) {
-			// `syncActiveProfile` (rather than the bare `uploadProfile`)
+			// `syncActiveProfile` (rather than the bare `uploadEffectiveProfile`)
 			// so the fingerprint cache is kept in sync with the upload —
 			// without this, the next Coffee tap would see a stale cache
 			// and re-upload even though the bytes already match.

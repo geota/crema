@@ -89,7 +89,7 @@ export interface ProfileSyncRequest {
 	/** `true` when the snapshot's cached `activeProfileFingerprint` already
 	 *  matches `desired` — short-circuits to success with no upload. */
 	readonly alreadyLoaded: boolean;
-	/** Trigger the upload: `core.uploadProfile` + fold the output. Returns once
+	/** Trigger the upload: `core.uploadCremaProfile` + fold the output. Returns once
 	 *  the writes are *dispatched* (not completed); completion arrives later via
 	 *  `completed`. */
 	readonly upload: Effect.Effect<void>;

@@ -532,7 +532,7 @@
 	 * Reload the profile this shot was pulled against. Looks up the profile
 	 * by name in the local store (`StoredShot.profileName` is the only
 	 * identifying field we persist on shots) and routes through
-	 * `app.uploadProfile`, same as the /profiles → Load on Brew flow. If
+	 * `app.syncActiveProfile`, same as the /profiles → Load on Brew flow. If
 	 * the profile has since been deleted or renamed, surface a friendly
 	 * message rather than a no-op.
 	 */

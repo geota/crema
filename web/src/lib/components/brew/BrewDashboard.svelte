@@ -51,7 +51,16 @@
 		formatVolume,
 		formatWeight
 	} from '#lib/settings/index.js';
-	import { getProfileStore, newProfileId, preinfuseSeconds, type CremaProfile } from '#lib/profiles/index.js';
+	import {
+		brewTempRange,
+		effectiveCremaProfile,
+		getProfileStore,
+		newProfileId,
+		normalizeBrewOverrides,
+		preinfusionSeconds,
+		type CremaProfile,
+		type ProfileFingerprintOverrides
+	} from '#lib/profiles/index.js';
 	import { formatRatio } from '#lib/utils/ratio.js';
 	import {
 		getBeanStore,
@@ -378,13 +387,17 @@
 	 * different profile, an edited Settings default) re-seeds it — no sentinel,
 	 * no state-syncing `$effect`.
 	 */
+	/** The active profile's brew-temperature dial range and anchor (core-owned). */
+	const activeBrewTempRange = $derived(activeProfile ? brewTempRange(activeProfile) : null);
 	const paramSeed = $derived.by<BrewParamSeed>(() => {
 		if (activeProfile) {
+			// The core's anchor (the profile's own brew temp) and pre-infusion
+			// total — the values an override is measured from.
 			return {
 				dose: activeProfile.dose,
 				yield: activeProfile.yieldOut,
-				brewTemp: activeProfile.brewTemp,
-				preinf: preinfuseSeconds(activeProfile.segments)
+				brewTemp: activeBrewTempRange?.anchor ?? activeProfile.brewTemp,
+				preinf: preinfusionSeconds(activeProfile)
 			};
 		}
 		return {
@@ -432,20 +445,18 @@
 			})
 		)?.trim();
 		if (!name) return;
-		const live = params.current;
+		// The dial values that genuinely affect the recipe, baked in by the
+		// core exactly as a shot would run them: brew temp shifts every
+		// segment, pre-infusion rescales the leading segments, dose / yield
+		// replace. Steam / hot-water / flush fields on BrewParams are
+		// session-only UI; they aren't part of the profile model.
 		const cloned: CremaProfile = {
-			...base,
+			...effectiveCremaProfile(base, params.qcOverrides()),
 			source: 'custom',
 			id: newProfileId(),
 			name,
 			pinned: false,
-			lastUsed: null,
-			// Apply the QC dial values that genuinely affect the recipe.
-			// Steam / hot-water / flush fields on BrewParams are
-			// session-only UI; they aren't part of the profile model.
-			dose: live.dose,
-			yieldOut: live.yield,
-			brewTemp: live.brewTemp
+			lastUsed: null
 		};
 		profileStore.save(cloned);
 		profileStore.setActive(cloned.id);
@@ -519,8 +530,18 @@
 				waterVolume: prefs.qcHotWaterVolumeMl,
 				flushTime: prefs.qcFlushTimeS,
 				flushTemp: prefs.qcFlushTempC
-			}))
+			})),
+		() => activeBrewTempRange
 	);
+	/**
+	 * The Quick Sheet overrides after the core's lifecycle rule (brew temp
+	 * clamped into the profile's range, values equal to the profile's own
+	 * dropped) — what the shot actually runs with and what history records.
+	 */
+	function effectiveOverrides(): ProfileFingerprintOverrides {
+		const qc = params.qcOverrides();
+		return activeProfile ? normalizeBrewOverrides(activeProfile, qc) : qc;
+	}
 	/**
 	 * Whether the Quick Sheet is docked open. Starts hidden — the dashboard is
 	 * the primary view; the header's QuickPill opens the sheet, and its Close
@@ -1390,10 +1411,13 @@
 			const beanHasGrind = beanGrindRaw
 				? Number.isFinite(Number.parseFloat(beanGrindRaw))
 				: false;
+			// The brew temp and pre-infusion the shot actually runs with
+			// (after the core's clamp), so history records what was sent.
+			const qc = effectiveOverrides();
 			app.setBrewParamsSnapshot({
 				yieldTarget: live.yield,
-				brewTemp: live.brewTemp,
-				preinfuseTarget: live.preinf,
+				brewTemp: qc.brewTemp ?? paramSeed.brewTemp,
+				preinfuseTarget: qc.preinf ?? paramSeed.preinf,
 				stopOnWeight: live.stopOnWeight,
 				autoTare: live.autoTare,
 				grind: beanHasGrind || live.grind !== DEFAULT_BREW_PARAMS.grind ? live.grind : null
@@ -1402,7 +1426,7 @@
 			// `startShot()`; when no upload is needed the call returns
 			// promptly. `profileUploadProgress` (above) is the visible
 			// indicator during a genuine upload window.
-			await app.startShot(params.qcOverrides());
+			await app.startShot(qc);
 		} catch (e) {
 			if (
 				e instanceof NoActiveProfileError ||

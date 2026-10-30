@@ -35,7 +35,15 @@ export {
 
 export { ProfileStore, getProfileStore } from './store.svelte';
 
-export { profileFingerprint, type ProfileFingerprintOverrides } from './fingerprint';
+export {
+	profileFingerprint,
+	effectiveCremaProfile,
+	normalizeBrewOverrides,
+	brewTempRange,
+	preinfusionSeconds,
+	type ProfileFingerprintOverrides,
+	type BrewTempRange
+} from './fingerprint';
 
 export {
 	Y_MAX,
