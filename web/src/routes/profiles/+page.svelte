@@ -29,6 +29,7 @@
 	import {
 		getProfileStore,
 		importProfileFiles,
+		importSummary,
 		exportProfileFile,
 		type CremaProfile
 	} from '#lib/profiles/index.js';
@@ -481,24 +482,15 @@
 		if (!files || files.length === 0) return;
 		importing = true;
 		importBanner = null;
-		const { imported, errors } = await importProfileFiles(files, (p) => store.save(p));
+		// The whole library — hidden built-ins included — so a re-import is
+		// counted as already there, not added twice.
+		const result = await importProfileFiles(
+			files,
+			(p) => store.save(p),
+			() => [...store.all, ...store.hiddenBuiltinProfiles]
+		);
 		importing = false;
-		if (imported > 0 && errors.length === 0) {
-			importBanner = {
-				kind: 'success',
-				message: `Imported ${imported} profile${imported === 1 ? '' : 's'}.`
-			};
-		} else if (imported > 0) {
-			importBanner = {
-				kind: 'success',
-				message: `Imported ${imported} of ${imported + errors.length}. ${errors[0]}`
-			};
-		} else {
-			importBanner = {
-				kind: 'error',
-				message: errors[0] ?? 'No profiles imported.'
-			};
-		}
+		importBanner = importSummary(result);
 	}
 
 	/** Whether a card is the active profile. */

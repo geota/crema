@@ -38,6 +38,7 @@ export { ProfileStore, getProfileStore } from './store.svelte';
 export {
 	importProfileFile,
 	importProfileFiles,
+	importSummary,
 	exportProfileFile,
 	describeProfileFileError,
 	type ProfileFileImport,

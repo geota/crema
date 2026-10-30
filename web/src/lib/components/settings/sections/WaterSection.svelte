@@ -35,6 +35,7 @@
 	import { getMaintenanceStore } from '#lib/maintenance/index.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { MachineState } from '#lib/core/crema-core.js';
+	import { maintenanceRequestAllowed } from '#lib/wasm/de1_wasm.js';
 	import type { CremaApp } from '#lib/state/index.js';
 	import {
 		INITIAL_SNAPSHOT,
@@ -57,15 +58,10 @@
 	const snapshot = $derived(app?.state.current ?? INITIAL_SNAPSHOT);
 	const connected = $derived(snapshot.de1State === 'ready');
 	/**
-	 * Whether the firmware is in an idle/sleep state that accepts a cycle
-	 * request. The DE1 will reject a Descale / Clean / SteamRinse request
-	 * mid-shot or mid-steam; restrict the Run-now buttons to Idle or Sleep
-	 * to match the firmware's safety gating.
+	 * Whether the app may start a cycle now — the core's rule (Idle or Sleep),
+	 * the one `request_machine_state` enforces (F16).
 	 */
-	const machineIdle = $derived(
-		snapshot.machineStateName === MachineState.Idle ||
-			snapshot.machineStateName === MachineState.Sleep
-	);
+	const machineIdle = $derived(maintenanceRequestAllowed(snapshot.machineStateName ?? undefined));
 
 	const maintenance = getMaintenanceStore();
 	/** The derived filter / descale / clean readouts — reactive. */

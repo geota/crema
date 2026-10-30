@@ -616,6 +616,71 @@ pub enum Event {
         /// Why it was refused.
         reason: crate::CalibrationRefusal,
     },
+    /// An accepted shot start moved on (see [`shot_start`](crate::shot_start));
+    /// a shell shows "starting" until [`Event::ShotStartEnded`].
+    ShotStartProgress {
+        /// Where it stands.
+        phase: crate::StartPhase,
+    },
+    /// The shot start is over: started, failed, cancelled or stood down for a
+    /// group-head start.
+    ShotStartEnded {
+        /// How.
+        end: crate::StartEnd,
+        /// The sentence to tell the user, when there is one.
+        message: Option<String>,
+    },
+    /// A non-blocking notice for an accepted start (no scale for a shot that
+    /// stops on weight: the weight stop is off).
+    StartNotice {
+        /// The notice.
+        notice: crate::StartNoticeLine,
+    },
+    /// A shot started at the group head skipped steps only an app start runs:
+    /// the ones that applied (no scale for a weight stop, the pre-shot flush, a
+    /// profile upload still pending). A non-blocking banner; it never stops the
+    /// shot.
+    GroupHeadStartUnchecked {
+        /// One line per skipped check.
+        notices: Vec<crate::StartNoticeLine>,
+    },
+    /// A machine state request the user made is waiting out the firmware's
+    /// profile-download guard (a profile upload in flight, or the 500 ms after
+    /// it — see [`machine_requests`](crate::machine_requests)); it goes out on
+    /// its own, or is dropped ([`Event::MachineRequestDropped`]). A shell
+    /// shows a small non-blocking "waiting" note.
+    MachineRequestHeld {
+        /// The requested state.
+        state: MachineState,
+    },
+    /// A request the user made, held through the profile-download guard,
+    /// was dropped instead of sent: the machine left the state it was in (a
+    /// shot started at the group head), a maintenance cycle is no longer
+    /// allowed, or the profile took too long to load. Tell the user; nothing
+    /// was written.
+    MachineRequestDropped {
+        /// The requested state.
+        state: MachineState,
+        /// Why.
+        reason: crate::MachineRequestDrop,
+    },
+    /// A machine state request was refused before anything was written: a
+    /// maintenance cycle needs the machine in Idle or Sleep.
+    MachineRequestRefused {
+        /// The requested state.
+        state: MachineState,
+        /// Why.
+        reason: crate::MachineRequestRefusal,
+    },
+    /// Tick the core (`on_tick`) at this time — the shell's clock, the one it
+    /// passes to `on_tick`, in ms. The earliest deadline the core is waiting
+    /// for changed; the shell keeps one one-shot timer, replaced by each
+    /// hint, cancelled on a reset, a disconnect or when the app is
+    /// backgrounded (its regular tick still covers the deadline).
+    WakeAt {
+        /// When to tick, ms.
+        at_ms: f64,
+    },
     /// A write was refused because a firmware upload is locking out other
     /// writes. v1 carries the lockout guard as a stub
     /// ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
