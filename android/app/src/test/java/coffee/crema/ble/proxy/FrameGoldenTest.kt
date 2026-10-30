@@ -38,9 +38,8 @@ class FrameGoldenTest {
         "challenge.unpaired" to Frame.Challenge("host-1", "Kitchen tablet", "aG9zdC1ub25jZQ"),
         "auth" to Frame.Auth("Y2xpZW50LXByb29m"),
         "auth.pair" to Frame.Auth(),
-        "welcome" to Frame.Welcome(Golden.VERSION, "host-1", "Kitchen tablet", "primary", roster),
-        "welcome.mirror-paired" to
-            Frame.Welcome(Golden.VERSION, "host-1", "Kitchen tablet", "primary", emptyList(), scope = "mirror", pairingSecret = "c2VjcmV0"),
+        "welcome" to Frame.Welcome("Kitchen tablet", "primary", roster, scope = SCOPE_CONTROL),
+        "welcome.mirror" to Frame.Welcome("Kitchen tablet", "primary", emptyList(), scope = SCOPE_MIRROR),
         "denied" to Frame.Denied(DenyReason.NOT_PAIRED),
         "roster" to Frame.Roster(roster),
         "attach" to Frame.Attach(7, addr),
@@ -117,14 +116,15 @@ class FrameGoldenTest {
         assertEquals(emptySet(), Golden.list("frames") - samples.keys, "fixtures no sample checks")
     }
 
-    /** Today's tolerance (D-1 not done): an unknown `"type"` throws, which on
-     *  a socket ends the session (see ProxyFaultTest). When the codec learns
-     *  to skip unknown frames, flip this test. */
+    /** The strict codec still refuses an unknown `"type"`; the relay v4 decode
+     *  ([FrameCodec.decodeTolerant], spec §4.5) skips it, so a later v4.x can
+     *  add frames without a version bump. */
     @Test
-    fun `an unknown frame type fails to decode`() {
+    fun `an unknown frame type fails the strict decode and is skipped by the relay decode`() {
         val text = Golden.require("unknown/type.json")
         val e = assertFailsWith<SerializationException> { FrameCodec.decode(text) }
         assertTrue("pairingQr" in e.message.orEmpty(), "the error names the unknown type: ${e.message}")
+        assertEquals(null, FrameCodec.decodeTolerant(text))
     }
 
     /** An unknown field on a known frame is ignored (`ignoreUnknownKeys`): the

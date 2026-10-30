@@ -332,3 +332,8 @@ offered: at `PairPending` on the hub, at `Paired` on the remote, at `Established
     `Seed::from_entropy([u8; 32])`; it is neither `Clone` nor `Copy`.
 13. **`PinSet::insert` returns whether the key was new** (`Ok(true)`) or already pinned (`Ok(false)`), which is what
     the restore-prior rollback rule (§4 step 9) needs.
+14. **The squat rule's hook.** `HubConnection::refuse_pairing_requests()` (FFI `refuse_pairing_requests`) makes an
+    `intent=pair` hello on that connection get `ServerHello(BUSY)` and a close 4403 without touching the gate (no
+    slot, no failure); resumes are unaffected. The shell calls it before the ClientHello for an address whose
+    pairing request the hub user cancelled in the current window (spec §2.5).
+

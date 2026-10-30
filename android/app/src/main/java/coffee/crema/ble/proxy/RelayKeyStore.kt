@@ -83,7 +83,8 @@ sealed interface RelayKeyLoad {
 
 /**
  * This device's relay v4 static key and pins (spec §5.1), replacing the v3
- * `PairingStore`. Not wired yet (PR-3b uses it).
+ * `PairingStore`. One instance per process ([forProcess]): two would race on
+ * the file.
  *
  * - The private key is sealed with a dedicated AndroidKeyStore key
  *   ([RELAY_ALIAS], AAD [RELAY_AAD]) through [SecretBox.wrapBytes], so it never
@@ -241,6 +242,21 @@ class RelayKeyStore(
         previous to s.copy(remotes = s.remotes.filterNot { it.id == pin.id } + pin)
     }
 
+    /**
+     * [pinRemote] for the hub's pairing commit (spec §2.4 step 9): returns the
+     * record it replaced and whether the file was written (always true while
+     * memory-only, where pins last for this process by design), so a failed
+     * write can `reject_pairing` instead of confirming.
+     */
+    fun pinRemoteSaved(pin: RelayRemotePin): PinWrite = synchronized(lock) {
+        var previous: RelayRemotePin? = null
+        val saved = updateSaved { s ->
+            previous = s.remotes.firstOrNull { it.id == pin.id }
+            s.copy(remotes = s.remotes.filterNot { it.id == pin.id } + pin)
+        }
+        PinWrite(previous, saved)
+    }
+
     /** Put back [previous] for [id] (null: the remote wasn't pinned, so unpin it). */
     fun restoreRemote(id: String, previous: RelayRemotePin?) {
         update { s ->
@@ -306,9 +322,21 @@ class RelayKeyStore(
     /**
      * Reset pairing key (§2.10): a new key, every pin deleted in both
      * directions. Returns the new keys, or null when no key was loaded.
+     *
+     * [fromUnavailable]: the user's way out of a store that stays unreadable
+     * (SR-3a P2-1): with no key loaded, the old file moves to `relay-lost/` (as
+     * for a definitive loss) and a new key starts with the reset notice. Only
+     * ever from an explicit user action, never automatically.
      */
-    fun resetKey(): RelayKeys? = synchronized(lock) {
-        if (keys == null) return null
+    fun resetKey(fromUnavailable: Boolean = false): RelayKeys? = synchronized(lock) {
+        if (keys == null) {
+            if (!fromUnavailable) return null
+            if (file.exists()) moveAside()
+            return when (val result = createKey(RelayFile(keyResetNotice = true), keyReset = true)) {
+                is RelayKeyLoad.Ready -> result.keys
+                is RelayKeyLoad.Unavailable -> null
+            }
+        }
         when (val result = createKey(RelayFile(v3Migrated = state.v3Migrated), keyReset = false)) {
             is RelayKeyLoad.Ready -> result.keys
             is RelayKeyLoad.Unavailable -> null
@@ -323,11 +351,17 @@ class RelayKeyStore(
         result
     }
 
-    /** [update] that reports whether the change reached the file (always true while memory-only). */
+    /**
+     * [update] that reports whether the change reached the file (always true
+     * while memory-only). A failed write leaves the in-memory state as it was,
+     * so nothing reads as saved (a pin, `v3Migrated`) that isn't on disk.
+     */
     private fun updateSaved(change: (RelayFile) -> RelayFile): Boolean = synchronized(lock) {
         check(keys != null) { "relay keys not loaded" }
-        state = change(state)
-        !persistent || write(state)
+        val next = change(state)
+        if (persistent && !write(next)) return false
+        state = next
+        true
     }
 
     private fun write(next: RelayFile): Boolean = try {
@@ -356,12 +390,33 @@ class RelayKeyStore(
             ignoreUnknownKeys = true
         }
 
+        private val perProcess = HashMap<String, RelayKeyStore>()
+
+        /**
+         * The process's one store for [filesDir] (SR-3a P3-1). The per-alias
+         * lock covers key creation, but two instances would still race on the
+         * file, so a view model built again in the same process gets the same
+         * store (and [load]s it again).
+         */
+        fun forProcess(filesDir: File): RelayKeyStore = synchronized(perProcess) {
+            perProcess.getOrPut(filesDir.absolutePath) { RelayKeyStore(filesDir, deviceBox()) }
+        }
+
         /**
          * The device box for the relay key: dedicated alias and AAD (§5.1), and the
          * strict key lookup with the liveness probe ([AndroidKeystoreKeySource]).
          */
-        fun deviceBox(backend: KeystoreBackend = AndroidKeyStoreBackend): SecretBox =
+        fun deviceBox(backend: KeystoreBackend = backendForTests ?: AndroidKeyStoreBackend): SecretBox =
             SecretBox(AndroidKeystoreCipher(RELAY_ALIAS, RELAY_AAD, AndroidKeystoreKeySource(RELAY_ALIAS, backend)))
+
+        /**
+         * Test seam: the keystore [deviceBox] uses when set. Robolectric has no
+         * AndroidKeyStore, so the VM tests install a fake one here before the
+         * view model (and its [coffee.crema.ui.ProxyController]) is built.
+         */
+        @androidx.annotation.VisibleForTesting
+        @Volatile
+        internal var backendForTests: KeystoreBackend? = null
 
         internal fun b64(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
 

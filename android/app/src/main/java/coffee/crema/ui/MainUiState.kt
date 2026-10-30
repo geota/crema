@@ -462,15 +462,28 @@ data class MainUiState(
     /** This secondary was granted **view-only** (mirror, not control) by the host
      *  (issue 02) — its control attempts are refused, so the UI can say "view-only". */
     val mirrorViewOnly: Boolean = false,
-    /** A pending host-side pairing prompt (issue 02): a new secondary is asking to
-     *  mirror this device. Non-null ⟺ the Activity shows the "Allow this device?"
-     *  dialog; the user's choice resolves the held handshake. */
+    /** The hub's code-entry dialog (relay v4): a remote asks to pair. Non-null ⟺
+     *  the Activity shows "Pair ‹remote›?" with the 6-digit field and the scope. */
     val pendingPairing: PairingPrompt? = null,
     /** Devices this host has approved to mirror it (issue 02) — shown in Settings ▸
      *  "Paired devices" for review/revoke. */
     val pairedDevices: List<PairedDevice> = emptyList(),
     /** Seconds left in this host's pairing window; 0 = closed. */
     val pairingSecondsLeft: Int = 0,
+    /** Seconds left in the pairing lockout after three wrong codes; 0 = not locked. */
+    val pairingLockedSecondsLeft: Int = 0,
+    /** The hubs this remote has pinned (relay v4 Paired hubs). */
+    val pairedHubs: List<coffee.crema.ble.proxy.RelayHubPin> = emptyList(),
+    /** The remote's pairing with a hub, for the code sheet (relay v4, spec §6.1). */
+    val relayPairing: coffee.crema.ble.proxy.PairingState = coffee.crema.ble.proxy.PairingState.Idle,
+    /** The relay keys couldn't be read this start: the relay is off until a restart. */
+    val relayKeysUnavailable: Boolean = false,
+    /** The pairing key was reset (a definitive loss): the one-time notice. */
+    val relayKeyResetNotice: Boolean = false,
+    /** The v3 upgrade: this remote pairs again before it dials. */
+    val relayNeedsRepair: Boolean = false,
+    /** The v3 upgrade: this hub's one-time "pair your phones again" banner. */
+    val relayUpgradeNotice: Boolean = false,
     /** Paired devices holding a pairing secret from this host; a listed device
      *  missing here must pair again. */
     val pairedWithSecret: Set<String> = emptySet(),

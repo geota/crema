@@ -39,7 +39,6 @@ class ProxyLoopbackTest {
             val (clientEnd, serverEnd) = InMemoryFrameLink.pair()
             val versionBytes = byteArrayOf(0x09, 0x00, 0x7f)
             val hub = RelayHub(
-                primaryId = "primary-1",
                 primaryName = "Kitchen tablet",
                 roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
                 readSource = { a, s, c ->
@@ -47,8 +46,8 @@ class ProxyLoopbackTest {
                 },
                 isSnapshotChar = { _, c -> c == stateChar }, // sample stream is NOT snapshotted
             )
-            scope.launch { hub.serve(serverEnd) }
-            val proxy = ProxyTransport(clientEnd, scope, clientId = "phone-1", clientName = "Phone")
+            scope.launch { hub.serve(serverEnd, TEST_PEER) }
+            val proxy = ProxyTransport(clientEnd, scope)
 
             // 1) Roster → scan surfaces the primary's DE1.
             val match = withTimeout(2_000) { proxy.scan { it == "DE1" }.first() }

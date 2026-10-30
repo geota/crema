@@ -66,70 +66,39 @@ sealed interface ControlReply {
  *
  * ## Lifecycle
  *
- * It collects the link's [FrameLink.events] and runs one handshake per
- * session epoch: exactly one [Frame.Hello], sent on that session only. It
- * answers the primary's [Frame.Challenge] with [Frame.Auth], proving the
- * pairing secret it holds for that host (or none, which asks the host to
- * pair), and keeps the secret a host issues on the Welcome that approves it.
- * Every request (attach, detach, read, write, control) waits for the current
- * session's [Frame.Welcome] and is sent on that session only, so nothing
- * reaches the primary ahead of the handshake or lands on a later session. On
- * [Frame.Denied] requests fail at once and the link is closed (no redial). A
- * Welcome after the first one (a redial) re-attaches every device. A closed
- * link simply ends the flows.
+ * It collects the link's [FrameLink.events]. Relay v4 authenticates each
+ * session in the core before the link reports it (spec §2.6), so a session
+ * here starts at [LinkEvent.SessionStarted] and is ready at the hub's
+ * [Frame.Welcome], which carries the scope the hub stored at pairing (a
+ * missing or unknown scope reads as view-only, never as control, R6). Every
+ * request (attach, detach, read, write, control) waits for the current
+ * session's Welcome and is sent on that session only, so nothing lands on a
+ * later session. A [LinkEvent.Refused] reaches [onRefused] with whether the
+ * hub's refusal was authenticated; a terminal one fails every request at once
+ * (the link stopped redialing). A Welcome after the first one (a redial)
+ * re-attaches every device. A closed link simply ends the flows.
  */
 class ProxyTransport(
     private val link: FrameLink,
     private val scope: CoroutineScope,
-    private val clientId: String,
-    private val clientName: String,
     private val requestTimeoutMs: Long = 5_000L,
     /** Invoked with the primary's [Frame.Config] JSON on attach + on every change
      *  — the secondary applies it so its config mirrors the primary (single-owner
      *  config; the settings-drift fix). Default no-op (tests / read-only path). */
     private val onConfig: (json: String) -> Unit = {},
-    /** Invoked with the granted scope (`"control"` / `"mirror"`) and the hub's
-     *  name from each [Frame.Welcome] (issue 02), so the remote can reflect
-     *  view-only state and name its hub before the first config snapshot.
-     *  Default no-op. */
+    /** Invoked with the granted scope ([SCOPE_CONTROL] / [SCOPE_MIRROR]) and the
+     *  hub's name from each [Frame.Welcome], so the remote can reflect view-only
+     *  state and name its hub before the first config snapshot. Default no-op. */
     private val onWelcome: (scope: String, primaryName: String) -> Unit = { _, _ -> },
-    /** Invoked when the primary [Frame.Denied]s this peer (TOFU declined / revoked,
-     *  issue 02) — on the initial handshake AND on a reconnect after a revoke — so
-     *  the secondary can surface it and stop mirroring. Default no-op. */
-    private val onDenied: (reason: String) -> Unit = {},
-    /** Every refusal that ends a session, with where it came from: [byHost]
-     *  for the host's [Frame.Denied], false for this device's own checks (a
-     *  host mismatch, an unproven secret, another protocol version);
-     *  [hostProved] when the host had proved the pairing secret this device
-     *  holds earlier in the session. The caller decides what a refusal means
-     *  for its role. Default: [onDenied] with the reason. */
-    private val onRefused: (reason: String, byHost: Boolean, hostProved: Boolean) -> Unit = { reason, _, _ -> onDenied(reason) },
+    /** The hub refused this device ([LinkEvent.Refused]): [authenticated] only
+     *  for a `CLOSE` record decrypted with the session's keys (spec §2.9), and
+     *  [terminal] when the link stopped redialing. The caller decides what it
+     *  means for the role. Default no-op. */
+    private val onRefused: (reason: String, authenticated: Boolean, terminal: Boolean) -> Unit = { _, _, _ -> },
     /** Invoked with a primary [Frame.Event] — a transient "<who> drove the machine"
      *  notice (issue 11, loose multi-controller). Display-only; the VM surfaces it
      *  as a snackbar. Default no-op. */
     private val onEvent: (text: String) -> Unit = {},
-    /** The pairing secret this device holds for the primary with this host id,
-     *  or null (then the Auth asks to pair). Default: none. */
-    private val pairingSecretFor: (primaryId: String) -> String? = { null },
-    /** A primary approved this device and issued it a pairing secret: keep it
-     *  for that host id. Default no-op. */
-    private val onPaired: (primaryId: String, primaryName: String, secret: String) -> Unit = { _, _, _ -> },
-    /** The host id this mirror target is pinned to, or null (not pinned yet):
-     *  a Challenge from any other host id is refused. */
-    private val pinnedHostId: () -> String? = { null },
-    /** A session completed with this host id: the caller pins the target to it. */
-    private val onHostConfirmed: (primaryId: String) -> Unit = {},
-    /** Whether the user picked this target just now: only then may the session
-     *  ask to pair (a new host, or one that can't prove the secret this device
-     *  holds), and only until a handshake completes; later sessions (redials)
-     *  are unattended. An unattended session (restored target, automatic re-mirror)
-     *  connects only to a host that proves a secret this device already holds,
-     *  and refuses anything else. Production passes it per session; the default
-     *  serves the loopback and tests. */
-    private val allowRepair: Boolean = true,
-    /** The host with this id couldn't prove the secret this device holds for
-     *  it: the session is refused, and the caller can offer to forget the host. */
-    private val onHostChanged: (primaryId: String, primaryName: String) -> Unit = { _, _ -> },
 ) : BleTransport {
 
     /** Devices the primary holds, from [Frame.Welcome] / [Frame.Roster]; drives [scan]. */
@@ -184,31 +153,6 @@ class ProxyTransport(
     @Volatile
     private var welcomedBefore = false
 
-    /** Whether this session may still ask to pair: the user's pick
-     *  ([allowRepair]) covers only the first completed handshake. Every later
-     *  session on this transport (an automatic redial) is unattended. */
-    @Volatile
-    private var repairAllowed = allowRepair
-
-    /** What this device did in one session's pairing handshake: the nonce its
-     *  Hello carried, the host id of the Challenge it answered, and whether its
-     *  Auth asked to pair. One per epoch. */
-    private class PairingRound(val clientNonce: String) {
-        /** The host id of the Challenge this round answered; null until then. */
-        @Volatile var challengedBy: String? = null
-        /** The Auth carried no proof: this device asked to pair, so the Welcome
-         *  may carry a new secret for [challengedBy]. */
-        @Volatile var askedToPair: Boolean = false
-        /** This round answered its Challenge with an Auth: the host proved the
-         *  secret, or this device chose to ask to pair. Only then can a Welcome
-         *  complete the session. */
-        @Volatile var answered: Boolean = false
-    }
-
-    /** The current session's round; replaced at every session start. */
-    @Volatile
-    private var round = PairingRound(PairingCrypto.newNonce())
-
     init {
         link.events().onEach { onLinkEvent(it) }.launchIn(scope)
     }
@@ -216,34 +160,23 @@ class ProxyTransport(
     private fun onLinkEvent(event: LinkEvent) {
         when (event) {
             is LinkEvent.SessionStarted -> {
-                // A terminal refusal sticks: the link is closed, nothing redials.
+                // A terminal refusal sticks: the link stopped, nothing redials.
                 if (handshake.value is Handshake.Refused) return
                 handshake.value = Handshake.Pending(event.epoch)
                 failSupersededRequests(event.epoch)
-                val next = PairingRound(PairingCrypto.newNonce())
-                round = next
-                // Exactly one Hello per session, on that session only.
-                scope.launch {
-                    runCatching {
-                        link.sendOn(event.epoch, Frame.Hello(PROXY_PROTOCOL_VERSION, ROLE_SECONDARY, clientId, clientName, nonce = next.clientNonce))
-                    }
-                }
             }
             is LinkEvent.Received -> dispatch(event.frame)
+            is LinkEvent.Refused -> {
+                if (event.terminal) {
+                    handshake.value = Handshake.Refused(
+                        handshake.value.epoch,
+                        IllegalStateException("Proxy refused: ${event.reason}"),
+                    )
+                    failSupersededRequests(null)
+                }
+                onRefused(event.reason, event.authenticated, event.terminal)
+            }
         }
-    }
-
-    /** The current session refused us (Denied, version, a host mismatch): fail
-     *  every waiting request, tell the caller, and close the link so it doesn't
-     *  redial into the same refusal. */
-    private fun refuse(reason: String, error: Throwable, byHost: Boolean = false) {
-        handshake.value = Handshake.Refused(handshake.value.epoch, error)
-        failSupersededRequests(null)
-        // The host proved our secret this session only if this device answered
-        // its Challenge with a proof (not a pairing request).
-        val hostProved = round.answered && !round.askedToPair
-        onRefused(reason, byHost, hostProved)
-        scope.launch { runCatching { link.close() } }
     }
 
     /** Re-attach every device the managers had attached after a redial (issue
@@ -262,112 +195,22 @@ class ProxyTransport(
     }
 
     private fun dispatch(frame: Frame) {
-        // Until this session is welcomed only the handshake counts: anything
-        // else (config, telemetry, events, offers) from a host that hasn't
-        // completed it is ignored, so a host refused later can't have pushed
-        // anything first.
-        if (frame !is Frame.Welcome && frame !is Frame.Challenge && frame !is Frame.Denied &&
-            handshake.value !is Handshake.Welcomed
-        ) {
+        // Until this session is welcomed only the Welcome counts: anything else
+        // (config, telemetry, events) before it is ignored.
+        if (frame !is Frame.Welcome && handshake.value !is Handshake.Welcomed) {
             Log.w(TAG, "Ignoring ${frame::class.simpleName} before the session's Welcome")
             return
         }
         when (frame) {
             is Frame.Welcome -> {
-                // Reject a primary on a different protocol version (issue 05): the
-                // primary normally denies our Hello, but an OLDER primary won't know
-                // to, so the secondary refuses here and surfaces "please update".
-                if (frame.v != PROXY_PROTOCOL_VERSION) {
-                    refuse(
-                        "version mismatch — update Crema on both devices",
-                        IllegalStateException("Proxy version mismatch: primary v${frame.v} != v$PROXY_PROTOCOL_VERSION"),
-                    )
-                } else {
-                    val state = handshake.value
-                    if (state !is Handshake.Pending) return
-                    val current = round
-                    val challengedBy = current.challengedBy
-                    val pinned = pinnedHostId()
-                    // A Welcome counts only after this session's Challenge/Auth
-                    // round, from the host that challenged it (and the pinned host,
-                    // if any). Anything else is refused and nothing is stored.
-                    if (challengedBy == null || !current.answered || frame.primaryId != challengedBy ||
-                        (pinned != null && frame.primaryId != pinned)
-                    ) {
-                        Log.w(TAG, "Welcome from ${frame.primaryId} outside a completed handshake (challenged by $challengedBy, pinned $pinned) — refusing")
-                        refuse(DenyReason.HANDSHAKE_MISMATCH, IllegalStateException("Proxy handshake mismatch"))
-                        return
-                    }
-                    frame.pairingSecret?.let { secret ->
-                        // Keep a secret only when this session asked to pair with
-                        // the host that challenged it; never replace a secret
-                        // this device didn't ask to replace.
-                        if (current.askedToPair) {
-                            onPaired(challengedBy, frame.primaryName, secret)
-                        } else {
-                            Log.w(TAG, "Ignoring a pairing secret this device didn't ask for")
-                        }
-                    }
-                    onHostConfirmed(challengedBy)
-                    // The user's consent was for this handshake only.
-                    repairAllowed = false
-                    applyRoster(frame.roster)
-                    onWelcome(frame.scope, frame.primaryName)
-                    handshake.value = Handshake.Welcomed(state.epoch)
-                    if (welcomedBefore) scope.launch { reattach() }
-                    welcomedBefore = true
-                }
-            }
-            is Frame.Challenge -> {
-                val current = round
-                if (current.challengedBy != null) {
-                    Log.w(TAG, "Ignoring a second Challenge in one session")
-                    return
-                }
-                current.challengedBy = frame.primaryId
-                val pinned = pinnedHostId()
-                if (pinned != null && frame.primaryId != pinned) {
-                    Log.w(TAG, "Challenge from ${frame.primaryId}, but this target is pinned to $pinned — refusing")
-                    refuse(DenyReason.HOST_MISMATCH, IllegalStateException("Proxy host refused: ${DenyReason.HOST_MISMATCH}"))
-                    return
-                }
-                // Prove our secret only to a host that proved it first, over our
-                // nonce. Asking to pair (no secret held, or the host can't prove
-                // ours) needs the user's own pick of this target; an unattended
-                // session refuses instead.
-                val held = pairingSecretFor(frame.primaryId)
-                val hostProved = held != null &&
-                    PairingCrypto.verifyHost(held, frame.primaryId, clientId, current.clientNonce, frame.nonce, frame.hostProof)
-                val proof = if (held != null && hostProved) {
-                    // A proof that can't be computed refuses: a missing proof
-                    // would read as a pairing request.
-                    runCatching { PairingCrypto.clientProof(held, frame.primaryId, clientId, current.clientNonce, frame.nonce) }.getOrNull()
-                        ?: run {
-                            refuse(DenyReason.HANDSHAKE_MISMATCH, IllegalStateException("Proxy client proof failed"))
-                            return
-                        }
-                } else {
-                    if (held != null) {
-                        // A secret this device holds is never replaced by a new
-                        // pairing, not even on the user's pick: the user forgets
-                        // the host on this device first.
-                        Log.w(TAG, "Host ${frame.primaryName} didn't prove our pairing secret — refusing")
-                        onHostChanged(frame.primaryId, frame.primaryName)
-                        refuse(DenyReason.HOST_CHANGED, IllegalStateException("Proxy host refused: ${DenyReason.HOST_CHANGED}"))
-                        return
-                    }
-                    if (!repairAllowed) {
-                        Log.w(TAG, "Host ${frame.primaryName} isn't one this device can verify, and the user didn't pick it — refusing")
-                        refuse(DenyReason.HOST_UNVERIFIED, IllegalStateException("Proxy host refused: ${DenyReason.HOST_UNVERIFIED}"))
-                        return
-                    }
-                    null
-                }
-                current.askedToPair = proof == null
-                current.answered = true
-                // On this session only, like the Hello it answers.
-                val epoch = handshake.value.epoch
-                scope.launch { runCatching { link.sendOn(epoch, Frame.Auth(proof)) } }
+                val state = handshake.value
+                if (state !is Handshake.Pending) return
+                applyRoster(frame.roster)
+                // Only "control" grants control; anything else is view-only (R6).
+                onWelcome(if (frame.grantsControl) SCOPE_CONTROL else SCOPE_MIRROR, frame.primaryName)
+                handshake.value = Handshake.Welcomed(state.epoch)
+                if (welcomedBefore) scope.launch { reattach() }
+                welcomedBefore = true
             }
             is Frame.Roster -> applyRoster(frame.devices)
             is Frame.Attached -> {
@@ -385,10 +228,9 @@ class ProxyTransport(
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
             is Frame.Config -> onConfig(frame.json)
             is Frame.Event -> onEvent(frame.text)
-            is Frame.Denied -> refuse(frame.reason, IllegalStateException("Proxy denied: ${frame.reason}"), byHost = true)
             // Retired: an older hub's "Hand off". Nothing changes here.
             is Frame.HandoffOffer -> Log.i(TAG, "Ignoring a retired handoff offer from ${frame.fromName}")
-            else -> Log.w(TAG, "Secondary ignoring unexpected server frame: $frame")
+            else -> Log.w(TAG, "Secondary ignoring unexpected server frame: ${frame::class.simpleName}")
         }
     }
 
@@ -407,7 +249,7 @@ class ProxyTransport(
         }
 
     override suspend fun connect(device: BleTransport.DeviceHandle) {
-        // The first handshake may wait on the host's pairing prompt: no timeout.
+        // The first session may take a while (the hub restarting): no timeout.
         val settled = handshake.first { it !is Handshake.Pending }
         if (settled is Handshake.Refused) throw settled.error
         val id = nextId.getAndIncrement()
@@ -579,7 +421,6 @@ class ProxyTransport(
 
     private companion object {
         const val TAG = "ProxyTransport"
-        const val ROLE_SECONDARY = "secondary"
 
         fun parseState(s: String): BleTransport.ConnState =
             runCatching { BleTransport.ConnState.valueOf(s) }.getOrDefault(BleTransport.ConnState.DISCONNECTED)

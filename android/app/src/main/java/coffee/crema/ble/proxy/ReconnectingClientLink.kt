@@ -1,13 +1,20 @@
 package coffee.crema.ble.proxy
 
 import android.util.Log
+import coffee.crema.core.RelayCloseReason
+import coffee.crema.core.RelayEvent
+import coffee.crema.core.RelayFfiException
+import coffee.crema.core.RelayKeys
+import coffee.crema.core.RelayRemoteConnection
 import coffee.crema.net.HttpClients
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.url
+import io.ktor.websocket.WebSocketSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,99 +28,164 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** Coarse state of a [ReconnectingClientLink], for the mirror's UI: distinguish
- *  "socket up" from "telemetry flowing" so a dropped primary doesn't read as a
+ *  "session up" from "dialing" so a dropped primary doesn't read as a
  *  healthy-but-frozen mirror (issue 03). */
 enum class LinkState { CONNECTING, CONNECTED }
 
 /**
  * The secondary's [FrameLink] to a primary's [LanRelayServer]: a Ktor WebSocket
- * client that **keeps a live session up across drops** — it dials with backoff at
- * startup *and* redials whenever the session ends, so a secondary survives the
- * primary restarting (issue 03), not just a late-starting primary (M1).
+ * client that **keeps a live session up across drops**, and runs the relay v4
+ * resume on every connection (spec §2.6): a [RelayRemoteConnection.resume] to
+ * the hub whose static key this device pinned at pairing ([hubKey]).
  *
- * Reconnection has two parts and this class owns the **transport** half:
- * - [events] is one continuous stream spanning every session: each new socket
- *   starts with [LinkEvent.SessionStarted] (epoch 1, 2, …), then its frames, so
- *   the [ProxyTransport] collector never ends and knows which session every
- *   frame came from.
+ * - [events] is one continuous stream spanning every session. A session counts
+ *   only once the core reports it `Established` (the hub proved its pinned key
+ *   and the client-finished record went out): only then does
+ *   [LinkEvent.SessionStarted] (epoch 1, 2, …) reach the consumer, followed by
+ *   that session's frames. Nothing from an unauthenticated connection reaches
+ *   the [ProxyTransport].
+ * - A refusal from the hub is a [LinkEvent.Refused] with whether it was
+ *   authenticated (spec §2.9). `HubStopped`, `Normal`, `Protocol` and `Timeout`
+ *   keep redialing with the back-off; anything else stops the link (no
+ *   redial) and leaves the decision to the caller: an authenticated
+ *   `Revoked`/`NotPaired` drops the pin, an advisory one keeps the role.
  * - [sendOn] sends on one session only, so a frame meant for a session that
  *   has ended is never delivered to the next one.
  * - [state] exposes CONNECTING/CONNECTED for the UI.
  *
- * The **protocol** half (one `Hello` per session, requests after that
- * session's `Welcome`, re-`Attach` → re-snapshot) lives in [ProxyTransport],
- * keyed by epoch. The link knows nothing about frames.
- *
- * The socket is Ktor's OkHttp engine ([HttpClients.webSocketClient]: no retry
- * plugin, no read timeout, a ping every [HttpClients.WS_PING_INTERVAL_MS], so a
- * half-open socket ends the session). OkHttp can't cap the frame size, so each
- * session's [KtorWsFrameLink] enforces [PROXY_MAX_FRAME_BYTES] itself. The
- * engine is shared and outlives this link, so teardown cancels the live
- * session explicitly rather than relying on closing the client.
+ * The socket is Ktor's OkHttp engine ([HttpClients.webSocketClient]). OkHttp
+ * can't cap the message size, so the [RelayWire] closes the socket (1009) on a
+ * binary message over [WS_MAX_MESSAGE] before the core sees it. The engine is
+ * shared and outlives this link, so teardown cancels the live session
+ * explicitly.
  */
 class ReconnectingClientLink(
     private val url: String,
     scope: CoroutineScope,
+    /** This device's relay key. */
+    private val keys: RelayKeys,
+    /** The hub's static public key, pinned at pairing. */
+    private val hubKey: ByteArray,
     private val client: HttpClient = HttpClients.webSocketClient(),
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : FrameLink {
 
     /** One continuous inbound stream across all sessions. */
     private val inbox = Channel<LinkEvent>(Channel.UNLIMITED)
 
     private val _state = MutableStateFlow(LinkState.CONNECTING)
-    /** CONNECTING while dialing/redialing, CONNECTED while a session is live. */
+    /** CONNECTING while dialing/redialing, CONNECTED while an established session is live. */
     val state: StateFlow<LinkState> = _state.asStateFlow()
 
-    /** One live socket and its epoch. */
-    private class Session(val epoch: Long, val link: KtorWsFrameLink)
+    /** One established session and its epoch. */
+    private class Session(val epoch: Long, val wire: RelayWire)
 
-    /** The current live session, or null while (re)connecting. */
+    /** The current established session, or null while (re)connecting. */
     @Volatile
     private var live: Session? = null
 
+    /** The socket being dialed or served, for teardown. */
+    @Volatile
+    private var socket: WebSocketSession? = null
+
+    /** A refusal stopped the link: nothing redials. */
+    @Volatile
+    private var stopped = false
+
+    private var epoch = 0L
+
     private val loop = scope.launch {
         var attempt = 0
-        var epoch = 0L
-        while (isActive) {
+        while (isActive && !stopped) {
             try {
-                val session = client.webSocketSession { url(this@ReconnectingClientLink.url) }
-                val link = KtorWsFrameLink(session, maxFrameBytes = PROXY_MAX_FRAME_BYTES)
-                epoch++
-                // The session is live (sendOn works) BEFORE its boundary reaches
-                // the consumer, so a Hello sent on SessionStarted always finds
-                // it, whatever thread the consumer runs on. The boundary still
-                // precedes every frame of the session: those are pumped below.
-                live = Session(epoch, link)
-                inbox.trySend(LinkEvent.SessionStarted(epoch))
-                attempt = 0
-                _state.value = LinkState.CONNECTED
-                Log.i(TAG, "Connected to primary at $url (session $epoch)")
-                // Pump this session until the socket ends, then fall through to redial.
-                link.incoming().collect { inbox.trySend(LinkEvent.Received(it)) }
-                Log.i(TAG, "Primary link dropped — will redial")
+                if (runSession()) attempt = 0
             } catch (e: Exception) {
-                Log.i(TAG, "Primary not reachable at $url (attempt ${attempt + 1}): ${e.message}")
+                if (!isActive) break
+                Log.i(TAG, "Primary not reachable at $url (attempt ${attempt + 1}): ${e.javaClass.simpleName}")
             } finally {
-                // Also on cancellation: the session isn't a child of this loop.
-                live?.link?.cancel()
                 live = null
-                if (isActive) _state.value = LinkState.CONNECTING
+                socket?.cancel()
+                socket = null
+                if (isActive && !stopped) _state.value = LinkState.CONNECTING
             }
+            if (stopped) break
             attempt++
             if (isActive) delay(backoffMs(attempt))
         }
+    }
+
+    /** Dial once and run the resume and the session; true when it was established. */
+    private suspend fun runSession(): Boolean = coroutineScope {
+        val ws = client.webSocketSession { url(this@ReconnectingClientLink.url) }
+        socket = ws
+        val core = try {
+            RelayRemoteConnection.resume(keys, hubKey, clock().toULong())
+        } catch (e: RelayFfiException) {
+            Log.w(TAG, "Couldn't start a resume: ${RelayWire.kindOf(e)}")
+            ws.cancel()
+            return@coroutineScope false
+        }
+        var established = false
+        lateinit var wire: RelayWire
+        val listener = object : RelayWire.Listener {
+            override suspend fun onDeliver(message: ByteArray) {
+                val frame = try {
+                    FrameCodec.decodeTolerant(message.decodeToString(throwOnInvalidSequence = true))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Malformed frame from the hub: ${e.javaClass.simpleName} — closing")
+                    wire.abort(CLOSE_PROTOCOL, "malformed frame")
+                    return
+                }
+                if (frame != null && live?.wire === wire) inbox.trySend(LinkEvent.Received(frame))
+            }
+
+            override suspend fun onEvents(events: List<RelayEvent>) {
+                for (event in events) when (event) {
+                    is RelayEvent.Established -> {
+                        established = true
+                        epoch++
+                        // The session is live (sendOn works) BEFORE its boundary
+                        // reaches the consumer, so a request sent on
+                        // SessionStarted always finds it.
+                        live = Session(epoch, wire)
+                        inbox.trySend(LinkEvent.SessionStarted(epoch))
+                        _state.value = LinkState.CONNECTED
+                        Log.i(TAG, "Relay session $epoch established with the hub at $url")
+                    }
+                    is RelayEvent.Refused -> {
+                        val reason = event.content.reason
+                        val terminal = reason !in REDIAL_REASONS
+                        if (terminal) stopped = true
+                        Log.i(TAG, "Hub refused the session: $reason (authenticated=${event.content.authenticated}, terminal=$terminal)")
+                        inbox.trySend(LinkEvent.Refused(reason, event.content.authenticated, terminal))
+                    }
+                    is RelayEvent.Failed -> Log.i(TAG, "Relay session failed: ${event.content.error}")
+                    else -> Log.d(TAG, "relay event ${RelayWire.nameOf(event)}")
+                }
+            }
+        }
+        wire = RelayWire(ws, RemoteConn(core), this, listener, clock)
+        wire.callChecked { (this as RemoteConn).core.start() }
+        wire.pump()
+        if (established) Log.i(TAG, "Primary link dropped — will redial")
+        established
     }
 
     /** Send on the live session, waiting for one while redialing. A frame sent
      *  during a blip may be lost with the socket. */
     override suspend fun send(frame: Frame) {
         val session = live ?: run { state.first { it == LinkState.CONNECTED }; live }
-        session?.link?.send(frame)
+        session?.let { sendTo(it, frame) }
     }
 
     override suspend fun sendOn(epoch: Long, frame: Frame): Boolean {
         val session = live?.takeIf { it.epoch == epoch } ?: return false
-        return runCatching { session.link.send(frame) }.isSuccess
+        return sendTo(session, frame)
+    }
+
+    private suspend fun sendTo(session: Session, frame: Frame): Boolean {
+        val bytes = FrameCodec.encode(frame).encodeToByteArray()
+        return session.wire.call { send(bytes, it) }
     }
 
     override fun events(): Flow<LinkEvent> = inbox.receiveAsFlow()
@@ -121,22 +193,19 @@ class ReconnectingClientLink(
     override fun incoming(): Flow<Frame> =
         inbox.receiveAsFlow().filterIsInstance<LinkEvent.Received>().map { it.frame }
 
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    /** Leave: an authenticated `CLOSE(NORMAL)` on the live session, then tear down. */
     override suspend fun close() {
-        val session = live?.link
-        loop.cancel()
-        runCatching { session?.close() }
-        session?.cancel()
-        client.close()
-        inbox.close()
+        stopped = true
+        live?.wire?.call { closeSession(RelayCloseReason.NORMAL, it) }
+        dispose()
     }
 
     /** Synchronous teardown for non-suspend call sites (e.g. `ViewModel.onCleared`).
-     *  Cancels the live session (the shared engine outlives the client). */
+     *  Cancels the live socket (the shared engine outlives the client). */
     fun dispose() {
-        val session = live?.link
+        stopped = true
         loop.cancel()
-        session?.cancel()
+        socket?.cancel()
         runCatching { client.close() }
         // Close the inbox so a consumer of incoming() (the ProxyTransport's dispatch
         // flow) completes instead of suspending forever on a dead link (issue 10).
@@ -145,6 +214,10 @@ class ReconnectingClientLink(
 
     private companion object {
         const val TAG = "ReconnectingClientLink"
+        const val CLOSE_PROTOCOL = 4400
+
+        /** Refusals that keep the role and redial with the back-off (spec §2.9). */
+        val REDIAL_REASONS = setOf("HubStopped", "Normal", "Protocol", "Timeout")
 
         /** 500 ms doubling, capped at 5 s — tighter than the BLE managers' 30 s, since
          *  a primary restart on the LAN is usually back within a few seconds and a

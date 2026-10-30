@@ -1,10 +1,7 @@
 package coffee.crema.ble.proxy
 
 import coffee.crema.ble.BleTransport
-import coffee.crema.net.HttpClients
-import io.ktor.client.plugins.websocket.webSocketSession
-import io.ktor.client.request.url
-import io.ktor.websocket.close
+import coffee.crema.core.RelayKeys
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,12 +20,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The M1 reads-path mirror over a **real WebSocket** — the same [RelayHub] and
- * [ProxyTransport] as the in-process loopback, but bridged by [LanRelayServer]
- * (Ktor CIO server) and the app's Ktor WebSocket client on the OkHttp engine
- * ([HttpClients.webSocketClient]), both behind [KtorWsFrameLink].
- * Proves the socket layer carries the frames correctly: handshake → roster/scan
- * → attach + snapshot → lossless notify fan-out → read → write-reject. (The
+ * The M1 reads-path mirror over a **real WebSocket**, encrypted (relay v4) —
+ * the same [RelayHub] and [ProxyTransport] as the in-process loopback, but
+ * bridged by [LanRelayServer] + [SecureRelayAcceptor] (Ktor CIO server) and
+ * the app's Ktor WebSocket client on the OkHttp engine through
+ * [ReconnectingClientLink], each side driving its core connection. Proves the
+ * socket layer carries the frames correctly after the resume: roster/scan →
+ * attach + snapshot → lossless notify fan-out → read → write-reject. (The
  * 500-sample losslessness stress lives in [ProxyLoopbackTest]; here a smaller
  * stream confirms the wire faithfully relays it.)
  */
@@ -43,7 +41,6 @@ class LanRelayWsTest {
     fun `secondary mirrors the primary over a websocket`() = runBlocking {
         val versionBytes = byteArrayOf(0x09, 0x00)
         val hub = RelayHub(
-            primaryId = "primary-1",
             primaryName = "Kitchen tablet",
             roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
             readSource = { a, s, c ->
@@ -51,13 +48,13 @@ class LanRelayWsTest {
             },
             isSnapshotChar = { _, c -> c == stateChar },
         )
-        val server = LanRelayServer(hub, requestedPort = 0)
-        val port = server.start()
-        val client = HttpClients.webSocketClient()
+        val rig = RelayRig(hub).start()
+        val remote = RelayKeys.generate()
+        rig.trust.pin(remote)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
-            val session = client.webSocketSession { url("ws://127.0.0.1:$port${LanRelayServer.PATH}") }
-            val proxy = ProxyTransport(KtorWsFrameLink(session, PROXY_MAX_FRAME_BYTES), scope, clientId = "phone-1", clientName = "Phone")
+            val link = rig.link(remote)
+            val proxy = ProxyTransport(link, scope)
 
             val match = withTimeout(5_000) { proxy.scan { it == "DE1" }.first() }
             assertEquals(addr, match.device.address)
@@ -92,11 +89,10 @@ class LanRelayWsTest {
             withTimeout(5_000) { proxy.write(match.device, service, stateChar, byteArrayOf(0x01)) }
 
             obs.cancel()
-            session.close()
+            link.close()
         } finally {
-            client.close()
             scope.cancel()
-            server.stop()
+            rig.stop()
         }
     }
 }

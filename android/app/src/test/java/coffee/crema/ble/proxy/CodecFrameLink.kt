@@ -15,7 +15,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * An in-memory [FrameLink] pair that carries **wire text**, not [Frame]
  * objects: every frame is encoded with [FrameCodec] on send and decoded on
- * receipt, as [KtorWsFrameLink] does, so an in-process test exercises the
+ * receipt, as a socket link does, so an in-process test exercises the
  * codec too. A text the receiver can't decode fails its [incoming] flow, as
  * on a socket.
  *

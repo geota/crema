@@ -1,5 +1,6 @@
 package coffee.crema.ble.proxy
 
+import coffee.crema.core.RelayKeys
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,7 +22,7 @@ class ReconnectingClientLinkDisposeTest {
         try {
             // Port 1 never connects — the redial loop just backs off; we only assert
             // the inbox lifecycle, not connectivity.
-            val link = ReconnectingClientLink("ws://127.0.0.1:1/de1-bridge", scope)
+            val link = ReconnectingClientLink("ws://127.0.0.1:1/de1-bridge", scope, RelayKeys.generate(), RelayKeys.generate().publicKey())
             link.dispose()
             // Completes (drains the closed, empty channel) rather than hanging.
             withTimeout(2_000) { link.incoming().collect { } }

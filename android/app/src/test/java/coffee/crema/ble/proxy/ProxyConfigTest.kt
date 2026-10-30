@@ -28,18 +28,17 @@ class ProxyConfigTest {
             val (clientEnd, serverEnd) = InMemoryFrameLink.pair()
             val configJson = """{"pressureUnit":"psi","tempUnit":"F","activeProfileId":"abc"}"""
             val hub = RelayHub(
-                primaryId = "primary-1",
                 primaryName = "Kitchen tablet",
                 roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
                 readSource = { _, _, _ -> error("no read in this test") },
                 isSnapshotChar = { _, _ -> true },
                 configSource = { configJson },
             )
-            scope.launch { hub.serve(serverEnd) }
+            scope.launch { hub.serve(serverEnd, TEST_PEER) }
 
             val received = CompletableDeferred<String>()
             val proxy = ProxyTransport(
-                clientEnd, scope, clientId = "phone-1", clientName = "Phone",
+                clientEnd, scope,
                 onConfig = { if (!received.isCompleted) received.complete(it) },
             )
 

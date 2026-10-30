@@ -32,7 +32,6 @@ import kotlin.test.assertTrue
 class RelayHubControlOrderTest {
 
     private fun hub(handler: suspend (String, String, String?, String?) -> Result<Unit>) = RelayHub(
-        primaryId = "host-1",
         primaryName = "Tablet",
         roster = { emptyList() },
         readSource = { _, _, _ -> error("unused") },
@@ -46,10 +45,10 @@ class RelayHubControlOrderTest {
         val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
-            io.launch { hub.serve(server) }
+            io.launch { hub.serve(server, TEST_PEER) }
             val rx = CopyOnWriteArrayList<Frame>()
             io.launch { client.incoming().collect { rx += it } }
-            handshake(client, rx)
+            awaitWelcome(rx)
             for (i in 1..count) client.send(control(i))
             withTimeout(10_000) { while (rx.count { it is Frame.ControlOk || it is Frame.ControlErr } < count) delay(5) }
             // One reply per control, in order.
@@ -85,7 +84,6 @@ class RelayHubControlOrderTest {
         var config = """{"qcGrind":10.0}"""
         lateinit var hub: RelayHub
         hub = RelayHub(
-            primaryId = "host-1",
             primaryName = "Tablet",
             roster = { emptyList() },
             readSource = { _, _, _ -> error("unused") },
@@ -100,10 +98,10 @@ class RelayHubControlOrderTest {
         val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
-            io.launch { hub.serve(server) }
+            io.launch { hub.serve(server, TEST_PEER) }
             val rx = CopyOnWriteArrayList<Frame>()
             io.launch { client.incoming().collect { rx += it } }
-            handshake(client, rx)
+            awaitWelcome(rx)
             for (i in 1..20) client.send(Frame.Control(i.toLong(), "setQcGrind", "$i.5"))
             withTimeout(10_000) { while (rx.count { it is Frame.ControlOk } < 20) delay(5) }
             for (i in 1..20) {
@@ -175,10 +173,10 @@ class RelayHubControlOrderTest {
         val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
-            io.launch { hub.serve(server) }
+            io.launch { hub.serve(server, TEST_PEER) }
             val rx = CopyOnWriteArrayList<Frame>()
             io.launch { client.incoming().collect { rx += it } }
-            handshake(client, rx)
+            awaitWelcome(rx)
             client.send(Frame.Control(1, "tareScale", ""))
             client.send(Frame.Control(2, "tareScale", ""))
             withTimeout(5_000) { while (rx.count { it is Frame.ControlOk || it is Frame.ControlErr } < 2) delay(5) }
@@ -215,10 +213,10 @@ class RelayHubControlOrderTest {
         val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
-            io.launch { hub.serve(server) }
+            io.launch { hub.serve(server, TEST_PEER) }
             val rx = CopyOnWriteArrayList<Frame>()
             io.launch { client.incoming().collect { rx += it } }
-            handshake(client, rx)
+            awaitWelcome(rx)
             client.send(Frame.Control(1, "startShot", ""))
             withTimeout(5_000) { while (rx.none { it is Frame.ControlOk || it is Frame.ControlErr }) delay(5) }
             assertEquals(listOf<Frame>(Frame.ControlOk(1)), rx.filter { it is Frame.ControlOk || it is Frame.ControlErr })

@@ -1128,18 +1128,38 @@ fun SettingsScreen(
                             // Devices this host has allowed to mirror it (issue 02). A new
                             // device can ask only while the pairing window is open.
                             // Forget → its session ends and it has to pair again.
-                            if (ui.proxyRole == "primary") {
-                                val open = ui.pairingSecondsLeft > 0
+                            // Relay v4: the pairing keys couldn't be read this start (spec §6.3). The
+                            // relay stays off; resetting the key is the user's way out (SR-3a P2-1).
+                            if (ui.relayKeysUnavailable) {
                                 CremaSettingsRow(
-                                    if (open) "Pairing open · ${fmt("%d:%02d", ui.pairingSecondsLeft / 60, ui.pairingSecondsLeft % 60)}" else "Pair a device",
-                                    if (open) "On the other device, choose this machine under Other devices, then allow it here."
-                                    else "Lets a new phone or tablet connect for the next 2 minutes.",
+                                    "Pairing keys couldn't be read",
+                                    "Restart Crema to try again. If this keeps happening, reset this device's pairing key: every paired device has to pair with it again.",
                                 ) {
-                                    CremaButton(
-                                        onClick = { if (open) vm.closePairingWindow() else vm.openPairingWindow() },
-                                        variant = CremaButtonVariant.Text,
-                                        label = if (open) "Stop" else "Pair",
-                                    )
+                                    CremaButton(onClick = { vm.resetPairingKey() }, variant = CremaButtonVariant.Text, label = "Reset")
+                                }
+                            }
+                            if (ui.proxyRole == "primary" && !ui.relayKeysUnavailable) {
+                                val open = ui.pairingSecondsLeft > 0
+                                val locked = ui.pairingLockedSecondsLeft
+                                CremaSettingsRow(
+                                    when {
+                                        locked > 0 -> "Pairing paused · ${fmt("%d:%02d", locked / 60, locked % 60)}"
+                                        open -> "Pairing open · ${fmt("%d:%02d", ui.pairingSecondsLeft / 60, ui.pairingSecondsLeft % 60)}"
+                                        else -> "Pair a device"
+                                    },
+                                    when {
+                                        locked > 0 -> "Too many wrong codes. Pairing is paused for a minute."
+                                        open -> "On your phone, open Other devices and choose this hub, then type the code it shows here."
+                                        else -> "Lets a new phone or tablet pair for the next 2 minutes."
+                                    },
+                                ) {
+                                    if (locked == 0) {
+                                        CremaButton(
+                                            onClick = { if (open) vm.closePairingWindow() else vm.openPairingWindow() },
+                                            variant = CremaButtonVariant.Text,
+                                            label = if (open) "Stop" else "Pair",
+                                        )
+                                    }
                                 }
                             }
                             if (ui.pairedDevices.isEmpty()) {

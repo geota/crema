@@ -1,5 +1,6 @@
 package coffee.crema.ble.proxy
 
+import coffee.crema.core.RelayKeys
 import coffee.crema.net.HttpClients
 import io.ktor.client.engine.HttpClientEngine
 import kotlinx.coroutines.CoroutineScope
@@ -40,19 +41,15 @@ class ProxyLivenessTest {
 
     @Test
     fun `the secondary detects a half-open link and redials`() = runBlocking {
-        val hub = hub()
-        val server = LanRelayServer(hub)
-        val serverPort = server.start()
-        val relay = FreezableTcpRelay(serverPort)
+        val rig = RelayRig(hub()).start()
+        val remote = RelayKeys.generate()
+        rig.trust.pin(remote)
+        val relay = FreezableTcpRelay(rig.port)
         val engine = pingingEngine(pingIntervalMs = 200)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
-            val link = ReconnectingClientLink(
-                "ws://127.0.0.1:${relay.port}${LanRelayServer.PATH}",
-                scope,
-                client = HttpClients.webSocketClient(engine),
-            )
-            val proxy = ProxyTransport(link, scope, "phone-1", "Phone")
+            val link = rig.link(remote, at = "ws://127.0.0.1:${relay.port}${LanRelayServer.PATH}", client = HttpClients.webSocketClient(engine))
+            val proxy = ProxyTransport(link, scope)
             assertTrue(withTimeout(5_000) { proxy.control("tareScale") }.isSuccess)
 
             relay.freeze()
@@ -63,7 +60,7 @@ class ProxyLivenessTest {
         } finally {
             scope.cancel()
             relay.close()
-            server.stop()
+            rig.stop()
             engine.close()
         }
     }
@@ -71,35 +68,31 @@ class ProxyLivenessTest {
     @Test
     fun `the primary sheds a half-open session`() = runBlocking {
         val hub = hub()
-        val server = LanRelayServer(hub, pingPeriodMs = 200, pingTimeoutMs = 300)
-        val serverPort = server.start()
-        val relay = FreezableTcpRelay(serverPort)
+        val rig = RelayRig(hub, pingPeriodMs = 200, pingTimeoutMs = 300).start()
+        val remote = RelayKeys.generate()
+        rig.trust.pin(remote)
+        val relay = FreezableTcpRelay(rig.port)
         // This client never pings, so only the server's ping can notice.
         val engine = pingingEngine(pingIntervalMs = 0)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
-            val link = ReconnectingClientLink(
-                "ws://127.0.0.1:${relay.port}${LanRelayServer.PATH}",
-                scope,
-                client = HttpClients.webSocketClient(engine),
-            )
-            val proxy = ProxyTransport(link, scope, "phone-1", "Phone")
+            val link = rig.link(remote, at = "ws://127.0.0.1:${relay.port}${LanRelayServer.PATH}", client = HttpClients.webSocketClient(engine))
+            val proxy = ProxyTransport(link, scope)
             assertTrue(withTimeout(5_000) { proxy.control("tareScale") }.isSuccess)
-            assertTrue(hub.hasClient("phone-1"))
+            assertTrue(hub.hasClient(remote.deviceId()))
 
             relay.freeze()
-            withTimeout(5_000) { while (hub.hasClient("phone-1")) delay(20) }
+            withTimeout(5_000) { while (hub.hasClient(remote.deviceId())) delay(20) }
             link.close()
         } finally {
             scope.cancel()
             relay.close()
-            server.stop()
+            rig.stop()
             engine.close()
         }
     }
 
     private fun hub() = RelayHub(
-        primaryId = "p",
         primaryName = "P",
         roster = { emptyList() },
         readSource = { _, _, _ -> error("unused") },

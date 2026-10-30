@@ -5,7 +5,11 @@ import android.os.Looper
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
+import coffee.crema.ble.proxy.RelayKeyLoad
+import coffee.crema.ble.proxy.RelayKeyStore
 import coffee.crema.core.CremaBridge
+import coffee.crema.core.RelayKeys
+import coffee.crema.security.FakeKeystore
 import org.robolectric.Shadows.shadowOf
 import java.io.File
 import java.time.Duration
@@ -28,10 +32,35 @@ internal object VmHarness {
         )
     }
 
+    /** The keystore every VM's relay key store uses: Robolectric has no
+     *  AndroidKeyStore (installed by [build] and [relayStore]). */
+    val keystore = FakeKeystore()
+
     /** A new factory per call: `AndroidViewModelFactory.getInstance` caches the
      *  first test's Application, whose files dir a later test doesn't use. */
-    fun build(store: ViewModelStore): MainViewModel =
-        ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(app()))[MainViewModel::class.java]
+    fun build(store: ViewModelStore): MainViewModel {
+        RelayKeyStore.backendForTests = keystore
+        return ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(app()))[MainViewModel::class.java]
+    }
+
+    /**
+     * This device's relay store before the VM is built (the same file and
+     * keystore the VM's [ProxyController] will load), with its key: a test pins
+     * peers or the saved hub here.
+     */
+    fun relayStore(): Pair<RelayKeyStore, RelayKeys> {
+        RelayKeyStore.backendForTests = keystore
+        val store = RelayKeyStore(app().filesDir, RelayKeyStore.deviceBox(keystore))
+        val keys = (store.load() as RelayKeyLoad.Ready).keys
+        return store to keys
+    }
+
+    /** Pin the hub [hubKeys] at 127.0.0.1:[port] in [store] as this remote's saved hub (what pairing leaves). */
+    fun pinHub(store: RelayKeyStore, hubKeys: RelayKeys, port: Int, name: String = "Kitchen tablet") {
+        val id = hubKeys.deviceId()
+        store.pinHub(coffee.crema.ble.proxy.RelayHubPin(id, RelayKeyStore.b64(hubKeys.publicKey()), name, "127.0.0.1", port, pinnedAtMs = 1))
+        store.setSavedHub(id)
+    }
 
     /** Run everything due on the main looper (no clock advance). */
     fun idle() = shadowOf(Looper.getMainLooper()).idle()

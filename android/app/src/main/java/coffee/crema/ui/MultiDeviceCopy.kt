@@ -37,10 +37,15 @@ internal fun remoteStatusLine(
 internal fun MainUiState.remoteHubLabel(): String =
     mirroringPrimaryName.ifBlank { proxyPrimaryHost.ifBlank { "the hub" } }
 
-/** The status line while this device is a remote, else null. */
-internal fun MainUiState.remoteStatus(): String? =
-    if (proxyRole != "secondary") null
-    else remoteStatusLine(remoteHubLabel(), mirrorReconnecting, remoteHubHasMachine, mirrorViewOnly, refindGaveUp, hubStoppedHosting)
+/** The status line while this device is a remote, else null. Relay v4: a
+ *  remote whose keys couldn't be read, or that must pair again after the
+ *  upgrade, doesn't dial and says why (spec §6.3, §6.4). */
+internal fun MainUiState.remoteStatus(): String? = when {
+    proxyRole != "secondary" -> null
+    relayKeysUnavailable -> KEYS_UNAVAILABLE_COPY
+    relayNeedsRepair -> "Crema updated how devices connect. Pair again with ${remoteHubLabel()}."
+    else -> remoteStatusLine(remoteHubLabel(), mirrorReconnecting, remoteHubHasMachine, mirrorViewOnly, refindGaveUp, hubStoppedHosting)
+}
 
 /** The phone Brew card's cue beside its readiness badge while this device is
  *  a remote: the same words as the status line, so it never says "Connected

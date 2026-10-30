@@ -1,9 +1,9 @@
 package coffee.crema.ui
 
+import coffee.crema.ble.proxy.TEST_PEER
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.settings.AppPrefs
-import coffee.crema.settings.PairedDevice
 import coffee.crema.ui.RemoteFixture.Companion.savedPrefs
 import coffee.crema.ui.RemoteFixture.Companion.writePrefs
 import coffee.crema.ble.proxy.CodecFrameLink
@@ -143,14 +143,8 @@ class StandaloneSettingsTest {
         val hub = assertNotNull(VmHarness.proxyController(vm).relayHub)
         val (client, server) = CodecFrameLink.pair(scope)
         val rx = CopyOnWriteArrayList<Frame>()
-        scope.launch { hub.serve(server) }
+        scope.launch { hub.serve(server, TEST_PEER) }
         scope.launch { client.incoming().collect { rx += it } }
-        vm.openPairingWindow()
-        scope.launch { client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone", nonce = "bm9uY2U")) }
-        VmHarness.idle()
-        scope.launch { client.send(Frame.Auth(proof = null)) }
-        VmHarness.idle()
-        vm.resolvePairing(PairingChoice.ALLOW_CONTROL)
         VmHarness.idleUntil("the Welcome") { rx.any { it is Frame.Welcome } }
 
         fun configs() = rx.filterIsInstance<Frame.Config>().map { coreJson.decodeFromString(coffee.crema.settings.ConfigSnapshot.serializer(), it.json) }
@@ -184,12 +178,15 @@ class StandaloneSettingsTest {
      *  the hub target, the paired devices or the DE1 / scale bindings. */
     @Test
     fun `reset keeps role and pairing`() {
-        val paired = listOf(PairedDevice("phone-1", "Phone", canControl = true))
+        // Relay v4: the pairing lives in relay-v4.json, never in the prefs.
+        val (relayStore, _) = VmHarness.relayStore()
+        val remote = coffee.crema.core.RelayKeys.generate()
+        relayStore.pinRemote(coffee.crema.ble.proxy.RelayRemotePin(remote.deviceId(), coffee.crema.ble.proxy.RelayKeyStore.b64(remote.publicKey()), "Phone", "control", pairedAtMs = 1))
         writePrefs(
             AppPrefs(
                 themeMode = "light", weightUnit = "oz", stopOnWeight = false, idleSleepMin = 30,
                 proxyRole = "primary", proxyPrimaryHost = "192.168.1.20", proxyPrimaryPort = 8765,
-                pairedDevices = paired, de1Address = "AA:BB:CC:DD:EE:01", scaleAddress = "AA:BB:CC:DD:EE:02", scaleName = "Bookoo",
+                de1Address = "AA:BB:CC:DD:EE:01", scaleAddress = "AA:BB:CC:DD:EE:02", scaleName = "Bookoo",
             ),
         )
         val vm = VmHarness.build(store)
@@ -203,7 +200,8 @@ class StandaloneSettingsTest {
         assertEquals("primary", saved.proxyRole)
         assertEquals("192.168.1.20", saved.proxyPrimaryHost)
         assertEquals(8765, saved.proxyPrimaryPort)
-        assertEquals(paired, saved.pairedDevices)
+        assertEquals(emptyList(), saved.pairedDevices, "the prefs carry no pairing")
+        assertEquals(listOf(remote.deviceId()), VmHarness.proxyController(vm).relayStore.remotes.map { it.id }, "the pin survives the reset")
         assertEquals("AA:BB:CC:DD:EE:01", saved.de1Address)
         assertEquals("AA:BB:CC:DD:EE:02", saved.scaleAddress)
         assertEquals("Bookoo", saved.scaleName)

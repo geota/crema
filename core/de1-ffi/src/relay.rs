@@ -539,6 +539,15 @@ impl RelayHubConnection {
         self.conn.step(|c| c.cancel_pairing(now_ms))
     }
 
+    /// The squat rule (spec §2.5): an `intent=pair` hello on this connection
+    /// gets `ServerHello(BUSY)` and a close, without touching the gate. Call it
+    /// before the ClientHello; a poisoned connection is already failed.
+    pub fn refuse_pairing_requests(&self) {
+        if let Some(mut c) = self.conn.lock() {
+            c.refuse_pairing_requests();
+        }
+    }
+
     /// Encrypts one application message into its records.
     pub fn send(&self, message: Vec<u8>, now_ms: u64) -> Result<RelayStep, RelayFfiError> {
         self.conn.result(|c| c.send(&message, now_ms))

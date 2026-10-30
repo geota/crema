@@ -1181,8 +1181,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // streams — the DE1 ShotSample and the scale weight — stay live-only or
         // the mirror's core double-counts (issue 04; M1-PROTOCOL §5).
         isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE && char != scale.weightNotifyChar },
-        pairedDevices = { _ui.value.pairedDevices },
-        rememberPaired = { id, name, canControl -> rememberPaired(id, name, canControl) },
         firmwareHoldsLink = { runCatching { bridge.firmwareLocksWrites() }.getOrDefault(false) },
         onRoleStarting = { role, refind -> onRoleStarting(role, refind) },
         showPending = { showPending(it) },
@@ -1673,6 +1671,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // same pattern as [visualizer]/[drive] below).
         viewModelScope.launch {
             proxy.state.collect { ps ->
+                // Relay v4's one-time notices (spec §6.3, §6.4), shown once each.
+                if (ps.keyResetNotice) {
+                    notifyUser("This device's pairing key was reset (for example after a restore). Pair it with your devices again.")
+                    proxy.dismissKeyResetNotice()
+                }
+                if (ps.upgradeNotice && ps.role == "primary") {
+                    notifyUser("Crema updated how devices connect. Pair your phones again: Pair a device.")
+                    proxy.dismissUpgradeNotice()
+                }
                 _ui.update {
                     it.copy(
                         peers = ps.peers,
@@ -1680,7 +1687,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         mirrorViewOnly = ps.mirrorViewOnly,
                         pendingPairing = ps.pendingPairing,
                         pairingSecondsLeft = ps.pairingSecondsLeft,
-                        pairedWithSecret = ps.pairedWithSecret,
+                        pairingLockedSecondsLeft = ps.pairingLockedSecondsLeft,
+                        // Relay v4: the pins are the paired devices (never persisted with the prefs).
+                        pairedDevices = ps.pairedRemotes.map { r -> PairedDevice(r.id, r.name, r.scope == "control") },
+                        pairedWithSecret = ps.pairedRemotes.map { r -> r.id }.toSet(),
+                        pairedHubs = ps.pairedHubs,
+                        relayPairing = ps.pairing,
+                        relayKeysUnavailable = ps.relayKeysUnavailable,
+                        relayKeyResetNotice = ps.keyResetNotice,
+                        relayNeedsRepair = ps.needsRepair,
+                        relayUpgradeNotice = ps.upgradeNotice,
                         remotes = ps.remotes,
                         // The link to the hub dropped: pending edits become
                         // unconfirmed (never resent) until it's back.
@@ -1698,7 +1714,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             null
                         },
                         pairedHubPinned = ps.pairedHubPinned,
-                        changedHost = ps.changedHost,
                     )
                 }
             }
@@ -2938,13 +2953,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ── Multi-device pairing (issue 02) ───────────────────────────────────────
-    // The gate itself lives in [ProxyController.authorizePeer]; the remembered
-    // peers stay here (persisted with the app prefs, listed in Settings). The
-    // pairing secrets live in ProxyController's own credential file.
+    // ── Multi-device pairing (relay v4) ───────────────────────────────────────
+    // The pairing ceremony, the pins and the keys live in [ProxyController]
+    // (relay-v4.json, its own credential file); nothing here is persisted.
 
-    /** The Activity resolves a pending [PairingPrompt] with the user's choice. */
-    fun resolvePairing(choice: PairingChoice) = proxy.resolvePairing(choice)
+    /** The hub's code dialog: the hub user typed [code] and chose a scope. */
+    fun submitPairingCode(code: String, canControl: Boolean) = proxy.submitPairingCode(code, canControl)
+
+    /** The hub's code dialog was cancelled. */
+    fun cancelPairing() = proxy.cancelPairing()
+
+    /** Remote: pair with the hub at [host]:[port] ("Pair again"). */
+    fun pairWith(host: String, port: Int, label: String) = proxy.pairWith(host, port, label)
+
+    /** Remote: cancel the pairing in progress (the code sheet's Cancel). */
+    fun cancelRemotePairing() = proxy.cancelRemotePairing()
+
+    /** Remote: close the code sheet after its outcome. */
+    fun dismissPairing() = proxy.dismissPairing()
+
+    /** Remote: the code sheet's Try again (three new attempts). */
+    fun retryRemotePairing() = proxy.retryRemotePairing()
+
+    /** Reset this device's pairing key (every pairing is cleared). */
+    fun resetPairingKey() = proxy.resetPairingKey()
+
+    /** The one-time key-reset notice was shown. */
+    fun dismissKeyResetNotice() = proxy.dismissKeyResetNotice()
+
+    /** The upgrade banner / "Pair again" status was dismissed. */
+    fun dismissUpgradeNotice() = proxy.dismissUpgradeNotice()
 
     /** Settings ▸ Advanced ▸ Paired devices ▸ Pair a device: accept new devices for a while. */
     fun openPairingWindow() = proxy.openPairingWindow()
@@ -2952,27 +2990,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Stop accepting new devices now. */
     fun closePairingWindow() = proxy.closePairingWindow()
 
-    /** Forget a host whose identity changed, so it can be paired again. */
-    fun forgetHost(hostId: String) = proxy.forgetHost(hostId)
+    /** Remote: forget the hub [hubId] (it has to pair again). */
+    fun forgetHub(hubId: String) = proxy.forgetHub(hubId)
 
-    /** Keep the host's pairing; dismiss the notice. */
-    fun dismissChangedHost() = proxy.dismissChangedHost()
-
-    private fun rememberPaired(id: String, name: String, canControl: Boolean) {
-        _ui.update {
-            it.copy(pairedDevices = it.pairedDevices.filterNot { d -> d.id == id } + PairedDevice(id, name, canControl))
-        }
-        persistPrefs()
-        appendLog("Paired device '$name' (${if (canControl) "control" else "mirror-only"})")
-    }
-
-    /** Revoke a paired device (Settings ▸ Advanced ▸ Paired devices): its pairing secret is
+    /** Revoke a paired device (Settings ▸ Advanced ▸ Paired devices): its pin is
      *  dropped and a live session ends now; it has to pair again to reconnect. */
-    fun forgetPairedDevice(id: String) {
-        _ui.update { it.copy(pairedDevices = it.pairedDevices.filterNot { d -> d.id == id }) }
-        persistPrefs()
-        proxy.forgetPaired(id)
-    }
+    fun forgetPairedDevice(id: String) = proxy.forgetRemote(id)
 
     /** A user's machine request (a control, or one relayed from a peer). It
      *  cancels a pending shot start first (05 F2): a Stop, or another mode,
@@ -3507,7 +3530,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         proxyPrimaryHost = _ui.value.proxyPrimaryHost,
         proxyPrimaryPort = _ui.value.proxyPrimaryPort,
         replayPrimary = _ui.value.replayPrimary,
-        pairedDevices = _ui.value.pairedDevices,
+        // Relay v4 keeps the pins in relay-v4.json; prefs carry no paired devices.
+        pairedDevices = emptyList(),
     )
 
     /** [persistPrefs], awaited: the T6 commit saves the adopted values before
@@ -4051,7 +4075,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             proxyPrimaryHost = p.proxyPrimaryHost,
             proxyPrimaryPort = p.proxyPrimaryPort,
             replayPrimary = p.replayPrimary,
-            pairedDevices = p.pairedDevices,
             companionDeclined = p.companionDeclined,
         ) }
         // Prime the background keep-alive with the resolved setting (#65).
@@ -4571,6 +4594,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             visualizer.eraseAll()
             decent.eraseAll()
             drive.eraseAll()
+            // The relay key store, relay-lost/ and the v3 pairing file (SR-3a).
+            proxy.eraseRelayData()
             kotlinx.coroutines.withContext(Dispatchers.IO) {
                 bleRecorder.eraseCaptures()
                 val left = coffee.crema.persist.SafeFile.eraseCopiesIn(getApplication<Application>().filesDir)
