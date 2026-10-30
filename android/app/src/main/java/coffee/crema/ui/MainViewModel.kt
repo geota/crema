@@ -3413,9 +3413,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 pushCoreInputs(effectiveState())
             },
             onStale = {
-                // Another switch ran first (R2): this device may still be a
-                // remote. Unless that switch already cancelled the leave
-                // (onRoleStarting), unfreeze and say so.
+                // Another switch ran first, or a firmware flash refused this
+                // one (R2): this device may still be a remote. Unless a switch
+                // already cancelled the leave (onRoleStarting), unfreeze and
+                // say so. After a flash refusal nothing else will.
                 val stillLeaving = _ui.value.mirror?.frozen == true
                 proxy.holdRefind(false)
                 _ui.update { s -> s.copy(mirror = s.mirror?.copy(frozen = false)) }

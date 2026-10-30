@@ -514,4 +514,47 @@ class RemoteToStandaloneTest {
         VmHarness.idle()
         assertNull(vm.ui.value.adoptPrompt)
     }
+
+    /** AC-36 / R2, the firmware branch: an answer during a firmware flash is
+     *  refused by the commit's flash check. The epoch didn't move, so no role
+     *  start unfreezes anything: the stale path itself must unfreeze the
+     *  slice, release the re-find hold and say so, and nothing is adopted.
+     *  Once the flash ends, Stop works again. */
+    @Test
+    fun `an answer refused during a firmware flash adopts nothing and lets the user leave again`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        val pc = VmHarness.proxyController(vm)
+        val flashing = ProxyController::class.java.getDeclaredField("firmwareHoldsLink").apply { isAccessible = true }
+        val idle = flashing.get(pc)
+        flashing.set(pc, { true })
+        val epochBefore = pc.modeEpoch
+        val messages = vm.ui.value.userMessages.size
+        vm.resolveAdoption(useHub = true)
+        repeat(20) {
+            VmHarness.advance(100)
+            Thread.sleep(10)
+        }
+        VmHarness.idle()
+        assertEquals(epochBefore, pc.modeEpoch, "no switch ran")
+        assertEquals("secondary", role(vm))
+        assertTrue(switches.isEmpty(), "$switches")
+        assertEquals(abOf(P), abOf(savedPrefs()), "nothing adopted")
+        assertNull(vm.ui.value.adoptPrompt)
+        assertTrue(VmHarness.ownState(vm).mirror?.frozen == false, "the slice unfreezes")
+        assertEquals(false, ProxyController::class.java.getDeclaredField("refindHeld").apply { isAccessible = true }.getBoolean(pc), "the re-find is released")
+        assertEquals(
+            listOf(FIRMWARE_BUSY_NOTICE, "Couldn't leave Kitchen tablet — try again"),
+            vm.ui.value.userMessages.drop(messages),
+        )
+        flashing.set(pc, idle)
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt, "Stop asks again")
+        vm.resolveAdoption(useHub = false)
+        waitRole(vm, "normal")
+        assertEquals(listOf("normal"), switches.map { it.first })
+    }
 }
