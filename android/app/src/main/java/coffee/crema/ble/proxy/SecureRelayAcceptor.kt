@@ -135,6 +135,10 @@ class SecureRelayAcceptor(
     },
 ) {
     private val sessions = CopyOnWriteArrayList<Session>()
+
+    /** Sessions currently held (tests wait on it instead of sleeping). */
+    @androidx.annotation.VisibleForTesting
+    internal val sessionCount: Int get() = sessions.size
     private val seq = AtomicLong(0)
 
     /** Serve one accepted WebSocket from [address]; returns when it ends. */

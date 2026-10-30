@@ -48,6 +48,20 @@ internal class RawWsClient(port: Int, path: String = LanRelayServer.PATH) : Clos
 
     fun text(s: String) = frame(1, true, s.encodeToByteArray())
 
+    /** Start a binary frame that declares [declaredLength] bytes but send only [sent] of them. */
+    fun partialFrame(declaredLength: Long, sent: Int) {
+        val header = java.io.ByteArrayOutputStream()
+        header.write(0x80 or 2)
+        header.write(0x80 or 127)
+        for (i in 7 downTo 0) header.write(((declaredLength shr (8 * i)) and 0xFF).toInt())
+        header.write(ByteArray(4)) // a zero mask
+        runCatching {
+            out.write(header.toByteArray())
+            out.write(ByteArray(sent))
+            out.flush()
+        }
+    }
+
     /** Read server frames until a close; its code, or null when the socket just ended. Binary
      *  messages seen on the way are counted in [binaries]. */
     fun awaitClose(timeoutMs: Int = 15_000): Int? {

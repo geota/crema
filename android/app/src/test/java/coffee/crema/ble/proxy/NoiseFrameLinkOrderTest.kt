@@ -36,7 +36,7 @@ class NoiseFrameLinkOrderTest {
                 (0 until 8).map { c ->
                     scope.async { repeat(125) { i -> check(link.sendOn(epoch, Frame.Event("$c:$i"))) { "send $c:$i failed" } } }
                 }.awaitAll()
-                eventually(ms = 10_000, what = "every frame at the hub") { got.size == 1_000 }
+                eventually(what = "every frame at the hub") { got.size == 1_000 }
             }
             for (c in 0 until 8) {
                 val mine = got.filter { it.startsWith("$c:") }.map { it.substringAfter(':').toInt() }

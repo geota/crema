@@ -33,11 +33,17 @@ class SecureAcceptorLimitsTest {
         }
     }
 
+    /** The server closed the connection for the size: a 1009 close, or (Linux) a reset,
+     *  when it closes with the rest of the message still unread. Never a timeout. */
+    private fun assertRefusedForSize(code: Int?) =
+        assertTrue(code == 1009 || code == null, "closed for the size (1009 or a reset), was $code")
+
     @Test
     fun `a message over 64 KiB is refused before authentication`() = withRig { rig ->
         RawWsClient(rig.port).use { ws ->
             ws.frame(2, true, ByteArray(70_000))
-            assertEquals(1009, ws.awaitClose())
+            assertRefusedForSize(ws.awaitClose())
+            assertEquals(0, rig.trust.admitted.size)
         }
     }
 
@@ -46,7 +52,18 @@ class SecureAcceptorLimitsTest {
         RawWsClient(rig.port).use { ws ->
             ws.frame(2, false, ByteArray(40_000))
             ws.frame(0, true, ByteArray(40_000))
-            assertEquals(1009, ws.awaitClose())
+            assertRefusedForSize(ws.awaitClose())
+            assertEquals(0, rig.trust.admitted.size)
+        }
+    }
+
+    /** The server's WebSocket cap acts on the frame header: a frame that
+     *  declares 8 MiB is refused before its payload, never buffered. */
+    @Test
+    fun `a frame declaring more than 64 KiB is refused before its payload arrives`() = withRig { rig ->
+        RawWsClient(rig.port).use { ws ->
+            ws.partialFrame(declaredLength = 8L shl 20, sent = 1_000)
+            assertRefusedForSize(ws.awaitClose(timeoutMs = 5_000))
         }
     }
 
@@ -74,10 +91,11 @@ class SecureAcceptorLimitsTest {
     @Test
     fun `at most 2 unauthenticated sessions per address, the oldest evicted`() = withRig { rig ->
         val first = RawWsClient(rig.port)
+        runBlocking { eventually(what = "the first session held") { rig.acceptor.sessionCount == 1 } }
         val second = RawWsClient(rig.port)
-        Thread.sleep(200)
+        runBlocking { eventually(what = "both sessions held") { rig.acceptor.sessionCount == 2 } }
         RawWsClient(rig.port).use {
-            assertEquals(4408, first.awaitClose(timeoutMs = 2_000), "the oldest is evicted")
+            assertEquals(4408, first.awaitClose(timeoutMs = 4_000), "the oldest is evicted")
         }
         first.close()
         second.close()
@@ -85,9 +103,11 @@ class SecureAcceptorLimitsTest {
 
     @Test
     fun `at most 4 unauthenticated sessions, the oldest evicted`() = withRig(maxUnauthPerAddress = 10) { rig ->
-        val flood = (1..4).map { RawWsClient(rig.port).also { Thread.sleep(50) } }
+        val flood = (1..4).map { n ->
+            RawWsClient(rig.port).also { runBlocking { eventually(what = "$n sessions held") { rig.acceptor.sessionCount == n } } }
+        }
         RawWsClient(rig.port).use {
-            assertEquals(4408, flood.first().awaitClose(timeoutMs = 2_000), "the oldest is evicted")
+            assertEquals(4408, flood.first().awaitClose(timeoutMs = 4_000), "the oldest is evicted")
         }
         flood.forEach { it.close() }
     }

@@ -12,7 +12,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -173,8 +172,10 @@ internal class RelayRig(
 }
 
 /** Poll [done] for up to [ms] (real time). */
-internal suspend fun eventually(ms: Long = 10_000, what: String = "condition", done: () -> Boolean) {
-    withTimeout(ms) { while (!done()) delay(10) }.also { if (!done()) throw AssertionError("timed out: $what") }
+internal suspend fun eventually(ms: Long = 20_000, what: String = "condition", done: () -> Boolean) {
+    // Generous: the host core is an unoptimised build, and a loaded CI runner
+    // can take seconds over a pairing's crypto. A pass returns at once.
+    withTimeoutOrNull(ms) { while (!done()) delay(10) } ?: throw AssertionError("timed out after $ms ms: $what")
 }
 
 /** The peer every in-memory loopback serves as (relay v4: authenticated before [RelayHub.serve]). */

@@ -74,18 +74,18 @@ class NoSecretsInLogsTest {
         val hub = controller("hub", store(hubDir))
         val remote = controller("remote", store(remoteDir))
         hub.setHubMode(true)
-        runBlocking { eventually(ms = 10_000, what = "the hub listening") { lines.any { "LAN relay listening" in it } } }
+        runBlocking { eventually(what = "the hub listening") { lines.any { "LAN relay listening" in it } } }
         val port = lines.first { "LAN relay listening" in it }.substringAfterLast(":").toInt()
         hub.openPairingWindow()
 
         remote.pairWith("127.0.0.1", port, "Kitchen tablet")
-        runBlocking { eventually(ms = 10_000, what = "the code") { remote.state.value.pairing is PairingState.ShowCode } }
+        runBlocking { eventually(what = "the code") { remote.state.value.pairing is PairingState.ShowCode } }
         val code = (remote.state.value.pairing as PairingState.ShowCode).code
         runBlocking { eventually(what = "the hub's dialog") { hub.state.value.pendingPairing != null } }
         hub.submitPairingCode(code, canControl = true)
         runBlocking {
-            eventually(ms = 10_000, what = "the remote role") { remote.state.value.role == "secondary" }
-            eventually(ms = 10_000, what = "the resume") { remote.state.value.hubName.isNotEmpty() && !remote.state.value.mirrorReconnecting }
+            eventually(what = "the remote role") { remote.state.value.role == "secondary" }
+            eventually(what = "the resume") { remote.state.value.hubName.isNotEmpty() && !remote.state.value.mirrorReconnecting }
         }
         assertTrue(hub.relayStore.remotes.isNotEmpty() && remote.relayStore.hubs.isNotEmpty(), "both pinned")
 
