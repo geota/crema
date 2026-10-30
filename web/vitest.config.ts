@@ -34,7 +34,8 @@ export default defineConfig({
 			// runtime — stand-ins keep store-coupled imports that reach them
 			// (e.g. `#lib/bean/bag-empty-prompt.js`) collectable under vitest.
 			'$app/navigation': path.resolve('./vitest.mocks/app-navigation.ts'),
-			'$app/paths': path.resolve('./vitest.mocks/app-paths.ts')
+			'$app/paths': path.resolve('./vitest.mocks/app-paths.ts'),
+			'$app/state': path.resolve('./vitest.mocks/app-state.ts')
 		},
 		// Resolve the browser entry points of `.svelte.ts` rune modules.
 		conditions: ['browser']
