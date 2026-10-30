@@ -1647,12 +1647,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             proxy.state.collect { ps ->
                 // Relay v4's one-time notices (spec §6.3, §6.4), shown once each.
                 if (ps.keyResetNotice) {
-                    notifyUser("This device's pairing key was reset (for example after a restore). Pair it with your devices again.")
+                    notifyUser(KEY_RESET_COPY)
                     proxy.dismissKeyResetNotice()
-                }
-                if (ps.upgradeNotice && ps.role == "primary") {
-                    notifyUser("Crema updated how devices connect. Pair your phones again: Pair a device.")
-                    proxy.dismissUpgradeNotice()
                 }
                 _ui.update {
                     it.copy(
@@ -1663,8 +1659,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         pairingSecondsLeft = ps.pairingSecondsLeft,
                         pairingLockedSecondsLeft = ps.pairingLockedSecondsLeft,
                         // Relay v4: the pins are the paired devices (never persisted with the prefs).
-                        pairedDevices = ps.pairedRemotes.map { r -> PairedDevice(r.id, r.name, r.scope == "control") },
-                        pairedWithSecret = ps.pairedRemotes.map { r -> r.id }.toSet(),
+                        pairedDevices = ps.pairedRemotes.map { r -> PairedDevice(r.id, r.name, r.scope == "control", r.lastSeenMs) },
+                        remoteConnecting = ps.remoteConnecting,
                         pairedHubs = ps.pairedHubs,
                         relayPairing = ps.pairing,
                         relayKeysUnavailable = ps.relayKeysUnavailable,
@@ -2881,8 +2877,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The hub's code dialog was cancelled. */
     fun cancelPairing() = proxy.cancelPairing()
 
-    /** Remote: pair with the hub at [host]:[port] ("Pair again"). */
+    /** Remote: pair with the hub at [host]:[port]. */
     fun pairWith(host: String, port: Int, label: String) = proxy.pairWith(host, port, label)
+
+    /** Remote: Pair again with the saved target (after the upgrade, or once
+     *  the hub couldn't be verified; spec §6.3, §6.4). */
+    fun pairAgain() = proxy.pairAgain()
 
     /** Remote: cancel the pairing in progress (the code sheet's Cancel). */
     fun cancelRemotePairing() = proxy.cancelRemotePairing()
@@ -2914,6 +2914,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Revoke a paired device (Settings ▸ Advanced ▸ Paired devices): its pin is
      *  dropped and a live session ends now; it has to pair again to reconnect. */
     fun forgetPairedDevice(id: String) = proxy.forgetRemote(id)
+
+    /** The Paired devices rows' actions, for both shells. */
+    internal fun relayPairingActions() = RelayPairingActions(
+        openWindow = ::openPairingWindow,
+        closeWindow = ::closePairingWindow,
+        forgetRemote = ::forgetPairedDevice,
+        forgetHub = ::forgetHub,
+        resetKey = ::resetPairingKey,
+        dismissUpgradeBanner = ::dismissUpgradeNotice,
+    )
 
     /** A user's machine request (a control, or one relayed from a peer). The
      *  core cancels a pending shot start with it (05 F2, F16): a Stop, or

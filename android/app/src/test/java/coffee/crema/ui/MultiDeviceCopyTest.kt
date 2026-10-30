@@ -17,6 +17,9 @@ class MultiDeviceCopyTest {
 
     private val kitchen = Peer("nsd-1", "Kitchen tablet", "primary", holdsDe1 = true, host = "192.168.1.20", port = 8765)
 
+    private fun pin(id: String, host: String) =
+        coffee.crema.ble.proxy.RelayHubPin(id, "AAAA", "Kitchen tablet", host, 8765, pinnedAtMs = 1, lastSeenMs = 0)
+
     private fun remote(
         name: String = "Kitchen tablet",
         reconnecting: Boolean = false,
@@ -47,13 +50,14 @@ class MultiDeviceCopyTest {
      *  A link that is up still says "Connected through". */
     @Test
     fun `the re-find's verdicts while the link redials`() {
+        val unverified = "Couldn't verify Kitchen tablet. If Crema on Kitchen tablet was reset or reinstalled, pair again."
         val gaveUp = remote(reconnecting = true).copy(refindGaveUp = true)
-        assertEquals("Couldn't verify Kitchen tablet", gaveUp.remoteStatus())
+        assertEquals(unverified, gaveUp.remoteStatus())
         assertTrue(gaveUp.canConnectDirectly())
         val stopped = remote(reconnecting = true).copy(hubStoppedHosting = true)
         assertEquals("Kitchen tablet isn't a hub any more", stopped.remoteStatus())
         assertTrue(stopped.canConnectDirectly())
-        assertEquals("Couldn't verify Kitchen tablet", stopped.copy(refindGaveUp = true).remoteStatus(), "the give-up comes first")
+        assertEquals(unverified, stopped.copy(refindGaveUp = true).remoteStatus(), "the give-up comes first")
         assertEquals("Connected through Kitchen tablet", remote().copy(hubStoppedHosting = true, refindGaveUp = true).remoteStatus())
     }
 
@@ -106,11 +110,10 @@ class MultiDeviceCopyTest {
             unpaired.discoveredHubWarning(),
         )
         assertEquals(unpaired.discoveredHubWarning(), unpaired.hubModeSubtitle("tablet"))
-        // A pin for another address, or an address without a pin, isn't verified.
-        assertFalse(unpaired.copy(pairedHubPinned = true, proxyPrimaryHost = "192.168.1.99").isVerifiedHub(kitchen))
-        assertFalse(unpaired.copy(pairedHubPinned = false, proxyPrimaryHost = kitchen.host).isVerifiedHub(kitchen))
+        // A pin for another hub isn't this one.
+        assertFalse(unpaired.copy(pairedHubs = listOf(pin("bbbbbbbb00", "192.168.1.99"))).isVerifiedHub(kitchen))
 
-        val pinned = unpaired.copy(pairedHubPinned = true, proxyPrimaryHost = kitchen.host)
+        val pinned = unpaired.copy(pairedHubs = listOf(pin("aaaaaaaa00", kitchen.host)))
         assertTrue(pinned.isVerifiedHub(kitchen))
         assertEquals(
             "Kitchen tablet is already the hub for this machine — turning on Hub mode here will fail to connect while it holds the machine",
@@ -218,5 +221,103 @@ class MultiDeviceCopyTest {
             }
         }
         return openers
+    }
+
+    // ── Relay v4 (spec §6) ──────────────────────────────────────────────────
+
+    /** AC-37: each advisory a remote can meet gives its §6 string. */
+    @Test
+    fun `each advisory refusal gives its spec string`() {
+        val hub = "Kitchen tablet"
+        val expected = mapOf(
+            "PairingClosed" to "Kitchen tablet isn't accepting new devices. On Kitchen tablet, open Settings ▸ Advanced ▸ Paired devices ▸ Pair a device, then try again.",
+            "Busy" to "Kitchen tablet is pairing another device. Try again in a moment.",
+            "LockedOut" to "Kitchen tablet paused pairing after too many wrong codes. Try again in a minute.",
+            "Cancelled" to "Pairing was cancelled on Kitchen tablet.",
+            "Timeout" to "The code expired. Try again.",
+            "HubOutdated" to "Kitchen tablet runs an older Crema — update it to connect.",
+            "Version" to "Update Crema on both devices to connect.",
+            "HubUnverified" to "Couldn't verify Kitchen tablet. If Crema on Kitchen tablet was reset or reinstalled, pair again.",
+            "HostMismatch" to "Couldn't verify Kitchen tablet. If Crema on Kitchen tablet was reset or reinstalled, pair again.",
+            "Revoked" to "Kitchen tablet removed this device. Pair again to reconnect.",
+            "NotPaired" to "Kitchen tablet removed this device. Pair again to reconnect.",
+            "HubStopped" to "Kitchen tablet turned off Hub mode.",
+        )
+        for ((reason, line) in expected) assertEquals(line, refusalMessage(reason, hub), reason)
+        // The hub's notice for an old remote.
+        assertEquals("Sam's phone runs an older Crema — update it to connect.", olderCrema("Sam's phone"))
+    }
+
+    /** §6.1: the code sheet's and the hub dialog's words. */
+    @Test
+    fun `the pairing words`() {
+        assertEquals("Pairing with Kitchen tablet…", pairingWaitingTitle("Kitchen tablet"))
+        assertEquals("Enter this code on Kitchen tablet", pairingCodeTitle("Kitchen tablet"))
+        assertEquals("482 913", groupedCode("482913"))
+        assertEquals("4 8 2, 9 1 3", spokenCode("482913"), "TalkBack reads it digit by digit")
+        assertEquals("Expires in 1:52", expiresIn(112))
+        assertEquals("Expires in 0:05", expiresIn(5))
+        assertEquals("Attempt 2 of 3", pairingAttemptLine(2))
+        assertEquals("That code didn't work. Here's a new one: enter it on Kitchen tablet.", pairingRetryLine("Kitchen tablet"))
+        assertEquals(
+            "Pairing with Kitchen tablet didn't work. Make sure you're entering the code on Kitchen tablet itself, then try again.",
+            pairingFailedLine("Kitchen tablet"),
+        )
+        assertEquals("Pair Sam's phone?", pairRemoteTitle("Sam's phone"))
+        assertEquals("Enter the 6-digit code shown on Sam's phone.", enterCodeLine("Sam's phone"))
+        assertEquals("That code didn't match. Sam's phone is showing a new code — enter that one. (2 of 3)", wrongCodeLine("Sam's phone", 2))
+        assertEquals("Paired Sam's phone (View and control)", pairedRemote("Sam's phone", canControl = true))
+        assertEquals("Paired Sam's phone (View only)", pairedRemote("Sam's phone", canControl = false))
+    }
+
+    /** §6.2: the Pair a device row, closed, open and paused. */
+    @Test
+    fun `the pairing window row`() {
+        assertEquals("Pair a device", pairWindowTitle(0, 0))
+        assertEquals("Pairing open · 1:58", pairWindowTitle(118, 0))
+        assertEquals("Pairing paused · 0:42", pairWindowTitle(0, 42))
+        assertEquals("On your phone, open Other devices and choose Kitchen tablet.", pairWindowLine(118, 0, "Kitchen tablet"))
+        assertEquals(LOCKED_OUT_COPY, pairWindowLine(0, 42, "Kitchen tablet"))
+    }
+
+    /** §6.5: "Last connected", relative. */
+    @Test
+    fun `last connected reads relative`() {
+        val now = 10_000_000_000L
+        assertEquals("Never connected", lastConnected(0, now))
+        assertEquals("Last connected just now", lastConnected(now - 20_000, now))
+        assertEquals("Last connected 5 minutes ago", lastConnected(now - 5 * 60_000, now))
+        assertEquals("Last connected 1 hour ago", lastConnected(now - 61 * 60_000, now))
+        assertEquals("Last connected yesterday", lastConnected(now - 25 * 3_600_000L, now))
+        assertEquals("Last connected 3 days ago", lastConnected(now - 3 * 86_400_000L, now))
+    }
+
+    /** §6.1, AC-56: before the first Welcome since the pick, the line says
+     *  Connecting, never Connected. */
+    @Test
+    fun `a remote says connecting until its hub welcomes it`() {
+        assertEquals("Connecting through Kitchen tablet…", remote(reconnecting = true).copy(remoteConnecting = true).remoteStatus())
+        assertEquals("Connecting through Kitchen tablet…", remote().copy(remoteConnecting = true).remoteStatus())
+    }
+
+    /** §6.3, §6.4: Pair again only where the remote must pair before it dials. */
+    @Test
+    fun `pair again is offered after the upgrade and once the hub couldn't be verified`() {
+        assertFalse(remote().canPairAgain())
+        assertTrue(remote().copy(relayNeedsRepair = true).canPairAgain())
+        assertEquals("Crema updated how devices connect. Pair again with Kitchen tablet.", remote().copy(relayNeedsRepair = true).remoteStatus())
+        assertTrue(remote(reconnecting = true).copy(refindGaveUp = true).canPairAgain())
+        assertFalse(remote(reconnecting = true).copy(refindGaveUp = true, relayKeysUnavailable = true).canPairAgain(), "no keys, no pairing")
+        assertFalse(MainUiState(proxyRole = "normal", relayNeedsRepair = true).canPairAgain())
+    }
+
+    /** §4.8, §6.1: the picker says Paired for a pinned hub and Needs a Crema update for an old one. */
+    @Test
+    fun `the picker labels paired and outdated hubs`() {
+        val withKid = kitchen.copy(kid = "aaaaaaaa")
+        val ui = MainUiState(pairedHubs = listOf(pin("aaaaaaaa00", "10.0.0.9")))
+        assertEquals("Paired · holds the DE1 · 192.168.1.20", ui.pickerLine(withKid), "the kid matches a pin, wherever it is")
+        assertEquals("Says it's a hub · unverified · 192.168.1.20", ui.pickerLine(withKid.copy(kid = "bbbbbbbb")))
+        assertEquals("Needs a Crema update · 192.168.1.20", ui.pickerLine(kitchen.copy(version = 3)))
     }
 }
