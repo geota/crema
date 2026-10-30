@@ -376,6 +376,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
         onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
+        networkWatcher = coffee.crema.visualizer.DefaultNetworkWatcher(app),
     )
 
     /**
@@ -1806,6 +1807,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             pushStopTargets()
             loadMaintenance()
             visualizer.load()
+            // Uploads that failed last time retry now (F17).
+            visualizer.drainSoon()
             // Daily Visualizer Premium check (gates the edit sync's Premium-only fields).
             visualizer.refreshPremiumIfStale()
             decent.load()
@@ -4339,6 +4342,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  counting in the background for as long as the process lives. */
     fun setAppForeground(foreground: Boolean) {
         appInForeground = foreground
+        // The Visualizer retry queue's tick and network trigger run only in
+        // the foreground (F17).
+        visualizer.setForeground(foreground)
         // No wake-up tick in the background (the 1 s tick covers the core's
         // deadline while the link is kept up).
         if (!foreground) wake.cancel()

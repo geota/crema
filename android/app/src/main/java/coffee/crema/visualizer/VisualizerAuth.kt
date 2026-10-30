@@ -111,9 +111,17 @@ private fun formBody(params: Map<String, String>): String =
     }
 
 /**
+ * The token endpoint answered, but not with a token set: its HTTP [status]
+ * and reply [body], so the core can tell a definitive grant rejection from a
+ * transient failure (`classify_token_refresh_failure`). A transport failure
+ * stays a plain [IOException].
+ */
+class TokenEndpointError(val status: Int, val body: String, message: String) : IOException(message)
+
+/**
  * POST `application/x-www-form-urlencoded` to the token endpoint and map the
- * wire response onto a [TokenSet]. Throws [IOException] with the Doorkeeper
- * `error_description` on a non-2xx or token-less body (the web's
+ * wire response onto a [TokenSet]. Throws [TokenEndpointError] (status, body
+ * and the Doorkeeper `error_description`) on a non-2xx or token-less body (the web's
  * `tokenSetFromWire` semantics: `expires_in` seconds → absolute deadline,
  * 1-hour default when omitted).
  */
@@ -133,11 +141,15 @@ private suspend fun postToken(params: Map<String, String>, json: Json): TokenSet
             val body = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
             val obj: JsonObject = runCatching { json.parseToJsonElement(body).jsonObject }
-                .getOrElse { throw IOException("Visualizer token endpoint returned non-JSON (HTTP $status).") }
+                .getOrElse { throw TokenEndpointError(status, body, "Visualizer token endpoint returned non-JSON (HTTP $status).") }
             fun str(k: String) = obj[k]?.jsonPrimitive?.contentOrNull
             val access = str("access_token")
             if (status !in 200..299 || access == null) {
-                throw IOException("Visualizer token endpoint: ${str("error_description") ?: str("error") ?: "HTTP $status"}")
+                throw TokenEndpointError(
+                    status,
+                    body,
+                    "Visualizer token endpoint: ${str("error_description") ?: str("error") ?: "HTTP $status"}",
+                )
             }
             val ttlS = obj["expires_in"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 3600L
             TokenSet(
