@@ -24,6 +24,8 @@
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
+use crate::hot_water::{HotWaterMode, StoredHotWater};
+
 /// Guided-brew cue sound when the user never chose (issue #10): off.
 pub const DEFAULT_BREW_CUE_SOUND: bool = false;
 /// Guided-brew cue haptics when the user never chose (issue #10): on.
@@ -172,8 +174,24 @@ pub struct CommonSettings {
     pub qc_steam_temp_c: f32,
     /// Quick-Controls hot-water temperature, °C.
     pub qc_hot_water_temp_c: f32,
-    /// Quick-Controls hot-water volume, ml.
+    /// Quick-Controls hot-water volume, ml: the volume-mode value.
     pub qc_hot_water_volume_ml: f32,
+    /// Quick-Controls hot-water mode. `None` in settings from before the
+    /// modes: the load-time migration ([`crate::initial_hot_water_dose`])
+    /// decides, and the shells persist its result once. Like the three
+    /// fields after it, an `Option` so older blobs and backups decode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qc_hot_water_mode: Option<HotWaterMode>,
+    /// Quick-Controls hot-water time-mode seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qc_hot_water_time_s: Option<f32>,
+    /// Quick-Controls hot-water time mode pours until stopped (honoured only
+    /// when the firmware has a value for it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qc_hot_water_time_no_limit: Option<bool>,
+    /// Quick-Controls hot-water ratio: water per gram of shot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qc_hot_water_ratio: Option<f32>,
     /// Quick-Controls group-flush duration, seconds.
     pub qc_flush_time_s: f32,
     /// Quick-Controls group-flush temperature, °C.
@@ -224,6 +242,10 @@ impl Default for CommonSettings {
             qc_steam_temp_c: 148.0,
             qc_hot_water_temp_c: 80.0,
             qc_hot_water_volume_ml: 150.0,
+            qc_hot_water_mode: None,
+            qc_hot_water_time_s: None,
+            qc_hot_water_time_no_limit: None,
+            qc_hot_water_ratio: None,
             qc_flush_time_s: 4.0,
             qc_flush_temp_c: 95.0,
         }
@@ -231,6 +253,17 @@ impl Default for CommonSettings {
 }
 
 impl CommonSettings {
+    /// The stored hot-water fields, for [`crate::initial_hot_water_dose`].
+    pub fn stored_hot_water(&self) -> StoredHotWater {
+        StoredHotWater {
+            mode: self.qc_hot_water_mode,
+            volume_ml: Some(self.qc_hot_water_volume_ml),
+            time_s: self.qc_hot_water_time_s,
+            time_no_limit: self.qc_hot_water_time_no_limit,
+            ratio: self.qc_hot_water_ratio,
+        }
+    }
+
     /// Effective guided-brew cue sound: the explicit choice, else
     /// [`DEFAULT_BREW_CUE_SOUND`].
     pub fn brew_cue_sound_on(&self) -> bool {
@@ -268,6 +301,34 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         assert!(!json.contains("brewCueSound"), "{json}");
         assert!(!json.contains("brewCueHaptics"), "{json}");
+    }
+
+    /// AC-HW8: a blob from before the hot-water modes decodes, and the
+    /// migration follows the never-changed rule.
+    #[test]
+    fn old_blob_migrates() {
+        use crate::hot_water::{HOT_WATER_FIRMWARE, initial_hot_water_dose};
+        let fw = &HOT_WATER_FIRMWARE;
+        let c: CommonSettings =
+            serde_json::from_str(r#"{"qcHotWaterVolumeMl":150,"qcHotWaterTempC":80}"#).unwrap();
+        assert_eq!(c.qc_hot_water_mode, None);
+        let d = initial_hot_water_dose(&c.stored_hot_water(), None, fw);
+        assert_eq!((d.mode, d.ratio), (HotWaterMode::Ratio, 3.0));
+        let c: CommonSettings = serde_json::from_str(r#"{"qcHotWaterVolumeMl":200}"#).unwrap();
+        let d = initial_hot_water_dose(&c.stored_hot_water(), None, fw);
+        assert_eq!((d.mode, d.volume_ml), (HotWaterMode::Volume, 200.0));
+        // Unset fields aren't written, so an older build reads the blob as
+        // before; a set mode round-trips.
+        let json = serde_json::to_string(&CommonSettings::default()).unwrap();
+        assert!(!json.contains("qcHotWaterMode"), "{json}");
+        let set = CommonSettings {
+            qc_hot_water_mode: Some(HotWaterMode::Time),
+            qc_hot_water_time_s: Some(45.0),
+            ..CommonSettings::default()
+        };
+        let back: CommonSettings =
+            serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
+        assert_eq!(back, set);
     }
 
     #[test]

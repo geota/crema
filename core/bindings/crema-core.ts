@@ -1062,6 +1062,16 @@ export interface CatalogueRoasterPage {
 	pages: number;
 }
 
+/** How the hot-water amount is set. */
+export enum HotWaterMode {
+	/** Pour for a number of seconds. */
+	Time = "time",
+	/** Pour a number of ml. */
+	Volume = "volume",
+	/** Pour a multiple of the shot's target yield. */
+	Ratio = "ratio",
+}
+
 /**
  * The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
  * whole struct (via [`Default`]) so a partial blob — an older backup, or one
@@ -1232,12 +1242,49 @@ export interface CommonSettings {
 	qcSteamTempC: number;
 	/** Quick-Controls hot-water temperature, °C. */
 	qcHotWaterTempC: number;
-	/** Quick-Controls hot-water volume, ml. */
+	/** Quick-Controls hot-water volume, ml: the volume-mode value. */
 	qcHotWaterVolumeMl: number;
+	/**
+	 * Quick-Controls hot-water mode. `None` in settings from before the
+	 * modes: the load-time migration ([`crate::initial_hot_water_dose`])
+	 * decides, and the shells persist its result once. Like the three
+	 * fields after it, an `Option` so older blobs and backups decode.
+	 */
+	qcHotWaterMode?: HotWaterMode;
+	/** Quick-Controls hot-water time-mode seconds. */
+	qcHotWaterTimeS?: number;
+	/**
+	 * Quick-Controls hot-water time mode pours until stopped (honoured only
+	 * when the firmware has a value for it).
+	 */
+	qcHotWaterTimeNoLimit?: boolean;
+	/** Quick-Controls hot-water ratio: water per gram of shot. */
+	qcHotWaterRatio?: number;
 	/** Quick-Controls group-flush duration, seconds. */
 	qcFlushTimeS: number;
 	/** Quick-Controls group-flush temperature, °C. */
 	qcFlushTempC: number;
+}
+
+/**
+ * What the user set: the mode plus every mode's value, so switching modes
+ * brings each value back.
+ */
+export interface HotWaterDose {
+	/** The persisted mode. */
+	mode: HotWaterMode;
+	/** Time-mode seconds. */
+	timeS: number;
+	/**
+	 * Time mode pours until stopped. Honoured only when
+	 * [`HotWaterFirmware::no_limit_timeout`] is `Some`; `time_s` is kept so
+	 * turning it off restores the last time.
+	 */
+	timeNoLimit: boolean;
+	/** Volume-mode ml. */
+	volumeMl: number;
+	/** Ratio-mode water per gram of shot. */
+	ratio: number;
 }
 
 /**
@@ -1277,8 +1324,11 @@ export interface ConnectSweepSettings {
 	steamTimeoutS: number;
 	/** Hot-water temperature, °C. */
 	hotWaterTempC: number;
-	/** Hot-water volume, ml. */
-	hotWaterVolumeMl: number;
+	/**
+	 * The hot-water dose (the core resolves the packet's volume and timeout
+	 * from it).
+	 */
+	hotWater: HotWaterDose;
 	/** Steam flow, ml/s. */
 	steamFlowMlS: number;
 	/** Group-flush timeout, s. */
@@ -2019,6 +2069,27 @@ export type Event =
 	espresso_volume: number;
 	/** Espresso group target temperature, °C. */
 	group_temp: number;
+}}
+	/**
+	 * The resolved hot-water target changed (the dose, the target yield a
+	 * ratio applies to, or whether a scale is operational). The shells
+	 * render the hot-water readout, chips and mode card from it; its wire
+	 * fields equal the packet the core writes. A remote ignores its own
+	 * read-only core's and shows the hub's.
+	 */
+	| { type: "HotWaterTarget", content: {
+	/** The target. */
+	target: HotWaterTarget;
+}}
+	/**
+	 * A cuuid_0B notification differed from the packet Crema wrote this link
+	 * generation (another client, or the firmware). The first one is
+	 * restored on the next write; a second is left alone, so Crema can't
+	 * loop against firmware that normalises a field.
+	 */
+	| { type: "ShotSettingsForeignChange", content: {
+	/** Crema will restore its packet. */
+	restored: boolean;
 }}
 	/**
 	 * A profile upload has begun. Carries the frame counts the orchestrator
@@ -2976,6 +3047,109 @@ export interface HistoryStats {
 	avgRating?: number;
 }
 
+/** A stepper's range: `chips` lie inside `[min, max]`. */
+export interface StepRange {
+	/** Lowest value. */
+	min: number;
+	/** Highest value. */
+	max: number;
+	/** Step. */
+	step: number;
+	/** Preset chips. */
+	chips: number[];
+}
+
+/** The hot-water steppers' ranges and the default dose, for both shells. */
+export interface HotWaterBounds {
+	/** Time mode, s. */
+	timeS: StepRange;
+	/** Offer a "No limit" step above the time range. */
+	timeNoLimit: boolean;
+	/** Volume mode, ml. */
+	volumeMl: StepRange;
+	/** Ratio mode. */
+	ratio: StepRange;
+	/** The default dose. */
+	defaults: HotWaterDose;
+}
+
+/** The shot context the ratio and the stop depend on. */
+export interface HotWaterContext {
+	/** The next shot's target yield, g (`None`, 0 or NaN = no target). */
+	targetYieldG?: number;
+	/** A scale is connected and not stale (de1app `is_operational`). */
+	scaleOperational: boolean;
+}
+
+/**
+ * The hardware facts a DE1 run settles, injected so both branches are
+ * unit-testable. The core passes [`HOT_WATER_FIRMWARE`].
+ */
+export interface HotWaterFirmware {
+	/**
+	 * The packet volume in time mode: 0 = no volume stop; 255 if 0 doesn't
+	 * disable it.
+	 */
+	timeModeWireVolumeMl: number;
+	/** A timeout value that pours until stopped, if the firmware has one. */
+	noLimitTimeout?: number;
+	/**
+	 * The longest time-mode pour, s: 255 (the `u8` field), 25 when volume 0
+	 * fails, or a measured firmware cap.
+	 */
+	timeMaxS: number;
+	/** The default time, s: 30 (reaprime), 20 when volume 0 fails. */
+	timeDefaultS: number;
+}
+
+/** Which bound changed the ml. */
+export enum HotWaterClamp {
+	/** Lowered to [`HOT_WATER_MAX_ML`]. */
+	Capped = "capped",
+	/** Raised to [`HOT_WATER_MIN_ML`]. */
+	RaisedToMinimum = "raisedToMinimum",
+}
+
+/** What a ratio-mode amount was applied to. */
+export enum HotWaterBasis {
+	/** Time and volume modes. */
+	NotApplicable = "notApplicable",
+	/** The ratio applied to the target yield. */
+	TargetYield = "targetYield",
+	/** No target yield: the volume-mode value is poured. */
+	NoYieldTarget = "noYieldTarget",
+}
+
+/**
+ * The resolved hot-water target: what the readout shows, what the packet
+ * holds and where the weight stop sits.
+ */
+export interface HotWaterTarget {
+	/** The dose's mode. */
+	mode: HotWaterMode;
+	/** Time mode: the seconds poured; `None` for No limit. */
+	timeS?: number;
+	/** Volume and ratio modes: what Crema pours, ml, after clamping. */
+	volumeMl?: number;
+	/** The unclamped ml, only when a clamp changed it. */
+	requestedMl?: number;
+	/** Which bound applied, if one did. */
+	clamp?: HotWaterClamp;
+	/** What a ratio applied to. */
+	basis: HotWaterBasis;
+	/** Ratio mode: the yield the ratio applied to, g. */
+	basisG?: number;
+	/** The packet's `TargetHotWaterVol`, ml. */
+	wireVolumeMl: number;
+	/** The packet's `TargetHotWaterLength`, s. */
+	wireTimeoutS: number;
+	/**
+	 * Volume and ratio modes with an operational scale: the weight to stop
+	 * at, g.
+	 */
+	stopWeightG?: number;
+}
+
 /**
  * A slim view onto the shell's `StoredShot`: only the fields the
  * reconcile planner reads. Lets the shell project its full record
@@ -3108,8 +3282,6 @@ export interface ModeTargetInputs {
 	machineSteamTimeoutS?: number;
 	/** Machine hot-water target temperature, °C (`ShotSettingsRead.hot_water_temp`). */
 	machineHotWaterTempC?: number;
-	/** Machine hot-water volume, ml (`ShotSettingsRead.hot_water_volume`). */
-	machineHotWaterVolumeMl?: number;
 	/** Machine hot-water timeout, seconds (`ShotSettingsRead.hot_water_timeout`). */
 	machineHotWaterTimeoutS?: number;
 	/**
@@ -3124,8 +3296,11 @@ export interface ModeTargetInputs {
 	qcSteamTimeS?: number;
 	/** Quick-Controls hot-water temperature, °C. */
 	qcHotWaterTempC?: number;
-	/** Quick-Controls hot-water volume, ml. */
-	qcHotWaterVolumeMl?: number;
+	/**
+	 * The core's resolved hot-water target (`Event::HotWaterTarget`, or
+	 * `hot_water_target_json`); when given, the hot-water timeout is its.
+	 */
+	hotWater?: HotWaterTarget;
 	/** Quick-Controls flush temperature, °C. */
 	qcFlushTempC?: number;
 	/** Quick-Controls flush duration, seconds. */
@@ -3140,8 +3315,6 @@ export interface ModeTargets {
 	steamTimeoutS: number;
 	/** Hot-water target temperature, °C. */
 	hotWaterTempC: number;
-	/** Hot-water volume, ml. */
-	hotWaterVolumeMl: number;
 	/** Hot-water timeout, seconds. */
 	hotWaterTimeoutS: number;
 	/** Flush water temperature, °C. */
@@ -3941,6 +4114,46 @@ export interface StairSegment {
 	t0Ms: number;
 	t1Ms: number;
 	targetG: number;
+}
+
+/**
+ * The steam / hot-water targets the shells own in the DE1's combined
+ * settings packet (cuuid_0B), the input to
+ * [`set_steam_hotwater_targets`](CremaCore::set_steam_hotwater_targets).
+ * The hot-water volume and timeout are resolved from the dose and the
+ * group target is the effective profile's temperature, both by the core;
+ * every other field (the flag byte, the espresso volume) is the machine's,
+ * so the core keeps it.
+ */
+export interface SteamHotWaterTargets {
+	/** Target steam temperature, °C (0 turns the heater off). */
+	steamTempC: number;
+	/** Steam timeout, seconds. */
+	steamTimeoutS: number;
+	/** Target hot-water temperature, °C. */
+	hotWaterTempC: number;
+	/**
+	 * The hot-water dose: time, volume or ratio (see
+	 * [`de1_domain::hot_water`]).
+	 */
+	hotWater: HotWaterDose;
+}
+
+/**
+ * What the stored settings hold, every field optional: the input to the
+ * migration ([`initial_hot_water_dose`]).
+ */
+export interface StoredHotWater {
+	/** The stored mode; `None` before the modes existed. */
+	mode?: HotWaterMode;
+	/** The stored volume, ml. */
+	volumeMl?: number;
+	/** The stored time, s. */
+	timeS?: number;
+	/** The stored No limit flag. */
+	timeNoLimit?: boolean;
+	/** The stored ratio. */
+	ratio?: number;
 }
 
 /**

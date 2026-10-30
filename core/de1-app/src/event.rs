@@ -667,6 +667,23 @@ pub enum Event {
         /// Espresso group target temperature, °C.
         group_temp: f32,
     },
+    /// The resolved hot-water target changed (the dose, the target yield a
+    /// ratio applies to, or whether a scale is operational). The shells
+    /// render the hot-water readout, chips and mode card from it; its wire
+    /// fields equal the packet the core writes. A remote ignores its own
+    /// read-only core's and shows the hub's.
+    HotWaterTarget {
+        /// The target.
+        target: de1_domain::HotWaterTarget,
+    },
+    /// A cuuid_0B notification differed from the packet Crema wrote this link
+    /// generation (another client, or the firmware). The first one is
+    /// restored on the next write; a second is left alone, so Crema can't
+    /// loop against firmware that normalises a field.
+    ShotSettingsForeignChange {
+        /// Crema will restore its packet.
+        restored: bool,
+    },
     /// A profile upload has begun. Carries the frame counts the orchestrator
     /// expects acks for (the header ack, then frames + extensions + tail).
     ProfileUploadStarted {

@@ -60,6 +60,7 @@ import coffee.crema.ui.modeRunningSub
 import coffee.crema.ui.modeTargetSeconds
 import coffee.crema.core.steamAtTemperature
 import coffee.crema.core.groupAtTemperature
+import coffee.crema.ui.hotWaterMl
 import coffee.crema.ui.rememberModeTargets
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
@@ -216,6 +217,7 @@ fun PhoneBrewScreen(
                 machineStateName = ui.machineStateName,
                 modeElapsedMs = ui.modeElapsedMs,
                 targets = rememberModeTargets(ui),
+                hotWaterMl = hotWaterMl(ui),
                 targetsKnown = !ui.awaitingHubValues,
                 tempUnit = ui.tempUnit,
                 connected = connected,
@@ -1272,6 +1274,8 @@ private fun ModeCluster(
     machineStateName: MachineState?,
     modeElapsedMs: Long,
     targets: ModeTargets,
+    /** The hot-water amount, ml ([hotWaterMl]). */
+    hotWaterMl: Float,
     /** False on a remote before the hub's first snapshot ("—" subs). */
     targetsKnown: Boolean,
     tempUnit: String,
@@ -1309,7 +1313,7 @@ private fun ModeCluster(
             "Water",
             if (dispensing) modeRunningSub(modeElapsedMs, targets.hotWaterTimeoutS)
             else if (!targetsKnown) UNKNOWN_VALUE
-            else "${targets.hotWaterVolumeMl.toInt()}ml · ${deg(targets.hotWaterTempC)}",
+            else "${hotWaterMl.toInt()}ml · ${deg(targets.hotWaterTempC)}",
             "drop", tel.modeWater,
             active = dispensing,
             enabled = connected, atTemperature = groupHot, onTap = onWater, modifier = Modifier.weight(1f),

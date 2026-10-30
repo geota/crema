@@ -13,7 +13,7 @@
 //! binding glue — so this crate opts out of the workspace's
 //! `unsafe_code = "forbid"` lint (see `Cargo.toml`).
 
-use de1_app::{CoreOutput, CremaCore, Source, SteamHotWaterTargets};
+use de1_app::{CoreOutput, CremaCore, Source};
 use de1_domain::Profile;
 use de1_protocol::{CalTarget, MachineState, MmrRegister};
 use std::cell::Cell;
@@ -705,6 +705,32 @@ pub fn resolve_mode_targets(inputs_json: &str) -> Result<String, String> {
     let inputs: de1_domain::ModeTargetInputs =
         serde_json::from_str(inputs_json).map_err(|e| e.to_string())?;
     serde_json::to_string(&de1_domain::resolve_mode_targets(&inputs)).map_err(|e| e.to_string())
+}
+
+/// The hot-water steppers' ranges, chips and default dose for the shipped
+/// firmware, as `HotWaterBounds` JSON. See `de1_domain::hot_water_bounds`.
+#[wasm_bindgen(js_name = hotWaterBoundsJson)]
+pub fn hot_water_bounds_json() -> String {
+    de1_domain::hot_water_bounds_json()
+}
+
+/// The hot-water dose to start from for stored settings that may predate the
+/// modes: `StoredHotWater` JSON and an optional marker in, `HotWaterDose`
+/// JSON out. See `de1_domain::initial_hot_water_dose`.
+#[wasm_bindgen(js_name = initialHotWaterDose)]
+pub fn initial_hot_water_dose(
+    stored_json: &str,
+    marker_json: Option<String>,
+) -> Result<String, String> {
+    de1_domain::initial_hot_water_dose_json(stored_json, marker_json.as_deref())
+}
+
+/// Resolve a hot-water dose for a shot context, for previews and tests:
+/// `HotWaterDose` and `HotWaterContext` JSON in, `HotWaterTarget` JSON out.
+/// See `de1_domain::resolve_hot_water`.
+#[wasm_bindgen(js_name = resolveHotWaterJson)]
+pub fn resolve_hot_water_json(dose_json: &str, ctx_json: &str) -> Result<String, String> {
+    de1_domain::resolve_hot_water_json(dose_json, ctx_json)
 }
 
 /// Whether the profile's volume limit (SAV) will actually arm — the
@@ -3225,26 +3251,24 @@ impl CremaBridge {
         json(self.state().core.set_scale_auto_stop(mode_id))
     }
 
-    /// Set the steam / hot-water targets: the core writes the combined
-    /// packet read-modify-write, keeping every field it doesn't own (see
-    /// [`de1_app::CremaCore::set_steam_hotwater_targets`]); the group target
-    /// is the effective profile's temperature. Returns a JSON-encoded
-    /// [`CoreOutput`] whose command applies them (with the legacy hot-water
-    /// volume override when a scale is connected).
-    pub fn set_steam_hotwater_targets(
-        &self,
-        steam_temp_c: f32,
-        steam_timeout_s: f32,
-        hot_water_temp_c: f32,
-        hot_water_volume_ml: f32,
-    ) -> String {
-        let targets = SteamHotWaterTargets {
-            steam_temp_c,
-            steam_timeout_s,
-            hot_water_temp_c,
-            hot_water_volume_ml,
-        };
-        json(self.state().core.set_steam_hotwater_targets(&targets))
+    /// Set the steam / hot-water targets and the hot-water dose from a
+    /// camelCase `SteamHotWaterTargets` JSON. The core keeps the packet in
+    /// step with them and its other inputs (see
+    /// [`de1_app::CremaCore::set_steam_hotwater_targets`]). Returns a
+    /// JSON-encoded [`CoreOutput`].
+    pub fn set_steam_hotwater_targets(&self, targets_json: &str) -> String {
+        json(
+            self.state()
+                .core
+                .set_steam_hotwater_targets_json(targets_json),
+        )
+    }
+
+    /// The resolved hot-water target as JSON (`null` until a dose is set).
+    /// Read it at start-up and after an input change of the shell's own; see
+    /// [`de1_app::CremaCore::hot_water_target_json`].
+    pub fn hot_water_target_json(&self) -> String {
+        self.state().core.hot_water_target_json()
     }
 
     /// Enable or disable steam eco mode (the legacy `eco_steam` setting).
@@ -3989,12 +4013,42 @@ mod tests {
 
     /// Apply representative steam / hot-water targets to `bridge`.
     fn set_steam_settings(bridge: &CremaBridge) -> String {
-        bridge.set_steam_hotwater_targets(150.0, 120.0, 85.0, 50.0)
+        bridge.set_steam_hotwater_targets(
+            r#"{"steamTempC":150,"steamTimeoutS":120,"hotWaterTempC":85,
+                "hotWater":{"mode":"volume","timeS":30,"timeNoLimit":false,"volumeMl":50,"ratio":3}}"#,
+        )
+    }
+
+    /// AC-HW19: the JSON faces round-trip AC-HW1's case.
+    #[test]
+    fn hot_water_json_round_trip() {
+        let out = resolve_hot_water_json(
+            r#"{"mode":"ratio","timeS":30,"timeNoLimit":false,"volumeMl":150,"ratio":3}"#,
+            r#"{"targetYieldG":50,"scaleOperational":false}"#,
+        )
+        .unwrap();
+        let t: de1_domain::HotWaterTarget = serde_json::from_str(&out).unwrap();
+        assert_eq!(t.volume_ml, Some(150.0));
+        let bridge = CremaBridge::new();
+        assert_eq!(bridge.hot_water_target_json(), "null");
+        set_steam_settings(&bridge);
+        let t: de1_domain::HotWaterTarget =
+            serde_json::from_str(&bridge.hot_water_target_json()).unwrap();
+        assert_eq!(t.volume_ml, Some(50.0));
+        let b: de1_domain::HotWaterBounds = serde_json::from_str(&hot_water_bounds_json()).unwrap();
+        assert_eq!(b.ratio.max, 6.0);
+        let d: de1_domain::HotWaterDose =
+            serde_json::from_str(&initial_hot_water_dose(r#"{"volumeMl":200}"#, None).unwrap())
+                .unwrap();
+        assert_eq!(d.mode, de1_domain::HotWaterMode::Volume);
     }
 
     #[test]
     fn set_steam_hotwater_targets_produces_a_write_command() {
         let bridge = CremaBridge::new();
+        // A connected, idle DE1 after its on-ready sweep.
+        bridge.on_notification(NotificationSource::De1State, vec![2, 0], 0.0);
+        bridge.connect_sweep("{}", 0.0);
         let json = set_steam_settings(&bridge);
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteCharacteristic"));

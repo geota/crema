@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CoreOutput } from '#lib/core/index.js';
 import { UsbChargingMode, type ConnectSweepSettings } from '#lib/core/crema-core.js';
@@ -10,6 +10,12 @@ import {
 } from './connect-sweep';
 
 const EMPTY: CoreOutput = { events: [], commands: [] };
+
+// The snapshot's hot-water dose takes the core's defaults.
+beforeAll(async () => {
+	const { loadCore } = await import('#lib/core/index.js');
+	await loadCore();
+});
 
 function harness(settings: Settings = DEFAULT_SETTINGS) {
 	const sweeps: ConnectSweepSettings[] = [];

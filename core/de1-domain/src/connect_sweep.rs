@@ -20,7 +20,7 @@
 //! | steam two-tap stop | MMR `0x803850` | 0/1 | `set_heater_tweaks` |
 //! | refill point | `WaterLevels` (`cuuid_11`) | mm | `de1_send_waterlevel_settings` |
 //! | tank-temp threshold | MMR `0x80380C` | °C, 0..=45 | profile upload (de1app `de1_send_shot_frames`, Decenza `writeTankPreheatForProfile`) |
-//! | steam / hot-water | `ShotSettings` (`cuuid_0B`) | packet | `de1_send_steam_hotwater_settings` |
+//! | steam / hot-water | `ShotSettings` (`cuuid_0B`) | packet (the hot-water dose resolved by `hot_water`) | `de1_send_steam_hotwater_settings` |
 //! | steam flow | MMR `0x803828` | ml/s × 100 | crema QC |
 //! | flush timeout / temp | MMR `0x803848` / `0x803844` | × 10 | `set_heater_tweaks` / reaprime |
 //! | steam eco | re-sent `ShotSettings` | — | crema |
@@ -138,8 +138,9 @@ pub struct ConnectSweepSettings {
     pub steam_timeout_s: f32,
     /// Hot-water temperature, °C.
     pub hot_water_temp_c: f32,
-    /// Hot-water volume, ml.
-    pub hot_water_volume_ml: f32,
+    /// The hot-water dose (the core resolves the packet's volume and timeout
+    /// from it).
+    pub hot_water: crate::hot_water::HotWaterDose,
     /// Steam flow, ml/s.
     pub steam_flow_ml_s: f32,
     /// Group-flush timeout, s.
@@ -173,7 +174,7 @@ impl Default for ConnectSweepSettings {
             steam_temp_c: 160.0,
             steam_timeout_s: 120.0,
             hot_water_temp_c: 85.0,
-            hot_water_volume_ml: 120.0,
+            hot_water: crate::hot_water::HotWaterDose::default(),
             steam_flow_ml_s: 1.5,
             flush_timeout_s: 5.0,
             flush_temp_c: 92.0,

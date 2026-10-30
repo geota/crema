@@ -70,6 +70,20 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **The DE1's steam / hot-water settings always hold what Crema has loaded**,
+  so the machine's own hot-water button pours the same amount as the app: the
+  settings follow the hot-water amount, a scale connecting, going quiet or
+  leaving, and the active profile. They are re-sent on every connect, and a
+  change made by another app is put back once per connection. While a shot,
+  steam, hot water or a flush runs, a steam or hot-water change waits until it
+  ends. Web, tablet and phone.
+- **The DE1's steam settings flag byte is sent back as the machine reports
+  it**, as reaprime does; de1app and Decenza always send 0. Web, tablet and
+  phone.
+- **The espresso group temperature in the steam / hot-water settings is the
+  active profile's**, including a Quick Controls brew-temperature change, as
+  de1app and Decenza send it. Web, tablet and phone.
+
 - **Basic pressure profiles limit flow during the forced rise**, and pressure
   steps without a flow limit — cleaning and calibration profiles included — are
   capped at 8 ml/s, matching de1app and Decenza. A profile an earlier version
@@ -109,6 +123,15 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   forever. Tablet and phone.
 
 ### Fixed
+
+- **Hot water stops by weight above 250 ml no longer silently fails** — the
+  amount is capped at 250 ml, the most the DE1 is asked for with a scale. Web,
+  tablet and phone.
+- **A scale that disconnects no longer leaves the next hot-water pour running
+  to 250 ml unwatched**, and a scale that connects after the DE1 turns the
+  weight stop on for the machine's button too. Web, tablet and phone.
+- **A hot-water pour from the machine's button right after a reconnect still
+  stops by weight.** Web, tablet and phone.
 
 - **A second Start can no longer stop and restart a running shot, and Stop
   during the pre-shot flush no longer starts the shot** — a shot start is now

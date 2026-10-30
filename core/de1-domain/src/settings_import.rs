@@ -78,6 +78,10 @@ pub struct ImportedDe1AppSettings {
     pub hot_water_temperature_c: Option<u8>,
     /// `water_volume` — hot-water target volume, ml.
     pub hot_water_volume_ml: Option<u32>,
+    /// The hot-water mode the import implies: de1app pours a volume, so
+    /// [`HotWaterMode::Volume`](crate::HotWaterMode::Volume) whenever
+    /// `water_volume` is present.
+    pub hot_water_mode: Option<crate::HotWaterMode>,
 
     // ── Flush ─────────────────────────────────────────────────────────
     /// `flush_flow` — flush flow rate, ml/s. The legacy app stores
@@ -180,6 +184,9 @@ pub fn import_settings_tdb(content: &str) -> Result<ImportedDe1AppSettings, Impo
         steam_max_time_s: dict.get_f32("steam_max_time").map(round_clamped_u32),
         hot_water_temperature_c: dict.get_f32("water_temperature").map(round_clamped_u8),
         hot_water_volume_ml: dict.get_f32("water_volume").map(round_clamped_u32),
+        hot_water_mode: dict
+            .get_f32("water_volume")
+            .map(|_| crate::HotWaterMode::Volume),
         flush_flow_ml_per_s: dict.get_f32("flush_flow"),
         flush_seconds: dict.get_f32("flush_seconds").map(round_clamped_u32),
         machine_bluetooth_address: non_empty(dict.get("bluetooth_address")),
@@ -427,6 +434,17 @@ mod tests {
         // Unknown keys didn't crash; the result has only the one
         // recognised field set.
         assert_eq!(r.target_yield_g, None);
+    }
+
+    /// AC-HW8: de1app pours a volume, so its `water_volume` imports as
+    /// volume mode with that ml.
+    #[test]
+    fn water_volume_sets_volume_mode() {
+        let r = import_settings_tdb("water_volume 200\n").unwrap();
+        assert_eq!(r.hot_water_volume_ml, Some(200));
+        assert_eq!(r.hot_water_mode, Some(crate::HotWaterMode::Volume));
+        let r = import_settings_tdb("water_temperature 90\n").unwrap();
+        assert_eq!(r.hot_water_mode, None);
     }
 
     #[test]

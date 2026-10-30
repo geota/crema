@@ -26,7 +26,7 @@ import type {
 	CalTarget,
 	SubState
 } from '#lib/core/index.js';
-import type { StopReason } from '#lib/core/crema-core.js';
+import type { HotWaterTarget, StopReason } from '#lib/core/crema-core.js';
 import { MaintenanceFailure, ScaleLinkDeadReason } from '#lib/core/crema-core.js';
 import type { De1State, De1Diagnostics } from '#lib/ble/de1.js';
 import { EMPTY_DE1_DIAGNOSTICS } from '#lib/ble/de1.js';
@@ -415,6 +415,13 @@ export interface UiSnapshot {
 	 */
 	readonly de1ShotSettings: De1ShotSettingsSnapshot | null;
 	/**
+	 * The core's resolved hot-water target (`HotWaterTarget` events, or a
+	 * re-read after our own input changes). The hot-water chip and mode card
+	 * show its amount, never the machine echo (which can carry the 250 ml
+	 * scale backstop). `null` until the core has a dose.
+	 */
+	readonly hotWaterTarget: HotWaterTarget | null;
+	/**
 	 * Readable text for the machine's current error substate (R5), or `null`
 	 * when the machine is healthy. Set from `MachineStateChanged` whenever the
 	 * substate is one of the DE1's `Error*` fault codes; cleared on any
@@ -671,6 +678,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	de1MachineInfo: {},
 	de1Calibration: EMPTY_DE1_CALIBRATION,
 	de1ShotSettings: null,
+	hotWaterTarget: null,
 	machineError: null,
 	maintenance: null,
 	idleSince: null,
@@ -1319,6 +1327,18 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		case 'ProfileSyncWarning':
 			// The app's fold resolves a waiting start / shows the warning.
 			return snapshot;
+		case 'HotWaterTarget':
+			return { ...snapshot, hotWaterTarget: event.content.target };
+		case 'ShotSettingsForeignChange':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					event.content.restored
+						? 'Steam / hot-water settings changed outside Crema: restoring them'
+						: 'Steam / hot-water settings changed outside Crema again: left as they are'
+				)
+			};
 		case 'CalibrationRefused':
 			// The core's calibration guard, or the DE1's error reply. The
 			// modal shows the sentence; the log keeps the record.
@@ -1573,6 +1593,11 @@ export async function refreshStopTargetsProjection(core: {
 	} catch {
 		// Best-effort: the event path still covers the connected case.
 	}
+}
+
+/** Land a re-read hot-water target (see `CremaApp.refreshHotWaterTarget`). */
+export function setHotWaterTarget(target: HotWaterTarget | null): void {
+	getCremaUiState().patch({ hotWaterTarget: target });
 }
 
 export function getCremaUiState(): CremaUiState {

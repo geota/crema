@@ -972,6 +972,20 @@ data class CatalogueRoasterPage (
 	val pages: UInt
 )
 
+/// How the hot-water amount is set.
+@Serializable
+enum class HotWaterMode(val string: String) {
+	/// Pour for a number of seconds.
+	@SerialName("time")
+	Time("time"),
+	/// Pour a number of ml.
+	@SerialName("volume")
+	Volume("volume"),
+	/// Pour a multiple of the shot's target yield.
+	@SerialName("ratio")
+	Ratio("ratio"),
+}
+
 /// The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
 /// whole struct (via [`Default`]) so a partial blob — an older backup, or one
 /// shell omitting a field it shares — fills gaps from the canonical defaults
@@ -1111,12 +1125,42 @@ data class CommonSettings (
 	val qcSteamTempC: Float,
 	/// Quick-Controls hot-water temperature, °C.
 	val qcHotWaterTempC: Float,
-	/// Quick-Controls hot-water volume, ml.
+	/// Quick-Controls hot-water volume, ml: the volume-mode value.
 	val qcHotWaterVolumeMl: Float,
+	/// Quick-Controls hot-water mode. `None` in settings from before the
+	/// modes: the load-time migration ([`crate::initial_hot_water_dose`])
+	/// decides, and the shells persist its result once. Like the three
+	/// fields after it, an `Option` so older blobs and backups decode.
+	val qcHotWaterMode: HotWaterMode? = null,
+	/// Quick-Controls hot-water time-mode seconds.
+	val qcHotWaterTimeS: Float? = null,
+	/// Quick-Controls hot-water time mode pours until stopped (honoured only
+	/// when the firmware has a value for it).
+	val qcHotWaterTimeNoLimit: Boolean? = null,
+	/// Quick-Controls hot-water ratio: water per gram of shot.
+	val qcHotWaterRatio: Float? = null,
 	/// Quick-Controls group-flush duration, seconds.
 	val qcFlushTimeS: Float,
 	/// Quick-Controls group-flush temperature, °C.
 	val qcFlushTempC: Float
+)
+
+/// What the user set: the mode plus every mode's value, so switching modes
+/// brings each value back.
+@Serializable
+data class HotWaterDose (
+	/// The persisted mode.
+	val mode: HotWaterMode,
+	/// Time-mode seconds.
+	val timeS: Float,
+	/// Time mode pours until stopped. Honoured only when
+	/// [`HotWaterFirmware::no_limit_timeout`] is `Some`; `time_s` is kept so
+	/// turning it off restores the last time.
+	val timeNoLimit: Boolean,
+	/// Volume-mode ml.
+	val volumeMl: Float,
+	/// Ratio-mode water per gram of shot.
+	val ratio: Float
 )
 
 /// The "Tablet charging" setting: Decenza's `BatteryManager::ChargingMode`.
@@ -1153,8 +1197,9 @@ data class ConnectSweepSettings (
 	val steamTimeoutS: Float,
 	/// Hot-water temperature, °C.
 	val hotWaterTempC: Float,
-	/// Hot-water volume, ml.
-	val hotWaterVolumeMl: Float,
+	/// The hot-water dose (the core resolves the packet's volume and timeout
+	/// from it).
+	val hotWater: HotWaterDose,
 	/// Steam flow, ml/s.
 	val steamFlowMlS: Float,
 	/// Group-flush timeout, s.
@@ -1669,6 +1714,20 @@ data class EventShotSettingsReadInner (
 	val group_temp: Float
 )
 
+/// Generated type representing the anonymous struct variant `HotWaterTarget` of the `Event` Rust enum
+@Serializable
+data class EventHotWaterTargetInner (
+	/// The target.
+	val target: HotWaterTarget
+)
+
+/// Generated type representing the anonymous struct variant `ShotSettingsForeignChange` of the `Event` Rust enum
+@Serializable
+data class EventShotSettingsForeignChangeInner (
+	/// Crema will restore its packet.
+	val restored: Boolean
+)
+
 /// Generated type representing the anonymous struct variant `ProfileUploadStarted` of the `Event` Rust enum
 @Serializable
 data class EventProfileUploadStartedInner (
@@ -2062,6 +2121,21 @@ sealed class Event {
 	@Serializable
 	@SerialName("ShotSettingsRead")
 	data class ShotSettingsRead(val content: EventShotSettingsReadInner): Event()
+	/// The resolved hot-water target changed (the dose, the target yield a
+	/// ratio applies to, or whether a scale is operational). The shells
+	/// render the hot-water readout, chips and mode card from it; its wire
+	/// fields equal the packet the core writes. A remote ignores its own
+	/// read-only core's and shows the hub's.
+	@Serializable
+	@SerialName("HotWaterTarget")
+	data class HotWaterTarget(val content: EventHotWaterTargetInner): Event()
+	/// A cuuid_0B notification differed from the packet Crema wrote this link
+	/// generation (another client, or the firmware). The first one is
+	/// restored on the next write; a second is left alone, so Crema can't
+	/// loop against firmware that normalises a field.
+	@Serializable
+	@SerialName("ShotSettingsForeignChange")
+	data class ShotSettingsForeignChange(val content: EventShotSettingsForeignChangeInner): Event()
 	/// A profile upload has begun. Carries the frame counts the orchestrator
 	/// expects acks for (the header ack, then frames + extensions + tail).
 	@Serializable
@@ -3023,6 +3097,111 @@ data class HistoryStats (
 	val avgRating: Float? = null
 )
 
+/// A stepper's range: `chips` lie inside `[min, max]`.
+@Serializable
+data class StepRange (
+	/// Lowest value.
+	val min: Float,
+	/// Highest value.
+	val max: Float,
+	/// Step.
+	val step: Float,
+	/// Preset chips.
+	val chips: List<Float>
+)
+
+/// The hot-water steppers' ranges and the default dose, for both shells.
+@Serializable
+data class HotWaterBounds (
+	/// Time mode, s.
+	val timeS: StepRange,
+	/// Offer a "No limit" step above the time range.
+	val timeNoLimit: Boolean,
+	/// Volume mode, ml.
+	val volumeMl: StepRange,
+	/// Ratio mode.
+	val ratio: StepRange,
+	/// The default dose.
+	val defaults: HotWaterDose
+)
+
+/// The shot context the ratio and the stop depend on.
+@Serializable
+data class HotWaterContext (
+	/// The next shot's target yield, g (`None`, 0 or NaN = no target).
+	val targetYieldG: Float? = null,
+	/// A scale is connected and not stale (de1app `is_operational`).
+	val scaleOperational: Boolean
+)
+
+/// The hardware facts a DE1 run settles, injected so both branches are
+/// unit-testable. The core passes [`HOT_WATER_FIRMWARE`].
+@Serializable
+data class HotWaterFirmware (
+	/// The packet volume in time mode: 0 = no volume stop; 255 if 0 doesn't
+	/// disable it.
+	val timeModeWireVolumeMl: UByte,
+	/// A timeout value that pours until stopped, if the firmware has one.
+	val noLimitTimeout: UByte? = null,
+	/// The longest time-mode pour, s: 255 (the `u8` field), 25 when volume 0
+	/// fails, or a measured firmware cap.
+	val timeMaxS: UByte,
+	/// The default time, s: 30 (reaprime), 20 when volume 0 fails.
+	val timeDefaultS: UByte
+)
+
+/// Which bound changed the ml.
+@Serializable
+enum class HotWaterClamp(val string: String) {
+	/// Lowered to [`HOT_WATER_MAX_ML`].
+	@SerialName("capped")
+	Capped("capped"),
+	/// Raised to [`HOT_WATER_MIN_ML`].
+	@SerialName("raisedToMinimum")
+	RaisedToMinimum("raisedToMinimum"),
+}
+
+/// What a ratio-mode amount was applied to.
+@Serializable
+enum class HotWaterBasis(val string: String) {
+	/// Time and volume modes.
+	@SerialName("notApplicable")
+	NotApplicable("notApplicable"),
+	/// The ratio applied to the target yield.
+	@SerialName("targetYield")
+	TargetYield("targetYield"),
+	/// No target yield: the volume-mode value is poured.
+	@SerialName("noYieldTarget")
+	NoYieldTarget("noYieldTarget"),
+}
+
+/// The resolved hot-water target: what the readout shows, what the packet
+/// holds and where the weight stop sits.
+@Serializable
+data class HotWaterTarget (
+	/// The dose's mode.
+	val mode: HotWaterMode,
+	/// Time mode: the seconds poured; `None` for No limit.
+	val timeS: Float? = null,
+	/// Volume and ratio modes: what Crema pours, ml, after clamping.
+	val volumeMl: Float? = null,
+	/// The unclamped ml, only when a clamp changed it.
+	val requestedMl: Float? = null,
+	/// Which bound applied, if one did.
+	val clamp: HotWaterClamp? = null,
+	/// What a ratio applied to.
+	val basis: HotWaterBasis,
+	/// Ratio mode: the yield the ratio applied to, g.
+	val basisG: Float? = null,
+	/// The packet's `TargetHotWaterVol`, ml.
+	val wireVolumeMl: Float,
+	/// The packet's `TargetHotWaterLength`, s.
+	val wireTimeoutS: Float,
+	/// Volume and ratio modes with an operational scale: the weight to stop
+	/// at, g.
+	val stopWeightG: Float? = null
+)
+
 /// A slim view onto the shell's `StoredShot`: only the fields the
 /// reconcile planner reads. Lets the shell project its full record
 /// (web `StoredShot` in `#lib/history/model.ts`, Android equivalent)
@@ -3142,8 +3321,6 @@ data class ModeTargetInputs (
 	val machineSteamTimeoutS: Float? = null,
 	/// Machine hot-water target temperature, °C (`ShotSettingsRead.hot_water_temp`).
 	val machineHotWaterTempC: Float? = null,
-	/// Machine hot-water volume, ml (`ShotSettingsRead.hot_water_volume`).
-	val machineHotWaterVolumeMl: Float? = null,
 	/// Machine hot-water timeout, seconds (`ShotSettingsRead.hot_water_timeout`).
 	val machineHotWaterTimeoutS: Float? = null,
 	/// The machine's stored flush setpoint — the raw `FlushTemp` MMR word
@@ -3156,8 +3333,9 @@ data class ModeTargetInputs (
 	val qcSteamTimeS: Float? = null,
 	/// Quick-Controls hot-water temperature, °C.
 	val qcHotWaterTempC: Float? = null,
-	/// Quick-Controls hot-water volume, ml.
-	val qcHotWaterVolumeMl: Float? = null,
+	/// The core's resolved hot-water target (`Event::HotWaterTarget`, or
+	/// `hot_water_target_json`); when given, the hot-water timeout is its.
+	val hotWater: HotWaterTarget? = null,
 	/// Quick-Controls flush temperature, °C.
 	val qcFlushTempC: Float? = null,
 	/// Quick-Controls flush duration, seconds.
@@ -3173,8 +3351,6 @@ data class ModeTargets (
 	val steamTimeoutS: Float,
 	/// Hot-water target temperature, °C.
 	val hotWaterTempC: Float,
-	/// Hot-water volume, ml.
-	val hotWaterVolumeMl: Float,
 	/// Hot-water timeout, seconds.
 	val hotWaterTimeoutS: Float,
 	/// Flush water temperature, °C.
@@ -3854,6 +4030,42 @@ data class StairSegment (
 	val t0Ms: Long,
 	val t1Ms: Long,
 	val targetG: Float
+)
+
+/// The steam / hot-water targets the shells own in the DE1's combined
+/// settings packet (cuuid_0B), the input to
+/// [`set_steam_hotwater_targets`](CremaCore::set_steam_hotwater_targets).
+/// The hot-water volume and timeout are resolved from the dose and the
+/// group target is the effective profile's temperature, both by the core;
+/// every other field (the flag byte, the espresso volume) is the machine's,
+/// so the core keeps it.
+@Serializable
+data class SteamHotWaterTargets (
+	/// Target steam temperature, °C (0 turns the heater off).
+	val steamTempC: Float,
+	/// Steam timeout, seconds.
+	val steamTimeoutS: Float,
+	/// Target hot-water temperature, °C.
+	val hotWaterTempC: Float,
+	/// The hot-water dose: time, volume or ratio (see
+	/// [`de1_domain::hot_water`]).
+	val hotWater: HotWaterDose
+)
+
+/// What the stored settings hold, every field optional: the input to the
+/// migration ([`initial_hot_water_dose`]).
+@Serializable
+data class StoredHotWater (
+	/// The stored mode; `None` before the modes existed.
+	val mode: HotWaterMode? = null,
+	/// The stored volume, ml.
+	val volumeMl: Float? = null,
+	/// The stored time, s.
+	val timeS: Float? = null,
+	/// The stored No limit flag.
+	val timeNoLimit: Boolean? = null,
+	/// The stored ratio.
+	val ratio: Float? = null
 )
 
 /// A telemetry sample tagged with its time since the shot began.

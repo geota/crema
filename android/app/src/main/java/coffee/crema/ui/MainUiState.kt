@@ -103,6 +103,10 @@ data class MainUiState(
      *  until the first read. Drives the mode chips' target sub-labels and the
      *  steam / hot-water timers (web `ui.de1ShotSettings` parity). */
     val de1ShotSettings: EventShotSettingsReadInner? = null,
+    /** The core's resolved hot-water target (`Event.HotWaterTarget`, or a
+     *  re-read after this device's own input changes): the chips and mode
+     *  card show its amount. Null until the core has a dose. */
+    val hotWaterTarget: coffee.crema.core.HotWaterTarget? = null,
     /** Monotonic ms when the DE1 entered the current service mode (Steam /
      *  HotWater / HotWaterRinse), or null when no service mode is running. */
     val modeStartedAtMs: Long? = null,

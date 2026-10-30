@@ -8,11 +8,12 @@
 //! last pushed and uploads (through [`CremaCore::upload_crema_profile`]) when
 //! the two differ:
 //!
-//! - **Connection generation.** A link drop ([`CremaCore::de1_link_lost`]) or
-//!   teardown ([`CremaCore::reset`]) starts a new generation, forgets what was
+//! - **Connection generation.** The link session is shared with the packet
+//!   sync ([`crate::packet_sync`]). A link drop ([`CremaCore::de1_link_lost`])
+//!   or teardown ([`CremaCore::reset`]) starts a new generation, forgets what was
 //!   pushed and cancels any retry. A completion or failure of an upload from
 //!   an older generation is ignored.
-//! - **Every connect.** The first connect sweep of a generation
+//! - **Every connect.** The first on-ready connect sweep of a generation
 //!   ([`CremaCore::connect_sweep`]) settles the connection: what was pushed is
 //!   forgotten and the desired profile is uploaded, whatever an earlier
 //!   connection sent — the DE1 may have been power-cycled or changed by
@@ -116,9 +117,6 @@ pub(crate) struct SyncTag {
 pub(crate) struct ProfileSync {
     desired: Option<Desired>,
     last_pushed: Option<String>,
-    generation: u32,
-    /// The connect sweep ran for this generation.
-    settled: bool,
     /// A `StateInfo` arrived on this generation's link: the core's last
     /// state is this connection's, not one from before the drop.
     state_seen: bool,
@@ -135,13 +133,6 @@ pub(crate) struct ProfileSync {
 }
 
 impl ProfileSync {
-    /// The current link generation (bumped by every drop and teardown; kept
-    /// across [`CremaCore::reset`]).
-    #[cfg(test)]
-    pub(crate) fn generation(&self) -> u32 {
-        self.generation
-    }
-
     fn status(&self) -> ProfileSyncStatus {
         ProfileSyncStatus {
             desired: self.desired.as_ref().map(|d| d.fingerprint.clone()),
@@ -172,8 +163,6 @@ impl ProfileSync {
     /// The link is gone: a new generation. Returns whether a raised warning
     /// must be cleared.
     fn disconnected(&mut self) -> bool {
-        self.generation = self.generation.wrapping_add(1);
-        self.settled = false;
         self.state_seen = false;
         self.last_pushed = None;
         self.in_flight = None;
@@ -183,13 +172,9 @@ impl ProfileSync {
         std::mem::take(&mut self.warned)
     }
 
-    /// The connect sweep ran. Only the first one of a generation settles it,
-    /// so a second sweep on the same connection does not re-upload.
-    fn settle(&mut self) {
-        if self.settled {
-            return;
-        }
-        self.settled = true;
+    /// This generation's link just settled (its first on-ready sweep); a
+    /// second sweep on the same connection does not re-upload.
+    fn settled(&mut self) {
         self.last_pushed = None;
         self.attempt = 0;
         self.retry_at = None;
@@ -203,9 +188,9 @@ impl ProfileSync {
 
     /// The desired profile to upload now, if one is due and the machine can
     /// take it (`ready`).
-    fn due(&self, now: Duration, ready: bool) -> Option<Desired> {
+    fn due(&self, now: Duration, ready: bool, settled: bool) -> Option<Desired> {
         let desired = self.desired.as_ref()?;
-        let due = self.settled
+        let due = settled
             && self.state_seen
             && ready
             && self.in_flight.is_none()
@@ -216,9 +201,9 @@ impl ProfileSync {
     }
 
     /// A sync upload of `fingerprint` started: its tag.
-    fn started(&mut self, fingerprint: String) -> SyncTag {
+    fn started(&mut self, fingerprint: String, generation: u32) -> SyncTag {
         let tag = SyncTag {
-            generation: self.generation,
+            generation,
             fingerprint,
         };
         self.retry_at = None;
@@ -235,13 +220,13 @@ impl ProfileSync {
     /// upload: the cold-maintenance profile). Returns whether a raised
     /// warning must be cleared and, for a sync upload of this generation,
     /// the fingerprint the DE1 now holds.
-    fn completed(&mut self, tag: Option<SyncTag>) -> (bool, Option<String>) {
+    fn completed(&mut self, tag: Option<SyncTag>, generation: u32) -> (bool, Option<String>) {
         let Some(tag) = tag else {
             // Something else is on the machine now.
             self.last_pushed = None;
             return (false, None);
         };
-        if tag.generation != self.generation {
+        if tag.generation != generation {
             return (false, None);
         }
         self.in_flight = None;
@@ -254,8 +239,8 @@ impl ProfileSync {
     /// A sync upload of `tag` failed at `now`: schedule the retry. Returns
     /// whether a warning must be raised (the first failure of a streak).
     /// Another generation's failure is ignored.
-    fn failed(&mut self, tag: &SyncTag, now: Duration) -> bool {
-        if tag.generation != self.generation {
+    fn failed(&mut self, tag: &SyncTag, now: Duration, generation: u32) -> bool {
+        if tag.generation != generation {
             return false;
         }
         self.in_flight = None;
@@ -312,6 +297,9 @@ impl CremaCore {
         });
         self.profile_sync.set_desired(desired);
         let mut out = CoreOutput::default();
+        // The packet's group target follows the profile (F5.3); it goes
+        // before any upload, as in the connect sweep.
+        self.drive_shot_settings(&mut out, false);
         self.drive_profile_sync(&mut out);
         self.gate_read_only(out)
     }
@@ -357,8 +345,12 @@ impl CremaCore {
         self.profile_sync.status()
     }
 
-    /// The link is gone (a drop or a teardown): see the module docs.
-    pub(crate) fn profile_sync_disconnected(&mut self, out: &mut CoreOutput) {
+    /// The link is gone (a drop or a teardown): a new link generation for
+    /// both syncs (see the module docs and [`crate::packet_sync`]).
+    pub(crate) fn link_lost_session(&mut self, out: &mut CoreOutput) {
+        self.link.generation = self.link.generation.wrapping_add(1);
+        self.link.settled = false;
+        self.packet_sync_new_generation();
         if self.profile_sync.disconnected() {
             out.events.push(Event::ProfileSyncWarning { active: false });
         }
@@ -375,9 +367,19 @@ impl CremaCore {
         }
     }
 
-    /// The connect sweep ran: the connection is settled; upload.
-    pub(crate) fn profile_sync_settled(&mut self, out: &mut CoreOutput) {
-        self.profile_sync.settle();
+    /// Settle this generation's link: the on-ready connect sweep calls it
+    /// before its writes, so the packet sync lets the sweep's packet
+    /// through. Returns whether the link just settled (its first sweep).
+    pub(crate) fn settle_link(&mut self) -> bool {
+        !std::mem::replace(&mut self.link.settled, true)
+    }
+
+    /// The on-ready sweep's last step: a link that just settled forgets what
+    /// was pushed, then the desired profile goes out after every setting.
+    pub(crate) fn profile_sync_settled(&mut self, newly_settled: bool, out: &mut CoreOutput) {
+        if newly_settled {
+            self.profile_sync.settled();
+        }
         self.drive_profile_sync(out);
     }
 
@@ -403,22 +405,15 @@ impl CremaCore {
         tag: Option<SyncTag>,
         out: &mut CoreOutput,
     ) {
-        let (clear_warning, holds) = self.profile_sync.completed(tag);
+        let (clear_warning, holds) = self.profile_sync.completed(tag, self.link.generation);
         if clear_warning {
             out.events.push(Event::ProfileSyncWarning { active: false });
         }
-        let landed = holds.is_some();
         if let Some(fingerprint) = holds {
             out.events.push(Event::ProfileSyncHolds { fingerprint });
         }
         // A change that arrived meanwhile goes out now.
         self.drive_profile_sync(out);
-        // The DE1 holds the desired profile: the group target follows it, as
-        // Decenza re-sends the shot settings after every profile upload. A
-        // newer upload just started re-sends it when that one lands.
-        if landed && !self.profile_upload_in_progress() {
-            self.resend_group_target(out);
-        }
     }
 
     /// The group target the steam / hot-water packet carries: the effective
@@ -439,7 +434,10 @@ impl CremaCore {
     ) {
         match tag {
             Some(tag) => {
-                if self.profile_sync.failed(&tag, self.clock) {
+                if self
+                    .profile_sync
+                    .failed(&tag, self.clock, self.link.generation)
+                {
                     out.events.push(Event::ProfileSyncWarning { active: true });
                 }
             }
@@ -459,7 +457,7 @@ impl CremaCore {
             && self.parked_upload.is_none()
             && self.maintenance.is_none()
             && self.last_state.is_some_and(|s| idle_enough(s.state));
-        let Some(desired) = self.profile_sync.due(self.clock, ready) else {
+        let Some(desired) = self.profile_sync.due(self.clock, ready, self.link.settled) else {
             return;
         };
         match self.upload_crema_profile(&desired.profile, &desired.qc, self.clock) {
@@ -467,7 +465,7 @@ impl CremaCore {
                 out.events.extend(upload.events);
                 out.commands.extend(upload.commands);
                 if self.profile_upload_in_progress() {
-                    let tag = self.profile_sync.started(fingerprint);
+                    let tag = self.profile_sync.started(fingerprint, self.link.generation);
                     if let Some(running) = self.profile_upload.as_mut() {
                         running.sync = Some(tag.clone());
                     }
@@ -513,47 +511,75 @@ mod tests {
     #[test]
     fn f7_3_stale_generation_results_are_ignored() {
         let mut sync = ProfileSync::default();
-        sync.settle();
+        sync.settled();
         sync.set_desired(Some(desired("a")));
-        let old = sync.started("a".into());
+        let old = sync.started("a".into(), 0);
         assert!(!sync.disconnected());
-        sync.settle();
-        assert_eq!(sync.completed(Some(old.clone())), (false, None));
+        sync.settled();
+        assert_eq!(sync.completed(Some(old.clone()), 1), (false, None));
         assert_eq!(sync.last_pushed, None);
-        assert!(!sync.failed(&old, Duration::ZERO));
+        assert!(!sync.failed(&old, Duration::ZERO, 1));
         assert_eq!(sync.retry_at, None);
         // The new generation's own upload counts.
-        let new = sync.started("a".into());
-        assert_eq!(sync.completed(Some(new)), (false, Some("a".into())));
+        let new = sync.started("a".into(), 1);
+        assert_eq!(sync.completed(Some(new), 1), (false, Some("a".into())));
         assert_eq!(sync.last_pushed.as_deref(), Some("a"));
         let _ = tag(0, "x");
     }
 
-    /// AC-F7.4 (model half): 3 s, 10 s, 30 s, then 30 s; one warning per streak.
+    /// AC-HW10b (R2): an upload result tagged before a `reset()` is
+    /// ignored — the generation it carries is never reused.
+    #[test]
+    fn stale_result_after_reset_ignored() {
+        let mut core = crate::CremaCore::new_with_model(1);
+        let _ = core.on_notification(crate::Source::De1State, &[2, 0], 0);
+        let profile = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
+        let _ = core.set_desired_profile(Some(&profile), &BrewOverrides::default(), Duration::ZERO);
+        let _ = core.connect_sweep(&de1_domain::ConnectSweepSettings::default(), 10);
+        let tag = core
+            .profile_upload
+            .as_ref()
+            .and_then(|u| u.sync.clone())
+            .expect("a sync upload runs");
+        let _ = core.reset();
+        let mut out = CoreOutput::default();
+        core.profile_sync_upload_completed(Some(tag), &mut out);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::ProfileSyncHolds { .. }))
+        );
+        assert_eq!(core.profile_sync_status().last_pushed, None);
+    }
+
+    /// AC-F7.4 (model half): 3 s, 10 s, 30 s, then 30 s; one warning per streak.    /// AC-F7.4 (model half): 3 s, 10 s, 30 s, then 30 s; one warning per streak.
     #[test]
     fn f7_4_retry_backoff_schedule() {
         let mut sync = ProfileSync::default();
-        sync.settle();
+        sync.settled();
         assert!(sync.state_seen(), "the first state of the generation");
         assert!(!sync.state_seen(), "only the first");
         sync.set_desired(Some(desired("a")));
         let mut now = Duration::ZERO;
         let mut warnings = 0;
         for expected in [3, 10, 30, 30, 30] {
-            let t = sync.started("a".into());
-            if sync.failed(&t, now) {
+            let t = sync.started("a".into(), 0);
+            if sync.failed(&t, now, 0) {
                 warnings += 1;
             }
             let at = sync.retry_at.expect("a retry is scheduled");
             assert_eq!(at - now, Duration::from_secs(expected));
-            assert!(sync.due(at - Duration::from_millis(1), true).is_none());
-            assert!(sync.due(at, true).is_some());
+            assert!(
+                sync.due(at - Duration::from_millis(1), true, true)
+                    .is_none()
+            );
+            assert!(sync.due(at, true, true).is_some());
             now = at;
         }
         assert_eq!(warnings, 1, "one warning for the streak");
-        let t = sync.started("a".into());
+        let t = sync.started("a".into(), 0);
         assert_eq!(
-            sync.completed(Some(t)),
+            sync.completed(Some(t), 0),
             (true, Some("a".into())),
             "success clears it"
         );

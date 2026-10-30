@@ -21,6 +21,9 @@ pub mod firmware_info;
 mod hds_sleep_tests;
 mod idle_sleep;
 mod maintenance_run;
+mod packet_sync;
+#[cfg(test)]
+mod packet_sync_tests;
 mod profile_sync;
 #[cfg(test)]
 mod scale_robustness_tests;
@@ -55,7 +58,7 @@ use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
 use de1_domain::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AutoStop, BeverageType, BrewOverrides, BrewRecipe,
     BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, CremaProfile, Estimate, FlowAlgorithm,
-    FlowEstimator, LineFreqDetector, LowWaterMonitor, MAX_COUNTED_GAP_S, Profile,
+    FlowEstimator, HotWaterDose, LineFreqDetector, LowWaterMonitor, MAX_COUNTED_GAP_S, Profile,
     STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor,
     StepWeightExit, StopCapture, StopConfig, StopReason, StopTargets, TankLevelSmoother,
     TareSettleWindow, VolumeIntegrator, WaterEvent, WaterMonitor, WeightSpikeGate, WeightUnit,
@@ -151,10 +154,6 @@ const UNTARED_STABLE_MIN: Duration = Duration::from_secs(1);
 /// and falls back to suppressing SAW (the reading never stopped moving — a
 /// hand, a bump, a cup still being lowered).
 const UNTARED_SETTLE_WINDOW: Duration = Duration::from_secs(2);
-/// Hot-water volume (ml) requested when a scale is connected: the legacy app
-/// asks for far more water than wanted so the scale's weight-based stop is what
-/// cuts off the pour (`binary.tcl` `return_de1_packed_steam_hotwater_settings`).
-const HOT_WATER_STOP_ON_SCALE_ML: f32 = 250.0;
 /// The legacy `steam_eco_temperature` default (°C): the lower steam target the
 /// machine drops to after a long idle period (`machine.tcl:33`).
 const STEAM_ECO_TEMPERATURE_C: f32 = 136.0;
@@ -444,10 +443,13 @@ const POST_SHOT_SETTLE_RISE_G: f32 = 0.1;
 /// The steam / hot-water targets the shells own in the DE1's combined
 /// settings packet (cuuid_0B), the input to
 /// [`set_steam_hotwater_targets`](CremaCore::set_steam_hotwater_targets).
-/// The group target is the core's (the effective profile's temperature);
-/// every other field (the flag byte, the hot-water timeout, the espresso
-/// volume) is the machine's, so the core keeps it.
-#[derive(Debug, Clone, PartialEq)]
+/// The hot-water volume and timeout are resolved from the dose and the
+/// group target is the effective profile's temperature, both by the core;
+/// every other field (the flag byte, the espresso volume) is the machine's,
+/// so the core keeps it.
+#[typeshare::typeshare]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SteamHotWaterTargets {
     /// Target steam temperature, °C (0 turns the heater off).
     pub steam_temp_c: f32,
@@ -455,9 +457,9 @@ pub struct SteamHotWaterTargets {
     pub steam_timeout_s: f32,
     /// Target hot-water temperature, °C.
     pub hot_water_temp_c: f32,
-    /// Hot-water volume, ml (the user's dial; the scale override is the
-    /// core's).
-    pub hot_water_volume_ml: f32,
+    /// The hot-water dose: time, volume or ratio (see
+    /// [`de1_domain::hot_water`]).
+    pub hot_water: HotWaterDose,
 }
 
 /// The headless Crema application core.
@@ -479,25 +481,37 @@ pub struct CremaCore {
     water: WaterMonitor,
     /// Tracks steam sessions, eco mode, and steam-clog detection.
     steam: SteamMonitor,
-    /// The most recent steam / hot-water [`ShotSettings`] supplied by the
-    /// shell, retained so eco-mode transitions can rewrite the steam target.
-    /// `None` until [`set_steam_hotwater_settings`](Self::set_steam_hotwater_settings).
-    /// NOTE: this snapshot tracks the MACHINE (connect-time reads and change
-    /// notifications overwrite it), so with a scale connected its hot-water
-    /// volume can be the 250 ml wire override echoed back — never read a
-    /// stop target from it (review #25; use `user_hot_water_volume_ml`).
+    /// The steam / hot-water packet the machine last reported or Crema last
+    /// wrote: the baseline whose fields Crema doesn't own (the flag byte,
+    /// the espresso volume, the group target with no desired profile) are
+    /// kept. With a scale its hot-water volume can be the 250 ml backstop,
+    /// so no target is ever read from it (review #25).
     steam_hotwater_settings: Option<ShotSettings>,
-    /// The hot-water volume the USER configured, ml — the source of truth
-    /// for the hot-water-by-weight target and for every outgoing settings
-    /// write. Kept apart from `steam_hotwater_settings` because the machine
-    /// echoes back the scale-mode 250 ml override, which must never
-    /// redefine the user's dial (review #25: setting 150 ml then receiving
-    /// one echo made the next pour stop at 250 g).
-    user_hot_water_volume_ml: Option<f32>,
+    /// The steam / hot-water targets and the hot-water dose the user set —
+    /// the source of every packet write and of the hot-water weight stop.
+    /// Kept apart from `steam_hotwater_settings`, which the machine echo
+    /// overwrites (review #25). User intent: kept across
+    /// [`reset`](Self::reset), so a group-head pour right after one still
+    /// arms its weight stop (as #56 did for the espresso stop targets).
+    steam_hotwater_targets: Option<SteamHotWaterTargets>,
+    /// The DE1 connection the profile sync and the packet sync share — see
+    /// [`packet_sync`].
+    link: packet_sync::LinkSession,
+    /// The encoded packet written in this link generation; the packet sync
+    /// never writes the same bytes twice.
+    shot_settings_written: Option<[u8; 9]>,
+    /// This generation's one restore after a foreign packet change is used.
+    foreign_restore_used: bool,
+    /// The next cuuid_0B data is the reply to the shells' connect-time seed
+    /// read: never a foreign change.
+    shot_settings_read_pending: bool,
+    /// The hot-water target last sent in [`Event::HotWaterTarget`] this
+    /// generation.
+    last_hot_water_target: Option<de1_domain::HotWaterTarget>,
     /// Hot-water-by-weight: armed (target grams) while a hot-water session
     /// pours with a scale connected. The user's volume translates 1 ml ≈ 1 g
     /// (water density); the wire packet asked the DE1 for far MORE water
-    /// ([`HOT_WATER_STOP_ON_SCALE_ML`]) precisely so this scale-side stop is
+    /// ([`de1_domain::HOT_WATER_STOP_ON_SCALE_ML`]) precisely so this scale-side stop is
     /// the one that cuts the pour — it was the missing half of that de1app
     /// convention. Cleared when the session completes or the stop fires.
     hot_water_stop_target_g: Option<f32>,
@@ -1010,7 +1024,12 @@ impl CremaCore {
             water: WaterMonitor::new(),
             steam: SteamMonitor::new(),
             steam_hotwater_settings: None,
-            user_hot_water_volume_ml: None,
+            steam_hotwater_targets: None,
+            link: packet_sync::LinkSession::default(),
+            shot_settings_written: None,
+            foreign_restore_used: false,
+            shot_settings_read_pending: true,
+            last_hot_water_target: None,
             hot_water_stop_target_g: None,
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
@@ -1510,6 +1529,13 @@ impl CremaCore {
                 data: vec![requested_state(MachineState::Idle)],
             });
         }
+        // The pending packet goes between the Idle bounce and the pour, so
+        // "change the profile, then tap Hot water" pours the new target. It
+        // arms nothing: the stop is armed from the state notification, for
+        // every initiator.
+        if state == MachineState::HotWater {
+            self.drive_shot_settings(&mut out, true);
+        }
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1RequestedState,
             data: vec![requested_state(state)],
@@ -1659,144 +1685,9 @@ impl CremaCore {
         out
     }
 
-    /// Build a [`Command`] that writes the DE1's steam / hot-water
-    /// [`ShotSettings`] (`cuuid_0B`).
-    ///
-    /// The caller supplies the user's configured settings. When a scale is
-    /// connected the hot-water volume on the wire is overridden so the scale's
-    /// weight-based stop cuts the pour off — see
-    /// [`steam_settings_for_eco`](Self::steam_settings_for_eco).
-    ///
-    /// The supplied settings are retained *unmodified* so a later eco-mode
-    /// transition can rewrite the steam target on the same baseline; the
-    /// scale-connected hot-water override is applied only when building the
-    /// wire packet (see [`steam_settings_for_eco`](Self::steam_settings_for_eco))
-    /// so it does not stick after the scale disconnects.
-    ///
-    /// **Range clamps** (defense-in-depth — the web shell already steppers
-    /// to similar ranges, but external callers / replays / future
-    /// bridges could bypass that):
-    ///
-    /// - `steam_temp_c`: 0 (disabled) or 135–170 °C. Legacy default
-    ///   skin slider runs 134–170; legacy `binary.tcl:184-186` forces
-    ///   values `<135` to `0` (disable the steam heater entirely).
-    ///   Values above 170 °C risk over-heating the steam boiler —
-    ///   neither TCL nor reaprime intends them. The 135 °C floor
-    ///   matches TCL exactly.
-    /// - `hot_water_temp_c`: 0–100 °C. Above 100 °C boils → pressure
-    ///   event. The legacy default is 85 °C; reaprime doesn't clamp.
-    /// - `group_temp_c`: 0–105 °C (matches legacy `vars.tcl`
-    ///   `range_check_shot_variables` espresso_temperature 0..105).
-    ///   The group cannot usefully run above 100 °C; the +5 °C head-
-    ///   room matches the TCL guard.
-    ///
-    /// The `*_timeout_s` and `*_volume_ml` fields are not clamped here
-    /// — they encode to a `u8` (capped at 255 in the protocol layer
-    /// via `u8p0_encode`). A steam timeout of 0 would stop steam at once,
-    /// so it goes out as 255 s, as de1app sends it (`binary.tcl`); the
-    /// retained settings keep the user's 0.
-    pub fn set_steam_hotwater_settings(&mut self, settings: ShotSettings) -> CoreOutput {
-        if let Some(out) = self.refuse_if_firmware_locked("set_steam_hotwater_settings") {
-            return out;
-        }
-        let clamped = Self::clamp_shot_settings(settings);
-        // The user's dialled volume — the one value the machine echo must
-        // never overwrite (see `user_hot_water_volume_ml`).
-        self.user_hot_water_volume_ml = Some(clamped.hot_water_volume_ml);
-        self.steam_hotwater_settings = Some(clamped);
-        let mut out = CoreOutput::default();
-        out.commands.push(Command::WriteCharacteristic {
-            target: WriteTarget::De1ShotSettings,
-            data: self
-                .steam_settings_for_eco(self.steam.is_eco_mode())
-                .encode()
-                .to_vec(),
-        });
-        // The DE1 only notifies cuuid_0B for machine-initiated changes, never
-        // as an echo of a host write — so project the retained settings back
-        // as a ShotSettingsRead here, or the shells' machine snapshot (which
-        // outranks the QC dial in `resolve_mode_targets`) stays frozen at the
-        // connect-time seed read and the Brew mode chips keep showing it
-        // (issue 43). The user target is projected, not the eco/scale wire
-        // overrides: those are transient wire-only rewrites on this baseline.
-        let retained = self
-            .steam_hotwater_settings
-            .as_ref()
-            .expect("just set above");
-        out.events.push(Event::ShotSettingsRead {
-            steam_temp: retained.steam_temp_c,
-            steam_timeout: retained.steam_timeout_s,
-            hot_water_temp: retained.hot_water_temp_c,
-            hot_water_volume: retained.hot_water_volume_ml,
-            hot_water_timeout: retained.hot_water_timeout_s,
-            espresso_volume: retained.espresso_volume_ml,
-            group_temp: retained.group_temp_c,
-        });
-        out
-    }
-
-    /// Set the steam / hot-water targets and write the combined packet
-    /// (cuuid_0B) read-modify-write. The packet carries eight fields; the
-    /// ones in `targets` replace the current values, and the group target is
-    /// the effective desired profile's temperature (de1app and Decenza send
-    /// the profile's temperature; see
-    /// [`set_desired_profile`](Self::set_desired_profile)). Every other field
-    /// (the flag byte, the hot-water timeout, the espresso volume, and the
-    /// group target with no desired profile) is kept from the last packet
-    /// the machine reported or Crema wrote — reaprime re-reads the
-    /// characteristic before every write and keeps all fields, flags
-    /// included (`de1_controller.dart` `_writeSteamSettings`). Before any
-    /// read, the legacy defaults stand in ([`ShotSettings::default`]: flags
-    /// 0, 60 s, 200 ml, 92 °C, as de1app and Decenza send).
-    ///
-    /// The only way the shells write this packet, and what
-    /// [`connect_sweep`](Self::connect_sweep) uses. Clamps, the eco and
-    /// scale overrides and the read-back projection are
-    /// [`set_steam_hotwater_settings`](Self::set_steam_hotwater_settings)'s.
-    pub fn set_steam_hotwater_targets(&mut self, targets: &SteamHotWaterTargets) -> CoreOutput {
-        let current = self.steam_hotwater_settings.clone().unwrap_or_default();
-        let packet = ShotSettings {
-            steam_temp_c: targets.steam_temp_c,
-            steam_timeout_s: targets.steam_timeout_s,
-            hot_water_temp_c: targets.hot_water_temp_c,
-            hot_water_volume_ml: targets.hot_water_volume_ml,
-            group_temp_c: self.profile_group_temp_c().unwrap_or(current.group_temp_c),
-            ..current
-        };
-        self.set_steam_hotwater_settings(packet)
-    }
-
-    /// Re-send the steam / hot-water packet when the desired profile's group
-    /// target differs from the packet's (at wire resolution). Only once a
-    /// packet is known, read or written: before that there is nothing to
-    /// keep, and the connect sweep sends it with the right group target.
-    pub(crate) fn resend_group_target(&mut self, out: &mut CoreOutput) {
-        let (Some(current), Some(group)) = (
-            self.steam_hotwater_settings.clone(),
-            self.profile_group_temp_c(),
-        ) else {
-            return;
-        };
-        let wire = |c: f32| (c * 256.0).round();
-        if wire(current.group_temp_c) == wire(group) {
-            return;
-        }
-        let packet = ShotSettings {
-            group_temp_c: group,
-            // The user's dial, never a machine echo of the scale override.
-            hot_water_volume_ml: self
-                .user_hot_water_volume_ml
-                .unwrap_or(current.hot_water_volume_ml),
-            ..current
-        };
-        let more = self.set_steam_hotwater_settings(packet);
-        out.events.extend(more.events);
-        out.commands.extend(more.commands);
-    }
-
     /// Apply the documented range clamps to a [`ShotSettings`] before it
-    /// is retained or written. See [`set_steam_hotwater_settings`] for
-    /// the full rationale.
+    /// is written (defense-in-depth: restored, adopted and relayed values
+    /// reach here too).
     ///
     /// - `steam_temp_c`: 0 (disabled) or 135–170 °C — values in
     ///   `(0, 135)` are snapped to 0 to match legacy
@@ -2432,47 +2323,6 @@ impl CremaCore {
     /// output.
     pub fn set_water_warn_ml(&mut self, warn_ml: Option<f32>) {
         self.low_water.set_warn_ml(warn_ml);
-    }
-
-    /// The steam / hot-water [`ShotSettings`] to write, with the steam target
-    /// temperature set for the given eco state. Falls back to a representative
-    /// default when no settings have been supplied yet.
-    ///
-    /// When a scale is connected the hot-water volume is overridden to
-    /// [`HOT_WATER_STOP_ON_SCALE_ML`]: the legacy app asks for far more water
-    /// than wanted so the scale's weight-based stop is what cuts the pour off,
-    /// since a weight stop is more accurate than the DE1's volume estimate
-    /// (`binary.tcl` `return_de1_packed_steam_hotwater_settings`). The override
-    /// is applied here, on the wire packet, rather than to the stored user
-    /// settings, so it lifts as soon as the scale disconnects.
-    fn steam_settings_for_eco(&self, eco: bool) -> ShotSettings {
-        let mut settings = self.steam_hotwater_settings.clone().unwrap_or_default();
-        if eco {
-            settings.steam_temp_c = self.steam_eco_temp;
-        }
-        // Maintenance cycle: the steam heater is held off (de1app `dd5ebda4`)
-        // — wins over eco, and over a user edit made mid-cycle.
-        if self.maintenance_steam_off {
-            settings.steam_temp_c = 0.0;
-        }
-        // Rebase the volume on the USER's dial before deciding the override:
-        // the stored snapshot may hold the machine-echoed 250 ml sentinel,
-        // and a scale-less rewrite from that would ask the DE1 for a quarter
-        // litre with nothing watching (review #25).
-        if let Some(user_ml) = self.user_hot_water_volume_ml {
-            settings.hot_water_volume_ml = user_ml;
-        }
-        if self.scale.is_some() && settings.hot_water_volume_ml > 0.0 {
-            settings.hot_water_volume_ml = HOT_WATER_STOP_ON_SCALE_ML;
-        }
-        // A steam timeout of 0 tells the DE1 to stop steam immediately, so
-        // de1app sends the maximum instead (`binary.tcl`: "a setting of zero
-        // would mean, turn off steam immediately, so we set it instead to the
-        // maximum allowed"). Wire-only, like the overrides above.
-        if settings.steam_timeout_s.is_nan() || settings.steam_timeout_s.round() < 1.0 {
-            settings.steam_timeout_s = STEAM_TIMEOUT_MAX_S;
-        }
-        settings
     }
 
     /// Build a [`Command`] that tares the connected scale. Empty if no scale is
@@ -3218,6 +3068,10 @@ impl CremaCore {
         // Descale progress advances between substate boundaries that can be
         // seven minutes apart; the tank level's steady stream drives it.
         self.update_maintenance(now, &mut out);
+        // Any input may have moved the packet (a scale's recovery, a state
+        // leaving a flow, a foreign change); notifications keep arriving when
+        // a browser tab is hidden and its timers throttle.
+        self.drive_shot_settings(&mut out, false);
         self.gate_read_only(out)
     }
 
@@ -3312,6 +3166,9 @@ impl CremaCore {
         self.send_pending_end_of_shot_clear(&mut out);
         // A due profile-sync retry goes out.
         self.drive_profile_sync(&mut out);
+        // The packet's backstop: a stale scale, or an input change no
+        // notification has carried yet.
+        self.drive_shot_settings(&mut out, false);
         self.update_machine_error(now, &mut out);
         self.update_maintenance(now, &mut out);
         // Backstop for the post-stop drip settle (#64): guarantees a deferred
@@ -3383,7 +3240,7 @@ impl CremaCore {
         self.firmware_flash_link_lost();
         let mut out = CoreOutput::default();
         // A new connection generation: what was pushed is forgotten.
-        self.profile_sync_disconnected(&mut out);
+        self.link_lost_session(&mut out);
         self.stop_scale_timer_for_link_loss(&mut out);
         self.tank_level.reset();
         // The tank may be refilled while the link is down: warn afresh.
@@ -3429,8 +3286,12 @@ impl CremaCore {
         // The profile sync keeps the desired profile (user intent) and starts a
         // new connection generation; it is never persisted, so a restart
         // starts empty and the next connect uploads.
-        self.profile_sync_disconnected(&mut out);
+        self.link_lost_session(&mut out);
         let profile_sync = std::mem::take(&mut self.profile_sync);
+        // The link session too: a generation set back to 0 could match a late
+        // upload result from before the reset (F7.3's stale-result rule).
+        let link = self.link;
+        let steam_hotwater_targets = self.steam_hotwater_targets.take();
         // `read_only` is a device-role config (this core is a secondary mirror),
         // not session/shot state — it must survive a reset, else a reconnect
         // (the BLE manager resets the core on every disconnect) would turn the
@@ -3520,6 +3381,8 @@ impl CremaCore {
         self.profile_volume_limit = profile_volume_limit;
         self.max_shot_duration = max_shot_duration;
         self.profile_sync = profile_sync;
+        self.link = link;
+        self.steam_hotwater_targets = steam_hotwater_targets;
         self.gate_read_only(out)
     }
 
@@ -3546,17 +3409,12 @@ impl CremaCore {
         };
         let entering = is_maintenance(next) && !prev.is_some_and(is_maintenance);
         let leaving = !is_maintenance(next) && self.maintenance_steam_off;
-        if !(entering || leaving) || self.steam_hotwater_settings.is_none() {
+        if !(entering || leaving) {
             return;
         }
         self.maintenance_steam_off = entering;
-        out.commands.push(Command::WriteCharacteristic {
-            target: WriteTarget::De1ShotSettings,
-            data: self
-                .steam_settings_for_eco(self.steam.is_eco_mode())
-                .encode()
-                .to_vec(),
-        });
+        // Maintenance states aren't flow states, so this goes out now.
+        self.drive_shot_settings(out, false);
     }
 
     /// Emit [`Event::MachineErrorChanged`] when the fault the shells should
@@ -5338,45 +5196,6 @@ impl CremaCore {
         }
     }
 
-    /// Decode and process a `ShotSettings` notification — fired by the
-    /// firmware when the steam / hot-water / group-temp settings change
-    /// (either from on-machine UI or from a host write), and as the reply
-    /// to a connect-time Read of `cuuid_0B`. Caches the value on
-    /// [`steam_hotwater_settings`](Self::steam_hotwater_settings) and
-    /// emits one [`Event::ShotSettingsRead`].
-    fn handle_shot_settings_read(&mut self, data: &[u8], out: &mut CoreOutput) {
-        let mut settings = match ShotSettings::decode(data) {
-            Ok(s) => s,
-            Err(e) => {
-                out.events.push(Event::DecodeError {
-                    message: e.to_string(),
-                });
-                return;
-            }
-        };
-        // A 0 °C steam target read back during a maintenance cycle is our own
-        // temporary override, not the user's setting — keep the real one, so
-        // neither the shells' snapshot nor the restore on exit adopts it.
-        if self.maintenance_steam_off
-            && settings.steam_temp_c == 0.0
-            && let Some(retained) = &self.steam_hotwater_settings
-        {
-            settings.steam_temp_c = retained.steam_temp_c;
-        }
-        out.events.push(Event::ShotSettingsRead {
-            steam_temp: settings.steam_temp_c,
-            steam_timeout: settings.steam_timeout_s,
-            hot_water_temp: settings.hot_water_temp_c,
-            hot_water_volume: settings.hot_water_volume_ml,
-            hot_water_timeout: settings.hot_water_timeout_s,
-            espresso_volume: settings.espresso_volume_ml,
-            group_temp: settings.group_temp_c,
-        });
-        // RS6: cache by move after the event has copied its scalar fields out,
-        // rather than cloning up front.
-        self.steam_hotwater_settings = Some(settings);
-    }
-
     /// Translate a domain [`ShotEvent`] into FFI [`Event`]s, maintaining the
     /// shot-start timestamp and the auto-stop lifecycle.
     ///
@@ -5653,16 +5472,18 @@ impl CremaCore {
                 // entry (with the settle gate, same as an espresso start)
                 // so the vessel's weight never counts as water; the tare
                 // itself still respects the user's auto-tare preference.
-                if kind == de1_domain::WaterSessionKind::HotWater {
-                    // USER-configured volume only — the machine snapshot can
-                    // carry the echoed 250 ml override (review #25).
-                    let target_ml = self.user_hot_water_volume_ml.unwrap_or(0.0);
-                    if self.scale.is_some() && target_ml > 0.0 {
-                        self.hot_water_stop_target_g = Some(target_ml);
-                        if self.auto_tare {
-                            self.push_tare_command(out);
-                            self.tare_gate = Some(now);
-                        }
+                // Whoever started the pour — Crema, a remote or the
+                // group-head button — gets the same stop: the resolved
+                // target's weight (volume and ratio modes with an
+                // operational scale; never time mode). Never the machine
+                // echo, which can carry the 250 ml backstop (review #25).
+                if kind == de1_domain::WaterSessionKind::HotWater
+                    && let Some(target_g) = self.hot_water_target().and_then(|t| t.stop_weight_g)
+                {
+                    self.hot_water_stop_target_g = Some(target_g);
+                    if self.auto_tare {
+                        self.push_tare_command(out);
+                        self.tare_gate = Some(now);
                     }
                 }
                 out.events.push(Event::WaterSessionStarted { kind });
@@ -5678,8 +5499,7 @@ impl CremaCore {
     }
 
     /// Translate a domain [`SteamEvent`] into FFI [`Event`]s. An eco-mode
-    /// change also emits the [`Command`] that rewrites the DE1's steam target
-    /// temperature.
+    /// change also rewrites the packet's steam target temperature.
     fn map_steam_event(&mut self, event: SteamEvent, out: &mut CoreOutput) {
         match event {
             SteamEvent::Started => out.events.push(Event::SteamSessionStarted),
@@ -5694,10 +5514,9 @@ impl CremaCore {
             }
             SteamEvent::EcoModeChanged(eco) => {
                 out.events.push(Event::SteamEcoModeChanged { eco });
-                out.commands.push(Command::WriteCharacteristic {
-                    target: WriteTarget::De1ShotSettings,
-                    data: self.steam_settings_for_eco(eco).encode().to_vec(),
-                });
+                // Not held for a flow state: leaving eco as a steam session
+                // starts must restore the steam target for that session.
+                self.drive_shot_settings(out, true);
             }
         }
     }
@@ -6064,7 +5883,7 @@ fn mmr_write_command(register: MmrRegister, value: u32, byte_len: u8) -> CoreOut
 #[cfg(test)]
 mod tests {
     use super::*;
-    use de1_domain::ShotPhase;
+    use de1_domain::{HOT_WATER_STOP_ON_SCALE_ML, HotWaterMode, ShotPhase};
     use de1_protocol::{MachineState, SubState, heater_voltage_from_raw};
     // Per-scale protocol modules used by the tests; the production lib
     // no longer reaches into these directly (the capability-driven
@@ -7925,6 +7744,38 @@ mod tests {
         )));
     }
 
+    /// Steam / hot-water targets from a packet: its steam and hot-water
+    /// fields, the hot water as a volume-mode dose.
+    fn targets_of(s: &ShotSettings) -> SteamHotWaterTargets {
+        SteamHotWaterTargets {
+            steam_temp_c: s.steam_temp_c,
+            steam_timeout_s: s.steam_timeout_s,
+            hot_water_temp_c: s.hot_water_temp_c,
+            hot_water: HotWaterDose {
+                mode: de1_domain::HotWaterMode::Volume,
+                volume_ml: s.hot_water_volume_ml,
+                ..HotWaterDose::default()
+            },
+        }
+    }
+
+    /// Mark the link settled, as the on-ready connect sweep does: the packet
+    /// sync writes only then.
+    fn settle(core: &mut CremaCore) {
+        core.link.settled = true;
+    }
+
+    /// Set the steam / hot-water targets of `s` on a settled link, with the
+    /// machine's state known (Idle unless one was reported): the packet
+    /// sync waits out an unknown state.
+    fn set_packet(core: &mut CremaCore, s: ShotSettings) -> CoreOutput {
+        settle(core);
+        if core.last_state.is_none() {
+            let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        }
+        core.set_steam_hotwater_targets(&targets_of(&s))
+    }
+
     /// The `ShotSettings` writes in an output, decoded.
     fn shot_settings_writes(out: &CoreOutput) -> Vec<ShotSettings> {
         out.commands
@@ -7944,10 +7795,13 @@ mod tests {
         for maintenance in [18u8, 10, 20] {
             // Clean, Descale, AirPurge
             let mut core = CremaCore::new();
-            let _ = core.set_steam_hotwater_settings(ShotSettings {
-                steam_temp_c: 155.0,
-                ..ShotSettings::default()
-            });
+            let _ = set_packet(
+                &mut core,
+                ShotSettings {
+                    steam_temp_c: 155.0,
+                    ..ShotSettings::default()
+                },
+            );
             let _ = core.on_notification(Source::De1State, &[2, 0], 0);
             // Entering: one write with the steam target forced to 0.
             let out = core.on_notification(Source::De1State, &[maintenance, 0], 1_000);
@@ -7970,10 +7824,13 @@ mod tests {
     #[test]
     fn maintenance_steam_off_survives_echoes_and_user_edits() {
         let mut core = CremaCore::new();
-        let _ = core.set_steam_hotwater_settings(ShotSettings {
-            steam_temp_c: 150.0,
-            ..ShotSettings::default()
-        });
+        let _ = set_packet(
+            &mut core,
+            ShotSettings {
+                steam_temp_c: 150.0,
+                ..ShotSettings::default()
+            },
+        );
         let _ = core.on_notification(Source::De1State, &[2, 0], 0);
         let _ = core.on_notification(Source::De1State, &[18, 0], 1_000);
         // A read-back of our own 0 °C override is not adopted as the setting.
@@ -7987,12 +7844,16 @@ mod tests {
             e,
             Event::ShotSettingsRead { steam_temp, .. } if *steam_temp == 150.0
         )));
-        // A user edit mid-cycle is stored but still written with steam off.
-        let out = core.set_steam_hotwater_settings(ShotSettings {
-            steam_temp_c: 160.0,
-            ..ShotSettings::default()
-        });
-        assert_eq!(shot_settings_writes(&out)[0].steam_temp_c, 0.0);
+        // A user edit mid-cycle is stored, but the packet keeps the steam
+        // off: the same bytes, so nothing new is written.
+        let out = set_packet(
+            &mut core,
+            ShotSettings {
+                steam_temp_c: 160.0,
+                ..ShotSettings::default()
+            },
+        );
+        assert!(shot_settings_writes(&out).is_empty());
         // Leaving restores the latest user target.
         let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
         assert_eq!(shot_settings_writes(&out)[0].steam_temp_c, 160.0);
@@ -8008,7 +7869,7 @@ mod tests {
         assert!(shot_settings_writes(&out).is_empty());
         // And an ordinary flow (espresso) never touches the steam target.
         let mut core = CremaCore::new();
-        let _ = core.set_steam_hotwater_settings(ShotSettings::default());
+        let _ = set_packet(&mut core, ShotSettings::default());
         let _ = core.on_notification(Source::De1State, &[2, 0], 0);
         let out = core.on_notification(Source::De1State, &[4, 1], 1_000);
         assert!(shot_settings_writes(&out).is_empty());
@@ -9736,7 +9597,7 @@ mod tests {
         // THIS is the stop that cuts the pour.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_steam_hotwater_settings(hotwater_settings(150.0));
+        set_packet(&mut core, hotwater_settings(150.0));
         let out = core.on_notification(Source::De1State, &[6, 5], 0);
         // Entering hot water tares the scale (settle-gated, like espresso).
         assert!(
@@ -9780,7 +9641,7 @@ mod tests {
         // characteristic. That echo must not become the by-weight target.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_steam_hotwater_settings(hotwater_settings(150.0));
+        set_packet(&mut core, hotwater_settings(150.0));
         // The machine echoes the settings we actually wrote — 250 ml.
         let echo = hotwater_settings(HOT_WATER_STOP_ON_SCALE_ML).encode();
         core.on_notification(Source::De1ShotSettings, &echo, 500);
@@ -9803,7 +9664,7 @@ mod tests {
         // with nothing watching.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_steam_hotwater_settings(hotwater_settings(150.0));
+        set_packet(&mut core, hotwater_settings(150.0));
         let echo = hotwater_settings(HOT_WATER_STOP_ON_SCALE_ML).encode();
         core.on_notification(Source::De1ShotSettings, &echo, 500);
         // The scale disconnects (unrecognised name clears `scale`).
@@ -9828,10 +9689,18 @@ mod tests {
 
     #[test]
     fn hot_water_by_weight_needs_a_volume_and_does_not_arm_on_a_flush() {
-        // Volume 0 (off) → never arms even with a scale.
+        // Time mode never arms the weight stop, even with a scale.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_steam_hotwater_settings(hotwater_settings(0.0));
+        settle(&mut core);
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        let _ = core.set_steam_hotwater_targets(&SteamHotWaterTargets {
+            hot_water: HotWaterDose {
+                mode: HotWaterMode::Time,
+                ..HotWaterDose::default()
+            },
+            ..targets_of(&hotwater_settings(150.0))
+        });
         core.on_notification(Source::De1State, &[6, 5], 0);
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(30_000), 2_000);
         assert!(
@@ -9843,7 +9712,7 @@ mod tests {
         // A flush (HotWaterRinse) never arms regardless of the volume.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_steam_hotwater_settings(hotwater_settings(150.0));
+        set_packet(&mut core, hotwater_settings(150.0));
         core.on_notification(Source::De1State, &[15, 5], 0);
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(30_000), 2_000);
         assert!(
@@ -9859,7 +9728,7 @@ mod tests {
         // completes, and a later heavy reading must not fire a stale stop.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_steam_hotwater_settings(hotwater_settings(150.0));
+        set_packet(&mut core, hotwater_settings(150.0));
         core.on_notification(Source::De1State, &[6, 5], 0);
         core.on_notification(Source::De1State, &[2, 0], 3_000);
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(30_000), 5_000);
@@ -9872,24 +9741,50 @@ mod tests {
 
     #[test]
     fn the_scale_override_leaves_a_disabled_hot_water_volume_alone() {
-        // Volume 0 means "no volume stop" — bumping it to 250 ml with no
-        // weight watcher armed would pour a quarter litre unwatched.
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC", &[]);
-        let out = core.set_steam_hotwater_settings(hotwater_settings(0.0));
-        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
-            panic!("expected a WriteCharacteristic command");
-        };
-        assert_eq!(data[4], 0, "0 (off) must not become the 250 ml override");
+        // Time mode sends the firmware's time-mode volume (0 = no volume
+        // stop) with or without a scale — bumping it to the 250 ml backstop
+        // with no weight stop armed would cut the timed pour short.
+        for scale in [false, true] {
+            let mut core = CremaCore::new();
+            if scale {
+                core.connect_scale("BOOKOO_SC", &[]);
+            }
+            settle(&mut core);
+            let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+            let out = core.set_steam_hotwater_targets(&SteamHotWaterTargets {
+                hot_water: HotWaterDose {
+                    mode: HotWaterMode::Time,
+                    time_s: 45.0,
+                    ..HotWaterDose::default()
+                },
+                ..steam_targets()
+            });
+            let w = &shot_settings_writes(&out)[0];
+            assert_eq!(
+                w.hot_water_volume_ml,
+                f32::from(de1_domain::HOT_WATER_FIRMWARE.time_mode_wire_volume_ml),
+                "scale {scale}"
+            );
+            assert_eq!(w.hot_water_timeout_s, 45.0);
+        }
     }
 
-    /// The four targets a shell owns.
+    /// The targets a shell owns, the hot water as 150 ml.
     fn steam_targets() -> SteamHotWaterTargets {
         SteamHotWaterTargets {
             steam_temp_c: 148.0,
             steam_timeout_s: 12.0,
             hot_water_temp_c: 80.0,
-            hot_water_volume_ml: 150.0,
+            hot_water: volume_dose(150.0),
+        }
+    }
+
+    /// A volume-mode dose of `ml`.
+    fn volume_dose(ml: f32) -> HotWaterDose {
+        HotWaterDose {
+            mode: HotWaterMode::Volume,
+            volume_ml: ml,
+            ..HotWaterDose::default()
         }
     }
 
@@ -9910,8 +9805,12 @@ mod tests {
 
     #[test]
     fn steam_hotwater_targets_keep_every_field_they_dont_own() {
-        // AC-F5.1: read-modify-write over the machine's last report.
+        // AC-F5.1: read-modify-write over the machine's last report. The
+        // hot-water volume and timeout are Crema's (the dose); the flags,
+        // the espresso volume and the group target stay the machine's.
         let mut core = CremaCore::new();
+        settle(&mut core);
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
         let _ = core.on_notification(
             Source::De1ShotSettings,
             &machine_shot_settings().encode(),
@@ -9926,7 +9825,7 @@ mod tests {
                 steam_timeout_s: 12.0,
                 hot_water_temp_c: 80.0,
                 hot_water_volume_ml: 150.0,
-                hot_water_timeout_s: 45.0,
+                hot_water_timeout_s: 60.0,
                 espresso_volume_ml: 220.0,
                 group_temp_c: 88.0,
             }]
@@ -9936,6 +9835,8 @@ mod tests {
     #[test]
     fn steam_hotwater_targets_use_the_legacy_defaults_before_a_read() {
         let mut core = CremaCore::new();
+        settle(&mut core);
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
         let w = &shot_settings_writes(&core.set_steam_hotwater_targets(&steam_targets()))[0];
         assert_eq!(w.steam_flags, 0);
         assert_eq!(w.hot_water_timeout_s, 60.0);
@@ -9947,7 +9848,7 @@ mod tests {
     #[test]
     fn set_steam_hotwater_settings_writes_the_user_volume_without_a_scale() {
         let mut core = CremaCore::new();
-        let out = core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        let out = set_packet(&mut core, hotwater_settings(50.0));
         let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic command");
         };
@@ -9966,7 +9867,7 @@ mod tests {
         let mut core = CremaCore::new();
         let mut settings = hotwater_settings(50.0);
         settings.steam_temp_c = 180.0; // out of range — projection must be clamped
-        let out = core.set_steam_hotwater_settings(settings);
+        let out = set_packet(&mut core, settings);
         let Some(Event::ShotSettingsRead {
             steam_temp,
             steam_timeout,
@@ -9996,7 +9897,7 @@ mod tests {
         // dial — the override is transient and lifts on scale disconnect.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        let out = core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        let out = set_packet(&mut core, hotwater_settings(50.0));
         let Some(Event::ShotSettingsRead {
             hot_water_volume, ..
         }) = out
@@ -10013,7 +9914,7 @@ mod tests {
     fn set_steam_hotwater_settings_requests_250ml_when_a_scale_is_connected() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        let out = core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        let out = set_packet(&mut core, hotwater_settings(50.0));
         let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic command");
         };
@@ -10027,7 +9928,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         // The user configures 50 ml while a scale is connected.
-        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        set_packet(&mut core, hotwater_settings(50.0));
         // The scale disconnects (an unrecognised name clears `scale`).
         assert_eq!(core.connect_scale("Some Random Device", &[]), None);
         // An eco transition rewrites the settings; the hot-water volume must
@@ -10095,7 +9996,7 @@ mod tests {
     #[test]
     fn steam_eco_mode_engages_on_tick_and_writes_the_eco_temperature() {
         let mut core = CremaCore::new();
-        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        set_packet(&mut core, hotwater_settings(50.0));
         core.enable_steam_eco_mode(true, 0);
         // Before the 600 s idle delay: nothing.
         assert!(core.on_tick(599_000).events.is_empty());
@@ -10116,7 +10017,7 @@ mod tests {
     #[test]
     fn disabling_steam_eco_mode_restores_the_normal_target() {
         let mut core = CremaCore::new();
-        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        set_packet(&mut core, hotwater_settings(50.0));
         core.enable_steam_eco_mode(true, 0);
         core.on_tick(600_000); // engages eco mode
         let out = core.enable_steam_eco_mode(false, 700_000);
@@ -10134,7 +10035,7 @@ mod tests {
     #[test]
     fn a_steam_session_disengages_eco_mode() {
         let mut core = CremaCore::new();
-        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        set_packet(&mut core, hotwater_settings(50.0));
         core.enable_steam_eco_mode(true, 0);
         core.on_tick(600_000); // engages eco mode
         // Steaming is activity: it disengages eco mode.
@@ -10155,7 +10056,7 @@ mod tests {
             kind: IdleActivity::Touch,
         };
         let mut core = CremaCore::new();
-        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        set_packet(&mut core, hotwater_settings(50.0));
         core.enable_steam_eco_mode(true, 0);
         // The user is busy at 500 s (core clock): no eco at 600 s.
         let _ = core.on_tick(500_000);
@@ -10199,7 +10100,7 @@ mod tests {
             kind: IdleActivity::Touch,
         };
         let mut core = CremaCore::new();
-        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        set_packet(&mut core, hotwater_settings(50.0));
         core.enable_steam_eco_mode(true, 0);
         core.set_read_only(true);
         let out = core.on_tick(600_000);
@@ -10731,11 +10632,14 @@ mod tests {
         // stops steam at once (cohort review 02 P3-1). Byte 2 of the
         // 9-byte ShotSettings packet is TargetSteamLength.
         let mut core = CremaCore::new();
-        let out = core.set_steam_hotwater_settings(ShotSettings {
-            steam_temp_c: 150.0,
-            steam_timeout_s: 0.0,
-            ..ShotSettings::default()
-        });
+        let out = set_packet(
+            &mut core,
+            ShotSettings {
+                steam_temp_c: 150.0,
+                steam_timeout_s: 0.0,
+                ..ShotSettings::default()
+            },
+        );
         let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
             panic!("expected the ShotSettings write");
         };
@@ -10745,11 +10649,14 @@ mod tests {
             e,
             Event::ShotSettingsRead { steam_timeout, .. } if *steam_timeout == 0.0
         )));
-        let out = core.set_steam_hotwater_settings(ShotSettings {
-            steam_temp_c: 150.0,
-            steam_timeout_s: 90.0,
-            ..ShotSettings::default()
-        });
+        let out = set_packet(
+            &mut core,
+            ShotSettings {
+                steam_temp_c: 150.0,
+                steam_timeout_s: 90.0,
+                ..ShotSettings::default()
+            },
+        );
         let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
             panic!("expected the ShotSettings write");
         };
@@ -11086,12 +10993,15 @@ mod tests {
         // TCL vars.tcl range_check_shot_variables clamps
         // espresso_temperature to 0..=105. Above 100 °C the group
         // cannot usefully run; +5 °C head-room matches the TCL guard.
+        // The group target isn't a shell input: a baseline (or a profile)
+        // above the range is clamped on the way out.
         let mut core = CremaCore::new();
         let settings = ShotSettings {
             group_temp_c: 200.0,
             ..ShotSettings::default()
         };
-        let out = core.set_steam_hotwater_settings(settings);
+        let _ = core.on_notification(Source::De1ShotSettings, &settings.encode(), 0);
+        let out = set_packet(&mut core, settings);
         assert_eq!(out.commands.len(), 1);
         // Round-trip the wire packet to read the clamped group temp.
         let Command::WriteCharacteristic { data, .. } = &out.commands[0] else {
@@ -11118,7 +11028,7 @@ mod tests {
             hot_water_temp_c: 150.0,
             ..ShotSettings::default()
         };
-        core.set_steam_hotwater_settings(settings);
+        set_packet(&mut core, settings);
         let stored = core
             .steam_hotwater_settings
             .as_ref()
@@ -11135,7 +11045,7 @@ mod tests {
             steam_temp_c: 250.0,
             ..ShotSettings::default()
         };
-        core.set_steam_hotwater_settings(settings);
+        set_packet(&mut core, settings);
         let stored = core
             .steam_hotwater_settings
             .as_ref()
@@ -11155,7 +11065,7 @@ mod tests {
             steam_temp_c: 80.0,
             ..ShotSettings::default()
         };
-        core.set_steam_hotwater_settings(settings);
+        set_packet(&mut core, settings);
         let stored = core
             .steam_hotwater_settings
             .as_ref()
@@ -11170,7 +11080,7 @@ mod tests {
             steam_temp_c: 134.0,
             ..ShotSettings::default()
         };
-        core.set_steam_hotwater_settings(just_under);
+        set_packet(&mut core, just_under);
         let stored = core
             .steam_hotwater_settings
             .as_ref()
@@ -11185,7 +11095,7 @@ mod tests {
             steam_temp_c: 0.0,
             ..ShotSettings::default()
         };
-        core.set_steam_hotwater_settings(off);
+        set_packet(&mut core, off);
         let stored = core
             .steam_hotwater_settings
             .as_ref()
@@ -11197,7 +11107,7 @@ mod tests {
             steam_temp_c: 150.0,
             ..ShotSettings::default()
         };
-        core.set_steam_hotwater_settings(normal);
+        set_packet(&mut core, normal);
         let stored = core
             .steam_hotwater_settings
             .as_ref()
@@ -11209,7 +11119,7 @@ mod tests {
             steam_temp_c: 135.0,
             ..ShotSettings::default()
         };
-        core.set_steam_hotwater_settings(boundary);
+        set_packet(&mut core, boundary);
         let stored = core
             .steam_hotwater_settings
             .as_ref()
@@ -13012,58 +12922,62 @@ mod tests {
             fn f5_3_the_steam_packet_carries_the_effective_profile_temperature() {
                 let p = library("Daily");
                 let mut core = connected();
+                settle(&mut core);
                 machine_packet(&mut core);
                 let _ = desire(&mut core, &p, &qc(95.0), 10);
                 let targets = SteamHotWaterTargets {
                     steam_temp_c: 150.0,
                     steam_timeout_s: 60.0,
                     hot_water_temp_c: 80.0,
-                    hot_water_volume_ml: 150.0,
+                    hot_water: volume_dose(150.0),
                 };
                 let w = &steam_packets(&core.set_steam_hotwater_targets(&targets))[0];
                 assert_eq!(w.group_temp_c, 95.0);
                 assert_eq!(w.steam_flags, 0x40);
-                assert_eq!(w.hot_water_timeout_s, 45.0);
+                assert_eq!(w.espresso_volume_ml, 220.0);
                 // The connect sweep sends the same group target.
                 let w = &steam_packets(&sweep(&mut core, 20))[0];
                 assert_eq!(w.group_temp_c, 95.0);
                 // No desired profile: the machine's group target stays.
                 let mut core = connected();
+                settle(&mut core);
                 machine_packet(&mut core);
                 let w = &steam_packets(&core.set_steam_hotwater_targets(&targets))[0];
                 assert_eq!(w.group_temp_c, 88.0);
             }
 
-            /// AC-F5.3: when a changed profile lands on the DE1, the packet is
-            /// re-sent with its group target (Decenza re-sends the shot
-            /// settings after every upload); an unchanged target sends nothing.
+            /// AC-F5.3 with the packet sync: a profile change rewrites the
+            /// group target once, and never while water flows — a change made
+            /// during a shot goes out at the next non-flow state.
             #[test]
-            fn f5_3_a_landed_profile_resends_the_group_target() {
+            fn f5_3_a_profile_change_rewrites_the_group_target_when_not_busy() {
                 let p = library("Daily");
                 let mut core = connected();
                 machine_packet(&mut core);
                 let _ = desire(&mut core, &p, &BrewOverrides::default(), 10);
                 let first = sweep(&mut core, 20);
                 assert_eq!(steam_packets(&first)[0].group_temp_c, 92.0);
-                let landed = land(&mut core, &first.commands, 30);
-                assert!(holds(&landed.events).is_some());
-                assert!(steam_packets(&landed).is_empty(), "already at 92 °C");
+                let _ = land(&mut core, &first.commands, 30);
 
-                let change = desire(&mut core, &p, &qc(95.0), 40);
-                assert_eq!(uploads(&change), 1);
-                assert!(steam_packets(&change).is_empty(), "not before it lands");
-                let landed = land(&mut core, &change.commands, 50);
-                assert!(holds(&landed.events).is_some());
-                let w = steam_packets(&landed);
+                // Idle: the change goes out at once, before the upload.
+                let change = desire(&mut core, &p, &qc(94.0), 40);
+                let w = steam_packets(&change);
+                assert_eq!(w.len(), 1);
+                assert_eq!(w[0].group_temp_c, 94.0);
+                assert_eq!(w[0].steam_flags, 0x40);
+                let _ = land(&mut core, &change.commands, 50);
+                // The same profile again: nothing to write.
+                assert!(steam_packets(&desire(&mut core, &p, &qc(94.0), 60)).is_empty());
+
+                // During a shot: held until the machine is Idle again.
+                let _ = core.on_notification(Source::De1State, &[4, 1], 70);
+                let busy = desire(&mut core, &p, &qc(95.0), 80);
+                assert!(steam_packets(&busy).is_empty(), "never mid-shot");
+                assert!(steam_packets(&core.on_tick(1_000)).is_empty());
+                let idle_again = idle(&mut core, 2_000);
+                let w = steam_packets(&idle_again);
                 assert_eq!(w.len(), 1);
                 assert_eq!(w[0].group_temp_c, 95.0);
-                assert_eq!(w[0].steam_flags, 0x40);
-                assert_eq!(w[0].espresso_volume_ml, 220.0);
-                assert_eq!(
-                    w[0].hot_water_volume_ml,
-                    ConnectSweepSettings::default().hot_water_volume_ml,
-                    "the user's dial"
-                );
             }
 
             /// AC-F7.2: within one connection an unchanged profile is never
@@ -13290,13 +13204,13 @@ mod tests {
             #[test]
             fn the_link_generation_survives_a_reset() {
                 let mut core = connected();
-                let g0 = core.profile_sync.generation();
+                let g0 = core.link.generation;
                 let _ = core.de1_link_lost();
-                assert_eq!(core.profile_sync.generation(), g0.wrapping_add(1));
+                assert_eq!(core.link.generation, g0.wrapping_add(1));
                 let _ = core.reset();
-                assert_eq!(core.profile_sync.generation(), g0.wrapping_add(2));
+                assert_eq!(core.link.generation, g0.wrapping_add(2));
                 let _ = core.reset();
-                assert_eq!(core.profile_sync.generation(), g0.wrapping_add(3));
+                assert_eq!(core.link.generation, g0.wrapping_add(3));
             }
 
             #[test]

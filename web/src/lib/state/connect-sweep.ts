@@ -9,7 +9,7 @@
  * (Decenza `BatteryManager`) while it stays ready. Android's `ConnectSweep.kt` is the twin.
  */
 
-import type { CoreOutput, CremaCore } from '#lib/core/index.js';
+import { type CoreOutput, type CremaCore, volumeHotWaterDose } from '#lib/core/index.js';
 import { type ConnectSweepSettings, UsbChargingMode } from '#lib/core/crema-core.js';
 import type { Settings } from '#lib/settings/store.svelte.js';
 import { defaultRefillPointMm } from './ui-state.svelte';
@@ -45,7 +45,7 @@ export function buildConnectSweepSettings(
 		steamTempC: s.qcSteamTempC,
 		steamTimeoutS: s.qcSteamTimeS,
 		hotWaterTempC: s.qcHotWaterTempC,
-		hotWaterVolumeMl: s.qcHotWaterVolumeMl,
+		hotWater: volumeHotWaterDose(s.qcHotWaterVolumeMl),
 		steamFlowMlS: s.qcSteamFlowMlS,
 		flushTimeoutS: s.qcFlushTimeS,
 		flushTempC: s.qcFlushTempC,
