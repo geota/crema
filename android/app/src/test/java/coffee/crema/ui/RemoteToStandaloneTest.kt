@@ -365,15 +365,13 @@ class RemoteToStandaloneTest {
         assertEquals(listOf("Leaving Kitchen tablet"), vm.ui.value.userMessages.drop(messages))
     }
 
-    /** P2-1 (the P2b validation): a re-find switch that runs while the
-     *  confirmation is open (an attempt already in flight, refused for an
-     *  unproven reason) cancels the leave. The dialog goes away, the slice
-     *  unfreezes, the re-find is released, the user is told, and Stop works
-     *  again. */
+    /** P2-1 (the P2b validation), #205's guard: a re-find attempt already in
+     *  flight when the confirmation opens, then refused for an unproven
+     *  reason, doesn't switch while the re-find is held. The confirmation
+     *  stays usable, and its answer leaves. Started from the validator's probe. */
     @Test
-    fun `a re-find switch while the confirmation is open cancels it cleanly`() {
-        val vm = fixture.start()
-        fixture.push(S)
+    fun `a re-find attempt refused while the confirmation is open doesn't switch`() {
+        val vm = remoteWithPendingEdit()
         vm.switchToNormal()
         VmHarness.idle()
         assertNotNull(vm.ui.value.adoptPrompt, "the prompt is open")
@@ -389,10 +387,101 @@ class RemoteToStandaloneTest {
         val ctor = cls.getDeclaredConstructor(String::class.java, Int::class.javaPrimitiveType, ProxyController.MirrorTrust::class.java, Boolean::class.javaPrimitiveType)
             .apply { isAccessible = true }
         sessionField.set(pc, ctor.newInstance(host, port + 1, ProxyController.MirrorTrust.UNATTENDED, true))
-        val messages = vm.ui.value.userMessages.size
-        // The attempt is refused for an unproven reason: the re-find switches back.
         pc.refuseCurrentSessionForTest("host mismatch", byHost = false, hostProved = false)
         repeat(60) {
+            VmHarness.advance(100)
+            Thread.sleep(10)
+        }
+        VmHarness.idle()
+        assertEquals(epochBefore, pc.modeEpoch, "no switch while held")
+        assertTrue(switches.isEmpty(), "$switches")
+        assertNotNull(vm.ui.value.adoptPrompt, "the confirmation is still open")
+        vm.resolveAdoption(useHub = false)
+        waitRole(vm, "normal")
+        assertNull(vm.ui.value.adoptPrompt)
+        assertEquals(listOf("normal"), switches.map { it.first })
+        assertEquals(abOf(P), abOf(savedPrefs()), "nothing adopted")
+    }
+
+    /** A re-find switch queued while the confirmation is open is dropped
+     *  without counting as a switch, so the answer still commits (the merge
+     *  of #205's hold check with the T6 epoch). */
+    @Test
+    fun `a re-find switch queued while the confirmation is open is dropped`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        val pc = VmHarness.proxyController(vm)
+        val epochBefore = pc.modeEpoch
+        val session = ProxyController::class.java.getDeclaredField("session").apply { isAccessible = true }.get(pc)!!
+        val host = session.javaClass.getDeclaredMethod("getHost").invoke(session) as String
+        val port = session.javaClass.getDeclaredMethod("getPort").invoke(session) as Int
+        ProxyController::class.java.declaredMethods.single { it.name == "requestRefindSwitch" }
+            .apply { isAccessible = true }.invoke(pc, host, port + 1, true, session)
+        repeat(10) {
+            VmHarness.advance(100)
+            Thread.sleep(10)
+        }
+        VmHarness.idle()
+        assertEquals(epochBefore, pc.modeEpoch, "the dropped switch didn't count")
+        assertTrue(VmHarness.log(vm).any { "Re-find: held — dropping a queued switch" in it })
+        assertNotNull(vm.ui.value.adoptPrompt, "the confirmation is still open")
+        vm.resolveAdoption(useHub = true)
+        VmHarness.advance(200)
+        waitRole(vm, "normal")
+        VmHarness.idle()
+        assertAdoptedS(vm, "normal")
+    }
+
+    /** A switch queued before the answer runs first: it cancels the leave
+     *  (the slice was frozen, though the answer had already cleared the
+     *  pending leave), the user is told once, and the stale commit adopts
+     *  nothing. */
+    @Test
+    fun `a switch queued before the answer cancels the leave once`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        val pc = VmHarness.proxyController(vm)
+        val modeLock = ProxyController::class.java.getDeclaredField("modeMutex").apply { isAccessible = true }.get(pc) as kotlinx.coroutines.sync.Mutex
+        assertTrue(modeLock.tryLock())
+        val messages = vm.ui.value.userMessages.size
+        vm.switchToSecondary("127.0.0.1", fixture.endpoint.port) // queued first
+        VmHarness.idle()
+        vm.resolveAdoption(useHub = true) // queued behind it
+        VmHarness.idle()
+        modeLock.unlock()
+        repeat(20) {
+            VmHarness.advance(100)
+            Thread.sleep(10)
+        }
+        VmHarness.idle()
+        assertEquals("secondary", role(vm))
+        assertNull(vm.ui.value.adoptPrompt)
+        assertTrue(VmHarness.ownState(vm).mirror?.frozen == false)
+        assertEquals(listOf("Couldn't leave Kitchen tablet — try again"), vm.ui.value.userMessages.drop(messages).filter { "leave" in it })
+        assertEquals(listOf("secondary"), switches.map { it.first }, "only the queued switch ran")
+        assertEquals(abOf(P), abOf(savedPrefs()), "the stale commit adopted nothing")
+    }
+
+    /** P2-1, the VM's guard: a switch that does run while the confirmation is
+     *  open (here the user picks the hub again) cancels the leave. The dialog
+     *  goes away, the slice unfreezes, the re-find is released, the user is
+     *  told, and Stop works again. */
+    @Test
+    fun `a switch while the confirmation is open cancels it cleanly`() {
+        val vm = fixture.start()
+        fixture.push(S)
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt, "the prompt is open")
+        val pc = VmHarness.proxyController(vm)
+        val epochBefore = pc.modeEpoch
+        val messages = vm.ui.value.userMessages.size
+        vm.switchToSecondary("127.0.0.1", fixture.endpoint.port)
+        repeat(20) {
             VmHarness.advance(100)
             Thread.sleep(10)
         }
@@ -403,53 +492,11 @@ class RemoteToStandaloneTest {
         assertTrue(VmHarness.ownState(vm).mirror?.frozen == false, "the slice unfreezes")
         assertEquals(false, ProxyController::class.java.getDeclaredField("refindHeld").apply { isAccessible = true }.getBoolean(pc), "the re-find is released")
         assertTrue(vm.ui.value.userMessages.drop(messages).contains("Couldn't leave Kitchen tablet — try again"), "${vm.ui.value.userMessages.drop(messages)}")
-        vm.resolveAdoption(useHub = true) // a late answer: nothing to resolve, nothing stuck
-        VmHarness.idle()
+        // Stop works again (the new session has no snapshot yet: it leaves at once).
+        vm.switchToNormal()
+        waitRole(vm, "normal")
         assertNull(vm.ui.value.adoptPrompt)
-        // Stop works again: it asks again (S still differs from P), and Keep mine leaves.
-        vm.switchToNormal()
-        VmHarness.idle()
-        assertNotNull(vm.ui.value.adoptPrompt, "Stop asks again")
-        vm.resolveAdoption(useHub = false)
-        waitRole(vm, "normal")
         assertEquals(abOf(P), abOf(savedPrefs()), "nothing adopted")
-    }
-
-    /** AC-36 / R2: a commit whose epoch went stale (another switch took the
-     *  mode lock first) adopts nothing and doesn't switch; it unfreezes the
-     *  slice, says so, and the user can leave again. */
-    @Test
-    fun `a stale commit adopts nothing and lets the user leave again`() {
-        val vm = remoteWithPendingEdit()
-        vm.switchToNormal()
-        VmHarness.idle()
-        assertNotNull(vm.ui.value.adoptPrompt)
-        val pc = VmHarness.proxyController(vm)
-        val modeLock = ProxyController::class.java.getDeclaredField("modeMutex").apply { isAccessible = true }.get(pc) as kotlinx.coroutines.sync.Mutex
-        assertTrue(modeLock.tryLock(), "the mode lock is free")
-        val messages = vm.ui.value.userMessages.size
-        vm.resolveAdoption(useHub = true) // the commit queues on the lock
-        VmHarness.idle()
-        // Another switch ran first.
-        ProxyController::class.java.getDeclaredField("modeEpoch").apply { isAccessible = true }.setLong(pc, pc.modeEpoch + 1)
-        modeLock.unlock()
-        repeat(20) {
-            VmHarness.advance(100)
-            Thread.sleep(10)
-        }
-        VmHarness.idle()
-        assertEquals("secondary", role(vm))
-        assertTrue(switches.isEmpty(), "no switch: $switches")
-        assertEquals(abOf(P), abOf(savedPrefs()), "no adoption")
-        assertTrue(VmHarness.ownState(vm).mirror?.frozen == false, "the slice unfreezes")
-        assertTrue(VmHarness.log(vm).any { "Mode switch to normal skipped" in it })
-        assertEquals(listOf("Couldn't leave Kitchen tablet — try again"), vm.ui.value.userMessages.drop(messages))
-        vm.switchToNormal()
-        VmHarness.idle()
-        assertNotNull(vm.ui.value.adoptPrompt, "Stop asks again")
-        vm.resolveAdoption(useHub = false)
-        waitRole(vm, "normal")
-        assertEquals(listOf("normal"), switches.map { it.first })
     }
 
     /** P2-1: an answer always closes the dialog, even when the leave it
