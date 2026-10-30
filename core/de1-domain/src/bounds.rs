@@ -105,6 +105,8 @@ pub struct BrewDefaultsBounds {
     pub brew_temp_c: StepRange,
     /// Default pre-infusion, s.
     pub preinfuse_s: StepRange,
+    /// The global max shot duration, s (`0` = none).
+    pub max_shot_duration_s: StepRange,
 }
 
 /// The profile editor's ranges: applied when the user edits a field, never
@@ -170,6 +172,7 @@ pub fn brew_defaults_bounds() -> BrewDefaultsBounds {
         ratio: range(1.0, 5.0, 0.1),
         brew_temp_c: range(MIN_BREW_TEMPERATURE_C, MAX_TEMPERATURE_C, 0.5),
         preinfuse_s: range(0.0, 60.0, 1.0),
+        max_shot_duration_s: range(0.0, 300.0, 5.0),
     }
 }
 
@@ -250,6 +253,10 @@ mod tests {
         }
         let b = brew_defaults_bounds();
         assert_eq!((b.preinfuse_s.min, b.preinfuse_s.max), (0.0, 60.0));
+        assert_eq!(
+            (b.max_shot_duration_s.min, b.max_shot_duration_s.max),
+            (0.0, 300.0)
+        );
         assert_eq!(b.brew_temp_c, q.brew_temp_c);
     }
 
