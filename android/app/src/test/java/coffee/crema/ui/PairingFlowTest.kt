@@ -71,7 +71,7 @@ class PairingFlowTest {
     /** A hub listening, its window open; returns its relay port. */
     private fun openHub(h: ProxyController): Int {
         h.setHubMode(true)
-        VmHarness.idleUntil("the hub listening") { hubLines.any { "LAN relay listening" in it } }
+        waitFor("the hub listening") { hubLines.any { "LAN relay listening" in it } }
         h.openPairingWindow()
         return hubLines.first { "LAN relay listening" in it }.substringAfterLast(":").toInt()
     }
@@ -101,7 +101,7 @@ class PairingFlowTest {
     }
 
     private fun shownCode(vm: MainViewModel, attempt: Int): PairingState.ShowCode {
-        VmHarness.idleUntil("code attempt $attempt") { (vm.ui.value.relayPairing as? PairingState.ShowCode)?.attempt == attempt }
+        waitFor("code attempt $attempt") { (vm.ui.value.relayPairing as? PairingState.ShowCode)?.attempt == attempt }
         return vm.ui.value.relayPairing as PairingState.ShowCode
     }
 
@@ -114,6 +114,7 @@ class PairingFlowTest {
         val h = hubController()
         val port = openHub(h)
         val vm = remote()
+        dump = remoteDump(vm)
         val seen = watch(vm)
 
         vm.switchToSecondary("127.0.0.1", port)
@@ -124,13 +125,13 @@ class PairingFlowTest {
         val left = code.expiresAtMs - System.currentTimeMillis()
         assertTrue(left in 1..120_000, "a countdown of at most 2 minutes: $left")
 
-        VmHarness.idleUntil("the hub's code dialog") { h.state.value.pendingPairing != null }
+        waitFor("the hub's code dialog") { h.state.value.pendingPairing != null }
         val prompt = h.state.value.pendingPairing!!
         assertEquals(deviceLabel(), prompt.clientName, "the dialog names the remote")
         assertTrue(!prompt.lastWasWrong)
 
         h.submitPairingCode(code.code, canControl = false)
-        VmHarness.idleUntil("the remote's success") { pairedWith(code.hubName) in vm.ui.value.userMessages }
+        waitFor("the remote's success") { pairedWith(code.hubName) in vm.ui.value.userMessages }
         assertTrue(hubLines.any { it == "notify: ${pairedRemote(deviceLabel(), canControl = false)}" }, "$hubLines")
         untilClock("connected through the hub") { vm.ui.value.remoteStatus()?.startsWith("Connected through") == true }
         assertEquals("Connected through ${code.hubName} · view-only", vm.ui.value.remoteStatus())
@@ -149,28 +150,29 @@ class PairingFlowTest {
         val h = hubController()
         val port = openHub(h)
         val vm = remote()
+        dump = remoteDump(vm)
         vm.switchToSecondary("127.0.0.1", port)
 
         var code = shownCode(vm, attempt = 1)
-        VmHarness.idleUntil("the first request") { h.state.value.pendingPairing != null }
+        waitFor("the first request") { h.state.value.pendingPairing != null }
         h.submitPairingCode(wrong(code.code), canControl = true)
 
         code = shownCode(vm, attempt = 2)
         assertTrue(code.retryAfterWrongCode, "the remote says the code didn't work")
-        VmHarness.idleUntil("the hub's second request") { h.state.value.pendingPairing?.lastWasWrong == true }
+        waitFor("the hub's second request") { h.state.value.pendingPairing?.lastWasWrong == true }
         val second = h.state.value.pendingPairing!!
         assertTrue(wrongCodeLine(second.clientName, second.wrongCodes + 1).endsWith("(2 of 3)"), "$second")
         h.submitPairingCode(wrong(code.code), canControl = true)
 
         code = shownCode(vm, attempt = 3)
-        VmHarness.idleUntil("the hub's third request") { h.state.value.pendingPairing?.wrongCodes == 2 }
+        waitFor("the hub's third request") { h.state.value.pendingPairing?.wrongCodes == 2 }
         h.submitPairingCode(wrong(code.code), canControl = true)
 
-        VmHarness.idleUntil("the lockout") { h.state.value.pairingLockedSecondsLeft > 0 }
+        waitFor("the lockout") { h.state.value.pairingLockedSecondsLeft > 0 }
         assertTrue(hubLines.any { it == "notify: $LOCKED_OUT_COPY" }, "$hubLines")
         assertTrue(h.state.value.pairingLockedSecondsLeft in 50..60, "${h.state.value.pairingLockedSecondsLeft}")
         assertTrue(pairWindowTitle(h.state.value.pairingSecondsLeft, h.state.value.pairingLockedSecondsLeft).startsWith("Pairing paused · "))
-        VmHarness.idleUntil("the remote's final failure") { vm.ui.value.relayPairing is PairingState.Failed }
+        waitFor("the remote's final failure") { vm.ui.value.relayPairing is PairingState.Failed }
         assertTrue(vm.ui.value.pairedHubs.isEmpty())
     }
 
@@ -184,6 +186,7 @@ class PairingFlowTest {
         VmHarness.pinHub(relayStore, coffee.crema.core.RelayKeys.generate(), port, name = deviceLabel())
         VmHarness.persistRole("secondary", "127.0.0.1", port)
         val vm = remote()
+        dump = remoteDump(vm)
         val oldPin = vm.ui.value.pairedHubs.single().id
         // The hub doesn't hold the pinned key: the re-find gives up, and Pair
         // again is offered (it never pairs by itself).
@@ -191,7 +194,7 @@ class PairingFlowTest {
 
         vm.pairAgain()
         val code = shownCode(vm, attempt = 1)
-        VmHarness.idleUntil("the hub's code dialog") { h.state.value.pendingPairing != null }
+        waitFor("the hub's code dialog") { h.state.value.pendingPairing != null }
         h.submitPairingCode(code.code, canControl = true)
         try {
             untilClock("the key-changed line") { hubKeyChanged(code.hubName) in vm.ui.value.userMessages }
@@ -213,6 +216,7 @@ class PairingFlowTest {
         VmHarness.pinHub(relayStore, r.hubKeys, r.port)
         VmHarness.persistRole("secondary", "127.0.0.1", r.port)
         val vm = remote()
+        dump = remoteDump(vm)
         val seen = watch(vm)
         untilClock("the refusal") { vm.ui.value.userMessages.any { "removed this device" in it } }
         untilClock("normal") { vm.ui.value.proxyRole == "normal" }
@@ -228,6 +232,24 @@ class PairingFlowTest {
             check(System.nanoTime() < deadline) { "Timed out waiting for $what" }
             Thread.sleep(5)
         }
+    }
+
+    /** What [waitFor] prints when it times out: both sides' state and logs. */
+    @Volatile private var dump: () -> String = { "" }
+
+    /** [VmHarness.idleUntil], saying where it stuck. */
+    private fun waitFor(what: String, done: () -> Boolean) {
+        try {
+            VmHarness.idleUntil(what, done = done)
+        } catch (e: IllegalStateException) {
+            throw IllegalStateException("${e.message}\n${dump()}\nhub:\n${hubLines.joinToString("\n")}", e)
+        }
+    }
+
+    private fun remoteDump(vm: MainViewModel): () -> String = {
+        val hubState = hub?.state?.value
+        "remote pairing ${vm.ui.value.relayPairing}, role ${vm.ui.value.proxyRole}; hub prompt ${hubState?.pendingPairing}, " +
+            "locked ${hubState?.pairingLockedSecondsLeft}\nremote log:\n${VmHarness.log(vm).take(30).joinToString("\n")}"
     }
 
     private fun wrong(code: String): String = code.map { c -> '0' + ((c - '0' + 1) % 10) }.joinToString("")
