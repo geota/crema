@@ -187,11 +187,15 @@ impl CremaCore {
     /// The earliest time the core needs a tick for.
     fn next_deadline(&self) -> Option<Duration> {
         let waiting = self.request_guard.held.is_some() || self.maintenance_waits_for_guard();
-        match (waiting, self.guard()) {
+        let guard = match (waiting, self.guard()) {
             (true, Guard::Until(at)) => Some(at),
             // Clear already: as soon as possible.
             (true, Guard::Clear) => Some(self.clock),
             _ => None,
+        };
+        match (guard, self.shot_start_deadline()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
         }
     }
 

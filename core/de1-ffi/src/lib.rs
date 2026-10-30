@@ -3417,6 +3417,35 @@ impl CremaBridge {
         self.core().builtin_profiles_json()
     }
 
+    /// Start an espresso shot with the library `CremaProfile` JSON and an
+    /// optional `BrewOverrides` JSON — the core runs the whole start (sync,
+    /// guard, pre-flush, Espresso). See
+    /// [`CremaCore::start_shot`](de1_app::CremaCore::start_shot). Returns a
+    /// JSON `StartShotResult`.
+    pub fn start_shot(&self, profile_json: String, qc_json: Option<String>, now_ms: u64) -> String {
+        let mut result = self
+            .core()
+            .start_shot_json(&profile_json, qc_json.as_deref(), now_ms);
+        if self.read_only.load(Ordering::Relaxed) {
+            result.output.commands.clear();
+        }
+        serde_json::to_string(&result).unwrap_or_else(|_| {
+            r#"{"accepted":false,"refusal":null,"message":null,"output":{"events":[],"commands":[]}}"#.to_string()
+        })
+    }
+
+    /// A shot start is pending. See `CremaCore::shot_starting`.
+    pub fn shot_starting(&self) -> bool {
+        self.core().shot_starting()
+    }
+
+    /// Latch the start settings: the pre-shot flush, require-scale and the
+    /// post-steam auto-purge. See `CremaCore::set_start_settings`.
+    pub fn set_start_settings(&self, pre_flush: bool, require_scale: bool, steam_purge: bool) {
+        self.core()
+            .set_start_settings(pre_flush, require_scale, steam_purge);
+    }
+
     /// Tell the core which profile the DE1 should hold: the library
     /// `CremaProfile` in `profile_json` (`null` = no active profile) with the
     /// Quick Controls overrides in `qc_json` (`{dose, yield, brewTemp,
