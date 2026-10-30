@@ -510,7 +510,7 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		defaultBrewTempC: s.defaultBrewTempC,
 		defaultPreinfuseS: s.defaultPreinfusionS,
 		grinderModel: s.grinderModel,
-		baristaName: s.baristaName.trim() || undefined,
+		baristaName: (typeof s.baristaName === 'string' ? s.baristaName.trim() : '') || undefined,
 		// Retired (presence follows activity; the app owns sleep) — still
 		// written because older versions require the field in a backup.
 		suppressDe1Sleep: true,
@@ -523,6 +523,12 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		qcFlushTimeS: s.qcFlushTimeS,
 		qcFlushTempC: s.qcFlushTempC
 	};
+}
+
+/** A flat `Settings` (a pre-unification file or backup line) with its
+ *  `CommonSettings` half read through the core's sanitize. */
+export function sanitizeFlat(flat: Settings): Settings {
+	return applyCommonToSettings(settingsToCommon(flat), flat);
 }
 
 /** A {@link CommonSettings} after the core's sanitize: the "unset reads as"
@@ -651,7 +657,9 @@ function loadSettings(): Settings {
 	if (stored && typeof stored === 'object' && 'visualizerAutoUpload' in stored) {
 		readSyncConfig();
 	}
-	return { ...DEFAULT_SETTINGS, ...((stored as Partial<Settings> | null) ?? {}) };
+	// Through the core's sanitize too, so an old flat file with a bad value
+	// reads like a nested one.
+	return sanitizeFlat({ ...DEFAULT_SETTINGS, ...((stored as Partial<Settings> | null) ?? {}) });
 }
 
 /**
