@@ -252,9 +252,11 @@ pub fn normalize_brew_overrides(profile: &CremaProfile, qc: &BrewOverrides) -> B
         .map(|p| round_tenth(p.clamp(0.0, preinf_max)))
         .filter(|p| !same(*p, preinfusion_seconds(profile)));
 
-    // Dose and yield land inside the Quick-Controls stepper ranges (F8); a
-    // yield of 0 keeps its meaning (no weight target).
+    // Dose and yield land inside the Quick-Controls ranges (F8): the dose
+    // stepper's, and for the yield what the yield or ratio stepper reaches;
+    // a yield of 0 keeps its meaning (no weight target).
     let q = crate::bounds::quick_control_bounds();
+    let yield_range = q.override_yield_g();
     let dose = qc
         .dose
         .filter(|d| d.is_finite() && *d > 0.0)
@@ -267,7 +269,7 @@ pub fn normalize_brew_overrides(profile: &CremaProfile, qc: &BrewOverrides) -> B
             if y == 0.0 {
                 y
             } else {
-                q.yield_g.clamp_or(y, y)
+                yield_range.clamp_or(y, y)
             }
         })
         .filter(|y| !same(*y, profile.yield_out));
@@ -913,11 +915,17 @@ mod tests {
         let p = crate::blank_profile(&crate::BrewDefaults::default());
         let qc = BrewOverrides {
             dose: Some(45.0),
-            yield_g: Some(150.0),
+            yield_g: Some(400.0),
             ..BrewOverrides::default()
         };
         let n = normalize_brew_overrides(&p, &qc);
-        assert_eq!((n.dose, n.yield_g), (Some(30.0), Some(80.0)));
+        // Yield: up to what the ratio stepper reaches (30 g × 5).
+        assert_eq!((n.dose, n.yield_g), (Some(30.0), Some(150.0)));
+        let ratio = BrewOverrides {
+            yield_g: Some(100.0),
+            ..BrewOverrides::default()
+        };
+        assert_eq!(normalize_brew_overrides(&p, &ratio).yield_g, Some(100.0));
         let low = BrewOverrides {
             dose: Some(2.0),
             yield_g: Some(0.0),

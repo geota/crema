@@ -87,6 +87,22 @@ pub struct QuickControlBounds {
     pub flush_temp_c: StepRange,
 }
 
+impl QuickControlBounds {
+    /// The yield a brew override may carry, g: the yield stepper's range
+    /// widened to what the ratio stepper reaches (`dose × ratio`, Android's
+    /// ratio mode), so an override the Quick Controls can produce is never
+    /// cut. The yield stepper itself keeps its range.
+    #[must_use]
+    pub fn override_yield_g(&self) -> StepRange {
+        StepRange {
+            min: self.yield_g.min.min(self.dose_g.min * self.ratio.min),
+            max: self.yield_g.max.max(self.dose_g.max * self.ratio.max),
+            step: self.yield_g.step,
+            chips: Vec::new(),
+        }
+    }
+}
+
 /// Settings → Brew defaults' ranges (the seeds for new profiles).
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -310,5 +326,17 @@ mod tests {
         let e = profile_editor_bounds();
         assert!(!e.yield_g.contains(p.yield_out) && !e.tank_temp_c.contains(p.tank_temperature_c));
         assert!(!e.pressure_bar.contains(p.segments[0].target));
+    }
+
+    #[test]
+    fn override_yield_covers_the_ratio_stepper() {
+        let q = quick_control_bounds();
+        let r = q.override_yield_g();
+        assert_eq!((r.min, r.max), (5.0, 150.0));
+        assert_eq!(
+            (q.yield_g.min, q.yield_g.max),
+            (10.0, 80.0),
+            "the stepper keeps its range"
+        );
     }
 }
