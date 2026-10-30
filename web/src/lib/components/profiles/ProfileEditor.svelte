@@ -194,19 +194,20 @@
 	/** Total shot time across the segments. */
 	const total = $derived(totalTime(draft.segments));
 
-	/** Patch the draft and mark it dirty. */
 	/**
 	 * The profile's brew temperature is its first step's (the dial's anchor),
 	 * and its range keeps every step inside the core's bounds. Editing it
 	 * shifts every step by the core, keeping the shape — Decenza's
-	 * `applyTemperatureToProfile`; editing segment 0's own temperature moves
-	 * it the same way.
+	 * `applyTemperatureToProfile` — and marks the draft dirty; editing
+	 * segment 0's own temperature moves it the same way.
 	 */
 	const brewTemp = $derived(brewTempRange(draft));
 	function setBrewTemp(v: number): void {
 		draft = effectiveCremaProfile(draft, { brewTemp: v });
+		dirty = true;
 	}
 
+	/** Patch the draft and mark it dirty. */
 	function patch(p: Partial<CremaProfile>): void {
 		draft = { ...draft, ...p };
 		dirty = true;

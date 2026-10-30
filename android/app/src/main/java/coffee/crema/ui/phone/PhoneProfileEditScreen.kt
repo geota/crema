@@ -100,7 +100,6 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var beverage by remember(profile.id) { mutableStateOf(profile.beverageType) }
     var dose by remember(profile.id) { mutableStateOf(profile.dose.toDouble()) }
     var yieldG by remember(profile.id) { mutableStateOf(profile.yieldOut.toDouble()) }
-    var brewTemp by remember(profile.id) { mutableStateOf(profile.brewTemp.toDouble()) }
     var maxVol by remember(profile.id) { mutableStateOf(profile.maxTotalVolumeMl.toDouble()) }
     var preinfuse by remember(profile.id) { mutableStateOf(profile.preinfuseStepCount.toDouble()) }
     var tankTemp by remember(profile.id) { mutableStateOf(profile.tankTemperatureC.toDouble()) }
@@ -109,6 +108,9 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             addAll(profile.segments.map { it.toEdit(profile.brewTemp) })
         }
     }
+    // The profile's brew temperature is its first step's: it follows a direct
+    // edit of segment 0's temperature live, and its own field shifts every step.
+    val brewTemp = segs.firstOrNull()?.temp?.toDouble() ?: profile.brewTemp.toDouble()
     var openPhase by remember(profile.id) { mutableStateOf(-1) }
     val tagPending = remember(profile.id) { mutableStateOf("") }
 
@@ -196,7 +198,6 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     // the first step's (clamped) temperature.
                     val shifted = vm.editorBrewTemp(profile.id, segs.toList(), target)
                     segs.clear(); segs.addAll(shifted)
-                    brewTemp = shifted.firstOrNull()?.temp?.toDouble() ?: target
                 }, style = CremaStepperStyle.BareCompact) }
                 EdRow("Max total volume", sub = "Cap the whole shot by volume", dot = true, dotOn = maxVol > 0, onDot = { maxVol = if (maxVol > 0) 0.0 else 50.0 }) { CremaStepper(value = maxVol, unit = "ml", step = 5.0, min = 0.0, max = 500.0, fmt = { fmt("%.0f", it) }, onChange = { maxVol = it }, style = CremaStepperStyle.BareCompact) }
                 EdRow("Pre-infuse phases", sub = "Leading phases counted as pre-infusion", dot = true, dotOn = preinfuse > 0, onDot = { preinfuse = if (preinfuse > 0) 0.0 else 1.0 }) { CremaStepper(value = preinfuse, unit = null, step = 1.0, min = 0.0, max = segs.size.toDouble(), fmt = { fmt("%.0f", it) }, onChange = { preinfuse = it }, style = CremaStepperStyle.BareCompact) }
