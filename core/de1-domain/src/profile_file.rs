@@ -132,7 +132,11 @@ pub fn export_profile_file(profiles: &[CremaProfile]) -> Result<String, serde_js
     }
     let mut out = String::new();
     for p in profiles {
-        out.push_str(&export_v2_json_with(&to_wire(p), Some(extension(p)), false)?);
+        out.push_str(&export_v2_json_with(
+            &to_wire(p),
+            Some(extension(p)),
+            false,
+        )?);
         out.push('\n');
     }
     Ok(out)
@@ -163,10 +167,16 @@ fn extension(p: &CremaProfile) -> Value {
 /// Apply an extension object read back from an exported profile. A key that
 /// is missing or malformed leaves the imported value alone.
 fn apply_extension(p: &mut CremaProfile, ext: &Map<String, Value>) {
-    if let Some(tags) = ext.get("tags").and_then(|v| Vec::<String>::deserialize(v).ok()) {
+    if let Some(tags) = ext
+        .get("tags")
+        .and_then(|v| Vec::<String>::deserialize(v).ok())
+    {
         p.tags = tags;
     }
-    if let Some(roast) = ext.get("roast").and_then(|v| Option::<Roast>::deserialize(v).ok()) {
+    if let Some(roast) = ext
+        .get("roast")
+        .and_then(|v| Option::<Roast>::deserialize(v).ok())
+    {
         p.roast = roast;
     }
     if let Some(on) = ext.get("stopOnWeight").and_then(Value::as_bool) {
@@ -212,7 +222,10 @@ impl Importer {
         } else if obj.contains_key("segments") {
             self.native(item, obj);
         } else {
-            self.error(item, "not a profile (it has neither steps nor segments)".to_owned());
+            self.error(
+                item,
+                "not a profile (it has neither steps nor segments)".to_owned(),
+            );
         }
     }
 
@@ -329,12 +342,22 @@ mod tests {
             ("profiles/android-profile.json", &["My 7g"]),
             (
                 "profiles/android-profiles.json",
-                &["My 7g", "7g basket", "Blooming Allongé", "A-Flow / default-dark"],
+                &[
+                    "My 7g",
+                    "7g basket",
+                    "Blooming Allongé",
+                    "A-Flow / default-dark",
+                ],
             ),
             ("profiles/crema-profile.json", &["My 7g"]),
             (
                 "profiles/crema-profiles.jsonl",
-                &["My 7g", "7g basket", "Blooming Allongé", "A-Flow / default-dark"],
+                &[
+                    "My 7g",
+                    "7g basket",
+                    "Blooming Allongé",
+                    "A-Flow / default-dark",
+                ],
             ),
             ("default.tcl", &["Default"]),
             ("best_practice.tcl", &["Adaptive v2"]),
@@ -368,14 +391,19 @@ mod tests {
             import.profiles.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids.len(), import.profiles.len(), "distinct ids");
         for p in &import.profiles {
-            assert!(uuid::Uuid::parse_str(&p.id).is_ok_and(|u| u.get_version_num() == 7), "{}", p.id);
+            assert!(
+                uuid::Uuid::parse_str(&p.id).is_ok_and(|u| u.get_version_num() == 7),
+                "{}",
+                p.id
+            );
             assert_eq!(p.source, ProfileSource::Custom);
             assert!(!p.tags.iter().any(|t| t == BUILTIN_TAG), "{:?}", p.tags);
             assert!(!p.pinned && p.last_used.is_none());
         }
 
         // A stale top-level brew temp is ignored on a library profile…
-        let mut native: Value = serde_json::from_str(&fixture("profiles/android-profile.json")).unwrap();
+        let mut native: Value =
+            serde_json::from_str(&fixture("profiles/android-profile.json")).unwrap();
         native["brewTemp"] = Value::from(99.0);
         native["pinned"] = Value::from(true);
         native["lastUsed"] = Value::from("2026-10-01T00:00:00Z");
@@ -405,10 +433,17 @@ mod tests {
         assert_eq!(import.profiles.len(), 4);
         assert_eq!(import.errors.len(), 1);
         assert_eq!(import.errors[0].item, Some(2));
-        assert!(import.errors[0].message.contains("21 steps"), "{}", import.errors[0].message);
+        assert!(
+            import.errors[0].message.contains("21 steps"),
+            "{}",
+            import.errors[0].message
+        );
 
         // The same through the v2 path, on a JSON line.
-        let mut lines: Vec<String> = fixture("profiles/web-profiles.jsonl").lines().map(String::from).collect();
+        let mut lines: Vec<String> = fixture("profiles/web-profiles.jsonl")
+            .lines()
+            .map(String::from)
+            .collect();
         let mut long: Value = serde_json::from_str(&lines[0]).unwrap();
         let step = long["steps"][0].clone();
         long["steps"] = Value::Array(vec![step; 21]);
@@ -438,7 +473,10 @@ mod tests {
             assert!(!import.errors[0].message.is_empty());
         }
         // A bad JSON line names its line; the rest imports.
-        let mut lines: Vec<String> = fixture("profiles/web-profiles.jsonl").lines().map(String::from).collect();
+        let mut lines: Vec<String> = fixture("profiles/web-profiles.jsonl")
+            .lines()
+            .map(String::from)
+            .collect();
         lines.insert(1, "{oops".to_owned());
         lines.insert(1, String::new());
         let import = import_profile_file(&lines.join("\n"));
@@ -494,10 +532,16 @@ mod tests {
         assert_eq!(bulk.errors, vec![]);
         assert_eq!(bulk.profiles.len(), all.len());
         for (before, after) in all.iter().zip(bulk.profiles) {
-            let single = import_profile_file(&export_profile_file(std::slice::from_ref(before)).unwrap());
+            let single =
+                import_profile_file(&export_profile_file(std::slice::from_ref(before)).unwrap());
             assert_eq!(single.errors, vec![], "{}", before.name);
             let expected = comparable(before.clone());
-            assert_eq!(comparable(single.profiles[0].clone()), expected, "{} alone", before.name);
+            assert_eq!(
+                comparable(single.profiles[0].clone()),
+                expected,
+                "{} alone",
+                before.name
+            );
             assert_eq!(comparable(after), expected, "{} in bulk", before.name);
         }
         // The library metadata v2 has no field for.
@@ -506,7 +550,8 @@ mod tests {
         p.roast = Some(Roast::Dark);
         p.stop_on_weight = false;
         p.auto_tare = false;
-        let back = &import_profile_file(&export_profile_file(std::slice::from_ref(&p)).unwrap()).profiles[0];
+        let back = &import_profile_file(&export_profile_file(std::slice::from_ref(&p)).unwrap())
+            .profiles[0];
         assert_eq!(back.tags, p.tags);
         assert_eq!(back.roast, Some(Roast::Dark));
         assert!(!back.stop_on_weight && !back.auto_tare);
@@ -531,7 +576,11 @@ mod tests {
 
     #[test]
     fn a_file_imports_at_most_the_cap() {
-        let line = fixture("profiles/web-profiles.jsonl").lines().next().unwrap().to_owned();
+        let line = fixture("profiles/web-profiles.jsonl")
+            .lines()
+            .next()
+            .unwrap()
+            .to_owned();
         let text = vec![line; MAX_PROFILES_PER_FILE + 2].join("\n");
         let import = import_profile_file(&text);
         assert_eq!(import.profiles.len(), MAX_PROFILES_PER_FILE);
@@ -543,7 +592,8 @@ mod tests {
     fn the_json_faces_round_trip() {
         let set = export_set();
         let text = export_profile_file_json(&serde_json::to_string(&set).unwrap()).unwrap();
-        let back: ProfileFileImport = serde_json::from_str(&import_profile_file_json(&text).unwrap()).unwrap();
+        let back: ProfileFileImport =
+            serde_json::from_str(&import_profile_file_json(&text).unwrap()).unwrap();
         assert_eq!(back.profiles.len(), set.len());
         assert!(export_profile_file_json("{}").is_err());
     }
