@@ -27,7 +27,7 @@
 		fmt,
 		dimension,
 		name,
-		unitBefore = false
+		extra
 	}: {
 		/** The preset values to render as chips (canonical when `dimension` set). */
 		options: number[];
@@ -44,10 +44,10 @@
 		/** What the presets set ("Dose") — names the chip group "Dose presets". */
 		name?: string;
 		/**
-		 * Render the unit before the digits (a ratio's "1:"). It stays in the
-		 * unit span, so the narrow layout hides it like any unit.
+		 * One more chip after the presets that isn't a number (hot water's
+		 * No limit, "∞"): its label, accessible name, state and action.
 		 */
-		unitBefore?: boolean;
+		extra?: { label: string; name: string; active: boolean; onSelect: () => void };
 	} = $props();
 
 	const settings = getSettingsStore();
@@ -77,16 +77,20 @@
 			class="qchip"
 			class:is-active={Math.abs(value - option) < 0.001}
 			aria-pressed={Math.abs(value - option) < 0.001}
-			aria-label={effectiveUnit
-				? unitBefore
-					? `${effectiveUnit}${text}`
-					: `${text} ${effectiveUnit}`
-				: undefined}
+			aria-label={effectiveUnit ? `${text} ${effectiveUnit}` : undefined}
 			onclick={() => onChange?.(option)}
 		>
-			{#if effectiveUnit && unitBefore}<span class="qchip-unit">{effectiveUnit}</span>{/if}{text}{#if effectiveUnit && !unitBefore}<span
-					class="qchip-unit">{effectiveUnit}</span
-				>{/if}
+			{text}{#if effectiveUnit}<span class="qchip-unit">{effectiveUnit}</span>{/if}
 		</button>
 	{/each}
+	{#if extra}
+		<button
+			type="button"
+			class="qchip qchip-extra"
+			class:is-active={extra.active}
+			aria-pressed={extra.active}
+			aria-label={extra.name}
+			onclick={extra.onSelect}>{extra.label}</button
+		>
+	{/if}
 </div>

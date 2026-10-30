@@ -1,8 +1,9 @@
 /**
  * The Hot water card (hot-water modes spec §2.7, AC-HW20 / AC-HW21): the
- * readout copy, the Time · ml · Ratio switch setting the persisted dose, the
- * ratio chips, and the readout following the core's target — on a profile
- * change with nothing connected, without a settings write.
+ * readout copy and its short form, the mode in the label with its Time /
+ * Volume / Ratio menu setting the persisted dose, the ratio chips, and the
+ * secondary line following the core's target — on a profile change with
+ * nothing connected, without a settings write.
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +16,7 @@ import {
 	hotWaterReadout,
 	hotWaterRestingAmount,
 	hotWaterRunning,
+	hotWaterSub,
 	hotWaterTargetSeconds
 } from '#lib/brew/hot-water.js';
 import {
@@ -85,6 +87,34 @@ describe('hot-water readout copy', () => {
 		);
 	});
 
+	it('the short form under the digits', () => {
+		expect(hotWaterSub(resolve(dose({}), 36), ML)).toEqual({ short: '→ 108 ml', warn: false });
+		expect(hotWaterSub(resolve(dose({}), 100), ML)).toEqual({ short: 'max 250 ml', warn: true });
+		expect(hotWaterSub(resolve(dose({ ratio: 0.5 }), 18), ML)).toEqual({ short: 'min 20 ml', warn: true });
+		expect(hotWaterSub(resolve(dose({}), undefined), ML)).toEqual({ short: '150 ml', warn: true });
+		const volume = dose({ mode: HotWaterMode.Volume, volumeMl: 200 });
+		expect(hotWaterSub(resolve(volume, 36, true), ML)).toEqual({ short: 'by weight', warn: false });
+		expect(hotWaterSub(resolve(volume, 36, false), ML)).toBeNull();
+		expect(hotWaterSub(resolve(dose({ mode: HotWaterMode.Time, timeS: 30 })), ML)).toBeNull();
+		expect(hotWaterSub(resolve(dose({ mode: HotWaterMode.Time, timeS: 200 })), ML)).toEqual({
+			short: 'large pour',
+			warn: true
+		});
+		const time = (over: Partial<HotWaterTarget>): HotWaterTarget => ({
+			mode: HotWaterMode.Time,
+			timeS: 20,
+			basis: HotWaterBasis.NotApplicable,
+			wireVolumeMl: 0,
+			wireTimeoutS: 20,
+			...over
+		});
+		expect(hotWaterSub(time({ wireVolumeMl: 255 }), ML)).toEqual({ short: '≤ 255 ml', warn: false });
+		expect(hotWaterSub(time({ timeS: undefined, wireTimeoutS: 0 }), ML)).toEqual({
+			short: 'until stopped',
+			warn: true
+		});
+	});
+
 	it('the chip amount and the running counter', () => {
 		const ratio = resolve(dose({}), 50);
 		const timed = resolve(dose({ mode: HotWaterMode.Time, timeS: 30 }));
@@ -127,27 +157,63 @@ describe('the Hot water card', () => {
 		return target;
 	}
 
-	it('the switch sets the persisted mode and pushes it', () => {
-		const root = render();
-		const radios = [...root.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
-		expect(radios.map((r) => r.getAttribute('aria-label'))).toEqual(['Time', 'Volume', 'Ratio of the shot']);
-		expect(radios[2].getAttribute('aria-checked')).toBe('true');
-		radios[1].click();
+	/** The label's second option, naming the current mode. */
+	const modeOption = (root: HTMLElement) => root.querySelectorAll<HTMLButtonElement>('.qsplit-opt')[1];
+
+	/** Open the mode menu (the option is already active) and pick `name`. */
+	function pick(root: HTMLElement, name: string): void {
+		modeOption(root).click();
 		flushSync();
+		const item = [...root.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((b) =>
+			b.textContent?.includes(name)
+		);
+		item!.click();
+		flushSync();
+	}
+
+	it('the label names the mode, and its menu sets the persisted mode and pushes it', () => {
+		const root = render();
+		expect(modeOption(root).textContent?.trim()).toBe('ratio');
+		expect(modeOption(root).getAttribute('aria-haspopup')).toBe('menu');
+		expect(modeOption(root).getAttribute('aria-expanded')).toBe('false');
+		modeOption(root).click();
+		flushSync();
+		const items = [...root.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+		expect(items.map((i) => i.querySelector('.qhw-menu-name')?.textContent)).toEqual(['Time', 'Volume', 'Ratio']);
+		expect(items.map((i) => i.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true']);
+		expect(modeOption(root).getAttribute('aria-expanded')).toBe('true');
+		items[1].click();
+		flushSync();
+		expect(root.querySelector('[role="menu"]')).toBeNull();
 		expect(getSettingsStore().hotWaterDose().mode).toBe(HotWaterMode.Volume);
+		expect(modeOption(root).textContent?.trim()).toBe('ml');
 		expect(push).toHaveBeenCalledOnce();
 		// Each mode keeps its value: back to ratio is still 1:3.
-		root.querySelectorAll<HTMLButtonElement>('[role="radio"]')[2].click();
-		flushSync();
+		pick(root, 'Ratio');
 		expect(getSettingsStore().hotWaterDose()).toMatchObject({ mode: HotWaterMode.Ratio, ratio: 3, volumeMl: 150 });
+		// Picking the current mode closes the menu and writes nothing.
+		push.mockClear();
+		pick(root, 'Ratio');
+		expect(push).not.toHaveBeenCalled();
 	});
 
-	it('ratio chips carry "1:" in the unit span, before the number', () => {
+	it('Temp shows the mode without a menu; the first tap on it is the Amount view', () => {
+		const root = render();
+		root.querySelectorAll<HTMLButtonElement>('.qsplit-opt')[0].click();
+		flushSync();
+		expect(modeOption(root).textContent?.trim()).toBe('ratio');
+		expect(modeOption(root).getAttribute('aria-haspopup')).toBeNull();
+		modeOption(root).click();
+		flushSync();
+		expect(root.querySelector('[role="menu"]')).toBeNull();
+		expect(root.querySelector('[aria-label="Hot water ratio presets"]')).not.toBeNull();
+	});
+
+	it('ratio chips read as ratios at every width (no unit span to hide)', () => {
 		const root = render();
 		const chips = [...root.querySelectorAll('.qchipr[aria-label="Hot water ratio presets"] .qchip')];
 		expect(chips.map((c) => c.textContent?.trim())).toEqual(['1:2', '1:2.5', '1:3', '1:4', '1:5']);
-		expect(chips[0].firstElementChild?.className).toBe('qchip-unit');
-		expect(chips[0].firstElementChild?.textContent).toBe('1:');
+		expect(chips[0].querySelector('.qchip-unit')).toBeNull();
 	});
 
 	it('ratio follows profile', async () => {
@@ -163,10 +229,12 @@ describe('the Hot water card', () => {
 		const stored = localStorage.getItem('crema.settings.v1');
 		await app.applyProfileTargetWeight(36);
 		const root = render();
-		expect(root.querySelector('.qhw-readout')?.textContent).toBe('1:3 → 108 ml for a 36 g shot');
+		expect(root.querySelector('.qhw-sub-short')?.textContent).toBe('→ 108 ml');
+		expect(root.querySelector('.qhw-sub-long')?.textContent).toBe('1:3 → 108 ml for a 36 g shot');
+		expect(root.querySelector('.qhw-sub')?.getAttribute('title')).toBe('1:3 → 108 ml for a 36 g shot');
 		await app.applyProfileTargetWeight(50);
 		flushSync();
-		expect(root.querySelector('.qhw-readout')?.textContent).toBe('1:3 → 150 ml for a 50 g shot');
+		expect(root.querySelector('.qhw-sub-long')?.textContent).toBe('1:3 → 150 ml for a 50 g shot');
 		expect(localStorage.getItem('crema.settings.v1')).toBe(stored);
 	});
 

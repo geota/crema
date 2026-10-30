@@ -71,6 +71,35 @@ export function hotWaterReadout(target: HotWaterTarget, units: HotWaterUnits, ra
 }
 
 /**
+ * The stepper's secondary line (spec §2.7): the short form of the readout that
+ * fits under the digits in a ~56 px value box, or `null` when the stepper
+ * already says it all. `warn` marks a caveat (a clamp, no yield target, a
+ * large pour, No limit). Every number is the target's; the full sentence
+ * stays {@link hotWaterReadout}.
+ */
+export function hotWaterSub(
+	target: HotWaterTarget,
+	units: HotWaterUnits
+): { short: string; warn: boolean } | null {
+	if (target.mode === HotWaterMode.Time) {
+		if (target.timeS == null) return { short: 'until stopped', warn: true };
+		if (target.wireVolumeMl > 0) {
+			return { short: `≤ ${formatVolume(target.wireVolumeMl, units.volumeUnit)}`, warn: false };
+		}
+		if (target.timeS > LARGE_POUR_S) return { short: 'large pour', warn: true };
+		return null;
+	}
+	if (target.mode === HotWaterMode.Volume) {
+		return target.stopWeightG != null ? { short: 'by weight', warn: false } : null;
+	}
+	const ml = formatVolume(target.volumeMl, units.volumeUnit);
+	if (target.basis === HotWaterBasis.NoYieldTarget) return { short: ml, warn: true };
+	if (target.clamp === HotWaterClamp.Capped) return { short: `max ${ml}`, warn: true };
+	if (target.clamp === HotWaterClamp.RaisedToMinimum) return { short: `min ${ml}`, warn: true };
+	return { short: `→ ${ml}`, warn: false };
+}
+
+/**
  * The amount a resting chip shows after the temperature: "150 ml", "30 s", or
  * "no limit".
  */
