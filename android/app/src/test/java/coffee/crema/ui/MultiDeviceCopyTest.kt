@@ -320,4 +320,15 @@ class MultiDeviceCopyTest {
         assertEquals("Says it's a hub · unverified · 192.168.1.20", ui.pickerLine(withKid.copy(kid = "bbbbbbbb")))
         assertEquals("Needs a Crema update · 192.168.1.20", ui.pickerLine(kitchen.copy(version = 3)))
     }
+
+    /** §2.10: a superseded hub pin reads "Last seen … · replaced" and never counts as paired in the picker. */
+    @Test
+    fun `a superseded pin reads replaced and isn't paired`() {
+        val now = 10_000_000_000L
+        assertEquals("Last seen 3 days ago · replaced", lastSeenReplaced(now - 3 * 86_400_000L, now))
+        assertEquals("Never seen · replaced", lastSeenReplaced(0, now))
+        val old = pin("aaaaaaaa00", kitchen.host).copy(superseded = true)
+        assertFalse(MainUiState(pairedHubs = listOf(old)).isVerifiedHub(kitchen.copy(kid = "aaaaaaaa")))
+        assertFalse(MainUiState(pairedHubs = listOf(old)).isVerifiedHub(kitchen))
+    }
 }

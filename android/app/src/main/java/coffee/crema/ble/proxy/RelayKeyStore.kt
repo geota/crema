@@ -47,6 +47,14 @@ data class RelayHubPin(
     val port: Int,
     val pinnedAtMs: Long,
     val lastSeenMs: Long = 0,
+    /**
+     * A newer pairing at this pin's address found a different key (spec
+     * §2.10, §6.3): the pin is kept for the user to forget, but no automatic
+     * lookup uses it (matching a pick, the re-find, the restart dial, the
+     * saved-hub fallback). Only the user's explicit Connect dials it, and its
+     * Welcome clears the flag.
+     */
+    val superseded: Boolean = false,
 )
 
 /** A remote this hub pinned at pairing (public data). */

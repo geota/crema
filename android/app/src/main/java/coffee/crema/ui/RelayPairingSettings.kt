@@ -18,6 +18,8 @@ internal class RelayPairingActions(
     val closeWindow: () -> Unit,
     val forgetRemote: (id: String) -> Unit,
     val forgetHub: (id: String) -> Unit,
+    /** Connect through a superseded hub pin: the user's explicit pick (§2.10). */
+    val connectHub: (id: String) -> Unit,
     val resetKey: () -> Unit,
     val dismissUpgradeBanner: () -> Unit,
 )
@@ -84,8 +86,12 @@ internal fun RelayPairingRows(ui: MainUiState, actions: RelayPairingActions, sta
             }
         }
         ui.pairedHubs.forEach { h ->
-            CremaSettingsRow(h.name, "Paired hub · ${lastConnected(h.lastSeenMs, nowMs)}", stacked = stacked) {
-                CremaButton(onClick = { forgetHub = h }, variant = CremaButtonVariant.Text, label = "Forget")
+            val line = if (h.superseded) lastSeenReplaced(h.lastSeenMs, nowMs) else "Paired hub · ${lastConnected(h.lastSeenMs, nowMs)}"
+            CremaSettingsRow(h.name, line, stacked = stacked) {
+                androidx.compose.foundation.layout.Row {
+                    if (h.superseded) CremaButton(onClick = { actions.connectHub(h.id) }, variant = CremaButtonVariant.Text, label = "Connect")
+                    CremaButton(onClick = { forgetHub = h }, variant = CremaButtonVariant.Text, label = "Forget")
+                }
             }
         }
         if (!hub && ui.pairedHubs.isEmpty()) {

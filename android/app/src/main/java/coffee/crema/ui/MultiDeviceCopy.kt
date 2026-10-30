@@ -40,7 +40,7 @@ internal fun remoteStatusLine(
  *  the address it dials, else that address. */
 internal fun MainUiState.remoteHubLabel(): String =
     mirroringPrimaryName.ifBlank {
-        pairedHubs.firstOrNull { it.host == proxyPrimaryHost }?.name ?: proxyPrimaryHost.ifBlank { "the hub" }
+        pairedHubs.firstOrNull { !it.superseded && it.host == proxyPrimaryHost }?.name ?: proxyPrimaryHost.ifBlank { "the hub" }
     }
 
 /** The status line while this device is a remote, else null. Relay v4: a
@@ -82,7 +82,7 @@ internal fun MainUiState.hubModeBlockedReason(): String? =
  */
 internal fun MainUiState.isVerifiedHub(peer: Peer): Boolean {
     val kid = peer.kid
-    return pairedHubs.any { pin -> if (kid != null) pin.id.startsWith(kid) else pin.host == peer.host }
+    return pairedHubs.any { pin -> !pin.superseded && if (kid != null) pin.id.startsWith(kid) else pin.host == peer.host }
 }
 
 /** A hub's picker line: "Paired", or unverified, and "Needs a Crema update"
@@ -252,6 +252,10 @@ internal fun forgetHubTitle(hub: String): String = "Forget $hub?"
 internal const val FORGET_HUB_BODY = "This device will stop connecting through it until you pair again."
 internal const val RESET_KEY_TITLE = "Reset this device's pairing key?"
 internal const val RESET_KEY_BODY = "Every paired device has to pair with it again."
+
+/** A superseded hub pin's line (§2.10): "Last seen 3 days ago · replaced". */
+internal fun lastSeenReplaced(lastSeenMs: Long, nowMs: Long): String =
+    lastConnected(lastSeenMs, nowMs).replace("Last connected", "Last seen").replace("Never connected", "Never seen") + " · replaced"
 
 /** "Last connected 5 minutes ago"; "Never connected" before the first session. */
 internal fun lastConnected(lastSeenMs: Long, nowMs: Long): String {

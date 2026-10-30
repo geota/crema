@@ -205,7 +205,8 @@ class PairingFlowTest {
         }
         val pins = vm.ui.value.pairedHubs
         assertEquals(2, pins.size, "$pins")
-        assertTrue(pins.any { it.id == oldPin }, "the old pin stays, to forget")
+        assertTrue(pins.single { it.id == oldPin }.superseded, "the old pin stays, superseded, to forget")
+        assertTrue(!pins.single { it.id != oldPin }.superseded)
         val newPin = pins.single { it.id != oldPin }
         assertEquals(newPin.id, VmHarness.proxyController(vm).relayStore.savedHub, "the new hub is the saved one")
         untilClock("connected through the hub") { vm.ui.value.remoteStatus() == "Connected through ${code.hubName}" }
