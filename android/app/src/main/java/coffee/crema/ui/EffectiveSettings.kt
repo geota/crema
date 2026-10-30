@@ -91,13 +91,19 @@ private fun MainUiState.withSnapshot(cfg: ConfigSnapshot, m: MirroredSettings): 
     )
 }
 
+/** [id] as the active profile. A profile change clears the Quick-Controls
+ *  override: it was dialled against the old profile (Decenza clears its
+ *  temperature override on a profile load). Every path that changes the active
+ *  profile goes through here. */
+fun MainUiState.withActiveProfileId(id: String?): MainUiState = copy(activeProfileId = id, brewParams = null)
+
 /** What a config command shows, without its side effects: the #203
  *  `showConfig` body as a pure function. */
 fun MachineCommand.Config.applyTo(s: MainUiState): MainUiState = when (this) {
     // Switching profiles clears any Quick-Controls override, and the hub's
     // custom profile no longer applies.
     is MachineCommand.SetActiveProfile ->
-        s.copy(activeProfileId = id, brewParams = null, mirroredProfile = null, mirroredProfileJson = null)
+        s.withActiveProfileId(id).copy(mirroredProfile = null, mirroredProfileJson = null)
     is MachineCommand.SetActiveBean -> s.copy(activeBeanId = id)
     is MachineCommand.SetStopOnWeight -> s.copy(stopOnWeight = on)
     is MachineCommand.SetAutoTare -> s.copy(autoTare = on)

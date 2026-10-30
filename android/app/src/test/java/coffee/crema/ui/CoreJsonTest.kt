@@ -33,17 +33,20 @@ class CoreJsonTest {
     """.trimIndent()
 
     @Test
-    fun `a superseding upload's output decodes with its Aborted event and every write`() {
+    fun `an aborted upload and the retry that follows decode with every write`() {
         val bridge = CremaBridge() // the host build of the core
         bridge.onNotification(NotificationSource.DE1_MMR_READ, modelReply(1), 0uL)
-        bridge.uploadProfile(profile("A"), 0uL)
-        val raw = bridge.uploadProfile(profile("B"), 10uL) // aborts A, starts B
-        val out = coreJson.decodeFromString(CoreOutput.serializer(), raw)
-        val failed = out.events.filterIsInstance<Event.ProfileUploadFailed>().single()
+        bridge.settleForUploads()
+        bridge.uploadWire(profile("A"), 0uL)
+        val aborted = coreJson.decodeFromString(CoreOutput.serializer(), bridge.cancelProfileUpload())
+        val failed = aborted.events.filterIsInstance<Event.ProfileUploadFailed>().single()
         assertIs<ProfileUploadFailure.Aborted>(failed.content.reason)
         assertEquals("Aborted", uploadFailureLabel(failed.content.reason))
+        assertTrue(aborted.events.any { it is Event.ProfileSyncWarning })
+        // The core's retry, 3 s later.
+        val out = coreJson.decodeFromString(CoreOutput.serializer(), bridge.onTick(3_000uL))
         assertTrue(out.events.any { it is Event.ProfileUploadStarted })
-        assertTrue(out.commands.filterIsInstance<Command.WriteCharacteristic>().size >= 3, "B's header, frame and tail")
+        assertTrue(out.commands.filterIsInstance<Command.WriteCharacteristic>().size >= 3, "the header, frame and tail")
     }
 
     @Test

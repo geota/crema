@@ -581,6 +581,23 @@ data class BrewMethodPreset (
 	val icon: String? = null
 )
 
+/// The user's per-shot Quick Controls overrides — absolute values, each
+/// optional (absent = the profile's own value). The JSON shape the shells
+/// already pass to the fingerprint (`{dose, yield, brewTemp, preinf}`).
+@Serializable
+data class BrewOverrides (
+	/// Dose, grams.
+	val dose: Float? = null,
+	/// Yield target, grams.
+	val yield: Float? = null,
+	/// Absolute brew temperature, °C — every step is shifted by the
+	/// difference from the profile's anchor ([`brew_temp_anchor`]).
+	val brewTemp: Float? = null,
+	/// Total pre-infusion time, seconds, across the leading pre-infusion
+	/// segments ([`preinfusion_seconds`]).
+	val preinf: Float? = null
+)
+
 /// What a [`BrewStep`] is, for its icon / default label. Lowercase wire
 /// spelling, like [`BeverageType`](crate::BeverageType).
 @Serializable
@@ -750,6 +767,18 @@ data class BrewStatInput (
 	val rating: UByte? = null,
 	/// The brew method; `None` = machine espresso.
 	val brewMethod: String? = null
+)
+
+/// The brew-temperature dial's range for one profile, °C (inclusive).
+@Serializable
+data class BrewTempRange (
+	/// Lowest absolute brew temperature the dial may reach.
+	val min: Float,
+	/// Highest absolute brew temperature the dial may reach.
+	val max: Float,
+	/// The profile's own brew temperature (the anchor the shift is
+	/// measured from) — the dial's "from profile" reference.
+	val anchor: Float
 )
 
 /// The result of [`catalogue_autofill`].
@@ -1698,6 +1727,20 @@ data class EventProfileUploadFailedInner (
 	val reason: ProfileUploadFailure
 )
 
+/// Generated type representing the anonymous struct variant `ProfileSyncHolds` of the `Event` Rust enum
+@Serializable
+data class EventProfileSyncHoldsInner (
+	/// The fingerprint of the profile the DE1 now holds.
+	val fingerprint: String
+)
+
+/// Generated type representing the anonymous struct variant `ProfileSyncWarning` of the `Event` Rust enum
+@Serializable
+data class EventProfileSyncWarningInner (
+	/// Whether the warning is raised.
+	val active: Boolean
+)
+
 /// Generated type representing the anonymous struct variant `DecodeError` of the `Event` Rust enum
 @Serializable
 data class EventDecodeErrorInner (
@@ -2045,34 +2088,31 @@ sealed class Event {
 	@SerialName("ProfileUploadCompleted")
 	data class ProfileUploadCompleted(val content: EventProfileUploadCompletedInner): Event()
 	/// The profile upload failed. The core has discarded its in-progress
-	/// state; the shell may retry by calling `upload_profile` again.
+	/// state.
 	/// 
 	/// Once the header was dispatched, what the DE1 holds is **unknown**:
 	/// frames are indexed slot writes with no commit step, so an interrupted
 	/// upload can leave the new header's frame count over a mix of new and
-	/// old frames (Decenza `aa8232e6`). The shell must forget any "the DE1
-	/// holds profile X" cache on this event; the core asks for a re-upload
-	/// with [`ProfileReuploadNeeded`](Self::ProfileReuploadNeeded) once the
-	/// machine is Idle.
+	/// old frames (Decenza `aa8232e6`). The core's profile sync retries a
+	/// failed sync upload on its backoff and puts the desired profile back
+	/// after any other failed upload, once the machine is idle (see
+	/// [`ProfileSyncWarning`](Self::ProfileSyncWarning)).
 	@Serializable
 	@SerialName("ProfileUploadFailed")
 	data class ProfileUploadFailed(val content: EventProfileUploadFailedInner): Event()
-	/// The DE1's loaded profile is unknown after a failed upload and the
-	/// machine is Idle, so the shell should upload the active profile now.
-	/// Emitted when a failure lands while the machine is Idle, on the next
-	/// transition into Idle (after the flow that interrupted the upload,
-	/// never during it), or on a tick. The request stays outstanding until a
-	/// shell starts an upload: it is repeated every
-	/// [`PROFILE_REUPLOAD_REPEAT`](crate::PROFILE_REUPLOAD_REPEAT) while the
-	/// machine stays Idle, so a shell that could not act at once (link not
-	/// ready yet) is asked again. At most
-	/// [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
-	/// uploads are started in answer until one completes; cleared by a
-	/// completed upload or a reset (the reconnect path owns the re-upload).
-	/// Decenza's `ReArm` follow-up (`aa8232e6`).
+	/// A profile-sync upload landed: the DE1 now holds the effective profile
+	/// with this fingerprint (the shell's desired one, unless it changed
+	/// meanwhile — the newer one follows). A shot start waits for its own.
 	@Serializable
-	@SerialName("ProfileReuploadNeeded")
-	object ProfileReuploadNeeded: Event()
+	@SerialName("ProfileSyncHolds")
+	data class ProfileSyncHolds(val content: EventProfileSyncHoldsInner): Event()
+	/// The profile sync's one non-blocking warning: `active` when a sync
+	/// upload failed and retries are running (3 s, 10 s, then every 30 s);
+	/// cleared (`active: false`) by the next success or a disconnect.
+	/// Raised once per streak of failures (reaprime `onUploadError`).
+	@Serializable
+	@SerialName("ProfileSyncWarning")
+	data class ProfileSyncWarning(val content: EventProfileSyncWarningInner): Event()
 	/// An incoming notification could not be decoded.
 	@Serializable
 	@SerialName("DecodeError")
@@ -3162,6 +3202,47 @@ data class PhaseMarker (
 	/// (sensor-confirmed), "pressure_unconfirmed" / "flow_unconfirmed",
 	/// "time", or "" when unknown (old data).
 	val transitionReason: String
+)
+
+/// The pre-infusion dial for one profile: its range, the profile's own
+/// seconds ([`preinfusion_seconds`]) and whether it can be dialled at all.
+@Serializable
+data class PreinfusionDial (
+	/// Lowest pre-infusion, seconds (0 = off).
+	val min: Float,
+	/// Highest pre-infusion, seconds: the stepper's [`PREINFUSION_DIAL_MAX_S`],
+	/// raised to the profile's own value when that is longer.
+	val max: Float,
+	/// The profile's own pre-infusion seconds — the dial's seed.
+	val seconds: Float,
+	/// `false` for a profile with no pre-infusion segment: there is nothing
+	/// to rescale, so the shells disable the dial and say why.
+	val adjustable: Boolean
+)
+
+/// The profile sync's state, as a shell sees it.
+@Serializable
+data class ProfileSyncStatus (
+	/// Fingerprint of the effective profile the shell wants on the DE1, or
+	/// `None` with no active profile.
+	val desired: String? = null,
+	/// Fingerprint of what this connection last pushed successfully, or
+	/// `None` (nothing yet, or what the DE1 holds is unknown).
+	val lastPushed: String? = null,
+	/// A sync upload is running.
+	val uploading: Boolean,
+	/// A failed upload is waiting for its retry.
+	val retrying: Boolean
+)
+
+/// What [`CremaCore::set_desired_profile_json`] returns: the output (an upload
+/// it started) and the sync's status after it.
+@Serializable
+data class ProfileSyncOutput (
+	/// Events and BLE writes.
+	val output: CoreOutput,
+	/// The sync's status after the call.
+	val status: ProfileSyncStatus
 )
 
 /// The four badge booleans the shells surface as chips. Projection rules:

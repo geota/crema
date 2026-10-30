@@ -25,15 +25,3 @@ internal fun pushActiveProfile(
     runCatching { setActiveProfile(wire) }
         .onFailure { log("Push active profile failed: ${it.message}") }
 }
-
-/**
- * Whether [MainViewModel.startShot] can skip the profile upload (issue 11): a
- * non-null effective-profile fingerprint that matches what a still-connected DE1
- * already holds. Top-level + `internal` so it's pure and unit-testable without a
- * device (the FFI fingerprint compute and the BLE/DE1 round-trip aren't).
- */
-internal fun shouldSkipProfileUpload(
-    effectiveFingerprint: String?,
-    lastUploaded: String?,
-    de1Ready: Boolean,
-): Boolean = de1Ready && effectiveFingerprint != null && effectiveFingerprint == lastUploaded

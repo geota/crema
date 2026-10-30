@@ -42,7 +42,6 @@ async function harness(opts: { preFlush: boolean; autoPurge?: boolean }): Promis
 	const { De1Manager } = await import('#lib/ble/index.js');
 	const { getProfileStore } = await import('#lib/profiles/index.js');
 	const { getSettingsStore } = await import('#lib/settings/index.js');
-	const { profileFingerprint } = await import('#lib/profiles/fingerprint.js');
 	const requested: number[] = [];
 	vi.spyOn(De1Manager.prototype, 'writeCharacteristic').mockImplementation(
 		async (target: string, data: Uint8Array) => {
@@ -52,6 +51,8 @@ async function harness(opts: { preFlush: boolean; autoPurge?: boolean }): Promis
 	);
 	const core = await loadCore();
 	core.reset();
+	// The bridge outlives one test; a reset keeps the desired profile.
+	await core.setDesiredProfile(null, {}, 0);
 	const app = new CremaApp(core, null);
 	const internals = app as unknown as {
 		de1: { callbacks: { onState(s: string): void } };
@@ -66,8 +67,6 @@ async function harness(opts: { preFlush: boolean; autoPurge?: boolean }): Promis
 	settings.set('stopOnWeight', false);
 	settings.set('groupFlushBeforeShot', opts.preFlush);
 	settings.set('autoPurgeAfterSteam', opts.autoPurge ?? false);
-	// The DE1 already holds this profile, so the start skips the upload.
-	app.state.patch({ activeProfileFingerprint: profileFingerprint(profile, {}) });
 	const h: Harness = {
 		app: app as unknown as App,
 		core,
@@ -80,8 +79,18 @@ async function harness(opts: { preFlush: boolean; autoPurge?: boolean }): Promis
 		},
 		onState: (s) => internals.de1.callbacks.onState(s)
 	};
+	// The machine model (an upload waits for it), an Idle machine and a
+	// settled connection: the core's profile sync uploads the active profile,
+	// so the DE1 already holds it when a test starts a shot.
+	const model = new Uint8Array(20);
+	model.set([0x80, 0x00, 0x0c], 1);
+	new DataView(model.buffer).setUint32(4, 1, true);
+	internals.applyCoreOutput(await core.onNotification('De1MmrRead', model, performance.now()));
 	h.onState('ready');
 	await h.report(IDLE);
+	internals.applyCoreOutput((await core.setDesiredProfile(profile, {}, performance.now())).output);
+	await vi.advanceTimersByTimeAsync(10);
+	if (!(await core.profileSyncStatus()).lastPushed) throw new Error('the profile did not land');
 	requested.length = 0;
 	return h;
 }

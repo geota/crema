@@ -188,6 +188,32 @@ class RelayedVerbPrimaryDispatchTest {
         assertEquals(Frame.ControlOk(1), relay(Golden.require("control/tareScale.json")), "the session still serves")
     }
 
+    /** AC-F6.7: a remote's brew dial reaches the hub as the typed
+     *  `AdjustBrew`, the hub applies the core's rule to it (clamped into the
+     *  active profile's range, from that profile's own brew temp), and the
+     *  relay refuses anything above the core's 100 °C. */
+    @Test
+    fun `f6_7 a relayed brew dial gets the core's clamp on the hub`() {
+        // A built-in whose hottest step leaves the dial short of 100 °C.
+        val profile = vm.ui.value.profiles.first { p ->
+            vm.setActiveProfile(p.id)
+            VmHarness.idle()
+            vm.brewDial()?.let { it.max < 99.0 } == true
+        }
+        val dial = assertNotNull(vm.brewDial(), profile.name)
+        val ok = relay(FrameCodec.encode(Frame.Control(1, "quickAdjustBrew", "18.0,36.0,99.5,")))
+        assertEquals(Frame.ControlOk(1), ok)
+        assertEquals(dial.max, vm.ui.value.brewParams?.brewTemp, "clamped to ${profile.name}'s range")
+        // Back at the profile's own brew temp (and its dose / yield): no override.
+        val back = relay(FrameCodec.encode(Frame.Control(2, "quickAdjustBrew", "${profile.dose},${profile.yieldOut},${dial.anchor},")))
+        assertEquals(Frame.ControlOk(2), back)
+        assertEquals(null, vm.ui.value.brewParams)
+        // Above the core's bound: refused by the relay, nothing changes.
+        val err = assertIs<Frame.ControlErr>(relay(FrameCodec.encode(Frame.Control(3, "quickAdjustBrew", "18.0,36.0,100.5,"))))
+        assertTrue("out of range" in err.reason, err.reason)
+        assertEquals(null, vm.ui.value.brewParams)
+    }
+
     /** The hub's read-only Remotes list shows the paired remote, with its scope. */
     @Test
     fun `the paired remote is listed under Remotes connected`() {

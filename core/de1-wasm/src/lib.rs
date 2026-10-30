@@ -13,7 +13,7 @@
 //! binding glue — so this crate opts out of the workspace's
 //! `unsafe_code = "forbid"` lint (see `Cargo.toml`).
 
-use de1_app::{CoreOutput, CremaCore, Event, ProfileUploadFailure, Source};
+use de1_app::{CoreOutput, CremaCore, Source};
 use de1_domain::Profile;
 use de1_protocol::{CalTarget, MachineState, MmrRegister, ShotSettings};
 use std::cell::Cell;
@@ -913,18 +913,100 @@ pub fn signature_for_roaster(name: String) -> String {
     de1_domain::signature_for_roaster(&name)
 }
 
-/// djb2 base-36 fingerprint of an "effective profile" — library
-/// `CremaProfile` JSON merged with optional Quick-Controls overrides
-/// JSON. Drives the connect-time + shot-start "do we already have these
-/// bytes loaded?" decision. See `de1_domain::profile_fingerprint`.
+/// djb2 base-36 fingerprint of the effective profile — the library
+/// `CremaProfile` JSON with the optional Quick Controls overrides JSON applied
+/// — i.e. the hash of exactly the bytes `an upload of `(profile, qc)` writes. See
+/// `de1_domain::effective_profile_fingerprint`.
 ///
 /// # Errors
 ///
 /// Returns the JSON parse error string when either payload fails to
-/// deserialise into the expected shape.
-#[wasm_bindgen(js_name = profileFingerprint)]
-pub fn profile_fingerprint(profile_json: &str, qc_json: Option<String>) -> Result<String, String> {
-    de1_domain::profile_fingerprint(profile_json, qc_json.as_deref())
+/// deserialise.
+#[wasm_bindgen(js_name = effectiveProfileFingerprint)]
+pub fn effective_profile_fingerprint(
+    profile_json: &str,
+    qc_json: Option<String>,
+) -> Result<String, String> {
+    de1_domain::effective_profile_fingerprint_json(profile_json, qc_json.as_deref())
+}
+
+/// The effective profile: the library `CremaProfile` JSON with the optional
+/// Quick Controls overrides JSON applied by the core — the profile an upload
+/// of `(profile, qc)` sends, and what "Save preset" saves. See
+/// `de1_domain::effective_crema_profile`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[wasm_bindgen(js_name = effectiveCremaProfile)]
+pub fn effective_crema_profile(
+    profile_json: &str,
+    qc_json: Option<String>,
+) -> Result<String, String> {
+    de1_domain::effective_crema_profile_json(profile_json, qc_json.as_deref())
+}
+
+/// The Quick Controls overrides after the core's lifecycle rule: brew
+/// temperature clamped into the profile's range, values equal to the
+/// profile's own dropped. JSON `BrewOverrides` in and out. See
+/// `de1_domain::normalize_brew_overrides`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[wasm_bindgen(js_name = normalizeBrewOverrides)]
+pub fn normalize_brew_overrides(
+    profile_json: &str,
+    qc_json: Option<String>,
+) -> Result<String, String> {
+    de1_domain::normalize_brew_overrides_json(profile_json, qc_json.as_deref())
+}
+
+/// The brew-temperature dial's range for a `CremaProfile` JSON, as a JSON
+/// `BrewTempRange` (`{min, max, anchor}`). See `de1_domain::brew_temp_range`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[wasm_bindgen(js_name = brewTempRange)]
+pub fn brew_temp_range(profile_json: &str) -> Result<String, String> {
+    de1_domain::brew_temp_range_json(profile_json)
+}
+
+/// A `CremaProfile` JSON with its top-level `brewTemp` derived from the first
+/// step's temperature (the brew-temp dial's anchor) — applied on load and save
+/// so every surface shows the same number. See
+/// `de1_domain::with_derived_brew_temp`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[wasm_bindgen(js_name = withDerivedBrewTemp)]
+pub fn with_derived_brew_temp(profile_json: &str) -> Result<String, String> {
+    de1_domain::with_derived_brew_temp_json(profile_json)
+}
+
+/// The pre-infusion dial for a `CremaProfile` JSON, as a JSON
+/// `PreinfusionDial` (`{min, max, seconds, adjustable}`). See
+/// `de1_domain::preinfusion_dial`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[wasm_bindgen(js_name = preinfusionDial)]
+pub fn preinfusion_dial(profile_json: &str) -> Result<String, String> {
+    de1_domain::preinfusion_dial_json(profile_json)
+}
+
+/// The profile's pre-infusion time, seconds — the total of its leading
+/// pre-infusion segments. See `de1_domain::preinfusion_seconds`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[wasm_bindgen(js_name = preinfusionSeconds)]
+pub fn preinfusion_seconds(profile_json: &str) -> Result<f32, String> {
+    de1_domain::preinfusion_seconds_json(profile_json)
 }
 
 /// Convert an editable `CremaProfile` JSON into the wire `Profile` JSON the DE1
@@ -3398,42 +3480,37 @@ impl CremaBridge {
         self.state().core.builtin_profiles_json()
     }
 
-    /// Start uploading the profile in `profile_json` to the DE1.
+    /// Tell the core which profile the DE1 should hold: the library
+    /// `CremaProfile` in `profile_json` (`undefined` = no active profile)
+    /// with the Quick Controls overrides in `qc_json` (`{dose, yield,
+    /// brewTemp, preinf}`; `undefined` = none). Call on every activation,
+    /// edit, override change and restore. The core's profile sync uploads it
+    /// — the only way a profile reaches the DE1 (AC-F6.6) — on every connect,
+    /// on a change, with retries, never while the machine is busy and never
+    /// on a read-only mirror.
     ///
-    /// Returns a JSON-encoded [`CoreOutput`]:
-    ///
-    /// - On success, `commands` carries the full upload sequence (header
-    ///   write, every frame write in order, tail) and `events` carries one
-    ///   `ProfileUploadStarted`.
-    /// - On validation failure (`Empty` / `TooManySteps`), `events`
-    ///   carries one `ProfileUploadFailed` and `commands` is empty.
-    /// - On a JSON parse failure, `events` carries one `DecodeError`.
-    ///
-    /// The shell confirms each write it made with
-    /// `on_profile_write_ack(De1HeaderAck | De1FrameAck, …, upload_id)`; the
-    /// core emits `ProfileUploadProgress` / `ProfileUploadCompleted` /
-    /// `ProfileUploadFailed` from those.
-    pub fn upload_profile(&self, profile_json: String, now_ms: f64) -> String {
-        let profile: Profile = match serde_json::from_str(&profile_json) {
-            Ok(p) => p,
-            Err(e) => {
-                let mut out = CoreOutput::default();
-                out.events.push(Event::DecodeError {
-                    message: format!("profile JSON parse failed: {e}"),
-                });
-                return json(out);
-            }
-        };
-        let now = std::time::Duration::from_millis(now_ms as u64);
-        match self.state().core.upload_profile(&profile, now) {
-            Ok(out) => json(out),
-            Err(err) => {
-                let mut out = CoreOutput::default();
-                let reason = ProfileUploadFailure::from(err);
-                out.events.push(Event::ProfileUploadFailed { reason });
-                json(out)
-            }
-        }
+    /// Returns a JSON `ProfileSyncOutput`: `output` (an upload this started,
+    /// or one `DecodeError` on malformed JSON) and `status`.
+    pub fn set_desired_profile(
+        &self,
+        profile_json: Option<String>,
+        qc_json: Option<String>,
+        now_ms: f64,
+    ) -> String {
+        let sync = self.state().core.set_desired_profile_json(
+            profile_json.as_deref(),
+            qc_json.as_deref(),
+            now_ms as u64,
+        );
+        serde_json::to_string(&sync).unwrap_or_else(|_| {
+            r#"{"output":{"events":[],"commands":[]},"status":{"desired":null,"lastPushed":null,"uploading":false,"retrying":false}}"#.to_string()
+        })
+    }
+
+    /// The profile sync's state as JSON `ProfileSyncStatus` (`desired`,
+    /// `lastPushed`, `uploading`, `retrying`).
+    pub fn profile_sync_status(&self) -> String {
+        serde_json::to_string(&self.state().core.profile_sync_status()).unwrap_or_default()
     }
 
     /// Cancel an in-progress profile upload. Returns the

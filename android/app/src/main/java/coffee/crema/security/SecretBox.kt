@@ -22,9 +22,12 @@ import javax.crypto.spec.GCMParameterSpec
  * key that lives in AndroidKeyStore and never leaves it.
  *
  * Reads accept a legacy plaintext value (no `sb1:` prefix) and report it as
- * needing migration, so the store re-saves it wrapped. A value that no longer
- * opens (key invalidated, app reinstalled with the old file restored) reads as
- * [Opened.Lost] — callers treat that as signed out, never as a crash.
+ * needing migration, so the store re-saves it wrapped. A value that provably
+ * never opens again (key gone or invalidated, app reinstalled with the old file
+ * restored: [KeystoreFailures] says DEFINITIVE) reads as [Opened.Lost] — callers
+ * treat that as signed out, never as a crash. Any other failure (a keystore that
+ * isn't ready at boot) reads as [Opened.Unavailable]: the stored value is kept
+ * as it is and a later start tries again.
  *
  * The cipher sits behind [SecretCipher] so the wrap / unwrap / migrate logic is
  * JVM-testable with a fake; [AndroidKeystoreCipher] is the device implementation.
@@ -44,23 +47,32 @@ class SecretBox(private val cipher: SecretCipher) {
 
         /** Wrapped, but the key can no longer open it — treat as signed out. */
         data object Lost : Opened()
+
+        /**
+         * It didn't open this time, but nothing proves it never will (a transient
+         * keystore error). Keep the stored value unchanged, don't re-save it, and
+         * try again on a later start.
+         */
+        data object Unavailable : Opened()
     }
 
     /** Wrap [plain] for storage. Throws [GeneralSecurityException] when the keystore is unusable. */
     fun wrap(plain: String): String =
         PREFIX + Base64.getEncoder().encodeToString(cipher.seal(plain.toByteArray(Charsets.UTF_8)))
 
+    /**
+     * Open a token field. A plaintext value opens and asks to be migrated; a
+     * sealed one goes through [openBytes], so the same classification decides
+     * [Opened.Lost] (definitive) versus [Opened.Unavailable] (anything else).
+     */
     fun open(stored: String): Opened {
         if (!stored.startsWith(PREFIX)) return Opened.Value(stored, migrate = true)
-        return try {
-            val bytes = Base64.getDecoder().decode(stored.removePrefix(PREFIX))
-            Opened.Value(String(cipher.open(bytes), Charsets.UTF_8), migrate = false)
-        } catch (e: Exception) {
-            // GeneralSecurityException (key invalidated / missing / tag mismatch),
-            // a keystore ProviderException or IOException, or corrupt base64 —
-            // all mean the same thing: this secret is gone.
-            Log.w(TAG, "stored secret no longer opens: ${e.javaClass.simpleName}")
-            Opened.Lost
+        return when (val o = openBytes(stored)) {
+            is OpenedBytes.Value -> Opened.Value(String(o.bytes, Charsets.UTF_8), migrate = false).also { o.bytes.fill(0) }
+            is OpenedBytes.Failed -> when (o.kind) {
+                KeystoreFailure.DEFINITIVE -> Opened.Lost
+                KeystoreFailure.TRANSIENT -> Opened.Unavailable
+            }
         }
     }
 
@@ -180,9 +192,16 @@ object AndroidKeyStoreBackend : KeystoreBackend {
 class AndroidKeystoreKeySource(
     private val alias: String,
     private val backend: KeystoreBackend = AndroidKeyStoreBackend,
+    /**
+     * How to read an alias the keystore lists but returns no key for. False
+     * (the relay key): a transient [KeyStoreException]. True (the account
+     * tokens, as before relay v4): absent, so a seal makes a new key and an
+     * open reads as lost, but still only once the probe shows the keystore works.
+     */
+    private val listedWithoutKeyIsAbsent: Boolean = false,
 ) : SecretKeySource {
     override fun existing(): SecretKey? {
-        if (backend.containsAlias(alias)) return present()
+        if (backend.containsAlias(alias)) present()?.let { return it }
         probe()
         // The keystore works. The alias may have appeared meanwhile (it was just
         // starting); otherwise it is really gone.
@@ -191,9 +210,8 @@ class AndroidKeystoreKeySource(
 
     override fun getOrCreate(): SecretKey = KeyCreation.locked(alias) { existing() ?: backend.generate(alias) }
 
-    private fun present(): SecretKey = backend.getKey(alias)
-        // A listed alias without a key is not proof of loss: transient.
-        ?: throw KeyStoreException("alias $alias present but no secret key returned")
+    private fun present(): SecretKey? = backend.getKey(alias)
+        ?: if (listedWithoutKeyIsAbsent) null else throw KeyStoreException("alias $alias present but no secret key returned")
 
     /** Throws [KeyStoreException] unless the keystore lists, returns and uses a key. */
     private fun probe() {
@@ -226,22 +244,6 @@ class AndroidKeystoreKeySource(
 }
 
 /**
- * The account-token boxes' key lookup, unchanged from before relay v4: a key
- * that can't be found is created on seal, and is a loss on open (which
- * [SecretBox.open] turns into signed out). No liveness probe and no strict
- * "listed but no key" rule: those apply to the relay key only
- * ([AndroidKeystoreKeySource]), so the token sign-in paths behave as they did.
- */
-class LegacyKeystoreKeySource(
-    private val alias: String,
-    private val backend: KeystoreBackend = AndroidKeyStoreBackend,
-) : SecretKeySource {
-    override fun existing(): SecretKey? = backend.getKey(alias)
-
-    override fun getOrCreate(): SecretKey = KeyCreation.locked(alias) { existing() ?: backend.generate(alias) }
-}
-
-/**
  * One check-then-create per alias at a time, process-wide: generating under an
  * alias that already has a key replaces it, so two first-use sealers (the three
  * token stores share one alias) must not both see "absent" and both generate.
@@ -254,8 +256,8 @@ internal object KeyCreation {
 
 /**
  * Seals with AES-256-GCM under [keys] (by default the strict, probed
- * [AndroidKeystoreKeySource] for [alias], as the relay key uses; the token boxes
- * pass [LegacyKeystoreKeySource]), binding [aad] as associated data when it
+ * [AndroidKeystoreKeySource] for [alias]; the token boxes pass one that re-keys
+ * an alias listed without a key), binding [aad] as associated data when it
  * is non-empty: a blob sealed under one purpose's AAD never opens under
  * another's (the relay key uses `"relay-v4 static"`). A missing key throws
  * [KeystoreKeyMissingException]; a wrong key, AAD or tampered blob throws
@@ -298,7 +300,13 @@ object DeviceSecretBox {
 
     val instance: SecretBox by lazy { create() }
 
-    /** The token box over [backend]: the token alias, no AAD, the pre-relay-v4 key handling. */
-    internal fun create(backend: KeystoreBackend = AndroidKeyStoreBackend): SecretBox =
-        SecretBox(AndroidKeystoreCipher(TOKEN_ALIAS, keys = LegacyKeystoreKeySource(TOKEN_ALIAS, backend)))
+    /**
+     * The token box over [backend]: the token alias, no AAD, and a key source
+     * that re-keys an alias listed without a key (as before relay v4) but only
+     * believes "absent" from a keystore the liveness probe shows working, so a
+     * keystore that isn't ready never gets a new key over the real one.
+     */
+    internal fun create(backend: KeystoreBackend = AndroidKeyStoreBackend): SecretBox = SecretBox(
+        AndroidKeystoreCipher(TOKEN_ALIAS, keys = AndroidKeystoreKeySource(TOKEN_ALIAS, backend, listedWithoutKeyIsAbsent = true)),
+    )
 }

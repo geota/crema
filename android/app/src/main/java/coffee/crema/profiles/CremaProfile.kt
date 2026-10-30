@@ -63,7 +63,7 @@ data class CremaProfile(
     val dose: Float = 18f,
     /** Yield target, grams (round-trips as the wire `target_weight`). */
     val yieldOut: Float = 36f,
-    /** Brew temperature, °C — a display default; per-segment temps are the real control. */
+    /** Brew temperature, °C — the first step's, kept derived by the core. */
     val brewTemp: Float = 93f,
     /** How many leading segments count as preinfusion. */
     val preinfuseStepCount: Int = 0,
@@ -79,12 +79,19 @@ data class CremaProfile(
     val beverageType: String? = null,
     /** The ordered pressure / flow segments (the phase track). */
     val segments: List<ProfileSegment> = emptyList(),
+    /** The core's pre-infusion seconds (the total of the leading pre-infusion
+     *  segments), filled from the full JSON when the library loads; not stored. */
+    @kotlinx.serialization.Transient
+    val preinfusionS: Float? = null,
 ) {
     /** Live yield-to-dose ratio target, the x in `1:x` (0 when dose is unset). */
     val ratio: Float get() = brewRatio(dose, yieldOut) ?: 0f
 
-    /** Pre-infusion seconds — the first segment's duration, rounded (web parity). */
-    val preinfuseSeconds: Int get() = segments.firstOrNull()?.time?.let { Math.round(it) } ?: 0
+    /** Pre-infusion seconds, rounded: the core's total of the leading
+     *  pre-infusion segments ([preinfusionS]); before the library filled it, the
+     *  first segment's duration. */
+    val preinfuseSeconds: Int get() = preinfusionS?.let { Math.round(it) }
+        ?: segments.firstOrNull()?.time?.let { Math.round(it) } ?: 0
 }
 
 /*

@@ -76,6 +76,7 @@ pub mod crema_profile;
 pub mod decent_shot_record;
 pub mod decent_wire;
 pub mod duration;
+pub mod effective_profile;
 pub mod error;
 pub mod filter;
 pub mod firmware_builds;
@@ -206,6 +207,14 @@ pub use decent_wire::{
     decent_login_token, decent_login_token_json, decent_machines, decent_machines_json,
     decent_shot_view_url, decent_upload_reply, decent_upload_reply_json, extract_decent_id,
     parse_decent_machines,
+};
+pub use effective_profile::{
+    BrewOverrides, BrewTempRange, PREINFUSION_DIAL_MAX_S, PreinfusionDial, STEP_FLOOR_C,
+    brew_temp_anchor, brew_temp_range, brew_temp_range_json, effective_crema_profile,
+    effective_crema_profile_json, effective_profile_fingerprint,
+    effective_profile_fingerprint_json, normalize_brew_overrides, normalize_brew_overrides_json,
+    parse_brew_overrides, preinfusion_dial, preinfusion_dial_json, preinfusion_seconds,
+    preinfusion_seconds_json, with_derived_brew_temp, with_derived_brew_temp_json,
 };
 pub use error::{DomainError, ImportError};
 pub use firmware_builds::{

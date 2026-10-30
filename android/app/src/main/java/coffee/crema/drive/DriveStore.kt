@@ -9,6 +9,7 @@ import coffee.crema.security.SecretBox
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
 import java.io.File
 
@@ -41,29 +42,49 @@ data class DriveState(
     /** Epoch ms of the last SUCCESSFUL backup upload, manual or automatic —
      *  drives the "Last backed up X ago" readout. Additive → nullable. */
     val lastBackupSuccessAtMs: Long? = null,
+    /**
+     * The stored state as read, when the keystore couldn't open a secret this
+     * start ([SecretBox.Opened.Unavailable]); in memory only. Meanwhile the
+     * session reads as signed out, and every save writes the stored sealed
+     * values back unchanged, so a transient keystore error never erases the
+     * sign-in. Setting new tokens or signing out drops it ([DriveSync]).
+     */
+    @Transient val unopened: DriveState? = null,
 )
 
 /** The at-rest form: token + PKCE verifier sealed ([SecretBox]). Idempotent. */
 internal fun DriveState.sealedWith(box: SecretBox): DriveState {
     fun seal(v: String) = if (SecretBox.isWrapped(v)) v else box.wrap(v)
+    val kept = unopened?.takeIf { tokens == null }
     return copy(
-        tokens = tokens?.let { t -> t.copy(accessToken = seal(t.accessToken), refreshToken = t.refreshToken?.let(::seal)) },
+        tokens = tokens?.let { t -> t.copy(accessToken = seal(t.accessToken), refreshToken = t.refreshToken?.let(::seal)) }
+            ?: kept?.tokens,
+        // A handshake is single-use: one in flight at that start isn't kept.
         pendingVerifier = pendingVerifier?.let(::seal),
     )
 }
 
-/** The in-memory form, plus whether to re-save (legacy plaintext, or a lost key → signed out). */
+/**
+ * The in-memory form, plus whether to re-save (legacy plaintext, or a lost key
+ * → signed out). A secret the keystore can't open this start (transient): signed
+ * out for the session, the stored state kept in [DriveState.unopened], no re-save.
+ */
 internal fun DriveState.openedWith(box: SecretBox): Pair<DriveState, Boolean> {
     var resave = false
     var lost = false
+    var unavailable = false
     fun open(v: String?): String? = when (val o = box.openOrNull(v)) {
         null -> null
         is SecretBox.Opened.Value -> { if (o.migrate) resave = true; o.value }
         SecretBox.Opened.Lost -> { lost = true; resave = true; null }
+        SecretBox.Opened.Unavailable -> { unavailable = true; null }
     }
     val access = tokens?.let { open(it.accessToken) }
     val refresh = tokens?.refreshToken?.let { open(it) }
     val verifier = open(pendingVerifier)
+    if (unavailable && !lost) {
+        return copy(tokens = null, pendingVerifier = null, pendingState = null, pendingStartedAtMs = null, unopened = this) to false
+    }
     return copy(
         tokens = if (lost || access == null) null else tokens?.copy(accessToken = access, refreshToken = refresh),
         pendingVerifier = if (lost) null else verifier,

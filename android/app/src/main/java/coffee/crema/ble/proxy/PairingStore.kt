@@ -83,7 +83,7 @@ class PairingStore(
 
     private fun open(stored: String?): String? = when (val o = box.openOrNull(stored)) {
         is SecretBox.Opened.Value -> o.value
-        SecretBox.Opened.Lost, null -> null
+        SecretBox.Opened.Lost, SecretBox.Opened.Unavailable, null -> null
     }
 
     private fun seal(secret: String): String? = try {

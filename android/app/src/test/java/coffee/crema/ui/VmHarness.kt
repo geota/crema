@@ -109,6 +109,14 @@ internal object VmHarness {
         idleUntil("the prefs load") { field.getBoolean(vm) }
     }
 
+    /** Wait for the whole startup load (library, prefs, custom profiles, …):
+     *  [awaitPrefsLoaded] returns before the custom profiles load, which would
+     *  overwrite a profile a test saves in that window, and before the load's
+     *  own push of the desired profile. */
+    fun awaitStartupLoaded(vm: MainViewModel) {
+        idleUntil("the startup load") { vm.startupLoad.isCompleted }
+    }
+
     /** The VM's own state: what it persists (the screens see [MainViewModel.ui]). */
     fun ownState(vm: MainViewModel): MainUiState = vm.ownState.value
 

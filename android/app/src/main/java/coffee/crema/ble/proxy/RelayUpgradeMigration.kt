@@ -39,7 +39,7 @@ class RelayUpgradeMigration(private val filesDir: File, private val json: Json) 
         /** v3 state removed, flags recorded. */
         MIGRATED,
 
-        /** The relay store has no key this start: nothing touched; retry next start. */
+        /** The relay store has no key this start, or couldn't record the flags: nothing touched; retry next start. */
         DEFERRED,
     }
 
@@ -69,7 +69,13 @@ class RelayUpgradeMigration(private val filesDir: File, private val json: Json) 
             // interrupted run runs again; once marked, a leftover found later (a
             // restored `.bak`, an older build's save) is cleaned up without
             // sending a re-paired remote back to "Pair again".
-            store.markUpgraded(needsRepair = v3Paired && role == ROLE_REMOTE, upgradeNotice = v3Paired && role == ROLE_HUB)
+            val recorded = store.markUpgraded(needsRepair = v3Paired && role == ROLE_REMOTE, upgradeNotice = v3Paired && role == ROLE_HUB)
+            if (!recorded) {
+                // The flags never reached relay-v4.json: deleting now would lose
+                // the "Pair again" state for good. Touch nothing; retry next start.
+                Log.w(TAG, "couldn't record the v3 migration in ${RelayKeyStore.FILE_NAME}; the next start retries")
+                return Outcome.DEFERRED
+            }
         }
 
         SafeFile.erase(pairingFile)

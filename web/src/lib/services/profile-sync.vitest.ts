@@ -1,30 +1,22 @@
 /**
- * `#lib/services/profile-sync.vitest` — vitest for the `ProfileSync`
- * coordination service (docs/53 T-21, risk R-03).
+ * `#lib/services/profile-sync.vitest` — vitest for the `ProfileSync` waiter
+ * (docs/53 T-21). The core owns when to upload (`profile_sync.rs`); this
+ * service only lets a shot start wait until the DE1 holds the fingerprint it
+ * needs:
  *
- * This is the behavior that was previously buried in `state/app.svelte.ts`'s
- * `syncActiveProfile` + the two event-fold arms, driven by `window.setTimeout`
- * and three mutable fields — unreachable by any automated test. Lifting it into
- * a service (with the upload/cancel/log injected) makes the four subtle
- * behaviors R-03 calls out deterministically testable:
- *
- *  - **cache hit** → short-circuit `true`, no upload;
- *  - **success / failure** → the fold's `completed` / `failed` resolve the
- *    waiter (and `completed` hands back the fingerprint to persist);
- *  - **piggyback** → a second caller on the same fingerprint shares one upload;
- *  - **supersession** → a different fingerprint cancels the in-flight one (old
- *    waiter resolves `false`), the newer wins;
- *  - **15 s timeout** → resolves `false` + logs (driven by `TestClock`);
+ *  - **already held** → `true` at once;
+ *  - **holds / failed** → the fold's `holds(fp)` resolves that fingerprint's
+ *    waiters `true`, `failed` resolves every waiter `false`;
+ *  - **shared waiter** → two callers on one fingerprint resolve together;
+ *    another fingerprint's `holds` leaves them waiting;
+ *  - **15 s timeout** → `false` + a log line (driven by `TestClock`);
  *  - **profile-download guard** → waits out the remaining 500 ms window.
  *
- * The time-free behaviors run on the live runtime with a tiny real `sleep` to
- * let forked fibers settle; the time-based ones use Effect's `TestClock` (no
- * `@effect/vitest` — `TestClock.layer()` under plain vitest). Run:
- * `cd web && pnpm test:vitest` (or `vitest run profile-sync`).
+ * Run: `cd web && pnpm test:vitest` (or `vitest run profile-sync`).
  */
 
 import { describe, expect, it } from 'vitest';
-import { Deferred, Duration, Effect, Fiber } from 'effect';
+import { Duration, Effect, Fiber } from 'effect';
 import { TestClock } from 'effect/testing';
 import { ProfileSync, ProfileSyncLive, profileWriteAck } from './profile-sync.ts';
 
@@ -42,300 +34,91 @@ function runTest<A>(program: Effect.Effect<A, never, ProfileSync>): Promise<A> {
 	);
 }
 
-/** Build an `upload` thunk that records the call + signals `started`. */
-const signalUpload = (started: Deferred.Deferred<void>) =>
-	Deferred.succeed(started, undefined).pipe(Effect.asVoid);
+/** Let forked fibers reach their await. */
+const settle = Effect.promise(() => new Promise((r) => setTimeout(r, 5)));
 
-describe('ProfileSync.sync — cache hit', () => {
-	it('short-circuits to true without uploading', async () => {
-		const result = await run(
+describe('ProfileSync.sync — already held', () => {
+	it('resolves true at once', async () => {
+		const ok = await run(
 			Effect.gen(function* () {
 				const ps = yield* ProfileSync;
-				let uploaded = false;
-				const ok = yield* ps.sync({
-					desired: 'fp1',
-					alreadyLoaded: true,
-					upload: Effect.sync(() => {
-						uploaded = true;
-					}),
-					cancel: Effect.void,
-					log: noop
-				});
-				return { ok, uploaded };
+				return yield* ps.sync({ desired: 'fp1', alreadyLoaded: true, log: noop });
 			})
 		);
-		expect(result.ok).toBe(true);
-		expect(result.uploaded).toBe(false);
+		expect(ok).toBe(true);
 	});
 });
 
-describe('ProfileSync.sync — completion', () => {
-	it('resolves true and returns the fingerprint when the upload completes', async () => {
-		const result = await run(
+describe('ProfileSync.sync — the core reports the outcome', () => {
+	it('resolves true when the DE1 holds the fingerprint', async () => {
+		const ok = await run(
 			Effect.gen(function* () {
 				const ps = yield* ProfileSync;
-				const started = yield* Deferred.make<void>();
 				const fiber = yield* Effect.forkChild(
-					ps.sync({
-						desired: 'fp1',
-						alreadyLoaded: false,
-						upload: signalUpload(started),
-						cancel: Effect.void,
-						log: noop
-					})
+					ps.sync({ desired: 'fp1', alreadyLoaded: false, log: noop })
 				);
-				yield* Deferred.await(started); // pending installed; fiber now awaiting
-				const committed = yield* ps.completed; // the fold's ProfileUploadCompleted arm
-				const ok = yield* Fiber.join(fiber);
-				return { committed, ok };
+				yield* settle;
+				yield* ps.holds('fp1');
+				return yield* Fiber.join(fiber);
 			})
 		);
-		expect(result.committed).toBe('fp1');
-		expect(result.ok).toBe(true);
+		expect(ok).toBe(true);
 	});
 
-	it('resolves false and commits nothing when the upload fails', async () => {
-		const result = await run(
+	it('resolves false when an upload fails', async () => {
+		const ok = await run(
 			Effect.gen(function* () {
 				const ps = yield* ProfileSync;
-				const started = yield* Deferred.make<void>();
 				const fiber = yield* Effect.forkChild(
-					ps.sync({
-						desired: 'fp1',
-						alreadyLoaded: false,
-						upload: signalUpload(started),
-						cancel: Effect.void,
-						log: noop
-					})
+					ps.sync({ desired: 'fp1', alreadyLoaded: false, log: noop })
 				);
-				yield* Deferred.await(started);
-				yield* ps.failed; // the fold's ProfileUploadFailed arm
-				const ok = yield* Fiber.join(fiber);
-				// A late completion now finds nothing pending → commits nothing.
-				const lateCommit = yield* ps.completed;
-				return { ok, lateCommit };
+				yield* settle;
+				yield* ps.failed;
+				return yield* Fiber.join(fiber);
 			})
 		);
-		expect(result.ok).toBe(false);
-		expect(result.lateCommit).toBe(null);
+		expect(ok).toBe(false);
 	});
-});
 
-describe('ProfileSync.sync — piggyback', () => {
-	it('shares one upload between two callers on the same fingerprint', async () => {
+	it('shares a waiter per fingerprint; another fingerprint leaves it waiting', async () => {
 		const result = await run(
 			Effect.gen(function* () {
 				const ps = yield* ProfileSync;
-				let uploadCount = 0;
-				const started = yield* Deferred.make<void>();
-				const mkUpload = () =>
-					Effect.sync(() => {
-						uploadCount += 1;
-					}).pipe(Effect.andThen(Deferred.succeed(started, undefined)), Effect.asVoid);
-				const f1 = yield* Effect.forkChild(
-					ps.sync({ desired: 'fp1', alreadyLoaded: false, upload: mkUpload(), cancel: Effect.void, log: noop })
-				);
-				yield* Deferred.await(started);
-				const f2 = yield* Effect.forkChild(
-					ps.sync({ desired: 'fp1', alreadyLoaded: false, upload: mkUpload(), cancel: Effect.void, log: noop })
-				);
-				yield* Effect.sleep(Duration.millis(5)); // let f1 release the permit + f2 piggyback
-				const committed = yield* ps.completed;
-				const r1 = yield* Fiber.join(f1);
-				const r2 = yield* Fiber.join(f2);
-				return { uploadCount, committed, r1, r2 };
+				const a1 = yield* Effect.forkChild(ps.sync({ desired: 'A', alreadyLoaded: false, log: noop }));
+				const a2 = yield* Effect.forkChild(ps.sync({ desired: 'A', alreadyLoaded: false, log: noop }));
+				const b = yield* Effect.forkChild(ps.sync({ desired: 'B', alreadyLoaded: false, log: noop }));
+				yield* settle;
+				// The core coalesced: A landed first, B follows.
+				yield* ps.holds('A');
+				const first = [yield* Fiber.join(a1), yield* Fiber.join(a2)];
+				const bWaiting = (yield* Effect.sync(() => b.pollUnsafe())) === undefined;
+				yield* ps.holds('B');
+				return { first, bWaiting, b: yield* Fiber.join(b) };
 			})
 		);
-		expect(result.uploadCount).toBe(1); // only one upload despite two callers
-		expect(result.committed).toBe('fp1');
-		expect(result.r1).toBe(true);
-		expect(result.r2).toBe(true);
-	});
-});
-
-describe('ProfileSync.sync — supersession', () => {
-	it('cancels an in-flight upload of a different fingerprint; the newer wins', async () => {
-		const result = await run(
-			Effect.gen(function* () {
-				const ps = yield* ProfileSync;
-				const started1 = yield* Deferred.make<void>();
-				const started2 = yield* Deferred.make<void>();
-				const f1 = yield* Effect.forkChild(
-					ps.sync({
-						desired: 'fp1',
-						alreadyLoaded: false,
-						upload: signalUpload(started1),
-						cancel: Effect.void,
-						log: noop
-					})
-				);
-				yield* Deferred.await(started1);
-				const f2 = yield* Effect.forkChild(
-					ps.sync({
-						desired: 'fp2',
-						alreadyLoaded: false,
-						upload: signalUpload(started2),
-						// `cancel` models the orchestrator reacting to the core's
-						// ProfileUploadFailed{Aborted} — the fold runs `failed`.
-						cancel: ps.failed,
-						log: noop
-					})
-				);
-				yield* Deferred.await(started2); // fp2 installed; fp1 already cancelled
-				const committed = yield* ps.completed;
-				const r1 = yield* Fiber.join(f1);
-				const r2 = yield* Fiber.join(f2);
-				return { committed, r1, r2 };
-			})
-		);
-		expect(result.r1).toBe(false); // superseded
-		expect(result.r2).toBe(true); // newer won
-		expect(result.committed).toBe('fp2');
-	});
-});
-
-describe('ProfileSync.sync — background syncs never displace an upload (cohort review 2026-10-28, #2 N2)', () => {
-	it('an automatic re-upload waits on the user start in flight instead of cancelling it', async () => {
-		const result = await run(
-			Effect.gen(function* () {
-				const ps = yield* ProfileSync;
-				const startedUser = yield* Deferred.make<void>();
-				let cancelled = false;
-				let autoUploaded = false;
-				const user = yield* Effect.forkChild(
-					ps.sync({
-						desired: 'fp-with-qc',
-						alreadyLoaded: false,
-						upload: signalUpload(startedUser),
-						cancel: Effect.void,
-						log: noop
-					})
-				);
-				yield* Deferred.await(startedUser);
-				const auto = yield* Effect.forkChild(
-					ps.sync({
-						desired: 'fp-no-qc',
-						alreadyLoaded: false,
-						upload: Effect.sync(() => {
-							autoUploaded = true;
-						}),
-						cancel: Effect.sync(() => {
-							cancelled = true;
-						}),
-						log: noop,
-						background: true
-					})
-				);
-				yield* Effect.sleep(Duration.millis(5));
-				const committed = yield* ps.completed;
-				return {
-					committed,
-					user: yield* Fiber.join(user),
-					auto: yield* Fiber.join(auto),
-					cancelled,
-					autoUploaded
-				};
-			})
-		);
-		expect(result.cancelled).toBe(false);
-		expect(result.autoUploaded).toBe(false);
-		expect(result.user).toBe(true);
-		expect(result.auto).toBe(true);
-		expect(result.committed).toBe('fp-with-qc');
-	});
-
-	it('a user start still supersedes an automatic upload', async () => {
-		const result = await run(
-			Effect.gen(function* () {
-				const ps = yield* ProfileSync;
-				const startedAuto = yield* Deferred.make<void>();
-				const startedUser = yield* Deferred.make<void>();
-				const auto = yield* Effect.forkChild(
-					ps.sync({
-						desired: 'fp-no-qc',
-						alreadyLoaded: false,
-						upload: signalUpload(startedAuto),
-						cancel: Effect.void,
-						log: noop,
-						background: true
-					})
-				);
-				yield* Deferred.await(startedAuto);
-				const user = yield* Effect.forkChild(
-					ps.sync({
-						desired: 'fp-with-qc',
-						alreadyLoaded: false,
-						upload: signalUpload(startedUser),
-						cancel: ps.failed,
-						log: noop
-					})
-				);
-				yield* Deferred.await(startedUser);
-				const committed = yield* ps.completed;
-				return { committed, auto: yield* Fiber.join(auto), user: yield* Fiber.join(user) };
-			})
-		);
-		expect(result.auto).toBe(false);
-		expect(result.user).toBe(true);
-		expect(result.committed).toBe('fp-with-qc');
+		expect(result.first).toEqual([true, true]);
+		expect(result.bWaiting).toBe(true);
+		expect(result.b).toBe(true);
 	});
 });
 
 describe('ProfileSync.sync — timeout (TestClock)', () => {
-	it('cancels the core upload when the backstop fires (cohort review 2026-10-28, #2 N1)', async () => {
-		const result = await runTest(
-			Effect.gen(function* () {
-				const ps = yield* ProfileSync;
-				const started = yield* Deferred.make<void>();
-				let cancels = 0;
-				const fiber = yield* Effect.forkChild(
-					ps.sync({
-						desired: 'fp1',
-						alreadyLoaded: false,
-						upload: signalUpload(started),
-						// The core's ProfileUploadFailed{Aborted} fold runs `failed`.
-						cancel: Effect.sync(() => {
-							cancels += 1;
-						}).pipe(Effect.andThen(ps.failed)),
-						log: noop
-					})
-				);
-				yield* Deferred.await(started);
-				yield* TestClock.adjust(Duration.seconds(15));
-				const ok = yield* Fiber.join(fiber);
-				return { ok, cancels };
-			})
-		);
-		expect(result.ok).toBe(false);
-		expect(result.cancels).toBe(1);
-	});
-
-	it('resolves false + logs when no completion arrives within 15s', async () => {
+	it('resolves false + logs when the DE1 does not confirm within 15 s', async () => {
 		const result = await runTest(
 			Effect.gen(function* () {
 				const ps = yield* ProfileSync;
 				const logs: string[] = [];
-				const started = yield* Deferred.make<void>();
 				const fiber = yield* Effect.forkChild(
-					ps.sync({
-						desired: 'fp1',
-						alreadyLoaded: false,
-						upload: signalUpload(started),
-						cancel: Effect.void,
-						log: (l) => logs.push(l)
-					})
+					ps.sync({ desired: 'fp1', alreadyLoaded: false, log: (l) => logs.push(l) })
 				);
-				yield* Deferred.await(started); // fiber armed its 15s backstop
+				yield* TestClock.adjust(Duration.zero); // the fiber arms its backstop
 				yield* TestClock.adjust(Duration.seconds(15));
 				const ok = yield* Fiber.join(fiber);
-				// Timeout cleared the pending entry → a late completion commits nothing.
-				const lateCommit = yield* ps.completed;
-				return { ok, logs, lateCommit };
+				return { ok, logs };
 			})
 		);
 		expect(result.ok).toBe(false);
-		expect(result.logs.some((l) => l.includes('timed out'))).toBe(true);
-		expect(result.lateCommit).toBe(null);
+		expect(result.logs.some((l) => l.includes('15 s'))).toBe(true);
 	});
 });
 
