@@ -36,6 +36,8 @@
 		uid,
 		newProfileId,
 		ratioLabel,
+		brewTempRange,
+		effectiveCremaProfile,
 		totalTime,
 		type CremaProfile,
 		type ProfileSegment,
@@ -193,6 +195,18 @@
 	const total = $derived(totalTime(draft.segments));
 
 	/** Patch the draft and mark it dirty. */
+	/**
+	 * The profile's brew temperature is its first step's (the dial's anchor),
+	 * and its range keeps every step inside the core's bounds. Editing it
+	 * shifts every step by the core, keeping the shape — Decenza's
+	 * `applyTemperatureToProfile`; editing segment 0's own temperature moves
+	 * it the same way.
+	 */
+	const brewTemp = $derived(brewTempRange(draft));
+	function setBrewTemp(v: number): void {
+		draft = effectiveCremaProfile(draft, { brewTemp: v });
+	}
+
 	function patch(p: Partial<CremaProfile>): void {
 		draft = { ...draft, ...p };
 		dirty = true;
@@ -500,12 +514,12 @@
 						/>
 						<PeNumber
 							label="Brew temp"
-							value={draft.brewTemp}
+							value={brewTemp.anchor}
 							step={0.5}
 							dimension="temp"
-							min={80}
-							max={100}
-							onChange={(v) => patch({ brewTemp: v })}
+							min={brewTemp.min}
+							max={brewTemp.max}
+							onChange={setBrewTemp}
 						/>
 						<div class="pe-readout">
 							<div class="pe-readout-head">

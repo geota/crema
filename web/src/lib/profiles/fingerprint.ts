@@ -25,9 +25,11 @@ import {
 	effectiveCremaProfile as wasmEffectiveCremaProfile,
 	effectiveProfileFingerprint as wasmEffectiveProfileFingerprint,
 	normalizeBrewOverrides as wasmNormalizeBrewOverrides,
-	preinfusionSeconds as wasmPreinfusionSeconds
+	preinfusionDial as wasmPreinfusionDial,
+	preinfusionSeconds as wasmPreinfusionSeconds,
+	withDerivedBrewTemp as wasmWithDerivedBrewTemp
 } from '#lib/wasm/de1_wasm.js';
-import type { BrewOverrides, BrewTempRange } from '#lib/core/crema-core.js';
+import type { BrewOverrides, BrewTempRange, PreinfusionDial } from '#lib/core/crema-core.js';
 import type { CremaProfile } from './model';
 
 /**
@@ -36,7 +38,7 @@ import type { CremaProfile } from './model';
  */
 export type ProfileFingerprintOverrides = BrewOverrides;
 
-export type { BrewTempRange };
+export type { BrewTempRange, PreinfusionDial };
 
 /**
  * The fingerprint of the effective profile (`profile` with `qc` applied by the
@@ -83,4 +85,27 @@ export function brewTempRange(profile: CremaProfile): BrewTempRange {
 /** The profile's pre-infusion seconds: the total of its leading pre-infusion segments. */
 export function preinfusionSeconds(profile: CremaProfile): number {
 	return wasmPreinfusionSeconds(JSON.stringify(profile));
+}
+
+/**
+ * The pre-infusion dial for `profile` (core-owned): its range (always holding
+ * the profile's own value), the profile's seconds, and whether it can be
+ * dialled at all — a profile with no pre-infusion segment can't.
+ */
+export function preinfusionDial(profile: CremaProfile): PreinfusionDial {
+	return JSON.parse(wasmPreinfusionDial(JSON.stringify(profile))) as PreinfusionDial;
+}
+
+/**
+ * `profile` with its top-level `brewTemp` derived from the first step's
+ * temperature — the brew-temp dial's anchor — so the cards, the dial and the
+ * editor show the same number. Applied on load and save. A profile the core
+ * can't read is returned as it is.
+ */
+export function withDerivedBrewTemp(profile: CremaProfile): CremaProfile {
+	try {
+		return JSON.parse(wasmWithDerivedBrewTemp(JSON.stringify(profile))) as CremaProfile;
+	} catch {
+		return profile;
+	}
 }

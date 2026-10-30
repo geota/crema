@@ -21,7 +21,7 @@
 	import {
 		ratioLabel,
 		relativeLastUsed,
-		preinfuseSeconds,
+		preinfusionSeconds,
 		type CremaProfile
 	} from '#lib/profiles/index.js';
 	import { getSettingsStore, convertWeight, convertTemp } from '#lib/settings/index.js';
@@ -76,7 +76,8 @@
 	/** Saved before the 20-step limit: say what to change (#6 #6). */
 	const stepNote = $derived(stepCapNote(profile.segments.length));
 	const ratio = $derived(ratioLabel(profile));
-	const preinf = $derived(preinfuseSeconds(profile.segments));
+	/** The core's pre-infusion seconds: every leading pre-infusion segment. */
+	const preinf = $derived(Math.round(preinfusionSeconds(profile)));
 	const doseM = $derived(convertWeight(profile.dose, prefs.weightUnit));
 	const tempM = $derived(convertTemp(profile.brewTemp, prefs.tempUnit));
 	/**
@@ -125,7 +126,7 @@
 		</button>
 	</div>
 
-	<ProfilePreview segments={profile.segments} {active} />
+	<ProfilePreview segments={profile.segments} {preinf} {active} />
 
 	<div class="pp-card-body">
 		<div class="pp-card-name">{profile.name || 'Untitled profile'}</div>

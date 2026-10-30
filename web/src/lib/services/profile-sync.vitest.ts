@@ -44,7 +44,7 @@ function runTest<A>(program: Effect.Effect<A, never, ProfileSync>): Promise<A> {
 
 /** Build an `upload` thunk that records the call + signals `started`. */
 const signalUpload = (started: Deferred.Deferred<void>) =>
-	Deferred.succeed(started, undefined).pipe(Effect.asVoid);
+	Deferred.succeed(started, undefined).pipe(Effect.as(null));
 
 describe('ProfileSync.sync — cache hit', () => {
 	it('short-circuits to true without uploading', async () => {
@@ -57,6 +57,7 @@ describe('ProfileSync.sync — cache hit', () => {
 					alreadyLoaded: true,
 					upload: Effect.sync(() => {
 						uploaded = true;
+						return null;
 					}),
 					cancel: Effect.void,
 					log: noop
@@ -131,7 +132,7 @@ describe('ProfileSync.sync — piggyback', () => {
 				const mkUpload = () =>
 					Effect.sync(() => {
 						uploadCount += 1;
-					}).pipe(Effect.andThen(Deferred.succeed(started, undefined)), Effect.asVoid);
+					}).pipe(Effect.andThen(Deferred.succeed(started, undefined)), Effect.as(null));
 				const f1 = yield* Effect.forkChild(
 					ps.sync({ desired: 'fp1', alreadyLoaded: false, upload: mkUpload(), cancel: Effect.void, log: noop })
 				);
@@ -218,6 +219,7 @@ describe('ProfileSync.sync — background syncs never displace an upload (cohort
 						alreadyLoaded: false,
 						upload: Effect.sync(() => {
 							autoUploaded = true;
+							return null;
 						}),
 						cancel: Effect.sync(() => {
 							cancelled = true;

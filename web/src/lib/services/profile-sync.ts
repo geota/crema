@@ -89,10 +89,11 @@ export interface ProfileSyncRequest {
 	/** `true` when the snapshot's cached `activeProfileFingerprint` already
 	 *  matches `desired` — short-circuits to success with no upload. */
 	readonly alreadyLoaded: boolean;
-	/** Trigger the upload: `core.uploadCremaProfile` + fold the output. Returns once
-	 *  the writes are *dispatched* (not completed); completion arrives later via
-	 *  `completed`. */
-	readonly upload: Effect.Effect<void>;
+	/** Trigger the upload: `core.uploadCremaProfile` + fold the output. Returns
+	 *  once the writes are *dispatched* (not completed), with the fingerprint the
+	 *  core computed for the bytes it uploaded (`null` when nothing started) —
+	 *  the one `completed` commits. Completion arrives later via `completed`. */
+	readonly upload: Effect.Effect<string | null>;
 	/** Cancel the in-flight upload at the core (emits `ProfileUploadFailed`,
 	 *  which the fold turns into `failed`). Awaited before a superseding upload
 	 *  installs, so the old waiter is resolved + cleared first. */
@@ -205,7 +206,15 @@ export const ProfileSyncLive = Layer.effect(
 						yield* Ref.set(pending, Option.some({ fingerprint: req.desired, done }));
 						// Dispatch the upload while holding the permit so no other `sync`
 						// can install between our `set pending` and the first writes.
-						yield* req.upload;
+						// Commit the core's fingerprint of what it uploaded, not ours.
+						const uploaded = yield* req.upload;
+						if (uploaded !== null) {
+							yield* Ref.update(pending, (cur) =>
+								Option.isSome(cur) && cur.value.done === done
+									? Option.some({ fingerprint: uploaded, done })
+									: cur
+							);
+						}
 						return done;
 					})
 				);

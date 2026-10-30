@@ -2187,9 +2187,9 @@ export class CremaApp {
 					ps.sync({
 						desired,
 						alreadyLoaded,
-						upload: Effect.promise(async () => {
-							await this.uploadEffectiveProfile(profile, qc);
-						}),
+						// The core's fingerprint of the bytes it uploaded is the
+						// one committed on completion.
+						upload: Effect.promise(() => this.uploadEffectiveProfile(profile, qc)),
 						cancel: Effect.promise(() => this.cancelProfileUpload()),
 						log: (line) => this.state.log(line),
 						background: opts.background
@@ -2513,6 +2513,11 @@ export class CremaApp {
 		}
 		try {
 			await this.runStart(start, qc);
+		} catch (e) {
+			// A start that failed brews nothing: its dial snapshot must not be
+			// recorded onto a later group-head shot.
+			this.brewParamsAtShotStart = null;
+			throw e;
 		} finally {
 			this.startSequence.end(start);
 		}

@@ -163,8 +163,27 @@ export class BrewParamState {
 		 * Optional getter for the active profile's brew-temperature dial range
 		 * (the core's `brewTempRange`), or `null` with no active profile.
 		 */
-		private readonly brewTempRange?: () => { min: number; max: number } | null
+		private readonly brewTempRange?: () => { min: number; max: number } | null,
+		/**
+		 * Optional getter for the active profile's pre-infusion dial (the core's
+		 * `preinfusionDial`), or `null` with no active profile.
+		 */
+		private readonly preinfusionDial?: () => {
+			min: number;
+			max: number;
+			adjustable: boolean;
+		} | null
 	) {}
+
+	/**
+	 * The pre-infusion dial's bounds and whether it applies: the core's range
+	 * for the active profile (always holding its own value), else the
+	 * stepper's 0–30 s default. `adjustable` is false for a profile with no
+	 * pre-infusion segment — there is nothing to rescale.
+	 */
+	preinfusionBounds(): { min: number; max: number; adjustable: boolean } {
+		return this.preinfusionDial?.() ?? { min: 0, max: 30, adjustable: true };
+	}
 
 	/**
 	 * The brew-temperature dial's bounds: the core's range for the active
