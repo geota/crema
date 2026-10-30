@@ -234,9 +234,9 @@
 			<StStepper
 				value={prefs.maxShotDurationS}
 				unit="s"
-				step={5}
-				min={0}
-				max={300}
+				step={bd.maxShotDurationS.step}
+				min={bd.maxShotDurationS.min}
+				max={bd.maxShotDurationS.max}
 				onCommit={setMaxShotDuration}
 				dot
 				dotOn={prefs.maxShotDurationS > 0}

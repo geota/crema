@@ -34,7 +34,8 @@ describe('core bounds table (F8)', () => {
 			'components/brew/YieldRatioStepper.svelte',
 			'components/brew/SteamStepper.svelte',
 			'components/brew/PreinfFlushStepper.svelte',
-			'components/profiles/SegmentRow.svelte'
+			'components/profiles/SegmentRow.svelte',
+			'components/settings/sections/BrewDefaultsSection.svelte'
 		]) {
 			expect(src(path).match(literal), path).toBeNull();
 		}
