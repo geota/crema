@@ -65,6 +65,11 @@ pub struct ShotCaptureContext {
     /// The DE1 the shot ran on, or `None` when it isn't known.
     #[serde(default)]
     pub machine: Option<ShotMachine>,
+    /// The profile name the shell knows, the last fallback when the core
+    /// knows neither the profile it ran nor a title — a replay, whose shadow
+    /// core saw no upload, passes the capture's name here.
+    #[serde(default)]
+    pub profile_name: Option<String>,
 }
 
 /// The profile and Quick Controls the DE1 held when the shot started.
@@ -134,7 +139,8 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
         s.preinfuse_target = Some(preinfusion_seconds(&effective));
         s.profile = Some(to_wire(&effective));
     } else {
-        s.profile_name = non_blank(shot.profile_title.as_deref());
+        s.profile_name = non_blank(shot.profile_title.as_deref())
+            .or_else(|| non_blank(ctx.profile_name.as_deref()));
     }
     s.stop_reason = shot.stop_reason;
     s.stop_on_weight = Some(shot.stop_on_weight);
@@ -256,6 +262,21 @@ mod tests {
         // The stop switches and measurements are the core's either way.
         assert_eq!(shot.stop_on_weight, Some(true));
         assert_eq!(shot.metadata.yield_out, Some(36.4));
+    }
+
+    #[test]
+    fn the_shells_profile_name_is_the_last_fallback() {
+        let mut nameless = completed(None);
+        nameless.profile_title = None;
+        let ctx = ShotCaptureContext {
+            profile_name: Some("From the capture".into()),
+            ..ShotCaptureContext::default()
+        };
+        let shot = assemble_stored_shot(nameless, ctx.clone()).unwrap();
+        assert_eq!(shot.profile_name.as_deref(), Some("From the capture"));
+        // The core's own title wins over it.
+        let shot = assemble_stored_shot(completed(None), ctx).unwrap();
+        assert_eq!(shot.profile_name.as_deref(), Some("Foreign"));
     }
 
     #[test]

@@ -21,11 +21,14 @@
 import {
 	defaultBrewCueHaptics,
 	defaultBrewCueSound,
-	defaultBrewDefaults
+	defaultCommonSettingsJson,
+	defaultIdleSleepMin,
+	resetSettingsJson,
+	sanitizeCommonSettingsJson
 } from '#lib/wasm/de1_wasm.js';
 import { isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
 import { readSyncConfig } from '#lib/visualizer/sync-config.js';
-import type { CommonSettings } from '#lib/core/crema-core.js';
+import type { CommonSettings, SettingsReset } from '#lib/core/crema-core.js';
 
 /** localStorage key for the bundle of app preferences ({@link Settings}). */
 const SETTINGS_KEY = 'crema.settings.v1';
@@ -40,16 +43,6 @@ const SETTINGS_KEY = 'crema.settings.v1';
  * fire when the settings store is first constructed at render time, long after
  * boot. See `de1_domain::default_brew_defaults_json`.
  */
-interface RawBrewDefaults {
-	doseG: number;
-	ratio: number;
-	brewTempC: number;
-	preinfusionS: number;
-}
-let rawBrewDefaults: RawBrewDefaults | null = null;
-const brewDefaults = (): RawBrewDefaults =>
-	(rawBrewDefaults ??= JSON.parse(defaultBrewDefaults()) as RawBrewDefaults);
-
 /**
  * Light/dark theme. The design ships dark; dark stays the default. `system`
  * follows the device's `prefers-color-scheme` (a kitchen tablet that dims to
@@ -349,79 +342,13 @@ export interface Settings {
 	showDebugPanel: boolean;
 }
 
-/** The default preference bundle — every field's out-of-box value. */
-export const DEFAULT_SETTINGS: Settings = {
-	theme: 'dark',
+/** The web-only settings' defaults — every field that isn't in the core's
+ *  `CommonSettings` (see `PLATFORM_KEYS`). */
+const PLATFORM_DEFAULTS = {
 	density: 'comfortable',
 	screensaver: true,
-	weightUnit: 'g',
-	tempUnit: 'C',
-	volumeUnit: 'ml',
-	pressureUnit: 'bar',
-	waterLevelUnit: 'ml',
-	waterWarnMl: null,
-	waterRefillPointMm: null,
-
-	get defaultDoseG() {
-		return brewDefaults().doseG;
-	},
-	get defaultRatio() {
-		return brewDefaults().ratio;
-	},
-	get defaultBrewTempC() {
-		return brewDefaults().brewTempC;
-	},
-	get defaultPreinfusionS() {
-		return brewDefaults().preinfusionS;
-	},
-	autoPurgeAfterSteam: false,
-	groupFlushBeforeShot: false,
-	steamEcoMode: false,
-	autoTareOnShotStart: true,
-	stopOnWeight: true,
-	volumeStopWithScale: false,
-	requireScale: false,
-	maxShotDurationS: 0,
-
 	telemetryRateHz: 50,
 	lineFrequencyHz: 0,
-	idleSleepMin: 30,
-	steamTwoTapStop: false,
-	fanThresholdC: 55,
-	usbChargingMode: 'alwaysOn',
-
-	grinderModel: '',
-	baristaName: '',
-
-	keepScreenOnBrew: false,
-
-	// Guided-brew cues (issue #10) — unset: sound reads OFF, haptics ON
-	// (see brewCueSoundOn / brewCueHapticsOn).
-	brewCueSound: null,
-	brewCueHaptics: null,
-
-	// Quick-Controls steam / hot-water / flush — match DEFAULT_BREW_PARAMS so a
-	// fresh install seeds the Quick Sheet identically to before persistence.
-	qcSteamTimeS: 12,
-	qcSteamFlowMlS: 1.2,
-	qcSteamTempC: 148,
-	qcHotWaterTempC: 80,
-	qcHotWaterVolumeMl: 150,
-	qcFlushTimeS: 4,
-	qcFlushTempC: 95,
-
-	// Chart channels — only Pressure, Flow, and Weight default on; the rest
-	// are opt-in via the Quick Sheet's "Chart" toggles.
-	showPressure: true,
-	showResistance: false,
-	showFlow: true,
-	showVolume: false,
-	showHeadTemp: false,
-	showMixTemp: false,
-	showWeight: true,
-	showWeightFlow: false,
-
-	// Webhooks — off by default; user opts in from Advanced → Webhooks.
 	webhookEnabled: false,
 	webhookUrl: '',
 	webhookEvents: {
@@ -431,10 +358,83 @@ export const DEFAULT_SETTINGS: Settings = {
 		scaleConnected: false,
 		de1Connected: false
 	},
+	smoothPressure: true
+} as const satisfies Pick<Settings, (typeof PLATFORM_KEYS)[number]>;
 
-	smoothPressure: true,
-	showDebugPanel: false
-};
+/** The web `Settings` fields that come from the core's `CommonSettings`. */
+const COMMON_KEYS = [
+	'theme',
+	'weightUnit',
+	'tempUnit',
+	'volumeUnit',
+	'pressureUnit',
+	'waterLevelUnit',
+	'waterWarnMl',
+	'waterRefillPointMm',
+	'defaultDoseG',
+	'defaultRatio',
+	'defaultBrewTempC',
+	'defaultPreinfusionS',
+	'autoPurgeAfterSteam',
+	'groupFlushBeforeShot',
+	'steamEcoMode',
+	'autoTareOnShotStart',
+	'stopOnWeight',
+	'volumeStopWithScale',
+	'requireScale',
+	'maxShotDurationS',
+	'idleSleepMin',
+	'steamTwoTapStop',
+	'fanThresholdC',
+	'usbChargingMode',
+	'grinderModel',
+	'baristaName',
+	'keepScreenOnBrew',
+	'brewCueSound',
+	'brewCueHaptics',
+	'qcSteamTimeS',
+	'qcSteamFlowMlS',
+	'qcSteamTempC',
+	'qcHotWaterTempC',
+	'qcHotWaterVolumeMl',
+	'qcFlushTimeS',
+	'qcFlushTempC',
+	'showPressure',
+	'showResistance',
+	'showFlow',
+	'showVolume',
+	'showHeadTemp',
+	'showMixTemp',
+	'showWeight',
+	'showWeightFlow',
+	'showDebugPanel'
+] as const satisfies ReadonlyArray<keyof Settings>;
+
+let coreDefaults: Settings | null = null;
+/** The core's default bundle (`default_common_settings`) mapped onto the web
+ *  shape, over the platform defaults. Parsed once, on first read (after the
+ *  wasm has loaded). An unset idle timer reads as the core default. */
+function defaultsFromCore(): Settings {
+	if (!coreDefaults) {
+		const base = { ...PLATFORM_DEFAULTS, idleSleepMin: defaultIdleSleepMin() } as unknown as Settings;
+		coreDefaults = applyCommonToSettings(JSON.parse(defaultCommonSettingsJson()) as CommonSettings, base);
+	}
+	return coreDefaults;
+}
+
+/**
+ * The default preference bundle — every field's out-of-box value. The
+ * `CommonSettings` half reads the core's default bundle (one source for both
+ * shells); only the web-only extras are literals here. The common fields are
+ * getters, so spreading the object (`{ ...DEFAULT_SETTINGS }`) copies values.
+ */
+export const DEFAULT_SETTINGS: Settings = { ...PLATFORM_DEFAULTS } as unknown as Settings;
+for (const key of COMMON_KEYS) {
+	Object.defineProperty(DEFAULT_SETTINGS, key, {
+		enumerable: true,
+		get: () => defaultsFromCore()[key]
+	});
+}
 
 // ── Cross-shell common-settings mapping ──────────────────────────────────────
 //
@@ -510,7 +510,7 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		defaultBrewTempC: s.defaultBrewTempC,
 		defaultPreinfuseS: s.defaultPreinfusionS,
 		grinderModel: s.grinderModel,
-		baristaName: s.baristaName.trim() || undefined,
+		baristaName: (typeof s.baristaName === 'string' ? s.baristaName.trim() : '') || undefined,
 		// Retired (presence follows activity; the app owns sleep) — still
 		// written because older versions require the field in a backup.
 		suppressDe1Sleep: true,
@@ -525,13 +525,41 @@ export function settingsToCommon(s: Settings): CommonSettings {
 	};
 }
 
+/** A flat `Settings` (a pre-unification file or backup line) with its
+ *  `CommonSettings` half read through the core's sanitize. */
+export function sanitizeFlat(flat: Settings): Settings {
+	return applyCommonToSettings(settingsToCommon(flat), flat);
+}
+
+/** A {@link CommonSettings} after the core's sanitize: the "unset reads as"
+ *  fields are always present. */
+type SanitizedCommon = CommonSettings &
+	Required<
+		Pick<
+			CommonSettings,
+			| 'volumeStopWithScale'
+			| 'requireScale'
+			| 'steamTwoTap'
+			| 'fanThresholdC'
+			| 'waterLevelUnit'
+			| 'usbChargingMode'
+		>
+	>;
+
+/** Read any settings blob through the core's `sanitize_common_settings`. */
+export function sanitizeCommon(blob: unknown): SanitizedCommon {
+	return JSON.parse(sanitizeCommonSettingsJson(JSON.stringify(blob ?? null))) as SanitizedCommon;
+}
+
 /** Overlay a restored {@link CommonSettings} onto a flat `Settings`, preserving
  *  the web-only platform fields. `themeMode` keeps `light` / `system`; anything
  *  else reads as the default `dark`. */
 export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Settings {
-	// Forward-compat: tolerate a partial blob (an older backup predating a field)
-	// by filling any missing field from the canonical web defaults.
-	const c: CommonSettings = { ...settingsToCommon(DEFAULT_SETTINGS), ...cIn };
+	// The core's sanitize (`sanitize_common_settings`): a partial blob (an older
+	// backup predating a field) fills from the default bundle, a wrong-typed
+	// field falls back on its own, and bad values are repaired. It also
+	// resolves the "unset reads as" fields, so none are defaulted here.
+	const c = sanitizeCommon(cIn);
 	const on = new Set(c.chartChannels);
 	return {
 		...s,
@@ -539,14 +567,11 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		maxShotDurationS: c.maxShotDurationS,
 		autoTareOnShotStart: c.autoTare,
 		stopOnWeight: c.stopOnWeight,
-		// Optional in the shared shape (additive-field tolerance): an older
-		// backup / another shell omitting it reads as "off".
-		volumeStopWithScale: c.volumeStopWithScale ?? false,
+		volumeStopWithScale: c.volumeStopWithScale,
 		steamEcoMode: c.steamEco,
-		// Nullable additive fields: older blobs read as the canonical defaults.
-		requireScale: c.requireScale ?? false,
-		steamTwoTapStop: c.steamTwoTap ?? false,
-		fanThresholdC: c.fanThresholdC ?? 55,
+		requireScale: c.requireScale,
+		steamTwoTapStop: c.steamTwoTap,
+		fanThresholdC: c.fanThresholdC,
 		usbChargingMode: parseUsbChargingMode(c.usbChargingMode),
 		groupFlushBeforeShot: c.preFlush,
 		autoPurgeAfterSteam: c.steamPurge,
@@ -554,7 +579,7 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		tempUnit: c.tempUnit as TempUnit,
 		pressureUnit: c.pressureUnit as PressureUnit,
 		volumeUnit: c.volumeUnit as VolumeUnit,
-		waterLevelUnit: (c.waterLevelUnit ?? 'ml') as WaterLevelUnit,
+		waterLevelUnit: c.waterLevelUnit as WaterLevelUnit,
 		waterWarnMl: c.waterWarnMl ?? null,
 		waterRefillPointMm: c.waterRefillPointMm ?? null,
 		showPressure: on.has('pressure'),
@@ -576,7 +601,7 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		grinderModel: c.grinderModel,
 		baristaName: c.baristaName ?? '',
 		// A blob from before the idle timer carries none: keep this device's.
-		idleSleepMin: cIn.idleSleepMin ?? s.idleSleepMin,
+		idleSleepMin: c.idleSleepMin ?? s.idleSleepMin,
 		qcSteamTimeS: c.qcSteamTimeS,
 		qcSteamFlowMlS: c.qcSteamFlowMlS,
 		qcSteamTempC: c.qcSteamTempC,
@@ -632,7 +657,9 @@ function loadSettings(): Settings {
 	if (stored && typeof stored === 'object' && 'visualizerAutoUpload' in stored) {
 		readSyncConfig();
 	}
-	return { ...DEFAULT_SETTINGS, ...((stored as Partial<Settings> | null) ?? {}) };
+	// Through the core's sanitize too, so an old flat file with a bad value
+	// reads like a nested one.
+	return sanitizeFlat({ ...DEFAULT_SETTINGS, ...((stored as Partial<Settings> | null) ?? {}) });
 }
 
 /**
@@ -713,16 +740,35 @@ export class SettingsStore {
 		this.current = next;
 		applyTheme(this.current.theme);
 		this.persist();
+		this.onReplaced?.();
 	}
 
 	/**
-	 * Restore every preference to its default and persist. Profiles and shot
-	 * history live in their own stores and are untouched.
+	 * Called after the whole bundle changes ({@link replaceAll}, {@link reset}):
+	 * a backup restore, a held change applied, Restore defaults. The app
+	 * registers its settings push here (`CremaApp.pushSettings`), so every
+	 * bundle write reaches the core without each caller knowing the app.
+	 */
+	onReplaced: (() => void) | null = null;
+
+	/**
+	 * Restore every preference to its default and persist — the core's rule
+	 * (`reset_settings`): the weight unit and the mains line frequency are
+	 * facts about the user's setup and stay. Profiles and shot history live in
+	 * their own stores and are untouched.
 	 */
 	reset(): void {
-		this.current = { ...DEFAULT_SETTINGS };
+		const kept = JSON.parse(
+			resetSettingsJson(JSON.stringify(settingsToCommon(this.current)), this.current.lineFrequencyHz)
+		) as SettingsReset;
+		const hz = kept.lineFrequencyHz;
+		this.current = applyCommonToSettings(kept.common, {
+			...DEFAULT_SETTINGS,
+			lineFrequencyHz: hz === 50 || hz === 60 ? hz : 0
+		});
 		applyTheme(this.current.theme);
 		this.persist();
+		this.onReplaced?.();
 	}
 }
 
