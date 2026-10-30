@@ -71,7 +71,7 @@ fun PhoneProfilesScreen(
         if (uri != null) vm.importProfiles(uri)
     }
     var pendingExport by remember { mutableStateOf<String?>(null) }
-    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-ndjson")) { uri ->
         val t = pendingExport; pendingExport = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
@@ -117,7 +117,7 @@ fun PhoneProfilesScreen(
                 actions = listOf(
                     BarAction("upload-simple") { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
                     BarAction("download-simple") {
-                        vm.allProfilesJson()?.let { pendingExport = it; saveLauncher.launch("crema-profiles.json") }
+                        vm.allProfilesFile()?.let { pendingExport = it; saveLauncher.launch("crema-profiles.jsonl") }
                     },
                     BarAction("gear-six") { onNav("settings") },
                 ),

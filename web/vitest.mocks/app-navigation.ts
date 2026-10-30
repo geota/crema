@@ -7,3 +7,8 @@
 export function goto(): Promise<void> {
 	return Promise.resolve();
 }
+
+/** Navigation hooks: never fire, since tests don't navigate. */
+export function afterNavigate(): void {}
+
+export function beforeNavigate(): void {}

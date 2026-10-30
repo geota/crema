@@ -3220,6 +3220,16 @@ data class PreinfusionDial (
 	val adjustable: Boolean
 )
 
+/// One part of a profile file that did not import.
+@Serializable
+data class ProfileFileError (
+	/// The 1-based line (JSON lines) or element (JSON array) it came from;
+	/// `None` for a single-profile file.
+	val item: UInt? = null,
+	/// Why, in words a user can act on.
+	val message: String
+)
+
 /// The profile sync's state, as a shell sees it.
 @Serializable
 data class ProfileSyncStatus (

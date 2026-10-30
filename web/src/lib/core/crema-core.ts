@@ -3197,6 +3197,17 @@ export interface PreinfusionDial {
 	adjustable: boolean;
 }
 
+/** One part of a profile file that did not import. */
+export interface ProfileFileError {
+	/**
+	 * The 1-based line (JSON lines) or element (JSON array) it came from;
+	 * `None` for a single-profile file.
+	 */
+	item?: number;
+	/** Why, in words a user can act on. */
+	message: string;
+}
+
 /** The profile sync's state, as a shell sees it. */
 export interface ProfileSyncStatus {
 	/**

@@ -1841,6 +1841,31 @@ pub fn import_crema_jsonl(text: &str) -> Result<String, String> {
     de1_domain::import_jsonl_to_plan_json(text)
 }
 
+/// Read a profile file (community v2 `.json`, a `.jsonl` bundle, a de1app
+/// `.tcl`, a Crema backup, or an old Android Crema export): a
+/// `ProfileFileImport` JSON of fresh custom profiles plus per-item errors. See
+/// `de1_domain::import_profile_file`.
+///
+/// # Errors
+///
+/// Only if the result fails to serialize, which it cannot.
+#[wasm_bindgen(js_name = importProfileFile)]
+pub fn import_profile_file(text: &str) -> Result<String, String> {
+    de1_domain::import_profile_file_json(text)
+}
+
+/// Write library profiles (a JSON array of `CremaProfile`) as the profile file
+/// both shells export: one profile as pretty community v2, several as JSON
+/// lines. See `de1_domain::export_profile_file`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[wasm_bindgen(js_name = exportProfileFile)]
+pub fn export_profile_file(profiles_json: &str) -> Result<String, String> {
+    de1_domain::export_profile_file_json(profiles_json)
+}
+
 /// Build a Crema **backup bundle** (`crema-backup/v1`) from an envelope
 /// JSON `{ "profiles": [...], "beans": [...], "roasters": [...],
 /// "shots": [...], "settings": {...} }`. A superset of `exportCremaJsonl`:
