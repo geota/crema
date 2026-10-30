@@ -811,8 +811,14 @@ export const ShotSyncLive = Layer.effect(
 			profilesById?: ReadonlyMap<string, unknown>
 		): Effect.Effect<void> =>
 			Effect.sync(() => {
-				const local = history.all;
+				// Tombstones included: a shot deleted here whose remote DELETE
+				// hasn't landed yet is still on Visualizer, and without its
+				// tombstone the planner saw it as new and pulled it back. The
+				// planner never binds to a tombstone; its `update` is skipped below.
+				const local = history.rawAll;
 				const actions = reconcileShots(local, remote);
+				const tombstoned = (localId: string): boolean =>
+					history.get(localId)?.deletedAt != null;
 				// Read once for the whole pull, not per shot (C3 #10): nothing
 				// edits a barista inside this synchronous pass.
 				const pending = baristaPending.snapshot();
@@ -851,6 +857,8 @@ export const ShotSyncLive = Layer.effect(
 							at: Date.now()
 						});
 					} else if (action.kind === 'update') {
+						// Deleted here; the pending DELETE removes the remote too.
+						if (tombstoned(action.localId)) continue;
 						// Wire `tag_list` defaults to `[]` server-side, so this patch is
 						// idempotent — re-applying an empty list to a local with none is a
 						// no-op write.

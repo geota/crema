@@ -896,7 +896,8 @@ function mapTimedSamples(
 			// per `applyEvent` in ui-state.svelte.ts.
 			setHeadTemp: t.sample.setHeadTemp,
 			setGroupPressure: t.sample.setGroupPressure,
-			setGroupFlow: t.sample.setGroupFlow
+			setGroupFlow: t.sample.setGroupFlow,
+			frameNumber: t.sample.frameNumber
 		};
 	});
 }
