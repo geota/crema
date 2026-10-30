@@ -3628,6 +3628,22 @@ export interface SeriesPoint {
 }
 
 /**
+ * What "Restore defaults" leaves: every common setting back to the default
+ * bundle except the two facts about the user's setup it keeps, the weight
+ * unit (it matches their scale) and the mains line frequency. The idle-sleep
+ * timer gets its default explicitly.
+ */
+export interface SettingsReset {
+	/** The reset common settings. */
+	common: CommonSettings;
+	/**
+	 * The line-frequency override kept from before, Hz: `50`, `60`, or `0`
+	 * for auto (anything else reads as auto).
+	 */
+	lineFrequencyHz: number;
+}
+
+/**
  * A snapshot of the active bean at the moment a shot was pulled.
  * Frozen onto each [`crate::history::StoredShot`] (in the shell's
  * extended record) so a later rename / archive / delete of the bag

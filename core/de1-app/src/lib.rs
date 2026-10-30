@@ -2356,6 +2356,26 @@ impl CremaCore {
         self.low_water.set_warn_ml(warn_ml);
     }
 
+    /// Latch every core input that comes from the user's settings in one call
+    /// — auto-tare, stop-on-weight, volume stop with a scale (unset = off),
+    /// the max shot duration (`0` = none), the weight-unit preference
+    /// (`"oz"` = ounces, anything else grams) and the low-water threshold.
+    /// Shells call it whenever the whole settings bundle changes (start-up,
+    /// restore, reset, erase, leaving a hub); a single edit may still use the
+    /// matching setter. Pure state — no output.
+    pub fn apply_common_settings(&mut self, settings: &de1_domain::app_settings::CommonSettings) {
+        self.set_auto_tare(settings.auto_tare);
+        self.set_stop_on_weight(settings.stop_on_weight);
+        self.set_volume_stop_with_scale(settings.volume_stop_with_scale.unwrap_or(false));
+        self.set_max_shot_duration(Some(settings.max_shot_duration_s));
+        self.set_weight_unit_pref(if settings.weight_unit == "oz" {
+            WeightUnit::Ounces
+        } else {
+            WeightUnit::Grams
+        });
+        self.set_water_warn_ml(settings.water_warn_ml);
+    }
+
     /// The steam / hot-water [`ShotSettings`] to write, with the steam target
     /// temperature set for the given eco state. Falls back to a representative
     /// default when no settings have been supplied yet.
@@ -5987,6 +6007,33 @@ fn mmr_write_command(register: MmrRegister, value: u32, byte_len: u8) -> CoreOut
 mod tests {
     use super::*;
     use de1_domain::ShotPhase;
+
+    #[test]
+    fn apply_common_settings_latches_every_settings_input() {
+        let mut core = CremaCore::new();
+        let settings = de1_domain::app_settings::CommonSettings {
+            auto_tare: false,
+            stop_on_weight: false,
+            volume_stop_with_scale: Some(true),
+            max_shot_duration_s: 50.0,
+            weight_unit: "oz".into(),
+            water_warn_ml: Some(200.0),
+            ..de1_domain::app_settings::default_common_settings()
+        };
+        core.apply_common_settings(&settings);
+        assert!(!core.auto_tare);
+        assert!(!core.stop_on_weight);
+        assert!(core.volume_stop_with_scale);
+        assert_eq!(core.max_shot_duration, Some(50.0));
+        assert_eq!(core.weight_unit_pref(), WeightUnit::Ounces);
+        assert_eq!(core.low_water.warn_ml(), Some(200.0));
+        // The defaults put each back: max shot 0 = none, volume stop unset = off.
+        core.apply_common_settings(&de1_domain::app_settings::CommonSettings::default());
+        assert!(core.auto_tare && core.stop_on_weight && !core.volume_stop_with_scale);
+        assert_eq!(core.max_shot_duration, None);
+        assert_eq!(core.weight_unit_pref(), WeightUnit::Grams);
+        assert_eq!(core.low_water.warn_ml(), None);
+    }
     use de1_protocol::{MachineState, SubState, heater_voltage_from_raw};
     // Per-scale protocol modules used by the tests; the production lib
     // no longer reaches into these directly (the capability-driven

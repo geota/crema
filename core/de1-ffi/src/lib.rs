@@ -763,6 +763,32 @@ pub fn default_brew_cue_haptics() -> bool {
     de1_domain::app_settings::DEFAULT_BREW_CUE_HAPTICS
 }
 
+/// The default settings bundle (`CommonSettings` JSON) both shells build
+/// their defaults from. See [`de1_domain::app_settings::default_common_settings`].
+#[uniffi::export]
+#[must_use]
+pub fn default_common_settings_json() -> String {
+    de1_domain::app_settings::default_common_settings_json()
+}
+
+/// Read a stored or restored settings blob (any JSON) into a sanitized
+/// `CommonSettings` JSON: a wrong-typed field falls back to its default, bad
+/// values are repaired. See [`de1_domain::app_settings::sanitize_common_settings`].
+#[uniffi::export]
+#[must_use]
+pub fn sanitize_common_settings_json(blob_json: String) -> String {
+    de1_domain::app_settings::sanitize_common_settings_json(&blob_json)
+}
+
+/// "Restore defaults": the current `CommonSettings` JSON and line-frequency
+/// override in, a `SettingsReset` JSON out (defaults, keeping the weight unit
+/// and the line frequency). See [`de1_domain::app_settings::reset_settings`].
+#[uniffi::export]
+#[must_use]
+pub fn reset_settings_json(current_json: String, line_frequency_hz: f32) -> String {
+    de1_domain::app_settings::reset_settings_json(&current_json, line_frequency_hz)
+}
+
 /// Resolve the Brew screen's service-mode display targets (steam /
 /// hot-water / flush) — machine value → Quick-Controls dial → legacy
 /// default, per field. Takes `ModeTargetInputs` JSON, returns
@@ -2525,6 +2551,15 @@ impl CremaBridge {
     /// `0` = off); re-arms the warning. See `CremaCore::set_water_warn_ml`.
     pub fn set_water_warn_ml(&self, warn_ml: Option<f32>) {
         self.core().set_water_warn_ml(warn_ml);
+    }
+
+    /// Latch every settings-driven core input from a `CommonSettings` JSON
+    /// (read through `sanitize_common_settings`, so a partial or bad blob
+    /// still applies). See `CremaCore::apply_common_settings`.
+    pub fn apply_common_settings(&self, settings_json: String) {
+        let blob = serde_json::from_str(&settings_json).unwrap_or(serde_json::Value::Null);
+        let settings = de1_domain::app_settings::sanitize_common_settings(&blob);
+        self.core().apply_common_settings(&settings);
     }
 
     /// Enable or disable auto-tare on shot start.

@@ -3591,6 +3591,19 @@ data class SeriesPoint (
 	val v: Double
 )
 
+/// What "Restore defaults" leaves: every common setting back to the default
+/// bundle except the two facts about the user's setup it keeps, the weight
+/// unit (it matches their scale) and the mains line frequency. The idle-sleep
+/// timer gets its default explicitly.
+@Serializable
+data class SettingsReset (
+	/// The reset common settings.
+	val common: CommonSettings,
+	/// The line-frequency override kept from before, Hz: `50`, `60`, or `0`
+	/// for auto (anything else reads as auto).
+	val lineFrequencyHz: Float
+)
+
 /// A snapshot of the active bean at the moment a shot was pulled.
 /// Frozen onto each [`crate::history::StoredShot`] (in the shell's
 /// extended record) so a later rename / archive / delete of the bag
