@@ -240,6 +240,28 @@ pub fn evil_pair_hub(
     resolver: EvilResolver,
     now: u64,
 ) -> Vec<Step> {
+    evil_pair_hub_guessing(
+        remote,
+        first,
+        claimed_id,
+        static_private,
+        resolver,
+        None,
+        now,
+    )
+}
+
+/// As [`evil_pair_hub`], but the fake hub runs SPAKE2 with `guess` instead of
+/// the code the remote shows (a hub without the code).
+pub fn evil_pair_hub_guessing(
+    remote: &mut RemoteConnection,
+    first: &Step,
+    claimed_id: DeviceId,
+    static_private: &[u8; 32],
+    resolver: EvilResolver,
+    guess: Option<&str>,
+    now: u64,
+) -> Vec<Step> {
     let hello = first.send[0].bytes.clone();
     let remote_id = match ClientHello::parse(&hello).unwrap() {
         de1_relay::ParsedClientHello::V4(h) => h.client_id.unwrap(),
@@ -263,6 +285,7 @@ pub fn evil_pair_hub(
             _ => None,
         })
         .unwrap();
+    let code = guess.map_or(code, str::to_owned);
     let pake_a = s1.send[0].bytes[1..].to_vec();
     let (state, b) = pake::start_b(
         &Code::parse(&code).unwrap(),

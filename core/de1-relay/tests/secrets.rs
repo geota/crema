@@ -47,7 +47,7 @@ fn debug_redacts() {
         assert!(shown.contains(&k.device_id().to_hex()));
     }
     let seed = test_seed("remote-static", 0);
-    let seed_hex = hex(&seed.0);
+    let seed_hex = hex(&seed.expose_for_tests());
     assert!(!format!("{seed:?}").contains(&seed_hex));
     let sub = sub_seed(&seed, b"static");
     assert_eq!(format!("{sub:?}"), "SubSeed([redacted])");
@@ -66,4 +66,35 @@ fn debug_redacts() {
     let psk_b = pake::derive_psk(&key_b, b"prologue", &r, &h);
     assert_eq!(psk_a.expose_for_tests(), psk_b.expose_for_tests());
     assert!(!format!("{psk_a:?}").contains(&hex(&psk_a.expose_for_tests())[..8]));
+}
+
+/// `Debug` of a `ShowCode` event, and of a Step carrying one, never prints the code.
+#[test]
+fn show_code_debug_is_redacted() {
+    let gate = common::new_gate();
+    common::open_gate(&gate, common::T0);
+    let mut link = common::Link::pairing(
+        &remote_keys(),
+        &hub_keys(),
+        gate,
+        common::new_pins(vec![]),
+        0,
+        common::T0,
+    );
+    link.pump();
+    let code = link.shown_code().unwrap();
+    let step_debug = format!("{:?}", link.remote_steps);
+    assert!(step_debug.contains("ShowCode") && step_debug.contains("[redacted]"));
+    assert!(!step_debug.contains(&code), "{step_debug}");
+    // Other events still read as their JSON.
+    let ev = de1_relay::RelayEvent::Established {
+        peer_id: "ab".into(),
+    };
+    assert_eq!(
+        format!("{ev:?}"),
+        r#"{"type":"Established","content":{"peer_id":"ab"}}"#
+    );
+    // A seed from the bridge's entropy is opaque too.
+    let seed = Seed::from_entropy([0x5c; 32]);
+    assert!(!format!("{seed:?}").contains("5c"));
 }

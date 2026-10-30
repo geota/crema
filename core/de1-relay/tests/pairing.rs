@@ -41,7 +41,15 @@ fn pairs_with_matching_code() {
     assert_eq!(link.remote.phase(), Phase::Paired);
     assert_eq!(link.hub_close(), Some(ws_close::NORMAL));
     assert_eq!(link.remote_close(), Some(ws_close::NORMAL));
-    assert_eq!(link.hub.channel_binding(), link.remote.channel_binding());
+    // The handshake hashes agree, but a pairing session is never Established,
+    // so neither side exposes a channel binding.
+    assert_eq!(
+        link.hub.channel_binding_for_tests(),
+        link.remote.channel_binding_for_tests()
+    );
+    assert!(link.hub.channel_binding_for_tests().is_some());
+    assert_eq!(link.hub.channel_binding(), None);
+    assert_eq!(link.remote.channel_binding(), None);
     assert_eq!(link.hub.psk_for_tests(), link.remote.psk_for_tests());
     // PairPending came first, then Paired after the commit.
     let pending = hub_events

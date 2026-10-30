@@ -10,7 +10,6 @@
 use core::fmt;
 
 use curve25519_dalek::{edwards::CompressedEdwardsY, traits::IsIdentity};
-use hkdf::Hkdf;
 use rand_core::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 use spake2::{Ed25519Group, Identity, Password, Spake2};
@@ -253,11 +252,6 @@ pub fn derive_psk(
 ) -> Psk {
     let salt = Sha256::digest(pair_prologue);
     let info = [labels::PSK, &remote.0, &hub.0].concat();
-    let mut okm = [0_u8; 32];
-    Hkdf::<Sha256>::new(Some(&salt), &spake_key.0)
-        .expand(&info, &mut okm)
-        .unwrap_or_else(|_| unreachable!("32-byte HKDF output"));
-    let psk = Psk(okm);
-    okm.zeroize();
-    psk
+    let okm = crate::seed::hkdf_sha256(Some(&salt), &spake_key.0, &info);
+    Psk(*okm)
 }

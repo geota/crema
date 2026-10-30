@@ -20,7 +20,7 @@ pub fn test_seed(label: &str, n: u32) -> Seed {
         .finalize();
     let mut seed = [0_u8; 32];
     seed.copy_from_slice(&digest);
-    Seed(seed)
+    Seed::from_entropy(seed)
 }
 
 /// Builds a pairing (`XXpsk3`, psk at 3) or resume (`IK`) handshake through the

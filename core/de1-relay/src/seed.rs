@@ -11,14 +11,35 @@ use hkdf::Hkdf;
 use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, RngCore, SeedableRng};
 use sha2::Sha256;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-/// 32 bytes of entropy for one key pair or one connection. Wiped on drop;
-/// `Debug` never prints it.
+/// 32 bytes of entropy for one key pair or one connection. Not `Clone`; wiped
+/// on drop; `Debug` never prints it.
 #[derive(Zeroize, ZeroizeOnDrop)]
-pub struct Seed(pub [u8; 32]);
+pub struct Seed([u8; 32]);
 
 impl Seed {
+    /// Wraps 32 bytes the bridge just drew from the platform's entropy source.
+    ///
+    /// **Single use:** each seed must be fresh entropy and go to exactly one
+    /// key pair or one connection. Two connections built from the same seed
+    /// would generate the same code, SPAKE2 scalar and ephemerals. The
+    /// constructors that take a `Seed` consume it, so the type can't be
+    /// reused by accident; never build two from the same bytes.
+    pub fn from_entropy(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The seed bytes, for vectors and tests only.
+    #[cfg(feature = "test-seeds")]
+    pub fn expose_for_tests(&self) -> [u8; 32] {
+        self.0
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
     /// The sub-seed for one stream: `HKDF-SHA256(salt = none, ikm = seed, info = label)`.
     pub(crate) fn derive(&self, label: &[u8]) -> SubSeed {
         SubSeed::derive_from(&self.0, label)
@@ -43,14 +64,8 @@ pub struct SubSeed([u8; 32]);
 
 impl SubSeed {
     pub(crate) fn derive_from(ikm: &[u8; 32], label: &[u8]) -> SubSeed {
-        let mut okm = [0_u8; 32];
-        // 32 bytes is far below HKDF-SHA256's 255 × 32 limit, so expand can't fail.
-        Hkdf::<Sha256>::new(None, ikm)
-            .expand(label, &mut okm)
-            .unwrap_or_else(|_| unreachable!("32-byte HKDF output"));
-        let sub = SubSeed(okm);
-        okm.zeroize();
-        sub
+        let okm = hkdf_sha256(None, ikm, label);
+        SubSeed(*okm)
     }
 
     /// The ChaCha20 generator keyed by this sub-seed.
@@ -63,6 +78,21 @@ impl fmt::Debug for SubSeed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SubSeed([redacted])")
     }
+}
+
+/// HKDF-SHA256 with a 32-byte output. The PRK and the output buffers we hold
+/// are wiped; the keyed HMAC states inside `hkdf` are not (`hkdf` 0.12, `hmac`
+/// 0.12 and `sha2` 0.10 have no zeroize support).
+pub(crate) fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Zeroizing<[u8; 32]> {
+    let mut okm = Zeroizing::new([0_u8; 32]);
+    let (mut prk, _) = Hkdf::<Sha256>::extract(salt, ikm);
+    // A 32-byte PRK and a 32-byte output are always valid for SHA-256.
+    let expanded = Hkdf::<Sha256>::from_prk(&prk)
+        .map_err(|_| ())
+        .and_then(|h| h.expand(info, okm.as_mut()).map_err(|_| ()));
+    prk.as_mut_slice().zeroize();
+    expanded.unwrap_or_else(|()| unreachable!("32-byte HKDF-SHA256"));
+    okm
 }
 
 /// A seeded ChaCha20 stream, usable as `rand_core` 0.6's RNG (for `spake2`)

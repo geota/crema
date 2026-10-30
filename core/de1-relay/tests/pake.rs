@@ -125,7 +125,7 @@ fn honest_elements_pass() {
 /// 10⁵ seeded draws, 9 degrees of freedom, p > 0.001 (statistic < 27.877).
 #[test]
 fn codes_are_uniform_six_digits() {
-    let mut rng = ChaCha20Rng::from_seed(test_seed("codes", 0).0);
+    let mut rng = ChaCha20Rng::from_seed(test_seed("codes", 0).expose_for_tests());
     let mut counts = [[0_u32; 10]; 6];
     let draws = 100_000;
     for _ in 0..draws {

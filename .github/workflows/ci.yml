@@ -150,7 +150,8 @@ jobs:
   # de1-relay fuzzing (relay v4 spec §3.7, AC-21): each cargo-fuzz target for
   # 60 s, nightly only. The seed corpus also replays in `cargo test` on every
   # PR (tests/fuzz_corpus.rs). New inputs go to a scratch corpus; a crash
-  # uploads its artifact and fails the job.
+  # uploads its artifact and fails the job. -len_control=0 -max_len=4096 lets
+  # inputs grow to full message sequences from the first second of a 60 s run.
   # ─────────────────────────────────────────────────────────────────────
   fuzz:
     name: fuzz (de1-relay)
@@ -178,7 +179,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/artifacts"
           cargo fuzz run ${{ matrix.target }} "$RUNNER_TEMP/corpus" corpus/${{ matrix.target }} -- \
-            -max_total_time=60 -artifact_prefix="$RUNNER_TEMP/artifacts/"
+            -max_total_time=60 -len_control=0 -max_len=4096 -artifact_prefix="$RUNNER_TEMP/artifacts/"
 
       - name: Upload crash artifacts
         if: failure()

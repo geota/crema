@@ -361,7 +361,7 @@ fn pairing(remote_keys: &StaticKeypair, hub_keys: &StaticKeypair) -> Value {
     );
     obj.insert(
         "channel_binding".into(),
-        binding_hex(run.hub.channel_binding()),
+        binding_hex(run.hub.channel_binding_for_tests()),
     );
     obj.insert(
         "paired".into(),
@@ -516,7 +516,7 @@ pub fn rejection_name(r: ElementRejection) -> &'static str {
 pub fn build() -> Value {
     let remote_keys = StaticKeypair::generate(test_seed("remote-static", 0));
     let hub_keys = StaticKeypair::generate(test_seed("hub-static", 0));
-    let seed_hex = |label: &str, n: u32| hex(&test_seed(label, n).0);
+    let seed_hex = |label: &str, n: u32| hex(&test_seed(label, n).expose_for_tests());
     json!({
         "format": "de1-relay v4 vectors; lowercase hex; wire messages are whole WebSocket payloads, kind byte included",
         "seed_rule": "SHA-256(\"de1-relay test seed \" || label || \" \" || n), n in decimal",

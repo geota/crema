@@ -34,9 +34,11 @@ pub struct RemoteConnection {
     keys: StaticKeypair,
     my_id: DeviceId,
     mode: Mode,
-    code_rng: SeededRandom,
-    spake_rng: SeededRandom,
-    noise: NoiseEntropy,
+    /// The code, SPAKE2 and Noise randomness, each dropped as soon as it has
+    /// been used (resume never holds the first two).
+    code_rng: Option<SeededRandom>,
+    spake_rng: Option<SeededRandom>,
+    noise: Option<NoiseEntropy>,
     rekey_override: Option<u64>,
 
     phase: Phase,
@@ -72,14 +74,15 @@ impl RemoteConnection {
         hello: &ClientHello,
         now_ms: u64,
     ) -> (Self, Step) {
+        let pairing = matches!(mode, Mode::Pair);
         let client_hello = hello.encode();
         let conn = Self {
             keys: keys.duplicate(),
             my_id: keys.device_id(),
             mode,
-            code_rng: seed.derive(crate::labels::STREAM_CODE).rng(),
-            spake_rng: seed.derive(crate::labels::STREAM_SPAKE).rng(),
-            noise: NoiseEntropy::new(seed),
+            code_rng: pairing.then(|| seed.derive(crate::labels::STREAM_CODE).rng()),
+            spake_rng: pairing.then(|| seed.derive(crate::labels::STREAM_SPAKE).rng()),
+            noise: Some(NoiseEntropy::new(seed)),
             rekey_override: None,
             phase: Phase::AwaitHello,
             deadline: Some(now_ms + HELLO_DEADLINE_MS),
@@ -140,14 +143,22 @@ impl RemoteConnection {
         self.phase
     }
 
-    /// The hub's static key, after pairing or IK message 2.
+    /// The hub's static key, once trusted (`Paired` or `Established`); `None`
+    /// before and after a failure.
     pub fn peer_public_key(&self) -> Option<[u8; 32]> {
-        self.peer_static
+        // Only once the hub is trusted: PAIR_COMPLETE decrypted, or IK message 2
+        // did. A fake hub that reached XX message 2 without the code reveals nothing.
+        match self.phase {
+            Phase::Paired | Phase::Established => self.peer_static,
+            _ => None,
+        }
     }
 
-    /// The Noise handshake hash `h` of this session, after the handshake.
+    /// The Noise handshake hash `h` of an established session (`Established` only).
     pub fn channel_binding(&self) -> Option<[u8; 32]> {
-        self.binding
+        (self.phase == Phase::Established)
+            .then_some(self.binding)
+            .flatten()
     }
 
     /// When the shell should call `tick` next.
@@ -448,15 +459,21 @@ impl RemoteConnection {
                     );
                     return step;
                 }
-                let code = pake::generate_code(&mut self.code_rng);
+                // The code stream is consumed (and freed) by drawing the code.
+                let code = self
+                    .code_rng
+                    .take()
+                    .map(|mut rng| pake::generate_code(&mut rng));
+                let (Some(code), Some(spake_rng)) = (code, self.spake_rng.take()) else {
+                    return self.malformed("no entropy");
+                };
                 let lifetime = CODE_LIFETIME_MS.min(u64::from(sh.secs_left) * 1000);
                 let expires_at_ms = now_ms + lifetime;
                 step.events.push(RelayEvent::ShowCode {
                     code: code.as_str().to_owned(),
                     expires_at_ms,
                 });
-                let (state, pake_a) =
-                    pake::start_a(&code, &self.my_id, &sh.hub_id, &mut self.spake_rng);
+                let (state, pake_a) = pake::start_a(&code, &self.my_id, &sh.hub_id, spake_rng);
                 step.push_binary(wire::encode_pake(kind::PAKE_A, &pake_a));
                 self.code = Some(code);
                 self.spake = Some(state);
@@ -479,6 +496,10 @@ impl RemoteConnection {
             );
             return;
         };
+        let Some(entropy) = self.noise.take() else {
+            self.fail(step, None, ws_close::PROTOCOL, &RelayError::InvalidState);
+            return;
+        };
         let built = noise::build(
             Pattern::Resume,
             true,
@@ -486,7 +507,7 @@ impl RemoteConnection {
             Some(&hub_public),
             &prologue,
             None,
-            self.noise.resolver(),
+            entropy.resolver(),
         );
         let mut msg1 = [0_u8; 128];
         let written = built.and_then(|mut hs| hs.write_message(&[], &mut msg1).map(|n| (hs, n)));
@@ -530,6 +551,9 @@ impl RemoteConnection {
         {
             self.psk_for_tests = Some(psk.expose_for_tests());
         }
+        let Some(entropy) = self.noise.take() else {
+            return self.malformed("no entropy");
+        };
         let built = noise::build(
             Pattern::Pairing,
             true,
@@ -537,7 +561,7 @@ impl RemoteConnection {
             None,
             &prologue,
             Some(&psk),
-            self.noise.resolver(),
+            entropy.resolver(),
         );
         drop(psk);
         let mut msg1 = [0_u8; 64];
@@ -855,6 +879,11 @@ impl RemoteConnection {
     /// Uses a reduced rekey interval (records per direction); call before the handshake.
     pub fn set_rekey_interval_for_tests(&mut self, records: u64) {
         self.rekey_override = Some(records);
+    }
+
+    /// The handshake hash whatever the phase, for vectors and tests.
+    pub fn channel_binding_for_tests(&self) -> Option<[u8; 32]> {
+        self.binding
     }
 
     /// The psk of this pairing, for vectors and tests.

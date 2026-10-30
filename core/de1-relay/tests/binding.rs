@@ -322,3 +322,20 @@ fn names_drop_control_and_format_characters() {
     assert_eq!(sanitize_name("Café ☕ 🍵 עברית"), "Café ☕ 🍵 עברית");
     assert_eq!(sanitize_name(&"x".repeat(40)).chars().count(), 32);
 }
+
+/// A long multi-byte hub name is cut on a character boundary, so the
+/// ServerHello always parses.
+#[test]
+fn server_hello_name_is_cut_on_a_char_boundary() {
+    let sh = de1_relay::ServerHello {
+        version: 4,
+        status: de1_relay::HelloStatus::Ready,
+        hub_id: hub_keys().device_id(),
+        secs_left: 0,
+        name: format!("a{}", "é".repeat(40)),
+        ext: vec![],
+    };
+    let parsed = de1_relay::ServerHello::parse(&sh.encode()).unwrap();
+    assert!(parsed.name.len() <= 64 && sh.name.starts_with(&parsed.name));
+    assert_eq!(parsed.name.len(), 63);
+}

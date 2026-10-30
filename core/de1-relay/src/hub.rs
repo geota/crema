@@ -38,8 +38,10 @@ pub struct HubConnection {
     hub_name: String,
     gate: Arc<Mutex<PairingGate>>,
     pins: Arc<RwLock<PinSet>>,
-    spake_rng: SeededRandom,
-    noise: NoiseEntropy,
+    /// The SPAKE2 and Noise randomness, dropped as soon as the handshake that
+    /// needs it is built.
+    spake_rng: Option<SeededRandom>,
+    noise: Option<NoiseEntropy>,
     rekey_override: Option<u64>,
 
     phase: Phase,
@@ -102,8 +104,8 @@ impl HubConnection {
             hub_name: crate::hello::wire_name(hub_name),
             gate,
             pins,
-            spake_rng: seed.derive(crate::labels::STREAM_SPAKE).rng(),
-            noise: NoiseEntropy::new(&seed),
+            spake_rng: Some(seed.derive(crate::labels::STREAM_SPAKE).rng()),
+            noise: Some(NoiseEntropy::new(&seed)),
             rekey_override: None,
             phase: Phase::AwaitHello,
             now_ms,
@@ -133,14 +135,22 @@ impl HubConnection {
         self.phase
     }
 
-    /// The peer's static key, after `PairPending` (pairing) or IK message 1 (resume).
+    /// The peer's static key, once trusted: from `PairPending` (pairing) or
+    /// admission (resume) on; `None` before and after a failure.
     pub fn peer_public_key(&self) -> Option<[u8; 32]> {
-        self.peer_static
+        // Only once the key is trusted: pairing confirmed (or committed), or
+        // the session admitted. A replayed IK message 1 reveals nothing.
+        match self.phase {
+            Phase::AwaitCommit | Phase::Paired | Phase::Established => self.peer_static,
+            _ => None,
+        }
     }
 
-    /// The Noise handshake hash `h` of this session, after the handshake.
+    /// The Noise handshake hash `h` of an admitted session (`Established` only).
     pub fn channel_binding(&self) -> Option<[u8; 32]> {
-        self.binding
+        (self.phase == Phase::Established)
+            .then_some(self.binding)
+            .flatten()
     }
 
     /// When the shell should call `tick` next.
@@ -479,6 +489,10 @@ impl HubConnection {
         let Ok(prologue) = noise::resume_prologue(&self.client_hello, &self.server_hello) else {
             return self.malformed("prologue");
         };
+        self.spake_rng = None;
+        let Some(entropy) = self.noise.take() else {
+            return self.malformed("no entropy");
+        };
         match noise::build(
             Pattern::Resume,
             false,
@@ -486,7 +500,7 @@ impl HubConnection {
             None,
             &prologue,
             None,
-            self.noise.resolver(),
+            entropy.resolver(),
         ) {
             Ok(hs) => self.handshake = Some(hs),
             Err(_) => {
@@ -600,7 +614,10 @@ impl HubConnection {
         };
         self.spake_ran = true;
         let mut step = Step::default();
-        let (state, pake_b) = pake::start_b(&code, &remote_id, &self.hub_id, &mut self.spake_rng);
+        let (Some(rng), Some(entropy)) = (self.spake_rng.take(), self.noise.take()) else {
+            return Err(RelayError::InvalidState);
+        };
+        let (state, pake_b) = pake::start_b(&code, &remote_id, &self.hub_id, rng);
         drop(code);
         let Ok(spake_key) = pake::finish(state, &pake_a, SIDE_A) else {
             return Ok(self.malformed("PAKE_A element"));
@@ -623,7 +640,7 @@ impl HubConnection {
             None,
             &prologue,
             Some(&psk),
-            self.noise.resolver(),
+            entropy.resolver(),
         ) {
             Ok(hs) => self.handshake = Some(hs),
             Err(_) => {
@@ -649,15 +666,15 @@ impl HubConnection {
 
     fn on_pair_handshake(&mut self, body: &[u8], now_ms: u64) -> Step {
         let mut step = Step::default();
-        let Some(hs) = self.handshake.as_mut() else {
-            return self.malformed("no handshake");
-        };
-        let mut payload = [0_u8; 64];
         match self.pair_stage {
             PairStage::Msg1 => {
                 if body.len() != XX_MESSAGE_LENS[0] {
                     return self.malformed("XX message 1 length");
                 }
+                let Some(hs) = self.handshake.as_mut() else {
+                    return self.malformed("no handshake");
+                };
+                let mut payload = [0_u8; 64];
                 match hs.read_message(body, &mut payload) {
                     Ok(0) => {}
                     Ok(_) => return self.malformed("XX message 1 payload"),
@@ -694,36 +711,81 @@ impl HubConnection {
                 if body.len() != XX_MESSAGE_LENS[2] {
                     return self.malformed("XX message 3 length");
                 }
-                match hs.read_message(body, &mut payload) {
-                    Ok(0) => self.on_pair_confirmed(now_ms),
-                    Ok(_) => self.malformed("XX message 3 payload"),
-                    Err(snow::Error::Decrypt) => self.on_wrong_code(now_ms),
-                    // A low-order static fails `se` before the psk is even mixed:
-                    // no code was tested, so nothing is counted.
-                    Err(_) => {
-                        self.fail(
-                            &mut step,
-                            Some(AbortReason::HandshakeFailed),
-                            ws_close::AUTH,
-                            &RelayError::HandshakeFailed,
-                        );
-                        step
-                    }
-                }
+                self.on_msg3(body, now_ms)
+            }
+        }
+    }
+
+    /// Reads XX message 3 under one gate lock held across "still holds the
+    /// slot", the read and the failure count, so a concurrent `close()` can't
+    /// land between them (lock order: connection, then gate).
+    fn on_msg3(&mut self, body: &[u8], now_ms: u64) -> Step {
+        let gate = Arc::clone(&self.gate);
+        let mut guard = match gate.lock() {
+            Ok(g) => g,
+            Err(poison) => {
+                drop(poison);
+                return self.poisoned();
+            }
+        };
+        if !self.ticket.is_some_and(|t| guard.holds(t)) {
+            drop(guard);
+            let mut step = Step::default();
+            self.ticket = None;
+            self.end_pairing(
+                &mut step,
+                AbortReason::Cancelled,
+                ws_close::REFUSED,
+                "Cancelled",
+            );
+            return step;
+        }
+        let mut payload = [0_u8; 64];
+        let read = match self.handshake.as_mut() {
+            Some(hs) => hs.read_message(body, &mut payload),
+            None => {
+                drop(guard);
+                return self.malformed("no handshake");
+            }
+        };
+        match read {
+            Ok(0) => {
+                drop(guard);
+                self.on_pair_confirmed(now_ms)
+            }
+            Ok(_) => {
+                drop(guard);
+                self.malformed("XX message 3 payload")
+            }
+            Err(snow::Error::Decrypt) => {
+                let counted = self
+                    .ticket
+                    .take()
+                    .and_then(|t| guard.record_failure(t, now_ms));
+                drop(guard);
+                self.on_wrong_code(counted)
+            }
+            // A low-order static fails `se` before the psk is even mixed: no
+            // code was tested, so nothing is counted.
+            Err(_) => {
+                drop(guard);
+                let mut step = Step::default();
+                self.fail(
+                    &mut step,
+                    Some(AbortReason::HandshakeFailed),
+                    ws_close::AUTH,
+                    &RelayError::HandshakeFailed,
+                );
+                step
             }
         }
     }
 
     /// Message 3 failed to decrypt after a code entry: the only event that
     /// counts as a failed code (§2.4 step 8).
-    fn on_wrong_code(&mut self, now_ms: u64) -> Step {
+    fn on_wrong_code(&mut self, counted: Option<(u8, bool)>) -> Step {
         let mut step = Step::default();
         step.push_binary(wire::encode_abort(AbortReason::HandshakeFailed, &[]));
-        let ticket = self.ticket.take();
-        let Ok(counted) = self.with_gate(|g| ticket.and_then(|t| g.record_failure(t, now_ms)))
-        else {
-            return self.poisoned();
-        };
         let (failures, locked) = counted.unwrap_or((0, false));
         step.events.push(RelayEvent::PairingFailed {
             reason: RelayError::WrongCode.name().to_owned(),
@@ -1150,6 +1212,11 @@ impl HubConnection {
     /// Uses a reduced rekey interval (records per direction); call before the handshake.
     pub fn set_rekey_interval_for_tests(&mut self, records: u64) {
         self.rekey_override = Some(records);
+    }
+
+    /// The handshake hash whatever the phase, for vectors and tests.
+    pub fn channel_binding_for_tests(&self) -> Option<[u8; 32]> {
+        self.binding
     }
 
     /// The psk of this pairing, for vectors and tests.

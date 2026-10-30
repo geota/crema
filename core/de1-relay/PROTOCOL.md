@@ -125,7 +125,8 @@ H → R  RECORD           inner PAIR_COMPLETE (empty)                 R: decrypt
    `hub_id`; after message 3 the hub checks the remote's static against `clientId` (`PeerIdMismatch`).
 8. **Key confirmation and failure counting.** The hub confirms when message 3 decrypts. A message 3 that fails
    authentication after a code entry is `WrongCode`: the hub counts one failure, sends `ABORT(HANDSHAKE_FAILED)`
-   and closes 4401. **This is the only event that counts.** A DH failure (low-order key), a malformed message, a
+   and closes 4401. **This is the only event that counts.** The hub checks that it still holds the slot, reads
+   message 3 and counts the failure under one gate lock, so a concurrent close of the window can't fall between. A DH failure (low-order key), a malformed message, a
    timeout (including after code entry), a cancel, a closed window and `reject_pairing` free the slot uncounted.
    The remote confirms only when the `PAIR_COMPLETE` record decrypts.
 9. **Two-phase commit on the hub.** On message 3 success the hub emits `PairPending`, exposes the remote's key and
@@ -138,9 +139,16 @@ H → R  RECORD           inner PAIR_COMPLETE (empty)                 R: decrypt
      has passed; `PairingClosed` when the gate was closed or reopened since; `Closed` when the attempt already ended
      (a cancel, a timeout, the remote's `ABORT`); `Poisoned` for a poisoned lock. When the call itself ended the
      attempt, its `ABORT`/close Step is held and returned by the next `tick()` (or any other call).
-   - **Rollback rule (normative):** the shell keeps the pin only if `confirm_paired()` returned `Ok`. On any `Err`
-     other than the retryable `InvalidState`, and on any `PairingFailed` after `PairPending`, it removes the key from
-     the live `PinSet` and from the store, then applies `tick()`'s Step.
+   - **Rollback rule (normative): restore the prior state.** The shell keeps the new pin record only if
+     `confirm_paired()` returned `Ok`. On any `Err` other than the retryable `InvalidState`, and on any
+     `PairingFailed` after `PairPending`, it puts back exactly what was there before:
+     - `PinSet::insert` returned `true` (the key was new): remove the key from the live `PinSet` and its record from
+       the store;
+     - it returned `false` (the key was already pinned: a re-pair): keep the key in the live set and restore the
+       old record (scope, name, timestamps) in the store, so a failed re-pair neither unpins the device nor changes
+       its scope.
+
+     Then it applies `tick()`'s Step.
    - If the write fails the shell calls `reject_pairing()` instead: `ABORT(CANCELLED)`, close 4403, no failure.
    - The remote pins on `PAIR_COMPLETE`.
 
@@ -269,11 +277,27 @@ step, other than `Timeout` (the code expired), is a failed attempt the shell may
 
 ## 11. Zeroization (best effort)
 
-Our copies of the static private key, the SPAKE2 output, the psk, the HKDF outputs and sub-seeds, and the code
-are wiped on drop, and their `Debug` prints `[redacted]`. Not covered: snow's internal copies (its static key, the
-psk and chaining key in `HandshakeState`, the CipherState keys; snow 0.10 has no zeroization), `spake2`'s password
-copy and scalars, the ChaCha20 generator states, and the bytes that cross UniFFI or wasm memory. An attacker who
-can read process memory is out of scope.
+Wiped on drop, with a `Debug` that prints `[redacted]`: our copies of the static private key, the seed, the
+sub-seeds, the HKDF PRK and outputs, the SPAKE2 output, the psk and the code (the `Code` value, and the code
+string in a `ShowCode` event; `Debug` of a `ShowCode` never prints it). The seed's Noise copy, and the code,
+SPAKE2 and Noise generators, are dropped as soon as the handshake that needs them is built.
+
+Not wiped, and accepted (an attacker who can read process memory is out of scope):
+- snow's internal copies: its static and ephemeral private keys, the psk and chaining key in `HandshakeState`,
+  the CipherState keys (snow 0.10 has no zeroization);
+- `spake2`'s copy of the password and its scalars;
+- the ChaCha20 generator states (`rand_chacha` 0.3 has no zeroize support; they hold derived stream keys, never
+  a seed, and are dropped after use);
+- the keyed HMAC states inside `hkdf` (`hkdf`/`hmac` 0.12 and `sha2` 0.10 have no zeroize support);
+- the code string `RemoteConnection::code()` returns and any copy the shell makes of an event;
+- the bytes that cross UniFFI's `RustBuffer` or wasm linear memory.
+
+## 12. What is exposed when
+
+`peer_public_key()` returns the peer's static key only once it is trusted: on the hub in `AwaitCommit`, `Paired`
+and `Established`, on the remote in `Paired` and `Established`. `channel_binding()` returns `h` only in
+`Established`. Before that (a replayed IK message 1, a fake hub that reached XX message 2 without the code) and
+after any failure, both are `None`.
 
 ## Implementation notes (where the code pins down or differs from the spec)
 
@@ -302,3 +326,7 @@ can read process memory is out of scope.
 11. **Names drop format characters** (Unicode Cf: bidi embeddings, overrides and isolates, zero-width spaces and
     joiners, the BOM, soft hyphen, tag characters) as well as control characters, so a name can't reorder or hide
     text in the hub's code dialog. Emoji sequences built with a zero-width joiner show as their parts.
+12. **`Seed` is opaque and single-use**: its bytes are private, built only with the consuming
+    `Seed::from_entropy([u8; 32])`; it is neither `Clone` nor `Copy`.
+13. **`PinSet::insert` returns whether the key was new** (`Ok(true)`) or already pinned (`Ok(false)`), which is what
+    the restore-prior rollback rule (§4 step 9) needs.

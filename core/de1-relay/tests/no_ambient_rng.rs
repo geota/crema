@@ -9,7 +9,7 @@ fn sources_name_no_ambient_rng() {
         "getrandom",
         "OsRng",
         "thread_rng",
-        "from_entropy",
+        "from_entropy()",
         "rand::rngs",
         "SystemTime",
         "Instant::now",

@@ -233,3 +233,22 @@ fn heartbeats_and_receive_timeout() {
     }));
     let _ = inner::HEARTBEAT;
 }
+
+/// The code lives `min(120 s, secs_left)`: with 30 s left in the hub's window
+/// the remote's code expires after 30 s, not 120.
+#[test]
+fn code_lifetime_is_capped_by_the_window() {
+    let gate = new_gate();
+    open_gate(&gate, T0);
+    let late = T0 + 90_000;
+    let mut link = Link::pairing(&remote_keys(), &hub_keys(), gate, new_pins(vec![]), 0, late);
+    link.pump();
+    let expires = link.remote_events().iter().find_map(|e| match e {
+        RelayEvent::ShowCode { expires_at_ms, .. } => Some(*expires_at_ms),
+        _ => None,
+    });
+    assert_eq!(expires, Some(late + 30_000));
+    assert_eq!(link.remote.next_deadline_ms(), Some(late + 30_000));
+    let s = expire_remote(&mut link.remote);
+    assert_timeout(&s, true);
+}

@@ -160,7 +160,7 @@ impl CryptoResolver for RelayResolver {
             RngSource::Seeded { seed, counter } => {
                 let n = counter.fetch_add(1, Ordering::Relaxed);
                 let label = [labels::STREAM_NOISE, &n.to_be_bytes()].concat();
-                Some(Box::new(SubSeed::derive_from(&seed.0, &label).rng()))
+                Some(Box::new(SubSeed::derive_from(seed.bytes(), &label).rng()))
             }
             #[cfg(feature = "test-seeds")]
             RngSource::Scripted(streams) => {

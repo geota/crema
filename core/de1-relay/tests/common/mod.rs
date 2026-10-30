@@ -301,8 +301,8 @@ impl Link {
 
     /// The code the remote showed.
     pub fn shown_code(&self) -> Option<String> {
-        self.remote_events().into_iter().find_map(|e| match e {
-            RelayEvent::ShowCode { code, .. } => Some(code),
+        self.remote_events().iter().find_map(|e| match e {
+            RelayEvent::ShowCode { code, .. } => Some(code.clone()),
             _ => None,
         })
     }

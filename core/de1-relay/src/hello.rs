@@ -269,7 +269,11 @@ pub struct ServerHello {
 impl ServerHello {
     /// The exact bytes sent (and bound into the prologue), kind byte included.
     pub fn encode(&self) -> Vec<u8> {
-        let name = &self.name.as_bytes()[..self.name.len().min(NAME_MAX_BYTES)];
+        let mut cut = self.name.len().min(NAME_MAX_BYTES);
+        while !self.name.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let name = &self.name.as_bytes()[..cut];
         let ext_len = u16::try_from(self.ext.len()).unwrap_or(u16::MAX);
         let ext = &self.ext[..usize::from(ext_len)];
         let mut out = Vec::with_capacity(24 + name.len() + ext.len());

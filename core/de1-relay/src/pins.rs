@@ -39,18 +39,22 @@ impl PinSet {
         Ok(set)
     }
 
-    /// Pins a key (a no-op if it is already pinned).
+    /// Pins a key. Returns `true` if it was newly pinned and `false` if it was
+    /// already pinned (a re-pair). The pairing rollback rule depends on it:
+    /// after a failed `confirm_paired` the shell removes the key only if this
+    /// returned `true`, and otherwise restores the old pin record.
     ///
     /// # Errors
     /// [`RelayError::LowOrderKey`] if the key is low-order; nothing changes.
-    pub fn insert(&mut self, key: [u8; 32]) -> Result<(), RelayError> {
+    pub fn insert(&mut self, key: [u8; 32]) -> Result<bool, RelayError> {
         if is_low_order(&key) {
             return Err(RelayError::LowOrderKey);
         }
-        if !self.contains(&key) {
-            self.keys.push(key);
+        if self.contains(&key) {
+            return Ok(false);
         }
-        Ok(())
+        self.keys.push(key);
+        Ok(true)
     }
 
     /// Unpins a key (a no-op if it isn't pinned).

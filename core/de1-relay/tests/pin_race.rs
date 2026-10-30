@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use de1_relay::{Phase, RelayError, RelayEvent, kind, ws_close};
+use de1_relay::{Phase, PinSet, RelayError, RelayEvent, kind, ws_close};
 
 fn not_paired_anywhere(link: &Link) -> bool {
     !link
@@ -122,10 +122,10 @@ fn reject_pins_nothing() {
     assert!(pins.read().unwrap().is_empty());
     assert!(!has_event(&link.hub_events(), is_paired));
     assert!(!has_event(&link.remote_events(), is_paired));
-    assert!(
-        link.remote.peer_public_key().is_some(),
-        "the remote saw the hub's key, but never pinned it"
-    );
+    // Neither side exposes the other's key after a failed pairing.
+    assert_eq!(link.remote.peer_public_key(), None);
+    assert_eq!(link.hub.peer_public_key(), None);
+    assert_eq!(link.remote.channel_binding(), None);
     assert_eq!(link.remote.phase(), Phase::Failed);
     // And a later resume from it is refused as unknown.
     let mut resume = Link::resume(&r, &h, new_gate(), pins, 11, T0);
@@ -276,4 +276,98 @@ fn poisoned_pin_set_frees_the_slot() {
     }));
     let status = link.gate.lock().unwrap().status(T0);
     assert!(status.open && !status.pending);
+}
+
+/// Neither side reveals the peer's key or a channel binding before the peer
+/// is trusted: a replayed IK message 1 on the hub, a fake hub without the
+/// code that got the remote to `AwaitConfirm`.
+#[test]
+fn untrusted_peers_reveal_no_key_or_binding() {
+    let (r, h) = (remote_keys(), hub_keys());
+    let pins = new_pins(vec![r.public()]);
+    let mut original = Link::resume(&r, &h, new_gate(), pins.clone(), 1, T0);
+    original.pump();
+    let flights = original.sent(Dir::ToHub);
+    let mut replay = de1_relay::HubConnection::new(
+        &h,
+        new_gate(),
+        pins,
+        "Kitchen tablet",
+        de1_relay::test_support::test_seed("hub-conn", 90),
+        T0,
+    );
+    replay.on_ws(ws(&flights[0]), T0);
+    let s = replay.on_ws(ws(&flights[1]), T0);
+    assert_eq!(s.send[0].bytes[0], kind::NOISE_HS, "message 2 went out");
+    assert_eq!(replay.phase(), Phase::AwaitClientFinished);
+    assert_eq!(replay.peer_public_key(), None);
+    assert_eq!(replay.channel_binding(), None);
+    assert!(
+        replay.channel_binding_for_tests().is_some(),
+        "known internally, not exposed"
+    );
+    // Admitted sessions do expose both.
+    assert_eq!(original.hub.peer_public_key(), Some(r.public()));
+    assert!(original.hub.channel_binding().is_some());
+    assert_eq!(original.remote.peer_public_key(), Some(h.public()));
+
+    let fake = keys("hub-static", 9);
+    let fake_private: [u8; 32] = *fake.private_for_storage();
+    let (mut remote, first) = de1_relay::RemoteConnection::pair(
+        &r,
+        "Pixel 8",
+        de1_relay::test_support::test_seed("remote-conn", 90),
+        T0,
+    );
+    let shown_wrong = Some("000000");
+    let steps = common::evil::evil_pair_hub_guessing(
+        &mut remote,
+        &first,
+        fake.device_id(),
+        &fake_private,
+        common::evil::EvilResolver::new(None, None, 9),
+        shown_wrong,
+        T0,
+    );
+    assert_eq!(
+        steps[2].send[0].bytes[0],
+        kind::NOISE_HS,
+        "message 3 went out"
+    );
+    assert_eq!(remote.phase(), Phase::AwaitConfirm);
+    assert_eq!(remote.peer_public_key(), None);
+    assert_eq!(remote.channel_binding(), None);
+}
+
+/// A re-pair: the key was already pinned, so `insert` says so and a failed
+/// `confirm_paired` leaves the pin in place (the shell restores the old
+/// record instead of removing the key).
+#[test]
+fn repair_rollback_keeps_the_existing_pin() {
+    let (r, h) = (remote_keys(), hub_keys());
+    let gate = new_gate();
+    open_gate(&gate, T0);
+    let pins = new_pins(vec![r.public()]);
+    let mut link = Link::pairing(&r, &h, gate, pins.clone(), 0, T0);
+    link.pump();
+    link.enter_code(&link.shown_code().unwrap());
+    let key = link.hub.peer_public_key().unwrap();
+    assert_eq!(
+        pins.write().unwrap().insert(key),
+        Ok(false),
+        "already pinned"
+    );
+    assert_eq!(
+        link.hub.confirm_paired(T0 + de1_relay::PAIR_FINISH_MS),
+        Err(RelayError::Timeout)
+    );
+    // Rollback rule: insert returned false, so the key stays.
+    assert!(pins.read().unwrap().contains(&key));
+    let mut resume = Link::resume(&r, &h, new_gate(), pins.clone(), 12, T0);
+    resume.pump();
+    assert_eq!(resume.hub.phase(), Phase::Established);
+    // A first pairing's key is new: insert says true, and rollback removes it.
+    let mut fresh = PinSet::default();
+    assert_eq!(fresh.insert(r.public()), Ok(true));
+    assert_eq!(fresh.insert(r.public()), Ok(false));
 }
