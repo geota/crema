@@ -1878,12 +1878,10 @@ export class CremaApp {
 	}
 
 	/**
-	 * Write the four QC-modeled steam / hot-water fields via read-modify-write
-	 * (issue 14). The combined cuuid_0B packet carries eight fields; the
-	 * timeouts / espresso volume / group temp the Quick Sheet doesn't model are
-	 * seeded from the machine's last `ShotSettingsRead` (`de1ShotSettings`) so
-	 * this change doesn't reset them. Pre-read, the legacy-app defaults stand
-	 * in. `steamFlags` is always 0 (legacy parity; bits undocumented).
+	 * Write the four QC-modeled steam / hot-water fields (issue 14). The core
+	 * owns the read-modify-write of the combined cuuid_0B packet: the fields
+	 * the Quick Sheet doesn't model (flags, timeouts, espresso volume, group
+	 * temp) keep their current values.
 	 */
 	async setSteamHotwater(values: {
 		steamTempC: number;
@@ -1891,19 +1889,7 @@ export class CremaApp {
 		hotWaterTempC: number;
 		hotWaterVolumeMl: number;
 	}): Promise<void> {
-		const m = this.state.current.de1ShotSettings;
-		this.applyCoreOutput(
-			await this.core.setSteamHotwaterSettings({
-				steamFlags: 0,
-				steamTempC: values.steamTempC,
-				steamTimeoutS: values.steamTimeoutS,
-				hotWaterTempC: values.hotWaterTempC,
-				hotWaterVolumeMl: values.hotWaterVolumeMl,
-				hotWaterTimeoutS: m?.hotWaterTimeout ?? 60,
-				espressoVolumeMl: m?.espressoVolume ?? 200,
-				groupTempC: m?.groupTemp ?? 92
-			})
-		);
+		this.applyCoreOutput(await this.core.setSteamHotwaterTargets(values));
 	}
 
 	/** Set the steam flow rate, ml/s — the Quick Sheet Steam→Flow stepper. */

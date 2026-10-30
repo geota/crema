@@ -24,6 +24,7 @@ import coffee.crema.core.ScaleCapabilities
 import coffee.crema.core.Bean
 import coffee.crema.core.MaintenanceState
 import coffee.crema.core.WriteTarget
+import coffee.crema.core.SteamHotWaterTargets
 import coffee.crema.drive.DriveStore
 import coffee.crema.drive.DriveSync
 import coffee.crema.core.MaintenanceReadout
@@ -64,7 +65,6 @@ import coffee.crema.machine.MachineActions
 import coffee.crema.machine.MachineCommand
 import coffee.crema.machine.MachineCommands
 import coffee.crema.machine.QcField
-import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotDisposition
 import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.profileFingerprint
@@ -276,12 +276,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  disconnect. One dip never nags twice. */
     private var waterLowWarned = false
     private var pendingUploadFingerprint: String? = null
-
-    /** The machine's last-reported steam/hot-water settings (from
-     *  `Event.ShotSettingsRead`). Used to read-modify-write QC steam/water
-     *  changes so the unmodeled fields (timeouts, espresso volume, group temp)
-     *  are preserved rather than reset (issue 14). Null until the DE1 reports. */
-    private var machineShotSettings: EventShotSettingsReadInner? = null
 
     /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
     private var modeTickerJob: Job? = null
@@ -3679,9 +3673,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Quick-Controls steam / hot-water / flush (issue 14) ──────────────────
     // Persisted QC overrides that stick + take priority. On change we update
     // UiState, persist, and write to the machine. Steam temp/time + hot-water
-    // temp/vol share one packet (cuuid_0B) written read-modify-write so the
-    // fields QC doesn't model (timeouts, espresso volume, group temp) survive;
-    // steam flow + flush temp/time are separate writes.
+    // temp/vol share one packet (cuuid_0B), which the core writes
+    // read-modify-write so the fields QC doesn't model (flags, timeouts,
+    // espresso volume, group temp) survive; steam flow + flush temp/time are
+    // separate writes.
 
     /** Route a core-output-producing machine write through the shared command
      *  path, logging (not throwing) on failure. */
@@ -3693,19 +3688,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreOutputJson(raw)
     }
 
-    /** Write the combined steam + hot-water packet via read-modify-write,
-     *  seeding the unmodeled fields from the machine's last-reported settings
-     *  (or legacy defaults pre-read). */
+    /** Write the four QC steam / hot-water targets; the core does the
+     *  read-modify-write of the combined packet. */
     private fun applySteamHotWater() {
         val ui = _ui.value
-        val settings = buildSteamHotWaterSettings(
+        val targets = SteamHotWaterTargets(
             steamTempC = ui.qcSteamTempC,
             steamTimeoutS = ui.qcSteamTimeS,
             hotWaterTempC = ui.qcHotWaterTempC,
             hotWaterVolumeMl = ui.qcHotWaterVolumeMl,
-            machine = machineShotSettings,
+            groupTempC = null,
         )
-        routeWrite("Set steam/hot-water") { bridge.setSteamHotwaterSettings(settings) }
+        routeWrite("Set steam/hot-water") { bridge.setSteamHotwaterTargets(targets) }
     }
 
     /** Steam timeout, seconds (Quick Controls). Persisted; RMW write. */
@@ -5354,11 +5348,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             is Event.ShotSettingsRead -> {
-                // Cache the machine's reported steam/hot-water settings so QC
-                // changes can read-modify-write without clobbering the fields QC
-                // doesn't model (timeouts, espresso volume, group temp) — issue 14.
-                machineShotSettings = event.content
-                // Also project into UI state: the mode chips + steam / hot-water
+                // Project into UI state: the mode chips + steam / hot-water
                 // timers read the machine's own targets (web de1ShotSettings parity).
                 _ui.update { it.copy(de1ShotSettings = event.content) }
             }

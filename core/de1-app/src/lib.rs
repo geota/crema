@@ -441,6 +441,28 @@ const POST_SHOT_SETTLE_QUIET: Duration = Duration::from_millis(700);
 /// A weight rise smaller than this is noise, not a landing drip.
 const POST_SHOT_SETTLE_RISE_G: f32 = 0.1;
 
+/// The steam / hot-water targets Crema owns in the DE1's combined settings
+/// packet (cuuid_0B), the input to
+/// [`set_steam_hotwater_targets`](CremaCore::set_steam_hotwater_targets).
+/// Every other field of the packet (the flag byte, the hot-water timeout, the
+/// espresso volume) is the machine's, so the core keeps it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SteamHotWaterTargets {
+    /// Target steam temperature, °C (0 turns the heater off).
+    pub steam_temp_c: f32,
+    /// Steam timeout, seconds.
+    pub steam_timeout_s: f32,
+    /// Target hot-water temperature, °C.
+    pub hot_water_temp_c: f32,
+    /// Hot-water volume, ml (the user's dial; the scale override is the
+    /// core's).
+    pub hot_water_volume_ml: f32,
+    /// Espresso group target, °C. `None` keeps the current value: de1app and
+    /// Decenza send the profile's temperature here, which the shells don't
+    /// pass yet.
+    pub group_temp_c: Option<f32>,
+}
+
 /// The headless Crema application core.
 ///
 /// One `CremaCore` tracks one machine session. The FFI bridges wrap it behind
@@ -1707,6 +1729,34 @@ impl CremaCore {
             group_temp: retained.group_temp_c,
         });
         out
+    }
+
+    /// Set the steam / hot-water targets and write the combined packet
+    /// (cuuid_0B) read-modify-write. The packet carries eight fields; the
+    /// ones in `targets` replace the current values, and every other field
+    /// (the flag byte, the hot-water timeout, the espresso volume, and the
+    /// group target when `targets.group_temp_c` is `None`) is kept from the
+    /// last packet the machine reported or Crema wrote — reaprime re-reads
+    /// the characteristic before every write and keeps all fields, flags
+    /// included (`de1_controller.dart` `_writeSteamSettings`). Before any
+    /// read, the legacy defaults stand in ([`ShotSettings::default`]: flags
+    /// 0, 60 s, 200 ml, 92 °C, as de1app and Decenza send).
+    ///
+    /// The only way the shells write this packet, and what
+    /// [`connect_sweep`](Self::connect_sweep) uses. Clamps, the eco and
+    /// scale overrides and the read-back projection are
+    /// [`set_steam_hotwater_settings`](Self::set_steam_hotwater_settings)'s.
+    pub fn set_steam_hotwater_targets(&mut self, targets: &SteamHotWaterTargets) -> CoreOutput {
+        let current = self.steam_hotwater_settings.clone().unwrap_or_default();
+        let packet = ShotSettings {
+            steam_temp_c: targets.steam_temp_c,
+            steam_timeout_s: targets.steam_timeout_s,
+            hot_water_temp_c: targets.hot_water_temp_c,
+            hot_water_volume_ml: targets.hot_water_volume_ml,
+            group_temp_c: targets.group_temp_c.unwrap_or(current.group_temp_c),
+            ..current
+        };
+        self.set_steam_hotwater_settings(packet)
     }
 
     /// Apply the documented range clamps to a [`ShotSettings`] before it
@@ -9503,6 +9553,89 @@ mod tests {
             panic!("expected a WriteCharacteristic command");
         };
         assert_eq!(data[4], 0, "0 (off) must not become the 250 ml override");
+    }
+
+    /// The four targets a shell owns, with no group target.
+    fn steam_targets() -> SteamHotWaterTargets {
+        SteamHotWaterTargets {
+            steam_temp_c: 148.0,
+            steam_timeout_s: 12.0,
+            hot_water_temp_c: 80.0,
+            hot_water_volume_ml: 150.0,
+            group_temp_c: None,
+        }
+    }
+
+    /// The machine's packet: a set flag bit and non-default values in every
+    /// field Crema doesn't own.
+    fn machine_shot_settings() -> ShotSettings {
+        ShotSettings {
+            steam_flags: 0x40,
+            steam_temp_c: 160.0,
+            steam_timeout_s: 30.0,
+            hot_water_temp_c: 90.0,
+            hot_water_volume_ml: 200.0,
+            hot_water_timeout_s: 45.0,
+            espresso_volume_ml: 220.0,
+            group_temp_c: 88.0,
+        }
+    }
+
+    #[test]
+    fn steam_hotwater_targets_keep_every_field_they_dont_own() {
+        // AC-F5.1: read-modify-write over the machine's last report.
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(
+            Source::De1ShotSettings,
+            &machine_shot_settings().encode(),
+            0,
+        );
+        let writes = shot_settings_writes(&core.set_steam_hotwater_targets(&steam_targets()));
+        assert_eq!(
+            writes,
+            vec![ShotSettings {
+                steam_flags: 0x40,
+                steam_temp_c: 148.0,
+                steam_timeout_s: 12.0,
+                hot_water_temp_c: 80.0,
+                hot_water_volume_ml: 150.0,
+                hot_water_timeout_s: 45.0,
+                espresso_volume_ml: 220.0,
+                group_temp_c: 88.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn steam_hotwater_targets_use_the_legacy_defaults_before_a_read() {
+        let mut core = CremaCore::new();
+        let w = &shot_settings_writes(&core.set_steam_hotwater_targets(&steam_targets()))[0];
+        assert_eq!(w.steam_flags, 0);
+        assert_eq!(w.hot_water_timeout_s, 60.0);
+        assert_eq!(w.espresso_volume_ml, 200.0);
+        assert_eq!(w.group_temp_c, 92.0);
+        assert_eq!(w.steam_temp_c, 148.0);
+    }
+
+    #[test]
+    fn steam_hotwater_targets_set_the_group_target_only_when_given() {
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(
+            Source::De1ShotSettings,
+            &machine_shot_settings().encode(),
+            0,
+        );
+        let given = SteamHotWaterTargets {
+            group_temp_c: Some(94.0),
+            ..steam_targets()
+        };
+        let w = &shot_settings_writes(&core.set_steam_hotwater_targets(&given))[0];
+        assert_eq!(w.group_temp_c, 94.0);
+        assert_eq!(w.steam_flags, 0x40);
+        // The next write without one keeps what Crema wrote last.
+        let w = &shot_settings_writes(&core.set_steam_hotwater_targets(&steam_targets()))[0];
+        assert_eq!(w.group_temp_c, 94.0);
+        assert_eq!(w.hot_water_timeout_s, 45.0);
     }
 
     #[test]
