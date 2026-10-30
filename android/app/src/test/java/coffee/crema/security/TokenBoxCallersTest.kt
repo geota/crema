@@ -27,14 +27,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The account-token boxes keep their pre-relay-v4 key handling
- * ([LegacyKeystoreKeySource]; relay v4 PR-3a limits the strict rule and the
- * liveness probe to the relay key). Every token caller, through the real
- * AES-GCM cipher over a fake keystore:
+ * The account-token boxes ([DeviceSecretBox.create]) through every token
+ * caller, with the real AES-GCM cipher over a fake keystore:
  * - a permanently lost key ends as signed out ("sign in again"), with no
  *   exception and no rewrite loop on the next start;
+ * - a keystore that isn't ready (or errors) at start keeps the stored token:
+ *   the session reads as signed out, nothing is re-saved, the session's saves
+ *   write the sealed token back unchanged, and a later start opens it;
  * - a keystore error while sealing fails the save (false, logged), leaves the
- *   stored token as it was, and the next save after the keystore recovers stores it.
+ *   stored token as it was, and the next save after the keystore recovers stores it;
+ * - an alias listed without a key still re-keys on seal (as before relay v4),
+ *   but a keystore that isn't ready never gets a new key, and opening never creates one.
  */
 class TokenBoxCallersTest {
     private val dir: File = Files.createTempDirectory("token-box").toFile()
@@ -66,14 +69,39 @@ class TokenBoxCallersTest {
         }
         val legacy = DeviceSecretBox.create(listedOnly)
         assertTrue(SecretBox.isWrapped(legacy.wrap("token")))
-        assertEquals(listOf(DeviceSecretBox.TOKEN_ALIAS), keystore.generated)
+        assertTrue(DeviceSecretBox.TOKEN_ALIAS in keystore.generated)
     }
 
     @Test
-    fun `the token box uses the token alias, no AAD and no probe`() {
-        box.wrap("token")
-        assertEquals(setOf(DeviceSecretBox.TOKEN_ALIAS), keystore.keys.keys)
+    fun `the token box uses the token alias and no AAD`() {
+        val sealed = box.wrap("token")
+        assertTrue(DeviceSecretBox.TOKEN_ALIAS in keystore.keys)
         assertEquals("crema.secretbox.v1", DeviceSecretBox.TOKEN_ALIAS)
+        val noAad = SecretBox(AndroidKeystoreCipher(DeviceSecretBox.TOKEN_ALIAS, keys = SoftKeySource(keystore.keys[DeviceSecretBox.TOKEN_ALIAS])))
+        assertEquals(SecretBox.Opened.Value("token", migrate = false), noAad.open(sealed))
+    }
+
+    @Test
+    fun `a keystore that isn't ready never re-keys the token alias`() {
+        box.wrap("token")
+        val key = keystore.keys.getValue(DeviceSecretBox.TOKEN_ALIAS)
+        keystore.notReady = true
+        assertFalse(runCatching { box.wrap("other") }.isSuccess)
+        keystore.notReady = false
+        assertEquals(key, keystore.keys[DeviceSecretBox.TOKEN_ALIAS])
+    }
+
+    @Test
+    fun `opening a token never creates a key`() {
+        val sealed = box.wrap("token")
+        keystore.keys.remove(DeviceSecretBox.TOKEN_ALIAS)
+        keystore.generated.clear()
+        assertEquals(SecretBox.Opened.Lost, box.open(sealed))
+        keystore.notReady = true
+        assertEquals(SecretBox.Opened.Unavailable, box.open(sealed))
+        keystore.notReady = false
+        assertFalse(DeviceSecretBox.TOKEN_ALIAS in keystore.generated)
+        assertFalse(DeviceSecretBox.TOKEN_ALIAS in keystore.keys)
     }
 
     // ---- Decent -------------------------------------------------------------------
@@ -109,6 +137,29 @@ class TokenBoxCallersTest {
         assertEquals("new-token", store.load().token)
     }
 
+    @Test
+    fun `Decent - a keystore that isn't ready at start keeps the sign-in for a later start`() = runBlocking {
+        val store = DecentStore(context, json, box)
+        assertTrue(store.save(DecentState(email = "a@b.c", token = "tok-123456", autoUpload = true)))
+        val stored = file(DECENT).readBytes()
+        keystore.notReady = true
+        val loaded = store.load()
+        assertNull(loaded.token)
+        assertFalse(loaded.needsReauth)
+        assertArrayEquals(stored, file(DECENT).readBytes()) // nothing re-saved
+        // A save this session (another field) keeps the sealed token.
+        assertTrue(store.save(loaded.copy(autoUpload = false)))
+        assertEquals(field("token", stored), field("token", file(DECENT).readBytes()))
+        keystore.notReady = false
+        val later = store.load()
+        assertEquals("tok-123456", later.token)
+        assertFalse(later.autoUpload)
+    }
+
+    /** A string field as stored (a sealed token stays byte-for-byte the same). */
+    private fun field(name: String, bytes: ByteArray): String? =
+        Regex("\"$name\"\\s*:\\s*\"([^\"]+)\"").find(String(bytes))?.groupValues?.get(1)
+
     // ---- Visualizer ---------------------------------------------------------------
 
     private val signedIn = VisualizerState(
@@ -143,6 +194,40 @@ class TokenBoxCallersTest {
         assertEquals("acc", store.load().tokens!!.accessToken)
         assertTrue(store.save(fresh))
         assertEquals("acc2", store.load().tokens!!.accessToken)
+    }
+
+    @Test
+    fun `Visualizer - a keystore error at start keeps the sign-in for a later start`() = runBlocking {
+        val store = VisualizerStore(context, json, box)
+        assertTrue(store.save(signedIn))
+        val stored = file(VISUALIZER).readBytes()
+        keystore.failure = KeyStoreException("keystore2 system error")
+        val loaded = store.load()
+        assertNull(loaded.tokens)
+        assertNull(loaded.account)
+        assertArrayEquals(stored, file(VISUALIZER).readBytes())
+        keystore.failure = null
+        assertTrue(store.save(loaded.copy(lastShotSyncAt = 3)))
+        assertEquals(field("accessToken", stored), field("accessToken", file(VISUALIZER).readBytes()))
+        val later = store.load()
+        assertEquals("acc", later.tokens!!.accessToken)
+        assertEquals(signedIn.account, later.account)
+        assertEquals(3L, later.lastShotSyncAt)
+    }
+
+    @Test
+    fun `Drive - a keystore error at start keeps the sign-in for a later start`() = runBlocking {
+        val store = DriveStore(context, json, box)
+        assertTrue(store.save(DriveState(tokens = DriveTokenSet(accessToken = "g", refreshToken = "r", expiresAt = 1))))
+        val stored = file(DRIVE).readBytes()
+        keystore.notReady = true
+        val loaded = store.load()
+        assertNull(loaded.tokens)
+        assertArrayEquals(stored, file(DRIVE).readBytes())
+        assertTrue(store.save(loaded.copy(lastAutoBackupAtMs = 9)))
+        assertEquals(field("accessToken", stored), field("accessToken", file(DRIVE).readBytes()))
+        keystore.notReady = false
+        assertEquals("g", store.load().tokens!!.accessToken)
     }
 
     // ---- Drive and the v3 pairing store (same box) --------------------------------

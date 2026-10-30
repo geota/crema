@@ -519,6 +519,33 @@ class DecentSyncTest {
     }
 
     @Test
+    fun `a keystore that isn't ready at start keeps the sign-in for the next start`() = runTest {
+        val files = TokenFiles()
+        try {
+            files.store.save(linked)
+            files.keystore.notReady = true
+            val h = Harness(this, DecentState(), listOf(shot("s1")), backing = files.store).also { it.sync.load() }
+            files.keystore.notReady = false
+            val ui = h.sync.state.value
+            assertFalse(ui.linked)
+            assertFalse(ui.needsReauth)
+            assertFalse(ui.busy)
+            assertFalse(h.sync.enabled)
+            assertEquals(0, h.api.posts.size)
+            // A save this session keeps the stored token.
+            h.sync.setAutoUpload(false)
+            settle { !h.sync.state.value.autoUpload }
+            settle { files.dir.resolve("decent.json").readText().contains("\"autoUpload\":false") || !files.dir.resolve("decent.json").readText().contains("autoUpload") }
+            // The next start opens it.
+            val next = Harness(this, DecentState(), emptyList(), backing = files.store).also { it.sync.load() }
+            assertTrue(next.sync.state.value.linked)
+            assertFalse(next.sync.state.value.autoUpload)
+        } finally {
+            files.dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `sign-in with a keystore error is linked for the session, not stuck, and saved later`() = runTest {
         val files = TokenFiles()
         try {

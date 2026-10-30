@@ -3,6 +3,7 @@ package coffee.crema.ui
 import coffee.crema.ble.proxy.RelayKeyStore
 import coffee.crema.ble.proxy.RelayUpgradeMigration
 import coffee.crema.ble.proxy.RelayUpgradeMigration.Outcome
+import coffee.crema.persist.SafeFile
 import coffee.crema.security.AndroidKeystoreCipher
 import coffee.crema.security.ScriptedCipher
 import coffee.crema.security.SecretBox
@@ -216,6 +217,26 @@ class RelayUpgradeMigrationTest {
         v3("secondary")
         migration.run(loadedStore())
         assertFalse(File(dir, "prefs.json.bak").let { it.exists() && it.readText().contains("pairedDevices") })
+    }
+
+    @Test
+    fun `when the flags can't be written nothing is deleted and the next start retries`() {
+        v3("secondary")
+        val store = loadedStore()
+        val snapshot = dir.listFiles()!!.filter { it.isFile }.associate { it.name to it.readBytes() }
+        SafeFile.beforeRename = { if (it.name.startsWith(RelayKeyStore.FILE_NAME)) throw java.io.IOException("disk full") }
+        try {
+            assertEquals(Outcome.DEFERRED, migration.run(store))
+        } finally {
+            SafeFile.beforeRename = {}
+        }
+        for ((name, bytes) in snapshot) assertArrayEquals(name, bytes, File(dir, name).readBytes())
+        assertFalse(loadedStore().needsRepair)
+        // The next start records the flags, then removes the v3 state.
+        val next = loadedStore()
+        assertEquals(Outcome.MIGRATED, migration.run(next))
+        assertV3Gone()
+        assertTrue(loadedStore().needsRepair)
     }
 
     @Test
