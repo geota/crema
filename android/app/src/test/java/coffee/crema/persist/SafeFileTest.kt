@@ -126,6 +126,19 @@ class SafeFileTest {
         assertEquals(listOf("broken 4", "broken 3", "broken 2"), kept.map { it.readText() })
     }
 
+    /** A copy numbered ahead of the clock (several quarantines in one
+     *  millisecond bump the number): the next one is still numbered after
+     *  it, so it is the newest and survives the prune. */
+    @Test
+    fun aNewCopyIsNumberedAfterTheNewestKept() {
+        val ahead = File(target().parentFile, target().name + ".corrupt-" + (System.currentTimeMillis() + 60_000)).apply { writeText("older") }
+        target().writeText("newer")
+        assertIs<SafeLoad.Corrupt>(SafeFile.load(target(), decode = ::decodeList))
+        val kept = SafeFile.keptAside(target())
+        assertEquals(listOf("newer", "older"), kept.map { it.readText() }, "the new copy sorts first")
+        assertTrue(ahead.exists())
+    }
+
     @Test
     fun aCorruptFileThatCantBeKeptAsideIsNeverOverwritten() {
         val dir = tmp.newFolder("ro")
