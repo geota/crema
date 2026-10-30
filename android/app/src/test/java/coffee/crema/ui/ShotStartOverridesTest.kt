@@ -120,22 +120,34 @@ class ShotStartOverridesTest {
         fun desired() = json.decodeFromString(ProfileSyncStatus.serializer(), bridge.profileSyncStatus()).desired
         assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "the bare profile at first")
 
-        val moved = System.nanoTime()
-        vm.quickAdjustBrew(active.dose.toDouble(), active.yieldOut.toDouble(), dial.anchor + 1, null)
-        VmHarness.idle()
-        vm.quickAdjustBrew(active.dose.toDouble(), active.yieldOut.toDouble(), dial.anchor + 2, null)
-        VmHarness.idle()
-        drainCoreLane(vm)
-        val seenAfterMs = (System.nanoTime() - moved) / 1_000_000
-        // The debounce is real time: the check means something only when it
-        // ran well inside the 0.5 s (a loaded machine can take longer).
-        if (seenAfterMs < 300) {
-            assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "not while the dial moves")
+        // The debounce on virtual time: every wait below is exact, so a push
+        // that skips the debounce fails here on any machine.
+        val clock = kotlinx.coroutines.test.TestCoroutineScheduler()
+        vm.dialDebounceContext = kotlinx.coroutines.test.StandardTestDispatcher(clock)
+        fun settle() {
+            VmHarness.idle()
+            drainCoreLane(vm)
         }
+        // Settle what the last call queued (its debounce starts now), move the
+        // clock, then settle the push the move released.
+        fun advance(ms: Long) {
+            settle()
+            clock.advanceTimeBy(ms)
+            clock.runCurrent()
+            settle()
+        }
+        vm.quickAdjustBrew(active.dose.toDouble(), active.yieldOut.toDouble(), dial.anchor + 1, null)
+        advance(300)
+        vm.quickAdjustBrew(active.dose.toDouble(), active.yieldOut.toDouble(), dial.anchor + 2, null)
+        advance(0)
+        assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "not while the dial moves")
+        // 0.3 s after the first step, 0.499 s after the second: still waiting
+        // (the second step restarted the wait).
+        advance(499)
+        assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "not before the dial rests 0.5 s")
 
         val dialled = effectiveProfileFingerprint(profileJson, vm.ui.value.brewParams.overridesJson(json))
-        Thread.sleep(800) // the 0.5 s debounce, with margin
-        drainCoreLane(vm)
+        advance(1)
         assertEquals(dialled, desired(), "the dialled profile once it rests")
     }
 

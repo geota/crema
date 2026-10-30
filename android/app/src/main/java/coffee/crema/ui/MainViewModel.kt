@@ -165,6 +165,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val coreDispatcher = kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)
 
+    /** Where the dial's debounce wait runs ([pushDesiredProfile]); the push
+     *  itself always runs on the core lane. Test seam: a test dispatcher
+     *  makes the 0.5 s virtual time. */
+    @androidx.annotation.VisibleForTesting
+    internal var dialDebounceContext: kotlin.coroutines.CoroutineContext = coreDispatcher
+
     /** Run [block] on the core lane, FIFO behind any queued event application.
      *  Every write to lane-owned state ([pendingBrew],
      *  [maintenanceTotalLitres]) goes through here or runs
@@ -1495,6 +1501,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  paired devices are known. */
     private val prefsReady = kotlinx.coroutines.CompletableDeferred<Unit>()
 
+    /** The whole startup load (library, prefs, custom profiles, …). Tests wait
+     *  for it: [prefsReady] completes partway through. */
+    @androidx.annotation.VisibleForTesting
+    internal lateinit var startupLoad: kotlinx.coroutines.Job
+
     /** The pending "nearby" setup after a DE1 connects (see [setUpNearby]). */
     private var nearbySetupJob: kotlinx.coroutines.Job? = null
 
@@ -1749,7 +1760,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         library.loadBuiltinProfiles()
         // Load both persisted stores in one coroutine, sequentially, so their
         // _ui copies don't race (read-modify-write of the shared snapshot).
-        viewModelScope.launch {
+        startupLoad = viewModelScope.launch {
             library.loadLibrary()
             library.loadHistory()
             loadPrefs()
@@ -1779,7 +1790,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             drive.autoBackupIfDue(_ui.value.autoDriveBackup)
             // Daily automatic release check (opt-in, default off).
             maybeAutoUpdateCheck()
-        }.invokeOnCompletion {
+        }
+        startupLoad.invokeOnCompletion {
             // A load that failed before the prefs still lets a hub serve.
             prefsReady.complete(Unit)
         }
@@ -2543,9 +2555,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // The latest push wins: a dial change waits [delayMs] for the dial to
         // rest (de1app's 0.5 s), and any later push replaces a pending one.
         desiredPushJob?.cancel()
-        desiredPushJob = viewModelScope.launch(coreDispatcher) {
+        desiredPushJob = viewModelScope.launch(if (delayMs > 0) dialDebounceContext else coreDispatcher) {
             if (delayMs > 0) delay(delayMs)
-            setDesiredOnLane(cremaJson, qcJson)
+            kotlinx.coroutines.withContext(coreDispatcher) { setDesiredOnLane(cremaJson, qcJson) }
         }
     }
 
