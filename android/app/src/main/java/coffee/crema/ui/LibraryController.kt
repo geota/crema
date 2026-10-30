@@ -32,6 +32,8 @@ import coffee.crema.core.creditRemaining
 import coffee.crema.core.debitRemaining
 import coffee.crema.core.resettleRemaining
 import coffee.crema.core.exportBackupJsonl
+import coffee.crema.core.exportProfileFile
+import coffee.crema.core.importProfileFile
 import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.importBeanconquerorJson
 import coffee.crema.core.importCremaJsonl
@@ -80,6 +82,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.floatOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import coffee.crema.core.ShotMachine
@@ -655,12 +658,23 @@ class LibraryController(
 
     // ── Export / share + history actions ────────────────────────────────────
 
-    /** Export a profile's full community-v2 JSON via the system share sheet. */
+    /** Share one profile as the core's community-v2 `.json` profile file (the
+     *  file web exports, readable by de1app, reaprime and Decenza). */
     fun exportProfile(id: String) {
-        val full = profileJsonById[id]
-            ?: customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
-            ?: run { appendLog("Export: profile $id not found"); return }
-        shareText(full, "Share profile")
+        val text = profilesFile(listOf(id)) { appendLog(it) } ?: return
+        shareText(text, "Share profile")
+    }
+
+    /** The core's profile file for the profiles [ids], in order: pretty v2 for
+     *  one, JSON lines for several. Null (after telling [report] why) when none
+     *  is found or the core refuses. */
+    fun profilesFile(ids: List<String>, report: (String) -> Unit): String? {
+        val profiles = ids.mapNotNull { id ->
+            profileJsonById[id] ?: customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
+        }
+        if (profiles.isEmpty()) { report("Export — no profiles"); return null }
+        return runCatching { exportProfileFile("[${profiles.joinToString(",")}]") }
+            .getOrElse { report("Export profiles failed: ${it.message}"); null }
     }
 
     /** Export a stored shot as JSON via the system share sheet. */
@@ -741,12 +755,9 @@ class LibraryController(
         }.getOrNull()
     }
 
-    /** All profiles (built-ins + customs) as a JSON array. */
-    fun allProfilesJson(): String? {
-        val all = uiState().profiles.mapNotNull { profileJsonById[it.id] }
-        if (all.isEmpty()) { notify("Export — no profiles"); return null }
-        return "[${all.joinToString(",")}]"
-    }
+    /** All profiles (built-ins + customs) as the core's profile file: one
+     *  community-v2 profile per line (`.jsonl`), the file web exports. */
+    fun allProfilesFile(): String? = profilesFile(uiState().profiles.map { it.id }) { notify(it) }
 
     /** Write export [text] to a SAF document Uri (large-payload safe). */
     fun writeTextToUri(uri: Uri, text: String) {
@@ -836,58 +847,33 @@ class LibraryController(
         }
     }
 
-    /** Re-stamp an exported profile's JSON as a fresh custom (new id, source,
-     *  Built-in tag stripped) while preserving every other wire field. */
-    private fun adoptProfileJson(raw: String): String? {
-        val obj = runCatching { json.parseToJsonElement(raw).jsonObject.toMutableMap() }.getOrNull() ?: return null
-        if (!obj.containsKey("name") && !obj.containsKey("segments")) return null
-        obj["id"] = JsonPrimitive(java.util.UUID.randomUUID().toString())
-        obj["source"] = JsonPrimitive("custom")
-        (obj["tags"] as? JsonArray)?.let { tags ->
-            obj["tags"] = JsonArray(tags.filterNot { runCatching { it.jsonPrimitive.content }.getOrNull() == "Built-in" })
-        }
-        return runCatching { json.encodeToString(JsonObject.serializer(), JsonObject(obj)) }.getOrNull()
-    }
-
-    /** Import profiles — Crema's own `.json`/`.jsonl` export, plus external
-     *  community-v2 `.json` and legacy `.tcl` profiles (Visualizer / de1app),
-     *  routed through the core importers → CremaProfile → adopted as custom (#12). */
+    /** Import profiles from any profile file — community-v2 `.json`, a `.jsonl`
+     *  bundle, a de1app `.tcl`, a Crema backup, an old Android export — read by
+     *  the core, which returns fresh custom profiles (core id, brew temp from the
+     *  first step) and what didn't import (#12, F12). */
     fun importProfiles(uri: Uri) {
         scope.launch {
-            val text = readUriText(uri)?.trim()
+            val text = readUriText(uri)
             if (text.isNullOrBlank()) { notify(readFailure("Import failed — couldn't read that file")); return@launch }
-            val elements = runCatching {
-                when {
-                    text.startsWith("[") -> json.parseToJsonElement(text).jsonArray.map { it.toString() }
-                    text.startsWith("{") -> listOf(text)
-                    else -> text.lineSequence().map { it.trim() }.filter { it.startsWith("{") }.toList()
-                }
-            }.getOrElse { emptyList() }
-            val adopted = elements.mapNotNull { adoptProfileJson(it) }.toMutableList()
-            // Not Crema's own shape? Try the external single-file formats via the
-            // core: a `{`-leading file is community-v2 JSON, otherwise legacy TCL.
-            // Convert the parsed wire Profile to a CremaProfile, then adopt it.
-            if (adopted.isEmpty()) {
-                val ext = runCatching {
-                    val wire = if (text.startsWith("{")) bridge.importV2JsonProfile(text)
-                    else bridge.importLegacyTclProfile(text)
-                    adoptProfileJson(cremaProfileFromWire(wire))
-                }
-                ext.getOrNull()?.let { adopted.add(it) }
-                if (adopted.isEmpty()) {
-                    // Surface the core's reason (e.g. "imported profile has no steps"
-                    // for a profile-less Visualizer shot) instead of a blanket
-                    // "unrecognised file".
-                    val why = ext.exceptionOrNull()?.message?.takeIf { it.isNotBlank() }
-                    notify(why?.let { "Couldn’t import profile — $it" }
-                        ?: "No profiles imported — unrecognised file")
-                    return@launch
-                }
+            val result = runCatching { json.parseToJsonElement(importProfileFile(text)).jsonObject }
+                .getOrElse { notify("Couldn’t import profile — ${it.message}"); return@launch }
+            val imported = result["profiles"]?.jsonArray.orEmpty().map { it.toString() }
+            val errors = result["errors"]?.jsonArray.orEmpty().map { e ->
+                val obj = e.jsonObject
+                val message = obj["message"]?.jsonPrimitive?.content.orEmpty()
+                obj["item"]?.jsonPrimitive?.intOrNull?.let { "item $it: $message" } ?: message
             }
-            customProfilesJson = adopted.map(::derivedBrewTemp) + customProfilesJson
+            if (imported.isEmpty()) {
+                notify(errors.firstOrNull()?.let { "Couldn’t import profile — $it" } ?: "No profiles imported")
+                return@launch
+            }
+            customProfilesJson = imported + customProfilesJson
             refreshProfiles()
             persistCustomProfiles()
-            notify("Imported ${adopted.size} profile(s)")
+            notify(
+                if (errors.isEmpty()) "Imported ${imported.size} profile(s)"
+                else "Imported ${imported.size} of ${imported.size + errors.size} — ${errors.first()}"
+            )
         }
     }
 

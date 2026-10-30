@@ -199,15 +199,7 @@ class RemoteToStandaloneTest {
     fun `no confirmation when the hub's values are this device's own`() {
         val vm = fixture.start()
         val own = VmHarness.ownState(vm)
-        fixture.push(
-            ConfigSnapshot(
-                activeProfileId = own.activeProfileId, activeBeanId = own.activeBeanId, stopOnWeight = own.stopOnWeight, autoTare = own.autoTare,
-                maxShotDurationS = own.maxShotDurationS, grinderModel = own.grinderModel, qcSteamTimeS = own.qcSteamTimeS,
-                qcSteamFlowMlS = own.qcSteamFlowMlS, qcSteamTempC = own.qcSteamTempC, qcHotWaterTempC = own.qcHotWaterTempC,
-                qcHotWaterVolumeMl = own.qcHotWaterVolumeMl, qcFlushTimeS = own.qcFlushTimeS, qcFlushTempC = own.qcFlushTempC,
-                qcGrind = own.qcGrind,
-            ),
-        )
+        fixture.push(coffee.crema.settings.v4Snapshot(own))
         vm.switchToNormal()
         VmHarness.idle()
         assertNull(vm.ui.value.adoptPrompt, "nothing differs")
@@ -248,30 +240,6 @@ class RemoteToStandaloneTest {
         VmHarness.idle()
         assertEquals(shown, vm.ui.value.qcSteamTempC)
         assertEquals(S.qcSteamTempC, VmHarness.ownState(vm).mirror!!.snapshot!!.qcSteamTempC, "the frozen slice")
-    }
-
-    /** AC-25: with a pre-P2 hub, only the keys it sent are adopted, and the
-     *  confirmation names the rest. */
-    @Test
-    fun `with a legacy hub only known keys are adopted`() {
-        val vm = fixture.start()
-        val legacy = S.copy(
-            settingsSchema = null, steamEco = null, steamTwoTap = null, fanThresholdC = null, waterRefillPointMm = null,
-            heaterVoltage = null, flowMultiplier = null, lineFrequencyHz = null, lineFrequencyOverride = null, cupWarmerTempC = null,
-            volumeStopWithScale = null, requireScale = null, preFlush = null, steamPurge = null, idleSleepMin = null,
-        )
-        fixture.push(legacy)
-        vm.switchToNormal()
-        VmHarness.idle()
-        assertEquals(9, assertNotNull(vm.ui.value.adoptPrompt).legacyUnknown)
-        vm.resolveAdoption(useHub = true)
-        VmHarness.advance(200)
-        waitRole(vm, "normal")
-        VmHarness.idle()
-        val saved = savedPrefs()
-        assertEquals(S.qcSteamTempC, saved.qcSteamTempC, "a key the hub sent")
-        assertEquals(P.steamEco, saved.steamEco, "a key it didn't")
-        assertEquals(P.fanThresholdC, saved.fanThresholdC)
     }
 
     /** AC-36: a switch queued between the confirmation and the commit wins:

@@ -15,7 +15,6 @@ import coffee.crema.maintenance.MaintenanceStore
 import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.MirroredSettings
-import coffee.crema.settings.PairedDevice
 import coffee.crema.visualizer.VisualizerSync
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager

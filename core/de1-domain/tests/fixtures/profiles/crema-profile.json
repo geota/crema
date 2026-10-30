@@ -1,0 +1,109 @@
+{
+  "title": "My 7g",
+  "notes": "Mine now",
+  "type": "advanced",
+  "version": "2",
+  "author": "Me",
+  "beverage_type": "espresso",
+  "tank_temperature": 0.0,
+  "steps": [
+    {
+      "name": "preinfusion temp boost",
+      "temperature": 90.0,
+      "sensor": "coffee",
+      "pump": "flow",
+      "transition": "fast",
+      "pressure": 0.0,
+      "flow": 2.4,
+      "seconds": 2.0,
+      "volume": 0,
+      "weight": null,
+      "exit": {
+        "type": "pressure",
+        "condition": "over",
+        "value": 4.5
+      }
+    },
+    {
+      "name": "preinfusion",
+      "temperature": 90.0,
+      "sensor": "coffee",
+      "pump": "flow",
+      "transition": "fast",
+      "pressure": 0.0,
+      "flow": 2.4,
+      "seconds": 6.0,
+      "volume": 0,
+      "weight": null,
+      "exit": {
+        "type": "pressure",
+        "condition": "over",
+        "value": 4.5
+      }
+    },
+    {
+      "name": "forced rise",
+      "temperature": 90.0,
+      "sensor": "coffee",
+      "pump": "pressure",
+      "transition": "fast",
+      "pressure": 7.5,
+      "flow": 0.0,
+      "seconds": 3.0,
+      "volume": 0,
+      "weight": null,
+      "limiter": {
+        "value": 6.0,
+        "range": 1.0
+      }
+    },
+    {
+      "name": "rise and hold",
+      "temperature": 90.0,
+      "sensor": "coffee",
+      "pump": "pressure",
+      "transition": "fast",
+      "pressure": 7.5,
+      "flow": 0.0,
+      "seconds": 3.0,
+      "volume": 0,
+      "weight": null,
+      "limiter": {
+        "value": 6.0,
+        "range": 1.0
+      }
+    },
+    {
+      "name": "decline",
+      "temperature": 90.0,
+      "sensor": "coffee",
+      "pump": "pressure",
+      "transition": "smooth",
+      "pressure": 4.5,
+      "flow": 0.0,
+      "seconds": 10.0,
+      "volume": 0,
+      "weight": null,
+      "limiter": {
+        "value": 6.0,
+        "range": 1.0
+      }
+    }
+  ],
+  "target_weight": 35.0,
+  "target_volume": 36.0,
+  "target_volume_count_start": 3,
+  "grinder_dose_weight": 18.0,
+  "legacy_profile_type": "settings_2c",
+  "lang": "",
+  "hidden": 0,
+  "crema": {
+    "autoTare": true,
+    "roast": "medium",
+    "stopOnWeight": true,
+    "tags": [
+      "Fixture",
+      "Small"
+    ]
+  }
+}

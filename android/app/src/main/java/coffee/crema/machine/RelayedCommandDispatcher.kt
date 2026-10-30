@@ -67,11 +67,6 @@ class RelayedCommandDispatcher(
             // The command ran: a failed announcement is logged, never a refusal
             // (the remote would undo a change the hub kept).
             CommandOutcome.Accepted -> {
-                // Older remotes still send the machine settings newer ones
-                // don't (§2): still applied, and logged once they ran.
-                if (!cmd.sentByRemotes() && cmd is MachineCommand.SetQc) {
-                    log("${origin.name ?: "A remote"} changed ${cmd.field.label} (older Crema)")
-                }
                 if (phrase != null && origin.id != null) {
                     runCatching { announce("${origin.name ?: "A remote"} $phrase", origin) }
                         .onFailure { log("Relayed $method ran, but announcing it failed: ${it.message}") }

@@ -47,12 +47,12 @@ data class MirroredSettings(
         beanSummary = cfg.activeBeanSummary,
         pending = pending - unconfirmed,
         unconfirmed = emptySet(),
-        lastRev = cfg.rev ?: lastRev,
+        lastRev = cfg.rev,
     )
 
     /** Whether a snapshot with [rev] is older than, or the same as, the last
-     *  applied one. A snapshot without a rev (an older hub) always applies. */
-    fun isStale(rev: Long?): Boolean = rev != null && lastRev != null && rev <= lastRev
+     *  applied one. Every v4 snapshot has a rev. */
+    fun isStale(rev: Long): Boolean = lastRev != null && rev <= lastRev
 
     /** The link dropped: pending edits become unconfirmed, never resent (§7.3). */
     fun reconnectingNow(): MirroredSettings =
@@ -80,23 +80,13 @@ data class MirroredSettings(
     }
 }
 
-/** Whether this snapshot carries [setting]'s value. The fields every hub has
- *  sent since v3 are always present; a field a hub may not send is known
- *  only when it is not null. */
+/** Whether this snapshot carries [setting]'s value. A v4 hub sends every
+ *  snapshot setting except the machine registers it may not have read yet
+ *  (or that this machine doesn't have): those are known only when not null. */
 fun ConfigSnapshot.carries(setting: Setting): Boolean = when (setting) {
-    Setting.STEAM_ECO -> steamEco != null
-    Setting.STEAM_TWO_TAP -> steamTwoTap != null
-    Setting.FAN_THRESHOLD -> fanThresholdC != null
-    Setting.WATER_REFILL_POINT -> waterRefillPointMm != null
     Setting.HEATER_VOLTAGE -> heaterVoltage != null
     Setting.FLOW_MULTIPLIER -> flowMultiplier != null
-    Setting.LINE_FREQUENCY -> lineFrequencyOverride != null
     Setting.CUP_WARMER_TEMP -> cupWarmerTempC != null
-    Setting.VOLUME_STOP_WITH_SCALE -> volumeStopWithScale != null
-    Setting.REQUIRE_SCALE -> requireScale != null
-    Setting.PRE_FLUSH -> preFlush != null
-    Setting.STEAM_PURGE -> steamPurge != null
-    Setting.IDLE_SLEEP -> idleSleepMin != null
-    // Sent by every v3 hub; for these four a null value means "none".
+    // For the rest a null value (no profile, no bean, no override) means "none".
     else -> setting.mirroredVia == MirrorSource.SNAPSHOT
 }

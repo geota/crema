@@ -354,6 +354,28 @@ struct ShotInProgress {
     /// neither the pre-pour heating/stabilising phase nor the trailing ending
     /// phase is counted (de1app's "during"-only timing). `ZERO` until flow ends.
     flow_duration: Duration,
+    /// Whether the last [`ShotMonitor::on_sample`] recorded its sample, so
+    /// [`ShotMonitor::annotate_last_sample`] fills the overlays of that one
+    /// sample only.
+    recorded_last: bool,
+}
+
+/// The per-sample overlay channels the caller knows at sample time (the
+/// scale estimate, the volume integrator, the resistance metrics) — see
+/// [`TimedSample`]. Filled onto the recorded sample by
+/// [`ShotMonitor::annotate_last_sample`] so the stored record is complete.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SampleOverlays {
+    /// [`TimedSample::scale_weight`].
+    pub scale_weight: Option<f32>,
+    /// [`TimedSample::scale_flow_weight`].
+    pub scale_flow_weight: Option<f32>,
+    /// [`TimedSample::dispensed_volume`].
+    pub dispensed_volume: Option<f32>,
+    /// [`TimedSample::resistance`].
+    pub resistance: Option<f32>,
+    /// [`TimedSample::resistance_weight`].
+    pub resistance_weight: Option<f32>,
 }
 
 /// Observes the DE1's notification stream and tracks one espresso shot at a time.
@@ -448,6 +470,7 @@ impl ShotMonitor {
         // indicator stays in sync.
         let flowing = matches!(self.phase, ShotPhase::Preinfusion | ShotPhase::Pouring);
         if let Some(shot) = &mut self.shot {
+            shot.recorded_last = false;
             if shot.last_frame != Some(sample.frame_number) {
                 shot.last_frame = Some(sample.frame_number);
                 events.push(ShotEvent::FrameChanged(sample.frame_number));
@@ -458,19 +481,35 @@ impl ShotMonitor {
                 shot.samples.push(TimedSample {
                     elapsed: shot.timer.elapsed(now),
                     sample: sample.clone(),
-                    // Overlay channels are populated at the export
-                    // boundary (the shell's `toRustStoredShot` adapter)
-                    // — the live `ShotMonitor` only carries the DE1
-                    // protocol sample. Leave them `None` here.
+                    // The overlay channels come from the caller, which
+                    // knows them at sample time: see `annotate_last_sample`.
                     scale_weight: None,
                     scale_flow_weight: None,
                     dispensed_volume: None,
                     resistance: None,
                     resistance_weight: None,
                 });
+                shot.recorded_last = true;
             }
         }
         events
+    }
+
+    /// Fill the overlay channels of the sample the last [`on_sample`]
+    /// (Self::on_sample) recorded. A no-op when that call recorded nothing
+    /// (no shot, not flowing, at the cap).
+    pub fn annotate_last_sample(&mut self, overlays: SampleOverlays) {
+        let Some(shot) = &mut self.shot else { return };
+        if !shot.recorded_last {
+            return;
+        }
+        if let Some(last) = shot.samples.last_mut() {
+            last.scale_weight = overlays.scale_weight;
+            last.scale_flow_weight = overlays.scale_flow_weight;
+            last.dispensed_volume = overlays.dispensed_volume;
+            last.resistance = overlays.resistance;
+            last.resistance_weight = overlays.resistance_weight;
+        }
     }
 }
 

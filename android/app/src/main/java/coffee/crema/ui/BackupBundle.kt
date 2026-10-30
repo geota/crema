@@ -78,7 +78,6 @@ internal fun backupBundleJsonl(
         proxyPrimaryHost = "",
         proxyPrimaryPort = 0,
         replayPrimary = false,
-        pairedDevices = emptyList(),
     )
     val beansJson = runCatching { json.encodeToString(ListSerializer(Bean.serializer()), s.beans) }.getOrElse { "[]" }
     val roastersJson = runCatching { json.encodeToString(ListSerializer(Roaster.serializer()), s.roasters) }.getOrElse { "[]" }

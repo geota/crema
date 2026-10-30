@@ -2,7 +2,7 @@ package coffee.crema.ui
 
 /**
  * One relayed control as a secondary puts it on the wire. [fixture] names the
- * golden wire file `proxy-golden/v3/control/<fixture>.json`, which holds
+ * golden wire file `proxy-golden/v4/control/<fixture>.json`, which holds
  * `Frame.Control(id = 1, method, args)` as encoded; [send] is the
  * [MainViewModel] call that produces it on a secondary, or null for a form
  * only older builds send, which a primary must still accept.
@@ -48,14 +48,6 @@ internal val RELAYED_VERB_SAMPLES: List<RelayedVerbSample> = listOf(
     RelayedVerbSample("setActiveBean.none", "setActiveBean", "") { it.setActiveBean(null) },
     RelayedVerbSample("setStopOnWeight", "setStopOnWeight", "true") { it.setStopOnWeight(true) },
     RelayedVerbSample("setAutoTare", "setAutoTare", "false") { it.setAutoTare(false) },
-    RelayedVerbSample("setQcSteamTime", "setQcSteamTime", "30.0") { it.setQcSteamTime(30f) },
-    RelayedVerbSample("setQcSteamFlow", "setQcSteamFlow", "1.2") { it.setQcSteamFlow(1.2f) },
-    RelayedVerbSample("setQcSteamTemp", "setQcSteamTemp", "148.0") { it.setQcSteamTemp(148f) },
-    RelayedVerbSample("setQcSteamTemp.off", "setQcSteamTemp", "0.0") { it.setQcSteamTemp(0f) },
-    RelayedVerbSample("setQcHotWaterTemp", "setQcHotWaterTemp", "85.0") { it.setQcHotWaterTemp(85f) },
-    RelayedVerbSample("setQcHotWaterVolume", "setQcHotWaterVolume", "250.0") { it.setQcHotWaterVolume(250f) },
-    RelayedVerbSample("setQcFlushTime", "setQcFlushTime", "5.0") { it.setQcFlushTime(5f) },
-    RelayedVerbSample("setQcFlushTemp", "setQcFlushTemp", "92.0") { it.setQcFlushTemp(92f) },
     RelayedVerbSample("setQcGrind", "setQcGrind", "14.5") { it.setQcGrind(14.5f) },
     RelayedVerbSample("quickAdjustBrew", "quickAdjustBrew", "18.0,36.0,93.0,8.0") { it.quickAdjustBrew(18.0, 36.0, 93.0, 8.0) },
     RelayedVerbSample("quickAdjustBrew.noPreinf", "quickAdjustBrew", "18.0,36.0,93.0,") { it.quickAdjustBrew(18.0, 36.0, 93.0) },
