@@ -1710,6 +1710,18 @@ export type Event =
 	 */
 	| { type: "ScaleStale", content?: undefined }
 	/**
+	 * The scale link looks dead: still no reading 5 s after
+	 * [`Event::ScaleStale`], or three scale writes in a row failed with no
+	 * reading in between. Emitted once per episode — a fresh reading re-arms
+	 * it. The shell drops the link at the transport (not a user disconnect)
+	 * so its reconnect loop recovers it, but only while its link still
+	 * claims ready.
+	 */
+	| { type: "ScaleLinkDead", content: {
+	/** Which rule tripped. */
+	reason: ScaleLinkDeadReason;
+}}
+	/**
 	 * The untared-cup guard latched a virtual zero: a heavy reading right
 	 * after first flow held still, so it was a cup landing after the tare —
 	 * every later reading this shot is netted against it and stop-at-weight
@@ -4673,6 +4685,14 @@ export type SawModelLoad =
 	/** The parser's error message, for the shell's warning log. */
 	error: string;
 }};
+
+/** Why [`Event::ScaleLinkDead`] fired. */
+export enum ScaleLinkDeadReason {
+	/** No weight reading for the stale timeout plus the 5 s grace. */
+	Silent = "Silent",
+	/** Three scale writes in a row failed with no reading in between. */
+	WritesFailing = "WritesFailing",
+}
 
 /**
  * What the shell should do with a just-completed shot — decided at the

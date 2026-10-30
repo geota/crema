@@ -744,6 +744,11 @@ export class CremaApp {
 			if (event.type === 'MachineStateChanged') {
 				this.startSequence.onMachineState(event.content.state);
 			}
+			if (event.type === 'ScaleLinkDead') {
+				// The core presumed the scale link dead (silent past the grace,
+				// or writes failing): drop it so the reconnect loop recovers it.
+				this.scale.presumeDead(event.content.reason);
+			}
 			if (event.type === 'MachineErrorChanged') {
 				const nextMachineError = this.state.current.machineError;
 				if (nextMachineError !== null && nextMachineError !== priorMachineError) {
