@@ -690,6 +690,127 @@ pub fn brews_remaining_estimate(remaining_g: f32, recent_doses: &[f32]) -> u32 {
     (remaining_g / per_brew).floor() as u32
 }
 
+/// A new bag copied from `source` — the bean library's "Duplicate" action.
+/// The copy gets `new_id`, the name "`<name>` (copy)" ("Untitled bag (copy)"
+/// for a blank name) and `now_ms` timestamps, and keeps the bag's details
+/// (roaster, dates, origin, sizes, notes, grinder, tags, linked profile,
+/// metadata).
+///
+/// It is a new bag in every outside system, so it drops the links that tie a
+/// row to the original's records:
+///
+/// - `visualizer_id`: if kept, the next push would PATCH the original's
+///   Visualizer bag and an "also on Visualizer" delete would remove it;
+/// - `beanconqueror_id`: if kept, a Beanconqueror re-import would treat the copy
+///   as the original;
+/// - `image_ref`: the photo is stored per bean id, so a carried ref points at
+///   the original's photo (removing the copy's photo would delete it);
+/// - `deleted_at` / `archived_at` / `favourite`: a copy starts live, active
+///   and unpinned.
+///
+/// The Visualizer catalogue links (`canonical_coffee_bag_id`,
+/// `canonical_roaster_id`) stay: they name the coffee in the shared
+/// catalogue, not the user's bag record, any number of bags may carry them,
+/// and sync never matches a bag by them.
+///
+/// The field list is exhaustive on purpose: a new `Bean` field does not
+/// compile here until someone decides whether a copy keeps it.
+#[must_use]
+pub fn duplicate_bean(source: &Bean, new_id: &str, now_ms: i64) -> Bean {
+    let Bean {
+        id: _,
+        name,
+        roaster_id,
+        roasted_on,
+        opened_on,
+        frozen_on,
+        defrosted_on,
+        roast_level,
+        mix,
+        roast_type,
+        decaf,
+        origin,
+        bag_size,
+        remaining,
+        quality_score,
+        tasting_notes,
+        rating,
+        place_of_purchase,
+        cost,
+        url,
+        notes,
+        favourite: _,
+        archived_at: _,
+        grinder,
+        grinder_setting,
+        tags,
+        linked_profile_id,
+        visualizer_id: _,
+        canonical_coffee_bag_id,
+        canonical_roaster_id,
+        deleted_at: _,
+        beanconqueror_id: _,
+        image_ref: _,
+        metadata,
+        created_at: _,
+        updated_at: _,
+    } = source.clone();
+    let name = name.trim();
+    let name = if name.is_empty() {
+        "Untitled bag"
+    } else {
+        name
+    };
+    Bean {
+        id: new_id.to_owned(),
+        name: format!("{name} (copy)"),
+        roaster_id,
+        roasted_on,
+        opened_on,
+        frozen_on,
+        defrosted_on,
+        roast_level,
+        mix,
+        roast_type,
+        decaf,
+        origin,
+        bag_size,
+        remaining,
+        quality_score,
+        tasting_notes,
+        rating,
+        place_of_purchase,
+        cost,
+        url,
+        notes,
+        favourite: false,
+        archived_at: None,
+        grinder,
+        grinder_setting,
+        tags,
+        linked_profile_id,
+        visualizer_id: None,
+        canonical_coffee_bag_id,
+        canonical_roaster_id,
+        deleted_at: None,
+        beanconqueror_id: None,
+        image_ref: None,
+        metadata,
+        created_at: now_ms,
+        updated_at: now_ms,
+    }
+}
+
+/// JSON-bridged [`duplicate_bean`]. Input: a [`Bean`] JSON; output: the
+/// copy's [`Bean`] JSON.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `bean_json`.
+pub fn duplicate_bean_json(bean_json: &str, new_id: &str, now_ms: i64) -> Result<String, String> {
+    let bean: Bean = serde_json::from_str(bean_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&duplicate_bean(&bean, new_id, now_ms)).map_err(|e| e.to_string())
+}
+
 impl Bean {
     /// Build a brand-new bag with a freshly minted id and `name`. Every
     /// other field starts at its default (empty / `None` / `false` / `0`).
@@ -1224,6 +1345,83 @@ mod tests {
         bean.grinder_setting = "1.2".to_owned();
         bean.metadata = serde_json::json!({"co2eKg": 1.4});
         bean
+    }
+
+    // -- duplicate_bean -------------------------------------------------
+
+    /// A bag linked everywhere: Visualizer, Beanconqueror, catalogue, a
+    /// photo, archived, pinned and tombstoned.
+    fn linked_bean() -> Bean {
+        let mut bean = sample_bean();
+        bean.visualizer_id = Some("vb-orig".to_owned());
+        bean.beanconqueror_id = Some("bc-orig".to_owned());
+        bean.canonical_coffee_bag_id = Some("cat-bag-1".to_owned());
+        bean.canonical_roaster_id = Some("cat-roaster-1".to_owned());
+        bean.image_ref = Some("bean-image:bean:abc".to_owned());
+        bean.archived_at = Some(NOW - 10);
+        bean.deleted_at = Some(NOW - 5);
+        bean.tags = vec!["daily".to_owned()];
+        bean.linked_profile_id = Some("profile:x".to_owned());
+        bean.frozen_on = Some("2026-05-10".to_owned());
+        bean
+    }
+
+    #[test]
+    fn duplicate_bean_drops_every_remote_link_and_keeps_the_details() {
+        let src = linked_bean();
+        let copy = duplicate_bean(&src, "bean:copy", NOW + 1);
+        // New identity and stamps.
+        assert_eq!(copy.id, "bean:copy");
+        assert_eq!(copy.name, "Yirgacheffe (copy)");
+        assert_eq!((copy.created_at, copy.updated_at), (NOW + 1, NOW + 1));
+        // No remote record, import provenance, photo, tombstone or archive.
+        assert_eq!(copy.visualizer_id, None);
+        assert_eq!(copy.beanconqueror_id, None);
+        assert_eq!(copy.image_ref, None);
+        assert_eq!(copy.deleted_at, None);
+        assert_eq!(copy.archived_at, None);
+        assert!(!copy.favourite);
+        // Everything else is the original's, catalogue links included.
+        let expected = Bean {
+            id: copy.id.clone(),
+            name: copy.name.clone(),
+            created_at: copy.created_at,
+            updated_at: copy.updated_at,
+            visualizer_id: None,
+            beanconqueror_id: None,
+            image_ref: None,
+            deleted_at: None,
+            archived_at: None,
+            favourite: false,
+            ..src.clone()
+        };
+        assert_eq!(copy, expected);
+        assert_eq!(copy.canonical_coffee_bag_id.as_deref(), Some("cat-bag-1"));
+        assert_eq!(copy.canonical_roaster_id.as_deref(), Some("cat-roaster-1"));
+    }
+
+    #[test]
+    fn duplicate_bean_names_a_blank_bag_and_trims() {
+        let mut src = Bean::new("bean:a".to_owned(), "   ".to_owned(), NOW);
+        assert_eq!(
+            duplicate_bean(&src, "bean:b", NOW).name,
+            "Untitled bag (copy)"
+        );
+        src.name = "  Gesha ".to_owned();
+        assert_eq!(duplicate_bean(&src, "bean:b", NOW).name, "Gesha (copy)");
+        // A copy of a copy stacks the suffix, like the recipe copy.
+        let again = duplicate_bean(&duplicate_bean(&src, "bean:b", NOW), "bean:c", NOW);
+        assert_eq!(again.name, "Gesha (copy) (copy)");
+    }
+
+    #[test]
+    fn duplicate_bean_json_round_trips_and_rejects_garbage() {
+        let src = linked_bean();
+        let out =
+            duplicate_bean_json(&serde_json::to_string(&src).unwrap(), "bean:j", NOW).unwrap();
+        let copy: Bean = serde_json::from_str(&out).unwrap();
+        assert_eq!(copy, duplicate_bean(&src, "bean:j", NOW));
+        assert!(duplicate_bean_json("nope", "bean:j", NOW).is_err());
     }
 
     #[test]

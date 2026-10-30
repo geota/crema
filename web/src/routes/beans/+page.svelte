@@ -40,7 +40,7 @@
 	import {
 		getBeanStore,
 		bagState,
-		mintBeanId,
+		duplicateBean,
 		mintRoasterId,
 		type Bean,
 		type Roaster, activateBean } from '#lib/bean/index.js';
@@ -655,29 +655,14 @@
 	}
 
 	/**
-	 * Clone a bag inline. The duplicate keeps the original's metadata
-	 * (roaster, origin, processing, tags…) but gets a fresh id, a
-	 * `" (copy)"` suffix on the name, and is bumped to the front of the
-	 * library (newest-first sort). The new bag is **not** made active.
+	 * Clone a bag inline via the core copy (`duplicateBean`: fresh id,
+	 * `" (copy)"` name, no remote links). It is bumped to the front of the
+	 * library (newest-first sort) and is **not** made active.
 	 */
-	function duplicateBean(id: string): void {
+	function duplicateBeanRow(id: string): void {
 		const src = library.getBean(id);
 		if (!src) return;
-		const copy: Bean = {
-			...src,
-			id: mintBeanId(),
-			name: `${src.name || 'Untitled bag'} (copy)`,
-			origin: { ...src.origin },
-			tags: [...src.tags],
-			metadata: { ...src.metadata },
-			visualizerId: null,
-			beanconquerorId: null,
-			favourite: false,
-			archivedAt: null,
-			createdAt: Date.now(),
-			updatedAt: Date.now()
-		};
-		library.upsertBean(copy);
+		library.upsertBean(duplicateBean(src));
 	}
 
 	/** Clone a roaster row. Bags pointing at the original are not moved. */
@@ -1058,7 +1043,7 @@
 								onOpen={openTile}
 								onToggleFavourite={toggleFavourite}
 								onSetActive={setActive}
-								onDuplicate={duplicateBean}
+								onDuplicate={duplicateBeanRow}
 								onEdit={gotoEdit}
 								hit={bagHits.byId.get(b.id)}
 							/>

@@ -7,7 +7,7 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
-import { coerceBean, coerceRoaster } from './model.ts';
+import { blankBean, coerceBean, coerceRoaster, duplicateBean, type Bean } from './model.ts';
 
 beforeAll(async () => {
 	await initTestWasm();
@@ -83,5 +83,47 @@ describe('coerceRoaster', () => {
 		expect(roaster!.website).toBe('https://onyx.coffee');
 		expect(roaster!.visualizerId).toBe('rv-1');
 		expect(roaster!.notes).toBe('');
+	});
+});
+
+describe('duplicateBean (core duplicate_bean)', () => {
+	it('copies the details and drops every remote link, photo ref, tombstone, archive and pin', () => {
+		const src: Bean = {
+			...blankBean('bean:orig'),
+			name: 'Gesha',
+			roasterId: 'roaster:1',
+			roastedOn: '2026-09-01',
+			tags: ['daily'],
+			favourite: true,
+			archivedAt: 10,
+			deletedAt: 20,
+			visualizerId: 'vb-orig',
+			beanconquerorId: 'bc-orig',
+			canonicalCoffeeBagId: 'cat-bag-1',
+			imageRef: 'bean-image:bean:orig',
+			metadata: { co2eKg: 1.4 }
+		};
+		const copy = duplicateBean(src, 'bean:copy', 1_000);
+		expect(copy).toEqual({
+			...src,
+			id: 'bean:copy',
+			name: 'Gesha (copy)',
+			favourite: false,
+			archivedAt: null,
+			deletedAt: null,
+			visualizerId: null,
+			beanconquerorId: null,
+			imageRef: null,
+			createdAt: 1_000,
+			updatedAt: 1_000
+		});
+		expect(src.visualizerId).toBe('vb-orig');
+	});
+
+	it('names a blank bag and mints a bean id by default', () => {
+		const copy = duplicateBean(blankBean('bean:x'));
+		expect(copy.name).toBe('Untitled bag (copy)');
+		expect(copy.id).toMatch(/^bean:/);
+		expect(copy.id).not.toBe('bean:x');
 	});
 });

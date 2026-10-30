@@ -406,6 +406,23 @@ pub fn resettle_remaining(
     de1_domain::resettle_remaining(remaining, bag_size, old_dose, new_dose)
 }
 
+/// A new bag copied from a bean (`Bean` JSON in and out): `new_id`,
+/// "<name> (copy)", `now_unix_ms` stamps, and no Visualizer id,
+/// Beanconqueror id, photo ref, tombstone, archive or pin. See
+/// [`de1_domain::duplicate_bean`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the bean JSON is malformed.
+#[uniffi::export]
+pub fn duplicate_bean_json(
+    bean_json: String,
+    new_id: String,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::duplicate_bean_json(&bean_json, &new_id, now_unix_ms).map_err(CremaError::from)
+}
+
 /// The "≈N brews left" estimate — [`de1_domain::brews_remaining_estimate`]
 /// (the bag's newest ≤10 doses, newest first; 18 g fallback).
 #[uniffi::export]
