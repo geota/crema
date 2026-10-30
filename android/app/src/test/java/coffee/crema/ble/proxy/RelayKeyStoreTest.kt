@@ -350,6 +350,21 @@ class RelayKeyStoreTest {
         assertNoClearKeyOnDisk(result.keys)
     }
 
+    @Test
+    fun `AC-30 a sealing failure drops pins from a file that has no key`() {
+        // A file with pins but no self (hand-edited, or a future format): a new key
+        // that can't be sealed keeps none of them, in memory or on disk.
+        val pins = """{"v":1,"hubs":[{"id":"h1","public":"AA==","name":"t","host":"h","port":1,"pinnedAtMs":0}],""" +
+            """"remotes":[{"id":"r1","public":"AA==","name":"p","scope":"control","pairedAtMs":0}]}"""
+        storeFile.writeText(pins)
+        cipher.sealFailure = ProviderException("keystore unusable")
+        val s = store()
+        assertFalse(ready(s.load()).persistent)
+        assertTrue(s.hubs.isEmpty())
+        assertTrue(s.remotes.isEmpty())
+        assertEquals(pins, storeFile.readText())
+    }
+
     // ---- pins ------------------------------------------------------------------
 
     @Test
