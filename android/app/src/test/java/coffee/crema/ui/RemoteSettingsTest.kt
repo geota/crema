@@ -252,11 +252,12 @@ class RemoteSettingsTest {
      *  lands before this device's prefs finish loading still drives the core
      *  once they have. */
     @Test
-    fun `the remote core follows a snapshot that beat loadPrefs`() {
+    fun `the remote core follows a snapshot that beat loadPrefs`() = VmHarness.holdingStartupLoad { release ->
         var early = false
         val vm = fixture.start(onBuilt = {
             early = !MainViewModel::class.java.getDeclaredField("prefsLoaded").apply { isAccessible = true }.getBoolean(it)
             it.deliverConfigForTest(coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), S))
+            release.complete(Unit)
         })
         assertTrue(early, "the snapshot landed before loadPrefs finished")
         VmHarness.idle()

@@ -91,6 +91,22 @@ internal object VmHarness {
     /** The VM's own state: what it persists (the screens see [MainViewModel.ui]). */
     fun ownState(vm: MainViewModel): MainUiState = vm.ownState.value
 
+    /**
+     * Run [block] with the startup load (library, prefs, …) of every VM built
+     * in it held until [block] completes `release`, so a test can act before
+     * the prefs load: unheld, the load can finish inside the constructor.
+     */
+    fun holdingStartupLoad(block: (release: kotlinx.coroutines.CompletableDeferred<Unit>) -> Unit) {
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        MainViewModel.holdStartupLoad = release
+        try {
+            block(release)
+        } finally {
+            MainViewModel.holdStartupLoad = null
+            release.complete(Unit)
+        }
+    }
+
     /** The VM's event log, newest first. */
     fun log(vm: MainViewModel): List<String> = vm.ui.value.eventLog
 
