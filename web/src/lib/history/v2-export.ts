@@ -15,7 +15,8 @@
  * the equipment-level `grinderModel`, shot-level `tags`, and the
  * Quick-control overrides (`yieldTarget` / `brewTemp` /
  * `preinfuseTarget` / `stopOnWeight` / `autoTare`) — ride alongside in
- * a sibling `metadata.crema.*` block — the documented escape valve
+ * a sibling `metadata.crema.*` block, which the core writes too (F10)
+ * from the fields this adapter passes — the documented escape valve
  * (shot-sync's Visualizer payload uses the same key for `localId` /
  * `signature` / `appVersion`). Visualizer's `additionalProperties:
  * true` schema accepts unknown keys so the same JSON drives both the
@@ -32,8 +33,8 @@ import { peaksOf, type StoredShot } from './model';
  *
  * The bean snapshot rides two slots: the legacy `metadata.beans`
  * carries the flat `"roaster · type"` label for v2 consumers, while
- * the Crema escape valve (`metadata.crema.bean_*`) carries the
- * richer ShotBean fields (`roastedOn`, `roastLevel`, `notes`) so a
+ * the Crema escape valve (`metadata.crema.bean_*`, written by the core)
+ * carries the richer ShotBean fields (`roastedOn`, `roastLevel`, `notes`) so a
  * Crema → Crema round-trip preserves everything the shell modeled.
  * `grinderSetting` rides the existing `metadata.grinder.setting` v2
  * slot — same wire field Visualizer's `grinder_setting` reads.
@@ -48,52 +49,9 @@ export function exportStoredShotAsV2Json(
 	opts?: { fullSeries?: boolean }
 ): string {
 	const rust = JSON.stringify(toRustStoredShot(shot));
-	const baseJson = opts?.fullSeries ? export_v2_json_shot_full(rust) : export_v2_json_shot(rust);
-	const crema = cremaExtras(shot);
-	if (crema === null) return baseJson;
-	// The wasm exporter produces a top-level JSON object; parse + augment
-	// it with the escape-valve block. The cost (one extra JSON parse +
-	// stringify) is paid only on download / upload, not on every shot
-	// completion. Pretty-print to match the exporter's own format so the
-	// downloaded file stays human-readable.
-	let doc: Record<string, unknown>;
-	try {
-		doc = JSON.parse(baseJson) as Record<string, unknown>;
-	} catch {
-		// If the wasm output somehow fails to parse, prefer the raw bytes
-		// over throwing — a downloaded archive missing the crema block
-		// is strictly better than no archive at all.
-		return baseJson;
-	}
-	const existing = (doc.metadata as Record<string, unknown> | undefined) ?? {};
-	doc.metadata = { ...existing, crema };
-	return JSON.stringify(doc, null, 2);
-}
-
-/**
- * Build the `metadata.crema.*` block — every field optional, omitted
- * when its source is absent so the persisted shape stays minimal and
- * a re-importer can distinguish "not captured" from "explicit zero".
- * Returns `null` when the shot has nothing to add (no extras, no
- * QC snapshot, no grinder model, no tags, no bean snapshot extras) —
- * the export then matches the legacy pre-this-PR shape byte-for-byte.
- */
-function cremaExtras(shot: StoredShot): Record<string, unknown> | null {
-	const out: Record<string, unknown> = {};
-	if (shot.grinderModel) out.grinder_model = shot.grinderModel;
-	if (shot.tags && shot.tags.length > 0) out.tags = [...shot.tags];
-	if (shot.yieldTarget != null) out.yield_target = shot.yieldTarget;
-	if (shot.brewTempTarget != null) out.brew_temp_target = shot.brewTempTarget;
-	if (shot.preinfuseTarget != null) out.preinfuse_target = shot.preinfuseTarget;
-	if (shot.stopOnWeight !== undefined) out.stop_on_weight = shot.stopOnWeight;
-	if (shot.autoTare !== undefined) out.auto_tare = shot.autoTare;
-	const bean = shot.bean;
-	if (bean) {
-		if (bean.roastedOn) out.bean_roasted_on = bean.roastedOn;
-		if (bean.roastLevel != null) out.bean_roast_level = bean.roastLevel;
-		if (bean.notes && bean.notes.length > 0) out.bean_notes = bean.notes;
-	}
-	return Object.keys(out).length > 0 ? out : null;
+	// The core writes the whole document, the `metadata.crema` escape valve
+	// included (F10 — it used to be bolted on here).
+	return opts?.fullSeries ? export_v2_json_shot_full(rust) : export_v2_json_shot(rust);
 }
 
 /** Build the Rust-shape `StoredShot` the wasm exporter consumes. The
@@ -150,7 +108,14 @@ function toRustStoredShot(shot: StoredShot): RustStoredShot {
 		// consumers). `tags: null` normalises to absent — the Rust `Vec`
 		// field defaults on a missing key but rejects an explicit null.
 		bean: shot.bean ? { ...shot.bean, tags: shot.bean.tags ?? undefined } : null,
-		grinderModel: shot.grinderModel ?? null
+		grinderModel: shot.grinderModel ?? null,
+		// The `metadata.crema` inputs — the core writes the block (F10).
+		tags: shot.tags && shot.tags.length > 0 ? [...shot.tags] : undefined,
+		yieldTarget: shot.yieldTarget ?? null,
+		brewTempTarget: shot.brewTempTarget ?? null,
+		preinfuseTarget: shot.preinfuseTarget ?? null,
+		stopOnWeight: shot.stopOnWeight,
+		autoTare: shot.autoTare
 	};
 }
 
