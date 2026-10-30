@@ -254,7 +254,8 @@ pub use profile::{
 };
 pub use profile_file::{
     MAX_PROFILES_PER_FILE, MAX_REPORTED_ERRORS, ProfileFileError, ProfileFileImport,
-    export_profile_file, export_profile_file_json, import_profile_file, import_profile_file_json,
+    export_profile_file, export_profile_file_json, import_profile_file, import_profile_file_into,
+    import_profile_file_json,
 };
 pub use profile_fingerprint::profile_fingerprint;
 pub use profile_import::{
@@ -306,7 +307,9 @@ pub use visualizer_catalogue::{
     parse_catalogue_roasters, parse_catalogue_roasters_json, roaster_match_key,
 };
 pub use visualizer_error::{
-    VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, is_recoverable, retry_backoff_ms,
+    AUTH_PARK_MS, MAX_QUEUE_ATTEMPTS, QueueDecision, QueueOp, RefreshFailure,
+    VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, classify_token_refresh_failure,
+    is_recoverable, retry_backoff_ms, visualizer_queue_decision, visualizer_queue_decision_json,
     visualizer_quota_limit,
 };
 pub use visualizer_sync::{

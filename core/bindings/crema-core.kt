@@ -1629,6 +1629,36 @@ data class EventCalibrationRefusedInner (
 	val reason: CalibrationRefusal
 )
 
+/// Generated type representing the anonymous struct variant `ShotStartProgress` of the `Event` Rust enum
+@Serializable
+data class EventShotStartProgressInner (
+	/// Where it stands.
+	val phase: StartPhase
+)
+
+/// Generated type representing the anonymous struct variant `ShotStartEnded` of the `Event` Rust enum
+@Serializable
+data class EventShotStartEndedInner (
+	/// How.
+	val end: StartEnd,
+	/// The sentence to tell the user, when there is one.
+	val message: String? = null
+)
+
+/// Generated type representing the anonymous struct variant `StartNotice` of the `Event` Rust enum
+@Serializable
+data class EventStartNoticeInner (
+	/// The notice.
+	val notice: StartNoticeLine
+)
+
+/// Generated type representing the anonymous struct variant `GroupHeadStartUnchecked` of the `Event` Rust enum
+@Serializable
+data class EventGroupHeadStartUncheckedInner (
+	/// One line per skipped check.
+	val notices: List<StartNoticeLine>
+)
+
 /// Generated type representing the anonymous struct variant `MachineRequestHeld` of the `Event` Rust enum
 @Serializable
 data class EventMachineRequestHeldInner (
@@ -2065,6 +2095,28 @@ sealed class Event {
 	@Serializable
 	@SerialName("CalibrationRefused")
 	data class CalibrationRefused(val content: EventCalibrationRefusedInner): Event()
+	/// An accepted shot start moved on (see [`shot_start`](crate::shot_start));
+	/// a shell shows "starting" until [`Event::ShotStartEnded`].
+	@Serializable
+	@SerialName("ShotStartProgress")
+	data class ShotStartProgress(val content: EventShotStartProgressInner): Event()
+	/// The shot start is over: started, failed, cancelled or stood down for a
+	/// group-head start.
+	@Serializable
+	@SerialName("ShotStartEnded")
+	data class ShotStartEnded(val content: EventShotStartEndedInner): Event()
+	/// A non-blocking notice for an accepted start (no scale for a shot that
+	/// stops on weight: the weight stop is off).
+	@Serializable
+	@SerialName("StartNotice")
+	data class StartNotice(val content: EventStartNoticeInner): Event()
+	/// A shot started at the group head skipped steps only an app start runs:
+	/// the ones that applied (no scale for a weight stop, the pre-shot flush, a
+	/// profile upload still pending). A non-blocking banner; it never stops the
+	/// shot.
+	@Serializable
+	@SerialName("GroupHeadStartUnchecked")
+	data class GroupHeadStartUnchecked(val content: EventGroupHeadStartUncheckedInner): Event()
 	/// A machine state request the user made is waiting out the firmware's
 	/// profile-download guard (a profile upload in flight, or the 500 ms after
 	/// it — see [`machine_requests`](crate::machine_requests)); it goes out on
@@ -3972,6 +4024,84 @@ data class StairSegment (
 	val targetG: Float
 )
 
+/// A non-blocking notice about a start.
+@Serializable
+enum class StartCheck(val string: String) {
+	/// The shot stops on weight but no scale is connected: the weight stop is
+	/// off.
+	@SerialName("NoScale")
+	NoScale("NoScale"),
+	/// The pre-shot flush did not run (a group-head start).
+	@SerialName("PreFlushSkipped")
+	PreFlushSkipped("PreFlushSkipped"),
+	/// The profile upload had not finished: the machine runs the profile it
+	/// held before.
+	@SerialName("ProfilePending")
+	ProfilePending("ProfilePending"),
+}
+
+/// One line of the group-head banner.
+@Serializable
+data class StartNoticeLine (
+	/// Which check.
+	val check: StartCheck,
+	/// Its sentence.
+	val message: String
+)
+
+/// Generated type representing the anonymous struct variant `TooManySteps` of the `StartRefusal` Rust enum
+@Serializable
+data class StartRefusalTooManyStepsInner (
+	/// The profile's name.
+	val name: String,
+	/// Its step count.
+	val count: UInt
+)
+
+/// Why [`CremaCore::start_shot`] refused a start.
+@Serializable
+sealed class StartRefusal {
+	/// A start is already pending.
+	@Serializable
+	@SerialName("AlreadyStarting")
+	object AlreadyStarting: StartRefusal()
+	/// A shot is already running.
+	@Serializable
+	@SerialName("ShotRunning")
+	object ShotRunning: StartRefusal()
+	/// The profile has more steps than the DE1 holds.
+	@Serializable
+	@SerialName("TooManySteps")
+	data class TooManySteps(val details: StartRefusalTooManyStepsInner): StartRefusal()
+	/// Require-scale is on, the shot stops on weight and no scale is
+	/// connected.
+	@Serializable
+	@SerialName("ScaleRequired")
+	object ScaleRequired: StartRefusal()
+	/// A firmware flash holds the link.
+	@Serializable
+	@SerialName("FirmwareLocked")
+	object FirmwareLocked: StartRefusal()
+	/// The machine has not reported its state (not connected yet).
+	@Serializable
+	@SerialName("NotConnected")
+	object NotConnected: StartRefusal()
+}
+
+/// What [`CremaCore::start_shot`] returns: whether the start was accepted, why
+/// not, and the output (the first requests, events).
+@Serializable
+data class StartShotResult (
+	/// The start runs.
+	val accepted: Boolean,
+	/// Why it was refused.
+	val refusal: StartRefusal? = null,
+	/// The refusal's sentence.
+	val message: String? = null,
+	/// Events and BLE writes.
+	val output: CoreOutput
+)
+
 /// A telemetry sample tagged with its time since the shot began.
 /// 
 /// The DE1's [`ShotSample`] is the raw protocol decode (pressure, flow,
@@ -4967,6 +5097,81 @@ enum class Pump(val string: String) {
 	Flow("flow"),
 }
 
+/// Generated type representing the anonymous struct variant `Drop` of the `QueueDecision` Rust enum
+@Serializable
+data class QueueDecisionDropInner (
+	/// Stop the drain.
+	val stop_pass: Boolean
+)
+
+/// Generated type representing the anonymous struct variant `Park` of the `QueueDecision` Rust enum
+@Serializable
+data class QueueDecisionParkInner (
+	/// Wait, ms.
+	val delay_ms: UInt
+)
+
+/// Generated type representing the anonymous struct variant `Retry` of the `QueueDecision` Rust enum
+@Serializable
+data class QueueDecisionRetryInner (
+	/// Wait, ms.
+	val delay_ms: UInt,
+	/// Stop the drain.
+	val stop_pass: Boolean
+)
+
+/// What a retry queue does with an operation that just failed.
+@Serializable
+sealed class QueueDecision {
+	/// Remove it. `stop_pass`: stop this drain (the daily quota — every other
+	/// upload would hit it too).
+	@Serializable
+	@SerialName("Drop")
+	data class Drop(val details: QueueDecisionDropInner): QueueDecision()
+	/// Keep it without spending an attempt; look again after `delay_ms` (a
+	/// delete while signed out).
+	@Serializable
+	@SerialName("Park")
+	data class Park(val details: QueueDecisionParkInner): QueueDecision()
+	/// Retry after `delay_ms`. `stop_pass`: leave the rest of the queue for a
+	/// later drain (the rate limit).
+	@Serializable
+	@SerialName("Retry")
+	data class Retry(val details: QueueDecisionRetryInner): QueueDecision()
+}
+
+/// The kind of queued Visualizer operation.
+@Serializable
+enum class QueueOp(val string: String) {
+	/// Upload a new shot.
+	@SerialName("Create")
+	Create("Create"),
+	/// Update a remote row.
+	@SerialName("Update")
+	Update("Update"),
+	/// Delete a remote row.
+	@SerialName("Delete")
+	Delete("Delete"),
+}
+
+/// What a failed OAuth refresh means for the session (both shells; web
+/// `classifyRefreshFailure`, review 03 P1-1).
+@Serializable
+enum class RefreshFailure(val string: String) {
+	/// The token endpoint rejected the refresh token: the session is over.
+	@SerialName("Definitive")
+	Definitive("Definitive"),
+	/// A transient server answer (5xx, 408, 429): keep the session, retry on
+	/// the status-aware backoff.
+	@SerialName("Retryable")
+	Retryable("Retryable"),
+	/// Anything else — a transport failure, a captive portal, a proxy page,
+	/// `invalid_client`: nothing proves the refresh token is dead, so the
+	/// session stays.
+	@SerialName("Transient")
+	Transient("Transient"),
+}
+
 /// Generated type representing the anonymous struct variant `LegacyPeer` of the `RelayEvent` Rust enum
 @Serializable
 data class RelayEventLegacyPeerInner (
@@ -5239,6 +5444,60 @@ enum class ShotPrivacy(val string: String) {
 	/// Visible to the owner only.
 	@SerialName("private")
 	Private("private"),
+}
+
+/// Generated type representing the anonymous struct variant `FlushLeftIdle` of the `StartEnd` Rust enum
+@Serializable
+data class StartEndFlushLeftIdleInner (
+	/// Where the machine went.
+	val state: MachineState
+)
+
+/// How a start ended.
+@Serializable
+sealed class StartEnd {
+	/// The machine reported Espresso after our request.
+	@Serializable
+	@SerialName("Started")
+	object Started: StartEnd()
+	/// The profile upload failed (the core keeps retrying it).
+	@Serializable
+	@SerialName("UploadFailed")
+	object UploadFailed: StartEnd()
+	/// The DE1 did not confirm the profile within [`START_UPLOAD_TIMEOUT`].
+	@Serializable
+	@SerialName("UploadTimedOut")
+	object UploadTimedOut: StartEnd()
+	/// The pre-shot flush ended outside Idle.
+	@Serializable
+	@SerialName("FlushLeftIdle")
+	data class FlushLeftIdle(val details: StartEndFlushLeftIdleInner): StartEnd()
+	/// The machine did not report Espresso within [`ESPRESSO_ENTRY_TIMEOUT`].
+	@Serializable
+	@SerialName("NotEntered")
+	object NotEntered: StartEnd()
+	/// A user's request, a link drop or a reset cancelled it.
+	@Serializable
+	@SerialName("Cancelled")
+	object Cancelled: StartEnd()
+	/// The shot was started at the group head first.
+	@Serializable
+	@SerialName("StoodDown")
+	object StoodDown: StartEnd()
+}
+
+/// Where an accepted start stands.
+@Serializable
+enum class StartPhase(val string: String) {
+	/// Waiting for the DE1 to hold the shot's profile.
+	@SerialName("Syncing")
+	Syncing("Syncing"),
+	/// The pre-shot flush is running.
+	@SerialName("Flushing")
+	Flushing("Flushing"),
+	/// Espresso was requested; waiting for the machine to report it.
+	@SerialName("Requested")
+	Requested("Requested"),
 }
 
 /// Why a steam-clog warning was raised — which threshold the telemetry tripped.

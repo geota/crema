@@ -850,30 +850,29 @@ class LibraryController(
     /** Import profiles from any profile file — community-v2 `.json`, a `.jsonl`
      *  bundle, a de1app `.tcl`, a Crema backup, an old Android export — read by
      *  the core, which returns fresh custom profiles (core id, brew temp from the
-     *  first step) and what didn't import (#12, F12). */
+     *  first step) and what didn't import (#12, F12). The core skips, and counts,
+     *  the profiles already in the library — custom and built-in, hidden ones
+     *  included — by title and steps (F12b). */
     fun importProfiles(uri: Uri) {
         scope.launch {
             val text = readUriText(uri)
             if (text.isNullOrBlank()) { notify(readFailure("Import failed — couldn't read that file")); return@launch }
-            val result = runCatching { json.parseToJsonElement(importProfileFile(text)).jsonObject }
+            val library = "[" + (customProfilesJson + builtinProfileJson.values).joinToString(",") + "]"
+            val result = runCatching { json.parseToJsonElement(importProfileFile(text, library)).jsonObject }
                 .getOrElse { notify("Couldn’t import profile — ${it.message}"); return@launch }
             val imported = result["profiles"]?.jsonArray.orEmpty().map { it.toString() }
+            val skipped = result["skipped_duplicates"]?.jsonPrimitive?.intOrNull ?: 0
             val errors = result["errors"]?.jsonArray.orEmpty().map { e ->
                 val obj = e.jsonObject
                 val message = obj["message"]?.jsonPrimitive?.content.orEmpty()
                 obj["item"]?.jsonPrimitive?.intOrNull?.let { "item $it: $message" } ?: message
             }
-            if (imported.isEmpty()) {
-                notify(errors.firstOrNull()?.let { "Couldn’t import profile — $it" } ?: "No profiles imported")
-                return@launch
+            if (imported.isNotEmpty()) {
+                customProfilesJson = imported + customProfilesJson
+                refreshProfiles()
+                persistCustomProfiles()
             }
-            customProfilesJson = imported + customProfilesJson
-            refreshProfiles()
-            persistCustomProfiles()
-            notify(
-                if (errors.isEmpty()) "Imported ${imported.size} profile(s)"
-                else "Imported ${imported.size} of ${imported.size + errors.size} — ${errors.first()}"
-            )
+            notify(profileImportSummary(imported.size, skipped, errors))
         }
     }
 
@@ -2368,4 +2367,18 @@ class LibraryController(
         discardedShot = null
         updateUi { it.copy(discardToastMessage = null) }
     }
+}
+
+/** The message after a profile import: "Imported 2 profiles; 3 already in your
+ *  library", with the first error when some didn't import (web words it the
+ *  same, F12b). */
+internal fun profileImportSummary(imported: Int, skipped: Int, errors: List<String>): String {
+    if (imported == 0 && skipped == 0) {
+        return errors.firstOrNull()?.let { "Couldn’t import profile — $it" } ?: "No profiles imported"
+    }
+    val head = if (errors.isEmpty()) "Imported $imported profile${if (imported == 1) "" else "s"}"
+    else "Imported $imported of ${imported + errors.size}"
+    val already = if (skipped > 0) "; $skipped already in your library" else ""
+    val tail = errors.firstOrNull()?.let { " — $it" }.orEmpty()
+    return head + already + tail
 }

@@ -2,6 +2,12 @@ package coffee.crema.visualizer
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 /*
  * The Visualizer backlog loop's stop / retry policy — the Android twin of the
@@ -64,7 +70,24 @@ class UploadPolicy(
     val backoffMs: (status: Int?, attempt: Int) -> Long,
     /** How many times a 429 is retried before the pass stops. */
     val maxRateLimitRetries: Int = 2,
+    /** Core `classify_token_refresh_failure(status, body)`: `"Definitive"`, `"Retryable"` or `"Transient"`. */
+    val refreshFailure: (status: Int?, body: String?) -> String = { _, _ -> "Transient" },
+    /** Core `visualizer_queue_decision(op, tag, status, body, attemptsMade)` as JSON. */
+    val queueDecisionJson: (op: String, tag: String, status: Int?, body: String, attemptsMade: Int) -> String =
+        { _, _, _, _, _ -> "{\"kind\":\"Drop\",\"details\":{\"stop_pass\":false}}" },
 ) {
+    /** Whether a failed refresh-token grant ([e] from the refresh) ends the session. */
+    fun refreshEndsSession(e: Throwable): Boolean {
+        val reply = e as? TokenEndpointError
+        return refreshFailure(reply?.status, reply?.body) == "Definitive"
+    }
+
+    /** The retry queue's rule for a queued [op] that failed with [e], [attemptsMade] attempts in. */
+    fun queueDecision(op: String, e: Throwable, attemptsMade: Int): RetryDecision {
+        val http = e as? VisualizerError.Http
+        return RetryDecision.parse(queueDecisionJson(op, errorTag(e), http?.status, http?.body.orEmpty(), attemptsMade))
+    }
+
     fun quotaLimitOf(e: Throwable): Int? = (e as? VisualizerError.Http)?.let { quotaLimit(it.status, it.body) }
 
     fun isRateLimited(e: Throwable): Boolean = e is VisualizerError.Http && e.status == 429
@@ -82,6 +105,18 @@ class UploadPolicy(
     companion object {
         /** The production policy over the native core. */
         fun core(): UploadPolicy = UploadPolicy(
+            refreshFailure = { status, body ->
+                coffee.crema.core.classifyTokenRefreshFailure(status?.takeIf { it in 0..0xFFFF }?.toUShort(), body)
+            },
+            queueDecisionJson = { op, tag, status, body, attempts ->
+                coffee.crema.core.visualizerQueueDecision(
+                    op,
+                    tag,
+                    status?.takeIf { it in 0..0xFFFF }?.toUShort(),
+                    body,
+                    attempts.coerceAtLeast(0).toUInt(),
+                )
+            },
             quotaLimit = { status, body ->
                 status.takeIf { it in 0..0xFFFF }
                     ?.let { coffee.crema.core.visualizerQuotaLimit(it.toUShort(), body)?.toInt() }
@@ -135,4 +170,41 @@ suspend fun <T> runUploadPass(
         }
     }
     return PassResult(uploaded, failed, skipped)
+}
+
+/** The core's error taxonomy tag for [e] (`VisualizerCallError::from_tag`). */
+fun errorTag(e: Throwable): String = when (e) {
+    is VisualizerError.Auth -> "NotAuthenticatedError"
+    is VisualizerError.PremiumGated -> "VisualizerPremiumGatedError"
+    is VisualizerError.NotFound -> "VisualizerNotFoundError"
+    is VisualizerError.Http -> "HttpStatusError"
+    is VisualizerError.Network, is java.io.IOException -> "NetworkError"
+    else -> "ResponseDecodeError"
+}
+
+/** What the retry queue does with a failed operation (core `QueueDecision`). */
+sealed class RetryDecision {
+    /** Remove it; [stopPass]: stop this drain (the daily quota). */
+    data class Drop(val stopPass: Boolean) : RetryDecision()
+
+    /** Keep it without spending an attempt; look again after [delayMs]. */
+    data class Park(val delayMs: Long) : RetryDecision()
+
+    /** Retry after [delayMs]; [stopPass]: leave the rest for a later drain (a 429). */
+    data class Retry(val delayMs: Long, val stopPass: Boolean) : RetryDecision()
+
+    companion object {
+        /** Read the core's `QueueDecision` JSON (`{"kind":…,"details":{…}}`). */
+        fun parse(json: String): RetryDecision {
+            val obj = Json.parseToJsonElement(json).jsonObject
+            val details = obj["details"]?.jsonObject
+            fun long(k: String) = details?.get(k)?.jsonPrimitive?.longOrNull ?: 0L
+            fun bool(k: String) = details?.get(k)?.jsonPrimitive?.booleanOrNull ?: false
+            return when (obj["kind"]?.jsonPrimitive?.contentOrNull) {
+                "Park" -> Park(long("delay_ms"))
+                "Retry" -> Retry(long("delay_ms"), bool("stop_pass"))
+                else -> Drop(bool("stop_pass"))
+            }
+        }
+    }
 }

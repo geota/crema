@@ -25,7 +25,7 @@ import type { CoreOutput, ScaleCapabilities, ScaleUuids, TimedSample } from './c
 import type { CalTarget, MmrRegister } from './crema-core';
 import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
 import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core';
-import type { BrewOverrides, ProfileSyncOutput, ProfileSyncStatus } from './crema-core';
+import type { BrewOverrides, ProfileSyncOutput, ProfileSyncStatus, StartShotResult } from './crema-core';
 import type { ShotCaptureContext } from './crema-core';
 import { guardStoppedBridge } from './stopped-guard';
 
@@ -507,6 +507,16 @@ export interface CremaCore {
 		qc: BrewOverrides,
 		nowMs: number
 	): Promise<{ output: CoreOutput; status: ProfileSyncStatus }>;
+	/**
+	 * Start an espresso shot with the library `CremaProfile` and the Quick
+	 * Controls overrides: the core runs the whole start (sync, guard,
+	 * pre-flush, Espresso) and reports it as `ShotStartProgress` /
+	 * `ShotStartEnded` events. Resolves to whether it was accepted (or why
+	 * not) and the first output.
+	 */
+	startShot(profile: unknown, qc: BrewOverrides, nowMs: number): Promise<StartShotResult>;
+	/** Latch the start settings: pre-shot flush, require-scale, post-steam purge. */
+	setStartSettings(preFlush: boolean, requireScale: boolean, steamPurge: boolean): Promise<void>;
 	/** The profile sync's state: desired / last-pushed fingerprints, uploading, retrying. */
 	profileSyncStatus(): Promise<ProfileSyncStatus>;
 	/** Cancel an in-progress upload; emits `ProfileUploadFailed { Aborted }`. */
@@ -1217,6 +1227,14 @@ async function createCore(): Promise<CremaCore> {
 				)
 			) as ProfileSyncOutput;
 			return { output: sync.output, status: sync.status };
+		},
+		async startShot(profile, qc, nowMs) {
+			return JSON.parse(
+				bridge.start_shot(JSON.stringify(profile), JSON.stringify(qc), nowMs)
+			) as StartShotResult;
+		},
+		async setStartSettings(preFlush, requireScale, steamPurge) {
+			bridge.set_start_settings(preFlush, requireScale, steamPurge);
 		},
 		async profileSyncStatus() {
 			return JSON.parse(bridge.profile_sync_status()) as ProfileSyncStatus;
