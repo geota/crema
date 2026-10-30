@@ -243,7 +243,8 @@ class VisualizerSync(
     /** Apply + store [mutate]; false when the write failed (the in-memory state still applies). */
     private suspend fun persist(mutate: (VisualizerState) -> VisualizerState): Boolean {
         val ok = persistMutex.withLock {
-            persisted = mutate(persisted)
+            // New tokens replace a sign-in the keystore couldn't open at start.
+            persisted = mutate(persisted).let { if (it.tokens != null && it.unopened != null) it.copy(unopened = null) else it }
             store.save(persisted)
         }
         fold()
@@ -340,7 +341,8 @@ class VisualizerSync(
             // token on disk (final review 04 P3-3).
             val token = persisted.tokens?.accessToken
             // The tier is per-account: a later sign-in re-probes it.
-            persist { it.copy(tokens = null, account = null, premium = null, premiumCheckedAt = null) }
+            // Also forgets a stored sign-in the keystore couldn't open this start.
+            persist { it.copy(tokens = null, account = null, premium = null, premiumCheckedAt = null, unopened = null) }
             if (!quiet) notify("Signed out of Visualizer")
             token?.let { revokeToken(clientId, it) }
         }

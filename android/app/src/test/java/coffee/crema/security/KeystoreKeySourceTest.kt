@@ -126,7 +126,7 @@ class KeystoreKeySourceTest {
 
     @Test
     fun `SR-3a P3-1 two first-use token sealers share one key`() {
-        assertOneKeyForTwoSealers { LegacyKeystoreKeySource("crema.relay.v1", it) }
+        assertOneKeyForTwoSealers { AndroidKeystoreKeySource("crema.relay.v1", it, listedWithoutKeyIsAbsent = true) }
     }
 
     @Test

@@ -10,6 +10,7 @@ import coffee.crema.visualizer.SyncLogEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
 import java.io.File
 
@@ -67,6 +68,14 @@ data class DecentState(
     val rejectedShotIds: Set<String> = emptySet(),
     /** Decent's own "Recent activity" lines (capped 20, newest first); the UI merges it with Visualizer's. */
     val log: List<SyncLogEntry> = emptyList(),
+    /**
+     * The stored (sealed) token when the keystore couldn't open it this start
+     * ([SecretBox.Opened.Unavailable]); in memory only. [token] is null meanwhile
+     * (nothing uses it), and every save writes this value back unchanged, so a
+     * transient keystore error never erases the sign-in. A new sign-in or a
+     * sign-out builds a fresh state, which drops it.
+     */
+    @Transient val unopenedToken: String? = null,
 ) {
     val linked: Boolean get() = !email.isNullOrBlank() && !token.isNullOrBlank()
 }
@@ -82,17 +91,22 @@ interface DecentStateStore {
     suspend fun erase(): Boolean = save(DecentState())
 }
 
-/** The at-rest form: the token sealed. Idempotent. */
+/** The at-rest form: the token sealed (or the unopened one kept). Idempotent. */
 internal fun DecentState.sealedWith(box: SecretBox): DecentState =
-    copy(token = token?.let { if (SecretBox.isWrapped(it)) it else box.wrap(it) })
+    copy(token = token?.let { if (SecretBox.isWrapped(it)) it else box.wrap(it) } ?: unopenedToken)
 
-/** The in-memory form, plus whether the file should be re-saved (a plaintext token, or a lost one). */
+/**
+ * The in-memory form, plus whether the file should be re-saved (a plaintext
+ * token, or a lost one). A token the keystore can't open this start is kept
+ * aside unopened and nothing is re-saved.
+ */
 internal fun DecentState.openedWith(box: SecretBox): Pair<DecentState, Boolean> {
     val stored = token ?: return this to false
     return when (val o = box.open(stored)) {
         is SecretBox.Opened.Value -> copy(token = o.value) to o.migrate
         // The key is gone: keep the email for a prefilled "sign in again".
         SecretBox.Opened.Lost -> copy(token = null, needsReauth = !email.isNullOrBlank()) to true
+        SecretBox.Opened.Unavailable -> copy(token = null, unopenedToken = stored) to false
     }
 }
 

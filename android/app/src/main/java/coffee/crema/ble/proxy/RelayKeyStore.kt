@@ -284,22 +284,20 @@ class RelayKeyStore(
 
     /**
      * Raise the v3 migration's flags (§5.1, §6.4) and record that it ran; never
-     * clears a flag already set.
+     * clears a flag already set. Returns false when the file couldn't be
+     * written (the caller must not act as if it was recorded); true when it was,
+     * or when the store is memory-only (nothing is ever written then).
      */
-    fun markUpgraded(needsRepair: Boolean, upgradeNotice: Boolean) {
-        update { s ->
-            Unit to s.copy(
-                needsRepair = s.needsRepair || needsRepair,
-                upgradeNotice = s.upgradeNotice || upgradeNotice,
-                v3Migrated = true,
-            )
-        }
+    fun markUpgraded(needsRepair: Boolean, upgradeNotice: Boolean): Boolean = updateSaved { s ->
+        s.copy(
+            needsRepair = s.needsRepair || needsRepair,
+            upgradeNotice = s.upgradeNotice || upgradeNotice,
+            v3Migrated = true,
+        )
     }
 
-    /** Record that the v3 migration has run (or had nothing to do). */
-    fun markV3Migrated() {
-        update { s -> Unit to s.copy(v3Migrated = true) }
-    }
+    /** Record that the v3 migration has run (or had nothing to do); false as for [markUpgraded]. */
+    fun markV3Migrated(): Boolean = updateSaved { s -> s.copy(v3Migrated = true) }
 
     fun clearUpgradeFlags() {
         update { s -> Unit to s.copy(needsRepair = false, upgradeNotice = false) }
@@ -323,6 +321,13 @@ class RelayKeyStore(
         state = next
         if (persistent) write(next)
         result
+    }
+
+    /** [update] that reports whether the change reached the file (always true while memory-only). */
+    private fun updateSaved(change: (RelayFile) -> RelayFile): Boolean = synchronized(lock) {
+        check(keys != null) { "relay keys not loaded" }
+        state = change(state)
+        !persistent || write(state)
     }
 
     private fun write(next: RelayFile): Boolean = try {
