@@ -133,6 +133,135 @@ pub const TANK_FULL_ML: u16 = 1104;
 /// behaves the same in all of them.
 pub const DEFAULT_REFILL_POINT_MM: f32 = 5.0;
 
+/// The low-water warning threshold, ml, when the user hasn't set one: ~10 %
+/// of a [`TANK_FULL_ML`] fill (#33 follow-up). An explicit `0` disables the
+/// warning.
+pub const WATER_WARN_DEFAULT_ML: f32 = 110.0;
+
+/// How far above the warning threshold, ml, the tank must rise before the
+/// once-per-dip warning re-arms — ~2 mm of tank, so the level bounce a
+/// running pump causes can't re-fire it.
+pub const WATER_WARN_REARM_ML: f32 = 55.0;
+
+/// The refill point range, raw sensor mm — de1app's own slider
+/// (`-from 3 -to 70`). Every refill point the core writes is clamped to it
+/// ([`clamp_refill_point_mm`]), so a restored or adopted value can't reach
+/// the DE1 raw.
+pub const REFILL_POINT_MIN_MM: f32 = 3.0;
+/// See [`REFILL_POINT_MIN_MM`].
+pub const REFILL_POINT_MAX_MM: f32 = 70.0;
+
+/// The headroom above the refill threshold, mm, at or below which the
+/// "refill soon" cue shows ([`refill_soon`]).
+pub const REFILL_SOON_MARGIN_MM: f32 = 5.0;
+
+/// A refill point (raw sensor mm) clamped to
+/// [`REFILL_POINT_MIN_MM`]`..=`[`REFILL_POINT_MAX_MM`]; a non-finite value
+/// falls back to [`DEFAULT_REFILL_POINT_MM`].
+#[must_use]
+pub fn clamp_refill_point_mm(mm: f32) -> f32 {
+    if mm.is_finite() {
+        mm.clamp(REFILL_POINT_MIN_MM, REFILL_POINT_MAX_MM)
+    } else {
+        DEFAULT_REFILL_POINT_MM
+    }
+}
+
+/// Whether the tank is low enough for the "refill soon" cue: the level DEPTH
+/// (`Event::WaterLevel.level`) is within [`REFILL_SOON_MARGIN_MM`] of — or
+/// already below — the machine's RAW refill threshold, converted to depth
+/// first (depth vs depth, Decenza's raw-vs-raw margin). `false` when either
+/// reading is missing.
+#[must_use]
+pub fn refill_soon(level_depth_mm: Option<f32>, raw_threshold_mm: Option<f32>) -> bool {
+    match (level_depth_mm, raw_threshold_mm) {
+        (Some(level), Some(threshold)) if level.is_finite() && threshold.is_finite() => {
+            level <= water_tank_depth_mm(threshold) + REFILL_SOON_MARGIN_MM
+        }
+        _ => false,
+    }
+}
+
+/// The water constants the shells' settings UI needs, in one place.
+#[typeshare::typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaterConstants {
+    /// [`TANK_FULL_ML`], the percent readout's denominator.
+    pub tank_full_ml: f32,
+    /// [`WATER_WARN_DEFAULT_ML`].
+    pub warn_default_ml: f32,
+    /// [`DEFAULT_REFILL_POINT_MM`].
+    pub default_refill_point_mm: f32,
+    /// [`REFILL_POINT_MIN_MM`].
+    pub refill_point_min_mm: f32,
+    /// [`REFILL_POINT_MAX_MM`].
+    pub refill_point_max_mm: f32,
+}
+
+/// The [`WaterConstants`].
+#[must_use]
+pub fn water_constants() -> WaterConstants {
+    WaterConstants {
+        tank_full_ml: f32::from(TANK_FULL_ML),
+        warn_default_ml: WATER_WARN_DEFAULT_ML,
+        default_refill_point_mm: DEFAULT_REFILL_POINT_MM,
+        refill_point_min_mm: REFILL_POINT_MIN_MM,
+        refill_point_max_mm: REFILL_POINT_MAX_MM,
+    }
+}
+
+/// The low-water warning: once per dip below the user's threshold, re-armed
+/// only after a real refill ([`WATER_WARN_REARM_ML`] above it), a threshold
+/// change, or a new link. Feed it the smoothed level depths.
+#[derive(Debug, Clone, Default)]
+pub struct LowWaterMonitor {
+    /// The user's threshold, ml; `None` = [`WATER_WARN_DEFAULT_ML`], `0` = off.
+    warn_ml: Option<f32>,
+    /// Whether the current dip has already warned.
+    warned: bool,
+}
+
+impl LowWaterMonitor {
+    /// Set the user's threshold (ml; `None` for the default, `0` to turn the
+    /// warning off). Re-arms, so a raised threshold warns on the next report.
+    pub fn set_warn_ml(&mut self, warn_ml: Option<f32>) {
+        self.warn_ml = warn_ml.filter(|ml| ml.is_finite());
+        self.warned = false;
+    }
+
+    /// The user's threshold as set (`None` = the default).
+    #[must_use]
+    pub fn warn_ml(&self) -> Option<f32> {
+        self.warn_ml
+    }
+
+    /// Re-arm: the next report at or below the threshold warns again (a new
+    /// link — the tank may have been refilled while it was down).
+    pub fn rearm(&mut self) {
+        self.warned = false;
+    }
+
+    /// Feed one level DEPTH (mm). `Some(ml)` — the tank volume — when this
+    /// report starts a dip below the threshold, so the shell warns once.
+    pub fn on_level(&mut self, depth_mm: f32) -> Option<u16> {
+        let warn_ml = self.warn_ml.unwrap_or(WATER_WARN_DEFAULT_ML);
+        if warn_ml <= 0.0 {
+            return None;
+        }
+        let ml = water_tank_ml(depth_mm);
+        let level = f32::from(ml);
+        if !self.warned && level <= warn_ml {
+            self.warned = true;
+            return Some(ml);
+        }
+        if self.warned && level > warn_ml + WATER_WARN_REARM_ML {
+            self.warned = false;
+        }
+        None
+    }
+}
+
 /// Convert a tank water DEPTH (mm, as for [`water_tank_ml`]) to a whole
 /// percentage of a typical full fill ([`TANK_FULL_ML`]), clamped to
 /// `0..=100`. Adds no offset.
@@ -225,6 +354,54 @@ impl TankLevelSmoother {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_refill_point_is_clamped_to_the_de1app_range() {
+        assert!((clamp_refill_point_mm(0.0) - 3.0).abs() < f32::EPSILON);
+        assert!((clamp_refill_point_mm(250.0) - 70.0).abs() < f32::EPSILON);
+        assert!((clamp_refill_point_mm(12.5) - 12.5).abs() < f32::EPSILON);
+        assert!((clamp_refill_point_mm(f32::NAN) - DEFAULT_REFILL_POINT_MM).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn refill_soon_compares_depth_with_the_threshold_as_depth() {
+        // Raw threshold 5 → 10 mm of depth; the cue's margin is 5 mm more.
+        assert!(refill_soon(Some(15.0), Some(5.0)));
+        assert!(!refill_soon(Some(15.5), Some(5.0)));
+        assert!(refill_soon(Some(water_tank_depth_mm(5.0)), Some(5.0)));
+        assert!(!refill_soon(None, Some(5.0)));
+        assert!(!refill_soon(Some(10.0), None));
+    }
+
+    #[test]
+    fn the_low_water_warning_fires_once_per_dip_and_rearms_after_a_refill() {
+        let mut m = LowWaterMonitor::default();
+        // 110 ml default: 5 mm depth = 124 ml (no warn), 4 mm = 97 ml (warn).
+        assert_eq!(m.on_level(5.0), None);
+        assert_eq!(m.on_level(4.0), Some(97));
+        // Pump bounce around the threshold doesn't re-fire it.
+        assert_eq!(m.on_level(5.0), None);
+        assert_eq!(m.on_level(4.0), None);
+        // 6 mm = 151 ml is under 110 + 55: still armed-off.
+        assert_eq!(m.on_level(6.0), None);
+        assert_eq!(m.on_level(4.0), None);
+        // A refill (7 mm = 179 ml > 165 ml) re-arms it.
+        assert_eq!(m.on_level(7.0), None);
+        assert_eq!(m.on_level(4.0), Some(97));
+    }
+
+    #[test]
+    fn a_threshold_change_or_a_new_link_rearms_the_low_water_warning() {
+        let mut m = LowWaterMonitor::default();
+        assert_eq!(m.on_level(4.0), Some(97));
+        m.rearm();
+        assert_eq!(m.on_level(4.0), Some(97));
+        m.set_warn_ml(Some(200.0));
+        assert_eq!(m.on_level(6.0), Some(151));
+        // 0 turns it off.
+        m.set_warn_ml(Some(0.0));
+        assert_eq!(m.on_level(0.0), None);
+    }
 
     #[test]
     fn the_offset_is_applied_exactly_once_from_raw_to_ml() {

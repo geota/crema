@@ -16,7 +16,8 @@
 	 * confirm dialog — the firmware drives the cycle to completion, then the
 	 * user manually taps "Mark complete" once the puck-side hardware is reset.
 	 * The Tank group's low-water threshold is a `#lib/settings/index.js` pref — this
-	 * row is only the input; the once-per-dip toast lives in `app.svelte.ts`.
+	 * row is only the input; the core's monitor decides when to warn (`WaterLow`)
+	 * and `app.svelte.ts` shows the toast.
 	 *
 	 * **UI-only** — the water-chemistry inputs are faithful UI; they are not
 	 * app preferences the rest of the app reads, so they are kept as local
@@ -39,7 +40,8 @@
 		INITIAL_SNAPSHOT,
 		defaultRefillPointMm,
 		maintenanceProgressText,
-		maintenanceTitle
+		maintenanceTitle,
+		waterConstants
 	} from '#lib/state/index.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -78,19 +80,26 @@
 
 	// ── Low-water warning (#33 follow-up) ───────────────────────────────
 	//
-	// This row is only the input — the once-per-dip toast itself lives in
-	// app.svelte.ts (WaterLevel handler, with refill hysteresis). Canonical
-	// unit is ml: `null` = unset (the app falls back to the 110 ml default),
+	// This row is only the input — the core's low-water monitor warns once per
+	// dip (with refill hysteresis) and app.svelte.ts shows the toast. Canonical
+	// unit is ml: `null` = unset (the core falls back to its 110 ml default),
 	// an explicit `0` = disabled. The dial converts to percent when the
 	// user's tank unit pref (Display section) says so.
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
 
-	/** A typical full tank fill, ml — mirrors the core's TANK_FULL_ML. */
-	const TANK_FULL_ML = 1104;
-	/** Default warning threshold when unset — ~10% of a full fill. */
-	const WATER_WARN_DEFAULT_ML = 110;
+	// The core's water constants (Android's settings use the same): a typical
+	// full fill, the warning default (~10 % of it) and de1app's refill range.
+	const water = waterConstants();
+	const TANK_FULL_ML = water.tankFullMl;
+	const WATER_WARN_DEFAULT_ML = water.warnDefaultMl;
+
+	/** Store the low-water threshold and tell the core, which re-arms the warning. */
+	function setWarnMl(ml: number): void {
+		settings.set('waterWarnMl', ml);
+		void app?.applyWaterWarnMl(ml);
+	}
 
 	/** Whether the warning is armed — unset (default on) or an explicit positive ml. */
 	const warnOn = $derived((prefs.waterWarnMl ?? WATER_WARN_DEFAULT_ML) > 0);
@@ -106,9 +115,9 @@
 	 */
 	const refillPointMm = $derived(prefs.waterRefillPointMm ?? defaultRefillPointMm());
 	
-	/** de1app's own refill-point slider range (`-from 3 -to 70`). */
-	const REFILL_POINT_MIN_MM = 3;
-	const REFILL_POINT_MAX_MM = 70;
+	/** de1app's own refill-point slider range (`-from 3 -to 70`); the core clamps writes to it too. */
+	const REFILL_POINT_MIN_MM = water.refillPointMinMm;
+	const REFILL_POINT_MAX_MM = water.refillPointMaxMm;
 
 	// TODO: water chemistry is not yet wired into a store the app reads; local
 	// state only, so the segment / chips feel real while previewing the IA.
@@ -245,8 +254,8 @@
 
 <!--
 	Tank — the low-water warning threshold, dialled in the user's tank unit
-	(Display section). This row is the input for the app-level once-per-dip
-	toast; the behaviour itself lives in app.svelte.ts.
+	(Display section). This row is the input for the once-per-dip warning;
+	the rule lives in the core (`WaterLow`), the toast in app.svelte.ts.
 -->
 <StGroup title="Tank">
 	<StRow
@@ -257,8 +266,7 @@
 			<span class="ws-armed-row">
 				<StToggle
 					on={warnOn}
-					onChange={(v) =>
-						settings.set('waterWarnMl', v ? WATER_WARN_DEFAULT_ML : 0)}
+					onChange={(v) => setWarnMl(v ? WATER_WARN_DEFAULT_ML : 0)}
 					label="Low-water warning armed"
 				/>
 				{#if warnOn}
@@ -269,7 +277,7 @@
 							step={1}
 							min={1}
 							max={50}
-							onCommit={(v) => settings.set('waterWarnMl', (v / 100) * TANK_FULL_ML)}
+							onCommit={(v) => setWarnMl((v / 100) * TANK_FULL_ML)}
 						/>
 					{:else}
 						<StStepper
@@ -278,7 +286,7 @@
 							step={25}
 							min={25}
 							max={550}
-							onCommit={(v) => settings.set('waterWarnMl', v)}
+							onCommit={(v) => setWarnMl(v)}
 						/>
 					{/if}
 				{/if}

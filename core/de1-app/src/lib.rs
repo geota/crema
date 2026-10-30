@@ -52,11 +52,12 @@ use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
 use de1_domain::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AutoStop, BeverageType, BrewOverrides, BrewRecipe,
     BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, CremaProfile, Estimate, FlowAlgorithm,
-    FlowEstimator, LineFreqDetector, Profile, STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor,
-    ShotPhase, SteamEvent, SteamMonitor, StepWeightExit, StopCapture, StopConfig, StopReason,
-    StopTargets, TankLevelSmoother, TareSettleWindow, VolumeIntegrator, WaterEvent, WaterMonitor,
-    WeightSpikeGate, WeightUnit, pre_shot_zero_offset, sav_counts_volume, shot_disposition,
-    water_tank_depth_mm,
+    FlowEstimator, LineFreqDetector, LowWaterMonitor, MAX_COUNTED_GAP_S, Profile,
+    STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor,
+    StepWeightExit, StopCapture, StopConfig, StopReason, StopTargets, TankLevelSmoother,
+    TareSettleWindow, VolumeIntegrator, WaterEvent, WaterMonitor, WeightSpikeGate, WeightUnit,
+    clamp_refill_point_mm, counts_toward_water, pre_shot_zero_offset, sav_counts_volume,
+    shot_disposition, water_tank_depth_mm,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -828,6 +829,10 @@ pub struct CremaCore {
     /// both shells' readouts and low-water toasts inherit it. Re-seeded on
     /// [`reset`](Self::reset) and [`de1_link_lost`](Self::de1_link_lost).
     tank_level: TankLevelSmoother,
+    /// The low-water warning (`Event::WaterLow`): the user's threshold and
+    /// whether the current dip already warned. The threshold survives
+    /// [`reset`](Self::reset); every new link re-arms the warning.
+    low_water: LowWaterMonitor,
     /// The DE1's firmware build (MMR `FirmwareVersion`), cached from the
     /// connect-time read for firmware-gated behaviour (the `ErrorNoAc`
     /// gate). Kept here as well as in the capture identity-keeper because
@@ -1079,6 +1084,7 @@ impl CremaCore {
             firmware_lock_override: false,
             firmware_flash: None,
             tank_level: TankLevelSmoother::new(),
+            low_water: LowWaterMonitor::default(),
             de1_firmware_build: None,
             no_ac_since: None,
             reported_machine_error: None,
@@ -2361,9 +2367,12 @@ impl CremaCore {
             return out;
         }
         let mut out = CoreOutput::default();
+        // Clamped to de1app's range on every write — the connect sweep, a
+        // restored backup and a hub-adopted value all land here, so none can
+        // reach the DE1 raw.
         let packet = WaterLevels {
             current_mm: 0.0,
-            refill_threshold_mm: threshold_mm,
+            refill_threshold_mm: clamp_refill_point_mm(threshold_mm),
         }
         .encode();
         out.commands.push(Command::WriteCharacteristic {
@@ -2371,6 +2380,14 @@ impl CremaCore {
             data: packet.to_vec(),
         });
         out
+    }
+
+    /// Set the low-water warning threshold, ml (`None` = the 110 ml default,
+    /// `0` = off). Re-arms the warning, so a raised threshold warns on the
+    /// next level report. Kept across [`reset`](Self::reset). Pure state — no
+    /// output.
+    pub fn set_water_warn_ml(&mut self, warn_ml: Option<f32>) {
+        self.low_water.set_warn_ml(warn_ml);
     }
 
     /// The steam / hot-water [`ShotSettings`] to write, with the steam target
@@ -3320,6 +3337,8 @@ impl CremaCore {
         let mut out = CoreOutput::default();
         self.stop_scale_timer_for_link_loss(&mut out);
         self.tank_level.reset();
+        // The tank may be refilled while the link is down: warn afresh.
+        self.low_water.rearm();
         self.abandon_maintenance(&mut out);
         self.idle_sleep.link(false);
         self.gate_read_only(out)
@@ -3377,6 +3396,9 @@ impl CremaCore {
         // it would mis-record the next cleaning run as a shot.
         let active_beverage_type = self.active_beverage_type;
         let step_weight = std::mem::take(&mut self.step_weight);
+        // The low-water threshold is a user preference; the warning itself
+        // re-arms for the next link.
+        let water_warn_ml = self.low_water.warn_ml();
         // The stop targets and their switches are USER INTENT — the active
         // recipe's yield, the Quick-Controls override, the volume cap, the
         // max-time guard, and the three behaviour toggles. A DE1 dropping and
@@ -3428,6 +3450,7 @@ impl CremaCore {
         self.saw_model = saw_model;
         self.active_beverage_type = active_beverage_type;
         self.step_weight = step_weight;
+        self.low_water.set_warn_ml(water_warn_ml);
         self.stop_on_weight = stop_on_weight;
         self.auto_tare = auto_tare;
         self.volume_stop_with_scale = volume_stop_with_scale;
@@ -3665,12 +3688,20 @@ impl CremaCore {
         let counts_as_pour = self
             .last_state
             .is_none_or(|s| sav_counts_volume(s.state, s.substate));
-        self.volume_integrator.integrate_counting(
+        let increment_ml = self.volume_integrator.integrate_counting(
             &sample,
             now,
             self.line_frequency_hz(),
             counts_as_pour,
         );
+        // The filter / descale counters count espresso and hot water only,
+        // with a stream gap capped so a dropped link can't count phantom
+        // water — see `Event::Telemetry::counted_ml`.
+        let counted_ml = self
+            .last_state
+            .filter(|s| counts_toward_water(s.state))
+            .map(|_| increment_ml.min(sample.group_flow.max(0.0) * MAX_COUNTED_GAP_S))
+            .filter(|ml| *ml > 0.0);
         let pour_ml = self.volume_integrator.pour_ml();
         let reason = self
             .auto_stop
@@ -3718,6 +3749,7 @@ impl CremaCore {
             set_group_flow: sample.set_group_flow,
             resistance: puck_resistance(sample.group_pressure, sample.group_flow),
             resistance_weight,
+            counted_ml,
         });
     }
 
@@ -4157,12 +4189,21 @@ impl CremaCore {
     /// `de1_domain::tank` module docs for the units rule.
     fn handle_water_levels(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {
         match WaterLevels::decode(data) {
-            Ok(levels) => out.events.push(Event::WaterLevel {
-                level: self
+            Ok(levels) => {
+                let level = self
                     .tank_level
-                    .update(water_tank_depth_mm(levels.current_mm), now_ms),
-                refill_threshold: levels.refill_threshold_mm,
-            }),
+                    .update(water_tank_depth_mm(levels.current_mm), now_ms);
+                out.events.push(Event::WaterLevel {
+                    level,
+                    refill_threshold: levels.refill_threshold_mm,
+                });
+                if let Some(ml) = self.low_water.on_level(level) {
+                    out.events.push(Event::WaterLow {
+                        level,
+                        ml: f32::from(ml),
+                    });
+                }
+            }
             Err(e) => out.events.push(Event::DecodeError {
                 message: e.to_string(),
             }),
@@ -7691,6 +7732,143 @@ mod tests {
         let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
         let writes = scale_writes(&out);
         assert!(!writes.contains(&difluid::SET_UNIT_GRAMS.as_slice()));
+    }
+
+    /// `counted_ml` on the second of two telemetry samples 250 ms apart in
+    /// `state` (substate Pouring).
+    fn counted_ml_in(state: MachineState) -> Option<f32> {
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[state as u8, 5], 1_000);
+        core.on_notification(Source::De1ShotSample, &SAMPLE, 1_000);
+        let out = core.on_notification(Source::De1ShotSample, &SAMPLE, 1_250);
+        out.events.iter().find_map(|e| match e {
+            Event::Telemetry { counted_ml, .. } => Some(*counted_ml),
+            _ => None,
+        })?
+    }
+
+    #[test]
+    fn counted_water_follows_the_per_state_table() {
+        use MachineState as S;
+        for (state, counts) in [
+            (S::Espresso, true),
+            (S::HotWater, true),
+            (S::HotWaterRinse, true),
+            (S::Steam, false),
+            (S::Descale, false),
+            (S::Clean, false),
+            (S::SteamRinse, false),
+            (S::AirPurge, false),
+            (S::Idle, false),
+        ] {
+            let counted = counted_ml_in(state);
+            assert_eq!(counted.is_some(), counts, "{state:?}: {counted:?}");
+            if let Some(ml) = counted {
+                assert!(ml > 0.0, "{state:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_telemetry_gap_counts_at_most_two_seconds_of_flow() {
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[MachineState::HotWater as u8, 5], 1_000);
+        core.on_notification(Source::De1ShotSample, &SAMPLE, 1_000);
+        // 30 s of silence (a dropped link), then the stream resumes.
+        let out = core.on_notification(Source::De1ShotSample, &SAMPLE, 31_000);
+        let (flow, counted) = out
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::Telemetry {
+                    group_flow,
+                    counted_ml,
+                    ..
+                } => Some((*group_flow, *counted_ml)),
+                _ => None,
+            })
+            .expect("telemetry");
+        let counted = counted.expect("hot water counts");
+        assert!(
+            counted <= flow * 2.0 + f32::EPSILON,
+            "{counted} ml for {flow} ml/s"
+        );
+    }
+
+    /// The refill threshold byte pair of the `WaterLevels` write in `out`.
+    fn written_refill_mm(out: &CoreOutput) -> f32 {
+        let data = out
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1WaterLevels,
+                    data,
+                } => Some(data.clone()),
+                _ => None,
+            })
+            .expect("a WaterLevels write");
+        WaterLevels::decode(&data)
+            .expect("decodes")
+            .refill_threshold_mm
+    }
+
+    #[test]
+    fn the_refill_point_is_clamped_on_every_write() {
+        let core = CremaCore::new();
+        // A direct set (a restored backup or a hub-adopted value).
+        assert!((written_refill_mm(&core.set_refill_threshold(250.0)) - 70.0).abs() < 0.01);
+        assert!((written_refill_mm(&core.set_refill_threshold(0.0)) - 3.0).abs() < 0.01);
+        assert!((written_refill_mm(&core.set_refill_threshold(12.0)) - 12.0).abs() < 0.01);
+    }
+
+    /// `(level ml)` of each `WaterLow` in `out`.
+    fn water_low(out: &CoreOutput) -> Vec<f32> {
+        out.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::WaterLow { ml, .. } => Some(*ml),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_low_water_warning_rearms_on_a_refill_a_new_link_and_a_threshold_change() {
+        let mut core = CremaCore::new();
+        // Raw 0 mm → 5 mm depth → 124 ml: above the 110 ml default.
+        assert!(
+            water_low(&core.on_notification(Source::De1WaterLevels, &[0, 0, 5, 0], 0)).is_empty()
+        );
+        core.de1_link_lost(); // re-seed the level smoother for a step
+        // Raw 0 mm is the floor; use a lower threshold change instead:
+        core.set_water_warn_ml(Some(130.0));
+        assert_eq!(
+            water_low(&core.on_notification(Source::De1WaterLevels, &[0, 0, 5, 0], 0)),
+            vec![124.0]
+        );
+        // The same dip doesn't warn twice.
+        assert!(
+            water_low(&core.on_notification(Source::De1WaterLevels, &[0, 0, 5, 0], 100)).is_empty()
+        );
+        // A new link re-arms it.
+        core.de1_link_lost();
+        assert_eq!(
+            water_low(&core.on_notification(Source::De1WaterLevels, &[0, 0, 5, 0], 200)),
+            vec![124.0]
+        );
+        // A reset (disconnect) keeps the user's threshold and re-arms.
+        core.reset();
+        assert_eq!(
+            water_low(&core.on_notification(Source::De1WaterLevels, &[0, 0, 5, 0], 300)),
+            vec![124.0]
+        );
+        // 0 turns it off.
+        core.set_water_warn_ml(Some(0.0));
+        core.de1_link_lost();
+        assert!(
+            water_low(&core.on_notification(Source::De1WaterLevels, &[0, 0, 5, 0], 400)).is_empty()
+        );
     }
 
     #[test]

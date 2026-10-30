@@ -38,8 +38,6 @@ import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.MaintenanceStore
-import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_DT_S
-import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_ML
 import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.persist.KeptAside
 import coffee.crema.persist.KeptAsideNotices
@@ -169,7 +167,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Run [block] on the core lane, FIFO behind any queued event application.
      *  Every write to lane-owned state (the upload-skip cache, [pendingBrew],
-     *  [waterLowWarned], [maintenanceTotalLitres]) goes through here or runs
+     *  [maintenanceTotalLitres]) goes through here or runs
      *  on the lane already: a plain Main-thread write is not ordered against a
      *  queued lane task (cohort review 2026-10-25, Android P2-3). */
     private fun onCoreLane(block: () -> Unit) {
@@ -274,11 +272,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  session warns again, but one connection never nags twice. */
     private var scaleLowBatteryWarned = false
 
-    /** Whether the low-water snackbar fired for the current tank dip (#33
-     *  follow-up) — re-armed once the level rises [WATER_WARN_REARM_ML]
-     *  above the threshold (a refill), on threshold edits, and on
-     *  disconnect. One dip never nags twice. */
-    private var waterLowWarned = false
     private var pendingUploadFingerprint: String? = null
 
     /** The machine's last-reported steam/hot-water settings (from
@@ -1127,14 +1120,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * shot / water-session completion and after a mark action.
      */
     private var maintenanceTotalLitres: Double = 0.0
-
-    /**
-     * Timestamp (System.currentTimeMillis) of the previous telemetry sample, for
-     * the wall-clock Δ the accumulate integrates over; null at session start.
-     * Reset to null on `ShotStarted` / `WaterSessionStarted` so the FIRST sample
-     * of a session adds no Δ (avoids a huge between-session gap being integrated).
-     */
-    private var lastTelemetryMs: Long? = null
 
     /**
      * What this device does for each [MachineCommand]: the bodies behind the
@@ -2612,8 +2597,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreLane {
             pendingBrew = false
             pendingBrewStart = null
-            // Next connection's first low-water report warns afresh (#33).
-            waterLowWarned = false
         }
         _ui.update { it.copy(
             machineState = null,
@@ -2924,6 +2907,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setMaxShotDuration(state.maxShotDurationS) }.onFailure { appendLog("Set max shot duration failed: ${it.message}") }
         runCatching { bridge.setVolumeStopWithScale(state.volumeStopWithScale) }.onFailure { appendLog("Set volume-stop-with-scale failed: ${it.message}") }
         runCatching { bridge.setWeightUnitPref(coreWeightUnit(state.weightUnit)) }.onFailure { appendLog("Set weight unit failed: ${it.message}") }
+        runCatching { bridge.setWaterWarnMl(state.waterWarnMl) }.onFailure { appendLog("Set low-water threshold failed: ${it.message}") }
         pushStopTargets(state)
         idleSleep.configure(state.idleSleepMin)
     }
@@ -3815,7 +3799,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setWaterWarnMl(ml: Float) {
         _ui.update { it.copy(waterWarnMl = ml) }
         persistPrefs()
-        onCoreLane { waterLowWarned = false }
+        // The core's monitor re-arms on a threshold change.
+        onCoreLane { runCatching { bridge.setWaterWarnMl(ml) } }
     }
 
     /** The machine's own refill threshold, raw sensor mm (geota/crema#47).
@@ -3969,27 +3954,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             maintenanceReadout = computeMaintenanceReadout(next),
         ) }
         viewModelScope.launch { maintenanceStore.save(next) }
-    }
-
-    /**
-     * Integrate one telemetry sample into [maintenanceTotalLitres]. [flowMlPerS]
-     * is the DE1's group flow; the wall-clock Δ since the previous sample is
-     * derived from [nowMs] and [lastTelemetryMs]. Mirrors the web store's clamps:
-     * the Δ is capped at [MAINTENANCE_MAX_SAMPLE_DT_S] (ignore between-session
-     * gaps), only positive flow accumulates, and an implausibly large per-sample
-     * volume (> [MAINTENANCE_MAX_SAMPLE_ML]) is dropped. Does NOT persist or
-     * recompute the readout (that happens at the completion boundaries).
-     */
-    private fun accumulateMaintenance(flowMlPerS: Float, nowMs: Long) {
-        val prevMs = lastTelemetryMs
-        lastTelemetryMs = nowMs
-        if (prevMs == null) return
-        val dtSeconds = (nowMs - prevMs) / 1000.0
-        if (dtSeconds <= 0.0 || flowMlPerS <= 0f) return
-        val cappedDt = dtSeconds.coerceAtMost(MAINTENANCE_MAX_SAMPLE_DT_S)
-        val ml = flowMlPerS.toDouble() * cappedDt
-        if (ml <= 0.0 || ml > MAINTENANCE_MAX_SAMPLE_ML) return
-        maintenanceTotalLitres += ml / 1000.0
     }
 
     /**
@@ -4597,7 +4561,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val freshMaintenance = defaultMaintenanceState(System.currentTimeMillis())
         onCoreLane {
             maintenanceTotalLitres = 0.0
-            lastTelemetryMs = null
             // A fresh stop-at-weight model (null = start learning again).
             runCatching { bridge.loadSawModelJson(null) }
         }
@@ -5210,9 +5173,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ShotStarted -> {
                 // Entering a shot: flip the resting↔extracting flag and zero the
                 // per-shot counters so the Brew timer / phase / volume restart.
-                // Reset the maintenance dt-tracker so the first telemetry sample of
-                // this session adds no wall-clock Δ (no phantom between-session water).
-                lastTelemetryMs = null
                 _ui.update { it.copy(
                     shotInProgress = true,
                     shotFrame = 0,
@@ -5242,14 +5202,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.Telemetry -> {
                 val t = event.content
-                // Integrate group flow into the running water total (the DE1 has no
-                // cumulative counter). In-memory only — NOT persisted/recomputed per
-                // sample (~25–40 Hz); flushed on shot / water-session completion.
-                // SIDE EFFECT — stays OUTSIDE the update lambda so it accumulates
-                // exactly once per frame even if the CAS retries (issue 11).
-                // Monotonic clock (review #36): a wall-clock jump (NTP, DST)
-                // used to distort the water integral; elapsedRealtime can't.
-                accumulateMaintenance(t.group_flow, SystemClock.elapsedRealtime())
+                // Add the core's counted water to the running total (the DE1 has no
+                // cumulative counter): `counted_ml` is set only for espresso and hot
+                // water, gap-capped — the core's rule, shared with web (Android used
+                // to count descale, clean, steam rinse and air purge too). In-memory
+                // only — flushed on shot / water-session completion.
+                // SIDE EFFECT — stays OUTSIDE the update lambda so it adds exactly
+                // once per frame even if the CAS retries (issue 11).
+                t.counted_ml?.let { maintenanceTotalLitres += it / 1000.0 }
                 val line = fmt("t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C", 
                     t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
                 )
@@ -5367,24 +5327,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     lastLoggedWaterMm = mm
                     appendLog("Water level: ${mm}mm")
                 }
-                // Configurable low-water warning (#33 follow-up): one snackbar
-                // per dip below the user's threshold, in the user's tank unit.
-                // Hysteresis re-arms it only after a real refill, so the mm
-                // bounce a running pump causes can't re-fire it.
+            }
+            is Event.WaterLow -> {
+                // The core's low-water monitor (#33 follow-up, shared with web):
+                // once per dip below the user's threshold, re-armed on a refill,
+                // a threshold change or a new link. Shown in the user's tank unit.
                 val s = _ui.value
-                val warnMl = s.waterWarnThresholdMl()
-                if (warnMl > 0f) {
-                    // The event level is already a depth (offset applied in
-                    // core) — the ml conversion takes it as-is.
-                    val ml = coffee.crema.core.waterTankMl(event.content.level).toFloat()
-                    if (!waterLowWarned && ml <= warnMl) {
-                        waterLowWarned = true
-                        val left = formatTankLevel(event.content.level, s.waterLevelUnit, s.volumeUnit)
-                        notifyUser("Water low — ${left.value} ${left.unit} left, refill soon")
-                    } else if (waterLowWarned && ml > warnMl + WATER_WARN_REARM_ML) {
-                        waterLowWarned = false
-                    }
-                }
+                val left = formatTankLevel(event.content.level, s.waterLevelUnit, s.volumeUnit)
+                notifyUser("Water low — ${left.value} ${left.unit} left, refill soon")
             }
             is Event.ShotSettingsRead -> {
                 // Cache the machine's reported steam/hot-water settings so QC
@@ -5515,9 +5465,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 shotStartedByApp = false
             }
             is Event.WaterSessionStarted -> {
-                // A hot-water pour also moves water through the group — reset the
-                // dt-tracker so its first telemetry sample adds no Δ, then accumulate.
-                lastTelemetryMs = null
                 appendLog("Water session started: ${event.content.kind.string}")
                 if (event.content.kind == WaterSessionKind.Flush) startSequence.onFlushStarted()
             }

@@ -289,6 +289,76 @@ data class BeanFilterResult (
 	val showingArchived: Boolean
 )
 
+/// One roastery — a record in the roaster directory. Sparse on
+/// purpose, mirroring Visualizer's `RoasterDetail` (which is itself
+/// minimal: id + name + website + image). Beanconqueror has no
+/// first-class roaster entity — its `bean.roaster` is free text; the
+/// shell promotes unique strings into [`Roaster`] rows on import.
+@Serializable
+data class Roaster (
+	/// Stable id — `"roaster:<uuid>"`.
+	val id: String,
+	/// Roastery name. **Required.**
+	val name: String,
+	/// Roastery website / store URL.
+	val website: String? = null,
+	/// Logo / hero image URL. Mirrors Visualizer's `RoasterDetail.image_url`
+	/// — round-trips losslessly on sync. Renders as a small thumbnail in
+	/// the roaster card and the editor's preview slot.
+	val imageUrl: String? = null,
+	/// City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
+	/// on Visualizer round-trip so the wire format stays lossless.
+	val city: String? = null,
+	/// Country / state / region — free text. Crema-only.
+	val country: String? = null,
+	/// Free-form notes (private to the user — not pushed to Visualizer).
+	val notes: String,
+	/// Pointer to the canonical **local** roaster row (`roaster:<uuid>`)
+	/// when this row was tagged as a duplicate in the roaster directory.
+	/// `None` = this row is itself canonical (or has not been deduped).
+	/// Local-only: Visualizer's `canonical_roaster_id` is a link into its
+	/// shared roaster catalogue, which lives in
+	/// [`Roaster::catalogue_roaster_id`] instead.
+	val canonicalRoasterId: String? = null,
+	/// Visualizer **catalogue** roaster id — the wire's
+	/// `RoasterDetail.canonical_roaster_id`. Set from a catalogue pick in the
+	/// bean form (or pulled from Visualizer) and sent on the roaster write.
+	/// `None` = not linked. Defaults so older JSON deserialises cleanly.
+	val catalogueRoasterId: String? = null,
+	/// Visualizer `roaster.id` once pushed.
+	val visualizerId: String? = null,
+	/// Unix epoch ms when this roaster was soft-deleted, or `None` when
+	/// active. See [`Bean::deleted_at`] for the rationale. Defaults to
+	/// `None` so older JSON deserialises cleanly.
+	val deletedAt: Long? = null,
+	/// Open JSON metadata — escape valve symmetric with [`Bean::metadata`].
+	val metadata: kotlinx.serialization.json.JsonElement,
+	/// Unix epoch ms.
+	val createdAt: Long,
+	/// Unix epoch ms.
+	val updatedAt: Long
+)
+
+/// What an import changes in the library.
+@Serializable
+data class BeanImportMerge (
+	/// Beans whose id the library doesn't have, roaster pointers resolved.
+	val newBeans: List<Bean>,
+	/// Incoming beans that replace the library row with the same id (newer
+	/// `updated_at`), roaster pointers resolved.
+	val updatedBeans: List<Bean>,
+	/// Roasters the new and updated beans need that the library doesn't have.
+	val newRoasters: List<Roaster>,
+	/// Incoming roasters that replace the library row with the same id.
+	val updatedRoasters: List<Roaster>,
+	/// Incoming bean id → the library bean id its shots should reference.
+	val beanIdRemap: HashMap<String, String>,
+	/// Incoming beans that change nothing: already in the library and not
+	/// newer, an earlier Beanconqueror import, or a (roaster, name, roast
+	/// date) duplicate.
+	val skipped: UInt
+)
+
 /// One local bag the push leg writes.
 @Serializable
 data class BeanPushItem (
@@ -777,56 +847,6 @@ data class CataloguePage (
 	val pages: UInt
 )
 
-/// One roastery — a record in the roaster directory. Sparse on
-/// purpose, mirroring Visualizer's `RoasterDetail` (which is itself
-/// minimal: id + name + website + image). Beanconqueror has no
-/// first-class roaster entity — its `bean.roaster` is free text; the
-/// shell promotes unique strings into [`Roaster`] rows on import.
-@Serializable
-data class Roaster (
-	/// Stable id — `"roaster:<uuid>"`.
-	val id: String,
-	/// Roastery name. **Required.**
-	val name: String,
-	/// Roastery website / store URL.
-	val website: String? = null,
-	/// Logo / hero image URL. Mirrors Visualizer's `RoasterDetail.image_url`
-	/// — round-trips losslessly on sync. Renders as a small thumbnail in
-	/// the roaster card and the editor's preview slot.
-	val imageUrl: String? = null,
-	/// City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
-	/// on Visualizer round-trip so the wire format stays lossless.
-	val city: String? = null,
-	/// Country / state / region — free text. Crema-only.
-	val country: String? = null,
-	/// Free-form notes (private to the user — not pushed to Visualizer).
-	val notes: String,
-	/// Pointer to the canonical **local** roaster row (`roaster:<uuid>`)
-	/// when this row was tagged as a duplicate in the roaster directory.
-	/// `None` = this row is itself canonical (or has not been deduped).
-	/// Local-only: Visualizer's `canonical_roaster_id` is a link into its
-	/// shared roaster catalogue, which lives in
-	/// [`Roaster::catalogue_roaster_id`] instead.
-	val canonicalRoasterId: String? = null,
-	/// Visualizer **catalogue** roaster id — the wire's
-	/// `RoasterDetail.canonical_roaster_id`. Set from a catalogue pick in the
-	/// bean form (or pulled from Visualizer) and sent on the roaster write.
-	/// `None` = not linked. Defaults so older JSON deserialises cleanly.
-	val catalogueRoasterId: String? = null,
-	/// Visualizer `roaster.id` once pushed.
-	val visualizerId: String? = null,
-	/// Unix epoch ms when this roaster was soft-deleted, or `None` when
-	/// active. See [`Bean::deleted_at`] for the rationale. Defaults to
-	/// `None` so older JSON deserialises cleanly.
-	val deletedAt: Long? = null,
-	/// Open JSON metadata — escape valve symmetric with [`Bean::metadata`].
-	val metadata: kotlinx.serialization.json.JsonElement,
-	/// Unix epoch ms.
-	val createdAt: Long,
-	/// Unix epoch ms.
-	val updatedAt: Long
-)
-
 /// A form field a catalogue pick can fill — the ids a clash list is made of.
 /// Both shells map them to their own human labels ("Roast level",
 /// "Roaster website", …). Declaration order is form order: clash lists come
@@ -1283,7 +1303,14 @@ data class EventTelemetryInner (
 	/// so shots with and without a scale render coherently. The
 	/// legacy de1app TCL computes the same metric — see
 	/// `de1plus/gui.tcl:3414-3416`.
-	val resistance_weight: Float? = null
+	val resistance_weight: Float? = null,
+	/// The water this sample adds to the filter / descale counters, ml —
+	/// the volume integrator's increment (gap-capped at
+	/// `MAX_COUNTED_GAP_S`), only in the states that count
+	/// (`counts_toward_water`: espresso and hot water). `None` otherwise.
+	/// The shells add it to their persisted litre total; the counting
+	/// rule lives here.
+	val counted_ml: Float? = null
 )
 
 /// Generated type representing the anonymous struct variant `ScaleReading` of the `Event` Rust enum
@@ -1334,6 +1361,15 @@ data class EventWaterLevelInner (
 	/// refill is wanted when the raw level is at or below it. Convert it
 	/// with `water_tank_depth_mm` before comparing it with `level`.
 	val refill_threshold: Float
+)
+
+/// Generated type representing the anonymous struct variant `WaterLow` of the `Event` Rust enum
+@Serializable
+data class EventWaterLowInner (
+	/// The tank DEPTH, mm, as in [`Event::WaterLevel`].
+	val level: Float,
+	/// The tank volume, ml.
+	val ml: Float
 )
 
 /// Generated type representing the anonymous struct variant `StopTriggered` of the `Event` Rust enum
@@ -1786,6 +1822,13 @@ sealed class Event {
 	@Serializable
 	@SerialName("WaterLevel")
 	data class WaterLevel(val content: EventWaterLevelInner): Event()
+	/// The tank dropped to the user's low-water threshold (default 110 ml,
+	/// `0` = off; `CremaCore::set_water_warn_ml`). Once per dip: re-armed by
+	/// a refill 55 ml above the threshold, a threshold change, or a new link.
+	/// The shell shows the warning in the user's tank unit.
+	@Serializable
+	@SerialName("WaterLow")
+	data class WaterLow(val content: EventWaterLowInner): Event()
 	/// Auto-stop decided the shot should end. The accompanying [`Command`]
 	/// carries the actual stop write.
 	@Serializable
@@ -3845,6 +3888,21 @@ data class TimedSample (
 	/// this over `resistance` per-sample when present. Same
 	/// non-upload story as `resistance`.
 	val resistanceWeight: Float? = null
+)
+
+/// The water constants the shells' settings UI needs, in one place.
+@Serializable
+data class WaterConstants (
+	/// [`TANK_FULL_ML`], the percent readout's denominator.
+	val tankFullMl: Float,
+	/// [`WATER_WARN_DEFAULT_ML`].
+	val warnDefaultMl: Float,
+	/// [`DEFAULT_REFILL_POINT_MM`].
+	val defaultRefillPointMm: Float,
+	/// [`REFILL_POINT_MIN_MM`].
+	val refillPointMinMm: Float,
+	/// [`REFILL_POINT_MAX_MM`].
+	val refillPointMaxMm: Float
 )
 
 /// The bean / grinder journal fields Visualizer's native detail flattens

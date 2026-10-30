@@ -52,7 +52,6 @@ function mkDeps(parsed: ParsedCapture, core: CoreSlice, over: Partial<ReplayCapt
 		patch: vi.fn<(s: Record<string, unknown>) => void>(),
 		setActiveShot: vi.fn(),
 		clearActiveShot: vi.fn(),
-		resetTelemetryAnchor: vi.fn(),
 		currentDone: vi.fn(() => 0),
 		...over
 	} satisfies ReplayCaptureDeps;
@@ -76,7 +75,6 @@ describe('replayCaptureProgram — happy path', () => {
 
 		expect(core.beginReplay).toHaveBeenCalledOnce();
 		expect(deps.setActiveShot).toHaveBeenCalledOnce();
-		expect(deps.resetTelemetryAnchor).toHaveBeenCalledOnce();
 
 		// Three feeds, in file order.
 		const fedBytes = (core.onNotification as ReturnType<typeof vi.fn>).mock.calls.map(

@@ -1424,7 +1424,8 @@ class LibraryController(
 
     /**
      * Merge a core import-plan JSON's beans + roasters into the library with the
-     * web's dedup rules ([mergeBeanImport]). Persisted.
+     * core's import rule ([mergeBeanImport], the one web uses): new rows are
+     * added, newer same-id rows replace their library ones. Persisted.
      */
     private fun applyBeanImportPlan(planJson: String) {
         val plan = runCatching { json.parseToJsonElement(planJson).jsonObject }.getOrElse {
@@ -1437,7 +1438,10 @@ class LibraryController(
         val wireRoasters = decodeList("roasters", Roaster.serializer())
 
         val s = uiState()
-        val (newBeans, newRoasters, beanIdRemap, skipped) = mergeBeanImport(wireBeans, wireRoasters, s.beans, s.roasters)
+        val merge = mergeBeanImport(wireBeans, wireRoasters, s.beans, s.roasters)
+        val newBeans = merge.newBeans
+        val newRoasters = merge.newRoasters
+        val beanIdRemap: Map<String, String> = merge.beanIdRemap
 
         // Shots — the core has already mapped BC brews (espresso-only,
         // metadata, no telemetry); land them as history rows, web parity.
@@ -1446,16 +1450,18 @@ class LibraryController(
         // BC ids aren't carried on the shot, and our own ids are minted.
         val importedShots = buildImportedShots(plan, beanIdRemap)
 
-        if (newBeans.isEmpty() && newRoasters.isEmpty() && importedShots.isEmpty()) {
-            notify(if (skipped > 0) "Already imported — nothing new to add" else "No beans found in that file")
+        if (newBeans.isEmpty() && newRoasters.isEmpty() && merge.updatedBeans.isEmpty() &&
+            merge.updatedRoasters.isEmpty() && importedShots.isEmpty()
+        ) {
+            notify(if (merge.skipped > 0u) "Already imported — nothing new to add" else "No beans found in that file")
             return
         }
         // Apply onto the CURRENT state (not the snapshot `s`) so a concurrent
         // high-rate telemetry / scale update isn't clobbered (issue 11).
         updateUi { cur ->
             cur.copy(
-                beans = cur.beans + newBeans,
-                roasters = cur.roasters + newRoasters,
+                beans = cur.beans.replacingById(merge.updatedBeans) { it.id } + newBeans,
+                roasters = cur.roasters.replacingById(merge.updatedRoasters) { it.id } + newRoasters,
                 activeBeanId = cur.activeBeanId ?: newBeans.firstOrNull()?.id,
                 history = (importedShots + cur.history)
                     .sortedByDescending { it.completedAtMs }
@@ -1467,13 +1473,21 @@ class LibraryController(
             val snapshot = uiState().history
             scope.launch { historyStore.save(snapshot) }
         }
-        val bn = newBeans.size; val rn = newRoasters.size; val sn = importedShots.size
+        val bn = newBeans.size; val rn = newRoasters.size; val sn = importedShots.size; val un = merge.updatedBeans.size
         updateUi { it.copy(
             status = buildString {
                 append("Imported $bn bean${if (bn == 1) "" else "s"} · $rn roaster${if (rn == 1) "" else "s"}")
+                if (un > 0) append(" · updated $un bean${if (un == 1) "" else "s"}")
                 if (sn > 0) append(" · $sn shot${if (sn == 1) "" else "s"}")
             },
         ) }
+    }
+
+    /** This list with each row that shares an id with one of [rows] swapped for it, order kept. */
+    private fun <T> List<T>.replacingById(rows: List<T>, id: (T) -> String): List<T> {
+        if (rows.isEmpty()) return this
+        val byId = rows.associateBy(id)
+        return map { byId[id(it)] ?: it }
     }
 
     /**
