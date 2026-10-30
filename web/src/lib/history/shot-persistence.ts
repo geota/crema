@@ -24,8 +24,17 @@ import { getBeanStore } from '#lib/bean/index.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import { promptBagEmpty } from '#lib/bean/bag-empty-prompt.js';
-import { getProfileStore, toCoreProfile } from '#lib/profiles/index.js';
-import { getActiveShotStore, type ActiveShotData } from '#lib/state/active-shot.svelte.js';
+import {
+	effectiveCremaProfile,
+	getProfileStore,
+	toCoreProfile,
+	type CremaProfile
+} from '#lib/profiles/index.js';
+import {
+	getActiveShotStore,
+	type ActiveShotBrewParams,
+	type ActiveShotData
+} from '#lib/state/active-shot.svelte.js';
 import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 import { liveMachineIdentity, pushShotToDecent } from '#lib/decent/upload.js';
 import { isDecentLinked, readDecentAccount } from '#lib/decent/account.js';
@@ -217,6 +226,24 @@ function autoUploadDestinations(): string[] {
 }
 
 /**
+ * The profile a shot ran: the library profile with the shot's recorded brew
+ * temperature and pre-infusion applied by the core (every step shifted, the
+ * leading segments rescaled) — so history and the uploads built from it carry
+ * the steps the DE1 actually ran. No recorded params (a headless shot) → the
+ * library profile as saved.
+ */
+export function asRunProfile(
+	profile: CremaProfile,
+	brewParams: Pick<ActiveShotBrewParams, 'brewTemp' | 'preinfuseTarget'> | null
+): CremaProfile {
+	if (!brewParams) return profile;
+	return effectiveCremaProfile(profile, {
+		brewTemp: brewParams.brewTemp,
+		preinf: brewParams.preinfuseTarget
+	});
+}
+
+/**
  * Write the history row. Reads bean tags from the live library at commit
  * time (one-shot copy into `shot.tags`); a later edit to the bean's tags
  * does NOT rewrite history — same discipline as `setBeanFromLive`.
@@ -231,9 +258,11 @@ function recordShotHistory(
 	const liveBeanForTags = bean?.beanId ? getBeanStore().getBean(bean.beanId) : null;
 	// Snapshot the active profile's recipe (as-run) so the upload embeds real
 	// steps, not just a name (#12). You can't switch profiles mid-pour, so the
-	// currently-active profile is the one that ran.
+	// currently-active profile is the one that ran — with the dialled brew temp
+	// and pre-infusion applied by the core, the steps the DE1 actually ran.
 	const profiles = getProfileStore();
-	const activeProfile = profiles.activeId ? profiles.get(profiles.activeId) : undefined;
+	const libraryProfile = profiles.activeId ? profiles.get(profiles.activeId) : undefined;
+	const activeProfile = libraryProfile ? asRunProfile(libraryProfile, brewParams) : undefined;
 	return getHistoryStore().record({
 		duration: event.content.duration,
 		profileName: activeShot?.profileName ?? snapshot.activeProfileName,

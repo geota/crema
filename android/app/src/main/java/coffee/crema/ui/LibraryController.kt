@@ -25,6 +25,9 @@ import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileFromWire
 import coffee.crema.core.cremaProfileToWire
+import coffee.crema.core.effectiveCremaProfile
+import coffee.crema.core.withDerivedBrewTemp
+import coffee.crema.core.preinfusionSeconds
 import coffee.crema.core.creditRemaining
 import coffee.crema.core.debitRemaining
 import coffee.crema.core.resettleRemaining
@@ -51,8 +54,8 @@ import coffee.crema.profiles.PinnedProfileStore
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.profiles.duplicatedCustomProfileJson
-import coffee.crema.profiles.overrideBrewParamsJson
 import coffee.crema.profiles.patchCremaProfileJson
+import coffee.crema.profiles.withEditedSegmentsJson
 import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.quickPresetJson
 import coffee.crema.profiles.setProfilePinnedJson
@@ -76,6 +79,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import coffee.crema.core.ShotMachine
@@ -261,9 +265,13 @@ class LibraryController(
                 id to element.toString()
             }
         }.getOrElse { emptyMap() }
-        builtinProfiles = list
+        builtinProfiles = list.map { p -> p.copy(preinfusionS = builtinProfileJson[p.id]?.let(::corePreinfusion)) }
         refreshProfiles()
     }
+
+    /** The core's pre-infusion seconds for a full profile JSON (cards, brew
+     *  header); null when the core can't read it. */
+    private fun corePreinfusion(raw: String): Float? = runCatching { preinfusionSeconds(raw) }.getOrNull()
 
     /** Load the persisted bean library into the UI snapshot at startup. */
     suspend fun loadLibrary() {
@@ -289,8 +297,33 @@ class LibraryController(
 
     /** Load the persisted custom profiles into the merged list at startup. */
     suspend fun loadCustomProfiles() {
-        customProfilesJson = customProfileStore.load()
+        // The top-level brew temp follows the first step (the dial's anchor):
+        // re-derived for customs saved before that rule.
+        customProfilesJson = customProfileStore.load().map(::derivedBrewTemp)
         refreshProfiles()
+    }
+
+    /** [raw] with its top-level brew temp derived from its first step by the
+     *  core, so the cards, the dial and the editor show the same number; a
+     *  profile the core can't read is kept as it is. */
+    private fun derivedBrewTemp(raw: String): String = runCatching { withDerivedBrewTemp(raw) }.getOrDefault(raw)
+
+    /**
+     * The editor's segments after its Brew temp field moved to [target]: the
+     * core shifts every step by the difference from the first step's
+     * temperature, keeping the shape and the bounds (Decenza
+     * `applyTemperatureToProfile`). Unchanged when the profile can't be found
+     * or read.
+     */
+    fun editorBrewTemp(id: String, segments: List<SegmentEdit>, target: Double): List<SegmentEdit> {
+        val base = draftProfileJson?.takeIf { uiState().editingProfileId == id } ?: profileJsonById[id] ?: return segments
+        return runCatching {
+            val edited = withEditedSegmentsJson(base, segments, json)
+            val shifted = effectiveCremaProfile(edited, """{"brewTemp":$target}""")
+            val temps = json.parseToJsonElement(shifted).jsonObject["segments"]!!.jsonArray
+                .map { it.jsonObject["temp"]?.jsonPrimitive?.floatOrNull }
+            segments.mapIndexed { i, seg -> temps.getOrNull(i)?.let { seg.copy(temp = it) } ?: seg }
+        }.getOrDefault(segments)
     }
 
     // ── Profile list derivation + persistence ────────────────────────────────
@@ -304,6 +337,7 @@ class LibraryController(
     private fun refreshProfiles() {
         val customThin = customProfilesJson.mapNotNull { raw ->
             runCatching { json.decodeFromString(CremaProfile.serializer(), raw) }.getOrNull()
+                ?.copy(preinfusionS = corePreinfusion(raw))
         }
         // Customs carry `pinned` in their own JSON; built-ins get the Favorites
         // star overlaid from the persisted [pinnedIds] set (they re-decode from the
@@ -318,11 +352,12 @@ class LibraryController(
         // Self-heal a stale selection (deleted custom, hidden built-in restored
         // from prefs) by reseeding to the first visible profile.
         val current = uiState().activeProfileId?.takeIf { id -> all.any { it.id == id } }
-        updateUi { it.copy(
-            profiles = all,
-            hiddenProfileIds = hiddenIds,
-            activeProfileId = current ?: all.firstOrNull { it.id !in hiddenIds }?.id,
-        ) }
+        updateUi { st ->
+            val active = current ?: all.firstOrNull { it.id !in hiddenIds }?.id
+            // A reseeded selection is a profile change: the override goes too.
+            val reseeded = if (active == st.activeProfileId) st else st.withActiveProfileId(active)
+            reseeded.copy(profiles = all, hiddenProfileIds = hiddenIds)
+        }
     }
 
     /** Persist the current custom profiles (best-effort, off the main thread). */
@@ -379,21 +414,17 @@ class LibraryController(
             if (s.mirror != null) notify("That profile is only on ${s.remoteHubLabel()}")
             return
         }
-        val bp = s.brewParams
         val active = s.profiles.firstOrNull { it.id == activeId }
-        val d = bp?.dose?.toFloat() ?: active?.dose ?: BrewDefaults.INSTANCE.doseG
-        val y = bp?.yieldOut?.toFloat() ?: active?.yieldOut
-            ?: (BrewDefaults.INSTANCE.doseG * BrewDefaults.INSTANCE.ratio)
-        val t = bp?.brewTemp?.toFloat() ?: active?.brewTemp ?: BrewDefaults.INSTANCE.brewTempC
+        // The dial baked in by the core exactly as a shot runs it: brew temp
+        // shifts every segment, pre-infusion rescales the leading segments,
+        // dose / yield replace (id / name / everything else preserved).
+        val effective = runCatching { effectiveCremaProfile(base, s.brewParams.overridesJson(json)) }.getOrElse {
+            appendLog("Save profile failed: ${it.message}")
+            return
+        }
         if (active?.source == "custom") {
-            // User-defined: bake the dialled dose/yield/temp into its own JSON in
-            // place (id / name / segments preserved), replace by id, persist — it
-            // stays active. overrideBrewParamsJson is the locale-safe patcher the
-            // shot-upload path uses, so a comma-decimal locale stays correct.
-            val updated = runCatching { overrideBrewParamsJson(base, d, y, t, json = json) }.getOrElse {
-                appendLog("Save profile failed: ${it.message}")
-                return
-            }
+            // User-defined: replace it by id in place, persist — it stays active.
+            val updated = effective
             customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == activeId) updated else it }
             refreshProfiles()
             persistCustomProfiles()
@@ -402,7 +433,7 @@ class LibraryController(
         } else {
             // Predefined (read-only): save a NEW custom copy carrying the dialled
             // values, then make it active.
-            val preset = runCatching { quickPresetJson(base, name, d, y, t, json) }.getOrElse {
+            val preset = runCatching { quickPresetJson(effective, name, json) }.getOrElse {
                 appendLog("Save profile failed: ${it.message}")
                 return
             }
@@ -538,10 +569,13 @@ class LibraryController(
             appendLog("Save profile failed: ${it.message}")
             return
         }
+        // The saved brew temp is the first step's (the editor's field shifted
+        // every step as it moved; a direct segment 0 edit moves it too).
+        val saved = derivedBrewTemp(patched)
         customProfilesJson = if (isExisting) {
-            customProfilesJson.map { if (profileIdOf(it, json) == id) patched else it }
+            customProfilesJson.map { if (profileIdOf(it, json) == id) saved else it }
         } else {
-            listOf(patched) + customProfilesJson
+            listOf(saved) + customProfilesJson
         }
         // Clear the draft but KEEP editingProfileId: the saved profile is now in
         // customProfilesJson, so the editor still resolves it (no "no profile"
@@ -573,9 +607,8 @@ class LibraryController(
     fun deleteProfile(id: String) {
         if (customProfilesJson.none { profileIdOf(it, json) == id }) return
         customProfilesJson = customProfilesJson.filterNot { profileIdOf(it, json) == id }
-        if (uiState().activeProfileId == id) {
-            updateUi { it.copy(activeProfileId = null) }
-        }
+        val wasActive = uiState().activeProfileId == id
+        if (wasActive) updateUi { it.withActiveProfileId(null) }
         // Cascade: a deleted custom is gone for good — clear bean links so
         // the auto-load never chases a tombstone (web onDeleted parity).
         if (uiState().beans.any { it.linkedProfileId == id }) {
@@ -586,6 +619,16 @@ class LibraryController(
         }
         refreshProfiles()
         persistCustomProfiles()
+        if (wasActive) activateReseeded()
+    }
+
+    /** The active profile was deleted or hidden and [refreshProfiles] picked the
+     *  next visible one: select it like any other pick, so its stop targets,
+     *  the desired profile and the mirrors follow (on this device's own
+     *  selection; a remote's screen shows its hub's). */
+    private fun activateReseeded() {
+        if (uiState().mirror != null) return
+        uiState().activeProfileId?.let(setActiveProfile)
     }
 
     /** Archive (hide) a built-in profile — built-ins can't be deleted, so this
@@ -594,10 +637,10 @@ class LibraryController(
         hiddenIds = hiddenIds + id
         // If the hidden profile was active, drop the selection so refreshProfiles
         // re-seeds the Brew header to a still-visible profile.
-        if (uiState().activeProfileId == id) {
-            updateUi { it.copy(activeProfileId = null) }
-        }
+        val wasActive = uiState().activeProfileId == id
+        if (wasActive) updateUi { it.withActiveProfileId(null) }
         refreshProfiles()
+        if (wasActive) activateReseeded()
         val snapshot = hiddenIds
         scope.launch { hiddenProfileStore.save(snapshot) }
     }
@@ -841,7 +884,7 @@ class LibraryController(
                     return@launch
                 }
             }
-            customProfilesJson = adopted + customProfilesJson
+            customProfilesJson = adopted.map(::derivedBrewTemp) + customProfilesJson
             refreshProfiles()
             persistCustomProfiles()
             notify("Imported ${adopted.size} profile(s)")
@@ -1021,7 +1064,7 @@ class LibraryController(
             // Profiles — add customs whose id isn't already known (built-in or custom).
             val knownProfileIds = uiState().profiles.map { it.id }.toHashSet()
             val newProfiles = profiles.filter { p -> profileIdOf(p, json)?.let { it !in knownProfileIds } ?: false }
-            customProfilesJson = customProfilesJson + newProfiles
+            customProfilesJson = customProfilesJson + newProfiles.map(::derivedBrewTemp)
 
             // Beans / roasters / shots — id-union (preserves ids, so a re-restore dedups).
             val s = uiState()
@@ -1899,9 +1942,12 @@ class LibraryController(
         // their declared defaults (a segment target of 0, a dose of exactly
         // 18 g…), the core requires them, and the failed conversion silently
         // dropped the snapshot for any such profile.
+        // With the Quick-Controls override applied by the core, so history
+        // carries the steps the DE1 actually ran.
         val profileWire: JsonObject? = s.activeProfileId?.let { profileJson(it) }?.let { raw ->
             runCatching {
-                json.parseToJsonElement(cremaProfileToWire(raw)) as? JsonObject
+                val ran = effectiveCremaProfile(raw, s.brewParams.overridesJson(json))
+                json.parseToJsonElement(cremaProfileToWire(ran)) as? JsonObject
             }.onFailure { appendLog("Shot profile snapshot failed: ${it.message}") }.getOrNull()
         }
         val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
@@ -1930,6 +1976,9 @@ class LibraryController(
             // The QC grind dial actually used (issue 15) — null until the user sets one.
             grindSetting = s.qcGrind,
             yieldTargetG = (s.brewParams?.yieldOut ?: profile?.yieldOut?.toDouble())?.toFloat(),
+            // The brew temperature the shot ran at: the (core-clamped) dial, else
+            // the profile's own.
+            brewTempC = (s.brewParams?.brewTemp ?: profile?.brewTemp?.toDouble())?.toFloat(),
             peakPressure = peakPressure,
             peakTemp = peakTemp,
             // The stats' yield fallback when the settled final weight is

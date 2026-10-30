@@ -2,7 +2,12 @@ package coffee.crema.decent
 
 import coffee.crema.core.DecentMachine
 import coffee.crema.core.ShotMachine
+import android.content.ContextWrapper
 import coffee.crema.history.StoredShot
+import coffee.crema.security.DeviceSecretBox
+import coffee.crema.security.FakeKeystore
+import java.io.File
+import java.nio.file.Files
 import coffee.crema.ui.UploadOutcome
 import coffee.crema.ui.UploadOutcomeKind
 import kotlinx.coroutines.CompletableDeferred
@@ -15,6 +20,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -55,7 +61,13 @@ class DecentSyncTest {
 
     private val linked = DecentState(email = "a@b.c", token = "token-123456", serials = listOf("6262"), autoUpload = true)
 
-    private class Harness(scope: TestScope, initial: DecentState, shots: List<StoredShot>) {
+    private class Harness(
+        scope: TestScope,
+        initial: DecentState,
+        shots: List<StoredShot>,
+        /** A real store to run against instead of [store]. */
+        backing: DecentStateStore? = null,
+    ) {
         val store = MemoryStore(initial)
         val api = FakeApi()
         val history = shots.associateBy { it.id }.toMutableMap()
@@ -65,7 +77,7 @@ class DecentSyncTest {
         var live: ShotMachine? = null
         var liveUnreadable = false
         val sync = DecentSync(
-            store = store,
+            store = backing ?: store,
             client = api,
             scope = scope,
             buildRecord = { s, m, _ -> """{"shot":"${s.id}","sn":"${m.serialNumber}"}""" },
@@ -454,6 +466,106 @@ class DecentSyncTest {
         gate.complete(Unit)
         first.join()
         assertEquals(1, h.api.posts.size)
+    }
+
+    /** The real file store over the token box ([DeviceSecretBox]'s key handling) and a fake keystore. */
+    private class TokenFiles {
+        val dir: File = Files.createTempDirectory("decent-token").toFile()
+        val keystore = FakeKeystore()
+        val store = DecentStore(
+            object : ContextWrapper(null) {
+                override fun getFilesDir(): File = dir
+            },
+            Json { ignoreUnknownKeys = true; coerceInputValues = true },
+            DeviceSecretBox.create(keystore),
+        )
+    }
+
+    /** The real store saves on Dispatchers.IO: run the test dispatcher until [done] (real time, bounded). */
+    private fun TestScope.settle(done: () -> Boolean) {
+        repeat(500) {
+            advanceUntilIdle()
+            if (done()) return
+            Thread.sleep(10)
+        }
+        throw AssertionError("never settled")
+    }
+
+    @Test
+    fun `a lost token key at start reads as sign in again, with nothing running`() = runTest {
+        val files = TokenFiles()
+        try {
+            files.store.save(linked)
+            files.keystore.keys.clear() // the key is gone (reinstall, keystore reset)
+            val h = Harness(this, DecentState(), listOf(shot("s1")), backing = files.store).also { it.sync.load() }
+            advanceUntilIdle()
+            val ui = h.sync.state.value
+            assertTrue(ui.needsReauth)
+            assertFalse(ui.linked)
+            assertFalse(ui.busy)
+            assertEquals("a@b.c", ui.email)
+            assertFalse(h.sync.enabled)
+            assertTrue(h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null) is DecentSync.Outcome.Skipped)
+            assertEquals(0, h.api.posts.size)
+            // Signing in again works and is stored under a new key.
+            h.sync.signIn("a@b.c", "pw")
+            settle { !h.sync.state.value.busy }
+            assertTrue(h.sync.state.value.linked)
+            assertFalse(h.sync.state.value.needsReauth)
+            assertEquals("token-123456", files.store.load().token)
+        } finally {
+            files.dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a keystore that isn't ready at start keeps the sign-in for the next start`() = runTest {
+        val files = TokenFiles()
+        try {
+            files.store.save(linked)
+            files.keystore.notReady = true
+            val h = Harness(this, DecentState(), listOf(shot("s1")), backing = files.store).also { it.sync.load() }
+            files.keystore.notReady = false
+            val ui = h.sync.state.value
+            assertFalse(ui.linked)
+            assertFalse(ui.needsReauth)
+            assertFalse(ui.busy)
+            assertFalse(h.sync.enabled)
+            assertEquals(0, h.api.posts.size)
+            // A save this session keeps the stored token.
+            h.sync.setAutoUpload(false)
+            settle { !h.sync.state.value.autoUpload }
+            settle { files.dir.resolve("decent.json").readText().contains("\"autoUpload\":false") || !files.dir.resolve("decent.json").readText().contains("autoUpload") }
+            // The next start opens it.
+            val next = Harness(this, DecentState(), emptyList(), backing = files.store).also { it.sync.load() }
+            assertTrue(next.sync.state.value.linked)
+            assertFalse(next.sync.state.value.autoUpload)
+        } finally {
+            files.dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `sign-in with a keystore error is linked for the session, not stuck, and saved later`() = runTest {
+        val files = TokenFiles()
+        try {
+            val h = Harness(this, DecentState(), emptyList(), backing = files.store).also { it.sync.load() }
+            files.keystore.failure = java.security.KeyStoreException("keystore2 system error")
+            h.sync.signIn("a@b.c", "pw")
+            settle { !h.sync.state.value.busy }
+            assertTrue(h.sync.state.value.linked)
+            assertNull(h.sync.state.value.signInError)
+            assertTrue(h.notices.last().contains("couldn’t save the login"))
+            assertNull(files.store.load().token)
+            // The next save, once the keystore answers, stores the token.
+            files.keystore.failure = null
+            h.sync.setAutoUpload(false)
+            settle { !h.sync.state.value.autoUpload }
+            settle { files.dir.resolve("decent.json").let { it.exists() && it.readText().contains("sb1:") } }
+            assertEquals("token-123456", files.store.load().token)
+        } finally {
+            files.dir.deleteRecursively()
+        }
     }
 
     @Test

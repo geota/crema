@@ -11,6 +11,7 @@ import coffee.crema.core.MaintenancePhase
 import coffee.crema.core.NotificationSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /** The running-maintenance row copy (web `WaterSection` parity). */
 class MaintenanceRunTextTest {
@@ -93,28 +94,32 @@ class MaintenanceRunTextTest {
     """.trimIndent()
 
     @Test
-    fun aHeldCycleReplacedByTheUsersUploadSaysSo() {
-        // Round-3 clean check C1 P3-1, through the host core and the VM's decode:
-        // firmware 1355, machine heating, Descale held behind the cold profile;
-        // the user then picks a profile. The notice must not blame a load failure.
+    fun aHeldCycleIsNotReplacedByTheUsersProfile() {
+        // Through the host core: firmware 1355, machine heating, Descale held
+        // behind the cold profile; the user then picks a profile. The core's
+        // profile sync waits for the cycle instead of replacing its profile
+        // (Round-3 C1 P3-1 used to fail the cycle here).
         val bridge = CremaBridge()
         bridge.onNotification(NotificationSource.DE1_MMR_READ, mmrReply(0x80000C, 1), 0uL) // model
         bridge.onNotification(NotificationSource.DE1_MMR_READ, mmrReply(0x800010, 1355), 0uL) // build
         bridge.onNotification(NotificationSource.DE1_MMR_READ, mmrReply(0x80381C, 3), 0uL) // GHC
         bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(2, 1), 1_000uL) // Idle / Heating
+        bridge.connectSweep("{}", 1_000uL)
         val held = coreJson.decodeFromString(CoreOutput.serializer(), bridge.requestMachineState(MachineRequest.DESCALE))
         assertEquals(
             MaintenancePhase.WaitingForPreheat,
             held.events.filterIsInstance<Event.MaintenanceProgress>().single().content.phase,
         )
-        val raw = bridge.uploadProfile(brewProfile, 1_500uL)
-        val failed = coreJson.decodeFromString(CoreOutput.serializer(), raw).events
-            .filterIsInstance<Event.MaintenanceProgress>().single().content
-        assertEquals(MaintenancePhase.Failed, failed.phase)
-        assertEquals(MaintenanceFailure.ProfileReplaced, failed.failure)
+        val picked = coreJson.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(brewProfile, 1_500uL))
+        assertTrue(picked.events.none { it is Event.MaintenanceProgress }, "${picked.events}")
+        assertTrue(picked.events.none { it is Event.ProfileUploadStarted }, "the profile waits for the cycle")
+    }
+
+    @Test
+    fun aReplacedProfileSaysSo() {
         assertEquals(
             "Descale didn't start: another profile was loaded before the cycle could start. Start it again when you're ready.",
-            maintenanceFailedText(failed.state, failed.failure),
+            maintenanceFailedText(MachineState.Descale, MaintenanceFailure.ProfileReplaced),
         )
     }
 }

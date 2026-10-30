@@ -602,7 +602,8 @@ export class De1Manager {
 
 	/**
 	 * Tell the core the DE1 link dropped (Decenza 29878266). Fire-and-forget:
-	 * the output (at most one scale-timer stop) routes like any other.
+	 * the output (a scale-timer stop, the failure of an upload the drop cut
+	 * short) routes like any other.
 	 */
 	private notifyLinkLost(): void {
 		this.core

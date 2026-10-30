@@ -205,7 +205,6 @@ export function replayCaptureProgram(d: ReplayCaptureDeps): Effect.Effect<void> 
 		yield* Effect.sync(() =>
 			d.patch({
 				...d.clearedReadout,
-				activeProfileFingerprint: null,
 				...replayState('running', 0, composeReplayStartMessage(d.fileName, total, d.parsed.meta))
 			})
 		);

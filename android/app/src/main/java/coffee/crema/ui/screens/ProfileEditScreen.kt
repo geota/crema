@@ -151,7 +151,6 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var beverage by remember(profile.id) { mutableStateOf(profile.beverageType) }
     var dose by remember(profile.id) { mutableStateOf(profile.dose.toDouble()) }
     var yieldG by remember(profile.id) { mutableStateOf(profile.yieldOut.toDouble()) }
-    var brewTemp by remember(profile.id) { mutableStateOf(profile.brewTemp.toDouble()) }
     var maxVol by remember(profile.id) { mutableStateOf(profile.maxTotalVolumeMl.toDouble()) }
     var preinfuse by remember(profile.id) { mutableStateOf(profile.preinfuseStepCount.toDouble()) }
     var tankTemp by remember(profile.id) { mutableStateOf(profile.tankTemperatureC.toDouble()) }
@@ -161,6 +160,9 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             addAll(profile.segments.map { it.toEdit(profile.brewTemp) })
         }
     }
+    // The profile's brew temperature is its first step's: it follows a direct
+    // edit of segment 0's temperature live, and its own field shifts every step.
+    val brewTemp = segs.firstOrNull()?.temp?.toDouble() ?: profile.brewTemp.toDouble()
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Row(
@@ -297,7 +299,12 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             NumberedSection("2", "Target + Limits", "Recipe targets & optional caps") {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     GroupCard("Target", 4f) {
-                        LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, ProfileBounds.INSTANCE.maxTemperatureC.toDouble(), { brewTemp = it })
+                        LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, ProfileBounds.INSTANCE.maxTemperatureC.toDouble(), { target ->
+                            // Every step moves with it, through the core; the field
+                            // shows the first step's (clamped) temperature.
+                            val shifted = vm.editorBrewTemp(profile.id, segs.toList(), target)
+                            segs.clear(); segs.addAll(shifted)
+                        })
                         LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, 1.0, 60.0, { dose = it })
                         LabeledStepper("Yield", yieldG, "g", Modifier.weight(1f), 0.5, 1.0, 200.0, { yieldG = it })
                         LabeledRatio(dose, yieldG, Modifier.weight(1f))

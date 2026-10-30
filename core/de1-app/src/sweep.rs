@@ -55,10 +55,70 @@ impl CremaCore {
     /// Refused while a firmware upload is in progress (one
     /// [`crate::Event::FirmwareLockoutHit`], no commands); empty on a
     /// read-only mirror.
+    ///
+    /// **The on-ready sweep only.** It also settles the connection for the
+    /// profile sync (the first sweep of a link generation uploads the desired
+    /// profile, see [`crate::profile_sync`]), so the shells call it only from
+    /// the link's ready transition. Re-sending the settings at any other time
+    /// (a restored backup) goes through
+    /// [`reapply_machine_settings`](Self::reapply_machine_settings), which
+    /// leaves the sync state alone: a re-sweep while the DE1 is down must not
+    /// mark the link settled and skip the real reconnect's upload.
     pub fn connect_sweep(&mut self, settings: &ConnectSweepSettings, now_ms: u64) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("connect_sweep") {
             return out;
         }
+        let mut out = self.machine_settings_writes(settings, now_ms);
+        // The connection is settled: the desired profile goes out after the
+        // settings, on every connect (reaprime `initSettled`) — see
+        // `profile_sync`.
+        self.profile_sync_settled(&mut out);
+        self.gate_read_only(out)
+    }
+
+    /// The same writes as [`connect_sweep`](Self::connect_sweep) — every
+    /// machine setting Crema owns a preference for — without settling the
+    /// profile sync's connection: for re-sending the settings outside the
+    /// link's ready transition (a restored backup). Safe while the DE1 is
+    /// down; the sync state is untouched. Refused during a firmware flash
+    /// like the sweep.
+    pub fn reapply_machine_settings(
+        &mut self,
+        settings: &ConnectSweepSettings,
+        now_ms: u64,
+    ) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("reapply_machine_settings") {
+            return out;
+        }
+        let out = self.machine_settings_writes(settings, now_ms);
+        self.gate_read_only(out)
+    }
+
+    /// [`reapply_machine_settings`](Self::reapply_machine_settings) from the
+    /// shells' JSON snapshot, like [`connect_sweep_json`](Self::connect_sweep_json).
+    pub fn reapply_machine_settings_json(
+        &mut self,
+        settings_json: &str,
+        now_ms: u64,
+    ) -> CoreOutput {
+        match serde_json::from_str::<ConnectSweepSettings>(settings_json) {
+            Ok(settings) => self.reapply_machine_settings(&settings, now_ms),
+            Err(e) => {
+                let mut out = CoreOutput::default();
+                out.events.push(crate::Event::DecodeError {
+                    message: format!("machine settings JSON parse failed: {e}"),
+                });
+                out
+            }
+        }
+    }
+
+    /// The sweep's writes, in order (see [`connect_sweep`](Self::connect_sweep)).
+    fn machine_settings_writes(
+        &mut self,
+        settings: &ConnectSweepSettings,
+        now_ms: u64,
+    ) -> CoreOutput {
         self.clock = self.clock.max(ms_to_duration(now_ms));
         let mut out = CoreOutput::default();
 
@@ -134,7 +194,7 @@ impl CremaCore {
         if settings.steam_eco {
             append(&mut out, self.enable_steam_eco_mode(true, now_ms));
         }
-        self.gate_read_only(out)
+        out
     }
 
     /// [`connect_sweep`](Self::connect_sweep) from the shells' JSON

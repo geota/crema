@@ -22,11 +22,17 @@
 
 	let {
 		segments,
+		preinf: preinfSeconds,
 		active = false,
 		compact = false
 	}: {
 		/** The profile's segments — the real curve is computed from these. */
 		segments: ProfileSegment[];
+		/**
+		 * The profile's pre-infusion seconds from the core (the total of its
+		 * leading pre-infusion segments); without it, segment 0's time.
+		 */
+		preinf?: number;
 		/** Whether the owning card is the active profile (warmer box tint). */
 		active?: boolean;
 		/**
@@ -53,7 +59,9 @@
 	const tempStepPath = uPlot.paths.stepped?.({ align: 1 });
 
 	/** Leading pre-infusion seconds — shown as the top-right chip. */
-	const preinf = $derived(preinfuseSeconds(segments));
+	const preinf = $derived(
+		preinfSeconds === undefined ? preinfuseSeconds(segments) : Math.round(preinfSeconds)
+	);
 
 
 	/** Flow-ghost damping — matches the curve editor's `dampFlow`. */

@@ -18,7 +18,7 @@ const core = {
 	setWeightTargetDisabled: vi.fn(async (_v: boolean) => {}),
 	setProfileTargetWeight: vi.fn(async (_v: number | undefined) => {}),
 	setProfileVolumeLimit: vi.fn(async (_v: number | undefined) => {}),
-	uploadProfile: vi.fn(async () => ({ commands: [], events: [] })),
+	uploadCremaProfile: vi.fn(async () => ({ output: { commands: [], events: [] }, fingerprint: null })),
 	stopTargetsProjection: vi.fn(async () => ({
 		armed: false,
 		weight: null,
@@ -78,7 +78,7 @@ describe('active profile → core step weights', () => {
 		expect(lastPushedWeights()).toEqual(expected);
 		// The store never uploads; whether `CremaApp` uploads (fingerprint
 		// miss) or skips (match), the core already has the weights.
-		expect(core.uploadProfile).not.toHaveBeenCalled();
+		expect(core.uploadCremaProfile).not.toHaveBeenCalled();
 	});
 
 	it('editing the active profile replaces the weights', async () => {
