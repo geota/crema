@@ -1755,6 +1755,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Load both persisted stores in one coroutine, sequentially, so their
         // _ui copies don't race (read-modify-write of the shared snapshot).
         startupLoad = viewModelScope.launch {
+            holdStartupLoad?.await()
             library.loadLibrary()
             library.loadHistory()
             loadPrefs()
@@ -5715,24 +5716,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         decentClient.close()
     }
 
-    private companion object {
-        const val MAX_LOG_LINES = 200
+    internal companion object {
+        /**
+         * Tests set this before building a VM to hold its startup load until
+         * they complete it, so they can act while the prefs are still unloaded
+         * (the load may otherwise finish inside the constructor). Null in the
+         * app: nothing waits.
+         */
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var holdStartupLoad: kotlinx.coroutines.Deferred<Unit>? = null
+
+        private const val MAX_LOG_LINES = 200
 
         /** How long a Sleep state report is still attributable to our own
          *  request (BLE write → firmware → notify, plus a GoingToSleep dwell). */
-        const val APP_SLEEP_WINDOW_MS = 15_000L
+        private const val APP_SLEEP_WINDOW_MS = 15_000L
 
         /** Grace past [QUIT_WRITE_BUDGET_MS] before onCleared's deferred BLE
          *  teardown runs anyway (the write's own timeout normally fires first). */
-        const val QUIT_TEARDOWN_SLACK_MS = 250L
+        private const val QUIT_TEARDOWN_SLACK_MS = 250L
 
         /** Abort a pending gated-start brew if the upload never completes. */
-        const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
+        private const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
 
         /** How long the Quick-Controls dial must rest before its override
          *  becomes the desired profile (de1app debounces its temperature dial by
          *  0.5 s too), so a run of stepper taps uploads once. */
-        const val DIAL_PUSH_DEBOUNCE_MS = 500L
+        private const val DIAL_PUSH_DEBOUNCE_MS = 500L
     }
 }
 
