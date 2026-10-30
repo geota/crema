@@ -202,7 +202,10 @@ class RemoteSettingsTest {
         assertEquals("", vm.ui.value.beans.first { it.id == BEAN_P }.grinderSetting)
 
         vm.saveQuickPreset("Hub dial")
-        VmHarness.idle()
+        // Saving a built-in's copy makes it active, an edit relayed to the
+        // hub. Until the hub answers, that pending edit is what the screen
+        // shows (and what the next library action acts on), so let it settle.
+        VmHarness.idleUntil("the hub's answer") { VmHarness.ownState(vm).mirror?.pending?.isEmpty() == true }
         val saved = vm.ui.value.profiles.firstOrNull { it.name == "Hub dial" }
         assertNotNull(saved, "a copy of S's built-in profile")
         assertEquals(20f, saved.dose, "with S's brew override")
