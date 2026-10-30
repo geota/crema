@@ -77,15 +77,21 @@ thread_local! {
     static FAIL_ENTROPY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// The OS entropy source (`getrandom(2)` on Android). Tests swap in a failing
+/// source here, so the failure goes through the same handling as a real one.
+fn os_entropy(bytes: &mut [u8; 32]) -> Result<(), getrandom::Error> {
+    #[cfg(test)]
+    if FAIL_ENTROPY.with(std::cell::Cell::get) {
+        return Err(getrandom::Error::UNSUPPORTED);
+    }
+    getrandom::fill(bytes)
+}
+
 /// 32 fresh bytes from the OS for one key pair or one connection. A failure
 /// is an error, never a fallback.
 fn fresh_seed() -> Result<Seed, RelayFfiError> {
-    #[cfg(test)]
-    if FAIL_ENTROPY.with(std::cell::Cell::get) {
-        return Err(RelayError::Entropy.into());
-    }
     let mut bytes = [0_u8; 32];
-    if getrandom::fill(&mut bytes).is_err() {
+    if os_entropy(&mut bytes).is_err() {
         return Err(RelayError::Entropy.into());
     }
     let seed = Seed::from_entropy(bytes);

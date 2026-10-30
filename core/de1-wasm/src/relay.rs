@@ -54,15 +54,23 @@ thread_local! {
     static FAIL_ENTROPY: Cell<bool> = const { Cell::new(false) };
 }
 
+/// The entropy source (`crypto.getRandomValues`). Tests swap in a failing
+/// source here, so the failure goes through the same handling as a real one.
+fn js_entropy(bytes: &mut [u8; 32]) -> Result<(), getrandom::Error> {
+    #[cfg(test)]
+    if FAIL_ENTROPY.with(Cell::get) {
+        return Err(getrandom::Error::UNSUPPORTED);
+    }
+    getrandom::fill(bytes)
+}
+
 /// 32 fresh bytes from `crypto.getRandomValues` for one key pair or one
 /// connection. A failure is an error, never a fallback.
 fn fresh_seed() -> Result<Seed, RelayError> {
-    #[cfg(test)]
-    if FAIL_ENTROPY.with(Cell::get) {
+    let mut bytes = [0_u8; 32];
+    if js_entropy(&mut bytes).is_err() {
         return Err(RelayError::Entropy);
     }
-    let mut bytes = [0_u8; 32];
-    getrandom::fill(&mut bytes).map_err(|_| RelayError::Entropy)?;
     let seed = Seed::from_entropy(bytes);
     zeroize::Zeroize::zeroize(&mut bytes);
     Ok(seed)
