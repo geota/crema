@@ -151,6 +151,11 @@ impl ProfileSync {
         }
     }
 
+    /// The desired library profile and its overrides, if any.
+    fn desired_profile(&self) -> Option<(&CremaProfile, &BrewOverrides)> {
+        self.desired.as_ref().map(|d| (&d.profile, &d.qc))
+    }
+
     /// A new desired profile. A changed fingerprint starts a fresh attempt
     /// count (reaprime `_onChange`).
     fn set_desired(&mut self, desired: Option<Desired>) {
@@ -402,11 +407,28 @@ impl CremaCore {
         if clear_warning {
             out.events.push(Event::ProfileSyncWarning { active: false });
         }
+        let landed = holds.is_some();
         if let Some(fingerprint) = holds {
             out.events.push(Event::ProfileSyncHolds { fingerprint });
         }
         // A change that arrived meanwhile goes out now.
         self.drive_profile_sync(out);
+        // The DE1 holds the desired profile: the group target follows it, as
+        // Decenza re-sends the shot settings after every profile upload. A
+        // newer upload just started re-sends it when that one lands.
+        if landed && !self.profile_upload_in_progress() {
+            self.resend_group_target(out);
+        }
+    }
+
+    /// The group target the steam / hot-water packet carries: the effective
+    /// desired profile's brew temperature (its first step after the Quick
+    /// Controls shift). de1app sends `espresso_temperature`; Decenza sends the
+    /// profile's temperature, or the override. `None` with no desired profile.
+    pub(crate) fn profile_group_temp_c(&self) -> Option<f32> {
+        self.profile_sync.desired_profile().map(|(profile, qc)| {
+            de1_domain::brew_temp_anchor(&de1_domain::effective_crema_profile(profile, qc))
+        })
     }
 
     /// An upload failed; `tag` says whether it was a sync upload.
