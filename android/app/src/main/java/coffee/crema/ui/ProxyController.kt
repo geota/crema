@@ -1054,7 +1054,10 @@ class ProxyController(
         dialer?.cancel()
         dialerJob?.cancel()
         // The saved hub at this address, if any: pairing with a different key
-        // there means its key changed (a reset or reinstall, spec §6.3).
+        // there means its key changed (a reset or reinstall, spec §6.3), or
+        // it's another hub at that address now (DHCP). Its pin stays, a dead
+        // entry the user can forget (spec §2.10); the new hub becomes the
+        // saved one.
         val previous = savedHubPin()?.takeIf { sameAddress(it.host, host) }
         var keyChanged = false
         val d = PairingDialer(
@@ -1067,10 +1070,7 @@ class ProxyController(
                 runCatching {
                     relay.pinHub(RelayHubPin(hubId, RelayKeyStore.b64(hubKey), hubName, host, port, System.currentTimeMillis()))
                     relay.setSavedHub(hubId)
-                    if (previous != null && previous.id != hubId) {
-                        relay.unpinHub(previous.id)
-                        keyChanged = true
-                    }
+                    if (previous != null && previous.id != hubId) keyChanged = true
                     if (relay.needsRepair) relay.clearUpgradeFlags()
                     refreshPins()
                 }.isSuccess

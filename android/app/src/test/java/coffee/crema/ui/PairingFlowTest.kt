@@ -176,10 +176,12 @@ class PairingFlowTest {
         assertTrue(vm.ui.value.pairedHubs.isEmpty())
     }
 
-    /** §6.3: the hub's key changed (reset or reinstalled). Pair again pairs
-     *  with the saved target, replaces the old pin, and says the key changed. */
+    /** §6.3, §2.10: the hub's key changed (reset or reinstalled, or another
+     *  hub at that address). Pair again pairs with the saved target and says
+     *  the key changed; the new hub is the saved one, and the old pin stays
+     *  as an entry the user can forget. */
     @Test
-    fun `pair again after a key change replaces the pin and says so`() {
+    fun `pair again after a key change keeps the old pin and says so`() {
         val h = hubController()
         val port = openHub(h)
         val (relayStore, _) = VmHarness.relayStore()
@@ -202,8 +204,10 @@ class PairingFlowTest {
             throw IllegalStateException("${e.message}; messages ${vm.ui.value.userMessages.takeLast(5)}, pairing ${vm.ui.value.relayPairing}, hub ${hubLines.takeLast(5)}", e)
         }
         val pins = vm.ui.value.pairedHubs
-        assertEquals(1, pins.size, "$pins")
-        assertTrue(pins.single().id != oldPin, "the old key's pin is gone")
+        assertEquals(2, pins.size, "$pins")
+        assertTrue(pins.any { it.id == oldPin }, "the old pin stays, to forget")
+        val newPin = pins.single { it.id != oldPin }
+        assertEquals(newPin.id, VmHarness.proxyController(vm).relayStore.savedHub, "the new hub is the saved one")
         untilClock("connected through the hub") { vm.ui.value.remoteStatus() == "Connected through ${code.hubName}" }
     }
 

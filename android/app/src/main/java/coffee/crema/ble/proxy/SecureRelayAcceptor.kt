@@ -236,8 +236,10 @@ class SecureRelayAcceptor(
          * the core takes the code only once it is in (`InvalidState` before).
          * It is applied after the next inbound message ([onInboundHandled]),
          * and dropped when the attempt ends, is cancelled or the connection
-         * closes, or after [PAKE_A_WAIT_MS]. The pairing secret: a CharArray
-         * wiped when used or dropped, never logged.
+         * closes, or after [PAKE_A_WAIT_MS]. The pairing secret, never logged.
+         * Held here as a CharArray cleared when used or dropped: best effort
+         * only, since the code also passes through immutable Strings (the
+         * dialog's field, the `enter_code` FFI call).
          */
         private var pendingCode: CharArray? = null
         private var pendingTimer: Job? = null
