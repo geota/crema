@@ -427,6 +427,8 @@ class RemoteToStandaloneTest {
         assertEquals(epochBefore, pc.modeEpoch, "the dropped switch didn't count")
         assertTrue(VmHarness.log(vm).any { "Re-find: held — dropping a queued switch" in it })
         assertNotNull(vm.ui.value.adoptPrompt, "the confirmation is still open")
+        switches.clear() // the probe saw the dropped switch arrive at the lock
+        customOnDisk.clear()
         vm.resolveAdoption(useHub = true)
         VmHarness.advance(200)
         waitRole(vm, "normal")

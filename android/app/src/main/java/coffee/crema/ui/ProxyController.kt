@@ -1227,6 +1227,7 @@ class ProxyController(
         trust: MirrorTrust,
         refind: RefindSwitch? = null,
     ) {
+        modeSwitchProbe?.invoke(role)
         // A re-find switch doesn't run while the re-find is held (the
         // leave-remote prompt is open): it is dropped, and the release
         // re-checks. It never ran, so the mode epoch stays.
@@ -1236,7 +1237,6 @@ class ProxyController(
             return
         }
         modeEpoch++
-        modeSwitchProbe?.invoke(role)
         // Off the remote role nothing holds the re-find.
         if (role != "secondary") refindHeld = false
         closePairingWindow()
