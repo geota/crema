@@ -43,7 +43,9 @@ class CustomProfileSaveOrderTest {
     fun `the library numbers every custom-profile save`() {
         val vm = VmHarness.build(store)
         VmHarness.idle()
-        VmHarness.awaitPrefsLoaded(vm)
+        // The whole startup load, not just the prefs: its custom-profile load
+        // replaces the library's list, and would drop a profile adopted before it.
+        VmHarness.awaitStartupLoaded(vm)
         val library = MainViewModel::class.java.getDeclaredField("library").apply { isAccessible = true }.get(vm) as LibraryController
         val full = Json(coreJson) { encodeDefaults = true }
         val base = vm.ui.value.profiles.first()

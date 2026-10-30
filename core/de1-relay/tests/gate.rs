@@ -78,6 +78,36 @@ fn second_request_is_busy() {
 }
 
 #[test]
+fn refused_address_gets_busy_without_touching_the_gate() {
+    // The squat rule: a connection told to refuse pairing answers a pair hello
+    // with BUSY and a close, takes no slot and counts nothing.
+    let gate = new_gate();
+    open_gate(&gate, T0);
+    let pins = new_pins(vec![]);
+    let h = hub_keys();
+    let mut refused = HubConnection::new(
+        &h,
+        gate.clone(),
+        pins.clone(),
+        "Hub",
+        test_seed("hub-conn", 0),
+        T0,
+    );
+    refused.refuse_pairing_requests();
+    let s = refused.on_ws(WsIn::Text(&pair_hello()), T0);
+    assert_eq!(status_of(&s), de1_relay::HelloStatus::Busy);
+    assert_eq!(s.close.unwrap().code, ws_close::REFUSED);
+    let status = gate.lock().unwrap().status(T0);
+    assert!(status.open);
+    assert!(!status.pending);
+    assert_eq!(status.failures, 0);
+    // Another address still gets the slot.
+    let mut other = HubConnection::new(&h, gate.clone(), pins, "Hub", test_seed("hub-conn", 1), T0);
+    let s = other.on_ws(WsIn::Text(&pair_hello()), T0);
+    assert_eq!(status_of(&s), de1_relay::HelloStatus::AwaitingCode);
+}
+
+#[test]
 fn three_failures_lock_out() {
     let gate = new_gate();
     open_gate(&gate, T0);

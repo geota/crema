@@ -276,6 +276,41 @@ class RelayKeyStoreTest {
     }
 
     @Test
+    fun `AC-30 the relay alias listed without a key is transient, never a reset`() {
+        val first = probedStore()
+        val id = ready(first.load()).keys.deviceId()
+        first.pinRemote(remote("r1"))
+        val before = storeFile.readBytes()
+        // keystore2 may list the alias before it hands the key back: the relay
+        // box must read that as not ready (the token box's rule is the opposite).
+        val listedOnly = object : coffee.crema.security.KeystoreBackend by keystore {
+            override fun containsAlias(alias: String) = alias == RelayKeyStore.RELAY_ALIAS || keystore.containsAlias(alias)
+            override fun getKey(alias: String) = if (alias == RelayKeyStore.RELAY_ALIAS) null else keystore.getKey(alias)
+        }
+        val s = RelayKeyStore(dir, RelayKeyStore.deviceBox(listedOnly)) { now }
+        val result = s.load()
+        assertTrue("$result", result is RelayKeyLoad.Unavailable)
+        assertArrayEquals(before, storeFile.readBytes())
+        assertFalse(lostDir.exists())
+        assertEquals(id, ready(probedStore().load()).keys.deviceId())
+    }
+
+    @Test
+    fun `a write that fails changes nothing in memory either`() {
+        val s = store()
+        ready(s.load())
+        val before = storeFile.readBytes()
+        // The atomic write's temp file can't be created (a non-empty directory
+        // there, which the failed write can't delete either).
+        File(dir, "${RelayKeyStore.FILE_NAME}.tmp/x").apply { parentFile!!.mkdirs(); writeText("") }
+        assertFalse(s.markV3Migrated())
+        assertFalse("not migrated for the rest of the process", s.v3Migrated)
+        assertFalse(s.pinRemoteSaved(remote("r1")).saved)
+        assertTrue("no pin that isn't on disk", s.remotes.isEmpty())
+        assertArrayEquals(before, storeFile.readBytes())
+    }
+
+    @Test
     fun `AC-30 an alias missing from a working keystore is a definitive loss`() {
         val first = probedStore()
         val id = ready(first.load()).keys.deviceId()
@@ -546,5 +581,17 @@ class RelayKeyStoreTest {
         val s = store()
         assertFalse(ready(s.load()).keyReset)
         assertEquals(listOf("r1"), s.remotes.map { it.id })
+    }
+
+    @Test
+    fun `one store per files directory in a process`() {
+        val other = Files.createTempDirectory("relay-store-other").toFile()
+        try {
+            val first = RelayKeyStore.forProcess(dir)
+            assertTrue("the same directory gets the same store", first === RelayKeyStore.forProcess(File(dir.path)))
+            assertFalse("another directory gets its own", first === RelayKeyStore.forProcess(other))
+        } finally {
+            other.deleteRecursively()
+        }
     }
 }

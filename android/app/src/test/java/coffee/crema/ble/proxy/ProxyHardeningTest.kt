@@ -24,11 +24,9 @@ import kotlin.test.assertTrue
  * - the attach snapshot burst never regresses a characteristic to a value older
  *   than one already delivered live (per-client monotonic seq guard), and a
  *   re-attach still re-delivers the current snapshot;
- * - a duplicate `Hello` on an approved session does not re-run TOFU;
  * - an `Attach` for a device the hub has no state for reports DISCONNECTED,
  *   not an assumed CONNECTED;
- * - a session that only claims a client id is neither that client nor a
- *   remote in the hub's list;
+ * - the hub's remotes list follows the admitted sessions;
  * - the observe tripwire counts concurrent collectors per characteristic.
  */
 class ProxyHardeningTest {
@@ -37,17 +35,12 @@ class ProxyHardeningTest {
     private val service = UUID.fromString("0000a000-0000-1000-8000-00805f9b34fb")
     private val stateChar = UUID.fromString("0000a00e-0000-1000-8000-00805f9b34fb")
 
-    private fun hub(
-        capacity: Int = kotlinx.coroutines.channels.Channel.UNLIMITED,
-        authorize: suspend (PairingRequest) -> PairingDecision = { PairingDecision.Allowed(true) },
-    ) = RelayHub(
-        primaryId = "p",
+    private fun hub(capacity: Int = kotlinx.coroutines.channels.Channel.UNLIMITED) = RelayHub(
         primaryName = "P",
         roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
         readSource = { _, _, _ -> error("unused") },
         isSnapshotChar = { _, c -> c == stateChar },
         clientCapacity = capacity,
-        authorize = authorize,
     )
 
     /** A server-side link whose sends can be held, so a test can make the
@@ -60,7 +53,7 @@ class ProxyHardeningTest {
     }
 
     private suspend fun handshakeAndAttach(client: FrameLink, rx: MutableList<Frame>) {
-        handshake(client, rx)
+        awaitWelcome(rx)
         client.send(Frame.Attach(1L, addr))
         withTimeout(2_000) { while (rx.none { it is Frame.Attached }) delay(10) }
     }
@@ -72,7 +65,7 @@ class ProxyHardeningTest {
             val (client, serverEnd) = InMemoryFrameLink.pair()
             val server = StallableLink(serverEnd)
             val h = hub(capacity = 2) // tiny outbox: easy to overflow
-            scope.launch { h.serve(server) }
+            scope.launch { h.serve(server, TEST_PEER) }
 
             val rx = CopyOnWriteArrayList<Frame>()
             val ended = CompletableDeferred<Unit>()
@@ -101,7 +94,7 @@ class ProxyHardeningTest {
         try {
             val (client, server) = InMemoryFrameLink.pair()
             val h = hub()
-            scope.launch { h.serve(server) }
+            scope.launch { h.serve(server, TEST_PEER) }
             val rx = CopyOnWriteArrayList<Frame>()
             scope.launch { client.incoming().collect { rx.add(it) } }
 
@@ -129,42 +122,16 @@ class ProxyHardeningTest {
     }
 
     @Test
-    fun `duplicate Hello does not re-run authorization`() = runBlocking {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        try {
-            val (client, server) = InMemoryFrameLink.pair()
-            val authCalls = AtomicInteger(0)
-            val h = hub { authCalls.incrementAndGet(); PairingDecision.Allowed(true) }
-            scope.launch { h.serve(server) }
-            val rx = CopyOnWriteArrayList<Frame>()
-            scope.launch { client.incoming().collect { rx.add(it) } }
-
-            handshake(client, rx)
-            client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
-            client.send(Frame.Auth(null))
-            // A round trip drains the session's frames past the repeats.
-            client.send(Frame.Detach(9L, addr))
-            withTimeout(2_000) { while (rx.none { it is Frame.Detached }) delay(5) }
-
-            assertEquals(1, authCalls.get(), "an approved session's repeated handshake is ignored")
-            assertEquals(1, rx.count { it is Frame.Welcome }, "no second Welcome")
-            assertEquals(1, rx.count { it is Frame.Challenge }, "no second Challenge")
-        } finally {
-            scope.cancel()
-        }
-    }
-
-    @Test
     fun `attach for an unknown device reports DISCONNECTED not assumed CONNECTED`() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
             val h = hub()
-            scope.launch { h.serve(server) }
+            scope.launch { h.serve(server, TEST_PEER) }
             val rx = CopyOnWriteArrayList<Frame>()
             scope.launch { client.incoming().collect { rx.add(it) } }
 
-            handshake(client, rx)
+            awaitWelcome(rx)
             // No onConnState was ever fed for this address.
             client.send(Frame.Attach(1L, "11:22:33:44:55:66"))
             withTimeout(2_000) { while (rx.none { it is Frame.Attached }) delay(10) }
@@ -181,8 +148,8 @@ class ProxyHardeningTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
-            scope.launch { hub().serve(server) }
-            val proxy = ProxyTransport(client, scope, "phone-1", "Phone")
+            scope.launch { hub().serve(server, TEST_PEER) }
+            val proxy = ProxyTransport(client, scope)
             val device = object : coffee.crema.ble.BleTransport.DeviceHandle {
                 override val name: String = "DE1"
                 override val address: String = addr
@@ -205,13 +172,12 @@ class ProxyHardeningTest {
             val (client, serverEnd) = InMemoryFrameLink.pair()
             val server = StallableLink(serverEnd)
             val h = RelayHub(
-                primaryId = "p",
                 primaryName = "P",
                 roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
                 readSource = { _, _, _ -> error("unused") },
                 isSnapshotChar = { _, _ -> false },
             )
-            scope.launch { h.serve(server) }
+            scope.launch { h.serve(server, TEST_PEER) }
             val rx = CopyOnWriteArrayList<Frame>()
             val ended = CompletableDeferred<Unit>()
             scope.launch { client.incoming().collect { rx.add(it) }; ended.complete(Unit) }
@@ -229,29 +195,20 @@ class ProxyHardeningTest {
     }
 
     @Test
-    fun `a session that only claims an id doesn't count as that client`() = runBlocking {
+    fun `the remotes list follows the admitted sessions`() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val h = hub()
-            // The real client: approved.
-            val (taker, takerServer) = InMemoryFrameLink.pair()
-            scope.launch { h.serve(takerServer) }
-            val takerRx = CopyOnWriteArrayList<Frame>()
-            scope.launch { taker.incoming().collect { takerRx.add(it) } }
-            handshake(taker, takerRx, clientId = "phone-1")
-            // A second session that sends Hello with the same id but never completes.
-            val (claimant, claimantServer) = InMemoryFrameLink.pair()
-            scope.launch { h.serve(claimantServer) }
-            val claimantRx = CopyOnWriteArrayList<Frame>()
-            scope.launch { claimant.incoming().collect { claimantRx.add(it) } }
-            claimant.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
-            withTimeout(2_000) { while (claimantRx.none { it is Frame.Challenge }) delay(5) }
-
+            val (client, server) = InMemoryFrameLink.pair()
+            scope.launch { h.serve(server, TEST_PEER) }
+            val rx = CopyOnWriteArrayList<Frame>()
+            scope.launch { client.incoming().collect { rx.add(it) } }
+            awaitWelcome(rx)
             assertTrue(h.hasClient("phone-1"))
-            assertEquals(listOf(RemoteClient("phone-1", "Phone", canControl = true)), h.remotes(), "only the approved session is a remote")
-            taker.close() // the approved client leaves
+            assertEquals(listOf(RemoteClient("phone-1", "Phone", canControl = true)), h.remotes())
+            client.close() // the client leaves
             withTimeout(2_000) { while (h.hasClient("phone-1")) delay(5) }
-            assertTrue(h.remotes().isEmpty(), "the unapproved claimant isn't a remote")
+            assertTrue(h.remotes().isEmpty())
         } finally {
             scope.cancel()
         }

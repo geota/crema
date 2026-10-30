@@ -576,10 +576,19 @@ class MainActivity : ComponentActivity() {
                     hostState = snackbarHostState,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
                 )
-                // Host-side TOFU pairing prompt (issue 02) — a new device wants to
-                // mirror this machine. Modal over any screen; dismiss = Deny.
+                // Hub: a remote asks to pair (relay v4) — type the code it shows.
+                // Modal over any screen; dismiss = Cancel.
                 ui.pendingPairing?.let { prompt ->
-                    PairingDialog(prompt = prompt, onChoice = viewModel::resolvePairing)
+                    PairingCodeDialog(prompt = prompt, onPair = viewModel::submitPairingCode, onCancel = viewModel::cancelPairing)
+                }
+                // Remote: the pairing code sheet (relay v4).
+                if (ui.relayPairing !is coffee.crema.ble.proxy.PairingState.Idle) {
+                    RemotePairingSheet(
+                        state = ui.relayPairing,
+                        onCancel = viewModel::cancelRemotePairing,
+                        onTryAgain = viewModel::retryRemotePairing,
+                        onDismiss = viewModel::dismissPairing,
+                    )
                 }
                 // Remote → standalone (T6): take the hub's settings, or keep mine.
                 ui.adoptPrompt?.let { prompt ->
@@ -587,14 +596,6 @@ class MainActivity : ComponentActivity() {
                         prompt = prompt,
                         onUseHub = { viewModel.resolveAdoption(useHub = true) },
                         onKeepMine = { viewModel.resolveAdoption(useHub = false) },
-                    )
-                }
-                // A host this device pairs with couldn't prove the pairing.
-                ui.changedHost?.let { (hostId, hostName) ->
-                    ChangedHostDialog(
-                        hostName = hostName,
-                        onForget = { viewModel.forgetHost(hostId) },
-                        onDismiss = viewModel::dismissChangedHost,
                     )
                 }
                 // Fullscreen expanded chart — drawn last, over everything.
@@ -1211,62 +1212,6 @@ private fun Field(label: String, value: String) {
             fontFamily = FontFamily.Monospace,
         )
     }
-}
-
-/**
- * Host-side TOFU pairing prompt (issue 02): a new secondary ([prompt]) is asking
- * to mirror this machine. Three explicit choices — full control, view-only, or
- * deny — with dismiss (tap-outside / back) defaulting to **Deny**, so a prompt
- * left unanswered never grants access.
- */
-@Composable
-private fun PairingDialog(prompt: PairingPrompt, onChoice: (PairingChoice) -> Unit) {
-    AlertDialog(
-        onDismissRequest = { onChoice(PairingChoice.DENY) },
-        title = { Text("Allow this device?") },
-        text = {
-            Column {
-                Text("“${prompt.clientName}” wants to connect through this hub and control the machine over the network.")
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "ID ${prompt.clientId.take(8)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onChoice(PairingChoice.ALLOW_CONTROL) }) { Text("Allow control") }
-        },
-        dismissButton = {
-            Row {
-                TextButton(onClick = { onChoice(PairingChoice.MIRROR_ONLY) }) { Text("View only") }
-                TextButton(onClick = { onChoice(PairingChoice.DENY) }) { Text("Deny") }
-            }
-        },
-    )
-}
-
-/**
- * A host this device paired with couldn't prove that pairing (it was reset or
- * reinstalled, or it isn't the same host). The held pairing is never replaced
- * silently: forgetting it here is what allows pairing again.
- */
-@Composable
-private fun ChangedHostDialog(hostName: String, onForget: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("This host's identity changed") },
-        text = {
-            Text(
-                "“$hostName” couldn't confirm the pairing this device has with it. If you reset or reinstalled " +
-                    "Crema on it, forget it here, then choose it under Other devices to pair again.",
-            )
-        },
-        confirmButton = { TextButton(onClick = onForget) { Text("Forget host") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
-    )
 }
 
 /**

@@ -33,9 +33,17 @@ data class Peer(
     val host: String,
     /** The peer's relay port — connect a [ProxyTransport] here to mirror it. */
     val port: Int,
+    /** The proxy protocol version it advertises (TXT `v`); 0 when absent. */
+    val version: Int = PROXY_PROTOCOL_VERSION,
+    /** A hosting peer's short relay device id (TXT `kid`, spec §4.8): advisory,
+     *  it chooses resume (a pinned hub) vs pair; the handshake decides. */
+    val kid: String? = null,
 ) {
-    /** A peer you can "Mirror from": it's a primary holding the DE1 with a live relay. */
-    val isMirrorSource: Boolean get() = role == "primary" && holdsDe1 && port > 0
+    /** It speaks relay v4: an older peer is listed as "Needs a Crema update" and is not dialable. */
+    val upToDate: Boolean get() = version >= PROXY_PROTOCOL_VERSION
+
+    /** A peer you can "Mirror from": an up-to-date primary holding the DE1 with a live relay. */
+    val isMirrorSource: Boolean get() = role == "primary" && holdsDe1 && port > 0 && upToDate
 }
 
 /**
@@ -87,7 +95,7 @@ class PeerDiscovery(
 
     /** (Re)advertise this instance's current role/state. Idempotent — replaces any
      *  prior registration (NSD has no in-place attribute update pre-API-34). */
-    fun advertise(name: String, role: String, holdsDe1: Boolean, port: Int) {
+    fun advertise(name: String, role: String, holdsDe1: Boolean, port: Int, kid: String? = null) {
         stopAdvertising()
         val info = NsdServiceInfo().apply {
             serviceName = "Crema-${selfId.take(8)}"
@@ -99,6 +107,8 @@ class PeerDiscovery(
             setAttribute("role", role)
             setAttribute("de1", if (holdsDe1) "1" else "0")
             setAttribute("v", PROXY_PROTOCOL_VERSION.toString())
+            // The short relay id, only while hosting (spec §4.8).
+            if (kid != null && port > 0) setAttribute("kid", kid)
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(s: NsdServiceInfo) { Log.i(TAG, "advertised as ${s.serviceName} ($role, de1=$holdsDe1, :$port)") }
@@ -195,6 +205,8 @@ class PeerDiscovery(
             holdsDe1 = attrs["de1"]?.let { String(it) } == "1",
             host = host,
             port = resolved.port,
+            version = attrs["v"]?.let { String(it).toIntOrNull() } ?: 0,
+            kid = attrs["kid"]?.let { String(it) }?.takeIf { it.length == 8 && it.all { c -> c in '0'..'9' || c in 'a'..'f' } },
         )
         publish()
     }

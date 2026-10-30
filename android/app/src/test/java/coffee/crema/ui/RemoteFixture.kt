@@ -3,9 +3,9 @@ package coffee.crema.ui
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.newBean
-import coffee.crema.ble.proxy.PairingCrypto
 import coffee.crema.ble.proxy.RelayHub
 import coffee.crema.ble.proxy.TestHubServer
+import coffee.crema.core.RelayKeys
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.ConfigSnapshot
 import coffee.crema.ble.proxy.Peer
@@ -15,14 +15,17 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * A remote under test (spec §8): a real [MainViewModel] restored in the
- * remote role, paired with and pinned to a real [RelayHub] behind a socket,
- * whose config snapshot the test sets ([push]). [P] is the remote's own
- * settings, written before the VM is built; [S] is a hub snapshot whose
- * machine and session values all differ from P.
+ * remote role, paired with a real [RelayHub] behind a relay v4 socket (each
+ * side has pinned the other's key), whose config snapshot the test sets
+ * ([push]). [P] is the remote's own settings, written before the VM is built;
+ * [S] is a hub snapshot whose machine and session values all differ from P.
  */
 internal class RemoteFixture(private val store: ViewModelStore) {
-    /** The pairing secret this remote and the hub share. */
-    val secret = PairingCrypto.newSecret()
+    /** The hub's relay key: the same across a [restart]. */
+    val hubKeys: RelayKeys = RelayKeys.generate()
+
+    /** This remote's relay key (from its store, set by [start]). */
+    lateinit var remoteKeys: RelayKeys
     @Volatile var hubConfig: String = ""
 
     /** What the hub was asked to run, in order. */
@@ -64,11 +67,11 @@ internal class RemoteFixture(private val store: ViewModelStore) {
     /** Restore a remote with [own] as its settings and wait for the hub's Welcome. */
     fun start(own: AppPrefs = P, onBuilt: (MainViewModel) -> Unit = {}): MainViewModel {
         val dir = VmHarness.app().filesDir
-        File(dir, "proxy-pairing.json").writeText(
-            """{"hostId":"this-device","held":{"host-1":"$secret"},"pinnedHost":"host-1"}""",
-        )
+        val (relayStore, keys) = VmHarness.relayStore()
+        remoteKeys = keys
         File(dir, "beanLibrary.json").writeText(coreJson.encodeToString(BeanLibrary.serializer(), LIBRARY))
         serve()
+        VmHarness.pinHub(relayStore, hubKeys, endpoint.port)
         writePrefs(own.copy(proxyRole = "secondary", proxyPrimaryHost = "127.0.0.1", proxyPrimaryPort = endpoint.port))
         vm = VmHarness.build(store)
         peers?.let { VmHarness.proxyController(vm).overridePeers(it) }
@@ -103,8 +106,9 @@ internal class RemoteFixture(private val store: ViewModelStore) {
     /** Start a relay for this remote: [endpoint] and [hub]. */
     private fun serve() {
         val (e, h) = TestHubServer.relay(
-            "host-1", "Kitchen tablet", secret,
-            clientId = { VmHarness.proxyController(vm).deviceId },
+            remote = remoteKeys,
+            name = "Kitchen tablet",
+            hubKeys = hubKeys,
             roster = { if (hubHoldsDe1) listOf(coffee.crema.ble.proxy.DeviceInfo("AA:BB", "DE1", "de1", "CONNECTED")) else emptyList() },
             configSource = { hubConfig },
             controlHandler = { method, args, _, _ ->
@@ -126,8 +130,11 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         hub = h
     }
 
-    /** The hub forgets this remote: it gets a Denied (revoked). */
-    fun revoke() = hub.revoke(VmHarness.proxyController(vm).deviceId)
+    /** The hub forgets this remote: out of its pins, and its session gets an authenticated CLOSE(REVOKED). */
+    fun revoke() {
+        endpoint.trust.forget(remoteKeys.deviceId())
+        hub.revoke(remoteKeys.deviceId())
+    }
 
     /** Apply a relayed edit to [current] and push it (on the hub's thread,
      *  before the reply). One at a time, as a hub's main lane does, even

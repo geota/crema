@@ -1,6 +1,7 @@
 package coffee.crema.ble.proxy
 
 import coffee.crema.ble.BleTransport
+import coffee.crema.core.RelayKeys
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -18,8 +19,8 @@ import kotlin.test.assertEquals
 
 /**
  * The secondary's [ReconnectingClientLink] driving a [ProxyTransport] against a
- * real [LanRelayServer] — proves the self-connecting link establishes the
- * session and carries the protocol (scan → connect → notify → read) end-to-end
+ * real [LanRelayServer] — proves the self-connecting link runs the relay v4
+ * resume and carries the protocol (scan → connect → notify → read) end-to-end
  * over a socket.
  */
 class ReconnectingClientLinkTest {
@@ -33,18 +34,18 @@ class ReconnectingClientLinkTest {
     fun `self-connecting link mirrors over a real socket`() = runBlocking {
         val versionBytes = byteArrayOf(0x09, 0x00)
         val hub = RelayHub(
-            primaryId = "primary-1",
             primaryName = "Tablet",
             roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
             readSource = { a, s, c -> if (a == addr && s == service && c == stateChar) versionBytes else error("no read") },
             isSnapshotChar = { _, c -> c == stateChar },
         )
-        val server = LanRelayServer(hub, requestedPort = 0)
-        val port = server.start()
+        val rig = RelayRig(hub).start()
+        val remote = RelayKeys.generate()
+        rig.trust.pin(remote)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
-            val link = ReconnectingClientLink("ws://127.0.0.1:$port${LanRelayServer.PATH}", scope)
-            val proxy = ProxyTransport(link, scope, clientId = "phone-1", clientName = "Phone")
+            val link = rig.link(remote)
+            val proxy = ProxyTransport(link, scope)
 
             val match = withTimeout(5_000) { proxy.scan { it == "DE1" }.first() }
             assertEquals(addr, match.device.address)
@@ -65,7 +66,7 @@ class ReconnectingClientLinkTest {
             link.close()
         } finally {
             scope.cancel()
-            server.stop()
+            rig.stop()
         }
     }
 }

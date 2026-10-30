@@ -64,6 +64,8 @@ pub struct HubConnection {
     /// Output of a `Result` call that ended the connection and returned `Err`;
     /// the next call (normally `tick`) returns it.
     pending: Step,
+    /// `refuse_pairing_requests` was called: a pair hello gets BUSY.
+    refuse_pairing: bool,
     #[cfg(feature = "test-seeds")]
     psk_for_tests: Option<[u8; 32]>,
     /// Test hook: runs once in `on_msg3`, after preflight and before the gate
@@ -129,11 +131,21 @@ impl HubConnection {
             peer_static: None,
             binding: None,
             pending: Step::default(),
+            refuse_pairing: false,
             #[cfg(feature = "test-seeds")]
             before_msg3_lock: None,
             #[cfg(feature = "test-seeds")]
             psk_for_tests: None,
         }
+    }
+
+    /// Answer an `intent=pair` hello on this connection with `ServerHello(BUSY)`
+    /// and a close, without touching the gate (spec §2.5, the squat rule: the
+    /// hub user cancelled a pairing request from this address, so it is turned
+    /// away for the rest of the window). Resumes are unaffected. Call it before
+    /// the ClientHello arrives; afterwards it changes nothing.
+    pub fn refuse_pairing_requests(&mut self) {
+        self.refuse_pairing = true;
     }
 
     /// The current phase.
@@ -529,8 +541,15 @@ impl HubConnection {
 
     fn start_pairing(&mut self, hello: &ClientHello, version: u8, now_ms: u64) -> Step {
         let mut step = Step::default();
-        let Ok(grant) = self.with_gate(|g| g.try_acquire(now_ms)) else {
-            return self.poisoned();
+        // The squat rule (spec §2.5): this address was turned away for the
+        // rest of the window. Answer BUSY without touching the gate.
+        let grant = if self.refuse_pairing {
+            Grant::Busy
+        } else {
+            let Ok(grant) = self.with_gate(|g| g.try_acquire(now_ms)) else {
+                return self.poisoned();
+            };
+            grant
         };
         let (status, secs) = match grant {
             Grant::Granted {

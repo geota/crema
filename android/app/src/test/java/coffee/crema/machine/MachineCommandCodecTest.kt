@@ -138,13 +138,14 @@ class MachineCommandCodecTest {
      *  it is refused with the retired reason, with or without arguments
      *  (checked before parsing, so `handoff x` isn't "unknown"). */
     @Test
-    fun `handoff is a retired refusal on protocol v3`() {
+    fun `handoff is a retired refusal`() {
         val reason = MachineCommandCodec.RETIRED_METHODS.getValue("handoff")
         assertTrue("hub mode" in reason, reason)
         assertEquals(MachineCommandCodec.Decoded.Invalid(reason), MachineCommandCodec.decode("handoff", ""))
         assertEquals(MachineCommandCodec.Decoded.Invalid(reason), MachineCommandCodec.decode("handoff", "x"))
         assertTrue("handoff" !in MachineCommandCodec.METHODS)
-        assertEquals(3, PROXY_PROTOCOL_VERSION, "retiring a verb doesn't bump the protocol")
+        // Retiring it didn't bump the protocol (v3); relay v4 did, and PR-4 removes the retired list.
+        assertEquals(4, PROXY_PROTOCOL_VERSION)
     }
 
     @Test

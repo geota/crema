@@ -4,24 +4,20 @@ import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.ble.proxy.DeviceInfo
 import coffee.crema.ble.proxy.Golden
-import coffee.crema.ble.proxy.MockWsServerLink
+import coffee.crema.ble.proxy.TestHubServer
 import coffee.crema.ble.proxy.RelayHub
-import coffee.crema.ble.proxy.serveWhenOpen
 import coffee.crema.machine.sentByRemotes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import mockwebserver3.MockResponse
-import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.net.InetAddress
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -47,8 +43,7 @@ class RelayedVerbSecondaryWireTest {
     /** One thread: the hub handles controls and queues replies in arrival order. */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val hubScope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
-    private val server = MockWebServer()
-    private val primary = MockWsServerLink()
+    private lateinit var endpoint: TestHubServer
     private val store = ViewModelStore()
 
     /** What the primary's control handler was asked to run, in order. */
@@ -62,7 +57,6 @@ class RelayedVerbSecondaryWireTest {
     @Volatile private var hubConfig = ""
 
     private val hub: RelayHub = RelayHub(
-        primaryId = "host-1",
         primaryName = "Test primary",
         roster = { emptyList<DeviceInfo>() },
         readSource = { _, _, _ -> error("no reads in this test") },
@@ -88,12 +82,13 @@ class RelayedVerbSecondaryWireTest {
 
     @Before
     fun mirrorTheTestPrimary() {
-        server.enqueue(MockResponse.Builder().webSocketUpgrade(primary).build())
-        server.start(InetAddress.getLoopbackAddress(), 0)
-        hubScope.launch { hub.serveWhenOpen(primary) }
+        // Paired before: each side pinned the other's relay key.
+        val (relayStore, remote) = VmHarness.relayStore()
+        endpoint = TestHubServer.serving(hub, remote, name = "Test primary")
+        VmHarness.pinHub(relayStore, endpoint.hubKeys, endpoint.port, name = "Test primary")
         vm = VmHarness.build(store)
         VmHarness.idle()
-        vm.switchToSecondary("127.0.0.1", server.port)
+        vm.switchToSecondary("127.0.0.1", endpoint.port)
         VmHarness.advance(MODE_SWITCH_SETTLE_MS)
         VmHarness.idleUntil("the secondary to be welcomed") { hub.remotes().isNotEmpty() }
     }
@@ -103,11 +98,11 @@ class RelayedVerbSecondaryWireTest {
         store.clear()
         VmHarness.idle()
         hubScope.cancel()
-        server.close()
+        endpoint.kill()
     }
 
     /** The control texts the secondary has sent so far. */
-    private fun controlTexts(): List<String> = primary.receivedText.filter { "\"type\":\"control\"" in it }
+    private fun controlTexts(): List<String> = endpoint.received.filter { "\"type\":\"control\"" in it }
 
     @Test
     fun `every relayed verb leaves the secondary in its golden wire form`() {

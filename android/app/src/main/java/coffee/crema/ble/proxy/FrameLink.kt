@@ -14,6 +14,17 @@ sealed interface LinkEvent {
 
     /** A frame arrived on the current session. */
     data class Received(val frame: Frame) : LinkEvent
+
+    /**
+     * The hub refused this device (relay v4, spec §2.9). [authenticated] is
+     * true only for a `CLOSE` record decrypted with the session's keys: only
+     * then may trust state or role change. [reason] is the core's name
+     * (`Revoked`, `NotPaired`, `HubStopped`, `HubUnverified`, `HostMismatch`,
+     * `HubOutdated`, an `ABORT` reason, …). [terminal]: the link stopped
+     * redialing, so the caller decides what comes next; otherwise it redials
+     * with its back-off (`HubStopped`, `Normal`, `Protocol`, `Timeout`).
+     */
+    data class Refused(val reason: String, val authenticated: Boolean, val terminal: Boolean) : LinkEvent
 }
 
 /**
@@ -52,6 +63,11 @@ interface FrameLink {
         send(frame)
         return true
     }
+
+    /** Close because the hub forgot this device. A relay session sends an
+     *  authenticated `CLOSE(REVOKED)` first ([NoiseFrameLink]); the default
+     *  just closes. */
+    suspend fun revoke() = close()
 }
 
 /**

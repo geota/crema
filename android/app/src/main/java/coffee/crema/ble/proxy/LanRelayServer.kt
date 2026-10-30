@@ -18,6 +18,7 @@ import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.websocket.timeout
 import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.WebSocketSession
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -27,10 +28,13 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * The primary-side LAN WebSocket server: it accepts secondary connections and
- * hands each to a [RelayHub]. A thin shell — Ktor (CIO engine) accepts the
- * socket and upgrades it to a WebSocket; every connection is wrapped in a
- * [KtorWsFrameLink] and driven by [RelayHub.serve]. All protocol logic lives in
- * the (link-agnostic, already unit-proven) [RelayHub]; this only owns the socket.
+ * hands each, with its remote address, to [handler] — in production the relay
+ * v4 [SecureRelayAcceptor], which runs the core's handshake and serves admitted
+ * sessions through the [RelayHub]. A thin shell — Ktor (CIO engine) accepts the
+ * socket and upgrades it to a WebSocket; this only owns the socket, the
+ * WebSocket message cap ([WS_MAX_MESSAGE], which Ktor checks on the reassembled
+ * message, so a message split into continuation frames is refused too) and the
+ * origin check.
  *
  * Runs **on the primary device** (the DE1 owner). [start] binds [requestedPort]
  * (the hub's last relay port, so its remotes' saved target still works after
@@ -39,7 +43,8 @@ import kotlin.time.Duration.Companion.milliseconds
  * (`_crema._tcp`). [INTERNET] is the only permission needed.
  */
 class LanRelayServer(
-    private val hub: RelayHub,
+    /** Serves one accepted WebSocket for its life: the session and the remote address. */
+    private val handler: suspend (session: WebSocketSession, remoteAddress: String) -> Unit,
     private val requestedPort: Int = 0,
     private val path: String = PATH,
     /** Liveness: ping every [pingPeriodMs], close a session whose pong is
@@ -115,10 +120,10 @@ class LanRelayServer(
     }
 
     /** The relay's one route: Crema's own client upgrades to a WebSocket that
-     *  [hub] serves. */
+     *  [handler] serves. */
     private fun Application.relayModule() {
         install(WebSockets) {
-            maxFrameSize = PROXY_MAX_FRAME_BYTES
+            maxFrameSize = WS_MAX_MESSAGE
             // Liveness: a TCP that dies without FIN (phone doze, wifi
             // power-save, AP roam) must not leave a "connected" zombie —
             // ping every 15 s, close after 10 s of silence, so a dead peer's
@@ -139,8 +144,8 @@ class LanRelayServer(
         routing {
             webSocket(path) {
                 // `this` is a DefaultWebSocketServerSession (a WebSocketSession).
-                // serve() suspends for the life of this connection.
-                hub.serve(KtorWsFrameLink(this))
+                // The handler suspends for the life of this connection.
+                handler(this, call.request.local.remoteAddress)
             }
         }
     }

@@ -54,7 +54,6 @@ class ReplayMirrorTest {
 
             lateinit var tapping: TappingBleTransport
             val hub = RelayHub(
-                primaryId = "primary-1",
                 primaryName = "Replay primary",
                 roster = { listOf(DeviceInfo(de1Addr, "DE1", "de1", "CONNECTED")) },
                 readSource = { a, s, c -> tapping.readByAddress(a, s, c) },
@@ -66,8 +65,8 @@ class ReplayMirrorTest {
             // mirror sees the whole telemetry stream (a real mirror joining mid-shot
             // would only see from attach-time — here we join before it starts).
             val (clientEnd, serverEnd) = InMemoryFrameLink.pair()
-            scope.launch { hub.serve(serverEnd) }
-            val proxy = ProxyTransport(clientEnd, scope, clientId = "phone-1", clientName = "Phone")
+            scope.launch { hub.serve(serverEnd, TEST_PEER) }
+            val proxy = ProxyTransport(clientEnd, scope)
             val secondaryDe1 = withTimeout(2_000) { proxy.scan { it == "DE1" }.first() }.device
             withTimeout(2_000) { proxy.connect(secondaryDe1) }
             val mirrored = CopyOnWriteArrayList<BleTransport.Notification>()

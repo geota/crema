@@ -1,6 +1,7 @@
 package coffee.crema.ble.proxy
 
 import coffee.crema.net.HttpClients
+import io.ktor.websocket.close
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -33,8 +34,8 @@ class LanRelayOriginTest {
 
     @Test
     fun `a request with an Origin is refused before the upgrade`() = runBlocking {
-        val hub = RelayHub("p", "P", roster = { emptyList() }, readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false })
-        val server = LanRelayServer(hub)
+        // Only the upgrade's HTTP status matters here: the handler just closes.
+        val server = LanRelayServer(handler = { ws, _ -> ws.close() })
         val port = server.start()
         val ok = HttpClients.newBaseOkHttp()
         try {

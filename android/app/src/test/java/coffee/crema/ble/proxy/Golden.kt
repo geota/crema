@@ -5,18 +5,18 @@ import kotlin.test.assertEquals
 import kotlin.test.fail
 
 /**
- * The checked-in proxy wire fixtures under `src/test/resources/proxy-golden/v3/`:
+ * The checked-in proxy wire fixtures under `src/test/resources/proxy-golden/v4/`:
  * one file per sample, holding the exact text that crosses the WebSocket.
  *
  * A wire change fails the golden tests. When the change is intended, rerun
  * them with `CREMA_UPDATE_GOLDEN=1` in the environment: the fixtures are
  * rewritten from the current code, and the diff is the change to review. A
- * protocol bump keeps `v3/` as the old-peer fixtures and adds the next
- * version's directory.
+ * protocol bump keeps the old directory as the old-peer fixtures and adds the
+ * next version's (`v3/` stays until PR-4 removes the v3 frames).
  */
 internal object Golden {
     /** The protocol version these fixtures describe. */
-    const val VERSION = 3
+    const val VERSION = 4
     private const val ROOT = "proxy-golden/v$VERSION"
 
     private val updating = System.getenv("CREMA_UPDATE_GOLDEN") == "1"
