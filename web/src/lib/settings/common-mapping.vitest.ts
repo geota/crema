@@ -204,3 +204,39 @@ describe('core-owned defaults, sanitize and reset (F15)', () => {
 		store.set('lineFrequencyHz', 0);
 	});
 });
+
+describe('pre-unification flat settings go through the core sanitize too (F15)', () => {
+	beforeAll(async () => {
+		await initTestWasm();
+	});
+
+	it('an old flat settings file loads sanitized', async () => {
+		const { SettingsStore } = await import('./store.svelte');
+		localStorage.setItem(
+			'crema.settings.v1',
+			JSON.stringify({ theme: 'light', fanThresholdC: 400, weightUnit: 'stone', baristaName: 7 })
+		);
+		const s = new SettingsStore().current;
+		expect(s.theme).toBe('light');
+		expect(s.fanThresholdC).toBe(60);
+		expect(s.weightUnit).toBe('g');
+		expect(s.baristaName).toBe('');
+		localStorage.clear();
+	});
+
+	it('an old flat web backup line restores sanitized', async () => {
+		const { getSettingsStore } = await import('./store.svelte');
+		const { restoreBackup } = await import('#lib/backup/index.js');
+		const store = getSettingsStore();
+		store.onReplaced = null;
+		const bundle = [
+			JSON.stringify({ kind: 'crema-backup/v1', createdAt: 1 }),
+			JSON.stringify({ kind: 'settings', _shell: 'web', tempUnit: 'F', fanThresholdC: -5 })
+		].join('\n');
+		restoreBackup(bundle, 'merge');
+		expect(store.current.tempUnit).toBe('F');
+		expect(store.current.fanThresholdC).toBe(0);
+		store.set('tempUnit', 'C');
+		store.set('fanThresholdC', 55);
+	});
+});
