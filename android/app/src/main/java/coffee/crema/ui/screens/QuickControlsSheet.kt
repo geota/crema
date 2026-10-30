@@ -36,10 +36,9 @@ import coffee.crema.ui.QcBounds
 import coffee.crema.ui.QcSteam
 import coffee.crema.ui.SteamMode
 import coffee.crema.ui.WaterMode
-import coffee.crema.ui.HotWaterModeSwitch
-import coffee.crema.ui.HotWaterReadoutLine
-import coffee.crema.ui.hotWaterReadoutFor
+import coffee.crema.ui.HotWaterHeader
 import coffee.crema.ui.hotWaterStepper
+import coffee.crema.ui.hotWaterSubLine
 import coffee.crema.core.HotWaterDose
 import coffee.crema.core.HotWaterTarget
 import coffee.crema.ui.formatRatio
@@ -396,10 +395,18 @@ fun QuickControlsSheet(
                         },
                     )
                 },
-                // 5 — Hot water: temp | amount (Time · ml · Ratio, spec §2.7).
+                // 5 — Hot water: temp | ‹mode› ▾ (spec §2.7). The mode lives in
+                // the label (a menu), the amount in the stepper's secondary line,
+                // so the card keeps its siblings' footprint in every mode.
                 { m ->
                     val waterHeader: @Composable () -> Unit = {
-                        CremaSplitLabel(prefix = "Hot water", options = listOf(SplitOption("temp", "Temp"), SplitOption("amount", "Amount")), value = waterMode.value, onChange = { waterMode = WaterMode.of(it) })
+                        HotWaterHeader(
+                            waterMode = waterMode,
+                            onWaterMode = { waterMode = it },
+                            mode = hotWaterDose.mode,
+                            onMode = { onHotWaterDose(hotWaterDose.copy(mode = it)) },
+                            gate = gate(Setting.QC_HOT_WATER_MODE),
+                        )
                     }
                     if (waterMode == WaterMode.Temp) {
                         CremaStepper(
@@ -418,13 +425,9 @@ fun QuickControlsSheet(
                         )
                     } else {
                         val hw = hotWaterStepper(hotWaterDose, onHotWaterDose)
-                        Column(m, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            waterHeader()
-                            HotWaterModeSwitch(
-                                mode = hotWaterDose.mode,
-                                onMode = { onHotWaterDose(hotWaterDose.copy(mode = it)) },
-                                gate = gate(Setting.QC_HOT_WATER_MODE),
-                            )
+                        // Six to a row (~181 dp) gets the short form; a wider card
+                        // the full sentence (web switches at 260 px).
+                        BoxWithConstraints(m) {
                             CremaStepper(
                                 value = hw.value,
                                 unit = hw.unit,
@@ -433,11 +436,15 @@ fun QuickControlsSheet(
                                 step = hw.step,
                                 fmt = hw.fmt,
                                 chips = hw.chips,
+                                chipFmt = hw.chipFmt,
+                                chipActive = hw.chipActive,
+                                extraChip = hw.extraChip,
                                 onChange = hw.onChange,
                                 style = CremaStepperStyle.Boxed,
                                 gate = gate(hw.setting),
+                                header = waterHeader,
+                                sub = hotWaterSubLine(hotWaterTarget, weightUnit, volumeUnit, hotWaterDose.ratio, long = maxWidth >= 260.dp),
                             )
-                            HotWaterReadoutLine(hotWaterReadoutFor(hotWaterTarget, weightUnit, volumeUnit, hotWaterDose.ratio))
                         }
                     }
                 },

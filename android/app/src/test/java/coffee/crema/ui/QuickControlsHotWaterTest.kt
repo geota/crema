@@ -78,6 +78,34 @@ class QuickControlsHotWaterTest {
     }
 
     @Test
+    fun `the short form under the digits`() {
+        assertEquals(HotWaterSub("→ 108 ml", false), hotWaterSub(resolve(dose(), 36f), "ml"))
+        assertEquals(HotWaterSub("max 250 ml", true), hotWaterSub(resolve(dose(), 100f), "ml"))
+        assertEquals(HotWaterSub("min 20 ml", true), hotWaterSub(resolve(dose(ratio = 0.5f), 18f), "ml"))
+        assertEquals(HotWaterSub("150 ml", true), hotWaterSub(resolve(dose()), "ml"), "no yield target")
+        val volume = dose(mode = HotWaterMode.Volume, volumeMl = 200f)
+        assertEquals(HotWaterSub("by weight", false), hotWaterSub(resolve(volume, 36f, scaleOperational = true), "ml"))
+        assertEquals(null, hotWaterSub(resolve(volume, 36f), "ml"))
+        assertEquals(null, hotWaterSub(resolve(dose(mode = HotWaterMode.Time)), "ml"))
+        assertEquals(HotWaterSub("large pour", true), hotWaterSub(resolve(dose(mode = HotWaterMode.Time, timeS = 200f)), "ml"))
+        val time = HotWaterTarget(HotWaterMode.Time, timeS = 20f, basis = HotWaterBasis.NotApplicable, wireVolumeMl = 0f, wireTimeoutS = 20f)
+        assertEquals(HotWaterSub("≤ 255 ml", false), hotWaterSub(time.copy(wireVolumeMl = 255f), "ml"))
+        assertEquals(HotWaterSub("until stopped", true), hotWaterSub(time.copy(timeS = null, wireTimeoutS = 0f), "ml"))
+    }
+
+    /** The label names the mode ("TEMP | RATIO ▾"): its second option is the
+     *  current mode's word and opens the menu. */
+    @Test
+    fun `the label names the mode and is a menu`() {
+        for ((mode, word) in listOf(HotWaterMode.Time to "time", HotWaterMode.Volume to "ml", HotWaterMode.Ratio to "ratio")) {
+            val opts = hotWaterLabelOptions(mode)
+            assertEquals(listOf("temp" to false, "amount" to true), opts.map { it.id to it.menu })
+            assertEquals(word, opts[1].label, "$mode")
+        }
+        assertEquals(listOf("Time", "Volume", "Ratio"), hotWaterModes.map { it.name })
+    }
+
+    @Test
     fun `the chip amount and the running counter`() {
         val ratio = resolve(dose(), 50f)
         val timed = resolve(dose(mode = HotWaterMode.Time))
@@ -118,8 +146,14 @@ class QuickControlsHotWaterTest {
         val time = hotWaterStepper(start.copy(mode = HotWaterMode.Time, timeNoLimit = true)) { edits += it }
         assertEquals(listOf(b.timeS.min, b.timeS.max, b.timeS.step).map { it.toDouble() }, listOf(time.min, time.max, time.step))
         assertEquals(b.timeS.chips.map { it.toDouble() }, time.chips)
-        // No limit ships dark: shown only when this firmware honours it.
-        assertEquals(if (b.timeNoLimit) "no limit" else "40", time.fmt(40.0))
+        // No limit ships dark: "∞" (no unit, no number chip lit, a sixth chip)
+        // only when this firmware honours it.
+        assertEquals(if (b.timeNoLimit) "∞" else "40", time.fmt(40.0))
+        assertEquals(if (b.timeNoLimit) null else "s", time.unit)
+        assertEquals("40", time.chipFmt(40.0), "the chips stay numbers")
+        assertEquals(!b.timeNoLimit, time.chipActive(40.0))
+        assertEquals(b.timeNoLimit, time.extraChip != null)
+        assertEquals(listOf("1:2", "1:2.5", "1:3", "1:4", "1:5"), ratio.chips.map(ratio.chipFmt), "ratio chips read as ratios")
         time.onChange(25.0)
         assertEquals(start.copy(mode = HotWaterMode.Time, timeS = 25f, timeNoLimit = false), edits.last(), "a time edit turns No limit off")
     }

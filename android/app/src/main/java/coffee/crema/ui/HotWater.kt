@@ -92,6 +92,38 @@ fun hotWaterReadout(target: HotWaterTarget, weightUnit: String, volumeUnit: Stri
     }
 }
 
+/** The stepper's secondary line: a short form that fits under the digits,
+ *  and whether it is a caveat (amber). */
+data class HotWaterSub(val short: String, val warn: Boolean)
+
+/**
+ * The stepper's secondary line (spec §2.7), or null when the stepper already
+ * says it all: ratio "→ 108 ml", amber "max 250 ml" / "min 20 ml" when clamped
+ * and the bare amount with no yield target; volume "by weight" with an
+ * operational scale; time amber "large pour" above 120 s, "≤ 255 ml" with the
+ * firmware's backstop, amber "until stopped" for No limit. Every number is the
+ * target's; the full sentence stays [hotWaterReadout]. Web parity:
+ * `hotWaterSub` in `#lib/brew/hot-water.ts`.
+ */
+fun hotWaterSub(target: HotWaterTarget, volumeUnit: String): HotWaterSub? {
+    if (target.mode == HotWaterMode.Time) {
+        val t = target.timeS ?: return HotWaterSub("until stopped", warn = true)
+        return when {
+            target.wireVolumeMl > 0f -> HotWaterSub("≤ ${volume(target.wireVolumeMl, volumeUnit)}", warn = false)
+            t > LARGE_POUR_S -> HotWaterSub("large pour", warn = true)
+            else -> null
+        }
+    }
+    if (target.mode == HotWaterMode.Volume) return if (target.stopWeightG != null) HotWaterSub("by weight", warn = false) else null
+    val ml = volume(target.volumeMl, volumeUnit)
+    if (target.basis == HotWaterBasis.NoYieldTarget) return HotWaterSub(ml, warn = true)
+    return when (target.clamp) {
+        HotWaterClamp.Capped -> HotWaterSub("max $ml", warn = true)
+        HotWaterClamp.RaisedToMinimum -> HotWaterSub("min $ml", warn = true)
+        null -> HotWaterSub("→ $ml", warn = false)
+    }
+}
+
 /** The amount a resting chip shows: "150 ml", "30 s", or "no limit". */
 fun hotWaterRestingAmount(target: HotWaterTarget, volumeUnit: String): String =
     if (target.mode == HotWaterMode.Time) target.timeS?.let(::seconds) ?: "no limit" else volume(target.volumeMl, volumeUnit)

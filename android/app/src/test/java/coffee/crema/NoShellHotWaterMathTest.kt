@@ -64,7 +64,8 @@ class NoShellHotWaterMathTest {
     @Test
     fun `no hot-water range literals`() {
         val clamp = Regex("coerce(In|AtMost|AtLeast)\\(\\s*\\d|Math\\.(min|max)\\(\\s*\\d|\\bclamp\\w*\\([^)]*\\d{2}|\\d+(\\.\\d+)?f?\\s*\\.\\.\\s*\\d")
-        val stepper = Regex("\\b(min|max|step)\\s*=\\s*\\{?\\s*\\d|\\b(options|chips)\\s*=\\s*(\\{\\s*\\[|listOf\\(|\\[)\\s*\\d")
+        // A numeric bound or preset list; layout sizes (`min = 220.dp`) aren't.
+        val stepper = Regex("\\b(min|max|step)\\s*=\\s*\\{?\\s*\\d++(?!(\\.\\d+)?\\.(dp|sp)\\b)|\\b(options|chips)\\s*=\\s*(\\{\\s*\\[|listOf\\(|\\[)\\s*\\d")
         val found = hits {
             (hotWater.containsMatchIn(it.text) && clamp.containsMatchIn(it.text) && !temperature.containsMatchIn(it.text)) ||
                 (cardFile(it.file) && stepper.containsMatchIn(it.text) && !temperature.containsMatchIn(it.element))
