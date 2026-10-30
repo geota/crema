@@ -1478,6 +1478,18 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		case 'WakeAt':
 			// The app arms its wake-up tick.
 			return snapshot;
+		// F16: the core's shot start — the app patches `shotStarting` and
+		// tells the user; the log keeps the notices.
+		case 'ShotStartProgress':
+		case 'ShotStartEnded':
+			return snapshot;
+		case 'StartNotice':
+			return {
+				...snapshot,
+				eventLog: appendLog(snapshot.eventLog, event.content.notice.message)
+			};
+		case 'GroupHeadStartUnchecked':
+			return snapshot;
 		case 'MachineRequestRefused':
 			return {
 				...snapshot,
