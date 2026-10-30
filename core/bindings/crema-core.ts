@@ -324,6 +324,90 @@ export interface BeanFilterResult {
 	showingArchived: boolean;
 }
 
+/**
+ * One roastery — a record in the roaster directory. Sparse on
+ * purpose, mirroring Visualizer's `RoasterDetail` (which is itself
+ * minimal: id + name + website + image). Beanconqueror has no
+ * first-class roaster entity — its `bean.roaster` is free text; the
+ * shell promotes unique strings into [`Roaster`] rows on import.
+ */
+export interface Roaster {
+	/** Stable id — `"roaster:<uuid>"`. */
+	id: string;
+	/** Roastery name. **Required.** */
+	name: string;
+	/** Roastery website / store URL. */
+	website?: string;
+	/**
+	 * Logo / hero image URL. Mirrors Visualizer's `RoasterDetail.image_url`
+	 * — round-trips losslessly on sync. Renders as a small thumbnail in
+	 * the roaster card and the editor's preview slot.
+	 */
+	imageUrl?: string;
+	/**
+	 * City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
+	 * on Visualizer round-trip so the wire format stays lossless.
+	 */
+	city?: string;
+	/** Country / state / region — free text. Crema-only. */
+	country?: string;
+	/** Free-form notes (private to the user — not pushed to Visualizer). */
+	notes: string;
+	/**
+	 * Pointer to the canonical **local** roaster row (`roaster:<uuid>`)
+	 * when this row was tagged as a duplicate in the roaster directory.
+	 * `None` = this row is itself canonical (or has not been deduped).
+	 * Local-only: Visualizer's `canonical_roaster_id` is a link into its
+	 * shared roaster catalogue, which lives in
+	 * [`Roaster::catalogue_roaster_id`] instead.
+	 */
+	canonicalRoasterId?: string;
+	/**
+	 * Visualizer **catalogue** roaster id — the wire's
+	 * `RoasterDetail.canonical_roaster_id`. Set from a catalogue pick in the
+	 * bean form (or pulled from Visualizer) and sent on the roaster write.
+	 * `None` = not linked. Defaults so older JSON deserialises cleanly.
+	 */
+	catalogueRoasterId?: string;
+	/** Visualizer `roaster.id` once pushed. */
+	visualizerId?: string;
+	/**
+	 * Unix epoch ms when this roaster was soft-deleted, or `None` when
+	 * active. See [`Bean::deleted_at`] for the rationale. Defaults to
+	 * `None` so older JSON deserialises cleanly.
+	 */
+	deletedAt?: number;
+	/** Open JSON metadata — escape valve symmetric with [`Bean::metadata`]. */
+	metadata: unknown;
+	/** Unix epoch ms. */
+	createdAt: number;
+	/** Unix epoch ms. */
+	updatedAt: number;
+}
+
+/** What an import changes in the library. */
+export interface BeanImportMerge {
+	/** Beans whose id the library doesn't have, roaster pointers resolved. */
+	newBeans: Bean[];
+	/**
+	 * Incoming beans that replace the library row with the same id (newer
+	 * `updated_at`), roaster pointers resolved.
+	 */
+	updatedBeans: Bean[];
+	/** Roasters the new and updated beans need that the library doesn't have. */
+	newRoasters: Roaster[];
+	/** Incoming roasters that replace the library row with the same id. */
+	updatedRoasters: Roaster[];
+	/** Incoming bean id → the library bean id its shots should reference. */
+	beanIdRemap: Record<string, string>;
+	/**
+	 * Incoming beans that change nothing: already in the library and not
+	 * newer, an earlier Beanconqueror import, or a (roaster, name, roast
+	 * date) duplicate.
+	 */
+	skipped: number;
+}
+
 /** One local bag the push leg writes. */
 export interface BeanPushItem {
 	/** The local bean id. */
@@ -579,6 +663,28 @@ export interface BrewMethodPreset {
 }
 
 /**
+ * The user's per-shot Quick Controls overrides — absolute values, each
+ * optional (absent = the profile's own value). The JSON shape the shells
+ * already pass to the fingerprint (`{dose, yield, brewTemp, preinf}`).
+ */
+export interface BrewOverrides {
+	/** Dose, grams. */
+	dose?: number;
+	/** Yield target, grams. */
+	yield?: number;
+	/**
+	 * Absolute brew temperature, °C — every step is shifted by the
+	 * difference from the profile's anchor ([`brew_temp_anchor`]).
+	 */
+	brewTemp?: number;
+	/**
+	 * Total pre-infusion time, seconds, across the leading pre-infusion
+	 * segments ([`preinfusion_seconds`]).
+	 */
+	preinf?: number;
+}
+
+/**
  * What a [`BrewStep`] is, for its icon / default label. Lowercase wire
  * spelling, like [`BeverageType`](crate::BeverageType).
  */
@@ -756,6 +862,19 @@ export interface BrewStatInput {
 	brewMethod?: string;
 }
 
+/** The brew-temperature dial's range for one profile, °C (inclusive). */
+export interface BrewTempRange {
+	/** Lowest absolute brew temperature the dial may reach. */
+	min: number;
+	/** Highest absolute brew temperature the dial may reach. */
+	max: number;
+	/**
+	 * The profile's own brew temperature (the anchor the shift is
+	 * measured from) — the dial's "from profile" reference.
+	 */
+	anchor: number;
+}
+
 /** The result of [`catalogue_autofill`]. */
 export interface CatalogueAutofill {
 	/** The bean with the picked catalogue entry applied. */
@@ -825,67 +944,6 @@ export interface CataloguePage {
 	page: number;
 	/** Total page count (`paging.pages`; `1` when absent). */
 	pages: number;
-}
-
-/**
- * One roastery — a record in the roaster directory. Sparse on
- * purpose, mirroring Visualizer's `RoasterDetail` (which is itself
- * minimal: id + name + website + image). Beanconqueror has no
- * first-class roaster entity — its `bean.roaster` is free text; the
- * shell promotes unique strings into [`Roaster`] rows on import.
- */
-export interface Roaster {
-	/** Stable id — `"roaster:<uuid>"`. */
-	id: string;
-	/** Roastery name. **Required.** */
-	name: string;
-	/** Roastery website / store URL. */
-	website?: string;
-	/**
-	 * Logo / hero image URL. Mirrors Visualizer's `RoasterDetail.image_url`
-	 * — round-trips losslessly on sync. Renders as a small thumbnail in
-	 * the roaster card and the editor's preview slot.
-	 */
-	imageUrl?: string;
-	/**
-	 * City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
-	 * on Visualizer round-trip so the wire format stays lossless.
-	 */
-	city?: string;
-	/** Country / state / region — free text. Crema-only. */
-	country?: string;
-	/** Free-form notes (private to the user — not pushed to Visualizer). */
-	notes: string;
-	/**
-	 * Pointer to the canonical **local** roaster row (`roaster:<uuid>`)
-	 * when this row was tagged as a duplicate in the roaster directory.
-	 * `None` = this row is itself canonical (or has not been deduped).
-	 * Local-only: Visualizer's `canonical_roaster_id` is a link into its
-	 * shared roaster catalogue, which lives in
-	 * [`Roaster::catalogue_roaster_id`] instead.
-	 */
-	canonicalRoasterId?: string;
-	/**
-	 * Visualizer **catalogue** roaster id — the wire's
-	 * `RoasterDetail.canonical_roaster_id`. Set from a catalogue pick in the
-	 * bean form (or pulled from Visualizer) and sent on the roaster write.
-	 * `None` = not linked. Defaults so older JSON deserialises cleanly.
-	 */
-	catalogueRoasterId?: string;
-	/** Visualizer `roaster.id` once pushed. */
-	visualizerId?: string;
-	/**
-	 * Unix epoch ms when this roaster was soft-deleted, or `None` when
-	 * active. See [`Bean::deleted_at`] for the rationale. Defaults to
-	 * `None` so older JSON deserialises cleanly.
-	 */
-	deletedAt?: number;
-	/** Open JSON metadata — escape valve symmetric with [`Bean::metadata`]. */
-	metadata: unknown;
-	/** Unix epoch ms. */
-	createdAt: number;
-	/** Unix epoch ms. */
-	updatedAt: number;
 }
 
 /**
@@ -1424,6 +1482,15 @@ export type Event =
 	 * `de1plus/gui.tcl:3414-3416`.
 	 */
 	resistance_weight?: number;
+	/**
+	 * The water this sample adds to the filter / descale counters, ml —
+	 * the volume integrator's increment (gap-capped at
+	 * `MAX_COUNTED_GAP_S`), only in the states that count
+	 * (`counts_toward_water`: espresso and hot water). `None` otherwise.
+	 * The shells add it to their persisted litre total; the counting
+	 * rule lives here.
+	 */
+	counted_ml?: number;
 }}
 	/** A weight reading arrived from the scale, smoothed by the flow estimator. */
 	| { type: "ScaleReading", content: {
@@ -1490,6 +1557,18 @@ export type Event =
 	 * with `water_tank_depth_mm` before comparing it with `level`.
 	 */
 	refill_threshold: number;
+}}
+	/**
+	 * The tank dropped to the user's low-water threshold (default 110 ml,
+	 * `0` = off; `CremaCore::set_water_warn_ml`). Once per dip: re-armed by
+	 * a refill 55 ml above the threshold, a threshold change, or a new link.
+	 * The shell shows the warning in the user's tank unit.
+	 */
+	| { type: "WaterLow", content: {
+	/** The tank DEPTH, mm, as in [`Event::WaterLevel`]. */
+	level: number;
+	/** The tank volume, ml. */
+	ml: number;
 }}
 	/**
 	 * Auto-stop decided the shot should end. The accompanying [`Command`]
@@ -2009,36 +2088,39 @@ export type Event =
 }}
 	/**
 	 * The profile upload failed. The core has discarded its in-progress
-	 * state; the shell may retry by calling `upload_profile` again.
+	 * state.
 	 * 
 	 * Once the header was dispatched, what the DE1 holds is **unknown**:
 	 * frames are indexed slot writes with no commit step, so an interrupted
 	 * upload can leave the new header's frame count over a mix of new and
-	 * old frames (Decenza `aa8232e6`). The shell must forget any "the DE1
-	 * holds profile X" cache on this event; the core asks for a re-upload
-	 * with [`ProfileReuploadNeeded`](Self::ProfileReuploadNeeded) once the
-	 * machine is Idle.
+	 * old frames (Decenza `aa8232e6`). The core's profile sync retries a
+	 * failed sync upload on its backoff and puts the desired profile back
+	 * after any other failed upload, once the machine is idle (see
+	 * [`ProfileSyncWarning`](Self::ProfileSyncWarning)).
 	 */
 	| { type: "ProfileUploadFailed", content: {
 	/** Why the upload failed. */
 	reason: ProfileUploadFailure;
 }}
 	/**
-	 * The DE1's loaded profile is unknown after a failed upload and the
-	 * machine is Idle, so the shell should upload the active profile now.
-	 * Emitted when a failure lands while the machine is Idle, on the next
-	 * transition into Idle (after the flow that interrupted the upload,
-	 * never during it), or on a tick. The request stays outstanding until a
-	 * shell starts an upload: it is repeated every
-	 * [`PROFILE_REUPLOAD_REPEAT`](crate::PROFILE_REUPLOAD_REPEAT) while the
-	 * machine stays Idle, so a shell that could not act at once (link not
-	 * ready yet) is asked again. At most
-	 * [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
-	 * uploads are started in answer until one completes; cleared by a
-	 * completed upload or a reset (the reconnect path owns the re-upload).
-	 * Decenza's `ReArm` follow-up (`aa8232e6`).
+	 * A profile-sync upload landed: the DE1 now holds the effective profile
+	 * with this fingerprint (the shell's desired one, unless it changed
+	 * meanwhile — the newer one follows). A shot start waits for its own.
 	 */
-	| { type: "ProfileReuploadNeeded", content?: undefined }
+	| { type: "ProfileSyncHolds", content: {
+	/** The fingerprint of the profile the DE1 now holds. */
+	fingerprint: string;
+}}
+	/**
+	 * The profile sync's one non-blocking warning: `active` when a sync
+	 * upload failed and retries are running (3 s, 10 s, then every 30 s);
+	 * cleared (`active: false`) by the next success or a disconnect.
+	 * Raised once per streak of failures (reaprime `onUploadError`).
+	 */
+	| { type: "ProfileSyncWarning", content: {
+	/** Whether the warning is raised. */
+	active: boolean;
+}}
 	/** An incoming notification could not be decoded. */
 	| { type: "DecodeError", content: {
 	/** Human-readable description of the failure. */
@@ -3095,6 +3177,56 @@ export interface PhaseMarker {
 }
 
 /**
+ * The pre-infusion dial for one profile: its range, the profile's own
+ * seconds ([`preinfusion_seconds`]) and whether it can be dialled at all.
+ */
+export interface PreinfusionDial {
+	/** Lowest pre-infusion, seconds (0 = off). */
+	min: number;
+	/**
+	 * Highest pre-infusion, seconds: the stepper's [`PREINFUSION_DIAL_MAX_S`],
+	 * raised to the profile's own value when that is longer.
+	 */
+	max: number;
+	/** The profile's own pre-infusion seconds — the dial's seed. */
+	seconds: number;
+	/**
+	 * `false` for a profile with no pre-infusion segment: there is nothing
+	 * to rescale, so the shells disable the dial and say why.
+	 */
+	adjustable: boolean;
+}
+
+/** The profile sync's state, as a shell sees it. */
+export interface ProfileSyncStatus {
+	/**
+	 * Fingerprint of the effective profile the shell wants on the DE1, or
+	 * `None` with no active profile.
+	 */
+	desired?: string;
+	/**
+	 * Fingerprint of what this connection last pushed successfully, or
+	 * `None` (nothing yet, or what the DE1 holds is unknown).
+	 */
+	lastPushed?: string;
+	/** A sync upload is running. */
+	uploading: boolean;
+	/** A failed upload is waiting for its retry. */
+	retrying: boolean;
+}
+
+/**
+ * What [`CremaCore::set_desired_profile_json`] returns: the output (an upload
+ * it started) and the sync's status after it.
+ */
+export interface ProfileSyncOutput {
+	/** Events and BLE writes. */
+	output: CoreOutput;
+	/** The sync's status after the call. */
+	status: ProfileSyncStatus;
+}
+
+/**
  * The four badge booleans the shells surface as chips. Projection rules:
  * `channeling` fires only on *sustained* severity (transients stay a prose
  * caution); `grind_issue` mirrors `detectGrindIssue`
@@ -3880,6 +4012,20 @@ export interface TimedSample {
 	 * non-upload story as `resistance`.
 	 */
 	resistanceWeight?: number;
+}
+
+/** The water constants the shells' settings UI needs, in one place. */
+export interface WaterConstants {
+	/** [`TANK_FULL_ML`], the percent readout's denominator. */
+	tankFullMl: number;
+	/** [`WATER_WARN_DEFAULT_ML`]. */
+	warnDefaultMl: number;
+	/** [`DEFAULT_REFILL_POINT_MM`]. */
+	defaultRefillPointMm: number;
+	/** [`REFILL_POINT_MIN_MM`]. */
+	refillPointMinMm: number;
+	/** [`REFILL_POINT_MAX_MM`]. */
+	refillPointMaxMm: number;
 }
 
 /**

@@ -36,8 +36,11 @@ import {
 	water_tank_percent as wasmWaterTankPercent,
 	water_tank_depth_mm as wasmWaterTankDepthMm,
 	default_refill_point_mm as wasmDefaultRefillPointMm,
+	refillSoon as wasmRefillSoon,
+	waterConstants as wasmWaterConstants,
 	subStateErrorMessage
 } from '#lib/wasm/de1_wasm.js';
+import type { WaterConstants } from '#lib/core/crema-core.js';
 
 /** Default scale beeper-volume step shown before the first live reading. */
 export const DEFAULT_SCALE_VOLUME = 3;
@@ -360,33 +363,6 @@ export interface UiSnapshot {
 	 * the in-flight window — see `BrewDashboard.svelte`.
 	 */
 	readonly activeProfileName: string | null;
-	/**
-	 * Fingerprint of the effective profile (library bytes + per-shot Quick
-	 * Controls overrides) the DE1 most recently acknowledged loading —
-	 * computed by {@link profileFingerprint}, stamped onto the snapshot
-	 * on `ProfileUploadCompleted` and cleared on disconnect.
-	 *
-	 * Compared against the *current* effective fingerprint at two
-	 * checkpoints:
-	 *
-	 *  - On `de1State === 'ready'`, the orchestrator's
-	 *    `ensureLoadedMatches()` uploads the active profile defensively
-	 *    when the cache is `null` or differs.
-	 *  - On `startShot()`, before issuing the Espresso state request — a
-	 *    dial change to dose / yield / brew temp / preinf that hasn't
-	 *    yet been pushed to the DE1 triggers an upload + await on
-	 *    `ProfileUploadCompleted` first.
-	 *
-	 * Persisted to `localStorage` (`crema.profile-sync.lastFingerprint`)
-	 * so a tab reload doesn't trigger a re-upload if the DE1 is still
-	 * running the same bytes.
-	 *
-	 * `null` means "no profile has been uploaded this session" (the
-	 * DE1's loaded bytes are unknown to us — a fresh connect with a
-	 * stale localStorage value is invalidated on connect anyway, see
-	 * `app.svelte.ts`).
-	 */
-	readonly activeProfileFingerprint: string | null;
 	/** Which auto-stop condition ended the last shot (weight / volume /
 	 *  max-time), or null when the user stopped it (or no shot yet). Cleared
 	 *  on the next ShotStarted — the stop-conditions card highlights the
@@ -688,7 +664,6 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
 	de1Firmware: null,
 	activeProfileName: null,
-	activeProfileFingerprint: null,
 	lastStopReason: null,
 	loadedProfileShape: null,
 	profileUploadProgress: null,
@@ -758,28 +733,30 @@ export function defaultRefillPointMm(): number {
 }
 
 /**
- * The mm of headroom above the refill threshold at or below which a "refill
- * soon" cue is shown (E2) — the tank is close to, but not yet at, the DE1's
- * own refill point.
- */
-const REFILL_SOON_MARGIN_MM = 5;
-
-/**
- * Whether the tank is low enough to warrant a "refill soon" cue — the level
- * is within {@link REFILL_SOON_MARGIN_MM} of (or already below) the DE1's
- * refill threshold. `false` when either reading is missing.
+ * Whether the tank is low enough to warrant a "refill soon" cue — the core's
+ * rule (`refill_soon`, shared with Android): the level is within 5 mm of, or
+ * already below, the DE1's refill threshold. `false` when either reading is
+ * missing.
  *
  * `levelMm` is the event's depth (offset-corrected); `rawThresholdMm` is the
- * machine's raw threshold, so it is converted to depth first — depth vs
- * depth, the same comparison as Decenza's raw-vs-raw margin.
+ * machine's raw threshold — the core converts it to depth first.
  */
 export function waterRefillSoon(
 	levelMm: number | null | undefined,
 	rawThresholdMm: number | null | undefined
 ): boolean {
-	const thresholdDepth = waterTankDepthMm(rawThresholdMm);
-	if (levelMm == null || thresholdDepth == null) return false;
-	return levelMm <= thresholdDepth + REFILL_SOON_MARGIN_MM;
+	return wasmRefillSoon(levelMm ?? undefined, rawThresholdMm ?? undefined);
+}
+
+let waterConstantsCache: WaterConstants | null = null;
+
+/**
+ * The core's water constants — the tank-full ml, the low-water default and
+ * the refill-point default and range (de1app's 3–70 mm), the same numbers
+ * Android's settings show. Read lazily (the wasm bundle loads first).
+ */
+export function waterConstants(): WaterConstants {
+	return (waterConstantsCache ??= JSON.parse(wasmWaterConstants()) as WaterConstants);
 }
 
 /**
@@ -1010,6 +987,12 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				scaleAutoStop: r.device_auto_stop ?? snapshot.scaleAutoStop
 			};
 		}
+		case 'WaterLow':
+			// The app shows the toast (in the user's tank unit); log it too.
+			return {
+				...snapshot,
+				eventLog: appendLog(snapshot.eventLog, `Water low: ${Math.round(event.content.ml)} ml`)
+			};
 		case 'WaterLevel': {
 			// Log only when the whole millimetre changes. The DE1 reports the
 			// tank level continuously, and logging every report drowned the
@@ -1332,8 +1315,9 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				)
 			};
 		}
-		case 'ProfileReuploadNeeded':
-			// The app's fold starts the re-upload; nothing to show here.
+		case 'ProfileSyncHolds':
+		case 'ProfileSyncWarning':
+			// The app's fold resolves a waiting start / shows the warning.
 			return snapshot;
 		case 'CalibrationRefused':
 			// The core's calibration guard, or the DE1's error reply. The

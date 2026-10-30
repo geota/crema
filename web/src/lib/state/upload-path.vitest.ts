@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CremaCore } from '#lib/core/index.js';
 import type { CoreOutput } from '#lib/core/crema-core.js';
+import { cremaProfileFromWire } from '#lib/wasm/de1_wasm.js';
 
 type WriteFn = (
 	target: string,
@@ -20,7 +21,7 @@ type WriteFn = (
 interface Harness {
 	app: {
 		state: { current: { eventLog: readonly { message?: string; text?: string }[] | readonly string[] } };
-		uploadProfile(profile: unknown): Promise<void>;
+		setDesiredProfile(profile: unknown, qc?: object): Promise<unknown>;
 	};
 	core: CremaCore;
 	onState(state: string): void;
@@ -28,8 +29,14 @@ interface Harness {
 	log(): string[];
 }
 
+/** A two-step classic profile as a library `CremaProfile` (the only shape the
+ *  shell can upload), adapted from the core's wire shape by the core. */
+function twoStepProfile(title: string): unknown {
+	return JSON.parse(cremaProfileFromWire(JSON.stringify(twoStepWireProfile(title))));
+}
+
 /** A two-step classic profile in the core's wire shape. */
-function twoStepProfile(title: string) {
+function twoStepWireProfile(title: string) {
 	const step = (name: string) => ({
 		name,
 		pump: 'pressure',
@@ -78,6 +85,9 @@ async function harness(write: WriteFn): Promise<Harness> {
 	);
 	const core = await loadCore();
 	core.reset();
+	// The bridge outlives one test, and a reset keeps the desired profile
+	// (user intent): start each test with none.
+	await core.setDesiredProfile(null, {}, 0);
 	const app = new CremaApp(core, null);
 	const internals = app as unknown as {
 		de1: { callbacks: { onState(s: string): void } };
@@ -98,6 +108,20 @@ async function harness(write: WriteFn): Promise<Harness> {
 /** Tell the core the machine model, as the connect sweep's reply would. */
 async function knowModel(h: Harness): Promise<void> {
 	h.feed(await h.core.onNotification('De1MmrRead', modelReply(1), performance.now()));
+}
+
+/** A settled, idle connection: the model and an Idle state reported, then
+ *  `ready` (the app's connect sweep settles the core's profile sync). */
+async function connect(h: Harness): Promise<void> {
+	await knowModel(h);
+	h.feed(await h.core.onNotification('De1State', new Uint8Array([2, 0]), performance.now()));
+	h.onState('ready');
+	await vi.advanceTimersByTimeAsync(0);
+}
+
+/** Make a profile titled `title` the desired one: the core's sync uploads it. */
+async function upload(h: Harness, title: string): Promise<void> {
+	await h.app.setDesiredProfile(twoStepProfile(title), {});
 }
 
 /** Note a profile write that reached the DE1: `H<count>` / `F<FrameToWrite>`. */
@@ -129,20 +153,18 @@ describe('the app ticks the core while the DE1 is connected (#2 N1)', () => {
 			if (target === 'De1ProfileFrame' && data[0] === 2) return new Promise<boolean>(() => {});
 			return true;
 		});
-		await knowModel(h);
-		await h.app.uploadProfile(twoStepProfile('Stall'));
-		await vi.advanceTimersByTimeAsync(7_000);
-		expect(failedWith(h, 'AckTimeout'), 'no ticker before the link is up').toBe(false);
-
-		h.onState('ready');
-		await vi.advanceTimersByTimeAsync(2_000);
+		await connect(h);
+		await upload(h, 'Stall');
+		await vi.advanceTimersByTimeAsync(6_000);
 		expect(failedWith(h, 'AckTimeout')).toBe(true);
 		expect(await h.core.profileUploadInProgress()).toBe(false);
+		// The core's retry (3 s later) runs on the same clock.
+		await vi.advanceTimersByTimeAsync(3_000);
+		expect(await h.core.profileUploadInProgress()).toBe(true);
 
-		// A dropped link stops the clock.
+		// A dropped link stops the clock: the stalled retry is never failed.
 		h.onState('disconnected');
-		await h.app.uploadProfile(twoStepProfile('Stall again'));
-		await vi.advanceTimersByTimeAsync(7_000);
+		await vi.advanceTimersByTimeAsync(60_000);
 		expect(await h.core.profileUploadInProgress()).toBe(true);
 	});
 });
@@ -158,6 +180,8 @@ describe('profile-write generations in the app executor (#2 N2)', () => {
 		// Like the transport's queue: the guard and `settled` run inside the
 		// queued step.
 		const write: WriteFn = (target, data, guard, settled) => {
+			// Only profile writes are held; the connect sweep's go through.
+			if (!target.startsWith('De1Profile')) return Promise.resolve(true);
 			const index = started++;
 			const op = chain.then(async () => {
 				if (index >= released) await new Promise<void>((r) => waiters.push(r));
@@ -180,20 +204,22 @@ describe('profile-write generations in the app executor (#2 N2)', () => {
 	it("a superseded upload's queued writes never reach the DE1 or ack into its successor", async () => {
 		const q = gatedQueue();
 		const h = await harness(q.write);
-		h.onState('ready');
-		await knowModel(h);
-		await h.app.uploadProfile(twoStepProfile('A'));
+		await connect(h);
+		await upload(h, 'A');
 		// A's header and first frame land; the rest of A is still queued.
 		await q.release(2);
-		await h.app.uploadProfile(twoStepProfile('B'));
+		// A is cut short (cancelled); the core's retry 3 s later starts a new
+		// upload of it behind A's queued writes.
+		h.feed(await h.core.cancelProfileUpload());
+		await vi.advanceTimersByTimeAsync(3_000);
 		await q.release(100);
 		await vi.advanceTimersByTimeAsync(10);
 
-		expect(h.log().some((l) => l.includes('Profile uploaded: B'))).toBe(true);
+		expect(h.log().some((l) => l.includes('Profile uploaded: A'))).toBe(true);
 		expect(failedWith(h, 'HeaderNotAcked')).toBe(false);
 		expect(failedWith(h, 'UnexpectedAck')).toBe(false);
-		// A: header + frame 0 only. B: header (2 frames), both frames, the
-		// two default-limiter extensions, the tail.
+		// The first A: header + frame 0 only. The retry: header (2 frames),
+		// both frames, the two default-limiter extensions, the tail.
 		expect(q.written).toEqual(['H2', 'F0', 'H2', 'F0', 'F1', 'F32', 'F33', 'F2']);
 	});
 
@@ -211,18 +237,17 @@ describe('profile-write generations in the app executor (#2 N2)', () => {
 			chain = op;
 			return op;
 		});
-		h.onState('ready');
-		await knowModel(h);
-		await h.app.uploadProfile(twoStepProfile('Fail'));
+		await connect(h);
+		await upload(h, 'Fail');
 		await vi.advanceTimersByTimeAsync(10);
 		expect(failedWith(h, 'WriteFailed')).toBe(true);
 		expect(written, 'nothing after the failed frame').toEqual(['H2', 'F0']);
 	});
 
 	it('a failure report that lands after a newer upload started leaves the newer one running (V3 #1)', async () => {
-		// Upload A's first frame fails. Before the executor reports it, upload
-		// B starts (a shot start). The report names A, so B is not failed and
-		// completes; the old unnamed report failed B and refused the shot.
+		// Upload A's first frame fails. Before the executor reports it, A is
+		// cut short and the core's retry B starts. The report names A, so B is
+		// not failed and completes; an unnamed report would fail B.
 		const written: string[] = [];
 		let chain: Promise<unknown> = Promise.resolve();
 		let startedB = false;
@@ -235,7 +260,8 @@ describe('profile-write generations in the app executor (#2 N2)', () => {
 					settled?.(false);
 					// The newer upload starts between the failure and its report.
 					startedB = true;
-					h.feed(await h.core.uploadProfile(twoStepProfile('B'), performance.now()));
+					h.feed(await h.core.cancelProfileUpload());
+					h.feed(await h.core.onTick(performance.now() + 3_000));
 					return false;
 				}
 				record(written, target, data);
@@ -245,17 +271,16 @@ describe('profile-write generations in the app executor (#2 N2)', () => {
 			chain = op;
 			return op;
 		});
-		h.onState('ready');
-		await knowModel(h);
+		await connect(h);
 		// The event log outlives one app; read only this test's entries.
 		const idOf = (l: string) => (JSON.parse(l) as { id?: number }).id ?? 0;
 		const startId = Math.max(0, ...h.log().map(idOf));
 		const fresh = () => h.log().filter((l) => idOf(l) > startId);
-		await h.app.uploadProfile(twoStepProfile('A'));
+		await upload(h, 'A');
 		await vi.advanceTimersByTimeAsync(10);
 		expect(fresh().some((l) => l.includes('Profile write failed'))).toBe(true);
 		expect(fresh().some((l) => l.includes('Profile upload failed: WriteFailed'))).toBe(false);
-		expect(fresh().some((l) => l.includes('Profile uploaded: B'))).toBe(true);
+		expect(fresh().some((l) => l.includes('Profile uploaded: A'))).toBe(true);
 		expect(written).toEqual(['H2', 'H2', 'F0', 'F1', 'F32', 'F33', 'F2']);
 	});
 });
@@ -308,6 +333,7 @@ describe('a core rebuilt after a panic (round-3 clean check C2 P3-1)', () => {
 		const waiters: (() => void)[] = [];
 		let chain: Promise<unknown> = Promise.resolve();
 		const h = await harness((target, data, guard, settled) => {
+			if (!target.startsWith('De1Profile')) return Promise.resolve(true);
 			const index = started++;
 			const op = chain.then(async () => {
 				if (index >= released) await new Promise<void>((res) => waiters.push(res));
@@ -320,9 +346,8 @@ describe('a core rebuilt after a panic (round-3 clean check C2 P3-1)', () => {
 			return op;
 		});
 		const acks = vi.spyOn(r.core, 'onProfileWriteAck');
-		h.onState('ready');
-		await knowModel(h);
-		await h.app.uploadProfile(twoStepProfile('A'));
+		await connect(h);
+		await upload(h, 'A');
 		released = 1; // A's header lands and is acked
 		while (waiters.length > 0) waiters.shift()?.();
 		await vi.advanceTimersByTimeAsync(0);
@@ -359,12 +384,90 @@ describe('a core rebuilt after a panic (round-3 clean check C2 P3-1)', () => {
 			return op;
 		});
 		const reports = vi.spyOn(r.core, 'profileWriteFailed');
-		h.onState('ready');
-		await knowModel(h);
-		await h.app.uploadProfile(twoStepProfile('A'));
+		await connect(h);
+		await upload(h, 'A');
 		await vi.advanceTimersByTimeAsync(10);
 		expect(failedOnce).toBe(true);
 		expect(reports).not.toHaveBeenCalled();
 		expect(h.log().some((l) => l.includes('Core reset after an internal error'))).toBe(true);
+	});
+});
+
+describe('the shell uploads the effective profile (AC-F6.3)', () => {
+	it('the brew-temp and pre-infusion overrides change the frames, and the fingerprint is theirs', async () => {
+		const { profileFingerprint, effectiveCremaProfile } = await import('#lib/profiles/index.js');
+		const frames: Uint8Array[] = [];
+		const h = await harness(async (target, data, guard, settled) => {
+			if (guard && !guard()) return false;
+			if (target === 'De1ProfileFrame') frames.push(new Uint8Array(data));
+			settled?.(true);
+			return true;
+		});
+		await connect(h);
+		// Two 20 s steps at 92 °C; the first is the one pre-infusion segment.
+		const profile = twoStepProfile('Dialled') as import('#lib/profiles/index.js').CremaProfile;
+		const desired = (qc: object) =>
+			(h.app.setDesiredProfile(profile, qc) as Promise<{ desired?: string | null }>).then(
+				(status) => status.desired ?? null
+			);
+		const bareFp = await desired({});
+		await vi.advanceTimersByTimeAsync(10);
+		const bare = frames.splice(0);
+		const qc = { brewTemp: 94, preinf: 12 };
+		const fp = await desired(qc);
+		await vi.advanceTimersByTimeAsync(10);
+		const dialled = frames.splice(0);
+
+		// ShotFrame bytes: [3] temperature (U8P1, half degrees), [4] duration
+		// (F8_1_7: tenths below 12.75 s, whole seconds | 0x80 above).
+		expect([bare[0][3], bare[1][3]]).toEqual([184, 184]);
+		expect([dialled[0][3], dialled[1][3]]).toEqual([188, 188]);
+		expect(bare[0][4]).toBe(0x80 | 20);
+		expect(dialled[0][4]).toBe(120); // 12.0 s in tenths
+		expect(dialled[1][4]).toBe(bare[1][4]);
+
+		// The fingerprint is the hash of exactly those bytes' profile.
+		expect(fp).toBe(profileFingerprint(profile, qc));
+		expect(fp).toBe(profileFingerprint(effectiveCremaProfile(profile, qc), {}));
+		expect(bareFp).toBe(profileFingerprint(profile, {}));
+		expect(fp).not.toBe(bareFp);
+	});
+});
+
+describe('the core sends the desired profile on every connect (AC-F7.1, web)', () => {
+	it('f7_1 a connect and a reconnect each upload it; nothing is persisted (F7.6)', async () => {
+		const headers: number[] = [];
+		const h = await harness(async (target, data, guard, settled) => {
+			if (guard && !guard()) return false;
+			if (target === 'De1ProfileHeader') headers.push(data[1]);
+			settled?.(true);
+			return true;
+		});
+		// The active profile is set before the DE1 connects.
+		await upload(h, 'Daily');
+		await vi.advanceTimersByTimeAsync(10);
+		expect(headers, 'nothing before the connection settles').toEqual([]);
+		await connect(h);
+		await vi.advanceTimersByTimeAsync(10);
+		expect(headers, 'the connect sweep is followed by the upload').toEqual([2]);
+		expect((await h.core.profileSyncStatus()).lastPushed).not.toBeNull();
+		// Unchanged within the connection: not sent again.
+		await upload(h, 'Daily');
+		await vi.advanceTimersByTimeAsync(10);
+		expect(headers).toEqual([2]);
+
+		// The link drops (the DE1 manager tells the core), then comes back:
+		// the DE1 manager re-reads the state before it reports ready.
+		h.feed(await h.core.de1LinkLost());
+		h.onState('reconnecting');
+		await vi.advanceTimersByTimeAsync(10);
+		h.feed(await h.core.onNotification('De1State', new Uint8Array([2, 0]), performance.now()));
+		h.onState('ready');
+		await vi.advanceTimersByTimeAsync(10);
+		expect(headers, 'a reconnect re-sends').toEqual([2, 2]);
+
+		// F7.6: no "DE1 holds X" fingerprint reaches storage.
+		const keys = Object.keys(localStorage);
+		expect(keys.filter((k) => /fingerprint|profile-sync/i.test(k))).toEqual([]);
 	});
 });

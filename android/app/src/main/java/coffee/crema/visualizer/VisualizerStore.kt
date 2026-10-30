@@ -10,6 +10,7 @@ import coffee.crema.core.VisualizerSyncPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -114,6 +115,15 @@ data class VisualizerState(
      * the web keeps the same set in `crema.visualizer.baristaPending.v1`.
      */
     val baristaPending: Set<String> = emptySet(),
+    /**
+     * The stored state as read, when the keystore couldn't open a secret this
+     * start ([SecretBox.Opened.Unavailable]); in memory only. Meanwhile the
+     * session reads as signed out (no tokens, account or handshake), and every
+     * save writes the stored sealed values back unchanged, so a transient
+     * keystore error never erases the sign-in. Setting new tokens or signing
+     * out drops it ([VisualizerSync]).
+     */
+    @Transient val unopened: VisualizerState? = null,
 )
 
 /** The canonical default sync prefs — mirrors the core `VisualizerSyncPrefs::default`. */
@@ -131,8 +141,12 @@ val DEFAULT_VISUALIZER_SYNC_PREFS: VisualizerSyncPrefs = VisualizerSyncPrefs(
 /** The at-rest form: token + PKCE verifier sealed ([SecretBox]). Idempotent. */
 internal fun VisualizerState.sealedWith(box: SecretBox): VisualizerState {
     fun seal(v: String) = if (SecretBox.isWrapped(v)) v else box.wrap(v)
+    val kept = unopened?.takeIf { tokens == null }
     return copy(
-        tokens = tokens?.let { t -> t.copy(accessToken = seal(t.accessToken), refreshToken = t.refreshToken?.let(::seal)) },
+        tokens = tokens?.let { t -> t.copy(accessToken = seal(t.accessToken), refreshToken = t.refreshToken?.let(::seal)) }
+            ?: kept?.tokens,
+        account = account ?: kept?.account,
+        // A handshake is single-use: one in flight at that start isn't kept.
         pendingVerifier = pendingVerifier?.let(::seal),
     )
 }
@@ -140,18 +154,26 @@ internal fun VisualizerState.sealedWith(box: SecretBox): VisualizerState {
 /**
  * The in-memory form, plus whether to re-save (a legacy plaintext secret, or
  * one the key can no longer open — then the session is dropped: signed out).
+ * When a secret can't be opened this start (transient), the session reads as
+ * signed out, the stored state is kept in [VisualizerState.unopened], and
+ * nothing is re-saved.
  */
 internal fun VisualizerState.openedWith(box: SecretBox): Pair<VisualizerState, Boolean> {
     var resave = false
     var lost = false
+    var unavailable = false
     fun open(v: String?): String? = when (val o = box.openOrNull(v)) {
         null -> null
         is SecretBox.Opened.Value -> { if (o.migrate) resave = true; o.value }
         SecretBox.Opened.Lost -> { lost = true; resave = true; null }
+        SecretBox.Opened.Unavailable -> { unavailable = true; null }
     }
     val access = tokens?.let { open(it.accessToken) }
     val refresh = tokens?.refreshToken?.let { open(it) }
     val verifier = open(pendingVerifier)
+    if (unavailable && !lost) {
+        return copy(tokens = null, account = null, pendingVerifier = null, pendingState = null, unopened = this) to false
+    }
     val opened = copy(
         tokens = if (lost || access == null) null else tokens.copy(accessToken = access, refreshToken = refresh),
         account = if (lost) null else account,

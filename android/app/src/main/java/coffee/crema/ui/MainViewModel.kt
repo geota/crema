@@ -12,6 +12,8 @@ import android.os.BatteryManager
 import coffee.crema.core.ConnectSweepSettings
 import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
+import coffee.crema.core.ProfileSyncOutput
+import coffee.crema.core.ProfileSyncStatus
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
 import coffee.crema.core.MaintenancePhase
@@ -37,8 +39,6 @@ import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.MaintenanceStore
-import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_DT_S
-import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_ML
 import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.persist.KeptAside
 import coffee.crema.persist.KeptAsideNotices
@@ -68,11 +68,12 @@ import coffee.crema.machine.QcField
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotDisposition
 import coffee.crema.core.ShotQualityReport
-import coffee.crema.core.profileFingerprint
+import coffee.crema.core.brewTempRange
+import coffee.crema.core.normalizeBrewOverrides
+import coffee.crema.core.preinfusionDial
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.core.MachineState
-import coffee.crema.profiles.overrideBrewParamsJson
 import coffee.crema.profiles.SegmentEdit
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
@@ -164,9 +165,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val coreDispatcher = kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)
 
+    /** Where the dial's debounce wait runs ([pushDesiredProfile]); the push
+     *  itself always runs on the core lane. Test seam: a test dispatcher
+     *  makes the 0.5 s virtual time. */
+    @androidx.annotation.VisibleForTesting
+    internal var dialDebounceContext: kotlin.coroutines.CoroutineContext = coreDispatcher
+
     /** Run [block] on the core lane, FIFO behind any queued event application.
-     *  Every write to lane-owned state (the upload-skip cache, [pendingBrew],
-     *  [waterLowWarned], [maintenanceTotalLitres]) goes through here or runs
+     *  Every write to lane-owned state ([pendingBrew],
+     *  [maintenanceTotalLitres]) goes through here or runs
      *  on the lane already: a plain Main-thread write is not ordered against a
      *  queued lane task (cohort review 2026-10-25, Android P2-3). */
     private fun onCoreLane(block: () -> Unit) {
@@ -216,12 +223,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Set when [startShot] kicks off a profile upload that should be followed by an
-     * Espresso request once the upload completes (the gated start). Cleared on
-     * `ProfileUploadCompleted` (after firing Espresso), on `ProfileUploadFailed`,
-     * on the upload timeout, and on disconnect.
+     * Set when [startShot] waits for the DE1 to hold its profile before the
+     * Espresso request (the gated start): the core's profile sync is uploading
+     * it. Cleared on the matching `ProfileSyncHolds` (after firing Espresso), on
+     * `ProfileUploadFailed`, on the timeout, and on disconnect.
      */
     private var pendingBrew = false
+
+    /** The effective-profile fingerprint [pendingBrew] waits for. Lane-owned. */
+    private var pendingBrewFingerprint: String? = null
 
     /** Which start armed [pendingBrew]: its backstop and its upload's
      *  outcome act only on that start. Lane-owned, like [pendingBrew]. */
@@ -249,34 +259,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         notifyUser = ::notifyUser,
     )
 
-    /**
-     * Profile-upload-skip cache (issue 11, mirrors the web shell). The djb2
-     * fingerprint of the profile last successfully uploaded to the *currently
-     * connected* DE1 — so a re-`startShot` of the same profile skips the
-     * redundant upload and goes straight to Espresso. [pendingUploadFingerprint]
-     * holds the in-flight upload's fingerprint, committed to [lastUploadedFingerprint]
-     * on `ProfileUploadCompleted`. The cache is invalidated on any drop out of
-     * READY (the DE1 no longer holds our bytes) — without that, a skip after a
-     * power-cycle would start a shot against a stale/absent profile.
-     *
-     * NOTE: unverified — there is no DE1 simulator, so the skip→Espresso path
-     * cannot be exercised in CI/emulator. The decision is unit-tested
-     * ([shouldSkipProfileUpload]); the wiring degrades safely (a null fingerprint
-     * ⇒ never skip ⇒ the previous always-upload behaviour).
-     */
-    private var lastUploadedFingerprint: String? = null
-
     /** Whether the low-battery snackbar fired for the current scale
      *  connection (issue #29) — reset in [clearScaleSessionUi] so the next
      *  session warns again, but one connection never nags twice. */
     private var scaleLowBatteryWarned = false
 
-    /** Whether the low-water snackbar fired for the current tank dip (#33
-     *  follow-up) — re-armed once the level rises [WATER_WARN_REARM_ML]
-     *  above the threshold (a refill), on threshold edits, and on
-     *  disconnect. One dip never nags twice. */
-    private var waterLowWarned = false
-    private var pendingUploadFingerprint: String? = null
 
     /** The machine's last-reported steam/hot-water settings (from
      *  `Event.ShotSettingsRead`). Used to read-modify-write QC steam/water
@@ -1126,14 +1113,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var maintenanceTotalLitres: Double = 0.0
 
     /**
-     * Timestamp (System.currentTimeMillis) of the previous telemetry sample, for
-     * the wall-clock Δ the accumulate integrates over; null at session start.
-     * Reset to null on `ShotStarted` / `WaterSessionStarted` so the FIRST sample
-     * of a session adds no Δ (avoids a huge between-session gap being integrated).
-     */
-    private var lastTelemetryMs: Long? = null
-
-    /**
      * What this device does for each [MachineCommand]: the bodies behind the
      * verbs. [ProxyController]'s local machine runs them for this device's own
      * UI and for a secondary's relayed commands alike. Declared before [proxy],
@@ -1464,13 +1443,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // known (it only runs on an idle machine).
             scheduleNearbySetup()
         },
-        // The DE1 no longer holds our profile — drop the upload-skip cache so
-        // the next shot re-uploads (issue 11). Without this, a skip after a
-        // reconnect would brew against a stale/absent profile.
+        // The core's profile sync forgets what this connection pushed when
+        // the link drops (`de1LinkLost` / `reset`) and uploads again after
+        // the next connect sweep.
         onDe1Dropped = {
-            // On the lane: a ProfileUploadCompleted still queued there would
-            // otherwise re-commit the fingerprint AFTER this clear.
-            onCoreLane { lastUploadedFingerprint = null }
             de1SetupDone = false
             sweepRunner.onDropped()
             idleSleep.link(false)
@@ -1524,6 +1500,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  it): the hub's relay waits for it, so it never serves before the
      *  paired devices are known. */
     private val prefsReady = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+    /** The whole startup load (library, prefs, custom profiles, …). Tests wait
+     *  for it: [prefsReady] completes partway through. */
+    @androidx.annotation.VisibleForTesting
+    internal lateinit var startupLoad: kotlinx.coroutines.Job
 
     /** The pending "nearby" setup after a DE1 connects (see [setUpNearby]). */
     private var nearbySetupJob: kotlinx.coroutines.Job? = null
@@ -1779,7 +1760,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         library.loadBuiltinProfiles()
         // Load both persisted stores in one coroutine, sequentially, so their
         // _ui copies don't race (read-modify-write of the shared snapshot).
-        viewModelScope.launch {
+        startupLoad = viewModelScope.launch {
             library.loadLibrary()
             library.loadHistory()
             loadPrefs()
@@ -1809,7 +1790,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             drive.autoBackupIfDue(_ui.value.autoDriveBackup)
             // Daily automatic release check (opt-in, default off).
             maybeAutoUpdateCheck()
-        }.invokeOnCompletion {
+        }
+        startupLoad.invokeOnCompletion {
             // A load that failed before the prefs still lets a hub serve.
             prefsReady.complete(Unit)
         }
@@ -1878,6 +1860,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         id, name, roast, tags, pinned, notes, author, beverageType, dose, yieldOut,
         brewTemp, maxTotalVolumeMl, preinfuseStepCount, tankTemperatureC, segments,
     )
+
+    /** The editor's segments after its Brew temp field moved to [target]: every
+     *  step shifted by the core (Decenza `applyTemperatureToProfile`). */
+    fun editorBrewTemp(id: String, segments: List<SegmentEdit>, target: Double): List<SegmentEdit> =
+        library.editorBrewTemp(id, segments, target)
 
     /** Close the editor without saving (discards any new / duplicated draft). */
     fun cancelProfileEdit() = library.cancelProfileEdit()
@@ -2199,10 +2186,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (shot.doseG != null || shot.yieldTargetG != null) {
             val active = match ?: effectiveState().activeProfile()
             val dose = shot.doseG?.toDouble() ?: active?.dose?.toDouble() ?: 18.0
+            // The profile's own brew temperature as the core anchors it (its
+            // first step), so the dial-in moves no temperature it didn't record.
+            val anchor = brewDialOf(active?.id?.let { library.profileJson(it) }, json, ::brewTempRange, ::preinfusionDial)?.anchor
             quickAdjustBrew(
                 dose = dose,
                 yieldOut = shot.yieldTargetG?.toDouble() ?: active?.yieldOut?.toDouble() ?: (dose * 2),
-                brewTemp = active?.brewTemp?.toDouble() ?: 93.0,
+                brewTemp = shot.brewTempC?.toDouble() ?: anchor ?: active?.brewTemp?.toDouble() ?: 93.0,
             )
         }
         val stamp = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
@@ -2233,7 +2223,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * shot target is the Quick-Controls dial override (null when unset, so the
      * profile recipe wins). Safe while disconnected — pure core state, no BLE.
      */
-    private fun pushStopTargets(s: MainUiState = effectiveState()) {
+    private fun pushStopTargets(s: MainUiState = effectiveState(), desiredDelayMs: Long = 0) {
         // On a remote, a hub's custom profile this library lacks is the overlay.
         val active = s.activeProfile()
         val profileYield = active?.yieldOut?.takeIf { it.isFinite() && it > 0f }
@@ -2257,6 +2247,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             setActiveProfile = { bridge.setActiveProfile(it) },
             log = { appendLog(it) },
         )
+        pushDesiredProfile(s, desiredDelayMs)
         refreshStopTargetProjection()
     }
 
@@ -2343,11 +2334,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ) }
         // On a remote the core keeps following the hub's values (§7.4).
         pushCoreInputs(effectiveState())
-        // Re-run the connect sweep with the restored prefs — machine registers
-        // plus the Quick-Controls steam / hot-water / flush params — so a
-        // restore takes effect without waiting for the next connect or QC edit
-        // (a no-op when disconnected or off-primary).
-        seedMachineSettings()
+        // Re-send the connect sweep's settings with the restored prefs — machine
+        // registers plus the Quick-Controls steam / hot-water / flush params —
+        // so a restore takes effect without waiting for the next connect or QC
+        // edit (its writes are a no-op when disconnected or off-primary). Not
+        // the sweep itself: only the on-ready sweep settles the link for the
+        // profile sync, and a restore while the DE1 is down must not.
+        seedMachineSettings(onReady = false)
         persistPrefs() // pushes the hub's snapshot too
     }
 
@@ -2487,66 +2480,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { appendLog("Re-assert stop-on-weight failed: ${it.message}") }
         runCatching { bridge.setVolumeStopWithScale(_ui.value.volumeStopWithScale) }
             .onFailure { appendLog("Re-assert volume-stop-with-scale failed: ${it.message}") }
-        // Quick-Controls override: bake the transient dose/yield/brew-temp into the
-        // uploaded profile (the web shell's lazy re-upload-with-overrides). The
-        // library profile is untouched; only this one upload carries the override.
-        val bp = _ui.value.brewParams
-        val effectiveJson = if (bp != null) {
-            runCatching {
-                overrideBrewParamsJson(
-                    cremaJson,
-                    bp.dose.toFloat(),
-                    bp.yieldOut.toFloat(),
-                    bp.brewTemp.toFloat(),
-                    bp.preinf?.toFloat(),
-                    json,
-                )
-            }.getOrDefault(cremaJson)
-        } else {
-            cremaJson
-        }
-        // Issue 11: if the connected DE1 already holds this exact effective profile
-        // (fingerprint match), skip the redundant upload and go straight to the
-        // gated Espresso request. A null fingerprint (hash failure) ⇒ never skip.
-        val fingerprint = runCatching { profileFingerprint(effectiveJson, null) }.getOrNull()
-        if (shouldSkipProfileUpload(
-                fingerprint,
-                lastUploadedFingerprint,
-                _ui.value.bleState == De1BleManager.State.READY,
-            )
-        ) {
-            appendLog("Profile unchanged on DE1 (fingerprint match) — skipping re-upload")
-            startSequence.proceed(start, _ui.value.preFlush)
-            return
-        }
-        val wireJson = runCatching { cremaProfileToWire(effectiveJson) }.getOrElse {
+        // The shot's profile — the library profile with the Quick-Controls
+        // override, applied by the core — becomes the desired one. The core's
+        // profile sync uploads it unless this connection already pushed it
+        // (issue 11's skip, now the core's), and the start waits for it.
+        val status = setDesiredOnLane(cremaJson, _ui.value.brewParams.overridesJson(json)) ?: run {
             startSequence.end(start)
             notifyUser("Can\u2019t start shot \u2014 profile conversion failed")
             return
         }
-        if (!startUploadOnLane(wireJson, fingerprint)) {
-            startSequence.end(start)
-            notifyUser("Can\u2019t start shot \u2014 profile upload failed")
+        if (status.holdsDesired()) {
+            appendLog("Profile already on the DE1 \u2014 no upload")
+            startSequence.proceed(start, _ui.value.preFlush)
             return
         }
-        // Set only after the upload's own output was applied: its Aborted
-        // for the upload it superseded (often the automatic re-upload) used
-        // to clear this flag and drop the start silently (#2 N2).
+        // Set after the call's own output was applied; the upload's acks and
+        // its ProfileSyncHolds queue behind this lane task.
         pendingBrew = true
         pendingBrewStart = start
-        // Backstop: if no ProfileUploadCompleted arrives, cancel the core
-        // upload (so it fails like any other: fingerprint forgotten, re-upload
-        // armed) and clear the pending brew so the UI doesn't hang in
-        // "uploading". On the core lane so pendingBrew stays single-threaded.
+        pendingBrewFingerprint = status.desired
+        // Backstop: if the DE1 does not confirm the profile in time, end the
+        // start so the UI doesn't hang in "uploading" (the core keeps retrying
+        // on its own). On the core lane so pendingBrew stays single-threaded.
         viewModelScope.launch(coreDispatcher) {
             delay(PROFILE_UPLOAD_TIMEOUT_MS)
             if (pendingBrew && pendingBrewStart === start) {
-                runCatching { applyCoreOutputJson(bridge.cancelProfileUpload()) }
                 pendingBrew = false
                 pendingBrewStart = null
+                pendingBrewFingerprint = null
                 val live = startSequence.end(start)
-                pendingUploadFingerprint = null
-                _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 // A start that was stopped, or overtaken by a group-head
                 // shot, needs no toast (mid-shot it would be wrong).
                 if (live) notifyUser("Profile upload timed out \u2014 shot not started")
@@ -2556,27 +2518,51 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * On the core lane: start uploading [wireJson] and apply the output NOW,
-     * then record [fingerprint] as the upload in flight. The output's own
-     * events — an `Aborted` for the upload it superseded — must land before the
-     * caller marks this upload's pending state, or they clear it (cohort review
-     * 2026-10-28, #2 N2). Its acks queue behind this lane task, so the
-     * completion always sees that state. Returns whether an upload is now
-     * running (or waiting for the machine model).
+     * On the core lane: make the library [cremaJson] (null = no active
+     * profile) with the Quick-Controls overrides [qcJson] the core's desired
+     * profile (`setDesiredProfile`, this shell's only way to put a profile on
+     * the DE1) and apply the output NOW — an upload the core's profile sync
+     * started. Returns the sync's status, or null when the core can't read the
+     * profile.
      */
-    private fun startUploadOnLane(wireJson: String, fingerprint: String?): Boolean {
-        val raw = runCatching {
-            bridge.uploadProfile(wireJson, SystemClock.elapsedRealtime().toULong())
+    private fun setDesiredOnLane(cremaJson: String?, qcJson: String?): ProfileSyncStatus? {
+        val sync = runCatching {
+            json.decodeFromString(
+                ProfileSyncOutput.serializer(),
+                bridge.setDesiredProfile(cremaJson, qcJson, SystemClock.elapsedRealtime().toULong()),
+            )
         }.getOrElse {
-            appendLog("Profile upload failed to start: ${it.message}")
-            return false
+            appendLog("Setting the desired profile failed: ${it.message}")
+            return null
         }
-        applyCoreOutputJson(raw)
-        if (runCatching { bridge.profileUploadInProgress() }.getOrDefault(false) != true) return false
-        pendingUploadFingerprint = fingerprint
-        _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
-        return true
+        applyCoreOutput(sync.output)
+        if (sync.output.events.any { it is Event.DecodeError }) return null
+        return sync.status
     }
+
+    /**
+     * The profile on screen — the active profile and its Quick-Controls
+     * override — as the core's desired profile. Pushed with the stop targets
+     * (select, override change, startup restore, every DE1 connect, every shot
+     * start): the core's profile sync decides when to upload. A remote pushes
+     * nothing: its core is a read-only mirror that never uploads (the hub holds
+     * the machine), and it pushes again once it stops being a remote.
+     */
+    private fun pushDesiredProfile(s: MainUiState = effectiveState(), delayMs: Long = 0) {
+        if (_ui.value.mirror != null) return
+        val cremaJson = s.activeProfile()?.id?.let { library.profileJson(it) } ?: s.mirroredProfileJson
+        val qcJson = s.brewParams.overridesJson(json)
+        // The latest push wins: a dial change waits [delayMs] for the dial to
+        // rest (de1app's 0.5 s), and any later push replaces a pending one.
+        desiredPushJob?.cancel()
+        desiredPushJob = viewModelScope.launch(if (delayMs > 0) dialDebounceContext else coreDispatcher) {
+            if (delayMs > 0) delay(delayMs)
+            kotlinx.coroutines.withContext(coreDispatcher) { setDesiredOnLane(cremaJson, qcJson) }
+        }
+    }
+
+    /** The pending [pushDesiredProfile] (a dial change waiting to settle). */
+    private var desiredPushJob: Job? = null
 
     /** Scan for and connect to a DE1 — delegate of [ConnectionController.connect].
      *  Called from the UI once the BLE runtime permissions have been granted. */
@@ -2615,8 +2601,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreLane {
             pendingBrew = false
             pendingBrewStart = null
-            // Next connection's first low-water report warns afresh (#33).
-            waterLowWarned = false
+            pendingBrewFingerprint = null
         }
         _ui.update { it.copy(
             machineState = null,
@@ -2672,6 +2657,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  shows its relayed edits in its mirror slice instead ([showPending]). */
     private fun showConfig(cmd: MachineCommand.Config) {
         _ui.update { cmd.applyTo(it) }
+        // The brew override is stored normalized by the core (this device holds
+        // the machine: its own dial and a remote's relayed one alike) — brew
+        // temp clamped into the active profile's range, values back at the
+        // profile's own dropped, nothing left = no override (Decenza model).
+        if (cmd is MachineCommand.AdjustBrew) {
+            val activeJson = _ui.value.activeProfileId?.let { library.profileJson(it) }
+            _ui.update {
+                it.copy(
+                    brewParams = normalizedBrewParams(
+                        it.brewParams, activeJson, json, ::normalizeBrewOverrides, ::brewTempRange,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** The brew-temperature dial for the profile on screen (the core's range,
+     *  anchor and pre-infusion seed); `null` with no active profile. */
+    fun brewDial(): BrewDial? {
+        val s = effectiveState()
+        // On a remote the hub's copy of its custom profile wins over this
+        // library's (possibly out-of-date) one.
+        val cremaJson = s.mirroredProfileJson?.takeIf { _ui.value.mirror != null }
+            ?: s.activeProfileId?.let { library.profileJson(it) } ?: s.mirroredProfileJson
+        return brewDialOf(cremaJson, json, ::brewTempRange, ::preinfusionDial)
     }
 
     /** The rest of a config command on the device that owns the config:
@@ -2716,7 +2726,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             is MachineCommand.AdjustBrew -> {
-                pushStopTargets() // the new yield override becomes the live stop-at-weight target
+                // The new yield override becomes the live stop-at-weight target
+                // now; the dialled profile goes to the DE1 once the dial rests.
+                pushStopTargets(desiredDelayMs = DIAL_PUSH_DEBOUNCE_MS)
                 proxy.pushConfig() // mirrors track the primary's live override (issue 06)
             }
             MachineCommand.ResetBrew -> {
@@ -2902,6 +2914,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setMaxShotDuration(state.maxShotDurationS) }.onFailure { appendLog("Set max shot duration failed: ${it.message}") }
         runCatching { bridge.setVolumeStopWithScale(state.volumeStopWithScale) }.onFailure { appendLog("Set volume-stop-with-scale failed: ${it.message}") }
         runCatching { bridge.setWeightUnitPref(coreWeightUnit(state.weightUnit)) }.onFailure { appendLog("Set weight unit failed: ${it.message}") }
+        runCatching { bridge.setWaterWarnMl(state.waterWarnMl) }.onFailure { appendLog("Set low-water threshold failed: ${it.message}") }
         pushStopTargets(state)
         idleSleep.configure(state.idleSleepMin)
     }
@@ -3079,7 +3092,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  without this the machine silently runs the firmware defaults (the
      *  constant-fan report, geota/crema#31). Safe to call any time — the writes
      *  route through [routeWrite], a no-op when disconnected. */
-    private fun seedMachineSettings() {
+    private fun seedMachineSettings(onReady: Boolean = true) {
         // One core-owned list (`CremaCore::connect_sweep`, web runs the same):
         // USB charger (Tablet charging setting), the user-presence feature flag
         // (FeatureFlags bit 0 — UserPresent pokes, sent on real activity by the
@@ -3097,7 +3110,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // The notification clock (elapsedRealtime), like every core
             // timestamp: wall-clock ms pushed the core's clock decades ahead
             // and every watchdog compared against the wrong epoch.
-            bridge.connectSweep(json.encodeToString(ConnectSweepSettings.serializer(), settings), SystemClock.elapsedRealtime().toULong())
+            val settingsJson = json.encodeToString(ConnectSweepSettings.serializer(), settings)
+            val now = SystemClock.elapsedRealtime().toULong()
+            // Only the link's ready transition settles the profile sync (its
+            // first sweep uploads the desired profile).
+            if (onReady) bridge.connectSweep(settingsJson, now) else bridge.reapplyMachineSettings(settingsJson, now)
         }
     }
 
@@ -3577,26 +3594,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreOutputJson(raw)
     }
 
-    /**
-     * Put the active profile back on the DE1 without starting a shot — after a
-     * cold-maintenance cycle left core's 1 °C profile loaded (Decenza re-uploads
-     * on leaving its descale page). Skipped with no active profile or no link.
-     */
-    private fun reuploadActiveProfile() {
-        if (_ui.value.bleState != De1BleManager.State.READY) return
-        val cremaJson = _ui.value.activeProfileId?.let { library.profileJson(it) } ?: return
-        viewModelScope.launch(coreDispatcher) {
-            // A user's start owns the upload (it carries the Quick-Controls
-            // overrides): never displace it (#2 N2). The core asks again in
-            // 5 s if the DE1's profile is still unknown then.
-            if (pendingBrew || runCatching { bridge.profileUploadInProgress() }.getOrDefault(false) == true) {
-                return@launch
-            }
-            val wireJson = runCatching { cremaProfileToWire(cremaJson) }.getOrElse { return@launch }
-            startUploadOnLane(wireJson, runCatching { profileFingerprint(cremaJson, null) }.getOrNull())
-        }
-    }
-
     /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. Persisted. */
     fun setAutoTare(enabled: Boolean) = machine.execute(MachineCommand.SetAutoTare(enabled))
 
@@ -3792,7 +3789,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setWaterWarnMl(ml: Float) {
         _ui.update { it.copy(waterWarnMl = ml) }
         persistPrefs()
-        onCoreLane { waterLowWarned = false }
+        // The core's monitor re-arms on a threshold change.
+        onCoreLane { runCatching { bridge.setWaterWarnMl(ml) } }
     }
 
     /** The machine's own refill threshold, raw sensor mm (geota/crema#47).
@@ -3946,27 +3944,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             maintenanceReadout = computeMaintenanceReadout(next),
         ) }
         viewModelScope.launch { maintenanceStore.save(next) }
-    }
-
-    /**
-     * Integrate one telemetry sample into [maintenanceTotalLitres]. [flowMlPerS]
-     * is the DE1's group flow; the wall-clock Δ since the previous sample is
-     * derived from [nowMs] and [lastTelemetryMs]. Mirrors the web store's clamps:
-     * the Δ is capped at [MAINTENANCE_MAX_SAMPLE_DT_S] (ignore between-session
-     * gaps), only positive flow accumulates, and an implausibly large per-sample
-     * volume (> [MAINTENANCE_MAX_SAMPLE_ML]) is dropped. Does NOT persist or
-     * recompute the readout (that happens at the completion boundaries).
-     */
-    private fun accumulateMaintenance(flowMlPerS: Float, nowMs: Long) {
-        val prevMs = lastTelemetryMs
-        lastTelemetryMs = nowMs
-        if (prevMs == null) return
-        val dtSeconds = (nowMs - prevMs) / 1000.0
-        if (dtSeconds <= 0.0 || flowMlPerS <= 0f) return
-        val cappedDt = dtSeconds.coerceAtMost(MAINTENANCE_MAX_SAMPLE_DT_S)
-        val ml = flowMlPerS.toDouble() * cappedDt
-        if (ml <= 0.0 || ml > MAINTENANCE_MAX_SAMPLE_ML) return
-        maintenanceTotalLitres += ml / 1000.0
     }
 
     /**
@@ -4574,7 +4551,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val freshMaintenance = defaultMaintenanceState(System.currentTimeMillis())
         onCoreLane {
             maintenanceTotalLitres = 0.0
-            lastTelemetryMs = null
             // A fresh stop-at-weight model (null = start learning again).
             runCatching { bridge.loadSawModelJson(null) }
         }
@@ -4923,6 +4899,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("JSON parse error: ${it.message}")
             return
         }
+        applyCoreOutput(output)
+    }
+
+    private fun applyCoreOutput(output: CoreOutput) {
         output.events.forEach(::applyEvent)
         // DE1 writes of one output go out IN ORDER on one coroutine (cohort
         // review 02 P2-2): a write retried after a failure must not land
@@ -5156,12 +5136,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 if (c.cold_workaround) {
-                    // The DE1 holds core's 1 °C profile now, not ours: the
-                    // skip-upload cache is stale, and the real profile goes
-                    // back once the cycle ends.
-                    lastUploadedFingerprint = null
-                    if (terminal) reuploadActiveProfile()
-                    // The cold profile never loaded (or was replaced), so core
+                    // The DE1 holds core's 1 °C profile now, not ours; the
+                    // core's profile sync puts the real one back once the
+                    // cycle ends. The cold profile never loaded (or was replaced), so core
                     // did not send the request (round-2 V3 #4): say so, and why,
                     // instead of going quiet.
                     if (c.phase == MaintenancePhase.Failed) notifyUser(maintenanceFailedText(c.state, c.failure))
@@ -5183,9 +5160,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ShotStarted -> {
                 // Entering a shot: flip the resting↔extracting flag and zero the
                 // per-shot counters so the Brew timer / phase / volume restart.
-                // Reset the maintenance dt-tracker so the first telemetry sample of
-                // this session adds no wall-clock Δ (no phantom between-session water).
-                lastTelemetryMs = null
                 _ui.update { it.copy(
                     shotInProgress = true,
                     shotFrame = 0,
@@ -5215,14 +5189,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.Telemetry -> {
                 val t = event.content
-                // Integrate group flow into the running water total (the DE1 has no
-                // cumulative counter). In-memory only — NOT persisted/recomputed per
-                // sample (~25–40 Hz); flushed on shot / water-session completion.
-                // SIDE EFFECT — stays OUTSIDE the update lambda so it accumulates
-                // exactly once per frame even if the CAS retries (issue 11).
-                // Monotonic clock (review #36): a wall-clock jump (NTP, DST)
-                // used to distort the water integral; elapsedRealtime can't.
-                accumulateMaintenance(t.group_flow, SystemClock.elapsedRealtime())
+                // Add the core's counted water to the running total (the DE1 has no
+                // cumulative counter): `counted_ml` is set only for espresso and hot
+                // water, gap-capped — the core's rule, shared with web (Android used
+                // to count descale, clean, steam rinse and air purge too). In-memory
+                // only — flushed on shot / water-session completion.
+                // SIDE EFFECT — stays OUTSIDE the update lambda so it adds exactly
+                // once per frame even if the CAS retries (issue 11).
+                t.counted_ml?.let { maintenanceTotalLitres += it / 1000.0 }
                 val line = fmt("t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C", 
                     t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
                 )
@@ -5340,24 +5314,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     lastLoggedWaterMm = mm
                     appendLog("Water level: ${mm}mm")
                 }
-                // Configurable low-water warning (#33 follow-up): one snackbar
-                // per dip below the user's threshold, in the user's tank unit.
-                // Hysteresis re-arms it only after a real refill, so the mm
-                // bounce a running pump causes can't re-fire it.
+            }
+            is Event.WaterLow -> {
+                // The core's low-water monitor (#33 follow-up, shared with web):
+                // once per dip below the user's threshold, re-armed on a refill,
+                // a threshold change or a new link. Shown in the user's tank unit.
                 val s = _ui.value
-                val warnMl = s.waterWarnThresholdMl()
-                if (warnMl > 0f) {
-                    // The event level is already a depth (offset applied in
-                    // core) — the ml conversion takes it as-is.
-                    val ml = coffee.crema.core.waterTankMl(event.content.level).toFloat()
-                    if (!waterLowWarned && ml <= warnMl) {
-                        waterLowWarned = true
-                        val left = formatTankLevel(event.content.level, s.waterLevelUnit, s.volumeUnit)
-                        notifyUser("Water low — ${left.value} ${left.unit} left, refill soon")
-                    } else if (waterLowWarned && ml > warnMl + WATER_WARN_REARM_ML) {
-                        waterLowWarned = false
-                    }
-                }
+                val left = formatTankLevel(event.content.level, s.waterLevelUnit, s.volumeUnit)
+                notifyUser("Water low — ${left.value} ${left.unit} left, refill soon")
             }
             is Event.ShotSettingsRead -> {
                 // Cache the machine's reported steam/hot-water settings so QC
@@ -5488,9 +5452,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 shotStartedByApp = false
             }
             is Event.WaterSessionStarted -> {
-                // A hot-water pour also moves water through the group — reset the
-                // dt-tracker so its first telemetry sample adds no Δ, then accumulate.
-                lastTelemetryMs = null
                 appendLog("Water session started: ${event.content.kind.string}")
                 if (event.content.kind == WaterSessionKind.Flush) startSequence.onFlushStarted()
             }
@@ -5681,40 +5642,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ProfileUploadCompleted -> {
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile uploaded: ${event.content.title}")
-                // The DE1 now holds this profile — cache its fingerprint so an
-                // unchanged re-start skips the upload (issue 11).
-                lastUploadedFingerprint = pendingUploadFingerprint
-                pendingUploadFingerprint = null
-                // Gated start: the profile is now on the DE1. Observe the
-                // firmware's profile-download guard window, optionally pre-flush,
-                // then request Espresso (issue 15).
-                if (pendingBrew) {
+            }
+            is Event.ProfileSyncHolds -> {
+                // Gated start: the DE1 holds the start's profile now. Observe
+                // the firmware's profile-download guard window, optionally
+                // pre-flush, then request Espresso (issue 15).
+                if (pendingBrew && event.content.fingerprint == pendingBrewFingerprint) {
                     pendingBrew = false
+                    pendingBrewFingerprint = null
                     pendingBrewStart?.let { startSequence.proceed(it, _ui.value.preFlush) }
                     pendingBrewStart = null
                 }
             }
             is Event.ProfileUploadFailed -> {
-                // The start waiting on this upload is over (the user taps
-                // Coffee again).
+                // The start waiting on the DE1 is over (the user taps Coffee
+                // again); the core retries the upload on its own backoff.
                 if (pendingBrew) pendingBrewStart?.let(startSequence::end)
                 pendingBrew = false
                 pendingBrewStart = null
-                pendingUploadFingerprint = null
-                // What the DE1 holds after a failed upload is unknown: frames
-                // are slot writes with no commit step, so an interrupted upload
-                // can leave the new header's frame count over a mix of new and
-                // old frames (Decenza aa8232e6). Never skip the next upload.
-                lastUploadedFingerprint = null
+                pendingBrewFingerprint = null
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile upload failed: ${uploadFailureLabel(event.content.reason)}")
             }
-            is Event.ProfileReuploadNeeded -> {
-                // The core saw the machine Idle with an unknown profile after a
-                // failed upload: put the active profile back now, so a
-                // group-head start can't brew the mix (Decenza ReArm).
-                appendLog("Profile on the DE1 is unknown after a failed upload — re-uploading")
-                reuploadActiveProfile()
+            is Event.ProfileSyncWarning -> {
+                // The core's one non-blocking warning per streak of failed
+                // profile uploads; it keeps retrying (3 s, 10 s, then 30 s).
+                if (event.content.active) {
+                    notifyUser("Couldn\u2019t load the profile on the DE1 \u2014 retrying")
+                    appendLog("Profile upload to the DE1 failed \u2014 the core is retrying")
+                } else {
+                    appendLog("Profile upload to the DE1 recovered")
+                }
             }
             // Shot-settings-read events surface in the real screens (M5), not this
             // Phase-0 debug readout. An explicit else keeps the sealed `when`
@@ -5781,6 +5739,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Abort a pending gated-start brew if the upload never completes. */
         const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
+
+        /** How long the Quick-Controls dial must rest before its override
+         *  becomes the desired profile (de1app debounces its temperature dial by
+         *  0.5 s too), so a run of stepper taps uploads once. */
+        const val DIAL_PUSH_DEBOUNCE_MS = 500L
     }
 }
 

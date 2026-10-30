@@ -56,9 +56,9 @@ export interface ActiveShotBrewParams {
  *   - `profileName` is null when no active profile is set or the replay
  *     META didn't carry one.
  *   - `dose` is null when the active profile carries no dose value.
- *   - `brewParams` is null on a headless shot path that doesn't go
- *     through the Quick Sheet (a manual on-machine start, or a replay
- *     META without QC fields).
+ *   - `brewParams` is null on a live shot with no active profile, or a
+ *     replay META without QC fields. A manual on-machine start records the
+ *     dial the DE1 was given (`CremaApp.pushedBrewParams`).
  *   - `grinderModel` falls through bean.grinder → settings default → null.
  */
 export interface ActiveShotData {

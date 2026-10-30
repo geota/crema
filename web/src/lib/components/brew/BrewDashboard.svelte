@@ -51,7 +51,16 @@
 		formatVolume,
 		formatWeight
 	} from '#lib/settings/index.js';
-	import { getProfileStore, newProfileId, preinfuseSeconds, type CremaProfile } from '#lib/profiles/index.js';
+	import {
+		brewTempRange,
+		effectiveCremaProfile,
+		getProfileStore,
+		newProfileId,
+		normalizeBrewOverrides,
+		preinfusionDial,
+		type CremaProfile,
+		type ProfileFingerprintOverrides
+	} from '#lib/profiles/index.js';
 	import { formatRatio } from '#lib/utils/ratio.js';
 	import {
 		getBeanStore,
@@ -378,13 +387,19 @@
 	 * different profile, an edited Settings default) re-seeds it — no sentinel,
 	 * no state-syncing `$effect`.
 	 */
+	/** The active profile's brew-temperature dial range and anchor (core-owned). */
+	const activeBrewTempRange = $derived(activeProfile ? brewTempRange(activeProfile) : null);
+	/** The active profile's pre-infusion dial (core-owned range, seed, adjustable). */
+	const activePreinfusionDial = $derived(activeProfile ? preinfusionDial(activeProfile) : null);
 	const paramSeed = $derived.by<BrewParamSeed>(() => {
 		if (activeProfile) {
+			// The core's anchor (the profile's own brew temp) and pre-infusion
+			// total — the values an override is measured from.
 			return {
 				dose: activeProfile.dose,
 				yield: activeProfile.yieldOut,
-				brewTemp: activeProfile.brewTemp,
-				preinf: preinfuseSeconds(activeProfile.segments)
+				brewTemp: activeBrewTempRange?.anchor ?? activeProfile.brewTemp,
+				preinf: activePreinfusionDial?.seconds ?? 0
 			};
 		}
 		return {
@@ -432,20 +447,18 @@
 			})
 		)?.trim();
 		if (!name) return;
-		const live = params.current;
+		// The dial values that genuinely affect the recipe, baked in by the
+		// core exactly as a shot would run them: brew temp shifts every
+		// segment, pre-infusion rescales the leading segments, dose / yield
+		// replace. Steam / hot-water / flush fields on BrewParams are
+		// session-only UI; they aren't part of the profile model.
 		const cloned: CremaProfile = {
-			...base,
+			...effectiveCremaProfile(base, params.qcOverrides()),
 			source: 'custom',
 			id: newProfileId(),
 			name,
 			pinned: false,
-			lastUsed: null,
-			// Apply the QC dial values that genuinely affect the recipe.
-			// Steam / hot-water / flush fields on BrewParams are
-			// session-only UI; they aren't part of the profile model.
-			dose: live.dose,
-			yieldOut: live.yield,
-			brewTemp: live.brewTemp
+			lastUsed: null
 		};
 		profileStore.save(cloned);
 		profileStore.setActive(cloned.id);
@@ -519,8 +532,35 @@
 				waterVolume: prefs.qcHotWaterVolumeMl,
 				flushTime: prefs.qcFlushTimeS,
 				flushTemp: prefs.qcFlushTempC
-			}))
+			})),
+		() => activeBrewTempRange,
+		// The dial starts from the app-level overrides for this profile.
+		() => (app ? app.brewOverridesFor(activeProfile ?? null) : {}),
+		() => activePreinfusionDial
 	);
+	/**
+	 * The Quick Sheet overrides after the core's lifecycle rule (brew temp
+	 * clamped into the profile's range, values equal to the profile's own
+	 * dropped) — what the shot actually runs with and what history records.
+	 */
+	function effectiveOverrides(): ProfileFingerprintOverrides {
+		const qc = params.qcOverrides();
+		return activeProfile ? normalizeBrewOverrides(activeProfile, qc) : qc;
+	}
+	/**
+	 * The dial is part of what the DE1 should hold: every change of the active
+	 * profile or its overrides is reported to the app, which makes them the
+	 * core's desired profile once the dial rests 0.5 s (de1app's debounce), and
+	 * the core's profile sync uploads them (coalesced while an upload runs,
+	 * never while the machine is busy) — like Decenza re-uploading on a
+	 * temperature override. So a group-head start runs the dialled profile.
+	 */
+	$effect(() => {
+		const profile = activeProfile;
+		const qc = effectiveOverrides();
+		if (!app || !profile) return;
+		app.setBrewOverrides(profile, qc);
+	});
 	/**
 	 * Whether the Quick Sheet is docked open. Starts hidden — the dashboard is
 	 * the primary view; the header's QuickPill opens the sheet, and its Close
@@ -714,7 +754,7 @@
 			const profile = profileStore.all.find((pr) => pr.name.toLowerCase() === wanted);
 			if (profile) {
 				profileStore.setActive(profile.id);
-				void app?.syncActiveProfile(profile, {});
+				void app?.setDesiredProfile(profile);
 			} else {
 				toast.info(
 					`Profile "${shot.profileName}" was renamed or deleted since this shot; loaded the rest.`
@@ -1333,9 +1373,9 @@
 	 * Start / stop a shot via the real DE1 control surface (real, not stub).
 	 *
 	 * The orchestrator's `startShot(qc)` first verifies an active profile
-	 * is selected, then lazily re-uploads the effective profile to the
-	 * DE1 if the user's dial changes have drifted from what's currently
-	 * loaded (the `activeProfileFingerprint` cache), then interposes a
+	 * is selected, then waits until the DE1 holds the effective profile (the
+	 * core's profile sync uploads it unless this connection already pushed
+	 * it), then interposes a
 	 * `HotWaterRinse` if `prefs.groupFlushBeforeShot` is on, then
 	 * requests `Espresso`. `stopShot()` requests `Idle` which the
 	 * firmware honours from any session state. We treat any non-Idle DE1
@@ -1390,10 +1430,13 @@
 			const beanHasGrind = beanGrindRaw
 				? Number.isFinite(Number.parseFloat(beanGrindRaw))
 				: false;
+			// The brew temp and pre-infusion the shot actually runs with
+			// (after the core's clamp), so history records what was sent.
+			const qc = effectiveOverrides();
 			app.setBrewParamsSnapshot({
 				yieldTarget: live.yield,
-				brewTemp: live.brewTemp,
-				preinfuseTarget: live.preinf,
+				brewTemp: qc.brewTemp ?? paramSeed.brewTemp,
+				preinfuseTarget: qc.preinf ?? paramSeed.preinf,
 				stopOnWeight: live.stopOnWeight,
 				autoTare: live.autoTare,
 				grind: beanHasGrind || live.grind !== DEFAULT_BREW_PARAMS.grind ? live.grind : null
@@ -1402,7 +1445,7 @@
 			// `startShot()`; when no upload is needed the call returns
 			// promptly. `profileUploadProgress` (above) is the visible
 			// indicator during a genuine upload window.
-			await app.startShot(params.qcOverrides());
+			await app.startShot(qc);
 		} catch (e) {
 			if (
 				e instanceof NoActiveProfileError ||

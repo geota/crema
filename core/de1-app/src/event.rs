@@ -241,6 +241,13 @@ pub enum Event {
         /// legacy de1app TCL computes the same metric — see
         /// `de1plus/gui.tcl:3414-3416`.
         resistance_weight: Option<f32>,
+        /// The water this sample adds to the filter / descale counters, ml —
+        /// the volume integrator's increment (gap-capped at
+        /// `MAX_COUNTED_GAP_S`), only in the states that count
+        /// (`counts_toward_water`: espresso and hot water). `None` otherwise.
+        /// The shells add it to their persisted litre total; the counting
+        /// rule lives here.
+        counted_ml: Option<f32>,
     },
     /// A weight reading arrived from the scale, smoothed by the flow estimator.
     ScaleReading {
@@ -287,6 +294,16 @@ pub enum Event {
         /// refill is wanted when the raw level is at or below it. Convert it
         /// with `water_tank_depth_mm` before comparing it with `level`.
         refill_threshold: f32,
+    },
+    /// The tank dropped to the user's low-water threshold (default 110 ml,
+    /// `0` = off; `CremaCore::set_water_warn_ml`). Once per dip: re-armed by
+    /// a refill 55 ml above the threshold, a threshold change, or a new link.
+    /// The shell shows the warning in the user's tank unit.
+    WaterLow {
+        /// The tank DEPTH, mm, as in [`Event::WaterLevel`].
+        level: f32,
+        /// The tank volume, ml.
+        ml: f32,
     },
     /// Auto-stop decided the shot should end. The accompanying [`Command`]
     /// carries the actual stop write.
@@ -703,33 +720,34 @@ pub enum Event {
         title: String,
     },
     /// The profile upload failed. The core has discarded its in-progress
-    /// state; the shell may retry by calling `upload_profile` again.
+    /// state.
     ///
     /// Once the header was dispatched, what the DE1 holds is **unknown**:
     /// frames are indexed slot writes with no commit step, so an interrupted
     /// upload can leave the new header's frame count over a mix of new and
-    /// old frames (Decenza `aa8232e6`). The shell must forget any "the DE1
-    /// holds profile X" cache on this event; the core asks for a re-upload
-    /// with [`ProfileReuploadNeeded`](Self::ProfileReuploadNeeded) once the
-    /// machine is Idle.
+    /// old frames (Decenza `aa8232e6`). The core's profile sync retries a
+    /// failed sync upload on its backoff and puts the desired profile back
+    /// after any other failed upload, once the machine is idle (see
+    /// [`ProfileSyncWarning`](Self::ProfileSyncWarning)).
     ProfileUploadFailed {
         /// Why the upload failed.
         reason: ProfileUploadFailure,
     },
-    /// The DE1's loaded profile is unknown after a failed upload and the
-    /// machine is Idle, so the shell should upload the active profile now.
-    /// Emitted when a failure lands while the machine is Idle, on the next
-    /// transition into Idle (after the flow that interrupted the upload,
-    /// never during it), or on a tick. The request stays outstanding until a
-    /// shell starts an upload: it is repeated every
-    /// [`PROFILE_REUPLOAD_REPEAT`](crate::PROFILE_REUPLOAD_REPEAT) while the
-    /// machine stays Idle, so a shell that could not act at once (link not
-    /// ready yet) is asked again. At most
-    /// [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
-    /// uploads are started in answer until one completes; cleared by a
-    /// completed upload or a reset (the reconnect path owns the re-upload).
-    /// Decenza's `ReArm` follow-up (`aa8232e6`).
-    ProfileReuploadNeeded,
+    /// A profile-sync upload landed: the DE1 now holds the effective profile
+    /// with this fingerprint (the shell's desired one, unless it changed
+    /// meanwhile — the newer one follows). A shot start waits for its own.
+    ProfileSyncHolds {
+        /// The fingerprint of the profile the DE1 now holds.
+        fingerprint: String,
+    },
+    /// The profile sync's one non-blocking warning: `active` when a sync
+    /// upload failed and retries are running (3 s, 10 s, then every 30 s);
+    /// cleared (`active: false`) by the next success or a disconnect.
+    /// Raised once per streak of failures (reaprime `onUploadError`).
+    ProfileSyncWarning {
+        /// Whether the warning is raised.
+        active: bool,
+    },
     /// An incoming notification could not be decoded.
     DecodeError {
         /// Human-readable description of the failure.
