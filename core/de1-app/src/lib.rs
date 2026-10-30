@@ -55,14 +55,15 @@ use std::time::Duration;
 use de1_domain::connect_sweep::MAX_TANK_TEMP_C;
 use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
 use de1_domain::{
-    AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AutoStop, BeverageType, BrewOverrides, BrewRecipe,
-    BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, CremaProfile, Estimate, FlowAlgorithm,
-    FlowEstimator, LineFreqDetector, LowWaterMonitor, MAX_COUNTED_GAP_S, Profile,
-    STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor,
-    StepWeightExit, StopCapture, StopConfig, StopReason, StopTargets, TankLevelSmoother,
-    TareSettleWindow, VolumeIntegrator, WaterEvent, WaterMonitor, WeightSpikeGate, WeightUnit,
-    clamp_refill_point_mm, counts_toward_water, pre_shot_zero_offset, sav_counts_volume,
-    shot_disposition, water_tank_depth_mm,
+    AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AsRunShot, AutoStop, BeverageType, BrewOverrides,
+    BrewRecipe, BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, CompletedShot,
+    CremaProfile, Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, LowWaterMonitor,
+    MAX_COUNTED_GAP_S, Profile, STOP_WEIGHT_BEFORE, SampleOverlays, ShotCaptureContext, ShotEvent,
+    ShotMonitor, ShotPhase, ShotRecord, SteamEvent, SteamMonitor, StepWeightExit, StopCapture,
+    StopConfig, StopReason, StopTargets, StoredShot, TankLevelSmoother, TareSettleWindow,
+    VolumeIntegrator, WaterEvent, WaterMonitor, WeightSpikeGate, WeightUnit, clamp_refill_point_mm,
+    counts_toward_water, pre_shot_zero_offset, sav_counts_volume, shot_disposition,
+    water_tank_depth_mm,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -417,6 +418,9 @@ impl ShotMetricsAccumulator {
 struct PostShotSettle {
     /// `Event::ShotCompleted.sample_count`, captured at Idle.
     sample_count: u32,
+    /// The recorded shot, held through the settle for
+    /// [`CremaCore::take_stored_shot`].
+    record: ShotRecord,
     /// `Event::ShotCompleted.duration`, captured at Idle (ms).
     duration_ms: u32,
     /// The weight-stop capture (SAW drip-learning input), captured at Idle.
@@ -754,6 +758,16 @@ pub struct CremaCore {
     /// the brief window after a scale-paired shot completes. See
     /// [`PostShotSettle`].
     post_shot_settle: Option<PostShotSettle>,
+    /// The profile and Quick Controls the DE1 held when the current shot
+    /// started (F10) — snapshotted at `ShotStarted` from the profile sync,
+    /// `None` when the DE1 holds a profile the core didn't push.
+    shot_as_run: Option<AsRunShot>,
+    /// The first stop the core commanded for the current shot, if any.
+    shot_stop_reason: Option<StopReason>,
+    /// The last finished shot, waiting for the shell's
+    /// [`take_stored_shot`](Self::take_stored_shot) — set when
+    /// `Event::ShotCompleted` is emitted.
+    pending_shot: Option<CompletedShot>,
     /// Rolling BLE-capture buffer + identity-keeper. Fed at the top of
     /// [`on_notification`](Self::on_notification) (gated on
     /// [`CaptureRecorder::is_suppressed`] so replays don't re-record
@@ -1067,6 +1081,9 @@ impl CremaCore {
             line_freq_override: None,
             shot_metrics: ShotMetricsAccumulator::default(),
             post_shot_settle: None,
+            shot_as_run: None,
+            shot_stop_reason: None,
+            pending_shot: None,
             capture: CaptureRecorder::default(),
             weight_unit_pref: WeightUnit::default(),
             auto_off_scale_on_sleep: false,
@@ -3245,6 +3262,26 @@ impl CremaCore {
         self.gate_read_only(out)
     }
 
+    /// The last finished shot as a [`StoredShot`], assembled by the core
+    /// ([`de1_domain::assemble_stored_shot`]) from its own record and the
+    /// shell's `ctx`. Call it on `Event::ShotCompleted` — whatever the
+    /// disposition, so an aborted shot's undo can still record it. One-shot:
+    /// a second call returns `None`, as does a shot with no telemetry.
+    pub fn take_stored_shot(&mut self, ctx: ShotCaptureContext) -> Option<StoredShot> {
+        de1_domain::assemble_stored_shot(self.pending_shot.take()?, ctx)
+    }
+
+    /// [`take_stored_shot`](Self::take_stored_shot) over JSON: the
+    /// `ShotCaptureContext` in, the `StoredShot` (or `null`) out.
+    ///
+    /// # Errors
+    ///
+    /// The JSON error string on a malformed context.
+    pub fn take_stored_shot_json(&mut self, ctx_json: &str) -> Result<String, String> {
+        let ctx = de1_domain::parse_shot_capture_context(ctx_json)?;
+        serde_json::to_string(&self.take_stored_shot(ctx)).map_err(|e| e.to_string())
+    }
+
     /// Report how one scale write the shell sent went. After
     /// [`MAX_SCALE_WRITE_FAILURES`] failures in a row with no reading in
     /// between, emit [`Event::ScaleLinkDead`] (`WritesFailing`) and start the
@@ -3823,6 +3860,16 @@ impl CremaCore {
         let resistance_weight = self
             .last_scale_estimate
             .and_then(|e| puck_resistance_weight(sample.group_pressure, e.flow));
+        let resistance = puck_resistance(sample.group_pressure, sample.group_flow);
+        // The recorded sample carries the same overlays the Telemetry event
+        // does, so the stored shot needs no shell buffer (F10).
+        self.monitor.annotate_last_sample(SampleOverlays {
+            scale_weight: self.last_scale_estimate.map(|e| e.weight),
+            scale_flow_weight: self.last_scale_estimate.map(|e| e.flow),
+            dispensed_volume: Some(self.volume_integrator.dispensed_ml()),
+            resistance,
+            resistance_weight,
+        });
         out.events.push(Event::Telemetry {
             elapsed,
             group_pressure: sample.group_pressure,
@@ -3834,7 +3881,7 @@ impl CremaCore {
             set_head_temp: sample.set_head_temp,
             set_group_pressure: sample.set_group_pressure,
             set_group_flow: sample.set_group_flow,
-            resistance: puck_resistance(sample.group_pressure, sample.group_flow),
+            resistance,
             resistance_weight,
             counted_ml,
         });
@@ -5434,6 +5481,7 @@ impl CremaCore {
             duration_ms,
             stop_capture,
             ended_without_triggering_stop,
+            record,
             ..
         } = settle;
         // Drain the running peak / final-weight tracker into the event — one
@@ -5454,6 +5502,16 @@ impl CremaCore {
             // each re-implemented the aborted thresholds + cleaning-profile lookup).
             disposition: shot_disposition(duration_ms, final_weight, self.active_beverage_type),
             ended_without_triggering_stop,
+        });
+        // The shell assembles the StoredShot from this on the event (F10).
+        self.pending_shot = Some(CompletedShot {
+            record,
+            as_run: self.shot_as_run.take(),
+            profile_title: self.last_active_profile_title.clone(),
+            stop_reason: self.shot_stop_reason.take(),
+            final_weight,
+            stop_on_weight: self.stop_on_weight,
+            auto_tare: self.auto_tare,
         });
         // Drip learning (Decenza SAW learning): the measured sample is (final
         // settled weight − weight at the stop trigger) at the trigger's flow.
@@ -5519,6 +5577,16 @@ impl CremaCore {
                     self.finalize_shot_completed(settle, now, out);
                 }
                 self.shot_started = Some(now);
+                // What this shot runs (F10): the profile the DE1 holds, if the
+                // core pushed it on this connection.
+                self.shot_as_run =
+                    self.profile_sync
+                        .held_profile()
+                        .map(|(profile, qc)| AsRunShot {
+                            profile: profile.clone(),
+                            qc: *qc,
+                        });
+                self.shot_stop_reason = None;
                 // Flow hasn't begun yet (the shot opens in the heating phase) —
                 // the elapsed clock is zeroed at the first preinfusion/pouring
                 // phase below, so the preheat isn't counted. See `flow_started`.
@@ -5652,6 +5720,7 @@ impl CremaCore {
                 let sample_count = u32::try_from(record.samples.len()).unwrap_or(u32::MAX);
                 let settle = PostShotSettle {
                     sample_count,
+                    record,
                     duration_ms: duration,
                     stop_capture,
                     ended_without_triggering_stop,
@@ -5847,6 +5916,7 @@ impl CremaCore {
     fn push_stop(&mut self, reason: Option<StopReason>, now: Duration, out: &mut CoreOutput) {
         if let Some(reason) = reason {
             self.stop_triggered_this_shot = true;
+            self.shot_stop_reason.get_or_insert(reason);
             out.events.push(Event::StopTriggered { reason });
             out.commands.push(Command::WriteCharacteristic {
                 target: WriteTarget::De1RequestedState,
@@ -13452,6 +13522,245 @@ mod tests {
                     .filter(|e| matches!(e, Event::ProfileUploadStarted { .. }))
                     .count();
                 assert_eq!(back, 1, "the desired profile goes back at once");
+            }
+
+            /// F10: the core assembles the StoredShot from its own record and
+            /// what the shell hands in (`take_stored_shot`).
+            mod stored_shot {
+                use super::*;
+                use de1_domain::{ShotBean, ShotCaptureContext, StopReason};
+
+                /// A ShotSample in `frame` (byte 17 is the frame number).
+                fn sample_in(frame: u8) -> [u8; 19] {
+                    let mut s = SAMPLE;
+                    s[17] = frame;
+                    s
+                }
+
+                /// Pour from `start` (Espresso / Pouring) through frames
+                /// 0 → 2 → 3, then go Idle at `start + 2000`.
+                fn pour(core: &mut CremaCore, start: u64) -> Vec<Event> {
+                    let mut events = Vec::new();
+                    events.extend(
+                        core.on_notification(Source::De1State, &[4, 5], start)
+                            .events,
+                    );
+                    for (i, frame) in (1u64..).zip([0u8, 2, 2, 3]) {
+                        let t = start + 250 * i;
+                        events.extend(
+                            core.on_notification(Source::De1ShotSample, &sample_in(frame), t)
+                                .events,
+                        );
+                    }
+                    events.extend(idle(core, start + 2_000).events);
+                    events
+                }
+
+                fn ctx() -> ShotCaptureContext {
+                    ShotCaptureContext {
+                        completed_at: 1_700_000_000_000,
+                        ..ShotCaptureContext::default()
+                    }
+                }
+
+                #[test]
+                fn the_stored_record_carries_frames_and_scale_overlays() {
+                    let mut core = connected();
+                    // No auto-tare, so the readings below reach the metrics
+                    // without waiting for a tare to land.
+                    core.set_auto_tare(false);
+                    core.connect_scale("BOOKOO_SC", &[]);
+                    core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 900);
+                    core.on_notification(Source::De1State, &[4, 5], 1_000);
+                    for (i, frame) in (1u32..).zip([0u8, 2, 2, 3]) {
+                        let t = 1_000 + 250 * u64::from(i);
+                        core.on_notification(Source::ScaleWeight, &bookoo_packet(60 * i), t - 10);
+                        core.on_notification(Source::De1ShotSample, &sample_in(frame), t);
+                    }
+                    // With a scale the completion waits for the drip settle,
+                    // which ends at its backstop (`POST_SHOT_SETTLE_MAX`, 3 s)
+                    // at the latest.
+                    let mut events = idle(&mut core, 3_000).events;
+                    events.extend(core.on_tick(3_000 + 3_010).events);
+                    let final_weight = events
+                        .iter()
+                        .find_map(|e| match e {
+                            Event::ShotCompleted { final_weight, .. } => Some(*final_weight),
+                            _ => None,
+                        })
+                        .expect("ShotCompleted");
+                    let shot = core.take_stored_shot(ctx()).expect("a shot");
+                    let samples = &shot.record.samples;
+                    assert_eq!(
+                        samples
+                            .iter()
+                            .map(|t| t.sample.frame_number)
+                            .collect::<Vec<_>>(),
+                        [0, 2, 2, 3]
+                    );
+                    assert!(
+                        samples.iter().all(|t| t.scale_weight.is_some()),
+                        "scale weight"
+                    );
+                    assert!(
+                        samples.iter().all(|t| t.scale_flow_weight.is_some()),
+                        "scale flow"
+                    );
+                    assert!(
+                        samples.iter().all(|t| t.dispensed_volume.is_some()),
+                        "volume"
+                    );
+                    assert!(samples.iter().all(|t| t.resistance.is_some()), "resistance");
+                    assert!(final_weight.is_some(), "the scale fed a settled yield");
+                    assert_eq!(
+                        shot.metadata.yield_out, final_weight,
+                        "the event's settled yield"
+                    );
+                    assert_eq!(shot.completed_at, 1_700_000_000_000);
+                }
+
+                #[test]
+                fn a_shot_records_the_profile_and_overrides_the_de1_ran() {
+                    let p = library("Daily");
+                    let mut core = connected();
+                    let overrides = BrewOverrides {
+                        brew_temp: Some(p.brew_temp + 2.0),
+                        ..BrewOverrides::default()
+                    };
+                    let _ = desire(&mut core, &p, &overrides, 0);
+                    let first = sweep(&mut core, 0);
+                    let _ = ack_every_frame(&mut core, &first.commands, 1);
+                    pour(&mut core, 1_000);
+                    let shot = core.take_stored_shot(ctx()).expect("a shot");
+                    assert_eq!(shot.profile_name.as_deref(), Some("Daily"));
+                    assert_eq!(shot.brew_temp_target, Some(p.brew_temp + 2.0));
+                    let ran = shot.profile.expect("the as-run profile");
+                    let shifted = de1_domain::effective_crema_profile(&p, &overrides);
+                    assert_eq!(ran, de1_domain::to_wire(&shifted), "every step shifted");
+                    assert!(shot.preinfuse_target.is_some());
+                }
+
+                #[test]
+                fn the_qc_dose_dial_is_the_recorded_dose() {
+                    let mut p = library("Daily");
+                    p.dose = 18.0;
+                    let mut core = connected();
+                    let overrides = BrewOverrides {
+                        dose: Some(20.5),
+                        yield_g: Some(41.0),
+                        ..BrewOverrides::default()
+                    };
+                    let _ = desire(&mut core, &p, &overrides, 0);
+                    let first = sweep(&mut core, 0);
+                    let _ = ack_every_frame(&mut core, &first.commands, 1);
+                    pour(&mut core, 1_000);
+                    let shot = core.take_stored_shot(ctx()).expect("a shot");
+                    assert_eq!(shot.metadata.dose, Some(20.5));
+                    assert_eq!(shot.yield_target, Some(41.0));
+                }
+
+                #[test]
+                fn a_shot_on_a_foreign_profile_records_no_overrides() {
+                    // The DE1 holds a profile the sync didn't push (another
+                    // app's, or one loaded before a desired profile was set).
+                    let mut core = connected();
+                    let mut foreign = two_step();
+                    foreign.title = "Theirs".into();
+                    let up = core
+                        .upload_profile(&foreign, Duration::from_millis(100))
+                        .unwrap();
+                    let _ = ack_every_frame(&mut core, &up.commands, 200);
+                    pour(&mut core, 1_000);
+                    let shot = core.take_stored_shot(ctx()).expect("a shot");
+                    assert_eq!(shot.profile_name.as_deref(), Some("Theirs"), "name only");
+                    assert!(shot.profile.is_none());
+                    assert_eq!(shot.metadata.dose, None);
+                    assert_eq!(shot.brew_temp_target, None);
+                    assert_eq!(shot.yield_target, None);
+                    assert_eq!(shot.preinfuse_target, None);
+                }
+
+                #[test]
+                fn a_shot_before_the_desired_profile_lands_records_no_overrides() {
+                    // The upload of the desired profile is still in flight:
+                    // the DE1 doesn't hold it yet, so a shot now isn't it.
+                    let p = library("Daily");
+                    let mut core = connected();
+                    let _ = desire(&mut core, &p, &qc(p.brew_temp + 2.0), 0);
+                    let _ = sweep(&mut core, 0); // started, never acked
+                    pour(&mut core, 1_000);
+                    let shot = core.take_stored_shot(ctx()).expect("a shot");
+                    assert!(shot.profile.is_none());
+                    assert_eq!(shot.brew_temp_target, None);
+                }
+
+                #[test]
+                fn grinder_model_is_the_bean_grinder_else_the_settings_grinder() {
+                    let bean = |grinder: Option<&str>| ShotBean {
+                        name: "Gesha".into(),
+                        grinder: grinder.map(str::to_owned),
+                        ..ShotBean::default()
+                    };
+                    for (b, settings, want) in [
+                        (
+                            Some(bean(Some("Niche Zero"))),
+                            Some("EK43"),
+                            Some("Niche Zero"),
+                        ),
+                        (Some(bean(None)), Some("EK43"), Some("EK43")),
+                        (None, Some("  "), None),
+                        (None, None, None),
+                    ] {
+                        let mut core = connected();
+                        pour(&mut core, 1_000);
+                        let shot = core
+                            .take_stored_shot(ShotCaptureContext {
+                                bean: b,
+                                settings_grinder: settings.map(str::to_owned),
+                                ..ctx()
+                            })
+                            .expect("a shot");
+                        assert_eq!(shot.grinder_model.as_deref(), want);
+                    }
+                }
+
+                #[test]
+                fn the_stop_reason_and_settled_yield_are_recorded() {
+                    let mut core = connected();
+                    core.set_max_shot_duration(Some(0.4));
+                    let events = pour(&mut core, 1_000);
+                    assert!(
+                        events
+                            .iter()
+                            .any(|e| matches!(e, Event::StopTriggered { .. }))
+                    );
+                    let shot = core.take_stored_shot(ctx()).expect("a shot");
+                    assert_eq!(shot.stop_reason, Some(StopReason::MaxTime));
+                    assert!(shot.stop_on_weight.is_some());
+                    assert!(shot.auto_tare.is_some());
+                }
+
+                #[test]
+                fn no_samples_no_shot() {
+                    let mut core = connected();
+                    // Espresso / Heating, then Idle: the shot never flowed.
+                    core.on_notification(Source::De1State, &[4, 1], 1_000);
+                    idle(&mut core, 2_000);
+                    assert_eq!(core.take_stored_shot(ctx()), None);
+                }
+
+                #[test]
+                fn a_completed_shot_is_taken_once() {
+                    let mut core = connected();
+                    pour(&mut core, 1_000);
+                    assert!(core.take_stored_shot(ctx()).is_some());
+                    assert_eq!(core.take_stored_shot(ctx()), None);
+                    // The JSON entry point answers `null` when nothing waits.
+                    assert_eq!(
+                        core.take_stored_shot_json(r#"{"completedAt":1}"#).unwrap(),
+                        "null"
+                    );
+                }
             }
         }
 

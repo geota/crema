@@ -380,7 +380,33 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
                 settings: app_settings,
             },
         },
+        metadata: crema_extras(shot).map(|crema| V2MetadataOut { crema }),
     }
+}
+
+/// The `metadata.crema.*` block — the documented escape valve for what the
+/// v2 schema has no slot for: the equipment grinder, shot tags, the dialled
+/// targets and the bean snapshot's roast date / level / notes. Every field
+/// is omitted when absent, and the block itself when empty, so a shot with
+/// none of them exports the plain v2 shape. Read back by the web
+/// `extractCremaExtras`; used to be bolted on in TypeScript (F10).
+fn crema_extras(shot: &StoredShot) -> Option<V2CremaExtrasOut> {
+    let bean = shot.bean.as_ref();
+    let extras = V2CremaExtrasOut {
+        grinder_model: shot.grinder_model.clone().filter(|s| !s.is_empty()),
+        tags: shot.tags.clone(),
+        yield_target: shot.yield_target,
+        brew_temp_target: shot.brew_temp_target,
+        preinfuse_target: shot.preinfuse_target,
+        stop_on_weight: shot.stop_on_weight,
+        auto_tare: shot.auto_tare,
+        bean_roasted_on: bean
+            .and_then(|b| b.roasted_on.clone())
+            .filter(|s| !s.is_empty()),
+        bean_roast_level: bean.and_then(|b| b.roast_level),
+        bean_notes: bean.and_then(|b| b.notes.clone()).filter(|s| !s.is_empty()),
+    };
+    (extras != V2CremaExtrasOut::default()).then_some(extras)
 }
 
 /// Map a stored 1..5 star rating back to the legacy 0..100 enjoyment
@@ -533,6 +559,38 @@ struct V2DocumentOut {
     profile: V2ProfileSlotOut,
     meta: V2MetaOut,
     app: V2AppOut,
+    /// The Crema escape valve, absent when it would be empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<V2MetadataOut>,
+}
+
+#[derive(Serialize)]
+struct V2MetadataOut {
+    crema: V2CremaExtrasOut,
+}
+
+#[derive(Serialize, Default, PartialEq)]
+struct V2CremaExtrasOut {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grinder_model: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    yield_target: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    brew_temp_target: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preinfuse_target: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_on_weight: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_tare: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bean_roasted_on: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bean_roast_level: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bean_notes: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -756,6 +814,58 @@ mod tests {
         shot
     }
 
+    /// F10.8: the core's export carries the `metadata.crema` escape valve the
+    /// web shell used to bolt on in TypeScript (`cremaExtras`) — the same
+    /// keys, each omitted when absent.
+    #[test]
+    fn v2_export_carries_the_crema_extras() {
+        let mut shot = fixture();
+        shot.grinder_model = Some("Niche Zero".into());
+        shot.tags = vec!["dial-in".into()];
+        shot.yield_target = Some(36.0);
+        shot.brew_temp_target = Some(93.5);
+        shot.preinfuse_target = Some(8.0);
+        shot.stop_on_weight = Some(true);
+        shot.auto_tare = Some(false);
+        shot.bean = Some(crate::bean::ShotBean {
+            name: "Gesha".into(),
+            roasted_on: Some("2026-10-01".into()),
+            roast_level: Some(3),
+            notes: Some("jasmine".into()),
+            ..crate::bean::ShotBean::default()
+        });
+        let doc: serde_json::Value =
+            serde_json::from_str(&export_v2_json_shot(&shot).unwrap()).unwrap();
+        assert_eq!(
+            doc["metadata"]["crema"],
+            serde_json::json!({
+                "grinder_model": "Niche Zero",
+                "tags": ["dial-in"],
+                "yield_target": 36.0,
+                "brew_temp_target": 93.5,
+                "preinfuse_target": 8.0,
+                "stop_on_weight": true,
+                "auto_tare": false,
+                "bean_roasted_on": "2026-10-01",
+                "bean_roast_level": 3,
+                "bean_notes": "jasmine"
+            })
+        );
+        // Nothing to add → no block at all (the plain v2 shape).
+        let mut plain = fixture();
+        plain.bean = None;
+        plain.grinder_model = None;
+        plain.tags.clear();
+        plain.yield_target = None;
+        plain.brew_temp_target = None;
+        plain.preinfuse_target = None;
+        plain.stop_on_weight = None;
+        plain.auto_tare = None;
+        let doc: serde_json::Value =
+            serde_json::from_str(&export_v2_json_shot(&plain).unwrap()).unwrap();
+        assert!(doc.get("metadata").is_none(), "{doc}");
+    }
+
     #[test]
     fn exports_a_v2_document_with_the_expected_top_level_shape() {
         let shot = fixture();
@@ -902,6 +1012,7 @@ mod tests {
             tags: Vec::new(),
             grinder_setting: Some("2.4".into()),
             grinder: Some("Niche Zero".into()),
+            notes: None,
         });
         // A trailing sample past the 27 s flow window — the machine's
         // Espresso/Ending tail — must not be exported.
