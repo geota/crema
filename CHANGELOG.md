@@ -70,6 +70,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Connections between Crema devices are now encrypted.** Pair your devices
+  again once: on the hub, open Paired devices ▸ Pair a device; on the phone,
+  choose the hub and type the code it shows into the hub. Update every device:
+  older versions can't connect. Pairing takes a 6-digit code shown on the phone
+  and typed on the hub, which also chooses View and control or View only;
+  three wrong codes pause pairing for a minute. After that the devices
+  reconnect on their own, and only to each other: a device on the network that
+  only claims to be your hub is never trusted. Forget on either device ends the
+  pairing at once, and Reset pairing key starts this device over. The keys are
+  kept in the Android Keystore and never leave the device in a backup.
+  Tablet and phone.
 - **Basic pressure profiles limit flow during the forced rise**, and pressure
   steps without a flow limit — cleaning and calibration profiles included — are
   capped at 8 ml/s, matching de1app and Decenza. A profile an earlier version
@@ -104,9 +115,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 - **Hand-off and take-over between devices** — the "Take over the DE1" and
   "Hand off" actions are gone; to move the machine to another device, turn off
-  hub mode on the hub. Nightly users: update every device — an older nightly
-  hub still shows "Hand off" next to a newer remote, and tapping it waits
-  forever. Tablet and phone.
+  hub mode on the hub. Nightly users: update every device — devices on an
+  older nightly can't connect to updated ones. Tablet and phone.
 
 ### Fixed
 
