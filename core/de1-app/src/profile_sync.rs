@@ -27,8 +27,13 @@
 //!   steps) is not retried until the desired profile changes.
 //! - **Busy.** Nothing is uploaded while the machine is doing something (a
 //!   shot, steam, hot water, a flush, a maintenance cycle the core is
-//!   following) or its state is not known yet: the upload waits for Idle /
-//!   Sleep (Decenza `uploadCurrentProfile` blocks active phases the same way).
+//!   following) or its state is not known yet — after a drop, until this
+//!   connection's first `StateInfo`: the upload waits for Idle / Sleep
+//!   (Decenza `uploadCurrentProfile` blocks active phases the same way).
+//! - **A drop ends the upload.** An upload running when the link drops
+//!   cannot finish, so [`CremaCore::de1_link_lost`] fails it at once
+//!   (`Aborted`, ignored by the sync as an older generation's) and the
+//!   reconnect uploads without waiting for its ack timeout.
 //! - **Never persisted.** Nothing here survives the process: after a restart
 //!   the next connect uploads.
 //! - **Hub only.** A read-only mirror core (a remote) never uploads.
@@ -39,7 +44,7 @@
 use std::time::Duration;
 
 use de1_domain::{BrewOverrides, CremaProfile};
-use de1_protocol::MachineState;
+use de1_protocol::{MachineState, StateInfo};
 use typeshare::typeshare;
 
 use crate::{CoreOutput, CremaCore, Event, ms_to_duration};
@@ -114,6 +119,9 @@ pub(crate) struct ProfileSync {
     generation: u32,
     /// The connect sweep ran for this generation.
     settled: bool,
+    /// A `StateInfo` arrived on this generation's link: the core's last
+    /// state is this connection's, not one from before the drop.
+    state_seen: bool,
     /// The sync upload running, if any.
     in_flight: Option<SyncTag>,
     /// Failures since the last success.
@@ -161,6 +169,7 @@ impl ProfileSync {
     fn disconnected(&mut self) -> bool {
         self.generation = self.generation.wrapping_add(1);
         self.settled = false;
+        self.state_seen = false;
         self.last_pushed = None;
         self.in_flight = None;
         self.attempt = 0;
@@ -181,11 +190,18 @@ impl ProfileSync {
         self.retry_at = None;
     }
 
+    /// A `StateInfo` arrived. Returns whether it is the first of this
+    /// generation.
+    fn state_seen(&mut self) -> bool {
+        !std::mem::replace(&mut self.state_seen, true)
+    }
+
     /// The desired profile to upload now, if one is due and the machine can
     /// take it (`ready`).
     fn due(&self, now: Duration, ready: bool) -> Option<Desired> {
         let desired = self.desired.as_ref()?;
         let due = self.settled
+            && self.state_seen
             && ready
             && self.in_flight.is_none()
             && self.last_pushed.as_ref() != Some(&desired.fingerprint)
@@ -343,6 +359,17 @@ impl CremaCore {
         }
     }
 
+    /// A `StateInfo` notification arrived, before
+    /// [`handle_state`](Self::handle_state) records it. The first of a
+    /// generation makes the machine's state known again after a drop; when
+    /// it repeats the state from before the drop (no change for
+    /// `handle_state` to act on) a deferred upload is driven here.
+    pub(crate) fn profile_sync_state_seen(&mut self, info: StateInfo, out: &mut CoreOutput) {
+        if self.profile_sync.state_seen() && self.last_state == Some(info) {
+            self.drive_profile_sync(out);
+        }
+    }
+
     /// The connect sweep ran: the connection is settled; upload.
     pub(crate) fn profile_sync_settled(&mut self, out: &mut CoreOutput) {
         self.profile_sync.settle();
@@ -485,6 +512,8 @@ mod tests {
     fn f7_4_retry_backoff_schedule() {
         let mut sync = ProfileSync::default();
         sync.settle();
+        assert!(sync.state_seen(), "the first state of the generation");
+        assert!(!sync.state_seen(), "only the first");
         sync.set_desired(Some(desired("a")));
         let mut now = Duration::ZERO;
         let mut warnings = 0;

@@ -3297,7 +3297,10 @@ impl CremaCore {
     /// site, on the timer actually running — a drop from Idle or Sleep sends
     /// nothing, so a timer the user started by hand on the scale is left
     /// alone — and latched to one stop per outage. The tank-level filter is
-    /// re-seeded on reconnect (Decenza resets it on disconnect).
+    /// re-seeded on reconnect (Decenza resets it on disconnect). A profile
+    /// upload the drop cut short fails at once
+    /// ([`ProfileUploadFailure::Aborted`]), so the reconnect's sync upload need
+    /// not wait for its ack timeout.
     pub fn de1_link_lost(&mut self) -> CoreOutput {
         self.firmware_flash_link_lost();
         let mut out = CoreOutput::default();
@@ -3308,6 +3311,12 @@ impl CremaCore {
         // The tank may be refilled while the link is down: warn afresh.
         self.low_water.rearm();
         self.abandon_maintenance(&mut out);
+        // An upload in flight cannot finish over a dead link: fail it now so
+        // the reconnect's sync upload need not wait for its ack timeout. The
+        // sync ignores the failure — it belongs to the generation just ended.
+        if self.profile_upload_in_progress() {
+            self.fail_profile_upload(ProfileUploadFailure::Aborted, &mut out);
+        }
         self.idle_sleep.link(false);
         self.gate_read_only(out)
     }
@@ -3520,6 +3529,7 @@ impl CremaCore {
                 return;
             }
         };
+        self.profile_sync_state_seen(info, out);
         if self.last_state != Some(info) {
             let prev_info = self.last_state;
             let prev_state = prev_info.map(|s| s.state);
@@ -12857,29 +12867,69 @@ mod tests {
                 );
             }
 
-            /// AC-F7.3: an upload from an older connection generation that
-            /// completes after the link dropped does not count for the new one.
+            /// AC-F7.3: an upload from an older connection generation does
+            /// not count for the new one. A drop fails the upload it cut short
+            /// at once (its late acks are ignored) without a sync warning, and
+            /// the reconnect uploads as soon as the machine reports a state —
+            /// not after the old upload's ack timeout.
             #[test]
-            fn f7_3_a_stale_generation_completion_is_ignored() {
+            fn f7_3_a_drop_fails_the_running_upload_and_the_reconnect_sends_at_once() {
                 let p = library("Daily");
                 let mut core = connected();
                 let _ = desire(&mut core, &p, &BrewOverrides::default(), 0);
                 let first = sweep(&mut core, 10);
                 assert_eq!(uploads(&first), 1);
-                // The link drops mid-upload (no teardown: the core still holds
-                // the upload), then its acks arrive.
-                let _ = core.de1_link_lost();
+                // The link drops mid-upload (no teardown).
+                let lost = core.de1_link_lost();
+                assert!(
+                    lost.events.iter().any(|e| matches!(
+                        e,
+                        Event::ProfileUploadFailed {
+                            reason: ProfileUploadFailure::Aborted
+                        }
+                    )),
+                    "the cut-short upload fails at once: {:?}",
+                    lost.events
+                );
+                assert!(!core.profile_upload_in_progress());
+                assert_eq!(warnings(&lost.events), Vec::<bool>::new(), "no sync warning");
+                assert!(!core.profile_sync_status().retrying);
+                // Its late acks count for nothing.
                 let late = ack_every_frame(&mut core, &first.commands, 1);
                 assert!(
-                    late.iter()
+                    !late
+                        .iter()
                         .any(|e| matches!(e, Event::ProfileUploadCompleted { .. })),
-                    "the upload itself completed"
+                    "the dropped upload never completes"
                 );
-                assert_eq!(holds(&late), None, "but not for this generation");
+                assert_eq!(holds(&late), None);
                 assert_eq!(core.profile_sync_status().last_pushed, None);
-                // The new connection still uploads.
-                let _ = idle(&mut core, 20);
-                assert_eq!(uploads(&sweep(&mut core, 30)), 1);
+                // The reconnect: the sweep runs before the first state, which
+                // repeats the Idle from before the drop — the upload goes out on
+                // that state, well inside the old upload's ack timeout.
+                assert_eq!(uploads(&sweep(&mut core, 20)), 0, "state not known yet");
+                assert_eq!(uploads(&idle(&mut core, 30)), 1, "uploads at once");
+            }
+
+            /// A state from before a drop is not trusted: after the reconnect
+            /// the sync waits for this connection's first state, and a machine
+            /// that came back busy defers the upload until it is idle.
+            #[test]
+            fn a_reconnect_waits_for_a_fresh_state_before_uploading() {
+                let p = library("Daily");
+                let mut core = connected();
+                let _ = desire(&mut core, &p, &BrewOverrides::default(), 0);
+                let first = sweep(&mut core, 10);
+                let _ = ack_every_frame(&mut core, &first.commands, 1);
+                let _ = core.de1_link_lost();
+                // Reconnected; the last state on record is Idle, but it is the
+                // old connection's.
+                assert_eq!(uploads(&sweep(&mut core, 20)), 0);
+                assert_eq!(uploads(&core.on_tick(25)), 0);
+                // The machine came back pulling a shot (started at the group).
+                let busy = core.on_notification(Source::De1State, &[4, 0], 30);
+                assert_eq!(uploads(&busy), 0, "not during a shot");
+                assert_eq!(uploads(&idle(&mut core, 40)), 1, "once idle");
             }
 
             /// AC-F7.4: a failed upload is retried after 3 s, 10 s, 30 s, then
