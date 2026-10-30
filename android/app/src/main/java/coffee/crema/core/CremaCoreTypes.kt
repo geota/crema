@@ -2796,6 +2796,21 @@ data class FrameExitSpec (
 	val maxDurationS: Double
 )
 
+/// What the hub UI shows about pairing.
+@Serializable
+data class GateStatus (
+	/// The window is open.
+	val open: Boolean,
+	/// Seconds left in the window (0 when closed).
+	val secs_left: UInt,
+	/// Failed codes counted in this window.
+	val failures: UByte,
+	/// Seconds left in the lockout (0 when not locked).
+	val locked_secs_left: UInt,
+	/// A remote holds the pairing slot.
+	val pending: Boolean
+)
+
 /// The user's Visualizer sync **preferences** — the portable, cross-shell
 /// subset a whole-app backup carries. One shared `#[typeshare]` shape so web
 /// and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
@@ -4604,6 +4619,170 @@ enum class Pump(val string: String) {
 	/// Flow priority — the step targets a flow rate in ml/s.
 	@SerialName("flow")
 	Flow("flow"),
+}
+
+/// Generated type representing the anonymous struct variant `LegacyPeer` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventLegacyPeerInner (
+	/// The remote's protocol version.
+	val version: UInt,
+	/// The remote's display name.
+	val name: String
+)
+
+/// Generated type representing the anonymous struct variant `PairRequest` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPairRequestInner (
+	/// The remote's claimed device id (unauthenticated until pairing completes).
+	val remote_id: String,
+	/// The remote's display name.
+	val remote_name: String
+)
+
+/// Generated type representing the anonymous struct variant `PairPending` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPairPendingInner (
+	/// The remote's device id, checked against its static key.
+	val remote_id: String,
+	/// The remote's display name.
+	val remote_name: String
+)
+
+/// Generated type representing the anonymous struct variant `PairingFailed` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPairingFailedInner (
+	/// `WrongCode`, `NotConfirmed`, `Timeout`, `Cancelled`, `Malformed`, …
+	val reason: String,
+	/// Failed codes counted in this window.
+	val failures: UByte,
+	/// Whether pairing is now locked out.
+	val locked: Boolean
+)
+
+/// Generated type representing the anonymous struct variant `UnknownRemote` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventUnknownRemoteInner (
+	/// The remote's device id.
+	val remote_id: String
+)
+
+/// Generated type representing the anonymous struct variant `HubHello` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventHubHelloInner (
+	/// The hub's device id.
+	val hub_id: String,
+	/// The hub's display name.
+	val hub_name: String,
+	/// `Ready`, `AwaitingCode`, `PairingClosed`, `Busy` or `LockedOut`.
+	val status: String,
+	/// Seconds left in the pairing window (or the lockout).
+	val secs_left: UInt
+)
+
+/// Generated type representing the anonymous struct variant `ShowCode` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventShowCodeInner (
+	/// Six ASCII digits.
+	val code: String,
+	/// When the code expires (`now_ms` clock).
+	val expires_at_ms: Long
+)
+
+/// Generated type representing the anonymous struct variant `Refused` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventRefusedInner (
+	/// `HostMismatch`, `HubOutdated`, `HubUnverified`, `Timeout`, `Revoked`,
+	/// `NotPaired`, `HubStopped`, `Protocol`, `Normal`, or an `ABORT` reason.
+	val reason: String,
+	/// Whether the refusal arrived inside the session.
+	val authenticated: Boolean
+)
+
+/// Generated type representing the anonymous struct variant `Paired` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPairedInner (
+	/// The peer's device id.
+	val peer_id: String,
+	/// The peer's display name.
+	val peer_name: String
+)
+
+/// Generated type representing the anonymous struct variant `Established` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventEstablishedInner (
+	/// The peer's device id.
+	val peer_id: String
+)
+
+/// Generated type representing the anonymous struct variant `PeerClosed` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPeerClosedInner (
+	/// `Normal`, `Protocol`, … (the record's code).
+	val reason: String
+)
+
+/// Generated type representing the anonymous struct variant `Failed` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventFailedInner (
+	/// The `RelayError` name.
+	val error: String
+)
+
+/// Events for the shell (§3.4). Names are sanitized; public keys never ride
+/// in events (read `peer_public_key()`).
+@Serializable
+sealed class RelayEvent {
+	/// Hub: a v2/v3 remote dialled; it got the legacy denial.
+	@Serializable
+	@SerialName("LegacyPeer")
+	data class LegacyPeer(val content: RelayEventLegacyPeerInner): RelayEvent()
+	/// Hub: a remote asks to pair; show the code entry dialog.
+	@Serializable
+	@SerialName("PairRequest")
+	data class PairRequest(val content: RelayEventPairRequestInner): RelayEvent()
+	/// Hub: the code matched. Persist the pin, insert it into the live
+	/// `PinSet`, then call `confirm_paired()` (or `reject_pairing()` if the write failed).
+	@Serializable
+	@SerialName("PairPending")
+	data class PairPending(val content: RelayEventPairPendingInner): RelayEvent()
+	/// A pairing attempt ended without success. `failures`/`locked` describe the
+	/// hub's gate after it (always 0/false on the remote).
+	@Serializable
+	@SerialName("PairingFailed")
+	data class PairingFailed(val content: RelayEventPairingFailedInner): RelayEvent()
+	/// Hub: an unpinned remote tried to resume; it got `CLOSE(NOT_PAIRED)`.
+	@Serializable
+	@SerialName("UnknownRemote")
+	data class UnknownRemote(val content: RelayEventUnknownRemoteInner): RelayEvent()
+	/// Remote: the hub's ServerHello (advisory until the handshake).
+	@Serializable
+	@SerialName("HubHello")
+	data class HubHello(val content: RelayEventHubHelloInner): RelayEvent()
+	/// Remote: show this code until `expires_at_ms`.
+	@Serializable
+	@SerialName("ShowCode")
+	data class ShowCode(val content: RelayEventShowCodeInner): RelayEvent()
+	/// Remote: the hub refused. Only `authenticated` refusals (a `CLOSE` record)
+	/// may change trust state or role.
+	@Serializable
+	@SerialName("Refused")
+	data class Refused(val content: RelayEventRefusedInner): RelayEvent()
+	/// Both: pairing completed.
+	@Serializable
+	@SerialName("Paired")
+	data class Paired(val content: RelayEventPairedInner): RelayEvent()
+	/// Both: the session is up (hub: admitted; remote: hub authenticated).
+	@Serializable
+	@SerialName("Established")
+	data class Established(val content: RelayEventEstablishedInner): RelayEvent()
+	/// Hub: the remote ended an established session with an authenticated `CLOSE` record.
+	@Serializable
+	@SerialName("PeerClosed")
+	data class PeerClosed(val content: RelayEventPeerClosedInner): RelayEvent()
+	/// The connection failed for a reason no more specific event covers.
+	@Serializable
+	@SerialName("Failed")
+	data class Failed(val content: RelayEventFailedInner): RelayEvent()
 }
 
 /// Generated type representing the anonymous struct variant `Corrupt` of the `SawModelLoad` Rust enum

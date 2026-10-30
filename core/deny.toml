@@ -1,0 +1,56 @@
+# cargo-deny: the Rust supply-chain gate (relay v4 spec §2.2, §3.1; AC-58).
+# CI runs `cargo deny check advisories bans` on every PR and push, blocking
+# (.github/workflows/ci.yml, job `deny`). Run it locally from core/.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+# Any RustSec advisory (vulnerability, unmaintained, unsound, notice) anywhere
+# in the workspace graph fails, as does a yanked version. The de1-relay tree
+# has no exception.
+yanked = "deny"
+ignore = [
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml (unmaintained, no safe upgrade) is a build-time dependency of uniffi_bindgen via askama in de1-ffi; it is not in the de1-relay tree and never ships" },
+]
+
+[bans]
+# sha2 0.10 (snow, spake2, de1-relay) and 0.11 (the rest) coexist until snow
+# 0.11 ships (spec §2.2).
+multiple-versions = "allow"
+wildcards = "allow"
+deny = [
+    # Nothing under de1-relay may draw OS entropy (§2.11). snow's `std` feature
+    # lists "getrandom/std" and "ring/std" without `?`, so enabling it pulls in
+    # both; spake2's default `getrandom` feature pulls in rand_core's OsRng.
+    # Only these existing crates may depend on getrandom directly.
+    { crate = "getrandom", wrappers = ["uuid", "tempfile"], reason = "de1-relay draws no ambient entropy; the bridges inject seeds" },
+    { crate = "ring", reason = "snow's ring resolver and `std` feature must stay off" },
+    # Exact pins: any other resolved version needs the upstream diff read first.
+    { crate = "snow:<0.10.0", reason = "pinned to =0.10.0 (spec §2.2)" },
+    { crate = "snow:>0.10.0", reason = "pinned to =0.10.0 (spec §2.2)" },
+    { crate = "spake2:<0.4.0", reason = "pinned to =0.4.0 (spec §2.2)" },
+    { crate = "spake2:>0.4.0", reason = "pinned to =0.4.0 (spec §2.2)" },
+    { crate = "curve25519-dalek:<4.1.3", reason = "RUSTSEC-2024-0344 is fixed in 4.1.3" },
+]
+
+# The exact feature sets the spec gives (§3.1).
+[[bans.features]]
+crate = "snow"
+exact = true
+allow = [
+    "default-resolver",
+    "use-curve25519",
+    "use-chacha20poly1305",
+    "use-sha2",
+    # the optional dependencies those three turn on
+    "curve25519-dalek",
+    "chacha20poly1305",
+    "sha2",
+]
+
+[[bans.features]]
+crate = "spake2"
+exact = true
+allow = []
