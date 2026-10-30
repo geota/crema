@@ -184,4 +184,23 @@ class BackupRoundTripTest {
         // A bundle from before custom methods restores none.
         assertTrue(parseBackup(line("crema-backup/v1"), json, 0L)!!.customMethods.isEmpty())
     }
+
+    @Test
+    fun `a wrong-typed settings field doesn't drop the settings`() {
+        val bundle = listOf(
+            line("crema-backup/v1"),
+            line("settings", buildJsonObject {
+                put("common", buildJsonObject {
+                    put("tempUnit", "F")
+                    put("autoTare", "yes")
+                    put("maxShotDurationS", 30)
+                })
+                put("_shell", "web")
+            }),
+        ).joinToString("\n")
+        val common = assertNotNull(parseBackup(bundle, json, 0L)!!.common)
+        assertEquals("F", common.tempUnit)
+        assertEquals(true, common.autoTare)
+        assertEquals(30f, common.maxShotDurationS)
+    }
 }
