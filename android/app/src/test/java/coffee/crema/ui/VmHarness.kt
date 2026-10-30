@@ -120,6 +120,36 @@ internal object VmHarness {
     /** The VM's own state: what it persists (the screens see [MainViewModel.ui]). */
     fun ownState(vm: MainViewModel): MainUiState = vm.ownState.value
 
+    /**
+     * Run [block] with the startup load (library, prefs, …) of every VM built
+     * in it held until [block] completes `release`, so a test can act before
+     * the prefs load: unheld, the load can finish inside the constructor.
+     */
+    fun holdingStartupLoad(block: (release: kotlinx.coroutines.CompletableDeferred<Unit>) -> Unit) {
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        MainViewModel.holdStartupLoad = release
+        try {
+            block(release)
+        } finally {
+            MainViewModel.holdStartupLoad = null
+            release.complete(Unit)
+        }
+    }
+
     /** The VM's event log, newest first. */
     fun log(vm: MainViewModel): List<String> = vm.ui.value.eventLog
+
+    /**
+     * Restore [backup] and wait until the restore has finished. It runs in
+     * its own coroutine whose saves post back to Main, so one idle() can
+     * return halfway and let the rest land after the test's next step (a
+     * reset whose values the restore then puts back, say). Its last step
+     * says "Restored …".
+     */
+    fun restore(vm: MainViewModel, backup: ByteArray, mode: MainViewModel.RestoreMode = MainViewModel.RestoreMode.MERGE) {
+        fun restored() = vm.ui.value.userMessages.count { it.startsWith("Restored ") }
+        val before = restored()
+        kotlinx.coroutines.runBlocking { vm.restoreBackupBytes(backup, mode) }
+        idleUntil("the restore") { restored() > before }
+    }
 }

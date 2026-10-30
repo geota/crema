@@ -79,6 +79,9 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         VmHarness.idle()
         VmHarness.awaitPrefsLoaded(vm)
         VmHarness.idleUntil("the hub's Welcome") { hub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
+        // The rest of the startup load (custom profiles, maintenance, …) runs
+        // after the prefs: a test step taken before it ends can be undone by it.
+        VmHarness.awaitStartupLoaded(vm)
         return vm
     }
 

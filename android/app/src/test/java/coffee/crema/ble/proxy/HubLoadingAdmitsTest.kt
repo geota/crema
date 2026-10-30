@@ -43,7 +43,7 @@ class HubLoadingAdmitsTest {
     }
 
     @Test
-    fun `a restarting hub admits a paired remote that dials at once`() {
+    fun `a restarting hub admits a paired remote that dials at once`() = VmHarness.holdingStartupLoad { release ->
         val files = VmHarness.app().filesDir
         val port = ServerSocket(0).use { it.localPort }
         // The hub's last run: Hub mode, the relay on `port`, the remote pinned.
@@ -52,7 +52,7 @@ class HubLoadingAdmitsTest {
         hubStore.pinRemote(RelayRemotePin(remote.deviceId(), RelayKeyStore.b64(remote.publicKey()), "Phone", SCOPE_CONTROL, pairedAtMs = 1))
         File(files, "relayPort").writeText("$port")
         File(files, "prefs.json").writeText("""{"proxyRole":"primary"}""")
-        VmHarness.build(store) // the main looper isn't idled yet: the prefs haven't loaded
+        VmHarness.build(store) // its startup load is held: the prefs haven't loaded
 
         val refusals = CopyOnWriteArrayList<String>()
         val welcomed = AtomicBoolean(false)
@@ -66,6 +66,7 @@ class HubLoadingAdmitsTest {
         assertEquals(emptyList(), refusals.toList(), "no refusal before the prefs load")
         assertFalse(welcomed.get())
 
+        release.complete(Unit)
         VmHarness.idleUntil("the remote's welcome") { welcomed.get() }
         assertEquals(emptyList(), refusals.toList(), "no refusal at any point")
     }
