@@ -200,7 +200,7 @@ class PeerDiscovery(
         @Suppress("DEPRECATION") val host = resolved.host?.hostAddress ?: return
         found[resolved.serviceName] = Peer(
             id = id,
-            name = attrs["name"]?.let { String(it) } ?: id,
+            name = sanitizePeerName(attrs["name"]?.let { String(it) } ?: id),
             role = attrs["role"]?.let { String(it) } ?: "normal",
             holdsDe1 = attrs["de1"]?.let { String(it) } == "1",
             host = host,
@@ -305,3 +305,30 @@ internal suspend fun <T> awaitNsdResolve(
         if (!result.isCompleted) cancel()
     }
 }
+
+/**
+ * A name a peer chose (an NSD advertisement, a legacy hello), made safe to
+ * show: the core's rule for hello names (`hello.rs` `sanitize_name`). No
+ * control or format characters (bidi overrides and isolates, zero-width
+ * characters), no line or paragraph separators, trimmed, at most 32
+ * characters; blank becomes "Unnamed device".
+ */
+internal fun sanitizePeerName(raw: String): String {
+    val kept = StringBuilder()
+    raw.codePoints().forEach { cp ->
+        val type = Character.getType(cp)
+        if (type != Character.CONTROL.toInt() && type != Character.FORMAT.toInt() && cp != 0x2028 && cp != 0x2029) kept.appendCodePoint(cp)
+    }
+    val trimmed = kept.toString().trim()
+    val cut = StringBuilder()
+    var n = 0
+    val it = trimmed.codePoints().iterator()
+    while (it.hasNext() && n < PEER_NAME_MAX_CHARS) {
+        cut.appendCodePoint(it.nextInt())
+        n++
+    }
+    return cut.toString().trim().ifBlank { "Unnamed device" }
+}
+
+/** The core's `NAME_MAX_CHARS`. */
+internal const val PEER_NAME_MAX_CHARS = 32

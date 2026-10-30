@@ -34,7 +34,9 @@ import coffee.crema.ui.turnOffHubCopy
 import coffee.crema.ui.canConnectDirectly
 import coffee.crema.ui.discoveredHubWarning
 import coffee.crema.ui.hubModeBlockedReason
+import coffee.crema.ui.canPairAgain
 import coffee.crema.ui.isVerifiedHub
+import coffee.crema.ui.pickerLine
 import coffee.crema.ui.hubModeSubtitle
 import coffee.crema.ui.remoteHubLabel
 import coffee.crema.ui.remoteStatus
@@ -54,6 +56,8 @@ fun MultiDeviceSection(
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onConnectDirectly: () -> Unit,
+    /** A remote's Pair again (spec §6.3, §6.4): pairs with the saved target. */
+    onPairAgain: () -> Unit,
     // The phone embeds this at the bottom of its Devices sheet, so it draws its own
     // "Other devices" header; the tablet hosts it under a Settings group title that
     // already serves as the header, so it suppresses this one (issue 13).
@@ -117,6 +121,14 @@ fun MultiDeviceSection(
             action = "Stop",
             onClick = onStopMirroring,
         )
+        if (ui.canPairAgain()) {
+            MirrorRow(
+                title = "Pair again",
+                sub = "Pair this device with ${ui.remoteHubLabel()} again: you'll type a code on ${ui.remoteHubLabel()}.",
+                action = "Pair again",
+                onClick = onPairAgain,
+            )
+        }
         if (ui.canConnectDirectly()) {
             MirrorRow(
                 title = "Connect directly",
@@ -129,8 +141,9 @@ fun MultiDeviceSection(
     }
 
     // NSD-discovered hubs holding the DE1, plus the manual peer (for
-    // emulators / when NSD can't run).
-    val sources = ui.peers.filter { it.isMirrorSource }
+    // emulators / when NSD can't run). A hub on the old protocol is listed
+    // but can't be picked: it needs a Crema update.
+    val sources = ui.peers.filter { it.role == "primary" && it.holdsDe1 && it.port > 0 }
     val manualHost = ui.proxyPrimaryHost.takeIf { it.isNotBlank() }
     if (sources.isEmpty() && manualHost == null) {
         Text(
@@ -141,13 +154,14 @@ fun MultiDeviceSection(
         return
     }
     sources.forEach { peer ->
-        // An advertisement is unauthenticated: only a paired, pinned hub is
-        // called one. Connecting to any other asks to pair first.
+        // An advertisement is unauthenticated: only a paired hub is called
+        // one. Connecting to any other asks to pair first.
         MirrorRow(
             title = peer.name,
-            sub = if (ui.isVerifiedHub(peer)) "Hub · holds the DE1 · ${peer.host}" else "Says it's a hub · unverified · ${peer.host}",
+            sub = ui.pickerLine(peer),
             action = "Connect through",
             onClick = { onMirrorFrom(peer.host, peer.port) },
+            enabled = peer.upToDate,
         )
     }
     manualHost?.let { host ->
@@ -279,7 +293,7 @@ private fun RemoteRow(name: String, viewOnly: Boolean) {
 }
 
 @Composable
-private fun MirrorRow(title: String, sub: String, action: String, onClick: () -> Unit) {
+private fun MirrorRow(title: String, sub: String, action: String, onClick: () -> Unit, enabled: Boolean = true) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -290,7 +304,7 @@ private fun MirrorRow(title: String, sub: String, action: String, onClick: () ->
             Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
             Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        OutlinedButton(onClick = onClick, shape = RoundedCornerShape(999.dp)) {
+        OutlinedButton(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(999.dp)) {
             Text(action, style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold))
         }
     }

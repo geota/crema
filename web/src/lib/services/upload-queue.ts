@@ -20,7 +20,7 @@
  *    `attempts` on every re-enqueue (including the first failure, before any
  *    retry ran), so the per-entry ceiling was one short. Now the drain owns the
  *    counter: a fresh entry starts at 0, each failed drain increments it, and
- *    the entry is dropped when it reaches `MAX_ATTEMPTS` — so a persistently
+ *    the entry is dropped when it reaches the core's `MAX_QUEUE_ATTEMPTS` (3) — so a persistently
  *    failing recoverable op is retried a full 3 times before it's dropped.
  *    `enqueue()` no longer touches `attempts`.
  *
@@ -36,16 +36,12 @@ import { BeanSync } from './bean-sync.ts';
 import type { ResponseDecodeError } from '../effect/errors.ts';
 import {
 	describeVisualizerError,
-	isRateLimited,
-	isRecoverable,
-	quotaLimit,
-	retryDelayMs,
+	queueDecision,
 	type VisualizerCallError
 } from './visualizer-call.ts';
 import {
 	dequeueEntry,
 	enqueueEntry,
-	MAX_ATTEMPTS,
 	persistRetry,
 	readQueue,
 	type EnqueueInput,
@@ -64,22 +60,10 @@ export interface DrainResult {
 
 const DEFERRED: DrainResult = { processed: 0, succeeded: 0, dropped: 0, deferred: 1 };
 
-/** How long a remote delete parked on a signed-out session waits between checks. */
-const AUTH_PARK_MS = 5 * 60 * 1000;
-
 /**
- * The session is gone (no tokens, or the refresh token was definitively
- * rejected). Only signing in again fixes it. A transient refresh failure is a
- * `NetworkError` / 5xx `HttpStatusError` instead, and retries on the normal
- * schedule (review 03 P1-1).
- */
-const isSignedOut = (e: UploadError): boolean =>
-	e._tag === 'NotAuthenticatedError' || e._tag === 'TokenRefreshFailedError';
-
-/**
- * Every failure `runEntry` can surface (from ShotSync / BeanSync). The shared
- * `isRecoverable` (which of these is worth a timed retry) and
- * `describeVisualizerError` live in `visualizer-call.ts`.
+ * Every failure `runEntry` can surface (from ShotSync / BeanSync). What the
+ * queue does with one is the core's rule (`queueDecision` in
+ * `visualizer-call.ts`); `describeVisualizerError` words it.
  */
 type UploadError = VisualizerCallError | ResponseDecodeError;
 
@@ -159,34 +143,30 @@ export const UploadQueueLive = Layer.effect(
 				} else {
 					const e = result.failure;
 					const made = entry.attempts + 1;
-					if (quotaLimit(e) != null) {
-						// The free-plan daily cap: drop the entry (the shot stays
-						// unsynced, so the next unsynced pass re-offers it) and stop —
-						// every other create would hit the same cap.
-						yield* dequeue(entry.entity, entry.id, entry.op);
-						out.dropped += 1;
-						break;
-					}
-					if (entry.op === 'delete' && isSignedOut(e)) {
-						// A remote delete has no other path to the server: the local row
-						// is already gone, so nothing re-offers it later. Park it, without
-						// spending an attempt, until the user signs in again.
+					// The rule is the core's (`visualizer_queue_decision`), shared with
+					// Android: the free-plan daily cap drops and stops (the shot stays
+					// unsynced, so the next pass re-offers it); a remote delete while
+					// signed out parks without spending an attempt (nothing else
+					// re-offers it); a terminal or third failure drops; otherwise retry
+					// on the core backoff, and a 429 leaves the rest for a later drain.
+					const decision = queueDecision(entry.op, e, made);
+					if (decision.kind === 'Park') {
 						yield* Effect.sync(() =>
-							persistRetry(entry, entry.attempts, describeVisualizerError(e), AUTH_PARK_MS)
+							persistRetry(entry, entry.attempts, describeVisualizerError(e), decision.details.delay_ms)
 						);
 						out.deferred += 1;
 						continue;
 					}
-					if (!isRecoverable(e) || made >= MAX_ATTEMPTS) {
+					if (decision.kind === 'Drop') {
 						yield* dequeue(entry.entity, entry.id, entry.op);
 						out.dropped += 1;
-					} else {
-						yield* Effect.sync(() =>
-							persistRetry(entry, made, describeVisualizerError(e), retryDelayMs(e, made))
-						);
-						// Rate-limited: leave the rest for a later drain.
-						if (isRateLimited(e)) break;
+						if (decision.details.stop_pass) break;
+						continue;
 					}
+					yield* Effect.sync(() =>
+						persistRetry(entry, made, describeVisualizerError(e), decision.details.delay_ms)
+					);
+					if (decision.details.stop_pass) break;
 				}
 			}
 			return out;

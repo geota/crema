@@ -10,7 +10,9 @@
 //! i18n / display copy, not policy. Only the recoverable-vs-terminal decision
 //! moves here.
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use typeshare::typeshare;
 
 /// The closed Visualizer-call error taxonomy. Mirrors the shell's
 /// `VisualizerCallError | ResponseDecodeError` tagged-error union. The shell
@@ -156,6 +158,159 @@ pub fn is_recoverable(tag: &str, status: Option<u16>) -> bool {
     VisualizerCallError::from_tag(tag, status).is_recoverable()
 }
 
+/// What a failed OAuth refresh means for the session (both shells; web
+/// `classifyRefreshFailure`, review 03 P1-1).
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefreshFailure {
+    /// The token endpoint rejected the refresh token: the session is over.
+    Definitive,
+    /// A transient server answer (5xx, 408, 429): keep the session, retry on
+    /// the status-aware backoff.
+    Retryable,
+    /// Anything else — a transport failure, a captive portal, a proxy page,
+    /// `invalid_client`: nothing proves the refresh token is dead, so the
+    /// session stays.
+    Transient,
+}
+
+/// Classify a failed refresh-token grant from the token endpoint's `status`
+/// (`None`: the request never got an answer) and its `body`.
+///
+/// **Definitive** only for HTTP 400 or 401 whose OAuth `error` is
+/// `invalid_grant`: Visualizer runs Doorkeeper 5.9 with refresh-token
+/// rotation, which answers a revoked, expired, unknown or already-rotated
+/// refresh token with exactly that (RFC 6749 §5.2). **Retryable** for 5xx,
+/// 408 and 429. Everything else is **Transient**: a shell signs out only on
+/// Definitive.
+#[must_use]
+pub fn classify_token_refresh_failure(status: Option<u16>, body: Option<&str>) -> RefreshFailure {
+    let Some(status) = status else {
+        return RefreshFailure::Transient;
+    };
+    let oauth_error = body
+        .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned));
+    if (status == 400 || status == 401) && oauth_error.as_deref() == Some("invalid_grant") {
+        RefreshFailure::Definitive
+    } else if status >= 500 || status == 408 || status == RATE_LIMITED {
+        RefreshFailure::Retryable
+    } else {
+        RefreshFailure::Transient
+    }
+}
+
+/// The most attempts a queued Visualizer operation gets before it is dropped.
+pub const MAX_QUEUE_ATTEMPTS: u32 = 3;
+
+/// How long a remote delete waits, parked, while the user is signed out (no
+/// attempt spent: only signing in again fixes it, and nothing else re-offers a
+/// delete whose local row is gone).
+pub const AUTH_PARK_MS: u32 = 5 * 60 * 1000;
+
+/// The kind of queued Visualizer operation.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueueOp {
+    /// Upload a new shot.
+    Create,
+    /// Update a remote row.
+    Update,
+    /// Delete a remote row.
+    Delete,
+}
+
+/// What a retry queue does with an operation that just failed.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "details")]
+pub enum QueueDecision {
+    /// Remove it. `stop_pass`: stop this drain (the daily quota — every other
+    /// upload would hit it too).
+    Drop {
+        /// Stop the drain.
+        stop_pass: bool,
+    },
+    /// Keep it without spending an attempt; look again after `delay_ms` (a
+    /// delete while signed out).
+    Park {
+        /// Wait, ms.
+        delay_ms: u32,
+    },
+    /// Retry after `delay_ms`. `stop_pass`: leave the rest of the queue for a
+    /// later drain (the rate limit).
+    Retry {
+        /// Wait, ms.
+        delay_ms: u32,
+        /// Stop the drain.
+        stop_pass: bool,
+    },
+}
+
+/// The retry queue's rule for an operation `op` that failed with the error
+/// `(tag, status)` and reply `body`, `attempts_made` attempts in (this one
+/// included). Both shells' queues follow it (web `UploadQueue.doDrain`):
+///
+/// 1. the free-plan daily quota ([`visualizer_quota_limit`]): drop and stop;
+/// 2. a delete while signed out (not authenticated, or the refresh token
+///    definitively rejected): park for [`AUTH_PARK_MS`];
+/// 3. not recoverable ([`is_recoverable`]), or [`MAX_QUEUE_ATTEMPTS`] made:
+///    drop;
+/// 4. otherwise retry after [`retry_backoff_ms`]; a 429 also stops the drain.
+#[must_use]
+pub fn visualizer_queue_decision(
+    op: QueueOp,
+    tag: &str,
+    status: Option<u16>,
+    body: &str,
+    attempts_made: u32,
+) -> QueueDecision {
+    let error = VisualizerCallError::from_tag(tag, status);
+    if let VisualizerCallError::HttpStatus(code) = error
+        && visualizer_quota_limit(code, body).is_some()
+    {
+        return QueueDecision::Drop { stop_pass: true };
+    }
+    let signed_out = matches!(
+        error,
+        VisualizerCallError::NotAuthenticated | VisualizerCallError::TokenRefreshFailed
+    );
+    if op == QueueOp::Delete && signed_out {
+        return QueueDecision::Park {
+            delay_ms: AUTH_PARK_MS,
+        };
+    }
+    if !error.is_recoverable() || attempts_made >= MAX_QUEUE_ATTEMPTS {
+        return QueueDecision::Drop { stop_pass: false };
+    }
+    QueueDecision::Retry {
+        // At most 10 min (`retry_backoff_ms`'s cap): fits a `u32`.
+        delay_ms: u32::try_from(retry_backoff_ms(status, attempts_made)).unwrap_or(u32::MAX),
+        stop_pass: error == VisualizerCallError::HttpStatus(RATE_LIMITED),
+    }
+}
+
+/// [`visualizer_queue_decision`] for the bridges: `op` by name (`"create"`,
+/// `"update"`, `"delete"`; anything else reads as an update) and the decision
+/// as JSON.
+#[must_use]
+pub fn visualizer_queue_decision_json(
+    op: &str,
+    tag: &str,
+    status: Option<u16>,
+    body: &str,
+    attempts_made: u32,
+) -> String {
+    let op = match op {
+        "create" => QueueOp::Create,
+        "delete" => QueueOp::Delete,
+        _ => QueueOp::Update,
+    };
+    let decision = visualizer_queue_decision(op, tag, status, body, attempts_made);
+    serde_json::to_string(&decision)
+        .unwrap_or_else(|_| r#"{"kind":"Drop","details":{"stop_pass":false}}"#.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +434,106 @@ mod tests {
         assert_eq!(retry_backoff_ms(Some(429), 1), 120_000);
         assert_eq!(retry_backoff_ms(Some(429), 4), 600_000);
         assert_eq!(retry_backoff_ms(Some(429), 40), 600_000);
+    }
+
+    /// AC-F17.1: only a 400 / 401 `invalid_grant` ends the session.
+    #[test]
+    fn f17_1_only_invalid_grant_on_400_or_401_is_definitive() {
+        let grant = Some(r#"{"error":"invalid_grant","error_description":"revoked"}"#);
+        assert_eq!(
+            classify_token_refresh_failure(Some(400), grant),
+            RefreshFailure::Definitive
+        );
+        assert_eq!(
+            classify_token_refresh_failure(Some(401), grant),
+            RefreshFailure::Definitive
+        );
+        let transient = [
+            (Some(401), None),
+            (Some(401), Some(r#"{"error":"invalid_client"}"#)),
+            (Some(403), grant),
+            (Some(403), Some("<html>proxy</html>")),
+            (Some(400), Some("<html>captive portal</html>")),
+            (Some(200), Some("<html>captive portal</html>")),
+            (None, None),
+        ];
+        for (status, body) in transient {
+            assert_eq!(
+                classify_token_refresh_failure(status, body),
+                RefreshFailure::Transient,
+                "{status:?} {body:?}"
+            );
+        }
+        for status in [500, 502, 503, 408, 429] {
+            assert_eq!(
+                classify_token_refresh_failure(Some(status), grant),
+                RefreshFailure::Retryable,
+                "{status}"
+            );
+        }
+    }
+
+    /// AC-F17.2: one case per branch of the web drain.
+    #[test]
+    fn f17_2_the_queue_decision_matches_the_web_drain() {
+        let quota = r#"{"error":"You've reached your daily limit of 30 shots."}"#;
+        assert_eq!(
+            visualizer_queue_decision(QueueOp::Create, "HttpStatusError", Some(422), quota, 1),
+            QueueDecision::Drop { stop_pass: true }
+        );
+        for tag in ["NotAuthenticatedError", "TokenRefreshFailedError"] {
+            assert_eq!(
+                visualizer_queue_decision(QueueOp::Delete, tag, None, "", 1),
+                QueueDecision::Park {
+                    delay_ms: AUTH_PARK_MS
+                }
+            );
+            assert_eq!(
+                visualizer_queue_decision(QueueOp::Create, tag, None, "", 1),
+                QueueDecision::Drop { stop_pass: false },
+                "a signed-out create is re-offered by the next pass instead"
+            );
+        }
+        assert_eq!(
+            visualizer_queue_decision(QueueOp::Create, "HttpStatusError", Some(422), "{}", 1),
+            QueueDecision::Drop { stop_pass: false },
+            "not recoverable"
+        );
+        assert_eq!(
+            visualizer_queue_decision(QueueOp::Create, "NetworkError", None, "", 1),
+            QueueDecision::Retry {
+                delay_ms: 2_000,
+                stop_pass: false
+            }
+        );
+        assert_eq!(
+            visualizer_queue_decision(QueueOp::Create, "HttpStatusError", Some(503), "", 2),
+            QueueDecision::Retry {
+                delay_ms: 4_000,
+                stop_pass: false
+            }
+        );
+        assert_eq!(
+            visualizer_queue_decision(
+                QueueOp::Create,
+                "NetworkError",
+                None,
+                "",
+                MAX_QUEUE_ATTEMPTS
+            ),
+            QueueDecision::Drop { stop_pass: false },
+            "the third attempt is the last"
+        );
+        assert_eq!(
+            visualizer_queue_decision(QueueOp::Create, "HttpStatusError", Some(429), "", 1),
+            QueueDecision::Retry {
+                delay_ms: 120_000,
+                stop_pass: true
+            }
+        );
+        assert_eq!(
+            visualizer_queue_decision_json("delete", "NotAuthenticatedError", None, "", 1),
+            r#"{"kind":"Park","details":{"delay_ms":300000}}"#
+        );
     }
 }

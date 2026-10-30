@@ -194,6 +194,7 @@ fun PhoneNavHost(
             onMirrorFrom = { host, port -> vm.switchToSecondary(host, port); devicesOpen = false },
             onStopMirroring = { vm.switchToNormal(); devicesOpen = false },
             onConnectDirectly = { vm.connectDirectly(); devicesOpen = false },
+            onPairAgain = { vm.pairAgain(); devicesOpen = false },
             onRetry = vm::retryReconnectNow,
             onDismiss = { devicesOpen = false },
         )

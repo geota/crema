@@ -478,13 +478,16 @@ data class MainUiState(
     /** The hub's code-entry dialog (relay v4): a remote asks to pair. Non-null ⟺
      *  the Activity shows "Pair ‹remote›?" with the 6-digit field and the scope. */
     val pendingPairing: PairingPrompt? = null,
-    /** Devices this host has approved to mirror it (issue 02) — shown in Settings ▸
-     *  "Paired devices" for review/revoke. */
+    /** The remotes this hub has paired (relay v4 pins), for Settings ▸ Paired
+     *  devices: name, scope, last connected, Forget. */
     val pairedDevices: List<PairedDevice> = emptyList(),
     /** Seconds left in this host's pairing window; 0 = closed. */
     val pairingSecondsLeft: Int = 0,
     /** Seconds left in the pairing lockout after three wrong codes; 0 = not locked. */
     val pairingLockedSecondsLeft: Int = 0,
+    /** A remote's first session since the pick hasn't been welcomed yet:
+     *  "Connecting through ‹hub›…" (spec §6.1). */
+    val remoteConnecting: Boolean = false,
     /** The hubs this remote has pinned (relay v4 Paired hubs). */
     val pairedHubs: List<coffee.crema.ble.proxy.RelayHubPin> = emptyList(),
     /** The remote's pairing with a hub, for the code sheet (relay v4, spec §6.1). */
@@ -497,9 +500,6 @@ data class MainUiState(
     val relayNeedsRepair: Boolean = false,
     /** The v3 upgrade: this hub's one-time "pair your phones again" banner. */
     val relayUpgradeNotice: Boolean = false,
-    /** Paired devices holding a pairing secret from this host; a listed device
-     *  missing here must pair again. */
-    val pairedWithSecret: Set<String> = emptySet(),
     /** Remotes connected through THIS device while it's the hub: the
      *  read-only "Remotes connected" list. */
     val remotes: List<RemoteClient> = emptyList(),

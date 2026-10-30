@@ -566,6 +566,7 @@ class MainActivity : ComponentActivity() {
                         onMirrorFrom = { host, port -> viewModel.switchToSecondary(host, port); showDevices = false },
                         onStopMirroring = { viewModel.switchToNormal(); showDevices = false },
                         onConnectDirectly = { viewModel.connectDirectly(); showDevices = false },
+                        onPairAgain = { viewModel.pairAgain(); showDevices = false },
                         onRetry = viewModel::retryReconnectNow,
                         onDismiss = { showDevices = false },
                     )

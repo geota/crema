@@ -45,8 +45,7 @@ class OwnStateReadsTest {
             // its own active profile.
             "showConfig" to setOf("activeProfileId", "brewParams"),
             // Hub only (StartShot is relayed).
-            "applyStartShot" to setOf("activeProfileId", "brewParams", "requireScale", "stopOnWeight"),
-            "startShotOnCoreLane" to setOf("autoTare", "brewParams", "preFlush", "stopOnWeight", "volumeStopWithScale"),
+            "applyStartShot" to setOf("activeProfileId", "autoTare", "brewParams", "stopOnWeight", "volumeStopWithScale"),
             // Holder logic, already gated by `authoritative`; and the scale
             // echo, which fills this device's scale fields (the scale's own
             // values: no snapshot carries them).

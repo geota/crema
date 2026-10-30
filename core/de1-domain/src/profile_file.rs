@@ -74,6 +74,11 @@ pub struct ProfileFileImport {
     pub profiles: Vec<CremaProfile>,
     /// What could not be imported, in file order.
     pub errors: Vec<ProfileFileError>,
+    /// Profiles skipped as already in the library (or earlier in the file):
+    /// the same title (trimmed, case-insensitive) and the same steps (see
+    /// [`import_profile_file_into`]).
+    #[serde(default)]
+    pub skipped_duplicates: u32,
 }
 
 /// One part of a profile file that did not import.
@@ -87,11 +92,31 @@ pub struct ProfileFileError {
     pub message: String,
 }
 
-/// Read a profile file — see the module docs for the formats.
+/// Read a profile file — see the module docs for the formats. Duplicates
+/// within the file collapse to the first; see [`import_profile_file_into`]
+/// to skip the ones already in a library too.
 #[must_use]
 pub fn import_profile_file(text: &str) -> ProfileFileImport {
+    import_profile_file_into(text, &[])
+}
+
+/// [`import_profile_file`], skipping each profile already in `library` (the
+/// user's whole library: custom profiles and built-ins, hidden ones included)
+/// or earlier in the file, and counting it in `skipped_duplicates`.
+///
+/// The same profile means the same **title**, trimmed and compared
+/// case-insensitively, and the same **steps**: everything an upload writes to
+/// the DE1 (the steps and the shot header's pre-infusion count, volume limit
+/// and tank temperature; ids are not part of it). A profile with the same steps under another title, or another
+/// version of the steps under the same title, is a deliberate copy and is
+/// imported.
+#[must_use]
+pub fn import_profile_file_into(text: &str, library: &[CremaProfile]) -> ProfileFileImport {
     let text = text.trim_start_matches('\u{feff}').trim();
-    let mut out = Importer::default();
+    let mut out = Importer {
+        seen: library.iter().map(duplicate_key).collect(),
+        ..Importer::default()
+    };
     if text.is_empty() {
         out.error(None, "the file is empty".to_owned());
         return out.finish();
@@ -139,13 +164,40 @@ pub fn import_profile_file(text: &str) -> ProfileFileImport {
     out.finish()
 }
 
-/// [`import_profile_file`] as JSON, for the bridges.
+/// [`import_profile_file_into`] as JSON, for the bridges: `library_json` is a
+/// JSON array of the library's `CremaProfile`s (`None` = an empty library).
+/// An element that isn't a `CremaProfile` is left out of the comparison, so one
+/// odd stored profile can't block an import.
 ///
 /// # Errors
 ///
-/// Only if the result fails to serialize, which a profile cannot.
-pub fn import_profile_file_json(text: &str) -> Result<String, String> {
-    serde_json::to_string(&import_profile_file(text)).map_err(|e| e.to_string())
+/// A message when `library_json` is not a JSON array.
+pub fn import_profile_file_json(text: &str, library_json: Option<&str>) -> Result<String, String> {
+    let library: Vec<CremaProfile> = match library_json {
+        Some(json) => serde_json::from_str::<Vec<serde_json::Value>>(json)
+            .map_err(|e| format!("library JSON: {e}"))?
+            .into_iter()
+            .filter_map(|v| serde_json::from_value(v).ok())
+            .collect(),
+        None => Vec::new(),
+    };
+    serde_json::to_string(&import_profile_file_into(text, &library)).map_err(|e| e.to_string())
+}
+
+/// What makes two profiles the same for [`import_profile_file_into`]: the
+/// title, trimmed and lower-cased, and what an upload puts on the DE1 — the
+/// wire steps and the shot header's pre-infusion count, volume limit and tank
+/// temperature. Ids (the profile's and its segments'), tags, notes and the
+/// author are not part of it.
+fn duplicate_key(p: &CremaProfile) -> (String, String) {
+    let wire = to_wire(p);
+    let machine = serde_json::json!({
+        "steps": wire.steps,
+        "preinfuse": wire.preinfuse_step_count,
+        "volume": wire.max_total_volume_ml,
+        "tank": wire.tank_temperature,
+    });
+    (p.name.trim().to_lowercase(), machine.to_string())
 }
 
 /// Write `profiles` as a profile file: one profile as pretty community-v2
@@ -249,6 +301,8 @@ struct Importer {
     over_cap: usize,
     /// Errors past [`MAX_REPORTED_ERRORS`] (counted once, at the end).
     more_errors: usize,
+    /// The library's and this file's profiles so far ([`duplicate_key`]).
+    seen: std::collections::HashSet<(String, String)>,
 }
 
 impl Importer {
@@ -324,7 +378,12 @@ impl Importer {
         p.tags.retain(|t| t != BUILTIN_TAG);
         p.pinned = false;
         p.last_used = None;
-        self.result.profiles.push(with_derived_brew_temp(p));
+        let p = with_derived_brew_temp(p);
+        if !self.seen.insert(duplicate_key(&p)) {
+            self.result.skipped_duplicates += 1;
+            return;
+        }
+        self.result.profiles.push(p);
     }
 
     fn error(&mut self, item: Option<u32>, message: String) {
@@ -688,7 +747,11 @@ mod tests {
             .next()
             .unwrap()
             .to_owned();
-        let text = vec![line; MAX_PROFILES_PER_FILE + 2].join("\n");
+        // Distinct titles, so none collapses as a duplicate.
+        let text = (0..MAX_PROFILES_PER_FILE + 2)
+            .map(|i| line.replacen("\"title\":\"", &format!("\"title\":\"{i} "), 1))
+            .collect::<Vec<_>>()
+            .join("\n");
         let import = import_profile_file(&text);
         assert_eq!(import.profiles.len(), MAX_PROFILES_PER_FILE);
         assert_eq!(import.errors.len(), 1);
@@ -700,8 +763,65 @@ mod tests {
         let set = export_set();
         let text = export_profile_file_json(&serde_json::to_string(&set).unwrap()).unwrap();
         let back: ProfileFileImport =
-            serde_json::from_str(&import_profile_file_json(&text).unwrap()).unwrap();
+            serde_json::from_str(&import_profile_file_json(&text, None).unwrap()).unwrap();
         assert_eq!(back.profiles.len(), set.len());
         assert!(export_profile_file_json("{}").is_err());
+    }
+
+    /// F12b: a profile already in the library — the same title (trimmed,
+    /// case-insensitive) and the same steps — is skipped and counted; a
+    /// deliberate copy (another title, or other steps) is imported.
+    #[test]
+    fn f12b_a_profile_already_in_the_library_is_skipped_and_counted() {
+        let library = builtins();
+        let blooming = library
+            .iter()
+            .find(|p| p.name == "Blooming Allongé")
+            .unwrap()
+            .clone();
+        // A re-import of a built-in's export.
+        let import = import_profile_file_into(
+            &export_profile_file(std::slice::from_ref(&blooming)).unwrap(),
+            &library,
+        );
+        assert_eq!((import.profiles.len(), import.skipped_duplicates), (0, 1));
+        // The title is compared trimmed and case-insensitively.
+        let mut renamed = blooming.clone();
+        renamed.name = " blooming allongé  ".to_owned();
+        let import = import_profile_file_into(
+            &export_profile_file(std::slice::from_ref(&renamed)).unwrap(),
+            &library,
+        );
+        assert_eq!(import.skipped_duplicates, 1);
+        // Another title, or other steps: imported.
+        let mut copy = blooming.clone();
+        copy.name = "My Blooming".to_owned();
+        let mut edited = blooming.clone();
+        edited.segments[0].temp += 1.0;
+        let import =
+            import_profile_file_into(&export_profile_file(&[copy, edited]).unwrap(), &library);
+        assert_eq!((import.profiles.len(), import.skipped_duplicates), (2, 0));
+        // Duplicates inside one file collapse to the first.
+        let mut a = blooming.clone();
+        a.name = "Twice".to_owned();
+        let import = import_profile_file_into(&export_profile_file(&[a.clone(), a]).unwrap(), &[]);
+        assert_eq!((import.profiles.len(), import.skipped_duplicates), (1, 1));
+        // The JSON face takes the library.
+        let text = export_profile_file(std::slice::from_ref(&blooming)).unwrap();
+        let back: ProfileFileImport = serde_json::from_str(
+            &import_profile_file_json(&text, Some(&serde_json::to_string(&library).unwrap()))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(back.skipped_duplicates, 1);
+        // A library element that isn't a profile is left out, not fatal.
+        let odd = format!(
+            "[{{\"name\":\"x\"}},{}]",
+            serde_json::to_string(&blooming).unwrap()
+        );
+        let back: ProfileFileImport =
+            serde_json::from_str(&import_profile_file_json(&text, Some(&odd)).unwrap()).unwrap();
+        assert_eq!(back.skipped_duplicates, 1);
+        assert!(import_profile_file_json(&text, Some("{}")).is_err());
     }
 }
