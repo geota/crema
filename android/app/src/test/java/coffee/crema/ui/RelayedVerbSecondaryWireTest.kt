@@ -124,7 +124,7 @@ class RelayedVerbSecondaryWireTest {
         VmHarness.idleUntil("the primary to handle it") { handled.isNotEmpty() }
         assertEquals(listOf("tareScale" to ""), handled.toList())
         val notices = vm.ui.value.userMessages
-        assertTrue(notices.any { "Not available while mirroring" in it }, "$notices")
+        assertTrue(notices.any { "Not available on a remote" in it }, "$notices")
     }
 
     /** A config verb is applied on the secondary at once, then reverted when

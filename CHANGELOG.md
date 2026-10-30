@@ -17,6 +17,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   connect through that hub instead. A remote shows "Connected through ‹hub›"
   on every screen, and offers Connect directly when its hub is gone or no
   longer holds the machine. Tablet and phone.
+- **A remote finds its hub again after the hub restarts** — the hub keeps its
+  relay port across restarts, so its remotes simply reconnect. If that port
+  was taken and the hub comes back on another port of the same address, a
+  remote whose link has been down for 5 seconds reconnects to the new port on
+  its own. It never dials another address, and only connects to a hub that
+  proves the pairing this device already holds: anything else is refused,
+  never paired with, and after three refusals the remote shows "Couldn't
+  verify ‹hub›" with Connect directly. When the hub moved to another address,
+  pick it again under Other devices. When the hub turns Hub mode off, the
+  remote says "‹hub› isn't a hub any more". Tablet and phone.
 - **Bengle machines receive profiles in their own encoding** — Crema waits for
   the machine model before uploading, and a stop-at-weight target another app
   saved in a Bengle is cleared on connect, even when no upload is needed.

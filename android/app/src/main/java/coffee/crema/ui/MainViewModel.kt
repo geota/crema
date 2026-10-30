@@ -1199,6 +1199,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             persistPrefs()
         },
+        // The re-find reattached on a new port of the saved host: that is
+        // the remote's target now (same role, same hub, nothing to drop).
+        // Applied after the prefs load, which would otherwise put the old
+        // target back (and persistPrefs does nothing before it).
+        onTargetMoved = { host, port ->
+            viewModelScope.launch {
+                prefsReady.await()
+                _ui.update { it.copy(proxyPrimaryHost = host, proxyPrimaryPort = port) }
+                persistPrefs()
+            }
+        },
+        prefsReady = { prefsReady.await() },
     )
 
     /**
@@ -1477,6 +1489,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  erase the restored activeProfileId during boot). */
     @Volatile private var prefsLoaded = false
 
+    /** Completes with [prefsLoaded] (or when the startup load ends without
+     *  it): the hub's relay waits for it, so it never serves before the
+     *  paired devices are known. */
+    private val prefsReady = kotlinx.coroutines.CompletableDeferred<Unit>()
+
     /** The pending "nearby" setup after a DE1 connects (see [setUpNearby]). */
     private var nearbySetupJob: kotlinx.coroutines.Job? = null
 
@@ -1662,12 +1679,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         // The Welcome names the hub before its first snapshot does.
                         mirroringPrimaryName = ps.hubName.ifBlank { it.mirroringPrimaryName },
                         remoteHubHasMachine = ps.hubHasMachine,
+                        refindGaveUp = ps.refindGaveUp,
+                        hubStoppedHosting = ps.hubStoppedHosting,
                         hubHoldingMachine = if (ps.role == "normal") {
                             ps.peers.firstOrNull { p -> p.isMirrorSource && p.id != proxy.instanceId }
                         } else {
                             null
                         },
-                        pairedHubPinned = proxy.hasPinnedHub(),
+                        pairedHubPinned = ps.pairedHubPinned,
                         changedHost = ps.changedHost,
                     )
                 }
@@ -1751,6 +1770,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             drive.autoBackupIfDue(_ui.value.autoDriveBackup)
             // Daily automatic release check (opt-in, default off).
             maybeAutoUpdateCheck()
+        }.invokeOnCompletion {
+            // A load that failed before the prefs still lets a hub serve.
+            prefsReady.complete(Unit)
         }
         startScreensaverClock()
         // Mirror the Visualizer controller's state into the UI snapshot.
@@ -3848,6 +3870,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
         runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
         prefsLoaded = true
+        prefsReady.complete(Unit)
         // The idle-sleep timer starts counting once it knows the setting.
         idleSleep.configure(_ui.value.idleSleepMin)
         // The Brew setup opens on the most recent method, now it's known.

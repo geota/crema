@@ -97,7 +97,7 @@ fun etaText(status: FlashStatus): String {
 fun blockerText(b: FlashBlocker): String = when (b) {
     FlashBlocker.NotConnected -> "Connect your DE1."
     FlashBlocker.NotReady -> "Wait for the DE1 to finish connecting."
-    FlashBlocker.ReadOnlyMirror -> "This device mirrors another Crema. Update from the primary device."
+    FlashBlocker.ReadOnlyMirror -> "This device is connected through a hub. Update the firmware from the hub."
     FlashBlocker.FlashInProgress -> "A firmware update is already running."
     FlashBlocker.BuildUnknown -> "The DE1 hasn’t reported its firmware build yet."
     FlashBlocker.ModelUnknown -> "The DE1 hasn’t reported its model yet."

@@ -43,9 +43,9 @@ class RelayedCommandDispatcher(
         return order.withLock { withContext(lane) { run(method, cmd, origin) } }
     }
 
-    /** Everything here runs inside one catch: a throw anywhere, not only in
-     *  the command, becomes a refusal for this control instead of ending the
-     *  peer's session. */
+    /** Everything here runs inside one catch: a throw anywhere before or in
+     *  the command becomes a refusal for this control instead of ending the
+     *  peer's session. After the command ran, nothing can turn it into one. */
     private fun run(method: String, cmd: MachineCommand.Relayable, origin: CommandOrigin): CommandOutcome = try {
         runChecked(method, cmd, origin)
     } catch (e: CancellationException) {
@@ -64,8 +64,12 @@ class RelayedCommandDispatcher(
         val phrase = phrase(cmd)
         val outcome = machine.run(cmd, origin)
         when (outcome) {
-            CommandOutcome.Accepted ->
-                if (phrase != null && origin.id != null) announce("${origin.name ?: "A mirror"} $phrase", origin)
+            // The command ran: a failed announcement is logged, never a refusal
+            // (the remote would undo a change the hub kept).
+            CommandOutcome.Accepted -> if (phrase != null && origin.id != null) {
+                runCatching { announce("${origin.name ?: "A remote"} $phrase", origin) }
+                    .onFailure { log("Relayed $method ran, but announcing it failed: ${it.message}") }
+            }
             is CommandOutcome.Refused -> log("Relayed $method refused: ${outcome.reason}")
             is CommandOutcome.Unknown -> log("Relayed $method: ${outcome.detail}")
         }

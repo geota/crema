@@ -453,6 +453,11 @@ data class MainUiState(
     /** A remote's hub lists the DE1 in its roster (it holds the machine).
      *  Only meaningful while [proxyRole] == "secondary". */
     val remoteHubHasMachine: Boolean = false,
+    /** A remote's re-find gave up: no hub it found proved this device's
+     *  pairing ("Couldn't verify <hub>"). */
+    val refindGaveUp: Boolean = false,
+    /** NSD lists a remote's hub address as a device that isn't a hub any more. */
+    val hubStoppedHosting: Boolean = false,
     /** This secondary was granted **view-only** (mirror, not control) by the host
      *  (issue 02) — its control attempts are refused, so the UI can say "view-only". */
     val mirrorViewOnly: Boolean = false,

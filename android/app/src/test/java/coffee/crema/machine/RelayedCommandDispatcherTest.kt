@@ -24,14 +24,16 @@ class RelayedCommandDispatcherTest {
     private var machineIdle = false
     private var hostNameThrows = false
     private var machineIdleThrows = false
+    private var announceThrows = false
+    private val logged = CopyOnWriteArrayList<String>()
     private val phone = CommandOrigin("phone-1", "Phone")
 
     private val dispatcher = RelayedCommandDispatcher(
         machine = LocalMachine(actions, notify = {}),
         hostName = { check(!hostNameThrows) { "hostName failed" }; "Tablet" },
         machineIdle = { check(!machineIdleThrows) { "machineIdle failed" }; machineIdle },
-        announce = { text, _ -> announced += text },
-        log = {},
+        announce = { text, _ -> check(!announceThrows) { "announce failed" }; announced += text },
+        log = { logged += it },
         lane = laneExecutor.asCoroutineDispatcher(),
     )
 
@@ -165,6 +167,19 @@ class RelayedCommandDispatcherTest {
         assertTrue(announced.isEmpty(), "$announced")
         assertEquals(CommandOutcome.Accepted, dispatch("tareScale"), "the next control still runs")
         assertEquals(listOf("tareScale"), actions.applied.toList())
+    }
+
+    /** Validation D6: once the command ran, a failed announcement is logged
+     *  and the outcome stays Accepted, so the remote keeps the change. */
+    @Test
+    fun `a failed announcement after the command ran is still accepted`() {
+        announceThrows = true
+        assertEquals(CommandOutcome.Accepted, dispatch("startShot"))
+        assertEquals(listOf("startShot"), actions.applied.toList(), "the command ran once")
+        assertTrue(logged.any { "announcing it failed" in it }, "$logged")
+        announceThrows = false
+        assertEquals(CommandOutcome.Accepted, dispatch("tareScale"))
+        assertEquals(listOf("Phone tared the scale"), announced.toList())
     }
 
     private companion object {

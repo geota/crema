@@ -11,9 +11,21 @@ import coffee.crema.ble.proxy.Peer
 
 /** The remote's status line: "Connected through <hub>", "Reconnecting to
  *  <hub>…" while its link redials, or "<hub> isn't connected to the machine"
- *  while the link is up but the hub's roster has no DE1. */
-internal fun remoteStatusLine(hub: String, reconnecting: Boolean, hubHasMachine: Boolean, viewOnly: Boolean = false): String =
+ *  while the link is up but the hub's roster has no DE1. While redialing,
+ *  "Couldn't verify <hub>" once the re-find gave up ([refindGaveUp]), and
+ *  "<hub> isn't a hub any more" when NSD lists its address as a device that
+ *  turned Hub mode off ([hubStoppedHosting]). */
+internal fun remoteStatusLine(
+    hub: String,
+    reconnecting: Boolean,
+    hubHasMachine: Boolean,
+    viewOnly: Boolean = false,
+    refindGaveUp: Boolean = false,
+    hubStoppedHosting: Boolean = false,
+): String =
     when {
+        reconnecting && refindGaveUp -> "Couldn't verify $hub"
+        reconnecting && hubStoppedHosting -> "$hub isn't a hub any more"
         reconnecting -> "Reconnecting to $hub…"
         !hubHasMachine -> "$hub isn't connected to the machine"
         viewOnly -> "Connected through $hub · view-only"
@@ -28,12 +40,17 @@ internal fun MainUiState.remoteHubLabel(): String =
 /** The status line while this device is a remote, else null. */
 internal fun MainUiState.remoteStatus(): String? =
     if (proxyRole != "secondary") null
-    else remoteStatusLine(remoteHubLabel(), mirrorReconnecting, remoteHubHasMachine, mirrorViewOnly)
+    else remoteStatusLine(remoteHubLabel(), mirrorReconnecting, remoteHubHasMachine, mirrorViewOnly, refindGaveUp, hubStoppedHosting)
 
-/** A remote may connect the machine itself when its hub is unreachable or no
- *  longer holds the DE1. */
+/** The phone Brew card's cue beside its readiness badge while this device is
+ *  a remote: the same words as the status line, so it never says "Connected
+ *  through" while the banner says the hub has no machine. */
+internal fun MainUiState.remoteBrewCue(): String? = remoteStatus()?.let { "· $it" }
+
+/** A remote may connect the machine itself when its hub is unreachable, no
+ *  longer holds the DE1, or couldn't be verified. */
 internal fun MainUiState.canConnectDirectly(): Boolean =
-    proxyRole == "secondary" && (mirrorReconnecting || !remoteHubHasMachine)
+    proxyRole == "secondary" && (mirrorReconnecting || !remoteHubHasMachine || refindGaveUp)
 
 /** Why Hub mode can't be turned on here, or null: this device is a remote
  *  and its hub, which proved the pairing this device holds, has the DE1. */
@@ -49,7 +66,14 @@ internal fun MainUiState.hubModeBlockedReason(): String? =
  * advertisements are unauthenticated and carry no host id, so a peer counts
  * only at the address of this device's pinned target ([MainUiState.proxyPrimaryHost])
  * while it holds a secret for the pinned host. Anything else is a device that
- * merely says it's a hub. This only words the advice; nothing is gated on it.
+ * merely says it's a hub.
+ *
+ * The binding is by address only, and the name shown is the advertiser's own.
+ * A device that later gets the old hub's address (DHCP reuse), or one at an
+ * address typed into the manual Hub host field while a pin for another host
+ * remains, is named too. That is accepted because this only words advice:
+ * nothing is gated on it, and "Connect through" is the user's pick, which
+ * pairs on the hub before anything is trusted.
  */
 internal fun MainUiState.isVerifiedHub(peer: Peer): Boolean =
     pairedHubPinned && proxyPrimaryHost.isNotBlank() && peer.host == proxyPrimaryHost

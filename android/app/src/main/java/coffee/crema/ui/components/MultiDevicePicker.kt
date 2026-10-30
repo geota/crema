@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.sp
 import coffee.crema.ble.proxy.Peer
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.connectThroughLabel
-import coffee.crema.ui.turnOffHubToConnect
+import coffee.crema.ui.turnOffHubCopy
 import coffee.crema.ui.canConnectDirectly
 import coffee.crema.ui.discoveredHubWarning
 import coffee.crema.ui.hubModeBlockedReason
@@ -210,7 +210,7 @@ fun HubHoldsMachineNotice(ui: MainUiState, onConnectThrough: (host: String, port
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            turnOffHubToConnect(hub, verified),
+            ui.turnOffHubCopy().orEmpty(),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),

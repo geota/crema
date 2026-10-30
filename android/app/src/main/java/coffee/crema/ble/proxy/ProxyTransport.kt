@@ -97,6 +97,13 @@ class ProxyTransport(
      *  issue 02) — on the initial handshake AND on a reconnect after a revoke — so
      *  the secondary can surface it and stop mirroring. Default no-op. */
     private val onDenied: (reason: String) -> Unit = {},
+    /** Every refusal that ends a session, with where it came from: [byHost]
+     *  for the host's [Frame.Denied], false for this device's own checks (a
+     *  host mismatch, an unproven secret, another protocol version);
+     *  [hostProved] when the host had proved the pairing secret this device
+     *  holds earlier in the session. The caller decides what a refusal means
+     *  for its role. Default: [onDenied] with the reason. */
+    private val onRefused: (reason: String, byHost: Boolean, hostProved: Boolean) -> Unit = { reason, _, _ -> onDenied(reason) },
     /** Invoked with a primary [Frame.Event] — a transient "<who> drove the machine"
      *  notice (issue 11, loose multi-controller). Display-only; the VM surfaces it
      *  as a snackbar. Default no-op. */
@@ -229,10 +236,13 @@ class ProxyTransport(
     /** The current session refused us (Denied, version, a host mismatch): fail
      *  every waiting request, tell the caller, and close the link so it doesn't
      *  redial into the same refusal. */
-    private fun refuse(reason: String, error: Throwable) {
+    private fun refuse(reason: String, error: Throwable, byHost: Boolean = false) {
         handshake.value = Handshake.Refused(handshake.value.epoch, error)
         failSupersededRequests(null)
-        onDenied(reason)
+        // The host proved our secret this session only if this device answered
+        // its Challenge with a proof (not a pairing request).
+        val hostProved = round.answered && !round.askedToPair
+        onRefused(reason, byHost, hostProved)
         scope.launch { runCatching { link.close() } }
     }
 
@@ -329,7 +339,13 @@ class ProxyTransport(
                 val hostProved = held != null &&
                     PairingCrypto.verifyHost(held, frame.primaryId, clientId, current.clientNonce, frame.nonce, frame.hostProof)
                 val proof = if (held != null && hostProved) {
+                    // A proof that can't be computed refuses: a missing proof
+                    // would read as a pairing request.
                     runCatching { PairingCrypto.clientProof(held, frame.primaryId, clientId, current.clientNonce, frame.nonce) }.getOrNull()
+                        ?: run {
+                            refuse(DenyReason.HANDSHAKE_MISMATCH, IllegalStateException("Proxy client proof failed"))
+                            return
+                        }
                 } else {
                     if (held != null) {
                         // A secret this device holds is never replaced by a new
@@ -369,7 +385,7 @@ class ProxyTransport(
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
             is Frame.Config -> onConfig(frame.json)
             is Frame.Event -> onEvent(frame.text)
-            is Frame.Denied -> refuse(frame.reason, IllegalStateException("Proxy denied: ${frame.reason}"))
+            is Frame.Denied -> refuse(frame.reason, IllegalStateException("Proxy denied: ${frame.reason}"), byHost = true)
             // Retired: an older hub's "Hand off". Nothing changes here.
             is Frame.HandoffOffer -> Log.i(TAG, "Ignoring a retired handoff offer from ${frame.fromName}")
             else -> Log.w(TAG, "Secondary ignoring unexpected server frame: $frame")

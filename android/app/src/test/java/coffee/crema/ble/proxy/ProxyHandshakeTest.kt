@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import java.net.ServerSocket
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -185,10 +184,24 @@ class ProxyHandshakeTest {
      * fix it went out ahead of the re-Hello and was dropped, so it failed at
      * the request timeout although the link was back in about half a second.
      */
+    /** A new relay server for [hub] on [port], retrying the bind for up to
+     *  two seconds. */
+    private suspend fun restartOn(hub: RelayHub, port: Int): LanRelayServer {
+        var lastError: Throwable? = null
+        repeat(40) {
+            val next = LanRelayServer(hub, requestedPort = port)
+            val bound = runCatching { next.start() }
+            if (bound.isSuccess) return next
+            lastError = bound.exceptionOrNull()
+            runCatching { next.stop() }
+            delay(50)
+        }
+        throw AssertionError("Couldn't bind :$port again", lastError)
+    }
+
     @Test
     fun `a control parked across a primary restart lands after the new session's Welcome`() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val port = ServerSocket(0).use { it.localPort }
         val relayed = CopyOnWriteArrayList<String>()
         val hellos = AtomicInteger(0)
         // A real host: it pairs the device on first contact and proves the
@@ -206,8 +219,10 @@ class ProxyHandshakeTest {
                 PairingDecision.Allowed(true, PairingCrypto.newSecret().also { issued[req.clientId] = it })
             }
         }
-        var server = LanRelayServer(h, requestedPort = port)
-        server.start()
+        // An ephemeral port the server binds itself and reports back: picking a
+        // free port first and binding it later races other builds on the host.
+        var server = LanRelayServer(h)
+        val port = server.start()
         try {
             val link = ReconnectingClientLink("ws://127.0.0.1:$port${LanRelayServer.PATH}", scope)
             val proxy = ProxyTransport(
@@ -220,8 +235,9 @@ class ProxyHandshakeTest {
             withTimeout(5_000) { link.state.first { it == LinkState.CONNECTING } }
             val pending = scope.async { proxy.control("machineState", "IDLE") }
             delay(200)
-            server = LanRelayServer(h, requestedPort = port)
-            server.start()
+            // The primary comes back on the port it had. Retry the bind briefly
+            // in case the old listener's socket is still being released.
+            server = restartOn(h, port)
 
             val result = withTimeout(6_000) { pending.await() }
             assertTrue(result.isSuccess, "the parked control lands on the new session: $result")

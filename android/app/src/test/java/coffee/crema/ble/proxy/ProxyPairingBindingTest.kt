@@ -28,6 +28,8 @@ class ProxyPairingBindingTest {
     private val held = ConcurrentHashMap<String, String>()
     private val paired = Channel<Pair<String, String>>(Channel.UNLIMITED)
     private val denied = CompletableDeferred<String>()
+    /** Each refusal as (reason, byHost, hostProved). */
+    private val refusals = Channel<Triple<String, Boolean, Boolean>>(Channel.UNLIMITED)
     private val welcomed = CompletableDeferred<Unit>()
     private val confirmed = Channel<String>(Channel.UNLIMITED)
     private val changed = Channel<Pair<String, String>>(Channel.UNLIMITED)
@@ -45,7 +47,10 @@ class ProxyPairingBindingTest {
             scope.launch { server.incoming().collect { rx.send(it) } }
             val proxy = ProxyTransport(
                 client, scope, "phone-1", "Phone",
-                onDenied = { denied.complete(it) },
+                onRefused = { reason, byHost, hostProved ->
+                    refusals.trySend(Triple(reason, byHost, hostProved))
+                    denied.complete(reason)
+                },
                 onWelcome = { _, _ -> welcomed.complete(Unit) },
                 pairingSecretFor = { held[it] },
                 onPaired = { id, _, secret -> held[id] = secret; paired.trySend(id to secret) },
@@ -280,6 +285,55 @@ class ProxyPairingBindingTest {
             val sent = rx.next<Frame.Control>()
             server.send(Frame.ControlOk(sent.id))
             assertEquals(ControlReply.Ok, control.await())
+        }
+    }
+
+    /** P1b: a refusal says where it came from and whether the host had proved
+     *  the held secret, which the remote's re-find relies on: only a Denied
+     *  from a host that proved it makes a re-finding remote normal. */
+    @Test
+    fun `a refusal says whether the host refused and had proved the secret`() = runBlocking {
+        val secret = PairingCrypto.newSecret()
+        held["host-1"] = secret
+        // This device's own refusal, before any proof.
+        scripted(allowRepair = false) { server, rx, _ ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce()))
+            assertEquals(Triple(DenyReason.HOST_CHANGED, false, false), refusals.receive())
+        }
+    }
+
+    @Test
+    fun `a Denied before the host proved anything is unverified`() = runBlocking {
+        scripted(allowRepair = false) { server, rx, _ ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Denied(DenyReason.REVOKED))
+            assertEquals(Triple(DenyReason.REVOKED, true, false), refusals.receive())
+        }
+    }
+
+    @Test
+    fun `a Denied after the host proved the held secret is verified`() = runBlocking {
+        val secret = PairingCrypto.newSecret()
+        held["host-1"] = secret
+        scripted(allowRepair = false, pinned = "host-1") { server, rx, _ ->
+            val hello = rx.next<Frame.Hello>()
+            val hn = PairingCrypto.newNonce()
+            server.send(Frame.Challenge("host-1", "Tablet", hn, PairingCrypto.hostProof(secret, "host-1", "phone-1", hello.nonce!!, hn)))
+            rx.next<Frame.Auth>()
+            server.send(Frame.Denied(DenyReason.REVOKED))
+            assertEquals(Triple(DenyReason.REVOKED, true, true), refusals.receive())
+        }
+    }
+
+    @Test
+    fun `a Denied after a pairing request is not a proved host`() = runBlocking {
+        scripted(allowRepair = true) { server, rx, _ ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce()))
+            assertNull(rx.next<Frame.Auth>().proof, "the user's pick asks to pair")
+            server.send(Frame.Denied(DenyReason.PAIRING_CLOSED))
+            assertEquals(Triple(DenyReason.PAIRING_CLOSED, true, false), refusals.receive())
         }
     }
 
