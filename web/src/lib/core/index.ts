@@ -282,20 +282,16 @@ export type NotificationSource =
 	| 'ScaleButton';
 
 /**
- * The eight fields of the DE1's steam / hot-water settings packet (cuuid_0B),
- * the argument to {@link CremaCore.setSteamHotwaterSettings}. Canonical units
- * (°C, s, ml); the wire scaling lives in the core. `steamFlags` is the legacy
- * flag byte (always 0 — bits undocumented).
+ * The steam / hot-water targets the shell owns in the DE1's combined settings
+ * packet (cuuid_0B), the argument to {@link CremaCore.setSteamHotwaterTargets}.
+ * Canonical units (°C, s, ml); the wire scaling lives in the core. The group
+ * target is the core's (the effective profile's temperature).
  */
-export interface SteamHotwaterSettings {
-	steamFlags: number;
+export interface SteamHotwaterTargets {
 	steamTempC: number;
 	steamTimeoutS: number;
 	hotWaterTempC: number;
 	hotWaterVolumeMl: number;
-	hotWaterTimeoutS: number;
-	espressoVolumeMl: number;
-	groupTempC: number;
 }
 
 /**
@@ -818,13 +814,12 @@ export interface CremaCore {
 	/** Set the tank desired water-temperature threshold. Celsius is the canonical unit (see docs/25 §7). */
 	setTankThreshold(celsius: number): Promise<CoreOutput>;
 	/**
-	 * Write the combined steam + hot-water settings packet (cuuid_0B). All
-	 * eight fields ship in one write, so callers read-modify-write: seed the
-	 * fields the UI doesn't model (timeouts, espresso volume, group temp) from
-	 * the machine's last `ShotSettingsRead` so a steam/water change doesn't
-	 * reset them. `steamFlags` is 0 (legacy parity; bits undocumented).
+	 * Set the steam / hot-water targets. The core writes the combined packet
+	 * (cuuid_0B) read-modify-write with the effective profile's group target,
+	 * keeping every field it doesn't own (the flag byte, the hot-water
+	 * timeout, the espresso volume).
 	 */
-	setSteamHotwaterSettings(settings: SteamHotwaterSettings): Promise<CoreOutput>;
+	setSteamHotwaterTargets(targets: SteamHotwaterTargets): Promise<CoreOutput>;
 	/** Set the steam flow rate, ml/s. */
 	setSteamFlow(mlPerS: number): Promise<CoreOutput>;
 	/** Set the seconds of high-flow steam at the start of a steam cycle. */
@@ -1414,17 +1409,13 @@ async function createCore(): Promise<CremaCore> {
 		async setTankThreshold(celsius) {
 			return parseOutput(bridge.set_tank_threshold(celsius));
 		},
-		async setSteamHotwaterSettings(s) {
+		async setSteamHotwaterTargets(t) {
 			return parseOutput(
-				bridge.set_steam_hotwater_settings(
-					s.steamFlags,
-					s.steamTempC,
-					s.steamTimeoutS,
-					s.hotWaterTempC,
-					s.hotWaterVolumeMl,
-					s.hotWaterTimeoutS,
-					s.espressoVolumeMl,
-					s.groupTempC
+				bridge.set_steam_hotwater_targets(
+					t.steamTempC,
+					t.steamTimeoutS,
+					t.hotWaterTempC,
+					t.hotWaterVolumeMl
 				)
 			);
 		},
