@@ -4,9 +4,10 @@
  * The DE1 has **no** cumulative water-volume counter — but the legacy de1app
  * derives one by integrating group flow over time (`de1_de1.tcl:570-628`:
  * `volume += GroupFlow × Δt`, with sanity clamps). Crema's web shell does the
- * same here: the orchestrator feeds every telemetry sample's flow + elapsed
- * wall-time into {@link MaintenanceStore.accumulate}, and the running litre
- * total is persisted to `localStorage`.
+ * same in the core (`Event::Telemetry.counted_ml`, espresso and hot water
+ * only); the orchestrator adds each sample's count via
+ * {@link MaintenanceStore.addCountedMl}, and the running litre total is
+ * persisted to `localStorage`.
  *
  * From that one persisted counter plus user-set intervals the store derives
  * the three maintenance readouts the Settings → Water section shows: the
@@ -34,7 +35,10 @@
 
 import type { MaintenanceState, MaintenanceReadout } from '#lib/core/crema-core.js';
 import { isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
-import { maintenanceReadout as wasmMaintenanceReadout } from '#lib/wasm/de1_wasm.js';
+import {
+	defaultMaintenanceState as wasmDefaultMaintenanceState,
+	maintenanceReadout as wasmMaintenanceReadout
+} from '#lib/wasm/de1_wasm.js';
 
 /** localStorage key for the maintenance counters ({@link MaintenanceState}). */
 const MAINTENANCE_KEY = 'crema.maintenance.v2';
@@ -45,38 +49,17 @@ const MAINTENANCE_KEY = 'crema.maintenance.v2';
  */
 const MAINTENANCE_KEY_V1 = 'crema.maintenance.v1';
 
-/**
- * A single telemetry sample's worth of accumulated water dispensed past which
- * the value is treated as a glitch and dropped — mirrors the legacy app's
- * "excessive water volume dispensed" clamp (`de1_de1.tcl`, 1000 ml).
- */
-const MAX_SAMPLE_ML = 1000;
-
 // `MaintenanceState` and `MaintenanceReadout` are the typeshare-generated
 // types from `#lib/core/crema-core` (the Rust `de1_domain::maintenance` shapes)
 // — imported above, not re-declared here, so the field set has one source.
 
 /**
- * The default maintenance state — a fresh install. The baselines and the
- * timestamps start at "now / zero" so the very first readouts are sane: a
- * full filter, no litres since descale, no hours since clean.
+ * The default maintenance state — a fresh install, from the core
+ * (`MaintenanceState::default_at`, shared with Android): the stamps at now,
+ * no water counted, a 50 L filter, a 120 L descale interval, a 48 h clean.
  */
 function defaultState(): MaintenanceState {
-	const now = Date.now();
-	return {
-		totalLitres: 0,
-		filterBaselineLitres: 0,
-		descaleBaselineLitres: 0,
-		cleanAtMs: now,
-		filterAtMs: now,
-		descaleAtMs: now,
-		// Sane defaults — a typical inline water filter is rated ~50 L; the
-		// DE1's own descale guidance is interval-based; 48 h clean matches
-		// the design's placeholder copy.
-		filterCapacityLitres: 50,
-		descaleIntervalLitres: 120,
-		cleanIntervalHours: 48
-	};
+	return JSON.parse(wasmDefaultMaintenanceState(Date.now())) as MaintenanceState;
 }
 
 /**
@@ -159,23 +142,12 @@ export class MaintenanceStore {
 	}
 
 	/**
-	 * Integrate one telemetry sample into the litre counter — the orchestrator
-	 * calls this from its `Telemetry` handler. `flowMlPerS` is the DE1's group
-	 * flow; `deltaSeconds` is the wall-clock time since the previous sample.
-	 *
-	 * Mirrors the legacy app's clamps: a negative result (a flow / clock
-	 * glitch) and an implausibly large one (`> MAX_SAMPLE_ML`) are dropped.
+	 * Add one telemetry sample's counted water, ml — the core's `counted_ml`,
+	 * which already applies the counting rule (espresso and hot water only),
+	 * the gap cap and the per-sample clamp. A non-positive value is ignored.
 	 */
-	accumulate(flowMlPerS: number, deltaSeconds: number): void {
-		if (
-			!Number.isFinite(flowMlPerS) ||
-			!Number.isFinite(deltaSeconds) ||
-			deltaSeconds <= 0
-		) {
-			return;
-		}
-		const ml = flowMlPerS * deltaSeconds;
-		if (ml <= 0 || ml > MAX_SAMPLE_ML) return;
+	addCountedMl(ml: number): void {
+		if (!Number.isFinite(ml) || ml <= 0) return;
 		this.state = { ...this.state, totalLitres: this.state.totalLitres + ml / 1000 };
 		this.persist();
 	}

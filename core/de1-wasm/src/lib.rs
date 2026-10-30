@@ -402,6 +402,28 @@ pub fn default_refill_point_mm() -> f32 {
     de1_domain::DEFAULT_REFILL_POINT_MM
 }
 
+/// The water constants the settings UI needs (`WaterConstants` JSON): the
+/// tank-full ml, the low-water default, the refill-point default and range.
+/// See `de1_domain::water_constants`.
+#[wasm_bindgen(js_name = waterConstants)]
+pub fn water_constants() -> String {
+    serde_json::to_string(&de1_domain::water_constants()).unwrap_or_else(|_| "{}".into())
+}
+
+/// Whether the tank is low enough for the "refill soon" cue — the level
+/// DEPTH vs the machine's RAW threshold. See `de1_domain::refill_soon`.
+#[wasm_bindgen(js_name = refillSoon)]
+pub fn refill_soon(level_depth_mm: Option<f32>, raw_threshold_mm: Option<f32>) -> bool {
+    de1_domain::refill_soon(level_depth_mm, raw_threshold_mm)
+}
+
+/// A fresh install's `MaintenanceState` JSON at `now_ms` (the default
+/// intervals and stamps). See `de1_domain::MaintenanceState::default_at`.
+#[wasm_bindgen(js_name = defaultMaintenanceState)]
+pub fn default_maintenance_state(now_ms: f64) -> String {
+    de1_domain::default_maintenance_state_json(f64_to_ms(now_ms))
+}
+
 /// Compute the brew ratio (yield ÷ dose) for a pair of weights in grams.
 /// Returns `undefined` (JS `null`/`undefined`) when the ratio is undefined
 /// — non-positive dose, non-finite operand, or non-finite quotient.
@@ -2422,6 +2444,13 @@ impl CremaBridge {
     /// See `de1_app::CremaCore::disconnect_scale`.
     pub fn disconnect_scale(&self) {
         self.state().core.disconnect_scale();
+    }
+
+    /// Set the low-water warning threshold, ml (`undefined` = the 110 ml
+    /// default, `0` = off); re-arms the warning. See
+    /// `CremaCore::set_water_warn_ml`.
+    pub fn set_water_warn_ml(&self, warn_ml: Option<f32>) {
+        self.state().core.set_water_warn_ml(warn_ml);
     }
 
     /// Enable or disable auto-tare on shot start.

@@ -1424,6 +1424,15 @@ export type Event =
 	 * `de1plus/gui.tcl:3414-3416`.
 	 */
 	resistance_weight?: number;
+	/**
+	 * The water this sample adds to the filter / descale counters, ml —
+	 * the volume integrator's increment (gap-capped at
+	 * `MAX_COUNTED_GAP_S`), only in the states that count
+	 * (`counts_toward_water`: espresso and hot water). `None` otherwise.
+	 * The shells add it to their persisted litre total; the counting
+	 * rule lives here.
+	 */
+	counted_ml?: number;
 }}
 	/** A weight reading arrived from the scale, smoothed by the flow estimator. */
 	| { type: "ScaleReading", content: {
@@ -1490,6 +1499,18 @@ export type Event =
 	 * with `water_tank_depth_mm` before comparing it with `level`.
 	 */
 	refill_threshold: number;
+}}
+	/**
+	 * The tank dropped to the user's low-water threshold (default 110 ml,
+	 * `0` = off; `CremaCore::set_water_warn_ml`). Once per dip: re-armed by
+	 * a refill 55 ml above the threshold, a threshold change, or a new link.
+	 * The shell shows the warning in the user's tank unit.
+	 */
+	| { type: "WaterLow", content: {
+	/** The tank DEPTH, mm, as in [`Event::WaterLevel`]. */
+	level: number;
+	/** The tank volume, ml. */
+	ml: number;
 }}
 	/**
 	 * Auto-stop decided the shot should end. The accompanying [`Command`]
@@ -3844,6 +3865,20 @@ export interface TimedSample {
 	 * non-upload story as `resistance`.
 	 */
 	resistanceWeight?: number;
+}
+
+/** The water constants the shells' settings UI needs, in one place. */
+export interface WaterConstants {
+	/** [`TANK_FULL_ML`], the percent readout's denominator. */
+	tankFullMl: number;
+	/** [`WATER_WARN_DEFAULT_ML`]. */
+	warnDefaultMl: number;
+	/** [`DEFAULT_REFILL_POINT_MM`]. */
+	defaultRefillPointMm: number;
+	/** [`REFILL_POINT_MIN_MM`]. */
+	refillPointMinMm: number;
+	/** [`REFILL_POINT_MAX_MM`]. */
+	refillPointMaxMm: number;
 }
 
 /**

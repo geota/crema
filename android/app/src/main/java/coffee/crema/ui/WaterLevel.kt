@@ -1,30 +1,27 @@
 package coffee.crema.ui
 
-/**
- * Headroom (mm) above the DE1's refill threshold at or below which the "refill
- * soon" cue shows — the tank is close to, but not yet at, the machine's own
- * refill point. Mirrors the web shell's `REFILL_SOON_MARGIN_MM`
- * (`web/src/lib/state/ui-state.svelte.ts`) so every shell warns at the same level.
- */
-const val REFILL_SOON_MARGIN_MM = 5f
+import coffee.crema.core.WaterConstants
+import kotlinx.serialization.json.Json
 
-/** Typical full tank, ml — mirrors core `TANK_FULL_ML` (de1app's 40 mm
+/** The core's water constants (web's settings read the same ones). */
+private val water: WaterConstants by lazy {
+    Json.decodeFromString(WaterConstants.serializer(), coffee.crema.core.waterConstants())
+}
+
+/** Typical full tank, ml — core `TANK_FULL_ML` (de1app's 40 mm
  *  `water_level_full_point`). Converts the warn dial's % ↔ canonical ml. */
-const val TANK_FULL_ML_UI = 1104f
+val TANK_FULL_ML_UI: Float get() = water.tankFullMl
 
-/** Default low-water warning threshold, ml — ~10% of a typical 1104 ml full
- *  fill (#33 follow-up). Applied when [MainUiState.waterWarnMl] is unset. */
-const val WATER_WARN_DEFAULT_ML = 110f
-
-/** Hysteresis above the warning threshold before the once-per-dip warning
- *  re-arms — ~2 mm of tank so pump-driven level bounce can't re-fire it. */
-const val WATER_WARN_REARM_ML = 55f
+/** Default low-water warning threshold, ml — core `WATER_WARN_DEFAULT_ML`,
+ *  ~10% of a full fill (#33 follow-up). Applied when [MainUiState.waterWarnMl]
+ *  is unset. */
+val WATER_WARN_DEFAULT_ML: Float get() = water.warnDefaultMl
 
 /** Refill-point dial bounds, raw sensor mm — de1app's own slider range
- *  (`de1_skin_settings.tcl`, `-from 3 -to 70`), which is the range the
- *  firmware accepts. */
-const val REFILL_POINT_MIN_MM = 3f
-const val REFILL_POINT_MAX_MM = 70f
+ *  (`-from 3 -to 70`), core `REFILL_POINT_MIN_MM` / `MAX`; the core clamps
+ *  every refill-point write to it too. */
+val REFILL_POINT_MIN_MM: Float get() = water.refillPointMinMm
+val REFILL_POINT_MAX_MM: Float get() = water.refillPointMaxMm
 
 /** The effective low-water warning threshold, ml — the user's dialled value,
  *  the default when unset, and `<= 0` = disabled. */
@@ -54,18 +51,10 @@ fun MainUiState.refillThresholdDepthMm(): Float? =
     waterRefillThresholdMm?.let { coffee.crema.core.waterTankDepthMm(it) }
 
 /**
- * Whether the tank is low enough to warrant a "refill soon" cue: the live level
- * is within [REFILL_SOON_MARGIN_MM] of (or already below) the DE1's *reported*
- * refill threshold. Both readings arrive together in one `Event.WaterLevel`
- * packet, so the cue is naturally suppressed before the first report and while
- * disconnected (the level is null). Mirrors web `waterRefillSoon` — the shell
- * defers to the machine's own refill point rather than a hardcoded threshold,
- * reconciling the former phone 20 mm vs tablet 5 mm constants (issue 29).
+ * Whether the tank is low enough to warrant a "refill soon" cue — the core's
+ * `refill_soon` (shared with web): the live level DEPTH within 5 mm of, or
+ * already below, the DE1's *reported* RAW refill threshold. Both readings
+ * arrive together in one `Event.WaterLevel`, so the cue is naturally
+ * suppressed before the first report and while disconnected.
  */
-fun MainUiState.refillSoon(): Boolean {
-    // Depth vs depth: the level is offset-corrected, the threshold is raw on
-    // the wire, so it goes through [refillThresholdDepthMm] first.
-    val level = tankDepthMm() ?: return false
-    val threshold = refillThresholdDepthMm() ?: return false
-    return level <= threshold + REFILL_SOON_MARGIN_MM
-}
+fun MainUiState.refillSoon(): Boolean = coffee.crema.core.refillSoon(tankDepthMm(), waterRefillThresholdMm)
