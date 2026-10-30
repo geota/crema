@@ -70,6 +70,7 @@ import coffee.crema.visualizer.shotHistoryJsonl
 import coffee.crema.visualizer.shotsFromCremaJsonl
 import coffee.crema.visualizer.storedShotFromBackupJson
 import coffee.crema.visualizer.wireShotJson
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -297,19 +298,38 @@ class LibraryController(
         val rows = historyStore.loadRows()
         updateUi { it.copy(history = rows) }
         val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
-        if (missing.isEmpty()) return
+        if (missing.isEmpty()) {
+            seriesLoaded.complete(Unit)
+            return
+        }
         scope.launch {
-            val series = historyStore.loadSeries(missing)
-            if (series.isEmpty()) return@launch
-            updateUi { st ->
-                st.copy(
-                    history = st.history.map { shot ->
-                        if (shot.samples.isEmpty()) series[shot.id]?.let { shot.copy(samples = it) } ?: shot else shot
-                    },
-                )
+            try {
+                val series = historyStore.loadSeries(missing)
+                if (series.isEmpty()) return@launch
+                updateUi { st ->
+                    st.copy(
+                        history = st.history.map { shot ->
+                            if (shot.samples.isEmpty()) series[shot.id]?.let { shot.copy(samples = it) } ?: shot else shot
+                        },
+                    )
+                }
+            } finally {
+                seriesLoaded.complete(Unit)
             }
         }
     }
+
+    /** Completes once [loadHistory]'s background series load has landed in
+     *  the history (F10 validation P1-2). */
+    private val seriesLoaded = CompletableDeferred<Unit>()
+
+    /** Wait for the stored shots' telemetry: everything that reads a shot's
+     *  series from the history (backup, export, uploads, a Visualizer pull's
+     *  backfill) awaits this first, or a shot would go out without its curve. */
+    suspend fun awaitSeries() = seriesLoaded.await()
+
+    /** Whether the stored shots' telemetry has loaded ([awaitSeries]). */
+    val seriesReady: Boolean get() = seriesLoaded.isCompleted
 
     /** Load the pinned/hidden built-in overlays at startup (before the customs). */
     suspend fun loadProfileMeta() {
@@ -700,17 +720,23 @@ class LibraryController(
      *  share sheet — the core's exporter (F10), which web and every DE1 app
      *  read; it used to be Android's flat model, which nothing could import. */
     fun exportShot(id: String) {
-        val shot = uiState().history.firstOrNull { it.id == id } ?: return
-        val text = runCatching { exportV2JsonShot(wireShotJson(shot, settingsGrinder()).toString()) }
-            .getOrElse { appendLog("Export shot failed: ${it.message}"); return }
-        shareText(text, "Share shot")
+        scope.launch {
+            awaitSeries()
+            val shot = uiState().history.firstOrNull { it.id == id } ?: return@launch
+            val text = runCatching { exportV2JsonShot(wireShotJson(shot, settingsGrinder()).toString()) }
+                .getOrElse { appendLog("Export shot failed: ${it.message}"); return@launch }
+            shareText(text, "Share shot")
+        }
     }
 
     /** Export the whole shot history as Crema `crema/v1` JSONL — Settings →
      *  Sharing. The core's format (F10): both shells import it back. */
     fun exportAllShots() {
-        val text = shotsJson(null) ?: return
-        shareText(text, "Export shots")
+        scope.launch {
+            awaitSeries()
+            val text = shotsJson(null) ?: return@launch
+            shareText(text, "Export shots")
+        }
     }
 
     /** The Settings grinder, for an export of a shot captured before F10
@@ -755,6 +781,9 @@ class LibraryController(
     /** Shots as the core's Crema `crema/v1` JSONL ([shotHistoryJsonl]) — all
      *  (ids null) or only the given ids. Both shells import it (F10). */
     fun shotsJson(ids: List<String>?): String? {
+        // The save buttons call this on the spot: until the telemetry has
+        // loaded, say so rather than write shots without their curves.
+        if (!seriesReady) { notify("Shot data is still loading — try again in a moment"); return null }
         val history = uiState().history
         val shots = if (ids == null) history else { val w = ids.toHashSet(); history.filter { it.id in w } }
         if (shots.isEmpty()) { notify("Export — no shots"); return null }
@@ -939,6 +968,7 @@ class LibraryController(
             val toAdd = shots.filterNot { it.id in existing }
             val next = toAdd + uiState().history
             updateUi { it.copy(history = next) }
+            visualizer.forgetTombstones(toAdd.map { it.id })
             notify("Imported ${toAdd.size} shot(s)")
             historyStore.save(next)
         }
@@ -993,7 +1023,24 @@ class LibraryController(
      * Snapshots on the caller's thread, then serialises, exports and zips on
      * [Dispatchers.Default] — never on Main.
      */
-    suspend fun buildBackupZipBytes(): ByteArray? =
+    suspend fun buildBackupZipBytes(): ByteArray? {
+        // Never back up shots whose telemetry hasn't loaded yet (F10
+        // validation P1-2: the startup auto-backup ran during the load).
+        awaitSeries()
+        reportUnreadableSeries()
+        return buildBackupZipBytesNow()
+    }
+
+    /** Shots whose telemetry file couldn't be read go into a backup without a
+     *  curve: say so once per backup. */
+    private fun reportUnreadableSeries() {
+        val unreadable = historyStore.unreadableSeries
+        if (unreadable.isEmpty()) return
+        val n = uiState().history.count { it.id in unreadable && it.samples.isEmpty() }
+        if (n > 0) notify("$n shot(s) have damaged telemetry and are backed up without their curves")
+    }
+
+    private suspend fun buildBackupZipBytesNow(): ByteArray? =
         snapshotThenBuild(::backupSnapshot, Dispatchers.Default) { snap ->
             val jsonl = backupBundleJson(snap) ?: return@snapshotThenBuild null // already notified
             runCatching {
@@ -1087,6 +1134,7 @@ class LibraryController(
             val newBeans = beans.filterNot { it.id in haveBeans }
             val newRoasters = roasters.filterNot { it.id in haveRoasters }
             val newShots = shots.filterNot { it.id in haveShots }
+            visualizer.forgetTombstones(newShots.map { it.id })
             updateUi { it.copy(
                 beans = it.beans + newBeans,
                 roasters = it.roasters + newRoasters,
@@ -1223,6 +1271,9 @@ class LibraryController(
 
     /** Backfill a curve-less local shot's telemetry from a Visualizer pull. Persisted. */
     fun backfillShotTelemetry(localId: String, samples: List<TelemetrySample>, durationMs: Long) {
+        // Before the stored series load, every shot looks curve-less: a pulled
+        // series would replace the shot's own (the pull awaits [awaitSeries]).
+        if (!seriesReady) return
         updateUi { st ->
             st.copy(
                 history = st.history.map {
