@@ -234,7 +234,7 @@ pub use firmware_image::{
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{
     HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMachine, ShotMetadata, ShotStatInput, StoredShot,
-    brew_ratio, history_stats,
+    brew_ratio, history_stats, ratio_label,
 };
 pub use history_export::{export_v2_json_shot, export_v2_json_shot_full};
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};

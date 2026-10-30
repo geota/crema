@@ -338,6 +338,14 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
     de1_domain::brew_ratio(dose, yield_out)
 }
 
+/// The `1:N` label for a ratio (brew or hot-water): one decimal, a trailing
+/// ".0" dropped (`1:3`, `1:2.5`), `1:—` when missing. See
+/// [`de1_domain::ratio_label`].
+#[uniffi::export]
+pub fn ratio_label(ratio: Option<f32>) -> String {
+    de1_domain::ratio_label(ratio)
+}
+
 /// The bag's remaining grams after a pulled shot debits `dose_g`, floored at 0
 /// — `de1_domain::debit_remaining` so web + Android share one burn-down +
 /// run-out rule. `None` means nothing to debit (already empty / bad dose): the

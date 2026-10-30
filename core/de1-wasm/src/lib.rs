@@ -433,6 +433,14 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
     de1_domain::brew_ratio(dose, yield_out)
 }
 
+/// The `1:N` label for a ratio (brew or hot-water): one decimal, a trailing
+/// ".0" dropped (`1:3`, `1:2.5`), `1:—` when missing. See
+/// `de1_domain::ratio_label`.
+#[wasm_bindgen(js_name = ratioLabel)]
+pub fn ratio_label(ratio: Option<f32>) -> String {
+    de1_domain::ratio_label(ratio)
+}
+
 /// Derive the History stat strip over a JSON array of light per-shot
 /// tuples (`ShotStatInput`); returns `HistoryStats` JSON. One
 /// derivation for every shell (review #41). See

@@ -99,6 +99,21 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
     if r.is_finite() { Some(r) } else { None }
 }
 
+/// The `1:N` label for a ratio — the brew ratio (yield per gram of dose) or a
+/// hot-water ratio (water per gram of shot): one decimal with a trailing
+/// ".0" dropped, so `1:3`, `1:2.5`; `1:—` when the ratio is missing or not
+/// finite. One formatter, so every ratio reads the same on both shells.
+#[must_use]
+pub fn ratio_label(ratio: Option<f32>) -> String {
+    match ratio.filter(|r| r.is_finite()) {
+        Some(r) => {
+            let tenths = format!("{r:.1}");
+            format!("1:{}", tenths.strip_suffix(".0").unwrap_or(&tenths))
+        }
+        None => "1:\u{2014}".to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod ratio_tests {
     use super::brew_ratio;
@@ -661,6 +676,16 @@ mod tests {
         // Defaults leave the new fields unset.
         assert_eq!(ShotMetadata::default().tds, None);
         assert_eq!(ShotMetadata::default().extraction_yield, None);
+    }
+
+    #[test]
+    fn ratio_label_drops_a_trailing_zero() {
+        assert_eq!(ratio_label(Some(3.0)), "1:3");
+        assert_eq!(ratio_label(Some(2.5)), "1:2.5");
+        assert_eq!(ratio_label(Some(2.04)), "1:2");
+        assert_eq!(ratio_label(Some(2.46)), "1:2.5");
+        assert_eq!(ratio_label(None), "1:\u{2014}");
+        assert_eq!(ratio_label(Some(f32::NAN)), "1:\u{2014}");
     }
 
     #[test]
