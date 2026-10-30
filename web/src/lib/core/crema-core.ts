@@ -2775,6 +2775,20 @@ export interface FrameExitSpec {
 	maxDurationS: number;
 }
 
+/** What the hub UI shows about pairing. */
+export interface GateStatus {
+	/** The window is open. */
+	open: boolean;
+	/** Seconds left in the window (0 when closed). */
+	secs_left: number;
+	/** Failed codes counted in this window. */
+	failures: number;
+	/** Seconds left in the lockout (0 when not locked). */
+	locked_secs_left: number;
+	/** A remote holds the pairing slot. */
+	pending: boolean;
+}
+
 /**
  * The user's Visualizer sync **preferences** — the portable, cross-shell
  * subset a whole-app backup carries. One shared `#[typeshare]` shape so web
@@ -4575,6 +4589,106 @@ export enum Pump {
 	/** Flow priority — the step targets a flow rate in ml/s. */
 	Flow = "flow",
 }
+
+/**
+ * Events for the shell (§3.4). Names are sanitized; public keys never ride
+ * in events (read `peer_public_key()`).
+ */
+export type RelayEvent = 
+	/** Hub: a v2/v3 remote dialled; it got the legacy denial. */
+	| { type: "LegacyPeer", content: {
+	/** The remote's protocol version. */
+	version: number;
+	/** The remote's display name. */
+	name: string;
+}}
+	/** Hub: a remote asks to pair; show the code entry dialog. */
+	| { type: "PairRequest", content: {
+	/** The remote's claimed device id (unauthenticated until pairing completes). */
+	remote_id: string;
+	/** The remote's display name. */
+	remote_name: string;
+}}
+	/**
+	 * Hub: the code matched. Persist the pin, insert it into the live
+	 * `PinSet`, then call `confirm_paired()` (or `reject_pairing()` if the write failed).
+	 */
+	| { type: "PairPending", content: {
+	/** The remote's device id, checked against its static key. */
+	remote_id: string;
+	/** The remote's display name. */
+	remote_name: string;
+}}
+	/**
+	 * A pairing attempt ended without success. `failures`/`locked` describe the
+	 * hub's gate after it (always 0/false on the remote).
+	 */
+	| { type: "PairingFailed", content: {
+	/** `WrongCode`, `NotConfirmed`, `Timeout`, `Cancelled`, `Malformed`, … */
+	reason: string;
+	/** Failed codes counted in this window. */
+	failures: number;
+	/** Whether pairing is now locked out. */
+	locked: boolean;
+}}
+	/** Hub: an unpinned remote tried to resume; it got `CLOSE(NOT_PAIRED)`. */
+	| { type: "UnknownRemote", content: {
+	/** The remote's device id. */
+	remote_id: string;
+}}
+	/** Remote: the hub's ServerHello (advisory until the handshake). */
+	| { type: "HubHello", content: {
+	/** The hub's device id. */
+	hub_id: string;
+	/** The hub's display name. */
+	hub_name: string;
+	/** `Ready`, `AwaitingCode`, `PairingClosed`, `Busy` or `LockedOut`. */
+	status: string;
+	/** Seconds left in the pairing window (or the lockout). */
+	secs_left: number;
+}}
+	/** Remote: show this code until `expires_at_ms`. */
+	| { type: "ShowCode", content: {
+	/** Six ASCII digits. */
+	code: string;
+	/** When the code expires (`now_ms` clock). */
+	expires_at_ms: number;
+}}
+	/**
+	 * Remote: the hub refused. Only `authenticated` refusals (a `CLOSE` record)
+	 * may change trust state or role.
+	 */
+	| { type: "Refused", content: {
+	/**
+	 * `HostMismatch`, `HubOutdated`, `HubUnverified`, `Timeout`, `Revoked`,
+	 * `NotPaired`, `HubStopped`, `Protocol`, `Normal`, or an `ABORT` reason.
+	 */
+	reason: string;
+	/** Whether the refusal arrived inside the session. */
+	authenticated: boolean;
+}}
+	/** Both: pairing completed. */
+	| { type: "Paired", content: {
+	/** The peer's device id. */
+	peer_id: string;
+	/** The peer's display name. */
+	peer_name: string;
+}}
+	/** Both: the session is up (hub: admitted; remote: hub authenticated). */
+	| { type: "Established", content: {
+	/** The peer's device id. */
+	peer_id: string;
+}}
+	/** Hub: the remote ended an established session with an authenticated `CLOSE` record. */
+	| { type: "PeerClosed", content: {
+	/** `Normal`, `Protocol`, … (the record's code). */
+	reason: string;
+}}
+	/** The connection failed for a reason no more specific event covers. */
+	| { type: "Failed", content: {
+	/** The `RelayError` name. */
+	error: string;
+}};
 
 /**
  * What loading a persisted SAW model blob found — returned to the shell by

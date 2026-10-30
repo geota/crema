@@ -1781,17 +1781,14 @@ class LibraryController(
         persistLibrary()
     }
 
-    /** Duplicate a bag into a fresh row (new id, "name (copy)", not favourite). Persisted. */
+    /**
+     * Duplicate a bag into a fresh row via the core copy
+     * ([coffee.crema.beans.duplicateBean]: new id, "name (copy)", no remote
+     * links). Persisted.
+     */
     fun duplicateBean(id: String) {
         val base = uiState().beans.firstOrNull { it.id == id } ?: return
-        val now = System.currentTimeMillis()
-        val copy = base.copy(
-            id = "bean:" + java.util.UUID.randomUUID(),
-            name = "${base.name} (copy)",
-            favourite = false,
-            createdAt = now,
-            updatedAt = now,
-        )
+        val copy = coffee.crema.beans.duplicateBean(base, System.currentTimeMillis())
         updateUi { it.copy(beans = it.beans + copy) }
         persistLibrary()
     }

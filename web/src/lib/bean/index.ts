@@ -18,6 +18,7 @@ export {
 	coerceBean,
 	coerceRoaster,
 	daysOffRoast,
+	duplicateBean,
 	beanDaysOffRoast,
 	migrateLegacyCurrentBean,
 	mintBeanId,

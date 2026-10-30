@@ -63,6 +63,22 @@ function scanFilters(): ScaleScanFilters {
 }
 
 /**
+ * A rejected write may be the first sign of a dropped link, with the drop
+ * event a beat behind: wait this long before asking for a re-query, and skip
+ * it if the scale stopped being ready meanwhile (the reconnect re-queries).
+ */
+const RESYNC_DELAY_MS = 1_000;
+
+/**
+ * No re-query within this long of the last settings query (the connect query,
+ * the post-reconnect one or a re-query), and none until a write has landed
+ * since then. A query's own writes can be rejected too; before this, each
+ * rejection re-queried, and its writes were rejected again (core/shell review
+ * 2026-10-30 §2.6-1).
+ */
+const RESYNC_COOLDOWN_MS = 5_000;
+
+/**
  * Coarse state of the scale connection — an alias of
  * {@link BleConnectionState}, the shared BLE-manager lifecycle. Kept as
  * `ScaleState` for backward compatibility at the existing call sites; new
@@ -81,7 +97,9 @@ export interface ScaleManagerCallbacks {
 	/**
 	 * A scale command write was rejected by GATT. Optional: the app layer
 	 * re-queries the scale's settings so the live stream corrects any
-	 * optimistically-patched control (review #34).
+	 * optimistically-patched control (review #34). Fired only while the scale
+	 * is ready, never because a settings query's own writes were rejected —
+	 * see {@link RESYNC_COOLDOWN_MS}.
 	 */
 	onWriteFailed?: () => void;
 	/**
@@ -107,6 +125,24 @@ export class ScaleManager {
 	/** The connected scale's GATT UUIDs, learned from the core after connect. */
 	private uuids: ScaleUuids | null = null;
 
+	/**
+	 * Whether the last reported state is `ready`. Scale writes (heartbeat,
+	 * tare, settings) go out only while it is, and the link is up: a write to
+	 * a reconnecting scale fails, and each failure used to re-query the
+	 * settings, whose writes failed again (core/shell review 2026-10-30
+	 * §2.6-1). Android stops its heartbeat when the scale is not READY too.
+	 */
+	private ready = false;
+
+	/** When the last settings query went out (`Date.now()` ms). */
+	private lastQueryAt = -Infinity;
+
+	/** Whether a scale write has landed since {@link lastQueryAt}. */
+	private wroteSinceQuery = false;
+
+	/** The pending {@link RESYNC_DELAY_MS} wait before a re-query, if any. */
+	private resyncTimer: ReturnType<typeof setTimeout> | null = null;
+
 	constructor(
 		private readonly core: CremaCore,
 		private readonly callbacks: ScaleManagerCallbacks,
@@ -126,7 +162,7 @@ export class ScaleManager {
 	 * identifies it and reports the exact per-model UUIDs.
 	 */
 	async connect(): Promise<void> {
-		this.callbacks.onState('connecting');
+		this.setState('connecting');
 		// Tear down any previous device first. Without this a re-connect leaks
 		// the old `BleDevice` — its `gattserverdisconnected` handler and every
 		// characteristic value-change listener stay bound, and its auto-reconnect
@@ -150,11 +186,11 @@ export class ScaleManager {
 			// now (nothing, or a connect that raced this chooser) is left alone.
 			if (isChooserCancelled(error)) {
 				// Dismissing the chooser is a choice, not a failed connection.
-				this.callbacks.onState('idle');
+				this.setState('idle');
 				this.callbacks.onStatus('Scale chooser closed — not connected');
 				return;
 			}
-			this.callbacks.onState('failed');
+			this.setState('failed');
 			this.callbacks.onStatus(`Scale connection failed: ${describeError(error)}`);
 			return;
 		}
@@ -166,7 +202,7 @@ export class ScaleManager {
 	 * reconnect over `navigator.bluetooth.getDevices()` (no chooser).
 	 */
 	async connectKnown(known: BluetoothDevice): Promise<void> {
-		this.callbacks.onState('connecting');
+		this.setState('connecting');
 		this.dropDevice();
 		this.callbacks.onStatus(`Reconnecting to the last scale (${known.name ?? known.id})…`);
 		await this.attach(new BleDevice(known));
@@ -181,6 +217,39 @@ export class ScaleManager {
 	identity(): { id: string; name: string | null } | null {
 		const d = this.device;
 		return d === null ? null : { id: d.id, name: d.device.name ?? null };
+	}
+
+	/** Report a state change, tracking whether the scale is ready for writes. */
+	private setState(state: ScaleState): void {
+		this.ready = state === 'ready';
+		if (!this.ready) this.cancelResync();
+		this.callbacks.onState(state);
+	}
+
+	/** Whether `device` is the current scale, reported ready, with its link up. */
+	private writable(device: BleDevice): boolean {
+		return this.device === device && this.ready && device.connectionState === 'connected';
+	}
+
+	/** A settings query is going out: it is the resync for what came before. */
+	private noteQuery(): void {
+		this.cancelResync();
+		this.lastQueryAt = Date.now();
+		this.wroteSinceQuery = false;
+	}
+
+	/** Whether a rejected write on `device` may ask for a re-query now. */
+	private mayResync(device: BleDevice): boolean {
+		return (
+			this.writable(device) &&
+			this.wroteSinceQuery &&
+			Date.now() - this.lastQueryAt >= RESYNC_COOLDOWN_MS
+		);
+	}
+
+	private cancelResync(): void {
+		if (this.resyncTimer !== null) clearTimeout(this.resyncTimer);
+		this.resyncTimer = null;
 	}
 
 	/**
@@ -212,13 +281,13 @@ export class ScaleManager {
 		// A terminal disconnect (user-initiated; auto-reconnect never gives up).
 		device.onDisconnected(() => {
 			if (!current()) return;
-			this.callbacks.onState('disconnected');
+			this.setState('disconnected');
 			this.callbacks.onStatus('Scale disconnected');
 		});
 		// On recovery the manager re-fires a settings query (via onReconnected).
 		device.onReconnectAttempt((attempt) => {
 			if (!current()) return;
-			this.callbacks.onState('reconnecting');
+			this.setState('reconnecting');
 			this.callbacks.onStatus(`Reconnecting to scale… (attempt ${attempt})`);
 		});
 		device.onAdvertisement((rssi) => {
@@ -231,20 +300,25 @@ export class ScaleManager {
 		});
 		device.onReconnected(() => {
 			if (!current()) return;
-			this.callbacks.onState('ready');
+			this.setState('ready');
 			this.callbacks.onStatus('Reconnected — receiving scale weight');
+			// The app re-queries the settings here.
+			this.noteQuery();
 			this.callbacks.onReconnected();
 		});
 
 		if (this.runtime === null) {
 			this.dropDevice();
-			this.callbacks.onState('failed');
+			this.setState('failed');
 			this.callbacks.onStatus('Scale connection failed: app runtime unavailable');
 			return;
 		}
 
 		// ── Phase 2: connect → identify → UUIDs → subscribe → query (Effect) ──
-		this.callbacks.onState('subscribing');
+		this.setState('subscribing');
+		// The settings query's output (its writes) is held until the scale is
+		// ready, so nothing is written to a scale that isn't.
+		let queryOutput: CoreOutput | null = null;
 		// The core too: a stale program must not identify a scale the user
 		// already disconnected (a ghost scale arms stop-at-weight with no
 		// weight data; audit r13 L-1). `current()` is checked in the same
@@ -264,7 +338,7 @@ export class ScaleManager {
 					if (current()) this.callbacks.onStatus(line);
 				},
 				onCoreOutput: (output) => {
-					if (current()) this.callbacks.onCoreOutput(output);
+					if (current()) queryOutput = output;
 				},
 				onScaleIdentified: (name) => {
 					if (current()) this.callbacks.onScaleIdentified(name);
@@ -306,14 +380,18 @@ export class ScaleManager {
 			// The core may already have identified the scale: the drop clears
 			// it so a failed handshake leaves no ghost scale behind.
 			this.dropDevice();
-			this.callbacks.onState('failed');
+			this.setState('failed');
 			this.callbacks.onStatus(
 				`Scale connection failed at "${outcome.step}": ${describeError(outcome.cause)}`
 			);
 			return;
 		}
-		this.callbacks.onState('ready');
+		this.setState('ready');
 		this.callbacks.onStatus('Ready — receiving scale weight');
+		if (queryOutput !== null) {
+			this.noteQuery();
+			this.callbacks.onCoreOutput(queryOutput);
+		}
 	}
 
 	/** Attempt a pending reconnect NOW — the scale twin of `De1Manager.kick`. */
@@ -333,7 +411,7 @@ export class ScaleManager {
 		// weight + a reconnect starts clean (the same gap AND4 closed for
 		// Android's ScaleBleManager). Best-effort — never blocks the teardown.
 		await this.core.disconnectScale();
-		this.callbacks.onState('disconnected');
+		this.setState('disconnected');
 		this.callbacks.onStatus('Scale disconnected');
 	}
 
@@ -358,6 +436,10 @@ export class ScaleManager {
 			this.callbacks.onStatus('Cannot write scale command — scale not connected');
 			return;
 		}
+		if (!this.writable(device)) {
+			this.callbacks.onStatus('Scale command not sent — the scale is not ready');
+			return;
+		}
 		try {
 			// The gen-1/IPS Acaia's command characteristic rejects acknowledged
 			// writes (Decenza acaiascale.cpp:279-295) — the core flags it.
@@ -367,12 +449,21 @@ export class ScaleManager {
 				data,
 				!uuids.command_write_no_response
 			);
+			if (this.device === device) this.wroteSinceQuery = true;
 		} catch (error) {
 			this.callbacks.onStatus(`Scale command write was rejected: ${describeError(error)}`);
 			// Let the app layer re-sync optimistic UI state — a rejected
 			// config write otherwise leaves the control showing a value the
-			// scale doesn't hold (review #34).
-			this.callbacks.onWriteFailed?.();
+			// scale doesn't hold (review #34). Not while the link is down (the
+			// reconnect re-queries once it's back), and not for a query's own
+			// rejected writes (RESYNC_COOLDOWN_MS).
+			if (this.resyncTimer !== null || !this.mayResync(device)) return;
+			this.resyncTimer = setTimeout(() => {
+				this.resyncTimer = null;
+				if (!this.mayResync(device)) return;
+				this.noteQuery();
+				this.callbacks.onWriteFailed?.();
+			}, RESYNC_DELAY_MS);
 		}
 	}
 

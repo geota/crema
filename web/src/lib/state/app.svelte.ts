@@ -630,7 +630,8 @@ export class CremaApp {
 			onWriteFailed: () => {
 				// Re-query the scale's settings so the response stream
 				// overwrites whatever a rejected write optimistically
-				// patched (review #34).
+				// patched (review #34). The manager fires this only while the
+				// scale is ready, once per run of rejected writes.
 				void this.core
 					.queryScaleSettings()
 					.then((out) => this.applyCoreOutput(out));
@@ -1550,6 +1551,9 @@ export class CremaApp {
 		this.clearScaleHeartbeat();
 		if (intervalMs == null || intervalMs <= 0) return;
 		this.scaleHeartbeatId = setInterval(() => {
+			// Only while the scale is ready: a reconnecting scale can't take the
+			// write (Android stops its heartbeat when not READY too).
+			if (this.state.current.scaleState !== 'ready') return;
 			void this.core
 				.scaleHeartbeat()
 				.then((output) => this.applyCoreOutput(output))

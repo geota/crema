@@ -749,6 +749,15 @@ pub fn resettle_remaining(
     de1_domain::resettle_remaining(remaining, bag_size, old_dose, new_dose)
 }
 
+/// A new bag copied from a bean (`Bean` JSON in and out): `new_id`,
+/// "<name> (copy)", `now_ms` stamps, and no Visualizer id, Beanconqueror
+/// id, photo ref, tombstone, archive or pin. See
+/// `de1_domain::duplicate_bean`.
+#[wasm_bindgen(js_name = duplicateBeanJson)]
+pub fn duplicate_bean_json(bean_json: &str, new_id: &str, now_ms: f64) -> Result<String, String> {
+    de1_domain::duplicate_bean_json(bean_json, new_id, f64_to_ms(now_ms))
+}
+
 /// The "≈N brews left" estimate — shared
 /// `de1_domain::brews_remaining_estimate` (the bag's newest ≤10 doses,
 /// newest first; 18 g fallback).
