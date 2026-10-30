@@ -22,7 +22,7 @@ const POURING = 5;
 
 interface App {
 	state: { current: { shotStarting: boolean; eventLog: readonly unknown[] } };
-	startShot(): Promise<void>;
+	startShot(qc?: { yield?: number }): Promise<void>;
 	stopShot(): Promise<void>;
 	requestMachineState(state: MachineState): Promise<void>;
 }
@@ -302,7 +302,7 @@ describe('the core runs the start (F16b, web)', () => {
 		const { ScaleRequiredError } = await import('#lib/state/app.svelte.js');
 		// A Quick Controls yield of 0 falls back to the profile's yield, as
 		// the stop-at-weight does: the check runs (it used to be skipped).
-		await expect(h.app.startShot({ yield: 0 } as never)).rejects.toBeInstanceOf(ScaleRequiredError);
+		await expect(h.app.startShot({ yield: 0 })).rejects.toBeInstanceOf(ScaleRequiredError);
 		expect(h.requested).toEqual([]);
 		expect(action.mock.calls.some(([, label]) => label === 'Connect')).toBe(true);
 		expect(h.app.state.current.shotStarting).toBe(false);

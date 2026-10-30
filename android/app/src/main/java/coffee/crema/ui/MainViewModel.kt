@@ -2839,11 +2839,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun pushCoreInputs(state: MainUiState) {
         // Every settings-driven core input in one call (auto-tare,
         // stop-on-weight, volume stop, max shot, weight unit, low-water
-        // threshold) — the core's apply_common_settings, as web does.
+        // threshold, and the start settings: pre-flush, require-scale,
+        // steam purge) — the core's apply_common_settings, as web does.
         runCatching { bridge.applyCommonSettings(json.encodeToString(CommonSettings.serializer(), state.commonSettings())) }
             .onFailure { appendLog("Apply settings to the core failed: ${it.message}") }
         pushStopTargets(state)
-        pushStartSettings(state)
         idleSleep.configure(state.idleSleepMin)
     }
 
