@@ -70,6 +70,15 @@ class AppPrefsMigrationTest {
         }
     }
 
+    /** The rule runs once: a dose stored later is read as it is, even
+     *  volume 150 (which the never-changed rule would make ratio). */
+    @Test
+    fun `hot water stored dose is never re-derived`() {
+        prefsFile.writeText("""{"common":{"qcHotWaterVolumeMl":150.0,"qcHotWaterMode":"volume","qcHotWaterTimeS":30.0,"qcHotWaterTimeNoLimit":false,"qcHotWaterRatio":3.0}}""")
+        val p = load()
+        assertEquals(HotWaterMode.Volume to 150f, p.qcHotWaterMode to p.qcHotWaterVolumeMl)
+    }
+
     @Test
     fun `downgrade marker`() {
         // Volume 150 chosen on this build, then a 0.0.9 run rewrote prefs.json
@@ -82,7 +91,9 @@ class AppPrefsMigrationTest {
 
         // A stored mode wins over the marker.
         clean()
+        prefsFile.writeText("""{"common":{"qcHotWaterVolumeMl":150.0,"qcHotWaterMode":"ratio","qcHotWaterTimeS":30.0,"qcHotWaterTimeNoLimit":false,"qcHotWaterRatio":2.5}}""")
         markerFile.writeText(coreJson.encodeToString(StoredHotWater.serializer(), StoredHotWater(HotWaterMode.Volume, 150f, 30f, false, 3f)))
+        assertEquals(HotWaterMode.Ratio to 2.5f, load().let { it.qcHotWaterMode to it.qcHotWaterRatio })
         runBlocking { store().save(AppPrefs(qcHotWaterMode = HotWaterMode.Time, qcHotWaterTimeS = 45f, qcHotWaterTimeNoLimit = false, qcHotWaterRatio = 3f)) }
         assertEquals(HotWaterMode.Time, load().qcHotWaterMode)
         // Every save of a dose rewrites the marker.

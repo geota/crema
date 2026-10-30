@@ -2,9 +2,13 @@ package coffee.crema.ui
 
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
+import coffee.crema.core.Command
+import coffee.crema.core.CoreOutput
 import coffee.crema.core.HotWaterMode
 import coffee.crema.core.HotWaterTarget
+import coffee.crema.core.NotificationSource
 import coffee.crema.core.ProfileSyncStatus
+import coffee.crema.core.WriteTarget
 import coffee.crema.settings.AppPrefs
 import coffee.crema.ui.RemoteFixture.Companion.writePrefs
 import kotlinx.coroutines.runBlocking
@@ -17,6 +21,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * A restore while the DE1 is down (hot-water modes spec §4 writers, R6,
@@ -59,5 +64,12 @@ class RestoreResweepTest {
         assertNotNull(sync.desired, "a desired profile to upload once settled")
         assertFalse(sync.uploading, "no upload: the link isn't settled")
         assertNull(sync.lastPushed)
+        // An unsettled link writes no packet on the next input either; a
+        // settled one would write the restored dose here.
+        val out = coreJson.decodeFromString(CoreOutput.serializer(), bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(2, 0), 0uL))
+        assertTrue(
+            out.commands.filterIsInstance<Command.WriteCharacteristic>().none { it.content.target == WriteTarget.De1ShotSettings },
+            "no packet before the on-ready sweep",
+        )
     }
 }
