@@ -10,7 +10,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import coffee.crema.core.defaultCommonSettingsJson
+import coffee.crema.core.resetSettingsJson
+import coffee.crema.core.sanitizeCommonSettingsJson
+import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.jsonObject
 import java.io.File
 
@@ -21,16 +29,64 @@ import java.io.File
  * v1 holds just the theme mode; units (weight/temp/pressure) and other prefs are
  * additive later (older records deserialise cleanly via defaults).
  */
+
+/** Decodes the core's settings JSON (the typeshare'd [CommonSettings]). */
+private val coreSettingsJson = Json { ignoreUnknownKeys = true }
+
+/**
+ * The core's default settings bundle (`default_common_settings`, the one both
+ * shells build their defaults from), decoded once. The [AppPrefs] defaults
+ * read it, so Android holds no copy of the shared defaults. Its "unset reads
+ * as" fields are resolved; the unsets that mean something (`idleSleepMin`,
+ * `brewCue*`, the water thresholds, `baristaName`) stay null.
+ */
+internal object CommonDefaults {
+    val common: CommonSettings by lazy {
+        // The core is required to run at all; if its native library can't
+        // load, fail here with a plain reason rather than a bare link error
+        // from deep inside the first AppPrefs() construction.
+        val json = try {
+            defaultCommonSettingsJson()
+        } catch (e: Throwable) {
+            throw IllegalStateException("The Crema core (libde1_ffi) didn't load, so the settings defaults are unavailable", e)
+        }
+        coreSettingsJson.decodeFromString(CommonSettings.serializer(), json)
+    }
+}
+
+/** Read any settings blob through the core's `sanitize_common_settings`: a
+ *  wrong-typed field falls back to its default without dropping the rest, and
+ *  bad values are repaired. */
+fun sanitizeCommonSettings(blob: JsonElement): CommonSettings =
+    coreSettingsJson.decodeFromString(CommonSettings.serializer(), sanitizeCommonSettingsJson(blob.toString()))
+
+/** [sanitizeCommonSettings] for a typed [CommonSettings]. */
+fun sanitizeCommonSettings(c: CommonSettings): CommonSettings =
+    sanitizeCommonSettings(coreSettingsJson.encodeToJsonElement(CommonSettings.serializer(), c))
+
+/** "Restore defaults" — the core's `reset_settings`: these prefs with every
+ *  common setting back to its default except the weight unit; the line
+ *  frequency [lineFrequencyHz] (the override, `0` = auto) is kept too and
+ *  returned for the caller to apply. Platform extras are untouched. */
+fun AppPrefs.resetCommon(lineFrequencyHz: Float): Pair<AppPrefs, Float> {
+    val out = coreSettingsJson.parseToJsonElement(
+        resetSettingsJson(coreSettingsJson.encodeToString(CommonSettings.serializer(), toCommonSettings()), lineFrequencyHz),
+    ).jsonObject
+    val common = coreSettingsJson.decodeFromJsonElement(CommonSettings.serializer(), out.getValue("common"))
+    val hz = (out["lineFrequencyHz"] as? JsonPrimitive)?.floatOrNull ?: 0f
+    return copy(idleSleepMin = common.idleSleepMin?.toInt()).withCommonSettings(common) to hz
+}
+
 @Serializable
 data class AppPrefs(
     /** `"system" | "light" | "dark"` — drives CremaTheme. Defaults to dark
      *  (the machine app is dark-skinned). */
-    val themeMode: String = "dark",
+    val themeMode: String = CommonDefaults.common.themeMode,
     /** Max shot duration cap, seconds (`0` = none). Pushed to the core on load
      *  + shown as a Time stop-condition on Brew. Defaults OFF — the profile
      *  dictates shot length; a silent 45 s cap truncated long profiles with no
      *  cue (geota/crema#32). Existing users keep their saved value. */
-    val maxShotDurationS: Float = 0f,
+    val maxShotDurationS: Float = CommonDefaults.common.maxShotDurationS,
     // ── Shot behaviour (re-applied to the core on launch) ────────────────────
     /** Auto-tare the scale on shot start. Defaults ON to match the core's own
      *  default ([CremaCore] `auto_tare = true`) and the web shell (which
@@ -38,53 +94,53 @@ data class AppPrefs(
      *  false, so a fresh install silently shipped auto-tare DISABLED — the scale
      *  never zeroed at shot start, unlike web. Existing users keep their saved
      *  value (this only changes the no-prefs / absent-key default). */
-    val autoTare: Boolean = true,
+    val autoTare: Boolean = CommonDefaults.common.autoTare,
     /** Stop the shot at the yield target (stop-on-weight). Defaults ON for the
      *  same web/core parity reason as [autoTare] (web defaults `stopOnWeight`
      *  true); a no-op when no scale or yield target is present. */
-    val stopOnWeight: Boolean = true,
+    val stopOnWeight: Boolean = CommonDefaults.common.stopOnWeight,
     /** Opt-in: arm the profile's max-volume stop even while a scale is
      *  connected. Default off — volume is a no-scale fallback, never a
      *  competitor to stop-at-weight (reference-app consensus; the firmware's
      *  own tail volume stop is never uploaded either way). */
-    val volumeStopWithScale: Boolean = false,
+    val volumeStopWithScale: Boolean = CommonDefaults.common.volumeStopWithScale!!,
     /** Opt-in: refuse to start a shot when stop-at-weight would arm (a weight
      *  target resolves) but no scale is connected — the de1app
      *  `start_espresso_only_if_scale_connected` / reaprime `blockOnNoScale`
      *  pattern, both also default-off (geota/crema#29). Off = warn
      *  non-blockingly instead. */
-    val requireScale: Boolean = false,
-    val steamEco: Boolean = false,
+    val requireScale: Boolean = CommonDefaults.common.requireScale!!,
+    val steamEco: Boolean = CommonDefaults.common.steamEco,
     /** DE1 firmware two-tap steam stop (MMR `SteamTwoTapStop`): first stop tap
      *  ends steam without the wand auto-purge; a second tap purges. Written on
      *  change + re-seeded on connect (geota/crema#34). */
-    val steamTwoTap: Boolean = false,
+    val steamTwoTap: Boolean = CommonDefaults.common.steamTwoTap!!,
     /** Fan-on temperature threshold, °C (MMR `FanThreshold`, 0..=60 —
      *  de1app/Decenza's range; 55 splits their 60 and reaprime's 50).
      *  Re-seeded on every connect — the DE1 boots with a low firmware
      *  default, so without this the fan runs near-constantly
      *  (geota/crema#31). */
-    val fanThresholdC: Float = 55f,
+    val fanThresholdC: Float = CommonDefaults.common.fanThresholdC!!,
     /** Tablet charging from the DE1's USB port (Decenza `BatteryManager`
      *  modes): `"alwaysOn"` (the default, as decaid), `"smart"` (55–65 %) or
      *  `"smartHigh"` (90–95 %). Asserted on connect and every minute after. */
-    val usbChargingMode: String = "alwaysOn",
+    val usbChargingMode: String = CommonDefaults.common.usbChargingMode!!,
     /** Flush the group before each shot. */
-    val preFlush: Boolean = false,
+    val preFlush: Boolean = CommonDefaults.common.preFlush,
     /** Run a short group flush after steaming (app-level; distinct from the
      *  firmware's own wand purge — see [steamTwoTap]). */
-    val steamPurge: Boolean = false,
+    val steamPurge: Boolean = CommonDefaults.common.steamPurge,
     // ── Units (issue 44) ──────────────────────────────────────────────────────
     /** Weight unit for dose/yield/scale readouts — `"g" | "oz"`. */
-    val weightUnit: String = "g",
+    val weightUnit: String = CommonDefaults.common.weightUnit,
     /** Temperature unit for every temp readout — `"C" | "F"`. */
-    val tempUnit: String = "C",
+    val tempUnit: String = CommonDefaults.common.tempUnit,
     /** Pressure unit for the pressure channel — `"bar" | "psi"`. */
-    val pressureUnit: String = "bar",
+    val pressureUnit: String = CommonDefaults.common.pressureUnit,
     /** Volume unit for water/dispensed readouts — `"ml" | "floz"`. */
-    val volumeUnit: String = "ml",
+    val volumeUnit: String = CommonDefaults.common.volumeUnit,
     /** Water-tank readout style — `"ml" | "percent"` (geota/crema#33). */
-    val waterLevelUnit: String = "ml",
+    val waterLevelUnit: String = CommonDefaults.common.waterLevelUnit!!,
     /** Low-water warning threshold, canonical ml (geota/crema#33 follow-up).
      *  Null = unset → the 110 ml (~10%) default; 0 disables. The Settings
      *  row dials it in [waterLevelUnit]. */
@@ -95,9 +151,9 @@ data class AppPrefs(
     val waterRefillPointMm: Float? = null,
     // ── Display ──────────────────────────────────────────────────────────────
     /** Live-chart channel keys (Quick Controls chart strip). */
-    val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
+    val chartChannels: Set<String> = CommonDefaults.common.chartChannels.toSet(),
     /** Hold FLAG_KEEP_SCREEN_ON while a shot is pulling. */
-    val keepScreenOnBrew: Boolean = false,
+    val keepScreenOnBrew: Boolean = CommonDefaults.common.keepScreenOnBrew,
     /** Guided-brew cue sound (issue #10). Null = never chosen → off
      *  ([coffee.crema.ui.brewlog.BrewCueDefaults]); only a toggle stores a value. */
     val brewCueSound: Boolean? = null,
@@ -136,7 +192,7 @@ data class AppPrefs(
     val keepConnectedScreenOff: Boolean? = null,
     /** Show the inline debug / event-log panel in Settings → Advanced
      *  (web `showDebugPanel`). */
-    val showDebugPanel: Boolean = false,
+    val showDebugPanel: Boolean = CommonDefaults.common.showDebugPanel,
     /** Daily automatic Google Drive backup while Drive is linked (issue #36).
      *  Platform extra — per-device like the screensaver, not in
      *  CommonSettings. Default ON: linking Drive expresses backup intent,
@@ -158,29 +214,29 @@ data class AppPrefs(
      *  localStorage). Null = never logged; the core then opens on pourover. */
     val lastBrewLogMethod: String? = null,
     // ── Brew defaults (seed new profiles + the Quick-Controls fallbacks) ─────
-    val defaultDoseG: Float = 18f,
-    val defaultRatio: Float = 2f,
-    val defaultBrewTempC: Float = 93f,
-    val defaultPreinfuseS: Float = 8f,
+    val defaultDoseG: Float = CommonDefaults.common.defaultDoseG,
+    val defaultRatio: Float = CommonDefaults.common.defaultRatio,
+    val defaultBrewTempC: Float = CommonDefaults.common.defaultBrewTempC,
+    val defaultPreinfuseS: Float = CommonDefaults.common.defaultPreinfuseS,
     /** Equipment-level grinder model (web `grinderModel`) — free text shown on
      *  Brew + sent with Visualizer uploads/patches. Blank = unset. */
-    val grinderModel: String = "",
+    val grinderModel: String = CommonDefaults.common.grinderModel,
     /** Default barista name (web `baristaName`) — stamped on each new shot and
      *  brew log. Blank = unset. */
-    val baristaName: String = "",
+    val baristaName: String = CommonDefaults.common.baristaName.orEmpty(),
     // ── Quick-Controls steam / hot-water / flush (issue 14) ──────────────────
     /** Persisted QC overrides for the machine's steam / hot-water / flush params.
      *  These stick (no throwaway state) and take priority; on change they're
      *  applied to the machine via read-modify-write (the machine's reported
      *  timeouts / espresso volume / group temp are preserved). Defaults mirror
      *  the former QuickControls seed values. */
-    val qcSteamTimeS: Float = 12f,
-    val qcSteamFlowMlS: Float = 1.2f,
-    val qcSteamTempC: Float = 148f,
-    val qcHotWaterTempC: Float = 80f,
-    val qcHotWaterVolumeMl: Float = 150f,
-    val qcFlushTimeS: Float = 4f,
-    val qcFlushTempC: Float = 95f,
+    val qcSteamTimeS: Float = CommonDefaults.common.qcSteamTimeS,
+    val qcSteamFlowMlS: Float = CommonDefaults.common.qcSteamFlowMlS,
+    val qcSteamTempC: Float = CommonDefaults.common.qcSteamTempC,
+    val qcHotWaterTempC: Float = CommonDefaults.common.qcHotWaterTempC,
+    val qcHotWaterVolumeMl: Float = CommonDefaults.common.qcHotWaterVolumeMl,
+    val qcFlushTimeS: Float = CommonDefaults.common.qcFlushTimeS,
+    val qcFlushTempC: Float = CommonDefaults.common.qcFlushTempC,
     /** Persisted Quick-Controls grinder click (issue 15). Null = never dialed —
      *  the stepper shows a seed value and shots record no grind until the user
      *  sets it; once set it sticks and is recorded onto each shot. */
@@ -302,28 +358,27 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
 )
 
 /** Overlay a restored [CommonSettings] onto these prefs, keeping the platform
- *  extras (BLE/proxy/qcGrind/activeProfileId) untouched. */
-fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
+ *  extras (BLE/proxy/qcGrind/activeProfileId) untouched. The settings go
+ *  through the core's sanitize first ([sanitizeCommonSettings]), which also
+ *  resolves the "unset reads as" fields, so none are defaulted here. */
+fun AppPrefs.withCommonSettings(cIn: CommonSettings): AppPrefs = sanitizeCommonSettings(cIn).let { c -> copy(
     themeMode = c.themeMode,
     maxShotDurationS = c.maxShotDurationS,
     autoTare = c.autoTare,
     stopOnWeight = c.stopOnWeight,
-    // Nullable in the generated binding (additive-field tolerance): a
-    // pre-existing prefs.json / older backup simply reads as "off".
-    volumeStopWithScale = c.volumeStopWithScale ?: false,
-    // Nullable additive fields: older blobs read as the canonical defaults.
-    requireScale = c.requireScale ?: false,
+    volumeStopWithScale = c.volumeStopWithScale!!,
+    requireScale = c.requireScale!!,
     steamEco = c.steamEco,
-    steamTwoTap = c.steamTwoTap ?: false,
-    fanThresholdC = c.fanThresholdC ?: 55f,
-    usbChargingMode = c.usbChargingMode ?: "alwaysOn",
+    steamTwoTap = c.steamTwoTap!!,
+    fanThresholdC = c.fanThresholdC!!,
+    usbChargingMode = c.usbChargingMode!!,
     preFlush = c.preFlush,
     steamPurge = c.steamPurge,
     weightUnit = c.weightUnit,
     tempUnit = c.tempUnit,
     pressureUnit = c.pressureUnit,
     volumeUnit = c.volumeUnit,
-    waterLevelUnit = c.waterLevelUnit ?: "ml",
+    waterLevelUnit = c.waterLevelUnit!!,
     waterWarnMl = c.waterWarnMl,
     waterRefillPointMm = c.waterRefillPointMm,
     chartChannels = c.chartChannels.toSet(),
@@ -346,7 +401,7 @@ fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
     qcHotWaterVolumeMl = c.qcHotWaterVolumeMl,
     qcFlushTimeS = c.qcFlushTimeS,
     qcFlushTempC = c.qcFlushTempC,
-)
+) }
 
 /**
  * The on-disk shape of [AppPrefs] (`prefs.json`) — the shared cross-shell
@@ -514,12 +569,23 @@ data class ConfigSnapshot(
 
 /** Decode `prefs.json`'s text: the nested shape, or a pre-unification FLAT
  *  [AppPrefs] (decoded directly; the next save rewrites it nested). */
-internal fun decodePrefs(json: Json, text: String): AppPrefs =
-    if (json.parseToJsonElement(text).jsonObject["common"] != null) {
-        json.decodeFromString(PersistedPrefs.serializer(), text).toAppPrefs()
-    } else {
-        json.decodeFromString(AppPrefs.serializer(), text)
-    }
+internal fun decodePrefs(json: Json, text: String): AppPrefs {
+    val obj = json.parseToJsonElement(text).jsonObject
+    val common = obj["common"] ?: return decodeFlatPrefs(json, obj)
+    // The core's sanitize first, so one wrong-typed or out-of-range field
+    // can't make the whole file unreadable.
+    val clean = JsonObject(obj + ("common" to json.encodeToJsonElement(CommonSettings.serializer(), sanitizeCommonSettings(common))))
+    return json.decodeFromJsonElement(PersistedPrefs.serializer(), clean).toAppPrefs()
+}
+
+/** A pre-unification FLAT `prefs.json`: its shared fields (Android's names
+ *  are the canonical ones) go through the core's sanitize, the rest decode as
+ *  before, so an old file with one bad value still loads. */
+private fun decodeFlatPrefs(json: Json, obj: JsonObject): AppPrefs {
+    val commonKeys = CommonSettings.serializer().descriptor.elementNames.toSet()
+    val platform = JsonObject(obj.filterKeys { it !in commonKeys })
+    return json.decodeFromJsonElement(AppPrefs.serializer(), platform).withCommonSettings(sanitizeCommonSettings(obj))
+}
 
 /** File-backed JSON persistence for [AppPrefs] (`filesDir/prefs.json`). */
 class SettingsStore(private val context: Context, private val json: Json) {
