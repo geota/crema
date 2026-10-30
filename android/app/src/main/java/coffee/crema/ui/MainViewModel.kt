@@ -2538,10 +2538,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * The profile on screen — the active profile and its Quick-Controls
      * override — as the core's desired profile. Pushed with the stop targets
      * (select, override change, startup restore, every DE1 connect, every shot
-     * start): the core's profile sync decides when to upload. On a remote the
-     * core is a read-only mirror and never uploads.
+     * start): the core's profile sync decides when to upload. A remote pushes
+     * nothing: its core is a read-only mirror that never uploads (the hub holds
+     * the machine), and it pushes again once it stops being a remote.
      */
     private fun pushDesiredProfile(s: MainUiState = effectiveState()) {
+        if (_ui.value.mirror != null) return
         val cremaJson = s.activeProfile()?.id?.let { library.profileJson(it) } ?: s.mirroredProfileJson
         val qcJson = s.brewParams.overridesJson(json)
         onCoreLane { setDesiredOnLane(cremaJson, qcJson) }
