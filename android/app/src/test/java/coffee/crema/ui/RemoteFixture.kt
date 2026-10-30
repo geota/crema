@@ -85,8 +85,8 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         return vm
     }
 
-    /** The hub pushes [snapshot]; waits until the remote applied it. */
-    /** Push [snapshot] with the hub's next `rev` (a v4 hub numbers every one). */
+    /** The hub pushes [snapshot] with its next `rev` (a v4 hub numbers every
+     *  one); waits until the remote applied it. */
     fun push(snapshot: ConfigSnapshot = S) {
         // An explicit rev above the counter is kept (a test pinning the order).
         val numbered = snapshot.copy(rev = revs.updateAndGet { maxOf(it + 1, snapshot.rev) })

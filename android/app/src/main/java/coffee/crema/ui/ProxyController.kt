@@ -238,6 +238,10 @@ class ProxyController(
         val hubStoppedHosting: Boolean = false,
         /** This remote holds a pin for its saved hub ([State.pairedHubs]). */
         val pairedHubPinned: Boolean = false,
+        /** A remote's first session since the user's pick (or this start)
+         *  hasn't been welcomed yet: "Connecting through ‹hub›…", never
+         *  "Connected through" before the hub's Welcome (spec §6.1, AC-56). */
+        val remoteConnecting: Boolean = false,
     )
 
     private data class ProxyConfig(val role: String, val host: String, val port: Int, val replayPrimary: Boolean = false)
@@ -367,7 +371,8 @@ class ProxyController(
     private val turnedAway: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** Rate limit for the "needs an update" notice. */
-    @Volatile private var outdatedNoticeCooling = false
+    /** When each older remote's notice last showed, by name (§6.3: once a minute per name). */
+    private val outdatedNoticeAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /** The remote's pairing with a hub, while one runs ([pairWith]). */
     private var dialer: PairingDialer? = null
@@ -961,7 +966,7 @@ class ProxyController(
             openRequest = null
             when {
                 locked -> {
-                    notify("Too many wrong codes. Pairing is paused for a minute.")
+                    notify(LOCKED_OUT_COPY)
                     _state.update { it.copy(pendingPairing = null) }
                     watchGate()
                 }
@@ -973,7 +978,7 @@ class ProxyController(
                         delay(WRONG_CODE_GRACE_MS)
                         if (openRequest == null && _state.value.pendingPairing?.requestId == request.id) {
                             _state.update { it.copy(pendingPairing = null) }
-                            notify("That code didn't match. Pairing with ${request.remoteName} stopped.")
+                            notify(wrongCodeLine(request.remoteName, failures + 1))
                         }
                     }
                 }
@@ -984,18 +989,18 @@ class ProxyController(
         override fun onPairingNotSaved(request: HubPairingRequest) {
             if (openRequest?.id == request.id) openRequest = null
             _state.update { it.copy(pendingPairing = null) }
-            notify("Pairing couldn't be saved on this device. Try again.")
+            notify(NOT_SAVED_COPY)
         }
 
         override fun onPaired(request: HubPairingRequest) {
             if (openRequest?.id == request.id) openRequest = null
             val pin = relay.remotes.firstOrNull { it.id == request.remoteId }
-            val scopeLabel = if (pin?.scope == SCOPE_CONTROL) "View and control" else "View only"
             _state.update { it.copy(pendingPairing = null) }
             refreshPins()
             refreshGate()
-            appendLog("Paired ${request.remoteName} ($scopeLabel)")
-            notify("Paired ${request.remoteName} ($scopeLabel)")
+            val paired = pairedRemote(request.remoteName, pin?.scope == SCOPE_CONTROL)
+            appendLog(paired)
+            notify(paired)
             if (relay.upgradeNotice) relay.clearUpgradeFlags()
         }
 
@@ -1041,6 +1046,10 @@ class ProxyController(
         }
         dialer?.cancel()
         dialerJob?.cancel()
+        // The saved hub at this address, if any: pairing with a different key
+        // there means its key changed (a reset or reinstall, spec §6.3).
+        val previous = savedHubPin()?.takeIf { sameAddress(it.host, host) }
+        var keyChanged = false
         val d = PairingDialer(
             url = "ws://$host:$port${LanRelayServer.PATH}",
             hubLabel = label.ifBlank { host },
@@ -1051,6 +1060,10 @@ class ProxyController(
                 runCatching {
                     relay.pinHub(RelayHubPin(hubId, RelayKeyStore.b64(hubKey), hubName, host, port, System.currentTimeMillis()))
                     relay.setSavedHub(hubId)
+                    if (previous != null && previous.id != hubId) {
+                        relay.unpinHub(previous.id)
+                        keyChanged = true
+                    }
                     if (relay.needsRepair) relay.clearUpgradeFlags()
                     refreshPins()
                 }.isSuccess
@@ -1062,8 +1075,8 @@ class ProxyController(
             d.state.collect { st ->
                 _state.update { it.copy(pairing = st) }
                 if (st is PairingState.Paired) {
-                    appendLog("Paired with ${st.hubName}")
-                    notify("Paired with ${st.hubName}")
+                    appendLog("Paired with ${st.hubName}${if (keyChanged) " (its key changed)" else ""}")
+                    notify(if (keyChanged) hubKeyChanged(st.hubName) else pairedWith(st.hubName))
                     _state.update { it.copy(pairing = PairingState.Idle) }
                     resetRefind()
                     applyMode("secondary", host, port, trust = MirrorTrust.USER_PICK)
@@ -1071,6 +1084,19 @@ class ProxyController(
             }
         }
         d.start()
+    }
+
+    /**
+     * Pair again with the saved target: the remote's "Pair again" after the
+     * upgrade (§6.4) or once its hub couldn't be verified (§6.3). A user tap
+     * only; nothing calls it on its own.
+     */
+    fun pairAgain() {
+        val (host, port) = savedTarget ?: persistedTarget ?: savedHubPin()?.let { it.host to it.port } ?: run {
+            notify("Choose the hub under Other devices to pair with it.")
+            return
+        }
+        pairWith(host, port, savedHubPin()?.name ?: _state.value.hubName.ifBlank { host })
     }
 
     /** Cancel the remote's pairing (the code sheet's Cancel). */
@@ -1165,16 +1191,14 @@ class ProxyController(
     }
 
     /** A remote on an older protocol version got the legacy denial: tell the
-     *  hub user, at most once a minute (spec §6.3). */
+     *  hub user, at most once a minute per name (spec §6.3). */
     private fun onOutdatedPeer(clientName: String) {
         appendLog("Refused $clientName: older Crema version")
-        if (outdatedNoticeCooling) return
-        outdatedNoticeCooling = true
-        notify("$clientName runs an older Crema — update it to connect")
-        scope.launch {
-            delay(OUTDATED_NOTICE_COOLDOWN_MS)
-            outdatedNoticeCooling = false
-        }
+        val now = System.currentTimeMillis()
+        val last = outdatedNoticeAt[clientName]
+        if (last != null && now - last < OUTDATED_NOTICE_COOLDOWN_MS) return
+        outdatedNoticeAt[clientName] = now
+        notify(olderCrema(clientName))
     }
 
     // ── Mode construction ─────────────────────────────────────────────────────
@@ -1329,11 +1353,13 @@ class ProxyController(
                     else -> "Not dialing $host:$port: this device has to pair with the hub again"
                 },
             )
-            _state.update { it.copy(mirrorReconnecting = true) }
+            _state.update { it.copy(mirrorReconnecting = true, remoteConnecting = false) }
             return ProxyTransport(SilentLink, modeScope)
         }
         val link = ReconnectingClientLink(url, modeScope, keys, hubKey)
         proxyLink = link
+        // A re-find switch keeps the remote's "Reconnecting" wording.
+        if (refind == null) _state.update { it.copy(remoteConnecting = true) }
         // Reflect the link into the UI so a dropped hub shows "Reconnecting…",
         // not a frozen "Connected through" (issue 03). The link only counts as
         // up once the hub has welcomed this session (onWelcome below).
@@ -1372,7 +1398,7 @@ class ProxyController(
             // through" only now, on Welcome, spec §2.6).
             onWelcome = { scope, hubName ->
                 onWelcomed(hubName)
-                _state.update { it.copy(mirrorViewOnly = scope != SCOPE_CONTROL, hubName = hubName, mirrorReconnecting = false) }
+                _state.update { it.copy(mirrorViewOnly = scope != SCOPE_CONTROL, hubName = hubName, mirrorReconnecting = false, remoteConnecting = false) }
                 live = true
                 stallTimer?.cancel()
                 remote.stalled = false
@@ -1600,6 +1626,7 @@ class ProxyController(
                 // A new target's Welcome names the hub again. The re-find only
                 // reaches the hub this device is pinned to, so it keeps the name.
                 hubName = if (refind != null) it.hubName else "",
+                remoteConnecting = role == "secondary" && it.remoteConnecting,
             )
         }
         // The VM mirrors role/host/port into MainUiState (with its sticky
@@ -1731,41 +1758,13 @@ internal const val PAIRING_WINDOW_S = 120
 
 private const val OUTDATED_NOTICE_COOLDOWN_MS = 60_000L
 
-/** The core's refusal names this controller acts on (PROTOCOL.md §10). */
-internal const val REFUSED_REVOKED = "Revoked"
-internal const val REFUSED_NOT_PAIRED = "NotPaired"
-internal const val REFUSED_HUB_STOPPED = "HubStopped"
-
 /** How long the hub's code dialog waits for a remote's next attempt after a wrong code. */
 private const val WRONG_CODE_GRACE_MS = 15_000L
-
-/** Spec §6.3: the keys couldn't be read this start. */
-internal const val KEYS_UNAVAILABLE_COPY = "Pairing keys couldn't be read. Restart Crema to try again."
 
 private val gateJson = Json { ignoreUnknownKeys = true }
 
 /** A [RelayFfiException]'s kind, never its detail. */
 private fun relayKind(e: RelayFfiException): String = (e as? RelayFfiException.Failed)?.kind ?: e.javaClass.simpleName
-
-/** What a remote shows when its hub refuses the session (spec §6.1, §6.3), from the core's reason. */
-internal fun refusalMessage(reason: String, hub: String): String {
-    val name = hub.ifBlank { "The hub" }
-    return when (reason) {
-        REFUSED_REVOKED, REFUSED_NOT_PAIRED -> "$name removed this device. Pair again to reconnect."
-        REFUSED_HUB_STOPPED -> "$name turned off Hub mode."
-        "HubUnverified", "HostMismatch" -> "Couldn't verify $name. If Crema on $name was reset or reinstalled, pair again."
-        "HubOutdated" -> "$name runs an older Crema — update it to connect."
-        "Version", "VERSION" -> "Update Crema on both devices to connect."
-        "PairingClosed", "PAIRING_CLOSED" ->
-            "$name isn't accepting new devices. On $name, open Settings ▸ Advanced ▸ Paired devices ▸ Pair a device, then try again."
-        "Busy", "BUSY" -> "$name is pairing another device. Try again in a moment."
-        "LockedOut", "LOCKED_OUT" -> "$name paused pairing after too many wrong codes. Try again in a minute."
-        "Cancelled", "CANCELLED" -> "Pairing was cancelled on $name."
-        "Timeout", "TIMEOUT" -> "The code expired. Try again."
-        PairingDialer.UNREACHABLE -> "Couldn't reach $name. Check that it's on and on this network, then try again."
-        else -> "Reconnecting to $name…"
-    }
-}
 
 /** A link that never connects: a remote role with nothing it may dial (no pin, or no keys). */
 private object SilentLink : FrameLink {
