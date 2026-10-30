@@ -19,7 +19,8 @@ import kotlin.test.fail
  * Final review 05 N-1 / N-2 and 04 P3-3: "Erase all data" deletes every store
  * file AND its copies (`.bak`, `.tmp`, `.corrupt-*`), the Visualizer / Decent /
  * Drive stores with their logs and settings, the bag photos, the last-shot
- * diagnostic and the BLE session captures. Builds the real ViewModel (as
+ * diagnostic, the BLE session captures, the relay key store with
+ * `relay-lost/` and the v3 pairing files. Builds the real ViewModel (as
  * [MainViewModelSmokeTest] does), seeds old data on disk, erases, and waits
  * for the erase's own completion notice.
  */
@@ -35,6 +36,8 @@ class EraseAllDataTest {
         "hiddenProfiles.json", "brew-recipes.json", "maintenance.json", "prefs.json",
         "sawModel.json", "sawModel.corrupt.json", "visualizer.json", "decent.json", "drive.json",
         "last-shot.txt",
+        // The relay key store and the v3 pairing leftovers (SR-3a).
+        "relay-v4.json", "proxy-pairing.json", "deviceId",
     )
 
     @Test
@@ -53,6 +56,8 @@ class EraseAllDataTest {
         }
         File(files, "bean-images").mkdirs()
         File(files, "bean-images/bean_1").writeText(old)
+        File(files, "relay-lost").mkdirs()
+        File(files, "relay-lost/relay-v4-1700000000000.json").writeText(old)
         val captures = File(app.getExternalFilesDir(null), "captures").apply { mkdirs() }
         File(captures, "session-20261001-120000.jsonl").writeText(old)
 
@@ -72,6 +77,7 @@ class EraseAllDataTest {
             .filter { it.endsWith(".bak") || it.endsWith(".tmp") || ".corrupt-" in it }
         assertEquals(emptyList(), copies, "store copies left behind")
         assertTrue(captures.listFiles().isNullOrEmpty(), "BLE captures left behind")
+        assertTrue(!File(files, "relay-lost").exists(), "relay-lost/ left behind")
         assertTrue(vm.ui.value.history.isEmpty())
         assertTrue(vm.ui.value.beans.isEmpty())
 

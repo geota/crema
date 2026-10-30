@@ -547,4 +547,16 @@ class RelayKeyStoreTest {
         assertFalse(ready(s.load()).keyReset)
         assertEquals(listOf("r1"), s.remotes.map { it.id })
     }
+
+    @Test
+    fun `one store per files directory in a process`() {
+        val other = Files.createTempDirectory("relay-store-other").toFile()
+        try {
+            val first = RelayKeyStore.forProcess(dir)
+            assertTrue("the same directory gets the same store", first === RelayKeyStore.forProcess(File(dir.path)))
+            assertFalse("another directory gets its own", first === RelayKeyStore.forProcess(other))
+        } finally {
+            other.deleteRecursively()
+        }
+    }
 }

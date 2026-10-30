@@ -308,7 +308,7 @@ class ProxyController(
      * the relay off for this start ([State.relayKeysUnavailable]); a definitive
      * loss started over with a new key and no pins ([State.keyResetNotice]).
      */
-    private val relay: RelayKeyStore = relayStore ?: RelayKeyStore(app.filesDir, RelayKeyStore.deviceBox())
+    private val relay: RelayKeyStore = relayStore ?: RelayKeyStore.forProcess(app.filesDir)
 
     private val keyLoad: RelayKeyLoad = relay.load()
 

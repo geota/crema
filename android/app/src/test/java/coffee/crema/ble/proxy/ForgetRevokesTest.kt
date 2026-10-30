@@ -18,9 +18,8 @@ import kotlin.test.assertTrue
  * authenticated `CLOSE(REVOKED)`, and a later resume from it gets
  * `NOT_PAIRED`. (The remote's "removed this device" copy and the switch to
  * normal are `ProxyControllerModeTest`'s "only an authenticated revoke makes a
- * remote normal"; AC-48's race between IK message 1 and admission is the
- * core's `pin_race.rs::forget_between_msg1_and_admission`, which the acceptor
- * relies on: it reads the live pin set the controller updates first.)
+ * remote normal".) AC-48's Android half is the second test; the core half is
+ * `pin_race.rs::forget_between_msg1_and_admission`.
  */
 class ForgetRevokesTest {
 

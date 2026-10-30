@@ -114,12 +114,15 @@ class SecureAcceptorLimitsTest {
         rig.trust.gate.open(System.currentTimeMillis().toULong())
         val dialer = PairingDialer(rig.url, "Kitchen tablet", RelayKeys.generate(), "Phone", rig.scope, storePin = { _, _, _ -> true })
         dialer.start()
-        runBlocking { eventually(what = "the code request") { rig.trust.requests.isNotEmpty() } }
+        runBlocking { eventually(what = "the code request") { rig.trust.requests.isNotEmpty() && dialer.state.value is PairingState.ShowCode } }
+        val shown = dialer.state.value as PairingState.ShowCode
         val flood = (1..6).map { RawWsClient(rig.port).also { Thread.sleep(50) } }
         Thread.sleep(300)
-        assertTrue(dialer.state.value is PairingState.ShowCode, "the pairing session is still waiting: ${dialer.state.value}")
+        // The same connection, not a retry after an eviction: the same code and still one request.
+        assertEquals(shown.code, (dialer.state.value as? PairingState.ShowCode)?.code, "the pairing session is still waiting")
+        assertEquals(1, rig.trust.requests.size, "no second request: ${rig.trust.requests.size}")
         // And it still pairs.
-        val code = (dialer.state.value as PairingState.ShowCode).code
+        val code = shown.code
         runBlocking {
             assertTrue(rig.trust.requests.last().enterCode(code, canControl = true))
             eventually(what = "paired") { dialer.state.value is PairingState.Paired }

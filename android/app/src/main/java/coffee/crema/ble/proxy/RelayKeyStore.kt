@@ -83,7 +83,8 @@ sealed interface RelayKeyLoad {
 
 /**
  * This device's relay v4 static key and pins (spec §5.1), replacing the v3
- * `PairingStore`. Not wired yet (PR-3b uses it).
+ * `PairingStore`. One instance per process ([forProcess]): two would race on
+ * the file.
  *
  * - The private key is sealed with a dedicated AndroidKeyStore key
  *   ([RELAY_ALIAS], AAD [RELAY_AAD]) through [SecretBox.wrapBytes], so it never
@@ -381,6 +382,18 @@ class RelayKeyStore(
         private val json = Json {
             encodeDefaults = true
             ignoreUnknownKeys = true
+        }
+
+        private val perProcess = HashMap<String, RelayKeyStore>()
+
+        /**
+         * The process's one store for [filesDir] (SR-3a P3-1). The per-alias
+         * lock covers key creation, but two instances would still race on the
+         * file, so a view model built again in the same process gets the same
+         * store (and [load]s it again).
+         */
+        fun forProcess(filesDir: File): RelayKeyStore = synchronized(perProcess) {
+            perProcess.getOrPut(filesDir.absolutePath) { RelayKeyStore(filesDir, deviceBox()) }
         }
 
         /**
