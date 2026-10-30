@@ -511,6 +511,23 @@ data class BrewMethodPreset (
 	val icon: String? = null
 )
 
+/// The user's per-shot Quick Controls overrides — absolute values, each
+/// optional (absent = the profile's own value). The JSON shape the shells
+/// already pass to the fingerprint (`{dose, yield, brewTemp, preinf}`).
+@Serializable
+data class BrewOverrides (
+	/// Dose, grams.
+	val dose: Float? = null,
+	/// Yield target, grams.
+	val yield: Float? = null,
+	/// Absolute brew temperature, °C — every step is shifted by the
+	/// difference from the profile's anchor ([`brew_temp_anchor`]).
+	val brewTemp: Float? = null,
+	/// Total pre-infusion time, seconds, across the leading pre-infusion
+	/// segments ([`preinfusion_seconds`]).
+	val preinf: Float? = null
+)
+
 /// What a [`BrewStep`] is, for its icon / default label. Lowercase wire
 /// spelling, like [`BeverageType`](crate::BeverageType).
 @Serializable
@@ -680,6 +697,18 @@ data class BrewStatInput (
 	val rating: UByte? = null,
 	/// The brew method; `None` = machine espresso.
 	val brewMethod: String? = null
+)
+
+/// The brew-temperature dial's range for one profile, °C (inclusive).
+@Serializable
+data class BrewTempRange (
+	/// Lowest absolute brew temperature the dial may reach.
+	val min: Float,
+	/// Highest absolute brew temperature the dial may reach.
+	val max: Float,
+	/// The profile's own brew temperature (the anchor the shift is
+	/// measured from) — the dial's "from profile" reference.
+	val anchor: Float
 )
 
 /// The result of [`catalogue_autofill`].
@@ -3056,6 +3085,18 @@ data class PhaseMarker (
 	/// (sensor-confirmed), "pressure_unconfirmed" / "flow_unconfirmed",
 	/// "time", or "" when unknown (old data).
 	val transitionReason: String
+)
+
+/// What [`CremaCore::upload_crema_profile_json`](crate::CremaCore::upload_crema_profile_json)
+/// returns to a shell: the upload's [`CoreOutput`] and the fingerprint of the
+/// bytes it writes (`None` when nothing was uploaded — a malformed or rejected
+/// profile, whose failure event is in `output`).
+@Serializable
+data class ProfileUploadOutput (
+	/// The upload's events and BLE writes.
+	val output: CoreOutput,
+	/// The effective profile's fingerprint, or `None` when no upload started.
+	val fingerprint: String? = null
 )
 
 /// The four badge booleans the shells surface as chips. Projection rules:

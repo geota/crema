@@ -507,6 +507,12 @@ pub fn blank_profile(defaults: &BrewDefaults) -> CremaProfile {
     if let Some(first) = segments.first_mut() {
         first.time = defaults.preinfusion_s;
     }
+    // Every step brews at the user's default brew temperature, so the
+    // displayed `brew_temp` is the temperature the profile actually runs at
+    // (it used to stay at the template's 92 °C whatever the default said).
+    for seg in &mut segments {
+        seg.temp = defaults.brew_temp_c;
+    }
     CremaProfile {
         id: crate::new_profile_id(),
         source: ProfileSource::Custom,
@@ -763,6 +769,30 @@ mod tests {
         assert_eq!(p.segments.len(), 4);
         assert!(close(p.segments[0].time, 6.0)); // preinfusion_s applied
         assert!(!p.id.is_empty());
+    }
+
+    /// AC-F6.4: a blank profile brews at the default brew temperature on
+    /// every step, not the template's 92 °C.
+    #[test]
+    fn f6_4_blank_profile_uses_the_default_brew_temp_on_every_step() {
+        for brew_temp_c in [88.0, 93.0, 96.5] {
+            let p = blank_profile(&BrewDefaults {
+                brew_temp_c,
+                ..BrewDefaults::default()
+            });
+            assert!(close(p.brew_temp, brew_temp_c));
+            assert!(
+                p.segments.iter().all(|s| close(s.temp, brew_temp_c)),
+                "{:?}",
+                p.segments.iter().map(|s| s.temp).collect::<Vec<_>>()
+            );
+            let wire = to_wire(&p);
+            assert!(
+                wire.steps
+                    .iter()
+                    .all(|s| close(s.temperature_c, brew_temp_c))
+            );
+        }
     }
 
     #[test]
