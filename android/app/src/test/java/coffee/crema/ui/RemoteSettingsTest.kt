@@ -234,8 +234,7 @@ class RemoteSettingsTest {
         VmHarness.idle()
         assertEquals(40f to 44f, core(), "after the snapshot")
         val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
-        runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) }
-        VmHarness.idle()
+        VmHarness.restore(vm, backup)
         assertEquals(40f to 44f, core(), "after a restore")
         vm.resetPreferences()
         VmHarness.idle()
@@ -283,8 +282,7 @@ class RemoteSettingsTest {
         fixture.push()
         val shown = abOfUi(vm.ui.value)
         val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
-        runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) }
-        VmHarness.idle()
+        VmHarness.restore(vm, backup)
         assertEquals(shown, abOfUi(vm.ui.value), "after a restore")
         vm.resetPreferences()
         VmHarness.idle()

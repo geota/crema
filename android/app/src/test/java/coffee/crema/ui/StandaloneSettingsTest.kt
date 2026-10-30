@@ -161,7 +161,7 @@ class StandaloneSettingsTest {
         }
         pushedBy("the reset") { vm.resetPreferences() }
         val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
-        pushedBy("the restore") { runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) } }
+        pushedBy("the restore") { VmHarness.restore(vm, backup) }
         // The pushes §6.1 adds.
         val duration = pushedBy("a max shot duration") { vm.setMaxShotDuration(41f) }
         assertEquals(41f, duration.maxShotDurationS)
