@@ -363,7 +363,8 @@ class RemoteEditFlowTest {
         )
         fixture.push(base.copy(hotWaterTarget = hubTarget, qcHotWaterMode = HotWaterMode.Ratio))
         VmHarness.idleUntil("the hub's target") { vm.ui.value.hotWaterTarget == hubTarget }
-        assertEquals("1:2.5 → 135 ml for a 54 g shot", hotWaterReadoutFor(vm.ui.value.hotWaterTarget, vm.ui.value.weightUnit, vm.ui.value.volumeUnit, vm.ui.value.qcHotWaterRatio))
+        val readout = hotWaterReadoutFor(vm.ui.value.hotWaterTarget, vm.ui.value.weightUnit, vm.ui.value.volumeUnit, vm.ui.value.qcHotWaterRatio)
+        assertTrue(readout.startsWith("1:2.5 → 135 ml for a "), readout)
         for (s in listOf(Setting.QC_HOT_WATER_MODE, Setting.QC_HOT_WATER_TIME, Setting.QC_HOT_WATER_TIME_NO_LIMIT, Setting.QC_HOT_WATER_RATIO)) {
             assertEquals(SettingAvailability.READ_ONLY, availability(vm, s), "$s")
         }

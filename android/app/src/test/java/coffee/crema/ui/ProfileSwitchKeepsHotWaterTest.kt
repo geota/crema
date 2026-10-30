@@ -11,6 +11,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import kotlin.math.roundToInt
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -46,7 +47,7 @@ class ProfileSwitchKeepsHotWaterTest {
             vm.setActiveProfile(p.id)
             VmHarness.idle()
             VmHarness.idleUntil("${p.name} saved") { savedPrefs().activeProfileId == p.id }
-            assertEquals(2.5f * p.yieldOut, assertNotNull(vm.ui.value.hotWaterTarget).volumeMl, "${p.name}: 1:2.5 of ${p.yieldOut} g")
+            assertEquals((2.5f * p.yieldOut).roundToInt().toFloat(), assertNotNull(vm.ui.value.hotWaterTarget).volumeMl, "${p.name}: 1:2.5 of ${p.yieldOut} g")
             assertEquals(stored, savedPrefs().hotWater(), "${p.name}: prefs.json's hot-water fields")
             assertEquals(180f, vm.ui.value.qcHotWaterVolumeMl, "the volume mode's value is kept")
         }

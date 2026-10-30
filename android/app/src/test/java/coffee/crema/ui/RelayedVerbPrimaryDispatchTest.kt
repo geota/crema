@@ -97,7 +97,8 @@ class RelayedVerbPrimaryDispatchTest {
         // Relay v4: the core admitted a remote paired with control before
         // RelayHub.serve sees it, so the hub's Welcome comes first.
         VmHarness.idleUntil("the Welcome") { replies.any { it is Frame.Welcome } }
-        val welcome = assertIs<Frame.Welcome>(replies.single())
+        // The Welcome first; the hub may push its config right after.
+        val welcome = assertIs<Frame.Welcome>(replies.first(), "$replies")
         assertEquals("control", welcome.scope)
     }
 

@@ -148,7 +148,7 @@ sealed interface MachineCommand {
 }
 
 /** The Quick-Controls values a mirror may set, each with its stepper's bounds. */
-enum class QcField(val label: String, private val range: ClosedFloatingPointRange<Double>) {
+enum class QcField(val label: String, private val range: ClosedFloatingPointRange<Double>?) {
     STEAM_TIME("steam time", QcSteam.MIN_TIME_S..QcSteam.MAX_TIME_S),
     STEAM_FLOW("steam flow", QcSteam.MIN_FLOW_ML_S..QcSteam.MAX_FLOW_ML_S),
     /** 0 turns the steam heater off; otherwise the stepper's range, which
@@ -157,7 +157,7 @@ enum class QcField(val label: String, private val range: ClosedFloatingPointRang
     HOT_WATER_TEMP("hot-water temperature", QcBounds.WATER_TEMP_MIN_C..QcBounds.WATER_TEMP_MAX_C),
     /** The bare volume edit; its range is the core's volume range, read
      *  lazily (see [refusal]). */
-    HOT_WATER_VOLUME("hot-water volume", 0.0..0.0),
+    HOT_WATER_VOLUME("hot-water volume", null),
     /** The phone's flush stepper starts at 0 (it shares the pre-infusion minimum). */
     FLUSH_TIME("flush time", 0.0..QcBounds.FLUSH_TIME_MAX_S),
     FLUSH_TEMP("flush temperature", QcBounds.FLUSH_TEMP_MIN_C..QcBounds.FLUSH_TEMP_MAX_C),
@@ -173,11 +173,7 @@ enum class QcField(val label: String, private val range: ClosedFloatingPointRang
     /** The field's range; the hot-water volume's is the core's, read lazily
      *  like `ProfileBounds`. */
     private fun range(): ClosedFloatingPointRange<Double> =
-        if (this == HOT_WATER_VOLUME) {
-            HotWaterUi.bounds.volumeMl.let { it.min.toDouble()..it.max.toDouble() }
-        } else {
-            range
-        }
+        range ?: HotWaterUi.bounds.volumeMl.let { it.min.toDouble()..it.max.toDouble() }
 }
 
 private val ASLEEP = setOf("Sleep", "GoingToSleep")
