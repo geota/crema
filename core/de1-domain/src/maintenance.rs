@@ -85,6 +85,52 @@ pub struct MaintenanceReadout {
     pub clean_enabled: bool,
 }
 
+/// Group flow is integrated over at most this many seconds per telemetry
+/// sample for the maintenance counters, so a gap in the stream (a dropped
+/// link) can't count phantom water.
+pub const MAX_COUNTED_GAP_S: f32 = 2.0;
+
+/// Whether water the DE1 pours in `state` counts toward the filter and
+/// descale counters: an espresso shot and the two hot-water modes. Steam
+/// draws no water through the group; descale, clean, steam rinse and air
+/// purge are maintenance cycles, not drinking water (de1app likewise counts
+/// only espresso and hot water). The one rule both shells used to carry —
+/// and disagree on.
+#[must_use]
+pub fn counts_toward_water(state: de1_protocol::MachineState) -> bool {
+    use de1_protocol::MachineState as S;
+    matches!(state, S::Espresso | S::HotWater | S::HotWaterRinse)
+}
+
+impl MaintenanceState {
+    /// A fresh install at `now_ms`: no water counted, every "last performed"
+    /// stamp at now, and the default intervals — a 50 L inline filter, a
+    /// 120 L descale interval, a 48 h clean cycle.
+    #[must_use]
+    pub fn default_at(now_ms: i64) -> Self {
+        Self {
+            total_litres: 0.0,
+            filter_baseline_litres: 0.0,
+            descale_baseline_litres: 0.0,
+            clean_at_ms: now_ms,
+            filter_at_ms: now_ms,
+            descale_at_ms: now_ms,
+            filter_capacity_litres: 50.0,
+            descale_interval_litres: 120.0,
+            clean_interval_hours: 48.0,
+            filter_enabled: None,
+            descale_enabled: None,
+            clean_enabled: None,
+        }
+    }
+}
+
+/// [`MaintenanceState::default_at`] as JSON — the FFI / wasm boundary shape.
+#[must_use]
+pub fn default_maintenance_state_json(now_ms: i64) -> String {
+    serde_json::to_string(&MaintenanceState::default_at(now_ms)).unwrap_or_else(|_| "{}".into())
+}
+
 /// Derive a [`MaintenanceReadout`] from the persisted state. `now_ms`
 /// is the wall-clock unix-epoch ms used to compute "hours since clean".
 #[must_use]
@@ -138,6 +184,35 @@ pub fn maintenance_readout_json(state_json: &str, now_ms: i64) -> Result<String,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_espresso_and_hot_water_count_toward_the_water_counters() {
+        use de1_protocol::MachineState as S;
+        for (state, counts) in [
+            (S::Espresso, true),
+            (S::HotWater, true),
+            (S::HotWaterRinse, true),
+            (S::Steam, false),
+            (S::Descale, false),
+            (S::Clean, false),
+            (S::SteamRinse, false),
+            (S::AirPurge, false),
+            (S::Idle, false),
+            (S::Sleep, false),
+        ] {
+            assert_eq!(counts_toward_water(state), counts, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn a_fresh_install_has_the_default_intervals() {
+        let s = MaintenanceState::default_at(1_000);
+        assert!((s.filter_capacity_litres - 50.0).abs() < f64::EPSILON);
+        assert!((s.descale_interval_litres - 120.0).abs() < f64::EPSILON);
+        assert!((s.clean_interval_hours - 48.0).abs() < f64::EPSILON);
+        assert_eq!(s.clean_at_ms, 1_000);
+        assert!(default_maintenance_state_json(1_000).contains("\"filterCapacityLitres\":50"));
+    }
 
     fn fresh_state() -> MaintenanceState {
         MaintenanceState {

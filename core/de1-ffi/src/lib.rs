@@ -426,6 +426,21 @@ pub fn duplicate_bean_json(
     de1_domain::duplicate_bean_json(&bean_json, &new_id, now_unix_ms).map_err(CremaError::from)
 }
 
+/// Merge an imported bean library into the local one — the rule both shells
+/// use (newer `updated_at` wins for a shared id, a tie keeps local, an older
+/// row never resurrects a local tombstone; Beanconqueror re-import, roaster
+/// repoint and (roaster, name, roast date) dedupe). Input
+/// `{incomingBeans, incomingRoasters, libraryBeans, libraryRoasters}`, output
+/// a `BeanImportMerge` JSON. See [`de1_domain::merge_bean_import`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the payload JSON is malformed.
+#[uniffi::export]
+pub fn merge_bean_import_json(payload: String) -> Result<String, CremaError> {
+    de1_domain::merge_bean_import_json(&payload).map_err(CremaError::from)
+}
+
 /// A bean with its Frozen switch set (`Bean` JSON in and out): freeze stamps
 /// today, defrost stamps `defrosted_on` and keeps `frozen_on`, refreeze
 /// carries the earlier frozen span; days off roast never moves. See
@@ -2013,6 +2028,31 @@ pub fn default_refill_point_mm() -> f32 {
     de1_domain::DEFAULT_REFILL_POINT_MM
 }
 
+/// The water constants the settings UI needs (`WaterConstants` JSON): the
+/// tank-full ml, the low-water default, the refill-point default and range.
+/// See [`de1_domain::water_constants`].
+#[uniffi::export]
+#[must_use]
+pub fn water_constants() -> String {
+    serde_json::to_string(&de1_domain::water_constants()).unwrap_or_else(|_| "{}".into())
+}
+
+/// Whether the tank is low enough for the "refill soon" cue — the level
+/// DEPTH vs the machine's RAW threshold. See [`de1_domain::refill_soon`].
+#[uniffi::export]
+#[must_use]
+pub fn refill_soon(level_depth_mm: Option<f32>, raw_threshold_mm: Option<f32>) -> bool {
+    de1_domain::refill_soon(level_depth_mm, raw_threshold_mm)
+}
+
+/// A fresh install's `MaintenanceState` JSON at `now_ms` (the default
+/// intervals and stamps). See [`de1_domain::MaintenanceState::default_at`].
+#[uniffi::export]
+#[must_use]
+pub fn default_maintenance_state(now_ms: i64) -> String {
+    de1_domain::default_maintenance_state_json(now_ms)
+}
+
 /// Reconcile a remote Visualizer pull against the local shot refs. Payload
 /// `{"local": LocalShotRef[], "remote": WireShot[]}` → `ReconcileAction[]`
 /// JSON (`kind: add | update | bind`). Mirrors the wasm `reconcileShots`
@@ -2479,6 +2519,12 @@ impl CremaBridge {
     /// link drops. See [`de1_app::CremaCore::disconnect_scale`].
     pub fn disconnect_scale(&self) {
         self.core().disconnect_scale();
+    }
+
+    /// Set the low-water warning threshold, ml (`None` = the 110 ml default,
+    /// `0` = off); re-arms the warning. See `CremaCore::set_water_warn_ml`.
+    pub fn set_water_warn_ml(&self, warn_ml: Option<f32>) {
+        self.core().set_water_warn_ml(warn_ml);
     }
 
     /// Enable or disable auto-tare on shot start.

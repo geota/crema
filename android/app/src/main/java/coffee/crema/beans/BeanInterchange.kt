@@ -1,8 +1,10 @@
 package coffee.crema.beans
 
 import coffee.crema.core.Bean
+import coffee.crema.core.BeanImportMerge
 import coffee.crema.core.Roaster
 import coffee.crema.core.exportCremaJsonl
+import coffee.crema.core.mergeBeanImportJson
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -13,7 +15,8 @@ import kotlinx.serialization.json.jsonObject
 /*
  * The bean library's Crema file (`crema/v1` JSONL) and the import merge. The
  * core writes and reads the file (`exportCremaJsonl` / `importCremaJsonl`, the
- * calls web makes), so a library exported on either shell imports on the other.
+ * calls web makes) and merges it ([mergeBeanImport], the core's rule), so a
+ * library exported on either shell imports the same way on the other.
  */
 
 private val interchangeJson = Json { ignoreUnknownKeys = true }
@@ -48,60 +51,28 @@ fun isCremaLibraryJsonl(text: String): Boolean {
 }
 
 /**
- * What an import adds to the library: the new beans and roasters, the import's
- * bean id → the library id its shots should reference, and how many beans were
- * already there.
- */
-data class BeanImportMerge(
-    val newBeans: List<Bean>,
-    val newRoasters: List<Roaster>,
-    val beanIdRemap: Map<String, String>,
-    val skipped: Int,
-)
-
-/**
- * Merge an import plan's [wireBeans] / [wireRoasters] against the library
- * ([libBeans] / [libRoasters]) with web's dedup rules: skip a bean whose id or
- * `beanconquerorId` is already present (a Crema re-import, a resumable
- * Beanconqueror re-import); repoint a new bean to an existing same-named
- * roaster (dropping the duplicate roaster); skip a bean matching an existing
- * (roaster, name, roastedOn) triple. A roaster whose id is already present is
- * never added twice. Skipped beans remap to the library row they matched.
+ * Merge an import plan's [wireBeans] / [wireRoasters] into the library
+ * ([libBeans] / [libRoasters]) through the core's `merge_bean_import`, the rule
+ * web uses: a shared id goes to the newer `updatedAt` (a tie keeps local; an
+ * older row never resurrects a local tombstone), an earlier Beanconqueror
+ * import and a (roaster, name, roast date) match are skipped, and a same-named
+ * library roaster is reused. [core] is the UniFFI `mergeBeanImportJson`
+ * (injectable for tests).
  */
 fun mergeBeanImport(
     wireBeans: List<Bean>,
     wireRoasters: List<Roaster>,
     libBeans: List<Bean>,
     libRoasters: List<Roaster>,
+    core: (payload: String) -> String = ::mergeBeanImportJson,
 ): BeanImportMerge {
-    val existingRoasterByLc = libRoasters.associateBy { it.name.trim().lowercase() }
-    val existingById = libBeans.associateBy { it.id }
-    val existingByBcId = libBeans.filter { it.beanconquerorId != null }.associateBy { it.beanconquerorId!! }
-    val existingRoasterIds = libRoasters.map { it.id }.toHashSet()
-    val wireRoasterById = wireRoasters.associateBy { it.id }
-
-    val newBeans = ArrayList<Bean>()
-    val keptRoasterIds = HashSet<String>()
-    val beanIdRemap = HashMap<String, String>()
-    var skipped = 0
-    for (bean in wireBeans) {
-        val prior = existingById[bean.id] ?: bean.beanconquerorId?.let { existingByBcId[it] }
-        if (prior != null) { beanIdRemap[bean.id] = prior.id; skipped++; continue }
-        val wireRoaster = bean.roasterId?.let { wireRoasterById[it] }
-        val libRoaster = wireRoaster?.name?.let { existingRoasterByLc[it.trim().lowercase()] }
-        val resolved = when {
-            libRoaster != null && wireRoaster.id != libRoaster.id -> bean.copy(roasterId = libRoaster.id)
-            else -> { if (wireRoaster != null) keptRoasterIds.add(wireRoaster.id); bean }
-        }
-        val tripleDupe = libRoaster != null && libBeans.firstOrNull {
-            it.roasterId == libRoaster.id &&
-                it.name.trim().equals(bean.name.trim(), ignoreCase = true) &&
-                (it.roastedOn ?: "") == (bean.roastedOn ?: "")
-        }?.also { beanIdRemap[bean.id] = it.id } != null
-        if (tripleDupe) { skipped++; continue }
-        beanIdRemap[bean.id] = bean.id
-        newBeans.add(resolved)
+    val beans = ListSerializer(Bean.serializer())
+    val roasters = ListSerializer(Roaster.serializer())
+    val payload = buildJsonObject {
+        put("incomingBeans", interchangeJson.encodeToJsonElement(beans, wireBeans))
+        put("incomingRoasters", interchangeJson.encodeToJsonElement(roasters, wireRoasters))
+        put("libraryBeans", interchangeJson.encodeToJsonElement(beans, libBeans))
+        put("libraryRoasters", interchangeJson.encodeToJsonElement(roasters, libRoasters))
     }
-    val newRoasters = wireRoasters.filter { it.id in keptRoasterIds && it.id !in existingRoasterIds }
-    return BeanImportMerge(newBeans, newRoasters, beanIdRemap, skipped)
+    return interchangeJson.decodeFromString(BeanImportMerge.serializer(), core(payload.toString()))
 }

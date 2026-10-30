@@ -65,6 +65,12 @@ pub const MIN_TEMPERATURE_C: f32 = 0.0;
 /// targets above 100 °C are normal — see [`MAX_STEAM_TEMPERATURE_C`].
 pub const MAX_TEMPERATURE_C: f32 = 100.0;
 
+/// The lowest brew temperature the Quick Controls dial offers (°C) — both
+/// shells' brew-temp steppers and the web editor start here. A brew-temp shift
+/// never takes the dial below it (a profile authored lower keeps its own
+/// value; it just can't be dialled further down).
+pub const MIN_BREW_TEMPERATURE_C: f32 = 80.0;
+
 /// Upper bound for *steam* temperature setpoints — boiler-side, can
 /// exceed brew temperature. Matches the de1app's editorial cap.
 pub const MAX_STEAM_TEMPERATURE_C: f32 = 170.0;

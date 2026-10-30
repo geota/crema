@@ -97,13 +97,14 @@ impl VolumeIntegrator {
     /// [`integrate`](Self::integrate), also adding the increment to
     /// [`pour_ml`](Self::pour_ml) when `counts_as_pour` — the caller decides
     /// from the machine state ([`sav_counts_volume`](crate::sav_counts_volume)).
+    /// Returns this sample's increment, ml (0 for a clamped one).
     pub fn integrate_counting(
         &mut self,
         sample: &ShotSample,
         now: Duration,
         line_freq_hz: Option<f32>,
         counts_as_pour: bool,
-    ) {
+    ) -> f32 {
         let dt_s = self.dt_seconds(sample.sample_time, now, line_freq_hz);
         let raw = sample.group_flow * dt_s;
         let inc = if raw.is_finite() && (0.0..=PER_SAMPLE_MAX_ML).contains(&raw) {
@@ -117,6 +118,7 @@ impl VolumeIntegrator {
         }
         self.last_sample_time = Some(sample.sample_time);
         self.last_host_time = Some(now);
+        inc
     }
 
     fn dt_seconds(&self, sample_time: u16, now: Duration, line_freq_hz: Option<f32>) -> f32 {
