@@ -39,9 +39,9 @@ class FrameCodecTest {
 
     @Test
     fun `optional nulls stay off the wire`() {
-        val f = Frame.Hello(v = PROXY_PROTOCOL_VERSION, role = "secondary", clientId = "dev-1", clientName = "Phone")
+        val f = Frame.Control(id = 3, method = "tareScale")
         val json = FrameCodec.encode(f)
-        assertFalse(json.contains("token"), json) // encodeDefaults = false
+        assertFalse(json.contains("args"), json) // encodeDefaults = false
         val notify = Frame.Notify(address = "a", service = "s", char = "c", hex = "00", t = 0L)
         assertFalse(FrameCodec.encode(notify).contains("src"), "src is null → omitted")
         assertEquals(f, FrameCodec.decode(json))

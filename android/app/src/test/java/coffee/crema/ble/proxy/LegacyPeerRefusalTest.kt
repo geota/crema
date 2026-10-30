@@ -39,7 +39,7 @@ class LegacyPeerRefusalTest {
         val rig = RelayRig().start()
         val client = HttpClients.webSocketClient()
         try {
-            val hello = javaClass.classLoader!!.getResource("proxy-golden/v3/frames/hello.json")!!.readText().trimEnd('\n')
+            val hello = javaClass.classLoader!!.getResource("legacy-peers/v3-hello.json")!!.readText().trimEnd('\n')
             val (texts, binaries, code) = runBlocking {
                 val ws = client.webSocketSession { url(rig.url) }
                 ws.send(WsFrame.Text(hello))

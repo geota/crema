@@ -32,13 +32,15 @@ import kotlin.test.assertSame
  */
 class SettingsAvailabilityTest {
 
-    private val schema1 = coreJson.decodeFromString(ConfigSnapshot.serializer(), Golden.require("config-snapshot/schema1.json"))
-    private val legacy = coreJson.decodeFromString(ConfigSnapshot.serializer(), Golden.require("config-snapshot/legacy-nightly.json"))
+    private val v4 = coreJson.decodeFromString(ConfigSnapshot.serializer(), Golden.require("config-snapshot/schema.json"))
+
+    /** A hub that hasn't read its machine registers yet. */
+    private val unread = v4.copy(heaterVoltage = null, flowMultiplier = null, cupWarmerTempC = null)
 
     /** The scale settings a Bookoo's weight stream reports (A16–A18, A21). */
     private val echoed = setOf(Setting.SCALE_VOLUME, Setting.SCALE_STANDBY, Setting.SCALE_FLOW_SMOOTHING, Setting.SCALE_AUTO_STOP)
 
-    private fun remote(snapshot: ConfigSnapshot? = schema1, scale: Set<Setting> = echoed) = MainUiState(
+    private fun remote(snapshot: ConfigSnapshot? = v4, scale: Set<Setting> = echoed) = MainUiState(
         proxyRole = "secondary", mirroringPrimaryName = "Kitchen tablet", scaleEchoed = scale,
         mirror = MirroredSettings(snapshot = snapshot, hubName = "Kitchen tablet"),
     )
@@ -76,7 +78,7 @@ class SettingsAvailabilityTest {
     @Test
     fun `a control remote follows the table`() {
         val ui = remote()
-        for (s in Setting.entries) assertEquals(expected(s, false, false, schema1, echoed), ui.availability(s), "$s")
+        for (s in Setting.entries) assertEquals(expected(s, false, false, v4, echoed), ui.availability(s), "$s")
         // Spot checks against the table's words, independent of the helper above.
         assertEquals(VIA_HUB, ui.availability(Setting.QC_GRIND))
         assertEquals(VIA_HUB, ui.availability(Setting.STOP_ON_WEIGHT))
@@ -93,7 +95,7 @@ class SettingsAvailabilityTest {
     @Test
     fun `a view-only remote can't edit relayed settings`() {
         val ui = remote().copy(mirrorViewOnly = true)
-        for (s in Setting.entries) assertEquals(expected(s, true, false, schema1, echoed), ui.availability(s), "$s")
+        for (s in Setting.entries) assertEquals(expected(s, true, false, v4, echoed), ui.availability(s), "$s")
         assertEquals(VIEW_ONLY, ui.availability(Setting.AUTO_TARE))
         assertEquals(READ_ONLY, ui.availability(Setting.PRE_FLUSH))
         assertEquals(false, ui.gate(Setting.AUTO_TARE).editable)
@@ -103,7 +105,7 @@ class SettingsAvailabilityTest {
     @Test
     fun `a reconnecting remote shows relayed settings offline`() {
         for (ui in listOf(remote().copy(mirrorReconnecting = true), remote().let { it.copy(mirror = it.mirror!!.reconnectingNow()) })) {
-            for (s in Setting.entries) assertEquals(expected(s, false, true, schema1, echoed), ui.availability(s), "$s")
+            for (s in Setting.entries) assertEquals(expected(s, false, true, v4, echoed), ui.availability(s), "$s")
             assertEquals(OFFLINE, ui.availability(Setting.QC_GRIND))
             assertEquals(READ_ONLY, ui.availability(Setting.QC_STEAM_TIME))
             assertEquals(false, ui.gate(Setting.QC_GRIND).editable)
@@ -113,7 +115,7 @@ class SettingsAvailabilityTest {
 
     @Test
     fun `pending and unconfirmed edits`() {
-        val (slice, gen) = MirroredSettings(snapshot = schema1, hubName = "Kitchen tablet").withPending(MachineCommand.SetQc(QcField.GRIND, 18f))
+        val (slice, gen) = MirroredSettings(snapshot = v4, hubName = "Kitchen tablet").withPending(MachineCommand.SetQc(QcField.GRIND, 18f))
         val (both, _) = slice.withPending(MachineCommand.SetAutoTare(false))
         val ui = remote().copy(mirror = both.settled(Setting.QC_GRIND, gen, coffee.crema.machine.CommandOutcome.Unknown("no reply")))
         assertEquals(PENDING, ui.availability(Setting.AUTO_TARE))
@@ -134,15 +136,17 @@ class SettingsAvailabilityTest {
         assertEquals(RowGate(editable = false, unknown = true, note = "Waiting for Kitchen tablet"), ui.gate(Setting.QC_STEAM_TEMP))
     }
 
+    /** Relay v4 R3b: only the machine registers a hub hasn't read can be
+     *  missing, and they wait for the hub (no "update the hub" copy). */
     @Test
-    fun `a legacy hub's missing keys are unknown, each on its own row`() {
-        val ui = remote(snapshot = legacy)
-        val missing = Setting.entries.filter { it.mirroredVia == MirrorSource.SNAPSHOT && !legacy.carries(it) }
-        assertEquals(13, missing.size, "$missing")
-        for (s in Setting.entries) assertEquals(expected(s, false, false, legacy, echoed), ui.availability(s), "$s")
+    fun `unread machine registers are unknown, each on its own row`() {
+        val ui = remote(snapshot = unread)
+        val missing = Setting.entries.filter { it.mirroredVia == MirrorSource.SNAPSHOT && !unread.carries(it) }
+        assertEquals(setOf(Setting.HEATER_VOLTAGE, Setting.FLOW_MULTIPLIER, Setting.CUP_WARMER_TEMP), missing.toSet())
+        for (s in Setting.entries) assertEquals(expected(s, false, false, unread, echoed), ui.availability(s), "$s")
         for (s in missing) {
             assertEquals(UNKNOWN, ui.availability(s))
-            assertEquals("Update Crema on Kitchen tablet to see this here", ui.availabilityNote(s), "$s")
+            assertEquals("Waiting for Kitchen tablet", ui.availabilityNote(s), "$s")
         }
         assertEquals(VIA_HUB, ui.availability(Setting.STOP_ON_WEIGHT), "a key it carries")
     }

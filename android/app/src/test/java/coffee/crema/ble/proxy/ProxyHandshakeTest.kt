@@ -160,6 +160,8 @@ class ProxyHandshakeTest {
             val result = withTimeout(2_000) { pending.await() }
             assertTrue(result.isFailure)
             assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("Revoked"), "${result.exceptionOrNull()}")
+            // The refusal callback runs right after the parked requests fail.
+            withTimeout(2_000) { while (refusals.isEmpty()) delay(5) }
             assertEquals(listOf("Revoked/true/true"), refusals.toList())
             assertTrue(link.sent.isEmpty(), "nothing went out")
         } finally {
