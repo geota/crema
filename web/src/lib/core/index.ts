@@ -25,7 +25,7 @@ import type { CoreOutput, ScaleCapabilities, ScaleUuids, TimedSample } from './c
 import type { CalTarget, MmrRegister } from './crema-core';
 import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
 import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core';
-import type { BrewOverrides, ProfileUploadOutput } from './crema-core';
+import type { BrewOverrides, ProfileSyncOutput, ProfileSyncStatus } from './crema-core';
 import { guardStoppedBridge } from './stopped-guard';
 
 /** Parse a bridge `FlashStep` JSON; `status: null` reads as "no flash". */
@@ -479,21 +479,22 @@ export interface CremaCore {
 	 */
 	scaleUuids(): Promise<ScaleUuids | undefined>;
 	/**
-	 * Upload the effective profile to the DE1: the library `CremaProfile`
-	 * with the Quick Controls overrides applied by the core (brew temp shifts
-	 * every step, pre-infusion rescales the leading segments, dose / yield
-	 * replace, all clamped). The only upload the shell has — the core builds
-	 * every byte from `(profile, qc)`. Resolves to the initial `CoreOutput`
-	 * (`ProfileUploadStarted` + every BLE write in upload order) and the
-	 * fingerprint of those bytes (`null` when nothing was uploaded).
-	 * Progress arrives via `ProfileUploadProgress`, success via
-	 * `ProfileUploadCompleted`, failure via `ProfileUploadFailed`.
+	 * Tell the core which profile the DE1 should hold: the library
+	 * `CremaProfile` (`null` = no active profile) with the Quick Controls
+	 * overrides. Call on every activation, edit, override change and restore.
+	 * The core's profile sync uploads it — the only way a profile reaches the
+	 * DE1 — after every connect, on a change, coalesced while an upload runs,
+	 * retried with backoff, never while the machine is busy and never on a
+	 * read-only mirror. Resolves to the output (an upload it started, applied
+	 * like any other) and the sync's status after the call.
 	 */
-	uploadCremaProfile(
+	setDesiredProfile(
 		profile: unknown,
 		qc: BrewOverrides,
 		nowMs: number
-	): Promise<{ output: CoreOutput; fingerprint: string | null }>;
+	): Promise<{ output: CoreOutput; status: ProfileSyncStatus }>;
+	/** The profile sync's state: desired / last-pushed fingerprints, uploading, retrying. */
+	profileSyncStatus(): Promise<ProfileSyncStatus>;
 	/** Cancel an in-progress upload; emits `ProfileUploadFailed { Aborted }`. */
 	cancelProfileUpload(): Promise<CoreOutput>;
 	/**
@@ -503,7 +504,7 @@ export interface CremaCore {
 	 * running upload. `nowMs` is a `performance.now()` time.
 	 */
 	profileWriteFailed(nowMs: number, uploadId: number): Promise<CoreOutput>;
-	/** `true` from `uploadCremaProfile` until the tail ack / failure / cancel. */
+	/** `true` from an upload's start until the tail ack / failure / cancel. */
 	profileUploadInProgress(): Promise<boolean>;
 	/**
 	 * Name of the profile most recently uploaded successfully — the
@@ -1198,11 +1199,18 @@ async function createCore(): Promise<CremaCore> {
 			const raw = bridge.scale_uuids();
 			return raw === undefined ? undefined : (JSON.parse(raw) as ScaleUuids);
 		},
-		async uploadCremaProfile(profile, qc, nowMs) {
-			const upload = JSON.parse(
-				bridge.upload_crema_profile(JSON.stringify(profile), JSON.stringify(qc), nowMs)
-			) as ProfileUploadOutput;
-			return { output: upload.output, fingerprint: upload.fingerprint ?? null };
+		async setDesiredProfile(profile, qc, nowMs) {
+			const sync = JSON.parse(
+				bridge.set_desired_profile(
+					profile == null ? undefined : JSON.stringify(profile),
+					JSON.stringify(qc),
+					nowMs
+				)
+			) as ProfileSyncOutput;
+			return { output: sync.output, status: sync.status };
+		},
+		async profileSyncStatus() {
+			return JSON.parse(bridge.profile_sync_status()) as ProfileSyncStatus;
 		},
 		async cancelProfileUpload() {
 			return parseOutput(bridge.cancel_profile_upload());
@@ -1534,6 +1542,7 @@ async function createCore(): Promise<CremaCore> {
 }
 
 export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareBuildReport } from './crema-core';
+export type { BrewOverrides, ProfileSyncStatus } from './crema-core';
 export type {
 	FirmwareArtifact,
 	FirmwareImageCheck,

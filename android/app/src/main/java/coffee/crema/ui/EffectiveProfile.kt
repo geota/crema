@@ -105,3 +105,8 @@ internal fun brewDialOf(
         )
     }.getOrNull()
 }
+
+/** The DE1 holds the desired profile (the core's profile sync pushed it on
+ *  this connection). */
+internal fun coffee.crema.core.ProfileSyncStatus.holdsDesired(): Boolean =
+    desired != null && desired == lastPushed

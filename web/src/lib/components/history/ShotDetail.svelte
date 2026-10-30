@@ -532,7 +532,7 @@
 	 * Reload the profile this shot was pulled against. Looks up the profile
 	 * by name in the local store (`StoredShot.profileName` is the only
 	 * identifying field we persist on shots) and routes through
-	 * `app.syncActiveProfile`, same as the /profiles → Load on Brew flow. If
+	 * `app.setDesiredProfile`, same as the /profiles → Load on Brew flow. If
 	 * the profile has since been deleted or renamed, surface a friendly
 	 * message rather than a no-op.
 	 */
@@ -555,11 +555,9 @@
 			return;
 		}
 		store.setActive(profile.id);
-		// `syncActiveProfile` keeps the fingerprint cache in lockstep
-		// with the upload — without it, the next Coffee tap on Brew
-		// would treat the DE1's loaded bytes as still being whatever
-		// was there before, and trigger an unnecessary re-upload.
-		void app.syncActiveProfile(profile, {});
+		// The core's desired profile; its profile sync uploads it unless the
+		// DE1 already holds it.
+		void app.setDesiredProfile(profile);
 	}
 
 	/**

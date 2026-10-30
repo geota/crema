@@ -4,7 +4,7 @@ import coffee.crema.MainSources
 import coffee.crema.core.Command
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
-import coffee.crema.core.ProfileUploadOutput
+import coffee.crema.core.ProfileSyncOutput
 import coffee.crema.core.WriteTarget
 import coffee.crema.core.brewTempRange
 import coffee.crema.core.cremaProfileFromWire
@@ -48,17 +48,20 @@ class EffectiveProfileTest {
         it[4] = model.toByte()
     }
 
-    /** Upload through the shell's one entry point; the normal frames' bytes. */
+    /** Upload through the shell's one entry point (the desired profile, which
+     *  the core's profile sync uploads on a settled, idle connection); the
+     *  normal frames' bytes and the fingerprint the core is pushing. */
     private fun upload(qcJson: String?): Pair<List<ByteArray>, String?> {
         val bridge = CremaBridge()
         bridge.onNotification(NotificationSource.DE1_MMR_READ, modelReply(1), 0uL)
-        val out = json.decodeFromString(ProfileUploadOutput.serializer(), bridge.uploadCremaProfile(crema, qcJson, 0uL))
+        bridge.settleForUploads()
+        val out = json.decodeFromString(ProfileSyncOutput.serializer(), bridge.setDesiredProfile(crema, qcJson, 0uL))
         val frames = out.output.commands.filterIsInstance<Command.WriteCharacteristic>()
             .filter { it.content.target == WriteTarget.De1ProfileFrame }
             .map { w -> w.content.data.map { it.toByte() }.toByteArray() }
             .dropLast(1) // the tail
             .filter { (it[0].toInt() and 0xFF) < 32 } // extension frames carry index + 32
-        return frames to out.fingerprint
+        return frames to out.status.desired
     }
 
     @Test
@@ -118,12 +121,12 @@ class EffectiveProfileTest {
     }
 
     @Test
-    fun `f6_6 the shell has one profile upload, the core's effective one`() {
-        // (Kotlin mangles a name with an unsigned parameter: `uploadCremaProfile-<hash>`.)
+    fun `f6_6 the shell has no profile upload, only the desired profile`() {
+        // (Kotlin mangles a name with an unsigned parameter: `setDesiredProfile-<hash>`.)
         val methods = CremaBridge::class.java.methods.map { it.name.substringBefore('-') }
-            .filter { it.startsWith("upload") && "rofile" in it }
-        assertEquals(listOf("uploadCremaProfile"), methods.distinct())
-        val callers = MainSources.kotlinFiles().filter { (_, text) -> "uploadCremaProfile(" in text }.map { it.first }
+        assertTrue("setDesiredProfile" in methods)
+        assertEquals(emptyList(), methods.filter { it.startsWith("upload") && "rofile" in it })
+        val callers = MainSources.kotlinFiles().filter { (_, text) -> "bridge.setDesiredProfile(" in text }.map { it.first }
         assertEquals(listOf("coffee/crema/ui/MainViewModel.kt"), callers)
         val handPatched = MainSources.kotlinFiles().filter { (_, text) -> "overrideBrewParamsJson" in text }.map { it.first }
         assertTrue(handPatched.isEmpty(), "no shell code hand-patches upload bytes: $handPatched")

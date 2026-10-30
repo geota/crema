@@ -84,3 +84,38 @@ describe('brew overrides (AC-F6.5)', () => {
 		expect(normalizeBrewOverrides(hotter, { brewTemp: 99 })).toEqual({ brewTemp: 97 });
 	});
 });
+
+describe('the dial lives at app level (F7)', () => {
+	it('a dial mounted again starts from the app-level overrides for its profile', () => {
+		const active = new ReactiveBox(profileAt(92, 'A'));
+		// What the app holds for the active profile (CremaApp.brewOverridesFor).
+		const app = new ReactiveBox<{ profileId: string; qc: { brewTemp?: number } } | null>(null);
+		const overridesFor = (p: CremaProfile) =>
+			app.value?.profileId === p.id ? app.value.qc : {};
+		const mount = () =>
+			new BrewParamState(
+				() => seedOf(active.value),
+				undefined,
+				undefined,
+				() => brewTempRange(active.value),
+				() => overridesFor(active.value)
+			);
+
+		// The dial moves; the dashboard reports it to the app.
+		const first = mount();
+		first.set('brewTemp', 94.5);
+		app.value = { profileId: active.value.id, qc: first.qcOverrides() };
+
+		// Leaving Brew drops the component; coming back mounts a new dial.
+		const again = mount();
+		expect(again.current.brewTemp).toBe(94.5);
+		expect(again.qcOverrides()).toEqual({ brewTemp: 94.5 });
+		expect(again.isOverridden('brewTemp')).toBe(true);
+
+		// Another profile: the app's overrides are for the old one — none.
+		active.value = profileAt(90, 'B');
+		flushSync();
+		expect(again.current.brewTemp).toBe(90);
+		expect(again.qcOverrides()).toEqual({});
+	});
+});

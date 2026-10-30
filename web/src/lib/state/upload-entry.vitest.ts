@@ -1,9 +1,9 @@
 /**
- * AC-F6.6: the shell has exactly one way to upload a profile — the core's
- * `upload_crema_profile`, which builds every byte from (library profile, Quick
- * Controls overrides). Nothing else in the shell can send a raw or hand-edited
- * profile: the bridge no longer exports a raw `upload_profile`, and the one
- * call site of the entry point is `CremaApp.uploadEffectiveProfile`.
+ * AC-F6.6 (with F7): the shell never uploads a profile itself. It sets the
+ * desired profile (`set_desired_profile`: library profile + Quick Controls
+ * overrides) and the core's profile sync builds every byte and decides when to
+ * send them. The bridge exports no upload at all, and the one shell call site
+ * of the entry point is `CremaApp.setDesiredProfile`.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -33,18 +33,24 @@ function filesWith(needle: RegExp): string[] {
 }
 
 describe('one upload entry point (AC-F6.6)', () => {
-	it('f6_6 the bridge exports no raw profile upload', () => {
+	it('f6_6 the bridge exports no profile upload, only the desired profile', () => {
 		const methods = Object.getOwnPropertyNames(CremaBridge.prototype);
-		expect(methods).toContain('upload_crema_profile');
-		expect(methods.filter((m) => /^upload.*profile/.test(m))).toEqual([
-			'upload_crema_profile'
-		]);
+		expect(methods).toContain('set_desired_profile');
+		expect(methods.filter((m) => /^upload.*profile/.test(m))).toEqual([]);
 	});
 
-	it('f6_6 only the core wrapper calls the bridge upload, and only the app calls the wrapper', () => {
-		expect(filesWith(/upload_crema_profile|upload_profile\b/)).toEqual(['lib/core/index.ts']);
-		expect(filesWith(/\.uploadCremaProfile\(/)).toEqual(['lib/state/app.svelte.ts']);
+	it('f6_6 only the core wrapper calls the bridge, and only the app calls the wrapper', () => {
+		expect(filesWith(/set_desired_profile|upload_crema_profile|upload_profile\b/)).toEqual([
+			'lib/core/index.ts'
+		]);
+		expect(filesWith(/core\.setDesiredProfile\(/)).toEqual(['lib/state/app.svelte.ts']);
 		// No shell code hand-builds upload bytes from a wire profile any more.
-		expect(filesWith(/\buploadProfile\b/)).toEqual([]);
+		expect(filesWith(/\buploadProfile\b|uploadCremaProfile|uploadEffectiveProfile/)).toEqual([]);
+	});
+});
+
+describe('nothing about the DE1 profile is persisted (AC-F7.6)', () => {
+	it('f7_6 no shell code reads or writes a "DE1 holds" fingerprint', () => {
+		expect(filesWith(/lastFingerprint|activeProfileFingerprint|LAST_FINGERPRINT_KEY/)).toEqual([]);
 	});
 });

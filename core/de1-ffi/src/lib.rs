@@ -1633,7 +1633,7 @@ pub fn profile_bounds_json() -> String {
 
 /// djb2 base-36 fingerprint of the effective profile — the library
 /// `CremaProfile` JSON with the optional Quick Controls overrides JSON applied
-/// — i.e. the hash of exactly the bytes `upload_crema_profile` writes. See
+/// — i.e. the hash of exactly the bytes `an upload of `(profile, qc)` writes. See
 /// [`de1_domain::effective_profile_fingerprint`].
 ///
 /// # Errors
@@ -2670,6 +2670,17 @@ impl CremaBridge {
         self.emit(out)
     }
 
+    /// The connect sweep's writes without settling the profile sync's
+    /// connection — for re-sending the settings outside the link's ready
+    /// transition (a restored backup); safe while the DE1 is down. See
+    /// [`CremaCore::reapply_machine_settings`](de1_app::CremaCore::reapply_machine_settings).
+    pub fn reapply_machine_settings(&self, settings_json: String, now_ms: u64) -> String {
+        let out = self
+            .core()
+            .reapply_machine_settings_json(&settings_json, now_ms);
+        self.emit(out)
+    }
+
     /// Feed the idle-sleep timer ("Sleep after") one input — a JSON
     /// `IdleSleepInput` (`{"type":"Tick"}`, `{"type":"Configure","content":
     /// {"minutes":60}}`, `{"type":"Activity","content":{"kind":"Touch"}}`,
@@ -3339,33 +3350,40 @@ impl CremaBridge {
         self.core().builtin_profiles_json()
     }
 
-    /// Upload the effective profile: the library `CremaProfile` in
-    /// `profile_json` with the Quick Controls overrides in `qc_json`
-    /// (`{dose, yield, brewTemp, preinf}`; `null` = none) applied by the core.
-    /// The only way a shell uploads a profile — the core builds every byte
-    /// from `(profile, qc)` (AC-F6.6).
+    /// Tell the core which profile the DE1 should hold: the library
+    /// `CremaProfile` in `profile_json` (`null` = no active profile) with the
+    /// Quick Controls overrides in `qc_json` (`{dose, yield, brewTemp,
+    /// preinf}`; `null` = none). Call on every activation, edit, override
+    /// change and restore. The core's profile sync uploads it — the only way
+    /// a profile reaches the DE1 (AC-F6.6) — on every connect, on a change,
+    /// with retries, never while the machine is busy and never on a read-only
+    /// mirror. See [`CremaCore::set_desired_profile`](de1_app::CremaCore::set_desired_profile).
     ///
-    /// Returns a JSON `ProfileUploadOutput`: `output` is the upload's
-    /// `CoreOutput` (one `ProfileUploadStarted` + every write on success; one
-    /// `ProfileUploadFailed` on a rejected profile; one `DecodeError` on
-    /// malformed JSON) and `fingerprint` the hash of the bytes uploaded
-    /// (`null` when nothing was). See
-    /// [`CremaCore::upload_crema_profile_json`](de1_app::CremaCore::upload_crema_profile_json).
-    pub fn upload_crema_profile(
+    /// Returns a JSON `ProfileSyncOutput`: `output` (an upload this started,
+    /// or one `DecodeError` on malformed JSON) and `status`.
+    pub fn set_desired_profile(
         &self,
-        profile_json: String,
+        profile_json: Option<String>,
         qc_json: Option<String>,
         now_ms: u64,
     ) -> String {
-        let mut upload =
-            self.core()
-                .upload_crema_profile_json(&profile_json, qc_json.as_deref(), now_ms);
+        let mut sync = self.core().set_desired_profile_json(
+            profile_json.as_deref(),
+            qc_json.as_deref(),
+            now_ms,
+        );
         if self.read_only.load(Ordering::Relaxed) {
-            upload.output.commands.clear();
+            sync.output.commands.clear();
         }
-        serde_json::to_string(&upload).unwrap_or_else(|_| {
-            r#"{"output":{"events":[],"commands":[]},"fingerprint":null}"#.to_string()
+        serde_json::to_string(&sync).unwrap_or_else(|_| {
+            r#"{"output":{"events":[],"commands":[]},"status":{"desired":null,"lastPushed":null,"uploading":false,"retrying":false}}"#.to_string()
         })
+    }
+
+    /// The profile sync's state as JSON `ProfileSyncStatus` (`desired`,
+    /// `lastPushed`, `uploading`, `retrying`).
+    pub fn profile_sync_status(&self) -> String {
+        serde_json::to_string(&self.core().profile_sync_status()).unwrap_or_default()
     }
 
     /// Cancel an in-progress profile upload.

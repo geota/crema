@@ -70,19 +70,13 @@ class ActiveProfilePushTest {
     }
 
     @Test
-    fun `the fingerprint-skip path still hands the core the step weights`() {
-        // App restart: a fresh core, the DE1 still holds A-Flow.
+    fun `an activation with no upload still hands the core the step weights`() {
+        // App restart: a fresh core, the DE1 still holds A-Flow (this
+        // connection's profile sync may not upload it again).
         val core = FakeCore()
         // Startup restore / shot start: pushStopTargets → the active profile.
         pushActiveProfile(aflow, ::toWire, { core.activations += it })
-        // The shot start's effective profile (a Quick-Controls dose/yield
-        // override applied by the core, which keeps step weights — core test
-        // `step_weights_survive_the_overrides`) still matches what the DE1
-        // holds → skip.
-        val skipped = shouldSkipProfileUpload("fp", "fp", de1Ready = true)
-        if (!skipped) core.uploads++
-        assertTrue(skipped)
-        assertEquals(0, core.uploads, "no upload on the skip path")
+        assertEquals(0, core.uploads, "the push itself uploads nothing")
         assertEquals(listOf(null, 3.6f, null), weightsOf(core.activations.single()))
     }
 

@@ -40,11 +40,13 @@ import { commitShotCompletion } from '#lib/history/shot-persistence.js';
 import { getCaptureStore } from '#lib/capture/index.js';
 import {
 	getProfileStore,
-	profileFingerprint,
+	effectiveCremaProfile,
+	preinfusionSeconds,
 	type CremaProfile,
 	type ProfileFingerprintOverrides
 } from '#lib/profiles/index.js';
-import { readJson, writeJson } from '#lib/utils/storage.js';
+import { writeJson } from '#lib/utils/storage.js';
+import type { ProfileSyncStatus } from '#lib/core/index.js';
 import { isSerialStolen } from '#lib/decent/stolen-serials.js';
 import { SAW_MODEL_KEY, seedSawModel } from './saw-model-store';
 import { getSettingsStore } from '#lib/settings/index.js';
@@ -208,14 +210,6 @@ const CLEARED_DE1_READOUT = {
 	de1Calibration: EMPTY_DE1_CALIBRATION,
 	machineError: null,
 	idleSince: null
-	// `activeProfileFingerprint` is **deliberately omitted** here so the
-	// connect / replay-start paths retain the hydrated localStorage
-	// value across the clear — without that, the connect-time
-	// `ensureLoadedMatches()` would always see a `null` cache and
-	// re-upload, defeating the persistence design. `disconnectDe1` /
-	// `replayCapture` clear the fingerprint explicitly (the DE1 is
-	// unreachable / the replay is offline; the cache is no longer
-	// authoritative).
 } as const satisfies Partial<UiSnapshot>;
 
 /**
@@ -226,16 +220,27 @@ const CLEARED_DE1_READOUT = {
 const SCALE_LOW_BATTERY_PCT = 25;
 
 /**
- * localStorage key for the most recent profile-upload fingerprint —
- * persisted on every `ProfileUploadCompleted` and hydrated into the
- * snapshot on app construction. Lets a page reload that keeps the DE1
- * connected (or a quick reconnect) skip the defensive auto-upload when
- * the machine still has the bytes we last sent.
+ * How long the Quick Controls dial must rest before its overrides become the
+ * desired profile (de1app debounces its temperature dial by 0.5 s too), so a
+ * run of stepper taps uploads once.
  */
-// v2 (2026-10-29): uploads now wait for the machine model, so a fingerprint a
-// Bengle cached for a classic-encoded upload (v1, cohort review 2026-10-28
-// #2 N3) must not skip the next upload. The bump re-uploads once per browser.
-const LAST_FINGERPRINT_KEY = 'crema.profile-sync.lastFingerprint.v2';
+const DIAL_PUSH_DEBOUNCE_MS = 500;
+
+/** The five Quick Sheet values a shot records as they were at its start. */
+interface ShotStartBrewParams {
+	yieldTarget: number;
+	brewTemp: number;
+	preinfuseTarget: number;
+	stopOnWeight: boolean;
+	autoTare: boolean;
+}
+
+/** Two override sets with the same values (absent = absent). */
+function sameOverrides(a: ProfileFingerprintOverrides, b: ProfileFingerprintOverrides): boolean {
+	return (
+		a.dose === b.dose && a.yield === b.yield && a.brewTemp === b.brewTemp && a.preinf === b.preinf
+	);
+}
 
 /**
  * The replay-specific helpers — `composeReplayStartMessage`,
@@ -314,12 +319,11 @@ export class CremaApp {
 	 */
 	private shotStartedAtMs: number | null = null;
 
-	// The profile-upload coordination state — the download-guard clock, the
-	// in-flight fingerprint, and the completion waiter — moved into the
-	// `ProfileSync` service (T-21). `syncActiveProfile` drives it; the
-	// `ProfileUploadCompleted` / `ProfileUploadFailed` fold arms call
-	// `ProfileSync.completed` / `.failed`; `requestMachineState` awaits
-	// `ProfileSync.profileDownloadGuard`.
+	// The core owns the profile sync (when to upload, what the DE1 holds);
+	// the `ProfileSync` service only lets a start wait for its fingerprint.
+	// The `ProfileSyncHolds` / `ProfileUploadCompleted` / `ProfileUploadFailed`
+	// fold arms call `ProfileSync.holds` / `.completed` / `.failed`;
+	// `requestMachineState` awaits `ProfileSync.profileDownloadGuard`.
 
 	/**
 	 * Active `setInterval` id for the scale-heartbeat loop, or `null` when
@@ -355,19 +359,13 @@ export class CremaApp {
 	 * would let a post-shot dial change retroactively rewrite history,
 	 * the snapshot-vs-live failure mode).
 	 *
-	 * `null` between shots and on a headless / replay path that does not
-	 * pass through the Quick Sheet — both leave the `StoredShot`'s QC
-	 * fields absent and downstream readers fall back to the embedded
-	 * profile slot. Cleared at `ShotCompleted` so a never-completed shot
-	 * does not leak its snapshot into the next one.
+	 * `null` between shots and on a path that does not pass through the
+	 * Quick Sheet: a start at the group head records the dial the DE1 was
+	 * given instead ({@link pushedBrewParams}); a replay sets its own.
+	 * Cleared at `ShotCompleted` so a never-completed shot does not leak its
+	 * snapshot into the next one.
 	 */
-	private brewParamsAtShotStart: {
-		yieldTarget: number;
-		brewTemp: number;
-		preinfuseTarget: number;
-		stopOnWeight: boolean;
-		autoTare: boolean;
-	} | null = null;
+	private brewParamsAtShotStart: ShotStartBrewParams | null = null;
 
 	constructor(
 		private readonly core: CremaCore,
@@ -482,17 +480,10 @@ export class CremaApp {
 					// cancels its deferred start on disconnect too).
 					this.cancelStart('disconnected');
 				}
-				// Defensive re-upload of the active profile when the DE1
-				// becomes ready. Mirrors the legacy DE1-app's
-				// `save_settings_to_de1` → `de1_send_shot_frames` chain
-				// (the 2026-05-21 HCI snoop confirmed it fires ~80 ms
-				// after the connect-time subscriptions complete).
-				// `ensureLoadedMatches()` consults the cached
-				// fingerprint (persisted across reloads via localStorage)
-				// to skip the upload when the DE1 still has the right
-				// bytes — without it, the DE1 wakes up with no profile
-				// loaded and the user has to remember to click Load on
-				// Brew every session.
+				// The active profile goes to the DE1 on every connect: the
+				// core's profile sync uploads it after the connect sweep
+				// below (legacy de1app `save_settings_to_de1` →
+				// `de1_send_shot_frames`, reaprime `WorkflowDeviceSync`).
 				if (de1State === 'ready' && !wasReady) {
 					// Every connect path (fresh, launch, reload, auto-reconnect)
 					// tells a firmware flash the link is up, so a power-cycle wait
@@ -517,7 +508,9 @@ export class CremaApp {
 				// sweep (audit H2). They run once the flash lets go.
 				const held = this.firmware?.holdsLink ?? false;
 				if (de1State === 'ready' && !held) {
-					this.ensureLoadedMatches();
+					// The post-connect steps are queued; the reconnect's timeline
+					// ends here (a no-op with no open episode).
+					reconnectTimelines.postConnectDone('DE1');
 				}
 				// The idle-sleep timer learns the link state (a reconnect is not
 				// presence: no poke here — the core pokes on real activity only).
@@ -625,16 +618,6 @@ export class CremaApp {
 		// A flash that was waiting for the DE1's power-cycle before a reload
 		// comes back with its lock (audit M3).
 		void this.firmware.restore();
-		// Hydrate the last-uploaded profile fingerprint from localStorage,
-		// so a page reload that kept the DE1 connected (or a quick
-		// reconnect to the same machine) skips the defensive auto-upload
-		// on `de1State === 'ready'`. `null` (no prior upload, or a fresh
-		// install) leaves the snapshot's field untouched — the connect-
-		// time `ensureLoadedMatches()` will see no cache and upload.
-		const persisted = readJson<string | null>(LAST_FINGERPRINT_KEY, null);
-		if (persisted !== null) {
-			this.state.patch({ activeProfileFingerprint: persisted });
-		}
 		// Best-effort: ask the browser for persistent storage (so IndexedDB
 		// captures aren't evicted under disk pressure), and garbage-collect
 		// any captures whose StoredShot no longer exists. Fire and forget —
@@ -839,26 +822,11 @@ export class CremaApp {
 				);
 			}
 			if (event.type === 'ProfileUploadCompleted') {
-				// Hand the completion to the `ProfileSync` service (T-21): it
-				// stamps the download-guard clock (opening the BC 9788201734
-				// window `profileDownloadGuard` reads), resolves the
-				// `syncActiveProfile` waiter (the lazy re-upload path on
-				// `startShot()`), and returns the just-landed fingerprint — or
-				// `null` if no upload was pending. `runSync` is safe: `completed`
-				// is fully synchronous, so the supersession `cancel` in `sync`
-				// observes the cleared pending before it returns. No runtime ⇒ no
-				// DE1 ⇒ this event never fires, so the guard is belt-and-braces.
-				const committed = this.runtime
-					? this.runtime.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.completed)))
-					: null;
-				// Commit the fingerprint into the snapshot + persist it across
-				// reloads (the rune store + localStorage stay here — the service
-				// owns coordination, not persistence). Skip when nothing was
-				// pending (e.g. a late completion after a 15 s timeout).
-				if (committed !== null) {
-					this.state.patch({ activeProfileFingerprint: committed });
-					writeJson(LAST_FINGERPRINT_KEY, committed);
-				}
+				// Stamp the download-guard clock (opening the BC 9788201734
+				// window `profileDownloadGuard` reads). `runSync` is safe:
+				// `completed` is fully synchronous. No runtime ⇒ no DE1 ⇒ this
+				// event never fires, so the guard is belt-and-braces.
+				this.runtime?.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.completed)));
 				// Fire `profileUploaded` webhook — the core gives us the
 				// title; the dose / yield come from the active profile in
 				// the library (the same profile we just uploaded). `null`
@@ -877,30 +845,25 @@ export class CremaApp {
 				}
 			}
 			if (event.type === 'ProfileUploadFailed') {
-				// What the DE1 holds after a failed upload is unknown: frames
-				// are indexed slot writes with no commit step, so an
-				// interrupted upload can leave the new header's frame count
-				// over a mix of new and old frames (Decenza aa8232e6). Forget
-				// the "already loaded" fingerprint (snapshot + localStorage)
-				// so no later sync skips the upload. `ProfileSync.failed`
-				// resolves the waiter `false` and clears the pending entry so
-				// `syncActiveProfile` surfaces the problem to its caller (T-21).
+				// A start waiting on the DE1 fails (the core retries the upload
+				// on its own backoff and puts the profile back after any other
+				// failed upload).
 				this.runtime?.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.failed)));
-				if (this.state.current.activeProfileFingerprint !== null) {
-					this.state.patch({ activeProfileFingerprint: null });
-				}
-				writeJson(LAST_FINGERPRINT_KEY, null);
 			}
-			if (event.type === 'ProfileReuploadNeeded') {
-				// The core saw the machine Idle with an unknown profile after
-				// a failed upload — put the active profile back now, so a
-				// group-head start can't brew the mix (Decenza ReArm). The
-				// request stays outstanding in the core until an upload starts
-				// and is repeated every 5 s, so a link that is not ready yet is
-				// asked again rather than dropped (#6 #8).
-				if (this.state.current.de1State === 'ready' && !(this.firmware?.holdsLink ?? false)) {
-					this.state.log('Profile on the DE1 is unknown after a failed upload — re-uploading.');
-					this.ensureLoadedMatches();
+			if (event.type === 'ProfileSyncHolds') {
+				// The DE1 holds this effective profile: a start waiting for it
+				// goes on.
+				const { fingerprint } = event.content;
+				this.runtime?.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.holds(fingerprint))));
+			}
+			if (event.type === 'ProfileSyncWarning') {
+				// The core's one non-blocking warning per streak of failed
+				// profile uploads (it keeps retrying: 3 s, 10 s, then 30 s).
+				if (event.content.active) {
+					toast.info('Could not load the profile on the DE1 — retrying.', 6000);
+					this.state.log('Profile upload to the DE1 failed — the core is retrying.');
+				} else {
+					this.state.log('Profile upload to the DE1 recovered.');
 				}
 			}
 			if (event.type === 'WaterSessionStarted' && event.content.kind === 'Flush') {
@@ -995,7 +958,10 @@ export class CremaApp {
 		const snapshot = this.state.current;
 		const profileName = snapshot.activeProfileName ?? activeProfile?.name ?? null;
 		const dose = activeProfile?.dose ?? null;
-		const brewParams = this.brewParamsAtShotStart;
+		// A start at the group head has no Quick Sheet snapshot: record the
+		// dial the DE1 was given instead.
+		const brewParams =
+			this.brewParamsAtShotStart ?? (activeProfile ? this.pushedBrewParams(activeProfile) : null);
 
 		return {
 			bean: beanSnapshot,
@@ -1004,6 +970,25 @@ export class CremaApp {
 			brewParams: brewParams ? { ...brewParams } : null,
 			grinderModel,
 			source: 'live'
+		};
+	}
+
+	/**
+	 * The shot-start snapshot for a shot the app did not start (the group
+	 * head): `profile` with the overrides last given to the core as its
+	 * desired profile — what the DE1 runs — or, before any, the live dial.
+	 */
+	private pushedBrewParams(profile: CremaProfile): ShotStartBrewParams {
+		const desired = this.#desiredOverrides;
+		const qc = desired?.profileId === profile.id ? desired.qc : this.brewOverridesFor(profile);
+		const run = effectiveCremaProfile(profile, qc);
+		const settings = getSettingsStore().current;
+		return {
+			yieldTarget: run.yieldOut,
+			brewTemp: run.brewTemp,
+			preinfuseTarget: preinfusionSeconds(run),
+			stopOnWeight: settings.stopOnWeight,
+			autoTare: settings.autoTareOnShotStart
 		};
 	}
 
@@ -1074,15 +1059,15 @@ export class CremaApp {
 	 */
 	/**
 	 * The flash let go of the link: run what a reconnect skipped while it held
-	 * it (the identity reads, the settings sweep, the profile check). The
-	 * identity reads go first, like Android's `afterFirmwareRelease`: the core
-	 * refused them during the hold, and the flash changed the build.
+	 * it (the identity reads, the settings sweep, after which the core's
+	 * profile sync uploads). The identity reads go first, like Android's
+	 * `afterFirmwareRelease`: the core refused them during the hold, and the
+	 * flash changed the build.
 	 */
 	private afterFirmwareRelease(): void {
 		if (this.state.current.de1State !== 'ready') return;
 		void this.de1.readMachineInfo();
 		this.sweep.onDe1State('ready');
-		this.ensureLoadedMatches();
 		// No presence poke here: the idle-sleep timer (#139) pokes on real
 		// activity only, and the core pinned its countdown while the flash
 		// held the DE1, so it starts over from this release.
@@ -1258,22 +1243,15 @@ export class CremaApp {
 
 	/**
 	 * The core loaded its 1 °C cold-maintenance profile (old firmware, cold
-	 * machine): the DE1 no longer holds the user's profile, so forget the
-	 * "already loaded" fingerprint at once, and put the active profile back
-	 * when the cycle ends (Decenza re-uploads it on leaving its descale page).
+	 * machine). The core's profile sync puts the active profile back once the
+	 * cycle is over (Decenza re-uploads it on leaving its descale page); the
+	 * shell only reports a failed run.
 	 */
 	private onColdMaintenanceProgress(
 		phase: string,
 		state: string,
 		failure: MaintenanceFailure | null | undefined
 	): void {
-		if (this.state.current.activeProfileFingerprint !== null) {
-			writeJson(LAST_FINGERPRINT_KEY, null);
-			this.state.patch({ activeProfileFingerprint: null });
-		}
-		if (isMaintenanceTerminal(phase)) {
-			if (this.state.current.de1State === 'ready') this.ensureLoadedMatches();
-		}
 		// The cold profile never loaded (or was replaced), so the core did not
 		// send the request.
 		if (phase === 'Failed') toast.error(maintenanceFailedMessage(state, failure));
@@ -1301,17 +1279,7 @@ export class CremaApp {
 		this.sweep.stop();
 		await this.de1.disconnect();
 		this.stolenSerial = false;
-		// The fingerprint cache (snapshot + localStorage) is wiped on
-		// an explicit disconnect: the DE1 may be powered off or the
-		// user may be moving to a different machine, so the cached
-		// "what's on it" assumption no longer holds. A page-reload
-		// path (no explicit disconnect) keeps the localStorage value
-		// for cheap reconnects — see the hydrate in the constructor.
-		writeJson(LAST_FINGERPRINT_KEY, null);
-		this.state.patch({
-			...CLEARED_DE1_READOUT,
-			activeProfileFingerprint: null
-		});
+		this.state.patch(CLEARED_DE1_READOUT);
 	}
 
 	// ---- Reconnect on launch ----------------------------------------------
@@ -1490,26 +1458,72 @@ export class CremaApp {
 	}
 
 	/**
-	 * Upload the effective profile — the library `profile` with the Quick
-	 * Controls overrides `qc` applied by the core — to the DE1. The core builds
-	 * every byte (`CremaCore.uploadCremaProfile`, the shell's only upload); the
-	 * orchestrator routes each `WriteCharacteristic` through
-	 * `de1.writeCharacteristic`. Progress events (`ProfileUploadStarted` /
-	 * `ProfileUploadProgress` / `ProfileUploadCompleted` /
-	 * `ProfileUploadFailed`) arrive over the same `applyCoreOutput` path
-	 * the rest of the events use; the UI snapshot's `profileUploadProgress`
-	 * and `activeProfileName` fields reflect them.
-	 *
-	 * Returns the fingerprint of the bytes uploaded (`null` when nothing was).
+	 * The live Quick Controls overrides and the profile they were dialled on —
+	 * app-level state, the one source of truth whichever screen is showing:
+	 * the Brew dashboard's dial reads them when it mounts and writes them as it
+	 * moves. They are part of what the DE1 should hold, so a group-head start
+	 * runs the dialled profile. Not persisted (like Android's `brewParams`): a
+	 * restart starts with none. A profile change clears them.
 	 */
-	async uploadEffectiveProfile(
-		profile: CremaProfile,
-		qc: ProfileFingerprintOverrides = {}
-	): Promise<string | null> {
-		const now = performance.now();
-		const { output, fingerprint } = await this.core.uploadCremaProfile(profile, qc, now);
+	#brewOverrides = $state.raw<{ profileId: string; qc: ProfileFingerprintOverrides } | null>(
+		null
+	);
+
+	/** The profile and overrides last given to the core as its desired profile. */
+	#desiredOverrides: { profileId: string; qc: ProfileFingerprintOverrides } | null = null;
+
+	/** The pending debounced push of a dial change ({@link setBrewOverrides}). */
+	#overridesPush: ReturnType<typeof setTimeout> | null = null;
+
+	/**
+	 * Set the live overrides for `profile` (the dial moved). They become the
+	 * core's desired profile after the dial rests {@link DIAL_PUSH_DEBOUNCE_MS}
+	 * (de1app's 0.5 s), so stepping the dial uploads once, not per step. A
+	 * repeat of the current overrides changes nothing.
+	 */
+	setBrewOverrides(profile: CremaProfile, qc: ProfileFingerprintOverrides): void {
+		const cur = this.#brewOverrides;
+		if (cur?.profileId === profile.id && sameOverrides(cur.qc, qc)) return;
+		this.#brewOverrides = { profileId: profile.id, qc };
+		if (this.#overridesPush !== null) clearTimeout(this.#overridesPush);
+		this.#overridesPush = setTimeout(() => {
+			this.#overridesPush = null;
+			void this.setDesiredProfile(profile, qc);
+		}, DIAL_PUSH_DEBOUNCE_MS);
+	}
+
+	/**
+	 * The live overrides dialled on `profile`, or none — what the dial shows
+	 * when it mounts, and what goes with that profile to the DE1. Reactive.
+	 */
+	brewOverridesFor(profile: CremaProfile | null): ProfileFingerprintOverrides {
+		const cur = this.#brewOverrides;
+		return profile !== null && cur?.profileId === profile.id ? cur.qc : {};
+	}
+
+	/**
+	 * Tell the core which profile the DE1 should hold: the library `profile`
+	 * (`null` = none active) with the Quick Controls overrides `qc` — by
+	 * default the live ones dialled on that profile, so activation, edits and
+	 * the boot push the overridden profile, never a bare one over a dial. The
+	 * core's profile sync uploads it (the shell's only way to put a profile on
+	 * the DE1) — on every connect, on a change, coalesced while an upload
+	 * runs, retried with backoff, never while the machine is busy. The core
+	 * ignores a repeat. Any upload it starts is applied like every other
+	 * output. Returns the sync's status.
+	 */
+	async setDesiredProfile(
+		profile: CremaProfile | null,
+		qc: ProfileFingerprintOverrides = this.brewOverridesFor(profile)
+	): Promise<ProfileSyncStatus> {
+		// Another profile (or none) is active: the old dial no longer applies.
+		if (this.#brewOverrides !== null && this.#brewOverrides.profileId !== profile?.id) {
+			this.#brewOverrides = null;
+		}
+		this.#desiredOverrides = profile === null ? null : { profileId: profile.id, qc };
+		const { output, status } = await this.core.setDesiredProfile(profile, qc, performance.now());
 		this.applyCoreOutput(output);
-		return fingerprint;
+		return status;
 	}
 
 	/** Cancel an in-progress profile upload (emits ProfileUploadFailed{Aborted}). */
@@ -1998,129 +2012,33 @@ export class CremaApp {
 	}
 
 	/**
-	 * Defensive ensure-loaded on a fresh DE1 connect: if the active
-	 * profile's effective fingerprint differs from the snapshot's cached
-	 * `activeProfileFingerprint` (or no fingerprint is cached at all),
-	 * upload it. Mirrors the legacy de1app's `save_settings_to_de1`
-	 * convention — guarantees the DE1 always has what the user wants
-	 * loaded, without re-uploading bytes the machine already has.
-	 *
-	 * Fire-and-forget — a failure surfaces in the event log via the
-	 * normal `applyCoreOutput` stream and does not block any other
-	 * connect step. Profile store still loading → wait for it (the
-	 * `ensureLoaded` call resolves once the built-in library has been
-	 * deserialised; without this guard a fresh launch would skip the
-	 * upload because `activeId` is briefly `null`).
-	 *
-	 * No active profile → no upload — the DE1 stays empty until the
-	 * user picks one from the Profiles page; the next connect (or the
-	 * next shot tap) is when the sync kicks in.
-	 */
-	private ensureLoadedMatches(): void {
-		void (async () => {
-			try {
-				await this.syncProfileOnConnect();
-			} finally {
-				// The post-connect profile sync is the last step of a DE1
-				// reconnect's timeline (a no-op with no open episode).
-				reconnectTimelines.postConnectDone('DE1');
-			}
-		})();
-	}
-
-	/** The body of {@link ensureLoadedMatches}: push the active profile unless the DE1 already holds it. */
-	private async syncProfileOnConnect(): Promise<void> {
-		const profiles = getProfileStore();
-		await profiles.ensureLoaded();
-		const id = profiles.activeId;
-		if (id === null) {
-			this.state.log(
-				'No active profile to sync — select one on Profiles; subsequent connects will auto-push it.'
-			);
-			return;
-		}
-		const profile = profiles.get(id);
-		if (!profile) {
-			this.state.log(
-				`Active profile id "${id}" not found in store — sync skipped.`
-			);
-			return;
-		}
-		// Compute the connect-time fingerprint with no QC overrides —
-		// the user hasn't dialed anything yet, so the "current intent"
-		// is just the profile's own defaults. The shot-start path
-		// (below) reuses the same hash with the user's QC overrides
-		// merged in.
-		const desired = profileFingerprint(profile, {});
-		if (this.state.current.activeProfileFingerprint === desired) {
-			this.state.log(
-				`DE1 already has "${profile.name}" loaded (fingerprint match) — sync skipped.`
-			);
-			return;
-		}
-		this.state.log(`Sync on connect: ${profile.name}`);
-		try {
-			// Background: a user's start already uploading wins (#2 N2).
-			await this.syncActiveProfile(profile, {}, { background: true });
-		} catch (e) {
-			// `syncActiveProfile` already logs failure detail through
-			// the `ProfileUploadFailed` event fold; swallow the
-			// rejection so it doesn't bubble out of this fire-and-
-			// forget caller.
-			void e;
-		}
-	}
-
-	/**
-	 * Upload `profile` to the DE1 unless the snapshot's cached
-	 * `activeProfileFingerprint` already matches the desired one. When an
-	 * upload is needed, awaits `ProfileUploadCompleted` so callers can
-	 * sequence a follow-up action (most commonly: `startShot()`'s
-	 * `requestMachineState(Espresso)`) after the bytes are confirmed
-	 * landed.
-	 *
-	 * Returns `true` when the DE1 ends up holding the desired fingerprint
-	 * — either because the cache already matched, or because the upload
-	 * completed successfully. Returns `false` if the upload failed; the
-	 * `ProfileUploadFailed` event's fold logs the cause. A pending sync
-	 * already running on the same fingerprint is awaited rather than
-	 * re-issued, so two rapid Coffee taps don't double-upload.
-	 *
-	 * Throws only on a *write-side* failure (the BLE characteristic
-	 * write rejected before the core could even emit `ProfileUploadStarted`);
-	 * the typical async-failure path is `false` via `ProfileUploadFailed`.
+	 * Make `profile` with the overrides `qc` the desired profile and wait until
+	 * the DE1 holds it — the core's profile sync uploads it unless this
+	 * connection already pushed it. Resolves `true` once the core reports it
+	 * landed (`ProfileSyncHolds`, or at once when its status already says so),
+	 * `false` on a failed upload (the core keeps retrying) or after 15 s.
+	 * Several callers on the same profile share one wait.
 	 */
 	async syncActiveProfile(
 		profile: CremaProfile,
-		qc: ProfileFingerprintOverrides,
-		opts: { background?: boolean } = {}
+		qc: ProfileFingerprintOverrides
 	): Promise<boolean> {
-		const desired = profileFingerprint(profile, qc);
-		const alreadyLoaded = this.state.current.activeProfileFingerprint === desired;
+		// The start's own push supersedes a dial push still settling.
+		if (this.#overridesPush !== null) {
+			clearTimeout(this.#overridesPush);
+			this.#overridesPush = null;
+		}
+		const status = await this.setDesiredProfile(profile, qc);
+		const alreadyLoaded = status.desired != null && status.desired === status.lastPushed;
 		// No runtime ⇒ no Effect-routed services (and no Web Bluetooth ⇒ no DE1
-		// to upload to). The cache check is the only meaningful answer; a real
-		// upload can't happen, so report "loaded" only on a hit.
-		if (this.runtime === null) return alreadyLoaded;
-		// All coordination — the cache short-circuit, piggyback on an in-flight
-		// upload of the same fingerprint, supersession of a different one
-		// (`cancel` → `ProfileUploadFailed{Aborted}` → waiter resolves `false`),
-		// and the 15 s backstop — lives in the `ProfileSync` service (T-21). The
-		// upload still leaves through the core + BLE write cascade, confirmed by
-		// the `ProfileUploadCompleted` fold calling `ProfileSync.completed`.
+		// to upload to): only the core's status answers.
+		if (this.runtime === null || status.desired == null) return alreadyLoaded;
+		const desired = status.desired;
 		return runtimePromise(
 			this.runtime,
 			ProfileSync.pipe(
 				Effect.flatMap((ps) =>
-					ps.sync({
-						desired,
-						alreadyLoaded,
-						// The core's fingerprint of the bytes it uploaded is the
-						// one committed on completion.
-						upload: Effect.promise(() => this.uploadEffectiveProfile(profile, qc)),
-						cancel: Effect.promise(() => this.cancelProfileUpload()),
-						log: (line) => this.state.log(line),
-						background: opts.background
-					})
+					ps.sync({ desired, alreadyLoaded, log: (line) => this.state.log(line) })
 				)
 			)
 		);
@@ -2380,9 +2298,9 @@ export class CremaApp {
 	 *
 	 * Callable independently of {@link startShot} — the brew dashboard
 	 * calls this every time the user taps Coffee (just before the shot
-	 * request goes out), and a manual on-machine start (no Crema tap)
-	 * simply leaves the snapshot at its previous value; the `null`
-	 * fallback after `ShotCompleted` keeps that case sane.
+	 * request goes out). A manual on-machine start (no Crema tap) finds it
+	 * `null` (cleared at `ShotCompleted` and on a failed start) and records
+	 * the dial the core was given instead.
 	 */
 	setBrewParamsSnapshot(snapshot: {
 		yieldTarget: number;
@@ -2403,12 +2321,12 @@ export class CremaApp {
 	 *     the shot via a thrown {@link NoActiveProfileError} so the caller
 	 *     can surface a "Select a profile first" banner. The DE1 simply
 	 *     has nothing to load without an active profile.
-	 *  2. **Lazy profile sync.** Compute the effective fingerprint from
-	 *     the active profile + the caller's per-shot QC overrides; if it
-	 *     differs from the cached `activeProfileFingerprint`, upload +
-	 *     await `ProfileUploadCompleted` before going further. The
-	 *     upload's "Uploading… N/N" pip in the dash header is the
-	 *     user-visible sync indicator during the 1-2 s upload window.
+	 *  2. **Profile sync.** The active profile + the caller's per-shot QC
+	 *     overrides become the core's desired profile; the core uploads it
+	 *     unless this connection already pushed it, and the start waits for
+	 *     `ProfileSyncHolds` before going further. The upload's
+	 *     "Uploading… N/N" pip in the dash header is the user-visible sync
+	 *     indicator during the 1-2 s upload window.
 	 *  3. **Pre-shot flush (optional)** + **Espresso state-request**.
 	 *     Mirrors the prior behaviour: when `groupFlushBeforeShot` is
 	 *     on, fire `HotWaterRinse` and wait for its
@@ -2503,9 +2421,9 @@ export class CremaApp {
 		if (overLimit !== null) {
 			throw new ProfileSyncFailedError(overLimit);
 		}
-		// Lazy profile sync — compare the desired fingerprint against the
-		// cached "what's on the DE1" fingerprint. `syncActiveProfile` is
-		// a no-op when they match (cheap djb2 + one snapshot read).
+		// The shot's profile (with the dial) becomes the desired one; the core
+		// uploads it unless this connection already pushed it, and the start
+		// waits until the DE1 holds it.
 		const synced = await this.syncActiveProfile(profile, qc);
 		if (!live()) return;
 		if (!synced) {
@@ -2784,20 +2702,14 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	app.idleSleep.configure(getSettingsStore().current.idleSleepMin);
 	app.idleSleep.start();
 	if (typeof document !== 'undefined') app.idleSleep.attach(document);
-	// Register the eager DE1 upload hook on profile activation. Every
-	// `ProfileStore.setActive(...)` site (BrewDashboard, ProfileEditor,
-	// ShotDetail, profiles page, library delete-self) gets a
-	// fingerprint-gated upload for free.
-	//
-	// Connection-state policy: only upload when the DE1 is `ready`. If
-	// the user activates a profile while disconnected, the upload is
-	// deferred — the existing `ensureLoadedMatches()` call on the next
-	// `de1State === 'ready'` transition picks up the fingerprint
-	// mismatch and pushes the bytes then. This avoids firing BLE writes
-	// at a missing device + keeps "activate now, connect later" working.
-	//
-	// Fire-and-forget — failures surface via the existing
-	// `profileUploadProgress` / log UI.
+	// The active profile is the core's desired profile: set at boot (once the
+	// library has loaded) and on every activation (`ProfileStore.setActive`
+	// from BrewDashboard, ProfileEditor, ShotDetail, the profiles page, a
+	// delete that re-points), with no overrides — a profile change clears
+	// them. The Brew dashboard adds the live overrides; edits of the active
+	// profile set it again. The core's profile sync decides when to upload
+	// (every connect, a change, retries; never while busy) — so activating
+	// while disconnected simply goes out on the next connect.
 	{
 		const profiles = getProfileStore();
 		// Profile-deletion cascade: clear bean linked-profile references so
@@ -2807,14 +2719,12 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 			getBeanLibraryStore().clearLinksTo(id);
 		};
 		profiles.onActivate = (profile) => {
-			if (profile == null) return;
-			if (app.state.current.de1State !== 'ready') return;
-			void app.syncActiveProfile(profile, {}).catch((e) => {
-				app.state.log(
-					`Eager profile upload failed: ${e instanceof Error ? e.message : String(e)}`
-				);
-			});
+			void app.setDesiredProfile(profile);
 		};
+		void profiles.ensureLoaded().then(() => {
+			const id = profiles.activeId;
+			return app.setDesiredProfile(id === null ? null : (profiles.get(id) ?? null));
+		});
 	}
 	// Reconnect the last DE1 / scale where the browser can (client-only: this
 	// factory runs from the layout's onMount, never during SSR / prerender).
