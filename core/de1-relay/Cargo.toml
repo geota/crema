@@ -1,0 +1,49 @@
+[package]
+name = "de1-relay"
+version = "0.1.0"
+description = "The Crema LAN relay's secure channel: SPAKE2 pairing, Noise sessions, sans-IO"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Every dependency is pinned by the relay v4 spec (§3.1). Bumping snow or spake2
+# means reading the upstream diff first; core/deny.toml fails CI on any other
+# resolved version, and on snow's `std` feature (which pulls in OS entropy).
+[dependencies]
+snow = { version = "=0.10.0", default-features = false, features = [
+    "use-curve25519",
+    "use-chacha20poly1305",
+    "use-sha2",
+] }
+spake2 = { version = "=0.4.0", default-features = false }
+curve25519-dalek = { version = ">=4.1.3, <5", default-features = false }
+rand_core = "0.6"
+rand_chacha = { version = "0.3", default-features = false }
+sha2 = "0.10"
+hkdf = "0.12"
+subtle = "2"
+zeroize = { version = "1", features = ["derive"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+typeshare = "1.0.5"
+
+# The crate's own integration tests, vectors and corpus replay need the
+# deterministic test hooks; this self-dependency turns `test-seeds` on for test
+# builds only. A normal dependent (de1-ffi's release `.so`) never sees it.
+[dev-dependencies]
+de1-relay = { path = ".", features = ["test-seeds"] }
+
+[features]
+# Deterministic test hooks (§2.11): test seeds, a scripted Noise RNG for the
+# cacophony replay, reduced rekey interval, psk inspection, the vector generator
+# and the fuzz entry points. Never enabled for a release artifact.
+test-seeds = []
+
+[[example]]
+name = "gen_vectors"
+required-features = ["test-seeds"]
+
+[lints]
+workspace = true
