@@ -188,7 +188,13 @@ object SafeFile {
     /** Move [target] to `<name>.corrupt-<epochMs>` and prune to [MAX_KEPT]; null on failure. */
     private fun quarantine(target: File): File? {
         val dest = run {
-            var ms = System.currentTimeMillis()
+            // Numbered after the newest copy kept, never before it: several
+            // quarantines in one millisecond bump the number, and once the
+            // prune deleted the oldest, the wall clock alone could reuse its
+            // (lower) number and the newest copy would sort, and be pruned, as
+            // the oldest.
+            val newest = keptAside(target).firstOrNull()?.name?.substringAfterLast(CORRUPT)?.toLongOrNull()
+            var ms = maxOf(System.currentTimeMillis(), (newest ?: Long.MIN_VALUE) + 1)
             var f: File
             do { f = File(target.parentFile, target.name + CORRUPT + ms); ms++ } while (f.exists())
             f

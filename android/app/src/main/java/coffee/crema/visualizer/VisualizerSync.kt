@@ -112,6 +112,13 @@ class VisualizerSync(
     private val onBeansSynced: (result: BeanSyncResult, snapshotBeanIds: Set<String>, snapshotRoasterIds: Set<String>) -> Unit = { _, _, _ -> },
     /** The core's bean-sync surface (injected so JVM tests needn't load the native core). */
     private val beanSyncCore: BeanSyncCore = BeanSyncCore.Native,
+    /** When a network comes back (F17's retry trigger); null = no trigger (JVM tests). */
+    private val networkWatcher: NetworkWatcher? = null,
+    /** Run the retry queue's timers (the scheduled retry and the foreground
+     *  tick); JVM tests turn them off and drain by hand. */
+    private val retryTimers: Boolean = true,
+    /** How the retry timers wait (injected so a JVM test can see each wait). */
+    private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
 ) : UploadDestination {
 
     internal companion object {
@@ -120,6 +127,20 @@ class VisualizerSync(
 
         /** The app-start Premium re-probe runs at most this often (web `PREMIUM_REFRESH_INTERVAL_MS`). */
         const val PREMIUM_REFRESH_INTERVAL_MS = 24L * 60 * 60 * 1000
+
+        /** The retry queue's foreground tick (web `UploadQueue`'s 5 minutes). */
+        const val RETRY_TICK_MS = 5L * 60 * 1000
+
+        /** A network coming back drains at most this often, so a flapping
+         *  link can't drain in a loop. */
+        const val NETWORK_DRAIN_SPACING_MS = 30_000L
+
+        /** A queued shot another upload holds is retried this much later. */
+        const val CLAIMED_RETRY_MS = 5_000L
+
+        /** The scheduled drain never runs sooner than this, so an entry left
+         *  due (a stopped pass) can't make the drain spin. */
+        const val MIN_DRAIN_DELAY_MS = 5_000L
     }
 
     /** What the Settings/History UI binds to. */
@@ -513,19 +534,28 @@ class VisualizerSync(
         }
     }
 
-    /** Refresh + persist, or clear the session when the grant is gone. */
+    /**
+     * Refresh + persist. Clears the session only when the token endpoint
+     * definitively rejected the refresh token (core
+     * `classify_token_refresh_failure`: 400/401 `invalid_grant`); offline, a
+     * 5xx or a proxy page keeps it and fails the call as a recoverable
+     * [VisualizerError.Network], so the retry queue tries again (F17; web
+     * `classifyRefreshFailure`).
+     */
     private suspend fun refreshOrSignOut(current: TokenSet): TokenSet? {
         val refresh = current.refreshToken ?: run {
             persist { it.copy(tokens = null) }
             return null
         }
-        return runCatchingCancellable { refreshTokens(refresh) }
-            .onSuccess { fresh -> persist { it.copy(tokens = fresh) } }
-            .getOrElse {
-                persist { it.copy(tokens = null) }
-                notify("Visualizer session expired — sign in again")
-                null
-            }
+        val result = runCatchingCancellable { refreshTokens(refresh) }
+        result.onSuccess { fresh -> persist { it.copy(tokens = fresh) } }
+        val error = result.exceptionOrNull() ?: return result.getOrNull()
+        if (uploadPolicy.refreshEndsSession(error)) {
+            persist { it.copy(tokens = null) }
+            notify("Visualizer session expired — sign in again")
+            return null
+        }
+        throw VisualizerError.Network("Couldn’t refresh the Visualizer session: ${error.message}")
     }
 
     // ── Shot upload ──────────────────────────────────────────────────────────
@@ -613,6 +643,10 @@ class VisualizerSync(
                 release(shot.id)
             }
             result.onSuccess { id -> onShotSynced(shot.id, id) }
+            // F17: a recoverable failure is queued for a retry; a success is a
+            // sync tail that drains what is waiting.
+            result.onSuccess { drainSoon() }
+            result.exceptionOrNull()?.let { enqueueRetry(shot.id, it) }
             if (silent) return@launch
             val sink = onUploadOutcome
             result
@@ -666,6 +700,161 @@ class VisualizerSync(
         } finally {
             _state.update { it.copy(busy = false) }
             drainMutex.unlock()
+        }
+    }
+
+    // ── Retry queue (F17; web `UploadQueue`) ─────────────────────────────────
+
+    /** One drain at a time. */
+    private val retryMutex = Mutex()
+
+    /** The next scheduled drain (a queued entry's retry time). */
+    private var retryJob: kotlinx.coroutines.Job? = null
+
+    /** The foreground tick and its network trigger. */
+    private var tickJob: kotlinx.coroutines.Job? = null
+
+    /** When a network-triggered drain last ran (for [NETWORK_DRAIN_SPACING_MS]). */
+    @Volatile private var lastNetworkDrainAt = 0L
+
+    /** Queue a shot whose upload failed with [e], if the core says retry. */
+    private suspend fun enqueueRetry(shotId: String, e: Throwable) {
+        when (val d = uploadPolicy.queueDecision("create", e, attemptsMade = 1)) {
+            is RetryDecision.Retry -> {
+                val at = now() + d.delayMs
+                persist { st ->
+                    st.copy(retryQueue = st.retryQueue.filterNot { it.shotId == shotId } + QueuedUpload(shotId, 1, at))
+                }
+                scheduleDrain(at)
+            }
+            // The quota, a terminal error or a signed-out create: not queued (the
+            // shot stays unsynced; the next pass or the post-sign-in catch-up
+            // offers it again).
+            else -> Unit
+        }
+    }
+
+    /** Drain soon (a trigger: start, network back, the tick, a sync tail). */
+    fun drainSoon() {
+        if (persisted.retryQueue.isEmpty() && persisted.shotTombstones.none { it.deleteRemote }) return
+        scope.launch { drainRetryQueue() }
+    }
+
+    /** Run the drain when the earliest entry is due, and never sooner than
+     *  [MIN_DRAIN_DELAY_MS] from now (an entry already due waits that long). */
+    private fun scheduleDrain(at: Long) {
+        if (!retryTimers) return
+        retryJob?.cancel()
+        retryJob = scope.launch {
+            retryDelay((at - now()).coerceAtLeast(MIN_DRAIN_DELAY_MS))
+            drainRetryQueue()
+        }
+    }
+
+    /** When the next drain is owed: the earliest queued upload, or remote
+     *  delete waiting out a backoff (signed in only); null = nothing waits. */
+    private fun nextDrainAt(): Long? {
+        val deletes = if (persisted.tokens == null) emptyList()
+        else persisted.shotTombstones.filter { it.deleteRemote && it.nextAttemptAt > 0 }.map { it.nextAttemptAt }
+        return (persisted.retryQueue.map { it.nextAttemptAt } + deletes).minOrNull()
+    }
+
+    /**
+     * Retry every due queued upload once, on the core's rule
+     * (`visualizer_queue_decision`): success binds the id; the daily quota or a
+     * 429 stops the drain; a terminal or third failure drops it. A shot since
+     * deleted, or already synced, leaves the queue. Then the remote deletes the
+     * tombstones still owe (signed out: parked until a sign-in). Single-flight;
+     * returns the number uploaded.
+     */
+    internal suspend fun drainRetryQueue(): Int {
+        if (!retryMutex.tryLock()) return 0
+        var uploaded = 0
+        try {
+            val due = persisted.retryQueue.filter { it.nextAttemptAt <= now() }
+            for (entry in due) {
+                val shot = currentShot(entry.shotId)
+                if (shot == null || shot.visualizerId != null || shot.isBrewLog) {
+                    dequeueRetry(entry.shotId)
+                    continue
+                }
+                // Another upload holds it: try again a little later, not at
+                // once (its entry stays due otherwise, and the drain would spin).
+                if (!claim(shot.id)) {
+                    updateRetry(entry.copy(nextAttemptAt = now() + CLAIMED_RETRY_MS))
+                    continue
+                }
+                val failure = try {
+                    onShotSynced(shot.id, uploadShotNow(shot))
+                    null
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (e: Exception) {
+                    e
+                } finally {
+                    release(shot.id)
+                }
+                if (failure == null) {
+                    dequeueRetry(entry.shotId)
+                    uploaded += 1
+                    continue
+                }
+                val made = entry.attempts + 1
+                when (val d = uploadPolicy.queueDecision("create", failure, made)) {
+                    is RetryDecision.Drop -> {
+                        dequeueRetry(entry.shotId)
+                        logSync("skip", shot.id, shot.profileName ?: "Shot", uploadPolicy.describe(failure))
+                        if (d.stopPass) {
+                            uploadPolicy.quotaLimitOf(failure)?.let { notify(quotaNotice(it)) }
+                            break
+                        }
+                    }
+                    is RetryDecision.Park -> updateRetry(entry.copy(nextAttemptAt = now() + d.delayMs))
+                    is RetryDecision.Retry -> {
+                        updateRetry(QueuedUpload(entry.shotId, made, now() + d.delayMs))
+                        if (d.stopPass) break
+                    }
+                }
+            }
+            deleteRemoteShots(dueOnly = true)
+        } finally {
+            retryMutex.unlock()
+        }
+        nextDrainAt()?.let(::scheduleDrain)
+        return uploaded
+    }
+
+    private suspend fun dequeueRetry(shotId: String) =
+        persist { st -> st.copy(retryQueue = st.retryQueue.filterNot { it.shotId == shotId }) }
+
+    private suspend fun updateRetry(entry: QueuedUpload) =
+        persist { st -> st.copy(retryQueue = st.retryQueue.map { if (it.shotId == entry.shotId) entry else it }) }
+
+    /**
+     * The app came to the foreground ([foreground]) or left it: while in the
+     * foreground the queue drains every [RETRY_TICK_MS] and whenever a network
+     * becomes available (at most once per [NETWORK_DRAIN_SPACING_MS]).
+     */
+    fun onForegroundChanged(foreground: Boolean) {
+        tickJob?.cancel()
+        tickJob = null
+        if (!foreground) {
+            networkWatcher?.stop()
+            return
+        }
+        networkWatcher?.start {
+            val t = now()
+            if (t - lastNetworkDrainAt >= NETWORK_DRAIN_SPACING_MS) {
+                lastNetworkDrainAt = t
+                drainSoon()
+            }
+        }
+        if (!retryTimers) return
+        tickJob = scope.launch {
+            while (true) {
+                retryDelay(RETRY_TICK_MS)
+                drainSoon()
+            }
         }
     }
 
@@ -973,17 +1162,39 @@ class VisualizerSync(
     /**
      * Send `DELETE /shots/{id}` for every tombstone the user asked to delete
      * remotely (web `ShotSync.deleteShot`: open to free accounts, a 404 counts
-     * as already gone). A success drops the tombstone; a failure keeps it for
-     * the next sync. A no-op when signed out.
+     * as already gone). A success drops the tombstone. A failure goes by the
+     * core's queue rule for a delete (`visualizer_queue_decision`, as web's
+     * queue): retried on its backoff, at most three attempts; a terminal failure
+     * (a 403, …) or the third stops the remote delete but keeps the tombstone,
+     * so the copy is still never pulled back. [dueOnly] (the drain) skips the
+     * ones still in their backoff; a sync the user runs tries them all. A no-op
+     * when signed out (parked until a sign-in).
      */
-    internal suspend fun deleteRemoteShots() {
+    internal suspend fun deleteRemoteShots(dueOnly: Boolean = false) {
         if (persisted.tokens == null) return
-        for (t in persisted.shotTombstones.filter { it.deleteRemote }) {
-            val err = runCatchingCancellable { withFreshToken { client.request("DELETE", "/shots/${t.visualizerId}", it) } }
-                .fold(onSuccess = { null }, onFailure = { e -> if (e is VisualizerError.NotFound) null else (e.message ?: "delete failed") })
-            if (err == null) persist { st -> st.copy(shotTombstones = st.shotTombstones.filterNot { it.id == t.id }) }
-            val entry = SyncLogEntry(direction = "delete", entity = "shot", id = t.visualizerId, name = "Shot", at = now(), error = err)
+        for (t in persisted.shotTombstones.filter { it.deleteRemote && (!dueOnly || it.nextAttemptAt <= now()) }) {
+            val failure = runCatchingCancellable { withFreshToken { client.request("DELETE", "/shots/${t.visualizerId}", it) } }
+                .exceptionOrNull()?.takeUnless { it is VisualizerError.NotFound }
+            val decision = failure?.let { uploadPolicy.queueDecision("delete", it, t.attempts + 1) }
+            val updated = when (decision) {
+                null -> null
+                is RetryDecision.Drop -> t.copy(deleteRemote = false)
+                is RetryDecision.Park -> t.copy(nextAttemptAt = now() + decision.delayMs)
+                is RetryDecision.Retry -> t.copy(attempts = t.attempts + 1, nextAttemptAt = now() + decision.delayMs)
+            }
+            persist { st ->
+                st.copy(
+                    shotTombstones = if (updated == null) st.shotTombstones.filterNot { it.id == t.id }
+                    else st.shotTombstones.map { if (it.id == t.id) updated else it },
+                )
+            }
+            val entry = SyncLogEntry(
+                direction = "delete", entity = "shot", id = t.visualizerId, name = "Shot", at = now(),
+                error = failure?.let { it.message ?: "delete failed" },
+            )
             persist { it.copy(log = (listOf(entry) + it.log).take(20)) }
+            // The quota or a 429 stops the deletes too.
+            if ((decision as? RetryDecision.Retry)?.stopPass == true || (decision as? RetryDecision.Drop)?.stopPass == true) break
         }
     }
 

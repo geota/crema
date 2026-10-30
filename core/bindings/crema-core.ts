@@ -2012,6 +2012,87 @@ export type Event =
 	reason: CalibrationRefusal;
 }}
 	/**
+	 * An accepted shot start moved on (see [`shot_start`](crate::shot_start));
+	 * a shell shows "starting" until [`Event::ShotStartEnded`].
+	 */
+	| { type: "ShotStartProgress", content: {
+	/** Where it stands. */
+	phase: StartPhase;
+}}
+	/**
+	 * The shot start is over: started, failed, cancelled or stood down for a
+	 * group-head start.
+	 */
+	| { type: "ShotStartEnded", content: {
+	/** How. */
+	end: StartEnd;
+	/** The sentence to tell the user, when there is one. */
+	message?: string;
+}}
+	/**
+	 * A non-blocking notice for an accepted start (no scale for a shot that
+	 * stops on weight: the weight stop is off).
+	 */
+	| { type: "StartNotice", content: {
+	/** The notice. */
+	notice: StartNoticeLine;
+}}
+	/**
+	 * A shot started at the group head skipped steps only an app start runs:
+	 * the ones that applied (no scale for a weight stop, the pre-shot flush, a
+	 * profile upload still pending). A non-blocking banner; it never stops the
+	 * shot.
+	 */
+	| { type: "GroupHeadStartUnchecked", content: {
+	/** One line per skipped check. */
+	notices: StartNoticeLine[];
+}}
+	/**
+	 * A machine state request the user made is waiting out the firmware's
+	 * profile-download guard (a profile upload in flight, or the 500 ms after
+	 * it — see [`machine_requests`](crate::machine_requests)); it goes out on
+	 * its own, or is dropped ([`Event::MachineRequestDropped`]). A shell
+	 * shows a small non-blocking "waiting" note.
+	 */
+	| { type: "MachineRequestHeld", content: {
+	/** The requested state. */
+	state: MachineState;
+}}
+	/**
+	 * A request the user made, held through the profile-download guard,
+	 * was dropped instead of sent: the machine left the state it was in (a
+	 * shot started at the group head), a maintenance cycle is no longer
+	 * allowed, or the profile took too long to load. Tell the user; nothing
+	 * was written.
+	 */
+	| { type: "MachineRequestDropped", content: {
+	/** The requested state. */
+	state: MachineState;
+	/** Why. */
+	reason: MachineRequestDrop;
+}}
+	/**
+	 * A machine state request was refused before anything was written: a
+	 * maintenance cycle needs the machine in Idle or Sleep.
+	 */
+	| { type: "MachineRequestRefused", content: {
+	/** The requested state. */
+	state: MachineState;
+	/** Why. */
+	reason: MachineRequestRefusal;
+}}
+	/**
+	 * Tick the core (`on_tick`) at this time — the shell's clock, the one it
+	 * passes to `on_tick`, in ms. The earliest deadline the core is waiting
+	 * for changed; the shell keeps one one-shot timer, replaced by each
+	 * hint, cancelled on a reset, a disconnect or when the app is
+	 * backgrounded (its regular tick still covers the deadline).
+	 */
+	| { type: "WakeAt", content: {
+	/** When to tick, ms. */
+	at_ms: number;
+}}
+	/**
 	 * A write was refused because a firmware upload is locking out other
 	 * writes. v1 carries the lockout guard as a stub
 	 * ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
@@ -4186,6 +4267,68 @@ export interface StairSegment {
 	targetG: number;
 }
 
+/** A non-blocking notice about a start. */
+export enum StartCheck {
+	/**
+	 * The shot stops on weight but no scale is connected: the weight stop is
+	 * off.
+	 */
+	NoScale = "NoScale",
+	/** The pre-shot flush did not run (a group-head start). */
+	PreFlushSkipped = "PreFlushSkipped",
+	/**
+	 * The profile upload had not finished: the machine runs the profile it
+	 * held before.
+	 */
+	ProfilePending = "ProfilePending",
+}
+
+/** One line of the group-head banner. */
+export interface StartNoticeLine {
+	/** Which check. */
+	check: StartCheck;
+	/** Its sentence. */
+	message: string;
+}
+
+/** Why [`CremaCore::start_shot`] refused a start. */
+export type StartRefusal = 
+	/** A start is already pending. */
+	| { kind: "AlreadyStarting", details?: undefined }
+	/** A shot is already running. */
+	| { kind: "ShotRunning", details?: undefined }
+	/** The profile has more steps than the DE1 holds. */
+	| { kind: "TooManySteps", details: {
+	/** The profile's name. */
+	name: string;
+	/** Its step count. */
+	count: number;
+}}
+	/**
+	 * Require-scale is on, the shot stops on weight and no scale is
+	 * connected.
+	 */
+	| { kind: "ScaleRequired", details?: undefined }
+	/** A firmware flash holds the link. */
+	| { kind: "FirmwareLocked", details?: undefined }
+	/** The machine has not reported its state (not connected yet). */
+	| { kind: "NotConnected", details?: undefined };
+
+/**
+ * What [`CremaCore::start_shot`] returns: whether the start was accepted, why
+ * not, and the output (the first requests, events).
+ */
+export interface StartShotResult {
+	/** The start runs. */
+	accepted: boolean;
+	/** Why it was refused. */
+	refusal?: StartRefusal;
+	/** The refusal's sentence. */
+	message?: string;
+	/** Events and BLE writes. */
+	output: CoreOutput;
+}
+
 /**
  * The steam / hot-water targets the shells own in the DE1's combined
  * settings packet (cuuid_0B), the input to
@@ -4733,6 +4876,31 @@ export type IdleSleepInput =
 	 */
 	| { type: "Tick", content?: undefined };
 
+/** Why a held machine state request was dropped instead of sent. */
+export type MachineRequestDrop = 
+	/**
+	 * The machine left the state it was in when the request was made (a
+	 * shot started at the group head, for one).
+	 */
+	| { kind: "StateChanged", details: {
+	/** The state it was in. */
+	from?: MachineState;
+	/** The state it is in now. */
+	to: MachineState;
+}}
+	/** The profile took longer than [`MAX_HOLD`] to load. */
+	| { kind: "TookTooLong", details?: undefined };
+
+/** Why a machine state request was refused before it reached the DE1. */
+export type MachineRequestRefusal = 
+	/** A maintenance cycle needs the machine in Idle or Sleep. */
+	| { kind: "MachineNotIdle", details: {
+	/** The state the machine last reported. */
+	state: MachineState;
+}}
+	/** No machine state has been reported yet (fail closed). */
+	| { kind: "MachineStateUnknown", details?: undefined };
+
 /**
  * DE1 top-level machine state. Discriminants match the firmware `MachineState`
  * enum (see protocol §4.1).
@@ -5019,6 +5187,65 @@ export enum Pump {
 	Flow = "flow",
 }
 
+/** What a retry queue does with an operation that just failed. */
+export type QueueDecision = 
+	/**
+	 * Remove it. `stop_pass`: stop this drain (the daily quota — every other
+	 * upload would hit it too).
+	 */
+	| { kind: "Drop", details: {
+	/** Stop the drain. */
+	stop_pass: boolean;
+}}
+	/**
+	 * Keep it without spending an attempt; look again after `delay_ms` (a
+	 * delete while signed out).
+	 */
+	| { kind: "Park", details: {
+	/** Wait, ms. */
+	delay_ms: number;
+}}
+	/**
+	 * Retry after `delay_ms`. `stop_pass`: leave the rest of the queue for a
+	 * later drain (the rate limit).
+	 */
+	| { kind: "Retry", details: {
+	/** Wait, ms. */
+	delay_ms: number;
+	/** Stop the drain. */
+	stop_pass: boolean;
+}};
+
+/** The kind of queued Visualizer operation. */
+export enum QueueOp {
+	/** Upload a new shot. */
+	Create = "Create",
+	/** Update a remote row. */
+	Update = "Update",
+	/** Delete a remote row. */
+	Delete = "Delete",
+}
+
+/**
+ * What a failed OAuth refresh means for the session (both shells; web
+ * `classifyRefreshFailure`, review 03 P1-1).
+ */
+export enum RefreshFailure {
+	/** The token endpoint rejected the refresh token: the session is over. */
+	Definitive = "Definitive",
+	/**
+	 * A transient server answer (5xx, 408, 429): keep the session, retry on
+	 * the status-aware backoff.
+	 */
+	Retryable = "Retryable",
+	/**
+	 * Anything else — a transport failure, a captive portal, a proxy page,
+	 * `invalid_client`: nothing proves the refresh token is dead, so the
+	 * session stays.
+	 */
+	Transient = "Transient",
+}
+
 /**
  * Events for the shell (§3.4). Names are sanitized; public keys never ride
  * in events (read `peer_public_key()`).
@@ -5208,6 +5435,36 @@ export enum ShotPrivacy {
 	Unlisted = "unlisted",
 	/** Visible to the owner only. */
 	Private = "private",
+}
+
+/** How a start ended. */
+export type StartEnd = 
+	/** The machine reported Espresso after our request. */
+	| { kind: "Started", details?: undefined }
+	/** The profile upload failed (the core keeps retrying it). */
+	| { kind: "UploadFailed", details?: undefined }
+	/** The DE1 did not confirm the profile within [`START_UPLOAD_TIMEOUT`]. */
+	| { kind: "UploadTimedOut", details?: undefined }
+	/** The pre-shot flush ended outside Idle. */
+	| { kind: "FlushLeftIdle", details: {
+	/** Where the machine went. */
+	state: MachineState;
+}}
+	/** The machine did not report Espresso within [`ESPRESSO_ENTRY_TIMEOUT`]. */
+	| { kind: "NotEntered", details?: undefined }
+	/** A user's request, a link drop or a reset cancelled it. */
+	| { kind: "Cancelled", details?: undefined }
+	/** The shot was started at the group head first. */
+	| { kind: "StoodDown", details?: undefined };
+
+/** Where an accepted start stands. */
+export enum StartPhase {
+	/** Waiting for the DE1 to hold the shot's profile. */
+	Syncing = "Syncing",
+	/** The pre-shot flush is running. */
+	Flushing = "Flushing",
+	/** Espresso was requested; waiting for the machine to report it. */
+	Requested = "Requested",
 }
 
 /**

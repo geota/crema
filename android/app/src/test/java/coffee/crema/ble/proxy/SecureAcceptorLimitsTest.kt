@@ -62,8 +62,11 @@ class SecureAcceptorLimitsTest {
     @Test
     fun `a frame declaring more than 64 KiB is refused before its payload arrives`() = withRig { rig ->
         RawWsClient(rig.port).use { ws ->
-            ws.partialFrame(declaredLength = 8L shl 20, sent = 1_000)
-            assertRefusedForSize(ws.awaitClose(timeoutMs = 5_000))
+            // Only the header: nothing is left unread on the server, so its
+            // close frame always arrives (no reset). Without the cap the server
+            // would wait for the payload until the 5 s hello deadline (4408).
+            ws.partialFrame(declaredLength = 8L shl 20, sent = 0)
+            assertEquals(1009, ws.awaitClose(timeoutMs = 15_000), "refused for its size, not timed out")
         }
     }
 

@@ -40,8 +40,10 @@ import {
 import {
 	isRecoverable as wasmIsRecoverable,
 	retryBackoffMs as wasmRetryBackoffMs,
+	visualizerQueueDecision as wasmVisualizerQueueDecision,
 	visualizerQuotaLimit as wasmVisualizerQuotaLimit
 } from '#lib/wasm/de1_wasm.js';
+import type { QueueDecision } from '#lib/core/crema-core.js';
 
 /** Visualizer API base. */
 export const API_BASE = 'https://visualizer.coffee/api';
@@ -187,6 +189,21 @@ export function isRateLimited(e: VisualizerCallError | ResponseDecodeError): boo
  */
 export function retryDelayMs(e: VisualizerCallError | ResponseDecodeError, attempt: number): number {
 	return wasmRetryBackoffMs(e._tag === 'HttpStatusError' ? e.status : undefined, attempt);
+}
+
+/**
+ * The retry queue's rule for a queued `op` that failed with `e`, `attemptsMade`
+ * attempts in (this one included) — the core's `visualizer_queue_decision`,
+ * which Android's queue follows too.
+ */
+export function queueDecision(
+	op: 'create' | 'update' | 'delete',
+	e: VisualizerCallError | ResponseDecodeError,
+	attemptsMade: number
+): QueueDecision {
+	const status = e._tag === 'HttpStatusError' ? e.status : undefined;
+	const body = e._tag === 'HttpStatusError' ? (e.body ?? '') : '';
+	return JSON.parse(wasmVisualizerQueueDecision(op, e._tag, status, body, attemptsMade)) as QueueDecision;
 }
 
 /** The user notice when the free-plan daily cap stops an upload pass. */
