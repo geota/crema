@@ -1,8 +1,9 @@
 # Crema CI — quality gates for the Rust core and the SvelteKit web shell.
 #
 # This workflow runs on every PR to `main` and on direct pushes to `main`,
-# plus a weekly schedule that runs ONLY the advisory `audit` job (every other
-# job is guarded with `if: github.event_name != 'schedule'`). It does NOT
+# plus two schedules: a weekly one that runs ONLY the advisory `audit` job and
+# a nightly one that runs ONLY the relay `fuzz` job (every other job is guarded
+# with `if: github.event_name != 'schedule'`). It does NOT
 # deploy, and neither does a push to `main`: the web deploys to Cloudflare
 # Pages only from release.yml on a `v*.*.*` tag. See DEPLOY.md.
 #
@@ -21,8 +22,10 @@ on:
     branches: [main]
   # Weekly advisory audit (Mondays 07:00 UTC) so a new advisory surfaces even
   # in a week with no merges. Only the `audit` job runs on this trigger.
+  # Nightly (03:30 UTC): only the de1-relay `fuzz` job.
   schedule:
     - cron: '0 7 * * 1'
+    - cron: '30 3 * * *'
 
 # Cancel in-flight CI runs on the same PR when a new commit lands;
 # leave push-to-main runs alone so each merge gets a clean signal. The weekly
@@ -74,6 +77,25 @@ jobs:
         working-directory: core
         run: cargo test --workspace
 
+      # de1-relay's seeded vectors (relay v4 spec §3.7, AC-1): regenerating them
+      # from the fixed seeds must reproduce tests/vectors/v4.json byte for byte.
+      - name: relay vectors are fresh
+        working-directory: core
+        run: cargo run -p de1-relay --features test-seeds --example gen_vectors -- --check
+
+      # AC-19: de1-relay draws no OS entropy, so getrandom (and ring) must never
+      # appear in its normal dependency tree; AC-46: the pinned versions resolve.
+      - name: relay has no ambient entropy
+        working-directory: core
+        run: |
+          tree="$(cargo tree -p de1-relay -e normal --prefix none)"
+          echo "$tree"
+          if echo "$tree" | grep -Eq '^(getrandom|ring) '; then
+            echo "::error::getrandom or ring in the de1-relay tree"; exit 1
+          fi
+          echo "$tree" | grep -q '^snow v0.10.0'
+          echo "$tree" | grep -q '^spake2 v0.4.0'
+
       # gen-builtin-ids is idempotent: it stamps stable UUID v7 IDs into
       # builtin.json once, and is a no-op afterward. If running it produces
       # any diff, either (a) the tool isn't idempotent (bug) or (b) somebody
@@ -96,6 +118,74 @@ jobs:
           cargo install typeshare-cli --version 1.13.4 --locked
           core/generate-bindings.sh
           git diff --exit-code core/bindings web/src/lib/core/crema-core.ts android/app/src/main/java/coffee/crema/core/CremaCoreTypes.kt
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Rust supply-chain gate (relay v4 spec §3.1, AC-58). BLOCKING, unlike the
+  # advisory `audit` job below: any RustSec advisory in the core graph (one
+  # documented exception in core/deny.toml), getrandom/ring under de1-relay
+  # (snow's `std` must never be on), or snow/spake2 off their exact pins
+  # fails the PR.
+  # ─────────────────────────────────────────────────────────────────────
+  deny:
+    name: deny (supply chain)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: cargo deny check advisories bans
+        working-directory: core
+        run: cargo deny check advisories bans
+
+  # ─────────────────────────────────────────────────────────────────────
+  # de1-relay fuzzing (relay v4 spec §3.7, AC-21): each cargo-fuzz target for
+  # 60 s, nightly only. The seed corpus also replays in `cargo test` on every
+  # PR (tests/fuzz_corpus.rs). New inputs go to a scratch corpus; a crash
+  # uploads its artifact and fails the job.
+  # ─────────────────────────────────────────────────────────────────────
+  fuzz:
+    name: fuzz (de1-relay)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && github.event.schedule == '30 3 * * *'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_hub_ws, fuzz_remote_ws, fuzz_transport_records, fuzz_client_hello]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # cargo-fuzz needs nightly (sanitizer flags); the fuzz project has its own lockfile.
+      - name: Install Rust toolchain (nightly)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      - name: cargo fuzz run ${{ matrix.target }} (60 s)
+        working-directory: core/de1-relay/fuzz
+        run: |
+          mkdir -p "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/artifacts"
+          cargo fuzz run ${{ matrix.target }} "$RUNNER_TEMP/corpus" corpus/${{ matrix.target }} -- \
+            -max_total_time=60 -artifact_prefix="$RUNNER_TEMP/artifacts/"
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: ${{ runner.temp }}/artifacts
 
   # ─────────────────────────────────────────────────────────────────────
   # Web shell gates: install, build wasm bundle, svelte-check, build.
@@ -166,7 +256,7 @@ jobs:
   audit:
     name: audit (advisory)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'schedule'
+    if: github.event_name == 'push' || github.event.schedule == '0 7 * * 1'
     continue-on-error: true
     steps:
       - name: Checkout
