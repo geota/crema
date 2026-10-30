@@ -1155,10 +1155,13 @@ export class CremaApp {
 	 */
 	/**
 	 * The flash let go of the link: run what a reconnect skipped while it held
-	 * it (the settings sweep, the profile check).
+	 * it (the identity reads, the settings sweep, the profile check). The
+	 * identity reads go first, like Android's `afterFirmwareRelease`: the core
+	 * refused them during the hold, and the flash changed the build.
 	 */
 	private afterFirmwareRelease(): void {
 		if (this.state.current.de1State !== 'ready') return;
+		void this.de1.readMachineInfo();
 		this.sweep.onDe1State('ready');
 		this.ensureLoadedMatches();
 		// No presence poke here: the idle-sleep timer (#139) pokes on real
