@@ -112,8 +112,13 @@ class LibraryController(
     private val applyRestoredRecipes: (recipes: List<coffee.crema.core.BrewRecipe>, meta: JsonObject?, wipe: Boolean) -> Int = { _, _, _ -> 0 },
     /** Apply a backup's custom brewing methods (merge by id / wipe); returns how many were added. */
     private val applyRestoredCustomMethods: (methods: List<coffee.crema.core.CustomBrewMethod>, wipe: Boolean) -> Int = { _, _ -> 0 },
-    /** Read the live UI snapshot (library rows, active ids, live-shot state). */
+    /** Read this device's own UI snapshot (library rows, active ids,
+     *  live-shot state): what the library persists. */
     private val uiState: () -> MainUiState,
+    /** The UI snapshot as the screens show it: on a remote, the hub's machine
+     *  and session settings over this device's own (spec §7.2). Library
+     *  actions that act on what is on screen read this. */
+    private val effectiveState: () -> MainUiState = uiState,
     /** Synchronously update the UI snapshot (the VM's `_ui.update`). */
     private val updateUi: ((MainUiState) -> MainUiState) -> Unit,
     /** Surface a user-facing message (the VM's snackbar channel). */
@@ -355,9 +360,14 @@ class LibraryController(
      * afterwards (the values now live in the profile). Pure shell.
      */
     fun saveQuickPreset(name: String) {
-        val s = uiState()
+        // The profile and dial on screen: on a remote, the hub's.
+        val s = effectiveState()
         val activeId = s.activeProfileId ?: return
-        val base = profileJsonById[activeId] ?: return
+        val base = profileJsonById[activeId] ?: run {
+            // A hub's custom profile this library doesn't have.
+            if (s.mirror != null) notify("That profile is only on ${s.remoteHubLabel()}")
+            return
+        }
         val bp = s.brewParams
         val active = s.profiles.firstOrNull { it.id == activeId }
         val d = bp?.dose?.toFloat() ?: active?.dose ?: BrewDefaults.INSTANCE.doseG
@@ -1956,7 +1966,9 @@ class LibraryController(
         disposition: ShotDisposition = ShotDisposition.Record,
         peakWeightG: Float? = null,
     ) {
-        val s = uiState()
+        // The selections on screen: on a remote, the hub's (02 F2 — a remote
+        // still records the shot it watched).
+        val s = effectiveState()
         val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
         // The core classified this completion (review #40 —
         // `de1_domain::shot_disposition`, same rule on web). SkipCleaning:

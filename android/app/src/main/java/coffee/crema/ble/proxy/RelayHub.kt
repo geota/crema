@@ -89,11 +89,13 @@ class RelayHub(
         { _, _, _, _ -> Result.failure(UnsupportedOperationException("relay has no control handler")) },
     /**
      * The primary's current session-config JSON (an app-level `ConfigSnapshot`),
-     * pushed to a secondary on attach and via [pushConfig] on change — the
-     * single-owner config a mirror snaps to (the settings-drift fix). Empty
-     * string = nothing to send (M1 / a normal relay / the unit tests).
+     * pushed to a secondary on attach — the single-owner config a mirror
+     * snaps to (the settings-drift fix). Suspending: the hub builds every
+     * snapshot on its UI thread (spec §6.1, so its `rev` is taken in the same
+     * step as the state it reads). Empty string = nothing to send (M1 / a
+     * normal relay / the unit tests).
      */
-    private val configSource: () -> String = { "" },
+    private val configSource: suspend () -> String = { "" },
     /**
      * Pairing authorization (issue 02): decide whether a connecting secondary may
      * mirror, and with what scope. Called once per session, after the peer
@@ -182,11 +184,12 @@ class RelayHub(
         for (c in clients) if (c.approved && c.isAttached(address)) deliver(c, frame)
     }
 
-    /** Push the primary's current session config to every attached secondary —
-     *  called when the primary's config changes, so mirrors stay in sync between
-     *  attaches (the attach-time snapshot covers a fresh join). */
-    fun pushConfig() {
-        val json = configSource().takeIf { it.isNotEmpty() } ?: return
+    /** Push [json], the primary's current session config, to every attached
+     *  secondary — called when the primary's config changes, so mirrors stay in
+     *  sync between attaches (the attach-time snapshot covers a fresh join).
+     *  Synchronous: a relayed edit's snapshot goes out before its reply. */
+    fun pushConfig(json: String) {
+        if (json.isEmpty()) return
         val frame = Frame.Config(json)
         for (c in clients) if (c.approved) deliver(c, frame)
     }
@@ -414,7 +417,7 @@ class RelayHub(
         if (reply != null) deliver(session, reply)
     }
 
-    private fun handle(session: ClientSession, frame: Frame) {
+    private suspend fun handle(session: ClientSession, frame: Frame) {
         when (frame) {
             is Frame.Attach -> {
                 // A (re-)attach means the peer's core is converging afresh: clear

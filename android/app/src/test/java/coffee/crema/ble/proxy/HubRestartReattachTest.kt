@@ -14,6 +14,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -56,7 +57,8 @@ class HubRestartReattachTest {
     fun `a restarted hub is re-found on its new port and the remote reattaches`() {
         lateinit var vm: MainViewModel
         val clientId = { VmHarness.proxyController(vm).deviceId }
-        val (first, firstHub) = lifetime(clientId = clientId)
+        val firstConfig = """{"grinderModel":"Before the restart","rev":9}"""
+        val (first, firstHub) = lifetime(configSource = { firstConfig }, clientId = clientId)
         // Restored as a remote of the first lifetime, paired and pinned (the
         // secret stored the way a pre-keystore build did: Robolectric has no
         // keystore, and the store still opens it).
@@ -72,13 +74,21 @@ class HubRestartReattachTest {
         val peers = MutableStateFlow<List<Peer>>(emptyList())
         proxy.overridePeers(peers)
         VmHarness.idleUntil("the first lifetime's welcome") { firstHub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
+        firstHub.pushConfig(firstConfig)
+        VmHarness.idleUntil("the first lifetime's snapshot") { vm.ui.value.grinderModel == "Before the restart" }
+        vm.setQcGrind(14f) // one relayed edit: the slice's generation becomes 1
+        VmHarness.idleUntil("the edit settled") { VmHarness.ownState(vm).mirror?.let { it.generation == 1L && it.pending.isEmpty() } == true }
+        val slice = assertNotNull(VmHarness.ownState(vm).mirror)
         assertEquals("Connected through Kitchen tablet", vm.ui.value.remoteStatus())
 
         // The hub restarts: its relay comes back on another port.
         first.kill()
         VmHarness.idleUntil("the remote to notice") { vm.ui.value.mirrorReconnecting }
+        // P2 (AC-10's slice clause, AC-26): the last values stay, marked reconnecting.
+        assertEquals("Before the restart", vm.ui.value.grinderModel)
+        assertTrue(VmHarness.ownState(vm).mirror!!.reconnecting)
         assertEquals("Reconnecting to Kitchen tablet…", vm.ui.value.remoteStatus())
-        val (second, secondHub) = lifetime(configSource = { """{"grinderModel":"After the restart","primaryName":"Kitchen tablet"}""" }, clientId = clientId)
+        val (second, secondHub) = lifetime(configSource = { """{"grinderModel":"After the restart","primaryName":"Kitchen tablet","rev":0}""" }, clientId = clientId)
         peers.value = listOf(Peer("nsd-second-lifetime", "Kitchen tablet", "primary", holdsDe1 = false, host = "127.0.0.1", port = second.port))
 
         advanceStepped(REFIND_DELAY_MS + 500)
@@ -93,5 +103,12 @@ class HubRestartReattachTest {
         // whose attach snapshot carries its config.
         VmHarness.idleUntil("the reattach") { second.received.any { "\"type\":\"attach\"" in it } }
         VmHarness.idleUntil("the attach snapshot") { vm.ui.value.grinderModel == "After the restart" }
+        // The slice was kept across the re-find (a recreated one starts at
+        // generation 0), and the new lifetime's rev 0, below the 9 applied
+        // before the restart, still applied because its Welcome reset it.
+        val kept = assertNotNull(VmHarness.ownState(vm).mirror)
+        assertEquals(1L, slice.generation)
+        assertEquals(slice.generation, kept.generation)
+        assertTrue(!kept.reconnecting)
     }
 }

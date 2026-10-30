@@ -54,6 +54,8 @@ internal class TestHubServer private constructor() {
             clientId: () -> String,
             roster: () -> List<DeviceInfo> = { listOf(DeviceInfo("AA:BB", "DE1", "de1", "CONNECTED")) },
             configSource: () -> String = { "" },
+            controlHandler: suspend (method: String, args: String, originId: String?, originName: String?) -> Result<Unit> =
+                { _, _, _, _ -> Result.success(Unit) },
         ): Pair<TestHubServer, RelayHub> {
             val endpoint = TestHubServer().start()
             val hub = RelayHub(
@@ -63,6 +65,7 @@ internal class TestHubServer private constructor() {
                 readSource = { _, _, _ -> ByteArray(0) },
                 isSnapshotChar = { _, _ -> false },
                 configSource = configSource,
+                controlHandler = controlHandler,
                 authorize = { request ->
                     if (request.proves(secret)) PairingDecision.Allowed(canControl = true)
                     else PairingDecision.Denied(DenyReason.NOT_AUTHORIZED)

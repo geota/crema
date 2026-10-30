@@ -5,13 +5,27 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
+ * How a remote shows a relayed config edit until the hub answers: [settle]
+ * gets every outcome (spec §7.3). The remote's mirror slice keeps the edit
+ * pending; an accepted or refused edit makes way for the hub's value, and an
+ * unknown one stays on screen as unconfirmed until the next snapshot.
+ */
+fun interface ConfigEcho {
+    fun settle(outcome: CommandOutcome)
+
+    companion object {
+        /** Shows nothing and settles nothing. */
+        val NONE = ConfigEcho {}
+    }
+}
+
+/**
  * A mirror's [MachineCommands]: every command goes to the primary, by its
  * relay policy (see [MachineCommand]).
  *
  * - [MachineCommand.Control] is forwarded and nothing changes here.
- * - [MachineCommand.Config] is shown at once, then forwarded. A refusal, or a
- *   frame that never left, undoes it. With no reply the primary may have
- *   applied it, so it stays until the next config push corrects it.
+ * - [MachineCommand.Config] is shown at once ([showConfig]), then forwarded,
+ *   and its [ConfigEcho] settles with the outcome, whatever it is.
  * - [MachineCommand.LocalOnly] is refused here.
  *
  * Nothing is ever resent: an unknown outcome is reported as one.
@@ -19,8 +33,8 @@ import kotlinx.coroutines.launch
 class RelayMachine(
     /** `ProxyTransport.sendControl`. */
     private val send: suspend (method: String, args: String) -> ControlReply,
-    /** The VM's optimistic half of a config change; returns its undo. */
-    private val showConfig: (MachineCommand.Config) -> (() -> Unit),
+    /** Show a config edit until the hub answers (the remote's mirror slice). */
+    private val showConfig: (MachineCommand.Config) -> ConfigEcho,
     /** This mirror's view of the machine state (`MachineState.string`). */
     private val machineStateName: () -> String?,
     /** Where the round trips run (the VM's scope: Main). */
@@ -49,10 +63,10 @@ class RelayMachine(
                 }
             }
             is MachineCommand.Config -> {
-                val undo = showConfig(cmd)
+                val echo = showConfig(cmd)
                 scope.launch {
                     val outcome = forward(cmd)
-                    if (outcome is CommandOutcome.Refused) undo()
+                    echo.settle(outcome)
                     report(cmd, outcome, config = true)
                     onOutcome(outcome)
                 }

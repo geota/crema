@@ -25,7 +25,9 @@ import coffee.crema.ble.De1Uuids
 import coffee.crema.machine.CommandOrigin
 import coffee.crema.machine.CommandOutcome
 import coffee.crema.machine.LocalMachine
+import coffee.crema.machine.ConfigEcho
 import coffee.crema.machine.MachineActions
+import coffee.crema.machine.MachineCommand
 import coffee.crema.machine.MachineCommands
 import coffee.crema.machine.RelayMachine
 import coffee.crema.machine.RelayedCommandDispatcher
@@ -52,6 +54,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.CoroutineContext
 
@@ -146,11 +149,21 @@ class ProxyController(
     secretBox: SecretBox = DeviceSecretBox.instance,
     /** Where a primary runs relayed commands: Main, like its own UI (tests
      *  pass a test dispatcher). */
-    commandLane: CoroutineContext = Dispatchers.Main.immediate,
+    private val commandLane: CoroutineContext = Dispatchers.Main.immediate,
     /** How long a remote's session may go without a Welcome before the
      *  re-find looks for its hub on a new port, and how long a re-find
      *  attempt has to be welcomed. */
     private val refindDelayMs: Long = REFIND_DELAY_MS,
+    /** A role is about to start, before its transport is built: the VM
+     *  creates or drops its mirror slice (I6). [refind] is a remote dialing
+     *  its hub at a new address, which keeps the slice. */
+    private val onRoleStarting: (role: String, refind: Boolean) -> Unit = { _, _ -> },
+    /** A remote shows a relayed config edit until the hub answers (its mirror
+     *  slice); the echo settles it. */
+    private val showPending: (MachineCommand.Config) -> ConfigEcho = { ConfigEcho.NONE },
+    /** A remote session was welcomed, with the hub's name. Called before any
+     *  frame of that session is applied. */
+    private val onWelcomed: (hubName: String) -> Unit = {},
     /** A re-find attempt was welcomed: the remote's saved target is now
      *  [host]:[port]. The VM shows and persists it (the role is unchanged). */
     private val onTargetMoved: (host: String, port: Int) -> Unit = { _, _ -> },
@@ -364,6 +377,7 @@ class ProxyController(
     fun start() {
         check(!started) { "ProxyController.start() runs once" }
         started = true
+        onRoleStarting(readProxyConfigSync().role, false)
         switchable.setDelegate(startPersistedRole())
         // A secondary (read-only mirror) doesn't record the primary's shot (issue 14).
         setRecorderEnabled(readProxyConfigSync().role != "secondary")
@@ -919,7 +933,8 @@ class ProxyController(
                 }
             },
             // The single-owner session config a mirror snaps to on attach (T2).
-            configSource = { snapshotConfig() },
+            // Built on Main (the command lane), like every push (§6.1).
+            configSource = { withContext(commandLane) { snapshotConfig() } },
             // Pairing gate (issue 02): a valid pairing secret, or the host's
             // prompt while its pairing window is open.
             authorize = { request -> authorizePeer(request) },
@@ -1014,6 +1029,7 @@ class ProxyController(
             // Reflect the granted scope (issue 02): view-only remotes can't
             // control. The hub's name labels the status line from now on.
             onWelcome = { scope, hubName ->
+                onWelcomed(hubName)
                 _state.update { it.copy(mirrorViewOnly = scope == "mirror", hubName = hubName, mirrorReconnecting = false) }
                 live = true
                 stallTimer?.cancel()
@@ -1054,7 +1070,7 @@ class ProxyController(
         // The VM's commands now go to this primary.
         relayMachine = RelayMachine(
             send = { method, args -> proxy.sendControl(method, args) },
-            showConfig = { machineActions.showConfig(it) },
+            showConfig = { showPending(it) },
             machineStateName = machineStateName,
             scope = scope,
             notify = notify,
@@ -1195,6 +1211,7 @@ class ProxyController(
         relayMachine = null
         proxyLink?.dispose(); proxyLink = null
         session = null
+        onRoleStarting(role, refind != null)
         switchable.setDelegate(
             when (role) {
                 "secondary" -> startSecondaryMode(host, port, trust, refind)
@@ -1254,7 +1271,7 @@ class ProxyController(
     /** Push the primary's session config to attached mirrors — called when the
      *  single-owner config changes (T2). No-op off-primary. */
     fun pushConfig() {
-        relayHub?.pushConfig()
+        relayHub?.pushConfig(snapshotConfig())
     }
 
     // ── Persisted proxy config ────────────────────────────────────────────────

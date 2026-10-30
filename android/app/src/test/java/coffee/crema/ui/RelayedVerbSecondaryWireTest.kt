@@ -55,7 +55,11 @@ class RelayedVerbSecondaryWireTest {
     /** Verbs the test primary refuses (a `ControlErr` back to the secondary). */
     private val refused = mutableSetOf<String>()
 
-    private val hub = RelayHub(
+    /** The test primary's config snapshot: an accepted `setQcSteamTime`
+     *  updates it and pushes it before the reply, as a real hub does. */
+    @Volatile private var hubConfig = ""
+
+    private val hub: RelayHub = RelayHub(
         primaryId = "host-1",
         primaryName = "Test primary",
         roster = { emptyList<DeviceInfo>() },
@@ -63,9 +67,20 @@ class RelayedVerbSecondaryWireTest {
         isSnapshotChar = { _, _ -> false },
         controlHandler = { method, args, _, _ ->
             handled += method to args
-            if (method in refused) Result.failure(IllegalStateException("refused by the test primary")) else Result.success(Unit)
+            if (method in refused) {
+                Result.failure(IllegalStateException("refused by the test primary"))
+            } else {
+                if (method == "setQcSteamTime") {
+                    hubConfig = """{"qcSteamTimeS":$args}"""
+                    pushHubConfig()
+                }
+                Result.success(Unit)
+            }
         },
+        configSource = { hubConfig },
     )
+
+    private fun pushHubConfig() = hub.pushConfig(hubConfig)
 
     private lateinit var vm: MainViewModel
 
@@ -139,8 +154,9 @@ class RelayedVerbSecondaryWireTest {
         assertEquals(listOf("setQcGrind" to "14.5"), handled.toList())
     }
 
-    /** An accepted config verb stays applied; an authority-first verb changes
-     *  nothing locally and reaches the primary as is. */
+    /** An accepted config verb shows the hub's value (pushed before its
+     *  reply); an authority-first verb changes nothing locally and reaches the
+     *  primary as is. */
     @Test
     fun `an accepted config verb stays applied and a machine verb reaches the primary`() {
         // The hub answers in order (one thread), so once the refused drain
@@ -151,7 +167,8 @@ class RelayedVerbSecondaryWireTest {
         vm.tareScale()
         VmHarness.idleUntil("the drain verb's refusal") { VmHarness.log(vm).any { "Relay tareScale failed" in it } }
         assertEquals(listOf("setQcSteamTime" to "30.0", "machineState" to "IDLE", "tareScale" to ""), handled.toList())
-        assertEquals(30f, vm.ui.value.qcSteamTimeS, "an accepted edit is not reverted")
+        assertEquals(30f, vm.ui.value.qcSteamTimeS, "the hub's value, pushed before its reply")
+        assertEquals(12f, VmHarness.ownState(vm).qcSteamTimeS, "never written to this remote's own settings")
     }
 
     private companion object {
