@@ -934,7 +934,7 @@ fun SettingsScreen(
                                 "One-shot download of your entire shot history as JSON. Useful for spreadsheets and other tools.",
                                 last = true,
                             ) {
-                                CremaButton(onClick = { confirm.launchSave("crema-history.json", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+                                CremaButton(onClick = { confirm.launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
                             }
                         }
                         // Other integrations — the web's stub trio, disabled until real.

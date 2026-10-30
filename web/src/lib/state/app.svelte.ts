@@ -35,8 +35,14 @@ import {
 	type ReconnectTrigger
 } from '#lib/ble/index.js';
 import { getBeanStore, getBeanLibraryStore } from '#lib/bean/index.js';
-import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '#lib/history/index.js';
+import {
+	getHistoryStore,
+	snapshotFromBean,
+	extractCremaExtras,
+	type StoredShot
+} from '#lib/history/index.js';
 import { commitShotCompletion } from '#lib/history/shot-persistence.js';
+import { isCremaJsonl, shotsFromCremaJsonl } from '#lib/history/crema-jsonl.js';
 import { getCaptureStore } from '#lib/capture/index.js';
 import {
 	getProfileStore,
@@ -1910,23 +1916,48 @@ export class CremaApp {
 	// (Type alias inline so callers don't need a separate import.)
 
 	/**
-	 * Import a single legacy de1app `.shot` (Tcl-dict) or modern
-	 * `.shot.json` (v2) file and add the resulting shot to the History
-	 * store. Picks the parser by file extension: `.json` → v2, anything
-	 * else → legacy TCL. Returns the imported record on success, or an
-	 * error string the caller can surface as a toast.
+	 * Import a shot file into the History store: a Crema `crema/v1` JSONL
+	 * history export (web's or Android's, F10) adds every shot not already
+	 * there; otherwise a single legacy de1app `.shot` (Tcl-dict) or modern
+	 * `.shot.json` (v2) file, the parser picked by file extension: `.json` →
+	 * v2, anything else → legacy TCL. Returns the first imported record and
+	 * the count on success, or an error string the caller can surface as a
+	 * toast.
 	 */
-	async importShotFile(
-		file: File
-	): Promise<{ record: ReturnType<ReturnType<typeof getHistoryStore>['addImported']>; error: string | null }> {
+	async importShotFile(file: File): Promise<{
+		record: ReturnType<ReturnType<typeof getHistoryStore>['addImported']>;
+		imported: number;
+		error: string | null;
+	}> {
 		let content: string;
 		try {
 			content = await readImportText(file);
 		} catch (e) {
 			return {
 				record: null,
+				imported: 0,
 				error: `Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`
 			};
+		}
+		if (isCremaJsonl(content)) {
+			let shots: StoredShot[];
+			try {
+				shots = shotsFromCremaJsonl(content);
+			} catch (e) {
+				return {
+					record: null,
+					imported: 0,
+					error: `Could not import ${file.name}: ${e instanceof Error ? e.message : String(e)}`
+				};
+			}
+			const history = getHistoryStore();
+			const fresh = shots.filter((s) => !history.get(s.id));
+			// The export is newest first and each insert prepends: oldest first
+			// leaves the newest on top.
+			for (const shot of [...fresh].reverse()) history.insertPulled(shot);
+			return fresh.length > 0
+				? { record: fresh[0], imported: fresh.length, error: null }
+				: { record: null, imported: 0, error: `${file.name} had no shots that aren't already here.` };
 		}
 		const isV2Json = file.name.toLowerCase().endsWith('.json');
 		try {
@@ -1945,13 +1976,15 @@ export class CremaApp {
 			if (!record) {
 				return {
 					record: null,
+					imported: 0,
 					error: `${file.name} parsed cleanly but had no telemetry samples.`
 				};
 			}
-			return { record, error: null };
+			return { record, imported: 1, error: null };
 		} catch (e) {
 			return {
 				record: null,
+				imported: 0,
 				error: `Could not import ${file.name}: ${e instanceof Error ? e.message : String(e)}`
 			};
 		}
