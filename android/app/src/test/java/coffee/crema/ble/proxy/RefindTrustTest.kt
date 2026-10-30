@@ -71,6 +71,8 @@ class RefindTrustTest {
         VmHarness.persistRole("secondary", "127.0.0.1", 1)
         val vm = VmHarness.build(store)
         VmHarness.idle()
+        // The role and target reach the UI with the prefs load.
+        VmHarness.awaitPrefsLoaded(vm)
         val proxy = VmHarness.proxyController(vm)
         proxy.overridePeers(
             MutableStateFlow(listOf(Peer("nsd-impostor", "Kitchen tablet", "primary", holdsDe1 = true, host = "127.0.0.1", port = impostor.port))),
@@ -87,6 +89,23 @@ class RefindTrustTest {
         assertEquals(1, vm.ui.value.proxyPrimaryPort, "its saved target is unchanged")
         assertEquals("Couldn't verify 127.0.0.1", vm.ui.value.remoteStatus())
         assertTrue(vm.ui.value.canConnectDirectly())
+    }
+
+    /** The one place "forget this host" is offered: the user's own pick of
+     *  a host that can't prove the secret this device holds for it. */
+    @Test
+    fun `a user's pick that fails the host proof offers to forget the host`() {
+        val changed = TestHubServer.scripted { Frame.Challenge("host-1", "Kitchen tablet", PairingCrypto.newNonce()) }
+        endpoints += changed
+        pairingFile.writeText("""{"hostId":"this-device","held":{"host-1":"$secret"}}""")
+        val vm = VmHarness.build(store)
+        VmHarness.idle()
+        // The role and target reach the UI with the prefs load.
+        VmHarness.awaitPrefsLoaded(vm)
+        VmHarness.proxyController(vm).switchToSecondary("127.0.0.1", changed.port)
+        advanceUntil("the forget prompt", maxMs = 10_000) { vm.ui.value.changedHost != null }
+        assertEquals("host-1", vm.ui.value.changedHost?.first)
+        assertEquals(emptyList(), changed.auths)
     }
 
     @Test

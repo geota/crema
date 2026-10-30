@@ -68,6 +68,8 @@ class HubRestartReattachTest {
         VmHarness.persistRole("secondary", "127.0.0.1", first.port)
         vm = VmHarness.build(store)
         VmHarness.idle()
+        // The role and target reach the UI with the prefs load.
+        VmHarness.awaitPrefsLoaded(vm)
         val proxy = VmHarness.proxyController(vm)
         val peers = MutableStateFlow<List<Peer>>(emptyList())
         proxy.overridePeers(peers)
@@ -86,7 +88,7 @@ class HubRestartReattachTest {
         assertEquals("Before the restart", vm.ui.value.grinderModel)
         assertTrue(VmHarness.ownState(vm).mirror!!.reconnecting)
         assertEquals("Reconnecting to Kitchen tablet…", vm.ui.value.remoteStatus())
-        val (second, secondHub) = lifetime(configSource = { """{"grinderModel":"After the restart","rev":0}""" }, clientId = clientId)
+        val (second, secondHub) = lifetime(configSource = { """{"grinderModel":"After the restart","primaryName":"Kitchen tablet","rev":0}""" }, clientId = clientId)
         peers.value = listOf(Peer("nsd-second-lifetime", "Kitchen tablet", "primary", holdsDe1 = false, host = "127.0.0.1", port = second.port))
 
         advanceStepped(REFIND_DELAY_MS + 500)

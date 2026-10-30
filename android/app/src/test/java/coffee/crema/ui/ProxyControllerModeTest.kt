@@ -519,6 +519,58 @@ class ProxyControllerModeTest {
         assertEquals("127.0.0.1:12", dials().last())
     }
 
+    /** #207 validation P2-1: while the re-find is held (the leave-remote
+     *  prompt is open), an attempt in flight that ends, by a refusal or its
+     *  deadline, switches nothing; the release goes back to the saved target. */
+    @Test
+    fun `a held re-find doesn't switch when an attempt ends`() {
+        remoteOnDeadHub(peer("a", 12))
+        advance(REFIND_DELAY_MS + 200)
+        assertEquals("127.0.0.1:12", dials().last())
+        val switches = events.count { it == "teardown" }
+
+        controller.holdRefind(true)
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        advance(1_000)
+        assertEquals("127.0.0.1:12", dials().last(), "no go-back while held")
+        assertEquals(switches, events.count { it == "teardown" }, "no switch at all while held")
+        assertEquals("secondary", controller.state.value.role)
+
+        // Released before the attempt's deadline: the refusal itself ends it.
+        controller.holdRefind(false)
+        advance(200)
+        assertEquals("127.0.0.1:9", dials().last(), "the release goes back to the saved target")
+        // Counted once: the first back-off (5 s), then the port again.
+        advance(REFIND_BACKOFF_MS[0] + 200)
+        assertEquals("127.0.0.1:12", dials().last(), "one refusal, the first back-off: ${dials()}")
+    }
+
+    /** The same for an attempt that only times out, and for a re-find switch
+     *  already queued when the hold is set: it is dropped at the mode lock. */
+    @Test
+    fun `a held re-find drops a queued switch and an unanswered attempt's go-back`() {
+        remoteOnDeadHub(peer("a", 12))
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        controller.modeSwitchProbe = { gate.await() }
+        advance(REFIND_DELAY_MS + 200) // the attempt's switch is queued, waiting at the lock
+        controller.holdRefind(true)
+        gate.complete(Unit)
+        advance(1_000)
+        assertEquals("127.0.0.1:9", dials().last(), "the queued switch was dropped")
+        assertTrue(log.any { "dropping a queued switch" in it }, "$log")
+        controller.modeSwitchProbe = null
+
+        controller.holdRefind(false)
+        advance(200)
+        assertEquals("127.0.0.1:12", dials().last(), "the release re-checks")
+        controller.holdRefind(true)
+        advance(REFIND_DELAY_MS * 4)
+        assertEquals("127.0.0.1:12", dials().last(), "the deadline passed while held: no go-back")
+        controller.holdRefind(false)
+        advance(200)
+        assertEquals("127.0.0.1:9", dials().last())
+    }
+
     /**
      * AC-9 as narrowed (validation P1b): a refused attempt goes back to the
      * saved target (a refused link never redials), and the next try waits
@@ -567,7 +619,45 @@ class ProxyControllerModeTest {
         peers.value = peers.value + peer("a-again", 15)
         advance(200)
         assertFalse(controller.state.value.refindGaveUp, "a new port on the saved host resumes the re-find")
-        assertEquals("127.0.0.1:12", dials().last(), "the first listed port is tried")
+        assertEquals("127.0.0.1:15", dials().last(), "the port not tried yet goes first")
+    }
+
+    /** Validation P1b R2: the least recently tried port on the saved host
+     *  goes first, so an advertisement that sorts first can't take every
+     *  attempt. */
+    @Test
+    fun `the least recently tried port goes first`() {
+        remoteOnDeadHub(peer("a-bad", 12), peer("b-hub", 13))
+        advance(REFIND_DELAY_MS + 200)
+        assertEquals("127.0.0.1:12", dials().last(), "NSD's order for ports never tried")
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        advance(REFIND_BACKOFF_MS[0] + REFIND_DELAY_MS)
+        assertEquals("127.0.0.1:13", dials().last(), "the other port next")
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        advance(REFIND_BACKOFF_MS[1] + REFIND_DELAY_MS)
+        assertEquals("127.0.0.1:12", dials().last(), "then the one tried longest ago")
+    }
+
+    /** Validation P1b R3: after a give-up with the saved target refused,
+     *  the hub back on its saved port under a new instance resumes the
+     *  re-find, and the saved target is dialed again. */
+    @Test
+    fun `a hub back on its saved port resumes after a give-up`() {
+        val peers = remoteOnDeadHub(peer("hub-before", 9))
+        repeat(3) {
+            controller.refuseCurrentSessionForTest(DenyReason.BUSY, byHost = true, hostProved = false)
+            advance(REFIND_BACKOFF_MS[it] + 200)
+        }
+        assertTrue(controller.state.value.refindGaveUp, "three unproven refusals: ${dials()}")
+        val dialed = dials().size
+        advance(120_000)
+        assertEquals(dialed, dials().size, "stopped")
+
+        peers.value = listOf(peer("hub-restarted", 9))
+        advance(200)
+        assertFalse(controller.state.value.refindGaveUp, "a new instance on the saved port resumes")
+        assertEquals(dialed + 1, dials().size)
+        assertEquals("127.0.0.1:9", dials().last())
     }
 
     /** Validation P1b S1/S3: the re-find never dials another address, so an

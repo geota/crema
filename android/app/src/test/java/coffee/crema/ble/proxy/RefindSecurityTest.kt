@@ -81,15 +81,26 @@ class RefindSecurityTest {
     private fun restoredRemote(port: Int, held: Boolean = true): MainViewModel {
         val heldJson = if (held) """{"host-1":"$secret"}""" else "{}"
         pairingFile.writeText("""{"hostId":"this-device","held":$heldJson,"pinnedHost":"host-1"}""")
+        // A known install id, so a hub can check it before the VM exists.
+        File(VmHarness.app().filesDir, "deviceId").writeText(CLIENT_ID)
         VmHarness.persistRole("secondary", "127.0.0.1", port)
         val vm = VmHarness.build(store)
         VmHarness.idle()
+        // The role and target reach the UI with the prefs load.
+        VmHarness.awaitPrefsLoaded(vm)
         return vm
     }
 
-    private fun savedPort(): Int =
-        Json.parseToJsonElement(File(VmHarness.app().filesDir, "prefs.json").readText())
-            .jsonObject["proxyPrimaryPort"]!!.jsonPrimitive.int
+    /** The saved target port. A save renames the old file aside before the
+     *  new one lands, so a read can miss the file for a moment: retry. */
+    private fun savedPort(): Int {
+        val file = File(VmHarness.app().filesDir, "prefs.json")
+        repeat(50) {
+            runCatching { return Json.parseToJsonElement(file.readText()).jsonObject["proxyPrimaryPort"]!!.jsonPrimitive.int }
+            Thread.sleep(5)
+        }
+        return Json.parseToJsonElement(file.readText()).jsonObject["proxyPrimaryPort"]!!.jsonPrimitive.int
+    }
 
     /** A WebSocket endpoint that accepts [sockets] dials and never says anything. */
     private fun silent(sockets: Int = 5): MockWebServer {
@@ -171,11 +182,10 @@ class RefindSecurityTest {
      *  the machine. */
     @Test
     fun `an advertiser at another address can't relay the handshake`() {
-        lateinit var vm: MainViewModel
-        val live = liveHub(clientId = { VmHarness.proxyController(vm).deviceId })
+        val live = liveHub(clientId = { CLIENT_ID })
         val hubServer = serve(live)
         val attacker = relayTo(hubServer.port)
-        vm = restoredRemote(1)
+        val vm = restoredRemote(1)
         val proxy = VmHarness.proxyController(vm)
         val peers = MutableStateFlow(listOf(Peer("nsd-attacker", "A Kitchen tablet", "primary", true, "localhost", attacker.port)))
         proxy.overridePeers(peers)
@@ -200,11 +210,10 @@ class RefindSecurityTest {
      *  silent port is never saved. The hub's own new port then resumes it. */
     @Test
     fun `a silent advertiser can't hold the re-find or be saved`() {
-        lateinit var vm: MainViewModel
-        val live = liveHub(clientId = { VmHarness.proxyController(vm).deviceId })
+        val live = liveHub(clientId = { CLIENT_ID })
         val elsewhere = silent()
         val quiet = silent()
-        vm = restoredRemote(1)
+        val vm = restoredRemote(1)
         val proxy = VmHarness.proxyController(vm)
         val peers = MutableStateFlow(
             listOf(
@@ -235,11 +244,10 @@ class RefindSecurityTest {
      *  matter, and its address isn't the saved host. */
     @Test
     fun `an impostor reusing the hub's instance id can't hide it`() {
-        lateinit var vm: MainViewModel
-        val (real, realHub) = TestHubServer.relay("host-1", "Kitchen tablet", secret, clientId = { VmHarness.proxyController(vm).deviceId })
+        val (real, realHub) = TestHubServer.relay("host-1", "Kitchen tablet", secret, clientId = { CLIENT_ID })
         val impostor = TestHubServer.scripted { Frame.Challenge("rogue-1", "Kitchen tablet", PairingCrypto.newNonce()) }
         endpoints += listOf(real, impostor)
-        vm = restoredRemote(1)
+        val vm = restoredRemote(1)
         VmHarness.proxyController(vm).overridePeers(
             MutableStateFlow(
                 listOf(
@@ -284,12 +292,11 @@ class RefindSecurityTest {
      *  old dead address. */
     @Test
     fun `a re-found hub that blips is kept`() {
-        lateinit var vm: MainViewModel
-        val clientId = { VmHarness.proxyController(vm).deviceId }
+        val clientId = { CLIENT_ID }
         val (first, _) = TestHubServer.relay("host-1", "Kitchen tablet", secret, clientId = clientId)
         endpoints += first
         val oldPort = first.port
-        vm = restoredRemote(oldPort)
+        val vm = restoredRemote(oldPort)
         val proxy = VmHarness.proxyController(vm)
         val peers = MutableStateFlow<List<Peer>>(emptyList())
         proxy.overridePeers(peers)
@@ -316,5 +323,9 @@ class RefindSecurityTest {
         assertTrue(back.requestCount > 0, "the remote came back to the re-found port")
         assertEquals(newPort, vm.ui.value.proxyPrimaryPort)
         assertEquals(newPort, savedPort())
+    }
+
+    private companion object {
+        const val CLIENT_ID = "phone-1"
     }
 }
