@@ -101,6 +101,17 @@ pub(crate) struct RequestGuard {
     wake_sent: Option<Duration>,
 }
 
+/// The states the DE1 enters only from Idle, and in which water flows.
+fn is_flow_state(state: MachineState) -> bool {
+    matches!(
+        state,
+        MachineState::Espresso
+            | MachineState::Steam
+            | MachineState::HotWater
+            | MachineState::HotWaterRinse
+    )
+}
+
 /// A request waiting out the guard.
 #[derive(Debug, Clone, Copy)]
 struct Held {
@@ -219,8 +230,13 @@ impl CremaCore {
             } else if clear {
                 self.request_guard.held = None;
                 self.write_state_now(held.state, out);
-                // The profile sync waited for it.
-                self.drive_profile_sync(out);
+                // The profile sync waited for it — but not after a flow
+                // state: the last state report still reads Idle, and an
+                // upload must not chase a machine entering Steam (F7.5). The
+                // next state report or tick decides.
+                if !is_flow_state(held.state) {
+                    self.drive_profile_sync(out);
+                }
             }
         }
         self.emit_wake(out);
@@ -230,14 +246,7 @@ impl CremaCore {
     /// first (the DE1 only enters a flow state from Idle), then the state.
     pub(crate) fn write_state_now(&mut self, state: MachineState, out: &mut CoreOutput) {
         let current = self.last_state.map(|info| info.state);
-        let starting_flow = matches!(
-            state,
-            MachineState::Espresso
-                | MachineState::Steam
-                | MachineState::HotWater
-                | MachineState::HotWaterRinse
-        );
-        if starting_flow && current != Some(MachineState::Idle) {
+        if is_flow_state(state) && current != Some(MachineState::Idle) {
             out.commands.push(Command::WriteCharacteristic {
                 target: WriteTarget::De1RequestedState,
                 data: vec![requested_state(MachineState::Idle)],
@@ -658,5 +667,50 @@ mod tests {
                 .any(|e| matches!(e, Event::MachineRequestDropped { .. }))
         );
         assert!(state_writes(&out).is_empty());
+    }
+
+    /// Validation P2 (F16): releasing a held flow request starts no profile
+    /// upload in the same output — the last report still reads Idle, and the
+    /// header must not chase a machine entering Steam (F7.5).
+    #[test]
+    fn releasing_a_flow_request_starts_no_upload_with_it() {
+        use de1_domain::{BrewOverrides, ConnectSweepSettings};
+        let mut core = CremaCore::new_with_model(1);
+        let _ = core.on_notification(Source::De1State, &IDLE, 1_000);
+        let _ = core.connect_sweep(&ConnectSweepSettings::default(), 1_000);
+        let p = blank_profile(&BrewDefaults::default());
+        let upload = core.set_desired_profile(
+            Some(&p),
+            &BrewOverrides::default(),
+            Duration::from_millis(1_100),
+        );
+        assert!(core.profile_upload_in_progress());
+        let _ = core.request_machine_state(MachineState::Steam); // held
+        // The dial moves: a new desired profile, waiting for the upload.
+        let dialled = BrewOverrides {
+            brew_temp: Some(p.segments[0].temp + 1.0),
+            ..BrewOverrides::default()
+        };
+        let _ = core.set_desired_profile(Some(&p), &dialled, Duration::from_millis(1_200));
+        let done = complete(&mut core, &upload, 1_300);
+        assert!(!uploads_header(&done), "the held request goes first");
+        let release = core.on_tick(1_800);
+        assert_eq!(
+            state_writes(&release),
+            vec![requested_state(MachineState::Steam)]
+        );
+        assert!(!uploads_header(&release), "no header chasing Steam");
+    }
+
+    fn uploads_header(out: &CoreOutput) -> bool {
+        out.commands.iter().any(|c| {
+            matches!(
+                c,
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1ProfileHeader,
+                    ..
+                }
+            )
+        })
     }
 }
