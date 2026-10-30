@@ -5662,8 +5662,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         "(${event.content.command}): ${event.content.measured}",
                 )
             is Event.WakeAt -> wake.arm(event.content.at_ms.toLong())
-            is Event.MachineRequestHeld ->
+            is Event.MachineRequestHeld -> {
                 appendLog("${event.content.state.string} request held until the profile finishes loading")
+                notifyUser(REQUEST_HELD_TEXT)
+            }
+            is Event.MachineRequestDropped -> {
+                val text = machineRequestDropText(event.content.state, event.content.reason)
+                appendLog(text)
+                notifyUser(text)
+            }
             is Event.MachineRequestRefused -> {
                 val text = machineRequestRefusalText(event.content.state, event.content.reason)
                 appendLog("Request refused: $text")

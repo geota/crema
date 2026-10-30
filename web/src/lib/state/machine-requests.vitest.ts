@@ -8,11 +8,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CoreOutput } from '#lib/core/crema-core.js';
+import { toast } from '#lib/components/shared/toast.svelte.js';
 
 const IDLE = 2;
 /** The RequestedState byte for Steam / Idle (`de1_protocol::requested_state`). */
 const STEAM = 5;
 const STOP = 2;
+const ESPRESSO = 4;
 
 function modelReply(): Uint8Array {
 	const packet = new Uint8Array(20);
@@ -115,5 +117,43 @@ describe('state requests wait out the profile-download guard (F16a, web)', () =>
 		await vi.advanceTimersByTimeAsync(1_000);
 		expect(ticks).not.toHaveBeenCalled();
 		Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+	});
+});
+
+describe('the user hears about a held, dropped or refused request (F16a validation)', () => {
+	it('a held request says it waits; one the machine moved on from is dropped and said so', async () => {
+		const info = vi.spyOn(toast, 'info');
+		const { app, core, requests, profile, internals } = await setup();
+		// An upload in flight (its acks don't land yet): hold the writes.
+		const { De1Manager } = await import('#lib/ble/index.js');
+		vi.spyOn(De1Manager.prototype, 'writeCharacteristic').mockImplementation(
+			async (target: string, data: Uint8Array) => {
+				if (target === 'De1RequestedState') requests.push(data[0]);
+				return true;
+			}
+		);
+		await app.setDesiredProfile(profile);
+		requests.length = 0;
+		await app.requestMachineState('Steam' as never);
+		expect(info).toHaveBeenCalledWith('Waiting for the profile to load…', 2500);
+		// A shot starts at the group head; the hold runs out.
+		internals.applyCoreOutput(
+			await core.onNotification('De1State', new Uint8Array([ESPRESSO, 4]), performance.now())
+		);
+		await vi.advanceTimersByTimeAsync(3_100);
+		expect(requests, 'Steam never sent: it would stop the shot').toEqual([]);
+		expect(info).toHaveBeenCalledWith('Steam cancelled: a shot started', 6000);
+	});
+
+	it('a refused maintenance request is a toast', async () => {
+		const error = vi.spyOn(toast, 'error');
+		const { app, core, internals, requests } = await setup();
+		internals.applyCoreOutput(
+			await core.onNotification('De1State', new Uint8Array([ESPRESSO, 4]), performance.now())
+		);
+		requests.length = 0;
+		await app.requestMachineState('Descale' as never);
+		expect(requests).toEqual([]);
+		expect(error).toHaveBeenCalledWith('Descale needs the DE1 idle or asleep (it is in Espresso).');
 	});
 });

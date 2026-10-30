@@ -1,5 +1,6 @@
 package coffee.crema.ui
 
+import coffee.crema.core.MachineRequestDrop
 import coffee.crema.core.MachineRequestRefusal
 import coffee.crema.core.MachineState
 
@@ -17,3 +18,16 @@ internal fun machineRequestRefusalText(state: MachineState, reason: MachineReque
  *  (Idle or Sleep), the one `request_machine_state` enforces (F16). */
 internal fun MainUiState.maintenanceRunAllowed(): Boolean =
     coffee.crema.core.maintenanceRequestAllowed(machineStateName?.string)
+
+/** Shown while a request the user made waits for the profile to load. */
+internal const val REQUEST_HELD_TEXT = "Waiting for the profile to load\u2026"
+
+/** One sentence for `Event.MachineRequestDropped`: why the request never
+ *  went out (web twin `machineRequestDropText`). */
+internal fun machineRequestDropText(state: MachineState, reason: MachineRequestDrop): String =
+    when (reason) {
+        is MachineRequestDrop.StateChanged ->
+            if (reason.details.to == MachineState.Espresso) "${state.string} cancelled: a shot started"
+            else "${state.string} cancelled: the machine moved on (it is in ${reason.details.to.string})"
+        MachineRequestDrop.TookTooLong -> "${state.string} cancelled: the profile is still loading \u2014 try again"
+    }

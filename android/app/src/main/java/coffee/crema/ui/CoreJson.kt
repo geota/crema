@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import coffee.crema.core.CalibrationRefusal
+import coffee.crema.core.MachineRequestDrop
 import coffee.crema.core.MachineRequestRefusal
 import coffee.crema.core.ProfileUploadFailure
 import kotlinx.serialization.DeserializationStrategy
@@ -21,6 +22,7 @@ internal val kindTaggedCoreEnums: SerializersModule = SerializersModule {
     polymorphicDefaultDeserializer(ProfileUploadFailure::class) { KindTagged(ProfileUploadFailure.serializer()) }
     polymorphicDefaultDeserializer(CalibrationRefusal::class) { KindTagged(CalibrationRefusal.serializer()) }
     polymorphicDefaultDeserializer(MachineRequestRefusal::class) { KindTagged(MachineRequestRefusal.serializer()) }
+    polymorphicDefaultDeserializer(MachineRequestDrop::class) { KindTagged(MachineRequestDrop.serializer()) }
 }
 
 /**

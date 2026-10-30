@@ -43,7 +43,9 @@ pub use firmware_flash::{
     FLASHABLE_MODELS, FirmwareFlash, FlashAction, FlashBlocker, FlashFailure, FlashPhase,
     FlashShellConditions, FlashStartError, FlashStatus, FlashStep,
 };
-pub use machine_requests::{MachineRequestRefusal, PROFILE_DOWNLOAD_GUARD};
+pub use machine_requests::{
+    MAX_HOLD, MachineRequestDrop, MachineRequestRefusal, PROFILE_DOWNLOAD_GUARD,
+};
 pub use profile_sync::{
     ProfileSyncOutput, ProfileSyncStatus, RETRY_DELAYS as PROFILE_SYNC_RETRY_DELAYS,
 };
@@ -1534,7 +1536,7 @@ impl CremaCore {
             self.drop_held_request();
             return out;
         }
-        self.issue_state_request(state, &mut out);
+        self.issue_state_request(state, true, &mut out);
         out
     }
 
@@ -3377,6 +3379,7 @@ impl CremaCore {
         self.update_maintenance(now, &mut out);
         // A request waiting out the profile-download guard goes out.
         self.drive_held_request(&mut out);
+        self.rearm_wake(&mut out);
         // Backstop for the post-stop drip settle (#64): guarantees a deferred
         // completion finalizes on the [`POST_SHOT_SETTLE_MAX`] deadline even if
         // the scale stream stalls (the tick is the shells' periodic watchdog).

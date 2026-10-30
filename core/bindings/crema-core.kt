@@ -1636,6 +1636,15 @@ data class EventMachineRequestHeldInner (
 	val state: MachineState
 )
 
+/// Generated type representing the anonymous struct variant `MachineRequestDropped` of the `Event` Rust enum
+@Serializable
+data class EventMachineRequestDroppedInner (
+	/// The requested state.
+	val state: MachineState,
+	/// Why.
+	val reason: MachineRequestDrop
+)
+
 /// Generated type representing the anonymous struct variant `MachineRequestRefused` of the `Event` Rust enum
 @Serializable
 data class EventMachineRequestRefusedInner (
@@ -2056,13 +2065,22 @@ sealed class Event {
 	@Serializable
 	@SerialName("CalibrationRefused")
 	data class CalibrationRefused(val content: EventCalibrationRefusedInner): Event()
-	/// A machine state request is waiting out the firmware's profile-download
-	/// guard (a profile upload in flight, or the 500 ms after it — see
-	/// [`machine_requests`](crate::machine_requests)); it goes out on its own.
-	/// For the log; the shell need not tell the user.
+	/// A machine state request the user made is waiting out the firmware's
+	/// profile-download guard (a profile upload in flight, or the 500 ms after
+	/// it — see [`machine_requests`](crate::machine_requests)); it goes out on
+	/// its own, or is dropped ([`Event::MachineRequestDropped`]). A shell
+	/// shows a small non-blocking "waiting" note.
 	@Serializable
 	@SerialName("MachineRequestHeld")
 	data class MachineRequestHeld(val content: EventMachineRequestHeldInner): Event()
+	/// A request the user made, held through the profile-download guard,
+	/// was dropped instead of sent: the machine left the state it was in (a
+	/// shot started at the group head), a maintenance cycle is no longer
+	/// allowed, or the profile took too long to load. Tell the user; nothing
+	/// was written.
+	@Serializable
+	@SerialName("MachineRequestDropped")
+	data class MachineRequestDropped(val content: EventMachineRequestDroppedInner): Event()
 	/// A machine state request was refused before anything was written: a
 	/// maintenance cycle needs the machine in Idle or Sleep.
 	@Serializable
@@ -4569,6 +4587,29 @@ sealed class IdleSleepInput {
 	@Serializable
 	@SerialName("Tick")
 	object Tick: IdleSleepInput()
+}
+
+/// Generated type representing the anonymous struct variant `StateChanged` of the `MachineRequestDrop` Rust enum
+@Serializable
+data class MachineRequestDropStateChangedInner (
+	/// The state it was in.
+	val from: MachineState? = null,
+	/// The state it is in now.
+	val to: MachineState
+)
+
+/// Why a held machine state request was dropped instead of sent.
+@Serializable
+sealed class MachineRequestDrop {
+	/// The machine left the state it was in when the request was made (a
+	/// shot started at the group head, for one).
+	@Serializable
+	@SerialName("StateChanged")
+	data class StateChanged(val details: MachineRequestDropStateChangedInner): MachineRequestDrop()
+	/// The profile took longer than [`MAX_HOLD`] to load.
+	@Serializable
+	@SerialName("TookTooLong")
+	object TookTooLong: MachineRequestDrop()
 }
 
 /// Generated type representing the anonymous struct variant `MachineNotIdle` of the `MachineRequestRefusal` Rust enum
