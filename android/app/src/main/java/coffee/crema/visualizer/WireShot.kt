@@ -141,17 +141,22 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
                     // fallbacks, and preserved through a backup.
                     put("grinderSetting", b.grinderSetting)
                     put("grinder", b.grinder)
+                    b.notes?.let { put("notes", it) }
                 }
             } ?: JsonNull,
         )
         put("grinderModel", resolveGrinderModel(shot, grinderModel))
-        put("tags", buildJsonArray {})
+        put("tags", buildJsonArray { shot.tags.forEach { add(JsonPrimitive(it)) } })
         // The stop-at-weight target dialled for this shot (Decent's `targetYield`).
         put("yieldTarget", shot.yieldTargetG)
         if (forBackup && shot.brewTempC != null) put("brewTempTarget", shot.brewTempC) else put("brewTempTarget", JsonNull)
-        put("preinfuseTarget", JsonNull)
-        put("stopOnWeight", false)
-        put("autoTare", false)
+        // The as-run pre-infusion and the stop switches (F10, from the core);
+        // the v2 exporter writes them to `metadata.crema`.
+        put("preinfuseTarget", shot.preinfuseTargetS)
+        put("stopOnWeight", shot.stopOnWeight)
+        put("autoTare", shot.autoTare)
+        shot.stopReason?.let { put("stopReason", it) }
+        if (forBackup) shot.privacy?.let { put("privacy", it) }
         // Server-assigned on upload (rides as null); preserved for a backup so a
         // restore PATCHes the same Visualizer row instead of duplicating it.
         if (forBackup) put("visualizerId", shot.visualizerId) else put("visualizerId", JsonNull)
@@ -236,21 +241,26 @@ fun storedShotFromWire(wire: JsonObject, samplesJson: String?, json: kotlinx.ser
         notes = str("notes"),
         // Final review 06 #1: dropped before, so an edit wiped the remote one.
         barista = str("barista")?.trim()?.takeIf { it.isNotEmpty() },
-        samples = coffee.crema.history.downsampleForStorage(samples),
+        // The whole pulled series (F10): a re-upload must reproduce it.
+        samples = samples,
         visualizerId = vid,
     )
 }
 
 /**
  * Inverse of [wireShotJson]: materialise a backup/core-shape `StoredShot` JSON
- * object (the shape the core backup exporter emits and the web shell persists
- * natively — `formatVersion` / `completedAt` / nested `record.samples`) back into
- * Android's flat [StoredShot], for whole-app backup RESTORE (issue 01). Distinct
+ * object (the shape the core backup exporter emits, the core's shot assembly
+ * returns and the web shell persists natively — `formatVersion` /
+ * `completedAt` / nested `record.samples`) back into Android's flat
+ * [StoredShot] — for whole-app backup RESTORE (issue 01) and, since F10, for
+ * every captured shot (`CremaBridge.takeStoredShot`): the one adapter from the
+ * core shape to the flat model. Distinct
  * from [storedShotFromWire], which parses the Visualizer *detail* shape
  * (`clock` / `duration_ms`), not this. Peaks are re-derived from the samples
  * (the core stores none). Returns null only when `id` is absent.
  */
 fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Json): StoredShot? {
+    fun boolOf(k: String) = (o[k] as? JsonPrimitive)?.contentOrNull?.toBooleanStrictOrNull()
     fun str(k: String) = (o[k] as? JsonPrimitive)?.contentOrNull
     fun longOf(s: String?): Long? = s?.toLongOrNull() ?: s?.toDoubleOrNull()?.toLong()
     val id = str("id") ?: return null
@@ -279,8 +289,17 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         bean = bean,
         rating = metaStr("rating")?.toIntOrNull()?.takeIf { it > 0 },
         notes = metaStr("notes"),
-        samples = coffee.crema.history.downsampleForStorage(samples),
+        // The whole series (F10): the core's record, or a backup's.
+        samples = samples,
         privacy = str("privacy"),
+        profile = o["profile"] as? JsonObject,
+        tags = (o["tags"] as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            .orEmpty(),
+        preinfuseTargetS = str("preinfuseTarget")?.toFloatOrNull(),
+        stopOnWeight = boolOf("stopOnWeight"),
+        autoTare = boolOf("autoTare"),
+        stopReason = str("stopReason")?.takeIf { it.isNotBlank() },
         visualizerId = str("visualizerId"),
         yieldTargetG = str("yieldTarget")?.toFloatOrNull(),
         decentId = str("decentId")?.takeIf { it.isNotBlank() },
