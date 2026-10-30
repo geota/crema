@@ -351,11 +351,17 @@ class RelayKeyStore(
         result
     }
 
-    /** [update] that reports whether the change reached the file (always true while memory-only). */
+    /**
+     * [update] that reports whether the change reached the file (always true
+     * while memory-only). A failed write leaves the in-memory state as it was,
+     * so nothing reads as saved (a pin, `v3Migrated`) that isn't on disk.
+     */
     private fun updateSaved(change: (RelayFile) -> RelayFile): Boolean = synchronized(lock) {
         check(keys != null) { "relay keys not loaded" }
-        state = change(state)
-        !persistent || write(state)
+        val next = change(state)
+        if (persistent && !write(next)) return false
+        state = next
+        true
     }
 
     private fun write(next: RelayFile): Boolean = try {
