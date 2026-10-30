@@ -137,6 +137,10 @@ impl CremaCore {
         if settings.steam_eco {
             append(&mut out, self.enable_steam_eco_mode(true, now_ms));
         }
+        // The connection is settled: the desired profile goes out after the
+        // settings, on every connect (reaprime `initSettled`) — see
+        // `profile_sync`.
+        self.profile_sync_settled(&mut out);
         self.gate_read_only(out)
     }
 

@@ -693,33 +693,34 @@ pub enum Event {
         title: String,
     },
     /// The profile upload failed. The core has discarded its in-progress
-    /// state; the shell may retry by calling `upload_profile` again.
+    /// state.
     ///
     /// Once the header was dispatched, what the DE1 holds is **unknown**:
     /// frames are indexed slot writes with no commit step, so an interrupted
     /// upload can leave the new header's frame count over a mix of new and
-    /// old frames (Decenza `aa8232e6`). The shell must forget any "the DE1
-    /// holds profile X" cache on this event; the core asks for a re-upload
-    /// with [`ProfileReuploadNeeded`](Self::ProfileReuploadNeeded) once the
-    /// machine is Idle.
+    /// old frames (Decenza `aa8232e6`). The core's profile sync retries a
+    /// failed sync upload on its backoff and puts the desired profile back
+    /// after any other failed upload, once the machine is idle (see
+    /// [`ProfileSyncWarning`](Self::ProfileSyncWarning)).
     ProfileUploadFailed {
         /// Why the upload failed.
         reason: ProfileUploadFailure,
     },
-    /// The DE1's loaded profile is unknown after a failed upload and the
-    /// machine is Idle, so the shell should upload the active profile now.
-    /// Emitted when a failure lands while the machine is Idle, on the next
-    /// transition into Idle (after the flow that interrupted the upload,
-    /// never during it), or on a tick. The request stays outstanding until a
-    /// shell starts an upload: it is repeated every
-    /// [`PROFILE_REUPLOAD_REPEAT`](crate::PROFILE_REUPLOAD_REPEAT) while the
-    /// machine stays Idle, so a shell that could not act at once (link not
-    /// ready yet) is asked again. At most
-    /// [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
-    /// uploads are started in answer until one completes; cleared by a
-    /// completed upload or a reset (the reconnect path owns the re-upload).
-    /// Decenza's `ReArm` follow-up (`aa8232e6`).
-    ProfileReuploadNeeded,
+    /// A profile-sync upload landed: the DE1 now holds the effective profile
+    /// with this fingerprint (the shell's desired one, unless it changed
+    /// meanwhile — the newer one follows). A shot start waits for its own.
+    ProfileSyncHolds {
+        /// The fingerprint of the profile the DE1 now holds.
+        fingerprint: String,
+    },
+    /// The profile sync's one non-blocking warning: `active` when a sync
+    /// upload failed and retries are running (3 s, 10 s, then every 30 s);
+    /// cleared (`active: false`) by the next success or a disconnect.
+    /// Raised once per streak of failures (reaprime `onUploadError`).
+    ProfileSyncWarning {
+        /// Whether the warning is raised.
+        active: bool,
+    },
     /// An incoming notification could not be decoded.
     DecodeError {
         /// Human-readable description of the failure.
@@ -893,19 +894,6 @@ pub struct CoreOutput {
     pub events: Vec<Event>,
     /// BLE writes the shell should perform, in order.
     pub commands: Vec<Command>,
-}
-
-/// What [`CremaCore::upload_crema_profile_json`](crate::CremaCore::upload_crema_profile_json)
-/// returns to a shell: the upload's [`CoreOutput`] and the fingerprint of the
-/// bytes it writes (`None` when nothing was uploaded — a malformed or rejected
-/// profile, whose failure event is in `output`).
-#[typeshare]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ProfileUploadOutput {
-    /// The upload's events and BLE writes.
-    pub output: CoreOutput,
-    /// The effective profile's fingerprint, or `None` when no upload started.
-    pub fingerprint: Option<String>,
 }
 
 #[cfg(test)]
