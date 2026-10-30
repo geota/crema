@@ -1009,11 +1009,15 @@
 						<div class="be-grid2">
 							<div class="be-frow be-frow-stack">
 								<div class="be-frow-l">
-									<label class="be-frow-label" for={`${uid}-frozen-on`}>Frozen on</label>
+									<label class="be-frow-label" for={`${uid}-frozen-on`}>Frozen since</label>
+									<div class="be-frow-sub" id={`${uid}-frozen-on-sub`}>
+										Moved later by any thaw, so the off-roast count stays right.
+									</div>
 								</div>
 								<div class="be-frow-r">
 									<input
 										id={`${uid}-frozen-on`}
+										aria-describedby={`${uid}-frozen-on-sub`}
 										class="be-input be-input-date"
 										type="date"
 										value={current.frozenOn ?? ''}
