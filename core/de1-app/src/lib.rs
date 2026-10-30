@@ -506,9 +506,6 @@ pub struct CremaCore {
     shot_settings_written: Option<[u8; 9]>,
     /// This generation's one restore after a foreign packet change is used.
     foreign_restore_used: bool,
-    /// The next cuuid_0B data is the reply to the shells' connect-time seed
-    /// read: never a foreign change.
-    shot_settings_read_pending: bool,
     /// The hot-water target last sent in [`Event::HotWaterTarget`] this
     /// generation.
     last_hot_water_target: Option<de1_domain::HotWaterTarget>,
@@ -519,6 +516,12 @@ pub struct CremaCore {
     /// the one that cuts the pour — it was the missing half of that de1app
     /// convention. Cleared when the session completes or the stop fires.
     hot_water_stop_target_g: Option<f32>,
+    /// The first state this core saw (after [`new`](Self::new) or
+    /// [`reset`](Self::reset)) was already HotWater: that pour began before
+    /// this core watched it, so it is neither tared (the cup already holds
+    /// water) nor armed with the full target. The packet's backstop bounds
+    /// it. Cleared by the next state that isn't HotWater.
+    hot_water_began_unseen: bool,
     /// The eco-mode steam target temperature, °C.
     steam_eco_temp: f32,
     last_state: Option<StateInfo>,
@@ -676,6 +679,13 @@ pub struct CremaCore {
     /// Whether an [`Event::ScaleStale`] has already been emitted for the
     /// current stale episode — cleared by the next fresh reading.
     scale_stale_reported: bool,
+    /// Whether the connected scale has sent a weight reading since it
+    /// connected (de1app `is_operational`'s `_watchdog_updates_seen`). The
+    /// stale watchdog only runs once a reading exists, so without this a
+    /// scale that never streams would count as operational. `false` from
+    /// [`connect_scale`](Self::connect_scale), [`disconnect_scale`](Self::disconnect_scale)
+    /// and [`reset`](Self::reset) (which keeps the scale but needs a fresh reading).
+    scale_reading_seen: bool,
     /// The `last_scale_weight` a silent [`Event::ScaleLinkDead`] was emitted
     /// for. A fresh reading moves `last_scale_weight` on, which re-arms it, so
     /// a scale that reconnects but stays silent is not torn down again.
@@ -1042,9 +1052,9 @@ impl CremaCore {
             link: packet_sync::LinkSession::default(),
             shot_settings_written: None,
             foreign_restore_used: false,
-            shot_settings_read_pending: true,
             last_hot_water_target: None,
             hot_water_stop_target_g: None,
+            hot_water_began_unseen: false,
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
             shot_started: None,
@@ -1075,6 +1085,7 @@ impl CremaCore {
             last_scale_weight: None,
             last_scale_estimate: None,
             scale_stale_reported: false,
+            scale_reading_seen: false,
             scale_dead_reported_for: None,
             scale_write_failures: 0,
             scale_write_failures_anchor: None,
@@ -1230,6 +1241,7 @@ impl CremaCore {
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
         self.scale_write_failures = 0;
+        self.scale_reading_seen = false;
         // A scale arriving MID-SHOT was never tared for this shot — reopen
         // the untared-cup window so its first reading is sanity-checked
         // before the re-armed weight leg can fire (review #29).
@@ -1263,6 +1275,7 @@ impl CremaCore {
         self.last_scale_weight = None;
         self.last_scale_estimate = None;
         self.scale_stale_reported = false;
+        self.scale_reading_seen = false;
         self.scale_dead_reported_for = None;
         self.scale_write_failures = 0;
         self.scale_write_failures_anchor = None;
@@ -3527,6 +3540,11 @@ impl CremaCore {
             let prev_info = self.last_state;
             let prev_state = prev_info.map(|s| s.state);
             self.last_state = Some(info);
+            if info.state != MachineState::HotWater {
+                self.hot_water_began_unseen = false;
+            } else if prev_info.is_none() {
+                self.hot_water_began_unseen = true;
+            }
             self.idle_sleep.machine_state(info.state, info.substate);
             self.descale.on_state(prev_info, info, now);
             self.advance_maintenance(info, now, out);
@@ -3801,6 +3819,7 @@ impl CremaCore {
         // A fresh reading re-arms the lost-scale watchdog.
         self.last_scale_weight = Some(now);
         self.scale_stale_reported = false;
+        self.scale_reading_seen = true;
         // The first weight notification stands in for a scale-connected hook:
         // fire the one-shot serial / settings queries so the anti-mistouch
         // state and active mode are fetched as soon as the scale is reporting.
@@ -5567,6 +5586,7 @@ impl CremaCore {
                 // operational scale; never time mode). Never the machine
                 // echo, which can carry the 250 ml backstop (review #25).
                 if kind == de1_domain::WaterSessionKind::HotWater
+                    && !self.hot_water_began_unseen
                     && let Some(target_g) = self.hot_water_target().and_then(|t| t.stop_weight_g)
                 {
                     self.hot_water_stop_target_g = Some(target_g);
@@ -5603,9 +5623,13 @@ impl CremaCore {
             }
             SteamEvent::EcoModeChanged(eco) => {
                 out.events.push(Event::SteamEcoModeChanged { eco });
-                // Not held for a flow state: leaving eco as a steam session
-                // starts must restore the steam target for that session.
-                self.drive_shot_settings(out, true);
+                // Not held in Steam: leaving eco as a steam session starts
+                // must restore the steam target for that session. Any other
+                // flow state (a pour, a shot) waits as usual.
+                let steaming = self
+                    .last_state
+                    .is_some_and(|s| s.state == MachineState::Steam);
+                self.drive_shot_settings(out, steaming);
             }
         }
     }
@@ -9714,6 +9738,7 @@ mod tests {
         // THIS is the stop that cuts the pour.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
         set_packet(&mut core, hotwater_settings(150.0));
         let out = core.on_notification(Source::De1State, &[6, 5], 0);
         // Entering hot water tares the scale (settle-gated, like espresso).
@@ -9758,6 +9783,7 @@ mod tests {
         // characteristic. That echo must not become the by-weight target.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
         set_packet(&mut core, hotwater_settings(150.0));
         // The machine echoes the settings we actually wrote — 250 ml.
         let echo = hotwater_settings(HOT_WATER_STOP_ON_SCALE_ML).encode();
@@ -10031,6 +10057,7 @@ mod tests {
     fn set_steam_hotwater_settings_requests_250ml_when_a_scale_is_connected() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
         let out = set_packet(&mut core, hotwater_settings(50.0));
         let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic command");
