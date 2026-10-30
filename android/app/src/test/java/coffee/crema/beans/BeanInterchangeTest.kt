@@ -94,7 +94,7 @@ class BeanInterchangeTest {
         val merge = mergeBeanImport(wireBeans, wireRoasters, renamed, roasterRenamed)
         assertTrue(merge.newBeans.isEmpty())
         assertTrue(merge.newRoasters.isEmpty())
-        assertEquals(2, merge.skipped)
+        assertEquals(2u, merge.skipped)
         assertEquals(mapOf("bean:android-1" to "bean:android-1", "bean:android-2" to "bean:android-2"), merge.beanIdRemap)
     }
 
@@ -105,5 +105,39 @@ class BeanInterchangeTest {
         assertFalse(isCremaLibraryJsonl("{\"BEANS\":[],\"BREWS\":[]}"))
         assertFalse(isCremaLibraryJsonl("{\"beans\":[],\"roasters\":[],\"activeBeanId\":null}"))
         assertFalse(isCremaLibraryJsonl(""))
+    }
+
+    // ── F11c: the core's import merge rule (merge_bean_import) ────────────
+
+    private fun stamped(bean: Bean, updatedAt: Long, deletedAt: Long? = null) =
+        bean.copy(updatedAt = updatedAt, deletedAt = deletedAt)
+
+    @Test
+    fun `a newer incoming bean replaces the library row with the same id`() {
+        val local = stamped(beans[1], 100)
+        val incoming = stamped(beans[1].copy(name = "House Blend (new bag)"), 200)
+        val merge = mergeBeanImport(listOf(incoming), emptyList(), listOf(local), emptyList())
+        assertEquals(listOf(incoming), merge.updatedBeans)
+        assertTrue(merge.newBeans.isEmpty())
+        assertEquals(0u, merge.skipped)
+    }
+
+    @Test
+    fun `an older or tied incoming bean keeps the library row`() {
+        val local = stamped(beans[1].copy(name = "Edited here"), 200)
+        for (stamp in listOf(100L, 200L)) {
+            val merge = mergeBeanImport(listOf(stamped(beans[1], stamp)), emptyList(), listOf(local), emptyList())
+            assertTrue(merge.updatedBeans.isEmpty() && merge.newBeans.isEmpty(), "$stamp")
+            assertEquals(1u, merge.skipped, "$stamp")
+        }
+    }
+
+    @Test
+    fun `an older incoming bean does not resurrect a local tombstone`() {
+        val deleted = stamped(beans[1], 100, deletedAt = 300)
+        val older = mergeBeanImport(listOf(stamped(beans[1], 250)), emptyList(), listOf(deleted), emptyList())
+        assertTrue(older.updatedBeans.isEmpty() && older.newBeans.isEmpty())
+        val newer = mergeBeanImport(listOf(stamped(beans[1], 400)), emptyList(), listOf(deleted), emptyList())
+        assertEquals(listOf("bean:android-2"), newer.updatedBeans.map { it.id })
     }
 }

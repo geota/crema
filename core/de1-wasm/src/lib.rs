@@ -761,6 +761,15 @@ pub fn duplicate_bean_json(bean_json: &str, new_id: &str, now_ms: f64) -> Result
     de1_domain::duplicate_bean_json(bean_json, new_id, f64_to_ms(now_ms))
 }
 
+/// Merge an imported bean library into the local one — the rule both shells
+/// use. Input `{incomingBeans, incomingRoasters, libraryBeans,
+/// libraryRoasters}`, output a `BeanImportMerge` JSON. See
+/// `de1_domain::merge_bean_import`.
+#[wasm_bindgen(js_name = mergeBeanImportJson)]
+pub fn merge_bean_import_json(payload: &str) -> Result<String, String> {
+    de1_domain::merge_bean_import_json(payload)
+}
+
 /// A bean with its Frozen switch set (`Bean` JSON in and out): freeze stamps
 /// today, defrost stamps `defrostedOn` and keeps `frozenOn`, refreeze carries
 /// the earlier frozen span; days off roast never moves. See

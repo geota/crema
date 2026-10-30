@@ -426,6 +426,21 @@ pub fn duplicate_bean_json(
     de1_domain::duplicate_bean_json(&bean_json, &new_id, now_unix_ms).map_err(CremaError::from)
 }
 
+/// Merge an imported bean library into the local one — the rule both shells
+/// use (newer `updated_at` wins for a shared id, a tie keeps local, an older
+/// row never resurrects a local tombstone; Beanconqueror re-import, roaster
+/// repoint and (roaster, name, roast date) dedupe). Input
+/// `{incomingBeans, incomingRoasters, libraryBeans, libraryRoasters}`, output
+/// a `BeanImportMerge` JSON. See [`de1_domain::merge_bean_import`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the payload JSON is malformed.
+#[uniffi::export]
+pub fn merge_bean_import_json(payload: String) -> Result<String, CremaError> {
+    de1_domain::merge_bean_import_json(&payload).map_err(CremaError::from)
+}
+
 /// A bean with its Frozen switch set (`Bean` JSON in and out): freeze stamps
 /// today, defrost stamps `defrosted_on` and keeps `frozen_on`, refreeze
 /// carries the earlier frozen span; days off roast never moves. See

@@ -3,7 +3,7 @@ import { flushSync, mount, tick, unmount } from 'svelte';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { initTestWasm } from '#lib/testing/test-init.js';
-import { getBeanStore } from '#lib/bean/index.js';
+import { getBeanStore, type Bean } from '#lib/bean/index.js';
 import BeanImportDialog from './BeanImportDialog.svelte';
 
 /**
@@ -37,7 +37,8 @@ describe('BeanImportDialog: an Android bean export (F11b)', () => {
 		document.body.innerHTML = '';
 	});
 
-	it('imports every bean and roaster from the Android file', async () => {
+	/** Open the dialog, pick the Android file and press Import; returns the button's label. */
+	async function importFixture(): Promise<string> {
 		const target = document.createElement('div');
 		document.body.appendChild(target);
 		component = mount(BeanImportDialog, { target, props: { onClose: () => {} } });
@@ -51,8 +52,14 @@ describe('BeanImportDialog: an Android bean export (F11b)', () => {
 		const importButton = (): HTMLButtonElement | undefined =>
 			[...target.querySelectorAll('button')].find((b) => /^\s*Import \d/.test(b.textContent ?? ''));
 		await settle(() => importButton() !== undefined);
-		expect(importButton()?.textContent).toMatch(/Import 2 items/);
+		const label = importButton()?.textContent?.trim() ?? '';
 		importButton()!.click();
+		await settle(() => !importButton());
+		return label;
+	}
+
+	it('imports every bean and roaster from the Android file', async () => {
+		expect(await importFixture()).toMatch(/Import 2 items/);
 		await settle(() => getBeanStore().beans.length > 0);
 
 		const library = getBeanStore();
@@ -68,5 +75,26 @@ describe('BeanImportDialog: an Android bean export (F11b)', () => {
 		expect(library.roasters.map((r) => [r.id, r.name, r.city])).toEqual([
 			['roaster:android-1', 'Onyx', 'Rogers']
 		]);
+	});
+
+	// F11c: the core merge rule decides a shared id — the newer row wins.
+	it('re-importing updates older library rows and keeps newer ones', async () => {
+		const fixtureBeans = readFileSync(FIXTURE, 'utf8')
+			.split('\n')
+			.filter((l) => l.includes('"kind":"bean"'))
+			.map((l) => JSON.parse(l) as Bean);
+		const [halo, house] = fixtureBeans;
+		getBeanStore().bulkAdd(
+			[
+				{ ...halo, name: 'Halo (older here)', updatedAt: halo.updatedAt - 1 },
+				{ ...house, name: 'House (edited here)', updatedAt: house.updatedAt + 1 }
+			],
+			[]
+		);
+		expect(await importFixture()).toMatch(/Import 1 item\b/);
+		await settle(() => getBeanStore().getBean('bean:android-1')?.name === 'Halo Hambela');
+		expect(getBeanStore().getBean('bean:android-1')?.name).toBe('Halo Hambela');
+		expect(getBeanStore().getBean('bean:android-2')?.name).toBe('House (edited here)');
+		expect(getBeanStore().beans).toHaveLength(2);
 	});
 });
