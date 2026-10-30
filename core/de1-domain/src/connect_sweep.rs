@@ -164,20 +164,26 @@ pub struct ConnectSweepSettings {
     pub battery_percent: Option<u8>,
 }
 
+/// Built from the default settings bundle
+/// ([`crate::app_settings::default_common_settings`]), so a sweep with no
+/// stored settings sends the same values the shells default to.
 impl Default for ConnectSweepSettings {
     fn default() -> Self {
+        let c = crate::app_settings::default_common_settings();
         Self {
-            fan_threshold_c: 55.0,
-            steam_two_tap: false,
+            fan_threshold_c: c
+                .fan_threshold_c
+                .unwrap_or(crate::app_settings::DEFAULT_FAN_THRESHOLD_C),
+            steam_two_tap: c.steam_two_tap.unwrap_or(false),
             refill_point_mm: crate::tank::DEFAULT_REFILL_POINT_MM,
-            steam_temp_c: 160.0,
-            steam_timeout_s: 120.0,
-            hot_water_temp_c: 85.0,
-            hot_water_volume_ml: 120.0,
-            steam_flow_ml_s: 1.5,
-            flush_timeout_s: 5.0,
-            flush_temp_c: 92.0,
-            steam_eco: false,
+            steam_temp_c: c.qc_steam_temp_c,
+            steam_timeout_s: c.qc_steam_time_s,
+            hot_water_temp_c: c.qc_hot_water_temp_c,
+            hot_water_volume_ml: c.qc_hot_water_volume_ml,
+            steam_flow_ml_s: c.qc_steam_flow_ml_s,
+            flush_timeout_s: c.qc_flush_time_s,
+            flush_temp_c: c.qc_flush_temp_c,
+            steam_eco: c.steam_eco,
             tank_temp_c: 0.0,
             phase_1_flow_ml_s: None,
             phase_2_flow_ml_s: None,
@@ -192,6 +198,26 @@ impl Default for ConnectSweepSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_sweep_settings_match_common_defaults() {
+        let c = crate::app_settings::default_common_settings();
+        let d = ConnectSweepSettings::default();
+        assert_eq!(d.fan_threshold_c, 55.0);
+        assert!(!d.steam_two_tap && !d.steam_eco);
+        assert_eq!(
+            (d.steam_temp_c, d.steam_timeout_s, d.steam_flow_ml_s),
+            (c.qc_steam_temp_c, c.qc_steam_time_s, c.qc_steam_flow_ml_s)
+        );
+        assert_eq!(
+            (d.hot_water_temp_c, d.hot_water_volume_ml),
+            (c.qc_hot_water_temp_c, c.qc_hot_water_volume_ml)
+        );
+        assert_eq!(
+            (d.flush_timeout_s, d.flush_temp_c),
+            (c.qc_flush_time_s, c.qc_flush_temp_c)
+        );
+    }
 
     #[test]
     fn smart_charging_holds_55_to_65() {
