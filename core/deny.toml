@@ -24,8 +24,10 @@ deny = [
     # Nothing under de1-relay may draw OS entropy (§2.11). snow's `std` feature
     # lists "getrandom/std" and "ring/std" without `?`, so enabling it pulls in
     # both; spake2's default `getrandom` feature pulls in rand_core's OsRng.
-    # Only these existing crates may depend on getrandom directly.
-    { crate = "getrandom", wrappers = ["uuid", "tempfile"], reason = "de1-relay draws no ambient entropy; the bridges inject seeds" },
+    # Only these crates may depend on getrandom directly: the two bridges, which
+    # draw each relay seed from the OS (spec §2.11), and the existing uuid and
+    # tempfile. de1-relay itself never may.
+    { crate = "getrandom", wrappers = ["de1-ffi", "de1-wasm", "uuid", "tempfile"], reason = "de1-relay draws no ambient entropy; the bridges inject seeds" },
     { crate = "ring", reason = "snow's ring resolver and `std` feature must stay off" },
     # Exact pins: any other resolved version needs the upstream diff read first.
     { crate = "snow:<0.10.0", reason = "pinned to =0.10.0 (spec §2.2)" },

@@ -180,7 +180,10 @@ fun BeansScreen(
         if (uri != null) vm.importBeanconquerorUri(uri)
     }
     var pendingExport by remember { mutableStateOf<String?>(null) }
-    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    // octet-stream keeps the suggested name as given: with "application/json" the
+    // storage provider appends ".json" to "crema-beans.crema.jsonl", and web's
+    // importer then reads it as a Beanconqueror file.
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val t = pendingExport; pendingExport = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
@@ -260,7 +263,7 @@ fun BeansScreen(
                     // landscape-only affordance; the icon runs the primary Crema backup.
                     CremaIconButton("upload-simple", { importLauncher.launch(arrayOf("*/*")) }, tone = CremaIconTone.Tonal)
                     Spacer(Modifier.width(4.dp))
-                    CremaIconButton("download-simple", { launchSave("crema-beans.json", vm.beansLibraryJson()) }, tone = CremaIconTone.Tonal)
+                    CremaIconButton("download-simple", { launchSave("crema-beans.crema.jsonl", vm.beansLibraryJson()) }, tone = CremaIconTone.Tonal)
                     Spacer(Modifier.width(4.dp))
                     CremaIconButton("plus", { if (tab == "bags") { vm.startNewBean(); onNav("bean-edit") } else { roasterEditing = null; roasterDialogOpen = true } }, tone = CremaIconTone.Filled)
                 } else {
@@ -275,9 +278,9 @@ fun BeansScreen(
                         icon = "download-simple",
                         label = "Export",
                         menuHead = "Export as",
-                        onPrimary = { launchSave("crema-beans.json", vm.beansLibraryJson()) },
+                        onPrimary = { launchSave("crema-beans.crema.jsonl", vm.beansLibraryJson()) },
                         items = listOf(
-                            SplitMenuItem("file-text", "Crema backup", "Lossless round-trip — beans and roasters. Re-importable in Crema.") { launchSave("crema-beans.json", vm.beansLibraryJson()) },
+                            SplitMenuItem("file-text", "Crema backup", "Lossless round-trip — beans and roasters. Re-importable in Crema.") { launchSave("crema-beans.crema.jsonl", vm.beansLibraryJson()) },
                             SplitMenuItem("file-zip", "Beanconqueror", "For sharing with Beanconqueror users. Crema-only fields like tags don't survive.") { launchSave("crema-to-beanconqueror.json", vm.beansBeanconquerorJson()) },
                         ),
                     )

@@ -66,6 +66,10 @@ pub struct HubConnection {
     pending: Step,
     #[cfg(feature = "test-seeds")]
     psk_for_tests: Option<[u8; 32]>,
+    /// Test hook: runs once in `on_msg3`, after preflight and before the gate
+    /// lock, to land a gate change in exactly that window.
+    #[cfg(feature = "test-seeds")]
+    before_msg3_lock: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl core::fmt::Debug for HubConnection {
@@ -126,6 +130,8 @@ impl HubConnection {
             binding: None,
             pending: Step::default(),
             #[cfg(feature = "test-seeds")]
+            before_msg3_lock: None,
+            #[cfg(feature = "test-seeds")]
             psk_for_tests: None,
         }
     }
@@ -135,8 +141,10 @@ impl HubConnection {
         self.phase
     }
 
-    /// The peer's static key, once trusted: from `PairPending` (pairing) or
-    /// admission (resume) on; `None` before and after a failure.
+    /// The peer's static key, once trusted: in `AwaitCommit`, `Paired` and
+    /// `Established`. `None` before, after a failure and after a normal close
+    /// (`Closed`), so the shell keeps the key it read at `PairPending` or
+    /// `Established`.
     pub fn peer_public_key(&self) -> Option<[u8; 32]> {
         // Only once the key is trusted: pairing confirmed (or committed), or
         // the session admitted. A replayed IK message 1 reveals nothing.
@@ -720,6 +728,10 @@ impl HubConnection {
     /// slot", the read and the failure count, so a concurrent `close()` can't
     /// land between them (lock order: connection, then gate).
     fn on_msg3(&mut self, body: &[u8], now_ms: u64) -> Step {
+        #[cfg(feature = "test-seeds")]
+        if let Some(hook) = self.before_msg3_lock.take() {
+            hook();
+        }
         let gate = Arc::clone(&self.gate);
         let mut guard = match gate.lock() {
             Ok(g) => g,
@@ -1209,6 +1221,12 @@ impl HubConnection {
 
 #[cfg(feature = "test-seeds")]
 impl HubConnection {
+    /// Runs `hook` once when XX message 3 arrives, after the preflight gate
+    /// check and before `on_msg3` takes the gate lock (the in-lock slot check).
+    pub fn run_before_msg3_lock_for_tests(&mut self, hook: impl FnOnce() + Send + 'static) {
+        self.before_msg3_lock = Some(Box::new(hook));
+    }
+
     /// Uses a reduced rekey interval (records per direction); call before the handshake.
     pub fn set_rekey_interval_for_tests(&mut self, records: u64) {
         self.rekey_override = Some(records);

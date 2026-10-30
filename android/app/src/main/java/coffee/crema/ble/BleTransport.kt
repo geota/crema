@@ -223,6 +223,17 @@ interface BleTransport {
     suspend fun rearmNotifications(device: DeviceHandle, service: UUID, characteristic: UUID) {}
 
     /**
+     * Enable notifications on [characteristic] and suspend until the CCCD write
+     * is acknowledged. Throws when the characteristic is missing or the write
+     * fails. [observe] enables them too, but un-awaited, so its failure only
+     * ended the stream: the DE1 manager awaits each subscription here and
+     * fails the connect on a required one (web's connect program does the
+     * same). A no-op once [observe] has them on. The default is a no-op for
+     * transports with no radio underneath (replay / LAN proxy).
+     */
+    suspend fun enableNotifications(device: DeviceHandle, service: UUID, characteristic: UUID) {}
+
+    /**
      * Write [data] to the [characteristic] of [service] on [device]. Suspends
      * until the write completes; throws on failure. Used for scale tare /
      * timer commands.

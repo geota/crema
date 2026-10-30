@@ -41,6 +41,7 @@ import {
 } from './transport';
 import type { ReconnectTrigger } from './reconnect-timeline';
 import { scaleScanUuids } from '#lib/wasm/de1_wasm.js';
+import { ScaleLinkDeadReason } from '#lib/core/crema-core.js';
 
 /** The pre-connect scan filter set across all supported scales (the core owns
  *  `Scale::identify`, so it owns the scan filters). */
@@ -394,6 +395,38 @@ export class ScaleManager {
 		}
 	}
 
+	/**
+	 * The core presumed the link dead (`ScaleLinkDead`): drop it at the
+	 * transport, not as a user disconnect, so the reconnect loop recovers it
+	 * (Android's `ScaleBleManager.presumeDead`). Only while the scale is
+	 * ready: a link already reconnecting is left to its loop, which also
+	 * keeps one dead episode from tearing down twice.
+	 */
+	presumeDead(reason: ScaleLinkDeadReason): void {
+		const device = this.device;
+		if (device === null || !this.ready) return;
+		const why =
+			reason === ScaleLinkDeadReason.Silent ? 'no readings' : 'writes keep failing';
+		this.callbacks.onStatus(`Scale unresponsive (${why}) — reconnecting…`);
+		this.setState('reconnecting');
+		device.recycle();
+	}
+
+	/**
+	 * Tell the core how a sent write went, for its dead-link count. A failure
+	 * counts only while the link is up: one rejected because the link already
+	 * dropped says nothing new (the reconnect loop has it).
+	 */
+	private reportWrite(device: BleDevice, ok: boolean): void {
+		if (ok ? this.device !== device : !this.writable(device)) return;
+		void this.core
+			.onScaleWriteResult(ok)
+			.then((out) => {
+				if (this.device === device) this.callbacks.onCoreOutput(out);
+			})
+			.catch(() => undefined);
+	}
+
 	/** Attempt a pending reconnect NOW — the scale twin of `De1Manager.kick`. */
 	kick(trigger: ReconnectTrigger): KickResult {
 		return this.device?.kick(trigger) ?? 'ignored-idle';
@@ -450,8 +483,10 @@ export class ScaleManager {
 				!uuids.command_write_no_response
 			);
 			if (this.device === device) this.wroteSinceQuery = true;
+			this.reportWrite(device, true);
 		} catch (error) {
 			this.callbacks.onStatus(`Scale command write was rejected: ${describeError(error)}`);
+			this.reportWrite(device, false);
 			// Let the app layer re-sync optimistic UI state — a rejected
 			// config write otherwise leaves the control showing a value the
 			// scale doesn't hold (review #34). Not while the link is down (the

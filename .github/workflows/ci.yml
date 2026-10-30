@@ -148,6 +148,45 @@ jobs:
         run: cargo deny check advisories bans
 
   # ─────────────────────────────────────────────────────────────────────
+  # AC-54: the release artifacts carry no deterministic relay test
+  # constructors. Builds the release de1-ffi library (`-p de1-ffi --lib`),
+  # its Kotlin bindings and the production wasm bundle and checks each, with
+  # positive controls on test-seeds builds so the check can't pass vacuously.
+  # The release and nightly workflows also check the real APK.
+  # ─────────────────────────────────────────────────────────────────────
+  release-symbols-check:
+    name: release-symbols-check (relay)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain (stable + wasm32)
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo + target (shared with rust job)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+          shared-key: rust-core
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+
+      - name: Check release artifacts for test constructors
+        run: scripts/relay-release-symbols-check.sh ci
+
+  # ─────────────────────────────────────────────────────────────────────
   # de1-relay fuzzing (relay v4 spec §3.7, AC-21): each cargo-fuzz target for
   # 60 s, nightly only. The seed corpus also replays in `cargo test` on every
   # PR (tests/fuzz_corpus.rs). New inputs go to a scratch corpus; a crash
@@ -253,6 +292,16 @@ jobs:
       - name: Build (adapter-static)
         working-directory: web
         run: pnpm build
+
+      # AC-23: the relay wasm bridge reproduces core/de1-relay's seeded vectors
+      # byte for byte. Its deterministic constructors exist only in this separate
+      # test-seeds bundle (web/.wasm-test, outside src/); RELAY_WASM_TEST=1 makes
+      # a missing bundle a failure instead of a skip.
+      - name: Relay wasm vectors (test-seeds bundle)
+        working-directory: web
+        run: |
+          pnpm wasm:test
+          RELAY_WASM_TEST=1 pnpm vitest run src/lib/relay
 
   # ─────────────────────────────────────────────────────────────────────
   # Android shell gates: JVM unit tests (incl. Robolectric), Android lint and

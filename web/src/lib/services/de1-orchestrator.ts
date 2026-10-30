@@ -27,8 +27,14 @@
 
 import { Effect, Exit } from 'effect';
 import type { CoreOutput, CremaCore, NotificationSource } from '#lib/core/index.js';
-import { MmrRegister } from '#lib/core/crema-core.js';
-import { De1Uuids } from '#lib/ble/de1-uuids.js';
+import type { De1Subscription, MmrRegister } from '#lib/core/crema-core.js';
+import {
+	De1Uuids,
+	connectIdentityRegisters,
+	de1NotificationSource,
+	de1SeedReads,
+	de1Subscriptions
+} from '#lib/ble/de1-uuids.js';
 import type { De1Transport } from '#lib/ble/de1-transport.js';
 import { describeError } from '#lib/utils/error.js';
 import { De1ConnectStepFailed } from '../effect/errors.ts';
@@ -48,39 +54,17 @@ export interface De1ConnectDeps {
 }
 
 /**
- * The five fatal NOTIFY subscriptions, in subscribe order. A failure here is the
- * structural tell the selected device is not a DE1 (its GATT lacks A000 / the
- * characteristic), so each is attributed to its own step.
+ * The connect-time subscriptions and identity reads come from the core
+ * (`de1Subscriptions`, `connectIdentityRegisters`), the tables Android reads
+ * too. Read at connect time, never at module scope: they resolve from wasm
+ * (see `de1-uuids.ts`).
  *
- * `char` is a thunk, not a string: the `De1Uuids.*` getters resolve lazily from
- * wasm (see `de1-uuids.ts`), so reading them here at module scope would fire the
- * wasm call at import time — before `loadCore()` runs, the very race this fixes.
- * The thunk defers each read to connect time, inside `de1ConnectProgram` below.
+ * A required subscription failing is the structural tell the selected device
+ * is not a DE1 (its GATT lacks A000 / the characteristic), so each is
+ * attributed to its own step. The identity reads are best-effort — each
+ * consumer falls back to "—" until the value lands.
  */
-const SUBSCRIBE_STEPS: ReadonlyArray<{ step: string; char: () => string; ok: string }> = [
-	{ step: 'StateInfo characteristic A00E', char: () => De1Uuids.STATE_INFO, ok: 'StateInfo A00E subscribed ✓' },
-	{ step: 'ShotSample characteristic A00D', char: () => De1Uuids.SHOT_SAMPLE, ok: 'ShotSample A00D subscribed ✓' },
-	{ step: 'WaterLevels characteristic A011', char: () => De1Uuids.WATER_LEVELS, ok: 'WaterLevels A011 subscribed ✓' },
-	{ step: 'MMR_READ characteristic A005', char: () => De1Uuids.MMR_READ, ok: 'MMR_READ A005 subscribed ✓' },
-	{ step: 'ShotSettings characteristic A00B', char: () => De1Uuids.SHOT_SETTINGS, ok: 'ShotSettings A00B subscribed ✓' }
-];
-
-/**
- * Connect-time MMR sweep (mirrors the legacy `later_new_de1_connection_setup`).
- * `FirmwareVersion` is dispatched first (separately) so the firmware-update
- * check has its build number; the rest run serially in declaration order. All
- * reads are best-effort — each consumer falls back to "—" until the value lands.
- */
-const CONNECT_MMR_SWEEP: ReadonlyArray<MmrRegister> = [
-	MmrRegister.CpuBoardVersion,
-	MmrRegister.MachineModel,
-	MmrRegister.GhcInfo,
-	MmrRegister.RefillKit,
-	MmrRegister.SerialNumber,
-	MmrRegister.HeaterVoltage,
-	MmrRegister.FlushTemp,
-	MmrRegister.CalibrationFlowMultiplier
-];
+const subscribeStep = (s: De1Subscription): string => `${s.name} characteristic ${s.short}`;
 
 /** The step name a hollow link fails at — see {@link de1SeedProgram}. */
 export const STATE_SEED_STEP = 'machine state read';
@@ -126,15 +110,15 @@ export const de1SeedProgram = (
 			);
 
 		/** The required read: one retry, then the program fails at {@link STATE_SEED_STEP}. */
-		const readStateSeed = Effect.gen(function* () {
-			const first = yield* Effect.exit(readOnce('De1State', De1Uuids.STATE_INFO));
+		const readStateSeed = (source: NotificationSource, char: string) => Effect.gen(function* () {
+			const first = yield* Effect.exit(readOnce(source, char));
 			let output: CoreOutput;
 			if (Exit.isSuccess(first)) {
 				output = first.value;
 			} else {
 				d.onStatus('DE1 machine state read failed — retrying once');
 				yield* Effect.sleep(STATE_SEED_RETRY_DELAY_MS);
-				output = yield* readOnce('De1State', De1Uuids.STATE_INFO).pipe(
+				output = yield* readOnce(source, char).pipe(
 					Effect.mapError((cause) => new De1ConnectStepFailed({ step: STATE_SEED_STEP, cause }))
 				);
 			}
@@ -142,14 +126,18 @@ export const de1SeedProgram = (
 			d.onStatus('DE1 machine state read ✓');
 		});
 
-		yield* readSeed('De1Version', De1Uuids.VERSION, 'firmware version');
-		yield* readStateSeed;
-		yield* readSeed('De1ShotSettings', De1Uuids.SHOT_SETTINGS, 'shot-settings');
+		// The core's seed table: one required read (StateInfo), the rest best-effort.
+		for (const seed of de1SeedReads()) {
+			const source = de1NotificationSource(seed.characteristic);
+			if (source === null) continue;
+			if (seed.required) yield* readStateSeed(source, seed.characteristic);
+			else yield* readSeed(source, seed.characteristic, seed.label);
+		}
 	});
 
 /**
  * The machine-identity reads: the FirmwareVersion MMR (build number for the
- * update check), then {@link CONNECT_MMR_SWEEP} serially (CPU board, model,
+ * update check), then the rest of the core's identity table serially (CPU board, model,
  * GHC, refill kit, serial, heater voltage, flush temp, flow multiplier). All
  * best-effort; each read is dispatched and its reply lands later as an
  * `MmrValue`.
@@ -176,8 +164,12 @@ export const de1MachineInfoProgram = (
 					Effect.sync(() => d.onStatus(`DE1 MMR read ${reg} skipped: ${describeError(e)}`))
 				)
 			);
-		yield* readMmr(MmrRegister.FirmwareVersion, 'DE1 firmware-build MMR read dispatched ✓');
-		yield* Effect.forEach(CONNECT_MMR_SWEEP, (reg) => readMmr(reg), {
+		// The core's identity table, firmware build first, serially in order.
+		const [first, ...rest] = connectIdentityRegisters();
+		if (first !== undefined) {
+			yield* readMmr(first, 'DE1 firmware-build MMR read dispatched ✓');
+		}
+		yield* Effect.forEach(rest, (reg) => readMmr(reg), {
 			concurrency: 1,
 			discard: true
 		});
@@ -193,31 +185,38 @@ export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1Con
 		yield* fatal('GATT connect', () => d.device.connectGatt());
 		d.onStatus('GATT connected');
 
-		// 2) The five NOTIFY subscriptions, in order (fatal — structural DE1 proof).
-		for (const s of SUBSCRIBE_STEPS) {
-			yield* fatal(s.step, () => d.device.startNotifications(De1Uuids.SERVICE, s.char()));
-			d.onStatus(s.ok);
+		// 2) The required NOTIFY subscriptions, in the core's order (fatal —
+		//    structural DE1 proof).
+		const subscriptions = de1Subscriptions();
+		for (const s of subscriptions.filter((x) => x.required)) {
+			yield* fatal(subscribeStep(s), () =>
+				d.device.startNotifications(De1Uuids.SERVICE, s.characteristic)
+			);
+			d.onStatus(`${s.name} ${s.short} subscribed ✓`);
 		}
 
-		// 3) All five GATT objects resolved — verified DE1.
+		// 3) All required GATT objects resolved — verified DE1.
 		d.onGattVerified();
 		d.onStatus('DE1 GATT verified ✓ — A000 + StateInfo/ShotSample/WaterLevels resolved');
 
-		// 3b) Calibration (A012) NOTIFY — best-effort, NOT part of the structural DE1
-		//     proof (a hiccup here must not fail an already-verified link). Without
-		//     it the DE1's replies to `readCalibration` can't be delivered, so the
-		//     Settings → Calibration panel stays blank (audit F4). Mirrors Android,
-		//     which merges A012 into its observe stream.
-		yield* Effect.gen(function* () {
-			yield* Effect.tryPromise(() =>
-				d.device.startNotifications(De1Uuids.SERVICE, De1Uuids.CALIBRATION)
+		// 3b) The best-effort NOTIFYs (Calibration, Version) — NOT part of the
+		//     structural DE1 proof, so a hiccup must not fail a verified link.
+		//     Without Calibration the DE1's replies to `readCalibration` can't be
+		//     delivered and the Settings → Calibration panel stays blank (audit F4).
+		for (const s of subscriptions.filter((x) => !x.required)) {
+			yield* Effect.gen(function* () {
+				yield* Effect.tryPromise(() =>
+					d.device.startNotifications(De1Uuids.SERVICE, s.characteristic)
+				);
+				d.onStatus(`${s.name} ${s.short} subscribed ✓`);
+			}).pipe(
+				Effect.catch((e) =>
+					Effect.sync(() =>
+						d.onStatus(`DE1 ${s.name} ${s.short} subscribe skipped: ${describeError(e)}`)
+					)
+				)
 			);
-			d.onStatus('Calibration A012 subscribed ✓');
-		}).pipe(
-			Effect.catch((e) =>
-				Effect.sync(() => d.onStatus(`DE1 Calibration A012 subscribe skipped: ${describeError(e)}`))
-			)
-		);
+		}
 
 		// 4) Connect-time one-shot reads to seed the dashboard. StateInfo is
 		//    required — a link that can't answer it is hollow (see de1SeedProgram).

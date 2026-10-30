@@ -394,13 +394,6 @@ export function applyHeldRestoreChanges(held: HeldRestoreChanges): void {
  * @throws if the text has no `crema-backup/v1` header (not a Crema backup).
  */
 export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
-	// Guard the header ourselves: the core parser is tolerant (a foreign or empty
-	// file parses to an empty plan), so it can't distinguish "not a Crema backup"
-	// from "an empty one". The header line is the sole carrier of `crema-backup/v1`.
-	if (!/"kind"\s*:\s*"crema-backup\/v1"/.test(text)) {
-		throw new Error('Not a Crema backup file.');
-	}
-
 	// F1 (review #06): parse through the shared core (`parse_backup_jsonl`) instead
 	// of a hand-rolled line loop. Beans/roasters/shots come back typed + lossless —
 	// each shot keeps its full `bean` snapshot (the library importer's ImportedShot
@@ -408,6 +401,7 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	// while profiles + the config blobs ride as the verbatim JSON the shell owns.
 	// Android's restore parses the IDENTICAL bytes off this same core function.
 	const plan = JSON.parse(importBackupJsonl(text)) as {
+		hasHeader?: boolean;
 		profiles?: CremaProfile[];
 		beans?: Bean[];
 		roasters?: Roaster[];
@@ -420,6 +414,11 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 		maintenance?: Record<string, unknown> | null;
 		visualizerPrefs?: Record<string, unknown> | null;
 	};
+	// The core parse is tolerant (a foreign or empty file gives an empty plan);
+	// its header flag tells "not a Crema backup" from "an empty one".
+	if (!plan.hasHeader) {
+		throw new Error('Not a Crema backup file.');
+	}
 	const profiles = plan.profiles ?? [];
 	const beans = plan.beans ?? [];
 	const roasters = plan.roasters ?? [];

@@ -6,8 +6,6 @@ import coffee.crema.core.CremaBridge
 import coffee.crema.ble.proxy.Hex
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.WriteTarget
-import coffee.crema.core.de1Uuids
-import kotlinx.serialization.json.Json
 import java.util.UUID
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
@@ -29,6 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -385,8 +384,8 @@ class De1BleManager(
         seedReads(device)
     }
 
-    /** Linked + discovered: join the recording and (re)subscribe. */
-    private fun afterLinked(device: BleTransport.DeviceHandle) {
+    /** Linked + discovered: join the recording and (re)subscribe, awaited. */
+    private suspend fun afterLinked(device: BleTransport.DeviceHandle) {
         _state.value = State.DISCOVERING
         onStatus("Connected — discovering services…")
         // Join the shared session recording ONCE per session (not per reconnect),
@@ -399,6 +398,7 @@ class De1BleManager(
         onStatus("Subscribing to StateInfo + ShotSample…")
         timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.SUBSCRIBE)
         startObserving(device)
+        awaitSubscriptions(device)
     }
 
     fun disconnect() {
@@ -445,36 +445,62 @@ class De1BleManager(
     // ---- Observation ------------------------------------------------------
 
     /**
-     * Observe StateInfo and ShotSample as ONE merged, ordered stream.
+     * Observe every subscription in the core's table as ONE merged, ordered
+     * stream.
      *
-     * [merge] interleaves the two characteristic flows into a single flow
-     * collected on one coroutine: a DE1's notifications are therefore consumed
-     * strictly in arrival order, never split into independently-collected
-     * flows that could reorder. Each [BleTransport.Notification] is already
-     * arrival-stamped inside the transport.
+     * [merge] interleaves the characteristic flows into a single flow
+     * collected on one coroutine, so notifications are consumed in arrival
+     * order rather than split into independently-collected flows. Each
+     * [BleTransport.Notification] is already arrival-stamped inside the
+     * transport. A best-effort flow that fails is caught on its own, so it
+     * can't cancel the merge (and with it every other stream); a required one
+     * that fails is caught by [awaitSubscriptions], which fails the connect.
      */
     private fun startObserving(device: BleTransport.DeviceHandle) {
         // Drop any prior subscription job (a reconnect re-subscribes on the same
         // handle); the old Nordic subscribe flows complete on the link drop, but
         // cancelling here keeps exactly one merged collector alive.
         observeJob?.cancel()
-        val stateInfo = transport.observe(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO)
-        val shotSample = transport.observe(device, De1Uuids.SERVICE, De1Uuids.SHOT_SAMPLE)
-        // The core needs these too: tank level, shot-settings read-backs, and
-        // MMR answers (firmware / model / GHC / calibration). All NOTIFY chars
-        // on a real DE1 — the same fatal set the web connect program subscribes.
-        val waterLevels = transport.observe(device, De1Uuids.SERVICE, De1Uuids.WATER_LEVELS)
-        val shotSettings = transport.observe(device, De1Uuids.SERVICE, De1Uuids.SHOT_SETTINGS)
-        val mmr = transport.observe(device, De1Uuids.SERVICE, De1Uuids.MMR_READ)
-        // The Version (A001) and Calibration (A012) characteristics: the DE1
-        // answers a read request on these via notify, so the connect-time
-        // read-sweep's firmware + calibration replies fire as Firmware /
-        // Calibration events. Both are NOTIFY chars on a real DE1.
-        val version = transport.observe(device, De1Uuids.SERVICE, VERSION)
-        val calibration = transport.observe(device, De1Uuids.SERVICE, CALIBRATION)
-        observeJob = merge(stateInfo, shotSample, waterLevels, shotSettings, mmr, version, calibration)
+        val flows = De1Uuids.SUBSCRIPTIONS.map { sub ->
+            val flow = transport.observe(device, De1Uuids.SERVICE, UUID.fromString(sub.characteristic))
+            if (sub.required) {
+                flow
+            } else {
+                flow.catch { Log.w(TAG, "DE1 ${sub.name} ${sub.short} stream ended", it) }
+            }
+        }
+        observeJob = merge(*flows.toTypedArray())
             .onEach { handleNotification(it) }
             .launchIn(scope)
+    }
+
+    /**
+     * Await every subscription in the core's table, in order (web's connect
+     * program does the same). The un-awaited [observe] flows used to be the
+     * only subscribe: one that failed was just logged, the merge cancelled
+     * every other stream, and READY stayed up over a link with dead
+     * notifications (core/shell review 2026-10-30 §2.1-1). Now a required one
+     * that fails tears the link down and throws, so the supervisor counts a
+     * failed attempt and retries; a best-effort one is logged and skipped.
+     */
+    private suspend fun awaitSubscriptions(device: BleTransport.DeviceHandle) {
+        for (sub in De1Uuids.SUBSCRIPTIONS) {
+            try {
+                transport.enableNotifications(device, De1Uuids.SERVICE, UUID.fromString(sub.characteristic))
+            } catch (c: CancellationException) {
+                throw c // the session ended: never judge a link we no longer own
+            } catch (e: Exception) {
+                if (!sub.required) {
+                    onStatus("DE1 ${sub.name} ${sub.short} subscribe skipped: ${e.message}")
+                    continue
+                }
+                Log.w(TAG, "DE1 ${sub.name} ${sub.short} subscribe failed — tearing down", e)
+                onStatus("DE1 ${sub.name} ${sub.short} subscribe failed — reconnecting")
+                runCatching { transport.disconnect(device) }
+                    .onFailure { Log.w(TAG, "Forced DE1 teardown (subscribe) failed", it) }
+                throw RequiredSubscriptionException(sub.name, e)
+            }
+        }
     }
 
     /**
@@ -502,11 +528,12 @@ class De1BleManager(
      * 2026-10-25: report 04 P2-1, report 06 #12).
      */
     private suspend fun seedReads(device: BleTransport.DeviceHandle) {
-        val seeds = listOf(
-            SeedSpec(Triple(VERSION, NotificationSource.DE1_VERSION, "firmware version"), "firmware version", required = false),
-            SeedSpec(Triple(De1Uuids.STATE_INFO, NotificationSource.DE1_STATE, "machine state"), "machine state", required = true),
-            SeedSpec(Triple(De1Uuids.SHOT_SETTINGS, NotificationSource.DE1_SHOT_SETTINGS, "shot-settings"), "shot-settings", required = false),
-        )
+        // The core's seed table (web reads the same one).
+        val seeds = De1Uuids.SEED_READS.mapNotNull { seed ->
+            val char = UUID.fromString(seed.characteristic)
+            val source = De1Uuids.sourceFor(char) ?: return@mapNotNull null
+            SeedSpec(Triple(char, source, seed.label), seed.label, seed.required)
+        }
         runSeedReads(
             seeds,
             read = { seed -> val (char, source, label) = seed.key; seedRead(device, char, source, label) },
@@ -550,18 +577,10 @@ class De1BleManager(
      * -> UI.
      */
     private fun handleNotification(notification: BleTransport.Notification) {
-        val source = when (notification.characteristic) {
-            De1Uuids.STATE_INFO -> NotificationSource.DE1_STATE
-            De1Uuids.SHOT_SAMPLE -> NotificationSource.DE1_SHOT_SAMPLE
-            De1Uuids.WATER_LEVELS -> NotificationSource.DE1_WATER_LEVELS
-            De1Uuids.SHOT_SETTINGS -> NotificationSource.DE1_SHOT_SETTINGS
-            De1Uuids.MMR_READ -> NotificationSource.DE1_MMR_READ
-            VERSION -> NotificationSource.DE1_VERSION
-            CALIBRATION -> NotificationSource.DE1_CALIBRATION
-            else -> {
-                Log.w(TAG, "Notification from unmapped characteristic ${notification.characteristic}")
-                return
-            }
+        // The core's characteristic → source map (web uses the same one).
+        val source = De1Uuids.sourceFor(notification.characteristic) ?: run {
+            Log.w(TAG, "Notification from unmapped characteristic ${notification.characteristic}")
+            return
         }
         // The timestamp was stamped at delivery inside the transport; the same
         // value goes to the recorder and the core, so a replayed capture
@@ -943,27 +962,6 @@ class De1BleManager(
 
         // The liveness numbers live with the rule: see [De1LivenessCheck].
 
-        /**
-         * The DE1 `Version` (`A001`) and `Calibration` (`A012`) characteristic
-         * UUIDs, sourced from the core's single DE1 UUID map (`de1Uuids()`) —
-         * the same source the shell's [De1Uuids] accessor parses. Resolved once
-         * here because [De1Uuids] does not surface these two accessors; this
-         * keeps every DE1 UUID literal in the core (no cross-shell drift) while
-         * letting this manager subscribe to the firmware-version and
-         * sensor-calibration notify characteristics.
-         *
-         * `DE1_VERSION` carries the BLE + firmware versions (→ `Event.Firmware`);
-         * `DE1_CALIBRATION` carries sensor-calibration replies
-         * (→ `Event.Calibration`). Both are read-request + notify on a real DE1.
-         */
-        private val coreUuids: coffee.crema.core.De1Uuids by lazy {
-            Json.decodeFromString(
-                coffee.crema.core.De1Uuids.serializer(),
-                de1Uuids(),
-            )
-        }
-        private val VERSION: UUID by lazy { UUID.fromString(coreUuids.version) }
-        private val CALIBRATION: UUID by lazy { UUID.fromString(coreUuids.calibration) }
 
         /**
          * Whether a scanned advertisement name identifies a DE1. The DE1

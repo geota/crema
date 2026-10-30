@@ -466,6 +466,16 @@ pub enum Event {
     /// for roughly a second. Emitted once per stale episode; a fresh reading
     /// re-arms it.
     ScaleStale,
+    /// The scale link looks dead: still no reading 5 s after
+    /// [`Event::ScaleStale`], or three scale writes in a row failed with no
+    /// reading in between. Emitted once per episode — a fresh reading re-arms
+    /// it. The shell drops the link at the transport (not a user disconnect)
+    /// so its reconnect loop recovers it, but only while its link still
+    /// claims ready.
+    ScaleLinkDead {
+        /// Which rule tripped.
+        reason: ScaleLinkDeadReason,
+    },
     /// The untared-cup guard latched a virtual zero: a heavy reading right
     /// after first flow held still, so it was a cup landing after the tare —
     /// every later reading this shot is netted against it and stop-at-weight
@@ -725,6 +735,17 @@ pub enum Event {
         /// Human-readable description of the failure.
         message: String,
     },
+}
+
+/// Why [`Event::ScaleLinkDead`] fired.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ScaleLinkDeadReason {
+    /// No weight reading for the stale timeout plus the 5 s grace.
+    Silent,
+    /// Three scale writes in a row failed with no reading in between.
+    WritesFailing,
 }
 
 /// Why a profile upload failed.

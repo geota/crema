@@ -20,6 +20,9 @@ use std::cell::Cell;
 
 use wasm_bindgen::prelude::*;
 
+// Relay v4 secure channel (its own module and exports; see relay.rs).
+mod relay;
+
 // ── Panic reporting ─────────────────────────────────────────────────
 //
 // A panic on wasm32-unknown-unknown is a trap whose only trace used to be
@@ -758,6 +761,15 @@ pub fn duplicate_bean_json(bean_json: &str, new_id: &str, now_ms: f64) -> Result
     de1_domain::duplicate_bean_json(bean_json, new_id, f64_to_ms(now_ms))
 }
 
+/// A bean with its Frozen switch set (`Bean` JSON in and out): freeze stamps
+/// today, defrost stamps `defrostedOn` and keeps `frozenOn`, refreeze carries
+/// the earlier frozen span; days off roast never moves. See
+/// `de1_domain::set_bean_frozen`.
+#[wasm_bindgen(js_name = setBeanFrozenJson)]
+pub fn set_bean_frozen_json(bean_json: &str, frozen: bool, now_ms: f64) -> Result<String, String> {
+    de1_domain::set_bean_frozen_json(bean_json, frozen, f64_to_ms(now_ms))
+}
+
 /// The "≈N brews left" estimate — shared
 /// `de1_domain::brews_remaining_estimate` (the bag's newest ≤10 doses,
 /// newest first; 18 g fallback).
@@ -969,6 +981,37 @@ pub fn builtin_crema_profiles() -> String {
 #[wasm_bindgen(js_name = de1Uuids)]
 pub fn de1_uuids() -> String {
     de1_app::de1_uuids_json()
+}
+
+/// The connect-time notify subscriptions (`De1Subscription[]` JSON), in
+/// subscribe order, each marked required or best-effort. See
+/// `de1_app::de1_subscriptions`.
+#[wasm_bindgen(js_name = de1Subscriptions)]
+pub fn de1_subscriptions() -> String {
+    de1_app::de1_subscriptions_json()
+}
+
+/// The connect-time seed reads (`De1SeedRead[]` JSON), in read order. See
+/// `de1_app::de1_seed_reads`.
+#[wasm_bindgen(js_name = de1SeedReads)]
+pub fn de1_seed_reads() -> String {
+    de1_app::de1_seed_reads_json()
+}
+
+/// The MMR registers read for the machine's identity after a connect
+/// (`MmrRegister[]` JSON), in read order. See
+/// `de1_app::connect_identity_registers`.
+#[wasm_bindgen(js_name = connectIdentityRegisters)]
+pub fn connect_identity_registers() -> String {
+    de1_app::connect_identity_registers_json()
+}
+
+/// The notification source (`"De1State"`, …) a DE1 characteristic feeds, or
+/// `None` for one the shell doesn't dispatch. See
+/// `de1_app::de1_notification_source`.
+#[wasm_bindgen(js_name = de1NotificationSource)]
+pub fn de1_notification_source(characteristic: &str) -> Option<String> {
+    de1_app::de1_notification_source_name(characteristic).map(str::to_owned)
 }
 
 /// The DE1 characteristic UUID a `WriteTarget` (by its serde name) is written
@@ -2306,6 +2349,13 @@ impl CremaBridge {
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_tick(&self, now_ms: f64) -> String {
         json(self.state().core.on_tick(now_ms as u64))
+    }
+
+    /// Report how one scale write the shell sent went (`ok` = it landed).
+    /// Returns a JSON-encoded [`CoreOutput`] that may carry
+    /// `Event::ScaleLinkDead`. See `CremaCore::on_scale_write_result`.
+    pub fn on_scale_write_result(&self, ok: bool) -> String {
+        json(self.state().core.on_scale_write_result(ok))
     }
 
     // ── Guided brew sessions (issue #10) ─────────────────────────

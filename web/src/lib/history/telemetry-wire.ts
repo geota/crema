@@ -34,10 +34,11 @@ import type { TelemetrySample } from '#lib/state/index.js';
  * Called by the orchestrator at `ShotCompleted` to write the buffered
  * series into a `StoredShot.record.samples`.
  *
- * Three nested-sample fields the live buffer doesn't track
- * (`sampleTime`, `setMixTemp`, `frameNumber`) zero-fill — non-load-
- * bearing for chart playback, only present for v2 `.shot.json` cross-
- * app compatibility (where they're optional / zero on the wire).
+ * Two nested-sample fields the live buffer doesn't track (`sampleTime`,
+ * `setMixTemp`) zero-fill — non-load-bearing for chart playback, only
+ * present for v2 `.shot.json` cross-app compatibility (where they're
+ * optional / zero on the wire). `frameNumber` zero-fills only for a
+ * sample captured before the live buffer carried it.
  */
 export function toWire(t: TelemetrySample): TimedSample {
 	const sample: ShotSample = {
@@ -50,7 +51,7 @@ export function toWire(t: TelemetrySample): TimedSample {
 		setMixTemp: 0,
 		setGroupPressure: t.setGroupPressure ?? 0,
 		setGroupFlow: t.setGroupFlow ?? 0,
-		frameNumber: 0,
+		frameNumber: t.frameNumber ?? 0,
 		steamTemp: t.steamTemp
 	};
 	const out: TimedSample = { elapsed: t.elapsed, sample };
@@ -94,6 +95,7 @@ export function fromWire(t: TimedSample): TelemetrySample {
 		resistanceWeight: rw != null && rw > 0 ? rw : null,
 		setHeadTemp: t.sample.setHeadTemp,
 		setGroupPressure: t.sample.setGroupPressure,
-		setGroupFlow: t.sample.setGroupFlow
+		setGroupFlow: t.sample.setGroupFlow,
+		frameNumber: t.sample.frameNumber
 	};
 }

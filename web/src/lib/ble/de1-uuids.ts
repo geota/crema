@@ -22,7 +22,15 @@
  * "never at module scope (the wasm bundle loads first)".
  */
 
-import { de1Uuids as wasmDe1Uuids } from '#lib/wasm/de1_wasm.js';
+import {
+	connectIdentityRegisters as wasmConnectIdentityRegisters,
+	de1NotificationSource as wasmDe1NotificationSource,
+	de1SeedReads as wasmDe1SeedReads,
+	de1Subscriptions as wasmDe1Subscriptions,
+	de1Uuids as wasmDe1Uuids
+} from '#lib/wasm/de1_wasm.js';
+import type { De1SeedRead, De1Subscription, MmrRegister } from '#lib/core/crema-core.js';
+import type { NotificationSource } from '#lib/core/index.js';
 
 interface De1UuidMap {
 	service: string;
@@ -121,3 +129,29 @@ export const De1Uuids = {
 	 */
 	NAME_PREFIXES: ['DE1', 'BENGLE', 'nRF5x'] as const
 } as const;
+
+// The connect tables, from the core like the UUIDs (Android reads the same
+// ones): lazily, never at module scope (see the header).
+let subscriptions: readonly De1Subscription[] | null = null;
+let seedReads: readonly De1SeedRead[] | null = null;
+let identityRegisters: readonly MmrRegister[] | null = null;
+
+/** The connect-time notify subscriptions, in subscribe order (required first). */
+export function de1Subscriptions(): readonly De1Subscription[] {
+	return (subscriptions ??= JSON.parse(wasmDe1Subscriptions()) as De1Subscription[]);
+}
+
+/** The connect-time seed reads, in read order (only `machine state` required). */
+export function de1SeedReads(): readonly De1SeedRead[] {
+	return (seedReads ??= JSON.parse(wasmDe1SeedReads()) as De1SeedRead[]);
+}
+
+/** The MMR registers read for the machine's identity, firmware build first. */
+export function connectIdentityRegisters(): readonly MmrRegister[] {
+	return (identityRegisters ??= JSON.parse(wasmConnectIdentityRegisters()) as MmrRegister[]);
+}
+
+/** The core source a DE1 characteristic feeds, or `null` for one not dispatched. */
+export function de1NotificationSource(characteristic: string): NotificationSource | null {
+	return (wasmDe1NotificationSource(characteristic) as NotificationSource | undefined) ?? null;
+}
