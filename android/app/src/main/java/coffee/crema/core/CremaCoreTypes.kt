@@ -409,7 +409,9 @@ data class BrewDefaultsBounds (
 	/// Default brew temperature, °C.
 	val brewTempC: StepRange,
 	/// Default pre-infusion, s.
-	val preinfuseS: StepRange
+	val preinfuseS: StepRange,
+	/// The global max shot duration, s (`0` = none).
+	val maxShotDurationS: StepRange
 )
 
 /// Summary metrics over a (filter/range-scoped) set of brews — the

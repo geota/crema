@@ -336,7 +336,8 @@ impl CommonSettings {
     ///   `barista_name` is none);
     /// - an unknown theme, unit or charging mode becomes the default;
     /// - `max_shot_duration_s` and `water_warn_ml` must be finite and `>= 0`
-    ///   (a bad threshold becomes unset); `fan_threshold_c` is clamped to
+    ///   (a bad threshold becomes unset), and the max shot duration is at most
+    ///   300 s (the table's); `fan_threshold_c` is clamped to
     ///   `0..=60`, `water_refill_point_mm` to the refill range;
     ///   `idle_sleep_min` snaps to a choice;
     /// - `chart_channels` keeps the known keys ([`CHART_CHANNEL_KEYS`]), once;
@@ -366,13 +367,12 @@ impl CommonSettings {
                 &["system", "light", "dark"],
                 &d.theme_mode,
             ),
-            max_shot_duration_s: if self.max_shot_duration_s.is_finite()
-                && self.max_shot_duration_s >= 0.0
-            {
-                self.max_shot_duration_s
-            } else {
-                d.max_shot_duration_s
-            },
+            max_shot_duration_s: crate::bounds::brew_defaults_bounds()
+                .max_shot_duration_s
+                .clamp_or(
+                    non_negative_or(self.max_shot_duration_s, d.max_shot_duration_s),
+                    d.max_shot_duration_s,
+                ),
             volume_stop_with_scale: Some(self.volume_stop_with_scale.unwrap_or(false)),
             require_scale: Some(self.require_scale.unwrap_or(false)),
             steam_two_tap: Some(self.steam_two_tap.unwrap_or(false)),
@@ -887,6 +887,7 @@ mod tests {
             default_ratio: 9.0,
             default_brew_temp_c: 70.0,
             default_preinfuse_s: 90.0,
+            max_shot_duration_s: 900.0,
             qc_hot_water_temp_c: 99.0,
             ..default_common_settings()
         };
@@ -899,6 +900,7 @@ mod tests {
         assert_eq!((s.qc_flush_time_s, s.qc_flush_temp_c), (1.0, 60.0));
         assert_eq!((s.default_dose_g, s.default_ratio), (30.0, 5.0));
         assert_eq!((s.default_brew_temp_c, s.default_preinfuse_s), (80.0, 60.0));
+        assert_eq!(s.max_shot_duration_s, 300.0);
         assert_eq!(s.qc_hot_water_temp_c, 99.0, "hot water is not F8's");
         let kept = CommonSettings {
             qc_steam_temp_c: 0.0,
