@@ -32,6 +32,12 @@ class ProfileFileCrossShellTest {
 
     private fun fixture(name: String) = File(fixtures, name).readText()
 
+    /** Three fixture profiles are built-ins, which an import now skips as already
+     *  in the library (F12b). The format tests retitle them so they import as
+     *  custom profiles: [mine] on the file read and on the file expected. */
+    private val builtinTitles = listOf("7g basket", "Blooming Allongé", "A-Flow / default-dark")
+    private fun mine(text: String) = builtinTitles.fold(text) { t, n -> t.replace("\"$n\"", "\"Mine: $n\"") }
+
     private fun build(): MainViewModel {
         val vm = VmHarness.build(store)
         VmHarness.idle()
@@ -60,10 +66,14 @@ class ProfileFileCrossShellTest {
     @Test
     fun `f12_6 web's exports import on Android`() {
         val vm = build()
-        assertEquals("Imported 1 profile(s)", pickAndImport(vm, "web-profile.json", fixture("profiles/web-profile.json")))
-        assertEquals("Imported 3 profile(s)", pickAndImport(vm, "web-profiles.jsonl", fixture("profiles/web-profiles.jsonl")))
+        assertEquals("Imported 1 profile", pickAndImport(vm, "web-profile.json", mine(fixture("profiles/web-profile.json"))))
+        // The single export's profile is in "Export all" too: skipped.
+        assertEquals(
+            "Imported 2 profiles; 1 already in your library",
+            pickAndImport(vm, "web-profiles.jsonl", mine(fixture("profiles/web-profiles.jsonl"))),
+        )
         val names = customs(vm).map { it.name }.sorted()
-        assertEquals(listOf("7g basket", "7g basket", "A-Flow / default-dark", "Blooming Allongé"), names)
+        assertEquals(listOf("Mine: 7g basket", "Mine: A-Flow / default-dark", "Mine: Blooming Allongé"), names)
         for (p in customs(vm)) {
             assertFalse("Built-in" in p.tags, p.name)
             assertEquals(p.segments.first().temp, p.brewTemp, p.name)
@@ -74,11 +84,11 @@ class ProfileFileCrossShellTest {
     @Test
     fun `f12_6 Android's export of a set is the core's file, byte for byte`() {
         val vm = build()
-        assertEquals("Imported 4 profile(s)", pickAndImport(vm, "android-profiles.json", fixture("profiles/android-profiles.json")))
+        assertEquals("Imported 4 profiles", pickAndImport(vm, "android-profiles.json", mine(fixture("profiles/android-profiles.json"))))
         val byName = customs(vm).associateBy { it.name }
-        val ids = listOf("My 7g", "7g basket", "Blooming Allongé", "A-Flow / default-dark").map { byName.getValue(it).id }
+        val ids = (listOf("My 7g") + builtinTitles.map { "Mine: $it" }).map { byName.getValue(it).id }
         val library = libraryOf(vm)
-        assertEquals(fixture("profiles/crema-profiles.jsonl"), library.profilesFile(ids) { error(it) })
+        assertEquals(mine(fixture("profiles/crema-profiles.jsonl")), library.profilesFile(ids) { error(it) })
         assertEquals(fixture("profiles/crema-profile.json"), library.profilesFile(ids.take(1)) { error(it) })
         // "Export all" is the same file over the whole library: every line a v2 profile.
         val all = vm.allProfilesFile()!!.lines().filter { it.isNotBlank() }
@@ -108,9 +118,13 @@ class ProfileFileCrossShellTest {
     @Test
     fun `f12_1 a de1app tcl and a backup import on Android too`() {
         val vm = build()
-        assertEquals("Imported 1 profile(s)", pickAndImport(vm, "default.tcl", fixture("default.tcl")))
+        // de1app's "Default" reads as exactly the built-in of that name.
         assertEquals(
-            "Imported 1 profile(s)",
+            "Imported 0 profiles; 1 already in your library",
+            pickAndImport(vm, "default.tcl", fixture("default.tcl")),
+        )
+        assertEquals(
+            "Imported 1 profile",
             pickAndImport(vm, "web-backup.crema.jsonl", fixture("backup/web-backup.crema.jsonl")),
         )
     }
@@ -122,11 +136,53 @@ class ProfileFileCrossShellTest {
         val message = pickAndImport(vm, "groceries.json", """{"name":"Groceries","items":["milk"]}""")
         assertEquals("Couldn’t import profile — not a profile (it has neither steps nor segments)", message)
         assertEquals(before, customs(vm).size)
-        val lines = fixture("profiles/web-profiles.jsonl").lines().toMutableList().apply { add(1, """{"name":"x"}""") }
+        val lines = mine(fixture("profiles/web-profiles.jsonl")).lines().toMutableList().apply { add(1, """{"name":"x"}""") }
         assertEquals(
             "Imported 3 of 4 — item 2: not a profile (it has neither steps nor segments)",
             pickAndImport(vm, "mixed.jsonl", lines.joinToString("\n")),
         )
+    }
+
+    @Test
+    fun `f12b a re-import skips what the library has, hidden built-ins included`() {
+        val vm = build()
+        // "Export all" holds "My 7g" and three built-ins.
+        assertEquals(
+            "Imported 1 profile; 3 already in your library",
+            pickAndImport(vm, "android-profiles.json", fixture("profiles/android-profiles.json")),
+        )
+        assertEquals(listOf("My 7g"), customs(vm).map { it.name })
+        assertEquals(
+            "Imported 0 profiles; 1 already in your library",
+            pickAndImport(vm, "android-profile.json", fixture("profiles/android-profile.json")),
+        )
+        // A hidden built-in is still in the library; the title matches trimmed
+        // and case-insensitive.
+        val basket = vm.ui.value.profiles.single { it.source != "custom" && it.name == "7g basket" }
+        vm.archiveBuiltinProfile(basket.id)
+        VmHarness.idle()
+        val shouty = fixture("profiles/web-profile.json").replace("\"7g basket\"", "\"  7G BASKET \"")
+        assertEquals("Imported 0 profiles; 1 already in your library", pickAndImport(vm, "web-profile.json", shouty))
+        assertEquals(listOf("My 7g"), customs(vm).map { it.name })
+    }
+
+    @Test
+    fun `f12b the import message`() {
+        assertEquals("Imported 2 profiles; 3 already in your library", profileImportSummary(2, 3, emptyList()))
+        assertEquals("Imported 1 profile", profileImportSummary(1, 0, emptyList()))
+        assertEquals("Imported 2 of 3; 1 already in your library — item 3: bad", profileImportSummary(2, 1, listOf("item 3: bad")))
+        assertEquals("Couldn’t import profile — nope", profileImportSummary(0, 0, listOf("nope")))
+        assertEquals("No profiles imported", profileImportSummary(0, 0, emptyList()))
+    }
+
+    @Test
+    fun `f12b a duplicated profile gets a core UUID v7 id`() {
+        val vm = build()
+        val builtin = vm.ui.value.profiles.first { it.source != "custom" }
+        vm.duplicateProfile(builtin.id)
+        VmHarness.idle()
+        val id = vm.ui.value.editingProfileId!!
+        assertTrue(Regex("^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").matches(id), id)
     }
 
     @Test

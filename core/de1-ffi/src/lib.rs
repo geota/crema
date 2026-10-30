@@ -1689,15 +1689,21 @@ pub fn maintenance_request_allowed(state: Option<String>) -> bool {
 
 /// Read a profile file (community v2 `.json`, a `.jsonl` bundle, a de1app
 /// `.tcl`, a Crema backup, or an old Android Crema export): a
-/// `ProfileFileImport` JSON of fresh custom profiles plus per-item errors. See
-/// [`de1_domain::import_profile_file`].
+/// `ProfileFileImport` JSON of fresh custom profiles plus per-item errors.
+/// `library_json` (a JSON array of every library `CremaProfile`, built-ins
+/// and hidden ones included) makes it skip, and count, the profiles already
+/// there. See [`de1_domain::import_profile_file_into`].
 ///
 /// # Errors
 ///
-/// Only if the result fails to serialize, which it cannot.
+/// A message when `library_json` is not a JSON array (an element that is not
+/// a profile is left out).
 #[uniffi::export]
-pub fn import_profile_file(text: String) -> Result<String, CremaError> {
-    de1_domain::import_profile_file_json(&text).map_err(crema_err)
+pub fn import_profile_file(
+    text: String,
+    library_json: Option<String>,
+) -> Result<String, CremaError> {
+    de1_domain::import_profile_file_json(&text, library_json.as_deref()).map_err(crema_err)
 }
 
 /// Write library profiles (a JSON array of `CremaProfile`) as the profile file
