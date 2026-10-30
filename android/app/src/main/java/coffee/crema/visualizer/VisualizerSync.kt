@@ -853,8 +853,14 @@ class VisualizerSync(
      * (`reconcile_shots` over the FFI — the identical algorithm the web runs)
      * and apply the actions through the VM callbacks. Returns pulled-count.
      */
-    private suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>, profilesById: Map<String, JsonObject>): Int {
+    internal suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>, profilesById: Map<String, JsonObject>): Int {
         if (wires.isEmpty()) return 0
+        // Tombstones ride along (web F18a): a shot deleted here whose remote copy
+        // is still on Visualizer must match that copy (an `update`, skipped
+        // below), not look new and be pulled back in. The planner never binds a
+        // tombstone by signature, so only its Visualizer id matters.
+        val tombstones = persisted.shotTombstones
+        val tombstoned = tombstones.mapTo(HashSet()) { it.id }
         val payload = buildJsonObject {
             put(
                 "local",
@@ -869,6 +875,19 @@ class VisualizerSync(
                                 put("finalWeight", shotFinalWeight(shot)?.let { JsonPrimitive(it) } ?: JsonNull)
                                 put("visualizerId", shot.visualizerId?.let { JsonPrimitive(it) } ?: JsonNull)
                                 put("deletedAt", JsonNull)
+                            },
+                        )
+                    }
+                    tombstones.forEach { t ->
+                        add(
+                            buildJsonObject {
+                                put("id", JsonPrimitive(t.id))
+                                put("completedAt", JsonPrimitive(0))
+                                put("duration", JsonPrimitive(0))
+                                put("profileName", JsonNull)
+                                put("finalWeight", JsonNull)
+                                put("visualizerId", JsonPrimitive(t.visualizerId))
+                                put("deletedAt", JsonPrimitive(t.deletedAt))
                             },
                         )
                     }
@@ -908,6 +927,9 @@ class VisualizerSync(
                 }
                 "update" -> {
                     val localId = fld("localId") ?: continue
+                    // Deleted here: nothing to update, and the remote copy stays
+                    // out of the history.
+                    if (localId in tombstoned) continue
                     val remote = action["remote"] as? JsonObject ?: continue
                     // A shot pulled before the barista was read gets it now.
                     fillBarista(localId, remote)
@@ -922,6 +944,47 @@ class VisualizerSync(
         }
         if (stubs.isNotEmpty()) onPulledShots(stubs)
         return pulled
+    }
+
+    // ── Shot deletion (web history tombstones + upload-queue delete) ───────
+
+    /** The shots deleted here whose Visualizer copy still exists. */
+    internal val shotTombstones: List<ShotTombstone> get() = persisted.shotTombstones
+
+    /**
+     * Record that the shot [id], uploaded as [visualizerId], was deleted here.
+     * The tombstone keeps the next pull from bringing the remote copy back.
+     * With [deleteRemote] the remote copy is deleted too, now and on every
+     * later sync until the `DELETE` lands; then the tombstone goes. A shot
+     * that was never uploaded needs no tombstone (the caller just drops it).
+     */
+    fun tombstoneShot(id: String, visualizerId: String, deleteRemote: Boolean) {
+        scope.launch {
+            persist { st ->
+                st.copy(
+                    shotTombstones = st.shotTombstones.filterNot { it.id == id } +
+                        ShotTombstone(id, visualizerId, deletedAt = now(), deleteRemote = deleteRemote),
+                )
+            }
+            if (deleteRemote) deleteRemoteShots()
+        }
+    }
+
+    /**
+     * Send `DELETE /shots/{id}` for every tombstone the user asked to delete
+     * remotely (web `ShotSync.deleteShot`: open to free accounts, a 404 counts
+     * as already gone). A success drops the tombstone; a failure keeps it for
+     * the next sync. A no-op when signed out.
+     */
+    internal suspend fun deleteRemoteShots() {
+        if (persisted.tokens == null) return
+        for (t in persisted.shotTombstones.filter { it.deleteRemote }) {
+            val err = runCatchingCancellable { withFreshToken { client.request("DELETE", "/shots/${t.visualizerId}", it) } }
+                .fold(onSuccess = { null }, onFailure = { e -> if (e is VisualizerError.NotFound) null else (e.message ?: "delete failed") })
+            if (err == null) persist { st -> st.copy(shotTombstones = st.shotTombstones.filterNot { it.id == t.id }) }
+            val entry = SyncLogEntry(direction = "delete", entity = "shot", id = t.visualizerId, name = "Shot", at = now(), error = err)
+            persist { it.copy(log = (listOf(entry) + it.log).take(20)) }
+        }
     }
 
     /**
@@ -1031,6 +1094,8 @@ class VisualizerSync(
         scope.launch {
             val parts = mutableListOf<String>()
             var failed = false
+            // Remote deletes the user asked for that haven't landed yet.
+            runCatchingCancellable { deleteRemoteShots() }
             if (beansOn) {
                 runCatchingCancellable { runBeanSync() }
                     .onSuccess { r ->

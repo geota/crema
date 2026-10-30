@@ -1096,13 +1096,12 @@ private fun PhoneShotDetail(
     }
 
     if (confirmDelete) {
-        CremaConfirmDialog(
+        coffee.crema.ui.components.DeleteWithVisualizerDialog(
             title = "Delete shot?",
             body = "This shot will be removed from this device. This can’t be undone.",
-            confirmLabel = "Delete",
-            icon = "trash",
-            danger = true,
-            onConfirm = { vm.deleteShot(shot.id); confirmDelete = false; onDeleted() },
+            what = "shot",
+            remoteAvailable = vm.canDeleteShotOnVisualizer(shot.visualizerId),
+            onConfirm = { remote -> vm.deleteShot(shot.id, alsoOnVisualizer = remote); confirmDelete = false; onDeleted() },
             onDismiss = { confirmDelete = false },
         )
     }

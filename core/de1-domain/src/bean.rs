@@ -1133,6 +1133,11 @@ pub struct ShotBean {
     /// stored shots decode unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grinder: Option<String>,
+    /// The bag's free-form notes at the time of the shot — exported as the
+    /// v2 `metadata.crema.bean_notes` (the web snapshot always carried them;
+    /// the core type didn't, so every backup lost them). Additive + optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
 }
 
 impl ShotBean {
@@ -1156,6 +1161,11 @@ impl ShotBean {
                 None
             } else {
                 Some(bean.grinder.clone())
+            },
+            notes: if bean.notes.is_empty() {
+                None
+            } else {
+                Some(bean.notes.clone())
             },
         }
     }

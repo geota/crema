@@ -131,7 +131,6 @@ import coffee.crema.ui.components.CremaSplitButton
 import coffee.crema.ui.components.SplitMenuItem
 import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
-import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.components.ShotQualityCard
 import coffee.crema.core.ShotQualityReport
 import coffee.crema.ui.theme.CremaTheme
@@ -568,7 +567,8 @@ fun HistoryScreen(
                             onStartFromShot = { vm.startFromShot(selected.id) },
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
                             onExport = { vm.exportShot(selected.id) },
-                            onDelete = { vm.deleteShot(selected.id); selectedId = null },
+                            onDelete = { remote -> vm.deleteShot(selected.id, alsoOnVisualizer = remote); selectedId = null },
+                            remoteDeleteAvailable = vm.canDeleteShotOnVisualizer(selected.visualizerId),
                             // One Upload row over Visualizer + Decent (a re-upload for a
                             // destination that already has the shot: Visualizer de-dupes
                             // by telemetry SHA; Decent replaces its copy) — #44 follow-up.
@@ -880,7 +880,9 @@ private fun ShotDetail(
     onRate: (Int, String) -> Unit,
     onLoadOnBrew: () -> Unit,
     onExport: () -> Unit,
-    onDelete: () -> Unit,
+    onDelete: (alsoOnVisualizer: Boolean) -> Unit,
+    /** Whether the delete confirm offers "Also delete on Visualizer". */
+    remoteDeleteAvailable: Boolean = false,
     /**
      * The cloud destinations (Visualizer, Decent) with their enabled /
      * uploaded state for this shot — folded into ONE "Upload" menu row by
@@ -1113,13 +1115,12 @@ private fun ShotDetail(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         if (confirmDelete) {
-            CremaConfirmDialog(
+            coffee.crema.ui.components.DeleteWithVisualizerDialog(
                 title = "Delete shot?",
                 body = "This shot will be removed from this device. This can’t be undone.",
-                confirmLabel = "Delete",
-                icon = "trash",
-                danger = true,
-                onConfirm = { onDelete(); confirmDelete = false },
+                what = "shot",
+                remoteAvailable = remoteDeleteAvailable,
+                onConfirm = { remote -> onDelete(remote); confirmDelete = false },
                 onDismiss = { confirmDelete = false },
             )
         }

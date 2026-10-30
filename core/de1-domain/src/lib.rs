@@ -100,6 +100,7 @@ pub mod saw_learning;
 pub mod session;
 pub mod settings_import;
 pub mod shot;
+pub mod shot_capture;
 pub mod shot_quality;
 pub mod steam;
 pub mod step_weight;
@@ -232,8 +233,8 @@ pub use firmware_image::{
 };
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{
-    HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMachine, ShotMetadata, ShotStatInput, StoredShot,
-    brew_ratio, history_stats,
+    HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMachine, ShotMetadata, ShotPrivacy,
+    ShotStatInput, StoredShot, brew_ratio, history_stats,
 };
 pub use history_export::{export_v2_json_shot, export_v2_json_shot_full};
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
@@ -264,8 +265,11 @@ pub use session::SessionTimer;
 pub use settings_import::{ImportedDe1AppSettings, import_settings_tdb};
 pub use shot::{
     ABORTED_MAX_DURATION_MS, ABORTED_MAX_WEIGHT_G, MAX_SHOT_SAMPLES, STORAGE_SAMPLE_CAP,
-    ShotDisposition, ShotEvent, ShotMetrics, ShotMonitor, ShotPeaks, ShotPhase, ShotRecord,
-    TimedSample, downsample_indices, shot_disposition,
+    SampleOverlays, ShotDisposition, ShotEvent, ShotMetrics, ShotMonitor, ShotPeaks, ShotPhase,
+    ShotRecord, TimedSample, downsample_indices, shot_disposition,
+};
+pub use shot_capture::{
+    AsRunShot, CompletedShot, ShotCaptureContext, assemble_stored_shot, parse_shot_capture_context,
 };
 pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,
