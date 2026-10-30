@@ -1050,7 +1050,7 @@ private fun SharingSection(
     }
     SettingsGroup("Local export") {
         CremaSettingsRow("History export", "Your entire shot history as JSON — for spreadsheets and other tools.", last = true) {
-            CremaButton(onClick = { launchSave("crema-history.json", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+            CremaButton(onClick = { launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
         }
     }
 }

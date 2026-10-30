@@ -3,11 +3,15 @@ package coffee.crema.visualizer
 import coffee.crema.history.StoredShot
 import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.beanLabel
+import coffee.crema.core.exportCremaJsonl
+import coffee.crema.core.importCremaJsonl
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -321,6 +325,30 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
     )
 }
 
+/** The history export: [shots] as the core's Crema `crema/v1` JSONL (F10) —
+ *  what web's History import reads, and [shotsFromCremaJsonl] reads back.
+ *  [grinderModel] is the Settings grinder, for shots captured before F10
+ *  froze theirs. */
+fun shotHistoryJsonl(shots: List<StoredShot>, grinderModel: String?, exportedAtMs: Long, version: String): String {
+    val envelope = buildJsonObject {
+        put("shots", JsonArray(shots.map { wireShotJson(it, grinderModel, forBackup = true) }))
+    }
+    return exportCremaJsonl(envelope.toString(), exportedAtMs, version)
+}
+
+/** The shots of a Crema `crema/v1` JSONL — either shell's history export —
+ *  parsed by the core; empty when [text] is not one. */
+fun shotsFromCremaJsonl(text: String, json: kotlinx.serialization.json.Json): List<StoredShot> {
+    val header = text.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+    if (!header.contains("\"crema/v1\"")) return emptyList()
+    return runCatching {
+        val plan = json.parseToJsonElement(importCremaJsonl(text)).jsonObject
+        (plan["shots"] as? JsonArray).orEmpty().mapNotNull { imported ->
+            (imported.jsonObject["storedShot"] as? JsonObject)?.let { storedShotFromBackupJson(it, json) }
+        }
+    }.getOrElse { emptyList() }
+}
+
 /** Encoder for the backup-only brew series (drops nulls-as-defaults like the stores). */
 private val backupJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
@@ -346,7 +374,8 @@ fun parseTimedSamples(samplesJson: String, json: kotlinx.serialization.json.Json
                 setHeadTemp = sp("setHeadTemp") ?: 0f,
                 setGroupPressure = sp("setGroupPressure") ?: 0f,
                 setGroupFlow = sp("setGroupFlow") ?: 0f,
-                frameNumber = sp("frameNumber")?.toInt()?.takeIf { it != 0 },
+                // DE1 frames count from 0, so 0 is the first frame, not "unknown".
+                frameNumber = sp("frameNumber")?.toInt(),
             )
         }
     }.getOrDefault(emptyList())

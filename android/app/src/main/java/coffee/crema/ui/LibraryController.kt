@@ -38,7 +38,6 @@ import coffee.crema.core.importProfileFile
 import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.importBeanconquerorJson
 import coffee.crema.core.importCremaJsonl
-import coffee.crema.core.exportCremaJsonl
 import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.newShotId
 import coffee.crema.history.HistoryStore
@@ -67,6 +66,8 @@ import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.toCommonSettings
 import coffee.crema.settings.withCommonSettings
 import coffee.crema.visualizer.VisualizerSync
+import coffee.crema.visualizer.shotHistoryJsonl
+import coffee.crema.visualizer.shotsFromCremaJsonl
 import coffee.crema.visualizer.storedShotFromBackupJson
 import coffee.crema.visualizer.wireShotJson
 import kotlinx.coroutines.CoroutineScope
@@ -708,14 +709,7 @@ class LibraryController(
     /** Export the whole shot history as Crema `crema/v1` JSONL — Settings →
      *  Sharing. The core's format (F10): both shells import it back. */
     fun exportAllShots() {
-        val shots = uiState().history
-        if (shots.isEmpty()) { appendLog("Export: no shots"); return }
-        val text = runCatching {
-            val envelope = buildJsonObject {
-                put("shots", JsonArray(shots.map { wireShotJson(it, forBackup = true) }))
-            }
-            exportCremaJsonl(envelope.toString(), System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME)
-        }.getOrElse { appendLog("Export shots failed: ${it.message}"); return }
+        val text = shotsJson(null) ?: return
         shareText(text, "Export shots")
     }
 
@@ -758,12 +752,15 @@ class LibraryController(
             .getOrElse { notify("Beanconqueror export failed"); null }
     }
 
-    /** Shots as Crema JSON — all (ids null) or only the given ids. */
+    /** Shots as the core's Crema `crema/v1` JSONL ([shotHistoryJsonl]) — all
+     *  (ids null) or only the given ids. Both shells import it (F10). */
     fun shotsJson(ids: List<String>?): String? {
         val history = uiState().history
         val shots = if (ids == null) history else { val w = ids.toHashSet(); history.filter { it.id in w } }
         if (shots.isEmpty()) { notify("Export — no shots"); return null }
-        return runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), shots) }.getOrNull()
+        return runCatching {
+            shotHistoryJsonl(shots, settingsGrinder(), System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME)
+        }.getOrElse { appendLog("Export shots failed: ${it.message}"); null }
     }
 
     /**
@@ -906,18 +903,6 @@ class LibraryController(
         }
     }
 
-    /** The shots of a Crema `crema/v1` JSONL, parsed by the core, or empty
-     *  when [text] isn't one. */
-    private fun cremaJsonlShots(text: String): List<StoredShot> {
-        if (!text.lineSequence().firstOrNull().orEmpty().contains("\"crema/v1\"")) return emptyList()
-        return runCatching {
-            val plan = json.parseToJsonElement(importCremaJsonl(text)).jsonObject
-            (plan["shots"] as? JsonArray).orEmpty().mapNotNull { imported ->
-                (imported.jsonObject["storedShot"] as? JsonObject)?.let { storedShotFromBackupJson(it, json) }
-            }
-        }.getOrElse { emptyList() }
-    }
-
     /** Import shots from a Crema export — the `crema/v1` JSONL, or an older
      *  Android flat array / single / .jsonl — skipping ids already in history. */
     fun importShots(uri: Uri) {
@@ -925,7 +910,7 @@ class LibraryController(
             val text = readUriText(uri)?.trim()
             if (text.isNullOrBlank()) { notify(readFailure("Import failed — couldn't read that file")); return@launch }
             // Crema `crema/v1` JSONL (the all-shots export, F10) through the core.
-            var shots = cremaJsonlShots(text)
+            var shots = shotsFromCremaJsonl(text, json)
             if (shots.isEmpty()) shots = runCatching {
                 if (text.startsWith("[")) json.decodeFromString(ListSerializer(StoredShot.serializer()), text)
                 else listOf(json.decodeFromString(StoredShot.serializer(), text))
