@@ -1577,6 +1577,8 @@ export async function refreshStopTargetsProjection(core: {
 		weightConfigured: number | null;
 		weightBlocked: string | null;
 	}>;
+	/** The core's hot-water target, re-read alongside (see below). */
+	hotWaterTarget?(): Promise<HotWaterTarget | null>;
 }): Promise<void> {
 	try {
 		const p = await core.stopTargetsProjection();
@@ -1592,6 +1594,16 @@ export async function refreshStopTargetsProjection(core: {
 		});
 	} catch {
 		// Best-effort: the event path still covers the connected case.
+	}
+	// The target yield is also the hot-water ratio's basis: re-read the
+	// core's hot-water target too, so a profile select or yield edit with
+	// nothing connected still moves the readout.
+	if (core.hotWaterTarget) {
+		try {
+			setHotWaterTarget(await core.hotWaterTarget());
+		} catch {
+			// Best-effort, as above.
+		}
 	}
 }
 

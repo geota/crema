@@ -23,15 +23,31 @@ import {
 	defaultBrewCueSound,
 	defaultCommonSettingsJson,
 	defaultIdleSleepMin,
+	initialHotWaterDose,
 	resetSettingsJson,
 	sanitizeCommonSettingsJson
 } from '#lib/wasm/de1_wasm.js';
 import { isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
 import { readSyncConfig } from '#lib/visualizer/sync-config.js';
-import type { CommonSettings, SettingsReset } from '#lib/core/crema-core.js';
+import type {
+	CommonSettings,
+	HotWaterDose,
+	HotWaterMode,
+	SettingsReset,
+	StoredHotWater
+} from '#lib/core/crema-core.js';
 
 /** localStorage key for the bundle of app preferences ({@link Settings}). */
 const SETTINGS_KEY = 'crema.settings.v1';
+
+/**
+ * localStorage key for the device-local copy of the hot-water dose: the
+ * downgrade marker. An older build ignores the unknown hot-water keys and
+ * drops them on its next save; this copy, which it never rewrites, keeps a
+ * deliberate volume-mode 150 ml from turning into ratio 1:3 when the user
+ * upgrades again. Read only when the settings carry no mode.
+ */
+const HOT_WATER_MARKER_KEY = 'crema.hotWater';
 
 /**
  * The core's out-of-box brew defaults (`{doseG, ratio, brewTempC, preinfusionS}`),
@@ -279,8 +295,21 @@ export interface Settings {
 	qcSteamTempC: number;
 	/** Hot-water temperature, °C. */
 	qcHotWaterTempC: number;
-	/** Hot-water volume, ml. */
+	/** Hot-water volume-mode value, ml. */
 	qcHotWaterVolumeMl: number;
+	/**
+	 * The hot-water dose mode, and the time / No limit / ratio values (the
+	 * volume is `qcHotWaterVolumeMl`). `null` in a record from before the
+	 * modes, until the start-up migration stores the core's answer: read the
+	 * dose through `SettingsStore.hotWaterDose()`, never these fields.
+	 */
+	qcHotWaterMode: HotWaterMode | null;
+	/** Hot-water time-mode seconds (see `qcHotWaterMode`). */
+	qcHotWaterTimeS: number | null;
+	/** Hot-water time mode pours until stopped (see `qcHotWaterMode`). */
+	qcHotWaterTimeNoLimit: boolean | null;
+	/** Hot-water ratio: water per gram of shot (see `qcHotWaterMode`). */
+	qcHotWaterRatio: number | null;
 	/** Group-flush duration, seconds. */
 	qcFlushTimeS: number;
 	/** Group-flush target temperature, °C. */
@@ -397,6 +426,10 @@ const COMMON_KEYS = [
 	'qcSteamTempC',
 	'qcHotWaterTempC',
 	'qcHotWaterVolumeMl',
+	'qcHotWaterMode',
+	'qcHotWaterTimeS',
+	'qcHotWaterTimeNoLimit',
+	'qcHotWaterRatio',
 	'qcFlushTimeS',
 	'qcFlushTempC',
 	'showPressure',
@@ -520,6 +553,10 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		qcSteamTempC: s.qcSteamTempC,
 		qcHotWaterTempC: s.qcHotWaterTempC,
 		qcHotWaterVolumeMl: s.qcHotWaterVolumeMl,
+		qcHotWaterMode: s.qcHotWaterMode ?? undefined,
+		qcHotWaterTimeS: s.qcHotWaterTimeS ?? undefined,
+		qcHotWaterTimeNoLimit: s.qcHotWaterTimeNoLimit ?? undefined,
+		qcHotWaterRatio: s.qcHotWaterRatio ?? undefined,
 		qcFlushTimeS: s.qcFlushTimeS,
 		qcFlushTempC: s.qcFlushTempC
 	};
@@ -601,8 +638,63 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		qcSteamTempC: c.qcSteamTempC,
 		qcHotWaterTempC: c.qcHotWaterTempC,
 		qcHotWaterVolumeMl: c.qcHotWaterVolumeMl,
+		qcHotWaterMode: c.qcHotWaterMode ?? null,
+		qcHotWaterTimeS: c.qcHotWaterTimeS ?? null,
+		qcHotWaterTimeNoLimit: c.qcHotWaterTimeNoLimit ?? null,
+		qcHotWaterRatio: c.qcHotWaterRatio ?? null,
 		qcFlushTimeS: c.qcFlushTimeS,
 		qcFlushTempC: c.qcFlushTempC
+	};
+}
+
+/** The stored hot-water fields of `s`, for the core's migration rule. */
+function storedHotWater(s: Settings): StoredHotWater {
+	return {
+		mode: s.qcHotWaterMode ?? undefined,
+		volumeMl: s.qcHotWaterVolumeMl,
+		timeS: s.qcHotWaterTimeS ?? undefined,
+		timeNoLimit: s.qcHotWaterTimeNoLimit ?? undefined,
+		ratio: s.qcHotWaterRatio ?? undefined
+	};
+}
+
+/** The downgrade marker (see {@link HOT_WATER_MARKER_KEY}), or `null`. */
+function readHotWaterMarker(): StoredHotWater | null {
+	return readJson<StoredHotWater | null>(HOT_WATER_MARKER_KEY, null, {
+		what: 'hot-water marker',
+		valid: isJsonObject
+	});
+}
+
+/**
+ * The hot-water dose `s` holds — the core's rule (`initial_hot_water_dose`):
+ * a stored mode wins; with none, the `marker` (the device-local copy) when
+ * given; else never-changed (no volume, or the old 150 ml default) gives
+ * ratio 1:3 and any other volume gives volume mode. Pure: nothing is written.
+ */
+export function hotWaterDoseOf(s: Settings, marker: StoredHotWater | null = null): HotWaterDose {
+	const markerJson = s.qcHotWaterMode == null && marker ? JSON.stringify(marker) : undefined;
+	return JSON.parse(initialHotWaterDose(JSON.stringify(storedHotWater(s)), markerJson)) as HotWaterDose;
+}
+
+/**
+ * The hot-water dose `s` holds, reading the device-local marker when `s`
+ * carries no mode — what {@link SettingsStore.hotWaterDose} returns, for
+ * readers that hold a `Settings` (the connect sweep).
+ */
+export function settingsHotWaterDose(s: Settings): HotWaterDose {
+	return hotWaterDoseOf(s, s.qcHotWaterMode == null ? readHotWaterMarker() : null);
+}
+
+/** `s` holding `dose` (its mode stored). */
+function withHotWaterDose(s: Settings, dose: HotWaterDose): Settings {
+	return {
+		...s,
+		qcHotWaterMode: dose.mode,
+		qcHotWaterTimeS: dose.timeS,
+		qcHotWaterTimeNoLimit: dose.timeNoLimit,
+		qcHotWaterVolumeMl: dose.volumeMl,
+		qcHotWaterRatio: dose.ratio
 	};
 }
 
@@ -711,6 +803,39 @@ export class SettingsStore {
 			common: settingsToCommon(this.current),
 			...settingsPlatformExtras(this.current)
 		});
+		// Every save of a stored dose rewrites the downgrade marker.
+		if (this.current.qcHotWaterMode != null) {
+			writeJson(HOT_WATER_MARKER_KEY, storedHotWater(this.current));
+		}
+	}
+
+	/**
+	 * The hot-water dose — the only way to read it (the card, the push, the
+	 * connect sweep, the backup export). Before the start-up migration a
+	 * record without a mode reads through the marker and the core's rule;
+	 * nothing is written here, so this is safe from a render.
+	 */
+	hotWaterDose(): HotWaterDose {
+		return settingsHotWaterDose(this.current);
+	}
+
+	/**
+	 * Store the core's answer for a record without a hot-water mode, once:
+	 * afterwards a stored mode always exists, so the never-changed rule never
+	 * runs again (a later volume-mode 150 ml is a choice and is kept). Call at
+	 * start-up right after the wasm core loads — never from a render, where
+	 * the write would be a state mutation Svelte refuses.
+	 */
+	migrateHotWater(): void {
+		if (this.current.qcHotWaterMode != null) return;
+		this.current = withHotWaterDose(this.current, this.hotWaterDose());
+		this.persist();
+	}
+
+	/** Store a new hot-water dose (mode and every mode's value) in one write. */
+	setHotWaterDose(dose: HotWaterDose): void {
+		this.current = withHotWaterDose(this.current, dose);
+		this.persist();
 	}
 
 	/**
@@ -729,7 +854,9 @@ export class SettingsStore {
 	 * per-key `set()` fan-out (one `persist()` instead of ~30 localStorage writes).
 	 */
 	replaceAll(next: Settings): void {
-		this.current = next;
+		// A backup with no hot-water mode goes through the core's rule — its
+		// own fields, never this device's marker.
+		this.current = next.qcHotWaterMode == null ? withHotWaterDose(next, hotWaterDoseOf(next)) : next;
 		applyTheme(this.current.theme);
 		this.persist();
 		this.onReplaced?.();

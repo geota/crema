@@ -65,18 +65,12 @@
 	 * Steam temp/time — the same persisted Quick-Controls overrides the Brew
 	 * Quick Sheet edits, so both surfaces stay in sync. Written now while
 	 * connected; the connect path re-seeds them, so offline edits land on the
-	 * next connect. The two share the one cuuid_0B packet with hot-water
-	 * temp/volume — persist first, then read-modify-write all four from the
-	 * freshly-updated settings.
+	 * next connect. The two share the one cuuid_0B packet with the hot-water
+	 * temperature and dose — persist first, then the app's one push sends the
+	 * persisted dose too (never just a volume).
 	 */
 	function pushSteamHotwater(): void {
-		const c = settings.current;
-		void app?.setSteamHotwater({
-			steamTempC: c.qcSteamTempC,
-			steamTimeoutS: c.qcSteamTimeS,
-			hotWaterTempC: c.qcHotWaterTempC,
-			hotWaterVolumeMl: c.qcHotWaterVolumeMl
-		});
+		void app?.pushSteamHotwater();
 	}
 	function setSteamTemp(v: number): void {
 		settings.set('qcSteamTempC', v);

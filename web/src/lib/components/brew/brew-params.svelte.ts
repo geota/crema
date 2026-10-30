@@ -19,7 +19,8 @@
  *     `qcOverrides()` keys baked in at shot start.
  *   - `grind` — log-only; never reaches the machine or a profile.
  *   - steam (`steamTime` / `steamFlow` / `steamTemp`), hot water
- *     (`waterTemp` / `waterVolume`), flush (`flushTime` / `flushTemp`) —
+ *     (`waterTemp`; the hot-water dose lives in the settings store —
+ *     `hotWaterDose()` — not here), flush (`flushTime` / `flushTemp`) —
  *     DE1 system settings, written live on edit via BLE (RMW for the
  *     steam+hot-water settings blob, standalone writes for steam flow /
  *     flush) — see `BrewDashboard.svelte`'s steam/water/flush `onWrite`
@@ -56,12 +57,11 @@ export interface BrewParams {
 	steamFlow: number;
 	/** Steam boiler target temperature, °C. */
 	steamTemp: number;
-	/** Which of Temp / Volume the Hot Water card is editing. */
-	waterMode: 'temp' | 'volume';
+	/** Which of Temp / Amount the Hot Water card shows (view state: peeking
+	 *  at Temp never changes the persisted hot-water mode). */
+	waterMode: 'temp' | 'amount';
 	/** Hot-water temperature, °C. */
 	waterTemp: number;
-	/** Hot-water volume, ml. */
-	waterVolume: number;
 	/** Which of Time / Temp the Flush bucket is editing. */
 	flushMode: 'time' | 'temp';
 	/** Group-flush duration, seconds. */
@@ -87,9 +87,8 @@ export const DEFAULT_BREW_PARAMS: BrewParams = {
 	steamTime: 12,
 	steamFlow: 1.2,
 	steamTemp: 148.0,
-	waterMode: 'volume',
+	waterMode: 'amount',
 	waterTemp: 80,
-	waterVolume: 150,
 	flushMode: 'time',
 	flushTime: 4,
 	flushTemp: 95.0,

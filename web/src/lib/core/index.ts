@@ -26,8 +26,7 @@ import type { CalTarget, MmrRegister } from './crema-core';
 import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
 import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core';
 import type { BrewOverrides, ProfileSyncOutput, ProfileSyncStatus } from './crema-core';
-import type { HotWaterBounds, HotWaterDose, HotWaterTarget, SteamHotWaterTargets } from './crema-core';
-import { HotWaterMode } from './crema-core';
+import type { HotWaterBounds, HotWaterTarget, SteamHotWaterTargets } from './crema-core';
 import { guardStoppedBridge } from './stopped-guard';
 
 /** Parse a bridge `FlashStep` JSON; `status: null` reads as "no flash". */
@@ -960,14 +959,6 @@ export function hotWaterBounds(): HotWaterBounds {
 		throw new Error('hotWaterBounds() called before the wasm core was loaded');
 	}
 	return JSON.parse(wasmModule.hotWaterBoundsJson()) as HotWaterBounds;
-}
-
-/**
- * A volume-mode hot-water dose of `ml`, the other modes' values the core's
- * defaults: what this shell sends until it has the time / ml / ratio card.
- */
-export function volumeHotWaterDose(ml: number): HotWaterDose {
-	return { ...hotWaterBounds().defaults, mode: HotWaterMode.Volume, volumeMl: ml };
 }
 
 /**

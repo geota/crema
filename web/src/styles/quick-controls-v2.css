@@ -1282,6 +1282,57 @@
   .qchip-unit { display: none; }
 }
 
+/* ── Hot water: the Time · ml · Ratio switch and the readout line ─────────
+   (hot-water modes spec §2.7). The switch draws 32 px (28 px buttons) and
+   takes a 44 px hit area through an inset ::before, like .qsplit-opt; the readout is one
+   ellipsised line (the full text is its title). Six columns (~180 px per
+   card): the labels shorten to s / ml / 1:x, and the ratio chips' "1:" (in the
+   unit span) drops with the other units. */
+.qhw { container-type: inline-size; }
+.qhw-seg {
+  display: flex;
+  gap: 2px;
+  height: 32px;
+  margin: 6px 0;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(var(--tint-rgb), 0.06);
+}
+.qhw-seg-opt {
+  flex: 1;
+  position: relative;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+}
+.qhw-seg-opt::before { content: ''; position: absolute; inset: -8px 0; }
+.qhw-seg-opt.is-active {
+  background: rgba(var(--tint-rgb), 0.12);
+  color: rgba(var(--tint-rgb), 0.9);
+  cursor: default;
+}
+.qhw-seg-short { display: none; }
+@container (max-width: 200px) {
+  .qhw-seg-full { display: none; }
+  .qhw-seg-short { display: inline; }
+}
+.qhw-readout {
+  margin: 4px 0 0;
+  min-height: 16px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qhw-nolimit { margin-top: 4px; }
+
 /* ── Phone width (final cohort review 07 N6) ──────────────────────────────
    At 400 px the three-column grid overlapped labels and squeezed preset
    chips to 10-20 px, and the foot ran off the right edge. Below 600 px the

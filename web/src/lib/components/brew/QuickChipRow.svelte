@@ -26,7 +26,8 @@
 		onChange,
 		fmt,
 		dimension,
-		name
+		name,
+		unitBefore = false
 	}: {
 		/** The preset values to render as chips (canonical when `dimension` set). */
 		options: number[];
@@ -42,6 +43,11 @@
 		dimension?: Dimension;
 		/** What the presets set ("Dose") — names the chip group "Dose presets". */
 		name?: string;
+		/**
+		 * Render the unit before the digits (a ratio's "1:"). It stays in the
+		 * unit span, so the narrow layout hides it like any unit.
+		 */
+		unitBefore?: boolean;
 	} = $props();
 
 	const settings = getSettingsStore();
@@ -71,10 +77,16 @@
 			class="qchip"
 			class:is-active={Math.abs(value - option) < 0.001}
 			aria-pressed={Math.abs(value - option) < 0.001}
-			aria-label={effectiveUnit ? `${text} ${effectiveUnit}` : undefined}
+			aria-label={effectiveUnit
+				? unitBefore
+					? `${effectiveUnit}${text}`
+					: `${text} ${effectiveUnit}`
+				: undefined}
 			onclick={() => onChange?.(option)}
 		>
-			{text}{#if effectiveUnit}<span class="qchip-unit">{effectiveUnit}</span>{/if}
+			{#if effectiveUnit && unitBefore}<span class="qchip-unit">{effectiveUnit}</span>{/if}{text}{#if effectiveUnit && !unitBefore}<span
+					class="qchip-unit">{effectiveUnit}</span
+				>{/if}
 		</button>
 	{/each}
 </div>
