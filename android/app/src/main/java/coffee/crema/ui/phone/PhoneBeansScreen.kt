@@ -130,7 +130,10 @@ fun PhoneBeansScreen(
         if (uri != null) vm.importBeanconquerorUri(uri)
     }
     var pendingExport by remember { mutableStateOf<String?>(null) }
-    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    // octet-stream keeps the suggested name as given: with "application/json" the
+    // storage provider appends ".json" to "crema-beans.crema.jsonl", and web's
+    // importer then reads it as a Beanconqueror file.
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val t = pendingExport; pendingExport = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
@@ -343,7 +346,7 @@ fun PhoneBeansScreen(
             title = "Export as",
             items = listOf(
                 SheetItem("file-text", "Crema backup", sub = "Lossless round-trip — beans and roasters. Re-importable in Crema.") {
-                    launchSave("crema-beans.json", vm.beansLibraryJson())
+                    launchSave("crema-beans.crema.jsonl", vm.beansLibraryJson())
                 },
                 SheetItem("file-zip", "Beanconqueror", sub = "For sharing with Beanconqueror users. Crema-only fields like tags don't survive.") {
                     launchSave("crema-to-beanconqueror.json", vm.beansBeanconquerorJson())
