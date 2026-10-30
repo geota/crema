@@ -202,5 +202,15 @@ describe('the dial is part of the desired profile (F7, validation P2)', () => {
 		await vi.advanceTimersByTimeAsync(10);
 		expect(frames).toEqual([]);
 		expect((await core.profileSyncStatus()).desired).toBe(profileFingerprint(profile, qc));
+		// No Brew screen was involved: the overrides live at app level.
+		expect(app.brewOverridesFor(profile)).toEqual(qc);
+
+		// Another profile becomes active: the dial goes, and it stays gone
+		// when the first profile comes back.
+		const other = profiles.all.find((p) => p.id !== profile.id && p.segments.length <= 20)!;
+		await app.setDesiredProfile(other);
+		expect(app.brewOverridesFor(profile)).toEqual({});
+		await app.setDesiredProfile(profile);
+		expect((await core.profileSyncStatus()).desired).toBe(profileFingerprint(profile, {}));
 	});
 });

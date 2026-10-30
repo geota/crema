@@ -224,6 +224,13 @@ const SCALE_LOW_BATTERY_PCT = 25;
  */
 const DIAL_PUSH_DEBOUNCE_MS = 500;
 
+/** Two override sets with the same values (absent = absent). */
+function sameOverrides(a: ProfileFingerprintOverrides, b: ProfileFingerprintOverrides): boolean {
+	return (
+		a.dose === b.dose && a.yield === b.yield && a.brewTemp === b.brewTemp && a.preinf === b.preinf
+	);
+}
+
 /**
  * The replay-specific helpers — `composeReplayStartMessage`,
  * `replayMetaToActiveShot`, `guessScaleAdvertisedName` — moved to
@@ -1424,21 +1431,29 @@ export class CremaApp {
 	}
 
 	/**
-	 * The live Quick Controls overrides and the profile they were dialled on
-	 * (the Brew dashboard reports them). They are part of what the DE1 should
-	 * hold, so a group-head start runs the dialled profile too.
+	 * The live Quick Controls overrides and the profile they were dialled on —
+	 * app-level state, the one source of truth whichever screen is showing:
+	 * the Brew dashboard's dial reads them when it mounts and writes them as it
+	 * moves. They are part of what the DE1 should hold, so a group-head start
+	 * runs the dialled profile. Not persisted (like Android's `brewParams`): a
+	 * restart starts with none. A profile change clears them.
 	 */
-	#brewOverrides: { profileId: string; qc: ProfileFingerprintOverrides } | null = null;
+	#brewOverrides = $state.raw<{ profileId: string; qc: ProfileFingerprintOverrides } | null>(
+		null
+	);
 
 	/** The pending debounced push of a dial change ({@link setBrewOverrides}). */
 	#overridesPush: ReturnType<typeof setTimeout> | null = null;
 
 	/**
-	 * The Brew dashboard's live overrides for `profile`. They become the core's
-	 * desired profile after the dial settles for {@link DIAL_PUSH_DEBOUNCE_MS}
-	 * (de1app's 0.5 s), so stepping the dial uploads once, not per step.
+	 * Set the live overrides for `profile` (the dial moved). They become the
+	 * core's desired profile after the dial rests {@link DIAL_PUSH_DEBOUNCE_MS}
+	 * (de1app's 0.5 s), so stepping the dial uploads once, not per step. A
+	 * repeat of the current overrides changes nothing.
 	 */
 	setBrewOverrides(profile: CremaProfile, qc: ProfileFingerprintOverrides): void {
+		const cur = this.#brewOverrides;
+		if (cur?.profileId === profile.id && sameOverrides(cur.qc, qc)) return;
 		this.#brewOverrides = { profileId: profile.id, qc };
 		if (this.#overridesPush !== null) clearTimeout(this.#overridesPush);
 		this.#overridesPush = setTimeout(() => {
@@ -1447,12 +1462,13 @@ export class CremaApp {
 		}, DIAL_PUSH_DEBOUNCE_MS);
 	}
 
-	/** The overrides that go with `profile`: the live ones when they were
-	 *  dialled on it, else none (a profile change clears them). */
-	#overridesFor(profile: CremaProfile | null): ProfileFingerprintOverrides {
-		return profile !== null && this.#brewOverrides?.profileId === profile.id
-			? this.#brewOverrides.qc
-			: {};
+	/**
+	 * The live overrides dialled on `profile`, or none — what the dial shows
+	 * when it mounts, and what goes with that profile to the DE1. Reactive.
+	 */
+	brewOverridesFor(profile: CremaProfile | null): ProfileFingerprintOverrides {
+		const cur = this.#brewOverrides;
+		return profile !== null && cur?.profileId === profile.id ? cur.qc : {};
 	}
 
 	/**
@@ -1468,8 +1484,12 @@ export class CremaApp {
 	 */
 	async setDesiredProfile(
 		profile: CremaProfile | null,
-		qc: ProfileFingerprintOverrides = this.#overridesFor(profile)
+		qc: ProfileFingerprintOverrides = this.brewOverridesFor(profile)
 	): Promise<ProfileSyncStatus> {
+		// Another profile (or none) is active: the old dial no longer applies.
+		if (this.#brewOverrides !== null && this.#brewOverrides.profileId !== profile?.id) {
+			this.#brewOverrides = null;
+		}
 		const { output, status } = await this.core.setDesiredProfile(profile, qc, performance.now());
 		this.applyCoreOutput(output);
 		return status;

@@ -534,6 +534,8 @@
 				flushTemp: prefs.qcFlushTempC
 			})),
 		() => activeBrewTempRange,
+		// The dial starts from the app-level overrides for this profile.
+		() => (app ? app.brewOverridesFor(activeProfile ?? null) : {}),
 		() => activePreinfusionDial
 	);
 	/**

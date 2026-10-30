@@ -30,6 +30,8 @@
  *     `startShot`.
  */
 
+import { untrack } from 'svelte';
+
 /** The full mode-aware Quick Sheet parameter set — mirrors `DEFAULT_PARAMS_V2`. */
 export interface BrewParams {
 	/** Which of Dose / Grind the combined card is editing. */
@@ -134,11 +136,18 @@ export class BrewParamState {
 	 * `$derived`), after which it tracks the component, not the seed, until a
 	 * seed input changes and the `$derived` body re-runs.
 	 */
-	current = $derived.by<BrewParams>(() => ({
-		...DEFAULT_BREW_PARAMS,
-		...this.qcSeed?.(),
-		...this.seed()
-	}));
+	current = $derived.by<BrewParams>(() => {
+		const seed = this.seed();
+		return {
+			...DEFAULT_BREW_PARAMS,
+			...this.qcSeed?.(),
+			...seed,
+			// The app-level overrides for this profile (read untracked: the
+			// dial writes them as it moves, which must not re-seed it), so a
+			// remounted dial shows what it was left at.
+			...untrack(() => this.overrides?.() ?? {})
+		};
+	});
 
 	/**
 	 * @param seed A getter for the current brew-target seed. Read inside the
@@ -168,6 +177,12 @@ export class BrewParamState {
 		 * Optional getter for the active profile's pre-infusion dial (the core's
 		 * `preinfusionDial`), or `null` with no active profile.
 		 */
+		/**
+		 * Optional getter for the live overrides kept at app level for the
+		 * active profile (`CremaApp.brewOverridesFor`): the dial starts from
+		 * them, so leaving Brew and coming back keeps the dial.
+		 */
+		private readonly overrides?: () => Partial<BrewParamSeed>,
 		private readonly preinfusionDial?: () => {
 			min: number;
 			max: number;
