@@ -543,6 +543,19 @@
 		return activeProfile ? normalizeBrewOverrides(activeProfile, qc) : qc;
 	}
 	/**
+	 * The dial is part of what the DE1 should hold: every change of the active
+	 * profile or its overrides makes them the core's desired profile, and the
+	 * core's profile sync uploads them (coalesced while an upload runs, never
+	 * while the machine is busy) — like Decenza re-uploading on a temperature
+	 * override. The core ignores a repeat.
+	 */
+	$effect(() => {
+		const profile = activeProfile;
+		const qc = effectiveOverrides();
+		if (!app || !profile) return;
+		void app.setDesiredProfile(profile, qc);
+	});
+	/**
 	 * Whether the Quick Sheet is docked open. Starts hidden — the dashboard is
 	 * the primary view; the header's QuickPill opens the sheet, and its Close
 	 * button or a scrim tap dismisses it again.
@@ -735,7 +748,7 @@
 			const profile = profileStore.all.find((pr) => pr.name.toLowerCase() === wanted);
 			if (profile) {
 				profileStore.setActive(profile.id);
-				void app?.syncActiveProfile(profile, {});
+				void app?.setDesiredProfile(profile, {});
 			} else {
 				toast.info(
 					`Profile "${shot.profileName}" was renamed or deleted since this shot; loaded the rest.`
@@ -1354,9 +1367,9 @@
 	 * Start / stop a shot via the real DE1 control surface (real, not stub).
 	 *
 	 * The orchestrator's `startShot(qc)` first verifies an active profile
-	 * is selected, then lazily re-uploads the effective profile to the
-	 * DE1 if the user's dial changes have drifted from what's currently
-	 * loaded (the `activeProfileFingerprint` cache), then interposes a
+	 * is selected, then waits until the DE1 holds the effective profile (the
+	 * core's profile sync uploads it unless this connection already pushed
+	 * it), then interposes a
 	 * `HotWaterRinse` if `prefs.groupFlushBeforeShot` is on, then
 	 * requests `Espresso`. `stopShot()` requests `Idle` which the
 	 * firmware honours from any session state. We treat any non-Idle DE1

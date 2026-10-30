@@ -362,28 +362,25 @@
 	 *   responsive). The brew dashboard's header also reads
 	 *   `activeProfile?.name` as a fallback during the upload window for
 	 *   the same instant-feedback reason.
-	 * - `app.syncActiveProfile(...)` ships the profile to the DE1 over BLE; on
+	 * - `app.setDesiredProfile(...)` hands the profile to the core, whose
+	 *   profile sync ships it to the DE1 over BLE; on
 	 *   success the orchestrator emits `ProfileUploadCompleted`, which sets
 	 *   `ui.activeProfileName` so the brew page header pins to what's
 	 *   *actually* on the machine. On failure the field stays at the prior
 	 *   value — the DE1 didn't accept this one, so the previous profile is
 	 *   still loaded.
 	 *
-	 * If no DE1 is connected the upload is a no-op (the core builds the
-	 * commands; `de1.writeCharacteristic` short-circuits with a "not
-	 * connected" status log). The user can still see the UI-level active
-	 * outline; the upload retries on the next click.
+	 * If no DE1 is connected the core keeps it as the desired profile and
+	 * uploads it on the next connect.
 	 */
 	function loadOnBrew(id: string): void {
 		store.setActive(id);
 		const profile = store.get(id);
 		const app = ctx().app;
 		if (profile && app) {
-			// `syncActiveProfile` (rather than the bare `uploadEffectiveProfile`)
-			// so the fingerprint cache is kept in sync with the upload —
-			// without this, the next Coffee tap would see a stale cache
-			// and re-upload even though the bytes already match.
-			void app.syncActiveProfile(profile, {});
+			// The core's desired profile; its profile sync uploads it unless
+			// the DE1 already holds it.
+			void app.setDesiredProfile(profile, {});
 		}
 	}
 

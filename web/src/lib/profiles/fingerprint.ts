@@ -15,9 +15,8 @@
  *    ({@link normalizeBrewOverrides}).
  *
  * The fingerprint ({@link profileFingerprint}) is the hash of the effective
- * profile — exactly the bytes `CremaCore.uploadCremaProfile` writes — compared
- * against the cached "what's on the DE1" fingerprint
- * (`UiSnapshot.activeProfileFingerprint`) on connect and at shot start.
+ * profile — exactly the bytes the core's profile sync uploads for
+ * `(profile, qc)`; the core compares it with what it last pushed.
  */
 
 import {

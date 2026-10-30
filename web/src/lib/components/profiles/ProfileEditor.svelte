@@ -301,15 +301,13 @@
 		store.save(toSave);
 		if (cameFromBrew) {
 			// User was on the brew page editing the loaded profile —
-			// promote the (possibly forked) save as the active profile
-			// + sync to the DE1 so the next shot uses the edited bytes.
+			// promote the (possibly forked) save as the active profile so the
+			// next shot uses the edited bytes.
 			store.setActive(toSave.id);
-			if (app) {
-				// Mirrors `loadOnBrew` in routes/profiles — same path so
-				// the fingerprint cache stays consistent.
-				void app.syncActiveProfile(toSave, {});
-			}
 		}
+		// The active profile changed: it is the core's desired profile again,
+		// and the core's profile sync puts the edited bytes on the DE1.
+		if (app && store.activeId === toSave.id) void app.setDesiredProfile(toSave, {});
 		dirty = false;
 		void goto(returnPath);
 	}
