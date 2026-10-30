@@ -2,6 +2,8 @@ package coffee.crema.ble.proxy
 
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
+import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -48,14 +50,13 @@ class FrameCodecTest {
     @Test
     fun `welcome round-trips with a nested roster`() {
         val f = Frame.Welcome(
-            v = PROXY_PROTOCOL_VERSION,
-            primaryId = "primary-1",
             primaryName = "Kitchen tablet",
             authority = "primary",
             roster = listOf(
                 DeviceInfo(address = "AA:11", name = "DE1", kind = "de1", state = "CONNECTED"),
                 DeviceInfo(address = "BB:22", name = "BOOKOO_SC 502158", kind = "scale", state = "CONNECTED"),
             ),
+            scope = SCOPE_CONTROL,
         )
         val back = FrameCodec.decode(FrameCodec.encode(f))
         assertIs<Frame.Welcome>(back)
@@ -74,6 +75,27 @@ class FrameCodecTest {
             Frame.WriteErr(id = 9, reason = "not-authoritative"),
         )
         for (f in frames) assertEquals(f, FrameCodec.decode(FrameCodec.encode(f)), "round-trip $f")
+    }
+
+    @Test
+    fun `the relay decode skips an unknown frame type and refuses malformed JSON`() {
+        assertNull(FrameCodec.decodeTolerant("""{"type":"fromTheFuture","x":1}"""))
+        assertEquals(Frame.Event("hi"), FrameCodec.decodeTolerant("""{"type":"event","text":"hi"}"""))
+        assertFailsWith<Exception> { FrameCodec.decodeTolerant("{not json") }
+        assertFailsWith<Exception> { FrameCodec.decodeTolerant("""{"text":"no type"}""") }
+        // A known type with bad fields still fails (it closes the session).
+        assertFailsWith<Exception> { FrameCodec.decodeTolerant("""{"type":"event"}""") }
+    }
+
+    @Test
+    fun `a Welcome without a scope fails, and an unknown scope is view-only`() {
+        assertFailsWith<Exception> {
+            FrameCodec.decodeTolerant("""{"type":"welcome","primaryName":"H","authority":"primary","roster":[]}""")
+        }
+        val odd = FrameCodec.decodeTolerant("""{"type":"welcome","primaryName":"H","authority":"primary","roster":[],"scope":"admin"}""")
+        assertIs<Frame.Welcome>(odd)
+        assertFalse(odd.grantsControl)
+        assertTrue(Frame.Welcome("H", "primary", emptyList(), SCOPE_CONTROL).grantsControl)
     }
 
     @Test

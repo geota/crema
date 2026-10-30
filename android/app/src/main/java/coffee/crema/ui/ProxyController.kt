@@ -4,23 +4,38 @@ import android.app.Application
 import android.os.Build
 import coffee.crema.ble.BleTransport
 import coffee.crema.ble.NordicBleTransport
-import coffee.crema.ble.proxy.DenyReason
 import coffee.crema.ble.proxy.DeviceInfo
+import coffee.crema.ble.proxy.FrameLink
+import coffee.crema.ble.proxy.HubPairingRequest
+import coffee.crema.ble.proxy.HubTrust
 import coffee.crema.ble.proxy.LanRelayServer
 import coffee.crema.ble.proxy.LinkState
-import coffee.crema.ble.proxy.PairingCrypto
-import coffee.crema.ble.proxy.PairingDecision
-import coffee.crema.ble.proxy.PairingRequest
-import coffee.crema.ble.proxy.PairingStore
+import coffee.crema.ble.proxy.PairingDialer
+import coffee.crema.ble.proxy.PairingState
 import coffee.crema.ble.proxy.Peer
 import coffee.crema.ble.proxy.PeerDiscovery
+import coffee.crema.ble.proxy.PinWrite
 import coffee.crema.ble.proxy.ProxyTransport
 import coffee.crema.ble.proxy.ReconnectingClientLink
 import coffee.crema.ble.proxy.RelayHub
+import coffee.crema.ble.proxy.RelayHubPin
+import coffee.crema.ble.proxy.RelayKeyLoad
+import coffee.crema.ble.proxy.RelayKeyStore
+import coffee.crema.ble.proxy.RelayRemotePin
+import coffee.crema.ble.proxy.RelayUpgradeMigration
 import coffee.crema.ble.proxy.RemoteClient
+import coffee.crema.ble.proxy.RemotePeer
 import coffee.crema.ble.proxy.ReplayBleTransport
+import coffee.crema.ble.proxy.SCOPE_CONTROL
+import coffee.crema.ble.proxy.SCOPE_MIRROR
+import coffee.crema.ble.proxy.SecureRelayAcceptor
 import coffee.crema.ble.proxy.SwitchableBleTransport
 import coffee.crema.ble.proxy.TappingBleTransport
+import coffee.crema.core.GateStatus
+import coffee.crema.core.RelayFfiException
+import coffee.crema.core.RelayKeys
+import coffee.crema.core.RelayPairingGate
+import coffee.crema.core.RelayPinSet
 import coffee.crema.ble.De1Uuids
 import coffee.crema.machine.CommandOrigin
 import coffee.crema.machine.CommandOutcome
@@ -32,13 +47,9 @@ import coffee.crema.machine.MachineCommands
 import coffee.crema.machine.RelayMachine
 import coffee.crema.machine.RelayedCommandDispatcher
 import coffee.crema.persist.SafeFile
-import coffee.crema.security.DeviceSecretBox
-import coffee.crema.security.SecretBox
 import coffee.crema.settings.AppPrefs
-import coffee.crema.settings.PairedDevice
 import java.io.File
 import java.util.UUID
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,7 +60,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -62,13 +75,20 @@ import kotlin.coroutines.CoroutineContext
  *  and the label stamped into backup envelopes. */
 internal fun deviceLabel(): String = Build.MODEL ?: "crema"
 
-/** A pending host-side "Allow this device?" pairing prompt (issue 02) — while the
- *  host's pairing window is open, a secondary without a pairing secret is
- *  connecting; the UI shows it and the user's choice resolves the held handshake. */
-data class PairingPrompt(val clientId: String, val clientName: String)
-
-/** The host's answer to a [PairingPrompt] (issue 02). */
-enum class PairingChoice { DENY, MIRROR_ONLY, ALLOW_CONTROL }
+/**
+ * The hub's code-entry dialog (relay v4, spec §6.2): a remote asks to pair and
+ * shows a 6-digit code; the hub user types it and chooses a scope. [shortId]
+ * is the remote's claimed short id (unauthenticated, shown as a hint).
+ * [wrongCodes] counts this window's failed codes; [lockedOut] is the third.
+ */
+data class PairingPrompt(
+    val requestId: Long,
+    val clientName: String,
+    val shortId: String,
+    val wrongCodes: Int = 0,
+    /** The last code didn't match and the remote is retrying with a new one. */
+    val lastWasWrong: Boolean = false,
+)
 
 /*
  * The multi-device proxy controller — mode switching (normal / hub / remote;
@@ -134,10 +154,6 @@ class ProxyController(
     private val roster: () -> List<DeviceInfo>,
     /** Whether (service, char) is snapshot-on-attach vs a counted live stream. */
     private val isSnapshotChar: (service: UUID, char: UUID) -> Boolean,
-    /** The remembered TOFU peers (persisted with the app prefs, VM-owned). */
-    private val pairedDevices: () -> List<PairedDevice>,
-    /** Persist a TOFU decision so the peer's reconnects are silent. */
-    private val rememberPaired: (id: String, name: String, canControl: Boolean) -> Unit,
     /** A mode switch landed: mirror role/host/port into MainUiState (sticky
      *  rules), drop the mirror overlay fields, and persist the prefs. */
     private val onModeApplied: (role: String, host: String, port: Int) -> Unit,
@@ -145,8 +161,8 @@ class ProxyController(
      *  its erase / reboot window holds the DE1, so no mode switch may move the
      *  radio (audit r2 H1). */
     private val firmwareHoldsLink: () -> Boolean = { false },
-    /** Seals the pairing secrets at rest (tests pass a fake cipher). */
-    secretBox: SecretBox = DeviceSecretBox.instance,
+    /** The relay v4 key store (tests pass one over a fake keystore). One per process. */
+    relayStore: RelayKeyStore? = null,
     /** Where a primary runs relayed commands: Main, like its own UI (tests
      *  pass a test dispatcher). */
     private val commandLane: CoroutineContext = Dispatchers.Main.immediate,
@@ -167,8 +183,8 @@ class ProxyController(
     /** A re-find attempt was welcomed: the remote's saved target is now
      *  [host]:[port]. The VM shows and persists it (the role is unchanged). */
     private val onTargetMoved: (host: String, port: Int) -> Unit = { _, _ -> },
-    /** Returns once the VM's prefs are loaded: [pairedDevices] is empty until
-     *  then, so a hub that served earlier would deny every paired remote. */
+    /** Returns once the VM's prefs are loaded: a role change persisted before
+     *  then would be overwritten by the load. */
     private val prefsReady: suspend () -> Unit = {},
 ) {
 
@@ -182,35 +198,46 @@ class ProxyController(
         /** True while a remote's link to its hub is (re)dialing or not yet
          *  welcomed (issue 03). */
         val mirrorReconnecting: Boolean = false,
-        /** True when the host admitted this mirror view-only (issue 02). */
+        /** True when the hub's Welcome granted this mirror view-only. */
         val mirrorViewOnly: Boolean = false,
-        /** A host-side TOFU prompt awaiting the user's choice (issue 02). */
+        /** The hub's code-entry dialog: a remote asks to pair (spec §6.2). */
         val pendingPairing: PairingPrompt? = null,
         /** Remotes connected through this hub: its read-only Remotes list. */
         val remotes: List<RemoteClient> = emptyList(),
-        /** Seconds left in the host's pairing window; 0 = closed. */
+        /** Seconds left in the hub's pairing window; 0 = closed. */
         val pairingSecondsLeft: Int = 0,
-        /** Paired devices that hold a pairing secret from this host. A remembered
-         *  device missing here has to pair again. */
-        val pairedWithSecret: Set<String> = emptySet(),
+        /** Seconds left in the pairing lockout after three wrong codes; 0 = not locked. */
+        val pairingLockedSecondsLeft: Int = 0,
+        /** The remotes this hub has pinned (Paired devices). */
+        val pairedRemotes: List<RelayRemotePin> = emptyList(),
+        /** The hubs this remote has pinned (Paired hubs). */
+        val pairedHubs: List<RelayHubPin> = emptyList(),
+        /** The remote's pairing with a hub, for the code sheet (spec §6.1). */
+        val pairing: PairingState = PairingState.Idle,
+        /** The relay keys couldn't be read this start (transient): the relay is
+         *  off (no listening, no dialing) until a restart (spec §6.3). */
+        val relayKeysUnavailable: Boolean = false,
+        /** A definitive key loss replaced the key: show the one-time notice. */
+        val keyResetNotice: Boolean = false,
+        /** The v3 upgrade: this remote must pair again before it dials (spec §6.4). */
+        val needsRepair: Boolean = false,
+        /** The v3 upgrade: this hub's one-time "pair your phones again" banner. */
+        val upgradeNotice: Boolean = false,
         /** A remote's hub name, from the hub's Welcome; blank until then and
          *  in the other roles. */
         val hubName: String = "",
         /** A remote's hub lists the DE1 in its roster: it holds the machine. */
         val hubHasMachine: Boolean = false,
-        /** The re-find gave up: three hubs it tried couldn't prove the pairing
-         *  this device holds, and NSD lists no other. The remote shows
-         *  "Couldn't verify <hub>" with Connect directly. */
+        /** The re-find gave up: three refusals in a row that weren't
+         *  authenticated (the hub couldn't be verified, or kept refusing). The
+         *  remote shows "Couldn't verify <hub>" with Pair again and Connect
+         *  directly. */
         val refindGaveUp: Boolean = false,
         /** NSD lists this remote's hub address as a device that isn't a hub
          *  any more (it turned Hub mode off). Advice only: unauthenticated. */
         val hubStoppedHosting: Boolean = false,
-        /** This device holds a pairing secret for the host its target is
-         *  pinned to (cached; see [pinnedHubHeld]). */
+        /** This remote holds a pin for its saved hub ([State.pairedHubs]). */
         val pairedHubPinned: Boolean = false,
-        /** A host that couldn't prove the secret this device holds for it, as
-         *  (host id, name): the UI offers to forget it on this device. */
-        val changedHost: Pair<String, String>? = null,
     )
 
     private data class ProxyConfig(val role: String, val host: String, val port: Int, val replayPrimary: Boolean = false)
@@ -274,17 +301,37 @@ class ProxyController(
         runCatching { relayPortFile.takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull() }.getOrNull()
             ?.takeIf { it in 1..65_535 } ?: 0
 
-    /** Stable per-install id (persisted in a tiny file — issue 14): the
-     *  secondary's `clientId`, which tells a host which pairing record to check.
-     *  It is not advertised (see [instanceId]). */
-    val deviceId: String = run {
-        val f = File(app.filesDir, "deviceId")
-        runCatching { f.takeIf { it.exists() }?.readText()?.trim()?.ifBlank { null } }.getOrNull()
-            ?: UUID.randomUUID().toString().also { runCatching { SafeFile.write(f, it, keepBackup = false) } }
+    /**
+     * This device's relay v4 key and pins (spec §5.1): one store per process,
+     * loaded once here, before anything reads the role, and the one-time v3
+     * migration run right after (spec §6.4). A transient keystore error leaves
+     * the relay off for this start ([State.relayKeysUnavailable]); a definitive
+     * loss started over with a new key and no pins ([State.keyResetNotice]).
+     */
+    private val relay: RelayKeyStore = relayStore ?: RelayKeyStore(app.filesDir, RelayKeyStore.deviceBox())
+
+    private val keyLoad: RelayKeyLoad = relay.load()
+
+    /** This device's relay key, or null while the store is unavailable. */
+    @Volatile private var relayKeys: RelayKeys? = (keyLoad as? RelayKeyLoad.Ready)?.keys
+
+    init {
+        when (val load = keyLoad) {
+            is RelayKeyLoad.Unavailable -> appendLog("Relay: pairing keys couldn't be read this start (${load.reason}) — the relay stays off")
+            is RelayKeyLoad.Ready -> {
+                if (load.keyReset) appendLog("Relay: the pairing key was lost and replaced; every pairing was cleared")
+                if (!load.persistent) appendLog("Relay: pairing can't be saved on this device (the key lives in memory only)")
+            }
+        }
+        val outcome = RelayUpgradeMigration(app.filesDir, json).run(relay)
+        if (outcome == RelayUpgradeMigration.Outcome.MIGRATED) appendLog("Relay: removed the v3 pairing state; devices pair again once")
     }
 
-    /** The LAN pairing secrets and this install's host id. */
-    private val pairing = PairingStore(File(app.filesDir, PairingStore.FILE_NAME), secretBox, json)
+    /** The live pin set every hub connection reads (spec §2.6); updated before the store on a Forget. */
+    private val livePins: RelayPinSet = RelayPinSet(relay.remotes.mapNotNull { pin -> runCatching { RelayKeyStore.publicKeyOf(pin.public) }.getOrNull() })
+
+    /** The one pairing gate per hub process (spec §2.5), shared by every hub connection. */
+    private val gate = RelayPairingGate()
 
     /** This process's NSD instance id: a random id per launch, advertised for
      *  discovery and used to filter our own advertisement out. */
@@ -297,42 +344,47 @@ class ProxyController(
     private val proxyConfigCache: ProxyConfig = readProxyConfigUncached()
 
     private val _state = MutableStateFlow(
-        State(role = proxyConfigCache.role, pairedWithSecret = pairing.issuedIds(), pairedHubPinned = pinnedHubHeld()),
+        State(
+            role = proxyConfigCache.role,
+            relayKeysUnavailable = keyLoad is RelayKeyLoad.Unavailable,
+            keyResetNotice = relay.keyResetNotice,
+            needsRepair = relay.needsRepair,
+            upgradeNotice = relay.upgradeNotice,
+            pairedRemotes = relay.remotes,
+            pairedHubs = relay.hubs,
+            pairedHubPinned = savedHubPin() != null,
+        ),
     )
     val state: StateFlow<State> = _state.asStateFlow()
 
-    // Multi-device pairing (issue 02). The relay doesn't auto-accept: a
-    // connecting secondary is authorized in [authorizePeer]. A paired device
-    // proves its pairing secret; anything else is considered only while the
-    // host's pairing window is open, one prompt at a time, with a cooldown.
-    private val pairingMutex = Mutex()
-    @Volatile private var pairingDeferred: CompletableDeferred<PairingChoice?>? = null
-
-    /** The open pairing window's countdown; null or finished = closed. */
+    /** The open pairing window's countdown (reads the gate each second). */
     private var pairingWindowJob: Job? = null
 
-    /** Prompts shown in the current window (capped at [MAX_PROMPTS_PER_WINDOW]). */
-    @Volatile private var promptsThisWindow = 0
+    /** The hub's open pairing request (the code dialog's), or null. */
+    @Volatile private var openRequest: HubPairingRequest? = null
 
-    /** True for [PROMPT_COOLDOWN_MS] after a prompt ends. */
-    @Volatile private var promptCooling = false
-
-    /** Client ids the host denied while hosting; not prompted again until
-     *  hosting stops. */
-    private val deniedWhileHosting: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    /** Remote addresses the hub user turned away in this window (the squat rule, spec §2.5). */
+    private val turnedAway: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** Rate limit for the "needs an update" notice. */
     @Volatile private var outdatedNoticeCooling = false
 
-    /** How the next secondary session may treat its host. Only the user's own
-     *  pick ([USER_PICK]) clears the pin and may pair. Anything unattended — a
-     *  restored target, an automatic re-mirror — keeps the pin and connects
-     *  only to a host that proves a secret this device already holds
-     *  ([UNATTENDED]). Passed with each switch to [startSecondaryMode]. */
-    internal data class MirrorTrust(val repin: Boolean, val allowRepair: Boolean) {
+    /** The remote's pairing with a hub, while one runs ([pairWith]). */
+    private var dialer: PairingDialer? = null
+    private var dialerJob: Job? = null
+
+    /** The hub's secure acceptor while hosting. */
+    private var acceptor: SecureRelayAcceptor? = null
+
+    /** Who picked a remote session's target: only the user's own pick
+     *  ([USER_PICK]) is told to start over on its first refusal. Anything
+     *  unattended — a restored target, an automatic re-mirror, a re-find —
+     *  keeps the role through advisory refusals ([UNATTENDED]). Resume never
+     *  pairs (spec Appendix B): pairing runs only from [pairWith]. */
+    internal data class MirrorTrust(val userPick: Boolean) {
         companion object {
-            val USER_PICK = MirrorTrust(repin = true, allowRepair = true)
-            val UNATTENDED = MirrorTrust(repin = false, allowRepair = false)
+            val USER_PICK = MirrorTrust(userPick = true)
+            val UNATTENDED = MirrorTrust(userPick = false)
         }
     }
 
@@ -384,10 +436,11 @@ class ProxyController(
     fun start() {
         check(!started) { "ProxyController.start() runs once" }
         started = true
-        onRoleStarting(readProxyConfigSync().role, false)
-        switchable.setDelegate(startPersistedRole())
+        val role = startRole()
+        onRoleStarting(role, false)
+        switchable.setDelegate(startPersistedRole(role))
         // A secondary (read-only mirror) doesn't record the primary's shot (issue 14).
-        setRecorderEnabled(readProxyConfigSync().role != "secondary")
+        setRecorderEnabled(role != "secondary")
         collectPeers(peerDiscovery.peers)
         peerDiscovery.startDiscovery()
         refreshAdvertisement()
@@ -538,11 +591,11 @@ class ProxyController(
     }
 
     /** A port the re-find may try: on the saved host, not the current
-     *  target, and only for a target pinned to a host this device paired with
-     *  (so never from a user's pick still waiting for its Welcome). The least
+     *  target, and only for a target whose hub this device has pinned (so
+     *  never from a user's pick still waiting for its Welcome). The least
      *  recently tried port first; never-tried ones in NSD's order. */
     private fun refindCandidate(current: RemoteSession): Peer? {
-        if (pairing.pinnedHost == null || (current.trust.repin && !current.welcomed)) return null
+        if (savedHubPin() == null || (current.trust.userPick && !current.welcomed)) return null
         return hubsOnSavedHost().filter { it.port != current.port }.minByOrNull { refindTriedAt[it.port] ?: 0L }
     }
 
@@ -628,6 +681,8 @@ class ProxyController(
             appendLog("Re-find: reattached at ${welcomed.host}:${welcomed.port}")
             savedTarget = welcomed.target
             onTargetMoved(welcomed.host, welcomed.port)
+            // The hub's pin follows it to its new port.
+            savedHubPin()?.let { pin -> runCatching { relay.pinHub(pin.copy(host = welcomed.host, port = welcomed.port)) } }
         }
         refindBackoff?.cancel()
         refindBackoff = null
@@ -636,33 +691,39 @@ class ProxyController(
     }
 
     /**
-     * A remote session ended in a refusal ([ProxyTransport]'s `onRefused`).
-     * - The user's own pick, before its first Welcome: back to normal with
-     *   the reason, as before.
-     * - A Denied (or a version refusal) from a host that proved the held
-     *   secret in this session: normal, as before.
-     * - Anything else is unproven, from a re-find attempt or the saved target
-     *   alike: the remote keeps its role and backs off. An attempt goes back
-     *   to the saved target; the saved target is dialed again after the
-     *   back-off. After three in a row the re-find gives up.
+     * The hub refused a remote session ([ProxyTransport]'s `onRefused`). Only
+     * an authenticated refusal changes trust state or role (spec §2.9):
+     * - authenticated `Revoked` / `NotPaired`: the hub forgot this device. The
+     *   hub pin is dropped and the remote becomes normal;
+     * - `HubStopped`, `Normal`, `Protocol`, `Timeout`: role and pin kept; the
+     *   link redials with its back-off (a `HubStopped` says so once);
+     * - anything else is advisory (an `ABORT`, a legacy or newer hub, a hub
+     *   that couldn't be verified): role and pin kept, back-off, and after
+     *   three in a row the re-find gives up ("Couldn't verify <hub>"). A
+     *   re-find attempt goes back to the saved target.
      */
-    private fun handleSessionRefused(refused: RemoteSession?, reason: String, byHost: Boolean, hostProved: Boolean) {
+    private fun handleSessionRefused(refused: RemoteSession?, reason: String, authenticated: Boolean, terminal: Boolean) {
         if (refused == null || refused !== session || _state.value.role != "secondary") return
-        val verifiedDenial = hostProved && (byHost || reason.startsWith(DenyReason.VERSION_MISMATCH))
         when {
-            refused.trust.repin && !refused.welcomed -> demote(reason)
-            verifiedDenial -> demote(reason)
+            authenticated && (reason == REFUSED_REVOKED || reason == REFUSED_NOT_PAIRED) -> {
+                savedHubPin()?.let { pin ->
+                    relay.unpinHub(pin.id)
+                    refreshPins()
+                }
+                demote(reason)
+            }
+            !terminal -> {
+                appendLog("Hub session closed ($reason) — reconnecting")
+                if (reason == REFUSED_HUB_STOPPED) notify(refusalMessage(reason, hubLabel()))
+            }
             refused.trying -> {
                 refused.refused = true
                 endAttempt(refused, "refused ($reason)")
             }
             else -> {
                 refused.refused = true
-                appendLog("Unattended session refused ($reason) — staying a remote")
-                // Never word an automatic reconnect's refusal as "forget it":
-                // the host may just be restarting.
-                val shown = if (reason == DenyReason.HOST_CHANGED) DenyReason.HOST_UNVERIFIED else reason
-                if (refindRefusals == 0) notify(deniedMessage(shown))
+                appendLog("Hub refused the session ($reason, unauthenticated) — staying a remote")
+                if (refindRefusals == 0) notify(refusalMessage(reason, hubLabel()))
                 backOff()
             }
         }
@@ -670,17 +731,20 @@ class ProxyController(
 
     /** Called by tests for the session the current transport serves. */
     @androidx.annotation.VisibleForTesting
-    internal fun refuseCurrentSessionForTest(reason: String, byHost: Boolean, hostProved: Boolean) =
-        handleSessionRefused(session, reason, byHost, hostProved)
+    internal fun refuseCurrentSessionForTest(reason: String, authenticated: Boolean, terminal: Boolean = true) =
+        handleSessionRefused(session, reason, authenticated, terminal)
 
-    /** The host refused this device: stop being a remote, with the reason.
+    /** The hub this remote dials, by name for the copy. */
+    private fun hubLabel(): String = _state.value.hubName.ifBlank { savedHubPin()?.name ?: savedTarget?.first.orEmpty() }
+
+    /** The hub refused this device: stop being a remote, with the reason.
      *  Only from the mode it refused (R1): a switch that ran first — a
      *  remote → standalone commit above all — already took this device out
      *  of the remote role, and must not be undone by a second switch. */
     private fun demote(reason: String) {
         val epoch = modeEpoch
-        appendLog("Mirror denied by host: $reason")
-        notify(deniedMessage(reason))
+        appendLog("Mirror refused by the hub: $reason")
+        notify(refusalMessage(reason, hubLabel()))
         applyModeIfEpoch("normal", epoch)
     }
 
@@ -707,20 +771,27 @@ class ProxyController(
         evaluateRefind()
     }
 
-    /** Whether this device holds a pairing secret for the host its target is
-     *  pinned to: a discovered hub at that target is one it has paired with.
-     *  A presence check, so no keystore decrypt; [State.pairedHubPinned]
-     *  caches it, refreshed only when the pin or a held secret changes. */
-    private fun pinnedHubHeld(): Boolean = pairing.pinnedHost?.let { pairing.holdsSecretFor(it) } ?: false
+    /** The pin of the hub this remote is saved to: the store's `savedHub`, or
+     *  null when it has none (never paired, forgotten, or the v3 upgrade). */
+    private fun savedHubPin(): RelayHubPin? = relay.savedHub?.let { id -> relay.hubs.firstOrNull { it.id == id } }
 
-    private fun refreshPinnedHub() {
-        val held = pinnedHubHeld()
-        if (_state.value.pairedHubPinned != held) _state.update { it.copy(pairedHubPinned = held) }
+    /** Mirror the store's pins and flags into [state]. */
+    private fun refreshPins() {
+        _state.update {
+            it.copy(
+                pairedRemotes = relay.remotes,
+                pairedHubs = relay.hubs,
+                pairedHubPinned = savedHubPin() != null,
+                keyResetNotice = relay.keyResetNotice,
+                needsRepair = relay.needsRepair,
+                upgradeNotice = relay.upgradeNotice,
+            )
+        }
     }
 
-    /** The pairing store, for tests. */
+    /** The relay store, for tests. */
     @androidx.annotation.VisibleForTesting
-    internal val pairingStore: PairingStore get() = pairing
+    internal val relayStore: RelayKeyStore get() = relay
 
     /** Refresh the hub's Remotes list, wired to [RelayHub.onClientsChanged].
      *  No-op off-hub. */
@@ -729,153 +800,343 @@ class ProxyController(
         _state.update { it.copy(remotes = remotes) }
     }
 
-    // ── Multi-device pairing (issue 02) ───────────────────────────────────────
+    // ── Pairing, hub side (relay v4, spec §2.4, §2.5, §6.2) ─────────────────
 
     /**
-     * Open the host's pairing window for [PAIRING_WINDOW_S] seconds: only then
-     * does a device without a pairing secret raise the "Allow this device?"
-     * prompt. It closes on its own, after one approval, on a mode switch, or
-     * with [closePairingWindow].
+     * Open the hub's pairing window ([PAIRING_WINDOW_S] seconds, the core gate's
+     * `PAIR_WINDOW_MS`): only then does a remote's pairing request get a slot
+     * and the code dialog. It closes on its own, after one pairing, after the
+     * third wrong code (a lockout follows), on a mode switch, or with
+     * [closePairingWindow]. Refused (and logged) during a lockout.
      */
     fun openPairingWindow() {
-        pairingWindowJob?.cancel()
-        promptsThisWindow = 0
+        val now = System.currentTimeMillis().toULong()
+        try {
+            gate.open(now)
+        } catch (e: RelayFfiException) {
+            appendLog("Pairing window not opened: ${relayKind(e)}")
+            refreshGate()
+            return
+        }
+        turnedAway.clear()
         appendLog("Pairing window open for ${PAIRING_WINDOW_S}s")
+        watchGate()
+    }
+
+    /** Close the pairing window now: the request holding the slot aborts at once. */
+    fun closePairingWindow() {
+        gate.closeWindow()
+        turnedAway.clear()
+        openRequest?.let { r -> scope.launch { r.tick() } }
+        refreshGate()
+    }
+
+    /** Follow the gate each second while it is open or locked out (the countdowns). */
+    private fun watchGate() {
+        pairingWindowJob?.cancel()
         pairingWindowJob = scope.launch {
-            try {
-                for (left in PAIRING_WINDOW_S downTo 1) {
-                    _state.update { it.copy(pairingSecondsLeft = left) }
-                    delay(1_000L)
-                }
-            } finally {
-                _state.update { it.copy(pairingSecondsLeft = 0) }
-                // A prompt still up when the window ends expires with it.
-                pairingDeferred?.complete(null)
+            while (true) {
+                val status = refreshGate()
+                if (status == null || (!status.open && status.locked_secs_left == 0u)) break
+                delay(1_000L)
             }
+            turnedAway.clear()
         }
     }
 
-    /** Close the pairing window now (a pending prompt expires). */
-    fun closePairingWindow() {
-        pairingWindowJob?.cancel()
-        pairingWindowJob = null
+    /** Read the gate into [State]; null when it couldn't be read. */
+    private fun refreshGate(): GateStatus? {
+        val status = runCatching {
+            gateJson.decodeFromString(GateStatus.serializer(), gate.status(System.currentTimeMillis().toULong()))
+        }.getOrNull()
+        _state.update {
+            it.copy(
+                pairingSecondsLeft = status?.takeIf { s -> s.open }?.secs_left?.toInt() ?: 0,
+                pairingLockedSecondsLeft = status?.locked_secs_left?.toInt() ?: 0,
+            )
+        }
+        return status
     }
-
-    private val pairingOpen: Boolean get() = pairingWindowJob?.isActive == true
 
     /**
-     * Primary-side gate wired into [RelayHub]'s `authorize`. A remembered device
-     * that proves the secret this host issued it is admitted silently with its
-     * stored scope. Anything else is refused unless the pairing window is open;
-     * then the host sees one "Allow this device?" prompt at a time
-     * ([State.pendingPairing]), with a cooldown between prompts and a cap per
-     * window. Approving issues a new secret (sent once, in the Welcome), stores
-     * it, remembers the device and closes the window. A denial is remembered
-     * until hosting stops.
+     * The hub user typed [code] in the code dialog and chose a scope
+     * ([canControl] = View and control). The core refuses anything but six
+     * digits without starting SPAKE2 or counting an attempt.
      */
-    internal suspend fun authorizePeer(request: PairingRequest): PairingDecision {
-        val id = request.clientId
-        val known = pairedDevices().firstOrNull { it.id == id }
-        val secret = pairing.issuedSecret(id)
-        if (known != null && secret != null && request.proves(secret)) {
-            return PairingDecision.Allowed(known.canControl)
-        }
-        if (id in deniedWhileHosting) return PairingDecision.Denied(DenyReason.NOT_AUTHORIZED)
-        // A device that already holds a secret from us must prove it; a new
-        // pairing for it needs the host user to Forget it first.
-        if (known != null && secret != null) {
-            appendLog("Pairing request from ${request.clientName} refused: already paired (Forget it to pair again)")
-            return PairingDecision.Denied(DenyReason.ALREADY_PAIRED)
-        }
-        if (!pairingOpen) {
-            appendLog("Pairing request from ${request.clientName} refused: pairing is closed")
-            return PairingDecision.Denied(DenyReason.PAIRING_CLOSED)
-        }
-        if (promptCooling || promptsThisWindow >= MAX_PROMPTS_PER_WINDOW || !pairingMutex.tryLock()) {
-            return PairingDecision.Denied(DenyReason.BUSY)
-        }
-        try {
-            promptsThisWindow++
-            val deferred = CompletableDeferred<PairingChoice?>()
-            pairingDeferred = deferred
-            _state.update { it.copy(pendingPairing = PairingPrompt(id, request.clientName)) }
-            // finally: the prompt never outlives its request (cancelled when the
-            // relay stops or the scope ends), and the next one waits a cooldown.
-            // A peer that merely disconnects mid-prompt does not cancel it yet:
-            // the relay isn't reading its socket while the handshake is pending.
-            val choice = try {
-                deferred.await()
-            } finally {
-                pairingDeferred = null
-                _state.update { it.copy(pendingPairing = null) }
-                startPromptCooldown()
-            }
-            return when (choice) {
-                // The window closed with the prompt up: not a denial.
-                null -> PairingDecision.Denied(DenyReason.PAIRING_CLOSED)
-                PairingChoice.DENY -> {
-                    deniedWhileHosting += id
-                    PairingDecision.Denied(DenyReason.NOT_AUTHORIZED)
-                }
-                PairingChoice.MIRROR_ONLY, PairingChoice.ALLOW_CONTROL -> {
-                    val canControl = choice == PairingChoice.ALLOW_CONTROL
-                    val issued = PairingCrypto.newSecret()
-                    if (!pairing.putIssued(id, issued)) appendLog("Pairing secret for ${request.clientName} not saved: this session works, but the device will have to pair again next time")
-                    rememberPaired(id, request.clientName, canControl)
-                    _state.update { it.copy(pairedWithSecret = pairing.issuedIds()) }
-                    closePairingWindow() // one pairing per window
-                    PairingDecision.Allowed(canControl, issuedSecret = issued)
-                }
-            }
-        } finally {
-            pairingMutex.unlock()
-        }
-    }
-
-    private fun startPromptCooldown() {
-        promptCooling = true
+    fun submitPairingCode(code: String, canControl: Boolean) {
+        val r = openRequest ?: return
         scope.launch {
-            delay(PROMPT_COOLDOWN_MS)
-            promptCooling = false
+            if (!r.enterCode(code, canControl)) appendLog("Pairing code not accepted for ${r.remoteName}")
         }
     }
 
-    /** The Activity resolves a pending [PairingPrompt] with the user's choice. */
-    fun resolvePairing(choice: PairingChoice) {
-        pairingDeferred?.complete(choice)
+    /** The hub user cancelled the code dialog: `ABORT(CANCELLED)`, no failure
+     *  counted, and that address gets BUSY for the rest of the window. */
+    fun cancelPairing() {
+        val r = openRequest ?: return
+        openRequest = null
+        turnedAway += r.address
+        _state.update { it.copy(pendingPairing = null) }
+        scope.launch { r.cancel() }
     }
 
-    /** This device forgets the host [hostId]: drop the secret it holds for it
-     *  (and the pin, if it pointed there), so picking that host again may ask
-     *  to pair. The only way a held secret is ever replaced. */
-    fun forgetHost(hostId: String) {
-        pairing.removeHeld(hostId)
-        if (pairing.pinnedHost == hostId) pairing.pinHost(null)
-        _state.update { it.copy(changedHost = null) }
-        refreshPinnedHub()
-        appendLog("Forgot host $hostId on this device")
+    /** What the hub's connections need from this controller. */
+    private val hubTrust = object : HubTrust {
+        override val keys: RelayKeys get() = relayKeys ?: error("relay keys unavailable")
+        override val gate: RelayPairingGate get() = this@ProxyController.gate
+        override val pins: RelayPinSet get() = livePins
+        override val hubName: String get() = deviceLabel()
+
+        override fun onPairRequest(request: HubPairingRequest) {
+            val previous = _state.value.pendingPairing
+            openRequest = request
+            _state.update {
+                it.copy(
+                    pendingPairing = PairingPrompt(
+                        requestId = request.id,
+                        clientName = request.remoteName,
+                        shortId = request.shortId,
+                        // A remote retrying after a wrong code keeps the count on screen.
+                        wrongCodes = previous?.wrongCodes ?: 0,
+                        lastWasWrong = previous?.lastWasWrong ?: false,
+                    ),
+                )
+            }
+        }
+
+        override fun storePin(remoteId: String, remoteName: String, publicKey: ByteArray, canControl: Boolean): PinWrite? =
+            runCatching {
+                relay.pinRemoteSaved(
+                    RelayRemotePin(
+                        id = remoteId,
+                        public = RelayKeyStore.b64(publicKey),
+                        name = remoteName,
+                        scope = if (canControl) SCOPE_CONTROL else SCOPE_MIRROR,
+                        pairedAtMs = System.currentTimeMillis(),
+                    ),
+                )
+            }.getOrNull()
+
+        override fun restorePin(remoteId: String, previous: RelayRemotePin?) {
+            runCatching { relay.restoreRemote(remoteId, previous) }
+            refreshPins()
+        }
+
+        override fun onPairingFailed(request: HubPairingRequest, reason: String, failures: Int, locked: Boolean) {
+            if (openRequest?.id != request.id) return
+            openRequest = null
+            when {
+                locked -> {
+                    notify("Too many wrong codes. Pairing is paused for a minute.")
+                    _state.update { it.copy(pendingPairing = null) }
+                    watchGate()
+                }
+                reason == "WrongCode" -> {
+                    // The dialog stays for the remote's next attempt (spec §6.2);
+                    // with none within the window, the window's end closes it.
+                    _state.update { it.copy(pendingPairing = it.pendingPairing?.copy(wrongCodes = failures, lastWasWrong = true)) }
+                    scope.launch {
+                        delay(WRONG_CODE_GRACE_MS)
+                        if (openRequest == null && _state.value.pendingPairing?.requestId == request.id) {
+                            _state.update { it.copy(pendingPairing = null) }
+                            notify("That code didn't match. Pairing with ${request.remoteName} stopped.")
+                        }
+                    }
+                }
+                else -> _state.update { it.copy(pendingPairing = null) }
+            }
+        }
+
+        override fun onPairingNotSaved(request: HubPairingRequest) {
+            if (openRequest?.id == request.id) openRequest = null
+            _state.update { it.copy(pendingPairing = null) }
+            notify("Pairing couldn't be saved on this device. Try again.")
+        }
+
+        override fun onPaired(request: HubPairingRequest) {
+            if (openRequest?.id == request.id) openRequest = null
+            val pin = relay.remotes.firstOrNull { it.id == request.remoteId }
+            val scopeLabel = if (pin?.scope == SCOPE_CONTROL) "View and control" else "View only"
+            _state.update { it.copy(pendingPairing = null) }
+            refreshPins()
+            refreshGate()
+            appendLog("Paired ${request.remoteName} ($scopeLabel)")
+            notify("Paired ${request.remoteName} ($scopeLabel)")
+            if (relay.upgradeNotice) relay.clearUpgradeFlags()
+        }
+
+        override fun onLegacyPeer(name: String) = onOutdatedPeer(name)
+
+        override fun peerFor(deviceId: String): RemotePeer? =
+            relay.remotes.firstOrNull { it.id == deviceId }?.let { RemotePeer(it.id, it.name, it.scope == SCOPE_CONTROL) }
+
+        override fun onAdmitted(peer: RemotePeer) {
+            runCatching { relay.touchRemote(peer.deviceId, System.currentTimeMillis()) }
+        }
+
+        override fun isTurnedAway(address: String): Boolean = address in turnedAway
     }
 
-    /** Keep the held secret; just dismiss the notice. */
-    fun dismissChangedHost() {
-        _state.update { it.copy(changedHost = null) }
+    /** The hub forgets the remote [deviceId] (Paired devices ▸ Forget, spec
+     *  §2.10): out of the live pin set first, then the store; its live
+     *  sessions end with an authenticated `CLOSE(REVOKED)`. */
+    fun forgetRemote(deviceId: String) {
+        relay.remotes.firstOrNull { it.id == deviceId }?.let { pin ->
+            runCatching { livePins.remove(RelayKeyStore.publicKeyOf(pin.public)) }
+        }
+        runCatching { relay.unpinRemote(deviceId) }
+        relayHub?.revoke(deviceId)
+        refreshPins()
+        appendLog("Forgot remote $deviceId")
     }
 
-    /** The host forgot [clientId] (Settings ▸ Advanced ▸ Paired devices): drop its secret
-     *  and end its live session, if any. */
-    fun forgetPaired(clientId: String) {
-        pairing.removeIssued(clientId)
-        relayHub?.revoke(clientId)
-        _state.update { it.copy(pairedWithSecret = pairing.issuedIds()) }
+    // ── Pairing, remote side (spec §2.4, §6.1) ─────────────────────────────
+
+    /**
+     * Pair with the hub at [host]:[port] ([label] names it until its
+     * ServerHello does): the user's tap ("Pair again", or a picked hub this
+     * device hasn't pinned). Up to three automatic attempts; on success the hub
+     * pin is stored and the remote role starts with a resume. Never runs
+     * unattended (spec Appendix B).
+     */
+    fun pairWith(host: String, port: Int, label: String) {
+        val keys = relayKeys
+        if (keys == null) {
+            notify(KEYS_UNAVAILABLE_COPY)
+            return
+        }
+        dialer?.cancel()
+        dialerJob?.cancel()
+        val d = PairingDialer(
+            url = "ws://$host:$port${LanRelayServer.PATH}",
+            hubLabel = label.ifBlank { host },
+            keys = keys,
+            myName = deviceLabel(),
+            scope = scope,
+            storePin = { hubId, hubName, hubKey ->
+                runCatching {
+                    relay.pinHub(RelayHubPin(hubId, RelayKeyStore.b64(hubKey), hubName, host, port, System.currentTimeMillis()))
+                    relay.setSavedHub(hubId)
+                    if (relay.needsRepair) relay.clearUpgradeFlags()
+                    refreshPins()
+                }.isSuccess
+            },
+        )
+        dialer = d
+        appendLog("Pairing with $label at $host:$port")
+        dialerJob = scope.launch {
+            d.state.collect { st ->
+                _state.update { it.copy(pairing = st) }
+                if (st is PairingState.Paired) {
+                    appendLog("Paired with ${st.hubName}")
+                    notify("Paired with ${st.hubName}")
+                    _state.update { it.copy(pairing = PairingState.Idle) }
+                    resetRefind()
+                    applyMode("secondary", host, port, trust = MirrorTrust.USER_PICK)
+                }
+            }
+        }
+        d.start()
     }
 
-    /** A secondary on another protocol version was turned away: tell the host
-     *  user, at most once a minute. */
+    /** Cancel the remote's pairing (the code sheet's Cancel). */
+    fun cancelRemotePairing() {
+        dialer?.cancel()
+        dialer = null
+        dialerJob?.cancel()
+        dialerJob = null
+        _state.update { it.copy(pairing = PairingState.Idle) }
+    }
+
+    /** The code sheet's Try again: three new attempts with the same hub. */
+    fun retryRemotePairing() {
+        dialer?.start()
+    }
+
+        /** Dismiss the code sheet after an outcome (Paired, Failed, Refused). */
+    fun dismissPairing() {
+        if (_state.value.pairing !is PairingState.Waiting && _state.value.pairing !is PairingState.ShowCode) {
+            _state.update { it.copy(pairing = PairingState.Idle) }
+        }
+    }
+
+    /** This remote forgets the hub [hubId] (Paired hubs ▸ Forget, spec §2.10):
+     *  the pin goes; if it was the saved target, the remote becomes normal. */
+    fun forgetHub(hubId: String) {
+        val wasSaved = relay.savedHub == hubId
+        runCatching { relay.unpinHub(hubId) }
+        refreshPins()
+        appendLog("Forgot hub $hubId on this device")
+        if (wasSaved && _state.value.role == "secondary") switchToNormal()
+    }
+
+    // ── Keys: reset, notices, erase ─────────────────────────────────────────
+
+    /**
+     * Reset pairing key (Advanced ▸ Paired devices, spec §2.10): a new key,
+     * every pin deleted in both directions, live sessions revoked, and a
+     * remote becomes normal. Also the way out of a store that stays
+     * unreadable ([State.relayKeysUnavailable], SR-3a P2-1): the old file moves
+     * to `relay-lost/` and a new key starts. An explicit user action only.
+     */
+    fun resetPairingKey() {
+        val fresh = relay.resetKey(fromUnavailable = relayKeys == null)
+        if (fresh == null) {
+            notify(KEYS_UNAVAILABLE_COPY)
+            return
+        }
+        relayKeys = fresh
+        for (pin in _state.value.pairedRemotes) runCatching { livePins.remove(RelayKeyStore.publicKeyOf(pin.public)) }
+        relayHub?.let { hub -> hub.remotes().forEach { hub.revoke(it.clientId) } }
+        _state.update { it.copy(relayKeysUnavailable = false) }
+        refreshPins()
+        appendLog("Reset this device's pairing key: every pairing was cleared")
+        when (_state.value.role) {
+            "secondary" -> switchToNormal()
+            // The relay restarts with the new key (and starts at all after an unreadable store).
+            "primary" -> applyMode("primary", "", 0)
+            else -> refreshAdvertisement()
+        }
+    }
+
+    /** The one-time key-reset notice was shown. */
+    fun dismissKeyResetNotice() {
+        runCatching { relay.clearKeyResetNotice() }
+        refreshPins()
+    }
+
+    /** The one-time upgrade banner was shown (hub) or "Pair again" was dismissed (remote). */
+    fun dismissUpgradeNotice() {
+        runCatching { relay.clearUpgradeFlags() }
+        refreshPins()
+    }
+
+    /**
+     * Erase all data: the relay key store with its copies, `relay-lost/`, and
+     * the v3 `proxy-pairing.json` copies (SR-3a). This device starts over as a
+     * fresh install would: a new key and no pins (and the live sessions end).
+     */
+    fun eraseRelayData() {
+        SafeFile.erase(File(app.filesDir, RelayUpgradeMigration.V3_PAIRING_FILE))
+        SafeFile.erase(File(app.filesDir, RelayUpgradeMigration.V3_DEVICE_ID_FILE))
+        File(app.filesDir, RelayKeyStore.LOST_DIR).deleteRecursively()
+        SafeFile.erase(File(app.filesDir, RelayKeyStore.FILE_NAME))
+        if (relayKeys != null) {
+            relay.resetKey(fromUnavailable = false)?.let { relayKeys = it }
+            for (pin in _state.value.pairedRemotes) runCatching { livePins.remove(RelayKeyStore.publicKeyOf(pin.public)) }
+            relayHub?.let { hub -> hub.remotes().forEach { hub.revoke(it.clientId) } }
+            relay.clearKeyResetNotice()
+        }
+        refreshPins()
+    }
+
+    /** A remote on an older protocol version got the legacy denial: tell the
+     *  hub user, at most once a minute (spec §6.3). */
     private fun onOutdatedPeer(clientName: String) {
-        appendLog("Refused $clientName: different Crema version")
+        appendLog("Refused $clientName: older Crema version")
         if (outdatedNoticeCooling) return
         outdatedNoticeCooling = true
-        notify("$clientName runs a different Crema version — update both devices to connect")
+        notify("$clientName runs an older Crema — update it to connect")
         scope.launch {
             delay(OUTDATED_NOTICE_COOLDOWN_MS)
             outdatedNoticeCooling = false
@@ -884,12 +1145,31 @@ class ProxyController(
 
     // ── Mode construction ─────────────────────────────────────────────────────
 
-    private fun startPersistedRole(): BleTransport {
+    /**
+     * The role this start runs: the persisted one, except a remote whose key was
+     * just reset (a definitive loss cleared every pin, spec §5.1 step 3): it
+     * becomes normal, persisted once the prefs have loaded.
+     */
+    private fun startRole(): String {
+        val persisted = readProxyConfigSync().role
+        if (persisted == "secondary" && (keyLoad as? RelayKeyLoad.Ready)?.keyReset == true) {
+            appendLog("Relay: the pairing key was reset — this device is no longer a remote")
+            _state.update { it.copy(role = "normal") }
+            scope.launch {
+                prefsReady()
+                onModeApplied("normal", "", 0)
+            }
+            return "normal"
+        }
+        return persisted
+    }
+
+    private fun startPersistedRole(role: String): BleTransport {
         val cfg = readProxyConfigSync()
         // A secondary's core mirrors the DE1 but must never drive it — make it a
         // read-only observer from the start (preserved across session resets).
-        setCoreReadOnly(cfg.role == "secondary")
-        return when (cfg.role) {
+        setCoreReadOnly(role == "secondary")
+        return when (role) {
             "secondary" -> startSecondaryMode(cfg.host, cfg.port, MirrorTrust.UNATTENDED, refind = null)
             "primary" -> startPrimaryMode()
             else -> normalMode()
@@ -919,10 +1199,7 @@ class ProxyController(
             normalMode()
         }
         var tappingRef: TappingBleTransport? = null
-        deniedWhileHosting.clear() // a new hosting session
         val hub = RelayHub(
-            // The stable host id a secondary files its pairing secret under.
-            primaryId = pairing.hostId,
             primaryName = deviceLabel(),
             // The devices the primary holds: the DE1, plus the scale when one is
             // connected (issue 04) — its advertised name lets a secondary's scale
@@ -944,28 +1221,27 @@ class ProxyController(
             // The single-owner session config a mirror snaps to on attach (T2).
             // Built on Main (the command lane), like every push (§6.1).
             configSource = { withContext(commandLane) { snapshotConfig() } },
-            // Pairing gate (issue 02): a valid pairing secret, or the host's
-            // prompt while its pairing window is open.
-            authorize = { request -> authorizePeer(request) },
             // Keep the Remotes list live as remotes come and go.
             onClientsChanged = { refreshRemotes() },
-            onOutdatedPeer = { name -> onOutdatedPeer(name) },
-            // The host proves the secret it issued before a device proves it back.
-            pairingSecretFor = { clientId ->
-                if (pairedDevices().any { it.id == clientId }) pairing.issuedSecret(clientId) else null
-            },
         )
         relayHub = hub
         val tapping = TappingBleTransport(real, hub, scope)
         tappingRef = tapping
+        if (relayKeys == null) {
+            // Spec §6.3: the keys couldn't be read this start, so the relay
+            // doesn't listen; the DE1 still works on this device.
+            appendLog("LAN relay not started: pairing keys couldn't be read (restart Crema to try again)")
+            return tapping
+        }
+        val secure = SecureRelayAcceptor(hub, hubTrust)
+        acceptor = secure
         val wantedPort = savedRelayPort()
-        val server = LanRelayServer(hub, requestedPort = wantedPort)
+        val server = LanRelayServer(handler = { ws, address -> secure.accept(ws, address) }, requestedPort = wantedPort)
         relayServer = server
         scope.launch {
             runCatching {
-                // Not before the paired devices are known: a remote that dials
-                // a restarting hub meets a closed port and redials, rather
-                // than a Denied.
+                // Not before the prefs load: a remote that dials a restarting
+                // hub meets a closed port and redials.
                 prefsReady()
                 relayPort = server.start()
                 appendLog("LAN relay listening on :$relayPort")
@@ -978,7 +1254,10 @@ class ProxyController(
         return tapping
     }
 
-    /** SECONDARY: a self-connecting ProxyTransport to a primary's relay. */
+    /** SECONDARY: a self-connecting ProxyTransport to a primary's relay, resuming
+     *  with the hub pinned at pairing (spec §2.6). With no usable pin (never
+     *  paired, the v3 upgrade, the keys unreadable) it doesn't dial: the role
+     *  stays, and the status says to pair again or restart. */
     private fun startSecondaryMode(host: String, port: Int, trust: MirrorTrust, refind: RefindSwitch?): BleTransport {
         val url = "ws://$host:$port${LanRelayServer.PATH}"
         appendLog("Multi-device: SECONDARY → $url")
@@ -990,18 +1269,25 @@ class ProxyController(
         // collectors AND the ProxyTransport's own init collectors), so applyMode can
         // cancel them ALL on the next switch instead of leaking ~4 coroutines + a dead
         // ProxyTransport/link per secondary→x→secondary cycle (issue 10).
-        if (trust.repin) {
-            pairing.pinHost(null)
-            refreshPinnedHub()
-        }
         val modeScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         secondaryScope = modeScope
-        val link = ReconnectingClientLink(url, modeScope)
+        val keys = relayKeys
+        val hubKey = savedHubPin()?.let { runCatching { RelayKeyStore.publicKeyOf(it.public) }.getOrNull() }
+        if (keys == null || hubKey == null || relay.needsRepair) {
+            appendLog(
+                when {
+                    keys == null -> "Not dialing $host:$port: pairing keys couldn't be read"
+                    else -> "Not dialing $host:$port: this device has to pair with the hub again"
+                },
+            )
+            _state.update { it.copy(mirrorReconnecting = true) }
+            return ProxyTransport(SilentLink, modeScope)
+        }
+        val link = ReconnectingClientLink(url, modeScope, keys, hubKey)
         proxyLink = link
         // Reflect the link into the UI so a dropped hub shows "Reconnecting…",
         // not a frozen "Connected through" (issue 03). The link only counts as
-        // up once the hub has welcomed this session (onWelcome below): until
-        // then a socket can be open while the hub's pairing prompt waits.
+        // up once the hub has welcomed this session (onWelcome below).
         // The re-find's clock runs while the session isn't welcomed: from
         // the start, and again from each drop. An open socket doesn't stop
         // it, so a silent endpoint can't hold the re-find.
@@ -1029,52 +1315,25 @@ class ProxyController(
             }
         }
         val proxy = ProxyTransport(
-            // clientId = the STABLE per-install id (issue 14) so the host finds
-            // THIS device's pairing record, not every same-model phone's;
-            // clientName = the human label shown in the host's prompt.
-            link, modeScope, clientId = deviceId, clientName = deviceLabel(),
+            link, modeScope,
             // Snap this mirror's config to the primary's on every attach (T2).
             onConfig = { applyConfig(it) },
-            // Reflect the granted scope (issue 02): view-only remotes can't
-            // control. The hub's name labels the status line from now on.
+            // Reflect the granted scope: view-only remotes can't control. The
+            // hub's name labels the status line from now on ("Connected
+            // through" only now, on Welcome, spec §2.6).
             onWelcome = { scope, hubName ->
                 onWelcomed(hubName)
-                _state.update { it.copy(mirrorViewOnly = scope == "mirror", hubName = hubName, mirrorReconnecting = false) }
+                _state.update { it.copy(mirrorViewOnly = scope != SCOPE_CONTROL, hubName = hubName, mirrorReconnecting = false) }
                 live = true
                 stallTimer?.cancel()
                 remote.stalled = false
                 onRemoteWelcomed(remote)
+                savedHubPin()?.let { pin -> runCatching { relay.touchHub(pin.id, System.currentTimeMillis()) } }
             },
-            // A refusal: the host declined or revoked us (issue 02), or this
-            // device refused the host. handleSessionRefused decides the role.
-            onRefused = { reason, byHost, hostProved -> handleSessionRefused(remote, reason, byHost, hostProved) },
+            // A refusal: only an authenticated one changes the role (§2.9).
+            onRefused = { reason, authenticated, terminal -> handleSessionRefused(remote, reason, authenticated, terminal) },
             // "Who's driving" (issue 11): another mirror drove the machine → toast.
             onEvent = { text -> notify(text) },
-            // Prove the pairing secret this device holds for the host it reaches,
-            // and keep the one a host issues when it approves this device.
-            pairingSecretFor = { hostId -> pairing.heldSecret(hostId) },
-            onPaired = { hostId, hostName, secret ->
-                if (pairing.putHeld(hostId, secret)) appendLog("Paired with $hostName")
-                else appendLog("Paired with $hostName, but the pairing secret wasn't saved")
-                refreshPinnedHub()
-            },
-            // Pin this target to the host it completes with; a restored or
-            // automatic redial then refuses any other host at that address.
-            pinnedHostId = { pairing.pinnedHost },
-            onHostConfirmed = { hostId ->
-                pairing.pinHost(hostId)
-                refreshPinnedHub()
-            },
-            allowRepair = trust.allowRepair,
-            // Offer to forget a host only on the user's own pick, before its
-            // first Welcome. An automatic reconnect or re-find attempt never
-            // does: a hub still loading after a restart can't prove the secret
-            // yet, and an advertisement is unauthenticated, so Forget there
-            // would drop a real pairing.
-            onHostChanged = { hostId, hostName ->
-                if (remote.trust.repin && !remote.welcomed) _state.update { it.copy(changedHost = hostId to hostName) }
-                else appendLog("$hostName at $host:$port couldn't prove the pairing this device holds for it")
-            },
         )
         // The VM's commands now go to this primary.
         relayMachine = RelayMachine(
@@ -1135,11 +1394,28 @@ class ProxyController(
         }
     }
 
-    /** Mirror the DE1 from a primary at [host]:[port] — the picker's "Mirror from X". */
+    /**
+     * Mirror the DE1 from the hub at [host]:[port] — the picker's "Connect
+     * through" or Manual hub (spec §6.1). When the picked entry's `kid` matches
+     * a pinned hub (or a manual address matches a pinned hub's host) the remote
+     * resumes; otherwise it pairs first ([pairWith]).
+     */
     fun switchToSecondary(host: String, port: Int) {
-        // The user picked this target: it may be a new host, or the same host
-        // after a reset that needs pairing again.
         resetRefind()
+        val peer = _state.value.peers.firstOrNull { sameAddress(it.host, host) && it.port == port }
+        val pinned = relay.hubs.firstOrNull { pin ->
+            val kid = peer?.kid
+            if (kid != null) pin.id.startsWith(kid) else sameAddress(pin.host, host)
+        }
+        if (pinned == null || relayKeys == null) {
+            pairWith(host, port, peer?.name ?: host)
+            return
+        }
+        runCatching {
+            if (pinned.host != host || pinned.port != port) relay.pinHub(pinned.copy(host = host, port = port))
+            relay.setSavedHub(pinned.id)
+        }
+        refreshPins()
         applyMode("secondary", host, port, trust = MirrorTrust.USER_PICK)
     }
 
@@ -1245,6 +1521,9 @@ class ProxyController(
         if (!reconnect) disconnect()
         disconnectDevices()
         delay(150)
+        // Hosting stops: every admitted remote gets an authenticated
+        // CLOSE(HUB_STOPPED) (spec §2.9) before the server drops the sockets.
+        acceptor?.closeAll(); acceptor = null
         relayServer?.stop(); relayServer = null; relayHub = null
         // Cancel the previous SECONDARY mode's collectors + ProxyTransport before
         // releasing the link, so nothing leaks across the switch (issue 10).
@@ -1299,8 +1578,10 @@ class ProxyController(
     fun refreshAdvertisement() {
         val role = _state.value.role
         val holdsDe1 = role != "secondary" && de1Connected()
-        val port = if (role == "primary") relayPort else 0
-        peerDiscovery.advertise(deviceLabel(), role, holdsDe1, port)
+        val port = if (role == "primary" && relayServer != null) relayPort else 0
+        // The short relay id only while hosting (spec §4.8): advisory, for resume-vs-pair.
+        val kid = if (port > 0) relayKeys?.shortId() else null
+        peerDiscovery.advertise(deviceLabel(), role, holdsDe1, port, kid)
     }
 
     /** Push the primary's device roster to attached mirrors — called when the
@@ -1388,28 +1669,51 @@ internal fun sameAddress(a: String, b: String): Boolean {
 /** How long the host's pairing window stays open. */
 internal const val PAIRING_WINDOW_S = 120
 
-/** Pause between two pairing prompts. */
-internal const val PROMPT_COOLDOWN_MS = 3_000L
-
-/** Pairing prompts allowed in one window. */
-internal const val MAX_PROMPTS_PER_WINDOW = 5
-
 private const val OUTDATED_NOTICE_COOLDOWN_MS = 60_000L
 
-/** What a secondary shows when its host turns it away, from the host's reason. */
-internal fun deniedMessage(reason: String): String = when {
-    reason == DenyReason.PAIRING_CLOSED ->
-        "Pairing needed — on the host, open Settings ▸ Advanced ▸ Paired devices ▸ Pair a device, then connect again"
-    reason == DenyReason.BUSY -> "The host is busy — try again in a moment"
-    reason == DenyReason.REVOKED -> "The host removed this device — pair again to reconnect"
-    reason == DenyReason.ALREADY_PAIRED ->
-        "The host already has a pairing for this device — on the host, Forget it under Paired devices, then pair again"
-    reason == DenyReason.HOST_MISMATCH -> "This isn't the hub this device connects through — choose a hub under Other devices"
-    reason == DenyReason.HOST_CHANGED -> "This host's identity changed — forget it on this device to pair again"
-    reason == DenyReason.HOST_UNVERIFIED ->
-        "Couldn't verify this host for this device — choose it under Other devices to connect (it may need pairing again)"
-    reason.startsWith(DenyReason.VERSION_MISMATCH) -> "Update Crema on both devices to connect"
-    else -> "The host hasn't allowed this device"
+/** The core's refusal names this controller acts on (PROTOCOL.md §10). */
+internal const val REFUSED_REVOKED = "Revoked"
+internal const val REFUSED_NOT_PAIRED = "NotPaired"
+internal const val REFUSED_HUB_STOPPED = "HubStopped"
+
+/** How long the hub's code dialog waits for a remote's next attempt after a wrong code. */
+private const val WRONG_CODE_GRACE_MS = 15_000L
+
+/** Spec §6.3: the keys couldn't be read this start. */
+internal const val KEYS_UNAVAILABLE_COPY = "Pairing keys couldn't be read. Restart Crema to try again."
+
+private val gateJson = Json { ignoreUnknownKeys = true }
+
+/** A [RelayFfiException]'s kind, never its detail. */
+private fun relayKind(e: RelayFfiException): String = (e as? RelayFfiException.Failed)?.kind ?: e.javaClass.simpleName
+
+/** What a remote shows when its hub refuses the session (spec §6.1, §6.3), from the core's reason. */
+internal fun refusalMessage(reason: String, hub: String): String {
+    val name = hub.ifBlank { "The hub" }
+    return when (reason) {
+        REFUSED_REVOKED, REFUSED_NOT_PAIRED -> "$name removed this device. Pair again to reconnect."
+        REFUSED_HUB_STOPPED -> "$name turned off Hub mode."
+        "HubUnverified", "HostMismatch" -> "Couldn't verify $name. If Crema on $name was reset or reinstalled, pair again."
+        "HubOutdated" -> "$name runs an older Crema — update it to connect."
+        "Version", "VERSION" -> "Update Crema on both devices to connect."
+        "PairingClosed", "PAIRING_CLOSED" ->
+            "$name isn't accepting new devices. On $name, open Settings ▸ Advanced ▸ Paired devices ▸ Pair a device, then try again."
+        "Busy", "BUSY" -> "$name is pairing another device. Try again in a moment."
+        "LockedOut", "LOCKED_OUT" -> "$name paused pairing after too many wrong codes. Try again in a minute."
+        "Cancelled", "CANCELLED" -> "Pairing was cancelled on $name."
+        "Timeout", "TIMEOUT" -> "The code expired. Try again."
+        PairingDialer.UNREACHABLE -> "Couldn't reach $name. Check that it's on and on this network, then try again."
+        else -> "Reconnecting to $name…"
+    }
+}
+
+/** A link that never connects: a remote role with nothing it may dial (no pin, or no keys). */
+private object SilentLink : FrameLink {
+    override suspend fun send(frame: coffee.crema.ble.proxy.Frame) = error("this remote doesn't dial")
+    override fun incoming(): Flow<coffee.crema.ble.proxy.Frame> = flow { awaitCancellation() }
+    override fun events(): Flow<coffee.crema.ble.proxy.LinkEvent> = flow { awaitCancellation() }
+    override suspend fun close() {}
+    override suspend fun sendOn(epoch: Long, frame: coffee.crema.ble.proxy.Frame): Boolean = false
 }
 
 /**

@@ -5,7 +5,6 @@ import coffee.crema.ble.BleTransport
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -14,20 +13,16 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * The host's verdict on a secondary's pairing request (issue 02): either
- * [Denied] (no mirror) or [Allowed] with a capability scope — `canControl=false`
- * is a view-only remote whose `Control` frames are refused. [Allowed.issuedSecret]
- * is set when this decision completes a new pairing; it rides the Welcome.
- */
-sealed class PairingDecision {
-    data class Allowed(val canControl: Boolean, val issuedSecret: String? = null) : PairingDecision()
-    data class Denied(val reason: String) : PairingDecision()
-}
-
 /** A remote currently connected through this hub: the hub's read-only
  *  "Remotes connected" list. [canControl] is false for a view-only remote. */
 data class RemoteClient(val clientId: String, val clientName: String, val canControl: Boolean)
+
+/**
+ * The remote an admitted relay session belongs to (relay v4): its device id,
+ * the name and scope the hub stored with its pin at pairing. The core's
+ * handshake authenticated it before [RelayHub.serve] sees the link.
+ */
+data class RemotePeer(val deviceId: String, val name: String, val canControl: Boolean)
 
 /**
  * The primary-side relay: it forwards the one real BLE link out to N secondaries
@@ -57,9 +52,8 @@ data class RemoteClient(val clientId: String, val clientName: String, val canCon
  *   the primary is the sole controller.
  */
 class RelayHub(
-    private val primaryId: String,
     private val primaryName: String,
-    /** The devices the primary currently holds; evaluated per [Frame.Hello]. */
+    /** The devices the primary currently holds; evaluated per [Frame.Welcome]. */
     private val roster: () -> List<DeviceInfo>,
     /** Serves a GATT read for a [Frame.Read] — `transport.read(...)` in production. */
     private val readSource: suspend (address: String, service: UUID, char: UUID) -> ByteArray,
@@ -96,34 +90,11 @@ class RelayHub(
      * normal relay / the unit tests).
      */
     private val configSource: suspend () -> String = { "" },
-    /**
-     * Pairing authorization (issue 02): decide whether a connecting secondary may
-     * mirror, and with what scope. Called once per session, after the peer
-     * answered the [Frame.Challenge]; the [PairingRequest] checks the peer's
-     * proof against a pairing secret. The real handler (on the primary) accepts
-     * a valid proof for a paired device and otherwise prompts only while the
-     * host's pairing window is open. The default **allows control** — it keeps
-     * M1 / loopback / unit-test behaviour (no UI to prompt with); the production
-     * primary always injects the gate.
-     */
-    private val authorize: suspend (request: PairingRequest) -> PairingDecision =
-        { PairingDecision.Allowed(canControl = true) },
-    /** Fired when a remote joins, is approved or leaves, so the hub's UI can
-     *  refresh its "Remotes connected" list. Default no-op (tests / loopback). */
+    /** Fired when a remote joins or leaves, so the hub's UI can refresh its
+     *  "Remotes connected" list. Default no-op (tests / loopback). */
     private val onClientsChanged: () -> Unit = {},
-    /** Fired with the peer's name when a secondary on another protocol version
-     *  is turned away, so the host can say an update is needed. */
-    private val onOutdatedPeer: (clientName: String) -> Unit = {},
-    /** The pairing secret this host issued to a device, by client id, or null:
-     *  the host proves it in the Challenge so the device can tell it's talking
-     *  to the host that paired it. Default: none (tests / loopback). */
-    private val pairingSecretFor: (clientId: String) -> String? = { null },
-    /** At most this many sessions (approved or not) at once; more are refused. */
+    /** At most this many admitted sessions at once; more are closed. */
     private val maxSessions: Int = MAX_SESSIONS,
-    /** A session that hasn't answered the handshake ([Frame.Hello] then
-     *  [Frame.Auth]) within this long is closed. The host's own prompt time
-     *  doesn't count: the deadline stops once the Auth arrives. */
-    private val handshakeDeadlineMs: Long = HANDSHAKE_DEADLINE_MS,
 ) {
     private val clients = CopyOnWriteArrayList<ClientSession>()
 
@@ -142,8 +113,7 @@ class RelayHub(
     /** Latest connection state per device address (a [BleTransport.ConnState] name). */
     private val connStates = ConcurrentHashMap<String, String>()
 
-    /** Whether [clientId] currently has a live, approved session. A session
-     *  that only claimed the id in its Hello doesn't count. */
+    /** Whether the device [clientId] currently has a live session. */
     fun hasClient(clientId: String): Boolean = clients.any { it.approved && it.clientId == clientId }
 
     // ---- Tap: fed by the primary's notification path ----------------------
@@ -214,71 +184,70 @@ class RelayHub(
         for (c in clients) if (c.approved && c.clientId != exceptClientId) deliver(c, frame)
     }
 
-    /** Every approved, live remote session, view-only ones included: the
-     *  hub's "Remotes connected" list. A peer that hasn't finished the
-     *  handshake isn't a remote yet. */
+    /** Every live remote session, view-only ones included: the hub's
+     *  "Remotes connected" list. Only admitted sessions reach the hub. */
     fun remotes(): List<RemoteClient> =
         clients.mapNotNull { c ->
             val id = c.clientId
             if (id != null && c.approved && !c.isClosed) RemoteClient(id, c.clientName ?: id, c.canControl) else null
         }
 
-    /** End every live session of [clientId] (the host forgot the device): it
-     *  gets a [Frame.Denied] and its link closes; nothing else reaches it. */
+    /** End every live session of [clientId] (the host forgot the device):
+     *  nothing more reaches it, and its link closes with an authenticated
+     *  `CLOSE(REVOKED)` ([FrameLink.revoke], spec §2.10). */
     fun revoke(clientId: String) {
         for (c in clients) if (c.clientId == clientId) {
             c.approved = false
             c.canControl = false
-            deliver(c, Frame.Denied(REVOKED))
+            c.revoked = true
             c.closeOutbox()
         }
         onClientsChanged()
     }
 
+    /** Every live session, for an authenticated close when hosting stops. */
+    internal fun links(): List<FrameLink> = clients.map { it.link }
+
     // ---- One client connection --------------------------------------------
 
-    /** Serve one secondary for the life of its [link]. Returns when the link
-     *  closes. The caller (WS server / loopback) provides one [FrameLink] per
-     *  connection. */
-    suspend fun serve(link: FrameLink): Unit = coroutineScope {
+    /** Serve one admitted remote, [peer], for the life of its [link]. Returns
+     *  when the link closes. The core's handshake authenticated the peer before
+     *  this runs (relay v4), so the session is approved from the start: the
+     *  [Frame.Welcome] goes first, with the scope stored at pairing. The caller
+     *  (the secure acceptor / the loopback) provides one link per connection. */
+    suspend fun serve(link: FrameLink, peer: RemotePeer): Unit = coroutineScope {
         val session = ClientSession(link, clientCapacity)
         val admitted = synchronized(clients) { (clients.size < maxSessions).also { if (it) clients += session } }
         if (!admitted) {
-            Log.w(TAG, "Refusing a connection: $maxSessions sessions already open")
-            withTimeoutOrNull(CLOSE_TIMEOUT_MS) {
-                runCatching { link.send(Frame.Denied(BUSY)) }
-                runCatching { link.close() }
-            }
+            Log.w(TAG, "Closing an admitted session: $maxSessions sessions already open")
+            withTimeoutOrNull(CLOSE_TIMEOUT_MS) { runCatching { link.close() } }
             return@coroutineScope
         }
+        session.clientId = peer.deviceId
+        session.clientName = peer.name
+        session.canControl = peer.canControl
+        session.approved = true
+        deliver(session, Frame.Welcome(primaryName, AUTHORITY_PRIMARY, roster(), if (peer.canControl) SCOPE_CONTROL else SCOPE_MIRROR))
+        onClientsChanged() // the hub's Remotes list shows it
         val reader = launch { readFrames(session, link) }
         // One writer drains the outbox to the link, so the primary's notification
         // path (onInbound) and request handlers never block on the socket. When
-        // the outbox is CLOSED (a lag-drop, a denial, a revoke, a missed
-        // handshake deadline), the pump drains what's queued, closes the LINK —
+        // the outbox is CLOSED (a lag-drop, a revoke), the pump drains what's
+        // queued, closes the LINK — with an authenticated REVOKED for a revoke —
         // so the peer actually observes the drop (its incoming() completes → its
         // reconnect machinery resyncs) — and ends the session.
         val pump = launch {
             for (frame in session.outbox) {
-                // A lag-dropped peer resyncs from a snapshot anyway: don't trickle
-                // its backlog out at the slow peer's pace first.
-                if (session.dropped) break
+                // A lag-dropped or revoked peer gets nothing more.
+                if (session.dropped || session.revoked) break
                 link.send(frame)
             }
-            runCatching { link.close() }
+            runCatching { if (session.revoked) link.revoke() else link.close() }
             reader.cancel()
-        }
-        val deadline = launch {
-            delay(handshakeDeadlineMs)
-            if (!session.authReceived) {
-                Log.i(TAG, "Closing a session that didn't complete the handshake in ${handshakeDeadlineMs}ms")
-                session.closeOutbox()
-            }
         }
         try {
             reader.join()
         } finally {
-            deadline.cancel()
             clients.remove(session)
             session.closeOutbox()
             pump.cancel()
@@ -286,12 +255,14 @@ class RelayHub(
             // when the collect ended abnormally (the pump's drain-then-close
             // covers the outbox-close paths). Bounded, so a stuck flush can't
             // hold this coroutine past the server's stop.
-            withContext(NonCancellable) { withTimeoutOrNull(CLOSE_TIMEOUT_MS) { runCatching { link.close() } } }
+            withContext(NonCancellable) {
+                withTimeoutOrNull(CLOSE_TIMEOUT_MS) { runCatching { if (session.revoked) link.revoke() else link.close() } }
+            }
             onClientsChanged()
         }
     }
 
-    /** The session's read loop: handshake frames inline, then requests. */
+    /** The session's read loop: requests from an admitted remote. */
     private suspend fun readFrames(session: ClientSession, link: FrameLink): Unit = coroutineScope {
         // This session's controls run one at a time, in the order they
         // arrived: a setting then a Start must not swap. Off the read loop, so
@@ -300,17 +271,9 @@ class RelayHub(
         launch { for (frame in controls) handleControl(session, frame) }
         try {
             link.incoming().collect { frame ->
-                // The handshake is handled INLINE (suspending the collect loop) so
-                // the pairing decision lands before any later frame from this
-                // client is served (issue 02).
-                if (frame is Frame.Hello) { handleHello(session, frame); return@collect }
-                if (frame is Frame.Auth) { handleAuth(session, frame); return@collect }
-                // Pre-pairing gate (issue 03): until a Hello has been APPROVED, an
-                // unapproved peer may not attach, read, or observe. A peer that skips
-                // Hello (or was denied) gets no attach, snapshot, read or stream —
-                // only an error reply to each request, so it fails fast.
+                // A revoked session serves nothing more (its link is closing).
                 if (!session.approved) {
-                    Log.w(TAG, "Refusing ${frame::class.simpleName} from unapproved peer (no approved Hello)")
+                    Log.w(TAG, "Refusing ${frame::class.simpleName} from a revoked session")
                     refuseUnapproved(session, frame)
                     return@collect
                 }
@@ -329,79 +292,9 @@ class RelayHub(
         }
     }
 
-    /** First handshake step: check the version, then challenge the peer. The
-     *  session is not approved until its [Frame.Auth] passes [authorize]. */
-    private fun handleHello(session: ClientSession, frame: Frame.Hello) {
-        // A repeated Hello (a reconnect race can send two on one session) must not
-        // restart the handshake: one challenge per session, one decision.
-        if (session.approved || session.nonce != null) {
-            Log.w(TAG, "Ignoring repeated Hello from ${frame.clientName}")
-            return
-        }
-        // Refuse a protocol-version skew up front (issue 05): ignoreUnknownKeys
-        // already absorbs additive changes, so a different PROXY_PROTOCOL_VERSION
-        // means a structurally breaking change — deny rather than risk mis-decoding a
-        // later frame. (Secondaries do the mirror check on Frame.Welcome.v.)
-        if (frame.v != PROXY_PROTOCOL_VERSION) {
-            Log.i(TAG, "denied ${frame.clientName}: protocol v${frame.v} != v$PROXY_PROTOCOL_VERSION")
-            onOutdatedPeer(sanitizePeerName(frame.clientName))
-            deliver(session, Frame.Denied(VERSION_MISMATCH))
-            session.closeOutbox()
-            return
-        }
-        session.clientId = frame.clientId
-        session.clientName = sanitizePeerName(frame.clientName)
-        val clientNonce = frame.nonce.orEmpty()
-        session.clientNonce = clientNonce
-        val nonce = PairingCrypto.newNonce()
-        session.nonce = nonce
-        val hostProof = frame.nonce?.let { cn ->
-            pairingSecretFor(frame.clientId)?.let { secret ->
-                runCatching { PairingCrypto.hostProof(secret, primaryId, frame.clientId, cn, nonce) }.getOrNull()
-            }
-        }
-        deliver(session, Frame.Challenge(primaryId, primaryName, nonce, hostProof))
-    }
-
-    /** Second handshake step: the host decides on the peer's proof, then
-     *  Welcome (with its granted scope, and a new secret if it just paired) or
-     *  Denied. On denial the session ends — an unapproved client gets no roster,
-     *  snapshot, or stream. */
-    private suspend fun handleAuth(session: ClientSession, frame: Frame.Auth) {
-        val nonce = session.nonce
-        val clientId = session.clientId
-        if (session.approved || session.authReceived || nonce == null || clientId == null) {
-            Log.w(TAG, "Ignoring Auth outside the handshake")
-            return
-        }
-        session.authReceived = true
-        val name = session.clientName ?: clientId
-        val clientNonce = session.clientNonce.orEmpty()
-        val request = PairingRequest(clientId, name, hasProof = frame.proof != null) { secret ->
-            PairingCrypto.verifyClient(secret, primaryId, clientId, clientNonce, nonce, frame.proof)
-        }
-        when (val decision = authorize(request)) {
-            is PairingDecision.Allowed -> {
-                session.approved = true
-                session.canControl = decision.canControl
-                val scope = if (decision.canControl) SCOPE_CONTROL else SCOPE_MIRROR
-                deliver(
-                    session,
-                    Frame.Welcome(PROXY_PROTOCOL_VERSION, primaryId, primaryName, AUTHORITY_PRIMARY, roster(), scope, decision.issuedSecret),
-                )
-                onClientsChanged() // approved → the hub's Remotes list shows it
-            }
-            is PairingDecision.Denied -> {
-                Log.i(TAG, "pairing denied for $name ($clientId): ${decision.reason}")
-                deliver(session, Frame.Denied(decision.reason))
-                session.closeOutbox()
-            }
-        }
-    }
-
-    /** Reply to a request from a peer without an approved Hello. Every request
-     *  gets exactly one reply, in every state, so a peer that sent early fails
-     *  at once instead of waiting out its timeout. Nothing is served. */
+    /** Reply to a request from a session that was revoked mid-flight. Every
+     *  request gets exactly one reply, so the peer fails at once instead of
+     *  waiting out its timeout. Nothing is served. */
     private fun refuseUnapproved(session: ClientSession, frame: Frame) {
         val reply = when (frame) {
             is Frame.Read -> Frame.ReadErr(frame.id, NOT_PAIRED)
@@ -544,7 +437,7 @@ class RelayHub(
     private fun cacheKey(address: String, char: UUID): String = "$address|$char"
 
     /** One connected secondary: its outbox and the set of devices it has attached. */
-    private class ClientSession(@Suppress("unused") val link: FrameLink, capacity: Int) {
+    private class ClientSession(val link: FrameLink, capacity: Int) {
         val outbox = Channel<Frame>(capacity)
         /** Dropped for lagging: the pump sends nothing more. */
         @Volatile var dropped: Boolean = false
@@ -555,21 +448,16 @@ class RelayHub(
             isClosed = true
             outbox.close()
         }
-        /** Set true once this peer's Hello has been APPROVED (issue 03). Until then it
-         *  may not attach, read, or observe, and the fan-out methods skip it — a peer
-         *  that never sent (or was denied) a Hello gets no roster, snapshot, or stream. */
+        /** The session is served: set at admission, cleared by a revoke. The
+         *  fan-out methods skip a session that isn't. */
         @Volatile var approved: Boolean = false
-        /** Granted control scope (issue 02): false = view-only mirror, set on Welcome. */
+        /** The scope stored with the peer's pin: false = view-only mirror. */
         @Volatile var canControl: Boolean = false
-        /** Peer identity from [Frame.Hello], for the hub's Remotes list. */
+        /** The peer's device id and pinned name, for the hub's Remotes list. */
         @Volatile var clientId: String? = null
         @Volatile var clientName: String? = null
-        /** This session's challenge nonce, set when the Hello is answered. */
-        @Volatile var nonce: String? = null
-        /** The nonce the peer sent in its Hello. */
-        @Volatile var clientNonce: String? = null
-        /** The peer answered the challenge (stops the handshake deadline). */
-        @Volatile var authReceived: Boolean = false
+        /** The hub forgot this device: the link closes with `CLOSE(REVOKED)`. */
+        @Volatile var revoked: Boolean = false
         /** Highest notify seq delivered per `"address|char"` — the monotonic guard
          *  behind [deliverNotify]; cleared per device on (re-)attach. */
         val seenSeq = ConcurrentHashMap<String, Long>()
@@ -583,16 +471,10 @@ class RelayHub(
     private companion object {
         const val TAG = "RelayHub"
         const val AUTHORITY_PRIMARY = "primary"
-        const val SCOPE_CONTROL = "control"
-        const val SCOPE_MIRROR = "mirror"
         const val NOT_PAIRED = DenyReason.NOT_PAIRED
         const val CLOSE_TIMEOUT_MS = 1_000L
-        const val BUSY = DenyReason.BUSY
-        const val REVOKED = DenyReason.REVOKED
-        const val VERSION_MISMATCH = DenyReason.VERSION_MISMATCH
         const val DEFAULT_CLIENT_CAPACITY = 1024
         const val MAX_SESSIONS = 8
-        const val HANDSHAKE_DEADLINE_MS = 5_000L
         /** Controls one session may have waiting; more are refused. */
         const val CONTROL_QUEUE_CAPACITY = 64
         const val CONTROLS_BUSY = "too many controls waiting"

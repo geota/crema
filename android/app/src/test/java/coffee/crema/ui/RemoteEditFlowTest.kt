@@ -1,12 +1,12 @@
 package coffee.crema.ui
 
+import coffee.crema.ble.proxy.RemotePeer
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.ble.proxy.Frame
 import coffee.crema.ble.proxy.Golden
 import coffee.crema.ble.proxy.InMemoryFrameLink
 import coffee.crema.ble.proxy.PROXY_PROTOCOL_VERSION
-import coffee.crema.ble.proxy.PairingCrypto
 import coffee.crema.ble.proxy.Peer
 import coffee.crema.machine.LocalMachine
 import coffee.crema.machine.CommandOrigin
@@ -265,16 +265,11 @@ class RemoteEditFlowTest {
         val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
-            io.launch { fixture.hub.serve(server) }
+            // A second remote, admitted (relay v4 authenticates it before RelayHub.serve).
+            io.launch { fixture.hub.serve(server, RemotePeer("remote-2", "Second phone", canControl = true)) }
             val rx = CopyOnWriteArrayList<Frame>()
             io.launch { client.incoming().collect { rx += it } }
-            runBlocking {
-                val nonce = PairingCrypto.newNonce()
-                client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "remote-2", "Second phone", nonce = nonce))
-                val challenge = withTimeout(5_000) { while (rx.none { it is Frame.Challenge }) delay(5); rx.first { it is Frame.Challenge } as Frame.Challenge }
-                client.send(Frame.Auth(PairingCrypto.clientProof(fixture.secret, "host-1", "remote-2", nonce, challenge.nonce)))
-                withTimeout(5_000) { while (rx.none { it is Frame.Welcome }) delay(5) }
-            }
+            runBlocking { withTimeout(5_000) { while (rx.none { it is Frame.Welcome }) delay(5) } }
             fixture.holdReplies = true
             vm.setQcGrind(14.5f)
             runBlocking { client.send(Frame.Control(1, "setQcGrind", "16.0")) }

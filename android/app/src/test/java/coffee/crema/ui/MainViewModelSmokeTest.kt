@@ -8,15 +8,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import coffee.crema.ble.proxy.Frame
-import coffee.crema.ble.proxy.FrameCodec
-import coffee.crema.ble.proxy.MockWsServerLink
-import mockwebserver3.MockResponse
-import mockwebserver3.MockWebServer
+import coffee.crema.ble.proxy.TestHubServer
 import java.net.InetAddress
 import java.net.ServerSocket
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -99,27 +94,31 @@ class MainViewModelSmokeTest {
 
     @Test
     fun constructsAndClearsInThePersistedSecondaryRole() {
-        // A primary that upgrades the socket and then stays silent: the
-        // secondary's session goes live and sends its Hello, and nothing
-        // completes the handshake, so the role holds until the VM is cleared.
-        val primary = MockWsServerLink()
-        MockWebServer().use { server ->
-            server.enqueue(MockResponse.Builder().webSocketUpgrade(primary).build())
-            server.start(InetAddress.getLoopbackAddress(), 0)
-            VmHarness.persistRole("secondary", "127.0.0.1", server.port)
+        // A hub that admits the remote's resume and then stays silent (no
+        // Welcome), so the role holds until the VM is cleared.
+        val gone = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val (relayStore, remote) = VmHarness.relayStore()
+        val hub = TestHubServer.scripted(remote) { link ->
+            link.incoming().collect {}
+            gone.complete(Unit)
+        }
+        try {
+            VmHarness.pinHub(relayStore, hub.hubKeys, hub.port)
+            VmHarness.persistRole("secondary", "127.0.0.1", hub.port)
             val store = ViewModelStore()
             val vm = build(store)
             val controller = VmHarness.proxyController(vm)
             assertEquals("secondary", controller.state.value.role)
             assertNull(controller.relayHub, "a secondary runs no relay")
 
-            VmHarness.idleUntil("the secondary's Hello") { primary.receivedText.isNotEmpty() }
-            assertIs<Frame.Hello>(FrameCodec.decode(primary.receivedText.first()))
+            VmHarness.idleUntil("the remote's resume to be admitted") { hub.firstLink.isCompleted }
             VmHarness.idleUntil("the prefs load to reach the UI") { vm.ui.value.proxyRole == "secondary" }
 
             store.clear()
-            // Clearing the VM disposes the mirror link: its socket closes.
-            VmHarness.idleUntil("the secondary's socket to close on clear") { primary.gone.isCompleted }
+            // Clearing the VM disposes the mirror link: its session ends.
+            VmHarness.idleUntil("the remote's session to end on clear") { gone.isCompleted }
+        } finally {
+            hub.kill()
         }
     }
 

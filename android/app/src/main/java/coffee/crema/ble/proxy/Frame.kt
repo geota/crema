@@ -1,8 +1,12 @@
 package coffee.crema.ble.proxy
 
+import android.util.Log
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 
 /**
  * The Crema multi-device **proxy wire protocol** (M1 — LAN proxy transport).
@@ -102,26 +106,28 @@ sealed class Frame {
     data class Auth(val proof: String? = null) : Frame()
 
     /**
-     * The primary's acceptance reply to [Auth]. Carries the [authority] holder
-     * (always the primary in M1) and the current [roster] so the secondary can
-     * populate `scan()` immediately without waiting for a change push.
+     * The hub's first frame on an admitted session (relay v4: the core's
+     * handshake already authenticated both ends, spec §4.5). Carries the hub's
+     * name, the [authority] holder (always the primary) and the current
+     * [roster] so the secondary can populate `scan()` immediately.
      */
     @Serializable
     @SerialName("welcome")
     data class Welcome(
-        val v: Int,
-        val primaryId: String,
         val primaryName: String,
         val authority: String,
         val roster: List<DeviceInfo>,
-        /** The scope this peer was granted (issue 02 TOFU): `"control"` (may drive
-         *  the machine) or `"mirror"` (view-only — its Control frames are refused).
-         *  Defaults to `"control"` so an older relay (pre-pairing) reads as full. */
-        val scope: String = "control",
-        /** Set only on the Welcome that completes a new pairing: the secret the
-         *  secondary keeps for this primary and proves on every later connect. */
-        val pairingSecret: String? = null,
-    ) : Frame()
+        /**
+         * The scope the hub granted this remote at pairing: `"control"` (may
+         * drive the machine) or `"mirror"` (view-only). Required, with no
+         * default, and anything but `"control"` reads as view-only
+         * ([grantsControl]): a missing or unknown scope never fails open (R6).
+         */
+        val scope: String,
+    ) : Frame() {
+        /** Whether this Welcome grants control; any value but `"control"` is view-only. */
+        val grantsControl: Boolean get() = scope == SCOPE_CONTROL
+    }
 
     /** The primary's rejection reply to [Hello] / [Auth] (not paired, pairing
      *  closed, busy, version mismatch, revoked). The connection closes after this. */
@@ -339,17 +345,22 @@ data class DeviceInfo(
     val state: String,
 )
 
-/** Current proxy wire-protocol version. The handshake ([Frame.Hello] /
- *  [Frame.Welcome]) carries it so peers can refuse a mismatch; bump on any
- *  breaking frame change. */
-const val PROXY_PROTOCOL_VERSION: Int = 3 // 2: + Frame.Event (issue 11 who's-driving); 3: pairing secret (Challenge/Auth)
+/** Current proxy wire-protocol version, carried in the relay ClientHello and
+ *  NSD (spec §4.5). 2: + Frame.Event (issue 11 who's-driving); 3: pairing
+ *  secret (Challenge/Auth); 4: the encrypted relay (Noise, the core's hellos). */
+const val PROXY_PROTOCOL_VERSION: Int = 4
 
-/** Hard cap on a single proxy WebSocket frame (issue 03). Protocol frames are
- *  small JSON (well under 1 KiB; a snapshot burst is many small frames, not one
- *  big one), so 256 KiB is ample headroom while preventing an unauthenticated LAN
- *  peer from buffering an unbounded frame to OOM the primary mid-shot. Applied to
- *  both the relay server and the client link's WebSocket install. */
-const val PROXY_MAX_FRAME_BYTES: Long = 256L * 1024
+/** The WebSocket message cap on both ends (spec §4.3, Appendix A
+ *  `WS_MAX_MESSAGE`): every relay message is at most one Noise record plus its
+ *  kind byte. Larger application messages are fragmented by the core, which
+ *  caps a reassembled message at 1 MiB (`MAX_MESSAGE_BYTES`). */
+const val WS_MAX_MESSAGE: Long = 65_536L
+
+/** The [Frame.Welcome] scope that grants control; anything else is view-only. */
+const val SCOPE_CONTROL: String = "control"
+
+/** The view-only scope. */
+const val SCOPE_MIRROR: String = "mirror"
 
 /**
  * Encodes/decodes [Frame]s to/from the JSON wire text. Always (de)serialises via
@@ -371,6 +382,32 @@ object FrameCodec {
     fun encode(frame: Frame): String = json.encodeToString(Frame.serializer(), frame)
 
     fun decode(text: String): Frame = json.decodeFromString(Frame.serializer(), text)
+
+    /**
+     * Decode a relay v4 `FRAME` payload, tolerating an unknown frame `type`
+     * (spec §4.5): it is logged and skipped (null), so a later v4.x can add
+     * frames without a version bump. Malformed JSON, a missing `type` or a
+     * known type with bad fields still throws, which closes the session.
+     */
+    fun decodeTolerant(text: String): Frame? {
+        val obj = json.parseToJsonElement(text).jsonObject
+        val type = (obj["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            ?: throw SerializationException("frame without a type")
+        if (type !in knownTypes) {
+            Log.i(TAG, "Skipping a frame of unknown type \"${type.take(32)}\"")
+            return null
+        }
+        return json.decodeFromJsonElement(Frame.serializer(), obj)
+    }
+
+    /** The `type` names the sealed [Frame] serializer knows. */
+    private val knownTypes: Set<String> by lazy {
+        val d = Frame.serializer().descriptor
+        // The sealed descriptor's second element lists the subclasses by serial name.
+        (0 until d.getElementDescriptor(1).elementsCount).map { d.getElementDescriptor(1).getElementName(it) }.toSet()
+    }
+
+    private const val TAG = "FrameCodec"
 }
 
 /**

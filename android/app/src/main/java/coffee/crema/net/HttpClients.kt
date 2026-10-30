@@ -156,7 +156,7 @@ object HttpClients {
      * redial loop) and no https-only guard (the LAN link is `ws://`). The
      * OkHttp engine does NOT honour `WebSockets { maxFrameSize }` — setting it
      * throws "Max frame size switch is not supported in OkHttp engine" — so
-     * the frame cap is enforced by the link (KtorWsFrameLink's `maxFrameBytes`).
+     * the message cap is enforced by the relay link (`RelayWire`, `WS_MAX_MESSAGE`).
      */
     fun webSocketClient(engine: HttpClientEngine? = null): HttpClient =
         HttpClient(engine ?: webSocketEngine) {

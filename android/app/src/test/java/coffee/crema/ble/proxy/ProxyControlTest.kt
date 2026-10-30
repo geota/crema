@@ -31,7 +31,6 @@ class ProxyControlTest {
             val (clientEnd, serverEnd) = InMemoryFrameLink.pair()
             val relayed = CopyOnWriteArrayList<Pair<String, String>>()
             val hub = RelayHub(
-                primaryId = "primary-1",
                 primaryName = "Kitchen tablet",
                 roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
                 readSource = { _, _, _ -> error("no read in this test") },
@@ -41,8 +40,8 @@ class ProxyControlTest {
                     if (method == "boom") Result.failure(IllegalStateException("nope")) else Result.success(Unit)
                 },
             )
-            scope.launch { hub.serve(serverEnd) }
-            val proxy = ProxyTransport(clientEnd, scope, clientId = "phone-1", clientName = "Phone")
+            scope.launch { hub.serve(serverEnd, TEST_PEER) }
+            val proxy = ProxyTransport(clientEnd, scope)
 
             // A relayed machine-state intent dispatches on the primary and acks.
             val ok = withTimeout(2_000) { proxy.control("machineState", "IDLE") }
@@ -70,7 +69,6 @@ class ProxyControlTest {
             lateinit var hub: RelayHub
             val seenOrigin = CopyOnWriteArrayList<Pair<String?, String?>>()
             hub = RelayHub(
-                primaryId = "primary-1",
                 primaryName = "Kitchen tablet",
                 roster = { emptyList() },
                 readSource = { _, _, _ -> error("no read in this test") },
@@ -85,12 +83,12 @@ class ProxyControlTest {
             )
             val (aClient, aServer) = InMemoryFrameLink.pair()
             val (bClient, bServer) = InMemoryFrameLink.pair()
-            scope.launch { hub.serve(aServer) }
-            scope.launch { hub.serve(bServer) }
+            scope.launch { hub.serve(aServer, RemotePeer("phone-A", "Phone A", canControl = true)) }
+            scope.launch { hub.serve(bServer, RemotePeer("phone-B", "Phone B", canControl = true)) }
             val eventsA = CopyOnWriteArrayList<String>()
             val eventsB = CopyOnWriteArrayList<String>()
-            val proxyA = ProxyTransport(aClient, scope, clientId = "phone-A", clientName = "Phone A", onEvent = { eventsA.add(it) })
-            val proxyB = ProxyTransport(bClient, scope, clientId = "phone-B", clientName = "Phone B", onEvent = { eventsB.add(it) })
+            val proxyA = ProxyTransport(aClient, scope, onEvent = { eventsA.add(it) })
+            val proxyB = ProxyTransport(bClient, scope, onEvent = { eventsB.add(it) })
 
             // Round-trip B once so it's fully attached (Welcome done → in the client list).
             withTimeout(2_000) { proxyB.control("tareScale") }

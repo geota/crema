@@ -311,7 +311,7 @@ class RemoteToStandaloneTest {
         assertNotNull(vm.ui.value.adoptPrompt)
         vm.resolveAdoption(useHub = true) // the commit is queued first
         fixture.revoke() // the Denied's switch queues behind it
-        VmHarness.idleUntil("the Denied") { VmHarness.log(vm).any { "Mirror denied by host" in it } }
+        VmHarness.idleUntil("the revoke") { VmHarness.log(vm).any { "Mirror refused by the hub" in it } }
         waitRole(vm, "primary")
         Thread.sleep(200)
         VmHarness.advance(400)
@@ -341,7 +341,7 @@ class RemoteToStandaloneTest {
         assertNotNull(vm.ui.value.adoptPrompt, "the confirmation stays")
         assertEquals(S.qcSteamTempC, vm.ui.value.qcSteamTempC)
         assertTrue(VmHarness.ownState(vm).mirror!!.frozen)
-        assertTrue(fixture.endpoint.received.none { "\"type\":\"hello\"" in it }, "never dialed the candidate")
+        assertEquals(0, fixture.endpoint.dials.get(), "never dialed the candidate")
         vm.resolveAdoption(useHub = false)
         waitRole(vm, "normal")
         assertEquals(listOf("normal"), switches.map { it.first })
@@ -387,7 +387,7 @@ class RemoteToStandaloneTest {
         val ctor = cls.getDeclaredConstructor(String::class.java, Int::class.javaPrimitiveType, ProxyController.MirrorTrust::class.java, Boolean::class.javaPrimitiveType)
             .apply { isAccessible = true }
         sessionField.set(pc, ctor.newInstance(host, port + 1, ProxyController.MirrorTrust.UNATTENDED, true))
-        pc.refuseCurrentSessionForTest("host mismatch", byHost = false, hostProved = false)
+        pc.refuseCurrentSessionForTest("HostMismatch", authenticated = false)
         repeat(60) {
             VmHarness.advance(100)
             Thread.sleep(10)
@@ -450,6 +450,9 @@ class RemoteToStandaloneTest {
         val modeLock = ProxyController::class.java.getDeclaredField("modeMutex").apply { isAccessible = true }.get(pc) as kotlinx.coroutines.sync.Mutex
         assertTrue(modeLock.tryLock())
         val messages = vm.ui.value.userMessages.size
+        // The new session carries no snapshot (the relay v4 resume is fast
+        // enough that an attach snapshot would otherwise arrive first).
+        fixture.hubConfig = ""
         vm.switchToSecondary("127.0.0.1", fixture.endpoint.port) // queued first
         VmHarness.idle()
         vm.resolveAdoption(useHub = true) // queued behind it
@@ -482,6 +485,9 @@ class RemoteToStandaloneTest {
         val pc = VmHarness.proxyController(vm)
         val epochBefore = pc.modeEpoch
         val messages = vm.ui.value.userMessages.size
+        // The new session carries no snapshot (the relay v4 resume is fast
+        // enough that an attach snapshot would otherwise arrive first).
+        fixture.hubConfig = ""
         vm.switchToSecondary("127.0.0.1", fixture.endpoint.port)
         repeat(20) {
             VmHarness.advance(100)

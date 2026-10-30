@@ -2,25 +2,27 @@ package coffee.crema.ui
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
-import coffee.crema.ble.proxy.DenyReason
+import coffee.crema.ble.proxy.PairingState
 import coffee.crema.ble.proxy.Peer
-import coffee.crema.ble.proxy.PairingCrypto
-import coffee.crema.ble.proxy.PairingDecision
-import coffee.crema.ble.proxy.PairingRequest
+import coffee.crema.ble.proxy.ProxyTransport
+import coffee.crema.ble.proxy.ReconnectingClientLink
+import coffee.crema.ble.proxy.LanRelayServer
+import coffee.crema.ble.proxy.RelayHubPin
+import coffee.crema.ble.proxy.RelayKeyLoad
+import coffee.crema.ble.proxy.RelayKeyStore
+import coffee.crema.ble.proxy.RelayRemotePin
+import coffee.crema.ble.proxy.SCOPE_CONTROL
+import coffee.crema.core.RelayKeys
 import coffee.crema.machine.CommandOutcome
 import coffee.crema.machine.MachineCommand
 import coffee.crema.machine.QcField
 import coffee.crema.machine.RecordingMachineActions
-import coffee.crema.security.SecretBox
-import coffee.crema.security.SecretCipher
-import coffee.crema.settings.PairedDevice
+import coffee.crema.security.FakeKeystore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.serialization.json.Json
@@ -33,14 +35,15 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
-import kotlin.test.assertNotNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * [ProxyController] mode switching and pairing, on virtual time. Built in the
- * normal role (no prefs file), with every VM callback recorded and a fake
- * cipher for the pairing secrets.
+ * [ProxyController] mode switching, the relay v4 pins and keys, refusal
+ * handling and the re-find, on virtual time. Built in the normal role (no
+ * prefs file), with every VM callback recorded and the relay key store over a
+ * fake keystore (Robolectric has no AndroidKeyStore).
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -51,28 +54,37 @@ class ProxyControllerModeTest {
     private val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
     private val events = CopyOnWriteArrayList<String>()
     private val log = CopyOnWriteArrayList<String>()
-    private val remembered = CopyOnWriteArrayList<PairedDevice>()
+    private val notices = CopyOnWriteArrayList<String>()
     private val actions = RecordingMachineActions()
     @Volatile private var flashing = false
 
-    /** Not crypto: enough for the store to seal and open. */
-    private val box = SecretBox(object : SecretCipher {
-        override fun seal(plain: ByteArray) = ByteArray(12) + plain
-        override fun open(sealed: ByteArray) = sealed.copyOfRange(12, sealed.size)
-    })
+    private val app: Application = ApplicationProvider.getApplicationContext()
+    private val keystore = FakeKeystore()
 
-    /** A pairing request from [id] proving [secret] (or nothing). */
-    private fun request(id: String, secret: String? = null, name: String = "Phone") =
-        PairingRequest(id, name, hasProof = secret != null) { candidate -> candidate == secret }
+    /** The store this test's controller loads (the same file and keystore). */
+    private fun relayStore() = RelayKeyStore(app.filesDir, RelayKeyStore.deviceBox(keystore))
 
-    private val controller = ProxyController(
-        app = ApplicationProvider.getApplicationContext(),
+    /** A remote this hub paired before this launch, pinned in the store the controller loads. */
+    private val pairedRemote: RelayKeys = RelayKeys.generate()
+
+    init {
+        relayStore().apply {
+            load()
+            pinRemote(RelayRemotePin(pairedRemote.deviceId(), RelayKeyStore.b64(pairedRemote.publicKey()), "Phone", SCOPE_CONTROL, pairedAtMs = 1))
+        }
+    }
+
+    private fun newController(
+        appendLog: (String) -> Unit = { log += it },
+        prefsReady: suspend () -> Unit = {},
+    ) = ProxyController(
+        app = app,
         json = Json { ignoreUnknownKeys = true },
         scope = scope,
         setCoreReadOnly = {},
         setRecorderEnabled = {},
-        notify = {},
-        appendLog = { log += it },
+        notify = { notices += it },
+        appendLog = appendLog,
         connect = { events += "connect" },
         disconnect = { events += "disconnect" },
         disconnectDevices = { events += "teardown" },
@@ -85,20 +97,29 @@ class ProxyControllerModeTest {
         applyConfig = {},
         roster = { emptyList() },
         isSnapshotChar = { _, _ -> false },
-        pairedDevices = { remembered.toList() },
-        rememberPaired = { id, name, canControl -> remembered += PairedDevice(id, name, canControl) },
         onModeApplied = { role, host, port -> events += "applied:$role"; targets += "$role $host:$port" },
         firmwareHoldsLink = { flashing },
-        secretBox = box,
+        relayStore = relayStore(),
+        prefsReady = prefsReady,
     )
 
     /** Every applied mode with its target, in order. */
     private val targets = CopyOnWriteArrayList<String>()
 
+    private val controller = newController()
+
     /** Every remote target this controller dialed, as host:port, in order:
      *  saved targets and re-find attempts alike. */
     private fun dials(): List<String> =
-        log.filter { "SECONDARY →" in it }.map { it.substringAfter("ws://").substringBefore("/") }
+        log.filter { "SECONDARY →" in it && "Not dialing" !in it }.map { it.substringAfter("ws://").substringBefore("/") }
+            .filterIndexed { i, _ -> !notDialed(i) }
+
+    /** Whether the [i]th SECONDARY switch didn't dial (no pin or no keys). */
+    private fun notDialed(i: Int): Boolean {
+        val switches = log.withIndex().filter { "SECONDARY →" in it.value }
+        val at = switches.getOrNull(i)?.index ?: return false
+        return log.getOrNull(at + 1)?.startsWith("Not dialing") == true
+    }
 
     private fun advance(ms: Long) {
         scheduler.advanceTimeBy(ms)
@@ -109,11 +130,19 @@ class ProxyControllerModeTest {
     private fun peer(id: String, port: Int, role: String = "primary", de1: Boolean = true, host: String = "127.0.0.1") =
         Peer(id, "Kitchen tablet", role, de1, host, port)
 
+    private val hubKey: ByteArray = RelayKeys.generate().publicKey()
+
+    /** Pin the hub "hub-1" at 127.0.0.1:[port] as this device's saved hub (what pairing leaves). */
+    private fun pinHub(port: Int = 9) {
+        controller.relayStore.pinHub(RelayHubPin("hub-1", RelayKeyStore.b64(hubKey), "Kitchen tablet", "127.0.0.1", port, pinnedAtMs = 1))
+        controller.relayStore.setSavedHub("hub-1")
+    }
+
     /** A remote on 127.0.0.1:9 (nothing listens there: its link stays
-     *  CONNECTING), restored unattended with the pin "host-1". Returns the
+     *  CONNECTING), restored unattended with the hub pinned. Returns the
      *  peers flow the test drives. */
     private fun remoteOnDeadHub(vararg peers: Peer): MutableStateFlow<List<Peer>> {
-        controller.pairingStore.pinHost("host-1")
+        pinHub()
         controller.remirrorUnattended("127.0.0.1", 9)
         advance(200)
         assertEquals("secondary 127.0.0.1:9", targets.last())
@@ -151,159 +180,22 @@ class ProxyControllerModeTest {
         assertTrue(log.any { it.contains("refused") && it.contains(FIRMWARE_BUSY_REASON) }, "$log")
     }
 
+    // ── Relay v4 keys and pins ─────────────────────────────────────────────
+
     @Test
-    fun `a cancelled pairing prompt is cleared and frees the slot`() {
-        controller.openPairingWindow()
-        scheduler.runCurrent()
-        val first = scope.launch { controller.authorizePeer(request("id-1")) }
-        scheduler.runCurrent()
-        assertEquals(PairingPrompt("id-1", "Phone"), controller.state.value.pendingPairing)
-
-        first.cancel()
-        scheduler.runCurrent()
-        assertNull(controller.state.value.pendingPairing, "the prompt does not outlive its request")
-
-        scheduler.advanceTimeBy(PROMPT_COOLDOWN_MS + 1)
-        val second = scope.async { controller.authorizePeer(request("id-2", name = "Tablet")) }
-        scheduler.runCurrent()
-        assertNotNull(controller.state.value.pendingPairing, "the next unknown peer gets the slot")
-        controller.resolvePairing(PairingChoice.ALLOW_CONTROL)
-        scheduler.runCurrent()
-        val allowed = second.getCompleted() as PairingDecision.Allowed
-        assertTrue(allowed.canControl)
-        assertNotNull(allowed.issuedSecret, "approval issues a pairing secret")
-        assertEquals(listOf("id-2"), remembered.map { it.id })
+    fun `the store's pins and key load at construction`() {
+        assertFalse(controller.state.value.relayKeysUnavailable)
+        assertEquals(listOf(pairedRemote.deviceId()), controller.state.value.pairedRemotes.map { it.id })
     }
 
     @Test
-    fun `with the pairing window closed an unknown device is refused without a prompt`() {
-        val decision = scope.async { controller.authorizePeer(request("stranger")) }
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.PAIRING_CLOSED), decision.getCompleted())
-        assertNull(controller.state.value.pendingPairing)
-    }
-
-    @Test
-    fun `a paired device proving its secret is admitted without a prompt, a wrong secret is not`() {
+    fun `the pairing window opens and closes through the core gate`() {
         controller.openPairingWindow()
         scheduler.runCurrent()
-        val pairingRun = scope.async { controller.authorizePeer(request("phone")) }
-        scheduler.runCurrent()
-        controller.resolvePairing(PairingChoice.MIRROR_ONLY)
-        scheduler.runCurrent()
-        val secret = (pairingRun.getCompleted() as PairingDecision.Allowed).issuedSecret!!
-        scheduler.runCurrent()
-        assertEquals(0, controller.state.value.pairingSecondsLeft, "one approval closes the window")
-        assertEquals(setOf("phone"), controller.state.value.pairedWithSecret)
-
-        val again = scope.async { controller.authorizePeer(request("phone", secret)) }
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Allowed(canControl = false), again.getCompleted(), "silent, with the stored scope")
-
-        val forged = scope.async { controller.authorizePeer(request("phone", PairingCrypto.newSecret())) }
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.ALREADY_PAIRED), forged.getCompleted())
-    }
-
-    @Test
-    fun `a device that holds a secret can't pair again until the host forgets it`() {
-        controller.openPairingWindow()
-        scheduler.runCurrent()
-        val first = scope.async { controller.authorizePeer(request("phone")) }
-        scheduler.runCurrent()
-        controller.resolvePairing(PairingChoice.ALLOW_CONTROL)
-        scheduler.runCurrent()
-        assertTrue(first.getCompleted() is PairingDecision.Allowed)
-
-        scheduler.advanceTimeBy(PROMPT_COOLDOWN_MS + 1)
-        controller.openPairingWindow()
-        scheduler.runCurrent()
-        val again = scope.async { controller.authorizePeer(request("phone")) }
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.ALREADY_PAIRED), again.getCompleted())
-        assertNull(controller.state.value.pendingPairing, "no prompt for an already-paired device")
-
-        controller.forgetPaired("phone")
-        val afterForget = scope.async { controller.authorizePeer(request("phone")) }
-        scheduler.runCurrent()
-        assertEquals(PairingPrompt("phone", "Phone"), controller.state.value.pendingPairing, "after Forget it may pair again")
-        controller.resolvePairing(PairingChoice.DENY)
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.NOT_AUTHORIZED), afterForget.getCompleted())
-    }
-
-    @Test
-    fun `a device remembered without a secret has to pair again`() {
-        remembered += PairedDevice("legacy", "Old phone", canControl = true)
-        val decision = scope.async { controller.authorizePeer(request("legacy")) }
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.PAIRING_CLOSED), decision.getCompleted())
-        assertTrue("legacy" !in controller.state.value.pairedWithSecret)
-    }
-
-    @Test
-    fun `one prompt at a time, a cooldown after it, and a denial is remembered`() {
-        controller.openPairingWindow()
-        scheduler.runCurrent()
-        val first = scope.async { controller.authorizePeer(request("a")) }
-        scheduler.runCurrent()
-        val second = scope.async { controller.authorizePeer(request("b")) }
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.BUSY), second.getCompleted(), "no queue of prompts")
-
-        controller.resolvePairing(PairingChoice.DENY)
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.NOT_AUTHORIZED), first.getCompleted())
-
-        val tooSoon = scope.async { controller.authorizePeer(request("c")) }
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.BUSY), tooSoon.getCompleted(), "cooldown between prompts")
-
-        scheduler.advanceTimeBy(PROMPT_COOLDOWN_MS + 1)
-        val deniedAgain = scope.async { controller.authorizePeer(request("a")) }
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.NOT_AUTHORIZED), deniedAgain.getCompleted())
-        assertNull(controller.state.value.pendingPairing, "a denied device is not prompted again")
-    }
-
-    @Test
-    fun `prompts per window are capped`() {
-        controller.openPairingWindow()
-        scheduler.runCurrent()
-        repeat(MAX_PROMPTS_PER_WINDOW) { i ->
-            val d = scope.async { controller.authorizePeer(request("p$i")) }
-            scheduler.runCurrent()
-            controller.resolvePairing(PairingChoice.DENY)
-            scheduler.runCurrent()
-            assertEquals(PairingDecision.Denied(DenyReason.NOT_AUTHORIZED), d.getCompleted())
-            scheduler.advanceTimeBy(PROMPT_COOLDOWN_MS + 1)
-        }
-        val over = scope.async { controller.authorizePeer(request("one-more")) }
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.BUSY), over.getCompleted())
-    }
-
-    @Test
-    fun `the window closes on its own and takes a pending prompt with it`() {
-        controller.openPairingWindow()
-        scheduler.runCurrent()
-        assertEquals(PAIRING_WINDOW_S, controller.state.value.pairingSecondsLeft)
-        val pending = scope.async { controller.authorizePeer(request("late")) }
-        scheduler.runCurrent()
-        assertNotNull(controller.state.value.pendingPairing)
-
-        scheduler.advanceTimeBy(PAIRING_WINDOW_S * 1_000L + 1)
+        assertTrue(controller.state.value.pairingSecondsLeft in (PAIRING_WINDOW_S - 1)..PAIRING_WINDOW_S, "${controller.state.value}")
+        controller.closePairingWindow()
         scheduler.runCurrent()
         assertEquals(0, controller.state.value.pairingSecondsLeft)
-        assertNull(controller.state.value.pendingPairing)
-        assertEquals(PairingDecision.Denied(DenyReason.PAIRING_CLOSED), pending.getCompleted(), "expired, not denied")
-
-        controller.openPairingWindow()
-        scheduler.runCurrent()
-        scheduler.advanceTimeBy(PROMPT_COOLDOWN_MS + 1)
-        scope.async { controller.authorizePeer(request("late")) }
-        scheduler.runCurrent()
-        assertNotNull(controller.state.value.pendingPairing, "an expired request may ask again")
     }
 
     @Test
@@ -311,46 +203,77 @@ class ProxyControllerModeTest {
         controller.openPairingWindow()
         scheduler.runCurrent()
         controller.switchToNormal()
-        scheduler.advanceTimeBy(1_000)
-        scheduler.runCurrent()
+        advance(1_000)
         assertEquals(0, controller.state.value.pairingSecondsLeft)
     }
 
     @Test
-    fun `forgetting a device drops its secret`() {
-        controller.openPairingWindow()
-        scheduler.runCurrent()
-        val run = scope.async { controller.authorizePeer(request("phone")) }
-        scheduler.runCurrent()
-        controller.resolvePairing(PairingChoice.ALLOW_CONTROL)
-        scheduler.runCurrent()
-        val secret = (run.getCompleted() as PairingDecision.Allowed).issuedSecret!!
-
-        controller.forgetPaired("phone")
-        assertTrue("phone" !in controller.state.value.pairedWithSecret)
-        val after = scope.async { controller.authorizePeer(request("phone", secret)) }
-        scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.PAIRING_CLOSED), after.getCompleted())
+    fun `forgetting a remote drops its pin`() {
+        controller.forgetRemote(pairedRemote.deviceId())
+        assertTrue(controller.state.value.pairedRemotes.isEmpty())
+        assertTrue(relayStore().also { it.load() }.remotes.isEmpty(), "the store forgot it too")
     }
 
     @Test
-    fun `the NSD instance id is random per launch, not the install id`() {
-        assertTrue(controller.instanceId != controller.deviceId)
-        val other = ProxyController(
-            app = ApplicationProvider.getApplicationContext(), json = Json { ignoreUnknownKeys = true }, scope = scope,
-            setCoreReadOnly = {}, setRecorderEnabled = {}, notify = {}, appendLog = {}, connect = {}, disconnect = {},
-            disconnectDevices = {}, connectScale = {}, scaleAttachWanted = { false }, de1Connected = { false },
-            machineStateName = { null }, machineActions = RecordingMachineActions(), snapshotConfig = { "" }, applyConfig = {},
-            roster = { emptyList() }, isSnapshotChar = { _, _ -> false }, pairedDevices = { emptyList() },
-            rememberPaired = { _, _, _ -> }, onModeApplied = { _, _, _ -> }, secretBox = box,
-        )
+    fun `resetting the pairing key clears every pin and makes a remote normal`() {
+        remoteOnDeadHub()
+        val before = (relayStore().load() as RelayKeyLoad.Ready).keys.deviceId()
+        controller.resetPairingKey()
+        advance(1_000)
+        assertEquals("normal", controller.state.value.role)
+        assertTrue(controller.state.value.pairedRemotes.isEmpty())
+        assertTrue(controller.state.value.pairedHubs.isEmpty())
+        val after = (relayStore().load() as RelayKeyLoad.Ready).keys.deviceId()
+        assertNotEquals(before, after, "a new key")
+    }
+
+    @Test
+    fun `a keystore that isn't ready keeps the relay off and resetting is the way out`() {
+        keystore.notReady = true
+        val unavailable = newController()
         try {
-            assertEquals(controller.deviceId, other.deviceId, "the install id is stable")
-            assertTrue(other.instanceId != controller.instanceId, "the advertised id is not")
+            assertTrue(unavailable.state.value.relayKeysUnavailable)
+            unavailable.setHubMode(true)
+            advance(1_000)
+            assertTrue(log.any { "LAN relay not started" in it }, "$log")
+            assertTrue(log.none { "LAN relay listening" in it })
+            keystore.notReady = false
+            unavailable.resetPairingKey()
+            advance(1_000)
+            assertFalse(unavailable.state.value.relayKeysUnavailable, "a new key after the user's reset")
+            assertTrue(java.io.File(app.filesDir, RelayKeyStore.LOST_DIR).listFiles()!!.isNotEmpty(), "the unreadable file kept aside")
+        } finally {
+            unavailable.close()
+        }
+    }
+
+    @Test
+    fun `the NSD instance id is random per launch`() {
+        val other = newController(appendLog = {})
+        try {
+            assertTrue(other.instanceId != controller.instanceId)
         } finally {
             other.close()
         }
     }
+
+    @Test
+    fun `refusals map to what the remote shows`() {
+        assertTrue(refusalMessage("Revoked", "Hub").contains("removed this device"))
+        assertTrue(refusalMessage("NotPaired", "Hub").contains("Pair again"))
+        assertTrue(refusalMessage("HubStopped", "Hub").contains("turned off Hub mode"))
+        assertTrue(refusalMessage("HubUnverified", "Hub").startsWith("Couldn't verify Hub"))
+        assertTrue(refusalMessage("HostMismatch", "Hub").startsWith("Couldn't verify Hub"))
+        assertTrue(refusalMessage("HubOutdated", "Hub").contains("older Crema"))
+        assertTrue(refusalMessage("Version", "Hub").contains("Update Crema"))
+        assertTrue(refusalMessage("PairingClosed", "Hub").contains("Pair a device"))
+        assertTrue(refusalMessage("Busy", "Hub").contains("pairing another device"))
+        assertTrue(refusalMessage("LockedOut", "Hub").contains("too many wrong codes"))
+        assertTrue(refusalMessage("Cancelled", "Hub").contains("cancelled"))
+        assertTrue(refusalMessage("Timeout", "Hub").contains("expired"))
+    }
+
+    // ── Commands and roles ─────────────────────────────────────────────────
 
     @Test
     fun `a relayed control is checked before it is dispatched`() = runBlocking {
@@ -368,86 +291,66 @@ class ProxyControllerModeTest {
         controller.machine.execute(MachineCommand.SetQc(QcField.GRIND, 14.5f))
         assertEquals(listOf("commit(${MachineCommand.SetQc(QcField.GRIND, 14.5f)})"), actions.applied.toList())
 
+        pinHub()
         controller.switchToSecondary("127.0.0.1", 9)
-        scheduler.advanceTimeBy(1_000)
-        scheduler.runCurrent()
+        advance(1_000)
         actions.applied.clear()
         controller.machine.execute(MachineCommand.TareScale)
         assertTrue(actions.applied.isEmpty(), "a mirror forwards machine control and applies nothing itself")
 
         controller.switchToNormal()
-        scheduler.advanceTimeBy(1_000)
-        scheduler.runCurrent()
+        advance(1_000)
         controller.machine.execute(MachineCommand.TareScale)
         assertEquals(listOf("tareScale"), actions.applied.toList())
     }
 
     @Test
-    fun `only the user's pick clears the pin, an unattended re-mirror keeps it`() {
-        assertEquals(ProxyController.MirrorTrust(repin = false, allowRepair = false), ProxyController.MirrorTrust.UNATTENDED)
-        controller.pairingStore.pinHost("host-1")
+    fun `a picked hub this device pinned resumes, an unpinned one pairs first`() {
+        controller.switchToSecondary("127.0.0.1", 9)
+        advance(200)
+        assertTrue(dials().isEmpty(), "an unpinned hub is never dialed for a resume")
+        assertTrue(controller.state.value.pairing !is PairingState.Idle, "the pick started pairing")
+        assertTrue(events.none { it == "applied:secondary" }, "no role change before pairing")
+        controller.cancelRemotePairing()
 
-        controller.remirrorUnattended("127.0.0.1", 9)
-        scheduler.advanceTimeBy(1_000)
-        scheduler.runCurrent()
+        pinHub()
+        controller.switchToSecondary("127.0.0.1", 9)
+        advance(1_000)
+        assertEquals(listOf("127.0.0.1:9"), dials(), "a pinned hub resumes")
         assertEquals("applied:secondary", events.last { it.startsWith("applied") })
-        assertEquals("host-1", controller.pairingStore.pinnedHost, "an unattended re-mirror leaves the pin alone")
-
-        controller.switchToSecondary("127.0.0.1", 9)
-        scheduler.advanceTimeBy(1_000)
-        scheduler.runCurrent()
-        assertEquals(null, controller.pairingStore.pinnedHost, "the user's pick starts a new pin")
     }
 
     @Test
-    fun `each queued secondary switch keeps its own trust`() {
-        controller.pairingStore.pinHost("host-1")
-        // A user pick, then an unattended re-mirror, both queued before either runs.
-        controller.switchToSecondary("127.0.0.1", 9)
+    fun `a remote without a hub pin doesn't dial`() {
         controller.remirrorUnattended("127.0.0.1", 9)
-        scheduler.advanceTimeBy(1_000)
-        scheduler.runCurrent()
-        assertEquals(listOf("applied:secondary", "applied:secondary"), events.filter { it.startsWith("applied") })
-        assertNull(controller.pairingStore.pinnedHost, "the user's pick (run first) cleared the pin; the unattended one kept it cleared")
+        advance(1_000)
+        assertEquals("secondary", controller.state.value.role)
+        assertTrue(dials().isEmpty())
+        assertTrue(log.any { "has to pair with the hub again" in it }, "$log")
     }
 
     @Test
-    fun `forgetting a host on this device drops its secret and its pin`() {
-        controller.pairingStore.putHeld("host-1", PairingCrypto.newSecret())
-        controller.pairingStore.pinHost("host-1")
-        controller.forgetHost("host-1")
-        assertNull(controller.pairingStore.heldSecret("host-1"))
-        assertNull(controller.pairingStore.pinnedHost)
-        assertNull(controller.state.value.changedHost)
-    }
-
-    @Test
-    fun `denied reasons map to what the secondary shows`() {
-        assertTrue(deniedMessage(DenyReason.PAIRING_CLOSED).contains("Pair a device"))
-        assertTrue(deniedMessage(DenyReason.VERSION_MISMATCH).contains("Update Crema"))
-        assertTrue(deniedMessage("version mismatch — update Crema on both devices").contains("Update Crema"))
-        assertTrue(deniedMessage(DenyReason.REVOKED).contains("pair again"))
-        assertTrue(deniedMessage(DenyReason.BUSY).contains("busy"))
-        assertTrue(deniedMessage(DenyReason.ALREADY_PAIRED).contains("Forget"))
-        assertTrue(deniedMessage(DenyReason.HOST_MISMATCH).contains("Other devices"))
-        assertTrue(deniedMessage(DenyReason.HOST_UNVERIFIED).contains("Other devices"))
-        assertTrue(deniedMessage(DenyReason.HOST_CHANGED).contains("forget it on this device"))
-        assertEquals("The host hasn't allowed this device", deniedMessage(DenyReason.NOT_AUTHORIZED))
+    fun `forgetting the saved hub on a remote makes it normal`() {
+        remoteOnDeadHub()
+        assertTrue(controller.state.value.let { it.pairedHubs.isNotEmpty() || controller.relayStore.hubs.isNotEmpty() })
+        controller.forgetHub("hub-1")
+        advance(1_000)
+        assertEquals("normal", controller.state.value.role)
+        assertTrue(controller.relayStore.hubs.isEmpty())
+        assertFalse(controller.state.value.pairedHubPinned)
     }
 
     /** AC-6: the Hub mode switch applies live, both ways, with no restart. */
     @Test
     fun `hub mode switches live`() {
         controller.setHubMode(true)
-        scheduler.advanceTimeBy(1_000)
-        scheduler.runCurrent()
+        advance(1_000)
         assertEquals("primary", controller.state.value.role)
         assertEquals(listOf("teardown", "applied:primary", "connect"), events.toList(), "on: reconnect as the hub")
 
         events.clear()
         controller.setHubMode(false)
-        scheduler.advanceTimeBy(1_000)
-        scheduler.runCurrent()
+        advance(1_000)
         assertEquals("normal", controller.state.value.role)
         assertTrue("applied:normal" in events, "$events")
     }
@@ -460,13 +363,11 @@ class ProxyControllerModeTest {
     fun `hub mode off leaves the machine free`() {
         controller.modeSwitchProbe = { role -> events += "probe:$role" }
         controller.setHubMode(true)
-        scheduler.advanceTimeBy(1_000)
-        scheduler.runCurrent()
+        advance(1_000)
         events.clear()
 
         controller.setHubMode(false)
-        scheduler.advanceTimeBy(10_000)
-        scheduler.runCurrent()
+        advance(10_000)
         assertEquals(listOf("probe:normal", "disconnect", "teardown", "applied:normal"), events.toList())
         assertTrue("connect" !in events, "the stepped-down hub must not reconnect: $events")
 
@@ -474,12 +375,13 @@ class ProxyControllerModeTest {
         events.clear()
         flashing = true
         controller.setHubMode(true)
-        scheduler.advanceTimeBy(1_000)
-        scheduler.runCurrent()
+        advance(1_000)
         assertEquals("normal", controller.state.value.role)
         assertTrue(events.isEmpty(), "$events")
         assertTrue(log.any { it.contains("refused") && it.contains(FIRMWARE_BUSY_REASON) }, "$log")
     }
+
+    // ── The re-find (spec §3.3, narrowed by validation P1b) ─────────────────
 
     /** AC-9: once its session has gone unwelcomed for refindDelayMs, a remote
      *  dials a hub NSD lists on its saved host at a new port — with or
@@ -501,7 +403,7 @@ class ProxyControllerModeTest {
         assertEquals("127.0.0.1:9", dials().last(), "not before the delay")
         advance(1_500)
         assertEquals("127.0.0.1:12", dials().last())
-        assertEquals("host-1", controller.pairingStore.pinnedHost, "unattended: the pin is kept")
+        assertEquals("hub-1", controller.relayStore.savedHub, "unattended: the pin is kept")
         assertEquals("secondary", controller.state.value.role)
         assertEquals("secondary 127.0.0.1:9", targets.last(), "an attempt isn't saved before its Welcome")
     }
@@ -530,7 +432,7 @@ class ProxyControllerModeTest {
         val switches = events.count { it == "teardown" }
 
         controller.holdRefind(true)
-        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        controller.refuseCurrentSessionForTest("HostMismatch", authenticated = false)
         advance(1_000)
         assertEquals("127.0.0.1:12", dials().last(), "no go-back while held")
         assertEquals(switches, events.count { it == "teardown" }, "no switch at all while held")
@@ -572,20 +474,19 @@ class ProxyControllerModeTest {
     }
 
     /**
-     * AC-9 as narrowed (validation P1b): a refused attempt goes back to the
-     * saved target (a refused link never redials), and the next try waits
-     * 5 s, then 15 s, then 60 s. Nothing is skipped by instance id, so the
-     * same port is tried again. After three refusals the remote gives up
-     * ("Couldn't verify <hub>") and stays a remote, until NSD lists a new
-     * port on the saved host.
+     * AC-9 and AC-27 (controller half): an advisory refusal of a re-find
+     * attempt goes back to the saved target (a refused link never redials),
+     * and the next try waits 5 s, then 15 s, then 60 s. After three in a row
+     * the remote gives up ("Couldn't verify <hub>") and stays a remote, with
+     * its pin, until NSD lists a new port on the saved host.
      */
     @Test
-    fun `an unattended refusal keeps the remote role`() {
+    fun `an advisory refusal keeps the remote role`() {
         val peers = remoteOnDeadHub(peer("a", 12))
         advance(REFIND_DELAY_MS + 200)
         assertEquals("127.0.0.1:12", dials().last())
 
-        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        controller.refuseCurrentSessionForTest("HostMismatch", authenticated = false)
         advance(200)
         assertEquals("127.0.0.1:9", dials().last(), "the saved target is dialed again")
         assertEquals("secondary", controller.state.value.role)
@@ -594,7 +495,7 @@ class ProxyControllerModeTest {
         advance(600)
         assertEquals("127.0.0.1:12", dials().last())
 
-        controller.refuseCurrentSessionForTest(DenyReason.HOST_CHANGED, byHost = false, hostProved = false)
+        controller.refuseCurrentSessionForTest("HubUnverified", authenticated = false)
         advance(200)
         assertEquals("127.0.0.1:9", dials().last())
         advance(14_000)
@@ -602,15 +503,15 @@ class ProxyControllerModeTest {
         advance(1_200)
         assertEquals("127.0.0.1:12", dials().last())
 
-        // A host's Denied before it proved the pairing is just as unverified.
-        controller.refuseCurrentSessionForTest(DenyReason.REVOKED, byHost = true, hostProved = false)
+        // An ABORT is just as advisory.
+        controller.refuseCurrentSessionForTest("BUSY", authenticated = false)
         advance(200)
         assertEquals("127.0.0.1:9", dials().last())
         assertFalse(controller.state.value.refindGaveUp, "not before the 60 s back-off")
         advance(60_000)
         assertTrue(controller.state.value.refindGaveUp, "three refusals")
         assertEquals("secondary", controller.state.value.role)
-        assertEquals("host-1", controller.pairingStore.pinnedHost)
+        assertEquals("hub-1", controller.relayStore.savedHub, "the pin is kept")
         val dialed = dials().size
         advance(120_000)
         assertEquals(dialed, dials().size, "it stops trying")
@@ -630,10 +531,10 @@ class ProxyControllerModeTest {
         remoteOnDeadHub(peer("a-bad", 12), peer("b-hub", 13))
         advance(REFIND_DELAY_MS + 200)
         assertEquals("127.0.0.1:12", dials().last(), "NSD's order for ports never tried")
-        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        controller.refuseCurrentSessionForTest("HostMismatch", authenticated = false)
         advance(REFIND_BACKOFF_MS[0] + REFIND_DELAY_MS)
         assertEquals("127.0.0.1:13", dials().last(), "the other port next")
-        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        controller.refuseCurrentSessionForTest("HostMismatch", authenticated = false)
         advance(REFIND_BACKOFF_MS[1] + REFIND_DELAY_MS)
         assertEquals("127.0.0.1:12", dials().last(), "then the one tried longest ago")
     }
@@ -645,10 +546,10 @@ class ProxyControllerModeTest {
     fun `a hub back on its saved port resumes after a give-up`() {
         val peers = remoteOnDeadHub(peer("hub-before", 9))
         repeat(3) {
-            controller.refuseCurrentSessionForTest(DenyReason.BUSY, byHost = true, hostProved = false)
+            controller.refuseCurrentSessionForTest("BUSY", authenticated = false)
             advance(REFIND_BACKOFF_MS[it] + 200)
         }
-        assertTrue(controller.state.value.refindGaveUp, "three unproven refusals: ${dials()}")
+        assertTrue(controller.state.value.refindGaveUp, "three advisory refusals: ${dials()}")
         val dialed = dials().size
         advance(120_000)
         assertEquals(dialed, dials().size, "stopped")
@@ -660,9 +561,9 @@ class ProxyControllerModeTest {
         assertEquals("127.0.0.1:9", dials().last())
     }
 
-    /** Validation P1b S1/S3: the re-find never dials another address, so an
-     *  advertiser elsewhere on the LAN can't relay or hide the hub, even
-     *  with the hub's own instance id and a name that sorts first. */
+    /** Validation P1b S1/S3 (kept until the owner's follow-up widens it): the
+     *  re-find never dials another address, even an advertiser with the hub's
+     *  own instance id and a name that sorts first. */
     @Test
     fun `the re-find dials only the saved host`() {
         remoteOnDeadHub(
@@ -672,31 +573,27 @@ class ProxyControllerModeTest {
         )
         advance(REFIND_DELAY_MS + 200)
         assertEquals("127.0.0.1:13", dials().last())
-        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        controller.refuseCurrentSessionForTest("HostMismatch", authenticated = false)
         advance(REFIND_BACKOFF_MS.sum() + REFIND_DELAY_MS * 6)
         assertTrue(dials().all { it.startsWith("127.0.0.1:") }, "${dials()}")
     }
 
-    /** Validation P1b S6: the re-find needs a target pinned to a host this
-     *  device paired with, so it never runs from a user's pick still waiting
-     *  for its Welcome (the pick clears the pin). */
+    /** Validation P1b S6: the re-find never runs from a user's pick still
+     *  waiting for its Welcome. */
     @Test
-    fun `no re-find from an unpinned target or an unwelcomed user pick`() {
+    fun `no re-find from an unwelcomed user pick`() {
+        pinHub()
         controller.switchToSecondary("127.0.0.1", 9)
         advance(200)
         controller.overridePeers(MutableStateFlow(listOf(peer("nsd-restarted", 12))))
         advance(REFIND_DELAY_MS * 4)
-        assertEquals(listOf("127.0.0.1:9"), dials(), "the user's pick, unpinned")
-
-        controller.pairingStore.pinHost("host-1")
-        advance(REFIND_DELAY_MS * 4)
-        assertEquals(listOf("127.0.0.1:9"), dials(), "a pin doesn't make an unwelcomed pick unattended")
+        assertEquals(listOf("127.0.0.1:9"), dials(), "the user's pick, not welcomed")
     }
 
-    /** Validation P1b S2 / M3, the handshake deadline: an attempt that isn't
-     *  welcomed within refindDelayMs ends, whatever its socket does. It
-     *  counts as a refusal, the remote goes back to the saved target, and
-     *  the attempt's port is never saved. */
+    /** Validation P1b S2 / M3, the deadline: an attempt that isn't welcomed
+     *  within refindDelayMs ends, whatever its socket does. It counts as a
+     *  refusal, the remote goes back to the saved target, and the attempt's
+     *  port is never saved. */
     @Test
     fun `an attempt not welcomed in time ends and is not saved`() {
         remoteOnDeadHub(peer("silent", 12))
@@ -714,46 +611,44 @@ class ProxyControllerModeTest {
         assertEquals("secondary", controller.state.value.role)
     }
 
-    /** AC-9 as narrowed (validation P1b S5, S7): only a Denied from a host
-     *  that proved the pairing in this session, or a refused user pick
-     *  before its Welcome, make a remote normal. Any unproven refusal of the
-     *  saved target keeps the role, and the saved target is dialed again
-     *  after the back-off. */
+    /**
+     * AC-27 (controller half), spec §2.9: only an authenticated `Revoked` /
+     * `NotPaired` makes a remote normal (and drops its pin). Advisory
+     * refusals keep the role and pin, even on the user's own pick; a
+     * non-terminal `HubStopped` keeps everything and counts nothing.
+     */
     @Test
-    fun `only a proved denied or a refused user pick makes a remote normal`() {
+    fun `only an authenticated revoke makes a remote normal`() {
         remoteOnDeadHub()
-        controller.refuseCurrentSessionForTest(DenyReason.HOST_UNVERIFIED, byHost = false, hostProved = false)
+        controller.refuseCurrentSessionForTest("HubUnverified", authenticated = false)
         advance(1_000)
-        assertEquals("secondary", controller.state.value.role, "the saved target refused for trust: still a remote")
+        assertEquals("secondary", controller.state.value.role, "couldn't verify the hub: still a remote")
         advance(REFIND_BACKOFF_MS[0])
         assertEquals(listOf("127.0.0.1:9", "127.0.0.1:9"), dials(), "dialed again after the back-off")
 
-        controller.refuseCurrentSessionForTest(DenyReason.PAIRING_CLOSED, byHost = true, hostProved = false)
+        controller.refuseCurrentSessionForTest("PAIRING_CLOSED", authenticated = false)
         advance(1_000)
-        assertEquals("secondary", controller.state.value.role, "a bare Denied from the saved target: still a remote")
-        controller.refuseCurrentSessionForTest(DenyReason.BUSY, byHost = true, hostProved = false)
+        assertEquals("secondary", controller.state.value.role, "an ABORT: still a remote")
+        controller.refuseCurrentSessionForTest("HubStopped", authenticated = true, terminal = false)
         advance(1_000)
-        assertEquals("secondary", controller.state.value.role)
+        assertEquals("secondary", controller.state.value.role, "Hub mode off on the hub: still a remote")
+        assertTrue(notices.any { "turned off Hub mode" in it }, "$notices")
 
         controller.remirrorUnattended("127.0.0.1", 9)
         advance(200)
-        controller.refuseCurrentSessionForTest(DenyReason.REVOKED, byHost = true, hostProved = true)
+        controller.refuseCurrentSessionForTest("Revoked", authenticated = true)
         advance(1_000)
-        assertEquals("normal", controller.state.value.role, "a Denied after the host proved the pairing")
+        assertEquals("normal", controller.state.value.role, "an authenticated revoke")
+        assertNull(controller.relayStore.savedHub, "the hub's pin is dropped")
+        assertTrue(controller.relayStore.hubs.isEmpty())
 
-        // A re-find attempt that proved the pairing and then refused us.
-        remoteOnDeadHub(peer("a", 12))
-        advance(REFIND_DELAY_MS + 200)
-        assertEquals("127.0.0.1:12", dials().last())
-        controller.refuseCurrentSessionForTest(DenyReason.VERSION_MISMATCH, byHost = false, hostProved = true)
-        advance(1_000)
-        assertEquals("normal", controller.state.value.role, "a version refusal after a proof")
-
-        controller.switchToSecondary("127.0.0.1", 9) // the user's pick
+        // A user's pick refused by an advisory signal keeps the role too (§2.9).
+        pinHub()
+        controller.switchToSecondary("127.0.0.1", 9)
         advance(200)
-        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        controller.refuseCurrentSessionForTest("HostMismatch", authenticated = false)
         advance(1_000)
-        assertEquals("normal", controller.state.value.role, "a refused user pick")
+        assertEquals("secondary", controller.state.value.role, "advisory: wording only")
     }
 
     /** Run the controller's scope until [done] holds, for work that crosses
@@ -772,7 +667,7 @@ class ProxyControllerModeTest {
      *  taken port falls back to an ephemeral one, which is saved instead. */
     @Test
     fun `the hub binds its last relay port again`() {
-        val portFile = java.io.File(ApplicationProvider.getApplicationContext<Application>().filesDir, "relayPort")
+        val portFile = java.io.File(app.filesDir, "relayPort")
         val wanted = java.net.ServerSocket(0).use { it.localPort }
         portFile.writeText("$wanted")
         controller.setHubMode(true)
@@ -795,28 +690,16 @@ class ProxyControllerModeTest {
         }
     }
 
-    /** P2a validation: a restarting hub doesn't serve before its prefs (the
-     *  paired devices) are loaded, so a paired remote that dials at once meets
-     *  a closed port and redials, and is admitted once loading finishes: no
-     *  Denied, so nothing for it to count or demote on. */
+    /** P2a validation: a restarting hub doesn't serve before its prefs load,
+     *  so a paired remote that dials at once meets a closed port and redials,
+     *  then resumes once the relay serves: no refusal at any point. */
     @Test
     fun `a loading hub doesn't refuse a paired remote`() {
-        val app = ApplicationProvider.getApplicationContext<Application>()
         val port = java.net.ServerSocket(0).use { it.localPort }
         java.io.File(app.filesDir, "relayPort").writeText("$port")
-        val paired = CopyOnWriteArrayList<PairedDevice>()
         val loaded = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val hub = ProxyController(
-            app = app, json = Json { ignoreUnknownKeys = true }, scope = scope,
-            setCoreReadOnly = {}, setRecorderEnabled = {}, notify = {}, appendLog = { log += it }, connect = {}, disconnect = {},
-            disconnectDevices = {}, connectScale = {}, scaleAttachWanted = { false }, de1Connected = { false },
-            machineStateName = { null }, machineActions = RecordingMachineActions(), snapshotConfig = { "" }, applyConfig = {},
-            roster = { emptyList() }, isSnapshotChar = { _, _ -> false }, pairedDevices = { paired.toList() },
-            rememberPaired = { _, _, _ -> }, onModeApplied = { _, _, _ -> }, secretBox = box,
-            prefsReady = { loaded.await() },
-        )
-        val secret = PairingCrypto.newSecret()
-        hub.pairingStore.putIssued("phone-1", secret)
+        val hub = newController(prefsReady = { loaded.await() })
+        val hubKeys = (relayStore().load() as RelayKeyLoad.Ready).keys
         val remoteScope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         val refusals = CopyOnWriteArrayList<String>()
         val welcomed = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -824,10 +707,9 @@ class ProxyControllerModeTest {
             hub.setHubMode(true)
             advance(1_000)
             // The remote dials the hub's saved port straight away.
-            val link = coffee.crema.ble.proxy.ReconnectingClientLink("ws://127.0.0.1:$port${coffee.crema.ble.proxy.LanRelayServer.PATH}", remoteScope)
-            coffee.crema.ble.proxy.ProxyTransport(
-                link, remoteScope, "phone-1", "Phone",
-                pairingSecretFor = { secret }, allowRepair = false,
+            val link = ReconnectingClientLink("ws://127.0.0.1:$port${LanRelayServer.PATH}", remoteScope, pairedRemote, hubKeys.publicKey())
+            ProxyTransport(
+                link, remoteScope,
                 onRefused = { reason, _, _ -> refusals += reason },
                 onWelcome = { _, _ -> welcomed.set(true) },
             )
@@ -837,11 +719,9 @@ class ProxyControllerModeTest {
                 Thread.sleep(10)
             }
             assertTrue(log.none { "LAN relay listening" in it }, "not serving while loading: $log")
-            assertEquals(emptyList(), refusals.toList(), "no Denied while loading")
+            assertEquals(emptyList(), refusals.toList(), "no refusal while loading")
             assertFalse(welcomed.get())
 
-            // Loading finishes: the paired devices are known, the relay serves.
-            paired += PairedDevice("phone-1", "Phone", canControl = true)
             loaded.complete(Unit)
             runUntil("the relay") { log.any { "LAN relay listening on :$port" in it } }
             runUntil("the remote's welcome") { welcomed.get() }
@@ -898,40 +778,16 @@ class ProxyControllerModeTest {
         assertTrue(log.any { it.contains("Mode switch to normal refused") && it.contains(FIRMWARE_BUSY_REASON) }, "$log")
     }
 
-    /** Validation D5: whether this device holds a secret for its pinned hub
-     *  is cached in the state and needs no keystore decrypt, however often
-     *  the state changes. */
+    /** The pinned-hub flag follows the store's saved hub. */
     @Test
-    fun `the pinned-hub flag is cached and never decrypts`() {
-        var opens = 0
-        val countingBox = SecretBox(object : SecretCipher {
-            override fun seal(plain: ByteArray) = ByteArray(12) + plain
-            override fun open(sealed: ByteArray): ByteArray {
-                opens++
-                return sealed.copyOfRange(12, sealed.size)
-            }
-        })
-        controller.pairingStore.putHeld("host-1", PairingCrypto.newSecret())
-        controller.pairingStore.pinHost("host-1")
-        val other = ProxyController(
-            app = ApplicationProvider.getApplicationContext(), json = Json { ignoreUnknownKeys = true }, scope = scope,
-            setCoreReadOnly = {}, setRecorderEnabled = {}, notify = {}, appendLog = {}, connect = {}, disconnect = {},
-            disconnectDevices = {}, connectScale = {}, scaleAttachWanted = { false }, de1Connected = { false },
-            machineStateName = { null }, machineActions = RecordingMachineActions(), snapshotConfig = { "" }, applyConfig = {},
-            roster = { emptyList() }, isSnapshotChar = { _, _ -> false }, pairedDevices = { emptyList() },
-            rememberPaired = { _, _, _ -> }, onModeApplied = { _, _, _ -> }, secretBox = countingBox,
-        )
+    fun `the pinned-hub flag follows the saved hub's pin`() {
+        assertFalse(controller.state.value.pairedHubPinned)
+        pinHub()
+        val other = newController(appendLog = {})
         try {
             assertTrue(other.state.value.pairedHubPinned)
-            val peers = MutableStateFlow<List<Peer>>(emptyList())
-            other.overridePeers(peers)
-            repeat(50) { i ->
-                peers.value = listOf(peer("p$i", 1_000 + i))
-                scheduler.runCurrent()
-            }
-            assertEquals(0, opens, "no decrypt per state change")
-            other.forgetHost("host-1")
-            assertFalse(other.state.value.pairedHubPinned, "forgetting the host refreshes the cached flag")
+            other.forgetHub("hub-1")
+            assertFalse(other.state.value.pairedHubPinned, "forgetting the hub clears it")
         } finally {
             other.close()
         }

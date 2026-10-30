@@ -34,7 +34,6 @@ class ProxyFaultTest {
     private fun TestScope.stack(proxyScope: CoroutineScope = backgroundScope): Stack {
         val (client, server) = CodecFrameLink.pair(backgroundScope)
         val hub = RelayHub(
-            primaryId = "host-1",
             primaryName = "Tablet",
             roster = { listOf(DeviceInfo("AA:BB:CC:DD:EE:FF", "DE1", "de1", "CONNECTED")) },
             readSource = { _, _, _ -> error("no reads in this test") },
@@ -44,8 +43,8 @@ class ProxyFaultTest {
                 Result.success(Unit)
             },
         )
-        backgroundScope.launch { hub.serve(server) }
-        val proxy = ProxyTransport(client, proxyScope, "phone-1", "Phone", requestTimeoutMs = TIMEOUT_MS)
+        backgroundScope.launch { hub.serve(server, TEST_PEER) }
+        val proxy = ProxyTransport(client, proxyScope, requestTimeoutMs = TIMEOUT_MS)
         return Stack(proxy, client, server)
     }
 
@@ -53,17 +52,16 @@ class ProxyFaultTest {
         filter { "\"type\":\"$type\"" in it }.map { FrameCodec.decode(it) }
 
     @Test
-    fun `a request waits out a delayed Hello and never overtakes the handshake`() = runTest {
+    fun `a request waits out a delayed Welcome and never overtakes it`() = runTest {
         val s = stack()
-        s.client.faults.delay(1_000) { it is Frame.Hello }
+        s.server.faults.delay(1_000) { it is Frame.Welcome }
 
         val result = s.proxy.control("tareScale")
 
         assertTrue(result.isSuccess, "$result")
-        assertTrue(currentTime >= 1_000, "the control went out only after the delayed Hello: t=$currentTime")
+        assertTrue(currentTime >= 1_000, "the control went out only after the delayed Welcome: t=$currentTime")
         assertEquals(listOf("tareScale" to ""), handled.toList())
-        val wire = s.client.sentText
-        assertTrue(wire.indexOfFirst { "\"hello\"" in it } < wire.indexOfFirst { "\"control\"" in it }, "$wire")
+        assertEquals(1, s.client.sentText.count { "\"control\"" in it }, "${s.client.sentText}")
     }
 
     @Test

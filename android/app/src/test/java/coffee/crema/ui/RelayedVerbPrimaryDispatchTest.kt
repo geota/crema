@@ -1,5 +1,6 @@
 package coffee.crema.ui
 
+import coffee.crema.ble.proxy.TEST_PEER
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.ble.proxy.CodecFrameLink
@@ -96,21 +97,13 @@ class RelayedVerbPrimaryDispatchTest {
         val hub: RelayHub = assertNotNull(VmHarness.proxyController(vm).relayHub, "the primary built its relay")
         val (clientEnd, serverEnd) = CodecFrameLink.pair(scope)
         client = clientEnd
-        scope.launch { hub.serve(serverEnd) }
+        scope.launch { hub.serve(serverEnd, TEST_PEER) }
         scope.launch { client.incoming().collect { replies += it } }
 
-        // Pair the way a new secondary does: the host opens its pairing
-        // window, the secondary asks to pair, the host allows control.
-        vm.openPairingWindow()
-        scope.launch { client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone", nonce = "bm9uY2U")) }
-        VmHarness.idle()
-        assertIs<Frame.Challenge>(replies.single())
-        scope.launch { client.send(Frame.Auth(proof = null)) }
-        VmHarness.idle()
-        assertEquals(PairingPrompt("phone-1", "Phone"), vm.ui.value.pendingPairing)
-        vm.resolvePairing(PairingChoice.ALLOW_CONTROL)
-        VmHarness.idle()
-        val welcome = assertIs<Frame.Welcome>(replies.last())
+        // Relay v4: the core admitted a remote paired with control before
+        // RelayHub.serve sees it, so the hub's Welcome comes first.
+        VmHarness.idleUntil("the Welcome") { replies.any { it is Frame.Welcome } }
+        val welcome = assertIs<Frame.Welcome>(replies.single())
         assertEquals("control", welcome.scope)
     }
 

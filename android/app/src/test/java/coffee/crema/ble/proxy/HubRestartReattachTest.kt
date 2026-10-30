@@ -12,7 +12,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -29,7 +28,7 @@ class HubRestartReattachTest {
 
     private val store = ViewModelStore()
     private val endpoints = mutableListOf<TestHubServer>()
-    private val secret = PairingCrypto.newSecret()
+    private val hubKeys = coffee.crema.core.RelayKeys.generate()
 
     @After
     fun tearDown() {
@@ -49,24 +48,20 @@ class HubRestartReattachTest {
         }
     }
 
-    private fun lifetime(configSource: () -> String = { "" }, clientId: () -> String): Pair<TestHubServer, RelayHub> =
-        TestHubServer.relay("host-1", "Kitchen tablet", secret, clientId = clientId, configSource = configSource)
+    /** One lifetime of the hub: the same key (and pin for [remote]) each time, a new port. */
+    private fun lifetime(remote: coffee.crema.core.RelayKeys, configSource: () -> String = { "" }): Pair<TestHubServer, RelayHub> =
+        TestHubServer.relay(remote, "Kitchen tablet", hubKeys, configSource = configSource)
             .also { endpoints += it.first }
 
     @Test
     fun `a restarted hub is re-found on its new port and the remote reattaches`() {
-        lateinit var vm: MainViewModel
-        val clientId = { VmHarness.proxyController(vm).deviceId }
         val firstConfig = """{"grinderModel":"Before the restart","rev":9}"""
-        val (first, firstHub) = lifetime(configSource = { firstConfig }, clientId = clientId)
-        // Restored as a remote of the first lifetime, paired and pinned (the
-        // secret stored the way a pre-keystore build did: Robolectric has no
-        // keystore, and the store still opens it).
-        File(VmHarness.app().filesDir, "proxy-pairing.json").writeText(
-            """{"hostId":"this-device","held":{"host-1":"$secret"},"pinnedHost":"host-1"}""",
-        )
+        // Restored as a remote of the first lifetime, paired: each side pinned the other's key.
+        val (relayStore, remote) = VmHarness.relayStore()
+        val (first, firstHub) = lifetime(remote, configSource = { firstConfig })
+        VmHarness.pinHub(relayStore, hubKeys, first.port)
         VmHarness.persistRole("secondary", "127.0.0.1", first.port)
-        vm = VmHarness.build(store)
+        val vm = VmHarness.build(store)
         VmHarness.idle()
         // The role and target reach the UI with the prefs load.
         VmHarness.awaitPrefsLoaded(vm)
@@ -88,15 +83,16 @@ class HubRestartReattachTest {
         assertEquals("Before the restart", vm.ui.value.grinderModel)
         assertTrue(VmHarness.ownState(vm).mirror!!.reconnecting)
         assertEquals("Reconnecting to Kitchen tablet…", vm.ui.value.remoteStatus())
-        val (second, secondHub) = lifetime(configSource = { """{"grinderModel":"After the restart","primaryName":"Kitchen tablet","rev":0}""" }, clientId = clientId)
+        val (second, secondHub) = lifetime(remote, configSource = { """{"grinderModel":"After the restart","primaryName":"Kitchen tablet","rev":0}""" })
         peers.value = listOf(Peer("nsd-second-lifetime", "Kitchen tablet", "primary", holdsDe1 = false, host = "127.0.0.1", port = second.port))
 
         advanceStepped(REFIND_DELAY_MS + 500)
         VmHarness.idleUntil("the second lifetime's welcome") { secondHub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
         assertEquals("secondary", proxy.state.value.role, "no role change")
         assertEquals(second.port, vm.ui.value.proxyPrimaryPort, "the new port is the target now")
-        assertEquals("host-1", proxy.pairingStore.pinnedHost, "unattended: the pin is unchanged")
-        assertTrue(second.auths.isNotEmpty() && second.auths.all { "\"proof\"" in it }, "proved the held secret, never asked to pair: ${second.auths}")
+        assertEquals(hubKeys.deviceId(), proxy.relayStore.savedHub, "unattended: the same hub, resumed")
+        assertEquals(second.port, proxy.relayStore.hubs.single().port, "the hub's pin follows it to its new port")
+        assertTrue(second.trust.requests.isEmpty(), "a re-find never pairs")
         assertEquals("Connected through Kitchen tablet", vm.ui.value.remoteStatus())
 
         // The fresh attach: the remote's DE1 attaches to the second lifetime,

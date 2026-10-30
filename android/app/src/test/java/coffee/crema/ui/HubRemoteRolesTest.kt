@@ -4,8 +4,10 @@ import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.proxy.DeviceInfo
-import coffee.crema.ble.proxy.MockWsServerLink
-import coffee.crema.ble.proxy.PairingCrypto
+import coffee.crema.ble.proxy.RelayHubPin
+import coffee.crema.ble.proxy.RelayKeyStore
+import coffee.crema.ble.proxy.TestHubServer
+import coffee.crema.core.RelayKeys
 import coffee.crema.ble.proxy.Peer
 import coffee.crema.ble.proxy.RelayHub
 import coffee.crema.settings.AppPrefs
@@ -16,15 +18,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
-import mockwebserver3.MockResponse
-import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
-import java.net.InetAddress
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -43,7 +42,7 @@ import kotlin.test.assertTrue
 class HubRemoteRolesTest {
 
     private val store = ViewModelStore()
-    private var server: MockWebServer? = null
+    private var hubEndpoint: TestHubServer? = null
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val hubScope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
 
@@ -52,7 +51,7 @@ class HubRemoteRolesTest {
         store.clear()
         VmHarness.idle()
         hubScope.cancel()
-        server?.close()
+        hubEndpoint?.kill()
     }
 
     private fun build(role: String = "normal", host: String = "", port: Int = 0): MainViewModel {
@@ -160,13 +159,10 @@ class HubRemoteRolesTest {
      *  saved target, with a held secret) is named in the warning. */
     @Test
     fun `a paired and pinned hub is named in the warning`() {
-        // Paired and pinned before this launch: the saved target, a held
-        // secret for its pinned host. (Robolectric has no keystore to seal
-        // with, so the secret is stored the way a pre-keystore build did,
-        // which the store still opens.)
-        File(VmHarness.app().filesDir, "proxy-pairing.json").writeText(
-            """{"hostId":"this-device","held":{"host-1":"${PairingCrypto.newSecret()}"},"pinnedHost":"host-1"}""",
-        )
+        // Paired before this launch: the hub's pin is this device's saved hub.
+        val (relayStore, _) = VmHarness.relayStore()
+        relayStore.pinHub(RelayHubPin("hub-1", RelayKeyStore.b64(RelayKeys.generate().publicKey()), "Kitchen tablet", "192.168.1.20", 8765, pinnedAtMs = 1))
+        relayStore.setSavedHub("hub-1")
         VmHarness.persistRole("normal", host = "192.168.1.20")
         val vm = VmHarness.build(store)
         VmHarness.idle()
@@ -205,21 +201,14 @@ class HubRemoteRolesTest {
     @Test
     fun `a remote follows its hub's welcome and roster`() {
         val roster = MutableStateFlow(listOf(DeviceInfo("AA:BB", "DE1", "de1", "CONNECTED")))
-        val primary = MockWsServerLink()
-        val hub = RelayHub(
-            primaryId = "host-1",
-            primaryName = "Test hub",
-            roster = { roster.value },
-            readSource = { _, _, _ -> error("no reads in this test") },
-            isSnapshotChar = { _, _ -> false },
-        )
-        val ws = MockWebServer().also { server = it }
-        ws.enqueue(MockResponse.Builder().webSocketUpgrade(primary).build())
-        ws.start(InetAddress.getLoopbackAddress(), 0)
-        hubScope.launch { hub.serve(primary) }
+        // Paired before: the remote pinned the hub and the hub pinned the remote.
+        val (relayStore, remote) = VmHarness.relayStore()
+        val (endpoint, hub) = TestHubServer.relay(remote, name = "Test hub", roster = { roster.value })
+        hubEndpoint = endpoint
+        VmHarness.pinHub(relayStore, endpoint.hubKeys, endpoint.port, name = "Test hub")
 
         val vm = build()
-        vm.switchToSecondary("127.0.0.1", ws.port)
+        vm.switchToSecondary("127.0.0.1", endpoint.port)
         VmHarness.advance(MODE_SWITCH_SETTLE_MS)
         VmHarness.idleUntil("the remote to be welcomed") { vm.ui.value.mirroringPrimaryName.isNotEmpty() }
         VmHarness.idleUntil("the hub's roster") { vm.ui.value.remoteHubHasMachine }

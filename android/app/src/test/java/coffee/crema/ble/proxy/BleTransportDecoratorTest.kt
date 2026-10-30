@@ -40,7 +40,7 @@ class BleTransportDecoratorTest {
         SwitchableBleTransport(delegate),
         TappingBleTransport(
             delegate,
-            RelayHub("p", "P", roster = { emptyList() }, readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false }),
+            RelayHub("P", roster = { emptyList() }, readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false }),
             scope,
         ),
     )

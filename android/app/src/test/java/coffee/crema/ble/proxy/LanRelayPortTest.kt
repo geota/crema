@@ -39,13 +39,8 @@ class LanRelayPortTest {
         Thread.setDefaultUncaughtExceptionHandler(previousHandler)
     }
 
-    private fun hub() = RelayHub(
-        primaryId = "host-1",
-        primaryName = "Kitchen tablet",
-        roster = { emptyList() },
-        readSource = { _, _, _ -> ByteArray(0) },
-        isSnapshotChar = { _, _ -> false },
-    )
+    /** The port tests only bind and accept: no session is served. */
+    private val NOOP_HANDLER: suspend (io.ktor.websocket.WebSocketSession, String) -> Unit = { _, _ -> }
 
     /** A port nothing listens on right now. */
     private fun freePort(): Int = ServerSocket(0).use { it.localPort }
@@ -76,7 +71,7 @@ class LanRelayPortTest {
     @Test
     fun `a free requested port is the one it binds`() {
         val wanted = freePort()
-        val server = LanRelayServer(hub(), requestedPort = wanted)
+        val server = LanRelayServer(NOOP_HANDLER, requestedPort = wanted)
         try {
             assertEquals(wanted, runBlocking { server.start() })
             assertTrue(accepts(wanted))
@@ -88,11 +83,11 @@ class LanRelayPortTest {
 
     @Test
     fun `a taken port falls back to an ephemeral one`() =
-        fallsBack { taken -> LanRelayServer(hub(), requestedPort = taken) }
+        fallsBack { taken -> LanRelayServer(NOOP_HANDLER, requestedPort = taken) }
 
     /** The port is taken between the probe and CIO's bind: CIO's own failure
      *  is caught too, and nothing escapes its accept job. */
     @Test
     fun `a port taken after the probe still falls back without leaking`() =
-        fallsBack { taken -> LanRelayServer(hub(), requestedPort = taken, isPortFree = { true }) }
+        fallsBack { taken -> LanRelayServer(NOOP_HANDLER, requestedPort = taken, isPortFree = { true }) }
 }
