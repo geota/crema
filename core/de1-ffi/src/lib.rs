@@ -2501,6 +2501,15 @@ impl CremaBridge {
         self.emit(self.core().on_scale_write_result(ok))
     }
 
+    /// The last finished shot as a `StoredShot` JSON (or `null`), assembled by
+    /// the core from its own record and the shell's `ShotCaptureContext` JSON.
+    /// Call it on `ShotCompleted`; one-shot. See `CremaCore::take_stored_shot`.
+    pub fn take_stored_shot(&self, ctx_json: String) -> Result<String, CremaError> {
+        self.core()
+            .take_stored_shot_json(&ctx_json)
+            .map_err(crema_err)
+    }
+
     // ── Guided brew sessions (issue #10) ─────────────────────────
 
     /// Arm a guided brew session for a JSON-encoded `BrewRecipe`.

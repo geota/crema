@@ -142,6 +142,14 @@ impl ProfileSync {
         }
     }
 
+    /// The desired library profile and its overrides, when this connection
+    /// pushed it and the DE1 still holds it — what a shot starting now runs.
+    pub(crate) fn held_profile(&self) -> Option<(&CremaProfile, &BrewOverrides)> {
+        let desired = self.desired.as_ref()?;
+        (self.last_pushed.as_deref() == Some(desired.fingerprint.as_str()))
+            .then_some((&desired.profile, &desired.qc))
+    }
+
     /// The desired library profile and its overrides, if any.
     fn desired_profile(&self) -> Option<(&CremaProfile, &BrewOverrides)> {
         self.desired.as_ref().map(|d| (&d.profile, &d.qc))

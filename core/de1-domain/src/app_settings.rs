@@ -304,6 +304,16 @@ fn one_of(value: &str, allowed: &[&str], fallback: &str) -> String {
     .to_owned()
 }
 
+/// `value` when finite and `>= 0`, else `fallback` — for a value whose `0`
+/// means "off".
+fn non_negative_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() && value >= 0.0 {
+        value
+    } else {
+        fallback
+    }
+}
+
 /// `value` when finite and `> 0`, else `fallback`.
 fn positive_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() && value > 0.0 {
@@ -331,7 +341,9 @@ impl CommonSettings {
     ///   `idle_sleep_min` snaps to a choice;
     /// - `chart_channels` keeps the known keys ([`CHART_CHANNEL_KEYS`]), once;
     /// - a brew default or Quick-Controls value that isn't finite and `> 0`
-    ///   becomes the default.
+    ///   becomes the default — except the steam temperature and the
+    ///   hot-water volume, where `0` is the user's "off" and stays (only a
+    ///   negative or non-finite one repairs).
     ///
     /// UI ranges are not enforced here.
     #[must_use]
@@ -406,9 +418,11 @@ impl CommonSettings {
             },
             qc_steam_time_s: positive_or(self.qc_steam_time_s, d.qc_steam_time_s),
             qc_steam_flow_ml_s: positive_or(self.qc_steam_flow_ml_s, d.qc_steam_flow_ml_s),
-            qc_steam_temp_c: positive_or(self.qc_steam_temp_c, d.qc_steam_temp_c),
+            // 0 °C = steam off: the connect sweep must not heat the boiler.
+            qc_steam_temp_c: non_negative_or(self.qc_steam_temp_c, d.qc_steam_temp_c),
             qc_hot_water_temp_c: positive_or(self.qc_hot_water_temp_c, d.qc_hot_water_temp_c),
-            qc_hot_water_volume_ml: positive_or(
+            // 0 ml = "off" for the hot-water volume.
+            qc_hot_water_volume_ml: non_negative_or(
                 self.qc_hot_water_volume_ml,
                 d.qc_hot_water_volume_ml,
             ),
@@ -802,5 +816,33 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(json, reset_settings(&mine, 60.0));
+    }
+
+    #[test]
+    fn sanitize_keeps_steam_off_and_zero_hot_water_volume() {
+        let off = CommonSettings {
+            qc_steam_temp_c: 0.0,
+            qc_hot_water_volume_ml: 0.0,
+            ..default_common_settings()
+        };
+        let s = off.sanitized();
+        assert_eq!(s.qc_steam_temp_c, 0.0, "steam off stays off");
+        assert_eq!(s.qc_hot_water_volume_ml, 0.0);
+        // Through the lenient JSON read too (load and restore).
+        let blob = serde_json::json!({ "qcSteamTempC": 0, "qcHotWaterVolumeMl": 0 });
+        let j = sanitize_common_settings(&blob);
+        assert_eq!((j.qc_steam_temp_c, j.qc_hot_water_volume_ml), (0.0, 0.0));
+        // A negative or non-finite value still repairs.
+        let d = default_common_settings();
+        for bad in [-1.0, f32::NAN, f32::INFINITY] {
+            let r = CommonSettings {
+                qc_steam_temp_c: bad,
+                qc_hot_water_volume_ml: bad,
+                ..default_common_settings()
+            }
+            .sanitized();
+            assert_eq!(r.qc_steam_temp_c, d.qc_steam_temp_c, "{bad}");
+            assert_eq!(r.qc_hot_water_volume_ml, d.qc_hot_water_volume_ml, "{bad}");
+        }
     }
 }
