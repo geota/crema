@@ -8,6 +8,7 @@ import coffee.crema.ble.proxy.MockWsServerLink
 import coffee.crema.ble.proxy.PairingCrypto
 import coffee.crema.ble.proxy.Peer
 import coffee.crema.ble.proxy.RelayHub
+import coffee.crema.ble.proxy.serveWhenOpen
 import coffee.crema.settings.AppPrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -216,7 +217,7 @@ class HubRemoteRolesTest {
         val ws = MockWebServer().also { server = it }
         ws.enqueue(MockResponse.Builder().webSocketUpgrade(primary).build())
         ws.start(InetAddress.getLoopbackAddress(), 0)
-        hubScope.launch { hub.serve(primary) }
+        hubScope.launch { hub.serveWhenOpen(primary) }
 
         val vm = build()
         vm.switchToSecondary("127.0.0.1", ws.port)

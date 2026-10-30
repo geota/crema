@@ -6,6 +6,7 @@ import coffee.crema.ble.proxy.DeviceInfo
 import coffee.crema.ble.proxy.Golden
 import coffee.crema.ble.proxy.MockWsServerLink
 import coffee.crema.ble.proxy.RelayHub
+import coffee.crema.ble.proxy.serveWhenOpen
 import coffee.crema.machine.sentByRemotes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -89,7 +90,7 @@ class RelayedVerbSecondaryWireTest {
     fun mirrorTheTestPrimary() {
         server.enqueue(MockResponse.Builder().webSocketUpgrade(primary).build())
         server.start(InetAddress.getLoopbackAddress(), 0)
-        hubScope.launch { hub.serve(primary) }
+        hubScope.launch { hub.serveWhenOpen(primary) }
         vm = VmHarness.build(store)
         VmHarness.idle()
         vm.switchToSecondary("127.0.0.1", server.port)

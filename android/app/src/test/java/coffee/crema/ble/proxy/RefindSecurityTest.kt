@@ -145,7 +145,7 @@ class RefindSecurityTest {
                 Thread.sleep(50)
                 continue
             }
-            links.forEach { link -> live.scope.launch { live.hub.serve(link) } }
+            links.forEach { link -> live.scope.launch { live.hub.serveWhenOpen(link) } }
             return server
         }
     }

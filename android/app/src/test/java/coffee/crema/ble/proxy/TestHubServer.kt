@@ -73,7 +73,7 @@ internal class TestHubServer private constructor() {
                 },
                 pairingSecretFor = { id -> secret.takeIf { id == clientId() } },
             )
-            endpoint.scope.launch { hub.serve(endpoint.link) }
+            endpoint.scope.launch { hub.serveWhenOpen(endpoint.link) }
             return endpoint to hub
         }
 
