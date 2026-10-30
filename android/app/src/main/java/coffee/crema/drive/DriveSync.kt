@@ -56,6 +56,11 @@ class DriveSync(
     /** Apply a downloaded backup's raw bytes (a `.crema.zip` or legacy text).
      *  `wipe` = replace vs merge. */
     private val applyRestore: (bytes: ByteArray, wipe: Boolean) -> Unit,
+    /** The OAuth code → token exchange (injected so JVM tests can drive a sign-in). */
+    private val exchangeCode: suspend (code: String, verifier: String) -> DriveTokenSet =
+        { code, verifier -> exchangeCodeForDriveToken(clientId, code, verifier, json) },
+    /** The refresh-token grant (injected so JVM tests can drive a refresh). */
+    private val refreshToken: suspend (refresh: String) -> DriveTokenSet = { refresh -> refreshDriveToken(clientId, refresh, json) },
 ) {
     /** What the Settings UI binds to (mirrored into MainUiState). */
     data class UiState(
@@ -91,7 +96,8 @@ class DriveSync(
 
     private suspend fun persist(mutate: (DriveState) -> DriveState) {
         persistMutex.withLock {
-            persisted = mutate(persisted)
+            // New tokens replace a sign-in the keystore couldn't open at start.
+            persisted = mutate(persisted).let { if (it.tokens != null && it.unopened != null) it.copy(unopened = null) else it }
             store.save(persisted)
         }
         fold()
@@ -164,7 +170,7 @@ class DriveSync(
                     notify("Google Drive sign-in failed — state mismatch, try again")
                 else -> {
                     _state.update { it.copy(busy = true) }
-                    runCatching { exchangeCodeForDriveToken(clientId, code, verifier, json) }
+                    runCatching { exchangeCode(code, verifier) }
                         .onSuccess { tokens ->
                             persist { it.copy(tokens = tokens) }
                             notify("Connected to Google Drive")
@@ -184,7 +190,8 @@ class DriveSync(
     fun disconnect(quiet: Boolean = false) {
         scope.launch {
             val tokens = persisted.tokens
-            persist { it.copy(tokens = null) }
+            // Also forgets a stored sign-in the keystore couldn't open this start.
+            persist { it.copy(tokens = null, unopened = null) }
             if (!quiet) notify("Disconnected from Google Drive")
             tokens?.let { revokeDriveGrant(it) }
         }
@@ -213,7 +220,7 @@ class DriveSync(
         val t = persisted.tokens ?: return null
         if (System.currentTimeMillis() < t.expiresAt - 60_000) return t.accessToken
         val refresh = t.refreshToken ?: return t.accessToken
-        return runCatching { refreshDriveToken(clientId, refresh, json) }
+        return runCatching { refreshToken(refresh) }
             .fold(
                 onSuccess = { fresh -> persist { it.copy(tokens = fresh) }; fresh.accessToken },
                 onFailure = {
