@@ -257,6 +257,38 @@ class ProxyControllerModeTest {
         }
     }
 
+    /** Security review (PR-5): an older remote's name comes from an
+     *  unauthenticated hello. 1000 distinct names in a minute give one notice
+     *  and one log line, with nothing kept per name; the next minute's gives
+     *  one more, counting the rest. The name shown is sanitized. */
+    @Test
+    fun `older-remote notices are one a minute in all, whatever the names`() {
+        val controller = newController()
+        var now = 1_000_000L
+        controller.outdatedNoticeClock = { now }
+        repeat(1_000) { controller.legacyPeerForTest("Phone $it") }
+        assertEquals(listOf("Phone 0 runs an older Crema — update it to connect."), notices.filter { "older Crema" in it })
+        assertEquals(1, log.count { "older Crema version" in it })
+        now += 60_000
+        controller.legacyPeerForTest("Tablet")
+        assertEquals(2, notices.count { "older Crema" in it })
+        assertTrue(log.any { it == "Refused Tablet: older Crema version (999 more refused in the last minute)" }, "$log")
+        // No per-name state: nothing in the controller grows with the names.
+        assertTrue(ProxyController::class.java.declaredFields.none { java.util.Map::class.java.isAssignableFrom(it.type) && "outdated" in it.name.lowercase() })
+        controller.close()
+    }
+
+    @Test
+    fun `an older remote's name is sanitized before it is shown`() {
+        val controller = newController()
+        controller.legacyPeerForTest("\u202Eevil\u0000 phone ${"x".repeat(100)}")
+        val shown = notices.single { "older Crema" in it }
+        assertTrue('\u202E' !in shown && '\u0000' !in shown, shown)
+        assertTrue(shown.startsWith("evil phone "), shown)
+        assertTrue(shown.removeSuffix(" runs an older Crema — update it to connect.").length <= 32, shown)
+        controller.close()
+    }
+
     @Test
     fun `refusals map to what the remote shows`() {
         assertTrue(refusalMessage("Revoked", "Hub").contains("removed this device"))

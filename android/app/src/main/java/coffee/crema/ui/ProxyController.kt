@@ -371,8 +371,15 @@ class ProxyController(
     private val turnedAway: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** Rate limit for the "needs an update" notice. */
-    /** When each older remote's notice last showed, by name (§6.3: once a minute per name). */
-    private val outdatedNoticeAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    /** When the last older-remote notice showed (one a minute in all), and how
+     *  many refusals came in since without one. */
+    private var outdatedNoticeAtMs = 0L
+    private var outdatedNoticesHeld = 0
+    private val outdatedNoticeLock = Any()
+
+    /** Test seam: the older-remote notice's clock. */
+    @androidx.annotation.VisibleForTesting
+    internal var outdatedNoticeClock: () -> Long = System::currentTimeMillis
 
     /** The remote's pairing with a hub, while one runs ([pairWith]). */
     private var dialer: PairingDialer? = null
@@ -1190,16 +1197,31 @@ class ProxyController(
         refreshPins()
     }
 
-    /** A remote on an older protocol version got the legacy denial: tell the
-     *  hub user, at most once a minute per name (spec §6.3). */
+    /**
+     * A remote on an older protocol version got the legacy denial: tell the
+     * hub user (spec §6.3). The name comes from an unauthenticated hello, so
+     * the notice and the log line show at most once a minute in all, whatever
+     * the names (a LAN device sending hellos with random names gets one
+     * notice a minute and no growing state), and the name is sanitized.
+     */
     private fun onOutdatedPeer(clientName: String) {
-        appendLog("Refused $clientName: older Crema version")
-        val now = System.currentTimeMillis()
-        val last = outdatedNoticeAt[clientName]
-        if (last != null && now - last < OUTDATED_NOTICE_COOLDOWN_MS) return
-        outdatedNoticeAt[clientName] = now
-        notify(olderCrema(clientName))
+        val name = coffee.crema.ble.proxy.sanitizePeerName(clientName)
+        val now = outdatedNoticeClock()
+        val more = synchronized(outdatedNoticeLock) {
+            if (outdatedNoticeAtMs != 0L && now - outdatedNoticeAtMs < OUTDATED_NOTICE_COOLDOWN_MS) {
+                outdatedNoticesHeld++
+                return
+            }
+            outdatedNoticeAtMs = now
+            outdatedNoticesHeld.also { outdatedNoticesHeld = 0 }
+        }
+        appendLog("Refused $name: older Crema version" + if (more > 0) " ($more more refused in the last minute)" else "")
+        notify(olderCrema(name))
     }
+
+    /** Test seam: a legacy hello from [clientName], as the acceptor reports it. */
+    @androidx.annotation.VisibleForTesting
+    internal fun legacyPeerForTest(clientName: String) = onOutdatedPeer(clientName)
 
     // ── Mode construction ─────────────────────────────────────────────────────
 
