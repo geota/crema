@@ -1,1 +1,5 @@
-Fixes a crash on Android 14 and later when turning on "Keep connected in the background" while the DE1 was connected.
+• Encrypted multi-device: pair a remote by typing the 6-digit code it shows into the hub. Devices paired with an older Crema pair again once.
+• Hot water by time, volume or ratio (1:3 of your shot's yield by default).
+• The brew temperature and pre-infusion dials now change the shot, and the profile is sent to the machine on every connect.
+• Shot history keeps the full telemetry; profiles, beans and backups move between web and Android.
+• Many fixes.
