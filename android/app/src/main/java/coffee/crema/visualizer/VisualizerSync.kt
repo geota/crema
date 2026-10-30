@@ -812,7 +812,7 @@ class VisualizerSync(
      * foreground the queue drains every [RETRY_TICK_MS] and whenever a network
      * becomes available (at most once per [NETWORK_DRAIN_SPACING_MS]).
      */
-    fun setForeground(foreground: Boolean) {
+    fun onForegroundChanged(foreground: Boolean) {
         tickJob?.cancel()
         tickJob = null
         if (!foreground) {

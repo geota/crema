@@ -254,7 +254,7 @@ class VisualizerRetryQueueTest {
         val s = sync(watcher = watcher)
         s.uploadShot(shot("s1"), silent = true)
         settle()
-        s.setForeground(true)
+        s.onForegroundChanged(true)
         onAvailable = onAvailableHolder[0]
         assertNotNull("registered in the foreground", onAvailable)
         lastReply = HttpStatusCode.OK to """{"id":"v-net"}"""
@@ -271,7 +271,7 @@ class VisualizerRetryQueueTest {
         onAvailable!!.invoke()
         settle()
         assertEquals("inside the spacing: no drain", before, uploads.size)
-        s.setForeground(false)
+        s.onForegroundChanged(false)
         assertNull("unregistered in the background", onAvailableHolder[0])
 
         // A live upload's success drains what is waiting (the sync tail).

@@ -4344,7 +4344,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appInForeground = foreground
         // The Visualizer retry queue's tick and network trigger run only in
         // the foreground (F17).
-        visualizer.setForeground(foreground)
+        visualizer.onForegroundChanged(foreground)
         // No wake-up tick in the background (the 1 s tick covers the core's
         // deadline while the link is kept up).
         if (!foreground) wake.cancel()
