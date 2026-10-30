@@ -46,6 +46,11 @@ class EraseAllDataTest {
         val store = ViewModelStore()
         val vm = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory.getInstance(app))[MainViewModel::class.java]
         shadowOf(Looper.getMainLooper()).idle()
+        // The startup load reads the stores, and quarantines a SAW model it
+        // can't read as sawModel.corrupt.json. Seeding before it ends lets it
+        // read the old data seeded below and write that quarantine after the
+        // erase deleted it (seen twice on CI).
+        VmHarness.awaitStartupLoaded(vm)
 
         val files = app.filesDir
         for (name in stores) {

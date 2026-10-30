@@ -27,6 +27,7 @@ import {
 } from '../effect/errors.ts';
 import { TokenWireSchema } from '../effect/schema/visualizer.ts';
 import { HttpClient } from './http-client.ts';
+import { classifyTokenRefreshFailure as wasmClassifyTokenRefreshFailure } from '#lib/wasm/de1_wasm.js';
 import {
 	AUTHORIZE_URL,
 	OAUTH_SCOPE,
@@ -89,26 +90,10 @@ export class OAuth extends Context.Service<
 	}
 >()('crema/OAuth') {}
 
-/** Token-endpoint statuses worth retrying as-is (the shared retry policy reads the status). */
-const RETRYABLE_REFRESH_STATUS = (status: number) => status >= 500 || status === 408 || status === 429;
-
-/** The OAuth `error` code of a token-endpoint error body, or null when it is not one. */
-function oauthErrorCode(body: string | undefined): string | null {
-	if (!body) return null;
-	try {
-		const json: unknown = JSON.parse(body);
-		if (typeof json === 'object' && json !== null && 'error' in json && typeof json.error === 'string') {
-			return json.error;
-		}
-	} catch {
-		// Not JSON (a proxy or captive-portal page): not a definitive answer.
-	}
-	return null;
-}
-
 /**
  * Sort a failed refresh into the one outcome that ends the session and the
- * ones that must keep it (review 03 P1-1).
+ * ones that must keep it (review 03 P1-1). The status rule is the core's
+ * `classify_token_refresh_failure`, which Android uses too.
  *
  * - **Definitive** (`TokenRefreshFailedError`): the token endpoint answered
  *   HTTP 400 or 401 with the OAuth `invalid_grant` error. Visualizer runs
@@ -126,12 +111,13 @@ function oauthErrorCode(body: string | undefined): string | null {
 export function classifyRefreshFailure(
 	cause: unknown
 ): TokenRefreshFailedError | NetworkError | HttpStatusError {
+	// A build with no OAuth client id can never refresh (a build fact, not a reply).
 	if (cause instanceof OAuthNotConfiguredError) return new TokenRefreshFailedError({ cause });
 	if (cause instanceof HttpStatusError) {
-		if ((cause.status === 400 || cause.status === 401) && oauthErrorCode(cause.body) === 'invalid_grant') {
-			return new TokenRefreshFailedError({ cause });
-		}
-		if (RETRYABLE_REFRESH_STATUS(cause.status)) return cause;
+		// The rule is the core's (`classify_token_refresh_failure`), shared with Android.
+		const kind = wasmClassifyTokenRefreshFailure(cause.status, cause.body);
+		if (kind === 'Definitive') return new TokenRefreshFailedError({ cause });
+		if (kind === 'Retryable') return cause;
 	}
 	if (cause instanceof NetworkError) return cause;
 	return new NetworkError({ cause, url: TOKEN_URL });

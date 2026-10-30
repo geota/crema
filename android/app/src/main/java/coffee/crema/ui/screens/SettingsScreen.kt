@@ -1,6 +1,8 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.RelayPairingRows
 import coffee.crema.ui.maintenanceRunText
+import coffee.crema.ui.maintenanceRunAllowed
 import coffee.crema.ui.FirmwareCardCopy
 import coffee.crema.ui.rememberFirmwareCardCopy
 import androidx.compose.ui.text.style.TextOverflow
@@ -535,11 +537,11 @@ fun SettingsScreen(
                         SetGroup("Cycles") {
                             // "Run now" stages a confirm dialog before driving the DE1's
                             // cycles (web parity: a cycle takes minutes and needs the kit
-                            // fitted). Gated on connected AND machine idle — firing
-                            // Descale mid-shot is a real hazard the web also blocks.
-                            val machineIdle = ui.machineState?.startsWith("Idle") == true
+                            // fitted). Gated on connected AND the core's rule (Idle or
+                            // Sleep, which request_machine_state also enforces).
+                            val machineIdle = ui.maintenanceRunAllowed()
                             val cycleReady = connected && machineIdle
-                            val cycleSub = if (connected && !machineIdle) " Machine must be idle." else ""
+                            val cycleSub = if (connected && !machineIdle) " Machine must be idle or asleep." else ""
                             // A cycle core is following (held for preheat on old firmware,
                             // starting, or running with the descale countdown) — with Cancel.
                             ui.maintenanceRun?.let { run ->
@@ -932,7 +934,7 @@ fun SettingsScreen(
                                 "One-shot download of your entire shot history as JSON. Useful for spreadsheets and other tools.",
                                 last = true,
                             ) {
-                                CremaButton(onClick = { confirm.launchSave("crema-history.json", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+                                CremaButton(onClick = { confirm.launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
                             }
                         }
                         // Other integrations — the web's stub trio, disabled until real.
@@ -1092,6 +1094,7 @@ fun SettingsScreen(
                                     onMirrorFrom = { host, port -> vm.switchToSecondary(host, port) },
                                     onStopMirroring = vm::switchToNormal,
                                     onConnectDirectly = vm::connectDirectly,
+                                    onPairAgain = vm::pairAgain,
                                     showHeader = false,
                                 )
                             }
@@ -1125,60 +1128,9 @@ fun SettingsScreen(
                             }
                         }
                         SetGroup("Paired devices") {
-                            // Devices this host has allowed to mirror it (issue 02). A new
-                            // device can ask only while the pairing window is open.
-                            // Forget → its session ends and it has to pair again.
-                            // Relay v4: the pairing keys couldn't be read this start (spec §6.3). The
-                            // relay stays off; resetting the key is the user's way out (SR-3a P2-1).
-                            if (ui.relayKeysUnavailable) {
-                                CremaSettingsRow(
-                                    "Pairing keys couldn't be read",
-                                    "Restart Crema to try again. If this keeps happening, reset this device's pairing key: every paired device has to pair with it again.",
-                                ) {
-                                    CremaButton(onClick = { vm.resetPairingKey() }, variant = CremaButtonVariant.Text, label = "Reset")
-                                }
-                            }
-                            if (ui.proxyRole == "primary" && !ui.relayKeysUnavailable) {
-                                val open = ui.pairingSecondsLeft > 0
-                                val locked = ui.pairingLockedSecondsLeft
-                                CremaSettingsRow(
-                                    when {
-                                        locked > 0 -> "Pairing paused · ${fmt("%d:%02d", locked / 60, locked % 60)}"
-                                        open -> "Pairing open · ${fmt("%d:%02d", ui.pairingSecondsLeft / 60, ui.pairingSecondsLeft % 60)}"
-                                        else -> "Pair a device"
-                                    },
-                                    when {
-                                        locked > 0 -> "Too many wrong codes. Pairing is paused for a minute."
-                                        open -> "On your phone, open Other devices and choose this hub, then type the code it shows here."
-                                        else -> "Lets a new phone or tablet pair for the next 2 minutes."
-                                    },
-                                ) {
-                                    if (locked == 0) {
-                                        CremaButton(
-                                            onClick = { if (open) vm.closePairingWindow() else vm.openPairingWindow() },
-                                            variant = CremaButtonVariant.Text,
-                                            label = if (open) "Stop" else "Pair",
-                                        )
-                                    }
-                                }
-                            }
-                            if (ui.pairedDevices.isEmpty()) {
-                                CremaSettingsRow("No paired devices", "Devices you allow to connect through this hub appear here.", last = true) {}
-                            } else {
-                                ui.pairedDevices.forEachIndexed { i, d ->
-                                    CremaSettingsRow(
-                                        d.name,
-                                        when {
-                                            d.id !in ui.pairedWithSecret -> "Needs to pair again — use Pair a device"
-                                            d.canControl -> "View and control"
-                                            else -> "View only"
-                                        },
-                                        last = i == ui.pairedDevices.lastIndex,
-                                    ) {
-                                        CremaButton(onClick = { vm.forgetPairedDevice(d.id) }, variant = CremaButtonVariant.Text, label = "Forget")
-                                    }
-                                }
-                            }
+                            // Relay v4 (spec §6.2, §6.4, §6.5): pairing, the paired
+                            // devices and hubs, Forget and Reset, shared with the phone.
+                            RelayPairingRows(ui, vm.relayPairingActions())
                         }
                         SetGroup("Service-grade") {
                             // Mains heater voltage — service-grade, gated behind a danger

@@ -26,9 +26,10 @@
 //! - **Foreign changes.** A cuuid_0B notification that differs from the
 //!   recorded write clears the record once per generation, so the next drive
 //!   restores Crema's packet; a second one is reported and left alone. The
-//!   first cuuid_0B data of a generation is the reply to the shells'
-//!   connect-time seed read ([`crate::de1_seed_reads`]): it updates the
-//!   baseline and is never counted as foreign.
+//!   reply to the shells' connect-time seed read ([`crate::de1_seed_reads`])
+//!   is never foreign: both shells finish it before the link is ready, so it
+//!   lands before the on-ready sweep, while nothing is recorded yet. It
+//!   updates the baseline.
 //! - **Telling the shells.** Whenever the resolved hot-water target changes,
 //!   [`Event::HotWaterTarget`] carries it; a shell re-reads
 //!   [`CremaCore::hot_water_target_json`] after its own input changes.
@@ -130,10 +131,11 @@ impl CremaCore {
         });
     }
 
-    /// A scale is connected and not stale (de1app `is_operational`): the
+    /// A scale is connected, has sent a reading since it connected (or since
+    /// [`reset`](Self::reset)), and isn't stale (de1app `is_operational`): the
     /// packet carries the 250 ml backstop and the core stops by weight.
     pub(crate) fn scale_operational(&self) -> bool {
-        self.scale.is_some() && !self.scale_stale_reported
+        self.scale.is_some() && self.scale_reading_seen && !self.scale_stale_reported
     }
 
     /// The resolved hot-water target: the dose over the next shot's target
@@ -262,12 +264,11 @@ impl CremaCore {
     }
 
     /// A new link generation began (a drop or a teardown): what was written
-    /// is forgotten, the foreign-restore budget is back, the next cuuid_0B
-    /// data is the seed read's reply, and the target is told afresh.
+    /// is forgotten (so the seed read's reply isn't foreign), the
+    /// foreign-restore budget is back, and the target is told afresh.
     pub(crate) fn packet_sync_new_generation(&mut self) {
         self.shot_settings_written = None;
         self.foreign_restore_used = false;
-        self.shot_settings_read_pending = true;
         self.last_hot_water_target = None;
     }
 
@@ -289,9 +290,7 @@ impl CremaCore {
                 return;
             }
         };
-        let seed_reply = std::mem::take(&mut self.shot_settings_read_pending);
-        if !seed_reply
-            && let Some(written) = self.shot_settings_written
+        if let Some(written) = self.shot_settings_written
             && written != settings.encode()
         {
             let restore = !std::mem::replace(&mut self.foreign_restore_used, true);

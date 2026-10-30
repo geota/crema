@@ -41,6 +41,7 @@ use de1_domain::{
 };
 use de1_protocol::{MachineState, MmrRegister, StateInfo, requested_state};
 
+use crate::machine_requests::Guard;
 use crate::{Command, CoreOutput, CremaCore, Event, WriteTarget, mmr_write_command};
 
 /// How long a released (cold-workaround) request may wait for the machine to
@@ -141,6 +142,7 @@ impl CremaCore {
     /// the machine has already left preheat, else on the first packet that
     /// shows it has. Runs from the upload's tail ack.
     pub(crate) fn cold_maintenance_profile_loaded(&mut self, now: Duration, out: &mut CoreOutput) {
+        let guard_clear = self.guard() == Guard::Clear;
         let Some(run) = self.maintenance.as_mut() else {
             return;
         };
@@ -148,12 +150,27 @@ impl CremaCore {
             return;
         }
         run.cold_loaded = true;
-        if self
-            .last_state
-            .is_some_and(|info| !is_machine_heating(info))
+        if guard_clear
+            && self
+                .last_state
+                .is_some_and(|info| !is_machine_heating(info))
         {
             release_held(Some(run), now, out);
         }
+        // Just loaded, so the profile-download guard is open: ask for the
+        // tick that releases it.
+        self.emit_wake(out);
+    }
+
+    /// A held request is ready to go (its cold profile is in and the machine
+    /// has left preheat) and only the profile-download guard keeps it — the
+    /// wake hint's deadline covers it.
+    pub(crate) fn maintenance_waits_for_guard(&self) -> bool {
+        self.maintenance.as_ref().is_some_and(|run| {
+            run.phase == MaintenancePhase::WaitingForPreheat && run.cold && run.cold_loaded
+        }) && self
+            .last_state
+            .is_some_and(|info| !is_machine_heating(info))
     }
 
     /// An upload failed or was cancelled. A held request still waiting for
@@ -239,8 +256,8 @@ impl CremaCore {
     ) {
         // Release a held request on the first packet showing the machine is
         // no longer heating (Decenza `flushPendingMaintenanceState`), once the
-        // cold profile is in.
-        if !is_machine_heating(info) {
+        // cold profile is in and the profile-download guard is clear.
+        if !is_machine_heating(info) && self.guard() == Guard::Clear {
             release_held(self.maintenance.as_mut(), now, out);
         }
         if is_maintenance_state(info.state) {
@@ -278,6 +295,11 @@ impl CremaCore {
     /// Per-notification / per-tick upkeep: the released-request timeout and
     /// the descale countdown.
     pub(crate) fn update_maintenance(&mut self, now: Duration, out: &mut CoreOutput) {
+        // A held request kept only by the profile-download guard goes out once
+        // the guard clears.
+        if self.maintenance_waits_for_guard() && self.guard() == Guard::Clear {
+            release_held(self.maintenance.as_mut(), now, out);
+        }
         let Some(run) = self.maintenance.as_ref() else {
             return;
         };
@@ -545,8 +567,20 @@ mod tests {
         // (round-2 verification V3 #4).
         let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
         assert!(state_writes(&out).is_empty(), "waits for the cold profile");
-        // The cold profile's tail ack releases the held request.
+        // The cold profile's tail ack opens the firmware's profile-download
+        // guard (F16): the request goes out 500 ms later, on the tick the
+        // core asks for.
         let out = ack_profile_writes(&mut core, &start, 3_100);
+        assert!(state_writes(&out).is_empty(), "inside the download guard");
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::WakeAt { at_ms } if (*at_ms - 3_600.0).abs() < 0.5)),
+            "{:?}",
+            out.events
+        );
+        assert!(state_writes(&core.on_tick(3_599)).is_empty());
+        let out = core.on_tick(3_600);
         assert_eq!(
             state_writes(&out),
             vec![requested_state(MachineState::Descale)]
@@ -667,14 +701,19 @@ mod tests {
     #[test]
     fn another_request_supersedes_a_held_one() {
         let mut core = heating_core(Some(1355));
-        let _ = core.request_machine_state(MachineState::Descale);
+        let start = core.request_machine_state(MachineState::Descale);
         let out = core.request_machine_state(MachineState::Sleep);
         assert_eq!(
             progress(&out),
             vec![(MaintenancePhase::Cancelled, 0, 0, true)]
         );
+        // The cold profile is still downloading: the Sleep waits out the
+        // profile-download guard (F16), then goes out — the Descale never.
+        assert!(state_writes(&out).is_empty());
+        let out = ack_profile_writes(&mut core, &start, 2_000);
+        assert!(state_writes(&out).is_empty());
         assert_eq!(
-            state_writes(&out),
+            state_writes(&core.on_tick(2_500)),
             vec![requested_state(MachineState::Sleep)]
         );
     }

@@ -31,17 +31,18 @@ import coffee.crema.core.preinfusionSeconds
 import coffee.crema.core.creditRemaining
 import coffee.crema.core.debitRemaining
 import coffee.crema.core.resettleRemaining
+import coffee.crema.core.ShotCaptureContext
 import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportProfileFile
 import coffee.crema.core.importProfileFile
 import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.importBeanconquerorJson
 import coffee.crema.core.importCremaJsonl
+import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.newShotId
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
 import coffee.crema.history.coreShotJson
-import coffee.crema.history.downsampleForStorage
 import coffee.crema.history.isBrewLog
 import coffee.crema.history.isManualLog
 import coffee.crema.persist.ImportLimits
@@ -65,6 +66,8 @@ import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.toCommonSettings
 import coffee.crema.settings.withCommonSettings
 import coffee.crema.visualizer.VisualizerSync
+import coffee.crema.visualizer.shotHistoryJsonl
+import coffee.crema.visualizer.shotsFromCremaJsonl
 import coffee.crema.visualizer.storedShotFromBackupJson
 import coffee.crema.visualizer.wireShotJson
 import kotlinx.coroutines.CoroutineScope
@@ -286,10 +289,26 @@ class LibraryController(
         ) }
     }
 
-    /** Load the persisted shot log at startup. */
+    /** Load the persisted shot log at startup: the rows now, the telemetry
+     *  series in the background (F10 — ~0.1 s for 300 shots on a desktop JVM,
+     *  more on a phone), so the startup sequence (prefs, auto-connect) never
+     *  waits on it. Until a series lands its shot shows no curve. */
     suspend fun loadHistory() {
-        val loaded = historyStore.load()
-        updateUi { it.copy(history = loaded) }
+        val rows = historyStore.loadRows()
+        updateUi { it.copy(history = rows) }
+        val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
+        if (missing.isEmpty()) return
+        scope.launch {
+            val series = historyStore.loadSeries(missing)
+            if (series.isEmpty()) return@launch
+            updateUi { st ->
+                st.copy(
+                    history = st.history.map { shot ->
+                        if (shot.samples.isEmpty()) series[shot.id]?.let { shot.copy(samples = it) } ?: shot else shot
+                    },
+                )
+            }
+        }
     }
 
     /** Load the pinned/hidden built-in overlays at startup (before the customs). */
@@ -677,22 +696,26 @@ class LibraryController(
             .getOrElse { report("Export profiles failed: ${it.message}"); null }
     }
 
-    /** Export a stored shot as JSON via the system share sheet. */
+    /** Export a stored shot as a community-v2 `.shot.json` via the system
+     *  share sheet — the core's exporter (F10), which web and every DE1 app
+     *  read; it used to be Android's flat model, which nothing could import. */
     fun exportShot(id: String) {
         val shot = uiState().history.firstOrNull { it.id == id } ?: return
-        val text = runCatching { json.encodeToString(StoredShot.serializer(), shot) }
+        val text = runCatching { exportV2JsonShot(wireShotJson(shot, settingsGrinder()).toString()) }
             .getOrElse { appendLog("Export shot failed: ${it.message}"); return }
         shareText(text, "Share shot")
     }
 
-    /** Export the whole shot history as a JSON array — Settings → Sharing. */
+    /** Export the whole shot history as Crema `crema/v1` JSONL — Settings →
+     *  Sharing. The core's format (F10): both shells import it back. */
     fun exportAllShots() {
-        val shots = uiState().history
-        if (shots.isEmpty()) { appendLog("Export: no shots"); return }
-        val text = runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), shots) }
-            .getOrElse { appendLog("Export shots failed: ${it.message}"); return }
+        val text = shotsJson(null) ?: return
         shareText(text, "Export shots")
     }
+
+    /** The Settings grinder, for an export of a shot captured before F10
+     *  froze the grinder on it. */
+    private fun settingsGrinder(): String? = effectiveState().grinderModel.trim().ifEmpty { null }
 
     /** Export the bean library (beans + roasters) as Crema JSONL — Settings → Sharing. */
     fun exportBeansLibrary() {
@@ -729,12 +752,15 @@ class LibraryController(
             .getOrElse { notify("Beanconqueror export failed"); null }
     }
 
-    /** Shots as Crema JSON — all (ids null) or only the given ids. */
+    /** Shots as the core's Crema `crema/v1` JSONL ([shotHistoryJsonl]) — all
+     *  (ids null) or only the given ids. Both shells import it (F10). */
     fun shotsJson(ids: List<String>?): String? {
         val history = uiState().history
         val shots = if (ids == null) history else { val w = ids.toHashSet(); history.filter { it.id in w } }
         if (shots.isEmpty()) { notify("Export — no shots"); return null }
-        return runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), shots) }.getOrNull()
+        return runCatching {
+            shotHistoryJsonl(shots, settingsGrinder(), System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME)
+        }.getOrElse { appendLog("Export shots failed: ${it.message}"); null }
     }
 
     /**
@@ -850,40 +876,41 @@ class LibraryController(
     /** Import profiles from any profile file — community-v2 `.json`, a `.jsonl`
      *  bundle, a de1app `.tcl`, a Crema backup, an old Android export — read by
      *  the core, which returns fresh custom profiles (core id, brew temp from the
-     *  first step) and what didn't import (#12, F12). */
+     *  first step) and what didn't import (#12, F12). The core skips, and counts,
+     *  the profiles already in the library — custom and built-in, hidden ones
+     *  included — by title and steps (F12b). */
     fun importProfiles(uri: Uri) {
         scope.launch {
             val text = readUriText(uri)
             if (text.isNullOrBlank()) { notify(readFailure("Import failed — couldn't read that file")); return@launch }
-            val result = runCatching { json.parseToJsonElement(importProfileFile(text)).jsonObject }
+            val library = "[" + (customProfilesJson + builtinProfileJson.values).joinToString(",") + "]"
+            val result = runCatching { json.parseToJsonElement(importProfileFile(text, library)).jsonObject }
                 .getOrElse { notify("Couldn’t import profile — ${it.message}"); return@launch }
             val imported = result["profiles"]?.jsonArray.orEmpty().map { it.toString() }
+            val skipped = result["skipped_duplicates"]?.jsonPrimitive?.intOrNull ?: 0
             val errors = result["errors"]?.jsonArray.orEmpty().map { e ->
                 val obj = e.jsonObject
                 val message = obj["message"]?.jsonPrimitive?.content.orEmpty()
                 obj["item"]?.jsonPrimitive?.intOrNull?.let { "item $it: $message" } ?: message
             }
-            if (imported.isEmpty()) {
-                notify(errors.firstOrNull()?.let { "Couldn’t import profile — $it" } ?: "No profiles imported")
-                return@launch
+            if (imported.isNotEmpty()) {
+                customProfilesJson = imported + customProfilesJson
+                refreshProfiles()
+                persistCustomProfiles()
             }
-            customProfilesJson = imported + customProfilesJson
-            refreshProfiles()
-            persistCustomProfiles()
-            notify(
-                if (errors.isEmpty()) "Imported ${imported.size} profile(s)"
-                else "Imported ${imported.size} of ${imported.size + errors.size} — ${errors.first()}"
-            )
+            notify(profileImportSummary(imported.size, skipped, errors))
         }
     }
 
-    /** Import shots from a Crema .json export (array / single / .jsonl), skipping
-     *  ids already in history. */
+    /** Import shots from a Crema export — the `crema/v1` JSONL, or an older
+     *  Android flat array / single / .jsonl — skipping ids already in history. */
     fun importShots(uri: Uri) {
         scope.launch {
             val text = readUriText(uri)?.trim()
             if (text.isNullOrBlank()) { notify(readFailure("Import failed — couldn't read that file")); return@launch }
-            var shots = runCatching {
+            // Crema `crema/v1` JSONL (the all-shots export, F10) through the core.
+            var shots = shotsFromCremaJsonl(text, json)
+            if (shots.isEmpty()) shots = runCatching {
                 if (text.startsWith("[")) json.decodeFromString(ListSerializer(StoredShot.serializer()), text)
                 else listOf(json.decodeFromString(StoredShot.serializer(), text))
             }.getOrElse {
@@ -1201,7 +1228,8 @@ class LibraryController(
                 history = st.history.map {
                     if (it.id == localId && it.samples.isEmpty()) {
                         it.copy(
-                            samples = downsampleForStorage(samples),
+                            // The whole pulled series (F10).
+                            samples = samples,
                             durationMs = if (it.durationMs > 0) it.durationMs else durationMs,
                         )
                     } else {
@@ -1917,74 +1945,64 @@ class LibraryController(
         // nothing was ground). Decenza #1325 (maincontroller.cpp:1841-1853).
         // Descale/calibrate run in their own machine states, never here.
         if (disposition == ShotDisposition.SkipCleaning) {
+            // Take the core's pending shot anyway, so it never outlives its
+            // completion (web takes it whatever the disposition too).
+            runCatching { bridge.takeStoredShot(json.encodeToString(ShotCaptureContext.serializer(), ShotCaptureContext(completedAt = now))) }
             appendLog("Cleaning run finished — not recorded as a shot")
             return
         }
-        // Snapshot the recipe (as-run) as the core wire Profile so the upload
-        // embeds real steps (#12) — not just the name. You can't switch profiles
-        // mid-pour, so the active profile is the one that ran. Convert from the
-        // FULL raw library JSON (the same source startShot uploads from) — NOT a
-        // re-encode of the thin display model: kotlinx omits fields sitting at
-        // their declared defaults (a segment target of 0, a dose of exactly
-        // 18 g…), the core requires them, and the failed conversion silently
-        // dropped the snapshot for any such profile.
-        // With the Quick-Controls override applied by the core, so history
-        // carries the steps the DE1 actually ran.
-        val profileWire: JsonObject? = s.activeProfileId?.let { profileJson(it) }?.let { raw ->
-            runCatching {
-                val ran = effectiveCremaProfile(raw, s.brewParams.overridesJson(json))
-                json.parseToJsonElement(cremaProfileToWire(ran)) as? JsonObject
-            }.onFailure { appendLog("Shot profile snapshot failed: ${it.message}") }.getOrNull()
-        }
         val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
         val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
-        // Freeze a full bean snapshot (the core wire shape) at shot time — the
-        // single source for the Visualizer wire and the "Roaster · Name" display.
-        val beanSnapshot = bean?.let { b ->
-            ShotBean(
-                beanId = b.id,
-                name = b.name,
-                roasterName = roasterName,
-                roastedOn = b.roastedOn,
-                roastLevel = b.roastLevel,
-                tags = b.tags,
-                grinderSetting = b.grinderSetting?.takeIf { it.isNotBlank() },
-                grinder = b.grinder?.takeIf { it.isNotBlank() },
-            )
-        }
-        val machine = liveMachine()
-        val shot = StoredShot(
+        // The core assembles the shot (F10, the rule set web uses too): its own
+        // record (the full series with frames and scale overlays), the profile
+        // the DE1 held and its dose / yield / brew temp / pre-infusion, the
+        // grinder (bean, else Settings) frozen now, the stop reason and
+        // switches. The shell hands in only what the core can't know.
+        val ctx = ShotCaptureContext(
+            completedAt = now,
             id = shotId,
-            completedAtMs = now,
-            durationMs = durationMs,
-            yieldG = yieldG,
-            doseG = profile?.dose,
+            bean = bean?.let { b ->
+                ShotBean(
+                    beanId = b.id,
+                    name = b.name,
+                    roasterName = roasterName,
+                    roastedOn = b.roastedOn,
+                    roastLevel = b.roastLevel,
+                    tags = b.tags,
+                    grinderSetting = b.grinderSetting?.takeIf { it.isNotBlank() },
+                    grinder = b.grinder?.takeIf { it.isNotBlank() },
+                    notes = b.notes?.takeIf { it.isNotBlank() },
+                )
+            },
+            settingsGrinder = s.grinderModel.trim().ifEmpty { null },
             // The QC grind dial actually used (issue 15) — null until the user sets one.
-            grindSetting = s.qcGrind,
-            yieldTargetG = (s.brewParams?.yieldOut ?: profile?.yieldOut?.toDouble())?.toFloat(),
-            // The brew temperature the shot ran at: the (core-clamped) dial, else
-            // the profile's own.
-            brewTempC = (s.brewParams?.brewTemp ?: profile?.brewTemp?.toDouble())?.toFloat(),
-            peakPressure = peakPressure,
-            peakTemp = peakTemp,
-            // The stats' yield fallback when the settled final weight is
-            // missing (review #41) — the event has carried it all along.
-            peakWeightG = peakWeightG,
-            profileName = profile?.name,
-            profile = profileWire,
-            bean = beanSnapshot,
-            // The buffer still holds the just-finished shot (cleared on the next
-            // ShotStarted); downsample it for the detail chart.
-            samples = downsampleForStorage(s.shotTelemetry),
-            // The DE1 this ran on — frozen here so a later Decent upload (#84)
-            // carries the serial the server verifies, even after the machine
-            // disconnects or another one is paired.
-            machineSerial = machine?.serialNumber,
-            machineFirmware = machine?.firmwareVersion,
-            machineModel = machine?.model,
+            grindDial = s.qcGrind,
             // The Settings default barista (dye2 audit #1), editable later.
             barista = s.baristaName.trim().ifEmpty { null },
+            tags = bean?.tags?.takeIf { it.isNotEmpty() },
+            // The DE1 this ran on — frozen here so a later Decent upload (#84)
+            // carries the serial the server verifies.
+            machine = liveMachine(),
+            // The profile on screen, the core's last fallback name: a remote's
+            // mirror core never uploads, so it knows no profile title (on a
+            // remote the screen shows the hub's selection).
+            profileName = profile?.name,
         )
+        val assembled = runCatching {
+            bridge.takeStoredShot(json.encodeToString(ShotCaptureContext.serializer(), ctx))
+        }.onFailure { appendLog("Shot assembly failed: ${it.message}") }.getOrNull()
+        val core = assembled?.let { json.parseToJsonElement(it) as? JsonObject }
+        // No telemetry at all (or the core refused): nothing to record.
+        val shot = core?.let { storedShotFromBackupJson(it, json) }?.copy(
+            // The core's running peaks from the event, as before.
+            peakPressure = peakPressure,
+            peakTemp = peakTemp,
+            peakWeightG = peakWeightG,
+        )
+        if (shot == null) {
+            appendLog("Shot had no telemetry — not recorded")
+            return
+        }
         // Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
         // validated over 882 shots): under 10 s of flow AND under 5 g in the
         // cup is an aborted pull, not a shot — it would only pollute history
@@ -2006,9 +2024,8 @@ class LibraryController(
             updateUi { it.copy(history = next) }
             scope.launch { historyStore.save(next) }
             // Auto-upload to every armed destination (Visualizer, Decent), one
-            // notice for the batch. The full telemetry buffer rides along (the
-            // stored row is downsampled) for the destinations that take it.
-            autoUploadShot(shot, s.shotTelemetry)
+            // notice for the batch, with the core's full series.
+            autoUploadShot(shot, shot.samples)
         }
         // Persist the learned SAW drip model — a weight-stopped shot just
         // added a training sample in the core.
@@ -2020,7 +2037,9 @@ class LibraryController(
         // there's nothing to debit (bag already empty / bad dose), so we persist
         // — and touch updatedAt — ONLY on a real debit. If it just emptied the
         // bag, surface it so the user can switch / archive / rate.
-        val dose = profile?.dose
+        // The dose the core recorded — the Quick Controls dial when the DE1 ran
+        // the dialled profile (review §2.3-6) — else the profile's.
+        val dose = shot.doseG ?: profile?.dose
         if (!s.replayPrimary && bean != null && dose != null) {
             val debited = debitRemaining(bean.remaining ?: 0f, dose)
             if (debited != null) {
@@ -2368,4 +2387,18 @@ class LibraryController(
         discardedShot = null
         updateUi { it.copy(discardToastMessage = null) }
     }
+}
+
+/** The message after a profile import: "Imported 2 profiles; 3 already in your
+ *  library", with the first error when some didn't import (web words it the
+ *  same, F12b). */
+internal fun profileImportSummary(imported: Int, skipped: Int, errors: List<String>): String {
+    if (imported == 0 && skipped == 0) {
+        return errors.firstOrNull()?.let { "Couldn’t import profile — $it" } ?: "No profiles imported"
+    }
+    val head = if (errors.isEmpty()) "Imported $imported profile${if (imported == 1) "" else "s"}"
+    else "Imported $imported of ${imported + errors.size}"
+    val already = if (skipped > 0) "; $skipped already in your library" else ""
+    val tail = errors.firstOrNull()?.let { " — $it" }.orEmpty()
+    return head + already + tail
 }
