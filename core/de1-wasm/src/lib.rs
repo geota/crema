@@ -933,6 +933,31 @@ pub fn brew_temp_range(profile_json: &str) -> Result<String, String> {
     de1_domain::brew_temp_range_json(profile_json)
 }
 
+/// A `CremaProfile` JSON with its top-level `brewTemp` derived from the first
+/// step's temperature (the brew-temp dial's anchor) — applied on load and save
+/// so every surface shows the same number. See
+/// `de1_domain::with_derived_brew_temp`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[wasm_bindgen(js_name = withDerivedBrewTemp)]
+pub fn with_derived_brew_temp(profile_json: &str) -> Result<String, String> {
+    de1_domain::with_derived_brew_temp_json(profile_json)
+}
+
+/// The pre-infusion dial for a `CremaProfile` JSON, as a JSON
+/// `PreinfusionDial` (`{min, max, seconds, adjustable}`). See
+/// `de1_domain::preinfusion_dial`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[wasm_bindgen(js_name = preinfusionDial)]
+pub fn preinfusion_dial(profile_json: &str) -> Result<String, String> {
+    de1_domain::preinfusion_dial_json(profile_json)
+}
+
 /// The profile's pre-infusion time, seconds — the total of its leading
 /// pre-infusion segments. See `de1_domain::preinfusion_seconds`.
 ///

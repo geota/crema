@@ -8,11 +8,16 @@
 //! share:
 //!
 //! - **Brew temperature** is an *absolute* target `T`. The anchor `A` is the
-//!   profile's displayed brew temperature ([`brew_temp_anchor`]); every step's
-//!   temperature moves by `T − A`, so the profile's temperature shape is kept
-//!   (de1app `change_espresso_temperature`, reaprime `Profile.adjustTemperature`,
-//!   Decenza `framesShiftedToTemperature`). `T` is clamped into
-//!   [`brew_temp_range`], so no step leaves the core's temperature bounds.
+//!   first step's temperature ([`brew_temp_anchor`]; de1app's
+//!   `espresso_temperature` for an advanced profile), never the free-standing
+//!   top-level `brew_temp`, which old saves let drift from the steps. Every
+//!   step's temperature moves by `T − A`, so the profile's temperature shape
+//!   is kept (de1app `change_espresso_temperature`, reaprime
+//!   `Profile.adjustTemperature`, Decenza `framesShiftedToTemperature`). `T` is
+//!   clamped into [`brew_temp_range`], so no step leaves the core's
+//!   temperature bounds or drops below [`STEP_FLOOR_C`]; a `T` of 0 or outside
+//!   the bounds is refused. The top-level `brew_temp` is derived from the
+//!   first step ([`with_derived_brew_temp`]) so every surface shows the anchor.
 //! - **Pre-infusion** is the total time, seconds, of the profile's leading
 //!   pre-infusion segments (the first `preinfuse_step_count`). An override
 //!   rescales those segments' times proportionally to reach the new total —
@@ -33,6 +38,16 @@ use typeshare::typeshare;
 /// Two override values closer than this are the same value (half the 0.1
 /// resolution every Quick Controls stepper uses).
 const SAME_VALUE_EPSILON: f32 = 0.05;
+
+/// The lowest temperature a shift may move a heated step to, °C: a step's
+/// 0 °C means "heater off", so a brew-temperature change never turns a heated
+/// step off (a profile authored with a lower step is not shifted down at all).
+pub const STEP_FLOOR_C: f32 = 1.0;
+
+/// The pre-infusion dial's default top, seconds — both shells' stepper
+/// maximum. A profile whose own pre-infusion is longer raises it
+/// ([`preinfusion_dial`]).
+pub const PREINFUSION_DIAL_MAX_S: f32 = 30.0;
 
 /// The user's per-shot Quick Controls overrides — absolute values, each
 /// optional (absent = the profile's own value). The JSON shape the shells
@@ -83,34 +98,37 @@ pub struct BrewTempRange {
 }
 
 /// The temperature an absolute brew-temp override is measured from: the
-/// profile's displayed `brew_temp`. A profile without one (absent / 0 / not
-/// finite — an old save) falls back to the step mean rounded to the nearest
-/// 0.5 °C, the same value [`crate::from_wire`] derives for an import; a
-/// profile without positive step temperatures falls back to 92 °C.
+/// first step's temperature (de1app `espresso_temperature` for an advanced
+/// shot, Decenza `espressoTemperature`). Never the top-level `brew_temp`: old
+/// blank profiles carry 93 over 92 °C steps, and older editors and Save preset
+/// changed it without moving the steps. A profile without steps (or a
+/// non-finite first temperature) falls back to 92 °C — there is nothing to
+/// shift.
 #[must_use]
 pub fn brew_temp_anchor(profile: &CremaProfile) -> f32 {
-    if profile.brew_temp.is_finite() && profile.brew_temp > 0.0 {
-        return profile.brew_temp;
-    }
-    let temps: Vec<f32> = profile
+    profile
         .segments
-        .iter()
+        .first()
         .map(|s| s.temp)
-        .filter(|t| t.is_finite() && *t > 0.0)
-        .collect();
-    if temps.is_empty() {
-        return 92.0;
-    }
-    #[allow(clippy::cast_precision_loss)]
-    let mean = temps.iter().sum::<f32>() / temps.len() as f32;
-    (mean * 2.0).round() / 2.0
+        .filter(|t| t.is_finite())
+        .unwrap_or(92.0)
+}
+
+/// `profile` with its top-level `brew_temp` set to the anchor (the first
+/// step's temperature), so the cards, the dial and the editors all show the
+/// temperature the profile actually starts at. Shells apply it on load and
+/// save; [`crate::from_wire`] and [`effective_crema_profile`] produce it.
+#[must_use]
+pub fn with_derived_brew_temp(mut profile: CremaProfile) -> CremaProfile {
+    profile.brew_temp = brew_temp_anchor(&profile);
+    profile
 }
 
 /// The brew-temperature dial's range for `profile`: every absolute target in
 /// it shifts every step by `T − anchor` without any step leaving
-/// [`MIN_TEMPERATURE_C`]..=[`MAX_TEMPERATURE_C`]. The anchor is always in the
-/// range (no shift is always allowed, even for a profile authored outside the
-/// bounds).
+/// [`STEP_FLOOR_C`]..=[`MAX_TEMPERATURE_C`], and the ends themselves stay
+/// inside the core's temperature bounds. The anchor is always in the range (no
+/// shift is always allowed, even for a profile authored outside the bounds).
 #[must_use]
 pub fn brew_temp_range(profile: &CremaProfile) -> BrewTempRange {
     let anchor = brew_temp_anchor(profile);
@@ -126,8 +144,12 @@ pub fn brew_temp_range(profile: &CremaProfile) -> BrewTempRange {
         )
     });
     // No steps: nothing to push out of bounds, so the bounds themselves.
-    let min = lo.map_or(MIN_TEMPERATURE_C, |lo| anchor + (MIN_TEMPERATURE_C - lo));
-    let max = hi.map_or(MAX_TEMPERATURE_C, |hi| anchor + (MAX_TEMPERATURE_C - hi));
+    let min = lo
+        .map_or(STEP_FLOOR_C, |lo| anchor + (STEP_FLOOR_C - lo))
+        .max(STEP_FLOOR_C);
+    let max = hi
+        .map_or(MAX_TEMPERATURE_C, |hi| anchor + (MAX_TEMPERATURE_C - hi))
+        .min(MAX_TEMPERATURE_C);
     BrewTempRange {
         min: min.min(anchor),
         max: max.max(anchor),
@@ -151,7 +173,42 @@ pub fn preinfusion_seconds(profile: &CremaProfile) -> f32 {
         .iter()
         .map(|s| finite_non_negative(s.time))
         .sum();
-    round_tenth(total)
+    // `+ 0.0` turns the empty sum's -0.0 into 0.0 (a "-0 s" on screen).
+    round_tenth(total) + 0.0
+}
+
+/// The pre-infusion dial for one profile: its range, the profile's own
+/// seconds ([`preinfusion_seconds`]) and whether it can be dialled at all.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreinfusionDial {
+    /// Lowest pre-infusion, seconds (0 = off).
+    pub min: f32,
+    /// Highest pre-infusion, seconds: the stepper's [`PREINFUSION_DIAL_MAX_S`],
+    /// raised to the profile's own value when that is longer.
+    pub max: f32,
+    /// The profile's own pre-infusion seconds — the dial's seed.
+    pub seconds: f32,
+    /// `false` for a profile with no pre-infusion segment: there is nothing
+    /// to rescale, so the shells disable the dial and say why.
+    pub adjustable: bool,
+}
+
+/// The pre-infusion dial for `profile` — see [`PreinfusionDial`]. Its range
+/// always contains the profile's own value.
+#[must_use]
+pub fn preinfusion_dial(profile: &CremaProfile) -> PreinfusionDial {
+    let n = preinfusion_segment_count(profile);
+    let seconds = preinfusion_seconds(profile);
+    #[allow(clippy::cast_precision_loss)]
+    let ceiling = MAX_FRAME_SECONDS * n as f32;
+    PreinfusionDial {
+        min: 0.0,
+        max: PREINFUSION_DIAL_MAX_S.max(seconds.ceil()).min(ceiling),
+        seconds,
+        adjustable: n > 0,
+    }
 }
 
 fn finite_non_negative(v: f32) -> f32 {
@@ -174,9 +231,12 @@ fn same(a: f32, b: f32) -> bool {
 #[must_use]
 pub fn normalize_brew_overrides(profile: &CremaProfile, qc: &BrewOverrides) -> BrewOverrides {
     let range = brew_temp_range(profile);
+    // A target of 0 or outside the core's bounds is refused (it is no brew
+    // temperature: a model default, a corrupt value), never clamped into a
+    // shift.
     let brew_temp = qc
         .brew_temp
-        .filter(|t| t.is_finite())
+        .filter(|t| t.is_finite() && *t > MIN_TEMPERATURE_C && *t <= MAX_TEMPERATURE_C)
         .map(|t| t.clamp(range.min, range.max))
         .filter(|t| !same(*t, range.anchor));
 
@@ -235,8 +295,10 @@ fn apply_preinfusion(segments: &mut [ProfileSegment], n: usize, target: f32) {
 }
 
 /// The profile to upload: `profile` with the normalized `qc` applied (see the
-/// module docs). With no overrides it is `profile` unchanged, so its bytes and
-/// fingerprint match the saved profile's.
+/// module docs) and its `brew_temp` derived from the first step. With no
+/// overrides it is `profile` with only that derivation, so its bytes match the
+/// saved profile's. The editors' "Brew temp" field uses it too
+/// (`{brewTemp}` only) — Decenza's `applyTemperatureToProfile`.
 #[must_use]
 pub fn effective_crema_profile(profile: &CremaProfile, qc: &BrewOverrides) -> CremaProfile {
     let qc = normalize_brew_overrides(profile, qc);
@@ -244,10 +306,12 @@ pub fn effective_crema_profile(profile: &CremaProfile, qc: &BrewOverrides) -> Cr
     if let Some(target) = qc.brew_temp {
         let delta = target - brew_temp_anchor(profile);
         for seg in &mut effective.segments {
-            seg.temp += delta;
+            // Clamped after the shift: the range keeps every step inside the
+            // bounds, and this removes the float noise at its ends.
+            seg.temp = (seg.temp + delta).clamp(MIN_TEMPERATURE_C, MAX_TEMPERATURE_C);
         }
-        effective.brew_temp = target;
     }
+    let mut effective = with_derived_brew_temp(effective);
     if let Some(preinf) = qc.preinf {
         let n = preinfusion_segment_count(profile);
         apply_preinfusion(&mut effective.segments, n, preinf);
@@ -349,6 +413,27 @@ pub fn brew_temp_range_json(profile_json: &str) -> Result<String, String> {
     serde_json::to_string(&brew_temp_range(&p)).map_err(|e| e.to_string())
 }
 
+/// JSON facade for [`with_derived_brew_temp`]: a [`CremaProfile`] JSON in, the
+/// same profile with its `brewTemp` set to the first step's temperature out.
+///
+/// # Errors
+///
+/// The JSON error string on malformed input.
+pub fn with_derived_brew_temp_json(profile_json: &str) -> Result<String, String> {
+    let p = parse_profile(profile_json)?;
+    serde_json::to_string(&with_derived_brew_temp(p)).map_err(|e| e.to_string())
+}
+
+/// JSON facade for [`preinfusion_dial`]: a [`PreinfusionDial`] JSON.
+///
+/// # Errors
+///
+/// The JSON error string on malformed input.
+pub fn preinfusion_dial_json(profile_json: &str) -> Result<String, String> {
+    let p = parse_profile(profile_json)?;
+    serde_json::to_string(&preinfusion_dial(&p)).map_err(|e| e.to_string())
+}
+
 /// JSON facade for [`preinfusion_seconds`].
 ///
 /// # Errors
@@ -367,8 +452,8 @@ mod tests {
         (a - b).abs() < 1e-4
     }
 
-    /// A three-step declining-temperature profile: 94 / 90 / 88 °C, shown as
-    /// 91 °C (its half-degree mean rounded), one 6 s pre-infusion segment.
+    /// A three-step declining-temperature profile: 94 / 90 / 88 °C (anchored
+    /// on its first step, 94), one 6 s pre-infusion segment.
     fn declining() -> CremaProfile {
         let mut p = blank_profile(&BrewDefaults::default());
         p.segments.truncate(3);
@@ -376,7 +461,7 @@ mod tests {
             seg.temp = t;
         }
         p.segments[0].time = 6.0;
-        p.brew_temp = 91.0;
+        p.brew_temp = 94.0;
         p.preinfuse_step_count = 1;
         p
     }
@@ -390,13 +475,14 @@ mod tests {
     #[test]
     fn f6_1_brew_temp_shifts_every_step_by_the_delta() {
         let p = declining();
+        // 94/90/88, anchored on 94: dialled to 96 (+2) → 96/92/90.
         let qc = BrewOverrides {
-            brew_temp: Some(93.0),
+            brew_temp: Some(96.0),
             ..BrewOverrides::default()
         };
         let e = effective_crema_profile(&p, &qc);
         assert_eq!(temps(&e), vec![96.0, 92.0, 90.0]);
-        assert!(close(e.brew_temp, 93.0));
+        assert!(close(e.brew_temp, 96.0));
         // The wire steps carry the shift (the bytes the DE1 runs).
         let wire: Vec<f32> = to_wire(&e).steps.iter().map(|s| s.temperature_c).collect();
         assert_eq!(wire, vec![96.0, 92.0, 90.0]);
@@ -404,7 +490,7 @@ mod tests {
         let down = effective_crema_profile(
             &p,
             &BrewOverrides {
-                brew_temp: Some(89.5),
+                brew_temp: Some(92.5),
                 ..BrewOverrides::default()
             },
         );
@@ -417,41 +503,104 @@ mod tests {
     fn f6_2_brew_temp_range_is_enforced_at_both_ends() {
         let p = declining();
         let r = brew_temp_range(&p);
-        // Highest step 94 may rise 6 to 100 → 91 + 6; lowest 88 may fall to 0.
-        assert!(close(r.max, 97.0), "max {}", r.max);
-        assert!(close(r.min, 3.0), "min {}", r.min);
-        assert!(close(r.anchor, 91.0));
+        // Highest step 94 may rise 6 to 100 → 94 + 6; lowest 88 may fall to
+        // the 1 °C floor → 94 − 87.
+        assert!(close(r.max, 100.0), "max {}", r.max);
+        assert!(close(r.min, 7.0), "min {}", r.min);
+        assert!(close(r.anchor, 94.0));
 
         let high = effective_crema_profile(
             &p,
             &BrewOverrides {
-                brew_temp: Some(105.0),
+                brew_temp: Some(100.0),
                 ..BrewOverrides::default()
             },
         );
         assert_eq!(temps(&high), vec![100.0, 96.0, 94.0]);
-        assert!(close(high.brew_temp, 97.0));
         assert!(temps(&high).iter().all(|t| *t <= MAX_TEMPERATURE_C));
 
+        // Inside the core's bounds but below the range: clamped.
         let low = effective_crema_profile(
             &p,
             &BrewOverrides {
-                brew_temp: Some(-20.0),
+                brew_temp: Some(3.0),
                 ..BrewOverrides::default()
             },
         );
-        assert_eq!(temps(&low), vec![6.0, 2.0, 0.0]);
-        assert!(temps(&low).iter().all(|t| *t >= MIN_TEMPERATURE_C));
-
-        // The normalized override reports the clamped value.
+        assert_eq!(temps(&low), vec![7.0, 3.0, 1.0]);
+        assert!(temps(&low).iter().all(|t| *t >= STEP_FLOOR_C));
         let n = normalize_brew_overrides(
             &p,
             &BrewOverrides {
-                brew_temp: Some(150.0),
+                brew_temp: Some(3.0),
                 ..BrewOverrides::default()
             },
         );
-        assert_eq!(n.brew_temp, Some(97.0));
+        assert_eq!(n.brew_temp, Some(7.0));
+    }
+
+    /// A brew temperature of 0 or outside the core's bounds is refused, never
+    /// clamped into a shift: no step is ever moved to 0 °C.
+    #[test]
+    fn a_brew_temp_of_zero_or_out_of_bounds_is_refused() {
+        let p = declining();
+        for bad in [0.0, -20.0, 100.5, 150.0, f32::NAN, f32::INFINITY] {
+            let qc = BrewOverrides {
+                brew_temp: Some(bad),
+                ..BrewOverrides::default()
+            };
+            assert_eq!(normalize_brew_overrides(&p, &qc).brew_temp, None, "{bad}");
+            assert_eq!(
+                temps(&effective_crema_profile(&p, &qc)),
+                vec![94.0, 90.0, 88.0]
+            );
+        }
+    }
+
+    /// The range's ends stay inside the core's bounds: a profile with a 0 °C
+    /// step (heater off, like "Steam only") does not offer 192 °C.
+    #[test]
+    fn the_range_ends_stay_inside_the_core_bounds() {
+        let mut p = declining();
+        for seg in &mut p.segments {
+            seg.temp = 0.0;
+        }
+        p.segments[0].temp = 92.0;
+        let r = brew_temp_range(&p);
+        assert!(r.max <= MAX_TEMPERATURE_C, "{r:?}");
+        assert!(r.min >= MIN_TEMPERATURE_C, "{r:?}");
+        // The 0 °C steps can't go lower: the dial can't go down at all.
+        assert!(close(r.min, 92.0), "{r:?}");
+        // Every builtin's range is inside the bounds (or just the anchor).
+        for wire in crate::builtin_profiles() {
+            let p = crate::from_wire(wire);
+            let r = brew_temp_range(&p);
+            assert!(r.min <= r.anchor && r.anchor <= r.max, "{}: {r:?}", p.name);
+            assert!(
+                r.max <= MAX_TEMPERATURE_C.max(r.anchor),
+                "{}: {r:?}",
+                p.name
+            );
+            assert!(r.min >= MIN_TEMPERATURE_C, "{}: {r:?}", p.name);
+            // Shifting to either end keeps every step in bounds, exactly (an
+            // end at the anchor is no shift: the profile as authored).
+            for t in [r.min, r.max].into_iter().filter(|t| !same(*t, r.anchor)) {
+                let e = effective_crema_profile(
+                    &p,
+                    &BrewOverrides {
+                        brew_temp: Some(t),
+                        ..BrewOverrides::default()
+                    },
+                );
+                assert!(
+                    e.segments
+                        .iter()
+                        .all(|s| (MIN_TEMPERATURE_C..=MAX_TEMPERATURE_C).contains(&s.temp)),
+                    "{}: {t}",
+                    p.name
+                );
+            }
+        }
     }
 
     #[test]
@@ -461,24 +610,54 @@ mod tests {
         let mut p = declining();
         p.segments[0].temp = 101.0;
         let r = brew_temp_range(&p);
-        assert!(close(r.max, 91.0));
-        assert!(r.min <= 91.0);
+        assert!(close(r.anchor, 101.0));
+        assert!(close(r.max, 101.0));
+        assert!(r.min <= 101.0);
     }
 
+    /// P1: the anchor is the first step, never the free-standing top-level
+    /// `brew_temp` (old blank profiles carry 93 over 92 °C steps).
     #[test]
-    fn an_absent_brew_temp_anchors_on_the_step_mean() {
+    fn a_stale_top_level_brew_temp_is_ignored() {
         let mut p = declining();
-        p.brew_temp = 0.0;
-        // (94 + 90 + 88) / 3 = 90.67 → 90.5.
-        assert!(close(brew_temp_anchor(&p), 90.5));
+        for seg in &mut p.segments {
+            seg.temp = 92.0;
+        }
+        p.brew_temp = 93.0;
+        assert!(close(brew_temp_anchor(&p), 92.0));
+        assert!(close(brew_temp_range(&p).max, 100.0));
+        assert!(close(with_derived_brew_temp(p.clone()).brew_temp, 92.0));
+        // Dialling 95 brews at 95, not 94.
         let e = effective_crema_profile(
             &p,
             &BrewOverrides {
-                brew_temp: Some(91.5),
+                brew_temp: Some(95.0),
                 ..BrewOverrides::default()
             },
         );
-        assert_eq!(temps(&e), vec![95.0, 91.0, 89.0]);
+        assert_eq!(temps(&e), vec![95.0, 95.0, 95.0]);
+        // And no override still derives the display value from the steps.
+        assert!(close(
+            effective_crema_profile(&p, &BrewOverrides::default()).brew_temp,
+            92.0
+        ));
+    }
+
+    /// The editors' "Brew temp" field shifts every step through the core
+    /// (Decenza `applyTemperatureToProfile`), keeping the shape.
+    #[test]
+    fn an_editor_brew_temp_change_shifts_every_step() {
+        let p = declining();
+        let edited = effective_crema_profile(
+            &p,
+            &BrewOverrides {
+                brew_temp: Some(91.0),
+                ..BrewOverrides::default()
+            },
+        );
+        assert_eq!(temps(&edited), vec![91.0, 87.0, 85.0]);
+        assert!(close(edited.brew_temp, 91.0));
+        assert!(close(brew_temp_anchor(&edited), 91.0));
     }
 
     /// AC-F6.3 (core half): a pre-infusion override changes the uploaded
@@ -544,6 +723,44 @@ mod tests {
         assert!(e.segments.iter().all(|s| close(s.time, 3.0)));
     }
 
+    /// The pre-infusion dial's range always holds the profile's own value
+    /// (37 / 45 / 80 s builtins), and a profile with no pre-infusion segment
+    /// gets a disabled dial at 0 (not "-0").
+    #[test]
+    fn the_preinfusion_dial_holds_the_profiles_own_value() {
+        for wire in crate::builtin_profiles() {
+            let p = crate::from_wire(wire);
+            let d = preinfusion_dial(&p);
+            assert!(
+                d.min <= d.seconds && d.seconds <= d.max,
+                "{}: {d:?}",
+                p.name
+            );
+            if d.adjustable {
+                assert!(
+                    d.max >= PREINFUSION_DIAL_MAX_S.min(d.max),
+                    "{}: {d:?}",
+                    p.name
+                );
+            } else {
+                assert!(
+                    d.seconds.to_bits() == 0.0_f32.to_bits(),
+                    "{}: {d:?} is not +0",
+                    p.name
+                );
+            }
+        }
+        let mut long = declining();
+        long.segments[0].time = 45.0;
+        let d = preinfusion_dial(&long);
+        assert!(d.adjustable && close(d.max, 45.0) && close(d.seconds, 45.0));
+        let mut none = declining();
+        none.preinfuse_step_count = 0;
+        let d = preinfusion_dial(&none);
+        assert!(!d.adjustable);
+        assert_eq!(d.seconds.to_bits(), 0.0_f32.to_bits());
+    }
+
     #[test]
     fn a_profile_without_preinfusion_ignores_the_override() {
         let mut p = declining();
@@ -554,7 +771,10 @@ mod tests {
             ..BrewOverrides::default()
         };
         assert_eq!(normalize_brew_overrides(&p, &qc).preinf, None);
-        assert_eq!(effective_crema_profile(&p, &qc), p);
+        assert_eq!(
+            effective_crema_profile(&p, &qc),
+            with_derived_brew_temp(p.clone())
+        );
     }
 
     #[test]
@@ -597,12 +817,15 @@ mod tests {
         let at_anchor = BrewOverrides {
             dose: Some(p.dose),
             yield_g: Some(p.yield_out + 0.01),
-            brew_temp: Some(91.0),
+            brew_temp: Some(94.0),
             preinf: Some(6.0),
         };
         let n = normalize_brew_overrides(&p, &at_anchor);
         assert!(n.is_empty(), "{n:?}");
-        assert_eq!(effective_crema_profile(&p, &at_anchor), p);
+        assert_eq!(
+            effective_crema_profile(&p, &at_anchor),
+            with_derived_brew_temp(p.clone())
+        );
         assert_eq!(
             effective_profile_fingerprint(&p, &at_anchor).unwrap(),
             effective_profile_fingerprint(&p, &BrewOverrides::default()).unwrap()
@@ -637,7 +860,7 @@ mod tests {
         let base = effective_profile_fingerprint(&p, &BrewOverrides::default()).unwrap();
         for qc in [
             BrewOverrides {
-                brew_temp: Some(93.0),
+                brew_temp: Some(96.0),
                 ..BrewOverrides::default()
             },
             BrewOverrides {
@@ -655,13 +878,14 @@ mod tests {
             let json = serde_json::to_string(&effective).unwrap();
             assert_eq!(fp, crate::profile_fingerprint(&json, None).unwrap());
         }
-        // 150 °C and the range's max upload the same bytes.
+        // 3 °C (below the range, inside the bounds) and the range's min
+        // upload the same bytes.
         let over = BrewOverrides {
-            brew_temp: Some(150.0),
+            brew_temp: Some(3.0),
             ..BrewOverrides::default()
         };
         let at_max = BrewOverrides {
-            brew_temp: Some(97.0),
+            brew_temp: Some(7.0),
             ..BrewOverrides::default()
         };
         assert_eq!(
@@ -694,14 +918,24 @@ mod tests {
     fn json_facades_round_trip() {
         let p = declining();
         let pj = serde_json::to_string(&p).unwrap();
-        let ej = effective_crema_profile_json(&pj, Some(r#"{"brewTemp":93}"#)).unwrap();
+        let ej = effective_crema_profile_json(&pj, Some(r#"{"brewTemp":96}"#)).unwrap();
         let e: CremaProfile = serde_json::from_str(&ej).unwrap();
         assert_eq!(temps(&e), vec![96.0, 92.0, 90.0]);
         let r: BrewTempRange = serde_json::from_str(&brew_temp_range_json(&pj).unwrap()).unwrap();
-        assert!(close(r.max, 97.0));
+        assert!(close(r.max, 100.0));
+        let mut stale = p.clone();
+        stale.brew_temp = 80.0;
+        let derived: CremaProfile = serde_json::from_str(
+            &with_derived_brew_temp_json(&serde_json::to_string(&stale).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert!(close(derived.brew_temp, 94.0));
+        let dial: PreinfusionDial =
+            serde_json::from_str(&preinfusion_dial_json(&pj).unwrap()).unwrap();
+        assert!(dial.adjustable && close(dial.seconds, 6.0));
         assert!(close(preinfusion_seconds_json(&pj).unwrap(), 6.0));
         let n: BrewOverrides = serde_json::from_str(
-            &normalize_brew_overrides_json(&pj, Some(r#"{"brewTemp":91}"#)).unwrap(),
+            &normalize_brew_overrides_json(&pj, Some(r#"{"brewTemp":94}"#)).unwrap(),
         )
         .unwrap();
         assert!(n.is_empty());

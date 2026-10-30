@@ -11421,8 +11421,8 @@ mod tests {
                 .collect()
         }
 
-        /// A 94 / 90 / 88 °C library profile shown as 91 °C, with two
-        /// pre-infusion segments of 2 s and 6 s.
+        /// A 94 / 90 / 88 °C library profile (anchored on its first step, 94),
+        /// with two pre-infusion segments of 2 s and 6 s.
         fn declining_library_profile() -> de1_domain::CremaProfile {
             let mut steps = Vec::new();
             for (t, secs) in [(94.0, 2.0), (90.0, 6.0), (88.0, 20.0)] {
@@ -11433,9 +11433,7 @@ mod tests {
             }
             let mut wire = profile("Declining", steps);
             wire.preinfuse_step_count = 2;
-            let mut p = de1_domain::from_wire(&wire);
-            p.brew_temp = 91.0;
-            p
+            de1_domain::from_wire(&wire)
         }
 
         /// AC-F6.3 / F6.6: the one shell entry point uploads the effective
@@ -11445,7 +11443,7 @@ mod tests {
         fn f6_upload_crema_profile_sends_the_effective_bytes_and_their_fingerprint() {
             let p = declining_library_profile();
             let qc = BrewOverrides {
-                brew_temp: Some(93.0),
+                brew_temp: Some(96.0),
                 preinf: Some(12.0),
                 ..BrewOverrides::default()
             };
@@ -11484,19 +11482,26 @@ mod tests {
         }
 
         #[test]
-        fn upload_crema_profile_clamps_an_out_of_range_brew_temp() {
-            let p = declining_library_profile();
-            let qc = BrewOverrides {
-                brew_temp: Some(120.0),
-                ..BrewOverrides::default()
+        fn upload_crema_profile_clamps_or_refuses_an_out_of_range_brew_temp() {
+            let temps_for = |brew_temp: f32| {
+                let p = declining_library_profile();
+                let qc = BrewOverrides {
+                    brew_temp: Some(brew_temp),
+                    ..BrewOverrides::default()
+                };
+                let mut core = CremaCore::new_with_model(1);
+                let (out, _) = core.upload_crema_profile(&p, &qc, Duration::ZERO).unwrap();
+                uploaded_frames(&out)
+                    .iter()
+                    .map(|f| f.temperature)
+                    .collect::<Vec<f32>>()
             };
-            let mut core = CremaCore::new_with_model(1);
-            let (out, _) = core.upload_crema_profile(&p, &qc, Duration::ZERO).unwrap();
-            let temps: Vec<f32> = uploaded_frames(&out)
-                .iter()
-                .map(|f| f.temperature)
-                .collect();
-            assert_eq!(temps, vec![100.0, 96.0, 94.0]);
+            // Inside the core's bounds but below the range: clamped to its
+            // 7 °C end (the 88 °C step stops at the 1 °C floor).
+            assert_eq!(temps_for(3.0), vec![7.0, 3.0, 1.0]);
+            // Outside the bounds, or 0: refused — the profile as saved.
+            assert_eq!(temps_for(120.0), vec![94.0, 90.0, 88.0]);
+            assert_eq!(temps_for(0.0), vec![94.0, 90.0, 88.0]);
         }
 
         #[test]

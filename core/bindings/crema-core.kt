@@ -3102,6 +3102,22 @@ data class PhaseMarker (
 	val transitionReason: String
 )
 
+/// The pre-infusion dial for one profile: its range, the profile's own
+/// seconds ([`preinfusion_seconds`]) and whether it can be dialled at all.
+@Serializable
+data class PreinfusionDial (
+	/// Lowest pre-infusion, seconds (0 = off).
+	val min: Float,
+	/// Highest pre-infusion, seconds: the stepper's [`PREINFUSION_DIAL_MAX_S`],
+	/// raised to the profile's own value when that is longer.
+	val max: Float,
+	/// The profile's own pre-infusion seconds — the dial's seed.
+	val seconds: Float,
+	/// `false` for a profile with no pre-infusion segment: there is nothing
+	/// to rescale, so the shells disable the dial and say why.
+	val adjustable: Boolean
+)
+
 /// What [`CremaCore::upload_crema_profile_json`](crate::CremaCore::upload_crema_profile_json)
 /// returns to a shell: the upload's [`CoreOutput`] and the fingerprint of the
 /// bytes it writes (`None` when nothing was uploaded — a malformed or rejected

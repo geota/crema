@@ -207,10 +207,12 @@ pub use decent_wire::{
     parse_decent_machines,
 };
 pub use effective_profile::{
-    BrewOverrides, BrewTempRange, brew_temp_anchor, brew_temp_range, brew_temp_range_json,
-    effective_crema_profile, effective_crema_profile_json, effective_profile_fingerprint,
+    BrewOverrides, BrewTempRange, PREINFUSION_DIAL_MAX_S, PreinfusionDial, STEP_FLOOR_C,
+    brew_temp_anchor, brew_temp_range, brew_temp_range_json, effective_crema_profile,
+    effective_crema_profile_json, effective_profile_fingerprint,
     effective_profile_fingerprint_json, normalize_brew_overrides, normalize_brew_overrides_json,
-    parse_brew_overrides, preinfusion_seconds, preinfusion_seconds_json,
+    parse_brew_overrides, preinfusion_dial, preinfusion_dial_json, preinfusion_seconds,
+    preinfusion_seconds_json, with_derived_brew_temp, with_derived_brew_temp_json,
 };
 pub use error::{DomainError, ImportError};
 pub use firmware_builds::{
