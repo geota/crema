@@ -1464,6 +1464,13 @@ data class EventSteamEcoModeChangedInner (
 	val eco: Boolean
 )
 
+/// Generated type representing the anonymous struct variant `ScaleLinkDead` of the `Event` Rust enum
+@Serializable
+data class EventScaleLinkDeadInner (
+	/// Which rule tripped.
+	val reason: ScaleLinkDeadReason
+)
+
 /// Generated type representing the anonymous struct variant `SawAutoZeroed` of the `Event` Rust enum
 @Serializable
 data class EventSawAutoZeroedInner (
@@ -1851,6 +1858,15 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleStale")
 	object ScaleStale: Event()
+	/// The scale link looks dead: still no reading 5 s after
+	/// [`Event::ScaleStale`], or three scale writes in a row failed with no
+	/// reading in between. Emitted once per episode — a fresh reading re-arms
+	/// it. The shell drops the link at the transport (not a user disconnect)
+	/// so its reconnect loop recovers it, but only while its link still
+	/// claims ready.
+	@Serializable
+	@SerialName("ScaleLinkDead")
+	data class ScaleLinkDead(val content: EventScaleLinkDeadInner): Event()
 	/// The untared-cup guard latched a virtual zero: a heavy reading right
 	/// after first flow held still, so it was a cup landing after the tare —
 	/// every later reading this shot is netted against it and stop-at-weight
@@ -2101,6 +2117,38 @@ data class CustomMethodLabelInput (
 	/// The shell's display labels for the curated presets ("V60 /
 	/// pourover") — the core owns only the ids, which are checked too.
 	val presetLabels: List<String>
+)
+
+/// One connect-time seed read: a characteristic the DE1 answers on a direct
+/// read but does not notify at connect, so subscribing alone leaves its rows
+/// blank.
+@Serializable
+data class De1SeedRead (
+	/// Full lowercase 128-bit characteristic UUID.
+	val characteristic: String,
+	/// Label for status lines (`machine state`).
+	val label: String,
+	/// Whether the link depends on it. The DE1 answers a StateInfo read even
+	/// asleep, so a link that can't produce it (after one retry, the shells'
+	/// rule) is hollow and is dropped for the reconnect loop. The others are
+	/// best-effort.
+	val required: Boolean
+)
+
+/// One DE1 notify characteristic the shells subscribe to at connect.
+@Serializable
+data class De1Subscription (
+	/// Full lowercase 128-bit characteristic UUID.
+	val characteristic: String,
+	/// Characteristic name for status lines (`StateInfo`).
+	val name: String,
+	/// Its 16-bit short, upper case (`A00E`).
+	val short: String,
+	/// Whether a failed subscribe fails the connect. The required ones are
+	/// the streams the app can't run without, and together the structural
+	/// proof that the device is a DE1: a link that lacks one must never sit
+	/// ready with dead notifications.
+	val required: Boolean
 )
 
 /// The DE1's GATT service + characteristic UUIDs (full lowercase 128-bit
@@ -2794,6 +2842,21 @@ data class FrameExitSpec (
 	val threshold: Double,
 	/// Configured max frame duration, seconds; `<= 0` when unknown.
 	val maxDurationS: Double
+)
+
+/// What the hub UI shows about pairing.
+@Serializable
+data class GateStatus (
+	/// The window is open.
+	val open: Boolean,
+	/// Seconds left in the window (0 when closed).
+	val secs_left: UInt,
+	/// Failed codes counted in this window.
+	val failures: UByte,
+	/// Seconds left in the lockout (0 when not locked).
+	val locked_secs_left: UInt,
+	/// A remote holds the pairing slot.
+	val pending: Boolean
 )
 
 /// The user's Visualizer sync **preferences** — the portable, cross-shell
@@ -4606,6 +4669,170 @@ enum class Pump(val string: String) {
 	Flow("flow"),
 }
 
+/// Generated type representing the anonymous struct variant `LegacyPeer` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventLegacyPeerInner (
+	/// The remote's protocol version.
+	val version: UInt,
+	/// The remote's display name.
+	val name: String
+)
+
+/// Generated type representing the anonymous struct variant `PairRequest` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPairRequestInner (
+	/// The remote's claimed device id (unauthenticated until pairing completes).
+	val remote_id: String,
+	/// The remote's display name.
+	val remote_name: String
+)
+
+/// Generated type representing the anonymous struct variant `PairPending` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPairPendingInner (
+	/// The remote's device id, checked against its static key.
+	val remote_id: String,
+	/// The remote's display name.
+	val remote_name: String
+)
+
+/// Generated type representing the anonymous struct variant `PairingFailed` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPairingFailedInner (
+	/// `WrongCode`, `NotConfirmed`, `Timeout`, `Cancelled`, `Malformed`, …
+	val reason: String,
+	/// Failed codes counted in this window.
+	val failures: UByte,
+	/// Whether pairing is now locked out.
+	val locked: Boolean
+)
+
+/// Generated type representing the anonymous struct variant `UnknownRemote` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventUnknownRemoteInner (
+	/// The remote's device id.
+	val remote_id: String
+)
+
+/// Generated type representing the anonymous struct variant `HubHello` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventHubHelloInner (
+	/// The hub's device id.
+	val hub_id: String,
+	/// The hub's display name.
+	val hub_name: String,
+	/// `Ready`, `AwaitingCode`, `PairingClosed`, `Busy` or `LockedOut`.
+	val status: String,
+	/// Seconds left in the pairing window (or the lockout).
+	val secs_left: UInt
+)
+
+/// Generated type representing the anonymous struct variant `ShowCode` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventShowCodeInner (
+	/// When the code expires (`now_ms` clock).
+	val expires_at_ms: Long
+)
+
+/// Generated type representing the anonymous struct variant `Refused` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventRefusedInner (
+	/// `HostMismatch`, `HubOutdated`, `HubUnverified`, `Timeout`, `Revoked`,
+	/// `NotPaired`, `HubStopped`, `Protocol`, `Normal`, or an `ABORT` reason.
+	val reason: String,
+	/// Whether the refusal arrived inside the session.
+	val authenticated: Boolean
+)
+
+/// Generated type representing the anonymous struct variant `Paired` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPairedInner (
+	/// The peer's device id.
+	val peer_id: String,
+	/// The peer's display name.
+	val peer_name: String
+)
+
+/// Generated type representing the anonymous struct variant `Established` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventEstablishedInner (
+	/// The peer's device id.
+	val peer_id: String
+)
+
+/// Generated type representing the anonymous struct variant `PeerClosed` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventPeerClosedInner (
+	/// `Normal`, `Protocol`, … (the record's code).
+	val reason: String
+)
+
+/// Generated type representing the anonymous struct variant `Failed` of the `RelayEvent` Rust enum
+@Serializable
+data class RelayEventFailedInner (
+	/// The `RelayError` name.
+	val error: String
+)
+
+/// Events for the shell (§3.4). Names are sanitized; public keys never ride
+/// in events (read `peer_public_key()`).
+@Serializable
+sealed class RelayEvent {
+	/// Hub: a v2/v3 remote dialled; it got the legacy denial.
+	@Serializable
+	@SerialName("LegacyPeer")
+	data class LegacyPeer(val content: RelayEventLegacyPeerInner): RelayEvent()
+	/// Hub: a remote asks to pair; show the code entry dialog.
+	@Serializable
+	@SerialName("PairRequest")
+	data class PairRequest(val content: RelayEventPairRequestInner): RelayEvent()
+	/// Hub: the code matched. Persist the pin, insert it into the live
+	/// `PinSet`, then call `confirm_paired()` (or `reject_pairing()` if the write failed).
+	@Serializable
+	@SerialName("PairPending")
+	data class PairPending(val content: RelayEventPairPendingInner): RelayEvent()
+	/// A pairing attempt ended without success. `failures`/`locked` describe the
+	/// hub's gate after it (always 0/false on the remote).
+	@Serializable
+	@SerialName("PairingFailed")
+	data class PairingFailed(val content: RelayEventPairingFailedInner): RelayEvent()
+	/// Hub: an unpinned remote tried to resume; it got `CLOSE(NOT_PAIRED)`.
+	@Serializable
+	@SerialName("UnknownRemote")
+	data class UnknownRemote(val content: RelayEventUnknownRemoteInner): RelayEvent()
+	/// Remote: the hub's ServerHello (advisory until the handshake).
+	@Serializable
+	@SerialName("HubHello")
+	data class HubHello(val content: RelayEventHubHelloInner): RelayEvent()
+	/// Remote: show the code, read from `RemoteConnection::code()`, until
+	/// `expires_at_ms`. The event itself never carries the code, so no event,
+	/// event JSON or record a bridge builds from it can leak it into a log.
+	@Serializable
+	@SerialName("ShowCode")
+	data class ShowCode(val content: RelayEventShowCodeInner): RelayEvent()
+	/// Remote: the hub refused. Only `authenticated` refusals (a `CLOSE` record)
+	/// may change trust state or role.
+	@Serializable
+	@SerialName("Refused")
+	data class Refused(val content: RelayEventRefusedInner): RelayEvent()
+	/// Both: pairing completed.
+	@Serializable
+	@SerialName("Paired")
+	data class Paired(val content: RelayEventPairedInner): RelayEvent()
+	/// Both: the session is up (hub: admitted; remote: hub authenticated).
+	@Serializable
+	@SerialName("Established")
+	data class Established(val content: RelayEventEstablishedInner): RelayEvent()
+	/// Hub: the remote ended an established session with an authenticated `CLOSE` record.
+	@Serializable
+	@SerialName("PeerClosed")
+	data class PeerClosed(val content: RelayEventPeerClosedInner): RelayEvent()
+	/// The connection failed for a reason no more specific event covers.
+	@Serializable
+	@SerialName("Failed")
+	data class Failed(val content: RelayEventFailedInner): RelayEvent()
+}
+
 /// Generated type representing the anonymous struct variant `Corrupt` of the `SawModelLoad` Rust enum
 @Serializable
 data class SawModelLoadCorruptInner (
@@ -4642,6 +4869,17 @@ sealed class SawModelLoad {
 	@Serializable
 	@SerialName("Corrupt")
 	data class Corrupt(val content: SawModelLoadCorruptInner): SawModelLoad()
+}
+
+/// Why [`Event::ScaleLinkDead`] fired.
+@Serializable
+enum class ScaleLinkDeadReason(val string: String) {
+	/// No weight reading for the stale timeout plus the 5 s grace.
+	@SerialName("Silent")
+	Silent("Silent"),
+	/// Three scale writes in a row failed with no reading in between.
+	@SerialName("WritesFailing")
+	WritesFailing("WritesFailing"),
 }
 
 /// What the shell should do with a just-completed shot — decided at the

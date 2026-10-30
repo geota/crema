@@ -515,6 +515,12 @@ abstract class GenerateUniffiBindings : DefaultTask() {
     @get:Internal
     abstract val library: RegularFileProperty
 
+    /// An optional uniffi-bindgen config merged over the crate's uniffi.toml
+    /// (the test bindings use it to move into their own package).
+    @get:Optional
+    @get:InputFile
+    abstract val configFile: RegularFileProperty
+
     /// Where the generated Kotlin lands.
     @get:OutputDirectory
     abstract val outputDirectory: DirectoryProperty
@@ -535,6 +541,7 @@ abstract class GenerateUniffiBindings : DefaultTask() {
                 // installed, and a build/-dir generated file needs no formatting.
                 // Without this, the build prints a "ktlint: No such file" warning.
                 "--no-format",
+                *configFile.orNull?.let { arrayOf("--config", it.asFile.absolutePath) } ?: emptyArray(),
                 "--library", library.get().asFile.absolutePath,
                 "--language", "kotlin",
                 "--out-dir", outDir.absolutePath,
@@ -606,12 +613,17 @@ val hostCoreLibrary: Provider<RegularFile> =
         val targetDir = (groovy.json.JsonSlurper().parseText(json) as Map<*, *>)["target_directory"] as String
         layout.projectDirectory.file("$targetDir/debug/${System.mapLibraryName("de1_ffi")}")
     }
+// It is built with the `test-seeds` feature (relay v4 spec §2.11), which adds the
+// deterministic `*_for_tests` relay constructors for the vector round trip
+// (RelayFfiRoundTripTest). Only this host library has it: `cargoBuild` (the
+// APK's arm64 library, and so the APK's bindings) never does, and CI's
+// release-symbols check proves the release artifacts carry none.
 val cargoBuildHostCore =
     tasks.register<Exec>("cargoBuildHostCore") {
-        description = "Build de1-ffi for the host, for JVM unit tests."
+        description = "Build de1-ffi for the host (with test-seeds), for JVM unit tests."
         group = "rust"
         workingDir = coreDir.asFile
-        commandLine(cargoExecutable, "build", "--package", "de1-ffi", "--lib")
+        commandLine(cargoExecutable, "build", "--package", "de1-ffi", "--lib", "--features", "test-seeds")
         outputs.file(hostCoreLibrary).withPropertyName("hostCoreLibrary")
         // Cargo knows what is stale; Gradle has no view of the Rust sources.
         outputs.upToDateWhen { false }
@@ -630,5 +642,37 @@ tasks.withType<Test>().configureEach {
     // machine-specific path stays out of the cache key.
     doFirst {
         systemProperty("jna.library.path", hostCoreLibrary.get().asFile.parentFile.absolutePath)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test-only UniFFI bindings for the relay vector round trip (AC-22)
+// ---------------------------------------------------------------------------
+// The APK's bindings come from the arm64 library, which has no `*_for_tests`
+// constructors, so the unit tests can't reach them through those. This task
+// generates a second, complete set from the host library (built with
+// `test-seeds` above) into its own package, `coffee.crema.core.testseeds`
+// (uniffi-test-bindings.toml), and adds it to the UNIT-TEST sources only. Both
+// sets load the same host library; de1-ffi has no callback interfaces, so
+// they don't contend for registrations.
+val generateUniffiTestBindings =
+    tasks.register<GenerateUniffiBindings>("generateUniffiTestBindings") {
+        description = "Generate test-seeds UniFFI Kotlin bindings (unit tests only)."
+        group = "rust"
+        cargoCommand.set(cargoExecutable)
+        crateSource.set(layout.projectDirectory.dir("../../core/de1-ffi/src"))
+        workspaceDir.set(coreDir)
+        library.set(hostCoreLibrary)
+        configFile.set(layout.projectDirectory.file("uniffi-test-bindings.toml"))
+        outputDirectory.set(layout.buildDirectory.dir("generated/uniffi-test"))
+        dependsOn(cargoBuildHostCore)
+    }
+
+androidComponents {
+    onVariants { variant ->
+        (variant as? com.android.build.api.variant.HasUnitTest)?.unitTest?.sources?.kotlin?.addGeneratedSourceDirectory(
+            generateUniffiTestBindings,
+            GenerateUniffiBindings::outputDirectory,
+        )
     }
 }

@@ -28,10 +28,15 @@ mod sweep;
 pub use calibration_guard::CalibrationRefusal;
 pub use de1_domain::{FirmwareBuildReport, FirmwareBuildStatus};
 pub use de1_uuids::{
-    De1Uuids, de1_uuids, de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
+    De1SeedRead, De1Subscription, De1Uuids, connect_identity_registers,
+    connect_identity_registers_json, de1_notification_source, de1_notification_source_name,
+    de1_seed_reads, de1_seed_reads_json, de1_subscriptions, de1_subscriptions_json, de1_uuids,
+    de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
 };
 pub use error::AppError;
-pub use event::{Command, CoreOutput, Event, ProfileUploadFailure, Source, WriteTarget};
+pub use event::{
+    Command, CoreOutput, Event, ProfileUploadFailure, ScaleLinkDeadReason, Source, WriteTarget,
+};
 pub use firmware_flash::{
     FLASHABLE_MODELS, FirmwareFlash, FlashAction, FlashBlocker, FlashFailure, FlashPhase,
     FlashShellConditions, FlashStartError, FlashStatus, FlashStep,
@@ -127,6 +132,17 @@ const NO_AC_MIN_FIRMWARE: u32 = 1337;
 /// How long the scale may go without reporting weight before it is considered
 /// stale — the legacy app warns after roughly one second of silence.
 const SCALE_STALE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// How long a stale scale may stay silent before its link is presumed dead
+/// ([`Event::ScaleLinkDead`]): Android's grace, so a scale whose stream only
+/// hiccuped resumes before anything is torn down.
+const SCALE_DEAD_GRACE: Duration = Duration::from_secs(5);
+
+/// Consecutive failed scale writes, with no reading in between, that presume
+/// the link dead. The scale keep-alives (Decent 2 s, Acaia 3 s) write on a
+/// steady cadence, so a wedged link trips this within seconds (Android's
+/// detector; reaprime runs the same on GATT op timeouts).
+const MAX_SCALE_WRITE_FAILURES: u32 = 3;
 
 /// Minimum spacing between unit-recovery nudge writes — one per
 /// notification (~10 Hz) hammered a stubborn scale for no benefit.
@@ -661,6 +677,17 @@ pub struct CremaCore {
     /// Whether an [`Event::ScaleStale`] has already been emitted for the
     /// current stale episode — cleared by the next fresh reading.
     scale_stale_reported: bool,
+    /// The `last_scale_weight` a silent [`Event::ScaleLinkDead`] was emitted
+    /// for. A fresh reading moves `last_scale_weight` on, which re-arms it, so
+    /// a scale that reconnects but stays silent is not torn down again.
+    scale_dead_reported_for: Option<Duration>,
+    /// Consecutive failed scale writes the shell reported
+    /// ([`CremaCore::on_scale_write_result`]), counted since
+    /// `scale_write_failures_anchor`: a reading moves `last_scale_weight` on
+    /// and restarts the count.
+    scale_write_failures: u32,
+    /// The `last_scale_weight` the write-failure count started from.
+    scale_write_failures_anchor: Option<Duration>,
     /// Whether the one-shot connect-time scale-config queries (`0x0a` serial /
     /// `0x0f` settings) have already been issued for the connected scale.
     /// There is no scale-connected notification, so the queries are emitted on
@@ -1043,6 +1070,9 @@ impl CremaCore {
             last_scale_weight: None,
             last_scale_estimate: None,
             scale_stale_reported: false,
+            scale_dead_reported_for: None,
+            scale_write_failures: 0,
+            scale_write_failures_anchor: None,
             scale_config_queried: false,
             profile_upload: None,
             last_active_profile_title: None,
@@ -1193,6 +1223,7 @@ impl CremaCore {
         // A newly connected scale has not yet been asked for its serial /
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
+        self.scale_write_failures = 0;
         // A scale arriving MID-SHOT was never tared for this shot — reopen
         // the untared-cup window so its first reading is sanity-checked
         // before the re-armed weight leg can fire (review #29).
@@ -1226,6 +1257,9 @@ impl CremaCore {
         self.last_scale_weight = None;
         self.last_scale_estimate = None;
         self.scale_stale_reported = false;
+        self.scale_dead_reported_for = None;
+        self.scale_write_failures = 0;
+        self.scale_write_failures_anchor = None;
         self.scale_config_queried = false;
         self.shot_metrics.reset_scale();
         // The untared-cup guard's latches describe THIS scale's readings —
@@ -3175,6 +3209,35 @@ impl CremaCore {
         self.gate_read_only(out)
     }
 
+    /// Report how one scale write the shell sent went. After
+    /// [`MAX_SCALE_WRITE_FAILURES`] failures in a row with no reading in
+    /// between, emit [`Event::ScaleLinkDead`] (`WritesFailing`) and start the
+    /// count over. A reading restarts the count too, so a scale that streams
+    /// weight but rejects one command is not torn down over and over. Report
+    /// only writes actually sent (a shell that holds writes while the scale is
+    /// not ready reports nothing for them). A no-op with no scale.
+    pub fn on_scale_write_result(&mut self, ok: bool) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if self.scale.is_none() {
+            return out;
+        }
+        if ok || self.scale_write_failures_anchor != self.last_scale_weight {
+            self.scale_write_failures = 0;
+            self.scale_write_failures_anchor = self.last_scale_weight;
+        }
+        if ok {
+            return out;
+        }
+        self.scale_write_failures += 1;
+        if self.scale_write_failures >= MAX_SCALE_WRITE_FAILURES {
+            self.scale_write_failures = 0;
+            out.events.push(Event::ScaleLinkDead {
+                reason: ScaleLinkDeadReason::WritesFailing,
+            });
+        }
+        out
+    }
+
     /// Feed a periodic clock tick. Drives the lost-scale watchdog (if a scale
     /// is connected but has not reported weight for [`SCALE_STALE_TIMEOUT`],
     /// emit [`Event::ScaleStale`] once per stale episode), the steam
@@ -3190,17 +3253,32 @@ impl CremaCore {
         let mut out = CoreOutput::default();
         // A Half Decent Scale in SoftSleep stops streaming on purpose — its
         // silence is not a dead link (decaid suspends its watchdog there).
-        if self.scale.is_some()
+        let watched = self.scale.is_some()
             && !self
                 .hds
                 .as_ref()
-                .is_some_and(HdsNegotiation::is_soft_sleeping)
+                .is_some_and(HdsNegotiation::is_soft_sleeping);
+        if watched
             && !self.scale_stale_reported
             && let Some(last) = self.last_scale_weight
             && now.saturating_sub(last) >= SCALE_STALE_TIMEOUT
         {
             self.scale_stale_reported = true;
             out.events.push(Event::ScaleStale);
+        }
+        // Still silent SCALE_DEAD_GRACE later: presume the link dead (Android's
+        // rule; Decenza treats an in-shot feed stall as a link fault). Covers
+        // scales with no keep-alive writes (Bookoo), which the write-failure
+        // count never probes. Once per silent episode.
+        if watched
+            && let Some(last) = self.last_scale_weight
+            && self.scale_dead_reported_for != Some(last)
+            && now.saturating_sub(last) >= SCALE_STALE_TIMEOUT + SCALE_DEAD_GRACE
+        {
+            self.scale_dead_reported_for = Some(last);
+            out.events.push(Event::ScaleLinkDead {
+                reason: ScaleLinkDeadReason::Silent,
+            });
         }
         for event in self.steam.on_tick(now) {
             self.map_steam_event(event, &mut out);
@@ -6326,6 +6404,86 @@ mod tests {
         core.on_notification(Source::ScaleWeight, &bookoo_packet(2_100), 3_000);
         assert!(core.on_tick(3_500).events.is_empty());
         assert!(core.on_tick(4_100).events.contains(&Event::ScaleStale));
+    }
+
+    fn dead_events(out: &CoreOutput) -> Vec<ScaleLinkDeadReason> {
+        out.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::ScaleLinkDead { reason } => Some(*reason),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_silent_scale_link_is_presumed_dead_once_after_the_grace() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        assert!(core.on_tick(2_100).events.contains(&Event::ScaleStale));
+        // Stale, but within the 5 s grace: the stream may still resume.
+        assert!(dead_events(&core.on_tick(6_900)).is_empty());
+        assert_eq!(
+            dead_events(&core.on_tick(7_000)),
+            vec![ScaleLinkDeadReason::Silent]
+        );
+        // The shell tears down and reconnects; a scale that comes back silent
+        // is not torn down again and again (no reconnect storm).
+        for t in (8_000..120_000).step_by(1_000) {
+            assert!(dead_events(&core.on_tick(t)).is_empty(), "at {t} ms");
+        }
+        // A reading re-arms it: the next silent episode is reported again.
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_100), 120_000);
+        assert!(dead_events(&core.on_tick(125_900)).is_empty());
+        assert_eq!(
+            dead_events(&core.on_tick(126_000)),
+            vec![ScaleLinkDeadReason::Silent]
+        );
+    }
+
+    #[test]
+    fn three_failed_scale_writes_in_a_row_presume_the_link_dead() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        assert!(dead_events(&core.on_scale_write_result(false)).is_empty());
+        assert!(dead_events(&core.on_scale_write_result(false)).is_empty());
+        assert_eq!(
+            dead_events(&core.on_scale_write_result(false)),
+            vec![ScaleLinkDeadReason::WritesFailing]
+        );
+        // The count starts over after it fires.
+        assert!(dead_events(&core.on_scale_write_result(false)).is_empty());
+        assert!(dead_events(&core.on_scale_write_result(false)).is_empty());
+    }
+
+    #[test]
+    fn a_landed_write_or_a_reading_restarts_the_write_failure_count() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        core.on_scale_write_result(false);
+        core.on_scale_write_result(false);
+        core.on_scale_write_result(true);
+        assert!(dead_events(&core.on_scale_write_result(false)).is_empty());
+        core.on_scale_write_result(false);
+        // A scale streaming weight while it rejects a command is alive.
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_100), 1_100);
+        assert!(dead_events(&core.on_scale_write_result(false)).is_empty());
+        assert!(dead_events(&core.on_scale_write_result(false)).is_empty());
+        assert_eq!(
+            dead_events(&core.on_scale_write_result(false)),
+            vec![ScaleLinkDeadReason::WritesFailing]
+        );
+    }
+
+    #[test]
+    fn scale_write_results_without_a_scale_do_nothing() {
+        let mut core = CremaCore::new();
+        for _ in 0..5 {
+            assert!(core.on_scale_write_result(false).events.is_empty());
+        }
     }
 
     #[test]

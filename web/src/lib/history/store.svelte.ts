@@ -35,6 +35,7 @@ import {
 	isManualLog,
 	shotId,
 	snapshotFromBean,
+	toCoreShotMachine,
 	type ShotBean,
 	type ShotMachine,
 	type ShotMetadata,
@@ -895,7 +896,8 @@ function mapTimedSamples(
 			// per `applyEvent` in ui-state.svelte.ts.
 			setHeadTemp: t.sample.setHeadTemp,
 			setGroupPressure: t.sample.setGroupPressure,
-			setGroupFlow: t.sample.setGroupFlow
+			setGroupFlow: t.sample.setGroupFlow,
+			frameNumber: t.sample.frameNumber
 		};
 	});
 }
@@ -977,7 +979,7 @@ export interface ImportExtras {
  * Coerce a stored `bean` field on a persisted shot into a {@link ShotBean}
  * or `null`. Legacy records (pre-bean-snapshot) carry no `bean`; v1 records
  * carry only `{ roaster, type, roastedOn, roastLevel }`; post-inline-bean
- * records also carry `notes`, `grinderSetting`. Each extra field is read
+ * records also carry `notes`, `grinderSetting`, `grinder`. Each extra field is read
  * defensively so a stored-shape regression cannot crash the History route.
  *
  * Older records may still carry a persisted `visualizerId` on the snapshot
@@ -1020,7 +1022,25 @@ function coerceShotBean(raw: unknown): ShotBean | null {
 	if (typeof obj.grinderSetting === 'string' && obj.grinderSetting.length > 0) {
 		out.grinderSetting = obj.grinderSetting;
 	}
+	if (typeof obj.grinder === 'string' && obj.grinder.length > 0) out.grinder = obj.grinder;
 	return out as unknown as ShotBean;
+}
+
+/**
+ * Coerce a stored `machine` stamp into the core shape, or `null` when it has
+ * no serial. Rows persisted before the core type may carry `null`s for the
+ * optional fields; {@link toCoreShotMachine} drops them.
+ */
+function coerceShotMachine(raw: unknown): ShotMachine | null {
+	if (typeof raw !== 'object' || raw === null) return null;
+	const obj = raw as Record<string, unknown>;
+	if (typeof obj.serialNumber !== 'string') return null;
+	const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+	return toCoreShotMachine({
+		serialNumber: obj.serialNumber,
+		firmwareVersion: str(obj.firmwareVersion),
+		model: str(obj.model)
+	});
 }
 
 /**
@@ -1089,6 +1109,16 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 			: null;
 	const stopOnWeight = typeof obj.stopOnWeight === 'boolean' ? obj.stopOnWeight : undefined;
 	const autoTare = typeof obj.autoTare === 'boolean' ? obj.autoTare : undefined;
+	// The per-shot privacy override and the Decent upload state (#84). Dropping
+	// them here widened a private shot's next Visualizer PATCH to the settings
+	// default, re-queued Decent shots for upload, and re-stamped old shots
+	// with whichever DE1 was connected at upload time.
+	const privacy =
+		obj.privacy === 'public' || obj.privacy === 'unlisted' || obj.privacy === 'private'
+			? obj.privacy
+			: null;
+	const decentId = typeof obj.decentId === 'string' && obj.decentId ? obj.decentId : null;
+	const machine = coerceShotMachine(obj.machine);
 	const visualizerId = typeof obj.visualizerId === 'string' ? obj.visualizerId : null;
 	const deletedAt = typeof obj.deletedAt === 'number' ? obj.deletedAt : null;
 	// Brew Log fields (issue #10) — all additive; absent on machine shots.
@@ -1166,7 +1196,10 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 		preinfuseTarget,
 		stopOnWeight,
 		autoTare,
+		...(privacy ? { privacy } : {}),
 		visualizerId,
+		...(decentId ? { decentId } : {}),
+		...(machine ? { machine } : {}),
 		deletedAt,
 		...(brewMethod != null ? { brewMethod } : {}),
 		...(brewMethodLabel ? { brewMethodLabel } : {}),

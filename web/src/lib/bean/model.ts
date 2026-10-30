@@ -20,7 +20,9 @@ import {
 	days_off_roast as wasmDaysOffRoast,
 	roast_freshness as wasmRoastFreshness,
 	coerceBean as wasmCoerceBean,
-	coerceRoaster as wasmCoerceRoaster
+	coerceRoaster as wasmCoerceRoaster,
+	duplicateBeanJson as wasmDuplicateBeanJson,
+	setBeanFrozenJson as wasmSetBeanFrozenJson
 } from '#lib/wasm/de1_wasm.js';
 
 // ── Wire types (mirrored from de1_domain::bean) ─────────────────────────
@@ -543,6 +545,26 @@ export function migrateLegacyCurrentBean(raw: unknown): {
 export function coerceBean(raw: unknown): Bean | null {
 	const out = wasmCoerceBean(JSON.stringify(raw) ?? 'null', Date.now());
 	return out == null ? null : (JSON.parse(out) as Bean);
+}
+
+/**
+ * A new bag copied from `src` — the library's "Duplicate" action, delegated to
+ * `de1_domain::duplicate_bean` so Android copies identically: a fresh id,
+ * `"<name> (copy)"`, new timestamps, and none of the original's remote links
+ * (Visualizer id, Beanconqueror id), photo ref, tombstone, archive or pin.
+ */
+export function duplicateBean(src: Bean, newId: string = mintBeanId(), nowMs = Date.now()): Bean {
+	return JSON.parse(wasmDuplicateBeanJson(JSON.stringify(src), newId, nowMs)) as Bean;
+}
+
+/**
+ * `bean` with its Frozen switch set — `de1_domain::set_bean_frozen`, the rule
+ * Android uses too. Freezing stamps today; defrosting stamps `defrostedOn` and
+ * keeps `frozenOn`; refreezing carries the earlier frozen span. Only
+ * `frozenOn` / `defrostedOn` change, and days off roast never moves.
+ */
+export function setBeanFrozen(bean: Bean, frozen: boolean, nowMs = Date.now()): Bean {
+	return JSON.parse(wasmSetBeanFrozenJson(JSON.stringify(bean), frozen, nowMs)) as Bean;
 }
 
 /**

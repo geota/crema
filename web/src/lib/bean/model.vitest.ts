@@ -7,7 +7,15 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
-import { coerceBean, coerceRoaster } from './model.ts';
+import {
+	beanDaysOffRoast,
+	blankBean,
+	coerceBean,
+	coerceRoaster,
+	duplicateBean,
+	setBeanFrozen,
+	type Bean
+} from './model.ts';
 
 beforeAll(async () => {
 	await initTestWasm();
@@ -83,5 +91,79 @@ describe('coerceRoaster', () => {
 		expect(roaster!.website).toBe('https://onyx.coffee');
 		expect(roaster!.visualizerId).toBe('rv-1');
 		expect(roaster!.notes).toBe('');
+	});
+});
+
+describe('duplicateBean (core duplicate_bean)', () => {
+	it('copies the details and drops every remote link, photo ref, tombstone, archive and pin', () => {
+		const src: Bean = {
+			...blankBean('bean:orig'),
+			name: 'Gesha',
+			roasterId: 'roaster:1',
+			roastedOn: '2026-09-01',
+			tags: ['daily'],
+			favourite: true,
+			archivedAt: 10,
+			deletedAt: 20,
+			visualizerId: 'vb-orig',
+			beanconquerorId: 'bc-orig',
+			canonicalCoffeeBagId: 'cat-bag-1',
+			imageRef: 'bean-image:bean:orig',
+			metadata: { co2eKg: 1.4 }
+		};
+		const copy = duplicateBean(src, 'bean:copy', 1_000);
+		expect(copy).toEqual({
+			...src,
+			id: 'bean:copy',
+			name: 'Gesha (copy)',
+			favourite: false,
+			archivedAt: null,
+			deletedAt: null,
+			visualizerId: null,
+			beanconquerorId: null,
+			imageRef: null,
+			createdAt: 1_000,
+			updatedAt: 1_000
+		});
+		expect(src.visualizerId).toBe('vb-orig');
+	});
+
+	it('names a blank bag and mints a bean id by default', () => {
+		const copy = duplicateBean(blankBean('bean:x'));
+		expect(copy.name).toBe('Untitled bag (copy)');
+		expect(copy.id).toMatch(/^bean:/);
+		expect(copy.id).not.toBe('bean:x');
+	});
+});
+
+describe('setBeanFrozen (core set_bean_frozen)', () => {
+	// 2026-05-22 12:00 UTC.
+	const now = Date.UTC(2026, 4, 22, 12);
+
+	it('switching Frozen off defrosts today, keeps the freeze date and the count', () => {
+		const bag: Bean = {
+			...blankBean('bean:f'),
+			roastedOn: '2026-04-24',
+			frozenOn: '2026-05-07'
+		};
+		const off = setBeanFrozen(bag, false, now);
+		expect(off).toEqual({ ...bag, defrostedOn: '2026-05-22' });
+		expect(beanDaysOffRoast(off, now)).toBe(13);
+		expect(beanDaysOffRoast(bag, now)).toBe(13);
+	});
+
+	it('switching Frozen on stamps today, or carries an earlier freeze', () => {
+		const plain: Bean = { ...blankBean('bean:p'), roastedOn: '2026-05-12' };
+		expect(setBeanFrozen(plain, true, now)).toEqual({ ...plain, frozenOn: '2026-05-22' });
+		const thawed: Bean = {
+			...plain,
+			roastedOn: '2026-04-24',
+			frozenOn: '2026-05-07',
+			defrostedOn: '2026-05-12'
+		};
+		const on = setBeanFrozen(thawed, true, now);
+		expect(on.frozenOn).toBe('2026-05-17');
+		expect(on.defrostedOn).toBeNull();
+		expect(beanDaysOffRoast(on, now)).toBe(beanDaysOffRoast(thawed, now));
 	});
 });

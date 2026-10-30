@@ -1,0 +1,50 @@
+# cargo-fuzz project for de1-relay (relay v4 spec §3.7). Excluded from the
+# core workspace; builds on nightly with its own lockfile:
+#
+#   cd core/de1-relay/fuzz && cargo +nightly fuzz run fuzz_hub_ws -- -max_total_time=60
+#
+# The targets are thin wrappers around `de1_relay::fuzzing`, whose entry points
+# `tests/fuzz_corpus.rs` also replays on stable over `corpus/`.
+[package]
+name = "de1-relay-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+de1-relay = { path = "..", features = ["test-seeds"] }
+
+[[bin]]
+name = "fuzz_hub_ws"
+path = "fuzz_targets/fuzz_hub_ws.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_remote_ws"
+path = "fuzz_targets/fuzz_remote_ws.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_transport_records"
+path = "fuzz_targets/fuzz_transport_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_client_hello"
+path = "fuzz_targets/fuzz_client_hello.rs"
+test = false
+doc = false
+bench = false
+
+# Its own workspace root, so the core workspace's settings don't apply.
+[workspace]

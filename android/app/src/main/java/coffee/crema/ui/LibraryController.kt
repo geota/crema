@@ -7,6 +7,9 @@ import androidx.core.content.FileProvider
 import coffee.crema.beans.BeanImageStore
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.LibraryStore
+import coffee.crema.beans.beanLibraryJsonl
+import coffee.crema.beans.isCremaLibraryJsonl
+import coffee.crema.beans.mergeBeanImport
 import coffee.crema.beans.newBean
 import coffee.crema.beans.newRoaster
 import coffee.crema.core.Bean
@@ -28,6 +31,7 @@ import coffee.crema.core.resettleRemaining
 import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.importBeanconquerorJson
+import coffee.crema.core.importCremaJsonl
 import coffee.crema.core.newShotId
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
@@ -633,13 +637,9 @@ class LibraryController(
         shareText(text, "Export shots")
     }
 
-    /** Export the bean library (beans + roasters) as JSON — Settings → Sharing. */
+    /** Export the bean library (beans + roasters) as Crema JSONL — Settings → Sharing. */
     fun exportBeansLibrary() {
-        val s = uiState()
-        val lib = BeanLibrary(beans = s.beans, roasters = s.roasters, activeBeanId = s.activeBeanId)
-        if (lib.beans.isEmpty() && lib.roasters.isEmpty()) { appendLog("Export: empty library"); return }
-        val text = runCatching { json.encodeToString(BeanLibrary.serializer(), lib) }
-            .getOrElse { appendLog("Export library failed: ${it.message}"); return }
+        val text = beansLibraryJsonl { appendLog(it) } ?: return
         shareText(text, "Export beans & roasters")
     }
 
@@ -647,12 +647,17 @@ class LibraryController(
     //    large telemetry payloads — the Binder transaction limit). Return null +
     //    set a status when there's nothing to export. ──────────────────────────
 
-    /** Bean library as Crema JSON (beans + roasters). */
-    fun beansLibraryJson(): String? {
+    /** Bean library as a Crema `crema/v1` JSONL export (beans + roasters) — the
+     *  core's format, re-importable on both shells. */
+    fun beansLibraryJson(): String? = beansLibraryJsonl { notify(it) }
+
+    /** [beanLibraryJsonl] over the current library, or null after telling [report] why. */
+    private fun beansLibraryJsonl(report: (String) -> Unit): String? {
         val s = uiState()
-        val lib = BeanLibrary(beans = s.beans, roasters = s.roasters, activeBeanId = s.activeBeanId)
-        if (lib.beans.isEmpty() && lib.roasters.isEmpty()) { notify("Export — empty library"); return null }
-        return runCatching { json.encodeToString(BeanLibrary.serializer(), lib) }.getOrNull()
+        if (s.beans.isEmpty() && s.roasters.isEmpty()) { report("Export — empty library"); return null }
+        return runCatching {
+            beanLibraryJsonl(s.beans, s.roasters, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME)
+        }.getOrElse { report("Export library failed: ${it.message}"); null }
     }
 
     /** Library in Beanconqueror's format (via the core). */
@@ -890,23 +895,6 @@ class LibraryController(
     // stripped on export and preserved on import — a backup moves between devices
     // without dragging this device's bindings along.
 
-    /**
-     * Everything the backup reads from controller and VM state, captured on the
-     * caller's (Main) thread so the serialisation, the core export and the zip
-     * can run on [Dispatchers.Default] without touching live mutable state
-     * (cohort review 2026-10-25, Android P1-2: a few hundred shots with their
-     * full sample series froze the UI thread, daily at launch for Drive users).
-     */
-    private class BackupSnapshot(
-        val customs: List<String>,
-        val state: MainUiState,
-        val pinned: Set<String>,
-        val hidden: Set<String>,
-        val prefs: AppPrefs,
-        val visualizerPrefs: VisualizerSyncPrefs,
-        val userRecipes: List<coffee.crema.core.BrewRecipe>,
-    )
-
     /** Snapshot the backup inputs, or null + a notice when there's nothing to
      *  back up. Custom profiles only — built-ins ship with the app, so backing
      *  them up would only create duplicates. Cheap; runs on the caller. */
@@ -933,108 +921,12 @@ class LibraryController(
         return BackupSnapshot(customs, s, pinnedIds, hiddenIds, currentPrefs(), visualizer.backupPrefs(), userRecipes)
     }
 
-    /** Build the whole-app backup bundle as `crema-backup/v1` JSONL from [snap].
-     *  Heavy (every shot's sample series + the core export); reads only [snap],
-     *  so it is safe off the main thread. */
-    private fun backupBundleJson(snap: BackupSnapshot): String? {
-        val customs = snap.customs
-        val s = snap.state
-        val pinnedIds = snap.pinned
-        val hiddenIds = snap.hidden
-        val userRecipes = snap.userRecipes
-        // Portable settings only — drop per-device identity (BLE addresses, LAN
-        // proxy, paired devices); they're meaningless on another device.
-        val portable = snap.prefs.copy(
-            de1Address = null,
-            scaleAddress = null,
-            proxyRole = "normal",
-            proxyPrimaryHost = "",
-            proxyPrimaryPort = 0,
-            replayPrimary = false,
-            pairedDevices = emptyList(),
-        )
-        val beansJson = runCatching { json.encodeToString(ListSerializer(Bean.serializer()), s.beans) }.getOrElse { "[]" }
-        val roastersJson = runCatching { json.encodeToString(ListSerializer(Roaster.serializer()), s.roasters) }.getOrElse { "[]" }
-        // Shots ride in the canonical core `StoredShot` wire shape (the SAME shape
-        // the Visualizer path emits via `export_v2_json_shot`), NOT Android's flat
-        // store shape: the core backup exporter parses `shots:[StoredShot]`, so the
-        // flat shape fails the whole envelope's deserialization → the entire backup
-        // aborts once any shot exists (issue 01). `wireShotJson` emits
-        // formatVersion/completedAt/record; restore inverts via storedShotFromBackupJson.
-        val shotsJson = runCatching {
-            JsonArray(s.history.map { wireShotJson(it, forBackup = true) }).toString()
-        }.getOrElse { "[]" }
-        // Settings line: the shared cross-shell CommonSettings `common` block (both
-        // shells emit it identically, so common prefs restore web<->Android) + this
-        // shell's `_shell` tag + Android-only `qcGrind` (re-applied only on Android).
-        val settingsJson = runCatching {
-            val common = json.parseToJsonElement(json.encodeToString(CommonSettings.serializer(), portable.toCommonSettings()))
-            json.encodeToString(
-                JsonObject.serializer(),
-                buildJsonObject {
-                    put("common", common)
-                    put("_shell", "android")
-                    portable.qcGrind?.let { put("qcGrind", it) }
-                },
-            )
-        }.getOrElse { "{\"_shell\":\"android\"}" }
-        // Profile organisation — pinned + hidden BUILT-IN ids (cross-shell; custom
-        // pins ride inside the profile JSON). Maintenance — a shared core type,
-        // fully portable. Visualizer SYNC prefs — shell-tagged, token-free.
-        val profileMetaJson = json.encodeToString(
-            JsonObject.serializer(),
-            JsonObject(
-                mapOf(
-                    "pinned" to JsonArray(pinnedIds.map { JsonPrimitive(it) }),
-                    "hiddenBuiltins" to JsonArray(hiddenIds.map { JsonPrimitive(it) }),
-                ),
-            ),
-        )
-        val recipesJson = runCatching {
-            json.encodeToString(ListSerializer(coffee.crema.core.BrewRecipe.serializer()), userRecipes)
-        }.getOrElse { "[]" }
-        // Recipe organisation — default pointers (may name built-ins) + hidden
-        // built-in ids, cross-shell like profileMeta.
-        val recipeMetaJson = json.encodeToString(
-            JsonObject.serializer(),
-            JsonObject(
-                mapOf(
-                    "defaults" to JsonObject(s.lastRecipeByMethod.mapValues { JsonPrimitive(it.value) }),
-                    "hiddenBuiltins" to JsonArray(s.hiddenBuiltinRecipes.map { JsonPrimitive(it) }),
-                ),
-            ),
-        )
-        val customMethodsJson = runCatching {
-            json.encodeToString(ListSerializer(coffee.crema.core.CustomBrewMethod.serializer()), s.customMethods)
-        }.getOrElse { "[]" }
-        val maintenanceJson = runCatching { json.encodeToString(MaintenanceState.serializer(), s.maintenance) }.getOrElse { "{}" }
-        val visualizerPrefsJson = runCatching {
-            json.encodeToString(VisualizerSyncPrefs.serializer(), snap.visualizerPrefs)
-        }.getOrElse { "{}" }
-        // Assemble the envelope as a JsonObject rather than raw string concat so a
-        // dropped brace / comma can't silently corrupt it (issue 06 F5). Each piece
-        // is already a serialized JSON string; parse it back into the tree. The core
-        // re-serialises the envelope when it emits the JSONL, so formatting here is
-        // immaterial — this only hardens assembly.
-        val envelope = buildJsonObject {
-            put("profiles", JsonArray(customs.map { json.parseToJsonElement(it) }))
-            put("beans", json.parseToJsonElement(beansJson))
-            put("roasters", json.parseToJsonElement(roastersJson))
-            put("shots", json.parseToJsonElement(shotsJson))
-            put("settings", json.parseToJsonElement(settingsJson))
-            put("profileMeta", json.parseToJsonElement(profileMetaJson))
-            put("recipes", json.parseToJsonElement(recipesJson))
-            put("recipeMeta", json.parseToJsonElement(recipeMetaJson))
-            // The user's own brewing methods, tombstones included (their old
-            // brews still resolve) → `kind:"brewMethod"` lines.
-            put("customMethods", json.parseToJsonElement(customMethodsJson))
-            put("maintenance", json.parseToJsonElement(maintenanceJson))
-            put("visualizerPrefs", json.parseToJsonElement(visualizerPrefsJson))
-        }.toString()
-        return runCatching {
-            exportBackupJsonl(envelope, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
-        }.getOrElse { appendLog("Backup failed: ${it.message}"); notify("Backup failed"); null }
-    }
+    /** Build the whole-app backup bundle ([backupBundleJsonl]) from [snap], or
+     *  null + a notice on failure. Reads only [snap], so it is safe off the main
+     *  thread. */
+    private fun backupBundleJson(snap: BackupSnapshot): String? = runCatching {
+        backupBundleJsonl(snap, json, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
+    }.getOrElse { appendLog("Backup failed: ${it.message}"); notify("Backup failed"); null }
 
     /**
      * Wrap [backupBundleJson]'s JSONL into a `.crema.zip`: `backup.jsonl` plus, for
@@ -1100,9 +992,10 @@ class LibraryController(
      *  ([restoreBackup]) and the Google Drive restore (the downloaded `.crema`). */
     fun restoreBackupFromText(text: String, mode: MainViewModel.RestoreMode) {
         scope.launch {
-            // The line-parser lives in the pure, unit-tested `parseBackupRecords`
-            // (review #07); re-bind its result to the names the apply block uses.
-            val parsed = parseBackupRecords(text, json, System.currentTimeMillis())
+            // The core parses the bundle (`parseBackup` → importBackupJsonl, the
+            // parser web uses); re-bind its result to the names the apply block uses.
+            val parsed = parseBackup(text, json, System.currentTimeMillis())
+                ?: run { notify("Restore failed — not a Crema backup"); return@launch }
             val profiles = parsed.profiles
             val beans = parsed.beans
             val roasters = parsed.roasters
@@ -1113,7 +1006,6 @@ class LibraryController(
             val restoredProfileMeta = parsed.profileMeta
             val restoredMaintenance = parsed.maintenance
             val restoredVisualizerPrefs = parsed.visualizerPrefs
-            if (!parsed.sawHeader) { notify("Restore failed — not a Crema backup"); return@launch }
 
             if (mode == MainViewModel.RestoreMode.WIPE) {
                 customProfilesJson = emptyList()
@@ -1390,14 +1282,20 @@ class LibraryController(
     }
 
     /**
-     * Import a Beanconqueror export (a system file-picker Uri) into the bean
-     * library. Reads the file off the main thread — a single Beanconqueror JSON,
-     * or a `.zip` archive whose chunked BEANS/BREWS files are merged back into the
-     * main JSON ([mergeBcZip], the inverse of BC's chunked writer) — hands the
-     * merged JSON to the core's [importBeanconquerorJson], then merges the
-     * resulting plan into the library via [applyBeanImportPlan] — beans,
-     * roasters, AND the espresso brews as history rows (metadata only, no
-     * telemetry; web parity).
+     * Import a bean library file (a system file-picker Uri). Reads the file off
+     * the main thread, then:
+     *
+     * - a Crema `crema/v1` JSONL export (Android's or web's — bare, or the
+     *   `crema.jsonl` inside web's `.crema.zip`; its photos are not imported) goes
+     *   to the core's [importCremaJsonl];
+     * - otherwise it's a Beanconqueror export: a single JSON, or a `.zip` whose
+     *   chunked BEANS/BREWS files are merged back into the main JSON
+     *   ([mergeBcZip], the inverse of BC's chunked writer), for the core's
+     *   [importBeanconquerorJson].
+     *
+     * The plan merges into the library via [applyBeanImportPlan] — beans,
+     * roasters, AND (Beanconqueror) the espresso brews as history rows (metadata
+     * only, no telemetry; web parity).
      */
     fun importBeanconquerorUri(uri: Uri) {
         scope.launch {
@@ -1406,9 +1304,9 @@ class LibraryController(
                 capped {
                     val bytes = app.contentResolver.openInputStream(uri)
                         ?.use { it.readBytesCapped(ImportLimits.MAX_FILE_BYTES) } ?: return@capped null
-                    // PK\x03\x04 magic → a zip archive; else treat as raw JSON text.
+                    // PK\x03\x04 magic → a zip archive; else treat as raw text.
                     if (bytes.size >= 2 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4B.toByte()) {
-                        mergeBcZip(bytes)
+                        cremaJsonlFromZip(bytes) ?: mergeBcZip(bytes)
                     } else {
                         String(bytes, Charsets.UTF_8)
                     }
@@ -1416,6 +1314,15 @@ class LibraryController(
             }
             if (merged.isNullOrBlank()) {
                 notify(readFailure("Import failed — couldn't read that file"))
+                return@launch
+            }
+            if (isCremaLibraryJsonl(merged)) {
+                val planJson = runCatching { importCremaJsonl(merged) }.getOrElse {
+                    appendLog("Crema import failed: ${it.message}")
+                    notify("Import failed — not a Crema export")
+                    return@launch
+                }
+                applyBeanImportPlan(planJson)
                 return@launch
             }
             val planJson = runCatching { importBeanconquerorJson(merged, System.currentTimeMillis()) }
@@ -1426,6 +1333,17 @@ class LibraryController(
                 }
             applyBeanImportPlan(planJson)
         }
+    }
+
+    /** The `crema.jsonl` inside a web `.crema.zip` bean export, or null when the zip has none. */
+    private fun cremaJsonlFromZip(bytes: ByteArray): String? {
+        var jsonl: String? = null
+        java.util.zip.ZipInputStream(bytes.inputStream()).use { zin ->
+            readZipCapped(zin, accept = { it.lowercase().endsWith("crema.jsonl") }) { _, entryBytes ->
+                if (jsonl == null) jsonl = entryBytes.toString(Charsets.UTF_8)
+            }
+        }
+        return jsonl
     }
 
     /**
@@ -1462,11 +1380,8 @@ class LibraryController(
     }
 
     /**
-     * Merge a core import-plan JSON's beans + roasters into the library, applying
-     * the web's dedup rules: skip a bean whose `beanconquerorId` is already present
-     * (resumable re-import); repoint a new bean to an existing same-named roaster
-     * (dropping the duplicate roaster); skip a bean matching an existing
-     * (roaster, name, roastedOn) triple. Persisted.
+     * Merge a core import-plan JSON's beans + roasters into the library with the
+     * web's dedup rules ([mergeBeanImport]). Persisted.
      */
     private fun applyBeanImportPlan(planJson: String) {
         val plan = runCatching { json.parseToJsonElement(planJson).jsonObject }.getOrElse {
@@ -1479,36 +1394,7 @@ class LibraryController(
         val wireRoasters = decodeList("roasters", Roaster.serializer())
 
         val s = uiState()
-        val existingRoasterByLc = s.roasters.associateBy { it.name.trim().lowercase() }
-        val existingByBcId = s.beans.filter { it.beanconquerorId != null }.associateBy { it.beanconquerorId!! }
-        val wireRoasterById = wireRoasters.associateBy { it.id }
-
-        val newBeans = ArrayList<Bean>()
-        val keptRoasterIds = HashSet<String>()
-        // Wire bean id → the id the shot should reference after dedupe: a bean
-        // skipped as already-imported re-points its shots at the EXISTING
-        // library row, so a re-run still bean-links its history correctly.
-        val beanIdRemap = HashMap<String, String>()
-        var skipped = 0
-        for (bean in wireBeans) {
-            val prior = bean.beanconquerorId?.let { existingByBcId[it] }
-            if (prior != null) { beanIdRemap[bean.id] = prior.id; skipped++; continue }
-            val wireRoaster = bean.roasterId?.let { wireRoasterById[it] }
-            val libRoaster = wireRoaster?.name?.let { existingRoasterByLc[it.trim().lowercase()] }
-            val resolved = when {
-                libRoaster != null && wireRoaster.id != libRoaster.id -> bean.copy(roasterId = libRoaster.id)
-                else -> { if (wireRoaster != null) keptRoasterIds.add(wireRoaster.id); bean }
-            }
-            val tripleDupe = libRoaster != null && s.beans.firstOrNull {
-                it.roasterId == libRoaster.id &&
-                    it.name.trim().equals(bean.name.trim(), ignoreCase = true) &&
-                    (it.roastedOn ?: "") == (bean.roastedOn ?: "")
-            }?.also { beanIdRemap[bean.id] = it.id } != null
-            if (tripleDupe) { skipped++; continue }
-            beanIdRemap[bean.id] = bean.id
-            newBeans.add(resolved)
-        }
-        val newRoasters = wireRoasters.filter { keptRoasterIds.contains(it.id) }
+        val (newBeans, newRoasters, beanIdRemap, skipped) = mergeBeanImport(wireBeans, wireRoasters, s.beans, s.roasters)
 
         // Shots — the core has already mapped BC brews (espresso-only,
         // metadata, no telemetry); land them as history rows, web parity.
@@ -1785,30 +1671,30 @@ class LibraryController(
         persistLibrary()
     }
 
-    /** Duplicate a bag into a fresh row (new id, "name (copy)", not favourite). Persisted. */
+    /**
+     * Duplicate a bag into a fresh row via the core copy
+     * ([coffee.crema.beans.duplicateBean]: new id, "name (copy)", no remote
+     * links). Persisted.
+     */
     fun duplicateBean(id: String) {
         val base = uiState().beans.firstOrNull { it.id == id } ?: return
-        val now = System.currentTimeMillis()
-        val copy = base.copy(
-            id = "bean:" + java.util.UUID.randomUUID(),
-            name = "${base.name} (copy)",
-            favourite = false,
-            createdAt = now,
-            updatedAt = now,
-        )
+        val copy = coffee.crema.beans.duplicateBean(base, System.currentTimeMillis())
         updateUi { it.copy(beans = it.beans + copy) }
         persistLibrary()
     }
 
-    /** Freeze a bag — stamps `frozenOn` to today (ISO yyyy-mm-dd), pausing freshness. Persisted. */
-    fun freezeBean(id: String) = mutateBean(id) { it.copy(frozenOn = isoToday(), defrostedOn = null) }
+    /**
+     * Freeze a bag through the core rule ([coffee.crema.beans.setBeanFrozen]):
+     * stamps `frozenOn` today, or carries an earlier freeze. Persisted.
+     */
+    fun freezeBean(id: String) = mutateBean(id) { coffee.crema.beans.setBeanFrozen(it, true, System.currentTimeMillis()) }
 
     /**
-     * Defrost a bag — records `defrostedOn` and KEEPS `frozenOn` (web semantics:
-     * the freeze window `frozenOn..defrostedOn` is history the freshness math
-     * may use; "currently frozen" is `frozenOn != null && defrostedOn == null`).
+     * Defrost a bag through the core rule ([coffee.crema.beans.setBeanFrozen]):
+     * records `defrostedOn` and KEEPS `frozenOn`, so the frozen span stays off
+     * the off-roast count ("currently frozen" is `frozenOn != null && defrostedOn == null`).
      */
-    fun defrostBean(id: String) = mutateBean(id) { it.copy(defrostedOn = isoToday()) }
+    fun defrostBean(id: String) = mutateBean(id) { coffee.crema.beans.setBeanFrozen(it, false, System.currentTimeMillis()) }
 
     /** Archive a bag — stamps `archivedAt`. Persisted. */
     fun archiveBean(id: String) = mutateBean(id) { it.copy(archivedAt = System.currentTimeMillis()) }
@@ -1825,10 +1711,6 @@ class LibraryController(
         updateUi { s -> s.copy(beans = s.beans.map { if (it.id == id) transform(it).copy(updatedAt = now) else it }) }
         persistLibrary()
     }
-
-    /** Today as an ISO `yyyy-mm-dd` string (matches the Bean date fields). */
-    private fun isoToday(): String =
-        java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
 
     // ── Roaster directory ───────────────────────────────────────────────────
 

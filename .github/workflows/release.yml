@@ -264,6 +264,18 @@ jobs:
             -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
             --no-daemon --stacktrace
 
+      # AC-54: the shipped APK's and Play AAB's libde1_ffi.so and their Kotlin
+      # bindings carry no deterministic relay test constructors. Fails if
+      # neither artifact is there, so a renamed output can't skip the check.
+      - name: Relay release-symbols check
+        run: |
+          shopt -s nullglob
+          artifacts=(android/app/build/outputs/apk/release/*.apk android/app/build/outputs/bundle/release/*.aab)
+          [ "${#artifacts[@]}" -ge 2 ] || { echo "::error::expected a release APK and AAB, found: ${artifacts[*]}"; exit 1; }
+          for artifact in "${artifacts[@]}"; do
+            scripts/relay-release-symbols-check.sh apk "$artifact" android/app/build/generated/uniffi
+          done
+
       - name: Collect APKs + AAB
         env:
           VERSION_NAME: ${{ needs.version.outputs.name }}

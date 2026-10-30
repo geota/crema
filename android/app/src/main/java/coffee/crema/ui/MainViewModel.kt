@@ -25,6 +25,7 @@ import coffee.crema.core.Bean
 import coffee.crema.core.MaintenanceState
 import coffee.crema.core.WriteTarget
 import coffee.crema.core.SteamHotWaterTargets
+import coffee.crema.core.WeightUnit
 import coffee.crema.drive.DriveStore
 import coffee.crema.drive.DriveSync
 import coffee.crema.core.MaintenanceReadout
@@ -279,10 +280,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
     private var modeTickerJob: Job? = null
-
-    /** Grace timer between the core's ScaleStale (1 s of silence) and the
-     *  presume-dead teardown — cancelled/replaced per stale episode. */
-    private var scaleStaleJob: Job? = null
 
     /**
      * The outstanding stop write, if any (issue #15 follow-up). Two rules:
@@ -1747,6 +1744,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 wasReady = ready
             }
         }
+        // The lost-scale watchdog runs on the core clock: a scale alone keeps
+        // it ticking (a scale-only session).
+        viewModelScope.launch { scale.state.collect { coreTicker.onScaleState(it) } }
         viewModelScope.launch {
             connection.state.collect { cs ->
                 _ui.update {
@@ -2884,7 +2884,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * The core inputs that follow settings, from [state] (spec §7.4): the
      * stop-on-weight, auto-tare, max-duration and volume-stop flags, the stop
-     * targets, and the idle-sleep timer. Called with [effectiveState]: after
+     * targets, the idle-sleep timer and the weight unit (the scale LCD and
+     * set-grams writes follow it). Called with [effectiveState]: after
      * each applied snapshot on a remote, at the end of every own-state writer
      * ([loadPrefs], [applyRestoredSettings], [resetPreferences], [eraseAll])
      * in every role, and on leaving the remote role.
@@ -2894,6 +2895,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setAutoTare(state.autoTare) }.onFailure { appendLog("Set auto-tare failed: ${it.message}") }
         runCatching { bridge.setMaxShotDuration(state.maxShotDurationS) }.onFailure { appendLog("Set max shot duration failed: ${it.message}") }
         runCatching { bridge.setVolumeStopWithScale(state.volumeStopWithScale) }.onFailure { appendLog("Set volume-stop-with-scale failed: ${it.message}") }
+        runCatching { bridge.setWeightUnitPref(coreWeightUnit(state.weightUnit)) }.onFailure { appendLog("Set weight unit failed: ${it.message}") }
         pushStopTargets(state)
         idleSleep.configure(state.idleSleepMin)
     }
@@ -3115,23 +3117,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun readMachineInfo() {
-        // Identity (firmware / board / model / serial), GHC presence, heater
-        // voltage, flush temp, flow-calibration, refill-kit. Match the generated
-        // MmrReg variant spellings. (GhcMode 0x803820 is intentionally NOT read:
-        // it's dead in de1app + absent in reaprime — see audit F2/F3.)
-        val registers = listOf(
-            MmrReg.FIRMWARE_VERSION,
-            MmrReg.CPU_BOARD_VERSION,
-            MmrReg.MACHINE_MODEL,
-            MmrReg.SERIAL_NUMBER,
-            MmrReg.GHC_INFO,
-            MmrReg.HEATER_VOLTAGE,
-            // FlushTemp (0x803844): web reads it to show the live flush setpoint;
-            // read it here too so the sweeps match (audit F5). reaprime-only register.
-            MmrReg.FLUSH_TEMP,
-            MmrReg.CALIBRATION_FLOW_MULTIPLIER,
-            MmrReg.REFILL_KIT,
-        )
+        // The core's identity table (web reads the same one): firmware build
+        // first, then board, model, GHC, refill kit, serial, heater voltage,
+        // flush temp and flow multiplier. The passes and pacing below stay
+        // this shell's policy.
+        val registers = coffee.crema.core.connectIdentityRegisters()
         machineInfoJob?.cancel()
         machineInfoJob = viewModelScope.launch {
             // Pacing/retry budget — generous enough for a real DE1's notify
@@ -3740,14 +3730,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── Display units (issue 44) ──────────────────────────────────────────────
-    // Pure display prefs: nothing is sent to the machine and no canonical value
+    // Display prefs: nothing is sent to the machine and no canonical value
     // changes — flipping a unit only re-renders existing readouts through
-    // `Format.kt`. Persisted so the choice survives a restart.
+    // `Format.kt`. Persisted so the choice survives a restart. The weight unit
+    // also goes to the core, which picks the scale's LCD unit from it.
 
-    /** Weight readout unit (`"g" | "oz"`). Persisted display pref. */
+    /**
+     * Weight readout unit (`"g" | "oz"`). Persisted display pref. The core
+     * gets it too, and a connected scale's display switches now rather than
+     * on the next Idle entry or reconnect (as on web).
+     */
     fun setWeightUnit(unit: String) {
         _ui.update { it.copy(weightUnit = unit) }
         persistPrefs()
+        val wire = coreWeightUnit(unit)
+        runCatching { bridge.setWeightUnitPref(wire) }.onFailure {
+            appendLog("Set weight unit failed: ${it.message}")
+            return
+        }
+        // Each call is capability-gated and fails for a scale without it (or
+        // no scale): a no-op is intended.
+        runCatching { bridge.enableScaleLcd(wire) }.onSuccess(::onCoreOutputJson)
+        if (wire == WeightUnit.Grams.string) {
+            runCatching { bridge.setScaleUnitGrams() }.onSuccess(::onCoreOutputJson)
+        }
     }
 
     /** Temperature readout unit (`"C" | "F"`). Persisted display pref. */
@@ -5560,25 +5566,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ScaleStale -> {
                 _ui.update { it.copy(scaleWeightG = null) }
                 appendLog("Scale stale")
-                // Escalation (Decenza treats an in-shot feed stall as a link
-                // fault; reaprime probes on silence): the core flags staleness
-                // after 1 s without a reading. Scales stream weight
-                // continuously by design, so give the stream a short grace to
-                // resume — a fresh reading repopulates scaleWeightG — and if
-                // it stays silent while the link still claims READY, presume
-                // the link dead and let the reconnect supervisor recover it.
-                // Covers scales with no keep-alive writes (Bookoo), where the
-                // consecutive-write-failure detector never gets a probe.
-                scaleStaleJob?.cancel()
-                scaleStaleJob = viewModelScope.launch {
-                    delay(SCALE_STALE_TEARDOWN_GRACE_MS)
-                    if (_ui.value.scaleState == ScaleBleManager.State.READY &&
-                        _ui.value.scaleWeightG == null
-                    ) {
-                        scale.presumeDead(
-                            "no readings for ${(1_000 + SCALE_STALE_TEARDOWN_GRACE_MS) / 1_000}s",
-                        )
-                    }
+            }
+            is Event.ScaleLinkDead -> {
+                // The core presumed the scale link dead (silent 5 s past
+                // ScaleStale, or three failed writes with no reading between;
+                // once per episode). Tear it down for the reconnect supervisor,
+                // but only while the link still claims READY — one already
+                // reconnecting is left to its ladder.
+                _ui.update { it.copy(scaleWeightG = null) }
+                appendLog("Scale link dead: ${event.content.reason.string}")
+                if (_ui.value.scaleState == ScaleBleManager.State.READY) {
+                    viewModelScope.launch { scale.presumeDead(event.content.reason.string) }
                 }
             }
             is Event.ScaleButtonPressed ->
@@ -5773,12 +5771,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Abort a pending gated-start brew if the upload never completes. */
         const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
-
-        /** Grace after the core's ScaleStale (itself 1 s of silence) before
-         *  the scale link is presumed dead and torn down for the reconnect
-         *  supervisor. Long enough that a radio hiccup resumes on its own,
-         *  short enough that a mid-shot stall recovers within the pour. */
-        const val SCALE_STALE_TEARDOWN_GRACE_MS = 5_000L
     }
 }
 
@@ -5792,3 +5784,7 @@ private fun firmwarePowerOk(context: android.content.Context): Boolean {
     val percent = if (level >= 0 && scale > 0) level * 100 / scale else null
     return coffee.crema.firmware.powerOk(plugged, percent)
 }
+
+/** The core's wire spelling (`"grams" | "ounces"`) of the `"g" | "oz"` weight-unit pref. */
+private fun coreWeightUnit(pref: String): String =
+    if (pref == "oz") WeightUnit.Ounces.string else WeightUnit.Grams.string

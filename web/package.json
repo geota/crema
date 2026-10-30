@@ -7,6 +7,7 @@
   "packageManager": "pnpm@11.5.0",
   "scripts": {
     "wasm": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/src/lib/wasm --out-name de1_wasm",
+    "wasm:test": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/.wasm-test --out-name de1_wasm -- --features test-seeds",
     "dev": "vite dev",
     "build": "pnpm wasm && vite build",
     "preview": "vite preview",

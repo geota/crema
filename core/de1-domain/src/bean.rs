@@ -248,9 +248,12 @@ pub fn days_off_roast(
             let capped = frozen_ms.min(today_unix_ms);
             Some((capped - roast_unix_ms).div_euclid(MS_PER_DAY).max(0))
         }
-        // Thawed: subtract the frozen span from the running total.
+        // Thawed: subtract the frozen span from the running total (none
+        // yet for a freeze dated after today).
         Some(defrosted_ms) if defrosted_ms >= frozen_ms => {
-            let span_days = (defrosted_ms.min(today_unix_ms) - frozen_ms).div_euclid(MS_PER_DAY);
+            let span_days = (defrosted_ms.min(today_unix_ms) - frozen_ms)
+                .div_euclid(MS_PER_DAY)
+                .max(0);
             Some((total - span_days).max(0))
         }
         // Defrost recorded before the freeze — malformed pair; ignore.
@@ -688,6 +691,205 @@ pub fn brews_remaining_estimate(remaining_g: f32, recent_doses: &[f32]) -> u32 {
         doses.iter().sum::<f32>() / doses.len() as f32
     };
     (remaining_g / per_brew).floor() as u32
+}
+
+/// A new bag copied from `source` — the bean library's "Duplicate" action.
+/// The copy gets `new_id`, the name "`<name>` (copy)" ("Untitled bag (copy)"
+/// for a blank name) and `now_ms` timestamps, and keeps the bag's details
+/// (roaster, dates, origin, sizes, notes, grinder, tags, linked profile,
+/// metadata).
+///
+/// It is a new bag in every outside system, so it drops the links that tie a
+/// row to the original's records:
+///
+/// - `visualizer_id`: if kept, the next push would PATCH the original's
+///   Visualizer bag and an "also on Visualizer" delete would remove it;
+/// - `beanconqueror_id`: if kept, a Beanconqueror re-import would treat the copy
+///   as the original;
+/// - `image_ref`: the photo is stored per bean id, so a carried ref points at
+///   the original's photo (removing the copy's photo would delete it);
+/// - `deleted_at` / `archived_at` / `favourite`: a copy starts live, active
+///   and unpinned.
+///
+/// The Visualizer catalogue links (`canonical_coffee_bag_id`,
+/// `canonical_roaster_id`) stay: they name the coffee in the shared
+/// catalogue, not the user's bag record, any number of bags may carry them,
+/// and sync never matches a bag by them.
+///
+/// The field list is exhaustive on purpose: a new `Bean` field does not
+/// compile here until someone decides whether a copy keeps it.
+#[must_use]
+pub fn duplicate_bean(source: &Bean, new_id: &str, now_ms: i64) -> Bean {
+    let Bean {
+        id: _,
+        name,
+        roaster_id,
+        roasted_on,
+        opened_on,
+        frozen_on,
+        defrosted_on,
+        roast_level,
+        mix,
+        roast_type,
+        decaf,
+        origin,
+        bag_size,
+        remaining,
+        quality_score,
+        tasting_notes,
+        rating,
+        place_of_purchase,
+        cost,
+        url,
+        notes,
+        favourite: _,
+        archived_at: _,
+        grinder,
+        grinder_setting,
+        tags,
+        linked_profile_id,
+        visualizer_id: _,
+        canonical_coffee_bag_id,
+        canonical_roaster_id,
+        deleted_at: _,
+        beanconqueror_id: _,
+        image_ref: _,
+        metadata,
+        created_at: _,
+        updated_at: _,
+    } = source.clone();
+    let name = name.trim();
+    let name = if name.is_empty() {
+        "Untitled bag"
+    } else {
+        name
+    };
+    Bean {
+        id: new_id.to_owned(),
+        name: format!("{name} (copy)"),
+        roaster_id,
+        roasted_on,
+        opened_on,
+        frozen_on,
+        defrosted_on,
+        roast_level,
+        mix,
+        roast_type,
+        decaf,
+        origin,
+        bag_size,
+        remaining,
+        quality_score,
+        tasting_notes,
+        rating,
+        place_of_purchase,
+        cost,
+        url,
+        notes,
+        favourite: false,
+        archived_at: None,
+        grinder,
+        grinder_setting,
+        tags,
+        linked_profile_id,
+        visualizer_id: None,
+        canonical_coffee_bag_id,
+        canonical_roaster_id,
+        deleted_at: None,
+        beanconqueror_id: None,
+        image_ref: None,
+        metadata,
+        created_at: now_ms,
+        updated_at: now_ms,
+    }
+}
+
+/// JSON-bridged [`duplicate_bean`]. Input: a [`Bean`] JSON; output: the
+/// copy's [`Bean`] JSON.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `bean_json`.
+pub fn duplicate_bean_json(bean_json: &str, new_id: &str, now_ms: i64) -> Result<String, String> {
+    let bean: Bean = serde_json::from_str(bean_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&duplicate_bean(&bean, new_id, now_ms)).map_err(|e| e.to_string())
+}
+
+/// The UTC calendar date of `now_ms` as ISO `yyyy-mm-dd`.
+#[allow(clippy::cast_sign_loss)]
+fn iso_date_from_ms(now_ms: i64) -> String {
+    let days = now_ms.div_euclid(MS_PER_DAY).max(0) as u64;
+    let (y, m, d) = crate::history_export::civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// `bean` with its Frozen switch set to `frozen` — the freeze / defrost /
+/// refreeze rule every shell's switch and Freeze / Defrost action uses. Only
+/// `frozen_on` and `defrosted_on` change (the shell stamps `updated_at`), and
+/// the switch never moves [`days_off_roast`] on the day it is flipped:
+///
+/// - **Freeze** a bag that was never frozen: `frozen_on` = today.
+/// - **Defrost** (switch off): `defrosted_on` = today and `frozen_on` is
+///   kept, so the frozen span stays subtracted. A freeze date after today is
+///   pulled back to today (the count already treated it as today).
+/// - **Refreeze** a defrosted bag: `defrosted_on` is cleared and `frozen_on`
+///   moves forward by the days the bag spent thawed, so the earlier frozen
+///   span still doesn't count as age. The model holds one freeze window; this
+///   keeps the count right at the cost of a `frozen_on` that is no longer the
+///   first freeze date. Undoing a same-day defrost restores the original
+///   `frozen_on`. A freeze/defrost pair the count ignores (unparseable,
+///   before the roast, defrost before freeze) refreezes from today.
+///
+/// Setting the state the bag is already in (`frozen` = currently frozen)
+/// returns it unchanged. "Currently frozen" is `frozen_on` set and no
+/// `defrosted_on`, the shells' `isFrozen`.
+#[must_use]
+pub fn set_bean_frozen(bean: &Bean, frozen: bool, now_ms: i64) -> Bean {
+    let is_frozen = bean.frozen_on.is_some() && bean.defrosted_on.is_none();
+    let mut out = bean.clone();
+    if frozen == is_frozen {
+        return out;
+    }
+    let today_ms = now_ms.div_euclid(MS_PER_DAY) * MS_PER_DAY;
+    let today = iso_date_from_ms(now_ms);
+    let roast = bean
+        .roasted_on
+        .as_deref()
+        .and_then(parse_iso_date_to_unix_ms);
+    // The freeze date as the count sees it: parsed and not before the roast.
+    let counted_freeze = bean
+        .frozen_on
+        .as_deref()
+        .and_then(parse_iso_date_to_unix_ms)
+        .filter(|f| roast.is_none_or(|r| *f >= r));
+    if frozen {
+        let thawed_since = bean
+            .defrosted_on
+            .as_deref()
+            .and_then(parse_iso_date_to_unix_ms);
+        out.frozen_on = Some(match (counted_freeze, thawed_since) {
+            (Some(f), Some(d)) if d >= f => {
+                iso_date_from_ms((f + (today_ms - d).max(0)).min(today_ms))
+            }
+            _ => today,
+        });
+        out.defrosted_on = None;
+    } else {
+        if counted_freeze.is_some_and(|f| f > today_ms) {
+            out.frozen_on = Some(today.clone());
+        }
+        out.defrosted_on = Some(today);
+    }
+    out
+}
+
+/// JSON-bridged [`set_bean_frozen`]. Input: a [`Bean`] JSON; output: the
+/// updated [`Bean`] JSON.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `bean_json`.
+pub fn set_bean_frozen_json(bean_json: &str, frozen: bool, now_ms: i64) -> Result<String, String> {
+    let bean: Bean = serde_json::from_str(bean_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&set_bean_frozen(&bean, frozen, now_ms)).map_err(|e| e.to_string())
 }
 
 impl Bean {
@@ -1224,6 +1426,228 @@ mod tests {
         bean.grinder_setting = "1.2".to_owned();
         bean.metadata = serde_json::json!({"co2eKg": 1.4});
         bean
+    }
+
+    // -- set_bean_frozen ------------------------------------------------
+
+    /// `NOW` is 2026-05-22 12:00 UTC; `day(n)` is the ISO date `n` days later.
+    fn day(n: i64) -> String {
+        iso_date_from_ms(NOW + n * MS_PER_DAY)
+    }
+
+    fn frozen_bag(roasted: i64, frozen: Option<i64>, defrosted: Option<i64>) -> Bean {
+        let mut bean = Bean::new("bean:f".to_owned(), "Frozen".to_owned(), NOW);
+        bean.roasted_on = Some(day(roasted));
+        bean.frozen_on = frozen.map(day);
+        bean.defrosted_on = defrosted.map(day);
+        bean
+    }
+
+    fn count(bean: &Bean) -> Option<i64> {
+        days_off_roast(
+            bean.roasted_on.as_deref()?,
+            bean.frozen_on.as_deref(),
+            bean.defrosted_on.as_deref(),
+            NOW,
+        )
+    }
+
+    #[test]
+    fn days_off_roast_never_adds_days_for_a_freeze_dated_after_today() {
+        // Freeze and defrost both typed 3 days ahead: the bag hasn't been
+        // frozen yet, so the count is the plain 30, not 33.
+        assert_eq!(count(&frozen_bag(-30, Some(3), Some(3))), Some(30));
+    }
+
+    #[test]
+    fn iso_date_from_ms_formats_the_utc_day() {
+        assert_eq!(iso_date_from_ms(NOW), "2026-05-22");
+        assert_eq!(iso_date_from_ms(0), "1970-01-01");
+        assert_eq!(day(-22), "2026-04-30");
+    }
+
+    /// The review's case: roasted 28 days ago, frozen 13 days in. Switching
+    /// Frozen off used to erase the dates (13 → 28 days off roast).
+    #[test]
+    fn toggling_frozen_off_defrosts_today_and_keeps_the_freeze_date() {
+        let bag = frozen_bag(-28, Some(-15), None);
+        assert_eq!(count(&bag), Some(13));
+        let off = set_bean_frozen(&bag, false, NOW);
+        assert_eq!(off.frozen_on, bag.frozen_on);
+        assert_eq!(off.defrosted_on.as_deref(), Some("2026-05-22"));
+        assert_eq!(count(&off), Some(13));
+        // Nothing else moves; the shell stamps updated_at.
+        assert_eq!(
+            Bean {
+                defrosted_on: None,
+                ..off
+            },
+            bag
+        );
+    }
+
+    #[test]
+    fn freezing_a_never_frozen_bag_stamps_today() {
+        let bag = frozen_bag(-10, None, None);
+        let on = set_bean_frozen(&bag, true, NOW);
+        assert_eq!(on.frozen_on.as_deref(), Some("2026-05-22"));
+        assert_eq!(on.defrosted_on, None);
+        assert_eq!(count(&on), Some(10));
+    }
+
+    #[test]
+    fn refreezing_carries_the_earlier_frozen_span() {
+        // Roasted 28 days ago, frozen days -15..-10, thawed since: 23 days.
+        let bag = frozen_bag(-28, Some(-15), Some(-10));
+        assert_eq!(count(&bag), Some(23));
+        let on = set_bean_frozen(&bag, true, NOW);
+        assert_eq!(on.frozen_on, Some(day(-5)));
+        assert_eq!(on.defrosted_on, None);
+        assert_eq!(count(&on), Some(23));
+        // Off then on the same day restores the original freeze date.
+        let frozen = frozen_bag(-28, Some(-15), None);
+        let back = set_bean_frozen(&set_bean_frozen(&frozen, false, NOW), true, NOW);
+        assert_eq!(back, frozen);
+    }
+
+    #[test]
+    fn set_bean_frozen_is_a_no_op_in_the_current_state_and_clamps_a_future_freeze() {
+        let frozen = frozen_bag(-20, Some(-5), None);
+        assert_eq!(set_bean_frozen(&frozen, true, NOW), frozen);
+        let thawed = frozen_bag(-20, Some(-5), Some(-2));
+        assert_eq!(set_bean_frozen(&thawed, false, NOW), thawed);
+        let plain = frozen_bag(-20, None, None);
+        assert_eq!(set_bean_frozen(&plain, false, NOW), plain);
+        // A freeze typed in the future is pulled back to today on defrost.
+        let future = frozen_bag(-20, Some(3), None);
+        let off = set_bean_frozen(&future, false, NOW);
+        assert_eq!(off.frozen_on.as_deref(), Some("2026-05-22"));
+        assert_eq!(count(&off), count(&future));
+    }
+
+    /// AC-F13: no flip of the switch moves the count, over every mix of
+    /// roast / freeze / defrost dates, including the pairs the count ignores.
+    #[test]
+    fn toggling_frozen_never_changes_days_off_roast() {
+        let offsets = [
+            None,
+            Some(-40),
+            Some(-28),
+            Some(-15),
+            Some(-10),
+            Some(-1),
+            Some(0),
+            Some(3),
+        ];
+        for roasted in [-30, -10, 0, 5] {
+            for frozen in offsets {
+                for defrosted in offsets {
+                    let mut variants = vec![frozen_bag(roasted, frozen, defrosted)];
+                    let mut garbled = frozen_bag(roasted, frozen, defrosted);
+                    if garbled.frozen_on.is_some() {
+                        garbled.frozen_on = Some("not-a-date".to_owned());
+                        variants.push(garbled);
+                    }
+                    for bag in variants {
+                        for to in [true, false] {
+                            let next = set_bean_frozen(&bag, to, NOW);
+                            assert_eq!(count(&next), count(&bag), "{bag:?} -> {to}: {next:?}");
+                            assert_eq!(
+                                next.frozen_on.is_some() && next.defrosted_on.is_none(),
+                                to,
+                                "{bag:?} -> {to}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn set_bean_frozen_json_round_trips_and_rejects_garbage() {
+        let bag = frozen_bag(-28, Some(-15), None);
+        let out = set_bean_frozen_json(&serde_json::to_string(&bag).unwrap(), false, NOW).unwrap();
+        let off: Bean = serde_json::from_str(&out).unwrap();
+        assert_eq!(off, set_bean_frozen(&bag, false, NOW));
+        assert!(set_bean_frozen_json("nope", true, NOW).is_err());
+    }
+
+    // -- duplicate_bean -------------------------------------------------
+
+    /// A bag linked everywhere: Visualizer, Beanconqueror, catalogue, a
+    /// photo, archived, pinned and tombstoned.
+    fn linked_bean() -> Bean {
+        let mut bean = sample_bean();
+        bean.visualizer_id = Some("vb-orig".to_owned());
+        bean.beanconqueror_id = Some("bc-orig".to_owned());
+        bean.canonical_coffee_bag_id = Some("cat-bag-1".to_owned());
+        bean.canonical_roaster_id = Some("cat-roaster-1".to_owned());
+        bean.image_ref = Some("bean-image:bean:abc".to_owned());
+        bean.archived_at = Some(NOW - 10);
+        bean.deleted_at = Some(NOW - 5);
+        bean.tags = vec!["daily".to_owned()];
+        bean.linked_profile_id = Some("profile:x".to_owned());
+        bean.frozen_on = Some("2026-05-10".to_owned());
+        bean
+    }
+
+    #[test]
+    fn duplicate_bean_drops_every_remote_link_and_keeps_the_details() {
+        let src = linked_bean();
+        let copy = duplicate_bean(&src, "bean:copy", NOW + 1);
+        // New identity and stamps.
+        assert_eq!(copy.id, "bean:copy");
+        assert_eq!(copy.name, "Yirgacheffe (copy)");
+        assert_eq!((copy.created_at, copy.updated_at), (NOW + 1, NOW + 1));
+        // No remote record, import provenance, photo, tombstone or archive.
+        assert_eq!(copy.visualizer_id, None);
+        assert_eq!(copy.beanconqueror_id, None);
+        assert_eq!(copy.image_ref, None);
+        assert_eq!(copy.deleted_at, None);
+        assert_eq!(copy.archived_at, None);
+        assert!(!copy.favourite);
+        // Everything else is the original's, catalogue links included.
+        let expected = Bean {
+            id: copy.id.clone(),
+            name: copy.name.clone(),
+            created_at: copy.created_at,
+            updated_at: copy.updated_at,
+            visualizer_id: None,
+            beanconqueror_id: None,
+            image_ref: None,
+            deleted_at: None,
+            archived_at: None,
+            favourite: false,
+            ..src.clone()
+        };
+        assert_eq!(copy, expected);
+        assert_eq!(copy.canonical_coffee_bag_id.as_deref(), Some("cat-bag-1"));
+        assert_eq!(copy.canonical_roaster_id.as_deref(), Some("cat-roaster-1"));
+    }
+
+    #[test]
+    fn duplicate_bean_names_a_blank_bag_and_trims() {
+        let mut src = Bean::new("bean:a".to_owned(), "   ".to_owned(), NOW);
+        assert_eq!(
+            duplicate_bean(&src, "bean:b", NOW).name,
+            "Untitled bag (copy)"
+        );
+        src.name = "  Gesha ".to_owned();
+        assert_eq!(duplicate_bean(&src, "bean:b", NOW).name, "Gesha (copy)");
+        // A copy of a copy stacks the suffix, like the recipe copy.
+        let again = duplicate_bean(&duplicate_bean(&src, "bean:b", NOW), "bean:c", NOW);
+        assert_eq!(again.name, "Gesha (copy) (copy)");
+    }
+
+    #[test]
+    fn duplicate_bean_json_round_trips_and_rejects_garbage() {
+        let src = linked_bean();
+        let out =
+            duplicate_bean_json(&serde_json::to_string(&src).unwrap(), "bean:j", NOW).unwrap();
+        let copy: Bean = serde_json::from_str(&out).unwrap();
+        assert_eq!(copy, duplicate_bean(&src, "bean:j", NOW));
+        assert!(duplicate_bean_json("nope", "bean:j", NOW).is_err());
     }
 
     #[test]

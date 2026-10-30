@@ -39,7 +39,7 @@ import {
 import { De1Liveness } from './de1-liveness';
 import { HOLLOW_LINK_STATUS, stuckLinkHint } from './stuck-link';
 import type { BleConnectionState } from './connection-state';
-import { De1Uuids } from './de1-uuids';
+import { De1Uuids, de1NotificationSource } from './de1-uuids';
 import {
 	advertisingStatus,
 	BleDevice,
@@ -65,6 +65,7 @@ type De1NotificationSource = Extract<
 	| 'De1ShotSettings'
 	| 'De1FrameAck'
 	| 'De1Calibration'
+	| 'De1Version'
 >;
 
 /**
@@ -661,17 +662,7 @@ export class De1Manager {
 		// (frame encoding), serial, firmware build and heater voltage.
 		if (this.identityPending) {
 			this.callbacks.onStatus('Reading machine identity…');
-			const info = de1MachineInfoProgram({
-				core: this.core,
-				onStatus: (line) => {
-					if (current()) this.callbacks.onStatus(line);
-				},
-				onCoreOutput: (output) => {
-					if (current()) this.callbacks.onCoreOutput(output);
-				}
-			});
-			if (this.runtime === null) await Effect.runPromiseExit(info);
-			else await this.runtime.runPromiseExit(info);
+			await this.runMachineInfo(device);
 			if (!current()) {
 				device.releaseReconnect?.(false);
 				return;
@@ -687,6 +678,33 @@ export class De1Manager {
 		this.callbacks.onState('ready');
 		this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
 		this.startLiveness(device);
+	}
+
+	/**
+	 * Re-read the machine identity (firmware build, model, serial, GHC, heater
+	 * voltage, …) over the current link. For a firmware flash letting go of
+	 * the link: the reads a reconnect ran while the flash held it were refused,
+	 * and the build changed (Android's `afterFirmwareRelease` →
+	 * `readMachineInfo`). A no-op with no DE1.
+	 */
+	async readMachineInfo(): Promise<void> {
+		if (this.device !== null) await this.runMachineInfo(this.device);
+	}
+
+	/** Run {@link de1MachineInfoProgram} on `device`; its output counts only while it is current. */
+	private async runMachineInfo(device: De1Transport): Promise<void> {
+		const current = () => this.device === device;
+		const info = de1MachineInfoProgram({
+			core: this.core,
+			onStatus: (line) => {
+				if (current()) this.callbacks.onStatus(line);
+			},
+			onCoreOutput: (output) => {
+				if (current()) this.callbacks.onCoreOutput(output);
+			}
+		});
+		if (this.runtime === null) await Effect.runPromiseExit(info);
+		else await this.runtime.runPromiseExit(info);
 	}
 
 	/**
@@ -766,24 +784,9 @@ function uuidForWriteTarget(target: WriteTarget): string | null {
  * `null` for an unmapped characteristic, which is dropped.
  */
 function sourceFor(characteristicUuid: string): De1NotificationSource | null {
-	switch (characteristicUuid) {
-		case De1Uuids.STATE_INFO:
-			return 'De1State';
-		case De1Uuids.SHOT_SAMPLE:
-			return 'De1ShotSample';
-		case De1Uuids.WATER_LEVELS:
-			return 'De1WaterLevels';
-		case De1Uuids.MMR_READ:
-			return 'De1MmrRead';
-		case De1Uuids.SHOT_SETTINGS:
-			return 'De1ShotSettings';
-		case De1Uuids.FRAME_WRITE:
-			return 'De1FrameAck';
-		case De1Uuids.CALIBRATION:
-			return 'De1Calibration';
-		default:
-			return null;
-	}
+	// The core's map (Android uses the same one). No FrameWrite entry: the DE1
+	// sends no notification there; the app synthesises the frame ack.
+	return de1NotificationSource(characteristicUuid) as De1NotificationSource | null;
 }
 
 /**
@@ -799,6 +802,7 @@ function freshCounts(): Record<De1NotificationSource, number> {
 		De1MmrRead: 0,
 		De1ShotSettings: 0,
 		De1FrameAck: 0,
-		De1Calibration: 0
+		De1Calibration: 0,
+		De1Version: 0
 	};
 }

@@ -1710,6 +1710,18 @@ export type Event =
 	 */
 	| { type: "ScaleStale", content?: undefined }
 	/**
+	 * The scale link looks dead: still no reading 5 s after
+	 * [`Event::ScaleStale`], or three scale writes in a row failed with no
+	 * reading in between. Emitted once per episode — a fresh reading re-arms
+	 * it. The shell drops the link at the transport (not a user disconnect)
+	 * so its reconnect loop recovers it, but only while its link still
+	 * claims ready.
+	 */
+	| { type: "ScaleLinkDead", content: {
+	/** Which rule tripped. */
+	reason: ScaleLinkDeadReason;
+}}
+	/**
 	 * The untared-cup guard latched a virtual zero: a heavy reading right
 	 * after first flow held still, so it was a cup landing after the tare —
 	 * every later reading this shot is netted against it and stop-at-weight
@@ -2103,6 +2115,42 @@ export interface CustomMethodLabelInput {
 	 * pourover") — the core owns only the ids, which are checked too.
 	 */
 	presetLabels: string[];
+}
+
+/**
+ * One connect-time seed read: a characteristic the DE1 answers on a direct
+ * read but does not notify at connect, so subscribing alone leaves its rows
+ * blank.
+ */
+export interface De1SeedRead {
+	/** Full lowercase 128-bit characteristic UUID. */
+	characteristic: string;
+	/** Label for status lines (`machine state`). */
+	label: string;
+	/**
+	 * Whether the link depends on it. The DE1 answers a StateInfo read even
+	 * asleep, so a link that can't produce it (after one retry, the shells'
+	 * rule) is hollow and is dropped for the reconnect loop. The others are
+	 * best-effort.
+	 */
+	required: boolean;
+}
+
+/** One DE1 notify characteristic the shells subscribe to at connect. */
+export interface De1Subscription {
+	/** Full lowercase 128-bit characteristic UUID. */
+	characteristic: string;
+	/** Characteristic name for status lines (`StateInfo`). */
+	name: string;
+	/** Its 16-bit short, upper case (`A00E`). */
+	short: string;
+	/**
+	 * Whether a failed subscribe fails the connect. The required ones are
+	 * the streams the app can't run without, and together the structural
+	 * proof that the device is a DE1: a link that lacks one must never sit
+	 * ready with dead notifications.
+	 */
+	required: boolean;
 }
 
 /**
@@ -2738,6 +2786,20 @@ export interface FrameExitSpec {
 	threshold: number;
 	/** Configured max frame duration, seconds; `<= 0` when unknown. */
 	maxDurationS: number;
+}
+
+/** What the hub UI shows about pairing. */
+export interface GateStatus {
+	/** The window is open. */
+	open: boolean;
+	/** Seconds left in the window (0 when closed). */
+	secs_left: number;
+	/** Failed codes counted in this window. */
+	failures: number;
+	/** Seconds left in the lockout (0 when not locked). */
+	locked_secs_left: number;
+	/** A remote holds the pairing slot. */
+	pending: boolean;
 }
 
 /**
@@ -4529,6 +4591,108 @@ export enum Pump {
 }
 
 /**
+ * Events for the shell (§3.4). Names are sanitized; public keys never ride
+ * in events (read `peer_public_key()`).
+ */
+export type RelayEvent = 
+	/** Hub: a v2/v3 remote dialled; it got the legacy denial. */
+	| { type: "LegacyPeer", content: {
+	/** The remote's protocol version. */
+	version: number;
+	/** The remote's display name. */
+	name: string;
+}}
+	/** Hub: a remote asks to pair; show the code entry dialog. */
+	| { type: "PairRequest", content: {
+	/** The remote's claimed device id (unauthenticated until pairing completes). */
+	remote_id: string;
+	/** The remote's display name. */
+	remote_name: string;
+}}
+	/**
+	 * Hub: the code matched. Persist the pin, insert it into the live
+	 * `PinSet`, then call `confirm_paired()` (or `reject_pairing()` if the write failed).
+	 */
+	| { type: "PairPending", content: {
+	/** The remote's device id, checked against its static key. */
+	remote_id: string;
+	/** The remote's display name. */
+	remote_name: string;
+}}
+	/**
+	 * A pairing attempt ended without success. `failures`/`locked` describe the
+	 * hub's gate after it (always 0/false on the remote).
+	 */
+	| { type: "PairingFailed", content: {
+	/** `WrongCode`, `NotConfirmed`, `Timeout`, `Cancelled`, `Malformed`, … */
+	reason: string;
+	/** Failed codes counted in this window. */
+	failures: number;
+	/** Whether pairing is now locked out. */
+	locked: boolean;
+}}
+	/** Hub: an unpinned remote tried to resume; it got `CLOSE(NOT_PAIRED)`. */
+	| { type: "UnknownRemote", content: {
+	/** The remote's device id. */
+	remote_id: string;
+}}
+	/** Remote: the hub's ServerHello (advisory until the handshake). */
+	| { type: "HubHello", content: {
+	/** The hub's device id. */
+	hub_id: string;
+	/** The hub's display name. */
+	hub_name: string;
+	/** `Ready`, `AwaitingCode`, `PairingClosed`, `Busy` or `LockedOut`. */
+	status: string;
+	/** Seconds left in the pairing window (or the lockout). */
+	secs_left: number;
+}}
+	/**
+	 * Remote: show the code, read from `RemoteConnection::code()`, until
+	 * `expires_at_ms`. The event itself never carries the code, so no event,
+	 * event JSON or record a bridge builds from it can leak it into a log.
+	 */
+	| { type: "ShowCode", content: {
+	/** When the code expires (`now_ms` clock). */
+	expires_at_ms: number;
+}}
+	/**
+	 * Remote: the hub refused. Only `authenticated` refusals (a `CLOSE` record)
+	 * may change trust state or role.
+	 */
+	| { type: "Refused", content: {
+	/**
+	 * `HostMismatch`, `HubOutdated`, `HubUnverified`, `Timeout`, `Revoked`,
+	 * `NotPaired`, `HubStopped`, `Protocol`, `Normal`, or an `ABORT` reason.
+	 */
+	reason: string;
+	/** Whether the refusal arrived inside the session. */
+	authenticated: boolean;
+}}
+	/** Both: pairing completed. */
+	| { type: "Paired", content: {
+	/** The peer's device id. */
+	peer_id: string;
+	/** The peer's display name. */
+	peer_name: string;
+}}
+	/** Both: the session is up (hub: admitted; remote: hub authenticated). */
+	| { type: "Established", content: {
+	/** The peer's device id. */
+	peer_id: string;
+}}
+	/** Hub: the remote ended an established session with an authenticated `CLOSE` record. */
+	| { type: "PeerClosed", content: {
+	/** `Normal`, `Protocol`, … (the record's code). */
+	reason: string;
+}}
+	/** The connection failed for a reason no more specific event covers. */
+	| { type: "Failed", content: {
+	/** The `RelayError` name. */
+	error: string;
+}};
+
+/**
  * What loading a persisted SAW model blob found — returned to the shell by
  * [`SawLearningModel::load_json`] so it can tell "nothing stored yet" from
  * "stored bytes did not parse".
@@ -4557,6 +4721,14 @@ export type SawModelLoad =
 	/** The parser's error message, for the shell's warning log. */
 	error: string;
 }};
+
+/** Why [`Event::ScaleLinkDead`] fired. */
+export enum ScaleLinkDeadReason {
+	/** No weight reading for the stale timeout plus the 5 s grace. */
+	Silent = "Silent",
+	/** Three scale writes in a row failed with no reading in between. */
+	WritesFailing = "WritesFailing",
+}
 
 /**
  * What the shell should do with a just-completed shot — decided at the
