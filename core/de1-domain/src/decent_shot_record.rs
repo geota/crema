@@ -507,6 +507,7 @@ mod tests {
             tags: Vec::new(),
             grinder_setting: Some("2.4".to_owned()),
             grinder: Some("Niche Zero".to_owned()),
+            notes: None,
         });
         s.yield_target = Some(36.0);
         s

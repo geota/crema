@@ -385,6 +385,12 @@ pub struct StoredShot {
     /// Whether auto-tare was armed for this shot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_tare: Option<bool>,
+    /// Per-shot Visualizer privacy override, or `None` to inherit the
+    /// settings default at upload / patch time. Editable from the shot detail.
+    /// Omitted when absent (the web shell always carried it; the core type
+    /// didn't, so every backup dropped it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<ShotPrivacy>,
     /// Visualizer `shot.id` once pushed. `None` until the shot has been
     /// uploaded; the upload round-trip writes it back so subsequent syncs
     /// PATCH the same row instead of POSTing a duplicate.
@@ -434,6 +440,19 @@ pub struct StoredShot {
     pub brew_series: Option<crate::brew::BrewSeries>,
 }
 
+/// A shot's Visualizer privacy override — the `privacy` the upload sends.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShotPrivacy {
+    /// Listed publicly.
+    Public,
+    /// Reachable by link only.
+    Unlisted,
+    /// Visible to the owner only.
+    Private,
+}
+
 /// Machine identity frozen onto a [`StoredShot`] at completion — the exact
 /// shape the web shell's `model.ts` persists. Decent's upload endpoint checks
 /// `serial_number` against the account's registered machines.
@@ -479,6 +498,7 @@ impl StoredShot {
             preinfuse_target: None,
             stop_on_weight: None,
             auto_tare: None,
+            privacy: None,
             visualizer_id: None,
             deleted_at: None,
             decent_id: None,
