@@ -9,9 +9,9 @@ use de1_domain::connect_sweep::{
     DEFAULT_PHASE_2_FLOW_ML_S, MAX_TANK_TEMP_C,
 };
 use de1_domain::{ConnectSweepSettings, UsbChargingMode, usb_charger_decision};
-use de1_protocol::{MachineState, MmrRegister, ShotSettings};
+use de1_protocol::{MachineState, MmrRegister};
 
-use crate::{CoreOutput, CremaCore, mmr_write_command, ms_to_duration};
+use crate::{CoreOutput, CremaCore, SteamHotWaterTargets, mmr_write_command, ms_to_duration};
 
 /// Append `more` to `out`, events then commands, order kept.
 fn append(out: &mut CoreOutput, more: CoreOutput) {
@@ -173,20 +173,16 @@ impl CremaCore {
         let tank = whole_degrees(settings.tank_temp_c, MAX_TANK_TEMP_C);
         self.tank_temp_threshold_c = Some(tank);
         append(&mut out, self.set_tank_threshold(tank));
-        // The steam / hot-water packet: the user's dials, the rest from the
-        // machine's last echo (both shells' old fallbacks: 60 s, 200 ml, 92 °C).
-        let echo = self.steam_hotwater_settings.clone();
-        let packet = ShotSettings {
-            steam_flags: 0,
-            steam_temp_c: settings.steam_temp_c,
-            steam_timeout_s: settings.steam_timeout_s,
-            hot_water_temp_c: settings.hot_water_temp_c,
-            hot_water_volume_ml: settings.hot_water_volume_ml,
-            hot_water_timeout_s: echo.as_ref().map_or(60.0, |e| e.hot_water_timeout_s),
-            espresso_volume_ml: echo.as_ref().map_or(200.0, |e| e.espresso_volume_ml),
-            group_temp_c: echo.as_ref().map_or(92.0, |e| e.group_temp_c),
-        };
-        append(&mut out, self.set_steam_hotwater_settings(packet));
+        // The steam / hot-water packet: the user's dials, the rest kept.
+        append(
+            &mut out,
+            self.set_steam_hotwater_targets(&SteamHotWaterTargets {
+                steam_temp_c: settings.steam_temp_c,
+                steam_timeout_s: settings.steam_timeout_s,
+                hot_water_temp_c: settings.hot_water_temp_c,
+                hot_water_volume_ml: settings.hot_water_volume_ml,
+            }),
+        );
         append(&mut out, self.set_steam_flow(settings.steam_flow_ml_s));
         append(
             &mut out,
@@ -363,6 +359,39 @@ mod tests {
         assert!((packet.hot_water_volume_ml - 150.0).abs() < 0.5);
         // The tank threshold is remembered for the cold-maintenance restore.
         assert_eq!(core.tank_temp_threshold_c, Some(30));
+    }
+
+    #[test]
+    fn the_sweep_keeps_the_machines_steam_packet_fields() {
+        // AC-F5.1: the sweep goes through `set_steam_hotwater_targets`, so
+        // the flag byte and the fields Crema doesn't own survive it.
+        let mut core = CremaCore::new();
+        let machine = ShotSettings {
+            steam_flags: 0x80,
+            hot_water_timeout_s: 45.0,
+            espresso_volume_ml: 220.0,
+            group_temp_c: 88.0,
+            ..ShotSettings::default()
+        };
+        let _ = core.on_notification(Source::De1ShotSettings, &machine.encode(), 0);
+        let out = core.connect_sweep(&snapshot(), 1_000);
+        let packet = out
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1ShotSettings,
+                    data,
+                } => ShotSettings::decode(data).ok(),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(packet.steam_flags, 0x80);
+        assert_eq!(packet.hot_water_timeout_s, 45.0);
+        assert_eq!(packet.espresso_volume_ml, 220.0);
+        assert_eq!(packet.group_temp_c, 88.0);
+        assert_eq!(packet.steam_temp_c, 150.0);
+        assert_eq!(packet.hot_water_volume_ml, 150.0);
     }
 
     #[test]
