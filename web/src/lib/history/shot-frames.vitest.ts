@@ -60,19 +60,17 @@ describe('shot frame numbers', () => {
 	});
 
 	it('AC-F18b frame numbers round-trip through the stored shot and back', () => {
+		// Since F10 the core assembles the stored shot; the store keeps the
+		// frames of the record it is handed, and they read back.
 		localStorage.clear();
-		const series = capturedPour().shotTelemetry;
-		const shot = new HistoryStore().record({
-			duration: 1000,
+		const samples = capturedPour().shotTelemetry.map(toWire);
+		const shot = new HistoryStore().recordCaptured({
+			formatVersion: 3,
+			id: 'shot:frames',
+			completedAt: 1_700_000_000_000,
 			profileName: 'Test',
-			dose: 18,
-			series,
-			bean: null,
-			grinderModel: null,
-			peakPressure: 9,
-			peakTemp: 93,
-			peakWeight: null,
-			finalWeight: null
+			metadata: {},
+			record: { duration: 1000, samples }
 		});
 		expect(shot?.record.samples.map((t) => t.sample.frameNumber)).toEqual([0, 2, 2, 3]);
 		// The persisted wire JSON reads back to the same frames.

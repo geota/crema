@@ -64,6 +64,8 @@ class OwnStateReadsTest {
             // Own-state writers (§7.4).
             "loadPrefs" to setOf("idleSleepMin", "activeProfileId"),
             "applyRestoredSettings" to setOf("idleSleepMin"),
+            // Restore defaults keeps this device's own line frequency (F15).
+            "resetPreferences" to setOf("lineFreqOverride"),
             // The holder's own machine reads.
             "readMachineInfo" to setOf("de1MachineInfo"),
             "firmware" to setOf("de1MachineInfo"),

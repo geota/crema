@@ -3761,7 +3761,11 @@ data class ShotCaptureContext (
 	/// (or `null` on the wire) = no tags.
 	val tags: List<String>? = null,
 	/// The DE1 the shot ran on, or `None` when it isn't known.
-	val machine: ShotMachine? = null
+	val machine: ShotMachine? = null,
+	/// The profile name the shell knows, the last fallback when the core
+	/// knows neither the profile it ran nor a title — a replay, whose shadow
+	/// core saw no upload, passes the capture's name here.
+	val profileName: String? = null
 )
 
 /// Everything a shot-annotation PATCH can carry, gathered by the shell

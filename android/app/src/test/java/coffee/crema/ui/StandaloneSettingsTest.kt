@@ -194,7 +194,7 @@ class StandaloneSettingsTest {
         vm.resetPreferences()
         VmHarness.idleUntil("the reset saved") { savedPrefs().themeMode == AppPrefs().themeMode }
         val saved = savedPrefs()
-        assertEquals(AppPrefs().weightUnit, saved.weightUnit)
+        assertEquals("oz", saved.weightUnit, "Restore defaults keeps the weight unit (F15)")
         assertEquals(AppPrefs().stopOnWeight, saved.stopOnWeight)
         assertEquals("primary", saved.proxyRole)
         assertEquals("192.168.1.20", saved.proxyPrimaryHost)
