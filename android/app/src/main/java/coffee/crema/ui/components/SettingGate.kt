@@ -7,6 +7,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.disabled
@@ -29,13 +32,16 @@ data class RowGate(val editable: Boolean = true, val unknown: Boolean = false, v
 }
 
 /** Dims a control and swallows its taps when [gate] doesn't take edits. Its
- *  semantics are replaced too, so an accessibility click can't reach it. */
+ *  semantics are replaced too, so an accessibility click can't reach it, and
+ *  a focused child's activation keys (Enter, D-pad centre, Space) never
+ *  reach it either; focus can still move through. */
 fun Modifier.gated(gate: RowGate): Modifier = if (gate.editable) this else this
     .alpha(0.4f)
     .clearAndSetSemantics {
         disabled()
         gate.note?.let { stateDescription = it }
     }
+    .onPreviewKeyEvent { it.key in ACTIVATION_KEYS }
     .pointerInput(Unit) {
         // The initial pass reaches this parent before its children, so the
         // control never sees a press it could act on.
@@ -43,6 +49,8 @@ fun Modifier.gated(gate: RowGate): Modifier = if (gate.editable) this else this
             while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
         }
     }
+
+private val ACTIVATION_KEYS = setOf(Key.Enter, Key.NumPadEnter, Key.DirectionCenter, Key.Spacebar)
 
 /** [f], or "—" while the value is unknown on this device. */
 fun RowGate.fmt(f: (Double) -> String): (Double) -> String = if (unknown) { _ -> "—" } else f

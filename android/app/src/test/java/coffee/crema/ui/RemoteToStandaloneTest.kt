@@ -1,5 +1,6 @@
 package coffee.crema.ui
 
+import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import coffee.crema.ble.proxy.Peer
 import android.app.Application
@@ -40,6 +41,9 @@ class RemoteToStandaloneTest {
     /** Mode switches the controller ran, by role, and prefs.json as each began. */
     private val switches = CopyOnWriteArrayList<Pair<String, AppPrefs>>()
 
+    /** Whether the custom profiles on disk held the hub's profile as each switch began. */
+    private val customOnDisk = CopyOnWriteArrayList<Boolean>()
+
     private fun role(vm: MainViewModel) = VmHarness.proxyController(vm).state.value.role
 
     /** Wait for the role, moving the virtual clock (the switch's settle
@@ -69,7 +73,10 @@ class RemoteToStandaloneTest {
         vm.setQcGrind(18f) // pending: never answered
         VmHarness.idleUntil("the edit at the hub") { fixture.handled.isNotEmpty() }
         assertEquals(18f, vm.ui.value.qcGrind)
-        VmHarness.proxyController(vm).modeSwitchProbe = { r -> switches += r to savedPrefs() }
+        VmHarness.proxyController(vm).modeSwitchProbe = { r ->
+            switches += r to savedPrefs()
+            customOnDisk += File(VmHarness.app().filesDir, "customProfiles.json").let { it.exists() && "custom-on-the-hub" in it.readText() }
+        }
         return vm
     }
 
@@ -96,6 +103,7 @@ class RemoteToStandaloneTest {
         val (switchedTo, atSwitch) = switches.single()
         assertEquals(next, switchedTo)
         assertEquals(expected, abOf(atSwitch))
+        assertEquals(listOf(true), customOnDisk.toList(), "the adopted custom profile was on disk before the switch")
         // And the first sweep after it writes S's machine values (A only;
         // the tank temperature and battery are inputs, not settings).
         assertEquals(
@@ -355,5 +363,106 @@ class RemoteToStandaloneTest {
         assertEquals(S.stopOnWeight, vm.ui.value.stopOnWeight, "nothing shown")
         assertEquals(sent, fixture.handled.size, "nothing sent")
         assertEquals(listOf("Leaving Kitchen tablet"), vm.ui.value.userMessages.drop(messages))
+    }
+
+    /** P2-1 (the P2b validation): a re-find switch that runs while the
+     *  confirmation is open (an attempt already in flight, refused for an
+     *  unproven reason) cancels the leave. The dialog goes away, the slice
+     *  unfreezes, the re-find is released, the user is told, and Stop works
+     *  again. */
+    @Test
+    fun `a re-find switch while the confirmation is open cancels it cleanly`() {
+        val vm = fixture.start()
+        fixture.push(S)
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt, "the prompt is open")
+        val pc = VmHarness.proxyController(vm)
+        val epochBefore = pc.modeEpoch
+        // The current session becomes a re-find attempt still waiting for its
+        // Welcome (what the re-find dials for a new port on the saved host).
+        val sessionField = ProxyController::class.java.getDeclaredField("session").apply { isAccessible = true }
+        val current = sessionField.get(pc)!!
+        val cls = current.javaClass
+        val host = cls.getDeclaredMethod("getHost").invoke(current) as String
+        val port = cls.getDeclaredMethod("getPort").invoke(current) as Int
+        val ctor = cls.getDeclaredConstructor(String::class.java, Int::class.javaPrimitiveType, ProxyController.MirrorTrust::class.java, Boolean::class.javaPrimitiveType)
+            .apply { isAccessible = true }
+        sessionField.set(pc, ctor.newInstance(host, port + 1, ProxyController.MirrorTrust.UNATTENDED, true))
+        val messages = vm.ui.value.userMessages.size
+        // The attempt is refused for an unproven reason: the re-find switches back.
+        pc.refuseCurrentSessionForTest("host mismatch", byHost = false, hostProved = false)
+        repeat(60) {
+            VmHarness.advance(100)
+            Thread.sleep(10)
+        }
+        VmHarness.idle()
+        assertTrue(pc.modeEpoch > epochBefore, "a switch ran")
+        assertEquals("secondary", role(vm))
+        assertNull(vm.ui.value.adoptPrompt, "the dialog goes away")
+        assertTrue(VmHarness.ownState(vm).mirror?.frozen == false, "the slice unfreezes")
+        assertEquals(false, ProxyController::class.java.getDeclaredField("refindHeld").apply { isAccessible = true }.getBoolean(pc), "the re-find is released")
+        assertTrue(vm.ui.value.userMessages.drop(messages).contains("Couldn't leave Kitchen tablet — try again"), "${vm.ui.value.userMessages.drop(messages)}")
+        vm.resolveAdoption(useHub = true) // a late answer: nothing to resolve, nothing stuck
+        VmHarness.idle()
+        assertNull(vm.ui.value.adoptPrompt)
+        // Stop works again: it asks again (S still differs from P), and Keep mine leaves.
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt, "Stop asks again")
+        vm.resolveAdoption(useHub = false)
+        waitRole(vm, "normal")
+        assertEquals(abOf(P), abOf(savedPrefs()), "nothing adopted")
+    }
+
+    /** AC-36 / R2: a commit whose epoch went stale (another switch took the
+     *  mode lock first) adopts nothing and doesn't switch; it unfreezes the
+     *  slice, says so, and the user can leave again. */
+    @Test
+    fun `a stale commit adopts nothing and lets the user leave again`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        val pc = VmHarness.proxyController(vm)
+        val modeLock = ProxyController::class.java.getDeclaredField("modeMutex").apply { isAccessible = true }.get(pc) as kotlinx.coroutines.sync.Mutex
+        assertTrue(modeLock.tryLock(), "the mode lock is free")
+        val messages = vm.ui.value.userMessages.size
+        vm.resolveAdoption(useHub = true) // the commit queues on the lock
+        VmHarness.idle()
+        // Another switch ran first.
+        ProxyController::class.java.getDeclaredField("modeEpoch").apply { isAccessible = true }.setLong(pc, pc.modeEpoch + 1)
+        modeLock.unlock()
+        repeat(20) {
+            VmHarness.advance(100)
+            Thread.sleep(10)
+        }
+        VmHarness.idle()
+        assertEquals("secondary", role(vm))
+        assertTrue(switches.isEmpty(), "no switch: $switches")
+        assertEquals(abOf(P), abOf(savedPrefs()), "no adoption")
+        assertTrue(VmHarness.ownState(vm).mirror?.frozen == false, "the slice unfreezes")
+        assertTrue(VmHarness.log(vm).any { "Mode switch to normal skipped" in it })
+        assertEquals(listOf("Couldn't leave Kitchen tablet — try again"), vm.ui.value.userMessages.drop(messages))
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt, "Stop asks again")
+        vm.resolveAdoption(useHub = false)
+        waitRole(vm, "normal")
+        assertEquals(listOf("normal"), switches.map { it.first })
+    }
+
+    /** P2-1: an answer always closes the dialog, even when the leave it
+     *  belonged to is already gone. */
+    @Test
+    fun `an answer always closes the dialog`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        MainViewModel::class.java.getDeclaredField("pendingLeave").apply { isAccessible = true }.set(vm, null)
+        vm.resolveAdoption(useHub = false)
+        VmHarness.idle()
+        assertNull(vm.ui.value.adoptPrompt)
     }
 }

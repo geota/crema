@@ -63,7 +63,7 @@ class RelayMachineTest {
 
         reply = ControlReply.Err("not authorized")
         run(MachineCommand.TareScale)
-        assertTrue("View-only" in notices.last(), notices.last())
+        assertEquals(RelayMachine.viewOnly("Kitchen tablet"), notices.last())
     }
 
     @Test
@@ -138,10 +138,10 @@ class RelayMachineTest {
     fun `a view-only remote sends nothing`() {
         viewOnly = true
         for (cmd in listOf(MachineCommand.Stop, MachineCommand.StartShot, MachineCommand.SetQc(QcField.GRIND, 14f), MachineCommand.SetStopOnWeight(true))) {
-            assertEquals(CommandOutcome.Refused(RelayMachine.VIEW_ONLY), run(cmd))
+            assertEquals(CommandOutcome.Refused(RelayMachine.viewOnly("Kitchen tablet")), run(cmd))
         }
         assertTrue(sent.isEmpty() && shown.isEmpty(), "sent $sent, shown $shown")
-        assertTrue(notices.all { it == RelayMachine.VIEW_ONLY })
+        assertTrue(notices.all { it == "View only — Kitchen tablet hasn’t allowed changes from this device" }, "$notices")
     }
 
     /** AC-15 / AC-35: a machine setting is read-only on a remote. */

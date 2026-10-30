@@ -116,6 +116,25 @@ class StandaloneSettingsTest {
         }
     }
 
+    /** AC-27, the hub VM's half: its machine actions report config ready
+     *  only once the prefs load, so a relayed setting edit before then is
+     *  refused ("starting up") and applied after. */
+    @Test
+    fun `a hub refuses relayed config edits until its prefs load`() {
+        writePrefs(AppPrefs(idleSleepMin = 30, proxyRole = "primary"))
+        val vm = VmHarness.build(store)
+        val pc = VmHarness.proxyController(vm)
+        val early = runBlocking { pc.handleRelayedControl("setQcGrind", "14.5", "remote-1", "Phone") }
+        assertTrue(early is coffee.crema.machine.CommandOutcome.Refused && early.reason.endsWith("is starting up"), "$early")
+        VmHarness.idle()
+        VmHarness.awaitPrefsLoaded(vm)
+        assertEquals(null, vm.ui.value.qcGrind, "the early edit wasn't applied")
+        val late = runBlocking { pc.handleRelayedControl("setQcGrind", "14.5", "remote-1", "Phone") }
+        assertEquals(coffee.crema.machine.CommandOutcome.Accepted, late)
+        VmHarness.idle()
+        assertEquals(14.5f, vm.ui.value.qcGrind)
+    }
+
     /** AC-16: on a hub, a reset and a restore push a snapshot to its remotes. */
     @Test
     fun `reset and restore on a hub push a snapshot`() {

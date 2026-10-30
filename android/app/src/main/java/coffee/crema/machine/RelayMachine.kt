@@ -60,7 +60,7 @@ class RelayMachine(
     override fun execute(cmd: MachineCommand, onOutcome: (CommandOutcome) -> Unit) {
         // A view-only remote refuses every command, Stop included, as the hub
         // would (spec §7.3, review 11).
-        if (cmd is MachineCommand.Relayable && viewOnly()) return refuse(cmd, VIEW_ONLY, onOutcome)
+        if (cmd is MachineCommand.Relayable && viewOnly()) return refuse(cmd, viewOnly(hubName()), onOutcome)
         when (cmd) {
             is MachineCommand.LocalOnly -> {
                 notify(NOT_ON_MIRROR)
@@ -122,7 +122,7 @@ class RelayMachine(
             CommandOutcome.Accepted -> Unit
             is CommandOutcome.Refused -> {
                 log("Relay $method failed: ${outcome.reason}")
-                notify(refusedMessage(outcome.reason, config))
+                notify(refusedMessage(outcome.reason, config, hubName()))
             }
             is CommandOutcome.Unknown -> {
                 log("Relay $method: no reply (${outcome.detail}); outcome unknown, not resent")
@@ -135,15 +135,16 @@ class RelayMachine(
         /** The reason for a command that never reached the primary. */
         const val UNREACHABLE = "Couldn’t reach the machine"
         const val NOT_ON_MIRROR = "Not available on a remote — use the hub"
-        /** What a view-only remote shows for any command. */
-        const val VIEW_ONLY = "View-only — the host hasn’t allowed this device to control the machine"
+        /** What a view-only remote shows for any command (the same words as
+         *  its rows' note, spec §7.6). */
+        fun viewOnly(hub: String) = "View only — $hub hasn’t allowed changes from this device"
         const val UNKNOWN_CONTROL = "No reply from the machine — it may not have been applied"
         const val UNKNOWN_CONFIG = "No reply from the machine — the change may not have been applied"
 
         /** What the user sees for a refusal: the view-only wording for a
          *  mirror-only peer, else the primary's own reason. */
-        fun refusedMessage(reason: String, config: Boolean): String = when {
-            reason.contains("not authorized") -> VIEW_ONLY
+        fun refusedMessage(reason: String, config: Boolean, hub: String): String = when {
+            reason.contains("not authorized") -> viewOnly(hub)
             config -> "$reason — change reverted"
             reason == UNREACHABLE -> "$reason — change not applied"
             else -> reason

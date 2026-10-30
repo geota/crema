@@ -195,6 +195,15 @@ class RelayedCommandDispatcherTest {
         assertEquals(CommandOutcome.Accepted, dispatch("setQcGrind", "14.5"))
     }
 
+    /** An older remote's machine setting that the hub refuses (still loading)
+     *  isn't logged as a change: the log line follows the command running. */
+    @Test
+    fun `a refused older-remote machine setting isn't logged as a change`() {
+        actions.configLoaded = false
+        assertEquals(CommandOutcome.Refused("Tablet is starting up"), dispatch("setQcSteamTemp", "150.0"))
+        assertTrue(logged.none { "(older Crema)" in it }, "$logged")
+    }
+
     /** AC-35, the hub half: an older remote's machine setting is applied and logged. */
     @Test
     fun `an older remote's machine setting is applied and logged`() {

@@ -220,11 +220,12 @@ class LibraryController(
 
     /** Adopt a complete custom-profile JSON into the library (newest first),
      *  refresh + persist — a hub's custom profile, which a remote adopts when
-     *  it becomes standalone (issue 05). */
-    fun adoptCustomProfile(raw: String) {
+     *  it becomes standalone (issue 05). Returns once it is on disk, so the
+     *  T6 commit never saves an `activeProfileId` that isn't (§7.5 step 5). */
+    suspend fun adoptCustomProfile(raw: String) {
         customProfilesJson = listOf(raw) + customProfilesJson
         refreshProfiles()
-        persistCustomProfiles()
+        customProfileStore.save(customProfilesJson)
     }
 
     // ── Startup loads (called from the VM's init, same order as before) ──────

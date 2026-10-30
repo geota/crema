@@ -177,7 +177,7 @@ fun MainUiState.availabilityNote(setting: coffee.crema.settings.Setting): String
         SettingAvailability.PENDING -> "Sending to $hub…"
         SettingAvailability.UNCONFIRMED -> "$hub didn’t answer — this may not have been applied"
         SettingAvailability.READ_ONLY -> "Change on $hub"
-        SettingAvailability.VIEW_ONLY -> "View only — $hub hasn’t allowed changes from this device"
+        SettingAvailability.VIEW_ONLY -> coffee.crema.machine.RelayMachine.viewOnly(hub)
         SettingAvailability.OFFLINE -> "Reconnecting to $hub…"
         SettingAvailability.UNKNOWN -> when {
             setting.mirroredVia == coffee.crema.settings.MirrorSource.NONE_AVAILABLE -> "Change on $hub"

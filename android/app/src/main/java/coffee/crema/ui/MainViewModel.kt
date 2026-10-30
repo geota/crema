@@ -2863,17 +2863,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun onRoleStarting(role: String, refind: Boolean) {
         val wasRemote = _ui.value.mirror != null
         // Any switch cancels an open T6 confirmation (a Denied, a re-find):
-        // nothing is adopted (spec §7.5 step 3).
-        if (pendingLeave != null) {
+        // nothing is adopted (spec §7.5 step 3). The dialog goes, the slice
+        // unfreezes and the re-find is released, so the user can leave again.
+        val cancelled = pendingLeave != null || _ui.value.mirror?.frozen == true
+        if (cancelled) {
             pendingLeave = null
             appendLog("Leaving the hub cancelled: another mode switch ran")
         }
         _ui.update { s ->
             when {
                 role != "secondary" -> s.copy(mirror = null, adoptPrompt = null)
-                refind && s.mirror != null -> s.copy(mirror = s.mirror.reconnectingNow())
-                else -> s.copy(mirror = MirroredSettings(hubName = s.mirroringPrimaryName))
+                refind && s.mirror != null -> s.copy(mirror = s.mirror.reconnectingNow().copy(frozen = false), adoptPrompt = null)
+                else -> s.copy(mirror = MirroredSettings(hubName = s.mirroringPrimaryName), adoptPrompt = null)
             }
+        }
+        if (cancelled) {
+            // After this start returns: releasing the hold re-evaluates the re-find.
+            viewModelScope.launch { proxy.holdRefind(false) }
+            // A Denied explains itself; still a remote, say why nothing happened.
+            if (role == "secondary") notifyUser("Couldn't leave ${_ui.value.remoteHubLabel()} — try again")
         }
         // Leaving the remote role: the core goes back to this device's own values.
         if (wasRemote && role != "secondary") pushCoreInputs(effectiveState())
@@ -3384,9 +3392,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The T6 confirmation's answer: "Use <hub>'s" ([useHub]) or "Keep mine"
      *  (also what dismissing it means). */
     fun resolveAdoption(useHub: Boolean) {
+        // The dialog always closes, even when a switch already cancelled the leave.
+        _ui.update { it.copy(adoptPrompt = null) }
         val leave = pendingLeave ?: return
         pendingLeave = null
-        _ui.update { it.copy(adoptPrompt = null) }
         commitLeave(leave.next, leave.epoch, if (useHub) leave.snapshot else null, leave.changes)
     }
 
@@ -3404,10 +3413,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 pushCoreInputs(effectiveState())
             },
             onStale = {
-                // Another switch ran first (R2): this device may still be a remote.
+                // Another switch ran first (R2): this device may still be a
+                // remote. Unless that switch already cancelled the leave
+                // (onRoleStarting), unfreeze and say so.
+                val stillLeaving = _ui.value.mirror?.frozen == true
                 proxy.holdRefind(false)
                 _ui.update { s -> s.copy(mirror = s.mirror?.copy(frozen = false)) }
-                if (proxy.state.value.role == "secondary") notifyUser("Couldn't leave $hub — try again")
+                if (stillLeaving && proxy.state.value.role == "secondary") notifyUser("Couldn't leave $hub — try again")
             },
         )
     }
@@ -3415,7 +3427,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Take the hub's [changes] from [cfg] as this device's own (spec §7.5
      *  step 4): a custom profile into the library first, the bean only if
      *  this library has it. */
-    private fun adoptHubSettings(cfg: ConfigSnapshot, changes: Set<Setting>) {
+    private suspend fun adoptHubSettings(cfg: ConfigSnapshot, changes: Set<Setting>) {
         if (Setting.ACTIVE_PROFILE in changes) {
             val id = cfg.activeProfileId
             val json = _ui.value.mirror?.profileJson
@@ -3499,6 +3511,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  the role switch starts (I3). Numbered like every save, so an earlier
      *  fire-and-forget one can never land after it. */
     private suspend fun persistPrefsNow() {
+        // Like persistPrefs: never save a half-default AppPrefs before the load.
+        if (!prefsLoaded) return
         val snapshot = currentPrefs()
         val generation = ++prefsGeneration
         settingsStore.save(snapshot, generation)

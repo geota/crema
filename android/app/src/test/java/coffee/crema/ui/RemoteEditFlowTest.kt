@@ -128,7 +128,7 @@ class RemoteEditFlowTest {
         Thread.sleep(200)
         VmHarness.idle()
         assertTrue(fixture.endpoint.received.none { "\"type\":\"control\"" in it }, "nothing on the wire")
-        assertTrue(vm.ui.value.userMessages.count { it.startsWith("View-only") } >= 4, "${vm.ui.value.userMessages}")
+        assertTrue(vm.ui.value.userMessages.count { it == "View only — Kitchen tablet hasn’t allowed changes from this device" } >= 4, "${vm.ui.value.userMessages}")
     }
 
     /** S with the relayed values the golden samples set changed away from them. */
