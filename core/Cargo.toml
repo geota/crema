@@ -4,7 +4,17 @@
 # no UI, no file I/O. See ../docs/ for the design.
 [workspace]
 resolver = "3"
-members = ["de1-protocol", "de1-scale", "de1-domain", "de1-app", "de1-ffi", "de1-wasm"]
+members = [
+    "de1-protocol",
+    "de1-scale",
+    "de1-domain",
+    "de1-app",
+    "de1-relay",
+    "de1-ffi",
+    "de1-wasm",
+]
+# The cargo-fuzz project builds on nightly with its own lockfile.
+exclude = ["de1-relay/fuzz"]
 
 [workspace.package]
 edition = "2024"
