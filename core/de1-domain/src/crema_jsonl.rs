@@ -609,6 +609,36 @@ mod tests {
     use super::*;
     use crate::{Bean, Roaster};
 
+    /// F10.7: the shot's privacy override and the bean snapshot's notes ride
+    /// through a backup — the core types lacked both, so every backup
+    /// dropped them.
+    #[test]
+    fn privacy_and_bean_notes_survive_a_backup_round_trip() {
+        let mut shot = StoredShot::new(
+            1_700_000_000_000,
+            crate::ShotRecord {
+                duration: std::time::Duration::from_secs(30),
+                samples: Vec::new(),
+            },
+        );
+        shot.privacy = Some(crate::ShotPrivacy::Private);
+        shot.bean = Some(crate::ShotBean {
+            name: "Gesha".into(),
+            notes: Some("jasmine".into()),
+            ..crate::ShotBean::default()
+        });
+        let envelope = serde_json::json!({ "shots": [shot] }).to_string();
+        let text = export_backup_jsonl_from_json(&envelope, 1, "test", "test").unwrap();
+        assert!(text.contains("\"privacy\":\"private\""));
+        let plan = parse_backup_jsonl(&text);
+        assert_eq!(plan.shots.len(), 1);
+        assert_eq!(plan.shots[0].privacy, Some(crate::ShotPrivacy::Private));
+        assert_eq!(
+            plan.shots[0].bean.as_ref().and_then(|b| b.notes.as_deref()),
+            Some("jasmine")
+        );
+    }
+
     fn sample_bean(id: &str, name: &str, roaster_id: Option<&str>) -> Bean {
         let mut b = Bean::new(id.to_owned(), name.to_owned(), 1_700_000_000_000);
         b.roaster_id = roaster_id.map(str::to_owned);
