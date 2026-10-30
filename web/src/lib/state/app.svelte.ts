@@ -23,7 +23,7 @@ import {
 	type CremaCore
 } from '#lib/core/index.js';
 import { MachineState, MmrRegister } from '#lib/core/crema-core.js';
-import type { BrewRecipe, MaintenanceFailure } from '#lib/core/crema-core.js';
+import type { BrewRecipe, MaintenanceFailure, StartEnd } from '#lib/core/crema-core.js';
 import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 import { playBrewCue } from '#lib/brew/cues.js';
 import {
@@ -62,7 +62,7 @@ import type { AppRuntime } from '#lib/effect/runtime.js';
 import { runtimePromise } from '#lib/effect/bridge.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import { Webhooks } from '#lib/services/webhooks.js';
-import { ProfileSync, profileWriteAck } from '#lib/services/profile-sync.js';
+import { profileWriteAck } from '#lib/services/profile-sync.js';
 import { CalibrationRefusedError, calibrationRefusalIn } from '#lib/calibration/refusal.js';
 import { replayCaptureProgram } from '#lib/services/replay.js';
 import {
@@ -82,13 +82,6 @@ import { ConnectSweepRunner, readBatteryPercent } from './connect-sweep';
 import { IdleSleepRunner } from './idle-sleep';
 import { CoreTicker } from './core-ticker';
 import { stepCapRefusal } from '#lib/profiles/step-cap.js';
-import {
-	ESPRESSO_ENTRY_TIMEOUT_MS,
-	NOT_STARTED_NOTICE,
-	PRESHOT_FLUSH_TIMEOUT_MS,
-	StartSequence,
-	type StartToken
-} from './start-sequence';
 import { WakeTimer } from './wake-timer';
 import {
 	REQUEST_HELD_TEXT,
@@ -325,10 +318,9 @@ export class CremaApp {
 	 */
 	private shotStartedAtMs: number | null = null;
 
-	// The core owns the profile sync (when to upload, what the DE1 holds);
-	// the `ProfileSync` service only lets a start wait for its fingerprint.
-	// The `ProfileSyncHolds` / `ProfileUploadCompleted` / `ProfileUploadFailed`
-	// fold arms call `ProfileSync.holds` / `.completed` / `.failed`;
+	// The core owns the profile sync (when to upload, what the DE1 holds) and
+	// the shot start (sync → guard → pre-flush → Espresso, F16): `startShot`
+	// waits for its `ShotStartEnded`.
 
 	/**
 	 * Active `setInterval` id for the scale-heartbeat loop, or `null` when
@@ -483,9 +475,8 @@ export class CremaApp {
 					this.state.patch({ machineState: null, machineStateName: null, machineSubstate: null });
 					// Nothing the core waited for applies to a link that's gone.
 					this.wake.cancel();
-					// A start never resumes on a later connection (Decenza
+					// A pending start ends in the core on the drop (Decenza
 					// cancels its deferred start on disconnect too).
-					this.cancelStart('disconnected');
 				}
 				// The active profile goes to the DE1 on every connect: the
 				// core's profile sync uploads it after the connect sweep
@@ -637,6 +628,14 @@ export class CremaApp {
 		void this.runtime?.runPromise(Effect.flatMap(UploadQueue, (q) => q.armLifecycle));
 		// Each finished reconnect episode → one compact line in the event log.
 		reconnectTimelines.onFinished = (t) => this.state.log(compactLine(t));
+		// The start settings live in the core (it runs the start, the purge
+		// and the group-head banner): keep them current as they change.
+		$effect.root(() => {
+			$effect(() => {
+				const s = getSettingsStore().current;
+				void this.core.setStartSettings(s.groupFlushBeforeShot, s.requireScale, s.autoPurgeAfterSteam);
+			});
+		});
 		// A hidden tab gets no wake-up tick (the regular tick covers the
 		// core's deadline when it is visible again).
 		if (typeof document !== 'undefined') {
@@ -688,8 +687,17 @@ export class CremaApp {
 			// transition into an `Error*` substate after the fold below.
 			const priorMachineError = this.state.current.machineError;
 			this.state.applyEvent(event);
-			if (event.type === 'MachineStateChanged') {
-				this.startSequence.onMachineState(event.content.state);
+			if (event.type === 'ShotStartProgress') this.state.patch({ shotStarting: true });
+			if (event.type === 'ShotStartEnded') this.onShotStartEnded(event.content.end, event.content.message ?? null);
+			if (event.type === 'StartNotice') {
+				// No scale for a shot that stops on weight: non-blocking — the
+				// stop-at-weight arms mid-shot if the scale connects.
+				toast.action(event.content.notice.message, 'Connect', () => void this.connectScale());
+			}
+			if (event.type === 'GroupHeadStartUnchecked') {
+				// A shot started on the machine skipped the app-only steps that
+				// applied: one non-blocking banner, until the shot ends or a tap.
+				this.showGroupHeadBanner(event.content.notices.map((n) => n.message));
 			}
 			if (event.type === 'WakeAt') {
 				// The core waits for a time (the profile-download guard, …):
@@ -868,18 +876,6 @@ export class CremaApp {
 					});
 				}
 			}
-			if (event.type === 'ProfileUploadFailed') {
-				// A start waiting on the DE1 fails (the core retries the upload
-				// on its own backoff and puts the profile back after any other
-				// failed upload).
-				this.runtime?.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.failed)));
-			}
-			if (event.type === 'ProfileSyncHolds') {
-				// The DE1 holds this effective profile: a start waiting for it
-				// goes on.
-				const { fingerprint } = event.content;
-				this.runtime?.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.holds(fingerprint))));
-			}
 			if (event.type === 'ProfileSyncWarning') {
 				// The core's one non-blocking warning per streak of failed
 				// profile uploads (it keeps retrying: 3 s, 10 s, then 30 s).
@@ -890,30 +886,9 @@ export class CremaApp {
 					this.state.log('Profile upload to the DE1 recovered.');
 				}
 			}
-			if (event.type === 'WaterSessionStarted' && event.content.kind === 'Flush') {
-				// OUR pre-shot flush began — only a completion of a flush
-				// that started after the waiter armed may release it, so a
-				// stray Flush completion (a manual flush already running, a
-				// just-finished auto-purge) can't (review #34).
-				this.startSequence.onFlushStarted();
-			}
-			if (event.type === 'WaterSessionCompleted' && event.content.kind === 'Flush') {
-				// The pre-shot flush we requested just finished — release
-				// the `startShot()` waiter so it can issue the Espresso
-				// state request. The 30 s ceiling is the backstop if this
-				// notification is missed.
-				this.startSequence.onFlushCompleted();
-			}
-			if (event.type === 'SteamSessionCompleted') {
-				// Auto-purge after steam (Settings → Brew defaults). A
-				// short HotWaterRinse clears the group plumbing after
-				// the user releases the steam control. Gated on the
-				// pref, and only when the DE1 is in a state that
-				// accepts a fresh state-request (the firmware refuses
-				// state-requests during error / cal / clean modes).
-				if (getSettingsStore().current.autoPurgeAfterSteam) {
-					this.scheduleAutoPurge();
-				}
+			if (event.type === 'ShotCompleted' && this.#groupHeadBanner !== null) {
+				// The group-head banner lasts until the shot ends.
+				dismissToast(this.#groupHeadBanner);
 			}
 			if (event.type === 'ShotCompleted') {
 				// Persist the shot's history row, run live-only side effects
@@ -1991,39 +1966,6 @@ export class CremaApp {
 		return this.core.lineFrequencyHz();
 	}
 
-	/**
-	 * Make `profile` with the overrides `qc` the desired profile and wait until
-	 * the DE1 holds it — the core's profile sync uploads it unless this
-	 * connection already pushed it. Resolves `true` once the core reports it
-	 * landed (`ProfileSyncHolds`, or at once when its status already says so),
-	 * `false` on a failed upload (the core keeps retrying) or after 15 s.
-	 * Several callers on the same profile share one wait.
-	 */
-	async syncActiveProfile(
-		profile: CremaProfile,
-		qc: ProfileFingerprintOverrides
-	): Promise<boolean> {
-		// The start's own push supersedes a dial push still settling.
-		if (this.#overridesPush !== null) {
-			clearTimeout(this.#overridesPush);
-			this.#overridesPush = null;
-		}
-		const status = await this.setDesiredProfile(profile, qc);
-		const alreadyLoaded = status.desired != null && status.desired === status.lastPushed;
-		// No runtime ⇒ no Effect-routed services (and no Web Bluetooth ⇒ no DE1
-		// to upload to): only the core's status answers.
-		if (this.runtime === null || status.desired == null) return alreadyLoaded;
-		const desired = status.desired;
-		return runtimePromise(
-			this.runtime,
-			ProfileSync.pipe(
-				Effect.flatMap((ps) =>
-					ps.sync({ desired, alreadyLoaded, log: (line) => this.state.log(line) })
-				)
-			)
-		);
-	}
-
 	/** Tare the connected scale. Routes the core's `WriteScale` to the scale. */
 	async tareScale(): Promise<void> {
 		this.applyCoreOutput(await this.core.tareScale());
@@ -2235,48 +2177,6 @@ export class CremaApp {
 		this.applyCoreOutput(await this.core.setCalibrationFlowMultiplier(multiplier));
 	}
 
-	/**
-	 * Kick off a HotWaterRinse a brief moment after a steam session ended.
-	 *
-	 * The DE1 transitions Steam → Idle internally when the user releases the
-	 * steam control; the SteamSessionCompleted event arrives on or just
-	 * before that transition. Firing the state-request *during* the
-	 * Steam→Idle transition can race with the firmware, so we defer by a
-	 * short tick and bail out if the DE1 has already left Idle (e.g. user
-	 * pressed Espresso themselves) or a HotWaterRinse is already running.
-	 */
-	private scheduleAutoPurge(): void {
-		// Auto-purge and the pre-shot flush both fire `HotWaterRinse`. If a user
-		// steams and immediately presses "Brew" within the 1.5 s defer window,
-		// the start wins: the purge checks for a pending start when it fires.
-		// `rinsePending` only keeps two purges from being scheduled at once.
-		if (this.rinsePending) return;
-		this.rinsePending = true;
-		window.setTimeout(() => {
-			try {
-				// Only fire from Idle — avoid stepping on a manual user action
-				// or a shot start that began during the defer.
-				if (this.state.current.machineStateName !== MachineState.Idle) return;
-				if (this.startSequence.active) return;
-				void this.writeMachineState(MachineState.HotWaterRinse);
-			} finally {
-				this.rinsePending = false;
-			}
-		}, 1500);
-	}
-
-	/**
-	 * The core's wake hint (`WakeAt`): one one-shot tick, cancelled when the
-	 * link goes or the tab is hidden.
-	 */
-	private readonly wake = new WakeTimer(
-		() => performance.now(),
-		(now) => void this.core.onTick(now).then((out) => this.applyCoreOutput(out))
-	);
-
-	/** A post-steam auto-purge is scheduled (one at a time). A shot start
-	 *  is kept apart by `startSequence.active`, checked when the purge fires. */
-	private rinsePending = false;
 
 	/**
 	 * Stash the live Quick Sheet `BrewParams` snapshot on the orchestrator
@@ -2303,183 +2203,143 @@ export class CremaApp {
 	}
 
 	/**
-	 * Start an espresso shot — the Brew screen's primary action. Three
-	 * sequential steps, each pre-condition-gated:
+	 * Start an espresso shot — the Brew screen's primary action. The active
+	 * profile with the caller's Quick Controls overrides goes to the core,
+	 * which runs the whole start (F16, `shot_start.rs`): the profile sync
+	 * wait, the firmware's profile-download guard, the optional pre-shot
+	 * flush and Espresso, held until the machine reports it. A second start
+	 * while one runs, or while a shot runs, is refused; any machine request
+	 * ({@link stopShot} above all) cancels it.
 	 *
-	 *  1. **No-profile blocker.** If no active profile is selected, refuse
-	 *     the shot via a thrown {@link NoActiveProfileError} so the caller
-	 *     can surface a "Select a profile first" banner. The DE1 simply
-	 *     has nothing to load without an active profile.
-	 *  2. **Profile sync.** The active profile + the caller's per-shot QC
-	 *     overrides become the core's desired profile; the core uploads it
-	 *     unless this connection already pushed it, and the start waits for
-	 *     `ProfileSyncHolds` before going further. The upload's
-	 *     "Uploading… N/N" pip in the dash header is the user-visible sync
-	 *     indicator during the 1-2 s upload window.
-	 *  3. **Pre-shot flush (optional)** + **Espresso state-request**.
-	 *     Mirrors the prior behaviour: when `groupFlushBeforeShot` is
-	 *     on, fire `HotWaterRinse` and wait for its
-	 *     `WaterSessionCompleted(Flush)` (with a 30 s ceiling) before
-	 *     requesting Espresso.
+	 * Resolves when the start is over (started, cancelled, or a group-head
+	 * shot overtook it). Throws {@link NoActiveProfileError} with no active
+	 * profile, {@link ScaleRequiredError} when "Require scale to start"
+	 * refuses, and {@link ProfileSyncFailedError} when the profile can't
+	 * reach the DE1 (too many steps, a failed or timed-out upload).
 	 *
-	 * The whole chain is one owned start (05 F2, {@link StartSequence}): a
-	 * second call while it runs, or while a shot runs, is ignored, and
-	 * {@link stopShot} (or any other machine request) cancels it, so a Stop
-	 * during the pre-flush never ends in Espresso. The start stays pending
-	 * until the machine reports Espresso (`ui.shotStarting`).
-	 *
-	 * @param qc Per-shot Quick Controls overrides — the caller passes the
-	 *   live `BrewParamState.current` fields so the fingerprint reflects
-	 *   the user's *current* intent, not just the profile's own defaults.
-	 *   Defaults to no overrides for callers that don't have a brew sheet
-	 *   (e.g. headless scripts) — equivalent to running the profile bare.
+	 * @param qc Per-shot Quick Controls overrides — the live
+	 *   `BrewParamState.current` fields. Defaults to none (the profile bare).
 	 */
 	async startShot(qc: ProfileFingerprintOverrides = {}): Promise<void> {
-		// Claimed before the first await, so a second tap is refused at once.
-		const start = this.startSequence.begin();
-		if (start === null) {
-			this.state.log(
-				this.startSequence.active
-					? 'A shot is already starting — Start ignored.'
-					: 'A shot is already running — Start ignored.'
-			);
-			return;
+		const requests = this.#machineRequests;
+		const profiles = getProfileStore();
+		await profiles.ensureLoaded();
+		// Stopped (or another mode asked for) while the library loaded: the
+		// start is over before it began — no errors, no toasts for it.
+		if (this.#machineRequests !== requests) return;
+		const id = profiles.activeId;
+		const profile = id === null ? undefined : profiles.get(id);
+		if (!profile) {
+			this.brewParamsAtShotStart = null;
+			throw new NoActiveProfileError();
 		}
-		try {
-			await this.runStart(start, qc);
-		} catch (e) {
-			// A start that failed brews nothing: its dial snapshot must not be
+		// The start's own push supersedes a dial push still settling.
+		if (this.#overridesPush !== null) {
+			clearTimeout(this.#overridesPush);
+			this.#overridesPush = null;
+		}
+		this.#desiredOverrides = { profileId: profile.id, qc };
+		await this.pushStartSettings();
+		const result = await this.core.startShot(profile, qc, performance.now());
+		const ended = result.accepted
+			? new Promise<void>((resolve, reject) => {
+					this.#startWaiter = { resolve, reject };
+				})
+			: null;
+		this.applyCoreOutput(result.output);
+		if (ended === null) {
+			// A refused start brews nothing: its dial snapshot must not be
 			// recorded onto a later group-head shot.
 			this.brewParamsAtShotStart = null;
+			const message = result.message ?? 'Shot not started.';
+			switch (result.refusal?.kind) {
+				case 'AlreadyStarting':
+				case 'ShotRunning':
+					this.state.log(`${message} — Start ignored.`);
+					return;
+				case 'ScaleRequired':
+					toast.action('Connect the scale to start the shot', 'Connect', () => void this.connectScale());
+					throw new ScaleRequiredError();
+				default:
+					throw new ProfileSyncFailedError(message);
+			}
+		}
+		try {
+			await ended;
+		} catch (e) {
+			this.brewParamsAtShotStart = null;
 			throw e;
-		} finally {
-			this.startSequence.end(start);
 		}
 	}
 
-	/** The stages of {@link startShot} for one claimed `start`. Each await
-	 *  can see a cancel; nothing is requested after one. */
-	private async runStart(start: StartToken, qc: ProfileFingerprintOverrides): Promise<void> {
-		const live = () => this.startSequence.isLive(start);
-		const profiles = getProfileStore();
-		await profiles.ensureLoaded();
-		// Stopped before the library loaded: no toasts, upload or errors for it.
-		if (!live()) return;
-		const id = profiles.activeId;
-		if (id === null) {
-			throw new NoActiveProfileError();
-		}
-		const profile = profiles.get(id);
-		if (!profile) {
-			throw new NoActiveProfileError();
-		}
-		// Pre-shot scale gate (issue #29). Only when this shot actually
-		// resolves a weight target (QC dial override, else the profile's own
-		// yield — the same precedence SAW uses): a profile with no target
-		// never needed a scale, so it gets no noise (the Decenza/reaprime
-		// "profile uses weight" gate).
-		const weightTarget = qc.yield ?? profile.yieldOut;
-		if (
-			getSettingsStore().current.stopOnWeight &&
-			weightTarget > 0 &&
-			this.state.current.scaleState !== 'ready'
-		) {
-			// The toast's action button is a user gesture, so Web Bluetooth
-			// allows the chooser straight from it; the #15 fix arms SAW
-			// mid-shot, so a quick connect can still save this very shot.
-			if (getSettingsStore().current.requireScale) {
-				// Opt-in hard block (de1app `start_espresso_only_if_scale_connected`
-				// / reaprime `blockOnNoScale` — both also default off). The DE1
-				// is left untouched.
-				toast.action('Connect the scale to start the shot', 'Connect', () =>
-					void this.connectScale()
-				);
-				throw new ScaleRequiredError();
-			}
-			// Default: NON-blocking cue — a modal between the user and a
-			// tamped puck is workflow poison.
-			toast.action(
-				'No scale connected — stop-at-weight is off for this shot',
-				'Connect',
-				() => void this.connectScale()
-			);
-		}
-		// A profile saved before the 20-step limit can't upload: say so, rather
-		// than fail the sync and blame the DE1 (#6 #6).
-		const overLimit = stepCapRefusal(profile.name, profile.segments.length);
-		if (overLimit !== null) {
-			throw new ProfileSyncFailedError(overLimit);
-		}
-		// The shot's profile (with the dial) becomes the desired one; the core
-		// uploads it unless this connection already pushed it, and the start
-		// waits until the DE1 holds it.
-		const synced = await this.syncActiveProfile(profile, qc);
-		if (!live()) return;
-		if (!synced) {
-			// `ProfileUploadFailed`'s fold already logged the cause; the
-			// dashboard's machine-error / log banner will pick it up.
-			throw new ProfileSyncFailedError(
-				'The profile did not upload, so the shot was not started. ' +
-					'Try Coffee again, or reload the profile from the Profiles page.'
-			);
-		}
-		if (getSettingsStore().current.groupFlushBeforeShot) {
-			// Pre-shot group flush: kick off the rinse, then wait for its
-			// completion (or the 30 s ceiling) before requesting Espresso. A
-			// just-scheduled auto-purge stands down while the start is pending.
-			// Arm the waiter BEFORE the state request: the flush's Started
-			// notification could otherwise beat it and the correlation marker
-			// would be missed (review #34).
-			start.flushArmed = true;
-			await this.writeMachineState(MachineState.HotWaterRinse, live);
-			const released = await start.waitFor(() => start.flushEnded, PRESHOT_FLUSH_TIMEOUT_MS);
-			if (!live()) return;
-			// The flush ended but the machine went somewhere else (a
-			// group-head button mid-flush): that is not ours to override.
-			const state = this.state.current.machineStateName;
-			if (released && state !== MachineState.Idle) {
-				this.state.log(`Pre-shot flush ended in ${state ?? 'an unknown state'} — shot not started.`);
-				toast.error('Shot not started — the machine left the flush');
+	/**
+	 * The core's wake hint (`WakeAt`): one one-shot tick, cancelled when the
+	 * link goes or the tab is hidden.
+	 */
+	private readonly wake = new WakeTimer(
+		() => performance.now(),
+		(now) => void this.core.onTick(now).then((out) => this.applyCoreOutput(out))
+	);
+
+	/** The pending {@link startShot}, settled by the core's `ShotStartEnded`. */
+	#startWaiter: { resolve: () => void; reject: (e: Error) => void } | null = null;
+
+	/** The core's start ended: tell the user what needs telling, settle the caller. */
+	private onShotStartEnded(end: StartEnd, message: string | null): void {
+		this.state.patch({ shotStarting: false });
+		const waiter = this.#startWaiter;
+		this.#startWaiter = null;
+		switch (end.kind) {
+			case 'UploadFailed':
+			case 'UploadTimedOut': {
+				const error = new ProfileSyncFailedError(message ?? 'The profile did not upload.');
+				if (waiter) waiter.reject(error);
+				else toast.error(error.message);
 				return;
 			}
+			case 'FlushLeftIdle':
+				this.state.log(`Pre-shot flush ended in ${end.details.state} — shot not started.`);
+				toast.error(message ?? 'Shot not started — the machine left the flush');
+				break;
+			case 'NotEntered':
+				this.state.log('The machine did not enter Espresso within 5 s of the request.');
+				toast.info(message ?? 'The machine didn’t start the shot — start it on the machine', 7000);
+				break;
+			case 'StoodDown':
+				this.state.log('Shot started on the machine — app start dropped.');
+				break;
+			case 'Cancelled':
+				this.state.log('Shot start cancelled.');
+				break;
+			default:
+				break;
 		}
-		if (!live()) return;
-		start.espressoRequested = true;
-		await this.writeMachineState(MachineState.Espresso, live);
-		// Stay pending until the machine reports Espresso, so a Start in the
-		// gap is refused rather than starting a second chain.
-		if (this.state.current.machineStateName === MachineState.Espresso) return;
-		const entered = await start.waitFor(() => start.espressoEntered, ESPRESSO_ENTRY_TIMEOUT_MS);
-		if (!entered && live()) {
-			// A machine that only starts from the group head (GHC required)
-			// ignores the app's request.
-			this.state.log(
-				`The machine did not enter Espresso within ${ESPRESSO_ENTRY_TIMEOUT_MS / 1000} s of the request.`
-			);
-			toast.info(NOT_STARTED_NOTICE, 7000);
-		}
+		waiter?.resolve();
+	}
+
+	/** The group-head banner's toast (pinned until the shot ends or a tap). */
+	#groupHeadBanner: number | null = null;
+
+	private showGroupHeadBanner(lines: string[]): void {
+		if (this.#groupHeadBanner !== null) dismissToast(this.#groupHeadBanner);
+		this.#groupHeadBanner = toast.action(lines.join('\n'), 'OK', () => undefined, 0, 'info', {
+			onDismiss: () => {
+				this.#groupHeadBanner = null;
+			}
+		});
+		this.state.log(`Shot started on the machine: ${lines.join('; ')}`);
+	}
+
+	/** Latch the start settings in the core (also kept current by an effect). */
+	private async pushStartSettings(): Promise<void> {
+		const s = getSettingsStore().current;
+		await this.core.setStartSettings(s.groupFlushBeforeShot, s.requireScale, s.autoPurgeAfterSteam);
 	}
 
 	/** Stop a running shot — requests `Idle`, which the DE1 honours from any
 	 *  session state. Also cancels a shot start still pending (05 F2). */
 	async stopShot(): Promise<void> {
 		await this.requestMachineState(MachineState.Idle);
-	}
-
-	/**
-	 * The one shot start in flight (05 F2). Its writes go through
-	 * {@link writeMachineState}, so they don't cancel it; every user request
-	 * through {@link requestMachineState} does.
-	 */
-	private readonly startSequence = new StartSequence(
-		() => this.state.current.machineStateName,
-		(shotStarting) => this.state.patch({ shotStarting }),
-		(line) => this.state.log(line)
-	);
-
-	/** Drop the pending shot start, if any. */
-	private cancelStart(why: string): void {
-		if (this.startSequence.cancel() !== null) this.state.log(`Shot start cancelled (${why}).`);
 	}
 
 	/**
@@ -2490,25 +2350,17 @@ export class CremaApp {
 	 * Flush, Descale, Clean) are normally triggered by on-machine touch
 	 * buttons; the shell exposes them for completeness.
 	 */
-	async requestMachineState(state: MachineState): Promise<void> {
-		// A user's request (a control, the power button, a maintenance run)
-		// cancels a pending shot start first (05 F2): a Stop, or another
-		// mode, during the sync or the pre-flush must not end in Espresso.
-		this.cancelStart(state);
-		await this.writeMachineState(state);
-	}
+	/** Counts {@link requestMachineState} calls, so a start can tell one
+	 *  happened while it was still loading the library. */
+	#machineRequests = 0;
 
-	/** The write behind {@link requestMachineState}, also used by the shot
-	 *  start's own steps and the auto-purge, which must not cancel it. A
-	 *  `wanted` check that fails after the guard drops the write (a Stop
-	 *  during the guard cancelled the start). */
-	private async writeMachineState(
-		state: MachineState,
-		wanted: () => boolean = () => true
-	): Promise<void> {
-		// The core holds the request through the firmware's profile-download
-		// guard (BC 9788201734) and sends it on a later tick (F16).
-		if (!wanted()) return;
+	async requestMachineState(state: MachineState): Promise<void> {
+		this.#machineRequests += 1;
+		// A user's request (a control, the power button, a maintenance run)
+		// cancels a pending shot start in the core (05 F2, F16): a Stop, or
+		// another mode, during the sync or the pre-flush never ends in
+		// Espresso. The core holds the request through the firmware's
+		// profile-download guard (BC 9788201734) when it must.
 		this.applyCoreOutput(await this.core.requestMachineState(state));
 	}
 
