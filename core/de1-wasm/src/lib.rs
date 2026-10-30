@@ -761,6 +761,15 @@ pub fn duplicate_bean_json(bean_json: &str, new_id: &str, now_ms: f64) -> Result
     de1_domain::duplicate_bean_json(bean_json, new_id, f64_to_ms(now_ms))
 }
 
+/// A bean with its Frozen switch set (`Bean` JSON in and out): freeze stamps
+/// today, defrost stamps `defrostedOn` and keeps `frozenOn`, refreeze carries
+/// the earlier frozen span; days off roast never moves. See
+/// `de1_domain::set_bean_frozen`.
+#[wasm_bindgen(js_name = setBeanFrozenJson)]
+pub fn set_bean_frozen_json(bean_json: &str, frozen: bool, now_ms: f64) -> Result<String, String> {
+    de1_domain::set_bean_frozen_json(bean_json, frozen, f64_to_ms(now_ms))
+}
+
 /// The "≈N brews left" estimate — shared
 /// `de1_domain::brews_remaining_estimate` (the bag's newest ≤10 doses,
 /// newest first; 18 g fallback).
@@ -2309,6 +2318,13 @@ impl CremaBridge {
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_tick(&self, now_ms: f64) -> String {
         json(self.state().core.on_tick(now_ms as u64))
+    }
+
+    /// Report how one scale write the shell sent went (`ok` = it landed).
+    /// Returns a JSON-encoded [`CoreOutput`] that may carry
+    /// `Event::ScaleLinkDead`. See `CremaCore::on_scale_write_result`.
+    pub fn on_scale_write_result(&self, ok: bool) -> String {
+        json(self.state().core.on_scale_write_result(ok))
     }
 
     // ── Guided brew sessions (issue #10) ─────────────────────────

@@ -661,17 +661,7 @@ export class De1Manager {
 		// (frame encoding), serial, firmware build and heater voltage.
 		if (this.identityPending) {
 			this.callbacks.onStatus('Reading machine identity…');
-			const info = de1MachineInfoProgram({
-				core: this.core,
-				onStatus: (line) => {
-					if (current()) this.callbacks.onStatus(line);
-				},
-				onCoreOutput: (output) => {
-					if (current()) this.callbacks.onCoreOutput(output);
-				}
-			});
-			if (this.runtime === null) await Effect.runPromiseExit(info);
-			else await this.runtime.runPromiseExit(info);
+			await this.runMachineInfo(device);
 			if (!current()) {
 				device.releaseReconnect?.(false);
 				return;
@@ -687,6 +677,33 @@ export class De1Manager {
 		this.callbacks.onState('ready');
 		this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
 		this.startLiveness(device);
+	}
+
+	/**
+	 * Re-read the machine identity (firmware build, model, serial, GHC, heater
+	 * voltage, …) over the current link. For a firmware flash letting go of
+	 * the link: the reads a reconnect ran while the flash held it were refused,
+	 * and the build changed (Android's `afterFirmwareRelease` →
+	 * `readMachineInfo`). A no-op with no DE1.
+	 */
+	async readMachineInfo(): Promise<void> {
+		if (this.device !== null) await this.runMachineInfo(this.device);
+	}
+
+	/** Run {@link de1MachineInfoProgram} on `device`; its output counts only while it is current. */
+	private async runMachineInfo(device: De1Transport): Promise<void> {
+		const current = () => this.device === device;
+		const info = de1MachineInfoProgram({
+			core: this.core,
+			onStatus: (line) => {
+				if (current()) this.callbacks.onStatus(line);
+			},
+			onCoreOutput: (output) => {
+				if (current()) this.callbacks.onCoreOutput(output);
+			}
+		});
+		if (this.runtime === null) await Effect.runPromiseExit(info);
+		else await this.runtime.runPromiseExit(info);
 	}
 
 	/**

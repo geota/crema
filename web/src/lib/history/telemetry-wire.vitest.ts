@@ -40,6 +40,7 @@ function sample(over: Partial<TelemetrySample> = {}): TelemetrySample {
 		setHeadTemp: 92.0,
 		setGroupPressure: 9.0,
 		setGroupFlow: 2.0,
+		frameNumber: 2,
 		...over
 	};
 }
@@ -98,14 +99,19 @@ describe('toWire / fromWire round-trip', () => {
 		assert.equal(wire.resistanceWeight, undefined);
 	});
 
-	it('zero-fills the three unused-by-live nested fields on the wire', () => {
-		// `sampleTime` / `setMixTemp` / `frameNumber` are present in the
-		// Rust struct but absent from the live `TelemetrySample`. They
-		// must zero-fill (matching the v2 .shot.json convention).
+	it('zero-fills the two unused-by-live nested fields on the wire', () => {
+		// `sampleTime` / `setMixTemp` are present in the Rust struct but
+		// absent from the live `TelemetrySample`. They must zero-fill
+		// (matching the v2 .shot.json convention).
 		const wire = toWire(sample());
 		assert.equal(wire.sample.sampleTime, 0);
 		assert.equal(wire.sample.setMixTemp, 0);
-		assert.equal(wire.sample.frameNumber, 0);
+	});
+
+	it('carries the frame number, zero-filling only a sample without one', () => {
+		assert.equal(toWire(sample({ frameNumber: 3 })).sample.frameNumber, 3);
+		assert.equal(fromWire(toWire(sample({ frameNumber: 3 }))).frameNumber, 3);
+		assert.equal(toWire(sample({ frameNumber: undefined })).sample.frameNumber, 0);
 	});
 
 	it('round-trips the setpoint fields (load-bearing for the goal-line overlay)', () => {

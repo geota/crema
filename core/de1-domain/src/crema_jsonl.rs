@@ -329,6 +329,10 @@ pub struct BackupHeader {
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupImportPlan {
+    /// `true` when the text carries a `crema-backup/v1` header line. The parse
+    /// is tolerant (a foreign or empty file gives an empty plan), so this is
+    /// how a shell tells "not a Crema backup" from "an empty one".
+    pub has_header: bool,
     /// Custom-profile JSON objects, verbatim (`kind` stripped). Kept untyped so
     /// an evolving profile shape round-trips losslessly; the shell adopts/merges
     /// by `id`.
@@ -492,6 +496,7 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
     let mut shots = Vec::new();
     let mut recipes = Vec::new();
     let mut custom_methods = Vec::new();
+    let mut has_header = false;
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -506,6 +511,7 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
             .unwrap_or("")
             .to_owned();
         match kind.as_str() {
+            "crema-backup/v1" => has_header = true,
             "profile" => {
                 if let Some(map) = value.as_object_mut() {
                     map.remove("kind");
@@ -574,6 +580,7 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
         }
     }
     BackupImportPlan {
+        has_header,
         profiles,
         settings,
         profile_meta,
@@ -644,6 +651,59 @@ mod tests {
         assert!(lines[1].contains(r#""name":"Onyx""#));
         assert!(lines[2].contains(r#""kind":"bean""#));
         assert!(lines[2].contains(r#""name":"Yirg""#));
+    }
+
+    /// F11a: the committed backups from each shell (written by web's
+    /// `buildBackupJsonl` and Android's `backupBundleJsonl`) parse in full, so
+    /// both restores, which go through this parser, see every record.
+    #[test]
+    fn web_and_android_backup_fixtures_parse_in_full() {
+        for (shell, text) in [
+            (
+                "web",
+                include_str!("../tests/fixtures/backup/web-backup.crema.jsonl"),
+            ),
+            (
+                "android",
+                include_str!("../tests/fixtures/backup/android-backup.crema.jsonl"),
+            ),
+        ] {
+            let plan = parse_backup_jsonl(text);
+            assert!(plan.has_header, "{shell}");
+            assert_eq!(
+                (
+                    plan.profiles.len(),
+                    plan.beans.len(),
+                    plan.roasters.len(),
+                    plan.shots.len(),
+                    plan.recipes.len(),
+                    plan.custom_methods.len(),
+                ),
+                (1, 1, 1, 1, 1, 1),
+                "{shell}"
+            );
+            assert!(plan.shots[0].bean.is_some(), "{shell}");
+            assert_eq!(plan.shots[0].record.samples.len(), 2, "{shell}");
+            assert_eq!(plan.settings.as_ref().unwrap()["_shell"], shell);
+            assert!(
+                plan.profile_meta.is_some() && plan.recipe_meta.is_some(),
+                "{shell}"
+            );
+            assert!(
+                plan.maintenance.is_some() && plan.visualizer_prefs.is_some(),
+                "{shell}"
+            );
+        }
+    }
+
+    #[test]
+    fn backup_plan_reports_the_header_line() {
+        assert!(parse_backup_jsonl("{\"kind\":\"crema-backup/v1\"}\n").has_header);
+        assert!(
+            !parse_backup_jsonl("{\"kind\":\"crema/v1\"}\n{\"kind\":\"profile\",\"id\":\"p\"}")
+                .has_header
+        );
+        assert!(!parse_backup_jsonl("").has_header);
     }
 
     #[test]

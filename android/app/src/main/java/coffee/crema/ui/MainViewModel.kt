@@ -287,10 +287,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
     private var modeTickerJob: Job? = null
 
-    /** Grace timer between the core's ScaleStale (1 s of silence) and the
-     *  presume-dead teardown — cancelled/replaced per stale episode. */
-    private var scaleStaleJob: Job? = null
-
     /**
      * The outstanding stop write, if any (issue #15 follow-up). Two rules:
      * stop writes COALESCE (the enforcer re-commands every second, but
@@ -5589,25 +5585,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ScaleStale -> {
                 _ui.update { it.copy(scaleWeightG = null) }
                 appendLog("Scale stale")
-                // Escalation (Decenza treats an in-shot feed stall as a link
-                // fault; reaprime probes on silence): the core flags staleness
-                // after 1 s without a reading. Scales stream weight
-                // continuously by design, so give the stream a short grace to
-                // resume — a fresh reading repopulates scaleWeightG — and if
-                // it stays silent while the link still claims READY, presume
-                // the link dead and let the reconnect supervisor recover it.
-                // Covers scales with no keep-alive writes (Bookoo), where the
-                // consecutive-write-failure detector never gets a probe.
-                scaleStaleJob?.cancel()
-                scaleStaleJob = viewModelScope.launch {
-                    delay(SCALE_STALE_TEARDOWN_GRACE_MS)
-                    if (_ui.value.scaleState == ScaleBleManager.State.READY &&
-                        _ui.value.scaleWeightG == null
-                    ) {
-                        scale.presumeDead(
-                            "no readings for ${(1_000 + SCALE_STALE_TEARDOWN_GRACE_MS) / 1_000}s",
-                        )
-                    }
+            }
+            is Event.ScaleLinkDead -> {
+                // The core presumed the scale link dead (silent 5 s past
+                // ScaleStale, or three failed writes with no reading between;
+                // once per episode). Tear it down for the reconnect supervisor,
+                // but only while the link still claims READY — one already
+                // reconnecting is left to its ladder.
+                _ui.update { it.copy(scaleWeightG = null) }
+                appendLog("Scale link dead: ${event.content.reason.string}")
+                if (_ui.value.scaleState == ScaleBleManager.State.READY) {
+                    viewModelScope.launch { scale.presumeDead(event.content.reason.string) }
                 }
             }
             is Event.ScaleButtonPressed ->
@@ -5802,12 +5790,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Abort a pending gated-start brew if the upload never completes. */
         const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
-
-        /** Grace after the core's ScaleStale (itself 1 s of silence) before
-         *  the scale link is presumed dead and torn down for the reconnect
-         *  supervisor. Long enough that a radio hiccup resumes on its own,
-         *  short enough that a mid-shot stall recovers within the pour. */
-        const val SCALE_STALE_TEARDOWN_GRACE_MS = 5_000L
     }
 }
 

@@ -189,9 +189,15 @@ export class ProfileStore {
 		writeJson(ACTIVE_KEY, this.activeId);
 	}
 
-	/** Look up one profile by id, or `undefined` if it is not in the library. */
+	/**
+	 * Look up one profile by id, or `undefined` if it is not in the library.
+	 * Hidden built-ins resolve too: hiding only takes a built-in out of the
+	 * library list (like Android's `hiddenProfileIds` filter), so a bean's
+	 * linked profile or the active id still finds it.
+	 */
 	get(id: string): CremaProfile | undefined {
-		return this.all.find((p) => p.id === id);
+		const builtin = this.builtins.find((b) => b.id === id);
+		return builtin ? this.applyOverrides(builtin) : this.custom.find((p) => p.id === id);
 	}
 
 	/**
