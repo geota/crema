@@ -256,7 +256,7 @@ pub fn normalize_brew_overrides(profile: &CremaProfile, qc: &BrewOverrides) -> B
     // stepper's, and for the yield what the yield or ratio stepper reaches;
     // a yield of 0 keeps its meaning (no weight target).
     let q = crate::bounds::quick_control_bounds();
-    let yield_range = q.override_yield_g();
+    let yield_range = q.override_yield_g;
     let dose = qc
         .dose
         .filter(|d| d.is_finite() && *d > 0.0)

@@ -85,22 +85,11 @@ pub struct QuickControlBounds {
     pub flush_time_s: StepRange,
     /// Group-flush temperature, °C.
     pub flush_temp_c: StepRange,
-}
-
-impl QuickControlBounds {
     /// The yield a brew override may carry, g: the yield stepper's range
     /// widened to what the ratio stepper reaches (`dose × ratio`, Android's
     /// ratio mode), so an override the Quick Controls can produce is never
-    /// cut. The yield stepper itself keeps its range.
-    #[must_use]
-    pub fn override_yield_g(&self) -> StepRange {
-        StepRange {
-            min: self.yield_g.min.min(self.dose_g.min * self.ratio.min),
-            max: self.yield_g.max.max(self.dose_g.max * self.ratio.max),
-            step: self.yield_g.step,
-            chips: Vec::new(),
-        }
-    }
+    /// cut. Not a stepper; the yield stepper keeps `yield_g`.
+    pub override_yield_g: StepRange,
 }
 
 /// Settings → Brew defaults' ranges (the seeds for new profiles).
@@ -149,11 +138,19 @@ pub struct ProfileEditorBounds {
 /// The Quick Controls table.
 #[must_use]
 pub fn quick_control_bounds() -> QuickControlBounds {
+    let dose_g = range(5.0, 30.0, 0.1);
+    let yield_g = range(10.0, 80.0, 0.5);
+    let ratio = range(1.0, 5.0, 0.1);
+    let override_yield_g = range(
+        yield_g.min.min(dose_g.min * ratio.min),
+        yield_g.max.max(dose_g.max * ratio.max),
+        yield_g.step,
+    );
     QuickControlBounds {
-        dose_g: range(5.0, 30.0, 0.1),
+        dose_g,
         grind: range(0.0, 20.0, 0.1),
-        yield_g: range(10.0, 80.0, 0.5),
-        ratio: range(1.0, 5.0, 0.1),
+        yield_g,
+        ratio,
         brew_temp_c: range(MIN_BREW_TEMPERATURE_C, MAX_TEMPERATURE_C, 0.5),
         preinfuse_s: range(0.0, PREINFUSION_DIAL_MAX_S, 1.0),
         steam_time_s: range(1.0, 60.0, 1.0),
@@ -161,6 +158,7 @@ pub fn quick_control_bounds() -> QuickControlBounds {
         steam_temp_c: range(STEAM_TEMP_MIN_C, MAX_STEAM_TEMPERATURE_C, 0.5),
         flush_time_s: range(1.0, 20.0, 1.0),
         flush_temp_c: range(60.0, 100.0, 0.5),
+        override_yield_g,
     }
 }
 
@@ -331,7 +329,7 @@ mod tests {
     #[test]
     fn override_yield_covers_the_ratio_stepper() {
         let q = quick_control_bounds();
-        let r = q.override_yield_g();
+        let r = &q.override_yield_g;
         assert_eq!((r.min, r.max), (5.0, 150.0));
         assert_eq!(
             (q.yield_g.min, q.yield_g.max),
