@@ -616,6 +616,34 @@ pub enum Event {
         /// Why it was refused.
         reason: crate::CalibrationRefusal,
     },
+    /// An accepted shot start moved on (see [`shot_start`](crate::shot_start));
+    /// a shell shows "starting" until [`Event::ShotStartEnded`].
+    ShotStartProgress {
+        /// Where it stands.
+        phase: crate::StartPhase,
+    },
+    /// The shot start is over: started, failed, cancelled or stood down for a
+    /// group-head start.
+    ShotStartEnded {
+        /// How.
+        end: crate::StartEnd,
+        /// The sentence to tell the user, when there is one.
+        message: Option<String>,
+    },
+    /// A non-blocking notice for an accepted start (no scale for a shot that
+    /// stops on weight: the weight stop is off).
+    StartNotice {
+        /// The notice.
+        notice: crate::StartNoticeLine,
+    },
+    /// A shot started at the group head skipped steps only an app start runs:
+    /// the ones that applied (no scale for a weight stop, the pre-shot flush, a
+    /// profile upload still pending). A non-blocking banner; it never stops the
+    /// shot.
+    GroupHeadStartUnchecked {
+        /// One line per skipped check.
+        notices: Vec<crate::StartNoticeLine>,
+    },
     /// A machine state request the user made is waiting out the firmware's
     /// profile-download guard (a profile upload in flight, or the 500 ms after
     /// it — see [`machine_requests`](crate::machine_requests)); it goes out on

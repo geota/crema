@@ -281,7 +281,11 @@ impl CremaCore {
         };
         // A held request's hold limit.
         let limit = self.request_guard.held.map(|held| held.at + MAX_HOLD);
-        match (guard, limit) {
+        let guard = match (guard, limit) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        match (guard, self.shot_start_deadline()) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }
