@@ -625,6 +625,12 @@ export interface CremaCore {
 	 */
 	setWeightUnitPref(unit: ShellWeightUnit): Promise<void>;
 	/**
+	 * Set the low-water warning threshold, ml (`undefined` = the 110 ml
+	 * default, `0` = off). The core's monitor emits `WaterLow` once per dip
+	 * and re-arms it on a refill, a threshold change or a new link.
+	 */
+	setWaterWarnMl(warnMl: number | undefined): Promise<void>;
+	/**
 	 * Tell the core which profile is active — `profileJson` is the wire
 	 * `Profile` JSON (`JSON.stringify(toCoreProfile(p))`, the shape
 	 * `uploadProfile` takes); `undefined` = no active profile. Latches the
@@ -1273,6 +1279,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setWeightUnitPref(unit: ShellWeightUnit) {
 			bridge.set_weight_unit_pref(weightUnitToWire(unit));
+		},
+		async setWaterWarnMl(warnMl) {
+			bridge.set_water_warn_ml(warnMl);
 		},
 		async setActiveProfile(profileJson) {
 			bridge.setActiveProfile(profileJson);

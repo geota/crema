@@ -14,6 +14,7 @@ export {
 	refreshStopTargetsProjection,
 	defaultRefillPointMm,
 	waterRefillSoon,
+	waterConstants,
 	machineErrorText,
 	maintenanceTitle,
 	maintenanceProgressText,

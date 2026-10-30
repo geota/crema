@@ -1274,7 +1274,14 @@ data class EventTelemetryInner (
 	/// so shots with and without a scale render coherently. The
 	/// legacy de1app TCL computes the same metric — see
 	/// `de1plus/gui.tcl:3414-3416`.
-	val resistance_weight: Float? = null
+	val resistance_weight: Float? = null,
+	/// The water this sample adds to the filter / descale counters, ml —
+	/// the volume integrator's increment (gap-capped at
+	/// `MAX_COUNTED_GAP_S`), only in the states that count
+	/// (`counts_toward_water`: espresso and hot water). `None` otherwise.
+	/// The shells add it to their persisted litre total; the counting
+	/// rule lives here.
+	val counted_ml: Float? = null
 )
 
 /// Generated type representing the anonymous struct variant `ScaleReading` of the `Event` Rust enum
@@ -1325,6 +1332,15 @@ data class EventWaterLevelInner (
 	/// refill is wanted when the raw level is at or below it. Convert it
 	/// with `water_tank_depth_mm` before comparing it with `level`.
 	val refill_threshold: Float
+)
+
+/// Generated type representing the anonymous struct variant `WaterLow` of the `Event` Rust enum
+@Serializable
+data class EventWaterLowInner (
+	/// The tank DEPTH, mm, as in [`Event::WaterLevel`].
+	val level: Float,
+	/// The tank volume, ml.
+	val ml: Float
 )
 
 /// Generated type representing the anonymous struct variant `StopTriggered` of the `Event` Rust enum
@@ -1777,6 +1793,13 @@ sealed class Event {
 	@Serializable
 	@SerialName("WaterLevel")
 	data class WaterLevel(val content: EventWaterLevelInner): Event()
+	/// The tank dropped to the user's low-water threshold (default 110 ml,
+	/// `0` = off; `CremaCore::set_water_warn_ml`). Once per dip: re-armed by
+	/// a refill 55 ml above the threshold, a threshold change, or a new link.
+	/// The shell shows the warning in the user's tank unit.
+	@Serializable
+	@SerialName("WaterLow")
+	data class WaterLow(val content: EventWaterLowInner): Event()
 	/// Auto-stop decided the shot should end. The accompanying [`Command`]
 	/// carries the actual stop write.
 	@Serializable
@@ -3808,6 +3831,21 @@ data class TimedSample (
 	/// this over `resistance` per-sample when present. Same
 	/// non-upload story as `resistance`.
 	val resistanceWeight: Float? = null
+)
+
+/// The water constants the shells' settings UI needs, in one place.
+@Serializable
+data class WaterConstants (
+	/// [`TANK_FULL_ML`], the percent readout's denominator.
+	val tankFullMl: Float,
+	/// [`WATER_WARN_DEFAULT_ML`].
+	val warnDefaultMl: Float,
+	/// [`DEFAULT_REFILL_POINT_MM`].
+	val defaultRefillPointMm: Float,
+	/// [`REFILL_POINT_MIN_MM`].
+	val refillPointMinMm: Float,
+	/// [`REFILL_POINT_MAX_MM`].
+	val refillPointMaxMm: Float
 )
 
 /// The bean / grinder journal fields Visualizer's native detail flattens

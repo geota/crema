@@ -229,7 +229,8 @@ pub use history_export::{export_v2_json_shot, export_v2_json_shot_full};
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
 pub use ids::{new_custom_method_id, new_profile_id, new_recipe_id, new_shot_id};
 pub use maintenance::{
-    MaintenanceReadout, MaintenanceState, maintenance_readout, maintenance_readout_json,
+    MAX_COUNTED_GAP_S, MaintenanceReadout, MaintenanceState, counts_toward_water,
+    default_maintenance_state_json, maintenance_readout, maintenance_readout_json,
 };
 pub use mode_targets::{
     ModeTargetInputs, ModeTargets, READY_TOLERANCE_C, group_at_temperature, resolve_mode_targets,
@@ -266,8 +267,11 @@ pub use stop::{
     sav_counts_volume, volume_stop_arms,
 };
 pub use tank::{
-    DEFAULT_REFILL_POINT_MM, SENSOR_OFFSET_MM, TANK_FULL_ML, TANK_LEVEL_SMOOTHING_TAU_S,
-    TANK_MM_TO_ML, TankLevelSmoother, water_tank_depth_mm, water_tank_ml, water_tank_percent,
+    DEFAULT_REFILL_POINT_MM, LowWaterMonitor, REFILL_POINT_MAX_MM, REFILL_POINT_MIN_MM,
+    REFILL_SOON_MARGIN_MM, SENSOR_OFFSET_MM, TANK_FULL_ML, TANK_LEVEL_SMOOTHING_TAU_S,
+    TANK_MM_TO_ML, TankLevelSmoother, WATER_WARN_DEFAULT_ML, WATER_WARN_REARM_ML, WaterConstants,
+    clamp_refill_point_mm, refill_soon, water_constants, water_tank_depth_mm, water_tank_ml,
+    water_tank_percent,
 };
 pub use units::{
     WeightUnit, bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,

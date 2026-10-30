@@ -68,9 +68,6 @@ export interface ReplayCaptureDeps {
 	readonly patch: (snapshot: Partial<UiSnapshot>) => void;
 	readonly setActiveShot: (data: ActiveShotData) => void;
 	readonly clearActiveShot: () => void;
-	/** Drop the telemetry wall-clock anchor — replayed timestamps must not
-	 *  integrate the gap since the last live sample. */
-	readonly resetTelemetryAnchor: () => void;
 	/** The current `replay.done` count, for the cancelled/error message. */
 	readonly currentDone: () => number;
 }
@@ -190,11 +187,9 @@ export function replayCaptureProgram(d: ReplayCaptureDeps): Effect.Effect<void> 
 	// defects → caught below into the `error` state; interruption → `cancelled`.
 	const use = Effect.gen(function* () {
 		// Populate ActiveShot from the META BEFORE any events fire (the brew UI
-		// follows ActiveShot; the replay's ShotStarted fold then leaves it alone),
-		// and drop the telemetry anchor.
+		// follows ActiveShot; the replay's ShotStarted fold then leaves it alone).
 		yield* Effect.sync(() => {
 			d.setActiveShot(replayMetaToActiveShot(d.parsed.meta));
-			d.resetTelemetryAnchor();
 		});
 
 		// Identify the scale so SCALE_WEIGHT bytes decode into ScaleReading events.
