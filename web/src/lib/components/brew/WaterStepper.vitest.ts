@@ -159,10 +159,11 @@ describe('the Hot water card', () => {
 		core.reset();
 		const app = new CremaApp(core, null);
 		await app.pushSteamHotwater();
+		// No profile load writes the settings: snapshot before the first.
+		const stored = localStorage.getItem('crema.settings.v1');
 		await app.applyProfileTargetWeight(36);
 		const root = render();
 		expect(root.querySelector('.qhw-readout')?.textContent).toBe('1:3 → 108 ml for a 36 g shot');
-		const stored = localStorage.getItem('crema.settings.v1');
 		await app.applyProfileTargetWeight(50);
 		flushSync();
 		expect(root.querySelector('.qhw-readout')?.textContent).toBe('1:3 → 150 ml for a 50 g shot');
