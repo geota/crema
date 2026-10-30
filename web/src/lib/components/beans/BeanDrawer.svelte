@@ -401,7 +401,7 @@
 				<div class="bn-group-body">
 					<div class="bn-row"><div class="bn-row-label">Roasted on</div><div class="bn-row-val">{fmtDate(bean.roastedOn)}{days != null ? ` · ${days}d ago` : ''}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Opened on</div><div class="bn-row-val">{fmtDate(bean.openedOn)}{openedDays != null ? ` · ${openedDays}d ago` : ''}</div></div>
-					<div class="bn-row"><div class="bn-row-label">Frozen on</div><div class="bn-row-val">{fmtDate(bean.frozenOn)}</div></div>
+					<div class="bn-row"><div class="bn-row-label">Frozen since</div><div class="bn-row-val">{fmtDate(bean.frozenOn)}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Defrosted on</div><div class="bn-row-val">{fmtDate(bean.defrostedOn)}</div></div>
 				</div>
 			{/if}
