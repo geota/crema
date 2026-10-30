@@ -59,6 +59,34 @@ pub fn is_maintenance_state(state: MachineState) -> bool {
     )
 }
 
+/// The cycles the app's Settings "Run now" buttons (and any app request)
+/// start: descale, clean, air purge and steam rinse. The app may request one
+/// only while [`maintenance_request_allowed`].
+#[must_use]
+pub fn is_run_now_state(state: MachineState) -> bool {
+    is_maintenance_state(state) || state == MachineState::SteamRinse
+}
+
+/// Whether the app may request a maintenance cycle ([`is_run_now_state`])
+/// with the machine in `current`: Idle or Sleep only, the calibration guard's
+/// rule. The firmware refuses a cycle mid-shot or mid-steam, and an unknown
+/// state fails closed. Both shells enable their "Run now" buttons with it;
+/// the core refuses any other request.
+#[must_use]
+pub fn maintenance_request_allowed(current: Option<MachineState>) -> bool {
+    matches!(current, Some(MachineState::Idle | MachineState::Sleep))
+}
+
+/// [`maintenance_request_allowed`] for the bridges: the machine state by its
+/// name (`"Idle"`, `"Sleep"`, …; `None` or an unknown name = unknown).
+#[must_use]
+pub fn maintenance_request_allowed_by_name(state: Option<&str>) -> bool {
+    let state = state.and_then(|name| {
+        serde_json::from_value::<MachineState>(serde_json::Value::String(name.to_owned())).ok()
+    });
+    maintenance_request_allowed(state)
+}
+
 /// Whether the connected DE1's firmware drops a cold maintenance request.
 ///
 /// **An unknown build counts as old** — the same call Decenza and decaid make
@@ -324,6 +352,29 @@ pub enum MaintenanceFailure {
 
 #[cfg(test)]
 mod tests {
+
+    /// AC-F16.4 (domain): Idle or Sleep only; unknown fails closed; the
+    /// bridges' by-name face agrees.
+    #[test]
+    fn f16_4_maintenance_requests_need_idle_or_sleep() {
+        assert!(maintenance_request_allowed(Some(MachineState::Idle)));
+        assert!(maintenance_request_allowed(Some(MachineState::Sleep)));
+        for state in [
+            MachineState::Espresso,
+            MachineState::Steam,
+            MachineState::Descale,
+        ] {
+            assert!(!maintenance_request_allowed(Some(state)), "{state:?}");
+        }
+        assert!(!maintenance_request_allowed(None));
+        assert!(maintenance_request_allowed_by_name(Some("Idle")));
+        assert!(maintenance_request_allowed_by_name(Some("Sleep")));
+        assert!(!maintenance_request_allowed_by_name(Some("Espresso")));
+        assert!(!maintenance_request_allowed_by_name(Some("nonsense")));
+        assert!(!maintenance_request_allowed_by_name(None));
+        assert!(is_run_now_state(MachineState::SteamRinse));
+        assert!(!is_run_now_state(MachineState::Steam));
+    }
     use super::*;
 
     fn info(state: MachineState, substate: SubState) -> StateInfo {

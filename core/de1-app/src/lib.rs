@@ -20,6 +20,7 @@ pub mod firmware_info;
 #[cfg(test)]
 mod hds_sleep_tests;
 mod idle_sleep;
+pub mod machine_requests;
 mod maintenance_run;
 mod profile_sync;
 #[cfg(test)]
@@ -41,6 +42,9 @@ pub use event::{
 pub use firmware_flash::{
     FLASHABLE_MODELS, FirmwareFlash, FlashAction, FlashBlocker, FlashFailure, FlashPhase,
     FlashShellConditions, FlashStartError, FlashStatus, FlashStep,
+};
+pub use machine_requests::{
+    MAX_HOLD, MachineRequestDrop, MachineRequestRefusal, PROFILE_DOWNLOAD_GUARD,
 };
 pub use profile_sync::{
     ProfileSyncOutput, ProfileSyncStatus, RETRY_DELAYS as PROFILE_SYNC_RETRY_DELAYS,
@@ -692,6 +696,9 @@ pub struct CremaCore {
     /// Keeping the DE1's profile in step with the desired one (reaprime
     /// `WorkflowDeviceSync`) — see [`profile_sync`].
     profile_sync: profile_sync::ProfileSync,
+    /// The profile-download guard on state requests and the wake hint — see
+    /// [`machine_requests`].
+    request_guard: machine_requests::RequestGuard,
     /// The number the next started upload gets (its
     /// [`Event::ProfileUploadStarted`] `upload_id`). Kept across
     /// [`reset`](Self::reset), so a shell's late report about an upload from
@@ -1063,6 +1070,7 @@ impl CremaCore {
             profile_upload: None,
             last_active_profile_title: None,
             profile_sync: profile_sync::ProfileSync::default(),
+            request_guard: machine_requests::RequestGuard::default(),
             next_upload_id: 1,
             parked_upload: None,
             pending_cup_warmer_c: None,
@@ -1492,9 +1500,20 @@ impl CremaCore {
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits one
-    /// [`Event::FirmwareLockoutHit`] and no command.
+    /// [`Event::FirmwareLockoutHit`] and no command. A maintenance cycle
+    /// (descale, clean, air purge, steam rinse) is refused unless the machine
+    /// is in Idle or Sleep ([`Event::MachineRequestRefused`]).
+    ///
+    /// Waits out the firmware's profile-download guard: during a profile
+    /// upload and for 500 ms after it, the request is held and goes out on a
+    /// later tick ([`Event::MachineRequestHeld`], [`Event::WakeAt`]). Idle is
+    /// never held. See [`machine_requests`].
     pub fn request_machine_state(&mut self, state: MachineState) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("request_machine_state") {
+            return out;
+        }
+        // A maintenance cycle only from Idle or Sleep (the Run-now gate).
+        if let Some(out) = self.refuse_run_now(state) {
             return out;
         }
         // The idle-sleep timer: an app Sleep (power button, sleep-on-quit) is
@@ -1512,25 +1531,12 @@ impl CremaCore {
         let mut out = CoreOutput::default();
         self.supersede_held_maintenance(&mut out);
         if self.begin_cold_maintenance(state, &mut out) {
+            // The cold workaround supersedes a request still waiting out the
+            // guard.
+            self.drop_held_request();
             return out;
         }
-        let starting_flow = matches!(
-            state,
-            MachineState::Espresso
-                | MachineState::Steam
-                | MachineState::HotWater
-                | MachineState::HotWaterRinse
-        );
-        if starting_flow && current != Some(MachineState::Idle) {
-            out.commands.push(Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::Idle)],
-            });
-        }
-        out.commands.push(Command::WriteCharacteristic {
-            target: WriteTarget::De1RequestedState,
-            data: vec![requested_state(state)],
-        });
+        self.issue_state_request(state, true, &mut out);
         out
     }
 
@@ -3371,6 +3377,9 @@ impl CremaCore {
         self.drive_profile_sync(&mut out);
         self.update_machine_error(now, &mut out);
         self.update_maintenance(now, &mut out);
+        // A request waiting out the profile-download guard goes out.
+        self.drive_held_request(&mut out);
+        self.rearm_wake(&mut out);
         // Backstop for the post-stop drip settle (#64): guarantees a deferred
         // completion finalizes on the [`POST_SHOT_SETTLE_MAX`] deadline even if
         // the scale stream stalls (the tick is the shells' periodic watchdog).
@@ -3446,6 +3455,7 @@ impl CremaCore {
         // The tank may be refilled while the link is down: warn afresh.
         self.low_water.rearm();
         self.abandon_maintenance(&mut out);
+        self.drop_held_request();
         // An upload in flight cannot finish over a dead link: fail it now so
         // the reconnect's sync upload need not wait for its ack timeout. The
         // sync ignores the failure — it belongs to the generation just ended.
@@ -5086,6 +5096,10 @@ impl CremaCore {
         out.events.push(Event::ProfileUploadFailed { reason });
         self.cold_maintenance_upload_failed(out);
         self.profile_sync_upload_failed(tag, out);
+        // No upload in flight any more: a request it held goes out on the next
+        // tick, asked for now (not sent from here — a new upload may be
+        // replacing this one in the same call).
+        self.emit_wake(out);
     }
 
     /// Process the shell's [`Source::De1HeaderAck`]: the header write of the
@@ -5266,7 +5280,10 @@ impl CremaCore {
             self.active_beverage_type = beverage_type;
             self.step_weight.adopt_weights(step_weight);
             out.events.push(Event::ProfileUploadCompleted { title });
-            // A held cold-maintenance request goes out once its profile is in.
+            // The firmware's profile-download guard window opens.
+            self.note_upload_completed(now, out);
+            // A held cold-maintenance request goes out once its profile is in
+            // (and the guard is clear).
             self.cold_maintenance_profile_loaded(now, out);
             self.profile_sync_upload_completed(sync, out);
         }

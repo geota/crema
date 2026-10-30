@@ -1,6 +1,7 @@
 package coffee.crema.ui.phone
 
 import coffee.crema.ui.maintenanceRunText
+import coffee.crema.ui.maintenanceRunAllowed
 import coffee.crema.ui.fmt
 import coffee.crema.ui.relativeAgo
 import androidx.activity.compose.BackHandler
@@ -653,9 +654,9 @@ private fun WaterSection(
         }
     }
     SettingsGroup("Cycles") {
-        val machineIdle = ui.machineState?.startsWith("Idle") == true
+        val machineIdle = ui.maintenanceRunAllowed()
         val cycleReady = connected && machineIdle
-        val cycleSub = if (connected && !machineIdle) " Machine must be idle." else ""
+        val cycleSub = if (connected && !machineIdle) " Machine must be idle or asleep." else ""
         // A cycle core is following (held for preheat on old firmware,
         // starting, or running with the descale countdown) — with Cancel.
         ui.maintenanceRun?.let { run ->

@@ -14,27 +14,14 @@
  *    otherwise when the fold reports `ProfileSyncHolds` for that fingerprint
  *    (`holds`), `false` on a failed upload (`failed`) or after 15 s. Callers
  *    on the same fingerprint share one waiter.
- *  - `completed` stamps the profile-download guard clock on every
- *    `ProfileUploadCompleted`, which `profileDownloadGuard` reads (the BC
- *    9788201734 race — see below).
  *
- * Timestamps use Effect's `Clock` (`Date.now()` live, `TestClock`-driven in
- * tests); over the 500 ms guard window the difference from `performance.now()`
- * is immaterial. See `profile-sync.vitest.ts`.
+ * The firmware's profile-download guard (BC 9788201734) is the core's: it
+ * holds a state request through an upload and the 500 ms after it (F16).
+ * See `profile-sync.vitest.ts`.
  */
 
-import { Clock, Context, Deferred, Duration, Effect, Layer, Option, Ref } from 'effect';
+import { Context, Deferred, Duration, Effect, Layer, Ref } from 'effect';
 import { ProfileUploadTimeoutError } from '../effect/errors.ts';
-
-/**
- * Minimum ms between `ProfileUploadCompleted` and the next state request. The
- * DE1 firmware finishes the final flash write inside `APIView::write` for the
- * tail frame and only clears `ProfileDownloadInProgress` when that write
- * returns; a state-request that lands inside the window aborts the shot to
- * HeaterDown after preinfuse (BC 9788201734). Reaprime's
- * `ConnectionTimings.profileDownloadGuard` is 500 ms; Crema matches.
- */
-export const PROFILE_DOWNLOAD_GUARD_MS = 500;
 
 /**
  * The ack the shell synthesises for a profile write, or `null` for none.
@@ -87,22 +74,11 @@ export class ProfileSync extends Context.Service<
 		 */
 		readonly holds: (fingerprint: string) => Effect.Effect<void>;
 		/**
-		 * Called by the `ProfileUploadCompleted` fold: stamps the
-		 * download-guard clock. Fully synchronous.
-		 */
-		readonly completed: Effect.Effect<void>;
-		/**
 		 * Called by the `ProfileUploadFailed` fold: resolves every waiter
 		 * `false` (the start fails; the core retries on its own). Fully
 		 * synchronous.
 		 */
 		readonly failed: Effect.Effect<void>;
-		/**
-		 * Wait out the remaining {@link PROFILE_DOWNLOAD_GUARD_MS} window since the
-		 * last `ProfileUploadCompleted`, if any — call before a state request so a
-		 * `requestMachineState(Espresso)` can't hit the firmware mid-flash.
-		 */
-		readonly profileDownloadGuard: Effect.Effect<void>;
 	}
 >()('crema/ProfileSync') {}
 
@@ -110,7 +86,6 @@ export const ProfileSyncLive = Layer.effect(
 	ProfileSync,
 	Effect.gen(function* () {
 		const waiters = yield* Ref.make<ReadonlyMap<string, Deferred.Deferred<boolean>>>(new Map());
-		const lastCompletedAtMs = yield* Ref.make<Option.Option<number>>(Option.none());
 
 		const holds = (fingerprint: string): Effect.Effect<void> =>
 			Effect.gen(function* () {
@@ -123,22 +98,9 @@ export const ProfileSyncLive = Layer.effect(
 				yield* Deferred.succeed(done, true);
 			});
 
-		const completed: Effect.Effect<void> = Effect.gen(function* () {
-			const now = yield* Clock.currentTimeMillis;
-			yield* Ref.set(lastCompletedAtMs, Option.some(now));
-		});
-
 		const failed: Effect.Effect<void> = Effect.gen(function* () {
 			const map = yield* Ref.getAndSet(waiters, new Map());
 			for (const done of map.values()) yield* Deferred.succeed(done, false);
-		});
-
-		const profileDownloadGuard: Effect.Effect<void> = Effect.gen(function* () {
-			const last = yield* Ref.get(lastCompletedAtMs);
-			if (Option.isNone(last)) return;
-			const now = yield* Clock.currentTimeMillis;
-			const remaining = PROFILE_DOWNLOAD_GUARD_MS - (now - last.value);
-			if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
 		});
 
 		const sync = (req: ProfileSyncRequest): Effect.Effect<boolean> =>
@@ -172,6 +134,6 @@ export const ProfileSyncLive = Layer.effect(
 				);
 			});
 
-		return ProfileSync.of({ sync, holds, completed, failed, profileDownloadGuard });
+		return ProfileSync.of({ sync, holds, failed });
 	})
 );

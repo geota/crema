@@ -1678,6 +1678,15 @@ pub fn effective_crema_profile(
     de1_domain::effective_crema_profile_json(&profile_json, qc_json.as_deref()).map_err(crema_err)
 }
 
+/// Whether the app may request a maintenance cycle (descale, clean, air
+/// purge, steam rinse) with the machine in `state` (its name, e.g. `"Idle"`;
+/// `None` = unknown): Idle or Sleep only — the rule `request_machine_state`
+/// enforces. The Settings "Run now" buttons use it.
+#[uniffi::export]
+pub fn maintenance_request_allowed(state: Option<String>) -> bool {
+    de1_domain::maintenance_request_allowed_by_name(state.as_deref())
+}
+
 /// Read a profile file (community v2 `.json`, a `.jsonl` bundle, a de1app
 /// `.tcl`, a Crema backup, or an old Android Crema export): a
 /// `ProfileFileImport` JSON of fresh custom profiles plus per-item errors. See
