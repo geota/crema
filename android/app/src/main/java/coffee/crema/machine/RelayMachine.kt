@@ -62,6 +62,9 @@ class RelayMachine(
         // would (spec §7.3, review 11).
         if (cmd is MachineCommand.Relayable && viewOnly()) return refuse(cmd, viewOnly(hubName()), onOutcome)
         when (cmd) {
+            // The hot-water dose is a machine setting, read-only here as SetQc's
+            // are (hot-water modes spec §2.6): nothing shown, nothing sent.
+            is MachineCommand.SetHotWaterDose -> refuse(cmd, "Change on ${hubName()}", onOutcome)
             is MachineCommand.LocalOnly -> {
                 notify(NOT_ON_MIRROR)
                 onOutcome(CommandOutcome.Refused(NOT_ON_MIRROR))

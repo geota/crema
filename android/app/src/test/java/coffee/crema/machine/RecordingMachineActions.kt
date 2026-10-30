@@ -44,6 +44,7 @@ internal class RecordingMachineActions(
     override fun applyMachineState(request: MachineRequest) = ran("machineState($request)")
     override fun applyCancelMaintenance() = ran("cancelMaintenance")
     override fun applyTareScale() = ran("tareScale")
+    override fun applyHotWaterDose(dose: coffee.crema.core.HotWaterDose) = ran("hotWaterDose($dose)")
 
     override fun showConfig(cmd: MachineCommand.Config) {
         shown += cmd

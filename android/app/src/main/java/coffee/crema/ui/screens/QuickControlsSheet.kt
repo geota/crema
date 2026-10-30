@@ -36,6 +36,11 @@ import coffee.crema.ui.QcBounds
 import coffee.crema.ui.QcSteam
 import coffee.crema.ui.SteamMode
 import coffee.crema.ui.WaterMode
+import coffee.crema.ui.HotWaterHeader
+import coffee.crema.ui.hotWaterStepper
+import coffee.crema.ui.hotWaterSubLine
+import coffee.crema.core.HotWaterDose
+import coffee.crema.core.HotWaterTarget
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.UNKNOWN_VALUE
 import coffee.crema.ui.theme.CremaTheme
@@ -113,7 +118,12 @@ fun QuickControlsSheet(
     qcSteamFlowMlS: Double,
     qcSteamTempC: Double,
     qcHotWaterTempC: Double,
-    qcHotWaterVolumeMl: Double,
+    /** The hot-water dose (Time · ml · Ratio) and the core's resolved target
+     *  for its readout (the hub's on a remote); the units it reads in. */
+    hotWaterDose: HotWaterDose,
+    hotWaterTarget: HotWaterTarget?,
+    weightUnit: String,
+    volumeUnit: String,
     qcFlushTimeS: Double,
     qcFlushTempC: Double,
     onSelectProfile: (String) -> Unit,
@@ -130,7 +140,7 @@ fun QuickControlsSheet(
     onSteamFlow: (Double) -> Unit,
     onSteamTemp: (Double) -> Unit,
     onHotWaterTemp: (Double) -> Unit,
-    onHotWaterVolume: (Double) -> Unit,
+    onHotWaterDose: (HotWaterDose) -> Unit,
     onFlushTime: (Double) -> Unit,
     onFlushTemp: (Double) -> Unit,
     // Persisted QC grind click + pre-infuse transient override (issue 15).
@@ -174,10 +184,11 @@ fun QuickControlsSheet(
     // Steam / water / flush *values* are persisted props (issue 14); only which
     // sub-value each stepper edits ("mode") is local view state.
     var steamMode by remember { mutableStateOf(SteamMode.Time) }
-    var waterMode by remember { mutableStateOf(WaterMode.Volume) }
+    var waterMode by remember { mutableStateOf(WaterMode.Amount) }
     var flushMode by remember { mutableStateOf(FlushMode.Time) }
     val steamGate = gate(when (steamMode) { SteamMode.Flow -> Setting.QC_STEAM_FLOW; SteamMode.Temp -> Setting.QC_STEAM_TEMP; SteamMode.Time -> Setting.QC_STEAM_TIME })
-    val waterGate = gate(if (waterMode == WaterMode.Temp) Setting.QC_HOT_WATER_TEMP else Setting.QC_HOT_WATER_VOLUME)
+    // The card's note: the temperature, or the dose (its mode stands for it).
+    val waterGate = gate(if (waterMode == WaterMode.Temp) Setting.QC_HOT_WATER_TEMP else Setting.QC_HOT_WATER_MODE)
     val flushGate = gate(if (flushMode == FlushMode.Time) Setting.QC_FLUSH_TIME else Setting.QC_FLUSH_TEMP)
     val brewGate = gate(Setting.BREW_PARAMS)
     val doseGrindGate = if (doseGrindMode == DoseGrindMode.Dose) brewGate else gate(Setting.QC_GRIND)
@@ -384,24 +395,58 @@ fun QuickControlsSheet(
                         },
                     )
                 },
-                // 5 — Hot water temp | volume.
+                // 5 — Hot water: temp | ‹mode› ▾ (spec §2.7). The mode lives in
+                // the label (a menu), the amount in the stepper's secondary line,
+                // so the card keeps its siblings' footprint in every mode.
                 { m ->
-                    CremaStepper(
-                        modifier = m,
-                        value = if (waterMode == WaterMode.Temp) qcHotWaterTempC else qcHotWaterVolumeMl,
-                        unit = if (waterMode == WaterMode.Temp) "°C" else "ml",
-                        min = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MIN_C else QcBounds.WATER_VOL_MIN_ML,
-                        max = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MAX_C else QcBounds.WATER_VOL_MAX_ML,
-                        step = if (waterMode == WaterMode.Temp) 1.0 else 10.0,
-                        fmt = niceFmt,
-                        chips = if (waterMode == WaterMode.Temp) listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
-                        onChange = { if (waterMode == WaterMode.Temp) onHotWaterTemp(it) else onHotWaterVolume(it) },
-                        style = CremaStepperStyle.Boxed,
-                        gate = waterGate,
-                        header = {
-                            CremaSplitLabel(prefix = "Hot water", options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")), value = waterMode.value, onChange = { waterMode = WaterMode.of(it) })
-                        },
-                    )
+                    val waterHeader: @Composable () -> Unit = {
+                        HotWaterHeader(
+                            waterMode = waterMode,
+                            onWaterMode = { waterMode = it },
+                            mode = hotWaterDose.mode,
+                            onMode = { onHotWaterDose(hotWaterDose.copy(mode = it)) },
+                            gate = gate(Setting.QC_HOT_WATER_MODE),
+                        )
+                    }
+                    if (waterMode == WaterMode.Temp) {
+                        CremaStepper(
+                            modifier = m,
+                            value = qcHotWaterTempC,
+                            unit = "°C",
+                            min = QcBounds.WATER_TEMP_MIN_C,
+                            max = QcBounds.WATER_TEMP_MAX_C,
+                            step = 1.0,
+                            fmt = niceFmt,
+                            chips = listOf(60.0, 75.0, 85.0, 92.0, 96.0),
+                            onChange = onHotWaterTemp,
+                            style = CremaStepperStyle.Boxed,
+                            gate = waterGate,
+                            header = waterHeader,
+                        )
+                    } else {
+                        val hw = hotWaterStepper(hotWaterDose, onHotWaterDose)
+                        // Six to a row (~181 dp) gets the short form; a wider card
+                        // the full sentence (web switches at 260 px).
+                        BoxWithConstraints(m) {
+                            CremaStepper(
+                                value = hw.value,
+                                unit = hw.unit,
+                                min = hw.min,
+                                max = hw.max,
+                                step = hw.step,
+                                fmt = hw.fmt,
+                                chips = hw.chips,
+                                chipFmt = hw.chipFmt,
+                                chipActive = hw.chipActive,
+                                extraChip = hw.extraChip,
+                                onChange = hw.onChange,
+                                style = CremaStepperStyle.Boxed,
+                                gate = gate(hw.setting),
+                                header = waterHeader,
+                                sub = hotWaterSubLine(hotWaterTarget, weightUnit, volumeUnit, hotWaterDose.ratio, long = maxWidth >= 260.dp),
+                            )
+                        }
+                    }
                 },
                 // 6 — Flush time | temp.
                 { m ->

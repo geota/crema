@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelStore
 import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
+import coffee.crema.core.HotWaterMode
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.SteamHotWaterTargets
 import coffee.crema.core.WriteTarget
@@ -52,7 +53,7 @@ class SteamHotWaterTargetsTest {
      *  active profile's temperature. */
     @Test
     fun `a Quick Controls steam edit keeps the machine's fields and follows the profile`() {
-        writePrefs(AppPrefs(qcSteamTempC = 150f, qcSteamTimeS = 20f, qcHotWaterTempC = 80f, qcHotWaterVolumeMl = 150f))
+        writePrefs(AppPrefs(qcSteamTempC = 150f, qcSteamTimeS = 20f, qcHotWaterTempC = 80f, qcHotWaterVolumeMl = 150f, qcHotWaterMode = HotWaterMode.Volume))
         val vm = VmHarness.build(store)
         VmHarness.awaitPrefsLoaded(vm)
         VmHarness.awaitStartupLoaded(vm)
@@ -79,7 +80,7 @@ class SteamHotWaterTargetsTest {
         feedMachinePacket(bridge)
         bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(2, 0), 0uL)
         bridge.connectSweep("{}", 0uL)
-        val targets = SteamHotWaterTargets(148f, 20f, 80f, volumeHotWaterDose(150f))
+        val targets = SteamHotWaterTargets(148f, 20f, 80f, HotWaterUi.defaults.copy(mode = coffee.crema.core.HotWaterMode.Volume, volumeMl = 150f))
         val raw = bridge.setSteamHotwaterTargets(coreJson.encodeToString(SteamHotWaterTargets.serializer(), targets))
         val packet = coreJson.decodeFromString(CoreOutput.serializer(), raw).commands
             .filterIsInstance<Command.WriteCharacteristic>()

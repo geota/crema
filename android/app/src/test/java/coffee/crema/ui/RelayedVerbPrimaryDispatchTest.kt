@@ -10,6 +10,8 @@ import coffee.crema.ble.proxy.Golden
 import coffee.crema.ble.proxy.PROXY_PROTOCOL_VERSION
 import coffee.crema.ble.proxy.RelayHub
 import coffee.crema.ble.proxy.RemoteClient
+import coffee.crema.core.HotWaterMode
+import coffee.crema.core.HotWaterTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -101,7 +103,8 @@ class RelayedVerbPrimaryDispatchTest {
         // Relay v4: the core admitted a remote paired with control before
         // RelayHub.serve sees it, so the hub's Welcome comes first.
         VmHarness.idleUntil("the Welcome") { replies.any { it is Frame.Welcome } }
-        val welcome = assertIs<Frame.Welcome>(replies.single())
+        // The Welcome first; the hub may push its config right after.
+        val welcome = assertIs<Frame.Welcome>(replies.first(), "$replies")
         assertEquals("control", welcome.scope)
     }
 
@@ -242,5 +245,27 @@ class RelayedVerbPrimaryDispatchTest {
         VmHarness.idle()
         assertEquals(Frame.ControlOk(1), relay(Golden.require("control/startShot.json")))
         assertTrue(vm.ui.value.userMessages.any { it == "Phone started a shot" }, "${vm.ui.value.userMessages}")
+    }
+
+    /** AC-HW26, as relay v4 left it: no remote can send `setQcHotWaterVolume`
+     *  to a hub any more (AC-43), so the old verb is refused and the hub's dose
+     *  kept; the bare volume edit, run here, switches to volume mode, pushes
+     *  and logs. */
+    @Test
+    fun `hot-water volume verb switches to volume mode`() {
+        val ratio = HotWaterUi.defaults
+        vm.setHotWaterDose(ratio)
+        VmHarness.idle()
+        val err = assertIs<Frame.ControlErr>(relay(FrameCodec.encode(Frame.Control(1, "setQcHotWaterVolume", "200.0"))))
+        assertEquals("unknown relayed control: setQcHotWaterVolume", err.reason)
+        VmHarness.idle()
+        assertEquals(ratio, vm.ui.value.hotWaterDose(), "the relayed verb changed nothing")
+
+        vm.setQcHotWaterVolume(200f)
+        VmHarness.idle()
+        assertEquals(ratio.copy(mode = HotWaterMode.Volume, volumeMl = 200f), vm.ui.value.hotWaterDose())
+        val target = coreJson.decodeFromString(HotWaterTarget.serializer(), VmHarness.bridge(vm).hotWaterTargetJson())
+        assertEquals(HotWaterMode.Volume to 200f, target.mode to target.volumeMl, "pushed")
+        assertTrue(VmHarness.log(vm).any { it.contains("Hot-water volume 200 ml: switched to volume mode") }, "logged")
     }
 }

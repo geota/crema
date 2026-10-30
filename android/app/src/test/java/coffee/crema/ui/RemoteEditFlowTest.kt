@@ -3,6 +3,10 @@ package coffee.crema.ui
 import coffee.crema.ble.proxy.RemotePeer
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
+import coffee.crema.core.HotWaterBasis
+import coffee.crema.core.HotWaterDose
+import coffee.crema.core.HotWaterMode
+import coffee.crema.core.HotWaterTarget
 import coffee.crema.ble.proxy.Frame
 import coffee.crema.ble.proxy.Golden
 import coffee.crema.ble.proxy.InMemoryFrameLink
@@ -72,6 +76,7 @@ class RemoteEditFlowTest {
         "setQcSteamTemp" to listOf(150f), "setQcSteamTime" to listOf(30f), "setQcSteamFlow" to listOf(1.6f),
         "setQcHotWaterTemp" to listOf(85f), "setQcHotWaterVolume" to listOf(200f), "setQcFlushTime" to listOf(6f),
         "setQcFlushTemp" to listOf(93f),
+        "setHotWaterDose" to listOf(HotWaterDose(HotWaterMode.Volume, 30f, false, 200f, 3f)),
     )
 
     private fun call(vm: MainViewModel, signature: String) {
@@ -321,8 +326,8 @@ class RemoteEditFlowTest {
         assertTrue(actions.applied.isEmpty(), "the hub applied nothing")
     }
 
-    /** AC-35: the seven QC steam, hot-water and flush settings are READ_ONLY
-     *  on a control remote; their setters send nothing and change nothing. */
+    /** AC-35, AC-HW24: the eleven QC steam, hot-water and flush settings (the
+     *  hot-water dose's four included) are READ_ONLY on a control remote; their setters send nothing and change nothing. */
     @Test
     fun `QC steam, water and flush rows are read-only`() {
         val vm = fixture.start()
@@ -330,6 +335,7 @@ class RemoteEditFlowTest {
         val qc = listOf(
             Setting.QC_STEAM_TIME, Setting.QC_STEAM_FLOW, Setting.QC_STEAM_TEMP, Setting.QC_HOT_WATER_TEMP,
             Setting.QC_HOT_WATER_VOLUME, Setting.QC_FLUSH_TIME, Setting.QC_FLUSH_TEMP,
+            Setting.QC_HOT_WATER_MODE, Setting.QC_HOT_WATER_TIME, Setting.QC_HOT_WATER_TIME_NO_LIMIT, Setting.QC_HOT_WATER_RATIO,
         )
         for (s in qc) {
             assertEquals(SettingAvailability.READ_ONLY, availability(vm, s), "$s")
@@ -343,5 +349,34 @@ class RemoteEditFlowTest {
         VmHarness.idleUntil("the tare") { fixture.handled.isNotEmpty() }
         assertEquals(listOf("tareScale" to ""), fixture.handled.toList(), "no control for a QC machine setting")
         assertEquals(abOf(P), abOf(savedPrefs()))
+    }
+
+    /** AC-HW23: on a control remote the dose card is the hub's: its four rows
+     *  are READ_ONLY, an edit is refused here and sends no frame, and the
+     *  readout shows the snapshot's hotWaterTarget, not this device's math. */
+    @Test
+    fun `the hot-water dose on a remote is the hub's`() {
+        val vm = fixture.start()
+        val hubTarget = HotWaterTarget(
+            HotWaterMode.Ratio, volumeMl = 135f, basis = HotWaterBasis.TargetYield, basisG = 54f,
+            wireVolumeMl = 135f, wireTimeoutS = 60f,
+        )
+        fixture.push(base.copy(hotWaterTarget = hubTarget, qcHotWaterMode = HotWaterMode.Ratio))
+        VmHarness.idleUntil("the hub's target") { vm.ui.value.hotWaterTarget == hubTarget }
+        val readout = hotWaterReadoutFor(vm.ui.value.hotWaterTarget, vm.ui.value.weightUnit, vm.ui.value.volumeUnit, vm.ui.value.qcHotWaterRatio)
+        assertTrue(readout.startsWith("1:2.5 → 135 ml for a "), readout)
+        for (s in listOf(Setting.QC_HOT_WATER_MODE, Setting.QC_HOT_WATER_TIME, Setting.QC_HOT_WATER_TIME_NO_LIMIT, Setting.QC_HOT_WATER_RATIO)) {
+            assertEquals(SettingAvailability.READ_ONLY, availability(vm, s), "$s")
+        }
+        val shown = vm.ui.value.hotWaterDose()
+        val messages = vm.ui.value.userMessages.size
+        vm.setHotWaterDose(shown.copy(mode = HotWaterMode.Volume))
+        VmHarness.idle()
+        assertEquals(shown, vm.ui.value.hotWaterDose(), "nothing shown")
+        assertEquals(listOf("Change on Kitchen tablet"), vm.ui.value.userMessages.drop(messages))
+        vm.tareScale() // a control that is sent, so the wire has caught up
+        VmHarness.idleUntil("the tare") { fixture.handled.isNotEmpty() }
+        assertEquals(listOf("tareScale" to ""), fixture.handled.toList(), "no frame for the dose")
+        assertEquals(abOf(P), abOf(savedPrefs()), "this device's own dose kept")
     }
 }

@@ -49,9 +49,10 @@ class SettingsRegistryTest {
 
     @Test
     fun `the groups and counts match the spec`() {
-        // 87: relay v4 R5 removed `pairedDevices` (C), the v3 pairing list.
-        assertEquals(87, Setting.entries.size)
-        assertEquals(21, Setting.entries.count { it.group == SettingGroup.A_MACHINE })
+        // 87: relay v4 R5 removed `pairedDevices` (C), the v3 pairing list; 91:
+        // the hot-water modes added the dose rows A22–A25.
+        assertEquals(91, Setting.entries.size)
+        assertEquals(25, Setting.entries.count { it.group == SettingGroup.A_MACHINE })
         assertEquals(13, Setting.entries.count { it.group == SettingGroup.B_SESSION })
         assertEquals(53, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
         for (s in Setting.entries) {
@@ -67,7 +68,7 @@ class SettingsRegistryTest {
             if (s.adoptable) assertTrue(s.store in setOf(SettingStore.APP_PREFS, SettingStore.LIBRARY, SettingStore.MEMORY), "$s")
         }
         // Adoptable at T6: A1–A11 and B1–B13.
-        assertEquals(24, Setting.entries.count { it.adoptable })
+        assertEquals(28, Setting.entries.count { it.adoptable })
     }
 
     /** AC-14. */

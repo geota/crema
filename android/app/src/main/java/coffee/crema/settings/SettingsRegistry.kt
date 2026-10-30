@@ -75,12 +75,21 @@ enum class Setting(
     val uiField: String? = storeField,
     val snapshotExtras: List<String> = emptyList(),
 ) {
-    // ── A: machine (21) ──────────────────────────────────────────────────────
+    // ── A: machine (25) ──────────────────────────────────────────────────────
     QC_STEAM_TEMP(A, RO, AP, "qcSteamTempC", SNAP, "qcSteamTempC", true, listOf("$VM.setQcSteamTemp(Float)")),
     QC_STEAM_TIME(A, RO, AP, "qcSteamTimeS", SNAP, "qcSteamTimeS", true, listOf("$VM.setQcSteamTime(Float)")),
     QC_STEAM_FLOW(A, RO, AP, "qcSteamFlowMlS", SNAP, "qcSteamFlowMlS", true, listOf("$VM.setQcSteamFlow(Float)")),
     QC_HOT_WATER_TEMP(A, RO, AP, "qcHotWaterTempC", SNAP, "qcHotWaterTempC", true, listOf("$VM.setQcHotWaterTemp(Float)")),
-    QC_HOT_WATER_VOLUME(A, RO, AP, "qcHotWaterVolumeMl", SNAP, "qcHotWaterVolumeMl", true, listOf("$VM.setQcHotWaterVolume(Float)")),
+    QC_HOT_WATER_VOLUME(
+        A, RO, AP, "qcHotWaterVolumeMl", SNAP, "qcHotWaterVolumeMl", true,
+        listOf("$VM.setQcHotWaterVolume(Float)", "$VM.setHotWaterDose(HotWaterDose)"),
+    ),
+    // The hot-water dose (hot-water modes spec §2.6, A22–A25): one LocalOnly
+    // edit sets them, so a remote shows the hub's and refuses an edit.
+    QC_HOT_WATER_MODE(A, RO, AP, "qcHotWaterMode", SNAP, "qcHotWaterMode", true, listOf("$VM.setHotWaterDose(HotWaterDose)")),
+    QC_HOT_WATER_TIME(A, RO, AP, "qcHotWaterTimeS", SNAP, "qcHotWaterTimeS", true, listOf("$VM.setHotWaterDose(HotWaterDose)")),
+    QC_HOT_WATER_TIME_NO_LIMIT(A, RO, AP, "qcHotWaterTimeNoLimit", SNAP, "qcHotWaterTimeNoLimit", true, listOf("$VM.setHotWaterDose(HotWaterDose)")),
+    QC_HOT_WATER_RATIO(A, RO, AP, "qcHotWaterRatio", SNAP, "qcHotWaterRatio", true, listOf("$VM.setHotWaterDose(HotWaterDose)")),
     QC_FLUSH_TIME(A, RO, AP, "qcFlushTimeS", SNAP, "qcFlushTimeS", true, listOf("$VM.setQcFlushTime(Float)")),
     QC_FLUSH_TEMP(A, RO, AP, "qcFlushTempC", SNAP, "qcFlushTempC", true, listOf("$VM.setQcFlushTemp(Float)")),
     STEAM_ECO(A, RO, AP, "steamEco", SNAP, "steamEco", true, listOf("$VM.setSteamEco(Boolean)")),
@@ -214,12 +223,6 @@ private val NONE = MirrorSource.NONE
  * `VisualizerSyncPrefs`, `DecentState`) or `Owner.name(ParamTypes)`.
  */
 val NOT_SETTINGS: Map<String, String> = mapOf(
-    // The hot-water dose (hot-water modes spec §2.6): carried with the bundle
-    // here; rows A22–A25 come with the Android hot-water card (HW-3).
-    "AppPrefs.qcHotWaterMode" to "hot-water dose, tagged in HW-3",
-    "AppPrefs.qcHotWaterTimeS" to "hot-water dose, tagged in HW-3",
-    "AppPrefs.qcHotWaterTimeNoLimit" to "hot-water dose, tagged in HW-3",
-    "AppPrefs.qcHotWaterRatio" to "hot-water dose, tagged in HW-3",
     // Maintenance counters and timestamps: measured, not chosen.
     "MaintenanceState.totalLitres" to "a counter",
     "MaintenanceState.filterBaselineLitres" to "a counter baseline",
@@ -270,7 +273,11 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
 )
 
 /** Snapshot fields that are not settings: identity and bookkeeping. */
-val SNAPSHOT_META: Set<String> = setOf("activeProfileJson", "activeBeanSummary", "primaryName", "authority", "rev")
+val SNAPSHOT_META: Set<String> = setOf(
+    "activeProfileJson", "activeBeanSummary", "primaryName", "authority", "rev",
+    // The hub's resolved hot-water target: a readout of A5 and A22–A25, not a setting.
+    "hotWaterTarget",
+)
 
 /** The setting a #203 [MachineCommand.Config] edits. Exhaustive, so a new
  *  Config subtype has to answer it. */

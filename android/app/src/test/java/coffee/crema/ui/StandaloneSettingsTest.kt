@@ -3,7 +3,10 @@ package coffee.crema.ui
 import coffee.crema.ble.proxy.TEST_PEER
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
+import coffee.crema.core.HotWaterDose
+import coffee.crema.core.HotWaterMode
 import coffee.crema.settings.AppPrefs
+import coffee.crema.settings.hotWaterDose
 import coffee.crema.ui.RemoteFixture.Companion.savedPrefs
 import coffee.crema.ui.RemoteFixture.Companion.writePrefs
 import coffee.crema.ble.proxy.CodecFrameLink
@@ -57,6 +60,7 @@ class StandaloneSettingsTest {
         Edit("qcSteamFlow", { it.setQcSteamFlow(1.6f) }, { it.qcSteamFlowMlS }, { it.qcSteamFlowMlS }, 1.6f),
         Edit("qcHotWaterTemp", { it.setQcHotWaterTemp(85f) }, { it.qcHotWaterTempC }, { it.qcHotWaterTempC }, 85f),
         Edit("qcHotWaterVolume", { it.setQcHotWaterVolume(200f) }, { it.qcHotWaterVolumeMl }, { it.qcHotWaterVolumeMl }, 200f),
+        Edit("hotWaterDose", { it.setHotWaterDose(HotWaterDose(HotWaterMode.Time, 45f, false, 180f, 2.5f)) }, { it.hotWaterDose() }, { it.hotWaterDose() }, HotWaterDose(HotWaterMode.Time, 45f, false, 180f, 2.5f)),
         Edit("qcFlushTime", { it.setQcFlushTime(6f) }, { it.qcFlushTimeS }, { it.qcFlushTimeS }, 6f),
         Edit("qcFlushTemp", { it.setQcFlushTemp(93f) }, { it.qcFlushTempC }, { it.qcFlushTempC }, 93f),
         Edit("steamEco", { it.setSteamEco(true) }, { it.steamEco }, { it.steamEco }, true),
