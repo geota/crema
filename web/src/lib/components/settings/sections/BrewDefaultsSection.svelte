@@ -11,6 +11,7 @@
 	 * to the DE1 while connected (the connect path re-seeds it otherwise).
 	 */
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { brewDefaultsBounds, quickControlBounds } from '#lib/core/bounds.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -91,6 +92,9 @@
 		settings.set('qcSteamFlowMlS', v);
 		void app?.setSteamFlow(v);
 	}
+	/** The steppers' ranges, from the core's table (F8). */
+	const bd = brewDefaultsBounds();
+	const qc = quickControlBounds();
 </script>
 
 <StSectionHead
@@ -105,9 +109,9 @@
 			<StStepper
 				value={prefs.defaultDoseG}
 				dimension="weight"
-				step={0.1}
-				min={5}
-				max={30}
+				step={bd.doseG.step}
+				min={bd.doseG.min}
+				max={bd.doseG.max}
 				onCommit={(v) => settings.set('defaultDoseG', v)}
 			/>
 		{/snippet}
@@ -118,9 +122,9 @@
 				value={prefs.defaultRatio}
 				unit=":1"
 				decimals={1}
-				step={0.1}
-				min={1}
-				max={5}
+				step={bd.ratio.step}
+				min={bd.ratio.min}
+				max={bd.ratio.max}
 				onCommit={(v) => settings.set('defaultRatio', v)}
 			/>
 		{/snippet}
@@ -130,9 +134,9 @@
 			<StStepper
 				value={prefs.defaultBrewTempC}
 				dimension="temp"
-				step={0.5}
-				min={80}
-				max={100}
+				step={bd.brewTempC.step}
+				min={bd.brewTempC.min}
+				max={bd.brewTempC.max}
 				onCommit={(v) => settings.set('defaultBrewTempC', v)}
 			/>
 		{/snippet}
@@ -145,9 +149,9 @@
 			<StStepper
 				value={prefs.defaultPreinfusionS}
 				unit="s"
-				step={1}
-				min={0}
-				max={60}
+				step={bd.preinfuseS.step}
+				min={bd.preinfuseS.min}
+				max={bd.preinfuseS.max}
 				onCommit={(v) => settings.set('defaultPreinfusionS', v)}
 				dot
 				dotOn={prefs.defaultPreinfusionS > 0}
@@ -275,9 +279,9 @@
 			<StStepper
 				value={prefs.qcSteamTempC}
 				dimension="temp"
-				step={1}
-				min={135}
-				max={170}
+				step={qc.steamTempC.step}
+				min={qc.steamTempC.min}
+				max={qc.steamTempC.max}
 				onCommit={setSteamTemp}
 			/>
 		{/snippet}
@@ -287,9 +291,9 @@
 			<StStepper
 				value={prefs.qcSteamTimeS}
 				unit="s"
-				step={1}
-				min={1}
-				max={60}
+				step={qc.steamTimeS.step}
+				min={qc.steamTimeS.min}
+				max={qc.steamTimeS.max}
 				onCommit={setSteamTime}
 			/>
 		{/snippet}
@@ -300,9 +304,9 @@
 				value={prefs.qcSteamFlowMlS}
 				unit="ml/s"
 				decimals={1}
-				step={0.1}
-				min={0.2}
-				max={3.0}
+				step={qc.steamFlowMlS.step}
+				min={qc.steamFlowMlS.min}
+				max={qc.steamFlowMlS.max}
 				onCommit={setSteamFlow}
 			/>
 		{/snippet}

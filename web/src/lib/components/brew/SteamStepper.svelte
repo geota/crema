@@ -5,11 +5,14 @@
 	 * mirrors the ShotSettings `steamTemp` field).
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
+	import { quickControlBounds } from '#lib/core/bounds.js';
 	import QuickSplitLabel from './QuickSplitLabel.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
 
 	let { params }: { params: BrewParamState } = $props();
+	/** The steppers' ranges, from the core's table (F8). */
+	const b = quickControlBounds();
 
 	const p = $derived(params.current);
 </script>
@@ -33,9 +36,9 @@
 			value={p.steamTime}
 			name="Steam time"
 			unit="s"
-			min={1}
-			max={60}
-			step={1}
+			min={b.steamTimeS.min}
+			max={b.steamTimeS.max}
+			step={b.steamTimeS.step}
 			onChange={(v) => params.set('steamTime', v)}
 			fmt={(v) => v.toFixed(0)}
 		/>
@@ -52,9 +55,9 @@
 			value={p.steamFlow}
 			name="Steam flow"
 			unit="ml/s"
-			min={0.2}
-			max={3}
-			step={0.1}
+			min={b.steamFlowMlS.min}
+			max={b.steamFlowMlS.max}
+			step={b.steamFlowMlS.step}
 			onChange={(v) => params.set('steamFlow', v)}
 			fmt={(v) => v.toFixed(1)}
 		/>
@@ -76,9 +79,9 @@
 				value={p.steamTemp}
 				name="Steam temperature"
 				dimension="temp"
-				min={135}
-				max={170}
-				step={0.5}
+				min={b.steamTempC.min}
+				max={b.steamTempC.max}
+				step={b.steamTempC.step}
 				onChange={(v) => params.set('steamTemp', v)}
 			/>
 			<div style="height:6px"></div>
