@@ -28,6 +28,7 @@ import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core
 import type { BrewOverrides, ProfileSyncOutput, ProfileSyncStatus } from './crema-core';
 import type { HotWaterBounds, HotWaterDose, HotWaterTarget, SteamHotWaterTargets } from './crema-core';
 import { HotWaterMode } from './crema-core';
+import type { ShotCaptureContext } from './crema-core';
 import { guardStoppedBridge } from './stopped-guard';
 
 /** Parse a bridge `FlashStep` JSON; `status: null` reads as "no flash". */
@@ -249,10 +250,19 @@ export interface RustStoredShot {
 		tags?: readonly string[];
 		grinderSetting?: string | null;
 		grinder?: string | null;
+		notes?: string | null;
 	} | null;
 	/** Equipment-level grinder model at completion time — feeds the
 	 *  exporter's `app.data.settings.grinder_model`. */
 	grinderModel?: string | null;
+	/** Shot tags, the dialled targets and the stop switches — the exporter
+	 *  writes them to the `metadata.crema` block (F10). */
+	tags?: readonly string[];
+	yieldTarget?: number | null;
+	brewTempTarget?: number | null;
+	preinfuseTarget?: number | null;
+	stopOnWeight?: boolean;
+	autoTare?: boolean;
 	/** Brew Log method (`"pourover"`, …); absent/`null` = machine espresso. */
 	brewMethod?: string | null;
 	/** A custom method's label, snapshotted on save (Rust `brew_method_label`). */
@@ -328,6 +338,14 @@ export interface CremaCore {
 	 * implement it; see `#lib/core/recovery-watch.js`.
 	 */
 	panicRecoveries?(): number;
+	/**
+	 * The last finished shot as a `StoredShot` JSON object, assembled by the
+	 * core from its own record and `ctx` (F10) — or `null` (nothing waiting,
+	 * or no telemetry). Call it on `ShotCompleted`, whatever the disposition;
+	 * one-shot. Synchronous: the bridge call runs at once, so it reads the core
+	 * that emitted the event (the shadow core during a replay).
+	 */
+	takeStoredShot(ctx: ShotCaptureContext): Record<string, unknown> | null;
 	/**
 	 * Register `listener` to run once when the bridge stops: a call panicked
 	 * after the bridge's last allowed reset (`MAX_PANIC_RECOVERIES` in
@@ -610,6 +628,12 @@ export interface CremaCore {
 	 * and re-arms it on a refill, a threshold change or a new link.
 	 */
 	setWaterWarnMl(warnMl: number | undefined): Promise<void>;
+	/**
+	 * Latch every settings-driven core input from a `CommonSettings` JSON in
+	 * one call — auto-tare, stop-on-weight, volume stop, max shot duration,
+	 * weight unit, low-water threshold. The core sanitizes the blob first.
+	 */
+	applyCommonSettings(settingsJson: string): Promise<void>;
 	/**
 	 * Tell the core which profile is active — `profileJson` is the wire
 	 * `Profile` JSON (`JSON.stringify(toCoreProfile(p))`); `undefined` = no
@@ -1083,6 +1107,10 @@ async function createCore(): Promise<CremaCore> {
 		async onScaleWriteResult(ok) {
 			return parseOutput(bridge.on_scale_write_result(ok));
 		},
+		takeStoredShot(ctx) {
+			const json = bridge.take_stored_shot(JSON.stringify(ctx));
+			return JSON.parse(json) as Record<string, unknown> | null;
+		},
 		panicRecoveries() {
 			return bridge.panic_recoveries();
 		},
@@ -1289,6 +1317,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setWaterWarnMl(warnMl) {
 			bridge.set_water_warn_ml(warnMl);
+		},
+		async applyCommonSettings(settingsJson) {
+			bridge.applyCommonSettings(settingsJson);
 		},
 		async setActiveProfile(profileJson) {
 			bridge.setActiveProfile(profileJson);

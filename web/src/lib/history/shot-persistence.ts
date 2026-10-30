@@ -24,17 +24,9 @@ import { getBeanStore } from '#lib/bean/index.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import { promptBagEmpty } from '#lib/bean/bag-empty-prompt.js';
-import {
-	effectiveCremaProfile,
-	getProfileStore,
-	toCoreProfile,
-	type CremaProfile
-} from '#lib/profiles/index.js';
-import {
-	getActiveShotStore,
-	type ActiveShotBrewParams,
-	type ActiveShotData
-} from '#lib/state/active-shot.svelte.js';
+import { getProfileStore } from '#lib/profiles/index.js';
+import { getActiveShotStore, type ActiveShotData } from '#lib/state/active-shot.svelte.js';
+import type { ShotCaptureContext } from '#lib/core/crema-core.js';
 import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 import { liveMachineIdentity, pushShotToDecent } from '#lib/decent/upload.js';
 import { isDecentLinked, readDecentAccount } from '#lib/decent/account.js';
@@ -107,6 +99,12 @@ export interface ShotCompletionContext {
 	/** Fire a webhook (gated by user prefs inside the callback). */
 	fireWebhook(eventType: string, payload: object): void;
 	/**
+	 * The core's assembly of the shot that just completed (F10,
+	 * `CremaCore.takeStoredShot`) — one-shot, so the commit takes it once,
+	 * whatever the disposition.
+	 */
+	takeStoredShot(ctx: ShotCaptureContext): Record<string, unknown> | null;
+	/**
 	 * The app-wide Effect runtime (Option 3, T-16). The Visualizer push routes
 	 * through it (`ShotSync.uploadShot` / `UploadQueue.enqueue`); `null` (no
 	 * runtime) skips the push, same fire-and-forget non-fatal posture as before.
@@ -139,13 +137,20 @@ export function commitShotCompletion(
 	// behind an undo toast, and its live side effects still run (the dose
 	// was physically ground, so the bean debit belongs).
 	const disposition = event.content.disposition ?? 'Record';
+	// The core assembled the shot (F10): its own record — frames, scale
+	// overlays, the as-run profile and values, the stop reason — plus what
+	// only the shell knows. Taken now, whatever the disposition, so the
+	// core's pending shot never outlives its completion; an aborted
+	// discard keeps it for the undo.
+	const captured = ctx.takeStoredShot(captureContext(activeShot));
+	const dose = recordedDose(captured, activeShot);
 	if (disposition === 'SkipCleaning') {
 		getActiveShotStore().clear();
 		return;
 	}
 	if (disposition === 'DiscardAborted') {
 		if (activeShot?.source !== 'replay') {
-			runLiveOnlySideEffects(event, activeShot, ctx.snapshot, ctx.fireWebhook);
+			runLiveOnlySideEffects(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook);
 		}
 		// Freeze everything the undo needs — by the time the user taps it
 		// the active-shot store is cleared and a new shot may be underway.
@@ -161,7 +166,7 @@ export function commitShotCompletion(
 			`Aborted shot discarded (${(event.content.duration / 1000).toFixed(1)} s)`,
 			'Undo',
 			() => {
-				const record = recordShotHistory(event, frozenShot, frozenSnapshot);
+				const record = captured ? getHistoryStore().recordCaptured(captured) : null;
 				if (!record) return;
 				if (frozenCtx.runtime) {
 					registerUploadBatch(record.id, autoUploadDestinations());
@@ -178,12 +183,12 @@ export function commitShotCompletion(
 		getActiveShotStore().clear();
 		return;
 	}
-	const record = recordShotHistory(event, activeShot, ctx.snapshot);
+	const record = captured ? getHistoryStore().recordCaptured(captured) : null;
 
 	if (record) {
 		const isLive = activeShot?.source !== 'replay';
 		if (isLive) {
-			runLiveOnlySideEffects(event, activeShot, ctx.snapshot, ctx.fireWebhook);
+			runLiveOnlySideEffects(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook);
 		}
 		// Visualizer push — fire-and-forget; recoverable failures land in the
 		// retry queue. Runs on the app runtime (T-22) so it sees ShotSync /
@@ -226,71 +231,55 @@ function autoUploadDestinations(): string[] {
 }
 
 /**
- * The profile a shot ran: the library profile with the shot's recorded brew
- * temperature and pre-infusion applied by the core (every step shifted, the
- * leading segments rescaled) — so history and the uploads built from it carry
- * the steps the DE1 actually ran. No recorded params (a headless shot) → the
- * library profile as saved.
+ * The dose the core recorded — the Quick Controls dial when the DE1 ran the
+ * dialled profile (review §2.3-6) — else the profile's. The bean debit and
+ * the webhook use it, so they agree with the history row.
  */
-export function asRunProfile(
-	profile: CremaProfile,
-	brewParams: Pick<ActiveShotBrewParams, 'brewTemp' | 'preinfuseTarget'> | null
-): CremaProfile {
-	if (!brewParams) return profile;
-	return effectiveCremaProfile(profile, {
-		brewTemp: brewParams.brewTemp,
-		preinf: brewParams.preinfuseTarget
-	});
+function recordedDose(
+	captured: Record<string, unknown> | null,
+	activeShot: ActiveShotData | null
+): number | null {
+	const metadata = captured?.metadata as { dose?: number | null } | undefined;
+	return metadata?.dose ?? activeShot?.dose ?? null;
 }
 
 /**
- * Write the history row. Reads bean tags from the live library at commit
- * time (one-shot copy into `shot.tags`); a later edit to the bean's tags
- * does NOT rewrite history — same discipline as `setBeanFromLive`.
+ * What only the shell knows about the shot that just completed — the core's
+ * `ShotCaptureContext` (F10): the wall clock, the bean snapshot frozen at
+ * shot start, the Settings grinder (the core applies bean → Settings), the
+ * grind dial, the barista, the bean's tags (a one-shot copy: a later edit to
+ * the bean's tags does NOT rewrite history), the machine, and the profile
+ * name — the fallback a replay's shadow core needs.
  */
-function recordShotHistory(
-	event: ShotCompletedEvent,
-	activeShot: ActiveShotData | null,
-	snapshot: UiSnapshot
-): { id: string } | null {
+function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 	const bean = activeShot?.bean ?? null;
-	const brewParams = activeShot?.brewParams ?? null;
-	const liveBeanForTags = bean?.beanId ? getBeanStore().getBean(bean.beanId) : null;
-	// Snapshot the active profile's recipe (as-run) so the upload embeds real
-	// steps, not just a name (#12). You can't switch profiles mid-pour, so the
-	// currently-active profile is the one that ran — with the dialled brew temp
-	// and pre-infusion applied by the core, the steps the DE1 actually ran.
-	const profiles = getProfileStore();
-	const libraryProfile = profiles.activeId ? profiles.get(profiles.activeId) : undefined;
-	const activeProfile = libraryProfile ? asRunProfile(libraryProfile, brewParams) : undefined;
-	return getHistoryStore().record({
-		duration: event.content.duration,
-		profileName: activeShot?.profileName ?? snapshot.activeProfileName,
-		profile: activeProfile ? toCoreProfile(activeProfile) : null,
-		dose: activeShot?.dose ?? null,
-		series: snapshot.shotTelemetry,
-		grinderModel: activeShot?.grinderModel ?? null,
-		barista: getSettingsStore().current.baristaName?.trim() || null,
+	const liveBean = bean?.beanId ? getBeanStore().getBean(bean.beanId) : null;
+	const settings = getSettingsStore().current;
+	return {
+		completedAt: Date.now(),
+		bean: bean
+			? {
+					beanId: bean.beanId ?? undefined,
+					name: bean.name,
+					roasterName: bean.roasterName ?? undefined,
+					roastedOn: bean.roastedOn ?? undefined,
+					roastLevel: bean.roastLevel ?? undefined,
+					tags: bean.tags,
+					notes: bean.notes,
+					grinderSetting: bean.grinderSetting,
+					grinder: bean.grinder
+				}
+			: undefined,
+		settingsGrinder: settings.grinderModel?.trim() || undefined,
+		grindDial: activeShot?.brewParams?.grind ?? undefined,
+		barista: settings.baristaName?.trim() || undefined,
+		tags: liveBean?.tags && liveBean.tags.length > 0 ? [...liveBean.tags] : undefined,
 		// The DE1 this ran on — frozen here so a later upload (Decent shot
 		// history, #84) carries the serial the server verifies, even after
 		// the machine disconnects or another one is paired.
-		machine: liveMachineIdentity(),
-		peakPressure: event.content.peak_pressure ?? null,
-		peakTemp: event.content.peak_temp ?? null,
-		peakWeight: event.content.peak_weight ?? null,
-		finalWeight: event.content.final_weight ?? null,
-		bean,
-		yieldTarget: brewParams?.yieldTarget ?? null,
-		brewTemp: brewParams?.brewTemp ?? null,
-		preinfuseTarget: brewParams?.preinfuseTarget ?? null,
-		stopOnWeight: brewParams?.stopOnWeight,
-		autoTare: brewParams?.autoTare,
-		grindSetting: brewParams?.grind ?? null,
-		tags:
-			liveBeanForTags?.tags && liveBeanForTags.tags.length > 0
-				? [...liveBeanForTags.tags]
-				: []
-	});
+		machine: liveMachineIdentity() ?? undefined,
+		profileName: activeShot?.profileName ?? undefined
+	};
 }
 
 /**
@@ -301,15 +290,15 @@ function recordShotHistory(
 function runLiveOnlySideEffects(
 	event: ShotCompletedEvent,
 	activeShot: ActiveShotData | null,
+	dose: number | null,
 	snapshot: UiSnapshot,
 	fireWebhook: (eventType: string, payload: object) => void
 ): void {
-	if (activeShot?.bean?.beanId && activeShot.dose) {
-		const emptied = getBeanStore().debitBean(activeShot.bean.beanId, activeShot.dose);
+	if (activeShot?.bean?.beanId && dose) {
+		const emptied = getBeanStore().debitBean(activeShot.bean.beanId, dose);
 		if (emptied) void promptBagEmpty(activeShot.bean.beanId);
 	}
 	const finalWeight = event.content.final_weight ?? null;
-	const dose = activeShot?.dose ?? null;
 	// Core-owned ratio math (review #42) — same guard rule as the history
 	// stats (`de1_domain::brew_ratio`: positive dose, finite quotient).
 	const brewRatio =

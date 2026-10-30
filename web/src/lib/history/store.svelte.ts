@@ -68,91 +68,6 @@ const HISTORY_KEY = 'crema.history.v2';
  */
 const MAX_RECORDS = 300;
 
-/**
- * The inputs the orchestrator hands to {@link HistoryStore.record} when a shot
- * completes — everything that is *not* derivable from the series itself.
- *
- * Peak / final metrics ride on `Event::ShotCompleted` itself: the core's
- * `ShotMetricsAccumulator` tracks them in real time, so the live path no
- * longer re-iterates the buffered series for them.
- */
-export interface ShotCompletion {
-	/** The DE1 the shot ran on (serial + firmware + model), if known. */
-	machine?: ShotMachine | null;
-	/** Total shot duration, milliseconds (from `Event::ShotCompleted`). */
-	duration: number;
-	/** The active profile's name at the time of the shot, or `null`. */
-	profileName: string | null;
-	/**
-	 * A snapshot of the active profile's *recipe* (the core `Profile`, steps
-	 * included) at shot time, or `null`. Persisted onto {@link StoredShot.profile}
-	 * so an uploaded shot carries its recipe and round-trips through Visualizer
-	 * as a real, importable profile (#12) — `profileName` alone can't rebuild the
-	 * steps. Absent for headless/replay completions with no live profile.
-	 */
-	profile?: unknown | null;
-	/** The active profile's brew dose (grams) at the time of the shot, or `null`. */
-	dose: number | null;
-	/** The buffered telemetry series snapshotted at shot completion. */
-	series: readonly TelemetrySample[];
-	/** A snapshot of the current bean at shot completion, or `null`. */
-	bean: ShotBean | null;
-	/**
-	 * Initial shot-level tags at completion time. The orchestrator
-	 * copies the active bean's `Bean.tags` into this slot at
-	 * `ShotCompleted` so bean tags become shot tags — one source of
-	 * truth, no later live-bean rewrite of history. Defaults to `[]`
-	 * for shots pulled with no bean (or a tag-less bean).
-	 */
-	tags?: readonly string[];
-	/**
-	 * The equipment-level grinder model at shot-completion time —
-	 * `settings.prefs.grinderModel.trim()` or `null` when the user
-	 * hasn't set a default. Frozen on the shot so a later settings
-	 * change can't rewrite history.
-	 */
-	grinderModel: string | null;
-	/**
-	 * Who made the shot — the Settings default barista at completion time,
-	 * or `null`/absent when none is set. Editable afterwards.
-	 */
-	barista?: string | null;
-	/** Peak group pressure observed during the shot, bar — from the core. */
-	peakPressure: number | null;
-	/** Peak group-head temperature observed during the shot, °C — from the core. */
-	peakTemp: number | null;
-	/** Peak scale weight observed during the shot, grams — from the core; `null` when no scale. */
-	peakWeight: number | null;
-	/** Final scale weight at shot end, grams — from the core; `null` when no scale. */
-	finalWeight: number | null;
-	/**
-	 * Quick-control overrides — the `BrewParams` user dialed in for this
-	 * shot, snapshotted at completion time so a later dial change cannot
-	 * rewrite history. Each field optional: a headless caller (replay /
-	 * scripted shot) may have no live Quick Sheet, and a legacy completion
-	 * before this snapshot existed simply leaves them absent. The history
-	 * store mirrors them onto {@link StoredShot.yieldTarget} et al.
-	 *
-	 * Why not just read from the active profile? The QC dial decouples a
-	 * shot's user intent from the profile's bundled defaults (e.g. "this
-	 * shot uses Best Practice but I'm aiming for 40 g not the profile's
-	 * default 36"). The profile default lives in the embedded profile slot
-	 * via `exportStoredShotAsV2Json`; these are the user's *current*
-	 * overrides, sibling to the live QC fingerprint.
-	 */
-	yieldTarget?: number | null;
-	brewTemp?: number | null;
-	preinfuseTarget?: number | null;
-	stopOnWeight?: boolean;
-	autoTare?: boolean;
-	/**
-	 * The QC grind dial at shot start, or `null`/absent when it carried no
-	 * signal. Written to `metadata.grinderSetting` at capture so the shot
-	 * records the grind actually used (issue #30 — Android stores its
-	 * `qcGrind` the same way; web used to leave this for a post-hoc edit).
-	 */
-	grindSetting?: number | null;
-}
 
 /** A shot's telemetry series couldn't be written to IndexedDB (quota, most
  *  likely): say so instead of silently keeping it in memory only. */
@@ -258,69 +173,21 @@ export class HistoryStore {
 	}
 
 	/**
-	 * Record a finished shot. The peak / final metrics ride on the
-	 * `Event::ShotCompleted` payload — the core's `ShotMetricsAccumulator`
-	 * tracks them in real time — so the shell no longer re-iterates the
-	 * buffered series for them here. Prepends the new record (newest first),
-	 * caps the list and persists.
-	 *
-	 * A series with no samples — a shot that ended before any telemetry — is
-	 * dropped: there is nothing to draw and nothing useful to keep. Returns the
-	 * newly-created record (so the caller can key per-shot side effects like
-	 * the IndexedDB capture store), or `null` when the shot was dropped.
+	 * Record a finished shot the core assembled (`CremaCore.takeStoredShot`,
+	 * F10): the telemetry with its frames and overlays, the as-run profile and
+	 * values, the grinder, the stop reason — one rule set shared with Android.
+	 * Normalised through the same loader every persisted row goes through,
+	 * prepended (newest first), capped and persisted; the series rides
+	 * IndexedDB. `null` for a shot with no telemetry.
 	 */
-	record(completion: ShotCompletion): StoredShot | null {
-		const series = completion.series;
-		if (series.length === 0) return null;
-		const samples = series.map(toWire);
-		const metadata: ShotMetadata = {
-			dose: completion.dose ?? null,
-			// The settled drink weight from the core's `ShotMetricsAccumulator`
-			// (post-drip "cup at rest"), delivered on `Event::ShotCompleted`.
-			// Persisting it is what lets the exporter report the settled weight
-			// to Visualizer instead of the mid-drip stop-moment sample, and keeps
-			// the app's own displayed yield in agreement (geota/crema#64). Android
-			// already routed `final_weight → yieldOut`; web dropped it until now.
-			yieldOut: completion.finalWeight ?? null,
-			rating: null,
-			notes: null,
-			nextPlan: null,
-			...(completion.barista?.trim() ? { barista: completion.barista.trim() } : {}),
-			// Same number formatting as the history grind stepper's commit.
-			...(completion.grindSetting != null
-				? {
-						grinderSetting: Number.isInteger(completion.grindSetting)
-							? String(completion.grindSetting)
-							: completion.grindSetting.toFixed(1)
-					}
-				: {})
-		};
-		const record: StoredShot = {
-			formatVersion: STORED_SHOT_FORMAT_VERSION,
-			id: shotId(),
-			completedAt: Date.now(),
-			profileName: completion.profileName,
-			profile: completion.profile ?? null,
-			metadata,
-			record: {
-				duration: completion.duration,
-				samples
-			},
-			bean: completion.bean,
-			grinderModel: completion.grinderModel,
-			yieldTarget: completion.yieldTarget ?? null,
-			brewTempTarget: completion.brewTemp ?? null,
-			preinfuseTarget: completion.preinfuseTarget ?? null,
-			stopOnWeight: completion.stopOnWeight,
-			autoTare: completion.autoTare,
-			tags: completion.tags ? [...completion.tags] : [],
-			...(completion.machine ? { machine: { ...completion.machine } } : {})
-		};
+	recordCaptured(shot: Record<string, unknown>): StoredShot | null {
+		const record = coerceStoredShot(shot);
+		if (!record || record.record.samples.length === 0) return null;
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
 		// The series row rides IndexedDB (review #27) — fire-and-forget
 		// with a surface, like the capture store.
-		void putSeries(record.id, samples).catch(seriesSaveFailed);
+		void putSeries(record.id, record.record.samples).catch(seriesSaveFailed);
 		return record;
 	}
 
