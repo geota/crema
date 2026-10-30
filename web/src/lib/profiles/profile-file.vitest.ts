@@ -110,10 +110,7 @@ describe('one profile-file entry point (AC-F12.7, web)', () => {
 		expect(filesWith(/wasmImportProfileFile|wasmExportProfileFile/)).toEqual([
 			'lib/profiles/profile-file.ts'
 		]);
-		// The Profiles page parses nothing itself.
-		const page = readFileSync(path.join(SRC, 'routes/profiles/+page.svelte'), 'utf-8');
-		expect(page).toMatch(/importProfileFiles\(/);
-		expect(page).toMatch(/exportProfileFile\(/);
-		expect(page).not.toMatch(/JSON\.(parse|stringify)|\.split\(/);
+		// The Profiles page's buttons are checked by behaviour in
+		// `routes/profiles/page-export.vitest.ts`.
 	});
 });

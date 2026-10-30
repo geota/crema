@@ -86,6 +86,25 @@ class ProfileFileCrossShellTest {
         assertTrue(all.all { it.startsWith("{\"title\":") })
     }
 
+    /** The text the share sheet was handed by the last share. */
+    private fun sharedText(): String {
+        val chooser = org.robolectric.Shadows.shadowOf(VmHarness.app()).nextStartedActivity
+            ?: error("nothing was shared")
+        @Suppress("DEPRECATION")
+        val send = chooser.getParcelableExtra<android.content.Intent>(android.content.Intent.EXTRA_INTENT)!!
+        return send.getStringExtra(android.content.Intent.EXTRA_TEXT)!!
+    }
+
+    @Test
+    fun `f12_6 sharing one profile hands out the core's file`() {
+        val vm = build()
+        pickAndImport(vm, "android-profiles.json", fixture("profiles/android-profiles.json"))
+        val mine = customs(vm).single { it.name == "My 7g" }
+        vm.exportProfile(mine.id)
+        VmHarness.idle()
+        assertEquals(fixture("profiles/crema-profile.json"), sharedText())
+    }
+
     @Test
     fun `f12_1 a de1app tcl and a backup import on Android too`() {
         val vm = build()

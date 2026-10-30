@@ -21,6 +21,9 @@
 //! `Built-in` tag dropped, not pinned, never used) and has its brew temperature
 //! derived from its first step (F6). A profile of more than 20 steps is an
 //! error, never truncated. Errors are per item: the rest of the file imports.
+//! A broken multi-line JSON document is one error (with its line and column),
+//! text that is neither JSON nor a de1app profile is "not a profile file", and
+//! at most [`MAX_REPORTED_ERRORS`] errors are listed, plus a count of the rest.
 //!
 //! **Export** writes community v2: one profile pretty-printed, several as JSON
 //! lines. The library metadata v2 has no field for (tags, roast, stop on
@@ -46,6 +49,21 @@ const BUILTIN_TAG: &str = "Built-in";
 
 /// The key of Crema's extension object in an exported v2 profile.
 const CREMA_KEY: &str = "crema";
+
+/// The most errors one import reports; the rest are counted in one more.
+pub const MAX_REPORTED_ERRORS: usize = 20;
+
+/// What an import says of text that is neither JSON nor a de1app profile.
+const NOT_A_PROFILE_FILE: &str = "not a profile file";
+
+/// Keys of a de1app `.tcl` profile (`profile.tcl` `read_legacy`): a file
+/// naming none of them isn't one.
+const TCL_PROFILE_KEYS: [&str; 4] = [
+    "profile_title",
+    "settings_profile_type",
+    "advanced_shot",
+    "espresso_pressure",
+];
 
 /// What [`import_profile_file`] read from a file. Not shared through
 /// typeshare (the shells have their own `CremaProfile` types); each shell
@@ -86,7 +104,13 @@ pub fn import_profile_file(text: &str) -> ProfileFileImport {
                 }
             }
             Ok(item) => out.json_item(None, item, false),
-            // Not one JSON document: JSON lines.
+            // Not one JSON document: JSON lines — unless no line is an object
+            // on its own, which makes it one broken multi-line document (a
+            // pretty-printed profile with a typo): one error, with its line
+            // and column.
+            Err(e) if text.starts_with('{') && !some_line_is_a_json_object(text) => {
+                out.error(None, format!("not valid JSON: {e}"));
+            }
             Err(_) if text.starts_with('{') => {
                 for (i, line) in text.lines().enumerate() {
                     let line = line.trim();
@@ -104,6 +128,11 @@ pub fn import_profile_file(text: &str) -> ProfileFileImport {
     } else {
         match import_legacy_tcl(text) {
             Ok(wire) => out.profile(from_wire(&wire)),
+            // Text that names none of de1app's profile keys is not a failed
+            // TCL profile but some other file.
+            Err(_) if !looks_like_tcl_profile(text) => {
+                out.error(None, NOT_A_PROFILE_FILE.to_owned());
+            }
             Err(e) => out.error(None, e.to_string()),
         }
     }
@@ -187,6 +216,26 @@ fn apply_extension(p: &mut CremaProfile, ext: &Map<String, Value>) {
     }
 }
 
+/// Whether some line of `text` is a JSON object by itself: true of JSON lines
+/// (even with a bad line), false of a pretty-printed document, whose lines
+/// are fragments.
+fn some_line_is_a_json_object(text: &str) -> bool {
+    text.lines().any(|l| {
+        matches!(
+            serde_json::from_str::<Value>(l.trim()),
+            Ok(Value::Object(_))
+        )
+    })
+}
+
+/// Whether `text` names one of the keys every de1app `.tcl` profile carries.
+fn looks_like_tcl_profile(text: &str) -> bool {
+    TCL_PROFILE_KEYS.iter().any(|key| {
+        text.lines()
+            .any(|line| line.trim_start().split_whitespace().next() == Some(key))
+    })
+}
+
 /// A 0-based position as the 1-based item number a user sees.
 fn index(i: usize) -> u32 {
     u32::try_from(i.saturating_add(1)).unwrap_or(u32::MAX)
@@ -198,6 +247,8 @@ struct Importer {
     result: ProfileFileImport,
     /// Profiles past [`MAX_PROFILES_PER_FILE`] (reported once, at the end).
     over_cap: usize,
+    /// Errors past [`MAX_REPORTED_ERRORS`] (counted once, at the end).
+    more_errors: usize,
 }
 
 impl Importer {
@@ -277,18 +328,28 @@ impl Importer {
     }
 
     fn error(&mut self, item: Option<u32>, message: String) {
-        self.result.errors.push(ProfileFileError { item, message });
+        if self.result.errors.len() < MAX_REPORTED_ERRORS {
+            self.result.errors.push(ProfileFileError { item, message });
+        } else {
+            self.more_errors += 1;
+        }
     }
 
     fn finish(mut self) -> ProfileFileImport {
+        if self.more_errors > 0 {
+            self.result.errors.push(ProfileFileError {
+                item: None,
+                message: format!("and {} more", self.more_errors),
+            });
+        }
         if self.over_cap > 0 {
-            self.error(
-                None,
-                format!(
+            self.result.errors.push(ProfileFileError {
+                item: None,
+                message: format!(
                     "{} more profiles were not imported: a file holds at most {MAX_PROFILES_PER_FILE}",
                     self.over_cap
                 ),
-            );
+            });
         }
         self.result
     }
@@ -472,6 +533,18 @@ mod tests {
             assert_eq!(import.errors.len(), 1, "{text:?}");
             assert!(!import.errors[0].message.is_empty());
         }
+        // Plain text is not a profile file, not a profile "with no steps";
+        // a broken de1app profile still gets the TCL reason.
+        assert_eq!(
+            import_profile_file("hello world {").errors[0].message,
+            "not a profile file"
+        );
+        assert_eq!(
+            import_profile_file("profile_title Mine\nsettings_profile_type settings_2c\n").errors
+                [0]
+            .message,
+            ImportError::NoSteps.to_string()
+        );
         // A bad JSON line names its line; the rest imports.
         let mut lines: Vec<String> = fixture("profiles/web-profiles.jsonl")
             .lines()
@@ -572,6 +645,40 @@ mod tests {
         }
         assert_eq!(one, fixture("profiles/crema-profile.json"));
         assert_eq!(many, fixture("profiles/crema-profiles.jsonl"));
+    }
+
+    /// A pretty-printed profile with a typo is one broken document: one
+    /// error with its line and column, not one per line.
+    #[test]
+    fn a_broken_multi_line_document_is_one_error() {
+        let broken = fixture("profiles/web-profile.json").replacen("\"notes\":", "\"notes\"", 1);
+        let import = import_profile_file(&broken);
+        assert_eq!(import.profiles, vec![]);
+        assert_eq!(import.errors.len(), 1, "{:?}", import.errors);
+        let message = &import.errors[0].message;
+        assert!(message.contains("line 3 column"), "{message}");
+        // JSON lines with a bad line still report that line alone.
+        let lines = fixture("profiles/web-profiles.jsonl").replacen("\"notes\":", "\"notes\"", 1);
+        let import = import_profile_file(&lines);
+        assert_eq!((import.profiles.len(), import.errors.len()), (2, 1));
+        assert_eq!(import.errors[0].item, Some(1));
+    }
+
+    /// At most [`MAX_REPORTED_ERRORS`] errors are listed, then a count.
+    #[test]
+    fn the_error_list_is_capped() {
+        let good = fixture("profiles/web-profiles.jsonl")
+            .lines()
+            .next()
+            .unwrap()
+            .to_owned();
+        let mut lines = vec![good];
+        lines.extend((0..MAX_REPORTED_ERRORS + 10).map(|_| r#"{"name":"x"}"#.to_owned()));
+        let import = import_profile_file(&lines.join("\n"));
+        assert_eq!(import.profiles.len(), 1);
+        assert_eq!(import.errors.len(), MAX_REPORTED_ERRORS + 1);
+        assert_eq!(import.errors[MAX_REPORTED_ERRORS - 1].item, Some(21));
+        assert_eq!(import.errors[MAX_REPORTED_ERRORS].message, "and 10 more");
     }
 
     #[test]

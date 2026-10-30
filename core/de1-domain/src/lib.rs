@@ -251,8 +251,8 @@ pub use profile::{
     ProfileStep, Pump, TempSensor, Transition,
 };
 pub use profile_file::{
-    MAX_PROFILES_PER_FILE, ProfileFileError, ProfileFileImport, export_profile_file,
-    export_profile_file_json, import_profile_file, import_profile_file_json,
+    MAX_PROFILES_PER_FILE, MAX_REPORTED_ERRORS, ProfileFileError, ProfileFileImport,
+    export_profile_file, export_profile_file_json, import_profile_file, import_profile_file_json,
 };
 pub use profile_fingerprint::profile_fingerprint;
 pub use profile_import::{
