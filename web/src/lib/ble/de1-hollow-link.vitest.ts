@@ -25,7 +25,17 @@ vi.mock('#lib/services/de1-orchestrator.js', async (importOriginal) => {
 });
 vi.mock('#lib/wasm/de1_wasm.js', () => ({ de1WriteTargetUuid: () => null }));
 vi.mock('./de1-uuids', () => ({
-	De1Uuids: { SERVICE: 'a000', STATE_INFO: 'a00e', FW_MAP_REQUEST: 'a009' }
+	De1Uuids: { SERVICE: 'a000', STATE_INFO: 'a00e', FW_MAP_REQUEST: 'a009' },
+	// The wasm bundle is mocked out, so the core's identity table is stood in
+	// for by the registers this test checks.
+	connectIdentityRegisters: () => [
+		'FirmwareVersion',
+		'MachineModel',
+		'GhcInfo',
+		'SerialNumber',
+		'HeaterVoltage'
+	],
+	de1NotificationSource: () => null
 }));
 
 import { De1Manager } from './de1';

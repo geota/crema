@@ -104,4 +104,7 @@ class SwitchableBleTransport(initial: BleTransport) : BleTransport {
 
     override suspend fun rearmNotifications(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID) =
         current.rearmNotifications(device, service, characteristic)
+
+    override suspend fun enableNotifications(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID) =
+        current.enableNotifications(device, service, characteristic)
 }
