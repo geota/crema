@@ -531,14 +531,18 @@ class ProxyControllerModeTest {
 
         controller.holdRefind(true)
         controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
-        advance(REFIND_DELAY_MS * 4)
+        advance(1_000)
         assertEquals("127.0.0.1:12", dials().last(), "no go-back while held")
         assertEquals(switches, events.count { it == "teardown" }, "no switch at all while held")
         assertEquals("secondary", controller.state.value.role)
 
+        // Released before the attempt's deadline: the refusal itself ends it.
         controller.holdRefind(false)
         advance(200)
         assertEquals("127.0.0.1:9", dials().last(), "the release goes back to the saved target")
+        // Counted once: the first back-off (5 s), then the port again.
+        advance(REFIND_BACKOFF_MS[0] + 200)
+        assertEquals("127.0.0.1:12", dials().last(), "one refusal, the first back-off: ${dials()}")
     }
 
     /** The same for an attempt that only times out, and for a re-find switch
