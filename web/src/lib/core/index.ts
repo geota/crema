@@ -611,6 +611,12 @@ export interface CremaCore {
 	 */
 	setWaterWarnMl(warnMl: number | undefined): Promise<void>;
 	/**
+	 * Latch every settings-driven core input from a `CommonSettings` JSON in
+	 * one call — auto-tare, stop-on-weight, volume stop, max shot duration,
+	 * weight unit, low-water threshold. The core sanitizes the blob first.
+	 */
+	applyCommonSettings(settingsJson: string): Promise<void>;
+	/**
 	 * Tell the core which profile is active — `profileJson` is the wire
 	 * `Profile` JSON (`JSON.stringify(toCoreProfile(p))`); `undefined` = no
 	 * active profile. Latches the
@@ -1289,6 +1295,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setWaterWarnMl(warnMl) {
 			bridge.set_water_warn_ml(warnMl);
+		},
+		async applyCommonSettings(settingsJson) {
+			bridge.applyCommonSettings(settingsJson);
 		},
 		async setActiveProfile(profileJson) {
 			bridge.setActiveProfile(profileJson);
