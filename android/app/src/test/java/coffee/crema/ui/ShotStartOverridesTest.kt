@@ -21,6 +21,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * F6 validation, Android: the shot start uploads the dialled profile (a start
@@ -81,6 +82,8 @@ class ShotStartOverridesTest {
         VmHarness.idle()
         assertEquals(dial.anchor + 2, vm.ui.value.brewParams?.brewTemp)
         val bridge = bridgeOf(vm)
+        // An idle machine: the core refuses a start with no machine state.
+        bridge.onNotification(coffee.crema.core.NotificationSource.DE1_STATE, byteArrayOf(2, 0), 0uL)
         vm.startShot()
         val profileJson = builtinJson(active.id)
         val dialled = effectiveProfileFingerprint(profileJson, vm.ui.value.brewParams.overridesJson(json))
@@ -92,9 +95,8 @@ class ShotStartOverridesTest {
         drainCoreLane(vm)
         val status = json.decodeFromString(ProfileSyncStatus.serializer(), bridge.profileSyncStatus())
         assertEquals(dialled, status.desired)
-        val waitsFor = MainViewModel::class.java.declaredFields.single { it.name == "pendingBrewFingerprint" }
-            .apply { isAccessible = true }.get(vm)
-        assertEquals(dialled, waitsFor, "the start waits for the dialled profile, not the bare one")
+        // The core's start is waiting for the DE1 to hold exactly that (F16).
+        assertTrue(bridge.shotStarting(), "the start waits for the dialled profile")
     }
 
     /** Wait for every task already queued on the VM's single-threaded core

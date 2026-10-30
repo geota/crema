@@ -569,6 +569,7 @@ fun PhoneDevicesSheet(
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onConnectDirectly: () -> Unit,
+    onPairAgain: () -> Unit,
     onDismiss: () -> Unit,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -587,6 +588,7 @@ fun PhoneDevicesSheet(
             onMirrorFrom = onMirrorFrom,
             onStopMirroring = onStopMirroring,
             onConnectDirectly = onConnectDirectly,
+            onPairAgain = onPairAgain,
             onRetry = onRetry,
             modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(bottom = 20.dp),
         )
@@ -607,6 +609,7 @@ fun DevicesPanel(
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onConnectDirectly: () -> Unit,
+    onPairAgain: () -> Unit,
     modifier: Modifier = Modifier,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -707,7 +710,7 @@ fun DevicesPanel(
                 Spacer(Modifier.width(9.dp))
                 Text("Scan for devices", style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold))
             }
-            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onConnectDirectly)
+            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onConnectDirectly, onPairAgain)
             Text(
                 "Acaia, Bookoo, Decent, Felicita and more pair automatically.",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
@@ -731,6 +734,7 @@ fun TabletDevicesSheet(
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onConnectDirectly: () -> Unit,
+    onPairAgain: () -> Unit,
     onDismiss: () -> Unit,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -750,6 +754,7 @@ fun TabletDevicesSheet(
             onMirrorFrom = onMirrorFrom,
             onStopMirroring = onStopMirroring,
             onConnectDirectly = onConnectDirectly,
+            onPairAgain = onPairAgain,
             onRetry = onRetry,
             modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(top = 2.dp, bottom = 10.dp),
         )
@@ -770,6 +775,7 @@ fun DevicesPanelWide(
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onConnectDirectly: () -> Unit,
+    onPairAgain: () -> Unit,
     modifier: Modifier = Modifier,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -878,7 +884,7 @@ fun DevicesPanelWide(
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onConnectDirectly, showHeader = false)
+                    MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onConnectDirectly, onPairAgain, showHeader = false)
                 }
             }
         }

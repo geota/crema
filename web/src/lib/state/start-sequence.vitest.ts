@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CremaCore } from '#lib/core/index.js';
 import type { CoreOutput } from '#lib/core/crema-core.js';
 import { MachineState } from '#lib/core/crema-core.js';
-import { NOT_STARTED_NOTICE, StartSequence } from './start-sequence';
+/** The core's `StartEnd::NotEntered` sentence. */
+const NOT_STARTED_NOTICE = 'The machine didn’t start the shot — start it on the machine';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 
 // DE1 state bytes (de1_protocol::MachineState).
@@ -21,7 +22,7 @@ const POURING = 5;
 
 interface App {
 	state: { current: { shotStarting: boolean; eventLog: readonly unknown[] } };
-	startShot(): Promise<void>;
+	startShot(qc?: { yield?: number }): Promise<void>;
 	stopShot(): Promise<void>;
 	requestMachineState(state: MachineState): Promise<void>;
 }
@@ -34,9 +35,16 @@ interface Harness {
 	/** The DE1 reports `state` / `substate`. */
 	report(state: number, substate?: number): Promise<void>;
 	onState(state: string): void;
+	/** Apply a core output the way the app does. */
+	apply(out: CoreOutput): void;
 }
 
-async function harness(opts: { preFlush: boolean; autoPurge?: boolean }): Promise<Harness> {
+async function harness(opts: {
+	preFlush: boolean;
+	autoPurge?: boolean;
+	stopOnWeight?: boolean;
+	requireScale?: boolean;
+}): Promise<Harness> {
 	const { loadCore } = await import('#lib/core/index.js');
 	const { CremaApp } = await import('#lib/state/app.svelte.js');
 	const { De1Manager } = await import('#lib/ble/index.js');
@@ -64,7 +72,8 @@ async function harness(opts: { preFlush: boolean; autoPurge?: boolean }): Promis
 	if (!profile) throw new Error('no built-in profile');
 	profiles.setActive(profile.id);
 	const settings = getSettingsStore();
-	settings.set('stopOnWeight', false);
+	settings.set('stopOnWeight', opts.stopOnWeight ?? false);
+	settings.set('requireScale', opts.requireScale ?? false);
 	settings.set('groupFlushBeforeShot', opts.preFlush);
 	settings.set('autoPurgeAfterSteam', opts.autoPurge ?? false);
 	const h: Harness = {
@@ -77,7 +86,8 @@ async function harness(opts: { preFlush: boolean; autoPurge?: boolean }): Promis
 			);
 			await vi.advanceTimersByTimeAsync(0);
 		},
-		onState: (s) => internals.de1.callbacks.onState(s)
+		onState: (s) => internals.de1.callbacks.onState(s),
+		apply: (out) => internals.applyCoreOutput(out)
 	};
 	// The machine model (an upload waits for it), an Idle machine and a
 	// settled connection: the core's profile sync uploads the active profile,
@@ -91,6 +101,9 @@ async function harness(opts: { preFlush: boolean; autoPurge?: boolean }): Promis
 	internals.applyCoreOutput((await core.setDesiredProfile(profile, {}, performance.now())).output);
 	await vi.advanceTimersByTimeAsync(10);
 	if (!(await core.profileSyncStatus()).lastPushed) throw new Error('the profile did not land');
+	// Past the firmware's profile-download guard, which the core now holds
+	// state requests through (F16).
+	await vi.advanceTimersByTimeAsync(600);
 	requested.length = 0;
 	return h;
 }
@@ -209,6 +222,8 @@ describe('one owned shot start in the app (05 F2)', () => {
 		const start = h.app.startShot();
 		await settle();
 		await h.report(FLUSH);
+		// The DE1 manager tells the core the link dropped, then reports it.
+		h.apply(await h.core.de1LinkLost());
 		h.onState('disconnected');
 		await start;
 		await vi.advanceTimersByTimeAsync(60_000);
@@ -280,61 +295,71 @@ describe('PR #197 review fixes', () => {
 	});
 });
 
-describe('StartSequence', () => {
-	function sequence(state: { current: MachineState | null }) {
-		const changes: boolean[] = [];
-		const seq = new StartSequence(
-			() => state.current,
-			(a) => changes.push(a),
-			() => {}
+describe('the core runs the start (F16b, web)', () => {
+	it('require-scale refuses a shot that stops on weight: nothing written, Connect offered', async () => {
+		const action = vi.spyOn(toast, 'action');
+		const h = await harness({ preFlush: false, stopOnWeight: true, requireScale: true });
+		const { ScaleRequiredError } = await import('#lib/state/app.svelte.js');
+		// A Quick Controls yield of 0 falls back to the profile's yield, as
+		// the stop-at-weight does: the check runs (it used to be skipped).
+		await expect(h.app.startShot({ yield: 0 })).rejects.toBeInstanceOf(ScaleRequiredError);
+		expect(h.requested).toEqual([]);
+		expect(action.mock.calls.some(([, label]) => label === 'Connect')).toBe(true);
+		expect(h.app.state.current.shotStarting).toBe(false);
+	});
+
+	it('without require-scale the start runs with a non-blocking notice', async () => {
+		const action = vi.spyOn(toast, 'action');
+		const h = await harness({ preFlush: false, stopOnWeight: true });
+		const start = h.app.startShot();
+		await settle();
+		expect(action.mock.calls.some(([m]) => String(m).startsWith('No scale connected'))).toBe(true);
+		expect(h.requested).toEqual([ESPRESSO]);
+		await h.report(ESPRESSO, POURING);
+		await start;
+	});
+
+	it('a shot started on the machine shows the skipped checks until the shot ends', async () => {
+		const action = vi.spyOn(toast, 'action');
+		const h = await harness({ preFlush: true });
+		await settle();
+		await h.report(ESPRESSO, POURING);
+		const banner = action.mock.calls.find(([m]) => String(m).includes('pre-shot flush'));
+		expect(banner, 'the group-head banner').toBeDefined();
+		expect(banner![3], 'pinned until the shot ends or a tap').toBe(0);
+		expect(h.requested, 'it writes nothing').toEqual([]);
+	});
+
+	it('an app start shows no group-head banner', async () => {
+		const action = vi.spyOn(toast, 'action');
+		const h = await harness({ preFlush: false });
+		const start = h.app.startShot();
+		await settle();
+		await h.report(ESPRESSO, POURING);
+		await start;
+		expect(action.mock.calls.some(([m]) => String(m).includes('Started on the machine'))).toBe(false);
+	});
+});
+
+describe('one start implementation (AC-F16.8, web)', () => {
+	it('no shell code runs its own start sequence, purge or guard', async () => {
+		const { readdirSync, readFileSync, statSync } = await import('node:fs');
+		const path = await import('node:path');
+		const src = path.resolve('src');
+		const files = (dir: string): string[] =>
+			readdirSync(dir).flatMap((name) => {
+				const full = path.join(dir, name);
+				if (statSync(full).isDirectory()) return name === 'wasm' ? [] : files(full);
+				if (!/\.(ts|svelte)$/.test(name) || /\.(vitest|test)\.ts$/.test(name) || name === 'crema-core.ts') return [];
+				return [full];
+			});
+		const offenders = files(src).filter((f) =>
+			/StartSequence|StartToken|scheduleAutoPurge|rinsePending|profileDownloadGuard|PRESHOT_FLUSH_TIMEOUT_MS/.test(
+				readFileSync(f, 'utf-8')
+			)
 		);
-		return { seq, changes };
-	}
-
-	it('one start at a time, none while a shot runs', () => {
-		const state = { current: MachineState.Idle as MachineState | null };
-		const { seq, changes } = sequence(state);
-		const a = seq.begin();
-		expect(a).not.toBeNull();
-		expect(seq.begin()).toBeNull();
-		seq.end(a!);
-		expect(changes).toEqual([true, false]);
-		state.current = MachineState.Espresso;
-		expect(seq.begin()).toBeNull();
-	});
-
-	it('a cancel wakes the waiter and leaves the token dead', async () => {
-		vi.useFakeTimers();
-		const { seq } = sequence({ current: MachineState.Idle });
-		const a = seq.begin()!;
-		const waited = a.waitFor(() => a.flushEnded, 30_000);
-		seq.cancel();
-		await expect(waited).resolves.toBe(true);
-		expect(seq.isLive(a)).toBe(false);
-		// An old token can't end a newer start.
-		const b = seq.begin()!;
-		seq.end(a);
-		expect(seq.isLive(b)).toBe(true);
-	});
-
-	it('only a flush that started after arming releases the waiter', () => {
-		const { seq } = sequence({ current: MachineState.Idle });
-		const a = seq.begin()!;
-		seq.onFlushCompleted(); // a stray completion before arming
-		expect(a.flushEnded).toBe(false);
-		a.flushArmed = true;
-		seq.onFlushCompleted(); // armed, but this flush began earlier
-		expect(a.flushEnded).toBe(false);
-		seq.onFlushStarted();
-		seq.onFlushCompleted();
-		expect(a.flushEnded).toBe(true);
-	});
-
-	it('Espresso before our request means a machine start: the app start stands down', () => {
-		const { seq } = sequence({ current: MachineState.Idle });
-		const a = seq.begin()!;
-		seq.onMachineState(MachineState.Espresso);
-		expect(seq.isLive(a)).toBe(false);
-		expect(seq.active).toBe(false);
+		expect(offenders.map((f) => path.relative(src, f))).toEqual([]);
+		const app = readFileSync(path.join(src, 'lib/state/app.svelte.ts'), 'utf-8');
+		expect(app).toMatch(/this\.core\.startShot\(/);
 	});
 });

@@ -13,6 +13,9 @@ import coffee.crema.core.ConnectSweepSettings
 import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
 import coffee.crema.core.ProfileSyncOutput
+import coffee.crema.core.StartPhase
+import coffee.crema.core.StartRefusal
+import coffee.crema.core.StartShotResult
 import coffee.crema.core.ProfileSyncStatus
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
@@ -177,8 +180,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     internal var dialDebounceContext: kotlin.coroutines.CoroutineContext = coreDispatcher
 
     /** Run [block] on the core lane, FIFO behind any queued event application.
-     *  Every write to lane-owned state ([pendingBrew],
-     *  [maintenanceTotalLitres]) goes through here or runs
+     *  Every write to lane-owned state ([maintenanceTotalLitres]) goes
+     *  through here or runs
      *  on the lane already: a plain Main-thread write is not ordered against a
      *  queued lane task (cohort review 2026-10-25, Android P2-3). */
     private fun onCoreLane(block: () -> Unit) {
@@ -226,43 +229,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         edit()
     }
-
-    /**
-     * Set when [startShot] waits for the DE1 to hold its profile before the
-     * Espresso request (the gated start): the core's profile sync is uploading
-     * it. Cleared on the matching `ProfileSyncHolds` (after firing Espresso), on
-     * `ProfileUploadFailed`, on the timeout, and on disconnect.
-     */
-    private var pendingBrew = false
-
-    /** The effective-profile fingerprint [pendingBrew] waits for. Lane-owned. */
-    private var pendingBrewFingerprint: String? = null
-
-    /** Which start armed [pendingBrew]: its backstop and its upload's
-     *  outcome act only on that start. Lane-owned, like [pendingBrew]. */
-    private var pendingBrewStart: ShotStartSequence.Start? = null
-
-    /**
-     * The one shot start in flight (05 F2): a second Start is refused while it
-     * runs, and a user's machine request (Stop above all) cancels it rather
-     * than letting the pre-flush release it to Espresso. Its writes go through
-     * [writeMachineState], so they don't cancel it.
-     */
-    private val startSequence: ShotStartSequence = ShotStartSequence(
-        scope = viewModelScope,
-        request = { state ->
-            // Records whether this shot came from Crema or from the machine's
-            // GHC — the distinction that hid geota/crema#56. Set at the
-            // Espresso request, so a start that was stopped first leaves the
-            // next (group-head) shot attributed to the machine.
-            if (state == MachineRequest.ESPRESSO) shotStartedByApp = true
-            writeMachineState(state)
-        },
-        machineState = { _ui.value.machineStateName },
-        onActiveChanged = { _ui.update { it.copy(shotStarting = startSequence.active) } },
-        log = ::appendLog,
-        notifyUser = ::notifyUser,
-    )
 
     /** Whether the low-battery snackbar fired for the current scale
      *  connection (issue #29) — reset in [clearScaleSessionUi] so the next
@@ -378,6 +344,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
         onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
+        networkWatcher = coffee.crema.visualizer.DefaultNetworkWatcher(app),
     )
 
     /**
@@ -528,6 +495,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /** The core's wake hint (`WakeAt`, F16): one one-shot tick on the core
+     *  lane, cancelled when the link goes or the app is backgrounded. */
+    private val wake by lazy {
+        WakeTimer(viewModelScope, { SystemClock.elapsedRealtime() }, { at ->
+            kotlinx.coroutines.withContext(coreDispatcher) {
+                applyCoreOutputJson(bridge.onTick(at.toULong()))
+            }
+        })
+    }
+
+    /** Test seam: a wake-up tick is pending. */
+    @androidx.annotation.VisibleForTesting
+    internal val wakePending: Boolean get() = wake.pending
 
     /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
     private val sweepRunner by lazy {
@@ -1476,15 +1457,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Moved up from their feature sections below, in their original order,
     // so that no property is declared after an `init` block.
 
-    /** The post-steam auto-purge (issue 15). Only the device holding the DE1
-     *  runs it, and it stands down for a pending shot start. */
-    private val autoPurge = AutoPurge(
-        scope = viewModelScope,
-        authoritative = { proxy.state.value.role != "secondary" },
-        startPending = { startSequence.active },
-        flush = { writeMachineState(MachineRequest.FLUSH) },
-    )
-
     /** Connect-time machine-info sweep (see [readMachineInfo]); cancelled on reconnect/disconnect. */
     private var machineInfoJob: kotlinx.coroutines.Job? = null
 
@@ -1678,12 +1650,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             proxy.state.collect { ps ->
                 // Relay v4's one-time notices (spec §6.3, §6.4), shown once each.
                 if (ps.keyResetNotice) {
-                    notifyUser("This device's pairing key was reset (for example after a restore). Pair it with your devices again.")
+                    notifyUser(KEY_RESET_COPY)
                     proxy.dismissKeyResetNotice()
-                }
-                if (ps.upgradeNotice && ps.role == "primary") {
-                    notifyUser("Crema updated how devices connect. Pair your phones again: Pair a device.")
-                    proxy.dismissUpgradeNotice()
                 }
                 _ui.update {
                     it.copy(
@@ -1694,8 +1662,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         pairingSecondsLeft = ps.pairingSecondsLeft,
                         pairingLockedSecondsLeft = ps.pairingLockedSecondsLeft,
                         // Relay v4: the pins are the paired devices (never persisted with the prefs).
-                        pairedDevices = ps.pairedRemotes.map { r -> PairedDevice(r.id, r.name, r.scope == "control") },
-                        pairedWithSecret = ps.pairedRemotes.map { r -> r.id }.toSet(),
+                        pairedDevices = ps.pairedRemotes.map { r -> PairedDevice(r.id, r.name, r.scope == "control", r.lastSeenMs) },
+                        remoteConnecting = ps.remoteConnecting,
                         pairedHubs = ps.pairedHubs,
                         relayPairing = ps.pairing,
                         relayKeysUnavailable = ps.relayKeysUnavailable,
@@ -1739,6 +1707,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var wasReady = false
             ble.state.collect { st ->
                 coreTicker.onLinkState(st)
+                // Nothing the core waited for applies to a link that is gone
+                // (the BLE manager resets the core on a drop).
+                if (st != De1BleManager.State.READY) wake.cancel()
                 val ready = st == De1BleManager.State.READY
                 if (ready && !wasReady) firmware.onLinkRestored(ble.connectedAddress)
                 if (!ready && wasReady) firmware.onLinkLost()
@@ -1795,6 +1766,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             pushStopTargets()
             loadMaintenance()
             visualizer.load()
+            // Uploads that failed last time retry now (F17).
+            visualizer.drainSoon()
             // Daily Visualizer Premium check (gates the edit sync's Premium-only fields).
             visualizer.refreshPremiumIfStale()
             decent.load()
@@ -2363,6 +2336,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             qcSteamTempC = p.qcSteamTempC,
             qcHotWaterTempC = p.qcHotWaterTempC,
             qcHotWaterVolumeMl = p.qcHotWaterVolumeMl,
+            qcHotWaterMode = p.qcHotWaterMode,
+            qcHotWaterTimeS = p.qcHotWaterTimeS,
+            qcHotWaterTimeNoLimit = p.qcHotWaterTimeNoLimit,
+            qcHotWaterRatio = p.qcHotWaterRatio,
             qcFlushTimeS = p.qcFlushTimeS,
             qcFlushTempC = p.qcFlushTempC,
             qcGrind = p.qcGrind,
@@ -2441,115 +2418,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun startShot() = machine.execute(MachineCommand.StartShot)
 
     /** [startShot]'s body on the device holding the machine (also a mirror's
-     *  relayed start): refused, with the reason for whoever asked, when a shot
-     *  can't start. */
+     *  relayed start): the core runs the whole start (F16, `shot_start.rs`) —
+     *  the profile sync wait, the firmware's profile-download guard, the
+     *  optional pre-flush and Espresso — and refuses one that can't start,
+     *  with the reason for whoever asked. */
     private fun applyStartShot(): CommandOutcome {
-        // One start at a time (05 F2): a second chain's late Espresso request
-        // would land mid-shot. Stop is how to end or cancel either.
-        if (startSequence.active) return CommandOutcome.Refused("A shot is already starting")
-        if (_ui.value.machineStateName == MachineState.Espresso) return CommandOutcome.Refused("A shot is already running")
-        val cremaJson = _ui.value.activeProfileId?.let { library.profileJson(it) }
-            ?: return CommandOutcome.Refused("Can\u2019t start shot \u2014 no profile selected")
-        // Pre-shot scale gate (issue #29). Only when this shot actually
-        // resolves a weight target (QC dial override, else the active
-        // profile's own yield \u2014 the same precedence pushStopTargets uses): a
-        // profile with no target never needed a scale, so it gets no noise
-        // (the Decenza/reaprime "profile uses weight" gate).
         val s = _ui.value
-        val activeProfile = s.profiles.firstOrNull { it.id == s.activeProfileId }
-        // A profile saved before the DE1's 20-step limit can't upload: say
-        // what to change instead of failing the upload (cohort review
-        // 2026-10-28, #6 #6).
-        activeProfile?.let { coffee.crema.profiles.StepCap.refusal(it.name, it.segments.size) }?.let {
-            return CommandOutcome.Refused(it)
-        }
-        val weightTarget = s.brewParams?.yieldOut?.toFloat()?.takeIf { it.isFinite() && it > 0f }
-            ?: activeProfile?.yieldOut?.takeIf { it.isFinite() && it > 0f }
-        if (s.stopOnWeight && weightTarget != null && s.scaleState != ScaleBleManager.State.READY) {
-            val remembered = connection.state.value.rememberedScaleAddress != null
-            if (remembered) connection.kickScaleReconnect()
-            if (s.requireScale) {
-                // Opt-in hard block (de1app `start_espresso_only_if_scale_connected`
-                // / reaprime `blockOnNoScale` \u2014 both also default off). The DE1
-                // is left untouched; the reconnect kick above may make the next
-                // attempt succeed.
-                return CommandOutcome.Refused(
-                    if (remembered) "Shot not started \u2014 reconnecting the scale\u2026 try again in a moment"
-                    else "Shot not started \u2014 no scale connected, and \u201cRequire scale to start\u201d is on"
-                )
-            }
-            // Default: NON-blocking cue \u2014 a modal between the user and a
-            // tamped puck is workflow poison. The #15 fix arms SAW mid-shot,
-            // so a quick reconnect can still save this very shot.
-            notifyUser(
-                if (remembered) "Scale not connected \u2014 reconnecting\u2026 stop-at-weight is off until it lands"
-                else "No scale connected \u2014 stop-at-weight is off for this shot"
+        val cremaJson = s.activeProfileId?.let { library.profileJson(it) }
+            ?: return CommandOutcome.Refused("Can\u2019t start shot \u2014 no profile selected")
+        // The core's stop targets and flags are current before the shot arms
+        // its AutoStop (a profile restored at startup never went through
+        // setActiveProfile; a DE1 reconnect re-created the core).
+        pushStopTargets()
+        runCatching { bridge.setAutoTare(s.autoTare) }
+            .onFailure { appendLog("Re-assert auto-tare failed: ${it.message}") }
+        runCatching { bridge.setStopOnWeight(s.stopOnWeight) }
+            .onFailure { appendLog("Re-assert stop-on-weight failed: ${it.message}") }
+        runCatching { bridge.setVolumeStopWithScale(s.volumeStopWithScale) }
+            .onFailure { appendLog("Re-assert volume-stop-with-scale failed: ${it.message}") }
+        pushStartSettings(s)
+        // The start's own push supersedes a dial push still settling.
+        desiredPushJob?.cancel()
+        val result = runCatching {
+            json.decodeFromString(
+                StartShotResult.serializer(),
+                bridge.startShot(cremaJson, s.brewParams.overridesJson(json), SystemClock.elapsedRealtime().toULong()),
             )
+        }.getOrElse {
+            appendLog("Start shot failed: ${it.message}")
+            return CommandOutcome.Refused("Can\u2019t start shot \u2014 profile conversion failed")
         }
-        val start = startSequence.begin()
-            ?: return CommandOutcome.Refused(if (startSequence.active) "A shot is already starting" else "A shot is already running")
-        // The heavy chain below — several bridge calls including the full
-        // profile-frame build in Rust — runs on the core lane instead of
-        // the Main tap handler (review #28).
-        viewModelScope.launch(coreDispatcher) { startShotOnCoreLane(cremaJson, start) }
-        return CommandOutcome.Accepted
+        onCoreLane { applyCoreOutput(result.output) }
+        if (result.accepted) return CommandOutcome.Accepted
+        val remembered = connection.state.value.rememberedScaleAddress != null
+        if (result.refusal is StartRefusal.ScaleRequired && remembered) {
+            // The reconnect kick may make the next attempt succeed.
+            connection.kickScaleReconnect()
+            return CommandOutcome.Refused("Shot not started \u2014 reconnecting the scale\u2026 try again in a moment")
+        }
+        return CommandOutcome.Refused(result.message ?: "Shot not started")
     }
 
-    private fun startShotOnCoreLane(cremaJson: String, start: ShotStartSequence.Start) {
-        // Stopped before the lane got to it.
-        if (!startSequence.isLive(start)) return
-        // Make sure the core's stop-at-weight / volume targets are current before
-        // the shot arms its AutoStop \u2014 covers a profile restored at startup that
-        // never went through setActiveProfile (otherwise SAW silently never arms).
-        pushStopTargets()
-        // Re-assert the auto-tare / stop-on-weight flags from the saved setting on
-        // every shot, for the same reason as pushStopTargets above: bridge.reset()
-        // on a DE1 reconnect re-creates the core (CremaCore::new) back to its
-        // defaults, and nothing else re-applies these flags — so without this a
-        // reconnect could silently drop the user's choice before the next shot.
-        // The UI state + prefs already hold the truth; the core just needs to
-        // match it at shot time (direct bridge calls, like pushStopTargets).
-        runCatching { bridge.setAutoTare(_ui.value.autoTare) }
-            .onFailure { appendLog("Re-assert auto-tare failed: ${it.message}") }
-        runCatching { bridge.setStopOnWeight(_ui.value.stopOnWeight) }
-            .onFailure { appendLog("Re-assert stop-on-weight failed: ${it.message}") }
-        runCatching { bridge.setVolumeStopWithScale(_ui.value.volumeStopWithScale) }
-            .onFailure { appendLog("Re-assert volume-stop-with-scale failed: ${it.message}") }
-        // The shot's profile — the library profile with the Quick-Controls
-        // override, applied by the core — becomes the desired one. The core's
-        // profile sync uploads it unless this connection already pushed it
-        // (issue 11's skip, now the core's), and the start waits for it.
-        val status = setDesiredOnLane(cremaJson, _ui.value.brewParams.overridesJson(json)) ?: run {
-            startSequence.end(start)
-            notifyUser("Can\u2019t start shot \u2014 profile conversion failed")
-            return
-        }
-        if (status.holdsDesired()) {
-            appendLog("Profile already on the DE1 \u2014 no upload")
-            startSequence.proceed(start, _ui.value.preFlush)
-            return
-        }
-        // Set after the call's own output was applied; the upload's acks and
-        // its ProfileSyncHolds queue behind this lane task.
-        pendingBrew = true
-        pendingBrewStart = start
-        pendingBrewFingerprint = status.desired
-        // Backstop: if the DE1 does not confirm the profile in time, end the
-        // start so the UI doesn't hang in "uploading" (the core keeps retrying
-        // on its own). On the core lane so pendingBrew stays single-threaded.
-        viewModelScope.launch(coreDispatcher) {
-            delay(PROFILE_UPLOAD_TIMEOUT_MS)
-            if (pendingBrew && pendingBrewStart === start) {
-                pendingBrew = false
-                pendingBrewStart = null
-                pendingBrewFingerprint = null
-                val live = startSequence.end(start)
-                // A start that was stopped, or overtaken by a group-head
-                // shot, needs no toast (mid-shot it would be wrong).
-                if (live) notifyUser("Profile upload timed out \u2014 shot not started")
-                else appendLog("Profile upload timed out after its start was cancelled")
-            }
-        }
+    /** Latch the start settings (pre-shot flush, require-scale, post-steam
+     *  purge) in the core, which runs the start, the purge and the
+     *  group-head banner (F16). */
+    private fun pushStartSettings(s: MainUiState = _ui.value) {
+        runCatching { bridge.setStartSettings(s.preFlush, s.requireScale, s.steamPurge) }
+            .onFailure { appendLog("Set start settings failed: ${it.message}") }
     }
 
     /**
@@ -2630,14 +2545,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  values. Wired as [ConnectionController]'s onDe1SessionClosed. */
     private fun clearDe1SessionUi() {
         machineInfoJob?.cancel() // stop any in-flight connect-time register sweep
-        // A start never resumes on a later connection (Decenza cancels its
+        // A pending start ends in the core on the drop (Decenza cancels its
         // deferred start on disconnect too).
-        cancelStartSequence("disconnected")
-        onCoreLane {
-            pendingBrew = false
-            pendingBrewStart = null
-            pendingBrewFingerprint = null
-        }
         _ui.update { it.copy(
             machineState = null,
             machineStateName = null,
@@ -2941,7 +2850,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun pushCoreInputs(state: MainUiState) {
         // Every settings-driven core input in one call (auto-tare,
         // stop-on-weight, volume stop, max shot, weight unit, low-water
-        // threshold) — the core's apply_common_settings, as web does.
+        // threshold, and the start settings: pre-flush, require-scale,
+        // steam purge) — the core's apply_common_settings, as web does.
         runCatching { bridge.applyCommonSettings(json.encodeToString(CommonSettings.serializer(), state.commonSettings())) }
             .onFailure { appendLog("Apply settings to the core failed: ${it.message}") }
         pushStopTargets(state)
@@ -2982,8 +2892,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The hub's code dialog was cancelled. */
     fun cancelPairing() = proxy.cancelPairing()
 
-    /** Remote: pair with the hub at [host]:[port] ("Pair again"). */
+    /** Remote: pair with the hub at [host]:[port]. */
     fun pairWith(host: String, port: Int, label: String) = proxy.pairWith(host, port, label)
+
+    /** Remote: Pair again with the saved target (after the upgrade, or once
+     *  the hub couldn't be verified; spec §6.3, §6.4). */
+    fun pairAgain() = proxy.pairAgain()
 
     /** Remote: cancel the pairing in progress (the code sheet's Cancel). */
     fun cancelRemotePairing() = proxy.cancelRemotePairing()
@@ -3009,6 +2923,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Stop accepting new devices now. */
     fun closePairingWindow() = proxy.closePairingWindow()
 
+    /** Remote: connect through the pinned hub [hubId] (a superseded pin's explicit pick). */
+    fun connectToPinnedHub(hubId: String) = proxy.connectToPinnedHub(hubId)
+
     /** Remote: forget the hub [hubId] (it has to pair again). */
     fun forgetHub(hubId: String) = proxy.forgetHub(hubId)
 
@@ -3016,12 +2933,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  dropped and a live session ends now; it has to pair again to reconnect. */
     fun forgetPairedDevice(id: String) = proxy.forgetRemote(id)
 
-    /** A user's machine request (a control, or one relayed from a peer). It
-     *  cancels a pending shot start first (05 F2): a Stop, or another mode,
-     *  during the guard or the pre-flush must not end in Espresso. */
+    /** The Paired devices rows' actions, for both shells. */
+    internal fun relayPairingActions() = RelayPairingActions(
+        openWindow = ::openPairingWindow,
+        closeWindow = ::closePairingWindow,
+        forgetRemote = ::forgetPairedDevice,
+        forgetHub = ::forgetHub,
+        connectHub = ::connectToPinnedHub,
+        resetKey = ::resetPairingKey,
+        dismissUpgradeBanner = ::dismissUpgradeNotice,
+    )
+
+    /** A user's machine request (a control, or one relayed from a peer). The
+     *  core cancels a pending shot start with it (05 F2, F16): a Stop, or
+     *  another mode, during the sync or the pre-flush never ends in Espresso. */
     private fun applyMachineState(state: MachineRequest) {
         if (state == MachineRequest.SLEEP) markAppSleepRequest()
-        cancelStartSequence(state.name)
         writeMachineState(state)
     }
 
@@ -3031,13 +2958,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  that tapped, the primary that writes) mark it. */
     private fun markAppSleepRequest() {
         appSleepRequestedAtMs = SystemClock.elapsedRealtime()
-    }
-
-    /** Drop the pending shot start, if any. Its upload runs on, and the
-     *  upload hand-off stays armed so the backstop still ends a stuck one;
-     *  the hand-off's proceed is a no-op for a cancelled start. */
-    private fun cancelStartSequence(why: String) {
-        if (startSequence.cancel() != null) appendLog("Shot start cancelled ($why)")
     }
 
     /** The machine write behind [requestMachineState], also used by the shot
@@ -3532,6 +3452,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         qcSteamTempC = _ui.value.qcSteamTempC,
         qcHotWaterTempC = _ui.value.qcHotWaterTempC,
         qcHotWaterVolumeMl = _ui.value.qcHotWaterVolumeMl,
+        qcHotWaterMode = _ui.value.qcHotWaterMode,
+        qcHotWaterTimeS = _ui.value.qcHotWaterTimeS,
+        qcHotWaterTimeNoLimit = _ui.value.qcHotWaterTimeNoLimit,
+        qcHotWaterRatio = _ui.value.qcHotWaterRatio,
         qcFlushTimeS = _ui.value.qcFlushTimeS,
         qcFlushTempC = _ui.value.qcFlushTempC,
         qcGrind = _ui.value.qcGrind,
@@ -3880,6 +3804,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         editOwnSetting(Setting.REQUIRE_SCALE) {
             _ui.update { it.copy(requireScale = on) }
             persistPrefs()
+            pushStartSettings()
         }
     }
 
@@ -3895,19 +3820,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Persist the pre-shot flush preference (consumed by a later shot-sequence pass). */
+    /** The pre-shot flush preference: persisted, and latched in the core,
+     *  which runs the start (F16). */
     fun setPreFlush(enabled: Boolean) {
         editOwnSetting(Setting.PRE_FLUSH) {
             _ui.update { it.copy(preFlush = enabled) }
             persistPrefs()
+            pushStartSettings()
         }
     }
 
-    /** Persist the post-steam purge preference (consumed by a later shot-sequence pass). */
+    /** The post-steam purge preference: persisted, and latched in the core,
+     *  which runs the purge (F16). */
     fun setSteamPurge(enabled: Boolean) {
         editOwnSetting(Setting.STEAM_PURGE) {
             _ui.update { it.copy(steamPurge = enabled) }
             persistPrefs()
+            pushStartSettings()
         }
     }
 
@@ -4097,6 +4026,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             qcSteamTempC = p.qcSteamTempC,
             qcHotWaterTempC = p.qcHotWaterTempC,
             qcHotWaterVolumeMl = p.qcHotWaterVolumeMl,
+            qcHotWaterMode = p.qcHotWaterMode,
+            qcHotWaterTimeS = p.qcHotWaterTimeS,
+            qcHotWaterTimeNoLimit = p.qcHotWaterTimeNoLimit,
+            qcHotWaterRatio = p.qcHotWaterRatio,
             qcFlushTimeS = p.qcFlushTimeS,
             qcFlushTempC = p.qcFlushTempC,
             qcGrind = p.qcGrind,
@@ -4335,6 +4268,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  counting in the background for as long as the process lives. */
     fun setAppForeground(foreground: Boolean) {
         appInForeground = foreground
+        // The Visualizer retry queue's tick and network trigger run only in
+        // the foreground (F17).
+        visualizer.onForegroundChanged(foreground)
+        // No wake-up tick in the background (the 1 s tick covers the core's
+        // deadline while the link is kept up).
+        if (!foreground) wake.cancel()
         // A foreground service may only be STARTED from the foreground (Android
         // 12+); the keep-alive is therefore armed while visible and survives the
         // screen turning off after (#65).
@@ -5140,9 +5079,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 updateModeTicker()
                 appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
-                // After the UI state, so a start that ends here hands the
-                // Coffee button straight to Stop.
-                startSequence.onMachineState(c.state)
             }
             is Event.IdleSleepRequested -> {
                 lastIdleSleepAtMs = SystemClock.elapsedRealtime()
@@ -5489,17 +5425,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.WaterSessionStarted -> {
                 appendLog("Water session started: ${event.content.kind.string}")
-                if (event.content.kind == WaterSessionKind.Flush) startSequence.onFlushStarted()
             }
             is Event.WaterSessionCompleted -> {
                 appendLog("Water session completed: ${event.content.kind.string}")
                 // Flush the integrated water (same boundary as a completed shot).
                 flushMaintenance()
-                // Release the pre-shot flush waiter so the shot can proceed to
-                // Espresso (issue 15) — only for a group flush, not a hot-water pour.
-                if (event.content.kind == WaterSessionKind.Flush) {
-                    startSequence.onFlushCompleted()
-                }
             }
             is Event.BrewSessionStarted -> {
                 // Anchor the shell clock on the SAME monotonic timebase the
@@ -5559,12 +5489,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.SteamSessionStarted -> appendLog("Steam session started")
             is Event.SteamSessionCompleted -> {
+                // The post-steam purge is the core's (F16, the `steam_purge` setting).
                 appendLog("Steam session completed: ${event.content.duration}ms")
-                // Auto-purge after steam (issue 15 — Quick Controls / Settings
-                // "Steam purge"). A short group flush clears the plumbing once the
-                // user releases steam; gated on the pref + stands down if a shot
-                // flush already owns the group. DE1-gated.
-                if (_ui.value.steamPurge) autoPurge.schedule()
             }
             is Event.SteamClogSuspected ->
                 appendLog("Steam clog suspected: ${event.content.reason.string}")
@@ -5656,6 +5582,51 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     "Calibration ${event.content.target} " +
                         "(${event.content.command}): ${event.content.measured}",
                 )
+            is Event.WakeAt -> wake.arm(event.content.at_ms.toLong())
+            // F16: the core runs the shot start.
+            is Event.ShotStartProgress -> {
+                _ui.update { it.copy(shotStarting = true) }
+                // Records whether this shot came from Crema or from the
+                // machine's GHC — the distinction that hid geota/crema#56.
+                if (event.content.phase == StartPhase.Requested) shotStartedByApp = true
+            }
+            is Event.ShotStartEnded -> {
+                _ui.update { it.copy(shotStarting = false) }
+                val end = event.content.end
+                appendLog("Shot start ended: ${end::class.simpleName}")
+                event.content.message?.let(::notifyUser)
+            }
+            is Event.StartNotice -> {
+                // No scale for a shot that stops on weight: non-blocking — the
+                // stop-at-weight arms mid-shot if the scale lands.
+                val remembered = connection.state.value.rememberedScaleAddress != null
+                if (remembered) connection.kickScaleReconnect()
+                notifyUser(
+                    if (remembered) "Scale not connected \u2014 reconnecting\u2026 stop-at-weight is off until it lands"
+                    else event.content.notice.message,
+                )
+            }
+            is Event.GroupHeadStartUnchecked -> {
+                // A shot started on the machine skipped the app-only steps
+                // that applied: one non-blocking notice; it never stops the shot.
+                val lines = event.content.notices.map { it.message }
+                appendLog("Shot started on the machine: ${lines.joinToString("; ")}")
+                notifyUser(lines.joinToString("\n"))
+            }
+            is Event.MachineRequestHeld -> {
+                appendLog("${event.content.state.string} request held until the profile finishes loading")
+                notifyUser(REQUEST_HELD_TEXT)
+            }
+            is Event.MachineRequestDropped -> {
+                val text = machineRequestDropText(event.content.state, event.content.reason)
+                appendLog(text)
+                notifyUser(text)
+            }
+            is Event.MachineRequestRefused -> {
+                val text = machineRequestRefusalText(event.content.state, event.content.reason)
+                appendLog("Request refused: $text")
+                notifyUser(text)
+            }
             // v1 stub never fires this in practice.
             is Event.FirmwareLockoutHit ->
                 appendLog(
@@ -5679,24 +5650,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile uploaded: ${event.content.title}")
             }
-            is Event.ProfileSyncHolds -> {
-                // Gated start: the DE1 holds the start's profile now. Observe
-                // the firmware's profile-download guard window, optionally
-                // pre-flush, then request Espresso (issue 15).
-                if (pendingBrew && event.content.fingerprint == pendingBrewFingerprint) {
-                    pendingBrew = false
-                    pendingBrewFingerprint = null
-                    pendingBrewStart?.let { startSequence.proceed(it, _ui.value.preFlush) }
-                    pendingBrewStart = null
-                }
-            }
+            // The core's shot start waits for its own (F16).
+            is Event.ProfileSyncHolds -> Unit
             is Event.ProfileUploadFailed -> {
-                // The start waiting on the DE1 is over (the user taps Coffee
-                // again); the core retries the upload on its own backoff.
-                if (pendingBrew) pendingBrewStart?.let(startSequence::end)
-                pendingBrew = false
-                pendingBrewStart = null
-                pendingBrewFingerprint = null
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile upload failed: ${uploadFailureLabel(event.content.reason)}")
             }
@@ -5755,6 +5711,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // transport also cancels its scope, so any in-flight disconnect ends.
             proxy.close()
         }
+        // The Visualizer retry queue's network callback and tick (F17): the
+        // app normally leaves the foreground first, but don't rely on it.
+        visualizer.onForegroundChanged(false)
         // The HTTP clients (viewModelScope is already cancelled, so no
         // Visualizer / Decent call is still in flight). They sit on the
         // shared, process-lifetime OkHttp engine, which stays up.
@@ -5783,7 +5742,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private const val QUIT_TEARDOWN_SLACK_MS = 250L
 
         /** Abort a pending gated-start brew if the upload never completes. */
-        private const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
 
         /** How long the Quick-Controls dial must rest before its override
          *  becomes the desired profile (de1app debounces its temperature dial by
@@ -5843,6 +5801,10 @@ internal fun MainUiState.commonSettings(): CommonSettings = AppPrefs(
     qcSteamTempC = qcSteamTempC,
     qcHotWaterTempC = qcHotWaterTempC,
     qcHotWaterVolumeMl = qcHotWaterVolumeMl,
+    qcHotWaterMode = qcHotWaterMode,
+    qcHotWaterTimeS = qcHotWaterTimeS,
+    qcHotWaterTimeNoLimit = qcHotWaterTimeNoLimit,
+    qcHotWaterRatio = qcHotWaterRatio,
     qcFlushTimeS = qcFlushTimeS,
     qcFlushTempC = qcFlushTempC,
 ).toCommonSettings()

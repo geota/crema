@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import coffee.crema.core.CommonSettings
+import coffee.crema.core.HotWaterMode
 import coffee.crema.settings.CommonDefaults
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.Json
@@ -30,6 +31,7 @@ class CommonSettingsMappingTest {
         showDebugPanel = true, defaultDoseG = 20f, defaultRatio = 2.5f, defaultBrewTempC = 94f, defaultPreinfuseS = 5f,
         grinderModel = "Niche", baristaName = "Ana", suppressDe1Sleep = true, idleSleepMin = 60u,
         qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f, qcHotWaterVolumeMl = 200f,
+        qcHotWaterMode = HotWaterMode.Time, qcHotWaterTimeS = 45f, qcHotWaterTimeNoLimit = true, qcHotWaterRatio = 2.5f,
         qcFlushTimeS = 6f, qcFlushTempC = 93f,
     )
 

@@ -20,6 +20,7 @@ pub mod firmware_info;
 #[cfg(test)]
 mod hds_sleep_tests;
 mod idle_sleep;
+pub mod machine_requests;
 mod maintenance_run;
 mod packet_sync;
 #[cfg(test)]
@@ -27,6 +28,7 @@ mod packet_sync_tests;
 mod profile_sync;
 #[cfg(test)]
 mod scale_robustness_tests;
+pub mod shot_start;
 mod sweep;
 
 pub use calibration_guard::CalibrationRefusal;
@@ -45,8 +47,14 @@ pub use firmware_flash::{
     FLASHABLE_MODELS, FirmwareFlash, FlashAction, FlashBlocker, FlashFailure, FlashPhase,
     FlashShellConditions, FlashStartError, FlashStatus, FlashStep,
 };
+pub use machine_requests::{
+    MAX_HOLD, MachineRequestDrop, MachineRequestRefusal, PROFILE_DOWNLOAD_GUARD,
+};
 pub use profile_sync::{
     ProfileSyncOutput, ProfileSyncStatus, RETRY_DELAYS as PROFILE_SYNC_RETRY_DELAYS,
+};
+pub use shot_start::{
+    StartCheck, StartEnd, StartNoticeLine, StartPhase, StartRefusal, StartShotResult,
 };
 
 use capture::{CaptureRecorder, slice_to_jsonl};
@@ -506,9 +514,6 @@ pub struct CremaCore {
     shot_settings_written: Option<[u8; 9]>,
     /// This generation's one restore after a foreign packet change is used.
     foreign_restore_used: bool,
-    /// The next cuuid_0B data is the reply to the shells' connect-time seed
-    /// read: never a foreign change.
-    shot_settings_read_pending: bool,
     /// The hot-water target last sent in [`Event::HotWaterTarget`] this
     /// generation.
     last_hot_water_target: Option<de1_domain::HotWaterTarget>,
@@ -519,6 +524,12 @@ pub struct CremaCore {
     /// the one that cuts the pour — it was the missing half of that de1app
     /// convention. Cleared when the session completes or the stop fires.
     hot_water_stop_target_g: Option<f32>,
+    /// The first state this core saw (after [`new`](Self::new) or
+    /// [`reset`](Self::reset)) was already HotWater: that pour began before
+    /// this core watched it, so it is neither tared (the cup already holds
+    /// water) nor armed with the full target. The packet's backstop bounds
+    /// it. Cleared by the next state that isn't HotWater.
+    hot_water_began_unseen: bool,
     /// The eco-mode steam target temperature, °C.
     steam_eco_temp: f32,
     last_state: Option<StateInfo>,
@@ -676,6 +687,13 @@ pub struct CremaCore {
     /// Whether an [`Event::ScaleStale`] has already been emitted for the
     /// current stale episode — cleared by the next fresh reading.
     scale_stale_reported: bool,
+    /// Whether the connected scale has sent a weight reading since it
+    /// connected (de1app `is_operational`'s `_watchdog_updates_seen`). The
+    /// stale watchdog only runs once a reading exists, so without this a
+    /// scale that never streams would count as operational. `false` from
+    /// [`connect_scale`](Self::connect_scale), [`disconnect_scale`](Self::disconnect_scale)
+    /// and [`reset`](Self::reset) (which keeps the scale but needs a fresh reading).
+    scale_reading_seen: bool,
     /// The `last_scale_weight` a silent [`Event::ScaleLinkDead`] was emitted
     /// for. A fresh reading moves `last_scale_weight` on, which re-arms it, so
     /// a scale that reconnects but stays silent is not torn down again.
@@ -706,6 +724,12 @@ pub struct CremaCore {
     /// Keeping the DE1's profile in step with the desired one (reaprime
     /// `WorkflowDeviceSync`) — see [`profile_sync`].
     profile_sync: profile_sync::ProfileSync,
+    /// The profile-download guard on state requests and the wake hint — see
+    /// [`machine_requests`].
+    request_guard: machine_requests::RequestGuard,
+    /// The app's shot start, the post-steam purge and their settings — see
+    /// [`shot_start`].
+    starter: shot_start::ShotStarter,
     /// The number the next started upload gets (its
     /// [`Event::ProfileUploadStarted`] `upload_id`). Kept across
     /// [`reset`](Self::reset), so a shell's late report about an upload from
@@ -1042,9 +1066,9 @@ impl CremaCore {
             link: packet_sync::LinkSession::default(),
             shot_settings_written: None,
             foreign_restore_used: false,
-            shot_settings_read_pending: true,
             last_hot_water_target: None,
             hot_water_stop_target_g: None,
+            hot_water_began_unseen: false,
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
             shot_started: None,
@@ -1075,6 +1099,7 @@ impl CremaCore {
             last_scale_weight: None,
             last_scale_estimate: None,
             scale_stale_reported: false,
+            scale_reading_seen: false,
             scale_dead_reported_for: None,
             scale_write_failures: 0,
             scale_write_failures_anchor: None,
@@ -1082,6 +1107,8 @@ impl CremaCore {
             profile_upload: None,
             last_active_profile_title: None,
             profile_sync: profile_sync::ProfileSync::default(),
+            request_guard: machine_requests::RequestGuard::default(),
+            starter: shot_start::ShotStarter::default(),
             next_upload_id: 1,
             parked_upload: None,
             pending_cup_warmer_c: None,
@@ -1230,6 +1257,7 @@ impl CremaCore {
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
         self.scale_write_failures = 0;
+        self.scale_reading_seen = false;
         // A scale arriving MID-SHOT was never tared for this shot — reopen
         // the untared-cup window so its first reading is sanity-checked
         // before the re-armed weight leg can fire (review #29).
@@ -1263,6 +1291,7 @@ impl CremaCore {
         self.last_scale_weight = None;
         self.last_scale_estimate = None;
         self.scale_stale_reported = false;
+        self.scale_reading_seen = false;
         self.scale_dead_reported_for = None;
         self.scale_write_failures = 0;
         self.scale_write_failures_anchor = None;
@@ -1511,9 +1540,20 @@ impl CremaCore {
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits one
-    /// [`Event::FirmwareLockoutHit`] and no command.
+    /// [`Event::FirmwareLockoutHit`] and no command. A maintenance cycle
+    /// (descale, clean, air purge, steam rinse) is refused unless the machine
+    /// is in Idle or Sleep ([`Event::MachineRequestRefused`]).
+    ///
+    /// Waits out the firmware's profile-download guard: during a profile
+    /// upload and for 500 ms after it, the request is held and goes out on a
+    /// later tick ([`Event::MachineRequestHeld`], [`Event::WakeAt`]). Idle is
+    /// never held. See [`machine_requests`].
     pub fn request_machine_state(&mut self, state: MachineState) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("request_machine_state") {
+            return out;
+        }
+        // A maintenance cycle only from Idle or Sleep (the Run-now gate).
+        if let Some(out) = self.refuse_run_now(state) {
             return out;
         }
         // The idle-sleep timer: an app Sleep (power button, sleep-on-quit) is
@@ -1529,34 +1569,17 @@ impl CremaCore {
             return CoreOutput::default();
         }
         let mut out = CoreOutput::default();
+        // A user's request — Stop above all — cancels a pending shot start,
+        // so a Stop during the sync or the pre-flush never ends in Espresso.
+        self.cancel_start(&mut out);
         self.supersede_held_maintenance(&mut out);
         if self.begin_cold_maintenance(state, &mut out) {
+            // The cold workaround supersedes a request still waiting out the
+            // guard.
+            self.drop_held_request();
             return out;
         }
-        let starting_flow = matches!(
-            state,
-            MachineState::Espresso
-                | MachineState::Steam
-                | MachineState::HotWater
-                | MachineState::HotWaterRinse
-        );
-        if starting_flow && current != Some(MachineState::Idle) {
-            out.commands.push(Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::Idle)],
-            });
-        }
-        // The pending packet goes between the Idle bounce and the pour, so
-        // "change the profile, then tap Hot water" pours the new target. It
-        // arms nothing: the stop is armed from the state notification, for
-        // every initiator.
-        if state == MachineState::HotWater {
-            self.drive_shot_settings(&mut out, true);
-        }
-        out.commands.push(Command::WriteCharacteristic {
-            target: WriteTarget::De1RequestedState,
-            data: vec![requested_state(state)],
-        });
+        self.issue_state_request(state, true, &mut out);
         out
     }
 
@@ -2360,6 +2383,11 @@ impl CremaCore {
             WeightUnit::Grams
         });
         self.set_water_warn_ml(settings.water_warn_ml);
+        self.set_start_settings(
+            settings.pre_flush,
+            settings.require_scale.unwrap_or(false),
+            settings.steam_purge,
+        );
     }
 
     /// Build a [`Command`] that tares the connected scale. Empty if no scale is
@@ -3228,6 +3256,11 @@ impl CremaCore {
         self.drive_shot_settings(&mut out, false);
         self.update_machine_error(now, &mut out);
         self.update_maintenance(now, &mut out);
+        // A request waiting out the profile-download guard goes out.
+        self.drive_held_request(&mut out);
+        // The shot start's deadlines and the post-steam purge.
+        self.drive_shot_start(now, &mut out);
+        self.rearm_wake(&mut out);
         // Backstop for the post-stop drip settle (#64): guarantees a deferred
         // completion finalizes on the [`POST_SHOT_SETTLE_MAX`] deadline even if
         // the scale stream stalls (the tick is the shells' periodic watchdog).
@@ -3303,6 +3336,8 @@ impl CremaCore {
         // The tank may be refilled while the link is down: warn afresh.
         self.low_water.rearm();
         self.abandon_maintenance(&mut out);
+        self.abandon_shot_start(&mut out);
+        self.drop_held_request();
         // An upload in flight cannot finish over a dead link: fail it now so
         // the reconnect's sync upload need not wait for its ack timeout. The
         // sync ignores the failure — it belongs to the generation just ended.
@@ -3340,6 +3375,9 @@ impl CremaCore {
         let mut out = CoreOutput::default();
         self.stop_scale_timer_for_link_loss(&mut out);
         self.abandon_maintenance(&mut out);
+        // A pending shot start is over; its settings are user config.
+        self.abandon_shot_start(&mut out);
+        let start_settings = self.starter.settings;
         // The profile sync keeps the desired profile (user intent) and starts a
         // new connection generation; it is never persisted, so a restart
         // starts empty and the next connect uploads.
@@ -3418,6 +3456,7 @@ impl CremaCore {
         let next_upload_id = self.next_upload_id;
         *self = CremaCore::new();
         self.next_upload_id = next_upload_id;
+        self.starter.settings = start_settings;
         self.idle_sleep = idle_sleep;
         self.firmware_flash = firmware_flash;
         self.read_only = read_only;
@@ -3527,6 +3566,11 @@ impl CremaCore {
             let prev_info = self.last_state;
             let prev_state = prev_info.map(|s| s.state);
             self.last_state = Some(info);
+            if info.state != MachineState::HotWater {
+                self.hot_water_began_unseen = false;
+            } else if prev_info.is_none() {
+                self.hot_water_began_unseen = true;
+            }
             self.idle_sleep.machine_state(info.state, info.substate);
             self.descale.on_state(prev_info, info, now);
             self.advance_maintenance(info, now, out);
@@ -3611,6 +3655,8 @@ impl CremaCore {
                 }
             }
             self.steam_off_for_maintenance(prev_state, info.state, out);
+            // Espresso ends a requested start, or tells of a group-head one.
+            self.start_on_state_entry(prev_state, info.state, out);
         }
         // `ErrorNoAc` episode clock — see [`update_machine_error`].
         if info.substate == SubState::ErrorNoAc {
@@ -3801,6 +3847,7 @@ impl CremaCore {
         // A fresh reading re-arms the lost-scale watchdog.
         self.last_scale_weight = Some(now);
         self.scale_stale_reported = false;
+        self.scale_reading_seen = true;
         // The first weight notification stands in for a scale-connected hook:
         // fire the one-shot serial / settings queries so the anti-mistouch
         // state and active mode are fetched as soon as the scale is reporting.
@@ -4944,6 +4991,10 @@ impl CremaCore {
         out.events.push(Event::ProfileUploadFailed { reason });
         self.cold_maintenance_upload_failed(out);
         self.profile_sync_upload_failed(tag, out);
+        // No upload in flight any more: a request it held goes out on the next
+        // tick, asked for now (not sent from here — a new upload may be
+        // replacing this one in the same call).
+        self.emit_wake(out);
     }
 
     /// Process the shell's [`Source::De1HeaderAck`]: the header write of the
@@ -5124,7 +5175,10 @@ impl CremaCore {
             self.active_beverage_type = beverage_type;
             self.step_weight.adopt_weights(step_weight);
             out.events.push(Event::ProfileUploadCompleted { title });
-            // A held cold-maintenance request goes out once its profile is in.
+            // The firmware's profile-download guard window opens.
+            self.note_upload_completed(now, out);
+            // A held cold-maintenance request goes out once its profile is in
+            // (and the guard is clear).
             self.cold_maintenance_profile_loaded(now, out);
             self.profile_sync_upload_completed(sync, out);
         }
@@ -5567,6 +5621,7 @@ impl CremaCore {
                 // operational scale; never time mode). Never the machine
                 // echo, which can carry the 250 ml backstop (review #25).
                 if kind == de1_domain::WaterSessionKind::HotWater
+                    && !self.hot_water_began_unseen
                     && let Some(target_g) = self.hot_water_target().and_then(|t| t.stop_weight_g)
                 {
                     self.hot_water_stop_target_g = Some(target_g);
@@ -5576,6 +5631,9 @@ impl CremaCore {
                     }
                 }
                 out.events.push(Event::WaterSessionStarted { kind });
+                if kind == de1_domain::WaterSessionKind::Flush {
+                    self.start_on_flush_started();
+                }
             }
             WaterEvent::Completed(record) => {
                 self.hot_water_stop_target_g = None;
@@ -5583,6 +5641,9 @@ impl CremaCore {
                     kind: record.kind,
                     duration: duration_to_u32_ms(record.duration),
                 });
+                if record.kind == de1_domain::WaterSessionKind::Flush {
+                    self.start_on_flush_completed(out);
+                }
             }
         }
     }
@@ -5597,15 +5658,21 @@ impl CremaCore {
                     duration: duration_to_u32_ms(record.duration),
                     sample_count: u32::try_from(record.samples.len()).unwrap_or(u32::MAX),
                 });
+                // The post-steam auto-purge (the `steam_purge` setting).
+                self.arm_auto_purge(out);
             }
             SteamEvent::ClogSuspected(reason) => {
                 out.events.push(Event::SteamClogSuspected { reason });
             }
             SteamEvent::EcoModeChanged(eco) => {
                 out.events.push(Event::SteamEcoModeChanged { eco });
-                // Not held for a flow state: leaving eco as a steam session
-                // starts must restore the steam target for that session.
-                self.drive_shot_settings(out, true);
+                // Not held in Steam: leaving eco as a steam session starts
+                // must restore the steam target for that session. Any other
+                // flow state (a pour, a shot) waits as usual.
+                let steaming = self
+                    .last_state
+                    .is_some_and(|s| s.state == MachineState::Steam);
+                self.drive_shot_settings(out, steaming);
             }
         }
     }
@@ -9714,6 +9781,7 @@ mod tests {
         // THIS is the stop that cuts the pour.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
         set_packet(&mut core, hotwater_settings(150.0));
         let out = core.on_notification(Source::De1State, &[6, 5], 0);
         // Entering hot water tares the scale (settle-gated, like espresso).
@@ -9758,6 +9826,7 @@ mod tests {
         // characteristic. That echo must not become the by-weight target.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
         set_packet(&mut core, hotwater_settings(150.0));
         // The machine echoes the settings we actually wrote — 250 ml.
         let echo = hotwater_settings(HOT_WATER_STOP_ON_SCALE_ML).encode();
@@ -10031,6 +10100,7 @@ mod tests {
     fn set_steam_hotwater_settings_requests_250ml_when_a_scale_is_connected() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
         let out = set_packet(&mut core, hotwater_settings(50.0));
         let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic command");

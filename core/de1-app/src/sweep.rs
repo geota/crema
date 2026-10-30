@@ -439,6 +439,7 @@ mod tests {
     fn sweep_after_drop_writes_current_packet() {
         let mut core = idle_core();
         core.connect_scale("BOOKOO_SC", &[]);
+        core.scale_reading_seen = true; // it has reported a weight
         let first = core.connect_sweep(&snapshot(), 100);
         assert_eq!(packets(&first)[0].hot_water_volume_ml, 250.0);
         let _ = core.de1_link_lost();
@@ -586,7 +587,8 @@ mod tests {
 
     #[test]
     fn steam_eco_is_armed_by_the_sweep() {
-        let mut core = CremaCore::new();
+        // Idle: in an unknown state the packet waits, eco's included.
+        let mut core = idle_core();
         let mut s = snapshot();
         s.steam_eco = true;
         let _ = core.connect_sweep(&s, 0);

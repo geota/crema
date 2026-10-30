@@ -103,6 +103,9 @@ internal class RelayWire(
 
         /** The connection ended ([code] is the WebSocket close code when the core or the shell chose one). */
         fun onClosed(code: Int?) {}
+
+        /** One inbound message was fed to the core and its Step applied. */
+        suspend fun onInboundHandled() {}
     }
 
     private val lock = Mutex()
@@ -202,13 +205,13 @@ internal class RelayWire(
         try {
             for (frame in ws.incoming) {
                 when (frame) {
-                    is WsFrame.Text -> call { onText(frame.data, it) }
+                    is WsFrame.Text -> if (call { onText(frame.data, it) }) listener.onInboundHandled()
                     is WsFrame.Binary -> {
                         if (frame.data.size > WS_MAX_MESSAGE) {
                             abort(CloseReason.Codes.TOO_BIG.code.toInt(), "message too big")
                             break
                         }
-                        call { onBinary(frame.data, it) }
+                        if (call { onBinary(frame.data, it) }) listener.onInboundHandled()
                     }
                     else -> Unit
                 }

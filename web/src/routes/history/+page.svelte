@@ -234,9 +234,9 @@
 		let imported = 0;
 		const errors: string[] = [];
 		for (const file of files) {
-			const { record, error } = await app.importShotFile(file);
+			const { record, imported: count, error } = await app.importShotFile(file);
 			if (record) {
-				imported += 1;
+				imported += count;
 			} else if (error) {
 				errors.push(error);
 			}

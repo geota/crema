@@ -5,6 +5,7 @@ import coffee.crema.core.Compare
 import coffee.crema.core.ExitMetric
 import coffee.crema.core.Pump
 import coffee.crema.core.Transition
+import coffee.crema.core.newProfileId
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
@@ -120,15 +121,16 @@ fun profileIdOf(rawJson: String, json: Json): String? =
         .getOrNull()
 
 /**
- * Duplicate a complete `CremaProfile` JSON into a fresh CUSTOM one: a new shell-minted
- * id, `source: "custom"`, an unpinned `"<name> (copy)"`, and every other field — all
+ * Duplicate a complete `CremaProfile` JSON into a fresh CUSTOM one: a new id from the
+ * core (`newProfileId`, a UUID v7, as web mints), `source: "custom"`, an unpinned
+ * `"<name> (copy)"`, and every other field — all
  * segments with their temps / modes / limiters — preserved verbatim so the copy uploads
  * identically. Used by "Duplicate" (e.g. to customise a built-in).
  */
 fun duplicatedCustomProfileJson(baseJson: String, json: Json): String {
     val root = json.parseToJsonElement(baseJson).jsonObject.toMutableMap()
     val baseName = (root["name"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-    root["id"] = JsonPrimitive("profile:" + UUID.randomUUID())
+    root["id"] = JsonPrimitive(newProfileId())
     root["source"] = JsonPrimitive("custom")
     root["name"] = JsonPrimitive(if (baseName.isBlank()) "Custom profile" else "$baseName (copy)")
     root["pinned"] = JsonPrimitive(false)

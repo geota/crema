@@ -102,10 +102,12 @@ data class GuidedBrewUi(
 
 /**
  * A remote this hub has paired (relay v4: one of the store's pins), as the
- * Paired devices list shows it. [canControl] false marks a view-only remote.
+ * Paired devices list shows it. [canControl] false marks a view-only remote;
+ * [lastSeenMs] is its last admitted session (0 = never).
  */
 data class PairedDevice(
     val id: String,
     val name: String,
     val canControl: Boolean = true,
+    val lastSeenMs: Long = 0L,
 )

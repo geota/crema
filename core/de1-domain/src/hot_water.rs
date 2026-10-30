@@ -792,6 +792,10 @@ mod tests {
             let d = initial_hot_water_dose(&stored(None, Some(set)), None, &FW);
             assert_eq!((d.mode, d.volume_ml), (HotWaterMode::Volume, got), "{set}");
         }
+        // A volume that isn't a number (a shell bug, never valid JSON) is
+        // treated as never changed, not as a volume the user chose.
+        let d = initial_hot_water_dose(&stored(None, Some(f32::NAN)), None, &FW);
+        assert_eq!((d.mode, d.volume_ml), (HotWaterMode::Ratio, 150.0));
         // 0 ml was "no volume stop": a pour the timeout ends, so time mode.
         let d = initial_hot_water_dose(&stored(None, Some(0.0)), None, &FW);
         assert_eq!((d.mode, d.time_s), (HotWaterMode::Time, 30.0));

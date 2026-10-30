@@ -80,6 +80,25 @@ data class ShotTombstone(
     val deletedAt: Long,
     /** The user asked to delete the Visualizer copy too ("Also delete on Visualizer"). */
     val deleteRemote: Boolean = false,
+    /** Failed remote deletes so far (F17: at most three, on the core's rule). */
+    val attempts: Int = 0,
+    /** Unix ms before which the retry drain leaves the remote delete alone (0 = due). */
+    val nextAttemptAt: Long = 0L,
+)
+
+/**
+ * A shot upload waiting for its retry (F17): a recoverable failure (offline, a
+ * 5xx, a 429) is queued here and retried by the drain on the core's backoff
+ * (`visualizer_queue_decision`), at most three attempts in all.
+ */
+@Serializable
+data class QueuedUpload(
+    /** The local shot's id. */
+    val shotId: String,
+    /** Attempts made so far. */
+    val attempts: Int,
+    /** Unix ms of the earliest retry. */
+    val nextAttemptAt: Long,
 )
 
 /** Everything Visualizer-related the shell persists. */
@@ -140,6 +159,8 @@ data class VisualizerState(
      * reads them; only the shot reconcile and the remote delete do.
      */
     val shotTombstones: List<ShotTombstone> = emptyList(),
+    /** Shot uploads waiting for a retry — see [QueuedUpload]. */
+    val retryQueue: List<QueuedUpload> = emptyList(),
     /**
      * The stored state as read, when the keystore couldn't open a secret this
      * start ([SecretBox.Opened.Unavailable]); in memory only. Meanwhile the

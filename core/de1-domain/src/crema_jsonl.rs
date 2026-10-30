@@ -667,6 +667,41 @@ mod tests {
         assert!(plan.shots.is_empty());
     }
 
+    /// F10: each shell's history export (web's and Android's
+    /// `shotHistoryJsonl`, committed as fixtures) is this format, and the shot
+    /// parses whole: the core's assembled record, frame 0 kept as the first
+    /// frame, the bean snapshot and tags.
+    #[test]
+    fn web_and_android_shot_history_fixtures_parse_in_full() {
+        for (shell, text) in [
+            (
+                "web",
+                include_str!("../tests/fixtures/shots/web-shots.crema.jsonl"),
+            ),
+            (
+                "android",
+                include_str!("../tests/fixtures/shots/android-shots.crema.jsonl"),
+            ),
+        ] {
+            let plan = parse_jsonl(text).unwrap();
+            assert_eq!(plan.shots.len(), 1, "{shell}");
+            let imported = &plan.shots[0];
+            let shot = &imported.stored_shot;
+            assert_eq!(shot.record.samples.len(), 48, "{shell}");
+            assert_eq!(
+                shot.record.samples[..4]
+                    .iter()
+                    .map(|t| t.sample.frame_number)
+                    .collect::<Vec<_>>(),
+                [0, 2, 2, 3],
+                "{shell}"
+            );
+            assert_eq!(shot.grinder_model.as_deref(), Some("EK43"), "{shell}");
+            assert_eq!(shot.tags, ["dial-in"], "{shell}");
+            assert_eq!(imported.bean_name, "Gesha", "{shell}");
+        }
+    }
+
     #[test]
     fn export_writes_header_then_entities() {
         let roasters = vec![sample_roaster("roaster:r1", "Onyx")];
