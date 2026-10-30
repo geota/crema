@@ -3513,6 +3513,13 @@ export interface QuickControlBounds {
 	flushTimeS: StepRange;
 	/** Group-flush temperature, °C. */
 	flushTempC: StepRange;
+	/**
+	 * The yield a brew override may carry, g: the yield stepper's range
+	 * widened to what the ratio stepper reaches (`dose × ratio`, Android's
+	 * ratio mode), so an override the Quick Controls can produce is never
+	 * cut. Not a stepper; the yield stepper keeps `yield_g`.
+	 */
+	overrideYieldG: StepRange;
 }
 
 /**
