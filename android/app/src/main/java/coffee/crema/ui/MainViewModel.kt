@@ -24,6 +24,7 @@ import coffee.crema.core.ScaleCapabilities
 import coffee.crema.core.Bean
 import coffee.crema.core.MaintenanceState
 import coffee.crema.core.WriteTarget
+import coffee.crema.core.WeightUnit
 import coffee.crema.drive.DriveStore
 import coffee.crema.drive.DriveSync
 import coffee.crema.core.MaintenanceReadout
@@ -2890,7 +2891,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * The core inputs that follow settings, from [state] (spec §7.4): the
      * stop-on-weight, auto-tare, max-duration and volume-stop flags, the stop
-     * targets, and the idle-sleep timer. Called with [effectiveState]: after
+     * targets, the idle-sleep timer and the weight unit (the scale LCD and
+     * set-grams writes follow it). Called with [effectiveState]: after
      * each applied snapshot on a remote, at the end of every own-state writer
      * ([loadPrefs], [applyRestoredSettings], [resetPreferences], [eraseAll])
      * in every role, and on leaving the remote role.
@@ -2900,6 +2902,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setAutoTare(state.autoTare) }.onFailure { appendLog("Set auto-tare failed: ${it.message}") }
         runCatching { bridge.setMaxShotDuration(state.maxShotDurationS) }.onFailure { appendLog("Set max shot duration failed: ${it.message}") }
         runCatching { bridge.setVolumeStopWithScale(state.volumeStopWithScale) }.onFailure { appendLog("Set volume-stop-with-scale failed: ${it.message}") }
+        runCatching { bridge.setWeightUnitPref(coreWeightUnit(state.weightUnit)) }.onFailure { appendLog("Set weight unit failed: ${it.message}") }
         pushStopTargets(state)
         idleSleep.configure(state.idleSleepMin)
     }
@@ -3746,14 +3749,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── Display units (issue 44) ──────────────────────────────────────────────
-    // Pure display prefs: nothing is sent to the machine and no canonical value
+    // Display prefs: nothing is sent to the machine and no canonical value
     // changes — flipping a unit only re-renders existing readouts through
-    // `Format.kt`. Persisted so the choice survives a restart.
+    // `Format.kt`. Persisted so the choice survives a restart. The weight unit
+    // also goes to the core, which picks the scale's LCD unit from it.
 
-    /** Weight readout unit (`"g" | "oz"`). Persisted display pref. */
+    /**
+     * Weight readout unit (`"g" | "oz"`). Persisted display pref. The core
+     * gets it too, and a connected scale's display switches now rather than
+     * on the next Idle entry or reconnect (as on web).
+     */
     fun setWeightUnit(unit: String) {
         _ui.update { it.copy(weightUnit = unit) }
         persistPrefs()
+        val wire = coreWeightUnit(unit)
+        runCatching { bridge.setWeightUnitPref(wire) }.onFailure {
+            appendLog("Set weight unit failed: ${it.message}")
+            return
+        }
+        // Each call is capability-gated and fails for a scale without it (or
+        // no scale): a no-op is intended.
+        runCatching { bridge.enableScaleLcd(wire) }.onSuccess(::onCoreOutputJson)
+        if (wire == WeightUnit.Grams.string) {
+            runCatching { bridge.setScaleUnitGrams() }.onSuccess(::onCoreOutputJson)
+        }
     }
 
     /** Temperature readout unit (`"C" | "F"`). Persisted display pref. */
@@ -5802,3 +5821,7 @@ private fun firmwarePowerOk(context: android.content.Context): Boolean {
     val percent = if (level >= 0 && scale > 0) level * 100 / scale else null
     return coffee.crema.firmware.powerOk(plugged, percent)
 }
+
+/** The core's wire spelling (`"grams" | "ounces"`) of the `"g" | "oz"` weight-unit pref. */
+private fun coreWeightUnit(pref: String): String =
+    if (pref == "oz") WeightUnit.Ounces.string else WeightUnit.Grams.string

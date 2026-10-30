@@ -5,6 +5,7 @@ import android.os.Looper
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
+import coffee.crema.core.CremaBridge
 import org.robolectric.Shadows.shadowOf
 import java.io.File
 import java.time.Duration
@@ -60,6 +61,14 @@ internal object VmHarness {
             ?: error("MainViewModel no longer holds exactly one ProxyController field: update VmHarness.proxyController")
         field.isAccessible = true
         return field.get(vm) as ProxyController
+    }
+
+    /** The VM's [CremaBridge] (the host-built core), found by type. */
+    fun bridge(vm: MainViewModel): CremaBridge {
+        val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == CremaBridge::class.java }
+            ?: error("MainViewModel no longer holds exactly one CremaBridge field: update VmHarness.bridge")
+        field.isAccessible = true
+        return field.get(vm) as CremaBridge
     }
 
     /** Idle the main looper until the VM's async prefs load has hydrated
