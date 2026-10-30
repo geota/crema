@@ -482,7 +482,9 @@ class ProxyController(
     /** Held by the leave-remote flow (P2's frozen slice): no re-find runs. */
     private var refindHeld = false
 
-    /** Hold or release the re-find. While held it starts nothing; a release
+    /** Hold or release the re-find. While held it switches nothing: no new
+     *  attempt, no go-back from an attempt that ends (it waits for the
+     *  release), and a re-find switch already queued is dropped. A release
      *  re-checks at once. */
     fun holdRefind(hold: Boolean) {
         refindHeld = hold
@@ -528,9 +530,11 @@ class ProxyController(
     private fun evaluateRefind() {
         val current = session ?: return
         if (_state.value.role != "secondary" || refindHeld || refindQueued || _state.value.refindGaveUp) return
-        // The handshake deadline: an attempt not welcomed in time ends.
+        // The handshake deadline: an attempt not welcomed in time ends. So
+        // does one refused while the re-find was held.
         if (current.trying) {
-            if (current.stalled) endAttempt(current, "didn't answer")
+            if (current.refused) endAttempt(current, "was refused")
+            else if (current.stalled) endAttempt(current, "didn't answer")
             return
         }
         if (refindBackoff?.isActive == true) return
@@ -583,6 +587,12 @@ class ProxyController(
      *  off, and go back to the saved target now. Nothing about the attempt is
      *  saved. */
     private fun endAttempt(attempt: RemoteSession, why: String) {
+        // Held (the leave-remote prompt is open): no switch now. A refused
+        // attempt is marked, so the release ends it.
+        if (refindHeld) {
+            appendLog("Re-find: ${attempt.host}:${attempt.port} $why — held, going back on release")
+            return
+        }
         appendLog("Re-find: ${attempt.host}:${attempt.port} $why — going back")
         backOff()
         savedTarget?.let { (host, port) -> requestRefindSwitch(host, port, attempt = false, from = attempt) }
@@ -1164,6 +1174,14 @@ class ProxyController(
         refind: RefindSwitch? = null,
     ) {
         modeSwitchProbe?.invoke(role)
+        // A re-find switch doesn't run while the re-find is held (the
+        // leave-remote prompt is open): it is dropped, and the release
+        // re-checks.
+        if (refind != null && refindHeld) {
+            appendLog("Re-find: held — dropping a queued switch")
+            refindQueued = false
+            return
+        }
         closePairingWindow()
         // Not reconnecting (Hub mode off): a full user disconnect, which also
         // drops a DE1 scan still waiting for the machine, so nothing re-grabs it.

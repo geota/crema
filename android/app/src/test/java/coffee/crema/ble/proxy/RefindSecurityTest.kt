@@ -91,11 +91,16 @@ class RefindSecurityTest {
         return vm
     }
 
-    /** The port in the saved prefs, or -1 while the file is being replaced. */
-    private fun savedPort(): Int = runCatching {
-        Json.parseToJsonElement(File(VmHarness.app().filesDir, "prefs.json").readText())
-            .jsonObject["proxyPrimaryPort"]!!.jsonPrimitive.int
-    }.getOrDefault(-1)
+    /** The saved target port. A save renames the old file aside before the
+     *  new one lands, so a read can miss the file for a moment: retry. */
+    private fun savedPort(): Int {
+        val file = File(VmHarness.app().filesDir, "prefs.json")
+        repeat(50) {
+            runCatching { return Json.parseToJsonElement(file.readText()).jsonObject["proxyPrimaryPort"]!!.jsonPrimitive.int }
+            Thread.sleep(5)
+        }
+        return Json.parseToJsonElement(file.readText()).jsonObject["proxyPrimaryPort"]!!.jsonPrimitive.int
+    }
 
     /** A WebSocket endpoint that accepts [sockets] dials and never says anything. */
     private fun silent(sockets: Int = 5): MockWebServer {

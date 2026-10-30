@@ -519,6 +519,54 @@ class ProxyControllerModeTest {
         assertEquals("127.0.0.1:12", dials().last())
     }
 
+    /** #207 validation P2-1: while the re-find is held (the leave-remote
+     *  prompt is open), an attempt in flight that ends, by a refusal or its
+     *  deadline, switches nothing; the release goes back to the saved target. */
+    @Test
+    fun `a held re-find doesn't switch when an attempt ends`() {
+        remoteOnDeadHub(peer("a", 12))
+        advance(REFIND_DELAY_MS + 200)
+        assertEquals("127.0.0.1:12", dials().last())
+        val switches = events.count { it == "teardown" }
+
+        controller.holdRefind(true)
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        advance(REFIND_DELAY_MS * 4)
+        assertEquals("127.0.0.1:12", dials().last(), "no go-back while held")
+        assertEquals(switches, events.count { it == "teardown" }, "no switch at all while held")
+        assertEquals("secondary", controller.state.value.role)
+
+        controller.holdRefind(false)
+        advance(200)
+        assertEquals("127.0.0.1:9", dials().last(), "the release goes back to the saved target")
+    }
+
+    /** The same for an attempt that only times out, and for a re-find switch
+     *  already queued when the hold is set: it is dropped at the mode lock. */
+    @Test
+    fun `a held re-find drops a queued switch and an unanswered attempt's go-back`() {
+        remoteOnDeadHub(peer("a", 12))
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        controller.modeSwitchProbe = { gate.await() }
+        advance(REFIND_DELAY_MS + 200) // the attempt's switch is queued, waiting at the lock
+        controller.holdRefind(true)
+        gate.complete(Unit)
+        advance(1_000)
+        assertEquals("127.0.0.1:9", dials().last(), "the queued switch was dropped")
+        assertTrue(log.any { "dropping a queued switch" in it }, "$log")
+        controller.modeSwitchProbe = null
+
+        controller.holdRefind(false)
+        advance(200)
+        assertEquals("127.0.0.1:12", dials().last(), "the release re-checks")
+        controller.holdRefind(true)
+        advance(REFIND_DELAY_MS * 4)
+        assertEquals("127.0.0.1:12", dials().last(), "the deadline passed while held: no go-back")
+        controller.holdRefind(false)
+        advance(200)
+        assertEquals("127.0.0.1:9", dials().last())
+    }
+
     /**
      * AC-9 as narrowed (validation P1b): a refused attempt goes back to the
      * saved target (a refused link never redials), and the next try waits
