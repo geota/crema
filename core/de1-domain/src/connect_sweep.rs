@@ -180,7 +180,11 @@ impl Default for ConnectSweepSettings {
             steam_temp_c: c.qc_steam_temp_c,
             steam_timeout_s: c.qc_steam_time_s,
             hot_water_temp_c: c.qc_hot_water_temp_c,
-            hot_water: crate::hot_water::HotWaterDose::default(),
+            hot_water: crate::hot_water::initial_hot_water_dose(
+                &c.stored_hot_water(),
+                None,
+                &crate::hot_water::HOT_WATER_FIRMWARE,
+            ),
             steam_flow_ml_s: c.qc_steam_flow_ml_s,
             flush_timeout_s: c.qc_flush_time_s,
             flush_temp_c: c.qc_flush_temp_c,
@@ -210,10 +214,11 @@ mod tests {
             (d.steam_temp_c, d.steam_timeout_s, d.steam_flow_ml_s),
             (c.qc_steam_temp_c, c.qc_steam_time_s, c.qc_steam_flow_ml_s)
         );
-        assert_eq!(
-            (d.hot_water_temp_c, d.hot_water_volume_ml),
-            (c.qc_hot_water_temp_c, c.qc_hot_water_volume_ml)
-        );
+        assert_eq!(d.hot_water_temp_c, c.qc_hot_water_temp_c);
+        // The default bundle stores no hot-water mode: the never-changed
+        // rule gives the default dose, ratio 1:3 with its 150 ml value.
+        assert_eq!(d.hot_water, crate::hot_water::HotWaterDose::default());
+        assert_eq!(d.hot_water.volume_ml, c.qc_hot_water_volume_ml);
         assert_eq!(
             (d.flush_timeout_s, d.flush_temp_c),
             (c.qc_flush_time_s, c.qc_flush_temp_c)
