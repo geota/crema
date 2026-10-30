@@ -52,6 +52,7 @@ import coffee.crema.core.ExitMetric
 import coffee.crema.core.Pump
 import coffee.crema.core.Transition
 import coffee.crema.profiles.ProfileBounds
+import coffee.crema.ui.CoreBounds
 import coffee.crema.profiles.exitMetricFromWire
 import coffee.crema.profiles.pumpFromWire
 import coffee.crema.profiles.transitionFromWire
@@ -305,14 +306,14 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                             val shifted = vm.editorBrewTemp(profile.id, segs.toList(), target)
                             segs.clear(); segs.addAll(shifted)
                         })
-                        LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, 1.0, 60.0, { dose = it })
-                        LabeledStepper("Yield", yieldG, "g", Modifier.weight(1f), 0.5, 1.0, 200.0, { yieldG = it })
+                        LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, CoreBounds.editor.doseG.min.toDouble(), CoreBounds.editor.doseG.max.toDouble(), { dose = it })
+                        LabeledStepper("Yield", yieldG, "g", Modifier.weight(1f), 0.5, CoreBounds.editor.yieldG.min.toDouble(), CoreBounds.editor.yieldG.max.toDouble(), { yieldG = it })
                         LabeledRatio(dose, yieldG, Modifier.weight(1f))
                     }
                     GroupCard("Limit", 3f) {
-                        LimitTile("Max volume", maxVol, "ml", Modifier.weight(1f), maxVol > 0.0, { maxVol = if (maxVol > 0.0) 0.0 else 50.0 }, 10.0, ProfileBounds.INSTANCE.minTotalVolumeMl.toDouble(), ProfileBounds.INSTANCE.maxTotalVolumeMl.toDouble(), { maxVol = it })
+                        LimitTile("Max volume", maxVol, "ml", Modifier.weight(1f), maxVol > 0.0, { maxVol = if (maxVol > 0.0) 0.0 else 50.0 }, 10.0, CoreBounds.editor.maxTotalVolumeMl.min.toDouble(), CoreBounds.editor.maxTotalVolumeMl.max.toDouble(), { maxVol = it })
                         LimitTile("Preinfuse steps", preinfuse, null, Modifier.weight(1f), preinfuse > 0.0, { preinfuse = if (preinfuse > 0.0) 0.0 else 1.0 }, 1.0, 0.0, 10.0, { preinfuse = it })
-                        LimitTile("Tank temp", tankTemp, "°C", Modifier.weight(1f), tankTemp > 0.0, { tankTemp = if (tankTemp > 0.0) 0.0 else 92.0 }, 1.0, 0.0, 95.0, { tankTemp = it })
+                        LimitTile("Tank temp", tankTemp, "°C", Modifier.weight(1f), tankTemp > 0.0, { tankTemp = if (tankTemp > 0.0) 0.0 else 92.0 }, 1.0, CoreBounds.editor.tankTempC.min.toDouble(), CoreBounds.editor.tankTempC.max.toDouble(), { tankTemp = it })
                     }
                 }
             }
@@ -419,7 +420,9 @@ private fun SegmentRowFull(
     val limOn = seg.limiter != null
     val lmView = seg.limiter ?: SegmentLimiter(6f, 0.6f)
     val segVolOn = (seg.volume ?: 0) > 0
-    val bounds = ProfileBounds.INSTANCE
+    // The editor's ranges, from the core's table (F8): they apply when a
+    // field is edited; a stored value outside them shows as it is.
+    val eb = CoreBounds.editor
     CremaCard(Modifier.fillMaxWidth(), container = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
@@ -462,19 +465,19 @@ private fun SegmentRowFull(
 
             SegCell(1f) {
                 Eyebrow("Target")
-                CremaStepper(value = seg.target.toDouble(), unit = seg.targetUnit(), step = 0.1, min = 0.0, max = if (isFlow) bounds.maxFlowMlPerS.toDouble() else bounds.maxPressureBar.toDouble(), onChange = { onEdit(seg.copy(target = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
+                CremaStepper(value = seg.target.toDouble(), unit = seg.targetUnit(), step = 0.1, min = 0.0, max = if (isFlow) eb.flowMlS.max.toDouble() else eb.pressureBar.max.toDouble(), onChange = { onEdit(seg.copy(target = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1f) {
                 Eyebrow("Time")
-                CremaStepper(value = seg.time.toDouble(), unit = "s", step = 0.5, min = 0.0, max = bounds.maxFrameSeconds.toDouble(), onChange = { onEdit(seg.copy(time = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
+                CremaStepper(value = seg.time.toDouble(), unit = "s", step = 0.5, min = eb.segmentTimeS.min.toDouble(), max = eb.segmentTimeS.max.toDouble(), onChange = { onEdit(seg.copy(time = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1.15f) {
                 CremaSplitLabel(prefix = "Temp", icon = "thermometer", options = listOf(SplitOption("coffee", "Coffee", icon = "coffee"), SplitOption("water", "Water", icon = "drop")), value = seg.tempSensor ?: "coffee", onChange = { onEdit(seg.copy(tempSensor = it)) })
-                CremaStepper(value = (seg.temp ?: 93f).toDouble(), unit = "°C", step = 0.5, min = 20.0, max = bounds.maxTemperatureC.toDouble(), onChange = { onEdit(seg.copy(temp = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
+                CremaStepper(value = (seg.temp ?: 93f).toDouble(), unit = "°C", step = 0.5, min = eb.segmentTempC.min.toDouble(), max = eb.segmentTempC.max.toDouble(), onChange = { onEdit(seg.copy(temp = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1f) {
                 CremaOptionalHeader("Volume", segVolOn, { onEdit(seg.copy(volume = if (segVolOn) null else 50)) })
-                CremaStepper(value = (seg.volume ?: 0).toDouble(), unit = "ml", step = 5.0, min = 0.0, max = 500.0, onChange = { onEdit(seg.copy(volume = it.roundToInt().takeIf { v -> v > 0 })) }, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BoxedDense, enabled = segVolOn)
+                CremaStepper(value = (seg.volume ?: 0).toDouble(), unit = "ml", step = 5.0, min = eb.segmentVolumeMl.min.toDouble(), max = eb.segmentVolumeMl.max.toDouble(), onChange = { onEdit(seg.copy(volume = it.roundToInt().takeIf { v -> v > 0 })) }, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BoxedDense, enabled = segVolOn)
             }
             SegCell(1.5f) {
                 CremaSplitLabel(
@@ -490,7 +493,7 @@ private fun SegmentRowFull(
                 CremaStepper(
                     value = (exView.threshold ?: 4f).toDouble(),
                     unit = exView.unit(),
-                    step = 0.1, min = 0.0, max = if (exView.metric == ExitMetric.Pressure) bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
+                    step = 0.1, min = 0.0, max = if (exView.metric == ExitMetric.Pressure) eb.pressureBar.max.toDouble() else eb.flowMlS.max.toDouble(),
                     onChange = { v -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(threshold = v.toFloat()))) },
                     style = CremaStepperStyle.BoxedDense,
                     enabled = exitOn,
@@ -502,13 +505,13 @@ private fun SegmentRowFull(
             SegCellGroup(2f) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     CremaOptionalHeader("Max", limOn, { onEdit(seg.copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f))) })
-                    CremaStepper(value = lmView.value.toDouble(), unit = seg.limiterUnit(), step = 0.1, min = 0.0, max = if (seg.mode == Pump.Flow) bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), onChange = { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, style = CremaStepperStyle.BoxedDense, enabled = limOn)
+                    CremaStepper(value = lmView.value.toDouble(), unit = seg.limiterUnit(), step = 0.1, min = 0.0, max = if (seg.mode == Pump.Flow) eb.pressureBar.max.toDouble() else eb.flowMlS.max.toDouble(), onChange = { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, style = CremaStepperStyle.BoxedDense, enabled = limOn)
                 }
                 // Tolerance is gated by the Max dot — fade the whole cell (eyebrow
                 // included) when Max is off.
                 Column(Modifier.weight(1f).alpha(if (limOn) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Eyebrow("Tolerance")
-                    CremaStepper(value = lmView.range.toDouble(), unit = null, step = 0.1, min = 0.0, max = 6.0, onChange = { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(range = v.toFloat()))) }, style = CremaStepperStyle.BoxedDense)
+                    CremaStepper(value = lmView.range.toDouble(), unit = null, step = 0.1, min = eb.limiterRange.min.toDouble(), max = eb.limiterRange.max.toDouble(), onChange = { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(range = v.toFloat()))) }, style = CremaStepperStyle.BoxedDense)
                 }
             }
 

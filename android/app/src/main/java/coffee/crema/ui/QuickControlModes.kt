@@ -1,5 +1,12 @@
 package coffee.crema.ui
 
+import coffee.crema.core.BrewDefaultsBounds
+import coffee.crema.core.ProfileEditorBounds
+import coffee.crema.core.QuickControlBounds
+import coffee.crema.core.brewDefaultsBoundsJson
+import coffee.crema.core.profileEditorBoundsJson
+import coffee.crema.core.quickControlBoundsJson
+
 /*
  * Quick-Controls / brew-sheet per-stepper "mode" — which sub-value each combined
  * stepper currently edits. This is shell-local *view* state (not a core/wire type),
@@ -75,54 +82,87 @@ enum class PiFlushMode(val value: String) {
     }
 }
 
+/** Decodes the core's bounds JSON (the typeshare'd tables). */
+private val boundsJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
 /**
- * Quick-Controls steam-temp constants — previously the magic `148` / `135` / `170`
- * scattered across `MainViewModel` and both QC sheets (tablet + phone).
+ * The stepper and editor ranges from the core's one table (`de1_domain::bounds`),
+ * decoded once on first use — the same numbers web and the core's own
+ * enforcement use. Hot water is the core's `hot_water_bounds`; a profile's
+ * brew-temp range is `brewTempRange`. Fails with a plain reason if the core's
+ * native library can't load.
  */
-object QcSteam {
-    /** Default steam-temp target (°C) the Steam dot arms to. */
-    const val DEFAULT_TEMP_C = 148.0
+internal object CoreBounds {
+    private fun load(what: String, json: () -> String): String = try {
+        json()
+    } catch (e: Throwable) {
+        throw IllegalStateException("The Crema core (libde1_ffi) didn't load, so the $what are unavailable", e)
+    }
 
-    /**
-     * Steam-temp floor (°C). The DE1 firmware snaps anything below this to 0
-     * (heater off); the floor keeps the user out of that silent 120–134 snap band.
-     */
-    const val MIN_TEMP_C = 135.0
+    /** The Quick Controls steppers' ranges. */
+    val qc: QuickControlBounds by lazy {
+        boundsJson.decodeFromString(QuickControlBounds.serializer(), load("Quick Controls ranges", ::quickControlBoundsJson))
+    }
 
-    /** Steam-temp ceiling (°C). */
-    const val MAX_TEMP_C = 170.0
+    /** Settings → Brew defaults' ranges. */
+    val brewDefaults: BrewDefaultsBounds by lazy {
+        boundsJson.decodeFromString(BrewDefaultsBounds.serializer(), load("brew-default ranges", ::brewDefaultsBoundsJson))
+    }
 
-    const val MIN_FLOW_ML_S = 0.2
-    const val MAX_FLOW_ML_S = 3.0
-    const val MIN_TIME_S = 1.0
-    const val MAX_TIME_S = 60.0
+    /** The profile editor's ranges: they apply when a field is edited; a stored
+     *  profile outside them shows its own values. */
+    val editor: ProfileEditorBounds by lazy {
+        boundsJson.decodeFromString(ProfileEditorBounds.serializer(), load("profile editor ranges", ::profileEditorBoundsJson))
+    }
 }
 
 /**
- * Min/max ranges for the remaining Quick-Controls steppers — previously magic
- * numbers inlined in the tablet (`QuickControlsSheet`) and phone (`PhoneBrewSheets`)
- * `if`/`when` expressions. (Per-layout preset/chip arrays stay in their sheets:
- * they intentionally differ tablet vs phone.)
+ * Quick-Controls steam values, read from the core's table ([CoreBounds]). The
+ * steam temperature may also be 0 (heater off).
+ */
+object QcSteam {
+    /** Default steam-temp target (°C) the Steam dot arms to: the default
+     *  settings' steam temperature. */
+    val DEFAULT_TEMP_C: Double get() = coffee.crema.settings.CommonDefaults.common.qcSteamTempC.toDouble()
+
+    /** Steam-temp floor (°C). The DE1 firmware snaps anything below this to 0
+     *  (heater off); the floor keeps the user out of that silent snap band. */
+    val MIN_TEMP_C: Double get() = CoreBounds.qc.steamTempC.min.toDouble()
+
+    /** Steam-temp ceiling (°C). */
+    val MAX_TEMP_C: Double get() = CoreBounds.qc.steamTempC.max.toDouble()
+
+    val MIN_FLOW_ML_S: Double get() = CoreBounds.qc.steamFlowMlS.min.toDouble()
+    val MAX_FLOW_ML_S: Double get() = CoreBounds.qc.steamFlowMlS.max.toDouble()
+    val MIN_TIME_S: Double get() = CoreBounds.qc.steamTimeS.min.toDouble()
+    val MAX_TIME_S: Double get() = CoreBounds.qc.steamTimeS.max.toDouble()
+}
+
+/**
+ * Min/max ranges for the remaining Quick-Controls steppers, read from the core's
+ * table ([CoreBounds]). (Per-layout preset/chip arrays stay in their sheets:
+ * they intentionally differ tablet vs phone.) The hot-water values are the
+ * hot-water modes' and stay here until that work moves them.
  */
 object QcBounds {
-    const val DOSE_MIN_G = 5.0
-    const val DOSE_MAX_G = 30.0
-    const val GRIND_MIN = 0.0
-    const val GRIND_MAX = 20.0
-    const val YIELD_MIN_G = 10.0
-    const val YIELD_MAX_G = 80.0
-    const val RATIO_MIN = 1.0
-    const val RATIO_MAX = 5.0
-    const val BREW_TEMP_MIN_C = 80.0
-    const val BREW_TEMP_MAX_C = 100.0
-    const val PREINF_MIN_S = 0.0
-    const val PREINF_MAX_S = 30.0
+    val DOSE_MIN_G: Double get() = CoreBounds.qc.doseG.min.toDouble()
+    val DOSE_MAX_G: Double get() = CoreBounds.qc.doseG.max.toDouble()
+    val GRIND_MIN: Double get() = CoreBounds.qc.grind.min.toDouble()
+    val GRIND_MAX: Double get() = CoreBounds.qc.grind.max.toDouble()
+    val YIELD_MIN_G: Double get() = CoreBounds.qc.yieldG.min.toDouble()
+    val YIELD_MAX_G: Double get() = CoreBounds.qc.yieldG.max.toDouble()
+    val RATIO_MIN: Double get() = CoreBounds.qc.ratio.min.toDouble()
+    val RATIO_MAX: Double get() = CoreBounds.qc.ratio.max.toDouble()
+    val BREW_TEMP_MIN_C: Double get() = CoreBounds.qc.brewTempC.min.toDouble()
+    val BREW_TEMP_MAX_C: Double get() = CoreBounds.qc.brewTempC.max.toDouble()
+    val PREINF_MIN_S: Double get() = CoreBounds.qc.preinfuseS.min.toDouble()
+    val PREINF_MAX_S: Double get() = CoreBounds.qc.preinfuseS.max.toDouble()
     const val WATER_TEMP_MIN_C = 40.0
     const val WATER_TEMP_MAX_C = 98.0
     const val WATER_VOL_MIN_ML = 20.0
-    const val WATER_VOL_MAX_ML = 250.0
-    const val FLUSH_TIME_MIN_S = 1.0
-    const val FLUSH_TIME_MAX_S = 20.0
-    const val FLUSH_TEMP_MIN_C = 60.0
-    const val FLUSH_TEMP_MAX_C = 100.0
+    const val WATER_VOL_MAX_ML = 500.0
+    val FLUSH_TIME_MIN_S: Double get() = CoreBounds.qc.flushTimeS.min.toDouble()
+    val FLUSH_TIME_MAX_S: Double get() = CoreBounds.qc.flushTimeS.max.toDouble()
+    val FLUSH_TEMP_MIN_C: Double get() = CoreBounds.qc.flushTempC.min.toDouble()
+    val FLUSH_TEMP_MAX_C: Double get() = CoreBounds.qc.flushTempC.max.toDouble()
 }

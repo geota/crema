@@ -2,8 +2,8 @@ package coffee.crema.machine
 
 import coffee.crema.core.MachineRequest
 import coffee.crema.profiles.ProfileBounds
+import coffee.crema.ui.CoreBounds
 import coffee.crema.ui.QcBounds
-import coffee.crema.ui.QcSteam
 
 /**
  * A user's intent for the machine (DE1 + scale) or for the primary-owned
@@ -126,7 +126,15 @@ sealed interface MachineCommand {
      *  with the core (`normalizeBrewOverrides`), so no step leaves that bound. */
     data class AdjustBrew(val dose: Double, val yieldOut: Double, val brewTemp: Double, val preinf: Double?) : Config {
         override fun refusal(): String? {
-            val inRange = dose.within(0.0..MAX_DOSE_G) && yieldOut.within(0.0..MAX_YIELD_G) &&
+            // The ranges the Quick Controls themselves offer (the core's table,
+            // F8): the dose stepper's; for the yield, what the yield or ratio
+            // stepper reaches (0 = no weight target); the brew temperature's
+            // core bound. Pre-infusion's dial widens per profile (a profile's
+            // own longer pre-infusion), so it keeps the wire ceiling.
+            val q = CoreBounds.qc
+            val yieldRange = q.overrideYieldG.toRange()
+            val inRange = dose.within(q.doseG.min.toDouble()..q.doseG.max.toDouble()) &&
+                (yieldOut == 0.0 || yieldOut.within(yieldRange)) &&
                 brewTemp.within(0.0..maxBrewTempC()) && (preinf == null || preinf.within(0.0..MAX_PREINF_S))
             return if (inRange) null else "brew override out of range"
         }
@@ -141,31 +149,31 @@ sealed interface MachineCommand {
 }
 
 /** The Quick-Controls values a mirror may set, each with its stepper's bounds. */
-enum class QcField(val label: String, private val range: ClosedFloatingPointRange<Double>) {
-    STEAM_TIME("steam time", QcSteam.MIN_TIME_S..QcSteam.MAX_TIME_S),
-    STEAM_FLOW("steam flow", QcSteam.MIN_FLOW_ML_S..QcSteam.MAX_FLOW_ML_S),
+enum class QcField(val label: String, private val range: () -> ClosedFloatingPointRange<Double>) {
+    STEAM_TIME("steam time", { CoreBounds.qc.steamTimeS.toRange() }),
+    STEAM_FLOW("steam flow", { CoreBounds.qc.steamFlowMlS.toRange() }),
     /** 0 turns the steam heater off; otherwise the stepper's range, which
      *  keeps out of the band the firmware snaps to off. */
-    STEAM_TEMP("steam temperature", QcSteam.MIN_TEMP_C..QcSteam.MAX_TEMP_C),
-    HOT_WATER_TEMP("hot-water temperature", QcBounds.WATER_TEMP_MIN_C..QcBounds.WATER_TEMP_MAX_C),
-    HOT_WATER_VOLUME("hot-water volume", QcBounds.WATER_VOL_MIN_ML..QcBounds.WATER_VOL_MAX_ML),
-    /** The phone's flush stepper starts at 0 (it shares the pre-infusion minimum). */
-    FLUSH_TIME("flush time", 0.0..QcBounds.FLUSH_TIME_MAX_S),
-    FLUSH_TEMP("flush temperature", QcBounds.FLUSH_TEMP_MIN_C..QcBounds.FLUSH_TEMP_MAX_C),
+    STEAM_TEMP("steam temperature", { CoreBounds.qc.steamTempC.toRange() }),
+    HOT_WATER_TEMP("hot-water temperature", { QcBounds.WATER_TEMP_MIN_C..QcBounds.WATER_TEMP_MAX_C }),
+    HOT_WATER_VOLUME("hot-water volume", { QcBounds.WATER_VOL_MIN_ML..QcBounds.WATER_VOL_MAX_ML }),
+    FLUSH_TIME("flush time", { CoreBounds.qc.flushTimeS.toRange() }),
+    FLUSH_TEMP("flush temperature", { CoreBounds.qc.flushTempC.toRange() }),
     /** Grind also comes from a shot's or bag's recorded setting, not just the stepper. */
-    GRIND("grind", 0.0..MAX_GRIND);
+    GRIND("grind", { 0.0..MAX_GRIND });
 
-    /** Why [value] is out of bounds for this field, or null. */
+    /** Why [value] is out of bounds for this field, or null. The ranges are the
+     *  Quick Controls steppers' (the core's table, F8), hot water aside. */
     fun refusal(value: Float): String? {
         if (this == STEAM_TEMP && value == 0f) return null
-        return if (value.toDouble().within(range)) null else "$label out of range: $value"
+        return if (value.toDouble().within(range())) null else "$label out of range: $value"
     }
 }
 
+private fun coffee.crema.core.StepRange.toRange(): ClosedFloatingPointRange<Double> = min.toDouble()..max.toDouble()
+
 private val ASLEEP = setOf("Sleep", "GoingToSleep")
 private const val MAX_ID_LENGTH = 128
-private const val MAX_DOSE_G = 100.0
-private const val MAX_YIELD_G = 2_000.0
 private const val MAX_PREINF_S = 300.0
 private const val MAX_GRIND = 1_000.0
 
