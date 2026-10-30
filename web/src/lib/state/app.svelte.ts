@@ -40,6 +40,8 @@ import { commitShotCompletion } from '#lib/history/shot-persistence.js';
 import { getCaptureStore } from '#lib/capture/index.js';
 import {
 	getProfileStore,
+	effectiveCremaProfile,
+	preinfusionSeconds,
 	type CremaProfile,
 	type ProfileFingerprintOverrides
 } from '#lib/profiles/index.js';
@@ -224,6 +226,15 @@ const SCALE_LOW_BATTERY_PCT = 25;
  */
 const DIAL_PUSH_DEBOUNCE_MS = 500;
 
+/** The five Quick Sheet values a shot records as they were at its start. */
+interface ShotStartBrewParams {
+	yieldTarget: number;
+	brewTemp: number;
+	preinfuseTarget: number;
+	stopOnWeight: boolean;
+	autoTare: boolean;
+}
+
 /** Two override sets with the same values (absent = absent). */
 function sameOverrides(a: ProfileFingerprintOverrides, b: ProfileFingerprintOverrides): boolean {
 	return (
@@ -348,19 +359,13 @@ export class CremaApp {
 	 * would let a post-shot dial change retroactively rewrite history,
 	 * the snapshot-vs-live failure mode).
 	 *
-	 * `null` between shots and on a headless / replay path that does not
-	 * pass through the Quick Sheet — both leave the `StoredShot`'s QC
-	 * fields absent and downstream readers fall back to the embedded
-	 * profile slot. Cleared at `ShotCompleted` so a never-completed shot
-	 * does not leak its snapshot into the next one.
+	 * `null` between shots and on a path that does not pass through the
+	 * Quick Sheet: a start at the group head records the dial the DE1 was
+	 * given instead ({@link pushedBrewParams}); a replay sets its own.
+	 * Cleared at `ShotCompleted` so a never-completed shot does not leak its
+	 * snapshot into the next one.
 	 */
-	private brewParamsAtShotStart: {
-		yieldTarget: number;
-		brewTemp: number;
-		preinfuseTarget: number;
-		stopOnWeight: boolean;
-		autoTare: boolean;
-	} | null = null;
+	private brewParamsAtShotStart: ShotStartBrewParams | null = null;
 
 	constructor(
 		private readonly core: CremaCore,
@@ -953,7 +958,10 @@ export class CremaApp {
 		const snapshot = this.state.current;
 		const profileName = snapshot.activeProfileName ?? activeProfile?.name ?? null;
 		const dose = activeProfile?.dose ?? null;
-		const brewParams = this.brewParamsAtShotStart;
+		// A start at the group head has no Quick Sheet snapshot: record the
+		// dial the DE1 was given instead.
+		const brewParams =
+			this.brewParamsAtShotStart ?? (activeProfile ? this.pushedBrewParams(activeProfile) : null);
 
 		return {
 			bean: beanSnapshot,
@@ -962,6 +970,25 @@ export class CremaApp {
 			brewParams: brewParams ? { ...brewParams } : null,
 			grinderModel,
 			source: 'live'
+		};
+	}
+
+	/**
+	 * The shot-start snapshot for a shot the app did not start (the group
+	 * head): `profile` with the overrides last given to the core as its
+	 * desired profile — what the DE1 runs — or, before any, the live dial.
+	 */
+	private pushedBrewParams(profile: CremaProfile): ShotStartBrewParams {
+		const desired = this.#desiredOverrides;
+		const qc = desired?.profileId === profile.id ? desired.qc : this.brewOverridesFor(profile);
+		const run = effectiveCremaProfile(profile, qc);
+		const settings = getSettingsStore().current;
+		return {
+			yieldTarget: run.yieldOut,
+			brewTemp: run.brewTemp,
+			preinfuseTarget: preinfusionSeconds(run),
+			stopOnWeight: settings.stopOnWeight,
+			autoTare: settings.autoTareOnShotStart
 		};
 	}
 
@@ -1442,6 +1469,9 @@ export class CremaApp {
 		null
 	);
 
+	/** The profile and overrides last given to the core as its desired profile. */
+	#desiredOverrides: { profileId: string; qc: ProfileFingerprintOverrides } | null = null;
+
 	/** The pending debounced push of a dial change ({@link setBrewOverrides}). */
 	#overridesPush: ReturnType<typeof setTimeout> | null = null;
 
@@ -1490,6 +1520,7 @@ export class CremaApp {
 		if (this.#brewOverrides !== null && this.#brewOverrides.profileId !== profile?.id) {
 			this.#brewOverrides = null;
 		}
+		this.#desiredOverrides = profile === null ? null : { profileId: profile.id, qc };
 		const { output, status } = await this.core.setDesiredProfile(profile, qc, performance.now());
 		this.applyCoreOutput(output);
 		return status;
@@ -2267,9 +2298,9 @@ export class CremaApp {
 	 *
 	 * Callable independently of {@link startShot} — the brew dashboard
 	 * calls this every time the user taps Coffee (just before the shot
-	 * request goes out), and a manual on-machine start (no Crema tap)
-	 * simply leaves the snapshot at its previous value; the `null`
-	 * fallback after `ShotCompleted` keeps that case sane.
+	 * request goes out). A manual on-machine start (no Crema tap) finds it
+	 * `null` (cleared at `ShotCompleted` and on a failed start) and records
+	 * the dial the core was given instead.
 	 */
 	setBrewParamsSnapshot(snapshot: {
 		yieldTarget: number;
