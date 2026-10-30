@@ -37,7 +37,12 @@
 		ScaleRequiredError,
 		type UiSnapshot
 	} from '#lib/state/index.js';
-	import { ShotPhase, MachineState, MmrRegister } from '#lib/core/crema-core.js';
+	import { ShotPhase, MachineState, MmrRegister, HotWaterMode } from '#lib/core/crema-core.js';
+	import {
+		hotWaterRestingAmount,
+		hotWaterRunning,
+		hotWaterTargetSeconds
+	} from '#lib/brew/hot-water.js';
 	import ModeChip from './ModeChip.svelte';
 	import ModeCard from './ModeCard.svelte';
 	import MachineErrorBanner from './MachineErrorBanner.svelte';
@@ -188,20 +193,16 @@
 		};
 		return JSON.parse(wasmResolveModeTargets(JSON.stringify(inputs))) as ModeTargets;
 	});
-	/**
-	 * The hot-water amount: the core's resolved target (never the machine
-	 * echo, which can carry the 250 ml scale backstop); the Quick Controls
-	 * value until the core has one.
-	 */
-	// `$derived.by` for the same reason as `modeTargets`: `params` is declared
-	// later in the file.
-	const hotWaterMl = $derived.by(() => ui.hotWaterTarget?.volumeMl ?? params.current.waterVolume);
+	/** The hot-water copy follows the user's weight and volume units. */
+	const hotWaterUnits = $derived({ weightUnit: prefs.weightUnit, volumeUnit: prefs.volumeUnit });
 	/** Per-mode target ceilings — the timeouts the firmware enforces. */
 	const MODE_TARGET_SEC = $derived.by<
 		Record<'steaming' | 'dispensing' | 'flushing', number>
 	>(() => ({
 		steaming: modeTargets.steamTimeoutS,
-		dispensing: modeTargets.hotWaterTimeoutS,
+		// Time mode's seconds; volume and ratio pours have no time target (the
+		// 60 s backstop isn't the dose), so no progress bar.
+		dispensing: ui.hotWaterTarget ? hotWaterTargetSeconds(ui.hotWaterTarget) : 0,
 		flushing: modeTargets.flushTimeS
 	}));
 	/**
@@ -214,7 +215,11 @@
 		Record<'steaming' | 'dispensing' | 'flushing', string>
 	>(() => ({
 		steaming: `${formatTemp(modeTargets.steamTempC, prefs.tempUnit)} · ${modeTargets.steamTimeoutS} s`,
-		dispensing: `${formatTemp(modeTargets.hotWaterTempC, prefs.tempUnit)} · ${formatVolume(hotWaterMl, prefs.volumeUnit)}`,
+		// The amount is the core's resolved target, never the machine echo
+		// (which can carry the 250 ml scale backstop).
+		dispensing: ui.hotWaterTarget
+			? `${formatTemp(modeTargets.hotWaterTempC, prefs.tempUnit)} · ${hotWaterRestingAmount(ui.hotWaterTarget, hotWaterUnits)}`
+			: formatTemp(modeTargets.hotWaterTempC, prefs.tempUnit),
 		flushing: `${formatTemp(modeTargets.flushTempC, prefs.tempUnit)} · ${modeTargets.flushTimeS} s`
 	}));
 	/**
@@ -307,13 +312,22 @@
 	 * temperature: the millilitres are what the user set, and the temperature
 	 * is already promoted into the temperature channel while it dispenses.
 	 */
+	/** The mode card's fixed hot-water target: the ml poured, or time mode's
+	 *  seconds ("no limit" when it pours until stopped). */
+	function hotWaterCardTarget(): { value: string; unit: string } {
+		const t = ui.hotWaterTarget;
+		if (t?.mode === HotWaterMode.Time) {
+			return t.timeS == null ? { value: 'no limit', unit: '' } : { value: String(Math.round(t.timeS)), unit: 's' };
+		}
+		return convertVolume(t?.volumeMl, prefs.volumeUnit);
+	}
 	const modeCardView = $derived.by(() => {
 		if (modeState === 'dispensing')
 			return {
 				label: 'Hot water',
 				icon: 'drop',
 				color: 'var(--mc-water)',
-				target: convertVolume(hotWaterMl, prefs.volumeUnit)
+				target: hotWaterCardTarget()
 			};
 		if (modeState === 'flushing')
 			return {
@@ -340,8 +354,8 @@
 			: MODE_TARGET_LABEL.steaming
 	);
 	const waterChipSub = $derived(
-		modeState === 'dispensing'
-		? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
+		modeState === 'dispensing' && ui.hotWaterTarget
+			? hotWaterRunning(ui.hotWaterTarget, modeElapsedSec, hotWaterUnits)
 			: MODE_TARGET_LABEL.dispensing
 	);
 	const flushChipSub = $derived(
@@ -471,14 +485,14 @@
 		profileStore.setActive(cloned.id);
 	}
 
-	// Quick Sheet steam/hot-water key → its persisted Settings field (issue 14).
-	// Only the four fields that share the cuuid_0B packet need the map; the rest
-	// persist via literal keys in their own `case`.
+	// Quick Sheet steam / hot-water key → its persisted Settings field (issue
+	// 14). These three share the cuuid_0B packet with the hot-water dose (which
+	// the Hot water card stores itself); the rest persist via literal keys in
+	// their own `case`.
 	const QC_SETTING = {
 		steamTime: 'qcSteamTimeS',
 		steamTemp: 'qcSteamTempC',
-		waterTemp: 'qcHotWaterTempC',
-		waterVolume: 'qcHotWaterVolumeMl'
+		waterTemp: 'qcHotWaterTempC'
 	} as const;
 
 	const params = new BrewParamState(
@@ -493,21 +507,14 @@
 				'yield':
 					void app?.applyShotTargetWeight(value);
 					break;
-				case // Steam temp/time + hot-water temp/vol share the one cuuid_0B
-				// packet — persist + read-modify-write all four together (issue
-				// 14), reading the just-updated `params.current`.
+				case // Steam temp/time + the hot-water temperature share the one
+				// cuuid_0B packet with the hot-water dose — persist, then the
+				// app's one push sends them from the settings store (issue 14).
 				'steamTime':
 				case 'steamTemp':
-				case 'waterTemp':
-				case 'waterVolume': {
+				case 'waterTemp': {
 						settings.set(QC_SETTING[key as keyof typeof QC_SETTING], value);
-						const c = params.current;
-						void app?.setSteamHotwater({
-							steamTempC: c.steamTemp,
-							steamTimeoutS: c.steamTime,
-							hotWaterTempC: c.waterTemp,
-							hotWaterVolumeMl: c.waterVolume
-						});
+						void app?.pushSteamHotwater();
 						break;
 					}
 				case // Steam flow + flush temp/time are standalone MMR writes.
@@ -536,7 +543,6 @@
 				steamFlow: prefs.qcSteamFlowMlS,
 				steamTemp: prefs.qcSteamTempC,
 				waterTemp: prefs.qcHotWaterTempC,
-				waterVolume: prefs.qcHotWaterVolumeMl,
 				flushTime: prefs.qcFlushTimeS,
 				flushTemp: prefs.qcFlushTempC
 			})),

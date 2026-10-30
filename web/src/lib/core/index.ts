@@ -26,8 +26,7 @@ import type { CalTarget, MmrRegister } from './crema-core';
 import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
 import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core';
 import type { BrewOverrides, ProfileSyncOutput, ProfileSyncStatus } from './crema-core';
-import type { HotWaterBounds, HotWaterDose, HotWaterTarget, SteamHotWaterTargets } from './crema-core';
-import { HotWaterMode } from './crema-core';
+import type { HotWaterBounds, HotWaterTarget, SteamHotWaterTargets } from './crema-core';
 import { guardStoppedBridge } from './stopped-guard';
 
 /** Parse a bridge `FlashStep` JSON; `status: null` reads as "no flash". */
@@ -611,6 +610,12 @@ export interface CremaCore {
 	 */
 	setWaterWarnMl(warnMl: number | undefined): Promise<void>;
 	/**
+	 * Latch every settings-driven core input from a `CommonSettings` JSON in
+	 * one call — auto-tare, stop-on-weight, volume stop, max shot duration,
+	 * weight unit, low-water threshold. The core sanitizes the blob first.
+	 */
+	applyCommonSettings(settingsJson: string): Promise<void>;
+	/**
 	 * Tell the core which profile is active — `profileJson` is the wire
 	 * `Profile` JSON (`JSON.stringify(toCoreProfile(p))`); `undefined` = no
 	 * active profile. Latches the
@@ -957,14 +962,6 @@ export function hotWaterBounds(): HotWaterBounds {
 }
 
 /**
- * A volume-mode hot-water dose of `ml`, the other modes' values the core's
- * defaults: what this shell sends until it has the time / ml / ratio card.
- */
-export function volumeHotWaterDose(ml: number): HotWaterDose {
-	return { ...hotWaterBounds().defaults, mode: HotWaterMode.Volume, volumeMl: ml };
-}
-
-/**
  * Load the wasm core and return the async facade.
  *
  * Dynamic-imports the `de1-wasm` bundle, `await`s its async `init()`, and
@@ -1289,6 +1286,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setWaterWarnMl(warnMl) {
 			bridge.set_water_warn_ml(warnMl);
+		},
+		async applyCommonSettings(settingsJson) {
+			bridge.applyCommonSettings(settingsJson);
 		},
 		async setActiveProfile(profileJson) {
 			bridge.setActiveProfile(profileJson);

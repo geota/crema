@@ -14,6 +14,7 @@ export {
 	DEFAULT_SETTINGS,
 	settingsToCommon,
 	applyCommonToSettings,
+	sanitizeFlat,
 	settingsPlatformExtras,
 	brewCueSoundOn,
 	brewCueHapticsOn,

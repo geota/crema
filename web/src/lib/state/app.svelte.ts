@@ -18,7 +18,6 @@
 import { refreshStopTargetsProjection, setHotWaterTarget } from './ui-state.svelte';
 import {
 	loadCore,
-	volumeHotWaterDose,
 	type Command,
 	type CoreOutput,
 	type CremaCore
@@ -50,7 +49,7 @@ import { writeJson } from '#lib/utils/storage.js';
 import type { ProfileSyncStatus } from '#lib/core/index.js';
 import { isSerialStolen } from '#lib/decent/stolen-serials.js';
 import { SAW_MODEL_KEY, seedSawModel } from './saw-model-store';
-import { getSettingsStore } from '#lib/settings/index.js';
+import { getSettingsStore, settingsToCommon } from '#lib/settings/index.js';
 import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
 import { CoreRecoveryWatch } from '#lib/core/recovery-watch.js';
 import { CoreResetNotice } from '#lib/core/reset-notice.js';
@@ -556,6 +555,11 @@ export class CremaApp {
 				// user-disconnect path already clears it in disconnectScale.
 				if (scaleState === 'disconnected' || scaleState === 'failed') {
 					this.clearScaleHeartbeat();
+				}
+				// A scale arriving or leaving moves the hot-water target (the
+				// backstop and the weight stop); with no DE1 no output says so.
+				if (scaleState === 'ready' || scaleState === 'disconnected' || scaleState === 'failed') {
+					void this.refreshHotWaterTarget();
 				}
 				// Fire `scaleConnected` on the first transition into ready.
 				// The advertised name and capabilities arrive a beat later
@@ -1543,6 +1547,27 @@ export class CremaApp {
 	}
 
 	/**
+	 * Push the whole settings bundle to the core: every settings-driven core
+	 * input in one call (`applyCommonSettings` — auto-tare, stop-on-weight,
+	 * volume stop, max shot, weight unit, low-water threshold), the steam /
+	 * hot-water targets with the hot-water dose ({@link pushSteamHotwater}), the mains
+	 * line-frequency override, and the idle-sleep timeout. Runs at start-up and
+	 * after every whole-bundle write (the settings store's `onReplaced`: a
+	 * backup restore, Restore defaults), so the core never keeps stale values
+	 * until a reload. Single edits still use their own setters.
+	 */
+	pushSettings(): void {
+		const s = getSettingsStore().current;
+		void this.core.applyCommonSettings(JSON.stringify(settingsToCommon(s)));
+		// The steam / hot-water packet's targets and the hot-water dose: a
+		// restore that switches to ratio must not leave the old packet for the
+		// group-head button.
+		void this.pushSteamHotwater();
+		void this.core.setLineFrequencyOverride(s.lineFrequencyHz === 50 || s.lineFrequencyHz === 60 ? s.lineFrequencyHz : 0);
+		this.idleSleep.configure(s.idleSleepMin);
+	}
+
+	/**
 	 * Tell the core which unit the user wants on the connected scale's
 	 * on-scale LCD. The Settings page calls this whenever the
 	 * `weightUnit` pref changes.
@@ -1681,9 +1706,9 @@ export class CremaApp {
 	 * is the one moment it knows the picture moved (geota/crema#56).
 	 */
 	async refreshStopTargets(): Promise<void> {
+		// Re-reads the hot-water target too (the target yield is the ratio's
+		// basis).
 		await refreshStopTargetsProjection(this.core);
-		// The target yield is also the hot-water ratio's basis.
-		await this.refreshHotWaterTarget();
 	}
 
 	async applyProfileTargetWeight(grams: number): Promise<void> {
@@ -1831,24 +1856,24 @@ export class CremaApp {
 	}
 
 	/**
-	 * Write the four QC-modeled steam / hot-water fields (issue 14), the hot
-	 * water as a volume-mode dose. The core keeps the combined cuuid_0B packet
-	 * in step: the group target is the effective profile's temperature, and
-	 * the fields the Quick Sheet doesn't model (flags, espresso volume) keep
-	 * their current values.
+	 * Push the steam / hot-water targets and the hot-water dose to the core —
+	 * the one push for the combined cuuid_0B packet (spec §4), read from the
+	 * persisted settings (`hotWaterDose()`, never a view's copy). The core
+	 * keeps the packet in step: the volume and timeout come from the dose,
+	 * the group target is the effective profile's temperature, and the
+	 * fields no one here owns (flags, espresso volume) are kept. Every writer
+	 * of these settings ends here: the Quick Sheet, Settings → Steam, and the
+	 * whole-bundle writes through {@link pushSettings}.
 	 */
-	async setSteamHotwater(values: {
-		steamTempC: number;
-		steamTimeoutS: number;
-		hotWaterTempC: number;
-		hotWaterVolumeMl: number;
-	}): Promise<void> {
+	async pushSteamHotwater(): Promise<void> {
+		const settings = getSettingsStore();
+		const s = settings.current;
 		this.applyCoreOutput(
 			await this.core.setSteamHotwaterTargets({
-				steamTempC: values.steamTempC,
-				steamTimeoutS: values.steamTimeoutS,
-				hotWaterTempC: values.hotWaterTempC,
-				hotWater: volumeHotWaterDose(values.hotWaterVolumeMl)
+				steamTempC: s.qcSteamTempC,
+				steamTimeoutS: s.qcSteamTimeS,
+				hotWaterTempC: s.qcHotWaterTempC,
+				hotWater: settings.hotWaterDose()
 			})
 		);
 		await this.refreshHotWaterTarget();
@@ -2613,39 +2638,19 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// HistoryContext) construct themselves lazily on first access via
 	// the shared store + `getCremaUiState()` singletons — no bind step
 	// needed. See `#lib/state/{brew-context,machine-readout,history-context}.svelte`.
-	// Push the persisted AC mains-frequency preference into the core's
-	// volume integrator. `0` = auto (the core's auto-detector decides);
-	// `50` / `60` pin the value. Done once at construction; subsequent
-	// changes flow via `app.setLineFrequencyOverride(...)` from the
-	// Advanced settings section.
-	const hz = getSettingsStore().current.lineFrequencyHz;
-	if (hz === 50 || hz === 60) {
-		void core.setLineFrequencyOverride(hz);
-	} else {
-		void core.setLineFrequencyOverride(0);
-	}
-	// Push the persisted weight-unit pref into the core so the Decent
-	// Scale LCD-enable auto-policy (triggered on the DE1's Idle entry)
-	// picks the right wire packet from the first state notification.
-	// Subsequent changes flow via `app.applyWeightUnitPref(...)` invoked
-	// from the Settings page on every `weightUnit` change.
-	void core.setWeightUnitPref(getSettingsStore().current.weightUnit);
-	// The low-water threshold drives the core's warning (`WaterLow`).
-	void core.setWaterWarnMl(getSettingsStore().current.waterWarnMl ?? undefined);
-	// Push the persisted shot-behaviour settings into the core so SAW +
-	// auto-tare fire correctly on the very first shot — including a shot
-	// initiated via the DE1's group-head touch (GHC), which bypasses
-	// `startShot()`. The core latches these and consults them on
-	// `ShotEvent::Started` / first flowing phase regardless of initiator.
-	// Subsequent changes flow via the matching `applyXxx(...)` methods
-	// on `CremaApp` whenever the Settings / Profile / QC surfaces mutate.
-	{
-		const s = getSettingsStore().current;
-		void core.setAutoTare(s.autoTareOnShotStart);
-		void core.setStopOnWeight(s.stopOnWeight);
-		void core.setVolumeStopWithScale(s.volumeStopWithScale);
-		void core.setMaxShotDuration(s.maxShotDurationS > 0 ? s.maxShotDurationS : undefined);
-	}
+	// Push the persisted settings into the core — the shot behaviour (so SAW
+	// and auto-tare fire on the very first shot, including one started from
+	// the group head), the weight unit (the scale LCD auto-policy), the
+	// low-water threshold, the mains frequency and the idle-sleep timeout —
+	// and again whenever the whole bundle is replaced (restore, Restore
+	// defaults). Single edits flow through the matching `applyXxx(...)`.
+	// The hot-water migration runs once, here, right after the wasm core has
+	// loaded and before anything reads the dose (the connect sweep can run
+	// before any card renders): it stores the core's answer for a record from
+	// before the hot-water modes.
+	getSettingsStore().migrateHotWater();
+	app.pushSettings();
+	getSettingsStore().onReplaced = () => app.pushSettings();
 	// Seed the learned SAW drip model (core-owned opaque blob) from its
 	// persisted store; saved back after every completed shot. A corrupt
 	// blob is quarantined, not lost (see `saw-model-store.ts`).
@@ -2657,7 +2662,6 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// hidden-tab timer still fires on its next run. Replaces the old
 	// per-touch UserPresent heartbeat: presence is now poked by the core on
 	// activity only, throttled.
-	app.idleSleep.configure(getSettingsStore().current.idleSleepMin);
 	app.idleSleep.start();
 	if (typeof document !== 'undefined') app.idleSleep.attach(document);
 	// The active profile is the core's desired profile: set at boot (once the
