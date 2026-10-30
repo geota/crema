@@ -890,23 +890,6 @@ class LibraryController(
     // stripped on export and preserved on import — a backup moves between devices
     // without dragging this device's bindings along.
 
-    /**
-     * Everything the backup reads from controller and VM state, captured on the
-     * caller's (Main) thread so the serialisation, the core export and the zip
-     * can run on [Dispatchers.Default] without touching live mutable state
-     * (cohort review 2026-10-25, Android P1-2: a few hundred shots with their
-     * full sample series froze the UI thread, daily at launch for Drive users).
-     */
-    private class BackupSnapshot(
-        val customs: List<String>,
-        val state: MainUiState,
-        val pinned: Set<String>,
-        val hidden: Set<String>,
-        val prefs: AppPrefs,
-        val visualizerPrefs: VisualizerSyncPrefs,
-        val userRecipes: List<coffee.crema.core.BrewRecipe>,
-    )
-
     /** Snapshot the backup inputs, or null + a notice when there's nothing to
      *  back up. Custom profiles only — built-ins ship with the app, so backing
      *  them up would only create duplicates. Cheap; runs on the caller. */
@@ -933,108 +916,12 @@ class LibraryController(
         return BackupSnapshot(customs, s, pinnedIds, hiddenIds, currentPrefs(), visualizer.backupPrefs(), userRecipes)
     }
 
-    /** Build the whole-app backup bundle as `crema-backup/v1` JSONL from [snap].
-     *  Heavy (every shot's sample series + the core export); reads only [snap],
-     *  so it is safe off the main thread. */
-    private fun backupBundleJson(snap: BackupSnapshot): String? {
-        val customs = snap.customs
-        val s = snap.state
-        val pinnedIds = snap.pinned
-        val hiddenIds = snap.hidden
-        val userRecipes = snap.userRecipes
-        // Portable settings only — drop per-device identity (BLE addresses, LAN
-        // proxy, paired devices); they're meaningless on another device.
-        val portable = snap.prefs.copy(
-            de1Address = null,
-            scaleAddress = null,
-            proxyRole = "normal",
-            proxyPrimaryHost = "",
-            proxyPrimaryPort = 0,
-            replayPrimary = false,
-            pairedDevices = emptyList(),
-        )
-        val beansJson = runCatching { json.encodeToString(ListSerializer(Bean.serializer()), s.beans) }.getOrElse { "[]" }
-        val roastersJson = runCatching { json.encodeToString(ListSerializer(Roaster.serializer()), s.roasters) }.getOrElse { "[]" }
-        // Shots ride in the canonical core `StoredShot` wire shape (the SAME shape
-        // the Visualizer path emits via `export_v2_json_shot`), NOT Android's flat
-        // store shape: the core backup exporter parses `shots:[StoredShot]`, so the
-        // flat shape fails the whole envelope's deserialization → the entire backup
-        // aborts once any shot exists (issue 01). `wireShotJson` emits
-        // formatVersion/completedAt/record; restore inverts via storedShotFromBackupJson.
-        val shotsJson = runCatching {
-            JsonArray(s.history.map { wireShotJson(it, forBackup = true) }).toString()
-        }.getOrElse { "[]" }
-        // Settings line: the shared cross-shell CommonSettings `common` block (both
-        // shells emit it identically, so common prefs restore web<->Android) + this
-        // shell's `_shell` tag + Android-only `qcGrind` (re-applied only on Android).
-        val settingsJson = runCatching {
-            val common = json.parseToJsonElement(json.encodeToString(CommonSettings.serializer(), portable.toCommonSettings()))
-            json.encodeToString(
-                JsonObject.serializer(),
-                buildJsonObject {
-                    put("common", common)
-                    put("_shell", "android")
-                    portable.qcGrind?.let { put("qcGrind", it) }
-                },
-            )
-        }.getOrElse { "{\"_shell\":\"android\"}" }
-        // Profile organisation — pinned + hidden BUILT-IN ids (cross-shell; custom
-        // pins ride inside the profile JSON). Maintenance — a shared core type,
-        // fully portable. Visualizer SYNC prefs — shell-tagged, token-free.
-        val profileMetaJson = json.encodeToString(
-            JsonObject.serializer(),
-            JsonObject(
-                mapOf(
-                    "pinned" to JsonArray(pinnedIds.map { JsonPrimitive(it) }),
-                    "hiddenBuiltins" to JsonArray(hiddenIds.map { JsonPrimitive(it) }),
-                ),
-            ),
-        )
-        val recipesJson = runCatching {
-            json.encodeToString(ListSerializer(coffee.crema.core.BrewRecipe.serializer()), userRecipes)
-        }.getOrElse { "[]" }
-        // Recipe organisation — default pointers (may name built-ins) + hidden
-        // built-in ids, cross-shell like profileMeta.
-        val recipeMetaJson = json.encodeToString(
-            JsonObject.serializer(),
-            JsonObject(
-                mapOf(
-                    "defaults" to JsonObject(s.lastRecipeByMethod.mapValues { JsonPrimitive(it.value) }),
-                    "hiddenBuiltins" to JsonArray(s.hiddenBuiltinRecipes.map { JsonPrimitive(it) }),
-                ),
-            ),
-        )
-        val customMethodsJson = runCatching {
-            json.encodeToString(ListSerializer(coffee.crema.core.CustomBrewMethod.serializer()), s.customMethods)
-        }.getOrElse { "[]" }
-        val maintenanceJson = runCatching { json.encodeToString(MaintenanceState.serializer(), s.maintenance) }.getOrElse { "{}" }
-        val visualizerPrefsJson = runCatching {
-            json.encodeToString(VisualizerSyncPrefs.serializer(), snap.visualizerPrefs)
-        }.getOrElse { "{}" }
-        // Assemble the envelope as a JsonObject rather than raw string concat so a
-        // dropped brace / comma can't silently corrupt it (issue 06 F5). Each piece
-        // is already a serialized JSON string; parse it back into the tree. The core
-        // re-serialises the envelope when it emits the JSONL, so formatting here is
-        // immaterial — this only hardens assembly.
-        val envelope = buildJsonObject {
-            put("profiles", JsonArray(customs.map { json.parseToJsonElement(it) }))
-            put("beans", json.parseToJsonElement(beansJson))
-            put("roasters", json.parseToJsonElement(roastersJson))
-            put("shots", json.parseToJsonElement(shotsJson))
-            put("settings", json.parseToJsonElement(settingsJson))
-            put("profileMeta", json.parseToJsonElement(profileMetaJson))
-            put("recipes", json.parseToJsonElement(recipesJson))
-            put("recipeMeta", json.parseToJsonElement(recipeMetaJson))
-            // The user's own brewing methods, tombstones included (their old
-            // brews still resolve) → `kind:"brewMethod"` lines.
-            put("customMethods", json.parseToJsonElement(customMethodsJson))
-            put("maintenance", json.parseToJsonElement(maintenanceJson))
-            put("visualizerPrefs", json.parseToJsonElement(visualizerPrefsJson))
-        }.toString()
-        return runCatching {
-            exportBackupJsonl(envelope, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
-        }.getOrElse { appendLog("Backup failed: ${it.message}"); notify("Backup failed"); null }
-    }
+    /** Build the whole-app backup bundle ([backupBundleJsonl]) from [snap], or
+     *  null + a notice on failure. Reads only [snap], so it is safe off the main
+     *  thread. */
+    private fun backupBundleJson(snap: BackupSnapshot): String? = runCatching {
+        backupBundleJsonl(snap, json, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
+    }.getOrElse { appendLog("Backup failed: ${it.message}"); notify("Backup failed"); null }
 
     /**
      * Wrap [backupBundleJson]'s JSONL into a `.crema.zip`: `backup.jsonl` plus, for
@@ -1100,9 +987,10 @@ class LibraryController(
      *  ([restoreBackup]) and the Google Drive restore (the downloaded `.crema`). */
     fun restoreBackupFromText(text: String, mode: MainViewModel.RestoreMode) {
         scope.launch {
-            // The line-parser lives in the pure, unit-tested `parseBackupRecords`
-            // (review #07); re-bind its result to the names the apply block uses.
-            val parsed = parseBackupRecords(text, json, System.currentTimeMillis())
+            // The core parses the bundle (`parseBackup` → importBackupJsonl, the
+            // parser web uses); re-bind its result to the names the apply block uses.
+            val parsed = parseBackup(text, json, System.currentTimeMillis())
+                ?: run { notify("Restore failed — not a Crema backup"); return@launch }
             val profiles = parsed.profiles
             val beans = parsed.beans
             val roasters = parsed.roasters
@@ -1113,7 +1001,6 @@ class LibraryController(
             val restoredProfileMeta = parsed.profileMeta
             val restoredMaintenance = parsed.maintenance
             val restoredVisualizerPrefs = parsed.visualizerPrefs
-            if (!parsed.sawHeader) { notify("Restore failed — not a Crema backup"); return@launch }
 
             if (mode == MainViewModel.RestoreMode.WIPE) {
                 customProfilesJson = emptyList()
