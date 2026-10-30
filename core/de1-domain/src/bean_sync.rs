@@ -1155,6 +1155,67 @@ mod tests {
         );
     }
 
+    /// AC-F2.3: a duplicate of a synced bag is a new bag on Visualizer. The
+    /// push POSTs the copy (never PATCHes the original's bag), the original's
+    /// remote bag pulls back onto the original only, and deleting the copy has
+    /// no remote id to delete.
+    #[test]
+    fn duplicate_of_a_linked_bean_never_touches_the_original_remote_bag() {
+        use crate::visualizer_sync::{BeanReconcileAction, PulledBag, reconcile_pulled_bags};
+        let last_sync = 5_000;
+        let mut original = bean("bean:orig", Some("roaster:1"));
+        original.visualizer_id = Some("vb-orig".into());
+        original.beanconqueror_id = Some("bc-orig".into());
+        original.canonical_coffee_bag_id = Some("cat-bag-1".into());
+        original.updated_at = 4_000;
+        let copy = crate::duplicate_bean(&original, "bean:copy", 6_000);
+        let library = vec![original.clone(), copy.clone()];
+
+        // Push: only the copy, as a create; the original is untouched.
+        assert_eq!(
+            plan_bean_push(&library, Some(last_sync), &[]),
+            vec![BeanPushItem {
+                local_id: "bean:copy".into(),
+                create: true
+            }]
+        );
+        let body = &coffee_bag_write_request(&copy, Some("vz-r1"))["coffee_bag"];
+        assert_eq!(body["name"], "Gesha (copy)");
+        assert_eq!(body["metadata"]["crema"]["crema_id"], "bean:copy");
+        assert!(body["metadata"]["crema"]["crema_beanconqueror_id"].is_null());
+
+        // Pull: the original's remote bag (renamed remotely) lands on the
+        // original, never on the copy.
+        let mut remote = crate::visualizer_wire::bean_to_wire(&original, Some("vz-r1"));
+        remote.name = "Gesha (remote edit)".into();
+        let pulled = PulledBag {
+            wire: serde_json::to_value(&remote).unwrap(),
+            local_roaster_id: Some("roaster:1".into()),
+            fallback_id: "bean:fallback".into(),
+        };
+        let actions =
+            reconcile_pulled_bags(&library, &[pulled], &HashMap::new(), Some(last_sync), 7_000);
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        match &actions[0] {
+            BeanReconcileAction::Replace { local_id, remote } => {
+                assert_eq!(local_id, "bean:orig");
+                assert_eq!(remote.name, "Gesha (remote edit)");
+            }
+            other @ BeanReconcileAction::Add { .. } => panic!("{other:?}"),
+        }
+
+        // Delete: a tombstoned copy writes nothing and a cascade roaster
+        // delete sends only the original's remote id.
+        let mut gone = copy;
+        gone.deleted_at = Some(8_000);
+        assert_eq!(gone.visualizer_id, None);
+        let library = vec![original, gone];
+        assert!(plan_bean_push(&library, Some(last_sync), &[]).is_empty());
+        let roasters = vec![roaster("roaster:1", "Onyx", 0)];
+        let plan = plan_roaster_delete(&roasters, &library, "roaster:1", true).unwrap();
+        assert_eq!(plan.remote_bean_ids, vec!["vb-orig".to_owned()]);
+    }
+
     /// The cross-run contract both shells rely on: pull → apply → the next
     /// run's plan writes nothing; a local edit after the pull writes once.
     #[test]

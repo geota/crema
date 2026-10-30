@@ -4,6 +4,7 @@ import android.content.Context
 import coffee.crema.core.Bean
 import coffee.crema.core.BeanOrigin
 import coffee.crema.core.Roaster
+import coffee.crema.core.duplicateBeanJson
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
@@ -98,6 +99,24 @@ fun newBean(
     metadata = emptyMeta,
     createdAt = nowMs,
     updatedAt = nowMs,
+)
+
+private val duplicateJson = Json { ignoreUnknownKeys = true }
+
+/**
+ * A new bag copied from [source] — the core's `duplicate_bean`: [newId],
+ * "<name> (copy)", [nowMs] stamps, and none of the original's remote links
+ * (Visualizer id, Beanconqueror id), photo ref, tombstone, archive or pin.
+ * [core] is the UniFFI `duplicateBeanJson` (injectable for JVM tests).
+ */
+fun duplicateBean(
+    source: Bean,
+    nowMs: Long,
+    newId: String = "bean:" + UUID.randomUUID(),
+    core: (beanJson: String, newId: String, nowMs: Long) -> String = ::duplicateBeanJson,
+): Bean = duplicateJson.decodeFromString(
+    Bean.serializer(),
+    core(duplicateJson.encodeToString(Bean.serializer(), source), newId, nowMs),
 )
 
 /** Mint a new roaster-directory row. */
