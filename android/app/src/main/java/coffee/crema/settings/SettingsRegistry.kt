@@ -266,10 +266,6 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
 /** Snapshot fields that are not settings: identity and bookkeeping. */
 val SNAPSHOT_META: Set<String> = setOf("activeProfileJson", "activeBeanSummary", "primaryName", "authority", "settingsSchema", "rev")
 
-/** Snapshot fields still sent for pre-P2 remotes, which a P2 remote ignores:
- *  units are personal (C) now. */
-val SNAPSHOT_DEPRECATED: Set<String> = setOf("weightUnit", "tempUnit", "pressureUnit", "volumeUnit")
-
 /** The setting a #203 [MachineCommand.Config] edits. Exhaustive, so a new
  *  Config subtype has to answer it. */
 fun MachineCommand.Config.setting(): Setting = when (this) {

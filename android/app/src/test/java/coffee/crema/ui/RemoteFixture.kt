@@ -185,7 +185,6 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         val S = ConfigSnapshot(
             activeProfileId = PROFILE_S, activeBeanId = BEAN_S, activeBeanSummary = "S bag",
             stopOnWeight = true, autoTare = true, maxShotDurationS = 44f, grinderModel = "S grinder",
-            weightUnit = "g", tempUnit = "C",
             qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f,
             qcHotWaterVolumeMl = 200f, qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = 15f,
             brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0, brewPreinfuseS = 6.0,

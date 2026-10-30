@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
 class MirroredSettingsTest {
 
     private val own = MainUiState(stopOnWeight = false, qcGrind = 10f, qcSteamTempC = 140f, weightUnit = "oz", themeMode = "light")
-    private val snap = ConfigSnapshot(stopOnWeight = true, qcGrind = 15f, qcSteamTempC = 150f, weightUnit = "g")
+    private val snap = ConfigSnapshot(stopOnWeight = true, qcGrind = 15f, qcSteamTempC = 150f)
 
     @Test
     fun `effective is the identity without a slice`() {

@@ -33,7 +33,6 @@ class ConfigSnapshotCompatTest {
     private val schema1 = ConfigSnapshot(
         activeProfileId = legacy.activeProfileId, activeBeanId = legacy.activeBeanId, activeBeanSummary = legacy.activeBeanSummary,
         stopOnWeight = true, autoTare = true, maxShotDurationS = 44f, grinderModel = "Niche",
-        weightUnit = "oz", tempUnit = "F", pressureUnit = "psi", volumeUnit = "floz",
         qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f, qcHotWaterVolumeMl = 200f,
         qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = 15f,
         brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0, brewPreinfuseS = 6.0, primaryName = "Old tablet",
@@ -73,15 +72,6 @@ class ConfigSnapshotCompatTest {
             unknown.toSet(),
         )
         assertEquals(9, unknown.count { it.adoptable })
-    }
-
-    /** AC-28: a P2 hub's snapshot still decodes for a pre-P2 remote, with the
-     *  same values, units included (a pre-P2 remote would otherwise reset its
-     *  units to the decoder's defaults). */
-    @Test
-    fun `a P2 hub's snapshot decodes for a pre-P2 remote`() {
-        val old = coreJson.decodeFromString(LegacyConfigSnapshot.serializer(), Golden.require("config-snapshot/schema1.json"))
-        assertEquals(legacy, old)
     }
 
     @Test

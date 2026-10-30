@@ -77,8 +77,8 @@ class SettingsRegistryTest {
         val ab = Setting.entries.filter { it.group != SettingGroup.C_PERSONAL }
         val carried = ab.flatMap { it.snapshotFields }
         assertEquals(carried.size, carried.toSet().size, "a snapshot field carries two settings")
-        assertEquals(emptySet(), SNAPSHOT_META intersect SNAPSHOT_DEPRECATED)
-        assertEquals(snapshotFields, carried.toSet() + SNAPSHOT_META + SNAPSHOT_DEPRECATED, "untagged snapshot fields (left) or tags for no field (right)")
+        // Relay v4 R3: no deprecated fields; the units are personal and no longer sent.
+        assertEquals(snapshotFields, carried.toSet() + SNAPSHOT_META, "untagged snapshot fields (left) or tags for no field (right)")
         for (s in ab) {
             assertTrue(s.mirroredVia in setOf(MirrorSource.SNAPSHOT, MirrorSource.SCALE_ECHO, MirrorSource.NONE_AVAILABLE), "$s")
         }
