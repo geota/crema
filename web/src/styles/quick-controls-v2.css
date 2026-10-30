@@ -1282,6 +1282,90 @@
   .qchip-unit { display: none; }
 }
 
+/* ── Hot water: the amount mode lives in the label (spec §2.7) ────────────
+   "HOT WATER  TEMP | RATIO ▾": the second option names the persisted mode;
+   tapping it again opens a three-item menu. The resolved amount or caveat is
+   the stepper's secondary line, in the value box's bottom padding, so the
+   card keeps its siblings' three rows and 128 px. */
+.qhw { position: relative; }
+.qsplit-opt.has-menu { cursor: pointer; display: inline-flex; align-items: baseline; gap: 2px; }
+.qsplit-caret { font-size: 9px; align-self: center; opacity: 0.7; }
+.qhw-menu {
+  position: absolute;
+  top: 24px;
+  right: 0;
+  z-index: 60;
+  min-width: 210px;
+  background: var(--bg-page);
+  border: 1px solid rgba(var(--tint-rgb), 0.14);
+  border-radius: var(--radius-md);
+  padding: 6px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.qhw-menu-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: 'name check' 'hint check';
+  align-items: center;
+  column-gap: 8px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease);
+}
+.qhw-menu-item:hover { background: rgba(var(--tint-rgb), 0.06); }
+.qhw-menu-item.is-active { background: rgba(var(--copper-rgb), 0.1); }
+.qhw-menu-name { grid-area: name; font-size: 13px; font-weight: 500; }
+.qhw-menu-item.is-active .qhw-menu-name { color: var(--fg-accent); }
+.qhw-menu-hint { grid-area: hint; font-size: 11px; color: var(--fg-muted); }
+.qhw-menu-check { grid-area: check; font-size: 13px; color: var(--fg-accent); }
+
+/* The secondary line: absolutely placed in the value box's lower padding, so
+   the digits keep the siblings' baseline (nudged up 5 px to make room). */
+.qcs-val.has-sub { position: relative; }
+.qcs-val.has-sub > .qcs-num, .qcs-val.has-sub > .qcs-unit { transform: translateY(-5px); }
+.qcs-sub {
+  position: absolute;
+  left: 2px; right: 2px; bottom: 3px;
+  text-align: center;
+  line-height: 12px;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qhw-sub {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-accent);
+}
+.qhw-sub.is-warn { color: var(--warning); }
+/* Narrow boxes show the short form; the full sentence stays for screen
+   readers (and the title), visible from 260 px. */
+.qhw-sub-long {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.qhw .qcs { container-type: inline-size; }
+@container (min-width: 260px) {
+  .qhw-sub-short { display: none; }
+  .qhw-sub-long { position: static; width: auto; height: auto; overflow: visible; clip-path: none; }
+}
+
 /* ── Phone width (final cohort review 07 N6) ──────────────────────────────
    At 400 px the three-column grid overlapped labels and squeezed preset
    chips to 10-20 px, and the foot ran off the right edge. Below 600 px the
@@ -1307,3 +1391,8 @@
   .qsheet .qsheet-foot .qsheet-chart { row-gap: 0; }
   .qsheet .qsheet-chart .qsheet-chart-div { display: none; }
 }
+/* Hot water's No limit chip ("∞") shares the row evenly, its glyph at chip
+   size; after the phone-width rules so it keeps its size there. */
+.qchipr:has(.qchip-extra) .qchip { flex: 1 1 0; }
+.qchipr .qchip.qchip-extra,
+.qsheet-g-grid .qchipr .qchip.qchip-extra { font-size: 15px; line-height: 1; }

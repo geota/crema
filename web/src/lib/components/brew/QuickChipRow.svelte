@@ -26,7 +26,8 @@
 		onChange,
 		fmt,
 		dimension,
-		name
+		name,
+		extra
 	}: {
 		/** The preset values to render as chips (canonical when `dimension` set). */
 		options: number[];
@@ -42,6 +43,11 @@
 		dimension?: Dimension;
 		/** What the presets set ("Dose") — names the chip group "Dose presets". */
 		name?: string;
+		/**
+		 * One more chip after the presets that isn't a number (hot water's
+		 * No limit, "∞"): its label, accessible name, state and action.
+		 */
+		extra?: { label: string; name: string; active: boolean; onSelect: () => void };
 	} = $props();
 
 	const settings = getSettingsStore();
@@ -77,4 +83,14 @@
 			{text}{#if effectiveUnit}<span class="qchip-unit">{effectiveUnit}</span>{/if}
 		</button>
 	{/each}
+	{#if extra}
+		<button
+			type="button"
+			class="qchip qchip-extra"
+			class:is-active={extra.active}
+			aria-pressed={extra.active}
+			aria-label={extra.name}
+			onclick={extra.onSelect}>{extra.label}</button
+		>
+	{/if}
 </div>

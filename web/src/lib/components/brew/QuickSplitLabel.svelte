@@ -7,10 +7,16 @@
 		label: string;
 		/** Optional dim caption shown after the label when active (e.g. "log only"). */
 		meta?: string;
+		/**
+		 * The option opens a menu when tapped while active (a caret marks it):
+		 * the first tap selects it like any option, a second opens `onMenu`.
+		 */
+		menu?: boolean;
 	}
 </script>
 
 <script lang="ts">
+	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	/**
 	 * `QuickSplitLabel` — the "DOSE | grind" split-pill label, ported from the
 	 * design's `QuickSplitLabel` in `quick-controls-v2.jsx`. Tapping the dim side
@@ -34,7 +40,9 @@
 		onChange,
 		dot = false,
 		dotOn = false,
-		onDot
+		onDot,
+		onMenu,
+		menuOpen = false
 	}: {
 		/** Optional non-clickable category word before the toggle group. */
 		prefix?: string;
@@ -50,6 +58,10 @@
 		dotOn?: boolean;
 		/** Called when the on/off dot is clicked. */
 		onDot?: () => void;
+		/** Called when an active `menu` option is tapped again. */
+		onMenu?: (id: string) => void;
+		/** Whether the active `menu` option's menu is open (aria-expanded). */
+		menuOpen?: boolean;
 	} = $props();
 
 	/**
@@ -94,12 +106,23 @@
 					type="button"
 					class="qsplit-opt"
 					class:is-active={value === option.id}
+					class:has-menu={option.menu && value === option.id}
 					aria-pressed={value === option.id}
-					onclick={() => onChange?.(option.id)}
+					aria-haspopup={option.menu && value === option.id ? 'menu' : undefined}
+					aria-expanded={option.menu && value === option.id ? menuOpen : undefined}
+					onclick={(e) => {
+						if (option.menu && value === option.id) {
+							e.stopPropagation();
+							onMenu?.(option.id);
+						} else onChange?.(option.id);
+					}}
 				>
 					{option.label}{#if option.meta && value === option.id}<span class="qsplit-meta"
 							>{option.meta}</span
-						>{/if}
+						>{/if}{#if option.menu && value === option.id}<CaretDownIcon
+							class="qsplit-caret"
+							aria-hidden="true"
+						/>{/if}
 				</button>
 			{/each}
 		</span>

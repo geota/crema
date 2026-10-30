@@ -11,7 +11,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { getSettingsStore } from './index.js';
 import { restoreBackup } from '#lib/backup/index.js';
-import type { CommonSettings } from '#lib/core/crema-core.js';
+import { HotWaterMode, type CommonSettings, type SteamHotWaterTargets } from '#lib/core/crema-core.js';
 
 beforeAll(async () => {
 	await initTestWasm();
@@ -22,6 +22,7 @@ async function makeApp() {
 	const { CremaApp } = await import('#lib/state/app.svelte.js');
 	const pushed: CommonSettings[] = [];
 	const lineHz: number[] = [];
+	const steamHotwater: SteamHotWaterTargets[] = [];
 	const core = new Proxy(
 		{},
 		{
@@ -29,13 +30,25 @@ async function makeApp() {
 				if (key === 'applyCommonSettings')
 					return async (json: string) => void pushed.push(JSON.parse(json) as CommonSettings);
 				if (key === 'setLineFrequencyOverride') return async (hz: number) => void lineHz.push(hz);
+				if (key === 'setSteamHotwaterTargets')
+					return async (t: SteamHotWaterTargets) => {
+						steamHotwater.push(t);
+						return { events: [], commands: [] };
+					};
+				if (key === 'hotWaterTarget') return async () => null;
 				return async () => ({});
 			}
 		}
 	);
 	const app = new CremaApp(core as never, null);
 	getSettingsStore().onReplaced = () => app.pushSettings();
-	return { app, last: () => pushed.at(-1)!, lastHz: () => lineHz.at(-1), pushed };
+	return {
+		app,
+		last: () => pushed.at(-1)!,
+		lastHz: () => lineHz.at(-1),
+		lastDose: () => steamHotwater.at(-1)?.hotWater,
+		pushed
+	};
 }
 
 beforeEach(() => {
@@ -60,7 +73,9 @@ describe('settings pushes (F15)', () => {
 			volumeStopWithScale: true,
 			maxShotDurationS: 30,
 			weightUnit: 'oz',
-			waterWarnMl: 200
+			waterWarnMl: 200,
+			qcHotWaterMode: HotWaterMode.Volume,
+			qcHotWaterVolumeMl: 200
 		};
 		const bundle = [
 			JSON.stringify({ kind: 'crema-backup/v1', createdAt: 1 }),
@@ -69,6 +84,9 @@ describe('settings pushes (F15)', () => {
 		restoreBackup(bundle, 'merge');
 		expect(h.last()).toMatchObject(common);
 		expect(h.lastHz()).toBe(50);
+		// The steam / hot-water packet's push goes with it, the dose included.
+		await Promise.resolve();
+		expect(h.lastDose()).toMatchObject({ mode: HotWaterMode.Volume, volumeMl: 200 });
 	});
 
 	it('reset pushes the defaults to the core, keeping the weight unit and line frequency', async () => {
