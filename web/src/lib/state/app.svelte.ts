@@ -73,7 +73,6 @@ import {
 	defaultRefillPointMm,
 	isMaintenanceTerminal,
 	maintenanceFailedMessage,
-	waterTankMl,
 	waterTankPercent,
 	type UiSnapshot
 } from './ui-state.svelte';
@@ -221,33 +220,11 @@ const CLEARED_DE1_READOUT = {
 } as const satisfies Partial<UiSnapshot>;
 
 /**
- * The DE1 streams telemetry at ~25 Hz — a ~40 ms gap between samples. The
- * water-accumulation integral caps Δt here, at 50× the nominal gap: a longer
- * gap is a stall, a reconnect or a paused replay, not real dispensing, so it
- * must not be integrated as if water had flowed the whole time. Generous
- * enough to ride out a transient hiccup, tight enough to reject a real stall.
- */
-const MAX_TELEMETRY_GAP_S = 2;
-
-/**
  * Battery percentage at or below which the one-per-connection "charge your
  * scale" warning fires (issue #29) — early enough to charge before a session,
  * late enough not to nag.
  */
 const SCALE_LOW_BATTERY_PCT = 25;
-
-/**
- * Default low-water warning threshold, ml — ~10% of a typical 1104 ml full
- * fill (#33 follow-up). Applied when `settings.waterWarnMl` is unset;
- * an explicit `0` disables the warning.
- */
-const WATER_WARN_DEFAULT_ML = 110;
-
-/**
- * Hysteresis above the warning threshold before the once-per-dip warning
- * re-arms — ~2 mm of tank, so pump-driven level bounce can't re-fire it.
- */
-const WATER_WARN_REARM_ML = 55;
 
 /**
  * localStorage key for the most recent profile-upload fingerprint —
@@ -260,20 +237,6 @@ const WATER_WARN_REARM_ML = 55;
 // Bengle cached for a classic-encoded upload (v1, cohort review 2026-10-28
 // #2 N3) must not skip the next upload. The bump re-uploads once per browser.
 const LAST_FINGERPRINT_KEY = 'crema.profile-sync.lastFingerprint.v2';
-
-/**
- * The DE1 top-level states whose group flow counts toward the water-filter /
- * descale counters: an espresso shot and the two hot-water modes (hot water +
- * its rinse). Steam draws no water through the group, and idle / sleep / cal
- * states dispense nothing — the de1app likewise counts only espresso + hot
- * water. The state is the prefix of `UiSnapshot.machineState` (`"<state> /
- * <substate>"`).
- */
-const WATER_COUNTING_STATES: ReadonlySet<string> = new Set([
-	MachineState.Espresso,
-	MachineState.HotWater,
-	MachineState.HotWaterRinse
-]);
 
 /**
  * The replay-specific helpers — `composeReplayStartMessage`,
@@ -331,26 +294,11 @@ export class CremaApp {
 	private replayFiber: Fiber.Fiber<void> | null = null;
 
 	/**
-	 * `performance.now()` of the previous `Telemetry` event, or `null` before
-	 * the first — the wall-clock anchor the water-accumulation integral (E1)
-	 * uses for its Δt. Reset on disconnect so a stale gap is never integrated.
-	 */
-	private lastTelemetryAtMs: number | null = null;
-
-	/**
 	 * Whether the low-battery toast has fired for the current scale
 	 * connection (issue #29) — reset on disconnect so the next session
 	 * warns again, but a single connection never nags twice.
 	 */
 	private scaleLowBatteryWarned = false;
-
-	/**
-	 * Whether the low-water toast fired for the current tank dip (#33
-	 * follow-up) — re-armed once the level rises `WATER_WARN_REARM_ML`
-	 * above the threshold (a refill) or on disconnect. One dip never
-	 * nags twice.
-	 */
-	private waterLowWarned = false;
 
 	/**
 	 * Whether the connected DE1's serial is on Decent's stolen-machine list
@@ -767,26 +715,14 @@ export class CremaApp {
 				}
 			}
 			if (event.type === 'Telemetry') {
-				// Water accumulation (E1): integrate the DE1's group flow over
-				// the wall-clock gap since the previous telemetry sample, the
-				// de1app's `volume += GroupFlow × Δt` approach.
-				const now = performance.now();
-				// Replayed telemetry must never advance the REAL water-filter /
-				// descale counters (review #35) — the machine-state gate passes
-				// during a replay because the replayed events drive the same
-				// snapshot.
-				if (
-					this.lastTelemetryAtMs !== null &&
-					this.countsTowardWater() &&
-					this.replayFiber === null
-				) {
-					const deltaS = Math.min(
-						MAX_TELEMETRY_GAP_S,
-						(now - this.lastTelemetryAtMs) / 1000
-					);
-					getMaintenanceStore().accumulate(event.content.group_flow, deltaS);
+				// Water accumulation (E1): the core counts the water — espresso
+				// and hot water only, gap-capped (`counted_ml`); the shell keeps
+				// the persisted total. Replayed telemetry must never advance the
+				// REAL water-filter / descale counters (review #35).
+				const counted = event.content.counted_ml;
+				if (counted != null && counted > 0 && this.replayFiber === null) {
+					getMaintenanceStore().addCountedMl(counted);
 				}
-				this.lastTelemetryAtMs = now;
 			}
 			if (event.type === 'ShotCompleted') {
 				// Persist the learned SAW drip model — a weight-stopped shot
@@ -831,26 +767,15 @@ export class CremaApp {
 					toast.info(`Scale battery low (${batt}%) — charge it soon`);
 				}
 			}
-			if (event.type === 'WaterLevel') {
-				// Configurable low-water warning (#33 follow-up): one toast per
-				// dip below the user's threshold, in the user's tank unit.
-				// Hysteresis re-arms it only after a real refill, so the mm
-				// bounce a running pump causes can't re-fire it.
-				const s = getSettingsStore().current;
-				const warnMl = s.waterWarnMl ?? WATER_WARN_DEFAULT_ML;
-				const ml = waterTankMl(event.content.level);
-				if (warnMl > 0 && ml !== null) {
-					if (!this.waterLowWarned && ml <= warnMl) {
-						this.waterLowWarned = true;
-						const left =
-							s.waterLevelUnit === 'percent'
-								? `${waterTankPercent(event.content.level)}%`
-								: `${Math.round(ml)} ml`;
-						toast.info(`Water low — ${left} left, refill soon`);
-					} else if (this.waterLowWarned && ml > warnMl + WATER_WARN_REARM_ML) {
-						this.waterLowWarned = false;
-					}
-				}
+			if (event.type === 'WaterLow') {
+				// The core's low-water monitor (#33 follow-up): once per dip
+				// below the user's threshold, re-armed on a refill, a threshold
+				// change or a new link. Shown in the user's tank unit.
+				const left =
+					getSettingsStore().current.waterLevelUnit === 'percent'
+						? `${waterTankPercent(event.content.level)}%`
+						: `${Math.round(event.content.ml)} ml`;
+				toast.info(`Water low — ${left} left, refill soon`);
 			}
 			if (event.type === 'MmrValue' && event.content.register === MmrRegister.SerialNumber) {
 				// Decent's stolen-machine list: fetched at most daily, cached,
@@ -1139,19 +1064,6 @@ export class CremaApp {
 	}
 
 	/**
-	 * Whether the machine's current state is one whose group flow should feed
-	 * the water-accumulation counters — see {@link WATER_COUNTING_STATES}. Read
-	 * after the `Telemetry` event is folded, so `machineState` already reflects
-	 * the session this sample belongs to (a `MachineStateChanged` for the
-	 * session is folded before its telemetry). Gates out steam, where the DE1
-	 * still reports a small group flow that would otherwise overcount.
-	 */
-	private countsTowardWater(): boolean {
-		const name = this.state.current.machineStateName;
-		return name !== null && WATER_COUNTING_STATES.has(name);
-	}
-
-	/**
 	 * Run one core `Command`.
 	 *
 	 * `WriteScale` → write the bytes to the scale (manual tare, auto-tare, and
@@ -1389,11 +1301,6 @@ export class CremaApp {
 		}
 		this.sweep.stop();
 		await this.de1.disconnect();
-		// Drop the telemetry wall-clock anchor — the next connect must not
-		// integrate the (arbitrarily long) gap across the disconnect.
-		this.lastTelemetryAtMs = null;
-		// Next connection's first low-water report warns afresh (#33).
-		this.waterLowWarned = false;
 		this.stolenSerial = false;
 		// The fingerprint cache (snapshot + localStorage) is wiped on
 		// an explicit disconnect: the DE1 may be powered off or the
@@ -1629,6 +1536,15 @@ export class CremaApp {
 	 */
 	async applyWeightUnitPref(unit: 'g' | 'oz'): Promise<void> {
 		await this.core.setWeightUnitPref(unit);
+	}
+
+	/**
+	 * Tell the core the low-water warning threshold, ml (`null` = the core's
+	 * default, `0` = off). The Water settings call this on every change; the
+	 * core re-arms the warning.
+	 */
+	async applyWaterWarnMl(ml: number | null): Promise<void> {
+		await this.core.setWaterWarnMl(ml ?? undefined);
 	}
 
 	/**
@@ -2779,9 +2695,6 @@ export class CremaApp {
 				patch: (snapshot) => this.state.patch(snapshot),
 				setActiveShot: (data) => getActiveShotStore().set(data),
 				clearActiveShot: () => getActiveShotStore().clear(),
-				resetTelemetryAnchor: () => {
-					this.lastTelemetryAtMs = null;
-				},
 				currentDone: () => this.state.current.replay?.done ?? 0
 			})
 		);
@@ -2829,6 +2742,8 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// Subsequent changes flow via `app.applyWeightUnitPref(...)` invoked
 	// from the Settings page on every `weightUnit` change.
 	void core.setWeightUnitPref(getSettingsStore().current.weightUnit);
+	// The low-water threshold drives the core's warning (`WaterLow`).
+	void core.setWaterWarnMl(getSettingsStore().current.waterWarnMl ?? undefined);
 	// Push the persisted shot-behaviour settings into the core so SAW +
 	// auto-tare fire correctly on the very first shot — including a shot
 	// initiated via the DE1's group-head touch (GHC), which bypasses
