@@ -104,6 +104,14 @@ class RemoteToStandaloneTest {
         assertEquals(next, switchedTo)
         assertEquals(expected, abOf(atSwitch))
         assertEquals(listOf(true), customOnDisk.toList(), "the adopted custom profile was on disk before the switch")
+        // The core follows the adopted settings at once (F15): its stop-target
+        // projection's max-time leg is S's max shot duration.
+        val projection = kotlinx.serialization.json.Json.parseToJsonElement(VmHarness.bridge(vm).stopTargetsProjection())
+        assertEquals(
+            s.maxShotDurationS.toDouble(),
+            (projection as kotlinx.serialization.json.JsonObject)["maxTime"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content.toDouble() },
+            "the core follows the adopted max shot duration",
+        )
         // And the first sweep after it writes S's machine values (A only;
         // the tank temperature and battery are inputs, not settings).
         assertEquals(

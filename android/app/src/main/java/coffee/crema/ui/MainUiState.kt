@@ -23,10 +23,13 @@ import coffee.crema.ble.proxy.Peer
 import coffee.crema.ble.proxy.RemoteClient
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.StopReason
-import coffee.crema.profiles.BrewDefaults
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.core.MachineState
 import coffee.crema.decent.DecentSync
+
+/** The default preferences ([AppPrefs], built from the core's default
+ *  bundle): [MainUiState]'s settings fields start from these. */
+private val DefaultPrefs = AppPrefs()
 
 /** A flat snapshot of everything the current screen shows. */
 data class MainUiState(
@@ -226,34 +229,34 @@ data class MainUiState(
     // Default ON to match [AppPrefs.autoTare] / [AppPrefs.stopOnWeight], the
     // core's own defaults, and the web shell — loadPrefs() overwrites these with
     // the persisted value at startup, but the pre-load default must not diverge.
-    val autoTare: Boolean = true,
-    val stopOnWeight: Boolean = true,
+    val autoTare: Boolean = DefaultPrefs.autoTare,
+    val stopOnWeight: Boolean = DefaultPrefs.stopOnWeight,
     /** Opt-in: arm the profile's max-volume stop even while a scale is
      *  connected (Settings → Shot behaviour). Default off — volume is a
      *  no-scale fallback, never a competitor to stop-at-weight. */
-    val volumeStopWithScale: Boolean = false,
+    val volumeStopWithScale: Boolean = DefaultPrefs.volumeStopWithScale,
     /** Opt-in: refuse to start a shot with a weight target while no scale is
      *  connected (geota/crema#29 — de1app/reaprime's block pattern). */
-    val requireScale: Boolean = false,
-    val steamEco: Boolean = false,
+    val requireScale: Boolean = DefaultPrefs.requireScale,
+    val steamEco: Boolean = DefaultPrefs.steamEco,
     /** DE1 firmware two-tap steam stop (MMR `SteamTwoTapStop`): first stop tap
      *  ends steam without the wand auto-purge; a second tap purges. Written on
      *  change + re-seeded on connect (geota/crema#34). */
-    val steamTwoTap: Boolean = false,
+    val steamTwoTap: Boolean = DefaultPrefs.steamTwoTap,
     /** Fan-on temperature threshold, °C (MMR `FanThreshold`, 0..=60). Re-seeded
      *  on every connect (geota/crema#31). */
-    val fanThresholdC: Float = 55f,
+    val fanThresholdC: Float = DefaultPrefs.fanThresholdC,
     /** Tablet charging from the DE1's USB port (`"alwaysOn"`, the default as
      *  in decaid / `"smart"` / `"smartHigh"`, Decenza `BatteryManager`'s
      *  modes). Persisted; asserted on connect and every minute after by the
      *  core's USB-charger check. */
-    val usbChargingMode: String = "alwaysOn",
+    val usbChargingMode: String = DefaultPrefs.usbChargingMode,
     /** Persisted pre-shot flush / post-steam purge preferences (not yet consumed
      *  by the shot sequence — Settings rows carry the pill until then). */
-    val preFlush: Boolean = false,
-    val steamPurge: Boolean = false,
+    val preFlush: Boolean = DefaultPrefs.preFlush,
+    val steamPurge: Boolean = DefaultPrefs.steamPurge,
     /** Hold the screen on while a shot is pulling (Settings → Display). */
-    val keepScreenOnBrew: Boolean = false,
+    val keepScreenOnBrew: Boolean = DefaultPrefs.keepScreenOnBrew,
     /** Guided-brew cue sound / vibration (Settings → Display + the Brew setup
      *  bell). Null = never chosen — read through [coffee.crema.ui.brewlog.BrewCueDefaults]. */
     val brewCueSound: Boolean? = null,
@@ -293,20 +296,20 @@ data class MainUiState(
      *  checker or a live machine-sleep transition; cleared by tap-to-wake. */
     val saverVisible: Boolean = false,
     /** Brew defaults (Settings → Brew defaults) — seed new profiles + QC fallbacks.
-     *  Seeded from the core's [BrewDefaults] so web + Android share one source. */
-    val defaultDoseG: Float = BrewDefaults.INSTANCE.doseG,
-    val defaultRatio: Float = BrewDefaults.INSTANCE.ratio,
-    val defaultBrewTempC: Float = BrewDefaults.INSTANCE.brewTempC,
-    val defaultPreinfuseS: Float = BrewDefaults.INSTANCE.preinfusionS,
+     *  Seeded from the core's default settings bundle so web + Android share one source. */
+    val defaultDoseG: Float = DefaultPrefs.defaultDoseG,
+    val defaultRatio: Float = DefaultPrefs.defaultRatio,
+    val defaultBrewTempC: Float = DefaultPrefs.defaultBrewTempC,
+    val defaultPreinfuseS: Float = DefaultPrefs.defaultPreinfuseS,
     /** Persisted Quick-Controls steam / hot-water / flush overrides (issue 14) —
      *  seed the QC steppers + applied to the machine on change (read-modify-write). */
-    val qcSteamTimeS: Float = 12f,
-    val qcSteamFlowMlS: Float = 1.2f,
-    val qcSteamTempC: Float = QcSteam.DEFAULT_TEMP_C.toFloat(),
-    val qcHotWaterTempC: Float = 80f,
-    val qcHotWaterVolumeMl: Float = 150f,
-    val qcFlushTimeS: Float = 4f,
-    val qcFlushTempC: Float = 95f,
+    val qcSteamTimeS: Float = DefaultPrefs.qcSteamTimeS,
+    val qcSteamFlowMlS: Float = DefaultPrefs.qcSteamFlowMlS,
+    val qcSteamTempC: Float = DefaultPrefs.qcSteamTempC,
+    val qcHotWaterTempC: Float = DefaultPrefs.qcHotWaterTempC,
+    val qcHotWaterVolumeMl: Float = DefaultPrefs.qcHotWaterVolumeMl,
+    val qcFlushTimeS: Float = DefaultPrefs.qcFlushTimeS,
+    val qcFlushTempC: Float = DefaultPrefs.qcFlushTempC,
     /** Persisted Quick-Controls grinder click (issue 15); null = never dialed. */
     val qcGrind: Float? = null,
     // ── Brew Log (issue #10) ─────────────────────────────────────────────
@@ -339,28 +342,28 @@ data class MainUiState(
     /** Max shot duration cap, seconds (persisted in AppPrefs; `0` = none —
      *  the default, the profile dictates shot length). Shown as a Time
      *  stop-condition on Brew + edited in Settings → Brew defaults. */
-    val maxShotDurationS: Float = 0f,
+    val maxShotDurationS: Float = DefaultPrefs.maxShotDurationS,
     /**
      * Which telemetry channels the live chart draws — keys: `pressure`, `flow`,
      * `headTemp`, `mixTemp`, `weight`, `weightFlow`, `dispensedVolume`,
      * `resistance`. A local display pref toggled from Quick Controls; defaults
      * match the web (pressure / flow / weight).
      */
-    val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
+    val chartChannels: Set<String> = DefaultPrefs.chartChannels,
     // ── Display units (issue 44) ─────────────────────────────────────────────
     // The user's chosen display unit per dimension; everything is stored
     // canonical (g / °C / bar / ml) and routed through `Format.kt` for display.
     // Persisted in AppPrefs; defaults match the web shell.
     /** Weight unit for dose/yield/scale readouts — `"g" | "oz"`. */
-    val weightUnit: String = "g",
+    val weightUnit: String = DefaultPrefs.weightUnit,
     /** Temperature unit for every temp readout — `"C" | "F"`. */
-    val tempUnit: String = "C",
+    val tempUnit: String = DefaultPrefs.tempUnit,
     /** Pressure unit for the pressure channel — `"bar" | "psi"`. */
-    val pressureUnit: String = "bar",
+    val pressureUnit: String = DefaultPrefs.pressureUnit,
     /** Volume unit for water/dispensed readouts — `"ml" | "floz"`. */
-    val volumeUnit: String = "ml",
+    val volumeUnit: String = DefaultPrefs.volumeUnit,
     /** Water-tank readout style — `"ml" | "percent"` (geota/crema#33). */
-    val waterLevelUnit: String = "ml",
+    val waterLevelUnit: String = DefaultPrefs.waterLevelUnit,
     /** The DE1's own refill threshold, raw sensor mm — pushed to the machine at
      *  connect. Null = unset → core's 5 mm default. See [refillPointMm]. */
     val waterRefillPointMm: Float? = null,
@@ -430,11 +433,11 @@ data class MainUiState(
      */
     val maintenanceReadout: MaintenanceReadout? = null,
     /** Theme mode — `"system" | "light" | "dark"` (Settings), persisted. */
-    val themeMode: String = "dark",
-    val grinderModel: String = "",
+    val themeMode: String = DefaultPrefs.themeMode,
+    val grinderModel: String = DefaultPrefs.grinderModel,
     /** Default barista stamped on new shots / brew logs (Settings). Blank = unset. */
-    val baristaName: String = "",
-    val showDebugPanel: Boolean = false,
+    val baristaName: String = DefaultPrefs.baristaName,
+    val showDebugPanel: Boolean = DefaultPrefs.showDebugPanel,
     // Multi-device LAN proxy (M1/M2). Live mode switches via the device picker.
     val proxyRole: String = "normal",
     val proxyPrimaryHost: String = "",

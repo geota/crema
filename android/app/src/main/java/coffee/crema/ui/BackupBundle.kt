@@ -216,7 +216,8 @@ fun parseBackup(
         if (commonObj != null) {
             // Unified format: `common` is the cross-shell CommonSettings (apply
             // from any shell); `qcGrind` is Android-only.
-            common = decodeFilled(json, CommonSettings.serializer(), AppPrefs().toCommonSettings(), commonObj)
+            // The core's sanitize: a wrong-typed field falls back on its own.
+            common = coffee.crema.settings.sanitizeCommonSettings(commonObj)
             if (shell == null || shell == "android") qcGrind = (settings["qcGrind"] as? JsonPrimitive)?.floatOrNull
         } else if (shell == null || shell == "android") {
             // Pre-unification Android backup — a flat AppPrefs settings line.

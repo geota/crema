@@ -33,6 +33,10 @@ import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.exportBackupJsonl
+import coffee.crema.core.CommonSettings
+import coffee.crema.core.defaultIdleSleepMin
+import coffee.crema.settings.resetCommon
+import coffee.crema.settings.toCommonSettings
 import coffee.crema.core.maintenanceReadout
 import androidx.core.content.FileProvider
 import coffee.crema.beans.beanDaysOffRoast
@@ -2925,12 +2929,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * in every role, and on leaving the remote role.
      */
     private fun pushCoreInputs(state: MainUiState) {
-        runCatching { bridge.setStopOnWeight(state.stopOnWeight) }.onFailure { appendLog("Set stop-on-weight failed: ${it.message}") }
-        runCatching { bridge.setAutoTare(state.autoTare) }.onFailure { appendLog("Set auto-tare failed: ${it.message}") }
-        runCatching { bridge.setMaxShotDuration(state.maxShotDurationS) }.onFailure { appendLog("Set max shot duration failed: ${it.message}") }
-        runCatching { bridge.setVolumeStopWithScale(state.volumeStopWithScale) }.onFailure { appendLog("Set volume-stop-with-scale failed: ${it.message}") }
-        runCatching { bridge.setWeightUnitPref(coreWeightUnit(state.weightUnit)) }.onFailure { appendLog("Set weight unit failed: ${it.message}") }
-        runCatching { bridge.setWaterWarnMl(state.waterWarnMl) }.onFailure { appendLog("Set low-water threshold failed: ${it.message}") }
+        // Every settings-driven core input in one call (auto-tare,
+        // stop-on-weight, volume stop, max shot, weight unit, low-water
+        // threshold) — the core's apply_common_settings, as web does.
+        runCatching { bridge.applyCommonSettings(json.encodeToString(CommonSettings.serializer(), state.commonSettings())) }
+            .onFailure { appendLog("Apply settings to the core failed: ${it.message}") }
         pushStopTargets(state)
         idleSleep.configure(state.idleSleepMin)
     }
@@ -4520,37 +4523,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Reset Crema's preferences (theme, units, shot behaviour, brew defaults)
-     * to defaults. Only those fields: the role, the hub target, paired
-     * devices and the DE1 / scale bindings stay (review-v2 6; it used to save
-     * a blank AppPrefs wholesale). Persisted through [persistPrefs], which
-     * also pushes the hub's snapshot.
+     * Restore defaults — the core's rule (`reset_settings`, the one web uses):
+     * every shared setting back to its default except the weight unit and the
+     * mains line frequency, which are facts about the user's setup. The role,
+     * the hub target, paired devices, the DE1 / scale bindings and the other
+     * Android-only extras stay. Applied like a restore ([applyRestoredSettings]:
+     * pushed to the core, the machine settings re-sent, persisted).
      */
     fun resetPreferences() {
-        val def = AppPrefs()
-        _ui.update { it.copy(
-            themeMode = def.themeMode,
-            maxShotDurationS = def.maxShotDurationS,
-            autoTare = def.autoTare,
-            stopOnWeight = def.stopOnWeight,
-            steamEco = def.steamEco,
-            preFlush = def.preFlush,
-            steamPurge = def.steamPurge,
-            chartChannels = def.chartChannels,
-            weightUnit = def.weightUnit,
-            tempUnit = def.tempUnit,
-            pressureUnit = def.pressureUnit,
-            volumeUnit = def.volumeUnit,
-            keepScreenOnBrew = def.keepScreenOnBrew,
-            brewCueSound = def.brewCueSound,
-            brewCueHaptics = def.brewCueHaptics,
-            defaultDoseG = def.defaultDoseG,
-            defaultRatio = def.defaultRatio,
-            defaultBrewTempC = def.defaultBrewTempC,
-            defaultPreinfuseS = def.defaultPreinfuseS,
-        ) }
-        pushCoreInputs(effectiveState())
-        persistPrefs()
+        val (reset, lineHz) = currentPrefs().resetCommon(_ui.value.lineFreqOverride)
+        applyRestoredSettings(reset)
+        // The core keeps the line frequency; nothing to send unless it differs.
+        if (lineHz != _ui.value.lineFreqOverride) setLineFrequency(lineHz)
     }
 
     /**
@@ -4585,7 +4569,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Every preference back to its default in memory too (barista name,
         // grinder, units, …): the next persistPrefs would otherwise write the
         // old values straight back.
-        applyRestoredSettings(AppPrefs())
+        applyRestoredSettings(AppPrefs(idleSleepMin = defaultIdleSleepMin().toInt()))
         // The library/history/custom-profile share (UI rows + the
         // active-profile reseed via refreshProfiles).
         library.eraseAll()
@@ -5792,6 +5776,50 @@ private fun firmwarePowerOk(context: android.content.Context): Boolean {
     val percent = if (level >= 0 && scale > 0) level * 100 / scale else null
     return coffee.crema.firmware.powerOk(plugged, percent)
 }
+
+/** These UI settings as the shared [CommonSettings] (via [AppPrefs], whose
+ *  mapping is the canonical one) — what [MainViewModel.pushCoreInputs] hands
+ *  the core. */
+private fun MainUiState.commonSettings(): CommonSettings = AppPrefs(
+    themeMode = themeMode,
+    maxShotDurationS = maxShotDurationS,
+    autoTare = autoTare,
+    stopOnWeight = stopOnWeight,
+    volumeStopWithScale = volumeStopWithScale,
+    requireScale = requireScale,
+    steamEco = steamEco,
+    steamTwoTap = steamTwoTap,
+    fanThresholdC = fanThresholdC,
+    usbChargingMode = usbChargingMode,
+    preFlush = preFlush,
+    steamPurge = steamPurge,
+    weightUnit = weightUnit,
+    tempUnit = tempUnit,
+    pressureUnit = pressureUnit,
+    volumeUnit = volumeUnit,
+    waterLevelUnit = waterLevelUnit,
+    waterWarnMl = waterWarnMl,
+    waterRefillPointMm = waterRefillPointMm,
+    chartChannels = chartChannels,
+    keepScreenOnBrew = keepScreenOnBrew,
+    brewCueSound = brewCueSound,
+    brewCueHaptics = brewCueHaptics,
+    idleSleepMin = idleSleepMin,
+    grinderModel = grinderModel,
+    baristaName = baristaName,
+    showDebugPanel = showDebugPanel,
+    defaultDoseG = defaultDoseG,
+    defaultRatio = defaultRatio,
+    defaultBrewTempC = defaultBrewTempC,
+    defaultPreinfuseS = defaultPreinfuseS,
+    qcSteamTimeS = qcSteamTimeS,
+    qcSteamFlowMlS = qcSteamFlowMlS,
+    qcSteamTempC = qcSteamTempC,
+    qcHotWaterTempC = qcHotWaterTempC,
+    qcHotWaterVolumeMl = qcHotWaterVolumeMl,
+    qcFlushTimeS = qcFlushTimeS,
+    qcFlushTempC = qcFlushTempC,
+).toCommonSettings()
 
 /** The core's wire spelling (`"grams" | "ounces"`) of the `"g" | "oz"` weight-unit pref. */
 private fun coreWeightUnit(pref: String): String =
