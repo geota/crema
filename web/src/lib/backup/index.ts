@@ -30,6 +30,7 @@ import {
 	getSettingsStore,
 	settingsToCommon,
 	applyCommonToSettings,
+	sanitizeFlat,
 	settingsPlatformExtras,
 	DEFAULT_SETTINGS,
 	type Settings
@@ -493,7 +494,7 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 				if (key in settings && !isWebhookKey(key)) next[key] = settings[key];
 			}
 			heldWebhookChange = heldWebhook(settings, settingsStore.current);
-			settingsStore.replaceAll(next as unknown as typeof settingsStore.current);
+			settingsStore.replaceAll(sanitizeFlat(next as unknown as typeof settingsStore.current));
 			settingsApplied = true;
 		}
 	}
