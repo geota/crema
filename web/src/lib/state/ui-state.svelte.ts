@@ -17,6 +17,7 @@
  * then just applies the returned snapshot.
  */
 
+import { machineRequestRefusalText } from './machine-requests';
 import { calibrationRefusalMessage } from '#lib/calibration/refusal.js';
 import type {
 	Event,
@@ -1463,6 +1464,27 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			return {
 				...snapshot,
 				eventLog: appendLog(snapshot.eventLog, `Decode error: ${event.content.message}`)
+			};
+		// F16: the core holds a request through the profile-download guard;
+		// the log keeps the record (no toast — it goes out on its own).
+		case 'MachineRequestHeld':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`${event.content.state} request held until the profile finishes loading`
+				)
+			};
+		case 'WakeAt':
+			// The app arms its wake-up tick.
+			return snapshot;
+		case 'MachineRequestRefused':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Request refused: ${machineRequestRefusalText(event.content.state, event.content.reason)}`
+				)
 			};
 		// The idle-sleep timer ("Sleep after") — log only; the Sleep state
 		// report that follows updates the machine readout as usual.

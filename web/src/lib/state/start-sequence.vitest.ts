@@ -91,6 +91,9 @@ async function harness(opts: { preFlush: boolean; autoPurge?: boolean }): Promis
 	internals.applyCoreOutput((await core.setDesiredProfile(profile, {}, performance.now())).output);
 	await vi.advanceTimersByTimeAsync(10);
 	if (!(await core.profileSyncStatus()).lastPushed) throw new Error('the profile did not land');
+	// Past the firmware's profile-download guard, which the core now holds
+	// state requests through (F16).
+	await vi.advanceTimersByTimeAsync(600);
 	requested.length = 0;
 	return h;
 }

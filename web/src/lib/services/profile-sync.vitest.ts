@@ -122,38 +122,6 @@ describe('ProfileSync.sync — timeout (TestClock)', () => {
 	});
 });
 
-describe('ProfileSync.profileDownloadGuard (TestClock)', () => {
-	it('is a no-op before any completion', async () => {
-		// Resolves immediately (no sleep) — would hang under TestClock if it slept.
-		await runTest(
-			Effect.gen(function* () {
-				const ps = yield* ProfileSync;
-				yield* ps.profileDownloadGuard;
-			})
-		);
-		expect(true).toBe(true);
-	});
-
-	it('waits out the remaining 500ms window since the last completion', async () => {
-		const result = await runTest(
-			Effect.gen(function* () {
-				const ps = yield* ProfileSync;
-				yield* ps.completed; // stamps lastCompletedAt at test-time 0
-				const fiber = yield* Effect.forkChild(ps.profileDownloadGuard);
-				yield* TestClock.adjust(Duration.zero); // let the guard arm its 500ms sleep
-				const waitingAtStart = (yield* Effect.sync(() => fiber.pollUnsafe())) === undefined;
-				yield* TestClock.adjust(Duration.millis(499));
-				const waitingAt499 = (yield* Effect.sync(() => fiber.pollUnsafe())) === undefined;
-				yield* TestClock.adjust(Duration.millis(1)); // crosses 500ms → guard completes
-				yield* Fiber.join(fiber);
-				return { waitingAtStart, waitingAt499 };
-			})
-		);
-		expect(result.waitingAtStart).toBe(true);
-		expect(result.waitingAt499).toBe(true);
-	});
-});
-
 describe('profileWriteAck (cohort review 02 P0-2)', () => {
 	it('acks a delivered header as De1HeaderAck and a delivered frame as De1FrameAck', () => {
 		expect(profileWriteAck('De1ProfileHeader', true)).toBe('De1HeaderAck');

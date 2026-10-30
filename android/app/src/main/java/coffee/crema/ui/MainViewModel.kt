@@ -523,6 +523,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The core's wake hint (`WakeAt`, F16): one one-shot tick on the core
+     *  lane, cancelled when the link goes or the app is backgrounded. */
+    private val wake by lazy {
+        WakeTimer(viewModelScope, { SystemClock.elapsedRealtime() }, { at ->
+            kotlinx.coroutines.withContext(coreDispatcher) {
+                applyCoreOutputJson(bridge.onTick(at.toULong()))
+            }
+        })
+    }
+
+    /** Test seam: a wake-up tick is pending. */
+    @androidx.annotation.VisibleForTesting
+    internal val wakePending: Boolean get() = wake.pending
+
     /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
     private val sweepRunner by lazy {
         ConnectSweepRunner(viewModelScope, sweep = ::seedMachineSettings, tick = ::usbChargerTick)
@@ -1733,6 +1747,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var wasReady = false
             ble.state.collect { st ->
                 coreTicker.onLinkState(st)
+                // Nothing the core waited for applies to a link that is gone
+                // (the BLE manager resets the core on a drop).
+                if (st != De1BleManager.State.READY) wake.cancel()
                 val ready = st == De1BleManager.State.READY
                 if (ready && !wasReady) firmware.onLinkRestored(ble.connectedAddress)
                 if (!ready && wasReady) firmware.onLinkLost()
@@ -4295,6 +4312,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  counting in the background for as long as the process lives. */
     fun setAppForeground(foreground: Boolean) {
         appInForeground = foreground
+        // No wake-up tick in the background (the 1 s tick covers the core's
+        // deadline while the link is kept up).
+        if (!foreground) wake.cancel()
         // A foreground service may only be STARTED from the foreground (Android
         // 12+); the keep-alive is therefore armed while visible and survives the
         // screen turning off after (#65).
@@ -5627,6 +5647,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     "Calibration ${event.content.target} " +
                         "(${event.content.command}): ${event.content.measured}",
                 )
+            is Event.WakeAt -> wake.arm(event.content.at_ms.toLong())
+            is Event.MachineRequestHeld ->
+                appendLog("${event.content.state.string} request held until the profile finishes loading")
+            is Event.MachineRequestRefused -> {
+                val text = machineRequestRefusalText(event.content.state, event.content.reason)
+                appendLog("Request refused: $text")
+                notifyUser(text)
+            }
             // v1 stub never fires this in practice.
             is Event.FirmwareLockoutHit ->
                 appendLog(

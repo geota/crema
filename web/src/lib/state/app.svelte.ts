@@ -89,6 +89,8 @@ import {
 	StartSequence,
 	type StartToken
 } from './start-sequence';
+import { WakeTimer } from './wake-timer';
+import { machineRequestRefusalText } from './machine-requests';
 import {
 	ProfileWriteGenerations,
 	UNNAMED_PROFILE_BATCH_LOG,
@@ -323,7 +325,6 @@ export class CremaApp {
 	// the `ProfileSync` service only lets a start wait for its fingerprint.
 	// The `ProfileSyncHolds` / `ProfileUploadCompleted` / `ProfileUploadFailed`
 	// fold arms call `ProfileSync.holds` / `.completed` / `.failed`;
-	// `requestMachineState` awaits `ProfileSync.profileDownloadGuard`.
 
 	/**
 	 * Active `setInterval` id for the scale-heartbeat loop, or `null` when
@@ -476,6 +477,8 @@ export class CremaApp {
 				// mirrors Android's `onDe1Dropped`.
 				if (de1State !== 'ready' && de1State !== 'subscribing') {
 					this.state.patch({ machineState: null, machineStateName: null, machineSubstate: null });
+					// Nothing the core waited for applies to a link that's gone.
+					this.wake.cancel();
 					// A start never resumes on a later connection (Decenza
 					// cancels its deferred start on disconnect too).
 					this.cancelStart('disconnected');
@@ -630,6 +633,13 @@ export class CremaApp {
 		void this.runtime?.runPromise(Effect.flatMap(UploadQueue, (q) => q.armLifecycle));
 		// Each finished reconnect episode → one compact line in the event log.
 		reconnectTimelines.onFinished = (t) => this.state.log(compactLine(t));
+		// A hidden tab gets no wake-up tick (the regular tick covers the
+		// core's deadline when it is visible again).
+		if (typeof document !== 'undefined') {
+			document.addEventListener('visibilitychange', () => {
+				if (document.hidden) this.wake.cancel();
+			});
+		}
 	}
 
 	/**
@@ -676,6 +686,14 @@ export class CremaApp {
 			this.state.applyEvent(event);
 			if (event.type === 'MachineStateChanged') {
 				this.startSequence.onMachineState(event.content.state);
+			}
+			if (event.type === 'WakeAt') {
+				// The core waits for a time (the profile-download guard, …):
+				// tick it then.
+				this.wake.arm(event.content.at_ms);
+			}
+			if (event.type === 'MachineRequestRefused') {
+				toast.error(machineRequestRefusalText(event.content.state, event.content.reason));
 			}
 			if (event.type === 'ScaleLinkDead') {
 				// The core presumed the scale link dead (silent past the grace,
@@ -822,11 +840,6 @@ export class CremaApp {
 				);
 			}
 			if (event.type === 'ProfileUploadCompleted') {
-				// Stamp the download-guard clock (opening the BC 9788201734
-				// window `profileDownloadGuard` reads). `runSync` is safe:
-				// `completed` is fully synchronous. No runtime ⇒ no DE1 ⇒ this
-				// event never fires, so the guard is belt-and-braces.
-				this.runtime?.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.completed)));
 				// Fire `profileUploaded` webhook — the core gives us the
 				// title; the dose / yield come from the active profile in
 				// the library (the same profile we just uploaded). `null`
@@ -2224,6 +2237,15 @@ export class CremaApp {
 		}, 1500);
 	}
 
+	/**
+	 * The core's wake hint (`WakeAt`): one one-shot tick, cancelled when the
+	 * link goes or the tab is hidden.
+	 */
+	private readonly wake = new WakeTimer(
+		() => performance.now(),
+		(now) => void this.core.onTick(now).then((out) => this.applyCoreOutput(out))
+	);
+
 	/** A post-steam auto-purge is scheduled (one at a time). A shot start
 	 *  is kept apart by `startSequence.active`, checked when the purge fires. */
 	private rinsePending = false;
@@ -2456,18 +2478,8 @@ export class CremaApp {
 		state: MachineState,
 		wanted: () => boolean = () => true
 	): Promise<void> {
-		// Profile-download race guard (BC 9788201734): the DE1 firmware holds
-		// `ProfileDownloadInProgress` for a short window after the final frame
-		// write — a state-request inside it is aborted to HeaterDown after
-		// preinfuse. `ProfileSync.profileDownloadGuard` waits out the remaining
-		// 500 ms window since the last `ProfileUploadCompleted` (T-21). No-op
-		// when no upload has completed, or when there's no runtime.
-		if (this.runtime !== null) {
-			await runtimePromise(
-				this.runtime,
-				ProfileSync.pipe(Effect.flatMap((ps) => ps.profileDownloadGuard))
-			);
-		}
+		// The core holds the request through the firmware's profile-download
+		// guard (BC 9788201734) and sends it on a later tick (F16).
 		if (!wanted()) return;
 		this.applyCoreOutput(await this.core.requestMachineState(state));
 	}

@@ -1,6 +1,7 @@
 package coffee.crema.ui.screens
 
 import coffee.crema.ui.maintenanceRunText
+import coffee.crema.ui.maintenanceRunAllowed
 import coffee.crema.ui.FirmwareCardCopy
 import coffee.crema.ui.rememberFirmwareCardCopy
 import androidx.compose.ui.text.style.TextOverflow
@@ -535,11 +536,11 @@ fun SettingsScreen(
                         SetGroup("Cycles") {
                             // "Run now" stages a confirm dialog before driving the DE1's
                             // cycles (web parity: a cycle takes minutes and needs the kit
-                            // fitted). Gated on connected AND machine idle — firing
-                            // Descale mid-shot is a real hazard the web also blocks.
-                            val machineIdle = ui.machineState?.startsWith("Idle") == true
+                            // fitted). Gated on connected AND the core's rule (Idle or
+                            // Sleep, which request_machine_state also enforces).
+                            val machineIdle = ui.maintenanceRunAllowed()
                             val cycleReady = connected && machineIdle
-                            val cycleSub = if (connected && !machineIdle) " Machine must be idle." else ""
+                            val cycleSub = if (connected && !machineIdle) " Machine must be idle or asleep." else ""
                             // A cycle core is following (held for preheat on old firmware,
                             // starting, or running with the descale countdown) — with Cancel.
                             ui.maintenanceRun?.let { run ->

@@ -114,7 +114,7 @@ class ShotStartSequenceTest {
         val rig = Rig(this)
         val first = assertNotNull(rig.seq.begin())
         rig.seq.proceed(first, preFlush = true)
-        advanceTimeBy(PROFILE_DOWNLOAD_GUARD_MS + 1)
+        advanceTimeBy(1)
         assertEquals(listOf(FLUSH), rig.requested)
         rig.report(FLUSH)
         advanceTimeBy(2_000)
@@ -137,7 +137,7 @@ class ShotStartSequenceTest {
         val rig = Rig(this)
         val start = assertNotNull(rig.seq.begin())
         rig.seq.proceed(start, preFlush = true)
-        advanceTimeBy(PROFILE_DOWNLOAD_GUARD_MS + 1)
+        advanceTimeBy(1)
         rig.report(FLUSH)
         advanceTimeBy(1_000)
         rig.stop()
@@ -149,18 +149,8 @@ class ShotStartSequenceTest {
         assertNotNull(rig.seq.begin(), "a fresh start is allowed afterwards")
     }
 
-    @Test
-    fun `Stop during the guard cancels the start`() = runTest {
-        val rig = Rig(this)
-        val start = assertNotNull(rig.seq.begin())
-        rig.seq.proceed(start, preFlush = false)
-        advanceTimeBy(100)
-        rig.stop()
-        advanceTimeBy(5_000)
-        runCurrent()
-        assertEquals(listOf(IDLE), rig.requested)
-        assertFalse(rig.shotStarting)
-    }
+    // "Stop during the guard" moved to the core with the guard (F16):
+    // `machine_requests::tests::f16_2_idle_is_never_held`.
 
     @Test
     fun `a cancel before the upload finishes stops proceed from starting the shot`() = runTest {
@@ -178,7 +168,7 @@ class ShotStartSequenceTest {
         val rig = Rig(this)
         val start = assertNotNull(rig.seq.begin())
         rig.seq.proceed(start, preFlush = true)
-        advanceTimeBy(PROFILE_DOWNLOAD_GUARD_MS + 1)
+        advanceTimeBy(1)
         rig.report(FLUSH)
         advanceTimeBy(1_000)
         rig.report(STEAM) // the group-head Steam button mid-flush
@@ -194,7 +184,7 @@ class ShotStartSequenceTest {
         rig.report(FLUSH) // an auto-purge flush already running
         val start = assertNotNull(rig.seq.begin())
         rig.seq.proceed(start, preFlush = true)
-        advanceTimeBy(PROFILE_DOWNLOAD_GUARD_MS + 1)
+        advanceTimeBy(1)
         // Our request bounces the running flush through Idle.
         assertEquals(listOf(IDLE, FLUSH), rig.requested)
         rig.report(IDLE) // the old flush ends: not ours
@@ -212,7 +202,7 @@ class ShotStartSequenceTest {
         val rig = Rig(this)
         val start = assertNotNull(rig.seq.begin())
         rig.seq.proceed(start, preFlush = true)
-        advanceTimeBy(PROFILE_DOWNLOAD_GUARD_MS + 1)
+        advanceTimeBy(1)
         rig.report(FLUSH)
         advanceTimeBy(PRESHOT_FLUSH_TIMEOUT_MS - 1_000)
         assertEquals(listOf(FLUSH), rig.requested)
@@ -227,7 +217,7 @@ class ShotStartSequenceTest {
         val rig = Rig(this)
         val start = assertNotNull(rig.seq.begin())
         rig.seq.proceed(start, preFlush = false)
-        advanceTimeBy(PROFILE_DOWNLOAD_GUARD_MS + 1)
+        advanceTimeBy(1)
         assertTrue(rig.shotStarting)
         advanceTimeBy(ESPRESSO_ENTRY_TIMEOUT_MS)
         runCurrent()
@@ -241,7 +231,7 @@ class ShotStartSequenceTest {
         val rig = Rig(this)
         val start = assertNotNull(rig.seq.begin())
         rig.seq.proceed(start, preFlush = false)
-        advanceTimeBy(PROFILE_DOWNLOAD_GUARD_MS + 1_000)
+        advanceTimeBy(1_000)
         rig.stop()
         advanceTimeBy(ESPRESSO_ENTRY_TIMEOUT_MS * 2)
         runCurrent()

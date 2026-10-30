@@ -5,17 +5,9 @@ import coffee.crema.core.MachineState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicReference
-
-/**
- * Wait after `ProfileUploadCompleted` before requesting Espresso — the
- * firmware's profile-download guard window. A state request inside it is
- * aborted to HeaterDown (BC 9788201734); the web uses the same 500 ms.
- */
-const val PROFILE_DOWNLOAD_GUARD_MS = 500L
 
 /** Ceiling on the pre-shot group flush before proceeding to Espresso
  *  anyway (issue 15) — the backstop if WaterSessionCompleted is missed.
@@ -33,8 +25,8 @@ const val NOT_STARTED_NOTICE = "The machine didn’t start the shot — start it
 
 /**
  * The one shot start in flight (cohort review 2026-10-29, 05 F2): Coffee →
- * profile upload → the firmware's profile-download guard → optional pre-shot
- * flush → Espresso, held until the machine reports Espresso. Web twin:
+ * profile upload → optional pre-shot flush → Espresso, held until the
+ * machine reports Espresso. Web twin:
  * `lib/state/start-sequence.ts`, run by `CremaApp.startShot`.
  *
  * Only one start exists at a time: [begin] returns null while one is
@@ -68,7 +60,6 @@ internal class ShotStartSequence(
     private val onActiveChanged: () -> Unit,
     private val log: (String) -> Unit,
     private val notifyUser: (String) -> Unit,
-    private val guardMs: Long = PROFILE_DOWNLOAD_GUARD_MS,
     private val flushTimeoutMs: Long = PRESHOT_FLUSH_TIMEOUT_MS,
     private val espressoEntryTimeoutMs: Long = ESPRESSO_ENTRY_TIMEOUT_MS,
 ) {
@@ -129,7 +120,7 @@ internal class ShotStartSequence(
         return live
     }
 
-    /** The DE1 holds the profile: run the guard, the optional pre-flush and
+    /** The DE1 holds the profile: run the optional pre-flush and
      *  the Espresso request for [start]. A no-op when it was cancelled. */
     fun proceed(start: Start, preFlush: Boolean) {
         if (!isLive(start)) return
@@ -143,8 +134,8 @@ internal class ShotStartSequence(
     }
 
     private suspend fun run(start: Start, preFlush: Boolean) {
-        delay(guardMs)
-        if (!isLive(start)) return
+        // The firmware's profile-download guard is the core's: it holds our
+        // requests through an upload and the 500 ms after it (F16).
         if (preFlush) {
             start.flushArmed = true
             request(MachineRequest.FLUSH)
