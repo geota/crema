@@ -2142,6 +2142,38 @@ data class CustomMethodLabelInput (
 	val presetLabels: List<String>
 )
 
+/// One connect-time seed read: a characteristic the DE1 answers on a direct
+/// read but does not notify at connect, so subscribing alone leaves its rows
+/// blank.
+@Serializable
+data class De1SeedRead (
+	/// Full lowercase 128-bit characteristic UUID.
+	val characteristic: String,
+	/// Label for status lines (`machine state`).
+	val label: String,
+	/// Whether the link depends on it. The DE1 answers a StateInfo read even
+	/// asleep, so a link that can't produce it (after one retry, the shells'
+	/// rule) is hollow and is dropped for the reconnect loop. The others are
+	/// best-effort.
+	val required: Boolean
+)
+
+/// One DE1 notify characteristic the shells subscribe to at connect.
+@Serializable
+data class De1Subscription (
+	/// Full lowercase 128-bit characteristic UUID.
+	val characteristic: String,
+	/// Characteristic name for status lines (`StateInfo`).
+	val name: String,
+	/// Its 16-bit short, upper case (`A00E`).
+	val short: String,
+	/// Whether a failed subscribe fails the connect. The required ones are
+	/// the streams the app can't run without, and together the structural
+	/// proof that the device is a DE1: a link that lacks one must never sit
+	/// ready with dead notifications.
+	val required: Boolean
+)
+
 /// The DE1's GATT service + characteristic UUIDs (full lowercase 128-bit
 /// strings). The shells scan on [`service`](Self::service), subscribe to the
 /// notify characteristics, and address writes via [`de1_write_target_uuid`].

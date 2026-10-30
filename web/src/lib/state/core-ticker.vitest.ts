@@ -62,4 +62,20 @@ describe('CoreTicker', () => {
 		expect(ticks).toHaveLength(2);
 		t.stop();
 	});
+
+	it('ticks while only a scale is connected, and until both links are gone', async () => {
+		const { t, ticks } = ticker();
+		t.onScaleState('ready');
+		await vi.advanceTimersByTimeAsync(2 * CORE_TICK_MS);
+		expect(ticks).toHaveLength(2);
+		// The DE1 coming and going does not stop the scale's clock.
+		t.onDe1State('ready');
+		t.onDe1State('disconnected');
+		await vi.advanceTimersByTimeAsync(CORE_TICK_MS);
+		expect(ticks).toHaveLength(3);
+		t.onScaleState('disconnected');
+		await vi.advanceTimersByTimeAsync(3 * CORE_TICK_MS);
+		expect(ticks).toHaveLength(3);
+		expect(t.running).toBe(false);
+	});
 });

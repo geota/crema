@@ -618,6 +618,25 @@ mod tests {
         Roaster::new(id.to_owned(), name.to_owned(), 1_700_000_000_000)
     }
 
+    /// F11b: Android's bean export (`beanLibraryJsonl`, committed as a
+    /// fixture) is this format and parses in full, beans and roasters intact.
+    #[test]
+    fn android_bean_export_fixture_parses_in_full() {
+        let plan = parse_jsonl(include_str!(
+            "../tests/fixtures/beans/android-beans.crema.jsonl"
+        ))
+        .unwrap();
+        assert_eq!(
+            plan.beans.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(),
+            ["bean:android-1", "bean:android-2"]
+        );
+        assert_eq!(plan.beans[0].tags, ["comp", "washed"]);
+        assert_eq!(plan.beans[0].visualizer_id.as_deref(), Some("vb-1"));
+        assert_eq!(plan.roasters.len(), 1);
+        assert_eq!(plan.roasters[0].name, "Onyx");
+        assert!(plan.shots.is_empty());
+    }
+
     #[test]
     fn export_writes_header_then_entities() {
         let roasters = vec![sample_roaster("roaster:r1", "Onyx")];

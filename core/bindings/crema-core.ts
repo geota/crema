@@ -2139,6 +2139,42 @@ export interface CustomMethodLabelInput {
 }
 
 /**
+ * One connect-time seed read: a characteristic the DE1 answers on a direct
+ * read but does not notify at connect, so subscribing alone leaves its rows
+ * blank.
+ */
+export interface De1SeedRead {
+	/** Full lowercase 128-bit characteristic UUID. */
+	characteristic: string;
+	/** Label for status lines (`machine state`). */
+	label: string;
+	/**
+	 * Whether the link depends on it. The DE1 answers a StateInfo read even
+	 * asleep, so a link that can't produce it (after one retry, the shells'
+	 * rule) is hollow and is dropped for the reconnect loop. The others are
+	 * best-effort.
+	 */
+	required: boolean;
+}
+
+/** One DE1 notify characteristic the shells subscribe to at connect. */
+export interface De1Subscription {
+	/** Full lowercase 128-bit characteristic UUID. */
+	characteristic: string;
+	/** Characteristic name for status lines (`StateInfo`). */
+	name: string;
+	/** Its 16-bit short, upper case (`A00E`). */
+	short: string;
+	/**
+	 * Whether a failed subscribe fails the connect. The required ones are
+	 * the streams the app can't run without, and together the structural
+	 * proof that the device is a DE1: a link that lacks one must never sit
+	 * ready with dead notifications.
+	 */
+	required: boolean;
+}
+
+/**
  * The DE1's GATT service + characteristic UUIDs (full lowercase 128-bit
  * strings). The shells scan on [`service`](Self::service), subscribe to the
  * notify characteristics, and address writes via [`de1_write_target_uuid`].

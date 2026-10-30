@@ -554,6 +554,9 @@ export class CremaApp {
 			onState: (scaleState) => {
 				const wasReady = this.state.current.scaleState === 'ready';
 				this.state.patch({ scaleState });
+				// The lost-scale watchdog runs on the core clock, so a scale
+				// alone keeps it ticking (a scale-only session).
+				this.ticker.onScaleState(scaleState);
 				// A terminal drop (auto-reconnect exhausted, or a failure)
 				// must stop the heartbeat clock — it otherwise kept writing
 				// to a dead device every ~2 s forever (review #34). The

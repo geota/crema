@@ -1735,6 +1735,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 wasReady = ready
             }
         }
+        // The lost-scale watchdog runs on the core clock: a scale alone keeps
+        // it ticking (a scale-only session).
+        viewModelScope.launch { scale.state.collect { coreTicker.onScaleState(it) } }
         viewModelScope.launch {
             connection.state.collect { cs ->
                 _ui.update {
@@ -3104,23 +3107,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun readMachineInfo() {
-        // Identity (firmware / board / model / serial), GHC presence, heater
-        // voltage, flush temp, flow-calibration, refill-kit. Match the generated
-        // MmrReg variant spellings. (GhcMode 0x803820 is intentionally NOT read:
-        // it's dead in de1app + absent in reaprime — see audit F2/F3.)
-        val registers = listOf(
-            MmrReg.FIRMWARE_VERSION,
-            MmrReg.CPU_BOARD_VERSION,
-            MmrReg.MACHINE_MODEL,
-            MmrReg.SERIAL_NUMBER,
-            MmrReg.GHC_INFO,
-            MmrReg.HEATER_VOLTAGE,
-            // FlushTemp (0x803844): web reads it to show the live flush setpoint;
-            // read it here too so the sweeps match (audit F5). reaprime-only register.
-            MmrReg.FLUSH_TEMP,
-            MmrReg.CALIBRATION_FLOW_MULTIPLIER,
-            MmrReg.REFILL_KIT,
-        )
+        // The core's identity table (web reads the same one): firmware build
+        // first, then board, model, GHC, refill kit, serial, heater voltage,
+        // flush temp and flow multiplier. The passes and pacing below stay
+        // this shell's policy.
+        val registers = coffee.crema.core.connectIdentityRegisters()
         machineInfoJob?.cancel()
         machineInfoJob = viewModelScope.launch {
             // Pacing/retry budget — generous enough for a real DE1's notify

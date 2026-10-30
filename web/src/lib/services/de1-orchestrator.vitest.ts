@@ -77,8 +77,8 @@ describe('de1ConnectProgram — happy path', () => {
 		expect(Exit.isSuccess(exit)).toBe(true);
 		expect(device.connectGatt).toHaveBeenCalledOnce();
 
-		// Five fatal subscribes in the documented order, then the best-effort
-		// Calibration (A012) subscribe (audit F4).
+		// The core's table: five fatal subscribes in order, then the
+		// best-effort Calibration (A012) subscribe (audit F4).
 		const subChars = (device.startNotifications as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1]);
 		expect(subChars).toEqual([
 			De1Uuids.STATE_INFO,

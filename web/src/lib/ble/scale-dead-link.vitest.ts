@@ -164,6 +164,22 @@ describe('stale scale recovery', () => {
 		expect(t.scale.device.recycle).toHaveBeenCalledTimes(1);
 	});
 
+	it('AC-F14 a scale-only session gets ScaleLinkDead from the core clock', async () => {
+		// No DE1 at all: the app's own 1 s core ticker must run for the scale.
+		vi.useRealTimers();
+		vi.useFakeTimers({
+			toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date']
+		});
+		const t = await connectedApp();
+		expect(t.scaleState()).toBe('ready');
+		t.weigh(performance.now());
+		await settle();
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(t.scale.device.recycle).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(t.scale.device.recycle).toHaveBeenCalledTimes(1);
+	});
+
 	it('a link already reconnecting is left to its loop', async () => {
 		const t = await connectedApp();
 		t.weigh(1_000);
