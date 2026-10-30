@@ -100,7 +100,7 @@ class RemoteSettingsTest {
         assertEquals(PROFILE_S, ui.activeProfileId)
         assertEquals(BEAN_S, ui.activeBeanId)
         assertEquals(BrewParams(20.0, 40.0, 94.0, 6.0), ui.brewParams)
-        // The display fields a schema-1 hub adds (§6.1).
+        // The display fields a v4 hub sends (§6.1).
         assertEquals(listOf(true, true, 58f, 8f, true, true, true, true, 60), listOf(ui.steamEco, ui.steamTwoTap, ui.fanThresholdC, ui.waterRefillPointMm, ui.volumeStopWithScale, ui.requireScale, ui.preFlush, ui.steamPurge, ui.idleSleepMin))
         assertEquals(230u, ui.de1MachineInfo[coffee.crema.core.MmrRegister.HeaterVoltage])
         assertEquals(1100u, ui.de1MachineInfo[coffee.crema.core.MmrRegister.CalibrationFlowMultiplier])

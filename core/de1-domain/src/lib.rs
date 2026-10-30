@@ -92,6 +92,7 @@ pub mod maintenance;
 pub mod mode_targets;
 pub mod profile;
 pub mod profile_bounds;
+pub mod profile_file;
 pub mod profile_fingerprint;
 pub mod profile_import;
 pub mod profile_roast;
@@ -257,6 +258,10 @@ pub use mode_targets::{
 pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,
+};
+pub use profile_file::{
+    MAX_PROFILES_PER_FILE, MAX_REPORTED_ERRORS, ProfileFileError, ProfileFileImport,
+    export_profile_file, export_profile_file_json, import_profile_file, import_profile_file_json,
 };
 pub use profile_fingerprint::profile_fingerprint;
 pub use profile_import::{

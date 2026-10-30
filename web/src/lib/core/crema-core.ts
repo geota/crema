@@ -3370,6 +3370,17 @@ export interface PreinfusionDial {
 	adjustable: boolean;
 }
 
+/** One part of a profile file that did not import. */
+export interface ProfileFileError {
+	/**
+	 * The 1-based line (JSON lines) or element (JSON array) it came from;
+	 * `None` for a single-profile file.
+	 */
+	item?: number;
+	/** Why, in words a user can act on. */
+	message: string;
+}
+
 /** The profile sync's state, as a shell sees it. */
 export interface ProfileSyncStatus {
 	/**
@@ -3798,6 +3809,22 @@ export interface SeriesPoint {
 	t: number;
 	/** Sample value. */
 	v: number;
+}
+
+/**
+ * What "Restore defaults" leaves: every common setting back to the default
+ * bundle except the two facts about the user's setup it keeps, the weight
+ * unit (it matches their scale) and the mains line frequency. The idle-sleep
+ * timer gets its default explicitly.
+ */
+export interface SettingsReset {
+	/** The reset common settings. */
+	common: CommonSettings;
+	/**
+	 * The line-frequency override kept from before, Hz: `50`, `60`, or `0`
+	 * for auto (anything else reads as auto).
+	 */
+	lineFrequencyHz: number;
 }
 
 /**

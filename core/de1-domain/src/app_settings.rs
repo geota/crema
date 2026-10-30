@@ -277,6 +277,240 @@ impl CommonSettings {
     }
 }
 
+/// The chart-channel keys a [`CommonSettings::chart_channels`] list may hold.
+pub const CHART_CHANNEL_KEYS: [&str; 8] = [
+    "pressure",
+    "flow",
+    "weight",
+    "headTemp",
+    "mixTemp",
+    "weightFlow",
+    "resistance",
+    "dispensedVolume",
+];
+
+/// The fan threshold a shell reads for an unset one, °C.
+pub const DEFAULT_FAN_THRESHOLD_C: f32 = 55.0;
+/// The fan-threshold range the DE1 accepts, °C (de1app / Decenza).
+pub const FAN_THRESHOLD_MAX_C: f32 = 60.0;
+
+/// `value` when it is one of `allowed`, else `fallback`.
+fn one_of(value: &str, allowed: &[&str], fallback: &str) -> String {
+    if allowed.contains(&value) {
+        value
+    } else {
+        fallback
+    }
+    .to_owned()
+}
+
+/// `value` when finite and `> 0`, else `fallback`.
+fn positive_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        fallback
+    }
+}
+
+impl CommonSettings {
+    /// These settings with every value a shell can rely on, the rule both
+    /// shells apply on load and on restore. It repairs, never rejects:
+    ///
+    /// - the "unset reads as" fields are resolved: `volume_stop_with_scale`,
+    ///   `require_scale` and `steam_two_tap` to `false`, `fan_threshold_c` to
+    ///   [`DEFAULT_FAN_THRESHOLD_C`], `water_level_unit` to `ml`,
+    ///   `usb_charging_mode` to `alwaysOn`. The unsets that mean something stay
+    ///   (`brew_cue_*` follow the default, `idle_sleep_min` is migrated,
+    ///   `water_warn_ml` / `water_refill_point_mm` use the core default,
+    ///   `barista_name` is none);
+    /// - an unknown theme, unit or charging mode becomes the default;
+    /// - `max_shot_duration_s` and `water_warn_ml` must be finite and `>= 0`
+    ///   (a bad threshold becomes unset); `fan_threshold_c` is clamped to
+    ///   `0..=60`, `water_refill_point_mm` to the refill range;
+    ///   `idle_sleep_min` snaps to a choice;
+    /// - `chart_channels` keeps the known keys ([`CHART_CHANNEL_KEYS`]), once;
+    /// - a brew default or Quick-Controls value that isn't finite and `> 0`
+    ///   becomes the default.
+    ///
+    /// UI ranges are not enforced here.
+    #[must_use]
+    pub fn sanitized(self) -> Self {
+        let d = Self::default();
+        let mut channels: Vec<String> = Vec::new();
+        for c in self.chart_channels {
+            if CHART_CHANNEL_KEYS.contains(&c.as_str()) && !channels.contains(&c) {
+                channels.push(c);
+            }
+        }
+        Self {
+            theme_mode: one_of(
+                &self.theme_mode,
+                &["system", "light", "dark"],
+                &d.theme_mode,
+            ),
+            max_shot_duration_s: if self.max_shot_duration_s.is_finite()
+                && self.max_shot_duration_s >= 0.0
+            {
+                self.max_shot_duration_s
+            } else {
+                d.max_shot_duration_s
+            },
+            volume_stop_with_scale: Some(self.volume_stop_with_scale.unwrap_or(false)),
+            require_scale: Some(self.require_scale.unwrap_or(false)),
+            steam_two_tap: Some(self.steam_two_tap.unwrap_or(false)),
+            fan_threshold_c: Some(
+                self.fan_threshold_c
+                    .filter(|f| f.is_finite())
+                    .map_or(DEFAULT_FAN_THRESHOLD_C, |f| {
+                        f.clamp(0.0, FAN_THRESHOLD_MAX_C)
+                    }),
+            ),
+            weight_unit: one_of(&self.weight_unit, &["g", "oz"], &d.weight_unit),
+            temp_unit: one_of(&self.temp_unit, &["C", "F"], &d.temp_unit),
+            pressure_unit: one_of(&self.pressure_unit, &["bar", "psi"], &d.pressure_unit),
+            volume_unit: one_of(&self.volume_unit, &["ml", "floz"], &d.volume_unit),
+            water_level_unit: Some(one_of(
+                self.water_level_unit.as_deref().unwrap_or("ml"),
+                &["ml", "percent"],
+                "ml",
+            )),
+            water_warn_ml: self.water_warn_ml.filter(|w| w.is_finite() && *w >= 0.0),
+            water_refill_point_mm: self
+                .water_refill_point_mm
+                .filter(|r| r.is_finite())
+                .map(|r| {
+                    r.clamp(
+                        crate::tank::REFILL_POINT_MIN_MM,
+                        crate::tank::REFILL_POINT_MAX_MM,
+                    )
+                }),
+            usb_charging_mode: Some(one_of(
+                self.usb_charging_mode.as_deref().unwrap_or("alwaysOn"),
+                &["alwaysOn", "smart", "smartHigh"],
+                "alwaysOn",
+            )),
+            chart_channels: channels,
+            idle_sleep_min: self
+                .idle_sleep_min
+                .map(crate::idle_sleep::snap_idle_sleep_minutes),
+            default_dose_g: positive_or(self.default_dose_g, d.default_dose_g),
+            default_ratio: positive_or(self.default_ratio, d.default_ratio),
+            default_brew_temp_c: positive_or(self.default_brew_temp_c, d.default_brew_temp_c),
+            default_preinfuse_s: if self.default_preinfuse_s.is_finite()
+                && self.default_preinfuse_s >= 0.0
+            {
+                self.default_preinfuse_s
+            } else {
+                d.default_preinfuse_s
+            },
+            qc_steam_time_s: positive_or(self.qc_steam_time_s, d.qc_steam_time_s),
+            qc_steam_flow_ml_s: positive_or(self.qc_steam_flow_ml_s, d.qc_steam_flow_ml_s),
+            qc_steam_temp_c: positive_or(self.qc_steam_temp_c, d.qc_steam_temp_c),
+            qc_hot_water_temp_c: positive_or(self.qc_hot_water_temp_c, d.qc_hot_water_temp_c),
+            qc_hot_water_volume_ml: positive_or(
+                self.qc_hot_water_volume_ml,
+                d.qc_hot_water_volume_ml,
+            ),
+            qc_flush_time_s: positive_or(self.qc_flush_time_s, d.qc_flush_time_s),
+            qc_flush_temp_c: positive_or(self.qc_flush_temp_c, d.qc_flush_temp_c),
+            ..self
+        }
+    }
+}
+
+/// The default settings bundle every shell builds its defaults from:
+/// [`CommonSettings::default`] with the "unset reads as" fields resolved
+/// ([`CommonSettings::sanitized`]).
+#[must_use]
+pub fn default_common_settings() -> CommonSettings {
+    CommonSettings::default().sanitized()
+}
+
+/// Read a stored or restored settings blob leniently: start from the
+/// defaults and take each known field whose value has the right type, so one
+/// wrong-typed field falls back to its default without dropping the rest;
+/// then [`CommonSettings::sanitized`]. A blob that isn't a JSON object gives
+/// the defaults.
+#[must_use]
+pub fn sanitize_common_settings(blob: &serde_json::Value) -> CommonSettings {
+    let Some(fields) = blob.as_object() else {
+        return default_common_settings();
+    };
+    let mut base = match serde_json::to_value(CommonSettings::default()) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in fields {
+        let mut trial = base.clone();
+        trial.insert(key.clone(), value.clone());
+        if serde_json::from_value::<CommonSettings>(serde_json::Value::Object(trial.clone()))
+            .is_ok()
+        {
+            base = trial;
+        }
+    }
+    serde_json::from_value::<CommonSettings>(serde_json::Value::Object(base))
+        .unwrap_or_default()
+        .sanitized()
+}
+
+/// What "Restore defaults" leaves: every common setting back to the default
+/// bundle except the two facts about the user's setup it keeps, the weight
+/// unit (it matches their scale) and the mains line frequency. The idle-sleep
+/// timer gets its default explicitly.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsReset {
+    /// The reset common settings.
+    pub common: CommonSettings,
+    /// The line-frequency override kept from before, Hz: `50`, `60`, or `0`
+    /// for auto (anything else reads as auto).
+    pub line_frequency_hz: f32,
+}
+
+/// The "Restore defaults" rule both shells use. See [`SettingsReset`].
+#[must_use]
+pub fn reset_settings(current: &CommonSettings, line_frequency_hz: f32) -> SettingsReset {
+    let mut common = default_common_settings();
+    common.weight_unit = one_of(&current.weight_unit, &["g", "oz"], &common.weight_unit);
+    common.idle_sleep_min = Some(crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN);
+    let line_frequency_hz = if line_frequency_hz == 50.0 || line_frequency_hz == 60.0 {
+        line_frequency_hz
+    } else {
+        0.0
+    };
+    SettingsReset {
+        common,
+        line_frequency_hz,
+    }
+}
+
+/// [`default_common_settings`] as JSON.
+#[must_use]
+pub fn default_common_settings_json() -> String {
+    serde_json::to_string(&default_common_settings()).unwrap_or_default()
+}
+
+/// JSON-bridged [`sanitize_common_settings`]: any JSON in, a
+/// [`CommonSettings`] JSON out. Malformed JSON gives the defaults.
+#[must_use]
+pub fn sanitize_common_settings_json(blob_json: &str) -> String {
+    let blob = serde_json::from_str(blob_json).unwrap_or(serde_json::Value::Null);
+    serde_json::to_string(&sanitize_common_settings(&blob)).unwrap_or_default()
+}
+
+/// JSON-bridged [`reset_settings`]: the current settings blob (read through
+/// [`sanitize_common_settings`]) and line frequency in, a [`SettingsReset`]
+/// JSON out.
+#[must_use]
+pub fn reset_settings_json(current_json: &str, line_frequency_hz: f32) -> String {
+    let blob = serde_json::from_str(current_json).unwrap_or(serde_json::Value::Null);
+    let current = sanitize_common_settings(&blob);
+    serde_json::to_string(&reset_settings(&current, line_frequency_hz)).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,5 +574,202 @@ mod tests {
         let back: CommonSettings =
             serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back, c);
+    }
+
+    // -- F15: defaults, sanitize, reset --------------------------------------
+
+    #[test]
+    fn default_bundle_is_the_canonical_default_resolved() {
+        let d = default_common_settings();
+        assert_eq!(
+            d,
+            CommonSettings {
+                volume_stop_with_scale: Some(false),
+                require_scale: Some(false),
+                steam_two_tap: Some(false),
+                fan_threshold_c: Some(55.0),
+                water_level_unit: Some("ml".to_owned()),
+                usb_charging_mode: Some("alwaysOn".to_owned()),
+                ..CommonSettings::default()
+            }
+        );
+        // The unsets that mean something stay unset.
+        assert_eq!(d.brew_cue_sound, None);
+        assert_eq!(d.idle_sleep_min, None);
+        assert_eq!(d.water_warn_ml, None);
+        assert_eq!(d.water_refill_point_mm, None);
+        assert_eq!(d.barista_name, None);
+        assert_eq!(d.clone().sanitized(), d, "sanitize is idempotent");
+    }
+
+    #[test]
+    fn sanitize_repairs_unknown_enums_and_bad_numbers() {
+        let bad = CommonSettings {
+            theme_mode: "neon".into(),
+            weight_unit: "kg".into(),
+            temp_unit: "K".into(),
+            pressure_unit: "atm".into(),
+            volume_unit: "cup".into(),
+            water_level_unit: Some("litres".into()),
+            usb_charging_mode: Some("turbo".into()),
+            max_shot_duration_s: -5.0,
+            water_warn_ml: Some(-1.0),
+            default_dose_g: f32::NAN,
+            default_ratio: 0.0,
+            default_preinfuse_s: -1.0,
+            qc_steam_temp_c: f32::INFINITY,
+            qc_hot_water_volume_ml: -10.0,
+            chart_channels: vec![
+                "pressure".into(),
+                "bogus".into(),
+                "pressure".into(),
+                "flow".into(),
+            ],
+            ..CommonSettings::default()
+        };
+        let d = default_common_settings();
+        let s = bad.sanitized();
+        assert_eq!(
+            (
+                &*s.theme_mode,
+                &*s.weight_unit,
+                &*s.temp_unit,
+                &*s.pressure_unit,
+                &*s.volume_unit
+            ),
+            ("dark", "g", "C", "bar", "ml")
+        );
+        assert_eq!(s.water_level_unit.as_deref(), Some("ml"));
+        assert_eq!(s.usb_charging_mode.as_deref(), Some("alwaysOn"));
+        assert_eq!(s.max_shot_duration_s, 0.0);
+        assert_eq!(s.water_warn_ml, None);
+        assert_eq!(s.default_dose_g, d.default_dose_g);
+        assert_eq!(s.default_ratio, d.default_ratio);
+        assert_eq!(s.default_preinfuse_s, d.default_preinfuse_s);
+        assert_eq!(s.qc_steam_temp_c, d.qc_steam_temp_c);
+        assert_eq!(s.qc_hot_water_volume_ml, d.qc_hot_water_volume_ml);
+        assert_eq!(s.chart_channels, ["pressure", "flow"]);
+    }
+
+    #[test]
+    fn sanitize_clamps_fan_refill_and_snaps_idle_sleep() {
+        let s = CommonSettings {
+            fan_threshold_c: Some(90.0),
+            water_refill_point_mm: Some(500.0),
+            idle_sleep_min: Some(44),
+            ..CommonSettings::default()
+        }
+        .sanitized();
+        assert_eq!(s.fan_threshold_c, Some(60.0));
+        assert_eq!(
+            s.water_refill_point_mm,
+            Some(crate::tank::REFILL_POINT_MAX_MM)
+        );
+        assert_eq!(s.idle_sleep_min, Some(30));
+        let low = CommonSettings {
+            fan_threshold_c: Some(-3.0),
+            water_refill_point_mm: Some(0.5),
+            ..CommonSettings::default()
+        }
+        .sanitized();
+        assert_eq!(low.fan_threshold_c, Some(0.0));
+        assert_eq!(
+            low.water_refill_point_mm,
+            Some(crate::tank::REFILL_POINT_MIN_MM)
+        );
+        let nan = CommonSettings {
+            fan_threshold_c: Some(f32::NAN),
+            water_refill_point_mm: Some(f32::NAN),
+            ..CommonSettings::default()
+        }
+        .sanitized();
+        assert_eq!(nan.fan_threshold_c, Some(DEFAULT_FAN_THRESHOLD_C));
+        assert_eq!(nan.water_refill_point_mm, None);
+    }
+
+    #[test]
+    fn sanitize_keeps_valid_values_and_meaningful_unsets() {
+        let mine = CommonSettings {
+            theme_mode: "light".into(),
+            max_shot_duration_s: 60.0,
+            auto_tare: false,
+            volume_stop_with_scale: Some(true),
+            fan_threshold_c: Some(40.0),
+            weight_unit: "oz".into(),
+            temp_unit: "F".into(),
+            pressure_unit: "psi".into(),
+            volume_unit: "floz".into(),
+            water_level_unit: Some("percent".into()),
+            water_warn_ml: Some(0.0),
+            water_refill_point_mm: Some(10.0),
+            usb_charging_mode: Some("smartHigh".into()),
+            chart_channels: vec!["dispensedVolume".into(), "resistance".into()],
+            brew_cue_haptics: Some(false),
+            idle_sleep_min: Some(0),
+            barista_name: Some("Ana".into()),
+            default_preinfuse_s: 0.0,
+            qc_steam_temp_c: 150.0,
+            ..default_common_settings()
+        };
+        assert_eq!(mine.clone().sanitized(), mine);
+    }
+
+    #[test]
+    fn sanitize_json_drops_a_wrong_typed_field_not_the_blob() {
+        let blob = serde_json::json!({
+            "themeMode": "light",
+            "autoTare": "yes",
+            "maxShotDurationS": 30,
+            "chartChannels": "pressure",
+            "weightUnit": "oz",
+            "brewCueSound": true,
+            "unknownKey": 1,
+        });
+        let s = sanitize_common_settings(&blob);
+        assert_eq!(s.theme_mode, "light");
+        assert!(s.auto_tare, "wrong type falls back to the default (true)");
+        assert_eq!(s.max_shot_duration_s, 30.0);
+        assert_eq!(s.chart_channels, default_common_settings().chart_channels);
+        assert_eq!(s.weight_unit, "oz");
+        assert_eq!(s.brew_cue_sound, Some(true));
+        assert_eq!(
+            sanitize_common_settings(&serde_json::json!([1, 2])),
+            default_common_settings()
+        );
+        let out: CommonSettings =
+            serde_json::from_str(&sanitize_common_settings_json("not json")).unwrap();
+        assert_eq!(out, default_common_settings());
+    }
+
+    #[test]
+    fn reset_keeps_the_weight_unit_and_line_frequency() {
+        let mine = CommonSettings {
+            theme_mode: "light".into(),
+            weight_unit: "oz".into(),
+            temp_unit: "F".into(),
+            grinder_model: "Niche".into(),
+            idle_sleep_min: Some(120),
+            qc_steam_temp_c: 150.0,
+            ..default_common_settings()
+        };
+        let r = reset_settings(&mine, 50.0);
+        assert_eq!(r.line_frequency_hz, 50.0);
+        assert_eq!(
+            r.common,
+            CommonSettings {
+                weight_unit: "oz".into(),
+                idle_sleep_min: Some(crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN),
+                ..default_common_settings()
+            }
+        );
+        assert_eq!(reset_settings(&mine, 60.0).line_frequency_hz, 60.0);
+        assert_eq!(reset_settings(&mine, 0.0).line_frequency_hz, 0.0);
+        assert_eq!(reset_settings(&mine, 55.0).line_frequency_hz, 0.0);
+        let json: SettingsReset = serde_json::from_str(&reset_settings_json(
+            &serde_json::to_string(&mine).unwrap(),
+            60.0,
+        ))
+        .unwrap();
+        assert_eq!(json, reset_settings(&mine, 60.0));
     }
 }

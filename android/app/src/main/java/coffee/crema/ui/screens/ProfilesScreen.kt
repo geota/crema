@@ -123,7 +123,7 @@ fun ProfilesScreen(
         if (uri != null) vm.importProfiles(uri)
     }
     var pendingExport by remember { mutableStateOf<String?>(null) }
-    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-ndjson")) { uri ->
         val t = pendingExport; pendingExport = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
@@ -206,13 +206,13 @@ fun ProfilesScreen(
                 if (narrowBar) {
                     CremaIconButton("upload-simple", { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, tone = CremaIconTone.Tonal)
                     Spacer(Modifier.width(4.dp))
-                    CremaIconButton("download-simple", { launchSave("crema-profiles.json", vm.allProfilesJson()) }, tone = CremaIconTone.Tonal)
+                    CremaIconButton("download-simple", { launchSave("crema-profiles.jsonl", vm.allProfilesFile()) }, tone = CremaIconTone.Tonal)
                     Spacer(Modifier.width(4.dp))
                     CremaIconButton("plus", { vm.startNewProfile(); onNav("profile-edit") }, tone = CremaIconTone.Filled)
                 } else {
                     CremaButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Import")
                     Spacer(Modifier.width(8.dp))
-                    CremaButton(onClick = { launchSave("crema-profiles.json", vm.allProfilesJson()) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+                    CremaButton(onClick = { launchSave("crema-profiles.jsonl", vm.allProfilesFile()) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
                     Spacer(Modifier.width(8.dp))
                     CremaButton(onClick = { vm.startNewProfile(); onNav("profile-edit") }, icon = "plus", label = "New profile")
                 }

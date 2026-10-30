@@ -218,10 +218,6 @@ data class AppPrefs(
      *  hijacking it into a fake DE1 + blocking the real DE1/scale. Set it in
      *  `prefs.json` for an emulator with no Bluetooth. */
     val replayPrimary: Boolean = false,
-    /** Devices this host has approved to mirror it (issue 02 — TOFU pairing). A
-     *  remembered peer skips the "Allow this device?" prompt on reconnect; absence
-     *  ⟺ re-prompt. Host-side only — never pushed to mirrors (not in [ConfigSnapshot]). */
-    val pairedDevices: List<PairedDevice> = emptyList(),
     // ── Companion-device association (Android CDM, optional per device) ──────
     /** The remembered DE1's companion association id, or null when it has none.
      *  [COMPANION_ID_UNKNOWN] = associated on API 31–32, where the platform keeps
@@ -382,7 +378,6 @@ private data class PersistedPrefs(
     val proxyPrimaryHost: String = "",
     val proxyPrimaryPort: Int = 0,
     val replayPrimary: Boolean = false,
-    val pairedDevices: List<PairedDevice> = emptyList(),
     val de1CompanionId: Int? = null,
     val scaleCompanionId: Int? = null,
     val companionDeclined: List<String> = emptyList(),
@@ -409,7 +404,6 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,
     replayPrimary = replayPrimary,
-    pairedDevices = pairedDevices,
     de1CompanionId = de1CompanionId,
     scaleCompanionId = scaleCompanionId,
     companionDeclined = companionDeclined,
@@ -435,22 +429,9 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,
     replayPrimary = replayPrimary,
-    pairedDevices = pairedDevices,
     de1CompanionId = de1CompanionId,
     scaleCompanionId = scaleCompanionId,
     companionDeclined = companionDeclined,
-)
-
-/**
- * A secondary this host has approved (issue 02). [id] is the peer's stable
- * `clientId` (the TOFU key); [name] its display label; [canControl] = false marks
- * a **view-only** remote: Control is refused.
- */
-@Serializable
-data class PairedDevice(
-    val id: String,
-    val name: String,
-    val canControl: Boolean = true,
 )
 
 /**
@@ -481,10 +462,6 @@ data class ConfigSnapshot(
     val autoTare: Boolean = false,
     val maxShotDurationS: Float = 45f,
     val grinderModel: String = "",
-    val weightUnit: String = "g",
-    val tempUnit: String = "C",
-    val pressureUnit: String = "bar",
-    val volumeUnit: String = "ml",
     val qcSteamTimeS: Float = 12f,
     val qcSteamFlowMlS: Float = 1.2f,
     val qcSteamTempC: Float = 148f,
@@ -507,32 +484,32 @@ data class ConfigSnapshot(
     /** Config owner — always `"primary"` from a primary; a secondary uses it to
      *  flag that it is viewing as a read-only mirror. */
     val authority: String = "primary",
-    // ── Settings ownership (spec §6.1). All nullable: null = the hub didn't
-    // send it (an older hub), and the remote shows it as unknown. ────────────
-    /** `1` from a hub that sends the full set below. */
-    val settingsSchema: Int? = null,
+    // ── Settings ownership (spec §6.1). Every v4 hub sends these, so they are
+    // required: a snapshot without one fails to decode and is dropped. ─────
     /** A counter from 0 the hub bumps for every snapshot it builds; a remote
      *  drops one at or below the last it applied, and resets on each Welcome. */
-    val rev: Long? = null,
-    val steamEco: Boolean? = null,
-    val steamTwoTap: Boolean? = null,
-    val fanThresholdC: Float? = null,
+    val rev: Long,
+    val steamEco: Boolean,
+    val steamTwoTap: Boolean,
+    val fanThresholdC: Float,
     /** The resolved refill point (the default when unset), raw sensor mm. */
-    val waterRefillPointMm: Float? = null,
-    /** The DE1's mains heater voltage (MMR `HeaterVoltage`). */
+    val waterRefillPointMm: Float,
+    /** The DE1's mains heater voltage (MMR `HeaterVoltage`); null until the
+     *  hub has read the register. */
     val heaterVoltage: Int? = null,
-    /** The DE1's flow calibration multiplier, decoded. */
+    /** The DE1's flow calibration multiplier, decoded; null until read. */
     val flowMultiplier: Float? = null,
-    /** The hub core's resolved line frequency, Hz, and its override (0 = auto). */
+    /** The hub core's resolved line frequency, Hz (null until it is known),
+     *  and its override (0 = auto). */
     val lineFrequencyHz: Float? = null,
-    val lineFrequencyOverride: Float? = null,
+    val lineFrequencyOverride: Float,
     /** The cup-warmer setpoint (Bengle, MMR `CupWarmerTemp`); null on other machines. */
     val cupWarmerTempC: Int? = null,
-    val volumeStopWithScale: Boolean? = null,
-    val requireScale: Boolean? = null,
-    val preFlush: Boolean? = null,
-    val steamPurge: Boolean? = null,
-    val idleSleepMin: Int? = null,
+    val volumeStopWithScale: Boolean,
+    val requireScale: Boolean,
+    val preFlush: Boolean,
+    val steamPurge: Boolean,
+    val idleSleepMin: Int,
 )
 
 /** Decode `prefs.json`'s text: the nested shape, or a pre-unification FLAT

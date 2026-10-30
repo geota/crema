@@ -228,8 +228,6 @@ class ProxyTransport(
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
             is Frame.Config -> onConfig(frame.json)
             is Frame.Event -> onEvent(frame.text)
-            // Retired: an older hub's "Hand off". Nothing changes here.
-            is Frame.HandoffOffer -> Log.i(TAG, "Ignoring a retired handoff offer from ${frame.fromName}")
             else -> Log.w(TAG, "Secondary ignoring unexpected server frame: ${frame::class.simpleName}")
         }
     }

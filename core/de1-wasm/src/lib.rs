@@ -695,6 +695,28 @@ pub fn default_brew_cue_haptics() -> bool {
     de1_domain::app_settings::DEFAULT_BREW_CUE_HAPTICS
 }
 
+/// The default settings bundle (`CommonSettings` JSON) both shells build
+/// their defaults from. See `de1_domain::app_settings::default_common_settings`.
+#[wasm_bindgen(js_name = defaultCommonSettingsJson)]
+pub fn default_common_settings_json() -> String {
+    de1_domain::app_settings::default_common_settings_json()
+}
+
+/// Read a stored or restored settings blob (any JSON) into a sanitized
+/// `CommonSettings` JSON. See `de1_domain::app_settings::sanitize_common_settings`.
+#[wasm_bindgen(js_name = sanitizeCommonSettingsJson)]
+pub fn sanitize_common_settings_json(blob_json: &str) -> String {
+    de1_domain::app_settings::sanitize_common_settings_json(blob_json)
+}
+
+/// "Restore defaults": the current `CommonSettings` JSON and line-frequency
+/// override in, a `SettingsReset` JSON out. See
+/// `de1_domain::app_settings::reset_settings`.
+#[wasm_bindgen(js_name = resetSettingsJson)]
+pub fn reset_settings_json(current_json: &str, line_frequency_hz: f32) -> String {
+    de1_domain::app_settings::reset_settings_json(current_json, line_frequency_hz)
+}
+
 /// Resolve the Brew screen's service-mode display targets (steam /
 /// hot-water / flush) — machine value → Quick-Controls dial → legacy
 /// default, per field. Takes `ModeTargetInputs` JSON, returns
@@ -1845,6 +1867,31 @@ pub fn import_crema_jsonl(text: &str) -> Result<String, String> {
     de1_domain::import_jsonl_to_plan_json(text)
 }
 
+/// Read a profile file (community v2 `.json`, a `.jsonl` bundle, a de1app
+/// `.tcl`, a Crema backup, or an old Android Crema export): a
+/// `ProfileFileImport` JSON of fresh custom profiles plus per-item errors. See
+/// `de1_domain::import_profile_file`.
+///
+/// # Errors
+///
+/// Only if the result fails to serialize, which it cannot.
+#[wasm_bindgen(js_name = importProfileFile)]
+pub fn import_profile_file(text: &str) -> Result<String, String> {
+    de1_domain::import_profile_file_json(text)
+}
+
+/// Write library profiles (a JSON array of `CremaProfile`) as the profile file
+/// both shells export: one profile as pretty community v2, several as JSON
+/// lines. See `de1_domain::export_profile_file`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[wasm_bindgen(js_name = exportProfileFile)]
+pub fn export_profile_file(profiles_json: &str) -> Result<String, String> {
+    de1_domain::export_profile_file_json(profiles_json)
+}
+
 /// Build a Crema **backup bundle** (`crema-backup/v1`) from an envelope
 /// JSON `{ "profiles": [...], "beans": [...], "roasters": [...],
 /// "shots": [...], "settings": {...} }`. A superset of `exportCremaJsonl`:
@@ -2599,6 +2646,16 @@ impl CremaBridge {
     /// `CremaCore::set_water_warn_ml`.
     pub fn set_water_warn_ml(&self, warn_ml: Option<f32>) {
         self.state().core.set_water_warn_ml(warn_ml);
+    }
+
+    /// Latch every settings-driven core input from a `CommonSettings` JSON
+    /// (read through `sanitize_common_settings`, so a partial or bad blob
+    /// still applies). See `CremaCore::apply_common_settings`.
+    #[wasm_bindgen(js_name = applyCommonSettings)]
+    pub fn apply_common_settings(&self, settings_json: &str) {
+        let blob = serde_json::from_str(settings_json).unwrap_or(serde_json::Value::Null);
+        let settings = de1_domain::app_settings::sanitize_common_settings(&blob);
+        self.state().core.apply_common_settings(&settings);
     }
 
     /// Enable or disable auto-tare on shot start.

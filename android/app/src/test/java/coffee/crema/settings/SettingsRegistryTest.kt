@@ -49,10 +49,11 @@ class SettingsRegistryTest {
 
     @Test
     fun `the groups and counts match the spec`() {
-        assertEquals(88, Setting.entries.size)
+        // 87: relay v4 R5 removed `pairedDevices` (C), the v3 pairing list.
+        assertEquals(87, Setting.entries.size)
         assertEquals(21, Setting.entries.count { it.group == SettingGroup.A_MACHINE })
         assertEquals(13, Setting.entries.count { it.group == SettingGroup.B_SESSION })
-        assertEquals(54, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
+        assertEquals(53, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
         for (s in Setting.entries) {
             if (s.group == SettingGroup.C_PERSONAL) {
                 assertEquals(OnRemote.LOCAL, s.onRemote, "$s")
@@ -76,8 +77,8 @@ class SettingsRegistryTest {
         val ab = Setting.entries.filter { it.group != SettingGroup.C_PERSONAL }
         val carried = ab.flatMap { it.snapshotFields }
         assertEquals(carried.size, carried.toSet().size, "a snapshot field carries two settings")
-        assertEquals(emptySet(), SNAPSHOT_META intersect SNAPSHOT_DEPRECATED)
-        assertEquals(snapshotFields, carried.toSet() + SNAPSHOT_META + SNAPSHOT_DEPRECATED, "untagged snapshot fields (left) or tags for no field (right)")
+        // Relay v4 R3: no deprecated fields; the units are personal and no longer sent.
+        assertEquals(snapshotFields, carried.toSet() + SNAPSHOT_META, "untagged snapshot fields (left) or tags for no field (right)")
         for (s in ab) {
             assertTrue(s.mirroredVia in setOf(MirrorSource.SNAPSHOT, MirrorSource.SCALE_ECHO, MirrorSource.NONE_AVAILABLE), "$s")
         }

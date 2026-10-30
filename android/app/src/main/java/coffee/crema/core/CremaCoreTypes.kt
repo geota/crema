@@ -3396,6 +3396,16 @@ data class PreinfusionDial (
 	val adjustable: Boolean
 )
 
+/// One part of a profile file that did not import.
+@Serializable
+data class ProfileFileError (
+	/// The 1-based line (JSON lines) or element (JSON array) it came from;
+	/// `None` for a single-profile file.
+	val item: UInt? = null,
+	/// Why, in words a user can act on.
+	val message: String
+)
+
 /// The profile sync's state, as a shell sees it.
 @Serializable
 data class ProfileSyncStatus (
@@ -3765,6 +3775,19 @@ data class SeriesPoint (
 	val t: Double,
 	/// Sample value.
 	val v: Double
+)
+
+/// What "Restore defaults" leaves: every common setting back to the default
+/// bundle except the two facts about the user's setup it keeps, the weight
+/// unit (it matches their scale) and the mains line frequency. The idle-sleep
+/// timer gets its default explicitly.
+@Serializable
+data class SettingsReset (
+	/// The reset common settings.
+	val common: CommonSettings,
+	/// The line-frequency override kept from before, Hz: `50`, `60`, or `0`
+	/// for auto (anything else reads as auto).
+	val lineFrequencyHz: Float
 )
 
 /// A snapshot of the active bean at the moment a shot was pulled.

@@ -1,15 +1,15 @@
 package coffee.crema.ble.proxy
 
-import coffee.crema.MainSources
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.elementNames
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
- * Golden wire fixtures for every [Frame] type (`proxy-golden/v3/frames/`).
+ * Golden wire fixtures for every [Frame] type (`proxy-golden/v4/frames/`).
  * Each sample below must encode to its fixture byte for byte, and the fixture
  * must decode back to the sample, so any change to a frame's wire form
  * (a renamed field, a new default that now stays off the wire, a changed
@@ -32,15 +32,8 @@ class FrameGoldenTest {
 
     /** One canonical instance per fixture. */
     private val samples: Map<String, Frame> = linkedMapOf(
-        "hello" to Frame.Hello(Golden.VERSION, "secondary", "install-1", "Sam's phone", nonce = "Y2xpZW50LW5vbmNl"),
-        "hello.bare" to Frame.Hello(Golden.VERSION, "secondary", "install-1", "Sam's phone"),
-        "challenge" to Frame.Challenge("host-1", "Kitchen tablet", "aG9zdC1ub25jZQ", hostProof = "aG9zdC1wcm9vZg"),
-        "challenge.unpaired" to Frame.Challenge("host-1", "Kitchen tablet", "aG9zdC1ub25jZQ"),
-        "auth" to Frame.Auth("Y2xpZW50LXByb29m"),
-        "auth.pair" to Frame.Auth(),
         "welcome" to Frame.Welcome("Kitchen tablet", "primary", roster, scope = SCOPE_CONTROL),
         "welcome.mirror" to Frame.Welcome("Kitchen tablet", "primary", emptyList(), scope = SCOPE_MIRROR),
-        "denied" to Frame.Denied(DenyReason.NOT_PAIRED),
         "roster" to Frame.Roster(roster),
         "attach" to Frame.Attach(7, addr),
         "attached" to Frame.Attached(7, addr, "CONNECTED"),
@@ -56,7 +49,6 @@ class FrameGoldenTest {
         "control.noargs" to Frame.Control(12, "tareScale"),
         "controlOk" to Frame.ControlOk(11),
         "controlErr" to Frame.ControlErr(12, "not authorized"),
-        "handoffOffer" to Frame.HandoffOffer("Kitchen tablet"),
         "notify" to Frame.Notify(addr, service, "0000a00d-0000-1000-8000-00805f9b34fb", "0712deadbeef", 123_456L),
         "notify.src" to Frame.Notify(addr, service, stateChar, "0200", 123_457L, src = "DE1_STATE"),
         "state" to Frame.State(addr, "DISCONNECTED"),
@@ -75,19 +67,6 @@ class FrameGoldenTest {
             PROXY_PROTOCOL_VERSION,
             "PROXY_PROTOCOL_VERSION changed: keep proxy-golden/v${Golden.VERSION} as the old-peer fixtures and add the new version's",
         )
-    }
-
-    /** AC-4: the retired [Frame.HandoffOffer] still round-trips (an older hub
-     *  sends it, and a v3 codec drops the link on an unknown type), but no
-     *  production code builds one: a hub never sends it. */
-    @Test
-    fun `the retired handoff offer has no production sender`() {
-        val senders = MainSources.kotlinFiles().flatMap { (path, text) ->
-            text.lines().withIndex()
-                .filter { (_, line) -> "HandoffOffer(" in line && "class HandoffOffer(" !in line }
-                .map { (i, line) -> "$path:${i + 1}: ${line.trim()}" }
-        }
-        assertEquals(emptyList(), senders, "code that builds a Frame.HandoffOffer")
     }
 
     @Test
@@ -125,6 +104,25 @@ class FrameGoldenTest {
         val e = assertFailsWith<SerializationException> { FrameCodec.decode(text) }
         assertTrue("pairingQr" in e.message.orEmpty(), "the error names the unknown type: ${e.message}")
         assertEquals(null, FrameCodec.decodeTolerant(text))
+    }
+
+    /** AC-45 (R6): a `Welcome` without `scope` fails to decode, so the
+     *  session closes instead of guessing a scope. */
+    @Test
+    fun welcomeScopeRequired() {
+        val text = Golden.require("frames/welcome.json").replace(",\"scope\":\"control\"", "")
+        assertTrue("scope" !in text, text)
+        assertFailsWith<SerializationException> { FrameCodec.decode(text) }
+        assertFailsWith<SerializationException> { FrameCodec.decodeTolerant(text) }
+    }
+
+    /** AC-45 (R6): an unknown scope reads as view-only, never as control. */
+    @Test
+    fun unknownScopeIsViewOnly() {
+        val text = Golden.require("frames/welcome.json").replace("\"scope\":\"control\"", "\"scope\":\"admin\"")
+        val welcome = assertIs<Frame.Welcome>(FrameCodec.decode(text))
+        assertEquals(false, welcome.grantsControl)
+        assertEquals(true, assertIs<Frame.Welcome>(FrameCodec.decode(Golden.require("frames/welcome.json"))).grantsControl)
     }
 
     /** An unknown field on a known frame is ignored (`ignoreUnknownKeys`): the

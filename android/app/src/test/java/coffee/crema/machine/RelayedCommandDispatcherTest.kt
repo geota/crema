@@ -131,11 +131,11 @@ class RelayedCommandDispatcherTest {
         assertEquals(3, actions.peerActivity)
     }
 
-    /** AC-2: an older remote's Take over is refused with the retired reason,
-     *  with or without arguments, before anything runs or is announced. */
+    /** AC-41: `handoff` is refused as an unknown control, with or without
+     *  arguments, before anything runs or is announced. */
     @Test
-    fun `a retired handoff is refused and runs nothing`() {
-        val reason = MachineCommandCodec.RETIRED_METHODS.getValue("handoff")
+    fun `a handoff is refused as unknown and runs nothing`() {
+        val reason = "unknown relayed control: handoff"
         assertEquals(CommandOutcome.Refused(reason), dispatch("handoff"))
         assertEquals(CommandOutcome.Refused(reason), dispatch("handoff", "x"))
         assertTrue(actions.applied.isEmpty() && actions.shown.isEmpty(), "${actions.applied}")
@@ -195,23 +195,20 @@ class RelayedCommandDispatcherTest {
         assertEquals(CommandOutcome.Accepted, dispatch("setQcGrind", "14.5"))
     }
 
-    /** An older remote's machine setting that the hub refuses (still loading)
-     *  isn't logged as a change: the log line follows the command running. */
+    /** AC-43 (relay v4 R4): each of the seven read-only Quick Controls
+     *  methods is refused as unknown, and nothing is applied or announced. */
     @Test
-    fun `a refused older-remote machine setting isn't logged as a change`() {
-        actions.configLoaded = false
-        assertEquals(CommandOutcome.Refused("Tablet is starting up"), dispatch("setQcSteamTemp", "150.0"))
-        assertTrue(logged.none { "(older Crema)" in it }, "$logged")
-    }
-
-    /** AC-35, the hub half: an older remote's machine setting is applied and logged. */
-    @Test
-    fun `an older remote's machine setting is applied and logged`() {
-        assertEquals(CommandOutcome.Accepted, dispatch("setQcSteamTemp", "150.0"))
-        assertEquals(listOf("commit(${MachineCommand.SetQc(QcField.STEAM_TEMP, 150f)})"), actions.applied.toList())
-        assertTrue(logged.any { it == "Phone changed steam temperature (older Crema)" }, "$logged")
-        dispatch("setQcGrind", "14.5")
-        assertTrue(logged.none { "grind" in it && "older" in it }, "a shot dial isn't an older remote's edit")
+    fun readOnlyQcRefused() {
+        for (method in listOf(
+            "setQcSteamTime", "setQcSteamFlow", "setQcSteamTemp", "setQcHotWaterTemp",
+            "setQcHotWaterVolume", "setQcFlushTime", "setQcFlushTemp",
+        )) {
+            assertEquals(CommandOutcome.Refused("unknown relayed control: $method"), dispatch(method, "30.0"))
+        }
+        assertTrue(actions.applied.isEmpty() && actions.shown.isEmpty(), "${actions.applied}")
+        assertEquals(0, actions.peerActivity, "a refused control isn't presence")
+        assertTrue(announced.isEmpty(), "$announced")
+        assertEquals(CommandOutcome.Accepted, dispatch("setQcGrind", "14.5"), "grind is still relayed")
     }
 
     private companion object {
