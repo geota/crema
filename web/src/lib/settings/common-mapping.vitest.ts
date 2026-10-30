@@ -7,6 +7,7 @@
 
 import { beforeAll, describe, it, expect } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
+import type { CommonSettings } from '#lib/core/crema-core.js';
 import {
 	settingsToCommon,
 	applyCommonToSettings,
@@ -148,5 +149,94 @@ describe('common-settings mapping', () => {
 			expect(brewCueSoundOn(back)).toBe(true);
 			expect(brewCueHapticsOn(back)).toBe(false);
 		});
+	});
+});
+
+describe('core-owned defaults, sanitize and reset (F15)', () => {
+	beforeAll(async () => {
+		await initTestWasm();
+	});
+
+	it('default settings come from the core bundle', async () => {
+		const { defaultCommonSettingsJson, defaultIdleSleepMin } = await import('#lib/wasm/de1_wasm.js');
+		const { sanitizeCommon } = await import('./store.svelte');
+		const core = JSON.parse(defaultCommonSettingsJson()) as CommonSettings;
+		expect(sanitizeCommon(settingsToCommon(DEFAULT_SETTINGS))).toEqual(
+			sanitizeCommon({ ...core, idleSleepMin: defaultIdleSleepMin() })
+		);
+		// The resolved "unset reads as" values come from the core too.
+		expect(DEFAULT_SETTINGS.fanThresholdC).toBe(core.fanThresholdC);
+		expect(DEFAULT_SETTINGS.usbChargingMode).toBe(core.usbChargingMode);
+		expect(DEFAULT_SETTINGS.qcSteamTempC).toBe(core.qcSteamTempC);
+	});
+
+	it('a restored settings line with a wrong-typed field restores the rest', () => {
+		const common = {
+			...settingsToCommon(DEFAULT_SETTINGS),
+			autoTare: 'yes',
+			tempUnit: 'F',
+			fanThresholdC: 400,
+			chartChannels: ['flow', 'bogus']
+		} as unknown as CommonSettings;
+		const s = applyCommonToSettings(common, DEFAULT_SETTINGS);
+		expect(s.tempUnit).toBe('F');
+		expect(s.autoTareOnShotStart).toBe(true);
+		expect(s.fanThresholdC).toBe(60);
+		expect([s.showFlow, s.showPressure]).toEqual([true, false]);
+	});
+
+	it('reset keeps weightUnit and lineFrequencyHz', async () => {
+		const { getSettingsStore } = await import('./store.svelte');
+		const store = getSettingsStore();
+		store.onReplaced = null;
+		store.set('theme', 'light');
+		store.set('weightUnit', 'oz');
+		store.set('lineFrequencyHz', 60);
+		store.set('grinderModel', 'Niche');
+		store.set('telemetryRateHz', 10);
+		store.reset();
+		expect(store.current.weightUnit).toBe('oz');
+		expect(store.current.lineFrequencyHz).toBe(60);
+		expect(store.current.theme).toBe('dark');
+		expect(store.current.grinderModel).toBe('');
+		expect(store.current.telemetryRateHz).toBe(DEFAULT_SETTINGS.telemetryRateHz);
+		store.set('weightUnit', 'g');
+		store.set('lineFrequencyHz', 0);
+	});
+});
+
+describe('pre-unification flat settings go through the core sanitize too (F15)', () => {
+	beforeAll(async () => {
+		await initTestWasm();
+	});
+
+	it('an old flat settings file loads sanitized', async () => {
+		const { SettingsStore } = await import('./store.svelte');
+		localStorage.setItem(
+			'crema.settings.v1',
+			JSON.stringify({ theme: 'light', fanThresholdC: 400, weightUnit: 'stone', baristaName: 7 })
+		);
+		const s = new SettingsStore().current;
+		expect(s.theme).toBe('light');
+		expect(s.fanThresholdC).toBe(60);
+		expect(s.weightUnit).toBe('g');
+		expect(s.baristaName).toBe('');
+		localStorage.clear();
+	});
+
+	it('an old flat web backup line restores sanitized', async () => {
+		const { getSettingsStore } = await import('./store.svelte');
+		const { restoreBackup } = await import('#lib/backup/index.js');
+		const store = getSettingsStore();
+		store.onReplaced = null;
+		const bundle = [
+			JSON.stringify({ kind: 'crema-backup/v1', createdAt: 1 }),
+			JSON.stringify({ kind: 'settings', _shell: 'web', tempUnit: 'F', fanThresholdC: -5 })
+		].join('\n');
+		restoreBackup(bundle, 'merge');
+		expect(store.current.tempUnit).toBe('F');
+		expect(store.current.fanThresholdC).toBe(0);
+		store.set('tempUnit', 'C');
+		store.set('fanThresholdC', 55);
 	});
 });
