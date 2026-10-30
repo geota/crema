@@ -48,9 +48,6 @@ object MachineCommandCodec {
 
     /** Parse a relayed control and check its arguments. Nothing here applies it. */
     fun decode(method: String, args: String): Decoded {
-        // Before parse: a retired method with arguments would otherwise read
-        // as an unknown control.
-        RETIRED_METHODS[method]?.let { return Decoded.Invalid(it) }
         val command = parse(method, args) ?: return Decoded.Invalid(parseRefusal(method, args))
         return command.refusal()?.let { Decoded.Invalid(it) } ?: Decoded.Valid(command)
     }
@@ -62,15 +59,6 @@ object MachineCommandCodec {
             SET_ACTIVE_BEAN, SET_STOP_ON_WEIGHT, SET_AUTO_TARE, QUICK_ADJUST_BREW, RESET_BREW,
         ) + QcField.entries.map(::qcMethod)
     }
-
-    /**
-     * Methods older remotes still send that a hub no longer runs, with the
-     * reason it refuses them. The reason carries no host name: the codec has
-     * none, and an older remote shows its own wording for the refusal anyway.
-     */
-    val RETIRED_METHODS: Map<String, String> = mapOf(
-        "handoff" to "Take-over was removed — turn off hub mode on the hub to connect another device",
-    )
 
     /** The machine states a `machineState` control may carry. */
     val RELAYABLE_STATES: Set<String> get() = stateRequests.keys

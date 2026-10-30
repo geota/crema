@@ -1,6 +1,5 @@
 package coffee.crema.machine
 
-import coffee.crema.ble.proxy.PROXY_PROTOCOL_VERSION
 import coffee.crema.core.MachineRequest
 import kotlin.reflect.KClass
 import kotlin.test.Test
@@ -134,18 +133,14 @@ class MachineCommandCodecTest {
         }
     }
 
-    /** AC-4: take-over is retired on a v3 hub. `handoff` is no live method;
-     *  it is refused with the retired reason, with or without arguments
-     *  (checked before parsing, so `handoff x` isn't "unknown"). */
+    /** AC-41 (relay v4 R2): `handoff` has no retired entry any more; it is an
+     *  unknown method like any other, with or without arguments. */
     @Test
-    fun `handoff is a retired refusal`() {
-        val reason = MachineCommandCodec.RETIRED_METHODS.getValue("handoff")
-        assertTrue("hub mode" in reason, reason)
-        assertEquals(MachineCommandCodec.Decoded.Invalid(reason), MachineCommandCodec.decode("handoff", ""))
-        assertEquals(MachineCommandCodec.Decoded.Invalid(reason), MachineCommandCodec.decode("handoff", "x"))
+    fun `handoff is an unknown method`() {
+        val unknown = MachineCommandCodec.Decoded.Invalid("unknown relayed control: handoff")
+        assertEquals(unknown, MachineCommandCodec.decode("handoff", ""))
+        assertEquals(unknown, MachineCommandCodec.decode("handoff", "x"))
         assertTrue("handoff" !in MachineCommandCodec.METHODS)
-        // Retiring it didn't bump the protocol (v3); relay v4 did, and PR-4 removes the retired list.
-        assertEquals(4, PROXY_PROTOCOL_VERSION)
     }
 
     @Test

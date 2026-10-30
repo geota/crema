@@ -57,6 +57,18 @@ class NoCompatShimsTest {
         assertTrue("handoffOffer fixtures: $fixtures", fixtures.none { "/v4/" in it.path })
     }
 
+    /** AC-41 (R2): no retired-verb list; `handoff` is an unknown method and has no fixture. */
+    @Test
+    fun handoffVerbGone() {
+        assertNone("retired verbs left in main", Regex("\\bRETIRED_METHODS\\b"))
+        assertTrue(
+            coffee.crema.machine.MachineCommandCodec.decode("handoff", "") ==
+                coffee.crema.machine.MachineCommandCodec.Decoded.Invalid("unknown relayed control: handoff"),
+        )
+        val retired = File("src/test/resources/proxy-golden").walkTopDown().filter { it.isDirectory && it.name == "retired" }.toList()
+        assertTrue("control/retired fixtures: $retired", retired.none { "/v4/" in it.path })
+    }
+
     @Test
     fun thePatternsMatchWhatTheyGuard() {
         assertTrue(Regex("\\bPairingRequest\\b").containsMatchIn("class PairingRequest("))

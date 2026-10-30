@@ -174,14 +174,14 @@ class RelayedVerbPrimaryDispatchTest {
         assertEquals(Frame.ControlOk(2), accepted)
     }
 
-    /** AC-2: an older remote's Take over (`control/retired/handoff.json`) is
-     *  answered with the retired reason. The hub stays the hub, nothing runs
-     *  or is announced, and the same session serves the next control. */
+    /** AC-41: a `handoff` control is refused as unknown. The hub stays the
+     *  hub, nothing runs or is announced, and the same session serves the
+     *  next control. */
     @Test
-    fun `a retired handoff is refused and the session is kept`() {
+    fun `a handoff is refused as unknown and the session is kept`() {
         val messages = vm.ui.value.userMessages
-        val err = assertIs<Frame.ControlErr>(relay(Golden.require("control/retired/handoff.json")))
-        assertEquals(coffee.crema.machine.MachineCommandCodec.RETIRED_METHODS.getValue("handoff"), err.reason)
+        val err = assertIs<Frame.ControlErr>(relay(FrameCodec.encode(Frame.Control(1, "handoff", ""))))
+        assertEquals("unknown relayed control: handoff", err.reason)
         VmHarness.advance(1_000)
         assertEquals("primary", VmHarness.proxyController(vm).state.value.role, "the hub didn't step down")
         assertEquals(messages, vm.ui.value.userMessages, "nothing announced")

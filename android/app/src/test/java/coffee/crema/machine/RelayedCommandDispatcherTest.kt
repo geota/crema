@@ -131,11 +131,11 @@ class RelayedCommandDispatcherTest {
         assertEquals(3, actions.peerActivity)
     }
 
-    /** AC-2: an older remote's Take over is refused with the retired reason,
-     *  with or without arguments, before anything runs or is announced. */
+    /** AC-41: `handoff` is refused as an unknown control, with or without
+     *  arguments, before anything runs or is announced. */
     @Test
-    fun `a retired handoff is refused and runs nothing`() {
-        val reason = MachineCommandCodec.RETIRED_METHODS.getValue("handoff")
+    fun `a handoff is refused as unknown and runs nothing`() {
+        val reason = "unknown relayed control: handoff"
         assertEquals(CommandOutcome.Refused(reason), dispatch("handoff"))
         assertEquals(CommandOutcome.Refused(reason), dispatch("handoff", "x"))
         assertTrue(actions.applied.isEmpty() && actions.shown.isEmpty(), "${actions.applied}")

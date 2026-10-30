@@ -81,20 +81,12 @@ class ControlVerbGoldenTest {
         assertEquals(emptySet(), Golden.list("control") - RELAYED_VERB_SAMPLES.map { it.fixture }.toSet())
     }
 
-    /** AC-4: `control/` holds exactly the live verbs' fixtures. Take-over is
-     *  retired: its fixture sits in `control/retired/` and stays byte for byte
-     *  what older remotes send. */
+    /** `control/` holds exactly the live verbs' fixtures, and the retired
+     *  take-over has none any more (relay v4 R2, AC-41). */
     @Test
-    fun `control holds the 29 live fixtures and the retired handoff is refused`() {
+    fun `control holds the 29 live fixtures and no retired ones`() {
         assertEquals(29, Golden.list("control").size, "${Golden.list("control").sorted()}")
-        assertEquals(setOf("handoff"), Golden.list("control/retired"))
-        val text = Golden.require("control/retired/handoff.json")
-        assertEquals(Frame.Control(1, "handoff", ""), FrameCodec.decode(text))
-        assertEquals(text, FrameCodec.encode(Frame.Control(1, "handoff", "")))
-        assertEquals(
-            MachineCommandCodec.Decoded.Invalid(MachineCommandCodec.RETIRED_METHODS.getValue("handoff")),
-            MachineCommandCodec.decode("handoff", ""),
-        )
+        assertEquals(emptySet(), Golden.list("control/retired"))
     }
 }
 
