@@ -12892,7 +12892,11 @@ mod tests {
                     lost.events
                 );
                 assert!(!core.profile_upload_in_progress());
-                assert_eq!(warnings(&lost.events), Vec::<bool>::new(), "no sync warning");
+                assert_eq!(
+                    warnings(&lost.events),
+                    Vec::<bool>::new(),
+                    "no sync warning"
+                );
                 assert!(!core.profile_sync_status().retrying);
                 // Its late acks count for nothing.
                 let late = ack_every_frame(&mut core, &first.commands, 1);
