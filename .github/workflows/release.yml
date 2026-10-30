@@ -302,7 +302,9 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      # Optional: publish the AAB to Google Play's internal track as a draft.
+      # Optional: publish the AAB to Google Play. The track and release status come
+      # from the repo variables PLAY_TRACK (default 'internal'; 'alpha' is closed
+      # testing) and PLAY_STATUS (default 'draft'; 'completed' rolls out).
       # GATED so the first release stays manual — runs only when the repo variable
       # PLAY_AUTO_UPLOAD == 'true' (Settings → Secrets and variables → Actions →
       # Variables). Google Play rejects the FIRST upload via API, so leave this
@@ -313,15 +315,15 @@ jobs:
       # The AAB must be signed (keystore secrets) or Play rejects it. The "What's
       # new" notes come from android/distribution/whatsnew/ (whatsnew-<locale>,
       # <=500 chars each) — edit those before cutting the tag. See that dir's README.
-      - name: Publish AAB to Google Play (internal, draft)
+      - name: Publish AAB to Google Play
         if: startsWith(github.ref, 'refs/tags/') && env.PLAY_JSON != '' && vars.PLAY_AUTO_UPLOAD == 'true'
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: dev.maceiras.crema
           releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
-          track: internal
-          status: draft
+          track: ${{ vars.PLAY_TRACK || 'internal' }}
+          status: ${{ vars.PLAY_STATUS || 'draft' }}
           whatsNewDirectory: android/distribution/whatsnew
 
   # ─────────────────────────────────────────────────────────────────────

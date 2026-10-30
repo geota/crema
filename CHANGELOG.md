@@ -7,6 +7,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-30
+
 ### Added
 
 - **Hub mode** — Settings → Multi-device has a Hub mode switch, applied live
@@ -1159,3 +1161,4 @@ shot state machine, and domain model.
 [0.0.7]: https://github.com/geota/crema/releases/tag/v0.0.7
 [0.0.8]: https://github.com/geota/crema/releases/tag/v0.0.8
 [0.0.9]: https://github.com/geota/crema/releases/tag/v0.0.9
+[0.10.0]: https://github.com/geota/crema/releases/tag/v0.10.0
