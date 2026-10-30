@@ -29,7 +29,6 @@ import coffee.crema.core.Compare
 import coffee.crema.core.ExitMetric
 import coffee.crema.core.Pump
 import coffee.crema.core.Transition
-import coffee.crema.profiles.ProfileBounds
 import coffee.crema.ui.CoreBounds
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.SegmentExit
@@ -194,7 +193,11 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
-                EdRow("Brew temp") { CremaStepper(value = brewTemp, unit = "°C", step = 0.5, min = 80.0, max = ProfileBounds.INSTANCE.maxTemperatureC.toDouble(), fmt = { fmt("%.1f", it) }, onChange = { target ->
+                EdRow("Brew temp") {
+                    // The core's per-profile range (F6), like the Quick Controls dial.
+                    val tempRange = vm.editorBrewTempRange(profile.id, segs.toList())
+                        ?: (CoreBounds.qc.brewTempC.min.toDouble() to CoreBounds.qc.brewTempC.max.toDouble())
+                    CremaStepper(value = brewTemp, unit = "°C", step = 0.5, min = tempRange.first, max = tempRange.second, fmt = { fmt("%.1f", it) }, onChange = { target ->
                     // Every step moves with it, through the core; the field shows
                     // the first step's (clamped) temperature.
                     val shifted = vm.editorBrewTemp(profile.id, segs.toList(), target)

@@ -13,6 +13,8 @@ import coffee.crema.beans.mergeBeanImport
 import coffee.crema.beans.newBean
 import coffee.crema.beans.newRoaster
 import coffee.crema.core.Bean
+import coffee.crema.core.BrewTempRange
+import coffee.crema.core.brewTempRange
 import coffee.crema.core.CommonSettings
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.MaintenanceState
@@ -327,6 +329,17 @@ class LibraryController(
                 .map { it.jsonObject["temp"]?.jsonPrimitive?.floatOrNull }
             segments.mapIndexed { i, seg -> temps.getOrNull(i)?.let { seg.copy(temp = it) } ?: seg }
         }.getOrDefault(segments)
+    }
+
+    /** The editor's Brew temp field range for these [segments]: the core's
+     *  `brew_temp_range` (F6), so no step leaves the core's bounds after a
+     *  shift. Null when the draft can't be built (the caller falls back). */
+    fun editorBrewTempRange(id: String, segments: List<SegmentEdit>): Pair<Double, Double>? {
+        val base = draftProfileJson?.takeIf { uiState().editingProfileId == id } ?: profileJsonById[id] ?: return null
+        return runCatching {
+            val r = json.decodeFromString(BrewTempRange.serializer(), brewTempRange(withEditedSegmentsJson(base, segments, json)))
+            r.min.toDouble() to r.max.toDouble()
+        }.getOrNull()
     }
 
     // ── Profile list derivation + persistence ────────────────────────────────

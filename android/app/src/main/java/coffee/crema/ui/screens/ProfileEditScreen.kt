@@ -51,7 +51,6 @@ import coffee.crema.core.Compare
 import coffee.crema.core.ExitMetric
 import coffee.crema.core.Pump
 import coffee.crema.core.Transition
-import coffee.crema.profiles.ProfileBounds
 import coffee.crema.ui.CoreBounds
 import coffee.crema.profiles.exitMetricFromWire
 import coffee.crema.profiles.pumpFromWire
@@ -300,7 +299,10 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             NumberedSection("2", "Target + Limits", "Recipe targets & optional caps") {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     GroupCard("Target", 4f) {
-                        LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, ProfileBounds.INSTANCE.maxTemperatureC.toDouble(), { target ->
+                        // The core's per-profile range (F6), like the Quick Controls dial.
+                        val tempRange = vm.editorBrewTempRange(profile.id, segs.toList())
+                            ?: (CoreBounds.qc.brewTempC.min.toDouble() to CoreBounds.qc.brewTempC.max.toDouble())
+                        LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, tempRange.first, tempRange.second, { target ->
                             // Every step moves with it, through the core; the field
                             // shows the first step's (clamped) temperature.
                             val shifted = vm.editorBrewTemp(profile.id, segs.toList(), target)
