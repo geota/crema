@@ -72,7 +72,7 @@ import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.brewTempRange
 import coffee.crema.core.effectiveProfileFingerprint
 import coffee.crema.core.normalizeBrewOverrides
-import coffee.crema.core.preinfusionSeconds
+import coffee.crema.core.preinfusionDial
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.core.MachineState
@@ -1883,6 +1883,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         brewTemp, maxTotalVolumeMl, preinfuseStepCount, tankTemperatureC, segments,
     )
 
+    /** The editor's segments after its Brew temp field moved to [target]: every
+     *  step shifted by the core (Decenza `applyTemperatureToProfile`). */
+    fun editorBrewTemp(id: String, segments: List<SegmentEdit>, target: Double): List<SegmentEdit> =
+        library.editorBrewTemp(id, segments, target)
+
     /** Close the editor without saving (discards any new / duplicated draft). */
     fun cancelProfileEdit() = library.cancelProfileEdit()
 
@@ -2203,10 +2208,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (shot.doseG != null || shot.yieldTargetG != null) {
             val active = match ?: effectiveState().activeProfile()
             val dose = shot.doseG?.toDouble() ?: active?.dose?.toDouble() ?: 18.0
+            // The profile's own brew temperature as the core anchors it (its
+            // first step), so the dial-in moves no temperature it didn't record.
+            val anchor = brewDialOf(active?.id?.let { library.profileJson(it) }, json, ::brewTempRange, ::preinfusionDial)?.anchor
             quickAdjustBrew(
                 dose = dose,
                 yieldOut = shot.yieldTargetG?.toDouble() ?: active?.yieldOut?.toDouble() ?: (dose * 2),
-                brewTemp = active?.brewTemp?.toDouble() ?: 93.0,
+                brewTemp = shot.brewTempC?.toDouble() ?: anchor ?: active?.brewTemp?.toDouble() ?: 93.0,
             )
         }
         val stamp = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
@@ -2682,8 +2690,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  anchor and pre-infusion seed); `null` with no active profile. */
     fun brewDial(): BrewDial? {
         val s = effectiveState()
-        val cremaJson = s.activeProfileId?.let { library.profileJson(it) } ?: s.mirroredProfileJson
-        return brewDialOf(cremaJson, json, ::brewTempRange, ::preinfusionSeconds)
+        // On a remote the hub's copy of its custom profile wins over this
+        // library's (possibly out-of-date) one.
+        val cremaJson = s.mirroredProfileJson?.takeIf { _ui.value.mirror != null }
+            ?: s.activeProfileId?.let { library.profileJson(it) } ?: s.mirroredProfileJson
+        return brewDialOf(cremaJson, json, ::brewTempRange, ::preinfusionDial)
     }
 
     /** The rest of a config command on the device that owns the config:

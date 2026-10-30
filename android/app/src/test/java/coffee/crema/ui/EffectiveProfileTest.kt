@@ -10,7 +10,7 @@ import coffee.crema.core.brewTempRange
 import coffee.crema.core.cremaProfileFromWire
 import coffee.crema.core.effectiveProfileFingerprint
 import coffee.crema.core.normalizeBrewOverrides
-import coffee.crema.core.preinfusionSeconds
+import coffee.crema.core.preinfusionDial
 import coffee.crema.machine.MachineCommand
 import coffee.crema.machine.maxBrewTempC
 import coffee.crema.profiles.ProfileBounds
@@ -87,8 +87,8 @@ class EffectiveProfileTest {
     }
 
     @Test
-    fun `f6_5 an override dialled back to the profile is cleared, and one out of range is clamped`() {
-        val dial = assertNotNull(brewDialOf(crema, json, ::brewTempRange, ::preinfusionSeconds))
+    fun `f6_5 an override dialled back to the profile is cleared, and one out of bounds is refused`() {
+        val dial = assertNotNull(brewDialOf(crema, json, ::brewTempRange, ::preinfusionDial))
         assertEquals(92.0, dial.anchor)
         assertEquals(20.0, dial.preinfS)
         val atAnchor = BrewParams(18.0, 36.0, dial.anchor, null)
@@ -97,7 +97,10 @@ class EffectiveProfileTest {
         assertNull(normalizedBrewParams(atAnchorPreinf, crema, json, ::normalizeBrewOverrides, ::brewTempRange))
         // Every step at 92 °C: the dial tops out at 100.
         assertEquals(100.0, dial.max)
-        val hot = normalizedBrewParams(BrewParams(18.0, 36.0, 104.0, null), crema, json, ::normalizeBrewOverrides, ::brewTempRange)
+        // Beyond the core's bounds, or 0 (a model default): refused, no override.
+        assertNull(normalizedBrewParams(BrewParams(18.0, 36.0, 104.0, null), crema, json, ::normalizeBrewOverrides, ::brewTempRange))
+        assertNull(normalizedBrewParams(BrewParams(18.0, 36.0, 0.0, null), crema, json, ::normalizeBrewOverrides, ::brewTempRange))
+        val hot = normalizedBrewParams(BrewParams(18.0, 36.0, 100.0, null), crema, json, ::normalizeBrewOverrides, ::brewTempRange)
         assertEquals(BrewParams(18.0, 36.0, 100.0, null), hot)
         assertEquals("+8.0 °C from profile", dial.offsetLabel(100.0))
         assertNull(dial.offsetLabel(92.0))

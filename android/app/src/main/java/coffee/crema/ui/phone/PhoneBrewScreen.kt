@@ -907,7 +907,8 @@ private fun RestingBody(
                     val readyTemp = convertTemp(ui.effectiveBrew().brewTemp.toFloat(), ui.tempUnit)
                     val readyPress = convertPressure(peakBar?.toFloat(), ui.pressureUnit)
                     ReadyParam("TEMP", if (ui.awaitingHubValues) UNKNOWN_VALUE else readyTemp.value, if (ui.awaitingHubValues) "" else readyTemp.unit, Modifier.weight(1f))
-                    ReadyParam("PRE-INF", "${active?.preinfuseSeconds ?: 0}", "s", Modifier.weight(1f))
+                    val readyPreinf = ui.brewParams?.preinf?.let { Math.round(it) } ?: active?.preinfuseSeconds ?: 0
+                    ReadyParam("PRE-INF", "$readyPreinf", "s", Modifier.weight(1f))
                     ReadyParam("PRESSURE", if (peakBar != null) readyPress.value else "—", if (peakBar != null) readyPress.unit else "", Modifier.weight(1f))
                     ReadyParam("EST. TIME", estTime?.let { "~$it" } ?: "—", if (estTime != null) "s" else "", Modifier.weight(1f))
                 }

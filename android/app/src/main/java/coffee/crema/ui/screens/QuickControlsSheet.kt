@@ -322,16 +322,21 @@ fun QuickControlsSheet(
                 { m ->
                     val tempMin = brewDial?.min ?: QcBounds.BREW_TEMP_MIN_C
                     val tempMax = brewDial?.max ?: QcBounds.BREW_TEMP_MAX_C
+                    // The core's pre-infusion range holds the profile's own value;
+                    // a profile with no pre-infusion step has nothing to adjust.
+                    val preinfMax = brewDial?.preinfMax ?: QcBounds.PREINF_MAX_S
+                    val preinfOff = brewMode == BrewMode.Preinf && brewDial?.preinfAdjustable == false
                     Column(m) {
                         CremaStepper(
                             modifier = Modifier.fillMaxWidth(),
                             value = if (brewMode == BrewMode.Temp) brewTemp else preinf,
                             unit = if (brewMode == BrewMode.Temp) "°C" else "s",
                             min = if (brewMode == BrewMode.Temp) tempMin else QcBounds.PREINF_MIN_S,
-                            max = if (brewMode == BrewMode.Temp) tempMax else QcBounds.PREINF_MAX_S,
+                            max = if (brewMode == BrewMode.Temp) tempMax else preinfMax,
                             step = if (brewMode == BrewMode.Temp) 0.5 else 1.0,
                             fmt = niceFmt,
-                            chips = if (brewMode == BrewMode.Temp) listOf(88.0, 91.0, 93.0, 95.0, 97.0).filter { it in tempMin..tempMax } else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
+                            enabled = !preinfOff,
+                            chips = if (brewMode == BrewMode.Temp) listOf(88.0, 91.0, 93.0, 95.0, 97.0).filter { it in tempMin..tempMax } else listOf(0.0, 4.0, 8.0, 12.0, 16.0).filter { it <= preinfMax },
                             onChange = { if (brewMode == BrewMode.Temp) onAdjustBrew(dose, yieldOut, it, preinfOverride) else onAdjustBrew(dose, yieldOut, brewTemp, it) },
                             style = CremaStepperStyle.Boxed,
                             gate = brewGate,
@@ -339,6 +344,7 @@ fun QuickControlsSheet(
                                 CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-infuse")), value = brewMode.value, onChange = { brewMode = BrewMode.of(it) })
                             },
                         )
+                        if (preinfOff) PreinfusionNotAdjustableNote()
                         val offset = if (brewMode == BrewMode.Temp && brewParams != null) brewDial?.offsetLabel(brewTemp) else null
                         if (offset != null && brewDial != null) {
                             BrewTempOffsetRow(offset, enabled = brewGate.editable) {
@@ -544,4 +550,15 @@ internal fun BrewTempOffsetRow(label: String, enabled: Boolean, onReset: () -> U
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
         CremaButton(onClick = onReset, variant = CremaButtonVariant.Text, label = "Reset", enabled = enabled)
     }
+}
+
+/** Under a disabled pre-infusion dial: the profile has no pre-infusion step. */
+@Composable
+internal fun PreinfusionNotAdjustableNote() {
+    Text(
+        "This profile has no pre-infusion step, so there is nothing to adjust.",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
 }

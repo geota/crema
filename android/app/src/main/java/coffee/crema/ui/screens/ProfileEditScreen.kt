@@ -297,7 +297,13 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             NumberedSection("2", "Target + Limits", "Recipe targets & optional caps") {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     GroupCard("Target", 4f) {
-                        LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, ProfileBounds.INSTANCE.maxTemperatureC.toDouble(), { brewTemp = it })
+                        LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, ProfileBounds.INSTANCE.maxTemperatureC.toDouble(), { target ->
+                            // Every step moves with it, through the core; the field
+                            // shows the first step's (clamped) temperature.
+                            val shifted = vm.editorBrewTemp(profile.id, segs.toList(), target)
+                            segs.clear(); segs.addAll(shifted)
+                            brewTemp = shifted.firstOrNull()?.temp?.toDouble() ?: target
+                        })
                         LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, 1.0, 60.0, { dose = it })
                         LabeledStepper("Yield", yieldG, "g", Modifier.weight(1f), 0.5, 1.0, 200.0, { yieldG = it })
                         LabeledRatio(dose, yieldG, Modifier.weight(1f))
