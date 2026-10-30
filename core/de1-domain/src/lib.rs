@@ -92,6 +92,7 @@ pub mod mode_targets;
 pub mod profile;
 pub mod profile_bounds;
 pub mod profile_fingerprint;
+pub mod profile_file;
 pub mod profile_import;
 pub mod profile_roast;
 pub mod replay;
@@ -250,6 +251,10 @@ pub use profile::{
     ProfileStep, Pump, TempSensor, Transition,
 };
 pub use profile_fingerprint::profile_fingerprint;
+pub use profile_file::{
+    MAX_PROFILES_PER_FILE, ProfileFileError, ProfileFileImport, export_profile_file,
+    export_profile_file_json, import_profile_file, import_profile_file_json,
+};
 pub use profile_import::{
     export_v2_json, import_legacy_tcl, import_v2_json, import_v2_json_embedded,
 };

@@ -1665,6 +1665,31 @@ pub fn effective_crema_profile(
     de1_domain::effective_crema_profile_json(&profile_json, qc_json.as_deref()).map_err(crema_err)
 }
 
+/// Read a profile file (community v2 `.json`, a `.jsonl` bundle, a de1app
+/// `.tcl`, a Crema backup, or an old Android Crema export): a
+/// `ProfileFileImport` JSON of fresh custom profiles plus per-item errors. See
+/// [`de1_domain::import_profile_file`].
+///
+/// # Errors
+///
+/// Only if the result fails to serialize, which it cannot.
+#[uniffi::export]
+pub fn import_profile_file(text: String) -> Result<String, CremaError> {
+    de1_domain::import_profile_file_json(&text).map_err(crema_err)
+}
+
+/// Write library profiles (a JSON array of `CremaProfile`) as the profile file
+/// both shells export: one profile as pretty community v2, several as JSON
+/// lines. See [`de1_domain::export_profile_file`].
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[uniffi::export]
+pub fn export_profile_file(profiles_json: String) -> Result<String, CremaError> {
+    de1_domain::export_profile_file_json(&profiles_json).map_err(crema_err)
+}
+
 /// The Quick Controls overrides after the core's lifecycle rule
 /// ([`de1_domain::normalize_brew_overrides`]): brew temperature clamped into
 /// the profile's range, values equal to the profile's own dropped. JSON
