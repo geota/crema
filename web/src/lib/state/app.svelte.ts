@@ -49,7 +49,7 @@ import { writeJson } from '#lib/utils/storage.js';
 import type { ProfileSyncStatus } from '#lib/core/index.js';
 import { isSerialStolen } from '#lib/decent/stolen-serials.js';
 import { SAW_MODEL_KEY, seedSawModel } from './saw-model-store';
-import { getSettingsStore } from '#lib/settings/index.js';
+import { getSettingsStore, settingsToCommon } from '#lib/settings/index.js';
 import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
 import { CoreRecoveryWatch } from '#lib/core/recovery-watch.js';
 import { CoreResetNotice } from '#lib/core/reset-notice.js';
@@ -1543,6 +1543,22 @@ export class CremaApp {
 	}
 
 	/**
+	 * Push the whole settings bundle to the core: every settings-driven core
+	 * input in one call (`applyCommonSettings` — auto-tare, stop-on-weight,
+	 * volume stop, max shot, weight unit, low-water threshold), the mains
+	 * line-frequency override, and the idle-sleep timeout. Runs at start-up and
+	 * after every whole-bundle write (the settings store's `onReplaced`: a
+	 * backup restore, Restore defaults), so the core never keeps stale values
+	 * until a reload. Single edits still use their own setters.
+	 */
+	pushSettings(): void {
+		const s = getSettingsStore().current;
+		void this.core.applyCommonSettings(JSON.stringify(settingsToCommon(s)));
+		void this.core.setLineFrequencyOverride(s.lineFrequencyHz === 50 || s.lineFrequencyHz === 60 ? s.lineFrequencyHz : 0);
+		this.idleSleep.configure(s.idleSleepMin);
+	}
+
+	/**
 	 * Tell the core which unit the user wants on the connected scale's
 	 * on-scale LCD. The Settings page calls this whenever the
 	 * `weightUnit` pref changes.
@@ -2595,39 +2611,14 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// HistoryContext) construct themselves lazily on first access via
 	// the shared store + `getCremaUiState()` singletons — no bind step
 	// needed. See `#lib/state/{brew-context,machine-readout,history-context}.svelte`.
-	// Push the persisted AC mains-frequency preference into the core's
-	// volume integrator. `0` = auto (the core's auto-detector decides);
-	// `50` / `60` pin the value. Done once at construction; subsequent
-	// changes flow via `app.setLineFrequencyOverride(...)` from the
-	// Advanced settings section.
-	const hz = getSettingsStore().current.lineFrequencyHz;
-	if (hz === 50 || hz === 60) {
-		void core.setLineFrequencyOverride(hz);
-	} else {
-		void core.setLineFrequencyOverride(0);
-	}
-	// Push the persisted weight-unit pref into the core so the Decent
-	// Scale LCD-enable auto-policy (triggered on the DE1's Idle entry)
-	// picks the right wire packet from the first state notification.
-	// Subsequent changes flow via `app.applyWeightUnitPref(...)` invoked
-	// from the Settings page on every `weightUnit` change.
-	void core.setWeightUnitPref(getSettingsStore().current.weightUnit);
-	// The low-water threshold drives the core's warning (`WaterLow`).
-	void core.setWaterWarnMl(getSettingsStore().current.waterWarnMl ?? undefined);
-	// Push the persisted shot-behaviour settings into the core so SAW +
-	// auto-tare fire correctly on the very first shot — including a shot
-	// initiated via the DE1's group-head touch (GHC), which bypasses
-	// `startShot()`. The core latches these and consults them on
-	// `ShotEvent::Started` / first flowing phase regardless of initiator.
-	// Subsequent changes flow via the matching `applyXxx(...)` methods
-	// on `CremaApp` whenever the Settings / Profile / QC surfaces mutate.
-	{
-		const s = getSettingsStore().current;
-		void core.setAutoTare(s.autoTareOnShotStart);
-		void core.setStopOnWeight(s.stopOnWeight);
-		void core.setVolumeStopWithScale(s.volumeStopWithScale);
-		void core.setMaxShotDuration(s.maxShotDurationS > 0 ? s.maxShotDurationS : undefined);
-	}
+	// Push the persisted settings into the core — the shot behaviour (so SAW
+	// and auto-tare fire on the very first shot, including one started from
+	// the group head), the weight unit (the scale LCD auto-policy), the
+	// low-water threshold, the mains frequency and the idle-sleep timeout —
+	// and again whenever the whole bundle is replaced (restore, Restore
+	// defaults). Single edits flow through the matching `applyXxx(...)`.
+	app.pushSettings();
+	getSettingsStore().onReplaced = () => app.pushSettings();
 	// Seed the learned SAW drip model (core-owned opaque blob) from its
 	// persisted store; saved back after every completed shot. A corrupt
 	// blob is quarantined, not lost (see `saw-model-store.ts`).
@@ -2639,7 +2630,6 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// hidden-tab timer still fires on its next run. Replaces the old
 	// per-touch UserPresent heartbeat: presence is now poked by the core on
 	// activity only, throttled.
-	app.idleSleep.configure(getSettingsStore().current.idleSleepMin);
 	app.idleSleep.start();
 	if (typeof document !== 'undefined') app.idleSleep.attach(document);
 	// The active profile is the core's desired profile: set at boot (once the
