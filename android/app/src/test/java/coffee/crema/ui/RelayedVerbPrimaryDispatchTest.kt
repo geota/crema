@@ -63,14 +63,6 @@ class RelayedVerbPrimaryDispatchTest {
         "setActiveBean.none" to Effect(prime = { it.setActiveBean("bean-2") }) { it.activeBeanId == null },
         "setStopOnWeight" to Effect(prime = { it.setStopOnWeight(false) }) { it.stopOnWeight },
         "setAutoTare" to Effect(prime = { it.setAutoTare(true) }) { !it.autoTare },
-        "setQcSteamTime" to Effect { it.qcSteamTimeS == 30f },
-        "setQcSteamFlow" to Effect(prime = { it.setQcSteamFlow(2f) }) { it.qcSteamFlowMlS == 1.2f },
-        "setQcSteamTemp" to Effect(prime = { it.setQcSteamTemp(140f) }) { it.qcSteamTempC == 148f },
-        "setQcSteamTemp.off" to Effect { it.qcSteamTempC == 0f },
-        "setQcHotWaterTemp" to Effect { it.qcHotWaterTempC == 85f },
-        "setQcHotWaterVolume" to Effect { it.qcHotWaterVolumeMl == 250f },
-        "setQcFlushTime" to Effect { it.qcFlushTimeS == 5f },
-        "setQcFlushTemp" to Effect { it.qcFlushTempC == 92f },
         "setQcGrind" to Effect { it.qcGrind == 14.5f },
         "quickAdjustBrew" to Effect { it.brewParams == BrewParams(18.0, 36.0, 93.0, 8.0) },
         "quickAdjustBrew.noPreinf" to Effect { it.brewParams == BrewParams(18.0, 36.0, 93.0, null) },
@@ -221,18 +213,20 @@ class RelayedVerbPrimaryDispatchTest {
         assertEquals(listOf(RemoteClient("phone-1", "Phone", canControl = true)), vm.ui.value.remotes)
     }
 
-    /** AC-35, the hub half: the steam, hot-water and flush verbs newer
-     *  remotes don't send still come from older ones; the hub applies them
-     *  (the golden fixtures) and logs who changed what. */
+    /** AC-43 (relay v4 R4), the hub half: a relayed steam, hot-water or
+     *  flush value is refused as unknown and changes nothing on the hub. */
     @Test
-    fun `older remotes' QC machine verbs are applied and logged`() {
+    fun `read-only QC verbs are refused and change nothing`() {
         vm.setQcSteamTemp(140f)
+        vm.setQcFlushTime(5f)
         VmHarness.idle()
-        assertEquals(Frame.ControlOk(1), relay(Golden.require("control/setQcSteamTemp.json")))
-        assertEquals(148f, vm.ui.value.qcSteamTempC, "applied")
-        assertTrue(VmHarness.log(vm).any { it.endsWith("Phone changed steam temperature (older Crema)") }, "${VmHarness.log(vm).take(5)}")
-        assertEquals(Frame.ControlOk(1), relay(Golden.require("control/setQcFlushTime.json")))
-        assertTrue(VmHarness.log(vm).any { it.endsWith("Phone changed flush time (older Crema)") })
+        val steam = assertIs<Frame.ControlErr>(relay(FrameCodec.encode(Frame.Control(1, "setQcSteamTemp", "148.0"))))
+        assertEquals("unknown relayed control: setQcSteamTemp", steam.reason)
+        val flush = assertIs<Frame.ControlErr>(relay(FrameCodec.encode(Frame.Control(1, "setQcFlushTime", "0.0"))))
+        assertEquals("unknown relayed control: setQcFlushTime", flush.reason)
+        VmHarness.idle()
+        assertEquals(140f, vm.ui.value.qcSteamTempC, "unchanged")
+        assertEquals(5f, vm.ui.value.qcFlushTimeS, "unchanged")
     }
 
     /** An accepted start is announced to this primary's user. */

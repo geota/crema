@@ -5,9 +5,10 @@ import coffee.crema.core.MachineRequest
 /**
  * The relay's wire vocabulary for [MachineCommand]: today's `Frame.Control`
  * method names and argument strings, byte for byte (the golden fixtures in
- * `proxy-golden/v3/control/` pin them). [encode] is exhaustive over
+ * `proxy-golden/v4/control/` pin them). [encode] is exhaustive over
  * [MachineCommand.Relayable], so a new relayable command without a wire form
- * doesn't compile; [MachineCommand.LocalOnly] has none.
+ * doesn't compile; [MachineCommand.LocalOnly] has none, and neither has a
+ * Quick Controls machine setting a remote doesn't send ([sentByRemotes]).
  *
  * Two wire forms stand for more than one command until the protocol can say
  * more:
@@ -28,7 +29,9 @@ object MachineCommandCodec {
         data class Invalid(val reason: String) : Decoded
     }
 
-    fun encode(cmd: MachineCommand.Relayable): Wire = when (cmd) {
+    /** [cmd]'s wire form, or null for a machine setting that isn't relayed
+     *  (a remote keeps it read-only, so it never reaches the wire). */
+    fun encode(cmd: MachineCommand.Relayable): Wire? = when (cmd) {
         MachineCommand.StartShot -> Wire(START_SHOT, "")
         is MachineCommand.StateRequest -> Wire(MACHINE_STATE, cmd.request.name)
         MachineCommand.CancelMaintenance -> Wire(CANCEL_MAINTENANCE, "")
@@ -39,7 +42,7 @@ object MachineCommandCodec {
         is MachineCommand.SetStopOnWeight -> Wire(SET_STOP_ON_WEIGHT, cmd.on.toString())
         is MachineCommand.SetAutoTare -> Wire(SET_AUTO_TARE, cmd.on.toString())
         // Float.toString is locale-independent.
-        is MachineCommand.SetQc -> Wire(qcMethod(cmd.field), cmd.value.toString())
+        is MachineCommand.SetQc -> qcMethod(cmd.field)?.let { Wire(it, cmd.value.toString()) }
         // `dose,yield,temp,preinf`, preinf empty = none.
         is MachineCommand.AdjustBrew ->
             Wire(QUICK_ADJUST_BREW, "${cmd.dose},${cmd.yieldOut},${cmd.brewTemp},${cmd.preinf ?: ""}")
@@ -57,7 +60,7 @@ object MachineCommandCodec {
         setOf(
             START_SHOT, MACHINE_STATE, CANCEL_MAINTENANCE, TARE_SCALE, SET_ACTIVE_PROFILE,
             SET_ACTIVE_BEAN, SET_STOP_ON_WEIGHT, SET_AUTO_TARE, QUICK_ADJUST_BREW, RESET_BREW,
-        ) + QcField.entries.map(::qcMethod)
+        ) + QcField.entries.mapNotNull(::qcMethod)
     }
 
     /** The machine states a `machineState` control may carry. */
@@ -75,7 +78,9 @@ object MachineCommandCodec {
         }
     }
 
-    private val qcByMethod: Map<String, QcField> by lazy { QcField.entries.associateBy(::qcMethod) }
+    private val qcByMethod: Map<String, QcField> by lazy {
+        QcField.entries.mapNotNull { field -> qcMethod(field)?.let { it to field } }.toMap()
+    }
 
     private fun parse(method: String, args: String): MachineCommand.Relayable? {
         qcByMethod[method]?.let { field -> return args.toFloatOrNull()?.let { MachineCommand.SetQc(field, it) } }
@@ -124,15 +129,13 @@ object MachineCommandCodec {
         return MachineCommand.AdjustBrew(dose, yieldOut, brewTemp, preinf)
     }
 
-    private fun qcMethod(field: QcField): String = when (field) {
-        QcField.STEAM_TIME -> "setQcSteamTime"
-        QcField.STEAM_FLOW -> "setQcSteamFlow"
-        QcField.STEAM_TEMP -> "setQcSteamTemp"
-        QcField.HOT_WATER_TEMP -> "setQcHotWaterTemp"
-        QcField.HOT_WATER_VOLUME -> "setQcHotWaterVolume"
-        QcField.FLUSH_TIME -> "setQcFlushTime"
-        QcField.FLUSH_TEMP -> "setQcFlushTemp"
+    /** The relayed Quick Controls fields' methods: grind, a shot dial. The
+     *  steam, hot-water and flush values are machine settings a remote
+     *  doesn't send (relay v4 R4), so they have none. */
+    private fun qcMethod(field: QcField): String? = when (field) {
         QcField.GRIND -> "setQcGrind"
+        QcField.STEAM_TIME, QcField.STEAM_FLOW, QcField.STEAM_TEMP, QcField.HOT_WATER_TEMP,
+        QcField.HOT_WATER_VOLUME, QcField.FLUSH_TIME, QcField.FLUSH_TEMP -> null
     }
 
     private const val START_SHOT = "startShot"
