@@ -736,8 +736,11 @@ class ProxyController(
         if (refused == null || refused !== session || _state.value.role != "secondary") return
         when {
             authenticated && (reason == REFUSED_REVOKED || reason == REFUSED_NOT_PAIRED) -> {
-                savedHubPin()?.let { pin ->
-                    relay.unpinHub(pin.id)
+                // The hub this session dialed signed it (with its pinned key):
+                // drop that pin, never another hub's. The saved hub is cleared
+                // only when it is that hub.
+                refused.hub?.let { pin ->
+                    runCatching { relay.unpinHub(pin.id) }
                     refreshPins()
                 }
                 demote(reason)
@@ -765,7 +768,8 @@ class ProxyController(
         handleSessionRefused(session, reason, authenticated, terminal)
 
     /** The hub this remote dials, by name for the copy. */
-    private fun hubLabel(): String = _state.value.hubName.ifBlank { savedHubPin()?.name ?: savedTarget?.first.orEmpty() }
+    private fun hubLabel(): String =
+        _state.value.hubName.ifBlank { (session?.hub ?: savedHubPin())?.name ?: session?.host ?: savedTarget?.first.orEmpty() }
 
     /** The hub refused this device: stop being a remote, with the reason.
      *  Only from the mode it refused (R1): a switch that ran first — a
@@ -1305,9 +1309,10 @@ class ProxyController(
         val hub = pick ?: savedHubPin()
         val remote = RemoteSession(host, port, trust, attempt = refind?.attempt == true, hub = hub)
         session = remote
-        // A pinned hub picked at a new address isn't the saved target before
-        // its Welcome: a refused pick goes back to the last welcomed one.
-        if (!remote.attempt && (pick == null || savedTarget == null)) savedTarget = remote.target
+        // A picked hub isn't the saved target before its Welcome (not even
+        // when there was none): a refused pick goes back to the last welcomed
+        // one, and the re-find never searches the picked host.
+        if (!remote.attempt && pick == null) savedTarget = remote.target
         refindQueued = false
         // A child scope for everything this mode launches (the link-state + roster
         // collectors AND the ProxyTransport's own init collectors), so applyMode can
@@ -1372,7 +1377,7 @@ class ProxyController(
                 stallTimer?.cancel()
                 remote.stalled = false
                 onRemoteWelcomed(remote)
-                savedHubPin()?.let { pin -> runCatching { relay.touchHub(pin.id, System.currentTimeMillis()) } }
+                remote.hub?.let { pin -> runCatching { relay.touchHub(pin.id, System.currentTimeMillis()) } }
             },
             // A refusal: only an authenticated one changes the role (§2.9).
             onRefused = { reason, authenticated, terminal -> handleSessionRefused(remote, reason, authenticated, terminal) },

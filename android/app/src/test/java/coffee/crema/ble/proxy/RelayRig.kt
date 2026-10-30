@@ -92,8 +92,12 @@ internal class TestHubTrust(
     override fun peerFor(deviceId: String): RemotePeer? =
         remotes[deviceId]?.let { RemotePeer(it.id, it.name, it.scope == SCOPE_CONTROL) }
 
+    /** Runs at admission, between the acceptor's pin check and [RelayHub.serve] (a Forget racing it). */
+    @Volatile var duringAdmit: (RemotePeer) -> Unit = {}
+
     override fun onAdmitted(peer: RemotePeer) {
         admitted += peer.deviceId
+        duringAdmit(peer)
     }
 
     override fun isTurnedAway(address: String): Boolean = address in turnedAway

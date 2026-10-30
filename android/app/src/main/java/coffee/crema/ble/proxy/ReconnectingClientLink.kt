@@ -165,7 +165,7 @@ class ReconnectingClientLink(
             }
         }
         wire = RelayWire(ws, RemoteConn(core), this, listener, clock)
-        wire.applyStep(core.start())
+        wire.callChecked { (this as RemoteConn).core.start() }
         wire.pump()
         if (established) Log.i(TAG, "Primary link dropped — will redial")
         established

@@ -189,7 +189,7 @@ class PairingDialer(
         w = RelayWire(ws, RemoteConn(core), this, listener, clock)
         wire = w
         try {
-            w.applyStep(core.start())
+            w.callChecked { (this as RemoteConn).core.start() }
             w.pump()
         } finally {
             wire = null

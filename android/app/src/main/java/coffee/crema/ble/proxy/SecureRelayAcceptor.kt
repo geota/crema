@@ -128,7 +128,11 @@ class SecureRelayAcceptor(
     private val maxUnauthPerAddress: Int = MAX_UNAUTH_PER_ADDRESS,
     private val clock: () -> Long = System::currentTimeMillis,
     /** Serves one admitted session: [RelayHub.serve] (tests record or script the link). */
-    private val serve: suspend (link: FrameLink, peer: RemotePeer) -> Unit = { link, peer -> hub.serve(link, peer) },
+    private val serve: suspend (link: FrameLink, peer: RemotePeer) -> Unit = { link, peer ->
+        // Checked again once the session is listed: a Forget that ran between
+        // the admission check and here missed it in its revoke loop.
+        hub.serve(link, peer, stillTrusted = { trust.peerFor(peer.deviceId) != null })
+    },
 ) {
     private val sessions = CopyOnWriteArrayList<Session>()
     private val seq = AtomicLong(0)
@@ -220,17 +224,16 @@ class SecureRelayAcceptor(
         internal suspend fun enterCode(code: String, canControl: Boolean): Boolean {
             val w = wire ?: return false
             this.canControl = canControl
-            val step = try {
-                w.withConn { (this as HubConn).core.enterCode(code, it) }
+            val sent = try {
+                w.callChecked { (this as HubConn).core.enterCode(code, it) }
             } catch (e: RelayFfiException) {
                 // CodeFormat changes nothing; an ended attempt returns its Step on the next tick.
                 Log.i(TAG, "code entry refused: ${RelayWire.kindOf(e)}")
                 w.call { tick(it) }
                 return false
-            } ?: return false
-            awaitingCode = false
-            w.applyStep(step)
-            return true
+            }
+            if (sent) awaitingCode = false
+            return sent
         }
 
         internal suspend fun poke() {
@@ -296,7 +299,7 @@ class SecureRelayAcceptor(
                 write?.let { trust.restorePin(remoteId, it.previous) }
                 // The hub user hears it before the remote does.
                 r?.let { trust.onPairingNotSaved(it) }
-                w.withConn { core(this).rejectPairing(it) }?.let { w.applyStep(it) }
+                w.call { core(this).rejectPairing(it) }
                 request = null
                 return
             }
@@ -306,20 +309,17 @@ class SecureRelayAcceptor(
                 Log.w(TAG, "pin set refused the key: ${RelayWire.kindOf(e)}")
                 trust.restorePin(remoteId, write.previous)
                 r?.let { trust.onPairingNotSaved(it) }
-                w.withConn { core(this).rejectPairing(it) }?.let { w.applyStep(it) }
+                w.call { core(this).rejectPairing(it) }
                 request = null
                 return
             }
             val confirmed = try {
-                w.withConn { core(this).confirmPaired(it) }
+                w.callChecked { core(this).confirmPaired(it) }
             } catch (e: RelayFfiException) {
                 Log.i(TAG, "confirm_paired refused: ${RelayWire.kindOf(e)} — restoring the prior pin state")
-                null
+                false
             }
-            if (confirmed != null) {
-                w.applyStep(confirmed)
-                return
-            }
+            if (confirmed) return
             // Restore what was there before: a new key leaves the live set and
             // the store; a re-pair keeps the key pinned with its old record.
             if (isNew) runCatching { trust.pins.remove(key) }

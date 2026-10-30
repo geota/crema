@@ -214,8 +214,9 @@ class RelayHub(
      *  when the link closes. The core's handshake authenticated the peer before
      *  this runs (relay v4), so the session is approved from the start: the
      *  [Frame.Welcome] goes first, with the scope stored at pairing. The caller
-     *  (the secure acceptor / the loopback) provides one link per connection. */
-    suspend fun serve(link: FrameLink, peer: RemotePeer): Unit = coroutineScope {
+     *  (the secure acceptor / the loopback) provides one link per connection.
+     *  [stillTrusted] is asked once the session is listed: false revokes it. */
+    suspend fun serve(link: FrameLink, peer: RemotePeer, stillTrusted: () -> Boolean = { true }): Unit = coroutineScope {
         val session = ClientSession(link, clientCapacity)
         val admitted = synchronized(clients) { (clients.size < maxSessions).also { if (it) clients += session } }
         if (!admitted) {
@@ -227,6 +228,14 @@ class RelayHub(
         session.clientName = peer.name
         session.canControl = peer.canControl
         session.approved = true
+        // Listed now, so a Forget from here on revokes it. One that ran before
+        // (after the acceptor's check) didn't see it: check the pin again.
+        if (!stillTrusted()) {
+            clients.remove(session)
+            Log.i(TAG, "Revoking a session forgotten while it was admitted")
+            withTimeoutOrNull(CLOSE_TIMEOUT_MS) { runCatching { link.revoke() } }
+            return@coroutineScope
+        }
         deliver(session, Frame.Welcome(primaryName, AUTHORITY_PRIMARY, roster(), if (peer.canControl) SCOPE_CONTROL else SCOPE_MIRROR))
         onClientsChanged() // the hub's Remotes list shows it
         val reader = launch { readFrames(session, link) }

@@ -103,4 +103,28 @@ class SpoofedKidPickTest {
         runBlocking { eventually(ms = 15_000, what = "back on the real hub") { lines.any { "remote log: Multi-device: SECONDARY → ws://127.0.0.1:$port" in it } } }
         assertEquals("127.0.0.1" to port, remote.relayStore.hubs.single().let { it.host to it.port })
     }
+
+    /**
+     * SR-3b P3-3: with no saved target yet (a device that wasn't a remote), a
+     * refused spoofed pick doesn't become one, so the re-find never goes back
+     * to the spoofer's address. One dial, then nothing.
+     */
+    @Test
+    fun `a refused spoofed pick with no saved target isn't dialed again`() {
+        val remote = controller("remote")
+        val hubA = coffee.crema.core.RelayKeys.generate()
+        remote.relayStore.pinHub(RelayHubPin(hubA.deviceId(), RelayKeyStore.b64(hubA.publicKey()), "Kitchen tablet", "10.0.0.9", 41234, pinnedAtMs = 1))
+        remote.relayStore.setSavedHub(hubA.deviceId())
+        val rig = RelayRig().start().also { spoofer = it }
+        remote.overridePeers(MutableStateFlow(listOf(Peer("spoof", "Kitchen tablet", "primary", holdsDe1 = true, host = "127.0.0.1", port = rig.port, kid = hubA.deviceId().take(8)))))
+        runBlocking { eventually(what = "the spoofer listed") { remote.state.value.peers.isNotEmpty() } }
+        remote.switchToSecondary("127.0.0.1", rig.port)
+        runBlocking { eventually(what = "the spoofer refused") { lines.any { "remote log: Hub refused the session" in it } } }
+        // Past the first re-find back-off (5 s).
+        Thread.sleep(7_000)
+        val dials = lines.count { "remote log: Multi-device: SECONDARY → ws://127.0.0.1:${rig.port}" in it }
+        assertEquals(1, dials, "the spoofer was dialed once, for the pick")
+        assertEquals("10.0.0.9" to 41234, remote.relayStore.hubs.single().let { it.host to it.port })
+        assertTrue(savedTargets.none { it.second == rig.port }, "$savedTargets")
+    }
 }

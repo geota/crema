@@ -148,20 +148,23 @@ internal class RelayWire(
         if (destroyed) null else runCatching { conn.block() }.getOrNull()
     }
 
-    /** A call whose `Result` error the caller handles (`enter_code`, `confirm_paired`). */
-    suspend fun <T> withConn(block: RelayConn.(nowMs: ULong) -> T): T? = lock.withLock {
-        if (closed) null else conn.block(clock().toULong())
-    }
-
-    /** Apply a Step obtained through [withConn] (send, deliver, events, close). */
-    suspend fun applyStep(step: RelayStep) {
-        lock.withLock {
-            if (closed) return
+    /**
+     * [call] for a core call whose error the caller handles (`start`,
+     * `enter_code`, `confirm_paired`): a [RelayFfiException] propagates and
+     * nothing is sent. Otherwise the Step is sent under the lock and applied,
+     * as in [call]. Returns false when the connection had already ended.
+     */
+    suspend fun callChecked(block: RelayConn.(nowMs: ULong) -> RelayStep): Boolean {
+        val step = lock.withLock {
+            if (closed) return false
+            val step = conn.block(clock().toULong())
             sendAll(step)
             if (step.closeCode != null) markClosed(step.closeCode!!.toInt())
             if (!closed) rearm()
+            step
         }
         apply(step)
+        return true
     }
 
     /**

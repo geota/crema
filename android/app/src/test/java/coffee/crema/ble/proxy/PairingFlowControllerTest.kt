@@ -42,7 +42,10 @@ class PairingFlowControllerTest {
         scope.cancel()
     }
 
-    private fun controller(name: String): ProxyController = ProxyController(
+    private fun controller(
+        name: String,
+        store: RelayKeyStore = RelayKeyStore(Files.createTempDirectory(name).toFile(), RelayKeyStore.deviceBox(FakeKeystore())),
+    ): ProxyController = ProxyController(
         app = ApplicationProvider.getApplicationContext(),
         json = Json { ignoreUnknownKeys = true },
         scope = scope,
@@ -54,7 +57,7 @@ class PairingFlowControllerTest {
         snapshotConfig = { "" }, applyConfig = {},
         roster = { listOf(DeviceInfo("AA:BB", "DE1", "de1", "CONNECTED")) }, isSnapshotChar = { _, _ -> false },
         onModeApplied = { _, _, _ -> },
-        relayStore = RelayKeyStore(Files.createTempDirectory(name).toFile(), RelayKeyStore.deviceBox(FakeKeystore())),
+        relayStore = store,
         commandLane = Dispatchers.Default,
         refindDelayMs = 60_000,
     ).also { controllers += it }
@@ -85,5 +88,38 @@ class PairingFlowControllerTest {
         assertTrue(remote.relayStore.hubs.isEmpty(), "the remote dropped the hub's pin")
         assertTrue(lines.any { "removed this device" in it }, "the remote says so")
         assertTrue(hub.relayStore.remotes.isEmpty())
+    }
+
+    /**
+     * AC-28 through the controller (SR-3b P3-2): after the hub user forgets a
+     * remote, its next resume gets `NOT_PAIRED`, not `REVOKED`. The key left
+     * the live pin set, so the core refuses it at IK, before admission.
+     */
+    @Test
+    fun `a resume after a forget is not paired`() {
+        val store = RelayKeyStore(Files.createTempDirectory("hub").toFile(), RelayKeyStore.deviceBox(FakeKeystore()))
+        val hubKeys = (store.load() as RelayKeyLoad.Ready).keys
+        val remote = coffee.crema.core.RelayKeys.generate()
+        store.pinRemote(RelayRemotePin(remote.deviceId(), RelayKeyStore.b64(remote.publicKey()), "Phone", SCOPE_CONTROL, pairedAtMs = 1))
+        val hub = controller("hub", store)
+        hub.setHubMode(true)
+        runBlocking { eventually(what = "the hub listening") { lines.any { "LAN relay listening" in it } } }
+        val url = "ws://127.0.0.1:${lines.first { "LAN relay listening" in it }.substringAfterLast(":").toInt()}${LanRelayServer.PATH}"
+
+        val first = CopyOnWriteArrayList<String>()
+        val welcomed = java.util.concurrent.atomic.AtomicBoolean(false)
+        ProxyTransport(ReconnectingClientLink(url, scope, remote, hubKeys.publicKey()), scope,
+            onRefused = { reason, auth, _ -> first += "$reason/$auth" }, onWelcome = { _, _ -> welcomed.set(true) })
+        runBlocking { eventually(what = "welcomed") { welcomed.get() } }
+
+        hub.forgetRemote(remote.deviceId())
+        runBlocking { eventually(what = "the revoke") { first.isNotEmpty() } }
+        assertEquals(listOf("Revoked/true"), first.toList())
+
+        val later = CopyOnWriteArrayList<String>()
+        ProxyTransport(ReconnectingClientLink(url, scope, remote, hubKeys.publicKey()), scope,
+            onRefused = { reason, auth, _ -> later += "$reason/$auth" })
+        runBlocking { eventually(what = "the later refusal") { later.isNotEmpty() } }
+        assertEquals(listOf("NotPaired/true"), later.toList())
     }
 }

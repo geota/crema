@@ -92,4 +92,35 @@ class ForgetRevokesTest {
             rig.stop()
         }
     }
+
+    /**
+     * SR-3b P3-1: a Forget that lands after the acceptor's pin check but
+     * before [RelayHub.serve] lists the session. Its revoke loop can't see
+     * the session, so serve checks the pin again once it is listed: the
+     * remote gets an authenticated `CLOSE(REVOKED)` and is never welcomed.
+     */
+    @Test
+    fun `a forget while the session is being admitted still revokes it`() {
+        val rig = RelayRig().start()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val keys = RelayKeys.generate()
+            rig.trust.pin(keys)
+            rig.trust.duringAdmit = { peer ->
+                rig.trust.forget(peer.deviceId)
+                rig.hub.revoke(peer.deviceId) // too early: the session isn't listed yet
+            }
+            val refusals = CopyOnWriteArrayList<String>()
+            val welcomed = AtomicBoolean(false)
+            val link = ReconnectingClientLink(rig.url, scope, keys, rig.hubKeys.publicKey())
+            ProxyTransport(link, scope, onRefused = { reason, auth, _ -> refusals += "$reason/$auth" }, onWelcome = { _, _ -> welcomed.set(true) })
+            runBlocking { eventually(what = "the refusal") { refusals.isNotEmpty() } }
+            assertEquals(listOf("Revoked/true"), refusals.toList())
+            assertTrue(!welcomed.get(), "never welcomed")
+            assertTrue(!rig.hub.hasClient(keys.deviceId()), "not served")
+        } finally {
+            scope.cancel()
+            rig.stop()
+        }
+    }
 }

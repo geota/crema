@@ -70,14 +70,21 @@ class RelayWireLockTest {
     }
 
     @Test
-    fun `a slow socket write holds the next encryption back`() = runBlocking {
+    fun `a slow socket write holds the next encryption back`() = holdsBack { call { send(byteArrayOf(), it) } }
+
+    /** The same through [RelayWire.callChecked] (`start`, `enter_code`, `confirm_paired`). */
+    @Test
+    fun `a checked call also sends under the lock`() = holdsBack { callChecked { send(byteArrayOf(), it) } }
+
+    /** Two calls through [encrypt]; the first one's socket write is slow. */
+    private fun holdsBack(encrypt: suspend RelayWire.() -> Boolean) = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val ws = SlowFirstWrite()
             val wire = RelayWire(ws, CountingConn(), scope, object : RelayWire.Listener {})
-            val first = scope.async { wire.call { send(byteArrayOf(), it) } }
+            val first = scope.async { wire.encrypt() }
             delay(50) // the first write is in flight
-            val second = scope.async { wire.call { send(byteArrayOf(), it) } }
+            val second = scope.async { wire.encrypt() }
             first.await()
             second.await()
             assertEquals(listOf(1, 2), ws.wire.toList(), "encryption order is wire order")
