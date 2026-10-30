@@ -47,8 +47,9 @@ const BUILTIN_TAG: &str = "Built-in";
 /// The key of Crema's extension object in an exported v2 profile.
 const CREMA_KEY: &str = "crema";
 
-/// What [`import_profile_file`] read from a file.
-#[typeshare]
+/// What [`import_profile_file`] read from a file. Not shared through
+/// typeshare (the shells have their own `CremaProfile` types); each shell
+/// declares this shape over its own.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProfileFileImport {
     /// The profiles to save, in file order, each a fresh custom profile.

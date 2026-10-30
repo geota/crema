@@ -3230,15 +3230,6 @@ data class ProfileFileError (
 	val message: String
 )
 
-/// What [`import_profile_file`] read from a file.
-@Serializable
-data class ProfileFileImport (
-	/// The profiles to save, in file order, each a fresh custom profile.
-	val profiles: List<CremaProfile>,
-	/// What could not be imported, in file order.
-	val errors: List<ProfileFileError>
-)
-
 /// The profile sync's state, as a shell sees it.
 @Serializable
 data class ProfileSyncStatus (

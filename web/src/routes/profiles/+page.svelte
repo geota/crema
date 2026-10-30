@@ -1,7 +1,6 @@
 <script lang="ts">
 	import Icon from '#lib/icons/Icon.svelte';
 	import { pinActiveThenFavourite } from '#lib/library-order.js';
-	import { readImportText } from '#lib/utils/import-limits.js';
 	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
@@ -29,9 +28,8 @@
 	import { resolve } from '$app/paths';
 	import {
 		getProfileStore,
-		toCoreProfile,
-		fromCoreProfile,
-		newProfileId,
+		importProfileFiles,
+		exportProfileFile,
 		type CremaProfile
 	} from '#lib/profiles/index.js';
 	import {
@@ -436,67 +434,31 @@
 	}
 
 	/**
-	 * Hand-off from the hidden `<input type="file">` to the wasm-bridged
-	 * importers. Routes by extension: `.tcl` → legacy importer; anything
-	 * else (`.json`, `.shot.json`) → community-v2 JSON importer. Each
-	 * parsed `Profile` becomes a custom `CremaProfile` (fresh UUID, the
-	 * file's own title preserved) saved into the local library.
-	 */
-	/**
-	 * Adopt a Rust-shape `Profile` into the local store as a custom
-	 * CremaProfile (fresh UUID, source `custom`, `Built-in` tag stripped).
-	 * Used by both the per-file and per-line import paths.
-	 */
-	function adoptImportedProfile(core: import('#lib/core/index.js').Profile): void {
-		const adapted = fromCoreProfile(core, -1);
-		const custom: CremaProfile = {
-			...adapted,
-			id: newProfileId(),
-			source: 'custom',
-			tags: adapted.tags.filter((t) => t !== 'Built-in')
-		};
-		store.save(custom);
-	}
-
-	/**
 	 * Export every profile in the library as one `.jsonl` file — one
-	 * community-v2 profile JSON per line. Counterpart to the bulk
-	 * Import path which also recognises `.jsonl`. Built-ins + custom
-	 * profiles are both included; round-trips back through the same
-	 * page's Import button.
+	 * community-v2 profile per line, written by the core (the same file
+	 * Android exports). Built-ins and custom profiles are both included; the
+	 * file round-trips through this page's Import button.
 	 */
-	async function exportAllAsV2Jsonl(): Promise<void> {
+	function exportAllProfiles(): void {
 		if (profiles.length === 0) return;
-		const app = ctx().app;
-		if (!app) return;
-		const lines: string[] = [];
-		for (const p of profiles) {
-			try {
-				const v2 = await app.exportProfileAsV2Json(toCoreProfile(p));
-				// `exportProfileAsV2Json` returns pretty-printed JSON;
-				// flatten to one line per profile for true JSONL.
-				lines.push(JSON.stringify(JSON.parse(v2)));
-			} catch (e) {
-				console.warn(`Skipped "${p.name}" in bulk export:`, e);
-			}
+		try {
+			const blob = new Blob([exportProfileFile(profiles)], { type: 'application/x-ndjson' });
+			downloadBlob(`crema-profiles-${filenameStamp()}.jsonl`, blob);
+		} catch (e) {
+			importBanner = {
+				kind: 'error',
+				message: `Could not export the profiles: ${e instanceof Error ? e.message : String(e)}`
+			};
 		}
-		const blob = new Blob([lines.join('\n')], { type: 'application/x-ndjson' });
-		downloadBlob(`crema-profiles-${filenameStamp()}.jsonl`, blob);
 	}
 
-	/**
-	 * Export a single profile as a community-v2 `.json` file. Looks up
-	 * the profile by id, asks the app to encode it via the wasm bridge,
-	 * and triggers a browser download.
-	 */
-	async function exportProfile(id: string): Promise<void> {
+	/** Export one profile as a community-v2 `.json` file, written by the core. */
+	function exportProfile(id: string): void {
 		const profile = store.get(id);
-		const app = ctx().app;
-		if (!profile || !app) return;
+		if (!profile) return;
 		try {
-			const v2 = await app.exportProfileAsV2Json(toCoreProfile(profile));
 			const safeName = (profile.name || 'profile').replace(/[^\w.-]+/g, '_');
-			const blob = new Blob([v2], { type: 'application/json' });
+			const blob = new Blob([exportProfileFile([profile])], { type: 'application/json' });
 			downloadBlob(`${safeName}.json`, blob);
 		} catch (e) {
 			importBanner = {
@@ -506,52 +468,20 @@
 		}
 	}
 
+	/**
+	 * Hand-off from the hidden `<input type="file">` to the core's profile-file
+	 * reader, which takes any profile file (community v2 `.json`, a `.jsonl`
+	 * bundle, a de1app `.tcl`, a Crema backup, an Android export) whatever its
+	 * extension, and returns fresh custom profiles to save.
+	 */
 	async function onImportFilesChosen(event: Event): Promise<void> {
 		const input = event.currentTarget as HTMLInputElement;
 		const files = input.files;
 		input.value = '';
-		const app = ctx().app;
-		if (!app || !files || files.length === 0) return;
+		if (!files || files.length === 0) return;
 		importing = true;
 		importBanner = null;
-		let imported = 0;
-		const errors: string[] = [];
-		for (const file of Array.from(files)) {
-			// `.jsonl` is a multi-profile bundle: one v2 profile JSON per
-			// line. Split locally, then route each non-empty line through
-			// the v2-JSON importer. `.json` / `.tcl` stay one-profile per
-			// file via `importProfileFile`.
-			const isJsonl = file.name.toLowerCase().endsWith('.jsonl');
-			if (isJsonl) {
-				try {
-					const text = await readImportText(file);
-					const lines = text.split('\n').filter((l) => l.trim().length > 0);
-					for (let i = 0; i < lines.length; i++) {
-						try {
-							const core = await app.parseV2JsonProfile(lines[i]);
-							adoptImportedProfile(core);
-							imported += 1;
-						} catch (e) {
-							errors.push(
-								`Line ${i + 1} of ${file.name}: ${e instanceof Error ? e.message : String(e)}`
-							);
-						}
-					}
-				} catch (e) {
-					errors.push(
-						`Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`
-					);
-				}
-				continue;
-			}
-			const { profile: core, error } = await app.importProfileFile(file);
-			if (!core) {
-				errors.push(error ?? `Could not import ${file.name}.`);
-				continue;
-			}
-			adoptImportedProfile(core);
-			imported += 1;
-		}
+		const { imported, errors } = await importProfileFiles(files, (p) => store.save(p));
 		importing = false;
 		if (imported > 0 && errors.length === 0) {
 			importBanner = {
@@ -796,7 +726,7 @@
 			<button
 				class="pp-btn pp-btn-secondary"
 				disabled={profiles.length === 0}
-				onclick={exportAllAsV2Jsonl}
+				onclick={exportAllProfiles}
 				title="Download every profile as one .jsonl file — one community-v2 profile per line"
 			><DownloadSimpleIcon aria-hidden="true" /> Export</button>
 

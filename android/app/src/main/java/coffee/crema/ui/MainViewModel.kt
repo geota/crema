@@ -1894,7 +1894,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Restore a hidden built-in profile back to the active grid. */
     fun unarchiveBuiltinProfile(id: String) = library.unarchiveBuiltinProfile(id)
 
-    /** Export a profile's full community-v2 JSON via the system share sheet. */
+    /** Share a profile as the core's community-v2 `.json` profile file. */
     fun exportProfile(id: String) = library.exportProfile(id)
 
     /** Export a stored shot as JSON via the system share sheet. */
@@ -1918,8 +1918,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The core's shot-quality analysis over a stored shot (review #39). */
     fun analyzeShotQuality(shot: StoredShot): ShotQualityReport? = library.analyzeShotQuality(shot)
 
-    /** All profiles (built-ins + customs) as a JSON array, or null when empty. */
-    fun allProfilesJson(): String? = library.allProfilesJson()
+    /** All profiles (built-ins + customs) as the core's `.jsonl` profile file, or null when empty. */
+    fun allProfilesFile(): String? = library.allProfilesFile()
 
     /** Write export [text] to a SAF document Uri (large-payload safe). */
     fun writeTextToUri(uri: Uri, text: String) = library.writeTextToUri(uri, text)

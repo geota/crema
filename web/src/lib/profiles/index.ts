@@ -36,6 +36,15 @@ export {
 export { ProfileStore, getProfileStore } from './store.svelte';
 
 export {
+	importProfileFile,
+	importProfileFiles,
+	exportProfileFile,
+	describeProfileFileError,
+	type ProfileFileImport,
+	type ProfileFileError
+} from './profile-file';
+
+export {
 	profileFingerprint,
 	effectiveCremaProfile,
 	normalizeBrewOverrides,

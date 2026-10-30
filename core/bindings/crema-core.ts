@@ -3208,14 +3208,6 @@ export interface ProfileFileError {
 	message: string;
 }
 
-/** What [`import_profile_file`] read from a file. */
-export interface ProfileFileImport {
-	/** The profiles to save, in file order, each a fresh custom profile. */
-	profiles: CremaProfile[];
-	/** What could not be imported, in file order. */
-	errors: ProfileFileError[];
-}
-
 /** The profile sync's state, as a shell sees it. */
 export interface ProfileSyncStatus {
 	/**
