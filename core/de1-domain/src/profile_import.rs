@@ -369,6 +369,18 @@ struct V2ProfileOut {
     target_volume_count_start: u8,
     /// The recommended dry coffee dose, grams — the legacy `grinder_dose_weight`.
     grinder_dose_weight: f32,
+    /// de1app's profile type (`profiles_v2` metadata, `profile.tcl`
+    /// `legacy_profile_to_v2`): every Crema profile is advanced, `settings_2c`.
+    /// Decenza reads its type from this key first.
+    legacy_profile_type: &'static str,
+    /// de1app's `profile_language`; Crema profiles carry none.
+    lang: &'static str,
+    /// de1app's `profile_hide`: an exported profile is visible.
+    hidden: u8,
+    /// Crema's library metadata with no v2 field (see `crate::profile_file`);
+    /// other apps ignore the key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crema: Option<serde_json::Value>,
 }
 
 /// Export a Crema [`Profile`] as a legacy **v2 JSON** profile string.
@@ -388,9 +400,31 @@ struct V2ProfileOut {
 /// unreachable (a `Profile` is plain scalars + strings with bounded floats),
 /// but RS5: surfaced rather than silently yielding an empty string.
 pub fn export_v2_json(profile: &Profile) -> Result<String, serde_json::Error> {
+    // The legacy app pretty-prints its profiles, so do the same for
+    // human-readable output. RS5: surface a serialize error rather than emit "".
+    serde_json::to_string_pretty(&v2_out(profile, None))
+}
+
+/// [`export_v2_json`]'s document with Crema's `crema` extension object, pretty
+/// (`pretty`) or on one line — the profile-file exporter's encoder.
+pub(crate) fn export_v2_json_with(
+    profile: &Profile,
+    crema: Option<serde_json::Value>,
+    pretty: bool,
+) -> Result<String, serde_json::Error> {
+    let out = v2_out(profile, crema);
+    if pretty {
+        serde_json::to_string_pretty(&out)
+    } else {
+        serde_json::to_string(&out)
+    }
+}
+
+/// The v2 document [`export_v2_json`] writes for `profile`.
+fn v2_out(profile: &Profile, crema: Option<serde_json::Value>) -> V2ProfileOut {
     let steps = profile.steps.iter().map(step_to_v2).collect();
 
-    let out = V2ProfileOut {
+    V2ProfileOut {
         title: profile.title.clone(),
         notes: profile.notes.clone(),
         kind: "advanced",
@@ -410,11 +444,11 @@ pub fn export_v2_json(profile: &Profile) -> Result<String, serde_json::Error> {
         target_volume: f32::from(profile.max_total_volume_ml),
         target_volume_count_start: profile.preinfuse_step_count,
         grinder_dose_weight: profile.dose,
-    };
-
-    // The legacy app pretty-prints its profiles, so do the same for
-    // human-readable output. RS5: surface a serialize error rather than emit "".
-    serde_json::to_string_pretty(&out)
+        legacy_profile_type: "settings_2c",
+        lang: "",
+        hidden: 0,
+        crema,
+    }
 }
 
 /// Serialize a profile's steps into the community-v2 step shape (the same shape

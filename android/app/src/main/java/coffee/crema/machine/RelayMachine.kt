@@ -104,7 +104,8 @@ class RelayMachine(
 
     /** Send [cmd] to the primary and map its answer. Reports nothing. */
     suspend fun forward(cmd: MachineCommand.Relayable): CommandOutcome {
-        val wire = MachineCommandCodec.encode(cmd)
+        // A machine setting has no wire form; execute() refuses it before this.
+        val wire = MachineCommandCodec.encode(cmd) ?: return CommandOutcome.Refused("Change on ${hubName()}")
         return when (val reply = send(wire.method, wire.args)) {
             ControlReply.Ok -> CommandOutcome.Accepted
             is ControlReply.Err -> CommandOutcome.Refused(reply.reason)
@@ -117,7 +118,7 @@ class RelayMachine(
     }
 
     private fun report(cmd: MachineCommand.Relayable, outcome: CommandOutcome, config: Boolean) {
-        val method = MachineCommandCodec.encode(cmd).method
+        val method = MachineCommandCodec.encode(cmd)?.method ?: cmd.toString()
         when (outcome) {
             CommandOutcome.Accepted -> Unit
             is CommandOutcome.Refused -> {

@@ -750,6 +750,32 @@ pub fn default_brew_cue_haptics() -> bool {
     de1_domain::app_settings::DEFAULT_BREW_CUE_HAPTICS
 }
 
+/// The default settings bundle (`CommonSettings` JSON) both shells build
+/// their defaults from. See [`de1_domain::app_settings::default_common_settings`].
+#[uniffi::export]
+#[must_use]
+pub fn default_common_settings_json() -> String {
+    de1_domain::app_settings::default_common_settings_json()
+}
+
+/// Read a stored or restored settings blob (any JSON) into a sanitized
+/// `CommonSettings` JSON: a wrong-typed field falls back to its default, bad
+/// values are repaired. See [`de1_domain::app_settings::sanitize_common_settings`].
+#[uniffi::export]
+#[must_use]
+pub fn sanitize_common_settings_json(blob_json: String) -> String {
+    de1_domain::app_settings::sanitize_common_settings_json(&blob_json)
+}
+
+/// "Restore defaults": the current `CommonSettings` JSON and line-frequency
+/// override in, a `SettingsReset` JSON out (defaults, keeping the weight unit
+/// and the line frequency). See [`de1_domain::app_settings::reset_settings`].
+#[uniffi::export]
+#[must_use]
+pub fn reset_settings_json(current_json: String, line_frequency_hz: f32) -> String {
+    de1_domain::app_settings::reset_settings_json(&current_json, line_frequency_hz)
+}
+
 /// Resolve the Brew screen's service-mode display targets (steam /
 /// hot-water / flush) — machine value → Quick-Controls dial → legacy
 /// default, per field. Takes `ModeTargetInputs` JSON, returns
@@ -1652,6 +1678,31 @@ pub fn effective_crema_profile(
     de1_domain::effective_crema_profile_json(&profile_json, qc_json.as_deref()).map_err(crema_err)
 }
 
+/// Read a profile file (community v2 `.json`, a `.jsonl` bundle, a de1app
+/// `.tcl`, a Crema backup, or an old Android Crema export): a
+/// `ProfileFileImport` JSON of fresh custom profiles plus per-item errors. See
+/// [`de1_domain::import_profile_file`].
+///
+/// # Errors
+///
+/// Only if the result fails to serialize, which it cannot.
+#[uniffi::export]
+pub fn import_profile_file(text: String) -> Result<String, CremaError> {
+    de1_domain::import_profile_file_json(&text).map_err(crema_err)
+}
+
+/// Write library profiles (a JSON array of `CremaProfile`) as the profile file
+/// both shells export: one profile as pretty community v2, several as JSON
+/// lines. See [`de1_domain::export_profile_file`].
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[uniffi::export]
+pub fn export_profile_file(profiles_json: String) -> Result<String, CremaError> {
+    de1_domain::export_profile_file_json(&profiles_json).map_err(crema_err)
+}
+
 /// The Quick Controls overrides after the core's lifecycle rule
 /// ([`de1_domain::normalize_brew_overrides`]): brew temperature clamped into
 /// the profile's range, values equal to the profile's own dropped. JSON
@@ -2521,6 +2572,15 @@ impl CremaBridge {
     /// `0` = off); re-arms the warning. See `CremaCore::set_water_warn_ml`.
     pub fn set_water_warn_ml(&self, warn_ml: Option<f32>) {
         self.core().set_water_warn_ml(warn_ml);
+    }
+
+    /// Latch every settings-driven core input from a `CommonSettings` JSON
+    /// (read through `sanitize_common_settings`, so a partial or bad blob
+    /// still applies). See `CremaCore::apply_common_settings`.
+    pub fn apply_common_settings(&self, settings_json: String) {
+        let blob = serde_json::from_str(&settings_json).unwrap_or(serde_json::Value::Null);
+        let settings = de1_domain::app_settings::sanitize_common_settings(&blob);
+        self.core().apply_common_settings(&settings);
     }
 
     /// Enable or disable auto-tare on shot start.

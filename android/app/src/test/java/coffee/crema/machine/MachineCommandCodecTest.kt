@@ -1,11 +1,11 @@
 package coffee.crema.machine
 
-import coffee.crema.ble.proxy.PROXY_PROTOCOL_VERSION
 import coffee.crema.core.MachineRequest
 import kotlin.reflect.KClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /** The wire codec: every command round-trips, and a primary accepts only the
@@ -49,8 +49,8 @@ class MachineCommandCodecTest {
 
     @Test
     fun `every relayable command round-trips through its wire form`() {
-        for (cmd in samples.filterIsInstance<MachineCommand.Relayable>()) {
-            val wire = MachineCommandCodec.encode(cmd)
+        for (cmd in samples.filterIsInstance<MachineCommand.Relayable>().filter { it.sentByRemotes() }) {
+            val wire = assertNotNull(MachineCommandCodec.encode(cmd), "$cmd")
             val back = assertIs<MachineCommandCodec.Decoded.Valid>(MachineCommandCodec.decode(wire.method, wire.args), "$cmd").command
             // Wake shares Stop's IDLE on this wire; the primary applies the same write.
             assertEquals(if (cmd == MachineCommand.Wake) MachineCommand.Stop else cmd, back, "$cmd via $wire")
@@ -85,26 +85,38 @@ class MachineCommandCodecTest {
     }
 
     @Test
-    fun `Quick Controls numbers must be finite and in range`() {
-        ok("setQcSteamTime", "30.0")
-        ok("setQcSteamFlow", "1.2")
-        ok("setQcSteamTemp", "148.0")
-        ok("setQcSteamTemp", "0.0") // heater off
-        ok("setQcHotWaterTemp", "85.0")
-        ok("setQcHotWaterVolume", "250.0")
-        ok("setQcFlushTime", "0.0")
-        ok("setQcFlushTemp", "92.0")
+    fun `the relayed grind must be finite and in range`() {
         ok("setQcGrind", "14.5")
-        for (bad in listOf("NaN", "Infinity", "-Infinity", "1e9", "-1", "", "abc")) {
-            refused("setQcSteamTime", bad)
-            refused("setQcSteamTemp", bad)
-            refused("setQcHotWaterVolume", bad)
-            refused("setQcFlushTemp", bad)
-            refused("setQcGrind", bad)
+        for (bad in listOf("NaN", "Infinity", "-Infinity", "1e9", "-1", "", "abc")) refused("setQcGrind", bad)
+    }
+
+    /** AC-43 (relay v4 R4): the steam, hot-water and flush values are machine
+     *  settings a remote doesn't send. They have no wire form, and a hub
+     *  refuses their old methods as unknown controls. */
+    @Test
+    fun `machine settings have no wire form and their methods are unknown`() {
+        for (field in QcField.entries) {
+            assertEquals(field.sentByRemotes(), MachineCommandCodec.encode(MachineCommand.SetQc(field, inRange(field))) != null, "$field")
         }
-        refused("setQcSteamTemp", "120.0") // the band the firmware snaps to off
-        refused("setQcSteamTime", "61.0")
-        refused("setQcHotWaterVolume", "501.0")
+        val gone = listOf(
+            "setQcSteamTime", "setQcSteamFlow", "setQcSteamTemp", "setQcHotWaterTemp",
+            "setQcHotWaterVolume", "setQcFlushTime", "setQcFlushTemp",
+        )
+        for (method in gone) {
+            assertEquals(MachineCommandCodec.Decoded.Invalid("unknown relayed control: $method"), MachineCommandCodec.decode(method, "30.0"))
+            assertTrue(method !in MachineCommandCodec.METHODS, method)
+        }
+    }
+
+    /** The hub's own Quick Controls edits still get the range checks. */
+    @Test
+    fun `machine-setting numbers stay range-checked for the hub's own edits`() {
+        assertEquals(null, MachineCommand.SetQc(QcField.STEAM_TEMP, 0f).refusal()) // heater off
+        assertEquals(null, MachineCommand.SetQc(QcField.STEAM_TEMP, 148f).refusal())
+        assertNotNull(MachineCommand.SetQc(QcField.STEAM_TEMP, 120f).refusal()) // the band the firmware snaps to off
+        assertNotNull(MachineCommand.SetQc(QcField.STEAM_TIME, 61f).refusal())
+        assertNotNull(MachineCommand.SetQc(QcField.HOT_WATER_VOLUME, 501f).refusal())
+        assertNotNull(MachineCommand.SetQc(QcField.FLUSH_TEMP, Float.NaN).refusal())
     }
 
     @Test
@@ -134,18 +146,14 @@ class MachineCommandCodecTest {
         }
     }
 
-    /** AC-4: take-over is retired on a v3 hub. `handoff` is no live method;
-     *  it is refused with the retired reason, with or without arguments
-     *  (checked before parsing, so `handoff x` isn't "unknown"). */
+    /** AC-41 (relay v4 R2): `handoff` has no retired entry any more; it is an
+     *  unknown method like any other, with or without arguments. */
     @Test
-    fun `handoff is a retired refusal`() {
-        val reason = MachineCommandCodec.RETIRED_METHODS.getValue("handoff")
-        assertTrue("hub mode" in reason, reason)
-        assertEquals(MachineCommandCodec.Decoded.Invalid(reason), MachineCommandCodec.decode("handoff", ""))
-        assertEquals(MachineCommandCodec.Decoded.Invalid(reason), MachineCommandCodec.decode("handoff", "x"))
+    fun `handoff is an unknown method`() {
+        val unknown = MachineCommandCodec.Decoded.Invalid("unknown relayed control: handoff")
+        assertEquals(unknown, MachineCommandCodec.decode("handoff", ""))
+        assertEquals(unknown, MachineCommandCodec.decode("handoff", "x"))
         assertTrue("handoff" !in MachineCommandCodec.METHODS)
-        // Retiring it didn't bump the protocol (v3); relay v4 did, and PR-4 removes the retired list.
-        assertEquals(4, PROXY_PROTOCOL_VERSION)
     }
 
     @Test

@@ -55,6 +55,7 @@ class RelayedVerbSecondaryWireTest {
     /** The test primary's config snapshot: an accepted `setQcGrind`
      *  updates it and pushes it before the reply, as a real hub does. */
     @Volatile private var hubConfig = ""
+    @Volatile private var hubRev = 0L
 
     private val hub: RelayHub = RelayHub(
         primaryName = "Test primary",
@@ -67,7 +68,7 @@ class RelayedVerbSecondaryWireTest {
                 Result.failure(IllegalStateException("refused by the test primary"))
             } else {
                 if (method == "setQcGrind") {
-                    hubConfig = """{"qcGrind":$args}"""
+                    hubConfig = coffee.crema.settings.v4SnapshotJson(rev = ++hubRev) { it.copy(qcGrind = args.toFloat()) }
                     pushHubConfig()
                 }
                 Result.success(Unit)
@@ -130,12 +131,15 @@ class RelayedVerbSecondaryWireTest {
      *  are read-only on a remote: their setters put nothing on the wire. */
     @Test
     fun `machine settings a remote doesn't send put nothing on the wire`() {
-        val refusedHere = RELAYED_VERB_SAMPLES.filter { it.send != null && !sentByRemotes(it) }
-        assertEquals(
-            setOf("setQcSteamTime", "setQcSteamFlow", "setQcSteamTemp", "setQcHotWaterTemp", "setQcHotWaterVolume", "setQcFlushTime", "setQcFlushTemp"),
-            refusedHere.map { it.method }.toSet(),
-        )
-        for (sample in refusedHere) sample.send!!(vm)
+        // Relay v4 R4: these have no wire form (and no relayed sample) at all.
+        assertTrue(RELAYED_VERB_SAMPLES.all { sentByRemotes(it) }, "every relayed sample is a verb a remote sends")
+        vm.setQcSteamTime(30f)
+        vm.setQcSteamFlow(1.2f)
+        vm.setQcSteamTemp(148f)
+        vm.setQcHotWaterTemp(85f)
+        vm.setQcHotWaterVolume(250f)
+        vm.setQcFlushTime(5f)
+        vm.setQcFlushTemp(92f)
         vm.tareScale() // a control that is sent, so the wire has caught up
         VmHarness.idleUntil("the tare on the wire") { controlTexts().isNotEmpty() }
         VmHarness.idleUntil("the primary to handle it") { handled.isNotEmpty() }

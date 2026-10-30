@@ -86,11 +86,17 @@ internal class RemoteFixture(private val store: ViewModelStore) {
     }
 
     /** The hub pushes [snapshot]; waits until the remote applied it. */
+    /** Push [snapshot] with the hub's next `rev` (a v4 hub numbers every one). */
     fun push(snapshot: ConfigSnapshot = S) {
-        hubConfig = coreJson.encodeToString(ConfigSnapshot.serializer(), snapshot)
+        // An explicit rev above the counter is kept (a test pinning the order).
+        val numbered = snapshot.copy(rev = revs.updateAndGet { maxOf(it + 1, snapshot.rev) })
+        hubConfig = coreJson.encodeToString(ConfigSnapshot.serializer(), numbered)
         hub.pushConfig(hubConfig)
-        VmHarness.idleUntil("the snapshot") { VmHarness.ownState(vm).mirror?.snapshot == snapshot }
+        VmHarness.idleUntil("the snapshot") { VmHarness.ownState(vm).mirror?.snapshot == numbered }
     }
+
+    /** The hub's snapshot counter: the rev of the last snapshot it pushed. */
+    private val revs = java.util.concurrent.atomic.AtomicLong(0)
 
     fun kill() = runCatching { endpoint.kill() }
 
@@ -150,7 +156,7 @@ internal class RemoteFixture(private val store: ViewModelStore) {
                 current.copy(brewDoseG = p[0].toDouble(), brewYieldG = p[1].toDouble(), brewTempC = p[2].toDouble(), brewPreinfuseS = p.getOrNull(3)?.toDoubleOrNull())
             }
             else -> current
-        }.let { it.copy(rev = (it.rev ?: 0) + 1) }
+        }.let { it.copy(rev = revs.incrementAndGet()) }
         hubConfig = coreJson.encodeToString(ConfigSnapshot.serializer(), current)
         hub.pushConfig(hubConfig)
     }
@@ -185,12 +191,11 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         val S = ConfigSnapshot(
             activeProfileId = PROFILE_S, activeBeanId = BEAN_S, activeBeanSummary = "S bag",
             stopOnWeight = true, autoTare = true, maxShotDurationS = 44f, grinderModel = "S grinder",
-            weightUnit = "g", tempUnit = "C",
             qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f,
             qcHotWaterVolumeMl = 200f, qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = 15f,
             brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0, brewPreinfuseS = 6.0,
             primaryName = "Kitchen tablet",
-            settingsSchema = 1,
+            rev = 0,
             steamEco = true, steamTwoTap = true, fanThresholdC = 58f, waterRefillPointMm = 8f,
             heaterVoltage = 230, flowMultiplier = 1.1f, lineFrequencyHz = 50f, lineFrequencyOverride = 50f,
             cupWarmerTempC = 60, volumeStopWithScale = true, requireScale = true, preFlush = true, steamPurge = true,

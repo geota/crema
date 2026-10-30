@@ -55,7 +55,7 @@ class HubRestartReattachTest {
 
     @Test
     fun `a restarted hub is re-found on its new port and the remote reattaches`() {
-        val firstConfig = """{"grinderModel":"Before the restart","rev":9}"""
+        val firstConfig = coffee.crema.settings.v4SnapshotJson(rev = 9) { it.copy(grinderModel = "Before the restart") }
         // Restored as a remote of the first lifetime, paired: each side pinned the other's key.
         val (relayStore, remote) = VmHarness.relayStore()
         val (first, firstHub) = lifetime(remote, configSource = { firstConfig })
@@ -83,7 +83,7 @@ class HubRestartReattachTest {
         assertEquals("Before the restart", vm.ui.value.grinderModel)
         assertTrue(VmHarness.ownState(vm).mirror!!.reconnecting)
         assertEquals("Reconnecting to Kitchen tablet…", vm.ui.value.remoteStatus())
-        val (second, secondHub) = lifetime(remote, configSource = { """{"grinderModel":"After the restart","primaryName":"Kitchen tablet","rev":0}""" })
+        val (second, secondHub) = lifetime(remote, configSource = { coffee.crema.settings.v4SnapshotJson(rev = 0) { it.copy(grinderModel = "After the restart", primaryName = "Kitchen tablet") } })
         peers.value = listOf(Peer("nsd-second-lifetime", "Kitchen tablet", "primary", holdsDe1 = false, host = "127.0.0.1", port = second.port))
 
         advanceStepped(REFIND_DELAY_MS + 500)

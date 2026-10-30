@@ -1,7 +1,6 @@
 package coffee.crema.security
 
 import android.content.ContextWrapper
-import coffee.crema.ble.proxy.PairingStore
 import coffee.crema.decent.DecentState
 import coffee.crema.decent.DecentStore
 import coffee.crema.drive.DriveState
@@ -230,7 +229,7 @@ class TokenBoxCallersTest {
         assertEquals("g", store.load().tokens!!.accessToken)
     }
 
-    // ---- Drive and the v3 pairing store (same box) --------------------------------
+    // ---- Drive ------------------------------------------------------------------------
 
     @Test
     fun `Drive - a lost key signs out and a sealing error keeps the token`() = runBlocking {
@@ -246,19 +245,6 @@ class TokenBoxCallersTest {
         loseKey()
         assertNull(store.load().tokens)
         assertFalse(file(DRIVE).readText().contains("sb1:"))
-    }
-
-    @Test
-    fun `v3 pairing store - a lost key forgets the secret and a sealing error stores nothing`() {
-        val f = file(PairingStore.FILE_NAME)
-        val store = PairingStore(f, box, json)
-        assertTrue(store.putHeld("host", "secret"))
-        keystore.failure = KeyStoreException("busy")
-        assertFalse(store.putHeld("host2", "secret2"))
-        keystore.failure = null
-        assertEquals("secret", PairingStore(f, box, json).heldSecret("host"))
-        loseKey()
-        assertNull(PairingStore(f, box, json).heldSecret("host"))
     }
 
     private companion object {

@@ -480,7 +480,8 @@ class RelayHub(
     private companion object {
         const val TAG = "RelayHub"
         const val AUTHORITY_PRIMARY = "primary"
-        const val NOT_PAIRED = DenyReason.NOT_PAIRED
+        /** A request on a session that isn't ready (never on an admitted one). */
+        const val NOT_PAIRED = "not-paired"
         const val CLOSE_TIMEOUT_MS = 1_000L
         const val DEFAULT_CLIENT_CAPACITY = 1024
         const val MAX_SESSIONS = 8

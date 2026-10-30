@@ -1415,7 +1415,7 @@ class ProxyController(
     // ── Live mode switches (M2 — no restart) ────────────────────────────────
 
     /** Stop being a remote: become a standalone NORMAL device and connect the
-     *  DE1 directly (Stop, Connect directly, and a host's Denied). */
+     *  DE1 directly (Stop, Connect directly, and a hub's refusal). */
     fun switchToNormal() {
         resetRefind()
         applyMode("normal", "", 0)
@@ -1494,7 +1494,7 @@ class ProxyController(
         scope.launch {
             modeMutex.withLock {
                 // A re-find switch runs only from the session that asked for
-                // it: a user's switch (or a Denied) queued ahead of it wins.
+                // it: a user's switch (or a refusal) queued ahead of it wins.
                 if (refind != null && (refind.from !== session || _state.value.role != "secondary")) {
                     appendLog("Re-find: a newer switch ran first — skipping")
                     if (refind.from === session) refindQueued = false

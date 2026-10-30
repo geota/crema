@@ -1230,10 +1230,6 @@ private fun AdoptDialog(prompt: AdoptPrompt, onUseHub: () -> Unit, onKeepMine: (
                     if (prompt.changed == 1) "1 setting on this device differs from ${prompt.hubName}’s."
                     else "${prompt.changed} settings on this device differ from ${prompt.hubName}’s.",
                 )
-                if (prompt.legacyUnknown > 0) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("${prompt.legacyUnknown} settings ${prompt.hubName} doesn’t share stay as they are on this device.")
-                }
             }
         },
         confirmButton = { Button(onClick = onUseHub) { Text("Use ${prompt.hubName}’s") } },
