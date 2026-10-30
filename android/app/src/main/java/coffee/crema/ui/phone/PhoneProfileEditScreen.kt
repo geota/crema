@@ -29,7 +29,7 @@ import coffee.crema.core.Compare
 import coffee.crema.core.ExitMetric
 import coffee.crema.core.Pump
 import coffee.crema.core.Transition
-import coffee.crema.profiles.ProfileBounds
+import coffee.crema.ui.CoreBounds
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.SegmentExit
 import coffee.crema.profiles.exitMetricFromWire
@@ -184,8 +184,8 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
 
             // ── Targets ─────────────────────────────────────────────────────
             EdGroup("Targets") {
-                EdRow("Dose") { CremaStepper(value = dose, unit = "g", step = 0.1, min = 5.0, max = 30.0, fmt = { fmt("%.1f", it) }, onChange = { dose = it }, style = CremaStepperStyle.BareCompact) }
-                EdRow("Yield") { CremaStepper(value = yieldG, unit = "g", step = 0.5, min = 10.0, max = 120.0, fmt = { fmt("%.1f", it) }, onChange = { yieldG = it }, style = CremaStepperStyle.BareCompact) }
+                EdRow("Dose") { CremaStepper(value = dose, unit = "g", step = 0.1, min = CoreBounds.editor.doseG.min.toDouble(), max = CoreBounds.editor.doseG.max.toDouble(), fmt = { fmt("%.1f", it) }, onChange = { dose = it }, style = CremaStepperStyle.BareCompact) }
+                EdRow("Yield") { CremaStepper(value = yieldG, unit = "g", step = 0.5, min = CoreBounds.editor.yieldG.min.toDouble(), max = CoreBounds.editor.yieldG.max.toDouble(), fmt = { fmt("%.1f", it) }, onChange = { yieldG = it }, style = CremaStepperStyle.BareCompact) }
                 EdRow("Ratio", sub = "Computed") {
                     Text(
                         formatRatio(dose, yieldG),
@@ -193,15 +193,19 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
-                EdRow("Brew temp") { CremaStepper(value = brewTemp, unit = "°C", step = 0.5, min = 80.0, max = ProfileBounds.INSTANCE.maxTemperatureC.toDouble(), fmt = { fmt("%.1f", it) }, onChange = { target ->
+                EdRow("Brew temp") {
+                    // The core's per-profile range (F6), like the Quick Controls dial.
+                    val tempRange = vm.editorBrewTempRange(profile.id, segs.toList())
+                        ?: (CoreBounds.qc.brewTempC.min.toDouble() to CoreBounds.qc.brewTempC.max.toDouble())
+                    CremaStepper(value = brewTemp, unit = "°C", step = 0.5, min = tempRange.first, max = tempRange.second, fmt = { fmt("%.1f", it) }, onChange = { target ->
                     // Every step moves with it, through the core; the field shows
                     // the first step's (clamped) temperature.
                     val shifted = vm.editorBrewTemp(profile.id, segs.toList(), target)
                     segs.clear(); segs.addAll(shifted)
                 }, style = CremaStepperStyle.BareCompact) }
-                EdRow("Max total volume", sub = "Cap the whole shot by volume", dot = true, dotOn = maxVol > 0, onDot = { maxVol = if (maxVol > 0) 0.0 else 50.0 }) { CremaStepper(value = maxVol, unit = "ml", step = 5.0, min = 0.0, max = 500.0, fmt = { fmt("%.0f", it) }, onChange = { maxVol = it }, style = CremaStepperStyle.BareCompact) }
+                EdRow("Max total volume", sub = "Cap the whole shot by volume", dot = true, dotOn = maxVol > 0, onDot = { maxVol = if (maxVol > 0) 0.0 else 50.0 }) { CremaStepper(value = maxVol, unit = "ml", step = 5.0, min = CoreBounds.editor.maxTotalVolumeMl.min.toDouble(), max = CoreBounds.editor.maxTotalVolumeMl.max.toDouble(), fmt = { fmt("%.0f", it) }, onChange = { maxVol = it }, style = CremaStepperStyle.BareCompact) }
                 EdRow("Pre-infuse phases", sub = "Leading phases counted as pre-infusion", dot = true, dotOn = preinfuse > 0, onDot = { preinfuse = if (preinfuse > 0) 0.0 else 1.0 }) { CremaStepper(value = preinfuse, unit = null, step = 1.0, min = 0.0, max = segs.size.toDouble(), fmt = { fmt("%.0f", it) }, onChange = { preinfuse = it }, style = CremaStepperStyle.BareCompact) }
-                EdRow("Tank temp", sub = "Override the machine tank setpoint", dot = true, dotOn = tankTemp > 0, onDot = { tankTemp = if (tankTemp > 0) 0.0 else 92.0 }) { CremaStepper(value = tankTemp, unit = "°C", step = 1.0, min = 0.0, max = 60.0, fmt = { fmt("%.0f", it) }, onChange = { tankTemp = it }, style = CremaStepperStyle.BareCompact) }
+                EdRow("Tank temp", sub = "Override the machine tank setpoint", dot = true, dotOn = tankTemp > 0, onDot = { tankTemp = if (tankTemp > 0) 0.0 else 92.0 }) { CremaStepper(value = tankTemp, unit = "°C", step = 1.0, min = CoreBounds.editor.tankTempC.min.toDouble(), max = CoreBounds.editor.tankTempC.max.toDouble(), fmt = { fmt("%.0f", it) }, onChange = { tankTemp = it }, style = CremaStepperStyle.BareCompact) }
             }
 
             // ── Pressure curve + phase accordion ────────────────────────────
@@ -313,7 +317,9 @@ private fun PhaseRow(
     val isPressure = seg.isPressure
     val dotColor = if (isPressure) tel.pressure else tel.flow
     val tUnit = seg.targetUnit()
-    val bounds = ProfileBounds.INSTANCE
+    // The editor's ranges, from the core's table (F8): they apply when a
+    // field is edited; a stored value outside them shows as it is.
+    val eb = CoreBounds.editor
     val summary = buildString {
         append(if (isPressure) "Pressure" else "Flow")
         append(fmt(" · %.1f %s · %.0fs", seg.target, tUnit, seg.time))
@@ -383,12 +389,12 @@ private fun PhaseRow(
                 )
             }
             FieldRow("Target") {
-                CremaStepper(value = seg.target.toDouble(), unit = tUnit, step = 0.1, min = 0.0, max = if (isPressure) bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
+                CremaStepper(value = seg.target.toDouble(), unit = tUnit, step = 0.1, min = 0.0, max = if (isPressure) eb.pressureBar.max.toDouble() else eb.flowMlS.max.toDouble(), fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
                     onChange(seg.copy(target = it.toFloat()))
                 })
             }
             FieldRow("Duration") {
-                CremaStepper(value = seg.time.toDouble(), unit = "s", step = 1.0, min = 0.0, max = bounds.maxFrameSeconds.toDouble(), fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
+                CremaStepper(value = seg.time.toDouble(), unit = "s", step = 1.0, min = eb.segmentTimeS.min.toDouble(), max = eb.segmentTimeS.max.toDouble(), fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
                     onChange(seg.copy(time = it.toFloat()))
                 })
             }
@@ -407,7 +413,7 @@ private fun PhaseRow(
                         compact = true,
                         modifier = Modifier.width(SegmentPillWidth),
                     )
-                    CremaStepper(value = (seg.temp ?: 93f).toDouble(), unit = "°", step = 0.5, min = 70.0, max = bounds.maxTemperatureC.toDouble(), fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
+                    CremaStepper(value = (seg.temp ?: 93f).toDouble(), unit = "°", step = 0.5, min = eb.segmentTempC.min.toDouble(), max = eb.segmentTempC.max.toDouble(), fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
                         onChange(seg.copy(temp = it.toFloat()))
                     })
                 }
@@ -419,7 +425,7 @@ private fun PhaseRow(
                 on = seg.volume != null,
                 onToggle = { onChange(seg.copy(volume = if (seg.volume == null) 50 else null)) },
             ) {
-                CremaStepper(value = (seg.volume ?: 50).toDouble(), unit = "ml", step = 5.0, min = 0.0, max = 500.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
+                CremaStepper(value = (seg.volume ?: 50).toDouble(), unit = "ml", step = 5.0, min = eb.segmentVolumeMl.min.toDouble(), max = eb.segmentVolumeMl.max.toDouble(), fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
                     onChange(seg.copy(volume = it.roundToInt()))
                 })
             }
@@ -451,7 +457,7 @@ private fun PhaseRow(
                     )
                     CremaStepper(
                         value = (exit.threshold ?: 1.5f).toDouble(), unit = null, step = 0.1, min = 0.0,
-                        max = if (exit.metric == ExitMetric.Pressure) bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
+                        max = if (exit.metric == ExitMetric.Pressure) eb.pressureBar.max.toDouble() else eb.flowMlS.max.toDouble(),
                         fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.BareCompact,
                         compareSymbol = if ((exit.compare ?: Compare.Over) == Compare.Over) ">" else "<",
                         onCompare = { onChange(seg.copy(exit = exit.copy(compare = if ((exit.compare ?: Compare.Over) == Compare.Over) Compare.Under else Compare.Over))) },
@@ -469,7 +475,7 @@ private fun PhaseRow(
                 },
             ) {
                 val lim = seg.limiter ?: SegmentLimiter()
-                CremaStepper(value = lim.value.toDouble(), unit = seg.limiterUnit(), step = 0.1, min = 0.0, max = if (isPressure) bounds.maxFlowMlPerS.toDouble() else bounds.maxPressureBar.toDouble(), fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
+                CremaStepper(value = lim.value.toDouble(), unit = seg.limiterUnit(), step = 0.1, min = 0.0, max = if (isPressure) eb.flowMlS.max.toDouble() else eb.pressureBar.max.toDouble(), fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
                     onChange(seg.copy(limiter = lim.copy(value = it.toFloat())))
                 })
             }

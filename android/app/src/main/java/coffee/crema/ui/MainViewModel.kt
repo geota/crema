@@ -1858,6 +1858,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun editorBrewTemp(id: String, segments: List<SegmentEdit>, target: Double): List<SegmentEdit> =
         library.editorBrewTemp(id, segments, target)
 
+    /** The editor's Brew temp field range — the core's per-profile range (F6). */
+    fun editorBrewTempRange(id: String, segments: List<SegmentEdit>): Pair<Double, Double>? =
+        library.editorBrewTempRange(id, segments)
+
     /** Close the editor without saving (discards any new / duplicated draft). */
     fun cancelProfileEdit() = library.cancelProfileEdit()
 

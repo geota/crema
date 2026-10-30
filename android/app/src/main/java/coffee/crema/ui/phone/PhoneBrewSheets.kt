@@ -254,7 +254,7 @@ fun PhoneQuickSheet(
                                 value = if (piFlushMode == PiFlushMode.Preinf) preinf else flushTime,
                                 unit = "s", step = 1.0,
                                 // The core's pre-infusion range holds the profile's own value.
-                                min = QcBounds.PREINF_MIN_S, max = if (piFlushMode == PiFlushMode.Preinf) preinfMax else QcBounds.FLUSH_TIME_MAX_S,
+                                min = if (piFlushMode == PiFlushMode.Preinf) QcBounds.PREINF_MIN_S else QcBounds.FLUSH_TIME_MIN_S, max = if (piFlushMode == PiFlushMode.Preinf) preinfMax else QcBounds.FLUSH_TIME_MAX_S,
                                 presets = if (piFlushMode == PiFlushMode.Preinf) listOf(0.0, 4.0, 8.0, 12.0).filter { it <= preinfMax } else listOf(2.0, 4.0, 6.0, 8.0),
                                 fmt = { fmt("%.0f", it) },
                                 onChange = {

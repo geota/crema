@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.CoreBounds
 import coffee.crema.ui.RelayPairingRows
 import coffee.crema.ui.maintenanceRunText
 import coffee.crema.ui.maintenanceRunAllowed
@@ -537,7 +538,8 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
         ) {
             val maxDur = ui.maxShotDurationS.toInt()
             CremaStepper(
-                value = maxDur.toDouble(), unit = "s", step = 5.0, min = 0.0, max = 300.0,
+                value = maxDur.toDouble(), unit = "s", step = CoreBounds.brewDefaults.maxShotDurationS.step.toDouble(),
+                    min = CoreBounds.brewDefaults.maxShotDurationS.min.toDouble(), max = CoreBounds.brewDefaults.maxShotDurationS.max.toDouble(),
                 fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact,
                 onChange = { vm.setMaxShotDuration(it.toFloat()) },
             )
