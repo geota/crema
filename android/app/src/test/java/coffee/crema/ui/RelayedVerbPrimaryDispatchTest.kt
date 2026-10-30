@@ -86,6 +86,12 @@ class RelayedVerbPrimaryDispatchTest {
         VmHarness.idle()
         // The settings a test sets must not be overwritten by the prefs load.
         VmHarness.awaitPrefsLoaded(vm)
+        // An idle DE1 on this primary: the core refuses a start with no
+        // machine state (F16).
+        val bridge = MainViewModel::class.java.declaredFields
+            .single { it.type == coffee.crema.core.CremaBridge::class.java }
+            .apply { isAccessible = true }.get(vm) as coffee.crema.core.CremaBridge
+        bridge.onNotification(coffee.crema.core.NotificationSource.DE1_STATE, byteArrayOf(2, 0), 0uL)
         val hub: RelayHub = assertNotNull(VmHarness.proxyController(vm).relayHub, "the primary built its relay")
         val (clientEnd, serverEnd) = CodecFrameLink.pair(scope)
         client = clientEnd

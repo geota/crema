@@ -418,6 +418,8 @@ impl CremaCore {
             out.events.push(Event::ProfileSyncWarning { active: false });
         }
         if let Some(fingerprint) = holds {
+            // A shot start waiting for this profile goes on.
+            self.start_on_sync_holds(&fingerprint, out);
             out.events.push(Event::ProfileSyncHolds { fingerprint });
         }
         // A change that arrived meanwhile goes out now.
@@ -448,6 +450,9 @@ impl CremaCore {
                 {
                     out.events.push(Event::ProfileSyncWarning { active: true });
                 }
+                // A shot start waiting for this upload is over (the core
+                // retries); an older upload's failure is not its own.
+                self.start_on_sync_failed(&tag.fingerprint, out);
             }
             // Another upload (the cold profile) failed: the DE1 holds an
             // unknown mix, so the desired profile goes back once it can.
@@ -464,6 +469,11 @@ impl CremaCore {
             && self.profile_upload.is_none()
             && self.parked_upload.is_none()
             && self.maintenance.is_none()
+            // A request waiting out the profile-download guard goes first: a
+            // new upload would hold it again (F16).
+            && !self.request_held()
+            // A start past its sync stage is flushing or requesting Espresso.
+            && !self.start_past_sync()
             && self.last_state.is_some_and(|s| idle_enough(s.state));
         let Some(desired) = self.profile_sync.due(self.clock, ready, self.link.settled) else {
             return;
@@ -486,6 +496,7 @@ impl CremaCore {
                 out.events.push(Event::ProfileUploadFailed {
                     reason: crate::ProfileUploadFailure::from(err),
                 });
+                self.start_on_sync_failed(&desired.fingerprint, out);
                 if self.profile_sync.rejected(desired.fingerprint) {
                     out.events.push(Event::ProfileSyncWarning { active: true });
                 }

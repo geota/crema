@@ -45,7 +45,12 @@ class RelayInjectProbeTest {
         val welcomed = AtomicBoolean(false)
         val link = ReconnectingClientLink(probe.url, scope, remote, rig.hubKeys.publicKey())
         val proxy = ProxyTransport(link, scope, requestTimeoutMs = 3_000, onWelcome = { _, _ -> welcomed.set(true) })
-        runBlocking { eventually(what = "the remote welcomed through the relay") { welcomed.get() } }
+        try {
+            runBlocking { eventually(what = "the remote welcomed through the relay") { welcomed.get() } }
+        } catch (e: AssertionError) {
+            val msgs = probe.captured.joinToString(" ") { (if (it.toHub) ">" else "<") + (if (it.text) "T" else "%02x".format(it.bytes[0])) + ":" + it.bytes.size }
+            throw AssertionError("${e.message}; link ${link.state.value}; admitted ${rig.trust.admitted}; hub closes ${probe.hubCloseCodes}; msgs $msgs", e)
+        }
         // Every byte of the handshake crossed the relay untouched.
         assertTrue(probe.captured.first().text, "the ClientHello is the only text message")
         return Run(rig, probe, proxy, scope, controls)

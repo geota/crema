@@ -1713,6 +1713,44 @@ pub fn retry_backoff_ms(status: Option<u32>, attempt: u32) -> f64 {
     ms
 }
 
+/// What a failed Visualizer refresh-token grant means: `"Definitive"` (sign
+/// out), `"Retryable"` or `"Transient"` (keep the session). `status` is
+/// `undefined` when the request got no answer. See
+/// `de1_domain::classify_token_refresh_failure`.
+#[wasm_bindgen(js_name = classifyTokenRefreshFailure)]
+#[must_use]
+pub fn classify_token_refresh_failure(status: Option<u32>, body: Option<String>) -> String {
+    format!(
+        "{:?}",
+        de1_domain::classify_token_refresh_failure(
+            status.and_then(|s| u16::try_from(s).ok()),
+            body.as_deref()
+        )
+    )
+}
+
+/// The Visualizer retry queue's rule for a failed operation: a JSON
+/// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
+/// `attemptsMade` counts this attempt. See
+/// `de1_domain::visualizer_queue_decision`.
+#[wasm_bindgen(js_name = visualizerQueueDecision)]
+#[must_use]
+pub fn visualizer_queue_decision(
+    op: &str,
+    tag: &str,
+    status: Option<u32>,
+    body: &str,
+    attempts_made: u32,
+) -> String {
+    de1_domain::visualizer_queue_decision_json(
+        op,
+        tag,
+        status.and_then(|s| u16::try_from(s).ok()),
+        body,
+        attempts_made,
+    )
+}
+
 /// Whether the DE1 with serial `serial` (MMR `SerialNumber`) is on Decent's
 /// stolen-machine list `list_json` (the published `stolen_serials.json`).
 /// `0` and a malformed list never match. See
@@ -1875,17 +1913,30 @@ pub fn import_crema_jsonl(text: &str) -> Result<String, String> {
     de1_domain::import_jsonl_to_plan_json(text)
 }
 
+/// Whether the app may request a maintenance cycle (descale, clean, air
+/// purge, steam rinse) with the machine in `state` (its name, e.g. `"Idle"`;
+/// `None` = unknown): Idle or Sleep only — the rule `request_machine_state`
+/// enforces. The Settings "Run now" buttons use it.
+#[wasm_bindgen(js_name = maintenanceRequestAllowed)]
+#[must_use]
+pub fn maintenance_request_allowed(state: Option<String>) -> bool {
+    de1_domain::maintenance_request_allowed_by_name(state.as_deref())
+}
+
 /// Read a profile file (community v2 `.json`, a `.jsonl` bundle, a de1app
 /// `.tcl`, a Crema backup, or an old Android Crema export): a
-/// `ProfileFileImport` JSON of fresh custom profiles plus per-item errors. See
-/// `de1_domain::import_profile_file`.
+/// `ProfileFileImport` JSON of fresh custom profiles plus per-item errors.
+/// `library_json` (a JSON array of every library `CremaProfile`, built-ins
+/// and hidden ones included) makes it skip, and count, the profiles already
+/// there. See `de1_domain::import_profile_file_into`.
 ///
 /// # Errors
 ///
-/// Only if the result fails to serialize, which it cannot.
+/// A message when `library_json` is not a JSON array (an element that is not
+/// a profile is left out).
 #[wasm_bindgen(js_name = importProfileFile)]
-pub fn import_profile_file(text: &str) -> Result<String, String> {
-    de1_domain::import_profile_file_json(text)
+pub fn import_profile_file(text: &str, library_json: Option<String>) -> Result<String, String> {
+    de1_domain::import_profile_file_json(text, library_json.as_deref())
 }
 
 /// Write library profiles (a JSON array of `CremaProfile`) as the profile file
@@ -3586,6 +3637,34 @@ impl CremaBridge {
     /// profile type, consistent with the rest of the JSON-string surface.
     pub fn builtin_profiles_json(&self) -> String {
         self.state().core.builtin_profiles_json()
+    }
+
+    /// Start an espresso shot with the library `CremaProfile` JSON and an
+    /// optional `BrewOverrides` JSON — the core runs the whole start (sync,
+    /// guard, pre-flush, Espresso). See `CremaCore::start_shot`. Returns a
+    /// JSON `StartShotResult`.
+    pub fn start_shot(&self, profile_json: &str, qc_json: Option<String>, now_ms: f64) -> String {
+        let result =
+            self.state()
+                .core
+                .start_shot_json(profile_json, qc_json.as_deref(), now_ms as u64);
+        serde_json::to_string(&result).unwrap_or_else(|_| {
+            r#"{"accepted":false,"refusal":null,"message":null,"output":{"events":[],"commands":[]}}"#.to_string()
+        })
+    }
+
+    /// A shot start is pending. See `CremaCore::shot_starting`.
+    #[must_use]
+    pub fn shot_starting(&self) -> bool {
+        self.state().core.shot_starting()
+    }
+
+    /// Latch the start settings: the pre-shot flush, require-scale and the
+    /// post-steam auto-purge. See `CremaCore::set_start_settings`.
+    pub fn set_start_settings(&self, pre_flush: bool, require_scale: bool, steam_purge: bool) {
+        self.state()
+            .core
+            .set_start_settings(pre_flush, require_scale, steam_purge);
     }
 
     /// Tell the core which profile the DE1 should hold: the library

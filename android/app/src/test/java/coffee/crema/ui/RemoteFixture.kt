@@ -78,15 +78,25 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         onBuilt(vm)
         VmHarness.idle()
         VmHarness.awaitPrefsLoaded(vm)
-        VmHarness.idleUntil("the hub's Welcome") { hub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
+        try {
+            VmHarness.idleUntil("the hub's Welcome") { hub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
+        } catch (e: IllegalStateException) {
+            // Timed out under load in PR-6's validation: say where it stuck.
+            val ps = VmHarness.proxyController(vm).state.value
+            throw IllegalStateException(
+                "${e.message}; hub remotes ${hub.remotes().size}, role ${ps.role}, reconnecting ${ps.mirrorReconnecting}, " +
+                    "dials ${endpoint.dials}\nlog:\n${VmHarness.log(vm).take(20).joinToString("\n")}",
+                e,
+            )
+        }
         // The rest of the startup load (custom profiles, maintenance, …) runs
         // after the prefs: a test step taken before it ends can be undone by it.
         VmHarness.awaitStartupLoaded(vm)
         return vm
     }
 
-    /** The hub pushes [snapshot]; waits until the remote applied it. */
-    /** Push [snapshot] with the hub's next `rev` (a v4 hub numbers every one). */
+    /** The hub pushes [snapshot] with its next `rev` (a v4 hub numbers every
+     *  one); waits until the remote applied it. */
     fun push(snapshot: ConfigSnapshot = S) {
         // An explicit rev above the counter is kept (a test pinning the order).
         val numbered = snapshot.copy(rev = revs.updateAndGet { maxOf(it + 1, snapshot.rev) })

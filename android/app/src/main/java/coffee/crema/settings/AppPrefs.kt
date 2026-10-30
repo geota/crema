@@ -2,6 +2,7 @@ package coffee.crema.settings
 
 import android.content.Context
 import coffee.crema.core.CommonSettings
+import coffee.crema.core.HotWaterMode
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
@@ -235,6 +236,13 @@ data class AppPrefs(
     val qcSteamTempC: Float = CommonDefaults.common.qcSteamTempC,
     val qcHotWaterTempC: Float = CommonDefaults.common.qcHotWaterTempC,
     val qcHotWaterVolumeMl: Float = CommonDefaults.common.qcHotWaterVolumeMl,
+    /** The hot-water dose's mode and its time / No limit / ratio values (the
+     *  volume is [qcHotWaterVolumeMl]), carried with the bundle. Null in a
+     *  `prefs.json` from before the modes. */
+    val qcHotWaterMode: HotWaterMode? = null,
+    val qcHotWaterTimeS: Float? = null,
+    val qcHotWaterTimeNoLimit: Boolean? = null,
+    val qcHotWaterRatio: Float? = null,
     val qcFlushTimeS: Float = CommonDefaults.common.qcFlushTimeS,
     val qcFlushTempC: Float = CommonDefaults.common.qcFlushTempC,
     /** Persisted Quick-Controls grinder click (issue 15). Null = never dialed —
@@ -353,6 +361,10 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
     qcSteamTempC = qcSteamTempC,
     qcHotWaterTempC = qcHotWaterTempC,
     qcHotWaterVolumeMl = qcHotWaterVolumeMl,
+    qcHotWaterMode = qcHotWaterMode,
+    qcHotWaterTimeS = qcHotWaterTimeS,
+    qcHotWaterTimeNoLimit = qcHotWaterTimeNoLimit,
+    qcHotWaterRatio = qcHotWaterRatio,
     qcFlushTimeS = qcFlushTimeS,
     qcFlushTempC = qcFlushTempC,
 )
@@ -399,6 +411,10 @@ fun AppPrefs.withCommonSettings(cIn: CommonSettings): AppPrefs = sanitizeCommonS
     qcSteamTempC = c.qcSteamTempC,
     qcHotWaterTempC = c.qcHotWaterTempC,
     qcHotWaterVolumeMl = c.qcHotWaterVolumeMl,
+    qcHotWaterMode = c.qcHotWaterMode,
+    qcHotWaterTimeS = c.qcHotWaterTimeS,
+    qcHotWaterTimeNoLimit = c.qcHotWaterTimeNoLimit,
+    qcHotWaterRatio = c.qcHotWaterRatio,
     qcFlushTimeS = c.qcFlushTimeS,
     qcFlushTempC = c.qcFlushTempC,
 ) }

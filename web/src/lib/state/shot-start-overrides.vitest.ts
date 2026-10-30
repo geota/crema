@@ -43,7 +43,6 @@ describe('the shot start uploads the dialled profile', () => {
 			'#lib/profiles/index.js'
 		);
 		const { getSettingsStore } = await import('#lib/settings/index.js');
-		const { ProfileSyncLive } = await import('#lib/services/profile-sync.js');
 		const { UploadQueue } = await import('#lib/services/upload-queue.js');
 		const { Webhooks } = await import('#lib/services/webhooks.js');
 
@@ -56,10 +55,8 @@ describe('the shot start uploads the dialled profile', () => {
 				return true;
 			}
 		);
-		// The services the app reaches: the real profile-sync coordinator, inert
-		// upload-queue / webhooks.
+		// The services the app reaches: inert upload-queue / webhooks.
 		const layer = Layer.mergeAll(
-			ProfileSyncLive,
 			Layer.succeed(
 				UploadQueue,
 				UploadQueue.of({

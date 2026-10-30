@@ -76,7 +76,12 @@ class PairingFlowControllerTest {
         val code = (remote.state.value.pairing as PairingState.ShowCode).code
         runBlocking { eventually(what = "the hub's dialog") { hub.state.value.pendingPairing != null } }
         hub.submitPairingCode(code, canControl = false)
-        runBlocking { eventually(what = "the resume") { remote.state.value.role == "secondary" && remote.state.value.hubName.isNotEmpty() } }
+        try {
+            runBlocking { eventually(what = "the resume") { remote.state.value.role == "secondary" && remote.state.value.hubName.isNotEmpty() } }
+        } catch (e: AssertionError) {
+            // Timed out once on CI: say where it stuck.
+            throw AssertionError("${e.message}; remote ${remote.state.value.role}/${remote.state.value.hubName}/${remote.state.value.pairing}\n${lines.joinToString("\n")}", e)
+        }
 
         assertEquals(SCOPE_MIRROR, hub.relayStore.remotes.single().scope, "pinned with the chosen scope")
         assertTrue(remote.state.value.mirrorViewOnly, "the resumed session is view-only")

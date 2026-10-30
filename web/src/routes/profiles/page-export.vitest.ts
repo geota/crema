@@ -78,4 +78,23 @@ describe('the Profiles page exports the core file (AC-F12.6, web)', () => {
 		expect(await downloads[0].blob.text()).toBe(coreExportProfileFile(JSON.stringify(all)));
 		expect((await downloads[0].blob.text()).split('\n').filter(Boolean)).toHaveLength(all.length);
 	});
+	it('F12b Import skips what the library has, hidden built-ins included, and says so', async () => {
+		const store = getProfileStore();
+		// A built-in without a custom copy (the setup imported three).
+		const customNames = new Set(store.all.filter((p) => p.source === 'custom').map((p) => p.name));
+		const builtin = store.all.find((p) => p.source === 'builtin' && !customNames.has(p.name))!;
+		const builtinFile = new File([coreExportProfileFile(JSON.stringify([builtin]))], 'b.json');
+		store.delete(builtin.id);
+		try {
+			const page = await mountPage();
+			const input = page.querySelector('input[type="file"]') as HTMLInputElement;
+			const files = [builtinFile, new File([fixture('android-profile.json')], 'android-profile.json')];
+			Object.defineProperty(input, 'files', { configurable: true, value: files });
+			input.dispatchEvent(new Event('change', { bubbles: true }));
+			await vi.waitFor(() => expect(page.textContent).toContain('already in your library'));
+			expect(page.textContent).toContain('Imported 0 profiles; 2 already in your library.');
+		} finally {
+			store.unhideBuiltin(builtin.id);
+		}
+	});
 });

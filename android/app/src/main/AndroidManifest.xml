@@ -32,6 +32,8 @@
     <!-- Network: Visualizer + Decent shot sync, the on-demand update check,
          Google Drive backup, and the multi-device LAN proxy. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The Visualizer retry queue drains when a network comes back (F17). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Guided-brew cue vibration (issue #10): a normal permission, no prompt. -->
     <uses-permission android:name="android.permission.VIBRATE" />
 

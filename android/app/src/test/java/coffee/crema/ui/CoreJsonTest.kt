@@ -75,4 +75,18 @@ class CoreJsonTest {
         )
         assertTrue(out.events.any { it is Event.CalibrationRefused }, out.events.toString())
     }
+
+    /** F16a: a refused maintenance request decodes (its `kind`-tagged reason
+     *  used to fail the whole output). */
+    @Test
+    fun `a machine request refusal decodes`() {
+        val bridge = CremaBridge()
+        bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(4, 5), 0uL) // Espresso pouring
+        val out = coreJson.decodeFromString(
+            CoreOutput.serializer(),
+            bridge.requestMachineState(coffee.crema.core.MachineRequest.DESCALE),
+        )
+        val refused = out.events.filterIsInstance<Event.MachineRequestRefused>().single()
+        assertIs<coffee.crema.core.MachineRequestRefusal.MachineNotIdle>(refused.content.reason)
+    }
 }

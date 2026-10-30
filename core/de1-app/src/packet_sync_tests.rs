@@ -57,6 +57,17 @@ fn connected(dose: HotWaterDose) -> CremaCore {
     core
 }
 
+fn sweep_settings_with(dose: HotWaterDose) -> de1_domain::ConnectSweepSettings {
+    de1_domain::ConnectSweepSettings {
+        hot_water: dose,
+        ..de1_domain::ConnectSweepSettings::default()
+    }
+}
+
+fn sweep_settings() -> de1_domain::ConnectSweepSettings {
+    sweep_settings_with(volume(150.0))
+}
+
 /// The packets an output writes, decoded.
 fn packets(out: &CoreOutput) -> Vec<ShotSettings> {
     out.commands
@@ -146,6 +157,7 @@ fn hot_water_ignores_last_shot_weight() {
 fn hot_water_weight_stop_from_target() {
     let mut core = connected(ratio(3.0));
     core.connect_scale("BOOKOO_SC", &[]);
+    let _ = weight(&mut core, 0, 1);
     core.set_profile_target_weight(Some(50.0));
     let out = state(&mut core, 6, 5, 1_000);
     assert_eq!(core.hot_water_stop_target_g, Some(150.0));
@@ -153,6 +165,7 @@ fn hot_water_weight_stop_from_target() {
     // Auto-tare off: the stop arms, no tare.
     let mut core = connected(volume(200.0));
     core.connect_scale("BOOKOO_SC", &[]);
+    let _ = weight(&mut core, 0, 1);
     core.set_auto_tare(false);
     let out = state(&mut core, 6, 5, 1_000);
     assert_eq!(core.hot_water_stop_target_g, Some(200.0));
@@ -278,6 +291,86 @@ fn packet_follows_operational_scale() {
     assert_eq!(w[0].hot_water_volume_ml, 150.0);
 }
 
+/// AC-HW12 (validation P2-1): a scale counts as operational only once it has
+/// sent a reading since it connected (de1app `is_operational`). One that
+/// connects and never streams gets no backstop and arms no weight stop; the
+/// first reading brings both. A stale scale carried across `reset()` needs a
+/// fresh reading too.
+#[test]
+fn packet_waits_for_a_scale_reading() {
+    let mut core = connected(ratio(3.0));
+    core.set_profile_target_weight(Some(36.0));
+    let _ = core.on_tick(50); // the new yield's packet
+    core.connect_scale("BOOKOO_SC", &[]);
+    assert!(!core.scale_operational(), "connected, no reading");
+    assert!(packets(&core.on_tick(100)).is_empty(), "no backstop yet");
+    let t = core.hot_water_target().unwrap();
+    assert_eq!((t.wire_volume_ml, t.stop_weight_g), (108.0, None));
+    // A pour now arms no weight stop that could never fire.
+    let _ = state(&mut core, 6, 5, 200);
+    assert_eq!(core.hot_water_stop_target_g, None);
+    let _ = state(&mut core, 2, 0, 300);
+    // The first reading: the backstop and the weight stop.
+    let w = packets(&weight(&mut core, 0, 400));
+    assert_eq!(w.len(), 1, "first reading");
+    assert_eq!(w[0].hot_water_volume_ml, 250.0);
+    assert_eq!(core.hot_water_target().unwrap().stop_weight_g, Some(108.0));
+
+    // Stale, then reset() keeping the scale: still not operational until a
+    // fresh reading.
+    let stale_ms = 400 + u64::try_from(SCALE_STALE_TIMEOUT.as_millis()).unwrap() + 10;
+    let _ = core.on_tick(stale_ms);
+    assert!(!core.scale_operational(), "stale");
+    core.reset();
+    assert!(core.scale.is_some(), "reset keeps the scale");
+    assert!(!core.scale_operational(), "after reset, no reading yet");
+    let _ = weight(&mut core, 0, stale_ms + 100);
+    assert!(core.scale_operational(), "a fresh reading");
+}
+
+/// Validation P3-1: an eco change flushes the packet only in Steam (leaving
+/// eco as a steam session starts). Eco turned off mid-pour writes nothing
+/// until the pour ends.
+#[test]
+fn eco_change_flushes_only_in_steam() {
+    let mut core = connected(ratio(3.0));
+    let _ = core.enable_steam_eco_mode(true, 0);
+    let engaged = core.on_tick(600_000);
+    assert_eq!(
+        packets(&engaged)[0].steam_temp_c,
+        136.0,
+        "eco engaged at Idle"
+    );
+    let _ = state(&mut core, 6, 5, 601_000);
+    core.set_profile_target_weight(Some(50.0));
+    let out = core.enable_steam_eco_mode(false, 602_000);
+    assert!(
+        out.events
+            .contains(&Event::SteamEcoModeChanged { eco: false })
+    );
+    assert!(packets(&out).is_empty(), "nothing mid-pour");
+    let w = packets(&state(&mut core, 2, 0, 603_000));
+    assert_eq!(w.len(), 1, "after the pour");
+    assert_eq!(
+        (w[0].steam_temp_c, w[0].hot_water_volume_ml),
+        (148.0, 150.0)
+    );
+
+    // In Steam it goes out at once.
+    let _ = core.enable_steam_eco_mode(true, 603_000);
+    let _ = core.on_tick(1_203_000);
+    let out = state(&mut core, 5, 7, 1_204_000);
+    assert!(
+        out.events
+            .contains(&Event::SteamEcoModeChanged { eco: false })
+    );
+    assert_eq!(
+        packets(&out).last().map(|p| p.steam_temp_c),
+        Some(148.0),
+        "the steam session's target"
+    );
+}
+
 /// AC-HW13: inputs and explicit edits in a flow state or an unknown state
 /// write nothing; one write follows the first non-flow state. A running
 /// pour's weight stop doesn't change.
@@ -289,8 +382,9 @@ fn packet_deferred_in_flow_and_unknown_states() {
     assert!(packets(&core.set_steam_hotwater_targets(&targets(volume(150.0)))).is_empty());
     assert!(packets(&core.on_tick(100)).is_empty());
     assert_eq!(packets(&state(&mut core, 2, 0, 200)).len(), 1);
-    // Espresso, Steam, HotWater, HotWaterRinse.
-    for flow in [4u8, 5, 6, 15] {
+    // Espresso, Steam, HotWater, HotWaterRinse, SteamRinse (water runs
+    // through the wand).
+    for flow in [4u8, 5, 6, 15, 16] {
         let mut core = connected(ratio(3.0));
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(36.0));
@@ -428,41 +522,129 @@ fn foreign_packet_restored_once() {
     );
 }
 
-/// AC-HW16: the reply to the connect-time seed read, landing after the
-/// sweep's write with the old bytes, isn't foreign — a later real foreign
-/// change is still restored.
+/// AC-HW16: the reply to the connect-time seed read isn't foreign. Both
+/// shells finish that read before the link is ready, so it lands before the
+/// on-ready sweep; a later real foreign change is still restored.
 #[test]
 fn own_read_reply_is_not_foreign() {
     let mut core = connected(volume(150.0));
+    // A packet written and read back this generation, then a drop: the new
+    // generation's seed reply must not be compared with it.
+    let mine = core.desired_shot_settings().unwrap();
+    let _ = core.on_notification(Source::De1ShotSettings, &mine.encode(), 10);
     let _ = core.de1_link_lost();
     let _ = state(&mut core, 2, 0, 100);
-    let sweep = core.connect_sweep(
-        &de1_domain::ConnectSweepSettings {
-            hot_water: volume(150.0),
-            ..de1_domain::ConnectSweepSettings::default()
-        },
-        200,
-    );
-    let mine = packets(&sweep).pop().expect("the sweep writes");
     let old = ShotSettings {
         steam_temp_c: 140.0,
         hot_water_volume_ml: 60.0,
         ..mine.clone()
     }
     .encode();
-    let out = core.on_notification(Source::De1ShotSettings, &old, 300);
+    let out = core.on_notification(Source::De1ShotSettings, &old, 150);
     assert!(
         !out.events
             .iter()
-            .any(|e| matches!(e, Event::ShotSettingsForeignChange { .. }))
+            .any(|e| matches!(e, Event::ShotSettingsForeignChange { .. })),
+        "the new generation's seed reply"
     );
-    assert!(packets(&out).is_empty());
+    let sweep = core.connect_sweep(&sweep_settings(), 200);
+    let mine = packets(&sweep).pop().expect("the sweep writes");
     let out = core.on_notification(Source::De1ShotSettings, &old, 400);
     assert!(
         out.events
             .contains(&Event::ShotSettingsForeignChange { restored: true })
     );
     assert_eq!(packets(&out), vec![mine]);
+}
+
+/// Validation P3-3: the seed read is optional. When it fails, the first real
+/// foreign change after the on-ready sweep is restored, not swallowed as the
+/// "seed reply".
+#[test]
+fn failed_seed_read_doesnt_swallow_a_foreign_change() {
+    let mut core = connected(volume(150.0));
+    let _ = core.de1_link_lost();
+    let _ = state(&mut core, 2, 0, 100);
+    // No seed reply this generation.
+    let sweep = core.connect_sweep(&sweep_settings(), 200);
+    let mine = packets(&sweep).pop().expect("the sweep writes");
+    let foreign = ShotSettings {
+        hot_water_volume_ml: 60.0,
+        ..mine.clone()
+    }
+    .encode();
+    let out = core.on_notification(Source::De1ShotSettings, &foreign, 300);
+    assert!(
+        out.events
+            .contains(&Event::ShotSettingsForeignChange { restored: true })
+    );
+    assert_eq!(packets(&out), vec![mine]);
+}
+
+/// Validation P3-4: during a firmware flash the packet is neither written
+/// nor recorded, so it goes out once the flash is over.
+#[test]
+fn flash_gate_neither_writes_nor_records() {
+    let mut core = connected(ratio(3.0));
+    core.set_profile_target_weight(Some(36.0));
+    let _ = core.on_tick(10);
+    core.firmware_lock_override = true;
+    core.set_profile_target_weight(Some(50.0));
+    assert!(
+        packets(&core.on_tick(100)).is_empty(),
+        "nothing during the flash"
+    );
+    core.firmware_lock_override = false;
+    // Not recorded as written, so it goes out now.
+    let w = packets(&core.on_tick(200));
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0].hot_water_volume_ml, 150.0);
+}
+
+/// Validation P3-4: each generation gets its own foreign restore.
+#[test]
+fn next_generation_can_restore_again() {
+    let mut core = connected(volume(150.0));
+    let mine = core.desired_shot_settings().unwrap();
+    let _ = core.on_notification(Source::De1ShotSettings, &mine.encode(), 10);
+    let foreign = ShotSettings {
+        hot_water_volume_ml: 90.0,
+        ..mine.clone()
+    }
+    .encode();
+    let out = core.on_notification(Source::De1ShotSettings, &foreign, 20);
+    assert!(
+        out.events
+            .contains(&Event::ShotSettingsForeignChange { restored: true })
+    );
+    let _ = core.de1_link_lost();
+    let _ = state(&mut core, 2, 0, 100);
+    let _ = core.connect_sweep(&sweep_settings(), 200);
+    let out = core.on_notification(Source::De1ShotSettings, &foreign, 300);
+    assert!(
+        out.events
+            .contains(&Event::ShotSettingsForeignChange { restored: true }),
+        "the new generation's restore"
+    );
+}
+
+/// Validation P3-4: a reconnect tells the target again, even unchanged.
+#[test]
+fn reconnect_retells_the_target() {
+    let mut core = connected(ratio(3.0));
+    core.set_profile_target_weight(Some(50.0));
+    let _ = core.on_tick(10);
+    assert!(
+        target_events(&core.on_tick(20)).is_empty(),
+        "unchanged: no event"
+    );
+    let _ = core.de1_link_lost();
+    let mut events = target_events(&state(&mut core, 2, 0, 100));
+    events.extend(target_events(
+        &core.connect_sweep(&sweep_settings_with(ratio(3.0)), 200),
+    ));
+    assert_eq!(events.len(), 1, "the new generation re-tells it");
+    assert_eq!(events[0].volume_ml, Some(150.0));
 }
 
 /// AC-HW17: `HotWaterTarget` comes exactly when the target changes, and its
@@ -502,6 +684,7 @@ fn hot_water_target_event_matches_packet() {
 fn ghc_hot_water_ratio_stops_at_target_weight() {
     let mut core = connected(ratio(3.0));
     core.connect_scale("BOOKOO_SC", &[]);
+    let _ = weight(&mut core, 0, 0);
     core.set_profile_target_weight(Some(50.0));
     let out = state(&mut core, 6, 5, 0);
     assert!(tared(&out), "auto-tare on the group-head start");
@@ -517,6 +700,7 @@ fn ghc_hot_water_ratio_stops_at_target_weight() {
 fn ghc_hot_water_time_mode_arms_nothing() {
     let mut core = connected(time(45.0));
     core.connect_scale("BOOKOO_SC", &[]);
+    let _ = weight(&mut core, 0, 0);
     core.set_profile_target_weight(Some(50.0));
     let _ = state(&mut core, 6, 5, 0);
     assert_eq!(core.hot_water_stop_target_g, None);
@@ -532,8 +716,38 @@ fn hot_water_dose_survives_reset_for_ghc_pour() {
     core.connect_scale("BOOKOO_SC", &[]);
     let _ = core.reset();
     core.connect_scale("BOOKOO_SC", &[]);
+    let _ = weight(&mut core, 0, 500);
+    // The connect-time state read: Idle. (A first state already HotWater is
+    // a pour that began before the link, see reset_mid_pour_does_not_rearm.)
+    let _ = state(&mut core, 2, 0, 600);
     let _ = state(&mut core, 6, 5, 1_000);
     assert_eq!(core.hot_water_stop_target_g, Some(150.0));
+}
+
+/// Validation P3-2: `reset()` mid-pour, then the same HotWater state, is a
+/// pour this core didn't see start: no tare (the cup holds water already) and
+/// no re-armed full target. The next pour arms as usual.
+#[test]
+fn reset_mid_pour_does_not_rearm() {
+    let mut core = connected(ratio(3.0));
+    core.set_profile_target_weight(Some(50.0));
+    core.connect_scale("BOOKOO_SC", &[]);
+    let _ = weight(&mut core, 0, 0);
+    let _ = state(&mut core, 6, 5, 100);
+    assert_eq!(core.hot_water_stop_target_g, Some(150.0));
+    let _ = core.reset();
+    let _ = weight(&mut core, 80, 200);
+    let out = state(&mut core, 6, 5, 300);
+    assert!(!tared(&out), "no tare mid-pour");
+    assert_eq!(core.hot_water_stop_target_g, None, "not re-armed");
+    let _ = state(&mut core, 2, 0, 400);
+    let out = state(&mut core, 6, 5, 500);
+    assert!(tared(&out));
+    assert_eq!(
+        core.hot_water_stop_target_g,
+        Some(150.0),
+        "the next pour arms"
+    );
 }
 
 /// AC-HW31: an espresso shot started at the group head arms the same rules

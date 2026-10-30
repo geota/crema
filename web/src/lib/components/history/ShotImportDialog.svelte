@@ -2,7 +2,8 @@
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `ShotImportDialog` — drop or pick legacy `.shot` / `.shot.json`
-	 * files to import into the shot library. Mirrors the BeanImportDialog
+	 * files, or a Crema history export (`.crema.jsonl`, web's or
+	 * Android's), to import into the shot library. Mirrors the BeanImportDialog
 	 * shell (modal overlay, header, drop zone) so /beans and /history
 	 * share one drag-drop pattern.
 	 *
@@ -47,7 +48,7 @@
 		<FileDropZone
 			icon="ph-duotone ph-file-arrow-down"
 			title="Drop legacy .shot or .shot.json files"
-			accept=".shot,.json,.shot.json"
+			accept=".shot,.json,.shot.json,.jsonl"
 			disabled={importing}
 			pickLabel={importing ? 'Importing…' : 'Choose files…'}
 			onFiles={async (files) => {
@@ -57,7 +58,8 @@
 		>
 			{#snippet subtitle()}
 				Multi-select supported — drop a whole <code>history/</code> folder of de1app
-				shots in one go. Each parsed shot is prepended to the local history;
+				shots in one go, or a Crema history export (<code>.crema.jsonl</code>, from web or
+				Android). Each parsed shot is prepended to the local history;
 				duplicates by filename + timestamp are skipped.
 			{/snippet}
 		</FileDropZone>

@@ -19,6 +19,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import { getHistoryStore, isBrewLog } from '#lib/history/index.js';
+	import { shotHistoryJsonl } from '#lib/history/crema-jsonl.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import {
 		clearVisualizerPremiumCache,
@@ -301,12 +302,13 @@
 		return 'Signed in';
 	});
 
-	/** Export the local shot history as a JSON download. */
+	/** Export the local shot history as the core's Crema `crema/v1` JSONL —
+	 *  the file Android's shot import reads too (F10). */
 	function exportHistory(): void {
-		const blob = new Blob([JSON.stringify(history.all, null, 2)], {
-			type: 'application/json'
+		const blob = new Blob([shotHistoryJsonl(history.all, Date.now(), __APP_VERSION__)], {
+			type: 'application/x-ndjson'
 		});
-		downloadBlob('crema-history.json', blob);
+		downloadBlob('crema-history.crema.jsonl', blob);
 	}
 
 	/** Brief inline feedback for the Back-up action (shown under that row). */
