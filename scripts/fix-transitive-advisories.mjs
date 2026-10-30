@@ -12,7 +12,10 @@
 //      for 0.x), picks the lowest patched release on that line that is older
 //      than pnpm's minimumReleaseAge (CI's `--frozen-lockfile` rejects younger
 //      ones). None old enough yet: skipped as "patched version too new, will
-//      retry" (the next daily run picks it up).
+//      retry" (the next daily run picks it up). A package fixed by a local
+//      patch (`patchedDependencies` in pnpm-workspace.yaml) is skipped too:
+//      moving it off the patched version fails every install with
+//      ERR_PNPM_UNUSED_PATCH, so dropping the patch is a manual step.
 //   3. Lockfile-only fix: adds a temporary scoped override per line
 //      (`brace-expansion@2: '^2.1.7'`), `pnpm install --lockfile-only`, restores
 //      pnpm-workspace.yaml and installs again. pnpm keeps the patched version
@@ -142,6 +145,18 @@ function setOverrides(text, entries) {
   }
   return out;
 }
+// Package names with a `patchedDependencies` entry ("name@version: patches/…").
+function patchedNames(text) {
+  const lines = text.split('\n');
+  const start = lines.findIndex((l) => /^patchedDependencies:\s*(#.*)?$/.test(l));
+  const names = new Set();
+  if (start < 0) return names;
+  for (let i = start + 1; i < lines.length && /^\s+\S/.test(lines[i]); i++) {
+    const m = /^\s+['"]?(@?[^@'"\s]+)@/.exec(lines[i]);
+    if (m) names.add(m[1]);
+  }
+  return names;
+}
 // Versions of `name` in the lockfile's packages section.
 function lockedVersions(lock, name) {
   const re = new RegExp(`^  '?${escapeRe(name)}@(\\d[^:'(]*)`, 'gm');
@@ -191,6 +206,14 @@ function main() {
       g.skip = `could not plan: ${err.message}`;
     }
     g.direct = advisories.some((a) => a.paths.some((p) => p.split('>').length === 2));
+  }
+  const locallyPatched = patchedNames(original.ws);
+  for (const g of groups.values()) {
+    if (!locallyPatched.has(g.name)) continue;
+    g.skip = g.floor
+      ? `patched locally (patchedDependencies); ${g.floor} is out, so drop the patch and take it`
+      : `patched locally (patchedDependencies)${g.skip ? `; ${g.skip}` : ''}`;
+    g.floor = undefined;
   }
   const todo = [...groups.values()].filter((g) => g.floor);
 

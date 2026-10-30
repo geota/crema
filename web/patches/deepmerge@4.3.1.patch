@@ -1,0 +1,162 @@
+diff --git a/dist/cjs.js b/dist/cjs.js
+index 7c36cbdd06cc22c92d590be3f87a08a91ca06b40..be2a0cc94ce40d0e7dde64580381b90b1a17754c 100644
+--- a/dist/cjs.js
++++ b/dist/cjs.js
+@@ -76,22 +76,45 @@ function propertyIsUnsafe(target, key) {
+ 			&& Object.propertyIsEnumerable.call(target, key)) // and also unsafe if they're nonenumerable.
+ }
+ 
++// Keys that must never be written to a merged object (GHSA-gcqx-w48m-w2h4).
++// Assigning `__proto__` replaces the destination's prototype, and
++// `constructor` / `prototype` lead to one. They are skipped on both sides,
++// whatever the target's shape: propertyIsUnsafe() alone misses a null-prototype
++// or non-object target.
++function propertyIsForbidden(key) {
++	return key === '__proto__' || key === 'constructor' || key === 'prototype'
++}
++
++// Writes `key` as an own data property, so no setter up the prototype chain
++// runs.
++function defineOwnProperty(destination, key, value) {
++	Object.defineProperty(destination, key, {
++		value: value,
++		writable: true,
++		enumerable: true,
++		configurable: true
++	});
++}
++
+ function mergeObject(target, source, options) {
+ 	var destination = {};
+ 	if (options.isMergeableObject(target)) {
+ 		getKeys(target).forEach(function(key) {
+-			destination[key] = cloneUnlessOtherwiseSpecified(target[key], options);
++			if (propertyIsForbidden(key)) {
++				return
++			}
++			defineOwnProperty(destination, key, cloneUnlessOtherwiseSpecified(target[key], options));
+ 		});
+ 	}
+ 	getKeys(source).forEach(function(key) {
+-		if (propertyIsUnsafe(target, key)) {
++		if (propertyIsForbidden(key) || propertyIsUnsafe(target, key)) {
+ 			return
+ 		}
+ 
+ 		if (propertyIsOnObject(target, key) && options.isMergeableObject(source[key])) {
+-			destination[key] = getMergeFunction(key, options)(target[key], source[key], options);
++			defineOwnProperty(destination, key, getMergeFunction(key, options)(target[key], source[key], options));
+ 		} else {
+-			destination[key] = cloneUnlessOtherwiseSpecified(source[key], options);
++			defineOwnProperty(destination, key, cloneUnlessOtherwiseSpecified(source[key], options));
+ 		}
+ 	});
+ 	return destination
+diff --git a/dist/umd.js b/dist/umd.js
+index 4071e7c56ec8e5273fe166f6e723ac460fab8b72..fbd421eba20e80364108325a2fa549b569240033 100644
+--- a/dist/umd.js
++++ b/dist/umd.js
+@@ -80,22 +80,45 @@
+ 				&& Object.propertyIsEnumerable.call(target, key)) // and also unsafe if they're nonenumerable.
+ 	}
+ 
++	// Keys that must never be written to a merged object (GHSA-gcqx-w48m-w2h4).
++	// Assigning `__proto__` replaces the destination's prototype, and
++	// `constructor` / `prototype` lead to one. They are skipped on both sides,
++	// whatever the target's shape: propertyIsUnsafe() alone misses a null-prototype
++	// or non-object target.
++	function propertyIsForbidden(key) {
++		return key === '__proto__' || key === 'constructor' || key === 'prototype'
++	}
++
++	// Writes `key` as an own data property, so no setter up the prototype chain
++	// runs.
++	function defineOwnProperty(destination, key, value) {
++		Object.defineProperty(destination, key, {
++			value: value,
++			writable: true,
++			enumerable: true,
++			configurable: true
++		});
++	}
++
+ 	function mergeObject(target, source, options) {
+ 		var destination = {};
+ 		if (options.isMergeableObject(target)) {
+ 			getKeys(target).forEach(function(key) {
+-				destination[key] = cloneUnlessOtherwiseSpecified(target[key], options);
++				if (propertyIsForbidden(key)) {
++					return
++				}
++				defineOwnProperty(destination, key, cloneUnlessOtherwiseSpecified(target[key], options));
+ 			});
+ 		}
+ 		getKeys(source).forEach(function(key) {
+-			if (propertyIsUnsafe(target, key)) {
++			if (propertyIsForbidden(key) || propertyIsUnsafe(target, key)) {
+ 				return
+ 			}
+ 
+ 			if (propertyIsOnObject(target, key) && options.isMergeableObject(source[key])) {
+-				destination[key] = getMergeFunction(key, options)(target[key], source[key], options);
++				defineOwnProperty(destination, key, getMergeFunction(key, options)(target[key], source[key], options));
+ 			} else {
+-				destination[key] = cloneUnlessOtherwiseSpecified(source[key], options);
++				defineOwnProperty(destination, key, cloneUnlessOtherwiseSpecified(source[key], options));
+ 			}
+ 		});
+ 		return destination
+diff --git a/index.js b/index.js
+index 77968aed5d456cccc294f60912ef381fa1e52a7b..9fac10a1305ea63fbe2951a45e6f38bd9ff871b3 100644
+--- a/index.js
++++ b/index.js
+@@ -51,22 +51,45 @@ function propertyIsUnsafe(target, key) {
+ 			&& Object.propertyIsEnumerable.call(target, key)) // and also unsafe if they're nonenumerable.
+ }
+ 
++// Keys that must never be written to a merged object (GHSA-gcqx-w48m-w2h4).
++// Assigning `__proto__` replaces the destination's prototype, and
++// `constructor` / `prototype` lead to one. They are skipped on both sides,
++// whatever the target's shape: propertyIsUnsafe() alone misses a null-prototype
++// or non-object target.
++function propertyIsForbidden(key) {
++	return key === '__proto__' || key === 'constructor' || key === 'prototype'
++}
++
++// Writes `key` as an own data property, so no setter up the prototype chain
++// runs.
++function defineOwnProperty(destination, key, value) {
++	Object.defineProperty(destination, key, {
++		value: value,
++		writable: true,
++		enumerable: true,
++		configurable: true
++	})
++}
++
+ function mergeObject(target, source, options) {
+ 	var destination = {}
+ 	if (options.isMergeableObject(target)) {
+ 		getKeys(target).forEach(function(key) {
+-			destination[key] = cloneUnlessOtherwiseSpecified(target[key], options)
++			if (propertyIsForbidden(key)) {
++				return
++			}
++			defineOwnProperty(destination, key, cloneUnlessOtherwiseSpecified(target[key], options))
+ 		})
+ 	}
+ 	getKeys(source).forEach(function(key) {
+-		if (propertyIsUnsafe(target, key)) {
++		if (propertyIsForbidden(key) || propertyIsUnsafe(target, key)) {
+ 			return
+ 		}
+ 
+ 		if (propertyIsOnObject(target, key) && options.isMergeableObject(source[key])) {
+-			destination[key] = getMergeFunction(key, options)(target[key], source[key], options)
++			defineOwnProperty(destination, key, getMergeFunction(key, options)(target[key], source[key], options))
+ 		} else {
+-			destination[key] = cloneUnlessOtherwiseSpecified(source[key], options)
++			defineOwnProperty(destination, key, cloneUnlessOtherwiseSpecified(source[key], options))
+ 		}
+ 	})
+ 	return destination
