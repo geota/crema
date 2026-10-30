@@ -311,6 +311,12 @@ data class MainUiState(
     val qcSteamTempC: Float = DefaultPrefs.qcSteamTempC,
     val qcHotWaterTempC: Float = DefaultPrefs.qcHotWaterTempC,
     val qcHotWaterVolumeMl: Float = DefaultPrefs.qcHotWaterVolumeMl,
+    /** The hot-water dose's mode and time / No limit / ratio values (the
+     *  volume is [qcHotWaterVolumeMl]); carried with the settings bundle. */
+    val qcHotWaterMode: coffee.crema.core.HotWaterMode? = DefaultPrefs.qcHotWaterMode,
+    val qcHotWaterTimeS: Float? = DefaultPrefs.qcHotWaterTimeS,
+    val qcHotWaterTimeNoLimit: Boolean? = DefaultPrefs.qcHotWaterTimeNoLimit,
+    val qcHotWaterRatio: Float? = DefaultPrefs.qcHotWaterRatio,
     val qcFlushTimeS: Float = DefaultPrefs.qcFlushTimeS,
     val qcFlushTempC: Float = DefaultPrefs.qcFlushTempC,
     /** Persisted Quick-Controls grinder click (issue 15); null = never dialed. */

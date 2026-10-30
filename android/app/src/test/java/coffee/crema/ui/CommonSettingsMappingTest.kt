@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import coffee.crema.core.CommonSettings
+import coffee.crema.core.HotWaterMode
 import coffee.crema.settings.CommonDefaults
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.Json
@@ -30,12 +31,9 @@ class CommonSettingsMappingTest {
         showDebugPanel = true, defaultDoseG = 20f, defaultRatio = 2.5f, defaultBrewTempC = 94f, defaultPreinfuseS = 5f,
         grinderModel = "Niche", baristaName = "Ana", suppressDe1Sleep = true, idleSleepMin = 60u,
         qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f, qcHotWaterVolumeMl = 200f,
+        qcHotWaterMode = HotWaterMode.Time, qcHotWaterTimeS = 45f, qcHotWaterTimeNoLimit = true, qcHotWaterRatio = 2.5f,
         qcFlushTimeS = 6f, qcFlushTempC = 93f,
     )
-
-    /** The hot-water dose's new fields: Android's settings carry them with
-     *  the hot-water card (hot-water modes spec §4, HW-3), not before. */
-    private val hotWaterDose = setOf("qcHotWaterMode", "qcHotWaterTimeS", "qcHotWaterTimeNoLimit", "qcHotWaterRatio")
 
     @Test
     fun `the bundle differs from the defaults in every field`() {
@@ -43,7 +41,6 @@ class CommonSettingsMappingTest {
         val d = json.encodeToJsonElement(CommonSettings.serializer(), CommonDefaults.common).jsonObject
         val same = CommonSettings.serializer().descriptor.elementNames
             .filter { it != "suppressDe1Sleep" } // retired, always written true
-            .filter { it !in hotWaterDose }
             .filter { nd[it] == d[it] }
         assertEquals(emptyList(), same, "set these to a non-default value above")
     }
