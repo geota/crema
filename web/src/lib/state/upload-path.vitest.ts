@@ -456,10 +456,12 @@ describe('the core sends the desired profile on every connect (AC-F7.1, web)', (
 		await vi.advanceTimersByTimeAsync(10);
 		expect(headers).toEqual([2]);
 
-		// The link drops (the DE1 manager tells the core), then comes back.
+		// The link drops (the DE1 manager tells the core), then comes back:
+		// the DE1 manager re-reads the state before it reports ready.
 		h.feed(await h.core.de1LinkLost());
 		h.onState('reconnecting');
 		await vi.advanceTimersByTimeAsync(10);
+		h.feed(await h.core.onNotification('De1State', new Uint8Array([2, 0]), performance.now()));
 		h.onState('ready');
 		await vi.advanceTimersByTimeAsync(10);
 		expect(headers, 'a reconnect re-sends').toEqual([2, 2]);
