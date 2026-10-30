@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import coffee.crema.core.CalibrationRefusal
+import coffee.crema.core.MachineRequestRefusal
 import coffee.crema.core.ProfileUploadFailure
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.KSerializer
@@ -19,6 +20,7 @@ import kotlinx.serialization.modules.SerializersModule
 internal val kindTaggedCoreEnums: SerializersModule = SerializersModule {
     polymorphicDefaultDeserializer(ProfileUploadFailure::class) { KindTagged(ProfileUploadFailure.serializer()) }
     polymorphicDefaultDeserializer(CalibrationRefusal::class) { KindTagged(CalibrationRefusal.serializer()) }
+    polymorphicDefaultDeserializer(MachineRequestRefusal::class) { KindTagged(MachineRequestRefusal.serializer()) }
 }
 
 /**
@@ -30,7 +32,7 @@ internal val kindTaggedCoreEnums: SerializersModule = SerializersModule {
  * default (null) rather than throwing — preserves the lenient profile decode
  * after the mode/ramp/metric/compare fields became typed enums.
  *
- * [kindTaggedCoreEnums]: two core enums are adjacently tagged with `kind` /
+ * [kindTaggedCoreEnums]: some core enums are adjacently tagged with `kind` /
  * `details` (serde `tag = "kind"`), but the typeshare Kotlin for them is a
  * plain sealed class, which kotlinx decodes by a `type` discriminator. Every
  * output carrying `ProfileUploadFailed` or `CalibrationRefused` failed to
