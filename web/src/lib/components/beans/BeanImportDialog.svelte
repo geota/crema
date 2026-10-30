@@ -41,6 +41,7 @@
 		type Bean,
 		type Roaster
 	} from '#lib/bean/index.js';
+	import { mergeBeanImport } from '#lib/bean/import-merge.js';
 	import { getHistoryStore, type StoredShot, type ShotBean } from '#lib/history/index.js';
 	import FileDropZone from '#lib/components/shared/FileDropZone.svelte';
 
@@ -139,7 +140,11 @@
 	interface Preview {
 		filename: string;
 		newBeans: Bean[];
+		/** Incoming rows that replace a library bean with the same id (newer). */
+		updatedBeans: Bean[];
 		newRoasters: Roaster[];
+		/** Incoming rows that replace a library roaster with the same id (newer). */
+		updatedRoasters: Roaster[];
 		newShots: PreparedShot[];
 		duplicatesSkipped: number;
 		/** Shots already in history (same completed-at + bean — a re-import). */
@@ -446,25 +451,20 @@
 	}
 
 	/**
-	 * Build the preview object the UI renders. Three dedups happen
-	 * here, all against the shell library's current state:
+	 * Build the preview object the UI renders. The bean / roaster merge is
+	 * the core's (`mergeBeanImport`, the rule Android uses too), against the
+	 * library's current state:
 	 *
-	 *  1. **BC-uuid skip (resumability)**: if a bean's
-	 *     `beanconquerorId` already exists in the library, the bean
-	 *     and its photo were imported on a previous (possibly
-	 *     interrupted) run; skip silently. This is what makes
-	 *     re-importing the same `.zip` after a partial run pick up
-	 *     where it left off.
-	 *  2. **(roaster, name, roastedOn) triple**: dedup against
-	 *     hand-created Crema beans the user may have entered
-	 *     manually that line up with a BC bag.
-	 *  3. **Roaster re-point**: if an incoming bean references a
-	 *     freshly-minted roaster whose NAME matches an existing
-	 *     library roaster, rewrite the bean's `roasterId` to the
-	 *     existing roaster's id (and drop the duplicate roaster from
-	 *     the add-set). Otherwise the bean would land with a dangling
-	 *     pointer because we filter the duplicate-name roaster out
-	 *     of `newRoasters`.
+	 *  1. **Same id** as a library bean: the newer `updatedAt` wins (a tie
+	 *     keeps the library row; an older row never resurrects a deleted
+	 *     one), so re-importing a Crema export only updates what changed.
+	 *  2. **BC-uuid skip (resumability)**: a bean whose `beanconquerorId`
+	 *     is already in the library came in on a previous (possibly
+	 *     interrupted) run.
+	 *  3. **Roaster re-point**: a bean whose roaster NAME matches a library
+	 *     roaster is pointed at it, and the duplicate roaster is dropped.
+	 *  4. **(roaster, name, roastedOn) triple**: matches a hand-created
+	 *     Crema bean.
 	 *
 	 * Shots ARE dedup'd (bean-workflow-unify issue 08, Android parity):
 	 * our own shot ids are minted per import, but a BC brew's
@@ -472,90 +472,16 @@
 	 * (completedAt, bean name) identifies a row — a re-imported .zip
 	 * adds only what a previous run didn't land. Shots of a bean that
 	 * was itself dedup'd re-point at the surviving library bean via
-	 * `beanIdRemap` (BC-uuid dupes keep the same stable `bean:<uuid>`
-	 * id; the remap matters for the (roaster, name, roastedOn)
-	 * triple-dupes, whose library row has a Crema-minted id).
+	 * `beanIdRemap`.
 	 */
 	function buildPreview(plan: CorePlan, filename: string): Preview {
-		const wireBeans = plan.beans;
-		const wireRoasters = plan.roasters;
-
-		const existingRoasterByLc = new Map<string, Roaster>();
-		for (const r of library.roasters) {
-			existingRoasterByLc.set(r.name.trim().toLowerCase(), r);
-		}
-		const existingBeanByBcId = new Map<string, Bean>();
-		for (const b of library.beans) {
-			if (b.beanconquerorId) existingBeanByBcId.set(b.beanconquerorId, b);
-		}
-
-		// Build a roaster lookup from the wire beans' BC-side ids so we
-		// can resolve the new bean's roasterId → roaster name once.
-		const wireRoasterById = new Map<string, Roaster>();
-		for (const r of wireRoasters) wireRoasterById.set(r.id, r);
-
-		const newBeans: Bean[] = [];
-		let duplicatesSkipped = 0;
-		// Wire bean id → the id a shot should reference after dedupe, so a
-		// skipped bean's shots still link to the surviving library row.
-		const beanIdRemap = new Map<string, string>();
-		// Roasters that ended up referenced by a kept bean — we'll
-		// emit only these in `newRoasters` (dropping any name-collision
-		// roaster and rewriting the bean's pointer to the live one).
-		const keptNewRoasterIds = new Set<string>();
-		for (const bean of wireBeans) {
-			// Resumability: same BC uuid as a bean already in the library
-			// → skip. This lets a re-import of the same .zip pick up
-			// where a previous run left off without producing duplicates.
-			const priorImport = bean.beanconquerorId
-				? existingBeanByBcId.get(bean.beanconquerorId)
-				: undefined;
-			if (priorImport) {
-				beanIdRemap.set(bean.id, priorImport.id);
-				duplicatesSkipped += 1;
-				continue;
-			}
-
-			// Roaster lookup + repoint. The bean's roasterId currently
-			// points at a freshly-minted roaster from the core; if the
-			// library already has a roaster with the same name, rewrite
-			// the pointer to use it.
-			let resolvedBean = bean;
-			const wireRoaster = bean.roasterId
-				? wireRoasterById.get(bean.roasterId) ?? null
-				: null;
-			const roasterName = wireRoaster?.name ?? '';
-			const libRoaster = roasterName
-				? existingRoasterByLc.get(roasterName.toLowerCase())
-				: null;
-			if (libRoaster && wireRoaster && wireRoaster.id !== libRoaster.id) {
-				resolvedBean = { ...bean, roasterId: libRoaster.id };
-			} else if (wireRoaster) {
-				keptNewRoasterIds.add(wireRoaster.id);
-			}
-
-			// Soft dedup: same (roaster, name, roastedOn) triple as a
-			// library bean → skip, re-pointing its shots at the existing
-			// (Crema-minted-id) row. Catches hand-entered Crema beans
-			// that match a BC import.
-			const tripleDupe = libRoaster
-				? library.beans.find(
-						(existing) =>
-							existing.roasterId === libRoaster.id &&
-							existing.name.trim().toLowerCase() === bean.name.trim().toLowerCase() &&
-							(existing.roastedOn ?? null) === (bean.roastedOn ?? null)
-					)
-				: undefined;
-			if (tripleDupe) {
-				beanIdRemap.set(bean.id, tripleDupe.id);
-				duplicatesSkipped += 1;
-				continue;
-			}
-
-			newBeans.push(resolvedBean);
-		}
-
-		const newRoasters = wireRoasters.filter((r) => keptNewRoasterIds.has(r.id));
+		const merge = mergeBeanImport(plan.beans, plan.roasters, library.beans, library.roasters);
+		const newBeans = merge.newBeans as Bean[];
+		const updatedBeans = merge.updatedBeans as Bean[];
+		const newRoasters = merge.newRoasters as Roaster[];
+		const updatedRoasters = merge.updatedRoasters as Roaster[];
+		const duplicatesSkipped = merge.skipped;
+		const beanIdRemap = new Map(Object.entries(merge.beanIdRemap));
 
 		// Shots — skip rows already in history (a re-imported .zip), keyed
 		// by the stable BC brew timestamp + bean name; the set grows as we
@@ -596,7 +522,9 @@
 		return {
 			filename,
 			newBeans,
+			updatedBeans,
 			newRoasters,
+			updatedRoasters,
 			newShots,
 			duplicatesSkipped,
 			shotDuplicatesSkipped,
@@ -607,6 +535,11 @@
 			photosReferenced,
 			photosMatched
 		};
+	}
+
+	/** Rows the Import button writes: new and updated beans, plus new shots. */
+	function importCount(p: Preview): number {
+		return p.newBeans.length + p.updatedBeans.length + p.newShots.length;
 	}
 
 	/** Translate the core's category key into a user-facing label. */
@@ -691,7 +624,11 @@
 			// write. A crash AFTER this point still leaves a consistent
 			// library; the photo loop below picks up on re-import via
 			// the resume-photos scan.
-			library.bulkAdd(snapshot.newBeans, snapshot.newRoasters);
+			// bulkAdd upserts by id, so the updated rows replace their library ones.
+			library.bulkAdd(
+				[...snapshot.newBeans, ...snapshot.updatedBeans],
+				[...snapshot.newRoasters, ...snapshot.updatedRoasters]
+			);
 			for (const prep of snapshot.newShots) {
 				history.insertPulled(prep.shot);
 			}
@@ -908,6 +845,12 @@
 					<div class="bd-stat-label">bag photos</div>
 				</div>
 			{/if}
+			{#if preview.updatedBeans.length > 0}
+				<div class="bd-stat">
+					<div class="bd-stat-n">{preview.updatedBeans.length}</div>
+					<div class="bd-stat-label">beans updated</div>
+				</div>
+			{/if}
 			{#if preview.duplicatesSkipped > 0}
 				<div class="bd-stat">
 					<div class="bd-stat-n">{preview.duplicatesSkipped}</div>
@@ -967,7 +910,7 @@
 				onclick={commit}
 				disabled={step !== 'preview'}
 			>
-				Import {preview.newBeans.length + preview.newShots.length} item{preview.newBeans.length + preview.newShots.length === 1 ? '' : 's'}
+				Import {importCount(preview)} item{importCount(preview) === 1 ? '' : 's'}
 			</button>
 		</div>
 	{:else if step === 'done' && committed}
