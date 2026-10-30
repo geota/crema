@@ -51,6 +51,7 @@
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { profileEditorBounds } from '#lib/core/bounds.js';
 	import { ProfileBounds } from '#lib/profiles/bounds.js';
 
 	const settings = getSettingsStore();
@@ -371,6 +372,9 @@
 		'cleaning',
 		'calibrate'
 	];
+	/** The editor's ranges, from the core's table (F8): they apply when a
+	 *  field is edited; a stored value outside them shows as it is. */
+	const eb = profileEditorBounds();
 </script>
 
 <svelte:head>
@@ -490,19 +494,19 @@
 						<PeNumber
 							label="Dose"
 							value={draft.dose}
-							step={0.1}
+							step={eb.doseG.step}
 							dimension="weight"
-							min={5}
-							max={30}
+							min={eb.doseG.min}
+							max={eb.doseG.max}
 							onChange={(v) => patch({ dose: v })}
 						/>
 						<PeNumber
 							label="Yield"
 							value={draft.yieldOut}
-							step={0.5}
+							step={eb.yieldG.step}
 							dimension="weight"
-							min={0}
-							max={80}
+							min={eb.yieldG.min}
+							max={eb.yieldG.max}
 							onChange={(v) => patch({ yieldOut: v })}
 							dot
 							dotOn={draft.yieldOut > 0}
@@ -536,10 +540,10 @@
 						<PeNumber
 							label="Max total volume"
 							value={draft.maxTotalVolumeMl}
-							step={5}
+							step={eb.maxTotalVolumeMl.step}
 							dimension="volume"
-							min={ProfileBounds.MIN_TOTAL_VOLUME_ML}
-							max={ProfileBounds.MAX_TOTAL_VOLUME_ML}
+							min={eb.maxTotalVolumeMl.min}
+							max={eb.maxTotalVolumeMl.max}
 							digits={0}
 							onChange={(v) => patch({ maxTotalVolumeMl: Math.round(v) })}
 							dot
@@ -571,10 +575,10 @@
 						<PeNumber
 							label="Tank temp"
 							value={draft.tankTemperatureC}
-							step={1}
+							step={eb.tankTempC.step}
 							dimension="temp"
-							min={0}
-							max={ProfileBounds.MAX_TEMPERATURE_C}
+							min={eb.tankTempC.min}
+							max={eb.tankTempC.max}
 							digits={0}
 							onChange={(v) => patch({ tankTemperatureC: Math.round(v) })}
 							dot

@@ -5,6 +5,7 @@
 	 * live brew ratio as a top-right superscript.
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
+	import { quickControlBounds } from '#lib/core/bounds.js';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
 	import { getSettingsStore, formatWeight } from '#lib/settings/index.js';
@@ -26,6 +27,8 @@
 		/** Called when the user clicks the dot. The parent flips state. */
 		onDot?: () => void;
 	} = $props();
+	/** The steppers' ranges, from the core's table (F8). */
+	const b = quickControlBounds();
 
 	const p = $derived(params.current);
 	const prefs = $derived(getSettingsStore().current);
@@ -63,9 +66,9 @@
 		value={p.yield}
 		name="Yield"
 		dimension="weight"
-		min={10}
-		max={80}
-		step={0.5}
+		min={b.yieldG.min}
+		max={b.yieldG.max}
+		step={b.yieldG.step}
 		onChange={(v) => params.set('yield', v)}
 		overridden={yieldOverridden}
 		overriddenTooltip="Overriding default {yieldSeedLabel}"

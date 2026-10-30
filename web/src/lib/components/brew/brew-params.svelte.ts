@@ -32,6 +32,7 @@
  */
 
 import { untrack } from 'svelte';
+import { quickControlBounds } from '#lib/core/bounds.js';
 
 /** The full mode-aware Quick Sheet parameter set — mirrors `DEFAULT_PARAMS_V2`. */
 export interface BrewParams {
@@ -192,20 +193,22 @@ export class BrewParamState {
 	/**
 	 * The pre-infusion dial's bounds and whether it applies: the core's range
 	 * for the active profile (always holding its own value), else the
-	 * stepper's 0–30 s default. `adjustable` is false for a profile with no
-	 * pre-infusion segment — there is nothing to rescale.
+	 * stepper's range from the core's table. `adjustable` is false for a
+	 * profile with no pre-infusion segment — there is nothing to rescale.
 	 */
 	preinfusionBounds(): { min: number; max: number; adjustable: boolean } {
-		return this.preinfusionDial?.() ?? { min: 0, max: 30, adjustable: true };
+		const r = quickControlBounds().preinfuseS;
+		return this.preinfusionDial?.() ?? { min: r.min, max: r.max, adjustable: true };
 	}
 
 	/**
 	 * The brew-temperature dial's bounds: the core's range for the active
 	 * profile (no step may leave the core's temperature bounds after the
-	 * shift), else the stepper's 80–100 °C default.
+	 * shift), else the stepper's range from the core's table.
 	 */
 	brewTempBounds(): { min: number; max: number } {
-		return this.brewTempRange?.() ?? { min: 80, max: 100 };
+		const r = quickControlBounds().brewTempC;
+		return this.brewTempRange?.() ?? { min: r.min, max: r.max };
 	}
 
 	/**
