@@ -78,7 +78,17 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         onBuilt(vm)
         VmHarness.idle()
         VmHarness.awaitPrefsLoaded(vm)
-        VmHarness.idleUntil("the hub's Welcome") { hub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
+        try {
+            VmHarness.idleUntil("the hub's Welcome") { hub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
+        } catch (e: IllegalStateException) {
+            // Timed out under load in PR-6's validation: say where it stuck.
+            val ps = VmHarness.proxyController(vm).state.value
+            throw IllegalStateException(
+                "${e.message}; hub remotes ${hub.remotes().size}, role ${ps.role}, reconnecting ${ps.mirrorReconnecting}, " +
+                    "dials ${endpoint.dials}\nlog:\n${VmHarness.log(vm).take(20).joinToString("\n")}",
+                e,
+            )
+        }
         // The rest of the startup load (custom profiles, maintenance, …) runs
         // after the prefs: a test step taken before it ends can be undone by it.
         VmHarness.awaitStartupLoaded(vm)
