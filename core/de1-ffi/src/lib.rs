@@ -32,6 +32,9 @@ use de1_protocol::{CalTarget, MachineState, MmrRegister, ShotSettings};
 
 uniffi::setup_scaffolding!();
 
+// Relay v4 secure channel (its own module and exports; see relay.rs).
+mod relay;
+
 /// The error every fallible FFI export throws.
 ///
 /// UniFFI's bindgen cannot lower a bare `String` throw type — it panics with
@@ -421,6 +424,23 @@ pub fn duplicate_bean_json(
     now_unix_ms: i64,
 ) -> Result<String, CremaError> {
     de1_domain::duplicate_bean_json(&bean_json, &new_id, now_unix_ms).map_err(CremaError::from)
+}
+
+/// A bean with its Frozen switch set (`Bean` JSON in and out): freeze stamps
+/// today, defrost stamps `defrosted_on` and keeps `frozen_on`, refreeze
+/// carries the earlier frozen span; days off roast never moves. See
+/// [`de1_domain::set_bean_frozen`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the bean JSON is malformed.
+#[uniffi::export]
+pub fn set_bean_frozen_json(
+    bean_json: String,
+    frozen: bool,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::set_bean_frozen_json(&bean_json, frozen, now_unix_ms).map_err(CremaError::from)
 }
 
 /// The "≈N brews left" estimate — [`de1_domain::brews_remaining_estimate`]
@@ -2218,6 +2238,13 @@ impl CremaBridge {
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_tick(&self, now_ms: u64) -> String {
         self.emit(self.core().on_tick(now_ms))
+    }
+
+    /// Report how one scale write the shell sent went (`ok` = it landed).
+    /// Returns a JSON-encoded [`CoreOutput`] that may carry
+    /// `Event::ScaleLinkDead`. See `CremaCore::on_scale_write_result`.
+    pub fn on_scale_write_result(&self, ok: bool) -> String {
+        self.emit(self.core().on_scale_write_result(ok))
     }
 
     // ── Guided brew sessions (issue #10) ─────────────────────────

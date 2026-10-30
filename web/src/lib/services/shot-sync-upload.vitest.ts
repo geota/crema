@@ -328,6 +328,10 @@ describe('ShotSync pull fills the barista (final review 06 #1)', () => {
 			get all() {
 				return shots;
 			},
+			get rawAll() {
+				return shots;
+			},
+			get: (id: string) => shots.find((x) => x.id === id),
 			setTags: vi.fn(),
 			bindVisualizerId: vi.fn(),
 			backfillTelemetry: vi.fn(),
@@ -383,6 +387,8 @@ describe('ShotSync: an offline barista clear survives the next pull (V3 #6, V2 P
 		});
 		const history = {
 			all: [shot],
+			rawAll: [shot],
+			get: (id: string) => (id === shot.id ? shot : undefined),
 			setTags: vi.fn(),
 			bindVisualizerId: vi.fn(),
 			backfillTelemetry: vi.fn(),

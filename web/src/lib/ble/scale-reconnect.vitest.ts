@@ -177,12 +177,15 @@ describe('scale writes around a reconnect', () => {
 			connectScale: async () => 'Bookoo',
 			scaleUuids: async () => UUIDS,
 			queryScaleSettings: async () => writes(QUERY_A),
-			disconnectScale: async () => undefined
+			disconnectScale: async () => undefined,
+			onScaleWriteResult: async () => writes()
 		};
 		const manager: ScaleManager = new ScaleManager(
 			core as never,
 			{
 				onCoreOutput: (out) => {
+					// Write-result reports come back as empty outputs.
+					if (out.commands.length === 0) return;
 					order.push('query output');
 					for (const c of out.commands) void manager.writeScale(new Uint8Array(c.content.data));
 				},

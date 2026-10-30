@@ -70,6 +70,8 @@ pub struct Link {
     pub wire: Vec<Wire>,
     pub hub_closed: bool,
     pub remote_closed: bool,
+    /// The code the remote showed (read from `code()` when it said `ShowCode`).
+    pub shown: Option<String>,
     pub tamper: Option<Tamper>,
 }
 
@@ -149,6 +151,7 @@ impl Link {
             wire: Vec::new(),
             hub_closed: false,
             remote_closed: false,
+            shown: None,
             tamper: None,
         };
         link.remote_step(first);
@@ -201,6 +204,13 @@ impl Link {
     }
 
     pub fn remote_step(&mut self, step: Step) {
+        if step
+            .events
+            .iter()
+            .any(|e| matches!(e, RelayEvent::ShowCode { .. }))
+        {
+            self.shown = self.remote.code();
+        }
         for m in step.send.iter().cloned() {
             self.enqueue(Dir::ToHub, m);
         }
@@ -301,10 +311,7 @@ impl Link {
 
     /// The code the remote showed.
     pub fn shown_code(&self) -> Option<String> {
-        self.remote_events().iter().find_map(|e| match e {
-            RelayEvent::ShowCode { code, .. } => Some(code.clone()),
-            _ => None,
-        })
+        self.shown.clone()
     }
 
     pub fn enter_code(&mut self, code: &str) {

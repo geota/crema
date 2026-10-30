@@ -1684,15 +1684,18 @@ class LibraryController(
         persistLibrary()
     }
 
-    /** Freeze a bag — stamps `frozenOn` to today (ISO yyyy-mm-dd), pausing freshness. Persisted. */
-    fun freezeBean(id: String) = mutateBean(id) { it.copy(frozenOn = isoToday(), defrostedOn = null) }
+    /**
+     * Freeze a bag through the core rule ([coffee.crema.beans.setBeanFrozen]):
+     * stamps `frozenOn` today, or carries an earlier freeze. Persisted.
+     */
+    fun freezeBean(id: String) = mutateBean(id) { coffee.crema.beans.setBeanFrozen(it, true, System.currentTimeMillis()) }
 
     /**
-     * Defrost a bag — records `defrostedOn` and KEEPS `frozenOn` (web semantics:
-     * the freeze window `frozenOn..defrostedOn` is history the freshness math
-     * may use; "currently frozen" is `frozenOn != null && defrostedOn == null`).
+     * Defrost a bag through the core rule ([coffee.crema.beans.setBeanFrozen]):
+     * records `defrostedOn` and KEEPS `frozenOn`, so the frozen span stays off
+     * the off-roast count ("currently frozen" is `frozenOn != null && defrostedOn == null`).
      */
-    fun defrostBean(id: String) = mutateBean(id) { it.copy(defrostedOn = isoToday()) }
+    fun defrostBean(id: String) = mutateBean(id) { coffee.crema.beans.setBeanFrozen(it, false, System.currentTimeMillis()) }
 
     /** Archive a bag — stamps `archivedAt`. Persisted. */
     fun archiveBean(id: String) = mutateBean(id) { it.copy(archivedAt = System.currentTimeMillis()) }
@@ -1709,10 +1712,6 @@ class LibraryController(
         updateUi { s -> s.copy(beans = s.beans.map { if (it.id == id) transform(it).copy(updatedAt = now) else it }) }
         persistLibrary()
     }
-
-    /** Today as an ISO `yyyy-mm-dd` string (matches the Bean date fields). */
-    private fun isoToday(): String =
-        java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
 
     // ── Roaster directory ───────────────────────────────────────────────────
 

@@ -27,7 +27,7 @@ import type {
 	SubState
 } from '#lib/core/index.js';
 import type { StopReason } from '#lib/core/crema-core.js';
-import { MaintenanceFailure } from '#lib/core/crema-core.js';
+import { MaintenanceFailure, ScaleLinkDeadReason } from '#lib/core/crema-core.js';
 import type { De1State, De1Diagnostics } from '#lib/ble/de1.js';
 import { EMPTY_DE1_DIAGNOSTICS } from '#lib/ble/de1.js';
 import type { ScaleState } from '#lib/ble/scale.js';
@@ -139,6 +139,13 @@ export interface TelemetrySample {
 	readonly setHeadTemp: number;
 	readonly setGroupPressure: number;
 	readonly setGroupFlow: number;
+	/**
+	 * The profile frame the DE1 was running (zero-based) — the latest
+	 * `ShotFrameChanged`, like Android's capture. Persisted as the wire
+	 * `frameNumber`, which drives the Visualizer step bars and the quality
+	 * phases. Optional: samples recorded before this field have none.
+	 */
+	readonly frameNumber?: number;
 }
 
 /**
@@ -954,7 +961,8 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				resistanceWeight: t.resistance_weight ?? null,
 				setHeadTemp: t.set_head_temp,
 				setGroupPressure: t.set_group_pressure,
-				setGroupFlow: t.set_group_flow
+				setGroupFlow: t.set_group_flow,
+				frameNumber: snapshot.shotFrame
 			};
 			// Append to the series only during the FLOW window (preinfusion /
 			// pouring), like the core's own ShotRecord: idle-state telemetry
@@ -1184,6 +1192,18 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				scaleWeight: null,
 				eventLog: appendLog(snapshot.eventLog, 'Scale stale')
+			};
+		case 'ScaleLinkDead':
+			// The app drops the link so the reconnect loop recovers it.
+			return {
+				...snapshot,
+				scaleWeight: null,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					event.content.reason === ScaleLinkDeadReason.Silent
+						? 'Scale link dead: no readings for 6 s'
+						: 'Scale link dead: three writes failed in a row'
+				)
 			};
 		case 'SawAutoZeroed':
 			return {

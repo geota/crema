@@ -38,6 +38,17 @@ wasm-bindgen = "0.2.121"
 # the JS-binding dependency tree. See:
 # https://docs.rs/uuid/latest/uuid/#wasm-support
 uuid = { version = "1", features = ["v7", "js"] }
+# Relay v4 (spec §3.6): the secure channel's remote side, entropy for its
+# seeds from `crypto.getRandomValues` (getrandom 0.4's `wasm_js` backend needs
+# no --cfg flag), and zeroize for the seed buffer this bridge owns.
+de1-relay = { path = "../de1-relay" }
+getrandom = { version = "0.4", features = ["wasm_js"] }
+zeroize = "1"
+
+[features]
+# The deterministic `*ForTests` relay constructors (spec §2.11): only the
+# separate vitest bundle (`pnpm wasm:test`) enables it, never `pnpm wasm`.
+test-seeds = ["de1-relay/test-seeds"]
 
 [dev-dependencies]
 serde_json = { workspace = true }
