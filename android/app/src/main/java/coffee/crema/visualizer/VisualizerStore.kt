@@ -80,6 +80,10 @@ data class ShotTombstone(
     val deletedAt: Long,
     /** The user asked to delete the Visualizer copy too ("Also delete on Visualizer"). */
     val deleteRemote: Boolean = false,
+    /** Failed remote deletes so far (F17: at most three, on the core's rule). */
+    val attempts: Int = 0,
+    /** Unix ms before which the retry drain leaves the remote delete alone (0 = due). */
+    val nextAttemptAt: Long = 0L,
 )
 
 /**

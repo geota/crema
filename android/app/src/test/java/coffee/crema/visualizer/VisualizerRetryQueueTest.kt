@@ -9,9 +9,11 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.After
@@ -50,9 +52,16 @@ class VisualizerRetryQueueTest {
     private val uploads = mutableListOf<String>()
     private val deletes = mutableListOf<String>()
     private var deleteStatus = HttpStatusCode.NoContent
+    /** Set: each upload waits on it (an upload in flight holds its shot). */
+    @Volatile private var uploadGate: CompletableDeferred<Unit>? = null
     private val engine = MockEngine { req ->
         val path = req.url.encodedPath
         if (path.endsWith("/shots/upload")) {
+            uploadGate?.let { gate ->
+                uploads += path
+                gate.await()
+                return@MockEngine respond(lastReply.second, lastReply.first, headersOf(HttpHeaders.ContentType, "application/json"))
+            }
             val reply = uploadReplies.removeFirstOrNull() ?: lastReply
             lastReply = reply
             uploads += path
@@ -79,6 +88,7 @@ class VisualizerRetryQueueTest {
         expiredTokens: Boolean = false,
         watcher: NetworkWatcher? = null,
         keepStore: Boolean = false,
+        waits: MutableList<Long>? = null,
     ) = VisualizerSync(
         store = store,
         client = client,
@@ -95,7 +105,9 @@ class VisualizerRetryQueueTest {
         now = { clock },
         refreshTokens = { refresh(it) },
         networkWatcher = watcher,
-        retryTimers = false,
+        // [waits] turns the timers on, each wait recorded and never ending.
+        retryTimers = waits != null,
+        retryDelay = { ms -> waits?.add(ms); awaitCancellation() },
     ).also { s ->
         runBlocking {
             if (!keepStore) {
@@ -293,6 +305,9 @@ class VisualizerRetryQueueTest {
         deleteStatus = HttpStatusCode.NoContent
         val before = deletes.size
         runBlocking { s.drainRetryQueue() }
+        assertEquals("not retried inside its backoff", before, deletes.size)
+        clock += 60 * 60_000
+        runBlocking { s.drainRetryQueue() }
         assertTrue("retried", deletes.size > before)
         assertTrue("purged: ${s.shotTombstones}", s.shotTombstones.isEmpty())
 
@@ -307,5 +322,81 @@ class VisualizerRetryQueueTest {
         runBlocking { out.drainRetryQueue() }
         assertEquals("parked while signed out", tries, deletes.size)
         assertEquals(listOf("s2"), out.shotTombstones.map { it.id })
+    }
+
+    /** F17 validation P3: a remote delete gets the core's ceiling, as web's
+     *  queue: the third failure, or a terminal one (403), stops the remote
+     *  delete; the tombstone stays, so the copy is still never pulled back. */
+    @Test
+    fun `tombstone deletes stop after the third failure or a terminal one`() {
+        deleteStatus = HttpStatusCode.InternalServerError
+        val s = sync()
+        s.tombstoneShot("s1", "v-1", deleteRemote = true)
+        settle()
+        repeat(4) {
+            clock += 60 * 60_000
+            runBlocking { s.drainRetryQueue() }
+        }
+        assertEquals("three attempts in all: $deletes", 3, deletes.size)
+        val t = s.shotTombstones.single()
+        assertFalse("the remote delete stopped", t.deleteRemote)
+
+        deletes.clear()
+        deleteStatus = HttpStatusCode.Forbidden
+        s.tombstoneShot("s2", "v-2", deleteRemote = true)
+        settle()
+        clock += 60 * 60_000
+        runBlocking { s.drainRetryQueue() }
+        assertEquals("a 403 is not retried: $deletes", 1, deletes.size)
+        assertEquals(listOf(false, false), s.shotTombstones.map { it.deleteRemote })
+    }
+
+    /** F17 validation P2: a due shot another upload holds is pushed back, not
+     *  left due, so the scheduled drain doesn't re-run at once. */
+    @Test
+    fun `a queued shot another upload holds does not make the drain spin`() {
+        val waits = mutableListOf<Long>()
+        runBlocking {
+            store.save(
+                VisualizerState(
+                    tokens = TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000),
+                    retryQueue = listOf(QueuedUpload("s1", 1, clock)),
+                ),
+            )
+        }
+        val s = sync(keepStore = true, waits = waits)
+        val gate = CompletableDeferred<Unit>().also { uploadGate = it }
+        s.uploadShot(shot("s1"), silent = true)
+        val deadline = System.currentTimeMillis() + 10_000
+        while (uploads.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertEquals("the live upload is in flight", 1, uploads.size)
+
+        assertEquals(0, runBlocking { s.drainRetryQueue() })
+        assertEquals(clock + VisualizerSync.CLAIMED_RETRY_MS, queue().single().nextAttemptAt)
+        assertEquals("one wait, a few seconds long: $waits", listOf(VisualizerSync.CLAIMED_RETRY_MS), waits)
+        assertEquals("no second upload", 1, uploads.size)
+        gate.complete(Unit)
+    }
+
+    /** F17 validation P2: a pass stopped by a 429 leaves the next entry due;
+     *  the drain it schedules still waits at least the minimum. */
+    @Test
+    fun `a drain never schedules itself for a time already past`() {
+        val waits = mutableListOf<Long>()
+        runBlocking {
+            store.save(
+                VisualizerState(
+                    tokens = TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000),
+                    retryQueue = listOf(QueuedUpload("s1", 1, clock), QueuedUpload("s2", 1, clock)),
+                ),
+            )
+        }
+        shot("s1"); shot("s2")
+        lastReply = HttpStatusCode.TooManyRequests to "{}"
+        val s = sync(keepStore = true, waits = waits)
+        runBlocking { s.drainRetryQueue() }
+        assertEquals("the 429 stopped the pass", 1, uploads.size)
+        assertEquals("s2 is still due", clock, queue().single { it.shotId == "s2" }.nextAttemptAt)
+        assertEquals("the next drain waits the minimum: $waits", listOf(VisualizerSync.MIN_DRAIN_DELAY_MS), waits)
     }
 }

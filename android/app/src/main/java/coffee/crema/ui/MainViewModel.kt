@@ -5775,6 +5775,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // transport also cancels its scope, so any in-flight disconnect ends.
             proxy.close()
         }
+        // The Visualizer retry queue's network callback and tick (F17): the
+        // app normally leaves the foreground first, but don't rely on it.
+        visualizer.onForegroundChanged(false)
         // The HTTP clients (viewModelScope is already cancelled, so no
         // Visualizer / Decent call is still in flight). They sit on the
         // shared, process-lifetime OkHttp engine, which stays up.
