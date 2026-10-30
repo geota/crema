@@ -4972,6 +4972,65 @@ export enum Pump {
 	Flow = "flow",
 }
 
+/** What a retry queue does with an operation that just failed. */
+export type QueueDecision = 
+	/**
+	 * Remove it. `stop_pass`: stop this drain (the daily quota — every other
+	 * upload would hit it too).
+	 */
+	| { kind: "Drop", details: {
+	/** Stop the drain. */
+	stop_pass: boolean;
+}}
+	/**
+	 * Keep it without spending an attempt; look again after `delay_ms` (a
+	 * delete while signed out).
+	 */
+	| { kind: "Park", details: {
+	/** Wait, ms. */
+	delay_ms: number;
+}}
+	/**
+	 * Retry after `delay_ms`. `stop_pass`: leave the rest of the queue for a
+	 * later drain (the rate limit).
+	 */
+	| { kind: "Retry", details: {
+	/** Wait, ms. */
+	delay_ms: number;
+	/** Stop the drain. */
+	stop_pass: boolean;
+}};
+
+/** The kind of queued Visualizer operation. */
+export enum QueueOp {
+	/** Upload a new shot. */
+	Create = "Create",
+	/** Update a remote row. */
+	Update = "Update",
+	/** Delete a remote row. */
+	Delete = "Delete",
+}
+
+/**
+ * What a failed OAuth refresh means for the session (both shells; web
+ * `classifyRefreshFailure`, review 03 P1-1).
+ */
+export enum RefreshFailure {
+	/** The token endpoint rejected the refresh token: the session is over. */
+	Definitive = "Definitive",
+	/**
+	 * A transient server answer (5xx, 408, 429): keep the session, retry on
+	 * the status-aware backoff.
+	 */
+	Retryable = "Retryable",
+	/**
+	 * Anything else — a transport failure, a captive portal, a proxy page,
+	 * `invalid_client`: nothing proves the refresh token is dead, so the
+	 * session stays.
+	 */
+	Transient = "Transient",
+}
+
 /**
  * Events for the shell (§3.4). Names are sanitized; public keys never ride
  * in events (read `peer_public_key()`).
