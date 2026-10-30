@@ -50,7 +50,8 @@ data class TelemetrySample(
      * Profile frame executing at this instant. Stamped from the shot's
      * frame tracker at buffer time — persisted so the core's shot-quality
      * analysis gets EXACT phase boundaries instead of a setpoint-step
-     * heuristic (review #39). Null on records from before this field.
+     * heuristic (review #39). DE1 frames count from 0, so 0 is the first
+     * frame; null (never 0) means unknown, on records from before this field.
      */
     val frameNumber: Int? = null,
 )

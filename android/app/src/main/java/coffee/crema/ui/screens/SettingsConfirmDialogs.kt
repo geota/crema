@@ -71,7 +71,9 @@ fun rememberSettingsConfirmState(vm: MainViewModel): SettingsConfirmState {
     val resync = rememberSaveable { mutableStateOf(false) }
     // SAF export-to-file plumbing (same pattern as History / Beans / Profiles).
     val pendingExport = remember { mutableStateOf<String?>(null) }
-    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    // octet-stream keeps the suggested `.crema.jsonl` name as given: with
+    // "application/json" the storage provider appends ".json".
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val t = pendingExport.value; pendingExport.value = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }

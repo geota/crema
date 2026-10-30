@@ -154,7 +154,9 @@ fun PhoneHistoryScreen(
         if (uri != null) vm.importShots(uri)
     }
     var pendingExport by remember { mutableStateOf<String?>(null) }
-    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    // octet-stream keeps the suggested `.crema.jsonl` name as given: with
+    // "application/json" the storage provider appends ".json".
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val t = pendingExport; pendingExport = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
@@ -201,7 +203,7 @@ fun PhoneHistoryScreen(
             onDeleted = { detailId = null },
             onLoadOnBrew = { vm.loadProfileOnBrew(detail.profileName); onNav("brew") },
             onStartFromShot = { vm.startFromShot(detail.id); onNav("brew") },
-            onExport = { launchSave("crema-shot.json", vm.shotsJson(listOf(detail.id))) },
+            onExport = { launchSave("crema-shot.crema.jsonl", vm.shotsJson(listOf(detail.id))) },
             onLogAgain = { openLogBrew(detail) },
         )
         return
@@ -464,11 +466,11 @@ fun PhoneHistoryScreen(
         CremaOverflowSheet(
             title = "Export as",
             items = listOf(
-                SheetItem("file-text", "All shots", sub = "Every shot as one Crema JSON file. Re-importable in Crema.") {
-                    launchSave("crema-history.json", vm.shotsJson(null))
+                SheetItem("file-text", "All shots", sub = "Every shot as one Crema file. Re-importable in Crema on web and Android.") {
+                    launchSave("crema-history.crema.jsonl", vm.shotsJson(null))
                 },
                 SheetItem("file-code", "Current filter", sub = "Only the ${filtered.size} shot(s) matching your search and filters.") {
-                    launchSave("crema-history-filtered.json", vm.shotsJson(filtered.map { it.id }))
+                    launchSave("crema-history-filtered.crema.jsonl", vm.shotsJson(filtered.map { it.id }))
                 },
             ),
             onDismiss = { exportSheet = false },
