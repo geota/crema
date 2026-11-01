@@ -1603,11 +1603,10 @@
 			</div>
 			<div class="crema-dash-chartcol">
 				<!--
-					Card grouping (geota/crema#92): both flow readings share the FLOW
-					card — machine flow (ml/s) on the left, scale mass-flow (g/s) on
-					the right — so the two numbers being compared sit side by side.
-					Dispensed water volume lives on the WEIGHT card next to the scale
-					weight (volume vs mass of the same pour).
+					Cards group by channel, as the chart's colour pairs and legend
+					toggles do: FLOW carries machine flow plus dispensed volume (the
+					flow colours), WEIGHT carries scale weight plus scale flow (the
+					weight colours). This replaces #92's flow-beside-flow pairing.
 				-->
 				<div class="crema-readouts">
 					<ChannelReadout
@@ -1627,10 +1626,10 @@
 						value={fmt(tel?.flow)}
 						unit="ml/s"
 						color="var(--tel-flow)"
-						secondaryLabel="SCALE"
-						secondaryValue={weightFlowVal}
-						secondaryUnit="g/s"
-						secondaryColor="var(--tel-weight-2)"
+						secondaryLabel="VOLUME"
+						secondaryValue={dispensedVolumeVal}
+						secondaryUnit={dispensedVolumeUnit}
+						secondaryColor="var(--tel-flow-2)"
 					/>
 					<ChannelReadout
 						icon={tempChannel.icon}
@@ -1651,10 +1650,10 @@
 						unit={weightM.unit}
 						color="var(--tel-weight)"
 						target={yieldTarget.value}
-						secondaryLabel="WATER"
-						secondaryValue={dispensedVolumeVal}
-						secondaryUnit={dispensedVolumeUnit}
-						secondaryColor="var(--tel-flow-2)"
+						secondaryLabel="FLOW"
+						secondaryValue={weightFlowVal}
+						secondaryUnit="g/s"
+						secondaryColor="var(--tel-weight-2)"
 						onclick={tareOnTap ? tapTare : undefined}
 						flash={tarePulse}
 					/>
