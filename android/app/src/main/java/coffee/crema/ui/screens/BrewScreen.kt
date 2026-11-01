@@ -1687,16 +1687,16 @@ private fun ChannelsRow(
             secValue = fmt(resist, 2), secUnit = resistUnit,
         )
     }
-    // Card grouping (geota/crema#92): both flow readings share the Flow card —
-    // machine flow (ml/s) left, scale mass-flow (g/s) right — so the two numbers
-    // being compared sit side by side. Dispensed water volume lives on the
-    // Weight card next to the scale weight (volume vs mass of the same pour).
+    // Cards group by channel, as the chart's colour pairs and legend toggles do:
+    // Flow carries machine flow plus dispensed volume (the flow colours), Weight
+    // carries scale weight plus scale flow (the weight colours). This replaces
+    // #92's flow-beside-flow pairing.
     val flowCard: @Composable (Modifier) -> Unit = { m ->
         ChannelCard(
             m, primLabel = "Flow", primIcon = "drop", primColor = tel.flow,
             primValue = fmt(ui.flow), primUnit = "ml/s",
-            secLabel = "Scale", secColor = tel.weight2,
-            secValue = fmt(ui.scaleFlowGPerS), secUnit = "g/s",
+            secLabel = "Volume", secColor = tel.flow2,
+            secValue = water.value, secUnit = water.unit,
         )
     }
     // The temperature card follows the running mode (geota/crema#57). During a
@@ -1744,8 +1744,8 @@ private fun ChannelsRow(
         ChannelCard(
             m, primLabel = "Weight", primIcon = "scales", primColor = tel.weight,
             primValue = weight.value, primUnit = weight.unit,
-            secLabel = "Water", secColor = tel.flow2,
-            secValue = water.value, secUnit = water.unit,
+            secLabel = "Flow", secColor = tel.weight2,
+            secValue = fmt(ui.scaleFlowGPerS), secUnit = "g/s",
             target = active?.let { "target ${formatWeight(it.yieldOut, ui.weightUnit)}" },
             onTap = onTareScale,
         )
