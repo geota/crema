@@ -409,7 +409,7 @@ dependencies = [
  "rand_core",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "snow",
  "spake2",
  "subtle",
