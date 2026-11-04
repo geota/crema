@@ -255,7 +255,7 @@ class RemoteSettingsTest {
     fun `the remote core follows a snapshot that beat loadPrefs`() = VmHarness.holdingStartupLoad { release ->
         var early = false
         val vm = fixture.start(onBuilt = {
-            early = !MainViewModel::class.java.getDeclaredField("prefsLoaded").apply { isAccessible = true }.getBoolean(it)
+            early = !VmHarness.prefsLoaded(it)
             it.deliverConfigForTest(coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), S))
             release.complete(Unit)
         })

@@ -134,10 +134,15 @@ internal object VmHarness {
     /** Idle the main looper until the VM's async prefs load has hydrated
      *  the UI, so a later setter isn't overwritten by it. */
     fun awaitPrefsLoaded(vm: MainViewModel) {
-        val field = runCatching { MainViewModel::class.java.getDeclaredField("prefsLoaded") }.getOrNull()
-            ?: error("MainViewModel no longer has a prefsLoaded flag: update VmHarness.awaitPrefsLoaded")
+        idleUntil("the prefs load") { prefsLoaded(vm) }
+    }
+
+    /** Whether the VM's startup prefs load has hydrated the UI ([SettingsController.loaded]). */
+    fun prefsLoaded(vm: MainViewModel): Boolean {
+        val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == SettingsController::class.java }
+            ?: error("MainViewModel no longer holds exactly one SettingsController field: update VmHarness.prefsLoaded")
         field.isAccessible = true
-        idleUntil("the prefs load") { field.getBoolean(vm) }
+        return (field.get(vm) as SettingsController).loaded
     }
 
     /** Wait for the whole startup load (library, prefs, custom profiles, …):
