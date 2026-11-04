@@ -149,7 +149,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             scope = viewModelScope,
             clock = { SystemClock.elapsedRealtime() },
             feed = { input, now ->
-                routeWrite("Idle sleep") { bridge.idleSleep(idleSleepInputJson(input), now.toULong()) }
+                lane.route("Idle sleep") { bridge.idleSleep(idleSleepInputJson(input), now.toULong()) }
             },
         )
     }
@@ -161,33 +161,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
 
     /**
-     * Single-threaded home for core-event application and every HEAVY
-     * FFI interaction (review #28). The generated bridge is synchronous
-     * blocking JNA and `viewModelScope` runs on Main — so the profile
-     * upload chain janked the UI thread at the most latency-sensitive
-     * moment, and `applyEvent` ran concurrently from three threads (the
-     * two BLE manager scopes + Main), racing the ticker check-then-act
-     * guards. All `CoreOutput` now applies on this lane (FIFO per
-     * sender), and the heavy paths (startShot, the heartbeat clock)
-     * run their bridge calls here instead of Main.
+     * The core lane ([CoreLane], review #28): every `CoreOutput` applies there,
+     * and the heavy FFI calls run there. What each core event does is
+     * registered in [registerCoreHandlers] while the lane is built, before any
+     * output can apply. The writers reach later fields ([ble], [scale]) only
+     * when invoked.
      */
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private val coreDispatcher = kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)
+    private val lane: CoreLane = CoreLane(
+        scope = viewModelScope,
+        json = json,
+        log = { appendLog(it) },
+        writeDe1 = { target, bytes, urgent, ackUploadId ->
+            ble.writeCharacteristic(target, bytes, urgent = urgent, ackUploadId = ackUploadId)
+        },
+        writeScale = { bytes -> scale.writeCommand(bytes) },
+        shotRunning = { _ui.value.shotInProgress },
+        profileWriteFailed = { id -> bridge.profileWriteFailed(SystemClock.elapsedRealtime().toULong(), id) },
+    ).also(::registerCoreHandlers)
 
     /** Where the dial's debounce wait runs ([pushDesiredProfile]); the push
      *  itself always runs on the core lane. Test seam: a test dispatcher
      *  makes the 0.5 s virtual time. */
     @androidx.annotation.VisibleForTesting
-    internal var dialDebounceContext: kotlin.coroutines.CoroutineContext = coreDispatcher
-
-    /** Run [block] on the core lane, FIFO behind any queued event application.
-     *  Every write to lane-owned state ([maintenanceTotalLitres]) goes
-     *  through here or runs
-     *  on the lane already: a plain Main-thread write is not ordered against a
-     *  queued lane task (cohort review 2026-10-25, Android P2-3). */
-    private fun onCoreLane(block: () -> Unit) {
-        viewModelScope.launch(coreDispatcher) { block() }
-    }
+    internal var dialDebounceContext: kotlin.coroutines.CoroutineContext = lane.dispatcher
 
     private val _ui = MutableStateFlow(MainUiState())
 
@@ -233,23 +229,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Whether the low-battery snackbar fired for the current scale
      *  connection (issue #29) — reset in [clearScaleSessionUi] so the next
-     *  session warns again, but one connection never nags twice. */
+     *  session warns again, but one connection never nags twice. Lane-owned:
+     *  written only on the core lane. */
     private var scaleLowBatteryWarned = false
 
 
     /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
     private var modeTickerJob: Job? = null
-
-    /**
-     * The outstanding stop write, if any (issue #15 follow-up). Two rules:
-     * stop writes COALESCE (the enforcer re-commands every second, but
-     * stacking identical Idle bytes behind a wedged op adds nothing — at most
-     * one is ever queued/waiting), and the survivor is CANCELLED the moment
-     * the shot ends — a stale Idle delivered seconds late is not harmless: it
-     * wakes a sleeping machine and kills a steam/flush the user starts right
-     * after the shot.
-     */
-    private val pendingStopWrite = java.util.concurrent.atomic.AtomicReference<Job?>(null)
 
     /** Start the 4 Hz mode-clock ticker when a service mode is running, stop it
      *  when idle. Elapsed is recomputed from the monotonic anchor each tick, so
@@ -433,7 +419,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         applyRestoredSettings = { applyRestoredSettings(it) },
         applyRestoredMaintenance = { m ->
             // Reseed the live water integrator + persist (maintenance is VM-owned).
-            onCoreLane { maintenanceTotalLitres = m.totalLitres }
+            lane.post { maintenanceTotalLitres = m.totalLitres }
             saveMaintenance(m)
         },
         persistSawModel = {
@@ -481,9 +467,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _logBrew = MutableStateFlow<coffee.crema.ui.brewlog.BrewLogDraft?>(null)
     val logBrew: StateFlow<coffee.crema.ui.brewlog.BrewLogDraft?> = _logBrew.asStateFlow()
 
-    /** Which profile writes may still go out and be acked (cohort review 2026-10-28, #2 N2). */
-    private val profileWrites = ProfileWriteGenerations()
-
     /**
      * The 1 s core clock while the DE1 link is up or coming up (cohort review
      * 2026-10-28, #2 N1): the upload ack watchdog, the machine-model wait, the
@@ -493,8 +476,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val coreTicker by lazy {
         CoreTicker(viewModelScope) {
-            kotlinx.coroutines.withContext(coreDispatcher) {
-                applyCoreOutputJson(bridge.onTick(SystemClock.elapsedRealtime().toULong()))
+            kotlinx.coroutines.withContext(lane.dispatcher) {
+                lane.applyJson(bridge.onTick(SystemClock.elapsedRealtime().toULong()))
             }
         }
     }
@@ -503,8 +486,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  lane, cancelled when the link goes or the app is backgrounded. */
     private val wake by lazy {
         WakeTimer(viewModelScope, { SystemClock.elapsedRealtime() }, { at ->
-            kotlinx.coroutines.withContext(coreDispatcher) {
-                applyCoreOutputJson(bridge.onTick(at.toULong()))
+            kotlinx.coroutines.withContext(lane.dispatcher) {
+                lane.applyJson(bridge.onTick(at.toULong()))
             }
         })
     }
@@ -534,7 +517,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             while (true) {
                 kotlinx.coroutines.delay(250)
                 val now = SystemClock.elapsedRealtime()
-                onCoreOutputJson(bridge.onTick(now.toULong()))
+                lane.deliver(bridge.onTick(now.toULong()))
                 sampleLiveBrew(now)
             }
         }
@@ -565,7 +548,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Arm a session for [recipe]; [startOnPour] starts it at the first pour. */
     fun brewSessionArm(recipe: coffee.crema.core.BrewRecipe, startOnPour: Boolean) {
         val recipeJson = json.encodeToString(coffee.crema.core.BrewRecipe.serializer(), recipe)
-        onCoreOutputJson(bridge.brewSessionArm(recipeJson, startOnPour))
+        lane.deliver(bridge.brewSessionArm(recipeJson, startOnPour))
         rememberRecipeUsed(recipe)
         _ui.update {
             it.copy(guidedBrew = GuidedBrewUi(phase = "armed", recipe = recipe, startOnPour = startOnPour))
@@ -578,11 +561,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Start an armed session's clock (the Start tap). */
     fun brewSessionBegin() =
-        onCoreOutputJson(bridge.brewSessionBegin(SystemClock.elapsedRealtime().toULong()))
+        lane.deliver(bridge.brewSessionBegin(SystemClock.elapsedRealtime().toULong()))
 
     fun brewSessionPause() {
         val now = SystemClock.elapsedRealtime()
-        onCoreOutputJson(bridge.brewSessionPause(now.toULong()))
+        lane.deliver(bridge.brewSessionPause(now.toULong()))
         _ui.update { st ->
             st.copy(guidedBrew = st.guidedBrew.copy(phase = "paused", pausedSinceRealtime = now))
         }
@@ -590,7 +573,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun brewSessionResume() {
         val now = SystemClock.elapsedRealtime()
-        onCoreOutputJson(bridge.brewSessionResume(now.toULong()))
+        lane.deliver(bridge.brewSessionResume(now.toULong()))
         _ui.update { st ->
             val since = st.guidedBrew.pausedSinceRealtime
             st.copy(
@@ -604,14 +587,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun brewSessionSkip() =
-        onCoreOutputJson(bridge.brewSessionSkip(SystemClock.elapsedRealtime().toULong()))
+        lane.deliver(bridge.brewSessionSkip(SystemClock.elapsedRealtime().toULong()))
 
     fun brewSessionFinish() =
-        onCoreOutputJson(bridge.brewSessionFinish(SystemClock.elapsedRealtime().toULong()))
+        lane.deliver(bridge.brewSessionFinish(SystemClock.elapsedRealtime().toULong()))
 
     /** Drop the session without a summary (backing out of setup / discard). */
     fun brewSessionCancel() {
-        onCoreOutputJson(bridge.brewSessionCancel())
+        lane.deliver(bridge.brewSessionCancel())
         stopBrewTick()
         bgConnection.setBrewSessionActive(false)
         _ui.update { it.copy(guidedBrew = GuidedBrewUi()) }
@@ -1229,7 +1212,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         transport = proxy.transport,
         bridge = bridge,
         recorder = bleRecorder,
-        onCoreOutput = ::onCoreOutputJson,
+        onCoreOutput = lane::deliver,
         onStatus = { line -> _ui.update { it.copy(status = line) } },
         timeline = coffee.crema.diag.ReconnectTimelines.recorder,
     )
@@ -1359,7 +1342,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * The Bookoo scale connection. Shares the one [bridge] with [ble]: the core
      * is internally `Mutex`-guarded, so both managers feeding it concurrently
-     * is safe. Its `CoreOutput` goes through the same [onCoreOutputJson] path.
+     * is safe. Its `CoreOutput` goes through the same [CoreLane.deliver] path.
      * It also shares the one [bleRecorder] so its weight notifications and
      * tare/timer writes land in the same interleaved capture file as the DE1's.
      */
@@ -1367,7 +1350,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         transport = proxy.transport,
         bridge = bridge,
         recorder = bleRecorder,
-        onCoreOutput = ::onCoreOutputJson,
+        onCoreOutput = lane::deliver,
         onStatus = { line -> _ui.update { it.copy(status = line) } },
         onScaleIdentified = ::refreshScaleCapabilities,
         timeline = coffee.crema.diag.ReconnectTimelines.recorder,
@@ -1393,7 +1376,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val connection: ConnectionController = ConnectionController(
         app = app,
         scope = viewModelScope,
-        coreDispatcher = coreDispatcher,
+        coreDispatcher = lane.dispatcher,
         ble = ble,
         scale = scale,
         bleScanner = bleScanner,
@@ -1441,7 +1424,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pushRoster = { proxy.pushRoster() },
         refreshAdvertisement = { proxy.refreshAdvertisement() },
         heartbeatIntervalMs = { _ui.value.scaleCapabilities?.heartbeat_interval_ms?.toLong() },
-        sendScaleHeartbeat = { onCoreOutputJson(bridge.scaleHeartbeat()) },
+        sendScaleHeartbeat = { lane.deliver(bridge.scaleHeartbeat()) },
         isAppForeground = { appInForeground },
         timeline = coffee.crema.diag.ReconnectTimelines.recorder,
         companion = companion,
@@ -2406,7 +2389,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Start an espresso shot the gated way (web parity): upload the active
      * profile to the DE1, wait for the upload to complete, observe the firmware's
      * profile-download guard window, then request the Espresso state. The Espresso
-     * request itself fires from [applyEvent] on `ProfileUploadCompleted`.
+     * request itself fires from the core lane's handlers on `ProfileUploadCompleted`.
      *
      * The active profile is converted from the editable `CremaProfile` shape to
      * the wire `Profile` the DE1 expects by the sans-IO core
@@ -2450,7 +2433,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Start shot failed: ${it.message}")
             return CommandOutcome.Refused("Can\u2019t start shot \u2014 profile conversion failed")
         }
-        onCoreLane { applyCoreOutput(result.output) }
+        lane.post { lane.applyOutput(result.output) }
         if (result.accepted) return CommandOutcome.Accepted
         val remembered = connection.state.value.rememberedScaleAddress != null
         if (result.refusal is StartRefusal.ScaleRequired && remembered) {
@@ -2487,7 +2470,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Setting the desired profile failed: ${it.message}")
             return null
         }
-        applyCoreOutput(sync.output)
+        lane.applyOutput(sync.output)
         if (sync.output.events.any { it is Event.DecodeError }) return null
         return sync.status
     }
@@ -2507,9 +2490,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // The latest push wins: a dial change waits [delayMs] for the dial to
         // rest (de1app's 0.5 s), and any later push replaces a pending one.
         desiredPushJob?.cancel()
-        desiredPushJob = viewModelScope.launch(if (delayMs > 0) dialDebounceContext else coreDispatcher) {
+        desiredPushJob = viewModelScope.launch(if (delayMs > 0) dialDebounceContext else lane.dispatcher) {
             if (delayMs > 0) delay(delayMs)
-            kotlinx.coroutines.withContext(coreDispatcher) { setDesiredOnLane(cremaJson, qcJson) }
+            kotlinx.coroutines.withContext(lane.dispatcher) { setDesiredOnLane(cremaJson, qcJson) }
         }
     }
 
@@ -2533,7 +2516,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // `BatteryManager::ensureChargerOn`): smart charging may have switched
         // it off, and nothing would turn it back on once Crema is gone.
         if (_ui.value.bleState == De1BleManager.State.READY && !firmwareHolds()) {
-            routeWrite("USB charger on") { bridge.setUsbChargerOn(true) }
+            lane.route("USB charger on") { bridge.setUsbChargerOn(true) }
         }
         sweepRunner.onDropped()
         idleSleep.link(false)
@@ -2669,9 +2652,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         appendLog("Hot-water volume ${cmd.value.toInt()} ml: switched to volume mode")
                         applySteamHotWater()
                     }
-                    QcField.STEAM_FLOW -> routeWrite("Set steam flow") { bridge.setSteamFlow(cmd.value) }
-                    QcField.FLUSH_TIME -> routeWrite("Set flush time") { bridge.setFlushTimeout((cmd.value * 1000f).toUInt()) }
-                    QcField.FLUSH_TEMP -> routeWrite("Set flush temp") { bridge.setFlushTemp(cmd.value) }
+                    QcField.STEAM_FLOW -> lane.route("Set steam flow") { bridge.setSteamFlow(cmd.value) }
+                    QcField.FLUSH_TIME -> lane.route("Set flush time") { bridge.setFlushTimeout((cmd.value * 1000f).toUInt()) }
+                    QcField.FLUSH_TEMP -> lane.route("Set flush temp") { bridge.setFlushTemp(cmd.value) }
                     // Grind never reaches the machine: it's recorded onto the next shot.
                     QcField.GRIND -> Unit
                 }
@@ -2986,12 +2969,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("requestMachineState failed: ${it.message}")
             return
         }
-        onCoreOutputJson(raw)
+        lane.deliver(raw)
     }
 
     /**
      * Sleep-on-quit's write. NOT [sleep]: that routes through the core lane
-     * and [executeCommand], both on [viewModelScope], which is already
+     * and its command path, both on [viewModelScope], which is already
      * cancelled when [onCleared] fires the quit. The core output is computed
      * synchronously here and its DE1 writes go out on [ProcessScope], bounded
      * by [QUIT_WRITE_BUDGET_MS]. The result is true only when every write
@@ -3064,7 +3047,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  with its own firmware values and de1app rewrote these each connect, so
      *  without this the machine silently runs the firmware defaults (the
      *  constant-fan report, geota/crema#31). Safe to call any time — the writes
-     *  route through [routeWrite], a no-op when disconnected. */
+     *  route through [CoreLane.route], a no-op when disconnected. */
     private fun seedMachineSettings(onReady: Boolean = true) {
         // One core-owned list (`CremaCore::connect_sweep`, web runs the same):
         // USB charger (Tablet charging setting), the user-presence feature flag
@@ -3079,7 +3062,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val ui = _ui.value
         val tankTempC = ui.profiles.firstOrNull { it.id == ui.activeProfileId }?.tankTemperatureC ?: 0f
         val settings = ui.connectSweepSettings(tankTempC, batteryPercent())
-        routeWrite("Connect sweep") {
+        lane.route("Connect sweep") {
             // The notification clock (elapsedRealtime), like every core
             // timestamp: wall-clock ms pushed the core's clock decades ahead
             // and every watchdog compared against the wrong epoch.
@@ -3094,7 +3077,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The once-a-minute USB-charger check (Decenza `BatteryManager`) — see [ConnectSweepRunner]. */
     private fun usbChargerTick() {
         if (firmwareHolds()) return // no charger writes into a flash (audit H2)
-        routeWrite("USB charger check") {
+        lane.route("USB charger check") {
             bridge.usbChargerTick(_ui.value.usbChargingMode, batteryPercent()?.toUByte())
         }
     }
@@ -3133,7 +3116,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         appendLog("Read MMR $reg failed: ${it.message}")
                         null
                     }
-                    if (raw != null) onCoreOutputJson(raw)
+                    if (raw != null) lane.deliver(raw)
                     delay(readGapMs)
                 }
                 // Stop once the identity the UI actually shows has answered.
@@ -3178,8 +3161,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Set heater voltage failed: ${it.message}")
                 return
             }
-            onCoreOutputJson(raw)
-            runCatching { bridge.readMmr(MmrReg.HEATER_VOLTAGE) }.getOrNull()?.let(::onCoreOutputJson)
+            lane.deliver(raw)
+            runCatching { bridge.readMmr(MmrReg.HEATER_VOLTAGE) }.getOrNull()?.let(lane::deliver)
         }
     }
 
@@ -3544,8 +3527,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Set flow multiplier failed: ${it.message}")
                 return
             }
-            onCoreOutputJson(raw)
-            runCatching { bridge.readMmr(MmrReg.CALIBRATION_FLOW_MULTIPLIER) }.getOrNull()?.let(::onCoreOutputJson)
+            lane.deliver(raw)
+            runCatching { bridge.readMmr(MmrReg.CALIBRATION_FLOW_MULTIPLIER) }.getOrNull()?.let(lane::deliver)
         }
     }
 
@@ -3567,7 +3550,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("cancelMaintenance failed: ${it.message}")
             return
         }
-        onCoreOutputJson(raw)
+        lane.deliver(raw)
     }
 
     /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. Persisted. */
@@ -3635,7 +3618,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Set steam eco failed: ${it.message}")
                 return
             }
-            onCoreOutputJson(raw)
+            lane.deliver(raw)
         }
     }
 
@@ -3646,16 +3629,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // read-modify-write: the group target is the effective profile's, and the
     // fields QC doesn't model (flags, timeouts, espresso volume) survive;
     // steam flow + flush temp/time are separate writes.
-
-    /** Route a core-output-producing machine write through the shared command
-     *  path, logging (not throwing) on failure. */
-    private fun routeWrite(label: String, block: () -> String) {
-        val raw = runCatching { block() }.getOrElse {
-            appendLog("$label failed: ${it.message}")
-            return
-        }
-        onCoreOutputJson(raw)
-    }
 
     /** Push the steam / hot-water targets and the hot-water dose to the core —
      *  the one push for the combined cuuid_0B packet (spec §4), from [state]'s
@@ -3671,7 +3644,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             hotWaterTempC = ui.qcHotWaterTempC,
             hotWater = ui.hotWaterDose(),
         )
-        routeWrite("Set steam/hot-water") {
+        lane.route("Set steam/hot-water") {
             bridge.setSteamHotwaterTargets(json.encodeToString(SteamHotWaterTargets.serializer(), targets))
         }
         refreshHotWaterTarget()
@@ -3768,9 +3741,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         // Each call is capability-gated and fails for a scale without it (or
         // no scale): a no-op is intended.
-        runCatching { bridge.enableScaleLcd(wire) }.onSuccess(::onCoreOutputJson)
+        runCatching { bridge.enableScaleLcd(wire) }.onSuccess(lane::deliver)
         if (wire == WeightUnit.Grams.string) {
-            runCatching { bridge.setScaleUnitGrams() }.onSuccess(::onCoreOutputJson)
+            runCatching { bridge.setScaleUnitGrams() }.onSuccess(lane::deliver)
         }
     }
 
@@ -3805,7 +3778,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(waterWarnMl = ml) }
         persistPrefs()
         // The core's monitor re-arms on a threshold change.
-        onCoreLane { runCatching { bridge.setWaterWarnMl(ml) } }
+        lane.post { runCatching { bridge.setWaterWarnMl(ml) } }
     }
 
     /** The machine's own refill threshold, raw sensor mm (geota/crema#47).
@@ -3816,7 +3789,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val clamped = mm.coerceIn(REFILL_POINT_MIN_MM, REFILL_POINT_MAX_MM)
             _ui.update { it.copy(waterRefillPointMm = clamped) }
             persistPrefs()
-            routeWrite("Set refill point") { bridge.setRefillThreshold(clamped) }
+            lane.route("Set refill point") { bridge.setRefillThreshold(clamped) }
         }
     }
 
@@ -3834,7 +3807,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         editOwnSetting(Setting.FAN_THRESHOLD) {
             _ui.update { it.copy(fanThresholdC = tempC) }
             persistPrefs()
-            routeWrite("Set fan threshold") {
+            lane.route("Set fan threshold") {
                 bridge.setFanThreshold(tempC.roundToInt().coerceIn(0, 60).toUByte())
             }
         }
@@ -3855,7 +3828,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         editOwnSetting(Setting.STEAM_TWO_TAP) {
             _ui.update { it.copy(steamTwoTap = enabled) }
             persistPrefs()
-            routeWrite("Set steam two-tap stop") {
+            lane.route("Set steam two-tap stop") {
                 bridge.setSteamTwoTapStop(if (enabled) 1u else 0u)
             }
         }
@@ -3929,7 +3902,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Load the persisted maintenance state, seed the live total, compute the readout. */
     private suspend fun loadMaintenance() {
         val state = maintenanceStore.load()
-        onCoreLane { maintenanceTotalLitres = state.totalLitres }
+        lane.post { maintenanceTotalLitres = state.totalLitres }
         _ui.update { it.copy(
             maintenance = state,
             maintenanceReadout = computeMaintenanceReadout(state),
@@ -3971,7 +3944,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * total and stamp `filterAtMs` (the web store's `markFilterCleaned`). Persists
      * + recomputes the readout.
      */
-    fun markFilterCleaned() = onCoreLane {
+    fun markFilterCleaned() = lane.post {
         val next = _ui.value.maintenance.copy(
             totalLitres = maintenanceTotalLitres,
             filterBaselineLitres = maintenanceTotalLitres,
@@ -3985,7 +3958,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * total and stamp `descaleAtMs` (the web store's `markDescaled`). Persists +
      * recomputes the readout.
      */
-    fun markDescaled() = onCoreLane {
+    fun markDescaled() = lane.post {
         val next = _ui.value.maintenance.copy(
             totalLitres = maintenanceTotalLitres,
             descaleBaselineLitres = maintenanceTotalLitres,
@@ -3998,7 +3971,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Mark a clean cycle done — reset its hour counter by stamping `cleanAtMs`
      * (the web store's `markCleaned`). Persists + recomputes the readout.
      */
-    fun markCleaned() = onCoreLane {
+    fun markCleaned() = lane.post {
         val next = _ui.value.maintenance.copy(
             totalLitres = maintenanceTotalLitres,
             cleanAtMs = System.currentTimeMillis(),
@@ -4486,8 +4459,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Set cup warmer temp failed: ${it.message}")
                 return
             }
-            onCoreOutputJson(raw)
-            runCatching { bridge.readMmr(MmrReg.CUP_WARMER_TEMP) }.getOrNull()?.let(::onCoreOutputJson)
+            lane.deliver(raw)
+            runCatching { bridge.readMmr(MmrReg.CUP_WARMER_TEMP) }.getOrNull()?.let(lane::deliver)
         }
     }
 
@@ -4556,7 +4529,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Reset the maintenance counters too — a fresh-install state (baselines and
         // total zeroed, the three *AtMs = now so the readouts read "0 since").
         val freshMaintenance = defaultMaintenanceState(System.currentTimeMillis())
-        onCoreLane {
+        lane.post {
             maintenanceTotalLitres = 0.0
             // A fresh stop-at-weight model (null = start learning again).
             runCatching { bridge.loadSawModelJson(null) }
@@ -4614,8 +4587,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_ui.value.shotInProgress && _ui.value.stopTargets?.weightConfiguredG != null) {
             notifyUser("Scale disconnected — stop-at-weight is off for this shot")
         }
-        // Re-arm the once-per-connection low-battery warning (issue #29).
-        scaleLowBatteryWarned = false
+        // Re-arm the once-per-connection low-battery warning (issue #29), on
+        // the lane: a reading from the old connection still queued there must
+        // not see the reset (cohort review 2026-10-25, Android P2-3).
+        lane.post { scaleLowBatteryWarned = false }
         refreshStopTargetProjection()
         _ui.update { it.copy(
             scaleWeightG = null,
@@ -4659,7 +4634,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun refreshScaleCapabilities(advertisedName: String) =
         // Bridge read + heartbeat-guard mutation → core lane (review #28).
-        viewModelScope.launch(coreDispatcher) { refreshScaleCapabilitiesOnCoreLane(advertisedName) }
+        lane.post { refreshScaleCapabilitiesOnCoreLane(advertisedName) }
 
     private fun refreshScaleCapabilitiesOnCoreLane(advertisedName: String) {
         val capsJson = runCatching { bridge.scaleCapabilities() }.getOrNull()
@@ -4677,7 +4652,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Query scale settings failed: ${it.message}")
             return
         }
-        onCoreOutputJson(queryRaw)
+        lane.deliver(queryRaw)
     }
 
     /**
@@ -4708,7 +4683,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Set volume failed: ${it.message}")
                 return
             }
-            onCoreOutputJson(raw)
+            lane.deliver(raw)
         }
     }
 
@@ -4739,7 +4714,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Set standby failed: ${it.message}")
                 return
             }
-            onCoreOutputJson(raw)
+            lane.deliver(raw)
         }
     }
 
@@ -4760,7 +4735,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Set flow smoothing failed: ${it.message}")
                 return
             }
-            onCoreOutputJson(raw)
+            lane.deliver(raw)
         }
     }
 
@@ -4780,7 +4755,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Set anti-mistouch failed: ${it.message}")
                 return
             }
-            onCoreOutputJson(raw)
+            lane.deliver(raw)
         }
     }
 
@@ -4788,7 +4763,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Switch the connected scale to display mode [modeId]. Asks the core for
      * the command bytes, then routes the result through the shared command
      * path. Switching a mode is **three** `Command.WriteScale` entries; the
-     * core emits them in order and [onCoreOutputJson]'s `commands.forEach`
+     * core emits them in order and [CoreLane.applyOutput]'s `commands.forEach`
      * loop preserves that order, so all three reach `ScaleBleManager` in
      * sequence. Capability-gated: the core emits commands only for a scale that
      * exposes switchable modes and only for a listed [modeId].
@@ -4806,7 +4781,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Set mode failed: ${it.message}")
                 return
             }
-            onCoreOutputJson(raw)
+            lane.deliver(raw)
         }
     }
 
@@ -4829,7 +4804,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Set auto-stop failed: ${it.message}")
                 return
             }
-            onCoreOutputJson(raw)
+            lane.deliver(raw)
         }
     }
 
@@ -4845,7 +4820,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Tare failed: ${it.message}")
             return
         }
-        onCoreOutputJson(raw)
+        lane.deliver(raw)
     }
 
     /**
@@ -4858,7 +4833,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Beep failed: ${it.message}")
             return
         }
-        onCoreOutputJson(raw)
+        lane.deliver(raw)
     }
 
     /** Clear the scale's tracked peak + final weight (Scale page "Reset peak"). */
@@ -4877,837 +4852,651 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Start timer failed: ${it.message}")
             return
         }
-        onCoreOutputJson(raw)
+        lane.deliver(raw)
     }
 
     /**
-     * The FFI/BLE seam: a JSON `CoreOutput` string came back from
-     * [CremaBridge.onNotification]. Deserialize it and fold its [Event]s into
-     * the UI state.
-     *
-     * Runs on a BLE binder thread; [MutableStateFlow] assignment is thread-safe
-     * and Compose collects it on the main thread.
+     * What this VM does with each core [Event] (was `applyEvent`): one
+     * registration per event, run on the core lane in registration order.
+     * Called once while [lane] is built, before any output applies; an event
+     * with no registration is ignored. The breakup's later steps move each
+     * registration to the controller that owns its state.
      */
-    private fun onCoreOutputJson(raw: String) {
-        // Confine ALL event/command application to the core lane
-        // (review #28): callers arrive from Main, the DE1 manager scope,
-        // and the scale manager scope — launches enqueue FIFO per sender
-        // onto the single thread, so applyEvent's check-then-act state
-        // (tickers, pending flags) is single-threaded by construction.
-        // The guard also keeps one bad payload from killing the lane.
-        viewModelScope.launch(coreDispatcher) {
-            runCatching { applyCoreOutputJson(raw) }
-                .onFailure { appendLog("Core output application failed: ${it.message}") }
-        }
-    }
-
-    private fun applyCoreOutputJson(raw: String) {
-        val output: CoreOutput = runCatching {
-            json.decodeFromString(CoreOutput.serializer(), raw)
-        }.getOrElse {
-            appendLog("JSON parse error: ${it.message}")
-            return
-        }
-        applyCoreOutput(output)
-    }
-
-    private fun applyCoreOutput(output: CoreOutput) {
-        output.events.forEach(::applyEvent)
-        // DE1 writes of one output go out IN ORDER on one coroutine (cohort
-        // review 02 P2-2): a write retried after a failure must not land
-        // after the writes that followed it — an Idle bounce retried behind
-        // its Espresso would stop the shot that just started, and a retried
-        // profile frame would arrive out of order. Scale writes are another
-        // device and keep their own coroutines.
-        val de1Writes = output.commands.filterIsInstance<Command.WriteCharacteristic>()
-        output.commands.filterIsInstance<Command.WriteScale>().forEach(::executeCommand)
-        if (de1Writes.isNotEmpty()) executeDe1Writes(de1Writes, startedUploadId(output.events))
-    }
-
-    /**
-     * Centralised command execution: every `CoreOutput` — from the DE1 manager
-     * AND the scale manager — funnels its `commands` here. This single path
-     * makes both the manual Tare button and the core's automatic shot-start
-     * auto-tare work, because both surface as a [Command.WriteScale].
-     *
-     * A scale write is dispatched on [viewModelScope]: `writeCommand` is a
-     * `suspend fun`, so it awaits the BLE write on a coroutine rather than
-     * blocking the BLE binder thread this may be called from.
-     */
-    private fun executeCommand(command: Command) {
-        when (command) {
-            is Command.WriteScale -> {
-                // The core hands over the exact bytes as a List<UByte>.
-                val bytes = command.content.data
-                    .map { it.toByte() }
-                    .toByteArray()
-                // Fire-and-forget: a BLE write can fail (peer dropped, transient
-                // stack error → Nordic throws OperationFailedException). Log it here
-                // rather than let it escape the launch and crash the app; the
-                // reconnect supervisor handles an actual disconnect on its own.
-                viewModelScope.launch {
-                    try {
-                        scale.writeCommand(bytes)
-                    } catch (ce: kotlinx.coroutines.CancellationException) {
-                        throw ce
-                    } catch (e: Exception) {
-                        appendLog("Scale write failed: ${e.message}")
-                    }
-                }
+    private fun registerCoreHandlers(lane: CoreLane) {
+        lane.on<Event.MachineStateChanged> { event ->
+            val c = event.content
+            // Service-mode clock (steam / hot water / flush): anchor a
+            // monotonic start on entry, re-anchor on a direct mode→mode
+            // swap, clear on exit. The 4 Hz ticker feeds the Brew timers
+            // while a mode runs — mirrors the web BrewDashboard's
+            // modeStartedAtMs / modeNowMs pair.
+            val mode = c.state == MachineState.Steam ||
+                c.state == MachineState.HotWater ||
+                c.state == MachineState.HotWaterRinse
+            // Screensaver ↔ machine-sleep coupling, both directions
+            // (de1app gui.tcl:60-64; Decenza main.qml:3019-3027):
+            //  • a LIVE *external* transition into Sleep/GoingToSleep (GHC
+            //    tap or the machine's own timer) shows the saver — but not
+            //    a sleep the app asked for ([appAskedForSleep]: the power
+            //    button is a deliberate act, not an idle one, and raising
+            //    the saver over it made manual sleep near-unusable — the
+            //    next tap woke the machine straight back up), and not the
+            //    first state report after connect (Decenza's startup grace:
+            //    connecting to an already-asleep DE1 must not hijack the UI);
+            //  • the machine waking EXTERNALLY while the saver is up
+            //    dismisses it (no wake() needed — it's already awake);
+            //  • entering any active mode counts as user presence.
+            val prevState = _ui.value.machineStateName
+            val asleep = c.state.isAsleep()
+            val wasAsleep = prevState.isAsleep()
+            // The flash's own Sleep is not the user walking away (audit L8).
+            if (!firmwareHolds() && shouldRaiseSaver(prevState, c.state, ::appAskedForSleep)) {
+                _ui.update { it.copy(saverVisible = true) }
+            } else if (!asleep && wasAsleep && _ui.value.saverVisible) {
+                _ui.update { it.copy(saverVisible = false) }
+                lastInteractionAtMs = SystemClock.elapsedRealtime()
             }
-            is Command.WriteCharacteristic -> executeDe1Writes(listOf(command))
-        }
-    }
-
-    /**
-     * Write [writes] (the DE1 commands of ONE `CoreOutput`) in order on a single
-     * coroutine — each waits for the previous, including its one retry — so a
-     * retry can never reorder them (cohort review 02 P2-2; reaprime awaits
-     * each write in sequence, de1app runs one FIFO). A failed write is logged
-     * and the rest still go out, as before. The BLE manager maps each target
-     * to a UUID and writes; a profile header / frame write also gets its
-     * synthesized ack. This is the machine-control path (AND5).
-     */
-    private fun executeDe1Writes(writes: List<Command.WriteCharacteristic>, uploadId: UInt? = null) {
-        // A machine-state write during a shot IS the stop (issue #15).
-        val shotRunning = _ui.value.shotInProgress
-        fun isStop(c: Command.WriteCharacteristic) =
-            c.content.target == WriteTarget.De1RequestedState && shotRunning
-        // Coalesce stop writes: if one is already queued/waiting, a second
-        // copy of the same Idle byte buys nothing — and every extra copy is a
-        // stale-write risk after the machine stops.
-        val batch = writes.filter { c ->
-            if (isStop(c) && pendingStopWrite.get()?.isActive == true) {
-                appendLog("Stop write already in flight — not stacking another")
-                false
-            } else {
-                true
-            }
-        }
-        if (batch.isEmpty()) return
-        // The profile writes of this output: a header write supersedes every
-        // older upload's remaining writes (cohort review 2026-10-28, #2 N2).
-        val profileBatch = profileWrites.begin(batch.map { it.content.target }, uploadId)
-        if (profileWrites.unnamed(profileBatch)) appendLog(UNNAMED_PROFILE_BATCH_LOG)
-        val job = viewModelScope.launch {
-            executeInOrder(batch) { c ->
-                val profile = profileBatch?.takeIf { isProfileWriteTarget(c.content.target) }
-                if (profile == null) {
-                    deliverDe1Write(c, stopWrite = isStop(c))
-                    return@executeInOrder
+            // The saver's idle clock only — the core's idle-sleep timer sees
+            // every machine state itself.
+            if (mode || c.state == MachineState.Espresso) lastInteractionAtMs = SystemClock.elapsedRealtime()
+            _ui.update { prev ->
+                val started = when {
+                    !mode -> null
+                    prev.machineStateName != c.state -> SystemClock.elapsedRealtime()
+                    else -> prev.modeStartedAtMs
                 }
-                // Superseded, or an earlier write of this upload failed:
-                // nothing more of it reaches the DE1.
-                if (!profileWrites.mayWrite(profile)) return@executeInOrder
-                val delivered = deliverDe1Write(c, stopWrite = false) {
-                    profile.uploadId.takeIf { profileWrites.mayWrite(profile) }
-                }
-                if (profileWrites.settle(profile, delivered) == ProfileWriteGenerations.Outcome.FAILED) {
-                    // Fail the upload now rather than on the ack watchdog.
-                    appendLog("Profile write failed — stopping this upload")
-                    // Named by its upload: this runs on Main, so a shot start
-                    // on the core lane may already have begun a newer upload,
-                    // which the core must leave alone (round-2 V3 #1).
-                    profile.uploadId?.let { id ->
-                        onCoreOutputJson(bridge.profileWriteFailed(SystemClock.elapsedRealtime().toULong(), id))
-                    }
-                }
-            }
-        }
-        if (batch.any(::isStop)) {
-            pendingStopWrite.set(job)
-            job.invokeOnCompletion { pendingStopWrite.compareAndSet(job, null) }
-        }
-    }
-
-    /** One DE1 write from [executeDe1Writes]; failures are logged, never thrown.
-     *  Returns whether the write reached the DE1. [ackUploadId] names a profile
-     *  write's upload for its synthesized ack, null when superseded (see [ProfileWriteGenerations]). */
-    private suspend fun deliverDe1Write(
-        command: Command.WriteCharacteristic,
-        stopWrite: Boolean,
-        ackUploadId: () -> UInt? = { null },
-    ): Boolean {
-        val bytes = command.content.data
-            .map { it.toByte() }
-            .toByteArray()
-        // Time a stop write, so a field log shows exactly how long the stop
-        // took to reach the machine (queue contention, retries, a wedged link
-        // all show up here as milliseconds).
-        val queuedAt = if (stopWrite) SystemClock.elapsedRealtime() else 0L
-        // A failed machine write (e.g. the keep-alive poke as the DE1 drops)
-        // must not become an uncaught crash.
-        // A write's timeout or preemption arrives as De1WriteFailedException
-        // (an IOException, logged here); only the batch's own teardown is a
-        // cancellation (cohort review 2026-10-28, Android P2-1).
-        return deliverOrLog(
-            write = {
-                // Stop writes ride the urgent lane (issue #15): they preempt any
-                // in-flight non-critical GATT op instead of queuing behind it on
-                // the global op mutex.
-                val written = ble.writeCharacteristic(command.content.target, bytes, urgent = stopWrite, ackUploadId = ackUploadId)
-                if (stopWrite && written) {
-                    appendLog("Stop write delivered in ${SystemClock.elapsedRealtime() - queuedAt} ms")
-                }
-                written
-            },
-            log = { e ->
-                appendLog(
-                    if (stopWrite) {
-                        "STOP WRITE FAILED after ${SystemClock.elapsedRealtime() - queuedAt} ms: ${e.message}"
-                    } else {
-                        "DE1 write failed (${command.content.target}): ${e.message}"
-                    },
-                )
-            },
-        )
-    }
-
-    private fun applyEvent(event: Event) {
-        when (event) {
-            is Event.MachineStateChanged -> {
-                val c = event.content
-                // Service-mode clock (steam / hot water / flush): anchor a
-                // monotonic start on entry, re-anchor on a direct mode→mode
-                // swap, clear on exit. The 4 Hz ticker feeds the Brew timers
-                // while a mode runs — mirrors the web BrewDashboard's
-                // modeStartedAtMs / modeNowMs pair.
-                val mode = c.state == MachineState.Steam ||
-                    c.state == MachineState.HotWater ||
-                    c.state == MachineState.HotWaterRinse
-                // Screensaver ↔ machine-sleep coupling, both directions
-                // (de1app gui.tcl:60-64; Decenza main.qml:3019-3027):
-                //  • a LIVE *external* transition into Sleep/GoingToSleep (GHC
-                //    tap or the machine's own timer) shows the saver — but not
-                //    a sleep the app asked for ([appAskedForSleep]: the power
-                //    button is a deliberate act, not an idle one, and raising
-                //    the saver over it made manual sleep near-unusable — the
-                //    next tap woke the machine straight back up), and not the
-                //    first state report after connect (Decenza's startup grace:
-                //    connecting to an already-asleep DE1 must not hijack the UI);
-                //  • the machine waking EXTERNALLY while the saver is up
-                //    dismisses it (no wake() needed — it's already awake);
-                //  • entering any active mode counts as user presence.
-                val prevState = _ui.value.machineStateName
-                val asleep = c.state.isAsleep()
-                val wasAsleep = prevState.isAsleep()
-                // The flash's own Sleep is not the user walking away (audit L8).
-                if (!firmwareHolds() && shouldRaiseSaver(prevState, c.state, ::appAskedForSleep)) {
-                    _ui.update { it.copy(saverVisible = true) }
-                } else if (!asleep && wasAsleep && _ui.value.saverVisible) {
-                    _ui.update { it.copy(saverVisible = false) }
-                    lastInteractionAtMs = SystemClock.elapsedRealtime()
-                }
-                // The saver's idle clock only — the core's idle-sleep timer sees
-                // every machine state itself.
-                if (mode || c.state == MachineState.Espresso) lastInteractionAtMs = SystemClock.elapsedRealtime()
-                _ui.update { prev ->
-                    val started = when {
-                        !mode -> null
-                        prev.machineStateName != c.state -> SystemClock.elapsedRealtime()
-                        else -> prev.modeStartedAtMs
-                    }
-                    prev.copy(
-                        machineState = "${c.state.string} / ${c.substate.string}",
-                        machineStateName = c.state,
-                        machineSubstate = c.substate.string,
-                        modeStartedAtMs = started,
-                        modeElapsedMs = if (started == null) 0L else prev.modeElapsedMs,
-                    )
-                }
-                updateModeTicker()
-                appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
-            }
-            is Event.IdleSleepRequested -> {
-                lastIdleSleepAtMs = SystemClock.elapsedRealtime()
-                appendLog(
-                    "Idle for ${_ui.value.idleSleepMin} min — putting the DE1 to sleep" +
-                        if (event.content.attempt > 1u) " (retry)" else "",
+                prev.copy(
+                    machineState = "${c.state.string} / ${c.substate.string}",
+                    machineStateName = c.state,
+                    machineSubstate = c.substate.string,
+                    modeStartedAtMs = started,
+                    modeElapsedMs = if (started == null) 0L else prev.modeElapsedMs,
                 )
             }
-            is Event.IdleSleepBlocked -> appendLog(
+            updateModeTicker()
+            appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
+        }
+        lane.on<Event.IdleSleepRequested> { event ->
+            lastIdleSleepAtMs = SystemClock.elapsedRealtime()
+            appendLog(
+                "Idle for ${_ui.value.idleSleepMin} min — putting the DE1 to sleep" +
+                    if (event.content.attempt > 1u) " (retry)" else "",
+            )
+        }
+        lane.on<Event.IdleSleepBlocked> { event ->
+            appendLog(
                 "Idle sleep due but waiting: ${event.content.reason}" +
                     (event.content.state?.let { " (${it.string})" } ?: ""),
             )
-            is Event.IdleSleepUnconfirmed -> appendLog("Idle sleep: the DE1 never reported Sleep — timer re-armed")
-            is Event.MaintenanceProgress -> {
-                val c = event.content
-                val terminal = isMaintenanceTerminal(c.phase)
-                val phaseChanged = _ui.value.maintenanceRun?.phase != c.phase
-                _ui.update { it.copy(maintenanceRun = if (terminal) null else c) }
-                if (phaseChanged) {
-                    appendLog(
-                        "Maintenance ${c.state.string}: ${c.phase}" +
-                            if (c.cold_workaround) " (cold-start workaround)" else "",
-                    )
-                }
-                if (c.cold_workaround) {
-                    // The DE1 holds core's 1 °C profile now, not ours; the
-                    // core's profile sync puts the real one back once the
-                    // cycle ends. The cold profile never loaded (or was replaced), so core
-                    // did not send the request (round-2 V3 #4): say so, and why,
-                    // instead of going quiet.
-                    if (c.phase == MaintenancePhase.Failed) notifyUser(maintenanceFailedText(c.state, c.failure))
-                }
-            }
-            is Event.MachineErrorChanged -> {
-                // The fault to surface, decided in core so web and Android agree:
-                // every Error* substate at once, except ErrorNoAc, which the DE1
-                // reports spuriously while waking / heating and core holds until
-                // it persists (firmware >= 1337, 6 s — Decenza 98215217 /
-                // b8d625ba). A null message clears it.
-                val c = event.content
-                _ui.update { it.copy(machineError = c.message) }
+        }
+        lane.on<Event.IdleSleepUnconfirmed> { appendLog("Idle sleep: the DE1 never reported Sleep — timer re-armed") }
+        lane.on<Event.MaintenanceProgress> { event ->
+            val c = event.content
+            val terminal = isMaintenanceTerminal(c.phase)
+            val phaseChanged = _ui.value.maintenanceRun?.phase != c.phase
+            _ui.update { it.copy(maintenanceRun = if (terminal) null else c) }
+            if (phaseChanged) {
                 appendLog(
-                    if (c.message == null) "Machine fault cleared (${c.substate.string})"
-                    else "Machine fault: ${c.substate.string} — ${c.message}",
+                    "Maintenance ${c.state.string}: ${c.phase}" +
+                        if (c.cold_workaround) " (cold-start workaround)" else "",
                 )
             }
-            is Event.ShotStarted -> {
-                // Entering a shot: flip the resting↔extracting flag and zero the
-                // per-shot counters so the Brew timer / phase / volume restart.
-                _ui.update { it.copy(
-                    shotInProgress = true,
-                    shotFrame = 0,
-                    shotElapsedMs = 0,
-                    dispensedVolume = 0f,
-                    shotTelemetry = emptyList(),
-                    // Fresh shot — the previous stop attribution no longer applies.
-                    lastStopReason = null,
-                ) }
-                // Fresh shot — clear the previous shot's record markers so a
-                // stale "armed" line can never be attributed to this one (#56).
-                lastArmedTargets = null
-                // Tighten the DE1 link for the shot window (steadier ShotSample
-                // cadence + lower-latency SAW stop write); restored to BALANCED
-                // on ShotCompleted. Best-effort — see De1BleManager.
-                viewModelScope.launch { ble.setConnectionPriority(high = true) }
-                appendLog("Shot started")
+            if (c.cold_workaround) {
+                // The DE1 holds core's 1 °C profile now, not ours; the
+                // core's profile sync puts the real one back once the
+                // cycle ends. The cold profile never loaded (or was replaced), so core
+                // did not send the request (round-2 V3 #4): say so, and why,
+                // instead of going quiet.
+                if (c.phase == MaintenancePhase.Failed) notifyUser(maintenanceFailedText(c.state, c.failure))
             }
-            is Event.ShotPhaseChanged -> {
-                val phase = event.content.phase.string
-                _ui.update { it.copy(shotPhase = phase) }
-                appendLog("Shot phase -> $phase")
-            }
-            is Event.ShotFrameChanged -> {
-                _ui.update { it.copy(shotFrame = event.content.frame.toInt()) }
-                appendLog("Shot frame -> ${event.content.frame}")
-            }
-            is Event.Telemetry -> {
-                val t = event.content
-                // Add the core's counted water to the running total (the DE1 has no
-                // cumulative counter): `counted_ml` is set only for espresso and hot
-                // water, gap-capped — the core's rule, shared with web (Android used
-                // to count descale, clean, steam rinse and air purge too). In-memory
-                // only — flushed on shot / water-session completion.
-                // SIDE EFFECT — stays OUTSIDE the update lambda so it adds exactly
-                // once per frame even if the CAS retries (issue 11).
-                t.counted_ml?.let { maintenanceTotalLitres += it / 1000.0 }
-                val line = fmt("t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C", 
-                    t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
-                )
-                // Atomic read-modify-write: build the chart buffer from the lambda's
-                // `prev` (the live state), so a concurrent Event.ScaleReading update{}
-                // landing mid-frame isn't clobbered (issue 11).
-                _ui.update { prev ->
-                    // Append a chart sample only during the FLOW window
-                    // (preinfusion / pouring), like the core's own ShotRecord:
-                    // the pre-pour heating phase piles zero-elapsed points and
-                    // the Espresso/Ending tail (pump wind-down after the stop)
-                    // used to keep the curve growing past the stop point —
-                    // issue #44's "truncate at the stop" report. Fold in the
-                    // latest scale weight/flow so the WEIGHT curves track the
-                    // cup. FIFO-capped.
-                    val flowing = prev.machineSubstate == "Preinfusion" ||
-                        prev.machineSubstate == "Pouring"
-                    val nextBuffer = if (prev.shotInProgress && flowing) {
-                        val sample = TelemetrySample(
-                            elapsedMs = t.elapsed.toLong(),
-                            pressure = t.group_pressure,
-                            flow = t.group_flow,
-                            headTemp = t.head_temp,
-                            mixTemp = t.mix_temp,
-                            weight = prev.scaleWeightG,
-                            weightFlow = prev.scaleFlowGPerS,
-                            dispensedVolume = t.dispensed_volume,
-                            resistance = t.resistance,
-                            resistanceWeight = t.resistance_weight,
-                            setHeadTemp = t.set_head_temp,
-                            setGroupPressure = t.set_group_pressure,
-                            setGroupFlow = t.set_group_flow,
-                            frameNumber = prev.shotFrame,
-                        )
-                        val appended = prev.shotTelemetry + sample
-                        if (appended.size > SHOT_TELEMETRY_CAP) {
-                            appended.takeLast(SHOT_TELEMETRY_CAP)
-                        } else {
-                            appended
-                        }
-                    } else {
-                        prev.shotTelemetry
-                    }
-                    // Keep the debug string AND project the structured channels the
-                    // Brew dashboard reads. High-rate; no log line.
-                    prev.copy(
-                        telemetry = line,
+        }
+        lane.on<Event.MachineErrorChanged> { event ->
+            // The fault to surface, decided in core so web and Android agree:
+            // every Error* substate at once, except ErrorNoAc, which the DE1
+            // reports spuriously while waking / heating and core holds until
+            // it persists (firmware >= 1337, 6 s — Decenza 98215217 /
+            // b8d625ba). A null message clears it.
+            val c = event.content
+            _ui.update { it.copy(machineError = c.message) }
+            appendLog(
+                if (c.message == null) "Machine fault cleared (${c.substate.string})"
+                else "Machine fault: ${c.substate.string} — ${c.message}",
+            )
+        }
+        lane.on<Event.ShotStarted> {
+            // Entering a shot: flip the resting↔extracting flag and zero the
+            // per-shot counters so the Brew timer / phase / volume restart.
+            _ui.update { it.copy(
+                shotInProgress = true,
+                shotFrame = 0,
+                shotElapsedMs = 0,
+                dispensedVolume = 0f,
+                shotTelemetry = emptyList(),
+                // Fresh shot — the previous stop attribution no longer applies.
+                lastStopReason = null,
+            ) }
+            // Fresh shot — clear the previous shot's record markers so a
+            // stale "armed" line can never be attributed to this one (#56).
+            lastArmedTargets = null
+            // Tighten the DE1 link for the shot window (steadier ShotSample
+            // cadence + lower-latency SAW stop write); restored to BALANCED
+            // on ShotCompleted. Best-effort — see De1BleManager.
+            viewModelScope.launch { ble.setConnectionPriority(high = true) }
+            appendLog("Shot started")
+        }
+        lane.on<Event.ShotPhaseChanged> { event ->
+            val phase = event.content.phase.string
+            _ui.update { it.copy(shotPhase = phase) }
+            appendLog("Shot phase -> $phase")
+        }
+        lane.on<Event.ShotFrameChanged> { event ->
+            _ui.update { it.copy(shotFrame = event.content.frame.toInt()) }
+            appendLog("Shot frame -> ${event.content.frame}")
+        }
+        lane.on<Event.Telemetry> { event ->
+            val t = event.content
+            // Add the core's counted water to the running total (the DE1 has no
+            // cumulative counter): `counted_ml` is set only for espresso and hot
+            // water, gap-capped — the core's rule, shared with web (Android used
+            // to count descale, clean, steam rinse and air purge too). In-memory
+            // only — flushed on shot / water-session completion.
+            // SIDE EFFECT — stays OUTSIDE the update lambda so it adds exactly
+            // once per frame even if the CAS retries (issue 11).
+            t.counted_ml?.let { maintenanceTotalLitres += it / 1000.0 }
+            val line = fmt("t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C", 
+                t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
+            )
+            // Atomic read-modify-write: build the chart buffer from the lambda's
+            // `prev` (the live state), so a concurrent Event.ScaleReading update{}
+            // landing mid-frame isn't clobbered (issue 11).
+            _ui.update { prev ->
+                // Append a chart sample only during the FLOW window
+                // (preinfusion / pouring), like the core's own ShotRecord:
+                // the pre-pour heating phase piles zero-elapsed points and
+                // the Espresso/Ending tail (pump wind-down after the stop)
+                // used to keep the curve growing past the stop point —
+                // issue #44's "truncate at the stop" report. Fold in the
+                // latest scale weight/flow so the WEIGHT curves track the
+                // cup. FIFO-capped.
+                val flowing = prev.machineSubstate == "Preinfusion" ||
+                    prev.machineSubstate == "Pouring"
+                val nextBuffer = if (prev.shotInProgress && flowing) {
+                    val sample = TelemetrySample(
+                        elapsedMs = t.elapsed.toLong(),
                         pressure = t.group_pressure,
                         flow = t.group_flow,
                         headTemp = t.head_temp,
                         mixTemp = t.mix_temp,
-                        steamTemp = t.steam_temp,
+                        weight = prev.scaleWeightG,
+                        weightFlow = prev.scaleFlowGPerS,
                         dispensedVolume = t.dispensed_volume,
                         resistance = t.resistance,
                         resistanceWeight = t.resistance_weight,
-                        shotElapsedMs = t.elapsed.toLong(),
-                        shotTelemetry = nextBuffer,
+                        setHeadTemp = t.set_head_temp,
+                        setGroupPressure = t.set_group_pressure,
+                        setGroupFlow = t.set_group_flow,
+                        frameNumber = prev.shotFrame,
                     )
+                    val appended = prev.shotTelemetry + sample
+                    if (appended.size > SHOT_TELEMETRY_CAP) {
+                        appended.takeLast(SHOT_TELEMETRY_CAP)
+                    } else {
+                        appended
+                    }
+                } else {
+                    prev.shotTelemetry
                 }
+                // Keep the debug string AND project the structured channels the
+                // Brew dashboard reads. High-rate; no log line.
+                prev.copy(
+                    telemetry = line,
+                    pressure = t.group_pressure,
+                    flow = t.group_flow,
+                    headTemp = t.head_temp,
+                    mixTemp = t.mix_temp,
+                    steamTemp = t.steam_temp,
+                    dispensedVolume = t.dispensed_volume,
+                    resistance = t.resistance,
+                    resistanceWeight = t.resistance_weight,
+                    shotElapsedMs = t.elapsed.toLong(),
+                    shotTelemetry = nextBuffer,
+                )
             }
-            is Event.ScaleReading -> {
-                val r = event.content
-                // The Bookoo echoes its live settings in every weight
-                // notification. Project them into the config controls so they
-                // show the scale's real current state — `device_*` is null for
-                // scales that do not report a setting, in which case the
-                // control keeps its last value.
-                _ui.update { it.copy(
-                    scaleWeightG = r.weight,
-                    // Native per-packet flow when the scale reports one (Bookoo),
-                    // else the core's derived estimate (FlowEstimator) — web
-                    // parity (`device_flow ?? flow`). Binding only device_flow
-                    // left every non-Bookoo scale (Half Decent, Acaia, …)
-                    // showing "— g/s" forever (issue #24).
-                    scaleFlowGPerS = r.device_flow ?: r.flow,
-                    scaleTimerMs = r.device_timer?.toLong(),
-                    scaleVolume = r.device_volume?.toInt() ?: it.scaleVolume,
-                    scaleStandbyMinutes = r.device_standby?.toInt()
-                        ?: it.scaleStandbyMinutes,
-                    scaleBatteryPercent = r.device_battery?.toInt()
-                        ?: it.scaleBatteryPercent,
-                    scaleFlowSmoothing = r.device_flow_smoothing
-                        ?: it.scaleFlowSmoothing,
-                    scaleAutoStop = r.device_auto_stop?.toInt()
-                        ?: it.scaleAutoStop,
-                    scaleEchoed = it.scaleEchoed.withEchoes(
-                        r.device_volume != null, r.device_standby != null, r.device_flow_smoothing != null, r.device_auto_stop != null,
-                    ),
-                ) }
-                // Weight is high-rate; do not flood the log with every reading.
-                // Low-battery warning (issue #29): one snackbar per connection
-                // the first time the battery reads at or below the threshold,
-                // so it can be charged before it dies mid-shot.
-                val batt = _ui.value.scaleBatteryPercent
-                if (batt != null && batt <= SCALE_LOW_BATTERY_PCT && !scaleLowBatteryWarned) {
-                    scaleLowBatteryWarned = true
-                    notifyUser("Scale battery low ($batt%) — charge it soon")
-                }
+        }
+        lane.on<Event.ScaleReading> { event ->
+            val r = event.content
+            // The Bookoo echoes its live settings in every weight
+            // notification. Project them into the config controls so they
+            // show the scale's real current state — `device_*` is null for
+            // scales that do not report a setting, in which case the
+            // control keeps its last value.
+            _ui.update { it.copy(
+                scaleWeightG = r.weight,
+                // Native per-packet flow when the scale reports one (Bookoo),
+                // else the core's derived estimate (FlowEstimator) — web
+                // parity (`device_flow ?? flow`). Binding only device_flow
+                // left every non-Bookoo scale (Half Decent, Acaia, …)
+                // showing "— g/s" forever (issue #24).
+                scaleFlowGPerS = r.device_flow ?: r.flow,
+                scaleTimerMs = r.device_timer?.toLong(),
+                scaleVolume = r.device_volume?.toInt() ?: it.scaleVolume,
+                scaleStandbyMinutes = r.device_standby?.toInt()
+                    ?: it.scaleStandbyMinutes,
+                scaleBatteryPercent = r.device_battery?.toInt()
+                    ?: it.scaleBatteryPercent,
+                scaleFlowSmoothing = r.device_flow_smoothing
+                    ?: it.scaleFlowSmoothing,
+                scaleAutoStop = r.device_auto_stop?.toInt()
+                    ?: it.scaleAutoStop,
+                scaleEchoed = it.scaleEchoed.withEchoes(
+                    r.device_volume != null, r.device_standby != null, r.device_flow_smoothing != null, r.device_auto_stop != null,
+                ),
+            ) }
+            // Weight is high-rate; do not flood the log with every reading.
+            // Low-battery warning (issue #29): one snackbar per connection
+            // the first time the battery reads at or below the threshold,
+            // so it can be charged before it dies mid-shot.
+            val batt = _ui.value.scaleBatteryPercent
+            if (batt != null && batt <= SCALE_LOW_BATTERY_PCT && !scaleLowBatteryWarned) {
+                scaleLowBatteryWarned = true
+                notifyUser("Scale battery low ($batt%) — charge it soon")
             }
-            is Event.WaterLevel -> {
-                _ui.update { it.copy(
-                    waterLevelMm = event.content.level,
-                    waterRefillThresholdMm = event.content.refill_threshold,
-                ) }
-                // Log only when the whole millimetre actually changes. The DE1
-                // reports the tank level continuously (~2.4/s), and logging
-                // every report drowned the diagnostics buffer: a real report on
-                // geota/crema#56 arrived as 299 identical "Water level: 35mm"
-                // lines out of 300, covering 124 seconds — the shot being
-                // investigated had been evicted hours earlier. Decenza throttles
-                // the same channel for the same reason (de1device.cpp: emit only
-                // when the level changes).
-                val mm = event.content.level.roundToInt()
-                if (mm != lastLoggedWaterMm) {
-                    lastLoggedWaterMm = mm
-                    appendLog("Water level: ${mm}mm")
-                }
+        }
+        lane.on<Event.WaterLevel> { event ->
+            _ui.update { it.copy(
+                waterLevelMm = event.content.level,
+                waterRefillThresholdMm = event.content.refill_threshold,
+            ) }
+            // Log only when the whole millimetre actually changes. The DE1
+            // reports the tank level continuously (~2.4/s), and logging
+            // every report drowned the diagnostics buffer: a real report on
+            // geota/crema#56 arrived as 299 identical "Water level: 35mm"
+            // lines out of 300, covering 124 seconds — the shot being
+            // investigated had been evicted hours earlier. Decenza throttles
+            // the same channel for the same reason (de1device.cpp: emit only
+            // when the level changes).
+            val mm = event.content.level.roundToInt()
+            if (mm != lastLoggedWaterMm) {
+                lastLoggedWaterMm = mm
+                appendLog("Water level: ${mm}mm")
             }
-            is Event.WaterLow -> {
-                // The core's low-water monitor (#33 follow-up, shared with web):
-                // once per dip below the user's threshold, re-armed on a refill,
-                // a threshold change or a new link. Shown in the user's tank unit.
-                val s = _ui.value
-                val left = formatTankLevel(event.content.level, s.waterLevelUnit, s.volumeUnit)
-                notifyUser("Water low — ${left.value} ${left.unit} left, refill soon")
-            }
-            is Event.HotWaterTarget -> {
-                // A remote's own core is a read-only mirror: not the hub's number.
-                if (_ui.value.mirror == null) setHotWaterTarget(event.content.target)
-            }
-            is Event.ShotSettingsForeignChange -> appendLog(
+        }
+        lane.on<Event.WaterLow> { event ->
+            // The core's low-water monitor (#33 follow-up, shared with web):
+            // once per dip below the user's threshold, re-armed on a refill,
+            // a threshold change or a new link. Shown in the user's tank unit.
+            val s = _ui.value
+            val left = formatTankLevel(event.content.level, s.waterLevelUnit, s.volumeUnit)
+            notifyUser("Water low — ${left.value} ${left.unit} left, refill soon")
+        }
+        lane.on<Event.HotWaterTarget> { event ->
+            // A remote's own core is a read-only mirror: not the hub's number.
+            if (_ui.value.mirror == null) setHotWaterTarget(event.content.target)
+        }
+        lane.on<Event.ShotSettingsForeignChange> { event ->
+            appendLog(
                 if (event.content.restored) "Steam / hot-water settings changed outside Crema: restoring them"
                 else "Steam / hot-water settings changed outside Crema again: left as they are",
             )
-            is Event.ShotSettingsRead -> {
-                // Project into UI state: the mode chips + steam / hot-water
-                // timers read the machine's own targets (web de1ShotSettings parity).
-                _ui.update { it.copy(de1ShotSettings = event.content) }
+        }
+        lane.on<Event.ShotSettingsRead> { event ->
+            // Project into UI state: the mode chips + steam / hot-water
+            // timers read the machine's own targets (web de1ShotSettings parity).
+            _ui.update { it.copy(de1ShotSettings = event.content) }
+        }
+        lane.on<Event.SawAutoZeroed> { event ->
+            val w = fmt("%.0f", event.content.offset_g)
+            appendLog("SAW re-zeroed on the fly ($w g cup)")
+            notifyUser("Scale re-zeroed on the fly — $w g was on it")
+        }
+        lane.on<Event.SawSuppressedUntaredCup> { event ->
+            val w = fmt("%.0f", event.content.weight_g)
+            appendLog("SAW suppressed — untared cup ($w g)")
+            notifyUser("Stop-at-weight off for this shot — the scale wasn\u2019t tared ($w g on it)")
+        }
+        // A tare that arrived mid-pour was dropped by the core rather
+        // than obeyed (geota/crema#50). Say so — otherwise the Tare
+        // button just looks broken.
+        lane.on<Event.TareRefusedMidShot> {
+            appendLog("Tare refused — a shot is pouring")
+            notifyUser("Tare ignored — a shot is running. Taring now would break stop-at-weight.")
+        }
+        lane.on<Event.StopTargetsArmed> { event ->
+            // The SAW-visibility line (issue #15): what will stop this
+            // shot, straight from the core's armed targets — a silent
+            // arming failure now reads as "weight —" in the log.
+            val c = event.content
+            val armed = "weight " + (c.weight?.let { fmt("%.1f g", it) } ?: "\u2014") +
+                " · volume " + (c.volume?.let { fmt("%.0f ml", it) } ?: "\u2014") +
+                " · max " + (c.max_time?.let { fmt("%.0f s", it) } ?: "\u2014")
+            // Kept for the frozen shot record's verdict line (#56).
+            lastArmedTargets = armed
+            // Mirror into the snapshot so every stop-condition surface
+            // renders the core's answer instead of its own (#56).
+            _ui.update { it.copy(stopTargets = StopTargetsView(
+                c.weight, c.volume, c.max_time, c.armed,
+                c.weight_configured, c.weight_blocked,
+            )) }
+            appendLog((if (c.armed) "Stop targets armed: " else "Stop targets (next shot): ") + armed)
+        }
+        lane.on<Event.StopRetried> { event ->
+            // The machine hasn't honoured a commanded stop — the core is
+            // re-commanding it (issue #15). Loud on purpose.
+            appendLog("Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason.string})")
+        }
+        lane.on<Event.StopTriggered> { event ->
+            appendLog("Auto-stop: ${event.content.reason.string}")
+            // Attribute the stop ON the stop-conditions UI (the fired
+            // row/card gets a gold highlight) instead of a toast — an
+            // unexplained early stop reads as a bug, but a snackbar over
+            // the fresh shot was clutter. Espresso only: a hot-water
+            // weight stop must not ring the espresso stop cards.
+            _ui.update {
+                if (it.shotInProgress) it.copy(lastStopReason = event.content.reason) else it
             }
-            is Event.SawAutoZeroed -> {
-                val w = fmt("%.0f", event.content.offset_g)
-                appendLog("SAW re-zeroed on the fly ($w g cup)")
-                notifyUser("Scale re-zeroed on the fly — $w g was on it")
+        }
+        lane.on<Event.ShotCompleted> { event ->
+            // The machine stopped: no stop write still queued may land late.
+            lane.cancelStaleStop()
+            val c = event.content
+            val now = System.currentTimeMillis()
+            // One UUID-v7 shot id (core minter), shared by the "Last shot"
+            // card and the StoredShot captureCompletedShot persists, so
+            // tapping the card opens the stored shot.
+            val shotId = newShotId()
+            // Leaving a shot: clear the extracting flag and capture the
+            // summary for the Brew "Last shot" card.
+            _ui.update { it.copy(
+                shotInProgress = false,
+                lastShot = LastShot(
+                    durationMs = c.duration.toLong(),
+                    yieldG = c.final_weight,
+                    peakPressure = c.peak_pressure,
+                    peakTemp = c.peak_temp,
+                    completedAtMs = now,
+                    id = shotId,
+                ),
+            ) }
+            appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
+            // A weight/volume/max-time target was armed, yet the app
+            // never triggered its own stop — the DE1's own profile
+            // frame timing ended the pour on its own instead (core:
+            // Event::ShotCompleted.ended_without_triggering_stop). Most
+            // often a Quick Controls yield bump past what the profile's
+            // frames can physically produce in their configured
+            // duration. Called out distinctly so "why did my shot end
+            // short" doesn't require correlating timestamps by hand.
+            if (c.ended_without_triggering_stop == true) {
+                appendLog(
+                    "Shot ended on the profile's own timing, not the app's stop " +
+                        "(armed: ${lastArmedTargets ?: "unknown"}) — the profile's frames " +
+                        "ran out before the target could be reached",
+                )
             }
-            is Event.SawSuppressedUntaredCup -> {
-                val w = fmt("%.0f", event.content.weight_g)
-                appendLog("SAW suppressed — untared cup ($w g)")
-                notifyUser("Stop-at-weight off for this shot — the scale wasn\u2019t tared ($w g on it)")
-            }
-            // A tare that arrived mid-pour was dropped by the core rather
-            // than obeyed (geota/crema#50). Say so — otherwise the Tare
-            // button just looks broken.
-            is Event.TareRefusedMidShot -> {
-                appendLog("Tare refused — a shot is pouring")
-                notifyUser("Tare ignored — a shot is running. Taring now would break stop-at-weight.")
-            }
-            is Event.StopTargetsArmed -> {
-                // The SAW-visibility line (issue #15): what will stop this
-                // shot, straight from the core's armed targets — a silent
-                // arming failure now reads as "weight —" in the log.
-                val c = event.content
-                val armed = "weight " + (c.weight?.let { fmt("%.1f g", it) } ?: "\u2014") +
-                    " · volume " + (c.volume?.let { fmt("%.0f ml", it) } ?: "\u2014") +
-                    " · max " + (c.max_time?.let { fmt("%.0f s", it) } ?: "\u2014")
-                // Kept for the frozen shot record's verdict line (#56).
-                lastArmedTargets = armed
-                // Mirror into the snapshot so every stop-condition surface
-                // renders the core's answer instead of its own (#56).
-                _ui.update { it.copy(stopTargets = StopTargetsView(
-                    c.weight, c.volume, c.max_time, c.armed,
-                    c.weight_configured, c.weight_blocked,
-                )) }
-                appendLog((if (c.armed) "Stop targets armed: " else "Stop targets (next shot): ") + armed)
-            }
-            is Event.StopRetried -> {
-                // The machine hasn't honoured a commanded stop — the core is
-                // re-commanding it (issue #15). Loud on purpose.
-                appendLog("Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason.string})")
-            }
-            is Event.StopTriggered -> {
-                appendLog("Auto-stop: ${event.content.reason.string}")
-                // Attribute the stop ON the stop-conditions UI (the fired
-                // row/card gets a gold highlight) instead of a toast — an
-                // unexplained early stop reads as a bug, but a snackbar over
-                // the fresh shot was clutter. Espresso only: a hot-water
-                // weight stop must not ring the espresso stop cards.
-                _ui.update {
-                    if (it.shotInProgress) it.copy(lastStopReason = event.content.reason) else it
-                }
-            }
-            is Event.ShotCompleted -> {
-                // The machine stopped — cancel any stop write still queued or
-                // waiting on the GATT mutex. Delivered late, that same Idle
-                // byte would wake a sleeping machine or kill a steam/flush the
-                // user starts next (issue #15 follow-up).
-                pendingStopWrite.getAndSet(null)?.let { job ->
-                    if (job.isActive) {
-                        job.cancel(kotlinx.coroutines.CancellationException("machine already stopped"))
-                        appendLog("Stale stop write cancelled — machine already stopped")
-                    }
-                }
-                val c = event.content
-                val now = System.currentTimeMillis()
-                // One UUID-v7 shot id (core minter), shared by the "Last shot"
-                // card and the StoredShot captureCompletedShot persists, so
-                // tapping the card opens the stored shot.
-                val shotId = newShotId()
-                // Leaving a shot: clear the extracting flag and capture the
-                // summary for the Brew "Last shot" card.
-                _ui.update { it.copy(
-                    shotInProgress = false,
-                    lastShot = LastShot(
-                        durationMs = c.duration.toLong(),
-                        yieldG = c.final_weight,
-                        peakPressure = c.peak_pressure,
-                        peakTemp = c.peak_temp,
-                        completedAtMs = now,
-                        id = shotId,
+            // Shot window over — release the HIGH-priority link hint
+            // requested on ShotStarted.
+            viewModelScope.launch { ble.setConnectionPriority(high = false) }
+            library.captureCompletedShot(
+                c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp, now, shotId,
+                // Core-classified (review #40); null only on a version-skewed
+                // event stream → record.
+                c.disposition ?: ShotDisposition.Record,
+                peakWeightG = c.peak_weight,
+            )
+            // A pour just finished: flush the integrated water into the persisted
+            // maintenance state and recompute the filter / descale / clean readout.
+            flushMaintenance()
+            // Freeze this shot's event trail to disk while it is still in
+            // the rolling buffer. A "stop at weight didn't work" report
+            // reaches us long after the shot, by which time the buffer has
+            // scrolled — see [ShotDiag] (geota/crema#56).
+            coffee.crema.diag.ShotDiag.finish(getApplication(), shotDiagSummary(c))
+            // Consumed — the next shot is a machine start until the app
+            // says otherwise.
+            shotStartedByApp = false
+        }
+        lane.on<Event.WaterSessionStarted> { event -> appendLog("Water session started: ${event.content.kind.string}") }
+        lane.on<Event.WaterSessionCompleted> { event ->
+            appendLog("Water session completed: ${event.content.kind.string}")
+            // Flush the integrated water (same boundary as a completed shot).
+            flushMaintenance()
+        }
+        lane.on<Event.BrewSessionStarted> { event ->
+            // Anchor the shell clock on the SAME monotonic timebase the
+            // notifications feed the core (elapsedRealtime).
+            _ui.update { st ->
+                st.copy(
+                    guidedBrew = st.guidedBrew.copy(
+                        phase = "running",
+                        startedAtRealtime = SystemClock.elapsedRealtime(),
+                        stepIndex = 0,
+                        stepStartedAtMs = 0L,
+                        pausedAccumMs = 0L,
+                        pausedSinceRealtime = null,
                     ),
-                ) }
-                appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
-                // A weight/volume/max-time target was armed, yet the app
-                // never triggered its own stop — the DE1's own profile
-                // frame timing ended the pour on its own instead (core:
-                // Event::ShotCompleted.ended_without_triggering_stop). Most
-                // often a Quick Controls yield bump past what the profile's
-                // frames can physically produce in their configured
-                // duration. Called out distinctly so "why did my shot end
-                // short" doesn't require correlating timestamps by hand.
-                if (c.ended_without_triggering_stop == true) {
+                )
+            }
+            _liveBrewSeries.value = coffee.crema.core.BrewSeries(
+                samples = emptyList(),
+                stageMarks = listOf(coffee.crema.ui.brewlog.liveStageMark(_ui.value.guidedBrew.recipe, 0, 0L)),
+            )
+            appendLog("Guided brew started — ${event.content.recipe_name}")
+        }
+        lane.on<Event.BrewStepChanged> { event ->
+            _ui.update { st ->
+                st.copy(
+                    guidedBrew = st.guidedBrew.copy(
+                        stepIndex = event.content.step_index.toInt(),
+                        stepStartedAtMs = event.content.at_ms.toLong(),
+                    ),
+                )
+            }
+            if (event.content.step_index.toInt() > 0) {
+                _liveBrewSeries.update { s ->
+                    s.copy(
+                        stageMarks = s.stageMarks + coffee.crema.ui.brewlog.liveStageMark(
+                            _ui.value.guidedBrew.recipe,
+                            event.content.step_index.toInt(),
+                            event.content.at_ms.toLong(),
+                        ),
+                    )
+                }
+            }
+            // The chime for an auto-advanced boundary rides the step
+            // change itself (Boundary cues cover hold-steps).
+            if (event.content.step_index.toInt() > 0) playBrewCue("step")
+        }
+        lane.on<Event.BrewCueDue> { event ->
+            playBrewCue(if (event.content.cue == coffee.crema.core.BrewCue.Approach) "approach" else "boundary")
+        }
+        lane.on<Event.BrewSessionCompleted> { event ->
+            stopBrewTick()
+            bgConnection.setBrewSessionActive(false)
+            _ui.update { st ->
+                st.copy(guidedBrew = st.guidedBrew.copy(phase = "done", summary = event.content.summary))
+            }
+            playBrewCue("done")
+            appendLog("Guided brew completed — ${event.content.summary.recipeName}")
+        }
+        lane.on<Event.SteamSessionStarted> { appendLog("Steam session started") }
+        lane.on<Event.SteamSessionCompleted> { event ->
+            // The post-steam purge is the core's (F16, the `steam_purge` setting).
+            appendLog("Steam session completed: ${event.content.duration}ms")
+        }
+        lane.on<Event.SteamClogSuspected> { event -> appendLog("Steam clog suspected: ${event.content.reason.string}") }
+        lane.on<Event.SteamEcoModeChanged> { event -> appendLog("Steam eco mode: ${event.content.eco}") }
+        lane.on<Event.ScaleStale> {
+            _ui.update { it.copy(scaleWeightG = null) }
+            appendLog("Scale stale")
+        }
+        lane.on<Event.ScaleLinkDead> { event ->
+            // The core presumed the scale link dead (silent 5 s past
+            // ScaleStale, or three failed writes with no reading between;
+            // once per episode). Tear it down for the reconnect supervisor,
+            // but only while the link still claims READY — one already
+            // reconnecting is left to its ladder.
+            _ui.update { it.copy(scaleWeightG = null) }
+            appendLog("Scale link dead: ${event.content.reason.string}")
+            if (_ui.value.scaleState == ScaleBleManager.State.READY) {
+                viewModelScope.launch { scale.presumeDead(event.content.reason.string) }
+            }
+        }
+        lane.on<Event.ScaleButtonPressed> { event ->
+            // Logged like de1app (bluetooth.tcl:2825-2828) — no hard-wired
+            // action yet; the event is the hook for a future mapping.
+            appendLog("Scale button pressed: ${event.content.button}")
+        }
+        lane.on<Event.ScaleConfig> { event ->
+            val c = event.content
+            // The Bookoo's `ff12` command channel reports its dynamic
+            // config: a `03 0c` serial response carries anti_mistouch (plus
+            // serial / firmware), a `03 0e` settings response carries
+            // active_mode. Any one notification fills only one set, so the
+            // other fields are null — fold in whatever is present and keep
+            // the last value for the rest, the same two-way pattern the
+            // weight-stream settings use.
+            _ui.update { it.copy(
+                scaleAntiMistouch = c.anti_mistouch ?: it.scaleAntiMistouch,
+                scaleActiveMode = c.active_mode?.toInt() ?: it.scaleActiveMode,
+                // The `03 0c` serial response carries firmware + serial;
+                // the `03 0e` settings response leaves both null — fold in
+                // whatever is present and keep the last value otherwise.
+                scaleFirmware = c.firmware ?: it.scaleFirmware,
+                scaleSerial = c.serial ?: it.scaleSerial,
+            ) }
+            when {
+                c.anti_mistouch != null ->
                     appendLog(
-                        "Shot ended on the profile's own timing, not the app's stop " +
-                            "(armed: ${lastArmedTargets ?: "unknown"}) — the profile's frames " +
-                            "ran out before the target could be reached",
+                        "Scale config: anti-mistouch=${c.anti_mistouch}" +
+                            (c.serial?.let { ", serial=$it" } ?: "") +
+                            (c.firmware?.let { ", fw=$it" } ?: ""),
                     )
-                }
-                // Shot window over — release the HIGH-priority link hint
-                // requested on ShotStarted.
-                viewModelScope.launch { ble.setConnectionPriority(high = false) }
-                library.captureCompletedShot(
-                    c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp, now, shotId,
-                    // Core-classified (review #40); null only on a version-skewed
-                    // event stream → record.
-                    c.disposition ?: ShotDisposition.Record,
-                    peakWeightG = c.peak_weight,
-                )
-                // A pour just finished: flush the integrated water into the persisted
-                // maintenance state and recompute the filter / descale / clean readout.
-                flushMaintenance()
-                // Freeze this shot's event trail to disk while it is still in
-                // the rolling buffer. A "stop at weight didn't work" report
-                // reaches us long after the shot, by which time the buffer has
-                // scrolled — see [ShotDiag] (geota/crema#56).
-                coffee.crema.diag.ShotDiag.finish(getApplication(), shotDiagSummary(c))
-                // Consumed — the next shot is a machine start until the app
-                // says otherwise.
-                shotStartedByApp = false
-            }
-            is Event.WaterSessionStarted -> {
-                appendLog("Water session started: ${event.content.kind.string}")
-            }
-            is Event.WaterSessionCompleted -> {
-                appendLog("Water session completed: ${event.content.kind.string}")
-                // Flush the integrated water (same boundary as a completed shot).
-                flushMaintenance()
-            }
-            is Event.BrewSessionStarted -> {
-                // Anchor the shell clock on the SAME monotonic timebase the
-                // notifications feed the core (elapsedRealtime).
-                _ui.update { st ->
-                    st.copy(
-                        guidedBrew = st.guidedBrew.copy(
-                            phase = "running",
-                            startedAtRealtime = SystemClock.elapsedRealtime(),
-                            stepIndex = 0,
-                            stepStartedAtMs = 0L,
-                            pausedAccumMs = 0L,
-                            pausedSinceRealtime = null,
-                        ),
+                c.active_mode != null ->
+                    appendLog(
+                        "Scale config: active mode=${c.active_mode}, " +
+                            "enabled modes=${c.enabled_modes}",
                     )
-                }
-                _liveBrewSeries.value = coffee.crema.core.BrewSeries(
-                    samples = emptyList(),
-                    stageMarks = listOf(coffee.crema.ui.brewlog.liveStageMark(_ui.value.guidedBrew.recipe, 0, 0L)),
-                )
-                appendLog("Guided brew started — ${event.content.recipe_name}")
             }
-            is Event.BrewStepChanged -> {
-                _ui.update { st ->
-                    st.copy(
-                        guidedBrew = st.guidedBrew.copy(
-                            stepIndex = event.content.step_index.toInt(),
-                            stepStartedAtMs = event.content.at_ms.toLong(),
-                        ),
-                    )
-                }
-                if (event.content.step_index.toInt() > 0) {
-                    _liveBrewSeries.update { s ->
-                        s.copy(
-                            stageMarks = s.stageMarks + coffee.crema.ui.brewlog.liveStageMark(
-                                _ui.value.guidedBrew.recipe,
-                                event.content.step_index.toInt(),
-                                event.content.at_ms.toLong(),
-                            ),
-                        )
-                    }
-                }
-                // The chime for an auto-advanced boundary rides the step
-                // change itself (Boundary cues cover hold-steps).
-                if (event.content.step_index.toInt() > 0) playBrewCue("step")
+        }
+        lane.on<Event.DecodeError> { event -> appendLog("Decode error: ${event.content.message}") }
+        // The version / MMR read paths now feed the Settings machine rows.
+        // The preformatted firmware label is folded straight in; each MMR
+        // value lands raw in de1MachineInfo (the UI applies per-register
+        // scaling). Keep a log line so the data stays visible in the debug
+        // readout too.
+        lane.on<Event.Firmware> { event ->
+            _ui.update { it.copy(de1Firmware = event.content.firmware_string) }
+            appendLog("Firmware: ${event.content.firmware_string}")
+        }
+        lane.on<Event.MmrValue> { event ->
+            val c = event.content
+            val before = _ui.value.de1MachineInfo[c.register]
+            _ui.update { it.copy(
+                de1MachineInfo = it.de1MachineInfo + (c.register to c.value),
+            ) }
+            // Remotes show these registers (A12, A13, A15): push the change.
+            // They arrive after the write's reply, and none is relayed, so
+            // only the push itself is owed here (§6.1). Built on Main.
+            if (c.register in MIRRORED_REGISTERS && before != c.value) {
+                viewModelScope.launch(Dispatchers.Main) { proxy.pushConfig() }
             }
-            is Event.BrewCueDue ->
-                playBrewCue(if (event.content.cue == coffee.crema.core.BrewCue.Approach) "approach" else "boundary")
-            is Event.BrewSessionCompleted -> {
-                stopBrewTick()
-                bgConnection.setBrewSessionActive(false)
-                _ui.update { st ->
-                    st.copy(guidedBrew = st.guidedBrew.copy(phase = "done", summary = event.content.summary))
-                }
-                playBrewCue("done")
-                appendLog("Guided brew completed — ${event.content.summary.recipeName}")
+            appendLog("MMR ${c.register}: ${c.value}")
+            if (c.register == MmrRegister.SerialNumber) checkStolenSerial(c.value)
+        }
+        // Calibration value replies (current / factory) have no settings row
+        // yet, so keep logging them. Core surfaces only WriteKey-0 replies,
+        // never echoes of our own requests; the stored value is `measured`.
+        lane.on<Event.Calibration> { event ->
+            appendLog(
+                "Calibration ${event.content.target} " +
+                    "(${event.content.command}): ${event.content.measured}",
+            )
+        }
+        lane.on<Event.WakeAt> { event -> wake.arm(event.content.at_ms.toLong()) }
+        // F16: the core runs the shot start.
+        lane.on<Event.ShotStartProgress> { event ->
+            _ui.update { it.copy(shotStarting = true) }
+            // Records whether this shot came from Crema or from the
+            // machine's GHC — the distinction that hid geota/crema#56.
+            if (event.content.phase == StartPhase.Requested) shotStartedByApp = true
+        }
+        lane.on<Event.ShotStartEnded> { event ->
+            _ui.update { it.copy(shotStarting = false) }
+            val end = event.content.end
+            appendLog("Shot start ended: ${end::class.simpleName}")
+            event.content.message?.let(::notifyUser)
+        }
+        lane.on<Event.StartNotice> { event ->
+            // No scale for a shot that stops on weight: non-blocking — the
+            // stop-at-weight arms mid-shot if the scale lands.
+            val remembered = connection.state.value.rememberedScaleAddress != null
+            if (remembered) connection.kickScaleReconnect()
+            notifyUser(
+                if (remembered) "Scale not connected \u2014 reconnecting\u2026 stop-at-weight is off until it lands"
+                else event.content.notice.message,
+            )
+        }
+        lane.on<Event.GroupHeadStartUnchecked> { event ->
+            // A shot started on the machine skipped the app-only steps
+            // that applied: one non-blocking notice; it never stops the shot.
+            val lines = event.content.notices.map { it.message }
+            appendLog("Shot started on the machine: ${lines.joinToString("; ")}")
+            notifyUser(lines.joinToString("\n"))
+        }
+        lane.on<Event.MachineRequestHeld> { event ->
+            appendLog("${event.content.state.string} request held until the profile finishes loading")
+            notifyUser(REQUEST_HELD_TEXT)
+        }
+        lane.on<Event.MachineRequestDropped> { event ->
+            val text = machineRequestDropText(event.content.state, event.content.reason)
+            appendLog(text)
+            notifyUser(text)
+        }
+        lane.on<Event.MachineRequestRefused> { event ->
+            val text = machineRequestRefusalText(event.content.state, event.content.reason)
+            appendLog("Request refused: $text")
+            notifyUser(text)
+        }
+        // v1 stub never fires this in practice.
+        lane.on<Event.FirmwareLockoutHit> { event ->
+            appendLog(
+                "Write refused (firmware update in progress): " +
+                    event.content.method,
+            )
+        }
+        lane.on<Event.ProfileUploadStarted> { event ->
+            _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
+            appendLog("Uploading profile: ${event.content.title}")
+        }
+        lane.on<Event.ProfileUploadWaitingForModel> { event ->
+            appendLog("Waiting for the machine model before uploading ${event.content.title}")
+        }
+        lane.on<Event.ProfileUploadProgress> { event ->
+            val c = event.content
+            // High-rate (one per frame ack); update the progress hint, no log.
+            _ui.update { it.copy(
+                profileUploadProgress = "${c.acks_received}/${c.total_acks}",
+            ) }
+        }
+        lane.on<Event.ProfileUploadCompleted> { event ->
+            _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
+            appendLog("Profile uploaded: ${event.content.title}")
+        }
+        // The core's shot start waits for its own (F16).
+        // ProfileSyncHolds: nothing here — the core's shot start waits for its own (F16).
+        lane.on<Event.ProfileUploadFailed> { event ->
+            _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
+            appendLog("Profile upload failed: ${uploadFailureLabel(event.content.reason)}")
+        }
+        lane.on<Event.ProfileSyncWarning> { event ->
+            // The core's one non-blocking warning per streak of failed
+            // profile uploads; it keeps retrying (3 s, 10 s, then 30 s).
+            if (event.content.active) {
+                notifyUser("Couldn\u2019t load the profile on the DE1 \u2014 retrying")
+                appendLog("Profile upload to the DE1 failed \u2014 the core is retrying")
+            } else {
+                appendLog("Profile upload to the DE1 recovered")
             }
-            is Event.SteamSessionStarted -> appendLog("Steam session started")
-            is Event.SteamSessionCompleted -> {
-                // The post-steam purge is the core's (F16, the `steam_purge` setting).
-                appendLog("Steam session completed: ${event.content.duration}ms")
-            }
-            is Event.SteamClogSuspected ->
-                appendLog("Steam clog suspected: ${event.content.reason.string}")
-            is Event.SteamEcoModeChanged ->
-                appendLog("Steam eco mode: ${event.content.eco}")
-            is Event.ScaleStale -> {
-                _ui.update { it.copy(scaleWeightG = null) }
-                appendLog("Scale stale")
-            }
-            is Event.ScaleLinkDead -> {
-                // The core presumed the scale link dead (silent 5 s past
-                // ScaleStale, or three failed writes with no reading between;
-                // once per episode). Tear it down for the reconnect supervisor,
-                // but only while the link still claims READY — one already
-                // reconnecting is left to its ladder.
-                _ui.update { it.copy(scaleWeightG = null) }
-                appendLog("Scale link dead: ${event.content.reason.string}")
-                if (_ui.value.scaleState == ScaleBleManager.State.READY) {
-                    viewModelScope.launch { scale.presumeDead(event.content.reason.string) }
-                }
-            }
-            is Event.ScaleButtonPressed ->
-                // Logged like de1app (bluetooth.tcl:2825-2828) — no hard-wired
-                // action yet; the event is the hook for a future mapping.
-                appendLog("Scale button pressed: ${event.content.button}")
-            is Event.ScaleConfig -> {
-                val c = event.content
-                // The Bookoo's `ff12` command channel reports its dynamic
-                // config: a `03 0c` serial response carries anti_mistouch (plus
-                // serial / firmware), a `03 0e` settings response carries
-                // active_mode. Any one notification fills only one set, so the
-                // other fields are null — fold in whatever is present and keep
-                // the last value for the rest, the same two-way pattern the
-                // weight-stream settings use.
-                _ui.update { it.copy(
-                    scaleAntiMistouch = c.anti_mistouch ?: it.scaleAntiMistouch,
-                    scaleActiveMode = c.active_mode?.toInt() ?: it.scaleActiveMode,
-                    // The `03 0c` serial response carries firmware + serial;
-                    // the `03 0e` settings response leaves both null — fold in
-                    // whatever is present and keep the last value otherwise.
-                    scaleFirmware = c.firmware ?: it.scaleFirmware,
-                    scaleSerial = c.serial ?: it.scaleSerial,
-                ) }
-                when {
-                    c.anti_mistouch != null ->
-                        appendLog(
-                            "Scale config: anti-mistouch=${c.anti_mistouch}" +
-                                (c.serial?.let { ", serial=$it" } ?: "") +
-                                (c.firmware?.let { ", fw=$it" } ?: ""),
-                        )
-                    c.active_mode != null ->
-                        appendLog(
-                            "Scale config: active mode=${c.active_mode}, " +
-                                "enabled modes=${c.enabled_modes}",
-                        )
-                }
-            }
-            is Event.DecodeError ->
-                appendLog("Decode error: ${event.content.message}")
-            // The version / MMR read paths now feed the Settings machine rows.
-            // The preformatted firmware label is folded straight in; each MMR
-            // value lands raw in de1MachineInfo (the UI applies per-register
-            // scaling). Keep a log line so the data stays visible in the debug
-            // readout too.
-            is Event.Firmware -> {
-                _ui.update { it.copy(de1Firmware = event.content.firmware_string) }
-                appendLog("Firmware: ${event.content.firmware_string}")
-            }
-            is Event.MmrValue -> {
-                val c = event.content
-                val before = _ui.value.de1MachineInfo[c.register]
-                _ui.update { it.copy(
-                    de1MachineInfo = it.de1MachineInfo + (c.register to c.value),
-                ) }
-                // Remotes show these registers (A12, A13, A15): push the change.
-                // They arrive after the write's reply, and none is relayed, so
-                // only the push itself is owed here (§6.1). Built on Main.
-                if (c.register in MIRRORED_REGISTERS && before != c.value) {
-                    viewModelScope.launch(Dispatchers.Main) { proxy.pushConfig() }
-                }
-                appendLog("MMR ${c.register}: ${c.value}")
-                if (c.register == MmrRegister.SerialNumber) checkStolenSerial(c.value)
-            }
-            // Calibration value replies (current / factory) have no settings row
-            // yet, so keep logging them. Core surfaces only WriteKey-0 replies,
-            // never echoes of our own requests; the stored value is `measured`.
-            is Event.Calibration ->
-                appendLog(
-                    "Calibration ${event.content.target} " +
-                        "(${event.content.command}): ${event.content.measured}",
-                )
-            is Event.WakeAt -> wake.arm(event.content.at_ms.toLong())
-            // F16: the core runs the shot start.
-            is Event.ShotStartProgress -> {
-                _ui.update { it.copy(shotStarting = true) }
-                // Records whether this shot came from Crema or from the
-                // machine's GHC — the distinction that hid geota/crema#56.
-                if (event.content.phase == StartPhase.Requested) shotStartedByApp = true
-            }
-            is Event.ShotStartEnded -> {
-                _ui.update { it.copy(shotStarting = false) }
-                val end = event.content.end
-                appendLog("Shot start ended: ${end::class.simpleName}")
-                event.content.message?.let(::notifyUser)
-            }
-            is Event.StartNotice -> {
-                // No scale for a shot that stops on weight: non-blocking — the
-                // stop-at-weight arms mid-shot if the scale lands.
-                val remembered = connection.state.value.rememberedScaleAddress != null
-                if (remembered) connection.kickScaleReconnect()
-                notifyUser(
-                    if (remembered) "Scale not connected \u2014 reconnecting\u2026 stop-at-weight is off until it lands"
-                    else event.content.notice.message,
-                )
-            }
-            is Event.GroupHeadStartUnchecked -> {
-                // A shot started on the machine skipped the app-only steps
-                // that applied: one non-blocking notice; it never stops the shot.
-                val lines = event.content.notices.map { it.message }
-                appendLog("Shot started on the machine: ${lines.joinToString("; ")}")
-                notifyUser(lines.joinToString("\n"))
-            }
-            is Event.MachineRequestHeld -> {
-                appendLog("${event.content.state.string} request held until the profile finishes loading")
-                notifyUser(REQUEST_HELD_TEXT)
-            }
-            is Event.MachineRequestDropped -> {
-                val text = machineRequestDropText(event.content.state, event.content.reason)
-                appendLog(text)
-                notifyUser(text)
-            }
-            is Event.MachineRequestRefused -> {
-                val text = machineRequestRefusalText(event.content.state, event.content.reason)
-                appendLog("Request refused: $text")
-                notifyUser(text)
-            }
-            // v1 stub never fires this in practice.
-            is Event.FirmwareLockoutHit ->
-                appendLog(
-                    "Write refused (firmware update in progress): " +
-                        event.content.method,
-                )
-            is Event.ProfileUploadStarted -> {
-                _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
-                appendLog("Uploading profile: ${event.content.title}")
-            }
-            is Event.ProfileUploadWaitingForModel ->
-                appendLog("Waiting for the machine model before uploading ${event.content.title}")
-            is Event.ProfileUploadProgress -> {
-                val c = event.content
-                // High-rate (one per frame ack); update the progress hint, no log.
-                _ui.update { it.copy(
-                    profileUploadProgress = "${c.acks_received}/${c.total_acks}",
-                ) }
-            }
-            is Event.ProfileUploadCompleted -> {
-                _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
-                appendLog("Profile uploaded: ${event.content.title}")
-            }
-            // The core's shot start waits for its own (F16).
-            is Event.ProfileSyncHolds -> Unit
-            is Event.ProfileUploadFailed -> {
-                _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
-                appendLog("Profile upload failed: ${uploadFailureLabel(event.content.reason)}")
-            }
-            is Event.ProfileSyncWarning -> {
-                // The core's one non-blocking warning per streak of failed
-                // profile uploads; it keeps retrying (3 s, 10 s, then 30 s).
-                if (event.content.active) {
-                    notifyUser("Couldn\u2019t load the profile on the DE1 \u2014 retrying")
-                    appendLog("Profile upload to the DE1 failed \u2014 the core is retrying")
-                } else {
-                    appendLog("Profile upload to the DE1 recovered")
-                }
-            }
-            // Shot-settings-read events surface in the real screens (M5), not this
-            // Phase-0 debug readout. An explicit else keeps the sealed `when`
-            // exhaustive as `Event` grows.
-            else -> Unit
         }
     }
 

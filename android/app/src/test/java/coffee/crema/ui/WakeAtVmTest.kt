@@ -20,11 +20,7 @@ class WakeAtVmTest {
 
     @After fun tearDown() { store.clear(); VmHarness.idle() }
 
-    private fun deliver(vm: MainViewModel, json: String) {
-        val apply = MainViewModel::class.java.getDeclaredMethod("applyCoreOutputJson", String::class.java)
-        apply.isAccessible = true
-        apply.invoke(vm, json)
-    }
+    private fun deliver(vm: MainViewModel, json: String) = VmHarness.applyCoreOutput(vm, json)
 
     @Test
     fun `a WakeAt arms one tick, and backgrounding cancels it`() {

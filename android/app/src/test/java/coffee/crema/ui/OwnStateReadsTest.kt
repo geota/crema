@@ -49,7 +49,7 @@ class OwnStateReadsTest {
             // Holder logic, already gated by `authoritative`; and the scale
             // echo, which fills this device's scale fields (the scale's own
             // values: no snapshot carries them).
-            "applyEvent" to setOf(
+            "registerCoreHandlers" to setOf(
                 "idleSleepMin", "preFlush", "steamPurge", "de1MachineInfo",
                 "scaleVolume", "scaleStandbyMinutes", "scaleFlowSmoothing", "scaleAutoStop", "scaleAntiMistouch", "scaleActiveMode",
             ),

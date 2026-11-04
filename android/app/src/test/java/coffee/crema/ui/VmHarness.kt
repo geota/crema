@@ -100,6 +100,29 @@ internal object VmHarness {
         return field.get(vm) as CremaBridge
     }
 
+    /** The VM's [CoreLane], found by type. */
+    fun coreLane(vm: MainViewModel): CoreLane {
+        val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == CoreLane::class.java }
+            ?: error("MainViewModel no longer holds exactly one CoreLane field: update VmHarness.coreLane")
+        field.isAccessible = true
+        return field.get(vm) as CoreLane
+    }
+
+    /** Hand [raw] (a `CoreOutput`) to the VM's core lane the way the BLE
+     *  managers do: it applies there, after whatever is already queued. */
+    fun deliverCoreOutput(vm: MainViewModel, raw: String) = coreLane(vm).deliver(raw)
+
+    /** Apply [raw] (a `CoreOutput`) on the calling thread, as a task already
+     *  on the core lane would. */
+    fun applyCoreOutput(vm: MainViewModel, raw: String) = coreLane(vm).applyJson(raw)
+
+    /** Wait for every task already queued on the VM's single-threaded core
+     *  lane (it runs FIFO, so a no-op queued now runs after them). */
+    fun drainCoreLane(vm: MainViewModel) {
+        val lane = coreLane(vm).dispatcher
+        repeat(3) { kotlinx.coroutines.runBlocking(lane) {} }
+    }
+
     /** Idle the main looper until the VM's async prefs load has hydrated
      *  the UI, so a later setter isn't overwritten by it. */
     fun awaitPrefsLoaded(vm: MainViewModel) {
