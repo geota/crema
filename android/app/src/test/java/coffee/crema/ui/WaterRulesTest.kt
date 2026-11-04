@@ -43,10 +43,7 @@ class WaterRulesTest {
         VmHarness.idle()
     }
 
-    private fun countedLitres(vm: MainViewModel): Double =
-        MainViewModel::class.java.getDeclaredField("maintenanceTotalLitres")
-            .apply { isAccessible = true }
-            .getDouble(vm)
+    private fun countedLitres(vm: MainViewModel): Double = VmHarness.maintenance(vm).countedLitres
 
     @Test
     fun `water is counted only for espresso and hot water`() {
