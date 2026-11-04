@@ -31,7 +31,9 @@ updates:
       # canonical-element and all-zero-DH checks call curve25519-dalek on
       # the same types. A major bump here duplicates or splits that stack, so
       # it moves only together with snow/spake2, deliberately, with a
-      # security review. Minor/patch updates still come through.
+      # security review. Minor/patch updates still come through, and snow and
+      # spake2 are NOT ignored: a new release of either is the signal to move
+      # the whole stack together.
       - dependency-name: curve25519-dalek
         update-types: ["version-update:semver-major"]
       - dependency-name: sha2
@@ -40,8 +42,6 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: rand_core
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: snow
-      - dependency-name: spake2
 
   # ── Web PWA (pnpm at /web) ───────────────────────────────────────────
   - package-ecosystem: npm
