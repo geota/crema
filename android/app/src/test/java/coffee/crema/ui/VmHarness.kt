@@ -108,6 +108,14 @@ internal object VmHarness {
         return field.get(vm) as CoreLane
     }
 
+    /** The VM's [GuidedBrewController], found by type. */
+    fun guidedBrew(vm: MainViewModel): GuidedBrewController {
+        val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == GuidedBrewController::class.java }
+            ?: error("MainViewModel no longer holds exactly one GuidedBrewController field: update VmHarness.guidedBrew")
+        field.isAccessible = true
+        return field.get(vm) as GuidedBrewController
+    }
+
     /** Hand [raw] (a `CoreOutput`) to the VM's core lane the way the BLE
      *  managers do: it applies there, after whatever is already queued. */
     fun deliverCoreOutput(vm: MainViewModel, raw: String) = coreLane(vm).deliver(raw)
