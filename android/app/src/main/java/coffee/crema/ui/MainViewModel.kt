@@ -25,7 +25,6 @@ import coffee.crema.core.MachineRequest
 import coffee.crema.core.WaterSessionKind
 import coffee.crema.core.MmrReg
 import coffee.crema.core.MmrRegister
-import coffee.crema.core.ScaleCapabilities
 import coffee.crema.core.Bean
 import coffee.crema.core.WriteTarget
 import coffee.crema.core.SteamHotWaterTargets
@@ -215,19 +214,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * no machine write — and says where to change it.
      */
     private inline fun editOwnSetting(setting: Setting, edit: () -> Unit) {
-        if (_ui.value.mirror != null) {
-            appendLog("Not changing ${setting.name} on a remote")
-            notifyUser("Change on ${_ui.value.remoteHubLabel()}")
-            return
-        }
+        if (refusesOwnEdit(setting)) return
         edit()
     }
 
-    /** Whether the low-battery snackbar fired for the current scale
-     *  connection (issue #29) — reset in [clearScaleSessionUi] so the next
-     *  session warns again, but one connection never nags twice. Lane-owned:
-     *  written only on the core lane. */
-    private var scaleLowBatteryWarned = false
+    /** Whether [editOwnSetting] refuses [setting] here (a remote), saying so. */
+    private fun refusesOwnEdit(setting: Setting): Boolean {
+        if (_ui.value.mirror == null) return false
+        appendLog("Not changing ${setting.name} on a remote")
+        notifyUser("Change on ${_ui.value.remoteHubLabel()}")
+        return true
+    }
+
 
 
     /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
@@ -1078,7 +1076,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun applyStartShot(): CommandOutcome = this@MainViewModel.applyStartShot()
         override fun applyMachineState(request: MachineRequest) = this@MainViewModel.applyMachineState(request)
         override fun applyCancelMaintenance() = this@MainViewModel.applyCancelMaintenance()
-        override fun applyTareScale() = this@MainViewModel.applyTareScale()
+        override fun applyTareScale() = scaleController.applyTareScale()
         override fun applyHotWaterDose(dose: coffee.crema.core.HotWaterDose) = this@MainViewModel.applyHotWaterDose(dose)
         override fun showConfig(cmd: MachineCommand.Config) = this@MainViewModel.showConfig(cmd)
         override fun commitConfig(cmd: MachineCommand.Config) = this@MainViewModel.commitConfig(cmd)
@@ -1342,8 +1340,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         recorder = bleRecorder,
         onCoreOutput = lane::deliver,
         onStatus = { line -> _ui.update { it.copy(status = line) } },
-        onScaleIdentified = ::refreshScaleCapabilities,
+        onScaleIdentified = { scaleController.refreshScaleCapabilities(it) },
         timeline = coffee.crema.diag.ReconnectTimelines.recorder,
+    )
+
+    /** The scale session's UI, settings and verbs ([ScaleController]). */
+    private val scaleController = ScaleController(
+        lane = lane,
+        json = json,
+        bridge = bridge,
+        scope = viewModelScope,
+        uiState = { _ui.value },
+        updateUi = { transform -> _ui.update(transform) },
+        appendLog = { appendLog(it) },
+        notify = { notifyUser(it) },
+        refusesOwnEdit = { refusesOwnEdit(it) },
+        refreshStopTargets = { refreshStopTargetProjection() },
+        presumeDead = { reason -> scale.presumeDead(reason) },
     )
 
     /**
@@ -1375,7 +1388,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs = { persistPrefs() },
         onConnectStarted = { _ui.update { it.copy(eventLog = emptyList()) } },
         onDe1SessionClosed = { clearDe1SessionUi() },
-        onScaleSessionClosed = { clearScaleSessionUi() },
+        onScaleSessionClosed = { scaleController.clearScaleSessionUi() },
         onDe1Ready = {
             // Into a DE1 still in a flash / reboot window, nothing but the
             // flash's own build read (audit H2); [afterFirmwareRelease] runs
@@ -4459,238 +4472,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Disconnect the scale — delegate of [ConnectionController.disconnectScale]. */
     fun disconnectScale() = connection.disconnectScale()
 
-    /** A scale disconnect closed the session: clear the readings, capabilities,
-     *  and identity so the scale card/config UI hides until the next scale.
-     *  Wired as [ConnectionController]'s onScaleSessionClosed. */
-    private fun clearScaleSessionUi() {
-        // Losing the scale mid-shot silently kills stop-at-weight — the exact
-        // complaint in issue #29 ("shots which did not stop on weight due to
-        // the scale being disconnected"). The Brew card keeps the yield row
-        // with a "no scale" note, but a card the user isn't looking at is not
-        // enough for something that will overrun the cup in their hand.
-        if (_ui.value.shotInProgress && _ui.value.stopTargets?.weightConfiguredG != null) {
-            notifyUser("Scale disconnected — stop-at-weight is off for this shot")
-        }
-        // Re-arm the once-per-connection low-battery warning (issue #29), on
-        // the lane: a reading from the old connection still queued there must
-        // not see the reset (cohort review 2026-10-25, Android P2-3).
-        lane.post { scaleLowBatteryWarned = false }
-        refreshStopTargetProjection()
-        _ui.update { it.copy(
-            scaleWeightG = null,
-            scaleFlowGPerS = null,
-            scaleTimerMs = null,
-            // Drop the capabilities so the config UI hides until the next scale.
-            scaleCapabilities = null,
-            scaleVolume = DEFAULT_SCALE_VOLUME,
-            scaleStandbyMinutes = DEFAULT_SCALE_STANDBY_MINUTES,
-            scaleFlowSmoothing = false,
-            scaleAutoStop = null,
-            scaleAntiMistouch = false,
-            scaleActiveMode = null,
-            scaleEchoed = emptySet(),
-            // Drop the scale's identity so the card clears for the next scale.
-            scaleBatteryPercent = null,
-            scaleName = null,
-            scaleFirmware = null,
-            scaleSerial = null,
-        ) }
-    }
+    // ── Scale — see [ScaleController] ───────────────────────────────────────
 
-    /**
-     * Read the connected scale's [ScaleCapabilities] from the core and fold
-     * them into the UI snapshot. Called by [ScaleBleManager] once the core has
-     * identified the scale; the UI gates configuration controls on the result.
-     *
-     * Capability-driven, never device-driven: the UI never branches on the
-     * concrete scale model, only on the capability flags.
-     *
-     * [advertisedName] is the scale's BLE name the scanner resolved — captured
-     * into [MainUiState.scaleName] here so the scale card shows the device's
-     * identity immediately, before the core's `0x0a` connect query returns the
-     * firmware / serial.
-     *
-     * Also fires a baseline settings query at connect time: the core emits a
-     * `Command.WriteScale` carrying the scale's `0x0f` settings-query command
-     * (capability-gated — empty for a weight-only scale), routed through the
-     * shared command path so the scale's `03 0e` settings response lands in
-     * the capture.
-     */
-    private fun refreshScaleCapabilities(advertisedName: String) =
-        // Bridge read + heartbeat-guard mutation → core lane (review #28).
-        lane.post { refreshScaleCapabilitiesOnCoreLane(advertisedName) }
+    /** Set the connected scale's beeper volume (clamped to its range). */
+    fun setScaleVolume(level: Int) = scaleController.setScaleVolume(level)
 
-    private fun refreshScaleCapabilitiesOnCoreLane(advertisedName: String) {
-        val capsJson = runCatching { bridge.scaleCapabilities() }.getOrNull()
-        val caps = capsJson?.let {
-            runCatching {
-                json.decodeFromString(ScaleCapabilities.serializer(), it)
-            }.getOrNull()
-        }
-        _ui.update { it.copy(
-            scaleCapabilities = caps,
-            scaleName = advertisedName,
-        ) }
+    /** Set the connected scale's auto-standby timeout, minutes. */
+    fun setScaleStandbyMinutes(minutes: Int) = scaleController.setScaleStandbyMinutes(minutes)
 
-        val queryRaw = runCatching { bridge.queryScaleSettings() }.getOrElse {
-            appendLog("Query scale settings failed: ${it.message}")
-            return
-        }
-        lane.deliver(queryRaw)
-    }
+    /** Enable or disable the connected scale's flow smoothing. */
+    fun setScaleFlowSmoothing(enabled: Boolean) = scaleController.setScaleFlowSmoothing(enabled)
 
-    /**
-     * Set the connected scale's beeper volume to [level]. Asks the core for the
-     * command bytes, then routes the resulting `Command.WriteScale` through the
-     * shared command path — the same path as Tare and the core's auto-tare.
-     *
-     * The requested level is clamped to the connected scale's
-     * `ScaleCapabilities.volume` `[min, max]` bounds; the core clamps again, so
-     * an out-of-range value is harmless either way. The core only emits a
-     * command for a scale whose capabilities include a settable `volume`, so
-     * this is capability-gated end to end. The UI's shown volume is updated
-     * optimistically; the live `Event.ScaleReading.device_volume` stream then
-     * catches up and confirms the scale's real value.
-     */
-    fun setScaleVolume(level: Int) {
-        editOwnSetting(Setting.SCALE_VOLUME) {
-            val range = _ui.value.scaleCapabilities?.volume
-            val clamped = if (range != null) {
-                level.coerceIn(range.min.toInt(), range.max.toInt())
-            } else {
-                level
-            }
-            _ui.update { it.copy(scaleVolume = clamped) }
-            val raw = runCatching {
-                bridge.setScaleVolume(clamped.toUByte())
-            }.getOrElse {
-                appendLog("Set volume failed: ${it.message}")
-                return
-            }
-            lane.deliver(raw)
-        }
-    }
+    /** Enable or disable the connected scale's anti-mistouch. */
+    fun setScaleAntiMistouch(enabled: Boolean) = scaleController.setScaleAntiMistouch(enabled)
 
-    /**
-     * Set the connected scale's auto-standby timeout to [minutes]. Asks the
-     * core for the command bytes, then routes the resulting `Command.WriteScale`
-     * through the shared command path — the same path as volume and Tare.
-     *
-     * The requested value is clamped to the connected scale's
-     * `ScaleCapabilities.standby_minutes` `[min, max]` bounds; the core clamps
-     * again, so an out-of-range value is harmless. Capability-gated end to end:
-     * the core emits a command only for a scale that exposes a configurable
-     * auto-standby. The UI's shown value is updated optimistically; the live
-     * `Event.ScaleReading.device_standby` stream then catches up.
-     */
-    fun setScaleStandbyMinutes(minutes: Int) {
-        editOwnSetting(Setting.SCALE_STANDBY) {
-            val range = _ui.value.scaleCapabilities?.standby
-            val clamped = if (range != null) {
-                minutes.coerceIn(range.min.toInt(), range.max.toInt())
-            } else {
-                minutes
-            }
-            _ui.update { it.copy(scaleStandbyMinutes = clamped) }
-            val raw = runCatching {
-                bridge.setScaleStandby(clamped.toUByte())
-            }.getOrElse {
-                appendLog("Set standby failed: ${it.message}")
-                return
-            }
-            lane.deliver(raw)
-        }
-    }
+    /** Switch the connected scale to display mode [modeId]. */
+    fun setScaleMode(modeId: Int) = scaleController.setScaleMode(modeId)
 
-    /**
-     * Enable or disable the connected scale's flow smoothing. Asks the core for
-     * the command bytes, then routes the resulting `Command.WriteScale` through
-     * the shared command path. Capability-gated: the core emits a command only
-     * for a scale that supports flow smoothing. The UI's shown toggle is
-     * updated optimistically; the live `Event.ScaleReading.device_flow_smoothing`
-     * stream then catches up and confirms the scale's real state.
-     */
-    fun setScaleFlowSmoothing(enabled: Boolean) {
-        editOwnSetting(Setting.SCALE_FLOW_SMOOTHING) {
-            _ui.update { it.copy(scaleFlowSmoothing = enabled) }
-            val raw = runCatching {
-                bridge.setScaleFlowSmoothing(enabled)
-            }.getOrElse {
-                appendLog("Set flow smoothing failed: ${it.message}")
-                return
-            }
-            lane.deliver(raw)
-        }
-    }
-
-    /**
-     * Enable or disable the connected scale's anti-mistouch. Asks the core for
-     * the command bytes, then routes the resulting `Command.WriteScale` through
-     * the shared command path. Capability-gated: the core emits a command only
-     * for a scale that supports anti-mistouch. The UI's shown toggle is updated
-     * optimistically (the value is not read back).
-     */
-    fun setScaleAntiMistouch(enabled: Boolean) {
-        editOwnSetting(Setting.SCALE_ANTI_MISTOUCH) {
-            _ui.update { it.copy(scaleAntiMistouch = enabled) }
-            val raw = runCatching {
-                bridge.setScaleAntiMistouch(enabled)
-            }.getOrElse {
-                appendLog("Set anti-mistouch failed: ${it.message}")
-                return
-            }
-            lane.deliver(raw)
-        }
-    }
-
-    /**
-     * Switch the connected scale to display mode [modeId]. Asks the core for
-     * the command bytes, then routes the result through the shared command
-     * path. Switching a mode is **three** `Command.WriteScale` entries; the
-     * core emits them in order and [CoreLane.applyOutput]'s `commands.forEach`
-     * loop preserves that order, so all three reach `ScaleBleManager` in
-     * sequence. Capability-gated: the core emits commands only for a scale that
-     * exposes switchable modes and only for a listed [modeId].
-     *
-     * The UI's shown active mode is updated optimistically; the live
-     * `Event.ScaleConfig.active_mode` stream (the scale's `03 0e` settings
-     * response) then catches up and confirms the scale's real mode.
-     */
-    fun setScaleMode(modeId: Int) {
-        editOwnSetting(Setting.SCALE_MODE) {
-            _ui.update { it.copy(scaleActiveMode = modeId) }
-            val raw = runCatching {
-                bridge.setScaleMode(modeId.toUByte())
-            }.getOrElse {
-                appendLog("Set mode failed: ${it.message}")
-                return
-            }
-            lane.deliver(raw)
-        }
-    }
-
-    /**
-     * Select the connected scale's auto-stop mode ([modeId]: 0 = flow-stop,
-     * 1 = cup-removal). Asks the core for the command bytes, then routes the
-     * resulting `Command.WriteScale` through the shared command path.
-     * Capability-gated end to end: the core emits a command only for a scale
-     * that supports an auto-stop-mode setting and only for an in-range
-     * [modeId]. The UI's shown selection is updated optimistically; the live
-     * `Event.ScaleReading.device_auto_stop` stream then catches up and confirms
-     * the scale's real mode.
-     */
-    fun setScaleAutoStop(modeId: Int) {
-        editOwnSetting(Setting.SCALE_AUTO_STOP) {
-            _ui.update { it.copy(scaleAutoStop = modeId) }
-            val raw = runCatching {
-                bridge.setScaleAutoStop(modeId.toUByte())
-            }.getOrElse {
-                appendLog("Set auto-stop failed: ${it.message}")
-                return
-            }
-            lane.deliver(raw)
-        }
-    }
+    /** Select the connected scale's auto-stop mode (0 = flow-stop, 1 = cup-removal). */
+    fun setScaleAutoStop(modeId: Int) = scaleController.setScaleAutoStop(modeId)
 
     /**
      * Tare the connected scale. Asks the core for the tare bytes, then routes
@@ -4699,45 +4499,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun tareScale() = machine.execute(MachineCommand.TareScale)
 
-    private fun applyTareScale() {
-        val raw = runCatching { bridge.tareScale() }.getOrElse {
-            appendLog("Tare failed: ${it.message}")
-            return
-        }
-        lane.deliver(raw)
-    }
-
-    /**
-     * Beep the connected scale (locate / test tone). Capability-gated — the
-     * core only emits a command for a scale that supports it; it throws
-     * `CremaException` for one that doesn't, which we surface and swallow.
-     */
-    fun beepScale() {
-        val raw = runCatching { bridge.scaleBeep() }.getOrElse {
-            appendLog("Beep failed: ${it.message}")
-            return
-        }
-        lane.deliver(raw)
-    }
+    /** Beep the connected scale (locate / test tone). */
+    fun beepScale() = scaleController.beepScale()
 
     /** Clear the scale's tracked peak + final weight (Scale page "Reset peak"). */
-    fun resetScalePeaks() {
-        runCatching { bridge.resetScalePeaks() }.onFailure {
-            appendLog("Reset peak failed: ${it.message}")
-        }
-    }
+    fun resetScalePeaks() = scaleController.resetScalePeaks()
 
-    /**
-     * Start the connected scale's built-in timer. Capability-gated like
-     * [beepScale]; routed through the shared command path.
-     */
-    fun startScaleTimer() {
-        val raw = runCatching { bridge.startTimer() }.getOrElse {
-            appendLog("Start timer failed: ${it.message}")
-            return
-        }
-        lane.deliver(raw)
-    }
+    /** Start the connected scale's built-in timer. */
+    fun startScaleTimer() = scaleController.startScaleTimer()
 
     /**
      * What this VM does with each core [Event] (was `applyEvent`): one
@@ -4940,45 +4709,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
-        lane.on<Event.ScaleReading> { event ->
-            val r = event.content
-            // The Bookoo echoes its live settings in every weight
-            // notification. Project them into the config controls so they
-            // show the scale's real current state — `device_*` is null for
-            // scales that do not report a setting, in which case the
-            // control keeps its last value.
-            _ui.update { it.copy(
-                scaleWeightG = r.weight,
-                // Native per-packet flow when the scale reports one (Bookoo),
-                // else the core's derived estimate (FlowEstimator) — web
-                // parity (`device_flow ?? flow`). Binding only device_flow
-                // left every non-Bookoo scale (Half Decent, Acaia, …)
-                // showing "— g/s" forever (issue #24).
-                scaleFlowGPerS = r.device_flow ?: r.flow,
-                scaleTimerMs = r.device_timer?.toLong(),
-                scaleVolume = r.device_volume?.toInt() ?: it.scaleVolume,
-                scaleStandbyMinutes = r.device_standby?.toInt()
-                    ?: it.scaleStandbyMinutes,
-                scaleBatteryPercent = r.device_battery?.toInt()
-                    ?: it.scaleBatteryPercent,
-                scaleFlowSmoothing = r.device_flow_smoothing
-                    ?: it.scaleFlowSmoothing,
-                scaleAutoStop = r.device_auto_stop?.toInt()
-                    ?: it.scaleAutoStop,
-                scaleEchoed = it.scaleEchoed.withEchoes(
-                    r.device_volume != null, r.device_standby != null, r.device_flow_smoothing != null, r.device_auto_stop != null,
-                ),
-            ) }
-            // Weight is high-rate; do not flood the log with every reading.
-            // Low-battery warning (issue #29): one snackbar per connection
-            // the first time the battery reads at or below the threshold,
-            // so it can be charged before it dies mid-shot.
-            val batt = _ui.value.scaleBatteryPercent
-            if (batt != null && batt <= SCALE_LOW_BATTERY_PCT && !scaleLowBatteryWarned) {
-                scaleLowBatteryWarned = true
-                notifyUser("Scale battery low ($batt%) — charge it soon")
-            }
-        }
         lane.on<Event.WaterLevel> { event ->
             _ui.update { it.copy(
                 waterLevelMm = event.content.level,
@@ -5030,13 +4760,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val w = fmt("%.0f", event.content.weight_g)
             appendLog("SAW suppressed — untared cup ($w g)")
             notifyUser("Stop-at-weight off for this shot — the scale wasn\u2019t tared ($w g on it)")
-        }
-        // A tare that arrived mid-pour was dropped by the core rather
-        // than obeyed (geota/crema#50). Say so — otherwise the Tare
-        // button just looks broken.
-        lane.on<Event.TareRefusedMidShot> {
-            appendLog("Tare refused — a shot is pouring")
-            notifyUser("Tare ignored — a shot is running. Taring now would break stop-at-weight.")
         }
         lane.on<Event.StopTargetsArmed> { event ->
             // The SAW-visibility line (issue #15): what will stop this
@@ -5196,59 +4919,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         lane.on<Event.SteamClogSuspected> { event -> appendLog("Steam clog suspected: ${event.content.reason.string}") }
         lane.on<Event.SteamEcoModeChanged> { event -> appendLog("Steam eco mode: ${event.content.eco}") }
-        lane.on<Event.ScaleStale> {
-            _ui.update { it.copy(scaleWeightG = null) }
-            appendLog("Scale stale")
-        }
-        lane.on<Event.ScaleLinkDead> { event ->
-            // The core presumed the scale link dead (silent 5 s past
-            // ScaleStale, or three failed writes with no reading between;
-            // once per episode). Tear it down for the reconnect supervisor,
-            // but only while the link still claims READY — one already
-            // reconnecting is left to its ladder.
-            _ui.update { it.copy(scaleWeightG = null) }
-            appendLog("Scale link dead: ${event.content.reason.string}")
-            if (_ui.value.scaleState == ScaleBleManager.State.READY) {
-                viewModelScope.launch { scale.presumeDead(event.content.reason.string) }
-            }
-        }
-        lane.on<Event.ScaleButtonPressed> { event ->
-            // Logged like de1app (bluetooth.tcl:2825-2828) — no hard-wired
-            // action yet; the event is the hook for a future mapping.
-            appendLog("Scale button pressed: ${event.content.button}")
-        }
-        lane.on<Event.ScaleConfig> { event ->
-            val c = event.content
-            // The Bookoo's `ff12` command channel reports its dynamic
-            // config: a `03 0c` serial response carries anti_mistouch (plus
-            // serial / firmware), a `03 0e` settings response carries
-            // active_mode. Any one notification fills only one set, so the
-            // other fields are null — fold in whatever is present and keep
-            // the last value for the rest, the same two-way pattern the
-            // weight-stream settings use.
-            _ui.update { it.copy(
-                scaleAntiMistouch = c.anti_mistouch ?: it.scaleAntiMistouch,
-                scaleActiveMode = c.active_mode?.toInt() ?: it.scaleActiveMode,
-                // The `03 0c` serial response carries firmware + serial;
-                // the `03 0e` settings response leaves both null — fold in
-                // whatever is present and keep the last value otherwise.
-                scaleFirmware = c.firmware ?: it.scaleFirmware,
-                scaleSerial = c.serial ?: it.scaleSerial,
-            ) }
-            when {
-                c.anti_mistouch != null ->
-                    appendLog(
-                        "Scale config: anti-mistouch=${c.anti_mistouch}" +
-                            (c.serial?.let { ", serial=$it" } ?: "") +
-                            (c.firmware?.let { ", fw=$it" } ?: ""),
-                    )
-                c.active_mode != null ->
-                    appendLog(
-                        "Scale config: active mode=${c.active_mode}, " +
-                            "enabled modes=${c.enabled_modes}",
-                    )
-            }
-        }
         lane.on<Event.DecodeError> { event -> appendLog("Decode error: ${event.content.message}") }
         // The version / MMR read paths now feed the Settings machine rows.
         // The preformatted firmware label is folded straight in; each MMR

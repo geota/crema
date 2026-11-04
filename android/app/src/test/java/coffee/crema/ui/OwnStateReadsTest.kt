@@ -46,13 +46,8 @@ class OwnStateReadsTest {
             "showConfig" to setOf("activeProfileId", "brewParams"),
             // Hub only (StartShot is relayed).
             "applyStartShot" to setOf("activeProfileId", "autoTare", "brewParams", "stopOnWeight", "volumeStopWithScale"),
-            // Holder logic, already gated by `authoritative`; and the scale
-            // echo, which fills this device's scale fields (the scale's own
-            // values: no snapshot carries them).
-            "registerCoreHandlers" to setOf(
-                "idleSleepMin", "preFlush", "steamPurge", "de1MachineInfo",
-                "scaleVolume", "scaleStandbyMinutes", "scaleFlowSmoothing", "scaleAutoStop", "scaleAntiMistouch", "scaleActiveMode",
-            ),
+            // Holder logic, already gated by `authoritative`.
+            "registerCoreHandlers" to setOf("idleSleepMin", "preFlush", "steamPurge", "de1MachineInfo"),
             // Sleep on quit: holder only (a remote never sends it), own firmware.
             "init" to setOf("sleepLatchesInRefill()"),
             // T6 (§7.5): leaving compares and adopts into this device's own.
@@ -86,6 +81,11 @@ class OwnStateReadsTest {
             // Own-state writers (§7.4): a restore and a bean import.
             "restoreBackupFromText" to setOf("activeBeanId"),
             "applyBeanImportPlan" to setOf("activeBeanId"),
+        ),
+        "ScaleController.kt" to mapOf(
+            // The scale echo fills this device's scale fields (the scale's own
+            // values: no snapshot carries them).
+            "init" to setOf("scaleVolume", "scaleStandbyMinutes", "scaleFlowSmoothing", "scaleAutoStop", "scaleAntiMistouch", "scaleActiveMode"),
         ),
         "SharingController.kt" to mapOf(
             // The connected machine's identity (serial) for uploads, not a setting.
