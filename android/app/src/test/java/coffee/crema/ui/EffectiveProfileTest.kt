@@ -127,7 +127,7 @@ class EffectiveProfileTest {
         assertTrue("setDesiredProfile" in methods)
         assertEquals(emptyList(), methods.filter { it.startsWith("upload") && "rofile" in it })
         val callers = MainSources.kotlinFiles().filter { (_, text) -> "bridge.setDesiredProfile(" in text }.map { it.first }
-        assertEquals(listOf("coffee/crema/ui/MainViewModel.kt"), callers)
+        assertEquals(listOf("coffee/crema/ui/MachineSessionController.kt"), callers)
         val handPatched = MainSources.kotlinFiles().filter { (_, text) -> "overrideBrewParamsJson" in text }.map { it.first }
         assertTrue(handPatched.isEmpty(), "no shell code hand-patches upload bytes: $handPatched")
     }

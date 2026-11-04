@@ -1,37 +1,68 @@
 package coffee.crema.ui
 
 import android.content.Context
+import android.os.BatteryManager
 import android.os.SystemClock
+import android.util.Log
+import coffee.crema.ProcessScope
+import coffee.crema.core.Command
+import coffee.crema.core.ConnectSweepSettings
+import coffee.crema.core.CoreOutput
+import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
 import coffee.crema.core.HotWaterTarget
+import coffee.crema.core.MachineRequest
 import coffee.crema.core.MachineState
 import coffee.crema.core.MaintenancePhase
 import coffee.crema.core.MmrRegister
+import coffee.crema.core.ProfileSyncOutput
+import coffee.crema.core.ProfileSyncStatus
 import coffee.crema.core.ShotDisposition
 import coffee.crema.core.StartPhase
+import coffee.crema.core.StartRefusal
+import coffee.crema.core.StartShotResult
+import coffee.crema.core.WriteTarget
+import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.newShotId
+import coffee.crema.machine.CommandOutcome
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.floatOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.math.roundToInt
 
 /** The DE1 registers a hub sends its remotes (spec §6.1: A12, A13, A15). */
 private val MIRRORED_REGISTERS = setOf(MmrRegister.HeaterVoltage, MmrRegister.CalibrationFlowMultiplier, MmrRegister.CupWarmerTemp)
 
 /**
- * The machine session as the core reports it (MainViewModel breakup step 9a):
- * every machine event's projection into the UI state and the event log —
- * machine state and faults, the service-mode clock, the shot (start, phase,
- * frame, telemetry chart, stop targets and stops, completion and its record),
- * water and steam sessions, the tank, SAW notices, identity and MMR reads,
- * the core's shot start and machine-request outcomes, and profile uploads.
+ * The machine session (MainViewModel breakup step 9).
+ *
+ * As the core reports it (9a): every machine event's projection into the UI
+ * state and the event log — machine state and faults, the service-mode
+ * clock, the shot (start, phase, frame, telemetry chart, stop targets and
+ * stops, completion and its record), water and steam sessions, the tank,
+ * SAW notices, identity and MMR reads, the core's shot start and
+ * machine-request outcomes, and profile uploads.
+ *
+ * What the shell asks of the machine (9b): the shot start, the desired
+ * profile and the dial's debounce, the stop targets, machine-state writes
+ * (sleep-on-quit's included), and the connect-time setup (identity reads,
+ * the settings sweep, the USB-charger minute tick) with its session clear.
  *
  * Registers its core-event handlers on [lane] as it is built, before the
- * other owners of the same events (maintenance, presence's wiring), the
- * order they ran in as the VM's own.
+ * other owners of the same events (maintenance), the order they ran in as
+ * the VM's own.
  */
 internal class MachineSessionController(
     private val lane: CoreLane,
@@ -57,6 +88,24 @@ internal class MachineSessionController(
     /** A scale is remembered (so a missing one is reconnecting). */
     private val scaleRemembered: () -> Boolean,
     private val kickScaleReconnect: () -> Unit,
+    private val bridge: CremaBridge,
+    private val json: Json,
+    /** The library's raw profile JSON by id. */
+    private val profileJson: (String) -> String?,
+    /** Re-read the core's hot-water target (its ratio follows the target yield). */
+    private val refreshHotWaterTarget: () -> Unit,
+    /** Presence: the next Sleep report is the app's own request. */
+    private val markAppSleepRequest: () -> Unit,
+    /** A firmware flash holds the DE1 link (no charger writes). */
+    private val firmwareHolds: () -> Boolean,
+    /** The connect-time setup has run on this link (the flash may start). */
+    private val markSetupDone: () -> Unit,
+    /** The DE1 link is READY. */
+    private val de1Ready: () -> Boolean,
+    /** The connected DE1's address, or null. */
+    private val de1Address: () -> String?,
+    /** One direct DE1 write, outside the lane (sleep-on-quit). */
+    private val writeDe1: suspend (WriteTarget, ByteArray) -> Boolean,
 ) {
     /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
     private var modeTickerJob: Job? = null
@@ -101,6 +150,11 @@ internal class MachineSessionController(
      *  how geota/crema#56 hid — worth recording per shot. */
     @Volatile
     private var shotStartedByApp: Boolean = false
+
+    /** Where the dial's debounce wait runs ([pushDesiredProfile]); the push
+     *  itself always runs on the core lane. Test seam (via the VM): a test
+     *  dispatcher makes the 0.5 s virtual time. */
+    var dialDebounceContext: kotlin.coroutines.CoroutineContext = lane.dispatcher
 
     init {
         lane.on<Event.MachineStateChanged> { event ->
@@ -563,5 +617,401 @@ internal class MachineSessionController(
                 if (it.de1MachineInfo[MmrRegister.SerialNumber] == serial) it.copy(serialStolen = stolen) else it
             }
         }
+    }
+
+    // ── The shot start, the desired profile and the stop targets ─────────────
+
+    /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
+    val sweepRunner by lazy {
+        ConnectSweepRunner(scope, sweep = ::seedMachineSettings, tick = ::usbChargerTick)
+    }
+
+    /** Connect-time machine-info sweep (see [readMachineInfo]); cancelled on reconnect/disconnect. */
+    private var machineInfoJob: kotlinx.coroutines.Job? = null
+
+    fun afterFirmwareRelease() {
+        if (!de1Ready()) return
+        appendLog("Firmware: link released — running the connect setup")
+        readMachineInfo()
+        sweepRunner.onReady()
+    }
+
+    /**
+     * Push the stop-at-weight (SAW) / stop-at-volume (SAV) targets into the core
+     * so a shot actually auto-stops. The core arms its `AutoStop` from these on
+     * the next shot's first flowing phase and resolves the weight target as
+     * `shotTarget.or(profileTarget)` — with neither pushed it can't arm and the
+     * shot never stops on weight (the bug: Android never wired these, unlike the
+     * web's applyProfileTargetWeight / applyShotTargetWeight / applyProfileVolume-
+     * Limit). Profile yield + volume come from the active profile's recipe; the
+     * shot target is the Quick-Controls dial override (null when unset, so the
+     * profile recipe wins). Safe while disconnected — pure core state, no BLE.
+     */
+    fun pushStopTargets(s: MainUiState = effectiveState(), desiredDelayMs: Long = 0) {
+        // On a remote, a hub's custom profile this library lacks is the overlay.
+        val active = s.activeProfile()
+        val profileYield = active?.yieldOut?.takeIf { it.isFinite() && it > 0f }
+        val volumeLimit = active?.maxTotalVolumeMl?.takeIf { it > 0 }?.toFloat()
+        val shotYield = s.brewParams?.yieldOut?.toFloat()?.takeIf { it.isFinite() && it > 0f }
+        runCatching {
+            bridge.setProfileTargetWeight(profileYield)
+            bridge.setProfileVolumeLimit(volumeLimit)
+            bridge.setShotTargetWeight(shotYield)
+        }.onFailure { appendLog("Push stop targets failed: ${it.message}") }
+        // The active profile itself: the core latches its beverage type (a
+        // cleaning run must never be recorded as a shot — review #40) and its
+        // per-step weight exits (issue 11). Pushed alongside the stop targets —
+        // on select, startup restore, every DE1 (re)connect and every shot
+        // start — not only on upload, because activation can skip the upload:
+        // after an app restart the DE1 still holds the profile and startShot
+        // skips it on the fingerprint match.
+        pushActiveProfile(
+            activeCremaJson = active?.id?.let { profileJson(it) } ?: s.mirroredProfileJson,
+            toWire = ::cremaProfileToWire,
+            setActiveProfile = { bridge.setActiveProfile(it) },
+            log = { appendLog(it) },
+        )
+        pushDesiredProfile(s, desiredDelayMs)
+        refreshStopTargetProjection()
+    }
+
+    /**
+     * Re-read the core's stop-target projection into the snapshot.
+     *
+     * The core pushes `StopTargetsArmed` on every change, but only from the
+     * scale-reading and telemetry paths — so with nothing connected there is no
+     * beat to ride. This covers that: called wherever the shell itself changes
+     * an input, which is the one moment it knows the picture moved.
+     */
+    fun refreshStopTargetProjection() {
+        // The target yield is also the hot-water ratio's basis.
+        refreshHotWaterTarget()
+        val json = runCatching { bridge.stopTargetsProjection() }.getOrNull() ?: return
+        runCatching {
+            val o = this.json.parseToJsonElement(json).jsonObject
+            fun f(k: String) = o[k]?.jsonPrimitive?.floatOrNull
+            updateUi { it.copy(stopTargets = StopTargetsView(
+                weightG = f("weight"),
+                volumeMl = f("volume"),
+                maxTimeS = f("maxTime"),
+                armed = o["armed"]?.jsonPrimitive?.booleanOrNull ?: false,
+                weightConfiguredG = f("weightConfigured"),
+                weightBlocked = o["weightBlocked"]?.jsonPrimitive?.contentOrNull,
+            )) }
+        }.onFailure { appendLog("Stop-target projection parse failed: ${it.message}") }
+    }
+
+    /** [startShot]'s body on the device holding the machine (also a mirror's
+     *  relayed start): the core runs the whole start (F16, `shot_start.rs`) —
+     *  the profile sync wait, the firmware's profile-download guard, the
+     *  optional pre-flush and Espresso — and refuses one that can't start,
+     *  with the reason for whoever asked. */
+    fun applyStartShot(): CommandOutcome {
+        val s = uiState()
+        val cremaJson = s.activeProfileId?.let { profileJson(it) }
+            ?: return CommandOutcome.Refused("Can\u2019t start shot \u2014 no profile selected")
+        // The core's stop targets and flags are current before the shot arms
+        // its AutoStop (a profile restored at startup never went through
+        // setActiveProfile; a DE1 reconnect re-created the core).
+        pushStopTargets()
+        runCatching { bridge.setAutoTare(s.autoTare) }
+            .onFailure { appendLog("Re-assert auto-tare failed: ${it.message}") }
+        runCatching { bridge.setStopOnWeight(s.stopOnWeight) }
+            .onFailure { appendLog("Re-assert stop-on-weight failed: ${it.message}") }
+        runCatching { bridge.setVolumeStopWithScale(s.volumeStopWithScale) }
+            .onFailure { appendLog("Re-assert volume-stop-with-scale failed: ${it.message}") }
+        pushStartSettings(s)
+        // The start's own push supersedes a dial push still settling.
+        desiredPushJob?.cancel()
+        val result = runCatching {
+            json.decodeFromString(
+                StartShotResult.serializer(),
+                bridge.startShot(cremaJson, s.brewParams.overridesJson(json), SystemClock.elapsedRealtime().toULong()),
+            )
+        }.getOrElse {
+            appendLog("Start shot failed: ${it.message}")
+            return CommandOutcome.Refused("Can\u2019t start shot \u2014 profile conversion failed")
+        }
+        lane.post { lane.applyOutput(result.output) }
+        if (result.accepted) return CommandOutcome.Accepted
+        val remembered = scaleRemembered()
+        if (result.refusal is StartRefusal.ScaleRequired && remembered) {
+            // The reconnect kick may make the next attempt succeed.
+            kickScaleReconnect()
+            return CommandOutcome.Refused("Shot not started \u2014 reconnecting the scale\u2026 try again in a moment")
+        }
+        return CommandOutcome.Refused(result.message ?: "Shot not started")
+    }
+
+    /** Latch the start settings (pre-shot flush, require-scale, post-steam
+     *  purge) in the core, which runs the start, the purge and the
+     *  group-head banner (F16). */
+    fun pushStartSettings(s: MainUiState = uiState()) {
+        runCatching { bridge.setStartSettings(s.preFlush, s.requireScale, s.steamPurge) }
+            .onFailure { appendLog("Set start settings failed: ${it.message}") }
+    }
+
+    /**
+     * On the core lane: make the library [cremaJson] (null = no active
+     * profile) with the Quick-Controls overrides [qcJson] the core's desired
+     * profile (`setDesiredProfile`, this shell's only way to put a profile on
+     * the DE1) and apply the output NOW — an upload the core's profile sync
+     * started. Returns the sync's status, or null when the core can't read the
+     * profile.
+     */
+    private fun setDesiredOnLane(cremaJson: String?, qcJson: String?): ProfileSyncStatus? {
+        val sync = runCatching {
+            json.decodeFromString(
+                ProfileSyncOutput.serializer(),
+                bridge.setDesiredProfile(cremaJson, qcJson, SystemClock.elapsedRealtime().toULong()),
+            )
+        }.getOrElse {
+            appendLog("Setting the desired profile failed: ${it.message}")
+            return null
+        }
+        lane.applyOutput(sync.output)
+        if (sync.output.events.any { it is Event.DecodeError }) return null
+        return sync.status
+    }
+
+    /**
+     * The profile on screen — the active profile and its Quick-Controls
+     * override — as the core's desired profile. Pushed with the stop targets
+     * (select, override change, startup restore, every DE1 connect, every shot
+     * start): the core's profile sync decides when to upload. A remote pushes
+     * nothing: its core is a read-only mirror that never uploads (the hub holds
+     * the machine), and it pushes again once it stops being a remote.
+     */
+    private fun pushDesiredProfile(s: MainUiState = effectiveState(), delayMs: Long = 0) {
+        if (uiState().mirror != null) return
+        val cremaJson = s.activeProfile()?.id?.let { profileJson(it) } ?: s.mirroredProfileJson
+        val qcJson = s.brewParams.overridesJson(json)
+        // The latest push wins: a dial change waits [delayMs] for the dial to
+        // rest (de1app's 0.5 s), and any later push replaces a pending one.
+        desiredPushJob?.cancel()
+        desiredPushJob = scope.launch(if (delayMs > 0) dialDebounceContext else lane.dispatcher) {
+            if (delayMs > 0) delay(delayMs)
+            kotlinx.coroutines.withContext(lane.dispatcher) { setDesiredOnLane(cremaJson, qcJson) }
+        }
+    }
+
+    /** The pending [pushDesiredProfile] (a dial change waiting to settle). */
+    private var desiredPushJob: Job? = null
+
+    /** A DE1 disconnect closed the session: stop the in-flight connect-time
+     *  register sweep, drop the pending gated-start, and clear the live
+     *  telemetry + machine identity so the Brew/Settings surfaces show "—"
+     *  for the next connection rather than freezing on the last machine's
+     *  values. Wired as [ConnectionController]'s onDe1SessionClosed. */
+    fun clearDe1SessionUi() {
+        machineInfoJob?.cancel() // stop any in-flight connect-time register sweep
+        // A pending start ends in the core on the drop (Decenza cancels its
+        // deferred start on disconnect too).
+        updateUi { it.copy(
+            machineState = null,
+            machineStateName = null,
+            machineSubstate = null,
+            shotPhase = null,
+            telemetry = null,
+            // Drop the live telemetry so the Brew cards clear to "—" for the
+            // next connection rather than freezing on the last machine's values.
+            pressure = null,
+            flow = null,
+            headTemp = null,
+            mixTemp = null,
+            steamTemp = null,
+            dispensedVolume = null,
+            resistance = null,
+            resistanceWeight = null,
+            shotElapsedMs = 0,
+            shotFrame = 0,
+            shotInProgress = false,
+            shotTelemetry = emptyList(),
+            waterLevelMm = null,
+            // Drop the machine identity / register readouts so the Settings
+            // machine rows clear to "—" for the next connection rather than
+            // freezing on the last machine's values. The firmware label and
+            // line frequency clear too (line freq is re-read on next connect).
+            de1Firmware = null,
+            de1MachineInfo = emptyMap(),
+            serialStolen = false,
+            lineFreqHz = null,
+            lineFreqOverride = 0f,
+            profileUploading = false,
+            profileUploadProgress = null,
+        ) }
+    }
+
+    /** A user's machine request (a control, or one relayed from a peer). The
+     *  core cancels a pending shot start with it (05 F2, F16): a Stop, or
+     *  another mode, during the sync or the pre-flush never ends in Espresso. */
+    fun applyMachineState(state: MachineRequest) {
+        if (state == MachineRequest.SLEEP) markAppSleepRequest()
+        writeMachineState(state)
+    }
+
+    /** The machine write behind [requestMachineState], also used by the shot
+     *  start's own steps and the auto-purge, which must not cancel the start.
+     *  Never relayed: an automated write on a mirror is not a user's intent,
+     *  and the primary would run it as one (a relayed Flush cancels its
+     *  pending start). A mirror's read-only core drops the write. */
+    private fun writeMachineState(state: MachineRequest) {
+        val raw = runCatching { bridge.requestMachineState(state) }.getOrElse {
+            appendLog("requestMachineState failed: ${it.message}")
+            return
+        }
+        lane.deliver(raw)
+    }
+
+    /**
+     * Sleep-on-quit's write. NOT [sleep]: that routes through the core lane
+     * and its command path, both on [scope], which is already
+     * cancelled when [onCleared] fires the quit. The core output is computed
+     * synchronously here and its DE1 writes go out on [ProcessScope], bounded
+     * by [QUIT_WRITE_BUDGET_MS]. The result is true only when every write
+     * completed on a live link, so [QuitSleep]'s latch re-arms otherwise.
+     * The output's events are dropped: the UI they would update is going away.
+     * [presence] marks the sleep as the app's before calling this.
+     */
+    fun launchQuitSleepWrite(): Deferred<Boolean> {
+        val writes = runCatching {
+            json.decodeFromString(CoreOutput.serializer(), bridge.requestMachineState(MachineRequest.SLEEP))
+                .commands.filterIsInstance<Command.WriteCharacteristic>()
+        }.getOrElse {
+            Log.w("QuitSleep", "sleep request failed", it)
+            emptyList()
+        }
+        if (de1Address() == null) return CompletableDeferred(false)
+        return ProcessScope.main.async {
+            sendQuitWrites(
+                writes.map { cmd ->
+                    suspend {
+                        writeDe1(cmd.content.target, cmd.content.data.map { it.toByte() }.toByteArray())
+                        Unit
+                    }
+                },
+                QUIT_WRITE_BUDGET_MS,
+            ).also { sent -> Log.i("QuitSleep", if (sent) "sleep write sent" else "sleep write did not go out") }
+        }
+    }
+
+    /**
+     * Read the DE1's identity + service registers once a connection is READY.
+     * Each [CremaBridge.readMmr] emits a `Command.WriteCharacteristic` read
+     * request (the same shared command path the scale/state writes use); the
+     * DE1 answers later on its MMR / version notify characteristics, surfacing
+     * as `Event.MmrValue` / `Event.Firmware` folded into [MainUiState].
+     *
+     * Sequencing matters on real hardware: [De1BleManager] flips to READY the
+     * moment the notification flows are *launched* (startObserving → launchIn),
+     * not when their CCCD writes land — so firing all nine reads the instant we
+     * see READY races the subscriptions and the DE1's notify replies get
+     * dropped, stranding firmware / heater-voltage on "—". So we mirror the web
+     * connect program: let the subscriptions settle, issue the reads serially
+     * with a small gap (web uses concurrency:1), and re-read until the
+     * user-visible identity (firmware + heater voltage) has answered or the
+     * attempt budget is spent. Reads are idempotent — a re-request re-answers.
+     *
+     * Also folds the two pure (no-BLE) core reads — the firmware build report
+     * and the resolved line frequency — straight into the snapshot. Safe to
+     * call while disconnected: with no BLE link the read requests write nothing
+     * and the pure reads still return; the UI just shows "—" until replies land.
+     */
+    /** Re-seed the machine registers Crema owns a preference for. The DE1 boots
+     *  with its own firmware values and de1app rewrote these each connect, so
+     *  without this the machine silently runs the firmware defaults (the
+     *  constant-fan report, geota/crema#31). Safe to call any time — the writes
+     *  route through [CoreLane.route], a no-op when disconnected. */
+    fun seedMachineSettings(onReady: Boolean = true) {
+        // One core-owned list (`CremaCore::connect_sweep`, web runs the same):
+        // USB charger (Tablet charging setting), the user-presence feature flag
+        // (FeatureFlags bit 0 — UserPresent pokes, sent on real activity by the
+        // idle-sleep timer, only count with it set), fan threshold, de1app's
+        // heater tweaks (phase-1 / phase-2 flow, hot-water idle temp, espresso
+        // warm-up timeout, two-tap steam stop), the machine's own refill point
+        // (geota/crema#47), the active profile's tank-temperature threshold,
+        // the Quick-Controls steam / hot-water packet, steam flow, flush
+        // time / temp, and steam eco last. de1app and Decenza re-send these on
+        // every connect; the DE1 forgets them across power cycles.
+        val ui = uiState()
+        val tankTempC = ui.profiles.firstOrNull { it.id == ui.activeProfileId }?.tankTemperatureC ?: 0f
+        val settings = ui.connectSweepSettings(tankTempC, batteryPercent())
+        lane.route("Connect sweep") {
+            // The notification clock (elapsedRealtime), like every core
+            // timestamp: wall-clock ms pushed the core's clock decades ahead
+            // and every watchdog compared against the wrong epoch.
+            val settingsJson = json.encodeToString(ConnectSweepSettings.serializer(), settings)
+            val now = SystemClock.elapsedRealtime().toULong()
+            // Only the link's ready transition settles the profile sync (its
+            // first sweep uploads the desired profile).
+            if (onReady) bridge.connectSweep(settingsJson, now) else bridge.reapplyMachineSettings(settingsJson, now)
+        }
+    }
+
+    /** The once-a-minute USB-charger check (Decenza `BatteryManager`) — see [ConnectSweepRunner]. */
+    fun usbChargerTick() {
+        if (firmwareHolds()) return // no charger writes into a flash (audit H2)
+        lane.route("USB charger check") {
+            bridge.usbChargerTick(uiState().usbChargingMode, batteryPercent()?.toUByte())
+        }
+    }
+
+    /** The tablet battery, %, or null when the platform won't say. */
+    private fun batteryPercent(): Int? = runCatching {
+        val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 }
+    }.getOrNull()
+
+    fun readMachineInfo() {
+        // The core's identity table (web reads the same one): firmware build
+        // first, then board, model, GHC, refill kit, serial, heater voltage,
+        // flush temp and flow multiplier. The passes and pacing below stay
+        // this shell's policy.
+        val registers = coffee.crema.core.connectIdentityRegisters()
+        machineInfoJob?.cancel()
+        machineInfoJob = scope.launch {
+            // Pacing/retry budget — generous enough for a real DE1's notify
+            // round-trips, cheap because it stops as soon as identity lands.
+            val settleMs = 400L     // let the just-launched CCCD writes go active
+            val readGapMs = 40L     // keep ~one outstanding GATT op at a time
+            val retryGapMs = 1_500L // wait for replies before re-reading gaps
+            val attempts = 3
+            delay(settleMs)
+            for (attempt in 0 until attempts) {
+                for (reg in registers) {
+                    val raw = runCatching { bridge.readMmr(reg) }.getOrElse {
+                        appendLog("Read MMR $reg failed: ${it.message}")
+                        null
+                    }
+                    if (raw != null) lane.deliver(raw)
+                    delay(readGapMs)
+                }
+                // Stop once the identity the UI actually shows has answered.
+                if (uiState().de1Firmware != null &&
+                    MmrRegister.HeaterVoltage in uiState().de1MachineInfo
+                ) {
+                    break
+                }
+                delay(retryGapMs)
+            }
+            // Pure reads — no BLE traffic. Resolved after the sweep so the line
+            // frequency reflects whatever the sweep just brought in. The
+            // firmware build report is logged; Settings classifies the live
+            // build itself (FirmwareBuildCopy).
+            runCatching { bridge.firmwareBuildReport() }.onSuccess { report ->
+                appendLog("Firmware build: $report")
+            }.onFailure { appendLog("Firmware build report failed: ${it.message}") }
+            val freq = runCatching { bridge.lineFrequencyHz() }.getOrNull()
+            updateUi { it.copy(lineFreqHz = freq) }
+            markSetupDone()
+        }
+    }
+
+    fun applyCancelMaintenance() {
+        val raw = runCatching { bridge.cancelMaintenance() }.getOrElse {
+            appendLog("cancelMaintenance failed: ${it.message}")
+            return
+        }
+        lane.deliver(raw)
     }
 }
