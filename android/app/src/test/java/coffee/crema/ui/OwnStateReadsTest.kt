@@ -51,7 +51,10 @@ class OwnStateReadsTest {
             "resetPreferences" to setOf("lineFreqOverride"),
             // The holder's own machine reads.
             "readMachineInfo" to setOf("de1MachineInfo"),
-            "firmware" to setOf("de1MachineInfo"),
+        ),
+        "FirmwareController.kt" to mapOf(
+            // The holder's own machine reads.
+            "update" to setOf("de1MachineInfo"),
         ),
         "LibraryController.kt" to mapOf(
             "persistLibrary" to setOf("activeBeanId"),
