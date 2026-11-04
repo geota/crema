@@ -25,6 +25,23 @@ updates:
       cargo-minor-patch:
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      # Relay v4 crypto stack (core/de1-relay). These versions are pinned to
+      # what snow =0.10.0 and spake2 =0.4.0 are built on, and the relay's
+      # canonical-element and all-zero-DH checks call curve25519-dalek on
+      # the same types. A major bump here duplicates or splits that stack, so
+      # it moves only together with snow/spake2, deliberately, with a
+      # security review. Minor/patch updates still come through.
+      - dependency-name: curve25519-dalek
+        update-types: ["version-update:semver-major"]
+      - dependency-name: sha2
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: hkdf
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: rand_core
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: snow
+      - dependency-name: spake2
 
   # ── Web PWA (pnpm at /web) ───────────────────────────────────────────
   - package-ecosystem: npm
