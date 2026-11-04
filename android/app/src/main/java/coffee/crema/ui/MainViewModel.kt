@@ -27,7 +27,6 @@ import coffee.crema.core.MmrReg
 import coffee.crema.core.MmrRegister
 import coffee.crema.core.ScaleCapabilities
 import coffee.crema.core.Bean
-import coffee.crema.core.MaintenanceState
 import coffee.crema.core.WriteTarget
 import coffee.crema.core.SteamHotWaterTargets
 import coffee.crema.core.HotWaterTarget
@@ -35,7 +34,6 @@ import kotlinx.serialization.builtins.nullable
 import coffee.crema.core.WeightUnit
 import coffee.crema.drive.DriveStore
 import coffee.crema.drive.DriveSync
-import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.exportBackupJsonl
@@ -44,13 +42,11 @@ import coffee.crema.core.defaultIdleSleepMin
 import coffee.crema.settings.resetCommon
 import coffee.crema.settings.toCommonSettings
 import coffee.crema.settings.hotWaterDose
-import coffee.crema.core.maintenanceReadout
 import androidx.core.content.FileProvider
 import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.MaintenanceStore
-import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.persist.KeptAside
 import coffee.crema.persist.KeptAsideNotices
 import coffee.crema.settings.AppPrefs
@@ -266,8 +262,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         coffee.crema.decent.StolenSerialsFileStore(app),
     )
 
-    /** Maintenance-state persistence — a JSON file in filesDir. */
-    private val maintenanceStore = MaintenanceStore(app, json)
+    /** Water accumulation and the maintenance readouts ([MaintenanceController]). */
+    private val maintenance = MaintenanceController(
+        lane = lane,
+        json = json,
+        store = MaintenanceStore(app, json),
+        scope = viewModelScope,
+        uiState = { _ui.value },
+        updateUi = { transform -> _ui.update(transform) },
+        appendLog = { appendLog(it) },
+    )
 
     /** Closed in [onCleared]; lives exactly as long as this ViewModel. */
     private val decentClient = DecentClient(json)
@@ -417,11 +421,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog = { appendLog(it) },
         currentPrefs = { currentPrefs() },
         applyRestoredSettings = { applyRestoredSettings(it) },
-        applyRestoredMaintenance = { m ->
-            // Reseed the live water integrator + persist (maintenance is VM-owned).
-            lane.post { maintenanceTotalLitres = m.totalLitres }
-            saveMaintenance(m)
-        },
+        applyRestoredMaintenance = { m -> maintenance.restore(m) },
         persistSawModel = {
             runCatching { sawModelStore.save(bridge.sawModelJson()) }
                 .onFailure { appendLog("SAW model save failed: ${it.message}") }
@@ -1067,16 +1067,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             vibrator?.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
         }
     }
-
-    /**
-     * The live integrated water total, litres — seeded from the loaded
-     * [MaintenanceState.totalLitres] in [loadMaintenance] and advanced on every
-     * `Event.Telemetry` (group_flow × Δseconds / 1000). Held in a `var` rather
-     * than the ui-state so the ~25–40 Hz accumulate does NOT thrash recomposition;
-     * it is flushed into the persisted state (and the readout recomputed) only on
-     * shot / water-session completion and after a mark action.
-     */
-    private var maintenanceTotalLitres: Double = 0.0
 
     /**
      * What this device does for each [MachineCommand]: the bodies behind the
@@ -1751,7 +1741,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // never triggers that push, so it would arm nothing at all
             // (geota/crema#56). Pure core state; safe while disconnected.
             pushStopTargets()
-            loadMaintenance()
+            maintenance.load()
             visualizer.load()
             // Uploads that failed last time retry now (F17).
             visualizer.drainSoon()
@@ -3889,104 +3879,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Set (or with `null`, clear) the active bean (the Brew bean block). Persisted. */
     fun setActiveBean(id: String?) = machine.execute(MachineCommand.SetActiveBean(id))
 
-    // ── Maintenance (water accumulation) ────────────────────────────────────────
-    //
-    // The DE1 has no cumulative water counter; we integrate group flow over
-    // telemetry into a running litre total (the de1app / web-shell approach) and
-    // derive the filter / descale / clean readouts from it via the pure core FFI.
-    // The live total lives in [maintenanceTotalLitres] (not the ui-state) so the
-    // ~25–40 Hz accumulate doesn't thrash recomposition; it's flushed into the
-    // persisted [MaintenanceState] (and the readout recomputed) only at load, on
-    // shot / water-session completion, and after a mark action.
+    // ── Maintenance — see [MaintenanceController] ───────────────────────────
 
-    /** Load the persisted maintenance state, seed the live total, compute the readout. */
-    private suspend fun loadMaintenance() {
-        val state = maintenanceStore.load()
-        lane.post { maintenanceTotalLitres = state.totalLitres }
-        _ui.update { it.copy(
-            maintenance = state,
-            maintenanceReadout = computeMaintenanceReadout(state),
-        ) }
-    }
+    /** Mark the water filter cleaned (rebaseline to the current total). */
+    fun markFilterCleaned() = maintenance.markFilterCleaned()
 
-    /**
-     * Derive the filter / descale / clean readout from [state] via the pure core
-     * FFI (`maintenanceReadout` — a MaintenanceState JSON in, a MaintenanceReadout
-     * JSON out; @Throws on a bad input). The same derivation the web shell uses,
-     * so both produce byte-identical readouts. Failures fall back to null.
-     */
-    private fun computeMaintenanceReadout(state: MaintenanceState): MaintenanceReadout? = runCatching {
-        val stateJson = json.encodeToString(MaintenanceState.serializer(), state)
-        val resultJson = maintenanceReadout(stateJson, System.currentTimeMillis())
-        json.decodeFromString(MaintenanceReadout.serializer(), resultJson)
-    }.getOrElse {
-        appendLog("Maintenance readout failed: ${it.message}")
-        null
-    }
+    /** Mark a descale done (rebaseline to the current total). */
+    fun markDescaled() = maintenance.markDescaled()
 
-    /**
-     * Flush the live integrated [maintenanceTotalLitres] into the persisted
-     * [MaintenanceState], save, and recompute the readout. Called on shot /
-     * water-session completion (the natural "a pour just finished" boundaries) —
-     * NOT per telemetry sample.
-     */
-    private fun flushMaintenance() {
-        val next = _ui.value.maintenance.copy(totalLitres = maintenanceTotalLitres)
-        _ui.update { it.copy(
-            maintenance = next,
-            maintenanceReadout = computeMaintenanceReadout(next),
-        ) }
-        viewModelScope.launch { maintenanceStore.save(next) }
-    }
-
-    /**
-     * Mark the water filter cleaned — rebaseline its litre counter to the current
-     * total and stamp `filterAtMs` (the web store's `markFilterCleaned`). Persists
-     * + recomputes the readout.
-     */
-    fun markFilterCleaned() = lane.post {
-        val next = _ui.value.maintenance.copy(
-            totalLitres = maintenanceTotalLitres,
-            filterBaselineLitres = maintenanceTotalLitres,
-            filterAtMs = System.currentTimeMillis(),
-        )
-        saveMaintenance(next)
-    }
-
-    /**
-     * Mark a descale done — rebaseline the descale litre counter to the current
-     * total and stamp `descaleAtMs` (the web store's `markDescaled`). Persists +
-     * recomputes the readout.
-     */
-    fun markDescaled() = lane.post {
-        val next = _ui.value.maintenance.copy(
-            totalLitres = maintenanceTotalLitres,
-            descaleBaselineLitres = maintenanceTotalLitres,
-            descaleAtMs = System.currentTimeMillis(),
-        )
-        saveMaintenance(next)
-    }
-
-    /**
-     * Mark a clean cycle done — reset its hour counter by stamping `cleanAtMs`
-     * (the web store's `markCleaned`). Persists + recomputes the readout.
-     */
-    fun markCleaned() = lane.post {
-        val next = _ui.value.maintenance.copy(
-            totalLitres = maintenanceTotalLitres,
-            cleanAtMs = System.currentTimeMillis(),
-        )
-        saveMaintenance(next)
-    }
-
-    /** Fold a mark action's new state into the ui-state, recompute, and persist. */
-    private fun saveMaintenance(next: MaintenanceState) {
-        _ui.update { it.copy(
-            maintenance = next,
-            maintenanceReadout = computeMaintenanceReadout(next),
-        ) }
-        viewModelScope.launch { maintenanceStore.save(next) }
-    }
+    /** Mark a clean cycle done (reset its hour counter). */
+    fun markCleaned() = maintenance.markCleaned()
 
     // ── App settings ──────────────────────────────────────────────────────────
 
@@ -4414,28 +4316,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Maintenance intervals (web WaterSection "Maintenance intervals") ─────
 
     /** Set the water-filter capacity (litres). Persisted + readout recomputed. */
-    fun setFilterCapacity(litres: Double) =
-        saveMaintenance(_ui.value.maintenance.copy(filterCapacityLitres = litres.coerceIn(5.0, 500.0)))
+    fun setFilterCapacity(litres: Double) = maintenance.setFilterCapacity(litres)
 
     /** Set the descale interval (litres). Persisted + readout recomputed. */
-    fun setDescaleInterval(litres: Double) =
-        saveMaintenance(_ui.value.maintenance.copy(descaleIntervalLitres = litres.coerceIn(10.0, 1000.0)))
+    fun setDescaleInterval(litres: Double) = maintenance.setDescaleInterval(litres)
 
     /** Set the clean-cycle interval (hours). Persisted + readout recomputed. */
-    fun setCleanInterval(hours: Double) =
-        saveMaintenance(_ui.value.maintenance.copy(cleanIntervalHours = hours.coerceIn(1.0, 500.0)))
+    fun setCleanInterval(hours: Double) = maintenance.setCleanInterval(hours)
 
-    // Per-reminder arming (additive Option field: null = enabled). A disabled
-    // reminder is never "due" — the core readout forces its *_ok true, which
-    // silences the Brew banner on every shell with no special-casing.
-    fun setFilterReminderEnabled(on: Boolean) =
-        saveMaintenance(_ui.value.maintenance.copy(filterEnabled = on))
+    fun setFilterReminderEnabled(on: Boolean) = maintenance.setFilterReminderEnabled(on)
 
-    fun setDescaleReminderEnabled(on: Boolean) =
-        saveMaintenance(_ui.value.maintenance.copy(descaleEnabled = on))
+    fun setDescaleReminderEnabled(on: Boolean) = maintenance.setDescaleReminderEnabled(on)
 
-    fun setCleanReminderEnabled(on: Boolean) =
-        saveMaintenance(_ui.value.maintenance.copy(cleanEnabled = on))
+    fun setCleanReminderEnabled(on: Boolean) = maintenance.setCleanReminderEnabled(on)
 
     /** Start a steam-rinse cycle (Settings → Water → "Run now"). */
     fun startSteamRinse() = machine.execute(MachineCommand.StartSteamRinse)
@@ -4526,18 +4419,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * after their tokens are gone from disk.
      */
     fun eraseAll() {
-        // Reset the maintenance counters too — a fresh-install state (baselines and
-        // total zeroed, the three *AtMs = now so the readouts read "0 since").
-        val freshMaintenance = defaultMaintenanceState(System.currentTimeMillis())
-        lane.post {
-            maintenanceTotalLitres = 0.0
-            // A fresh stop-at-weight model (null = start learning again).
-            runCatching { bridge.loadSawModelJson(null) }
-        }
-        _ui.update { it.copy(
-            maintenance = freshMaintenance,
-            maintenanceReadout = computeMaintenanceReadout(freshMaintenance),
-        ) }
+        // Reset the maintenance counters too (a fresh-install state).
+        val freshMaintenance = maintenance.erase()
+        // A fresh stop-at-weight model (null = start learning again).
+        lane.post { runCatching { bridge.loadSawModelJson(null) } }
         // Every preference back to its default in memory too (barista name,
         // grinder, units, …): the next persistPrefs would otherwise write the
         // old values straight back.
@@ -4549,8 +4434,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             library.eraseStoredData()
             recipeStore.erase()
             settingsStore.erase()
-            maintenanceStore.erase()
-            maintenanceStore.save(freshMaintenance)
+            maintenance.eraseStored(freshMaintenance)
             sawModelStore.erase()
             // Sign-ins are personal data too (review 05 P2-1), and so are the
             // sync logs, settings and cursors (final review 04 P3-3).
@@ -4995,14 +4879,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         lane.on<Event.Telemetry> { event ->
             val t = event.content
-            // Add the core's counted water to the running total (the DE1 has no
-            // cumulative counter): `counted_ml` is set only for espresso and hot
-            // water, gap-capped — the core's rule, shared with web (Android used
-            // to count descale, clean, steam rinse and air purge too). In-memory
-            // only — flushed on shot / water-session completion.
-            // SIDE EFFECT — stays OUTSIDE the update lambda so it adds exactly
-            // once per frame even if the CAS retries (issue 11).
-            t.counted_ml?.let { maintenanceTotalLitres += it / 1000.0 }
+            // The counted water (`counted_ml`) is [MaintenanceController]'s.
             val line = fmt("t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C", 
                 t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
             )
@@ -5243,9 +5120,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 c.disposition ?: ShotDisposition.Record,
                 peakWeightG = c.peak_weight,
             )
-            // A pour just finished: flush the integrated water into the persisted
-            // maintenance state and recompute the filter / descale / clean readout.
-            flushMaintenance()
+            // The water flush is [MaintenanceController]'s own handler.
             // Freeze this shot's event trail to disk while it is still in
             // the rolling buffer. A "stop at weight didn't work" report
             // reaches us long after the shot, by which time the buffer has
@@ -5256,11 +5131,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             shotStartedByApp = false
         }
         lane.on<Event.WaterSessionStarted> { event -> appendLog("Water session started: ${event.content.kind.string}") }
-        lane.on<Event.WaterSessionCompleted> { event ->
-            appendLog("Water session completed: ${event.content.kind.string}")
-            // Flush the integrated water (same boundary as a completed shot).
-            flushMaintenance()
-        }
+        lane.on<Event.WaterSessionCompleted> { event -> appendLog("Water session completed: ${event.content.kind.string}") }
         lane.on<Event.BrewSessionStarted> { event ->
             // Anchor the shell clock on the SAME monotonic timebase the
             // notifications feed the core (elapsedRealtime).
