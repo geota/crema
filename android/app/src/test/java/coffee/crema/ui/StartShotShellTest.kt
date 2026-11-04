@@ -36,11 +36,7 @@ class StartShotShellTest {
         return vm to bridge
     }
 
-    private fun deliver(vm: MainViewModel, json: String) {
-        val apply = MainViewModel::class.java.getDeclaredMethod("applyCoreOutputJson", String::class.java)
-        apply.isAccessible = true
-        apply.invoke(vm, json)
-    }
+    private fun deliver(vm: MainViewModel, json: String) = VmHarness.applyCoreOutput(vm, json)
 
     private fun idle(bridge: CremaBridge) =
         bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(2, 0), 0uL)

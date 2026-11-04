@@ -99,14 +99,7 @@ class ShotStartOverridesTest {
         assertTrue(bridge.shotStarting(), "the start waits for the dialled profile")
     }
 
-    /** Wait for every task already queued on the VM's single-threaded core
-     *  lane (it runs FIFO, so a no-op queued now runs after them). */
-    private fun drainCoreLane(vm: MainViewModel) {
-        val field = MainViewModel::class.java.declaredFields.single { it.name == "coreDispatcher" }
-        field.isAccessible = true
-        val lane = field.get(vm) as kotlinx.coroutines.CoroutineDispatcher
-        repeat(3) { kotlinx.coroutines.runBlocking(lane) {} }
-    }
+    private fun drainCoreLane(vm: MainViewModel) = VmHarness.drainCoreLane(vm)
 
     /** F7 (validation P2): the dial is part of the desired profile. A dial
      *  change while connected becomes the desired profile once the dial rests

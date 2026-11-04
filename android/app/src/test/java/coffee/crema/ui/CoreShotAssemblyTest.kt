@@ -54,9 +54,7 @@ class CoreShotAssemblyTest {
 
     /** Run [raw] through the VM's own core-output path (applied on the core lane). */
     private fun apply(vm: MainViewModel, raw: String) {
-        MainViewModel::class.java.getDeclaredMethod("onCoreOutputJson", String::class.java)
-            .apply { isAccessible = true }
-            .invoke(vm, raw)
+        VmHarness.deliverCoreOutput(vm, raw)
         VmHarness.idle()
     }
 
