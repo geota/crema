@@ -47,9 +47,7 @@ class OwnStateReadsTest {
             // Hub only (StartShot is relayed).
             "applyStartShot" to setOf("activeProfileId", "autoTare", "brewParams", "stopOnWeight", "volumeStopWithScale"),
             // Holder logic, already gated by `authoritative`.
-            "registerCoreHandlers" to setOf("idleSleepMin", "preFlush", "steamPurge", "de1MachineInfo"),
-            // Sleep on quit: holder only (a remote never sends it), own firmware.
-            "init" to setOf("sleepLatchesInRefill()"),
+            "registerCoreHandlers" to setOf("preFlush", "steamPurge", "de1MachineInfo"),
             // T6 (§7.5): leaving compares and adopts into this device's own.
             "leaveRemote" to setOf("adoptableChanges()"),
             "adoptHubSettings" to setOf("adopt()"),
@@ -81,6 +79,12 @@ class OwnStateReadsTest {
             // Own-state writers (§7.4): a restore and a bean import.
             "restoreBackupFromText" to setOf("activeBeanId"),
             "applyBeanImportPlan" to setOf("activeBeanId"),
+        ),
+        "PresenceController.kt" to mapOf(
+            // The idle-sleep log line names the holder's own timer setting.
+            "init" to setOf("idleSleepMin"),
+            // Sleep on quit: holder only (a remote never sends it), own firmware.
+            "installQuitSleep" to setOf("sleepLatchesInRefill()"),
         ),
         "ScaleController.kt" to mapOf(
             // The scale echo fills this device's scale fields (the scale's own
