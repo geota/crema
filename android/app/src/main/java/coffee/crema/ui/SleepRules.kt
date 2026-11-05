@@ -63,34 +63,3 @@ internal fun sleepLatchesInRefill(
         machineInfo[MmrRegister.MachineModel],
     )
 }
-
-/**
- * True when [new] differs from [old] (the last PUBLISHED state) only in the
- * high-rate live readouts while the screensaver is up in both — a change
- * nothing on screen can show. Used to keep [MainViewModel.ui] quiet behind
- * the saver. Pure + `internal` for unit tests.
- */
-internal fun hiddenBySaver(old: MainUiState, new: MainUiState): Boolean =
-    old.saverVisible && new.saverVisible && old.withoutLiveReadouts() == new.withoutLiveReadouts()
-
-/** [this] with every telemetry-rate field blanked (DE1 samples, scale
- *  readings, water level, mode timers, the debug log). */
-private fun MainUiState.withoutLiveReadouts(): MainUiState = copy(
-    telemetry = null,
-    pressure = null,
-    flow = null,
-    headTemp = null,
-    mixTemp = null,
-    steamTemp = null,
-    dispensedVolume = null,
-    resistance = null,
-    resistanceWeight = null,
-    shotElapsedMs = 0,
-    shotTelemetry = emptyList(),
-    scaleWeightG = null,
-    scaleFlowGPerS = null,
-    scaleTimerMs = null,
-    waterLevelMm = null,
-    modeElapsedMs = 0,
-    eventLog = emptyList(),
-)

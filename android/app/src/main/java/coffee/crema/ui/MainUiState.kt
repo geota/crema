@@ -30,7 +30,9 @@ import coffee.crema.decent.DecentSync
  *  bundle): [MainUiState]'s settings fields start from these. */
 private val DefaultPrefs = AppPrefs()
 
-/** A flat snapshot of everything the current screen shows. */
+/** A flat snapshot of what the screens show, except the high-rate readouts:
+ *  those are [LiveTelemetry], in a flow of their own, so a telemetry sample
+ *  does not re-emit this state to every screen. */
 data class MainUiState(
     val bleState: De1BleManager.State = De1BleManager.State.IDLE,
     /** Coarse state of the scale connection. */
@@ -45,40 +47,10 @@ data class MainUiState(
     val machineState: String? = null,
     /** Latest shot phase. */
     val shotPhase: String? = null,
-    /** Latest telemetry sample, pre-formatted (debug readout). */
-    val telemetry: String? = null,
-    // ── Structured live telemetry (Brew dashboard) ───────────────────────────
-    // Projected from `Event.Telemetry`; null until the first sample of a session.
-    /** Group pressure, bar. */
-    val pressure: Float? = null,
-    /** Group flow, ml/s. */
-    val flow: Float? = null,
-    /** Group-head temperature, °C (the COFFEE channel). */
-    val headTemp: Float? = null,
-    /** Mix temperature, °C — the DE1's blended group water (COFFEE-card secondary). */
-    val mixTemp: Float? = null,
-    /** Steam-heater temperature, °C (foot "Steam" readout). */
-    val steamTemp: Float? = null,
-    /** Running shot volume dispensed so far, ml — integrated by the core. */
-    val dispensedVolume: Float? = null,
-    /** Puck resistance, `bar/(ml/s)²` — pump-flow derived, or null near zero flow. */
-    val resistance: Float? = null,
-    /** Scale-derived puck resistance, `bar/(g/s)²` — preferred when a scale is paired. */
-    val resistanceWeight: Float? = null,
-    /** Milliseconds since the shot began (`Event.Telemetry.elapsed`); resets each shot. */
-    val shotElapsedMs: Long = 0,
     /** Zero-based active frame index (`Event.ShotFrameChanged`); resets each shot. */
     val shotFrame: Int = 0,
     /** True between `ShotStarted` and `ShotCompleted` — drives resting↔extracting UI. */
     val shotInProgress: Boolean = false,
-    /**
-     * Buffered per-sample telemetry for the live shot chart — appended on each
-     * `Event.Telemetry` while [shotInProgress], reset on `ShotStarted`, capped at
-     * [SHOT_TELEMETRY_CAP]. Empty when no shot is running. The scalar fields
-     * above stay live outside a shot (for the resting channel cards); this series
-     * only fills during extraction (when the chart draws curves).
-     */
-    val shotTelemetry: List<TelemetrySample> = emptyList(),
     /** Raw machine-state name (e.g. `"Espresso"`) for `==` comparisons, or null. */
     val machineStateName: MachineState? = null,
     /** Raw machine-substate name (e.g. `"Pouring"`), or null. */
@@ -91,11 +63,8 @@ data class MainUiState(
      *  requested, or running with the descale countdown; null when none is
      *  (including once it finishes or is cancelled). Web: `snapshot.maintenance`. */
     val maintenanceRun: EventMaintenanceProgressInner? = null,
-    /** Latest tank DEPTH, mm (`Event.WaterLevel.level` — raw + core's 5 mm
-     *  sensor offset, smoothed), or null before the first report. */
-    val waterLevelMm: Float? = null,
     /** The DE1's own refill threshold, RAW sensor mm — reported alongside the level in the
-     *  same `Event.WaterLevel` packet (null before the first report / while
+     *  same `Event.WaterLevel` packet as [LiveTelemetry.waterLevelMm] (null before the first report / while
      *  disconnected). The shell defers to this live machine value for the
      *  "refill soon" cue rather than a hardcoded constant, matching the web
      *  shell's `waterRefillThreshold` (issue 29). */
@@ -112,9 +81,6 @@ data class MainUiState(
     /** Monotonic ms when the DE1 entered the current service mode (Steam /
      *  HotWater / HotWaterRinse), or null when no service mode is running. */
     val modeStartedAtMs: Long? = null,
-    /** Milliseconds since the current service mode began — ticked at 4 Hz
-     *  while a mode runs (the steam / hot-water / flush timers); 0 when idle. */
-    val modeElapsedMs: Long = 0,
     /**
      * The DE1's pre-formatted firmware label (e.g. `"v1.0.142 (API 4)"`), or
      * null until the machine's `Version` characteristic reply arrives.
@@ -545,19 +511,6 @@ data class MainUiState(
     val mirroredBeanSummary: String? = null,
     /** Crema instances discovered on the LAN (NSD) — the device picker's list. */
     val peers: List<Peer> = emptyList(),
-    /** Latest scale weight in grams, or null before the first reading. */
-    val scaleWeightG: Float? = null,
-    /**
-     * Latest scale-reported native mass-flow rate in g/s, or null — only
-     * scales that report their own flow (the Bookoo) populate this; it is
-     * distinct from the core-computed flow.
-     */
-    val scaleFlowGPerS: Float? = null,
-    /**
-     * Latest scale-reported built-in-timer reading in milliseconds, or null —
-     * only scales with a built-in timer (the Bookoo) populate this.
-     */
-    val scaleTimerMs: Long? = null,
     /**
      * What the connected scale can do beyond reporting a bare weight, or null
      * before a scale is connected / identified. The UI gates configuration
@@ -657,6 +610,4 @@ data class MainUiState(
      * a mode, after which the response confirms it.
      */
     val scaleActiveMode: Int? = null,
-    /** A rolling event log, newest first. */
-    val eventLog: List<String> = emptyList(),
 )

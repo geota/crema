@@ -234,10 +234,11 @@ fun HistoryScreen(
     // Bean filter: a coffee (every bag of it) or, from the bean detail's deep
     // link, one bag. The coffee resolves through the live library.
     val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
-    // Memoized: the screen recomposes on every UI-state emission (telemetry
-    // included), and re-filtering + re-sorting the whole log each time is the
-    // expensive part. `now` is minute-bucketed so it doesn't bust the cache.
-    val nowBucket = coffee.crema.history.minuteBucket(System.currentTimeMillis())
+    // Memoized: the screen recomposes on every UI-state emission, and
+    // re-filtering + re-sorting the whole log each time is the expensive part.
+    // `now` is minute-bucketed so it doesn't bust the cache, and ticks by
+    // itself so a range stays right on a screen nothing else recomposes.
+    val nowBucket = coffee.crema.ui.rememberMinuteBucket()
     val shots = remember(ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee) {
         filterAndSortShots(
             ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,

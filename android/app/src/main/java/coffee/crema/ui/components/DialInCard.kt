@@ -1,5 +1,6 @@
 package coffee.crema.ui.components
 
+import coffee.crema.ui.rememberMinuteBucket
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -80,7 +81,8 @@ fun DialInCard(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Eyebrow("Where you left off · ${relativeAgo(shot.completedAtMs)}", Modifier.weight(1f))
+                val minute = rememberMinuteBucket()
+                Eyebrow("Where you left off · ${relativeAgo(shot.completedAtMs, minute)}", Modifier.weight(1f))
                 if ((shot.rating ?: 0) > 0) {
                     CremaStarRating(
                         shot.rating ?: 0,

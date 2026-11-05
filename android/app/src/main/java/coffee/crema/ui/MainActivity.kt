@@ -738,57 +738,63 @@ private fun MainScreen(
             OutlinedButton(onClick = viewModel::stopShot, enabled = de1Ready) { Text("Stop") }
         }
 
-        ScaleSection(
-            scaleState = ui.scaleState,
-            scaleName = ui.scaleName,
-            scaleFirmware = ui.scaleFirmware,
-            scaleSerial = ui.scaleSerial,
-            scaleWeightG = ui.scaleWeightG,
-            scaleFlowGPerS = ui.scaleFlowGPerS,
-            scaleTimerMs = ui.scaleTimerMs,
-            scaleBatteryPercent = ui.scaleBatteryPercent,
-            volumeRange = ui.scaleCapabilities?.volume,
-            scaleVolume = ui.scaleVolume,
-            standbyRange = ui.scaleCapabilities?.standby,
-            scaleStandbyMinutes = ui.scaleStandbyMinutes,
-            flowSmoothingSupported = ui.scaleCapabilities?.flow_smoothing == true,
-            scaleFlowSmoothing = ui.scaleFlowSmoothing,
-            antiMistouchSupported = ui.scaleCapabilities?.anti_mistouch == true,
-            scaleAntiMistouch = ui.scaleAntiMistouch,
-            modes = ui.scaleCapabilities?.modes ?: emptyList(),
-            scaleActiveMode = ui.scaleActiveMode,
-            autoStopSupported = ui.scaleCapabilities?.auto_stop == true,
-            scaleAutoStop = ui.scaleAutoStop,
-            onConnectScale = onConnectScale,
-            onDisconnectScale = onDisconnectScale,
-            onTareScale = onTareScale,
-            onSetScaleVolume = onSetScaleVolume,
-            onSetScaleStandbyMinutes = onSetScaleStandbyMinutes,
-            onSetScaleFlowSmoothing = onSetScaleFlowSmoothing,
-            onSetScaleAntiMistouch = onSetScaleAntiMistouch,
-            onSetScaleMode = onSetScaleMode,
-            onSetScaleAutoStop = onSetScaleAutoStop,
-        )
+        LiveReadouts(viewModel.live) { live ->
+            ScaleSection(
+                scaleState = ui.scaleState,
+                scaleName = ui.scaleName,
+                scaleFirmware = ui.scaleFirmware,
+                scaleSerial = ui.scaleSerial,
+                scaleWeightG = live.scaleWeightG,
+                scaleFlowGPerS = live.scaleFlowGPerS,
+                scaleTimerMs = live.scaleTimerMs,
+                scaleBatteryPercent = ui.scaleBatteryPercent,
+                volumeRange = ui.scaleCapabilities?.volume,
+                scaleVolume = ui.scaleVolume,
+                standbyRange = ui.scaleCapabilities?.standby,
+                scaleStandbyMinutes = ui.scaleStandbyMinutes,
+                flowSmoothingSupported = ui.scaleCapabilities?.flow_smoothing == true,
+                scaleFlowSmoothing = ui.scaleFlowSmoothing,
+                antiMistouchSupported = ui.scaleCapabilities?.anti_mistouch == true,
+                scaleAntiMistouch = ui.scaleAntiMistouch,
+                modes = ui.scaleCapabilities?.modes ?: emptyList(),
+                scaleActiveMode = ui.scaleActiveMode,
+                autoStopSupported = ui.scaleCapabilities?.auto_stop == true,
+                scaleAutoStop = ui.scaleAutoStop,
+                onConnectScale = onConnectScale,
+                onDisconnectScale = onDisconnectScale,
+                onTareScale = onTareScale,
+                onSetScaleVolume = onSetScaleVolume,
+                onSetScaleStandbyMinutes = onSetScaleStandbyMinutes,
+                onSetScaleFlowSmoothing = onSetScaleFlowSmoothing,
+                onSetScaleAntiMistouch = onSetScaleAntiMistouch,
+                onSetScaleMode = onSetScaleMode,
+                onSetScaleAutoStop = onSetScaleAutoStop,
+            )
+        }
 
-        ReadoutCard(
-            bleState = ui.bleState.name,
-            status = ui.status,
-            machineState = ui.machineState,
-            shotPhase = ui.shotPhase,
-            telemetry = ui.telemetry,
-        )
+        LiveReadouts(viewModel.live) { live ->
+            ReadoutCard(
+                bleState = ui.bleState.name,
+                status = ui.status,
+                machineState = ui.machineState,
+                shotPhase = ui.shotPhase,
+                telemetry = live.debugLine(),
+            )
+        }
 
         Text("Decoded events", style = MaterialTheme.typography.titleMedium)
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            items(ui.eventLog) { line ->
-                Text(
-                    line,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                )
+        LiveReadouts(viewModel.live) { live ->
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                items(live.eventLog) { line ->
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
             }
         }
     }

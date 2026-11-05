@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.CoreBounds
 import coffee.crema.ui.RelayPairingRows
 import coffee.crema.ui.maintenanceRunText
@@ -236,12 +237,14 @@ fun PhoneSettingsScreen(
                     }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("Decent DE1", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            if (connected) listOfNotNull(firmwareLabel(ui.de1MachineInfo, ui.de1Firmware).takeIf { it != "—" }?.let { "Firmware $it" }, ui.headTemp?.let { formatTemp(it, ui.tempUnit) }).joinToString(" · ").ifEmpty { "Connected" }
-                            else "Not connected",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        LiveReadouts(vm.live) { live ->
+                            Text(
+                                if (connected) listOfNotNull(firmwareLabel(ui.de1MachineInfo, ui.de1Firmware).takeIf { it != "—" }?.let { "Firmware $it" }, live.headTemp?.let { formatTemp(it, ui.tempUnit) }).joinToString(" · ").ifEmpty { "Connected" }
+                                else "Not connected",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             CremaStatusDot(connected)
                             Text(
@@ -598,21 +601,23 @@ private fun WaterSection(
     tdsPpm: Int, onTds: (Int) -> Unit,
 ) {
     SettingsGroup("Tank") {
-        val mm = ui.waterLevelMm
-        val low = ui.refillSoon()
-        // Unit-aware like every other tank readout (tablet parity — this row
-        // used to hardcode raw sensor mm; see geota/crema#47).
-        val tank = formatTankLevel(mm, ui.waterLevelUnit, ui.volumeUnit)
-        val depth = ui.tankDepthMm()
-        CremaSettingsRow(
-            "Water tank",
-            when {
-                mm == null -> "Connect the DE1 to read the tank level."
-                low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills below ${ui.refillThresholdDepthMm()?.toInt()} mm."
-                else -> "Tank level looks good — ${depth?.toInt()} mm deep."
-            },
-        ) {
-            CremaMonoReadout(if (mm != null) "${tank.value} ${tank.unit}" else "—", color = if (low) Color(0xFFDBA764) else MaterialTheme.colorScheme.onSurface)
+        LiveReadouts(vm.live) { live ->
+            val mm = live.waterLevelMm
+            val low = ui.refillSoon(live)
+            // Unit-aware like every other tank readout (tablet parity — this row
+            // used to hardcode raw sensor mm; see geota/crema#47).
+            val tank = formatTankLevel(mm, ui.waterLevelUnit, ui.volumeUnit)
+            val depth = live.tankDepthMm()
+            CremaSettingsRow(
+                "Water tank",
+                when {
+                    mm == null -> "Connect the DE1 to read the tank level."
+                    low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills below ${ui.refillThresholdDepthMm()?.toInt()} mm."
+                    else -> "Tank level looks good — ${depth?.toInt()} mm deep."
+                },
+            ) {
+                CremaMonoReadout(if (mm != null) "${tank.value} ${tank.unit}" else "—", color = if (low) Color(0xFFDBA764) else MaterialTheme.colorScheme.onSurface)
+            }
         }
         // The machine's own refill threshold — written to the DE1, not an
         // app-side warning. See the tablet screen for the full rationale.
@@ -1153,16 +1158,18 @@ private fun AdvancedSection(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    val lines = ui.eventLog.takeLast(100)
-                    if (lines.isEmpty()) {
-                        Text("No events yet.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        lines.forEach { line ->
-                            Text(
-                                line,
-                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                    LiveReadouts(vm.live) { live ->
+                        val lines = live.eventLog.takeLast(100)
+                        if (lines.isEmpty()) {
+                            Text("No events yet.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else {
+                            lines.forEach { line ->
+                                Text(
+                                    line,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 }

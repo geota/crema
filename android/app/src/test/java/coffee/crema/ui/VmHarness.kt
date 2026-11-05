@@ -198,7 +198,7 @@ internal object VmHarness {
     }
 
     /** The VM's event log, newest first. */
-    fun log(vm: MainViewModel): List<String> = vm.ui.value.eventLog
+    fun log(vm: MainViewModel): List<String> = vm.liveStore.value.eventLog
 
     /**
      * Restore [backup] and wait until the restore has finished. It runs in

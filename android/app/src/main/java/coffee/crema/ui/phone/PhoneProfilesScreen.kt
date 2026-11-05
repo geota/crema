@@ -79,8 +79,8 @@ fun PhoneProfilesScreen(
     // Same facet model as the tablet: Hidden appears only when something is
     // archived, and falls back to All once the last one is restored (issue 28).
     val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
-    // Memoized: the screen recomposes on every UI-state emission (telemetry
-    // included); only these inputs change the list.
+    // Memoized: the screen recomposes on every UI-state emission; only these
+    // inputs change the list.
     val sorted = remember(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId) {
         filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId)
     }

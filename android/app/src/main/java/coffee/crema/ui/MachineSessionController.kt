@@ -70,6 +70,7 @@ internal class MachineSessionController(
     private val scope: CoroutineScope,
     private val uiState: () -> MainUiState,
     private val updateUi: ((MainUiState) -> MainUiState) -> Unit,
+    private val updateLive: ((LiveTelemetry) -> LiveTelemetry) -> Unit,
     private val effectiveState: () -> MainUiState,
     private val appendLog: (String) -> Unit,
     private val notify: (String) -> Unit,
@@ -107,7 +108,7 @@ internal class MachineSessionController(
     /** One direct DE1 write, outside the lane (sleep-on-quit). */
     private val writeDe1: suspend (WriteTarget, ByteArray) -> Boolean,
 ) {
-    /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
+    /** Ticker driving [LiveTelemetry.modeElapsedMs] while a service mode runs. */
     private var modeTickerJob: Job? = null
 
     /** Start the 4 Hz mode-clock ticker when a service mode is running, stop it
@@ -120,7 +121,7 @@ internal class MachineSessionController(
             modeTickerJob = scope.launch {
                 while (true) {
                     val started = uiState().modeStartedAtMs ?: break
-                    updateUi { it.copy(modeElapsedMs = SystemClock.elapsedRealtime() - started) }
+                    updateLive { it.copy(modeElapsedMs = SystemClock.elapsedRealtime() - started) }
                     delay(250)
                 }
             }
@@ -180,9 +181,11 @@ internal class MachineSessionController(
                     machineStateName = c.state,
                     machineSubstate = c.substate.string,
                     modeStartedAtMs = started,
-                    modeElapsedMs = if (started == null) 0L else prev.modeElapsedMs,
                 )
             }
+            // After the state: the mode's card leaves with it, so its timer
+            // never shows a zero first.
+            if (uiState().modeStartedAtMs == null) updateLive { it.copy(modeElapsedMs = 0L) }
             updateModeTicker()
             appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
         }
@@ -222,12 +225,16 @@ internal class MachineSessionController(
         lane.on<Event.ShotStarted> {
             // Entering a shot: flip the resting↔extracting flag and zero the
             // per-shot counters so the Brew timer / phase / volume restart.
-            updateUi { it.copy(
-                shotInProgress = true,
-                shotFrame = 0,
+            // The readouts first: nothing sees a running shot over the last
+            // shot's samples. The next sample lands after both, on this lane.
+            updateLive { it.copy(
                 shotElapsedMs = 0,
                 dispensedVolume = 0f,
                 shotTelemetry = emptyList(),
+            ) }
+            updateUi { it.copy(
+                shotInProgress = true,
+                shotFrame = 0,
                 // Fresh shot — the previous stop attribution no longer applies.
                 lastStopReason = null,
             ) }
@@ -252,13 +259,12 @@ internal class MachineSessionController(
         lane.on<Event.Telemetry> { event ->
             val t = event.content
             // The counted water (`counted_ml`) is [MaintenanceController]'s.
-            val line = fmt("t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C", 
-                t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
-            )
             // Atomic read-modify-write: build the chart buffer from the lambda's
             // `prev` (the live state), so a concurrent Event.ScaleReading update{}
-            // landing mid-frame isn't clobbered (issue 11).
-            updateUi { prev ->
+            // landing mid-frame isn't clobbered (issue 11). The shot's state is
+            // read in the lambda too, so a retry sees a disconnect's clear.
+            updateLive { prev ->
+                val shot = uiState()
                 // Append a chart sample only during the FLOW window
                 // (preinfusion / pouring), like the core's own ShotRecord:
                 // the pre-pour heating phase piles zero-elapsed points and
@@ -267,9 +273,9 @@ internal class MachineSessionController(
                 // issue #44's "truncate at the stop" report. Fold in the
                 // latest scale weight/flow so the WEIGHT curves track the
                 // cup. FIFO-capped.
-                val flowing = prev.machineSubstate == "Preinfusion" ||
-                    prev.machineSubstate == "Pouring"
-                val nextBuffer = if (prev.shotInProgress && flowing) {
+                val flowing = shot.machineSubstate == "Preinfusion" ||
+                    shot.machineSubstate == "Pouring"
+                val nextBuffer = if (shot.shotInProgress && flowing) {
                     val sample = TelemetrySample(
                         elapsedMs = t.elapsed.toLong(),
                         pressure = t.group_pressure,
@@ -284,7 +290,7 @@ internal class MachineSessionController(
                         setHeadTemp = t.set_head_temp,
                         setGroupPressure = t.set_group_pressure,
                         setGroupFlow = t.set_group_flow,
-                        frameNumber = prev.shotFrame,
+                        frameNumber = shot.shotFrame,
                     )
                     val appended = prev.shotTelemetry + sample
                     if (appended.size > SHOT_TELEMETRY_CAP) {
@@ -295,10 +301,9 @@ internal class MachineSessionController(
                 } else {
                     prev.shotTelemetry
                 }
-                // Keep the debug string AND project the structured channels the
-                // Brew dashboard reads. High-rate; no log line.
+                // Project the structured channels the Brew dashboard reads.
+                // High-rate; no log line.
                 prev.copy(
-                    telemetry = line,
                     pressure = t.group_pressure,
                     flow = t.group_flow,
                     headTemp = t.head_temp,
@@ -313,10 +318,10 @@ internal class MachineSessionController(
             }
         }
         lane.on<Event.WaterLevel> { event ->
-            updateUi { it.copy(
-                waterLevelMm = event.content.level,
-                waterRefillThresholdMm = event.content.refill_threshold,
-            ) }
+            // The threshold first: `refillSoon` reads both, and a level never
+            // shows without the threshold from its own packet.
+            updateUi { it.copy(waterRefillThresholdMm = event.content.refill_threshold) }
+            updateLive { it.copy(waterLevelMm = event.content.level) }
             // Log only when the whole millimetre actually changes. The DE1
             // reports the tank level continuously (~2.4/s), and logging
             // every report drowned the diagnostics buffer: a real report on
@@ -812,22 +817,8 @@ internal class MachineSessionController(
             machineStateName = null,
             machineSubstate = null,
             shotPhase = null,
-            telemetry = null,
-            // Drop the live telemetry so the Brew cards clear to "—" for the
-            // next connection rather than freezing on the last machine's values.
-            pressure = null,
-            flow = null,
-            headTemp = null,
-            mixTemp = null,
-            steamTemp = null,
-            dispensedVolume = null,
-            resistance = null,
-            resistanceWeight = null,
-            shotElapsedMs = 0,
             shotFrame = 0,
             shotInProgress = false,
-            shotTelemetry = emptyList(),
-            waterLevelMm = null,
             // Drop the machine identity / register readouts so the Settings
             // machine rows clear to "—" for the next connection rather than
             // freezing on the last machine's values. The firmware label and
@@ -839,6 +830,23 @@ internal class MachineSessionController(
             lineFreqOverride = 0f,
             profileUploading = false,
             profileUploadProgress = null,
+        ) }
+        // Drop the live telemetry so the Brew cards clear to "—" for the next
+        // connection rather than freezing on the last machine's values. After
+        // the state: a sample landing between the two can't add to a shot
+        // that has ended, and this clear still wipes it.
+        updateLive { it.copy(
+            pressure = null,
+            flow = null,
+            headTemp = null,
+            mixTemp = null,
+            steamTemp = null,
+            dispensedVolume = null,
+            resistance = null,
+            resistanceWeight = null,
+            shotElapsedMs = 0,
+            shotTelemetry = emptyList(),
+            waterLevelMm = null,
         ) }
     }
 

@@ -48,13 +48,13 @@ class ProxyStartupOrderTest {
         val vm = build(store)
         val listening = Regex("LAN relay listening on :(\\d+)")
         val deadline = System.nanoTime() + 10_000_000_000L
-        while (vm.ui.value.eventLog.none { listening.containsMatchIn(it) }) {
-            check(System.nanoTime() < deadline) { "the relay never listened: ${vm.ui.value.eventLog}" }
+        while (vm.liveStore.value.eventLog.none { listening.containsMatchIn(it) }) {
+            check(System.nanoTime() < deadline) { "the relay never listened: ${vm.liveStore.value.eventLog}" }
             shadowOf(Looper.getMainLooper()).idle()
             Thread.sleep(5)
         }
         shadowOf(Looper.getMainLooper()).idle()
-        val log = vm.ui.value.eventLog
+        val log = vm.liveStore.value.eventLog
         val port = log.firstNotNullOf { listening.find(it) }.groupValues[1].toInt()
 
         assertTrue(log.none { "LAN relay failed to start" in it }, "the relay start failed: $log")

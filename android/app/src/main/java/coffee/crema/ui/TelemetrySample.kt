@@ -9,9 +9,9 @@ import kotlinx.serialization.Serializable
  * `Event.Telemetry` (with the scale's weight/flow folded in from the latest
  * `Event.ScaleReading`).
  *
- * Buffered into [MainUiState.shotTelemetry] only while a shot is in progress,
+ * Buffered into [LiveTelemetry.shotTelemetry] only while a shot is in progress,
  * capped at [SHOT_TELEMETRY_CAP] (FIFO), and reset on `ShotStarted` — the same
- * lifecycle the web uses. The live scalar fields on [MainUiState] (pressure,
+ * lifecycle the web uses. The live scalar fields on [LiveTelemetry] (pressure,
  * flow, …) still update outside a shot to drive the resting channel cards; this
  * series only fills during extraction, which is when the chart draws curves.
  *

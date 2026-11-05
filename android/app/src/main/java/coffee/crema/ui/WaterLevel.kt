@@ -42,7 +42,7 @@ fun MainUiState.refillPointMm(): Float = waterRefillPointMm ?: coffee.crema.core
  *  sensor offset once, at decode), so this is the level as-is — never run it
  *  through `waterTankDepthMm` again (that double offset read ~135 ml high).
  *  Null until the first report. */
-fun MainUiState.tankDepthMm(): Float? = waterLevelMm
+fun LiveTelemetry.tankDepthMm(): Float? = waterLevelMm
 
 /** The DE1's reported refill threshold (RAW sensor mm on the wire) converted
  *  to depth mm via core's `waterTankDepthMm`, so it compares and reads in the
@@ -55,6 +55,8 @@ fun MainUiState.refillThresholdDepthMm(): Float? =
  * `refill_soon` (shared with web): the live level DEPTH within 5 mm of, or
  * already below, the DE1's *reported* RAW refill threshold. Both readings
  * arrive together in one `Event.WaterLevel`, so the cue is naturally
- * suppressed before the first report and while disconnected.
+ * suppressed before the first report and while disconnected. The threshold
+ * barely moves, so it stays on [MainUiState] and the level is [live]'s.
  */
-fun MainUiState.refillSoon(): Boolean = coffee.crema.core.refillSoon(tankDepthMm(), waterRefillThresholdMm)
+fun MainUiState.refillSoon(live: LiveTelemetry): Boolean =
+    coffee.crema.core.refillSoon(live.tankDepthMm(), waterRefillThresholdMm)
