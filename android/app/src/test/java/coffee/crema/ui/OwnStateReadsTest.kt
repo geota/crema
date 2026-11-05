@@ -105,12 +105,14 @@ class OwnStateReadsTest {
     /** §7.2 effective reads: these act on what is on screen. */
     private val effectiveMembers: Map<String, Set<String>> = mapOf(
         "MainViewModel.kt" to setOf(
-            "pushStopTargets", "startFromShot", "saveQuickGrindToBean", "shotDiagSummary", "guidedBeanId",
-            "openGuidedLogBrew", "openLogBrew", "defaultBrewRecipeFor", "resolveGuidedSetup",
+            "pushStopTargets", "startFromShot", "saveQuickGrindToBean", "shotDiagSummary",
             // Decent buildRecord.grinderModel; Visualizer grinderModel and beanLibrary.
             "decent", "visualizer",
         ),
         "LibraryController.kt" to setOf("saveQuickPreset", "captureCompletedShot"),
+        "GuidedBrewController.kt" to setOf(
+            "guidedBeanId", "openGuidedLogBrew", "openLogBrew", "defaultBrewRecipeFor", "resolveGuidedSetup",
+        ),
     )
 
     /** Where each file reads its own state: `_ui.value` in the VM, the own
