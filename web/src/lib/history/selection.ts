@@ -1,3 +1,11 @@
+/** A shot's pull time, e.g. `May 18 · 14:36` (Android `MMM d · HH:mm`). */
+export function shotStamp(completedAt: number): string {
+	const d = new Date(completedAt);
+	const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+	const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+	return `${date} · ${time}`;
+}
+
 /**
  * An explicit selection: a shot the user was sent to (`?shot=` deep link) or
  * just saved (Log brew), together with the filter scope that was active when

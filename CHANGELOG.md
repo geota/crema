@@ -7,6 +7,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Phone layout for the web app** — at 600 px and below the side rail gives
+  way to a bottom tab bar (Brew, Scale, Profiles, Beans, History, as on
+  Android) and a slim top bar with the DE1 and scale buttons and the Settings
+  gear. History opens a shot on its own screen, and Settings is a section list
+  with a screen per section; system Back returns to the list, at the place you
+  left. The tab bar hides on the profile, bean and roaster editors. Nothing
+  changes above 600 px. Web.
+
 ## [0.10.0] — 2026-10-30
 
 ### Added

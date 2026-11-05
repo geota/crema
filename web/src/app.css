@@ -38,4 +38,21 @@
 	--page-pad-x: 40px;
 	/* Vertical inset of the page-header block from the content top. */
 	--page-pad-top: 32px;
+	/* Phone chrome (≤ 600 px): the top bar and bottom tab bar heights, before
+	   their safe-area insets. */
+	--ptop-h: 52px;
+	--ptab-h: 64px;
+}
+/* Phone width: no rail (the top bar and tab bar replace it), and the 16 px
+   edge inset of the Android phone UI (CremaEdge). `--ptop-clear` and
+   `--ptab-clear` are what the fixed bars cover; they only exist down here, so
+   `var(--ptop-clear, 0px)` is 0 above 600 px. */
+@media (max-width: 600px) {
+	:root {
+		--sidebar-w: env(safe-area-inset-left, 0px);
+		--page-pad-x: 16px;
+		--page-pad-top: 20px;
+		--ptop-clear: calc(var(--ptop-h) + env(safe-area-inset-top, 0px));
+		--ptab-clear: calc(var(--ptab-h) + env(safe-area-inset-bottom, 0px));
+	}
 }

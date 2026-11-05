@@ -841,6 +841,13 @@
 		display: flex;
 		gap: 28px;
 	}
+	/* Phone: the value pair and the buttons wrap instead of clipping. */
+	@media (max-width: 600px) {
+		.cal-control {
+			flex-wrap: wrap;
+			gap: 12px 24px;
+		}
+	}
 	.cal-val {
 		font-family: var(--font-mono);
 		font-size: 13px;
@@ -849,6 +856,7 @@
 	}
 	.cal-actions {
 		display: flex;
+		flex-wrap: wrap;
 		gap: 8px;
 		align-items: center;
 	}

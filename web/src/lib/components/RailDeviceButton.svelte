@@ -26,6 +26,8 @@
 		/** The connected device's advertised name, shown in the menu. */
 		deviceName?: string | null;
 		disabled?: boolean;
+		/** Word the label for touch (the phone top bar). */
+		touch?: boolean;
 		onConnect: () => void;
 		onRetry: () => void;
 		onDisconnect: () => void;
@@ -36,6 +38,7 @@
 		linkState,
 		deviceName = null,
 		disabled = false,
+		touch = false,
 		onConnect,
 		onRetry,
 		onDisconnect
@@ -43,7 +46,7 @@
 
 	const status = $derived(railStatus(linkState));
 	const dot = $derived(railDotClass(status));
-	const label = $derived(railLabel(device, status));
+	const label = $derived(railLabel(device, status, touch));
 	const short = $derived(device === 'de1' ? 'DE1' : 'Scale');
 	const menuId = $derived(`cside-menu-${device}`);
 

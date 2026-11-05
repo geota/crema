@@ -14,6 +14,9 @@
 	import { getToasts, dismissToast, type ToastKind } from './toast.svelte';
 	import { getToastBottomInset } from './toast-inset.svelte';
 
+	/** The phone tab bar is on screen, so the stack sits above it. */
+	let { overTabBar = false }: { overTabBar?: boolean } = $props();
+
 	const ICON: Record<ToastKind, string> = {
 		info: 'info',
 		success: 'check-circle',
@@ -21,7 +24,10 @@
 	};
 </script>
 
-<div class="toast-host" style:--toast-inset="{getToastBottomInset()}px">
+<div
+	class={['toast-host', { 'over-tabs': overTabBar }]}
+	style:--toast-inset="{getToastBottomInset()}px"
+>
 	{#each getToasts() as t (t.id)}
 		<div class={['toast', `toast-${t.kind}`]} role={t.kind === 'error' ? 'alert' : 'status'}>
 			<Icon name={ICON[t.kind]} aria-hidden="true" />
@@ -61,6 +67,16 @@
 		gap: 8px;
 		max-width: min(420px, calc(100vw - 32px));
 		pointer-events: none;
+	}
+	/* Phone width: full width, clear of the home indicator and the tab bar. */
+	@media (max-width: 600px) {
+		.toast-host {
+			left: 16px;
+			bottom: calc(12px + max(var(--toast-inset, 0px), env(safe-area-inset-bottom, 0px)));
+		}
+		.toast-host.over-tabs {
+			bottom: calc(12px + max(var(--toast-inset, 0px), var(--ptab-clear)));
+		}
 	}
 	.toast {
 		pointer-events: auto;

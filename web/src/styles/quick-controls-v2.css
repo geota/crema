@@ -472,7 +472,7 @@
 }
 .cside-mark {
   display: flex; align-items: center; justify-content: center;
-  width: var(--sidebar-w); height: 56px;
+  width: var(--rail-w); height: 56px;
   margin-bottom: 4px;
 }
 .cside-mark-glyph {

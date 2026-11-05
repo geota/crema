@@ -41,8 +41,12 @@ export function persistView(ns: string, read: () => Record<string, unknown>): vo
 export interface ScrollMemoryOptions {
 	/** The list's identity + everything that changes its rows (filters, tab, sort). */
 	key: () => string;
-	/** The scrolling element; omit when the page scrolls the window. May be unbound at first. */
-	container?: () => HTMLElement | null | undefined;
+	/**
+	 * The scrolling element; omit when the page scrolls the window. May be
+	 * unbound at first, and may change (the window on a wide layout, an element
+	 * on a phone one).
+	 */
+	container?: () => Scroller | null | undefined;
 	/** How long a restore waits for the list's rows to render (data still loading). */
 	waitMs?: number;
 	/**
@@ -184,7 +188,7 @@ export function useScrollMemory(opts: ScrollMemoryOptions): void {
 			// An element scroller is ours alone (SvelteKit only manages the
 			// window), so it can restore as soon as it mounts.
 			if (first) {
-				if (opts.container) restore(null);
+				if (opts.container && scroller() !== window) restore(null);
 			} else {
 				restore(0);
 			}

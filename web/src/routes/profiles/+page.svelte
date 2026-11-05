@@ -1493,4 +1493,39 @@
 	.pp-import-banner-close:hover {
 		opacity: 1;
 	}
+	/* Phone (≤ 600 px): the header toolbar wraps under the title, search full
+	   width (it ran off the right edge at 390 px). */
+	@media (max-width: 600px) {
+		.pp-head {
+			flex-wrap: wrap;
+			row-gap: 14px;
+		}
+		.pp-head,
+		.pp-filters,
+		.pp-grid {
+			padding-left: var(--page-pad-x);
+			padding-right: var(--page-pad-x);
+		}
+		.pp-head-r {
+			flex-wrap: wrap;
+			width: 100%;
+		}
+		.pp-head-r :global(.pp-search) {
+			flex: 1 1 auto;
+			min-width: 0;
+		}
+		/* The filter pills get a full row and scroll sideways; the sort sits
+		   under them. */
+		.pp-filters {
+			flex-wrap: wrap;
+			row-gap: 10px;
+		}
+		.pp-filters :global(.pp-tags) {
+			flex: 1 0 100%;
+			scrollbar-width: none;
+		}
+		.pp-sort {
+			margin-left: auto;
+		}
+	}
 </style>

@@ -21,6 +21,10 @@
 	import { CremaSidebar } from '#lib/components/index.js';
 	import DebugPanel from '#lib/shell/DebugPanel.svelte';
 	import ReconnectStrip from '#lib/shell/ReconnectStrip.svelte';
+	import PhoneTopBar from '#lib/shell/PhoneTopBar.svelte';
+	import PhoneTabBar from '#lib/shell/PhoneTabBar.svelte';
+	import { showsPhoneTabs } from '#lib/shell/nav-items.js';
+	import { page } from '$app/state';
 	import ToastHost from '#lib/components/shared/ToastHost.svelte';
 	import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
 	import ConfirmDialog from '#lib/components/shared/ConfirmDialog.svelte';
@@ -45,6 +49,9 @@
 	import type { LayoutProps } from './$types';
 
 	let { children, data }: LayoutProps = $props();
+
+	/** The phone tab bar, hidden on the pushed editors (Android parity). */
+	const tabBar = $derived(showsPhoneTabs(page.route.id));
 
 	/** Web Bluetooth is Chromium-only — Firefox / Safari / iOS lack it. */
 	const bluetoothSupported =
@@ -246,17 +253,23 @@
 	<CoreLoadFailed message={data.coreError} />
 {:else}
 	<CremaSidebar {app} />
+	<!-- Phone width (≤ 600 px) swaps the rail for a top bar + bottom tabs; both
+	     are display: none above 600 px, the rail below it. -->
+	<PhoneTopBar {app} />
 	<DebugPanel {app} />
 	<!-- The one <main> landmark for every screen (cohort review 07 #13): pages
 	     render their own content inside it, never a nested <main>. -->
-	<main class="shell-content">
+	<main class={['shell-content', { 'has-tabs': tabBar }]}>
 		<ReconnectStrip {app} />
 		{@render children?.()}
 	</main>
+	{#if tabBar}
+		<PhoneTabBar />
+	{/if}
 	<!-- App-wide in-app dialog + toast hosts (FD4) — replace native
 	     confirm/alert/prompt. Single instances, driven by the shared stores. -->
 	<ConfirmDialog />
-	<ToastHost />
+	<ToastHost overTabBar={tabBar} />
 	<!-- The firmware-update flow (alpha) — app-wide so a running flash or its
 	     power-cycle step stays visible on every page. -->
 	<FirmwareUpdateHost {app} />
@@ -266,6 +279,33 @@
 	/* The content area clears the fixed side rail (--sidebar-w wide). */
 	.shell-content {
 		padding-left: var(--sidebar-w);
+		/* A landscape phone's notch can sit on either side. 0 elsewhere. */
+		padding-right: env(safe-area-inset-right, 0px);
 		min-height: 100vh;
+	}
+	/* Phone width: no rail; the content clears the fixed top bar and tab bar
+	   instead. Full-height screens (`.qcontain`: Brew, History, Settings,
+	   Scale) fill what the bars leave and scroll inside it; the others scroll
+	   the window. The `.qcontain` height lives in Brew's route CSS, so these
+	   rules also make it the same whether or not Brew was visited first. */
+	@media (max-width: 600px) {
+		.shell-content {
+			padding-top: var(--ptop-clear);
+			padding-bottom: env(safe-area-inset-bottom, 0px);
+			min-height: 100dvh;
+		}
+		.shell-content.has-tabs {
+			padding-bottom: var(--ptab-clear);
+		}
+		.shell-content:has(:global(.qcontain)) {
+			display: flex;
+			flex-direction: column;
+			height: 100dvh;
+		}
+		.shell-content :global(.qcontain) {
+			flex: 1 1 auto;
+			height: auto;
+			min-height: 0;
+		}
 	}
 </style>

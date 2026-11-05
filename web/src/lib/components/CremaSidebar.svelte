@@ -5,7 +5,7 @@
 	 * `CremaSidebar` in `web-dashboard-v2.jsx` and the `.cside` rules in
 	 * `quick-controls-v2.css`.
 	 *
-	 * Five nav items (Brew / Profiles / History / Scale / Settings) render as
+	 * The nav items (`NAV_ITEMS`, shared with `PhoneTabBar`) render as
 	 * SvelteKit `<a href>` links; the active item is derived from the current
 	 * route. The DE1 + scale status buttons at the bottom
 	 * (`RailDeviceButton`) follow the shared `CremaApp`'s live link state:
@@ -15,84 +15,15 @@
 	 */
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
 	import type { CremaApp } from '#lib/state/index.js';
 	import CremaMark from './CremaMark.svelte';
-	import RailDeviceButton from './RailDeviceButton.svelte';
+	import RailDevices from './RailDevices.svelte';
+	import { NAV_ITEMS } from '#lib/shell/nav-items.js';
 
 	let { app }: { app: CremaApp | null } = $props();
 
-	/**
-	 * Nav model — id, icon (Phosphor name), resolved route, label, keyboard digit.
-	 * `href` is the resolved pathname (via `resolve(...)`) so the rail honours any
-	 * future `paths.base` config and stays correct under SvelteKit 2's typed
-	 * route table.
-	 */
-	const items = [
-		{
-			id: 'brew',
-			icon: 'coffee',
-			label: 'Brew',
-			href: resolve('/'),
-			kbd: '1'
-		},
-
-		{
-			id: 'profiles',
-			icon: 'list-bullets',
-			label: 'Profiles',
-			href: resolve('profiles'),
-			kbd: '2'
-		},
-
-		{
-			id: 'beans',
-			icon: 'coffee-bean',
-			label: 'Beans',
-			href: resolve('beans'),
-			kbd: '3'
-		},
-
-		{
-			id: 'history',
-			icon: 'chart-line',
-			label: 'History',
-			href: resolve('history'),
-			kbd: '4'
-		},
-
-		{
-			id: 'scale',
-			icon: 'scales',
-			label: 'Scale',
-			href: resolve('scale'),
-			kbd: '5'
-		},
-
-		{
-			id: 'settings',
-			icon: 'gear-six',
-			label: 'Settings',
-			href: resolve('settings'),
-			kbd: '6'
-		}
-	];
-
 	/** The active item is the one whose href matches the current path. */
 	const activeHref = $derived(page.url.pathname);
-
-	/** Live snapshot from the shared orchestrator, or null before it loads. */
-	const ui = $derived(app?.state.current ?? null);
-
-	/**
-	 * Connect a device from the rail — a click, so Web Bluetooth's gesture
-	 * holds. The app toasts and bails when this browser can't connect (no Web
-	 * Bluetooth, the iOS Home Screen app, Bluetooth off).
-	 */
-	function connect(kind: 'de1' | 'scale'): void {
-		if (!app) return;
-		void (kind === 'de1' ? app.connectDe1() : app.connectScale());
-	}
 
 	/** Keys 1–5 navigate to the matching route — design parity. */
 	function onKeydown(event: KeyboardEvent) {
@@ -107,7 +38,7 @@
 			return;
 		}
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
-		const item = items.find((it) => it.kbd === event.key);
+		const item = NAV_ITEMS.find((it) => it.kbd === event.key);
 		if (item) {
 			event.preventDefault();
 			void goto(item.href);
@@ -122,7 +53,7 @@
 		<CremaMark size={34} />
 	</div>
 	<div class="cside-items">
-		{#each items as it (it.id)}
+		{#each NAV_ITEMS as it (it.id)}
 			<a
 				class="cside-item"
 				class:is-active={activeHref === it.href}
@@ -136,24 +67,7 @@
 		<div style="flex: 1 1 auto"></div>
 	</div>
 	<div class="cside-bottom">
-		<RailDeviceButton
-			device="de1"
-			linkState={ui?.de1State ?? 'idle'}
-			deviceName={ui?.de1Diagnostics.deviceName ?? null}
-			disabled={!app}
-			onConnect={() => connect('de1')}
-			onRetry={() => app?.retryReconnect('de1')}
-			onDisconnect={() => void app?.disconnectDe1()}
-		/>
-		<RailDeviceButton
-			device="scale"
-			linkState={ui?.scaleState ?? 'idle'}
-			deviceName={ui?.scaleName ?? null}
-			disabled={!app}
-			onConnect={() => connect('scale')}
-			onRetry={() => app?.retryReconnect('scale')}
-			onDisconnect={() => void app?.disconnectScale()}
-		/>
+		<RailDevices {app} />
 	</div>
 </nav>
 
@@ -173,8 +87,18 @@
 		   "half my clicks do nothing" bug. The scrims top out at 31, so 50 is
 		   comfortably above with room for future flyouts. */
 		z-index: 50;
+		/* `viewport-fit=cover`: a landscape phone's notch and home indicator
+		   sit over the rail's edges. Both are 0 on non-notched displays. */
+		padding-left: env(safe-area-inset-left, 0px);
+		padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
 	}
 	.cside-item {
 		text-decoration: none;
+	}
+	/* Phone width: `PhoneTopBar` + `PhoneTabBar` take over. */
+	@media (max-width: 600px) {
+		.cside {
+			display: none;
+		}
 	}
 </style>

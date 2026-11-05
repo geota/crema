@@ -279,7 +279,10 @@
   --edge-desktop: 32px;
 
   --topbar-h: 56px;
-  --sidebar-w: 72px; /* width of the fixed side rail (.cside) */
+  --rail-w: 72px; /* the side rail's content width (.cside) */
+  /* The rail plus the left inset: `viewport-fit=cover` puts a landscape
+     phone's notch over the rail's edge. 0 on every non-notched display. */
+  --sidebar-w: calc(var(--rail-w) + env(safe-area-inset-left, 0px));
 }
 
 /* ============================================================================
