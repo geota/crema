@@ -31,8 +31,6 @@ class OwnStateReadsTest {
             // The projection itself: own in, effective out.
             "ui" to ANY,
             "effectiveState" to ANY,
-            // Persistence.
-            "currentPrefs" to ANY,
             // Hub only (the remote's slice replaces its snapshot).
             "configSnapshotJson" to ANY,
             "activeBeanSummaryLine" to setOf("activeBeanId"),
@@ -53,9 +51,6 @@ class OwnStateReadsTest {
             "adoptHubSettings" to setOf("adopt()"),
             // The machine's identity (its serial register), not a setting.
             "checkStolenSerial" to setOf("de1MachineInfo"),
-            // Own-state writers (§7.4).
-            "loadPrefs" to setOf("idleSleepMin", "activeProfileId", "withHotWaterDose()"),
-            "applyRestoredSettings" to setOf("idleSleepMin", "withHotWaterDose()"),
             // The hot-water dose edit: LocalOnly, so never on a remote (own is shown).
             "applyHotWaterDose" to setOf("withHotWaterDose()"),
             // Restore defaults keeps this device's own line frequency (F15).
@@ -85,6 +80,13 @@ class OwnStateReadsTest {
             "init" to setOf("idleSleepMin"),
             // Sleep on quit: holder only (a remote never sends it), own firmware.
             "installQuitSleep" to setOf("sleepLatchesInRefill()"),
+        ),
+        "SettingsController.kt" to mapOf(
+            // Persistence.
+            "currentPrefs" to ANY,
+            // Own-state writers (§7.4).
+            "hydratePrefs" to setOf("idleSleepMin", "activeProfileId", "withHotWaterDose()"),
+            "restoreValues" to setOf("idleSleepMin", "withHotWaterDose()"),
         ),
         "ScaleController.kt" to mapOf(
             // The scale echo fills this device's scale fields (the scale's own

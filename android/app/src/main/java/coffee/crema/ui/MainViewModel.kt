@@ -226,8 +226,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** App-preferences persistence — a JSON file in filesDir. */
-    private val settingsStore = SettingsStore(app, json)
+    /** App preferences: load, persist, restore, and the personal setters ([SettingsController]). */
+    private val settings: SettingsController = SettingsController(
+        store = SettingsStore(app, json),
+        scope = viewModelScope,
+        uiState = { _ui.value },
+        updateUi = { transform -> _ui.update(transform) },
+        isTablet = app.resources.configuration.smallestScreenWidthDp >= 600,
+        connectionState = { connection.state.value },
+        companionIdFor = { presence.companionIdFor(it) },
+        pushConfig = { proxy.pushConfig() },
+    )
 
     /** Learned SAW drip-model persistence — an opaque core-owned JSON blob. */
     private val sawModelStore = SawModelStore(app)
@@ -236,7 +245,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     /** Water accumulation and the maintenance readouts ([MaintenanceController]). */
-    private val maintenance = MaintenanceController(
+    private val maintenance: MaintenanceController = MaintenanceController(
         lane = lane,
         json = json,
         store = MaintenanceStore(app, json),
@@ -553,7 +562,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun hasBean(id: String): Boolean = _ui.value.beans.any { it.id == id }
         // Someone is using Crema on a mirror: that's presence at the machine.
         override fun notePeerActivity() = presence.idleActivity(coffee.crema.core.IdleActivity.Mirror)
-        override fun configReady(): Boolean = prefsLoaded
+        override fun configReady(): Boolean = settings.loaded
     }
 
     /**
@@ -637,12 +646,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // target back (and persistPrefs does nothing before it).
         onTargetMoved = { host, port ->
             viewModelScope.launch {
-                prefsReady.await()
+                settings.ready.await()
                 _ui.update { it.copy(proxyPrimaryHost = host, proxyPrimaryPort = port) }
                 persistPrefs()
             }
         },
-        prefsReady = { prefsReady.await() },
+        prefsReady = { settings.ready.await() },
     )
 
     /**
@@ -792,9 +801,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         sweepRunner.onReady()
     }
 
-    /** True on tablet-class displays (≥600dp smallest width) — the form-factor
-     *  default for [MainUiState.keepConnectedScreenOff] (tablet on / phone off). */
-    private val isTablet = app.resources.configuration.smallestScreenWidthDp >= 600
 
     /**
      * The Bookoo scale connection. Shares the one [bridge] with [ble]: the core
@@ -814,7 +820,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     /** The scale session's UI, settings and verbs ([ScaleController]). */
-    private val scaleController = ScaleController(
+    private val scaleController: ScaleController = ScaleController(
         lane = lane,
         json = json,
         bridge = bridge,
@@ -909,7 +915,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * after [connection] and [companion]; its lambdas reach later members only
      * when invoked.
      */
-    private val presence = PresenceController(
+    private val presence: PresenceController = PresenceController(
         lane = lane,
         bridge = bridge,
         scope = viewModelScope,
@@ -945,18 +951,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Connect-time machine-info sweep (see [readMachineInfo]); cancelled on reconnect/disconnect. */
     private var machineInfoJob: kotlinx.coroutines.Job? = null
 
-    /** True once [loadPrefs] has hydrated the UI from disk — writes before that
-     *  would snapshot half-initialised state and clobber the saved prefs (e.g.
-     *  erase the restored activeProfileId during boot). */
-    @Volatile private var prefsLoaded = false
-
-    /** Completes with [prefsLoaded] (or when the startup load ends without
-     *  it): the hub's relay waits for it, so it never serves before the
-     *  paired devices are known. */
-    private val prefsReady = kotlinx.coroutines.CompletableDeferred<Unit>()
-
     /** The whole startup load (library, prefs, custom profiles, …). Tests wait
-     *  for it: [prefsReady] completes partway through. */
+     *  for it: [SettingsController.ready] completes partway through. */
     @androidx.annotation.VisibleForTesting
     internal lateinit var startupLoad: kotlinx.coroutines.Job
 
@@ -1190,7 +1186,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         startupLoad.invokeOnCompletion {
             // A load that failed before the prefs still lets a hub serve.
-            prefsReady.complete(Unit)
+            settings.ready.complete(Unit)
         }
         presence.startScreensaverClock()
         // Mirror the Visualizer controller's state into the UI snapshot.
@@ -1623,49 +1619,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  activeProfileId is deliberately NOT restored, so a merge never hijacks the
      *  current selection. */
     private fun applyRestoredSettings(p: AppPrefs) {
-        // A backup with no hot-water mode goes through the core's rule — its
-        // own fields, never this device's marker.
-        val hwDose = p.hotWaterDose()
-        _ui.update { it.withHotWaterDose(hwDose).copy(
-            idleSleepMin = p.idleSleepMin ?: it.idleSleepMin,
-            themeMode = p.themeMode,
-            maxShotDurationS = p.maxShotDurationS,
-            autoTare = p.autoTare,
-            stopOnWeight = p.stopOnWeight,
-            volumeStopWithScale = p.volumeStopWithScale,
-            requireScale = p.requireScale,
-            steamEco = p.steamEco,
-            steamTwoTap = p.steamTwoTap,
-            fanThresholdC = p.fanThresholdC,
-            usbChargingMode = p.usbChargingMode,
-            preFlush = p.preFlush,
-            steamPurge = p.steamPurge,
-            chartChannels = p.chartChannels,
-            keepScreenOnBrew = p.keepScreenOnBrew,
-            brewCueSound = p.brewCueSound,
-            brewCueHaptics = p.brewCueHaptics,
-            grinderModel = p.grinderModel,
-            baristaName = p.baristaName,
-            showDebugPanel = p.showDebugPanel,
-            defaultDoseG = p.defaultDoseG,
-            defaultRatio = p.defaultRatio,
-            defaultBrewTempC = p.defaultBrewTempC,
-            defaultPreinfuseS = p.defaultPreinfuseS,
-            weightUnit = p.weightUnit,
-            tempUnit = p.tempUnit,
-            pressureUnit = p.pressureUnit,
-            volumeUnit = p.volumeUnit,
-            waterLevelUnit = p.waterLevelUnit,
-            waterWarnMl = p.waterWarnMl,
-            waterRefillPointMm = p.waterRefillPointMm,
-            qcSteamTimeS = p.qcSteamTimeS,
-            qcSteamFlowMlS = p.qcSteamFlowMlS,
-            qcSteamTempC = p.qcSteamTempC,
-            qcHotWaterTempC = p.qcHotWaterTempC,
-            qcFlushTimeS = p.qcFlushTimeS,
-            qcFlushTempC = p.qcFlushTempC,
-            qcGrind = p.qcGrind,
-        ) }
+        settings.restoreValues(p)
         // On a remote the core keeps following the hub's values (§7.4).
         pushCoreInputs(effectiveState())
         // Re-send the connect sweep's settings with the restored prefs — machine
@@ -2732,105 +2686,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog("Adopted ${take.size} settings from the hub")
     }
 
-    /** Build a full AppPrefs from the current UI state so each setter persists
-     *  without clobbering the other fields. */
-    private fun currentPrefs() = AppPrefs(
-        themeMode = _ui.value.themeMode,
-        maxShotDurationS = _ui.value.maxShotDurationS,
-        autoTare = _ui.value.autoTare,
-        stopOnWeight = _ui.value.stopOnWeight,
-        volumeStopWithScale = _ui.value.volumeStopWithScale,
-        requireScale = _ui.value.requireScale,
-        steamEco = _ui.value.steamEco,
-        steamTwoTap = _ui.value.steamTwoTap,
-        fanThresholdC = _ui.value.fanThresholdC,
-        usbChargingMode = _ui.value.usbChargingMode,
-        preFlush = _ui.value.preFlush,
-        steamPurge = _ui.value.steamPurge,
-        chartChannels = _ui.value.chartChannels,
-        keepScreenOnBrew = _ui.value.keepScreenOnBrew,
-        brewCueSound = _ui.value.brewCueSound,
-        brewCueHaptics = _ui.value.brewCueHaptics,
-        idleSleepMin = _ui.value.idleSleepMin,
-        screensaverAfterMin = _ui.value.screensaverAfterMin,
-        wakeMachineWithSaver = _ui.value.wakeMachineWithSaver,
-        sleepOnQuit = _ui.value.sleepOnQuit,
-        keepConnectedScreenOff = _ui.value.keepConnectedScreenOff,
-        autoDriveBackup = _ui.value.autoDriveBackup,
-        autoUpdateCheck = _ui.value.autoUpdateCheck,
-        lastUpdateCheckAtMs = _ui.value.lastUpdateCheckAtMs,
-        lastSeenLatestVersion = _ui.value.lastSeenLatestVersion,
-        lastBrewLogMethod = _ui.value.lastBrewLogMethod,
-        grinderModel = _ui.value.grinderModel,
-        baristaName = _ui.value.baristaName,
-        showDebugPanel = _ui.value.showDebugPanel,
-        defaultDoseG = _ui.value.defaultDoseG,
-        defaultRatio = _ui.value.defaultRatio,
-        defaultBrewTempC = _ui.value.defaultBrewTempC,
-        defaultPreinfuseS = _ui.value.defaultPreinfuseS,
-        weightUnit = _ui.value.weightUnit,
-        tempUnit = _ui.value.tempUnit,
-        pressureUnit = _ui.value.pressureUnit,
-        volumeUnit = _ui.value.volumeUnit,
-        waterLevelUnit = _ui.value.waterLevelUnit,
-        waterWarnMl = _ui.value.waterWarnMl,
-        waterRefillPointMm = _ui.value.waterRefillPointMm,
-        qcSteamTimeS = _ui.value.qcSteamTimeS,
-        qcSteamFlowMlS = _ui.value.qcSteamFlowMlS,
-        qcSteamTempC = _ui.value.qcSteamTempC,
-        qcHotWaterTempC = _ui.value.qcHotWaterTempC,
-        qcHotWaterVolumeMl = _ui.value.qcHotWaterVolumeMl,
-        qcHotWaterMode = _ui.value.qcHotWaterMode,
-        qcHotWaterTimeS = _ui.value.qcHotWaterTimeS,
-        qcHotWaterTimeNoLimit = _ui.value.qcHotWaterTimeNoLimit,
-        qcHotWaterRatio = _ui.value.qcHotWaterRatio,
-        qcFlushTimeS = _ui.value.qcFlushTimeS,
-        qcFlushTempC = _ui.value.qcFlushTempC,
-        qcGrind = _ui.value.qcGrind,
-        activeProfileId = _ui.value.activeProfileId,
-        // The remembered addresses live on the connection controller — its
-        // setters call persistPrefs AFTER their state update, so this read is
-        // always fresh (the MainUiState copies are display mirrors).
-        de1Address = connection.state.value.rememberedDe1Address,
-        scaleAddress = connection.state.value.rememberedScaleAddress,
-        scaleName = connection.state.value.rememberedScaleName,
-        de1CompanionId = presence.companionIdFor(connection.state.value.rememberedDe1Address),
-        scaleCompanionId = presence.companionIdFor(connection.state.value.rememberedScaleAddress),
-        companionDeclined = _ui.value.companionDeclined,
-        proxyRole = _ui.value.proxyRole,
-        proxyPrimaryHost = _ui.value.proxyPrimaryHost,
-        proxyPrimaryPort = _ui.value.proxyPrimaryPort,
-        replayPrimary = _ui.value.replayPrimary,
-    )
+    /** A full AppPrefs from the current UI state ([SettingsController.currentPrefs]). */
+    private fun currentPrefs() = settings.currentPrefs()
 
-    /** [persistPrefs], awaited: the T6 commit saves the adopted values before
-     *  the role switch starts (I3). Numbered like every save, so an earlier
-     *  fire-and-forget one can never land after it. */
-    private suspend fun persistPrefsNow() {
-        // Like persistPrefs: never save a half-default AppPrefs before the load.
-        if (!prefsLoaded) return
-        val snapshot = currentPrefs()
-        val generation = ++prefsGeneration
-        settingsStore.save(snapshot, generation)
-    }
+    /** [SettingsController.persistPrefsNow]: the T6 commit's awaited save. */
+    private suspend fun persistPrefsNow() = settings.persistPrefsNow()
 
-    /** The last [persistPrefs] snapshot's number (Main only). */
-    private var prefsGeneration = 0L
-
-    /** Persist the current prefs snapshot (best-effort, off the main thread).
-     *  No-op until the initial [loadPrefs] hydration completes. */
-    private fun persistPrefs() {
-        if (!prefsLoaded) return
-        val snapshot = currentPrefs()
-        // Numbered on Main as the snapshot is built: the store skips one that
-        // lands after a newer one.
-        val generation = ++prefsGeneration
-        viewModelScope.launch { settingsStore.save(snapshot, generation) }
-        // Multi-device: if we're hosting, push the updated session config to every
-        // mirror so a secondary tracks our config mid-session (the attach-time
-        // snapshot only covers a fresh join). No-op off-primary.
-        proxy.pushConfig()
-    }
+    /** Persist the current prefs snapshot ([SettingsController.persistPrefs]);
+     *  a no-op until the initial load. */
+    private fun persistPrefs() = settings.persistPrefs()
 
     /** Queue a user-facing message (snackbar) + keep it in the log. Public so the
      *  Activity can surface e.g. a denied BLE permission — a connect tap must never
@@ -3041,13 +2905,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setQcGrind(clicks: Float) = machine.execute(MachineCommand.SetQc(QcField.GRIND, clicks))
 
     /** Show/hide a live-chart channel (Quick Controls). Persisted display pref. */
-    fun toggleChartChannel(key: String, enabled: Boolean) {
-        val next = _ui.value.chartChannels.toMutableSet().apply {
-            if (enabled) add(key) else remove(key)
-        }
-        _ui.update { it.copy(chartChannels = next) }
-        persistPrefs()
-    }
+    fun toggleChartChannel(key: String, enabled: Boolean) = settings.toggleChartChannel(key, enabled)
 
     // ── Display units (issue 44) ──────────────────────────────────────────────
     // Display prefs: nothing is sent to the machine and no canonical value
@@ -3077,28 +2935,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Temperature readout unit (`"C" | "F"`). Persisted display pref. */
-    fun setTempUnit(unit: String) {
-        _ui.update { it.copy(tempUnit = unit) }
-        persistPrefs()
-    }
+    fun setTempUnit(unit: String) = settings.setTempUnit(unit)
 
     /** Pressure readout unit (`"bar" | "psi"`). Persisted display pref. */
-    fun setPressureUnit(unit: String) {
-        _ui.update { it.copy(pressureUnit = unit) }
-        persistPrefs()
-    }
+    fun setPressureUnit(unit: String) = settings.setPressureUnit(unit)
 
     /** Volume readout unit (`"ml" | "floz"`). Persisted display pref. */
-    fun setVolumeUnit(unit: String) {
-        _ui.update { it.copy(volumeUnit = unit) }
-        persistPrefs()
-    }
+    fun setVolumeUnit(unit: String) = settings.setVolumeUnit(unit)
 
     /** Water-tank readout style (`"ml" | "percent"`). Persisted display pref. */
-    fun setWaterLevelUnit(unit: String) {
-        _ui.update { it.copy(waterLevelUnit = unit) }
-        persistPrefs()
-    }
+    fun setWaterLevelUnit(unit: String) = settings.setWaterLevelUnit(unit)
 
     /** Low-water warning threshold, canonical ml (0 = off) — #33 follow-up.
      *  Persisted; re-arms the once-per-dip warning so a raised threshold can
@@ -3184,34 +3030,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Keep the screen awake while a shot pulls (Settings → Display). Persisted. */
-    fun setKeepScreenOnBrew(enabled: Boolean) {
-        _ui.update { it.copy(keepScreenOnBrew = enabled) }
-        persistPrefs()
-    }
+    fun setKeepScreenOnBrew(enabled: Boolean) = settings.setKeepScreenOnBrew(enabled)
 
     /** Guided-brew cue sound (Settings → Display, the Brew setup bell). Persisted as an explicit choice. */
-    fun setBrewCueSound(enabled: Boolean) {
-        _ui.update { it.copy(brewCueSound = enabled) }
-        persistPrefs()
-    }
+    fun setBrewCueSound(enabled: Boolean) = settings.setBrewCueSound(enabled)
 
     /** Guided-brew cue vibration (Settings → Display). Persisted as an explicit choice. */
-    fun setBrewCueHaptics(enabled: Boolean) {
-        _ui.update { it.copy(brewCueHaptics = enabled) }
-        persistPrefs()
-    }
+    fun setBrewCueHaptics(enabled: Boolean) = settings.setBrewCueHaptics(enabled)
 
     /** Settings → Brew defaults: the dose / ratio / temp / pre-infusion a NEW
      *  profile seeds from ([startNewProfile] → brewDefaultsJson). Persisted. */
-    fun setBrewDefaults(doseG: Float, ratio: Float, brewTempC: Float, preinfuseS: Float) {
-        _ui.update { it.copy(
-            defaultDoseG = doseG,
-            defaultRatio = ratio,
-            defaultBrewTempC = brewTempC,
-            defaultPreinfuseS = preinfuseS,
-        ) }
-        persistPrefs()
-    }
+    fun setBrewDefaults(doseG: Float, ratio: Float, brewTempC: Float, preinfuseS: Float) =
+        settings.setBrewDefaults(doseG, ratio, brewTempC, preinfuseS)
 
     // ── Bean library — see [LibraryController] ──────────────────────────────
 
@@ -3233,71 +3063,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Load persisted app preferences at startup. */
     private suspend fun loadPrefs() {
-        val p = settingsStore.load()
-        // The load stored the migrated dose; read it through the core's rule.
-        val hwDose = p.hotWaterDose()
-        _ui.update { it.withHotWaterDose(hwDose).copy(
-            themeMode = p.themeMode,
-            maxShotDurationS = p.maxShotDurationS,
-            autoTare = p.autoTare,
-            stopOnWeight = p.stopOnWeight,
-            volumeStopWithScale = p.volumeStopWithScale,
-            requireScale = p.requireScale,
-            steamEco = p.steamEco,
-            steamTwoTap = p.steamTwoTap,
-            fanThresholdC = p.fanThresholdC,
-            usbChargingMode = p.usbChargingMode,
-            preFlush = p.preFlush,
-            steamPurge = p.steamPurge,
-            chartChannels = p.chartChannels,
-            keepScreenOnBrew = p.keepScreenOnBrew,
-            brewCueSound = p.brewCueSound,
-            brewCueHaptics = p.brewCueHaptics,
-            idleSleepMin = p.idleSleepMin ?: DEFAULT_IDLE_SLEEP_MIN,
-            screensaverAfterMin = p.screensaverAfterMin,
-            wakeMachineWithSaver = p.wakeMachineWithSaver,
-            sleepOnQuit = p.sleepOnQuit,
-            // Resolve the nullable pref against the form-factor default (#65).
-            keepConnectedScreenOff = p.keepConnectedScreenOff ?: isTablet,
-            autoDriveBackup = p.autoDriveBackup,
-            autoUpdateCheck = p.autoUpdateCheck,
-            lastUpdateCheckAtMs = p.lastUpdateCheckAtMs,
-            lastSeenLatestVersion = p.lastSeenLatestVersion,
-            lastBrewLogMethod = p.lastBrewLogMethod,
-            grinderModel = p.grinderModel,
-            baristaName = p.baristaName,
-            showDebugPanel = p.showDebugPanel,
-            defaultDoseG = p.defaultDoseG,
-            defaultRatio = p.defaultRatio,
-            defaultBrewTempC = p.defaultBrewTempC,
-            defaultPreinfuseS = p.defaultPreinfuseS,
-            weightUnit = p.weightUnit,
-            tempUnit = p.tempUnit,
-            pressureUnit = p.pressureUnit,
-            volumeUnit = p.volumeUnit,
-            waterLevelUnit = p.waterLevelUnit,
-            waterWarnMl = p.waterWarnMl,
-            waterRefillPointMm = p.waterRefillPointMm,
-            qcSteamTimeS = p.qcSteamTimeS,
-            qcSteamFlowMlS = p.qcSteamFlowMlS,
-            qcSteamTempC = p.qcSteamTempC,
-            qcHotWaterTempC = p.qcHotWaterTempC,
-            qcFlushTimeS = p.qcFlushTimeS,
-            qcFlushTempC = p.qcFlushTempC,
-            qcGrind = p.qcGrind,
-            // Restore the last session's profile selection; refreshProfiles
-            // self-heals if the id no longer resolves (e.g. deleted custom).
-            activeProfileId = p.activeProfileId ?: it.activeProfileId,
-            proxyRole = p.proxyRole,
-            proxyPrimaryHost = p.proxyPrimaryHost,
-            proxyPrimaryPort = p.proxyPrimaryPort,
-            replayPrimary = p.replayPrimary,
-            companionDeclined = p.companionDeclined,
-        ) }
+        val p = settings.read()
+        settings.hydratePrefs(p)
         // Prime the background keep-alive with the resolved setting (#65).
-        bgConnection.setEnabled(p.keepConnectedScreenOff ?: isTablet)
-        prefsLoaded = true
-        prefsReady.complete(Unit)
+        bgConnection.setEnabled(p.keepConnectedScreenOff ?: settings.isTablet)
+        settings.markLoaded()
         // The cap, behaviour toggles, stop targets and idle-sleep timer go
         // to the core now (it doesn't echo them back). On a remote that is
         // the hub's values: a snapshot that landed before the load finished
@@ -3342,10 +3112,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Default barista name (free text), stamped on each new shot and brew log. Persisted. */
-    fun setBaristaName(name: String) {
-        _ui.update { it.copy(baristaName = name) }
-        persistPrefs()
-    }
+    fun setBaristaName(name: String) = settings.setBaristaName(name)
 
     /** "Sleep after" — idle minutes before Crema puts the DE1 to sleep (0 =
      *  Never), snapped to one of the core's choices. Persisted; the timer
@@ -3362,10 +3129,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Sleep the machine when Crema is quit (swiped from recents) — the
      *  [QuitSleep] handler consumes this at fire time. */
-    fun setSleepOnQuit(on: Boolean) {
-        _ui.update { it.copy(sleepOnQuit = on) }
-        persistPrefs()
-    }
+    fun setSleepOnQuit(on: Boolean) = settings.setSleepOnQuit(on)
 
     /** Keep the DE1 connected + auto-reconnecting while the screen is off (#65).
      *  Persisted as an explicit value (overriding the form-factor default); the
@@ -3433,7 +3197,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // for READY / mid-handshake / user-disconnected devices.
             connection.kickReconnect(coffee.crema.ble.ReconnectTrigger.FOREGROUND)
             // An association removed in system settings shows up here.
-            if (prefsLoaded) refreshCompanion()
+            if (settings.loaded) refreshCompanion()
         }
     }
 
@@ -3444,16 +3208,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissSaver() = presence.dismissSaver()
 
     /** Set the screensaver idle timeout, minutes (0 = never). Persisted. */
-    fun setScreensaverAfterMin(minutes: Int) {
-        _ui.update { it.copy(screensaverAfterMin = minutes.coerceIn(0, 120)) }
-        persistPrefs()
-    }
+    fun setScreensaverAfterMin(minutes: Int) = settings.setScreensaverAfterMin(minutes)
 
     /** Toggle the coupled machine wake on saver dismiss. Persisted. */
-    fun setWakeMachineWithSaver(on: Boolean) {
-        _ui.update { it.copy(wakeMachineWithSaver = on) }
-        persistPrefs()
-    }
+    fun setWakeMachineWithSaver(on: Boolean) = settings.setWakeMachineWithSaver(on)
 
     /**
      * The bean half of the quick sheets' scope-aware **Save** (issue #16):
@@ -3527,34 +3285,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Show/hide the inline debug panel (Settings → Advanced). Persisted. */
-    fun setShowDebugPanel(on: Boolean) {
-        _ui.update { it.copy(showDebugPanel = on) }
-        persistPrefs()
-    }
+    fun setShowDebugPanel(on: Boolean) = settings.setShowDebugPanel(on)
 
     // ── Multi-device proxy: the manual hub address (emulators, no NSD) ──────
-    fun setProxyPrimaryHost(host: String) {
-        _ui.update { it.copy(proxyPrimaryHost = host.trim()) }
-        persistPrefs()
-    }
+    fun setProxyPrimaryHost(host: String) = settings.setProxyPrimaryHost(host)
 
-    fun setProxyPrimaryPort(port: Int) {
-        _ui.update { it.copy(proxyPrimaryPort = port) }
-        persistPrefs()
-    }
+    fun setProxyPrimaryPort(port: Int) = settings.setProxyPrimaryPort(port)
 
     /** Debug: replay a captured shot as a fake DE1 when primary (emulator demos).
      *  Restart-to-apply (read at primary-start). Off = a real primary uses live BT. */
-    fun setReplayPrimary(enabled: Boolean) {
-        _ui.update { it.copy(replayPrimary = enabled) }
-        persistPrefs()
-    }
+    fun setReplayPrimary(enabled: Boolean) = settings.setReplayPrimary(enabled)
 
     /** Set the theme mode (`"system"` / `"light"` / `"dark"`) and persist. */
-    fun setThemeMode(mode: String) {
-        _ui.update { it.copy(themeMode = mode) }
-        persistPrefs()
-    }
+    fun setThemeMode(mode: String) = settings.setThemeMode(mode)
 
     /**
      * Restore defaults — the core's rule (`reset_settings`, the one web uses):
@@ -3602,7 +3345,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             library.eraseStoredData()
             guided.eraseStoredData()
-            settingsStore.erase()
+            settings.erase()
             maintenance.eraseStored(freshMaintenance)
             sawModelStore.erase()
             // Sign-ins are personal data too (review 05 P2-1), and so are the
