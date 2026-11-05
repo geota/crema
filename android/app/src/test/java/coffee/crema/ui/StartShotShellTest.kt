@@ -109,6 +109,6 @@ class StartShotShellTest {
         }.map { it.first }
         assertEquals(emptyList(), own)
         val starters = sources.filter { (_, text) -> "bridge.startShot(" in text }.map { it.first }
-        assertEquals(listOf("coffee/crema/ui/MainViewModel.kt"), starters)
+        assertEquals(listOf("coffee/crema/ui/MachineSessionController.kt"), starters)
     }
 }

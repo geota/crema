@@ -88,6 +88,20 @@ class MachineSessionVmTest {
     }
 
     @Test
+    fun `a DE1 disconnect clears the session's machine state and identity`() {
+        val vm = build()
+        state(vm, 2)
+        events(vm, """{"type":"Firmware","content":{"release":1.0,"commits":0,"api_version":4,"firmware_string":"v1352"}}""")
+        assertEquals(MachineState.Idle, vm.ui.value.machineStateName)
+        assertEquals("v1352", vm.ui.value.de1Firmware)
+        vm.disconnect()
+        settle(vm)
+        assertNull(vm.ui.value.machineStateName)
+        assertNull(vm.ui.value.de1Firmware)
+        assertFalse(vm.ui.value.shotInProgress)
+    }
+
+    @Test
     fun `the armed stop targets show, and the stop that ended a shot is attributed`() {
         val vm = build()
         events(vm, """{"type":"StopTargetsArmed","content":{"weight":36.0,"max_time":60.0,"armed":true,"weight_configured":36.0}}""")

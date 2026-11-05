@@ -33,20 +33,15 @@ class OwnStateReadsTest {
             "effectiveState" to ANY,
             // Holder writes: on a remote they never reach the machine.
             "applySteamHotWater" to setOf("qcSteamTempC", "qcSteamTimeS", "qcHotWaterTempC", "qcHotWaterVolumeMl"),
-            "seedMachineSettings" to setOf("activeProfileId", "connectSweepSettings()"),
             "reuploadActiveProfile" to setOf("activeProfileId", "brewParams"),
             // The device that owns the config (a remote shows its edits in its
             // mirror slice): the brew override is stored normalized against
             // its own active profile.
             "showConfig" to setOf("activeProfileId", "brewParams"),
-            // Hub only (StartShot is relayed).
-            "applyStartShot" to setOf("activeProfileId", "autoTare", "brewParams", "stopOnWeight", "volumeStopWithScale"),
             // The hot-water dose edit: LocalOnly, so never on a remote (own is shown).
             "applyHotWaterDose" to setOf("withHotWaterDose()"),
             // Restore defaults keeps this device's own line frequency (F15).
             "resetPreferences" to setOf("lineFreqOverride"),
-            // The holder's own machine reads.
-            "readMachineInfo" to setOf("de1MachineInfo"),
         ),
         "FirmwareController.kt" to mapOf(
             // The holder's own machine reads.
@@ -57,6 +52,12 @@ class OwnStateReadsTest {
             "init" to setOf("preFlush", "steamPurge", "de1MachineInfo"),
             // The machine's identity (its serial register), not a setting.
             "checkStolenSerial" to setOf("de1MachineInfo"),
+            // Holder writes: on a remote they never reach the machine.
+            "seedMachineSettings" to setOf("activeProfileId", "connectSweepSettings()"),
+            // Hub only (StartShot is relayed).
+            "applyStartShot" to setOf("activeProfileId", "autoTare", "brewParams", "stopOnWeight", "volumeStopWithScale"),
+            // The holder's own machine reads.
+            "readMachineInfo" to setOf("de1MachineInfo"),
         ),
         "LibraryController.kt" to mapOf(
             "persistLibrary" to setOf("activeBeanId"),
@@ -110,7 +111,7 @@ class OwnStateReadsTest {
     /** §7.2 effective reads: these act on what is on screen. */
     private val effectiveMembers: Map<String, Set<String>> = mapOf(
         "MainViewModel.kt" to setOf(
-            "pushStopTargets", "startFromShot", "saveQuickGrindToBean",
+            "startFromShot", "saveQuickGrindToBean",
             // Decent buildRecord.grinderModel; Visualizer grinderModel and beanLibrary.
             "decent", "visualizer",
         ),
@@ -118,7 +119,7 @@ class OwnStateReadsTest {
         "GuidedBrewController.kt" to setOf(
             "guidedBeanId", "openGuidedLogBrew", "openLogBrew", "defaultBrewRecipeFor", "resolveGuidedSetup",
         ),
-        "MachineSessionController.kt" to setOf("shotDiagSummary"),
+        "MachineSessionController.kt" to setOf("shotDiagSummary", "pushStopTargets"),
     )
 
     /** Where each file reads its own state: `_ui.value` in the VM, the own
