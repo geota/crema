@@ -16,10 +16,6 @@ import coffee.crema.core.MachineRequest
 import coffee.crema.core.WaterSessionKind
 import coffee.crema.core.MmrReg
 import coffee.crema.core.Bean
-import coffee.crema.core.SteamHotWaterTargets
-import coffee.crema.core.HotWaterTarget
-import kotlinx.serialization.builtins.nullable
-import coffee.crema.core.WeightUnit
 import coffee.crema.drive.DriveStore
 import coffee.crema.drive.DriveSync
 import coffee.crema.core.builtinCremaProfiles
@@ -29,7 +25,6 @@ import coffee.crema.core.CommonSettings
 import coffee.crema.core.defaultIdleSleepMin
 import coffee.crema.settings.resetCommon
 import coffee.crema.settings.toCommonSettings
-import coffee.crema.settings.hotWaterDose
 import androidx.core.content.FileProvider
 import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.MaintenanceStore
@@ -56,7 +51,6 @@ import coffee.crema.machine.MachineCommands
 import coffee.crema.machine.QcField
 import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.brewTempRange
-import coffee.crema.core.normalizeBrewOverrides
 import coffee.crema.core.preinfusionDial
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.brewDefaultsJson
@@ -81,7 +75,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import android.net.Uri
 import kotlinx.serialization.json.put
-import kotlin.math.roundToInt
 import coffee.crema.decent.DecentClient
 import coffee.crema.decent.DecentStore
 import coffee.crema.decent.DecentSync
@@ -139,6 +132,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _live = MutableStateFlow(LiveTelemetry())
 
     /**
+     * The machine's configuration ([MachineConfigController]): the config
+     * commands' bodies, the core inputs that follow settings, the steam /
+     * hot-water packet and the setters that reach the core. Built before
+     * everything it or [session] reach: construction only stores these, and
+     * the callbacks reach later members only when invoked.
+     */
+    private val machineConfig: MachineConfigController = MachineConfigController(
+        lane = lane,
+        bridge = bridge,
+        json = json,
+        uiState = { _ui.value },
+        updateUi = { transform -> _ui.update(transform) },
+        effectiveState = { effectiveState() },
+        appendLog = { appendLog(it) },
+        refusesOwnEdit = { refusesOwnEdit(it) },
+        persistPrefs = { persistPrefs() },
+        pushConfig = { proxy.pushConfig() },
+        profileJson = { library.profileJson(it) },
+        persistLibrary = { library.persistLibrary() },
+        maybeLoadLinkedProfile = { library.maybeLoadLinkedProfile(it) },
+        pushStopTargets = { state, desiredDelayMs -> session.pushStopTargets(state, desiredDelayMs) },
+        refreshStopTargetProjection = { session.refreshStopTargetProjection() },
+        pushStartSettings = { session.pushStartSettings() },
+        configureIdleSleep = { presence.configureIdleSleep(it) },
+    )
+
+    /**
      * The machine session ([MachineSessionController]): its event handlers,
      * the service-mode clock, the shot record's markers, the shot start, the
      * desired profile, the stop targets and the connect setup. Built right after the lane, so its handlers come first for the
@@ -160,7 +180,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         captureCompletedShot = { durationMs, yieldG, peakPressure, peakTemp, completedAtMs, id, disposition, peakWeightG ->
             library.captureCompletedShot(durationMs, yieldG, peakPressure, peakTemp, completedAtMs, id, disposition, peakWeightG = peakWeightG)
         },
-        setHotWaterTarget = { setHotWaterTarget(it) },
+        setHotWaterTarget = { machineConfig.setHotWaterTarget(it) },
         pushConfig = { proxy.pushConfig() },
         armWake = { wake.arm(it) },
         scaleRemembered = { connection.state.value.rememberedScaleAddress != null },
@@ -168,7 +188,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bridge = bridge,
         json = json,
         profileJson = { library.profileJson(it) },
-        refreshHotWaterTarget = { refreshHotWaterTarget() },
+        refreshHotWaterTarget = { machineConfig.refreshHotWaterTarget() },
         markAppSleepRequest = { presence.markAppSleepRequest() },
         firmwareHolds = { firmwareHolds() },
         markSetupDone = { firmwareCtl.setupDone = true },
@@ -558,9 +578,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun applyMachineState(request: MachineRequest) = session.applyMachineState(request)
         override fun applyCancelMaintenance() = session.applyCancelMaintenance()
         override fun applyTareScale() = scaleController.applyTareScale()
-        override fun applyHotWaterDose(dose: coffee.crema.core.HotWaterDose) = this@MainViewModel.applyHotWaterDose(dose)
-        override fun showConfig(cmd: MachineCommand.Config) = this@MainViewModel.showConfig(cmd)
-        override fun commitConfig(cmd: MachineCommand.Config) = this@MainViewModel.commitConfig(cmd)
+        override fun applyHotWaterDose(dose: coffee.crema.core.HotWaterDose) = machineConfig.applyHotWaterDose(dose)
+        override fun showConfig(cmd: MachineCommand.Config) = machineConfig.showConfig(cmd)
+        override fun commitConfig(cmd: MachineCommand.Config) = machineConfig.commitConfig(cmd)
         override fun hasProfile(id: String): Boolean = library.hasProfile(id)
         override fun hasBean(id: String): Boolean = _ui.value.beans.any { it.id == id }
         // Someone is using Crema on a mirror: that's presence at the machine.
@@ -671,7 +691,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         effectiveState = { effectiveState() },
         appendLog = { appendLog(it) },
         notify = { notifyUser(it) },
-        pushCoreInputs = { pushCoreInputs(it) },
+        pushCoreInputs = { machineConfig.pushCoreInputs(it) },
         persistPrefsNow = { persistPrefsNow() },
         profileJson = { library.profileJson(it) },
         isBuiltinProfile = { library.isBuiltinProfile(it) },
@@ -1479,7 +1499,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun applyRestoredSettings(p: AppPrefs) {
         settings.restoreValues(p)
         // On a remote the core keeps following the hub's values (§7.4).
-        pushCoreInputs(effectiveState())
+        machineConfig.pushCoreInputs(effectiveState())
         // Re-send the connect sweep's settings with the restored prefs — machine
         // registers plus the Quick-Controls steam / hot-water / flush params —
         // so a restore takes effect without waiting for the next connect or QC
@@ -1589,125 +1609,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  primary while mirroring. */
     private val machine: MachineCommands get() = proxy.machine
 
-    /** The visible half of a config command on the device that owns the
-     *  config: update the UI state now; [commitConfig] does the rest. A remote
-     *  shows its relayed edits in its mirror slice instead ([showPending]). */
-    private fun showConfig(cmd: MachineCommand.Config) {
-        _ui.update { cmd.applyTo(it) }
-        // The brew override is stored normalized by the core (this device holds
-        // the machine: its own dial and a remote's relayed one alike) — brew
-        // temp clamped into the active profile's range, values back at the
-        // profile's own dropped, nothing left = no override (Decenza model).
-        if (cmd is MachineCommand.AdjustBrew) {
-            val activeJson = _ui.value.activeProfileId?.let { library.profileJson(it) }
-            _ui.update {
-                it.copy(
-                    brewParams = normalizedBrewParams(
-                        it.brewParams, activeJson, json, ::normalizeBrewOverrides, ::brewTempRange,
-                    ),
-                )
-            }
-        }
-    }
-
-    /** The brew-temperature dial for the profile on screen (the core's range,
-     *  anchor and pre-infusion seed); `null` with no active profile. */
-    fun brewDial(): BrewDial? {
-        val s = effectiveState()
-        // On a remote the hub's copy of its custom profile wins over this
-        // library's (possibly out-of-date) one.
-        val cremaJson = s.mirroredProfileJson?.takeIf { _ui.value.mirror != null }
-            ?: s.activeProfileId?.let { library.profileJson(it) } ?: s.mirroredProfileJson
-        return brewDialOf(cremaJson, json, ::brewTempRange, ::preinfusionDial)
-    }
-
-    /** The rest of a config command on the device that owns the config:
-     *  persist it, write the machine, push it to mirrors. */
-    private fun commitConfig(cmd: MachineCommand.Config) {
-        when (cmd) {
-            is MachineCommand.SetActiveProfile -> {
-                persistPrefs()
-                session.pushStopTargets() // new profile's recipe yield/volume become the stop targets
-            }
-            is MachineCommand.SetActiveBean -> {
-                library.persistLibrary()
-                proxy.pushConfig() // bean activation persists via the library, not prefs
-                // Linked-profile auto-load (web activateBean parity). Only user acts
-                // reach this — boot/library restore writes activeBeanId directly —
-                // so firing here matches the "explicit activation only" rule.
-                if (cmd.id != null) library.maybeLoadLinkedProfile(cmd.id)
-            }
-            is MachineCommand.SetStopOnWeight -> {
-                runCatching { bridge.setStopOnWeight(cmd.on) }.onFailure {
-                    appendLog("Set stop-on-weight failed: ${it.message}")
-                }
-                persistPrefs()
-            }
-            is MachineCommand.SetAutoTare -> {
-                runCatching { bridge.setAutoTare(cmd.on) }.onFailure {
-                    appendLog("Set auto-tare failed: ${it.message}")
-                }
-                persistPrefs()
-            }
-            is MachineCommand.SetQc -> {
-                persistPrefs()
-                when (cmd.field) {
-                    // One read-modify-write packet carries these and the dose.
-                    QcField.STEAM_TIME, QcField.STEAM_TEMP, QcField.HOT_WATER_TEMP -> applySteamHotWater()
-                    QcField.HOT_WATER_VOLUME -> {
-                        // A bare volume edit (no remote sends one since relay v4):
-                        // it switched the dose to volume mode (`applyTo`).
-                        appendLog("Hot-water volume ${cmd.value.toInt()} ml: switched to volume mode")
-                        applySteamHotWater()
-                    }
-                    QcField.STEAM_FLOW -> lane.route("Set steam flow") { bridge.setSteamFlow(cmd.value) }
-                    QcField.FLUSH_TIME -> lane.route("Set flush time") { bridge.setFlushTimeout((cmd.value * 1000f).toUInt()) }
-                    QcField.FLUSH_TEMP -> lane.route("Set flush temp") { bridge.setFlushTemp(cmd.value) }
-                    // Grind never reaches the machine: it's recorded onto the next shot.
-                    QcField.GRIND -> Unit
-                }
-            }
-            is MachineCommand.AdjustBrew -> {
-                // The new yield override becomes the live stop-at-weight target
-                // now; the dialled profile goes to the DE1 once the dial rests.
-                session.pushStopTargets(desiredDelayMs = DIAL_PUSH_DEBOUNCE_MS)
-                proxy.pushConfig() // mirrors track the primary's live override (issue 06)
-            }
-            MachineCommand.ResetBrew -> {
-                session.pushStopTargets() // drop the per-shot override; the profile recipe target takes over
-                proxy.pushConfig() // mirrors drop their override too (issue 06)
-            }
-        }
-    }
+    /** The brew-temperature dial for the profile on screen; `null` with no active profile. */
+    fun brewDial(): BrewDial? = machineConfig.brewDial()
 
     /** Test seam: feed a hub's config frame to this device, whatever its role
      *  (AC-20: a normal device or a hub drops it). */
     @androidx.annotation.VisibleForTesting
     internal fun deliverConfigForTest(json: String) = remoteConfig.applyRemoteConfig(json)
-
-    /**
-     * The core inputs that follow settings, from [state] (spec §7.4): the
-     * stop-on-weight, auto-tare, max-duration and volume-stop flags, the stop
-     * targets, the idle-sleep timer and the weight unit (the scale LCD and
-     * set-grams writes follow it). Called with [effectiveState]: after
-     * each applied snapshot on a remote, at the end of every own-state writer
-     * ([loadPrefs], [applyRestoredSettings], [resetPreferences], [eraseAll])
-     * in every role, and on leaving the remote role.
-     */
-    private fun pushCoreInputs(state: MainUiState) {
-        // Every settings-driven core input in one call (auto-tare,
-        // stop-on-weight, volume stop, max shot, weight unit, low-water
-        // threshold, and the start settings: pre-flush, require-scale,
-        // steam purge) — the core's apply_common_settings, as web does.
-        runCatching { bridge.applyCommonSettings(json.encodeToString(CommonSettings.serializer(), state.commonSettings())) }
-            .onFailure { appendLog("Apply settings to the core failed: ${it.message}") }
-        // The steam / hot-water packet's targets and the hot-water dose: a
-        // restore, reset or erase that changes the dose must not leave the old
-        // packet for the group-head button.
-        applySteamHotWater(state)
-        session.pushStopTargets(state)
-        presence.configureIdleSleep(state.idleSleepMin)
-    }
 
     // ── Multi-device pairing (relay v4) ───────────────────────────────────────
     // The pairing ceremony, the pins and the keys live in [ProxyController]
@@ -1801,47 +1709,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // setters are safe while disconnected — the bridge returns a command JSON
     // and with no BLE link nothing is written.
 
-    /**
-     * Set the mains heater voltage. The core @Throws unless [volts] is 120 or
-     * 230, so callers (the Settings segmented control behind a confirm) must
-     * only pass those — guarded here too so an out-of-range value is a no-op.
-     */
-    fun setHeaterVoltage(volts: Int) {
-        editOwnSetting(Setting.HEATER_VOLTAGE) {
-            if (volts != 120 && volts != 230) {
-                appendLog("Heater voltage $volts ignored (only 120 / 230 allowed)")
-                return
-            }
-            val raw = runCatching { bridge.setHeaterVoltage(volts.toUByte()) }.getOrElse {
-                appendLog("Set heater voltage failed: ${it.message}")
-                return
-            }
-            lane.deliver(raw)
-            runCatching { bridge.readMmr(MmrReg.HEATER_VOLTAGE) }.getOrNull()?.let(lane::deliver)
-        }
-    }
+    /** Set the mains heater voltage (120 or 230; anything else is a no-op). */
+    fun setHeaterVoltage(volts: Int) = machineConfig.setHeaterVoltage(volts)
 
-    /**
-     * Override the AC mains frequency. The core @Throws unless [hz] is 0.0
-     * (auto-detect), 50.0, or 60.0 — guarded here so a bad value is a no-op.
-     * Returns Unit (no BLE write); the resolved value is re-read into
-     * [MainUiState.lineFreqHz].
-     */
-    fun setLineFrequency(hz: Float) {
-        editOwnSetting(Setting.LINE_FREQUENCY) {
-            if (hz != 0.0f && hz != 50.0f && hz != 60.0f) {
-                appendLog("Line frequency $hz ignored (only 0 / 50 / 60 allowed)")
-                return
-            }
-            runCatching { bridge.setLineFrequencyOverride(hz) }.onFailure {
-                appendLog("Set line frequency failed: ${it.message}")
-                return
-            }
-            val resolved = runCatching { bridge.lineFrequencyHz() }.getOrNull() ?: hz
-            _ui.update { it.copy(lineFreqHz = resolved, lineFreqOverride = hz) }
-            proxy.pushConfig() // remotes show the hub's line frequency (§6.1)
-        }
-    }
+    /** Override the AC mains frequency (0 = auto-detect, 50 or 60; anything else is a no-op). */
+    fun setLineFrequency(hz: Float) = machineConfig.setLineFrequency(hz)
 
     /** On-demand GitHub release check (Settings → About, issue #36). */
     fun checkForUpdates() {
@@ -1895,29 +1767,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Re-read the auto-detector's current resolved line frequency so the AC-
-     *  frequency hint can show "Currently locked at X Hz" live while on Auto. */
-    fun refreshLineFrequency() {
-        val resolved = runCatching { bridge.lineFrequencyHz() }.getOrNull()
-        _ui.update { it.copy(lineFreqHz = resolved) }
-    }
+    /** Re-read the auto-detector's resolved line frequency. */
+    fun refreshLineFrequency() = machineConfig.refreshLineFrequency()
 
-    /**
-     * Set the maximum shot duration, seconds (null = clear the cap). Returns
-     * Unit (a sans-IO core setting); no event echo.
-     */
-    fun setMaxShotDuration(seconds: Float?) {
-        editOwnSetting(Setting.MAX_SHOT_DURATION) {
-            runCatching { bridge.setMaxShotDuration(seconds) }.onFailure {
-                appendLog("Set max shot duration failed: ${it.message}")
-            }
-            if (seconds != null) {
-                _ui.update { it.copy(maxShotDurationS = seconds) }
-                persistPrefs() // also pushes the hub's snapshot (§6.1)
-            }
-            session.refreshStopTargetProjection()
-        }
-    }
+    /** Set the maximum shot duration, seconds (null = clear the cap). */
+    fun setMaxShotDuration(seconds: Float?) = machineConfig.setMaxShotDuration(seconds)
 
     // ── Live mode switches (M2 — no restart) — see [ProxyController] ────────
 
@@ -2068,57 +1922,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // fields QC doesn't model (flags, timeouts, espresso volume) survive;
     // steam flow + flush temp/time are separate writes.
 
-    /** Push the steam / hot-water targets and the hot-water dose to the core —
-     *  the one push for the combined cuuid_0B packet (spec §4), from [state]'s
-     *  settings: the core keeps the packet in step (the volume and timeout
-     *  from the dose, the group target the effective profile's). Every writer
-     *  of these settings ends here: a Quick Controls edit, a relayed one, and
-     *  the whole-bundle writes through [pushCoreInputs]. */
-    private fun applySteamHotWater(state: MainUiState = _ui.value) {
-        val ui = state
-        val targets = SteamHotWaterTargets(
-            steamTempC = ui.qcSteamTempC,
-            steamTimeoutS = ui.qcSteamTimeS,
-            hotWaterTempC = ui.qcHotWaterTempC,
-            hotWater = ui.hotWaterDose(),
-        )
-        lane.route("Set steam/hot-water") {
-            bridge.setSteamHotwaterTargets(json.encodeToString(SteamHotWaterTargets.serializer(), targets))
-        }
-        refreshHotWaterTarget()
-    }
-
-    /** Re-read the core's hot-water target after an input change of this
-     *  device's own: with nothing connected no output carries its
-     *  `HotWaterTarget` event. A remote shows nothing of its own core's. */
-    private fun refreshHotWaterTarget() {
-        if (_ui.value.mirror != null) return
-        val raw = runCatching { bridge.hotWaterTargetJson() }.getOrNull() ?: return
-        val target = runCatching {
-            json.decodeFromString(HotWaterTarget.serializer().nullable, raw)
-        }.getOrNull()
-        setHotWaterTarget(target)
-    }
-
-    /** Show [target]; a hub tells its remotes when it changed (they show the
-     *  hub's own number, from the snapshot). */
-    private fun setHotWaterTarget(target: HotWaterTarget?) {
-        if (_ui.value.hotWaterTarget == target) return
-        _ui.update { it.copy(hotWaterTarget = target) }
-        proxy.pushConfig()
-    }
-
     /** The hot-water dose — the Quick Controls' Time · ml · Ratio card sets the
      *  mode and the mode's value in one edit. A machine setting: a remote
      *  refuses it ("Change on <hub>"). */
     fun setHotWaterDose(dose: coffee.crema.core.HotWaterDose) = machine.execute(MachineCommand.SetHotWaterDose(dose))
-
-    /** [setHotWaterDose] on the device holding the machine: store, push, show. */
-    private fun applyHotWaterDose(dose: coffee.crema.core.HotWaterDose) {
-        _ui.update { it.withHotWaterDose(dose) }
-        persistPrefs() // pushes the hub's snapshot too
-        applySteamHotWater()
-    }
 
     /** Steam timeout, seconds (Quick Controls). Persisted; RMW write. */
     fun setQcSteamTime(seconds: Float) = machine.execute(MachineCommand.SetQc(QcField.STEAM_TIME, seconds))
@@ -2158,26 +1965,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // `Format.kt`. Persisted so the choice survives a restart. The weight unit
     // also goes to the core, which picks the scale's LCD unit from it.
 
-    /**
-     * Weight readout unit (`"g" | "oz"`). Persisted display pref. The core
-     * gets it too, and a connected scale's display switches now rather than
-     * on the next Idle entry or reconnect (as on web).
-     */
-    fun setWeightUnit(unit: String) {
-        _ui.update { it.copy(weightUnit = unit) }
-        persistPrefs()
-        val wire = coreWeightUnit(unit)
-        runCatching { bridge.setWeightUnitPref(wire) }.onFailure {
-            appendLog("Set weight unit failed: ${it.message}")
-            return
-        }
-        // Each call is capability-gated and fails for a scale without it (or
-        // no scale): a no-op is intended.
-        runCatching { bridge.enableScaleLcd(wire) }.onSuccess(lane::deliver)
-        if (wire == WeightUnit.Grams.string) {
-            runCatching { bridge.setScaleUnitGrams() }.onSuccess(lane::deliver)
-        }
-    }
+    /** Weight readout unit (`"g" | "oz"`). Persisted display pref; the core and a connected scale follow it. */
+    fun setWeightUnit(unit: String) = machineConfig.setWeightUnit(unit)
 
     /** Temperature readout unit (`"C" | "F"`). Persisted display pref. */
     fun setTempUnit(unit: String) = settings.setTempUnit(unit)
@@ -2191,27 +1980,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Water-tank readout style (`"ml" | "percent"`). Persisted display pref. */
     fun setWaterLevelUnit(unit: String) = settings.setWaterLevelUnit(unit)
 
-    /** Low-water warning threshold, canonical ml (0 = off) — #33 follow-up.
-     *  Persisted; re-arms the once-per-dip warning so a raised threshold can
-     *  fire on the very next level report. */
-    fun setWaterWarnMl(ml: Float) {
-        _ui.update { it.copy(waterWarnMl = ml) }
-        persistPrefs()
-        // The core's monitor re-arms on a threshold change.
-        lane.post { runCatching { bridge.setWaterWarnMl(ml) } }
-    }
+    /** Low-water warning threshold, canonical ml (0 = off). Persisted. */
+    fun setWaterWarnMl(ml: Float) = machineConfig.setWaterWarnMl(ml)
 
-    /** The machine's own refill threshold, raw sensor mm (geota/crema#47).
-     *  Persisted AND pushed straight through, so the DE1 stops (or starts)
-     *  demanding water at the new level without waiting for a reconnect. */
-    fun setWaterRefillPointMm(mm: Float) {
-        editOwnSetting(Setting.WATER_REFILL_POINT) {
-            val clamped = mm.coerceIn(REFILL_POINT_MIN_MM, REFILL_POINT_MAX_MM)
-            _ui.update { it.copy(waterRefillPointMm = clamped) }
-            persistPrefs()
-            lane.route("Set refill point") { bridge.setRefillThreshold(clamped) }
-        }
-    }
+    /** The machine's own refill threshold, raw sensor mm. Persisted and written through. */
+    fun setWaterRefillPointMm(mm: Float) = machineConfig.setWaterRefillPointMm(mm)
 
     /** Daily automatic Google Drive backup toggle (issue #36). Turning it on
      *  runs a backup right away if one is due. */
@@ -2221,58 +1994,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (on) drive.autoBackupIfDue(true)
     }
 
-    /** Fan-on temperature threshold, °C (0..=60). Persisted + written to the
-     *  machine immediately; re-seeded on every connect. */
-    fun setFanThreshold(tempC: Float) {
-        editOwnSetting(Setting.FAN_THRESHOLD) {
-            _ui.update { it.copy(fanThresholdC = tempC) }
-            persistPrefs()
-            lane.route("Set fan threshold") {
-                bridge.setFanThreshold(tempC.roundToInt().coerceIn(0, 60).toUByte())
-            }
-        }
-    }
+    /** Fan-on temperature threshold, °C (0..=60). Persisted and written through. */
+    fun setFanThreshold(tempC: Float) = machineConfig.setFanThreshold(tempC)
 
     /** Opt-in "require scale to start" block (geota/crema#29). Persisted. */
-    fun setRequireScale(on: Boolean) {
-        editOwnSetting(Setting.REQUIRE_SCALE) {
-            _ui.update { it.copy(requireScale = on) }
-            persistPrefs()
-            session.pushStartSettings()
-        }
-    }
+    fun setRequireScale(on: Boolean) = machineConfig.setRequireScale(on)
 
-    /** DE1 firmware two-tap steam stop. Persisted + written to the machine
-     *  immediately; re-seeded on every connect. */
-    fun setSteamTwoTap(enabled: Boolean) {
-        editOwnSetting(Setting.STEAM_TWO_TAP) {
-            _ui.update { it.copy(steamTwoTap = enabled) }
-            persistPrefs()
-            lane.route("Set steam two-tap stop") {
-                bridge.setSteamTwoTapStop(if (enabled) 1u else 0u)
-            }
-        }
-    }
+    /** DE1 firmware two-tap steam stop. Persisted and written through. */
+    fun setSteamTwoTap(enabled: Boolean) = machineConfig.setSteamTwoTap(enabled)
 
-    /** The pre-shot flush preference: persisted, and latched in the core,
-     *  which runs the start (F16). */
-    fun setPreFlush(enabled: Boolean) {
-        editOwnSetting(Setting.PRE_FLUSH) {
-            _ui.update { it.copy(preFlush = enabled) }
-            persistPrefs()
-            session.pushStartSettings()
-        }
-    }
+    /** The pre-shot flush preference: persisted, and latched in the core. */
+    fun setPreFlush(enabled: Boolean) = machineConfig.setPreFlush(enabled)
 
-    /** The post-steam purge preference: persisted, and latched in the core,
-     *  which runs the purge (F16). */
-    fun setSteamPurge(enabled: Boolean) {
-        editOwnSetting(Setting.STEAM_PURGE) {
-            _ui.update { it.copy(steamPurge = enabled) }
-            persistPrefs()
-            session.pushStartSettings()
-        }
-    }
+    /** The post-steam purge preference: persisted, and latched in the core. */
+    fun setSteamPurge(enabled: Boolean) = machineConfig.setSteamPurge(enabled)
 
     /** Keep the screen awake while a shot pulls (Settings → Display). Persisted. */
     fun setKeepScreenOnBrew(enabled: Boolean) = settings.setKeepScreenOnBrew(enabled)
@@ -2317,7 +2052,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // to the core now (it doesn't echo them back). On a remote that is
         // the hub's values: a snapshot that landed before the load finished
         // isn't clobbered by this device's own (§7.4).
-        pushCoreInputs(effectiveState())
+        machineConfig.pushCoreInputs(effectiveState())
         // The Brew setup opens on the most recent method, now it's known.
         guided.resolveGuidedSetup()
         // Hydrate the remembered addresses, arm each manager's reconnect loop,
@@ -2685,16 +2420,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private const val QUIT_TEARDOWN_SLACK_MS = 250L
 
         /** Abort a pending gated-start brew if the upload never completes. */
-
-        /** How long the Quick-Controls dial must rest before its override
-         *  becomes the desired profile (de1app debounces its temperature dial by
-         *  0.5 s too), so a run of stepper taps uploads once. */
-        private const val DIAL_PUSH_DEBOUNCE_MS = 500L
     }
 }
 
 /** These UI settings as the shared [CommonSettings] (via [AppPrefs], whose
- *  mapping is the canonical one) — what [MainViewModel.pushCoreInputs] hands
+ *  mapping is the canonical one) — what [MachineConfigController.pushCoreInputs] hands
  *  the core. */
 internal fun MainUiState.commonSettings(): CommonSettings = AppPrefs(
     themeMode = themeMode,
@@ -2740,7 +2470,3 @@ internal fun MainUiState.commonSettings(): CommonSettings = AppPrefs(
     qcFlushTimeS = qcFlushTimeS,
     qcFlushTempC = qcFlushTempC,
 ).toCommonSettings()
-
-/** The core's wire spelling (`"grams" | "ounces"`) of the `"g" | "oz"` weight-unit pref. */
-private fun coreWeightUnit(pref: String): String =
-    if (pref == "oz") WeightUnit.Ounces.string else WeightUnit.Grams.string
