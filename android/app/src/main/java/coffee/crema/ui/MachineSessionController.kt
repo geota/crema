@@ -32,7 +32,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
@@ -156,6 +155,19 @@ internal class MachineSessionController(
      *  itself always runs on the core lane. Test seam (via the VM): a test
      *  dispatcher makes the 0.5 s virtual time. */
     var dialDebounceContext: kotlin.coroutines.CoroutineContext = lane.dispatcher
+
+    // Declared above `init`: a property below it is unset while it runs (P3-2).
+
+    /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
+    val sweepRunner by lazy {
+        ConnectSweepRunner(scope, sweep = ::seedMachineSettings, tick = ::usbChargerTick)
+    }
+
+    /** Connect-time machine-info sweep (see [readMachineInfo]); cancelled on reconnect/disconnect. */
+    private var machineInfoJob: kotlinx.coroutines.Job? = null
+
+    /** The pending [pushDesiredProfile] (a dial change waiting to settle). */
+    private var desiredPushJob: Job? = null
 
     init {
         lane.on<Event.MachineStateChanged> { event ->
@@ -626,14 +638,6 @@ internal class MachineSessionController(
 
     // ── The shot start, the desired profile and the stop targets ─────────────
 
-    /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
-    val sweepRunner by lazy {
-        ConnectSweepRunner(scope, sweep = ::seedMachineSettings, tick = ::usbChargerTick)
-    }
-
-    /** Connect-time machine-info sweep (see [readMachineInfo]); cancelled on reconnect/disconnect. */
-    private var machineInfoJob: kotlinx.coroutines.Job? = null
-
     fun afterFirmwareRelease() {
         if (!de1Ready()) return
         appendLog("Firmware: link released — running the connect setup")
@@ -799,9 +803,6 @@ internal class MachineSessionController(
             kotlinx.coroutines.withContext(lane.dispatcher) { setDesiredOnLane(cremaJson, qcJson) }
         }
     }
-
-    /** The pending [pushDesiredProfile] (a dial change waiting to settle). */
-    private var desiredPushJob: Job? = null
 
     /** A DE1 disconnect closed the session: stop the in-flight connect-time
      *  register sweep, drop the pending gated-start, and clear the live

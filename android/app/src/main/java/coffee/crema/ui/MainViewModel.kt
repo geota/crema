@@ -139,9 +139,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _live = MutableStateFlow(LiveTelemetry())
 
     /**
-     * The machine session as the core reports it ([MachineSessionController]):
-     * its event handlers, the service-mode clock and the shot record's
-     * markers. Built right after the lane, so its handlers come first for the
+     * The machine session ([MachineSessionController]): its event handlers,
+     * the service-mode clock, the shot record's markers, the shot start, the
+     * desired profile, the stop targets and the connect setup. Built right after the lane, so its handlers come first for the
      * events another owner also handles (as when they were the VM's own); its
      * callbacks reach later members only when invoked.
      */
@@ -461,7 +461,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Declared above every `init` block (cohort review 2026-10-25, P3-2) ──
     // Kotlin initialises properties and runs `init` blocks in source order, so
     // a property declared below an init is still null/0 while that init runs
-    // (the July 2026 launch crash). These four used to sit far below.
+    // (the July 2026 launch crash).
 
     /**
      * The 1 s core clock while the DE1 link is up or coming up (cohort review

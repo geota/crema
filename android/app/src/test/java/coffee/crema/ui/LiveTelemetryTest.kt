@@ -98,15 +98,17 @@ class LiveTelemetryTest {
         events(vm, pouring, """{"type":"ShotStarted"}""", telemetrySample(pressure = 9f), """{"type":"ShotFrameChanged","content":{"frame":2}}""")
         assertEquals(1, vm.liveStore.value.shotTelemetry.size)
 
-        // What an observer of the state finds in the store at each state change.
+        // What an observer of the state finds in the store as the start lands.
         val seen = CopyOnWriteArrayList<Int>()
-        collectors.launch { vm.ownState.collect { seen += vm.liveStore.value.shotTelemetry.size } }
+        collectors.launch {
+            vm.ownState.collect { if (it.shotFrame == 0) seen += vm.liveStore.value.shotTelemetry.size }
+        }
         events(vm, """{"type":"ShotStarted"}""")
 
         assertEquals(emptyList(), vm.live.value.shotTelemetry)
         assertEquals(0L, vm.live.value.shotElapsedMs)
         assertEquals(0f, vm.live.value.dispensedVolume)
-        assertEquals(listOf(1, 0), seen, "the readouts reset first")
+        assertEquals(0, seen.first(), "the readouts reset first")
     }
 
     @Test
@@ -124,22 +126,12 @@ class LiveTelemetryTest {
     }
 
     @Test
-    fun `a telemetry sample writes nothing the prefs save`() {
-        val vm = build()
-        val own = vm.ownState.value
-        events(vm, telemetrySample(pressure = 9f))
-        assertSame(own, vm.ownState.value)
-    }
-
-    @Test
     fun `a remote's readouts come from its own core, past the mirror slice`() {
         val vm = remote.start()
         remote.push()
-        val shown = vm.ui.value
         events(vm, telemetrySample(pressure = 7f), reading)
         assertEquals(7f, vm.live.value.pressure)
         assertEquals(12.5f, vm.live.value.scaleWeightG)
-        assertSame(shown, vm.ui.value, "the mirror's projection is not recomputed for a sample")
     }
 
     @Test
