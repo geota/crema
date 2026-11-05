@@ -2418,7 +2418,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** Grace past [QUIT_WRITE_BUDGET_MS] before onCleared's deferred BLE
          *  teardown runs anyway (the write's own timeout normally fires first). */
         private const val QUIT_TEARDOWN_SLACK_MS = 250L
-
     }
 }
 
