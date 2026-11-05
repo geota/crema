@@ -46,8 +46,8 @@ class ScaleSessionVmTest {
         val vm = build()
         deliver(vm, reading(""","device_volume":4,"device_standby":10,"device_battery":80,"device_flow":2.0"""))
         var s = vm.ui.value
-        assertEquals(12.5f, s.scaleWeightG)
-        assertEquals(2.0f, s.scaleFlowGPerS, "the scale's own flow when it reports one")
+        assertEquals(12.5f, vm.live.value.scaleWeightG)
+        assertEquals(2.0f, vm.live.value.scaleFlowGPerS, "the scale's own flow when it reports one")
         assertEquals(4, s.scaleVolume)
         assertEquals(10, s.scaleStandbyMinutes)
         assertEquals(80, s.scaleBatteryPercent)
@@ -55,7 +55,7 @@ class ScaleSessionVmTest {
 
         deliver(vm, reading())
         s = vm.ui.value
-        assertEquals(1.5f, s.scaleFlowGPerS, "else the core's estimate")
+        assertEquals(1.5f, vm.live.value.scaleFlowGPerS, "else the core's estimate")
         assertEquals(4, s.scaleVolume)
         assertEquals(10, s.scaleStandbyMinutes)
         assertEquals(80, s.scaleBatteryPercent)
@@ -78,14 +78,14 @@ class ScaleSessionVmTest {
         val vm = build()
         deliver(vm, reading(""","device_volume":5,"device_battery":70"""))
         deliver(vm, """{"type":"ScaleStale"}""")
-        assertNull(vm.ui.value.scaleWeightG)
+        assertNull(vm.live.value.scaleWeightG)
 
         deliver(vm, reading(""","device_volume":5,"device_battery":70"""))
         vm.disconnectScale()
         VmHarness.drainCoreLane(vm)
         VmHarness.idle()
         val s = vm.ui.value
-        assertNull(s.scaleWeightG)
+        assertNull(vm.live.value.scaleWeightG)
         assertNull(s.scaleBatteryPercent)
         assertEquals(DEFAULT_SCALE_VOLUME, s.scaleVolume)
         assertEquals(emptySet(), s.scaleEchoed)

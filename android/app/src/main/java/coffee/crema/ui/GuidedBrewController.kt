@@ -43,6 +43,8 @@ internal class GuidedBrewController(
     private val lane: CoreLane,
     /** This device's own UI snapshot (the VM's `_ui`). */
     private val uiFlow: StateFlow<MainUiState>,
+    /** The live store's current value, read on the caller's thread. */
+    private val liveState: () -> LiveTelemetry,
     /** The UI snapshot as the screens show it (spec §7.2). */
     private val effectiveState: () -> MainUiState,
     /** Synchronously update the UI snapshot (the VM's `_ui.update`). */
@@ -206,14 +208,15 @@ internal class GuidedBrewController(
         val st = uiState()
         val session = st.guidedBrew
         if (session.phase != "running") return
-        val w = st.scaleWeightG ?: return
+        val reading = liveState()
+        val w = reading.scaleWeightG ?: return
         if (st.scaleState != coffee.crema.ble.ScaleBleManager.State.READY) return
         val at = session.elapsedMs(now)
         _liveBrewSeries.update { s ->
             if (s.samples.size >= 4_500) {
                 s
             } else {
-                s.copy(samples = s.samples + coffee.crema.core.BrewSample(elapsedMs = at, weightG = w, flowGS = st.scaleFlowGPerS))
+                s.copy(samples = s.samples + coffee.crema.core.BrewSample(elapsedMs = at, weightG = w, flowGS = reading.scaleFlowGPerS))
             }
         }
     }

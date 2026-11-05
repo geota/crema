@@ -1,5 +1,6 @@
 package coffee.crema.ui.brewlog
 
+import coffee.crema.ui.LiveReadouts
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -139,17 +140,19 @@ fun GuidedBrewPanel(
     }
 
     when (session.phase) {
-        "armed", "running", "paused" -> LiveSession(
-            vm = vm,
-            session = session,
-            fallbackRecipe = setup.recipe,
-            connected = connected,
-            weightG = ui.scaleWeightG,
-            flowGPerS = ui.scaleFlowGPerS,
-            liveSeries = liveSeries,
-            nowRealtime = nowRealtime,
-            modifier = modifier,
-        )
+        "armed", "running", "paused" -> LiveReadouts(vm.live) { live ->
+            LiveSession(
+                vm = vm,
+                session = session,
+                fallbackRecipe = setup.recipe,
+                connected = connected,
+                weightG = live.scaleWeightG,
+                flowGPerS = live.scaleFlowGPerS,
+                liveSeries = liveSeries,
+                nowRealtime = nowRealtime,
+                modifier = modifier,
+            )
+        }
         "done" -> ScrollPane(modifier) {
             val summary = session.summary
             if (summary != null) {

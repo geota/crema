@@ -1,5 +1,8 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.LiveReadouts
+import coffee.crema.ui.LiveTelemetry
+import kotlinx.coroutines.flow.StateFlow
 import coffee.crema.ui.UNKNOWN_VALUE
 import coffee.crema.ui.awaitingHubValues
 import coffee.crema.ui.Measurement
@@ -145,7 +148,7 @@ fun PhoneBrewScreen(
                 ProfileStrip(
                     title = active?.name ?: "No profile loaded",
                     // Remembered (review #37): the lines do list scans + joins,
-                    // and this strip recomposes at telemetry rate.
+                    // and this strip recomposes on every UI-state change.
                     beanLine = remember(
                         ui.activeBeanId, ui.beans, ui.roasters, ui.mirroredBeanSummary,
                     ) { beanLine(ui) },
@@ -177,30 +180,35 @@ fun PhoneBrewScreen(
             // firmware timeout, measured temp, progress bar, and a Stop.
             val mode = if (running) null else modeLabel(ui.machineStateName)
             if (mode != null) {
-                ModeStatusBanner(
-                    label = mode,
-                    elapsedMs = ui.modeElapsedMs,
-                    targetS = modeTargetSeconds(ui.machineStateName, rememberModeTargets(ui), ui.hotWaterTarget) ?: 0f,
-                    // Steam shows the steam-heater temp; hot water / flush show
-                    // the group-head temp (web headStatusMeta parity).
-                    tempLabel = when (ui.machineStateName) {
-                        MachineState.Steam -> ui.steamTemp?.let { formatTemp(it, ui.tempUnit) }
-                        else -> ui.headTemp?.let { formatTemp(it, ui.tempUnit) }
-                    },
-                    color = when (ui.machineStateName) {
-                        MachineState.Steam -> CremaTheme.telemetry.modeSteam
-                        MachineState.HotWater -> CremaTheme.telemetry.modeWater
-                        else -> CremaTheme.telemetry.modeFlush
-                    },
-                    onStop = vm::stopShot,
-                )
+                LiveReadouts(vm.live) { live ->
+                    ModeStatusBanner(
+                        label = mode,
+                        elapsedMs = live.modeElapsedMs,
+                        targetS = modeTargetSeconds(ui.machineStateName, rememberModeTargets(ui), ui.hotWaterTarget) ?: 0f,
+                        // Steam shows the steam-heater temp; hot water / flush show
+                        // the group-head temp (web headStatusMeta parity).
+                        tempLabel = when (ui.machineStateName) {
+                            MachineState.Steam -> live.steamTemp?.let { formatTemp(it, ui.tempUnit) }
+                            else -> live.headTemp?.let { formatTemp(it, ui.tempUnit) }
+                        },
+                        color = when (ui.machineStateName) {
+                            MachineState.Steam -> CremaTheme.telemetry.modeSteam
+                            MachineState.HotWater -> CremaTheme.telemetry.modeWater
+                            else -> CremaTheme.telemetry.modeFlush
+                        },
+                        onStop = vm::stopShot,
+                    )
+                }
             }
 
             if (running) {
-                RunningBody(ui = ui, active = active, modifier = Modifier.weight(1f))
+                LiveReadouts(vm.live) { live ->
+                    RunningBody(ui = ui, live = live, active = active, modifier = Modifier.weight(1f))
+                }
             } else {
                 RestingBody(
                     ui = ui,
+                    live = vm.live,
                     active = active,
                     connected = connected,
                     scaleConnected = scaleConnected,
@@ -214,21 +222,23 @@ fun PhoneBrewScreen(
             }
 
             // ── Foot: mode cluster + Coffee/Stop ─────────────────────────────
-            ModeCluster(
-                machineStateName = ui.machineStateName,
-                modeElapsedMs = ui.modeElapsedMs,
-                targets = rememberModeTargets(ui),
-                hotWaterTarget = ui.hotWaterTarget,
-                volumeUnit = ui.volumeUnit,
-                targetsKnown = !ui.awaitingHubValues,
-                tempUnit = ui.tempUnit,
-                connected = connected,
-                onSteam = { if (ui.machineStateName == MachineState.Steam) vm.stopShot() else vm.steam() },
-                onWater = { if (ui.machineStateName == MachineState.HotWater) vm.stopShot() else vm.hotWater() },
-                onFlush = vm::flush,
-                steamTemp = ui.steamTemp,
-                machineSubstate = ui.machineSubstate,
-            )
+            LiveReadouts(vm.live) { live ->
+                ModeCluster(
+                    machineStateName = ui.machineStateName,
+                    modeElapsedMs = live.modeElapsedMs,
+                    targets = rememberModeTargets(ui),
+                    hotWaterTarget = ui.hotWaterTarget,
+                    volumeUnit = ui.volumeUnit,
+                    targetsKnown = !ui.awaitingHubValues,
+                    tempUnit = ui.tempUnit,
+                    connected = connected,
+                    onSteam = { if (ui.machineStateName == MachineState.Steam) vm.stopShot() else vm.steam() },
+                    onWater = { if (ui.machineStateName == MachineState.HotWater) vm.stopShot() else vm.hotWater() },
+                    onFlush = vm::flush,
+                    steamTemp = live.steamTemp,
+                    machineSubstate = ui.machineSubstate,
+                )
+            }
             // Stop also cancels a start still pending (05 F2).
             val stoppable = espressoActive || ui.shotStarting
             CoffeeCta(
@@ -584,11 +594,11 @@ private fun MiniProfileSpark(profile: CremaProfile, active: Boolean, modifier: M
 /* ────────────────────────── RUNNING (BrewRefinedA2) ─────────────────────── */
 
 @Composable
-private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifier = Modifier) {
+private fun RunningBody(ui: MainUiState, live: LiveTelemetry, active: CremaProfile?, modifier: Modifier = Modifier) {
     val tel = CremaTheme.telemetry
     Column(modifier, verticalArrangement = Arrangement.spacedBy(9.dp)) {
         // Compact timer + yield bar.
-        val totalS = ui.shotElapsedMs / 1000.0
+        val totalS = live.shotElapsedMs / 1000.0
         val mm = (totalS.toInt() / 60).toString().padStart(2, '0')
         val ss = (totalS.toInt() % 60).toString().padStart(2, '0')
         val frac = ((totalS % 1) * 10).toInt().toString()
@@ -598,7 +608,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
         // Floor at 0: lifting the cup during the post-stop drip (the shot stays
         // "in progress" until the DE1 idles) flips live weight crazy-negative —
         // keep it out of the yield readout + ratio (the bar already clamps at 525).
-        val weight = (ui.scaleWeightG ?: 0f).coerceAtLeast(0f)
+        val weight = (live.scaleWeightG ?: 0f).coerceAtLeast(0f)
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
@@ -675,12 +685,12 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
         // pairing.
         // Unit-aware (issue 44): pressure / volume / temp / weight convert to the
         // chosen unit; flow (ml/s, g/s) and resistance are not toggled dimensions.
-        val resist = ui.resistanceWeight ?: ui.resistance
-        val cPressure = convertPressure(ui.pressure, ui.pressureUnit)
-        val cVolume = convertVolume(ui.dispensedVolume, ui.volumeUnit)
-        val cCoffee = convertTemp(ui.headTemp, ui.tempUnit)
-        val cWater = convertTemp(ui.mixTemp, ui.tempUnit)
-        val cWeight = convertWeight(ui.scaleWeightG?.coerceAtLeast(0f), ui.weightUnit)
+        val resist = live.resistanceWeight ?: live.resistance
+        val cPressure = convertPressure(live.pressure, ui.pressureUnit)
+        val cVolume = convertVolume(live.dispensedVolume, ui.volumeUnit)
+        val cCoffee = convertTemp(live.headTemp, ui.tempUnit)
+        val cWater = convertTemp(live.mixTemp, ui.tempUnit)
+        val cWeight = convertWeight(live.scaleWeightG?.coerceAtLeast(0f), ui.weightUnit)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             DualChip(
                 Modifier.weight(1f),
@@ -689,7 +699,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
             )
             DualChip(
                 Modifier.weight(1f),
-                "FLOW", fmtF(ui.flow), "ml/s", tel.flow,
+                "FLOW", fmtF(live.flow), "ml/s", tel.flow,
                 "VOLUME", cVolume.value, cVolume.unit, tel.flow2,
             )
         }
@@ -702,7 +712,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
             DualChip(
                 Modifier.weight(1f),
                 "WEIGHT", cWeight.value, cWeight.unit, tel.weight,
-                "FLOW", fmtF(ui.scaleFlowGPerS), "g/s", tel.weight2,
+                "FLOW", fmtF(live.scaleFlowGPerS), "g/s", tel.weight2,
             )
         }
 
@@ -714,7 +724,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
         ) {
             EnlargeableChart(Modifier.fillMaxSize()) { m ->
                 CanvasShotChart(
-                    samples = ui.shotTelemetry,
+                    samples = live.shotTelemetry,
                     enabledChannels = ui.chartChannels,
                     modifier = m.padding(start = 2.dp, end = 8.dp, top = 8.dp, bottom = 2.dp),
                 )
@@ -804,6 +814,7 @@ private fun DualChip(
 @Composable
 private fun RestingBody(
     ui: MainUiState,
+    live: StateFlow<LiveTelemetry>,
     active: CremaProfile?,
     connected: Boolean,
     scaleConnected: Boolean,
@@ -858,11 +869,13 @@ private fun RestingBody(
                             )
                         }
                     }
-                    Text(
-                        ui.headTemp?.let { "Group ${formatTemp(it, ui.tempUnit)}" } ?: "Group —",
-                        style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp, fontFeatureSettings = "tnum"),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    LiveReadouts(live) { latest ->
+                        Text(
+                            latest.headTemp?.let { "Group ${formatTemp(it, ui.tempUnit)}" } ?: "Group —",
+                            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp, fontFeatureSettings = "tnum"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 // Another hub holds the machine: say how to get it here.
                 if (!connected) HubHoldsMachineNotice(ui, onConnectThrough = onConnectThrough)
@@ -1045,39 +1058,41 @@ private fun RestingBody(
         }
 
         // ── Machine readiness strip — group temp · steam temp · tank · scale ─
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val groupOk = connected && ui.headTemp != null &&
-                active != null && ui.headTemp >= active.brewTemp - 2f
-            // Ready tints derived (was hardcoded false): steam boiler up to temp,
-            // tank above the low-water mark. Mirrors the Group tile's pattern.
-            // Target-relative, not the hardcoded 130 °C this used to be: an
-            // absolute threshold never lit for a 120 °C steam target and lit
-            // 30 °C early for a 160 °C one. One rule, shared with the chips
-            // and the other shells (core `steam_at_temperature`).
-            val steamOk = connected && steamAtTemperature(ui.steamTemp, rememberModeTargets(ui).steamTempC)
-            val tankOk = connected && ui.waterLevelMm != null && !ui.refillSoon()
-            // Compact, unit-aware status (issue 44): converted value + explicit
-            // glyph, no space — this dense 4-up strip can't fit "148.0 °C".
-            val groupM = convertTemp(ui.headTemp, ui.tempUnit)
-            val steamM = convertTemp(ui.steamTemp, ui.tempUnit)
-            // After a shot, lifting the cup flips the scale crazy-negative (cup mass
-            // removed from the tared baseline). On this resting tile show the last
-            // shot's yield instead of a nonsense negative — web/tablet parity (they
-            // freeze the brew weight to the final post-shot rather than tracking live).
-            val liveScaleG = ui.scaleWeightG ?: 0f
-            val restScaleG = if (liveScaleG < 0f) (ui.lastShot?.yieldG ?: 0f) else liveScaleG
-            val scaleM = convertWeight(restScaleG, ui.weightUnit)
-            MStat("Group", "thermometer", ui.headTemp?.let { "${groupM.value}${groupM.unit}" } ?: "—", groupOk, Modifier.weight(1f))
-            MStat("Steam", "cloud", ui.steamTemp?.let { "${steamM.value}${steamM.unit}" } ?: "—", steamOk, Modifier.weight(1f))
-            val tankM = formatTankLevel(ui.waterLevelMm, ui.waterLevelUnit, ui.volumeUnit)
-            MStat("Tank", "drop-half", if (ui.waterLevelMm != null) "${tankM.value}${tankM.unit}" else "—", tankOk, Modifier.weight(1f))
-            // Tap-to-tare (issue #37): while connected and idle, tapping the
-            // Scale tile tares (a mid-shot tare would corrupt stop-at-weight).
-            MStat(
-                "Scale", "scales", if (scaleConnected) "${scaleM.value}${scaleM.unit}" else "—", scaleConnected,
-                Modifier.weight(1f),
-                onTap = if (scaleConnected && ui.machineStateName != MachineState.Espresso) onTareScale else null,
-            )
+        LiveReadouts(live) { latest ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val groupOk = connected && latest.headTemp != null &&
+                    active != null && latest.headTemp >= active.brewTemp - 2f
+                // Ready tints derived (was hardcoded false): steam boiler up to temp,
+                // tank above the low-water mark. Mirrors the Group tile's pattern.
+                // Target-relative, not the hardcoded 130 °C this used to be: an
+                // absolute threshold never lit for a 120 °C steam target and lit
+                // 30 °C early for a 160 °C one. One rule, shared with the chips
+                // and the other shells (core `steam_at_temperature`).
+                val steamOk = connected && steamAtTemperature(latest.steamTemp, rememberModeTargets(ui).steamTempC)
+                val tankOk = connected && latest.waterLevelMm != null && !ui.refillSoon(latest)
+                // Compact, unit-aware status (issue 44): converted value + explicit
+                // glyph, no space — this dense 4-up strip can't fit "148.0 °C".
+                val groupM = convertTemp(latest.headTemp, ui.tempUnit)
+                val steamM = convertTemp(latest.steamTemp, ui.tempUnit)
+                // After a shot, lifting the cup flips the scale crazy-negative (cup mass
+                // removed from the tared baseline). On this resting tile show the last
+                // shot's yield instead of a nonsense negative — web/tablet parity (they
+                // freeze the brew weight to the final post-shot rather than tracking live).
+                val liveScaleG = latest.scaleWeightG ?: 0f
+                val restScaleG = if (liveScaleG < 0f) (ui.lastShot?.yieldG ?: 0f) else liveScaleG
+                val scaleM = convertWeight(restScaleG, ui.weightUnit)
+                MStat("Group", "thermometer", latest.headTemp?.let { "${groupM.value}${groupM.unit}" } ?: "—", groupOk, Modifier.weight(1f))
+                MStat("Steam", "cloud", latest.steamTemp?.let { "${steamM.value}${steamM.unit}" } ?: "—", steamOk, Modifier.weight(1f))
+                val tankM = formatTankLevel(latest.waterLevelMm, ui.waterLevelUnit, ui.volumeUnit)
+                MStat("Tank", "drop-half", if (latest.waterLevelMm != null) "${tankM.value}${tankM.unit}" else "—", tankOk, Modifier.weight(1f))
+                // Tap-to-tare (issue #37): while connected and idle, tapping the
+                // Scale tile tares (a mid-shot tare would corrupt stop-at-weight).
+                MStat(
+                    "Scale", "scales", if (scaleConnected) "${scaleM.value}${scaleM.unit}" else "—", scaleConnected,
+                    Modifier.weight(1f),
+                    onTap = if (scaleConnected && ui.machineStateName != MachineState.Espresso) onTareScale else null,
+                )
+            }
         }
     }
 }
@@ -1156,7 +1171,8 @@ private fun PhoneDialInCard(
     /** Open this shot in History. */
     onOpen: () -> Unit,
 ) {
-    val ago = shot.completedAtMs.takeIf { it > 0L }?.let { coffee.crema.ui.relativeAgo(it) }
+    val minute = coffee.crema.ui.rememberMinuteBucket()
+    val ago = shot.completedAtMs.takeIf { it > 0L }?.let { coffee.crema.ui.relativeAgo(it, minute) }
     val yieldM = convertWeight(shot.yieldG, weightUnit)
     val ratio = formatRatio(shot.doseG, shot.yieldG)
     val plan = shot.nextPlan?.trim()?.takeIf { it.isNotEmpty() }

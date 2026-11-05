@@ -24,6 +24,7 @@ internal class ScaleController(
     private val scope: CoroutineScope,
     private val uiState: () -> MainUiState,
     private val updateUi: ((MainUiState) -> MainUiState) -> Unit,
+    private val updateLive: ((LiveTelemetry) -> LiveTelemetry) -> Unit,
     private val appendLog: (String) -> Unit,
     private val notify: (String) -> Unit,
     /** The VM's remote check for a read-only setter (§7.3): true = refused, said so. */
@@ -42,12 +43,7 @@ internal class ScaleController(
     init {
         lane.on<Event.ScaleReading> { event ->
             val r = event.content
-            // The Bookoo echoes its live settings in every weight
-            // notification. Project them into the config controls so they
-            // show the scale's real current state — `device_*` is null for
-            // scales that do not report a setting, in which case the
-            // control keeps its last value.
-            updateUi { it.copy(
+            updateLive { it.copy(
                 scaleWeightG = r.weight,
                 // Native per-packet flow when the scale reports one (Bookoo),
                 // else the core's derived estimate (FlowEstimator) — web
@@ -56,6 +52,13 @@ internal class ScaleController(
                 // showing "— g/s" forever (issue #24).
                 scaleFlowGPerS = r.device_flow ?: r.flow,
                 scaleTimerMs = r.device_timer?.toLong(),
+            ) }
+            // The Bookoo echoes its live settings in every weight
+            // notification. Project them into the config controls so they
+            // show the scale's real current state — `device_*` is null for
+            // scales that do not report a setting, in which case the
+            // control keeps its last value.
+            updateUi { it.copy(
                 scaleVolume = r.device_volume?.toInt() ?: it.scaleVolume,
                 scaleStandbyMinutes = r.device_standby?.toInt()
                     ?: it.scaleStandbyMinutes,
@@ -87,7 +90,7 @@ internal class ScaleController(
             notify("Tare ignored — a shot is running. Taring now would break stop-at-weight.")
         }
         lane.on<Event.ScaleStale> {
-            updateUi { it.copy(scaleWeightG = null) }
+            updateLive { it.copy(scaleWeightG = null) }
             appendLog("Scale stale")
         }
         lane.on<Event.ScaleLinkDead> { event ->
@@ -96,7 +99,7 @@ internal class ScaleController(
             // once per episode). Tear it down for the reconnect supervisor,
             // but only while the link still claims READY — one already
             // reconnecting is left to its ladder.
-            updateUi { it.copy(scaleWeightG = null) }
+            updateLive { it.copy(scaleWeightG = null) }
             appendLog("Scale link dead: ${event.content.reason.string}")
             if (uiState().scaleState == ScaleBleManager.State.READY) {
                 scope.launch { presumeDead(event.content.reason.string) }
@@ -165,9 +168,6 @@ internal class ScaleController(
         lane.post { scaleLowBatteryWarned = false }
         refreshStopTargets()
         updateUi { it.copy(
-            scaleWeightG = null,
-            scaleFlowGPerS = null,
-            scaleTimerMs = null,
             // Drop the capabilities so the config UI hides until the next scale.
             scaleCapabilities = null,
             scaleVolume = DEFAULT_SCALE_VOLUME,
@@ -182,6 +182,11 @@ internal class ScaleController(
             scaleName = null,
             scaleFirmware = null,
             scaleSerial = null,
+        ) }
+        updateLive { it.copy(
+            scaleWeightG = null,
+            scaleFlowGPerS = null,
+            scaleTimerMs = null,
         ) }
     }
 

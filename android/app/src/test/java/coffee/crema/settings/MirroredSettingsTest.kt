@@ -33,11 +33,11 @@ class MirroredSettingsTest {
     }
 
     @Test
-    fun `the ui pipeline projects before the screensaver gate`() {
+    fun `the ui pipeline is the effective projection`() {
         val vm = MainSources.kotlinFiles().toMap().getValue("coffee/crema/ui/MainViewModel.kt")
         assertTrue(
-            Regex("""val ui: StateFlow<MainUiState> = _ui\s*\.map \{ it\.effective\(\) }\s*\.distinctUntilChanged\(::hiddenBySaver\)""").containsMatchIn(vm),
-            "ui = _ui.map { effective() }.distinctUntilChanged(::hiddenBySaver)…",
+            Regex("""val ui: StateFlow<MainUiState> = _ui\s*\.map \{ it\.effective\(\) }""").containsMatchIn(vm),
+            "ui = _ui.map { effective() }…",
         )
     }
 

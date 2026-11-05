@@ -23,7 +23,7 @@ class EventLogAppendTest {
 
     @Test
     fun concurrentAppendsInsideTheUpdateLoseNothing() {
-        val state = MutableStateFlow(MainUiState())
+        val state = MutableStateFlow(LiveTelemetry())
         val threads = 8
         val perThread = 20 // 160 lines, under MAX_LOG_LINES (200)
         val pool = Executors.newFixedThreadPool(threads)

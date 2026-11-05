@@ -164,11 +164,12 @@ fun PhoneHistoryScreen(
         if (content != null) { pendingExport = content; saveLauncher.launch(name) }
     }
 
-    val now = System.currentTimeMillis()
+    // Minute-bucketed (see HistoryScreen), and ticks by itself.
+    val nowBucket = coffee.crema.ui.rememberMinuteBucket()
     val dayMs = 24L * 60L * 60L * 1000L
-    val startOfDay = remember(now / 60000L) {
+    val startOfDay = remember(nowBucket) {
         val cal = java.util.Calendar.getInstance()
-        cal.timeInMillis = now
+        cal.timeInMillis = nowBucket
         cal.set(java.util.Calendar.HOUR_OF_DAY, 0); cal.set(java.util.Calendar.MINUTE, 0)
         cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
         cal.timeInMillis
@@ -176,9 +177,8 @@ fun PhoneHistoryScreen(
     // Bean filter: a coffee (every bag of it) or, from the bean detail's deep
     // link, one bag. The coffee resolves through the live library.
     val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
-    // Memoized with a minute-bucketed `now` (see HistoryScreen): telemetry
-    // recomposes this screen several times a second.
-    val nowBucket = coffee.crema.history.minuteBucket(now)
+    // Memoized with the minute-bucketed `now`: re-filtering the whole log on
+    // every UI-state emission is the expensive part.
     val filtered = remember(ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee) {
         filterAndSortShots(
             ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,

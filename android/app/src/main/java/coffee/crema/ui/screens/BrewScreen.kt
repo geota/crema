@@ -1,5 +1,7 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.LiveReadouts
+import coffee.crema.ui.LiveTelemetry
 import coffee.crema.ui.BrewParams
 import coffee.crema.ui.effectiveBrew
 
@@ -243,15 +245,17 @@ fun BrewScreen(
                     // water / flush), fed by the VM's mode clock — the steaming
                     // countdown the web head pill shows (issue: steam timer).
                     val mode = modeLabel(ui.machineStateName)
-                    TimerCard(
-                        running = running || mode != null,
-                        elapsedMs = if (running) ui.shotElapsedMs else ui.modeElapsedMs,
-                        phase = ui.shotPhase,
-                        modeLabel = if (running) null else mode,
-                        substate = ui.machineSubstate,
-                        stateKnown = !connected || ui.machineStateName != null,
-                    )
-                    RatioCard(active = active, weightG = ratioWeight(ui, running))
+                    LiveReadouts(vm.live) { live ->
+                        TimerCard(
+                            running = running || mode != null,
+                            elapsedMs = if (running) live.shotElapsedMs else live.modeElapsedMs,
+                            phase = ui.shotPhase,
+                            modeLabel = if (running) null else mode,
+                            substate = ui.machineSubstate,
+                            stateKnown = !connected || ui.machineStateName != null,
+                        )
+                        RatioCard(active = active, weightG = ratioWeight(ui.lastShot?.yieldG, live.scaleWeightG, running))
+                    }
                     // Steam / hot water / flush run no profile, so the phase
                     // list has nothing to say — this slot otherwise sits on
                     // "Idle" above a static segment track for the whole mode.
@@ -275,31 +279,33 @@ fun BrewScreen(
                     } else null
                     if (mode != null) {
                         val t = rememberModeTargets(ui)
-                        ModeCard(
-                            label = when (ui.machineStateName) {
-                                MachineState.Steam -> "Steam"
-                                MachineState.HotWater -> "Hot water"
-                                else -> "Flush"
-                            },
-                            icon = when (ui.machineStateName) {
-                                MachineState.Steam -> "cloud"
-                                MachineState.HotWater -> "drop"
-                                else -> "sparkle"
-                            },
-                            elapsedMs = ui.modeElapsedMs,
-                            targetS = modeTargetSeconds(ui.machineStateName, t, ui.hotWaterTarget) ?: 0f,
-                            // A remote before the hub's first snapshot doesn't know the targets.
-                            target = if (ui.awaitingHubValues) Measurement(UNKNOWN_VALUE, "") else when (ui.machineStateName) {
-                                MachineState.Steam -> convertTemp(t.steamTempC, ui.tempUnit)
-                                MachineState.HotWater -> hotWaterCardTarget(ui.hotWaterTarget, ui.volumeUnit)
-                                else -> convertTemp(t.flushTempC, ui.tempUnit)
-                            },
-                            color = when (ui.machineStateName) {
-                                MachineState.Steam -> CremaTheme.telemetry.modeSteam
-                                MachineState.HotWater -> CremaTheme.telemetry.modeWater
-                                else -> CremaTheme.telemetry.modeFlush
-                            },
-                        )
+                        LiveReadouts(vm.live) { live ->
+                            ModeCard(
+                                label = when (ui.machineStateName) {
+                                    MachineState.Steam -> "Steam"
+                                    MachineState.HotWater -> "Hot water"
+                                    else -> "Flush"
+                                },
+                                icon = when (ui.machineStateName) {
+                                    MachineState.Steam -> "cloud"
+                                    MachineState.HotWater -> "drop"
+                                    else -> "sparkle"
+                                },
+                                elapsedMs = live.modeElapsedMs,
+                                targetS = modeTargetSeconds(ui.machineStateName, t, ui.hotWaterTarget) ?: 0f,
+                                // A remote before the hub's first snapshot doesn't know the targets.
+                                target = if (ui.awaitingHubValues) Measurement(UNKNOWN_VALUE, "") else when (ui.machineStateName) {
+                                    MachineState.Steam -> convertTemp(t.steamTempC, ui.tempUnit)
+                                    MachineState.HotWater -> hotWaterCardTarget(ui.hotWaterTarget, ui.volumeUnit)
+                                    else -> convertTemp(t.flushTempC, ui.tempUnit)
+                                },
+                                color = when (ui.machineStateName) {
+                                    MachineState.Steam -> CremaTheme.telemetry.modeSteam
+                                    MachineState.HotWater -> CremaTheme.telemetry.modeWater
+                                    else -> CremaTheme.telemetry.modeFlush
+                                },
+                            )
+                        }
                         // The card wraps its content instead of inheriting the
                         // Phase card's weight: a mode has three short lines, and
                         // stretched over the leftover height of a 10" column it
@@ -320,18 +326,20 @@ fun BrewScreen(
                             modifier = Modifier.weight(1f),
                         )
                     }
-                    LimitsCard(
-                        // The core's projection is the ONLY stop-condition
-                        // source now — no scalePresent / volumeStopWithScale /
-                        // active-yield re-derivation (geota/crema#56).
-                        stopTargets = ui.stopTargets,
-                        targetsKnown = !ui.awaitingHubValues,
-                        scaleWeightG = ui.scaleWeightG,
-                        dispensedVolume = ui.dispensedVolume,
-                        shotElapsedMs = ui.shotElapsedMs,
-                        weightUnit = ui.weightUnit,
-                        volumeUnit = ui.volumeUnit,
-                    )
+                    LiveReadouts(vm.live) { live ->
+                        LimitsCard(
+                            // The core's projection is the ONLY stop-condition
+                            // source now — no scalePresent / volumeStopWithScale /
+                            // active-yield re-derivation (geota/crema#56).
+                            stopTargets = ui.stopTargets,
+                            targetsKnown = !ui.awaitingHubValues,
+                            scaleWeightG = live.scaleWeightG,
+                            dispensedVolume = live.dispensedVolume,
+                            shotElapsedMs = live.shotElapsedMs,
+                            weightUnit = ui.weightUnit,
+                            volumeUnit = ui.volumeUnit,
+                        )
+                    }
                     if (!running && ui.lastShot != null) {
                         LastShotCard(
                             last = ui.lastShot!!,
@@ -373,11 +381,14 @@ fun BrewScreen(
                     // Tap-to-tare (issue #37): the weight card doubles as a tare
                     // button while a scale is connected and no shot is pulling
                     // (a mid-shot tare would corrupt stop-at-weight).
-                    ChannelsRow(
-                        ui = ui,
-                        active = active,
-                        onTareScale = if (scaleConnected && !espressoActive) vm::tareScale else null,
-                    )
+                    LiveReadouts(vm.live) { live ->
+                        ChannelsRow(
+                            ui = ui,
+                            live = live,
+                            active = active,
+                            onTareScale = if (scaleConnected && !espressoActive) vm::tareScale else null,
+                        )
+                    }
                     // The live chart fills the remainder. Hosted in a Surface
                     // (not CremaCard) so the Canvas chart can fillMaxSize.
                     Surface(
@@ -386,42 +397,46 @@ fun BrewScreen(
                         color = MaterialTheme.colorScheme.surfaceContainer,
                     ) {
                         EnlargeableChart(Modifier.fillMaxSize()) { m ->
-                            CanvasShotChart(
-                                samples = ui.shotTelemetry,
-                                enabledChannels = ui.chartChannels,
-                                modifier = m.padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
-                            )
+                            LiveReadouts(vm.live) { live ->
+                                CanvasShotChart(
+                                    samples = live.shotTelemetry,
+                                    enabledChannels = ui.chartChannels,
+                                    modifier = m.padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+                                )
+                            }
                         }
                     }
                 }
             }
-            BrewFoot(
-                machineState = ui.machineState,
-                machineStateName = ui.machineStateName,
-                machineSubstate = ui.machineSubstate,
-                scaleName = ui.scaleName,
-                steamTemp = ui.steamTemp,
-                waterLevelMm = ui.waterLevelMm,
-                modeElapsedMs = ui.modeElapsedMs,
-                profileUploading = ui.profileUploading,
-                targets = rememberModeTargets(ui),
-                hotWaterTarget = ui.hotWaterTarget,
-                targetsKnown = !ui.awaitingHubValues,
-                tempUnit = ui.tempUnit,
-                volumeUnit = ui.volumeUnit,
-                waterLevelUnit = ui.waterLevelUnit,
-                connected = connected,
-                scaleConnected = scaleConnected,
-                showStop = espressoActive || ui.shotStarting,
-                onPower = { if (ui.machineStateName == MachineState.Sleep) vm.wake() else vm.sleep() },
-                onSteam = { if (ui.machineStateName == MachineState.Steam) vm.stopShot() else vm.steam() },
-                onHotWater = { if (ui.machineStateName == MachineState.HotWater) vm.stopShot() else vm.hotWater() },
-                onFlush = vm::flush,
-                // Gated start: upload the active profile, await completion, guard,
-                // then Espresso (vm.startShot). Stop is a direct Idle request,
-                // and also cancels a start still pending (05 F2).
-                onCoffee = { if (espressoActive || ui.shotStarting) vm.stopShot() else vm.startShot() },
-            )
+            LiveReadouts(vm.live) { live ->
+                BrewFoot(
+                    machineState = ui.machineState,
+                    machineStateName = ui.machineStateName,
+                    machineSubstate = ui.machineSubstate,
+                    scaleName = ui.scaleName,
+                    steamTemp = live.steamTemp,
+                    waterLevelMm = live.waterLevelMm,
+                    modeElapsedMs = live.modeElapsedMs,
+                    profileUploading = ui.profileUploading,
+                    targets = rememberModeTargets(ui),
+                    hotWaterTarget = ui.hotWaterTarget,
+                    targetsKnown = !ui.awaitingHubValues,
+                    tempUnit = ui.tempUnit,
+                    volumeUnit = ui.volumeUnit,
+                    waterLevelUnit = ui.waterLevelUnit,
+                    connected = connected,
+                    scaleConnected = scaleConnected,
+                    showStop = espressoActive || ui.shotStarting,
+                    onPower = { if (ui.machineStateName == MachineState.Sleep) vm.wake() else vm.sleep() },
+                    onSteam = { if (ui.machineStateName == MachineState.Steam) vm.stopShot() else vm.steam() },
+                    onHotWater = { if (ui.machineStateName == MachineState.HotWater) vm.stopShot() else vm.hotWater() },
+                    onFlush = vm::flush,
+                    // Gated start: upload the active profile, await completion, guard,
+                    // then Espresso (vm.startShot). Stop is a direct Idle request,
+                    // and also cancels a start still pending (05 F2).
+                    onCoffee = { if (espressoActive || ui.shotStarting) vm.stopShot() else vm.startShot() },
+                )
+            }
             if (quickOpen) {
                 // The core's dial for the profile on screen (range, anchor,
                 // pre-infusion seed): recomputed when the profile changes.
@@ -486,8 +501,8 @@ fun BrewScreen(
 // Which weight feeds the Ratio card: the live scale weight while running (floored
 // at 0 — lifting the cup during the post-stop drip flips it crazy-negative), else
 // the last shot's yield held until the next shot (web parity).
-private fun ratioWeight(ui: coffee.crema.ui.MainUiState, running: Boolean): Float? =
-    if (!running) (ui.lastShot?.yieldG ?: ui.scaleWeightG) else ui.scaleWeightG?.coerceAtLeast(0f)
+private fun ratioWeight(lastYieldG: Float?, scaleWeightG: Float?, running: Boolean): Float? =
+    if (!running) (lastYieldG ?: scaleWeightG) else scaleWeightG?.coerceAtLeast(0f)
 
 // ── Header twin-block ───────────────────────────────────────────────────────
 
@@ -1592,8 +1607,9 @@ private fun LastShotCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // "Last shot · N min ago" eyebrow + a chevron hinting the tap-through.
+            val minute = coffee.crema.ui.rememberMinuteBucket()
             val ago = last.completedAtMs.takeIf { it > 0L }?.let {
-                coffee.crema.ui.relativeAgo(it)
+                coffee.crema.ui.relativeAgo(it, minute)
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Eyebrow(if (ago != null) "Last shot · $ago" else "Last shot")
@@ -1657,22 +1673,23 @@ private fun LastShotStat(
 @Composable
 private fun ChannelsRow(
     ui: coffee.crema.ui.MainUiState,
+    live: LiveTelemetry,
     active: CremaProfile?,
     /** Non-null makes the weight card tappable — tap = tare (issue #37). */
     onTareScale: (() -> Unit)? = null,
 ) {
     val tel = CremaTheme.telemetry
-    val resist = ui.resistanceWeight ?: ui.resistance
-    val resistUnit = if (ui.resistanceWeight != null) "bar·s²/g²" else "bar·s²/ml²"
+    val resist = live.resistanceWeight ?: live.resistance
+    val resistUnit = if (live.resistanceWeight != null) "bar·s²/g²" else "bar·s²/ml²"
     // Unit-aware readouts (issue 44): pressure / temp / weight / volume route
     // through the canonical→display converters; flow (ml/s, g/s) and resistance
     // are not user-toggled dimensions, so they stay as-is.
-    val pressure = convertPressure(ui.pressure, ui.pressureUnit)
-    val water = convertVolume(ui.dispensedVolume, ui.volumeUnit)
-    val coffeeTemp = convertTemp(ui.headTemp, ui.tempUnit)
-    val mixTempM = convertTemp(ui.mixTemp, ui.tempUnit)
+    val pressure = convertPressure(live.pressure, ui.pressureUnit)
+    val water = convertVolume(live.dispensedVolume, ui.volumeUnit)
+    val coffeeTemp = convertTemp(live.headTemp, ui.tempUnit)
+    val mixTempM = convertTemp(live.mixTemp, ui.tempUnit)
     // Floor at 0 (a post-stop cup-lift would read crazy-negative).
-    val weight = convertWeight(ui.scaleWeightG?.coerceAtLeast(0f), ui.weightUnit)
+    val weight = convertWeight(live.scaleWeightG?.coerceAtLeast(0f), ui.weightUnit)
     // The four telemetry cards as modifier-parameterised slots, so the same set
     // renders 4-across on a wide tablet (10") OR 2×2 on a narrow one (7"), where
     // four dual-value cards would starve each column and clip the labels/values.
@@ -1694,7 +1711,7 @@ private fun ChannelsRow(
     val flowCard: @Composable (Modifier) -> Unit = { m ->
         ChannelCard(
             m, primLabel = "Flow", primIcon = "drop", primColor = tel.flow,
-            primValue = fmt(ui.flow), primUnit = "ml/s",
+            primValue = fmt(live.flow), primUnit = "ml/s",
             secLabel = "Volume", secColor = tel.flow2,
             secValue = water.value, secUnit = water.unit,
         )
@@ -1709,7 +1726,7 @@ private fun ChannelsRow(
     // the temperature card in every mode, so swapping the glyph or the tint
     // made it read as a different card appearing rather than the same one
     // retargeting. The word alone is what stops "Coffee 150°".
-    val steamTempM = convertTemp(ui.steamTemp, ui.tempUnit)
+    val steamTempM = convertTemp(live.steamTemp, ui.tempUnit)
     val modeTargets = rememberModeTargets(ui)
     val tempCard: @Composable (Modifier) -> Unit = { m ->
         when (ui.machineStateName) {
@@ -1745,7 +1762,7 @@ private fun ChannelsRow(
             m, primLabel = "Weight", primIcon = "scales", primColor = tel.weight,
             primValue = weight.value, primUnit = weight.unit,
             secLabel = "Flow", secColor = tel.weight2,
-            secValue = fmt(ui.scaleFlowGPerS), secUnit = "g/s",
+            secValue = fmt(live.scaleFlowGPerS), secUnit = "g/s",
             target = active?.let { "target ${formatWeight(it.yieldOut, ui.weightUnit)}" },
             onTap = onTareScale,
         )

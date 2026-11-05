@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.LiveReadouts
 import coffee.crema.settings.Setting
 import coffee.crema.ui.gate
 import coffee.crema.ui.fmt
@@ -103,7 +104,6 @@ fun ScaleScreen(
         } else {
             null
         }
-    val weight = (ui.scaleWeightG ?: 0f).toDouble()
     // Dose target = the active profile's dose (what you're weighing to), not a
     // hardcoded 18 g — the dose helper now tracks the loaded recipe.
     val target = (ui.activeProfile()?.dose ?: 18f).toDouble()
@@ -149,16 +149,19 @@ fun ScaleScreen(
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(sp.s5)) {
                 // Left column — readout, dose helper, recent activity
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(sp.s4)) {
-                    ScaleHeroRow(
-                        connected = connected,
-                        weight = weight,
-                        weightUnit = ui.weightUnit,
-                        onTare = vm::tareScale,
-                        onConnect = { onConnect("scale") },
-                        onResetPeak = vm::resetScalePeaks,
-                        onStartTimer = vm::startScaleTimer,
-                    )
-                    DoseHelper(connected, weight, target, ui.weightUnit)
+                    LiveReadouts(vm.live) { live ->
+                        val weight = (live.scaleWeightG ?: 0f).toDouble()
+                        ScaleHeroRow(
+                            connected = connected,
+                            weight = weight,
+                            weightUnit = ui.weightUnit,
+                            onTare = vm::tareScale,
+                            onConnect = { onConnect("scale") },
+                            onResetPeak = vm::resetScalePeaks,
+                            onStartTimer = vm::startScaleTimer,
+                        )
+                        DoseHelper(connected, weight, target, ui.weightUnit)
+                    }
                     RecentActivity(connected, Modifier.weight(1f))
                 }
                 // Right column — capability-driven settings panel (shared body)

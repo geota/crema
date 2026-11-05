@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.CoreBounds
 import coffee.crema.ui.RelayPairingRows
 import coffee.crema.ui.maintenanceRunText
@@ -455,40 +456,42 @@ fun SettingsScreen(
                     }
                     "water" -> {
                         SetHead("Upkeep", "Water & maintenance", "Crema tracks water volume and shot counts to remind you when upkeep is due.")
-                        // Live tank level (Event.WaterLevel → ui.waterLevelMm) — a low
+                        // Live tank level (Event.WaterLevel → live.waterLevelMm) — a low
                         // note appears below the threshold. The Reminders group below
                         // is now driven by the real persisted MaintenanceState (the
                         // shell integrates group flow over telemetry into a litre
                         // counter, then derives the readouts via the pure core FFI).
                         SetGroup("Tank") {
-                            val mm = ui.waterLevelMm
-                            val low = ui.refillSoon()
-                            // Rendered through formatTankLevel like every other
-                            // tank readout, so this row honours Display & units →
-                            // "Water tank". It used to hardcode raw sensor mm,
-                            // which is why Settings showed "17 mm" while the Brew
-                            // footer showed "49 %" for the same tank
-                            // (geota/crema#47). The depth (the event level —
-                            // core already added the 5 mm sensor offset) rides
-                            // the detail line: it's the number de1app and
-                            // Decenza show. The machine's refill threshold is
-                            // raw sensor mm (the unit the dial below uses), so
-                            // it is converted to depth before it's shown next
-                            // to the level.
-                            val tank = formatTankLevel(mm, ui.waterLevelUnit, ui.volumeUnit)
-                            val depth = ui.tankDepthMm()
-                            CremaSettingsRow(
-                                "Water tank",
-                                when {
-                                    mm == null -> "Connect the DE1 to read the tank level."
-                                    low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills below ${ui.refillThresholdDepthMm()?.toInt()} mm."
-                                    else -> "Tank level looks good — ${depth?.toInt()} mm deep."
-                                },
-                            ) {
-                                CremaMonoReadout(
-                                    if (mm != null) "${tank.value} ${tank.unit}" else "—",
-                                    color = if (low) Color(0xFFDBA764) else MaterialTheme.colorScheme.onSurface,
-                                )
+                            LiveReadouts(vm.live) { live ->
+                                val mm = live.waterLevelMm
+                                val low = ui.refillSoon(live)
+                                // Rendered through formatTankLevel like every other
+                                // tank readout, so this row honours Display & units →
+                                // "Water tank". It used to hardcode raw sensor mm,
+                                // which is why Settings showed "17 mm" while the Brew
+                                // footer showed "49 %" for the same tank
+                                // (geota/crema#47). The depth (the event level —
+                                // core already added the 5 mm sensor offset) rides
+                                // the detail line: it's the number de1app and
+                                // Decenza show. The machine's refill threshold is
+                                // raw sensor mm (the unit the dial below uses), so
+                                // it is converted to depth before it's shown next
+                                // to the level.
+                                val tank = formatTankLevel(mm, ui.waterLevelUnit, ui.volumeUnit)
+                                val depth = live.tankDepthMm()
+                                CremaSettingsRow(
+                                    "Water tank",
+                                    when {
+                                        mm == null -> "Connect the DE1 to read the tank level."
+                                        low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills below ${ui.refillThresholdDepthMm()?.toInt()} mm."
+                                        else -> "Tank level looks good — ${depth?.toInt()} mm deep."
+                                    },
+                                ) {
+                                    CremaMonoReadout(
+                                        if (mm != null) "${tank.value} ${tank.unit}" else "—",
+                                        color = if (low) Color(0xFFDBA764) else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
                             }
                             // The machine's OWN threshold, written to the DE1 —
                             // not an app-side warning. Below it the DE1 blinks
@@ -1065,16 +1068,18 @@ fun SettingsScreen(
                                             .verticalScroll(rememberScrollState()),
                                         verticalArrangement = Arrangement.spacedBy(2.dp),
                                     ) {
-                                        val lines = ui.eventLog.takeLast(100)
-                                        if (lines.isEmpty()) {
-                                            Text("No events yet.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        } else {
-                                            lines.forEach { line ->
-                                                Text(
-                                                    line,
-                                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                )
+                                        LiveReadouts(vm.live) { live ->
+                                            val lines = live.eventLog.takeLast(100)
+                                            if (lines.isEmpty()) {
+                                                Text("No events yet.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            } else {
+                                                lines.forEach { line ->
+                                                    Text(
+                                                        line,
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
                                             }
                                         }
                                     }

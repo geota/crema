@@ -75,11 +75,15 @@ fun filterAndSortShots(
 /**
  * [nowMs] floored to the minute — the `now` the History screens pass to
  * [filterAndSortShots], so the memoized result stays valid across the many
- * recompositions a minute brings (live telemetry updates the shared UI state
- * several times a second) instead of re-filtering and re-sorting the whole log
- * on each. Range edges move by under a minute, which no range can show.
+ * recompositions a minute can bring instead of re-filtering and re-sorting the
+ * whole log on each. Range edges move by under a minute, which no range can
+ * show.
  */
 fun minuteBucket(nowMs: Long): Long = nowMs - Math.floorMod(nowMs, 60_000L)
+
+/** Milliseconds from [nowMs] to the next [minuteBucket]; never 0, so a loop that
+ *  waits this long always moves on. */
+fun msToNextMinute(nowMs: Long): Long = 60_000L - Math.floorMod(nowMs, 60_000L)
 
 /**
  * True when the shot's text fields contain [query] (case-insensitive): profile,

@@ -63,7 +63,7 @@ class MachineSessionVmTest {
         assertNotNull(vm.ui.value.modeStartedAtMs, "the mode clock runs")
         state(vm, 2)
         assertNull(vm.ui.value.modeStartedAtMs)
-        assertEquals(0L, vm.ui.value.modeElapsedMs)
+        assertEquals(0L, vm.live.value.modeElapsedMs)
     }
 
     @Test

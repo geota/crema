@@ -68,6 +68,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -131,6 +133,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _ui = MutableStateFlow(MainUiState())
 
+    /** The high-rate readouts as they arrive: the store every reader and
+     *  writer uses, on its own thread and in order ([live] is the screens'
+     *  view of it). In memory only: nothing persisted reads it. */
+    private val _live = MutableStateFlow(LiveTelemetry())
+
     /**
      * The machine session ([MachineSessionController]): its event handlers,
      * the service-mode clock, the shot record's markers, the shot start, the
@@ -144,6 +151,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         uiState = { _ui.value },
         updateUi = { transform -> _ui.update(transform) },
+        updateLive = { transform -> _live.update(transform) },
         effectiveState = { effectiveState() },
         appendLog = { appendLog(it) },
         notify = { notifyUser(it) },
@@ -172,12 +180,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * The UI state the screens collect: the effective projection of [_ui]
      * ([effective]: on a remote, the hub's mirrored values laid over this
-     * device's own; elsewhere [_ui] itself). While the screensaver covers
-     * everything, a change confined to the high-rate live fields
-     * ([hiddenBySaver]) is not published, so the screen tree behind the saver
-     * stops recomposing several times a second for hours on a wall tablet
-     * (cohort review 2026-10-25, P2-4). Any other change — including the
-     * saver going away — publishes the latest state in full.
+     * device's own; elsewhere [_ui] itself). A telemetry sample does not
+     * change it: the high-rate readouts are [live]'s (cohort review
+     * 2026-10-25, P2-4).
      *
      * [_ui] holds this device's own values plus the mirror slice, and is what
      * the VM persists. VM code reads it directly for its own values and
@@ -185,12 +190,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     val ui: StateFlow<MainUiState> = _ui
         .map { it.effective() }
-        .distinctUntilChanged(::hiddenBySaver)
         .stateIn(viewModelScope, SharingStarted.Eagerly, _ui.value.effective())
+
+    /**
+     * The readouts the screens collect, as low in the tree as they can
+     * ([LiveReadouts]). While the screensaver covers everything nothing is
+     * published, so the tree behind it stays still for hours on a wall tablet;
+     * the saver going away publishes the latest at once. Logic reads the
+     * store, never this: [_live]'s value is current on the caller's thread.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val live: StateFlow<LiveTelemetry> = _ui
+        .map { it.saverVisible }
+        .distinctUntilChanged()
+        .flatMapLatest { saverUp -> if (saverUp) emptyFlow() else _live }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, _live.value)
 
     /** This device's own state, for tests (AC-16): what [persistPrefs] saves. */
     @androidx.annotation.VisibleForTesting
     internal val ownState: StateFlow<MainUiState> = _ui
+
+    /** The readouts as they arrive, for tests: [live] goes quiet behind the saver. */
+    @androidx.annotation.VisibleForTesting
+    internal val liveStore: StateFlow<LiveTelemetry> = _live
 
     /** The state the screens show ([effective]). */
     private fun effectiveState(): MainUiState = _ui.value.effective()
@@ -410,6 +432,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bridge = bridge,
         lane = lane,
         uiFlow = _ui,
+        liveState = { _live.value },
         effectiveState = { effectiveState() },
         updateUi = { transform -> _ui.update(transform) },
         setBrewSessionActive = { bgConnection.setBrewSessionActive(it) },
@@ -745,6 +768,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         uiState = { _ui.value },
         updateUi = { transform -> _ui.update(transform) },
+        updateLive = { transform -> _live.update(transform) },
         appendLog = { appendLog(it) },
         notify = { notifyUser(it) },
         refusesOwnEdit = { refusesOwnEdit(it) },
@@ -779,7 +803,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         transport = proxy.transport,
         appendLog = { appendLog(it) },
         persistPrefs = { persistPrefs() },
-        onConnectStarted = { _ui.update { it.copy(eventLog = emptyList()) } },
+        onConnectStarted = { _live.update { it.copy(eventLog = emptyList()) } },
         onDe1SessionClosed = { session.clearDe1SessionUi() },
         onScaleSessionClosed = { scaleController.clearScaleSessionUi() },
         onDe1Ready = {
@@ -2607,7 +2631,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Built INSIDE the atomic update: appendLog runs from Main, the core
         // lane and the firmware scope at once, and a read outside the update
         // dropped concurrent lines (or resurrected a just-cleared log).
-        _ui.update { it.copy(eventLog = prependLogLine(it.eventLog, stamped, MAX_LOG_LINES)) }
+        _live.update { it.copy(eventLog = prependLogLine(it.eventLog, stamped, MAX_LOG_LINES)) }
     }
 
     override fun onCleared() {

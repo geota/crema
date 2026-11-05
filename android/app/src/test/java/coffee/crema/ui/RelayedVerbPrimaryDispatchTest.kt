@@ -86,8 +86,9 @@ class RelayedVerbPrimaryDispatchTest {
         VmHarness.persistRole("primary")
         vm = VmHarness.build(store)
         VmHarness.idle()
-        // The settings a test sets must not be overwritten by the prefs load.
-        VmHarness.awaitPrefsLoaded(vm)
+        // What a test sets must not be overwritten by the startup load: the
+        // library's load writes the active bean as well as the prefs' values.
+        VmHarness.awaitStartupLoaded(vm)
         // An idle DE1 on this primary: the core refuses a start with no
         // machine state (F16).
         val bridge = MainViewModel::class.java.declaredFields

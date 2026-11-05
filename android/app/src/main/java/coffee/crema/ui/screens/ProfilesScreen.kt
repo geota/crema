@@ -131,8 +131,8 @@ fun ProfilesScreen(
     // Hidden facet falls back to All when nothing is archived; both the chips and
     // the grid key off effectiveFilter (issue 28).
     val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
-    // Memoized: the screen recomposes on every UI-state emission (telemetry
-    // included); only these inputs change the list.
+    // Memoized: the screen recomposes on every UI-state emission; only these
+    // inputs change the list.
     val sorted = remember(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId) {
         filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId)
     }

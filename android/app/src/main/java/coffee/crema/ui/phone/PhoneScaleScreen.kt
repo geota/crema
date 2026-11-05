@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.UNKNOWN_VALUE
 import coffee.crema.ui.awaitingHubValues
 import coffee.crema.ui.gate
@@ -61,7 +62,6 @@ fun PhoneScaleScreen(
 
     val connected = ui.scaleState == ScaleBleManager.State.READY
     val caps = if (connected) ui.scaleCapabilities else null
-    val weight = (ui.scaleWeightG ?: 0f).toDouble()
     val activeProfile = ui.activeProfile()
     // Dose target = the QC override when set, else the active profile's dose.
     val target = effectiveBrew(ui.brewParams, activeProfile).dose
@@ -149,26 +149,30 @@ fun PhoneScaleScreen(
                 else if (connected) MaterialTheme.colorScheme.onSurface
                 else MaterialTheme.colorScheme.outline
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    fmt("%.1f",  if (connected) weight else 0.0),
-                    style = CremaTheme.readout.readoutXl,
-                    color = heroColor,
-                )
+                LiveReadouts(vm.live) { live ->
+                    Text(
+                        fmt("%.1f",  if (connected) (live.scaleWeightG ?: 0f).toDouble() else 0.0),
+                        style = CremaTheme.readout.readoutXl,
+                        color = heroColor,
+                    )
+                }
                 Text("grams", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(6.dp))
                 LivePill(connected)
             }
 
             if (connected) {
-                ConnectedBody(
-                    vm = vm,
-                    ui = ui,
-                    weight = weight,
-                    target = target,
-                    profileName = activeProfile?.name,
-                    onTare = { pulse = true; vm.tareScale() },
-                    onSwitchProfile = { onNav("profiles") },
-                )
+                LiveReadouts(vm.live) { live ->
+                    ConnectedBody(
+                        vm = vm,
+                        ui = ui,
+                        weight = (live.scaleWeightG ?: 0f).toDouble(),
+                        target = target,
+                        profileName = activeProfile?.name,
+                        onTare = { pulse = true; vm.tareScale() },
+                        onSwitchProfile = { onNav("profiles") },
+                    )
+                }
             } else {
                 DisconnectedBody(onConnect = { onConnect("scale") })
             }

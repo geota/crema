@@ -110,7 +110,7 @@ class SharingController(
             uiFlow
                 .map { Inputs(it.history, it.visualizer, it.decent, connectedSerial(it)) }
                 // History by identity: it is replaced, never mutated, and a deep
-                // compare of every shot on each telemetry tick would cost more
+                // compare of every shot on each state change would cost more
                 // than the recompute it saves.
                 .distinctUntilChanged { a, b ->
                     a.history === b.history && a.visualizer == b.visualizer && a.decent == b.decent && a.serial == b.serial
