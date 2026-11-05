@@ -124,6 +124,23 @@ internal object VmHarness {
         return field.get(vm) as MaintenanceController
     }
 
+    /** The VM's [RemoteConfigController], found by type. */
+    fun remoteConfig(vm: MainViewModel): RemoteConfigController {
+        val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == RemoteConfigController::class.java }
+            ?: error("MainViewModel no longer holds exactly one RemoteConfigController field: update VmHarness.remoteConfig")
+        field.isAccessible = true
+        return field.get(vm) as RemoteConfigController
+    }
+
+    /** The remote → standalone leave waiting on the T6 answer, or null. */
+    fun pendingLeave(vm: MainViewModel): Any? =
+        RemoteConfigController::class.java.getDeclaredField("pendingLeave").apply { isAccessible = true }.get(remoteConfig(vm))
+
+    /** Drop the pending leave, as a switch that cancelled it would. */
+    fun dropPendingLeave(vm: MainViewModel) {
+        RemoteConfigController::class.java.getDeclaredField("pendingLeave").apply { isAccessible = true }.set(remoteConfig(vm), null)
+    }
+
     /** Hand [raw] (a `CoreOutput`) to the VM's core lane the way the BLE
      *  managers do: it applies there, after whatever is already queued. */
     fun deliverCoreOutput(vm: MainViewModel, raw: String) = coreLane(vm).deliver(raw)

@@ -31,9 +31,6 @@ class OwnStateReadsTest {
             // The projection itself: own in, effective out.
             "ui" to ANY,
             "effectiveState" to ANY,
-            // Hub only (the remote's slice replaces its snapshot).
-            "configSnapshotJson" to ANY,
-            "activeBeanSummaryLine" to setOf("activeBeanId"),
             // Holder writes: on a remote they never reach the machine.
             "applySteamHotWater" to setOf("qcSteamTempC", "qcSteamTimeS", "qcHotWaterTempC", "qcHotWaterVolumeMl"),
             "seedMachineSettings" to setOf("activeProfileId", "connectSweepSettings()"),
@@ -46,9 +43,6 @@ class OwnStateReadsTest {
             "applyStartShot" to setOf("activeProfileId", "autoTare", "brewParams", "stopOnWeight", "volumeStopWithScale"),
             // Holder logic, already gated by `authoritative`.
             "registerCoreHandlers" to setOf("preFlush", "steamPurge", "de1MachineInfo"),
-            // T6 (§7.5): leaving compares and adopts into this device's own.
-            "leaveRemote" to setOf("adoptableChanges()"),
-            "adoptHubSettings" to setOf("adopt()"),
             // The machine's identity (its serial register), not a setting.
             "checkStolenSerial" to setOf("de1MachineInfo"),
             // The hot-water dose edit: LocalOnly, so never on a remote (own is shown).
@@ -87,6 +81,14 @@ class OwnStateReadsTest {
             // Own-state writers (§7.4).
             "hydratePrefs" to setOf("idleSleepMin", "activeProfileId", "withHotWaterDose()"),
             "restoreValues" to setOf("idleSleepMin", "withHotWaterDose()"),
+        ),
+        "RemoteConfigController.kt" to mapOf(
+            // Hub only (the remote's slice replaces its snapshot).
+            "configSnapshotJson" to ANY,
+            "activeBeanSummaryLine" to setOf("activeBeanId"),
+            // T6 (§7.5): leaving compares and adopts into this device's own.
+            "leaveRemote" to setOf("adoptableChanges()"),
+            "adoptHubSettings" to setOf("adopt()"),
         ),
         "ScaleController.kt" to mapOf(
             // The scale echo fills this device's scale fields (the scale's own
