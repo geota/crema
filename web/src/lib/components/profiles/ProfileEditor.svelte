@@ -800,6 +800,17 @@
 			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 		}
 	}
+	/* Phone: the actions wrap under the back button, Save stays on screen. */
+	@media (max-width: 600px) {
+		.pe-topbar {
+			flex-wrap: wrap;
+			row-gap: 12px;
+		}
+		.pe-topbar-r {
+			flex-wrap: wrap;
+			margin-left: auto;
+		}
+	}
 	.pe-left {
 		padding: 28px var(--page-pad-x);
 		border-right: 1px solid rgba(var(--tint-rgb), 0.05);

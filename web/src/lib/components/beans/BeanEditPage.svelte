@@ -1535,7 +1535,7 @@
 		padding: 14px var(--page-pad-x, 24px);
 		border-bottom: 1px solid rgba(var(--tint-rgb), 0.08);
 		position: sticky;
-		top: 0;
+		top: var(--ptop-clear, 0px);
 		background: var(--bg-page);
 		z-index: 10;
 	}

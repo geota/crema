@@ -3,7 +3,14 @@
  * `app-navigation.ts`). Components read `page.url`; tests that need a
  * particular URL set `page.url` before mounting.
  */
-export const page: { url: URL; params: Record<string, string> } = {
+export const page: {
+	url: URL;
+	params: Record<string, string>;
+	state: App.PageState;
+	route: { id: string | null };
+} = {
 	url: new URL('http://localhost/'),
-	params: {}
+	params: {},
+	state: {},
+	route: { id: null }
 };

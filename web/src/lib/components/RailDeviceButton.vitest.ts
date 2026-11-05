@@ -28,6 +28,14 @@ describe('rail status policy', () => {
 		expect(railLabel('scale', 'disconnected')).toBe('Click to connect scale');
 		expect(railLabel('scale', 'connecting')).toBe('Scale connecting…');
 	});
+
+	it('words the labels for touch in the phone top bar', () => {
+		expect(railLabel('de1', 'disconnected', true)).toBe('Connect DE1');
+		expect(railLabel('scale', 'disconnected', true)).toBe('Connect scale');
+		expect(railLabel('de1', 'reconnecting', true)).toBe('DE1 reconnecting — tap to retry now');
+		expect(railLabel('de1', 'connected', true)).toBe('DE1 connected — tap for options');
+		expect(railLabel('scale', 'connecting', true)).toBe('Scale connecting…');
+	});
 });
 
 describe('RailDeviceButton', () => {

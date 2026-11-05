@@ -49,5 +49,5 @@ export {
 	type ShotCoffee
 } from './search';
 
-export { filterScopeKey, selectedShot, type SelectionPin } from './selection';
+export { filterScopeKey, selectedShot, shotStamp, type SelectionPin } from './selection';
 

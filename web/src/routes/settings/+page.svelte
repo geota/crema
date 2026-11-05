@@ -31,6 +31,12 @@
 	 *
 	 * The `lib/settings` store applies the persisted theme at construction, so
 	 * the screen — and a reload — paints under the right theme.
+	 *
+	 * At phone width (≤ 600 px) the nav and the content are two screens: the
+	 * hash is the screen (`/settings` the list, `/settings#water` the Water
+	 * section), so the existing deep links open a section directly and system
+	 * Back returns to the list (`#lib/shell/phone-nav`). Wider screens keep the
+	 * `active` state and never touch the URL.
 	 */
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
@@ -44,6 +50,11 @@
 	import AboutSection from '#lib/components/settings/sections/AboutSection.svelte';
 
 	import { INITIAL_SNAPSHOT } from '#lib/state/index.js';
+	import CaretRightIcon from 'phosphor-svelte/lib/CaretRightIcon';
+	import { page } from '$app/state';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import { leaveSection, openSection } from '#lib/shell/phone-nav.js';
+	import PhoneBackBar from '#lib/shell/PhoneBackBar.svelte';
 	import { recallView } from '#lib/state/view-memory.js';
 	import { persistView, useScrollMemory } from '#lib/state/use-view-memory.svelte.js';
 
@@ -58,17 +69,21 @@
 	// Constructing the settings store applies the persisted theme to <html>.
 	getSettingsStore();
 
-	/** The nav sections — id, label, Phosphor icon. */
+	/**
+	 * The nav sections — id, label, Phosphor icon. `group` opens a group and
+	 * `sub` is the row's subtitle, both phone-only (Android `PHONE_SECTIONS`).
+	 */
 	const SECTIONS = [
-		{ id: 'machine', label: 'Machine', icon: 'plug-charging' },
-		{ id: 'brew', label: 'Brew defaults', icon: 'coffee' },
-		{ id: 'water', label: 'Water & maintenance', icon: 'drop' },
-		{ id: 'display', label: 'Display & units', icon: 'monitor' },
-		{ id: 'sharing', label: 'Sharing', icon: 'share-network' },
-		{ id: 'calibration', label: 'Calibration', icon: 'gauge' },
-		{ id: 'advanced', label: 'Advanced', icon: 'wrench' },
-		{ id: 'about', label: 'About', icon: 'info' }
+		{ id: 'machine', label: 'Machine', icon: 'plug-charging', group: 'Device', sub: '' },
+		{ id: 'brew', label: 'Brew defaults', icon: 'coffee', group: 'Brewing', sub: 'Targets, shot behaviour' },
+		{ id: 'water', label: 'Water & maintenance', icon: 'drop', group: '', sub: 'Tank, cycles, reminders' },
+		{ id: 'display', label: 'Display & units', icon: 'monitor', group: 'App', sub: 'Theme, density, units' },
+		{ id: 'sharing', label: 'Sharing', icon: 'share-network', group: '', sub: 'Visualizer account, sync' },
+		{ id: 'calibration', label: 'Calibration', icon: 'gauge', group: 'Advanced', sub: 'Sensor offsets' },
+		{ id: 'advanced', label: 'Advanced', icon: 'wrench', group: '', sub: 'Telemetry, diagnostics, resets' },
+		{ id: 'about', label: 'About', icon: 'info', group: '', sub: 'Version, licenses' }
 	] as const;
+	type SectionId = (typeof SECTIONS)[number]['id'];
 
 	/**
 	 * The currently shown section. Seed from `location.hash` so deep links
@@ -77,26 +92,61 @@
 	 * unknown / absent hash. SSR-safe via the `typeof window` guard.
 	 */
 	const SECTION_IDS = SECTIONS.map((s) => s.id) as readonly string[];
-	function hashSection(): (typeof SECTIONS)[number]['id'] {
+	function hashSection(): SectionId {
 		if (typeof window === 'undefined') return 'machine';
 		const h = window.location.hash.replace(/^#/, '');
-		return (SECTION_IDS.includes(h) ? h : 'machine') as (typeof SECTIONS)[number]['id'];
+		return (SECTION_IDS.includes(h) ? h : 'machine') as SectionId;
 	}
-	let active = $state<(typeof SECTIONS)[number]['id']>(hashSection());
+	let active = $state<SectionId>(hashSection());
 	// Without a deep-link hash, come back to the section you left (#123), each
 	// at its own scroll position.
 	if (typeof window !== 'undefined' && !window.location.hash) {
 		const saved = recallView<{ active: string }>('settings', { active: 'machine' }).active;
-		if (SECTION_IDS.includes(saved)) active = saved as (typeof SECTIONS)[number]['id'];
+		if (SECTION_IDS.includes(saved)) active = saved as SectionId;
 	}
 	persistView('settings', () => ({ active }));
-	useScrollMemory({ key: () => `settings/${active}`, pixelOnly: true });
+	/** The section the URL names at phone width; `null` is the section list. */
+	const phoneSection = $derived.by<SectionId | null>(() => {
+		const hash = page.url.hash.replace(/^#/, '');
+		return phoneLayout.current && SECTION_IDS.includes(hash) ? (hash as SectionId) : null;
+	});
+	/** The section on screen: the phone's hash section, else the nav's pick. */
+	const shown = $derived(phoneSection ?? active);
+	/** The phone's section list, which has no section `<h1>` to name the page. */
+	const phoneList = $derived(phoneLayout.current && !phoneSection);
+	/** Machine's row subtitle at phone width is its live link state. */
+	const machineSub = $derived(de1State === 'ready' ? 'DE1 connected' : 'Not connected');
+
+	/** The page: the scroller at phone width, where the window doesn't move. */
+	let pageEl = $state<HTMLElement>();
+	useScrollMemory({
+		key: () => (phoneLayout.current ? `settings/phone/${phoneSection ?? 'list'}` : `settings/${active}`),
+		container: () => (phoneLayout.current ? pageEl : window),
+		pixelOnly: true
+	});
+
+	function pick(id: SectionId): void {
+		active = id;
+		openSection(id);
+	}
+
+	// Leaving a section screen hands focus back to its row in the list.
+	let navEl = $state<HTMLElement>();
+	$effect(() => {
+		const id = phoneSection;
+		if (!id) return;
+		return () => {
+			navEl?.querySelector<HTMLElement>(`[data-section="${id}"]`)?.focus({ preventScroll: true });
+		};
+	});
 	// React to in-page hash changes (e.g. the user pasting `/settings#water`
 	// while already on the Settings route) — the navigation API doesn't
 	// remount the page when only the fragment changes.
 	$effect(() => {
 		if (typeof window === 'undefined') return;
 		const onHash = (): void => {
+			// Back to the phone's list keeps the section you left remembered.
+			if (phoneLayout.current && !window.location.hash) return;
 			active = hashSection();
 		};
 		window.addEventListener('hashchange', onHash);
@@ -108,25 +158,43 @@
 	<title>Crema — Settings</title>
 </svelte:head>
 
-<div class="qcontain st-page">
+<div
+	class="qcontain st-page"
+	bind:this={pageEl}
+	data-phone-view={phoneSection ? 'section' : 'list'}
+>
 	<div class="st-shell">
 		<!-- Left section nav -->
-		<nav class="st-nav" aria-label="Settings sections">
+		<nav class="st-nav" aria-label="Settings sections" bind:this={navEl}>
 			<div class="st-nav-head">
 				<div class="t-eyebrow" style="color:var(--fg-3)">Preferences</div>
-				<div class="st-nav-title">Settings</div>
+				<div
+					class="st-nav-title"
+					role={phoneList ? 'heading' : undefined}
+					aria-level={phoneList ? 1 : undefined}
+				>
+					Settings
+				</div>
 			</div>
 			<div class="st-nav-items">
 				{#each SECTIONS as s (s.id)}
+					{#if s.group}
+						<h2 class="st-nav-group">{s.group}</h2>
+					{/if}
 					<button
 						type="button"
 						class="st-nav-item"
+						data-section={s.id}
 						class:is-active={active === s.id}
-						aria-current={active === s.id ? 'page' : undefined}
-						onclick={() => (active = s.id)}
+						aria-current={active === s.id && !phoneLayout.current ? 'page' : undefined}
+						onclick={() => pick(s.id)}
 					>
 						<Icon cls={'ph-duotone ph-' + s.icon} aria-hidden="true" />
-						<span>{s.label}</span>
+						<span class="st-nav-text">
+							<span>{s.label}</span>
+							<span class="st-nav-sub">{s.id === 'machine' ? machineSub : s.sub}</span>
+						</span>
+						<span class="st-nav-chev"><CaretRightIcon aria-hidden="true" /></span>
 					</button>
 				{/each}
 			</div>
@@ -137,21 +205,28 @@
 
 		<!-- Right content pane -->
 		<div class="st-content">
-			{#if active === 'machine'}
+			{#if phoneSection}
+				<PhoneBackBar
+					title={SECTIONS.find((s) => s.id === phoneSection)?.label ?? 'Settings'}
+					backLabel="Back to Settings"
+					onBack={leaveSection}
+				/>
+			{/if}
+			{#if shown === 'machine'}
 				<MachineSection {app} {de1State} {snapshot} />
-			{:else if active === 'brew'}
+			{:else if shown === 'brew'}
 				<BrewDefaultsSection />
-			{:else if active === 'water'}
+			{:else if shown === 'water'}
 				<WaterSection {app} />
-			{:else if active === 'display'}
+			{:else if shown === 'display'}
 				<DisplaySection />
-			{:else if active === 'sharing'}
+			{:else if shown === 'sharing'}
 				<SharingSection />
-			{:else if active === 'calibration'}
+			{:else if shown === 'calibration'}
 				<CalibrationSection {app} />
-			{:else if active === 'advanced'}
+			{:else if shown === 'advanced'}
 				<AdvancedSection {app} {snapshot} />
-			{:else if active === 'about'}
+			{:else if shown === 'about'}
 				<AboutSection />
 			{/if}
 		</div>
@@ -822,6 +897,143 @@
 		}
 		:global(.st-content .st-otherint-grid) {
 			grid-template-columns: 1fr;
+		}
+	}
+
+	/* ── Phone (≤ 600 px): the list and each section are separate screens ── */
+	.st-nav-sub,
+	.st-nav-chev,
+	.st-nav-group {
+		display: none;
+	}
+	.st-nav-text {
+		display: contents;
+	}
+	@media (max-width: 600px) {
+		.st-shell {
+			display: block;
+		}
+		.st-page[data-phone-view='list'] .st-content,
+		.st-page[data-phone-view='section'] .st-nav {
+			display: none;
+		}
+		.st-nav {
+			position: static;
+			min-height: 0;
+			border-right: 0;
+			padding: var(--page-pad-top) var(--page-pad-x) 24px;
+			gap: 4px;
+		}
+		.st-nav-title {
+			font-size: 30px;
+		}
+		.st-nav-foot {
+			display: none;
+		}
+		.st-nav-group {
+			display: block;
+			margin: 0;
+			padding: 18px 4px 6px;
+			font-family: var(--font-sans);
+			font-size: 10.5px;
+			font-weight: 700;
+			letter-spacing: var(--track-allcaps);
+			text-transform: uppercase;
+			color: var(--fg-muted);
+		}
+		.st-nav-item,
+		.st-nav-item.is-active {
+			min-height: 60px;
+			padding: 10px 12px;
+			gap: 14px;
+			background: var(--bg-surface);
+			border-radius: var(--radius-md);
+			color: var(--fg-1);
+			font-size: 15px;
+		}
+		.st-nav-item + .st-nav-item {
+			margin-top: 4px;
+		}
+		.st-nav-item.is-active::before {
+			display: none;
+		}
+		.st-nav-item :global(svg),
+		.st-nav-item.is-active :global(svg) {
+			font-size: 20px;
+			color: var(--fg-3);
+		}
+		.st-nav-text {
+			display: flex;
+			flex-direction: column;
+			gap: 2px;
+			flex: 1 1 auto;
+			min-width: 0;
+		}
+		.st-nav-sub {
+			display: block;
+			font-size: 12px;
+			color: var(--fg-muted);
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		.st-nav-chev {
+			display: inline-flex;
+		}
+		.st-nav-chev :global(svg) {
+			font-size: 14px;
+		}
+		.st-nav-item:focus-visible {
+			outline: none;
+			box-shadow: var(--shadow-focus);
+		}
+
+		.st-content {
+			padding: 0 var(--page-pad-x) 32px;
+			max-width: none;
+		}
+		.st-content :global(.pbar) {
+			margin-bottom: 8px;
+		}
+		/* The bar is the screen's heading; the section's own eyebrow and title
+		   would repeat it (`display: none` leaves one <h1> in the a11y tree). */
+		:global(.st-content .st-shead) {
+			margin-bottom: 16px;
+			padding-bottom: 14px;
+		}
+		:global(.st-content .st-shead .t-eyebrow),
+		:global(.st-content .st-shead-title) {
+			display: none;
+		}
+		:global(.st-content .st-shead-sub) {
+			margin-top: 0;
+		}
+		:global(.st-content .st-group) {
+			margin-top: 22px;
+		}
+		/* Rows: the control sits beside the text while the text keeps ~180 px,
+		   and drops under it otherwise (a 1fr | auto grid squeezed the text to
+		   a word per line beside wide controls). */
+		:global(.st-content .st-row) {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			justify-content: space-between;
+			column-gap: 16px;
+			row-gap: 10px;
+			padding: 14px;
+		}
+		:global(.st-content .st-row-text) {
+			flex: 1 1 180px;
+			min-width: 0;
+		}
+		:global(.st-content .st-row-control) {
+			flex: 0 1 auto;
+			max-width: 100%;
+			flex-wrap: wrap;
+		}
+		:global(.st-content .st-btn) {
+			white-space: nowrap;
 		}
 	}
 </style>

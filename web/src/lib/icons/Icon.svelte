@@ -21,6 +21,7 @@
 	import CaretUpIcon from 'phosphor-svelte/lib/CaretUpIcon';
 	import ChartLineIcon from 'phosphor-svelte/lib/ChartLineIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
+	import UploadSimpleIcon from 'phosphor-svelte/lib/UploadSimpleIcon';
 	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
 	import CheckSquareIcon from 'phosphor-svelte/lib/CheckSquareIcon';
 	import CircleIcon from 'phosphor-svelte/lib/CircleIcon';
@@ -147,6 +148,7 @@
 		thermometer: ThermometerIcon,
 		timer: TimerIcon,
 		trash: TrashIcon,
+		'upload-simple': UploadSimpleIcon,
 		warning: WarningIcon,
 		'warning-circle': WarningCircleIcon,
 		wrench: WrenchIcon,

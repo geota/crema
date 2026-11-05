@@ -69,18 +69,22 @@ export function railCtaIcon(status: RailStatus): string {
 	}
 }
 
-/** Tooltip + accessible name for the status button. */
-export function railLabel(device: RailDevice, status: RailStatus): string {
+/**
+ * Tooltip + accessible name for the status button. `touch` words it for the
+ * phone top bar; the rail keeps "click".
+ */
+export function railLabel(device: RailDevice, status: RailStatus, touch = false): string {
 	const Name = device === 'de1' ? 'DE1' : 'Scale';
 	const name = device === 'de1' ? 'DE1' : 'scale';
+	const verb = touch ? 'tap' : 'click';
 	switch (status) {
 		case 'disconnected':
-			return `Click to connect ${name}`;
+			return touch ? `Connect ${name}` : `Click to connect ${name}`;
 		case 'connecting':
 			return `${Name} connecting…`;
 		case 'reconnecting':
-			return `${Name} reconnecting — click to retry now`;
+			return `${Name} reconnecting — ${verb} to retry now`;
 		case 'connected':
-			return `${Name} connected — click for options`;
+			return `${Name} connected — ${verb} for options`;
 	}
 }

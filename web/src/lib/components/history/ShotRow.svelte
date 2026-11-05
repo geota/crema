@@ -401,4 +401,63 @@
 		from { transform: rotate(0); }
 		to { transform: rotate(360deg); }
 	}
+
+	/* Phone (≤ 600 px): the seven-column row cannot fit (at 390 px the name
+	   column collapsed to nothing). Two lines instead, as in Android
+	   PhoneShotRow: spark | name · bean · note | time, then ratio · yield ·
+	   stars · pip under the name, values only. */
+	@media (max-width: 600px) {
+		.hi-row {
+			grid-template-columns: 96px auto auto minmax(0, 1fr) auto;
+			grid-template-areas:
+				'spark main main main time'
+				'spark ratio yield stars pip';
+			column-gap: 12px;
+			row-gap: 4px;
+			min-height: 64px;
+			padding: 10px 8px;
+		}
+		.hi-row.is-selectmode {
+			grid-template-columns: 22px 96px auto auto minmax(0, 1fr) auto;
+			grid-template-areas:
+				'check spark main main main time'
+				'check spark ratio yield stars pip';
+		}
+		.hi-row-check {
+			grid-area: check;
+		}
+		.hi-row-spark {
+			grid-area: spark;
+		}
+		.hi-row-main {
+			grid-area: main;
+		}
+		.hi-row-time {
+			grid-area: time;
+			align-self: start;
+			align-items: flex-end;
+		}
+		.hi-row-main + .hi-row-metric {
+			grid-area: ratio;
+		}
+		.hi-row-main + .hi-row-metric + .hi-row-metric {
+			grid-area: yield;
+		}
+		.hi-row-metric {
+			text-align: left;
+		}
+		.hi-row-metric-val {
+			font-size: 12px;
+			color: var(--fg-3);
+		}
+		.hi-row-metric-l {
+			display: none;
+		}
+		.hi-row-stars {
+			grid-area: stars;
+		}
+		.hi-row-pip {
+			grid-area: pip;
+		}
+	}
 </style>

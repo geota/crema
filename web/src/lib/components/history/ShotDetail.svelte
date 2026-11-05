@@ -24,6 +24,7 @@
 		shotFilename,
 		exportStoredShotAsV2Json,
 		peaksOf,
+		shotStamp,
 		yieldOf,
 		flatSamplesOf,
 		effectiveGrindSetting,
@@ -233,12 +234,7 @@
 	});
 
 	/** Date + time caption, e.g. `May 18 · 14:36`. */
-	const stamp = $derived.by(() => {
-		const d = new Date(shot.completedAt);
-		const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-		const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-		return `${date} · ${time}`;
-	});
+	const stamp = $derived(shotStamp(shot.completedAt));
 
 	/** Derived peaks — `peakWeight` / `finalWeight` / `peakPressure` / `peakTemp`. */
 	const peaks = $derived(peaksOf(shot));
@@ -1634,6 +1630,33 @@
 	@media (max-width: 1100px) {
 		.hi-metrics {
 			grid-template-columns: repeat(4, minmax(0, 1fr));
+		}
+	}
+
+	/* Phone (≤ 600 px): the detail is its own screen. The header blocks stack
+	   (side by side they overprinted each other at 390 px), the actions wrap
+	   under them, and the metric tiles go three-up. */
+	@media (max-width: 600px) {
+		.hi-detail {
+			padding: 16px;
+			gap: 16px;
+		}
+		.hi-detail-head {
+			flex-direction: column;
+			align-items: stretch;
+		}
+		.hi-head-blocks {
+			flex-direction: column;
+			gap: 14px;
+		}
+		.hi-detail-actions {
+			justify-content: flex-start;
+		}
+		.hi-metrics {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+		.hi-chart {
+			padding: 10px 8px 8px;
 		}
 	}
 </style>

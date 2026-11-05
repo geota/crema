@@ -22,12 +22,19 @@
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import UploadSimpleIcon from 'phosphor-svelte/lib/UploadSimpleIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
+	import { page } from '$app/state';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import { leaveShot, openShot, phoneShotId } from '#lib/shell/phone-nav.js';
+	import PhoneBackBar from '#lib/shell/PhoneBackBar.svelte';
+	import MoreMenu from '#lib/components/shared/MoreMenu.svelte';
 	/**
 	 * History — the `/history` route: the shot library, ported from
 	 * `HistoryPage` in `history-page.jsx`.
 	 *
 	 * The stats strip, the filter strip (per-profile chips + a range selector)
 	 * and the split pane — a scrollable `ShotRow` list and a `ShotDetail` pane.
+	 * At phone width (≤ 600 px) the list and the detail are two screens, with
+	 * real history entries between them (`#lib/shell/phone-nav`).
 	 *
 	 * ## Real vs. stubbed
 	 *
@@ -54,6 +61,7 @@
 		recentNames,
 		COFFEE_FILTER_PREFIX,
 		selectedShot,
+		shotStamp,
 		filterScopeKey,
 		type SelectionPin
 	} from '#lib/history/index.js';
@@ -509,7 +517,9 @@
 		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
 		const visualizerId = shot.visualizerId ?? null;
 		const wasSelected = selected?.id === shot.id;
+		const onDetailScreen = phoneDetail;
 		store.delete(shot.id);
+		if (onDetailScreen) leaveShot();
 		const api = appCtx().services;
 		if (opts.remote && visualizerId && api) {
 			try {
@@ -634,10 +644,16 @@
 	}));
 	/** The shot list's scroller (`.hi-list`), bound once the list renders. */
 	let listEl = $state<HTMLElement>();
+	/** The page itself: the scroller at phone width, where the list has none. */
+	let pageEl = $state<HTMLElement>();
 	useScrollMemory({
+		// A phone detail is a view of its own, so it opens at its top and the
+		// list comes back to its place.
 		key: () =>
-			`history/list|${filterProfile}|${filterBean}|${filterMethod}|${selectedTags.join(',')}|${range}|${sortField}-${sortDir}`,
-		container: () => listEl
+			phoneDetail
+				? `history/detail|${phoneShot}`
+				: `history/list|${filterProfile}|${filterBean}|${filterMethod}|${selectedTags.join(',')}|${range}|${sortField}-${sortDir}`,
+		container: () => (phoneLayout.current ? pageEl : listEl)
 	});
 	useScrollMemory({ key: () => 'history/page', pixelOnly: true });
 
@@ -946,13 +962,35 @@
 		})
 	);
 	/**
+	 * The shot on the phone detail screen, named by the history entry or a
+	 * `?shot=` deep link rather than the selection: an explicit pick, so an edit
+	 * that takes the shot out of the filtered list doesn't swap the screen.
+	 */
+	const phoneShot = $derived(phoneShotId());
+	/**
 	 * The selected shot record — the picked one while the filtered list
 	 * still shows it, an explicit pick until a filter changes, else the first
 	 * filtered shot ({@link selectedShot}).
 	 */
 	const selected = $derived(
-		selectedShot(filtered, selectedId, { pin, scope: filterScope, lookup: (id) => store.get(id) })
+		selectedShot(filtered, phoneShot ?? selectedId, {
+			pin: phoneShot ? { id: phoneShot, scope: filterScope } : pin,
+			scope: filterScope,
+			lookup: (id) => store.get(id)
+		})
 	);
+	/** Showing the detail screen: false when the entry's shot no longer exists. */
+	const phoneDetail = $derived(phoneShot !== null && selected?.id === phoneShot);
+	// Leaving the detail screen hands focus back to the row it opened from.
+	$effect(() => {
+		if (!phoneDetail) return;
+		const id = phoneShot as string;
+		return () => {
+			listEl
+				?.querySelector<HTMLElement>(`[data-scroll-key="${CSS.escape(id)}"]`)
+				?.focus({ preventScroll: true });
+		};
+	});
 
 	// ── Stats (issue 48) ──────────────────────────────────────────────────
 	// Scoped to the FILTERED set (reflects the active filter/range, not all-time).
@@ -1007,6 +1045,48 @@
 		selectedId = id;
 		pin = null;
 	}
+
+	/** Tap a row: select it and, at phone width, open its detail screen. */
+	function showShot(id: string): void {
+		select(id);
+		openShot(id);
+	}
+
+	/** The phone header's ⋯ menu: the wide toolbar's Import / Export / Upload. */
+	const moreItems = $derived([
+		{
+			icon: 'ph ph-upload-simple',
+			title: importing ? 'Importing…' : 'Import shots',
+			sub: 'Legacy de1app .shot or .shot.json files',
+			disabled: importing,
+			onclick: () => (importOpen = true)
+		},
+		{
+			icon: 'ph-duotone ph-file-text',
+			title: 'Export community v2 (.jsonl)',
+			sub: 'One JSON per shot, portable across de1 apps',
+			disabled: shots.length === 0 || exporting,
+			onclick: () => void exportAllCommunity()
+		},
+		{
+			icon: 'ph-duotone ph-file-zip',
+			title: 'Export replayable captures (.zip)',
+			sub: 'Per-shot raw BLE bytes',
+			disabled: shots.length === 0 || exporting,
+			onclick: () => void exportAllReplay()
+		},
+		...(missingTotal > 0
+			? [
+					{
+						icon: 'ph ph-cloud-arrow-up',
+						title: uploadingAll ? 'Uploading…' : `Upload ${missingTotal}`,
+						sub: missingTitle,
+						disabled: uploadingAll,
+						onclick: uploadMissing
+					}
+				]
+			: [])
+	]);
 
 	// ── Compare state ────────────────────────────────────────────────────
 	/**
@@ -1069,7 +1149,14 @@
 	<title>Crema — History</title>
 </svelte:head>
 
-<div class="qcontain hi-page">
+<div class="qcontain hi-page" bind:this={pageEl} data-phone-view={phoneDetail ? 'detail' : 'list'}>
+	{#if phoneDetail && selected}
+		<PhoneBackBar
+			title={shotStamp(selected.completedAt)}
+			backLabel="Back to shot list"
+			onBack={leaveShot}
+		/>
+	{/if}
 	<!-- Header -->
 	<div class="hi-head">
 		<div>
@@ -1098,60 +1185,62 @@
 				<PlusIcon aria-hidden="true" />
 				<span>Log brew</span>
 			</button>
-			<!-- Import: opens the ShotImportDialog so users get a
-			     draggable picker that matches the BeanImportDialog
-			     pattern. The dialog calls `runImport` with the chosen
-			     files; the banner below the header reports the result. -->
-			<button
-				class="st-btn st-btn-secondary"
-				disabled={importing}
-				onclick={() => (importOpen = true)}
-				title="Import legacy de1app .shot or .shot.json files"
-			>
-				<UploadSimpleIcon aria-hidden="true" />
-				<span>{importing ? 'Importing…' : 'Import'}</span>
-			</button>
-			<!-- Export split-button — primary fires community v2 bulk
-			     export; caret surfaces the replay-capture zip variant.
-			     Shares geometry with /beans via the SplitButton primitive. -->
-			<SplitButton
-				icon="ph ph-download-simple"
-				label={exporting ? 'Exporting…' : 'Export'}
-				title="Download every shot as one .jsonl file — community-v2 JSON, one shot per line"
-				disabled={shots.length === 0 || exporting}
-				onPrimary={() => void exportAllCommunity()}
-				caretAriaLabel="Choose export format"
-				menuHead="Export as"
-				items={[
-					{
-						icon: 'ph-duotone ph-file-text',
-						title: 'Community v2 (.jsonl)',
-						sub: 'One JSON per shot, one shot per line. Portable across reaprime / Visualizer / de1app.',
-						onclick: () => void exportAllCommunity()
-					},
-					{
-						icon: 'ph-duotone ph-file-zip',
-						title: 'Replayable captures (.zip)',
-						sub: 'Per-shot raw BLE bytes. Imports / pre-recorder shots are skipped (no raw bytes).',
-						onclick: () => void exportAllReplay()
-					}
-				]}
-			/>
-			<!-- Catch-up: every shot missing from an enabled destination, in one
-			     tap. Hidden at zero; the title gives the per-destination split. -->
-			{#if missingTotal > 0}
+			{#if !phoneLayout.current}
+				<!-- Import: opens the ShotImportDialog so users get a
+				     draggable picker that matches the BeanImportDialog
+				     pattern. The dialog calls `runImport` with the chosen
+				     files; the banner below the header reports the result. -->
 				<button
 					class="st-btn st-btn-secondary"
-					disabled={uploadingAll}
-					onclick={uploadMissing}
-					title={missingTitle}
+					disabled={importing}
+					onclick={() => (importOpen = true)}
+					title="Import legacy de1app .shot or .shot.json files"
 				>
-					<Icon
-						cls={uploadingAll ? 'ph ph-spinner-gap hi-spin' : 'ph ph-cloud-arrow-up'}
-						aria-hidden="true"
-					 />
-					{uploadingAll ? 'Uploading…' : `Upload ${missingTotal}`}
+					<UploadSimpleIcon aria-hidden="true" />
+					<span>{importing ? 'Importing…' : 'Import'}</span>
 				</button>
+				<!-- Export split-button — primary fires community v2 bulk
+				     export; caret surfaces the replay-capture zip variant.
+				     Shares geometry with /beans via the SplitButton primitive. -->
+				<SplitButton
+					icon="ph ph-download-simple"
+					label={exporting ? 'Exporting…' : 'Export'}
+					title="Download every shot as one .jsonl file — community-v2 JSON, one shot per line"
+					disabled={shots.length === 0 || exporting}
+					onPrimary={() => void exportAllCommunity()}
+					caretAriaLabel="Choose export format"
+					menuHead="Export as"
+					items={[
+						{
+							icon: 'ph-duotone ph-file-text',
+							title: 'Community v2 (.jsonl)',
+							sub: 'One JSON per shot, one shot per line. Portable across reaprime / Visualizer / de1app.',
+							onclick: () => void exportAllCommunity()
+						},
+						{
+							icon: 'ph-duotone ph-file-zip',
+							title: 'Replayable captures (.zip)',
+							sub: 'Per-shot raw BLE bytes. Imports / pre-recorder shots are skipped (no raw bytes).',
+							onclick: () => void exportAllReplay()
+						}
+					]}
+				/>
+				<!-- Catch-up: every shot missing from an enabled destination, in one
+				     tap. Hidden at zero; the title gives the per-destination split. -->
+				{#if missingTotal > 0}
+					<button
+						class="st-btn st-btn-secondary"
+						disabled={uploadingAll}
+						onclick={uploadMissing}
+						title={missingTitle}
+					>
+						<Icon
+							cls={uploadingAll ? 'ph ph-spinner-gap hi-spin' : 'ph ph-cloud-arrow-up'}
+							aria-hidden="true"
+						 />
+						{uploadingAll ? 'Uploading…' : `Upload ${missingTotal}`}
+					</button>
+				{/if}
 			{/if}
 			{#if selectMode}
 				<button
@@ -1183,6 +1272,9 @@
 				>
 					<ArrowsLeftRightIcon aria-hidden="true" /> Compare
 				</button>
+			{/if}
+			{#if phoneLayout.current}
+				<MoreMenu label="More history actions" items={moreItems} />
 			{/if}
 		</div>
 	</div>
@@ -1351,13 +1443,13 @@
 					{@const pip = pipFor(s)}
 					<ShotRow
 						shot={s}
-						active={selected?.id === s.id}
+						active={!phoneLayout.current && selected?.id === s.id}
 						selectable={selectMode}
 						selected={selectedIdSet.has(s.id)}
 						selectionDisabled={selectedIds.length >= COMPARE_MAX}
 						syncPip={pip.pip}
 						syncTitle={pip.title}
-						onclick={() => (selectMode ? toggleCompareSelection(s.id) : select(s.id))}
+						onclick={() => (selectMode ? toggleCompareSelection(s.id) : showShot(s.id))}
 					/>
 				{/each}
 				{#if filtered.length === 0}
@@ -1904,6 +1996,78 @@
 		}
 		.hi-split {
 			grid-template-columns: minmax(0, 1fr);
+		}
+	}
+
+	/* ── Phone (≤ 600 px): the list and the detail are separate screens ───── */
+	@media (max-width: 600px) {
+		.hi-page {
+			padding-bottom: 24px;
+			gap: 16px;
+		}
+		/* The page scrolls as one column: the list loses its own scroller and
+		   the split no longer shrinks to fit (the shrink is what drew the
+		   detail over the list). */
+		.hi-split {
+			display: block;
+			flex: none;
+		}
+		.hi-list {
+			max-height: none;
+			overflow: visible;
+			padding: 4px;
+		}
+		.hi-page[data-phone-view='list'] .hi-split > :not(.hi-list) {
+			display: none;
+		}
+		.hi-page[data-phone-view='detail'] {
+			padding-top: 0;
+		}
+		.hi-page[data-phone-view='detail'] > :not(:global(.pbar), .hi-split),
+		.hi-page[data-phone-view='detail'] .hi-list {
+			display: none;
+		}
+
+		/* List screen: search on its own row, the actions in one row under it,
+		   the stat tiles tighter, the filter row sideways. */
+		.hi-head {
+			flex-direction: column;
+			align-items: stretch;
+			gap: 14px;
+		}
+		.hi-head-r {
+			flex-wrap: wrap;
+			width: 100%;
+		}
+		.hi-head-r :global(.hi-search) {
+			flex: 1 0 100%;
+			width: auto;
+			min-height: 44px;
+		}
+		.hi-head-r :global(.st-btn) {
+			min-height: 44px;
+		}
+		.hi-head-r :global(.more) {
+			margin-left: auto;
+		}
+		.hi-stats {
+			gap: 8px;
+		}
+		.hi-stats :global(.hi-stat) {
+			padding: 10px 12px;
+			min-width: 0;
+		}
+		.hi-stats :global(.hi-stat-val) {
+			font-size: 18px;
+		}
+		.hi-filters {
+			flex-wrap: wrap;
+			row-gap: 10px;
+		}
+		.hi-prof-filters {
+			flex: 1 0 100%;
+			overflow-x: auto;
+			scrollbar-width: none;
 		}
 	}
 </style>

@@ -10,6 +10,10 @@ declare global {
 		interface PageState {
 			/** Set on an editor entry opened from the Beans list ($lib/beans/editor-nav). */
 			fromBeansList?: boolean;
+			/** Phone History: the shot whose detail screen this entry shows ($lib/shell/phone-nav). */
+			historyShot?: string;
+			/** Phone Settings: a section screen opened from the section list ($lib/shell/phone-nav). */
+			fromSettingsList?: boolean;
 		}
 		// interface Platform {}
 	}

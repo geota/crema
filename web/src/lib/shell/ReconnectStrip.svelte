@@ -45,7 +45,7 @@
 <style>
 	.rc-strip {
 		position: sticky;
-		top: 0;
+		top: var(--ptop-clear, 0px);
 		z-index: 30;
 		display: flex;
 		flex-direction: column;
