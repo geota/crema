@@ -46,13 +46,15 @@ class HotWaterOfflineReadoutTest {
         runBlocking { library.adoptCustomProfile(fifty) }
         VmHarness.idle()
 
-        vm.setActiveProfile(base.id)
-        VmHarness.idle()
+        // The target comes back through the core lane's own thread: wait for
+        // it, since idling the main looper does not.
         fun readout() = hotWaterReadoutFor(vm.ui.value.hotWaterTarget, vm.ui.value.weightUnit, vm.ui.value.volumeUnit, vm.ui.value.qcHotWaterRatio)
+        vm.setActiveProfile(base.id)
+        VmHarness.idleUntil("the 36 g target") { vm.ui.value.hotWaterTarget?.volumeMl == 108f }
         assertEquals("1:3 → 108 ml for a 36 g shot", readout())
 
         vm.setActiveProfile("fifty")
-        VmHarness.idle()
+        VmHarness.idleUntil("the 50 g target") { vm.ui.value.hotWaterTarget?.volumeMl == 150f }
         assertEquals(150f, assertNotNull(vm.ui.value.hotWaterTarget).volumeMl)
         assertEquals("1:3 → 150 ml for a 50 g shot", readout())
     }
