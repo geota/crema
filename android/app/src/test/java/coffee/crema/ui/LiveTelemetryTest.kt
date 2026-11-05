@@ -57,6 +57,17 @@ class LiveTelemetryTest {
         val vm = build()
         // The threshold and the state settle first: they are UI state.
         events(vm, pouring, """{"type":"WaterLevel","content":{"level":40.0,"refill_threshold":5.0}}""")
+        // Startup's last async writes are not samples: count from a still `ui`.
+        var last = vm.ui.value
+        var stillSince = System.nanoTime()
+        VmHarness.idleUntil("ui to settle") {
+            val now = vm.ui.value
+            if (now !== last) {
+                last = now
+                stillSince = System.nanoTime()
+            }
+            System.nanoTime() - stillSince > 300_000_000
+        }
         val emitted = CopyOnWriteArrayList<MainUiState>()
         collectors.launch { vm.ui.collect { emitted += it } }
         val before = vm.ui.value
