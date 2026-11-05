@@ -7,7 +7,12 @@
 #     git tag v0.2.0 && git push origin v0.2.0
 #
 # (Also runnable manually via "Run workflow" — those runs build artifacts but do
-# NOT publish a GitHub Release or deploy to Cloudflare.)
+# NOT publish a GitHub Release or upload to Play. Give a manual run on main a
+# `web_deploy_version` to also deploy that web build to Cloudflare, so a web fix
+# can ship without an Android release:
+#
+#     gh workflow run release.yml --ref main -f web_deploy_version=0.10.0-web.1
+# )
 #
 # Outputs:
 #   • Android  — a debug-signed installable APK (always) + a release-signed APK
@@ -36,7 +41,13 @@ name: release
 on:
   push:
     tags: ['v*.*.*']
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      web_deploy_version:
+        description: 'Deploy this main build to Cloudflare with this version label, e.g. 0.10.0-web.1. Empty: no deploy.'
+        type: string
+        required: false
+        default: ''
 
 # One release at a time per ref; never cancel an in-flight release build.
 concurrency:
@@ -49,7 +60,8 @@ permissions:
 jobs:
   # ─────────────────────────────────────────────────────────────────────
   # Resolve the version once: name from the tag (v0.2.0 -> 0.2.0), code from
-  # the run number. Manual runs get a 0.0.0-<sha> dev version (no release).
+  # the run number. Manual runs get a 0.0.0-<sha> dev version (no release),
+  # or the web_deploy_version label when they deploy.
   # ─────────────────────────────────────────────────────────────────────
   version:
     name: version
@@ -59,9 +71,13 @@ jobs:
       code: ${{ steps.v.outputs.code }}
     steps:
       - id: v
+        env:
+          WEB_DEPLOY_VERSION: ${{ inputs.web_deploy_version }}
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             NAME="${GITHUB_REF_NAME#v}"
+          elif [[ -n "$WEB_DEPLOY_VERSION" ]]; then
+            NAME="$WEB_DEPLOY_VERSION"
           else
             NAME="0.0.0-${GITHUB_SHA::7}"
           fi
@@ -87,7 +103,8 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────
   # Web PWA — build the static bundle (wasm + vite), zip it, and (on a real
-  # tag, when CF secrets exist) deploy it to Cloudflare Pages. Mirrors the
+  # tag or a web_deploy_version run on main, when CF secrets exist) deploy it
+  # to Cloudflare Pages. Mirrors the
   # toolchain in ci.yml so caches are shared.
   # ─────────────────────────────────────────────────────────────────────
   web:
@@ -174,9 +191,12 @@ jobs:
           if-no-files-found: error
 
       # Push the exact built bundle to Cloudflare Pages (production = `main`
-      # branch in the CF project). Skipped on manual runs and when no CF token.
+      # branch in the CF project). Skipped when there is no CF token, and on
+      # manual runs unless they are on main with a web_deploy_version.
       - name: Deploy to Cloudflare Pages
-        if: startsWith(github.ref, 'refs/tags/') && env.CF_API_TOKEN != ''
+        if: >-
+          env.CF_API_TOKEN != '' && (startsWith(github.ref, 'refs/tags/') ||
+          (github.ref == 'refs/heads/main' && inputs.web_deploy_version != ''))
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
