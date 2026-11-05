@@ -196,7 +196,7 @@ jobs:
   fuzz:
     name: fuzz (de1-relay)
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' && github.event.schedule == '30 3 * * *'
+    if: github.event_name == 'pull_request' || (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *')
     strategy:
       fail-fast: false
       matrix:
@@ -218,7 +218,9 @@ jobs:
         working-directory: core/de1-relay/fuzz
         run: |
           mkdir -p "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/artifacts"
-          cargo fuzz run ${{ matrix.target }} "$RUNNER_TEMP/corpus" corpus/${{ matrix.target }} -- \
+          # The target is explicit: cargo-fuzz defaults to the triple it was built
+          # for, and the prebuilt binary can be musl, which ASan can't link.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} "$RUNNER_TEMP/corpus" corpus/${{ matrix.target }} -- \
             -max_total_time=60 -len_control=0 -max_len=4096 -artifact_prefix="$RUNNER_TEMP/artifacts/"
 
       - name: Upload crash artifacts
