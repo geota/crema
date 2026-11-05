@@ -118,7 +118,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * The core lane ([CoreLane], review #28): every `CoreOutput` applies there,
-     * The core lane ([CoreLane], review #28): every `CoreOutput` applies there,
      * and the heavy FFI calls run there. What each core event does is
      * registered on it by the controller that owns its state, while that
      * controller is built and before any output can apply. The writers reach
