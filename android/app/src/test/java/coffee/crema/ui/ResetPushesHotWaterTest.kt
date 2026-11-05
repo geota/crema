@@ -8,6 +8,7 @@ import coffee.crema.core.NotificationSource
 import coffee.crema.settings.AppPrefs
 import coffee.crema.ui.RemoteFixture.Companion.savedPrefs
 import coffee.crema.ui.RemoteFixture.Companion.writePrefs
+import java.io.File
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,14 +47,19 @@ class ResetPushesHotWaterTest {
 
     private fun coreTarget(vm: MainViewModel) = coreJson.decodeFromString(HotWaterTarget.serializer(), VmHarness.bridge(vm).hotWaterTargetJson())
 
-    private fun assertResetAndPushed(vm: MainViewModel, what: String) {
+    private fun assertResetAndPushed(vm: MainViewModel, what: String, saved: () -> Boolean = ::savedRatio) {
         assertEquals(HotWaterUi.defaults, VmHarness.ownState(vm).hotWaterDose(), "$what: ratio 1:3")
         val target = coreTarget(vm)
         assertEquals(HotWaterMode.Ratio, target.mode, "$what: pushed to the core")
         assertEquals(target, vm.ui.value.hotWaterTarget, "$what: the readout's target")
         VmHarness.idleUntil("$what: the packet") { vm.ui.value.de1ShotSettings?.hot_water_volume == target.wireVolumeMl }
-        VmHarness.idleUntil("$what: saved") { runCatching { savedPrefs().qcHotWaterMode }.getOrNull() == HotWaterMode.Ratio }
+        VmHarness.idleUntil("$what: saved", done = saved)
     }
+
+    private fun savedRatio() = runCatching { savedPrefs().qcHotWaterMode }.getOrNull() == HotWaterMode.Ratio
+
+    /** Erase deletes prefs.json, which may land after the reset's save. */
+    private fun prefsGone() = !File(VmHarness.app().filesDir, "prefs.json").exists()
 
     @Test
     fun `restore defaults resets the dose and pushes it`() {
@@ -68,6 +74,6 @@ class ResetPushesHotWaterTest {
         val vm = volume200()
         vm.eraseAll()
         VmHarness.idle()
-        assertResetAndPushed(vm, "erase")
+        assertResetAndPushed(vm, "erase") { prefsGone() || savedRatio() }
     }
 }
