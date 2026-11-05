@@ -1372,6 +1372,10 @@
    parameter groups stack in one column, the foot stacks, and the sheet
    (already max-height + overflow-y: auto) scrolls to the last toggle. */
 @media (max-width: 600px) {
+  /* The sheet docks to `.qcontain`, which ends at the tab bar and starts under
+     the top bar here, so it fits that box, not the viewport: its head (Close)
+     stays on screen and the rest scrolls. */
+  .qsheet { max-height: calc(100% - 8px); }
   .qsheet.is-v2 {
     padding: 16px 16px 24px;
     border-radius: 16px 16px 0 0;

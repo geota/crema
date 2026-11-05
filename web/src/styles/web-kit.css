@@ -864,6 +864,13 @@ summary:focus-visible,
 
 .hpick { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; width: min(340px, 80vw); display: flex; flex-direction: column; max-height: 380px; background: var(--bg-surface); border: 1px solid rgba(var(--tint-rgb), 0.12); border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; }
 .bh-block-bean .hpick { left: auto; right: 0; }
+/* Phone width: the header blocks stack at the left edge, so the bean picker
+   opens rightwards too. Both stay short enough to end above the tab bar on a
+   small phone; the bean block sits lower, so its picker is shorter. */
+@media (max-width: 600px) {
+  .hpick { max-height: min(380px, 52dvh); }
+  .bh-block-bean .hpick { left: 0; right: auto; max-height: min(380px, 44dvh); }
+}
 .hpick-search { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(var(--tint-rgb), 0.08); }
 .hpick-search > :is(i, svg) { font-size: 15px; color: var(--fg-muted); }
 .hpick-search input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; font-family: var(--font-sans); font-size: 14px; color: var(--fg-1); }
