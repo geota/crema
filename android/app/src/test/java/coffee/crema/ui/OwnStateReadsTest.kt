@@ -32,20 +32,23 @@ class OwnStateReadsTest {
             "ui" to ANY,
             "effectiveState" to ANY,
             // Holder writes: on a remote they never reach the machine.
-            "applySteamHotWater" to setOf("qcSteamTempC", "qcSteamTimeS", "qcHotWaterTempC", "qcHotWaterVolumeMl"),
             "reuploadActiveProfile" to setOf("activeProfileId", "brewParams"),
-            // The device that owns the config (a remote shows its edits in its
-            // mirror slice): the brew override is stored normalized against
-            // its own active profile.
-            "showConfig" to setOf("activeProfileId", "brewParams"),
-            // The hot-water dose edit: LocalOnly, so never on a remote (own is shown).
-            "applyHotWaterDose" to setOf("withHotWaterDose()"),
             // Restore defaults keeps this device's own line frequency (F15).
             "resetPreferences" to setOf("lineFreqOverride"),
         ),
         "FirmwareController.kt" to mapOf(
             // The holder's own machine reads.
             "update" to setOf("de1MachineInfo"),
+        ),
+        "MachineConfigController.kt" to mapOf(
+            // Holder writes: on a remote they never reach the machine.
+            "applySteamHotWater" to setOf("qcSteamTempC", "qcSteamTimeS", "qcHotWaterTempC", "qcHotWaterVolumeMl"),
+            // The device that owns the config (a remote shows its edits in its
+            // mirror slice): the brew override is stored normalized against
+            // its own active profile.
+            "showConfig" to setOf("activeProfileId", "brewParams"),
+            // The hot-water dose edit: LocalOnly, so never on a remote (own is shown).
+            "applyHotWaterDose" to setOf("withHotWaterDose()"),
         ),
         "MachineSessionController.kt" to mapOf(
             // Holder logic, already gated by `authoritative`.
