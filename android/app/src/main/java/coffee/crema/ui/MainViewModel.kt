@@ -2419,7 +2419,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
          *  teardown runs anyway (the write's own timeout normally fires first). */
         private const val QUIT_TEARDOWN_SLACK_MS = 250L
 
-        /** Abort a pending gated-start brew if the upload never completes. */
     }
 }
 
