@@ -41,10 +41,6 @@ class OwnStateReadsTest {
             "showConfig" to setOf("activeProfileId", "brewParams"),
             // Hub only (StartShot is relayed).
             "applyStartShot" to setOf("activeProfileId", "autoTare", "brewParams", "stopOnWeight", "volumeStopWithScale"),
-            // Holder logic, already gated by `authoritative`.
-            "registerCoreHandlers" to setOf("preFlush", "steamPurge", "de1MachineInfo"),
-            // The machine's identity (its serial register), not a setting.
-            "checkStolenSerial" to setOf("de1MachineInfo"),
             // The hot-water dose edit: LocalOnly, so never on a remote (own is shown).
             "applyHotWaterDose" to setOf("withHotWaterDose()"),
             // Restore defaults keeps this device's own line frequency (F15).
@@ -55,6 +51,12 @@ class OwnStateReadsTest {
         "FirmwareController.kt" to mapOf(
             // The holder's own machine reads.
             "update" to setOf("de1MachineInfo"),
+        ),
+        "MachineSessionController.kt" to mapOf(
+            // Holder logic, already gated by `authoritative`.
+            "init" to setOf("preFlush", "steamPurge", "de1MachineInfo"),
+            // The machine's identity (its serial register), not a setting.
+            "checkStolenSerial" to setOf("de1MachineInfo"),
         ),
         "LibraryController.kt" to mapOf(
             "persistLibrary" to setOf("activeBeanId"),
@@ -108,7 +110,7 @@ class OwnStateReadsTest {
     /** §7.2 effective reads: these act on what is on screen. */
     private val effectiveMembers: Map<String, Set<String>> = mapOf(
         "MainViewModel.kt" to setOf(
-            "pushStopTargets", "startFromShot", "saveQuickGrindToBean", "shotDiagSummary",
+            "pushStopTargets", "startFromShot", "saveQuickGrindToBean",
             // Decent buildRecord.grinderModel; Visualizer grinderModel and beanLibrary.
             "decent", "visualizer",
         ),
@@ -116,6 +118,7 @@ class OwnStateReadsTest {
         "GuidedBrewController.kt" to setOf(
             "guidedBeanId", "openGuidedLogBrew", "openLogBrew", "defaultBrewRecipeFor", "resolveGuidedSetup",
         ),
+        "MachineSessionController.kt" to setOf("shotDiagSummary"),
     )
 
     /** Where each file reads its own state: `_ui.value` in the VM, the own
