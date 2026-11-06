@@ -1,40 +1,95 @@
 <script lang="ts">
 	/**
-	 * `PhoneTopBar` — the slim phone-width app bar (≤ 600 px): the Crema mark,
-	 * the DE1 and scale link buttons that sit at the foot of the rail on wider
-	 * screens, and the Settings gear (Android's top-bar gear). Page titles stay
-	 * in each page's own header, so the bar carries none.
+	 * `PhoneTopBar` — the phone-width app bar (≤ 600 px, Android
+	 * `CremaPhoneTopBar`): the Crema mark, the screen's title, and the screen's
+	 * actions. A route sets the title and actions with `usePhoneBar`; the
+	 * Bluetooth action opens the Devices sheet from any screen.
+	 *
+	 * The title is presentation: the screen's `<h1>` stays in the page (see
+	 * `.phone-bar-title`) or the `PhoneBackBar`, so a screen has exactly one
+	 * heading whichever of the two is showing.
 	 *
 	 * Hidden above 600 px by CSS.
 	 */
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
+	import BluetoothConnectedIcon from 'phosphor-svelte/lib/BluetoothConnectedIcon';
+	import BluetoothIcon from 'phosphor-svelte/lib/BluetoothIcon';
 	import GearSixIcon from 'phosphor-svelte/lib/GearSixIcon';
 	import type { CremaApp } from '#lib/state/index.js';
 	import CremaMark from '#lib/components/CremaMark.svelte';
-	import RailDevices from '#lib/components/RailDevices.svelte';
+	import { railStatus } from '#lib/components/rail-status.js';
+	import { NAV_ITEMS, tabIsActive } from './nav-items';
+	import { DEFAULT_PHONE_BAR_ACTIONS, phoneBarConfig, type PhoneBarAction } from './phone-bar.svelte';
+	import PhoneDevicesSheet from './PhoneDevicesSheet.svelte';
 
 	let { app }: { app: CremaApp | null } = $props();
 
-	const onSettings = $derived(page.url.pathname === resolve('/settings'));
+	let devicesOpen = $state(false);
+
+	const pathname = $derived(page.url.pathname);
+	const onSettings = $derived(pathname === resolve('/settings'));
+	const connected = $derived(railStatus(app?.state.current.de1State ?? 'idle') === 'connected');
+
+	const config = $derived(phoneBarConfig());
+	const title = $derived(
+		config?.title ?? NAV_ITEMS.find((item) => tabIsActive(item, pathname))?.label ?? 'Crema'
+	);
+
+	const devices = $derived<PhoneBarAction>({
+		id: 'devices',
+		label: connected ? 'Devices, DE1 connected' : 'Devices',
+		icon: connected ? BluetoothConnectedIcon : BluetoothIcon,
+		accent: connected,
+		haspopup: 'dialog',
+		onclick: () => (devicesOpen = true)
+	});
+	const settings = $derived<PhoneBarAction>({
+		id: 'settings',
+		label: 'Settings',
+		icon: GearSixIcon,
+		href: resolve('/settings'),
+		accent: onSettings
+	});
+	const actions = $derived(
+		(config?.actions ?? DEFAULT_PHONE_BAR_ACTIONS).map((a) =>
+			a === 'devices' ? devices : a === 'settings' ? settings : a
+		)
+	);
 </script>
 
 <header class="ptop">
 	<a class="ptop-mark" href={resolve('/')} aria-label="Crema — Brew">
-		<CremaMark size={28} />
+		<CremaMark size={26} />
 	</a>
-	<div class="ptop-devices">
-		<RailDevices {app} touch />
+	<span class="ptop-title" aria-hidden="true">{title}</span>
+	<div class="ptop-actions">
+		{#each actions as action (action.id)}
+			{@const ActionIcon = action.icon}
+			{#if action.href}
+				<a
+					class={['ptop-action', { 'is-accent': action.accent }]}
+					href={action.href}
+					aria-label={action.label}
+					aria-current={action.id === 'settings' && onSettings ? 'page' : undefined}
+				>
+					<ActionIcon aria-hidden="true" />
+				</a>
+			{:else}
+				<button
+					type="button"
+					class={['ptop-action', { 'is-accent': action.accent }]}
+					aria-label={action.label}
+					aria-haspopup={action.haspopup}
+					onclick={action.onclick}
+				>
+					<ActionIcon aria-hidden="true" />
+				</button>
+			{/if}
+		{/each}
 	</div>
-	<a
-		class={['ptop-gear', { 'is-active': onSettings }]}
-		href={resolve('/settings')}
-		aria-label="Settings"
-		aria-current={onSettings ? 'page' : undefined}
-	>
-		<GearSixIcon weight={onSettings ? 'fill' : 'duotone'} aria-hidden="true" />
-	</a>
 </header>
+<PhoneDevicesSheet {app} open={devicesOpen} onClose={() => (devicesOpen = false)} />
 
 <style>
 	.ptop {
@@ -49,71 +104,56 @@
 			z-index: 50;
 			display: flex;
 			align-items: center;
-			gap: 4px;
+			gap: 10px;
 			height: var(--ptop-clear);
-			padding: env(safe-area-inset-top, 0px) calc(8px + env(safe-area-inset-right, 0px)) 0
+			padding: env(safe-area-inset-top, 0px) calc(4px + env(safe-area-inset-right, 0px)) 0
 				calc(16px + env(safe-area-inset-left, 0px));
 			background: var(--bg-page);
-			border-bottom: 1px solid rgba(var(--tint-rgb), 0.06);
 		}
 	}
 	.ptop-mark {
+		flex: none;
 		display: inline-flex;
-		border-radius: 50%;
-		margin-right: auto;
+		align-items: center;
+		height: 44px;
+		border-radius: 8px;
 	}
-	.ptop-mark:focus-visible,
-	.ptop-gear:focus-visible {
-		outline: none;
-		box-shadow: var(--shadow-focus);
+	.ptop-title {
+		flex: 1 1 auto;
+		min-width: 0;
+		overflow: hidden;
+		font-family: var(--font-serif);
+		font-size: 26px;
+		font-weight: 400;
+		line-height: 30px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--fg-1);
 	}
-	/* The menu anchors here, not to its button, so it stays on screen at 320 px. */
-	.ptop-devices {
-		position: relative;
+	.ptop-actions {
+		flex: none;
 		display: flex;
 		align-items: center;
-		gap: 2px;
 	}
-	/* The rail's device buttons, laid out horizontally: dot + label + the
-	   Bluetooth "tap to connect" glyph, inline, in a 44 px-tall pill. */
-	.ptop-devices :global(.cside-status-wrap) {
-		position: static;
-		width: auto;
-	}
-	.ptop-devices :global(.cside-status.is-button) {
-		flex-direction: row;
-		gap: 6px;
-		height: 44px;
-		padding: 0 10px;
-		border-radius: var(--radius-pill);
-	}
-	.ptop-devices :global(.cside-status-label) {
-		font-size: 10px;
-	}
-	.ptop-devices :global(.cside-status-cta) {
-		position: static;
-	}
-	.ptop-devices :global(.cside-status.is-connected .cside-status-cta) {
-		display: none;
-	}
-	/* The connected menu drops below the bar instead of opening rightwards. */
-	.ptop-devices :global(.cside-menu) {
-		left: auto;
-		right: 0;
-		bottom: auto;
-		top: calc(100% + 6px);
-	}
-	.ptop-gear {
+	.ptop-action {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
 		width: 44px;
 		height: 44px;
+		border: 0;
 		border-radius: 50%;
-		color: var(--fg-3);
+		background: transparent;
+		color: var(--fg-2);
 		font-size: 22px;
+		cursor: pointer;
 	}
-	.ptop-gear.is-active {
+	.ptop-action.is-accent {
 		color: var(--fg-accent);
+	}
+	.ptop-mark:focus-visible,
+	.ptop-action:focus-visible {
+		outline: none;
+		box-shadow: var(--shadow-focus);
 	}
 </style>

@@ -9,6 +9,7 @@
 	import QuickSplitLabel from './QuickSplitLabel.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { getSettingsStore, formatWeight } from '#lib/settings/index.js';
 
 	let { params }: { params: BrewParamState } = $props();
@@ -51,7 +52,7 @@
 		/>
 		<div style="height:8px"></div>
 		<QuickChipRow
-			options={[16, 17, 18, 19, 20]}
+			options={phoneLayout.current ? [16, 18, 19, 20] : [16, 17, 18, 19, 20]}
 			value={p.dose}
 			name="Dose"
 			dimension="weight"
@@ -69,7 +70,7 @@
 		/>
 		<div style="height:8px"></div>
 		<QuickChipRow
-			options={[3.8, 4.0, 4.2, 4.4, 4.6]}
+			options={phoneLayout.current ? [3.5, 4.0, 4.5, 5.0] : [3.8, 4.0, 4.2, 4.4, 4.6]}
 			value={p.grind}
 			name="Grind"
 			onChange={(v) => params.set('grind', v)}

@@ -15,6 +15,7 @@
 	import QuickSplitLabel from './QuickSplitLabel.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 
 	let { params }: { params: BrewParamState } = $props();
 	/** The steppers' ranges, from the core's table (F8). */
@@ -46,7 +47,7 @@
 		/>
 		<div style="height:6px"></div>
 		<QuickChipRow
-			options={[2, 4, 6, 8, 10]}
+			options={phoneLayout.current ? [2, 4, 6, 8] : [2, 4, 6, 8, 10]}
 			value={p.flushTime}
 			name="Flush time"
 			unit="s"
@@ -68,7 +69,7 @@
 		/>
 		<div style="height:6px"></div>
 		<QuickChipRow
-			options={[88, 92, 95, 97, 99]}
+			options={phoneLayout.current ? [88, 92, 95, 97] : [88, 92, 95, 97, 99]}
 			value={p.flushTemp}
 			name="Flush temperature"
 			dimension="temp"

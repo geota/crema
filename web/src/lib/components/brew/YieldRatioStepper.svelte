@@ -8,6 +8,7 @@
 	import { quickControlBounds } from '#lib/core/bounds.js';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { getSettingsStore, formatWeight } from '#lib/settings/index.js';
 	import { formatRatio } from '#lib/utils/ratio.js';
 
@@ -75,7 +76,7 @@
 	/>
 	<div style="height:6px"></div>
 	<QuickChipRow
-		options={[28, 32, 36, 40, 45]}
+		options={phoneLayout.current ? [32, 36, 40, 45] : [28, 32, 36, 40, 45]}
 		value={p.yield}
 		name="Yield"
 		dimension="weight"

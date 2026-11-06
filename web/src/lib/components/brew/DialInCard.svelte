@@ -16,6 +16,10 @@
 	import { effectiveGrindSetting, yieldOf, type StoredShot } from '#lib/history/index.js';
 	import StarRating from '#lib/components/common/StarRating.svelte';
 	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
+	import CaretRightIcon from 'phosphor-svelte/lib/CaretRightIcon';
+	import { relativeAgo } from '#lib/brew/phone-brew.js';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import PhoneStat from './PhoneStat.svelte';
 
 	let {
 		shot,
@@ -55,6 +59,33 @@
 	const plan = $derived(shot.metadata.nextPlan?.trim() || null);
 </script>
 
+{#if phoneLayout.current}
+	<section class="pcard pdi" aria-label="Where you left off">
+		<button
+			type="button"
+			class="pdi-head"
+			aria-label="Open this shot in History"
+			onclick={() => onOpen(shot)}
+		>
+			<span class="pdi-head-text">
+				<span class="pdi-eyebrow">Where you left off · {relativeAgo(shot.completedAt)}</span>
+				{#if shot.profileName}<span class="pdi-profile">{shot.profileName}</span>{/if}
+			</span>
+			{#if rating > 0}<span class="pdi-stars"><StarRating {rating} size={11} /></span>{/if}
+			<CaretRightIcon aria-hidden="true" />
+		</button>
+		<div class="pdi-grid">
+			<PhoneStat label="Grind" value={grind ?? '—'} />
+			<PhoneStat label="Yield" value={yieldM?.value ?? '—'} unit={yieldM?.unit ?? ''} />
+			<PhoneStat label="Ratio" value={ratio ?? '—'} />
+			<PhoneStat label="Time" value={time} unit="s" />
+		</div>
+		{#if plan}<p class="pdi-plan">{plan}</p>{/if}
+		<button type="button" class="pdi-load" onclick={() => onStart(shot)}>
+			<ArrowCounterClockwiseIcon aria-hidden="true" /> Load setup
+		</button>
+	</section>
+{:else}
 <div class="crema-target di-card">
 	<div class="di-head">
 		<span class="t-eyebrow">Where you left off</span>
@@ -95,8 +126,116 @@
 		<ArrowCounterClockwiseIcon aria-hidden="true" /> Load setup
 	</button>
 </div>
+{/if}
 
 <style>
+	/* The phone card (Android `PhoneDialInCard`). */
+	.pdi {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		padding: 12px 16px;
+	}
+	.pdi-head {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		width: 100%;
+		min-height: 44px;
+		margin: -6px 0;
+		padding: 0;
+		border: 0;
+		border-radius: 8px;
+		background: transparent;
+		color: var(--fg-3);
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
+	}
+	.pdi-head:focus-visible,
+	.pdi-load:focus-visible {
+		outline: none;
+		box-shadow: var(--shadow-focus);
+	}
+	.pdi-head > :global(svg) {
+		flex: none;
+		font-size: 16px;
+	}
+	.pdi-head-text {
+		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+	.pdi-eyebrow {
+		font-family: var(--font-sans);
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--fg-3);
+	}
+	.pdi-profile {
+		overflow: hidden;
+		font-family: var(--font-sans);
+		font-size: 12px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--fg-3);
+	}
+	.pdi-stars {
+		flex: none;
+		display: inline-flex;
+	}
+	.pdi-grid {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 6px;
+	}
+	.pdi-plan {
+		display: -webkit-box;
+		margin: 0;
+		padding-left: 8px;
+		overflow: hidden;
+		border-left: 1px solid var(--fg-accent);
+		font-family: var(--font-sans);
+		font-size: 12px;
+		font-style: italic;
+		line-height: 1.4;
+		color: var(--fg-1);
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 4;
+		line-clamp: 4;
+	}
+	.pdi-load {
+		position: relative;
+		align-self: flex-end;
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		min-height: 34px;
+		margin: 2px 0;
+		padding: 0 12px;
+		border: 1px solid rgba(var(--tint-rgb), 0.16);
+		border-radius: var(--radius-pill);
+		background: transparent;
+		color: var(--fg-1);
+		font-family: var(--font-sans);
+		font-size: 13px;
+		font-weight: 500;
+		cursor: pointer;
+	}
+	.pdi-load::before {
+		content: '';
+		position: absolute;
+		inset: -5px 0;
+	}
+	.pdi-load :global(svg) {
+		font-size: 16px;
+		color: var(--fg-accent);
+	}
+
 	/* `.crema-target` (web-kit.css) gives the card chrome, matching the
 	   sibling Yield / Ratio / Last-shot cards in the idle column. */
 	.di-card {

@@ -748,8 +748,8 @@
 	<!-- Header -->
 	<div class="bn-head">
 		<div class="bn-head-l">
-			<div class="t-eyebrow">Library</div>
-			<h1 class="t-page-title bn-head-title">Beans</h1>
+			<div class="t-eyebrow phone-bar-eyebrow">Library</div>
+			<h1 class="t-page-title bn-head-title phone-bar-title">Beans</h1>
 			<div class="bn-head-sub">{statusLine}</div>
 		</div>
 		<div class="bn-head-r">

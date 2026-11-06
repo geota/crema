@@ -11,11 +11,20 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 - **Phone layout for the web app** — at 600 px and below the side rail gives
   way to a bottom tab bar (Brew, Scale, Profiles, Beans, History, as on
-  Android) and a slim top bar with the DE1 and scale buttons and the Settings
-  gear. History opens a shot on its own screen, and Settings is a section list
-  with a screen per section; system Back returns to the list, at the place you
-  left. The tab bar hides on the profile, bean and roaster editors. Nothing
-  changes above 600 px. Web.
+  Android) and a top bar with the Crema mark, the screen's title and its
+  actions, including a Devices sheet for the DE1 and scale. History opens a
+  shot on its own screen, and Settings is a section list with a screen per
+  section; system Back returns to the list, at the place you left. The tab bar
+  hides on the profile, bean and roaster editors. Nothing changes above 600 px.
+  Web.
+- **Android's Brew screen on the web at phone width** — one profile + bean
+  strip with its swap dropdown, a Ready card with the targets and the plan
+  curve, Android's Last-shot and Where-you-left-off cards, and the group,
+  steam, tank and scale row. The mode chips show their target under the label
+  (`148° · 12s`, `105ml · 80°`, `4s purge`) and a live counter while running,
+  and a shot shows the timer, yield bar and four channel cards over the chart.
+  Quick Controls has Android's Dial-in, Chart and Shot tabs, and ⋯ opens a
+  bottom sheet with Edit profile, the library and Sleep. Web.
 
 ## [0.10.0] — 2026-10-30
 

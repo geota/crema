@@ -139,4 +139,19 @@
 	.mc-head-status-text-btn:hover .mc-head-status-name {
 		text-decoration: underline;
 	}
+	/* Phone width: the small targets reach 44 px without growing the banner. */
+	@media (max-width: 600px) {
+		.mc-head-status-text-btn {
+			min-height: 44px;
+			margin: -12px 0;
+		}
+		.mc-head-status-dismiss {
+			position: relative;
+		}
+		.mc-head-status-dismiss::before {
+			content: '';
+			position: absolute;
+			inset: -11px;
+		}
+	}
 </style>

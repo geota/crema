@@ -15,6 +15,7 @@
 	import QuickSplitLabel from './QuickSplitLabel.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { getSettingsStore, formatTemp } from '#lib/settings/index.js';
 	import { celsius_to_fahrenheit as celsiusToFahrenheit } from '#lib/wasm/de1_wasm.js';
 
@@ -42,7 +43,7 @@
 	 *  has no pre-infusion segment. */
 	const preinfBounds = $derived(params.preinfusionBounds());
 	const tempChips = $derived(
-		[88, 91, 93, 95, 97].filter((t) => t >= tempBounds.min && t <= tempBounds.max)
+		(phoneLayout.current ? [90, 93, 95, 97] : [88, 91, 93, 95, 97]).filter((t) => t >= tempBounds.min && t <= tempBounds.max)
 	);
 	/**
 	 * "+x.x °C from profile": the dial's distance from the profile's own brew
@@ -66,10 +67,10 @@
 	     8 s brew-default, dimming the stepper + chips while off — the same
 	     affordance as the segment editor's optional groups. -->
 	<QuickSplitLabel
-		prefix="Brew"
+		prefix={phoneLayout.current ? undefined : 'Brew'}
 		options={[
-			{ id: 'temp', label: 'temp' },
-			{ id: 'preinf', label: 'pre-infuse' }
+			{ id: 'temp', label: phoneLayout.current ? 'Brew temp' : 'temp' },
+			{ id: 'preinf', label: phoneLayout.current ? 'Pre-inf' : 'pre-infuse' }
 		]}
 		value={p.brewMode}
 		onChange={(v) => params.set('brewMode', v as 'temp' | 'preinf')}
@@ -128,7 +129,7 @@
 			/>
 			<div style="height:6px"></div>
 			<QuickChipRow
-				options={[0, 4, 8, 12, 16].filter((v) => v <= preinfBounds.max)}
+				options={(phoneLayout.current ? [0, 4, 8, 12] : [0, 4, 8, 12, 16]).filter((v) => v <= preinfBounds.max)}
 				value={p.preinf}
 				name="Pre-infusion"
 				unit="s"

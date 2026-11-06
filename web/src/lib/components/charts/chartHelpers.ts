@@ -83,9 +83,11 @@ export function sharedAxes(opts: {
 	gridColor: string;
 	labelColor: string;
 	baseWindowSec: number;
+	/** Tighter gutters and labels, for a phone card under 150 px tall. */
+	compact?: boolean;
 }): uPlot.Axis[] {
-	const { gridColor, labelColor, baseWindowSec } = opts;
-	const font = '11px "JetBrains Mono", monospace';
+	const { gridColor, labelColor, baseWindowSec, compact = false } = opts;
+	const font = `${compact ? 9 : 11}px "JetBrains Mono", monospace`;
 	return [
 		{
 			scale: 'x',
@@ -93,6 +95,7 @@ export function sharedAxes(opts: {
 			grid: { stroke: gridColor, width: 1, dash: [2, 4] },
 			ticks: { show: false },
 			font,
+			...(compact ? { size: 18, gap: 2 } : {}),
 			splits: (u) => timeSplits((u.scales.x.max ?? baseWindowSec) as number),
 			values: (_u, splits) => splits.map((v) => `${v}s`)
 		},
@@ -104,7 +107,8 @@ export function sharedAxes(opts: {
 			grid: { stroke: gridColor, width: 1 },
 			ticks: { show: false },
 			font,
-			size: 34,
+			size: compact ? 22 : 34,
+			...(compact ? { gap: 2 } : {}),
 			values: (_u, splits) => splits.map((v) => `${v}`)
 		},
 		{
@@ -115,7 +119,8 @@ export function sharedAxes(opts: {
 			grid: { show: false },
 			ticks: { show: false },
 			font,
-			size: 38,
+			size: compact ? 26 : 38,
+			...(compact ? { gap: 2 } : {}),
 			values: (_u, splits) => splits.map((v) => `${v * 10}`)
 		}
 	];
