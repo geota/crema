@@ -131,6 +131,7 @@
 		peakPressureBar,
 		type ModeState
 	} from '#lib/brew/phone-brew.js';
+	import { rankBeansForPicker as rankForPicker } from '#lib/bean/picker.js';
 	import { pinActiveThenFavourite } from '#lib/library-order.js';
 	import PhoneBrewStrip, {
 		type StripBeanRow,
@@ -1286,8 +1287,11 @@
 		return parts.join(' · ');
 	});
 
-	/** Bean rows for the header's ▾ picker — all non-archived, favourites first. */
-	const beanPickerItems = $derived.by<PickerItem[]>(() => beanLibrary.beans.filter((b) => b.archivedAt == null).map((b) => {
+	/** Bean rows for the header's ▾ picker — all non-archived, in the core's order. */
+	const beanPickerItems = $derived.by<PickerItem[]>(() => rankForPicker(
+		beanLibrary.beans.filter((b) => b.archivedAt == null),
+		beanLibrary.activeBeanId
+	).map((b) => {
 		const r = b.roasterId
 			? beanLibrary.roasters.find((x) => x.id === b.roasterId) ?? null
 			: null;
@@ -1407,11 +1411,7 @@
 			}))
 	);
 	const stripBeans = $derived.by<StripBeanRow[]>(() =>
-		pinActiveThenFavourite(
-			beanLibrary.beans.filter((b) => b.archivedAt == null),
-			beanLibrary.activeBeanId,
-			(b) => b.favourite
-		)
+		rankForPicker(beanLibrary.beans.filter((b) => b.archivedAt == null), beanLibrary.activeBeanId)
 			.slice(0, 3)
 			.map((b) => {
 				const r = b.roasterId ? (beanLibrary.roasters.find((x) => x.id === b.roasterId) ?? null) : null;

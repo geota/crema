@@ -1675,6 +1675,19 @@ pub fn filter_beans(beans_json: &str, query_json: &str) -> Result<String, String
     de1_domain::filter_beans_json(beans_json, query_json)
 }
 
+/// The rows of a bean picker (geota/crema#301): which bags it lists and in
+/// what order. `beans_json` is a `Bean[]`, `roasters_json` a `Roaster[]`,
+/// `query_json` a `BeanPickerQuery`; returns a `BeanPickerResult`. See
+/// `de1_domain::bean_picker`.
+#[wasm_bindgen(js_name = beanPicker)]
+pub fn bean_picker(
+    beans_json: &str,
+    roasters_json: &str,
+    query_json: &str,
+) -> Result<String, String> {
+    de1_domain::bean_picker_json(beans_json, roasters_json, query_json)
+}
+
 /// The roaster-directory half of [`search_beans`] — same contract, over
 /// name / city / country / notes / website. See `de1_domain::search_roasters`.
 #[wasm_bindgen(js_name = searchRoasters)]

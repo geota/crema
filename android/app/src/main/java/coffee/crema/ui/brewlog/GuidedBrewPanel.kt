@@ -245,6 +245,8 @@ fun GuidedBrewPanel(
                             selectedId = brewBeanId,
                             doseG = recipe.doseG.toDouble(),
                             onPick = vm::selectGuidedBean,
+                            // resolve() swaps an archived pick for the active bag.
+                            allowArchived = false,
                         )
                     },
                     startOnPour = setup.startOnPour,

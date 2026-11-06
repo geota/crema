@@ -389,7 +389,11 @@
 			</div>
 			<!-- Bean, under the recipe picker (issue #10 feedback). -->
 			<div class="gb-bean">
-				<BrewBeanRow beanId={brewBeanId} onPick={(id) => session.pickBean(id)} />
+				<BrewBeanRow
+					beanId={brewBeanId}
+					allowArchived={false}
+					onPick={(id) => session.pickBean(id)}
+				/>
 				<BeanOverdrawNote bean={brewBean} dose={recipe.doseG} />
 			</div>
 			<ol class="gb-steps">
