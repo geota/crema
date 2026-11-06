@@ -22,7 +22,9 @@
 	let {
 		series,
 		height = 360,
-		compact = false
+		compact = false,
+		scaleFlow = false,
+		markerIndex = null
 	}: {
 		/** The stored shot-telemetry series, oldest first. */
 		series: readonly TelemetrySample[];
@@ -30,6 +32,10 @@
 		height?: number;
 		/** Tighter axis gutters, for the phone's Last-shot card. */
 		compact?: boolean;
+		/** Draw the scale's flow. History's detail chart sets this; Last shot doesn't. */
+		scaleFlow?: boolean;
+		/** Sample to mark with a vertical line and a dot per line, for the readout (#298). */
+		markerIndex?: number | null;
 	} = $props();
 
 	/**
@@ -70,6 +76,8 @@
 		// 0-10 scale by reading it as `ml / 10` (so 60 ml plots as 6 — same
 		// trick `temp / 10` uses).
 		const water: (number | null)[] = [];
+		// Scale flow (#297): g/s, raw on the left axis like the machine's flow.
+		const weightFlow: (number | null)[] = [];
 		const showResistance = settings.current.showResistance;
 		for (const s of samples) {
 			xs.push(s.elapsed / 1000);
@@ -97,8 +105,68 @@
 			goalFlow.push(s.setGroupFlow ?? null);
 			goalTemp.push(s.setHeadTemp == null ? null : s.setHeadTemp / 10);
 			water.push(s.dispensedVolume == null ? null : s.dispensedVolume / 10);
+			weightFlow.push(scaleFlow ? (s.weightFlow ?? null) : null);
 		}
-		return [xs, pressure, flow, temp, weight, resistance, goalPressure, goalFlow, goalTemp, water];
+		return [
+			xs,
+			pressure,
+			flow,
+			temp,
+			weight,
+			resistance,
+			goalPressure,
+			goalFlow,
+			goalTemp,
+			water,
+			weightFlow
+		];
+	}
+
+	/** The `toData` columns the marker puts a dot on: every solid line. */
+	const MARKER_COLUMNS: readonly (readonly [column: number, token: string])[] = [
+		[1, '--tel-pressure'],
+		[2, '--tel-flow'],
+		[3, '--tel-temp'],
+		[4, '--tel-weight'],
+		[5, '--tel-resistance'],
+		[9, '--tel-flow-2'],
+		[10, '--tel-weight-2']
+	];
+
+	/** uPlot plugin: the readout's vertical line and its dots, over the series. */
+	function markerPlugin(): uPlot.Plugin {
+		return {
+			hooks: {
+				draw: (u: uPlot) => {
+					const i = markerIndex;
+					const t = i === null ? undefined : u.data[0][i];
+					if (i === null || t === undefined) return;
+					const { top, height: h } = u.bbox;
+					const x = u.valToPos(t, 'x', true);
+					const ctx = u.ctx;
+					ctx.save();
+					ctx.setLineDash([]);
+					ctx.strokeStyle = cssVar('--copper-500');
+					ctx.lineWidth = 1.5 * devicePixelRatio;
+					ctx.beginPath();
+					ctx.moveTo(x, top);
+					ctx.lineTo(x, top + h);
+					ctx.stroke();
+					for (const [column, token] of MARKER_COLUMNS) {
+						const v = u.data[column][i];
+						if (v == null) continue;
+						const y = u.valToPos(v, 'y', true);
+						// A spike past the axis cap is clipped; so is its dot.
+						if (y < top || y > top + h) continue;
+						ctx.beginPath();
+						ctx.fillStyle = cssVar(token);
+						ctx.arc(x, y, 3.5 * devicePixelRatio, 0, Math.PI * 2);
+						ctx.fill();
+					}
+					ctx.restore();
+				}
+			}
+		};
 	}
 
 	/** uPlot plugin: the four horizontal grid lines, behind the series. */
@@ -220,9 +288,16 @@
 					stroke: () => cssVar('--tel-flow-2'),
 					width: 1.5,
 					points: { show: false }
+				},
+				// Scale flow — thin solid line beside the machine's flow.
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-weight-2'),
+					width: 1.5,
+					points: { show: false }
 				}
 			],
-			plugins: [gridPlugin()]
+			plugins: [gridPlugin(), markerPlugin()]
 		};
 	}
 
@@ -280,6 +355,24 @@
 	$effect(() => {
 		chart?.setSize({ width: chart.width, height });
 	});
+
+	// Move the marker without rebuilding paths.
+	$effect(() => {
+		markerIndex;
+		chart?.redraw(false);
+	});
+
+	/**
+	 * The shot time, in ms, under a client x. Clamped to the plot, so a drag
+	 * past either edge holds at that edge.
+	 */
+	export function elapsedAtClientX(clientX: number): number | null {
+		if (!chart) return null;
+		const rect = chart.over.getBoundingClientRect();
+		const x = Math.min(Math.max(clientX - rect.left, 0), rect.width);
+		const sec = chart.posToVal(x, 'x');
+		return Number.isFinite(sec) ? sec * 1000 : null;
+	}
 
 	// Repaint on theme flip — axis/grid colours are baked into `buildOpts` at
 	// creation, so rebuild the instance against the new tokens.

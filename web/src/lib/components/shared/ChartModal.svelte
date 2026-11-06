@@ -77,6 +77,7 @@
 		position: absolute;
 		top: var(--space-2, 8px);
 		right: var(--space-2, 8px);
+		z-index: 1; /* above the body, which comes later in the DOM */
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;

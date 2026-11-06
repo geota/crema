@@ -54,7 +54,8 @@
 	import TagInput from '#lib/components/profiles/TagInput.svelte';
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
-	import StaticShotChart from './StaticShotChart.svelte';
+	import InspectableShotChart from './InspectableShotChart.svelte';
+	import { CHANNEL_META, drawnChannels, type ChartChannel } from '#lib/history/chart-readout.js';
 	import ChartModal from '#lib/components/shared/ChartModal.svelte';
 	import BeanPicker from './BeanPicker.svelte';
 	import HeaderBlock from '#lib/components/brew/HeaderBlock.svelte';
@@ -281,6 +282,16 @@
 	const peaks = $derived(peaksOf(shot));
 	/** Flat chart-friendly samples — derived from `shot.record.samples`. */
 	const flatSeries = $derived(flatSamplesOf(shot));
+	/** The phone legend's labels, Android's `PhoneShotDetail` copy. */
+	const PHONE_LEGEND: Readonly<Record<ChartChannel, string>> = {
+		pressure: 'Press',
+		flow: 'Flow',
+		temp: 'Temp',
+		weight: 'Weight',
+		scaleFlow: 'Scale flow',
+		water: 'Water',
+		resistance: 'Resistance'
+	};
 	/** Settled yield, grams — recorded `yieldOut` (post-drip) else peak (#64). */
 	const yieldOut = $derived(yieldOf(shot, peaks));
 
@@ -345,6 +356,10 @@
 
 	// Unit-aware metric readouts — driven by the Settings unit prefs (D1).
 	const settings = getSettingsStore();
+	/** The solid lines this shot draws; the legends and the readout follow it. */
+	const chartChannels = $derived(
+		drawnChannels(flatSeries, { showResistance: settings.current.showResistance })
+	);
 	// Default upload privacy now lives in the Visualizer sync-config; mirror it
 	// reactively so the "Default · …" chip tracks a Settings → Sharing change.
 	let defaultPrivacy = $state(readSyncConfig().privacy);
@@ -810,10 +825,6 @@
 	}
 </script>
 
-	{#snippet shotChart(height: number)}
-		<StaticShotChart series={flatSeries} {height} />
-	{/snippet}
-
 {#snippet qualityCard()}
 	<!-- Shot quality — the core's Decenza-port analysis of the stored
 	     curves: badge chips, the verdict line, then the prose
@@ -1057,19 +1068,17 @@
 			{#if shot.record.samples.length > 0}
 				<div class="pshot-chart">
 					<div class="pshot-legend">
-						{@render chartLegendDot('Press', 'var(--tel-pressure)')}
-						{@render chartLegendDot('Flow', 'var(--tel-flow)')}
-						{@render chartLegendDot('Temp', 'var(--tel-temp)')}
-						{@render chartLegendDot('Weight', 'var(--tel-weight)')}
+						{#each chartChannels as channel (channel)}
+							{@render chartLegendDot(PHONE_LEGEND[channel], CHANNEL_META[channel].color)}
+						{/each}
 					</div>
 					<div class="pshot-plot">
-						<StaticShotChart series={flatSeries} height={190} />
-						<button
-							type="button"
-							class="pshot-expand"
-							aria-label="Enlarge chart"
-							onclick={() => (chartExpanded = true)}
-						></button>
+						<InspectableShotChart
+							series={flatSeries}
+							channels={chartChannels}
+							height={190}
+							onexpand={() => (chartExpanded = true)}
+						/>
 						{#if expandHint}
 							<span class="pshot-hint" transition:fade={{ duration: 450 }}>
 								<ArrowsOutIcon aria-hidden="true" /> Tap to expand
@@ -1390,7 +1399,13 @@
 		{/if}
 	{:else}
 	<div class="hi-chart">
-		{@render shotChart(380)}
+		<InspectableShotChart
+			series={flatSeries}
+			channels={chartChannels}
+			height={380}
+			onexpand={() => (chartExpanded = true)}
+			externalExpand
+		/>
 		<button
 			type="button"
 			class="hi-chart-expand"
@@ -1403,35 +1418,42 @@
 		<!--
 			Legend grouped into 4 channel families — mirrors the brew
 			dashboard's Quick Controls "Chart" toggle layout. Each group
-			carries the channel's icon and labels both the primary trace
-			(solid) and the paired secondary trace (also solid, in the
-			lighter sibling color). The static chart plots every series
-			whose data is non-null, so the legend names them all.
+			carries the channel's icon and names the lines this shot draws,
+			so a shot with no scale has no scale group.
 		-->
 		<div class="hi-chart-legend">
 			<span class="hi-leg-group">
 				<GaugeIcon class="hi-leg-icon" aria-hidden="true" />
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-pressure)"></i>Pressure</span>
-				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-pressure-2)"></i>Resistance</span>
+				{#if chartChannels.includes('resistance')}
+					<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-resistance)"></i>Resistance</span>
+				{/if}
 			</span>
 			<span class="hi-leg-rule" aria-hidden="true"></span>
 			<span class="hi-leg-group">
 				<DropIcon class="hi-leg-icon" aria-hidden="true" />
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-flow)"></i>Flow</span>
-				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-flow-2)"></i>Water</span>
+				{#if chartChannels.includes('water')}
+					<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-flow-2)"></i>Water</span>
+				{/if}
 			</span>
 			<span class="hi-leg-rule" aria-hidden="true"></span>
 			<span class="hi-leg-group">
 				<ThermometerIcon class="hi-leg-icon" aria-hidden="true" />
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-temp)"></i>Coffee</span>
-				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-temp-2)"></i>Water</span>
 			</span>
-			<span class="hi-leg-rule" aria-hidden="true"></span>
-			<span class="hi-leg-group">
-				<ScalesIcon class="hi-leg-icon" aria-hidden="true" />
-				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight)"></i>Weight</span>
-				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight-2)"></i>Flow</span>
-			</span>
+			{#if chartChannels.includes('weight') || chartChannels.includes('scaleFlow')}
+				<span class="hi-leg-rule" aria-hidden="true"></span>
+				<span class="hi-leg-group">
+					<ScalesIcon class="hi-leg-icon" aria-hidden="true" />
+					{#if chartChannels.includes('weight')}
+						<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight)"></i>Weight</span>
+					{/if}
+					{#if chartChannels.includes('scaleFlow')}
+						<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight-2)"></i>Scale flow</span>
+					{/if}
+				</span>
+			{/if}
 		</div>
 	</div>
 	{/if}
@@ -1594,7 +1616,7 @@
 
 {#if chartExpanded}
 	<ChartModal onclose={() => (chartExpanded = false)}>
-		{@render shotChart(700)}
+		<InspectableShotChart series={flatSeries} channels={chartChannels} expanded />
 	</ChartModal>
 {/if}
 
@@ -1648,6 +1670,7 @@
 
 
 	.hi-chart {
+		--readout-inset-end: 30px;
 		background: var(--bg-page);
 		border-radius: var(--radius-md);
 		padding: 14px 14px 10px;
@@ -2090,8 +2113,7 @@
 			color: var(--fg-3);
 		}
 		.pshot-strip:focus-visible,
-		.pshot-btn:focus-visible,
-		.pshot-expand:focus-visible {
+		.pshot-btn:focus-visible {
 			outline: none;
 			box-shadow: var(--shadow-focus);
 		}
@@ -2151,7 +2173,8 @@
 		}
 		.pshot-legend {
 			display: flex;
-			gap: 10px;
+			flex-wrap: wrap;
+			gap: 2px 10px;
 			padding: 0 0 4px 10px;
 		}
 		.pshot-leg {
@@ -2172,14 +2195,6 @@
 		}
 		.pshot-plot {
 			position: relative;
-		}
-		.pshot-expand {
-			position: absolute;
-			inset: 0;
-			border: 0;
-			border-radius: 8px;
-			background: transparent;
-			cursor: zoom-in;
 		}
 		.pshot-hint {
 			position: absolute;

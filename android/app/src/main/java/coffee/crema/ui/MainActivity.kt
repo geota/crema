@@ -81,6 +81,7 @@ import coffee.crema.ui.screens.BrewScreen
 import coffee.crema.ui.components.SaverOverlay
 import coffee.crema.ui.components.RemoteStatusChip
 import coffee.crema.ui.screens.ChartExpandOverlay
+import coffee.crema.ui.screens.ExpandedChart
 import coffee.crema.ui.screens.LocalChartExpander
 import coffee.crema.ui.screens.HistoryScreen
 import coffee.crema.ui.screens.ProfileEditScreen
@@ -389,7 +390,7 @@ class MainActivity : ComponentActivity() {
                 // A deep EnlargeableChart hands its chart up here so the fullscreen
                 // expanded view lives in the main window — a Dialog's window is torn
                 // down by the expand-to-landscape rotation, bouncing it closed.
-                var fullscreenChart by remember { mutableStateOf<(@Composable (Modifier) -> Unit)?>(null) }
+                var fullscreenChart by remember { mutableStateOf<ExpandedChart?>(null) }
                 CompositionLocalProvider(LocalChartExpander provides { c -> fullscreenChart = c }) {
                 Box(Modifier.fillMaxSize()) {
                 // ONE adaptive APK. The tablet rail layout is multi-pane (rail +
