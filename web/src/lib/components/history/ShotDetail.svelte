@@ -62,7 +62,9 @@
 	import { requestDialIn } from '#lib/components/brew/dial-in.svelte.js';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
+	import type { Attachment } from 'svelte/attachments';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import PhoneOverflowSheet, { type OverflowItem } from '#lib/shell/PhoneOverflowSheet.svelte';
 	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
@@ -80,7 +82,7 @@
 	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
 
 	let {
-		shot,
+		shot: shotProp,
 		onNotesChange,
 		onNextPlanChange,
 		onRatingChange,
@@ -100,55 +102,55 @@
 		onManualBrewEdit = null,
 		phoneMenuOpen = $bindable(false)
 	}: {
-		/** The selected stored shot. */
-		shot: StoredShot;
+		/** The selected stored shot. See {@link shot} for why it isn't read directly. */
+		shot: StoredShot | null;
 		/** Persist edited tasting notes. */
-		onNotesChange: (notes: string) => void;
+		onNotesChange: (id: string, notes: string) => void;
 		/** Persist the edited forward-looking "next time" plan. */
-		onNextPlanChange: (nextPlan: string) => void;
+		onNextPlanChange: (id: string, nextPlan: string) => void;
 		/** Persist an edited star rating. */
-		onRatingChange: (rating: number) => void;
+		onRatingChange: (id: string, rating: number) => void;
 		/**
 		 * Persist a per-shot Visualizer privacy override; `null` reverts to
 		 * the `Settings.visualizerPrivacy` default.
 		 */
-		onPrivacyChange: (privacy: 'public' | 'unlisted' | 'private' | null) => void;
+		onPrivacyChange: (id: string, privacy: 'public' | 'unlisted' | 'private' | null) => void;
 		/**
 		 * Persist an edited equipment-level grinder model. `null` clears
 		 * the override (cascade re-engages → settings default), a string
 		 * sets a shot-specific override.
 		 */
-		onGrinderModelChange: (grinderModel: string | null) => void;
+		onGrinderModelChange: (id: string, grinderModel: string | null) => void;
 		/**
 		 * Persist who made (`barista`) or drank (`drinker`) the shot. `null`
 		 * clears it.
 		 */
-		onPersonChange: (field: 'barista' | 'drinker', name: string | null) => void;
+		onPersonChange: (id: string, field: 'barista' | 'drinker', name: string | null) => void;
 		/** Barista names used before, most recent first. */
 		baristaSuggestions?: readonly string[];
 		/** Drinker names used before, most recent first. */
 		drinkerSuggestions?: readonly string[];
 		/** Persist edited shot-level tags. */
-		onTagsChange: (tags: string[]) => void;
+		onTagsChange: (id: string, tags: string[]) => void;
 		/**
 		 * Persist the grind THIS shot was pulled at (issue #16) — the
 		 * detail's grind stepper. Writes the per-shot value; display and
 		 * the Visualizer wire fall back to the bean snapshot when unset.
 		 */
-		onGrindChange: (grinderSetting: string | null) => void;
+		onGrindChange: (id: string, grinderSetting: string | null) => void;
 		/**
 		 * Retroactively (re)bind the shot to a live bean — caller wraps
 		 * `HistoryStore.setBeanFromLive` so the shared `snapshotFromBean`
 		 * helper handles the live → snapshot mapping. Passing `null`
 		 * clears the binding (shot becomes bean-less).
 		 */
-		onBeanChange: (bean: Bean | null, roaster: Roaster | null) => void;
+		onBeanChange: (id: string, bean: Bean | null, roaster: Roaster | null) => void;
 		/**
 		 * Delete this shot. `remote: false` removes it from the local
 		 * history only; `remote: true` also pushes a DELETE to Visualizer.
 		 * Optional — the delete control is hidden when not supplied.
 		 */
-		onDelete?: (opts: { remote: boolean }) => void;
+		onDelete?: (id: string, opts: { remote: boolean }) => void;
 		/**
 		 * Whether the "delete on Visualizer too" option is available — the
 		 * shot is uploaded (`visualizerId` set) and Visualizer push is on.
@@ -168,23 +170,37 @@
 		 * the shot this is a RE-upload (Visualizer de-dupes by telemetry
 		 * SHA; Decent replaces its copy). `null` = nothing to upload with.
 		 */
-		onUpload?: ((targets: UploadTarget[]) => void) | null;
+		onUpload?: ((id: string, targets: UploadTarget[]) => void) | null;
 		/**
 		 * Re-open the Log-brew form seeded from this brew, dated now —
 		 * the Brew Log's sibling of "Start from this shot" (issue #10).
 		 * Only rendered for brew rows.
 		 */
-		onLogAgain?: (() => void) | null;
+		onLogAgain?: ((id: string) => void) | null;
 		/**
 		 * Persist an edited user-entered fact of a MANUAL brew row
 		 * (dose / water / temp / time). The caller re-settles bean
 		 * inventory on dose changes. `null` (or a non-manual row)
 		 * renders the facts read-only.
 		 */
-		onManualBrewEdit?: ((patch: ManualBrewPatch) => void) | null;
+		onManualBrewEdit?: ((id: string, patch: ManualBrewPatch) => void) | null;
 		/** The phone arrangement's ⋮ sheet. The top bar's button opens it. */
 		phoneMenuOpen?: boolean;
 	} = $props();
+
+	/**
+	 * The shot this instance is for, fixed at mount. The parent keys the detail
+	 * on the shot, but a focused field commits as it leaves the page, after
+	 * the parent's selection has moved on or gone: Back, a filter change, a
+	 * rotation. So every edit below reports this id, and {@link shot} stays on
+	 * this shot's last known record rather than following the prop to another.
+	 */
+	const shotId = untrack(() => (shotProp as StoredShot).id);
+	let lastShot = untrack(() => shotProp as StoredShot);
+	const shot = $derived.by(() => {
+		if (shotProp?.id === shotId) lastShot = shotProp;
+		return lastShot;
+	});
 
 	const uploadEntry = $derived(uploadMenuEntry(uploadTargets));
 	const viewRows = $derived(viewableTargets(uploadTargets));
@@ -358,7 +374,7 @@
 		const next = trimmed.length > 0 ? trimmed : null;
 		// Only persist on real changes so a click-and-blur doesn't churn.
 		if ((shot.grinderModel ?? null) === next) return;
-		onGrinderModelChange(next);
+		onGrinderModelChange(shotId, next);
 	}
 
 	// ── Barista / drinker (dye2 audit #1) ─────────────────────────────────
@@ -367,7 +383,7 @@
 	function commitPerson(field: 'barista' | 'drinker', raw: string): void {
 		const next = raw.trim() || null;
 		if ((shot.metadata[field] ?? null) === next) return;
-		onPersonChange(field, next);
+		onPersonChange(shotId, field, next);
 	}
 
 	// ── Header blocks (issue #16 round 4) — the Brew page's profile/bean
@@ -430,7 +446,7 @@
 	});
 	function commitGrind(v: number): void {
 		const fmt = Number.isInteger(v) ? String(v) : v.toFixed(1);
-		onGrindChange(fmt);
+		onGrindChange(shotId, fmt);
 	}
 
 	/** Open the notes editor, seeding the draft from the current notes. */
@@ -440,7 +456,7 @@
 	}
 	/** Save the draft notes and leave edit mode. */
 	function saveNotes(): void {
-		onNotesChange(draft);
+		onNotesChange(shotId, draft);
 		editing = false;
 	}
 
@@ -456,7 +472,7 @@
 	}
 	/** Save the draft plan and leave edit mode. */
 	function savePlan(): void {
-		onNextPlanChange(planDraft);
+		onNextPlanChange(shotId, planDraft);
 		planEditing = false;
 	}
 
@@ -464,7 +480,7 @@
 	const rating = $derived(shot.metadata.rating ?? 0);
 	/** Set the star rating (clicking the same star again clears it). */
 	function setStar(n: number): void {
-		onRatingChange(rating === n ? 0 : n);
+		onRatingChange(shotId, rating === n ? 0 : n);
 	}
 
 	/**
@@ -618,7 +634,44 @@
 		if (target.viewUrl) window.open(target.viewUrl, '_blank', 'noopener');
 	}
 
+	/**
+	 * Commit a text field on `change`, and as it leaves the page with text in
+	 * it: Back or a rotation takes the field away mid-edit, and whether a removed
+	 * element fires `change` is up to the browser. Each value commits once.
+	 */
+	function commitField(
+		stored: () => string,
+		commit: (value: string) => void
+	): Attachment<HTMLInputElement | HTMLTextAreaElement> {
+		return (node) => {
+			let last = node.value;
+			const flush = (): void => {
+				const value = node.value;
+				const unchanged = value === last || value === stored();
+				last = value;
+				// In a microtask: removing a focused field fires `change` in the
+				// middle of Svelte's teardown, where state writes are forbidden.
+				if (!unchanged) queueMicrotask(() => commit(value));
+			};
+			node.addEventListener('change', flush);
+			return () => {
+				node.removeEventListener('change', flush);
+				flush();
+			};
+		};
+	}
+
 	// ── Phone arrangement ────────────────────────────────────────────────
+	/**
+	 * The ⋮ sheet's state lives in the page, which outlives this shot: close it
+	 * with the arrangement, or the next shot would open on its Delete rows.
+	 */
+	function closePhoneMenuOnLeave(): () => void {
+		return () => {
+			// In a microtask: state writes are forbidden during Svelte's teardown.
+			if (phoneMenuOpen) queueMicrotask(() => (phoneMenuOpen = false));
+		};
+	}
 	const detailTitle = $derived(
 		isBrew
 			? (shot.recipeName ?? methodLabel(method, shot.brewMethodLabel)) + (manual ? ' · logged' : '')
@@ -647,7 +700,7 @@
 						sub: 'From this device. Anything uploaded stays there.',
 						danger: true,
 						dividerAbove: true,
-						onclick: () => onDelete?.({ remote: false })
+						onclick: () => onDelete?.(shotId, { remote: false })
 					},
 					{
 						id: 'delete-remote',
@@ -658,7 +711,7 @@
 							: 'Unavailable — this shot is not on Visualizer, or sync is off / signed out.',
 						danger: true,
 						disabled: !canDeleteRemote,
-						onclick: () => onDelete?.({ remote: true })
+						onclick: () => onDelete?.(shotId, { remote: true })
 					}
 				]
 			: [];
@@ -713,7 +766,7 @@
 				label: uploadEntry.title,
 				sub: uploadEntry.sub,
 				disabled: !uploadEntry.enabled || !onUpload,
-				onclick: () => onUpload?.(uploadEntry.targets)
+				onclick: () => onUpload?.(shotId, uploadEntry.targets)
 			},
 			...viewRows.map((t): OverflowItem =>
 				t.shareable
@@ -744,11 +797,11 @@
 		pickerOpen = false;
 	}
 	function pickBean(bean: Bean, roaster: Roaster | null): void {
-		onBeanChange(bean, roaster);
+		onBeanChange(shotId, bean, roaster);
 		pickerOpen = false;
 	}
 	function clearBean(): void {
-		onBeanChange(null, null);
+		onBeanChange(shotId, null, null);
 		pickerOpen = false;
 	}
 </script>
@@ -818,7 +871,7 @@
 							const raw = e.currentTarget.value.trim();
 							const m = /^(\d+):([0-5]?\d)$/.exec(raw);
 							const secs = m ? Number(m[1]) * 60 + Number(m[2]) : Number(raw);
-							onManualBrewEdit?.({
+							onManualBrewEdit?.(shotId, {
 								durationMs:
 									Number.isFinite(secs) && secs > 0 ? Math.round(secs * 1000) : null
 							});
@@ -839,7 +892,7 @@
 						min={0}
 						max={200}
 						step={0.5}
-						onChange={(n) => onManualBrewEdit?.({ dose: n > 0 ? n : null })}
+						onChange={(n) => onManualBrewEdit?.(shotId, { dose: n > 0 ? n : null })}
 					/>
 				{:else}
 					<div class="hi-metric-v">
@@ -858,6 +911,7 @@
 						step={method === 'espresso' ? 1 : 10}
 						onChange={(n) =>
 							onManualBrewEdit?.(
+								shotId,
 								method === 'espresso'
 									? { yieldOut: n > 0 ? n : null }
 									: { waterG: n > 0 ? n : null }
@@ -880,7 +934,7 @@
 						min={0}
 						max={100}
 						step={1}
-						onChange={(n) => onManualBrewEdit?.({ brewTempC: n > 0 ? n : null })}
+						onChange={(n) => onManualBrewEdit?.(shotId, { brewTempC: n > 0 ? n : null })}
 					/>
 				{:else}
 					<div class="hi-metric-v">
@@ -897,7 +951,7 @@
 		<TagInput
 			tags={shot.tags ?? []}
 			suggestions={tagSuggestions}
-			onChange={onTagsChange}
+			onChange={(tags) => onTagsChange(shotId, tags)}
 		/>
 	</div>
 {/snippet}
@@ -911,8 +965,7 @@
 			type="text"
 			placeholder={grinderPlaceholder}
 			value={shot.grinderModel ?? ''}
-			onchange={(e) => commitGrinderModel((e.currentTarget as HTMLInputElement).value)}
-			onblur={(e) => commitGrinderModel((e.currentTarget as HTMLInputElement).value)}
+			{@attach commitField(() => shot.grinderModel ?? '', commitGrinderModel)}
 		/>
 		<span class="hi-grinder-hint">
 			{shot.grinderModel
@@ -937,8 +990,10 @@
 					list={`hi-${field}-names`}
 					placeholder={field === 'barista' ? 'Who made it' : 'Who drank it'}
 					value={shot.metadata[field] ?? ''}
-					onchange={(e) => commitPerson(field, (e.currentTarget as HTMLInputElement).value)}
-					onblur={(e) => commitPerson(field, (e.currentTarget as HTMLInputElement).value)}
+					{@attach commitField(
+						() => shot.metadata[field] ?? '',
+						(value) => commitPerson(field, value)
+					)}
 				/>
 				<datalist id={`hi-${field}-names`}>
 					{#each p.names as name (name)}
@@ -957,7 +1012,7 @@
 					class="hi-privacy-chip"
 					class:is-on={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
 					aria-pressed={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
-					onclick={() => onPrivacyChange(shot.privacy === p ? null : p)}
+					onclick={() => onPrivacyChange(shotId, shot.privacy === p ? null : p)}
 					title={shot.privacy == null && defaultPrivacy === p
 						? 'Following the Settings → Sharing default'
 						: undefined}
@@ -976,7 +1031,7 @@
 	<!-- Android's `PhoneShotDetail`: the strip, the chart, the metrics, the
 	     quality report, the journal, and the two foot actions. The rest of the
 	     wide header's actions ride the bar's ⋮ sheet. Same handlers. -->
-	<div class="pshot">
+	<div class="pshot" {@attach closePhoneMenuOnLeave}>
 		<div class="pshot-body">
 			<button
 				type="button"
@@ -1090,7 +1145,10 @@
 						rows="3"
 						placeholder="How did it taste?"
 						value={shot.metadata.notes ?? ''}
-						onchange={(e) => onNotesChange(e.currentTarget.value)}
+						{@attach commitField(
+							() => shot.metadata.notes ?? '',
+							(value) => onNotesChange(shotId, value)
+						)}
 					></textarea>
 				</label>
 				<label class="pshot-field">
@@ -1099,7 +1157,10 @@
 						rows="2"
 						placeholder={isBrew ? 'What will you change next time?' : 'What will you change next shot?'}
 						value={shot.metadata.nextPlan ?? ''}
-						onchange={(e) => onNextPlanChange(e.currentTarget.value)}
+						{@attach commitField(
+							() => shot.metadata.nextPlan ?? '',
+							(value) => onNextPlanChange(shotId, value)
+						)}
 					></textarea>
 				</label>
 				{@render tagsField()}
@@ -1116,7 +1177,7 @@
 		<div class="pshot-foot">
 			{#if isBrew}
 				{#if onLogAgain}
-					<button type="button" class="pshot-btn" onclick={onLogAgain}>
+					<button type="button" class="pshot-btn" onclick={() => onLogAgain?.(shotId)}>
 						<ArrowCounterClockwiseIcon aria-hidden="true" /> Log again
 					</button>
 				{/if}
@@ -1204,7 +1265,7 @@
 				{#if onLogAgain}
 					<button
 						class="st-btn st-btn-primary"
-						onclick={onLogAgain}
+						onclick={() => onLogAgain?.(shotId)}
 						title="Log another brew with these settings — same method, bean, dose and water"
 					>
 						<Icon cls="ph ph-arrow-counter-clockwise" aria-hidden="true" />
@@ -1245,7 +1306,7 @@
 						title: uploadEntry.title,
 						sub: uploadEntry.sub,
 						disabled: !uploadEntry.enabled || !onUpload,
-						onclick: () => onUpload?.(uploadEntry.targets)
+						onclick: () => onUpload?.(shotId, uploadEntry.targets)
 					},
 					// Share = the public link to an uploaded copy: one row when the
 					// shot is on one destination, one per destination when on both.
@@ -1276,7 +1337,7 @@
 					icon="ph ph-trash"
 					label="Delete"
 					title="Delete this shot from your local history"
-					onPrimary={() => onDelete?.({ remote: false })}
+					onPrimary={() => onDelete?.(shotId, { remote: false })}
 					caretAriaLabel="Choose delete scope"
 					menuHead="Delete shot"
 					items={[
@@ -1284,7 +1345,7 @@
 							icon: 'ph-duotone ph-device-mobile',
 							title: 'Delete from this device',
 							sub: 'Removes the shot from your local history. Anything uploaded to Visualizer stays there.',
-							onclick: () => onDelete?.({ remote: false })
+							onclick: () => onDelete?.(shotId, { remote: false })
 						},
 						{
 							icon: 'ph-duotone ph-cloud-slash',
@@ -1293,7 +1354,7 @@
 								? 'Removes it locally and deletes the uploaded copy from Visualizer too.'
 								: 'Unavailable — this shot is not on Visualizer, or sync is off / signed out.',
 							disabled: !canDeleteRemote,
-							onclick: () => onDelete?.({ remote: true })
+							onclick: () => onDelete?.(shotId, { remote: true })
 						}
 					]}
 				/>

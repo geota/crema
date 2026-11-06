@@ -43,12 +43,12 @@ describe('phone list → detail navigation', () => {
 			page.url = new URL('http://localhost/beans?tab=bags&roaster=r1');
 		});
 
-		it('pushes a shallow entry naming the bag, keeping the list URL', () => {
+		it('pushes an entry naming the bag, not a shallow one, keeping the list URL', () => {
 			openBean('bean:1');
 			expect(gotoMock).toHaveBeenCalledExactlyOnceWith('http://localhost/beans?tab=bags&roaster=r1', {
 				state: { beanDetail: 'bean:1' },
-				shallow: true,
-				persistState: true
+				persistState: true,
+				reset: false
 			});
 		});
 
@@ -69,12 +69,12 @@ describe('phone list → detail navigation', () => {
 	});
 
 	describe('History', () => {
-		it('pushes a shallow entry naming the shot at phone width', () => {
+		it('pushes an entry naming the shot, not a shallow one at phone width', () => {
 			openShot('shot:1');
 			expect(gotoMock).toHaveBeenCalledExactlyOnceWith('http://localhost/history', {
 				state: { historyShot: 'shot:1' },
-				shallow: true,
-				persistState: true
+				persistState: true,
+				reset: false
 			});
 		});
 

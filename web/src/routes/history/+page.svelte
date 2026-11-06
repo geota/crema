@@ -77,7 +77,7 @@
 		filterScopeKey,
 		type SelectionPin
 	} from '#lib/history/index.js';
-	import type { StoredShot } from '#lib/history/index.js';
+	import type { ManualBrewPatch, StoredShot } from '#lib/history/index.js';
 	import { ShotRow, ShotDetail, CompareOverlay } from '#lib/components/history/index.js';
 	import PhoneShotRow from '#lib/components/history/PhoneShotRow.svelte';
 	import { groupShots } from '#lib/history/phone-list.js';
@@ -92,7 +92,7 @@
 	import FilterPills from '#lib/components/shared/FilterPills.svelte';
 	import SortPill from '#lib/components/shared/SortPill.svelte';
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
-	import { getBeanStore } from '#lib/bean/index.js';
+	import { getBeanStore, type Bean, type Roaster } from '#lib/bean/index.js';
 	import { onMount, untrack } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { readQueue } from '#lib/services/queue-store.js';
@@ -522,6 +522,83 @@
 		}
 	}
 
+	// ── The detail's edits ───────────────────────────────────────────────
+	// All by the id `ShotDetail` was rendered for, never `selected`: a field
+	// can commit while its screen is going, after `selected` has moved on (or
+	// gone) with a Back, a filter change or a rotation.
+	function saveNotes(id: string, notes: string): void {
+		store.setNotes(id, notes);
+		syncEditToVisualizer(id);
+		scheduleDecentReplaceAfterEdit(id);
+	}
+	function saveRating(id: string, rating: number): void {
+		store.setRating(id, rating);
+		syncEditToVisualizer(id);
+		scheduleDecentReplaceAfterEdit(id);
+	}
+	function savePrivacy(id: string, privacy: StoredShot['privacy']): void {
+		store.setPrivacy(id, privacy ?? null);
+		syncEditToVisualizer(id);
+	}
+	function saveGrinderModel(id: string, grinderModel: string | null): void {
+		store.setGrinderModel(id, grinderModel);
+		syncEditToVisualizer(id);
+		scheduleDecentReplaceAfterEdit(id);
+	}
+	function savePerson(id: string, field: 'barista' | 'drinker', name: string | null): void {
+		store.setPerson(id, field, name);
+		// Visualizer has a barista field but no drinker; the Decent record
+		// carries both.
+		if (field === 'barista') syncEditToVisualizer(id, { baristaChanged: true });
+		scheduleDecentReplaceAfterEdit(id);
+	}
+	function saveTags(id: string, tags: string[]): void {
+		store.setTags(id, tags);
+		syncEditToVisualizer(id);
+	}
+	function saveGrind(id: string, grinderSetting: string | null): void {
+		store.setGrindSetting(id, grinderSetting);
+		syncEditToVisualizer(id);
+		scheduleDecentReplaceAfterEdit(id);
+	}
+	function saveBean(id: string, bean: Bean | null, roaster: Roaster | null): void {
+		const shot = store.get(id);
+		if (!shot) return;
+		// Move the bag debit with the attribution (Android setShotBean parity):
+		// credit the wrongly-billed old bag, debit the new one, using the dose
+		// the shot recorded. Same-bean picks change nothing.
+		const oldBeanId = shot.bean?.beanId ?? null;
+		const newBeanId = bean?.id ?? null;
+		const dose = shot.metadata?.dose;
+		if (oldBeanId !== newBeanId && dose != null && dose > 0) {
+			if (oldBeanId) beanLibrary.creditBean(oldBeanId, dose);
+			if (newBeanId) beanLibrary.debitBean(newBeanId, dose);
+		}
+		store.setBeanFromLive(id, bean, roaster);
+		syncEditToVisualizer(id);
+		scheduleDecentReplaceAfterEdit(id);
+	}
+	function saveManualBrew(id: string, patch: ManualBrewPatch): void {
+		const shot = store.get(id);
+		if (!shot) return;
+		// Manual rows keep their facts editable; a dose change re-settles the
+		// bag through the core rule (credit old, debit new — a no-op when the
+		// dose is unchanged).
+		const beanId = shot.bean?.beanId ?? null;
+		if (patch.dose !== undefined && beanId) {
+			beanLibrary.resettleBean(beanId, shot.metadata.dose ?? null, patch.dose);
+		}
+		store.updateManualBrew(id, patch);
+	}
+	function deleteById(id: string, opts: { remote: boolean }): void {
+		const shot = store.get(id);
+		if (shot) void handleDelete(shot, opts);
+	}
+	function logAgainById(id: string): void {
+		const shot = store.get(id);
+		if (shot) logAgain(shot);
+	}
+
 	/**
 	 * Delete a shot. `remote: false` removes it from the local history only
 	 * (a synced shot is tombstoned so it never re-pulls; an unsynced one is
@@ -536,7 +613,7 @@
 		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
 		const visualizerId = shot.visualizerId ?? null;
 		const wasSelected = selected?.id === shot.id;
-		const onDetailScreen = phoneDetail;
+		const onDetailScreen = phoneDetail && phoneShot === shot.id;
 		store.delete(shot.id);
 		if (onDetailScreen) leaveShot();
 		const api = appCtx().services;
@@ -1690,79 +1767,27 @@
 					<ShotDetail
 						shot={selected}
 						bind:phoneMenuOpen={shotMenuOpen}
-						onNotesChange={(notes) => {
-							store.setNotes(selected.id, notes);
-							syncEditToVisualizer(selected.id);
-							scheduleDecentReplaceAfterEdit(selected.id);
-						}}
-						onNextPlanChange={(nextPlan) => {
+						onNotesChange={saveNotes}
+						onNextPlanChange={(id, nextPlan) => {
 							// Local-only workflow state — the exporter never sends
 							// it, so no Visualizer mirror.
-							store.setNextPlan(selected.id, nextPlan);
+							store.setNextPlan(id, nextPlan);
 						}}
-						onRatingChange={(rating) => {
-							store.setRating(selected.id, rating);
-							syncEditToVisualizer(selected.id);
-							scheduleDecentReplaceAfterEdit(selected.id);
-						}}
-						onPrivacyChange={(privacy) => {
-							store.setPrivacy(selected.id, privacy);
-							syncEditToVisualizer(selected.id);
-						}}
-						onGrinderModelChange={(grinderModel) => {
-							store.setGrinderModel(selected.id, grinderModel);
-							syncEditToVisualizer(selected.id);
-							scheduleDecentReplaceAfterEdit(selected.id);
-						}}
-						onPersonChange={(field, name) => {
-							store.setPerson(selected.id, field, name);
-							// Visualizer has a barista field but no drinker;
-							// the Decent record carries both.
-							if (field === 'barista') syncEditToVisualizer(selected.id, { baristaChanged: true });
-							scheduleDecentReplaceAfterEdit(selected.id);
-						}}
+						onRatingChange={saveRating}
+						onPrivacyChange={savePrivacy}
+						onGrinderModelChange={saveGrinderModel}
+						onPersonChange={savePerson}
 						{baristaSuggestions}
 						{drinkerSuggestions}
-						onTagsChange={(tags) => {
-							store.setTags(selected.id, tags);
-							syncEditToVisualizer(selected.id);
-						}}
-						onGrindChange={(grinderSetting) => {
-							store.setGrindSetting(selected.id, grinderSetting);
-							syncEditToVisualizer(selected.id);
-							scheduleDecentReplaceAfterEdit(selected.id);
-						}}
-						onBeanChange={(bean, roaster) => {
-							// Move the bag debit with the attribution (Android
-							// setShotBean parity): credit the wrongly-billed old
-							// bag, debit the new one, using the dose the shot
-							// recorded. Same-bean picks change nothing.
-							const oldBeanId = selected.bean?.beanId ?? null;
-							const newBeanId = bean?.id ?? null;
-							const dose = selected.metadata?.dose;
-							if (oldBeanId !== newBeanId && dose != null && dose > 0) {
-								if (oldBeanId) beanLibrary.creditBean(oldBeanId, dose);
-								if (newBeanId) beanLibrary.debitBean(newBeanId, dose);
-							}
-							store.setBeanFromLive(selected.id, bean, roaster);
-							syncEditToVisualizer(selected.id);
-							scheduleDecentReplaceAfterEdit(selected.id);
-						}}
-						onDelete={(opts) => handleDelete(selected, opts)}
+						onTagsChange={saveTags}
+						onGrindChange={saveGrind}
+						onBeanChange={saveBean}
+						onDelete={deleteById}
 						canDeleteRemote={canPushShots && !!selected.visualizerId}
 						uploadTargets={uploadTargetsFor(selected)}
-						onUpload={(targets) => uploadShotTo(selected.id, targets)}
-						onLogAgain={() => logAgain(selected)}
-						onManualBrewEdit={(patch) => {
-							// Manual rows keep their facts editable; a dose change
-							// re-settles the bag through the core rule (credit old,
-							// debit new — a no-op when the dose is unchanged).
-							const beanId = selected.bean?.beanId ?? null;
-							if (patch.dose !== undefined && beanId) {
-								beanLibrary.resettleBean(beanId, selected.metadata.dose ?? null, patch.dose);
-							}
-							store.updateManualBrew(selected.id, patch);
-						}}
+						onUpload={uploadShotTo}
+						onLogAgain={logAgainById}
+						onManualBrewEdit={saveManualBrew}
 					/>
 				{/key}
 			{:else if !phoneLayout.current}

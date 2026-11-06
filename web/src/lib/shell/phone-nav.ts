@@ -22,10 +22,14 @@ export function phoneShotId(): string | null {
 	return page.state.historyShot ?? page.url.searchParams.get('shot');
 }
 
-/** Open a shot's detail screen. Shallow: the URL stays the list's. */
+/**
+ * Open a shot's detail screen. The URL stays the list's. A navigation of its
+ * own, not a shallow one: Kit's shallow popstate skips `beforeNavigate`, so
+ * system Back would pop the screen from under an open sheet.
+ */
 export function openShot(id: string): void {
 	if (!phoneLayout.current) return;
-	void goto(page.url.href, { state: { historyShot: id }, shallow: true, persistState: true });
+	void goto(page.url.href, { state: { historyShot: id }, persistState: true, reset: false });
 }
 
 /** Leave the shot detail screen for the list. */
@@ -45,10 +49,10 @@ export function phoneBeanId(): string | null {
 	return page.state.beanDetail ?? null;
 }
 
-/** Open a bag's detail screen. Shallow: the URL stays the list's. */
+/** Open a bag's detail screen. The URL stays the list's; see {@link openShot}. */
 export function openBean(id: string): void {
 	if (!phoneLayout.current) return;
-	void goto(page.url.href, { state: { beanDetail: id }, shallow: true, persistState: true });
+	void goto(page.url.href, { state: { beanDetail: id }, persistState: true, reset: false });
 }
 
 /** Leave the bag detail screen for the list. */
