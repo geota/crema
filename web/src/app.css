@@ -54,6 +54,26 @@
 		--page-pad-top: 20px;
 		--ptop-clear: calc(var(--ptop-h) + env(safe-area-inset-top, 0px));
 		--ptab-clear: calc(var(--ptab-h) + env(safe-area-inset-bottom, 0px));
+		/* Android's Material roles the phone components use and the web tokens
+		   have no name for. */
+		--ph-tonal: #f3e3cc;
+		--ph-on-tonal: #5a4326;
+		--ph-fab: #ffddbe;
+		--ph-on-fab: #5a3210;
+		--ph-lowest: #ffffff;
+		--ph-highest: #e8d9bc;
+		--ph-outline: rgba(31, 24, 18, 0.24);
+		--ph-outline-variant: rgba(31, 24, 18, 0.12);
+	}
+	[data-theme='dark'] {
+		--ph-tonal: #43301f;
+		--ph-on-tonal: #f2d2b0;
+		--ph-fab: var(--copper-700);
+		--ph-on-fab: #ffddbe;
+		--ph-lowest: #120d09;
+		--ph-highest: #322820;
+		--ph-outline: rgba(244, 237, 224, 0.16);
+		--ph-outline-variant: rgba(244, 237, 224, 0.08);
 	}
 }
 /* Android's 64 px bar costs a short phone a row of content. */

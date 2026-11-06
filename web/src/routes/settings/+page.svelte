@@ -39,7 +39,7 @@
 	 * `active` state and never touch the URL.
 	 */
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
-	import { getSettingsStore } from '#lib/settings/index.js';
+	import { convertTemp, getSettingsStore } from '#lib/settings/index.js';
 	import MachineSection from '#lib/components/settings/sections/MachineSection.svelte';
 	import BrewDefaultsSection from '#lib/components/settings/sections/BrewDefaultsSection.svelte';
 	import WaterSection from '#lib/components/settings/sections/WaterSection.svelte';
@@ -54,7 +54,8 @@
 	import { page } from '$app/state';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { leaveSection, openSection } from '#lib/shell/phone-nav.js';
-	import PhoneBackBar from '#lib/shell/PhoneBackBar.svelte';
+	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
+	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
 	import { recallView } from '#lib/state/view-memory.js';
 	import { persistView, useScrollMemory } from '#lib/state/use-view-memory.svelte.js';
 
@@ -67,14 +68,14 @@
 	const de1State = $derived(snapshot.de1State);
 
 	// Constructing the settings store applies the persisted theme to <html>.
-	getSettingsStore();
+	const settings = getSettingsStore();
 
 	/**
 	 * The nav sections — id, label, Phosphor icon. `group` opens a group and
 	 * `sub` is the row's subtitle, both phone-only (Android `PHONE_SECTIONS`).
 	 */
 	const SECTIONS = [
-		{ id: 'machine', label: 'Machine', icon: 'plug-charging', group: 'Device', sub: '' },
+		{ id: 'machine', label: 'Machine', icon: 'plug-charging', phoneIcon: 'sliders-horizontal', group: 'Device', sub: '' },
 		{ id: 'brew', label: 'Brew defaults', icon: 'coffee', group: 'Brewing', sub: 'Targets, shot behaviour' },
 		{ id: 'water', label: 'Water & maintenance', icon: 'drop', group: '', sub: 'Tank, cycles, reminders' },
 		{ id: 'display', label: 'Display & units', icon: 'monitor', group: 'App', sub: 'Theme, density, units' },
@@ -114,8 +115,26 @@
 	const shown = $derived(phoneSection ?? active);
 	/** The phone's section list, which has no section `<h1>` to name the page. */
 	const phoneList = $derived(phoneLayout.current && !phoneSection);
+	const connected = $derived(de1State === 'ready');
 	/** Machine's row subtitle at phone width is its live link state. */
-	const machineSub = $derived(de1State === 'ready' ? 'DE1 connected' : 'Not connected');
+	const machineSub = $derived(connected ? 'DE1 · connected' : 'Not connected');
+	/** The hero's middle line: the group head's temperature once it reports. */
+	const heroTemp = $derived.by(() => {
+		const c = snapshot.latestTelemetry?.temp;
+		if (!connected || c == null) return connected ? 'Connected' : 'Not connected';
+		const t = convertTemp(c, settings.current.tempUnit);
+		return `${t.value} ${t.unit}`;
+	});
+
+	usePhoneBar(() =>
+		phoneSection
+			? {
+					title: SECTIONS.find((s) => s.id === phoneSection)?.label ?? 'Settings',
+					back: { label: 'Back to Settings', onBack: leaveSection },
+					actions: []
+				}
+			: { actions: [] }
+	);
 
 	/** The page: the scroller at phone width, where the window doesn't move. */
 	let pageEl = $state<HTMLElement>();
@@ -176,6 +195,21 @@
 					Settings
 				</div>
 			</div>
+			{#if phoneLayout.current}
+				<!-- Android's machine hero: pushes the Machine section, where
+				     Connect lives. -->
+				<button type="button" class="st-hero" onclick={() => pick('machine')}>
+					<span class="st-hero-tile"><SlidersHorizontalIcon aria-hidden="true" /></span>
+					<span class="st-hero-text">
+						<span class="st-hero-name">Decent DE1</span>
+						<span class="st-hero-sub">{heroTemp}</span>
+						<span class={['st-hero-state', { 'is-on': connected }]}>
+							<i aria-hidden="true"></i>{connected ? 'Connected' : 'Tap to connect'}
+						</span>
+					</span>
+					<CaretRightIcon aria-hidden="true" />
+				</button>
+			{/if}
 			<div class="st-nav-items">
 				{#each SECTIONS as s (s.id)}
 					{#if s.group}
@@ -189,7 +223,11 @@
 						aria-current={active === s.id && !phoneLayout.current ? 'page' : undefined}
 						onclick={() => pick(s.id)}
 					>
-						<Icon cls={'ph-duotone ph-' + s.icon} aria-hidden="true" />
+						<Icon
+							cls={'ph-duotone ph-' +
+								((phoneLayout.current && 'phoneIcon' in s && s.phoneIcon) || s.icon)}
+							aria-hidden="true"
+						/>
 						<span class="st-nav-text">
 							<span>{s.label}</span>
 							<span class="st-nav-sub">{s.id === 'machine' ? machineSub : s.sub}</span>
@@ -205,13 +243,6 @@
 
 		<!-- Right content pane -->
 		<div class="st-content">
-			{#if phoneSection}
-				<PhoneBackBar
-					title={SECTIONS.find((s) => s.id === phoneSection)?.label ?? 'Settings'}
-					backLabel="Back to Settings"
-					onBack={leaveSection}
-				/>
-			{/if}
 			{#if shown === 'machine'}
 				<MachineSection {app} {de1State} {snapshot} />
 			{:else if shown === 'brew'}
@@ -921,58 +952,129 @@
 			position: static;
 			min-height: 0;
 			border-right: 0;
-			padding: var(--page-pad-top) var(--page-pad-x) 24px;
-			gap: 4px;
+			padding: 4px var(--page-pad-x) 24px;
+			gap: 8px;
 		}
-		.st-nav-title {
-			font-size: 30px;
+		.st-nav-head {
+			margin: 0;
 		}
 		.st-nav-foot {
 			display: none;
 		}
+		.st-hero {
+			display: flex;
+			align-items: center;
+			gap: 14px;
+			padding: 16px;
+			border: 0;
+			border-radius: 16px;
+			background: var(--bg-surface);
+			color: var(--fg-1);
+			font-family: var(--font-sans);
+			text-align: left;
+			cursor: pointer;
+		}
+		.st-hero > :global(svg) {
+			flex: none;
+			font-size: 18px;
+			color: var(--fg-3);
+		}
+		.st-hero:focus-visible {
+			outline: none;
+			box-shadow: var(--shadow-focus);
+		}
+		.st-hero-tile {
+			flex: none;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 56px;
+			height: 56px;
+			border-radius: 14px;
+			background: var(--ph-highest);
+			color: var(--fg-3);
+			font-size: 26px;
+		}
+		.st-hero-text {
+			flex: 1 1 auto;
+			display: flex;
+			flex-direction: column;
+			gap: 2px;
+			min-width: 0;
+		}
+		.st-hero-name {
+			font-size: 16px;
+			font-weight: 500;
+		}
+		.st-hero-sub {
+			font-size: 12px;
+			color: var(--fg-3);
+		}
+		.st-hero-state {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			font-size: 12px;
+			font-weight: 500;
+			color: var(--fg-3);
+		}
+		.st-hero-state i {
+			width: 8px;
+			height: 8px;
+			border-radius: 50%;
+			background: rgba(var(--tint-rgb), 0.3);
+		}
+		.st-hero-state.is-on {
+			color: var(--success);
+		}
+		.st-hero-state.is-on i {
+			background: var(--success);
+		}
 		.st-nav-group {
 			display: block;
 			margin: 0;
-			padding: 18px 4px 6px;
+			padding: 10px 4px 0;
 			font-family: var(--font-sans);
 			font-size: 10.5px;
-			font-weight: 700;
-			letter-spacing: var(--track-allcaps);
+			font-weight: 500;
+			letter-spacing: 0.07em;
 			text-transform: uppercase;
-			color: var(--fg-muted);
+			color: var(--fg-3);
+		}
+		.st-nav-items {
+			gap: 8px;
 		}
 		.st-nav-item,
 		.st-nav-item.is-active {
-			min-height: 60px;
-			padding: 10px 12px;
+			min-height: 44px;
+			padding: 14px;
 			gap: 14px;
 			background: var(--bg-surface);
 			border-radius: var(--radius-md);
 			color: var(--fg-1);
-			font-size: 15px;
-		}
-		.st-nav-item + .st-nav-item {
-			margin-top: 4px;
+			font-size: 14px;
+			font-weight: 500;
 		}
 		.st-nav-item.is-active::before {
 			display: none;
 		}
 		.st-nav-item :global(svg),
 		.st-nav-item.is-active :global(svg) {
-			font-size: 20px;
+			font-size: 22px;
 			color: var(--fg-3);
 		}
 		.st-nav-text {
 			display: flex;
 			flex-direction: column;
-			gap: 2px;
 			flex: 1 1 auto;
 			min-width: 0;
+			line-height: 1.3;
 		}
 		.st-nav-sub {
 			display: block;
 			font-size: 12px;
-			color: var(--fg-muted);
+			font-weight: 400;
+			color: var(--fg-3);
 			white-space: nowrap;
 			overflow: hidden;
 			text-overflow: ellipsis;
@@ -981,7 +1083,7 @@
 			display: inline-flex;
 		}
 		.st-nav-chev :global(svg) {
-			font-size: 14px;
+			font-size: 18px;
 		}
 		.st-nav-item:focus-visible {
 			outline: none;
@@ -989,27 +1091,28 @@
 		}
 
 		.st-content {
-			padding: 0 var(--page-pad-x) 32px;
+			padding: 4px var(--page-pad-x) 32px;
 			max-width: none;
 		}
-		.st-content :global(.pbar) {
-			margin-bottom: 8px;
-		}
-		/* The bar is the screen's heading; the section's own eyebrow and title
-		   would repeat it (`display: none` leaves one <h1> in the a11y tree). */
+		/* The bar names the screen; Android's sections open on their first card. */
 		:global(.st-content .st-shead) {
-			margin-bottom: 16px;
-			padding-bottom: 14px;
-		}
-		:global(.st-content .st-shead .t-eyebrow),
-		:global(.st-content .st-shead-title) {
 			display: none;
 		}
-		:global(.st-content .st-shead-sub) {
-			margin-top: 0;
-		}
 		:global(.st-content .st-group) {
-			margin-top: 22px;
+			margin-top: 16px;
+		}
+		:global(.st-content .st-group-head) {
+			margin-bottom: 8px;
+			padding-left: 4px;
+		}
+		:global(.st-content .st-group-title) {
+			font-size: 14px;
+			font-weight: 600;
+			letter-spacing: 0;
+			text-transform: none;
+		}
+		:global(.st-content .st-group-rows) {
+			border: 0;
 		}
 		/* Rows: the control sits beside the text while the text keeps ~180 px,
 		   and drops under it otherwise (a 1fr | auto grid squeezed the text to
@@ -1021,11 +1124,20 @@
 			justify-content: space-between;
 			column-gap: 16px;
 			row-gap: 10px;
-			padding: 14px;
+			padding: 14px 16px;
+			border-bottom-color: var(--ph-outline-variant);
 		}
 		:global(.st-content .st-row-text) {
 			flex: 1 1 180px;
 			min-width: 0;
+		}
+		:global(.st-content .st-row-title) {
+			font-size: 16px;
+			font-weight: 400;
+		}
+		:global(.st-content .st-row-sub) {
+			font-size: 12px;
+			color: var(--fg-3);
 		}
 		:global(.st-content .st-row-control) {
 			flex: 0 1 auto;
@@ -1033,7 +1145,83 @@
 			flex-wrap: wrap;
 		}
 		:global(.st-content .st-btn) {
+			min-height: 44px;
 			white-space: nowrap;
+		}
+		/* Controls: a 44 px target whatever they draw. `::after` is the toggle's
+		   knob, so its target is `::before`. */
+		:global(.st-content .qmini-tog) {
+			position: relative;
+			flex: none;
+		}
+		:global(.st-content .qmini-tog)::before {
+			content: '';
+			position: absolute;
+			inset: -13px -7px;
+		}
+		:global(.st-content .st-segment > button),
+		:global(.st-content .st-maint-action),
+		:global(.st-content .dc-input) {
+			min-height: 44px;
+		}
+		:global(.st-content .st-stepper .st-stepper-btn) {
+			width: 44px;
+			height: 44px;
+		}
+		:global(.st-content .st-stepper .st-stepper-num) {
+			min-height: 44px;
+		}
+		/* Android's Machine card: one column without the illustration. State,
+		   name, identity rows, the firmware box, then the connection actions. */
+		:global(.st-content .st-machinecard) {
+			display: flex;
+			flex-direction: column;
+			gap: 10px;
+			padding: 16px;
+			border: 0;
+			border-radius: 16px;
+		}
+		:global(.st-content .st-machinecard-img) {
+			display: none;
+		}
+		:global(.st-content .st-machinecard-info) {
+			display: contents;
+		}
+		:global(.st-content .st-machinecard-info-name) {
+			font-size: 16px;
+		}
+		:global(.st-content .st-machinecard-info-meta) {
+			gap: 6px;
+			margin: 0;
+			font-size: 14px;
+		}
+		:global(.st-content .st-machinecard-info-row) {
+			display: flex;
+			justify-content: space-between;
+		}
+		:global(.st-content .st-machinecard-info-key) {
+			color: var(--fg-3);
+		}
+		:global(.st-content .st-machinecard-info-val) {
+			font-weight: 400;
+		}
+		:global(.st-content .st-machinecard-info-val.is-placeholder) {
+			font-size: 14px;
+			color: var(--fg-1);
+		}
+		:global(.st-content .st-machinecard-fw) {
+			order: 1;
+		}
+		:global(.st-content .st-machinecard-info-actions) {
+			order: 2;
+			margin: 0;
+			padding: 0;
+		}
+		:global(.st-content .st-machinecard-info-actions .st-btn) {
+			flex: 1 1 100%;
+			min-height: 48px;
+			border-radius: 999px;
+			font-size: 14px;
 		}
 	}
 </style>

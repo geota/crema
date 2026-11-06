@@ -2,7 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { goto } from '$app/navigation';
 import { page } from '$app/state';
 import { selectedShot } from '#lib/history/index.js';
-import { leaveSection, leaveShot, openSection, openShot, phoneShotId } from './phone-nav';
+import {
+	leaveBean,
+	leaveSection,
+	leaveShot,
+	openBean,
+	openSection,
+	openShot,
+	phoneBeanId,
+	phoneShotId
+} from './phone-nav';
 import { phoneLayout } from './phone.svelte.js';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn(() => Promise.resolve()) }));
@@ -27,6 +36,36 @@ describe('phone list → detail navigation', () => {
 
 	afterEach(() => {
 		back.mockRestore();
+	});
+
+	describe('Beans', () => {
+		beforeEach(() => {
+			page.url = new URL('http://localhost/beans?tab=bags&roaster=r1');
+		});
+
+		it('pushes a shallow entry naming the bag, keeping the list URL', () => {
+			openBean('bean:1');
+			expect(gotoMock).toHaveBeenCalledExactlyOnceWith('http://localhost/beans?tab=bags&roaster=r1', {
+				state: { beanDetail: 'bean:1' },
+				shallow: true,
+				persistState: true
+			});
+		});
+
+		it('never pushes above 600 px, and no entry shows a detail there', () => {
+			setWidth(false);
+			page.state = { beanDetail: 'bean:1' };
+			openBean('bean:1');
+			expect(gotoMock).not.toHaveBeenCalled();
+			expect(phoneBeanId()).toBeNull();
+		});
+
+		it('steps back from a pushed entry', () => {
+			page.state = { beanDetail: 'bean:1' };
+			expect(phoneBeanId()).toBe('bean:1');
+			leaveBean();
+			expect(back).toHaveBeenCalledOnce();
+		});
 	});
 
 	describe('History', () => {

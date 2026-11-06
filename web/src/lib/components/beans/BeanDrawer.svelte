@@ -43,6 +43,7 @@
 		roaster,
 		isActive,
 		onClose,
+		screen = false,
 		onSetActive,
 		onEdit,
 		onToggleArchived,
@@ -55,6 +56,12 @@
 		roaster: Roaster | null;
 		isActive: boolean;
 		onClose: () => void;
+		/**
+		 * Render as a pushed phone screen in the page (Android
+		 * `PhoneBeanDetailScreen`), not a modal: the top bar carries the name,
+		 * star, edit and back, so the drawer's own head stays out.
+		 */
+		screen?: boolean;
 		onSetActive: (id: string) => void;
 		onEdit: (id: string) => void;
 		onToggleArchived: (id: string) => void;
@@ -142,7 +149,7 @@
 
 	function onKey(e: KeyboardEvent): void {
 		// A dialog stacked on top (ConfirmDialog) handles its own Escape first.
-		if (e.key === 'Escape' && !e.defaultPrevented) {
+		if (e.key === 'Escape' && !e.defaultPrevented && !screen) {
 			e.preventDefault();
 			onClose();
 		}
@@ -163,28 +170,34 @@
 
 </script>
 
-<div
-	class="bn-drawer-scrim"
-	onclick={onClose}
-	onkeydown={onKey}
-	role="button"
-	tabindex="-1"
-	aria-label="Close detail"
-></div>
+{#if !screen}
+	<div
+		class="bn-drawer-scrim"
+		onclick={onClose}
+		onkeydown={onKey}
+		role="button"
+		tabindex="-1"
+		aria-label="Close detail"
+	></div>
+{/if}
 
 <!-- The drawer is a modal dialog: the scrim covers the page, focus moves in
      on open and is trapped, Escape (window-level, below) closes it, and focus
      returns to the opening card. -->
 <svelte:window onkeydown={onKey} />
+<!-- svelte-ignore a11y_no_noninteractive_tabindex: a dialog except on the phone screen, where it has no tabindex -->
 <div
-	{@attach modalFocus}
-	class="bn-drawer"
-	role="dialog"
-	aria-modal="true"
-	aria-labelledby="bn-drawer-name"
-	tabindex="-1"
-	onkeydown={(e) => trapTab(e, e.currentTarget)}
+	{@attach screen ? undefined : modalFocus}
+	class={['bn-drawer', { 'is-screen': screen }]}
+	role={screen ? undefined : 'dialog'}
+	aria-modal={screen ? undefined : 'true'}
+	aria-labelledby={screen ? undefined : 'bn-drawer-name'}
+	tabindex={screen ? undefined : -1}
+	onkeydown={(e) => {
+		if (!screen) trapTab(e, e.currentTarget);
+	}}
 >
+	{#if !screen}
 	<header class="bn-drawer-head">
 		<div class="bn-drawer-roaster">
 			<span class="bn-drawer-roaster-mark" style="--tone: {mt.tone}">{mt.mark}</span>
@@ -225,6 +238,7 @@
 			</button>
 		</div>
 	</header>
+	{/if}
 
 	<div class="bn-drawer-scroll">
 		<!-- Hero. With a photo the tile becomes a button into the full-size
@@ -643,6 +657,19 @@
 {/if}
 
 <style>
+	/* Phone width: the pushed detail screen flows in the page, which scrolls. */
+	@media (max-width: 600px) {
+		.bn-drawer.is-screen {
+			position: static;
+			width: auto;
+			min-height: 0;
+			border: 0;
+			box-shadow: none;
+		}
+		.bn-drawer.is-screen .bn-drawer-scroll {
+			overflow: visible;
+		}
+	}
 	.bn-drawer-scrim {
 		position: fixed;
 		inset: 0;

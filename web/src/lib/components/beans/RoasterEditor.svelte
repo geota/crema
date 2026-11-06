@@ -37,6 +37,8 @@
 	 */
 	import { tick, untrack } from 'svelte';
 	import { leaveEditor } from '#lib/beans/editor-nav.js';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
 	import { resolve } from '$app/paths';
 	import { getBeanStore, roasterMarkTone, type Roaster } from '#lib/bean/index.js';
 	import RoasterDeleteSplit from './RoasterDeleteSplit.svelte';
@@ -199,6 +201,24 @@
 		back();
 	}
 
+	// Android's editor bar replaces the top bar at phone width.
+	usePhoneBar(() =>
+		phoneLayout.current
+			? {
+					title: current.name || 'Untitled roaster',
+					back: {
+						label: 'Back to Beans',
+						onBack: back,
+						breadcrumb: isNew ? 'New roaster' : 'Edit roaster'
+					},
+					actions: [
+						{ id: 'cancel', label: 'Cancel', text: 'Cancel', onclick: () => void discard() },
+						{ id: 'save', label: 'Save', text: 'Save', primary: true, onclick: () => void save() }
+					]
+				}
+			: {}
+	);
+
 	function onRoasterDeleted(): void {
 		leaveEditor(resolve('beans?tab=roasters'));
 	}
@@ -206,6 +226,7 @@
 
 <div class="rd-page">
 	<!-- Topbar -->
+	{#if !phoneLayout.current}
 	<header class="rd-bar">
 		<button class="rd-back" onclick={back}>
 			<ArrowLeftIcon aria-hidden="true" /> Beans
@@ -222,6 +243,7 @@
 			</button>
 		</div>
 	</header>
+	{/if}
 
 	<div class="rd-main">
 		<!-- Hero — the same gradient avatar as the bean editor's photo slot,

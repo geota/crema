@@ -22,6 +22,7 @@
 	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import PhoneOverflowSheet from '#lib/shell/PhoneOverflowSheet.svelte';
 
 	let {
 		roasterId,
@@ -29,7 +30,8 @@
 		linkedBeanCount,
 		size = 'sm',
 		label,
-		onDeleted
+		onDeleted,
+		sheet
 	}: {
 		roasterId: string;
 		roasterName: string;
@@ -37,6 +39,12 @@
 		size?: 'sm' | 'md';
 		label?: string;
 		onDeleted?: () => void;
+		/**
+		 * Offer the scopes as a phone sheet instead of the split button (the ⋮
+		 * sheet's Delete row). Stay mounted after it closes: a confirm is still
+		 * open then, and it reads these props.
+		 */
+		sheet?: { open: boolean; onClose: () => void };
 	} = $props();
 
 	const library = getBeanStore();
@@ -150,6 +158,14 @@
 	});
 </script>
 
+{#if sheet}
+	<PhoneOverflowSheet
+		open={sheet.open}
+		title="Delete {roasterName}"
+		items={items.map((i) => ({ ...i, id: i.title, label: i.title, danger: true }))}
+		onClose={sheet.onClose}
+	/>
+{:else}
 <SplitButton
 	variant="danger"
 	{size}
@@ -164,3 +180,4 @@
 	onPrimary={() => detach(false)}
 	{items}
 />
+{/if}

@@ -25,8 +25,17 @@
 	import { page } from '$app/state';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { leaveShot, openShot, phoneShotId } from '#lib/shell/phone-nav.js';
-	import PhoneBackBar from '#lib/shell/PhoneBackBar.svelte';
-	import MoreMenu from '#lib/components/shared/MoreMenu.svelte';
+	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
+	import PhoneChipRow from '#lib/shell/PhoneChipRow.svelte';
+	import PhoneDropdownPill from '#lib/shell/PhoneDropdownPill.svelte';
+	import PhoneFab from '#lib/shell/PhoneFab.svelte';
+	import PhoneOverflowSheet, { type OverflowItem } from '#lib/shell/PhoneOverflowSheet.svelte';
+	import PhoneSearch from '#lib/shell/PhoneSearch.svelte';
+	import PhoneSortPill from '#lib/shell/PhoneSortPill.svelte';
+	import DotsThreeVerticalIcon from 'phosphor-svelte/lib/DotsThreeVerticalIcon';
+	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
+	import FileCodeIcon from 'phosphor-svelte/lib/FileCodeIcon';
+	import FileTextIcon from 'phosphor-svelte/lib/FileTextIcon';
 	/**
 	 * History — the `/history` route: the shot library, ported from
 	 * `HistoryPage` in `history-page.jsx`.
@@ -35,6 +44,9 @@
 	 * and the split pane — a scrollable `ShotRow` list and a `ShotDetail` pane.
 	 * At phone width (≤ 600 px) the list and the detail are two screens, with
 	 * real history entries between them (`#lib/shell/phone-nav`).
+	 * That arrangement follows Android's `PhoneHistoryScreen` on the same state
+	 * and handlers: bar actions, tiles, chips, day-grouped rows, floating Log
+	 * brew.
 	 *
 	 * ## Real vs. stubbed
 	 *
@@ -67,6 +79,8 @@
 	} from '#lib/history/index.js';
 	import type { StoredShot } from '#lib/history/index.js';
 	import { ShotRow, ShotDetail, CompareOverlay } from '#lib/components/history/index.js';
+	import PhoneShotRow from '#lib/components/history/PhoneShotRow.svelte';
+	import { groupShots } from '#lib/history/phone-list.js';
 	import ShotImportDialog from '#lib/components/history/ShotImportDialog.svelte';
 	import LogBrewDialog from '#lib/components/brewlog/LogBrewDialog.svelte';
 	import { methodLabel, type LogBrewPrefill } from '#lib/brew/methods.js';
@@ -79,7 +93,7 @@
 	import SortPill from '#lib/components/shared/SortPill.svelte';
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
 	import { getBeanStore } from '#lib/bean/index.js';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { readQueue } from '#lib/services/queue-store.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
@@ -458,6 +472,11 @@
 	// ── Brew Log dialog state (issue #10) ────────────────────────────────
 	let logBrewOpen = $state(false);
 	let logBrewPrefill = $state<LogBrewPrefill | undefined>(undefined);
+	/** Log brew: the form, blank. */
+	function openLogBrew(): void {
+		logBrewPrefill = undefined;
+		logBrewOpen = true;
+	}
 	/** "Log again" — re-open the form seeded from a prior brew, dated now. */
 	function logAgain(shot: StoredShot): void {
 		logBrewPrefill = {
@@ -539,6 +558,17 @@
 	type SortDir = 'asc' | 'desc';
 	let sortField = $state<SortField>('completedAt');
 	let sortDir = $state<SortDir>('desc');
+	/**
+	 * Picking a NEW field reapplies that field's default direction so e.g.
+	 * "Bean" defaults to A→Z instead of inheriting the previous field's
+	 * descending preference. Flipping direction on the same field threads
+	 * through.
+	 */
+	function onSortChange(next: { field: string; direction: SortDir }): void {
+		const previousField = sortField;
+		sortField = next.field as SortField;
+		sortDir = next.field !== previousField ? (DEFAULT_DIR[sortField] ?? next.direction) : next.direction;
+	}
 	const sortOptions: { field: SortField; label: string; icon: string }[] = [
 		{ field: 'completedAt', label: 'Date', icon: 'calendar' },
 		{ field: 'rating', label: 'Rating', icon: 'star' },
@@ -1039,6 +1069,20 @@
 	}
 	/** Mean star rating across rated filtered shots. */
 	const avgRating = $derived(stats?.avgRating != null ? stats.avgRating.toFixed(1) : null);
+	/** The six tiles as Android words them: value over label, `· esp` when scoped. */
+	const phoneStats = $derived.by(() => {
+		const scoped = (label: string): string => (espScoped ? `${label} · esp` : label);
+		const weight = (m: { value: string | number; unit: string } | null): string =>
+			m ? `${m.value}${m.unit}` : '—';
+		return [
+			{ label: rowNoun === 'brew' ? 'Brews' : 'Shots', value: `${filtered.length}` },
+			{ label: 'Beans used', value: weight(beansUsed) },
+			{ label: scoped('Avg weight'), value: weight(avgYield) },
+			{ label: scoped('Avg ratio'), value: avgRatio != null ? `1:${avgRatio.toFixed(1)}` : '—' },
+			{ label: scoped('Avg time'), value: avgTime != null ? formatStatTime(avgTime) : '—' },
+			{ label: 'Avg rating', value: avgRating != null ? `${avgRating}★` : '—' }
+		];
+	});
 
 	/** Select a shot. */
 	function select(id: string): void {
@@ -1051,42 +1095,6 @@
 		select(id);
 		openShot(id);
 	}
-
-	/** The phone header's ⋯ menu: the wide toolbar's Import / Export / Upload. */
-	const moreItems = $derived([
-		{
-			icon: 'ph ph-upload-simple',
-			title: importing ? 'Importing…' : 'Import shots',
-			sub: 'Legacy de1app .shot or .shot.json files',
-			disabled: importing,
-			onclick: () => (importOpen = true)
-		},
-		{
-			icon: 'ph-duotone ph-file-text',
-			title: 'Export community v2 (.jsonl)',
-			sub: 'One JSON per shot, portable across de1 apps',
-			disabled: shots.length === 0 || exporting,
-			onclick: () => void exportAllCommunity()
-		},
-		{
-			icon: 'ph-duotone ph-file-zip',
-			title: 'Export replayable captures (.zip)',
-			sub: 'Per-shot raw BLE bytes',
-			disabled: shots.length === 0 || exporting,
-			onclick: () => void exportAllReplay()
-		},
-		...(missingTotal > 0
-			? [
-					{
-						icon: 'ph ph-cloud-arrow-up',
-						title: uploadingAll ? 'Uploading…' : `Upload ${missingTotal}`,
-						sub: missingTitle,
-						disabled: uploadingAll,
-						onclick: uploadMissing
-					}
-				]
-			: [])
-	]);
 
 	// ── Compare state ────────────────────────────────────────────────────
 	/**
@@ -1143,6 +1151,111 @@
 			.map((id) => store.get(id))
 			.filter((s): s is NonNullable<typeof s> => s != null)
 	);
+
+	// ── Phone arrangement (≤ 600 px, Android `PhoneHistoryScreen`) ───────
+	/** The search field opens from the bar, and stays open over a live query. */
+	let searchOpen = $state(untrack(() => q !== ''));
+	let exportSheetOpen = $state(false);
+	/** The shot detail's ⋮ sheet: the bar holds the button, the detail the items. */
+	let shotMenuOpen = $state(false);
+
+	const exportItems = $derived<OverflowItem[]>([
+		{
+			id: 'community',
+			icon: FileTextIcon,
+			label: 'Community v2 (.jsonl)',
+			sub: 'One JSON per shot, portable across reaprime / Visualizer / de1app.',
+			onclick: () => void exportAllCommunity()
+		},
+		{
+			id: 'replay',
+			icon: FileCodeIcon,
+			label: 'Replayable captures (.zip)',
+			sub: 'Per-shot raw BLE bytes. Imported shots are skipped (no raw bytes).',
+			onclick: () => void exportAllReplay()
+		}
+	]);
+
+	usePhoneBar(() => {
+		if (phoneDetail && selected) {
+			return {
+				title: shotStamp(selected.completedAt),
+				back: { label: 'Back to shot list', onBack: leaveShot },
+				actions: [
+					{
+						id: 'more',
+						label: 'More shot actions',
+						icon: DotsThreeVerticalIcon,
+						haspopup: 'dialog',
+						onclick: () => (shotMenuOpen = true)
+					}
+				]
+			};
+		}
+		if (selectMode) {
+			return {
+				title: 'Select shots',
+				actions: [
+					{ id: 'cancel', label: 'Cancel compare selection', icon: XIcon, onclick: toggleSelectMode }
+				]
+			};
+		}
+		return {
+			actions: [
+				{
+					id: 'search',
+					label: 'Search shots',
+					icon: MagnifyingGlassIcon,
+					accent: searchOpen,
+					onclick: () => (searchOpen = !searchOpen)
+				},
+				{
+					id: 'import',
+					label: importing ? 'Importing shots' : 'Import shots',
+					icon: UploadSimpleIcon,
+					disabled: importing,
+					haspopup: 'dialog',
+					onclick: () => (importOpen = true)
+				},
+				{
+					id: 'export',
+					label: exporting ? 'Exporting shots' : 'Export shots',
+					icon: DownloadSimpleIcon,
+					disabled: shots.length === 0 || exporting,
+					haspopup: 'dialog',
+					onclick: () => (exportSheetOpen = true)
+				},
+				'settings'
+			]
+		};
+	});
+
+	/** The chips: profiles and tags. Method, bean and range are dropdown pills. */
+	const phoneChips = $derived([
+		...filterPills.filter((p) => p.id.startsWith('p:') || p.id.startsWith('t:')),
+		...(selectedTags.length > 0
+			? [{ id: 'clear-tags', label: 'Clear tags', icon: 'ph ph-x', title: 'Clear all selected tag filters' }]
+			: [])
+	]);
+	function onPhoneChip(id: string): void {
+		if (id === 'clear-tags') selectedTags = [];
+		else onFilterPillClick(id);
+	}
+	const methodOptions = $derived([
+		{ id: 'all', label: 'All methods' },
+		...methodsInUse.map((m) => ({ id: m.id, label: m.label }))
+	]);
+	const beanOptions = $derived([
+		{ id: 'all', label: 'All beans' },
+		...(scopedBag ? [{ id: scopedBag.id, label: `This bag · ${scopedBag.label}` }] : []),
+		...beansInUse.map((b) => ({ id: b.id, label: b.label, title: b.title }))
+	]);
+	const rangeOptions = [
+		{ id: 'all', label: 'All time' },
+		{ id: '30d', label: 'Last 30 days' }
+	];
+	/** Day headings, under the date sort only. */
+	const shotGroups = $derived(groupShots(filtered, sortField === 'completedAt', new Date()));
 </script>
 
 <svelte:head>
@@ -1150,13 +1263,6 @@
 </svelte:head>
 
 <div class="qcontain hi-page" bind:this={pageEl} data-phone-view={phoneDetail ? 'detail' : 'list'}>
-	{#if phoneDetail && selected}
-		<PhoneBackBar
-			title={shotStamp(selected.completedAt)}
-			backLabel="Back to shot list"
-			onBack={leaveShot}
-		/>
-	{/if}
 	<!-- Header -->
 	<div class="hi-head">
 		<div>
@@ -1167,6 +1273,7 @@
 				{shots.length === 1 ? rowNoun : `${rowNoun}s`} on this device
 			</div>
 		</div>
+		{#if !phoneLayout.current}
 		<div class="hi-head-r">
 			<div class="hi-search">
 				<MagnifyingGlassIcon aria-hidden="true" />
@@ -1176,71 +1283,66 @@
 			<button
 				class="st-btn st-btn-secondary"
 				style="white-space: nowrap"
-				onclick={() => {
-					logBrewPrefill = undefined;
-					logBrewOpen = true;
-				}}
+				onclick={openLogBrew}
 				title="Log a brew made off the machine — pourover, AeroPress, French press…"
 			>
 				<PlusIcon aria-hidden="true" />
 				<span>Log brew</span>
 			</button>
-			{#if !phoneLayout.current}
-				<!-- Import: opens the ShotImportDialog so users get a
-				     draggable picker that matches the BeanImportDialog
-				     pattern. The dialog calls `runImport` with the chosen
-				     files; the banner below the header reports the result. -->
+			<!-- Import: opens the ShotImportDialog so users get a
+			     draggable picker that matches the BeanImportDialog
+			     pattern. The dialog calls `runImport` with the chosen
+			     files; the banner below the header reports the result. -->
+			<button
+				class="st-btn st-btn-secondary"
+				disabled={importing}
+				onclick={() => (importOpen = true)}
+				title="Import legacy de1app .shot or .shot.json files"
+			>
+				<UploadSimpleIcon aria-hidden="true" />
+				<span>{importing ? 'Importing…' : 'Import'}</span>
+			</button>
+			<!-- Export split-button — primary fires community v2 bulk
+			     export; caret surfaces the replay-capture zip variant.
+			     Shares geometry with /beans via the SplitButton primitive. -->
+			<SplitButton
+				icon="ph ph-download-simple"
+				label={exporting ? 'Exporting…' : 'Export'}
+				title="Download every shot as one .jsonl file — community-v2 JSON, one shot per line"
+				disabled={shots.length === 0 || exporting}
+				onPrimary={() => void exportAllCommunity()}
+				caretAriaLabel="Choose export format"
+				menuHead="Export as"
+				items={[
+					{
+						icon: 'ph-duotone ph-file-text',
+						title: 'Community v2 (.jsonl)',
+						sub: 'One JSON per shot, one shot per line. Portable across reaprime / Visualizer / de1app.',
+						onclick: () => void exportAllCommunity()
+					},
+					{
+						icon: 'ph-duotone ph-file-zip',
+						title: 'Replayable captures (.zip)',
+						sub: 'Per-shot raw BLE bytes. Imports / pre-recorder shots are skipped (no raw bytes).',
+						onclick: () => void exportAllReplay()
+					}
+				]}
+			/>
+			<!-- Catch-up: every shot missing from an enabled destination, in one
+			     tap. Hidden at zero; the title gives the per-destination split. -->
+			{#if missingTotal > 0}
 				<button
 					class="st-btn st-btn-secondary"
-					disabled={importing}
-					onclick={() => (importOpen = true)}
-					title="Import legacy de1app .shot or .shot.json files"
+					disabled={uploadingAll}
+					onclick={uploadMissing}
+					title={missingTitle}
 				>
-					<UploadSimpleIcon aria-hidden="true" />
-					<span>{importing ? 'Importing…' : 'Import'}</span>
+					<Icon
+						cls={uploadingAll ? 'ph ph-spinner-gap hi-spin' : 'ph ph-cloud-arrow-up'}
+						aria-hidden="true"
+					 />
+					{uploadingAll ? 'Uploading…' : `Upload ${missingTotal}`}
 				</button>
-				<!-- Export split-button — primary fires community v2 bulk
-				     export; caret surfaces the replay-capture zip variant.
-				     Shares geometry with /beans via the SplitButton primitive. -->
-				<SplitButton
-					icon="ph ph-download-simple"
-					label={exporting ? 'Exporting…' : 'Export'}
-					title="Download every shot as one .jsonl file — community-v2 JSON, one shot per line"
-					disabled={shots.length === 0 || exporting}
-					onPrimary={() => void exportAllCommunity()}
-					caretAriaLabel="Choose export format"
-					menuHead="Export as"
-					items={[
-						{
-							icon: 'ph-duotone ph-file-text',
-							title: 'Community v2 (.jsonl)',
-							sub: 'One JSON per shot, one shot per line. Portable across reaprime / Visualizer / de1app.',
-							onclick: () => void exportAllCommunity()
-						},
-						{
-							icon: 'ph-duotone ph-file-zip',
-							title: 'Replayable captures (.zip)',
-							sub: 'Per-shot raw BLE bytes. Imports / pre-recorder shots are skipped (no raw bytes).',
-							onclick: () => void exportAllReplay()
-						}
-					]}
-				/>
-				<!-- Catch-up: every shot missing from an enabled destination, in one
-				     tap. Hidden at zero; the title gives the per-destination split. -->
-				{#if missingTotal > 0}
-					<button
-						class="st-btn st-btn-secondary"
-						disabled={uploadingAll}
-						onclick={uploadMissing}
-						title={missingTitle}
-					>
-						<Icon
-							cls={uploadingAll ? 'ph ph-spinner-gap hi-spin' : 'ph ph-cloud-arrow-up'}
-							aria-hidden="true"
-						 />
-						{uploadingAll ? 'Uploading…' : `Upload ${missingTotal}`}
-					</button>
-				{/if}
 			{/if}
 			{#if selectMode}
 				<button
@@ -1273,10 +1375,8 @@
 					<ArrowsLeftRightIcon aria-hidden="true" /> Compare
 				</button>
 			{/if}
-			{#if phoneLayout.current}
-				<MoreMenu label="More history actions" items={moreItems} />
-			{/if}
 		</div>
+		{/if}
 	</div>
 
 	{#if importBanner}
@@ -1327,6 +1427,85 @@
 			</button>
 		</div>
 	{:else}
+		{#if phoneLayout.current}
+			<!-- Android's phone stack: six tiles 3 × 2, the chip strip with the
+			     compare entry pinned at its end, then the search the bar opens.
+			     While picking shots to compare, only the hint shows. -->
+			{#if !selectMode}
+				<div class="hi-pstats">
+					{#each phoneStats as tile (tile.label)}
+						<div class="hi-pstat">
+							<span class="hi-pstat-v">{tile.value}</span>
+							<span class="hi-pstat-l">{tile.label}</span>
+						</div>
+					{/each}
+				</div>
+				<div class="hi-pfilters">
+					<PhoneChipRow label="Filter shots" chips={phoneChips} onselect={onPhoneChip}>
+						{#snippet trailing()}
+							{#if methodsInUse.length > 1}
+								<PhoneDropdownPill
+									icon="ph ph-coffee"
+									label="Brew method"
+									options={methodOptions}
+									value={filterMethod}
+									onpick={(id) => (filterMethod = id)}
+								/>
+							{/if}
+							{#if beanOptions.length > 1}
+								<PhoneDropdownPill
+									icon="ph ph-coffee-bean"
+									label="Bean"
+									options={beanOptions}
+									value={filterBean}
+									onpick={(id) => (filterBean = id)}
+								/>
+							{/if}
+							<PhoneDropdownPill
+								icon="ph ph-calendar"
+								label="Range"
+								options={rangeOptions}
+								value={range}
+								onpick={(id) => (range = id as typeof range)}
+							/>
+							<PhoneSortPill
+								value={{ field: sortField, direction: sortDir }}
+								options={sortOptions}
+								onchange={onSortChange}
+							/>
+						{/snippet}
+					</PhoneChipRow>
+					{#if shots.length >= 2}
+						<button
+							type="button"
+							class="hi-pcompare"
+							aria-label="Compare shots"
+							title="Pick 2–5 shots to overlay on one chart"
+							onclick={toggleSelectMode}
+						>
+							<ArrowsLeftRightIcon aria-hidden="true" />
+						</button>
+					{/if}
+				</div>
+				{#if searchOpen}
+					<div class="hi-psearch">
+						<PhoneSearch bind:value={q} label="Search shots" placeholder="Search profile, bean, notes" />
+					</div>
+				{/if}
+				{#if missingTotal > 0}
+					<div class="hi-pcatch" title={missingTitle}>
+						<span>{missingTitle}</span>
+						<button type="button" disabled={uploadingAll} onclick={uploadMissing}>
+							<Icon
+								cls={uploadingAll ? 'ph ph-spinner-gap hi-spin' : 'ph ph-cloud-arrow-up'}
+								aria-hidden="true"
+							/>
+							{uploadingAll ? 'Uploading…' : `Upload ${missingTotal}`}
+						</button>
+					</div>
+				{/if}
+			{/if}
+		{:else}
 		<!-- Stats strip -->
 		<div class="hi-stats">
 			<div class="hi-stat">
@@ -1404,22 +1583,11 @@
 				<SortPill
 					value={{ field: sortField, direction: sortDir }}
 					options={sortOptions}
-					onchange={(next) => {
-						const previousField = sortField;
-						sortField = next.field as SortField;
-						// Picking a NEW field reapplies that field's default
-						// direction so e.g. "Bean" defaults to A→Z instead of
-						// inheriting the previous field's descending preference.
-						// Flipping direction on the same field threads through.
-						if (next.field !== previousField) {
-							sortDir = DEFAULT_DIR[next.field as SortField] ?? next.direction;
-						} else {
-							sortDir = next.direction;
-						}
-					}}
+					onchange={onSortChange}
 				/>
 			</div>
 		</div>
+		{/if}
 
 		<!-- Compare-select hint banner -->
 		{#if selectMode}
@@ -1439,19 +1607,37 @@
 		<!-- Split pane: list + detail -->
 		<div class="hi-split">
 			<div class="hi-list" bind:this={listEl}>
-				{#each filtered as s (s.id)}
-					{@const pip = pipFor(s)}
-					<ShotRow
-						shot={s}
-						active={!phoneLayout.current && selected?.id === s.id}
-						selectable={selectMode}
-						selected={selectedIdSet.has(s.id)}
-						selectionDisabled={selectedIds.length >= COMPARE_MAX}
-						syncPip={pip.pip}
-						syncTitle={pip.title}
-						onclick={() => (selectMode ? toggleCompareSelection(s.id) : showShot(s.id))}
-					/>
-				{/each}
+				{#if phoneLayout.current}
+					{#each shotGroups as group (group.label ?? 'all')}
+						{#if group.label}<h2 class="hi-pday">{group.label}</h2>{/if}
+						{#each group.shots as s (s.id)}
+							{@const pip = pipFor(s)}
+							<PhoneShotRow
+								shot={s}
+								selecting={selectMode}
+								picked={selectedIdSet.has(s.id)}
+								dimmed={selectedIds.length >= COMPARE_MAX && !selectedIdSet.has(s.id)}
+								syncPip={pip.pip}
+								syncTitle={pip.title}
+								onclick={() => (selectMode ? toggleCompareSelection(s.id) : showShot(s.id))}
+							/>
+						{/each}
+					{/each}
+				{:else}
+					{#each filtered as s (s.id)}
+						{@const pip = pipFor(s)}
+						<ShotRow
+							shot={s}
+							active={selected?.id === s.id}
+							selectable={selectMode}
+							selected={selectedIdSet.has(s.id)}
+							selectionDisabled={selectedIds.length >= COMPARE_MAX}
+							syncPip={pip.pip}
+							syncTitle={pip.title}
+							onclick={() => (selectMode ? toggleCompareSelection(s.id) : showShot(s.id))}
+						/>
+					{/each}
+				{/if}
 				{#if filtered.length === 0}
 					<div class="hi-empty">No shots match.</div>
 				{/if}
@@ -1494,7 +1680,7 @@
 						</ol>
 					{/if}
 				</div>
-			{:else if selected}
+			{:else if selected && (!phoneLayout.current || phoneDetail)}
 				<!-- Keyed on the shot id: `ShotDetail` holds a local notes draft
 				     in component state, so reusing one instance across a shot
 				     change could save shot A's open draft onto shot B. The
@@ -1503,6 +1689,7 @@
 				{#key selected.id}
 					<ShotDetail
 						shot={selected}
+						bind:phoneMenuOpen={shotMenuOpen}
 						onNotesChange={(notes) => {
 							store.setNotes(selected.id, notes);
 							syncEditToVisualizer(selected.id);
@@ -1578,12 +1765,43 @@
 						}}
 					/>
 				{/key}
-			{:else}
+			{:else if !phoneLayout.current}
 				<div class="hi-detail-empty">Select a shot to see its detail.</div>
 			{/if}
 		</div>
 	{/if}
 </div>
+
+{#if phoneLayout.current && !phoneDetail}
+	{#if selectMode}
+		<!-- Android's `PhoneSelectBar`: over the tab bar while picking. -->
+		<div class="hi-pselect">
+			<button type="button" class="hi-pselect-cancel" onclick={toggleSelectMode}>Cancel</button>
+			<span class="hi-pselect-count">{selectedIds.length} picked</span>
+			<button
+				type="button"
+				class="hi-pselect-go"
+				disabled={selectedIds.length < 2}
+				onclick={openCompare}
+			>
+				<ChartLineIcon aria-hidden="true" /> Compare
+			</button>
+		</div>
+	{:else}
+		<PhoneFab
+			label="Log brew"
+			title="Log a brew made off the machine — pourover, AeroPress, French press…"
+			haspopup="dialog"
+			onclick={openLogBrew}
+		/>
+	{/if}
+	<PhoneOverflowSheet
+		open={exportSheetOpen}
+		title="Export as"
+		items={exportItems}
+		onClose={() => (exportSheetOpen = false)}
+	/>
+{/if}
 
 {#if compareOpen && compareShots.length >= 2}
 	<CompareOverlay shots={compareShots} onClose={closeCompare} />
@@ -2002,8 +2220,15 @@
 	/* ── Phone (≤ 600 px): the list and the detail are separate screens ───── */
 	@media (max-width: 600px) {
 		.hi-page {
-			padding-bottom: 24px;
-			gap: 16px;
+			/* Room to scroll the last row out from under the floating button. */
+			padding: 0 0 96px;
+			gap: 0;
+		}
+		.hi-head {
+			display: block;
+		}
+		.hi-sub {
+			display: none;
 		}
 		/* The page scrolls as one column: the list loses its own scroller and
 		   the split no longer shrinks to fit (the shrink is what drew the
@@ -2013,61 +2238,189 @@
 			flex: none;
 		}
 		.hi-list {
+			display: flex;
+			flex-direction: column;
+			gap: 2px;
 			max-height: none;
 			overflow: visible;
-			padding: 4px;
+			padding: 4px var(--page-pad-x) 0;
+			background: transparent;
+			border: 0;
 		}
 		.hi-page[data-phone-view='list'] .hi-split > :not(.hi-list) {
 			display: none;
 		}
 		.hi-page[data-phone-view='detail'] {
-			padding-top: 0;
+			padding: 0;
 		}
-		.hi-page[data-phone-view='detail'] > :not(:global(.pbar), .hi-split),
+		.hi-page[data-phone-view='detail'] > :not(.hi-split),
 		.hi-page[data-phone-view='detail'] .hi-list {
 			display: none;
 		}
+		.hi-page[data-phone-view='detail'] .hi-split {
+			flex: 1 0 auto;
+		}
+		.hi-import-banner,
+		.hi-select-banner {
+			margin: 6px var(--page-pad-x);
+		}
+		.hi-empty-page {
+			margin: 0 var(--page-pad-x);
+		}
 
-		/* List screen: search on its own row, the actions in one row under it,
-		   the stat tiles tighter, the filter row sideways. */
-		.hi-head {
+		.hi-pstats {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 10px;
+			padding: 4px var(--page-pad-x);
+		}
+		.hi-pstat {
+			display: flex;
 			flex-direction: column;
-			align-items: stretch;
-			gap: 14px;
+			align-items: center;
+			gap: 3px;
+			min-width: 0;
+			padding: 11px 6px;
+			border-radius: 12px;
+			background: var(--bg-surface);
 		}
-		.hi-head-r {
-			flex-wrap: wrap;
-			width: 100%;
+		.hi-pstat-v {
+			font-family: var(--font-mono);
+			font-size: 19px;
+			font-weight: 500;
+			font-variant-numeric: tabular-nums;
+			line-height: 1.2;
+			white-space: nowrap;
+			color: var(--fg-1);
 		}
-		.hi-head-r :global(.hi-search) {
-			flex: 1 0 100%;
-			width: auto;
-			min-height: 44px;
+		.hi-pstat-l {
+			font-family: var(--font-sans);
+			font-size: 10.5px;
+			white-space: nowrap;
+			color: var(--fg-3);
 		}
-		.hi-head-r :global(.st-btn) {
-			min-height: 44px;
-		}
-		.hi-head-r :global(.more) {
-			margin-left: auto;
-		}
-		.hi-stats {
-			gap: 8px;
-		}
-		.hi-stats :global(.hi-stat) {
-			padding: 10px 12px;
+		.hi-pfilters {
+			display: flex;
+			align-items: center;
 			min-width: 0;
 		}
-		.hi-stats :global(.hi-stat-val) {
-			font-size: 18px;
+		.hi-pfilters :global(.pchips) {
+			flex: 1 1 auto;
+			padding-right: 8px;
 		}
-		.hi-filters {
-			flex-wrap: wrap;
-			row-gap: 10px;
+		.hi-pcompare {
+			flex: none;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 44px;
+			height: 44px;
+			margin-right: 6px;
+			border: 0;
+			border-radius: 50%;
+			background: transparent;
+			color: var(--fg-accent);
+			font-size: 20px;
+			cursor: pointer;
 		}
-		.hi-prof-filters {
-			flex: 1 0 100%;
-			overflow-x: auto;
-			scrollbar-width: none;
+		.hi-pcompare:focus-visible,
+		.hi-pcatch button:focus-visible,
+		.hi-pselect button:focus-visible {
+			outline: none;
+			box-shadow: var(--shadow-focus);
+		}
+		.hi-psearch {
+			padding: 6px var(--page-pad-x);
+		}
+		.hi-pcatch {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			padding: 4px var(--page-pad-x);
+			font-family: var(--font-sans);
+			font-size: 12px;
+			color: var(--fg-3);
+		}
+		.hi-pcatch span {
+			flex: 1 1 auto;
+			min-width: 0;
+		}
+		.hi-pcatch button {
+			flex: none;
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			min-height: 44px;
+			padding: 0 16px;
+			border: 0;
+			border-radius: 999px;
+			background: var(--ph-tonal);
+			color: var(--ph-on-tonal);
+			font-family: var(--font-sans);
+			font-size: 13px;
+			font-weight: 500;
+			cursor: pointer;
+		}
+		.hi-pday {
+			margin: 0;
+			padding: 12px 2px 4px;
+			font-family: var(--font-sans);
+			font-size: 10.5px;
+			font-weight: 500;
+			letter-spacing: 0.07em;
+			text-transform: uppercase;
+			color: var(--fg-3);
+		}
+		.hi-pselect {
+			position: fixed;
+			left: 0;
+			right: 0;
+			bottom: var(--ptab-clear);
+			z-index: 40;
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			padding: 8px calc(16px + env(safe-area-inset-right, 0px)) 8px
+				calc(16px + env(safe-area-inset-left, 0px));
+			background: var(--bg-surface);
+			border-top: 1px solid var(--ph-outline-variant);
+		}
+		.hi-pselect-cancel {
+			min-height: 44px;
+			padding: 0 8px;
+			border: 0;
+			border-radius: 999px;
+			background: transparent;
+			color: var(--fg-accent);
+			font-family: var(--font-sans);
+			font-size: 14px;
+			font-weight: 500;
+			cursor: pointer;
+		}
+		.hi-pselect-count {
+			flex: 1 1 auto;
+			font-family: var(--font-sans);
+			font-size: 14px;
+			color: var(--fg-3);
+		}
+		.hi-pselect-go {
+			display: inline-flex;
+			align-items: center;
+			gap: 8px;
+			min-height: 44px;
+			padding: 0 18px;
+			border: 0;
+			border-radius: 999px;
+			background: var(--copper-500);
+			color: var(--fg-on-accent);
+			font-family: var(--font-sans);
+			font-size: 14px;
+			font-weight: 500;
+			cursor: pointer;
+		}
+		.hi-pselect-go:disabled {
+			opacity: 0.4;
+			cursor: default;
 		}
 	}
 </style>

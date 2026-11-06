@@ -12,6 +12,8 @@ declare global {
 			fromBeansList?: boolean;
 			/** Phone History: the shot whose detail screen this entry shows ($lib/shell/phone-nav). */
 			historyShot?: string;
+			/** Phone Beans: the bag whose detail screen this entry shows ($lib/shell/phone-nav). */
+			beanDetail?: string;
 			/** Phone Settings: a section screen opened from the section list ($lib/shell/phone-nav). */
 			fromSettingsList?: boolean;
 		}

@@ -2,9 +2,9 @@
  * `#lib/shell/phone-nav.js` — how the phone-width list → detail screens are
  * entered and left, the same rule as `#lib/beans/editor-nav`.
  *
- * At phone width (and only there) History's shot detail and Settings' section
- * screens are history entries of their own, so system / browser Back returns
- * to the list. Leaving by the bar's ← steps back from an entry the list
+ * At phone width (and only there) History's shot detail, Beans' bag detail and
+ * Settings' section screens are history entries of their own, so system /
+ * browser Back returns to the list. Leaving by the bar's ← steps back from an entry the list
  * pushed. A deep link has no list entry behind it, so ← replaces itself with
  * the list instead of leaving the app.
  *
@@ -37,6 +37,23 @@ export function leaveShot(): void {
 	const list = new URL(page.url.href);
 	list.searchParams.delete('shot');
 	void goto(list, { replace: true, reset: false });
+}
+
+/** The bag on a phone detail screen, or `null` on the list. */
+export function phoneBeanId(): string | null {
+	if (!phoneLayout.current) return null;
+	return page.state.beanDetail ?? null;
+}
+
+/** Open a bag's detail screen. Shallow: the URL stays the list's. */
+export function openBean(id: string): void {
+	if (!phoneLayout.current) return;
+	void goto(page.url.href, { state: { beanDetail: id }, shallow: true, persistState: true });
+}
+
+/** Leave the bag detail screen for the list. */
+export function leaveBean(): void {
+	if (page.state.beanDetail != null) history.back();
 }
 
 /** Open a Settings section screen. The hash is the screen. */
