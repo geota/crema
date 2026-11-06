@@ -68,6 +68,20 @@
 	import WarningCircleIcon from 'phosphor-svelte/lib/WarningCircleIcon';
 	import WrenchIcon from 'phosphor-svelte/lib/WrenchIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
+	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
+	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
+	import ArrowsOutIcon from 'phosphor-svelte/lib/ArrowsOutIcon';
+	import BluetoothSlashIcon from 'phosphor-svelte/lib/BluetoothSlashIcon';
+	import BookmarkSimpleIcon from 'phosphor-svelte/lib/BookmarkSimpleIcon';
+	import CloudArrowDownIcon from 'phosphor-svelte/lib/CloudArrowDownIcon';
+	import LightningIcon from 'phosphor-svelte/lib/LightningIcon';
+	import LinkIcon from 'phosphor-svelte/lib/LinkIcon';
+	import PaperPlaneTiltIcon from 'phosphor-svelte/lib/PaperPlaneTiltIcon';
+	import PlugsConnectedIcon from 'phosphor-svelte/lib/PlugsConnectedIcon';
+	import SignInIcon from 'phosphor-svelte/lib/SignInIcon';
+	import SignOutIcon from 'phosphor-svelte/lib/SignOutIcon';
+	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
+	import StopIcon from 'phosphor-svelte/lib/StopIcon';
 
 	/**
 	 * Name → component map for icons chosen *at runtime* — the call sites that
@@ -84,10 +98,15 @@
 	const ICONS: Record<string, Component> = {
 		archive: ArchiveIcon,
 		'archive-box': PackageIcon,
+		'arrow-counter-clockwise': ArrowCounterClockwiseIcon,
 		'arrow-down': ArrowDownIcon,
+		'arrow-square-out': ArrowSquareOutIcon,
 		'arrow-up': ArrowUpIcon,
 		'arrows-clockwise': ArrowsClockwiseIcon,
+		'arrows-out': ArrowsOutIcon,
 		bluetooth: BluetoothIcon,
+		'bluetooth-slash': BluetoothSlashIcon,
+		'bookmark-simple': BookmarkSimpleIcon,
 		calendar: CalendarIcon,
 		'camera-plus': CameraPlusIcon,
 		'caret-down': CaretDownIcon,
@@ -100,6 +119,7 @@
 		clock: ClockIcon,
 		'clock-counter-clockwise': ClockCounterClockwiseIcon,
 		'cloud-arrow-up': CloudArrowUpIcon,
+		'cloud-arrow-down': CloudArrowDownIcon,
 		cloud: CloudIcon,
 		'cloud-slash': CloudSlashIcon,
 		coffee: CoffeeIcon,
@@ -121,18 +141,25 @@
 		gauge: GaugeIcon,
 		'gear-six': GearSixIcon,
 		info: InfoIcon,
+		lightning: LightningIcon,
+		link: LinkIcon,
 		'link-break': LinkBreakIcon,
 		'list-bullets': ListBulletsIcon,
 		'magnifying-glass': MagnifyingGlassIcon,
 		monitor: MonitorIcon,
 		moon: MoonIcon,
 		package: PackageIcon,
+		'paper-plane-tilt': PaperPlaneTiltIcon,
 		plugs: PlugsIcon,
+		'plugs-connected': PlugsConnectedIcon,
 		'pencil-simple': PencilSimpleIcon,
 		'plug-charging': PlugChargingIcon,
 		'plus-circle': PlusCircleIcon,
 		scales: ScalesIcon,
 		'share-network': ShareNetworkIcon,
+		'sign-in': SignInIcon,
+		'sign-out': SignOutIcon,
+		'sliders-horizontal': SlidersHorizontalIcon,
 		snowflake: SnowflakeIcon,
 		'sort-ascending': SortAscendingIcon,
 		'sort-descending': SortDescendingIcon,
@@ -144,6 +171,7 @@
 		sun: SunIcon,
 		square: SquareIcon,
 		star: StarIcon,
+		stop: StopIcon,
 		tag: TagIcon,
 		thermometer: ThermometerIcon,
 		timer: TimerIcon,
@@ -154,6 +182,9 @@
 		wrench: WrenchIcon,
 		x: XIcon
 	};
+
+	/** Every name `<Icon>` can draw. `icon-names.vitest.ts` checks the source against it. */
+	export const ICON_NAMES: readonly string[] = Object.keys(ICONS);
 
 	type Weight = 'thin' | 'light' | 'regular' | 'bold' | 'fill' | 'duotone';
 

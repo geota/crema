@@ -2038,6 +2038,19 @@
 		.hi-metrics {
 			grid-template-columns: repeat(4, minmax(0, 1fr));
 		}
+		/* The actions go under the blocks, and the blocks wrap: beside the
+		   actions they had too little room and overprinted each other. */
+		.hi-detail-head {
+			flex-direction: column;
+			align-items: stretch;
+		}
+		.hi-head-blocks {
+			flex-wrap: wrap;
+			gap: 12px 28px;
+		}
+		.hi-detail-actions {
+			justify-content: flex-start;
+		}
 	}
 
 	/* Phone (≤ 600 px): the detail is its own screen. The header blocks stack

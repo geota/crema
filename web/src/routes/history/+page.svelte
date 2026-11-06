@@ -2249,8 +2249,20 @@
 		.hi-stats {
 			grid-template-columns: repeat(3, minmax(0, 1fr));
 		}
+		/* Stacked, the page grows and the window scrolls. Brew's route CSS pins
+		   `.qcontain` to the viewport once Brew has been visited, and held to
+		   that height the split squeezes the list's row to almost nothing and
+		   the detail is drawn over the list. */
+		.hi-page {
+			height: auto;
+		}
 		.hi-split {
 			grid-template-columns: minmax(0, 1fr);
+		}
+		/* Short enough to show the top of the detail, so that picking a row
+		   visibly opens it. */
+		.hi-list {
+			max-height: 45vh;
 		}
 	}
 

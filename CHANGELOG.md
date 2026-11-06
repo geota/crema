@@ -38,6 +38,18 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   from any other tab, the gear leads to the machine card and Connect. Nothing
   changes above 600 px. Web.
 
+### Fixed
+
+- **Missing web icons are back** — Stop, the chart's enlarge button, the bag
+  photo's edit mark, and the icons on Settings, shot detail and bean filter
+  buttons were drawn blank. A test now fails on a name the icon map doesn't
+  have. Web.
+- **History no longer draws the shot detail over the list on tablets** — from
+  601 to 1100 px wide the list and the detail stack and the page scrolls, and
+  it returns to where you left it. The list is shorter, so a picked shot's
+  detail shows below it, and the detail's header no longer overprints itself.
+  Web.
+
 ## [0.10.0] — 2026-10-30
 
 ### Added

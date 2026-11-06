@@ -592,10 +592,7 @@
 						aria-label={hasPhoto ? 'Replace bag photo' : 'Add bag photo'}
 					/>
 					<span class="be-photo-overlay">
-						<i
-							class="ph {hasPhoto ? 'ph-pencil-simple' : 'ph-camera-plus'}"
-							aria-hidden="true"
-						></i>
+						<Icon name={hasPhoto ? 'pencil-simple' : 'camera-plus'} aria-hidden="true" />
 					</span>
 				</label>
 				<div class="be-photo-cap">{resolvedRoaster?.name ?? 'No roaster'}</div>
