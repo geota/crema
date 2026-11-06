@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ArchiveIcon from 'phosphor-svelte/lib/ArchiveIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import XCircleIcon from 'phosphor-svelte/lib/XCircleIcon';
@@ -16,16 +17,18 @@
 	 * (`getBeanStore().getBean(id)` + the shared
 	 * `snapshotFromBean` helper at the call site).
 	 *
-	 * Sort: most-recently-updated bag first — same default the brew
-	 * page's library page uses for the bags tab.
+	 * The core decides the rows (`beanPickerRows`): the same bags, in the
+	 * same order, as Android's picker.
 	 */
 	import { getBeanStore, beanDaysOffRoast, type Bean, type Roaster } from '#lib/bean/index.js';
+	import { beanPickerRows } from '#lib/bean/picker.js';
 
 	let {
 		currentBeanId,
 		onPick,
 		onClear,
-		onClose
+		onClose,
+		allowArchived = true
 	}: {
 		/** The shot's current bean FK, for the "currently bound" highlight. */
 		currentBeanId: string | null;
@@ -35,34 +38,22 @@
 		onClear: () => void;
 		/** Close the modal without changing anything. */
 		onClose: () => void;
+		/** Offer "Include archived"; false for a caller that couldn't use one. */
+		allowArchived?: boolean;
 	} = $props();
 
 	const library = getBeanStore();
 
-	/** Search query — case-insensitive substring over name + roaster. */
 	let query = $state('');
+	let includeArchived = $state(false);
 
-	/**
-	 * The bags to display: tombstoned / archived bags filtered out, then
-	 * searched, then sorted by `updatedAt` desc. Archived bags would
-	 * confuse the rebind UX — they're "this bag is done"; if the user
-	 * wants to bind a finished bag, they can unarchive it first.
-	 */
-	const visible = $derived.by(() => {
-		const q = query.trim().toLowerCase();
-		return library.beans
-			.filter((b) => b.deletedAt == null && b.archivedAt == null)
-			.filter((b) => {
-				if (q === '') return true;
-				const name = b.name.toLowerCase();
-				const r = b.roasterId
-					? (library.getRoaster(b.roasterId)?.name ?? '').toLowerCase()
-					: '';
-				return name.includes(q) || r.includes(q);
-			})
-			.slice()
-			.sort((a, b) => b.updatedAt - a.updatedAt);
-	});
+	const rows = $derived(
+		beanPickerRows(library.beans, library.roasters, {
+			currentId: currentBeanId,
+			includeArchived,
+			search: query
+		})
+	);
 
 	function pick(bean: Bean): void {
 		const roaster = bean.roasterId ? library.getRoaster(bean.roasterId) : null;
@@ -79,10 +70,12 @@
 
 	function beanSubtitle(b: Bean): string {
 		const parts: string[] = [];
+		if (b.archivedAt != null) parts.push('Archived');
 		const r = b.roasterId ? library.getRoaster(b.roasterId) : null;
 		if (r?.name) parts.push(r.name);
 		const days = beanDaysOffRoast(b);
 		if (days != null) parts.push(`${days}d off roast`);
+		if (b.bagSize > 0) parts.push(`${Math.max(0, Math.round(b.remaining))} g left`);
 		return parts.join(' · ');
 	}
 </script>
@@ -113,18 +106,31 @@
 			<MagnifyingGlassIcon aria-hidden="true" />
 			<input
 				bind:value={query}
-				aria-label="Search bags or roasters"
-				placeholder="Search bag or roaster…"
+				aria-label="Search beans, origin, notes"
+				placeholder="Search beans, origin, notes…"
 				autocomplete="off"
 			/>
 		</div>
 
+		{#if allowArchived && (rows.hasArchived || includeArchived)}
+			<button
+				type="button"
+				class="bp-toggle"
+				class:is-on={includeArchived}
+				aria-pressed={includeArchived}
+				onclick={() => (includeArchived = !includeArchived)}
+			>
+				<ArchiveIcon aria-hidden="true" /> Include archived
+			</button>
+		{/if}
+
 		<ul class="bp-list">
-			{#each visible as b (b.id)}
+			{#each rows.beans as b (b.id)}
 				<li>
 					<button
 						class="bp-row"
 						class:is-current={b.id === currentBeanId}
+						class:is-archived={b.archivedAt != null}
 						onclick={() => pick(b)}
 					>
 						<span class="bp-row-l">
@@ -137,7 +143,7 @@
 					</button>
 				</li>
 			{/each}
-			{#if visible.length === 0}
+			{#if rows.beans.length === 0}
 				<li class="bp-empty">
 					{query
 						? 'No bags match — try a different search.'
@@ -229,6 +235,28 @@
 		font-size: 13px;
 		padding: 2px 0;
 	}
+	.bp-toggle {
+		display: inline-flex;
+		align-items: center;
+		align-self: flex-start;
+		gap: 6px;
+		padding: 5px 10px;
+		background: transparent;
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		border-radius: var(--radius-pill);
+		color: var(--fg-3);
+		font-family: var(--font-sans);
+		font-size: 12px;
+		cursor: pointer;
+	}
+	.bp-toggle:hover {
+		background: rgba(var(--tint-rgb), 0.05);
+	}
+	.bp-toggle.is-on {
+		background: rgba(193, 116, 75, 0.08);
+		border-color: rgba(193, 116, 75, 0.3);
+		color: var(--fg-1);
+	}
 	.bp-list {
 		list-style: none;
 		padding: 0;
@@ -262,6 +290,9 @@
 		background: rgba(193, 116, 75, 0.08);
 		border: 1px solid rgba(193, 116, 75, 0.3);
 		padding: 9px 11px; /* compensate for the 1px border */
+	}
+	.bp-row.is-archived .bp-row-l {
+		opacity: 0.6;
 	}
 	.bp-row-l {
 		display: flex;

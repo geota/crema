@@ -58,6 +58,7 @@ pub mod bean;
 pub mod bean_coerce;
 pub mod bean_filter;
 pub mod bean_import;
+pub mod bean_picker;
 pub mod bean_search;
 pub mod bean_sync;
 pub mod beanconqueror;
@@ -134,6 +135,9 @@ pub use bean_filter::{
     BeanTagCount, filter_beans, filter_beans_json,
 };
 pub use bean_import::{BeanImportMerge, merge_bean_import, merge_bean_import_json};
+pub use bean_picker::{
+    BeanPickerQuery, BeanPickerResult, bean_picker, bean_picker_json, rank_beans_for_picker,
+};
 pub use bean_search::{
     FieldHit, SearchField, SearchHit, SearchSegment, search_beans, search_beans_json,
     search_roasters, search_roasters_json,

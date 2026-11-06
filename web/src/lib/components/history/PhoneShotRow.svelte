@@ -51,6 +51,9 @@
 
 	const settings = getSettingsStore();
 	const method = $derived(methodOf(shot));
+	const hasCurve = $derived(
+		shot.record.samples.length > 0 || (shot.brewSeries?.samples.length ?? 0) > 0
+	);
 	const beanLine = $derived.by(() => {
 		const bean = [shot.bean?.roasterName?.trim(), shot.bean?.name?.trim()].filter(Boolean);
 		return [...bean, grindLabel(shot)].filter(Boolean).join(' · ') || '—';
@@ -97,13 +100,13 @@
 			{#if picked}<CheckCircleIcon weight="fill" />{:else}<CircleIcon />{/if}
 		</span>
 	{/if}
-	<span class="psr-spark">
+	<span class={['psr-spark', { 'is-mark': !hasCurve }]}>
 		{#if shot.record.samples.length > 0}
 			<MiniShotChart series={spark} width={58} height={36} />
 		{:else if shot.brewSeries && shot.brewSeries.samples.length > 0}
 			<MiniBrewChart series={shot.brewSeries} width={58} height={36} />
 		{:else}
-			<MethodMark {method} tile />
+			<MethodMark {method} size={16} />
 		{/if}
 	</span>
 	<span class="psr-main">
@@ -181,6 +184,13 @@
 		overflow: hidden;
 		border-radius: 8px;
 		background: var(--bg-surface);
+	}
+	/* No curve to draw: a bare mark, so the name keeps the chart's width. */
+	.psr-spark.is-mark {
+		width: 20px;
+		background: none;
+		color: var(--fg-accent);
+		opacity: 0.8;
 	}
 	.psr-main {
 		flex: 1 1 auto;

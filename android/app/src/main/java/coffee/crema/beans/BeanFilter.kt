@@ -112,7 +112,7 @@ fun sortFilteredBeans(
     // sort above survives as the tiebreak between equally-relevant bags.
     if (hits.active) return sorted.sortedByDescending { hits.score(it.id) }
     // Loaded bean to the top, then favourites, then the rest; [sort] above is the
-    // within-group order. Shared with profiles + the Brew pickers.
+    // within-group order. Shared with profiles.
     return sorted.pinActiveThenFavourite({ it.id == activeId }, { it.favourite == true })
 }
 
@@ -147,11 +147,3 @@ fun roasterBagCountLabel(beans: List<Bean>, roasterId: String): String {
     val base = "${mine.size} ${if (mine.size == 1) "bag" else "bags"}"
     return if (archived > 0) "$base · $archived archived" else base
 }
-
-/**
- * Brew-PICKER order: the same active→favourite→rest grouping as the library
- * [sortFilteredBeans] (both via [pinActiveThenFavourite]), but over a list the
- * caller already filtered (non-archived) — within-group order is store order.
- */
-fun rankBeansForPicker(beans: List<Bean>, activeId: String?): List<Bean> =
-    beans.pinActiveThenFavourite({ it.id == activeId }, { it.favourite == true })

@@ -10,10 +10,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -29,10 +34,10 @@ import coffee.crema.brew.methodIcon
 import coffee.crema.core.Bean
 import coffee.crema.core.BrewSeries
 import coffee.crema.core.Roaster
-import coffee.crema.ui.components.CremaFilterDropdown
+import coffee.crema.ui.components.BeanPickerDialog
+import coffee.crema.ui.components.CremaSplitPill
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
-import coffee.crema.ui.components.SortKey
 import coffee.crema.ui.theme.CremaTheme
 import kotlin.math.max
 
@@ -43,24 +48,14 @@ import kotlin.math.max
  * MethodMark / MiniBrewChart / BrewSessionChart.
  */
 
-/** The 32dp sunken method tile — the row's sparkline-slot stand-in. */
+/**
+ * A history row's method mark, for a row with no curve to draw: a bare glyph
+ * in a narrow slot, so the name and bean keep the width a chart would take.
+ */
 @Composable
-fun MethodMarkTile(method: String?, modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .size(width = 72.dp, height = 32.dp)
-            .background(
-                MaterialTheme.colorScheme.surfaceContainerLowest,
-                RoundedCornerShape(6.dp),
-            )
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                RoundedCornerShape(6.dp),
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        PhIcon(methodIcon(method), sizeDp = 16, tint = MaterialTheme.colorScheme.primary)
+fun RowMethodMark(method: String?, modifier: Modifier = Modifier) {
+    Box(modifier.width(20.dp), contentAlignment = Alignment.Center) {
+        PhIcon(methodIcon(method), sizeDp = 16, tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
     }
 }
 
@@ -287,11 +282,12 @@ private fun BrewSessionPlot(
 
 /**
  * The "Bean" field shared by the Log-brew form and the guided Brew setup
- * (issue #10): a dropdown of the library's bags — roaster, name and grams
- * left, archived bags excluded — plus "No bean", and the quiet
- * "more than the N g left in this bag" note when [doseG] exceeds the chosen
- * bag. Picking never changes the app's active bag. [onPick] gets a bean id
- * or [GuidedBeanRules.NO_BEAN].
+ * (issue #10): a pill with the chosen bag and its grams left, opening the
+ * [BeanPickerDialog], plus the quiet "more than the N g left in this bag" note
+ * when [doseG] exceeds the chosen bag. Picking never changes the app's active
+ * bag. [onPick] gets a bean id or [GuidedBeanRules.NO_BEAN]. [allowArchived]
+ * false keeps archived bags out of the picker, for a pick that
+ * [GuidedBeanRules.resolve] would replace.
  */
 @Composable
 fun BeanPickField(
@@ -301,26 +297,19 @@ fun BeanPickField(
     doseG: Double,
     onPick: (String) -> Unit,
     modifier: Modifier = Modifier,
+    allowArchived: Boolean = true,
     below: @Composable () -> Unit = {},
 ) {
     val bean = selectedId?.let { id -> beans.firstOrNull { it.id == id } }
+    var picking by rememberSaveable { mutableStateOf(false) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Eyebrow("Bean")
-        CremaFilterDropdown(
+        CremaSplitPill(
             icon = "coffee-bean",
-            keys = buildList {
-                add(SortKey(GuidedBeanRules.NO_BEAN, "No bean — inventory untouched"))
-                GuidedBeanRules.choices(beans).forEach { b ->
-                    val roaster = roasters.firstOrNull { it.id == b.roasterId }?.name
-                    val left = b.remaining?.let { " · ${it.toInt()} g left" }.orEmpty()
-                    add(SortKey(b.id, listOfNotNull(roaster, b.name).joinToString(" · ") + left))
-                }
-            },
-            selectedKey = selectedId ?: GuidedBeanRules.NO_BEAN,
-            onKeyChange = onPick,
-            // The closed pill: bag + grams left (the roaster is in the menu),
-            // so the grams never wrap out of a phone-width pill.
-            selectedLabel = bean?.let { b -> b.name + b.remaining?.let { " · ${it.toInt()} g left" }.orEmpty() },
+            // Bag + grams left (the roaster is in the picker), so the grams
+            // never wrap out of a phone-width pill.
+            label = bean?.let { b -> b.name + b.remaining?.let { " · ${it.toInt()} g left" }.orEmpty() } ?: NO_BEAN_LABEL,
+            onClick = { picking = true },
             modifier = Modifier.testTag("bean-pick"),
         )
         below()
@@ -328,7 +317,20 @@ fun BeanPickField(
             BeanOverdrawNote(GuidedBeanRules.overdrawNote(bean))
         }
     }
+    if (picking) {
+        BeanPickerDialog(
+            beans = beans,
+            roasters = roasters,
+            currentBeanId = selectedId,
+            onSelect = { id -> onPick(id ?: GuidedBeanRules.NO_BEAN); picking = false },
+            onDismiss = { picking = false },
+            noBeanLabel = NO_BEAN_LABEL,
+            allowArchived = allowArchived,
+        )
+    }
 }
+
+private const val NO_BEAN_LABEL = "No bean — inventory untouched"
 
 /** The quiet warning note — the web log form's `.bl-warn` (warning ink on a faint well). */
 @Composable

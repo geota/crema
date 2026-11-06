@@ -688,6 +688,12 @@ fn tokens(query: &str) -> Vec<Vec<char>> {
         .collect()
 }
 
+/// Whether `query` holds nothing to search for: [`search_beans`] returning
+/// nothing then means "no query", not "no matches".
+pub(crate) fn is_blank_query(query: &str) -> bool {
+    tokens(query).is_empty()
+}
+
 /// Score one row's docs against the query tokens.
 ///
 /// Every token must land somewhere (AND across tokens, OR across fields) —

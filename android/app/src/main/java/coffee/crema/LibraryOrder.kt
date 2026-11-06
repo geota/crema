@@ -1,8 +1,8 @@
 package coffee.crema
 
 /**
- * Shared library ordering for the bean + profile lists — used by BOTH their
- * browse pages and their Brew pickers. Pins the ACTIVE (loaded) item to the very
+ * Shared library ordering for the bean + profile browse pages and the profile
+ * pickers (bean pickers rank in the core: `rankBeansForPicker`). Pins the ACTIVE (loaded) item to the very
  * top, then FAVOURITES, then the rest. Each group keeps its existing order, so
  * whatever the caller already sorted by (the page's chosen sort, or store order
  * in a picker) becomes the within-group order. Stable.

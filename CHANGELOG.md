@@ -44,6 +44,21 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   back bar replaces the top bar. Bluetooth stays on Brew's bar, as on Android;
   from any other tab, the gear leads to the machine card and Connect. Nothing
   changes above 600 px. Web.
+- **One bean picker, with search, everywhere a bag is chosen** — changing a
+  shot's bean and Log brew now share one picker on Android, phone and tablet,
+  and its search finds a bag by origin, process or notes and survives a typo,
+  as the Beans page's does. An **Include archived** toggle, off by default,
+  adds finished bags, and an archived bag a shot already uses still shows as
+  its current one. On Android the phone's dropdown and Log brew's menu become
+  this dialog. Guided Brew's picker has no toggle, because a guided session
+  replaces an archived bag with the active one. Android, web.
+- **Pickers list bags in the same order in both apps** — the current bag, then
+  favourites, then the rest oldest first, decided in the core. Web's picker
+  used to put the most recently edited bag first, and Android's oldest-first
+  order could shift for bags that arrived by sync or import. Android, web.
+- **Today and 7 days on web History** — the range now offers All time, 30 days,
+  7 days and Today, in both layouts, with Android's labels and day boundaries:
+  Today starts at local midnight, 7 and 30 days are rolling. Web.
 
 ### Fixed
 
@@ -57,6 +72,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   full row so the time can be read, and the steppers stay inside their cards.
   The fields stack below 380 px. A logged brew's detail uses two columns, so a
   stepper no longer runs off the row. Nothing changes above 600 px. Web.
+- **Archived bags no longer appear in tablet pickers** — the tablet's Change
+  bean dialog and Brew bean picker listed archived bags, unlike every other
+  picker. Android.
+- **A logged brew's row keeps its text** — the method icon took the width of a
+  chart in History, which cut off the name and bean. It's now a small bare mark.
+  Android and web.
 - **Missing web icons are back** — Stop, the chart's enlarge button, the bag
   photo's edit mark, and the icons on Settings, shot detail and bean filter
   buttons were drawn blank. A test now fails on a name the icon map doesn't

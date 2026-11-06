@@ -82,6 +82,13 @@
 	import { ShotRow, ShotDetail, CompareOverlay } from '#lib/components/history/index.js';
 	import PhoneShotRow from '#lib/components/history/PhoneShotRow.svelte';
 	import { groupShots } from '#lib/history/phone-list.js';
+	import {
+		HISTORY_RANGES,
+		minuteBucket,
+		msToNextMinute,
+		rangeCutoff,
+		type HistoryRange
+	} from '#lib/history/range.js';
 	import ShotImportDialog from '#lib/components/history/ShotImportDialog.svelte';
 	import LogBrewDialog from '#lib/components/brewlog/LogBrewDialog.svelte';
 	import { methodLabel, type LogBrewPrefill } from '#lib/brew/methods.js';
@@ -711,8 +718,8 @@
 	 * and `/beans`. An empty list means "no tag filter applied".
 	 */
 	let selectedTags = $state<string[]>([]);
-	/** The active date-range filter — `30d` keeps only the last 30 days. */
-	let range = $state<'30d' | 'all'>('all');
+	/** The active date-range filter, one of {@link HISTORY_RANGES}. */
+	let range = $state<HistoryRange>('all');
 	/** The selected shot's id. */
 	let selectedId = $state<string | null>(null);
 	/**
@@ -737,7 +744,7 @@
 			filterBean: string;
 			filterMethod: string;
 			selectedTags: string[];
-			range: '30d' | 'all';
+			range: HistoryRange;
 			selectedId: string | null;
 		}>('history', {
 			sortField: 'completedAt',
@@ -786,8 +793,21 @@
 	});
 	useScrollMemory({ key: () => 'history/page', pixelOnly: true });
 
-	/** Milliseconds in a day — shared by the range filter and the stats. */
-	const dayMs = 24 * 60 * 60 * 1000;
+	/**
+	 * The current minute, ticking by itself so a range and the day headings stay
+	 * right on a page left open past midnight (Android `rememberMinuteBucket`).
+	 */
+	let nowBucket = $state(minuteBucket(Date.now()));
+	$effect(() => {
+		let timer: ReturnType<typeof setTimeout>;
+		const tick = (): void => {
+			const now = Date.now();
+			nowBucket = minuteBucket(now);
+			timer = setTimeout(tick, msToNextMinute(now));
+		};
+		tick();
+		return () => clearTimeout(timer);
+	});
 
 	/** Names already used for the shot editor's barista / drinker suggestions. */
 	const baristaSuggestions = $derived(recentNames(shots, 'barista'));
@@ -1022,8 +1042,7 @@
 	/** The filtered shot list the list pane renders. */
 	const filtered = $derived.by(() => {
 		const query = q.trim().toLowerCase();
-		// The "Last 30 days" range cuts off shots older than the window.
-		const cutoff = range === '30d' ? Date.now() - 30 * dayMs : null;
+		const cutoff = rangeCutoff(range, nowBucket);
 		const base = shots.filter((s) => {
 			if (cutoff != null && s.completedAt < cutoff) return false;
 			if (filterProfile !== 'all' && s.profileName !== filterProfile) return false;
@@ -1349,12 +1368,8 @@
 		...(scopedBag ? [{ id: scopedBag.id, label: `This bag · ${scopedBag.label}` }] : []),
 		...beansInUse.map((b) => ({ id: b.id, label: b.label, title: b.title }))
 	]);
-	const rangeOptions = [
-		{ id: 'all', label: 'All time' },
-		{ id: '30d', label: 'Last 30 days' }
-	];
 	/** Day headings, under the date sort only. */
-	const shotGroups = $derived(groupShots(filtered, sortField === 'completedAt', new Date()));
+	const shotGroups = $derived(groupShots(filtered, sortField === 'completedAt', new Date(nowBucket)));
 </script>
 
 <svelte:head>
@@ -1563,7 +1578,7 @@
 							<PhoneDropdownPill
 								icon="ph ph-calendar"
 								label="Range"
-								options={rangeOptions}
+								options={HISTORY_RANGES}
 								value={range}
 								onpick={(id) => (range = id as typeof range)}
 							/>
@@ -1667,16 +1682,13 @@
 			{/if}
 			<div class="pp-sort hi-range">
 				<span class="t-eyebrow" style="color:var(--fg-muted)">Range</span>
-				<button
-					class="pp-sort-opt"
-					class:is-active={range === '30d'}
-					onclick={() => (range = '30d')}>Last 30 days</button
-				>
-				<button
-					class="pp-sort-opt"
-					class:is-active={range === 'all'}
-					onclick={() => (range = 'all')}>All time</button
-				>
+				{#each HISTORY_RANGES as option (option.id)}
+					<button
+						class="pp-sort-opt"
+						class:is-active={range === option.id}
+						onclick={() => (range = option.id)}>{option.label}</button
+					>
+				{/each}
 			</div>
 			<div class="pp-sort">
 				<SortPill

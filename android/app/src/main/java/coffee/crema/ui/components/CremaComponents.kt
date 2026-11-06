@@ -1745,6 +1745,41 @@ fun CremaFilterDropdown(
 ) {
     val current = keys.firstOrNull { it.id == selectedKey } ?: keys.first()
     var menuOpen by remember { mutableStateOf(false) }
+    CremaSplitPill(
+        icon = icon,
+        label = selectedLabel ?: current.label,
+        onClick = { menuOpen = true },
+        modifier = modifier,
+    ) {
+        CremaAnchoredPopup(expanded = menuOpen, onDismiss = { menuOpen = false }) {
+            CremaMenuSurface(Modifier.widthIn(min = 172.dp, max = 240.dp)) {
+                keys.forEach { key ->
+                    CremaMenuItem(
+                        label = key.label,
+                        onClick = { menuOpen = false; onKeyChange(key.id) },
+                        leadingIcon = key.icon,
+                        active = key.id == selectedKey,
+                        showCheck = true,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The split pill's anatomy: a glyph naming the dimension, a hairline, then the
+ * current value and caret, tapping which calls [onClick]. [menu] is composed
+ * next to the value, for a dropdown anchored there.
+ */
+@Composable
+fun CremaSplitPill(
+    icon: String,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    menu: @Composable () -> Unit = {},
+) {
     val shape = RoundedCornerShape(999.dp)
     val hairline = MaterialTheme.colorScheme.outlineVariant
     Row(
@@ -1760,13 +1795,13 @@ fun CremaFilterDropdown(
         Box(Modifier.width(1.dp).fillMaxHeight().background(hairline))
         Box {
             Row(
-                Modifier.fillMaxHeight().clickable { menuOpen = true }
+                Modifier.fillMaxHeight().clickable(onClick = onClick)
                     .padding(start = 12.dp, end = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    selectedLabel ?: current.label,
+                    label,
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -1775,19 +1810,7 @@ fun CremaFilterDropdown(
                 )
                 PhIcon("caret-down", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            CremaAnchoredPopup(expanded = menuOpen, onDismiss = { menuOpen = false }) {
-                CremaMenuSurface(Modifier.widthIn(min = 172.dp, max = 240.dp)) {
-                    keys.forEach { key ->
-                        CremaMenuItem(
-                            label = key.label,
-                            onClick = { menuOpen = false; onKeyChange(key.id) },
-                            leadingIcon = key.icon,
-                            active = key.id == selectedKey,
-                            showCheck = true,
-                        )
-                    }
-                }
-            }
+            menu()
         }
     }
 }

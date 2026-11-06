@@ -359,6 +359,29 @@ data class BeanImportMerge (
 	val skipped: UInt
 )
 
+/// What a picker is showing.
+@Serializable
+data class BeanPickerQuery (
+	/// The bag the picker opened on: the shot's, the draft's, or the loaded
+	/// one. It leads the list and stays listed when archived.
+	val currentId: String? = null,
+	/// The "Include archived" toggle.
+	val includeArchived: Boolean,
+	/// The search box. Blank means no search.
+	val search: String
+)
+
+/// The picker's rows.
+@Serializable
+data class BeanPickerResult (
+	/// The bags to list, in display order.
+	val ids: List<String>,
+	/// Whether the library holds an archived bag besides the current one —
+	/// whether "Include archived" can change the list at all. Ignores the
+	/// search, so the toggle doesn't come and go while typing.
+	val hasArchived: Boolean
+)
+
 /// One local bag the push leg writes.
 @Serializable
 data class BeanPushItem (
