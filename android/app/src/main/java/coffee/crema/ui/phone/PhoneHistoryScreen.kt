@@ -51,6 +51,7 @@ import coffee.crema.history.isManualLog
 import coffee.crema.history.methodOf
 import coffee.crema.history.methodRatioLabel
 import coffee.crema.history.shotTitle
+import coffee.crema.ui.brewlog.RowMethodMark
 import coffee.crema.ui.brewlog.BrewSessionCanvas
 import coffee.crema.ui.brewlog.BrewSparkChart
 import coffee.crema.ui.phone.components.CremaNewFab
@@ -586,9 +587,7 @@ private fun PhoneShotRow(
             )
             rowSeries != null && rowSeries.samples.isNotEmpty() ->
                 BrewSparkChart(series = rowSeries, modifier = sparkModifier)
-            else -> Box(sparkModifier, contentAlignment = Alignment.Center) {
-                PhIcon(methodIcon(shot.methodOf), sizeDp = 16, tint = MaterialTheme.colorScheme.primary)
-            }
+            else -> RowMethodMark(shot.methodOf)
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

@@ -83,6 +83,9 @@
 	 */
 	/** Row method — `null` for machine espresso (issue #10). */
 	const method = $derived(methodOf(shot));
+	const hasCurve = $derived(
+		shot.record.samples.length > 0 || (shot.brewSeries?.samples.length ?? 0) > 0
+	);
 	/** Manually logged (no telemetry of any kind) → "logged" tag. */
 	const manual = $derived(isManualLog(shot));
 
@@ -149,6 +152,7 @@
 	class:is-active={active && !selectable}
 	class:is-selected={selectable && selected}
 	class:is-selectmode={selectable}
+	class:is-mark={!hasCurve}
 	aria-current={active && !selectable ? 'true' : undefined}
 	aria-pressed={selectable ? selected : undefined}
 	disabled={selectable && selectionDisabled && !selected}
@@ -169,7 +173,7 @@
 		{:else if shot.brewSeries && shot.brewSeries.samples.length > 0}
 			<MiniBrewChart series={shot.brewSeries} width={96} height={32} />
 		{:else}
-			<MethodMark {method} tile />
+			<MethodMark {method} size={16} />
 		{/if}
 	</div>
 	<div class="hi-row-main">
@@ -244,6 +248,18 @@
 	.hi-row.is-selectmode {
 		/* Reserve a slot for the leading checkbox without shifting the rest. */
 		grid-template-columns: 22px 60px 96px 1fr auto auto auto 8px;
+	}
+	/* No curve to draw: a bare mark in a narrow slot, so the name and bean keep
+	   the chart's width. */
+	.hi-row.is-mark {
+		grid-template-columns: 60px 20px 1fr auto auto auto 8px;
+	}
+	.hi-row.is-mark.is-selectmode {
+		grid-template-columns: 22px 60px 20px 1fr auto auto auto 8px;
+	}
+	.hi-row.is-mark .hi-row-spark {
+		color: var(--fg-accent);
+		opacity: 0.8;
 	}
 	.hi-row:hover:not(:disabled) {
 		background: rgba(var(--tint-rgb), 0.04);
