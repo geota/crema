@@ -458,11 +458,10 @@ private fun SwapDropdown(
                 }
                 HorizontalDivider(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 DdSectionHead("Bean", "All beans →", onAllBeans)
-                // Loaded bean leads, then favourites, then store order (shared rank).
-                val beans = rankBeansForPicker(
-                    ui.beans.filter { it.archivedAt == null },
-                    ui.activeBeanId,
-                ).take(3)
+                // Loaded bean leads, then favourites, then the rest (the core's rank).
+                val beans = remember(ui.beans, ui.activeBeanId) {
+                    rankBeansForPicker(ui.beans.filter { it.archivedAt == null }, ui.activeBeanId).take(3)
+                }
                 beans.forEach { b ->
                     val activeRow = b.id == ui.activeBeanId
                     val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name

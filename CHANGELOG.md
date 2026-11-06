@@ -37,9 +37,24 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   back bar replaces the top bar. Bluetooth stays on Brew's bar, as on Android;
   from any other tab, the gear leads to the machine card and Connect. Nothing
   changes above 600 px. Web.
+- **One bean picker, with search, everywhere a bag is chosen** — changing a
+  shot's bean and Log brew now share one picker on Android, phone and tablet,
+  and its search finds a bag by origin, process or notes and survives a typo,
+  as the Beans page's does. An **Include archived** toggle, off by default,
+  adds finished bags, and an archived bag a shot already uses still shows as
+  its current one. On Android the phone's dropdown and Log brew's menu become
+  this dialog. Guided Brew's picker has no toggle, because a guided session
+  replaces an archived bag with the active one. Android, web.
+- **Pickers list bags in the same order in both apps** — the current bag, then
+  favourites, then the rest oldest first, decided in the core. Web's picker
+  used to put the most recently edited bag first, and Android's oldest-first
+  order could shift for bags that arrived by sync or import. Android, web.
 
 ### Fixed
 
+- **Archived bags no longer appear in tablet pickers** — the tablet's Change
+  bean dialog and Brew bean picker listed archived bags, unlike every other
+  picker. Android.
 - **Missing web icons are back** — Stop, the chart's enlarge button, the bag
   photo's edit mark, and the icons on Settings, shot detail and bean filter
   buttons were drawn blank. A test now fails on a name the icon map doesn't

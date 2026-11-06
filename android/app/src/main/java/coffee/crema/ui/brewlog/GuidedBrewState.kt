@@ -66,14 +66,11 @@ data class GuidedBrewSetup(
  * Twin of the web `$lib/brew/bean-pick`.
  */
 object GuidedBeanRules {
-    /** [GuidedBrewSetup.beanPick] / the dropdown key for "No bean". */
+    /** [GuidedBrewSetup.beanPick] / the pick for "No bean". */
     const val NO_BEAN = "none"
 
     /** A bag a brew can use: it exists and is neither archived nor deleted. */
     fun pickable(b: Bean?): Boolean = b != null && b.archivedAt == null && b.deletedAt == null
-
-    /** The dropdown's bags, in library order — archived bags excluded (the log form's rule). */
-    fun choices(beans: List<Bean>): List<Bean> = beans.filter(::pickable)
 
     /**
      * The bag [pick] resolves to: the chosen bag while it's still pickable;

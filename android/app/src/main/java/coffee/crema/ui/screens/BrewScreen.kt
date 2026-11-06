@@ -845,8 +845,8 @@ private fun BeanBlock(
                     modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     compact = true,
                 )
-                // Loaded bean first, then favourite, then store order (shared rank).
-                val sorted = rankBeansForPicker(beans, activeBean?.id)
+                // Loaded bean first, then favourite, then the rest (the core's rank).
+                val sorted = rankBeansForPicker(beans.filter { it.archivedAt == null }, activeBean?.id)
                 // While searching, the core matcher (issue 62) decides both which
                 // bags show and in what order — same query, same answer as the
                 // library page. The pinning above is the no-query order.

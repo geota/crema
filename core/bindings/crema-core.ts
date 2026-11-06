@@ -408,6 +408,31 @@ export interface BeanImportMerge {
 	skipped: number;
 }
 
+/** What a picker is showing. */
+export interface BeanPickerQuery {
+	/**
+	 * The bag the picker opened on: the shot's, the draft's, or the loaded
+	 * one. It leads the list and stays listed when archived.
+	 */
+	currentId?: string;
+	/** The "Include archived" toggle. */
+	includeArchived: boolean;
+	/** The search box. Blank means no search. */
+	search: string;
+}
+
+/** The picker's rows. */
+export interface BeanPickerResult {
+	/** The bags to list, in display order. */
+	ids: string[];
+	/**
+	 * Whether the library holds an archived bag besides the current one —
+	 * whether "Include archived" can change the list at all. Ignores the
+	 * search, so the toggle doesn't come and go while typing.
+	 */
+	hasArchived: boolean;
+}
+
 /** One local bag the push leg writes. */
 export interface BeanPushItem {
 	/** The local bean id. */

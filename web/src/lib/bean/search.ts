@@ -83,6 +83,11 @@ export function libraryBeansJson(beans: readonly Bean[]): string {
 	return beansJson(beans);
 }
 
+/** The memoised `Roaster[]` JSON — shared with `#lib/bean/picker.js`. */
+export function libraryRoastersJson(roasters: readonly Roaster[]): string {
+	return roastersJson(roasters);
+}
+
 /**
  * Rank `beans` against `query`. Roasters are passed so a bag can match on its
  * roastery's name. A blank query returns {@link noSearch} — the caller keeps

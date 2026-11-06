@@ -50,6 +50,8 @@ private val beansMemo = JsonMemo<Bean> { searchJson.encodeToString(ListSerialize
 internal fun libraryBeansJson(beans: List<Bean>): String = beansMemo.of(beans)
 
 private val roastersMemo = JsonMemo<Roaster> { searchJson.encodeToString(ListSerializer(Roaster.serializer()), it) }
+/** The memoised `Roaster[]` JSON — shared with the bean picker ([beanPickerRows]). */
+internal fun libraryRoastersJson(roasters: List<Roaster>): String = roastersMemo.of(roasters)
 
 /**
  * A ranked search over one library, keyed by row id.

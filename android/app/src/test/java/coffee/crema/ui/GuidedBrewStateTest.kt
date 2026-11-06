@@ -256,10 +256,6 @@ class GuidedBrewStateTest {
         assertNull(GuidedBeanRules.resolve("gone", bags, "old")) // the active bag itself archived
     }
 
-    @Test fun thePickerListsOnlyUsableBags() {
-        assertEquals(listOf("active", "other"), GuidedBeanRules.choices(bags).map { it.id })
-    }
-
     @Test fun changingMethodOrRecipeKeepsTheChosenBean() {
         val s = GuidedBrewSetup(method = "pourover", recipe = recipe("a"), methodChosen = true, beanPick = "other")
         val otherMethod = GuidedSetupRules.resolve(s.copy(method = "aeropress", recipe = null), emptyList(), emptyMap(), null, template)

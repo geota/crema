@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.horizontalScroll
@@ -595,12 +594,8 @@ fun HistoryScreen(
                             onPrivacyChange = { p -> vm.setShotPrivacy(selected.id, p) },
                             // Post-hoc log fix-ups (issue #16): the dial-in loop spans
                             // shots, and the wrong bean is sometimes active at pull time.
-                            beanChoices = remember(ui.beans, ui.roasters) {
-                                ui.beans.map { b ->
-                                    val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
-                                    b.id to listOfNotNull(roaster, b.name).joinToString(" \u00b7 ")
-                                }
-                            },
+                            beans = ui.beans,
+                            roasters = ui.roasters,
                             onGrindChange = { g -> vm.setShotGrind(selected.id, g) },
                             onBeanChange = { bid -> vm.setShotBean(selected.id, bid) },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -905,8 +900,9 @@ private fun ShotDetail(
     defaultPrivacy: String = "unlisted",
     /** Per-shot privacy override edit; null reverts to the Sharing default. */
     onPrivacyChange: (String?) -> Unit = {},
-    /** Library beans as id → "Roaster · Name" labels, for Change bean. */
-    beanChoices: List<Pair<String, String>> = emptyList(),
+    /** The library, for Change bean. */
+    beans: List<coffee.crema.core.Bean> = emptyList(),
+    roasters: List<coffee.crema.core.Roaster> = emptyList(),
     /** Edit the grind recorded on this shot; null clears it (issue #16). */
     onGrindChange: (Float?) -> Unit = {},
     /** Re-attribute this shot to another bean; null = no bean (issue #16). */
@@ -1128,8 +1124,9 @@ private fun ShotDetail(
             )
         }
         if (changeBean) {
-            ShotBeanDialog(
-                choices = beanChoices,
+            coffee.crema.ui.components.BeanPickerDialog(
+                beans = beans,
+                roasters = roasters,
                 currentBeanId = shot.bean?.beanId,
                 onSelect = { onBeanChange(it); changeBean = false },
                 onDismiss = { changeBean = false },
@@ -1411,58 +1408,3 @@ private fun shotRatio(shot: StoredShot): String? =
     // water-in — the core's ratio_for_method, which the web's ratioLabel
     // also calls.
     shot.methodRatioLabel()
-
-
-/**
- * Re-attribute a stored shot to another library bean (issue #16) — a fresh
- * snapshot is frozen from the chosen bean; "No bean" clears the attribution.
- * Marked internal: the phone detail reuses it.
- */
-@Composable
-internal fun ShotBeanDialog(
-    choices: List<Pair<String, String>>,
-    currentBeanId: String?,
-    onSelect: (String?) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Change bean") },
-        text = {
-            Column(
-                Modifier.verticalScroll(rememberScrollState()).heightIn(max = 400.dp),
-            ) {
-                (choices + (null to "No bean")).forEach { (id, label) ->
-                    val selected = id == currentBeanId
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(id) }
-                            .padding(vertical = 12.dp, horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        PhIcon(
-                            if (id == null) "prohibit" else "coffee-bean",
-                            sizeDp = 16,
-                            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (selected) PhIcon("check", sizeDp = 15, tint = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
-}

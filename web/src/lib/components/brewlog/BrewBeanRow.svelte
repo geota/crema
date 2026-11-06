@@ -2,21 +2,23 @@
 	/**
 	 * `BrewBeanRow` — the "Bean" row shared by the Log-brew form and the
 	 * guided Brew setup (issue #10): the chosen bag with its roaster and
-	 * grams left, or "No bean", opening the library's `BeanPicker`
-	 * (archived bags excluded). Choosing here never changes the app's
-	 * active bag.
+	 * grams left, or "No bean", opening the library's `BeanPicker`.
+	 * Choosing here never changes the app's active bag.
 	 */
 	import { getBeanStore, type Bean } from '#lib/bean/index.js';
 	import BeanPicker from '#lib/components/history/BeanPicker.svelte';
 
 	let {
 		beanId,
-		onPick
+		onPick,
+		allowArchived = true
 	}: {
 		/** The chosen bag, or `null` for No bean. */
 		beanId: string | null;
 		/** A bag was picked (`null` = No bean). */
 		onPick: (id: string | null) => void;
+		/** Offer archived bags; false for a pick `resolveBrewBean` would replace. */
+		allowArchived?: boolean;
 	} = $props();
 
 	const library = getBeanStore();
@@ -48,6 +50,7 @@
 {#if picking}
 	<BeanPicker
 		currentBeanId={beanId}
+		{allowArchived}
 		onPick={(b: Bean) => {
 			onPick(b.id);
 			picking = false;
