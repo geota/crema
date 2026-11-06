@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -100,6 +102,7 @@ fun CanvasShotChart(
     enabledChannels: Set<String>,
     modifier: Modifier = Modifier,
     live: Boolean = true,
+    scrub: ChartScrubState? = null,
 ) {
     val tel = CremaTheme.telemetry
     val gridColor = MaterialTheme.colorScheme.outlineVariant
@@ -146,8 +149,7 @@ fun CanvasShotChart(
 
     // X-window TARGET: auto-grows with the shot (de1app-style). LIVE snaps up in
     // clean 10 s steps (10→20→30…); a finished shot fits its length to 5 s. Floor 10 s.
-    val lastSec = (samples.lastOrNull()?.elapsedMs ?: 0L) / 1000f
-    val targetXMax = if (live) max(10f, ceil(lastSec / 10f) * 10f) else max(10f, ceil(lastSec / 5f) * 5f)
+    val targetXMax = shotChartXMaxSec(samples, live)
     // Ease each live step over 300 ms (reaprime-style) so the window glides instead
     // of snapping; a finished shot is static, so it takes the target directly.
     // Read INSIDE the Canvas draw lambda (review #37): reading the animated
@@ -161,8 +163,8 @@ fun CanvasShotChart(
 
     Canvas(modifier) {
         val xMax = if (live) animatedXMax.value else targetXMax
-        val padL = 30.dp.toPx()
-        val padR = 34.dp.toPx()
+        val padL = ChartPadLeft.toPx()
+        val padR = ChartPadRight.toPx()
         val padT = 8.dp.toPx()
         val padB = 16.dp.toPx()
         val plotL = padL
@@ -255,7 +257,31 @@ fun CanvasShotChart(
                 }
             }
         }
+
+        // The readout's marker (#298): read here, in the draw phase, so a drag
+        // only redraws this canvas.
+        samples.getOrNull(scrub?.index ?: -1)?.let { s ->
+            val sx = xPx(s.elapsedMs / 1000f)
+            drawLine(nowColor, Offset(sx, plotT), Offset(sx, plotB), strokeWidth = 1.5.dp.toPx())
+            active.forEach { ch ->
+                if (!ch.dashed) {
+                    ch.valueOf(s)?.let { v ->
+                        drawCircle(ch.color, radius = 3.5.dp.toPx(), center = Offset(sx, yPx(v)))
+                    }
+                }
+            }
+        }
     }
+}
+
+/** The plot's horizontal insets, for the axis labels; scrub gestures need them too. */
+internal val ChartPadLeft = 30.dp
+internal val ChartPadRight = 34.dp
+
+/** The x-window for [samples]: 10 s steps when live, fitted to 5 s when finished. Floor 10 s. */
+internal fun shotChartXMaxSec(samples: List<TelemetrySample>, live: Boolean): Float {
+    val lastSec = (samples.lastOrNull()?.elapsedMs ?: 0L) / 1000f
+    return if (live) max(10f, ceil(lastSec / 10f) * 10f) else max(10f, ceil(lastSec / 5f) * 5f)
 }
 
 /**
@@ -269,11 +295,16 @@ fun CanvasShotChart(
  *  purpose: a Compose `Dialog` here has its window torn down by the
  *  expand-to-landscape config-change, which dismisses it and bounces the
  *  orientation straight back to portrait. */
-val LocalChartExpander = staticCompositionLocalOf<((@Composable (Modifier) -> Unit)?) -> Unit> { {} }
+val LocalChartExpander = staticCompositionLocalOf<(ExpandedChart?) -> Unit> { {} }
+
+/** What [ChartExpandOverlay] shows. A [scrubbable] chart uses taps itself, so the
+ *  overlay won't close on one; it brings its own close control. */
+class ExpandedChart(val scrubbable: Boolean, val content: @Composable (Modifier) -> Unit)
 
 @Composable
 fun EnlargeableChart(
     modifier: Modifier = Modifier,
+    scrubbable: Boolean = false,
     chart: @Composable (Modifier) -> Unit,
 ) {
     val expand = LocalChartExpander.current
@@ -295,7 +326,7 @@ fun EnlargeableChart(
             showHint = false
         }
     }
-    Box(modifier.clickable { expand(chart) }) {
+    Box(modifier.clickable { expand(ExpandedChart(scrubbable, chart)) }) {
         chart(Modifier.fillMaxSize())
         if (hintAlpha > 0f) {
             Surface(
@@ -335,7 +366,7 @@ private var chartExpandHintShown = false
  *  the manifest's `configChanges` so the rotation recomposes, not recreates. */
 @Composable
 fun ChartExpandOverlay(
-    chart: @Composable (Modifier) -> Unit,
+    chart: ExpandedChart,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -357,12 +388,19 @@ fun ChartExpandOverlay(
     }
     BackHandler(onBack = onClose)
     // Opaque full-bleed backdrop so the underlying screen doesn't show at the
-    // margin. The whole overlay is the close target (tap toggles, like open).
+    // margin. A plain chart's whole overlay is the close target (tap toggles,
+    // like open); a scrubbable chart closes from its own button or system back.
     Box(
         Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .clickable(onClickLabel = "Close expanded chart") { onClose() },
+            .then(
+                if (chart.scrubbable) {
+                    Modifier.pointerInput(Unit) {}
+                } else {
+                    Modifier.clickable(onClickLabel = "Close expanded chart") { onClose() }
+                },
+            ),
     ) {
         Surface(
             modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -370,10 +408,11 @@ fun ChartExpandOverlay(
             color = MaterialTheme.colorScheme.surface,
         ) {
             Box(Modifier.fillMaxSize().padding(12.dp)) {
-                // No close X — it sat on the y-axis. Tap anywhere (or the
-                // system back, handled above) collapses; the chart itself has
-                // no gestures to conflict with.
-                chart(Modifier.fillMaxSize())
+                // No overlay close X — it sat on the y-axis. A scrubbable chart
+                // puts one in its readout bar, above the plot.
+                CompositionLocalProvider(LocalChartExpandClose provides onClose) {
+                    chart.content(Modifier.fillMaxSize())
+                }
             }
         }
     }
