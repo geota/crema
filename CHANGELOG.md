@@ -37,6 +37,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   back bar replaces the top bar. Bluetooth stays on Brew's bar, as on Android;
   from any other tab, the gear leads to the machine card and Connect. Nothing
   changes above 600 px. Web.
+- **Today and 7 days on web History** — the range now offers All time, 30 days,
+  7 days and Today, in both layouts, with Android's labels and day boundaries:
+  Today starts at local midnight, 7 and 30 days are rolling. Web.
 
 ### Fixed
 
