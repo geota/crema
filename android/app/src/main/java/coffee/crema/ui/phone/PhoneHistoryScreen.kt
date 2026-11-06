@@ -72,8 +72,11 @@ import coffee.crema.ui.compare.PhoneSelectBar
 import coffee.crema.ui.compare.PhoneSelectHint
 import coffee.crema.ui.compare.RowCheck
 import coffee.crema.ui.compare.rememberCompareSelection
-import coffee.crema.ui.screens.CanvasShotChart
+import coffee.crema.ui.screens.ChartUnits
+import coffee.crema.ui.screens.DetailLegend
 import coffee.crema.ui.screens.EnlargeableChart
+import coffee.crema.ui.screens.InspectableShotChart
+import coffee.crema.ui.screens.ShotChartLegend
 import coffee.crema.ui.screens.historySortKeys
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
@@ -822,15 +825,7 @@ private fun PhoneShotDetail(
             } else {
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
                 Column(Modifier.padding(start = 6.dp, end = 10.dp, top = 10.dp, bottom = 6.dp)) {
-                    Row(
-                        Modifier.padding(start = 10.dp, bottom = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        DetailLegend("PRESS", tel.pressure)
-                        DetailLegend("FLOW", tel.flow)
-                        DetailLegend("TEMP", tel.temp)
-                        DetailLegend("WEIGHT", tel.weight)
-                    }
+                    ShotChartLegend(shot.samples, Modifier.padding(start = 10.dp, bottom = 4.dp))
                     if (shot.samples.isEmpty()) {
                         Box(Modifier.fillMaxWidth().height(140.dp), contentAlignment = Alignment.Center) {
                             Text(
@@ -840,13 +835,9 @@ private fun PhoneShotDetail(
                             )
                         }
                     } else {
-                        EnlargeableChart(Modifier.fillMaxWidth().height(190.dp)) { m ->
-                            CanvasShotChart(
-                                samples = shot.samples,
-                                enabledChannels = setOf("pressure", "flow", "headTemp", "weight"),
-                                live = false,
-                                modifier = m,
-                            )
+                        val units = ChartUnits(weightUnit, tempUnit, pressureUnit)
+                        EnlargeableChart(Modifier.fillMaxWidth().height(210.dp), scrubbable = true) { m ->
+                            InspectableShotChart(shot.samples, units, m)
                         }
                     }
                 }
@@ -1131,18 +1122,6 @@ private fun PlannedDetailLegend() {
             "PLANNED",
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun DetailLegend(label: String, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Box(Modifier.size(width = 8.dp, height = 3.dp).clip(RoundedCornerShape(2.dp)).background(color))
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold),
-            color = color,
         )
     }
 }

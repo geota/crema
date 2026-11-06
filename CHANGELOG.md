@@ -16,6 +16,19 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   theirs. A date in the future is refused. A brew older than a full history of
   300 is refused when logging, so it can't vanish on save. Tablet, phone and
   web.
+- **Scale flow on the History chart** — a shot with scale data now draws a thin
+  Scale flow line beside the machine's flow, and the legends name it. The line
+  stays off Brew's small Last shot chart. Android's tablet History chart gains a
+  legend, and the legends list only what the chart draws, so the web's wide
+  legend no longer names scale flow as "Flow" or a water temperature line it
+  never drew, and a shot with no scale has no scale entries. Android and web.
+- **Touch the History chart to read values** — a readout bar above the chart
+  shows the time and one coloured value per line, in your units, with its space
+  reserved so nothing moves. On the chart, a sideways drag scrubs, a tap still
+  expands and vertical scrolling still works; on the expanded chart, a tap or
+  drag scrubs. Android's expanded History chart now closes from an X in the bar
+  or system Back, not a tap. On the web, a tap on the wide chart now expands it
+  too. Android and web.
 - **Phone layout for the web app** — at 600 px and below the side rail gives
   way to a bottom tab bar (Brew, Scale, Profiles, Beans, History, as on
   Android) and a top bar with the Crema mark, the screen's title and its

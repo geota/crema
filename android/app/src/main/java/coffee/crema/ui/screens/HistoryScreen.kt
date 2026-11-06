@@ -561,9 +561,6 @@ fun HistoryScreen(
                         ShotDetail(
                             shot = selected,
                             quality = quality,
-                            // Fixed archival set (web detail chart): pressure + flow +
-                            // coffee temp + weight — not the QC live-chart selection.
-                            channels = setOf("pressure", "flow", "headTemp", "weight"),
                             weightUnit = ui.weightUnit,
                             tempUnit = ui.tempUnit,
                             pressureUnit = ui.pressureUnit,
@@ -884,7 +881,6 @@ private fun ShotDetail(
     shot: StoredShot,
     /** The core's shot-quality report, or null when unanalyzable (no block). */
     quality: ShotQualityReport?,
-    channels: Set<String>,
     weightUnit: String,
     tempUnit: String,
     pressureUnit: String,
@@ -1268,7 +1264,7 @@ private fun ShotDetail(
         Surface(
             // Fixed height inside the scrolling pane — the chart's dominant,
             // pre-quality-card size (it was weight(1f) before the card ate it).
-            modifier = Modifier.height(360.dp).fillMaxWidth(),
+            modifier = Modifier.height(400.dp).fillMaxWidth(),
             shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.surfaceContainer,
         ) {
@@ -1281,13 +1277,18 @@ private fun ShotDetail(
                     )
                 }
             } else {
-                EnlargeableChart(Modifier.fillMaxSize()) { m ->
-                    CanvasShotChart(
-                        samples = shot.samples,
-                        enabledChannels = channels,
-                        live = false,
-                        modifier = m.padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
-                    )
+                // Fixed archival set (see HISTORY_CHART_CHANNELS), not the QC
+                // live-chart selection.
+                Column {
+                    ShotChartLegend(shot.samples, Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp))
+                    val units = ChartUnits(weightUnit, tempUnit, pressureUnit)
+                    EnlargeableChart(Modifier.weight(1f).fillMaxWidth(), scrubbable = true) { m ->
+                        InspectableShotChart(
+                            shot.samples,
+                            units,
+                            m.padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+                        )
+                    }
                 }
             }
         }
