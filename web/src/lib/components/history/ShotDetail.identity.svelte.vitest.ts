@@ -152,6 +152,24 @@ describe('ShotDetail keeps to the shot it was mounted for', () => {
 		expect(calls.onNotesChange).toHaveBeenCalledOnce();
 	});
 
+	it('saves a value retyped after the store moved away from it', async () => {
+		const { calls, field, moveTo } = show();
+		const el = field('Tasting notes');
+		type(el, 'VALUE-X');
+		change(el);
+		await Promise.resolve();
+		moveTo(shotOf('shot:a', 'VALUE-X'));
+		moveTo(shotOf('shot:a', 'VALUE-Y'));
+		expect(el.value).toBe('VALUE-Y');
+		type(el, 'VALUE-X');
+		change(el);
+		await Promise.resolve();
+		expect(calls.onNotesChange.mock.calls).toEqual([
+			['shot:a', 'VALUE-X'],
+			['shot:a', 'VALUE-X']
+		]);
+	});
+
 	it('barista and grinder model name the first shot too', async () => {
 		const { calls, moveTo } = show();
 		const barista = document.querySelector<HTMLInputElement>('.hi-person input')!;

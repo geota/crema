@@ -52,6 +52,14 @@ export function filterScopeKey(inputs: {
  * filter hides it (resolved through `lookup`, the whole store). Changing any
  * filter afterwards ends the pin.
  */
+/**
+ * `shot` unless it is a soft-deleted tombstone. `HistoryStore.get` returns
+ * those for the sync layer; a screen must not show or edit one.
+ */
+export function liveShot<T extends { deletedAt?: number | null }>(shot: T | undefined): T | undefined {
+	return shot?.deletedAt == null ? shot : undefined;
+}
+
 export function selectedShot<T extends { id: string }>(
 	filtered: readonly T[],
 	selectedId: string | null,

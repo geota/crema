@@ -72,6 +72,7 @@
 		shotCoffee,
 		recentNames,
 		COFFEE_FILTER_PREFIX,
+		liveShot,
 		selectedShot,
 		shotStamp,
 		filterScopeKey,
@@ -525,27 +526,40 @@
 	// ── The detail's edits ───────────────────────────────────────────────
 	// All by the id `ShotDetail` was rendered for, never `selected`: a field
 	// can commit while its screen is going, after `selected` has moved on (or
-	// gone) with a Back, a filter change or a rotation.
+	// gone) with a Back, a filter change or a rotation. A shot deleted under the
+	// screen (a background sync) is a tombstone by then: its edits are dropped.
+	const isLive = (id: string): boolean => liveShot(store.get(id)) !== undefined;
 	function saveNotes(id: string, notes: string): void {
+		if (!isLive(id)) return;
 		store.setNotes(id, notes);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
+	function saveNextPlan(id: string, nextPlan: string): void {
+		if (!isLive(id)) return;
+		// Local-only workflow state — the exporter never sends it, so no
+		// Visualizer mirror.
+		store.setNextPlan(id, nextPlan);
+	}
 	function saveRating(id: string, rating: number): void {
+		if (!isLive(id)) return;
 		store.setRating(id, rating);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function savePrivacy(id: string, privacy: StoredShot['privacy']): void {
+		if (!isLive(id)) return;
 		store.setPrivacy(id, privacy ?? null);
 		syncEditToVisualizer(id);
 	}
 	function saveGrinderModel(id: string, grinderModel: string | null): void {
+		if (!isLive(id)) return;
 		store.setGrinderModel(id, grinderModel);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function savePerson(id: string, field: 'barista' | 'drinker', name: string | null): void {
+		if (!isLive(id)) return;
 		store.setPerson(id, field, name);
 		// Visualizer has a barista field but no drinker; the Decent record
 		// carries both.
@@ -553,16 +567,18 @@
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function saveTags(id: string, tags: string[]): void {
+		if (!isLive(id)) return;
 		store.setTags(id, tags);
 		syncEditToVisualizer(id);
 	}
 	function saveGrind(id: string, grinderSetting: string | null): void {
+		if (!isLive(id)) return;
 		store.setGrindSetting(id, grinderSetting);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function saveBean(id: string, bean: Bean | null, roaster: Roaster | null): void {
-		const shot = store.get(id);
+		const shot = liveShot(store.get(id));
 		if (!shot) return;
 		// Move the bag debit with the attribution (Android setShotBean parity):
 		// credit the wrongly-billed old bag, debit the new one, using the dose
@@ -579,7 +595,7 @@
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function saveManualBrew(id: string, patch: ManualBrewPatch): void {
-		const shot = store.get(id);
+		const shot = liveShot(store.get(id));
 		if (!shot) return;
 		// Manual rows keep their facts editable; a dose change re-settles the
 		// bag through the core rule (credit old, debit new — a no-op when the
@@ -591,11 +607,11 @@
 		store.updateManualBrew(id, patch);
 	}
 	function deleteById(id: string, opts: { remote: boolean }): void {
-		const shot = store.get(id);
+		const shot = liveShot(store.get(id));
 		if (shot) void handleDelete(shot, opts);
 	}
 	function logAgainById(id: string): void {
-		const shot = store.get(id);
+		const shot = liveShot(store.get(id));
 		if (shot) logAgain(shot);
 	}
 
@@ -1083,7 +1099,7 @@
 		selectedShot(filtered, phoneShot ?? selectedId, {
 			pin: phoneShot ? { id: phoneShot, scope: filterScope } : pin,
 			scope: filterScope,
-			lookup: (id) => store.get(id)
+			lookup: (id) => liveShot(store.get(id))
 		})
 	);
 	/** Showing the detail screen: false when the entry's shot no longer exists. */
@@ -1768,11 +1784,7 @@
 						shot={selected}
 						bind:phoneMenuOpen={shotMenuOpen}
 						onNotesChange={saveNotes}
-						onNextPlanChange={(id, nextPlan) => {
-							// Local-only workflow state — the exporter never sends
-							// it, so no Visualizer mirror.
-							store.setNextPlan(id, nextPlan);
-						}}
+						onNextPlanChange={saveNextPlan}
 						onRatingChange={saveRating}
 						onPrivacyChange={savePrivacy}
 						onGrinderModelChange={saveGrinderModel}

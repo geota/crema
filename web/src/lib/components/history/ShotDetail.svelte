@@ -644,14 +644,18 @@
 		commit: (value: string) => void
 	): Attachment<HTMLInputElement | HTMLTextAreaElement> {
 		return (node) => {
-			let last = node.value;
+			/** Queued but not yet in the store, so `stored()` can't rule it out. */
+			let pending: string | null = null;
 			const flush = (): void => {
 				const value = node.value;
-				const unchanged = value === last || value === stored();
-				last = value;
+				if (value === pending || value === stored()) return;
+				pending = value;
 				// In a microtask: removing a focused field fires `change` in the
 				// middle of Svelte's teardown, where state writes are forbidden.
-				if (!unchanged) queueMicrotask(() => commit(value));
+				queueMicrotask(() => {
+					pending = null;
+					commit(value);
+				});
 			};
 			node.addEventListener('change', flush);
 			return () => {
