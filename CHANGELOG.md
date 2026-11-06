@@ -9,6 +9,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Pick a brew's date and time, and change it later** — Log brew on Android
+  now has a When field with a date and time picker in place of "Logged N min
+  ago", defaulting to now, as on the web. Both apps can change the date of a
+  manually logged brew from its detail; machine shots and guided sessions keep
+  theirs. A date in the future is refused. A brew older than a full history of
+  300 is refused when logging, so it can't vanish on save. Tablet, phone and
+  web.
 - **Scale flow on the History chart** — a shot with scale data now draws a thin
   Scale flow line beside the machine's flow, and the legends name it. The line
   stays off Brew's small Last shot chart. Android's tablet History chart gains a
@@ -62,7 +69,6 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   favourites, then the rest oldest first, decided in the core. Web's picker
   used to put the most recently edited bag first, and Android's oldest-first
   order could shift for bags that arrived by sync or import. Android, web.
-||||||| c069336b
 - **Today and 7 days on web History** — the range now offers All time, 30 days,
   7 days and Today, in both layouts, with Android's labels and day boundaries:
   Today starts at local midnight, 7 and 30 days are rolling. Web.
@@ -87,10 +93,22 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   read as empty the moment it gets a size. Android.
 - **Two quick bag changes can't drop the bean library file** — overlapping saves
   could leave only its backup on disk. Android.
+- **History stays in date order** — a pulled, restored or backdated row used
+  to land at the top of the list on the web, and on Android when imported,
+  restored or logged minutes ago. It could then seed the next log as the last
+  brew, count among a bag's latest doses, and push out newer rows at the 300
+  limit. Rows now go in by date, and an out-of-order history is put right when
+  it loads. A shot or brew made on the device always stays, even with its clock
+  behind the history. Restore and import report the shots they kept and say
+  when older ones were dropped. On the web, the 300 counts visible shots only,
+  and a shot with no date stays at the end. Tablet, phone and web.
+- **Web: logged-brew fields fit at phone width** — in Log a brew, When takes a
+  full row so the time can be read, and the steppers stay inside their cards.
+  The fields stack below 380 px. A logged brew's detail uses two columns, so a
+  stepper no longer runs off the row. Nothing changes above 600 px. Web.
 - **Archived bags no longer appear in tablet pickers** — the tablet's Change
   bean dialog and Brew bean picker listed archived bags, unlike every other
   picker. Android.
-||||||| c069336b
 - **A logged brew's row keeps its text** — the method icon took the width of a
   chart in History, which cut off the name and bean. It's now a small bare mark.
   Android and web.

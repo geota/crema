@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -81,6 +82,7 @@ import coffee.crema.history.grindLabel
 import coffee.crema.history.isManualLog
 import coffee.crema.history.methodOf
 import coffee.crema.history.methodRatioLabel
+import coffee.crema.ui.brewlog.BrewDateEditor
 import coffee.crema.ui.brewlog.BrewSessionCanvas
 import coffee.crema.ui.brewlog.BrewSparkChart
 import coffee.crema.ui.brewlog.BrewLogOwner
@@ -244,8 +246,13 @@ fun HistoryScreen(
             coffeeOf = { shotCoffee(it, liveCoffee)?.key },
         )
     }
+    // A brew re-dated out of the filtered list, held open until a filter changes.
+    var heldShotId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(query, range, profileFilter, beanFilter, methodFilter) { heldShotId = null }
     // Default the detail to the newest (top) shot until the user picks one.
-    val selected = shots.firstOrNull { it.id == selectedId } ?: shots.firstOrNull()
+    val selected = shots.firstOrNull { it.id == selectedId }
+        ?: heldShotId?.takeIf { it == selectedId }?.let { id -> ui.history.firstOrNull { it.id == id } }
+        ?: shots.firstOrNull()
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -587,6 +594,13 @@ fun HistoryScreen(
                             },
                             onManualTempChange = { vm.updateManualBrew(selected.id, brewTempC = it) },
                             onManualTimeChange = { vm.updateManualBrew(selected.id, durationMs = it) },
+                            onManualDateChange = {
+                                // A new date can move the brew out of the range:
+                                // its detail stays open until a filter changes.
+                                selectedId = selected.id
+                                heldShotId = selected.id
+                                vm.updateManualBrew(selected.id, completedAtMs = it)
+                            },
                             defaultPrivacy = ui.visualizer.privacy,
                             onPrivacyChange = { p -> vm.setShotPrivacy(selected.id, p) },
                             // Post-hoc log fix-ups (issue #16): the dial-in loop spans
@@ -922,6 +936,8 @@ private fun ShotDetail(
     onManualTempChange: ((Float?) -> Unit)? = null,
     /** Brew time, ms (web parity — the storyboard had deferred it on Android). */
     onManualTimeChange: ((Long?) -> Unit)? = null,
+    /** When it was brewed; the row moves to its place by date. */
+    onManualDateChange: ((Long) -> Unit)? = null,
 ) {
     // Brew Log rows (issue #10).
     val method = shot.methodOf
@@ -1155,6 +1171,13 @@ private fun ShotDetail(
             }
             // Manual rows keep their user-entered facts editable — steppers in
             // one wrapping row (the QC idiom), re-settling the bag on dose.
+            if (manual && onManualDateChange != null) {
+                BrewDateEditor(
+                    completedAtMs = shot.completedAtMs,
+                    onCommit = onManualDateChange,
+                    modifier = Modifier.widthIn(max = 280.dp),
+                )
+            }
             if (manual && (onManualDoseChange != null || onManualWaterChange != null || onManualTempChange != null || onManualTimeChange != null)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     onManualDoseChange?.let { commit ->

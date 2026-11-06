@@ -489,7 +489,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
         lock.withLock {
             loadStore(file, "shot history") {
                 json.decodeFromString(ListSerializer(StoredShot.serializer()), it)
-            }.valueOrNull() ?: emptyList()
+            }.valueOrNull()?.newestFirst() ?: emptyList() // a save before the list kept its order
         }
     }
 

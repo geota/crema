@@ -48,6 +48,7 @@ import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaFilterChip
 import coffee.crema.ui.components.CremaStarRating
+import coffee.crema.ui.components.CremaDateTimeField
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaStepperStyle
 import coffee.crema.ui.components.CremaTextField
@@ -197,11 +198,12 @@ private fun LogBrewFormBody(
                     )
                 },
                 { m ->
-                    CremaStepper(
-                        label = "Logged", value = draft.minutesAgo, unit = "min ago",
-                        onChange = { v -> update { it.copy(minutesAgo = v) } },
-                        step = 5.0, min = 0.0, max = 1440.0, fmt = { fmt("%.0f", it) },
-                        modifier = m, style = CremaStepperStyle.Boxed,
+                    CremaDateTimeField(
+                        valueMs = draft.completedAtMs,
+                        onValueChange = { v -> update { it.copy(completedAtMs = v) } },
+                        label = "When",
+                        modifier = m,
+                        clearable = true,
                     )
                 },
             )
@@ -213,6 +215,9 @@ private fun LogBrewFormBody(
                     }
                 }
             }
+        }
+        draft.dateError(ui.history, System.currentTimeMillis())?.let { error ->
+            Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         val ratio = coffee.crema.core.brewRatio(draft.dose.toFloat(), draft.water.toFloat())
         Text(

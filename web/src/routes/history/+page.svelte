@@ -73,6 +73,7 @@
 		recentNames,
 		COFFEE_FILTER_PREFIX,
 		liveShot,
+		historyDroppedNotice,
 		selectedShot,
 		shotStamp,
 		filterScopeKey,
@@ -263,11 +264,13 @@
 		importing = true;
 		importBanner = null;
 		let imported = 0;
+		let dropped = 0;
 		const errors: string[] = [];
 		for (const file of files) {
-			const { record, imported: count, error } = await app.importShotFile(file);
+			const { record, imported: count, dropped: cut, error } = await app.importShotFile(file);
 			if (record) {
 				imported += count;
+				dropped += cut;
 			} else if (error) {
 				errors.push(error);
 			}
@@ -276,12 +279,12 @@
 		if (imported > 0 && errors.length === 0) {
 			importBanner = {
 				kind: 'success',
-				message: `Imported ${imported} shot${imported === 1 ? '' : 's'}.`
+				message: `Imported ${imported} shot${imported === 1 ? '' : 's'}.${historyDroppedNotice(dropped, store.capacity)}`
 			};
 		} else if (imported > 0) {
 			importBanner = {
 				kind: 'success',
-				message: `Imported ${imported} of ${imported + errors.length}. ${errors[0]}`
+				message: `Imported ${imported} of ${imported + errors.length}. ${errors[0]}${historyDroppedNotice(dropped, store.capacity)}`
 			};
 		} else {
 			importBanner = {
@@ -610,6 +613,12 @@
 			store.setBagDebit(id, taken);
 		}
 		store.updateManualBrew(id, patch);
+		// A new date can move the brew out of the range: its detail stays open
+		// until a filter changes, the same way a just-saved brew's does.
+		if (patch.completedAt !== undefined) {
+			selectedId = id;
+			pin = { id, scope: filterScope };
+		}
 	}
 	function deleteById(id: string, opts: { remote: boolean }): void {
 		const shot = liveShot(store.get(id));

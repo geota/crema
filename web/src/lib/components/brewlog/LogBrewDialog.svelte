@@ -39,7 +39,14 @@
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { promptBagEmpty } from '#lib/bean/bag-empty-prompt.js';
 	import { getHistoryStore } from '#lib/history/store.svelte.js';
+	import { msToNextMinute } from '#lib/history/range.js';
 	import { snapshotFromBean, type StoredShot } from '#lib/history/model.js';
+	import {
+		brewDateError,
+		brewDateTooOld,
+		fromLocalInput,
+		toLocalInput
+	} from '#lib/history/brew-date.js';
 	import { formatRatio } from '#lib/utils/ratio.js';
 	import BeanOverdrawNote from './BeanOverdrawNote.svelte';
 	import BrewBeanRow from './BrewBeanRow.svelte';
@@ -112,6 +119,22 @@
 	let temp = $state<number | null>(null);
 	let timeStr = $state('');
 	let whenLocal = $state(toLocalInput(seed?.completedAt ?? Date.now()));
+	/**
+	 * Left alone, the field follows the clock and the brew is dated when it's
+	 * saved, as on Android: what it shows is what's saved, to the minute.
+	 */
+	let whenEdited = $state(false);
+	let nowMs = $state(Date.now());
+	$effect(() => {
+		let timer: ReturnType<typeof setTimeout>;
+		const tick = (): void => {
+			nowMs = Date.now();
+			if (!whenEdited && seed?.completedAt == null) whenLocal = toLocalInput(nowMs);
+			timer = setTimeout(tick, msToNextMinute(nowMs));
+		};
+		timer = setTimeout(tick, msToNextMinute(Date.now()));
+		return () => clearTimeout(timer);
+	});
 	let rating = $state(seed?.rating ?? 0);
 	let notes = $state(seed?.notes ?? '');
 	let nextPlan = $state('');
@@ -129,6 +152,7 @@
 	});
 	const doseMissing = $derived(bean != null && !(dose > 0));
 	const ratio = $derived(formatRatio(dose > 0 ? dose : null, water > 0 ? water : null));
+	const whenError = $derived(dateProblem(whenLocal, nowMs));
 
 	// Seed the numeric fields for the opening method (later re-seeds run
 	// from the chip handler with the freshly-picked id).
@@ -211,10 +235,17 @@
 		finishOffer();
 	}
 
-	function toLocalInput(ms: number): string {
-		const d = new Date(ms);
-		const pad = (n: number) => String(n).padStart(2, '0');
-		return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+	/**
+	 * Why `when` can't date this brew, or `null`. A blank field means now, and so
+	 * does an untouched one: a brew made now is kept whatever the clock says.
+	 */
+	function dateProblem(when: string, now: number = Date.now()): string | null {
+		if (!when || (!whenEdited && seed?.completedAt == null)) return null;
+		const at = fromLocalInput(when);
+		return (
+			brewDateError(at, now) ??
+			(history.fitsHistory(at) ? null : brewDateTooOld(history.capacity))
+		);
 	}
 
 	function formatDuration(ms: number): string {
@@ -239,7 +270,11 @@
 		const storedMethod = isCustom ? normalizeMethod(customMethod) : method;
 		if (!storedMethod) return;
 		if (doseMissing) return;
-		const completedAt = new Date(whenLocal).getTime() || Date.now();
+		if (dateProblem(whenLocal)) return;
+		const completedAt =
+			whenLocal && (whenEdited || seed?.completedAt != null)
+				? fromLocalInput(whenLocal)
+				: Date.now();
 		const record = history.addManualBrew({
 			method: storedMethod,
 			methodLabel: methodLabelSnapshot(storedMethod),
@@ -452,7 +487,7 @@
 					}}
 				/>
 			</div>
-			<label class="bl-cell">
+			<label class="bl-cell bl-cell-wide">
 				<span class="bl-label">Brew time</span>
 				<input
 					class="bl-input bl-input-mono"
@@ -461,9 +496,17 @@
 					placeholder="m:ss"
 				/>
 			</label>
-			<label class="bl-cell">
+			<label class="bl-cell bl-cell-wide" class:is-invalid={whenError != null}>
 				<span class="bl-label">When</span>
-				<input class="bl-input" type="datetime-local" bind:value={whenLocal} />
+				<input
+					class="bl-input"
+					type="datetime-local"
+					bind:value={whenLocal}
+					max={toLocalInput(nowMs)}
+					aria-invalid={whenError != null}
+					oninput={() => (whenEdited = true)}
+				/>
+				{#if whenError}<span class="bl-field-error" role="alert">{whenError}</span>{/if}
 			</label>
 		</div>
 
@@ -662,6 +705,11 @@
 		padding: 8px 10px;
 		min-width: 0;
 	}
+	.bl-field-error {
+		color: var(--danger);
+		font-size: 11px;
+		line-height: 1.3;
+	}
 	.bl-cell.is-invalid {
 		border-color: var(--danger);
 	}
@@ -754,6 +802,40 @@
 			position: sticky;
 			bottom: 0;
 			padding: 10px 22px 12px;
+		}
+	}
+	@media (max-width: 600px) {
+		/* A date and time need the full width to show both. */
+		.bl-cell-wide {
+			grid-column: 1 / -1;
+		}
+		/* A half-width cell holds 32 px buttons, as the phone quick sheet does,
+		   and the digits and unit take what's left. */
+		.bl-head,
+		.bl-body,
+		.bl-foot {
+			padding-inline: 16px;
+		}
+		.bl-cell {
+			padding-inline: 8px;
+		}
+		.bl-cell :global(.qcs-row) {
+			gap: 4px;
+			padding: 3px;
+		}
+		.bl-cell :global(.qcs-btn) {
+			width: 32px;
+			flex-basis: 32px;
+		}
+		.bl-cell :global(.qcs-val) {
+			min-width: 0;
+			padding-inline: 2px;
+		}
+	}
+	/* Narrower, two steppers can't share a row at their widest values. */
+	@media (max-width: 379px) {
+		.bl-grid {
+			grid-template-columns: 1fr;
 		}
 	}
 	.bl-btn {
