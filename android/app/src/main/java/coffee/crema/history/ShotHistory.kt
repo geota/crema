@@ -53,6 +53,13 @@ data class StoredShot(
     /** Dose at capture (from the active profile), g — for the ratio. */
     val doseG: Float? = null,
     /**
+     * Grams this row actually took from its bag, g: less than the dose when
+     * the bag ran out, 0 when it was empty, untracked or never debited. What
+     * moving the shot off the bag credits back. Null on a row from before the
+     * field and on a row with no bag. Mirrors core `StoredShot.bag_debit`.
+     */
+    val bagDebitG: Float? = null,
+    /**
      * Grinder click dialed in Quick Controls at capture (issue 15), or null when
      * the user never set one. The grind actually used for this shot — distinct
      * from the bean's catalog [ShotBean.grinderSetting] (the bag's reference

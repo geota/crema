@@ -93,9 +93,13 @@
 		roastBand,
 		beanFreshness,
 		freshnessColor,
+		bagStock,
+		emptyBagBannerText,
+		showsEmptyBagBanner,
 		type Bean,
 		type Roaster, activateBean } from '#lib/bean/index.js';
 	import { scoreMap, searchBeans } from '#lib/bean/search.js';
+	import BeanPicker from '#lib/components/history/BeanPicker.svelte';
 	import { getMaintenanceStore } from '#lib/maintenance/index.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { keepToastsAbove } from '#lib/components/shared/toast-inset.svelte.js';
@@ -1287,6 +1291,22 @@
 		return parts.join(' · ');
 	});
 
+	/**
+	 * The empty-bag banner (#302): stock only, so it never gates a shot, and it
+	 * makes way while one runs. "Empty" needs no doses, so none are read here.
+	 */
+	const showEmptyBag = $derived(
+		beanLibrary.activeBean != null &&
+			showsEmptyBagBanner(bagStock(beanLibrary.activeBean), ui.shotInProgress)
+	);
+	let bagPickerOpen = $state(false);
+
+	function switchBag(id: string | null): void {
+		bagPickerOpen = false;
+		if (id) activateBean(id, { shotInProgress: ui.shotInProgress });
+		else beanLibrary.setActiveBean(null);
+	}
+
 	/** Bean rows for the header's ▾ picker — all non-archived, in the core's order. */
 	const beanPickerItems = $derived.by<PickerItem[]>(() => rankForPicker(
 		beanLibrary.beans.filter((b) => b.archivedAt == null),
@@ -1729,6 +1749,16 @@
 			/>
 		</div>
 	{/if}
+	{#if showEmptyBag && beanLibrary.activeBean}
+		<div class="crema-dash-head-mid">
+			<MachineErrorBanner
+				text={emptyBagBannerText(beanLibrary.activeBean.name)}
+				title="Bag empty"
+				variant="warning"
+				action={{ label: 'Switch bag', onClick: () => (bagPickerOpen = true) }}
+			/>
+		</div>
+	{/if}
 {/snippet}
 {#snippet liveChart()}
 	<LiveChart
@@ -1835,6 +1865,17 @@
 		{/if}
 	</button>
 {/snippet}
+
+{#if bagPickerOpen}
+	<BeanPicker
+		currentBeanId={beanLibrary.activeBeanId}
+		allowArchived={false}
+		clearLabel="No bean"
+		onPick={(bean) => switchBag(bean.id)}
+		onClear={() => switchBag(null)}
+		onClose={() => (bagPickerOpen = false)}
+	/>
+{/if}
 
 <div class="qcontain">
 	{#if phoneLayout.current}

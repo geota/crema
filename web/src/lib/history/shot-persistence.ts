@@ -149,9 +149,10 @@ export function commitShotCompletion(
 		return;
 	}
 	if (disposition === 'DiscardAborted') {
-		if (activeShot?.source !== 'replay') {
-			runLiveOnlySideEffects(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook);
-		}
+		const bagDebit =
+			activeShot?.source !== 'replay'
+				? runLiveOnlySideEffects(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook)
+				: untouchedBag(activeShot);
 		// Freeze everything the undo needs — by the time the user taps it
 		// the active-shot store is cleared and a new shot may be underway.
 		const frozenShot = activeShot;
@@ -168,6 +169,7 @@ export function commitShotCompletion(
 			() => {
 				const record = captured ? getHistoryStore().recordCaptured(captured) : null;
 				if (!record) return;
+				getHistoryStore().setBagDebit(record.id, bagDebit);
 				if (frozenCtx.runtime) {
 					registerUploadBatch(record.id, autoUploadDestinations());
 					frozenCtx.runtime.runFork(pushShotToVisualizer(record.id));
@@ -187,9 +189,10 @@ export function commitShotCompletion(
 
 	if (record) {
 		const isLive = activeShot?.source !== 'replay';
-		if (isLive) {
-			runLiveOnlySideEffects(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook);
-		}
+		const bagDebit = isLive
+			? runLiveOnlySideEffects(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook)
+			: untouchedBag(activeShot);
+		getHistoryStore().setBagDebit(record.id, bagDebit);
 		// Visualizer push — fire-and-forget; recoverable failures land in the
 		// retry queue. Runs on the app runtime (T-22) so it sees ShotSync /
 		// UploadQueue and the REAL typed errors (no boundary squash); `runFork`
@@ -282,10 +285,16 @@ function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 	};
 }
 
+/** The `bagDebit` of a row whose bag wasn't debited: 0 with a bag, else `null`. */
+function untouchedBag(activeShot: ActiveShotData | null): number | null {
+	return activeShot?.bean?.beanId ? 0 : null;
+}
+
 /**
  * Bean burn-down + webhook. Both reach into user state (the user's bag
  * inventory, a user-configured endpoint), so replay paths must skip
- * them — a replay should leave no side effects on user data.
+ * them — a replay should leave no side effects on user data. Returns the grams
+ * the shot took from its bag, `null` for a shot with no bag.
  */
 function runLiveOnlySideEffects(
 	event: ShotCompletedEvent,
@@ -293,10 +302,12 @@ function runLiveOnlySideEffects(
 	dose: number | null,
 	snapshot: UiSnapshot,
 	fireWebhook: (eventType: string, payload: object) => void
-): void {
+): number | null {
+	let bagDebit = untouchedBag(activeShot);
 	if (activeShot?.bean?.beanId && dose) {
-		const emptied = getBeanStore().debitBean(activeShot.bean.beanId, dose);
-		if (emptied) void promptBagEmpty(activeShot.bean.beanId);
+		const debit = getBeanStore().debitBean(activeShot.bean.beanId, dose);
+		bagDebit = debit.taken;
+		if (debit.emptied) void promptBagEmpty(activeShot.bean.beanId);
 	}
 	const finalWeight = event.content.final_weight ?? null;
 	// Core-owned ratio math (review #42) — same guard rule as the history
@@ -314,6 +325,7 @@ function runLiveOnlySideEffects(
 		peakTemp: event.content.peak_temp ?? null,
 		brewRatio
 	});
+	return bagDebit;
 }
 
 /**

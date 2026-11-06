@@ -509,6 +509,11 @@ data class MainUiState(
      *  chip when that bean isn't in this device's library. Projected from
      *  [mirror]; null = use the library. */
     val mirroredBeanSummary: String? = null,
+    /** The hub's active bag is empty (#302): a remote's own copy of a bag can't
+     *  say. Projected from [mirror]. */
+    val mirroredBagEmpty: Boolean = false,
+    /** A debit just emptied a bag: the prompt after the shot (#302). */
+    val bagEmptyPrompt: coffee.crema.beans.BagEmptyPrompt? = null,
     /** Crema instances discovered on the LAN (NSD) — the device picker's list. */
     val peers: List<Peer> = emptyList(),
     /**

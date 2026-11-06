@@ -128,7 +128,8 @@ describe('HistoryStore reload', () => {
 			brewSeries: {
 				samples: [{ elapsedMs: 1000, weightG: 12.5, flowGS: 2 }],
 				stageMarks: [{ elapsedMs: 0, stepIndex: 0 }]
-			}
+			},
+			bagDebit: 10.5
 		};
 		new HistoryStore().insertPulled(full);
 		expect(reload().get('shot:full')).toStrictEqual(full);

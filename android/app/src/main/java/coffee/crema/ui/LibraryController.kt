@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import androidx.core.content.FileProvider
+import coffee.crema.beans.BagEmptyPrompt
 import coffee.crema.beans.BeanImageStore
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.LibraryStore
@@ -30,9 +31,11 @@ import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.effectiveCremaProfile
 import coffee.crema.core.withDerivedBrewTemp
 import coffee.crema.core.preinfusionSeconds
-import coffee.crema.core.creditRemaining
+import coffee.crema.core.creditShotDebit
 import coffee.crema.core.debitRemaining
+import coffee.crema.core.debitTaken
 import coffee.crema.core.resettleRemaining
+import coffee.crema.core.resettledBagDebit
 import coffee.crema.core.ShotCaptureContext
 import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportProfileFile
@@ -2057,16 +2060,23 @@ class LibraryController(
         }.onFailure { appendLog("Shot assembly failed: ${it.message}") }.getOrNull()
         val core = assembled?.let { json.parseToJsonElement(it) as? JsonObject }
         // No telemetry at all (or the core refused): nothing to record.
-        val shot = core?.let { storedShotFromBackupJson(it, json) }?.copy(
+        val captured = core?.let { storedShotFromBackupJson(it, json) }?.copy(
             // The core's running peaks from the event, as before.
             peakPressure = peakPressure,
             peakTemp = peakTemp,
             peakWeightG = peakWeightG,
         )
-        if (shot == null) {
+        if (captured == null) {
             appendLog("Shot had no telemetry — not recorded")
             return
         }
+        // Burn this shot's dose down from its bag's remaining weight — live
+        // shots only (a replay-demo must never touch real inventory) — and
+        // record what it took on the row. The dose the core recorded — the
+        // Quick Controls dial when the DE1 ran the dialled profile (review
+        // §2.3-6) — else the profile's.
+        val bagDebit = bean?.let { if (s.replayPrimary) 0f else debitBag(it, captured.doseG ?: profile?.dose) }
+        val shot = captured.copy(bagDebitG = bagDebit)
         // Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
         // validated over 882 shots): under 10 s of flow AND under 5 g in the
         // cup is an aborted pull, not a shot — it would only pollute history
@@ -2094,26 +2104,52 @@ class LibraryController(
         // Persist the learned SAW drip model — a weight-stopped shot just
         // added a training sample in the core.
         scope.launch { persistSawModel() }
+    }
 
-        // Burn this shot's dose down from its bag's remaining weight — live
-        // shots only (a replay-demo must never touch real inventory). The core
-        // `debitRemaining` owns the rule + its no-ops: it returns null when
-        // there's nothing to debit (bag already empty / bad dose), so we persist
-        // — and touch updatedAt — ONLY on a real debit. If it just emptied the
-        // bag, surface it so the user can switch / archive / rate.
-        // The dose the core recorded — the Quick Controls dial when the DE1 ran
-        // the dialled profile (review §2.3-6) — else the profile's.
-        val dose = shot.doseG ?: profile?.dose
-        if (!s.replayPrimary && bean != null && dose != null) {
-            val debited = debitRemaining(bean.remaining ?: 0f, dose)
-            if (debited != null) {
-                mutateBean(bean.id) { it.copy(remaining = debited) }
-                if (debited == 0f) {
-                    val rateHint = if ((bean.rating?.toInt() ?: 0) == 0) " — rate it in Beans" else ""
-                    notify("That was the last of ${bean.name}; bag empty$rateHint")
-                }
-            }
+    /**
+     * Debit [dose] from [bean] and return the grams actually taken. The core
+     * `debitRemaining` owns the rule + its no-ops: it returns null when there's
+     * nothing to debit (bag already empty / bad dose), so we persist — and
+     * touch updatedAt — ONLY on a real debit. If it just emptied the bag,
+     * surface it so the user can switch / archive / rate.
+     */
+    private fun debitBag(bean: Bean, dose: Float?): Float {
+        val remaining = bean.remaining ?: 0f
+        val grams = dose ?: return 0f
+        val next = debitRemaining(remaining, grams) ?: return 0f
+        mutateBean(bean.id) { it.copy(remaining = next) }
+        if (next == 0f) onBagEmptied(bean)
+        return debitTaken(remaining, grams)
+    }
+
+    /**
+     * A debit just emptied [bean]: ask what to do with it. Not on a remote: its
+     * library is its own, the hub asks about the hub's bag, and dropping the
+     * active bag here would change the hub's. A passing notice says so instead.
+     */
+    private fun onBagEmptied(bean: Bean) {
+        if (uiState().mirror != null) {
+            notify("That was the last of ${bean.name}; bag empty")
+            return
         }
+        val prompt = BagEmptyPrompt(bean.id, bean.name, unrated = (bean.rating?.toInt() ?: 0) == 0)
+        updateUi { it.copy(bagEmptyPrompt = prompt) }
+    }
+
+    /**
+     * The answer to the bag-empty prompt's first question. [archive] archives
+     * the bag; the caller then drops it as the active bag. An unrated bag goes on
+     * to the rating question.
+     */
+    fun answerBagEmpty(archive: Boolean) {
+        val prompt = uiState().bagEmptyPrompt ?: return
+        if (archive) archiveBean(prompt.beanId)
+        updateUi { it.copy(bagEmptyPrompt = if (prompt.unrated) prompt.copy(askingRating = true) else null) }
+    }
+
+    /** Close the bag-empty prompt. */
+    fun dismissBagEmptyPrompt() {
+        updateUi { it.copy(bagEmptyPrompt = null) }
     }
 
     /** The Log-brew form's payload (issue #10). */
@@ -2140,7 +2176,7 @@ class LibraryController(
      * Record a Brew Log entry (issue #10) — a manually logged brew, or a
      * finished guided session. The one path that legitimately persists a
      * telemetry-less row. Debits the bag exactly like a live shot
-     * (`debitRemaining` → bag-empty notice) and never touches Visualizer
+     * (`debitRemaining` → bag-empty prompt) and never touches Visualizer
      * (logged brews are local-only, like `nextPlan`).
      */
     fun addManualBrew(input: ManualBrewInput): StoredShot {
@@ -2159,12 +2195,15 @@ class LibraryController(
                 grinder = b.grinder?.takeIf { it.isNotBlank() },
             )
         }
+        // Burn the dose down from the bag — the whole point of the feature.
+        val bagDebit = bean?.let { debitBag(it, input.doseG) }
         val shot = StoredShot(
             id = coffee.crema.core.newShotId(),
             completedAtMs = input.completedAtMs,
             durationMs = input.durationMs ?: 0L,
             yieldG = input.yieldG,
             doseG = input.doseG,
+            bagDebitG = bagDebit,
             grindSetting = input.grindSetting,
             profileName = null,
             bean = beanSnapshot,
@@ -2185,18 +2224,6 @@ class LibraryController(
         val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
         updateUi { it.copy(history = next) }
         scope.launch { historyStore.save(next) }
-        // Burn the dose down from the bag — the whole point of the feature.
-        val dose = input.doseG
-        if (bean != null && dose != null && dose > 0f) {
-            val debited = debitRemaining(bean.remaining ?: 0f, dose)
-            if (debited != null) {
-                mutateBean(bean.id) { it.copy(remaining = debited) }
-                if (debited == 0f) {
-                    val rateHint = if ((bean.rating?.toInt() ?: 0) == 0) " — rate it in Beans" else ""
-                    notify("That was the last of ${bean.name}; bag empty$rateHint")
-                }
-            }
-        }
         notify("Brew logged")
         return shot
     }
@@ -2229,15 +2256,17 @@ class LibraryController(
         val shot = s.history.firstOrNull { it.id == id } ?: return
         if (!shot.isManualLog) return
         // Re-settle inventory before the row mutates, using the OLD dose —
-        // the core's resettleRemaining (credit old, debit new; null = nothing
-        // to persist, including an unchanged dose).
+        // the core's resettleRemaining (only the net change moves, and no more
+        // comes back than the row took; null = nothing to persist, including an
+        // unchanged dose).
+        var bagDebit = shot.bagDebitG
         if (doseG != null) {
-            shot.bean?.beanId?.let { beanId ->
-                s.beans.firstOrNull { it.id == beanId }?.let { bean ->
-                    val rem = bean.remaining ?: return@let
-                    resettleRemaining(rem, bean.bagSize ?: 0f, shot.doseG ?: 0f, doseG)?.let { next ->
-                        mutateBean(bean.id) { it.copy(remaining = next) }
-                    }
+            s.beans.firstOrNull { it.id == shot.bean?.beanId }?.let { bean ->
+                val rem = bean.remaining ?: 0f
+                val size = bean.bagSize ?: 0f
+                bagDebit = resettledBagDebit(rem, size, shot.bagDebitG, shot.doseG ?: 0f, doseG)
+                resettleRemaining(rem, size, shot.bagDebitG, shot.doseG ?: 0f, doseG)?.let { next ->
+                    mutateBean(bean.id) { it.copy(remaining = next) }
                 }
             }
         }
@@ -2247,6 +2276,7 @@ class LibraryController(
                     if (it.id != id) it
                     else it.copy(
                         doseG = doseG ?: it.doseG,
+                        bagDebitG = bagDebit,
                         waterG = waterG ?: it.waterG,
                         yieldG = yieldG ?: it.yieldG,
                         brewTempC = brewTempC ?: it.brewTempC,
@@ -2378,34 +2408,20 @@ class LibraryController(
                 grinder = b.grinder?.takeIf { it.isNotBlank() },
             )
         }
-        updateUi { st ->
-            st.copy(history = st.history.map { if (it.id == id) it.copy(bean = beanSnapshot) else it })
-        }
         // Move the bag debit with the attribution: the grounds physically came
-        // from the bag the user now says they did, so the wrongly-debited old
-        // bag gets the dose BACK and the new bag loses it (capture's
-        // debitRemaining rule). Best-effort by design: the credit is capped at
-        // bagSize (the bag may have been refilled since), null-remaining bags
-        // are untracked and left alone, and a capture-time debit that clamped
-        // at 0 can't be reconstructed. Uses the dose the shot recorded.
-        val dose = shot.doseG
-        if (dose != null && dose > 0f) {
-            s.beans.firstOrNull { it.id == oldBeanId }?.let { old ->
-                old.remaining?.let { rem ->
-                    // Core rule (the inverse of debitRemaining): cap at
-                    // bagSize, null = nothing changed, don't persist.
-                    creditRemaining(rem, dose, old.bagSize ?: 0f)?.let { credited ->
-                        mutateBean(old.id) { it.copy(remaining = credited) }
-                    }
-                }
+        // from the bag the user now says they did, so the old bag gets back what
+        // the row took (core creditShotDebit: capped at bagSize, an untracked bag
+        // gains nothing, null = nothing changed) and the new bag is debited, with
+        // the row recording what it took this time. Web's moveShotBag is the same.
+        val dose = shot.doseG ?: 0f
+        s.beans.firstOrNull { it.id == oldBeanId }?.let { old ->
+            creditShotDebit(old.remaining ?: 0f, old.bagSize ?: 0f, shot.bagDebitG, dose)?.let { credited ->
+                mutateBean(old.id) { it.copy(remaining = credited) }
             }
-            if (bean != null) {
-                val debited = debitRemaining(bean.remaining ?: 0f, dose)
-                if (debited != null) {
-                    mutateBean(bean.id) { it.copy(remaining = debited) }
-                    if (debited == 0f) notify("That was the last of ${bean.name}; bag empty")
-                }
-            }
+        }
+        val bagDebit = bean?.let { debitBag(it, dose) }
+        updateUi { st ->
+            st.copy(history = st.history.map { if (it.id == id) it.copy(bean = beanSnapshot, bagDebitG = bagDebit) else it })
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }

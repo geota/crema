@@ -85,7 +85,13 @@ private fun applyDraft(b: Bean, draft: BeanDraft, frozenOn: String?, defrostedOn
     decaf = draft.decaf,
     favourite = draft.pinned,
     bagSize = draft.bagSize.toFloat(),
-    remaining = draft.remaining.toFloat(),
+    // A size given to a bag at 0 fills it (web's editor does the same): 0 would
+    // otherwise read as an empty bag the moment it was sized.
+    remaining = if (draft.remaining == 0.0 && draft.bagSize != (b.bagSize ?: 0f).toDouble()) {
+        draft.bagSize.toFloat()
+    } else {
+        draft.remaining.toFloat()
+    },
     origin = (b.origin ?: BeanOrigin()).copy(
         country = draft.country.ifBlank { null },
         region = draft.region.ifBlank { null },

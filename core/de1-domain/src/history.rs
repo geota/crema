@@ -453,6 +453,13 @@ pub struct StoredShot {
     /// manual logs (no telemetry at all).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brew_series: Option<crate::brew::BrewSeries>,
+    /// Grams this row actually took from its bag, which is less than the dose
+    /// when the bag ran out and 0 when the bag was empty, untracked, or never
+    /// debited (a replay, an import). What moving the shot off the bag credits
+    /// back ([`credit_shot_debit`](crate::credit_shot_debit)). `None` on a row
+    /// from before the field, and on a row with no bag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bag_debit: Option<f32>,
 }
 
 /// A shot's Visualizer privacy override — the `privacy` the upload sends.
@@ -522,6 +529,7 @@ impl StoredShot {
             brew_method_label: None,
             recipe_name: None,
             brew_series: None,
+            bag_debit: None,
         }
     }
 

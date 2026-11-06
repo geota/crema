@@ -322,6 +322,20 @@ export class HistoryStore {
 	}
 
 	/**
+	 * Record the grams a row took from its bag (`StoredShot.bagDebit`), or
+	 * clear them when the row no longer has a bag. Stored apart from the bean
+	 * snapshot because the debit runs after the row exists.
+	 */
+	setBagDebit(id: string, grams: number | null): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const { bagDebit: _previous, ...rest } = this.shots[idx];
+		const next: StoredShot = grams == null ? rest : { ...rest, bagDebit: grams };
+		this.shots = this.shots.map((s, i) => (i === idx ? next : s));
+		this.persist();
+	}
+
+	/**
 	 * Replace a shot's tag list and persist. Tags are normalised at the
 	 * call site (trim + dedup case-sensitive); this setter is a thin
 	 * pass-through so the sync layer can drop a remote-sourced tag list
@@ -562,8 +576,9 @@ export class HistoryStore {
 	 * empty telemetry by accident.
 	 *
 	 * Inventory is NOT debited here — the caller pairs this with
-	 * `debitBean(beanId, dose)` exactly like the live-shot persistence
-	 * path, so the bag-empty prompt logic stays in one place.
+	 * `debitBean(beanId, dose)` and records what it took with
+	 * {@link setBagDebit}, exactly like the live-shot persistence path, so
+	 * the bag-empty prompt logic stays in one place.
 	 */
 	addManualBrew(input: ManualBrewInput): StoredShot {
 		const metadata: ShotMetadata = {
@@ -992,6 +1007,10 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 	// Presence-based like the core's `is_brew_log`: a stored `""` stays a
 	// brew row (local-only), it is not silently upcast to a machine shot.
 	const brewMethod = typeof obj.brewMethod === 'string' ? obj.brewMethod : null;
+	const bagDebit =
+		typeof obj.bagDebit === 'number' && Number.isFinite(obj.bagDebit) && obj.bagDebit >= 0
+			? obj.bagDebit
+			: null;
 	const brewMethodLabel =
 		typeof obj.brewMethodLabel === 'string' && obj.brewMethodLabel.trim().length > 0
 			? obj.brewMethodLabel
@@ -1070,6 +1089,7 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 		deletedAt,
 		...(brewMethod != null ? { brewMethod } : {}),
 		...(brewMethodLabel ? { brewMethodLabel } : {}),
+		...(bagDebit !== null ? { bagDebit } : {}),
 		...(recipeName ? { recipeName } : {}),
 		...(brewSeries ? { brewSeries } : {})
 	};

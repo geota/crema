@@ -581,6 +581,9 @@ data class ConfigSnapshot(
      *  mirror's bean chip renders even when that bean isn't in its own library.
      *  Full bean sync is out of scope — this is display only. */
     val activeBeanSummary: String? = null,
+    /** The active bag is empty on the hub, for a remote's Brew banner (#302). A
+     *  remote holds no live copy of the hub's stock. Display only. */
+    val activeBagEmpty: Boolean = false,
     val stopOnWeight: Boolean = false,
     val autoTare: Boolean = false,
     val maxShotDurationS: Float = 45f,

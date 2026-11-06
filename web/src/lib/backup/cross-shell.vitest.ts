@@ -96,7 +96,8 @@ function seed(): void {
 			roastLevel: 4,
 			tags: ['comp'],
 			grinderSetting: '2.5'
-		}
+		},
+		bagDebit: 12.5
 	});
 	getProfileStore().save({ ...blankProfile(), name: 'My Web Profile' });
 	getSettingsStore().set('tempUnit', 'F');
@@ -157,6 +158,7 @@ describe('cross-shell backup restore (F11a)', () => {
 		expect(shot.record.samples).toHaveLength(2);
 		expect(shot.record.samples[1].sample.groupPressure).toBe(9);
 		expect(shot.brewTempTarget).toBe(93);
+		expect(shot.bagDebit).toBe(10.5);
 
 		expect(getProfileStore().get('profile:android-fixture')?.name).toBe('Android Fixture Profile');
 		expect(getCustomMethodStore().get('custom:android-orb')?.label).toBe('ORB');
@@ -169,6 +171,7 @@ describe('cross-shell backup restore (F11a)', () => {
 		const summary = restoreBackup(fixture('web-backup.crema.jsonl'), 'wipe');
 		expect(summary).toMatchObject({ beans: 1, roasters: 1, shots: 1, profiles: 1, recipes: 1 });
 		expect(getHistoryStore().get('shot:web-1')?.bean?.name).toBe('Gesha Village');
+		expect(getHistoryStore().get('shot:web-1')?.bagDebit).toBe(12.5);
 		expect(getSettingsStore().current.tempUnit).toBe('F');
 	});
 });

@@ -28,7 +28,8 @@
 		onPick,
 		onClear,
 		onClose,
-		allowArchived = true
+		allowArchived = true,
+		clearLabel = 'Clear binding'
 	}: {
 		/** The shot's current bean FK, for the "currently bound" highlight. */
 		currentBeanId: string | null;
@@ -40,6 +41,8 @@
 		onClose: () => void;
 		/** Offer "Include archived"; false for a caller that couldn't use one. */
 		allowArchived?: boolean;
+		/** The clear button's wording, for a caller that isn't binding a shot. */
+		clearLabel?: string;
 	} = $props();
 
 	const library = getBeanStore();
@@ -155,7 +158,7 @@
 		<div class="bp-foot">
 			{#if currentBeanId}
 				<button class="bp-clear" onclick={onClear}>
-					<XCircleIcon aria-hidden="true" /> Clear binding
+					<XCircleIcon aria-hidden="true" /> {clearLabel}
 				</button>
 			{/if}
 			<button class="bp-cancel" onclick={onClose}>Cancel</button>

@@ -940,6 +940,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(keptAsideNotice = msg) }
             }
         }
+        // A hub's remotes hold no live copy of its stock: a change to the active
+        // bag's weights re-sends the snapshot that carries its empty flag.
+        viewModelScope.launch {
+            _ui.map { s -> s.beans.firstOrNull { it.id == s.activeBeanId }?.let { it.remaining to it.bagSize } }
+                .distinctUntilChanged()
+                .collect { proxy.pushConfig() }
+        }
         // Each finished reconnect episode → one compact line in the event log
         // (and so the diagnostics ring buffer).
         coffee.crema.diag.ReconnectTimelines.recorder.onFinished = timelineLogHook
@@ -1338,6 +1345,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Archive a bag. Persisted. */
     fun archiveBean(id: String) = library.archiveBean(id)
+
+    /** The bag-empty prompt's Archive or Keep. Archiving drops the bag as the
+     *  active one too, so the next shot isn't billed to an archived bag (web's
+     *  `promptBagEmpty`). */
+    fun answerBagEmpty(archive: Boolean) {
+        val beanId = _ui.value.bagEmptyPrompt?.beanId
+        library.answerBagEmpty(archive)
+        if (archive && effectiveState().activeBeanId == beanId) setActiveBean(null)
+    }
+
+    /** Close the bag-empty prompt. */
+    fun dismissBagEmptyPrompt() = library.dismissBagEmptyPrompt()
 
     /** Unarchive a bag. Persisted. */
     fun unarchiveBean(id: String) = library.unarchiveBean(id)

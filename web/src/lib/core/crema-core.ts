@@ -134,9 +134,10 @@ export interface Bean {
 	 */
 	bagSize?: number;
 	/**
-	 * Remaining weight in the bag, grams. Auto-debited per shot when
-	 * the shell enables `Track bag remaining weight`. `0.0` when
-	 * unknown.
+	 * Remaining weight in the bag, grams. Debited by every shot and logged
+	 * brew attributed to the bag. `0.0` is both "unknown" and "empty": the
+	 * two only differ by whether the bag declares a [`bag_size`](Self::bag_size),
+	 * and [`bag_stock`] is the one place that reads that difference.
 	 */
 	remaining?: number;
 	/** Quality score — free text per Visualizer (`"88"`, `"A-"`). */
@@ -4641,6 +4642,23 @@ export interface WireShot {
 	 */
 	barista?: string;
 }
+
+/** How much is left in a bag, for the shells to warn on. */
+export type BagStock = 
+	/** No weight to track: no declared size and nothing remaining. */
+	| { type: "Untracked", content?: undefined }
+	/** Plenty left. */
+	| { type: "Ok", content?: undefined }
+	/** At or under [`LOW_STOCK_BREWS`] brews left. */
+	| { type: "Low", content: {
+	/**
+	 * Whole brews left ([`brews_remaining_estimate`]); 0 when less than
+	 * one dose remains.
+	 */
+	brews: number;
+}}
+	/** A sized bag with nothing left. */
+	| { type: "Empty", content?: undefined };
 
 /**
  * What kind of beverage a profile produces. Mirrors reaprime's

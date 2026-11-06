@@ -10,6 +10,8 @@ import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -40,6 +42,10 @@ data class BeanLibrary(
 class LibraryStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
+    /** Saves run on IO and may overlap; one at a time. Two at once share a temp
+     *  file, and the loser moves the library aside with nothing to replace it. */
+    private val lock = Mutex()
+
     /** Load the library, or an empty one if absent. An unreadable file is kept
      *  aside and reported (see [loadStore]). */
     suspend fun load(): BeanLibrary = withContext(Dispatchers.IO) {
@@ -49,8 +55,10 @@ class LibraryStore(private val context: Context, private val json: Json) {
 
     /** Persist the library atomically (best-effort; a failure is logged). */
     suspend fun save(library: BeanLibrary) {
-        withContext(Dispatchers.IO) {
-            saveStore(file, json.encodeToString(BeanLibrary.serializer(), library))
+        lock.withLock {
+            withContext(Dispatchers.IO) {
+                saveStore(file, json.encodeToString(BeanLibrary.serializer(), library))
+            }
         }
     }
 

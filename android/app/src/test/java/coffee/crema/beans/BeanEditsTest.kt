@@ -35,6 +35,23 @@ class BeanEditsTest {
     )
 
     @Test
+    fun `a size given to a bag at 0 fills it`() {
+        assertEquals(250f, applyBeanEdits(bean(), blankDraft().copy(bagSize = 250.0)).remaining)
+    }
+
+    @Test
+    fun `a size edit leaves a bag in progress alone`() {
+        val out = applyBeanEdits(bean().copy(bagSize = 250f), blankDraft().copy(bagSize = 340.0, remaining = 120.0))
+        assertEquals(120f, out.remaining)
+    }
+
+    @Test
+    fun `a bag run down to 0 stays at 0 when nothing else changes`() {
+        val out = applyBeanEdits(bean().copy(bagSize = 250f), blankDraft().copy(bagSize = 250.0))
+        assertEquals(0f, out.remaining)
+    }
+
+    @Test
     fun `score, harvest, place and cost land on the bean`() {
         val out = applyBeanEdits(
             bean(),

@@ -41,6 +41,13 @@ export {
 } from './store.svelte';
 
 export { activateBean } from './activate';
+export {
+	bagStock,
+	emptyBagBannerText,
+	lowStockHint,
+	showsEmptyBagBanner,
+	type BagWeights
+} from './stock';
 
 export { roasterMark, roasterTone, roasterMarkTone } from './roaster-mark';
 export { roasterFaviconUrl } from './roaster-favicon';

@@ -809,25 +809,52 @@ pub fn debit_remaining(remaining: f32, dose_g: f32) -> Option<f32> {
     de1_domain::debit_remaining(remaining, dose_g)
 }
 
-/// The inverse credit for shot re-attribution — shared
-/// `de1_domain::credit_remaining` (dose back on the wrongly-billed bag,
-/// capped at `bag_size`; `undefined` = nothing to persist).
+/// The grams a debit actually takes — shared `de1_domain::debit_taken`: what a
+/// shot row records as its `bagDebit`.
 #[wasm_bindgen]
-pub fn credit_remaining(remaining: f32, dose_g: f32, bag_size: f32) -> Option<f32> {
-    de1_domain::credit_remaining(remaining, dose_g, bag_size)
+pub fn debit_taken(remaining: f32, dose_g: f32) -> f32 {
+    de1_domain::debit_taken(remaining, dose_g)
+}
+
+/// The bag's remaining grams after a shot moves off it — shared
+/// `de1_domain::credit_shot_debit`: only the grams the row took go back, capped
+/// at `bag_size`; an untracked bag gains nothing. `bag_debit` is `undefined` for
+/// a row from before the field. `undefined` = nothing to persist.
+#[wasm_bindgen]
+pub fn credit_shot_debit(
+    remaining: f32,
+    bag_size: f32,
+    bag_debit: Option<f32>,
+    dose_g: f32,
+) -> Option<f32> {
+    de1_domain::credit_shot_debit(remaining, bag_size, bag_debit, dose_g)
 }
 
 /// Re-settle a bag after a logged brew's dose edit — shared
-/// `de1_domain::resettle_remaining` (credit the old dose, debit the new;
-/// `undefined` = nothing to persist, including an unchanged dose).
+/// `de1_domain::resettle_remaining` (only the net change moves; `undefined` =
+/// nothing to persist, including an unchanged dose).
 #[wasm_bindgen]
 pub fn resettle_remaining(
     remaining: f32,
     bag_size: f32,
+    bag_debit: Option<f32>,
     old_dose: f32,
     new_dose: f32,
 ) -> Option<f32> {
-    de1_domain::resettle_remaining(remaining, bag_size, old_dose, new_dose)
+    de1_domain::resettle_remaining(remaining, bag_size, bag_debit, old_dose, new_dose)
+}
+
+/// What the row records as taken from its bag after that dose edit — shared
+/// `de1_domain::resettled_bag_debit`.
+#[wasm_bindgen]
+pub fn resettled_bag_debit(
+    remaining: f32,
+    bag_size: f32,
+    bag_debit: Option<f32>,
+    old_dose: f32,
+    new_dose: f32,
+) -> f32 {
+    de1_domain::resettled_bag_debit(remaining, bag_size, bag_debit, old_dose, new_dose)
 }
 
 /// A new bag copied from a bean (`Bean` JSON in and out): `new_id`,
@@ -863,6 +890,13 @@ pub fn set_bean_frozen_json(bean_json: &str, frozen: bool, now_ms: f64) -> Resul
 #[wasm_bindgen]
 pub fn brews_remaining_estimate(remaining_g: f32, recent_doses: &[f32]) -> u32 {
     de1_domain::brews_remaining_estimate(remaining_g, recent_doses)
+}
+
+/// How much is left in a bag, as `BagStock` JSON — shared
+/// `de1_domain::bag_stock`. Mirrors the FFI `bag_stock_json`.
+#[wasm_bindgen(js_name = bagStockJson)]
+pub fn bag_stock_json(remaining_g: f32, bag_size_g: f32, recent_doses: &[f32]) -> String {
+    de1_domain::bag_stock_json(remaining_g, bag_size_g, recent_doses)
 }
 
 // ─── Unit conversions (audit #1) ────────────────────────────────────────

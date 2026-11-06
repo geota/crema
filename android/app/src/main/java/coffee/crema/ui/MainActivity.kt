@@ -517,6 +517,7 @@ class MainActivity : ComponentActivity() {
                         ui.remoteStatus()?.let { status ->
                             RemoteStatusChip(status, onClick = { settingsSection = "advanced"; navTo("settings") })
                         }
+                        BagEmptyDialog(ui, viewModel, onNav = navTo)
                     },
                     machineConnected = machineConnected,
                     scaleConnected = scaleConnected,

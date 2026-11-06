@@ -63,6 +63,7 @@ class BackupCrossShellTest {
             durationMs = 28_000,
             yieldG = 36f,
             doseG = 18f,
+            bagDebitG = 10.5f,
             profileName = "Android Fixture Profile",
             bean = ShotBean(
                 beanId = bean.id,
@@ -138,6 +139,7 @@ class BackupCrossShellTest {
         assertEquals("shot:web-1", shot.id)
         assertEquals(18f, shot.doseG)
         assertEquals(36f, shot.yieldG)
+        assertEquals(12.5f, shot.bagDebitG)
         assertEquals("Gesha Village", shot.bean?.name)
         assertEquals("bean:web-1", shot.bean?.beanId)
         assertEquals(2, shot.samples.size)
@@ -173,6 +175,7 @@ class BackupCrossShellTest {
         assertEquals("Halo Hambela", shot.bean?.name)
         assertEquals(2, shot.samples.size)
         assertEquals(93f, shot.brewTempC)
+        assertEquals(10.5f, shot.bagDebitG)
         assertEquals(1, parsed.profiles.size)
         assertTrue(parsed.profiles.single().contains("profile:android-fixture"))
         assertEquals(listOf("custom:android-orb"), parsed.customMethods.map { it.id })
