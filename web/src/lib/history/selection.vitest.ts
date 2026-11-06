@@ -70,7 +70,8 @@ describe('liveShot', () => {
 
 	it('passes a live shot and a legacy one with no stamp', () => {
 		expect(liveShot(live)).toBe(live);
-		expect(liveShot({ id: 'old' })).toEqual({ id: 'old' });
+		const legacy: { id: string; deletedAt?: number | null } = { id: 'old' };
+		expect(liveShot(legacy)).toBe(legacy);
 		expect(liveShot(undefined)).toBeUndefined();
 	});
 
