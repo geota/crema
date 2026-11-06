@@ -37,6 +37,8 @@
 	import { page } from '$app/state';
 	import type { ResolvedPathname } from '$app/types';
 	import { leaveEditor, toQuery } from '#lib/beans/editor-nav.js';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
 	import {
 		getBeanStore,
 		getBeanImageStore,
@@ -471,6 +473,20 @@
 		leaveEditor(returnTo());
 	}
 
+	// Android's editor bar replaces the top bar at phone width.
+	usePhoneBar(() =>
+		phoneLayout.current
+			? {
+					title: current.name || 'Untitled bag',
+					back: { label: 'Back to Beans', onBack: back, breadcrumb: isNew ? 'New bean' : 'Edit bean' },
+					actions: [
+						{ id: 'cancel', label: 'Cancel', text: 'Cancel', onclick: () => void discard() },
+						{ id: 'save', label: 'Save', text: 'Save', primary: true, onclick: () => void save(false) }
+					]
+				}
+			: {}
+	);
+
 	async function discard(): Promise<void> {
 		if (!await confirmDialog({ message: 'Discard changes?', confirmLabel: 'Discard' })) return;
 		if (isNew) {
@@ -537,6 +553,7 @@
 
 <div class="be-page">
 	<!-- Topbar -->
+	{#if !phoneLayout.current}
 	<header class="be-bar">
 		<button class="be-back" onclick={back}>
 			<ArrowLeftIcon aria-hidden="true" /> Beans
@@ -554,6 +571,7 @@
 			</button>
 		</div>
 	</header>
+	{/if}
 
 	<div class="be-body">
 		<!-- Left rail -->

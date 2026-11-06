@@ -2,9 +2,9 @@
  * `#lib/shell/phone-nav.js` — how the phone-width list → detail screens are
  * entered and left, the same rule as `#lib/beans/editor-nav`.
  *
- * At phone width (and only there) History's shot detail and Settings' section
- * screens are history entries of their own, so system / browser Back returns
- * to the list. Leaving by the bar's ← steps back from an entry the list
+ * At phone width (and only there) History's shot detail, Beans' bag detail and
+ * Settings' section screens are history entries of their own, so system /
+ * browser Back returns to the list. Leaving by the bar's ← steps back from an entry the list
  * pushed. A deep link has no list entry behind it, so ← replaces itself with
  * the list instead of leaving the app.
  *
@@ -22,10 +22,14 @@ export function phoneShotId(): string | null {
 	return page.state.historyShot ?? page.url.searchParams.get('shot');
 }
 
-/** Open a shot's detail screen. Shallow: the URL stays the list's. */
+/**
+ * Open a shot's detail screen. The URL stays the list's. A navigation of its
+ * own, not a shallow one: Kit's shallow popstate skips `beforeNavigate`, so
+ * system Back would pop the screen from under an open sheet.
+ */
 export function openShot(id: string): void {
 	if (!phoneLayout.current) return;
-	void goto(page.url.href, { state: { historyShot: id }, shallow: true, persistState: true });
+	void goto(page.url.href, { state: { historyShot: id }, persistState: true, reset: false });
 }
 
 /** Leave the shot detail screen for the list. */
@@ -37,6 +41,23 @@ export function leaveShot(): void {
 	const list = new URL(page.url.href);
 	list.searchParams.delete('shot');
 	void goto(list, { replace: true, reset: false });
+}
+
+/** The bag on a phone detail screen, or `null` on the list. */
+export function phoneBeanId(): string | null {
+	if (!phoneLayout.current) return null;
+	return page.state.beanDetail ?? null;
+}
+
+/** Open a bag's detail screen. The URL stays the list's; see {@link openShot}. */
+export function openBean(id: string): void {
+	if (!phoneLayout.current) return;
+	void goto(page.url.href, { state: { beanDetail: id }, persistState: true, reset: false });
+}
+
+/** Leave the bag detail screen for the list. */
+export function leaveBean(): void {
+	if (page.state.beanDetail != null) history.back();
 }
 
 /** Open a Settings section screen. The hash is the screen. */

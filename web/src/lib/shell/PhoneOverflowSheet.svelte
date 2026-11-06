@@ -4,13 +4,15 @@
 	/** One row of an overflow sheet (Android `SheetItem`). */
 	export interface OverflowItem {
 		id: string;
-		/** A `phosphor-svelte` icon component. */
-		icon: Component;
+		/** A `phosphor-svelte` icon component, or a Phosphor class for `Icon`. */
+		icon: Component | string;
 		label: string;
 		sub?: string;
 		onclick: () => void;
 		/** Visible but inert, with `sub` saying why: a hidden item can't be found. */
 		disabled?: boolean;
+		/** Error tint, for an action that removes something. */
+		danger?: boolean;
 		/** Draw a separator above this row. */
 		dividerAbove?: boolean;
 	}
@@ -21,6 +23,7 @@
 	 * `PhoneOverflowSheet` — the ⋯ actions as a bottom sheet (Android
 	 * `CremaOverflowSheet`). A row closes the sheet, then runs its action.
 	 */
+	import Icon from '#lib/icons/Icon.svelte';
 	import PhoneSheet from './PhoneSheet.svelte';
 
 	let {
@@ -45,11 +48,15 @@
 			<li>
 				<button
 					type="button"
-					class="poverflow-item"
+					class={['poverflow-item', { 'is-danger': item.danger }]}
 					disabled={item.disabled}
 					onclick={() => pick(item)}
 				>
-					<ItemIcon aria-hidden="true" />
+					{#if typeof ItemIcon === 'string'}
+						<Icon cls={ItemIcon} aria-hidden="true" />
+					{:else}
+						<ItemIcon aria-hidden="true" />
+					{/if}
 					<span class="poverflow-text">
 						<span class="poverflow-label">{item.label}</span>
 						{#if item.sub}<span class="poverflow-sub">{item.sub}</span>{/if}
@@ -101,6 +108,10 @@
 		flex: none;
 		font-size: 21px;
 		color: var(--fg-3);
+	}
+	.poverflow-item.is-danger:not(:disabled) .poverflow-label,
+	.poverflow-item.is-danger:not(:disabled) :global(svg) {
+		color: var(--danger);
 	}
 	.poverflow-text {
 		display: flex;

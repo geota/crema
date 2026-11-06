@@ -66,6 +66,18 @@
 		METHOD_STYLES,
 		getCustomMethodStore
 	} from '#lib/brew/custom-methods.svelte.js';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
+	import PhoneChipRow from '#lib/shell/PhoneChipRow.svelte';
+	import PhoneFab from '#lib/shell/PhoneFab.svelte';
+	import PhoneOverflowSheet, { type OverflowItem } from '#lib/shell/PhoneOverflowSheet.svelte';
+	import PhoneSearch from '#lib/shell/PhoneSearch.svelte';
+	import PhoneSortPill from '#lib/shell/PhoneSortPill.svelte';
+	import ArchiveIcon from 'phosphor-svelte/lib/ArchiveIcon';
+	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
+	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
+	import StarIcon from 'phosphor-svelte/lib/StarIcon';
+	import PhoneProfileCard from '#lib/components/profiles/PhoneProfileCard.svelte';
 	import { recallView } from '#lib/state/view-memory.js';
 	import { persistView, useScrollMemory } from '#lib/state/use-view-memory.svelte.js';
 
@@ -435,6 +447,116 @@
 	}
 
 	/**
+	 * Two axes (#124). Status pills: re-clicking the active one resets to the
+	 * `all` catch-all (which stays pinned). Facet pills: re-clicking the active
+	 * one clears the facet.
+	 */
+	function onFilterPill(id: string): void {
+		if (id === 'all' || id === 'pinned' || id === 'hidden') {
+			status = status === id && id !== 'all' ? 'all' : id;
+		} else {
+			facet = facet === id ? null : id;
+		}
+	}
+
+	/**
+	 * When the user picks a new field (not just flipping direction), reapply
+	 * that field's default direction so e.g. "Name" defaults to A→Z instead of
+	 * inheriting the previous field's descending preference.
+	 */
+	function onSortChange(next: { field: string; direction: SortDir }): void {
+		const previousField = sort;
+		sort = next.field as SortKey;
+		if (next.field !== previousField) {
+			const opt = SORT_OPTIONS.find((s) => s.id === next.field);
+			sortDir = opt?.defaultDir ?? next.direction;
+		} else {
+			sortDir = next.direction;
+		}
+	}
+
+	// ── Phone arrangement (≤ 600 px, Android `PhoneProfilesScreen`) ──────
+	/** The bar's Import opens the same file picker as the wide header's. */
+	let importInput = $state<HTMLInputElement>();
+	/** The profile whose ⋮ sheet is open. */
+	let menuFor = $state<CremaProfile | null>(null);
+
+	usePhoneBar(() => ({
+		actions: [
+			{
+				id: 'import',
+				label: importing ? 'Importing profiles' : 'Import profiles',
+				icon: UploadSimpleIcon,
+				disabled: importing,
+				onclick: () => importInput?.click()
+			},
+			{
+				id: 'export',
+				label: 'Export profiles',
+				icon: DownloadSimpleIcon,
+				disabled: profiles.length === 0,
+				onclick: exportAllProfiles
+			},
+			'settings'
+		]
+	}));
+
+	const phoneChips = $derived(
+		filterPills
+			.filter((p) => !p.divider && !p.groupLabel)
+			.map((p) => ({ ...p, icon: p.id === 'pinned' ? 'ph ph-star' : p.icon }))
+	);
+	/** Android's card sheet: everything that isn't on the card itself. */
+	const menuItems = $derived.by<OverflowItem[]>(() => {
+		const p = menuFor;
+		if (!p) return [];
+		const removeItem: OverflowItem =
+			showingHidden
+				? {
+						id: 'restore',
+						icon: ArrowCounterClockwiseIcon,
+						label: 'Restore profile',
+						dividerAbove: true,
+						onclick: () => void remove(p.id)
+					}
+				: p.source === 'builtin'
+					? {
+							id: 'hide',
+							icon: ArchiveIcon,
+							label: 'Hide from library',
+							sub: 'Built-in profile. Restore it from the Hidden filter.',
+							danger: true,
+							dividerAbove: true,
+							onclick: () => void remove(p.id)
+						}
+					: {
+							id: 'delete',
+							icon: TrashIcon,
+							label: 'Delete profile',
+							danger: true,
+							dividerAbove: true,
+							onclick: () => void remove(p.id)
+						};
+		return [
+			{
+				id: 'pin',
+				icon: StarIcon,
+				label: p.pinned ? 'Unpin from favourites' : 'Pin to favourites',
+				onclick: () => togglePin(p.id)
+			},
+			{ id: 'duplicate', icon: CopyIcon, label: 'Duplicate', onclick: () => duplicate(p.id) },
+			{
+				id: 'download',
+				icon: DownloadSimpleIcon,
+				label: 'Download',
+				sub: 'Export as .json profile',
+				onclick: () => exportProfile(p.id)
+			},
+			removeItem
+		];
+	});
+
+	/**
 	 * Export every profile in the library as one `.jsonl` file — one
 	 * community-v2 profile per line, written by the core (the same file
 	 * Android exports). Built-ins and custom profiles are both included; the
@@ -684,6 +806,19 @@
 				{/if}
 			</div>
 		</div>
+		{#if phoneLayout.current}
+			<input
+				bind:this={importInput}
+				class="pp-pimport"
+				type="file"
+				accept=".tcl,.json,.jsonl"
+				multiple
+				tabindex="-1"
+				aria-hidden="true"
+				disabled={importing}
+				onchange={onImportFilesChosen}
+			/>
+		{:else}
 		<div class="pp-head-r">
 			<div class="pp-search">
 				<MagnifyingGlassIcon aria-hidden="true" />
@@ -727,6 +862,7 @@
 				onclick={() => goto(resolve('profiles/new'))}
 			><PlusIcon aria-hidden="true" /> New profile</button>
 		</div>
+		{/if}
 	</div>
 
 	{#if importBanner}
@@ -750,39 +886,49 @@
 		</div>
 	{/if}
 
+	{#if phoneLayout.current}
+		<PhoneChipRow label="Filter profiles" chips={phoneChips} onselect={onFilterPill}>
+			{#snippet trailing()}
+				<PhoneSortPill
+					value={{ field: sort, direction: sortDir }}
+					options={SORT_OPTIONS.map((s) => ({ field: s.id, label: s.label }))}
+					onchange={onSortChange}
+				/>
+			{/snippet}
+		</PhoneChipRow>
+		<div class="pp-plist">
+			<PhoneSearch bind:value={q} label="Search profiles" placeholder="Search profiles" />
+			{#each filtered as p (p.id)}
+				<PhoneProfileCard
+					profile={p}
+					active={p.id === activeId}
+					onLoad={loadOnBrew}
+					onEdit={edit}
+					onTogglePin={togglePin}
+					onMenu={(id) => (menuFor = filtered.find((x) => x.id === id) ?? null)}
+				/>
+			{/each}
+			{#if store.loaded && filtered.length === 0}
+				<div class="pp-empty">
+					{q ? 'No profiles match your search.' : 'No profiles in this view.'}
+					{#if q}
+						<button class="pp-empty-link" onclick={() => (q = '')}>Clear search</button>
+					{/if}
+				</div>
+			{/if}
+		</div>
+	{:else}
 	<!-- Filter strip -->
 	<div class="pp-filters">
 		<FilterPills
 			pills={filterPills}
-			onclick={(id) => {
-				// Two axes (#124). Status pills: re-clicking the active one
-				// resets to the `all` catch-all (which stays pinned). Facet
-				// pills: re-clicking the active one clears the facet.
-				if (id === 'all' || id === 'pinned' || id === 'hidden') {
-					status = status === id && id !== 'all' ? 'all' : id;
-				} else {
-					facet = facet === id ? null : id;
-				}
-			}}
+			onclick={onFilterPill}
 		/>
 		<div class="pp-sort">
 			<SortPill
 				value={{ field: sort, direction: sortDir }}
 				options={SORT_OPTIONS.map((s) => ({ field: s.id, label: s.label }))}
-				onchange={(next) => {
-					const previousField = sort;
-					sort = next.field as SortKey;
-					// When the user picks a new field (not just flipping
-					// direction), reapply that field's default direction so
-					// e.g. "Name" defaults to A→Z instead of inheriting the
-					// previous field's descending preference.
-					if (next.field !== previousField) {
-						const opt = SORT_OPTIONS.find((s) => s.id === next.field);
-						sortDir = opt?.defaultDir ?? next.direction;
-					} else {
-						sortDir = next.direction;
-					}
-				}}
+				onchange={onSortChange}
 			/>
 		</div>
 	</div>
@@ -821,6 +967,7 @@
 			</div>
 		{/if}
 	</div>
+	{/if}
 
 	<!-- ── Brew recipes — guided plans, followed by hand (issue #10).
 	     A separate section, not rows in the machine grid: selecting a
@@ -983,6 +1130,16 @@
 	{/if}
 
 </div>
+
+{#if phoneLayout.current}
+	<PhoneFab label="New" title="New profile" onclick={() => goto(resolve('profiles/new'))} />
+	<PhoneOverflowSheet
+		open={menuFor !== null}
+		title={menuFor?.name || 'Untitled profile'}
+		items={menuItems}
+		onClose={() => (menuFor = null)}
+	/>
+{/if}
 
 {#if methodDialog}
 	<CustomMethodDialog
@@ -1496,36 +1653,40 @@
 	/* Phone (≤ 600 px): the header toolbar wraps under the title, search full
 	   width (it ran off the right edge at 390 px). */
 	@media (max-width: 600px) {
+		.pp-page {
+			padding-bottom: 96px;
+		}
 		.pp-head {
-			flex-wrap: wrap;
-			row-gap: 14px;
+			display: block;
+			padding: 0;
 		}
-		.pp-head,
-		.pp-filters,
-		.pp-grid {
-			padding-left: var(--page-pad-x);
-			padding-right: var(--page-pad-x);
+		.pp-sub {
+			margin: 0;
 		}
-		.pp-head-r {
-			flex-wrap: wrap;
-			width: 100%;
+		.pp-head-l .pp-sub {
+			display: none;
 		}
-		.pp-head-r :global(.pp-search) {
-			flex: 1 1 auto;
-			min-width: 0;
+		.pp-pimport {
+			display: none;
 		}
-		/* The filter pills get a full row and scroll sideways; the sort sits
-		   under them. */
-		.pp-filters {
-			flex-wrap: wrap;
-			row-gap: 10px;
+		.pp-plist {
+			display: flex;
+			flex-direction: column;
+			gap: 12px;
+			padding: 8px var(--page-pad-x) 0;
 		}
-		.pp-filters :global(.pp-tags) {
-			flex: 1 0 100%;
-			scrollbar-width: none;
+		.pp-recipes {
+			margin: 26px 0 0;
+			padding: 0 var(--page-pad-x);
 		}
-		.pp-sort {
-			margin-left: auto;
+		.pp-recipes :global(.pp-btn),
+		.pp-link,
+		.pp-recipe-btn,
+		.pp-recipe-del {
+			min-height: 44px;
+		}
+		.pp-recipe-del {
+			min-width: 44px;
 		}
 	}
 </style>

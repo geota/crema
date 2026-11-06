@@ -2,15 +2,25 @@
 	import Icon from '#lib/icons/Icon.svelte';
 	import { menuKeyboard } from '#lib/a11y/focus.js';
 	import { pinActiveThenFavourite } from '#lib/library-order.js';
+	import ArchiveIcon from 'phosphor-svelte/lib/ArchiveIcon';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	import CoffeeBeanIcon from 'phosphor-svelte/lib/CoffeeBeanIcon';
+	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
+	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
+	import FileTextIcon from 'phosphor-svelte/lib/FileTextIcon';
+	import FileZipIcon from 'phosphor-svelte/lib/FileZipIcon';
 	import FunnelXIcon from 'phosphor-svelte/lib/FunnelXIcon';
+	import GlobeIcon from 'phosphor-svelte/lib/GlobeIcon';
 	import LightningIcon from 'phosphor-svelte/lib/LightningIcon';
+	import LinkBreakIcon from 'phosphor-svelte/lib/LinkBreakIcon';
 	import LinkIcon from 'phosphor-svelte/lib/LinkIcon';
 	import ListChecksIcon from 'phosphor-svelte/lib/ListChecksIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
+	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import StorefrontIcon from 'phosphor-svelte/lib/StorefrontIcon';
+	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
 	import UploadSimpleIcon from 'phosphor-svelte/lib/UploadSimpleIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
@@ -61,6 +71,20 @@
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import { leaveBean, openBean, phoneBeanId } from '#lib/shell/phone-nav.js';
+	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
+	import PhoneChipRow from '#lib/shell/PhoneChipRow.svelte';
+	import PhoneFab from '#lib/shell/PhoneFab.svelte';
+	import PhoneOverflowSheet, { type OverflowItem } from '#lib/shell/PhoneOverflowSheet.svelte';
+	import PhoneSearch from '#lib/shell/PhoneSearch.svelte';
+	import PhoneSortPill from '#lib/shell/PhoneSortPill.svelte';
+	import PhoneTabs from '#lib/shell/PhoneTabs.svelte';
+	import PhoneBeanCard from '#lib/components/beans/PhoneBeanCard.svelte';
+	import PhoneRoasterRow from '#lib/components/beans/PhoneRoasterRow.svelte';
+	import BeanDeleteSplit from '#lib/components/beans/BeanDeleteSplit.svelte';
+	import RoasterDeleteSplit from '#lib/components/beans/RoasterDeleteSplit.svelte';
+	import { safeExternalUrl } from '#lib/utils/safe-url.js';
 	import { recallView } from '#lib/state/view-memory.js';
 	import { persistView, useScrollMemory } from '#lib/state/use-view-memory.svelte.js';
 
@@ -171,7 +195,14 @@
 	const allBeans = $derived(library.beans);
 	const allRoasters = $derived(library.roasters);
 
-	const drawerBean = $derived(drawerBeanId ? library.getBean(drawerBeanId) : null);
+	/** The bag on the phone's pushed detail screen, once it still exists. */
+	const phoneBean = $derived.by(() => {
+		const id = phoneBeanId();
+		return id ? (library.getBean(id) ?? null) : null;
+	});
+	const drawerBean = $derived(
+		phoneLayout.current ? phoneBean : drawerBeanId ? library.getBean(drawerBeanId) : null
+	);
 
 	// Search runs in the core (issue 62): typo-tolerant, weighted across every
 	// recorded field, and identical on Android. The old inline `includes`
@@ -495,7 +526,9 @@
 	}));
 	useScrollMemory({
 		key: () =>
-			tab === 'roasters'
+			phoneBean
+				? `beans/detail|${phoneBean.id}`
+				: tab === 'roasters'
 				? `beans/roasters|${roasterSortField}-${roasterSortDir}|${roasterRegion}|${showDuplicates}`
 				: `beans/bags|${scopeId ?? ''}|${status}|${includeArchived}|${roast ?? ''}|${[...selectedTags].sort().join(',')}|${sortField}-${sortDir}`
 	});
@@ -601,10 +634,12 @@
 
 	// ── Actions ────────────────────────────────────────────────────────
 	function openTile(id: string): void {
-		drawerBeanId = id;
+		if (phoneLayout.current) openBean(id);
+		else drawerBeanId = id;
 	}
 	function closeDrawer(): void {
-		drawerBeanId = null;
+		if (phoneLayout.current) leaveBean();
+		else drawerBeanId = null;
 	}
 	function toggleSelectedTag(t: string): void {
 		selectedTags = selectedTags.includes(t)
@@ -652,6 +687,15 @@
 	}
 	function toggleArchived(id: string): void {
 		library.toggleArchived(id);
+	}
+
+	function onSortChange(next: { field: string; direction: SortDir }): void {
+		sortField = next.field as SortField;
+		sortDir = next.direction;
+	}
+	function onRoasterSortChange(next: { field: string; direction: SortDir }): void {
+		roasterSortField = next.field as RoasterSortField;
+		roasterSortDir = next.direction;
 	}
 
 	/**
@@ -739,12 +783,234 @@
 	function closeMenusOnDocClick(): void {
 		addMenuOpen = false;
 	}
+
+	// ── Phone arrangement (≤ 600 px, Android `PhoneBeansScreen`) ─────────
+	let exportSheetOpen = $state(false);
+	let newSheetOpen = $state(false);
+	/** The ⋮ sheet's bag or roaster, and the delete-scope sheet it leads to. */
+	let beanMenu = $state<Bean | null>(null);
+	let roasterMenu = $state<Roaster | null>(null);
+	let beanDelete = $state<Bean | null>(null);
+	let roasterDelete = $state<Roaster | null>(null);
+	let deleteSheetOpen = $state(false);
+
+	/** Bag count + archived count per roaster, for the delete sheet's cascade. */
+	const roasterDeleteCount = $derived(
+		roasterDelete ? allBeans.filter((b) => b.roasterId === roasterDelete?.id).length : 0
+	);
+
+	usePhoneBar(() => {
+		if (phoneBean) {
+			const b = phoneBean;
+			return {
+				title: b.name || 'Untitled bag',
+				back: {
+					label: 'Back to beans',
+					onBack: closeDrawer,
+					subtitle: b.roasterId ? library.getRoaster(b.roasterId)?.name : undefined
+				},
+				actions: [
+					{
+						id: 'favourite',
+						label: b.favourite ? 'Unpin from brew picker' : 'Pin to brew picker',
+						icon: StarIcon,
+						accent: b.favourite,
+						onclick: () => toggleFavourite(b.id)
+					},
+					{ id: 'edit', label: 'Edit', icon: PencilSimpleIcon, onclick: () => gotoEdit(b.id) }
+				]
+			};
+		}
+		return {
+			actions: [
+				{
+					id: 'import',
+					label: 'Import beans',
+					icon: UploadSimpleIcon,
+					haspopup: 'dialog',
+					onclick: () => (importOpen = true)
+				},
+				{
+					id: 'export',
+					label: 'Export beans',
+					icon: DownloadSimpleIcon,
+					haspopup: 'dialog',
+					onclick: () => (exportSheetOpen = true)
+				},
+				'settings'
+			]
+		};
+	});
+
+	/** Android's order: favourites beside Active; only the star keeps a glyph. */
+	const PHONE_STATUS_ORDER = ['s:all', 's:active', 's:favourite', 's:frozen', 's:archived'];
+	const phoneBagChips = $derived([
+		...bagsFilterPills
+			.filter((p) => !p.divider && !p.groupLabel)
+			.map((p) => (p.id === 's:frozen' || p.id === 's:archived' ? { ...p, icon: undefined } : p))
+			.sort((a, b) => {
+				const rank = (id: string): number => {
+					const i = PHONE_STATUS_ORDER.indexOf(id);
+					return i === -1 ? PHONE_STATUS_ORDER.length : i;
+				};
+				return rank(a.id) - rank(b.id);
+			}),
+		...(status !== 'all' || includeArchived || roast !== null || selectedTags.length > 0
+			? [{ id: 'clear', label: 'Clear', icon: 'ph ph-x' }]
+			: [])
+	]);
+	function onPhoneBagChip(id: string): void {
+		if (id === 'clear') clearFilters();
+		else onBagPillClick(id);
+	}
+	const phoneRoasterChips = $derived([
+		...(roasterRegionOptions.length > 1
+			? roasterFilterPills.filter((p) => !p.groupLabel)
+			: []),
+		...(allRoasters.some((r) => r.canonicalRoasterId != null)
+			? [
+					{
+						id: 'dupes',
+						label: showDuplicates ? 'Hide dupes' : 'Show dupes',
+						selected: showDuplicates,
+						icon: 'ph ph-link'
+					}
+				]
+			: [])
+	]);
+	function onPhoneRoasterChip(id: string): void {
+		if (id === 'dupes') showDuplicates = !showDuplicates;
+		else onRoasterPillClick(id);
+	}
+	const exportItems: OverflowItem[] = [
+		{
+			id: 'crema',
+			icon: FileTextIcon,
+			label: 'Crema .jsonl',
+			sub: 'Lossless round-trip. Beans, roasters, shots. Photos stay device-local.',
+			onclick: doExportCrema
+		},
+		{
+			id: 'beanconqueror',
+			icon: FileZipIcon,
+			label: 'Beanconqueror .zip',
+			sub: "For sharing with BC users. Photos bundled in the zip; Crema-only fields like tags don't survive.",
+			onclick: doExportBeanconqueror
+		}
+	];
+	const newItems: OverflowItem[] = [
+		{
+			id: 'quick',
+			icon: LightningIcon,
+			label: 'Quick add bean',
+			sub: 'Name, roaster, roast date — ~10 seconds. Refine later.',
+			onclick: () => (quickAddOpen = true)
+		},
+		{
+			id: 'full',
+			icon: ListChecksIcon,
+			label: 'Full editor bean',
+			sub: 'All fields — origin, processing, grinder, tasting notes.',
+			onclick: gotoNew
+		},
+		{
+			id: 'roaster',
+			icon: StorefrontIcon,
+			label: 'Roaster',
+			sub: 'New roastery — name, website, location, logo.',
+			onclick: gotoNewRoaster
+		}
+	];
+	const beanMenuItems = $derived.by<OverflowItem[]>(() => {
+		const b = beanMenu;
+		if (!b) return [];
+		return [
+			{
+				id: 'favourite',
+				icon: StarIcon,
+				label: b.favourite ? 'Unfavourite' : 'Favourite',
+				onclick: () => toggleFavourite(b.id)
+			},
+			{ id: 'duplicate', icon: CopyIcon, label: 'Duplicate bag', onclick: () => duplicateBeanRow(b.id) },
+			{
+				id: 'archive',
+				icon: ArchiveIcon,
+				label: b.archivedAt != null ? 'Restore to active' : 'Archive',
+				onclick: () => toggleArchived(b.id)
+			},
+			{
+				id: 'delete',
+				icon: TrashIcon,
+				label: 'Delete bag',
+				danger: true,
+				dividerAbove: true,
+				onclick: () => {
+					roasterDelete = null;
+					beanDelete = b;
+					deleteSheetOpen = true;
+				}
+			}
+		];
+	});
+	const roasterMenuItems = $derived.by<OverflowItem[]>(() => {
+		const r = roasterMenu;
+		if (!r) return [];
+		const site = safeExternalUrl(r.website);
+		return [
+			...(site
+				? [
+						{
+							id: 'site',
+							icon: GlobeIcon,
+							label: 'Open website',
+							sub: new URL(site).hostname.replace(/^www\./, ''),
+							onclick: () => window.open(site, '_blank', 'noopener,noreferrer')
+						}
+					]
+				: []),
+			...(r.canonicalRoasterId
+				? [
+						{
+							id: 'unmerge',
+							icon: LinkBreakIcon,
+							label: 'Un-merge',
+							sub: 'Restore as a standalone roaster.',
+							onclick: () => unmergeRoaster(r.id)
+						}
+					]
+				: []),
+			{ id: 'duplicate', icon: CopyIcon, label: 'Duplicate roaster', onclick: () => duplicateRoaster(r.id) },
+			{
+				id: 'delete',
+				icon: TrashIcon,
+				label: 'Delete roaster',
+				danger: true,
+				dividerAbove: true,
+				onclick: () => {
+					beanDelete = null;
+					roasterDelete = r;
+					deleteSheetOpen = true;
+				}
+			}
+		];
+	});
+
+	// Leaving the detail screen hands focus back to the card it opened from.
+	$effect(() => {
+		const id = phoneBean?.id;
+		if (!id) return;
+		return () => {
+			document
+				.querySelector<HTMLElement>(`[data-scroll-key="${CSS.escape(id)}"] .pbc-open`)
+				?.focus({ preventScroll: true });
+		};
+	});
 </script>
 
 <svelte:head><title>Crema — Beans</title></svelte:head>
 <svelte:window onclick={closeMenusOnDocClick}></svelte:window>
 
-<div class="bn-page">
+<div class="bn-page" data-phone-view={phoneBean ? 'detail' : 'list'}>
 	<!-- Header -->
 	<div class="bn-head">
 		<div class="bn-head-l">
@@ -752,6 +1018,7 @@
 			<h1 class="t-page-title bn-head-title phone-bar-title">Beans</h1>
 			<div class="bn-head-sub">{statusLine}</div>
 		</div>
+		{#if !phoneLayout.current}
 		<div class="bn-head-r">
 			<label class="bn-search">
 				<MagnifyingGlassIcon aria-hidden="true" />
@@ -905,8 +1172,70 @@
 				{/if}
 			</div>
 		</div>
+		{/if}
 	</div>
 
+	{#if phoneLayout.current}
+		<!-- Android's stack: the tabs, the chip strip with the sort at its end,
+		     then the search and the cards. -->
+		<PhoneTabs
+			label="Library view"
+			options={[
+				{ id: 'bags', label: 'Bags' },
+				{ id: 'roasters', label: 'Roasters' }
+			]}
+			value={tab}
+			onchange={(id) => selectTab(id as Tab)}
+		/>
+		{#if tab === 'bags'}
+			{#if allBeans.length > 0}
+				{#if scopeRoaster}
+					<button
+						class="bn-chip-clear bn-chip-toggle is-on bn-chip-scope bn-pscope"
+						onclick={clearRoasterScope}
+						aria-label="Showing {scopeRoaster.name}'s bags. Show all roasters"
+					>
+						<StorefrontIcon aria-hidden="true" />
+						<span class="bn-chip-scope-name">{scopeRoaster.name}</span>
+						<XIcon aria-hidden="true" />
+					</button>
+				{/if}
+				<div class="bn-pchips">
+					<PhoneChipRow label="Filter bags" chips={phoneBagChips} onselect={onPhoneBagChip}>
+						{#snippet trailing()}
+							<PhoneSortPill
+								value={{ field: sortField, direction: sortDir }}
+								options={sortOptions}
+								onchange={onSortChange}
+							/>
+						{/snippet}
+					</PhoneChipRow>
+				</div>
+			{/if}
+		{:else if allRoasters.length > 0}
+			<div class="bn-pchips">
+				<PhoneChipRow label="Filter roasters" chips={phoneRoasterChips} onselect={onPhoneRoasterChip}>
+					{#snippet trailing()}
+						<PhoneSortPill
+							value={{ field: roasterSortField, direction: roasterSortDir }}
+							options={roasterSortOptions}
+							onchange={onRoasterSortChange}
+						/>
+					{/snippet}
+				</PhoneChipRow>
+			</div>
+		{/if}
+		{#if tab === 'roasters' || allBeans.length > 0}
+			<div class="bn-psearch">
+				<PhoneSearch
+					bind:value={q}
+					label="Search beans"
+					placeholder="Search beans, origin, notes…"
+					title="Searches every field you've recorded — origin, process, tasting notes, grinder, tags — and tolerates typos."
+				/>
+			</div>
+		{/if}
+	{:else}
 	<!-- Tabs + filter rail — Bags/Roasters tab buttons share a single row
 	     with the filter pills (separated by a hairline vertical divider) and
 	     the sort pill on the far right. The filter-pill region scrolls
@@ -963,10 +1292,7 @@
 				<SortPill
 					value={{ field: sortField, direction: sortDir }}
 					options={sortOptions}
-					onchange={(next) => {
-						sortField = next.field as SortField;
-						sortDir = next.direction;
-					}}
+					onchange={onSortChange}
 				/>
 			</div>
 		{:else if tab === 'roasters' && allRoasters.length > 0}
@@ -1000,10 +1326,7 @@
 				<SortPill
 					value={{ field: roasterSortField, direction: roasterSortDir }}
 					options={roasterSortOptions}
-					onchange={(next) => {
-						roasterSortField = next.field as RoasterSortField;
-						roasterSortDir = next.direction;
-					}}
+					onchange={onRoasterSortChange}
 				/>
 				<!-- Primary CTA for the Roasters tab. Mirrors the Bags-tab "Add
 				     bean" split button's primary half so the two tabs offer the
@@ -1018,6 +1341,7 @@
 			</div>
 		{/if}
 	</div>
+	{/if}
 
 	<!-- Body -->
 	{#if tab === 'bags'}
@@ -1033,7 +1357,24 @@
 				     there are no Active / Frozen / Archived status sections. A
 				     bag's frozen / archived state still reads from its own
 				     BeanTile. -->
-				{#if sorted.length > 0}
+				{#if sorted.length > 0 && phoneLayout.current}
+					<div class="bn-plist">
+						{#each sorted as b (b.id)}
+							<PhoneBeanCard
+								bean={b}
+								roaster={b.roasterId ? library.getRoaster(b.roasterId) : null}
+								isActive={library.activeBeanId === b.id}
+								hit={bagHits.byId.get(b.id)}
+								onOpen={openTile}
+								onToggleFavourite={toggleFavourite}
+								onSetActive={setActive}
+								onRestore={toggleArchived}
+								onEdit={gotoEdit}
+								onMenu={(id) => (beanMenu = library.getBean(id) ?? null)}
+							/>
+						{/each}
+					</div>
+				{:else if sorted.length > 0}
 					<div class="bn-grid">
 						{#each sorted as b (b.id)}
 							<BeanTile
@@ -1103,6 +1444,24 @@
 					</section>
 				{/each}
 			{/if}
+			{#if phoneLayout.current}
+				<div class="bn-plist">
+					{#each roasterRows as { roaster, count, archivedCount } (roaster.id)}
+						<PhoneRoasterRow
+							{roaster}
+							{count}
+							{archivedCount}
+							dupOf={roaster.canonicalRoasterId
+								? library.getRoaster(roaster.canonicalRoasterId)
+								: null}
+							onOpen={openRoasterShelf}
+							onEdit={editRoaster}
+							onUnmerge={unmergeRoaster}
+							onMenu={(id) => (roasterMenu = library.getRoaster(id) ?? null)}
+						/>
+					{/each}
+				</div>
+			{:else}
 			<section class="bn-section">
 				<header class="bn-section-head">
 					<h2 class="bn-section-title">Roasters</h2>
@@ -1148,14 +1507,79 @@
 					</div>
 				{/if}
 			</section>
+			{/if}
+			{#if phoneLayout.current && roasterRows.length === 0}
+				<div class="bn-empty-filter">
+					<StorefrontIcon weight="duotone" aria-hidden="true" />
+					<div>
+						{allRoasters.length === 0
+							? 'No roasters yet — add one to group your bags.'
+							: 'No roasters match this region.'}
+					</div>
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>
+
+{#if phoneLayout.current && !phoneBean}
+	<PhoneFab
+		label="New"
+		title={tab === 'bags' ? 'New bean or roaster' : 'New roaster'}
+		haspopup={tab === 'bags' ? 'dialog' : undefined}
+		onclick={() => {
+			if (tab === 'bags') newSheetOpen = true;
+			else gotoNewRoaster();
+		}}
+	/>
+{/if}
+{#if phoneLayout.current}
+	<PhoneOverflowSheet
+		open={exportSheetOpen}
+		title="Export as"
+		items={exportItems}
+		onClose={() => (exportSheetOpen = false)}
+	/>
+	<PhoneOverflowSheet
+		open={newSheetOpen}
+		title="New"
+		items={newItems}
+		onClose={() => (newSheetOpen = false)}
+	/>
+	<PhoneOverflowSheet
+		open={beanMenu !== null}
+		title={beanMenu?.name || 'Untitled bag'}
+		items={beanMenuItems}
+		onClose={() => (beanMenu = null)}
+	/>
+	<PhoneOverflowSheet
+		open={roasterMenu !== null}
+		title={roasterMenu?.name ?? ''}
+		items={roasterMenuItems}
+		onClose={() => (roasterMenu = null)}
+	/>
+	{#if beanDelete}
+		<BeanDeleteSplit
+			beanId={beanDelete.id}
+			beanName={beanDelete.name || 'this bag'}
+			sheet={{ open: deleteSheetOpen, onClose: () => (deleteSheetOpen = false) }}
+		/>
+	{/if}
+	{#if roasterDelete}
+		<RoasterDeleteSplit
+			roasterId={roasterDelete.id}
+			roasterName={roasterDelete.name}
+			linkedBeanCount={roasterDeleteCount}
+			sheet={{ open: deleteSheetOpen, onClose: () => (deleteSheetOpen = false) }}
+		/>
+	{/if}
+{/if}
 
 <!-- Drawer -->
 {#if drawerBean}
 	<BeanDrawer
 		bean={drawerBean}
+		screen={phoneLayout.current}
 		roaster={drawerBean.roasterId ? library.getRoaster(drawerBean.roasterId) : null}
 		isActive={library.activeBeanId === drawerBean.id}
 		onClose={closeDrawer}
@@ -1745,5 +2169,48 @@
 	.bn-chip-toggle.is-on {
 		color: var(--fg-accent);
 		background: rgba(var(--copper-rgb), 0.08);
+	}
+	/* Phone width: Android's stack. The filters and list stand alone; a pushed
+	   bag detail takes the screen, with the list kept mounted behind it so its
+	   place survives. */
+	@media (max-width: 600px) {
+		.bn-page {
+			min-height: 0;
+			padding-bottom: 96px;
+		}
+		.bn-page[data-phone-view='detail'] {
+			display: none;
+		}
+		.bn-head {
+			display: block;
+			padding: 0;
+		}
+		.bn-head-sub {
+			display: none;
+		}
+		.bn-pscope {
+			align-self: flex-start;
+			margin: 6px var(--page-pad-x) 0;
+			min-height: 34px;
+		}
+		.bn-pchips {
+			padding-top: 6px;
+			min-width: 0;
+		}
+		.bn-psearch {
+			padding: 8px var(--page-pad-x) 0;
+		}
+		.bn-grid-scroll {
+			padding: 10px var(--page-pad-x) 0;
+			gap: 10px;
+		}
+		.bn-plist {
+			display: flex;
+			flex-direction: column;
+			gap: 10px;
+		}
+		.bn-merge-banner {
+			flex-wrap: wrap;
+		}
 	}
 </style>

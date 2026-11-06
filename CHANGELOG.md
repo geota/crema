@@ -25,6 +25,18 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   and a shot shows the timer, yield bar and four channel cards over the chart.
   Quick Controls has Android's Dial-in, Chart and Shot tabs, and ⋯ opens a
   bottom sheet with Edit profile, the library and Sleep. Web.
+- **Android's other screens on the web at phone width** — History, Profiles,
+  Beans, Scale and Settings follow the Android phone app at 600 px and below:
+  top-bar actions in place of page toolbars, filter chips with the sort at
+  their end, search pills, and floating Log brew and New buttons. History has
+  the six tiles, rows grouped by day, and Android's shot detail with a ⋮ sheet.
+  Profile and bean cards carry their badge, star, primary action, edit and ⋮.
+  Beans has Bags / Roasters tabs, and a bag opens on its own screen. Scale leads
+  with the readout and Connect scale. Settings opens on the machine card, with
+  section screens like Android's. On a pushed screen, the editors included, the
+  back bar replaces the top bar. Bluetooth stays on Brew's bar, as on Android;
+  from any other tab, the gear leads to the machine card and Connect. Nothing
+  changes above 600 px. Web.
 
 ## [0.10.0] — 2026-10-30
 

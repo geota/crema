@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterScopeKey, selectedShot } from './selection';
+import { filterScopeKey, liveShot, selectedShot } from './selection';
 
 const a = { id: 'a' };
 const b = { id: 'b' };
@@ -59,5 +59,25 @@ describe('selectedShot with an explicit selection (cohort review 06 #1)', () => 
 		const x = filterScopeKey({ q: ' mia ', profile: 'p', bean: 'b', method: 'm', tags: ['t'], range: 'all' });
 		const y = filterScopeKey({ q: 'mia', profile: 'p', bean: 'b', method: 'm', tags: ['t'], range: 'all' });
 		expect(x).toBe(y);
+	});
+});
+
+describe('liveShot', () => {
+	const live = { id: 'live', deletedAt: null };
+	const tombstone = { id: 'gone', deletedAt: 1_790_000_000_000 };
+	const scope = filterScopeKey({ q: '', profile: 'all', bean: 'all', method: 'all', tags: [], range: 'all' });
+	const lookup = (id: string) => liveShot([live, tombstone].find((s) => s.id === id));
+
+	it('passes a live shot and a legacy one with no stamp', () => {
+		expect(liveShot(live)).toBe(live);
+		const legacy: { id: string; deletedAt?: number | null } = { id: 'old' };
+		expect(liveShot(legacy)).toBe(legacy);
+		expect(liveShot(undefined)).toBeUndefined();
+	});
+
+	it('a pin on a deleted shot falls back to the list, not to the tombstone', () => {
+		const pin = { id: 'gone', scope };
+		expect(selectedShot([live], 'gone', { pin, scope, lookup })).toBe(live);
+		expect(selectedShot([], 'gone', { pin, scope, lookup })).toBeUndefined();
 	});
 });

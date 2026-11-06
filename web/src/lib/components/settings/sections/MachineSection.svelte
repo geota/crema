@@ -297,7 +297,7 @@
 	     pushed to bottom via flex). Sleep / Wake lives on the floating
 	     top-right PowerButton; this card is single-purpose connection. -->
 	<div class="st-machinecard-info">
-		<div class="t-eyebrow">{stateLabel}</div>
+		<div class={['t-eyebrow', 'st-machinecard-state', { 'is-on': connected }]}>{stateLabel}</div>
 		{#if connected}
 			<div class="st-machinecard-info-name">DE1 · Crema Bar</div>
 		{/if}
@@ -773,6 +773,34 @@
 	}
 	.mc-grinder-model:focus {
 		border-color: rgba(var(--tint-rgb), 0.4);
+	}
+	/* Phone width: the state line, as Android's Machine card leads with it. The
+	   card's arrangement is in the Settings route, beside its other rules. */
+	@media (max-width: 600px) {
+		.st-machinecard-state {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			font-family: var(--font-sans);
+			font-size: 14px;
+			font-weight: 500;
+			letter-spacing: 0;
+			text-transform: none;
+			color: var(--fg-3);
+		}
+		.st-machinecard-state::before {
+			content: '';
+			width: 10px;
+			height: 10px;
+			border-radius: 50%;
+			background: rgba(var(--tint-rgb), 0.3);
+		}
+		.st-machinecard-state.is-on {
+			color: var(--success);
+		}
+		.st-machinecard-state.is-on::before {
+			background: var(--success);
+		}
 	}
 	.fw-conn-pill {
 		font-family: var(--font-sans);

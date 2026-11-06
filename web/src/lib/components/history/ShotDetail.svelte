@@ -1,3 +1,8 @@
+<script lang="ts" module>
+	/** Set once the chart's "Tap to expand" hint has shown this session. */
+	let expandHintShown = false;
+</script>
+
 <script lang="ts">
 	import { uploadMenuEntry, viewableTargets, type UploadTarget } from '#lib/history/upload-targets.js';
 	import Icon from '#lib/icons/Icon.svelte';
@@ -28,6 +33,7 @@
 		yieldOf,
 		flatSamplesOf,
 		effectiveGrindSetting,
+		grindLabel,
 		isBrewLog,
 		isManualLog,
 		methodOf,
@@ -56,9 +62,27 @@
 	import { requestDialIn } from '#lib/components/brew/dial-in.svelte.js';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { untrack } from 'svelte';
+	import { fade } from 'svelte/transition';
+	import type { Attachment } from 'svelte/attachments';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import PhoneOverflowSheet, { type OverflowItem } from '#lib/shell/PhoneOverflowSheet.svelte';
+	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
+	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
+	import ArrowsOutIcon from 'phosphor-svelte/lib/ArrowsOutIcon';
+	import BookmarkSimpleIcon from 'phosphor-svelte/lib/BookmarkSimpleIcon';
+	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
+	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
+	import CloudArrowUpIcon from 'phosphor-svelte/lib/CloudArrowUpIcon';
+	import CloudSlashIcon from 'phosphor-svelte/lib/CloudSlashIcon';
+	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
+	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
+	import FileCodeIcon from 'phosphor-svelte/lib/FileCodeIcon';
+	import ShareNetworkIcon from 'phosphor-svelte/lib/ShareNetworkIcon';
+	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
 
 	let {
-		shot,
+		shot: shotProp,
 		onNotesChange,
 		onNextPlanChange,
 		onRatingChange,
@@ -75,57 +99,58 @@
 		uploadTargets = [],
 		onUpload = null,
 		onLogAgain = null,
-		onManualBrewEdit = null
+		onManualBrewEdit = null,
+		phoneMenuOpen = $bindable(false)
 	}: {
-		/** The selected stored shot. */
-		shot: StoredShot;
+		/** The selected stored shot. See {@link shot} for why it isn't read directly. */
+		shot: StoredShot | null;
 		/** Persist edited tasting notes. */
-		onNotesChange: (notes: string) => void;
+		onNotesChange: (id: string, notes: string) => void;
 		/** Persist the edited forward-looking "next time" plan. */
-		onNextPlanChange: (nextPlan: string) => void;
+		onNextPlanChange: (id: string, nextPlan: string) => void;
 		/** Persist an edited star rating. */
-		onRatingChange: (rating: number) => void;
+		onRatingChange: (id: string, rating: number) => void;
 		/**
 		 * Persist a per-shot Visualizer privacy override; `null` reverts to
 		 * the `Settings.visualizerPrivacy` default.
 		 */
-		onPrivacyChange: (privacy: 'public' | 'unlisted' | 'private' | null) => void;
+		onPrivacyChange: (id: string, privacy: 'public' | 'unlisted' | 'private' | null) => void;
 		/**
 		 * Persist an edited equipment-level grinder model. `null` clears
 		 * the override (cascade re-engages → settings default), a string
 		 * sets a shot-specific override.
 		 */
-		onGrinderModelChange: (grinderModel: string | null) => void;
+		onGrinderModelChange: (id: string, grinderModel: string | null) => void;
 		/**
 		 * Persist who made (`barista`) or drank (`drinker`) the shot. `null`
 		 * clears it.
 		 */
-		onPersonChange: (field: 'barista' | 'drinker', name: string | null) => void;
+		onPersonChange: (id: string, field: 'barista' | 'drinker', name: string | null) => void;
 		/** Barista names used before, most recent first. */
 		baristaSuggestions?: readonly string[];
 		/** Drinker names used before, most recent first. */
 		drinkerSuggestions?: readonly string[];
 		/** Persist edited shot-level tags. */
-		onTagsChange: (tags: string[]) => void;
+		onTagsChange: (id: string, tags: string[]) => void;
 		/**
 		 * Persist the grind THIS shot was pulled at (issue #16) — the
 		 * detail's grind stepper. Writes the per-shot value; display and
 		 * the Visualizer wire fall back to the bean snapshot when unset.
 		 */
-		onGrindChange: (grinderSetting: string | null) => void;
+		onGrindChange: (id: string, grinderSetting: string | null) => void;
 		/**
 		 * Retroactively (re)bind the shot to a live bean — caller wraps
 		 * `HistoryStore.setBeanFromLive` so the shared `snapshotFromBean`
 		 * helper handles the live → snapshot mapping. Passing `null`
 		 * clears the binding (shot becomes bean-less).
 		 */
-		onBeanChange: (bean: Bean | null, roaster: Roaster | null) => void;
+		onBeanChange: (id: string, bean: Bean | null, roaster: Roaster | null) => void;
 		/**
 		 * Delete this shot. `remote: false` removes it from the local
 		 * history only; `remote: true` also pushes a DELETE to Visualizer.
 		 * Optional — the delete control is hidden when not supplied.
 		 */
-		onDelete?: (opts: { remote: boolean }) => void;
+		onDelete?: (id: string, opts: { remote: boolean }) => void;
 		/**
 		 * Whether the "delete on Visualizer too" option is available — the
 		 * shot is uploaded (`visualizerId` set) and Visualizer push is on.
@@ -145,21 +170,37 @@
 		 * the shot this is a RE-upload (Visualizer de-dupes by telemetry
 		 * SHA; Decent replaces its copy). `null` = nothing to upload with.
 		 */
-		onUpload?: ((targets: UploadTarget[]) => void) | null;
+		onUpload?: ((id: string, targets: UploadTarget[]) => void) | null;
 		/**
 		 * Re-open the Log-brew form seeded from this brew, dated now —
 		 * the Brew Log's sibling of "Start from this shot" (issue #10).
 		 * Only rendered for brew rows.
 		 */
-		onLogAgain?: (() => void) | null;
+		onLogAgain?: ((id: string) => void) | null;
 		/**
 		 * Persist an edited user-entered fact of a MANUAL brew row
 		 * (dose / water / temp / time). The caller re-settles bean
 		 * inventory on dose changes. `null` (or a non-manual row)
 		 * renders the facts read-only.
 		 */
-		onManualBrewEdit?: ((patch: ManualBrewPatch) => void) | null;
+		onManualBrewEdit?: ((id: string, patch: ManualBrewPatch) => void) | null;
+		/** The phone arrangement's ⋮ sheet. The top bar's button opens it. */
+		phoneMenuOpen?: boolean;
 	} = $props();
+
+	/**
+	 * The shot this instance is for, fixed at mount. The parent keys the detail
+	 * on the shot, but a focused field commits as it leaves the page, after
+	 * the parent's selection has moved on or gone: Back, a filter change, a
+	 * rotation. So every edit below reports this id, and {@link shot} stays on
+	 * this shot's last known record rather than following the prop to another.
+	 */
+	const shotId = untrack(() => (shotProp as StoredShot).id);
+	let lastShot = untrack(() => shotProp as StoredShot);
+	const shot = $derived.by(() => {
+		if (shotProp?.id === shotId) lastShot = shotProp;
+		return lastShot;
+	});
 
 	const uploadEntry = $derived(uploadMenuEntry(uploadTargets));
 	const viewRows = $derived(viewableTargets(uploadTargets));
@@ -333,7 +374,7 @@
 		const next = trimmed.length > 0 ? trimmed : null;
 		// Only persist on real changes so a click-and-blur doesn't churn.
 		if ((shot.grinderModel ?? null) === next) return;
-		onGrinderModelChange(next);
+		onGrinderModelChange(shotId, next);
 	}
 
 	// ── Barista / drinker (dye2 audit #1) ─────────────────────────────────
@@ -342,7 +383,7 @@
 	function commitPerson(field: 'barista' | 'drinker', raw: string): void {
 		const next = raw.trim() || null;
 		if ((shot.metadata[field] ?? null) === next) return;
-		onPersonChange(field, next);
+		onPersonChange(shotId, field, next);
 	}
 
 	// ── Header blocks (issue #16 round 4) — the Brew page's profile/bean
@@ -405,7 +446,7 @@
 	});
 	function commitGrind(v: number): void {
 		const fmt = Number.isInteger(v) ? String(v) : v.toFixed(1);
-		onGrindChange(fmt);
+		onGrindChange(shotId, fmt);
 	}
 
 	/** Open the notes editor, seeding the draft from the current notes. */
@@ -415,7 +456,7 @@
 	}
 	/** Save the draft notes and leave edit mode. */
 	function saveNotes(): void {
-		onNotesChange(draft);
+		onNotesChange(shotId, draft);
 		editing = false;
 	}
 
@@ -431,7 +472,7 @@
 	}
 	/** Save the draft plan and leave edit mode. */
 	function savePlan(): void {
-		onNextPlanChange(planDraft);
+		onNextPlanChange(shotId, planDraft);
 		planEditing = false;
 	}
 
@@ -439,7 +480,7 @@
 	const rating = $derived(shot.metadata.rating ?? 0);
 	/** Set the star rating (clicking the same star again clears it). */
 	function setStar(n: number): void {
-		onRatingChange(rating === n ? 0 : n);
+		onRatingChange(shotId, rating === n ? 0 : n);
 	}
 
 	/**
@@ -593,6 +634,165 @@
 		if (target.viewUrl) window.open(target.viewUrl, '_blank', 'noopener');
 	}
 
+	/**
+	 * Commit a text field on `change`, and as it leaves the page with text in
+	 * it: Back or a rotation takes the field away mid-edit, and whether a removed
+	 * element fires `change` is up to the browser. Each value commits once.
+	 */
+	function commitField(
+		stored: () => string,
+		commit: (value: string) => void
+	): Attachment<HTMLInputElement | HTMLTextAreaElement> {
+		return (node) => {
+			/** Queued but not yet in the store, so `stored()` can't rule it out. */
+			let pending: string | null = null;
+			const flush = (): void => {
+				const value = node.value;
+				if (value === pending || value === stored()) return;
+				pending = value;
+				// In a microtask: removing a focused field fires `change` in the
+				// middle of Svelte's teardown, where state writes are forbidden.
+				queueMicrotask(() => {
+					pending = null;
+					commit(value);
+				});
+			};
+			node.addEventListener('change', flush);
+			return () => {
+				node.removeEventListener('change', flush);
+				flush();
+			};
+		};
+	}
+
+	// ── Phone arrangement ────────────────────────────────────────────────
+	/**
+	 * The ⋮ sheet's state lives in the page, which outlives this shot: close it
+	 * with the arrangement, or the next shot would open on its Delete rows.
+	 */
+	function closePhoneMenuOnLeave(): () => void {
+		return () => {
+			// In a microtask: state writes are forbidden during Svelte's teardown.
+			if (phoneMenuOpen) queueMicrotask(() => (phoneMenuOpen = false));
+		};
+	}
+	const detailTitle = $derived(
+		isBrew
+			? (shot.recipeName ?? methodLabel(method, shot.brewMethodLabel)) + (manual ? ' · logged' : '')
+			: (shot.profileName ?? 'Untitled shot')
+	);
+	/** The strip's bottom row: the grind this shot was pulled at + the grinder. */
+	const specLine = $derived(
+		[grindLabel(shot), shot.bean?.grinder?.trim()].filter(Boolean).join(' · ')
+	);
+	/** The "Tap to expand" hint: fades away, shown once per app session. */
+	let expandHint = $state(!expandHintShown);
+	$effect(() => {
+		if (!expandHint) return;
+		expandHintShown = true;
+		const timer = setTimeout(() => (expandHint = false), 2800);
+		return () => clearTimeout(timer);
+	});
+	/** The wide header's menus as Android's ⋮ sheet, on the same handlers. */
+	const phoneMenuItems = $derived.by<OverflowItem[]>(() => {
+		const del: OverflowItem[] = onDelete
+			? [
+					{
+						id: 'delete',
+						icon: TrashIcon,
+						label: isBrew ? 'Delete brew' : 'Delete shot',
+						sub: 'From this device. Anything uploaded stays there.',
+						danger: true,
+						dividerAbove: true,
+						onclick: () => onDelete?.(shotId, { remote: false })
+					},
+					{
+						id: 'delete-remote',
+						icon: CloudSlashIcon,
+						label: 'Delete here and on Visualizer',
+						sub: canDeleteRemote
+							? 'Removes it locally and deletes the uploaded copy from Visualizer too.'
+							: 'Unavailable — this shot is not on Visualizer, or sync is off / signed out.',
+						danger: true,
+						disabled: !canDeleteRemote,
+						onclick: () => onDelete?.(shotId, { remote: true })
+					}
+				]
+			: [];
+		if (isBrew) {
+			return [
+				{
+					id: 'download',
+					icon: DownloadSimpleIcon,
+					label: 'Download brew',
+					sub: 'Community v2 (.shot.json)',
+					onclick: downloadCommunity
+				},
+				...del
+			];
+		}
+		return [
+			{
+				id: 'load',
+				icon: ArrowCounterClockwiseIcon,
+				label: 'Load profile only',
+				sub: "Reload this shot's profile, nothing else.",
+				onclick: loadOnBrew
+			},
+			{
+				id: 'save-profile',
+				icon: BookmarkSimpleIcon,
+				label: 'Save as profile',
+				sub: 'Derive a reusable profile from this shot.',
+				onclick: saveAsProfile
+			},
+			{
+				id: 'download',
+				icon: DownloadSimpleIcon,
+				label: 'Download shot',
+				sub: 'Community v2 (.shot.json)',
+				onclick: downloadCommunity
+			},
+			{
+				id: 'replay',
+				icon: FileCodeIcon,
+				label: 'Download replayable capture',
+				sub:
+					hasCapture === false
+						? 'No raw BLE bytes recorded for this shot.'
+						: 'Raw BLE bytes (.jsonl). Crema-only; right for bug reports.',
+				disabled: hasCapture === false,
+				onclick: () => void downloadReplayCapture()
+			},
+			{
+				id: 'upload',
+				icon: CloudArrowUpIcon,
+				label: uploadEntry.title,
+				sub: uploadEntry.sub,
+				disabled: !uploadEntry.enabled || !onUpload,
+				onclick: () => onUpload?.(shotId, uploadEntry.targets)
+			},
+			...viewRows.map((t): OverflowItem =>
+				t.shareable
+					? {
+							id: `share-${t.name}`,
+							icon: ShareNetworkIcon,
+							label: shareableCount === 1 ? 'Share link' : `Share ${t.name} link`,
+							sub: `Copies the ${t.name} link — anyone with it can view the shot.`,
+							onclick: () => void shareLink(t)
+						}
+					: {
+							id: `view-${t.name}`,
+							icon: ArrowSquareOutIcon,
+							label: `View on ${t.name}`,
+							sub: `Open your ${t.name} shot history in a new tab.`,
+							onclick: () => openView(t)
+						}
+			),
+			...del
+		];
+	});
+
 	// ── Bean rebind (retroactive) ────────────────────────────────────────
 	function openPicker(): void {
 		pickerOpen = true;
@@ -601,15 +801,407 @@
 		pickerOpen = false;
 	}
 	function pickBean(bean: Bean, roaster: Roaster | null): void {
-		onBeanChange(bean, roaster);
+		onBeanChange(shotId, bean, roaster);
 		pickerOpen = false;
 	}
 	function clearBean(): void {
-		onBeanChange(null, null);
+		onBeanChange(shotId, null, null);
 		pickerOpen = false;
 	}
 </script>
 
+	{#snippet shotChart(height: number)}
+		<StaticShotChart series={flatSeries} {height} />
+	{/snippet}
+
+{#snippet qualityCard()}
+	<!-- Shot quality — the core's Decenza-port analysis of the stored
+	     curves: badge chips, the verdict line, then the prose
+	     observations with severity dots. Recomputed on view, never
+	     persisted; hidden while in flight, when the shot is too short
+	     to analyze, or when the analysis rejects. -->
+	{#if quality}
+		<div class="hi-quality">
+			<div class="hi-quality-head">
+				<span class="t-eyebrow" style="color:var(--fg-3)">Shot quality</span>
+				<div class="hi-quality-chips">
+					{#each qualityChips as chip (chip.label)}
+						<span class="hi-quality-chip is-{chip.tone}">
+							{#if phoneLayout.current && chip.tone === 'success'}
+								<CheckCircleIcon aria-hidden="true" />
+							{/if}{chip.label}
+						</span>
+					{/each}
+				</div>
+			</div>
+			{#if qualityVerdict}
+				<div class="hi-quality-verdict">{qualityVerdict.text}</div>
+			{/if}
+			{#if qualityLines.length > 0}
+				<ul class="hi-quality-lines">
+					{#each qualityLines as line (line.kind + line.text)}
+						<li class="hi-quality-line">
+							<i
+								class="hi-quality-dot"
+								style="background:{qualityDotColor(line.lineType)}"
+							></i>
+							<span>{line.text}</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</div>
+	{/if}
+{/snippet}
+
+{#snippet brewFacts()}
+		<div class="hi-metrics hi-metrics-brew" class:is-editable={factsEditable}>
+			<div class="hi-metric">
+				<div class="hi-metric-l">Method</div>
+				<div class="hi-metric-v hi-metric-method">
+					<MethodMark {method} size={14} />
+					<span>{methodLabel(method, shot.brewMethodLabel)}</span>
+				</div>
+			</div>
+			<div class="hi-metric">
+				<div class="hi-metric-l">Time</div>
+				{#if factsEditable}
+					<input
+						class="hi-fact-input"
+						value={shot.record.duration > 0 ? fmtDuration(shot.record.duration).replace(' s', '') : ''}
+						placeholder="m:ss"
+						aria-label="Brew time"
+						onchange={(e) => {
+							const raw = e.currentTarget.value.trim();
+							const m = /^(\d+):([0-5]?\d)$/.exec(raw);
+							const secs = m ? Number(m[1]) * 60 + Number(m[2]) : Number(raw);
+							onManualBrewEdit?.(shotId, {
+								durationMs:
+									Number.isFinite(secs) && secs > 0 ? Math.round(secs * 1000) : null
+							});
+						}}
+					/>
+				{:else}
+					<div class="hi-metric-v">
+						{shot.record.duration > 0 ? fmtDuration(shot.record.duration) : '—'}
+					</div>
+				{/if}
+			</div>
+			<div class="hi-metric">
+				<div class="hi-metric-l">Dose</div>
+				{#if factsEditable}
+					<QuickStepper
+						value={shot.metadata.dose ?? 0}
+						unit="g"
+						min={0}
+						max={200}
+						step={0.5}
+						onChange={(n) => onManualBrewEdit?.(shotId, { dose: n > 0 ? n : null })}
+					/>
+				{:else}
+					<div class="hi-metric-v">
+						{shot.metadata.dose != null ? `${shot.metadata.dose}` : '—'}<em>g</em>
+					</div>
+				{/if}
+			</div>
+			<div class="hi-metric">
+				<div class="hi-metric-l">{method === 'espresso' ? 'Yield' : 'Water'}</div>
+				{#if factsEditable}
+					<QuickStepper
+						value={(method === 'espresso' ? shot.metadata.yieldOut : shot.metadata.waterG) ?? 0}
+						unit="g"
+						min={0}
+						max={2000}
+						step={method === 'espresso' ? 1 : 10}
+						onChange={(n) =>
+							onManualBrewEdit?.(
+								shotId,
+								method === 'espresso'
+									? { yieldOut: n > 0 ? n : null }
+									: { waterG: n > 0 ? n : null }
+							)}
+					/>
+				{:else}
+					<div class="hi-metric-v">{brewOutValue}<em>g</em></div>
+				{/if}
+			</div>
+			<div class="hi-metric">
+				<div class="hi-metric-l">Ratio</div>
+				<div class="hi-metric-v">{ratioLabel(shot)}</div>
+			</div>
+			<div class="hi-metric">
+				<div class="hi-metric-l">Temp</div>
+				{#if factsEditable}
+					<QuickStepper
+						value={shot.brewTempTarget ?? 0}
+						unit="°C"
+						min={0}
+						max={100}
+						step={1}
+						onChange={(n) => onManualBrewEdit?.(shotId, { brewTempC: n > 0 ? n : null })}
+					/>
+				{:else}
+					<div class="hi-metric-v">
+						{shot.brewTempTarget != null ? Math.round(shot.brewTempTarget) : '—'}<em>°C</em>
+					</div>
+				{/if}
+			</div>
+		</div>
+{/snippet}
+
+{#snippet tagsField()}
+	<div class="hi-tags">
+		<span class="t-eyebrow" style="color:var(--fg-3)">Tags</span>
+		<TagInput
+			tags={shot.tags ?? []}
+			suggestions={tagSuggestions}
+			onChange={(tags) => onTagsChange(shotId, tags)}
+		/>
+	</div>
+{/snippet}
+
+{#snippet grinderField()}
+	<div class="hi-grinder">
+		<label class="t-eyebrow" style="color:var(--fg-3)" for={grinderInputId}>Grinder model</label>
+		<input
+			id={grinderInputId}
+			class="hi-grinder-input"
+			type="text"
+			placeholder={grinderPlaceholder}
+			value={shot.grinderModel ?? ''}
+			{@attach commitField(() => shot.grinderModel ?? '', commitGrinderModel)}
+		/>
+		<span class="hi-grinder-hint">
+			{shot.grinderModel
+				? 'Per-shot override.'
+				: settingsDefaultGrinder
+					? `Using settings default (“${settingsDefaultGrinder}”). Type to override.`
+					: 'Override the settings default. Free text.'}
+		</span>
+	</div>
+{/snippet}
+
+{#snippet peopleFields()}
+	<div class="hi-people">
+		{#each [{ field: 'barista', label: 'Barista', names: baristaSuggestions }, { field: 'drinker', label: 'Drinker', names: drinkerSuggestions }] as p (p.field)}
+			{@const field = p.field as 'barista' | 'drinker'}
+			<label class="hi-person">
+				<span class="t-eyebrow" style="color:var(--fg-3)">{p.label}</span>
+				<input
+					class="hi-grinder-input"
+					type="text"
+					autocomplete="off"
+					list={`hi-${field}-names`}
+					placeholder={field === 'barista' ? 'Who made it' : 'Who drank it'}
+					value={shot.metadata[field] ?? ''}
+					{@attach commitField(
+						() => shot.metadata[field] ?? '',
+						(value) => commitPerson(field, value)
+					)}
+				/>
+				<datalist id={`hi-${field}-names`}>
+					{#each p.names as name (name)}
+						<option value={name}></option>
+					{/each}
+				</datalist>
+			</label>
+		{/each}
+	</div>
+{/snippet}
+
+{#snippet privacyChips()}
+		<div class="hi-privacy-chips" role="group" aria-label="Visualizer privacy">
+			{#each ['public', 'unlisted', 'private'] as const as p (p)}
+				<button
+					class="hi-privacy-chip"
+					class:is-on={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
+					aria-pressed={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
+					onclick={() => onPrivacyChange(shotId, shot.privacy === p ? null : p)}
+					title={shot.privacy == null && defaultPrivacy === p
+						? 'Following the Settings → Sharing default'
+						: undefined}
+				>
+					{p[0].toUpperCase() + p.slice(1)}
+				</button>
+			{/each}
+		</div>
+{/snippet}
+
+{#snippet chartLegendDot(label: string, color: string)}
+	<span class="pshot-leg" style:color><i></i>{label}</span>
+{/snippet}
+
+{#if phoneLayout.current}
+	<!-- Android's `PhoneShotDetail`: the strip, the chart, the metrics, the
+	     quality report, the journal, and the two foot actions. The rest of the
+	     wide header's actions ride the bar's ⋮ sheet. Same handlers. -->
+	<div class="pshot" {@attach closePhoneMenuOnLeave}>
+		<div class="pshot-body">
+			<button
+				type="button"
+				class="pshot-strip"
+				aria-label="{shot.bean ? 'Change bean' : 'Assign bean'}: {beanTitle}"
+				onclick={openPicker}
+			>
+				<span class="pshot-strip-text">
+					<span class="pshot-strip-title">{detailTitle}</span>
+					<span class="pshot-strip-bean">{beanTitle}</span>
+					{#if specLine}<span class="pshot-strip-spec">{specLine}</span>{/if}
+				</span>
+				{#if freshAtPullLabel}
+					<span class="pshot-fresh" style:color={freshAtPullColor}><i></i>{freshAtPullLabel}</span>
+				{/if}
+				<CaretDownIcon aria-hidden="true" />
+			</button>
+
+			{#if shot.record.samples.length > 0}
+				<div class="pshot-chart">
+					<div class="pshot-legend">
+						{@render chartLegendDot('Press', 'var(--tel-pressure)')}
+						{@render chartLegendDot('Flow', 'var(--tel-flow)')}
+						{@render chartLegendDot('Temp', 'var(--tel-temp)')}
+						{@render chartLegendDot('Weight', 'var(--tel-weight)')}
+					</div>
+					<div class="pshot-plot">
+						<StaticShotChart series={flatSeries} height={190} />
+						<button
+							type="button"
+							class="pshot-expand"
+							aria-label="Enlarge chart"
+							onclick={() => (chartExpanded = true)}
+						></button>
+						{#if expandHint}
+							<span class="pshot-hint" transition:fade={{ duration: 450 }}>
+								<ArrowsOutIcon aria-hidden="true" /> Tap to expand
+							</span>
+						{/if}
+					</div>
+				</div>
+			{:else if shot.brewSeries && shot.brewSeries.samples.length > 0}
+				<div class="pshot-chart">
+					<div class="pshot-legend">
+						{@render chartLegendDot('Weight', 'var(--tel-weight)')}
+						{@render chartLegendDot('Pour rate', 'var(--tel-flow)')}
+					</div>
+					<BrewSessionChart series={shot.brewSeries} height={190} legend={false} />
+				</div>
+			{:else if !isBrew}
+				<div class="pshot-chart pshot-chart-empty">No telemetry recorded for this shot.</div>
+			{/if}
+
+			{#if isBrew}
+				{@render brewFacts()}
+			{:else}
+				<div class="pshot-tiles">
+					<div class="pshot-tile">
+						<span class="pshot-tile-v">{(shot.record.duration / 1000).toFixed(0)}s</span>
+						<span class="pshot-tile-l">Time</span>
+					</div>
+					<div class="pshot-tile">
+						<span class="pshot-tile-v" style:color="var(--tel-pressure)">{peakPressureM.value}</span>
+						<span class="pshot-tile-l">Peak {peakPressureM.unit}</span>
+					</div>
+					<div class="pshot-tile">
+						<span class="pshot-tile-v" style:color="var(--tel-temp)">{peakTempM.value}{peakTempM.unit}</span>
+						<span class="pshot-tile-l">Peak temp</span>
+					</div>
+					<div class="pshot-tile">
+						<span class="pshot-tile-v" style:color="var(--tel-weight)">{yieldOut != null ? `${yieldM.value}${yieldM.unit}` : '—'}</span>
+						<span class="pshot-tile-l">Yield</span>
+					</div>
+				</div>
+				<!-- Figures the wide strip shows and Android's four tiles don't. -->
+				<p class="pshot-more">
+					Peak weight {peakWeightM.value} {peakWeightM.unit} · Ratio {ratioLabel(shot)} · {flatSeries.length} samples
+				</p>
+			{/if}
+
+			{@render qualityCard()}
+
+			<div class="pshot-journal">
+				<div class="pshot-row">
+					<span class="t-eyebrow pshot-eye" id={`${detailUid}-rating`}>Your rating</span>
+					<StarRating
+						{rating}
+						interactive
+						onRate={setStar}
+						size={26}
+						labelledby={`${detailUid}-rating`}
+						emptyColor="var(--fg-3)"
+					/>
+				</div>
+				<div class="pshot-row">
+					<span class="t-eyebrow pshot-eye">Grind</span>
+					<QuickStepper
+						name="Grind"
+						value={grindValue}
+						min={0}
+						max={200}
+						step={0.1}
+						onChange={commitGrind}
+						fmt={(v) => (Number.isInteger(v) ? String(v) : v.toFixed(1))}
+					/>
+				</div>
+				{@render peopleFields()}
+				<label class="pshot-field">
+					<span>Tasting notes</span>
+					<textarea
+						rows="3"
+						placeholder="How did it taste?"
+						value={shot.metadata.notes ?? ''}
+						{@attach commitField(
+							() => shot.metadata.notes ?? '',
+							(value) => onNotesChange(shotId, value)
+						)}
+					></textarea>
+				</label>
+				<label class="pshot-field">
+					<span>Next time</span>
+					<textarea
+						rows="2"
+						placeholder={isBrew ? 'What will you change next time?' : 'What will you change next shot?'}
+						value={shot.metadata.nextPlan ?? ''}
+						{@attach commitField(
+							() => shot.metadata.nextPlan ?? '',
+							(value) => onNextPlanChange(shotId, value)
+						)}
+					></textarea>
+				</label>
+				{@render tagsField()}
+				{@render grinderField()}
+				{#if !isBrew}
+					<div class="pshot-row">
+						<span class="t-eyebrow pshot-eye">Privacy</span>
+						{@render privacyChips()}
+					</div>
+				{/if}
+			</div>
+		</div>
+
+		<div class="pshot-foot">
+			{#if isBrew}
+				{#if onLogAgain}
+					<button type="button" class="pshot-btn" onclick={() => onLogAgain?.(shotId)}>
+						<ArrowCounterClockwiseIcon aria-hidden="true" /> Log again
+					</button>
+				{/if}
+			{:else}
+				<button type="button" class="pshot-btn" onclick={startFromShot}>
+					<CoffeeIcon aria-hidden="true" /> Start from shot
+				</button>
+			{/if}
+			<button type="button" class="pshot-btn is-primary" onclick={downloadCommunity}>
+				<DownloadSimpleIcon aria-hidden="true" /> {isBrew ? 'Export brew' : 'Export shot'}
+			</button>
+		</div>
+	</div>
+	<PhoneOverflowSheet
+		open={phoneMenuOpen}
+		title="{detailTitle} · {stamp}"
+		items={phoneMenuItems}
+		onClose={() => (phoneMenuOpen = false)}
+	/>
+{:else}
 <div class="hi-detail">
 	<div class="hi-detail-head">
 		<div class="hi-head-blocks">
@@ -677,7 +1269,7 @@
 				{#if onLogAgain}
 					<button
 						class="st-btn st-btn-primary"
-						onclick={onLogAgain}
+						onclick={() => onLogAgain?.(shotId)}
 						title="Log another brew with these settings — same method, bean, dose and water"
 					>
 						<Icon cls="ph ph-arrow-counter-clockwise" aria-hidden="true" />
@@ -718,7 +1310,7 @@
 						title: uploadEntry.title,
 						sub: uploadEntry.sub,
 						disabled: !uploadEntry.enabled || !onUpload,
-						onclick: () => onUpload?.(uploadEntry.targets)
+						onclick: () => onUpload?.(shotId, uploadEntry.targets)
 					},
 					// Share = the public link to an uploaded copy: one row when the
 					// shot is on one destination, one per destination when on both.
@@ -749,7 +1341,7 @@
 					icon="ph ph-trash"
 					label="Delete"
 					title="Delete this shot from your local history"
-					onPrimary={() => onDelete?.({ remote: false })}
+					onPrimary={() => onDelete?.(shotId, { remote: false })}
 					caretAriaLabel="Choose delete scope"
 					menuHead="Delete shot"
 					items={[
@@ -757,7 +1349,7 @@
 							icon: 'ph-duotone ph-device-mobile',
 							title: 'Delete from this device',
 							sub: 'Removes the shot from your local history. Anything uploaded to Visualizer stays there.',
-							onclick: () => onDelete?.({ remote: false })
+							onclick: () => onDelete?.(shotId, { remote: false })
 						},
 						{
 							icon: 'ph-duotone ph-cloud-slash',
@@ -766,7 +1358,7 @@
 								? 'Removes it locally and deletes the uploaded copy from Visualizer too.'
 								: 'Unavailable — this shot is not on Visualizer, or sync is off / signed out.',
 							disabled: !canDeleteRemote,
-							onclick: () => onDelete?.({ remote: true })
+							onclick: () => onDelete?.(shotId, { remote: true })
 						}
 					]}
 				/>
@@ -775,9 +1367,6 @@
 	</div>
 
 	<!-- Chart -->
-	{#snippet shotChart(height: number)}
-		<StaticShotChart series={flatSeries} {height} />
-	{/snippet}
 	{#if shot.record.samples.length === 0}
 		<!-- Brew rows: no DE1 telemetry. A guided session draws its
 		     weight curve with stage bands; a manual log shows no chart
@@ -847,142 +1436,14 @@
 	</div>
 	{/if}
 
-	{#if chartExpanded}
-		<ChartModal onclose={() => (chartExpanded = false)}>
-			{@render shotChart(700)}
-		</ChartModal>
-	{/if}
-
-	<!-- Shot quality — the core's Decenza-port analysis of the stored
-	     curves: badge chips, the verdict line, then the prose
-	     observations with severity dots. Recomputed on view, never
-	     persisted; hidden while in flight, when the shot is too short
-	     to analyze, or when the analysis rejects. -->
-	{#if quality}
-		<div class="hi-quality">
-			<div class="hi-quality-head">
-				<span class="t-eyebrow" style="color:var(--fg-3)">Shot quality</span>
-				<div class="hi-quality-chips">
-					{#each qualityChips as chip (chip.label)}
-						<span class="hi-quality-chip is-{chip.tone}">{chip.label}</span>
-					{/each}
-				</div>
-			</div>
-			{#if qualityVerdict}
-				<div class="hi-quality-verdict">{qualityVerdict.text}</div>
-			{/if}
-			{#if qualityLines.length > 0}
-				<ul class="hi-quality-lines">
-					{#each qualityLines as line (line.kind + line.text)}
-						<li class="hi-quality-line">
-							<i
-								class="hi-quality-dot"
-								style="background:{qualityDotColor(line.lineType)}"
-							></i>
-							<span>{line.text}</span>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</div>
-	{/if}
+	{@render qualityCard()}
 
 	<!-- Metric strip -->
 	{#if isBrew}
 		<!-- Brew rows: five method-shaped tiles. On a MANUAL log the
 		     facts are user-entered, so they stay editable (steppers /
 		     time field); measured (guided) rows render read-only. -->
-		<div class="hi-metrics hi-metrics-brew" class:is-editable={factsEditable}>
-			<div class="hi-metric">
-				<div class="hi-metric-l">Method</div>
-				<div class="hi-metric-v hi-metric-method">
-					<MethodMark {method} size={14} />
-					<span>{methodLabel(method, shot.brewMethodLabel)}</span>
-				</div>
-			</div>
-			<div class="hi-metric">
-				<div class="hi-metric-l">Time</div>
-				{#if factsEditable}
-					<input
-						class="hi-fact-input"
-						value={shot.record.duration > 0 ? fmtDuration(shot.record.duration).replace(' s', '') : ''}
-						placeholder="m:ss"
-						aria-label="Brew time"
-						onchange={(e) => {
-							const raw = e.currentTarget.value.trim();
-							const m = /^(\d+):([0-5]?\d)$/.exec(raw);
-							const secs = m ? Number(m[1]) * 60 + Number(m[2]) : Number(raw);
-							onManualBrewEdit?.({
-								durationMs:
-									Number.isFinite(secs) && secs > 0 ? Math.round(secs * 1000) : null
-							});
-						}}
-					/>
-				{:else}
-					<div class="hi-metric-v">
-						{shot.record.duration > 0 ? fmtDuration(shot.record.duration) : '—'}
-					</div>
-				{/if}
-			</div>
-			<div class="hi-metric">
-				<div class="hi-metric-l">Dose</div>
-				{#if factsEditable}
-					<QuickStepper
-						value={shot.metadata.dose ?? 0}
-						unit="g"
-						min={0}
-						max={200}
-						step={0.5}
-						onChange={(n) => onManualBrewEdit?.({ dose: n > 0 ? n : null })}
-					/>
-				{:else}
-					<div class="hi-metric-v">
-						{shot.metadata.dose != null ? `${shot.metadata.dose}` : '—'}<em>g</em>
-					</div>
-				{/if}
-			</div>
-			<div class="hi-metric">
-				<div class="hi-metric-l">{method === 'espresso' ? 'Yield' : 'Water'}</div>
-				{#if factsEditable}
-					<QuickStepper
-						value={(method === 'espresso' ? shot.metadata.yieldOut : shot.metadata.waterG) ?? 0}
-						unit="g"
-						min={0}
-						max={2000}
-						step={method === 'espresso' ? 1 : 10}
-						onChange={(n) =>
-							onManualBrewEdit?.(
-								method === 'espresso'
-									? { yieldOut: n > 0 ? n : null }
-									: { waterG: n > 0 ? n : null }
-							)}
-					/>
-				{:else}
-					<div class="hi-metric-v">{brewOutValue}<em>g</em></div>
-				{/if}
-			</div>
-			<div class="hi-metric">
-				<div class="hi-metric-l">Ratio</div>
-				<div class="hi-metric-v">{ratioLabel(shot)}</div>
-			</div>
-			<div class="hi-metric">
-				<div class="hi-metric-l">Temp</div>
-				{#if factsEditable}
-					<QuickStepper
-						value={shot.brewTempTarget ?? 0}
-						unit="°C"
-						min={0}
-						max={100}
-						step={1}
-						onChange={(n) => onManualBrewEdit?.({ brewTempC: n > 0 ? n : null })}
-					/>
-				{:else}
-					<div class="hi-metric-v">
-						{shot.brewTempTarget != null ? Math.round(shot.brewTempTarget) : '—'}<em>°C</em>
-					</div>
-				{/if}
-			</div>
-		</div>
+		{@render brewFacts()}
 	{:else}
 	<div class="hi-metrics">
 		<div class="hi-metric">
@@ -1044,64 +1505,17 @@
 	     Wires straight to `HistoryStore.setTags`; the upload-time
 	     `resolveTagList` reads `shot.tags` and rides as Visualizer's
 	     `tag_list` on the next PATCH. -->
-	<div class="hi-tags">
-		<span class="t-eyebrow" style="color:var(--fg-3)">Tags</span>
-		<TagInput
-			tags={shot.tags ?? []}
-			suggestions={tagSuggestions}
-			onChange={onTagsChange}
-		/>
-	</div>
+	{@render tagsField()}
 
 	<!-- Grinder model — equipment-level override of the settings default
 	     (`prefs.grinderModel`). Empty saves as `null` so the upload-time
 	     cascade re-engages. The placeholder shows the current default so
 	     the user knows what the upload *would* use today. -->
-	<div class="hi-grinder">
-		<label class="t-eyebrow" style="color:var(--fg-3)" for={grinderInputId}>Grinder model</label>
-		<input
-			id={grinderInputId}
-			class="hi-grinder-input"
-			type="text"
-			placeholder={grinderPlaceholder}
-			value={shot.grinderModel ?? ''}
-			onchange={(e) => commitGrinderModel((e.currentTarget as HTMLInputElement).value)}
-			onblur={(e) => commitGrinderModel((e.currentTarget as HTMLInputElement).value)}
-		/>
-		<span class="hi-grinder-hint">
-			{shot.grinderModel
-				? 'Per-shot override.'
-				: settingsDefaultGrinder
-					? `Using settings default (“${settingsDefaultGrinder}”). Type to override.`
-					: 'Override the settings default. Free text.'}
-		</span>
-	</div>
+	{@render grinderField()}
 
 	<!-- Barista / drinker — who made it and who drank it. Suggestions are
 	     the names already in History, most recent first. -->
-	<div class="hi-people">
-		{#each [{ field: 'barista', label: 'Barista', names: baristaSuggestions }, { field: 'drinker', label: 'Drinker', names: drinkerSuggestions }] as p (p.field)}
-			{@const field = p.field as 'barista' | 'drinker'}
-			<label class="hi-person">
-				<span class="t-eyebrow" style="color:var(--fg-3)">{p.label}</span>
-				<input
-					class="hi-grinder-input"
-					type="text"
-					autocomplete="off"
-					list={`hi-${field}-names`}
-					placeholder={field === 'barista' ? 'Who made it' : 'Who drank it'}
-					value={shot.metadata[field] ?? ''}
-					onchange={(e) => commitPerson(field, (e.currentTarget as HTMLInputElement).value)}
-					onblur={(e) => commitPerson(field, (e.currentTarget as HTMLInputElement).value)}
-				/>
-				<datalist id={`hi-${field}-names`}>
-					{#each p.names as name (name)}
-						<option value={name}></option>
-					{/each}
-				</datalist>
-			</label>
-		{/each}
-	</div>
+	{@render peopleFields()}
 
 	<!-- Notes -->
 	<div class="hi-notes">
@@ -1172,24 +1586,17 @@
 	{#if !isBrew}
 	<div class="hi-privacy">
 		<span class="t-eyebrow" style="color:var(--fg-3)">Privacy</span>
-		<div class="hi-privacy-chips" role="group" aria-label="Visualizer privacy">
-			{#each ['public', 'unlisted', 'private'] as const as p (p)}
-				<button
-					class="hi-privacy-chip"
-					class:is-on={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
-					aria-pressed={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
-					onclick={() => onPrivacyChange(shot.privacy === p ? null : p)}
-					title={shot.privacy == null && defaultPrivacy === p
-						? 'Following the Settings → Sharing default'
-						: undefined}
-				>
-					{p[0].toUpperCase() + p.slice(1)}
-				</button>
-			{/each}
-		</div>
+		{@render privacyChips()}
 	</div>
 	{/if}
 </div>
+{/if}
+
+{#if chartExpanded}
+	<ChartModal onclose={() => (chartExpanded = false)}>
+		{@render shotChart(700)}
+	</ChartModal>
+{/if}
 
 {#if pickerOpen}
 	<BeanPicker
@@ -1637,26 +2044,364 @@
 	   (side by side they overprinted each other at 390 px), the actions wrap
 	   under them, and the metric tiles go three-up. */
 	@media (max-width: 600px) {
-		.hi-detail {
-			padding: 16px;
-			gap: 16px;
+		.pshot {
+			display: flex;
+			flex-direction: column;
+			min-height: 100%;
 		}
-		.hi-detail-head {
+		.pshot-body {
+			flex: 1 1 auto;
+			display: flex;
+			flex-direction: column;
+			gap: 12px;
+			padding: 4px var(--page-pad-x) 16px;
+		}
+		.pshot-strip {
+			display: flex;
+			align-items: flex-start;
+			gap: 8px;
+			width: 100%;
+			padding: 12px 14px 12px 16px;
+			border: 0;
+			border-radius: 16px;
+			background: var(--bg-surface);
+			color: var(--fg-1);
+			font-family: var(--font-sans);
+			text-align: left;
+			cursor: pointer;
+		}
+		.pshot-strip > :global(svg) {
+			flex: none;
+			align-self: center;
+			font-size: 18px;
+			color: var(--fg-3);
+		}
+		.pshot-strip:focus-visible,
+		.pshot-btn:focus-visible,
+		.pshot-expand:focus-visible {
+			outline: none;
+			box-shadow: var(--shadow-focus);
+		}
+		.pshot-strip-text {
+			flex: 1 1 auto;
+			display: flex;
+			flex-direction: column;
+			min-width: 0;
+		}
+		.pshot-strip-title {
+			overflow: hidden;
+			font-size: 17px;
+			font-weight: 500;
+			line-height: 1.3;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.pshot-strip-bean,
+		.pshot-strip-spec {
+			overflow: hidden;
+			font-family: var(--font-mono);
+			font-size: 12px;
+			line-height: 1.4;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			color: var(--fg-3);
+		}
+		.pshot-strip-spec {
+			color: var(--fg-muted);
+		}
+		.pshot-fresh {
+			flex: none;
+			display: inline-flex;
+			align-items: center;
+			gap: 5px;
+			padding-top: 3px;
+			font-size: 12px;
+			font-weight: 500;
+		}
+		.pshot-fresh i {
+			width: 8px;
+			height: 8px;
+			border-radius: 50%;
+			background: currentColor;
+		}
+		.pshot-chart {
+			padding: 10px 10px 6px 6px;
+			border-radius: 16px;
+			background: var(--bg-surface);
+		}
+		.pshot-chart-empty {
+			padding: 56px 16px;
+			text-align: center;
+			font-family: var(--font-sans);
+			font-size: 14px;
+			color: var(--fg-3);
+		}
+		.pshot-legend {
+			display: flex;
+			gap: 10px;
+			padding: 0 0 4px 10px;
+		}
+		.pshot-leg {
+			display: inline-flex;
+			align-items: center;
+			gap: 5px;
+			font-family: var(--font-sans);
+			font-size: 10.5px;
+			font-weight: 500;
+			letter-spacing: 0.05em;
+			text-transform: uppercase;
+		}
+		.pshot-leg i {
+			width: 12px;
+			height: 2.5px;
+			border-radius: 2px;
+			background: currentColor;
+		}
+		.pshot-plot {
+			position: relative;
+		}
+		.pshot-expand {
+			position: absolute;
+			inset: 0;
+			border: 0;
+			border-radius: 8px;
+			background: transparent;
+			cursor: zoom-in;
+		}
+		.pshot-hint {
+			position: absolute;
+			left: 50%;
+			bottom: 8px;
+			display: inline-flex;
+			align-items: center;
+			gap: 5px;
+			padding: 4px 10px;
+			border-radius: 999px;
+			background: color-mix(in srgb, var(--ph-highest) 90%, transparent);
+			color: var(--fg-3);
+			font-family: var(--font-sans);
+			font-size: 11px;
+			white-space: nowrap;
+			pointer-events: none;
+			transform: translateX(-50%);
+		}
+		.pshot-tiles {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+			gap: 8px;
+		}
+		.pshot-tile {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 2px;
+			min-width: 0;
+			padding: 11px 2px;
+			border-radius: 12px;
+			background: var(--bg-surface);
+		}
+		.pshot-tile-v {
+			font-family: var(--font-mono);
+			font-size: 16px;
+			font-weight: 500;
+			font-variant-numeric: tabular-nums;
+			white-space: nowrap;
+			color: var(--fg-1);
+		}
+		@media (max-width: 359px) {
+			.pshot-tile-v {
+				font-size: 14px;
+			}
+		}
+		.pshot-tile-l {
+			font-family: var(--font-sans);
+			font-size: 11px;
+			white-space: nowrap;
+			color: var(--fg-3);
+		}
+		.pshot-more {
+			margin: -4px 0 0;
+			text-align: center;
+			font-family: var(--font-mono);
+			font-size: 11px;
+			color: var(--fg-muted);
+		}
+		.hi-quality {
+			padding: 14px;
+			border-radius: 16px;
+			background: var(--bg-surface);
+		}
+		.hi-quality-head {
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 8px;
+		}
+		.hi-quality-verdict {
+			font-size: 14px;
+		}
+		.pshot-journal {
+			display: flex;
+			flex-direction: column;
+			gap: 12px;
+			padding: 14px;
+			border-radius: 16px;
+			background: var(--bg-surface);
+		}
+		.pshot-row {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			min-height: 44px;
+		}
+		.pshot-eye,
+		.hi-quality :global(.t-eyebrow) {
+			letter-spacing: 0.02em;
+			color: var(--fg-3);
+		}
+		.hi-quality-chip {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			min-height: 26px;
+			font-size: 13px;
+			font-weight: 400;
+		}
+		.hi-quality-chip :global(svg) {
+			font-size: 15px;
+		}
+		.pshot-row :global([role='radio']) {
+			width: min(44px, calc((100vw - 160px) / 5));
+			height: 44px;
+		}
+		.pshot-row :global(.qcs-num-btn) {
+			min-height: 44px;
+		}
+		.pshot-row :global(.qcs) {
+			flex: none;
+			width: 172px;
+		}
+		.pshot-row :global(.qcs-row) {
+			gap: 8px;
+			padding: 0;
+			border: 0;
+			background: transparent;
+		}
+		.pshot-row :global(.qcs-btn) {
+			flex: 0 0 48px;
+			width: 48px;
+			height: 48px;
+			border: 0;
+			border-radius: 50%;
+			background: var(--ph-tonal);
+			color: var(--ph-on-tonal);
+		}
+		.pshot-row :global(.qcs-num) {
+			font-size: 22px;
+		}
+		.pshot-field {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+			font-family: var(--font-sans);
+			font-size: 13px;
+			color: var(--fg-3);
+		}
+		.pshot-field textarea {
+			width: 100%;
+			padding: 10px 12px;
+			border: 1px solid var(--ph-outline);
+			border-radius: 10px;
+			outline: 0;
+			background: rgba(var(--tint-rgb), 0.03);
+			color: var(--fg-1);
+			font-family: var(--font-sans);
+			font-size: 16px;
+			resize: vertical;
+		}
+		.pshot-field textarea:focus {
+			border-color: var(--copper-500);
+		}
+		.pshot-field textarea::placeholder {
+			color: var(--fg-muted);
+		}
+		.hi-people {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 10px;
+		}
+		.hi-person {
 			flex-direction: column;
 			align-items: stretch;
+			gap: 6px;
+			min-width: 0;
 		}
-		.hi-head-blocks {
+		.hi-person .t-eyebrow {
+			font-family: var(--font-sans);
+			font-size: 13px;
+			font-weight: 400;
+			letter-spacing: 0;
+			text-transform: none;
+		}
+		.hi-grinder-input {
+			flex: 1 1 auto;
+			min-width: 0;
+			max-width: none;
+			min-height: 44px;
+			padding: 8px 12px;
+			border-color: var(--ph-outline);
+			border-radius: 10px;
+			font-size: 16px;
+		}
+		.hi-grinder {
 			flex-direction: column;
-			gap: 14px;
+			align-items: stretch;
+			gap: 6px;
 		}
-		.hi-detail-actions {
-			justify-content: flex-start;
+		.hi-privacy-chip {
+			min-height: 34px;
+			padding: 4px 14px;
+			font-size: 13px;
 		}
-		.hi-metrics {
-			grid-template-columns: repeat(3, minmax(0, 1fr));
+		.hi-metrics-brew {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 8px;
 		}
-		.hi-chart {
-			padding: 10px 8px 8px;
+		.pshot-foot {
+			position: sticky;
+			bottom: 0;
+			z-index: 2;
+			display: flex;
+			gap: 10px;
+			padding: 10px var(--page-pad-x);
+			background: var(--bg-page);
+		}
+		.pshot-btn {
+			flex: 1 1 0;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			gap: 8px;
+			min-width: 0;
+			height: 48px;
+			padding: 0 10px;
+			border: 0;
+			border-radius: 999px;
+			background: var(--ph-tonal);
+			color: var(--ph-on-tonal);
+			font-family: var(--font-sans);
+			font-size: 14px;
+			font-weight: 500;
+			white-space: nowrap;
+			cursor: pointer;
+		}
+		.pshot-btn.is-primary {
+			background: var(--copper-500);
+			color: var(--fg-on-accent);
+		}
+		.pshot-btn :global(svg) {
+			flex: none;
+			font-size: 18px;
 		}
 	}
 </style>

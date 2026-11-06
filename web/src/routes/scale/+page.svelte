@@ -42,6 +42,11 @@
 	import { getProfileStore } from '#lib/profiles/index.js';
 	import { getSettingsStore, convertWeight, formatWeight } from '#lib/settings/index.js';
 	import GuidedBrewPanel from '#lib/components/brewlog/GuidedBrewPanel.svelte';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import { setPhoneDevicesOpen, usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
+	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
+	import BluetoothIcon from 'phosphor-svelte/lib/BluetoothIcon';
+	import GearSixIcon from 'phosphor-svelte/lib/GearSixIcon';
 	import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 
 	const ctx = getCremaAppContext();
@@ -120,6 +125,24 @@
 
 	/** A human label for the coarse connection state. */
 	const statusLabel = $derived(bleStateLabel(scaleState));
+
+	// Android's Scale bar: reconnect until a scale is paired, then the gear.
+	usePhoneBar(() => ({
+		actions: [
+			...(connected
+				? []
+				: [
+						{
+							id: 'connect',
+							label: 'Connect scale',
+							icon: ArrowsClockwiseIcon,
+							haspopup: 'dialog' as const,
+							onclick: () => setPhoneDevicesOpen(true)
+						}
+					]),
+			'settings' as const
+		]
+	}));
 
 	// ── Tare-flash ───────────────────────────────────────────────────────
 	/** When true, the hero readout flashes copper (a 600 ms pulse after a tare). */
@@ -381,43 +404,7 @@
 	<title>Crema — Scale</title>
 </svelte:head>
 
-<div class="qcontain sc-page">
-	<!-- Header strip -->
-	<div class="sc-head">
-		<div>
-			<div class="t-eyebrow" style="color:var(--fg-3)">Connected scale</div>
-			<!-- The h1 names the screen; the device name follows (final review
-			     07 N12e: it read "No scale" as the page heading). -->
-			<h1 class="t-page-title sc-head-name"><span class="sr-only">Scale:</span> {scaleName}</h1>
-			<div class="sc-head-meta">
-				<span
-					class="sc-dot"
-					style="background:{connected ? 'var(--success)' : 'rgba(var(--tint-rgb), 0.25)'}"
-				></span>
-				<span>{statusLabel}</span>
-				{#if battery != null}
-					<span class="sc-sep">·</span>
-					<BatteryHighIcon aria-hidden="true" />
-					<span>{Math.round(battery)}%</span>
-				{/if}
-				{#if firmware}
-					<span class="sc-sep">·</span>
-					<span>Firmware {firmware}</span>
-				{/if}
-				{#if serial}
-					<span class="sc-sep">·</span>
-					<span>SN {serial}</span>
-				{/if}
-			</div>
-		</div>
-		<!-- Pair/Re-pair lives in Settings → Machine → Peripherals → Scale
-		     now, alongside the Grinder peripheral row. The Scale page hero
-		     stays focused on the live readout; pairing is a setup-once
-		     action that belongs in settings. -->
-		<div class="sc-head-r">
-			<!-- Weigh | Brew segment (issue #10): the scale is the
-			     instrument for both; guided brews live here rather than
-			     on the machine's Brew dashboard. -->
+{#snippet modeTabs()}
 			<div class="sc-mode" role="tablist" aria-label="Scale page mode">
 				<button
 					class="sc-mode-btn"
@@ -438,77 +425,9 @@
 					Brew
 				</button>
 			</div>
-		</div>
-	</div>
+{/snippet}
 
-	{#if mode === 'brew'}
-		<GuidedBrewPanel {connected} {weightG} flowGs={deviceFlow} />
-	{:else}
-	<!-- Live readout hero -->
-	<div class="sc-hero">
-		<div class="sc-readout">
-			<div class="sc-readout-num" class:is-tare={tarePulse}>
-				<span class="sc-sign">{heroSign}</span>
-				<span>{heroNum}</span>
-				<span class="sc-unit">{heroUnit}</span>
-			</div>
-			<div class="sc-readout-sub">
-				{#if connected}
-					<!-- F1: the scale's own decoded timer + native flow rate. The
-					     core surfaces both on every ScaleReading; the polished page
-					     never showed them. -->
-					<span>live</span>
-					<span class="sc-sub-sep">·</span>
-					<span>timer {timerLabel}</span>
-					{#if deviceFlow != null}
-						<span class="sc-sub-sep">·</span>
-						<span>{deviceFlow.toFixed(1)} g/s</span>
-					{/if}
-				{:else}
-					no scale connected
-				{/if}
-			</div>
-		</div>
-
-		<div class="sc-actions">
-			<button class="sc-tare" onclick={tare} disabled={!connected}>
-				<span class="sc-tare-label">Tare</span>
-				<span class="sc-tare-num">{tareZero.value}<em>{tareZero.unit}</em></span>
-			</button>
-			<button class="sc-secondary" onclick={resetPeak}>
-				<ArrowClockwiseIcon aria-hidden="true" />
-				<span>Reset peak</span>
-			</button>
-			{#if timerSupported}
-				<!-- Manual scale-timer controls — surface for milk-only
-				     sessions where the shot-state auto-wiring doesn't fire.
-				     The toggle is the primary affordance; Reset zeroes
-				     the count without changing the run state. Both are
-				     disabled when the link is down. -->
-				<div class="sc-timer-row">
-					<button
-						class="sc-secondary sc-timer-toggle"
-						onclick={toggleTimer}
-						disabled={!timerActionable}
-					>
-						<TimerIcon aria-hidden="true" />
-						<span>{timerRunning ? 'Stop timer' : 'Start timer'}</span>
-					</button>
-					<button
-						class="sc-secondary sc-timer-reset"
-						onclick={resetTimer}
-						disabled={!timerActionable}
-						aria-label="Reset scale timer"
-					>
-						<ArrowCounterClockwiseIcon aria-hidden="true" />
-						<span>Reset</span>
-					</button>
-				</div>
-			{/if}
-		</div>
-	</div>
-
-	<!-- Dose helper -->
+{#snippet doseHelper()}
 	<div class="sc-dose">
 		<div class="sc-dose-head">
 			<div>
@@ -547,16 +466,9 @@
 			{/if}
 		</div>
 	</div>
+{/snippet}
 
-	<!-- Settings + Recent activity -->
-	<div class="sc-bottom">
-		<div class="sc-settings">
-			<div class="sc-settings-head">Quick settings</div>
-
-			<!-- Empty state — settings are capability-gated, so a scale with no
-			     adjustable features (or no scale at all) would otherwise leave
-			     this card blank and looking broken. Spell out why. -->
-			{#if !hasScaleSettings}
+{#snippet settingsEmpty()}
 				<div class="sc-settings-empty">
 					{#if connected && caps}
 						<SlidersHorizontalIcon aria-hidden="true" />
@@ -566,8 +478,9 @@
 						<span>Connect a scale to adjust its settings — they'll appear here automatically.</span>
 					{/if}
 				</div>
-			{/if}
+{/snippet}
 
+{#snippet settingsRows()}
 			<!-- Filter strength → flow-smoothing (real capability) -->
 			{#if caps?.flow_smoothing}
 				<div class="sc-set-row">
@@ -753,11 +666,9 @@
 					</button>
 				</div>
 			{/if}
+{/snippet}
 
-			<!-- Auto-tare + stop-on-weight live in Settings → Brew defaults
-			     → Shot behaviour, mirrored on the Quick Controls. -->
-		</div>
-
+{#snippet activityLog()}
 		<div class="sc-activity">
 			<div class="sc-activity-head">
 				<span>Recent activity</span>
@@ -799,7 +710,241 @@
 				{/if}
 			</div>
 		</div>
+{/snippet}
+
+{#snippet phoneScale()}
+	<!-- Android's `PhoneScaleScreen`: the Weigh | Brew switch, the status, the
+	     hero, then Connect scale, or the tools and settings once one is paired. -->
+	<h1 class="phone-bar-title"><span class="sr-only">Scale:</span> {scaleName}</h1>
+	<div class="sc-pswitch">{@render modeTabs()}</div>
+	{#if mode === 'brew'}
+		<GuidedBrewPanel {connected} {weightG} flowGs={deviceFlow} />
+	{:else}
+		<div class="sc-pbody">
+			<div class="sc-pstatus">
+				<div class="sc-pstatus-name">{connected ? scaleName : 'No scale connected'}</div>
+				<div class="sc-pstatus-sub">
+					{#if connected}
+						{[
+							statusLabel,
+							battery != null ? `${Math.round(battery)}%` : null,
+							firmware ? `Firmware ${firmware}` : null,
+							serial ? `SN ${serial}` : null
+						]
+							.filter(Boolean)
+							.join(' · ')}
+					{:else}
+						Pair a scale to weigh your dose and stop shots by weight.
+					{/if}
+				</div>
+			</div>
+
+			<div class="sc-phero">
+				<div class={['sc-phero-num', { 'is-on': connected, 'is-tare': tarePulse }]}>
+					{connected ? `${heroSign}${heroNum}` : tareZero.value}
+				</div>
+				<div class="sc-phero-unit">{heroUnit === 'g' ? 'grams' : heroUnit}</div>
+				<div class="sc-ppill">
+					<i class={{ 'is-on': connected }}></i>
+					{#if connected}
+						Live · timer {timerLabel}{#if deviceFlow != null} · {deviceFlow.toFixed(1)} g/s{/if}
+					{:else}
+						No scale connected
+					{/if}
+				</div>
+			</div>
+
+			{#if connected}
+				<div class="sc-pactions">
+					<button type="button" class="sc-pbtn is-primary" onclick={tare}>Tare</button>
+					<button type="button" class="sc-pbtn" aria-label="Reset peak" onclick={resetPeak}>
+						<ArrowCounterClockwiseIcon aria-hidden="true" /> Peak
+					</button>
+					{#if timerSupported}
+						<button
+							type="button"
+							class="sc-pbtn"
+							aria-label={timerRunning ? 'Stop timer' : 'Start timer'}
+							disabled={!timerActionable}
+							onclick={toggleTimer}
+						>
+							<TimerIcon aria-hidden="true" /> {timerRunning ? 'Stop' : 'Timer'}
+						</button>
+						<button
+							type="button"
+							class="sc-pbtn is-icon"
+							aria-label="Reset scale timer"
+							disabled={!timerActionable}
+							onclick={resetTimer}
+						>
+							<ArrowClockwiseIcon aria-hidden="true" />
+						</button>
+					{/if}
+				</div>
+				{@render doseHelper()}
+				<h2 class="t-eyebrow sc-peye">Scale settings</h2>
+				<div class="sc-settings">
+					{#if !hasScaleSettings}{@render settingsEmpty()}{/if}
+					{@render settingsRows()}
+				</div>
+			{:else}
+				<div class="sc-pconnect">
+					<button type="button" class="sc-pcta" onclick={() => setPhoneDevicesOpen(true)}>
+						<BluetoothIcon aria-hidden="true" /> Connect scale
+					</button>
+					<p>Acaia, Bookoo, Decent, Felicita and more pair automatically.</p>
+				</div>
+				<h2 class="t-eyebrow sc-peye">Scale settings</h2>
+				<div class="sc-pnone">
+					<span class="sc-pnone-glyph"><GearSixIcon aria-hidden="true" /></span>
+					<strong>No settings yet</strong>
+					<p>
+						Connect a scale to adjust its settings — they'll appear here automatically, based on what
+						the scale supports.
+					</p>
+				</div>
+			{/if}
+			{#if connected || scaleEventLog.length > 0}
+				<h2 class="t-eyebrow sc-peye">Recent activity</h2>
+				{@render activityLog()}
+			{/if}
+		</div>
+	{/if}
+{/snippet}
+
+<div class="qcontain sc-page">
+	{#if phoneLayout.current}
+		{@render phoneScale()}
+	{:else}
+	<!-- Header strip -->
+	<div class="sc-head">
+		<div>
+			<div class="t-eyebrow" style="color:var(--fg-3)">Connected scale</div>
+			<!-- The h1 names the screen; the device name follows (final review
+			     07 N12e: it read "No scale" as the page heading). -->
+			<h1 class="t-page-title sc-head-name"><span class="sr-only">Scale:</span> {scaleName}</h1>
+			<div class="sc-head-meta">
+				<span
+					class="sc-dot"
+					style="background:{connected ? 'var(--success)' : 'rgba(var(--tint-rgb), 0.25)'}"
+				></span>
+				<span>{statusLabel}</span>
+				{#if battery != null}
+					<span class="sc-sep">·</span>
+					<BatteryHighIcon aria-hidden="true" />
+					<span>{Math.round(battery)}%</span>
+				{/if}
+				{#if firmware}
+					<span class="sc-sep">·</span>
+					<span>Firmware {firmware}</span>
+				{/if}
+				{#if serial}
+					<span class="sc-sep">·</span>
+					<span>SN {serial}</span>
+				{/if}
+			</div>
+		</div>
+		<!-- Pair/Re-pair lives in Settings → Machine → Peripherals → Scale
+		     now, alongside the Grinder peripheral row. The Scale page hero
+		     stays focused on the live readout; pairing is a setup-once
+		     action that belongs in settings. -->
+		<div class="sc-head-r">
+			<!-- Weigh | Brew segment (issue #10): the scale is the
+			     instrument for both; guided brews live here rather than
+			     on the machine's Brew dashboard. -->
+			{@render modeTabs()}
+		</div>
 	</div>
+
+	{#if mode === 'brew'}
+		<GuidedBrewPanel {connected} {weightG} flowGs={deviceFlow} />
+	{:else}
+	<!-- Live readout hero -->
+	<div class="sc-hero">
+		<div class="sc-readout">
+			<div class="sc-readout-num" class:is-tare={tarePulse}>
+				<span class="sc-sign">{heroSign}</span>
+				<span>{heroNum}</span>
+				<span class="sc-unit">{heroUnit}</span>
+			</div>
+			<div class="sc-readout-sub">
+				{#if connected}
+					<!-- F1: the scale's own decoded timer + native flow rate. The
+					     core surfaces both on every ScaleReading; the polished page
+					     never showed them. -->
+					<span>live</span>
+					<span class="sc-sub-sep">·</span>
+					<span>timer {timerLabel}</span>
+					{#if deviceFlow != null}
+						<span class="sc-sub-sep">·</span>
+						<span>{deviceFlow.toFixed(1)} g/s</span>
+					{/if}
+				{:else}
+					no scale connected
+				{/if}
+			</div>
+		</div>
+
+		<div class="sc-actions">
+			<button class="sc-tare" onclick={tare} disabled={!connected}>
+				<span class="sc-tare-label">Tare</span>
+				<span class="sc-tare-num">{tareZero.value}<em>{tareZero.unit}</em></span>
+			</button>
+			<button class="sc-secondary" onclick={resetPeak}>
+				<ArrowClockwiseIcon aria-hidden="true" />
+				<span>Reset peak</span>
+			</button>
+			{#if timerSupported}
+				<!-- Manual scale-timer controls — surface for milk-only
+				     sessions where the shot-state auto-wiring doesn't fire.
+				     The toggle is the primary affordance; Reset zeroes
+				     the count without changing the run state. Both are
+				     disabled when the link is down. -->
+				<div class="sc-timer-row">
+					<button
+						class="sc-secondary sc-timer-toggle"
+						onclick={toggleTimer}
+						disabled={!timerActionable}
+					>
+						<TimerIcon aria-hidden="true" />
+						<span>{timerRunning ? 'Stop timer' : 'Start timer'}</span>
+					</button>
+					<button
+						class="sc-secondary sc-timer-reset"
+						onclick={resetTimer}
+						disabled={!timerActionable}
+						aria-label="Reset scale timer"
+					>
+						<ArrowCounterClockwiseIcon aria-hidden="true" />
+						<span>Reset</span>
+					</button>
+				</div>
+			{/if}
+		</div>
+	</div>
+
+	<!-- Dose helper -->
+	{@render doseHelper()}
+
+	<!-- Settings + Recent activity -->
+	<div class="sc-bottom">
+		<div class="sc-settings">
+			<div class="sc-settings-head">Quick settings</div>
+
+			<!-- Empty state — settings are capability-gated, so a scale with no
+			     adjustable features (or no scale at all) would otherwise leave
+			     this card blank and looking broken. Spell out why. -->
+			{#if !hasScaleSettings}{@render settingsEmpty()}{/if}
+
+			{@render settingsRows()}
+
+			<!-- Auto-tare + stop-on-weight live in Settings → Brew defaults
+			     → Shot behaviour, mirrored on the Quick Controls. -->
+		</div>
+
+		{@render activityLog()}
+	</div>
+	{/if}
 	{/if}
 </div>
 
@@ -1345,6 +1490,256 @@
 		}
 		.sc-readout-num {
 			font-size: 96px;
+		}
+	}
+	/* Phone width: Android's Scale screen. */
+	@media (max-width: 600px) {
+		.sc-page {
+			padding: 0 0 24px;
+			gap: 0;
+			overflow-y: auto;
+		}
+		.sc-pswitch {
+			padding: 2px var(--page-pad-x) 0;
+		}
+		.sc-pswitch .sc-mode {
+			display: flex;
+			width: 100%;
+			padding: 2px;
+			border: 1px solid var(--ph-outline);
+			border-radius: 999px;
+			background: transparent;
+		}
+		.sc-pswitch .sc-mode-btn {
+			position: relative;
+			height: 32px;
+			padding: 0 14px;
+			border-radius: 999px;
+			background: transparent;
+			color: var(--fg-muted);
+			font-size: 14px;
+		}
+		.sc-pswitch .sc-mode-btn::after {
+			content: '';
+			position: absolute;
+			inset: -6px 0;
+		}
+		.sc-pswitch .sc-mode-btn.is-on {
+			background: rgba(var(--tint-rgb), 0.08);
+			color: var(--fg-1);
+		}
+		.sc-pbody {
+			display: flex;
+			flex-direction: column;
+			gap: 16px;
+			padding: 16px var(--page-pad-x) 0;
+		}
+		.sc-pstatus-name {
+			font-family: var(--font-sans);
+			font-size: 16px;
+			font-weight: 500;
+			color: var(--fg-1);
+		}
+		.sc-pstatus-sub {
+			font-family: var(--font-sans);
+			font-size: 12px;
+			color: var(--fg-3);
+		}
+		.sc-phero {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			padding-top: 4px;
+		}
+		.sc-phero-num {
+			font-family: var(--font-mono);
+			font-size: 96px;
+			font-weight: 500;
+			font-variant-numeric: tabular-nums;
+			line-height: 1;
+			letter-spacing: -0.02em;
+			color: rgba(var(--tint-rgb), 0.16);
+		}
+		.sc-phero-num.is-on {
+			color: var(--fg-1);
+		}
+		.sc-phero-num.is-tare {
+			color: var(--fg-accent);
+		}
+		.sc-phero-unit {
+			margin-top: 8px;
+			font-family: var(--font-sans);
+			font-size: 14px;
+			color: var(--fg-3);
+		}
+		.sc-ppill {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			margin-top: 6px;
+			font-family: var(--font-sans);
+			font-size: 12px;
+			font-weight: 500;
+			color: var(--fg-3);
+		}
+		.sc-ppill i {
+			width: 8px;
+			height: 8px;
+			border-radius: 50%;
+			background: var(--ph-outline);
+		}
+		.sc-ppill i.is-on {
+			background: var(--success);
+		}
+		.sc-pactions {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 10px;
+		}
+		.sc-pbtn {
+			flex: none;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			gap: 6px;
+			height: 52px;
+			padding: 0 16px;
+			border: 0;
+			border-radius: 999px;
+			background: var(--ph-tonal);
+			color: var(--ph-on-tonal);
+			font-family: var(--font-sans);
+			font-size: 14px;
+			font-weight: 500;
+			cursor: pointer;
+		}
+		.sc-pbtn.is-primary {
+			flex: 1 1 88px;
+			background: var(--copper-500);
+			color: var(--fg-on-accent);
+		}
+		.sc-pbtn.is-icon {
+			width: 52px;
+			padding: 0;
+		}
+		.sc-pbtn:disabled {
+			opacity: 0.4;
+			cursor: default;
+		}
+		.sc-pbtn :global(svg),
+		.sc-pcta :global(svg) {
+			flex: none;
+			font-size: 18px;
+		}
+		.sc-pconnect {
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+			padding: 8px 0;
+		}
+		.sc-pconnect p {
+			margin: 0;
+			text-align: center;
+			font-family: var(--font-sans);
+			font-size: 12px;
+			color: var(--fg-3);
+		}
+		.sc-pcta {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			gap: 8px;
+			width: 100%;
+			height: 52px;
+			border: 0;
+			border-radius: 999px;
+			background: var(--copper-500);
+			color: var(--fg-on-accent);
+			font-family: var(--font-sans);
+			font-size: 14px;
+			font-weight: 500;
+			cursor: pointer;
+		}
+		.sc-pbtn:focus-visible,
+		.sc-pcta:focus-visible {
+			outline: none;
+			box-shadow: var(--shadow-focus);
+		}
+		.sc-peye {
+			margin: 0 0 -8px;
+			letter-spacing: 0.02em;
+			color: var(--fg-3);
+		}
+		.sc-pnone {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 6px;
+			padding: 28px;
+			border-radius: 12px;
+			background: var(--bg-surface);
+			text-align: center;
+			font-family: var(--font-sans);
+		}
+		.sc-pnone-glyph {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 56px;
+			height: 56px;
+			margin-bottom: 4px;
+			border-radius: 50%;
+			background: var(--ph-highest);
+			color: var(--fg-3);
+			font-size: 26px;
+		}
+		.sc-pnone strong {
+			font-size: 14px;
+			font-weight: 500;
+			color: var(--fg-1);
+		}
+		.sc-pnone p {
+			margin: 0;
+			font-size: 14px;
+			line-height: 1.4;
+			color: var(--fg-3);
+		}
+		.sc-settings .sc-set-title {
+			font-size: 16px;
+			font-weight: 400;
+		}
+		.sc-settings .sc-set-sub {
+			font-size: 12px;
+			color: var(--fg-3);
+		}
+		.sc-settings :global(.qmini-tog) {
+			position: relative;
+			flex: none;
+		}
+		/* `::after` is the knob. */
+		.sc-settings :global(.qmini-tog)::before {
+			content: '';
+			position: absolute;
+			inset: -13px -7px;
+		}
+		.sc-settings :global(.st-segment > button) {
+			min-width: 44px;
+			min-height: 44px;
+		}
+		.sc-settings :global(.sc-secondary) {
+			min-height: 44px;
+		}
+		.sc-activity-search input {
+			min-height: 44px;
+		}
+		.sc-dose,
+		.sc-settings,
+		.sc-activity {
+			width: auto;
+			margin: 0;
+			border: 0;
+			border-radius: 12px;
+			background: var(--bg-surface);
 		}
 	}
 </style>

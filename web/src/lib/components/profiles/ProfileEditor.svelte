@@ -4,6 +4,7 @@
 	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
+	import DotsThreeVerticalIcon from 'phosphor-svelte/lib/DotsThreeVerticalIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	/**
 	 * `ProfileEditor` — the Edit / Create profile page body, ported from
@@ -51,6 +52,9 @@
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
+	import PhoneOverflowSheet, { type OverflowItem } from '#lib/shell/PhoneOverflowSheet.svelte';
 	import { profileEditorBounds } from '#lib/core/bounds.js';
 	import { ProfileBounds } from '#lib/profiles/bounds.js';
 
@@ -359,6 +363,39 @@
 		void goto(returnPath);
 	}
 
+	// Android's editor bar replaces the top bar at phone width. Discard and
+	// Duplicate ride a ⋮ sheet: the bar has no room for three worded actions.
+	let phoneMenuOpen = $state(false);
+	usePhoneBar(() =>
+		phoneLayout.current
+			? {
+					title: draft.name || 'Untitled profile',
+					back: { label: 'Back to Profiles', onBack: () => void back(), breadcrumb: heading },
+					actions: [
+						{
+							id: 'more',
+							label: 'More editor actions',
+							icon: DotsThreeVerticalIcon,
+							haspopup: 'dialog',
+							onclick: () => (phoneMenuOpen = true)
+						},
+						{ id: 'save', label: 'Save profile', text: 'Save', primary: true, onclick: save }
+					]
+				}
+			: {}
+	);
+	const phoneMenuItems = $derived<OverflowItem[]>([
+		{ id: 'duplicate', icon: CopyIcon, label: 'Duplicate', onclick: duplicateDraft },
+		{
+			id: 'discard',
+			icon: ArrowCounterClockwiseIcon,
+			label: 'Discard changes',
+			sub: dirty ? undefined : 'No changes yet.',
+			disabled: !dirty,
+			onclick: () => void discard()
+		}
+	]);
+
 	const roastOptions: Roast[] = ['light', 'medium', 'dark'];
 	/**
 	 * Beverage-type choices in editor-friendly order. Matches the v2
@@ -383,6 +420,7 @@
 
 <div class="pe-page">
 	<!-- Top bar -->
+	{#if !phoneLayout.current}
 	<div class="pe-topbar">
 		<div class="pe-topbar-l">
 			<button class="pe-back" onclick={back}>
@@ -404,6 +442,7 @@
 			</button>
 		</div>
 	</div>
+	{/if}
 
 	{#if !ready}
 		<div class="pe-loading">Loading profile…</div>
@@ -666,6 +705,16 @@
 		</div>
 	{/if}
 </div>
+
+{#if phoneLayout.current}
+	<PhoneOverflowSheet
+		open={phoneMenuOpen}
+		title={draft.name || 'Untitled profile'}
+		items={phoneMenuItems}
+		onClose={() => (phoneMenuOpen = false)}
+	/>
+{/if}
+
 
 <style>
 	.pe-page {
