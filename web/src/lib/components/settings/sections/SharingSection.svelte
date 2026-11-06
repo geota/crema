@@ -18,7 +18,7 @@
 	 * shared `ActivityLog`.
 	 */
 	import { onMount } from 'svelte';
-	import { getHistoryStore, isBrewLog } from '#lib/history/index.js';
+	import { getHistoryStore, historyDroppedNotice, isBrewLog } from '#lib/history/index.js';
 	import { shotHistoryJsonl } from '#lib/history/crema-jsonl.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import {
@@ -381,7 +381,8 @@
 				`${verb} ${r.profiles} profile(s), ${r.beans} bean(s), ` +
 				`${r.roasters} roaster(s), ${r.shots} shot(s)` +
 				(r.recipes > 0 ? `, ${r.recipes} recipe(s)` : '') +
-				(r.settingsApplied ? ' + settings.' : '.');
+				(r.settingsApplied ? ' + settings.' : '.') +
+				historyDroppedNotice(r.droppedShots, history.capacity);
 			if (r.held && !(await confirmHeldRestoreChanges(r.held))) {
 				restoreNote += ' Kept your webhook / Visualizer sharing settings.';
 			}
@@ -456,7 +457,8 @@
 			const r = await restoreBackupData(bytes, mode);
 			driveNote =
 				`Restored from Drive (${files[0].name}) — ${r.profiles} profile(s), ` +
-				`${r.beans} bean(s), ${r.shots} shot(s)${r.settingsApplied ? ' + settings.' : '.'}`;
+				`${r.beans} bean(s), ${r.shots} shot(s)${r.settingsApplied ? ' + settings.' : '.'}` +
+				historyDroppedNotice(r.droppedShots, history.capacity);
 			if (r.held && !(await confirmHeldRestoreChanges(r.held))) {
 				driveNote += ' Kept your webhook / Visualizer sharing settings.';
 			}

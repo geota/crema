@@ -49,6 +49,7 @@ import coffee.crema.history.isManualLog
 import coffee.crema.history.methodOf
 import coffee.crema.history.methodRatioLabel
 import coffee.crema.history.shotTitle
+import coffee.crema.ui.brewlog.BrewDateEditor
 import coffee.crema.ui.brewlog.RowMethodMark
 import coffee.crema.ui.brewlog.BrewSessionCanvas
 import coffee.crema.ui.brewlog.BrewSparkChart
@@ -875,6 +876,10 @@ private fun PhoneShotDetail(
             // and temp are editable too (web parity). Two-up from 360dp.
             if (manual) {
                 val esp = method == "espresso"
+                BrewDateEditor(
+                    completedAtMs = shot.completedAtMs,
+                    onCommit = { vm.updateManualBrew(shot.id, completedAtMs = it) },
+                )
                 val editors: List<@Composable (Modifier) -> Unit> = listOf(
                     { m ->
                         CremaStepper(

@@ -42,7 +42,12 @@
 		type Roaster
 	} from '#lib/bean/index.js';
 	import { mergeBeanImport } from '#lib/bean/import-merge.js';
-	import { getHistoryStore, type StoredShot, type ShotBean } from '#lib/history/index.js';
+	import {
+		getHistoryStore,
+		historyDroppedNotice,
+		type StoredShot,
+		type ShotBean
+	} from '#lib/history/index.js';
 	import FileDropZone from '#lib/components/shared/FileDropZone.svelte';
 
 	let { onClose }: { onClose: () => void } = $props();
@@ -58,6 +63,7 @@
 	let committed = $state<{
 		beansImported: number;
 		shotsImported: number;
+		shotsDropped: number;
 		duplicatesSkipped: number;
 		photosStored: number;
 	} | null>(null);
@@ -629,9 +635,9 @@
 				[...snapshot.newBeans, ...snapshot.updatedBeans],
 				[...snapshot.newRoasters, ...snapshot.updatedRoasters]
 			);
-			for (const prep of snapshot.newShots) {
-				history.insertPulled(prep.shot);
-			}
+			const { kept, dropped: droppedShots } = history.insertMany(
+				snapshot.newShots.map((prep) => prep.shot)
+			);
 
 			// Phase 2 — photos. Slow (IDB transactions per file +
 			// localStorage upsert per bean), so this drives the
@@ -723,7 +729,8 @@
 
 			committed = {
 				beansImported: snapshot.newBeans.length,
-				shotsImported: snapshot.newShots.length,
+				shotsImported: kept.length,
+				shotsDropped: droppedShots,
 				duplicatesSkipped: snapshot.duplicatesSkipped,
 				photosStored
 			};
@@ -926,6 +933,9 @@
 						(plus {committed.photosStored} photo{committed.photosStored === 1 ? '' : 's'})
 					{/if}
 				</div>
+				{#if committed.shotsDropped > 0}
+					<div>{historyDroppedNotice(committed.shotsDropped, history.capacity).trim()}</div>
+				{/if}
 				{#if committed.duplicatesSkipped > 0}
 					<div>Skipped {committed.duplicatesSkipped} duplicate bean{committed.duplicatesSkipped === 1 ? '' : 's'}.</div>
 				{/if}

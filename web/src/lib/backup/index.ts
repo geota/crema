@@ -252,6 +252,8 @@ export interface RestoreSummary {
 	beans: number;
 	roasters: number;
 	shots: number;
+	/** Rows of any kind the 300-row cap dropped. */
+	droppedShots: number;
 	recipes: number;
 	customMethods: number;
 	settingsApplied: boolean;
@@ -456,13 +458,8 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	const addedBeans = beanStore.beans.length - beforeBeans;
 	const addedRoasters = beanStore.roasters.length - beforeRoasters;
 	// Shots — insert those not already present.
-	let addedShots = 0;
-	for (const s of shots) {
-		if (!history.get(s.id)) {
-			history.insertPulled(s);
-			addedShots++;
-		}
-	}
+	const { kept: restoredShots, dropped: droppedShots } = history.insertMany(shots);
+	const addedShots = restoredShots.length;
 	// Settings. The unified line carries `common` (shared CommonSettings — applied
 	// cross-shell, no tag) plus the web-only platform extras (applied only from a
 	// `_shell:'web'` bundle). A pre-unification line had no `common` key — fall back
@@ -549,6 +546,7 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 		beans: addedBeans,
 		roasters: addedRoasters,
 		shots: addedShots,
+		droppedShots,
 		recipes: recipesAdded,
 		customMethods: methodsAdded,
 		settingsApplied,

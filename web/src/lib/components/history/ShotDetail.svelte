@@ -36,6 +36,9 @@
 		grindLabel,
 		isBrewLog,
 		isManualLog,
+		brewDateError,
+		fromLocalInput,
+		toLocalInput,
 		methodOf,
 	} from '#lib/history/index.js';
 	import { methodLabel } from '#lib/brew/methods.js';
@@ -219,6 +222,14 @@
 	/** Manually logged: user-entered facts stay editable. */
 	const manual = $derived(isManualLog(shot));
 	const factsEditable = $derived(manual && onManualBrewEdit != null);
+	/** Why the date just entered was refused; the field keeps it to correct. */
+	let dateError = $state<string | null>(null);
+	function commitDate(value: string): void {
+		const at = fromLocalInput(value, shot.completedAt);
+		dateError = brewDateError(at, Date.now());
+		if (dateError || value === toLocalInput(shot.completedAt)) return;
+		onManualBrewEdit?.(shotId, { completedAt: at });
+	}
 
 	/** "0:27" / "3:05" — one duration format for shots and pourovers. */
 	function fmtDuration(ms: number): string {
@@ -957,6 +968,21 @@
 					</div>
 				{/if}
 			</div>
+			{#if factsEditable}
+				<div class="hi-metric hi-metric-when">
+					<div class="hi-metric-l">When</div>
+					<input
+						class="hi-fact-input"
+						type="datetime-local"
+						aria-label="Date and time brewed"
+						aria-invalid={dateError != null}
+						value={toLocalInput(shot.completedAt)}
+						max={toLocalInput(Date.now())}
+						onchange={(e) => commitDate(e.currentTarget.value)}
+					/>
+					{#if dateError}<div class="hi-fact-error" role="alert">{dateError}</div>{/if}
+				</div>
+			{/if}
 		</div>
 {/snippet}
 
@@ -1783,6 +1809,14 @@
 	.hi-fact-input:focus {
 		border-color: var(--copper-400);
 	}
+	.hi-metric-when {
+		grid-column: 1 / -1;
+	}
+	.hi-fact-error {
+		color: var(--danger);
+		font-size: 11px;
+		line-height: 1.3;
+	}
 	.hi-metrics-brew .hi-metric :global(.qcs) {
 		width: 100%;
 	}
@@ -2391,7 +2425,8 @@
 			padding: 4px 14px;
 			font-size: 13px;
 		}
-		.hi-metrics-brew {
+		.hi-metrics-brew,
+		.hi-metrics-brew.is-editable {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 			gap: 8px;
 		}

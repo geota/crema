@@ -8,6 +8,9 @@ import coffee.crema.core.BrewSeedInput
 import coffee.crema.core.BrewSeries
 import coffee.crema.core.brewLogSeedsJson
 import coffee.crema.history.StoredShot
+import coffee.crema.history.brewDateError
+import coffee.crema.history.brewDateTooOld
+import coffee.crema.history.fitsHistory
 import coffee.crema.history.methodOf
 import kotlinx.serialization.json.Json
 import coffee.crema.core.BrewLogSeeds as CoreBrewLogSeeds
@@ -48,7 +51,8 @@ data class BrewLogDraft(
     val temp: Double,
     /** Brew time as typed ("3:05" or seconds). */
     val timeStr: String = "",
-    val minutesAgo: Double = 0.0,
+    /** When it was brewed; null = now, read at save. */
+    val completedAtMs: Long? = null,
     val rating: Int = 0,
     val notes: String = "",
     val nextPlan: String = "",
@@ -73,6 +77,11 @@ data class BrewLogDraft(
 
     /** A bag is chosen but the dose is empty — the bag could not be debited. */
     fun doseMissing(beanExists: Boolean): Boolean = beanExists && dose <= 0.0
+
+    /** Why [completedAtMs] can't date this brew, or null. Now is always fine. */
+    fun dateError(history: List<StoredShot>, nowMs: Long): String? = completedAtMs?.let { at ->
+        brewDateError(at, nowMs) ?: brewDateTooOld().takeUnless { fitsHistory(history, at) }
+    }
 
     /** Mark [field] user-edited — method switches stop re-seeding it. */
     fun edited(field: String): BrewLogDraft = if (field in dirty) this else copy(dirty = dirty + field)

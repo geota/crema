@@ -39,6 +39,12 @@ import androidx.compose.runtime.setValue
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import coffee.crema.history.localDateOf
+import coffee.crema.history.localTimeOf
+import coffee.crema.history.withLocalDate
+import coffee.crema.history.withLocalTime
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.draw.drawWithContent
@@ -48,6 +54,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
@@ -1467,9 +1475,6 @@ fun CremaDateField(
     minDate: String? = null,
     maxDate: String? = null,
 ) {
-    fun isoToMillis(iso: String): Long? =
-        runCatching { LocalDate.parse(iso).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }.getOrNull()
-
     var open by remember { mutableStateOf(false) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1492,35 +1497,163 @@ fun CremaDateField(
         }
     }
     if (open) {
-        val minMs = minDate?.let { isoToMillis(it) }
-        val maxMs = maxDate?.let { isoToMillis(it) }
-        val state = rememberDatePickerState(
-            initialSelectedDateMillis = value.ifBlank { null }?.let { isoToMillis(it) },
-            selectableDates = object : SelectableDates {
-                override fun isSelectableDate(utcTimeMillis: Long): Boolean {
-                    if (minMs != null && utcTimeMillis < minMs) return false
-                    if (maxMs != null && utcTimeMillis > maxMs) return false
-                    return true
-                }
-            },
+        CremaDatePickerDialog(
+            value = value,
+            clearable = value.isNotBlank(),
+            minDate = minDate,
+            maxDate = maxDate,
+            onPick = onValueChange,
+            onDismiss = { open = false },
         )
-        DatePickerDialog(
-            onDismissRequest = { open = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    state.selectedDateMillis?.let {
-                        onValueChange(Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString())
-                    }
-                    open = false
-                }) { Text("OK") }
-            },
-            dismissButton = {
-                Row {
-                    if (value.isNotBlank()) TextButton(onClick = { onValueChange(""); open = false }) { Text("Clear") }
-                    TextButton(onClick = { open = false }) { Text("Cancel") }
+    }
+}
+
+/** The Material date picker over an ISO yyyy-MM-dd value; Clear picks "". */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CremaDatePickerDialog(
+    value: String,
+    clearable: Boolean,
+    minDate: String?,
+    maxDate: String?,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    fun isoToMillis(iso: String): Long? =
+        runCatching { LocalDate.parse(iso).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }.getOrNull()
+
+    val minMs = minDate?.let { isoToMillis(it) }
+    val maxMs = maxDate?.let { isoToMillis(it) }
+    val state = rememberDatePickerState(
+        initialSelectedDateMillis = value.ifBlank { null }?.let { isoToMillis(it) },
+        selectableDates = object : SelectableDates {
+            override fun isSelectableDate(utcTimeMillis: Long): Boolean {
+                if (minMs != null && utcTimeMillis < minMs) return false
+                if (maxMs != null && utcTimeMillis > maxMs) return false
+                return true
+            }
+        },
+    )
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                state.selectedDateMillis?.let {
+                    onPick(Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString())
+                }
+                onDismiss()
+            }) { Text("OK") }
+        },
+        dismissButton = {
+            Row {
+                if (clearable) TextButton(onClick = { onPick(""); onDismiss() }) { Text("Clear") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    ) { DatePicker(state = state) }
+}
+
+// ── Date + time field — [CremaDateField]'s chrome, split in two ──────────────
+// One box the width of a form cell: the date half opens the date picker, the
+// time half a time picker. Null means now: the halves read Today and Now, and
+// [clearable] lets the date picker's Clear go back to that. Dates after today
+// aren't offered; a later time today is the caller's to refuse.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CremaDateTimeField(
+    valueMs: Long?,
+    onValueChange: (Long?) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    clearable: Boolean = false,
+) {
+    val context = LocalContext.current
+    val timeFormat = remember(context) { android.text.format.DateFormat.getTimeFormat(context) }
+    val dateFormat = remember { DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM) }
+    val dateText = valueMs?.let { localDateOf(it).format(dateFormat) }
+    val timeText = valueMs?.let { timeFormat.format(java.util.Date(it)) }
+    var pickDate by remember { mutableStateOf(false) }
+    var pickTime by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(8.dp)
+
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            Modifier.fillMaxWidth()
+                .height(IntrinsicSize.Min)
+                .clip(shape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
+        ) {
+            DateTimePart(dateText ?: "Today", "Date", dateText == null, Modifier.weight(1.4f).testTag("datetime-date")) { pickDate = true }
+            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            DateTimePart(timeText ?: "Now", "Time", timeText == null, Modifier.weight(1f).testTag("datetime-time")) { pickTime = true }
+        }
+    }
+    if (pickDate) {
+        CremaDatePickerDialog(
+            value = valueMs?.let { localDateOf(it).toString() }.orEmpty(),
+            clearable = clearable && valueMs != null,
+            minDate = null,
+            maxDate = LocalDate.now().toString(),
+            onPick = { iso ->
+                val date = runCatching { LocalDate.parse(iso) }.getOrNull()
+                val base = valueMs ?: System.currentTimeMillis()
+                when {
+                    // OK on the date already showing changes nothing.
+                    date != null -> withLocalDate(base, date).takeIf { it != base }?.let(onValueChange)
+                    clearable -> onValueChange(null)
                 }
             },
-        ) { DatePicker(state = state) }
+            onDismiss = { pickDate = false },
+        )
+    }
+    if (pickTime) {
+        val base = valueMs ?: System.currentTimeMillis()
+        val time = localTimeOf(base)
+        val state = rememberTimePickerState(
+            initialHour = time.hour,
+            initialMinute = time.minute,
+            is24Hour = android.text.format.DateFormat.is24HourFormat(context),
+        )
+        BasicAlertDialog(onDismissRequest = { pickTime = false }) {
+            Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()).padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    TimePicker(state = state)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { pickTime = false }) { Text("Cancel") }
+                        TextButton(onClick = {
+                            // OK on the time already showing changes nothing.
+                            withLocalTime(base, state.hour, state.minute).takeIf { it != base }?.let(onValueChange)
+                            pickTime = false
+                        }) { Text("OK") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DateTimePart(text: String, role: String, placeholder: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .fillMaxHeight()
+            .clickable(onClickLabel = "Change ${role.lowercase()}", onClick = onClick)
+            .semantics { contentDescription = "$role: $text" }
+            .padding(horizontal = 10.dp, vertical = 11.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (placeholder) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f) else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 

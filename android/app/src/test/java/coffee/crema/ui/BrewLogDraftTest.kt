@@ -2,7 +2,11 @@ package coffee.crema.ui
 
 import coffee.crema.core.BrewLogSeedInput
 import coffee.crema.core.ShotBean
+import coffee.crema.history.BREW_DATE_FUTURE
+import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
+import coffee.crema.history.brewDateTooOld
+import coffee.crema.history.historyWith
 import coffee.crema.ui.brewlog.BrewLogDraft
 import coffee.crema.ui.brewlog.BrewLogOwner
 import coffee.crema.ui.brewlog.BrewLogSeeds
@@ -180,5 +184,41 @@ class BrewLogDraftTest {
         assertNull(none.beanId)
         // Other doors still open on the active bag.
         assertEquals("active", BrewLogSeeds.open(BrewLogOwner.HISTORY, emptyList(), activeBeanId = "active", seedsJson = core::call).beanId)
+    }
+
+    private val blank = BrewLogDraft(owner = BrewLogOwner.HISTORY, method = "pourover", beanId = null, dose = 15.0, water = 250.0, grind = 0.0, temp = 0.0)
+
+    @Test fun anUntouchedDateMeansNowAndIsAlwaysFine() {
+        assertNull(blank.completedAtMs)
+        assertNull(blank.dateError(emptyList(), nowMs = 1_000_000))
+    }
+
+    @Test fun aFutureDateIsRefusedAndNowIsNot() {
+        val now = 1_700_000_000_000
+        assertEquals(BREW_DATE_FUTURE, blank.copy(completedAtMs = now + 60_000).dateError(emptyList(), now))
+        assertNull(blank.copy(completedAtMs = now).dateError(emptyList(), now))
+        assertNull(blank.copy(completedAtMs = now - 86_400_000).dateError(emptyList(), now))
+    }
+
+    @Test fun aDateOlderThanAFullHistoryIsRefusedBeforeItCanBeDropped() {
+        val now = 1_700_000_000_000
+        val full = List(HistoryStore.MAX_SHOTS) { i ->
+            brew("r$i", "pourover", null, 15f, 250f).copy(completedAtMs = now - i * 60_000L)
+        }
+        val oldest = full.last().completedAtMs
+        assertEquals(brewDateTooOld(), blank.copy(completedAtMs = oldest - 1).dateError(full, now))
+        assertNull(blank.copy(completedAtMs = oldest).dateError(full, now))
+        assertNull(blank.copy(completedAtMs = oldest - 1).dateError(full.drop(1), now))
+    }
+
+    @Test fun theCoreSeedsFromTheNewestRowNotTheLastLogged() {
+        val core = FakeCore(seeds("pourover", 15f, 250f))
+        val newer = brew("newer", "pourover", null, 15f, 250f).copy(completedAtMs = 2_000)
+        val backdated = brew("backdated", "pourover", null, 30f, 500f).copy(completedAtMs = 1_000)
+        BrewLogSeeds.seeds(
+            historyWith(listOf(backdated), listOf(newer)), "pourover", null, null, null, null,
+            seedsJson = core::call, customMethods = emptyList(),
+        )
+        assertEquals(listOf(15f, 30f), core.inputs.single().rows.map { it.doseG })
     }
 }

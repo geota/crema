@@ -787,7 +787,8 @@ internal class GuidedBrewController(
     /**
      * Validate + save the draft as a manual brew (bag debit included) and
      * close the form. Returns false — the draft stays open, flagged
-     * `attempted` — when the method name or a debit-able dose is missing.
+     * `attempted` — when the method name or a debit-able dose is missing, or
+     * the date is refused.
      */
     fun saveLogBrew(nowMs: Long = System.currentTimeMillis()): Boolean {
         val d = _logBrew.value ?: return false
@@ -796,7 +797,7 @@ internal class GuidedBrewController(
         // Never persist an empty method (blank → null → not saved); the
         // presets are already normalized ids.
         val storedMethod = coffee.crema.core.normalizeBrewMethod(if (d.isCustom) d.customMethod else d.method)
-        if (storedMethod == null || d.doseMissing(bean != null)) {
+        if (storedMethod == null || d.doseMissing(bean != null) || d.dateError(uiState().history, nowMs) != null) {
             _logBrew.value = flagged
             return false
         }
@@ -811,7 +812,7 @@ internal class GuidedBrewController(
             LibraryController.ManualBrewInput(
                 method = storedMethod,
                 methodLabel = customLabel,
-                completedAtMs = nowMs - (d.minutesAgo * 60_000).toLong(),
+                completedAtMs = d.completedAtMs ?: nowMs,
                 beanId = bean?.id,
                 doseG = d.dose.toFloat().takeIf { it > 0f },
                 waterG = if (!d.espresso) d.water.toFloat().takeIf { it > 0f } else null,
