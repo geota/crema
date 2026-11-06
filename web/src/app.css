@@ -40,7 +40,7 @@
 	--page-pad-top: 32px;
 	/* Phone chrome (≤ 600 px): the top bar and bottom tab bar heights, before
 	   their safe-area insets. */
-	--ptop-h: 52px;
+	--ptop-h: 64px;
 	--ptab-h: 64px;
 }
 /* Phone width: no rail (the top bar and tab bar replace it), and the 16 px
@@ -54,5 +54,11 @@
 		--page-pad-top: 20px;
 		--ptop-clear: calc(var(--ptop-h) + env(safe-area-inset-top, 0px));
 		--ptab-clear: calc(var(--ptab-h) + env(safe-area-inset-bottom, 0px));
+	}
+}
+/* Android's 64 px bar costs a short phone a row of content. */
+@media (max-width: 600px) and (max-height: 700px) {
+	:root {
+		--ptop-h: 52px;
 	}
 }

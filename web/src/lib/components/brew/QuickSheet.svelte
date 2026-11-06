@@ -28,53 +28,12 @@
 	import SteamStepper from './SteamStepper.svelte';
 	import WaterStepper from './WaterStepper.svelte';
 	import PreinfFlushStepper from './PreinfFlushStepper.svelte';
-	import { getSettingsStore, type Settings } from '#lib/settings/index.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
+	import { CHANNEL_GROUPS } from './channel-groups';
 	import { restoreFocus, trapTab } from '#lib/a11y/focus.js';
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
-
-	/**
-	 * The four channel groups in the foot's "Chart" strip. Each group has
-	 * the channel's Phosphor icon + colour and two toggles (primary,
-	 * secondary). Groups are visually separated by a thin vertical
-	 * divider.
-	 */
-	const CHANNEL_GROUPS: ReadonlyArray<{
-		icon: string;
-		color: string;
-		primary: { key: keyof Settings; label: string; color: string };
-		secondary: { key: keyof Settings; label: string; color: string };
-	}> = [
-		{
-			icon: 'gauge',
-			color: 'var(--tel-pressure)',
-			primary: { key: 'showPressure', label: 'Pressure', color: 'var(--tel-pressure)' },
-			secondary: {
-				key: 'showResistance',
-				label: 'Resistance',
-				color: 'var(--tel-pressure-2)'
-			}
-		},
-		{
-			icon: 'drop',
-			color: 'var(--tel-flow)',
-			primary: { key: 'showFlow', label: 'Flow', color: 'var(--tel-flow)' },
-			secondary: { key: 'showVolume', label: 'Volume', color: 'var(--tel-flow-2)' }
-		},
-		{
-			icon: 'thermometer',
-			color: 'var(--tel-temp)',
-			primary: { key: 'showHeadTemp', label: 'Coffee', color: 'var(--tel-temp)' },
-			secondary: { key: 'showMixTemp', label: 'Water', color: 'var(--tel-temp-2)' }
-		},
-		{
-			icon: 'scales',
-			color: 'var(--tel-weight)',
-			primary: { key: 'showWeight', label: 'Weight', color: 'var(--tel-weight)' },
-			secondary: { key: 'showWeightFlow', label: 'Flow', color: 'var(--tel-weight-2)' }
-		}
-	];
 
 	let {
 		params,

@@ -358,3 +358,55 @@
     transform: none;
   }
 }
+
+/* Phone width — the three chips above Coffee, at Android's sizes (`ModePill`):
+   icon + label on one row, the target under them. After the rules above so
+   the `.is-disabled` hover doesn't reset the tint. */
+@media (max-width: 600px) {
+  .pbrew-modes .mc-chip {
+    display: grid;
+    grid-template-columns: auto auto;
+    justify-content: center;
+    align-items: center;
+    column-gap: 5px;
+    row-gap: 3px;
+    min-width: 0;
+    height: auto;
+    min-height: 44px;
+    padding: 9px 4px;
+    border: 1.5px solid transparent;
+    border-radius: 12px;
+    color: var(--fg-1);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.2;
+    transform: none;
+  }
+  .pbrew-modes .mc-chip.is-steam { --chip: var(--mc-steam); }
+  .pbrew-modes .mc-chip.is-water { --chip: var(--mc-water); }
+  .pbrew-modes .mc-chip.is-flush { --chip: var(--mc-flush); }
+  .pbrew-modes .mc-chip,
+  .pbrew-modes .mc-chip:hover { background: color-mix(in srgb, var(--chip) 16%, var(--bg-surface)); }
+  .pbrew-modes .mc-chip.is-active { border-color: var(--chip); }
+  .pbrew-modes .mc-chip.is-disabled { opacity: 0.55; }
+  .pbrew-modes .mc-chip > :is(i, svg) { font-size: 17px; color: var(--chip); opacity: 1; filter: none; }
+  /* A cold heater dims the glyph alone: the chip can still be pressed. */
+  .pbrew-modes .mc-chip.is-cold > :is(i, svg) { color: var(--fg-3); }
+  .pbrew-modes .mc-chip-text { display: contents; }
+  .pbrew-modes .mc-chip-sub {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+    line-height: 1.3;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-3);
+  }
+  .pbrew-modes .mc-chip-cancel { display: none; }
+}

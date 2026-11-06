@@ -167,9 +167,9 @@
 		<!-- Left section nav -->
 		<nav class="st-nav" aria-label="Settings sections" bind:this={navEl}>
 			<div class="st-nav-head">
-				<div class="t-eyebrow" style="color:var(--fg-3)">Preferences</div>
+				<div class="t-eyebrow phone-bar-eyebrow" style="color:var(--fg-3)">Preferences</div>
 				<div
-					class="st-nav-title"
+					class="st-nav-title phone-bar-title"
 					role={phoneList ? 'heading' : undefined}
 					aria-level={phoneList ? 1 : undefined}
 				>

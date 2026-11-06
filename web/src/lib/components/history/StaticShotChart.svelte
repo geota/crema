@@ -21,12 +21,15 @@
 
 	let {
 		series,
-		height = 360
+		height = 360,
+		compact = false
 	}: {
 		/** The stored shot-telemetry series, oldest first. */
 		series: readonly TelemetrySample[];
 		/** Panel height, px. */
 		height?: number;
+		/** Tighter axis gutters, for the phone's Last-shot card. */
+		compact?: boolean;
 	} = $props();
 
 	/**
@@ -144,7 +147,7 @@
 				x: { time: false, range: xRangeStep(5) },
 				y: { range: yRange }
 			},
-			axes: sharedAxes({ gridColor, labelColor, baseWindowSec: BASE_WINDOW_SEC }),
+			axes: sharedAxes({ gridColor, labelColor, baseWindowSec: BASE_WINDOW_SEC, compact }),
 			series: [
 				{},
 				{

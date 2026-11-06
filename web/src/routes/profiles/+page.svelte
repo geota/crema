@@ -674,8 +674,8 @@
 	<!-- Header -->
 	<div class="pp-head">
 		<div class="pp-head-l">
-			<div class="t-eyebrow" style="color:var(--fg-3)">Library</div>
-			<h1 class="t-page-title pp-title">Profiles</h1>
+			<div class="t-eyebrow phone-bar-eyebrow" style="color:var(--fg-3)">Library</div>
+			<h1 class="t-page-title pp-title phone-bar-title">Profiles</h1>
 			<div class="pp-sub">
 				{#if store.loaded}
 					{profiles.length} saved · {pinnedCount} pinned to favorites

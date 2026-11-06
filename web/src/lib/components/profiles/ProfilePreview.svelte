@@ -24,7 +24,8 @@
 		segments,
 		preinf: preinfSeconds,
 		active = false,
-		compact = false
+		compact = false,
+		plan = false
 	}: {
 		/** The profile's segments — the real curve is computed from these. */
 		segments: ProfileSegment[];
@@ -47,6 +48,12 @@
 		 *     just add a paint round-trip for no benefit.
 		 */
 		compact?: boolean;
+		/**
+		 * Plan mode — the phone Ready card (Android `CanvasProfilePreview`): all
+		 * three curves and the grid, filling the parent's box, with no labels
+		 * or legend.
+		 */
+		plan?: boolean;
 	} = $props();
 
 	/** Build a chart once its card scrolls within this margin of the viewport. */
@@ -167,6 +174,13 @@
 		// The temp series — kept as a placeholder column so the data shape
 		// (x, flow, pressure, temp) stays identical between modes, but the
 		// line itself is hidden in compact previews.
+		if (plan) {
+			for (const axis of axes) {
+				axis.size = 0;
+				axis.gap = 0;
+				axis.values = (_u, splits) => splits.map(() => '');
+			}
+		}
 		const tempSeries: uPlot.Series = isCompact
 			? { scale: 'temp', show: false, points: { show: false } }
 			: {
@@ -174,13 +188,14 @@
 				stroke: () => cssVar('--tel-temp'),
 				width: 1.6,
 				paths: tempStepPath,
+				...(plan ? { dash: [4, 3], width: 1.2 } : {}),
 				points: { show: false }
 			};
 		return {
 			width: w,
 			height: h,
 			// Compact has no axis labels, so it can hug the box edges.
-			padding: isCompact ? [1, 1, 1, 1] : [14, 4, 2, 2],
+			padding: isCompact ? [1, 1, 1, 1] : plan ? [14, 18, 14, 18] : [14, 4, 2, 2],
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
@@ -307,6 +322,7 @@
 	class="pp-preview"
 	class:is-active={active}
 	class:is-compact={compact}
+	class:is-plan={plan}
 	bind:this={boxEl}
 >
 	{#if mounted}
@@ -317,7 +333,7 @@
 		Channel legend + pre-inf chip are full-preview chrome only; compact
 		thumbnails drop them so the silhouette can breathe at chip size.
 	-->
-	{#if !compact}
+	{#if !compact && !plan}
 		<div class="pp-preview-legend">
 			<span class="pp-preview-chip" style="--c:var(--tel-pressure)">
 				<i></i><span>Pressure</span>
@@ -362,6 +378,15 @@
 		margin: 0;
 		overflow: visible;
 		flex: 0 0 auto;
+	}
+	.pp-preview.is-plan {
+		width: 100%;
+		height: 100%;
+		aspect-ratio: auto;
+		background: transparent;
+		border: 0;
+		border-radius: 0;
+		margin: 0;
 	}
 	/* uPlot mounts here and fills the box; the legend / chip overlay on top. */
 	.pp-preview-plot {

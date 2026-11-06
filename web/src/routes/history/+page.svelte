@@ -1160,8 +1160,8 @@
 	<!-- Header -->
 	<div class="hi-head">
 		<div>
-			<div class="t-eyebrow" style="color:var(--fg-3)">Library</div>
-			<h1 class="t-page-title hi-title">{rowNoun === 'brew' ? 'Brew history' : 'Shot history'}</h1>
+			<div class="t-eyebrow phone-bar-eyebrow" style="color:var(--fg-3)">Library</div>
+			<h1 class="t-page-title hi-title phone-bar-title">{rowNoun === 'brew' ? 'Brew history' : 'Shot history'}</h1>
 			<div class="hi-sub">
 				{shots.length}
 				{shots.length === 1 ? rowNoun : `${rowNoun}s`} on this device

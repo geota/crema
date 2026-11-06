@@ -8,7 +8,18 @@
 	import type { ModeTargetInputs, ModeTargets } from '#lib/core/crema-core.js';
 	import { onMount, tick, untrack } from 'svelte';
 	import Icon from '#lib/icons/Icon.svelte';
+	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
+	import ArrowsOutIcon from 'phosphor-svelte/lib/ArrowsOutIcon';
+	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
+	import DotsThreeVerticalIcon from 'phosphor-svelte/lib/DotsThreeVerticalIcon';
+	import MoonIcon from 'phosphor-svelte/lib/MoonIcon';
+	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
+	import PlugsIcon from 'phosphor-svelte/lib/PlugsIcon';
+	import ShapesIcon from 'phosphor-svelte/lib/ShapesIcon';
+	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
+	import StopIcon from 'phosphor-svelte/lib/StopIcon';
+	import SunIcon from 'phosphor-svelte/lib/SunIcon';
 	/**
 	 * `BrewDashboard` — the Brew route's centrepiece, ported from the
 	 * `variant === 'g'` path of `WebQDashV2` in `web-dashboard-v2.jsx`.
@@ -27,6 +38,14 @@
 	 * orchestrator — `toggleRun` runs / stops a shot (`app.startShot` /
 	 * `app.stopShot`, with lazy profile re-upload + optional group flush), and
 	 * the steppers edit the live Quick-Sheet params.
+	 *
+	 * ## The phone layout
+	 *
+	 * At ≤ 600 px the template renders Android's `PhoneBrewScreen` instead of the
+	 * grid: the profile + bean strip, the Ready card or the running shot, and the
+	 * foot pinned above the tab bar. It is a second arrangement of this same
+	 * state: the mode chips, Coffee / Stop, the banners and the chart are shared
+	 * snippets, so both layouts run the same handlers under the same rules.
 	 */
 	import {
 		waterTankMl,
@@ -101,6 +120,28 @@
 	import { resolve } from '$app/paths';
 	import { beanEditPath } from '#lib/beans/editor-path.js';
 	import { promptDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
+	import PhoneOverflowSheet, { type OverflowItem } from '#lib/shell/PhoneOverflowSheet.svelte';
+	import {
+		UNKNOWN_VALUE,
+		brewReadiness,
+		estimatedShotSeconds,
+		modeChipSubs,
+		peakPressureBar,
+		type ModeState
+	} from '#lib/brew/phone-brew.js';
+	import { pinActiveThenFavourite } from '#lib/library-order.js';
+	import PhoneBrewStrip, {
+		type StripBeanRow,
+		type StripProfileRow
+	} from './PhoneBrewStrip.svelte';
+	import PhoneDualChip from './PhoneDualChip.svelte';
+	import PhoneMachineStats from './PhoneMachineStats.svelte';
+	import PhoneModeBanner from './PhoneModeBanner.svelte';
+	import PhoneQuickSheet from './PhoneQuickSheet.svelte';
+	import PhoneReadyCard from './PhoneReadyCard.svelte';
+	import PhoneShotTimer from './PhoneShotTimer.svelte';
 
 	let { ui
 
@@ -129,7 +170,6 @@
 	//
 	// `ready` gates on de1State === 'ready' (matches the floating
 	// PowerButton's threshold so the user only sees actionable controls).
-	type ModeState = 'idle' | 'steaming' | 'dispensing' | 'flushing';
 	const modeState = $derived.by<ModeState>(() => {
 		switch (ui.machineStateName) {
 			case MachineState.Steam:
@@ -362,6 +402,20 @@
 		modeState === 'flushing'
 		? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
 			: MODE_TARGET_LABEL.flushing
+	);
+	/** The same chips' shorter lines on the phone (Android `ModeCluster`). */
+	const phoneChipSubs = $derived(
+		modeChipSubs({
+			mode: modeState,
+			elapsedS: modeElapsedSec,
+			targets: modeTargets,
+			hotWater: ui.hotWaterTarget ?? null,
+			tempUnit: prefs.tempUnit,
+			units: hotWaterUnits,
+			// The targets resolve from the user's Quick Controls without a machine,
+			// so they are only unknown until the app has loaded.
+			known: app !== null
+		})
 	);
 
 	/** The real pinned profiles, shown as favorite chips in the Quick Sheet. */
@@ -739,6 +793,16 @@
 		// belong to a different instrument. Filter dial continuity comes
 		// from "Log again" instead.
 		return historyStore.all.find((s) => s.bean?.beanId === beanId && !s.brewMethod) ?? null;
+	});
+	/**
+	 * The history row of the just-finished shot: the newest stored shot, when it
+	 * is that shot. The snapshot's summary carries no id, so the duration is the
+	 * check; a mismatch leaves the card without a rating rather than rating the
+	 * wrong shot.
+	 */
+	const lastStoredShot = $derived.by<StoredShot | null>(() => {
+		const newest = historyStore.all[0];
+		return newest && lastShot && newest.record.duration === lastShot.duration ? newest : null;
 	});
 	/**
 	 * Show the dial-in card when idle — but yield to the session Last-shot
@@ -1299,7 +1363,159 @@
 		waterRefillSoon(ui.waterLevel, ui.waterRefillThreshold)
 	);
 
+	// ── The phone layout (≤ 600 px) ──────────────────────────────────────
+	let overflowOpen = $state(false);
+	/** Android's top-bar actions, around the bar's Devices and Settings. */
+	usePhoneBar(() => ({
+		actions: [
+			{
+				id: 'quick',
+				label: 'Quick Controls',
+				icon: SlidersHorizontalIcon,
+				haspopup: 'dialog',
+				onclick: () => (quickSheetOpen = true)
+			},
+			'devices',
+			'settings',
+			{
+				id: 'more',
+				label: 'More actions',
+				icon: DotsThreeVerticalIcon,
+				haspopup: 'dialog',
+				onclick: () => (overflowOpen = true)
+			}
+		]
+	}));
+
+	/** The strip's bottom row: the bag's grind and grinder, its own or the default. */
+	const stripSpecLine = $derived.by(() => {
+		const b = beanLibrary.activeBean;
+		if (!b) return null;
+		const grind = b.grinderSetting?.trim() ? `Grind ${b.grinderSetting.trim()}` : null;
+		const grinder = b.grinder?.trim() || prefs.grinderModel?.trim() || null;
+		return [grind, grinder].filter(Boolean).join(' · ') || null;
+	});
+	/** The swap dropdown's rows: the loaded item leads, then favourites. */
+	const stripProfiles = $derived.by<StripProfileRow[]>(() =>
+		pinActiveThenFavourite(profileStore.all, profileStore.activeId, (pr) => pr.pinned)
+			.slice(0, 4)
+			.map((pr) => ({
+				id: pr.id,
+				name: pr.name,
+				meta: `${formatRatio(pr.dose, pr.yieldOut)} · ${formatWeight(pr.dose, prefs.weightUnit)} · ${formatTemp(pr.brewTemp, prefs.tempUnit)}`,
+				segments: pr.segments
+			}))
+	);
+	const stripBeans = $derived.by<StripBeanRow[]>(() =>
+		pinActiveThenFavourite(
+			beanLibrary.beans.filter((b) => b.archivedAt == null),
+			beanLibrary.activeBeanId,
+			(b) => b.favourite
+		)
+			.slice(0, 3)
+			.map((b) => {
+				const r = b.roasterId ? (beanLibrary.roasters.find((x) => x.id === b.roasterId) ?? null) : null;
+				const { mark, tone } = roasterMarkTone(r);
+				const days = beanDaysOffRoast(b);
+				const meta = [
+					days != null ? `${days}d off roast` : null,
+					b.bagSize > 0 ? `${formatWeight(b.remaining, prefs.weightUnit)} left` : null
+				];
+				return {
+					id: b.id,
+					name: [r?.name?.trim(), b.name.trim()].filter(Boolean).join(' · '),
+					meta: meta.filter(Boolean).join(' · ') || '—',
+					mark,
+					tone
+				};
+			})
+	);
+
+	const readiness = $derived(brewReadiness(modeReady, ui.machineStateName, ui.machineSubstate));
+	/** Live, never the pinned chart moment: these describe the machine now. */
+	const liveTel = $derived(ui.latestTelemetry);
+	const liveHeadM = $derived(convertTemp(liveTel?.temp, prefs.tempUnit));
+	const liveSteamM = $derived(convertTemp(liveTel?.steamTemp, prefs.tempUnit));
+	const readyPeak = $derived(peakPressureBar(activeProfile?.segments));
+	const readyPressure = $derived(
+		readyPeak != null ? convertPressure(readyPeak, prefs.pressureUnit) : null
+	);
+	/** The tiles' values, unit tight against the number: `72.5°C`, `940ml`. */
+	const tileMeasure = (m: { value: string; unit: string }): string =>
+		m.unit ? `${m.value}${m.unit}` : m.value;
+
+	/** The running mode's name, its counter and its temperature. */
+	const modeBanner = $derived.by(() => {
+		if (modeState === 'idle') return null;
+		const label = { steaming: 'Steaming', dispensing: 'Hot water', flushing: 'Flushing' }[modeState];
+		const temp = modeState === 'steaming' ? liveSteamM : liveHeadM;
+		const counter = modeState === 'steaming' ? phoneChipSubs.steam
+			: modeState === 'dispensing' ? phoneChipSubs.water
+				: phoneChipSubs.flush;
+		const reading = temp.unit ? ` · ${temp.value} ${temp.unit}` : '';
+		return { label, color: modeCardView.color, meta: `${counter}${reading}` };
+	});
+
+	/** `now / target g`; a cup lifted mid-drip reads 0, not a negative weight. */
+	const yieldLine = $derived(
+		`${convertWeight(Math.max(0, weight ?? 0), prefs.weightUnit).value} / ${yieldTarget.value} ${yieldTarget.unit}`
+	);
+	const barPct = $derived(Number.isFinite(yieldPct) ? Math.max(0, yieldPct) : 0);
+
+	const hasBrewOverrides = $derived(Object.keys(effectiveOverrides()).length > 0);
+	const asleep = $derived(ui.machineStateName === MachineState.Sleep);
+	/** Android's Brew overflow, on the web's own handlers. */
+	const overflowItems = $derived.by<OverflowItem[]>(() => {
+		const hasProfile = !!profileStore.activeId;
+		const items: OverflowItem[] = [
+			{
+				id: 'edit',
+				icon: PencilSimpleIcon,
+				label: 'Edit profile',
+				onclick: hasProfile ? editActiveProfile : () => void goto(resolve('profiles/new'))
+			},
+			{
+				id: 'library',
+				icon: ShapesIcon,
+				label: 'Browse profile library',
+				onclick: () => void goto(resolve('profiles'))
+			}
+		];
+		if (hasBrewOverrides) {
+			items.push({
+				id: 'reset',
+				icon: ArrowCounterClockwiseIcon,
+				label: 'Reset changes to saved',
+				sub: 'Clear the Quick Controls override',
+				onclick: () => params.reset()
+			});
+		}
+		items.push({
+			id: 'power',
+			icon: !modeReady ? PlugsIcon : asleep ? SunIcon : MoonIcon,
+			label: modeReady && asleep ? 'Wake machine' : 'Sleep machine',
+			sub: modeReady ? undefined : 'Connect the DE1 first',
+			disabled: !modeReady,
+			dividerAbove: true,
+			onclick: () => void app?.requestMachineState(asleep ? MachineState.Idle : MachineState.Sleep)
+		});
+		return items;
+	});
+
 	// ── Quick Sheet callbacks ────────────────────────────────────────────
+	function toggleAutoTare(v: boolean): void {
+		settings.set('autoTareOnShotStart', v);
+		void app?.applyAutoTare(v);
+	}
+	function toggleStopOnWeight(v: boolean): void {
+		settings.set('stopOnWeight', v);
+		void app?.applyStopOnWeight(v);
+	}
+	function toggleSteamEco(v: boolean): void {
+		settings.set('steamEcoMode', v);
+		void app?.applySteamEcoMode(v);
+	}
+
 	/**
 	 * Pick a favorite profile — mark it active in the library store. The active
 	 * profile feeds {@link paramSeed}, so the header, the ratio readout and the
@@ -1490,363 +1706,587 @@
 
 <svelte:window onkeydown={onKeydown} onclick={onDocClick}></svelte:window>
 
-<div class="qcontain">
-	<div class="crema-dash">
-		<!-- Profile header strip -->
-		<BrewHeader
-			profileName={profileName}
-			profileMeta={`Pre-inf ${p.preinf}s · ${ratio} · ${formatWeight(p.yield, prefs.weightUnit)} · ${formatTemp(p.brewTemp, prefs.tempUnit)}`}
-			profileSpec={profileIdentity}
-			profileTags={profileTags}
-			loadedSubline={loadedShapeSubline}
-			syncLabel={profileSyncLabel}
-			syncTitle={profileSyncTitle}
-			canEditProfile={!!profileStore.activeId}
-			profileItems={profilePickerItems}
-			activeProfileId={profileStore.activeId}
-			beanName={headerBeanName}
-			beanMeta={headerBeanMeta}
-			beanPrep={headerBeanPrep}
-			beanTags={headerBeanTags}
-			freshLabel={headerFreshLabel}
-			freshColor={headerFreshColor}
-			beanItems={beanPickerItems}
-			activeBeanId={beanLibrary.activeBeanId}
-			beanRank={rankBeansForPicker}
-			quickSheetOpen={quickSheetOpen}
-			onEditProfile={editActiveProfile}
-			onSelectProfile={(id) => {
-				profileStore.setActive(id);
-				shotStartError = null;
-			}}
-			onAddProfile={() => void goto(resolve('profiles/new'))}
-			onProfileLibrary={() => void goto(resolve('profiles'))}
-			onEditBean={editActiveBean}
-			onSelectBean={(id) => activateBean(id, { shotInProgress: ui.shotInProgress })}
-			onAddBean={() => void goto(resolve('beans/new'))}
-			onBeanLibrary={() => void goto(resolve('beans'))}
-			onOpenQuick={() => quickSheetOpen = true}
+<!-- Shared by the phone and the wide layout, so both run the same handlers. -->
+{#snippet statusBanners()}
+	{#if ui.machineError != null}
+		<div class="crema-dash-head-mid"><MachineErrorBanner text={ui.machineError} /></div>
+	{:else if shotStartError != null}
+		<div class="crema-dash-head-mid">
+			<MachineErrorBanner
+				text={shotStartError}
+				title="Can't start shot"
+				onDismiss={() => shotStartError = null}
+			/>
+		</div>
+	{:else if maintVisibleText !== ''}
+		<div class="crema-dash-head-mid">
+			<MachineErrorBanner
+				text={maintVisibleText}
+				title="Maintenance due"
+				variant="warning"
+				onClick={openMaintenance}
+				onDismiss={dismissMaintenance}
+			/>
+		</div>
+	{/if}
+{/snippet}
+{#snippet liveChart()}
+	<LiveChart
+		compact={phoneLayout.current}
+		series={ui.shotTelemetry}
+		goalSegments={activeProfile?.segments}
+		showPressure={prefs.showPressure}
+		showResistance={prefs.showResistance}
+		showFlow={prefs.showFlow}
+		showVolume={prefs.showVolume}
+		showHeadTemp={prefs.showHeadTemp}
+		showMixTemp={prefs.showMixTemp}
+		showWeight={prefs.showWeight}
+		showWeightFlow={prefs.showWeightFlow}
+		smoothPressure={prefs.smoothPressure}
+		telemetryRateHz={prefs.telemetryRateHz}
+		pinnedTimeSec={pinnedTimeSec}
+		onPin={(t) => pinnedTimeSec = t}
+	/>
+{/snippet}
+{#snippet chartPanel()}
+	<div class="crema-chart">
+		<!-- Always mounted: an empty series renders bare axes + grid (the
+		     "ready" state); a finished shot's curve stays until the next
+		     shot starts. The same snippet renders in the enlarge modal
+		     (issue #11), so the live chart isn't re-mounted mid-shot. -->
+		{@render liveChart()}
+		<button
+			type="button"
+			class="crema-chart-expand"
+			onclick={() => chartExpanded = true}
+			aria-label="Enlarge chart"
+			title="Enlarge chart"
 		>
-			{#snippet status()}
-				{#if ui.machineError != null}
-					<div class="crema-dash-head-mid"><MachineErrorBanner text={ui.machineError} /></div>
-				{:else if shotStartError != null}
-					<div class="crema-dash-head-mid">
-						<MachineErrorBanner
-							text={shotStartError}
-							title="Can't start shot"
-							onDismiss={() => shotStartError = null}
-						/>
-					</div>
-				{:else if maintVisibleText !== ''}
-					<div class="crema-dash-head-mid">
-						<MachineErrorBanner
-							text={maintVisibleText}
-							title="Maintenance due"
-							variant="warning"
-							onClick={openMaintenance}
-							onDismiss={dismissMaintenance}
-						/>
-					</div>
-				{/if}
-			{/snippet}
-		</BrewHeader>
-
-		<!-- Main grid: timer + targets | readouts + chart -->
-		<div class="crema-dash-main">
-			<div class="crema-dash-timercol">
-				<ExtractionTimer seconds={elapsedSec} step={phaseLabel} />
-				<div class="crema-dash-targets">
-					<!-- Stop-conditions (Yield / Volume / Time) — renders nothing when none apply. -->
-					<MaxStopConditionsCard rows={stopConditionRows} none={noStopCondition} />
-					<!-- Brew ratio — live during a shot, then the last shot's, vs target. -->
-					<div class="crema-target">
-						<div class="t-eyebrow">Ratio</div>
-						<div class="crema-target-val">
-							<span>{formatRatio(p.dose, shotWeight)}</span>
-							<span class="crema-target-unit"> · target {ratio}</span>
-						</div>
-					</div>
-					<!-- Phase + Last-shot only fit the left column when the Quick Sheet is
-					     closed; the open sheet would overlap them. The Phase card flex-grows
-					     to fill the column's remaining height. -->
-					{#if !quickSheetOpen}
-						{#if modeState !== 'idle'}
-							<ModeCard
-								label={modeCardView.label}
-								icon={modeCardView.icon}
-								color={modeCardView.color}
-								elapsedSec={modeElapsedSec}
-								targetSec={modeTargetSec}
-								pct={modeProgressPct}
-								targetValue={modeCardView.target.value}
-								targetUnit={modeCardView.target.unit}
-							/>
-						{:else}
-							<PhaseIndicatorCard
-								seconds={elapsedSec}
-								frame={ui.shotFrame}
-								segments={activeProfile?.segments}
-							/>
-						{/if}
-						{#if showLastShot && lastShot}
-							<LastShotCard shot={lastShot} dose={p.dose} stopReason={ui.lastStopReason} />
-						{:else if showDialIn && lastBeanShot}
-							<DialInCard
-								shot={lastBeanShot}
-								onStart={(s) => void applyDialIn(s)}
-								onOpen={(s) => void goto(resolve(`history?shot=${encodeURIComponent(s.id)}`))}
-							/>
-						{/if}
-					{/if}
-				</div>
-			</div>
-			<div class="crema-dash-chartcol">
-				<!--
-					Cards group by channel, as the chart's colour pairs and legend
-					toggles do: FLOW carries machine flow plus dispensed volume (the
-					flow colours), WEIGHT carries scale weight plus scale flow (the
-					weight colours). This replaces #92's flow-beside-flow pairing.
-				-->
-				<div class="crema-readouts">
-					<ChannelReadout
-						icon="gauge"
-						label="PRESSURE"
-						value={pressureM.value}
-						unit={pressureM.unit}
-						color="var(--tel-pressure)"
-						secondaryLabel="RESISTANCE"
-						secondaryValue={resistanceVal}
-						secondaryUnit={resistanceUnit}
-						secondaryColor="var(--tel-pressure-2)"
-					/>
-					<ChannelReadout
-						icon="drop"
-						label="FLOW"
-						value={fmt(tel?.flow)}
-						unit="ml/s"
-						color="var(--tel-flow)"
-						secondaryLabel="VOLUME"
-						secondaryValue={dispensedVolumeVal}
-						secondaryUnit={dispensedVolumeUnit}
-						secondaryColor="var(--tel-flow-2)"
-					/>
-					<ChannelReadout
-						icon={tempChannel.icon}
-						label={tempChannel.label}
-						value={tempChannel.value}
-						unit={tempChannel.unit}
-						color={tempChannel.color}
-						target={tempChannel.target}
-						secondaryLabel={tempChannel.secondaryLabel}
-						secondaryValue={tempChannel.secondaryValue}
-						secondaryUnit={tempChannel.secondaryUnit}
-						secondaryColor="var(--tel-temp-2)"
-					/>
-					<ChannelReadout
-						icon="scales"
-						label="WEIGHT"
-						value={weightM.value}
-						unit={weightM.unit}
-						color="var(--tel-weight)"
-						target={yieldTarget.value}
-						secondaryLabel="FLOW"
-						secondaryValue={weightFlowVal}
-						secondaryUnit="g/s"
-						secondaryColor="var(--tel-weight-2)"
-						onclick={tareOnTap ? tapTare : undefined}
-						flash={tarePulse}
-					/>
-				</div>
-				{#snippet liveChart()}
-					<LiveChart
-						series={ui.shotTelemetry}
-						goalSegments={activeProfile?.segments}
-						showPressure={prefs.showPressure}
-						showResistance={prefs.showResistance}
-						showFlow={prefs.showFlow}
-						showVolume={prefs.showVolume}
-						showHeadTemp={prefs.showHeadTemp}
-						showMixTemp={prefs.showMixTemp}
-						showWeight={prefs.showWeight}
-						showWeightFlow={prefs.showWeightFlow}
-						smoothPressure={prefs.smoothPressure}
-						telemetryRateHz={prefs.telemetryRateHz}
-						pinnedTimeSec={pinnedTimeSec}
-						onPin={(t) => pinnedTimeSec = t}
-					/>
-				{/snippet}
-				<div class="crema-chart">
-					<!-- Always mounted: an empty series renders bare axes + grid (the
-					     "ready" state); a finished shot's curve stays until the next
-					     shot starts. The same snippet renders in the enlarge modal
-					     (issue #11), so the live chart isn't re-mounted mid-shot. -->
-					{@render liveChart()}
-					<button
-						type="button"
-						class="crema-chart-expand"
-						onclick={() => chartExpanded = true}
-						aria-label="Enlarge chart"
-						title="Enlarge chart"
-					>
-						<Icon cls="ph ph-arrows-out" aria-hidden="true" />
-					</button>
-				</div>
-				{#if chartExpanded}
-					<ChartModal onclose={() => chartExpanded = false}>{@render liveChart()}</ChartModal>
-				{/if}
-			</div>
-		</div>
-
-		<!-- Foot: meta cluster on the left, service-mode chips in the middle,
-		     big Start / Stop button on the right. Stays visible even with
-		     the Quick Sheet open — the docked sheet sits just above it
-		     (`bottom: 96px`).
-		     The chips share the foot with Start because they're all
-		     primary "what do I want the DE1 to do?" controls; espresso
-		     just gets the prominent copper pill. A subtle vertical hairline
-		     separates the chip cluster from Start so they don't read as
-		     one row of buttons. -->
-		<!-- `keepToastsAbove`: the toast stack sits above this band, so a
-		     pinned toast never covers Start / Flush (final review 07 N1). -->
-		<div class="crema-dash-foot is-split" {@attach keepToastsAbove}>
-			<div class="crema-foot-meta">
-				<!-- Sleep / wake the DE1 — rendered inline as the leftmost
-				     foot-meta item. Moved here from the layout's fixed
-				     top-right corner, which was overlapping the
-				     profile-switcher dropdown in the dashboard header. -->
-				<PowerButton app={app} />
-				<!-- Machine: the formatted "State / Substate" string from the
-				     last `MachineStateChanged` event (e.g. "Sleep / Ready",
-				     "Espresso / Pouring", "Idle / HeatWaterTank"). `—` until
-				     the first notification arrives. -->
-				<span class="t-eyebrow">Machine</span>
-				<span>{ui.machineState ?? '—'}</span>
-				<span class="crema-foot-divider"></span>
-				<span class="t-eyebrow">Scale</span>
-				<span>{scaleConnected ? scaleName : '—'}</span>
-				<span class="crema-foot-divider"></span>
-				<!-- Coffee / water-tank temperatures: the in-card COFFEE
-				     readout above the chart already covers the group-head
-				     thermocouple; the footer's job is the *other* live
-				     references — steam-heater temperature and water-tank
-				     volume — so the user has them at a glance without
-				     duplicating the card. -->
-				<span class="t-eyebrow">Steam</span><span
-					>{steamTempM.value}{steamTempM.unit ? ` ${steamTempM.unit}` : ''}</span
-				>
-				<!-- Water tank: real `WaterLevel` telemetry, the tank depth
-				     (core already added the 5 mm sensor offset) converted to a tank volume in ml (see `waterTankMl`), then
-				     to the Settings volume unit (D1). A "refill soon" cue (E2)
-				     shows when the level nears the DE1's refill threshold. -->
-				<span class="t-eyebrow">Tank</span>
-				<span style:color={refillSoon ? 'var(--warning)' : undefined}>
-					{tankText}{#if refillSoon}
-						· refill soon{/if}
-				</span>
-				<!-- Announce the threshold crossing once (cohort review 07 #16):
-				     the region is empty until the tank runs low. -->
-				<span class="sr-only" role="status">{refillSoon ? 'Water tank low, refill soon' : ''}</span>
-			</div>
-			<!-- Right cluster: three service-mode chips + a subtle vertical
-			     hairline + the big Start button. Wrapped in one element so
-			     the foot's `1fr auto` grid keeps a single right column
-			     (without this wrapper the extra children wrap to a new row
-			     above Start). Chip labels are single-line per the design;
-			     active state still shows the inline ✕ cancel. -->
-			<div class="crema-foot-actions">
-				<div class="mc-foot-chips">
-					<ModeChip
-						kind="steam"
-						active={modeState === 'steaming'}
-						ready={modeReady}
-						atTemperature={steamHot}
-						icon="cloud"
-						label="Steam"
-						sub={steamChipSub}
-						onTap={() => modeState === 'steaming' ? cancelMode() : tapSteam()}
-					/>
-					<ModeChip
-						kind="water"
-						active={modeState === 'dispensing'}
-						ready={modeReady}
-						atTemperature={groupHot}
-						icon="drop"
-						label="Hot water"
-						sub={waterChipSub}
-						onTap={() => modeState === 'dispensing' ? cancelMode() : tapWater()}
-					/>
-					<ModeChip
-						kind="flush"
-						active={modeState === 'flushing'}
-						ready={modeReady}
-						atTemperature={groupHot}
-						icon="sparkle"
-						label="Flush"
-						sub={flushChipSub}
-						onTap={() => modeState === 'flushing' ? cancelMode() : tapFlush()}
-					/>
-				</div>
-				<span class="mc-foot-rule" aria-hidden="true"></span>
-				<button
-					class="crema-bigbtn"
-					class:running={stoppable}
-					class:is-syncing={profileSyncing && !stoppable}
-					disabled={!modeReady}
-					onclick={toggleRun}
-				>
-					{#if profileSyncing && !stoppable}
-						<!-- Sync pip — visible only while a profile upload
-						     is in flight on the Coffee leg (not while the
-						     shot is already running). Spinner glyph + the
-						     "Syncing to DE1…" caption replaces the usual
-						     coffee icon + label for the 1-2 s upload
-						     window. -->
-						<ArrowsClockwiseIcon class="crema-bigbtn-spinner" aria-hidden="true" />
-						<span>Syncing to DE1…</span>
-					{:else}
-						<Icon
-							cls={'ph-fill ph-' + (stoppable ? 'stop' : 'coffee')}
-							aria-hidden="true"
-						 />
-						<span>{stoppable ? 'Stop' : 'Coffee'}</span>
-					{/if}
-				</button>
-			</div>
-		</div>
-
-		<!-- Docked Quick Sheet, variant G -->
-		<QuickSheet
-			params={params}
-			pinnedProfiles={pinnedProfiles}
-			selectedProfileId={profileStore.activeId}
-			pinnedBeans={pinnedBeans}
-			roasters={beanLibrary.roasters}
-			activeBeanId={beanLibrary.activeBeanId}
-			open={quickSheetOpen}
-			onSelectFavorite={selectFavorite}
-			onSelectBean={selectBean}
-			onClose={() => quickSheetOpen = false}
-			onToggleAutoTare={(v) => {
-				settings.set('autoTareOnShotStart', v);
-				void app?.applyAutoTare(v);
-			}}
-			onToggleStopOnWeight={(v) => {
-				settings.set('stopOnWeight', v);
-				void app?.applyStopOnWeight(v);
-			}}
-			yieldTargetOn={yieldTargetOn}
-			onToggleYieldTarget={onToggleYieldTarget}
-			onSavePreset={activeProfile ? savePreset : undefined}
-			onToggleSteamEco={(v) => {
-				settings.set('steamEcoMode', v);
-				void app?.applySteamEcoMode(v);
-			}}
-		/>
+			{#if phoneLayout.current}
+			<ArrowsOutIcon aria-hidden="true" />
+		{:else}
+			<Icon cls="ph ph-arrows-out" aria-hidden="true" />
+		{/if}
+		</button>
 	</div>
+	{#if chartExpanded}
+		<ChartModal onclose={() => chartExpanded = false}>{@render liveChart()}</ChartModal>
+	{/if}
+{/snippet}
+{#snippet modeChips()}
+	<ModeChip
+		kind="steam"
+		active={modeState === 'steaming'}
+		ready={modeReady}
+		atTemperature={steamHot}
+		icon="cloud"
+		label="Steam"
+		sub={phoneLayout.current ? phoneChipSubs.steam : steamChipSub}
+		onTap={() => modeState === 'steaming' ? cancelMode() : tapSteam()}
+	/>
+	<ModeChip
+		kind="water"
+		active={modeState === 'dispensing'}
+		ready={modeReady}
+		atTemperature={groupHot}
+		icon="drop"
+		label={phoneLayout.current ? 'Water' : 'Hot water'}
+		sub={phoneLayout.current ? phoneChipSubs.water : waterChipSub}
+		onTap={() => modeState === 'dispensing' ? cancelMode() : tapWater()}
+	/>
+	<ModeChip
+		kind="flush"
+		active={modeState === 'flushing'}
+		ready={modeReady}
+		atTemperature={groupHot}
+		icon="sparkle"
+		label="Flush"
+		sub={phoneLayout.current ? phoneChipSubs.flush : flushChipSub}
+		onTap={() => modeState === 'flushing' ? cancelMode() : tapFlush()}
+	/>
+{/snippet}
+{#snippet shotButton()}
+	<button
+		class="crema-bigbtn"
+		class:running={stoppable}
+		class:is-syncing={profileSyncing && !stoppable}
+		disabled={!modeReady}
+		onclick={toggleRun}
+	>
+		{#if profileSyncing && !stoppable}
+			<!-- Sync pip — visible only while a profile upload
+			     is in flight on the Coffee leg (not while the
+			     shot is already running). Spinner glyph + the
+			     "Syncing to DE1…" caption replaces the usual
+			     coffee icon + label for the 1-2 s upload
+			     window. -->
+			<ArrowsClockwiseIcon class="crema-bigbtn-spinner" aria-hidden="true" />
+			<span>Syncing to DE1…</span>
+		{:else}
+			{#if !phoneLayout.current}
+				<Icon cls={'ph-fill ph-' + (stoppable ? 'stop' : 'coffee')} aria-hidden="true" />
+			{:else if stoppable}
+				<StopIcon aria-hidden="true" />
+			{:else}
+				<CoffeeIcon aria-hidden="true" />
+			{/if}
+			<span>{stoppable ? 'Stop' : 'Coffee'}</span>
+		{/if}
+	</button>
+{/snippet}
+
+<div class="qcontain">
+	{#if phoneLayout.current}
+		<div class="pbrew">
+			<PhoneBrewStrip
+				title={profileName}
+				beanLine={headerBeanName}
+				specLine={stripSpecLine}
+				freshLabel={headerFreshLabel}
+				freshColor={headerFreshColor}
+				syncLabel={profileSyncLabel}
+				profiles={stripProfiles}
+				beans={stripBeans}
+				activeProfileId={profileStore.activeId}
+				activeBeanId={beanLibrary.activeBeanId}
+				onSelectProfile={(id) => {
+					profileStore.setActive(id);
+					shotStartError = null;
+				}}
+				onSelectBean={(id) => activateBean(id, { shotInProgress: ui.shotInProgress })}
+				onAllProfiles={() => void goto(resolve('profiles'))}
+				onAllBeans={() => void goto(resolve('beans'))}
+			/>
+			{@render statusBanners()}
+			{#if modeBanner && !ui.shotInProgress}
+				<PhoneModeBanner
+					label={modeBanner.label}
+					meta={modeBanner.meta}
+					color={modeBanner.color}
+					pct={modeProgressPct}
+					onStop={cancelMode}
+				/>
+			{/if}
+			<div class="pbrew-body">
+				{#if ui.shotInProgress}
+					<PhoneShotTimer
+						seconds={elapsedSec}
+						phase={phaseLabel}
+						ratio={formatRatio(p.dose, Math.max(0, weight ?? 0))}
+						yieldText={yieldLine}
+						yieldPct={barPct}
+					/>
+					<div class="pbrew-chips">
+						<PhoneDualChip
+							label="Pressure"
+							value={pressureM.value}
+							unit={pressureM.unit}
+							color="var(--tel-pressure)"
+							secondaryLabel="Resistance"
+							secondaryValue={resistanceVal}
+							secondaryUnit=""
+							secondaryColor="var(--tel-pressure-2)"
+						/>
+						<PhoneDualChip
+							label="Flow"
+							value={fmt(tel?.flow)}
+							unit="ml/s"
+							color="var(--tel-flow)"
+							secondaryLabel="Volume"
+							secondaryValue={dispensedVolumeVal}
+							secondaryUnit={dispensedVolumeUnit}
+							secondaryColor="var(--tel-flow-2)"
+						/>
+						<PhoneDualChip
+							label={tempChannel.label}
+							value={tempChannel.value}
+							unit={tempChannel.unit}
+							color={tempChannel.color}
+							secondaryLabel={tempChannel.secondaryLabel}
+							secondaryValue={tempChannel.secondaryValue}
+							secondaryUnit={tempChannel.secondaryUnit}
+							secondaryColor="var(--tel-temp-2)"
+						/>
+						<PhoneDualChip
+							label="Weight"
+							value={weightM.value}
+							unit={weightM.unit}
+							color="var(--tel-weight)"
+							secondaryLabel="Flow"
+							secondaryValue={weightFlowVal}
+							secondaryUnit="g/s"
+							secondaryColor="var(--tel-weight-2)"
+						/>
+					</div>
+					{@render chartPanel()}
+				{:else}
+					<PhoneReadyCard
+						{readiness}
+						group={liveTel ? `Group ${formatTemp(liveTel.temp, prefs.tempUnit)}` : 'Group —'}
+						dose={convertWeight(p.dose, prefs.weightUnit)}
+						yieldOut={yieldTarget}
+						{ratio}
+						segments={activeProfile?.segments}
+						preinf={activePreinfusionDial?.seconds}
+						temp={brewTempTarget}
+						preinfSeconds={p.preinf}
+						pressure={readyPressure}
+						estTime={estimatedShotSeconds(activeProfile?.segments)}
+					/>
+					{#if showLastShot && lastShot}
+						<LastShotCard
+							shot={lastShot}
+							dose={p.dose}
+							stopReason={ui.lastStopReason}
+							stored={lastStoredShot}
+							series={ui.shotTelemetry}
+							onOpen={(id) => void goto(resolve(`history?shot=${encodeURIComponent(id)}`))}
+							onRate={(id, n) => historyStore.setRating(id, n)}
+						/>
+					{:else if showDialIn && lastBeanShot}
+						<DialInCard
+							shot={lastBeanShot}
+							onStart={(s) => void applyDialIn(s)}
+							onOpen={(s) => void goto(resolve(`history?shot=${encodeURIComponent(s.id)}`))}
+						/>
+					{/if}
+					<PhoneMachineStats
+						group={{
+							value: liveTel ? tileMeasure(liveHeadM) : UNKNOWN_VALUE,
+							ok: modeReady && !!liveTel && !!activeProfile && liveTel.temp >= activeProfile.brewTemp - 2
+						}}
+						steam={{ value: liveTel ? tileMeasure(liveSteamM) : UNKNOWN_VALUE, ok: modeReady && steamHot }}
+						tank={{
+							value: ui.waterLevel != null ? tankText.replace(' ', '') : UNKNOWN_VALUE,
+							ok: modeReady && ui.waterLevel != null && !refillSoon
+						}}
+						scale={{ value: scaleConnected ? tileMeasure(weightM) : UNKNOWN_VALUE, ok: scaleConnected }}
+						onTare={tareOnTap ? tapTare : undefined}
+						{tarePulse}
+					/>
+				{/if}
+			</div>
+			<div class="pbrew-foot" {@attach keepToastsAbove}>
+				<div class="pbrew-modes">{@render modeChips()}</div>
+				{@render shotButton()}
+			</div>
+		</div>
+		<PhoneQuickSheet
+			{params}
+			open={quickSheetOpen}
+			onClose={() => (quickSheetOpen = false)}
+			{yieldTargetOn}
+			{onToggleYieldTarget}
+			onToggleStopOnWeight={toggleStopOnWeight}
+			onToggleAutoTare={toggleAutoTare}
+			onToggleSteamEco={toggleSteamEco}
+			onSavePreset={activeProfile ? savePreset : undefined}
+		/>
+		<PhoneOverflowSheet
+			open={overflowOpen}
+			title={profileName}
+			items={overflowItems}
+			onClose={() => (overflowOpen = false)}
+		/>
+	{:else}
+		<div class="crema-dash">
+			<!-- Profile header strip -->
+			<BrewHeader
+				profileName={profileName}
+				profileMeta={`Pre-inf ${p.preinf}s · ${ratio} · ${formatWeight(p.yield, prefs.weightUnit)} · ${formatTemp(p.brewTemp, prefs.tempUnit)}`}
+				profileSpec={profileIdentity}
+				profileTags={profileTags}
+				loadedSubline={loadedShapeSubline}
+				syncLabel={profileSyncLabel}
+				syncTitle={profileSyncTitle}
+				canEditProfile={!!profileStore.activeId}
+				profileItems={profilePickerItems}
+				activeProfileId={profileStore.activeId}
+				beanName={headerBeanName}
+				beanMeta={headerBeanMeta}
+				beanPrep={headerBeanPrep}
+				beanTags={headerBeanTags}
+				freshLabel={headerFreshLabel}
+				freshColor={headerFreshColor}
+				beanItems={beanPickerItems}
+				activeBeanId={beanLibrary.activeBeanId}
+				beanRank={rankBeansForPicker}
+				quickSheetOpen={quickSheetOpen}
+				onEditProfile={editActiveProfile}
+				onSelectProfile={(id) => {
+					profileStore.setActive(id);
+					shotStartError = null;
+				}}
+				onAddProfile={() => void goto(resolve('profiles/new'))}
+				onProfileLibrary={() => void goto(resolve('profiles'))}
+				onEditBean={editActiveBean}
+				onSelectBean={(id) => activateBean(id, { shotInProgress: ui.shotInProgress })}
+				onAddBean={() => void goto(resolve('beans/new'))}
+				onBeanLibrary={() => void goto(resolve('beans'))}
+				onOpenQuick={() => quickSheetOpen = true}
+			>
+				{#snippet status()}
+					{@render statusBanners()}
+				{/snippet}
+			</BrewHeader>
+
+			<!-- Main grid: timer + targets | readouts + chart -->
+			<div class="crema-dash-main">
+				<div class="crema-dash-timercol">
+					<ExtractionTimer seconds={elapsedSec} step={phaseLabel} />
+					<div class="crema-dash-targets">
+						<!-- Stop-conditions (Yield / Volume / Time) — renders nothing when none apply. -->
+						<MaxStopConditionsCard rows={stopConditionRows} none={noStopCondition} />
+						<!-- Brew ratio — live during a shot, then the last shot's, vs target. -->
+						<div class="crema-target">
+							<div class="t-eyebrow">Ratio</div>
+							<div class="crema-target-val">
+								<span>{formatRatio(p.dose, shotWeight)}</span>
+								<span class="crema-target-unit"> · target {ratio}</span>
+							</div>
+						</div>
+						<!-- Phase + Last-shot only fit the left column when the Quick Sheet is
+						     closed; the open sheet would overlap them. The Phase card flex-grows
+						     to fill the column's remaining height. -->
+						{#if !quickSheetOpen}
+							{#if modeState !== 'idle'}
+								<ModeCard
+									label={modeCardView.label}
+									icon={modeCardView.icon}
+									color={modeCardView.color}
+									elapsedSec={modeElapsedSec}
+									targetSec={modeTargetSec}
+									pct={modeProgressPct}
+									targetValue={modeCardView.target.value}
+									targetUnit={modeCardView.target.unit}
+								/>
+							{:else}
+								<PhaseIndicatorCard
+									seconds={elapsedSec}
+									frame={ui.shotFrame}
+									segments={activeProfile?.segments}
+								/>
+							{/if}
+							{#if showLastShot && lastShot}
+								<LastShotCard shot={lastShot} dose={p.dose} stopReason={ui.lastStopReason} />
+							{:else if showDialIn && lastBeanShot}
+								<DialInCard
+									shot={lastBeanShot}
+									onStart={(s) => void applyDialIn(s)}
+									onOpen={(s) => void goto(resolve(`history?shot=${encodeURIComponent(s.id)}`))}
+								/>
+							{/if}
+						{/if}
+					</div>
+				</div>
+				<div class="crema-dash-chartcol">
+					<!--
+						Cards group by channel, as the chart's colour pairs and legend
+						toggles do: FLOW carries machine flow plus dispensed volume (the
+						flow colours), WEIGHT carries scale weight plus scale flow (the
+						weight colours). This replaces #92's flow-beside-flow pairing.
+					-->
+					<div class="crema-readouts">
+						<ChannelReadout
+							icon="gauge"
+							label="PRESSURE"
+							value={pressureM.value}
+							unit={pressureM.unit}
+							color="var(--tel-pressure)"
+							secondaryLabel="RESISTANCE"
+							secondaryValue={resistanceVal}
+							secondaryUnit={resistanceUnit}
+							secondaryColor="var(--tel-pressure-2)"
+						/>
+						<ChannelReadout
+							icon="drop"
+							label="FLOW"
+							value={fmt(tel?.flow)}
+							unit="ml/s"
+							color="var(--tel-flow)"
+							secondaryLabel="VOLUME"
+							secondaryValue={dispensedVolumeVal}
+							secondaryUnit={dispensedVolumeUnit}
+							secondaryColor="var(--tel-flow-2)"
+						/>
+						<ChannelReadout
+							icon={tempChannel.icon}
+							label={tempChannel.label}
+							value={tempChannel.value}
+							unit={tempChannel.unit}
+							color={tempChannel.color}
+							target={tempChannel.target}
+							secondaryLabel={tempChannel.secondaryLabel}
+							secondaryValue={tempChannel.secondaryValue}
+							secondaryUnit={tempChannel.secondaryUnit}
+							secondaryColor="var(--tel-temp-2)"
+						/>
+						<ChannelReadout
+							icon="scales"
+							label="WEIGHT"
+							value={weightM.value}
+							unit={weightM.unit}
+							color="var(--tel-weight)"
+							target={yieldTarget.value}
+							secondaryLabel="FLOW"
+							secondaryValue={weightFlowVal}
+							secondaryUnit="g/s"
+							secondaryColor="var(--tel-weight-2)"
+							onclick={tareOnTap ? tapTare : undefined}
+							flash={tarePulse}
+						/>
+					</div>
+					{@render chartPanel()}
+				</div>
+			</div>
+
+			<!-- Foot: meta cluster on the left, service-mode chips in the middle,
+			     big Start / Stop button on the right. Stays visible even with
+			     the Quick Sheet open — the docked sheet sits just above it
+			     (`bottom: 96px`).
+			     The chips share the foot with Start because they're all
+			     primary "what do I want the DE1 to do?" controls; espresso
+			     just gets the prominent copper pill. A subtle vertical hairline
+			     separates the chip cluster from Start so they don't read as
+			     one row of buttons. -->
+			<!-- `keepToastsAbove`: the toast stack sits above this band, so a
+			     pinned toast never covers Start / Flush (final review 07 N1). -->
+			<div class="crema-dash-foot is-split" {@attach keepToastsAbove}>
+				<div class="crema-foot-meta">
+					<!-- Sleep / wake the DE1 — rendered inline as the leftmost
+					     foot-meta item. Moved here from the layout's fixed
+					     top-right corner, which was overlapping the
+					     profile-switcher dropdown in the dashboard header. -->
+					<PowerButton app={app} />
+					<!-- Machine: the formatted "State / Substate" string from the
+					     last `MachineStateChanged` event (e.g. "Sleep / Ready",
+					     "Espresso / Pouring", "Idle / HeatWaterTank"). `—` until
+					     the first notification arrives. -->
+					<span class="t-eyebrow">Machine</span>
+					<span>{ui.machineState ?? '—'}</span>
+					<span class="crema-foot-divider"></span>
+					<span class="t-eyebrow">Scale</span>
+					<span>{scaleConnected ? scaleName : '—'}</span>
+					<span class="crema-foot-divider"></span>
+					<!-- Coffee / water-tank temperatures: the in-card COFFEE
+					     readout above the chart already covers the group-head
+					     thermocouple; the footer's job is the *other* live
+					     references — steam-heater temperature and water-tank
+					     volume — so the user has them at a glance without
+					     duplicating the card. -->
+					<span class="t-eyebrow">Steam</span><span
+						>{steamTempM.value}{steamTempM.unit ? ` ${steamTempM.unit}` : ''}</span
+					>
+					<!-- Water tank: real `WaterLevel` telemetry, the tank depth
+					     (core already added the 5 mm sensor offset) converted to a tank volume in ml (see `waterTankMl`), then
+					     to the Settings volume unit (D1). A "refill soon" cue (E2)
+					     shows when the level nears the DE1's refill threshold. -->
+					<span class="t-eyebrow">Tank</span>
+					<span style:color={refillSoon ? 'var(--warning)' : undefined}>
+						{tankText}{#if refillSoon}
+							· refill soon{/if}
+					</span>
+					<!-- Announce the threshold crossing once (cohort review 07 #16):
+					     the region is empty until the tank runs low. -->
+					<span class="sr-only" role="status">{refillSoon ? 'Water tank low, refill soon' : ''}</span>
+				</div>
+				<!-- Right cluster: three service-mode chips + a subtle vertical
+				     hairline + the big Start button. Wrapped in one element so
+				     the foot's `1fr auto` grid keeps a single right column
+				     (without this wrapper the extra children wrap to a new row
+				     above Start). Chip labels are single-line per the design;
+				     active state still shows the inline ✕ cancel. -->
+				<div class="crema-foot-actions">
+					<div class="mc-foot-chips">
+						{@render modeChips()}
+					</div>
+					<span class="mc-foot-rule" aria-hidden="true"></span>
+					{@render shotButton()}
+				</div>
+			</div>
+
+			<!-- Docked Quick Sheet, variant G -->
+			<QuickSheet
+				params={params}
+				pinnedProfiles={pinnedProfiles}
+				selectedProfileId={profileStore.activeId}
+				pinnedBeans={pinnedBeans}
+				roasters={beanLibrary.roasters}
+				activeBeanId={beanLibrary.activeBeanId}
+				open={quickSheetOpen}
+				onSelectFavorite={selectFavorite}
+				onSelectBean={selectBean}
+				onClose={() => quickSheetOpen = false}
+				onToggleAutoTare={toggleAutoTare}
+				onToggleStopOnWeight={toggleStopOnWeight}
+				yieldTargetOn={yieldTargetOn}
+				onToggleYieldTarget={onToggleYieldTarget}
+				onSavePreset={activeProfile ? savePreset : undefined}
+				onToggleSteamEco={toggleSteamEco}
+			/>
+		</div>
+	{/if}
 </div>
 
 <style>
+	/* The phone screen (Android `PhoneBrewScreen`): the strip on top, the foot
+	   pinned above the tab bar, and the cards scroll between them. */
+	.pbrew {
+		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		gap: 9px;
+		min-height: 0;
+		padding: 2px 16px 10px;
+	}
+	.pbrew-body {
+		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		min-height: 0;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		margin: 0 -16px;
+		padding: 0 16px;
+	}
+	.pbrew-body > :global(*) {
+		flex: none;
+	}
+	.pbrew-chips {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 10px;
+	}
+	.pbrew-foot {
+		flex: none;
+		display: flex;
+		flex-direction: column;
+		gap: 9px;
+	}
+	.pbrew-modes {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 8px;
+	}
+	/* The running chart takes what the cards leave, at a size it can be read at. */
+	.pbrew-body > .crema-chart {
+		flex: 1 0 120px;
+		min-height: 120px;
+		overflow: hidden;
+		padding: 8px 8px 2px 2px;
+	}
+	/* Clear of the right axis' labels. */
+	.pbrew-body .crema-chart-expand {
+		top: 0;
+		right: 30px;
+		width: 44px;
+		height: 44px;
+		border: 0;
+		background: transparent;
+	}
+
 	/* The pinned moment renders as a vertical line on the chart itself
 	   (drawn by LiveChart's marker plugin); no chrome on the wrapper. */
 	.crema-chart {

@@ -32,6 +32,7 @@
 	import { cssVar, yRange, sharedAxes } from '#lib/components/charts/chartHelpers.js';
 
 	let {
+		compact = false,
 		series,
 		goalSegments,
 		showPressure = true,
@@ -47,6 +48,8 @@
 		pinnedTimeSec = null,
 		onPin
 	}: {
+		/** Tighter axis gutters, for the phone's chart card. */
+		compact?: boolean;
 		/** The buffered shot-telemetry series, oldest first. */
 		series: readonly TelemetrySample[];
 		/**
@@ -468,7 +471,7 @@
 				x: { time: false, range: () => [0, xMaxAnim] },
 				y: { range: yRange }
 			},
-			axes: sharedAxes({ gridColor, labelColor, baseWindowSec: BASE_WINDOW_SEC }),
+			axes: sharedAxes({ gridColor, labelColor, baseWindowSec: BASE_WINDOW_SEC, compact }),
 			series: [
 				{},
 				{

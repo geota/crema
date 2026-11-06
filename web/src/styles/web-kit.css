@@ -807,18 +807,36 @@ summary:focus-visible,
   }
 }
 
-/* Phone width — the action row wraps: the three service chips share one row
-   and the Coffee button takes a full-width row of its own (07 #14). */
+/* Phone width — BrewDashboard's phone branch: the cards, and the full-width
+   Coffee / Stop pill at Android's size (`CoffeeCta`). It is the wide layout's
+   button, so the same handler runs. */
 @media (max-width: 600px) {
-  .crema-dash-head { padding-left: 16px; padding-right: 16px; flex-wrap: wrap; }
-  .crema-dash-head .bh-divider { display: none; }
-  .crema-dash-main { padding: 12px 16px; gap: 12px; }
-  .crema-dash-foot.is-split { padding: 10px 16px 12px; }
-  .crema-dash-foot .crema-foot-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .crema-dash-foot .crema-foot-actions .mc-foot-rule { display: none; }
-  .crema-dash-foot .crema-foot-actions .crema-bigbtn { grid-column: 1 / -1; }
-  .crema-dash-foot .crema-foot-actions .mc-chip { flex-direction: column; gap: 2px; height: auto; min-height: 52px; padding: 6px 8px; }
-  .crema-dash-foot .crema-foot-actions .mc-chip-sub { display: none; }
+  .pcard { border-radius: 16px; background: var(--bg-surface); }
+
+  .pbrew-foot .crema-bigbtn {
+    gap: 10px;
+    height: 58px;
+    padding: 0 16px;
+    font-size: 17px;
+    box-shadow: none;
+    transform: none;
+  }
+  .pbrew-foot .crema-bigbtn > :is(i, svg) { font-size: 22px; }
+  .pbrew-foot .crema-bigbtn.running { background: #d26456; color: #2a0b07; }
+  .pbrew-foot .crema-bigbtn:disabled { opacity: 0.4; }
+
+  /* The top bar carries the screen's title: pages drop their eyebrow, and the
+     `<h1>` stays for assistive tech and heading navigation only. */
+  .phone-bar-eyebrow { display: none; }
+  .phone-bar-title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 /* ============================================================================
@@ -864,9 +882,8 @@ summary:focus-visible,
 
 .hpick { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; width: min(340px, 80vw); display: flex; flex-direction: column; max-height: 380px; background: var(--bg-surface); border: 1px solid rgba(var(--tint-rgb), 0.12); border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; }
 .bh-block-bean .hpick { left: auto; right: 0; }
-/* Phone width: the header blocks stack at the left edge, so the bean picker
-   opens rightwards too. Both stay short enough to end above the tab bar on a
-   small phone; the bean block sits lower, so its picker is shorter. */
+/* Phone width: History's bean picker opens rightwards from the left edge and
+   stays short enough to end above the tab bar on a small phone. */
 @media (max-width: 600px) {
   .hpick { max-height: min(380px, 52dvh); }
   .bh-block-bean .hpick { left: 0; right: auto; max-height: min(380px, 44dvh); }
