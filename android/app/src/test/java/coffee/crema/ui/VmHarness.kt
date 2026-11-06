@@ -124,6 +124,14 @@ internal object VmHarness {
         return field.get(vm) as MaintenanceController
     }
 
+    /** The VM's [LibraryController], found by type. */
+    fun library(vm: MainViewModel): LibraryController {
+        val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == LibraryController::class.java }
+            ?: error("MainViewModel no longer holds exactly one LibraryController field: update VmHarness.library")
+        field.isAccessible = true
+        return field.get(vm) as LibraryController
+    }
+
     /** The VM's [RemoteConfigController], found by type. */
     fun remoteConfig(vm: MainViewModel): RemoteConfigController {
         val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == RemoteConfigController::class.java }

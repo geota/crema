@@ -1579,7 +1579,8 @@ class LibraryController(
      * Telemetry stays empty — BC's `flow_profile` sidecar parse is deferred,
      * exactly as on web.
      */
-    private fun buildImportedShots(plan: JsonObject, beanIdRemap: Map<String, String>): List<StoredShot> {
+    @androidx.annotation.VisibleForTesting
+    internal fun buildImportedShots(plan: JsonObject, beanIdRemap: Map<String, String>): List<StoredShot> {
         val entries = plan["shots"]?.let { runCatching { it.jsonArray }.getOrNull() } ?: return emptyList()
         val existingKeys = uiState().history
             .map { it.completedAtMs to it.bean?.name?.trim()?.lowercase().orEmpty() }
@@ -1632,6 +1633,8 @@ class LibraryController(
                     brewMethod = stored.str("brewMethod"),
                     waterG = meta?.num("waterG")?.toFloat(),
                     brewTempC = stored.num("brewTempTarget")?.toFloat(),
+                    // The core's 0: an imported brew never debited its bag.
+                    bagDebitG = bean?.let { stored.num("bagDebit")?.toFloat() },
                 ),
             )
         }

@@ -2,11 +2,14 @@ package coffee.crema.beans
 
 import coffee.crema.core.BagStock
 import coffee.crema.core.BagStockLowInner
+import coffee.crema.core.MachineState
 import coffee.crema.settings.MirroredSettings
 import coffee.crema.ui.MainUiState
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /** The Android side of the stock rule (#302), through the host build of the core. */
 class BagStockTest {
@@ -81,6 +84,23 @@ class BagStockTest {
             mirroredBeanSummary = "Onyx · Gesha",
         )
         assertEquals("Onyx · Gesha", remote.emptyBagName())
+    }
+
+    @Test
+    fun `the prompt waits out a running shot`() {
+        assertTrue(MainUiState(shotInProgress = true).holdsBagPrompt())
+    }
+
+    @Test
+    fun `the prompt waits out steam, hot water and a flush`() {
+        for (mode in listOf(MachineState.Steam, MachineState.HotWater, MachineState.HotWaterRinse)) {
+            assertTrue(MainUiState(machineStateName = mode).holdsBagPrompt(), "$mode")
+        }
+    }
+
+    @Test
+    fun `the prompt shows on an idle machine`() {
+        assertFalse(MainUiState(machineStateName = MachineState.Idle).holdsBagPrompt())
     }
 
     @Test

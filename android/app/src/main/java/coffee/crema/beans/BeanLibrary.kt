@@ -48,9 +48,11 @@ class LibraryStore(private val context: Context, private val json: Json) {
 
     /** Load the library, or an empty one if absent. An unreadable file is kept
      *  aside and reported (see [loadStore]). */
-    suspend fun load(): BeanLibrary = withContext(Dispatchers.IO) {
-        loadStore(file, "bean library") { json.decodeFromString(BeanLibrary.serializer(), it) }
-            .valueOrNull() ?: BeanLibrary()
+    suspend fun load(): BeanLibrary = lock.withLock {
+        withContext(Dispatchers.IO) {
+            loadStore(file, "bean library") { json.decodeFromString(BeanLibrary.serializer(), it) }
+                .valueOrNull() ?: BeanLibrary()
+        }
     }
 
     /** Persist the library atomically (best-effort; a failure is logged). */
@@ -64,7 +66,7 @@ class LibraryStore(private val context: Context, private val json: Json) {
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {
-        withContext(Dispatchers.IO) { eraseStore(file) }
+        lock.withLock { withContext(Dispatchers.IO) { eraseStore(file) } }
     }
 
     private companion object {

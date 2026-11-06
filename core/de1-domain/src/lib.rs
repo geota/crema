@@ -126,10 +126,10 @@ pub use auto_tare::{
 pub use bean::{
     BREWS_REMAINING_WINDOW, BagStock, Bean, BeanMix, BeanOrigin, BeanRoastType,
     DEFAULT_DOSE_PER_BREW_G, LOW_STOCK_BREWS, RoastBand, RoastFreshness, Roaster, ShotBean,
-    bag_stock, bag_stock_json, brews_remaining_estimate, credit_remaining, credit_shot_debit,
-    days_off_roast, debit_remaining, debit_taken, duplicate_bean, duplicate_bean_json,
-    resettle_remaining, resettled_bag_debit, roast_band, roast_band5, roast_freshness,
-    set_bean_frozen, set_bean_frozen_json,
+    bag_stock, bag_stock_json, brews_remaining_estimate, credit_shot_debit, days_off_roast,
+    debit_remaining, debit_taken, duplicate_bean, duplicate_bean_json, resettle_remaining,
+    resettled_bag_debit, roast_band, roast_band5, roast_freshness, set_bean_frozen,
+    set_bean_frozen_json,
 };
 pub use bean_coerce::{coerce_bean, coerce_bean_json, coerce_roaster, coerce_roaster_json};
 pub use bean_filter::{

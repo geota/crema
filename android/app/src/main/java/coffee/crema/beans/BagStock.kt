@@ -4,6 +4,7 @@ import coffee.crema.core.BagStock
 import coffee.crema.core.Bean
 import coffee.crema.core.bagStockJson
 import coffee.crema.ui.MainUiState
+import coffee.crema.ui.modeLabel
 import kotlinx.serialization.json.Json
 
 /*
@@ -42,6 +43,12 @@ fun MainUiState.emptyBagName(): String? {
         else -> null
     }
 }
+
+/**
+ * Whether the bag-empty prompt waits: it stays off a running shot's Stop and a
+ * steam, hot-water or flush run's Stop chips, which it would cover.
+ */
+fun MainUiState.holdsBagPrompt(): Boolean = shotInProgress || modeLabel(machineStateName) != null
 
 /** The empty-bag banner's text. */
 fun emptyBagBannerText(name: String): String = "${name.trim().ifEmpty { "This bag" }} is at 0 g. Shots still log to it."

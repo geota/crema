@@ -1760,6 +1760,11 @@ mod tests {
         );
         let shot = &plan.shots[0];
         assert_eq!(
+            shot.stored_shot.bag_debit,
+            Some(0.0),
+            "an imported brew took nothing from its bag"
+        );
+        assert_eq!(
             shot.stored_shot.metadata.yield_out,
             Some(36.0),
             "legacy yield"

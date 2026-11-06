@@ -83,8 +83,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   an empty bag used to add about 90 g, and a bag with no tracked weight gained
   grams. Shots logged before this credit their dose only while the bag still
   holds grams, up to the bag size. Android and web.
-- **Sizing a bag at 0 g fills it on Android** — as on web, so a bag doesn't read
-  as empty the moment it gets a size. Android.
+- **A bag's first size fills it on Android** — as on web, so a new bag doesn't
+  read as empty the moment it gets a size. Android.
 - **Two quick bag changes can't drop the bean library file** — overlapping saves
   could leave only its backup on disk. Android.
 - **Archived bags no longer appear in tablet pickers** — the tablet's Change

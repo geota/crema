@@ -35,6 +35,7 @@ import {
 	type ReconnectTrigger
 } from '#lib/ble/index.js';
 import { getBeanStore, getBeanLibraryStore } from '#lib/bean/index.js';
+import { closeBagEmptyPrompt } from '#lib/bean/bag-empty-prompt.js';
 import {
 	getHistoryStore,
 	snapshotFromBean,
@@ -840,6 +841,8 @@ export class CremaApp {
 				);
 			}
 			if (event.type === 'ShotStarted') {
+				// A machine-button shot can start under this dialog: clear Stop.
+				closeBagEmptyPrompt();
 				// Mark the shot's start so ShotCompleted can slice the raw BLE
 				// capture (with a lead-in) for the IndexedDB capture store.
 				// Use the core's most-recent notification timestamp rather

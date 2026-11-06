@@ -54,6 +54,22 @@ data class BeanDraft(
 )
 
 /**
+ * The bag's `remaining` after an edit. A first size given to a bag fills it, or
+ * 0 would read as an empty bag the moment it was sized. Only a bag with no size
+ * before this edit: a size corrected on a bag that ran out leaves it empty. And
+ * only with Remaining untouched: a value the user set stands.
+ */
+private fun editedRemaining(b: Bean, draft: BeanDraft): Float {
+    val wasUnsized = (b.bagSize ?: 0f) <= 0f
+    val remainingUntouched = (b.remaining ?: 0f).toDouble() == draft.remaining
+    return if (wasUnsized && remainingUntouched && draft.remaining == 0.0) {
+        draft.bagSize.toFloat()
+    } else {
+        draft.remaining.toFloat()
+    }
+}
+
+/**
  * Apply the editor [draft] onto [b], returning the updated [Bean] — the
  * field-for-field save mapping both bean editors used to inline verbatim. Blank
  * text fields collapse to null (name/mix keep the prior value instead).
@@ -85,13 +101,7 @@ private fun applyDraft(b: Bean, draft: BeanDraft, frozenOn: String?, defrostedOn
     decaf = draft.decaf,
     favourite = draft.pinned,
     bagSize = draft.bagSize.toFloat(),
-    // A size given to a bag at 0 fills it (web's editor does the same): 0 would
-    // otherwise read as an empty bag the moment it was sized.
-    remaining = if (draft.remaining == 0.0 && draft.bagSize != (b.bagSize ?: 0f).toDouble()) {
-        draft.bagSize.toFloat()
-    } else {
-        draft.remaining.toFloat()
-    },
+    remaining = editedRemaining(b, draft),
     origin = (b.origin ?: BeanOrigin()).copy(
         country = draft.country.ifBlank { null },
         region = draft.region.ifBlank { null },

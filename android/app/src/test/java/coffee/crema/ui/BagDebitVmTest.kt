@@ -11,6 +11,7 @@ import coffee.crema.history.StoredShot
 import coffee.crema.visualizer.storedShotFromBackupJson
 import coffee.crema.visualizer.wireShotJson
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.jsonObject
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -97,9 +98,40 @@ class BagDebitVmTest {
 
     @Test
     fun `an untracked bag gains nothing`() {
+        val vm = vmWith(listOf(bag("a", 0f, 0f)), listOf(row("s", "a", bagDebit = null), row("t", "a", 0f)))
+        vm.setShotBean("s", null)
+        vm.setShotBean("t", null)
+        assertEquals(0f, vm.remaining("a"))
+    }
+
+    @Test
+    fun `a sizeless bag takes back a recorded debit`() {
         val vm = vmWith(listOf(bag("a", 0f, 0f)), listOf(row("s", "a", 18f)))
         vm.setShotBean("s", null)
-        assertEquals(0f, vm.remaining("a"))
+        assertEquals(18f, vm.remaining("a"))
+    }
+
+    @Test
+    fun `a Beanconqueror row records that it took nothing`() {
+        val vm = vmWith(listOf(bag("a", 100f, 250f)))
+        val plan = coreJson.parseToJsonElement(
+            """{"shots":[{"beanId":"a","beanName":"a","storedShot":{"completedAt":1,"metadata":{"dose":18.0},"bagDebit":0.0}}]}""",
+        ).jsonObject
+        assertEquals(0f, VmHarness.library(vm).buildImportedShots(plan, emptyMap()).single().bagDebitG)
+    }
+
+    @Test
+    fun `moving a Beanconqueror row gives its bag nothing`() {
+        val plan = coreJson.parseToJsonElement(
+            """{"shots":[{"beanId":"a","beanName":"a","storedShot":{"completedAt":1,"metadata":{"dose":18.0},"bagDebit":0.0}}]}""",
+        ).jsonObject
+        val seeded = vmWith(listOf(bag("a", 100f, 250f)))
+        val imported = VmHarness.library(seeded).buildImportedShots(plan, emptyMap()).single()
+        store.clear()
+        VmHarness.idle()
+        val vm = vmWith(listOf(bag("a", 100f, 250f)), listOf(imported))
+        vm.setShotBean(imported.id, null)
+        assertEquals(100f, vm.remaining("a"))
     }
 
     @Test

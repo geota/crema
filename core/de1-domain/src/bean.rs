@@ -600,24 +600,19 @@ pub fn debit_taken(remaining: f32, dose_g: f32) -> f32 {
 
 /// Put `grams` back on a bag. Capped at `bag_size` when the bag declares one
 /// (`> 0`; the bag may have been refilled or edited since the pull); with no
-/// declared size a positive `remaining` still takes the credit uncapped.
+/// declared size the credit is uncapped.
 ///
 /// Returns `None` when there is nothing to credit: a bad amount, a non-finite
-/// or negative `remaining`, a credit that changes nothing (already at the cap),
-/// or an **untracked** bag (no declared size and nothing remaining), which never
-/// gains grams. Callers persist (and touch `updated_at`) only on `Some`, as they
-/// do for a debit.
-#[must_use]
-pub fn credit_remaining(remaining: f32, grams: f32, bag_size: f32) -> Option<f32> {
+/// or negative `remaining`, or a credit that changes nothing (already at the
+/// cap). Callers persist (and touch `updated_at`) only on `Some`, as they do for
+/// a debit. The grams come from [`row_debit`], which is what keeps an untracked
+/// bag at 0: a row can only have taken grams from a bag that was tracked.
+fn credit_remaining(remaining: f32, grams: f32, bag_size: f32) -> Option<f32> {
     if !remaining.is_finite() || remaining < 0.0 || !grams.is_finite() || grams <= 0.0 {
         return None;
     }
-    let sized = bag_size.is_finite() && bag_size > 0.0;
-    if !sized && remaining <= 0.0 {
-        return None;
-    }
     let uncapped = remaining + grams;
-    let next = if sized {
+    let next = if bag_size.is_finite() && bag_size > 0.0 {
         uncapped.min(bag_size)
     } else {
         uncapped
@@ -640,10 +635,11 @@ fn row_debit(bag_debit: Option<f32>, remaining: f32, dose_g: f32) -> f32 {
 }
 
 /// The bag's `remaining` after a shot moves off it: the grams the row took go
-/// back ([`credit_remaining`] caps them). A recorded `bag_debit` says how many; a
-/// row from before the field (`None`) took its `dose_g` if the bag still holds
-/// grams and nothing if it is empty. `None` means nothing changes, so nothing is
-/// persisted.
+/// back, capped at a declared `bag_size`. A recorded `bag_debit` says how many,
+/// and a positive one proves the bag was tracked, so even a sizeless bag at 0
+/// takes it. A row from before the field (`None`) took its `dose_g` if the bag
+/// still holds grams and nothing if it is empty, so an untracked bag gains
+/// nothing. `None` means nothing changes, so nothing is persisted.
 #[must_use]
 pub fn credit_shot_debit(
     remaining: f32,
@@ -700,7 +696,7 @@ fn resettle(
 /// Re-settle a bag when a logged brew's dose is edited after the fact. Only the
 /// NET change moves: a bigger dose debits the difference ([`debit_remaining`],
 /// floored at 0), and a dose below what the row took credits the difference back
-/// ([`credit_remaining`], capped at `bag_size`). A dose that drops but stays
+/// (capped at `bag_size`). A dose that drops but stays
 /// above what the row took changes nothing, because those grams never left the
 /// bag. A non-positive / non-finite dose means "no dose" (0 g on that side).
 ///
@@ -2075,9 +2071,16 @@ mod tests {
     }
 
     #[test]
-    fn credit_remaining_gives_an_untracked_bag_nothing() {
-        assert_eq!(credit_remaining(0.0, 18.0, 0.0), None);
-        assert_eq!(credit_remaining(0.0, 18.0, f32::NAN), None);
+    fn a_sizeless_bag_takes_back_a_recorded_debit() {
+        assert_eq!(credit_shot_debit(0.0, 0.0, Some(18.0), 18.0), Some(18.0));
+    }
+
+    #[test]
+    fn a_sizeless_bag_takes_a_recorded_debit_back_on_a_dose_edit() {
+        assert_eq!(
+            resettle_remaining(0.0, 0.0, Some(18.0), 18.0, 10.0),
+            Some(8.0)
+        );
     }
 
     // ── bag_debit: what a row took, what a move gives back ────────────
@@ -2121,7 +2124,7 @@ mod tests {
     #[test]
     fn a_move_never_credits_an_untracked_bag() {
         assert_eq!(credit_shot_debit(0.0, 0.0, None, 18.0), None);
-        assert_eq!(credit_shot_debit(0.0, 0.0, Some(18.0), 18.0), None);
+        assert_eq!(credit_shot_debit(0.0, 0.0, Some(0.0), 18.0), None);
     }
 
     #[test]

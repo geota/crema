@@ -1866,7 +1866,7 @@
 	</button>
 {/snippet}
 
-{#if bagPickerOpen}
+{#if bagPickerOpen && !ui.shotInProgress}
 	<BeanPicker
 		currentBeanId={beanLibrary.activeBeanId}
 		allowArchived={false}

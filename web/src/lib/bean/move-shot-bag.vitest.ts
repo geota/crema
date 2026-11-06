@@ -53,16 +53,23 @@ describe('moveShotBag', () => {
 		expect(remaining('a')).toBe(110);
 	});
 
-	it('credits nothing for a row that took nothing', () => {
+	it('gives an untracked bag nothing', () => {
+		bag('a', 0, 0);
+		moveShotBag(row('a'), null);
+		moveShotBag(row('a', 0), null);
+		expect(remaining('a')).toBe(0);
+	});
+
+	it('gives a sizeless bag back a recorded debit', () => {
+		bag('a', 0, 0);
+		moveShotBag(row('a', 18), null);
+		expect(remaining('a')).toBe(18);
+	});
+
+	it('gives nothing back for an imported row', () => {
 		bag('a', 250, 100);
 		moveShotBag(row('a', 0), null);
 		expect(remaining('a')).toBe(100);
-	});
-
-	it('gives an untracked bag nothing', () => {
-		bag('a', 0, 0);
-		moveShotBag(row('a', 18), null);
-		expect(remaining('a')).toBe(0);
 	});
 
 	it('adds nothing moving five old shots off an empty bag', () => {
