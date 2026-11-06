@@ -509,6 +509,8 @@ export class HistoryStore {
 		if (fresh.length === 0) return { kept: [], dropped: 0 };
 		const before = this.shots.length + fresh.length;
 		this.shots = cappedHistory(newestFirst([...fresh, ...this.shots]), MAX_RECORDS);
+		// After `persist`: a full store trims the list, and the count must say so.
+		this.persist();
 		const freshIds = new Set(fresh.map((s) => s.id));
 		const kept = this.shots.filter((s) => freshIds.has(s.id));
 		for (const shot of kept) {
@@ -516,7 +518,6 @@ export class HistoryStore {
 				void putSeries(shot.id, shot.record.samples).catch(seriesSaveFailed);
 			}
 		}
-		this.persist();
 		return { kept, dropped: before - this.shots.length };
 	}
 

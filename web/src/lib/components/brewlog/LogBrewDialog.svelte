@@ -152,7 +152,7 @@
 	});
 	const doseMissing = $derived(bean != null && !(dose > 0));
 	const ratio = $derived(formatRatio(dose > 0 ? dose : null, water > 0 ? water : null));
-	const whenError = $derived(dateProblem(whenLocal));
+	const whenError = $derived(dateProblem(whenLocal, nowMs));
 
 	// Seed the numeric fields for the opening method (later re-seeds run
 	// from the chip handler with the freshly-picked id).
@@ -239,11 +239,11 @@
 	 * Why `when` can't date this brew, or `null`. A blank field means now, and so
 	 * does an untouched one: a brew made now is kept whatever the clock says.
 	 */
-	function dateProblem(when: string): string | null {
+	function dateProblem(when: string, now: number = Date.now()): string | null {
 		if (!when || (!whenEdited && seed?.completedAt == null)) return null;
 		const at = fromLocalInput(when);
 		return (
-			brewDateError(at, Date.now()) ??
+			brewDateError(at, now) ??
 			(history.fitsHistory(at) ? null : brewDateTooOld(history.capacity))
 		);
 	}
