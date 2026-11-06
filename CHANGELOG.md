@@ -43,6 +43,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A logged brew's row keeps its text** — the method icon took the width of a
+  chart in History, which cut off the name and bean. It's now a small bare mark.
+  Android and web.
 - **Missing web icons are back** — Stop, the chart's enlarge button, the bag
   photo's edit mark, and the icons on Settings, shot detail and bean filter
   buttons were drawn blank. A test now fails on a name the icon map doesn't

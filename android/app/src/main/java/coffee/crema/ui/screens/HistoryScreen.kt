@@ -86,7 +86,7 @@ import coffee.crema.ui.brewlog.BrewSessionCanvas
 import coffee.crema.ui.brewlog.BrewSparkChart
 import coffee.crema.ui.brewlog.BrewLogOwner
 import coffee.crema.ui.brewlog.LogBrewSheet
-import coffee.crema.ui.brewlog.MethodMarkTile
+import coffee.crema.ui.brewlog.RowMethodMark
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.historyListKey
 import coffee.crema.ui.rememberListBool
@@ -761,7 +761,7 @@ private fun ShotRow(
             )
         }
         // The sparkline slot: DE1 telemetry when recorded; a guided brew's
-        // weight curve; else the method mark tile (issue #10).
+        // weight curve; else the bare method mark (issue #10).
         val rowSeries = shot.brewSeries
         when {
             shot.samples.isNotEmpty() -> CremaSparkChart(
@@ -780,7 +780,7 @@ private fun ShotRow(
                     .clip(RoundedCornerShape(6.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerLowest),
             )
-            else -> MethodMarkTile(shot.methodOf)
+            else -> RowMethodMark(shot.methodOf)
         }
         // Main — profile name over the bean (PWA .hi-row-main). Brew rows show
         // the recipe / method name with a quiet "logged" provenance tag.
