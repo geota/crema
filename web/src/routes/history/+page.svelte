@@ -605,6 +605,12 @@
 			beanLibrary.resettleBean(beanId, shot.metadata.dose ?? null, patch.dose);
 		}
 		store.updateManualBrew(id, patch);
+		// A new date can move the brew out of the range: its detail stays open
+		// until a filter changes, the same way a just-saved brew's does.
+		if (patch.completedAt !== undefined) {
+			selectedId = id;
+			pin = { id, scope: filterScope };
+		}
 	}
 	function deleteById(id: string, opts: { remote: boolean }): void {
 		const shot = liveShot(store.get(id));

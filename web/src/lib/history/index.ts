@@ -30,6 +30,16 @@ export {
 } from './model';
 
 export {
+	BREW_DATE_FUTURE,
+	brewDateError,
+	brewDateTooOld,
+	fitsHistory,
+	fromLocalInput,
+	newestFirst,
+	toLocalInput
+} from './brew-date';
+
+export {
 	HistoryStore,
 	getHistoryStore,
 	type ImportExtras,

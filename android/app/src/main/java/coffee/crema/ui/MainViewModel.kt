@@ -1415,7 +1415,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         yieldG: Float? = null,
         brewTempC: Float? = null,
         durationMs: Long? = null,
-    ) = library.updateManualBrew(id, doseG, waterG, yieldG, brewTempC, durationMs)
+        completedAtMs: Long? = null,
+    ) = library.updateManualBrew(id, doseG, waterG, yieldG, brewTempC, durationMs, completedAtMs)
 
     /** Set a shot's forward-looking "next time" plan (local-only). */
     fun setShotNextPlan(id: String, nextPlan: String) = library.setShotNextPlan(id, nextPlan)

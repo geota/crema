@@ -9,6 +9,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Pick a brew's date and time, and change it later** — Log brew on Android
+  now has a When field with a date and time picker in place of "Logged N min
+  ago", defaulting to now, as on the web. Both apps can change the date of a
+  manually logged brew from its detail; machine shots and guided sessions keep
+  theirs. A date in the future is refused. A brew older than a full history of
+  300 is refused when logging, so it can't vanish on save. Tablet, phone and
+  web.
 - **Phone layout for the web app** — at 600 px and below the side rail gives
   way to a bottom tab bar (Brew, Scale, Profiles, Beans, History, as on
   Android) and a top bar with the Crema mark, the screen's title and its
@@ -40,6 +47,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **History stays in date order** — a pulled, restored or backdated row used
+  to land at the top of the list on the web, and on Android when imported,
+  restored or logged minutes ago. It could then seed the next log as the last
+  brew, count among a bag's latest doses, and push out newer rows at the 300
+  limit. Rows now go in by date, and an out-of-order history is put right when
+  it loads. Tablet, phone and web.
+- **Web: logged-brew fields fit at phone width** — in Log a brew, When takes a
+  full row so the time can be read, and the steppers stay inside their cards.
+  The fields stack below 380 px. A logged brew's detail uses two columns, so a
+  stepper no longer runs off the row. Nothing changes above 600 px. Web.
 - **Missing web icons are back** — Stop, the chart's enlarge button, the bag
   photo's edit mark, and the icons on Settings, shot detail and bean filter
   buttons were drawn blank. A test now fails on a name the icon map doesn't

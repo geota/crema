@@ -24,6 +24,7 @@ import type { TelemetrySample } from '#lib/state/index.js';
 import { toWire } from './telemetry-wire';
 import { readJson, writeJsonChecked } from '#lib/utils/storage.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
+import { brewDateError, fitsHistory, newestFirst } from './brew-date';
 import {
 	clearAllSeries,
 	deleteSeries,
@@ -165,6 +166,25 @@ export class HistoryStore {
 		}
 	}
 
+	/**
+	 * Add a row by its date. The list stays newest first, so the cap drops the
+	 * oldest rows and the core's "last brew" is the newest one, however the row
+	 * was dated. A row older than a full history is the one that goes.
+	 */
+	private insert(shot: StoredShot): void {
+		this.shots = newestFirst([shot, ...this.shots]).slice(0, MAX_RECORDS);
+	}
+
+	/** The most rows the history keeps. */
+	get capacity(): number {
+		return MAX_RECORDS;
+	}
+
+	/** Whether a new brew dated `at` would stay in the history once added. */
+	fitsHistory(at: number): boolean {
+		return fitsHistory(this.shots, at, MAX_RECORDS);
+	}
+
 	/** Wipe all recorded shots — for a "replace from backup" restore. */
 	clearAllShots(): void {
 		this.shots = [];
@@ -177,13 +197,13 @@ export class HistoryStore {
 	 * F10): the telemetry with its frames and overlays, the as-run profile and
 	 * values, the grinder, the stop reason — one rule set shared with Android.
 	 * Normalised through the same loader every persisted row goes through,
-	 * prepended (newest first), capped and persisted; the series rides
+	 * inserted by date, capped and persisted; the series rides
 	 * IndexedDB. `null` for a shot with no telemetry.
 	 */
 	recordCaptured(shot: Record<string, unknown>): StoredShot | null {
 		const record = coerceStoredShot(shot);
 		if (!record || record.record.samples.length === 0) return null;
-		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
+		this.insert(record);
 		this.persist();
 		// The series row rides IndexedDB (review #27) — fire-and-forget
 		// with a surface, like the capture store.
@@ -447,8 +467,8 @@ export class HistoryStore {
 	/**
 	 * Insert a shot that arrived whole from elsewhere — a Visualizer pull,
 	 * a backup restore or a Beanconqueror import. The caller has already
-	 * mapped it onto a `StoredShot` and verified de-dup. Prepends
-	 * newest-first and persists.
+	 * mapped it onto a `StoredShot` and verified de-dup. Inserts by date
+	 * and persists.
 	 *
 	 * The telemetry series rides IndexedDB (review #27): `persist()` strips
 	 * it from the localStorage row, so it is written here too, or the curve
@@ -456,7 +476,7 @@ export class HistoryStore {
 	 * chart and 0 samples.
 	 */
 	insertPulled(shot: StoredShot): void {
-		this.shots = [shot, ...this.shots].slice(0, MAX_RECORDS);
+		this.insert(shot);
 		if (shot.record.samples.length > 0) {
 			void putSeries(shot.id, shot.record.samples).catch(seriesSaveFailed);
 		}
@@ -548,7 +568,7 @@ export class HistoryStore {
 			...(imported.recipeName ? { recipeName: imported.recipeName } : {}),
 			...(imported.brewSeries ? { brewSeries: imported.brewSeries } : {})
 		};
-		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
+		this.insert(record);
 		this.persist();
 		void putSeries(record.id, record.record.samples).catch(seriesSaveFailed);
 		return record;
@@ -599,7 +619,7 @@ export class HistoryStore {
 			brewTempTarget: input.brewTempC ?? null,
 			tags: []
 		};
-		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
+		this.insert(record);
 		this.persist();
 		return record;
 	}
@@ -609,14 +629,16 @@ export class HistoryStore {
 	 * which {@link isManualLog} holds may be edited this way — measured
 	 * (machine / guided) rows keep their captured values immutable.
 	 * Inventory re-settling on a dose change is the caller's job (the
-	 * same credit/debit pair bean re-attribution uses). No-ops on an
-	 * unknown id.
+	 * same credit/debit pair bean re-attribution uses). A new date moves
+	 * the row to its place in the list; a future one refuses the patch.
+	 * No-ops on an unknown id.
 	 */
 	updateManualBrew(id: string, patch: ManualBrewPatch): void {
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
 		const shot = this.shots[idx];
 		if (!isManualLog(shot)) return;
+		if (patch.completedAt !== undefined && brewDateError(patch.completedAt, Date.now())) return;
 		// A blank method patch means "no method given" — it never blanks the
 		// row's method (which would turn a manual log into a machine shot).
 		const method = patch.method?.trim() ? patch.method : undefined;
@@ -635,7 +657,8 @@ export class HistoryStore {
 				...(patch.yieldOut !== undefined ? { yieldOut: patch.yieldOut } : {})
 			}
 		};
-		this.shots = this.shots.map((s, i) => (i === idx ? next : s));
+		const edited = this.shots.map((s, i) => (i === idx ? next : s));
+		this.shots = patch.completedAt !== undefined ? newestFirst(edited) : edited;
 		this.persist();
 	}
 
@@ -927,7 +950,8 @@ function loadShots(): StoredShot[] {
 		const migrated = coerceStoredShot(obj);
 		if (migrated) out.push(migrated);
 	}
-	return out;
+	// Rows saved before the list kept its order (a pull or a restore prepended).
+	return newestFirst(out);
 }
 
 /**

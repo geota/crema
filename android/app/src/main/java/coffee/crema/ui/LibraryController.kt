@@ -46,7 +46,10 @@ import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
 import coffee.crema.history.coreShotJson
 import coffee.crema.history.isBrewLog
+import coffee.crema.history.brewDateError
+import coffee.crema.history.historyWith
 import coffee.crema.history.isManualLog
+import coffee.crema.history.newestFirst
 import coffee.crema.persist.ImportLimits
 import coffee.crema.persist.ImportTooLargeException
 import coffee.crema.persist.readBytesCapped
@@ -979,7 +982,7 @@ class LibraryController(
             }
             val existing = uiState().history.map { it.id }.toHashSet()
             val toAdd = shots.filterNot { it.id in existing }
-            val next = toAdd + uiState().history
+            val next = historyWith(toAdd, uiState().history)
             updateUi { it.copy(history = next) }
             visualizer.forgetTombstones(toAdd.map { it.id })
             notify("Imported ${toAdd.size} shot(s)")
@@ -1151,7 +1154,7 @@ class LibraryController(
             updateUi { it.copy(
                 beans = it.beans + newBeans,
                 roasters = it.roasters + newRoasters,
-                history = newShots + it.history,
+                history = historyWith(newShots, it.history),
                 activeBeanId = it.activeBeanId ?: newBeans.firstOrNull()?.id,
             ) }
 
@@ -1275,7 +1278,7 @@ class LibraryController(
             if (fresh.isEmpty()) {
                 st
             } else {
-                st.copy(history = (fresh + st.history).sortedByDescending { it.completedAtMs }.take(HistoryStore.MAX_SHOTS))
+                st.copy(history = historyWith(fresh, st.history))
             }
         }
         val snapshot = uiState().history
@@ -1541,9 +1544,7 @@ class LibraryController(
                 beans = cur.beans.replacingById(merge.updatedBeans) { it.id } + newBeans,
                 roasters = cur.roasters.replacingById(merge.updatedRoasters) { it.id } + newRoasters,
                 activeBeanId = cur.activeBeanId ?: newBeans.firstOrNull()?.id,
-                history = (importedShots + cur.history)
-                    .sortedByDescending { it.completedAtMs }
-                    .take(HistoryStore.MAX_SHOTS),
+                history = historyWith(importedShots, cur.history),
             )
         }
         persistLibrary()
@@ -2084,7 +2085,7 @@ class LibraryController(
             ) }
             appendLog("Shot discarded as aborted (<10 s, <5 g)")
         } else {
-            val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
+            val next = historyWith(listOf(shot), s.history)
             updateUi { it.copy(history = next) }
             scope.launch { historyStore.save(next) }
             // Auto-upload to every armed destination (Visualizer, Decent), one
@@ -2182,7 +2183,7 @@ class LibraryController(
             // machineSerial / Firmware / Model stay null — the #84 record-time
             // stamp belongs to the live-shot path only.
         )
-        val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
+        val next = historyWith(listOf(shot), s.history)
         updateUi { it.copy(history = next) }
         scope.launch { historyStore.save(next) }
         // Burn the dose down from the bag — the whole point of the feature.
@@ -2215,7 +2216,9 @@ class LibraryController(
      * Edit the user-entered facts of a MANUAL brew row (dose / water /
      * yield / temp / time). Measured (machine / guided) rows are left
      * alone. A dose change re-settles the bag through the same
-     * credit/debit pair bean re-attribution uses.
+     * credit/debit pair bean re-attribution uses. A new date moves the row
+     * to its place in the list; a future one refuses the whole edit. Logged
+     * brews are local-only, so nothing goes to Visualizer.
      */
     fun updateManualBrew(
         id: String,
@@ -2224,10 +2227,13 @@ class LibraryController(
         yieldG: Float? = null,
         brewTempC: Float? = null,
         durationMs: Long? = null,
+        completedAtMs: Long? = null,
+        nowMs: Long = System.currentTimeMillis(),
     ) {
         val s = uiState()
         val shot = s.history.firstOrNull { it.id == id } ?: return
         if (!shot.isManualLog) return
+        if (completedAtMs != null && brewDateError(completedAtMs, nowMs) != null) return
         // Re-settle inventory before the row mutates, using the OLD dose —
         // the core's resettleRemaining (credit old, debit new; null = nothing
         // to persist, including an unchanged dose).
@@ -2242,18 +2248,18 @@ class LibraryController(
             }
         }
         updateUi { st ->
-            st.copy(
-                history = st.history.map {
-                    if (it.id != id) it
-                    else it.copy(
-                        doseG = doseG ?: it.doseG,
-                        waterG = waterG ?: it.waterG,
-                        yieldG = yieldG ?: it.yieldG,
-                        brewTempC = brewTempC ?: it.brewTempC,
-                        durationMs = durationMs ?: it.durationMs,
-                    )
-                },
-            )
+            val edited = st.history.map {
+                if (it.id != id) it
+                else it.copy(
+                    doseG = doseG ?: it.doseG,
+                    waterG = waterG ?: it.waterG,
+                    yieldG = yieldG ?: it.yieldG,
+                    brewTempC = brewTempC ?: it.brewTempC,
+                    durationMs = durationMs ?: it.durationMs,
+                    completedAtMs = completedAtMs ?: it.completedAtMs,
+                )
+            }
+            st.copy(history = if (completedAtMs != null) edited.newestFirst() else edited)
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
@@ -2429,7 +2435,7 @@ class LibraryController(
     fun undoDiscardShot() {
         val shot = discardedShot ?: return
         discardedShot = null
-        val next = (listOf(shot) + uiState().history).take(HistoryStore.MAX_SHOTS)
+        val next = historyWith(listOf(shot), uiState().history)
         updateUi { it.copy(
             history = next,
             discardToastMessage = null,
