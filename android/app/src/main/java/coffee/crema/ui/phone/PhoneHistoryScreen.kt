@@ -30,10 +30,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.history.StoredShot
-import coffee.crema.beans.rankBeansForPicker
 import coffee.crema.core.daysOffRoast as coreDaysOffRoast
 import coffee.crema.ui.freshnessColor
-import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.brew.methodIcon
 import coffee.crema.brew.methodLabel
 import coffee.crema.history.beanLabel
@@ -788,8 +786,9 @@ private fun PhoneShotDetail(
                 )
                 if (changeBean) {
                     val ui by vm.ui.collectAsStateWithLifecycle()
-                    ShotBeanSwapDropdown(
-                        ui = ui,
+                    coffee.crema.ui.components.BeanPickerDialog(
+                        beans = ui.beans,
+                        roasters = ui.roasters,
                         currentBeanId = shot.bean?.beanId,
                         onSelect = { vm.setShotBean(shot.id, it); changeBean = false },
                         onDismiss = { changeBean = false },
@@ -1107,68 +1106,6 @@ private fun PhoneShotDetail(
         )
     }
 
-}
-
-/**
- * The Brew strip's swap dropdown, beans only — anchored under the detail's
- * title block for re-attributing a shot (issue #16 round 3). Same visual
- * grammar as PhoneBrewScreen's SwapDropdown (DdRow, avatar, check-circle),
- * plus a "No bean" row to clear the attribution.
- */
-@Composable
-private fun ShotBeanSwapDropdown(
-    ui: coffee.crema.ui.MainUiState,
-    currentBeanId: String?,
-    onSelect: (String?) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val ddWidth = coffee.crema.ui.windowContentDpSize().width - CremaEdge * 2
-    CremaAnchoredPopup(expanded = true, onDismiss = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = 18.dp,
-            modifier = Modifier.width(ddWidth).heightIn(max = 560.dp),
-        ) {
-            Column(Modifier.padding(8.dp).verticalScroll(rememberScrollState())) {
-                Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 6.dp)) {
-                    Eyebrow("Shot bean")
-                }
-                // Current bean leads, then favourites, then store order — the
-                // Brew picker's shared rank, unarchived only.
-                rankBeansForPicker(ui.beans.filter { it.archivedAt == null }, currentBeanId).forEach { b ->
-                    val activeRow = b.id == currentBeanId
-                    val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
-                    DdRow(active = activeRow, onClick = { onSelect(b.id) }) {
-                        RoasterMarkAvatar(name = roaster ?: b.name, sizeDp = 30, cornerDp = 8, fontSize = 13.sp)
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                listOfNotNull(roaster, b.name).joinToString(" \u00b7 "),
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            )
-                            val days = beanDaysOffRoast(b)
-                            Text(
-                                listOfNotNull(
-                                    days?.let { "${it}d off roast" },
-                                    b.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" },
-                                ).joinToString(" \u00b7 ").ifEmpty { "\u2014" },
-                                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
-                                color = if (activeRow) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (activeRow) PhIcon("check-circle", sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
-                    }
-                }
-                HorizontalDivider(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                DdRow(active = currentBeanId == null, onClick = { onSelect(null) }) {
-                    PhIcon("prohibit", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("No bean", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    if (currentBeanId == null) PhIcon("check-circle", sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
-                }
-            }
-        }
-    }
 }
 
 /** The dashed "PLANNED" entry beside WEIGHT / POUR RATE (issue #10). */

@@ -1108,6 +1108,23 @@ pub fn filter_beans(beans_json: String, query_json: String) -> Result<String, Cr
     de1_domain::filter_beans_json(&beans_json, &query_json).map_err(crema_err)
 }
 
+/// The rows of a bean picker (geota/crema#301): which bags it lists and in
+/// what order. `beans_json` is a `Bean[]`, `roasters_json` a `Roaster[]`,
+/// `query_json` a `BeanPickerQuery`; returns a `BeanPickerResult` JSON object.
+/// Mirrors the wasm `beanPicker`; see [`de1_domain::bean_picker`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when any argument can't be deserialised.
+#[uniffi::export]
+pub fn bean_picker(
+    beans_json: String,
+    roasters_json: String,
+    query_json: String,
+) -> Result<String, CremaError> {
+    de1_domain::bean_picker_json(&beans_json, &roasters_json, &query_json).map_err(crema_err)
+}
+
 /// The roaster-directory half of [`search_beans`] — same contract, over
 /// name / city / country / notes / website. Mirrors the wasm `searchRoasters`;
 /// see [`de1_domain::search_roasters`].
@@ -4343,6 +4360,18 @@ mod tests {
         let all = filter_beans(format!("[{FAKE_BEAN}]"), "{}".to_owned()).unwrap();
         assert!(all.contains(r#""ids":["bean:test"]"#), "{all}");
         assert!(filter_beans("nope".to_owned(), "{}".to_owned()).is_err());
+    }
+
+    #[test]
+    fn bean_picker_bridges_the_query_and_result() {
+        let out = bean_picker(
+            format!("[{FAKE_BEAN}]"),
+            "[]".to_owned(),
+            r#"{"currentId":"bean:test"}"#.to_owned(),
+        )
+        .unwrap();
+        assert_eq!(out, r#"{"ids":["bean:test"],"hasArchived":false}"#);
+        assert!(bean_picker("nope".to_owned(), "[]".to_owned(), "{}".to_owned()).is_err());
     }
 
     #[test]
