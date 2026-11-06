@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -47,24 +48,14 @@ import kotlin.math.max
  * MethodMark / MiniBrewChart / BrewSessionChart.
  */
 
-/** The 32dp sunken method tile — the row's sparkline-slot stand-in. */
+/**
+ * A history row's method mark, for a row with no curve to draw: a bare glyph
+ * in a narrow slot, so the name and bean keep the width a chart would take.
+ */
 @Composable
-fun MethodMarkTile(method: String?, modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .size(width = 72.dp, height = 32.dp)
-            .background(
-                MaterialTheme.colorScheme.surfaceContainerLowest,
-                RoundedCornerShape(6.dp),
-            )
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                RoundedCornerShape(6.dp),
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        PhIcon(methodIcon(method), sizeDp = 16, tint = MaterialTheme.colorScheme.primary)
+fun RowMethodMark(method: String?, modifier: Modifier = Modifier) {
+    Box(modifier.width(20.dp), contentAlignment = Alignment.Center) {
+        PhIcon(methodIcon(method), sizeDp = 16, tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
     }
 }
 

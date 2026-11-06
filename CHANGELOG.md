@@ -49,12 +49,20 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   favourites, then the rest oldest first, decided in the core. Web's picker
   used to put the most recently edited bag first, and Android's oldest-first
   order could shift for bags that arrived by sync or import. Android, web.
+||||||| c069336b
+- **Today and 7 days on web History** — the range now offers All time, 30 days,
+  7 days and Today, in both layouts, with Android's labels and day boundaries:
+  Today starts at local midnight, 7 and 30 days are rolling. Web.
 
 ### Fixed
 
 - **Archived bags no longer appear in tablet pickers** — the tablet's Change
   bean dialog and Brew bean picker listed archived bags, unlike every other
   picker. Android.
+||||||| c069336b
+- **A logged brew's row keeps its text** — the method icon took the width of a
+  chart in History, which cut off the name and bean. It's now a small bare mark.
+  Android and web.
 - **Missing web icons are back** — Stop, the chart's enlarge button, the bag
   photo's edit mark, and the icons on Settings, shot detail and bean filter
   buttons were drawn blank. A test now fails on a name the icon map doesn't
