@@ -74,4 +74,56 @@ class BrewDateTest {
         val moved = withLocalTime(at(2026, 3, 8, 12, 0), 2, 30, zone)
         assertEquals(at(2026, 3, 8, 3, 30), moved)
     }
+
+    @Test fun theCheckIsAtTheCutNotAtTheEndOfAListOverTheCap() {
+        val rows = List(350) { i -> shot("r$i", 1_000_000L - i * 10) }
+        // Between ranks 320 and 321: newer than the last row, but cut at 300.
+        assertFalse(fitsHistory(rows, 1_000_000L - 3_195))
+        assertTrue(fitsHistory(rows, 1_000_000L - 2_990))
+    }
+
+    @Test fun aRowJustMadeStaysWhenTheClockIsBehindAFullHistory() {
+        val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i) }
+        val made = shot("made", 10)
+        val next = historyWith(listOf(made), full, keepId = made.id)
+        assertEquals(HistoryStore.MAX_SHOTS, next.size)
+        assertEquals("made", next.last().id)
+        assertFalse(next.any { it.id == full.last().id }, "the oldest other row goes")
+    }
+
+    @Test fun anImportedRowOlderThanAFullHistoryIsTheOneThatGoes() {
+        val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i) }
+        val merged = mergeHistory(listOf(shot("old", 10)), full)
+        assertEquals(full, merged.rows)
+        assertEquals(emptyList(), merged.kept)
+        assertEquals(1, merged.dropped)
+    }
+
+    @Test fun aMergeReportsTheRowsKeptAndAnyRowsDropped() {
+        val nearlyFull = List(HistoryStore.MAX_SHOTS - 1) { i -> shot("r$i", 1_000_000L - i) }
+        val merged = mergeHistory(listOf(shot("new", 2_000_000), shot("next", 2_000_001)), nearlyFull)
+        assertEquals(listOf("next", "new"), merged.kept.map { it.id })
+        assertEquals(1, merged.dropped, "an existing row went")
+        assertEquals(HistoryStore.MAX_SHOTS, merged.rows.size)
+    }
+
+    @Test fun nothingNewLeavesAListOverTheCapAsItIs() {
+        val rows = List(350) { i -> shot("r$i", 1_000_000L - i) }
+        assertEquals(350, mergeHistory(emptyList(), rows).rows.size)
+        assertEquals(0, mergeHistory(emptyList(), rows).dropped)
+    }
+
+    @Test fun theSameDateOrTimeKeepsTheValueExactly() {
+        val at = at(2026, 11, 6, 7, 5) + 42_123
+        assertEquals(at, withLocalDate(at, LocalDate.of(2026, 11, 6), zone))
+        assertEquals(at, withLocalTime(at, 7, 5, zone))
+    }
+
+    @Test fun anEditInTheRepeatedHourStaysOnTheSamePass() {
+        val first = LocalDateTime.of(2026, 11, 1, 1, 30).atZone(zone).withEarlierOffsetAtOverlap().toInstant().toEpochMilli()
+        val second = first + 3_600_000
+        assertEquals(second, withLocalDate(second, LocalDate.of(2026, 11, 1), zone), "OK on the same date")
+        assertEquals(second + 600_000, withLocalTime(second, 1, 40, zone))
+        assertEquals(first + 600_000, withLocalTime(first, 1, 40, zone))
+    }
 }

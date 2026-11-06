@@ -224,9 +224,10 @@
 	/** Why the date just entered was refused; the field keeps it to correct. */
 	let dateError = $state<string | null>(null);
 	function commitDate(value: string): void {
-		const at = fromLocalInput(value);
+		const at = fromLocalInput(value, shot.completedAt);
 		dateError = brewDateError(at, Date.now());
-		if (!dateError) onManualBrewEdit?.(shotId, { completedAt: at });
+		if (dateError || value === toLocalInput(shot.completedAt)) return;
+		onManualBrewEdit?.(shotId, { completedAt: at });
 	}
 
 	/** "0:27" / "3:05" — one duration format for shots and pourovers. */

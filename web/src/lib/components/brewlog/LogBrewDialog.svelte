@@ -39,6 +39,7 @@
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { promptBagEmpty } from '#lib/bean/bag-empty-prompt.js';
 	import { getHistoryStore } from '#lib/history/store.svelte.js';
+	import { msToNextMinute } from '#lib/history/range.js';
 	import { snapshotFromBean, type StoredShot } from '#lib/history/model.js';
 	import {
 		brewDateError,
@@ -118,8 +119,22 @@
 	let temp = $state<number | null>(null);
 	let timeStr = $state('');
 	let whenLocal = $state(toLocalInput(seed?.completedAt ?? Date.now()));
-	/** Left alone, the brew is dated when it's saved, as on Android. */
-	let whenEdited = false;
+	/**
+	 * Left alone, the field follows the clock and the brew is dated when it's
+	 * saved, as on Android: what it shows is what's saved, to the minute.
+	 */
+	let whenEdited = $state(false);
+	let nowMs = $state(Date.now());
+	$effect(() => {
+		let timer: ReturnType<typeof setTimeout>;
+		const tick = (): void => {
+			nowMs = Date.now();
+			if (!whenEdited && seed?.completedAt == null) whenLocal = toLocalInput(nowMs);
+			timer = setTimeout(tick, msToNextMinute(nowMs));
+		};
+		timer = setTimeout(tick, msToNextMinute(Date.now()));
+		return () => clearTimeout(timer);
+	});
 	let rating = $state(seed?.rating ?? 0);
 	let notes = $state(seed?.notes ?? '');
 	let nextPlan = $state('');
@@ -220,9 +235,12 @@
 		finishOffer();
 	}
 
-	/** Why `when` can't date this brew, or `null`. A blank field means now. */
+	/**
+	 * Why `when` can't date this brew, or `null`. A blank field means now, and so
+	 * does an untouched one: a brew made now is kept whatever the clock says.
+	 */
 	function dateProblem(when: string): string | null {
-		if (!when) return null;
+		if (!when || (!whenEdited && seed?.completedAt == null)) return null;
 		const at = fromLocalInput(when);
 		return (
 			brewDateError(at, Date.now()) ??
@@ -481,7 +499,7 @@
 					class="bl-input"
 					type="datetime-local"
 					bind:value={whenLocal}
-					max={toLocalInput(Date.now())}
+					max={toLocalInput(nowMs)}
 					aria-invalid={whenError != null}
 					oninput={() => (whenEdited = true)}
 				/>

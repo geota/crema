@@ -1955,6 +1955,8 @@ export class CremaApp {
 	async importShotFile(file: File): Promise<{
 		record: ReturnType<ReturnType<typeof getHistoryStore>['addImported']>;
 		imported: number;
+		/** Rows of any kind the 300-row cap dropped. */
+		dropped: number;
 		error: string | null;
 	}> {
 		let content: string;
@@ -1964,6 +1966,7 @@ export class CremaApp {
 			return {
 				record: null,
 				imported: 0,
+				dropped: 0,
 				error: `Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`
 			};
 		}
@@ -1975,17 +1978,24 @@ export class CremaApp {
 				return {
 					record: null,
 					imported: 0,
+					dropped: 0,
 					error: `Could not import ${file.name}: ${e instanceof Error ? e.message : String(e)}`
 				};
 			}
 			const history = getHistoryStore();
 			const fresh = shots.filter((s) => !history.get(s.id));
-			// The export is newest first and each insert prepends: oldest first
-			// leaves the newest on top.
-			for (const shot of [...fresh].reverse()) history.insertPulled(shot);
-			return fresh.length > 0
-				? { record: fresh[0], imported: fresh.length, error: null }
-				: { record: null, imported: 0, error: `${file.name} had no shots that aren't already here.` };
+			if (fresh.length === 0) {
+				return { record: null, imported: 0, dropped: 0, error: `${file.name} had no shots that aren't already here.` };
+			}
+			const { kept, dropped } = history.insertMany(fresh);
+			return kept.length > 0
+				? { record: kept[0], imported: kept.length, dropped, error: null }
+				: {
+						record: null,
+						imported: 0,
+						dropped,
+						error: `${file.name} is older than the newest ${history.capacity} brews History keeps.`
+					};
 		}
 		const isV2Json = file.name.toLowerCase().endsWith('.json');
 		try {
@@ -2000,19 +2010,29 @@ export class CremaApp {
 			// trip reconstructs the same `StoredShot`. Legacy `.shot`
 			// imports skip this — TCL files predate the escape valve.
 			const extras = isV2Json ? extractCremaExtras(content) ?? undefined : undefined;
+			if (!getHistoryStore().fitsHistory(imported.completedAt)) {
+				return {
+					record: null,
+					imported: 0,
+					dropped: 0,
+					error: `${file.name} is older than the newest ${getHistoryStore().capacity} brews History keeps.`
+				};
+			}
 			const record = getHistoryStore().addImported(imported, extras);
 			if (!record) {
 				return {
 					record: null,
 					imported: 0,
+					dropped: 0,
 					error: `${file.name} parsed cleanly but had no telemetry samples.`
 				};
 			}
-			return { record, imported: 1, error: null };
+			return { record, imported: 1, dropped: 0, error: null };
 		} catch (e) {
 			return {
 				record: null,
 				imported: 0,
+				dropped: 0,
 				error: `Could not import ${file.name}: ${e instanceof Error ? e.message : String(e)}`
 			};
 		}

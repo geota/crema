@@ -6,6 +6,8 @@
  * last brew.
  */
 
+const HOUR_MS = 60 * 60 * 1000;
+
 export const BREW_DATE_INVALID = 'Pick a date.';
 export const BREW_DATE_FUTURE = 'A brew can’t be dated in the future.';
 
@@ -21,15 +23,48 @@ export function brewDateTooOld(cap: number): string {
 }
 
 /**
- * Whether a new row dated `at` survives the cap. A full history drops its
- * oldest row, so a brew older than all of them would be gone as it saved.
+ * Whether a new row dated `at` survives the cap, given `live` rows newest
+ * first. Only the newest `cap` stay, and a new row leads its ties, so it has to
+ * reach the row at the cut. A list can be over the cap, so that isn't the last.
  */
 export function fitsHistory(
-	shots: readonly { completedAt: number }[],
+	live: readonly { completedAt: number }[],
 	at: number,
 	cap: number
 ): boolean {
-	return shots.length < cap || at >= (shots.at(-1)?.completedAt ?? at);
+	const cut = live[cap - 1];
+	return cut == null || at >= cut.completedAt;
+}
+
+/**
+ * `shots`, newest first, cut to `cap` live rows. Tombstones don't count and
+ * always stay: they carry a remote delete that hasn't gone out yet. `keepId`, a
+ * row just made here, stays whatever its date, for a device whose clock is
+ * behind its history: the oldest other row goes instead.
+ */
+export function cappedHistory<T extends { id: string; deletedAt?: unknown }>(
+	shots: readonly T[],
+	cap: number,
+	keepId?: string
+): T[] {
+	const room = keepId == null ? cap : cap - 1;
+	let live = 0;
+	return shots.filter((s) => s.deletedAt != null || s.id === keepId || ++live <= room);
+}
+
+/** How the cap ended a restore or an import. */
+export interface HistoryInsert<T> {
+	/** The added rows still in the history, newest first. */
+	kept: T[];
+	/** Rows of any kind the cap dropped, existing ones included. */
+	dropped: number;
+}
+
+/** What to say when the cap dropped rows, or nothing when it didn't. */
+export function historyDroppedNotice(dropped: number, cap: number): string {
+	return dropped > 0
+		? ` History keeps the newest ${cap}, so ${dropped} older shot${dropped === 1 ? ' was' : 's were'} dropped.`
+		: '';
 }
 
 /** Newest first; rows with the same date keep their order, so a new row leads. */
@@ -44,7 +79,16 @@ export function toLocalInput(ms: number): string {
 	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** A `datetime-local` value as epoch ms; `NaN` for a blank or unreadable one. */
-export function fromLocalInput(value: string): number {
-	return new Date(value).getTime();
+/**
+ * A `datetime-local` value as epoch ms; `NaN` for a blank or unreadable one.
+ * In the hour an autumn clock change repeats, the browser reads the first pass;
+ * with `near`, the value's old date, an edit stays on the pass it was on.
+ */
+export function fromLocalInput(value: string, near?: number): number {
+	const first = new Date(value).getTime();
+	const second = first + HOUR_MS;
+	const repeated = toLocalInput(second) === value;
+	const samePass =
+		near != null && new Date(near).getTimezoneOffset() === new Date(second).getTimezoneOffset();
+	return repeated && samePass ? second : first;
 }

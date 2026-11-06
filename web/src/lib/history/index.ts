@@ -35,6 +35,7 @@ export {
 	brewDateTooOld,
 	fitsHistory,
 	fromLocalInput,
+	historyDroppedNotice,
 	newestFirst,
 	toLocalInput
 } from './brew-date';

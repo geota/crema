@@ -6,7 +6,10 @@ import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
 import coffee.crema.ui.brewlog.BrewLogOwner
 import kotlinx.coroutines.runBlocking
+import coffee.crema.visualizer.wireShotJson
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -121,5 +124,66 @@ class ManualBrewDateVmTest {
         vm.updateManualBrew("machine", completedAtMs = now - hour)
         assertEquals(now, history(vm).single().completedAtMs)
         assertNull(history(vm).single().brewMethod)
+    }
+
+    /** A store file already holding [rows], as a VM built next would load it. */
+    private fun stored(rows: List<StoredShot>) = runBlocking { HistoryStore(VmHarness.app(), coreJson).save(rows) }
+
+    private fun machine(id: String, at: Long) = StoredShot(id = id, completedAtMs = at, durationMs = 30_000)
+
+    /** A bundle with the header and [shots], the way `backupBundleJson` emits them. */
+    private fun bundle(vararg shots: StoredShot): String {
+        fun line(body: JsonObject, kind: String) =
+            Json.encodeToString(JsonObject.serializer(), JsonObject(body + ("kind" to JsonPrimitive(kind))))
+        return (listOf(line(JsonObject(emptyMap()), "crema-backup/v1")) + shots.map { line(wireShotJson(it, forBackup = true), "shot") })
+            .joinToString("\n")
+    }
+
+    private fun restore(vm: MainViewModel, text: String): String {
+        val before = VmHarness.ownState(vm).userMessages.size
+        vm.restoreBackupFromText(text, MainViewModel.RestoreMode.MERGE)
+        VmHarness.idleUntil("the restore reported") { VmHarness.ownState(vm).userMessages.size > before }
+        return VmHarness.ownState(vm).userMessages.last()
+    }
+
+    @Test
+    fun `a date past the cut of a long stored list is refused, not lost`() {
+        stored(List(350) { i -> machine("r$i", now - i * hour) })
+        val vm = vm()
+        vm.openLogBrew(BrewLogOwner.HISTORY)
+        vm.updateLogBrew { it.copy(method = "pourover", dose = 15.0, completedAtMs = now - 320 * hour - hour / 2) }
+        assertFalse(vm.saveLogBrew(now), "older than rank 300, newer than the last row")
+        assertEquals(350, history(vm).size)
+    }
+
+    @Test
+    fun `a brew made now stays when the clock is behind a full history`() {
+        stored(List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now + (1_000 - i) * hour) })
+        val vm = vm()
+        val made = log(vm, at = null)
+        assertEquals(now, made.completedAtMs)
+        assertEquals(HistoryStore.MAX_SHOTS, history(vm).size)
+        assertEquals(made.id, history(vm).last().id)
+        assertNull(history(vm).firstOrNull { it.id == "r${HistoryStore.MAX_SHOTS - 1}" }, "the oldest other row goes")
+    }
+
+    @Test
+    fun `a restore with nothing new leaves a long stored list alone`() {
+        val rows = List(350) { i -> machine("r$i", now - i * hour) }
+        stored(rows)
+        val vm = vm()
+        val told = restore(vm, bundle(rows.first()))
+        assertTrue("0 shot(s)" in told, told)
+        assertEquals(350, history(vm).size)
+    }
+
+    @Test
+    fun `a restore counts the shots it kept and says what the cap dropped`() {
+        stored(List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now - i * hour) })
+        val vm = vm()
+        val told = restore(vm, bundle(machine("old", now - 1_000 * hour)))
+        assertTrue("0 shot(s)" in told, told)
+        assertTrue("1 older shot was dropped" in told, told)
+        assertEquals(HistoryStore.MAX_SHOTS, history(vm).size)
     }
 }

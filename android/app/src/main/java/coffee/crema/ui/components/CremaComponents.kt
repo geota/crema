@@ -1598,8 +1598,10 @@ fun CremaDateTimeField(
             maxDate = LocalDate.now().toString(),
             onPick = { iso ->
                 val date = runCatching { LocalDate.parse(iso) }.getOrNull()
+                val base = valueMs ?: System.currentTimeMillis()
                 when {
-                    date != null -> onValueChange(withLocalDate(valueMs ?: System.currentTimeMillis(), date))
+                    // OK on the date already showing changes nothing.
+                    date != null -> withLocalDate(base, date).takeIf { it != base }?.let(onValueChange)
                     clearable -> onValueChange(null)
                 }
             },
@@ -1624,7 +1626,8 @@ fun CremaDateTimeField(
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = { pickTime = false }) { Text("Cancel") }
                         TextButton(onClick = {
-                            onValueChange(withLocalTime(base, state.hour, state.minute))
+                            // OK on the time already showing changes nothing.
+                            withLocalTime(base, state.hour, state.minute).takeIf { it != base }?.let(onValueChange)
                             pickTime = false
                         }) { Text("OK") }
                     }

@@ -73,6 +73,7 @@
 		recentNames,
 		COFFEE_FILTER_PREFIX,
 		liveShot,
+		historyDroppedNotice,
 		selectedShot,
 		shotStamp,
 		filterScopeKey,
@@ -262,11 +263,13 @@
 		importing = true;
 		importBanner = null;
 		let imported = 0;
+		let dropped = 0;
 		const errors: string[] = [];
 		for (const file of files) {
-			const { record, imported: count, error } = await app.importShotFile(file);
+			const { record, imported: count, dropped: cut, error } = await app.importShotFile(file);
 			if (record) {
 				imported += count;
+				dropped += cut;
 			} else if (error) {
 				errors.push(error);
 			}
@@ -275,12 +278,12 @@
 		if (imported > 0 && errors.length === 0) {
 			importBanner = {
 				kind: 'success',
-				message: `Imported ${imported} shot${imported === 1 ? '' : 's'}.`
+				message: `Imported ${imported} shot${imported === 1 ? '' : 's'}.${historyDroppedNotice(dropped, store.capacity)}`
 			};
 		} else if (imported > 0) {
 			importBanner = {
 				kind: 'success',
-				message: `Imported ${imported} of ${imported + errors.length}. ${errors[0]}`
+				message: `Imported ${imported} of ${imported + errors.length}. ${errors[0]}${historyDroppedNotice(dropped, store.capacity)}`
 			};
 		} else {
 			importBanner = {

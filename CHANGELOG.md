@@ -67,7 +67,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   restored or logged minutes ago. It could then seed the next log as the last
   brew, count among a bag's latest doses, and push out newer rows at the 300
   limit. Rows now go in by date, and an out-of-order history is put right when
-  it loads. Tablet, phone and web.
+  it loads. A shot or brew made on the device always stays, even with its clock
+  behind the history. Restore and import report the shots they kept and say
+  when older ones were dropped. On the web, the 300 counts visible shots only,
+  and a shot with no date stays at the end. Tablet, phone and web.
 - **Web: logged-brew fields fit at phone width** — in Log a brew, When takes a
   full row so the time can be read, and the steppers stay inside their cards.
   The fields stack below 380 px. A logged brew's detail uses two columns, so a

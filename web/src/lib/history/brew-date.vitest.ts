@@ -147,6 +147,165 @@ describe('a backdated brew', () => {
 		expect(fitsHistory(rows, 2, 2)).toBe(true);
 		expect(fitsHistory(rows, 1, 2)).toBe(false);
 	});
+
+	it('is checked at the cut, not at the end of a list over the cap', () => {
+		const rows = Array.from({ length: 350 }, (_, i) => ({ completedAt: 1_000 - i }));
+		// Between ranks 320 and 321: newer than the last row, but cut at 300.
+		expect(fitsHistory(rows, 1_000 - 320 + 0.5, 300)).toBe(false);
+		expect(fitsHistory(rows, 1_000 - 299, 300)).toBe(true);
+	});
+});
+
+describe('a row just made on this device', () => {
+	const later = NOW + 1_000 * HOUR;
+	const fullAheadOfTheClock = () => {
+		const store = new HistoryStore();
+		for (let i = 0; i < 300; i++) store.addManualBrew(brew(later - i * HOUR));
+		return store;
+	};
+
+	it('stays when the clock is behind a full history, and the oldest other row goes', () => {
+		const store = fullAheadOfTheClock();
+		const oldest = store.all.at(-1)!;
+		const made = store.addManualBrew(brew(NOW));
+		expect(store.get(made.id)).toBeDefined();
+		expect(store.get(oldest.id)).toBeUndefined();
+		expect(store.all).toHaveLength(300);
+	});
+
+	it('stays when a machine shot is captured behind a full history', () => {
+		const store = fullAheadOfTheClock();
+		const oldest = store.all.at(-1)!;
+		const captured = {
+			...structuredClone(store.all[0]),
+			id: 'captured',
+			completedAt: NOW,
+			brewMethod: null,
+			record: { duration: 30_000, samples: [{ elapsedMs: 0 }] }
+		};
+		const record = store.recordCaptured(captured as unknown as Record<string, unknown>);
+		expect(record?.id).toBe('captured');
+		expect(store.get('captured')).toBeDefined();
+		expect(store.get(oldest.id)).toBeUndefined();
+	});
+});
+
+describe('the cap counts live rows', () => {
+	const withTombstones = () => {
+		const store = new HistoryStore();
+		for (let i = 0; i < 300; i++) store.addManualBrew(brew(NOW - i * HOUR));
+		for (const s of store.all.slice(0, 10)) {
+			store.bindVisualizerId(s.id, `remote-${s.id}`);
+			store.delete(s.id);
+		}
+		return store;
+	};
+
+	it('leaves room for a brew when tombstones fill the list', () => {
+		const store = withTombstones();
+		expect(store.all).toHaveLength(290);
+		expect(store.fitsHistory(NOW - 1_000 * HOUR)).toBe(true);
+		const old = store.addManualBrew(brew(NOW - 1_000 * HOUR));
+		expect(store.get(old.id)).toBeDefined();
+		expect(store.all).toHaveLength(291);
+	});
+
+	it('keeps tombstones, whose remote delete is still to go out', () => {
+		const store = withTombstones();
+		for (let i = 0; i < 20; i++) store.addManualBrew(brew(NOW + (i + 1) * 60_000));
+		expect(store.all).toHaveLength(300);
+		expect(store.rawAll).toHaveLength(310);
+	});
+});
+
+describe('inserting a batch', () => {
+	const template = (() => {
+		const row = new HistoryStore().addManualBrew(brew(NOW));
+		localStorage.clear();
+		return row;
+	})();
+	const shot = (id: string, completedAt: number): StoredShot => ({ ...template, id, completedAt });
+	const nearlyFull = () => {
+		const store = new HistoryStore();
+		for (let i = 0; i < 299; i++) store.addManualBrew(brew(NOW - i * HOUR));
+		return store;
+	};
+
+	it('reports the rows kept and the rows the cap dropped', () => {
+		const store = nearlyFull();
+		const { kept, dropped } = store.insertMany([
+			shot('new', NOW + HOUR),
+			shot('old', NOW - 1_000 * HOUR),
+			shot('older', NOW - 2_000 * HOUR)
+		]);
+		expect(kept.map((s) => s.id)).toEqual(['new']);
+		expect(dropped).toBe(2);
+		expect(store.all).toHaveLength(300);
+	});
+
+	it('doesn’t count a row a later row of the batch cut', () => {
+		const store = nearlyFull();
+		const { kept, dropped } = store.insertMany([shot('a', NOW - 1_000 * HOUR), shot('b', NOW + HOUR)]);
+		expect(kept.map((s) => s.id)).toEqual(['b']);
+		expect(dropped).toBe(1);
+	});
+
+	it('counts an existing row the batch pushed out', () => {
+		const store = nearlyFull();
+		const oldest = store.all.at(-1)!;
+		const { kept, dropped } = store.insertMany([shot('a', NOW + HOUR), shot('b', NOW + 2 * HOUR)]);
+		expect(kept).toHaveLength(2);
+		expect(dropped).toBe(1);
+		expect(store.get(oldest.id)).toBeUndefined();
+	});
+
+	it('leaves a list over the cap alone when nothing is new', () => {
+		const rows = Array.from({ length: 350 }, (_, i) => shot(`r${i}`, NOW - i * HOUR));
+		localStorage.setItem('crema.history.v2', JSON.stringify(rows));
+		const store = new HistoryStore();
+		expect(store.insertMany([rows[0], rows[1]])).toEqual({ kept: [], dropped: 0 });
+		expect(store.all).toHaveLength(350);
+	});
+});
+
+describe('a row with no date', () => {
+	const stored = () => JSON.parse(localStorage.getItem('crema.history.v2') as string);
+
+	it('stays at the tail and keeps what was stored', () => {
+		const first = new HistoryStore();
+		first.addManualBrew(brew(NOW));
+		const raw = stored();
+		const undated = { ...raw[0], id: 'undated', completedAt: 0 };
+		localStorage.setItem('crema.history.v2', JSON.stringify([undated, ...raw]));
+		const store = new HistoryStore();
+		expect(store.all.at(-1)?.id).toBe('undated');
+		store.addManualBrew(brew(NOW - HOUR));
+		expect(stored().find((s: StoredShot) => s.id === 'undated').completedAt).toBe(0);
+		expect(new HistoryStore().all.at(-1)?.id).toBe('undated');
+	});
+
+	it('doesn’t seed the next log', () => {
+		const first = new HistoryStore();
+		first.addManualBrew(brew(NOW, 15));
+		const raw = stored();
+		const undated = { ...raw[0], id: 'undated', completedAt: 0 };
+		undated.metadata = { ...undated.metadata, dose: 30 };
+		localStorage.setItem('crema.history.v2', JSON.stringify([undated, ...raw]));
+		expect(new HistoryStore().all[0].metadata.dose).toBe(15);
+	});
+});
+
+// Only a zone with a clock change has such an hour: run under
+// TZ=America/New_York to exercise it. UTC skips it.
+const repeatedFirst = new Date(2026, 10, 1, 1, 30).getTime();
+const repeats = toLocalInput(repeatedFirst) === toLocalInput(repeatedFirst + HOUR);
+describe.runIf(repeats)('an edit in the hour a clock change repeats', () => {
+	it('stays on the pass the brew was on', () => {
+		const later = repeatedFirst + 10 * 60_000;
+		expect(fromLocalInput(toLocalInput(later), repeatedFirst + HOUR)).toBe(later + HOUR);
+		expect(fromLocalInput(toLocalInput(later), repeatedFirst)).toBe(later);
+		expect(fromLocalInput(toLocalInput(later))).toBe(later);
+	});
 });
 
 describe('changing a saved date', () => {

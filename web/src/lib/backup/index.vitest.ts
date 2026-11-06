@@ -113,6 +113,20 @@ describe('backup round-trip (review #07)', () => {
 		expect(getBeanStore().beans.map((b) => b.id).sort()).toEqual(['bean-1', 'bean-2']);
 	});
 
+	it('reports the shots it kept and the ones the cap dropped', () => {
+		seed();
+		const built = buildBackupJsonl()!;
+		resetAll();
+		const history = getHistoryStore();
+		for (let i = 0; i < 300; i++) {
+			history.insertPulled({ ...makeShot(`full-${i}`), completedAt: 1_700_000_100_000 + i });
+		}
+		const summary = restoreBackup(built.jsonl, 'merge');
+		// The backup's shot is older than everything a full history keeps.
+		expect(summary).toMatchObject({ shots: 0, droppedShots: 1 });
+		expect(history.all).toHaveLength(300);
+	});
+
 	it('merge skips records whose ids are already present (idempotent re-restore)', () => {
 		seed();
 		const built = buildBackupJsonl()!;

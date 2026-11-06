@@ -24,7 +24,13 @@ import type { TelemetrySample } from '#lib/state/index.js';
 import { toWire } from './telemetry-wire';
 import { readJson, writeJsonChecked } from '#lib/utils/storage.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
-import { brewDateError, fitsHistory, newestFirst } from './brew-date';
+import {
+	brewDateError,
+	cappedHistory,
+	fitsHistory,
+	newestFirst,
+	type HistoryInsert
+} from './brew-date';
 import {
 	clearAllSeries,
 	deleteSeries,
@@ -172,7 +178,15 @@ export class HistoryStore {
 	 * was dated. A row older than a full history is the one that goes.
 	 */
 	private insert(shot: StoredShot): void {
-		this.shots = newestFirst([shot, ...this.shots]).slice(0, MAX_RECORDS);
+		this.shots = cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS);
+	}
+
+	/**
+	 * Add a row just made on this device. It stays whatever its date, so a clock
+	 * behind the history can't lose it: the oldest other row goes instead.
+	 */
+	private insertMade(shot: StoredShot): void {
+		this.shots = cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS, shot.id);
 	}
 
 	/** The most rows the history keeps. */
@@ -182,7 +196,7 @@ export class HistoryStore {
 
 	/** Whether a new brew dated `at` would stay in the history once added. */
 	fitsHistory(at: number): boolean {
-		return fitsHistory(this.shots, at, MAX_RECORDS);
+		return fitsHistory(this.all, at, MAX_RECORDS);
 	}
 
 	/** Wipe all recorded shots — for a "replace from backup" restore. */
@@ -203,7 +217,7 @@ export class HistoryStore {
 	recordCaptured(shot: Record<string, unknown>): StoredShot | null {
 		const record = coerceStoredShot(shot);
 		if (!record || record.record.samples.length === 0) return null;
-		this.insert(record);
+		this.insertMade(record);
 		this.persist();
 		// The series row rides IndexedDB (review #27) — fire-and-forget
 		// with a surface, like the capture store.
@@ -477,10 +491,33 @@ export class HistoryStore {
 	 */
 	insertPulled(shot: StoredShot): void {
 		this.insert(shot);
-		if (shot.record.samples.length > 0) {
+		if (shot.record.samples.length > 0 && this.get(shot.id)) {
 			void putSeries(shot.id, shot.record.samples).catch(seriesSaveFailed);
 		}
 		this.persist();
+	}
+
+	/**
+	 * Insert many rows at once — a restore or a file of shots — and say what the
+	 * cap left: an earlier row of the batch can be cut by a later one, so only
+	 * the end result counts. Rows already here, or repeated, are skipped. With
+	 * nothing new this changes nothing, so a list over the cap stays as it is.
+	 */
+	insertMany(shots: readonly StoredShot[]): HistoryInsert<StoredShot> {
+		const ids = new Set(this.shots.map((s) => s.id));
+		const fresh = shots.filter((s) => !ids.has(s.id) && !!ids.add(s.id));
+		if (fresh.length === 0) return { kept: [], dropped: 0 };
+		const before = this.shots.length + fresh.length;
+		this.shots = cappedHistory(newestFirst([...fresh, ...this.shots]), MAX_RECORDS);
+		const freshIds = new Set(fresh.map((s) => s.id));
+		const kept = this.shots.filter((s) => freshIds.has(s.id));
+		for (const shot of kept) {
+			if (shot.record.samples.length > 0) {
+				void putSeries(shot.id, shot.record.samples).catch(seriesSaveFailed);
+			}
+		}
+		this.persist();
+		return { kept, dropped: before - this.shots.length };
 	}
 
 	/**
@@ -619,7 +656,7 @@ export class HistoryStore {
 			brewTempTarget: input.brewTempC ?? null,
 			tags: []
 		};
-		this.insert(record);
+		this.insertMade(record);
 		this.persist();
 		return record;
 	}
@@ -1068,12 +1105,13 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 	return {
 		formatVersion: STORED_SHOT_FORMAT_VERSION,
 		id: obj.id as string,
-		// GEN4: 0 / non-finite / negative completedAt is a corrupt record that
-		// would render as a 1970 epoch row; fall back to "now" (re-save heals it).
+		// A zero or missing date stays what it is, at the tail as on Android:
+		// stamping it now would move the row to the head on every load, where it
+		// would seed the next brew as the last one.
 		completedAt:
-			typeof obj.completedAt === 'number' && Number.isFinite(obj.completedAt) && obj.completedAt > 0
+			typeof obj.completedAt === 'number' && Number.isFinite(obj.completedAt)
 				? (obj.completedAt as number)
-				: Date.now(),
+				: 0,
 		profileName: typeof obj.profileName === 'string' ? (obj.profileName as string) : null,
 		profile: (obj.profile as unknown) ?? null,
 		stopReason: (obj.stopReason as unknown) ?? null,

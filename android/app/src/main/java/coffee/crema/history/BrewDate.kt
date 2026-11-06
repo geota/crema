@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 
 /*
  * When a logged brew may be dated, and the order the history keeps (#300). The
@@ -27,11 +28,15 @@ fun brewDateTooOld(cap: Int = HistoryStore.MAX_SHOTS): String =
     "History keeps the newest $cap brews, and this date is older than all of them."
 
 /**
- * Whether a new row dated [atMs] survives the cap. A full history drops its
- * oldest row, so a brew older than all of them would be gone as it saved.
+ * Whether a new row dated [atMs] survives the cap, given [history] newest first.
+ * Only the newest [cap] stay, and a new row leads its ties, so it has to reach
+ * the row at the cut. A stored list can be over the cap, so that isn't the last.
  */
 fun fitsHistory(history: List<StoredShot>, atMs: Long, cap: Int = HistoryStore.MAX_SHOTS): Boolean =
-    history.size < cap || atMs >= (history.lastOrNull()?.completedAtMs ?: atMs)
+    history.getOrNull(cap - 1)?.let { atMs >= it.completedAtMs } ?: true
+
+/** What the cap made of an insert: the new list, the added rows still in it, and rows of any kind dropped. */
+data class HistoryMerge(val rows: List<StoredShot>, val kept: List<StoredShot>, val dropped: Int)
 
 /** Newest first; rows with the same date keep their order, so a new row leads. */
 fun List<StoredShot>.newestFirst(): List<StoredShot> = sortedByDescending { it.completedAtMs }
@@ -39,10 +44,27 @@ fun List<StoredShot>.newestFirst(): List<StoredShot> = sortedByDescending { it.c
 /**
  * [history] with [added] in place by date. The list stays newest first, so the
  * cap drops the oldest rows and the core's last brew is the newest one, however
- * a row was dated. A row older than a full history is the one that goes.
+ * a row was dated. A row older than a full history is the one that goes, except
+ * [keepId], a row just made here: it stays whatever its date, for a device whose
+ * clock is behind its history, and the oldest other row goes instead. With
+ * nothing to add this changes nothing, so a list over the cap stays as it is.
  */
-fun historyWith(added: List<StoredShot>, history: List<StoredShot>): List<StoredShot> =
-    (added + history).newestFirst().take(HistoryStore.MAX_SHOTS)
+fun mergeHistory(added: List<StoredShot>, history: List<StoredShot>, keepId: String? = null): HistoryMerge {
+    if (added.isEmpty()) return HistoryMerge(history, emptyList(), 0)
+    val room = if (keepId == null) HistoryStore.MAX_SHOTS else HistoryStore.MAX_SHOTS - 1
+    var others = 0
+    val rows = (added + history).newestFirst().filter { it.id == keepId || ++others <= room }
+    val addedIds = added.mapTo(HashSet()) { it.id }
+    return HistoryMerge(rows, rows.filter { it.id in addedIds }, added.size + history.size - rows.size)
+}
+
+/** The list [mergeHistory] leaves. */
+fun historyWith(added: List<StoredShot>, history: List<StoredShot>, keepId: String? = null): List<StoredShot> =
+    mergeHistory(added, history, keepId).rows
+
+/** What to say when the cap dropped rows, or nothing when it didn't. */
+fun historyDroppedNotice(dropped: Int, cap: Int = HistoryStore.MAX_SHOTS): String =
+    if (dropped > 0) ". History keeps the newest $cap, so $dropped older shot${if (dropped == 1) " was" else "s were"} dropped" else ""
 
 /** [atMs]'s local date. */
 fun localDateOf(atMs: Long, zone: ZoneId = ZoneId.systemDefault()): LocalDate =
@@ -52,10 +74,22 @@ fun localDateOf(atMs: Long, zone: ZoneId = ZoneId.systemDefault()): LocalDate =
 fun localTimeOf(atMs: Long, zone: ZoneId = ZoneId.systemDefault()): LocalTime =
     Instant.ofEpochMilli(atMs).atZone(zone).toLocalTime()
 
-/** [atMs] moved to [date], at the same time of day. */
-fun withLocalDate(atMs: Long, date: LocalDate, zone: ZoneId = ZoneId.systemDefault()): Long =
-    date.atTime(localTimeOf(atMs, zone)).atZone(zone).toInstant().toEpochMilli()
+/**
+ * [atMs] moved to [date], at the same time of day. The same date is [atMs]
+ * exactly. In the hour an autumn clock change repeats, it stays on the same pass.
+ */
+fun withLocalDate(atMs: Long, date: LocalDate, zone: ZoneId = ZoneId.systemDefault()): Long {
+    val at = Instant.ofEpochMilli(atMs).atZone(zone)
+    if (at.toLocalDate() == date) return atMs
+    return ZonedDateTime.ofLocal(date.atTime(at.toLocalTime()), zone, at.offset).toInstant().toEpochMilli()
+}
 
-/** [atMs] moved to [hour]:[minute] on the same day, to the minute (a picker has no seconds). */
-fun withLocalTime(atMs: Long, hour: Int, minute: Int, zone: ZoneId = ZoneId.systemDefault()): Long =
-    localDateOf(atMs, zone).atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
+/**
+ * [atMs] moved to [hour]:[minute] on the same day, to the minute (a picker has
+ * no seconds). The same hour and minute is [atMs] exactly, seconds and all.
+ */
+fun withLocalTime(atMs: Long, hour: Int, minute: Int, zone: ZoneId = ZoneId.systemDefault()): Long {
+    val at = Instant.ofEpochMilli(atMs).atZone(zone)
+    if (at.hour == hour && at.minute == minute) return atMs
+    return ZonedDateTime.ofLocal(at.toLocalDate().atTime(hour, minute), zone, at.offset).toInstant().toEpochMilli()
+}
