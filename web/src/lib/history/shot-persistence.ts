@@ -56,6 +56,15 @@ import {
 } from '#lib/services/visualizer-call.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import { getHistoryStore } from './store.svelte';
+import {
+	FROZEN_SHOTS_KEY,
+	dropFrozenShots,
+	peekFrozenShots,
+	restoreFrozen,
+	stashFrozenShot,
+	type LockManagerLike
+} from '#lib/restore/tab-safety.js';
+import { freezeOverlay } from '#lib/restore/freeze-overlay.svelte.js';
 import { isBrewLog } from './model';
 import type { UiSnapshot } from '#lib/state/ui-state.svelte.js';
 
@@ -152,6 +161,13 @@ export function commitShotCompletion(
 		getActiveShotStore().clear();
 		return;
 	}
+	if (restoreFrozen()) {
+		// A restore runs in another tab, and every write here is being dropped:
+		// keep the shot for after the reload, which records it the normal way.
+		if (captured && disposition === 'Record') keepFrozenShot(captured, activeShot, dose);
+		getActiveShotStore().clear();
+		return;
+	}
 	if (disposition === 'DiscardAborted') {
 		const bagDebit =
 			activeShot?.source !== 'replay'
@@ -220,6 +236,68 @@ export function commitShotCompletion(
 
 	// The replay path also clears in its `finally`; clear() is idempotent.
 	getActiveShotStore().clear();
+}
+
+/** Keep a shot finished in a frozen tab; if that fails, the overlay offers it. */
+function keepFrozenShot(captured: Record<string, unknown>, activeShot: ActiveShotData | null, dose: number | null): void {
+	const live = activeShot?.source !== 'replay';
+	const kept = stashFrozenShot({ captured, beanId: activeShot?.bean?.beanId ?? null, dose, live });
+	if (!kept) freezeOverlay.keep(captured);
+}
+
+/**
+ * Record the shots a frozen tab finished before it reloaded: the row, its
+ * series, the bag debit and the uploads, as {@link commitShotCompletion}
+ * would have. The raw capture is lost: IndexedDB was closed during the freeze.
+ * The webhook isn't sent: it would arrive late, out of the shot's moment.
+ * Not while this tab is frozen, as every write would be dropped: the shots
+ * wait for a boot that isn't. Each is recorded before it's forgotten, and an
+ * id history already has (a duplicated tab, a boot that stopped part-way) is
+ * only forgotten.
+ */
+export async function commitFrozenShots(
+	runtime: AppRuntime | null,
+	locks: LockManagerLike | undefined = typeof navigator === 'undefined' ? undefined : navigator.locks
+): Promise<void> {
+	// Tabs reloading together each see the same stash: one at a time, so a
+	// kept shot is recorded and uploaded once. Without Web Locks, as before.
+	if (!locks) {
+		commitFrozenShotsNow(runtime);
+		return;
+	}
+	try {
+		await locks.request(FROZEN_SHOTS_KEY, { mode: 'exclusive' }, () => commitFrozenShotsNow(runtime));
+	} catch {
+		// The lock was refused (an opaque origin): the stash stays for a later boot.
+	}
+}
+
+function commitFrozenShotsNow(runtime: AppRuntime | null): void {
+	if (restoreFrozen()) return;
+	const done: unknown[] = [];
+	for (const shot of peekFrozenShots()) {
+		const id = shot.captured.id;
+		if (typeof id === 'string' && getHistoryStore().get(id)) {
+			done.push(id);
+			continue;
+		}
+		const record = getHistoryStore().recordCaptured(shot.captured);
+		done.push(id);
+		if (!record) continue;
+		let bagDebit: number | null = shot.beanId ? 0 : null;
+		if (shot.live && shot.beanId && shot.dose) {
+			const debit = getBeanStore().debitBean(shot.beanId, shot.dose);
+			bagDebit = debit.taken;
+			if (debit.emptied) void promptBagEmpty(shot.beanId);
+		}
+		getHistoryStore().setBagDebit(record.id, bagDebit);
+		if (runtime) {
+			registerUploadBatch(record.id, autoUploadDestinations());
+			runtime.runFork(pushShotToVisualizer(record.id));
+			runtime.runFork(pushShotToDecent(record.id));
+		}
+	}
+	dropFrozenShots(done);
 }
 
 /**

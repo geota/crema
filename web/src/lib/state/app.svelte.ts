@@ -104,6 +104,14 @@ import {
 } from '#lib/services/profile-write-generations.js';
 import { FirmwareUpdateController } from '#lib/firmware/firmware-update.svelte.js';
 import { readPowerOk } from '#lib/firmware/power.js';
+import {
+	getMachineBusy,
+	machineInEspresso,
+	shotAbandoned,
+	shotFinished,
+	shotLinkDown,
+	shotStarted
+} from '#lib/restore/tab-safety.js';
 import { setFirmwareWakeLock } from '#lib/shell/wake-lock.js';
 import type { FlashShellConditions } from '#lib/core/index.js';
 import {
@@ -424,6 +432,8 @@ export class CremaApp {
 			// The fresh core runs no upload and numbers uploads from 1 again:
 			// no old batch may write, ack or report into it (C2 P3-1).
 			this.#profileWrites.supersede();
+			// A fresh core has no shot to complete.
+			shotAbandoned();
 			this.coreResetNotice.onReset();
 		});
 		// Logged once with the bridge's own message as context; the per-call
@@ -433,6 +443,7 @@ export class CremaApp {
 			this.state.log(
 				`Core stopped after repeated internal errors; reload required${reason ? ` (${reason})` : ''}`
 			);
+			shotAbandoned();
 			this.coreResetNotice.onCoreStopped();
 		});
 		this.sweep = new ConnectSweepRunner({
@@ -477,6 +488,8 @@ export class CremaApp {
 				// DE1 reported is history. Clear it so nothing reads "Idle" from
 				// before the drop until the next StateInfo seed read lands —
 				// mirrors Android's `onDe1Dropped`.
+				// A shot's hold outlives the drop for a while: a reconnect may finish it.
+				shotLinkDown(de1State !== 'ready' && de1State !== 'subscribing');
 				if (de1State !== 'ready' && de1State !== 'subscribing') {
 					this.state.patch({ machineState: null, machineStateName: null, machineSubstate: null });
 					// Nothing the core waited for applies to a link that's gone.
@@ -613,6 +626,7 @@ export class CremaApp {
 			onRelease: () => this.afterFirmwareRelease(),
 			machineId: () => this.state.current.de1Diagnostics.deviceId ?? null,
 			linkUp: () => this.state.current.de1State === 'ready',
+			machineBusy: getMachineBusy(),
 			unavailableReason: () =>
 				isBridgedBluetooth()
 					? "Firmware updates aren't available on iPhone or iPad: Bluetooth runs through the Beacio Safari extension, and a dropped link mid-flash is too risky. Use Chrome or Edge on a computer, or the Android app."
@@ -817,7 +831,13 @@ export class CremaApp {
 					"Tare ignored — a shot is running. Taring now would break stop-at-weight."
 				);
 			}
+			if (event.type === 'MachineStateChanged' && event.content.state === 'Espresso') {
+				// A shot the link-down grace let go, still pulling after the reconnect.
+				machineInEspresso();
+			}
 			if (event.type === 'ShotStarted') {
+				// Until its completion is committed, a reload would lose it.
+				shotStarted();
 				// A machine-button shot can start under this dialog: clear Stop.
 				closeBagEmptyPrompt();
 				// Mark the shot's start so ShotCompleted can slice the raw BLE
@@ -886,15 +906,19 @@ export class CremaApp {
 				// (bean burn-down, webhook), enqueue the Visualizer push,
 				// and persist the capture slice with both META preludes.
 				// See `#lib/history/shot-persistence.js` for the whole pipeline.
-				commitShotCompletion(event, {
-					snapshot: this.state.current,
-					shotStartedAtMs: this.shotStartedAtMs,
-					lastNotificationAtMs: this.core.lastNotificationAtMs,
-					sliceJsonl: (from, to) => this.core.captureSliceJsonl(from, to),
-					takeStoredShot: (shotCtx) => this.core.takeStoredShot(shotCtx),
-					fireWebhook: (eventType, payload) => this.fireWebhook(eventType, payload),
-					runtime: this.runtime
-				});
+				try {
+					commitShotCompletion(event, {
+						snapshot: this.state.current,
+						shotStartedAtMs: this.shotStartedAtMs,
+						lastNotificationAtMs: this.core.lastNotificationAtMs,
+						sliceJsonl: (from, to) => this.core.captureSliceJsonl(from, to),
+						takeStoredShot: (shotCtx) => this.core.takeStoredShot(shotCtx),
+						fireWebhook: (eventType, payload) => this.fireWebhook(eventType, payload),
+						runtime: this.runtime
+					});
+				} finally {
+					shotFinished();
+				}
 				// Orchestrator-owned timers / snapshot caches still clear
 				// here — they're our state, not the persistence module's.
 				// `brewParamsAtShotStart` cleared AFTER the commit call so
@@ -1269,6 +1293,8 @@ export class CremaApp {
 		}
 		this.sweep.stop();
 		await this.de1.disconnect();
+		// The user ended the session: the shot can't complete now.
+		shotAbandoned();
 		this.stolenSerial = false;
 		this.state.patch(CLEARED_DE1_READOUT);
 	}
