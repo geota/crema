@@ -1298,6 +1298,14 @@ pub fn classify_token_refresh_failure(status: Option<u16>, body: Option<String>)
     )
 }
 
+/// Whether a pull from `since_ms` covered the window an upload attempted at
+/// `attempted_at_ms` would have landed in. See
+/// [`de1_domain::pull_covers_attempt`].
+#[uniffi::export]
+pub fn pull_covers_attempt(since_ms: i64, attempted_at_ms: Option<i64>) -> bool {
+    de1_domain::pull_covers_attempt(since_ms, attempted_at_ms)
+}
+
 /// Whether an upload must refuse a stored row for having no telemetry. See
 /// [`de1_domain::upload_refused_no_samples`].
 #[uniffi::export]

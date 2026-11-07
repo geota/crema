@@ -234,11 +234,11 @@ describe('the upload attempt mark (#331)', () => {
 });
 
 describe('ShotSync.pullAndReconcileShots — unbound tombstones (#331)', () => {
-	const pull = (history: HistoryStore, reply: (req: HttpRequest) => Effect.Effect<Response, unknown>) => {
+	const pull = (history: HistoryStore, reply: (req: HttpRequest) => Effect.Effect<Response, unknown>, since = 0) => {
 		const layer = Layer.succeed(HttpClient, HttpClient.of({ request: (req) => reply(req) as never }));
 		return Effect.runPromise(
 			Effect.provide(
-				ShotSync.pipe(Effect.flatMap((s) => s.pullAndReconcileShots(history, 0))),
+				ShotSync.pipe(Effect.flatMap((s) => s.pullAndReconcileShots(history, since))),
 				Layer.provide(ShotSyncLive, Layer.merge(layer, vault))
 			)
 		);
@@ -261,6 +261,35 @@ describe('ShotSync.pullAndReconcileShots — unbound tombstones (#331)', () => {
 		const purge = withPurge(history);
 		await pull(history, emptyList);
 		expect(purge).toHaveBeenCalledWith('gone');
+	});
+
+	it('a cursor past the attempt leaves it: the row may be behind the cursor', async () => {
+		markUploadAttempted('gone');
+		uploadReturned('gone');
+		markUnboundTombstone('gone', false);
+		const history = mkHistory([]);
+		const purge = withPurge(history);
+		const since = Date.now() - 60_000;
+		await pull(history, emptyList, since);
+		expect(purge).not.toHaveBeenCalled();
+	});
+
+	it('a cursor a day older than the attempt speaks for it', async () => {
+		markUploadAttempted('gone');
+		uploadReturned('gone');
+		markUnboundTombstone('gone', false);
+		const history = mkHistory([]);
+		const purge = withPurge(history);
+		await pull(history, emptyList, Date.now() - 2 * 24 * 3_600_000);
+		expect(purge).toHaveBeenCalledWith('gone');
+	});
+
+	it('with no attempt time only a walk from the start can end it', async () => {
+		markUnboundTombstone('gone', false);
+		const history = mkHistory([]);
+		const purge = withPurge(history);
+		await pull(history, emptyList, 1);
+		expect(purge).not.toHaveBeenCalled();
 	});
 
 	it('a pull already running when it was written leaves it', async () => {

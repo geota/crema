@@ -1812,6 +1812,14 @@ pub fn classify_token_refresh_failure(status: Option<u32>, body: Option<String>)
     )
 }
 
+/// Whether a pull from `sinceMs` covered the window an upload attempted at
+/// `attemptedAtMs` would have landed in. See `de1_domain::pull_covers_attempt`.
+#[wasm_bindgen(js_name = pullCoversAttempt)]
+#[must_use]
+pub fn pull_covers_attempt(since_ms: f64, attempted_at_ms: Option<f64>) -> bool {
+    de1_domain::pull_covers_attempt(f64_to_ms(since_ms), attempted_at_ms.map(f64_to_ms))
+}
+
 /// The Visualizer retry queue's rule for a failed operation: a JSON
 /// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
 /// `attemptsMade` counts this attempt; `jitterUnit` is a random number in

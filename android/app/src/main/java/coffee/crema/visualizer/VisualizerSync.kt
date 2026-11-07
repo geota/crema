@@ -1,6 +1,7 @@
 package coffee.crema.visualizer
 
 import coffee.crema.core.CallbackOutcome
+import coffee.crema.core.pullCoversAttempt
 import coffee.crema.core.CataloguePage
 import coffee.crema.core.callbackOutcome
 import coffee.crema.core.ShotPatchInputs
@@ -206,6 +207,9 @@ class VisualizerSync(
 
     /** The rows' late arrival has been reported (see [rowsReady]). */
     private val rowsLateTold = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Shots deleted here this session with no id, so an upload holding one stops short. */
+    private val deletedHere: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** Shot ids with an upload running — checked and claimed atomically. */
     private val inFlight = HashSet<String>()
@@ -936,6 +940,8 @@ class VisualizerSync(
         val shot = if (snapshot.samples.isEmpty()) currentShot(snapshot.id) ?: snapshot else snapshot
         if (uploadRefused(shot.isBrewLog, shot.samples.size.toUInt())) throw VisualizerError.NoSeries()
         val payload = buildShotPayload(shot)
+        // Deleted while this held its claim: a POST would only make a copy to delete.
+        if (shot.id in deletedHere) throw VisualizerError.RowDeleted()
         // Stored first: a kill mid-POST must leave a delete able to see it.
         persist { it.copy(uploadAttempted = it.uploadAttempted + (shot.id to now())) }
         val id = try {
@@ -964,10 +970,12 @@ class VisualizerSync(
         if (gone) drainSoon()
     }
 
+    /** Whether an upload of [shotId] is running. */
+    private fun claimed(shotId: String): Boolean = synchronized(inFlight) { shotId in inFlight }
+
     /** Whether an upload of [shotId] may have reached Visualizer, or is about to. */
     private fun uploadPending(st: VisualizerState, shotId: String): Boolean =
-        shotId in st.uploadAttempted || st.retryQueue.any { it.shotId == shotId } ||
-            synchronized(inFlight) { shotId in inFlight }
+        shotId in st.uploadAttempted || st.retryQueue.any { it.shotId == shotId } || claimed(shotId)
 
     /** Whether a delete of [shot] should offer Visualizer: an upload may land its copy. */
     fun uploadPending(shot: StoredShot): Boolean = uploadPending(persisted, shot.id)
@@ -1267,6 +1275,14 @@ class VisualizerSync(
 
     // ── Shot deletion (web history tombstones + upload-queue delete) ───────
 
+    /**
+     * Whether pull [run] from [since], which walked everything, ends this
+     * tombstone: it started later, it covered the window the upload would have
+     * landed in, and no POST is still out, whose id would need somewhere to land.
+     */
+    private fun UnboundTombstone.expiredBy(run: Long, since: Long): Boolean =
+        writtenRun < run && !claimed(id) && pullCoversAttempt(since, attemptedAt)
+
     /** The shots deleted here whose Visualizer copy still exists. */
     internal val shotTombstones: List<ShotTombstone> get() = persisted.shotTombstones
 
@@ -1279,6 +1295,7 @@ class VisualizerSync(
     fun tombstoneDeleted(shot: StoredShot, deleteRemote: Boolean) {
         val visualizerId = shot.visualizerId
         if (visualizerId != null) return tombstoneShot(shot.id, visualizerId, deleteRemote)
+        deletedHere += shot.id
         scope.launch {
             if (!ownState.await()) return@launch
             persist { st ->
@@ -1290,6 +1307,7 @@ class VisualizerSync(
                     deletedAt = now(),
                     deleteRemote = deleteRemote,
                     writtenRun = st.pullRun,
+                    attemptedAt = st.uploadAttempted[shot.id] ?: now().takeIf { claimed(shot.id) },
                 )
                 st.copy(
                     unboundTombstones = st.unboundTombstones.filterNot { it.id == shot.id } + tombstone,
@@ -1325,6 +1343,7 @@ class VisualizerSync(
      */
     fun forgetTombstones(ids: Collection<String>) {
         val gone = ids.toHashSet()
+        deletedHere -= gone
         if (persisted.shotTombstones.none { it.id in gone } && persisted.unboundTombstones.none { it.id in gone }) return
         scope.launch {
             persist { st ->
@@ -1521,9 +1540,8 @@ class VisualizerSync(
                         val complete = pull.complete && applied.planned
                         st.copy(
                             shotPullCursor = System.currentTimeMillis(),
-                            // A complete pull that started after one was written
-                            // found no match, and matches left the list above.
-                            unboundTombstones = if (complete) st.unboundTombstones.filterNot { it.writtenRun < run } else st.unboundTombstones,
+                            // Matches left the list above, so what's here wasn't found.
+                            unboundTombstones = if (complete) st.unboundTombstones.filterNot { it.expiredBy(run, since) } else st.unboundTombstones,
                         )
                     }
                 }.onFailure { e ->

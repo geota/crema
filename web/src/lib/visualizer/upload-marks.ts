@@ -7,13 +7,15 @@
  * on a bind or a refusal, so a delete during an upload knows there may be a remote
  * copy, even after a kill. Such a delete leaves a soft-deleted row with no id,
  * marked here: an unbound tombstone. It ends when the id arrives, or when a
- * complete pull that started after it was written finds no match. That's an order
- * on this device, so no clock is compared and there's no time limit.
+ * complete pull that started after it was written and covered the window the
+ * upload would have landed in finds no match. There's no time limit: a mark is
+ * small, and a shot coming back is the bug.
  *
  * Synchronous and storage-backed: a mark must be down before the POST goes.
  */
 
 import { isJsonObject, readJson, writeJson } from '../utils/storage.ts';
+import { pullCoversAttempt } from '#lib/wasm/de1_wasm.js';
 
 const MARKS_KEY = 'crema.visualizer.uploadMarks.v1';
 
@@ -23,6 +25,8 @@ export interface UnboundTombstone {
 	run: number;
 	/** The user asked to delete the Visualizer copy too. */
 	deleteRemote: boolean;
+	/** When the POST went (unix ms), or `null` when nothing recorded it. */
+	attemptedAt: number | null;
 }
 
 interface UploadMarks {
@@ -31,6 +35,11 @@ interface UploadMarks {
 	unbound: Record<string, UnboundTombstone>;
 	/** Counts pulls, to order them against {@link UnboundTombstone.run}. */
 	pullRun: number;
+	/**
+	 * Remote ids whose row was gone when they arrived. There's no row to hold a
+	 * tombstone, so a pull leaves these out instead.
+	 */
+	keptOut: string[];
 }
 
 /** POSTs out from this tab: a tombstone isn't expired under one. */
@@ -38,7 +47,12 @@ const inFlight = new Set<string>();
 
 function read(): UploadMarks {
 	const raw = readJson<Partial<UploadMarks>>(MARKS_KEY, {}, { what: 'upload marks', valid: isJsonObject });
-	return { attempted: raw.attempted ?? {}, unbound: raw.unbound ?? {}, pullRun: raw.pullRun ?? 0 };
+	return {
+		attempted: raw.attempted ?? {},
+		unbound: raw.unbound ?? {},
+		pullRun: raw.pullRun ?? 0,
+		keptOut: raw.keptOut ?? []
+	};
 }
 
 /** Whether a POST may have reached Visualizer for `id`. */
@@ -69,7 +83,8 @@ export function clearUploadAttempted(id: string): void {
 /** `id` was deleted with its upload under way. */
 export function markUnboundTombstone(id: string, deleteRemote: boolean): void {
 	const marks = read();
-	const tombstone: UnboundTombstone = { run: marks.pullRun, deleteRemote };
+	const attemptedAt = marks.attempted[id] ?? (inFlight.has(id) ? Date.now() : null);
+	const tombstone: UnboundTombstone = { run: marks.pullRun, deleteRemote, attemptedAt };
 	writeJson(MARKS_KEY, { ...marks, unbound: { ...marks.unbound, [id]: tombstone } });
 }
 
@@ -84,6 +99,18 @@ export function settleUploadMarks(id: string): UnboundTombstone | null {
 	return tombstone;
 }
 
+/** `visualizerId` came back for a row that's gone: a pull must not add it. */
+export function keepRemoteOut(visualizerId: string): void {
+	const marks = read();
+	if (marks.keptOut.includes(visualizerId)) return;
+	writeJson(MARKS_KEY, { ...marks, keptOut: [...marks.keptOut, visualizerId] });
+}
+
+/** The remote ids a pull leaves out. */
+export function remoteKeptOut(): ReadonlySet<string> {
+	return new Set(read().keptOut);
+}
+
 /** A pull starts: its run number. */
 export function beginPullRun(): number {
 	const marks = read();
@@ -93,12 +120,16 @@ export function beginPullRun(): number {
 }
 
 /**
- * The tombstones complete pull `run` has ended: written before it started, and
- * not matched, since a match settles the mark. Not one with its POST still out,
- * whose answer needs the row to land on.
+ * The tombstones complete pull `run` from `sinceMs` has ended: written before it
+ * started, not matched, since a match settles the mark, and with the window the
+ * upload would have landed in covered. Not one with its POST still out, whose
+ * answer needs the row to land on.
  */
-export function expiredTombstones(run: number): string[] {
+export function expiredTombstones(run: number, sinceMs: number): string[] {
 	return Object.entries(read().unbound)
-		.filter(([id, t]) => t.run < run && !inFlight.has(id))
+		.filter(
+			([id, t]) =>
+				t.run < run && !inFlight.has(id) && pullCoversAttempt(sinceMs, t.attemptedAt ?? undefined)
+		)
 		.map(([id]) => id);
 }

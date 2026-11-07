@@ -106,10 +106,12 @@ data class UnboundTombstone(
     val deleteRemote: Boolean = false,
     /**
      * [VisualizerState.pullRun] when this was written. Only a complete pull that
-     * started later and found no match ends it: an order on this device, with no
-     * clock compared and no time limit.
+     * started later, covered the window of [attemptedAt], and found no match ends
+     * it. There's no time limit: this row is small, and a shot coming back is the bug.
      */
     val writtenRun: Long = 0L,
+    /** When the POST went (unix ms), or null when nothing recorded it. */
+    val attemptedAt: Long? = null,
 )
 
 /**

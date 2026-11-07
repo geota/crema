@@ -90,6 +90,7 @@ import {
 	clearUploadAttempted,
 	expiredTombstones,
 	markUploadAttempted,
+	remoteKeptOut,
 	uploadReturned
 } from '#lib/visualizer/upload-marks.js';
 
@@ -831,7 +832,11 @@ export const ShotSyncLive = Layer.effect(
 				// tombstone the planner saw it as new and pulled it back. A bound
 				// one's `update` is skipped below; an unbound one binds by upload key.
 				const local = history.rawAll.filter((s) => !isBrewLog(s));
-				const actions = reconcileShots(local, remote);
+				const keptOut = remoteKeptOut();
+				const actions = reconcileShots(
+					local,
+					remote.filter((r) => !keptOut.has(r.id))
+				);
 				const tombstoned = (localId: string): boolean =>
 					history.get(localId)?.deletedAt != null;
 				// Read once for the whole pull, not per shot (C3 #10): nothing
@@ -931,7 +936,7 @@ export const ShotSyncLive = Layer.effect(
 				});
 			}
 			if (!truncated && !rowsMissed) {
-				for (const id of expiredTombstones(run)) history.purgeTombstone(id);
+				for (const id of expiredTombstones(run, sinceMs)) history.purgeTombstone(id);
 			}
 			return { pulled: shots.length, truncated, refused };
 		});

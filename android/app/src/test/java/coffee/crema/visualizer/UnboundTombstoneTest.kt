@@ -82,6 +82,7 @@ class UnboundTombstoneTest {
     private val history = mutableMapOf<String, StoredShot>()
     private val pulled = CopyOnWriteArrayList<StoredShot>()
     private var clock = 1_800_000_000_000L
+    private var series: suspend () -> Unit = {}
 
     private val sample = TelemetrySample(
         elapsedMs = 0, pressure = 9f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null,
@@ -136,6 +137,7 @@ class UnboundTombstoneTest {
         now = { clock },
         revoke = {},
         retryTimers = false,
+        seriesReady = { series() },
     ).also { runBlocking { it.load() } }
 
     @After
@@ -309,6 +311,81 @@ class UnboundTombstoneTest {
         pull(v)
         assertTrue(stored().unboundTombstones.isEmpty())
         assertEquals(4L, stored().pullRun)
+    }
+
+    @Test
+    fun `a pull with the POST still out leaves the tombstone, so the delete isn't lost`() {
+        val s = shot()
+        val v = sync()
+        uploading(v, s)
+        delete(v, s, remote = true)
+        Thread.sleep(50)
+        // Pull in another scope: settling here would wait for the held POST.
+        v.setShotsDirection("pull")
+        Thread.sleep(50)
+        v.syncNow(emptyList(), includeBeans = false)
+        for (tick in 1..200) {
+            if (stored().pullRun > 0L && !v.state.value.syncing) break
+            Thread.sleep(10)
+        }
+        assertFalse("the pull finished", v.state.value.syncing)
+        assertEquals("kept", listOf("s1"), stored().unboundTombstones.map { it.id })
+
+        uploadGate!!.complete(Unit)
+        settle()
+        runBlocking { v.drainRetryQueue() }
+        settle()
+        assertEquals(listOf("/api/shots/v-1"), deletes)
+    }
+
+    /** The upload went at [attemptedAt]; the row may have landed behind this cursor. */
+    private fun pullFrom(cursor: Long?, attemptedAt: Long?): List<String> {
+        val written = UnboundTombstone("s1", completedAt, 30_000, 1L, writtenRun = 3, attemptedAt = attemptedAt)
+        val v = sync(VisualizerState(tokens = tokens, pullRun = 3, shotPullCursor = cursor, unboundTombstones = listOf(written)))
+        pull(v)
+        return stored().unboundTombstones.map { it.id }
+    }
+
+    private val day = 24 * 60 * 60 * 1000L
+
+    @Test
+    fun `a cursor past the attempt can't speak for the row`() {
+        val attempt = 1_700_000_000_000L
+        assertEquals(listOf("s1"), pullFrom(attempt + 1, attempt))
+        assertEquals("nor one inside the margin", listOf("s1"), pullFrom(attempt - day + 1, attempt))
+        assertEquals("nor with no attempt time", listOf("s1"), pullFrom(attempt - 30 * day, null))
+    }
+
+    @Test
+    fun `a cursor a day older than the attempt speaks for it, as does a walk from the start`() {
+        val attempt = 1_700_000_000_000L
+        assertEquals(emptyList<String>(), pullFrom(attempt - 2 * day, attempt))
+        assertEquals(emptyList<String>(), pullFrom(null, attempt))
+        assertEquals(emptyList<String>(), pullFrom(null, null))
+    }
+
+    @Test
+    fun `a delete keeps the attempt's time`() {
+        val s = shot()
+        val v = sync(VisualizerState(tokens = tokens, uploadAttempted = mapOf("s1" to 77L)))
+        delete(v, s)
+        settle()
+        assertEquals(77L, stored().unboundTombstones.single().attemptedAt)
+    }
+
+    @Test
+    fun `a shot deleted while its upload waited is not POSTed`() {
+        val gate = CompletableDeferred<Unit>()
+        val s = shot()
+        series = { gate.await() }
+        val v = sync()
+        assertTrue(v.uploadShot(s, silent = true))
+        Thread.sleep(50)
+        delete(v, s)
+        Thread.sleep(50)
+        gate.complete(Unit)
+        settle()
+        assertTrue("nothing went: $posts", posts.isEmpty())
     }
 
     @Test

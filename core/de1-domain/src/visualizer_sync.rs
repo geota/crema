@@ -560,10 +560,7 @@ pub fn reconcile_shots(local: &[LocalShotRef], remote: &[WireShot]) -> Vec<Recon
             });
             continue;
         }
-        if let Some(at) = unbound
-            .iter()
-            .position(|s| upload_matches(s.completed_at, s.duration, r))
-        {
+        if let Some(at) = unbound.iter().position(|s| upload_matches(s, r)) {
             let target = unbound.remove(at);
             actions.push(ReconcileAction::Bind {
                 local_id: target.id.clone(),
@@ -593,12 +590,32 @@ pub fn shot_upload_key(completed_at_ms: i64, duration_ms: i64) -> i64 {
     (completed_at_ms - duration_ms).max(0) / 1000
 }
 
-/// Whether the remote row `r` is the upload of a local shot: the same key, or the
-/// `completedAt` form rows carried before geota/crema#44, and a duration in reach.
-fn upload_matches(completed_at_ms: i64, duration_ms: i64, r: &WireShot) -> bool {
+/// How much older than an upload attempt a pull's `since` must be for that pull
+/// to speak for the row. A day, because the cursor and the attempt can each be
+/// off the server's clock: a device clock ahead, Android's end-of-pull stamp.
+pub const PULL_WINDOW_MARGIN_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Whether a pull from `since_ms` covered the window an upload attempted at
+/// `attempted_at_ms` would have landed in, so finding no match means something.
+/// A walk from the start always does. Otherwise it needs a cursor well before
+/// the attempt: the cursor can have moved past a row it never applied, and a
+/// tombstone expired on that evidence brings the shot back when the row turns
+/// up. With no attempt time, only a walk from the start can say.
+#[must_use]
+pub fn pull_covers_attempt(since_ms: i64, attempted_at_ms: Option<i64>) -> bool {
+    since_ms <= 0 || attempted_at_ms.is_some_and(|at| since_ms < at - PULL_WINDOW_MARGIN_MS)
+}
+
+/// Whether the remote row `r` is the upload of `local`: the same key, and a
+/// duration in reach. A live row also takes the `completedAt` form rows carried
+/// before geota/crema#44. A tombstone doesn't: binding one can delete the remote
+/// row, so only a shot uploaded with today's key qualifies, and that's every shot
+/// a tombstone can be waiting on.
+fn upload_matches(local: &LocalShotRef, r: &WireShot) -> bool {
     let clock = r.clock / 1000;
-    (clock == shot_upload_key(completed_at_ms, duration_ms) || clock == completed_at_ms / 1000)
-        && (r.duration_ms - duration_ms).abs() <= UPLOAD_KEY_DURATION_SLACK_MS
+    let same_start = clock == shot_upload_key(local.completed_at, local.duration);
+    let legacy = local.deleted_at.is_none() && clock == local.completed_at / 1000;
+    (same_start || legacy) && (r.duration_ms - local.duration).abs() <= UPLOAD_KEY_DURATION_SLACK_MS
 }
 
 // ── JSON facade for the wasm / FFI bridges ────────────────────────────
@@ -1470,6 +1487,37 @@ mod tests {
                 remote: upload("r-1")
             }
         );
+    }
+
+    #[test]
+    fn a_tombstone_binds_only_by_todays_key() {
+        let mut local = local_shot("shot:l-1", None);
+        local.deleted_at = Some(1_700_000_000_000);
+        // `wire` carries the pre-#44 form, the local's `completedAt` second.
+        assert!(matches!(
+            reconcile_shots(&[local], &[wire("r-1")])[0],
+            ReconcileAction::Add { .. }
+        ));
+    }
+
+    #[test]
+    fn a_pull_speaks_for_an_attempt_only_if_it_covered_the_window() {
+        let at = 1_700_000_000_000;
+        assert!(pull_covers_attempt(0, Some(at)), "a walk from the start");
+        assert!(pull_covers_attempt(0, None));
+        assert!(pull_covers_attempt(
+            at - PULL_WINDOW_MARGIN_MS - 1,
+            Some(at)
+        ));
+        assert!(
+            !pull_covers_attempt(at - PULL_WINDOW_MARGIN_MS, Some(at)),
+            "inside the margin"
+        );
+        assert!(
+            !pull_covers_attempt(at + 1, Some(at)),
+            "a cursor past the attempt"
+        );
+        assert!(!pull_covers_attempt(1, None), "no attempt time to go on");
     }
 
     #[test]

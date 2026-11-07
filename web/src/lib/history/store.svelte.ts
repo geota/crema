@@ -18,7 +18,12 @@
  */
 
 import { enqueueEntry, readQueue } from '#lib/services/queue-store.js';
-import { markUnboundTombstone, settleUploadMarks, uploadAttempted } from '#lib/visualizer/upload-marks.js';
+import {
+	keepRemoteOut,
+	markUnboundTombstone,
+	settleUploadMarks,
+	uploadAttempted
+} from '#lib/visualizer/upload-marks.js';
 import type { RustStoredShot, TimedSample } from '#lib/core/index.js';
 import type { BrewSeries } from '#lib/core/crema-core.js';
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
@@ -620,16 +625,19 @@ export class HistoryStore {
 	 */
 	bindVisualizerId(id: string, visualizerId: string): void {
 		const tombstone = settleUploadMarks(id);
+		// Deleted during its upload, with the remote copy to go too.
+		if (tombstone?.deleteRemote) enqueueEntry({ entity: 'shot', id, op: 'delete', visualizerId });
 		const idx = this.shots.findIndex((s) => s.id === id);
-		if (idx < 0) return;
+		if (idx < 0) {
+			keepRemoteOut(visualizerId);
+			return;
+		}
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{ ...this.shots[idx], visualizerId },
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();
-		// Deleted during its upload, with the remote copy to go too.
-		if (tombstone?.deleteRemote) enqueueEntry({ entity: 'shot', id, op: 'delete', visualizerId });
 	}
 
 	/**

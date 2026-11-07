@@ -7,7 +7,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { enqueueEntry, readQueue } from '#lib/services/queue-store.js';
 import { reconcileShots, type WireShot } from '#lib/visualizer/shot-sync-signatures.js';
-import { markUploadAttempted, uploadAttempted, uploadReturned } from '#lib/visualizer/upload-marks.js';
+import {
+	markUploadAttempted,
+	remoteKeptOut,
+	uploadAttempted,
+	uploadReturned
+} from '#lib/visualizer/upload-marks.js';
 import type { StoredShot } from './model';
 
 vi.mock('./series-store', () => ({
@@ -99,6 +104,14 @@ describe('delete_during_upload_stays_deleted', () => {
 		before.delete('s1');
 		expect(reconcileShots(new HistoryStore().rawAll, [remote()])[0]).toMatchObject({ kind: 'bind' });
 	});
+
+	it('an id for a row already gone is kept out of the next pull', () => {
+		const history = store();
+		history.purgeTombstone('s1');
+		history.bindVisualizerId('s1', 'v-1');
+		expect(remoteKeptOut().has('v-1')).toBe(true);
+	});
+
 
 	it('a queued create counts as offered', () => {
 		const history = store();

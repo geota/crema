@@ -433,7 +433,7 @@ describe('reconcileShots', () => {
 
 	it('binds an unbound tombstone, so a shot deleted during its upload stays deleted', () => {
 		const local = shot({ id: 'shot:l-1', deletedAt: Date.now() });
-		const remote = wire({ id: 'r-1' });
+		const remote = wire({ id: 'r-1', clock: local.completedAt - local.record.duration });
 		const actions = reconcileShots([local], [remote]);
 		assert.equal(actions[0].kind, 'bind');
 	});
