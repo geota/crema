@@ -1116,7 +1116,7 @@ private fun TimerCard(
     // "Ready"/"NoState"/"Idle" add nothing over the READY eyebrow itself;
     // anything else (Heating, Stabilising, Refill…) is worth surfacing.
     val informativeSub = substate?.takeIf {
-        it.isNotBlank() && it != "Ready" && it != "NoState" && it != "Idle"
+        it.isNotBlank() && it != "Ready" && it != "NoState" && it != "Idle" && it != "Unknown"
     }
     val step = when {
         modeLabel != null -> modeLabel
