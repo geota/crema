@@ -423,6 +423,12 @@ pub struct StoredShot {
     /// fixtures serialise byte-identically.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decent_id: Option<String>,
+    /// The Visualizer row's `updated_at` (unix s) when a pull last merged it,
+    /// written last, once the merge landed: a pull skips a row whose remote
+    /// version is this. Never uploaded. Omitted when absent, so existing bytes
+    /// don't change; a downgrade drops it, which costs a refetch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visualizer_updated_at: Option<i64>,
     /// The DE1 this shot was pulled on, stamped by the shell at record
     /// time (#84) — the provenance the Decent upload sends. `None` for
     /// shots recorded before the field existed (the shell then falls back
@@ -524,6 +530,7 @@ impl StoredShot {
             visualizer_id: None,
             deleted_at: None,
             decent_id: None,
+            visualizer_updated_at: None,
             machine: None,
             brew_method: None,
             brew_method_label: None,
@@ -878,5 +885,24 @@ mod tests {
         let parsed: Vec<StoredShot> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, shots);
         assert_eq!(parsed.len(), 3);
+    }
+
+    #[test]
+    fn the_remote_version_round_trips_and_is_omitted_when_absent() {
+        let mut shot = StoredShot::new(1, sample_record());
+        assert!(
+            !serde_json::to_string(&shot)
+                .unwrap()
+                .contains("visualizerUpdatedAt")
+        );
+        shot.visualizer_updated_at = Some(1_700_000_000);
+        let json = serde_json::to_string(&shot).unwrap();
+        assert!(json.contains(r#""visualizerUpdatedAt":1700000000"#));
+        assert_eq!(
+            serde_json::from_str::<StoredShot>(&json)
+                .unwrap()
+                .visualizer_updated_at,
+            Some(1_700_000_000)
+        );
     }
 }

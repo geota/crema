@@ -74,7 +74,7 @@ export interface WireShot {
 	 * `ShotDetail` field is `tags` — the `wireShotFromDetail` boundary
 	 * in `shot-sync.ts` reads `detail.tags ?? []` into this slot.
 	 */
-	tag_list: string[];
+	tag_list?: string[] | null;
 	/**
 	 * The remote's bean / grinder journal fields, or absent when the
 	 * detail carried none. Mutable metadata like `tag_list` — NOT part

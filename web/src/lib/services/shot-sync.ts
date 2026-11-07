@@ -665,7 +665,8 @@ export const ShotSyncLive = Layer.effect(
 				grinderModel: patch.grinderModel,
 				barista: patch.barista,
 				coffeeBagId: patch.coffeeBagId ?? undefined,
-				tagList: patch.tagList ?? [],
+				// An absolute list: `[]` would clear the remote tags.
+				tagList: patch.tagList?.length ? patch.tagList : undefined,
 				beanBrand: patch.bean?.roasterName ?? undefined,
 				beanType: patch.bean?.name,
 				roastDate: patch.bean?.roastedOn ?? undefined,

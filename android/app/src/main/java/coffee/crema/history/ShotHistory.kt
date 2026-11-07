@@ -172,6 +172,10 @@ data class StoredShot(
      * (geota/crema#84); null until pushed.
      */
     val decentId: String? = null,
+    /** The Visualizer row's `updated_at` (unix s) when a pull last merged it
+     *  (core `StoredShot::visualizer_updated_at`): a pull skips a row at this
+     *  version. Kept by backups, never uploaded. */
+    val visualizerUpdatedAt: Long? = null,
     /**
      * The DE1 this shot was pulled on, stamped at record time (#84). The Decent
      * upload needs the serial (the server checks it belongs to the account);
