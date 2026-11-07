@@ -46,6 +46,16 @@ const FRAME_MS: u64 = 20_000;
 const FRAMES: u8 = 3;
 /// The firmware's flush timeout.
 const FLUSH_MS: u64 = 10_000;
+/// `group_flow` climbs at about this rate in `Ending`, ml/s per second, up to
+/// [`ENDING_FLOW`]. Both captures on disk show it: the pump is off, but the
+/// reported flow reaches 4 ml/s, so reported flow alone can't prove water.
+const ENDING_RAMP: f32 = 1.15;
+const ENDING_FLOW: f32 = 4.0;
+/// After `Ending`, samples keep coming while `group_flow` decays with this time
+/// constant, ms. The 2026-05-17 capture crosses 0.3 ml/s about 2.3 s into Idle.
+const TAIL_TAU_MS: f32 = 800.0;
+/// Under this, the tail is over and samples stop.
+const TAIL_END: f32 = 0.005;
 
 /// The machine. Time moves only through [`step`](Self::step).
 #[derive(Debug, Clone)]
@@ -65,6 +75,7 @@ pub struct SimDe1 {
     settings: Option<ShotSettings>,
     ignored_left: u32,
     winding_down: bool,
+    group_flow: f32,
 }
 
 impl SimDe1 {
@@ -82,6 +93,7 @@ impl SimDe1 {
             settings: None,
             ignored_left: params.idle_ignored,
             winding_down: false,
+            group_flow: 0.0,
         }
     }
 
@@ -91,7 +103,7 @@ impl SimDe1 {
         self.state.is_flow_state()
     }
 
-    /// The flow it's reporting now, ml/s.
+    /// The water really leaving the group now, ml/s.
     #[must_use]
     pub fn flow_ml_s(&self) -> f32 {
         match self.sub {
@@ -99,6 +111,20 @@ impl SimDe1 {
             SubState::Ending => 0.5,
             _ => 0.0,
         }
+    }
+
+    /// The flow it reports in its samples, ml/s. Not the same thing: see
+    /// [`ENDING_RAMP`].
+    #[must_use]
+    pub fn group_flow(&self) -> f32 {
+        self.group_flow
+    }
+
+    /// Whether it's sending shot samples: in a flow state, and through the
+    /// tail after one.
+    #[must_use]
+    pub fn sends_samples(&self) -> bool {
+        self.active() || self.group_flow > 0.0
     }
 
     /// The wire form of the state report.
@@ -226,6 +252,25 @@ impl SimDe1 {
 
     /// Advance `dt_ms`. Returns the water delivered, ml.
     pub fn step(&mut self, dt_ms: u64) -> f32 {
+        let delivered = self.step_mode(dt_ms);
+        self.step_group_flow(dt_ms);
+        delivered
+    }
+
+    fn step_group_flow(&mut self, dt_ms: u64) {
+        #[allow(clippy::cast_precision_loss)]
+        let dt_ms = dt_ms as f32;
+        self.group_flow = match self.sub {
+            SubState::Preinfusion | SubState::Pouring => self.flow_ml_s(),
+            SubState::Ending => (self.group_flow + ENDING_RAMP * dt_ms / 1000.0).min(ENDING_FLOW),
+            _ => {
+                let decayed = self.group_flow * (-dt_ms / TAIL_TAU_MS).exp();
+                if decayed < TAIL_END { 0.0 } else { decayed }
+            }
+        };
+    }
+
+    fn step_mode(&mut self, dt_ms: u64) -> f32 {
         if !self.active() {
             return 0.0;
         }
@@ -277,7 +322,7 @@ impl SimDe1 {
         let mut p = [0u8; 19];
         p[0..2].copy_from_slice(&sample_time.to_be_bytes());
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let flow = (self.flow_ml_s() * 4096.0) as u16;
+        let flow = (self.group_flow * 4096.0) as u16;
         p[4..6].copy_from_slice(&flow.to_be_bytes());
         p[17] = self.frame;
         p
@@ -443,6 +488,8 @@ pub struct SimLane {
     pub timeout_ms: u64,
     /// Swap the two oldest queued writes, once.
     pub reorder_next: bool,
+    /// Extra time on the air for the next write, ms.
+    pub delay_next_ms: u64,
 }
 
 /// A write's time on the air.
@@ -462,6 +509,7 @@ impl SimLane {
             hang_next: false,
             timeout_ms,
             reorder_next: false,
+            delay_next_ms: 0,
         }
     }
 
@@ -497,7 +545,12 @@ impl SimLane {
                     return landed;
                 };
                 let hung = std::mem::take(&mut self.hang_next);
-                let took = if hung { self.timeout_ms } else { WRITE_MS };
+                let delay = std::mem::take(&mut self.delay_next_ms);
+                let took = if hung {
+                    self.timeout_ms
+                } else {
+                    WRITE_MS + delay
+                };
                 self.in_flight = Some((write, now + took, hung));
             }
             match self.in_flight.take() {
@@ -645,6 +698,75 @@ mod tests {
         assert_eq!(scale.reading(1_100, 20.0), Some(20.0));
         assert_eq!(scale.reading(1_200, 20.0), Some(0.0));
         assert_eq!(scale.reading(1_300, 25.0), Some(5.0));
+    }
+
+    #[test]
+    fn group_flow_climbs_in_ending_though_the_pump_is_off() {
+        let mut de1 = SimDe1::new(De1Params::default());
+        de1.enter(MachineState::HotWater);
+        run(&mut de1, 1_000);
+        assert!((de1.group_flow() - 2.0).abs() < 0.01);
+        de1.on_request(MachineState::Idle as u8);
+        run(&mut de1, 900);
+        assert_eq!(de1.sub, SubState::Ending);
+        assert!(de1.group_flow() > 2.9, "{}", de1.group_flow());
+        assert!(de1.flow_ml_s() < 1.0);
+    }
+
+    #[test]
+    fn samples_outlast_the_flow_state_until_the_tail_dies() {
+        let mut de1 = SimDe1::new(De1Params::default());
+        de1.enter(MachineState::HotWater);
+        run(&mut de1, 1_000);
+        de1.on_request(MachineState::Idle as u8);
+        run(&mut de1, 1_200);
+        assert_eq!(de1.state, MachineState::Idle);
+        assert!(de1.sends_samples());
+        assert!(de1.group_flow() > 0.3);
+        assert!(
+            run(&mut de1, 1_000).abs() < f32::EPSILON,
+            "no water in the tail"
+        );
+        run(&mut de1, 6_000);
+        assert!(!de1.sends_samples());
+    }
+
+    #[test]
+    fn a_bump_goes_away_and_a_step_up_is_the_callers_to_keep() {
+        let mut scale = SimScale::new(0);
+        scale.mode = ScaleMode::Bump { grams: 6.0 };
+        assert_eq!(scale.reading(0, 10.0), Some(16.0));
+        scale.mode = ScaleMode::Healthy;
+        assert_eq!(scale.reading(100, 10.0), Some(10.0));
+        scale.mode = ScaleMode::StepUp { grams: 250.0 };
+        assert_eq!(scale.reading(200, 10.0), Some(260.0));
+    }
+
+    #[test]
+    fn a_transient_zero_keeps_the_real_zero() {
+        let mut scale = SimScale::new(0);
+        scale.mode = ScaleMode::TransientZero;
+        assert_eq!(scale.reading(0, 10.0), Some(0.0));
+        scale.mode = ScaleMode::Healthy;
+        assert_eq!(scale.reading(100, 10.0), Some(10.0));
+    }
+
+    #[test]
+    fn a_rezero_stays_zeroed() {
+        let mut scale = SimScale::new(0);
+        scale.mode = ScaleMode::Rezero;
+        assert_eq!(scale.reading(0, 10.0), Some(0.0));
+        assert_eq!(scale.reading(100, 12.0), Some(2.0));
+    }
+
+    #[test]
+    fn a_delayed_write_lands_late() {
+        let mut lane = SimLane::new(5_000);
+        lane.delay_next_ms = 1_000;
+        lane.push(request(14));
+        assert!(lane.step(0).is_empty());
+        assert!(lane.step(1_000).is_empty());
+        assert_eq!(lane.step(1_040), vec![request(14)]);
     }
 
     #[test]

@@ -71,6 +71,11 @@ pub enum Op {
     HangWrite,
     /// The two oldest queued writes swap.
     ReorderWrites,
+    /// The next write lands late.
+    DelayWrite {
+        /// How late, ms.
+        ms: u64,
+    },
     /// The DE1 link drops.
     LinkDown {
         /// How long, ms.
@@ -138,8 +143,11 @@ pub struct World {
     pre_flush: bool,
     was_down: bool,
     reported: Option<[u8; 2]>,
-    /// The state the core last heard.
     heard: Option<MachineState>,
+    /// Shot samples the core has received.
+    samples_heard: u32,
+    /// Scale readings the core has received.
+    weights_heard: u32,
     steam_target_c: f32,
     profile_target_g: Option<f32>,
     dial_g: Option<f32>,
@@ -186,6 +194,8 @@ impl World {
             was_down: false,
             reported: None,
             heard: None,
+            samples_heard: 0,
+            weights_heard: 0,
             steam_target_c: 148.0,
             profile_target_g: Some(36.0),
             dial_g: None,
@@ -231,6 +241,19 @@ impl World {
         self.core.set_shot_target_weight(self.dial_g);
         self.core.set_profile_volume_limit(self.volume_limit_ml);
         self.core.set_max_shot_duration(self.max_time_s);
+    }
+
+    /// The state the core last heard, which a lost report leaves behind the
+    /// machine's.
+    #[must_use]
+    pub fn heard(&self) -> Option<MachineState> {
+        self.heard
+    }
+
+    /// How many samples and weight readings the core has received.
+    #[must_use]
+    pub fn heard_counts(&self) -> (u32, u32) {
+        (self.samples_heard, self.weights_heard)
     }
 
     fn weight_target(&self) -> Option<f32> {
@@ -296,6 +319,7 @@ impl World {
             Op::MuteSamples { ms } => self.link.samples_muted_until = self.now + ms,
             Op::HangWrite => self.lane.hang_next = true,
             Op::ReorderWrites => self.lane.reorder_next = true,
+            Op::DelayWrite { ms } => self.lane.delay_next_ms = ms,
             Op::LinkDown { ms } => {
                 if !self.link.down(self.now) {
                     self.coverage.drops += 1;
@@ -410,11 +434,12 @@ impl World {
             }
             self.report_state();
             if self.now.is_multiple_of(SAMPLE_MS)
-                && self.de1.active()
+                && self.de1.sends_samples()
                 && self.now >= self.link.samples_muted_until
             {
                 self.sample_clock = self.sample_clock.wrapping_add(24);
                 self.skips_since_sample = 0;
+                self.samples_heard += 1;
                 let sample = self.de1.sample(self.sample_clock);
                 let out = self
                     .core
@@ -429,6 +454,7 @@ impl World {
         if let Some(grams) = reading {
             self.stale_open = false;
             self.dead_open = false;
+            self.weights_heard += 1;
             let frame = SimScale::frame(grams);
             let out = self
                 .core

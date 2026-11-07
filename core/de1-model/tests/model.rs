@@ -85,7 +85,11 @@ fn fault_op() -> impl Strategy<Value = Op> {
         1 => (1u32..3).prop_map(Op::DuplicateWrites),
         1 => (1u32..3).prop_map(Op::LoseStates),
         1 => (1u64..120).prop_map(|t| Op::MuteSamples { ms: t * 100 }),
-        1 => prop_oneof![Just(Op::HangWrite), Just(Op::ReorderWrites)],
+        1 => prop_oneof![
+            Just(Op::HangWrite),
+            Just(Op::ReorderWrites),
+            (1u64..30).prop_map(|t| Op::DelayWrite { ms: t * 100 }),
+        ],
         1 => (1u64..300).prop_map(|t| Op::LinkDown { ms: t * 100 }),
     ]
 }
@@ -299,4 +303,95 @@ fn the_sim_can_reproduce_the_captures_substates() {
     assert!(world.cup.grams < 1.0, "the headspace is still filling");
     world.apply(&Op::Advance { ms: 30_000 });
     assert!(world.cup.grams > 5.0);
+}
+
+fn plain_world() -> World {
+    World::new(De1Params::default(), 0.0, 5_000, false, false)
+}
+
+#[test]
+fn a_lost_state_report_leaves_the_core_behind_the_machine() {
+    let mut world = plain_world();
+    world.apply(&Op::LoseStates(1));
+    world.apply(&Op::GroupHead(MachineState::HotWater));
+    world.apply(&Op::Advance { ms: 100 });
+    assert_eq!(world.de1.state, MachineState::HotWater);
+    assert_eq!(world.heard(), Some(MachineState::Idle));
+}
+
+#[test]
+fn muted_samples_leave_the_scale_running() {
+    let mut world = plain_world();
+    world.apply(&Op::GroupHead(MachineState::HotWater));
+    world.apply(&Op::Advance { ms: 1_000 });
+    world.apply(&Op::MuteSamples { ms: 2_000 });
+    let (samples, weights) = world.heard_counts();
+    world.apply(&Op::Advance { ms: 1_500 });
+    let (samples_after, weights_after) = world.heard_counts();
+    assert_eq!(samples_after, samples);
+    assert_eq!(weights_after, weights + 15);
+}
+
+/// `group_flow` from a capture line.
+fn flow_of(hex: &str) -> f32 {
+    f32::from(u16::from_str_radix(&hex[8..12], 16).expect("hex")) / 4096.0
+}
+
+/// When `group_flow` first falls under 0.3 after Idle, ms.
+fn capture_tail_ms() -> u64 {
+    let lines: Vec<CaptureLine> =
+        include_str!("../../de1-app/tests/fixtures/session-20260517-122732-shot-pull.jsonl")
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+    let ending = lines
+        .iter()
+        .position(|l| l.src == "DE1_STATE" && l.hex == "0406")
+        .expect("Ending");
+    let idle = lines[ending..]
+        .iter()
+        .find(|l| l.src == "DE1_STATE" && l.hex == "0200")
+        .expect("Idle")
+        .t;
+    let peak_in_ending = lines[ending..]
+        .iter()
+        .filter(|l| l.src == "DE1_SHOT_SAMPLE" && l.t < idle)
+        .map(|l| flow_of(&l.hex))
+        .fold(0.0, f32::max);
+    assert!(peak_in_ending > 3.9, "the reported flow in Ending");
+    lines[ending..]
+        .iter()
+        .find(|l| l.src == "DE1_SHOT_SAMPLE" && l.t >= idle && flow_of(&l.hex) < 0.3)
+        .expect("the tail")
+        .t
+        - idle
+}
+
+/// Conformance: I17's 0.3 ml/s rule depends on how long the tail lasts, so the
+/// sim's must match the capture's.
+#[test]
+fn the_sim_tail_matches_the_capture() {
+    let mut de1 = de1_model::SimDe1::new(De1Params::default());
+    de1.enter(MachineState::HotWater);
+    for _ in 0..50 {
+        de1.step(100);
+    }
+    de1.on_request(MachineState::Idle as u8);
+    while de1.state != MachineState::Idle {
+        de1.step(100);
+    }
+    // From the 4 ml/s the capture holds at the end of a 4 s `Ending`.
+    let from = de1.group_flow();
+    let mut sim_ms = 0;
+    while de1.group_flow() >= 0.3 {
+        de1.step(100);
+        sim_ms += 100;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let scaled = (sim_ms as f32 * (4.0f32 / 0.3).ln() / (from / 0.3).ln()) as u64;
+    let capture = capture_tail_ms();
+    assert!(
+        scaled.abs_diff(capture) <= 500,
+        "sim {scaled} ms, capture {capture} ms"
+    );
 }
