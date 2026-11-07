@@ -304,7 +304,7 @@ impl StepWeightExit {
         if !(projected_g.is_finite() && projected_g >= target) {
             return false;
         }
-        if !evidence.is_some_and(|at| now.saturating_sub(at) < SKIP_EVIDENCE_MAX_AGE) {
+        if evidence.is_none_or(|at| now.saturating_sub(at) >= SKIP_EVIDENCE_MAX_AGE) {
             return false;
         }
         // Mixed frame: let the firmware own the transition while it is about
