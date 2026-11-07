@@ -246,10 +246,11 @@ pub struct WireShot {
     /// mutable metadata, NOT part of the de-dup signature: a remote
     /// re-tagging doesn't change the shot's identity.
     ///
-    /// `#[serde(default)]` so older shells / responses without the
-    /// field still deserialise cleanly to an empty Vec.
+    /// `None` when the detail carried no `tags`. `Some([])` says no more: a
+    /// free account always answers `[]`, so remote tags only ever add
+    /// ([`crate::merge_remote_shot`]).
     #[serde(default)]
-    pub tag_list: Vec<String>,
+    pub tag_list: Option<Vec<String>>,
     /// The bean / grinder journal fields the remote carries, or `None`
     /// when the detail had none of them. Mutable metadata like `tag_list`
     /// — NOT part of the de-dup signature. `#[serde(default)]` so older
@@ -1342,7 +1343,7 @@ mod tests {
             notes: None,
             rating: None,
             updated_at_ms: None,
-            tag_list: Vec::new(),
+            tag_list: None,
             bean: None,
             barista: None,
         }
@@ -1598,16 +1599,19 @@ mod tests {
             "notes": null, "rating": null, "updated_at_ms": null
         }"#;
         let parsed: WireShot = serde_json::from_str(json).unwrap();
-        assert!(parsed.tag_list.is_empty());
+        assert_eq!(parsed.tag_list, None);
     }
 
     #[test]
     fn wire_shot_tag_list_round_trips() {
         let mut w = wire("r-1");
-        w.tag_list = vec!["daily-driver".to_owned(), "lever".to_owned()];
+        w.tag_list = Some(vec!["daily-driver".to_owned(), "lever".to_owned()]);
         let s = serde_json::to_string(&w).unwrap();
         let parsed: WireShot = serde_json::from_str(&s).unwrap();
-        assert_eq!(parsed.tag_list, vec!["daily-driver", "lever"]);
+        assert_eq!(
+            parsed.tag_list,
+            Some(vec!["daily-driver".to_owned(), "lever".to_owned()])
+        );
     }
 
     #[test]

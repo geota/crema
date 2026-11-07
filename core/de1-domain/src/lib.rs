@@ -100,12 +100,14 @@ pub mod profile_file;
 pub mod profile_fingerprint;
 pub mod profile_import;
 pub mod profile_roast;
+pub mod pull_run;
 pub mod replay;
 pub mod saw_learning;
 pub mod session;
 pub mod settings_import;
 pub mod shot;
 pub mod shot_capture;
+pub mod shot_merge;
 pub mod shot_quality;
 pub mod steam;
 pub mod step_weight;
@@ -293,6 +295,12 @@ pub use profile_import::{
     export_v2_json, import_legacy_tcl, import_v2_json, import_v2_json_embedded,
 };
 pub use profile_roast::roast_from_profile;
+pub use pull_run::{
+    KeyCandidate, KnownRow, ListRow, ListStep, PaceBucket, PageInput, PagePlan, PoisonEntry,
+    PullTally, RowAction, RowFailure, RowOutcome, RowPlan, RunEnd, SkipReason, after_list_page,
+    choose_bind, end_run, finish_run, note_rate_limit, pace, plan_page, poison_due, record_row,
+    row_failure_action, settle_poison,
+};
 pub use replay::{ReplayMeta, ReplayMetaBean, fold_meta_jsonl, fold_meta_jsonl_json};
 pub use session::SessionTimer;
 pub use settings_import::{ImportedDe1AppSettings, import_settings_tdb};
@@ -303,6 +311,11 @@ pub use shot::{
 };
 pub use shot_capture::{
     AsRunShot, CompletedShot, ShotCaptureContext, assemble_stored_shot, parse_shot_capture_context,
+};
+pub use shot_merge::{
+    ShotMergeInput, ShotPatch, TagMarks, edited_during_fetch, mark_tag_edit, mark_tag_edit_json,
+    merge_remote_shot, merge_remote_shot_json, normalize_tag, normalize_tags, normalize_tags_json,
+    settle_tag_push, settle_tag_push_json, tag_push_list, tag_push_list_json, tag_union,
 };
 pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,

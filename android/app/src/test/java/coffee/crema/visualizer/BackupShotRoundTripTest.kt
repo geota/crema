@@ -91,6 +91,13 @@ class BackupShotRoundTripTest {
     }
 
     @Test
+    fun `the Visualizer version survives a backup, through the core, and stays out of uploads`() {
+        val s = StoredShot(id = "shot:v", completedAtMs = 1, durationMs = 1, visualizerUpdatedAt = 1_700_000_000)
+        assertEquals(1_700_000_000L, storedShotFromBackupJson(wireShotJson(s, forBackup = true), json)!!.visualizerUpdatedAt)
+        assertEquals(null, wireShotJson(s)["visualizerUpdatedAt"], "never uploaded")
+    }
+
+    @Test
     fun `a shot's own grinder model survives a backup round trip and wins over the Settings grinder`() {
         val s = StoredShot(id = "shot:g", completedAtMs = 1, durationMs = 1, grinderModel = "Niche Zero")
         val restored = storedShotFromBackupJson(wireShotJson(s, forBackup = true), json)!!
