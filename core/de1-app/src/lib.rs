@@ -3703,6 +3703,8 @@ impl CremaCore {
                 return;
             }
         };
+        // A skip needs telemetry newer than its last write.
+        self.step_weight.on_evidence(now);
         // The mixed-frame skip deferral reads the live pressure / flow.
         self.step_weight
             .on_sensors(sample.group_pressure, sample.group_flow);
@@ -13940,7 +13942,11 @@ mod tests {
             // 3.6 g …
             let mut t = 3_100;
             let mut g = 2.0;
-            while feed_weights(&mut core, g, 0.0, t, 1).is_empty() {
+            loop {
+                core.on_notification(Source::De1ShotSample, &sample_packet(0, 2.0, 1), t - 50);
+                if !feed_weights(&mut core, g, 0.0, t, 1).is_empty() {
+                    break;
+                }
                 assert!(g < 5.0, "never skipped");
                 t += 100;
                 g += 0.1;
@@ -13967,12 +13973,35 @@ mod tests {
             pour_on_frame(&mut core, 1);
             // Over target for 2 s and the DE1 never leaves frame 1: the
             // first skip, then a retry every ~600 ms.
-            let sent = feed_weights(&mut core, 4.0, 0.0, 1_100, 20);
+            let mut sent = Vec::new();
+            for t in (1_100..3_100).step_by(100) {
+                core.on_notification(Source::De1ShotSample, &sample_packet(0, 2.0, 1), t - 50);
+                sent.extend(feed_weights(&mut core, 4.0, 0.0, t, 1));
+            }
             assert!(sent.len() >= 3, "first skip + retries, got {sent:?}");
             assert!(sent.windows(2).all(|w| w[1] - w[0] >= 600), "{sent:?}");
             // Once it moves on, the retries stop.
             core.on_notification(Source::De1ShotSample, &sample_packet(90, 2.0, 2), 3_150);
             assert!(feed_weights(&mut core, 4.0, 0.0, 3_200, 20).is_empty());
+        }
+
+        /// #318: telemetry goes quiet after the skip. The skip may have landed,
+        /// so it isn't repeated, and the next frame keeps its time.
+        #[test]
+        fn a_skip_is_not_repeated_while_telemetry_is_silent() {
+            let mut core = scale_core(&[None, Some(3.6), None]);
+            pour_on_frame(&mut core, 1);
+            let sent = feed_weights(&mut core, 4.0, 0.0, 1_100, 25);
+            assert_eq!(sent.len(), 1, "{sent:?}");
+        }
+
+        #[test]
+        fn no_first_skip_on_a_stale_sample() {
+            let mut core = scale_core(&[None, Some(3.6), None]);
+            pour_on_frame(&mut core, 1);
+            assert!(feed_weights(&mut core, 4.0, 0.0, 2_100, 5).is_empty());
+            core.on_notification(Source::De1ShotSample, &sample_packet(0, 2.0, 1), 2_600);
+            assert_eq!(feed_weights(&mut core, 4.0, 0.0, 2_700, 1).len(), 1);
         }
 
         #[test]

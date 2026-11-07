@@ -300,7 +300,7 @@ pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,
     SteamSample,
 };
-pub use step_weight::{SKIP_RETRY_AFTER, SKIP_RETRY_MAX, StepWeightExit};
+pub use step_weight::{SKIP_EVIDENCE_MAX_AGE, SKIP_RETRY_AFTER, SKIP_RETRY_MAX, StepWeightExit};
 pub use stolen_serials::{
     STOLEN_SERIALS_REFRESH_MS, STOLEN_SERIALS_URL, parse_stolen_serials, serial_on_stolen_list,
     stolen_serials_list_is_valid, stolen_serials_refresh_due,

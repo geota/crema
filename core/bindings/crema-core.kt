@@ -5827,6 +5827,11 @@ sealed class StartEnd {
 	@Serializable
 	@SerialName("FlushLeftIdle")
 	data class FlushLeftIdle(val details: StartEndFlushLeftIdleInner): StartEnd()
+	/// The pre-shot flush did not begin within
+	/// [`PRESHOT_FLUSH_ENTRY_TIMEOUT`].
+	@Serializable
+	@SerialName("FlushNotEntered")
+	object FlushNotEntered: StartEnd()
 	/// The machine did not report Espresso within [`ESPRESSO_ENTRY_TIMEOUT`].
 	@Serializable
 	@SerialName("NotEntered")
