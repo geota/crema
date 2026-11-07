@@ -9,7 +9,7 @@
  *    (proactive refresh + one-shot 401 retry), exactly as the old `call()`
  *    funnelled through `withFreshToken`;
  *  - `HttpClient.request` raises `HttpStatusError` on any non-2xx, which `call`
- *    maps back onto the Visualizer error taxonomy: 402/403 → premium-gated,
+ *    maps back onto the Visualizer error taxonomy: a premium 402/403 → premium-gated,
  *    404 → not-found, 401 handled upstream by `TokenVault`, everything else
  *    propagates as `HttpStatusError` (the old `'other'` bucket).
  *
@@ -43,6 +43,7 @@ import {
 import {
 	API_BASE,
 	describeVisualizerError,
+	isAccountBlocked,
 	isRateLimited,
 	isRecoverable,
 	quotaLimit,
@@ -299,9 +300,9 @@ function isAuthError(e: VisualizerCallError): boolean {
 }
 
 /**
- * Auth / premium failures, the free-plan daily quota and the rate limit abort
- * the unsynced-shots loop: every further POST would hit the same wall (and a
- * backlog catch-up would also trip the 50 requests/min limit).
+ * Auth / premium failures, a blocked account, the free-plan daily quota and the
+ * rate limit abort the unsynced-shots loop: every further POST would hit the
+ * same wall (and a backlog catch-up would also trip the 50 requests/min limit).
  */
 function shouldAbortLoop(e: VisualizerCallError | ResponseDecodeError): boolean {
 	return (
@@ -309,6 +310,7 @@ function shouldAbortLoop(e: VisualizerCallError | ResponseDecodeError): boolean 
 		e._tag === 'TokenRefreshFailedError' ||
 		(e._tag === 'HttpStatusError' && e.status === 401) ||
 		e._tag === 'VisualizerPremiumGatedError' ||
+		isAccountBlocked(e) ||
 		quotaLimit(e) != null ||
 		isRateLimited(e)
 	);
@@ -319,7 +321,8 @@ export type UnsyncedStop =
 	| { reason: 'quota'; limit: number }
 	| { reason: 'rate-limited' }
 	| { reason: 'auth' }
-	| { reason: 'premium' };
+	| { reason: 'premium' }
+	| { reason: 'blocked'; message: string };
 
 /** The outcome of `ShotSync.uploadUnsyncedShots`. */
 export interface UnsyncedUploadResult {
@@ -333,12 +336,14 @@ function stopFor(e: VisualizerCallError | ResponseDecodeError): UnsyncedStop {
 	if (limit != null) return { reason: 'quota', limit };
 	if (isRateLimited(e)) return { reason: 'rate-limited' };
 	if (e._tag === 'VisualizerPremiumGatedError') return { reason: 'premium' };
+	if (isAccountBlocked(e)) return { reason: 'blocked', message: describeVisualizerError(e) };
 	return { reason: 'auth' };
 }
 
 /**
- * The user notice for an unsynced-shots pass that stopped on the daily quota or
- * the rate limit (null otherwise — auth / premium already surface elsewhere).
+ * The user notice for an unsynced-shots pass that stopped on the daily quota, the
+ * rate limit or a blocked account (null otherwise — auth / premium already
+ * surface elsewhere).
  */
 export function describeUnsyncedStop(
 	result: UnsyncedUploadResult | null | undefined
@@ -347,6 +352,7 @@ export function describeUnsyncedStop(
 	if (!stop) return null;
 	if (stop.reason === 'quota') return { kind: 'info', message: quotaNotice(stop.limit) };
 	if (stop.reason === 'rate-limited') return { kind: 'info', message: RATE_LIMIT_NOTICE };
+	if (stop.reason === 'blocked') return { kind: 'error', message: stop.message };
 	return null;
 }
 

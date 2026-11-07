@@ -291,6 +291,24 @@ describe('ShotSync.uploadUnsyncedShots — free-plan daily quota (visualizer 3e9
 		expect(describeUnsyncedStop(result)).toBeNull();
 	});
 
+	it('stops on a blocked account and says why, not that Premium is needed', async () => {
+		const history = three();
+		const disabled = '{"error":"This account has been disabled. Contact miha@visualizer.coffee for more information."}';
+		const { result, posts } = await runFailing(history, 403, disabled);
+		expect(posts).toHaveLength(1);
+		expect(describeUnsyncedStop(result)).toEqual({
+			kind: 'error',
+			message: 'This Visualizer account is disabled.'
+		});
+	});
+
+	it('walks on past a row refused for itself', async () => {
+		const history = three();
+		const { result, posts } = await runFailing(history, 403, '{"error":"You are not authorized to perform this action."}');
+		expect(posts).toHaveLength(3);
+		expect(result.stopped).toBeNull();
+	});
+
 	it('stops on a 429 and queues that shot for a delayed retry', async () => {
 		const history = three();
 		const { result, posts } = await runFailing(history, 429, '{"error":"Too many requests. Please try again later."}');

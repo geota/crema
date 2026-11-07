@@ -45,7 +45,7 @@ import java.util.UUID
  * here since then keeps its edit and is pushed; otherwise the remote copy is
  * applied, keeping the local `updatedAt` so the pull never reads as an edit. Visualizer
  * bag / roaster WRITES are Premium-only: a cached `premium == false` starts the
- * run read-only (pull only, creates counted as skipped); the first 402/403
+ * run read-only (pull only, creates counted as skipped); the first premium 402/403
  * mid-run downshifts it the same way and logs one "Premium required" line.
  * The write bodies are the core's (`coffee_bag_write_request` /
  * `roaster_write_request`): catalogue links omitted when empty, the local
