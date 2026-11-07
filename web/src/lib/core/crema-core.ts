@@ -3310,7 +3310,8 @@ export interface LocalShotRef {
 	visualizerId?: string;
 	/**
 	 * Unix epoch ms when this shot was soft-deleted, or `null` / missing
-	 * when active. Tombstoned locals must NOT bind to a remote.
+	 * when active. An unbound one is a shot deleted during its upload: it
+	 * binds like any other, so the remote copy stays out of the history.
 	 */
 	deletedAt?: number;
 }

@@ -349,9 +349,10 @@ pub use visualizer_error::{
 pub use visualizer_sync::{
     BeanReconcileAction, GuardedVisualizerPrefs, LocalShotRef, PulledBag, ReconcileAction,
     RoasterReconcileAction, WireShot, guard_restored_visualizer_prefs,
-    guard_restored_visualizer_prefs_json, reconcile_beans, reconcile_beans_json,
-    reconcile_pulled_bags, reconcile_roasters, reconcile_roasters_json, reconcile_shots,
-    reconcile_shots_json, signature_for_bean, signature_for_roaster, signature_for_shot,
+    guard_restored_visualizer_prefs_json, pull_covers_attempt, reconcile_beans,
+    reconcile_beans_json, reconcile_pulled_bags, reconcile_roasters, reconcile_roasters_json,
+    reconcile_shots, reconcile_shots_json, shot_upload_key, signature_for_bean,
+    signature_for_roaster, signature_for_shot,
 };
 pub use visualizer_wire::{
     BagWire, RoasterWire, ShotPatchInputs, VISUALIZER_PREMIUM_SHOT_FIELDS, VISUALIZER_SHOT_FIELDS,

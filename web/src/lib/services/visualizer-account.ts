@@ -15,6 +15,7 @@ import { BeanSync } from './bean-sync.ts';
 import { settleQueueForAccount } from './queue-store.ts';
 import { accountChangeAction as wasmAccountChangeAction } from '#lib/wasm/de1_wasm.js';
 import { clearBaristaPending } from '../visualizer/barista-pending.ts';
+import { settleMarksForAccount } from '../visualizer/upload-marks.ts';
 import { readSyncConfig, updateSyncConfig } from '../visualizer/sync-config.ts';
 
 /**
@@ -32,6 +33,7 @@ export function applyAccount(id: string): void {
 	}
 	clearBaristaPending();
 	settleQueueForAccount(config.syncAccountId, id);
+	settleMarksForAccount(config.syncAccountId, id);
 	updateSyncConfig({
 		syncAccountId: id,
 		accountUnconfirmed: false,
