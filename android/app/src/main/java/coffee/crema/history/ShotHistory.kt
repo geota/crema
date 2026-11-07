@@ -511,8 +511,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
     }
 
     suspend fun save(shots: List<StoredShot>) {
-        withContext(Dispatchers.IO) {
-            lock.withLock {
+        // The lock before the hop, so saves land in call order and the newest
+        // snapshot wins.
+        lock.withLock {
+            withContext(Dispatchers.IO) {
                 for (shot in shots) {
                     val name = seriesFile(shot.id).name
                     if (shot.samples.isEmpty() || name in written) continue
@@ -542,8 +544,8 @@ class HistoryStore(private val context: Context, private val json: Json) {
     /** Delete the store file, every copy of it and the series files (Erase all
      *  data; final review 05 N-1). */
     suspend fun erase() {
-        withContext(Dispatchers.IO) {
-            lock.withLock {
+        lock.withLock {
+            withContext(Dispatchers.IO) {
                 eraseStore(file)
                 seriesDir.listFiles()?.forEach { eraseStore(it) }
                 written.clear()

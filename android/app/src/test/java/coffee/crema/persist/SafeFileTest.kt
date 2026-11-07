@@ -11,6 +11,10 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
@@ -60,6 +64,68 @@ class SafeFileTest {
         SafeFile.write(target(), "[]")
         assertEquals("[1,2,3,4", kept.readText())
         assertEquals(listOf(kept), SafeFile.keptAside(target()))
+    }
+
+    @Test
+    fun overlappingWritesNeverLoseTheTarget() {
+        val pool = Executors.newFixedThreadPool(4)
+        try {
+            repeat(300) { round ->
+                (1..4).map { n ->
+                    pool.submit { SafeFile.write(target(), "[$round,$n]") }
+                }.forEach { it.get() }
+                assertTrue(target().exists(), "the target went missing in round $round")
+            }
+        } finally {
+            pool.shutdown()
+        }
+    }
+
+    @Test
+    fun aLoadCannotDeleteATempFileASaveIsWriting() {
+        val writing = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        SafeFile.beforeRename = {
+            writing.countDown()
+            release.await()
+        }
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            val save = pool.submit { SafeFile.write(target(), "[1]") }
+            writing.await()
+            val load = pool.submit<SafeLoad<List<Int>>> { SafeFile.load(target(), decode = ::decodeList) }
+            assertFailsWith<TimeoutException> { load.get(200, TimeUnit.MILLISECONDS) }
+            release.countDown()
+            save.get()
+            assertEquals(SafeLoad.Loaded(listOf(1)), load.get())
+        } finally {
+            release.countDown()
+            pool.shutdown()
+        }
+    }
+
+    @Test
+    fun anEraseWaitsForASaveInProgress() {
+        val writing = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        SafeFile.beforeRename = {
+            writing.countDown()
+            release.await()
+        }
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            val save = pool.submit { SafeFile.write(target(), "[1]") }
+            writing.await()
+            val erase = pool.submit<Boolean> { SafeFile.erase(target()) }
+            assertFailsWith<TimeoutException> { erase.get(200, TimeUnit.MILLISECONDS) }
+            release.countDown()
+            save.get()
+            assertTrue(erase.get())
+            assertTrue(!target().exists())
+        } finally {
+            release.countDown()
+            pool.shutdown()
+        }
     }
 
     @Test
