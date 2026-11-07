@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 4a171f1e5e74fb9662bd888b512f8f06b72c133f6b16e085053e8c82b578d23e # shrinks to case = Case { params: De1Params { preinfusion: false, ending: None, idle_ignored: 0, two_tap_steam: false }, headspace_ml: 0.0, lane_timeout_ms: 5000, read_only: false, pre_flush: false, ops: [SetSteamTarget(0.0), GroupHead(HotWater), LinkDown { ms: 300 }, Advance { ms: 9800 }, Advance { ms: 5000 }, LoseStates(1), Advance { ms: 23100 }, Advance { ms: 10900 }, Advance { ms: 11400 }, GroupHead(Espresso)] }
