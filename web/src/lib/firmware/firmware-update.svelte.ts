@@ -23,6 +23,12 @@ import { FlashPhase } from '#lib/core/index.js';
 import { describeError } from '#lib/utils/error.js';
 import { FlashDriver, type FlashCore, type FlashIo, type FlashKeepAlive } from './flash-driver';
 import { downloadOfficialImage, pinnedFirmware, verifyImageFor } from './source';
+import { FLASH_REFUSED_FOR_RESTORE, type MachineBusy } from '#lib/restore/tab-safety.js';
+
+/** {@link MachineBusy} reasons: a flash starting, then running. */
+export const FLASH_STARTING = 'flash-start';
+export const FLASH_RUNNING = 'flash';
+
 
 /** The visible step of the flow. */
 export type FlowStep = 'closed' | 'warning' | 'choose' | 'source' | 'confirm' | 'flash';
@@ -113,6 +119,8 @@ export interface FirmwareUpdateDeps {
 	linkUp?: () => boolean;
 	/** Why this browser must not flash at all (e.g. the iOS Beacio bridge), or null. */
 	unavailableReason?: () => string | null;
+	/** This tab's hold on the machine, which a restore in any tab takes from it. */
+	machineBusy?: MachineBusy;
 	/** Wall clock for the persisted erase-hold deadline. */
 	wallNow?: () => number;
 	/** Logged at each start: the transport and the DE1. */
@@ -404,16 +412,30 @@ export class FirmwareUpdateController {
 			this.step = 'confirm';
 			return;
 		}
-		this.machine = this.deps.machineId?.() ?? null;
-		const error = await this.driver.start(image, await this.deps.conditions());
-		if (error !== null) {
-			if (error.type === 'Blocked') this.blockers = error.content.blockers;
-			else this.startProblem = 'The firmware file failed verification.';
+		// A restore in any tab holds the machine: a flash mustn't start under it.
+		const busy = this.deps.machineBusy;
+		if (busy && !(await busy.hold(FLASH_STARTING))) {
+			this.startProblem = FLASH_REFUSED_FOR_RESTORE;
 			this.step = 'confirm';
 			return;
 		}
-		await this.driver.bindMachine(0, this.machine);
-		this.step = 'flash';
+		try {
+			this.machine = this.deps.machineId?.() ?? null;
+			const error = await this.driver.start(image, await this.deps.conditions());
+			if (error !== null) {
+				if (error.type === 'Blocked') this.blockers = error.content.blockers;
+				else this.startProblem = 'The firmware file failed verification.';
+				this.step = 'confirm';
+				return;
+			}
+			// Held for the flash itself before the start's hold lets go, so no
+			// restore can take the machine in between.
+			void busy?.hold(FLASH_RUNNING);
+			await this.driver.bindMachine(0, this.machine);
+			this.step = 'flash';
+		} finally {
+			busy?.release(FLASH_STARTING);
+		}
 	}
 
 	/** Ask before cancelling (only while the core still allows it). */

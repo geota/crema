@@ -56,6 +56,8 @@ import {
 } from '#lib/services/visualizer-call.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import { getHistoryStore } from './store.svelte';
+import { restoreFrozen, stashFrozenShot, takeFrozenShots } from '#lib/restore/tab-safety.js';
+import { freezeOverlay } from '#lib/restore/freeze-overlay.svelte.js';
 import { isBrewLog } from './model';
 import type { UiSnapshot } from '#lib/state/ui-state.svelte.js';
 
@@ -152,6 +154,13 @@ export function commitShotCompletion(
 		getActiveShotStore().clear();
 		return;
 	}
+	if (restoreFrozen()) {
+		// A restore runs in another tab, and every write here is being dropped:
+		// keep the shot for after the reload, which records it the normal way.
+		if (captured && disposition === 'Record') keepFrozenShot(captured, activeShot, dose);
+		getActiveShotStore().clear();
+		return;
+	}
 	if (disposition === 'DiscardAborted') {
 		const bagDebit =
 			activeShot?.source !== 'replay'
@@ -220,6 +229,38 @@ export function commitShotCompletion(
 
 	// The replay path also clears in its `finally`; clear() is idempotent.
 	getActiveShotStore().clear();
+}
+
+/** Keep a shot finished in a frozen tab; if that fails, the overlay offers it. */
+function keepFrozenShot(captured: Record<string, unknown>, activeShot: ActiveShotData | null, dose: number | null): void {
+	const live = activeShot?.source !== 'replay';
+	const kept = stashFrozenShot({ captured, beanId: activeShot?.bean?.beanId ?? null, dose, live });
+	if (!kept) freezeOverlay.keep(captured);
+}
+
+/**
+ * Record the shots a frozen tab finished before it reloaded: the row, its
+ * series, the bag debit and the uploads, as {@link commitShotCompletion}
+ * would have. The raw capture is lost: IndexedDB was closed during the freeze.
+ * The webhook isn't sent: it would arrive late, out of the shot's moment.
+ */
+export function commitFrozenShots(runtime: AppRuntime | null): void {
+	for (const shot of takeFrozenShots()) {
+		const record = getHistoryStore().recordCaptured(shot.captured);
+		if (!record) continue;
+		let bagDebit: number | null = shot.beanId ? 0 : null;
+		if (shot.live && shot.beanId && shot.dose) {
+			const debit = getBeanStore().debitBean(shot.beanId, shot.dose);
+			bagDebit = debit.taken;
+			if (debit.emptied) void promptBagEmpty(shot.beanId);
+		}
+		getHistoryStore().setBagDebit(record.id, bagDebit);
+		if (runtime) {
+			registerUploadBatch(record.id, autoUploadDestinations());
+			runtime.runFork(pushShotToVisualizer(record.id));
+			runtime.runFork(pushShotToDecent(record.id));
+		}
+	}
 }
 
 /**

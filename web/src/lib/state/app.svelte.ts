@@ -104,6 +104,7 @@ import {
 } from '#lib/services/profile-write-generations.js';
 import { FirmwareUpdateController } from '#lib/firmware/firmware-update.svelte.js';
 import { readPowerOk } from '#lib/firmware/power.js';
+import { getMachineBusy } from '#lib/restore/tab-safety.js';
 import { setFirmwareWakeLock } from '#lib/shell/wake-lock.js';
 import type { FlashShellConditions } from '#lib/core/index.js';
 import {
@@ -613,6 +614,7 @@ export class CremaApp {
 			onRelease: () => this.afterFirmwareRelease(),
 			machineId: () => this.state.current.de1Diagnostics.deviceId ?? null,
 			linkUp: () => this.state.current.de1State === 'ready',
+			machineBusy: getMachineBusy(),
 			unavailableReason: () =>
 				isBridgedBluetooth()
 					? "Firmware updates aren't available on iPhone or iPad: Bluetooth runs through the Beacio Safari extension, and a dropped link mid-flash is too risky. Use Chrome or Edge on a computer, or the Android app."

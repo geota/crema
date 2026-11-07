@@ -1,0 +1,309 @@
+/**
+ * `#lib/restore/tab-safety` — keep a restore in one tab from costing another
+ * tab its machine or its writes (restore-safety design, section 2, "Other web
+ * tabs").
+ *
+ * **The machine comes first.** A tab holds the `crema-machine-busy` Web Lock in
+ * shared mode while a shot or a firmware flash runs ({@link MachineBusy}).
+ * Taking it never waits, as a shot needs no permission. A restoring tab takes
+ * it exclusive, without waiting, so any shot or flash anywhere refuses the
+ * restore; and a flash that can't get it doesn't start.
+ *
+ * **A frozen tab.** When a restore starts in another tab, this one stops every
+ * Crema write ({@link freezeCremaWrites}, the factory reset's freeze) and shows
+ * a blocking overlay, which is what makes the freeze honest: writes are dropped
+ * silently, so nothing may look saved. It reloads when the restoring tab
+ * releases `crema-restore` or says `done`, whichever comes first, but never
+ * while a shot or a flash runs here: then it waits for that to end. Without Web
+ * Locks, it reloads on `done`, or after {@link RESTORE_FALLBACK_MS} with no
+ * `progress`, should the restoring tab have died.
+ *
+ * **A shot finished in a frozen tab** would lose its row, debit and series, so
+ * it's kept in `sessionStorage` ({@link FROZEN_SHOTS_KEY}, a non-`crema.` key
+ * like the reset report's) and recorded by the normal path after the reload.
+ *
+ * Nothing posts `started` yet: the restore itself does, from restore-safety PR7w.
+ */
+import { freezeCremaWrites } from '#lib/security/reset-coordinator.js';
+
+/** BroadcastChannel name every Crema tab listens on for restores. */
+export const RESTORE_CHANNEL = 'crema-restore';
+/** Held by the restoring tab from confirm to the end. */
+export const RESTORE_LOCK = 'crema-restore';
+/** Held shared by a tab running a shot or a flash; exclusive by a restore. */
+export const MACHINE_BUSY_LOCK = 'crema-machine-busy';
+/** Without Web Locks: reload anyway after this long without word. */
+export const RESTORE_FALLBACK_MS = 30_000;
+/** sessionStorage key for shots a frozen tab finished. Not a `crema.` key. */
+export const FROZEN_SHOTS_KEY = 'crema-frozen-shots';
+
+export type RestoreMessage = { type: 'started' } | { type: 'progress' } | { type: 'done' };
+
+/** The slice of `LockManager` this module uses, so tests can stand one in. */
+export interface LockManagerLike {
+	request(
+		name: string,
+		options: { mode?: 'shared' | 'exclusive'; ifAvailable?: boolean },
+		callback: (lock: unknown) => unknown
+	): Promise<unknown>;
+	query?(): Promise<{ held?: { name?: string }[] }>;
+}
+
+function navigatorLocks(): LockManagerLike | undefined {
+	return typeof navigator === 'undefined'
+		? undefined
+		: (navigator.locks as unknown as LockManagerLike | undefined);
+}
+
+// ── The machine ────────────────────────────────────────────────────────────
+
+/**
+ * This tab's shared hold on {@link MACHINE_BUSY_LOCK}, for as long as any
+ * reason for it lasts: a shot, a flash, a flash starting. One lock for them
+ * all, so handing over from one reason to the next never lets it go.
+ */
+export class MachineBusy {
+	readonly #reasons = new Set<string>();
+	#release: (() => void) | null = null;
+	#acquiring: Promise<boolean> | null = null;
+
+	constructor(private readonly locks: LockManagerLike | undefined = navigatorLocks()) {}
+
+	/**
+	 * Hold the lock for `reason`, without waiting. False when a restore holds it
+	 * exclusive. True when there are no Web Locks: there's nothing to ask.
+	 */
+	hold(reason: string): Promise<boolean> {
+		this.#reasons.add(reason);
+		if (!this.locks || this.#release) return Promise.resolve(true);
+		this.#acquiring ??= this.#acquire();
+		return this.#acquiring.then((held) => {
+			if (!held) this.#reasons.delete(reason);
+			return held;
+		});
+	}
+
+	/** `reason` has ended; the lock goes with the last one. */
+	release(reason: string): void {
+		this.#reasons.delete(reason);
+		if (this.#reasons.size > 0 || !this.#release) return;
+		this.#release();
+		this.#release = null;
+	}
+
+	/** Hold or release for `reason`, as a flag changes. */
+	set(reason: string, on: boolean): void {
+		if (on) void this.hold(reason);
+		else this.release(reason);
+	}
+
+	/** Whether this tab holds the lock. */
+	get held(): boolean {
+		return this.#release !== null;
+	}
+
+	#acquire(): Promise<boolean> {
+		return new Promise<boolean>((resolve) => {
+			this.locks!
+				.request(MACHINE_BUSY_LOCK, { mode: 'shared', ifAvailable: true }, (lock) => {
+					if (lock === null) {
+						resolve(false);
+						return undefined;
+					}
+					return new Promise<void>((released) => {
+						this.#release = released;
+						resolve(true);
+						// Every reason may have ended while this was granted.
+						if (this.#reasons.size === 0) this.release('');
+					});
+				})
+				// A refused request (an opaque origin): nothing to hold, nothing to refuse.
+				.catch(() => resolve(true));
+		}).finally(() => {
+			this.#acquiring = null;
+		});
+	}
+}
+
+let machineBusy: MachineBusy | null = null;
+
+/** This tab's {@link MachineBusy}. */
+export function getMachineBusy(): MachineBusy {
+	machineBusy ??= new MachineBusy();
+	return machineBusy;
+}
+
+/** What a flash says when a restore holds the machine. */
+export const FLASH_REFUSED_FOR_RESTORE = 'A restore is running. Start the update once it has finished.';
+
+// ── A frozen tab ───────────────────────────────────────────────────────────
+
+let frozen = false;
+let restoringHere = false;
+
+/** Whether a restore in another tab has frozen this one. */
+export function restoreFrozen(): boolean {
+	return frozen;
+}
+
+/** This tab is the one restoring: its own messages mustn't freeze it. */
+export function markRestoringHere(on: boolean): void {
+	restoringHere = on;
+}
+
+/** Test seam: forget this module's state. */
+export function resetTabSafetyForTest(): void {
+	frozen = false;
+	restoringHere = false;
+	machineBusy = null;
+}
+
+export interface RestoreListenerOptions {
+	/** Whether a shot or a flash runs here, which a reload would interrupt. */
+	busy: () => boolean;
+	/** Show the overlay. */
+	onFrozen: () => void;
+	/** Whether a reload must wait for the user (a shot that couldn't be kept). */
+	holdReload?: () => boolean;
+	reload?: () => void;
+	freeze?: () => void;
+	locks?: LockManagerLike;
+	channel?: () => BroadcastChannel | null;
+	fallbackMs?: number;
+}
+
+export interface RestoreListener {
+	/** A shot or a flash here has ended, or the user is done: reload if one's due. */
+	idle(): void;
+	/** Check, at boot, whether a restore is already running elsewhere. */
+	checkAtBoot(): Promise<void>;
+	stop(): void;
+}
+
+function openChannel(): BroadcastChannel | null {
+	try {
+		return typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(RESTORE_CHANNEL);
+	} catch {
+		return null;
+	}
+}
+
+/** Tell every other Crema tab where a restore is. Best-effort. For PR7w. */
+export function announceRestore(message: RestoreMessage): void {
+	const ch = openChannel();
+	if (!ch) return;
+	try {
+		ch.postMessage(message);
+	} finally {
+		ch.close();
+	}
+}
+
+/** In every tab: freeze when a restore starts elsewhere, then reload once it's over. */
+export function installRestoreListener(o: RestoreListenerOptions): RestoreListener {
+	const locks = o.locks ?? navigatorLocks();
+	const ch = (o.channel ?? openChannel)();
+	const reload = o.reload ?? (() => location.reload());
+	const fallbackMs = o.fallbackMs ?? RESTORE_FALLBACK_MS;
+	let fallback: ReturnType<typeof setTimeout> | null = null;
+	let wanted = false;
+	let reloaded = false;
+	let stopped = false;
+
+	const tryReload = (): void => {
+		if (!wanted || reloaded || stopped || o.busy() || o.holdReload?.()) return;
+		reloaded = true;
+		if (fallback) clearTimeout(fallback);
+		reload();
+	};
+	const wantReload = (): void => {
+		wanted = true;
+		tryReload();
+	};
+	const startFallback = (): void => {
+		if (fallback) clearTimeout(fallback);
+		fallback = setTimeout(wantReload, fallbackMs);
+	};
+	const enterFrozen = (): void => {
+		if (frozen) return;
+		frozen = true;
+		(o.freeze ?? (() => freezeCremaWrites()))();
+		o.onFrozen();
+		if (!locks) {
+			startFallback();
+			return;
+		}
+		// Granted once the restoring tab lets go, whether it finished or died.
+		locks.request(RESTORE_LOCK, {}, () => wantReload()).catch(() => startFallback());
+	};
+
+	if (ch) {
+		ch.onmessage = (e: MessageEvent<RestoreMessage>) => {
+			if (restoringHere) return;
+			const type = e.data?.type;
+			if (type === 'started') enterFrozen();
+			else if (type === 'progress' && fallback) startFallback();
+			else if (type === 'done') {
+				enterFrozen();
+				wantReload();
+			}
+		};
+	}
+	return {
+		idle: tryReload,
+		async checkAtBoot() {
+			const held = await locks?.query?.().catch(() => undefined);
+			if (held?.held?.some((l) => l.name === RESTORE_LOCK) && !restoringHere) enterFrozen();
+		},
+		stop() {
+			stopped = true;
+			if (fallback) clearTimeout(fallback);
+			ch?.close();
+		}
+	};
+}
+
+// ── Shots a frozen tab finished ────────────────────────────────────────────
+
+/** A shot a frozen tab finished, kept for the reload. */
+export interface FrozenShot {
+	/** The core's assembled shot. */
+	captured: Record<string, unknown>;
+	/** The bag it came out of, when the shot was live and had one. */
+	beanId: string | null;
+	/** The dose to debit, when it was live. */
+	dose: number | null;
+	/** Live, not a replay: a replay debits nothing. */
+	live: boolean;
+}
+
+/** Keep `shot` for the reload. False when sessionStorage won't take it. */
+export function stashFrozenShot(shot: FrozenShot, storage: Storage | undefined = sessionStorage): boolean {
+	try {
+		if (!storage) return false;
+		const kept = readFrozen(storage);
+		storage.setItem(FROZEN_SHOTS_KEY, JSON.stringify([...kept, shot]));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function readFrozen(storage: Storage): FrozenShot[] {
+	const raw = storage.getItem(FROZEN_SHOTS_KEY);
+	if (raw == null) return [];
+	const parsed: unknown = JSON.parse(raw);
+	return Array.isArray(parsed) ? (parsed as FrozenShot[]) : [];
+}
+
+/** The shots kept before the reload, now removed. */
+export function takeFrozenShots(storage: Storage | undefined = sessionStorage): FrozenShot[] {
+	try {
+		if (!storage) return [];
+		const shots = readFrozen(storage);
+		storage.removeItem(FROZEN_SHOTS_KEY);
+		return shots;
+	} catch {
+		return [];
+	}
+}

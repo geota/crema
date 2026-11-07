@@ -22,6 +22,15 @@
 	import DebugPanel from '#lib/shell/DebugPanel.svelte';
 	import ReconnectStrip from '#lib/shell/ReconnectStrip.svelte';
 	import RefusedStoresStrip from '#lib/shell/RefusedStoresStrip.svelte';
+	import RestoreFreezeOverlay from '#lib/shell/RestoreFreezeOverlay.svelte';
+	import { freezeOverlay } from '#lib/restore/freeze-overlay.svelte.js';
+	import {
+		getMachineBusy,
+		installRestoreListener,
+		type RestoreListener
+	} from '#lib/restore/tab-safety.js';
+	import { FLASH_RUNNING } from '#lib/firmware/firmware-update.svelte.js';
+	import { commitFrozenShots } from '#lib/history/shot-persistence.js';
 	import PhoneTopBar from '#lib/shell/PhoneTopBar.svelte';
 	import PhoneTabBar from '#lib/shell/PhoneTabBar.svelte';
 	import { showsPhoneTabs } from '#lib/shell/nav-items.js';
@@ -101,8 +110,24 @@
 		);
 	}
 
+	/** A shot or a flash runs here: a reload now would cost this tab its machine. */
+	function machineRunning(): boolean {
+		const shot = app?.state.current.shotInProgress ?? false;
+		const flash = (app?.firmware.running ?? false) || (app?.firmware.holdsLink ?? false);
+		return shot || flash;
+	}
+
+	// A restore in another tab freezes this one (see `#lib/restore/tab-safety`).
+	let restoreListener: RestoreListener | null = null;
+
 	onMount(async () => {
 		stopResetListener = installResetListener();
+		restoreListener = installRestoreListener({
+			busy: machineRunning,
+			onFrozen: () => freezeOverlay.show(),
+			holdReload: () => freezeOverlay.unsaved !== null
+		});
+		void restoreListener.checkAtBoot();
 		// What a factory reset in this tab could not finish, told after its reload.
 		const resetReport = takeResetReport();
 		const resetNotice = resetReport && resetReportMessage(resetReport);
@@ -154,6 +179,8 @@
 		// and publish it via context (D-04): components call `services.*` instead
 		// of crossing the Effect boundary by hand.
 		services = createCremaServices(runtime);
+		// Shots a frozen tab finished before it reloaded: recorded now.
+		commitFrozenShots(runtime);
 		// Keep the cached Visualizer Premium flag (it gates the edit sync's
 		// Premium-only PATCH fields) fresh: re-probe at most once per 24 h.
 		// Fire-and-forget; a no-op when signed out, and it never rejects.
@@ -233,12 +260,23 @@
 		app?.coreResetNotice.onStateChange();
 	});
 
+	// This tab's shared hold on the machine, for a shot or a flash: a restore
+	// in any tab refuses while it's held. And a frozen tab's reload, once
+	// neither runs.
+	$effect(() => {
+		const busy = getMachineBusy();
+		busy.set('shot', app?.state.current.shotInProgress ?? false);
+		busy.set(FLASH_RUNNING, (app?.firmware.running ?? false) || (app?.firmware.holdsLink ?? false));
+		if (!machineRunning()) restoreListener?.idle();
+	});
+
 	// Tear the runtime's fibers + finalizers down when the shell unmounts
 	// (also fires on HMR), so a dev reload doesn't leak runtimes or listeners.
 	onDestroy(() => {
 		stopStorageNotices?.();
 		stopVisualizerNotices?.();
 		stopResetListener?.();
+		restoreListener?.stop();
 		serviceWorker?.dispose();
 		if (onOnline) window.removeEventListener('online', onOnline);
 		if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
@@ -279,6 +317,7 @@
 	<!-- The firmware-update flow (alpha) — app-wide so a running flash or its
 	     power-cycle step stays visible on every page. -->
 	<FirmwareUpdateHost {app} />
+	<RestoreFreezeOverlay onSaved={() => restoreListener?.idle()} />
 {/if}
 
 <style>
