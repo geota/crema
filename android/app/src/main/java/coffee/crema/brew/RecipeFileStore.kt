@@ -44,7 +44,7 @@ class RecipeFileStore(private val context: Context, private val json: Json) {
 
     suspend fun save(envelope: Envelope) {
         inSaveOrder(file) {
-            saveStore(file, json.encodeToString(Envelope.serializer(), envelope))
+            saveStore(file, "brew recipes", json.encodeToString(Envelope.serializer(), envelope))
         }
     }
 

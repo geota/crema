@@ -31,6 +31,8 @@ import kotlin.test.assertNull
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class BagDebitVmTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val store = ViewModelStore()
 
     @After fun tearDown() { store.clear(); VmHarness.idle() }

@@ -39,6 +39,8 @@ import org.junit.Test
  *   but a keystore that isn't ready never gets a new key, and opening never creates one.
  */
 class TokenBoxCallersTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val dir: File = Files.createTempDirectory("token-box").toFile()
     private val context = object : ContextWrapper(null) {
         override fun getFilesDir(): File = dir
