@@ -4345,7 +4345,7 @@ impl CremaCore {
                 MachineState::Sleep | MachineState::Idle => {
                     if info.substate == SubState::Refill {
                         blockers.push(FlashBlocker::Refilling);
-                    } else if (info.substate as u8) >= 200 {
+                    } else if info.substate.is_error() || info.substate == SubState::Unknown {
                         blockers.push(FlashBlocker::MachineError);
                     }
                 }

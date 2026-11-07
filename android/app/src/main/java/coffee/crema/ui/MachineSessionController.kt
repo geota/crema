@@ -285,8 +285,7 @@ internal class MachineSessionController(
                 // issue #44's "truncate at the stop" report. Fold in the
                 // latest scale weight/flow so the WEIGHT curves track the
                 // cup. FIFO-capped.
-                val flowing = shot.machineSubstate == "Preinfusion" ||
-                    shot.machineSubstate == "Pouring"
+                val flowing = shot.shotPhase == "Preinfusion" || shot.shotPhase == "Pouring"
                 val nextBuffer = if (shot.shotInProgress && flowing) {
                     val sample = TelemetrySample(
                         elapsedMs = t.elapsed.toLong(),
