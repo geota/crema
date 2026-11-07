@@ -2,10 +2,15 @@ package coffee.crema.persist
 
 import android.util.Log
 import coffee.crema.diag.DiagLog
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * A store file that couldn't be read at load time. [what] is the user-facing
@@ -73,6 +78,18 @@ fun saveStore(target: File, text: String, keepBackup: Boolean = true): Boolean =
     runCatching { SafeFile.write(target, text, keepBackup) }
         .onFailure { persistLog("couldn't save ${target.name}: ${it.message}") }
         .isSuccess
+
+/** One FIFO queue per store file. */
+private val saveQueues = ConcurrentHashMap<String, Mutex>()
+
+/**
+ * Run [block] on IO, after every earlier call for [target], for a store saved as
+ * whole snapshots. [SafeFile] keeps overlapping saves from colliding, but not in
+ * order: two launched in a row hop to IO on their own, and the older snapshot
+ * could land last. The queue is taken before the hop, so call order wins.
+ */
+suspend fun <T> inSaveOrder(target: File, block: () -> T): T =
+    saveQueues.getOrPut(target.path) { Mutex() }.withLock { withContext(Dispatchers.IO) { block() } }
 
 /** [SafeFile.erase], logging a file that could not be deleted; true when gone. */
 fun eraseStore(target: File): Boolean =
