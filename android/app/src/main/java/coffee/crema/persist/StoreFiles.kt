@@ -17,9 +17,14 @@ import java.util.concurrent.ConcurrentHashMap
  * A store file that couldn't be read at load time. [what] is the user-facing
  * name ("shot history"); [keptAt] is the moved-aside copy, when there is one.
  * [olderCopy] says the store came back from its backup, so the newest save is
- * gone.
+ * gone. [setAside] says the user moved it, from the banner.
  */
-data class KeptAside(val what: String, val keptAt: File?, val olderCopy: Boolean = false)
+data class KeptAside(
+    val what: String,
+    val keptAt: File?,
+    val olderCopy: Boolean = false,
+    val setAside: Boolean = false,
+)
 
 /** How a store's load went. A store nothing has loaded yet is [LOADING]. */
 enum class StoreHealth { LOADING, OK, ABSENT, DAMAGED, UNAVAILABLE }
@@ -54,6 +59,10 @@ object Stores {
         }
     }
 
+    /** A new session: nothing has loaded for it yet. A refusal stays until a
+     *  load settles it, as [SafeFile] still holds it. */
+    internal fun forgetHealth() = health.clear()
+
     /** [target] has gone (Erase all data): nothing is left to refuse. */
     internal fun forget(target: File) {
         health.remove(target.path)
@@ -87,10 +96,12 @@ object KeptAsideNotices {
 
     /** The snackbar line for [items]: "Couldn't read your shot history and bean library; …". */
     fun message(items: List<KeptAside>): String {
-        val (older, unreadable) = items.partition { it.olderCopy }
+        val (older, rest) = items.partition { it.olderCopy }
+        val (aside, unreadable) = rest.partition { it.setAside }
         return listOfNotNull(
-            unreadableLine(unreadable).takeIf { unreadable.isNotEmpty() || older.isEmpty() },
+            unreadableLine(unreadable).takeIf { unreadable.isNotEmpty() || items.isEmpty() },
             olderLine(older).takeIf { older.isNotEmpty() },
+            "Your ${names(aside)} file was set aside, and you can share it from here.".takeIf { aside.isNotEmpty() },
         ).joinToString(" ")
     }
 
@@ -132,8 +143,9 @@ private fun persistLog(line: String) {
  * refusal per path logs and queues one notice, until the path opens or a new
  * session starts. A store with a lock checks on entry, before the lock: a save
  * that waits there while the store loads would otherwise be let through once
- * the load had opened it, still carrying its old snapshot. Under unit tests (the build's
- * `crema.strictSaves`) a refusal throws, so it fails the test that caused it.
+ * the load had opened it, still carrying its old snapshot. Under unit tests
+ * (the build's `crema.strictSaves`) a refusal throws, so it fails the test that
+ * caused it. A store being reloaded ([SafeFile.closeSaves]) refuses quietly.
  */
 object SaveFloor {
     private val noticed: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
@@ -148,6 +160,7 @@ object SaveFloor {
 
     /** Whether a save to [target] may run; refusing tells whoever should know. */
     fun admit(target: File, what: String): Boolean {
+        if (SafeFile.savesHeld(target)) return false
         if (SafeFile.savesOpen(target)) return true
         if (throwOnRefusal) throw AssertionError("saved ${target.name} before it loaded")
         if (noticed.add(target.path)) {

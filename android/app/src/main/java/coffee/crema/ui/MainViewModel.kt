@@ -84,6 +84,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import android.net.Uri
 import kotlinx.serialization.json.put
@@ -360,7 +361,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
         seriesReady = { library.awaitSeries() },
-        shotsLoaded = { library.seriesReady },
+        shotsLoaded = { library.seriesReady && !library.historyRefused },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
         onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
         networkWatcher = coffee.crema.visualizer.DefaultNetworkWatcher(app),
@@ -914,6 +915,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         setBackgroundStartAllowed = { bgConnection.setBackgroundStartAllowed(it) },
     )
 
+    /** One store reload at a time: a double tap, or both banner buttons. */
+    private val storeReload = kotlinx.coroutines.sync.Mutex()
+
     /** Every store file reported unreadable this process (see [KeptAsideNotices]). */
     private var keptAside: List<KeptAside> = emptyList()
 
@@ -995,40 +999,57 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The banner's Try again: read [store] again and take what's there. */
-    fun retryStore(store: RefusedStore) = viewModelScope.launch { reopenStore(store) }
-
-    /** The banner's Set this aside: move the unreadable file with the other
-     *  kept-aside copies and carry on without it. If the rename fails too, the
-     *  banner stays. */
-    fun putStoreAside(store: RefusedStore) {
-        viewModelScope.launch {
-            val moved = withContext(Dispatchers.IO) { SafeFile.setAside(store.file) }
-            if (moved) reopenStore(store) else appendLog("Couldn't set ${store.what} aside")
+    /** The banner's Try again: load [store] from disk, only once it reads, as a
+     *  load that still fails would empty what's in memory. Reading it first
+     *  changes nothing, so saves stay refused until the real load. */
+    fun retryStore(store: RefusedStore) = viewModelScope.launch {
+        storeReload.withLock {
+            val read = withContext(Dispatchers.IO) { SafeFile.peek(store.file) { it } }
+            if (read is SafeLoad.Unavailable) {
+                appendLog("Still couldn't read ${store.what}: ${read.error}")
+                return@withLock
+            }
+            holdStoreReload?.invoke()
+            SafeFile.closeSaves(store.file)
+            reloadStore(store)
         }
     }
 
-    /** Load [store] for real only once it reads: a load that still fails would
-     *  replace what's in memory with an empty store. */
-    private suspend fun reopenStore(store: RefusedStore) {
-        val read = withContext(Dispatchers.IO) { loadStore(store.file, store.what) { it } }
-        if (read is SafeLoad.Unavailable) {
-            appendLog("Still couldn't read ${store.what}: ${read.error}")
-            return
-        }
-        when (store.file.name) {
-            LibraryStore.FILE_NAME -> library.loadLibrary()
-            HistoryStore.FILE_NAME -> library.reloadHistory()
-            SettingsStore.FILE_NAME -> loadPrefs()
-            PinnedProfileStore.FILE_NAME, HiddenProfileStore.FILE_NAME, CustomProfileStore.FILE_NAME -> {
-                library.loadProfileMeta()
-                library.loadCustomProfiles()
+    /** The banner's Set this aside: move the unreadable file with the other
+     *  kept-aside copies, offer it for sharing, and carry on without it. If the
+     *  rename fails too, the banner stays. */
+    fun putStoreAside(store: RefusedStore) = viewModelScope.launch {
+        storeReload.withLock {
+            val kept = withContext(Dispatchers.IO) { SafeFile.setAside(store.file) }
+            if (kept == null) {
+                appendLog("Couldn't set ${store.what} aside")
+                return@withLock
             }
-            RecipeFileStore.FILE_NAME -> guided.loadRecipes()
-            MaintenanceStore.FILE_NAME -> maintenance.load()
-            VisualizerStore.FILE_NAME -> visualizer.load()
-            DecentStore.FILE_NAME -> decent.load()
-            DriveStore.FILE_NAME -> drive.load()
+            KeptAsideNotices.report(KeptAside(store.what, kept, setAside = true))
+            reloadStore(store)
+        }
+    }
+
+    /** Load [store] into the UI state. Its saves open only once that has landed,
+     *  whichever store it is, and then stay refused if the load says so. */
+    private suspend fun reloadStore(store: RefusedStore) {
+        try {
+            when (store.file.name) {
+                LibraryStore.FILE_NAME -> library.loadLibrary()
+                HistoryStore.FILE_NAME -> library.reloadHistory()
+                SettingsStore.FILE_NAME -> loadPrefs()
+                PinnedProfileStore.FILE_NAME, HiddenProfileStore.FILE_NAME, CustomProfileStore.FILE_NAME -> {
+                    library.loadProfileMeta()
+                    library.loadCustomProfiles()
+                }
+                RecipeFileStore.FILE_NAME -> guided.loadRecipes()
+                MaintenanceStore.FILE_NAME -> maintenance.load()
+                VisualizerStore.FILE_NAME -> visualizer.load()
+                DecentStore.FILE_NAME -> decent.load()
+                DriveStore.FILE_NAME -> drive.load()
+            }
+        } finally {
+            SafeFile.openSaves(store.file)
         }
     }
 
@@ -2515,6 +2536,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
          */
         @androidx.annotation.VisibleForTesting
         @Volatile internal var holdStartupLoad: kotlinx.coroutines.Deferred<Unit>? = null
+
+        /** Test seam: holds Try again between reading a store and reloading it. */
+        @Volatile internal var holdStoreReload: (suspend () -> Unit)? = null
 
         private const val MAX_LOG_LINES = 200
 

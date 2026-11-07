@@ -48,7 +48,6 @@ import coffee.crema.machine.RelayMachine
 import coffee.crema.machine.RelayedCommandDispatcher
 import coffee.crema.persist.SafeFile
 import coffee.crema.persist.SafeLoad
-import coffee.crema.persist.loadStore
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.decodePrefs
 import java.io.File
@@ -1739,9 +1738,9 @@ class ProxyController(
     private fun readProxyConfigSync(): ProxyConfig = proxyConfigCache
 
     private fun readProxyConfigUncached(): ProxyConfig {
-        // Through the store's own read, as it can land between a save's two
-        // renames. Not its load: the VM's hasn't run, so its saves stay refused.
-        val read = loadStore(File(app.filesDir, "prefs.json"), "settings", open = false) { decodePrefs(json, it) }
+        // Reads what a load would, as this can land between a save's two renames.
+        // Not a load: the VM's hasn't run, and it's the one that says what it found.
+        val read = SafeFile.peek(File(app.filesDir, "prefs.json")) { decodePrefs(json, it) }
         val p = (read as? SafeLoad.Loaded)?.value ?: return ProxyConfig("normal", "", 0)
         return ProxyConfig(p.proxyRole, p.proxyPrimaryHost, p.proxyPrimaryPort, p.replayPrimary)
     }

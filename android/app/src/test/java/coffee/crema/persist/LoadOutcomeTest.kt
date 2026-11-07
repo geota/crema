@@ -15,6 +15,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -34,6 +35,7 @@ class LoadOutcomeTest {
         SafeFile.resetForTest()
         Stores.resetForTest()
         KeptAsideNotices.drain()
+        SafeFile.openAllForTest()
     }
 
     @After fun cleanup() {
@@ -90,7 +92,7 @@ class LoadOutcomeTest {
         target().writeText("[1,2]")
         SafeFile.load(target()) { throw OutOfMemoryError() }
         assertFailsWith<IOException> { SafeFile.write(target(), "[]") }
-        assertFalse(saveStore(target(), "[]"))
+        assertFalse(saveStore(target(), "shot history", "[]"))
         assertEquals("[1,2]", target().readText())
     }
 
@@ -126,10 +128,10 @@ class LoadOutcomeTest {
         target().setReadable(false)
         SafeFile.load(target(), decode = ::decodeList)
 
-        assertTrue(SafeFile.setAside(target()))
+        val kept = assertNotNull(SafeFile.setAside(target()))
+        assertEquals(kept, SafeFile.keptAside(target()).single())
         assertFalse(target().exists())
         assertFalse(SafeFile.isBlocked(target()))
-        val kept = SafeFile.keptAside(target()).single()
         kept.setReadable(true)
         assertEquals("[1,2]", kept.readText())
 
@@ -141,9 +143,10 @@ class LoadOutcomeTest {
     fun setAsideGetsPastACopyThatCantBeReadEither() {
         target().writeText("[1,2]")
         bak().writeText("[1]")
-        SafeFile.setAside(target())
+        SafeFile.load(target()) { throw OutOfMemoryError() }
+        assertNotNull(SafeFile.setAside(target()))
         assertIs<SafeLoad.Unavailable>(SafeFile.load(target()) { throw OutOfMemoryError() })
-        assertTrue(SafeFile.setAside(target()))
+        assertNotNull(SafeFile.setAside(target()))
         assertEquals(SafeLoad.Absent, SafeFile.load(target(), decode = ::decodeList))
         assertEquals(2, SafeFile.keptAside(target()).size)
     }
@@ -155,7 +158,7 @@ class LoadOutcomeTest {
         SafeFile.load(t) { throw OutOfMemoryError() }
         dir.setWritable(false)
         try {
-            assertFalse(SafeFile.setAside(t))
+            assertEquals(null, SafeFile.setAside(t))
             assertTrue(SafeFile.isBlocked(t))
         } finally {
             dir.setWritable(true)
@@ -163,17 +166,138 @@ class LoadOutcomeTest {
     }
 
     @Test
+    fun setAsideIsANoOpUnlessSavesAreRefused() {
+        target().writeText("[1,2]")
+        bak().writeText("[1]")
+        SafeFile.load(target(), decode = ::decodeList)
+        assertEquals(null, SafeFile.setAside(target()), "a double tap once it's been lifted")
+        assertEquals("[1,2]", target().readText())
+        assertEquals("[1]", bak().readText())
+    }
+
+    @Test
+    fun maxKeptNeverPrunesASetAside() {
+        target().writeText("[1,2]")
+        SafeFile.load(target()) { throw OutOfMemoryError() }
+        val kept = assertNotNull(SafeFile.setAside(target()))
+        repeat(SafeFile.MAX_KEPT + 2) {
+            target().writeText("{bad")
+            SafeFile.load(target(), decode = ::decodeList)
+        }
+        assertTrue(kept.exists())
+        assertEquals(SafeFile.MAX_KEPT + 1, SafeFile.keptAside(target()).size)
+    }
+
+    @Test
+    fun aSetAsideGoesWithEraseAllData() {
+        target().writeText("[1]")
+        SafeFile.load(target()) { throw OutOfMemoryError() }
+        val kept = assertNotNull(SafeFile.setAside(target()))
+        SafeFile.erase(target())
+        assertFalse(kept.exists())
+    }
+
+    /** A token's copy mustn't linger: signing in again replaces what it held. */
+    @Test
+    fun aSetAsideCredentialGoesAtTheNextSignIn() {
+        target().writeText("{}")
+        SafeFile.load(target()) { throw OutOfMemoryError() }
+        val kept = assertNotNull(SafeFile.setAside(target()))
+        SafeFile.openSaves(target())
+        SafeFile.writeCredential(target(), "{}", "sign-in")
+        assertFalse(kept.exists())
+    }
+
+    @Test
+    fun aSetAsideLeavesTheStoreClosedForItsReload() {
+        target().writeText("[1]")
+        SafeFile.load(target()) { throw OutOfMemoryError() }
+        SafeFile.setAside(target())
+        assertTrue(SafeFile.savesHeld(target()))
+        assertFalse(saveStore(target(), "shot history", "[]"))
+    }
+
+    @Test
+    fun aPeekChangesNothingWhateverItFinds() {
+        target().writeText("[1,2]")
+        SafeFile.load(target()) { throw OutOfMemoryError() }
+        Stores.record(target(), "shot history", SafeLoad.Unavailable("x"))
+
+        assertEquals(SafeLoad.Loaded(listOf(1, 2)), SafeFile.peek(target(), ::decodeList))
+        assertTrue(SafeFile.isBlocked(target()), "only a real load lifts a refusal")
+        assertEquals(StoreHealth.UNAVAILABLE, Stores.health(target()))
+    }
+
+    @Test
+    fun aPeekLeavesADamagedFileForTheLoadToFind() {
+        target().writeText("{bad")
+        bak().writeText("[1]")
+        assertEquals(SafeLoad.Loaded(listOf(1), recoveredFrom = "shots.json.bak"), SafeFile.peek(target(), ::decodeList))
+        assertEquals("{bad", target().readText())
+        assertEquals(emptyList(), SafeFile.keptAside(target()))
+        assertEquals(StoreHealth.LOADING, Stores.health(target()))
+    }
+
+    @Test
+    fun aPeekReportsWhatItCannotRead() {
+        assertEquals(SafeLoad.Absent, SafeFile.peek(target(), ::decodeList))
+        target().writeText("{bad")
+        assertIs<SafeLoad.Corrupt>(SafeFile.peek(target(), ::decodeList))
+        target().writeText("[1]")
+        target().setReadable(false)
+        assertIs<SafeLoad.Unavailable>(SafeFile.peek(target(), ::decodeList))
+    }
+
+    @Test
+    fun aLoadDoesNotOpenAStoreBeingReloaded() {
+        SafeFile.resetForTest()
+        target().writeText("[1]")
+        SafeFile.load(target(), decode = ::decodeList)
+        SafeFile.closeSaves(target())
+        SafeFile.load(target(), decode = ::decodeList)
+        assertFalse(SafeFile.savesOpen(target()))
+        SaveFloor.resetForTest()
+        assertFalse(saveStore(target(), "shot history", "[]"), "refused, and quietly: this doesn't throw")
+        assertEquals("[1]", target().readText())
+        SafeFile.openSaves(target())
+        assertTrue(saveStore(target(), "shot history", "[]"))
+    }
+
+    @Test
+    fun aFileThatCannotBeStatedIsNotAbsent() {
+        val dir = tmp.newFolder("locked")
+        val t = File(dir, "shots.json").apply { writeText("[1]") }
+        dir.setExecutable(false)
+        try {
+            assertIs<SafeLoad.Unavailable>(SafeFile.load(t, decode = ::decodeList))
+            assertTrue(SafeFile.isBlocked(t))
+        } finally {
+            dir.setExecutable(true)
+        }
+        assertEquals("[1]", t.readText())
+    }
+
+    @Test
+    fun aNewSessionHasNoHealthFromTheLastOne() {
+        target().writeText("[1]")
+        loadStore(target(), "shot history", decode = ::decodeList)
+        assertEquals(StoreHealth.OK, Stores.health(target()))
+        SafeFile.startSession()
+        assertEquals(StoreHealth.LOADING, Stores.health(target()))
+    }
+
+    @Test
     fun healthFollowsTheLoad() {
         assertEquals(StoreHealth.LOADING, Stores.health(target()))
-        loadStore(target(), "shot history", ::decodeList)
+        loadStore(target(), "shot history", decode = ::decodeList)
         assertEquals(StoreHealth.ABSENT, Stores.health(target()))
         target().writeText("[1]")
-        loadStore(target(), "shot history", ::decodeList)
+        loadStore(target(), "shot history", decode = ::decodeList)
         assertEquals(StoreHealth.OK, Stores.health(target()))
         loadStore(target(), "shot history") { throw OutOfMemoryError() }
         assertEquals(StoreHealth.UNAVAILABLE, Stores.health(target()))
         target().writeText("{oops")
-        loadStore(target(), "shot history", ::decodeList)
+        loadStore(target(), "shot history", decode = ::decodeList)
         assertEquals(StoreHealth.DAMAGED, Stores.health(target()))
     }
 
@@ -184,7 +308,7 @@ class LoadOutcomeTest {
         assertEquals(listOf(RefusedStore("shot history", target())), Stores.refused.value)
         loadStore(target(), "shot history") { throw OutOfMemoryError() }
         assertEquals(1, Stores.refused.value.size)
-        loadStore(target(), "shot history", ::decodeList)
+        loadStore(target(), "shot history", decode = ::decodeList)
         assertEquals(emptyList(), Stores.refused.value)
     }
 
@@ -194,7 +318,7 @@ class LoadOutcomeTest {
         val t = File(dir, "prefs.json").apply { writeText("{bad") }
         dir.setWritable(false)
         try {
-            loadStore(t, "settings", ::decodeList)
+            loadStore(t, "settings", decode = ::decodeList)
         } finally {
             dir.setWritable(true)
         }
@@ -212,7 +336,7 @@ class LoadOutcomeTest {
     @Test
     fun oneShotsTelemetryIsNoStoresHealth() {
         target().writeText("[1]")
-        loadItem(target(), "shot telemetry") { throw OutOfMemoryError() }
+        loadItem(target(), "shot telemetry", false) { throw OutOfMemoryError() }
         assertEquals(emptyList(), Stores.refused.value)
         assertTrue(SafeFile.isBlocked(target()))
     }
@@ -229,7 +353,7 @@ class LoadOutcomeTest {
     fun aStoreBackFromItsBackupSaysSo() {
         target().writeText("[1,")
         bak().writeText("[1]")
-        assertEquals(SafeLoad.Loaded(listOf(1), recoveredFrom = "shots.json.bak"), loadStore(target(), "shot history", ::decodeList))
+        assertEquals(SafeLoad.Loaded(listOf(1), recoveredFrom = "shots.json.bak"), loadStore(target(), "shot history", decode = ::decodeList))
         val notices = KeptAsideNotices.drain()
         assertEquals(
             "Your last change to your shot history couldn't be read, so the version before it was restored.",
@@ -242,8 +366,16 @@ class LoadOutcomeTest {
     fun aCompleteTempFileLosesNothingSoItSaysNothing() {
         target().writeText("[1,")
         tmpFile().writeText("[1,2]")
-        assertEquals(SafeLoad.Loaded(listOf(1, 2), recoveredFrom = "shots.json.tmp"), loadStore(target(), "shot history", ::decodeList))
+        assertEquals(SafeLoad.Loaded(listOf(1, 2), recoveredFrom = "shots.json.tmp"), loadStore(target(), "shot history", decode = ::decodeList))
         assertEquals(emptyList(), KeptAsideNotices.drain())
+    }
+
+    @Test
+    fun aSetAsideSaysSo() {
+        assertEquals(
+            "Your bean library file was set aside, and you can share it from here.",
+            KeptAsideNotices.message(listOf(KeptAside("bean library", File("x"), setAside = true))),
+        )
     }
 
     @Test

@@ -89,9 +89,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   only a file that doesn't decode is damaged. Anything else leaves it in place
   and refuses saves, and a banner says "Couldn't read your shot history, so
   changes aren't being saved". Try again reads it again, and Set this aside moves
-  it with the other kept-aside copies and carries on without it, so nothing is
-  lost either way. A shot made in the meantime stays. Android also now says when
-  a store came back from its backup, as the newest change is gone. Android.
+  it with the other kept-aside copies and carries on without it, and you can
+  share the file from the app. A set-aside sign-in goes at your next sign-in, so
+  old tokens don't linger. Try again reloads what's saved and discards changes
+  made since, except shots, which stay. A Visualizer pull waits until history
+  can be read. Android also now says when a store came back from its backup, as
+  the newest change is gone. Android.
 - **Android can't save a store before it has loaded** — a save that came before
   a store's load carried defaults, and could replace your data. Every store now
   refuses it, and the first refusal tells you what wasn't saved. This holds when

@@ -61,4 +61,5 @@ fun RefusedStoresBanner(
 
 /** The banner's line for [store]. */
 internal fun refusedStoreText(store: RefusedStore): String =
-    "Couldn't read your ${store.what}, so changes aren't being saved."
+    "Couldn't read your ${store.what}, so changes aren't being saved. " +
+        "Try again reloads what's saved and discards changes made since."

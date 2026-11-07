@@ -3,6 +3,9 @@ package coffee.crema.persist
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.NoSuchFileException
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
@@ -49,7 +52,9 @@ import java.util.concurrent.ConcurrentHashMap
  * that isn't marked (see [SaveFloor]), and [startSession] unmarks them all for
  * a new ViewModel, as this object can outlive one. A store whose state lands
  * after its load returns loads with `open = false` and calls [openSaves] once
- * the state is in place.
+ * the state is in place. A reload of a store that's already open goes between
+ * [closeSaves] and [openSaves], so nothing built from the state being replaced
+ * can land over the file. [peek] reads without touching any of this.
  *
  * **Overlap.** Every operation on a target holds that target's lock, because
  * they share its `.tmp`: without it the loser of two saves moves the target to
@@ -67,6 +72,9 @@ object SafeFile {
     private const val BAK = ".bak"
     private const val CORRUPT = ".corrupt-"
 
+    /** After [CORRUPT]: put there by [setAside], so [MAX_KEPT] leaves it alone. */
+    private const val SET_ASIDE = "kept-"
+
     /** Targets that couldn't be read, or moved aside: saving would destroy them. */
     private val blocked: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
 
@@ -75,6 +83,9 @@ object SafeFile {
 
     /** The newest session's number. */
     @Volatile private var session = 0
+
+    /** Targets being reloaded: refused, quietly, until [openSaves]. */
+    private val held: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
 
     /** See [openAllForTest]. */
     @Volatile private var allOpenForTest = false
@@ -87,6 +98,9 @@ object SafeFile {
     /** Test seam: runs after the temp file is synced and before any rename. */
     internal var beforeRename: (File) -> Unit = {}
 
+    /** Test seam: runs when a load has read its file, before it can open saves. */
+    internal var afterLoad: (File) -> Unit = {}
+
     /** Whether saves to [target] are being refused. */
     fun isBlocked(target: File): Boolean = target.path in blocked
 
@@ -94,8 +108,10 @@ object SafeFile {
      *  Returns the session's number, for [isCurrentSession]. */
     fun startSession(): Int {
         loaded.clear()
+        held.clear()
         allOpenForTest = false
         SaveFloor.forgetNotices()
+        Stores.forgetHealth()
         session += 1
         return session
     }
@@ -105,9 +121,24 @@ object SafeFile {
 
     /** [target]'s state is in place: gated saves may run. */
     fun openSaves(target: File) {
+        held -= target.path
         loaded += target.path
         SaveFloor.forgetNotice(target)
     }
+
+    /**
+     * Refuse saves to [target] until [openSaves], whatever a load does: it's
+     * about to be reloaded, and a snapshot built before the reload lands holds
+     * what the reload replaces. A refusal here is quiet, as the store is about
+     * to say what it holds.
+     */
+    fun closeSaves(target: File) {
+        loaded -= target.path
+        held += target.path
+    }
+
+    /** Whether [target] is between [closeSaves] and [openSaves]. */
+    fun savesHeld(target: File): Boolean = target.path in held
 
     /** Whether a load has finished for [target] this session. */
     fun savesOpen(target: File): Boolean = allOpenForTest || target.path in loaded
@@ -120,7 +151,7 @@ object SafeFile {
     /** The kept-aside corrupt copies of [target], newest first. */
     fun keptAside(target: File): List<File> =
         (target.parentFile?.listFiles { f -> f.name.startsWith(target.name + CORRUPT) } ?: emptyArray())
-            .sortedByDescending { it.name.substringAfterLast(CORRUPT).toLongOrNull() ?: 0L }
+            .sortedByDescending { it.name.substringAfterLast('-').toLongOrNull() ?: 0L }
 
     /** Atomically replace [target] with [text] (UTF-8). Throws on failure. */
     fun write(target: File, text: String, keepBackup: Boolean = true) =
@@ -132,7 +163,9 @@ object SafeFile {
      * `.corrupt-*` copy is deleted afterwards. Old tokens must not linger in
      * copies the backup / device-transfer rules cannot name (review 05 P3-5):
      * the previous session after a sign-out, or the plaintext token right
-     * after the SecretBox migration re-save. Refused before its store has
+     * after the SecretBox migration re-save. That includes a copy [setAside]
+     * kept: a credential is the one thing it doesn't keep for good, and signing
+     * in again replaces what it held. Refused before its store has
      * loaded, unless [gated] is off for a store that doesn't load through
      * [load]. [what] is the store's name in the notice.
      */
@@ -225,14 +258,45 @@ object SafeFile {
         open: Boolean = true,
         decode: (String) -> T,
     ): SafeLoad<T> = synchronized(lockOf(target)) {
-        loadLocked(target, log, decode).also { if (open) openSaves(target) }
+        loadLocked(target, log, decode).also {
+            afterLoad(target)
+            if (open && target.path !in held) openSaves(target)
+        }
+    }
+
+    /**
+     * What a load would find, with no side effects: nothing moved, recovered,
+     * refused or opened, whatever the outcome. For a read that isn't the store's
+     * load, and for checking a file reads before reloading a store from it.
+     */
+    fun <T : Any> peek(target: File, decode: (String) -> T): SafeLoad<T> = synchronized(lockOf(target)) {
+        var corrupt: Throwable? = null
+        for (file in listOf(target, tmpOf(target), backupOf(target))) {
+            val read = attempt(file, decode) ?: continue
+            read.getOrNull()?.let { value ->
+                return SafeLoad.Loaded(value, recoveredFrom = file.name.takeIf { file != target })
+            }
+            val error = read.exceptionOrNull() ?: continue
+            if (!isDecodeFailure(error)) return SafeLoad.Unavailable(describe(error))
+            corrupt = error
+        }
+        corrupt?.let { SafeLoad.Corrupt(null, describe(it)) } ?: SafeLoad.Absent
+    }
+
+    /** [decode] of [f]; null only if it isn't there. A failure to tell whether it
+     *  is says nothing about the store, so that's a failed read, not an absence. */
+    private fun <T : Any> attempt(f: File, decode: (String) -> T): Result<T>? = try {
+        Files.readAttributes(f.toPath(), BasicFileAttributes::class.java)
+        runCatching { decode(f.readText(Charsets.UTF_8)) }
+    } catch (_: NoSuchFileException) {
+        null
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
     private fun <T : Any> loadLocked(target: File, log: (String) -> Unit, decode: (String) -> T): SafeLoad<T> {
         val bak = backupOf(target)
         val tmp = tmpOf(target)
-        fun attempt(f: File): Result<T>? =
-            if (!f.isFile) null else runCatching { decode(f.readText(Charsets.UTF_8)) }
         fun unavailable(f: File, cause: Throwable): SafeLoad<T> {
             val error = describe(cause)
             blocked += target.path
@@ -241,7 +305,7 @@ object SafeFile {
         }
 
         blocked -= target.path
-        val primary = attempt(target)
+        val primary = attempt(target, decode)
         primary?.getOrNull()?.let { return SafeLoad.Loaded(it) }
         primary?.exceptionOrNull()?.takeUnless(::isDecodeFailure)?.let { return unavailable(target, it) }
 
@@ -261,7 +325,7 @@ object SafeFile {
         // crash between the two renames: it is the newest save, and only counts
         // if it decodes), then the previous good version.
         for (candidate in listOf(tmp, bak)) {
-            val r = attempt(candidate) ?: continue
+            val r = attempt(candidate, decode) ?: continue
             r.exceptionOrNull()?.takeUnless(::isDecodeFailure)?.let { return unavailable(candidate, it) }
             val value = r.getOrNull()
             if (value != null) {
@@ -279,14 +343,19 @@ object SafeFile {
      * Move what a load can't read out of [target]'s way, for a store that would
      * otherwise refuse saves for good: the target, or once that has gone the
      * temp file or backup that took its place. It's a rename, so it needs no
-     * read, and the file stays with the other kept-aside copies. Lifts the
-     * refusal; a rename that fails leaves it. Returns whether something moved.
+     * read, and it stays with the other kept-aside copies, past [MAX_KEPT]. Only
+     * a store that's refusing saves: anything else is a good file, and a double
+     * tap mustn't move a good backup. Lifts the refusal and leaves the store
+     * [closeSaves]d, for the caller to reload; a rename that fails changes
+     * nothing. Returns where the file went, or null if nothing moved.
      */
-    fun setAside(target: File): Boolean = synchronized(lockOf(target)) {
-        val file = listOf(target, tmpOf(target), backupOf(target)).firstOrNull { it.exists() }
-        if (file != null && quarantine(file, target) == null) return false
+    fun setAside(target: File): File? = synchronized(lockOf(target)) {
+        if (target.path !in blocked) return null
+        val file = listOf(target, tmpOf(target), backupOf(target)).firstOrNull { it.exists() } ?: return null
+        val kept = quarantine(file, target, CORRUPT + SET_ASIDE) ?: return null
+        closeSaves(target)
         blocked -= target.path
-        file != null
+        kept
     }
 
     /** Whether [e], thrown by a load, shows the file's content is bad. A
@@ -296,21 +365,22 @@ object SafeFile {
     private fun describe(e: Throwable) = e.message ?: e.javaClass.simpleName
 
     /** Move [file] to `<target>.corrupt-<epochMs>` and prune to [MAX_KEPT]; null on failure. */
-    private fun quarantine(file: File, target: File): File? {
+    private fun quarantine(file: File, target: File, tag: String = CORRUPT): File? {
         val dest = run {
             // Numbered after the newest copy kept, never before it: several
             // quarantines in one millisecond bump the number, and once the
             // prune deleted the oldest, the wall clock alone could reuse its
             // (lower) number and the newest copy would sort, and be pruned, as
             // the oldest.
-            val newest = keptAside(target).firstOrNull()?.name?.substringAfterLast(CORRUPT)?.toLongOrNull()
+            val newest = keptAside(target).firstOrNull()?.name?.substringAfterLast('-')?.toLongOrNull()
             var ms = maxOf(System.currentTimeMillis(), (newest ?: Long.MIN_VALUE) + 1)
             var f: File
-            do { f = File(target.parentFile, target.name + CORRUPT + ms); ms++ } while (f.exists())
+            do { f = File(target.parentFile, target.name + tag + ms); ms++ } while (f.exists())
             f
         }
         if (!file.renameTo(dest)) return null
-        keptAside(target).drop(MAX_KEPT).forEach { it.delete() }
+        keptAside(target).filterNot { SET_ASIDE in it.name.substringAfterLast(CORRUPT) }
+            .drop(MAX_KEPT).forEach { it.delete() }
         return dest
     }
 
@@ -324,8 +394,10 @@ object SafeFile {
     internal fun resetForTest() {
         blocked.clear()
         loaded.clear()
+        held.clear()
         allOpenForTest = false
         beforeRename = {}
+        afterLoad = {}
     }
 }
 
