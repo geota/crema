@@ -374,6 +374,26 @@ class UnboundTombstoneTest {
     }
 
     @Test
+    fun `a parked tombstone isn't this account's to match or expire`() {
+        val parked = UnboundTombstone("s1", completedAt, 30_000, 1L, deleteRemote = true, writtenRun = 0, parkedFor = "old")
+        val v = sync(VisualizerState(tokens = tokens, pullRun = 3, unboundTombstones = listOf(parked)))
+        listRemote()
+        pull(v)
+        assertEquals("the row is this account's own", 1, pulled.size)
+        val after = stored()
+        assertEquals("kept for its account", listOf("s1"), after.unboundTombstones.map { it.id })
+        assertTrue(after.shotTombstones.isEmpty())
+    }
+
+    @Test
+    fun `an id landing on a parked tombstone stays parked`() {
+        val parked = UnboundTombstone("s1", completedAt, 30_000, 1L, deleteRemote = true, parkedFor = "old")
+        val bound = VisualizerState(unboundTombstones = listOf(parked)).withTombstoneBound("s1", "v-1", 5L)
+        assertEquals("old", bound.shotTombstones.single().parkedFor)
+        assertFalse("its delete waits for that account", bound.shotTombstones.single().owed)
+    }
+
+    @Test
     fun `a shot deleted while its upload waited is not POSTed`() {
         val gate = CompletableDeferred<Unit>()
         val s = shot()

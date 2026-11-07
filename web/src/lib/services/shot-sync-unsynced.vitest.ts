@@ -27,7 +27,10 @@ const h = vi.hoisted(() => ({
 	enqueueEntry: vi.fn(),
 	appendSyncLog: vi.fn(),
 	/** The shot id whose export throws, as `profile: "junk"` does. */
-	throwsOn: null as string | null
+	throwsOn: null as string | null,
+	/** `uploadsHeld`, and the cut-off `excludedFromUpload` reads. */
+	held: false,
+	excludedBefore: 0
 }));
 
 vi.mock('#lib/settings/index.js', () => ({
@@ -55,6 +58,8 @@ vi.mock('#lib/visualizer/shot-sync-signatures.js', () => ({
 vi.mock('./queue-store.ts', () => ({ enqueueEntry: h.enqueueEntry }));
 // buildShotPayload reads the upload prefs from the sync-config (the unification).
 vi.mock('#lib/visualizer/sync-config.js', () => ({
+	uploadsHeld: () => h.held,
+	excludedFromUpload: (s: { completedAt: number }) => s.completedAt < h.excludedBefore,
 	appendSyncLog: h.appendSyncLog,
 	readSyncConfig: () => ({ includeProfile: true, includeNotes: true, privacy: 'unlisted' })
 }));
@@ -165,6 +170,8 @@ function run(history: HistoryStore) {
 beforeEach(() => {
 	localStorage.clear();
 	h.throwsOn = null;
+	h.held = false;
+	h.excludedBefore = 0;
 	h.reconcile = [];
 	h.enqueueEntry.mockClear();
 	h.appendSyncLog.mockClear();
@@ -427,6 +434,23 @@ describe('ShotSync.uploadUnsyncedShots — free-plan daily quota (visualizer 3e9
 		const { result, posts } = await runFailing(history, 403, '{"error":"You are not authorized to perform this action."}');
 		expect(posts).toHaveLength(3);
 		expect(result.stopped).toBeNull();
+	});
+
+	it('unknown_identity_holds_uploads: a held account POSTs nothing and says why', async () => {
+		h.held = true;
+		const { result, posts } = await runFailing(three(), 500, '');
+		expect(posts).toHaveLength(0);
+		expect(describeUnsyncedStop(result)).toEqual({
+			kind: 'info',
+			message: 'Visualizer is waiting on your account. See Settings → Sharing.'
+		});
+	});
+
+	it('decline_upload_lets_new_shots_flow: only the shots of then stay back', async () => {
+		h.excludedBefore = 2_000_000;
+		const history = mkHistory([shot({ id: 'old', completedAt: 1_000_000 }), shot({ id: 'new', completedAt: 3_000_000 })]);
+		const { posts } = await runFailing(history, 500, '');
+		expect(posts).toHaveLength(1);
 	});
 
 	it('stops on a 429 and queues that shot for a delayed retry', async () => {

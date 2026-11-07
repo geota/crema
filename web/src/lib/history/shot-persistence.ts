@@ -28,6 +28,8 @@ import { getProfileStore } from '#lib/profiles/index.js';
 import { getActiveShotStore, type ActiveShotData } from '#lib/state/active-shot.svelte.js';
 import type { ShotCaptureContext } from '#lib/core/crema-core.js';
 import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
+import { uploadsHeld } from '#lib/visualizer/sync-config.js';
+import { ACCOUNT_HELD_NOTICE } from '#lib/services/account-held.js';
 import { liveMachineIdentity, pushShotToDecent } from '#lib/decent/upload.js';
 import { isDecentLinked, readDecentAccount } from '#lib/decent/account.js';
 import { hasStoredVisualizerTokens } from '#lib/services/token-vault.js';
@@ -227,7 +229,7 @@ export function commitShotCompletion(
 function autoUploadDestinations(): string[] {
 	const out: string[] = [];
 	const cfg = readSyncConfig();
-	if (directionPushes(cfg.direction.shots) && cfg.autoUpload && hasStoredVisualizerTokens()) {
+	if (directionPushes(cfg.direction.shots) && cfg.autoUpload && hasStoredVisualizerTokens() && !uploadsHeld(cfg)) {
 		out.push('Visualizer');
 	}
 	const decent = readDecentAccount();
@@ -474,6 +476,11 @@ export function pushShotToVisualizer(
 	opts?: { manual?: boolean }
 ): Effect.Effect<void, never, ShotSync | UploadQueue> {
 	return Effect.gen(function* () {
+		// Manual or not: nothing goes to an account this device can't name.
+		if (uploadsHeld()) {
+			reportUploadOutcome(shotId, 'Visualizer', { kind: 'skipped', message: ACCOUNT_HELD_NOTICE });
+			return;
+		}
 		// A MANUAL push (the History detail's Upload / Re-upload action) skips
 		// the auto-upload gates: the caller already gated on connected + push
 		// direction, and the auto-upload pref must not veto an explicit tap.

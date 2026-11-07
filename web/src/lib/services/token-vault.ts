@@ -17,6 +17,11 @@
  *    definitively rejects the refresh token (`invalid_grant`); a network
  *    failure, timeout or 5xx keeps the stored set and fails retryably
  *    (`NetworkError` / `HttpStatusError`) — review 03 P1-1,
+ *  - a refresh writes only onto the set it started from: one finishing after a
+ *    sign-out must not sign back in, and one finishing after a sign-in as
+ *    someone else must not store the old account's tokens,
+ *  - a session the server ended marks `needsReconnect` in the sync config, and
+ *    keeps everything else,
  *  - single-flight refresh: concurrent callers share one refresh, so a rotating
  *    refresh token is spent once, and a caller never clears a set another
  *    caller (or tab) stored in the meantime — review 03 P1-2,
@@ -39,6 +44,7 @@ import {
 import { OAuth } from './oauth.ts';
 import type { TokenSet } from '../visualizer/oauth.ts';
 import { SecretBoxUnavailableError, secretBox } from '../security/secret-box.ts';
+import { updateSyncConfig } from '../visualizer/sync-config.ts';
 
 const TOKENS_KEY = 'crema.visualizer.tokens.v1';
 /** Refresh proactively when the access token has < 5 minutes left. */
@@ -210,8 +216,19 @@ export const TokenVaultLive = Layer.effect(
 				return same ? Option.none() : Option.some(loaded);
 			});
 
-		const storeTokens = (t: TokenSet): Effect.Effect<void, SecretBoxUnavailableError> =>
-			Effect.promise(async (): Promise<SecretBoxUnavailableError | null> => {
+		/** The stored item as it stands, for telling whether it moved. */
+		const rawTokens = () => (typeof localStorage === 'undefined' ? null : localStorage.getItem(TOKENS_KEY));
+
+		/**
+		 * Persist `t`, unless storage has moved on from `unchangedFrom` while it
+		 * was being wrapped (a sign-out or sign-in in that gap wins). `true` when
+		 * it was stored.
+		 */
+		const writeTokens = (
+			t: TokenSet,
+			unchangedFrom?: string | null
+		): Effect.Effect<boolean, SecretBoxUnavailableError> =>
+			Effect.promise(async (): Promise<SecretBoxUnavailableError | 'moved' | null> => {
 				let wrapped: TokenSet;
 				try {
 					wrapped = await wrapTokens(t);
@@ -225,18 +242,23 @@ export const TokenVaultLive = Layer.effect(
 					storedButUnreadable = false;
 					return e;
 				}
+				if (unchangedFrom !== undefined && rawTokens() !== unchangedFrom) return 'moved';
 				writeJson(TOKENS_KEY, wrapped);
 				storedButUnreadable = false;
 				return null;
 			}).pipe(
 				// The mirror follows storage: the new set when it was saved,
 				// signed out when it was not (final review 06 #11).
-				Effect.flatMap((failure) =>
-					failure === null
-						? SubscriptionRef.set(ref, t)
-						: SubscriptionRef.set(ref, null).pipe(Effect.andThen(Effect.fail(failure)))
-				)
+				Effect.flatMap((failure) => {
+					if (failure === 'moved') return Effect.succeed(false);
+					return failure === null
+						? SubscriptionRef.set(ref, t).pipe(Effect.as(true))
+						: SubscriptionRef.set(ref, null).pipe(Effect.andThen(Effect.fail(failure)));
+				})
 			);
+
+		const storeTokens = (t: TokenSet): Effect.Effect<void, SecretBoxUnavailableError> =>
+			Effect.asVoid(writeTokens(t));
 
 		const clearTokens = Effect.andThen(
 			Effect.sync(() => {
@@ -244,6 +266,11 @@ export const TokenVaultLive = Layer.effect(
 				storedButUnreadable = false;
 			}),
 			SubscriptionRef.set(ref, null)
+		);
+
+		/** Signed out by the server: the banner stays until a sign-in or a disconnect. */
+		const endSession = clearTokens.pipe(
+			Effect.andThen(Effect.sync(() => void updateSyncConfig({ needsReconnect: true })))
 		);
 
 		const isExpiringSoon = (t: TokenSet) => t.expiresAt - Date.now() <= EXPIRY_SAFETY_MS;
@@ -272,10 +299,11 @@ export const TokenVaultLive = Layer.effect(
 
 		/**
 		 * Refresh the STORED set and persist the result. Runs under the refresh
-		 * lock. Only a definitive grant rejection clears the tokens, and only
-		 * when the stored refresh token is still the one that was rejected —
-		 * if another tab or a fresh sign-in stored a newer set meanwhile, that
-		 * set wins. Transient failures propagate and leave storage untouched.
+		 * lock. Both outcomes act only when the stored refresh token is still
+		 * the one spent: if another tab or a fresh sign-in stored a newer set
+		 * meanwhile, that set wins, and after a sign-out nothing comes back.
+		 * Only a definitive grant rejection clears the tokens. Transient
+		 * failures propagate and leave storage untouched.
 		 */
 		const refreshStored = (
 			t: TokenSet
@@ -284,23 +312,43 @@ export const TokenVaultLive = Layer.effect(
 			NotAuthenticatedError | TokenRefreshFailedError | NetworkError | HttpStatusError
 		> => {
 			if (!t.refreshToken) {
-				return clearTokens.pipe(Effect.andThen(Effect.fail(new NotAuthenticatedError())));
+				return endSession.pipe(Effect.andThen(Effect.fail(new NotAuthenticatedError())));
 			}
 			const rt = t.refreshToken;
 			return oauth.refreshToken(rt).pipe(
 				// Doorkeeper rotates refresh tokens; keep the old one if omitted.
 				Effect.map((fresh): TokenSet => ({ ...fresh, refreshToken: fresh.refreshToken ?? rt })),
-				Effect.tap((t) => storeTokens(t).pipe(Effect.mapError(() => new NotAuthenticatedError()))),
+				Effect.flatMap((fresh) => storeOver(rt, fresh)),
 				Effect.catchTag('TokenRefreshFailedError', (err) =>
 					Effect.gen(function* () {
 						const now = yield* getTokens;
-						if (now !== null && now.refreshToken !== rt) return now;
-						yield* clearTokens;
+						if (now === null) return yield* Effect.fail(err);
+						if (now.refreshToken !== rt) return now;
+						yield* endSession;
 						return yield* Effect.fail(err);
 					})
 				)
 			);
 		};
+
+		/**
+		 * Store `fresh` only if `spent` is still the stored refresh token, and
+		 * answer with the set that's stored afterwards. Signed out meanwhile:
+		 * `NotAuthenticatedError`, with nothing written.
+		 */
+		const storeOver = (spent: string, fresh: TokenSet) =>
+			Effect.gen(function* () {
+				const before = rawTokens();
+				const now = yield* getTokens;
+				const stored =
+					now !== null &&
+					now.refreshToken === spent &&
+					(yield* writeTokens(fresh, before).pipe(Effect.mapError(() => new NotAuthenticatedError())));
+				if (stored) return fresh;
+				const winner = yield* getTokens;
+				if (winner === null) return yield* Effect.fail(new NotAuthenticatedError());
+				return winner;
+			});
 
 		/**
 		 * Single-flight refresh, starting from the set the caller `observed`.

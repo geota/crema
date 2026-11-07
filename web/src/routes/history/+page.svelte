@@ -106,6 +106,7 @@
 	import { onMount, untrack } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { uploadPending } from '#lib/history/store.svelte.js';
+	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
 	import { readQueue } from '#lib/services/queue-store.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { describeUnsyncedStop } from '#lib/services/shot-sync.js';
@@ -365,7 +366,7 @@
 		return { pip: off.length === 0 ? 'uploaded' : 'partial', title: title || 'Local only' };
 	}
 	/** Are we connected + push-enabled? Gates the "Upload all" button. */
-	const canPushShots = $derived(connected && directionPushes(syncConfig.direction.shots));
+	const canPushShots = $derived(connected && directionPushes(syncConfig.direction.shots) && !uploadsHeld(syncConfig));
 
 	/**
 	 * Best-effort: mirror a History-panel edit (rating / notes / privacy /

@@ -24,6 +24,7 @@ import {
 	settleUploadMarks,
 	uploadAttempted
 } from '#lib/visualizer/upload-marks.js';
+import { excludedFromUpload, readSyncConfig } from '#lib/visualizer/sync-config.js';
 import type { RustStoredShot, TimedSample } from '#lib/core/index.js';
 import type { BrewSeries } from '#lib/core/crema-core.js';
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
@@ -197,7 +198,10 @@ export class HistoryStore {
 	/** The shots waiting to go to Visualizer. */
 	get visualizerBacklog(): StoredShot[] {
 		const none = new Set(this.withoutTelemetry.map((s) => s.id));
-		return this.all.filter((s) => !s.visualizerId && !isBrewLog(s) && !none.has(s.id));
+		const config = readSyncConfig();
+		return this.all.filter(
+			(s) => !s.visualizerId && !isBrewLog(s) && !none.has(s.id) && !excludedFromUpload(s, config)
+		);
 	}
 
 	private async hydrateSeries(): Promise<void> {
@@ -636,7 +640,9 @@ export class HistoryStore {
 	bindVisualizerId(id: string, visualizerId: string): void {
 		const tombstone = settleUploadMarks(id);
 		// Deleted during its upload, with the remote copy to go too.
-		if (tombstone?.deleteRemote) enqueueEntry({ entity: 'shot', id, op: 'delete', visualizerId });
+		if (tombstone?.deleteRemote) {
+			enqueueEntry({ entity: 'shot', id, op: 'delete', visualizerId, parkedFor: tombstone.parkedFor });
+		}
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) {
 			keepRemoteOut(visualizerId);

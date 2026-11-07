@@ -1306,6 +1306,33 @@ pub fn pull_covers_attempt(since_ms: i64, attempted_at_ms: Option<i64>) -> bool 
     de1_domain::pull_covers_attempt(since_ms, attempted_at_ms)
 }
 
+/// What a run's JSON `RunOutcome` leaves a service showing: a JSON `SyncHealth`.
+/// See [`de1_domain::sync_health_after_run`].
+///
+/// # Errors
+/// When `outcome_json` isn't a `RunOutcome`.
+#[uniffi::export]
+pub fn sync_health_after_run(outcome_json: String, now_ms: i64) -> Result<String, CremaError> {
+    de1_domain::sync_health_after_run_json(&outcome_json, now_ms).map_err(CremaError::from)
+}
+
+/// Whether moving between two JSON `SyncHealth`s raises the one reconnect
+/// notice. See [`de1_domain::reconnect_notice_due`].
+#[uniffi::export]
+pub fn reconnect_notice_due(previous: Option<String>, next: String) -> bool {
+    de1_domain::reconnect_notice_due_json(previous.as_deref(), &next)
+}
+
+/// What a confirmed `/me` means: `"First"`, `"Same"` or `"Changed"`. See
+/// [`de1_domain::account_change_action`].
+#[uniffi::export]
+pub fn account_change_action(stored: Option<String>, me: String) -> String {
+    format!(
+        "{:?}",
+        de1_domain::account_change_action(stored.as_deref(), &me)
+    )
+}
+
 /// Whether an upload must refuse a stored row for having no telemetry. See
 /// [`de1_domain::upload_refused_no_samples`].
 #[uniffi::export]

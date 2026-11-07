@@ -47,9 +47,12 @@ import {
 	type EnqueueInput,
 	type QueueEntry
 } from './queue-store.ts';
+import { confirmAccount } from './visualizer-account.ts';
+import { hasStoredVisualizerTokens } from './token-vault.ts';
 import { getHistoryStore } from '#lib/history/index.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import { appendSyncLog } from '#lib/visualizer/sync-config.js';
+import { readSyncConfig, uploadsHeld } from '#lib/visualizer/sync-config.js';
 
 export type { EnqueueInput, QueueEntry } from './queue-store.ts';
 
@@ -146,7 +149,7 @@ export const UploadQueueLive = Layer.effect(
 		const doDrain = Effect.gen(function* () {
 			const out: DrainResult = { processed: 0, succeeded: 0, dropped: 0, deferred: 0 };
 			const now = Date.now();
-			const ready = readQueue().entries.filter((e) => e.nextAttemptAt <= now);
+			const ready = readQueue().entries.filter((e) => e.nextAttemptAt <= now && !e.parkedFor);
 			for (const entry of ready) {
 				out.processed += 1;
 				// A throw is a defect, which `Effect.result` lets through: one row
@@ -205,6 +208,14 @@ export const UploadQueueLive = Layer.effect(
 
 		const drain: Effect.Effect<DrainResult> = Effect.gen(function* () {
 			if (yield* isOffline) return DEFERRED;
+			// Nothing moves until `/me` says whose session this is, so each drain
+			// asks. A session from before this was recorded gets its id here too.
+			const config = readSyncConfig();
+			if (config.accountUnconfirmed || (config.syncAccountId === null && hasStoredVisualizerTokens())) {
+				const known = yield* confirmAccount.pipe(Effect.provideService(BeanSync, beanSync));
+				if (!known && config.accountUnconfirmed) return DEFERRED;
+			}
+			if (uploadsHeld()) return DEFERRED;
 			// Atomic non-blocking single-flight: acquire only if not already busy.
 			const acquired = yield* Ref.modify(draining, (busy) =>
 				busy ? [false, true] : [true, true]

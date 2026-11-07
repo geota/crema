@@ -80,11 +80,19 @@ data class ShotTombstone(
     val deletedAt: Long,
     /** The user asked to delete the Visualizer copy too ("Also delete on Visualizer"). */
     val deleteRemote: Boolean = false,
-    /** Failed remote deletes so far (F17: at most three, on the core's rule). */
+    /** Failed remote deletes so far (core `visualizer_queue_decision`). */
     val attempts: Int = 0,
     /** Unix ms before which the retry drain leaves the remote delete alone (0 = due). */
     val nextAttemptAt: Long = 0L,
-)
+    /**
+     * The account the remote copy is on, while another is signed in: its delete
+     * waits, since this one would only be refused. Null = the signed-in account's.
+     */
+    val parkedFor: String? = null,
+) {
+    /** A remote delete the signed-in account should carry out. */
+    val owed: Boolean get() = deleteRemote && parkedFor == null
+}
 
 /**
  * A shot deleted here that may be on Visualizer without Crema knowing its id: an
@@ -112,6 +120,12 @@ data class UnboundTombstone(
     val writtenRun: Long = 0L,
     /** When the POST went (unix ms), or null when nothing recorded it. */
     val attemptedAt: Long? = null,
+    /**
+     * The account the POST went to, while another is signed in. Its rows aren't
+     * this account's to match, and a pull of this one says nothing about it, so it
+     * waits for that account to come back. Null = the signed-in account's.
+     */
+    val parkedFor: String? = null,
 )
 
 /**
@@ -172,6 +186,31 @@ data class VisualizerState(
      * way: a shared cursor starved the pull).
      */
     val shotPullCursor: Long? = null,
+    /**
+     * The Visualizer account this device's cursor, marks and queue belong to. It
+     * outlives a sign-out, so a sign-in as someone else is noticed; only Erase
+     * clears it. Seeded from [account] at load, so the first reconnect after this
+     * field arrived is covered.
+     */
+    val syncAccountId: String? = null,
+    /**
+     * Signed in, but `/me` hasn't said as whom. Nothing is sent or fetched until
+     * it does: the drain keeps asking.
+     */
+    val accountUnconfirmed: Boolean = false,
+    /** Signed in as a different account: uploads wait for the user's answer. */
+    val accountChangeAsk: Boolean = false,
+    /**
+     * Shots completed before this (unix ms) stay off the account: the user said
+     * no when asked. New shots flow, so uploads can't stay held for good.
+     */
+    val uploadExcludedBefore: Long? = null,
+    /**
+     * The server ended the session. Signed out, with the account, cursor, marks
+     * and tombstones kept, and a lasting banner until the user signs in or
+     * disconnects.
+     */
+    val needsReconnect: Boolean = false,
     /** Recent sync activity — capped at 20 entries, newest first. */
     val log: List<SyncLogEntry> = emptyList(),
     /**

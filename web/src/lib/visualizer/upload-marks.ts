@@ -27,6 +27,12 @@ export interface UnboundTombstone {
 	deleteRemote: boolean;
 	/** When the POST went (unix ms), or `null` when nothing recorded it. */
 	attemptedAt: number | null;
+	/**
+	 * The account the POST went to, while another is signed in. Its rows aren't
+	 * this account's to match, and a pull of this one says nothing about it, so it
+	 * waits for that account to come back.
+	 */
+	parkedFor?: string | null;
 }
 
 interface UploadMarks {
@@ -99,6 +105,31 @@ export function settleUploadMarks(id: string): UnboundTombstone | null {
 	return tombstone;
 }
 
+/**
+ * The account changed from `oldId` to `newId`. Attempt marks were about the old
+ * one and go. Unbound tombstones stay parked for the account the POST went to,
+ * and `newId`'s own come back into play.
+ */
+export function settleMarksForAccount(oldId: string | null, newId: string): void {
+	const marks = read();
+	const unbound = Object.fromEntries(
+		Object.entries(marks.unbound).map(([id, t]) => {
+			if (t.parkedFor === newId) return [id, { ...t, parkedFor: null }];
+			return [id, t.parkedFor ? t : { ...t, parkedFor: oldId }];
+		})
+	);
+	writeJson(MARKS_KEY, { ...marks, attempted: {}, unbound });
+}
+
+/** The tombstones parked for another account: a pull leaves them out. */
+export function parkedTombstones(): ReadonlySet<string> {
+	return new Set(
+		Object.entries(read().unbound)
+			.filter(([, t]) => t.parkedFor)
+			.map(([id]) => id)
+	);
+}
+
 /** `visualizerId` came back for a row that's gone: a pull must not add it. */
 export function keepRemoteOut(visualizerId: string): void {
 	const marks = read();
@@ -129,7 +160,10 @@ export function expiredTombstones(run: number, sinceMs: number): string[] {
 	return Object.entries(read().unbound)
 		.filter(
 			([id, t]) =>
-				t.run < run && !inFlight.has(id) && pullCoversAttempt(sinceMs, t.attemptedAt ?? undefined)
+				!t.parkedFor &&
+				t.run < run &&
+				!inFlight.has(id) &&
+				pullCoversAttempt(sinceMs, t.attemptedAt ?? undefined)
 		)
 		.map(([id]) => id);
 }

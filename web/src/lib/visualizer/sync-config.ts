@@ -68,6 +68,22 @@ export interface VisualizerSyncConfig {
 	 * skipped every pre-existing remote shot and reported "No new shots".
 	 */
 	shotPullCursor: number | null;
+	/**
+	 * The account this device's cursor, marks and queue belong to. It outlives a
+	 * sign-out, so a sign-in as someone else is noticed; a factory reset clears it.
+	 */
+	syncAccountId: string | null;
+	/** Signed in, but `/me` hasn't said as whom. Nothing moves until it does. */
+	accountUnconfirmed: boolean;
+	/** Signed in as a different account: uploads wait for the user's answer. */
+	accountChangeAsk: boolean;
+	/**
+	 * Shots completed before this (unix ms) stay off the account: the user said
+	 * no when asked. New shots flow, so uploads can't stay held for good.
+	 */
+	uploadExcludedBefore: number | null;
+	/** The server ended the session: signed out, and Settings asks to sign in again. */
+	needsReconnect: boolean;
 	/** Cached premium-status flag. `null` until probed. */
 	premium: boolean | null;
 	/** Recent sync log — capped at 20 entries, newest first. */
@@ -89,6 +105,11 @@ export const DEFAULT_SYNC_CONFIG: VisualizerSyncConfig = {
 	},
 	lastSyncAt: { beans: null, roasters: null, shots: null },
 	shotPullCursor: null,
+	syncAccountId: null,
+	accountUnconfirmed: false,
+	accountChangeAsk: false,
+	uploadExcludedBefore: null,
+	needsReconnect: false,
 	premium: null,
 	log: []
 };
@@ -216,6 +237,19 @@ export function appendSyncLog(entry: SyncLogEntry): void {
 export function clearSyncLog(): void {
 	const config = readSyncConfig();
 	writeSyncConfig({ ...config, log: [] });
+}
+
+/** Nothing goes up until the account is known and any change of it is answered. */
+export function uploadsHeld(config: VisualizerSyncConfig = readSyncConfig()): boolean {
+	return config.accountUnconfirmed || config.accountChangeAsk;
+}
+
+/** The user kept this shot off the account signed in now. */
+export function excludedFromUpload(
+	shot: { completedAt: number },
+	config: VisualizerSyncConfig = readSyncConfig()
+): boolean {
+	return config.uploadExcludedBefore !== null && shot.completedAt < config.uploadExcludedBefore;
 }
 
 /** Helper — does this direction include push? */

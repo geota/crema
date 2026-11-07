@@ -10,6 +10,7 @@ import { reconcileShots, type WireShot } from '#lib/visualizer/shot-sync-signatu
 import {
 	markUploadAttempted,
 	remoteKeptOut,
+	settleMarksForAccount,
 	uploadAttempted,
 	uploadReturned
 } from '#lib/visualizer/upload-marks.js';
@@ -103,6 +104,15 @@ describe('delete_during_upload_stays_deleted', () => {
 		uploadReturned('s1'); // a new tab holds nothing in memory
 		before.delete('s1');
 		expect(reconcileShots(new HistoryStore().rawAll, [remote()])[0]).toMatchObject({ kind: 'bind' });
+	});
+
+	it('a parked tombstone carries its parking onto the remote delete', () => {
+		const history = store();
+		markUploadAttempted('s1');
+		history.delete('s1', { deleteRemote: true });
+		settleMarksForAccount('u1', 'u2');
+		history.bindVisualizerId('s1', 'v-1');
+		expect(readQueue().entries).toMatchObject([{ id: 's1', op: 'delete', parkedFor: 'u1' }]);
 	});
 
 	it('an id for a row already gone is kept out of the next pull', () => {

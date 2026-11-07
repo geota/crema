@@ -347,6 +347,38 @@ class BeanSyncTest {
         assertEquals("Onyx Coffee Lab", library.roasters.single().name)
     }
 
+    // ── A change of account ──────────────────────────────────────────────────
+
+    private fun seedAccount(state: VisualizerState) = runBlocking {
+        store.save(state.copy(tokens = TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000), premium = true))
+    }
+
+    @Test
+    fun `nothing is pushed while a change of account is unanswered, and the pull still runs`() {
+        library = BeanLibrary(listOf(bean("Old")), listOf(roaster("Acme")), null)
+        seedAccount(VisualizerState(accountChangeAsk = true, beanLastSyncAt = 5))
+        val s = sync()
+        runBlocking { s.load() }
+        val r = runBlocking { s.runBeanSync() }!!
+        assertTrue(r.ok)
+        assertTrue("no writes: ${writes()}", writes().isEmpty())
+        assertTrue(requests.any { it.path == "/coffee_bags" })
+        assertEquals("the baseline waits for the push", 5L, runBlocking { store.load() }.beanLastSyncAt)
+    }
+
+    @Test
+    fun `a no keeps the old device's rows off the new account, and new ones go`() {
+        val old = bean("Old")
+        val fresh = newBean("New", null, roastLevel = null, roastedOn = null, nowMs = 9_000)
+        library = BeanLibrary(listOf(old, fresh), listOf(roaster("Acme")), null)
+        seedAccount(VisualizerState(uploadExcludedBefore = 5_000, beanLastSyncAt = 0))
+        val s = sync()
+        runBlocking { s.load() }
+        runBlocking { s.runBeanSync() }!!
+        assertEquals(1, writes().size)
+        assertTrue(writes().single().body.contains("New"))
+    }
+
     // ── Direction gates the legs ─────────────────────────────────────────────
 
     private fun runWith(beansDir: String, roastersDir: String): BeanSyncResult {
