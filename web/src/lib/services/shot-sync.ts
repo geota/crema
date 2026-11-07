@@ -46,6 +46,7 @@ import {
 	isAccountBlocked,
 	isRateLimited,
 	isRecoverable,
+	pendingEditFailure,
 	quotaLimit,
 	refusedUpload,
 	quotaNotice,
@@ -66,6 +67,7 @@ import { historyFullNotice } from '#lib/history/brew-date.js';
 import { effectiveGrindSetting } from '#lib/history/index.js';
 import { exportStoredShotAsV2Json } from '#lib/history/v2-export.js';
 import type { ShotPatchInputs, TimedSample } from '#lib/core/index.js';
+import type { ShotMergeInput, ShotPatch as RemoteShotPatch, TagMarks } from '#lib/core/crema-core.js';
 import { isBrewLog, refusedNoSamples, type ShotBean, type StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { getSettingsStore } from '#lib/settings/index.js';
@@ -82,8 +84,19 @@ import {
 	readSyncConfig,
 	uploadsHeld
 } from '#lib/visualizer/sync-config.js';
-import { BaristaPending } from '#lib/visualizer/barista-pending.js';
 import {
+	hasTagMarks,
+	markShotEdit,
+	pendingEdit,
+	pendingEdits,
+	settlePendingEdit,
+	type PendingEdit
+} from '#lib/visualizer/pending-edits.js';
+import {
+	mergeRemoteShot as wasmMergeRemoteShot,
+	normalizeTags as wasmNormalizeTags,
+	settleTagPush as wasmSettleTagPush,
+	tagPushList as wasmTagPushList,
 	samplesFromVisualizerDetail as wasmSamplesFromVisualizerDetail,
 	wireShotFromDetail as wasmWireShotFromDetail,
 	parseV2Profile as wasmParseV2Profile,
@@ -219,23 +232,6 @@ function samplesFromVisualizerDetail(detail: ShotDetail): TimedSample[] {
 /** A shot's barista as the PATCH sends it: trimmed, `""` when unset or cleared. */
 function baristaOf(shot: StoredShot): string {
 	return shot.metadata.barista?.trim() ?? '';
-}
-
-/**
- * Fill a local shot's barista from a pulled remote one (final review 06 #1),
- * only when the local shot has none: a name set or edited in Crema is never
- * overwritten by a pull. `editedLocally` is true while a barista edit made
- * here has not reached Visualizer: a blank barista is then the user's clear,
- * not a gap to fill (V3 #6). Returns the name to store, or `null` for no change.
- */
-export function baristaToFill(
-	local: StoredShot | undefined,
-	remote: WireShot,
-	editedLocally = false
-): string | null {
-	const pulled = remote.barista?.trim();
-	if (!local || !pulled || editedLocally) return null;
-	return local.metadata.barista?.trim() ? null : pulled;
 }
 
 // ── PATCH-body resolvers ──────────────────────────────────────────────────
@@ -374,6 +370,44 @@ export function describeUnsyncedStop(
 	return null;
 }
 
+// ── The pull's merge ────────────────────────────────────────────────────
+
+/** What the core's `merge_remote_shot` reads of a local row. */
+function mergeInputOf(shot: StoredShot, edit: PendingEdit | undefined): ShotMergeInput {
+	return {
+		tags: [...(shot.tags ?? [])],
+		tagsPending: hasTagMarks(edit?.tags),
+		barista: shot.metadata.barista?.trim() || undefined,
+		baristaPending: edit?.barista === true,
+		hasSeries: shot.record.samples.length > 0,
+		hasProfile: shot.profile != null,
+		isBrew: isBrewLog(shot)
+	};
+}
+
+/** Every bound row as a pull begins, for the check at apply time. */
+function mergeInputsOf(history: HistoryStore): Map<string, ShotMergeInput> {
+	const edits = pendingEdits();
+	const out = new Map<string, ShotMergeInput>();
+	for (const shot of history.rawAll) {
+		if (shot.visualizerId && !isBrewLog(shot)) out.set(shot.id, mergeInputOf(shot, edits.get(shot.id)));
+	}
+	return out;
+}
+
+/**
+ * Whether a row changed while its copy was fetched (the core's
+ * `edited_during_fetch`): its tags, its barista, or what is pending on them.
+ */
+function editedDuringFetch(was: ShotMergeInput, now: ShotMergeInput): boolean {
+	return (
+		JSON.stringify(was.tags ?? []) !== JSON.stringify(now.tags ?? []) ||
+		was.tagsPending !== now.tagsPending ||
+		(was.barista ?? '') !== (now.barista ?? '') ||
+		was.baristaPending !== now.baristaPending
+	);
+}
+
 // ── Public surface ──────────────────────────────────────────────────────
 
 export interface ShotPatch {
@@ -440,6 +474,19 @@ export interface PullApplied {
 	truncated: boolean;
 	/** New rows a full history refused. They aren't fetched again by this loop. */
 	refused: number;
+	/**
+	 * A row edited during the pull still lacks its curve, so its copy wasn't
+	 * taken: the cursor holds and the next pull fetches it again.
+	 */
+	held: boolean;
+}
+
+/** What {@link ShotSync.applyShotReconciliation} left undone. */
+export interface ReconcileApplied {
+	/** New rows a full history refused. */
+	refused: number;
+	/** Rows edited mid-pull that still need their curve. */
+	held: number;
 }
 
 export interface PullResult {
@@ -452,11 +499,12 @@ export interface PullResult {
 	truncated: boolean;
 }
 
-/** What a History edit changed, for {@link ShotSync.patchEditedShot}. */
-export interface EditPatchOptions {
-	/** The barista itself was edited (set, changed or cleared). */
-	readonly baristaChanged?: boolean;
-}
+/**
+ * What {@link ShotSync.pushPendingEdit} did: `none` (nothing owed, or the row
+ * isn't on Visualizer), `waiting` (only tag marks, on a tier that can't take
+ * them), `sent`, or `tier` (sent, but Visualizer didn't keep the tags).
+ */
+export type PendingPush = 'none' | 'waiting' | 'sent' | 'tier';
 
 /** Internal iteration state for the `pullAllShotsSince` `iterate` walk. */
 interface PullState {
@@ -496,24 +544,19 @@ export class ShotSync extends Context.Service<
 		readonly deleteShot: (
 			visualizerId: string
 		) => Effect.Effect<void, Exclude<VisualizerCallError, VisualizerNotFoundError>>;
-		readonly patchShot: (visualizerId: string, patch: ShotPatch) => Effect.Effect<void, VisualizerCallError>;
+		/** PATCH a remote shot; the reply (the updated shot), or `undefined` when nothing was sent. */
+		readonly patchShot: (visualizerId: string, patch: ShotPatch) => Effect.Effect<unknown, VisualizerCallError>;
 		/**
-		 * Push a local shot's editable fields onto its already-uploaded
-		 * Visualizer copy — rating, notes (respecting the include-notes
-		 * setting), effective privacy, bean binding, tags, grinder model.
-		 * No-op when the shot has no `visualizerId`.
+		 * Send a History edit to the shot's Visualizer copy: whatever is
+		 * pending for it (see `#lib/visualizer/pending-edits.js`, which the
+		 * edit marks first). No-op when the shot isn't uploaded.
 		 */
-		/**
-		 * Mirror a History edit onto the shot's Visualizer copy. `baristaChanged`
-		 * marks an edit of the barista itself: only then (or while an earlier
-		 * barista edit has not reached Visualizer yet) does the PATCH carry
-		 * `barista`, so any other edit leaves the remote barista alone.
-		 */
-		readonly patchEditedShot: (
+		readonly patchEditedShot: (history: HistoryStore, id: string) => Effect.Effect<void, VisualizerCallError>;
+		/** {@link patchEditedShot}, saying what happened: the drain's retry. */
+		readonly pushPendingEdit: (
 			history: HistoryStore,
-			id: string,
-			opts?: EditPatchOptions
-		) => Effect.Effect<void, VisualizerCallError>;
+			id: string
+		) => Effect.Effect<PendingPush, VisualizerCallError>;
 		readonly pullShots: (
 			page?: number,
 			itemsPerPage?: number
@@ -527,8 +570,9 @@ export class ShotSync extends Context.Service<
 			history: HistoryStore,
 			remote: WireShot[],
 			samplesById?: ReadonlyMap<string, TimedSample[]>,
-			profilesById?: ReadonlyMap<string, unknown>
-		) => Effect.Effect<number>;
+			profilesById?: ReadonlyMap<string, unknown>,
+			before?: ReadonlyMap<string, ShotMergeInput>
+		) => Effect.Effect<ReconcileApplied>;
 		readonly pullAndReconcileShots: (
 			history: HistoryStore,
 			sinceMs: number,
@@ -543,15 +587,6 @@ export const ShotSyncLive = Layer.effect(
 	Effect.gen(function* () {
 		const http = yield* HttpClient;
 		const vault = yield* TokenVault;
-
-		/**
-		 * Shots whose barista was edited here and has not reached Visualizer
-		 * yet: a failed barista PATCH is carried by the next edit's PATCH, and
-		 * a pull does not fill a barista into them (V3 #6). Persisted, so a
-		 * restart keeps the mark (V2 P3-4); cleared once a PATCH carrying the
-		 * current value lands.
-		 */
-		const baristaPending = new BaristaPending();
 
 		/** Early bail mirroring the old `if (!isConnected())` guard. */
 		const requireConnected: Effect.Effect<void, NotAuthenticatedError> = vault.getTokens.pipe(
@@ -615,13 +650,20 @@ export const ShotSyncLive = Layer.effect(
 					...(shot.bean != null ? { bean: shot.bean } : {}),
 					...(grinderModel != null ? { grinderModel } : {})
 				}).pipe(
+					// The drain sends them again once the row is bound: the
+					// journal fields as they stand then, and the tags as an add
+					// onto whatever the server holds.
 					Effect.catch((e) =>
-						Effect.sync(() =>
+						Effect.sync(() => {
 							console.warn(
 								'[Crema] post-upload PATCH (coffee_bag_id / tag_list / inline bean / grinder_model) failed:',
 								describeVisualizerError(e)
-							)
-						)
+							);
+							markShotEdit(shot.id, 'annotations');
+							if (tagList != null && tagList.length > 0) {
+								markShotEdit(shot.id, { tags: { before: [], after: tagList } });
+							}
+						})
 					)
 				);
 			}
@@ -665,8 +707,9 @@ export const ShotSyncLive = Layer.effect(
 				grinderModel: patch.grinderModel,
 				barista: patch.barista,
 				coffeeBagId: patch.coffeeBagId ?? undefined,
-				// An absolute list: `[]` would clear the remote tags.
-				tagList: patch.tagList?.length ? patch.tagList : undefined,
+				// An absolute list, and `[]` clears the remote tags: only a tag
+				// push, built from the server's own list, sends one that way.
+				tagList: patch.tagList,
 				beanBrand: patch.bean?.roasterName ?? undefined,
 				beanType: patch.bean?.name,
 				roastDate: patch.bean?.roastedOn ?? undefined,
@@ -688,10 +731,11 @@ export const ShotSyncLive = Layer.effect(
 				JSON.stringify(inputs),
 				readSyncSettings().premium ?? undefined
 			);
-			if (patchJson === undefined) return;
+			if (patchJson === undefined) return undefined;
 			const shotBody = JSON.parse(patchJson) as ShotUpdateRequest['shot'];
 			const envelope: ShotUpdateRequest = { shot: shotBody };
-			yield* call(`/shots/${visualizerId}`, {
+			// The reply is the updated shot, `tags` included.
+			return yield* call(`/shots/${visualizerId}`, {
 				method: 'PATCH',
 				body: envelope
 			});
@@ -827,14 +871,17 @@ export const ShotSyncLive = Layer.effect(
 		 * via {@link appendSyncLog}; does not throw. Pure planner output translated
 		 * to store mutations — wrapped in `Effect.sync` (calls wasm + the rune
 		 * store synchronously, same as the old module). Answers how many new rows
-		 * a full history refused; the rest of the plan still applies.
+		 * a full history refused (the rest of the plan still applies), and how
+		 * many rows edited mid-pull still need their curve. `before` is each row
+		 * as the pull began, for that check.
 		 */
 		const applyShotReconciliation = (
 			history: HistoryStore,
 			remote: WireShot[],
 			samplesById?: ReadonlyMap<string, TimedSample[]>,
-			profilesById?: ReadonlyMap<string, unknown>
-		): Effect.Effect<number> =>
+			profilesById?: ReadonlyMap<string, unknown>,
+			before?: ReadonlyMap<string, ShotMergeInput>
+		): Effect.Effect<ReconcileApplied> =>
 			Effect.sync(() => {
 				let refused = 0;
 				// Tombstones included: a shot deleted here whose remote DELETE
@@ -851,15 +898,36 @@ export const ShotSyncLive = Layer.effect(
 				const tombstoned = (localId: string): boolean =>
 					history.get(localId)?.deletedAt != null;
 				// Read once for the whole pull, not per shot (C3 #10): nothing
-				// edits a barista inside this synchronous pass.
-				const pending = baristaPending.snapshot();
-				const fillBarista = (localId: string, wire: WireShot): void => {
-					const name = baristaToFill(
-						history.all.find((s) => s.id === localId),
-						wire,
-						pending.has(localId)
-					);
-					if (name !== null) history.setPerson(localId, 'barista', name);
+				// edits a row inside this synchronous pass.
+				const edits = pendingEdits();
+				let held = 0;
+				/**
+				 * Merge the pulled copy onto a bound row, through the core: tags
+				 * only add, a pending edit wins, a curve or recipe fills only a
+				 * row without one. A row edited since the pull began is newer
+				 * here: it is left alone, and holds the cursor only if it still
+				 * needs its curve.
+				 */
+				const merge = (localId: string, wire: WireShot): void => {
+					const row = history.get(localId);
+					if (!row) return;
+					const input = mergeInputOf(row, edits.get(localId));
+					const was = before?.get(localId);
+					if (was && editedDuringFetch(was, input)) {
+						if (!input.hasSeries && !input.isBrew) held += 1;
+						return;
+					}
+					const profile = profilesById?.get(wire.id);
+					const patch = JSON.parse(
+						wasmMergeRemoteShot(
+							JSON.stringify({ local: input, remote: wire, profileOffered: profile != null })
+						)
+					) as RemoteShotPatch;
+					history.applyRemote(localId, patch, {
+						samples: samplesById?.get(wire.id),
+						durationMs: wire.duration_ms,
+						profile
+					});
 				};
 				for (const action of actions) {
 					if (action.kind === 'add') {
@@ -885,7 +953,7 @@ export const ShotSyncLive = Layer.effect(
 						// so the remote copy stays out of the history.
 						history.bindVisualizerId(action.localId, action.visualizerId);
 						if (tombstoned(action.localId)) continue;
-						fillBarista(action.localId, action.remote);
+						merge(action.localId, action.remote);
 						appendSyncLog({
 							direction: 'pull',
 							entity: 'shot',
@@ -896,24 +964,10 @@ export const ShotSyncLive = Layer.effect(
 					} else if (action.kind === 'update') {
 						// Deleted here; the pending DELETE removes the remote too.
 						if (tombstoned(action.localId)) continue;
-						// `tag_list` is premium-only and `[]` otherwise, so it says nothing
-						// about what this shot should carry (#326): remote tags only fill
-						// a row with none, and never clear or replace local ones.
-						const remoteTags = action.remote.tag_list ?? [];
-						if (remoteTags.length > 0 && !history.get(action.localId)?.tags?.length) {
-							history.setTags(action.localId, remoteTags);
-						}
-						// A shot pulled before the barista was read gets it now.
-						fillBarista(action.localId, action.remote);
-						// Heal pre-telemetry-import stubs: if this bound row has no curve
-						// locally but the pull carries one, backfill it (no-op otherwise).
-						const samples = samplesById?.get(action.remote.id);
-						if (samples && samples.length > 0) {
-							history.backfillTelemetry(action.localId, samples, action.remote.duration_ms);
-						}
+						merge(action.localId, action.remote);
 					}
 				}
-				return refused;
+				return { refused, held };
 			});
 
 		/**
@@ -928,15 +982,18 @@ export const ShotSyncLive = Layer.effect(
 		) {
 			// Not from an account this device can't name.
 			if (readSyncConfig().accountUnconfirmed) return yield* new NotAuthenticatedError();
+			// A row read before its curve loaded would look like it has none.
+			yield* Effect.promise(() => history.seriesReady());
 			const run = beginPullRun();
+			const before = mergeInputsOf(history);
 			const { shots, samplesById, profilesById, truncated, rowsMissed } = yield* pullAllShotsSince(
 				sinceMs,
 				opts
 			);
-			const refused =
+			const { refused, held } =
 				shots.length > 0
-					? yield* applyShotReconciliation(history, shots, samplesById, profilesById)
-					: 0;
+					? yield* applyShotReconciliation(history, shots, samplesById, profilesById, before)
+					: { refused: 0, held: 0 };
 			if (refused > 0) {
 				// One line for the run: a large pull would push out the whole log.
 				appendSyncLog({
@@ -948,10 +1005,10 @@ export const ShotSyncLive = Layer.effect(
 					error: historyFullNotice(refused, history.capacity)
 				});
 			}
-			if (!truncated && !rowsMissed) {
+			if (!truncated && !rowsMissed && held === 0) {
 				for (const id of expiredTombstones(run, sinceMs)) history.purgeTombstone(id);
 			}
-			return { pulled: shots.length, truncated, refused };
+			return { pulled: shots.length, truncated, refused, held: held > 0 };
 		});
 
 		/**
@@ -1072,18 +1129,19 @@ export const ShotSyncLive = Layer.effect(
 		});
 
 		/**
-		 * Map a local shot's editable surface onto a [ShotPatch] — the same
-		 * resolvers the upload follow-up uses, plus the journal fields the
-		 * History panel edits. Notes respect `visualizerIncludeNotes` (a user
-		 * who opted out of uploading notes must not have an edit leak them).
-		 * Privacy sends the EFFECTIVE value (per-shot override, else the
-		 * settings default) so the server always matches what the user sees.
+		 * The journal fields of a local shot as a [ShotPatch]: what an
+		 * `annotations` mark sends. The same resolvers the upload follow-up
+		 * uses, plus the fields the History panel edits. Notes respect
+		 * `visualizerIncludeNotes` (a user who opted out of uploading notes
+		 * must not have an edit leak them). Privacy sends the EFFECTIVE value
+		 * (per-shot override, else the settings default) so the server always
+		 * matches what the user sees. No tags and no barista: those go only
+		 * with their own marks.
 		 */
-		const buildEditPatch = (shot: StoredShot, sendBarista: boolean): ShotPatch => {
+		const annotationsPatch = (shot: StoredShot): ShotPatch => {
 			const settings = getSettingsStore().current;
 			const cfg = readSyncConfig();
 			const coffeeBagId = resolveCoffeeBagId(shot);
-			const tagList = resolveTagList(shot);
 			const grinderModel = resolveGrinderModel(shot, settings.grinderModel);
 			const grinderSetting = effectiveGrindSetting(shot);
 			return {
@@ -1091,36 +1149,148 @@ export const ShotSyncLive = Layer.effect(
 				...(cfg.includeNotes ? { notes: shot.metadata.notes ?? '' } : {}),
 				privacy: shot.privacy ?? cfg.privacy,
 				...(coffeeBagId != null ? { coffeeBagId } : {}),
-				...(tagList != null && tagList.length > 0 ? { tagList } : {}),
 				...(shot.bean != null ? { bean: shot.bean } : {}),
 				...(grinderModel != null ? { grinderModel } : {}),
-				...(grinderSetting != null ? { grinderSetting } : {}),
-				// Only when the barista itself was edited (final review 06 #1):
-				// a shot pulled before the barista was read has none locally,
-				// and sending "" with a rating change wiped the remote one.
-				// An edit sends the name, or "" once cleared, so a clear
-				// still reaches Visualizer.
-				...(sendBarista ? { barista: baristaOf(shot) } : {})
+				...(grinderSetting != null ? { grinderSetting } : {})
 			};
 		};
 
+		/** The tags of a PATCH reply or a detail: `[]` when it carries none. */
+		const tagsOf = (body: unknown): string[] => {
+			const tags = (body as { tags?: unknown } | null | undefined)?.tags;
+			return Array.isArray(tags) ? tags.filter((t): t is string => typeof t === 'string') : [];
+		};
+
+		/**
+		 * Send what is pending for `id`, built from the row as it stands. Each
+		 * mark rides only its own field: the journal body, the barista, and the
+		 * tags, which on Premium start from the server's list (`GET` first) so a
+		 * change made on the website isn't undone. On a Free or unknown tier the
+		 * tag marks wait. A mark clears once what was sent is still the row's;
+		 * one made since stays. A failure keeps them for the drain, unless it is
+		 * for good (the row is gone or refused), which clears and reports.
+		 */
+		const pushPendingEdit = Effect.fn('ShotSync.pushPendingEdit')(function* (
+			history: HistoryStore,
+			id: string
+		) {
+			const edit = pendingEdit(id);
+			if (!edit) return 'none' as const;
+			const shot = history.all.find((s) => s.id === id);
+			// Gone here: nothing is owed.
+			if (!shot) {
+				settlePendingEdit(id, undefined);
+				return 'none' as const;
+			}
+			const vid = shot.visualizerId;
+			if (!vid || readSyncConfig().accountUnconfirmed) return 'none' as const;
+			const sendTags =
+				hasTagMarks(edit.tags) && readSyncSettings().premium === true && edit.tierSignal !== true;
+			const journal = edit.annotations ? annotationsPatch(shot) : undefined;
+			const barista = edit.barista ? baristaOf(shot) : undefined;
+			if (!journal && barista === undefined && !sendTags) return 'waiting' as const;
+			const sentTags: TagMarks | undefined = sendTags ? edit.tags : undefined;
+			let pushed: string[] | undefined;
+			const result = yield* Effect.result(
+				Effect.gen(function* () {
+					if (sentTags) {
+						const remote = yield* fetchShotDetail(vid);
+						pushed = JSON.parse(
+							wasmTagPushList(JSON.stringify(tagsOf(remote)), JSON.stringify(sentTags))
+						) as string[];
+					}
+					return yield* patchShot(vid, {
+						...journal,
+						...(barista !== undefined ? { barista } : {}),
+						...(pushed !== undefined ? { tagList: pushed } : {})
+					});
+				})
+			);
+			const current = pendingEdit(id) ?? {};
+			if (result._tag === 'Failure') {
+				const e = result.failure;
+				const kind = pendingEditFailure(e, sentTags !== undefined && !journal && barista === undefined);
+				if (kind === 'terminal') {
+					settlePendingEdit(id, undefined);
+					appendSyncLog({
+						direction: 'skip',
+						entity: 'shot',
+						id,
+						name: shot.profileName ?? 'Shot',
+						at: Date.now(),
+						error: `This edit can't reach Visualizer: ${describeVisualizerError(e)}`
+					});
+				} else if (kind === 'tier') {
+					settlePendingEdit(id, { ...current, tierSignal: true });
+				} else {
+					const attempts = (current.attempts ?? 0) + 1;
+					settlePendingEdit(id, {
+						...current,
+						attempts,
+						nextAttemptAt: Date.now() + retryDelayMs(e, attempts - 1)
+					});
+				}
+				return yield* Effect.fail(e);
+			}
+			const now = history.all.find((s) => s.id === id);
+			let next: PendingEdit = { ...current, attempts: undefined, nextAttemptAt: undefined };
+			// Sent and still the row's: done. Changed since: the drain sends it again.
+			if (journal && (!now || JSON.stringify(annotationsPatch(now)) === JSON.stringify(journal))) {
+				next = { ...next, annotations: undefined };
+			}
+			if (barista !== undefined && (!now || baristaOf(now) === barista)) {
+				next = { ...next, barista: undefined };
+			}
+			let outcome: 'sent' | 'tier' = 'sent';
+			if (sentTags && pushed !== undefined) {
+				const settled = JSON.parse(
+					wasmSettleTagPush(
+						JSON.stringify(current.tags ?? {}),
+						JSON.stringify(sentTags),
+						JSON.stringify(pushed),
+						JSON.stringify(tagsOf(result.success))
+					)
+				) as TagMarks | null;
+				if (settled === null) {
+					// Visualizer didn't keep them: a tier signal, checked by the drain.
+					next = { ...next, tierSignal: true };
+					outcome = 'tier';
+				} else {
+					next = { ...next, tags: settled, tierSignal: undefined };
+					if (now) repairTags(history, now, pushed, settled);
+				}
+			}
+			settlePendingEdit(id, next);
+			return outcome;
+		});
+
+		/**
+		 * After a tag push landed, the row takes what the server now holds
+		 * besides its own, so a tag added on the website arrives too. A tag
+		 * removed here since the push stays removed.
+		 */
+		const repairTags = (
+			history: HistoryStore,
+			shot: StoredShot,
+			pushed: readonly string[],
+			marks: TagMarks
+		): void => {
+			const norm = (list: readonly string[]): string[] =>
+				JSON.parse(wasmNormalizeTags(JSON.stringify(list))) as string[];
+			const have = new Set(norm([...(shot.tags ?? []), ...(marks.remove ?? [])]));
+			const extra = pushed.filter((t) => {
+				const [key] = norm([t]);
+				return key !== undefined && !have.has(key) && !!have.add(key);
+			});
+			if (extra.length > 0) history.setTags(shot.id, [...(shot.tags ?? []), ...extra]);
+		};
+
+		/** Send `id`'s pending edits now, as a History edit does. */
 		const patchEditedShot = Effect.fn('ShotSync.patchEditedShot')(function* (
 			history: HistoryStore,
-			id: string,
-			opts: EditPatchOptions = {}
+			id: string
 		) {
-			if (opts.baristaChanged) baristaPending.add(id);
-			const shot = history.all.find((s) => s.id === id);
-			const vid = shot?.visualizerId;
-			if (!shot || !vid || readSyncConfig().accountUnconfirmed) return;
-			const sendBarista = baristaPending.has(id);
-			const sent = baristaOf(shot);
-			yield* patchShot(vid, buildEditPatch(shot, sendBarista));
-			// A newer barista edit made while this PATCH was out stays pending.
-			if (sendBarista) {
-				const now = history.all.find((s) => s.id === id);
-				if (now === undefined || baristaOf(now) === sent) baristaPending.delete(id);
-			}
+			yield* pushPendingEdit(history, id);
 		});
 
 		return ShotSync.of({
@@ -1128,6 +1298,7 @@ export const ShotSyncLive = Layer.effect(
 			deleteShot,
 			patchShot,
 			patchEditedShot,
+			pushPendingEdit,
 			pullShots,
 			fetchShotDetail,
 			pullAllShotsSince,

@@ -203,6 +203,24 @@ export function refusedUpload(e: VisualizerCallError | ResponseDecodeError): boo
 }
 
 /**
+ * What a failed edit PATCH (or the GET before a tag push) means for its marks:
+ * `terminal` clears them and reports (the row is gone, on another account, or
+ * refused for good); `tier` is a 400 on a tags-only PATCH, which a free account
+ * answers; `retry` waits and tries again, the marks kept.
+ */
+export function pendingEditFailure(
+	e: VisualizerCallError | ResponseDecodeError,
+	tagsOnly: boolean
+): 'terminal' | 'tier' | 'retry' {
+	if (e._tag === 'VisualizerNotFoundError') return 'terminal';
+	if (e._tag !== 'HttpStatusError') return 'retry';
+	const failure = syncFailureOf(e);
+	if (failure.kind === 'Forbidden') return 'terminal';
+	if (failure.kind === 'Rejected') return tagsOnly && e.status === 400 ? 'tier' : 'terminal';
+	return 'retry';
+}
+
+/**
  * Whether Visualizer refused the whole account (disabled, unconfirmed, or a
  * token missing a scope): every further request hits the same wall, though the
  * session stays.

@@ -107,6 +107,7 @@
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { uploadPending } from '#lib/history/store.svelte.js';
 	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
+	import { markShotEdit, type ShotEdit } from '#lib/visualizer/pending-edits.js';
 	import { readQueue } from '#lib/services/queue-store.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { describeUnsyncedStop } from '#lib/services/shot-sync.js';
@@ -375,7 +376,14 @@
 	 * a no-op for never-uploaded shots; success and failure both land in
 	 * the sync activity log.
 	 */
-	function syncEditToVisualizer(id: string, opts?: { baristaChanged?: boolean }): void {
+	/**
+	 * Mark what an edit of an uploaded shot changed, before the row saves, so
+	 * the PATCH sends only that and a failed one is retried by the drain.
+	 */
+	function markForVisualizer(id: string, edit: ShotEdit): void {
+		if (store.get(id)?.visualizerId) markShotEdit(id, edit);
+	}
+	function syncEditToVisualizer(id: string): void {
 		if (!canPushShots) return;
 		const shot = store.all.find((s) => s.id === id);
 		if (!shot?.visualizerId) return;
@@ -383,7 +391,7 @@
 		if (!api) return;
 		const name = shot.profileName ?? 'Shot';
 		void api.shots
-			.patchEdited(store, id, opts)
+			.patchEdited(store, id)
 			.then(() =>
 				appendSyncLog({ direction: 'push', entity: 'shot', id, name, at: Date.now() })
 			)
@@ -545,6 +553,7 @@
 	const isLive = (id: string): boolean => liveShot(store.get(id)) !== undefined;
 	function saveNotes(id: string, notes: string): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
 		store.setNotes(id, notes);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
@@ -557,36 +566,42 @@
 	}
 	function saveRating(id: string, rating: number): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
 		store.setRating(id, rating);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function savePrivacy(id: string, privacy: StoredShot['privacy']): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
 		store.setPrivacy(id, privacy ?? null);
 		syncEditToVisualizer(id);
 	}
 	function saveGrinderModel(id: string, grinderModel: string | null): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
 		store.setGrinderModel(id, grinderModel);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function savePerson(id: string, field: 'barista' | 'drinker', name: string | null): void {
 		if (!isLive(id)) return;
-		store.setPerson(id, field, name);
 		// Visualizer has a barista field but no drinker; the Decent record
 		// carries both.
-		if (field === 'barista') syncEditToVisualizer(id, { baristaChanged: true });
+		if (field === 'barista') markForVisualizer(id, 'barista');
+		store.setPerson(id, field, name);
+		if (field === 'barista') syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function saveTags(id: string, tags: string[]): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, { tags: { before: store.get(id)?.tags ?? [], after: tags } });
 		store.setTags(id, tags);
 		syncEditToVisualizer(id);
 	}
 	function saveGrind(id: string, grinderSetting: string | null): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
 		store.setGrindSetting(id, grinderSetting);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
@@ -595,6 +610,7 @@
 		const shot = liveShot(store.get(id));
 		if (!shot) return;
 		moveShotBag(shot, bean?.id ?? null);
+		markForVisualizer(id, 'annotations');
 		store.setBeanFromLive(id, bean, roaster);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
