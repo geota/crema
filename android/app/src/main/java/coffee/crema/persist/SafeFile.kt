@@ -126,6 +126,11 @@ object SafeFile {
         SaveFloor.forgetNotice(target)
     }
 
+    /** [openSaves], unless a newer session has started: it hasn't loaded [target]. */
+    fun openSaves(target: File, session: Int) {
+        if (isCurrentSession(session)) openSaves(target)
+    }
+
     /**
      * Refuse saves to [target] until [openSaves], whatever a load does: it's
      * about to be reloaded, and a snapshot built before the reload lands holds

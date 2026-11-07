@@ -361,7 +361,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
         seriesReady = { library.awaitSeries() },
-        shotsLoaded = { library.seriesReady && !library.historyRefused },
+        shotsLoaded = { library.seriesReady },
+        historyRefused = { library.historyRefused },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
         onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
         networkWatcher = coffee.crema.visualizer.DefaultNetworkWatcher(app),
@@ -1010,7 +1011,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 return@withLock
             }
             holdStoreReload?.invoke()
-            SafeFile.closeSaves(store.file)
             reloadStore(store)
         }
     }
@@ -1030,9 +1030,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Load [store] into the UI state. Its saves open only once that has landed,
-     *  whichever store it is, and then stay refused if the load says so. */
+    /** Load [store] into the UI state. Its saves, and those of any store loaded
+     *  with it, open only once that has landed, and then stay refused if the
+     *  load says so. Not on a ViewModel a newer one has replaced. */
     private suspend fun reloadStore(store: RefusedStore) {
+        if (!SafeFile.isCurrentSession(saveSession)) return
+        val files = reloadedWith(store.file)
+        files.forEach(SafeFile::closeSaves)
         try {
             when (store.file.name) {
                 LibraryStore.FILE_NAME -> library.loadLibrary()
@@ -1049,8 +1053,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 DriveStore.FILE_NAME -> drive.load()
             }
         } finally {
-            SafeFile.openSaves(store.file)
+            files.forEach { SafeFile.openSaves(it, saveSession) }
         }
+    }
+
+    /** The store files a reload of [file] loads: the profile stores go together. */
+    private fun reloadedWith(file: File): List<File> {
+        val profiles = listOf(PinnedProfileStore.FILE_NAME, HiddenProfileStore.FILE_NAME, CustomProfileStore.FILE_NAME)
+        return if (file.name in profiles) profiles.map { File(file.parentFile, it) } else listOf(file)
     }
 
     /** The kept-aside snackbar was dismissed or timed out. */

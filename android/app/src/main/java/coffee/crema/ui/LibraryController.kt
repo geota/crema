@@ -306,10 +306,14 @@ class LibraryController(
      *  series in the background (F10 — ~0.1 s for 300 shots on a desktop JVM,
      *  more on a phone), so the startup sequence (prefs, auto-connect) never
      *  waits on it. Until a series lands its shot shows no curve. */
-    suspend fun loadHistory() {
+    suspend fun loadHistory() = landHistory { _, rows -> rows }
+
+    /** [loadHistory], with [land] deciding the list at the moment the rows
+     *  arrive, from what's in memory by then and the rows. */
+    private suspend fun landHistory(land: (session: List<StoredShot>, rows: List<StoredShot>) -> List<StoredShot>) {
         val loaded = seriesLoaded
         val rows = historyStore.loadRows()
-        updateUi { it.copy(history = rows) }
+        updateUi { it.copy(history = land(it.history, rows)) }
         historyStore.markLive(rows.map { it.id })
         historyStore.openSaves()
         val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
@@ -338,15 +342,14 @@ class LibraryController(
      *  couldn't be stay, and go into it now. Everything that reads a series
      *  waits for this load too. */
     suspend fun reloadHistory() {
-        val session = uiState().history
         seriesLoaded = CompletableDeferred()
-        loadHistory()
-        val made = madeWhileRefused(session, uiState().history)
-        if (made.isEmpty()) return
-        val merged = mergeHistory(made, uiState().history)
-        updateUi { it.copy(history = merged.rows) }
+        var merge: HistoryMerge? = null
+        landHistory { session, rows ->
+            mergeHistory(madeWhileRefused(session, rows), rows).also { merge = it }.rows
+        }
+        val merged = merge ?: return
         if (merged.dropped > 0) notify("Shot history reloaded${historyDroppedNotice(merged.dropped)}")
-        historyStore.save(merged.rows)
+        if (merged.kept.isNotEmpty()) historyStore.save(merged.rows)
     }
 
     /** Whether a Visualizer pull may run: not while the rows couldn't be read,
@@ -368,7 +371,9 @@ class LibraryController(
     /** Load the pinned/hidden built-in overlays at startup (before the customs). */
     suspend fun loadProfileMeta() {
         pinnedIds = pinnedProfileStore.load()
+        pinnedProfileStore.openSaves()
         hiddenIds = hiddenProfileStore.load()
+        hiddenProfileStore.openSaves()
     }
 
     /** Load the persisted custom profiles into the merged list at startup. */

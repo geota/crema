@@ -12,6 +12,7 @@ import coffee.crema.persist.Stores
 import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.saveStore
 import coffee.crema.ui.components.refusedStoreText
+import coffee.crema.visualizer.HISTORY_REFUSED_NOTICE
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -23,6 +24,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -174,6 +176,47 @@ class RefusedStoreVmTest {
     }
 
     @Test
+    fun aSaveToAnotherProfileStoreDuringTheReloadCannotLand() {
+        val pinned = File(app.filesDir, "pinnedProfiles.json")
+        val hidden = File(app.filesDir, "hiddenProfiles.json").apply { writeText("""{"ids":["a","b"]}""") }
+        val raw = hidden.readText()
+        pinned.writeText("""{"ids":["p"]}""")
+        pinned.setReadable(false)
+        val vm = vm()
+        pinned.setReadable(true)
+        var landed: Boolean? = null
+        SafeFile.afterLoad = { file ->
+            // Pinned has loaded; hidden hasn't, and memory holds no ids from it yet.
+            if (file == pinned && landed == null) landed = saveStore(hidden, "hidden profiles list", """{"ids":["new"]}""")
+        }
+        val retry = vm.retryStore(vm.ui.value.refusedStores.single())
+        VmHarness.idleUntil("the reload") { retry.isCompleted }
+        pinned.setReadable(true)
+        assertEquals(false, landed)
+        assertEquals(raw, hidden.readText())
+        assertTrue(SafeFile.savesOpen(hidden), "the reload opens what it closed")
+        assertTrue(SafeFile.savesOpen(pinned))
+    }
+
+    @Test
+    fun aShotMadeDuringTheReloadIsKept() {
+        shots.writeText("[${row("shot-1")}]")
+        shots.setReadable(false)
+        val vm = vm()
+        shots.setReadable(true)
+        var made: String? = null
+        SafeFile.afterLoad = { file ->
+            // The rows have been read and aren't in memory yet.
+            if (file == shots && made == null) made = vm.logBrew().id
+        }
+        val retry = vm.retryStore(vm.ui.value.refusedStores.single())
+        VmHarness.idleUntil("the reload") { retry.isCompleted }
+        val id = assertNotNull(made)
+        assertEquals(setOf("shot-1", id), vm.ui.value.history.map { it.id }.toSet())
+        VmHarness.idleUntil("the save") { id in shots.readText() }
+    }
+
+    @Test
     fun theBannerSaysWhatTryAgainDoes() {
         assertEquals(
             "Couldn't read your shot history, so changes aren't being saved. " +
@@ -188,7 +231,7 @@ class RefusedStoreVmTest {
         shots.setReadable(false)
         val vm = vm()
         vm.visualizer.resyncAllShots(emptyList())
-        VmHarness.idleUntil("the refusal") { "Shot data is still loading — try again in a moment" in vm.ui.value.userMessages }
+        VmHarness.idleUntil("the refusal") { HISTORY_REFUSED_NOTICE in vm.ui.value.userMessages }
     }
 
     @Test

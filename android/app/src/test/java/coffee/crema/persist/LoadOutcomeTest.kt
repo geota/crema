@@ -264,6 +264,15 @@ class LoadOutcomeTest {
     }
 
     @Test
+    fun anOldSessionCannotOpenWhatTheNewOneHasNotLoaded() {
+        SafeFile.resetForTest()
+        val old = SafeFile.startSession()
+        SafeFile.startSession()
+        SafeFile.openSaves(target(), old)
+        assertFalse(SafeFile.savesOpen(target()))
+    }
+
+    @Test
     fun aFileThatCannotBeStatedIsNotAbsent() {
         val dir = tmp.newFolder("locked")
         val t = File(dir, "shots.json").apply { writeText("[1]") }
