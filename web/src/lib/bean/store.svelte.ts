@@ -18,7 +18,14 @@
  * {@link getBeanLibraryStore} or the legacy alias {@link getBeanStore}.
  */
 
-import { isIdOrNull, isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
+import {
+	isIdOrNull,
+	isJsonObject,
+	keepSkippedRows,
+	readJson,
+	readStore,
+	writeJson
+} from '#lib/utils/storage.js';
 import {
 	credit_shot_debit,
 	debit_remaining,
@@ -40,6 +47,8 @@ import {
 
 /** Library envelope key — beans + roasters + schemaVersion. */
 const LIBRARY_KEY = 'crema.beans.v1';
+/** The library's name in a storage notice. */
+const LIBRARY_WHAT = 'bean library';
 /** Active bean id — the brew-page picker's pointer. */
 const ACTIVE_KEY = 'crema.beans.activeBeanId.v1';
 /** The pre-library single-bean key — read once for migration, then untouched. */
@@ -85,15 +94,23 @@ function isLibraryEnvelope(raw: unknown): raw is LibraryEnvelope {
 function readLibrary(): LibraryEnvelope {
 	// A stored value that isn't an envelope is kept aside (not silently read
 	// as an empty library and overwritten by the next save).
-	const raw = readJson<unknown>(LIBRARY_KEY, null, { what: 'bean library', valid: isLibraryEnvelope });
-	if (raw !== null && isLibraryEnvelope(raw)) {
-		const env = raw as LibraryEnvelope;
-		const beans = dedupById(
-			env.beans.map(coerceBean).filter((b): b is Bean => b !== null)
-		);
-		const roasters = dedupById(
-			env.roasters.map(coerceRoaster).filter((r): r is Roaster => r !== null)
-		);
+	const read = readStore<LibraryEnvelope>(LIBRARY_KEY, {
+		what: LIBRARY_WHAT,
+		valid: isLibraryEnvelope
+	});
+	if (read.kind === 'unavailable') return { schemaVersion: LIBRARY_SCHEMA, beans: [], roasters: [] };
+	if (read.kind === 'loaded') {
+		const env = read.value;
+		const skipped: unknown[] = [];
+		const coerced = <T,>(rows: unknown[], coerce: (row: unknown) => T | null): T[] =>
+			rows.flatMap((row) => {
+				const out = coerce(row);
+				if (out === null) skipped.push(row);
+				return out === null ? [] : [out];
+			});
+		const beans = dedupById(coerced(env.beans, coerceBean));
+		const roasters = dedupById(coerced(env.roasters, coerceRoaster));
+		keepSkippedRows(LIBRARY_KEY, skipped, LIBRARY_WHAT);
 		return { schemaVersion: LIBRARY_SCHEMA, beans, roasters };
 	}
 	// First load — try the legacy single-bean migration.
