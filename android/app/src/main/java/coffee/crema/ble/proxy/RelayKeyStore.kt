@@ -372,7 +372,7 @@ class RelayKeyStore(
     }
 
     private fun write(next: RelayFile): Boolean = try {
-        SafeFile.writeCredential(file, json.encodeToString(RelayFile.serializer(), next))
+        SafeFile.writeCredential(file, json.encodeToString(RelayFile.serializer(), next), gated = false)
         true
     } catch (e: Exception) {
         Log.e(TAG, "couldn't save $FILE_NAME: ${e.javaClass.simpleName}")

@@ -42,7 +42,7 @@ class PinnedProfileStore(private val context: Context, private val json: Json) {
     /** Persist the pinned ids (best-effort). */
     suspend fun save(ids: Set<String>) {
         inSaveOrder(file) {
-            saveStore(file, json.encodeToString(PinnedProfiles.serializer(), PinnedProfiles(ids.toList())))
+            saveStore(file, "pinned profiles list", json.encodeToString(PinnedProfiles.serializer(), PinnedProfiles(ids.toList())))
         }
     }
 

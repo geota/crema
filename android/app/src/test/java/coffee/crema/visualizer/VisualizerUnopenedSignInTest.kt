@@ -38,6 +38,8 @@ import java.util.concurrent.Executors
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class VisualizerUnopenedSignInTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val dir: File = Files.createTempDirectory("vz-unopened").toFile()
     private val context = object : ContextWrapper(null) {
         override fun getFilesDir(): File = dir

@@ -2,6 +2,8 @@ package coffee.crema.ui
 
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
+import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SafeLoad
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -20,6 +22,10 @@ import kotlin.test.assertTrue
 @Config(application = Application::class, sdk = [35])
 class PersonalSettingsVmTest {
     private val stores = mutableListOf<ViewModelStore>()
+
+    /** What a load would see, through the same lock as a save. */
+    private fun savedPrefs(f: File): String =
+        (SafeFile.load(f, open = false) { it } as? SafeLoad.Loaded)?.value.orEmpty()
 
     @After fun tearDown() { stores.forEach { it.clear() }; VmHarness.idle() }
 
@@ -46,7 +52,7 @@ class PersonalSettingsVmTest {
         assertEquals(120, s.screensaverAfterMin, "clamped to two hours")
         assertEquals("10.0.0.2", s.proxyPrimaryHost)
         val prefs = File(VmHarness.app().filesDir, "prefs.json")
-        VmHarness.idleUntil("the last save") { prefs.isFile && "10.0.0.2" in prefs.readText() }
+        VmHarness.idleUntil("the last save") { savedPrefs(prefs).contains("10.0.0.2") }
         stores.forEach { it.clear() }
         VmHarness.idle()
 

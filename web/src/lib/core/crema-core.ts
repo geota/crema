@@ -4686,6 +4686,52 @@ export interface WireShot {
 	barista?: string;
 }
 
+/**
+ * Why a 403 is about the whole account rather than one item. The tokens stay:
+ * each of these is fixed on the website or by signing in again by choice.
+ */
+export enum AccountBlockReason {
+	/** The account was disabled. */
+	Disabled = "Disabled",
+	/** The account's email address isn't confirmed. */
+	Unconfirmed = "Unconfirmed",
+	/** The token lacks the scope this call needs. */
+	MissingScope = "MissingScope",
+}
+
+/** What a service needs from the user. Each has an action in Settings. */
+export type AttentionReason = 
+	/** The session is over: reconnect. The one that also raises a notice. */
+	| { kind: "Reconnect", details?: undefined }
+	/** The run stopped with rows left: Continue. */
+	| { kind: "RowsLeft", details?: undefined }
+	/** The server kept failing, or something else answered for it: Continue. */
+	| { kind: "ServerTrouble", details?: undefined }
+	/** Rows were counted and passed for good. */
+	| { kind: "RowsSkipped", details?: undefined }
+	/** The history has no free slot. */
+	| { kind: "HistoryFull", details?: undefined }
+	/** Drive has no room left. */
+	| { kind: "StorageFull", details?: undefined }
+	/** The free plan's daily cap was reached. */
+	| { kind: "Quota", details?: undefined }
+	/** The account needs Premium. */
+	| { kind: "NeedsPremium", details?: undefined }
+	/** The Decent account doesn't have this machine. */
+	| { kind: "NotOnAccount", details?: undefined }
+	/** The account itself is refused. */
+	| { kind: "AccountBlocked", details: {
+	/** Why. */
+	reason: AccountBlockReason;
+}}
+	/** The server refused the work, and retrying won't change that. */
+	| { kind: "Refused", details?: undefined }
+	/** A run couldn't start. */
+	| { kind: "Blocked", details: {
+	/** What stopped it. */
+	why: BlockReason;
+}};
+
 /** How much is left in a bag, for the shells to warn on. */
 export type BagStock = 
 	/** No weight to track: no declared size and nothing remaining. */
@@ -4724,6 +4770,25 @@ export enum BeverageType {
 	Manual = "manual",
 	/** Pour-over style profile (long, low-pressure). */
 	Pourover = "pourover",
+}
+
+/** Why a run didn't start. */
+export enum BlockReason {
+	/** The service's own state, or a store it needs, is still loading. */
+	Loading = "Loading",
+	/** A data store is damaged, so automatic work leaves it alone. */
+	StoreDamaged = "StoreDamaged",
+	/**
+	 * The service's own state was damaged and kept aside: its marks, cursor and
+	 * tombstones went with it.
+	 */
+	OwnStateLost = "OwnStateLost",
+	/** A store can't be read at all. */
+	StoreUnavailable = "StoreUnavailable",
+	/** A restore was interrupted and still needs an answer. */
+	RestoreLeftover = "RestoreLeftover",
+	/** The signed-in account isn't known yet, so nothing is sent to it. */
+	IdentityUnknown = "IdentityUnknown",
 }
 
 /** A cue the shell renders as sound/haptic. */
@@ -5262,6 +5327,24 @@ export enum MmrRegister {
 	InactivitySleepTimeout = "InactivitySleepTimeout",
 }
 
+/** Why a run stopped before the end of its work, with the rows it applied kept. */
+export enum PartialReason {
+	/** The rate limit outlasted the run's waits. */
+	RateLimited = "RateLimited",
+	/** The network went away. */
+	Offline = "Offline",
+	/** Three transient failures in a row: an outage or a captive portal. */
+	ServerTrouble = "ServerTrouble",
+	/** The run reached its page limit. */
+	PageCap = "PageCap",
+	/** Rows failed, and the run walked on past them. */
+	RowsFailed = "RowsFailed",
+	/** The list kept shrinking under the walk. */
+	ListShifted = "ListShifted",
+	/** The history has no free slot for rows this run found. */
+	HistoryFull = "HistoryFull",
+}
+
 /**
  * Why a profile upload failed.
  * 
@@ -5365,7 +5448,7 @@ export type QueueDecision =
 }}
 	/**
 	 * Keep it without spending an attempt; look again after `delay_ms` (a
-	 * delete while signed out).
+	 * delete while signed out, or out of attempts).
 	 */
 	| { kind: "Park", details: {
 	/** Wait, ms. */
@@ -5512,6 +5595,43 @@ export type RelayEvent =
 	| { type: "Failed", content: {
 	/** The `RelayError` name. */
 	error: string;
+}};
+
+/** How a sync run ended. */
+export type RunOutcome = 
+	/** Everything was walked. The only outcome that moves the cursor. */
+	| { kind: "Complete", details: {
+	/** Where the next run starts. */
+	next_cursor_ms: number;
+	/** Rows changed by this run. */
+	applied: number;
+	/** Rows already up to date. */
+	unchanged: number;
+	/** Rows counted and passed for good. */
+	skipped_permanent: number;
+}}
+	/** The run stopped early. What it applied stays; the cursor holds. */
+	| { kind: "Partial", details: {
+	/** Why it stopped. */
+	reason: PartialReason;
+	/** Rows changed by this run. */
+	applied: number;
+	/** Rows still to do, as far as the run knows. */
+	left: number;
+	/** Rows counted and passed for good. */
+	skipped_permanent: number;
+	/** How long to wait before the next run, ms, when something said so. */
+	resume_after_ms?: number;
+}}
+	/** The run achieved nothing. */
+	| { kind: "Failed", details: {
+	/** What stopped it. */
+	failure: SyncFailure;
+}}
+	/** The run didn't start. */
+	| { kind: "Blocked", details: {
+	/** What stopped it. */
+	why: BlockReason;
 }};
 
 /**
@@ -5739,6 +5859,97 @@ export enum SubState {
 	Unknown = "Unknown",
 }
 
+/** What a failed cloud call means. */
+export type SyncFailure = 
+	/** No reply at all. */
+	| { kind: "Offline", details?: undefined }
+	/** Slow down: a 429, or Drive's 403 rate reasons. */
+	| { kind: "RateLimited", details: {
+	/** The server's `Retry-After`, ms, when it sent a usable one. */
+	retry_after_ms?: number;
+}}
+	/**
+	 * The server is in trouble, or something that isn't the server answered: a
+	 * 5xx, a 408, or a success or redirect that isn't the API's (a captive
+	 * portal's 200 HTML). Time fixes it.
+	 */
+	| { kind: "Unavailable", details: {
+	/** The HTTP status. */
+	status: number;
+}}
+	/** A 401 on a call: the access token was refused, so refresh once. */
+	| { kind: "AccessRefused", details?: undefined }
+	/** The session is over and the user must sign in again. */
+	| { kind: "SessionEnded", details?: undefined }
+	/** The free plan's daily cap on new shots. */
+	| { kind: "Quota", details: {
+	/** The cap. */
+	limit: number;
+}}
+	/** The account needs Premium for this. */
+	| { kind: "NeedsPremium", details?: undefined }
+	/** Decent: the shot's machine isn't registered to the linked account. */
+	| { kind: "NotOnAccount", details?: undefined }
+	/**
+	 * This one item is refused, and the account is fine: a row on another
+	 * account, say. Never reads as "buy Premium".
+	 */
+	| { kind: "Forbidden", details?: undefined }
+	/** The whole account is refused. See [`AccountBlockReason`]. */
+	| { kind: "AccountBlocked", details: {
+	/** Why. */
+	reason: AccountBlockReason;
+}}
+	/** Drive has no room left. Only the user can fix it. */
+	| { kind: "StorageFull", details?: undefined }
+	/** The target no longer exists. */
+	| { kind: "NotFound", details?: undefined }
+	/** The server refused this request for good. */
+	| { kind: "Rejected", details: {
+	/** The HTTP status, or 0 for a 2xx reply that couldn't be mapped. */
+	status: number;
+}};
+
+/** The one lasting status a service keeps, shown in Settings. */
+export type SyncHealth = 
+	/** The last run completed. */
+	| { kind: "Ok", details: {
+	/** When, unix ms. */
+	at_ms: number;
+}}
+	/** It will try again by itself. A Settings line, no notice. */
+	| { kind: "Waiting", details: {
+	/** When, unix ms, if anything said. */
+	until_ms?: number;
+	/** Why. */
+	why: WaitReason;
+}}
+	/** It needs the user. A Settings line with its action. */
+	| { kind: "NeedsAttention", details: {
+	/** What it needs. */
+	why: AttentionReason;
+	/** How many rows that leaves, or the cap for [`AttentionReason::Quota`]. */
+	count: number;
+}};
+
+/** What was being attempted when the failure came back. */
+export enum SyncOperation {
+	/** An API call with an access token. */
+	Call = "Call",
+	/** A refresh-token grant at the token endpoint. */
+	Refresh = "Refresh",
+}
+
+/** Which cloud service answered. */
+export enum SyncService {
+	/** visualizer.coffee. */
+	Visualizer = "Visualizer",
+	/** decentespresso.com. */
+	Decent = "Decent",
+	/** Google Drive, on Android: web Drive has no refresh token. */
+	Drive = "Drive",
+}
+
 /**
  * Which temperature a step regulates. Variant names match the community
  * v2 JSON contract used by the legacy de1app TCL + reaprime. The enum
@@ -5767,6 +5978,14 @@ export enum Transition {
 	Fast = "fast",
 	/** Ramp smoothly to the target. */
 	Smooth = "smooth",
+}
+
+/** Why a service is waiting by itself. */
+export enum WaitReason {
+	/** No network. */
+	Offline = "Offline",
+	/** The server asked it to slow down. */
+	RateLimited = "RateLimited",
 }
 
 /**

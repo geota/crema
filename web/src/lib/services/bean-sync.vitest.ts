@@ -31,7 +31,10 @@ beforeAll(async () => {
 	await initTestWasm();
 });
 
-type Reply = { ok: true; status?: number; json?: unknown } | { ok: false; status: number };
+/** Visualizer's reply on a Premium-only write (`Authorization#check_premium!`). */
+const PREMIUM_REPLY = '{"error":"You must be a premium user to access this feature."}';
+
+type Reply = { ok: true; status?: number; json?: unknown } | { ok: false; status: number; body?: string };
 
 function mkHttp(handler: (req: HttpRequest) => Reply) {
 	const calls: HttpRequest[] = [];
@@ -41,7 +44,7 @@ function mkHttp(handler: (req: HttpRequest) => Reply) {
 			request: (req) => {
 				calls.push(req);
 				const r = handler(req);
-				if (!r.ok) return Effect.fail(new HttpStatusError({ status: r.status, url: req.url }));
+				if (!r.ok) return Effect.fail(new HttpStatusError({ status: r.status, url: req.url, body: r.body }));
 				const status = r.status ?? 200;
 				if (status === 204) return Effect.succeed(new Response(null, { status }));
 				return Effect.succeed(
@@ -114,7 +117,7 @@ describe('BeanSync.uploadBean', () => {
 	});
 
 	it('maps a 403 to VisualizerPremiumGatedError', async () => {
-		const { layer } = mkHttp(() => ({ ok: false, status: 403 }));
+		const { layer } = mkHttp(() => ({ ok: false, status: 403, body: PREMIUM_REPLY }));
 		const tag = await failTag(BeanSync.pipe(Effect.flatMap((b) => b.uploadBean(blankBean(), null))), layer);
 		expect(tag).toBe('VisualizerPremiumGatedError');
 	});
@@ -251,7 +254,7 @@ describe('BeanSync.testConnection', () => {
 
 	it('reports free tier when the sentinel write is premium-gated', async () => {
 		const { layer } = mkHttp((req) =>
-			req.method === 'POST' ? { ok: false, status: 403 } : { ok: true, json: { data: [] } }
+			req.method === 'POST' ? { ok: false, status: 403, body: PREMIUM_REPLY } : { ok: true, json: { data: [] } }
 		);
 		const out = await run(BeanSync.pipe(Effect.flatMap((b) => b.testConnection)), layer);
 		expect(out).toEqual({ ok: true, premium: false });
@@ -272,7 +275,7 @@ describe('BeanSync premium refresh (the bean-sync flag the edit sync reads)', ()
 	/** The sentinel roaster probe: POST /roasters answers `status`; GET / DELETE succeed. */
 	const probeHttp = (status: number) =>
 		mkHttp((req) => {
-			if (req.method === 'POST') return status < 300 ? { ok: true, status, json: { id: 'sentinel' } } : { ok: false, status };
+			if (req.method === 'POST') return status < 300 ? { ok: true, status, json: { id: 'sentinel' } } : { ok: false, status, body: PREMIUM_REPLY };
 			return { ok: true, json: { data: [], paging: { pages: 1 } } };
 		});
 	const roasterPosts = (calls: HttpRequest[]) =>

@@ -1237,9 +1237,10 @@ class VisualizerSync(
      * remotely (web `ShotSync.deleteShot`: open to free accounts, a 404 counts
      * as already gone). A success drops the tombstone. A failure goes by the
      * core's queue rule for a delete (`visualizer_queue_decision`, as web's
-     * queue): retried on its backoff, at most three attempts; a terminal failure
-     * (a 403, …) or the third stops the remote delete but keeps the tombstone,
-     * so the copy is still never pulled back. [dueOnly] (the drain) skips the
+     * queue): retried on its backoff, then parked an hour at a time after the
+     * third attempt, since nothing else re-offers it; a terminal failure (a 403,
+     * …) stops the remote delete but keeps the tombstone, so the copy is still
+     * never pulled back. [dueOnly] (the drain) skips the
      * ones still in their backoff; a sync the user runs tries them all. A no-op
      * when signed out (parked until a sign-in).
      */

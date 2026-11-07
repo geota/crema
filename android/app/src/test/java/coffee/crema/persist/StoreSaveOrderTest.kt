@@ -27,6 +27,8 @@ import kotlin.test.assertFalse
  * hundred, so every test runs [ROUNDS].
  */
 class StoreSaveOrderTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     @get:Rule val tmp = TemporaryFolder()
 
     private val context by lazy {

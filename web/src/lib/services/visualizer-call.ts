@@ -6,8 +6,8 @@
  *  - attaches a fresh access token via `TokenVault.withFreshToken` (proactive
  *    refresh + one-shot 401 retry);
  *  - maps `HttpClient`'s `HttpStatusError` onto the Visualizer taxonomy
- *    (402/403 → premium-gated, 404 → not-found, everything else stays an
- *    `HttpStatusError`; 401 is handled upstream by `TokenVault`);
+ *    (402 or a 403 naming Premium → premium-gated, 404 → not-found, everything
+ *    else stays an `HttpStatusError`; 401 is handled upstream by `TokenVault`);
  *  - returns the parsed JSON body for a 2xx response, `null` for 204, and a
  *    `NetworkError` for a malformed 2xx body (so it stays recoverable).
  *
@@ -39,12 +39,13 @@ import {
 	VisualizerPremiumGatedError
 } from '../effect/errors.ts';
 import {
+	classifySyncFailure as wasmClassifySyncFailure,
 	isRecoverable as wasmIsRecoverable,
 	retryBackoffMs as wasmRetryBackoffMs,
 	visualizerQueueDecision as wasmVisualizerQueueDecision,
 	visualizerQuotaLimit as wasmVisualizerQuotaLimit
 } from '#lib/wasm/de1_wasm.js';
-import type { QueueDecision } from '#lib/core/crema-core.js';
+import { AccountBlockReason, type QueueDecision, type SyncFailure } from '#lib/core/crema-core.js';
 
 /** Visualizer API base. */
 export const API_BASE = 'https://visualizer.coffee/api';
@@ -110,10 +111,13 @@ export const visualizerCall = (
 					(
 						err
 					): Effect.Effect<never, VisualizerPremiumGatedError | VisualizerNotFoundError | HttpStatusError> => {
-						if (err.status === 402 || err.status === 403) {
+						// Only a reply naming Premium reads as Premium: a 403 is also a
+						// row on another account, or an account that's blocked.
+						const { kind } = syncFailureOf(err);
+						if (kind === 'NeedsPremium') {
 							return Effect.fail(new VisualizerPremiumGatedError({ endpoint: path }));
 						}
-						if (err.status === 404) {
+						if (kind === 'NotFound') {
 							return Effect.fail(new VisualizerNotFoundError({ visualizerId: path }));
 						}
 						return Effect.fail(err);
@@ -143,6 +147,13 @@ export const visualizerCall = (
 				})
 			);
 	});
+
+/** What a Visualizer HTTP failure means (core `classify_sync_failure`). */
+function syncFailureOf(e: HttpStatusError): SyncFailure {
+	return JSON.parse(
+		wasmClassifySyncFailure('visualizer', 'call', e.status, e.body ?? '', undefined, Date.now())
+	) as SyncFailure;
+}
 
 /**
  * A `recoverable` failure is worth a time-based retry through the `UploadQueue`:
@@ -185,12 +196,25 @@ export function isRateLimited(e: VisualizerCallError | ResponseDecodeError): boo
 }
 
 /**
- * Delay before retry number `attempt` (attempts made so far) of a recoverable
- * failure — a minute and up for a 429, seconds otherwise (core
- * `retry_backoff_ms`).
+ * Whether Visualizer refused the whole account (disabled, unconfirmed, or a
+ * token missing a scope): every further request hits the same wall, though the
+ * session stays.
  */
-export function retryDelayMs(e: VisualizerCallError | ResponseDecodeError, attempt: number): number {
-	return wasmRetryBackoffMs(e._tag === 'HttpStatusError' ? e.status : undefined, attempt);
+export function isAccountBlocked(e: VisualizerCallError | ResponseDecodeError): boolean {
+	return e._tag === 'HttpStatusError' && syncFailureOf(e).kind === 'AccountBlocked';
+}
+
+/**
+ * Delay before retry number `attempt` (attempts made so far) of a recoverable
+ * failure — a minute, then ten, for a 429, seconds otherwise (core
+ * `retry_backoff_ms`). `jitter` is a random number in `0..1`.
+ */
+export function retryDelayMs(
+	e: VisualizerCallError | ResponseDecodeError,
+	attempt: number,
+	jitter: number = Math.random()
+): number {
+	return wasmRetryBackoffMs(e._tag === 'HttpStatusError' ? e.status : undefined, attempt, jitter);
 }
 
 /**
@@ -201,11 +225,14 @@ export function retryDelayMs(e: VisualizerCallError | ResponseDecodeError, attem
 export function queueDecision(
 	op: 'create' | 'update' | 'delete',
 	e: VisualizerCallError | ResponseDecodeError,
-	attemptsMade: number
+	attemptsMade: number,
+	jitter: number = Math.random()
 ): QueueDecision {
 	const status = e._tag === 'HttpStatusError' ? e.status : undefined;
 	const body = e._tag === 'HttpStatusError' ? (e.body ?? '') : '';
-	return JSON.parse(wasmVisualizerQueueDecision(op, e._tag, status, body, attemptsMade)) as QueueDecision;
+	return JSON.parse(
+		wasmVisualizerQueueDecision(op, e._tag, status, body, attemptsMade, jitter)
+	) as QueueDecision;
 }
 
 /** The user notice when the free-plan daily cap stops an upload pass. */
@@ -218,6 +245,21 @@ export const RATE_LIMIT_NOTICE =
 	'Visualizer is limiting uploads right now — the rest will retry in a few minutes.';
 
 /**
+ * What to say for a 403 that isn't about Premium, or `null` for any other
+ * failure. The status alone can't say "buy Premium".
+ */
+export function describeRefusal(e: VisualizerCallError | ResponseDecodeError): string | null {
+	if (e._tag !== 'HttpStatusError' || e.status !== 403) return null;
+	const failure = syncFailureOf(e);
+	if (failure.kind === 'Forbidden') return "Visualizer refused this: it isn't on your account.";
+	if (failure.kind !== 'AccountBlocked') return null;
+	const { reason } = failure.details;
+	if (reason === AccountBlockReason.Disabled) return 'This Visualizer account is disabled.';
+	if (reason === AccountBlockReason.Unconfirmed) return 'Confirm your email at visualizer.coffee first.';
+	return 'Visualizer needs more access. Please sign in again.';
+}
+
+/**
  * Human-readable summary of a call failure for the sync log / console warn
  * (display only). The canonical wording across the sync surfaces — "row" rather
  * than "shot" so it reads sensibly for shots, bags, and roasters alike.
@@ -225,7 +267,7 @@ export const RATE_LIMIT_NOTICE =
 export function describeVisualizerError(e: VisualizerCallError | ResponseDecodeError): string {
 	switch (e._tag) {
 		case 'HttpStatusError':
-			return `HTTP ${e.status}: ${e.body ?? ''}`.trim();
+			return describeRefusal(e) ?? `HTTP ${e.status}: ${e.body ?? ''}`.trim();
 		case 'NetworkError':
 			return `Network error: ${e.cause instanceof Error ? e.cause.message : String(e.cause)}`;
 		case 'VisualizerPremiumGatedError':

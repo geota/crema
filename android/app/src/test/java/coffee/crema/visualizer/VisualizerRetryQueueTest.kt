@@ -38,6 +38,8 @@ import java.nio.file.Files
  * (`visualizer_queue_decision`, `classify_token_refresh_failure`, host-built).
  */
 class VisualizerRetryQueueTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val json = Json { ignoreUnknownKeys = true }
     private val dir: File = Files.createTempDirectory("viz-retry").toFile()
     private val context = object : ContextWrapper(null) {
@@ -196,12 +198,12 @@ class VisualizerRetryQueueTest {
         settle()
         val entry = queue().single()
         assertEquals(1, entry.attempts)
-        assertEquals(clock + 2_000, entry.nextAttemptAt)
+        assertTrue("2 s, plus up to 25%: ${entry.nextAttemptAt - clock}", entry.nextAttemptAt - clock in 2_000..2_500)
         // Not due yet: nothing is retried.
         assertEquals(0, runBlocking { s.drainRetryQueue() })
         lastReply = HttpStatusCode.OK to """{"id":"v-9"}"""
         uploadReplies.clear()
-        clock += 2_000
+        clock = entry.nextAttemptAt
         assertEquals(1, runBlocking { s.drainRetryQueue() })
         assertEquals("v-9", synced["s1"])
         assertTrue(queue().isEmpty())
@@ -343,31 +345,48 @@ class VisualizerRetryQueueTest {
         assertEquals(listOf("s2"), out.shotTombstones.map { it.id })
     }
 
-    /** F17 validation P3: a remote delete gets the core's ceiling, as web's
-     *  queue: the third failure, or a terminal one (403), stops the remote
-     *  delete; the tombstone stays, so the copy is still never pulled back. */
+    /** #331: nothing else re-offers a delete whose local row is gone, so one
+     *  time can fix never stops: past its attempts it parks an hour at a time. */
     @Test
-    fun `tombstone deletes stop after the third failure or a terminal one`() {
+    fun `delete_after_3_failures_retries`() {
         deleteStatus = HttpStatusCode.InternalServerError
         val s = sync()
         s.tombstoneShot("s1", "v-1", deleteRemote = true)
         settle()
-        repeat(4) {
-            clock += 60 * 60_000
+        repeat(6) {
+            clock += 2 * 60 * 60_000
             runBlocking { s.drainRetryQueue() }
         }
-        assertEquals("three attempts in all: $deletes", 3, deletes.size)
-        val t = s.shotTombstones.single()
-        assertFalse("the remote delete stopped", t.deleteRemote)
+        assertTrue("still trying: $deletes", deletes.size >= 6)
+        val parked = s.shotTombstones.single()
+        assertTrue("the remote delete stands", parked.deleteRemote)
+        assertEquals("parking spends no attempt", 2, parked.attempts)
+        assertEquals("parked an hour", clock + 60 * 60_000, parked.nextAttemptAt)
 
-        deletes.clear()
+        val tries = deletes.size
+        clock += 30 * 60_000
+        runBlocking { s.drainRetryQueue() }
+        assertEquals("not before the hour is up", tries, deletes.size)
+
+        deleteStatus = HttpStatusCode.NoContent
+        clock += 30 * 60_000
+        runBlocking { s.drainRetryQueue() }
+        assertEquals("a later try lands", tries + 1, deletes.size)
+        assertTrue("purged: ${s.shotTombstones}", s.shotTombstones.isEmpty())
+    }
+
+    /** F17 validation P3: a terminal failure (403) stops the remote delete; the
+     *  tombstone stays, so the copy is still never pulled back. */
+    @Test
+    fun `a terminal failure stops the delete and keeps the tombstone`() {
         deleteStatus = HttpStatusCode.Forbidden
+        val s = sync()
         s.tombstoneShot("s2", "v-2", deleteRemote = true)
         settle()
         clock += 60 * 60_000
         runBlocking { s.drainRetryQueue() }
         assertEquals("a 403 is not retried: $deletes", 1, deletes.size)
-        assertEquals(listOf(false, false), s.shotTombstones.map { it.deleteRemote })
+        assertEquals(listOf(false), s.shotTombstones.map { it.deleteRemote })
     }
 
     /** F17 validation P2: a due shot another upload holds is pushed back, not

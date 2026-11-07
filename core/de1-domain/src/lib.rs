@@ -111,6 +111,8 @@ pub mod steam;
 pub mod step_weight;
 pub mod stolen_serials;
 pub mod stop;
+pub mod sync_failure;
+pub mod sync_run;
 pub mod tank;
 pub mod units;
 pub mod visualizer_catalogue;
@@ -316,6 +318,14 @@ pub use stop::{
     AutoStop, STOP_WEIGHT_BEFORE, StopCapture, StopConfig, StopReason, StopTargets,
     sav_counts_volume, volume_stop_arms,
 };
+pub use sync_failure::{
+    AccountBlockReason, RETRY_AFTER_CAP_MS, SyncFailure, SyncOperation, SyncService,
+    classify_sync_failure, classify_sync_failure_json, parse_retry_after, rate_limit_wait_ms,
+};
+pub use sync_run::{
+    AttentionReason, BlockReason, PartialReason, RunOutcome, SyncHealth, WaitReason,
+    reconnect_notice_due, sync_health_after_run,
+};
 pub use tank::{
     DEFAULT_REFILL_POINT_MM, LowWaterMonitor, REFILL_POINT_MAX_MM, REFILL_POINT_MIN_MM,
     REFILL_SOON_MARGIN_MM, SENSOR_OFFSET_MM, TANK_FULL_ML, TANK_LEVEL_SMOOTHING_TAU_S,
@@ -337,7 +347,7 @@ pub use visualizer_catalogue::{
     parse_catalogue_roasters, parse_catalogue_roasters_json, roaster_match_key,
 };
 pub use visualizer_error::{
-    AUTH_PARK_MS, MAX_QUEUE_ATTEMPTS, QueueDecision, QueueOp, RefreshFailure,
+    AUTH_PARK_MS, DELETE_PARK_MS, MAX_QUEUE_ATTEMPTS, QueueDecision, QueueOp, RefreshFailure,
     VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, classify_token_refresh_failure,
     is_recoverable, retry_backoff_ms, upload_refused_no_samples, visualizer_queue_decision,
     visualizer_queue_decision_json, visualizer_quota_limit,

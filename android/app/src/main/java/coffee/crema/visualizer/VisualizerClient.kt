@@ -29,8 +29,8 @@ import java.io.Closeable
 /*
  * The authenticated Visualizer API client — the Android `visualizerCall`
  * (web `$lib/services/visualizer-call.ts`): one entry point, the same error
- * taxonomy (401 → auth, 402/403 → premium-gated, 404 → not-found, transport
- * → network), JSON bodies in and out over Ktor on OkHttp (HttpURLConnection
+ * taxonomy (401 → auth, 402 or a 403 naming Premium → premium-gated, 404 →
+ * not-found, transport → network), JSON bodies in and out over Ktor on OkHttp (HttpURLConnection
  * — and so ktor-client-android — can't send the PATCH verb shot-edit sync
  * needs).
  *
@@ -53,7 +53,7 @@ sealed class VisualizerError(message: String) : Exception(message) {
     /** 401 — token invalid/expired beyond refresh. */
     class Auth : VisualizerError("Not signed in to Visualizer")
 
-    /** 402/403 — premium-gated endpoint on a free account. */
+    /** 402, or a 403 naming Premium: a premium-gated endpoint on a free account. */
     class PremiumGated : VisualizerError("Requires a Visualizer premium account")
 
     /** 404 — the resource is gone server-side. */
@@ -62,7 +62,7 @@ sealed class VisualizerError(message: String) : Exception(message) {
     /** Transport failure or malformed body — worth retrying later. */
     class Network(message: String) : VisualizerError(message)
 
-    /** Any other non-2xx, with the reply body (the quota 422 is told apart by it). */
+    /** Any other non-2xx, with the reply body (the quota 422 and a 403 are told apart by it). */
     class Http(val status: Int, message: String, val body: String = "") : VisualizerError(message)
 
     /**
@@ -121,13 +121,36 @@ class VisualizerClient(
         }
         when {
             status == 401 -> throw VisualizerError.Auth()
-            status == 402 || status == 403 -> throw VisualizerError.PremiumGated()
+            status == 402 -> throw VisualizerError.PremiumGated()
+            status == 403 -> throw forbidden(text)
             status == 404 -> throw VisualizerError.NotFound()
             status !in 200..299 -> throw VisualizerError.Http(status, "Visualizer HTTP $status", text)
             text.isBlank() -> null
             else -> runCatching { json.parseToJsonElement(text) }
                 .getOrElse { throw VisualizerError.Network("Visualizer returned a malformed body") }
         }
+    }
+
+    /**
+     * What a 403's body means (core `classify_sync_failure`). Only a reply naming
+     * Premium reads as Premium: a 403 is also a row on another account, or an
+     * account that's blocked.
+     */
+    private fun forbidden(body: String): VisualizerError {
+        val failure = json.parseToJsonElement(
+            coffee.crema.core.classifySyncFailure("visualizer", "call", 403u, body, null, 0L),
+        ).jsonObject
+        val reason = failure["details"]?.jsonObject?.get("reason")?.jsonPrimitive?.contentOrNull
+        val message = when (failure["kind"]?.jsonPrimitive?.contentOrNull) {
+            "NeedsPremium" -> return VisualizerError.PremiumGated()
+            "AccountBlocked" -> when (reason) {
+                "Disabled" -> "This Visualizer account is disabled"
+                "Unconfirmed" -> "Confirm your email at visualizer.coffee first"
+                else -> "Visualizer needs more access. Please sign in again"
+            }
+            else -> "Visualizer refused this: it isn't on your account"
+        }
+        return VisualizerError.Http(403, message, body)
     }
 
     /** `GET /api/me` → the account projection (defensive field reads). */
@@ -147,7 +170,7 @@ class VisualizerClient(
      * The account's Premium tier — a port of the web `BeanSync` probe
      * (`probePremium`, run by its `testConnection`): `POST /api/roasters` with
      * a sentinel name (roaster writes are Premium-gated), then delete it.
-     * 2xx → true, 402/403 → false, any other failure → null (inconclusive).
+     * 2xx → true, premium-gated → false, any other failure → null (inconclusive).
      * A failed cleanup is non-fatal (the web's next full bean sync tidies the
      * sentinel). A 401 still throws [VisualizerError.Auth] so the caller's
      * token refresh can retry.

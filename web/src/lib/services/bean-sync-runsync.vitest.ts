@@ -44,7 +44,10 @@ beforeAll(async () => {
 /** A list GET (`/api/roasters?items=…`), not a `/roasters/{id}` detail. */
 const isList = (url: string, base: string) => new URL(url).pathname === `/api${base}`;
 
-type Reply = { ok: true; json?: unknown } | { ok: false; status: number };
+/** Visualizer's reply on a Premium-only write (`Authorization#check_premium!`). */
+const PREMIUM_REPLY = '{"error":"You must be a premium user to access this feature."}';
+
+type Reply = { ok: true; json?: unknown } | { ok: false; status: number; body?: string };
 
 function mkHttp(handler: (method: string, url: string) => Reply) {
 	const calls: { method: string; url: string; body?: unknown }[] = [];
@@ -55,7 +58,7 @@ function mkHttp(handler: (method: string, url: string) => Reply) {
 				const method = req.method ?? 'GET';
 				calls.push({ method, url: req.url, body: req.body ? JSON.parse(req.body) : undefined });
 				const r = handler(method, req.url);
-				if (!r.ok) return Effect.fail(new HttpStatusError({ status: r.status, url: req.url }));
+				if (!r.ok) return Effect.fail(new HttpStatusError({ status: r.status, url: req.url, body: r.body }));
 				return Effect.succeed(
 					new Response(JSON.stringify(r.json ?? {}), {
 						status: 200,
@@ -209,7 +212,7 @@ describe('BeanSync.runSync — push + premium', () => {
 		const local = { ...blankRoaster('Acme'), visualizerId: null };
 		const lib = mkLibrary({ roasters: [local] });
 		const { layer } = mkHttp((method, url) => {
-			if (method === 'POST' && url.includes('/roasters')) return { ok: false, status: 403 };
+			if (method === 'POST' && url.includes('/roasters')) return { ok: false, status: 403, body: PREMIUM_REPLY };
 			return { ok: true, json: { data: [], paging: { pages: 1 } } };
 		});
 		const result = await run(lib, layer);
