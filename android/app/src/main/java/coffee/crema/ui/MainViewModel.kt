@@ -917,6 +917,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @androidx.annotation.VisibleForTesting
     internal lateinit var startupLoad: kotlinx.coroutines.Job
 
+    /** The sync controllers' own-state loads, apart from [startupLoad]. */
+    @androidx.annotation.VisibleForTesting
+    internal lateinit var ownStateLoads: List<kotlinx.coroutines.Job>
+
     // ── `init` blocks: every property is declared above this point (P3-2) ──
 
     init {
@@ -1103,9 +1107,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // The sync controllers' own state, apart from the row load below: a
         // failure there must not strand a sign-in (geota/crema#322). Whatever
         // touches that state waits for these, not for their place in a chain.
-        loadOwnState("Visualizer") { visualizer.load() }
-        loadOwnState("Decent") { decent.load() }
-        loadOwnState("Google Drive") { drive.load() }
+        ownStateLoads = listOf(
+            loadOwnState("Visualizer") { visualizer.load() },
+            loadOwnState("Decent") { decent.load() },
+            loadOwnState("Google Drive") { drive.load() },
+        )
         // Load both persisted stores in one coroutine, sequentially, so their
         // _ui copies don't race (read-modify-write of the shared snapshot).
         startupLoad = viewModelScope.launch {
@@ -1166,10 +1172,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** One controller's own-state load. A failure is logged here: the controller
      *  has already let its waiters go, refusing, so nothing runs on its defaults. */
-    private fun loadOwnState(service: String, load: suspend () -> Unit) {
-        viewModelScope.launch {
-            runCatchingCancellable { load() }.onFailure { appendLog("$service state load failed: ${it.message}") }
-        }
+    private fun loadOwnState(service: String, load: suspend () -> Unit) = viewModelScope.launch {
+        runCatchingCancellable { load() }.onFailure { appendLog("$service state load failed: ${it.message}") }
     }
 
     /** Select the Brew header's active profile. (M1: display only — uploading the

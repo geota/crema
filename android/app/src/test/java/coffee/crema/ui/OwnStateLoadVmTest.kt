@@ -2,7 +2,6 @@ package coffee.crema.ui
 
 import android.app.Application
 import coffee.crema.MainSources
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Test
@@ -39,10 +38,7 @@ class OwnStateLoadVmTest {
 
         // The row chain ends before it reaches anything after the hold.
         release.cancel()
-        val vm = ViewModelProvider(
-            ViewModelStore(),
-            ViewModelProvider.AndroidViewModelFactory.getInstance(app),
-        )[MainViewModel::class.java]
+        val vm = VmHarness.build(ViewModelStore())
 
         VmHarness.idleUntil("own state") { vm.drive.state.value.connected }
         assertEquals(false, vm.startupLoad.isActive)

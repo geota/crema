@@ -183,7 +183,7 @@ internal object VmHarness {
      *  overwrite a profile a test saves in that window, and before the load's
      *  own push of the desired profile. */
     fun awaitStartupLoaded(vm: MainViewModel) {
-        idleUntil("the startup load") { vm.startupLoad.isCompleted }
+        idleUntil("the startup load") { vm.startupLoad.isCompleted && vm.ownStateLoads.all { it.isCompleted } }
     }
 
     /** The VM's own state: what it persists (the screens see [MainViewModel.ui]). */
