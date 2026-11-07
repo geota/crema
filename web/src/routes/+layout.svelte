@@ -21,6 +21,7 @@
 	import { CremaSidebar } from '#lib/components/index.js';
 	import DebugPanel from '#lib/shell/DebugPanel.svelte';
 	import ReconnectStrip from '#lib/shell/ReconnectStrip.svelte';
+	import RefusedStoresStrip from '#lib/shell/RefusedStoresStrip.svelte';
 	import PhoneTopBar from '#lib/shell/PhoneTopBar.svelte';
 	import PhoneTabBar from '#lib/shell/PhoneTabBar.svelte';
 	import { showsPhoneTabs } from '#lib/shell/nav-items.js';
@@ -261,6 +262,7 @@
 	     render their own content inside it, never a nested <main>. -->
 	<main class={['shell-content', { 'has-tabs': tabBar }]}>
 		<ReconnectStrip {app} />
+		<RefusedStoresStrip canReload={() => canReloadNow(reloadInputs())} />
 		{@render children?.()}
 	</main>
 	{#if tabBar}
