@@ -138,7 +138,7 @@ describe('deletes by name', () => {
 		await getCaptureStore().put('r299', []);
 		await putSeries('r0', samples);
 		const store = await boot();
-		store.insertPulled(row('newest', 2_000_000));
+		store.insertMany([row('newest', 2_000_000)]);
 		await settle();
 		expect(store.rawAll).toHaveLength(300);
 		expect(await seriesIds()).toEqual(['newest', 'r0']);

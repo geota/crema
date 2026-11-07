@@ -53,6 +53,7 @@ import coffee.crema.history.brewDateError
 import coffee.crema.history.HistoryMerge
 import coffee.crema.history.historyDroppedNotice
 import coffee.crema.history.historyWith
+import coffee.crema.history.mergePulled
 import coffee.crema.history.mergeHistory
 import coffee.crema.history.isManualLog
 import coffee.crema.history.newestFirst
@@ -1287,20 +1288,24 @@ class LibraryController(
 
     // ── Visualizer sync hooks (pull/backfill/synced stamps) ──────────────────
 
-    /** Insert pulled Visualizer stubs into the history (dedup by id, newest first). Persisted. */
-    fun insertPulledShots(stubs: List<StoredShot>) {
-        if (stubs.isEmpty()) return
+    /**
+     * Insert pulled Visualizer stubs into the history (dedup by id, newest
+     * first) and persist. A pull never removes a row ([mergePulled]), so this
+     * answers the ids a full history refused.
+     */
+    fun insertPulledShots(stubs: List<StoredShot>): Set<String> {
+        if (stubs.isEmpty()) return emptySet()
+        var kept = emptySet<String>()
+        var present = emptySet<String>()
         updateUi { st ->
-            val existing = st.history.map { it.id }.toHashSet()
-            val fresh = stubs.filter { it.id !in existing }
-            if (fresh.isEmpty()) {
-                st
-            } else {
-                st.copy(history = historyWith(fresh, st.history))
-            }
+            val merge = mergePulled(stubs, st.history)
+            kept = merge.kept.mapTo(HashSet()) { it.id }
+            present = st.history.mapTo(HashSet()) { it.id }
+            if (merge.kept.isEmpty()) st else st.copy(history = merge.rows)
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
+        return stubs.mapTo(HashSet()) { it.id } - kept - present
     }
 
     /** Backfill a curve-less local shot's telemetry from a Visualizer pull. Persisted. */
