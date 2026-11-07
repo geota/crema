@@ -84,6 +84,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Finishing a sign-in after the app was killed no longer wipes your Visualizer
+  or Google Drive settings** — a redirect landing on a cold start read the saved
+  sign-in before it had loaded, then wrote defaults over the file, losing tokens,
+  the pull cursor, deleted-shot records and your sharing settings. Everything
+  that touches those files now waits for them to load, and a stray or repeated
+  redirect changes nothing. A Google Drive redirect after the app was killed now
+  completes too. A refused Visualizer sign-in shows the provider's error instead
+  of "cancelled". Android.
 - **Moving a shot off a bag gives back only what it took** — each shot now
   records the grams it actually took, and backups keep them. Moving 5 shots off
   an empty bag used to add about 90 g, and a bag with no tracked weight gained
