@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1695b5addec4b2beb24bac2cfd6feee06035853c06b117db712d4d72419d3927 # shrinks to d = Device { beans: {"b": false}, shots: {}, cap: None }, b = Backup { beans: ["b"], shots: [], carries_beans: true }, revive = false
+cc f7e33fb5f94ff0ed87d03d24518479ef518b229343e024b6d63162916acb6dc5 # shrinks to d = Device { beans: {}, shots: {"c": Shot { from_backup: false, samples: false, deleted: true }}, cap: None }, b = Backup { beans: [], shots: [("c", false, false, 0)], carries_beans: false }, revive = false
+cc 3618046307335d01a2fdbe175c0f3f2ba3b84a2a10a61101e743475dec30598a # shrinks to d = Device { beans: {}, shots: {}, cap: Some(0) }, b = Backup { beans: [], shots: [("a", false, false, 0)], carries_beans: false }
+cc 5e23cc7e072acc6ae35a3780e2ffc4b430b87cacd88b49bd6b2c8d3dbfb5adf0 # shrinks to d = Device { beans: {"a": false}, shots: {}, cap: None }, b = Backup { beans: [], shots: [("a", false, false, 0)], carries_beans: false }

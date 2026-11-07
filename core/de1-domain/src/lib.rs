@@ -54,6 +54,7 @@
 
 pub mod app_settings;
 pub mod auto_tare;
+pub mod backup_plan;
 pub mod backup_retention;
 pub mod bean;
 pub mod bean_coerce;
@@ -126,6 +127,12 @@ pub mod weight_gate;
 pub use auto_tare::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_SETTLE_BAND_G, AUTO_TARE_SETTLE_SAMPLES, AUTO_TARE_THRESHOLD_G,
     MAX_PRE_SHOT_ZERO_OFFSET_G, TareSettleWindow, pre_shot_zero_offset,
+};
+pub use backup_plan::{
+    BackupLine, BackupManifest, BackupScan, LineError, LocalState, RestoreMode, RestoreOpts,
+    RestorePlan, common_is_pristine, common_is_pristine_json, import_backup_bytes,
+    import_backup_bytes_json, parse_backup_line, plan_restore, plan_restore_json,
+    scan_backup_bytes, scan_backup_bytes_json,
 };
 pub use backup_retention::{
     AutoBackupName, AutoBackupRetention, BackupCounts, BackupFile, BackupFileInfo, BackupShrink,
