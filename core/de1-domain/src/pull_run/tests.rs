@@ -530,8 +530,12 @@ fn a_clock_going_back_counts_as_no_time() {
     for _ in 0..30 {
         bucket = pace(bucket, NOW).0;
     }
-    let (_, wait) = pace(bucket, NOW - 3_600_000);
+    let (back, wait) = pace(bucket, NOW - 3_600_000);
     assert!(wait >= u64::try_from(PACE_INTERVAL_MS).unwrap() - 1);
+    assert_eq!(back.last_now_ms, NOW);
+    // Back an hour and forward again must not hand the burst back.
+    let (_, wait) = pace(back, NOW);
+    assert!(wait >= u64::try_from(PACE_INTERVAL_MS).unwrap());
 }
 
 #[test]
