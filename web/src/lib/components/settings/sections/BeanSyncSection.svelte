@@ -206,7 +206,7 @@
 				// idempotent), missing one is data loss.
 				const pullStartedAt = Date.now() - 60_000;
 				try {
-					const { pulled, truncated } = await svcPullAndReconcile(
+					const { pulled, truncated, held } = await svcPullAndReconcile(
 						config.shotPullCursor ?? 0,
 						{
 							itemsPerPage: 50,
@@ -225,6 +225,9 @@
 							at: Date.now(),
 							error: 'Pull truncated at safety cap — re-run Sync to continue.'
 						});
+					} else if (held) {
+						// A row edited during the pull still lacks its curve: the
+						// cursor stays, so the next pull fetches it again.
 					} else {
 						// Caught up to the end — advance the cursor (added rows log
 						// themselves via reconciliation).
@@ -291,7 +294,7 @@
 		resyncing = true;
 		const pullStartedAt = Date.now() - 60_000;
 		try {
-			const { pulled, truncated } = await svcPullAndReconcile(0, {
+			const { pulled, truncated, held } = await svcPullAndReconcile(0, {
 				itemsPerPage: 50,
 				onProgress: (p) => (pullProgress = { fetched: p.fetched, page: p.page })
 			});
@@ -304,6 +307,8 @@
 					at: Date.now(),
 					error: 'Pull truncated at safety cap — run again to continue.'
 				});
+			} else if (held) {
+				// A row edited during the pull still lacks its curve: run again.
 			} else {
 				config = updateSyncConfig({ shotPullCursor: pullStartedAt });
 				appendSyncLog({

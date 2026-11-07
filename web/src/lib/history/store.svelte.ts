@@ -26,7 +26,7 @@ import {
 } from '#lib/visualizer/upload-marks.js';
 import { excludedFromUpload, readSyncConfig } from '#lib/visualizer/sync-config.js';
 import type { RustStoredShot, TimedSample } from '#lib/core/index.js';
-import type { BrewSeries } from '#lib/core/crema-core.js';
+import type { BrewSeries, ShotPatch as RemoteShotPatch } from '#lib/core/crema-core.js';
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
 import type { TelemetrySample } from '#lib/state/index.js';
 import { toWire } from './telemetry-wire';
@@ -734,6 +734,40 @@ export class HistoryStore {
 	 * has samples — never clobber a locally-recorded curve with a pulled
 	 * one.
 	 */
+	/**
+	 * Apply what a pull may change on a row (the core's `merge_remote_shot`), in
+	 * one write: tags it adds, a barista into a blank one, the curve and the
+	 * recipe when the row has none. The remote version goes last, so a row is
+	 * never marked current without the rest. Nothing else can change here.
+	 */
+	applyRemote(id: string, patch: RemoteShotPatch, pulled: PulledParts = {}): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const target = this.shots[idx];
+		let next: StoredShot = target;
+		if (patch.tags) next = { ...next, tags: [...patch.tags] };
+		if (patch.barista && !next.metadata.barista?.trim()) {
+			next = { ...next, metadata: { ...next.metadata, barista: patch.barista } };
+		}
+		const samples = pulled.samples ?? [];
+		const backfill =
+			patch.backfillSamples === true && samples.length > 0 && next.record.samples.length === 0;
+		if (backfill) {
+			next = {
+				...next,
+				record: { duration: pulled.durationMs || next.record.duration, samples: [...samples] }
+			};
+		}
+		if (patch.fillProfile && pulled.profile != null && next.profile == null) {
+			next = { ...next, profile: pulled.profile };
+		}
+		if (patch.remoteVersion != null) next = { ...next, visualizerUpdatedAt: patch.remoteVersion };
+		if (next === target) return;
+		this.shots = [...this.shots.slice(0, idx), next, ...this.shots.slice(idx + 1)];
+		if (backfill) void putSeries(id, [...samples]).catch(seriesSaveFailed);
+		this.persist();
+	}
+
 	backfillTelemetry(id: string, samples: readonly TimedSample[], durationMs: number): void {
 		if (samples.length === 0) return;
 		const idx = this.shots.findIndex((s) => s.id === id);
@@ -919,6 +953,16 @@ export class HistoryStore {
 		this.shots = this.shots.map((s, i) => (i === idx ? next : s));
 		this.persist();
 	}
+}
+
+/** What a pull fetched besides the detail, for {@link HistoryStore.applyRemote}. */
+export interface PulledParts {
+	/** The pulled telemetry. */
+	readonly samples?: readonly TimedSample[];
+	/** The remote duration, ms, kept with a backfilled curve. */
+	readonly durationMs?: number;
+	/** The pulled recipe (core `Profile` JSON). */
+	readonly profile?: unknown;
 }
 
 /** Input to {@link HistoryStore.addManualBrew}. */
