@@ -123,11 +123,11 @@ describe('cross-shell backup restore (F11a)', () => {
 		vi.useRealTimers();
 	});
 
-	it.runIf(process.env.CREMA_REGEN_BACKUP_FIXTURES === '1')('regenerates the web fixture', () => {
+	it.runIf(process.env.CREMA_REGEN_BACKUP_FIXTURES === '1')('regenerates the web fixture', async () => {
 		vi.useFakeTimers({ toFake: ['Date'] });
 		vi.setSystemTime(1_790_000_000_000);
 		seed();
-		writeFileSync(resolve(FIXTURES, 'web-backup.crema.jsonl'), buildBackupJsonl('fixture')!.jsonl);
+		writeFileSync(resolve(FIXTURES, 'web-backup.crema.jsonl'), (await buildBackupJsonl('fixture'))!.jsonl);
 	});
 
 	it('restores an Android backup', () => {

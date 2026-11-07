@@ -8,11 +8,15 @@
 //!
 //! The human-readable `describeVisualizerError` stays **shell-side** — it is
 //! i18n / display copy, not policy. Only the recoverable-vs-terminal decision
-//! moves here.
+//! moves here, and it is the shared [`SyncFailure`] classification's.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use typeshare::typeshare;
+
+use crate::sync_failure::{
+    SyncFailure, SyncOperation, SyncService, classify_sync_failure, rate_limit_jitter, retry_jitter,
+};
 
 /// The closed Visualizer-call error taxonomy. Mirrors the shell's
 /// `VisualizerCallError | ResponseDecodeError` tagged-error union. The shell
@@ -62,11 +66,31 @@ impl VisualizerCallError {
         }
     }
 
+    /// What this failure means in the shared classification. `body` is the
+    /// reply text, which tells a quota 422 or a premium 403 from the rest.
+    #[must_use]
+    pub fn sync_failure(&self, body: &str) -> SyncFailure {
+        match self {
+            Self::Network => SyncFailure::Offline,
+            Self::HttpStatus(status) => classify_sync_failure(
+                SyncService::Visualizer,
+                SyncOperation::Call,
+                Some(*status),
+                body,
+                None,
+                0,
+            ),
+            Self::NotAuthenticated | Self::TokenRefreshFailed => SyncFailure::SessionEnded,
+            Self::PremiumGated => SyncFailure::NeedsPremium,
+            Self::NotFound => SyncFailure::NotFound,
+            Self::ResponseDecode => SyncFailure::Rejected { status: 0 },
+        }
+    }
+
     /// Whether the failure is worth a time-based retry through the upload
-    /// queue: a transport failure ([`Self::Network`]), or a transient
-    /// `5xx` / `408` / `429` / transport-blocked (`status 0`) HTTP response.
-    /// Auth / premium / not-found / decode failures need user action, not
-    /// time, so they are terminal. Mirrors `isRecoverable`.
+    /// queue: [`SyncFailure::is_transient`]. Auth / premium / not-found /
+    /// decode failures need user action, not time, so they are terminal.
+    /// Mirrors `isRecoverable`.
     ///
     /// `429` is Visualizer's rate limit (50 requests/min and 200 per 10 min
     /// per IP, 200 per 10 min per user — `openapi.yaml` "Rate limits"): it
@@ -74,21 +98,12 @@ impl VisualizerCallError {
     /// [`retry_backoff_ms`] delay.
     #[must_use]
     pub fn is_recoverable(&self) -> bool {
-        match self {
-            Self::Network => true,
-            Self::HttpStatus(status) => {
-                *status == 0
-                    || *status == 408
-                    || *status == RATE_LIMITED
-                    || (*status >= 500 && *status < 600)
-            }
-            _ => false,
-        }
+        self.sync_failure("").is_transient()
     }
 }
 
 /// HTTP 429 Too Many Requests — Visualizer's rate limit.
-const RATE_LIMITED: u16 = 429;
+pub(crate) const RATE_LIMITED: u16 = 429;
 
 /// Visualizer's free-plan daily cap on new shots when the reply doesn't name
 /// one (`Shot::DAILY_LIMIT`, 30 since visualizer 3e9ba33c, 2026-09-19).
@@ -135,18 +150,21 @@ pub fn visualizer_quota_limit(status: u16, body: &str) -> Option<u32> {
 /// Delay before retry number `attempt` (attempts made so far, 0-based) of a
 /// recoverable failure with HTTP `status` (`None` for a transport failure).
 ///
-/// - `429`: Visualizer's limits are per minute / per 10 minutes and the reply
-///   carries no `Retry-After`, so wait a full minute and double from there:
-///   60 s, 120 s, 240 s, … capped at 10 min.
+/// - `429`: Visualizer's windows are fixed, a rejected request counts and
+///   doesn't extend them, and the 10-minute one is the one that binds. So one
+///   60 s probe covers the minute limit, then every wait is 10 minutes, the
+///   longest a window can take to pass. 0 to 20% added jitter.
 /// - Everything else: 1 s × 2^attempt, capped at 60 s (the queue's existing
-///   schedule).
+///   schedule). 0 to 25% added jitter.
+///
+/// `jitter_unit` is the shell's random number in `0..1`.
 #[must_use]
-pub fn retry_backoff_ms(status: Option<u16>, attempt: u32) -> u64 {
-    let factor = 1u64 << attempt.min(16);
+pub fn retry_backoff_ms(status: Option<u16>, attempt: u32, jitter_unit: f64) -> u64 {
     if status == Some(RATE_LIMITED) {
-        (60_000 * factor).min(600_000)
+        let wait = if attempt == 0 { 60_000 } else { 600_000 };
+        rate_limit_jitter(wait, jitter_unit)
     } else {
-        (1_000 * factor).min(60_000)
+        retry_jitter((1_000 << attempt.min(16)).min(60_000), jitter_unit)
     }
 }
 
@@ -200,6 +218,18 @@ pub fn classify_token_refresh_failure(status: Option<u16>, body: Option<&str>) -
     }
 }
 
+/// Whether a stored row goes out with no telemetry, so an upload must refuse it.
+///
+/// A machine shot with no samples is one whose series hasn't loaded, or was
+/// lost: Visualizer would take it as `elapsed: 0` and Decent as a record with no
+/// measurements, and the row would count as uploaded (geota/crema#330). `None`
+/// reads as no samples. A brew log has none by nature, and stays local for its
+/// own reason, so this says nothing about it.
+#[must_use]
+pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -> bool {
+    !is_brew_log && sample_count.unwrap_or(0) == 0
+}
+
 /// The most attempts a queued Visualizer operation gets before it is dropped.
 pub const MAX_QUEUE_ATTEMPTS: u32 = 3;
 
@@ -207,6 +237,11 @@ pub const MAX_QUEUE_ATTEMPTS: u32 = 3;
 /// attempt spent: only signing in again fixes it, and nothing else re-offers a
 /// delete whose local row is gone).
 pub const AUTH_PARK_MS: u32 = 5 * 60 * 1000;
+
+/// How long a remote delete waits, parked, once [`MAX_QUEUE_ATTEMPTS`] have
+/// failed for a reason time can fix. Nothing else re-offers a delete whose local
+/// row is gone, so it is never dropped for such a failure (geota/crema#331).
+pub const DELETE_PARK_MS: u32 = 60 * 60 * 1000;
 
 /// The kind of queued Visualizer operation.
 #[typeshare]
@@ -232,7 +267,7 @@ pub enum QueueDecision {
         stop_pass: bool,
     },
     /// Keep it without spending an attempt; look again after `delay_ms` (a
-    /// delete while signed out).
+    /// delete while signed out, or out of attempts).
     Park {
         /// Wait, ms.
         delay_ms: u32,
@@ -249,14 +284,19 @@ pub enum QueueDecision {
 
 /// The retry queue's rule for an operation `op` that failed with the error
 /// `(tag, status)` and reply `body`, `attempts_made` attempts in (this one
-/// included). Both shells' queues follow it (web `UploadQueue.doDrain`):
+/// included). `jitter_unit` is the shell's random number in `0..1`. Both shells'
+/// queues follow it (web `UploadQueue.doDrain`):
 ///
-/// 1. the free-plan daily quota ([`visualizer_quota_limit`]): drop and stop;
+/// 1. the free-plan daily quota ([`SyncFailure::Quota`]): drop and stop;
 /// 2. a delete while signed out (not authenticated, or the refresh token
 ///    definitively rejected): park for [`AUTH_PARK_MS`];
-/// 3. not recoverable ([`is_recoverable`]), or [`MAX_QUEUE_ATTEMPTS`] made:
-///    drop;
-/// 4. otherwise retry after [`retry_backoff_ms`]; a 429 also stops the drain.
+/// 3. not recoverable ([`SyncFailure::is_transient`]): drop. A delete's tombstone
+///    stays, so the remote copy is never pulled back;
+/// 4. [`MAX_QUEUE_ATTEMPTS`] made: drop, unless it's a delete, which nothing else
+///    would re-offer. A delete parks for [`DELETE_PARK_MS`], or on a 429 keeps
+///    its cooldown below, which also stops the drain;
+/// 5. otherwise retry after [`retry_backoff_ms`]; a 429 also stops the drain.
+///    A first 429 is the 60 s probe, so its attempts count from 0.
 #[must_use]
 pub fn visualizer_queue_decision(
     op: QueueOp,
@@ -264,29 +304,40 @@ pub fn visualizer_queue_decision(
     status: Option<u16>,
     body: &str,
     attempts_made: u32,
+    jitter_unit: f64,
 ) -> QueueDecision {
-    let error = VisualizerCallError::from_tag(tag, status);
-    if let VisualizerCallError::HttpStatus(code) = error
-        && visualizer_quota_limit(code, body).is_some()
-    {
+    let failure = VisualizerCallError::from_tag(tag, status).sync_failure(body);
+    let rate_limited = matches!(failure, SyncFailure::RateLimited { .. });
+    if matches!(failure, SyncFailure::Quota { .. }) {
         return QueueDecision::Drop { stop_pass: true };
     }
-    let signed_out = matches!(
-        error,
-        VisualizerCallError::NotAuthenticated | VisualizerCallError::TokenRefreshFailed
-    );
-    if op == QueueOp::Delete && signed_out {
+    if op == QueueOp::Delete && failure == SyncFailure::SessionEnded {
         return QueueDecision::Park {
             delay_ms: AUTH_PARK_MS,
         };
     }
-    if !error.is_recoverable() || attempts_made >= MAX_QUEUE_ATTEMPTS {
+    if !failure.is_transient() {
         return QueueDecision::Drop { stop_pass: false };
     }
+    if attempts_made >= MAX_QUEUE_ATTEMPTS {
+        if op != QueueOp::Delete {
+            return QueueDecision::Drop { stop_pass: false };
+        }
+        if !rate_limited {
+            return QueueDecision::Park {
+                delay_ms: DELETE_PARK_MS,
+            };
+        }
+    }
+    let attempt = if rate_limited {
+        attempts_made.saturating_sub(1)
+    } else {
+        attempts_made
+    };
     QueueDecision::Retry {
-        // At most 10 min (`retry_backoff_ms`'s cap): fits a `u32`.
-        delay_ms: u32::try_from(retry_backoff_ms(status, attempts_made)).unwrap_or(u32::MAX),
-        stop_pass: error == VisualizerCallError::HttpStatus(RATE_LIMITED),
+        // At most 12 min (`retry_backoff_ms`'s longest, with jitter): fits a `u32`.
+        delay_ms: u32::try_from(retry_backoff_ms(status, attempt, jitter_unit)).unwrap_or(u32::MAX),
+        stop_pass: rate_limited,
     }
 }
 
@@ -300,13 +351,14 @@ pub fn visualizer_queue_decision_json(
     status: Option<u16>,
     body: &str,
     attempts_made: u32,
+    jitter_unit: f64,
 ) -> String {
     let op = match op {
         "create" => QueueOp::Create,
         "delete" => QueueOp::Delete,
         _ => QueueOp::Update,
     };
-    let decision = visualizer_queue_decision(op, tag, status, body, attempts_made);
+    let decision = visualizer_queue_decision(op, tag, status, body, attempts_made, jitter_unit);
     serde_json::to_string(&decision)
         .unwrap_or_else(|_| r#"{"kind":"Drop","details":{"stop_pass":false}}"#.to_owned())
 }
@@ -314,6 +366,19 @@ pub fn visualizer_queue_decision_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_machine_shot_with_no_samples_is_refused() {
+        assert!(upload_refused_no_samples(false, Some(0)));
+        assert!(upload_refused_no_samples(false, None));
+    }
+
+    #[test]
+    fn a_shot_with_samples_goes_and_a_brew_log_is_not_this_rules_business() {
+        assert!(!upload_refused_no_samples(false, Some(1)));
+        assert!(!upload_refused_no_samples(true, Some(0)));
+        assert!(!upload_refused_no_samples(true, None));
+    }
 
     // Cases pinned by the TS `visualizer-call.vitest.ts` retry-policy table.
 
@@ -336,8 +401,16 @@ mod tests {
 
     #[test]
     fn terminal_http_is_not_recoverable() {
-        for status in [404u16, 402, 401, 400, 422, 200, 301, 499] {
+        for status in [404u16, 402, 401, 400, 403, 422, 499] {
             assert!(!is_recoverable("HttpStatusError", Some(status)), "{status}");
+        }
+    }
+
+    /// Not the API's answer (a captive portal), so nothing proves it final.
+    #[test]
+    fn a_success_or_redirect_status_is_recoverable() {
+        for status in [200u16, 301] {
+            assert!(is_recoverable("HttpStatusError", Some(status)), "{status}");
         }
     }
 
@@ -426,14 +499,22 @@ mod tests {
 
     #[test]
     fn backoff_schedules() {
-        assert_eq!(retry_backoff_ms(None, 0), 1_000);
-        assert_eq!(retry_backoff_ms(Some(503), 1), 2_000);
-        assert_eq!(retry_backoff_ms(Some(503), 3), 8_000);
-        assert_eq!(retry_backoff_ms(Some(503), 10), 60_000);
-        assert_eq!(retry_backoff_ms(Some(429), 0), 60_000);
-        assert_eq!(retry_backoff_ms(Some(429), 1), 120_000);
-        assert_eq!(retry_backoff_ms(Some(429), 4), 600_000);
-        assert_eq!(retry_backoff_ms(Some(429), 40), 600_000);
+        assert_eq!(retry_backoff_ms(None, 0, 0.0), 1_000);
+        assert_eq!(retry_backoff_ms(Some(503), 1, 0.0), 2_000);
+        assert_eq!(retry_backoff_ms(Some(503), 3, 0.0), 8_000);
+        assert_eq!(retry_backoff_ms(Some(503), 10, 0.0), 60_000);
+        assert_eq!(retry_backoff_ms(Some(429), 0, 0.0), 60_000);
+        assert_eq!(retry_backoff_ms(Some(429), 1, 0.0), 600_000);
+        assert_eq!(retry_backoff_ms(Some(429), 2, 0.0), 600_000);
+        assert_eq!(retry_backoff_ms(Some(429), 40, 0.0), 600_000);
+    }
+
+    #[test]
+    fn backoffs_carry_their_added_jitter() {
+        assert_eq!(retry_backoff_ms(Some(503), 3, 1.0), 10_000, "25%");
+        assert_eq!(retry_backoff_ms(None, 10, 1.0), 75_000, "25% over the cap");
+        assert_eq!(retry_backoff_ms(Some(429), 0, 1.0), 72_000, "20%");
+        assert_eq!(retry_backoff_ms(Some(429), 1, 1.0), 720_000, "20%");
     }
 
     /// AC-F17.1: only a 400 / 401 `invalid_grant` ends the session.
@@ -473,48 +554,52 @@ mod tests {
         }
     }
 
+    fn decide(op: QueueOp, tag: &str, status: Option<u16>, body: &str, made: u32) -> QueueDecision {
+        visualizer_queue_decision(op, tag, status, body, made, 0.0)
+    }
+
     /// AC-F17.2: one case per branch of the web drain.
     #[test]
     fn f17_2_the_queue_decision_matches_the_web_drain() {
         let quota = r#"{"error":"You've reached your daily limit of 30 shots."}"#;
         assert_eq!(
-            visualizer_queue_decision(QueueOp::Create, "HttpStatusError", Some(422), quota, 1),
+            decide(QueueOp::Create, "HttpStatusError", Some(422), quota, 1),
             QueueDecision::Drop { stop_pass: true }
         );
         for tag in ["NotAuthenticatedError", "TokenRefreshFailedError"] {
             assert_eq!(
-                visualizer_queue_decision(QueueOp::Delete, tag, None, "", 1),
+                decide(QueueOp::Delete, tag, None, "", 1),
                 QueueDecision::Park {
                     delay_ms: AUTH_PARK_MS
                 }
             );
             assert_eq!(
-                visualizer_queue_decision(QueueOp::Create, tag, None, "", 1),
+                decide(QueueOp::Create, tag, None, "", 1),
                 QueueDecision::Drop { stop_pass: false },
                 "a signed-out create is re-offered by the next pass instead"
             );
         }
         assert_eq!(
-            visualizer_queue_decision(QueueOp::Create, "HttpStatusError", Some(422), "{}", 1),
+            decide(QueueOp::Create, "HttpStatusError", Some(422), "{}", 1),
             QueueDecision::Drop { stop_pass: false },
             "not recoverable"
         );
         assert_eq!(
-            visualizer_queue_decision(QueueOp::Create, "NetworkError", None, "", 1),
+            decide(QueueOp::Create, "NetworkError", None, "", 1),
             QueueDecision::Retry {
                 delay_ms: 2_000,
                 stop_pass: false
             }
         );
         assert_eq!(
-            visualizer_queue_decision(QueueOp::Create, "HttpStatusError", Some(503), "", 2),
+            decide(QueueOp::Create, "HttpStatusError", Some(503), "", 2),
             QueueDecision::Retry {
                 delay_ms: 4_000,
                 stop_pass: false
             }
         );
         assert_eq!(
-            visualizer_queue_decision(
+            decide(
                 QueueOp::Create,
                 "NetworkError",
                 None,
@@ -525,15 +610,129 @@ mod tests {
             "the third attempt is the last"
         );
         assert_eq!(
-            visualizer_queue_decision(QueueOp::Create, "HttpStatusError", Some(429), "", 1),
+            decide(QueueOp::Create, "HttpStatusError", Some(429), "", 1),
             QueueDecision::Retry {
-                delay_ms: 120_000,
+                delay_ms: 60_000,
+                stop_pass: true
+            },
+            "the first 429 is the probe"
+        );
+        assert_eq!(
+            decide(QueueOp::Create, "HttpStatusError", Some(429), "", 2),
+            QueueDecision::Retry {
+                delay_ms: 600_000,
+                stop_pass: true
+            },
+            "then the whole window"
+        );
+        assert_eq!(
+            visualizer_queue_decision_json("delete", "NotAuthenticatedError", None, "", 1, 0.0),
+            r#"{"kind":"Park","details":{"delay_ms":300000}}"#
+        );
+    }
+
+    #[test]
+    fn a_queue_retry_carries_the_shells_jitter() {
+        assert_eq!(
+            visualizer_queue_decision(QueueOp::Create, "NetworkError", None, "", 1, 1.0),
+            QueueDecision::Retry {
+                delay_ms: 2_500,
+                stop_pass: false
+            }
+        );
+    }
+
+    /// geota/crema#331: nothing else re-offers a delete whose local row is gone.
+    #[test]
+    fn delete_after_3_failures_retries() {
+        for (tag, status) in [
+            ("NetworkError", None),
+            ("HttpStatusError", Some(503)),
+            ("HttpStatusError", Some(408)),
+        ] {
+            for made in [MAX_QUEUE_ATTEMPTS, MAX_QUEUE_ATTEMPTS + 40] {
+                assert_eq!(
+                    decide(QueueOp::Delete, tag, status, "", made),
+                    QueueDecision::Park {
+                        delay_ms: DELETE_PARK_MS
+                    },
+                    "{tag} {status:?}"
+                );
+            }
+            assert!(matches!(
+                decide(QueueOp::Delete, tag, status, "", MAX_QUEUE_ATTEMPTS - 1),
+                QueueDecision::Retry { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn a_rate_limited_delete_out_of_attempts_still_stops_the_drain() {
+        assert_eq!(
+            decide(
+                QueueOp::Delete,
+                "HttpStatusError",
+                Some(429),
+                "",
+                MAX_QUEUE_ATTEMPTS
+            ),
+            QueueDecision::Retry {
+                delay_ms: 600_000,
                 stop_pass: true
             }
         );
+    }
+
+    #[test]
+    fn a_terminal_delete_failure_stops_at_once() {
+        for status in [400, 403, 422] {
+            assert_eq!(
+                decide(QueueOp::Delete, "HttpStatusError", Some(status), "", 1),
+                QueueDecision::Drop { stop_pass: false },
+                "{status}"
+            );
+        }
         assert_eq!(
-            visualizer_queue_decision_json("delete", "NotAuthenticatedError", None, "", 1),
-            r#"{"kind":"Park","details":{"delay_ms":300000}}"#
+            decide(QueueOp::Delete, "VisualizerPremiumGatedError", None, "", 1),
+            QueueDecision::Drop { stop_pass: false }
+        );
+    }
+
+    #[test]
+    fn only_a_delete_outlives_its_attempts() {
+        for op in [QueueOp::Create, QueueOp::Update] {
+            assert_eq!(
+                decide(op, "HttpStatusError", Some(503), "", MAX_QUEUE_ATTEMPTS),
+                QueueDecision::Drop { stop_pass: false }
+            );
+            assert_eq!(
+                decide(op, "HttpStatusError", Some(429), "", MAX_QUEUE_ATTEMPTS),
+                QueueDecision::Drop { stop_pass: false }
+            );
+        }
+    }
+
+    #[test]
+    fn call_errors_read_as_sync_failures() {
+        let from = |tag, status| VisualizerCallError::from_tag(tag, status).sync_failure("");
+        assert_eq!(from("NetworkError", None), SyncFailure::Offline);
+        assert_eq!(from("HttpStatusError", None), SyncFailure::Offline);
+        assert_eq!(
+            from("NotAuthenticatedError", None),
+            SyncFailure::SessionEnded
+        );
+        assert_eq!(
+            from("TokenRefreshFailedError", None),
+            SyncFailure::SessionEnded
+        );
+        assert_eq!(
+            from("VisualizerPremiumGatedError", None),
+            SyncFailure::NeedsPremium
+        );
+        assert_eq!(from("VisualizerNotFoundError", None), SyncFailure::NotFound);
+        assert_eq!(
+            from("ResponseDecodeError", None),
+            SyncFailure::Rejected { status: 0 }
         );
     }
 }

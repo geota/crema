@@ -13,8 +13,11 @@ import coffee.crema.core.downsampleIndices
 import coffee.crema.core.historyStats as coreHistoryStats
 import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.loadItem
 import coffee.crema.persist.loadStore
+import coffee.crema.persist.saveItem
 import coffee.crema.persist.saveStore
 import coffee.crema.ui.TelemetrySample
 import kotlinx.coroutines.Dispatchers
@@ -496,10 +499,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
      *  reading every series first. An unreadable file is kept aside and
      *  reported (see [loadStore]) rather than silently loaded as empty. A row
      *  saved before the split still carries its series inline; the next save
-     *  moves it out. */
+     *  moves it out. Saves stay refused until [openSaves]. */
     suspend fun loadRows(): List<StoredShot> = withContext(Dispatchers.IO) {
         lock.withLock {
-            val outcome = loadStore(file, "shot history") {
+            val outcome = loadStore(file, WHAT, open = false) {
                 json.decodeFromString(ListSerializer(StoredShot.serializer()), it)
             }
             when (outcome) {
@@ -508,6 +511,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
             }
         }
     }
+
+    /** The rows are in the UI state: a save can't carry defaults now. */
+    fun openSaves() = SafeFile.openSaves(file)
 
     /** The series of each of [ids] that has a series file, by id. On IO; at
      *  startup it runs after the rows are shown. */
@@ -549,6 +555,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
     }
 
     suspend fun save(shots: List<StoredShot>) {
+        if (!SaveFloor.admit(file, WHAT)) return
         // The lock before the hop, so saves land in call order and the newest
         // snapshot wins.
         lock.withLock {
@@ -566,7 +573,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
                         ListSerializer(StoredShot.serializer()),
                         shots.map { if (it.samples.isNotEmpty() && seriesFile(it.id).name in written) it.copy(samples = emptyList()) else it },
                     )
-                }.map { saveStore(file, it) }.getOrDefault(false)
+                }.map { saveStore(file, WHAT, it) }.getOrDefault(false)
                 // Nothing moves on a failed save: the old rows are still on
                 // disk, so their series have to be as well.
                 if (saved) {
@@ -606,7 +613,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
     private fun readSeries(id: String): List<TelemetrySample>? {
         val decode = { text: String -> json.decodeFromString(ListSerializer(TelemetrySample.serializer()), text) }
         val f = seriesFile(id)
-        when (val outcome = loadItem(f, "shot telemetry", decode)) {
+        when (val outcome = loadItem(f, "shot telemetry", open = false, decode)) {
             is SafeLoad.Loaded -> {
                 written += f.name
                 return outcome.value
@@ -619,7 +626,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
         }
         val legacy = legacySeriesFile(id)
         if (legacy.name == f.name) return null
-        return when (val outcome = loadItem(legacy, "shot telemetry", decode)) {
+        return when (val outcome = loadItem(legacy, "shot telemetry", open = false, decode)) {
             is SafeLoad.Loaded -> outcome.value
             is SafeLoad.Corrupt, is SafeLoad.Unavailable -> {
                 unreadableSeries = unreadableSeries + id
@@ -633,7 +640,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
         seriesDir.mkdirs()
         return runCatching {
             json.encodeToString(ListSerializer(TelemetrySample.serializer()), samples)
-        }.map { saveStore(seriesFile(id), it, keepBackup = false) }.getOrDefault(false)
+        }.map { saveItem(seriesFile(id), it, keepBackup = false) }.getOrDefault(false)
     }
 
     /** After [shots] reached disk: delete the series of the rows that left
@@ -677,6 +684,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
         /** Keep the most recent N shots (matches the web cap). */
         const val MAX_SHOTS = 300
         const val FILE_NAME = "shots.json"
+        private const val WHAT = "shot history"
         private const val SERIES_DIR = "shot-series"
     }
 }

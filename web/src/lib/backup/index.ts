@@ -26,6 +26,7 @@ import {
 } from '#lib/wasm/de1_wasm.js';
 import { getBeanStore } from '#lib/bean/index.js';
 import { getHistoryStore } from '#lib/history/index.js';
+import { refusedNoSamples } from '#lib/history/model.js';
 import {
 	getSettingsStore,
 	settingsToCommon,
@@ -77,6 +78,8 @@ export interface BackupContents {
 	omitted?: readonly OmittedBackupRow[];
 	/** Shots a built backup carries without their profile, by id. */
 	degraded?: readonly string[];
+	/** Machine shots a built backup carries with no curve. */
+	noCurves?: number;
 }
 
 /** One row a backup left out (the core's `OmittedBackupRow`). */
@@ -118,7 +121,22 @@ export function describeBackupGaps(c: BackupContents): string {
 		degraded === 0
 			? ''
 			: ` ${degraded} shot${degraded === 1 ? ' was' : 's were'} backed up without ${degraded === 1 ? 'its' : 'their'} profile.`;
-	return left + thin;
+	const noCurves = c.noCurves ?? 0;
+	const flat =
+		noCurves === 0
+			? ''
+			: ` ${noCurves} shot${noCurves === 1 ? ' was' : 's were'} backed up without ${noCurves === 1 ? 'its' : 'their'} curve.`;
+	return left + thin + flat;
+}
+
+/**
+ * Why a built backup shouldn't go to Drive, or `null`. A local file is the
+ * user's to keep or not, but Restore latest takes whatever is newest in Drive,
+ * so a copy that lost its curves to a failed read must not land there.
+ */
+export function driveBackupRefusal(c: BackupContents): string | null {
+	if (!getHistoryStore().seriesFailed || !c.noCurves) return null;
+	return `Shot curves couldn’t be read, so ${c.noCurves} shot${c.noCurves === 1 ? '' : 's'} would go without ${c.noCurves === 1 ? 'its curve' : 'their curves'}. Nothing was uploaded. Reload the app and try again.`;
 }
 
 /** Count what an export would include — lets the UI disable "Back up" / show a
@@ -175,10 +193,15 @@ function rowStrings(rows: readonly unknown[]): (string | null)[] {
  * Build the `crema-backup/v1` JSONL for everything local, WITHOUT downloading —
  * custom profiles only (built-ins ship with the app). Shared by the local
  * export and the Drive upload. Returns null when there's nothing to back up.
+ * Waits for the stored series, so no shot goes out without its curve, and
+ * throws when they don't arrive.
  */
-export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | null {
-	const beanStore = getBeanStore();
+export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<BuiltBackup | null> {
 	const history = getHistoryStore();
+	if (!(await history.seriesReady())) {
+		throw new Error('Shot data is still loading — try again in a moment.');
+	}
+	const beanStore = getBeanStore();
 	const settings = getSettingsStore();
 	const customProfiles = readJson<unknown[]>(CUSTOM_PROFILES_KEY, []);
 	const beans = beanStore.beans;
@@ -251,6 +274,11 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 	// What was written, which the core's header counts too.
 	const written = (kind: string, rows: number) =>
 		rows - built.omitted.filter((o) => o.kind === kind).length;
+	const left = new Set(built.omitted.filter((o) => o.kind === 'shot').map((o) => o.id));
+	// A row here can be unreadable: that's what `omitted` is for.
+	const noCurves = shots.filter(
+		(s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0)
+	).length;
 	return {
 		jsonl: built.jsonl,
 		contents: {
@@ -259,7 +287,8 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 			roasters: written('roaster', roasters.length),
 			shots: written('shot', shots.length),
 			omitted: built.omitted,
-			degraded: built.degraded
+			degraded: built.degraded,
+			noCurves
 		}
 	};
 }
@@ -283,7 +312,7 @@ const BACKUP_JSONL_MEMBER = 'backup.jsonl';
 export async function buildBackupZip(
 	cremaVersion = __APP_VERSION__
 ): Promise<{ zip: Uint8Array; contents: BackupContents } | null> {
-	const built = buildBackupJsonl(cremaVersion);
+	const built = await buildBackupJsonl(cremaVersion);
 	if (!built) return null;
 	const entries: Record<string, Uint8Array> = { [BACKUP_JSONL_MEMBER]: strToU8(built.jsonl) };
 	const imageStore = getBeanImageStore();
@@ -319,7 +348,7 @@ export async function backupNote(run: () => Promise<BackupContents | null> = exp
 			: 'Nothing to back up yet.';
 	} catch (err) {
 		console.error('Backup failed', err);
-		return 'Backup failed: nothing was saved.';
+		return `Backup failed: nothing was saved.${err instanceof Error ? ` ${err.message}` : ''}`;
 	}
 }
 

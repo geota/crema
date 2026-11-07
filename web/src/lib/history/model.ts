@@ -31,7 +31,8 @@ import {
 	peaksForShot as wasmPeaksForShot,
 	historyStats as wasmHistoryStats,
 	brewHistoryStats as wasmBrewHistoryStats,
-	ratioForMethod as wasmRatioForMethod
+	ratioForMethod as wasmRatioForMethod,
+	uploadRefusedNoSamples as wasmUploadRefusedNoSamples
 } from '#lib/wasm/de1_wasm.js';
 import type { TelemetrySample } from '#lib/state/index.js';
 import { filenameStamp } from '#lib/utils/download.js';
@@ -400,6 +401,18 @@ export function isBrewLog(shot: Pick<StoredShot, 'brewMethod'>): boolean {
 	// Presence, not content: `brewMethod: ""` is still a brew (core rule).
 	// Neither shell writes an empty method — saves normalize it to `null`.
 	return shot.brewMethod != null;
+}
+
+/**
+ * Whether no upload may take this row: a machine shot with no telemetry (core
+ * `upload_refused_no_samples`). `sampleCount` overrides the stored series when
+ * the caller still holds the full one.
+ */
+export function refusedNoSamples(
+	shot: Pick<StoredShot, 'brewMethod' | 'record'>,
+	sampleCount: number = shot.record.samples.length
+): boolean {
+	return wasmUploadRefusedNoSamples(isBrewLog(shot), sampleCount);
 }
 
 /**

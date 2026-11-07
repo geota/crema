@@ -39,8 +39,8 @@ import coffee.crema.persist.KeptAsideNotices
 import coffee.crema.persist.RefusedStore
 import coffee.crema.persist.SafeFile
 import coffee.crema.persist.SafeLoad
+import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.Stores
-import coffee.crema.persist.loadStore
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.Setting
 import coffee.crema.settings.setting
@@ -102,6 +102,10 @@ import coffee.crema.decent.decentShotRecordJson
  * is readable top to bottom. Splitting these into proper layers is future work.
  */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
+
+    /** First of all: the process can outlive a ViewModel, and this one starts
+     *  from defaults, so no store may take a save until it has loaded here. */
+    private val saveSession = SafeFile.startSession()
 
     // See [coreJson]: lenient enums, and the core enums tagged `kind`.
     private val json = coreJson
@@ -960,6 +964,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // A store that couldn't be read refuses saves: the banner stays while it does.
         viewModelScope.launch {
             Stores.refused.collect { refused -> _ui.update { it.copy(refusedStores = refused) } }
+        }
+        // A save that came before its store loaded was refused: say so, once.
+        viewModelScope.launch {
+            SaveFloor.pending.collect { pending ->
+                // Only the newest session's: a ViewModel on its way out would take
+                // the notice to a screen that's gone.
+                if (pending.isNotEmpty() && SafeFile.isCurrentSession(saveSession)) {
+                    SaveFloor.drain().forEach { notifyUser(SaveFloor.message(it)) }
+                }
+            }
         }
         // A hub's remotes hold no live copy of its stock: a change to the active
         // bag's weights re-sends the snapshot that carries its empty flag.

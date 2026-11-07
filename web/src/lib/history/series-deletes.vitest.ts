@@ -236,7 +236,7 @@ describe('rebasing', () => {
 		history.insertPulled(row('kept'));
 		await getCaptureStore().put('kept', []);
 		await settle();
-		const backup = buildBackupJsonl()!;
+		const backup = (await buildBackupJsonl())!;
 		history.insertPulled(row('later', 1_700_000_000_003));
 		await getCaptureStore().put('later', []);
 		await settle();

@@ -4,6 +4,7 @@ import android.content.ContextWrapper
 import coffee.crema.history.StoredShot
 import coffee.crema.security.SecretBox
 import coffee.crema.security.SecretCipher
+import coffee.crema.ui.TelemetrySample
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
@@ -37,6 +38,8 @@ import java.nio.file.Files
  * (`visualizer_queue_decision`, `classify_token_refresh_failure`, host-built).
  */
 class VisualizerRetryQueueTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val json = Json { ignoreUnknownKeys = true }
     private val dir: File = Files.createTempDirectory("viz-retry").toFile()
     private val context = object : ContextWrapper(null) {
@@ -88,8 +91,15 @@ class VisualizerRetryQueueTest {
     private var clock = 1_800_000_000_000L
     private var refresh: suspend (String) -> TokenSet = { error("no refresh expected") }
 
-    private fun shot(id: String) = StoredShot(id = id, completedAtMs = 1, durationMs = 30_000, profileName = "Test")
-        .also { history[id] = it }
+    private val sample = TelemetrySample(
+        elapsedMs = 0, pressure = 9f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null,
+        dispensedVolume = 0f, resistance = null, resistanceWeight = null, setHeadTemp = 93f, setGroupPressure = 9f,
+        setGroupFlow = 0f, frameNumber = 1,
+    )
+
+    private fun shot(id: String, samples: List<TelemetrySample> = listOf(sample)) =
+        StoredShot(id = id, completedAtMs = 1, durationMs = 30_000, profileName = "Test", samples = samples)
+            .also { history[id] = it }
 
     private fun sync(
         expiredTokens: Boolean = false,
@@ -97,6 +107,7 @@ class VisualizerRetryQueueTest {
         keepStore: Boolean = false,
         seriesReady: suspend () -> Unit = {},
         waits: MutableList<Long>? = null,
+        shotsLoaded: () -> Boolean = { true },
     ) = VisualizerSync(
         store = store,
         client = client,
@@ -116,6 +127,7 @@ class VisualizerRetryQueueTest {
         // [waits] turns the timers on, each wait recorded and never ending.
         retryTimers = waits != null,
         seriesReady = seriesReady,
+        shotsLoaded = shotsLoaded,
         retryDelay = { ms -> waits?.add(ms); awaitCancellation() },
     ).also { s ->
         runBlocking {
@@ -186,12 +198,12 @@ class VisualizerRetryQueueTest {
         settle()
         val entry = queue().single()
         assertEquals(1, entry.attempts)
-        assertEquals(clock + 2_000, entry.nextAttemptAt)
+        assertTrue("2 s, plus up to 25%: ${entry.nextAttemptAt - clock}", entry.nextAttemptAt - clock in 2_000..2_500)
         // Not due yet: nothing is retried.
         assertEquals(0, runBlocking { s.drainRetryQueue() })
         lastReply = HttpStatusCode.OK to """{"id":"v-9"}"""
         uploadReplies.clear()
-        clock += 2_000
+        clock = entry.nextAttemptAt
         assertEquals(1, runBlocking { s.drainRetryQueue() })
         assertEquals("v-9", synced["s1"])
         assertTrue(queue().isEmpty())
@@ -333,31 +345,48 @@ class VisualizerRetryQueueTest {
         assertEquals(listOf("s2"), out.shotTombstones.map { it.id })
     }
 
-    /** F17 validation P3: a remote delete gets the core's ceiling, as web's
-     *  queue: the third failure, or a terminal one (403), stops the remote
-     *  delete; the tombstone stays, so the copy is still never pulled back. */
+    /** #331: nothing else re-offers a delete whose local row is gone, so one
+     *  time can fix never stops: past its attempts it parks an hour at a time. */
     @Test
-    fun `tombstone deletes stop after the third failure or a terminal one`() {
+    fun `delete_after_3_failures_retries`() {
         deleteStatus = HttpStatusCode.InternalServerError
         val s = sync()
         s.tombstoneShot("s1", "v-1", deleteRemote = true)
         settle()
-        repeat(4) {
-            clock += 60 * 60_000
+        repeat(6) {
+            clock += 2 * 60 * 60_000
             runBlocking { s.drainRetryQueue() }
         }
-        assertEquals("three attempts in all: $deletes", 3, deletes.size)
-        val t = s.shotTombstones.single()
-        assertFalse("the remote delete stopped", t.deleteRemote)
+        assertTrue("still trying: $deletes", deletes.size >= 6)
+        val parked = s.shotTombstones.single()
+        assertTrue("the remote delete stands", parked.deleteRemote)
+        assertEquals("parking spends no attempt", 2, parked.attempts)
+        assertEquals("parked an hour", clock + 60 * 60_000, parked.nextAttemptAt)
 
-        deletes.clear()
+        val tries = deletes.size
+        clock += 30 * 60_000
+        runBlocking { s.drainRetryQueue() }
+        assertEquals("not before the hour is up", tries, deletes.size)
+
+        deleteStatus = HttpStatusCode.NoContent
+        clock += 30 * 60_000
+        runBlocking { s.drainRetryQueue() }
+        assertEquals("a later try lands", tries + 1, deletes.size)
+        assertTrue("purged: ${s.shotTombstones}", s.shotTombstones.isEmpty())
+    }
+
+    /** F17 validation P3: a terminal failure (403) stops the remote delete; the
+     *  tombstone stays, so the copy is still never pulled back. */
+    @Test
+    fun `a terminal failure stops the delete and keeps the tombstone`() {
         deleteStatus = HttpStatusCode.Forbidden
+        val s = sync()
         s.tombstoneShot("s2", "v-2", deleteRemote = true)
         settle()
         clock += 60 * 60_000
         runBlocking { s.drainRetryQueue() }
         assertEquals("a 403 is not retried: $deletes", 1, deletes.size)
-        assertEquals(listOf(false, false), s.shotTombstones.map { it.deleteRemote })
+        assertEquals(listOf(false), s.shotTombstones.map { it.deleteRemote })
     }
 
     /** F17 validation P2: a due shot another upload holds is pushed back, not
@@ -421,7 +450,7 @@ class VisualizerRetryQueueTest {
                 ),
             )
         }
-        shot("s1") // the row, before its series has loaded
+        shot("s1", samples = emptyList()) // the row, before its series has loaded
         val loaded = CompletableDeferred<Unit>()
         val s = sync(keepStore = true, seriesReady = { loaded.await() })
         val drain = CoroutineScope(Dispatchers.Default).async { s.drainRetryQueue() }
@@ -452,5 +481,60 @@ class VisualizerRetryQueueTest {
         clock += 60 * 60_000
         runBlocking { s.drainRetryQueue() }
         assertEquals("no delete after the restore", tries, deletes.size)
+    }
+
+    @Test
+    fun `non_brew_no_samples_refused - a queued shot leaves the queue with no POST`() {
+        val s = sync()
+        runBlocking {
+            store.save(store.load().copy(retryQueue = listOf(QueuedUpload("s1", 0, 0L))))
+            s.load()
+        }
+        shot("s1", samples = emptyList())
+
+        val uploaded = runBlocking { s.drainRetryQueue() }
+
+        assertEquals(0, uploaded)
+        assertEquals(emptyList<String>(), uploads)
+        assertEquals(emptyList<QueuedUpload>(), runBlocking { store.load() }.retryQueue)
+        assertEquals(emptyMap<String, String>(), synced)
+    }
+
+    @Test
+    fun `non_brew_no_samples_refused - a direct upload POSTs nothing and isn't queued`() {
+        val s = sync()
+        runBlocking { s.load() }
+
+        assertTrue(s.uploadShot(shot("s1", samples = emptyList())))
+        repeat(200) {
+            if (notices.isNotEmpty()) return@repeat
+            Thread.sleep(10)
+        }
+
+        assertEquals(listOf("Visualizer upload failed: This shot has no telemetry to upload"), notices.toList())
+        assertEquals(emptyList<String>(), uploads)
+        assertEquals(emptyList<QueuedUpload>(), runBlocking { store.load() }.retryQueue)
+    }
+
+    @Test
+    fun `a shot with no telemetry leaves the backlog once the series settle, with one log line a pass`() {
+        var settled = false
+        val s = sync(shotsLoaded = { settled })
+        val bare = listOf(shot("a", samples = emptyList()), shot("b", samples = emptyList()))
+        val good = shot("c")
+
+        assertTrue("its curve may be on its way", s.inBacklog(bare[0]))
+        settled = true
+        assertFalse(s.inBacklog(bare[0]))
+        assertTrue(s.noTelemetry(bare[0]))
+        assertTrue(s.inBacklog(good))
+        assertFalse(s.noTelemetry(good))
+
+        val r = runBlocking { s.uploadUnsentNow(bare + good) }
+
+        assertEquals(1, r.uploaded)
+        assertEquals(1, uploads.size)
+        val skips = runBlocking { store.load() }.log.filter { it.direction == "skip" }
+        assertEquals(listOf("2 shots have no telemetry to upload"), skips.map { it.error })
     }
 }

@@ -43,6 +43,14 @@ import java.util.concurrent.ConcurrentHashMap
  * file, which stays where it is: that's Unavailable, and saves are refused the
  * same way until a load reads it or [setAside] moves it.
  *
+ * **The load floor.** A store's saves are whole snapshots, so one built before
+ * the store has loaded holds defaults, and landing it would replace the user's
+ * data. [load] marks its path, [saveStore] and [writeCredential] refuse a path
+ * that isn't marked (see [SaveFloor]), and [startSession] unmarks them all for
+ * a new ViewModel, as this object can outlive one. A store whose state lands
+ * after its load returns loads with `open = false` and calls [openSaves] once
+ * the state is in place.
+ *
  * **Overlap.** Every operation on a target holds that target's lock, because
  * they share its `.tmp`: without it the loser of two saves moves the target to
  * `.bak` and finds its temp file gone, and a load can delete a temp file a save
@@ -62,6 +70,15 @@ object SafeFile {
     /** Targets that couldn't be read, or moved aside: saving would destroy them. */
     private val blocked: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
 
+    /** Targets loaded this session: only these can take a gated save. */
+    private val loaded: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
+
+    /** The newest session's number. */
+    @Volatile private var session = 0
+
+    /** See [openAllForTest]. */
+    @Volatile private var allOpenForTest = false
+
     /** One lock per target path. Bounded by the files the app owns. */
     private val locks = ConcurrentHashMap<String, Any>()
 
@@ -72,6 +89,28 @@ object SafeFile {
 
     /** Whether saves to [target] are being refused. */
     fun isBlocked(target: File): Boolean = target.path in blocked
+
+    /** A new ViewModel starts from defaults, so nothing is loaded for it yet.
+     *  Returns the session's number, for [isCurrentSession]. */
+    fun startSession(): Int {
+        loaded.clear()
+        allOpenForTest = false
+        SaveFloor.forgetNotices()
+        session += 1
+        return session
+    }
+
+    /** Whether [number] is the newest session: a ViewModel on its way out isn't. */
+    fun isCurrentSession(number: Int): Boolean = number == session
+
+    /** [target]'s state is in place: gated saves may run. */
+    fun openSaves(target: File) {
+        loaded += target.path
+        SaveFloor.forgetNotice(target)
+    }
+
+    /** Whether a load has finished for [target] this session. */
+    fun savesOpen(target: File): Boolean = allOpenForTest || target.path in loaded
 
     /** The previous good version kept beside [target]. */
     fun backupOf(target: File) = File(target.parentFile, target.name + BAK)
@@ -93,11 +132,18 @@ object SafeFile {
      * `.corrupt-*` copy is deleted afterwards. Old tokens must not linger in
      * copies the backup / device-transfer rules cannot name (review 05 P3-5):
      * the previous session after a sign-out, or the plaintext token right
-     * after the SecretBox migration re-save.
+     * after the SecretBox migration re-save. Refused before its store has
+     * loaded, unless [gated] is off for a store that doesn't load through
+     * [load]. [what] is the store's name in the notice.
      */
-    fun writeCredential(target: File, text: String) = synchronized(lockOf(target)) {
-        writeBytes(target, text.toByteArray(Charsets.UTF_8), keepBackup = false)
-        purgeCopies(target, keptAside = true)
+    fun writeCredential(target: File, text: String, what: String = target.name, gated: Boolean = true) {
+        if (gated && !SaveFloor.admit(target, what)) {
+            throw IOException("${target.name} hasn't loaded; not saving over it")
+        }
+        synchronized(lockOf(target)) {
+            writeBytes(target, text.toByteArray(Charsets.UTF_8), keepBackup = false)
+            purgeCopies(target, keptAside = true)
+        }
     }
 
     /**
@@ -169,10 +215,18 @@ object SafeFile {
      * (see [SafeLoad.Corrupt]); the backup and a complete leftover temp file are
      * tried before giving up. A file that can't be read at all stays put (see
      * [SafeLoad.Unavailable]). Each load decides afresh whether saves to
-     * [target] are refused. [log] receives one line per event.
+     * [target] are refused. [log] receives one line per event. On every outcome
+     * it opens [target]'s saves, unless [open] is off: a load whose state lands
+     * after this returns.
      */
-    fun <T : Any> load(target: File, log: (String) -> Unit = {}, decode: (String) -> T): SafeLoad<T> =
-        synchronized(lockOf(target)) { loadLocked(target, log, decode) }
+    fun <T : Any> load(
+        target: File,
+        log: (String) -> Unit = {},
+        open: Boolean = true,
+        decode: (String) -> T,
+    ): SafeLoad<T> = synchronized(lockOf(target)) {
+        loadLocked(target, log, decode).also { if (open) openSaves(target) }
+    }
 
     private fun <T : Any> loadLocked(target: File, log: (String) -> Unit, decode: (String) -> T): SafeLoad<T> {
         val bak = backupOf(target)
@@ -260,9 +314,17 @@ object SafeFile {
         return dest
     }
 
-    /** Test seam: forget blocked targets between tests. */
+    /** Test seam: every path is open until the next session, for a test of one
+     *  store, or one that seeds files before it builds a ViewModel. */
+    internal fun openAllForTest() {
+        allOpenForTest = true
+    }
+
+    /** Test seam: forget blocked and loaded targets between tests. */
     internal fun resetForTest() {
         blocked.clear()
+        loaded.clear()
+        allOpenForTest = false
         beforeRename = {}
     }
 }

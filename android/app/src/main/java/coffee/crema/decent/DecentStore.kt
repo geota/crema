@@ -139,7 +139,7 @@ class DecentStore(
 
     private fun write(state: DecentState): Boolean = try {
         // No `.bak` copies of sealed tokens (review 05 P3-5).
-        SafeFile.writeCredential(file, json.encodeToString(DecentState.serializer(), state.sealedWith(box)))
+        SafeFile.writeCredential(file, json.encodeToString(DecentState.serializer(), state.sealedWith(box)), "Decent sign-in")
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.

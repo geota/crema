@@ -23,6 +23,8 @@ import kotlin.test.assertTrue
 
 /** Crash-safe saves and the Absent / Loaded / Corrupt / Unavailable load. */
 class SafeFileTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     @get:Rule val tmp = TemporaryFolder()
 
     private val json = Json { ignoreUnknownKeys = true }

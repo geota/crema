@@ -41,7 +41,7 @@ class HiddenProfileStore(private val context: Context, private val json: Json) {
     /** Persist the hidden ids (best-effort). */
     suspend fun save(ids: Set<String>) {
         inSaveOrder(file) {
-            saveStore(file, json.encodeToString(HiddenProfiles.serializer(), HiddenProfiles(ids.toList())))
+            saveStore(file, "hidden profiles list", json.encodeToString(HiddenProfiles.serializer(), HiddenProfiles(ids.toList())))
         }
     }
 

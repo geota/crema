@@ -29,6 +29,8 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class ShotSeriesStoreTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val app = ApplicationProvider.getApplicationContext<Application>()
     private val seriesDir = File(app.filesDir, "shot-series")
     private val historyFile = File(app.filesDir, "shots.json")

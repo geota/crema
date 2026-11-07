@@ -7,7 +7,7 @@
  * `POST /coffee_bags`, `PATCH /coffee_bags/{id}`, `POST /roasters`) plus the
  * `deleteRemoteBean` / `deleteRemoteRoaster` helpers. Same shape as `ShotSync`:
  * each method funnels through `TokenVault.withFreshToken(token =>
- * HttpClient.request(...))`, and the premium gate (402/403) maps to
+ * HttpClient.request(...))`, and the premium gate (402, or a 403 naming Premium) maps to
  * `VisualizerPremiumGatedError` rather than today's status-code probe.
  *
  * Behavior mirrors the old module: a bag with a `visualizerId` PATCHes (keeping
@@ -239,7 +239,7 @@ export class BeanSync extends Context.Service<
 		 * `bean/visualizer-sync.ts` `runSync`): pull every remote roaster + bag and
 		 * reconcile (remote-wins LWW, bind by visualizer-id → signature → name),
 		 * then push every local create/update. Premium-gated writes downshift the
-		 * run to read-only on the first 402/403. Mutates `library` in place and
+		 * run to read-only on the first premium 402/403. Mutates `library` in place and
 		 * returns the aggregate {@link SyncResult}. Never fails (errors land in the
 		 * result's `log` / `error`), so the boundary stays a plain `Promise`.
 		 */
@@ -731,7 +731,7 @@ export const BeanSyncLive = Layer.effect(
 
 		/**
 		 * Premium probe: `POST /roasters` with a sentinel name (one of Visualizer's
-		 * premium-gated endpoints), then delete it. 201→premium, 402/403→free,
+		 * premium-gated endpoints), then delete it. 201→premium, a premium 402/403→free,
 		 * anything else→unknown (null). A failed cleanup is non-fatal — the next
 		 * full sync's reconcile tidies it.
 		 */

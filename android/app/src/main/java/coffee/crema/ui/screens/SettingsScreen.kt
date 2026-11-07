@@ -772,7 +772,8 @@ fun SettingsScreen(
                         // Android v1 = the shots-push controls).
                         if (vz.signedIn) {
                             SetGroup("Sync") {
-                                val unsyncedCount = ui.history.count { it.visualizerId == null }
+                                val noTelemetry = ui.sharing.noTelemetryShots
+                                val unsyncedCount = ui.history.count { it.visualizerId == null } - noTelemetry
                                 val lastSyncLabel = vz.lastShotSyncAt?.let {
                                     coffee.crema.ui.relativeAgo(it)
                                 } ?: "never"
@@ -791,6 +792,7 @@ fun SettingsScreen(
                                     "Shots",
                                     "${ui.history.size} shot(s)" +
                                         (if (unsyncedCount > 0) " · $unsyncedCount unsynced" else "") +
+                                        (if (noTelemetry > 0) " · $noTelemetry without telemetry" else "") +
                                         ". Last sync: $lastSyncLabel. Free.",
                                 ) {
                                     CremaSegmentedButton(

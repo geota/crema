@@ -1255,11 +1255,35 @@ pub fn visualizer_quota_limit(status: u16, body: String) -> Option<u32> {
 }
 
 /// Delay (ms) before retry number `attempt` of a recoverable Visualizer
-/// failure with HTTP `status` (`None` for a transport failure). Mirrors the
-/// wasm `retryBackoffMs`; see [`de1_domain::retry_backoff_ms`].
+/// failure with HTTP `status` (`None` for a transport failure). `jitter_unit`
+/// is a random number in `0..1`. Mirrors the wasm `retryBackoffMs`; see
+/// [`de1_domain::retry_backoff_ms`].
 #[uniffi::export]
-pub fn retry_backoff_ms(status: Option<u16>, attempt: u32) -> u64 {
-    de1_domain::retry_backoff_ms(status, attempt)
+pub fn retry_backoff_ms(status: Option<u16>, attempt: u32, jitter_unit: f64) -> u64 {
+    de1_domain::retry_backoff_ms(status, attempt, jitter_unit)
+}
+
+/// What a failed cloud call means: a JSON `SyncFailure`. `service` is
+/// `"visualizer"`, `"decent"` or `"drive"`, `operation` `"call"` or `"refresh"`,
+/// `status` `None` when the request got no answer, `retry_after` the raw header.
+/// See [`de1_domain::classify_sync_failure`].
+#[uniffi::export]
+pub fn classify_sync_failure(
+    service: String,
+    operation: String,
+    status: Option<u16>,
+    body: String,
+    retry_after: Option<String>,
+    now_ms: i64,
+) -> String {
+    de1_domain::classify_sync_failure_json(
+        &service,
+        &operation,
+        status,
+        &body,
+        retry_after.as_deref(),
+        now_ms,
+    )
 }
 
 /// What a failed Visualizer refresh-token grant means: `"Definitive"` (sign
@@ -1272,6 +1296,13 @@ pub fn classify_token_refresh_failure(status: Option<u16>, body: Option<String>)
         "{:?}",
         de1_domain::classify_token_refresh_failure(status, body.as_deref())
     )
+}
+
+/// Whether an upload must refuse a stored row for having no telemetry. See
+/// [`de1_domain::upload_refused_no_samples`].
+#[uniffi::export]
+pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -> bool {
+    de1_domain::upload_refused_no_samples(is_brew_log, sample_count)
 }
 
 /// What an OAuth redirect means for a sign-in in progress — mirrors
@@ -1327,8 +1358,8 @@ pub fn callback_outcome(
 
 /// The Visualizer retry queue's rule for a failed operation: a JSON
 /// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
-/// `attempts_made` counts this attempt. See
-/// [`de1_domain::visualizer_queue_decision`].
+/// `attempts_made` counts this attempt; `jitter_unit` is a random number in
+/// `0..1`. See [`de1_domain::visualizer_queue_decision`].
 #[uniffi::export]
 pub fn visualizer_queue_decision(
     op: String,
@@ -1336,8 +1367,9 @@ pub fn visualizer_queue_decision(
     status: Option<u16>,
     body: String,
     attempts_made: u32,
+    jitter_unit: f64,
 ) -> String {
-    de1_domain::visualizer_queue_decision_json(&op, &tag, status, &body, attempts_made)
+    de1_domain::visualizer_queue_decision_json(&op, &tag, status, &body, attempts_made, jitter_unit)
 }
 
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` → `"DE1"`),

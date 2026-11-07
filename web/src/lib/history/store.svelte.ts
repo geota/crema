@@ -38,7 +38,9 @@ import {
 	putSeries
 } from './series-store';
 import {
+	isBrewLog,
 	isManualLog,
+	refusedNoSamples,
 	shotId,
 	snapshotFromBean,
 	toCoreShotMachine,
@@ -76,6 +78,12 @@ const HISTORY_KEY = 'crema.history.v2';
 const MAX_RECORDS = 300;
 
 
+/**
+ * How long {@link HistoryStore.seriesReady} waits. A series load that hasn't
+ * ended by then has stuck, and an upload shouldn't wait on it for good.
+ */
+const SERIES_WAIT_MS = 30_000;
+
 /** A shot's telemetry series couldn't be written to IndexedDB (quota, most
  *  likely): say so instead of silently keeping it in memory only. */
 let lastSeriesToastAt = -Infinity;
@@ -98,6 +106,15 @@ export class HistoryStore {
 	/** The recorded shots, newest first. Loaded from localStorage. */
 	private shots = $state.raw<StoredShot[]>(loadShots());
 
+	/** The running series load; null once it has ended, or with no IndexedDB. */
+	private seriesLoading: Promise<void> | null = null;
+
+	/** The series load has ended, either way. Until then a row's curve may be on its way. */
+	private seriesSettled = $state(typeof indexedDB === 'undefined');
+
+	/** The stored series couldn't be read, even on a second try. */
+	private seriesUnreadable = false;
+
 	/**
 	 * Ids of the rows this tab has written, or loaded. A row's series and
 	 * capture are only ever deleted when its id leaves this set, never because
@@ -118,7 +135,52 @@ export class HistoryStore {
 		// one-time migration: rows persisted by the old all-in-localStorage
 		// format arrive WITH samples — move them to IndexedDB and re-persist
 		// stripped, freeing the quota that was silently killing saves.
-		if (typeof indexedDB !== 'undefined') void this.hydrateSeries();
+		if (typeof indexedDB !== 'undefined') {
+			this.seriesLoading = this.hydrateSeries().finally(() => {
+				this.seriesLoading = null;
+				this.seriesSettled = true;
+			});
+		}
+	}
+
+	/**
+	 * Wait for the stored series. Rows load at once and their curves follow, so
+	 * until this settles a machine shot looks like one with no telemetry.
+	 * Everything that sends or saves a whole shot awaits this first. True when
+	 * the load has ended, either way ({@link seriesFailed} says which); false
+	 * when it outlasted the wait.
+	 */
+	async seriesReady(timeoutMs: number = SERIES_WAIT_MS): Promise<boolean> {
+		const loading = this.seriesLoading;
+		if (!loading) return true;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const stuck = new Promise<boolean>((resolve) => {
+			timer = setTimeout(() => resolve(false), timeoutMs);
+		});
+		const loaded = await Promise.race([loading.then(() => true), stuck]);
+		clearTimeout(timer);
+		return loaded;
+	}
+
+	/**
+	 * The stored series were there to read and couldn't be, so rows that have
+	 * curves look like rows that don't. History works on from memory, but
+	 * anything written from it now is missing those curves.
+	 */
+	get seriesFailed(): boolean {
+		return this.seriesUnreadable;
+	}
+
+	/** Machine shots no upload can take: no telemetry, now the series have settled. */
+	get withoutTelemetry(): StoredShot[] {
+		if (!this.seriesSettled) return [];
+		return this.all.filter((s) => !s.visualizerId && s.record.samples.length === 0 && refusedNoSamples(s));
+	}
+
+	/** The shots waiting to go to Visualizer. */
+	get visualizerBacklog(): StoredShot[] {
+		const none = new Set(this.withoutTelemetry.map((s) => s.id));
+		return this.all.filter((s) => !s.visualizerId && !isBrewLog(s) && !none.has(s.id));
 	}
 
 	private async hydrateSeries(): Promise<void> {
@@ -127,7 +189,8 @@ export class HistoryStore {
 			for (const shot of legacy) {
 				await putSeries(shot.id, shot.record.samples);
 			}
-			const series = await getAllSeries();
+			// One retry: a read can fail once and work the next time.
+			const series = await getAllSeries().catch(() => getAllSeries());
 			this.shots = this.shots.map((s) =>
 				s.record.samples.length === 0 && series.has(s.id)
 					? { ...s, record: { ...s.record, samples: series.get(s.id) ?? [] } }
@@ -137,6 +200,7 @@ export class HistoryStore {
 		} catch {
 			// IndexedDB unavailable (private mode, etc.) — history still
 			// works this session from memory; only durability degrades.
+			this.seriesUnreadable = true;
 		}
 	}
 

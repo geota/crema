@@ -125,6 +125,7 @@ function mkHistory(initial: StoredShot[]) {
 			const s = map.get(id);
 			if (s) (s as { visualizerId?: string | null }).visualizerId = visualizerId;
 		},
+		seriesReady: async () => true,
 		insertPulled: (s: StoredShot) => map.set(s.id, { ...s }),
 		setTags: () => {},
 		backfillTelemetry: () => {},
@@ -134,7 +135,17 @@ function mkHistory(initial: StoredShot[]) {
 }
 
 const shot = (over: Partial<StoredShot> = {}): StoredShot =>
-	({ id: 's1', completedAt: 1_000_000, profileName: 'P', visualizerId: null, bean: null, tags: [], grinderModel: null, ...over }) as unknown as StoredShot;
+	({
+		id: 's1',
+		completedAt: 1_000_000,
+		profileName: 'P',
+		visualizerId: null,
+		bean: null,
+		tags: [],
+		grinderModel: null,
+		record: { duration: 30_000, samples: [{ t: 0 }] },
+		...over
+	}) as unknown as StoredShot;
 
 /** POST upload → 2xx with NO id; the self-heal list page carries one summary. */
 const handler = (req: HttpRequest): unknown => {
@@ -190,6 +201,43 @@ describe('ShotSync.uploadUnsyncedShots — EF1 self-heal on 2xx-no-id', () => {
 	});
 });
 
+describe('ShotSync.uploadUnsyncedShots — the stored series (#330)', () => {
+	it('reads the backlog only after the series have landed', async () => {
+		h.reconcile = [];
+		const history = mkHistory([shot()]);
+		let land: ((ready: boolean) => void) | undefined;
+		const waiting = new Promise<boolean>((resolve) => (land = resolve));
+		(history as unknown as { seriesReady: () => Promise<boolean> }).seriesReady = () => waiting;
+		const all = vi.spyOn(history, 'all', 'get');
+
+		const running = run(history);
+		await Promise.resolve();
+		expect(all).not.toHaveBeenCalled();
+
+		land?.(true);
+		await running;
+		expect(all).toHaveBeenCalled();
+	});
+});
+
+describe('ShotSync.uploadUnsyncedShots — shots with no telemetry (#330)', () => {
+	it('leaves them out of the pass, with one log line for all of them', async () => {
+		h.reconcile = [];
+		const bare = (id: string) => shot({ id, record: { duration: 30_000, samples: [] } } as Partial<StoredShot>);
+		const history = mkHistory([bare('a'), bare('b'), bare('c')]);
+		h.appendSyncLog.mockClear();
+
+		await run(history);
+
+		expect(h.appendSyncLog).toHaveBeenCalledTimes(1);
+		expect(h.appendSyncLog.mock.calls[0][0]).toMatchObject({
+			direction: 'skip',
+			error: '3 shots have no telemetry to upload.'
+		});
+		expect(h.enqueueEntry).not.toHaveBeenCalled();
+	});
+});
+
 describe('ShotSync.uploadUnsyncedShots — free-plan daily quota (visualizer 3e9ba33c)', () => {
 	// The exact reply `POST /shots/upload` sends at the cap.
 	const QUOTA_BODY = JSON.stringify({
@@ -241,6 +289,24 @@ describe('ShotSync.uploadUnsyncedShots — free-plan daily quota (visualizer 3e9
 		expect(posts).toHaveLength(3);
 		expect(result.stopped).toBeNull();
 		expect(describeUnsyncedStop(result)).toBeNull();
+	});
+
+	it('stops on a blocked account and says why, not that Premium is needed', async () => {
+		const history = three();
+		const disabled = '{"error":"This account has been disabled. Contact miha@visualizer.coffee for more information."}';
+		const { result, posts } = await runFailing(history, 403, disabled);
+		expect(posts).toHaveLength(1);
+		expect(describeUnsyncedStop(result)).toEqual({
+			kind: 'error',
+			message: 'This Visualizer account is disabled.'
+		});
+	});
+
+	it('walks on past a row refused for itself', async () => {
+		const history = three();
+		const { result, posts } = await runFailing(history, 403, '{"error":"You are not authorized to perform this action."}');
+		expect(posts).toHaveLength(3);
+		expect(result.stopped).toBeNull();
 	});
 
 	it('stops on a 429 and queues that shot for a delayed retry', async () => {

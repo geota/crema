@@ -299,6 +299,7 @@ class LibraryController(
             roasters = lib.roasters,
             activeBeanId = lib.activeBeanId ?: lib.beans.firstOrNull()?.id,
         ) }
+        library.openSaves()
     }
 
     /** Load the persisted shot log at startup: the rows now, the telemetry
@@ -309,6 +310,7 @@ class LibraryController(
         val rows = historyStore.loadRows()
         updateUi { it.copy(history = rows) }
         historyStore.markLive(rows.map { it.id })
+        historyStore.openSaves()
         val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
         if (missing.isEmpty()) {
             seriesLoaded.complete(Unit)
@@ -367,6 +369,7 @@ class LibraryController(
         // The top-level brew temp follows the first step (the dial's anchor):
         // re-derived for customs saved before that rule.
         customProfilesJson = customProfileStore.load().map(::derivedBrewTemp)
+        customProfileStore.openSaves()
         refreshProfiles()
     }
 

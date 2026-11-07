@@ -5,6 +5,7 @@ import android.content.ContextWrapper
 import coffee.crema.history.StoredShot
 import coffee.crema.security.SecretBox
 import coffee.crema.security.SecretCipher
+import coffee.crema.ui.TelemetrySample
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
@@ -50,6 +51,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class VisualizerOwnStateTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val json = Json { ignoreUnknownKeys = true }
     private val dir: File = Files.createTempDirectory("vz-own-state").toFile()
     private val file = File(dir, "visualizer.json")
@@ -128,6 +131,20 @@ class VisualizerOwnStateTest {
         job.cancel()
         dir.deleteRecursively()
     }
+
+    private val queuedShot = StoredShot(
+        id = "q1",
+        completedAtMs = 1,
+        durationMs = 30_000,
+        profileName = "Test",
+        samples = listOf(
+            TelemetrySample(
+                elapsedMs = 0, pressure = 9f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null,
+                dispensedVolume = 0f, resistance = null, resistanceWeight = null, setHeadTemp = 93f, setGroupPressure = 9f,
+                setGroupFlow = 0f, frameNumber = 1,
+            ),
+        ),
+    )
 
     private fun seed(state: VisualizerState) = runBlocking { assertTrue(store.save(state)) }
 
@@ -256,7 +273,7 @@ class VisualizerOwnStateTest {
 
     @Test
     fun `startup_drain_waits_for_own_state`() {
-        val shot = StoredShot(id = "q1", completedAtMs = 1, durationMs = 30_000, profileName = "Test")
+        val shot = queuedShot
         seed(saved.copy(retryQueue = listOf(QueuedUpload("q1", 1, 0L))))
         val s = sync(history = mapOf("q1" to shot))
 
@@ -272,7 +289,7 @@ class VisualizerOwnStateTest {
 
     @Test
     fun `the drain leaves a queued shot alone until the rows are there`() {
-        val shot = StoredShot(id = "q1", completedAtMs = 1, durationMs = 30_000, profileName = "Test")
+        val shot = queuedShot
         seed(saved.copy(retryQueue = listOf(QueuedUpload("q1", 1, 0L))))
         val rows = mutableMapOf<String, StoredShot>()
         val series = CompletableDeferred<Unit>()
@@ -304,7 +321,7 @@ class VisualizerOwnStateTest {
 
     @Test
     fun `a drain skips, once told, when the rows never arrive`() {
-        val shot = StoredShot(id = "q1", completedAtMs = 1, durationMs = 30_000, profileName = "Test")
+        val shot = queuedShot
         seed(saved.copy(retryQueue = listOf(QueuedUpload("q1", 1, 0L))))
         val test = TestScope()
         val s = sync(scope = test, history = mapOf("q1" to shot), seriesReady = { awaitCancellation() })
