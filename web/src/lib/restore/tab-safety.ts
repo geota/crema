@@ -25,6 +25,7 @@
  * Nothing posts `started` yet: the restore itself does, from restore-safety PR7w.
  */
 import { freezeCremaWrites } from '#lib/security/reset-coordinator.js';
+import { canReloadNow, type ReloadInputs } from '#lib/pwa/update-gate.js';
 
 /** BroadcastChannel name every Crema tab listens on for restores. */
 export const RESTORE_CHANNEL = 'crema-restore';
@@ -34,16 +35,29 @@ export const RESTORE_LOCK = 'crema-restore';
 export const MACHINE_BUSY_LOCK = 'crema-machine-busy';
 /** Without Web Locks: reload anyway after this long without word. */
 export const RESTORE_FALLBACK_MS = 30_000;
-/** sessionStorage key for shots a frozen tab finished. Not a `crema.` key. */
+/**
+ * localStorage key for shots a frozen tab finished: not a `crema.` key, so the
+ * freeze leaves it alone, and not sessionStorage, so closing the tab doesn't
+ * lose them. Any tab commits them at its next boot.
+ */
 export const FROZEN_SHOTS_KEY = 'crema-frozen-shots';
+/** How long a frozen tab waits for its machine before offering "Reload now". */
+export const STUCK_AFTER_MS = 120_000;
 
-export type RestoreMessage = { type: 'started' } | { type: 'progress' } | { type: 'done' };
+/** One message on {@link RESTORE_CHANNEL}, tagged with the tab that sent it. */
+export type RestoreMessage = { type: 'started' | 'progress' | 'done'; from?: string };
+
+/** This tab's id in restore messages: a tab hears its own posts too. */
+export const TAB_ID: string =
+	typeof crypto !== 'undefined' && 'randomUUID' in crypto
+		? crypto.randomUUID()
+		: `tab-${Math.random().toString(36).slice(2)}`;
 
 /** The slice of `LockManager` this module uses, so tests can stand one in. */
 export interface LockManagerLike {
 	request(
 		name: string,
-		options: { mode?: 'shared' | 'exclusive'; ifAvailable?: boolean },
+		options: { mode?: 'shared' | 'exclusive'; ifAvailable?: boolean; signal?: AbortSignal },
 		callback: (lock: unknown) => unknown
 	): Promise<unknown>;
 	query?(): Promise<{ held?: { name?: string }[] }>;
@@ -66,19 +80,24 @@ export class MachineBusy {
 	readonly #reasons = new Set<string>();
 	#release: (() => void) | null = null;
 	#acquiring: Promise<boolean> | null = null;
+	/** A queued request after a refusal, so a restore that comes later sees us. */
+	#retry: AbortController | null = null;
 
 	constructor(private readonly locks: LockManagerLike | undefined = navigatorLocks()) {}
 
 	/**
 	 * Hold the lock for `reason`, without waiting. False when a restore holds it
-	 * exclusive. True when there are no Web Locks: there's nothing to ask.
+	 * exclusive. True when there are no Web Locks: there's nothing to ask. With
+	 * `retry`, a refused reason stays, and a request queues behind the restore,
+	 * so a later restore elsewhere still sees this tab's shot.
 	 */
-	hold(reason: string): Promise<boolean> {
+	hold(reason: string, retry = false): Promise<boolean> {
 		this.#reasons.add(reason);
 		if (!this.locks || this.#release) return Promise.resolve(true);
 		this.#acquiring ??= this.#acquire();
 		return this.#acquiring.then((held) => {
-			if (!held) this.#reasons.delete(reason);
+			if (!held && !retry) this.#reasons.delete(reason);
+			if (!held && retry && this.#reasons.has(reason)) this.#queueRetry();
 			return held;
 		});
 	}
@@ -86,15 +105,35 @@ export class MachineBusy {
 	/** `reason` has ended; the lock goes with the last one. */
 	release(reason: string): void {
 		this.#reasons.delete(reason);
-		if (this.#reasons.size > 0 || !this.#release) return;
+		if (this.#reasons.size > 0) return;
+		this.#retry?.abort();
+		this.#retry = null;
+		if (!this.#release) return;
 		this.#release();
 		this.#release = null;
 	}
 
-	/** Hold or release for `reason`, as a flag changes. */
+	/** Hold or release for `reason`, as a flag changes; a refused hold retries. */
 	set(reason: string, on: boolean): void {
-		if (on) void this.hold(reason);
+		if (on) void this.hold(reason, true);
 		else this.release(reason);
+	}
+
+	#queueRetry(): void {
+		if (this.#retry || !this.locks) return;
+		const retry = new AbortController();
+		this.#retry = retry;
+		this.locks
+			.request(MACHINE_BUSY_LOCK, { mode: 'shared', signal: retry.signal }, () => {
+				if (this.#retry !== retry || this.#reasons.size === 0 || this.#release) return undefined;
+				this.#retry = null;
+				return new Promise<void>((released) => {
+					this.#release = released;
+				});
+			})
+			.catch(() => {
+				if (this.#retry === retry) this.#retry = null;
+			});
 	}
 
 	/** Whether this tab holds the lock. */
@@ -133,6 +172,63 @@ export function getMachineBusy(): MachineBusy {
 	return machineBusy;
 }
 
+// ── What a reload would interrupt ──────────────────────────────────────────
+
+let shotOpen = false;
+const idleListeners = new Set<() => void>();
+
+/** A shot has started: a reload waits until it's recorded, not until the machine stops. */
+export function shotStarted(): void {
+	shotOpen = true;
+	getMachineBusy().set(SHOT, true);
+}
+
+/**
+ * The shot's completion has been committed (or stashed). With a scale, that's
+ * up to 3 s after the machine went Idle: the drip settle.
+ */
+export function shotFinished(): void {
+	shotOpen = false;
+	getMachineBusy().set(SHOT, false);
+	for (const l of idleListeners) l();
+}
+
+/** Whether a shot has started and its completion isn't committed yet. */
+export function shotIsOpen(): boolean {
+	return shotOpen;
+}
+
+/** Hear when a shot is done with, to retry a reload. Returns the unsubscribe. */
+export function onShotFinished(listener: () => void): () => void {
+	idleListeners.add(listener);
+	return () => idleListeners.delete(listener);
+}
+
+/** {@link MachineBusy} reason for a shot, from `ShotStarted` to its commit. */
+export const SHOT = 'shot';
+
+/** What a reload would interrupt, as {@link reloadBlocked} reads it. */
+export interface ReloadState {
+	inputs: ReloadInputs;
+	/** A flash runs, or holds the link for a power cycle. */
+	flash: boolean;
+	shotOpen: boolean;
+}
+
+/**
+ * Whether a frozen tab must wait to reload: the update gate's rule (a shot, a
+ * hot-water stop by weight, steam, a guided brew, a start's sync, a link coming
+ * back), plus a shot not yet recorded and a flash. A down link counts as idle,
+ * as the gate counts it, so a DE1 switched off mid-shot can't freeze a tab for
+ * good; but not for a flash waiting on its power cycle, or a guided brew, which
+ * runs on the scale alone.
+ */
+export function reloadBlocked(s: ReloadState): boolean {
+	if (s.flash || s.inputs.guidedBrewLive) return true;
+	if (s.inputs.link === 'down') return false;
+	return s.shotOpen || !canReloadNow(s.inputs);
+}
+
 /** What a flash says when a restore holds the machine. */
 export const FLASH_REFUSED_FOR_RESTORE = 'A restore is running. Start the update once it has finished.';
 
@@ -152,10 +248,12 @@ export function markRestoringHere(on: boolean): void {
 }
 
 /** Test seam: forget this module's state. */
-export function resetTabSafetyForTest(): void {
+export function resetTabSafetyForTest(busy: MachineBusy | null = null): void {
 	frozen = false;
 	restoringHere = false;
-	machineBusy = null;
+	machineBusy = busy;
+	shotOpen = false;
+	idleListeners.clear();
 }
 
 export interface RestoreListenerOptions {
@@ -165,6 +263,9 @@ export interface RestoreListenerOptions {
 	onFrozen: () => void;
 	/** Whether a reload must wait for the user (a shot that couldn't be kept). */
 	holdReload?: () => boolean;
+	/** A reload has waited {@link STUCK_AFTER_MS} for the machine: offer one by hand. */
+	onStuck?: () => void;
+	stuckAfterMs?: number;
 	reload?: () => void;
 	freeze?: () => void;
 	locks?: LockManagerLike;
@@ -188,12 +289,12 @@ function openChannel(): BroadcastChannel | null {
 	}
 }
 
-/** Tell every other Crema tab where a restore is. Best-effort. For PR7w. */
-export function announceRestore(message: RestoreMessage): void {
+/** Tell every other Crema tab where a restore is, as this tab. Best-effort. For PR7w. */
+export function announceRestore(type: RestoreMessage['type']): void {
 	const ch = openChannel();
 	if (!ch) return;
 	try {
-		ch.postMessage(message);
+		ch.postMessage({ type, from: TAB_ID } satisfies RestoreMessage);
 	} finally {
 		ch.close();
 	}
@@ -206,14 +307,20 @@ export function installRestoreListener(o: RestoreListenerOptions): RestoreListen
 	const reload = o.reload ?? (() => location.reload());
 	const fallbackMs = o.fallbackMs ?? RESTORE_FALLBACK_MS;
 	let fallback: ReturnType<typeof setTimeout> | null = null;
+	let stuck: ReturnType<typeof setTimeout> | null = null;
 	let wanted = false;
 	let reloaded = false;
 	let stopped = false;
 
 	const tryReload = (): void => {
-		if (!wanted || reloaded || stopped || o.busy() || o.holdReload?.()) return;
+		if (!wanted || reloaded || stopped) return;
+		if (o.busy() || o.holdReload?.()) {
+			stuck ??= setTimeout(() => o.onStuck?.(), o.stuckAfterMs ?? STUCK_AFTER_MS);
+			return;
+		}
 		reloaded = true;
 		if (fallback) clearTimeout(fallback);
+		if (stuck) clearTimeout(stuck);
 		reload();
 	};
 	const wantReload = (): void => {
@@ -239,7 +346,8 @@ export function installRestoreListener(o: RestoreListenerOptions): RestoreListen
 
 	if (ch) {
 		ch.onmessage = (e: MessageEvent<RestoreMessage>) => {
-			if (restoringHere) return;
+			// A tab hears its own posts, later than it might clear a flag.
+			if (restoringHere || e.data?.from === TAB_ID) return;
 			const type = e.data?.type;
 			if (type === 'started') enterFrozen();
 			else if (type === 'progress' && fallback) startFallback();
@@ -258,6 +366,7 @@ export function installRestoreListener(o: RestoreListenerOptions): RestoreListen
 		stop() {
 			stopped = true;
 			if (fallback) clearTimeout(fallback);
+			if (stuck) clearTimeout(stuck);
 			ch?.close();
 		}
 	};
@@ -277,11 +386,17 @@ export interface FrozenShot {
 	live: boolean;
 }
 
-/** Keep `shot` for the reload. False when sessionStorage won't take it. */
-export function stashFrozenShot(shot: FrozenShot, storage: Storage | undefined = sessionStorage): boolean {
+function defaultStorage(): Storage | undefined {
+	return typeof localStorage === 'undefined' ? undefined : localStorage;
+}
+
+const idOf = (shot: FrozenShot): unknown => shot.captured.id;
+
+/** Keep `shot` for after the reload, once per shot id. False when storage won't take it. */
+export function stashFrozenShot(shot: FrozenShot, storage: Storage | undefined = defaultStorage()): boolean {
 	try {
 		if (!storage) return false;
-		const kept = readFrozen(storage);
+		const kept = readFrozen(storage).filter((s) => idOf(s) !== idOf(shot));
 		storage.setItem(FROZEN_SHOTS_KEY, JSON.stringify([...kept, shot]));
 		return true;
 	} catch {
@@ -296,14 +411,23 @@ function readFrozen(storage: Storage): FrozenShot[] {
 	return Array.isArray(parsed) ? (parsed as FrozenShot[]) : [];
 }
 
-/** The shots kept before the reload, now removed. */
-export function takeFrozenShots(storage: Storage | undefined = sessionStorage): FrozenShot[] {
+/** The shots kept for after a reload. They stay until {@link dropFrozenShots}. */
+export function peekFrozenShots(storage: Storage | undefined = defaultStorage()): FrozenShot[] {
 	try {
-		if (!storage) return [];
-		const shots = readFrozen(storage);
-		storage.removeItem(FROZEN_SHOTS_KEY);
-		return shots;
+		return storage ? readFrozen(storage) : [];
 	} catch {
 		return [];
+	}
+}
+
+/** Forget the kept shots with these ids, once they're recorded. */
+export function dropFrozenShots(ids: readonly unknown[], storage: Storage | undefined = defaultStorage()): void {
+	try {
+		if (!storage) return;
+		const left = readFrozen(storage).filter((s) => !ids.includes(idOf(s)));
+		if (left.length === 0) storage.removeItem(FROZEN_SHOTS_KEY);
+		else storage.setItem(FROZEN_SHOTS_KEY, JSON.stringify(left));
+	} catch {
+		// They stay, and the next boot tries again; history skips ids it has.
 	}
 }

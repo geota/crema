@@ -1,6 +1,6 @@
 /**
  * `#lib/testing/fake-locks` — a Web Locks manager for tests (jsdom has none):
- * shared and exclusive modes, `ifAvailable`, and a FIFO queue, enough for the
+ * shared and exclusive modes, `ifAvailable`, `signal`, and a FIFO queue, enough for the
  * restore's tab rules. Not a full implementation.
  */
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
@@ -24,15 +24,23 @@ export class FakeLocks implements LockManagerLike {
 
 	request(
 		name: string,
-		options: { mode?: Mode; ifAvailable?: boolean },
+		options: { mode?: Mode; ifAvailable?: boolean; signal?: AbortSignal },
 		callback: (lock: unknown) => unknown
 	): Promise<unknown> {
 		const mode = options.mode ?? 'exclusive';
 		const queued = this.#queue.some((w) => w.name === name);
 		if (!this.#free(name, mode) || queued) {
 			if (options.ifAvailable) return Promise.resolve(callback(null));
-			return new Promise((resolve) => {
-				this.#queue.push({ name, mode, start: () => resolve(this.#grant(name, mode, callback)) });
+			return new Promise((resolve, reject) => {
+				const waiter = { name, mode, start: () => resolve(this.#grant(name, mode, callback)) };
+				this.#queue.push(waiter);
+				options.signal?.addEventListener('abort', () => {
+					const at = this.#queue.indexOf(waiter);
+					if (at < 0) return;
+					this.#queue.splice(at, 1);
+					reject(new DOMException('aborted', 'AbortError'));
+					this.#drain();
+				});
 			});
 		}
 		return this.#grant(name, mode, callback);
@@ -53,8 +61,8 @@ export class FakeLocks implements LockManagerLike {
 		}
 	}
 
-	async query(): Promise<{ held: { name: string; mode: Mode }[] }> {
-		return { held: [...this.held] };
+	async query(): Promise<{ held: { name: string; mode: Mode }[]; pending: { name: string; mode: Mode }[] }> {
+		return { held: [...this.held], pending: this.#queue.map(({ name, mode }) => ({ name, mode })) };
 	}
 
 	/** Hold `name` until the returned function runs, as another tab would. */

@@ -12,14 +12,25 @@ import {
 	MachineBusy,
 	RESTORE_FALLBACK_MS,
 	RESTORE_LOCK,
+	STUCK_AFTER_MS,
+	TAB_ID,
+	announceRestore,
+	dropFrozenShots,
+	getMachineBusy,
 	installRestoreListener,
 	markRestoringHere,
+	peekFrozenShots,
+	reloadBlocked,
 	resetTabSafetyForTest,
 	restoreFrozen,
+	shotFinished,
+	shotIsOpen,
+	shotStarted,
 	stashFrozenShot,
-	takeFrozenShots,
 	type RestoreMessage
 } from './tab-safety';
+import { MachineState } from '#lib/core/crema-core.js';
+import type { ReloadInputs } from '#lib/pwa/update-gate.js';
 
 /** A channel a test can post into, as another tab would. */
 function fakeChannel(): { channel: BroadcastChannel; post: (m: RestoreMessage) => void } {
@@ -81,6 +92,85 @@ describe('MachineBusy', () => {
 	it('without Web Locks a shot or flash just runs', async () => {
 		expect(await new MachineBusy(undefined).hold('flash-start')).toBe(true);
 	});
+
+	it('a shot refused during a restore queues, so a later restore still sees it', async () => {
+		const locks = new FakeLocks();
+		const release = await locks.hold(MACHINE_BUSY_LOCK);
+		const busy = new MachineBusy(locks);
+		busy.set('shot', true);
+		await settle();
+		expect(busy.held).toBe(false);
+		release();
+		await settle();
+		expect(busy.held).toBe(true);
+		let refused = false;
+		await locks.request(MACHINE_BUSY_LOCK, { mode: 'exclusive', ifAvailable: true }, (lock) => {
+			refused = lock === null;
+		});
+		expect(refused).toBe(true);
+		busy.set('shot', false);
+		await settle();
+		expect(locks.held).toEqual([]);
+	});
+
+	it('a queued shot that ends before the restore does withdraws its request', async () => {
+		const locks = new FakeLocks();
+		const release = await locks.hold(MACHINE_BUSY_LOCK);
+		const busy = new MachineBusy(locks);
+		busy.set('shot', true);
+		await settle();
+		expect((await locks.query()).pending).toHaveLength(1);
+		busy.set('shot', false);
+		await settle();
+		expect((await locks.query()).pending).toEqual([]);
+		release();
+		await settle();
+		expect(busy.held).toBe(false);
+		expect(locks.held).toEqual([]);
+	});
+});
+
+describe('a shot, for the reload', () => {
+	const parked: ReloadInputs = {
+		link: 'up',
+		machineStateName: MachineState.Idle,
+		shotInProgress: false,
+		guidedBrewLive: false,
+		firmwareBusy: false
+	};
+	const blocked = (inputs: Partial<ReloadInputs>, more: { flash?: boolean; shotOpen?: boolean } = {}) =>
+		reloadBlocked({ inputs: { ...parked, ...inputs }, flash: more.flash ?? false, shotOpen: more.shotOpen ?? false });
+
+	it('holds the machine from ShotStarted until its completion is committed', async () => {
+		const locks = new FakeLocks();
+		const busy = new MachineBusy(locks);
+		resetTabSafetyForTest(busy);
+		shotStarted();
+		await settle();
+		expect(shotIsOpen()).toBe(true);
+		expect(busy.held).toBe(true);
+		// The machine is Idle, but the drip settle hasn't ended: still blocked.
+		expect(blocked({}, { shotOpen: shotIsOpen() })).toBe(true);
+		shotFinished();
+		await settle();
+		expect(busy.held).toBe(false);
+		expect(blocked({}, { shotOpen: shotIsOpen() })).toBe(false);
+	});
+
+	it('waits for hot water, steam, a guided brew, a start or a link coming back', () => {
+		expect(blocked({ machineStateName: MachineState.HotWater })).toBe(true);
+		expect(blocked({ machineStateName: MachineState.Steam })).toBe(true);
+		expect(blocked({ machineStateName: null })).toBe(true);
+		expect(blocked({ link: 'transient' })).toBe(true);
+		expect(blocked({ guidedBrewLive: true })).toBe(true);
+		expect(blocked({ guidedBrewLive: true, link: 'down' })).toBe(true);
+	});
+
+	it('counts a machine that has gone away as idle, unless a flash waits on its power cycle', () => {
+		expect(blocked({ link: 'down', shotInProgress: true }, { shotOpen: true })).toBe(false);
+		expect(blocked({ link: 'down' }, { flash: true })).toBe(true);
+		expect(blocked({}, { flash: true })).toBe(true);
+	});
 });
 
 describe('a frozen tab', () => {
@@ -89,16 +179,18 @@ describe('a frozen tab', () => {
 		const reload = vi.fn();
 		const freeze = vi.fn();
 		const onFrozen = vi.fn();
+		const onStuck = vi.fn();
 		const l = installRestoreListener({
 			busy: over.busy ?? (() => false),
 			holdReload: over.holdReload,
+			onStuck,
 			onFrozen,
 			reload,
 			freeze,
 			locks: over.locks,
 			channel: () => channel
 		});
-		return { l, post, reload, freeze, onFrozen };
+		return { l, post, reload, freeze, onFrozen, onStuck };
 	}
 
 	it('freezes and shows the overlay when a restore starts elsewhere', async () => {
@@ -181,6 +273,27 @@ describe('a frozen tab', () => {
 		expect(t.reload).toHaveBeenCalledOnce();
 	});
 
+	it('offers a reload by hand when the machine keeps it waiting', () => {
+		vi.useFakeTimers();
+		const t = listener({ busy: () => true });
+		t.post({ type: 'done' });
+		vi.advanceTimersByTime(STUCK_AFTER_MS - 1);
+		expect(t.onStuck).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(t.onStuck).toHaveBeenCalledOnce();
+		expect(t.reload).not.toHaveBeenCalled();
+	});
+
+	it('ignores a message it sent itself, however late it arrives', () => {
+		const t = listener();
+		t.post({ type: 'started', from: TAB_ID });
+		t.post({ type: 'done', from: TAB_ID });
+		expect(t.freeze).not.toHaveBeenCalled();
+		expect(t.reload).not.toHaveBeenCalled();
+		t.post({ type: 'started', from: 'another-tab' });
+		expect(t.freeze).toHaveBeenCalledOnce();
+	});
+
 	it('the restoring tab ignores its own messages', () => {
 		markRestoringHere(true);
 		const t = listener();
@@ -208,19 +321,52 @@ describe('a frozen tab', () => {
 	});
 });
 
-describe('shots a frozen tab finished', () => {
-	beforeEach(() => sessionStorage.clear());
+describe('announceRestore', () => {
+	it('tags every message with this tab', () => {
+		const posted: unknown[] = [];
+		vi.stubGlobal(
+			'BroadcastChannel',
+			class {
+				postMessage(m: unknown) {
+					posted.push(m);
+				}
+				close() {}
+			}
+		);
+		try {
+			announceRestore('started');
+			announceRestore('progress');
+			announceRestore('done');
+		} finally {
+			vi.unstubAllGlobals();
+		}
+		expect(posted).toEqual(['started', 'progress', 'done'].map((type) => ({ type, from: TAB_ID })));
+	});
+});
 
-	it('are kept for the reload, in a key the freeze leaves alone', () => {
+describe('shots a frozen tab finished', () => {
+	beforeEach(() => localStorage.clear());
+
+	it('are kept in localStorage, once per shot, in a key the freeze leaves alone', () => {
 		const shot = { captured: { id: 's1' }, beanId: 'b', dose: 18, live: true };
 		expect(stashFrozenShot(shot)).toBe(true);
 		expect(stashFrozenShot({ ...shot, captured: { id: 's2' } })).toBe(true);
+		expect(stashFrozenShot({ ...shot, dose: 19 })).toBe(true);
 		expect(FROZEN_SHOTS_KEY.startsWith('crema.')).toBe(false);
-		expect(takeFrozenShots().map((s) => s.captured.id)).toEqual(['s1', 's2']);
-		expect(takeFrozenShots()).toEqual([]);
+		expect(localStorage.getItem(FROZEN_SHOTS_KEY)).not.toBeNull();
+		expect(peekFrozenShots().map((s) => [s.captured.id, s.dose])).toEqual([
+			['s2', 18],
+			['s1', 19]
+		]);
+		// Looking doesn't take them: only a recorded shot is forgotten.
+		expect(peekFrozenShots()).toHaveLength(2);
+		dropFrozenShots(['s1']);
+		expect(peekFrozenShots().map((s) => s.captured.id)).toEqual(['s2']);
+		dropFrozenShots(['s2']);
+		expect(localStorage.getItem(FROZEN_SHOTS_KEY)).toBeNull();
 	});
 
-	it('say so when sessionStorage refuses them', () => {
+	it('say so when storage refuses them', () => {
 		const storage = { getItem: () => null, setItem: () => { throw new DOMException('full', 'QuotaExceededError'); } } as unknown as Storage;
 		expect(stashFrozenShot({ captured: {}, beanId: null, dose: null, live: true }, storage)).toBe(false);
 	});

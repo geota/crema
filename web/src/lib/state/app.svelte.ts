@@ -104,7 +104,7 @@ import {
 } from '#lib/services/profile-write-generations.js';
 import { FirmwareUpdateController } from '#lib/firmware/firmware-update.svelte.js';
 import { readPowerOk } from '#lib/firmware/power.js';
-import { getMachineBusy } from '#lib/restore/tab-safety.js';
+import { getMachineBusy, shotFinished, shotStarted } from '#lib/restore/tab-safety.js';
 import { setFirmwareWakeLock } from '#lib/shell/wake-lock.js';
 import type { FlashShellConditions } from '#lib/core/index.js';
 import {
@@ -820,6 +820,8 @@ export class CremaApp {
 				);
 			}
 			if (event.type === 'ShotStarted') {
+				// Until its completion is committed, a reload would lose it.
+				shotStarted();
 				// A machine-button shot can start under this dialog: clear Stop.
 				closeBagEmptyPrompt();
 				// Mark the shot's start so ShotCompleted can slice the raw BLE
@@ -888,15 +890,19 @@ export class CremaApp {
 				// (bean burn-down, webhook), enqueue the Visualizer push,
 				// and persist the capture slice with both META preludes.
 				// See `#lib/history/shot-persistence.js` for the whole pipeline.
-				commitShotCompletion(event, {
-					snapshot: this.state.current,
-					shotStartedAtMs: this.shotStartedAtMs,
-					lastNotificationAtMs: this.core.lastNotificationAtMs,
-					sliceJsonl: (from, to) => this.core.captureSliceJsonl(from, to),
-					takeStoredShot: (shotCtx) => this.core.takeStoredShot(shotCtx),
-					fireWebhook: (eventType, payload) => this.fireWebhook(eventType, payload),
-					runtime: this.runtime
-				});
+				try {
+					commitShotCompletion(event, {
+						snapshot: this.state.current,
+						shotStartedAtMs: this.shotStartedAtMs,
+						lastNotificationAtMs: this.core.lastNotificationAtMs,
+						sliceJsonl: (from, to) => this.core.captureSliceJsonl(from, to),
+						takeStoredShot: (shotCtx) => this.core.takeStoredShot(shotCtx),
+						fireWebhook: (eventType, payload) => this.fireWebhook(eventType, payload),
+						runtime: this.runtime
+					});
+				} finally {
+					shotFinished();
+				}
 				// Orchestrator-owned timers / snapshot caches still clear
 				// here — they're our state, not the persistence module's.
 				// `brewParamsAtShotStart` cleared AFTER the commit call so

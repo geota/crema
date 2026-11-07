@@ -56,7 +56,7 @@ import {
 } from '#lib/services/visualizer-call.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import { getHistoryStore } from './store.svelte';
-import { restoreFrozen, stashFrozenShot, takeFrozenShots } from '#lib/restore/tab-safety.js';
+import { dropFrozenShots, peekFrozenShots, restoreFrozen, stashFrozenShot } from '#lib/restore/tab-safety.js';
 import { freezeOverlay } from '#lib/restore/freeze-overlay.svelte.js';
 import { isBrewLog } from './model';
 import type { UiSnapshot } from '#lib/state/ui-state.svelte.js';
@@ -243,10 +243,22 @@ function keepFrozenShot(captured: Record<string, unknown>, activeShot: ActiveSho
  * series, the bag debit and the uploads, as {@link commitShotCompletion}
  * would have. The raw capture is lost: IndexedDB was closed during the freeze.
  * The webhook isn't sent: it would arrive late, out of the shot's moment.
+ * Not while this tab is frozen, as every write would be dropped: the shots
+ * wait for a boot that isn't. Each is recorded before it's forgotten, and an
+ * id history already has (a duplicated tab, a boot that stopped part-way) is
+ * only forgotten.
  */
 export function commitFrozenShots(runtime: AppRuntime | null): void {
-	for (const shot of takeFrozenShots()) {
+	if (restoreFrozen()) return;
+	const done: unknown[] = [];
+	for (const shot of peekFrozenShots()) {
+		const id = shot.captured.id;
+		if (typeof id === 'string' && getHistoryStore().get(id)) {
+			done.push(id);
+			continue;
+		}
 		const record = getHistoryStore().recordCaptured(shot.captured);
+		done.push(id);
 		if (!record) continue;
 		let bagDebit: number | null = shot.beanId ? 0 : null;
 		if (shot.live && shot.beanId && shot.dose) {
@@ -261,6 +273,7 @@ export function commitFrozenShots(runtime: AppRuntime | null): void {
 			runtime.runFork(pushShotToDecent(record.id));
 		}
 	}
+	dropFrozenShots(done);
 }
 
 /**

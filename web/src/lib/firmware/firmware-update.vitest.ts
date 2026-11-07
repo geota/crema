@@ -18,6 +18,7 @@ import {
 import { powerCycleLinkAction, waitingText } from './flash-copy';
 import {
 	AWAITING_KEY,
+	FLASH_RUNNING,
 	markerFor,
 	FirmwareUpdateController,
 	type FirmwareUpdateDeps,
@@ -201,6 +202,19 @@ describe('FirmwareUpdateController', () => {
 			refused = lock === null;
 		});
 		expect(refused).toBe(true);
+	});
+
+	it('the shell seeing no flash yet does not drop the hand-over', async () => {
+		const locks = new FakeLocks();
+		const busy = new MachineBusy(locks);
+		const flow = new FirmwareUpdateController({ ...deps({}), machineBusy: busy });
+		await flow.open();
+		flow.image = new Uint8Array(16);
+		await flow.startFlash();
+		// The layout's effect, in the gap before `running` turns true.
+		busy.set(FLASH_RUNNING, false);
+		await new Promise((r) => setTimeout(r, 0));
+		expect(busy.held).toBe(true);
 	});
 
 	it('a flash that fails to start lets the machine go', async () => {

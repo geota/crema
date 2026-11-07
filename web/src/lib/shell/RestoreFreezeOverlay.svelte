@@ -8,7 +8,8 @@
 	import { downloadBlob } from '#lib/utils/download.js';
 	import { freezeOverlay } from '#lib/restore/freeze-overlay.svelte.js';
 
-	let { onSaved }: { onSaved: () => void } = $props();
+	let { onSaved, reloadNow = () => location.reload() }: { onSaved: () => void; reloadNow?: () => void } =
+		$props();
 
 	function download(): void {
 		const shot = freezeOverlay.unsaved;
@@ -31,6 +32,12 @@
 				<button type="button" class="rf-button" onclick={download}>Download this shot</button>
 			{:else}
 				<p class="rf-body">This tab will reload when it's done.</p>
+				{#if freezeOverlay.waitedLong}
+					<p class="rf-body">
+						It's waiting for the machine to finish. If nothing is running on it, reload now.
+					</p>
+					<button type="button" class="rf-button" onclick={reloadNow}>Reload now</button>
+				{/if}
 			{/if}
 		</div>
 	</div>

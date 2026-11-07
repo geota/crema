@@ -7,7 +7,13 @@ import { initTestWasm } from '#lib/testing/test-init.js';
 import { coerceBean, getBeanStore } from '#lib/bean/index.js';
 import { getActiveShotStore } from '#lib/state/active-shot.svelte.js';
 import { freezeOverlay } from '#lib/restore/freeze-overlay.svelte.js';
-import { installRestoreListener, resetTabSafetyForTest, type RestoreMessage } from '#lib/restore/tab-safety.js';
+import {
+	FROZEN_SHOTS_KEY,
+	installRestoreListener,
+	peekFrozenShots,
+	resetTabSafetyForTest,
+	type RestoreMessage
+} from '#lib/restore/tab-safety.js';
 import { getHistoryStore } from './store.svelte';
 
 vi.mock('#lib/bean/bag-empty-prompt.js', () => ({ promptBagEmpty: () => {} }));
@@ -54,7 +60,7 @@ beforeAll(async () => {
 beforeEach(() => {
 	resetTabSafetyForTest();
 	freezeOverlay.resetForTest();
-	sessionStorage.clear();
+	localStorage.clear();
 	getBeanStore().clearAll();
 	getHistoryStore().clearAllShots();
 	getBeanStore().upsertBean({ ...coerceBean({ id: 'a', name: 'a' })!, bagSize: 250, remaining: 100 });
@@ -76,9 +82,49 @@ describe('a shot in a frozen tab', () => {
 		expect(getHistoryStore().all.filter((s) => s.id === 'shot:frozen')).toHaveLength(1);
 	});
 
-	it('that sessionStorage refuses is offered on the overlay instead', () => {
+	it('waits while this boot is frozen too, and is kept', () => {
 		freezeHere();
-		const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+		finish('shot:twice');
+		// A boot that a restore still freezes: nothing is recorded, nothing lost.
+		commitFrozenShots(null);
+		expect(getHistoryStore().get('shot:twice')).toBeUndefined();
+		expect(peekFrozenShots()).toHaveLength(1);
+		resetTabSafetyForTest();
+		commitFrozenShots(null);
+		expect(getHistoryStore().get('shot:twice')?.bagDebit).toBe(18);
+		expect(peekFrozenShots()).toEqual([]);
+	});
+
+	it('stays kept when recording it fails', () => {
+		freezeHere();
+		finish('shot:fails');
+		resetTabSafetyForTest();
+		const spy = vi.spyOn(getHistoryStore(), 'recordCaptured').mockImplementation(() => {
+			throw new Error('quota');
+		});
+		expect(() => commitFrozenShots(null)).toThrow('quota');
+		spy.mockRestore();
+		expect(peekFrozenShots()).toHaveLength(1);
+	});
+
+	it('already in history (a duplicated tab) is not recorded or debited twice', () => {
+		freezeHere();
+		finish('shot:dup');
+		const stash = localStorage.getItem(FROZEN_SHOTS_KEY)!;
+		resetTabSafetyForTest();
+		commitFrozenShots(null);
+		expect(getBeanStore().getBean('a')?.remaining).toBe(82);
+		// The second tab boots with its own copy of the same stash.
+		localStorage.setItem(FROZEN_SHOTS_KEY, stash);
+		commitFrozenShots(null);
+		expect(getHistoryStore().all.filter((s) => s.id === 'shot:dup')).toHaveLength(1);
+		expect(getBeanStore().getBean('a')?.remaining).toBe(82);
+		expect(peekFrozenShots()).toEqual([]);
+	});
+
+	it('that storage refuses is offered on the overlay instead', () => {
+		freezeHere();
+		const spy = vi.spyOn(Object.getPrototypeOf(localStorage) as Storage, 'setItem').mockImplementation(() => {
 			throw new DOMException('full', 'QuotaExceededError');
 		});
 		finish('shot:lost');

@@ -25,8 +25,11 @@ import { FlashDriver, type FlashCore, type FlashIo, type FlashKeepAlive } from '
 import { downloadOfficialImage, pinnedFirmware, verifyImageFor } from './source';
 import { FLASH_REFUSED_FOR_RESTORE, type MachineBusy } from '#lib/restore/tab-safety.js';
 
-/** {@link MachineBusy} reasons: a flash starting, then running. */
+/** {@link MachineBusy} reasons: a flash starting, handed over, then running.
+ *  The hand-over is the controller's alone, so the layout's `FLASH_RUNNING`
+ *  can't drop it before the flash shows as running. */
 export const FLASH_STARTING = 'flash-start';
+export const FLASH_HANDOVER = 'flash-handover';
 export const FLASH_RUNNING = 'flash';
 
 
@@ -181,7 +184,10 @@ export class FirmwareUpdateController {
 				// The flow stays on screen for as long as the flash holds the
 				// DE1: it's the only place to watch, wait or Exit.
 				if (s?.locksWrites && this.step === 'closed') this.step = 'flash';
-				if (wasHeld && !(s?.locksWrites ?? false)) deps.onRelease?.();
+				if (wasHeld && !(s?.locksWrites ?? false)) {
+					deps.machineBusy?.release(FLASH_HANDOVER);
+					deps.onRelease?.();
+				}
 			},
 			onLog: deps.log,
 			keepAlive: deps.keepAlive,
@@ -430,7 +436,7 @@ export class FirmwareUpdateController {
 			}
 			// Held for the flash itself before the start's hold lets go, so no
 			// restore can take the machine in between.
-			void busy?.hold(FLASH_RUNNING);
+			void busy?.hold(FLASH_HANDOVER);
 			await this.driver.bindMachine(0, this.machine);
 			this.step = 'flash';
 		} finally {

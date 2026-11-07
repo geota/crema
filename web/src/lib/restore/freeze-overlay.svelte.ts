@@ -4,6 +4,7 @@
  */
 
 let shown = $state(false);
+let stuck = $state(false);
 let unsaved = $state.raw<Record<string, unknown> | null>(null);
 
 export const freezeOverlay = {
@@ -17,6 +18,13 @@ export const freezeOverlay = {
 	show(): void {
 		shown = true;
 	},
+	/** The reload has waited long for the machine: offer one by hand. */
+	get waitedLong(): boolean {
+		return stuck;
+	},
+	stuck(): void {
+		stuck = true;
+	},
 	keep(shot: Record<string, unknown>): void {
 		unsaved = shot;
 	},
@@ -26,6 +34,7 @@ export const freezeOverlay = {
 	},
 	resetForTest(): void {
 		shown = false;
+		stuck = false;
 		unsaved = null;
 	}
 };
