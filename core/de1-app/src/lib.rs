@@ -68,6 +68,7 @@ use std::time::Duration;
 
 use de1_domain::connect_sweep::MAX_TANK_TEMP_C;
 use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
+use de1_domain::session::{Observed, Session};
 use de1_domain::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AsRunShot, AutoStop, BeverageType, BrewOverrides,
     BrewRecipe, BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, CompletedShot,
@@ -84,6 +85,7 @@ use de1_protocol::{
     SHOT_HEADER_LEN, ShotHeader, ShotSample, ShotSettings, StateInfo, SubState, Version,
     WaterLevels, mmr, profile, requested_state,
 };
+use packet_sync::LinkSession;
 
 /// Maximum gap between profile-upload acks before the orchestrator fails the
 /// upload with [`ProfileUploadFailure::AckTimeout`]. Measured from the
@@ -513,7 +515,10 @@ pub struct CremaCore {
     steam_hotwater_targets: Option<SteamHotWaterTargets>,
     /// The DE1 connection the profile sync and the packet sync share — see
     /// [`packet_sync`].
-    link: packet_sync::LinkSession,
+    link: LinkSession,
+    /// The flow the machine is running, from its first state until it leaves
+    /// that mode. A link drop keeps it; [`reset`](Self::reset) drops it.
+    session: Option<Session>,
     /// The encoded packet written in this link generation; the packet sync
     /// never writes the same bytes twice.
     shot_settings_written: Option<[u8; 9]>,
@@ -529,12 +534,6 @@ pub struct CremaCore {
     /// the one that cuts the pour — it was the missing half of that de1app
     /// convention. Cleared when the session completes or the stop fires.
     hot_water_stop_target_g: Option<f32>,
-    /// The first state this core saw (after [`new`](Self::new) or
-    /// [`reset`](Self::reset)) was already HotWater: that pour began before
-    /// this core watched it, so it is neither tared (the cup already holds
-    /// water) nor armed with the full target. The packet's backstop bounds
-    /// it. Cleared by the next state that isn't HotWater.
-    hot_water_began_unseen: bool,
     /// The eco-mode steam target temperature, °C.
     steam_eco_temp: f32,
     last_state: Option<StateInfo>,
@@ -1070,12 +1069,12 @@ impl CremaCore {
             steam: SteamMonitor::new(),
             steam_hotwater_settings: None,
             steam_hotwater_targets: None,
-            link: packet_sync::LinkSession::default(),
+            link: LinkSession::default(),
+            session: None,
             shot_settings_written: None,
             foreign_restore_used: false,
             last_hot_water_target: None,
             hot_water_stop_target_g: None,
-            hot_water_began_unseen: false,
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
             shot_started: None,
@@ -1458,6 +1457,7 @@ impl CremaCore {
         let weight = if self.stop_on_weight
             && !self.weight_target_disabled
             && !self.untared_cup_tripped
+            && !self.began_unseen()
             && self.scale.is_some()
         {
             self.effective_target_weight()
@@ -3337,6 +3337,11 @@ impl CremaCore {
     pub fn de1_link_lost(&mut self) -> CoreOutput {
         self.firmware_flash_link_lost();
         let mut out = CoreOutput::default();
+        // An outage runs from the first drop: a reconnect that fails before
+        // any state arrives is the same outage.
+        if self.link.state_seen || self.link.lost_at.is_none() {
+            self.link.lost_at = Some(self.clock);
+        }
         // A new connection generation: what was pushed is forgotten.
         self.link_lost_session(&mut out);
         self.stop_scale_timer_for_link_loss(&mut out);
@@ -3393,7 +3398,10 @@ impl CremaCore {
         let profile_sync = std::mem::take(&mut self.profile_sync);
         // The link session too: a generation set back to 0 could match a late
         // upload result from before the reset (F7.3's stale-result rule).
-        let link = self.link;
+        let link = LinkSession {
+            lost_at: None,
+            ..self.link
+        };
         let steam_hotwater_targets = self.steam_hotwater_targets.take();
         // `read_only` is a device-role config (this core is a secondary mirror),
         // not session/shot state — it must survive a reset, else a reconnect
@@ -3578,16 +3586,12 @@ impl CremaCore {
         {
             out.events.push(Event::UnknownMachineByte { byte });
         }
-        self.profile_sync_state_seen(info, out);
+        let first_on_link = self.link_state_seen(info, out);
+        self.session = Session::on_state(self.session, info, first_on_link);
         if self.last_state != Some(info) {
             let prev_info = self.last_state;
             let prev_state = prev_info.map(|s| s.state);
             self.last_state = Some(info);
-            if info.state != MachineState::HotWater {
-                self.hot_water_began_unseen = false;
-            } else if prev_info.is_none() {
-                self.hot_water_began_unseen = true;
-            }
             self.idle_sleep.machine_state(info.state, info.substate);
             self.descale.on_state(prev_info, info, now);
             self.advance_maintenance(info, now, out);
@@ -5500,7 +5504,9 @@ impl CremaCore {
                 // transient in as the zero. See `auto_tare_pending` and
                 // `handle_scale_weight`; first flow is the fallback.
                 self.tare_gate = None;
-                self.auto_tare_pending = self.auto_tare;
+                // A flow first seen mid-pour has something in the cup already:
+                // no tare, here or at first flow (#317).
+                self.auto_tare_pending = self.auto_tare && !self.began_unseen();
                 self.auto_tare_window.reset();
                 self.last_auto_tare = None;
                 self.tare_observed = false;
@@ -5638,7 +5644,7 @@ impl CremaCore {
                 // operational scale; never time mode). Never the machine
                 // echo, which can carry the 250 ml backstop (review #25).
                 if kind == de1_domain::WaterSessionKind::HotWater
-                    && !self.hot_water_began_unseen
+                    && !self.began_unseen()
                     && let Some(target_g) = self.hot_water_target().and_then(|t| t.stop_weight_g)
                 {
                     self.hot_water_stop_target_g = Some(target_g);
@@ -5786,9 +5792,11 @@ impl CremaCore {
         let saw_armed = self
             .effective_stop_targets()
             .is_some_and(|t| t.weight.is_some());
+        // An untared cup would read as a step's weight at once.
+        let scale_usable = self.scale.is_some() && !self.began_unseen();
         if self
             .step_weight
-            .on_weight(projected, now, self.scale.is_some(), saw_armed)
+            .on_weight(projected, now, scale_usable, saw_armed)
         {
             out.commands.push(Command::WriteCharacteristic {
                 target: WriteTarget::De1RequestedState,
@@ -5929,10 +5937,19 @@ impl CremaCore {
         if self.scale.is_none() {
             return Some("no-scale");
         }
+        if let Some(why) = self.session.and_then(|s| s.weight_refused()) {
+            return Some(why.as_str());
+        }
         if self.untared_cup_tripped {
             return Some("untared-cup");
         }
         None
+    }
+
+    /// Whether the open session began before the app saw it, so nothing on
+    /// the scale can be told from its tare.
+    fn began_unseen(&self) -> bool {
+        self.session.is_some_and(|s| s.observed == Observed::Unseen)
     }
 
     /// [`stop_targets_projection`](Self::stop_targets_projection) as JSON, for
@@ -6613,6 +6630,7 @@ mod tests {
         core.connect_scale("BOOKOO_SC", &[]);
         // Auto-tare is on by default; entering Espresso starts a shot, which
         // sends the tare and opens the settling gate.
+        core.on_notification(Source::De1State, &[2, 0], 0);
         let out = core.on_notification(Source::De1State, &[4, 5], 1_000);
         assert!(out.events.contains(&Event::ShotStarted));
         // The pan/cup is still on the scale (35 g) while the hardware tare is in
@@ -6823,6 +6841,7 @@ mod tests {
     fn tare_gate_times_out_so_weight_is_never_lost() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 1_000); // gate opens at t=1000
         // The scale never reaches zero (e.g. the tare failed). Before the
         // fallback timeout the weight is still suppressed...
@@ -7068,6 +7087,7 @@ mod tests {
         assert_eq!(t.volume, None, "volume stands down behind a weight target");
 
         // Once the shot runs, the same call reports the live armed picture.
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 1_000);
         let (armed, t) = core.stop_targets_projection();
         assert!(armed, "the shot is running");
@@ -7082,6 +7102,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("Skale", &[]);
         core.set_profile_target_weight(Some(36.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 1_000);
         assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
         assert_eq!(core.weight_stop_blocked_by(), None);
@@ -7139,6 +7160,7 @@ mod tests {
         assert!(core.auto_tare);
 
         // A GHC start: nothing but the machine's own state notification.
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 1_000);
         let armed = core
             .auto_stop
@@ -8938,6 +8960,7 @@ mod tests {
         // Default settings (auto_tare=true, stop_on_weight=true) — push only
         // the profile recipe target.
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // A 35 g reading well past the 5 s arming delay crosses the 30 g target.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
@@ -9053,6 +9076,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // Crosses the target — the app's own SAW fires the stop.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
@@ -9071,6 +9095,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // A real shot has telemetry/scale readings flowing throughout — this
         // one stays well under the 30 g target (`report_stop_targets` only
@@ -9103,6 +9128,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // Cross the target — the first stop command goes out and the
         // enforcer arms.
@@ -9165,6 +9191,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // The first reading that clears the tare/settle gates reports what
         // SAW is armed with — the visibility issue #15's silent failures
@@ -9352,6 +9379,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // A ~300 g cup lands after the tare and HOLDS STILL: the guard
         // watches it settle, then latches the software zero instead of
@@ -9384,6 +9412,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // The heavy reading keeps moving (a hand, a bump, a cup still being
         // lowered) — no stable band ever forms, so after the settle window
@@ -9418,6 +9447,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // 60 g at 4 s — outside the 3 s window: a legitimately heavy pour,
         // not an untared cup.
@@ -9442,6 +9472,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // Settle a ~300 g cup → the guard latches the virtual zero.
         for (cg, at) in [(30_000, 1_600u64), (30_030, 2_000), (29_990, 2_400)] {
@@ -9476,6 +9507,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         for (cg, at) in [(30_000, 1_600u64), (30_030, 2_000), (29_990, 2_400)] {
             core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
@@ -9522,6 +9554,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(36.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // A sane pour ramp, past the untared-cup window, under target.
         for (cg, at) in [(200u32, 1_000u64), (600, 2_000), (1_100, 3_200)] {
@@ -9573,6 +9606,7 @@ mod tests {
         // issue #15 shape, where the scale registers a beat after first flow.
         core.set_profile_target_weight(Some(30.0));
         core.set_max_shot_duration(Some(45.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         core.connect_scale("BOOKOO_SC", &[]);
         // The reconnect reopened the untared window (review #29): the first
@@ -9593,6 +9627,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.set_profile_target_weight(Some(30.0));
         core.set_max_shot_duration(Some(45.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         core.connect_scale("BOOKOO_SC", &[]);
         // First reading: 35 g absolute (cup + coffee), over the 30 g target.
@@ -9624,6 +9659,7 @@ mod tests {
         core.reset();
         assert!(core.scale_capabilities().is_some());
         core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
         assert!(out.events.contains(&Event::StopTriggered {
@@ -9735,6 +9771,7 @@ mod tests {
         // (reset + start) rather than three.
         let mut on_core = CremaCore::new();
         on_core.connect_scale("BOOKOO_SC", &[]);
+        on_core.on_notification(Source::De1State, &[2, 0], 0);
         let on_out = on_core.on_notification(Source::De1State, &[4, 5], 1_000);
         let on_writes = on_out
             .commands
@@ -13800,6 +13837,7 @@ mod tests {
             let profile = weights_profile(weights);
             let mut core = CremaCore::new_with_model(1);
             upload(&mut core, &profile);
+            core.on_notification(Source::De1State, &[2, 0], 1);
             core
         }
 
@@ -14010,6 +14048,7 @@ mod tests {
             core.set_active_profile(Some(&weights_profile(weights)));
             core.connect_scale("BOOKOO_SC", &[]);
             core.set_auto_tare(false);
+            core.on_notification(Source::De1State, &[2, 0], 1);
             core
         }
 
@@ -14070,6 +14109,7 @@ mod tests {
             let mut core = scale_core(&[None, Some(3.6), None]);
             core.reset();
             core.set_auto_tare(false);
+            core.on_notification(Source::De1State, &[2, 0], 1);
             pour_on_frame(&mut core, 1);
             assert_eq!(feed_weights(&mut core, 4.0, 0.0, 1_100, 1).len(), 1);
         }

@@ -48,6 +48,7 @@ use de1_domain::{BrewOverrides, CremaProfile};
 use de1_protocol::{MachineState, StateInfo};
 use typeshare::typeshare;
 
+use crate::packet_sync::LinkSession;
 use crate::{CoreOutput, CremaCore, Event, ms_to_duration};
 
 /// Waits before the retries of a failed sync upload: the first three
@@ -117,9 +118,6 @@ pub(crate) struct SyncTag {
 pub(crate) struct ProfileSync {
     desired: Option<Desired>,
     last_pushed: Option<String>,
-    /// A `StateInfo` arrived on this generation's link: the core's last
-    /// state is this connection's, not one from before the drop.
-    state_seen: bool,
     /// The sync upload running, if any.
     in_flight: Option<SyncTag>,
     /// Failures since the last success.
@@ -171,7 +169,6 @@ impl ProfileSync {
     /// The link is gone: a new generation. Returns whether a raised warning
     /// must be cleared.
     fn disconnected(&mut self) -> bool {
-        self.state_seen = false;
         self.last_pushed = None;
         self.in_flight = None;
         self.attempt = 0;
@@ -188,18 +185,12 @@ impl ProfileSync {
         self.retry_at = None;
     }
 
-    /// A `StateInfo` arrived. Returns whether it is the first of this
-    /// generation.
-    fn state_seen(&mut self) -> bool {
-        !std::mem::replace(&mut self.state_seen, true)
-    }
-
     /// The desired profile to upload now, if one is due and the machine can
     /// take it (`ready`).
-    fn due(&self, now: Duration, ready: bool, settled: bool) -> Option<Desired> {
+    fn due(&self, now: Duration, ready: bool, link: LinkSession) -> Option<Desired> {
         let desired = self.desired.as_ref()?;
-        let due = settled
-            && self.state_seen
+        let due = link.settled
+            && link.state_seen
             && ready
             && self.in_flight.is_none()
             && self.last_pushed.as_ref() != Some(&desired.fingerprint)
@@ -358,6 +349,7 @@ impl CremaCore {
     pub(crate) fn link_lost_session(&mut self, out: &mut CoreOutput) {
         self.link.generation = self.link.generation.wrapping_add(1);
         self.link.settled = false;
+        self.link.state_seen = false;
         self.packet_sync_new_generation();
         if self.profile_sync.disconnected() {
             out.events.push(Event::ProfileSyncWarning { active: false });
@@ -365,14 +357,16 @@ impl CremaCore {
     }
 
     /// A `StateInfo` notification arrived, before
-    /// [`handle_state`](Self::handle_state) records it. The first of a
-    /// generation makes the machine's state known again after a drop; when
-    /// it repeats the state from before the drop (no change for
-    /// `handle_state` to act on) a deferred upload is driven here.
-    pub(crate) fn profile_sync_state_seen(&mut self, info: StateInfo, out: &mut CoreOutput) {
-        if self.profile_sync.state_seen() && self.last_state == Some(info) {
+    /// [`handle_state`](Self::handle_state) records it. Returns whether it is
+    /// the first of this generation, which makes the machine's state known
+    /// again after a drop; when it repeats the state from before the drop (no
+    /// change for `handle_state` to act on) a deferred upload is driven here.
+    pub(crate) fn link_state_seen(&mut self, info: StateInfo, out: &mut CoreOutput) -> bool {
+        let first = !std::mem::replace(&mut self.link.state_seen, true);
+        if first && self.last_state == Some(info) {
             self.drive_profile_sync(out);
         }
+        first
     }
 
     /// Settle this generation's link: the on-ready connect sweep calls it
@@ -475,7 +469,7 @@ impl CremaCore {
             // A start past its sync stage is flushing or requesting Espresso.
             && !self.start_past_sync()
             && self.last_state.is_some_and(|s| idle_enough(s.state));
-        let Some(desired) = self.profile_sync.due(self.clock, ready, self.link.settled) else {
+        let Some(desired) = self.profile_sync.due(self.clock, ready, self.link) else {
             return;
         };
         match self.upload_crema_profile(&desired.profile, &desired.qc, self.clock) {
@@ -576,8 +570,11 @@ mod tests {
     fn f7_4_retry_backoff_schedule() {
         let mut sync = ProfileSync::default();
         sync.settled();
-        assert!(sync.state_seen(), "the first state of the generation");
-        assert!(!sync.state_seen(), "only the first");
+        let link = LinkSession {
+            settled: true,
+            state_seen: true,
+            ..LinkSession::default()
+        };
         sync.set_desired(Some(desired("a")));
         let mut now = Duration::ZERO;
         let mut warnings = 0;
@@ -589,10 +586,10 @@ mod tests {
             let at = sync.retry_at.expect("a retry is scheduled");
             assert_eq!(at - now, Duration::from_secs(expected));
             assert!(
-                sync.due(at - Duration::from_millis(1), true, true)
+                sync.due(at - Duration::from_millis(1), true, link)
                     .is_none()
             );
-            assert!(sync.due(at, true, true).is_some());
+            assert!(sync.due(at, true, link).is_some());
             now = at;
         }
         assert_eq!(warnings, 1, "one warning for the streak");

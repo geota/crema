@@ -1731,7 +1731,7 @@ export type Event =
 	weight_configured?: number;
 	/**
 	 * Why [`weight`] is not armed despite [`weight_configured`] being set
-	 * — `"no-scale"` or `"untared-cup"`. `None` when the leg is armed,
+	 * — `"no-scale"`, `"began-unseen"` or `"untared-cup"`. `None` when the leg is armed,
 	 * nothing is configured, or the user turned the stop off (a choice,
 	 * not an impediment).
 	 */

@@ -28,7 +28,8 @@
 //! - [`flow`] — [`FlowEstimator`], robust weight/mass-flow estimation for SAW.
 //! - [`filter`] — [`median`](filter::median) computation, for smoothing a
 //!   vibration-noisy signal.
-//! - [`session`] — [`SessionTimer`], the timing core shared by the monitors.
+//! - [`session`] — [`SessionTimer`], the timing core shared by the monitors,
+//!   and [`Session`](session::Session), what's known about the running flow.
 //! - [`bean`] — pure roast-classification helpers ([`roast_band`],
 //!   [`days_off_roast`], [`roast_freshness`]) plus the bean library
 //!   types ([`Bean`], [`Roaster`], [`ShotBean`], [`BeanOrigin`],

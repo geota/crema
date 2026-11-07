@@ -20,6 +20,7 @@
 
 use crate::*;
 use de1_domain::HotWaterMode;
+use std::time::Duration;
 
 fn bookoo(g: f32) -> [u8; 20] {
     let c = (g * 100.0).round() as u32;
@@ -50,12 +51,6 @@ fn state_writes(o: &CoreOutput) -> Vec<u8> {
             _ => None,
         })
         .collect()
-}
-fn scale_writes(o: &CoreOutput) -> usize {
-    o.commands
-        .iter()
-        .filter(|c| matches!(c, Command::WriteScale { .. }))
-        .count()
 }
 const SAMPLE: [u8; 19] = [
     0x12, 0x34, 0x90, 0x00, 0x28, 0x00, 0x5C, 0x80, 0x00, 0x58, 0x00, 0x5A, 0x00, 0x5D, 0x00, 0x60,
@@ -146,28 +141,146 @@ fn p2_hot_water_scale_stall_has_no_fallback() {
     assert!(stops.is_empty());
 }
 
-/// P3: first state seen mid-pour: a full cup is tared.
-/// Flips in PR 3: no tare.
-#[test]
-fn p3_late_join_mid_pour_tares_the_cup() {
+/// A scale write that tares a Bookoo.
+fn tares(o: &CoreOutput) -> usize {
+    o.commands
+        .iter()
+        .filter(|c| matches!(c, Command::WriteScale { data } if data.starts_with(&[3, 0x0A, 1])))
+        .count()
+}
+
+/// A connected scale and a 36 g target on a fresh core, with 20 g on the scale.
+fn core_with_cup() -> CremaCore {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_profile_target_weight(Some(36.0));
     core.on_notification(Source::ScaleWeight, &bookoo(20.0), 0);
+    core
+}
+
+/// P3: first state seen mid-pour: the cup keeps its weight.
+#[test]
+fn p3_late_join_mid_pour_leaves_the_cup_alone() {
+    let mut core = core_with_cup();
     let o = core.on_notification(Source::De1State, &[4, 5], 100);
-    assert!(scale_writes(&o) > 0, "tare sent mid-pour");
-    assert!(core.tare_gate.is_some(), "tare fired mid-pour");
+    assert_eq!(tares(&o), 0);
+    assert!(core.tare_gate.is_none());
+    assert!(!core.auto_tare_pending);
 
     // Kept session: the link dropped at Idle, a shot started at the GHC meanwhile.
-    let mut core = CremaCore::new();
-    core.connect_scale("BOOKOO_SC", &[]);
-    core.set_profile_target_weight(Some(36.0));
-    core.on_notification(Source::De1State, &[2, 0], 0);
-    core.on_notification(Source::ScaleWeight, &bookoo(20.0), 10);
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
     core.de1_link_lost();
     let o = core.on_notification(Source::De1State, &[4, 5], 9000);
-    assert!(scale_writes(&o) > 0);
-    assert!(core.tare_gate.is_some());
+    assert_eq!(tares(&o), 0);
+    assert!(core.tare_gate.is_none());
+}
+
+/// A shot first seen flowing runs on volume and time: its scale reading says
+/// nothing about the cup, so no weight stop, however far past target it reads.
+#[test]
+fn an_unseen_shot_never_stops_on_weight() {
+    let mut core = core_with_cup();
+    core.set_max_shot_duration(Some(30.0));
+    let mut out = core.on_notification(Source::De1State, &[4, 5], 100);
+    let (armed, targets) = core.stop_targets_projection();
+    assert!(armed);
+    assert_eq!(targets.weight, None);
+    assert_eq!(targets.max_time, Some(30.0));
+    assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
+    for i in 0..20u64 {
+        let t = 200 + i * 100;
+        out = core.on_notification(Source::ScaleWeight, &bookoo(60.0 + i as f32), t);
+        assert!(state_writes(&out).is_empty(), "stopped at {t}");
+    }
+    assert!(
+        out.events.iter().all(|e| !matches!(
+            e,
+            Event::SawAutoZeroed { .. } | Event::SawSuppressedUntaredCup { .. }
+        )),
+        "the untared-cup guard is for a shot that was tared"
+    );
+    let o = core.on_notification(Source::De1ShotSample, &sample(0), 31_000);
+    assert_eq!(state_writes(&o), [MachineState::Idle as u8]);
+}
+
+/// The first substate decides: a first state in a pre-flow substate is a start
+/// the app did see, so it's tared and stops on weight.
+#[test]
+fn a_shot_first_seen_heating_is_tared_and_stops_on_weight() {
+    let mut core = core_with_cup();
+    let o = core.on_notification(Source::De1State, &[4, 2], 100);
+    assert_eq!(core.weight_stop_blocked_by(), None);
+    let o2 = core.on_notification(Source::De1State, &[4, 5], 200);
+    assert_eq!(tares(&o) + tares(&o2), 1, "the fallback tare at first flow");
+    assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
+}
+
+/// A drop mid-shot isn't a late join: the session outlives it (the #15 class).
+#[test]
+fn a_shot_seen_from_its_start_keeps_its_weight_stop_across_a_drop() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 2_000);
+    core.de1_link_lost();
+    let o = core.on_notification(Source::De1State, &[4, 5], 3_000);
+    assert_eq!(tares(&o), 0);
+    assert_eq!(core.weight_stop_blocked_by(), None);
+    assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
+    let mut stops = vec![];
+    for i in 0..60u64 {
+        let g = i as f32;
+        let o = core.on_notification(Source::ScaleWeight, &bookoo(g), 3_100 + i * 100);
+        stops.extend(state_writes(&o));
+    }
+    assert_eq!(stops.first(), Some(&(MachineState::Idle as u8)));
+}
+
+/// `Unseen` ends with its session: the next shot is tared and stops on weight.
+#[test]
+fn the_shot_after_an_unseen_one_is_seen() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[4, 5], 100);
+    assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
+    core.on_notification(Source::De1State, &[2, 0], 5_000);
+    assert_eq!(core.weight_stop_blocked_by(), None);
+    assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
+    let o = core.on_notification(Source::De1State, &[4, 5], 9_000);
+    assert_eq!(tares(&o), 1);
+}
+
+/// A teardown ends the session, so the same pour is a late join afterwards.
+#[test]
+fn a_reset_mid_shot_makes_the_pour_a_late_join() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    core.reset();
+    let o = core.on_notification(Source::De1State, &[4, 5], 3_000);
+    assert_eq!(tares(&o), 0);
+    assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
+}
+
+/// An outage is timed from its first drop, on the core's own clock, and a
+/// teardown has none.
+#[test]
+fn the_link_records_when_an_outage_began() {
+    let mut core = CremaCore::new();
+    core.on_notification(Source::De1State, &[2, 0], 5_000);
+    assert!(core.link.state_seen);
+    core.de1_link_lost();
+    assert!(!core.link.state_seen);
+    assert_eq!(core.link.lost_at, Some(Duration::from_secs(5)));
+    // A failed reconnect, with no state heard: the same outage.
+    core.on_tick(9_000);
+    core.de1_link_lost();
+    assert_eq!(core.link.lost_at, Some(Duration::from_secs(5)));
+    core.on_notification(Source::De1State, &[2, 0], 12_000);
+    core.de1_link_lost();
+    assert_eq!(core.link.lost_at, Some(Duration::from_secs(12)));
+    core.reset();
+    assert_eq!(core.link.lost_at, None);
 }
 
 /// P4: nothing armed at first flow; a scale arrives during Pouring.
@@ -205,6 +318,7 @@ fn p5_silent_scale_demotes_volume_and_is_never_flagged() {
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_profile_target_weight(Some(36.0));
     core.set_profile_volume_limit(Some(40.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let mut stops = vec![];
     let mut watchdog = vec![];
@@ -446,10 +560,10 @@ fn q3_mirror_clock_mismatch_kills_scale_every_tick() {
     assert_eq!(dead, 10);
 }
 
-/// Q5: hot water that began during an outage counts as seen: tared mid-pour.
-/// Flips in PR 3: no tare.
+/// Q5: hot water that began during an outage isn't tared and has no weight
+/// stop, the same as a pour the app opened on.
 #[test]
-fn q5_hot_water_begun_during_outage_is_tared() {
+fn q5_hot_water_begun_during_outage_is_left_alone() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
@@ -459,8 +573,21 @@ fn q5_hot_water_begun_during_outage_is_tared() {
     core.de1_link_lost();
     core.on_notification(Source::ScaleWeight, &bookoo(90.0), 30);
     let o = core.on_notification(Source::De1State, &[6, 5], 2000);
-    assert!(scale_writes(&o) > 0);
-    assert!(core.tare_gate.is_some());
+    assert_eq!(tares(&o), 0);
+    assert!(core.tare_gate.is_none());
+    assert_eq!(core.hot_water_stop_target_g, None);
+}
+
+/// Hot water first seen heating is a start the app saw.
+#[test]
+fn hot_water_first_seen_heating_arms_its_stop() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
+    core.set_steam_hotwater_targets(&steam_targets(HotWaterMode::Volume));
+    let o = core.on_notification(Source::De1State, &[6, 2], 10);
+    assert_eq!(tares(&o), 1);
+    assert!(core.hot_water_stop_target_g.is_some());
 }
 
 /// Q6: physical tare at 20 g of 36: the overshoot equals what was in the cup.
@@ -471,6 +598,7 @@ fn q6_physical_tare_mid_shot() {
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
     core.set_profile_target_weight(Some(36.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let (mut t, mut real) = (100u64, 0.0f32);
     let mut stop_at = None;
@@ -576,6 +704,7 @@ fn review_scale_gap_rearms_a_passed_volume_limit() {
     core.set_auto_tare(false);
     core.set_profile_target_weight(Some(36.0));
     core.set_profile_volume_limit(Some(36.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let mut t = 100;
     let mut volume_stop = false;
@@ -615,6 +744,7 @@ fn review_owed_stop_survives_a_25_s_outage() {
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
     core.set_profile_target_weight(Some(36.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let mut t = 0;
     let mut g = 0.0;
@@ -632,13 +762,13 @@ fn review_owed_stop_survives_a_25_s_outage() {
     assert_eq!(state_writes(&o), vec![2]);
 }
 
-/// Review: a step-weight exit fires in a pour first seen mid-flow, on a tare
-/// that was never good. Flips in PR 5: no `SkipToNext`.
+/// Review: a pour first seen mid-flow never skips a step: the reading is the
+/// cup, not the step's yield. PR 5 lists this, but it has to land with the
+/// removed tare, or an untared cup would skip at once.
 #[test]
-fn review_unseen_pour_can_send_skip_to_next() {
+fn review_unseen_pour_sends_no_skip_to_next() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_auto_tare(false);
     let mut p = de1_domain::cold_maintenance_profile();
     p.steps[0].weight = Some(3.0);
     let s = p.steps[0].clone();
@@ -657,5 +787,5 @@ fn review_unseen_pour_can_send_skip_to_next() {
         let o = core.on_notification(Source::ScaleWeight, &bookoo(20.0), t + 1);
         skips += state_writes(&o).iter().filter(|b| **b == 14).count();
     }
-    assert!(skips >= 1);
+    assert_eq!(skips, 0);
 }

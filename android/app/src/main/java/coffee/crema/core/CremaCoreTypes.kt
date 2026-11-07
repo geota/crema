@@ -1494,7 +1494,7 @@ data class EventStopTargetsArmedInner (
 	/// with a reason, rather than silently dropping it.
 	val weight_configured: Float? = null,
 	/// Why [`weight`] is not armed despite [`weight_configured`] being set
-	/// — `"no-scale"` or `"untared-cup"`. `None` when the leg is armed,
+	/// — `"no-scale"`, `"began-unseen"` or `"untared-cup"`. `None` when the leg is armed,
 	/// nothing is configured, or the user turned the stop off (a choice,
 	/// not an impediment).
 	val weight_blocked: String? = null
