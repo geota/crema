@@ -68,17 +68,25 @@ export async function uploadBackup(
 	return (await res.json()) as DriveFile;
 }
 
-/** List this app's backup files, newest first. */
+/** List this app's backup files, newest first: all of them, so an older good
+ *  copy can still be picked. */
 export async function listBackups(accessToken: string): Promise<DriveFile[]> {
 	const q = encodeURIComponent("name contains 'crema-backup' and trashed = false");
-	const url =
-		`${FILES_URL}?q=${q}` +
-		`&fields=${encodeURIComponent('files(id,name,modifiedTime,size)')}` +
-		`&orderBy=modifiedTime%20desc&pageSize=50`;
-	const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-	if (!res.ok) await failOn(res, 'list');
-	const data = (await res.json()) as { files?: DriveFile[] };
-	return data.files ?? [];
+	const files: DriveFile[] = [];
+	let pageToken: string | undefined;
+	do {
+		const page = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
+		const url =
+			`${FILES_URL}?q=${q}` +
+			`&fields=${encodeURIComponent('nextPageToken,files(id,name,modifiedTime,size)')}` +
+			`&orderBy=modifiedTime%20desc&pageSize=100${page}`;
+		const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+		if (!res.ok) await failOn(res, 'list');
+		const data = (await res.json()) as { files?: DriveFile[]; nextPageToken?: string };
+		files.push(...(data.files ?? []));
+		pageToken = data.nextPageToken;
+	} while (pageToken);
+	return files;
 }
 
 /** Download a backup file's raw bytes by id (a `.crema.zip`, or legacy text). The

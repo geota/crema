@@ -2149,6 +2149,14 @@ pub fn auto_backup_file_name(
     ))
 }
 
+/// What a backup's name says about it, as a `BackupFileInfo` JSON. See
+/// [`de1_domain::describe_backup_file`].
+#[uniffi::export]
+#[must_use]
+pub fn describe_backup_file(name: String) -> String {
+    de1_domain::describe_backup_file_json(&name)
+}
+
 /// What to prune after an automatic upload, as an `AutoBackupRetention` JSON.
 /// See [`de1_domain::auto_backup_retention`].
 ///

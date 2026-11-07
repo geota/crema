@@ -3,6 +3,7 @@ package coffee.crema.drive
 import coffee.crema.core.AutoBackupRetention
 import coffee.crema.core.BackupCounts
 import coffee.crema.core.BackupFile
+import coffee.crema.core.BackupFileInfo
 import coffee.crema.core.BackupShrink
 import coffee.crema.core.BackupShrinkKind
 import coffee.crema.core.CallbackOutcome
@@ -13,6 +14,7 @@ import coffee.crema.core.SyncFailure
 import coffee.crema.core.SyncFailureRejectedInner
 import coffee.crema.core.autoBackupFileName
 import coffee.crema.core.autoBackupRetention
+import coffee.crema.core.describeBackupFile
 import coffee.crema.core.callbackOutcome
 import coffee.crema.core.reconnectNoticeDue
 import coffee.crema.runCatchingCancellable
@@ -33,7 +35,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import java.io.IOException
 import java.time.Instant
 import java.util.UUID
 
@@ -67,6 +68,22 @@ internal fun newAutoBackupTag(): String = UUID.randomUUID().toString().take(6)
 internal fun DriveFile.toBackupFile(): BackupFile? =
     runCatching { BackupFile(id, name, Instant.parse(modifiedTime).toEpochMilli()) }.getOrNull()
 
+/** One backup in the picker. [modifiedMs] is null when Drive's time can't be read. */
+data class DriveBackupRow(val id: String, val modifiedMs: Long?, val info: BackupFileInfo)
+
+internal fun DriveFile.toBackupRow(json: Json) = DriveBackupRow(
+    id = id,
+    modifiedMs = toBackupFile()?.modifiedMs,
+    info = json.decodeFromString(BackupFileInfo.serializer(), describeBackupFile(name)),
+)
+
+/** The picker's second line: what's known of a backup, of device, counts, kind. */
+internal fun DriveBackupRow.subtitle(): String = listOfNotNull(
+    info.device,
+    info.counts?.let { "${it.shots} shots, ${it.curves} with curves" },
+    if (info.automatic) "Daily" else "Manual",
+).joinToString(" · ")
+
 /** What to tell the user when a backup came out far smaller than the last. */
 internal fun shrinkNotice(shrink: BackupShrink): String {
     val what = when (shrink.kind) {
@@ -85,6 +102,8 @@ class DriveSync(
     private val clientId: String,
     /** Surface a user-facing message (the VM's snackbar channel). */
     private val notify: (String) -> Unit,
+    /** A line for the event log and diagnostics, not the user. */
+    private val log: (String) -> Unit = {},
     /** Produce the `.crema.zip` backup bytes, or null (+ its own notice) when
      *  empty. Suspends: the build runs off Main (LibraryController). */
     private val backupZip: suspend () -> BackupZip?,
@@ -128,6 +147,8 @@ class DriveSync(
         val needsReconnect: Boolean = false,
         /** The last run's lasting status, or null when there's nothing to say. */
         val healthLine: String? = null,
+        /** The backups to pick from, newest first, while the picker is open. */
+        val backups: List<DriveBackupRow>? = null,
     )
 
     private val _state = MutableStateFlow(UiState(configured = clientId.isNotBlank()))
@@ -521,22 +542,41 @@ class DriveSync(
             )
             plan.shrink?.let { notify(shrinkNotice(it)) }
             withToken(tokens) { token -> plan.delete.forEach { trashFile(token, it) } }
-        }
+        }.onFailure { log("Drive backup prune failed: ${it.message}") }
     }
 
-    /** Download the newest Drive backup and hand its text to [applyRestore]. */
-    fun restoreLatest(wipe: Boolean) {
+    /** List what's in Drive and open the picker: every backup, manual or daily,
+     *  from any device, as the newest isn't always the one that's wanted. */
+    fun openBackupPicker() {
         scope.launch {
             if (!ownState.await()) return@launch
             val tokens = tokenForUser("restore") ?: return@launch
             _state.update { it.copy(busy = true) }
-            runCatchingCancellable {
-                withToken(tokens) { token ->
-                    val newest = listBackups(token).firstOrNull()
-                        ?: throw IOException("No Crema backups found in Google Drive")
-                    downloadBackup(token, newest.id)
+            runCatchingCancellable { withToken(tokens) { listBackups(it) }.map { it.toBackupRow(json) } }
+                .onSuccess { rows ->
+                    if (rows.isEmpty()) notify("No Crema backups found in Google Drive")
+                    else _state.update { it.copy(backups = rows) }
                 }
-            }
+                .onFailure { e ->
+                    val failure = (e as? NoDriveToken)?.failure
+                    if (failure != SyncFailure.SessionEnded) {
+                        notify("Couldn't list your Google Drive backups: ${failure?.let { driveFailureLine(it, e.message) } ?: e.message}")
+                    }
+                }
+            _state.update { it.copy(busy = false) }
+        }
+    }
+
+    /** The picker was dismissed. */
+    fun closeBackupPicker() = _state.update { it.copy(backups = null) }
+
+    /** Download the backup [fileId] and hand its bytes to [applyRestore]. */
+    fun restoreBackup(fileId: String, wipe: Boolean) {
+        scope.launch {
+            if (!ownState.await()) return@launch
+            val tokens = tokenForUser("restore") ?: return@launch
+            _state.update { it.copy(busy = true, backups = null) }
+            runCatchingCancellable { withToken(tokens) { downloadBackup(it, fileId) } }
                 .onSuccess { bytes -> applyRestore(bytes, wipe) }
                 .onFailure { e ->
                     val failure = (e as? NoDriveToken)?.failure
