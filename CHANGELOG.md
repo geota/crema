@@ -9,6 +9,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Pick any Drive backup to restore** — Restore from Drive now lists every
+  backup in your Drive, manual or daily, from any device, newest first, with its
+  date and device and, for daily backups, its shot and curve counts. Pick one,
+  then Merge or Replace. Android gains Replace from Drive here, behind Type
+  ERASE. This replaces Restore latest, which could only reach the newest copy.
+  Android and web.
 - **Pick a brew's date and time, and change it later** — Log brew on Android
   now has a When field with a date and time picker in place of "Logged N min
   ago", defaulting to now, as on the web. Both apps can change the date of a

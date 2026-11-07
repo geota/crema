@@ -131,7 +131,7 @@ export function describeBackupGaps(c: BackupContents): string {
 
 /**
  * Why a built backup shouldn't go to Drive, or `null`. A local file is the
- * user's to keep or not, but Restore latest takes whatever is newest in Drive,
+ * user's to keep or not, but a restore from Drive starts at whatever is newest,
  * so a copy that lost its curves to a failed read must not land there.
  */
 export function driveBackupRefusal(c: BackupContents): string | null {

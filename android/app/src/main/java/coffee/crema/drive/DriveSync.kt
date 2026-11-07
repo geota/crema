@@ -3,11 +3,13 @@ package coffee.crema.drive
 import coffee.crema.core.AutoBackupRetention
 import coffee.crema.core.BackupCounts
 import coffee.crema.core.BackupFile
+import coffee.crema.core.BackupFileInfo
 import coffee.crema.core.BackupShrink
 import coffee.crema.core.BackupShrinkKind
 import coffee.crema.core.CallbackOutcome
 import coffee.crema.core.autoBackupFileName
 import coffee.crema.core.autoBackupRetention
+import coffee.crema.core.describeBackupFile
 import coffee.crema.core.callbackOutcome
 import coffee.crema.core.initialAutoBackupKeep
 import coffee.crema.core.ownAutoBackupCount
@@ -26,7 +28,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import java.io.IOException
 import java.time.Instant
 
 /*
@@ -52,6 +53,22 @@ class BackupZip(val bytes: ByteArray, val counts: BackupCounts)
  *  which leaves that file alone. */
 internal fun DriveFile.toBackupFile(): BackupFile? =
     runCatching { BackupFile(id, name, Instant.parse(modifiedTime).toEpochMilli()) }.getOrNull()
+
+/** One backup in the picker. [modifiedMs] is null when Drive's time can't be read. */
+data class DriveBackupRow(val id: String, val modifiedMs: Long?, val info: BackupFileInfo)
+
+internal fun DriveFile.toBackupRow(json: Json) = DriveBackupRow(
+    id = id,
+    modifiedMs = toBackupFile()?.modifiedMs,
+    info = json.decodeFromString(BackupFileInfo.serializer(), describeBackupFile(name)),
+)
+
+/** The picker's second line: what's known of a backup, of device, counts, kind. */
+internal fun DriveBackupRow.subtitle(): String = listOfNotNull(
+    info.device,
+    info.counts?.let { "${it.shots} shots, ${it.curves} with curves" },
+    if (info.automatic) "Daily" else "Manual",
+).joinToString(" · ")
 
 /** What to tell the user when a backup came out far smaller than the last. */
 internal fun shrinkNotice(shrink: BackupShrink): String {
@@ -98,6 +115,8 @@ class DriveSync(
         val connected: Boolean = false,
         /** True while a sign-in / backup / restore runs. */
         val busy: Boolean = false,
+        /** The backups to pick from, newest first, while the picker is open. */
+        val backups: List<DriveBackupRow>? = null,
     )
 
     private val _state = MutableStateFlow(UiState(configured = clientId.isNotBlank()))
@@ -365,16 +384,31 @@ class DriveSync(
         }
     }
 
-    /** Download the newest Drive backup and hand its text to [applyRestore]. */
-    fun restoreLatest(wipe: Boolean) {
+    /** List what's in Drive and open the picker: every backup, manual or daily,
+     *  from any device, as the newest isn't always the one that's wanted. */
+    fun openBackupPicker() {
         scope.launch {
             val token = freshToken() ?: run { notify("Connect Google Drive first"); return@launch }
             _state.update { it.copy(busy = true) }
-            runCatching {
-                val newest = driveListBackups(token, json).firstOrNull()
-                    ?: throw IOException("No Crema backups found in Google Drive")
-                driveDownloadBackup(token, newest.id, json)
-            }
+            runCatching { driveListBackups(token, json).map { it.toBackupRow(json) } }
+                .onSuccess { rows ->
+                    if (rows.isEmpty()) notify("No Crema backups found in Google Drive")
+                    else _state.update { it.copy(backups = rows) }
+                }
+                .onFailure { notify("Couldn't list your Google Drive backups: ${it.message}") }
+            _state.update { it.copy(busy = false) }
+        }
+    }
+
+    /** The picker was dismissed. */
+    fun closeBackupPicker() = _state.update { it.copy(backups = null) }
+
+    /** Download the backup [fileId] and hand its bytes to [applyRestore]. */
+    fun restoreBackup(fileId: String, wipe: Boolean) {
+        scope.launch {
+            val token = freshToken() ?: run { notify("Connect Google Drive first"); return@launch }
+            _state.update { it.copy(busy = true, backups = null) }
+            runCatching { driveDownloadBackup(token, fileId, json) }
                 .onSuccess { bytes -> applyRestore(bytes, wipe) }
                 .onFailure { notify("Google Drive restore failed: ${it.message}") }
             _state.update { it.copy(busy = false) }

@@ -76,7 +76,8 @@
 		uploadUnsentDecentShots
 	} from '#lib/decent/index.js';
 	import { getMachineReadout } from '#lib/state/index.js';
-	import { downloadBackup, listBackups, uploadBackup } from '#lib/drive/rest.js';
+	import { backupDate, backupSubtitle } from '#lib/drive/backup-list.js';
+	import { downloadBackup, listBackups, uploadBackup, type DriveFile } from '#lib/drive/rest.js';
 
 	const history = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -436,14 +437,31 @@
 		}
 	}
 
-	/** Restore the most-recent Drive backup — merge (add) or replace (wipe first). */
-	async function driveRestore(mode: RestoreMode): Promise<void> {
+	/** The backups to pick from, newest first, while the list is open. */
+	let driveFiles = $state<DriveFile[] | null>(null);
+
+	/** List what's in Drive: any backup can be restored, not just the newest. */
+	async function driveChoose(): Promise<void> {
+		driveBusy = true;
+		driveNote = 'Fetching from Drive…';
+		try {
+			const files = await listBackups(await drive.accessToken());
+			driveFiles = files.length > 0 ? files : null;
+			driveNote = files.length > 0 ? null : 'No backups found in Drive.';
+		} catch (err) {
+			driveNote = err instanceof Error ? `Drive list failed: ${err.message}` : 'Drive list failed.';
+		} finally {
+			driveBusy = false;
+		}
+	}
+
+	/** Restore the backup `file` — merge (add) or replace (wipe first). */
+	async function driveRestore(file: DriveFile, mode: RestoreMode): Promise<void> {
 		if (
 			mode === 'wipe' &&
 			!(await confirmDialog({
 				title: 'Replace from Drive?',
-				message:
-					"Replace everything on this device with your latest Google Drive backup? Your current profiles, beans, roasters and shots are deleted first. This can't be undone.",
+				message: `Replace everything on this device with your Google Drive backup from ${backupDate(file)}? Your current profiles, beans, roasters and shots are deleted first. This can't be undone.`,
 				confirmLabel: 'Replace',
 				danger: true
 			}))
@@ -454,15 +472,11 @@
 		driveNote = 'Fetching from Drive…';
 		try {
 			const token = await drive.accessToken();
-			const files = await listBackups(token);
-			if (files.length === 0) {
-				driveNote = 'No backups found in Drive.';
-				return;
-			}
-			const bytes = await downloadBackup(token, files[0].id);
+			const bytes = await downloadBackup(token, file.id);
 			const r = await restoreBackupData(bytes, mode);
+			driveFiles = null;
 			driveNote =
-				`Restored from Drive (${files[0].name}) — ${r.profiles} profile(s), ` +
+				`Restored from Drive (${file.name}) — ${r.profiles} profile(s), ` +
 				`${r.beans} bean(s), ${r.shots} shot(s)${r.settingsApplied ? ' + settings.' : '.'}` +
 				historyDroppedNotice(r.droppedShots, history.capacity);
 			if (r.held && !(await confirmHeldRestoreChanges(r.held))) {
@@ -696,7 +710,7 @@
 	title="Google Drive"
 	sub={driveNote ??
 		(drive.connected
-			? 'Back up to your Drive or restore your most recent backup. Crema only sees the files it created.'
+			? 'Back up to your Drive or restore a backup from it. Crema only sees the files it created.'
 			: drive.configured
 				? 'Connect Google Drive to back up online (drive.file — Crema only sees its own backups).'
 				: 'Set VITE_GOOGLE_DRIVE_CLIENT_ID in web/.env.local to enable Drive backup.')}
@@ -713,32 +727,34 @@
 				/>
 			{/snippet}
 		</StRow>
-		<StRow
-			title="Restore latest — merge"
-			sub="Add anything from your most-recent Drive backup; keeps your current data."
-		>
+		<StRow title="Restore from Drive" sub="Choose a backup to merge or replace.">
 			{#snippet control()}
 				<StButton
-					label={driveBusy ? 'Working…' : 'Merge'}
+					label={driveBusy ? 'Working…' : 'Restore…'}
 					icon="cloud-arrow-down"
 					disabled={driveBusy}
-					onClick={() => driveRestore('merge')}
+					onClick={driveChoose}
 				/>
 			{/snippet}
 		</StRow>
-		<StRow
-			title="Restore latest — replace"
-			sub="Wipe this device, then restore fully from your most-recent Drive backup."
-		>
-			{#snippet control()}
-				<StButton
-					label={driveBusy ? 'Working…' : 'Replace'}
-					icon="trash"
-					disabled={driveBusy}
-					onClick={() => driveRestore('wipe')}
-				/>
-			{/snippet}
-		</StRow>
+		{#each driveFiles ?? [] as file (file.id)}
+			<StRow title={backupDate(file)} sub={backupSubtitle(file)}>
+				{#snippet control()}
+					<StButton
+						label="Merge"
+						icon="cloud-arrow-down"
+						disabled={driveBusy}
+						onClick={() => driveRestore(file, 'merge')}
+					/>
+					<StButton
+						label="Replace"
+						icon="trash"
+						disabled={driveBusy}
+						onClick={() => driveRestore(file, 'wipe')}
+					/>
+				{/snippet}
+			</StRow>
+		{/each}
 		<StRow title="Disconnect Google Drive" sub="Forget the Drive sign-in on this device.">
 			{#snippet control()}
 				<StButton label="Disconnect" icon="sign-out" onClick={() => drive.signOut()} />

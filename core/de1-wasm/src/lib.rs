@@ -2035,6 +2035,14 @@ pub fn export_backup_bundle(
     serde_json::to_string(&built).map_err(|e| e.to_string())
 }
 
+/// What a backup's name says about it, as a `BackupFileInfo` JSON. See
+/// `de1_domain::describe_backup_file`.
+#[wasm_bindgen(js_name = describeBackupFile)]
+#[must_use]
+pub fn describe_backup_file(name: &str) -> String {
+    de1_domain::describe_backup_file_json(name)
+}
+
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the
 /// library `ImportPlan` (beans / roasters / shots) plus `profiles` and
 /// `settings` sections, so the shell's reconcile + apply path is reused.

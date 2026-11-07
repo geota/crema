@@ -25,11 +25,13 @@ import java.nio.file.Files
 import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
  * The daily backup's retention against a fake Drive: what it uploads, what it
- * deletes, and above all what an update doesn't delete.
+ * deletes, and above all what an update doesn't delete. Also the picker, as it
+ * lists and restores from the same Drive.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -56,6 +58,8 @@ class DriveRetentionTest {
     private val drive = CopyOnWriteArrayList<Pair<String, String>>()
     private val deleted = CopyOnWriteArrayList<String>()
     private val pageTokens = CopyOnWriteArrayList<String>()
+    private val restored = CopyOnWriteArrayList<Pair<String, Boolean>>()
+    private var listFails = false
 
     private val now = System.currentTimeMillis()
     private val day = 24L * 60 * 60 * 1000
@@ -76,6 +80,14 @@ class DriveRetentionTest {
                 drive.removeIf { it.first == id }
                 x.sendResponseHeaders(204, -1)
                 x.close()
+                return@createContext
+            }
+            if (x.requestURI.query.orEmpty().contains("alt=media")) {
+                x.respond(200, x.requestURI.path.substringAfterLast('/'))
+                return@createContext
+            }
+            if (listFails) {
+                x.respond(500, "{}")
                 return@createContext
             }
             val token = Regex("pageToken=(\\d+)").find(x.requestURI.query.orEmpty())?.groupValues?.get(1)
@@ -110,6 +122,23 @@ class DriveRetentionTest {
     private fun seed(count: Int, label: String = "tablet", counts: String = "-s100c100", from: Int = 0) {
         for (i in from until from + count) drive += "$label$i" to autoName(i, label, counts)
     }
+
+    private fun picker() = DriveSync(
+        store, json, scope, "cid",
+        notify = { notices += it },
+        backupZip = { null },
+        backupFileName = { "b" },
+        applyRestore = { bytes, wipe -> restored += bytes.decodeToString() to wipe },
+        refreshToken = { error("no refresh expected") },
+    ).also {
+        runBlocking {
+            store.load()
+            store.save(DriveState(tokens = tokens))
+            it.load()
+        }
+    }
+
+    private fun DriveSync.finish() = runBlocking { withTimeout(10_000) { job.children.toList().joinAll() } }
 
     /** One daily run, on a device whose last automatic backup was [lastAuto]. */
     private fun dailyBackup(
@@ -213,10 +242,91 @@ class DriveRetentionTest {
     @Test
     fun aListThatFailsDeletesNothing() {
         seed(12)
-        server.removeContext("/drive/v3/files")
-        server.createContext("/drive/v3/files") { x -> x.respond(500, "{}") }
+        listFails = true
         val state = runCatching { dailyBackup(keep = 3) }
         assertEquals(emptyList(), deleted.toList(), "$state")
+    }
+
+    @Test
+    fun thePickerShowsEveryBackupWhateverMadeIt() {
+        drive += "daily" to "crema-backup-auto-Pixel-Tablet-20261103-0800-s240c238.crema.zip"
+        drive += "old" to "crema-backup-auto-Pixel-20261102-0800.crema.zip"
+        drive += "manual" to "crema-backup-Pixel-20261101-0800.crema.zip"
+        drive += "web" to "crema-backup-web-20261031T0800.crema.zip"
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+
+        val rows = assertNotNull(sync.state.value.backups)
+        assertEquals(
+            listOf(
+                "Pixel-Tablet · 240 shots, 238 with curves · Daily",
+                "Pixel · Daily",
+                "Pixel · Manual",
+                "web · Manual",
+            ),
+            rows.map { it.subtitle() },
+        )
+        assertEquals(Instant.parse(modified(0)).toEpochMilli(), rows.first().modifiedMs)
+    }
+
+    @Test
+    fun thePickerReadsEveryPage() {
+        seed(PAGE + 20)
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        assertEquals(PAGE + 20, sync.state.value.backups?.size)
+    }
+
+    @Test
+    fun aBackupOlderThanTheNewestCanBeRestored() {
+        seed(3)
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        sync.restoreBackup("tablet2", wipe = false)
+        sync.finish()
+        assertEquals(listOf("tablet2" to false), restored.toList())
+        assertEquals(null, sync.state.value.backups, "the picker closes")
+    }
+
+    @Test
+    fun replaceReachesTheRestoreAsAWipe() {
+        seed(1)
+        val sync = picker()
+        sync.restoreBackup("tablet0", wipe = true)
+        sync.finish()
+        assertEquals(listOf("tablet0" to true), restored.toList())
+    }
+
+    @Test
+    fun anEmptyDriveSaysSoAndOpensNothing() {
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        assertEquals(null, sync.state.value.backups)
+        assertTrue("No Crema backups found in Google Drive" in notices, "$notices")
+    }
+
+    @Test
+    fun aListThatFailsSaysSoAndOpensNothing() {
+        listFails = true
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        assertEquals(null, sync.state.value.backups)
+        assertTrue(notices.any { it.startsWith("Couldn't list your Google Drive backups") }, "$notices")
+    }
+
+    @Test
+    fun dismissingThePickerClosesIt() {
+        seed(1)
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        sync.closeBackupPicker()
+        assertEquals(null, sync.state.value.backups)
     }
 
     private companion object {

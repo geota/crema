@@ -2084,6 +2084,14 @@ pub fn auto_backup_file_name(
     Ok(de1_domain::auto_backup_file_name(&backup_name, counts))
 }
 
+/// What a backup's name says about it, as a `BackupFileInfo` JSON. See
+/// [`de1_domain::describe_backup_file`].
+#[uniffi::export]
+#[must_use]
+pub fn describe_backup_file(name: String) -> String {
+    de1_domain::describe_backup_file_json(&name)
+}
+
 /// How many of a `BackupFile` JSON list are automatic copies from the device
 /// that made `uploaded`. See [`de1_domain::own_auto_backup_count`].
 ///

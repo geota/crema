@@ -37,6 +37,18 @@ export interface BackupFile {
 }
 
 /**
+ * What a backup's name says about it, for a list to pick from. Any name will
+ * do: what it doesn't say stays empty.
+ */
+export interface BackupFileInfo {
+	/** The device label, as it went into the name. */
+	device?: string;
+	/** Made by the daily backup, not by hand. */
+	automatic: boolean;
+	counts?: BackupCounts;
+}
+
+/**
  * Whether a bag of coffee is a single-origin lot or a blend. `None` =
  * unknown / unset. Serialises as the lowercase wire string
  * (`"single"` / `"blend"`) to match the TS shell's typed string union.
