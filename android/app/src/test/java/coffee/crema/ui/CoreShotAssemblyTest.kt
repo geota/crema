@@ -120,6 +120,24 @@ class CoreShotAssemblyTest {
         assertEquals(2, vm.ui.value.history.size)
     }
 
+    /** The debit reads what the bag holds as it lands, not what it held at the shot's end. */
+    @Test
+    fun `a debit during assembly isn't undone by the shot's own`() {
+        val bag = coffee.crema.beans.newBean("Bag", null, null, null, 0L).copy(remaining = 200f, bagSize = 250f)
+        val library = coffee.crema.beans.BeanLibrary(listOf(bag), emptyList(), bag.id)
+        java.io.File(VmHarness.app().filesDir, "beanLibrary.json")
+            .writeText(coreJson.encodeToString(coffee.crema.beans.BeanLibrary.serializer(), library))
+        val vm = VmHarness.build(store)
+        VmHarness.awaitStartupLoaded(vm)
+        VmHarness.library(vm).assembling = { vm.library().mutateBean(bag.id) { it.copy(remaining = 150f) } }
+        pour(vm, 48)
+        recorded(vm, 0)
+        val left = vm.ui.value.beans.single().remaining!!
+        assertTrue(left <= 150f, "left $left: the shot debited the 200 g it read")
+    }
+
+    private fun MainViewModel.library() = VmHarness.library(this)
+
     @Test
     fun `the grinder model is frozen at capture`() {
         val vm = VmHarness.build(store)
