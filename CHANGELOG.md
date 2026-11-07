@@ -107,7 +107,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   leave only its backup on disk, and a load could delete a save in progress. A
   wipe restore lost its recipes this way on the next launch, and pinned and
   hidden profiles, maintenance and the stop-at-weight model were open to it too.
-  Saves now take turns, and in those stores the newest save lands last. Android.
+  Saves now take turns, and in those stores and shot history the newest save
+  lands last. Android.
 
 ## [0.10.0] — 2026-10-30
 

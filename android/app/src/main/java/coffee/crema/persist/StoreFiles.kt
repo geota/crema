@@ -86,7 +86,8 @@ private val saveQueues = ConcurrentHashMap<String, Mutex>()
  * Run [block] on IO, after every earlier call for [target], for a store saved as
  * whole snapshots. [SafeFile] keeps overlapping saves from colliding, but not in
  * order: two launched in a row hop to IO on their own, and the older snapshot
- * could land last. The queue is taken before the hop, so call order wins.
+ * could land last. The queue is taken before the hop, so call order wins. A
+ * caller on Main releases its turn on Main, so never block Main on this queue.
  */
 suspend fun <T> inSaveOrder(target: File, block: () -> T): T =
     saveQueues.getOrPut(target.path) { Mutex() }.withLock { withContext(Dispatchers.IO) { block() } }
