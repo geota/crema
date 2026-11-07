@@ -32,7 +32,7 @@ function nameList(what: readonly string[]): string {
 /** The banner's line while saves to `stores` are refused. */
 export function refusedMessage(stores: readonly RefusedStore[]): string {
 	const list = nameList(stores.map((s) => s.what));
-	return `Couldn’t read your ${list}, so changes aren’t being saved.`;
+	return `Couldn’t read your ${list}, so changes aren’t being saved. Try again reloads what’s saved and discards changes made since.`;
 }
 
 /** One line for several unreadable stores ("shot history and bean library"). */

@@ -234,17 +234,25 @@ export function quarantineStored(key: string, raw: string, error: string, what?:
 /**
  * Read + parse a localStorage value, falling back to `fallback` when absent.
  * An unreadable value (parse failure, or `opts.valid` rejects it) is kept
- * aside before the fallback is returned — see the module doc.
+ * aside before the fallback is returned — see the module doc. A key that can't
+ * be read at all is refused until a read works, named or not, and only a named
+ * one shows in the banner.
  */
 export function readJson<T>(key: string, fallback: T, opts: ReadJsonOptions = {}): T {
 	const r = readStored(key);
-	if (r.kind === 'absent') return fallback;
+	if (r.kind === 'absent') {
+		unblock(key);
+		return fallback;
+	}
 	if (r.kind === 'unavailable') {
-		if (opts.what !== undefined) block(key, opts.what);
+		block(key, opts.what);
 		return fallback;
 	}
 	if (r.kind === 'loaded') {
-		if (!opts.valid || opts.valid(r.value)) return r.value as T;
+		if (!opts.valid || opts.valid(r.value)) {
+			unblock(key);
+			return r.value as T;
+		}
 		quarantineStored(key, JSON.stringify(r.value), 'unexpected shape', opts.what);
 		return fallback;
 	}
@@ -321,8 +329,9 @@ export function keepSkippedRows(key: string, rows: readonly unknown[], what: str
 		console.warn(`[storage] ${key}: ${fresh.length} unreadable rows kept at ${skippedKeyOf(key)}`);
 		notify({ kind: 'skipped', key, what, count: fresh.length });
 		return true;
-	} catch {
+	} catch (e) {
 		block(key, what);
+		noticeQuota(key, e);
 		console.warn(`[storage] ${key}: couldn't keep ${rows.length} unreadable rows, saving disabled`);
 		return false;
 	}

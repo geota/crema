@@ -10,7 +10,7 @@ import { RecipeStore } from '#lib/brew/recipes.svelte.js';
 import { HistoryStore } from '#lib/history/store.svelte.js';
 import { MaintenanceStore } from '#lib/maintenance/store.svelte.js';
 import { ProfileStore } from '#lib/profiles/store.svelte.js';
-import { SettingsStore } from '#lib/settings/store.svelte.js';
+import { DEFAULT_SETTINGS, SettingsStore, settingsHotWaterDose } from '#lib/settings/store.svelte.js';
 import { keptAsideBundle, refusedMessage } from '#lib/shell/storage-notices.js';
 import {
 	corruptKeyOf,
@@ -141,12 +141,42 @@ describe('readJson', () => {
 		expect(localStorage.getItem(KEY)).toBe('[1]');
 	});
 
-	it('a cache it cannot read is not', () => {
+	it('a key with no name is refused too, without a banner', () => {
 		localStorage.setItem(KEY, '[1]');
 		unreadable(KEY);
 		expect(readJson(KEY, [])).toEqual([]);
 		vi.restoreAllMocks();
-		expect(writeStore(KEY, [])).toBe('ok');
+		expect(writeStore(KEY, [])).toBe('blocked');
+		expect(localStorage.getItem(KEY)).toBe('[1]');
+		expect(refusedStores()).toEqual([]);
+	});
+
+	it.each([
+		['with a value', '[1]'],
+		['now absent', null]
+	])('a read that works lifts the refusal, %s', (_, value) => {
+		localStorage.setItem(KEY, '[1]');
+		unreadable(KEY);
+		readJson(KEY, [], { what: 'upload queue' });
+		vi.restoreAllMocks();
+		if (value === null) localStorage.removeItem(KEY);
+
+		readJson(KEY, []);
+		expect(writeStore(KEY, [2])).toBe('ok');
+		expect(refusedStores()).toEqual([]);
+	});
+
+	it('a value that fails its check lifts nothing', () => {
+		localStorage.setItem(KEY, '{"not":"a list"}');
+		unreadable(KEY);
+		readJson(KEY, [], { what: 'upload queue' });
+		vi.restoreAllMocks();
+		const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+			throw new DOMException('full', 'QuotaExceededError');
+		});
+		readJson(KEY, [], { valid: Array.isArray, what: 'upload queue' });
+		spy.mockRestore();
+		expect(writeStore(KEY, [])).toBe('blocked');
 	});
 });
 
@@ -200,6 +230,12 @@ describe('keepSkippedRows', () => {
 		expect(refusedStores()).toEqual([{ key: KEY, what: WHAT }]);
 	});
 
+	it('says when storage is full', () => {
+		fillUp();
+		keepSkippedRows(KEY, [{ n: 1 }], WHAT);
+		expect(takeStorageNotices()).toEqual([{ kind: 'quota', key: KEY }]);
+	});
+
 	it('goes in the file the user can save', () => {
 		keepSkippedRows(KEY, [{ n: 1 }], WHAT);
 		const bundle = JSON.parse(keptAsideBundle([KEY])) as Record<string, string | null>;
@@ -210,7 +246,7 @@ describe('keepSkippedRows', () => {
 describe('the banner', () => {
 	it('names every store', () => {
 		expect(refusedMessage([{ key: 'a', what: 'shot history' }])).toBe(
-			'Couldn’t read your shot history, so changes aren’t being saved.'
+			'Couldn’t read your shot history, so changes aren’t being saved. Try again reloads what’s saved and discards changes made since.'
 		);
 		expect(
 			refusedMessage([
@@ -218,7 +254,9 @@ describe('the banner', () => {
 				{ key: 'b', what: 'settings' },
 				{ key: 'c', what: 'bean library' }
 			])
-		).toBe('Couldn’t read your shot history, settings and bean library, so changes aren’t being saved.');
+		).toBe(
+			'Couldn’t read your shot history, settings and bean library, so changes aren’t being saved. Try again reloads what’s saved and discards changes made since.'
+		);
 	});
 });
 
@@ -296,6 +334,17 @@ const STORES: readonly {
 		loadAndSave: () => new MaintenanceStore().addCountedMl(5000)
 	}
 ];
+
+describe('the hot-water marker', () => {
+	it('never reaches the banner under an internal name', () => {
+		const MARKER = 'crema.hotWater';
+		unreadable(MARKER);
+		settingsHotWaterDose({ ...DEFAULT_SETTINGS, qcHotWaterMode: null });
+		vi.restoreAllMocks();
+		expect(writeStore(MARKER, {})).toBe('blocked');
+		expect(refusedStores()).toEqual([]);
+	});
+});
 
 describe('every store', () => {
 	it.each(STORES)('$what: unreadable means refused, never overwritten', ({ key, what, raw, loadAndSave }) => {

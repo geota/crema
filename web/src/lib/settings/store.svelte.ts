@@ -666,10 +666,7 @@ function storedHotWater(s: Settings): StoredHotWater {
 
 /** The downgrade marker (see {@link HOT_WATER_MARKER_KEY}), or `null`. */
 function readHotWaterMarker(): StoredHotWater | null {
-	return readJson<StoredHotWater | null>(HOT_WATER_MARKER_KEY, null, {
-		what: 'hot-water marker',
-		valid: isJsonObject
-	});
+	return readJson<StoredHotWater | null>(HOT_WATER_MARKER_KEY, null, { valid: isJsonObject });
 }
 
 /**
