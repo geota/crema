@@ -13,6 +13,7 @@ import coffee.crema.core.downsampleIndices
 import coffee.crema.core.historyStats as coreHistoryStats
 import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.loadItem
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import coffee.crema.ui.TelemetrySample
@@ -498,9 +499,13 @@ class HistoryStore(private val context: Context, private val json: Json) {
      *  moves it out. */
     suspend fun loadRows(): List<StoredShot> = withContext(Dispatchers.IO) {
         lock.withLock {
-            loadStore(file, "shot history") {
+            val outcome = loadStore(file, "shot history") {
                 json.decodeFromString(ListSerializer(StoredShot.serializer()), it)
-            }.valueOrNull()?.newestFirst() ?: emptyList() // a save before the list kept its order
+            }
+            when (outcome) {
+                is SafeLoad.Loaded -> outcome.value.newestFirst() // a save before the list kept its order
+                SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> emptyList()
+            }
         }
     }
 
@@ -595,17 +600,18 @@ class HistoryStore(private val context: Context, private val json: Json) {
         File(seriesDir, id.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".json")
 
     /** [id]'s series: its file, else a pre-rename file. A file that doesn't
-     *  decode is moved aside and reported ([loadStore]), and the shot is
-     *  listed in [unreadableSeries]: never read as "no curve" silently. */
+     *  decode is moved aside and reported ([loadItem]), and the shot is
+     *  listed in [unreadableSeries]: never read as "no curve" silently. One
+     *  that can't be read at all is listed too, and stays where it is. */
     private fun readSeries(id: String): List<TelemetrySample>? {
         val decode = { text: String -> json.decodeFromString(ListSerializer(TelemetrySample.serializer()), text) }
         val f = seriesFile(id)
-        when (val outcome = loadStore(f, "shot telemetry", decode)) {
+        when (val outcome = loadItem(f, "shot telemetry", decode)) {
             is SafeLoad.Loaded -> {
                 written += f.name
                 return outcome.value
             }
-            is SafeLoad.Corrupt -> {
+            is SafeLoad.Corrupt, is SafeLoad.Unavailable -> {
                 unreadableSeries = unreadableSeries + id
                 return null
             }
@@ -613,9 +619,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
         }
         val legacy = legacySeriesFile(id)
         if (legacy.name == f.name) return null
-        return when (val outcome = loadStore(legacy, "shot telemetry", decode)) {
+        return when (val outcome = loadItem(legacy, "shot telemetry", decode)) {
             is SafeLoad.Loaded -> outcome.value
-            is SafeLoad.Corrupt -> {
+            is SafeLoad.Corrupt, is SafeLoad.Unavailable -> {
                 unreadableSeries = unreadableSeries + id
                 null
             }
@@ -670,7 +676,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
         /** Keep the most recent N shots (matches the web cap). */
         const val MAX_SHOTS = 300
-        private const val FILE_NAME = "shots.json"
+        const val FILE_NAME = "shots.json"
         private const val SERIES_DIR = "shot-series"
     }
 }

@@ -3,6 +3,7 @@ package coffee.crema.profiles
 import android.content.Context
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.inSaveOrder
+import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -31,8 +32,10 @@ class HiddenProfileStore(private val context: Context, private val json: Json) {
 
     /** Load the hidden ids, or an empty set if absent / unreadable. */
     suspend fun load(): Set<String> = withContext(Dispatchers.IO) {
-        loadStore(file, "hidden profiles list") { json.decodeFromString(HiddenProfiles.serializer(), it) }
-            .valueOrNull()?.ids?.toSet() ?: emptySet()
+        when (val outcome = loadStore(file, "hidden profiles list") { json.decodeFromString(HiddenProfiles.serializer(), it) }) {
+            is SafeLoad.Loaded -> outcome.value.ids.toSet()
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> emptySet()
+        }
     }
 
     /** Persist the hidden ids (best-effort). */
@@ -47,7 +50,7 @@ class HiddenProfileStore(private val context: Context, private val json: Json) {
         inSaveOrder(file) { eraseStore(file) }
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "hiddenProfiles.json"
     }
 }

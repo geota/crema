@@ -26,10 +26,21 @@ import coffee.crema.runCatchingCancellable
 import coffee.crema.settings.resetCommon
 import coffee.crema.settings.toCommonSettings
 import androidx.core.content.FileProvider
+import coffee.crema.beans.LibraryStore
+import coffee.crema.brew.RecipeFileStore
+import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
+import coffee.crema.profiles.CustomProfileStore
+import coffee.crema.profiles.HiddenProfileStore
+import coffee.crema.profiles.PinnedProfileStore
 import coffee.crema.maintenance.MaintenanceStore
 import coffee.crema.persist.KeptAside
 import coffee.crema.persist.KeptAsideNotices
+import coffee.crema.persist.RefusedStore
+import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SafeLoad
+import coffee.crema.persist.Stores
+import coffee.crema.persist.loadStore
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.Setting
 import coffee.crema.settings.setting
@@ -73,6 +84,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.net.Uri
 import kotlinx.serialization.json.put
 import coffee.crema.decent.DecentClient
@@ -945,6 +957,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(keptAsideNotice = msg) }
             }
         }
+        // A store that couldn't be read refuses saves: the banner stays while it does.
+        viewModelScope.launch {
+            Stores.refused.collect { refused -> _ui.update { it.copy(refusedStores = refused) } }
+        }
         // A hub's remotes hold no live copy of its stock: a change to the active
         // bag's weights re-sends the snapshot that carries its empty flag.
         viewModelScope.launch {
@@ -962,6 +978,43 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             coffee.crema.ble.companion.CompanionPresence.events.collect { e ->
                 if (e.present) bgConnection.onCompanionPresence()
             }
+        }
+    }
+
+    /** The banner's Try again: read [store] again and take what's there. */
+    fun retryStore(store: RefusedStore) = viewModelScope.launch { reopenStore(store) }
+
+    /** The banner's Set this aside: move the unreadable file with the other
+     *  kept-aside copies and carry on without it. If the rename fails too, the
+     *  banner stays. */
+    fun putStoreAside(store: RefusedStore) {
+        viewModelScope.launch {
+            val moved = withContext(Dispatchers.IO) { SafeFile.setAside(store.file) }
+            if (moved) reopenStore(store) else appendLog("Couldn't set ${store.what} aside")
+        }
+    }
+
+    /** Load [store] for real only once it reads: a load that still fails would
+     *  replace what's in memory with an empty store. */
+    private suspend fun reopenStore(store: RefusedStore) {
+        val read = withContext(Dispatchers.IO) { loadStore(store.file, store.what) { it } }
+        if (read is SafeLoad.Unavailable) {
+            appendLog("Still couldn't read ${store.what}: ${read.error}")
+            return
+        }
+        when (store.file.name) {
+            LibraryStore.FILE_NAME -> library.loadLibrary()
+            HistoryStore.FILE_NAME -> library.reloadHistory()
+            SettingsStore.FILE_NAME -> loadPrefs()
+            PinnedProfileStore.FILE_NAME, HiddenProfileStore.FILE_NAME, CustomProfileStore.FILE_NAME -> {
+                library.loadProfileMeta()
+                library.loadCustomProfiles()
+            }
+            RecipeFileStore.FILE_NAME -> guided.loadRecipes()
+            MaintenanceStore.FILE_NAME -> maintenance.load()
+            VisualizerStore.FILE_NAME -> visualizer.load()
+            DecentStore.FILE_NAME -> decent.load()
+            DriveStore.FILE_NAME -> drive.load()
         }
     }
 

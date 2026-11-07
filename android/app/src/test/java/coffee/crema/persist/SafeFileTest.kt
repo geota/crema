@@ -21,7 +21,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** Crash-safe saves and the Absent / Loaded / Corrupt load. */
+/** Crash-safe saves and the Absent / Loaded / Corrupt / Unavailable load. */
 class SafeFileTest {
     @get:Rule val tmp = TemporaryFolder()
 

@@ -161,6 +161,8 @@ data class MainUiState(
      *  ("Couldn't read your shot history; …") — MainActivity shows it once in an
      *  action snackbar whose "Share" sends the kept-aside copies. */
     val keptAsideNotice: String? = null,
+    /** The stores whose saves are being refused: the banner stays up for these. */
+    val refusedStores: List<coffee.crema.persist.RefusedStore> = emptyList(),
     /**
      * Built-in profiles from the core (`builtinCremaProfiles()`), loaded once at
      * startup. The Brew header picker chooses from these until the profile

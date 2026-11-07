@@ -331,6 +331,19 @@ class LibraryController(
         }
     }
 
+    /** Load the shot log again, once it can be read. Shots made while it
+     *  couldn't be stay, and go into it now. */
+    suspend fun reloadHistory() {
+        val session = uiState().history
+        loadHistory()
+        val stored = uiState().history.mapTo(HashSet()) { it.id }
+        val made = session.filter { it.id !in stored }
+        if (made.isEmpty()) return
+        val merged = mergeHistory(made, uiState().history)
+        updateUi { it.copy(history = merged.rows) }
+        historyStore.save(merged.rows)
+    }
+
     /** Completes once [loadHistory]'s background series load has landed in
      *  the history (F10 validation P1-2). */
     private val seriesLoaded = CompletableDeferred<Unit>()

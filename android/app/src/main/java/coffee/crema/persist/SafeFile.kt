@@ -30,13 +30,18 @@ import java.util.concurrent.ConcurrentHashMap
  * run. Here the whole policy (backup, quarantine, refusing to overwrite an
  * unquarantined corrupt file) is one place, and is unit-tested end to end.
  *
- * **Load** ([load]) has three explicit outcomes ([SafeLoad]): Absent, Loaded,
- * Corrupt. On a decode failure the bad file is moved aside to
+ * **Load** ([load]) has four explicit outcomes ([SafeLoad]): Absent, Loaded,
+ * Corrupt, Unavailable. On a decode failure the bad file is moved aside to
  * `<name>.corrupt-<epochMs>` (newest [MAX_KEPT] per store), the backup or a
  * complete leftover temp file is tried in its place, and only when neither
  * decodes does the caller get Corrupt. If the bad file can't be moved aside,
- * [write] refuses to touch that target for the rest of the process, so an
- * empty state can never replace the only copy.
+ * [write] refuses to touch that target until a load reads it, so an empty state
+ * can never replace the only copy.
+ *
+ * Only a decode failure can quarantine. Anything else thrown while reading or
+ * decoding, an `IOException` or an `OutOfMemoryError`, says nothing about the
+ * file, which stays where it is: that's Unavailable, and saves are refused the
+ * same way until a load reads it or [setAside] moves it.
  *
  * **Overlap.** Every operation on a target holds that target's lock, because
  * they share its `.tmp`: without it the loser of two saves moves the target to
@@ -54,7 +59,7 @@ object SafeFile {
     private const val BAK = ".bak"
     private const val CORRUPT = ".corrupt-"
 
-    /** Targets whose corrupt file couldn't be moved aside: saving would destroy it. */
+    /** Targets that couldn't be read, or moved aside: saving would destroy them. */
     private val blocked: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
 
     /** One lock per target path. Bounded by the files the app owns. */
@@ -64,6 +69,9 @@ object SafeFile {
 
     /** Test seam: runs after the temp file is synced and before any rename. */
     internal var beforeRename: (File) -> Unit = {}
+
+    /** Whether saves to [target] are being refused. */
+    fun isBlocked(target: File): Boolean = target.path in blocked
 
     /** The previous good version kept beside [target]. */
     fun backupOf(target: File) = File(target.parentFile, target.name + BAK)
@@ -157,9 +165,11 @@ object SafeFile {
     }
 
     /**
-     * Read and [decode] [target]. A file that fails to read or decode is moved
-     * aside (see [SafeLoad.Corrupt]); the backup and a complete leftover temp
-     * file are tried before giving up. [log] receives one line per event.
+     * Read and [decode] [target]. A file that fails to decode is moved aside
+     * (see [SafeLoad.Corrupt]); the backup and a complete leftover temp file are
+     * tried before giving up. A file that can't be read at all stays put (see
+     * [SafeLoad.Unavailable]). Each load decides afresh whether saves to
+     * [target] are refused. [log] receives one line per event.
      */
     fun <T : Any> load(target: File, log: (String) -> Unit = {}, decode: (String) -> T): SafeLoad<T> =
         synchronized(lockOf(target)) { loadLocked(target, log, decode) }
@@ -169,14 +179,22 @@ object SafeFile {
         val tmp = tmpOf(target)
         fun attempt(f: File): Result<T>? =
             if (!f.isFile) null else runCatching { decode(f.readText(Charsets.UTF_8)) }
+        fun unavailable(f: File, cause: Throwable): SafeLoad<T> {
+            val error = describe(cause)
+            blocked += target.path
+            log("${f.name} couldn't be read ($error); left in place, saving is disabled")
+            return SafeLoad.Unavailable(error)
+        }
 
+        blocked -= target.path
         val primary = attempt(target)
         primary?.getOrNull()?.let { return SafeLoad.Loaded(it) }
+        primary?.exceptionOrNull()?.takeUnless(::isDecodeFailure)?.let { return unavailable(target, it) }
 
         var keptAt: File? = null
-        val error = primary?.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName }
+        val error = primary?.exceptionOrNull()?.let(::describe)
         if (primary != null) {
-            keptAt = quarantine(target)
+            keptAt = quarantine(target, target)
             if (keptAt == null) {
                 blocked += target.path
                 log("${target.name} unreadable ($error); couldn't keep it aside, saving is disabled")
@@ -190,6 +208,7 @@ object SafeFile {
         // if it decodes), then the previous good version.
         for (candidate in listOf(tmp, bak)) {
             val r = attempt(candidate) ?: continue
+            r.exceptionOrNull()?.takeUnless(::isDecodeFailure)?.let { return unavailable(candidate, it) }
             val value = r.getOrNull()
             if (value != null) {
                 log("${target.name}: recovered from ${candidate.name}")
@@ -202,8 +221,28 @@ object SafeFile {
         return if (primary == null) SafeLoad.Absent else SafeLoad.Corrupt(keptAt, error ?: "unreadable")
     }
 
-    /** Move [target] to `<name>.corrupt-<epochMs>` and prune to [MAX_KEPT]; null on failure. */
-    private fun quarantine(target: File): File? {
+    /**
+     * Move what a load can't read out of [target]'s way, for a store that would
+     * otherwise refuse saves for good: the target, or once that has gone the
+     * temp file or backup that took its place. It's a rename, so it needs no
+     * read, and the file stays with the other kept-aside copies. Lifts the
+     * refusal; a rename that fails leaves it. Returns whether something moved.
+     */
+    fun setAside(target: File): Boolean = synchronized(lockOf(target)) {
+        val file = listOf(target, tmpOf(target), backupOf(target)).firstOrNull { it.exists() }
+        if (file != null && quarantine(file, target) == null) return false
+        blocked -= target.path
+        file != null
+    }
+
+    /** Whether [e], thrown by a load, shows the file's content is bad. A
+     *  `SerializationException` is an `IllegalArgumentException`. */
+    private fun isDecodeFailure(e: Throwable) = e is IllegalArgumentException
+
+    private fun describe(e: Throwable) = e.message ?: e.javaClass.simpleName
+
+    /** Move [file] to `<target>.corrupt-<epochMs>` and prune to [MAX_KEPT]; null on failure. */
+    private fun quarantine(file: File, target: File): File? {
         val dest = run {
             // Numbered after the newest copy kept, never before it: several
             // quarantines in one millisecond bump the number, and once the
@@ -216,7 +255,7 @@ object SafeFile {
             do { f = File(target.parentFile, target.name + CORRUPT + ms); ms++ } while (f.exists())
             f
         }
-        if (!target.renameTo(dest)) return null
+        if (!file.renameTo(dest)) return null
         keptAside(target).drop(MAX_KEPT).forEach { it.delete() }
         return dest
     }
@@ -243,6 +282,9 @@ sealed interface SafeLoad<out T> {
      */
     data class Corrupt(val keptAt: File?, val error: String) : SafeLoad<Nothing>
 
-    /** The decoded value, or null when Absent/Corrupt. */
-    fun valueOrNull(): T? = (this as? Loaded<T>)?.value
+    /**
+     * Reading or decoding failed for a reason that says nothing about the file,
+     * so it may well be fine: nothing was moved, and saves are refused.
+     */
+    data class Unavailable(val error: String) : SafeLoad<Nothing>
 }

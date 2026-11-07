@@ -20,6 +20,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -79,6 +82,7 @@ import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.BrewScreen
 import coffee.crema.ui.components.SaverOverlay
+import coffee.crema.ui.components.RefusedStoresBanner
 import coffee.crema.ui.components.RemoteStatusChip
 import coffee.crema.ui.screens.ChartExpandOverlay
 import coffee.crema.ui.screens.ExpandedChart
@@ -455,6 +459,19 @@ class MainActivity : ComponentActivity() {
                     methodEditOwner = methodEdit?.ownerTab,
                 ) ?: "brew"
                 val routeOwners = NavRestore.owners(logBrewOwner, recipeEditOwner, methodEdit?.ownerTab, methodEdit?.parentRoute)
+                Column(Modifier.fillMaxSize()) {
+                RefusedStoresBanner(
+                    stores = ui.refusedStores,
+                    busy = ui.shotInProgress,
+                    onTryAgain = viewModel::retryStore,
+                    onSetAside = viewModel::putStoreAside,
+                )
+                Box(
+                    Modifier
+                        .weight(1f)
+                        // The banner took the status-bar inset: don't pad under it twice.
+                        .then(if (ui.refusedStores.isEmpty()) Modifier else Modifier.consumeWindowInsets(WindowInsets.statusBars)),
+                ) {
                 CompositionLocalProvider(
                     LocalListMemory provides listMemory,
                     LocalListShell provides if (isCompact) "phone" else "tablet",
@@ -573,6 +590,8 @@ class MainActivity : ComponentActivity() {
                         onRetry = viewModel::retryReconnectNow,
                         onDismiss = { showDevices = false },
                     )
+                }
+                }
                 }
                 }
                 }

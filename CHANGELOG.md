@@ -84,6 +84,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A store Android can't read is left alone** — a passing read error or running
+  out of memory while loading used to move a good file aside as damaged. Now
+  only a file that doesn't decode is damaged. Anything else leaves it in place
+  and refuses saves, and a banner says "Couldn't read your shot history, so
+  changes aren't being saved". Try again reads it again, and Set this aside moves
+  it with the other kept-aside copies and carries on without it, so nothing is
+  lost either way. A shot made in the meantime stays. Android also now says when
+  a store came back from its backup, as the newest change is gone. Android.
 - **One unreadable row can't block a backup** — on the web, one bad row made the
   whole backup fail, and the note stayed on Building backup for good. Now a shot
   whose profile can't be read is backed up without it, and any other bad row, of

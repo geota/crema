@@ -7,6 +7,7 @@ import coffee.crema.core.Roaster
 import coffee.crema.core.duplicateBeanJson
 import coffee.crema.core.setBeanFrozenJson
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -50,8 +51,10 @@ class LibraryStore(private val context: Context, private val json: Json) {
      *  aside and reported (see [loadStore]). */
     suspend fun load(): BeanLibrary = lock.withLock {
         withContext(Dispatchers.IO) {
-            loadStore(file, "bean library") { json.decodeFromString(BeanLibrary.serializer(), it) }
-                .valueOrNull() ?: BeanLibrary()
+            when (val outcome = loadStore(file, "bean library") { json.decodeFromString(BeanLibrary.serializer(), it) }) {
+                is SafeLoad.Loaded -> outcome.value
+                SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> BeanLibrary()
+            }
         }
     }
 
@@ -69,7 +72,7 @@ class LibraryStore(private val context: Context, private val json: Json) {
         lock.withLock { withContext(Dispatchers.IO) { eraseStore(file) } }
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "beanLibrary.json"
     }
 }
