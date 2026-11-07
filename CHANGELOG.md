@@ -99,13 +99,21 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   which account it is before anything syncs. A different one starts the pull
   over and asks before uploading the shots already here; Not now keeps those off
   it, and new shots still upload. Android and web.
+- **A store that can't be read is never saved over** — on the web, a storage
+  error while reading was treated as an empty store, so the next save replaced
+  your data. Now the value stays where it is, a strip says "Couldn't read your
+  shot history, so changes aren't being saved", and Try again reloads what's
+  saved, waiting if the machine is busy. A row that can't be read, in shots or
+  the bean library, is kept in `<key>.skipped` and offered as a saved copy,
+  rather than dropped by the next save. If it can't be kept, saves stop instead.
+  Only full storage now drops your oldest shots: a refused save no longer does.
+  Web.
 - **Android can't save a store before it has loaded** — a save that came before
   a store's load carried defaults, and could replace your data. Every store now
   refuses it, and the first refusal tells you what wasn't saved. This holds when
   a new screen starts in a running app too. Reading the network role at launch
   also goes through the store, so it no longer misses settings caught between
   the two renames of a save. Android.
-||||||| 8d551693
 - **A remote delete no longer stops after three failures** — a Visualizer delete
   that fails for a reason time can fix now waits an hour and tries again, for as
   long as it takes, where it used to stop with no notice. One Visualizer refuses

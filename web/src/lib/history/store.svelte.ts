@@ -23,7 +23,7 @@ import type { BrewSeries } from '#lib/core/crema-core.js';
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
 import type { TelemetrySample } from '#lib/state/index.js';
 import { toWire } from './telemetry-wire';
-import { readJson, writeJsonChecked } from '#lib/utils/storage.js';
+import { keepSkippedRows, readStore, writeStore, type StoreWrite } from '#lib/utils/storage.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import {
 	brewDateError,
@@ -69,6 +69,8 @@ const STORED_SHOT_FORMAT_VERSION = 3;
  * are simply ignored on first read rather than migrated.
  */
 const HISTORY_KEY = 'crema.history.v2';
+/** The history's name in a storage notice. */
+const HISTORY_WHAT = 'shot history';
 
 /**
  * Cap on the stored history. A `StoredShot` carries its full telemetry series
@@ -265,20 +267,28 @@ export class HistoryStore {
 	 * Persist the shot list to localStorage — WITHOUT the sample series
 	 * (those live in IndexedDB, review #27), so the blob stays a few KB per
 	 * shot and the 300-shot cap is actually reachable. A quota failure
-	 * evicts the oldest shots and retries once, and is never silent. Returns
-	 * whether the rows were stored; only then does {@link settleDeletes} run,
-	 * as until then the old rows are still there and need their curves.
+	 * evicts the oldest shots and retries once, and is never silent. Only
+	 * quota evicts: a key refused because it can't be read must keep every
+	 * row in memory, and its banner says so. Returns whether the rows were
+	 * stored; only then does {@link settleDeletes} run, as until then the old
+	 * rows are still there and need their curves.
 	 */
 	private persist(): boolean {
-		if (this.writeRows()) {
+		const written = this.writeRows();
+		if (written === 'ok') {
 			this.settleDeletes();
 			return true;
+		}
+		if (written === 'blocked') return false;
+		if (written === 'failed') {
+			toast.error('Shot history could not be saved.');
+			return false;
 		}
 		// Quota hit even without series — evict the oldest 10% and retry.
 		const keep = Math.max(1, Math.floor(this.shots.length * 0.9));
 		const dropped = this.shots.length - keep;
 		this.shots = this.shots.slice(0, keep);
-		if (!this.writeRows()) {
+		if (this.writeRows() !== 'ok') {
 			toast.error('Shot history could not be saved — storage is full.');
 			return false;
 		}
@@ -290,12 +300,12 @@ export class HistoryStore {
 	}
 
 	/** Write the rows to localStorage, without their series. */
-	private writeRows(): boolean {
+	private writeRows(): StoreWrite {
 		const stripped = this.shots.map((s) => ({
 			...s,
 			record: { ...s.record, samples: [] }
 		}));
-		return writeJsonChecked(HISTORY_KEY, stripped, false);
+		return writeStore(HISTORY_KEY, stripped, false);
 	}
 
 	/** After a stored write: delete the curves of the rows that left {@link known}. */
@@ -1140,18 +1150,25 @@ function coerceShotMachine(raw: unknown): ShotMachine | null {
  * keys leave the rows in their "never synced, never deleted" default).
  */
 function loadShots(): StoredShot[] {
-	const raw = readJson<unknown[]>(HISTORY_KEY, [], { what: 'shot history', valid: Array.isArray });
-	if (!Array.isArray(raw)) return [];
+	const read = readStore<unknown[]>(HISTORY_KEY, { what: HISTORY_WHAT, valid: Array.isArray });
+	if (read.kind !== 'loaded') return [];
 	const out: StoredShot[] = [];
-	for (const item of raw) {
-		if (typeof item !== 'object' || item === null) continue;
-		const obj = item as Record<string, unknown>;
-		if (typeof obj.id !== 'string') continue;
-		const migrated = coerceStoredShot(obj);
+	const skipped: unknown[] = [];
+	for (const item of read.value) {
+		const migrated = coerceRow(item);
 		if (migrated) out.push(migrated);
+		else skipped.push(item);
 	}
+	keepSkippedRows(HISTORY_KEY, skipped, HISTORY_WHAT);
 	// Rows saved before the list kept its order (a pull or a restore prepended).
 	return newestFirst(out);
+}
+
+/** One stored row as a shot, or null if it can't be read as one. */
+function coerceRow(item: unknown): StoredShot | null {
+	if (typeof item !== 'object' || item === null) return null;
+	const obj = item as Record<string, unknown>;
+	return typeof obj.id === 'string' ? coerceStoredShot(obj) : null;
 }
 
 /**
