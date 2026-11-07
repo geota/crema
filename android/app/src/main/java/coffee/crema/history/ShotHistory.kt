@@ -30,6 +30,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 /*
  * Shot history — the log of completed shots.
@@ -474,6 +475,16 @@ class HistoryStore(private val context: Context, private val json: Json) {
      *  is saved without its samples inline. */
     private val written = mutableSetOf<String>()
 
+    /** Ids of the shots this store has durably written, or been told are live
+     *  ([markLive]). A series is only ever deleted for an id that leaves this
+     *  set, never because a listing doesn't name it: rows that a corrupt load
+     *  lost were never in it, so their series stay and a row that comes back
+     *  later finds its curve (#325). P3's `delete(ids)` replaces this. */
+    private var known: Set<String> = emptySet()
+
+    /** Above zero while a restore runs: see [pauseDeletes]. */
+    private val deletesPaused = AtomicInteger()
+
     /** Shots whose series file was unreadable at load (kept aside and
      *  reported): they show, and back up, without a curve. */
     @Volatile var unreadableSeries: Set<String> = emptySet()
@@ -510,6 +521,28 @@ class HistoryStore(private val context: Context, private val json: Json) {
         return rows.map { row -> series[row.id]?.let { row.copy(samples = it) } ?: row }
     }
 
+    /** Mark [ids] as rows this store may delete the series of once they leave
+     *  the history. Call it after the loaded rows are in the app's state, not
+     *  from [loadRows]: a save in between carries a snapshot from before them,
+     *  and would otherwise read every loaded row as removed. Adds to [known],
+     *  as a save in that window may have written rows of its own. */
+    suspend fun markLive(ids: Collection<String>) {
+        lock.withLock { known = known + ids }
+    }
+
+    /** Turn series deletes off until [resumeDeletes], for a restore: saves
+     *  still write and still move [known] to what they wrote, but delete
+     *  nothing, so a removed row's series stays on disk. Restore's own deletes
+     *  arrive with its marker (PR7). */
+    fun pauseDeletes() {
+        deletesPaused.incrementAndGet()
+    }
+
+    /** Undo one [pauseDeletes]. */
+    fun resumeDeletes() {
+        deletesPaused.decrementAndGet()
+    }
+
     suspend fun save(shots: List<StoredShot>) {
         // The lock before the hop, so saves land in call order and the newest
         // snapshot wins.
@@ -520,23 +553,21 @@ class HistoryStore(private val context: Context, private val json: Json) {
                     if (shot.samples.isEmpty() || name in written) continue
                     if (writeSeries(shot.id, shot.samples)) written += name
                 }
-                // A pre-rename file goes only once its shot's new file holds
-                // the series (a save before the series load must not drop it).
-                pruneSeries(
-                    shots.flatMapTo(HashSet()) { shot ->
-                        val name = seriesFile(shot.id).name
-                        if (name in written) listOf(name) else listOf(name, legacySeriesFile(shot.id).name)
-                    },
-                )
                 // Only a shot whose series file is written goes without its
                 // samples; the rest stay inline until a later save writes them
                 // (a full disk must not cost a shot its curve).
-                runCatching {
+                val saved = runCatching {
                     json.encodeToString(
                         ListSerializer(StoredShot.serializer()),
                         shots.map { if (it.samples.isNotEmpty() && seriesFile(it.id).name in written) it.copy(samples = emptyList()) else it },
                     )
-                }.onSuccess { saveStore(file, it) }
+                }.map { saveStore(file, it) }.getOrDefault(false)
+                // Nothing moves on a failed save: the old rows are still on
+                // disk, so their series have to be as well.
+                if (saved) {
+                    if (deletesPaused.get() == 0) deleteSeriesAfter(shots)
+                    known = shots.mapTo(HashSet()) { it.id }
+                }
             }
         }
     }
@@ -549,6 +580,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 eraseStore(file)
                 seriesDir.listFiles()?.forEach { eraseStore(it) }
                 written.clear()
+                known = emptySet()
                 unreadableSeries = emptySet()
             }
         }
@@ -598,13 +630,20 @@ class HistoryStore(private val context: Context, private val json: Json) {
         }.map { saveStore(seriesFile(id), it, keepBackup = false) }.getOrDefault(false)
     }
 
-    /** Drop the series files of shots no longer in the history. */
-    private fun pruneSeries(keep: Set<String>) {
-        seriesDir.listFiles()?.forEach { f ->
-            if (f.name.endsWith(".json") && f.name !in keep) {
-                f.delete()
-                written.remove(f.name)
-            }
+    /** After [shots] reached disk: delete the series of the rows that left
+     *  [known], by name, and each pre-rename file whose shot's new file holds
+     *  the series (a save before the series load must not drop one). */
+    private fun deleteSeriesAfter(shots: List<StoredShot>) {
+        val keep = shots.flatMapTo(HashSet()) { shot ->
+            val name = seriesFile(shot.id).name
+            if (name in written) listOf(name) else listOf(name, legacySeriesFile(shot.id).name)
+        }
+        val moved = shots.map { legacySeriesFile(it.id) }
+        val gone = (known - shots.mapTo(HashSet()) { it.id }).flatMap { listOf(seriesFile(it), legacySeriesFile(it)) }
+        (moved + gone).filter { it.name !in keep }.forEach { f ->
+            f.delete()
+            // A later snapshot naming this row again has to rewrite the file.
+            written.remove(f.name)
         }
     }
 

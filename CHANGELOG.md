@@ -84,6 +84,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A damaged shot history keeps every curve on Android** — when `shots.json`
+  couldn't be read, the next save deleted every shot's curve, so the rows kept
+  aside could never get them back (#325). A curve now goes only when its own
+  shot leaves the history, once that save has landed, and anything left over
+  stays on disk until Erase all data. A row that comes back finds its curve.
+  Android.
+
 - **Finishing a sign-in after the app was killed no longer wipes your Visualizer
   or Google Drive settings** — a redirect landing on a cold start read the saved
   sign-in before it had loaded, then wrote defaults over the file, losing tokens,
