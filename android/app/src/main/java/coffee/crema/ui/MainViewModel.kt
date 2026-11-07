@@ -22,6 +22,7 @@ import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.CommonSettings
 import coffee.crema.core.defaultIdleSleepMin
+import coffee.crema.runCatchingCancellable
 import coffee.crema.settings.resetCommon
 import coffee.crema.settings.toCommonSettings
 import androidx.core.content.FileProvider
@@ -343,6 +344,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
         seriesReady = { library.awaitSeries() },
+        shotsLoaded = { library.seriesReady },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
         onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
         networkWatcher = coffee.crema.visualizer.DefaultNetworkWatcher(app),
@@ -914,6 +916,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @androidx.annotation.VisibleForTesting
     internal lateinit var startupLoad: kotlinx.coroutines.Job
 
+    /** The sync controllers' own-state loads, apart from [startupLoad]. */
+    @androidx.annotation.VisibleForTesting
+    internal lateinit var ownStateLoads: List<kotlinx.coroutines.Job>
+
     // ── `init` blocks: every property is declared above this point (P3-2) ──
 
     init {
@@ -1097,6 +1103,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         library.loadBuiltinProfiles()
+        // The sync controllers' own state, apart from the row load below: a
+        // failure there must not strand a sign-in (geota/crema#322). Whatever
+        // touches that state waits for these, not for their place in a chain.
+        ownStateLoads = listOf(
+            loadOwnState("Visualizer") { visualizer.load() },
+            loadOwnState("Decent") { decent.load() },
+            loadOwnState("Google Drive") { drive.load() },
+        )
         // Load both persisted stores in one coroutine, sequentially, so their
         // _ui copies don't race (read-modify-write of the shared snapshot).
         startupLoad = viewModelScope.launch {
@@ -1119,16 +1133,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // (geota/crema#56). Pure core state; safe while disconnected.
             session.pushStopTargets()
             maintenance.load()
-            visualizer.load()
             // Uploads that failed last time retry now (F17).
             visualizer.drainSoon()
             // Daily Visualizer Premium check (gates the edit sync's Premium-only fields).
             visualizer.refreshPremiumIfStale()
-            decent.load()
             sharing.start()
-            drive.load()
-            // Daily automatic Drive backup (issue #36) — after both the prefs
-            // (the toggle) and the Drive tokens have hydrated.
+            // Daily automatic Drive backup (issue #36) — after the prefs (the
+            // toggle); it waits for the Drive tokens itself.
             drive.autoBackupIfDue(_ui.value.autoDriveBackup)
             // Daily automatic release check (opt-in, default off).
             maybeAutoUpdateCheck()
@@ -1156,6 +1167,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(drive = ds) }
             }
         }
+    }
+
+    /** One controller's own-state load. A failure is logged here: the controller
+     *  has already let its waiters go, refusing, so nothing runs on its defaults. */
+    private fun loadOwnState(service: String, load: suspend () -> Unit) = viewModelScope.launch {
+        runCatchingCancellable { load() }.onFailure { appendLog("$service state load failed: ${it.message}") }
     }
 
     /** Select the Brew header's active profile. (M1: display only — uploading the

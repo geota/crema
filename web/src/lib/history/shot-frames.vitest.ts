@@ -6,7 +6,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { Event } from '#lib/core/index.js';
-import { SubState } from '#lib/core/crema-core.js';
+import { MachineState, SubState } from '#lib/core/crema-core.js';
 import { applyEvent, INITIAL_SNAPSHOT, type UiSnapshot } from '#lib/state/ui-state.svelte.js';
 import { fromWire, toWire } from './telemetry-wire';
 
@@ -14,7 +14,6 @@ vi.mock('./series-store', () => ({
 	putSeries: async () => {},
 	getAllSeries: async () => new Map(),
 	deleteSeries: async () => {},
-	pruneSeriesTo: async () => {},
 	clearAllSeries: async () => {}
 }));
 
@@ -40,7 +39,12 @@ function telemetry(elapsed: number): Event {
 
 /** A pour that moves through frames 0 → 2 → 3, one telemetry sample each. */
 function capturedPour(): UiSnapshot {
-	let s: UiSnapshot = { ...INITIAL_SNAPSHOT, shotInProgress: true, machineSubstate: SubState.Pouring };
+	let s: UiSnapshot = {
+		...INITIAL_SNAPSHOT,
+		shotInProgress: true,
+		machineSubstate: SubState.Pouring,
+		shotPhase: 'Pouring'
+	};
 	const events: Event[] = [
 		{ type: 'ShotFrameChanged', content: { frame: 0 } },
 		telemetry(250),
@@ -82,4 +86,13 @@ describe('shot frame numbers', () => {
 		const legacy = { ...capturedPour().shotTelemetry[0], frameNumber: undefined };
 		expect(toWire(legacy).sample.frameNumber).toBe(0);
 	});
+});
+
+it('an unknown substate mid-pour keeps growing the chart', () => {
+	const before = capturedPour();
+	const s = applyEvent(
+		applyEvent(before, { type: 'MachineStateChanged', content: { state: MachineState.Espresso, substate: SubState.Unknown } }),
+		telemetry(1250)
+	);
+	expect(s.shotTelemetry).toHaveLength(before.shotTelemetry.length + 1);
 });

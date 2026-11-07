@@ -307,6 +307,7 @@ class LibraryController(
     suspend fun loadHistory() {
         val rows = historyStore.loadRows()
         updateUi { it.copy(history = rows) }
+        historyStore.markLive(rows.map { it.id })
         val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
         if (missing.isEmpty()) {
             seriesLoaded.complete(Unit)
@@ -1120,6 +1121,9 @@ class LibraryController(
     /** Parse + apply a `crema-backup` bundle's raw text — shared by the SAF restore
      *  ([restoreBackup]) and the Google Drive restore (the downloaded `.crema`). */
     fun restoreBackupFromText(text: String, mode: MainViewModel.RestoreMode) {
+        // Series a restore removes stay on disk until its own marker can delete
+        // them (restore-safety PR7): no save in this window deletes one.
+        historyStore.pauseDeletes()
         scope.launch {
             // The core parses the bundle (`parseBackup` → importBackupJsonl, the
             // parser web uses); re-bind its result to the names the apply block uses.
@@ -1222,7 +1226,7 @@ class LibraryController(
                     historyDroppedNotice(merged.dropped) +
                     (heldSharingNotice(heldSharing)?.let { ". $it" } ?: ""),
             )
-        }
+        }.invokeOnCompletion { historyStore.resumeDeletes() }
     }
 
     /** Remove a stored shot from the local history. Persisted. */

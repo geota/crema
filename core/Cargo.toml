@@ -13,8 +13,9 @@ members = [
     "de1-ffi",
     "de1-wasm",
 ]
-# The cargo-fuzz project builds on nightly with its own lockfile.
-exclude = ["de1-relay/fuzz"]
+# The cargo-fuzz project builds on nightly with its own lockfile. The model test
+# has its own lockfile too: proptest would fail `cargo deny check bans`.
+exclude = ["de1-relay/fuzz", "de1-model"]
 
 [workspace.package]
 edition = "2024"
