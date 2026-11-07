@@ -138,9 +138,9 @@ class SaveFloorTest {
     fun theFirstRefusalPerPathIsTheOnlyNotice() {
         val a = file("a.json")
         val b = file("b.json")
-        assertFalse(saveStore(a, "first", "1"))
-        assertFalse(saveStore(a, "first", "2"))
-        assertFalse(saveStore(b, "second", "1"))
+        assertFalse(saveNow(a, "first", "1"))
+        assertFalse(saveNow(a, "first", "2"))
+        assertFalse(saveNow(b, "second", "1"))
         assertEquals(listOf("first", "second"), SaveFloor.drain())
         assertFalse(a.exists())
     }
@@ -148,22 +148,22 @@ class SaveFloorTest {
     @Test
     fun aRefusalFailsATestUnderTheBuildsStrictMode() {
         SaveFloor.resetForTest()
-        assertFailsWith<AssertionError> { saveStore(file("a.json"), "first", "1") }
+        assertFailsWith<AssertionError> { saveNow(file("a.json"), "first", "1") }
     }
 
     @Test
     fun anyLoadOutcomeOpensTheStore() {
         val absent = file("absent.json")
         SafeFile.load(absent) { it }
-        assertTrue(saveStore(absent, "x", "1"))
+        assertTrue(saveNow(absent, "x", "1"))
 
         val loaded = file("loaded.json").apply { writeText("1") }
         SafeFile.load(loaded) { it }
-        assertTrue(saveStore(loaded, "x", "2"))
+        assertTrue(saveNow(loaded, "x", "2"))
 
         val corrupt = file("corrupt.json").apply { writeText("{") }
         SafeFile.load(corrupt) { throw IllegalArgumentException("bad") }
-        assertTrue(saveStore(corrupt, "x", "3"))
+        assertTrue(saveNow(corrupt, "x", "3"))
     }
 
     @Test
@@ -197,7 +197,7 @@ class SaveFloorTest {
         val t = file("a.json")
         SafeFile.load(t) { it }
         SafeFile.startSession()
-        assertFalse(saveStore(t, "x", "1"))
+        assertFalse(saveNow(t, "x", "1"))
     }
 
     @Test
@@ -232,19 +232,19 @@ class SaveFloorTest {
         val t = file("a.json").apply { writeText("1") }
         SafeFile.load(t) { it }
         eraseStore(t)
-        assertTrue(saveStore(t, "x", "2"))
+        assertTrue(saveNow(t, "x", "2"))
     }
 
     @Test
     fun aNewSessionMakesARefusalNewsAgain() {
         val t = file("a.json")
-        assertFalse(saveStore(t, "first", "1"))
+        assertFalse(saveNow(t, "first", "1"))
         assertEquals(listOf("first"), SaveFloor.drain())
-        assertFalse(saveStore(t, "first", "2"))
+        assertFalse(saveNow(t, "first", "2"))
         assertEquals(emptyList(), SaveFloor.drain())
 
         SafeFile.startSession()
-        assertFalse(saveStore(t, "first", "3"))
+        assertFalse(saveNow(t, "first", "3"))
         assertEquals(listOf("first"), SaveFloor.drain())
     }
 

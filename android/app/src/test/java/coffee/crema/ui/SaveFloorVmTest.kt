@@ -6,7 +6,7 @@ import coffee.crema.persist.SafeFile
 import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.StoreHealth
 import coffee.crema.persist.Stores
-import coffee.crema.persist.saveStore
+import coffee.crema.persist.saveNow
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.SettingsStore
 import kotlinx.coroutines.runBlocking
@@ -58,7 +58,7 @@ class SaveFloorVmTest {
             assertFalse(SafeFile.savesOpen(prefs))
             assertFalse(SafeFile.savesOpen(files("beanLibrary.json")))
             SaveFloor.throwOnRefusal = false
-            assertFalse(saveStore(prefs, "settings", "{}"))
+            assertFalse(saveNow(prefs, "settings", "{}"))
             VmHarness.idleUntil("the notice") { SaveFloor.message("settings") in second.ui.value.userMessages }
         }
     }
@@ -71,7 +71,7 @@ class SaveFloorVmTest {
             val newest = build()
             VmHarness.idle()
             SaveFloor.throwOnRefusal = false
-            assertFalse(saveStore(files("prefs.json"), "settings", "{}"))
+            assertFalse(saveNow(files("prefs.json"), "settings", "{}"))
             VmHarness.idleUntil("the notice") { SaveFloor.message("settings") in newest.ui.value.userMessages }
             VmHarness.idle()
             assertFalse(SaveFloor.message("settings") in leftover.ui.value.userMessages)

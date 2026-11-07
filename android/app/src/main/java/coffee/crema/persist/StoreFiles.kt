@@ -3,6 +3,7 @@ package coffee.crema.persist
 import android.util.Log
 import coffee.crema.diag.DiagLog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -141,9 +142,10 @@ private fun persistLog(line: String) {
  * snapshots, so a save before the load carries defaults, and landing it later
  * would be the same loss, which is why a refused save isn't queued. The first
  * refusal per path logs and queues one notice, until the path opens or a new
- * session starts. A store with a lock checks on entry, before the lock: a save
- * that waits there while the store loads would otherwise be let through once
- * the load had opened it, still carrying its old snapshot. Under unit tests
+ * session starts. [saveStore] checks on entry, and so does a store that takes a
+ * lock of its own first: a save that waits while the store loads would otherwise
+ * be let through once the load had opened it, still carrying its old snapshot.
+ * Under unit tests
  * (the build's `crema.strictSaves`) a refusal throws, so it fails the test that
  * caused it. A store being reloaded ([SafeFile.closeSaves]) refuses quietly.
  */
@@ -236,9 +238,25 @@ fun <T : Any> loadItem(target: File, what: String?, open: Boolean, decode: (Stri
     return outcome
 }
 
-/** [saveItem] for a store: refused before it has loaded (see [SaveFloor]). */
-fun saveStore(target: File, what: String, text: String, keepBackup: Boolean = true): Boolean =
-    SaveFloor.admit(target, what) && saveItem(target, text, keepBackup)
+/**
+ * The one safe way to save a store: refused before it has loaded ([SaveFloor],
+ * checked here, on entry, so a stale snapshot can't wait out a load), then in
+ * call order ([inSaveOrder]), then [encode] and the write on IO. Encoding here
+ * keeps a big store off the caller's thread. A save that has been asked for
+ * always lands: a cancelled scope can't drop it while it waits its turn, or the
+ * store's file would stay behind what the user saw. True when stored.
+ */
+suspend fun saveStore(target: File, what: String, keepBackup: Boolean = true, encode: () -> String): Boolean {
+    if (!SaveFloor.admit(target, what)) return false
+    return withContext(NonCancellable) {
+        inSaveOrder(target) {
+            runCatching(encode)
+                .onFailure { persistLog("couldn't encode ${target.name}: ${it.message}") }
+                .map { saveItem(target, it, keepBackup) }
+                .getOrDefault(false)
+        }
+    }
+}
 
 /**
  * [SafeFile.write] for a file with no load to wait for, logging (not throwing)
