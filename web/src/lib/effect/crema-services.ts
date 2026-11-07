@@ -35,6 +35,7 @@ import { TokenVault } from '../services/token-vault.ts';
 import {
 	ShotSync,
 	type EditPatchOptions,
+	type PullApplied,
 	type PullOptions,
 	type ShotPatch,
 	type UnsyncedUploadResult
