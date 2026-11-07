@@ -92,6 +92,7 @@ pub mod idle_sleep;
 pub mod ids;
 pub mod maintenance;
 pub mod mode_targets;
+pub mod oauth_callback;
 pub mod profile;
 pub mod profile_bounds;
 pub mod profile_file;
@@ -269,6 +270,7 @@ pub use mode_targets::{
     ModeTargetInputs, ModeTargets, READY_TOLERANCE_C, group_at_temperature, resolve_mode_targets,
     steam_at_temperature,
 };
+pub use oauth_callback::{CallbackOutcome, callback_outcome};
 pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,
