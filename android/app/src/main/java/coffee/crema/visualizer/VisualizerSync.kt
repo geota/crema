@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -136,6 +137,9 @@ class VisualizerSync(
         /** Backstop on the pull walk — mirrors the web's maxPages default. */
         const val MAX_PULL_PAGES = 200
 
+        /** How long a run waits for the rows before it skips. */
+        const val ROWS_WAIT_MS = 30_000L
+
         /** The app-start Premium re-probe runs at most this often (web `PREMIUM_REFRESH_INTERVAL_MS`). */
         const val PREMIUM_REFRESH_INTERVAL_MS = 24L * 60 * 60 * 1000
 
@@ -193,6 +197,9 @@ class VisualizerSync(
 
     /** Holds everything that touches [persisted] until [load] has read the file. */
     private val ownState = OwnStateGate("Visualizer", notify)
+
+    /** The rows' late arrival has been reported (see [rowsReady]). */
+    private val rowsLateTold = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** Shot ids with an upload running — checked and claimed atomically. */
     private val inFlight = HashSet<String>()
@@ -362,7 +369,12 @@ class VisualizerSync(
                             persist { it.copy(account = account) }
                             refreshPremium()
                             notify("Signed in to Visualizer${account?.let { a -> " as ${a.name}" }.orEmpty()}")
-                            onSignedIn()
+                            // On a cold start the rows can still be loading, and the
+                            // catch-up offer counts them.
+                            scope.launch {
+                                rowsReady()
+                                onSignedIn()
+                            }
                         }
                         .onFailure { notify("Visualizer sign-in failed: ${it.message}") }
                     _state.update { it.copy(busy = false) }
@@ -395,8 +407,8 @@ class VisualizerSync(
      * (final review 04 P3-3). The revoke runs on [scope] after the wipe.
      */
     suspend fun eraseAll() {
-        // The token to revoke is in the file; a load that never ended only
-        // costs the revoke, not the erase.
+        // The token to revoke is in the file. The wait is bounded, but a load
+        // that never ends still holds the lock below, so the erase waits for it.
         ownState.settle()
         val token = persistMutex.withLock {
             val t = persisted.tokens?.accessToken
@@ -798,8 +810,9 @@ class VisualizerSync(
      */
     internal suspend fun drainRetryQueue(): Int {
         // Own state loads apart from the rows, and a shot that isn't in the
-        // history leaves the queue: not before the rows are there.
-        seriesReady()
+        // history leaves the queue: not before the rows are there. A later
+        // trigger tries again.
+        if (!rowsReady()) return 0
         if (!retryMutex.tryLock()) return 0
         var uploaded = 0
         try {
@@ -1413,6 +1426,19 @@ class VisualizerSync(
                 },
             )
         }
+    }
+
+    /**
+     * Wait for the rows and their series, up to [ROWS_WAIT_MS]. False when they
+     * didn't arrive: the caller skips this run, spending nothing, and the user
+     * is told once, not once per trigger.
+     */
+    private suspend fun rowsReady(): Boolean {
+        if (withTimeoutOrNull(ROWS_WAIT_MS) { seriesReady() } != null) return true
+        if (rowsLateTold.compareAndSet(false, true)) {
+            notify("Shot data hasn’t loaded, so Visualizer uploads are waiting. They’ll retry on their own.")
+        }
+        return false
     }
 
     /**

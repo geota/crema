@@ -14,7 +14,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -99,6 +101,7 @@ class VisualizerOwnStateTest {
         history: Map<String, StoredShot> = emptyMap(),
         shotsLoaded: () -> Boolean = { true },
         seriesReady: suspend () -> Unit = {},
+        onSignedIn: () -> Unit = {},
     ) = VisualizerSync(
         store = store,
         client = client,
@@ -117,6 +120,7 @@ class VisualizerOwnStateTest {
         now = { 1_800_000_000_000L },
         shotsLoaded = shotsLoaded,
         seriesReady = seriesReady,
+        onSignedIn = onSignedIn,
     )
 
     @After
@@ -296,6 +300,45 @@ class VisualizerOwnStateTest {
         rows["q1"] = shot
         series.complete(Unit)
         waitFor("the queued upload") { requests.any { it.endsWith("/shots/upload") } }
+    }
+
+    @Test
+    fun `a drain skips, once told, when the rows never arrive`() {
+        val shot = StoredShot(id = "q1", completedAtMs = 1, durationMs = 30_000, profileName = "Test")
+        seed(saved.copy(retryQueue = listOf(QueuedUpload("q1", 1, 0L))))
+        val test = TestScope()
+        val s = sync(scope = test, history = mapOf("q1" to shot), seriesReady = { awaitCancellation() })
+        runBlocking { s.load() }
+
+        repeat(2) {
+            s.drainSoon()
+            test.runCurrent()
+            test.advanceTimeBy(VisualizerSync.ROWS_WAIT_MS + 1)
+            test.runCurrent()
+        }
+
+        assertEquals("one notice, not one per trigger", 1, notices.count { "hasn’t loaded" in it })
+        assertEquals("nothing waits on past the bound", 0, test.coroutineContext[Job]!!.children.count())
+        assertEquals(emptyList<String>(), requests.toList())
+        assertEquals("the shot stays queued, no attempt spent", listOf(QueuedUpload("q1", 1, 0L)), stored().retryQueue)
+    }
+
+    @Test
+    fun `the catch-up offer waits for the rows after a cold-start sign-in`() {
+        seed(saved.copy(tokens = null, pendingVerifier = "verifier", pendingState = "csrf"))
+        val series = CompletableDeferred<Unit>()
+        val offers = java.util.concurrent.atomic.AtomicInteger()
+        val s = sync(seriesReady = { series.await() }, onSignedIn = { offers.incrementAndGet() })
+        runBlocking { s.load() }
+
+        s.handleCallback("code", "csrf", null)
+        waitFor("signed in") { notices.any { "Signed in" in it } }
+        waitFor("no longer busy") { !s.state.value.busy }
+        settle()
+        assertEquals("the rows aren't there to count", 0, offers.get())
+
+        series.complete(Unit)
+        waitFor("the offer") { offers.get() == 1 }
     }
 
     @Test
