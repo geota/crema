@@ -18,7 +18,7 @@
 	 * shared `ActivityLog`.
 	 */
 	import { onMount } from 'svelte';
-	import { getHistoryStore, historyDroppedNotice, isBrewLog } from '#lib/history/index.js';
+	import { getHistoryStore, historyDroppedNotice } from '#lib/history/index.js';
 	import { shotHistoryJsonl } from '#lib/history/crema-jsonl.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import {

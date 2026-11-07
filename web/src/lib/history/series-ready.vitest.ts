@@ -69,9 +69,35 @@ describe('HistoryStore.seriesReady', () => {
 		expect(store.get('s1')?.record.samples).toHaveLength(1);
 	});
 
-	it('settles when the load fails', async () => {
-		series.load = () => Promise.reject(new Error('blocked'));
-		expect(await new HistoryStore().seriesReady()).toBe(true);
+	it('a read that fails once is tried again, and nothing has failed', async () => {
+		let reads = 0;
+		series.load = () => {
+			reads += 1;
+			return reads === 1
+				? Promise.reject(new Error('blocked'))
+				: Promise.resolve(new Map([['s1', [sample]]]));
+		};
+		const store = new HistoryStore();
+
+		expect(await store.seriesReady()).toBe(true);
+
+		expect(reads).toBe(2);
+		expect(store.seriesFailed).toBe(false);
+		expect(store.get('s1')?.record.samples).toHaveLength(1);
+	});
+
+	it('a read that fails twice settles as failed', async () => {
+		let reads = 0;
+		series.load = () => {
+			reads += 1;
+			return Promise.reject(new Error('blocked'));
+		};
+		const store = new HistoryStore();
+
+		expect(await store.seriesReady()).toBe(true);
+
+		expect(reads).toBe(2);
+		expect(store.seriesFailed).toBe(true);
 	});
 
 	it('answers false when the load outlasts the wait', async () => {
@@ -88,6 +114,33 @@ describe('HistoryStore.seriesReady', () => {
 		vi.stubGlobal('indexedDB', undefined);
 		expect(await new HistoryStore().seriesReady()).toBe(true);
 		vi.stubGlobal('indexedDB', original);
+	});
+});
+
+describe('the Visualizer backlog', () => {
+	const withCurve = row({ id: 's2', record: { duration: 1, samples: [sample] } as never });
+	const uploaded = row({ id: 's3', visualizerId: 'v3' });
+	const brew = row({ id: 's4', brewMethod: 'pourover' });
+
+	beforeEach(() => {
+		localStorage.setItem('crema.history.v2', JSON.stringify([row(), withCurve, uploaded, brew]));
+	});
+
+	it('keeps a row while its curve may still be on its way', async () => {
+		let land: ((rows: Map<string, unknown[]>) => void) | undefined;
+		series.load = () => new Promise((resolve) => (land = resolve));
+		const store = new HistoryStore();
+		await vi.waitFor(() => expect(land).toBeDefined());
+
+		expect(store.visualizerBacklog.map((s) => s.id)).toEqual(['s1', 's2']);
+		expect(store.withoutTelemetry).toEqual([]);
+
+		land?.(new Map());
+		await store.seriesReady();
+		await new Promise((resolve) => setTimeout(resolve));
+
+		expect(store.visualizerBacklog.map((s) => s.id)).toEqual(['s2']);
+		expect(store.withoutTelemetry.map((s) => s.id)).toEqual(['s1']);
 	});
 });
 

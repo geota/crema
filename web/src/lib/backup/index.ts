@@ -26,6 +26,7 @@ import {
 } from '#lib/wasm/de1_wasm.js';
 import { getBeanStore } from '#lib/bean/index.js';
 import { getHistoryStore } from '#lib/history/index.js';
+import { refusedNoSamples } from '#lib/history/model.js';
 import {
 	getSettingsStore,
 	settingsToCommon,

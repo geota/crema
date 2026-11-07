@@ -59,7 +59,7 @@ data class SharingUiState(
  */
 class SharingController(
     private val scope: CoroutineScope,
-    visualizer: VisualizerSync,
+    private val visualizer: VisualizerSync,
     decent: DecentSync,
     /** The live UI snapshot (history, the destination mirrors, the DE1 info). */
     private val uiFlow: StateFlow<MainUiState>,

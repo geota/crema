@@ -14,7 +14,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import { getBeanStore, readSyncSettings, type SyncResult as BeanSyncResult } from '#lib/bean/index.js';
-	import { getHistoryStore, isBrewLog } from '#lib/history/index.js';
+	import { getHistoryStore } from '#lib/history/index.js';
 	import { historyFullNotice } from '#lib/history/brew-date.js';
 	import {
 		appendSyncLog,

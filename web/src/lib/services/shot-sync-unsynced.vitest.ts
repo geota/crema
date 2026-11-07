@@ -220,6 +220,24 @@ describe('ShotSync.uploadUnsyncedShots — the stored series (#330)', () => {
 	});
 });
 
+describe('ShotSync.uploadUnsyncedShots — shots with no telemetry (#330)', () => {
+	it('leaves them out of the pass, with one log line for all of them', async () => {
+		h.reconcile = [];
+		const bare = (id: string) => shot({ id, record: { duration: 30_000, samples: [] } } as Partial<StoredShot>);
+		const history = mkHistory([bare('a'), bare('b'), bare('c')]);
+		h.appendSyncLog.mockClear();
+
+		await run(history);
+
+		expect(h.appendSyncLog).toHaveBeenCalledTimes(1);
+		expect(h.appendSyncLog.mock.calls[0][0]).toMatchObject({
+			direction: 'skip',
+			error: '3 shots have no telemetry to upload.'
+		});
+		expect(h.enqueueEntry).not.toHaveBeenCalled();
+	});
+});
+
 describe('ShotSync.uploadUnsyncedShots — free-plan daily quota (visualizer 3e9ba33c)', () => {
 	// The exact reply `POST /shots/upload` sends at the cap.
 	const QUOTA_BODY = JSON.stringify({

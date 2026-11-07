@@ -241,12 +241,12 @@ describe('one unreadable row (#329)', () => {
 
 	const header = (jsonl: string) => JSON.parse(jsonl.split('\n')[0]) as Record<string, unknown>;
 
-	it('leaves the row out, counts what was written, and the file restores', () => {
+	it('leaves the row out, counts what was written, and the file restores', async () => {
 		const ids = seed();
 		const broken = { ...makeShot('shot:bad'), record: { duration: 'nope', samples: [] } };
 		getHistoryStore().insertPulled(broken as unknown as StoredShot);
 
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		expect(built.contents.shots).toBe(1);
 		expect(built.contents.omitted).toEqual([
 			expect.objectContaining({ kind: 'shot', id: 'shot:bad' })
@@ -259,19 +259,19 @@ describe('one unreadable row (#329)', () => {
 		expect(getHistoryStore().get('shot:bad')).toBeUndefined();
 	});
 
-	it('keeps a shot whose profile will not read, without the profile', () => {
+	it('keeps a shot whose profile will not read, without the profile', async () => {
 		const broken = { ...makeShot('shot:thin'), profile: 'not a profile' };
 		getHistoryStore().insertPulled(broken as unknown as StoredShot);
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		expect(built.contents.shots).toBe(1);
 		expect(built.contents.degraded).toEqual(['shot:thin']);
 		expect(built.contents.omitted).toEqual([]);
 	});
 
-	it('leaves out a bad row of any kind, not just shots', () => {
+	it('leaves out a bad row of any kind, not just shots', async () => {
 		seed();
 		getBeanStore().bulkAdd([{ ...blankBean('bean-bad'), name: 5 } as never], []);
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		expect(built.contents.beans).toBe(1);
 		expect(built.contents.omitted?.map((o) => [o.kind, o.id])).toEqual([['bean', 'bean-bad']]);
 		expect(header(built.jsonl)).toMatchObject({ beanCount: 1, omittedCount: 1 });
@@ -283,13 +283,13 @@ describe('one unreadable row (#329)', () => {
 		const broken = { ...makeShot('shot:bad'), record: { duration: 'nope', samples: [] } };
 		getHistoryStore().insertPulled(broken as unknown as StoredShot);
 
-		expect(() => buildBackupJsonl()).toThrow();
+		await expect(buildBackupJsonl()).rejects.toThrow();
 		expect(await backupNote()).toBe('Backup failed: nothing was saved.');
 	});
 
-	it('keeps a clean backup free of the key', () => {
+	it('keeps a clean backup free of the key', async () => {
 		seed();
-		expect(buildBackupJsonl()!.jsonl).not.toContain('omittedCount');
+		expect((await buildBackupJsonl())!.jsonl).not.toContain('omittedCount');
 	});
 
 	it('words the gaps, and says nothing for a clean backup', () => {
@@ -312,6 +312,6 @@ describe('one unreadable row (#329)', () => {
 
 	it('ends in a message when the build throws, so the UI cannot hang', async () => {
 		const note = await backupNote(() => Promise.reject(new Error('quota')));
-		expect(note).toBe('Backup failed: nothing was saved.');
+		expect(note).toBe('Backup failed: nothing was saved. quota');
 	});
 });

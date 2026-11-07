@@ -105,6 +105,7 @@ class VisualizerRetryQueueTest {
         keepStore: Boolean = false,
         seriesReady: suspend () -> Unit = {},
         waits: MutableList<Long>? = null,
+        shotsLoaded: () -> Boolean = { true },
     ) = VisualizerSync(
         store = store,
         client = client,
@@ -124,6 +125,7 @@ class VisualizerRetryQueueTest {
         // [waits] turns the timers on, each wait recorded and never ending.
         retryTimers = waits != null,
         seriesReady = seriesReady,
+        shotsLoaded = shotsLoaded,
         retryDelay = { ms -> waits?.add(ms); awaitCancellation() },
     ).also { s ->
         runBlocking {
@@ -493,5 +495,27 @@ class VisualizerRetryQueueTest {
         assertEquals(listOf("Visualizer upload failed: This shot has no telemetry to upload"), notices.toList())
         assertEquals(emptyList<String>(), uploads)
         assertEquals(emptyList<QueuedUpload>(), runBlocking { store.load() }.retryQueue)
+    }
+
+    @Test
+    fun `a shot with no telemetry leaves the backlog once the series settle, with one log line a pass`() {
+        var settled = false
+        val s = sync(shotsLoaded = { settled })
+        val bare = listOf(shot("a", samples = emptyList()), shot("b", samples = emptyList()))
+        val good = shot("c")
+
+        assertTrue("its curve may be on its way", s.inBacklog(bare[0]))
+        settled = true
+        assertFalse(s.inBacklog(bare[0]))
+        assertTrue(s.noTelemetry(bare[0]))
+        assertTrue(s.inBacklog(good))
+        assertFalse(s.noTelemetry(good))
+
+        val r = runBlocking { s.uploadUnsentNow(bare + good) }
+
+        assertEquals(1, r.uploaded)
+        assertEquals(1, uploads.size)
+        val skips = runBlocking { store.load() }.log.filter { it.direction == "skip" }
+        assertEquals(listOf("2 shots have no telemetry to upload"), skips.map { it.error })
     }
 }
