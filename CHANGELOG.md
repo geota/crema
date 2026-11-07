@@ -94,6 +94,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **A bean sync that couldn't push an edit tries again** — a failed write used to
   count as synced, so the edit stayed local until it was edited again. An edit
   made during a sync now pushes on the next one too. Android and web.
+- **Android finishes a save it has started** — leaving a screen could drop a
+  save still waiting behind another, so the file stayed behind what you saw. A
+  save that's been asked for now always lands. Encoding a store also moved off
+  the screen's thread, which helps big histories. Android.
 - **Drive keeps your fullest backups** — daily backups now carry their shot and
   curve counts in the file name, and each device manages only its own, even two
   of the same model. Past the 10 copies you keep, the newest with the most shots
