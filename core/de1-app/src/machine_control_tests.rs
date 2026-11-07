@@ -204,6 +204,140 @@ fn an_unseen_shot_never_stops_on_weight() {
     assert_eq!(state_writes(&o), [MachineState::Idle as u8]);
 }
 
+/// The bytes of the scale timer's start, stop and reset, on a Bookoo.
+fn timer_commands(core: &CremaCore) -> Vec<Command> {
+    [core.start_timer(), core.stop_timer(), core.reset_timer()]
+        .into_iter()
+        .flat_map(|o| o.commands)
+        .collect()
+}
+
+/// How many of `o`'s commands drive the scale's timer.
+fn timer_writes(o: &CoreOutput, timer: &[Command]) -> usize {
+    o.commands.iter().filter(|c| timer.contains(c)).count()
+}
+
+/// Feed a shot's first states, then a shot's worth of samples and readings,
+/// then a drop and its end, counting every timer command on the way.
+fn timer_writes_across_a_shot(core: &mut CremaCore) -> usize {
+    let timer = timer_commands(core);
+    assert_eq!(timer.len(), 3, "a Bookoo has a timer");
+    let mut outs = vec![core.on_notification(Source::De1State, &[4, 5], 100)];
+    outs.push(core.on_notification(Source::ScaleWeight, &bookoo(25.0), 200));
+    outs.push(core.de1_link_lost());
+    outs.push(core.on_notification(Source::De1State, &[4, 5], 300));
+    outs.push(core.on_notification(Source::De1State, &[2, 0], 40_000));
+    outs.iter().map(|o| timer_writes(o, &timer)).sum()
+}
+
+/// H12's "no beep": a shot first seen mid-pour leaves the scale's timer alone,
+/// including the stop, which would otherwise end a timer the user started.
+#[test]
+fn an_unseen_shot_leaves_the_scale_timer_alone() {
+    let mut core = core_with_cup();
+    assert_eq!(timer_writes_across_a_shot(&mut core), 0);
+}
+
+/// The same run on a shot the app saw from its start sends all of them, so the
+/// test above can't pass for want of a timer. Reset, start, the drop's stop
+/// and the end's stop.
+#[test]
+fn a_seen_shot_drives_the_scale_timer() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    assert_eq!(timer_writes_across_a_shot(&mut core), 4);
+}
+
+/// Run an unseen shot past 30 s with a heavy cup on the scale, to its end.
+fn finished_unseen_shot() -> (CremaCore, CoreOutput) {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[4, 5], 100);
+    for i in 0..300u64 {
+        let t = 200 + i * 100;
+        core.on_notification(Source::De1ShotSample, &sample(i as u16 * 12), t);
+        core.on_notification(Source::ScaleWeight, &bookoo(200.0 + i as f32 / 10.0), t + 1);
+    }
+    let end = core.on_notification(Source::De1State, &[2, 0], 31_000);
+    (core, end)
+}
+
+/// A wrong yield is worse than none: an unseen shot's readings are the cup,
+/// so it completes at once with no weight, not through the drip settle.
+#[test]
+fn an_unseen_shot_completes_with_no_weight() {
+    let (core, end) = finished_unseen_shot();
+    let Some(Event::ShotCompleted {
+        peak_weight,
+        final_weight,
+        disposition,
+        ..
+    }) = end
+        .events
+        .iter()
+        .find(|e| matches!(e, Event::ShotCompleted { .. }))
+    else {
+        panic!("completed on the state that ended it: {:?}", end.events);
+    };
+    assert_eq!(*peak_weight, None);
+    assert_eq!(*final_weight, None);
+    assert_eq!(*disposition, de1_domain::ShotDisposition::Record);
+    assert!(core.post_shot_settle.is_none());
+}
+
+/// Every reader of a stored shot's yield falls back to its series, so the
+/// series has to be clean too: the shot reads as one with no scale.
+#[test]
+fn an_unseen_shot_stores_no_yield_anywhere() {
+    let (mut core, _) = finished_unseen_shot();
+    let shot = core
+        .take_stored_shot(de1_domain::ShotCaptureContext {
+            completed_at: 1,
+            ..de1_domain::ShotCaptureContext::default()
+        })
+        .expect("the shot is recorded");
+    assert!(shot.record.samples.len() > 100);
+    assert_eq!(shot.metadata.yield_out, None);
+    assert!(shot.record.samples.iter().all(|t| t.scale_weight.is_none()));
+    let peaks = shot.peaks();
+    assert_eq!(peaks.peak_weight, None);
+    assert_eq!(peaks.final_weight, None);
+
+    let export: serde_json::Value =
+        serde_json::from_str(&de1_domain::export_v2_json_shot(&shot).expect("exports"))
+            .expect("JSON");
+    let drink_weight = &export["app"]["data"]["settings"]["drink_weight"];
+    assert!(
+        drink_weight.is_null() || drink_weight.as_f64() == Some(0.0),
+        "uploaded {drink_weight}"
+    );
+
+    let stats = de1_domain::history_stats(&[de1_domain::ShotStatInput {
+        duration_ms: 30_000,
+        final_weight_g: shot.metadata.yield_out,
+        peak_weight_g: peaks.peak_weight,
+        dose_g: Some(18.0),
+        rating: None,
+    }]);
+    assert_eq!(stats.count, 1);
+    assert_eq!(stats.avg_weight_g, None);
+    assert_eq!(stats.avg_ratio, None);
+}
+
+/// The latch ends with the shot: the next one, seen from its start, weighs.
+#[test]
+fn the_shot_after_an_unseen_one_has_a_yield() {
+    let (mut core, _) = finished_unseen_shot();
+    core.on_notification(Source::De1State, &[4, 2], 40_000);
+    core.on_notification(Source::De1State, &[4, 5], 41_000);
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 41_100);
+    for i in 0..20u64 {
+        let t = 41_200 + i * 100;
+        core.on_notification(Source::De1ShotSample, &sample(i as u16 * 12), t);
+        core.on_notification(Source::ScaleWeight, &bookoo(i as f32), t + 1);
+    }
+    assert!(core.shot_metrics.final_weight.is_some());
+}
+
 /// The first substate decides: a first state in a pre-flow substate is a start
 /// the app did see, so it's tared and stops on weight.
 #[test]
