@@ -95,6 +95,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   shot costs that shot, not the backup. One shot that throws no longer stops the
   web's upload queue or catch-up uploads. Android and web.
 
+- **A Visualizer pull no longer removes shots or tags** — at the 300-shot cap a
+  pull used to push out your oldest rows, including brew logs and shots that
+  never reached Visualizer. It now leaves the history alone, skips the new shots
+  that don't fit, keeps going, and says how many it left out. Re-sync shots
+  fetches them once there's room. On the web, a pull no longer empties a shot's
+  tags on a free account, and remote tags only fill a shot that has none. Android
+  and web.
 - **A damaged shot history keeps every curve on the web** — when the rows
   couldn't be read, the next load deleted every saved curve and raw capture, so
   the kept-aside rows could never get them back (#325). A curve or capture now

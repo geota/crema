@@ -15,6 +15,7 @@ import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.StoredShot
 import coffee.crema.history.effectiveGrindSetting
+import coffee.crema.history.historyFullNotice
 import coffee.crema.history.isBrewLog
 import coffee.crema.sync.OwnStateGate
 import coffee.crema.ui.DrainResult
@@ -73,8 +74,8 @@ class VisualizerSync(
     private val onShotSynced: (localId: String, visualizerId: String) -> Unit,
     /** The user's equipment-level grinder model (Settings → Machine); null = unset. */
     private val grinderModel: () -> String? = { null },
-    /** Insert pulled remote stubs into the local history (dedup by id). */
-    private val onPulledShots: (List<StoredShot>) -> Unit = {},
+    /** Insert pulled remote stubs into the local history (dedup by id); answers the ids a full history refused. */
+    private val onPulledShots: (List<StoredShot>) -> Set<String> = { emptySet() },
     /** Backfill a bound local's telemetry from a pull (no-op when it has a curve). */
     private val onBackfillTelemetry: (localId: String, samples: List<coffee.crema.ui.TelemetrySample>, durationMs: Long) -> Unit = { _, _, _ -> },
     /** Fill a bound local's blank barista from a pull (final review 06 #1). */
@@ -1088,10 +1089,11 @@ class VisualizerSync(
     /**
      * Reconcile pulled wires against the local history via the CORE planner
      * (`reconcile_shots` over the FFI — the identical algorithm the web runs)
-     * and apply the actions through the VM callbacks. Returns pulled-count.
+     * and apply the actions through the VM callbacks. A row a full history
+     * refuses is counted and the rest of the plan still applies.
      */
-    internal suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>, profilesById: Map<String, JsonObject>): Int {
-        if (wires.isEmpty()) return 0
+    internal suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>, profilesById: Map<String, JsonObject>): PullApplied {
+        if (wires.isEmpty()) return PullApplied()
         // Tombstones ride along (web F18a): a shot deleted here whose remote copy
         // is still on Visualizer must match that copy (an `update`, skipped
         // below), not look new and be pulled back in. The planner never binds a
@@ -1136,8 +1138,7 @@ class VisualizerSync(
             json.parseToJsonElement(
                 coffee.crema.core.reconcileShots(json.encodeToString(JsonObject.serializer(), payload)),
             ) as kotlinx.serialization.json.JsonArray
-        }.getOrElse { return 0 }
-        var pulled = 0
+        }.getOrElse { return PullApplied() }
         val stubs = mutableListOf<StoredShot>()
         for (el in actions) {
             val action = el as? JsonObject ?: continue
@@ -1149,10 +1150,7 @@ class VisualizerSync(
                     storedShotFromWire(remote, vid?.let { samplesById[it] }, json)?.let { stub ->
                         // Attach the recipe fetched at pull time (#12) so the shot is
                         // self-contained; absent for profile-less remotes.
-                        val withProfile = vid?.let { profilesById[it] }?.let { stub.copy(profile = it) } ?: stub
-                        stubs += withProfile
-                        pulled++
-                        logSync("pull", stub.id, stub.profileName ?: "Shot")
+                        stubs += vid?.let { profilesById[it] }?.let { stub.copy(profile = it) } ?: stub
                     }
                 }
                 "bind" -> {
@@ -1179,8 +1177,12 @@ class VisualizerSync(
                 }
             }
         }
-        if (stubs.isNotEmpty()) onPulledShots(stubs)
-        return pulled
+        val refused = if (stubs.isEmpty()) emptySet() else onPulledShots(stubs)
+        val added = stubs.filter { it.id !in refused }
+        added.forEach { logSync("pull", it.id, it.profileName ?: "Shot") }
+        // One line for the run: a large pull would push out the whole log.
+        if (refused.isNotEmpty()) logSync("skip", "", "Pull", historyFullNotice(refused.size))
+        return PullApplied(added.size, refused.size)
     }
 
     // ── Shot deletion (web history tombstones + upload-queue delete) ───────
@@ -1384,12 +1386,15 @@ class VisualizerSync(
                     }
             }
             var pulled = 0
+            var refused = 0
             var pushed = 0
             if (directionPulls(direction)) {
                 runCatchingCancellable {
                     val since = persisted.shotPullCursor ?: 0L
                     val (wires, samples, profiles) = pullAllShotsSince(since)
-                    pulled = reconcileAndApply(shots, wires, samples, profiles)
+                    val applied = reconcileAndApply(shots, wires, samples, profiles)
+                    pulled = applied.pulled
+                    refused = applied.refused
                     persist { it.copy(shotPullCursor = System.currentTimeMillis()) }
                 }.onFailure { e ->
                     failed = true
@@ -1421,6 +1426,7 @@ class VisualizerSync(
                 buildString {
                     append("Visualizer sync: ")
                     append(parts.joinToString(" · "))
+                    if (refused > 0) append(" · ${historyFullNotice(refused)}")
                     if (stop != null) append(" · ${stop.notice}")
                     else if (failed) append(" · some steps failed (see log)")
                 },
@@ -1535,6 +1541,9 @@ internal fun shotPatchInputs(
     // remote value alone. Empty once cleared, so a clear reaches Visualizer.
     barista = if (sendBarista) baristaOf(shot) else null,
 )
+
+/** What a pull left in the history: rows added, and new rows a full one refused. */
+internal data class PullApplied(val pulled: Int = 0, val refused: Int = 0)
 
 /** A shot's barista as the PATCH sends it: trimmed, "" when unset or cleared. */
 internal fun baristaOf(shot: StoredShot): String = shot.barista?.trim().orEmpty()

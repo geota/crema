@@ -12,6 +12,7 @@ import {
 	brewDateError,
 	fitsHistory,
 	fromLocalInput,
+	historyFullNotice,
 	newestFirst,
 	toLocalInput
 } from './brew-date';
@@ -257,6 +258,52 @@ describe('inserting a batch', () => {
 		expect(kept).toHaveLength(2);
 		expect(dropped).toBe(1);
 		expect(store.get(oldest.id)).toBeUndefined();
+	});
+
+	it('pull_never_evicts_at_cap: a full history refuses a pulled row and loses nothing', () => {
+		const store = nearlyFull();
+		store.addManualBrew(brew(NOW - 400 * HOUR));
+		const before = store.all.map((s) => s.id);
+		expect(store.freeSlots).toBe(0);
+
+		expect(store.insertPulled(shot('new', NOW + HOUR))).toBe(false);
+
+		expect(store.all.map((s) => s.id)).toEqual(before);
+		expect(new HistoryStore().all.map((s) => s.id)).toEqual(before);
+	});
+
+	it('the notice says Re-sync, because a plain Sync won’t fetch refused rows', () => {
+		expect(historyFullNotice(2, 300)).toBe(
+			'History is full at 300 shots, so 2 shots from Visualizer weren\u2019t added. After freeing up space, use Re-sync shots to fetch them.'
+		);
+		expect(historyFullNotice(1, 300)).toContain('to fetch it.');
+	});
+
+	it('a pull fills the last free slot by date', () => {
+		const store = nearlyFull();
+		expect(store.freeSlots).toBe(1);
+		expect(store.insertPulled(shot('new', NOW + HOUR))).toBe(true);
+		expect(store.all[0].id).toBe('new');
+		expect(store.all).toHaveLength(300);
+	});
+
+	it('a tombstone doesn’t take a slot, and a pull leaves it', () => {
+		const store = nearlyFull();
+		const row = { ...shot('deleted', NOW), visualizerId: 'v-1' };
+		expect(store.insertPulled(row)).toBe(true);
+		store.delete('deleted');
+		expect(store.freeSlots).toBe(1);
+		expect(store.insertPulled(shot('new', NOW + HOUR))).toBe(true);
+		expect(store.get('deleted')?.deletedAt).not.toBeNull();
+		expect(store.rawAll).toHaveLength(301);
+	});
+
+	it('a list over the cap stays as it is through a pull', () => {
+		const rows = Array.from({ length: 350 }, (_, i) => shot(`r${i}`, NOW - i * HOUR));
+		localStorage.setItem('crema.history.v2', JSON.stringify(rows));
+		const store = new HistoryStore();
+		expect(store.insertPulled(shot('new', NOW + HOUR))).toBe(false);
+		expect(store.all).toHaveLength(350);
 	});
 
 	it('leaves a list over the cap alone when nothing is new', () => {
