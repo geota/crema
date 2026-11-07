@@ -574,7 +574,7 @@ fun HistoryScreen(
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
                             onExport = { vm.exportShot(selected.id) },
                             onDelete = { remote -> vm.deleteShot(selected.id, alsoOnVisualizer = remote); selectedId = null },
-                            remoteDeleteAvailable = vm.canDeleteShotOnVisualizer(selected.visualizerId),
+                            remoteDeleteAvailable = vm.canDeleteShotOnVisualizer(selected),
                             // One Upload row over Visualizer + Decent (a re-upload for a
                             // destination that already has the shot: Visualizer de-dupes
                             // by telemetry SHA; Decent replaces its copy) — #44 follow-up.

@@ -313,6 +313,26 @@ class VisualizerSessionTest {
     }
 
     @Test
+    fun `an account change parks unbound tombstones and drops attempt marks`() {
+        shot("old-shot")
+        val tomb = UnboundTombstone("gone", 1_000, 30_000, 1L, deleteRemote = true, attemptedAt = 1L)
+        sync(VisualizerState(syncAccountId = "u1", unboundTombstones = listOf(tomb), uploadAttempted = mapOf("other" to 1L)))
+        me = HttpStatusCode.OK to """{"id":"u2","name":"Bo","public":false}"""
+        signIn()
+        val after = stored()
+        assertEquals("u1", after.unboundTombstones.single().parkedFor)
+        assertTrue(after.uploadAttempted.isEmpty())
+    }
+
+    @Test
+    fun `an unbound tombstone comes back with its own account`() {
+        val tomb = UnboundTombstone("gone", 1_000, 30_000, 1L, parkedFor = "u1")
+        sync(VisualizerState(syncAccountId = "u2", unboundTombstones = listOf(tomb)))
+        signIn()
+        assertNull(stored().unboundTombstones.single().parkedFor)
+    }
+
+    @Test
     fun `the same account comes back with everything in place`() {
         val tomb = ShotTombstone("gone", "v-gone", 1L, deleteRemote = true)
         sync(VisualizerState(syncAccountId = "u1", shotPullCursor = 99L, shotTombstones = listOf(tomb), needsReconnect = true))

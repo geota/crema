@@ -105,6 +105,7 @@
 	import { moveShotBag } from '#lib/bean/move-shot-bag.js';
 	import { onMount, untrack } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
+	import { uploadPending } from '#lib/history/store.svelte.js';
 	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
 	import { readQueue } from '#lib/services/queue-store.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
@@ -646,7 +647,7 @@
 		const visualizerId = shot.visualizerId ?? null;
 		const wasSelected = selected?.id === shot.id;
 		const onDetailScreen = phoneDetail && phoneShot === shot.id;
-		store.delete(shot.id);
+		store.delete(shot.id, { deleteRemote: opts.remote });
 		if (onDetailScreen) leaveShot();
 		const api = appCtx().services;
 		if (opts.remote && visualizerId && api) {
@@ -1816,7 +1817,7 @@
 						onGrindChange={saveGrind}
 						onBeanChange={saveBean}
 						onDelete={deleteById}
-						canDeleteRemote={canPushShots && !!selected.visualizerId}
+						canDeleteRemote={canPushShots && (!!selected.visualizerId || uploadPending(selected.id))}
 						uploadTargets={uploadTargetsFor(selected)}
 						onUpload={uploadShotTo}
 						onLogAgain={logAgainById}

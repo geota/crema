@@ -84,6 +84,18 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A shot deleted during its upload stays deleted** — the delete now waits for
+  the upload's id, from the upload finishing or from a pull finding the row, so
+  the shot no longer comes back, even if the app is killed mid-upload. The delete
+  dialog also offers Visualizer while an upload is under way, and the remote
+  copy goes once its id arrives. Android and web.
+- **A pull recognises Crema's own uploads** — it matches a remote shot to its
+  local row by start time and duration, where it never matched a real upload
+  before, so a shot uploaded without its id coming back no longer arrives as a
+  duplicate. An upload that may have landed retries and gets the same remote
+  shot back, in place of a pull that never found it. Android and web.
+- **A remote delete Visualizer refuses says so** — one notice, and the shot stays
+  deleted here. Android and web.
 - **Opening the app offline no longer disconnects Google Drive** — Drive used to
   sign out on any failed refresh, which ended backups until someone noticed.
   Only Google saying the sign-in is over ends it now. A daily backup with no
