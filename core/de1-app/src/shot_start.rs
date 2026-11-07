@@ -14,9 +14,12 @@
 //!    desired profile (F7); the start waits for [`Event::ProfileSyncHolds`] of
 //!    its fingerprint, at most [`START_UPLOAD_TIMEOUT`].
 //! 2. **Pre-flush** (the `pre_flush` setting): a `HotWaterRinse`, then our
-//!    flush's end, at most [`PRESHOT_FLUSH_TIMEOUT`]. A flush that ended
-//!    outside Idle (a group-head button took the machine elsewhere) does not
-//!    start the shot.
+//!    flush's end, at most [`PRESHOT_FLUSH_TIMEOUT`]. A flush that didn't begin
+//!    within [`PRESHOT_FLUSH_ENTRY_TIMEOUT`] ends the start: the request may
+//!    be lost, and the machine may be doing something else by now. A flush
+//!    that ended outside Idle (a group-head button took the machine elsewhere)
+//!    does not start the shot, and neither does the ceiling while another flow
+//!    is running.
 //! 3. **Espresso**: requested, then [`ESPRESSO_ENTRY_TIMEOUT`] for the machine
 //!    to report it (a GHC-only machine ignores app starts).
 //!
@@ -58,6 +61,8 @@ pub const START_UPLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 /// The ceiling on the pre-shot flush before Espresso is requested anyway (the
 /// backstop when its end is missed).
 pub const PRESHOT_FLUSH_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a start waits for its pre-shot flush to begin.
+pub const PRESHOT_FLUSH_ENTRY_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a start waits for the machine to report Espresso after the
 /// request.
 pub const ESPRESSO_ENTRY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -150,6 +155,9 @@ pub enum StartEnd {
         /// Where the machine went.
         state: MachineState,
     },
+    /// The pre-shot flush did not begin within
+    /// [`PRESHOT_FLUSH_ENTRY_TIMEOUT`].
+    FlushNotEntered,
     /// The machine did not report Espresso within [`ESPRESSO_ENTRY_TIMEOUT`].
     NotEntered,
     /// A user's request, a link drop or a reset cancelled it.
@@ -170,6 +178,9 @@ impl StartEnd {
             Self::UploadTimedOut => Some("Profile upload timed out — shot not started".to_owned()),
             Self::FlushLeftIdle { .. } => {
                 Some("Shot not started — the machine left the flush".to_owned())
+            }
+            Self::FlushNotEntered => {
+                Some("Shot not started — the pre-shot flush didn’t begin".to_owned())
             }
             Self::NotEntered => {
                 Some("The machine didn’t start the shot — start it on the machine".to_owned())
@@ -263,8 +274,13 @@ enum Phase {
         fingerprint: String,
         until: Duration,
     },
-    /// Our flush was requested; `started` once it began.
-    Flushing { started: bool, until: Duration },
+    /// Our flush was requested; `started` once it began. It must begin by
+    /// `enter_by`, and `until` is the ceiling on the flush itself.
+    Flushing {
+        started: bool,
+        enter_by: Duration,
+        until: Duration,
+    },
     /// Espresso requested.
     Requested { until: Duration },
 }
@@ -435,6 +451,7 @@ impl CremaCore {
             self.set_start_phase(
                 Phase::Flushing {
                     started: false,
+                    enter_by: self.clock + PRESHOT_FLUSH_ENTRY_TIMEOUT,
                     until: self.clock + PRESHOT_FLUSH_TIMEOUT,
                 },
                 out,
@@ -609,8 +626,18 @@ impl CremaCore {
             Phase::Syncing { until, .. } if now >= until => {
                 Some(Due::End(StartEnd::UploadTimedOut))
             }
-            // The flush ceiling: Espresso anyway (the flush's end was missed).
-            Phase::Flushing { until, .. } if now >= until => Some(Due::Espresso),
+            Phase::Flushing {
+                started: false,
+                enter_by,
+                ..
+            } if now >= enter_by => Some(Due::End(StartEnd::FlushNotEntered)),
+            // The flush ceiling: Espresso anyway (the flush's end was missed),
+            // unless that would bounce another flow.
+            Phase::Flushing {
+                started: true,
+                until,
+                ..
+            } if now >= until => Some(self.flush_ceiling_due()),
             Phase::Requested { until } if now >= until => Some(Due::End(StartEnd::NotEntered)),
             _ => None,
         });
@@ -628,9 +655,25 @@ impl CremaCore {
         }
     }
 
+    /// The flush ceiling is a core request, so it never bounces a flow that
+    /// isn't its own flush.
+    fn flush_ceiling_due(&self) -> Due {
+        match self.last_state.map(|info| info.state) {
+            Some(state) if state.is_flow_state() && state != MachineState::HotWaterRinse => {
+                Due::End(StartEnd::FlushLeftIdle { state })
+            }
+            _ => Due::Espresso,
+        }
+    }
+
     /// The start's and the purge's next deadline, for the wake hint.
     pub(crate) fn shot_start_deadline(&self) -> Option<Duration> {
         let start = self.starter.start.as_ref().map(|s| match s.phase {
+            Phase::Flushing {
+                started: false,
+                enter_by,
+                ..
+            } => enter_by,
             Phase::Syncing { until, .. }
             | Phase::Flushing { until, .. }
             | Phase::Requested { until } => until,
@@ -651,7 +694,7 @@ impl CremaCore {
 #[cfg(test)]
 mod tests {
     use de1_domain::{BrewDefaults, BrewOverrides, ConnectSweepSettings, blank_profile};
-    use de1_protocol::requested_state;
+    use de1_protocol::{StateInfo, requested_state};
 
     use super::*;
     use crate::{Command, Source, WriteTarget};
@@ -853,17 +896,88 @@ mod tests {
             }]
         );
         assert!(!state_writes(&out).contains(&requested_state(MachineState::Espresso)));
-        // A missed flush end: Espresso at the 30 s ceiling.
+        // A missed flush end: Espresso at the 30 s ceiling, via Idle because
+        // the machine last reported its flush.
         let mut core = connected(true);
         let r = start(&mut core, &profile(36.0), 2_000);
         let _ = ack(&mut core, &r.output, 2_100);
         let _ = core.on_tick(2_600); // the flush goes out
+        let _ = report(&mut core, FLUSH, 3_000);
         // 30 s from the flush stage (entered at the upload's end, 2 100).
         assert!(state_writes(&core.on_tick(32_099)).is_empty());
         assert_eq!(
             state_writes(&core.on_tick(32_100)),
-            vec![requested_state(MachineState::Espresso)]
+            vec![
+                requested_state(MachineState::Idle),
+                requested_state(MachineState::Espresso)
+            ]
         );
+    }
+
+    /// #318: the start's flush is lost and steam starts at the group head. The
+    /// start ends at 5 s and writes nothing, so steam carries on.
+    #[test]
+    fn a_flush_that_never_began_ends_the_start_without_a_write() {
+        let mut core = connected(true);
+        let r = start(&mut core, &profile(36.0), 2_000);
+        let _ = ack(&mut core, &r.output, 2_100);
+        let flush = core.on_tick(2_600);
+        assert_eq!(
+            state_writes(&flush),
+            vec![requested_state(MachineState::HotWaterRinse)]
+        );
+        let _ = report(&mut core, STEAM, 4_000);
+        // 5 s from the flush stage (entered at the upload's end, 2 100).
+        assert!(ends(&core.on_tick(7_099)).is_empty());
+        let out = core.on_tick(7_100);
+        assert_eq!(ends(&out), vec![StartEnd::FlushNotEntered]);
+        assert!(state_writes(&out).is_empty());
+        assert!(!core.shot_starting());
+        assert!(state_writes(&core.on_tick(40_000)).is_empty());
+    }
+
+    #[test]
+    fn a_flush_that_never_began_tells_the_user() {
+        let message = StartEnd::FlushNotEntered.message();
+        assert!(message.is_some_and(|m| m.starts_with("Shot not started")));
+    }
+
+    #[test]
+    fn the_wake_hint_asks_for_the_flush_entry_deadline() {
+        let mut core = connected(true);
+        let r = start(&mut core, &profile(36.0), 2_000);
+        let _ = ack(&mut core, &r.output, 2_100);
+        let _ = core.on_tick(2_600);
+        assert_eq!(
+            core.shot_start_deadline(),
+            Some(Duration::from_millis(7_100))
+        );
+        let _ = report(&mut core, FLUSH, 3_000);
+        assert_eq!(
+            core.shot_start_deadline(),
+            Some(Duration::from_millis(32_100))
+        );
+    }
+
+    /// Leaving the flush normally ends the start first, so this guards a
+    /// missed report: the core must not bounce a foreign flow on what it last
+    /// knew.
+    #[test]
+    fn the_flush_ceiling_refuses_to_bounce_another_flow() {
+        let mut core = connected(true);
+        let r = start(&mut core, &profile(36.0), 2_000);
+        let _ = ack(&mut core, &r.output, 2_100);
+        let _ = core.on_tick(2_600);
+        let _ = report(&mut core, FLUSH, 3_000);
+        core.last_state = StateInfo::parse(&STEAM).ok();
+        let out = core.on_tick(32_100);
+        assert_eq!(
+            ends(&out),
+            vec![StartEnd::FlushLeftIdle {
+                state: MachineState::Steam
+            }]
+        );
+        assert!(state_writes(&out).is_empty());
     }
 
     /// AC-F16.5: a user's request cancels the start; its upload still lands,

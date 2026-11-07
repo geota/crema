@@ -16,8 +16,14 @@
 //!   sent for it — a duplicate would land on the *next* frame and skip that too.
 //! - **Retry on reject.** decaid retries a skip the transport rejected. Crema's
 //!   core sees no write result, so "rejected" is observed the only way it can
-//!   be: the DE1 is still on the same frame [`SKIP_RETRY_AFTER`] later. Then the
-//!   skip is re-sent, up to [`SKIP_RETRY_MAX`] times.
+//!   be: a sample that arrived [`SKIP_RETRY_AFTER`] or more after the write
+//!   still shows the same frame. An earlier sample can't show the skip's
+//!   effect, and without any sample the frame is unknown, so `SkipToNext`,
+//!   being relative, could skip the next frame. Then the skip is re-sent, up to
+//!   [`SKIP_RETRY_MAX`] times.
+//! - **Fresh telemetry only.** The first skip needs a sample under
+//!   [`SKIP_EVIDENCE_MAX_AGE`] old: the frame it would skip must be the one the
+//!   machine is on. Feed samples with [`on_evidence`](StepWeightExit::on_evidence).
 //! - **Scale only.** No scale, no weight, no skip (the caller only feeds this
 //!   from scale readings and passes `scale_connected`).
 //! - **Last frame vs SAW.** Skipping the last frame ends the shot. decaid does
@@ -89,6 +95,9 @@ impl Deferral {
 /// was sent (a DE1 reports its frame ~4–5 times a second).
 pub const SKIP_RETRY_AFTER: Duration = Duration::from_millis(600);
 
+/// The first skip needs a DE1 sample younger than this.
+pub const SKIP_EVIDENCE_MAX_AGE: Duration = Duration::from_secs(1);
+
 /// Give up re-sending a frame's skip after this many retries.
 pub const SKIP_RETRY_MAX: u32 = 5;
 
@@ -118,6 +127,8 @@ pub struct StepWeightExit {
     sensors: Option<(f32, f32)>,
     /// The mixed-frame skip being deferred, if any.
     deferral: Option<Deferral>,
+    /// When the latest DE1 sample arrived.
+    evidence: Option<Duration>,
 }
 
 impl StepWeightExit {
@@ -188,6 +199,13 @@ impl StepWeightExit {
         self.pending = None;
         self.skipped.clear();
         self.deferral = None;
+        self.evidence = None;
+    }
+
+    /// A DE1 sample arrived at `now`: telemetry is live, and the frame is
+    /// known as of `now`.
+    pub fn on_evidence(&mut self, now: Duration) {
+        self.evidence = Some(now);
     }
 
     /// The DE1 reported `frame`. A frame change settles a pending skip (it
@@ -259,13 +277,14 @@ impl StepWeightExit {
         let Some(frame) = self.frame else {
             return false;
         };
-        // Retry a skip the DE1 has not acted on.
+        let evidence = self.evidence;
+        // Retry a skip the DE1 has not acted on, on a sample that could show
+        // its effect.
         if let Some(pending) = self.pending.as_mut()
             && pending.frame == frame
         {
-            if now.saturating_sub(pending.last_push) >= SKIP_RETRY_AFTER
-                && pending.retries < SKIP_RETRY_MAX
-            {
+            let proven = evidence.is_some_and(|at| at >= pending.last_push + SKIP_RETRY_AFTER);
+            if proven && pending.retries < SKIP_RETRY_MAX {
                 pending.retries += 1;
                 pending.last_push = now;
                 return true;
@@ -283,6 +302,9 @@ impl StepWeightExit {
             return false;
         }
         if !(projected_g.is_finite() && projected_g >= target) {
+            return false;
+        }
+        if !evidence.is_some_and(|at| now.saturating_sub(at) < SKIP_EVIDENCE_MAX_AGE) {
             return false;
         }
         // Mixed frame: let the firmware own the transition while it is about
@@ -309,6 +331,18 @@ mod tests {
         Duration::from_millis(ms)
     }
 
+    /// A weight reading with telemetry running: a DE1 sample arrived with it.
+    fn live(
+        a: &mut StepWeightExit,
+        projected_g: f32,
+        now: Duration,
+        scale_connected: bool,
+        saw_armed: bool,
+    ) -> bool {
+        a.on_evidence(now);
+        a.on_weight(projected_g, now, scale_connected, saw_armed)
+    }
+
     /// Three frames; frame 1 exits at 3.6 g (A-Flow's Infuse).
     fn aflow_like() -> StepWeightExit {
         StepWeightExit::new(vec![None, Some(3.6), None])
@@ -318,60 +352,124 @@ mod tests {
     fn no_skip_without_a_scale() {
         let mut a = aflow_like();
         a.on_frame(1);
-        assert!(!a.on_weight(10.0, ms(1_000), false, false));
+        assert!(!live(&mut a, 10.0, ms(1_000), false, false));
     }
 
     #[test]
     fn no_skip_on_a_frame_without_a_weight() {
         let mut a = aflow_like();
         a.on_frame(0);
-        assert!(!a.on_weight(50.0, ms(1_000), true, false));
+        assert!(!live(&mut a, 50.0, ms(1_000), true, false));
     }
 
     #[test]
     fn skips_once_the_projected_weight_reaches_the_target() {
         let mut a = aflow_like();
         a.on_frame(1);
-        assert!(!a.on_weight(3.5, ms(1_000), true, false));
-        assert!(a.on_weight(3.6, ms(1_100), true, false));
+        assert!(!live(&mut a, 3.5, ms(1_000), true, false));
+        assert!(live(&mut a, 3.6, ms(1_100), true, false));
     }
 
     #[test]
     fn a_single_skip_per_frame() {
         let mut a = aflow_like();
         a.on_frame(1);
-        assert!(a.on_weight(4.0, ms(1_000), true, false));
+        assert!(live(&mut a, 4.0, ms(1_000), true, false));
         // Readings keep arriving before the DE1 reports the new frame: no
         // duplicate (it would skip frame 2 as well).
-        assert!(!a.on_weight(4.2, ms(1_100), true, false));
-        assert!(!a.on_weight(4.4, ms(1_300), true, false));
+        assert!(!live(&mut a, 4.2, ms(1_100), true, false));
+        assert!(!live(&mut a, 4.4, ms(1_300), true, false));
         // The DE1 moves on; frame 2 has no weight.
         a.on_frame(2);
-        assert!(!a.on_weight(9.0, ms(1_400), true, false));
+        assert!(!live(&mut a, 9.0, ms(1_400), true, false));
     }
 
     #[test]
     fn retries_while_the_de1_stays_on_the_frame() {
         let mut a = aflow_like();
         a.on_frame(1);
-        assert!(a.on_weight(4.0, ms(1_000), true, false));
+        assert!(live(&mut a, 4.0, ms(1_000), true, false));
         // Still frame 1 after SKIP_RETRY_AFTER: the skip was lost — resend.
         a.on_frame(1);
-        assert!(!a.on_weight(4.1, ms(1_500), true, false));
-        assert!(a.on_weight(4.2, ms(1_600), true, false));
+        assert!(!live(&mut a, 4.1, ms(1_500), true, false));
+        assert!(live(&mut a, 4.2, ms(1_600), true, false));
         // The retry worked: the frame changes and nothing more is sent.
         a.on_frame(2);
-        assert!(!a.on_weight(4.3, ms(2_400), true, false));
+        assert!(!live(&mut a, 4.3, ms(2_400), true, false));
+    }
+
+    /// #318: the skip landed and moved the machine on, but no sample says so.
+    /// A retry here would skip the next frame too.
+    #[test]
+    fn no_retry_without_a_sample_since_the_skip() {
+        let mut a = aflow_like();
+        a.on_frame(1);
+        assert!(live(&mut a, 4.0, ms(1_000), true, false));
+        assert!(!a.on_weight(4.1, ms(1_700), true, false));
+        assert!(!a.on_weight(4.2, ms(5_000), true, false));
+    }
+
+    /// A sample in the window after the write predates the skip's effect.
+    #[test]
+    fn a_sample_too_soon_after_the_skip_proves_nothing() {
+        let mut a = aflow_like();
+        a.on_frame(1);
+        assert!(live(&mut a, 4.0, ms(1_000), true, false));
+        a.on_evidence(ms(1_599));
+        assert!(!a.on_weight(4.1, ms(5_000), true, false));
+        a.on_evidence(ms(1_600));
+        assert!(a.on_weight(4.1, ms(5_000), true, false));
+    }
+
+    #[test]
+    fn a_retry_needs_a_new_sample_after_the_last_retry() {
+        let mut a = aflow_like();
+        a.on_frame(1);
+        assert!(live(&mut a, 4.0, ms(0), true, false));
+        assert!(live(&mut a, 4.0, ms(600), true, false));
+        assert!(!a.on_weight(4.0, ms(1_300), true, false));
+        a.on_evidence(ms(1_200));
+        assert!(a.on_weight(4.0, ms(1_300), true, false));
+    }
+
+    #[test]
+    fn the_first_skip_needs_a_sample_under_a_second_old() {
+        let mut a = aflow_like();
+        a.on_frame(1);
+        a.on_evidence(ms(1_000));
+        assert!(!a.on_weight(4.0, ms(2_000), true, false), "exactly 1 s old");
+        assert!(a.on_weight(4.0, ms(1_999), true, false));
+    }
+
+    #[test]
+    fn a_stale_first_skip_stays_available_for_the_next_sample() {
+        let mut a = aflow_like();
+        a.on_frame(1);
+        assert!(
+            !a.on_weight(4.0, ms(1_000), true, false),
+            "no sample at all"
+        );
+        assert!(live(&mut a, 4.0, ms(1_100), true, false));
+    }
+
+    #[test]
+    fn a_new_shot_forgets_the_last_shots_sample() {
+        let mut a = aflow_like();
+        a.on_frame(1);
+        a.on_evidence(ms(1_000));
+        a.reset_shot();
+        a.on_frame(1);
+        assert!(!a.on_weight(4.0, ms(1_100), true, false));
     }
 
     #[test]
     fn retries_are_bounded() {
         let mut a = aflow_like();
         a.on_frame(1);
-        assert!(a.on_weight(4.0, ms(0), true, false));
+        assert!(live(&mut a, 4.0, ms(0), true, false));
         let mut sent = 0;
         for i in 1..=20u64 {
-            if a.on_weight(4.0, ms(i * 600), true, false) {
+            if live(&mut a, 4.0, ms(i * 600), true, false) {
                 sent += 1;
             }
         }
@@ -383,42 +481,42 @@ mod tests {
         let mut a = StepWeightExit::new(vec![None, Some(30.0)]);
         a.on_frame(1);
         // SAW armed: skipping the last frame would end the shot before SAW.
-        assert!(!a.on_weight(31.0, ms(1_000), true, true));
+        assert!(!live(&mut a, 31.0, ms(1_000), true, true));
         // No SAW target: the last-step weight ends the shot (decaid).
-        assert!(a.on_weight(31.0, ms(1_100), true, false));
+        assert!(live(&mut a, 31.0, ms(1_100), true, false));
     }
 
     #[test]
     fn an_earlier_frame_skips_even_with_saw_armed() {
         let mut a = aflow_like();
         a.on_frame(1);
-        assert!(a.on_weight(3.6, ms(1_000), true, true));
+        assert!(live(&mut a, 3.6, ms(1_000), true, true));
     }
 
     #[test]
     fn reset_shot_rearms_every_frame() {
         let mut a = aflow_like();
         a.on_frame(1);
-        assert!(a.on_weight(4.0, ms(1_000), true, false));
+        assert!(live(&mut a, 4.0, ms(1_000), true, false));
         a.reset_shot();
-        assert!(!a.on_weight(4.0, ms(2_000), true, false), "no frame yet");
+        assert!(!live(&mut a, 4.0, ms(2_000), true, false), "no frame yet");
         a.on_frame(1);
-        assert!(a.on_weight(4.0, ms(2_100), true, false));
+        assert!(live(&mut a, 4.0, ms(2_100), true, false));
     }
 
     #[test]
     fn adopting_weights_keeps_the_shot_state() {
         let mut a = aflow_like();
         a.on_frame(1);
-        assert!(a.on_weight(4.0, ms(1_000), true, false));
+        assert!(live(&mut a, 4.0, ms(1_000), true, false));
         // Same profile re-activated mid-shot: no second skip for frame 1.
         a.adopt_weights(aflow_like());
-        assert!(!a.on_weight(4.1, ms(1_100), true, false));
+        assert!(!live(&mut a, 4.1, ms(1_100), true, false));
         // A different profile's targets take effect from here.
         a.adopt_weights(StepWeightExit::new(vec![None, None, Some(8.0)]));
         assert_eq!(a.weights(), &[None, None, Some(8.0)]);
         a.on_frame(2);
-        assert!(a.on_weight(8.0, ms(1_400), true, false));
+        assert!(live(&mut a, 8.0, ms(1_400), true, false));
     }
 
     #[test]
@@ -451,21 +549,21 @@ mod tests {
         // 1 g reached as pressure climbs through 1.8 bar toward 2.0 bar.
         a.on_sensors(1.8, 2.0);
         assert!(
-            !a.on_weight(1.2, ms(1_000), true, false),
+            !live(&mut a, 1.2, ms(1_000), true, false),
             "defer: near and rising"
         );
         a.on_sensors(1.9, 2.0);
         assert!(
-            !a.on_weight(1.3, ms(1_200), true, false),
+            !live(&mut a, 1.3, ms(1_200), true, false),
             "defer: still rising"
         );
         // The firmware's own exit fires: frame 1. The weight skip never went
         // out, so the main pour is not skipped.
         a.on_frame(1);
         a.on_sensors(2.1, 2.0);
-        assert!(!a.on_weight(1.5, ms(1_400), true, false));
+        assert!(!live(&mut a, 1.5, ms(1_400), true, false));
         assert!(
-            !a.on_weight(30.0, ms(1_600), true, false),
+            !live(&mut a, 30.0, ms(1_600), true, false),
             "frame 1 has no weight exit"
         );
     }
@@ -475,12 +573,12 @@ mod tests {
         let mut a = soup_like();
         a.on_frame(0);
         a.on_sensors(1.7, 2.0);
-        assert!(!a.on_weight(1.1, ms(1_000), true, false));
+        assert!(!live(&mut a, 1.1, ms(1_000), true, false));
         a.on_sensors(1.8, 2.0);
-        assert!(!a.on_weight(1.2, ms(1_100), true, false));
+        assert!(!live(&mut a, 1.2, ms(1_100), true, false));
         a.on_sensors(1.85, 2.0);
         assert!(
-            a.on_weight(1.3, ms(1_200), true, false),
+            live(&mut a, 1.3, ms(1_200), true, false),
             "cap of 3 deferrals"
         );
     }
@@ -490,9 +588,9 @@ mod tests {
         let mut a = soup_like();
         a.on_frame(0);
         a.on_sensors(1.8, 2.0);
-        assert!(!a.on_weight(1.1, ms(1_000), true, false));
+        assert!(!live(&mut a, 1.1, ms(1_000), true, false));
         a.on_sensors(1.75, 2.0); // falling away from pressure_over 2.0
-        assert!(a.on_weight(1.2, ms(1_100), true, false));
+        assert!(live(&mut a, 1.2, ms(1_100), true, false));
     }
 
     #[test]
@@ -504,9 +602,9 @@ mod tests {
         let mut a = soup_like();
         a.on_frame(0);
         a.on_sensors(1.8, 2.0);
-        assert!(!a.on_weight(1.1, ms(1_000), true, false), "first: defer");
+        assert!(!live(&mut a, 1.1, ms(1_000), true, false), "first: defer");
         assert!(
-            a.on_weight(1.2, ms(1_100), true, false),
+            live(&mut a, 1.2, ms(1_100), true, false),
             "same reading: fire"
         );
     }
@@ -516,7 +614,7 @@ mod tests {
         let mut a = soup_like();
         a.on_frame(0);
         a.on_sensors(0.5, 2.0); // window = max(0.2 × 2.0, 0.3) = 0.4 bar
-        assert!(a.on_weight(1.1, ms(1_000), true, false));
+        assert!(live(&mut a, 1.1, ms(1_000), true, false));
     }
 
     #[test]
@@ -533,10 +631,10 @@ mod tests {
         a.on_frame(0);
         // window = max(0.25 × 1.0, 0.2) = 0.25 ml/s; 1.2 is near, falling.
         a.on_sensors(9.0, 1.2);
-        assert!(!a.on_weight(1.1, ms(1_000), true, false));
+        assert!(!live(&mut a, 1.1, ms(1_000), true, false));
         a.on_sensors(9.0, 1.6); // rising away: fire
         a.on_frame(0);
-        assert!(a.on_weight(1.2, ms(1_100), true, false));
+        assert!(live(&mut a, 1.2, ms(1_100), true, false));
     }
 
     #[test]
