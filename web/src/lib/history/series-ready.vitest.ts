@@ -22,6 +22,7 @@ vi.mock('./series-store', () => ({
 }));
 
 import { HistoryStore } from './store.svelte';
+import { updateSyncConfig } from '#lib/visualizer/sync-config.js';
 
 const sample = { t: 1, pressure: 9 } as unknown as TimedSample;
 
@@ -141,6 +142,15 @@ describe('the Visualizer backlog', () => {
 
 		expect(store.visualizerBacklog.map((s) => s.id)).toEqual(['s2']);
 		expect(store.withoutTelemetry.map((s) => s.id)).toEqual(['s1']);
+	});
+
+	it('leaves out the shots the user kept off this account', async () => {
+		const store = new HistoryStore();
+		await store.seriesReady();
+		expect(store.visualizerBacklog).not.toEqual([]);
+		updateSyncConfig({ uploadExcludedBefore: Date.now() + 1 });
+		expect(store.visualizerBacklog).toEqual([]);
+		updateSyncConfig({ uploadExcludedBefore: null });
 	});
 });
 

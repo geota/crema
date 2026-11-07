@@ -270,6 +270,47 @@ pub fn reconnect_notice_due(previous: Option<&SyncHealth>, next: &SyncHealth) ->
     needs_reconnect(next) && !previous.is_some_and(needs_reconnect)
 }
 
+/// [`sync_health_after_run`] for the bridges: the outcome and the health as JSON.
+///
+/// # Errors
+/// When `outcome_json` isn't a [`RunOutcome`].
+pub fn sync_health_after_run_json(outcome_json: &str, now_ms: i64) -> Result<String, String> {
+    let outcome: RunOutcome = serde_json::from_str(outcome_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&sync_health_after_run(&outcome, now_ms)).map_err(|e| e.to_string())
+}
+
+/// [`reconnect_notice_due`] for the bridges. A `previous` that can't be read counts
+/// as none, and a `next` that can't be read raises nothing.
+#[must_use]
+pub fn reconnect_notice_due_json(previous: Option<&str>, next: &str) -> bool {
+    let previous = previous.and_then(|json| serde_json::from_str(json).ok());
+    serde_json::from_str(next).is_ok_and(|next| reconnect_notice_due(previous.as_ref(), &next))
+}
+
+/// What a confirmed `/me` means for what this device holds.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AccountChange {
+    /// No account was on record: note this one and carry on. A user signed out
+    /// at upgrade with no cached account lands here, which can't be checked.
+    First,
+    /// The account this device already synced with.
+    Same,
+    /// Another account: the cursor, marks and queue belong to the old one, and
+    /// nothing goes up until the user says so.
+    Changed,
+}
+
+/// Compare the account on record (`syncAccountId`) with the one `/me` named.
+#[must_use]
+pub fn account_change_action(stored: Option<&str>, me: &str) -> AccountChange {
+    match stored {
+        None | Some("") => AccountChange::First,
+        Some(id) if id == me => AccountChange::Same,
+        Some(_) => AccountChange::Changed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +492,35 @@ mod tests {
         );
         assert!(!reconnect_notice_due(Some(&dead), &ok));
         assert!(!reconnect_notice_due(Some(&ok), &ok));
+    }
+
+    #[test]
+    fn the_account_on_record_decides_what_a_sign_in_means() {
+        assert_eq!(account_change_action(None, "u1"), AccountChange::First);
+        assert_eq!(account_change_action(Some(""), "u1"), AccountChange::First);
+        assert_eq!(account_change_action(Some("u1"), "u1"), AccountChange::Same);
+        assert_eq!(
+            account_change_action(Some("u1"), "u2"),
+            AccountChange::Changed
+        );
+    }
+
+    #[test]
+    fn the_health_bridge_reads_and_writes_json() {
+        let outcome = serde_json::to_string(&RunOutcome::Failed {
+            failure: SyncFailure::SessionEnded,
+        })
+        .unwrap();
+        let health = sync_health_after_run_json(&outcome, NOW).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SyncHealth>(&health).unwrap(),
+            attention(AttentionReason::Reconnect, 0)
+        );
+        assert!(sync_health_after_run_json("nope", NOW).is_err());
+        assert!(reconnect_notice_due_json(None, &health));
+        assert!(reconnect_notice_due_json(Some("nope"), &health));
+        assert!(!reconnect_notice_due_json(Some(&health), &health));
+        assert!(!reconnect_notice_due_json(None, "nope"));
     }
 
     /// The shells read these, so the shape is the contract.

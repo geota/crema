@@ -360,6 +360,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onFillBarista = { localId, barista -> library.fillShotBarista(localId, barista) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
+        allShots = { _ui.value.history },
         seriesReady = { library.awaitSeries() },
         shotsLoaded = { library.seriesReady },
         historyRefused = { library.historyRefused },

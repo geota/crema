@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import coffee.crema.decent.DecentSync
 import coffee.crema.ui.CatchUpOffer
 import coffee.crema.ui.UploadTargetId
+import coffee.crema.visualizer.VisualizerSync
 
 // ════════════════════════════════════════════════════════════════════════════
 // SHARED SHARING ROWS (Settings → Sharing) — the Decent account form + status
@@ -54,6 +55,34 @@ fun CatchUpRow(offer: CatchUpOffer, busy: Boolean, onUpload: () -> Unit, onDismi
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             CremaButton(onClick = onDismiss, variant = CremaButtonVariant.Text, enabled = !busy, label = "Not now")
             CremaButton(onClick = onUpload, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !busy, label = if (busy) "Uploading…" else "Upload")
+        }
+    }
+}
+
+/**
+ * What Visualizer is waiting on before anything uploads: `/me` hasn't said which
+ * account this is, or it's a different one and the user hasn't chosen. [unsent]
+ * counts the shots a different account would take. Not now keeps those shots off
+ * it, and new shots still flow.
+ */
+@Composable
+fun VisualizerAccountRows(vz: VisualizerSync.UiState, unsent: Int, onAnswer: (upload: Boolean) -> Unit) {
+    if (vz.accountUnconfirmed) {
+        CremaSettingsRow(
+            "Checking your account",
+            "Crema can't yet confirm which Visualizer account this is, so nothing syncs. It keeps trying.",
+        ) {}
+    } else if (vz.accountChangeAsk) {
+        CremaSettingsRow(
+            "This is a different Visualizer account",
+            "Upload the $unsent shot(s) on this device to ${vz.account?.name ?: "it"}? Not now keeps them off this account. " +
+                "New shots still upload.",
+            stacked = LocalSettingsRowDense.current,
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                CremaButton(onClick = { onAnswer(false) }, variant = CremaButtonVariant.Text, label = "Not now")
+                CremaButton(onClick = { onAnswer(true) }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", label = "Upload")
+            }
         }
     }
 }

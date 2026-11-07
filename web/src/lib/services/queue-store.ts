@@ -38,6 +38,11 @@ export interface QueueEntry {
 	enqueuedAt: number;
 	/** Earliest Unix epoch ms when the queue may retry this entry. */
 	nextAttemptAt: number;
+	/**
+	 * The account a remote delete's row is on, while another is signed in: it
+	 * waits, since this one would only be refused.
+	 */
+	parkedFor?: string | null;
 }
 
 interface QueueState {
@@ -123,6 +128,22 @@ export function enqueueEntry(input: EnqueueInput): void {
 		];
 	}
 	writeQueue(state);
+}
+
+/**
+ * The account changed from `oldId` to `newId`. What was queued for the old one
+ * goes: uploads wait for the user's answer, and an edit can't land on the new
+ * account. Remote deletes keep their intent, parked for the account they're on,
+ * and `newId`'s own come back into play.
+ */
+export function settleQueueForAccount(oldId: string | null, newId: string): void {
+	const entries = readQueue()
+		.entries.filter((e) => e.op === 'delete')
+		.map((e) => {
+			if (e.parkedFor === newId) return { ...e, parkedFor: null };
+			return e.parkedFor ? e : { ...e, parkedFor: oldId };
+		});
+	writeQueue({ entries });
 }
 
 /** Remove a queue entry by entity+id+op. */
