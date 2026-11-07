@@ -449,6 +449,9 @@ struct PostShotSettle {
     /// The last instant `best_weight` rose. `now − last_rise ≥ SETTLE_QUIET`
     /// means the cup has stopped filling.
     last_rise: Duration,
+    /// The shot began before the app saw it: its readings include the cup, so
+    /// it completes with no weight.
+    began_unseen: bool,
 }
 
 /// Hard cap on the post-stop drip settle (reaprime uses ≤4 s, despresso ≤2 s).
@@ -3991,9 +3994,7 @@ impl CremaCore {
         // smoothed `estimate.weight` is the value the shell sees on its
         // TelemetrySample.weight channel, so peak / final stay aligned with
         // what the chart actually drew.
-        if (self.shot_started.is_some() && !self.shot_began_unseen)
-            || self.post_shot_settle.is_some()
-        {
+        if self.shot_started.is_some() || self.post_shot_settle.is_some() {
             self.shot_metrics.feed_weight(estimate.weight, now);
         }
         out.events.push(Event::ScaleReading {
@@ -5379,6 +5380,7 @@ impl CremaCore {
             stop_capture,
             ended_without_triggering_stop,
             record,
+            began_unseen,
             ..
         } = settle;
         // Drain the running peak / final-weight tracker into the event — one
@@ -5386,6 +5388,11 @@ impl CremaCore {
         let (peak_pressure, peak_temp, peak_weight, final_weight) = self
             .shot_metrics
             .drain(stop_capture.as_ref().map(|c| c.weight_g));
+        let (peak_weight, final_weight) = if began_unseen {
+            (None, None)
+        } else {
+            (peak_weight, final_weight)
+        };
         // The pre-shot zero correction belongs to the shot just finalized.
         self.pre_shot_zero_offset_g = 0.0;
         out.events.push(Event::ShotCompleted {
@@ -5635,6 +5642,7 @@ impl CremaCore {
                     deadline: now + POST_SHOT_SETTLE_MAX,
                     best_weight: self.shot_metrics.final_weight.unwrap_or(f32::MIN),
                     last_rise: now,
+                    began_unseen: self.shot_began_unseen,
                 };
                 // Post-stop drip settle (geota/crema#64): crema's drip-compensated
                 // stop-at-weight halts the pump EARLY, so with a scale paired the
@@ -5645,7 +5653,10 @@ impl CremaCore {
                 // ([`maybe_finalize_post_shot_settle`]). With no scale — or a shot
                 // that recorded no weight — there is nothing to settle, so
                 // finalize immediately (the unchanged, prompt path).
-                if self.scale.is_some() && self.shot_metrics.final_weight.is_some() {
+                if self.scale.is_some()
+                    && self.shot_metrics.final_weight.is_some()
+                    && !settle.began_unseen
+                {
                     self.post_shot_settle = Some(settle);
                 } else {
                     self.finalize_shot_completed(settle, now, out);
@@ -5963,7 +5974,9 @@ impl CremaCore {
         if self.scale.is_none() {
             return Some("no-scale");
         }
-        if let Some(why) = self.session.and_then(|s| s.weight_refused()) {
+        if self.began_unseen()
+            && let Some(why) = self.session.and_then(|s| s.weight_refused())
+        {
             return Some(why.as_str());
         }
         if self.untared_cup_tripped {
@@ -5973,9 +5986,10 @@ impl CremaCore {
     }
 
     /// Whether the open session began before the app saw it, so nothing on
-    /// the scale can be told from its tare.
+    /// the scale can be told from its tare. Never on a mirror: joining late
+    /// says nothing about the shot, which the hub saw and stops on weight.
     fn began_unseen(&self) -> bool {
-        self.session.is_some_and(|s| s.observed == Observed::Unseen)
+        !self.read_only && self.session.is_some_and(|s| s.observed == Observed::Unseen)
     }
 
     /// [`stop_targets_projection`](Self::stop_targets_projection) as JSON, for

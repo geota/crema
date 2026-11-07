@@ -181,9 +181,12 @@ fn an_unseen_shot_never_stops_on_weight() {
     assert_eq!(targets.weight, None);
     assert_eq!(targets.max_time, Some(30.0));
     assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
-    for i in 0..20u64 {
+    // Past the 5 s arming delay, or no weight leg could fire anyway.
+    for i in 0..100u64 {
         let t = 200 + i * 100;
-        out = core.on_notification(Source::ScaleWeight, &bookoo(60.0 + i as f32), t);
+        let sample = core.on_notification(Source::De1ShotSample, &sample(i as u16 * 12), t);
+        assert!(state_writes(&sample).is_empty(), "stopped at {t}");
+        out = core.on_notification(Source::ScaleWeight, &bookoo(60.0 + i as f32), t + 1);
         assert!(state_writes(&out).is_empty(), "stopped at {t}");
     }
     assert!(
@@ -329,6 +332,18 @@ fn the_shot_after_an_unseen_one_has_a_yield() {
         core.on_notification(Source::ScaleWeight, &bookoo(i as f32), t + 1);
     }
     assert!(core.shot_metrics.final_weight.is_some());
+}
+
+/// A mirror joining mid-pour isn't a late join: the hub saw the shot and stops
+/// on weight, so the remote shows that, not "Started before Crema connected".
+#[test]
+fn a_mirror_joining_mid_pour_shows_the_hubs_weight_stop() {
+    let mut core = core_with_cup();
+    core.set_read_only(true);
+    core.on_notification(Source::De1State, &[4, 5], 100);
+    assert_eq!(core.weight_stop_blocked_by(), None);
+    assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
+    assert!(!core.shot_began_unseen);
 }
 
 /// The first substate decides: a first state in a pre-flow substate is a start
@@ -615,6 +630,7 @@ fn p8_no_skip_retry_without_fresh_frame_info() {
     p.steps[1].weight = None;
     p.steps[2].weight = None;
     core.set_active_profile(Some(&p));
+    core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let mut f = sample(100);
     f[17] = 0;

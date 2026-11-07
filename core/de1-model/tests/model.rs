@@ -408,7 +408,9 @@ fn unseen_shot() -> World {
     world.apply(&Op::GroupHead(MachineState::Espresso));
     world.apply(&Op::Advance { ms: 3_000 });
     world.apply(&Op::Attach);
-    world.apply(&Op::Advance { ms: 2_000 });
+    world.apply(&Op::SetStepWeight(Some(3.6)));
+    // Past the 5 s arming delay, so a weight leg or a skip could fire.
+    world.apply(&Op::Advance { ms: 8_000 });
     world
 }
 

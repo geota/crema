@@ -456,9 +456,30 @@ impl World {
         ]
         .iter()
         .any(|s| *s as u8 == substate);
-        self.unseen = mode.is_some() && first && !pre_flow;
-        if self.unseen {
+        self.unseen = !self.read_only && mode.is_some() && first && !pre_flow;
+        let weighs = matches!(mode, Some(ActiveMode::Espresso | ActiveMode::HotWater))
+            && self.scale.is_some()
+            && self.weight_target().is_some();
+        if self.unseen && weighs {
             self.coverage.unseen += 1;
+        }
+    }
+
+    /// I6 both ways: the core's reading of the session matches the oracle's.
+    /// "No scale" outranks the reason, and a core attached during an outage
+    /// has no scale until the shells' next connect.
+    fn check_session(&mut self) {
+        let blocked = self.core.weight_stop_blocked_by();
+        if self.scale.is_none() || self.weight_target().is_none() || blocked == Some("no-scale") {
+            return;
+        }
+        let core_unseen = blocked == Some("began-unseen");
+        if core_unseen != self.unseen {
+            let unseen = self.unseen;
+            self.violate(
+                Invariant::I6,
+                format!("core says unseen {core_unseen}, oracle {unseen}"),
+            );
         }
     }
 
@@ -510,6 +531,7 @@ impl World {
             let out = self.core.on_tick(self.now);
             self.ingest(out, Who::Core);
         }
+        self.check_session();
     }
 
     fn land(&mut self, write: Write) {
