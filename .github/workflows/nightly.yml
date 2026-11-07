@@ -18,8 +18,9 @@ on:
   workflow_dispatch: {}
 
 # Only the latest commit on main matters for a rolling nightly; cancel older runs.
+# Keyed on the ref, so a stray manual run elsewhere can't cancel a main nightly.
 concurrency:
-  group: nightly
+  group: nightly-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

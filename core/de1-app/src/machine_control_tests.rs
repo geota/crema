@@ -4,10 +4,14 @@
 //! Each test asserts what the core does **today**, so a change to any of it is
 //! a deliberate change. `Flips in PR n` names the PR that inverts the test;
 //! that PR rewrites it to the "after" in the note. A test with no such line is
-//! expected to stay. The ones marked `#[ignore]` flip in PR 1 or PR 2, which
-//! branch from the same `main` and carry their own tests for the fixed
-//! behaviour, so these must not block whichever lands second. Run them with
-//! `cargo test -p de1-app --lib machine_control -- --ignored`.
+//! expected to stay. The ones marked `#[ignore]` (P8, P9, Q1, R1) flip in PR 1
+//! or PR 2, which branch from the same `main` and carry their own tests for the
+//! fixed behaviour, so these must not block whichever lands second. Run them
+//! with `cargo test -p de1-app --lib machine_control -- --ignored`.
+//!
+//! **Whichever of #338 and #339 lands second rewrites all four to the fixed
+//! behaviour and removes `#[ignore]`.** CI never runs ignored tests, so left
+//! alone they'd assert fixed bugs and nobody would notice.
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -509,7 +513,7 @@ fn q7_start_with_rejected_profile_waits_for_timeout() {
 }
 
 /// R1: pre-flush never began; 30 s later the start bounces whatever is running.
-/// Flips in PR 2: ends at 5 s with `FlushNotEntered`, no write.
+/// Flips in PR 2: ends 10 s after the write with `FlushNotEntered`, no write.
 #[ignore = "flips in PR 2"]
 #[test]
 fn r1_flush_ceiling_starts_espresso_over_steam() {

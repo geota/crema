@@ -44,7 +44,10 @@ fn scale_mode() -> impl Strategy<Value = ScaleMode> {
         1 => Just(ScaleMode::Silent),
         1 => (1u64..5).prop_map(|s| ScaleMode::Flap { period_ms: s * 1_000 }),
         1 => Just(ScaleMode::Rezero),
-        1 => (1u8..20).prop_map(|g| ScaleMode::Bump { grams: f32::from(g) }),
+        1 => (1u8..20, 3u64..20).prop_map(|(g, t)| ScaleMode::Bump {
+            grams: f32::from(g),
+            ms: t * 100,
+        }),
         1 => (1u8..250).prop_map(|g| ScaleMode::StepUp { grams: f32::from(g) }),
         1 => Just(ScaleMode::TransientZero),
     ]

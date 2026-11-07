@@ -364,12 +364,14 @@ pub enum ScaleMode {
     },
     /// Zeroes itself once.
     Rezero,
-    /// A hand on the cup: `grams` on top, for as long as this mode lasts.
+    /// A hand on the cup: `grams` on top for `ms`, then back to healthy.
     Bump {
         /// Added weight.
         grams: f32,
+        /// How long the hand stays, ms.
+        ms: u64,
     },
-    /// A step up that stays.
+    /// A step up that stays while this mode lasts.
     StepUp {
         /// Added weight.
         grams: f32,
@@ -381,8 +383,8 @@ pub enum ScaleMode {
 /// The scale.
 #[derive(Debug, Clone)]
 pub struct SimScale {
-    /// Current behaviour.
-    pub mode: ScaleMode,
+    mode: ScaleMode,
+    bump_ends_at: Option<u64>,
     zero_g: f32,
     tare_at: Option<u64>,
     /// Write-to-effect tare latency, ms.
@@ -395,10 +397,17 @@ impl SimScale {
     pub fn new(tare_latency_ms: u64) -> Self {
         Self {
             mode: ScaleMode::Healthy,
+            bump_ends_at: None,
             zero_g: 0.0,
             tare_at: None,
             tare_latency_ms,
         }
+    }
+
+    /// Start misbehaving this way.
+    pub fn set_mode(&mut self, mode: ScaleMode) {
+        self.mode = mode;
+        self.bump_ends_at = None;
     }
 
     /// A tare command landed at `now`.
@@ -406,23 +415,40 @@ impl SimScale {
         self.tare_at = Some(now + self.tare_latency_ms);
     }
 
+    /// What's on the scale besides the cup at `now`, grams.
+    fn load(&mut self, now: u64) -> f32 {
+        match self.mode {
+            ScaleMode::Bump { grams, ms } => {
+                if now >= *self.bump_ends_at.get_or_insert(now + ms) {
+                    self.set_mode(ScaleMode::Healthy);
+                    0.0
+                } else {
+                    grams
+                }
+            }
+            ScaleMode::StepUp { grams } => grams,
+            _ => 0.0,
+        }
+    }
+
     /// The reading at `now`, if it sends one.
     pub fn reading(&mut self, now: u64, cup_g: f32) -> Option<f32> {
+        // A tare zeroes everything on the platter, a hand included.
+        let gross = cup_g + self.load(now);
         if self.tare_at.is_some_and(|at| now >= at) {
             self.tare_at = None;
-            self.zero_g = cup_g;
+            self.zero_g = gross;
         }
-        let net = cup_g - self.zero_g;
+        let net = gross - self.zero_g;
         match self.mode {
-            ScaleMode::Healthy => Some(net),
+            ScaleMode::Healthy | ScaleMode::Bump { .. } | ScaleMode::StepUp { .. } => Some(net),
             ScaleMode::Stall | ScaleMode::Silent => None,
             ScaleMode::Flap { period_ms } => (now % period_ms >= period_ms / 2).then_some(net),
             ScaleMode::Rezero => {
-                self.zero_g = cup_g;
+                self.zero_g = gross;
                 self.mode = ScaleMode::Healthy;
                 Some(0.0)
             }
-            ScaleMode::Bump { grams } | ScaleMode::StepUp { grams } => Some(net + grams),
             ScaleMode::TransientZero => Some(0.0),
         }
     }
@@ -732,29 +758,66 @@ mod tests {
     }
 
     #[test]
-    fn a_bump_goes_away_and_a_step_up_is_the_callers_to_keep() {
+    fn a_bump_lifts_after_its_duration() {
         let mut scale = SimScale::new(0);
-        scale.mode = ScaleMode::Bump { grams: 6.0 };
+        scale.set_mode(ScaleMode::Bump {
+            grams: 6.0,
+            ms: 500,
+        });
         assert_eq!(scale.reading(0, 10.0), Some(16.0));
-        scale.mode = ScaleMode::Healthy;
-        assert_eq!(scale.reading(100, 10.0), Some(10.0));
-        scale.mode = ScaleMode::StepUp { grams: 250.0 };
-        assert_eq!(scale.reading(200, 10.0), Some(260.0));
+        assert_eq!(scale.reading(400, 10.0), Some(16.0));
+        assert_eq!(scale.reading(500, 10.0), Some(10.0));
+    }
+
+    #[test]
+    fn a_second_bump_gets_its_own_duration() {
+        let mut scale = SimScale::new(0);
+        let bump = ScaleMode::Bump {
+            grams: 6.0,
+            ms: 500,
+        };
+        scale.set_mode(bump);
+        assert_eq!(scale.reading(0, 10.0), Some(16.0));
+        scale.set_mode(ScaleMode::Healthy);
+        scale.set_mode(bump);
+        assert_eq!(scale.reading(1_000, 10.0), Some(16.0));
+    }
+
+    #[test]
+    fn a_tare_zeroes_a_hand_on_the_platter() {
+        let mut scale = SimScale::new(0);
+        scale.set_mode(ScaleMode::Bump {
+            grams: 6.0,
+            ms: 500,
+        });
+        scale.tare(100);
+        assert_eq!(scale.reading(100, 10.0), Some(0.0));
+        assert_eq!(scale.reading(600, 10.0), Some(-6.0), "the hand lifted");
+    }
+
+    #[test]
+    fn a_tare_zeroes_a_step_up() {
+        let mut scale = SimScale::new(0);
+        scale.set_mode(ScaleMode::StepUp { grams: 250.0 });
+        assert_eq!(scale.reading(0, 10.0), Some(260.0));
+        scale.tare(100);
+        assert_eq!(scale.reading(100, 10.0), Some(0.0));
+        assert_eq!(scale.reading(200, 15.0), Some(5.0));
     }
 
     #[test]
     fn a_transient_zero_keeps_the_real_zero() {
         let mut scale = SimScale::new(0);
-        scale.mode = ScaleMode::TransientZero;
+        scale.set_mode(ScaleMode::TransientZero);
         assert_eq!(scale.reading(0, 10.0), Some(0.0));
-        scale.mode = ScaleMode::Healthy;
+        scale.set_mode(ScaleMode::Healthy);
         assert_eq!(scale.reading(100, 10.0), Some(10.0));
     }
 
     #[test]
     fn a_rezero_stays_zeroed() {
         let mut scale = SimScale::new(0);
-        scale.mode = ScaleMode::Rezero;
+        scale.set_mode(ScaleMode::Rezero);
         assert_eq!(scale.reading(0, 10.0), Some(0.0));
         assert_eq!(scale.reading(100, 12.0), Some(2.0));
     }
@@ -772,7 +835,7 @@ mod tests {
     #[test]
     fn a_stale_scale_flaps_on_its_period() {
         let mut scale = SimScale::new(0);
-        scale.mode = ScaleMode::Flap { period_ms: 2_000 };
+        scale.set_mode(ScaleMode::Flap { period_ms: 2_000 });
         assert_eq!(scale.reading(500, 5.0), None);
         assert_eq!(scale.reading(1_500, 5.0), Some(5.0));
     }

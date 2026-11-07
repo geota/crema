@@ -300,7 +300,7 @@ impl World {
             Op::SetStepWeight(g) => self.set_step_weight(g),
             Op::Scale(mode) => {
                 if let Some(scale) = &mut self.scale {
-                    scale.mode = mode;
+                    scale.set_mode(mode);
                 }
             }
             Op::ScaleDisconnect => {
@@ -510,8 +510,9 @@ impl World {
 
     /// Take a core output: watch it, then queue its writes.
     fn ingest(&mut self, out: CoreOutput, who: Who) {
-        // A remote's own tap still goes out: `request_machine_state` isn't
-        // gated, and the transport carries it to the hub.
+        // A remote's own tap is left out: `request_machine_state` isn't gated,
+        // so it returns commands. They go nowhere, because a mirror's transport
+        // refuses every write.
         if self.read_only && who == Who::Core && !out.commands.is_empty() {
             self.violate(Invariant::I10, format!("{:?}", out.commands));
         }
@@ -594,7 +595,8 @@ impl World {
                 match reason {
                     StopReason::Weight => {
                         self.coverage.weight_stops += 1;
-                        if let Some(target) = self.weight_target()
+                        if !self.read_only
+                            && let Some(target) = self.weight_target()
                             && self.cup.grams < target - WEIGHT_TOLERANCE_G
                         {
                             let grams = self.cup.grams;
