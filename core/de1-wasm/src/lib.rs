@@ -2128,6 +2128,14 @@ pub fn common_is_pristine(common_json: &str) -> bool {
     de1_domain::common_is_pristine_json(common_json)
 }
 
+/// What a backup's name says about it, as a `BackupFileInfo` JSON. See
+/// `de1_domain::describe_backup_file`.
+#[wasm_bindgen(js_name = describeBackupFile)]
+#[must_use]
+pub fn describe_backup_file(name: &str) -> String {
+    de1_domain::describe_backup_file_json(name)
+}
+
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the
 /// library `ImportPlan` (beans / roasters / shots) plus `profiles` and
 /// `settings` sections, so the shell's reconcile + apply path is reused.

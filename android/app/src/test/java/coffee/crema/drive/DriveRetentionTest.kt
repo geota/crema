@@ -30,7 +30,8 @@ import kotlin.test.assertTrue
 
 /**
  * The daily backup's retention against a fake Drive: what it uploads, what it
- * deletes, and above all what an update doesn't delete.
+ * deletes, and above all what an update doesn't delete. Also the picker, as it
+ * lists and restores from the same Drive.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -51,6 +52,7 @@ class DriveRetentionTest {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + Dispatchers.Default)
     private val notices = CopyOnWriteArrayList<String>()
+    private val logged = CopyOnWriteArrayList<String>()
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
 
     /** Drive's files, newest first, as `id` to `name`. */
@@ -60,6 +62,10 @@ class DriveRetentionTest {
     private var garbledList = false
     private var uploadFails = false
     private var emptyBody = false
+    private val restored = CopyOnWriteArrayList<Pair<String, Boolean>>()
+    private var listFails = false
+    private var loopingToken = false
+    private var trashFails = false
 
     private val now = System.currentTimeMillis()
     private val day = 24L * 60 * 60 * 1000
@@ -79,6 +85,10 @@ class DriveRetentionTest {
         }
         server.createContext("/drive/v3/files") { x ->
             if (x.requestMethod == "PATCH") {
+                if (trashFails) {
+                    x.respond(500, "{}")
+                    return@createContext
+                }
                 val id = x.requestURI.path.substringAfterLast('/')
                 assertEquals("""{"trashed":true}""", x.requestBody.readBytes().decodeToString())
                 trashed += id
@@ -93,6 +103,19 @@ class DriveRetentionTest {
             }
             if (emptyBody) {
                 x.respond(200, "{}")
+                return@createContext
+            }
+            if (x.requestURI.query.orEmpty().contains("alt=media")) {
+                x.respond(200, x.requestURI.path.substringAfterLast('/'))
+                return@createContext
+            }
+            if (listFails) {
+                x.respond(500, "{}")
+                return@createContext
+            }
+            if (loopingToken) {
+                Regex("pageToken=([^&]+)").find(x.requestURI.query.orEmpty())?.let { pageTokens += it.groupValues[1] }
+                x.respond(200, """{"files":[],"nextPageToken":"same"}""")
                 return@createContext
             }
             val token = Regex("pageToken=(\\d+)").find(x.requestURI.query.orEmpty())?.groupValues?.get(1)
@@ -130,6 +153,23 @@ class DriveRetentionTest {
         for (i in from until from + count) drive += "$id$i" to autoName(i, label, counts)
     }
 
+    private fun picker() = DriveSync(
+        store, json, scope, "cid",
+        notify = { notices += it },
+        backupZip = { null },
+        backupFileName = { "b" },
+        applyRestore = { bytes, wipe -> restored += bytes.decodeToString() to wipe },
+        refreshToken = { error("no refresh expected") },
+    ).also {
+        runBlocking {
+            store.load()
+            store.save(DriveState(tokens = tokens))
+            it.load()
+        }
+    }
+
+    private fun DriveSync.finish() = runBlocking { withTimeout(10_000) { job.children.toList().joinAll() } }
+
     /** One daily run, on a device whose last automatic backup was [lastAuto]. */
     private fun dailyBackup(
         lastAuto: Long? = now - 2 * day,
@@ -142,6 +182,7 @@ class DriveRetentionTest {
         val sync = DriveSync(
             store, json, scope, "cid",
             notify = { notices += it },
+            log = { logged += it },
             backupZip = { BackupZip(byteArrayOf(1), built) },
             backupFileName = { "crema-backup-tablet-20261106-0800.crema.zip" },
             applyRestore = { _, _ -> },
@@ -260,10 +301,137 @@ class DriveRetentionTest {
     @Test
     fun aListThatFailsDeletesNothing() {
         seed(12)
-        server.removeContext("/drive/v3/files")
-        server.createContext("/drive/v3/files") { x -> x.respond(500, "{}") }
+        listFails = true
         dailyBackup(keep = 3)
         assertEquals(emptyList(), trashed.toList())
+        assertTrue(logged.any { it.startsWith("Drive backup prune failed") }, "a stalled prune shows")
+    }
+
+    @Test
+    fun aTrashThatFailsIsLogged() {
+        seed(5)
+        trashFails = true
+        dailyBackup(keep = 1)
+        assertTrue(logged.any { it.startsWith("Drive backup prune failed") }, "$logged")
+    }
+
+    @Test
+    fun aPruneThatWorksLogsNothing() {
+        seed(5)
+        dailyBackup(keep = 1)
+        assertEquals(emptyList(), logged.toList())
+    }
+
+    @Test
+    fun thePickerShowsEveryBackupWhateverMadeIt() {
+        drive += "daily" to "crema-backup-auto-Pixel-Tablet~abc123-20261103-0800-s240c238.crema.zip"
+        drive += "old" to "crema-backup-auto-Pixel-20261102-0800.crema.zip"
+        drive += "manual" to "crema-backup-Pixel-20261101-0800.crema.zip"
+        drive += "web" to "crema-backup-web-20261031T0800.crema.zip"
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+
+        val rows = assertNotNull(sync.state.value.backups)
+        assertEquals(
+            listOf(
+                "Pixel-Tablet · 240 shots, 238 with curves · Daily",
+                "Pixel · Daily",
+                "Pixel · Manual",
+                "web · Manual",
+            ),
+            rows.map { it.subtitle() },
+        )
+        assertEquals(Instant.parse(modified(0)).toEpochMilli(), rows.first().modifiedMs)
+    }
+
+    @Test
+    fun thePickerReadsEveryPage() {
+        seed(PAGE + 20)
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        assertEquals(PAGE + 20, sync.state.value.backups?.size)
+    }
+
+    @Test
+    fun aBackupOlderThanTheNewestCanBeRestored() {
+        seed(3)
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        sync.restoreBackup("tablet2", wipe = false)
+        sync.finish()
+        assertEquals(listOf("tablet2" to false), restored.toList())
+        assertEquals(null, sync.state.value.backups, "the picker closes")
+    }
+
+    @Test
+    fun replaceReachesTheRestoreAsAWipe() {
+        seed(1)
+        val sync = picker()
+        sync.restoreBackup("tablet0", wipe = true)
+        sync.finish()
+        assertEquals(listOf("tablet0" to true), restored.toList())
+    }
+
+    @Test
+    fun anEmptyDriveSaysSoAndOpensNothing() {
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        assertEquals(null, sync.state.value.backups)
+        assertTrue("No Crema backups found in Google Drive" in notices, "$notices")
+    }
+
+    @Test
+    fun aListThatFailsSaysSoAndOpensNothing() {
+        listFails = true
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        assertEquals(null, sync.state.value.backups)
+        assertTrue(notices.any { it.startsWith("Couldn't list your Google Drive backups") }, "$notices")
+    }
+
+    @Test
+    fun aListingThatGoesRoundFailsRatherThanSpinning() {
+        loopingToken = true
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        assertEquals(null, sync.state.value.backups)
+        assertTrue(notices.any { it.startsWith("Couldn't list your Google Drive backups") }, "$notices")
+    }
+
+    @Test
+    fun aRepeatedPageTokenStopsAtOnce() {
+        loopingToken = true
+        val e = runCatching { runBlocking { driveListBackups("t", json) } }.exceptionOrNull()
+        assertTrue(e?.message?.contains("went round") == true, "$e")
+        assertEquals(1, pageTokens.size, "one page after the first, not $DRIVE_LIST_MAX_PAGES")
+    }
+
+    @Test
+    fun disconnectingClosesThePicker() {
+        seed(1)
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        assertNotNull(sync.state.value.backups)
+        sync.disconnect(quiet = true)
+        sync.finish()
+        assertEquals(null, sync.state.value.backups)
+    }
+
+    @Test
+    fun dismissingThePickerClosesIt() {
+        seed(1)
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        sync.closeBackupPicker()
+        assertEquals(null, sync.state.value.backups)
     }
 
     private companion object {

@@ -70,6 +70,13 @@ class SawModelStoreTest {
     }
 
     @Test
+    fun aPartialSaveFallsThroughToTheBackup() = runTest {
+        File(tmp.root, SawModelStore.FILE_NAME + ".tmp").writeText("{\"half")
+        File(tmp.root, SawModelStore.FILE_NAME + ".bak").writeText("{\"whole\":1}")
+        assertEquals("{\"whole\":1}", store().load())
+    }
+
+    @Test
     fun newestCaptureWins() = runTest {
         quarantined().writeText("older")
         val answer = """{"type":"Corrupt","content":{"raw":"{newer","error":"x"}}"""
