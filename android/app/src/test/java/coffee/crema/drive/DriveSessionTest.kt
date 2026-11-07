@@ -74,7 +74,7 @@ class DriveSessionTest {
     private fun reopen() = DriveSync(
         store, json, CoroutineScope(job + Dispatchers.Default), "cid",
         notify = { notices += it },
-        backupZip = { ByteArray(1) },
+        backupZip = { BackupZip(ByteArray(1), coffee.crema.core.BackupCounts(1u, 1u)) },
         backupFileName = { "crema-backup-1" },
         applyRestore = { _, _ -> },
         exchangeCode = { _, _ -> set("new") },

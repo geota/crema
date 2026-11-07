@@ -84,6 +84,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Drive keeps your fullest backups** — daily backups now carry their shot and
+  curve counts in the file name, and each device manages only its own, even two
+  of the same model. Past the 10 copies you keep, the newest with the most shots
+  and the newest with the most curves always stay, so a bad week can't push out
+  your last good copy. That's at most 3 more than the setting. If a backup comes
+  out under half the size of your last one, Crema tells you. Pruned copies go to
+  Drive's trash, where you can restore them for 30 days. Copies made before this
+  update are left alone. Android.
 - **A store Android can't read is left alone** — a passing read error or running
   out of memory while loading used to move a good file aside as damaged. Now
   only a file that doesn't decode is damaged. Anything else leaves it in place
