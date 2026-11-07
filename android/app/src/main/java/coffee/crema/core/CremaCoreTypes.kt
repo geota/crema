@@ -1921,6 +1921,13 @@ data class EventDecodeErrorInner (
 	val message: String
 )
 
+/// Generated type representing the anonymous struct variant `UnknownMachineByte` of the `Event` Rust enum
+@Serializable
+data class EventUnknownMachineByteInner (
+	/// The raw byte.
+	val byte: UByte
+)
+
 /// Something the core observed that the UI may want to react to.
 /// 
 /// Serialized adjacently tagged — a JSON event reads `{"type":"ShotStarted"}`
@@ -2356,6 +2363,12 @@ sealed class Event {
 	@Serializable
 	@SerialName("DecodeError")
 	data class DecodeError(val content: EventDecodeErrorInner): Event()
+	/// The DE1 reported a substate byte this build doesn't know. The report
+	/// was still applied, with [`SubState::Unknown`]; this is a diagnostic,
+	/// once per byte value.
+	@Serializable
+	@SerialName("UnknownMachineByte")
+	data class UnknownMachineByte(val content: EventUnknownMachineByteInner): Event()
 }
 
 /// Generated type representing the anonymous struct variant `WriteCharacteristic` of the `Command` Rust enum
@@ -5975,6 +5988,12 @@ enum class SubState(val string: String) {
 	/// Front power switch is off.
 	@SerialName("ErrorNoAc")
 	ErrorNoAc("ErrorNoAc"),
+	/// A byte this build doesn't know, from [`StateInfo::parse`]. The
+	/// discriminant is outside the firmware's ranges and is never a decoded
+	/// value: [`TryFrom`] still rejects unknown bytes for strict callers. It
+	/// sits below `200` so it never reads as an error.
+	@SerialName("Unknown")
+	Unknown("Unknown"),
 }
 
 /// Which temperature a step regulates. Variant names match the community

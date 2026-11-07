@@ -20,6 +20,8 @@ pub mod firmware_info;
 #[cfg(test)]
 mod hds_sleep_tests;
 mod idle_sleep;
+#[cfg(test)]
+mod machine_control_tests;
 pub mod machine_requests;
 mod maintenance_run;
 mod packet_sync;
@@ -30,6 +32,8 @@ mod profile_sync;
 mod scale_robustness_tests;
 pub mod shot_start;
 mod sweep;
+#[cfg(test)]
+mod unknown_substate_tests;
 
 pub use calibration_guard::CalibrationRefusal;
 pub use de1_domain::{FirmwareBuildReport, FirmwareBuildStatus};
@@ -59,6 +63,7 @@ pub use shot_start::{
 
 use capture::{CaptureRecorder, slice_to_jsonl};
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use de1_domain::connect_sweep::MAX_TANK_TEMP_C;
@@ -878,6 +883,8 @@ pub struct CremaCore {
     /// The fault last surfaced via [`Event::MachineErrorChanged`] (`None` =
     /// healthy), so the event is edge-triggered.
     reported_machine_error: Option<SubState>,
+    /// Substate bytes already reported as [`Event::UnknownMachineByte`].
+    unknown_substates_reported: BTreeSet<u8>,
     /// Latched once the scale's timer was stopped for a DE1 link drop
     /// (Decenza `29878266`), so an outage sends one stop, not one per
     /// teardown path. Re-armed at the next shot start.
@@ -1136,6 +1143,7 @@ impl CremaCore {
             de1_firmware_build: None,
             no_ac_since: None,
             reported_machine_error: None,
+            unknown_substates_reported: BTreeSet::new(),
             scale_timer_stopped_for_drop: false,
             auto_tare_pending: false,
             auto_tare_window: TareSettleWindow::new(),
@@ -3454,8 +3462,11 @@ impl CremaCore {
         idle_sleep.link(false);
         // Upload numbers stay unique across a reconnect (see the field).
         let next_upload_id = self.next_upload_id;
+        // A diagnostic: a reconnect doesn't make a byte new again.
+        let unknown_substates_reported = std::mem::take(&mut self.unknown_substates_reported);
         *self = CremaCore::new();
         self.next_upload_id = next_upload_id;
+        self.unknown_substates_reported = unknown_substates_reported;
         self.starter.settings = start_settings;
         self.idle_sleep = idle_sleep;
         self.firmware_flash = firmware_flash;
@@ -3561,6 +3572,12 @@ impl CremaCore {
                 return;
             }
         };
+        if info.substate == SubState::Unknown
+            && let Some(&byte) = data.get(1)
+            && self.unknown_substates_reported.insert(byte)
+        {
+            out.events.push(Event::UnknownMachineByte { byte });
+        }
         self.profile_sync_state_seen(info, out);
         if self.last_state != Some(info) {
             let prev_info = self.last_state;
@@ -4330,7 +4347,7 @@ impl CremaCore {
                 MachineState::Sleep | MachineState::Idle => {
                     if info.substate == SubState::Refill {
                         blockers.push(FlashBlocker::Refilling);
-                    } else if (info.substate as u8) >= 200 {
+                    } else if info.substate.is_error() || info.substate == SubState::Unknown {
                         blockers.push(FlashBlocker::MachineError);
                     }
                 }
