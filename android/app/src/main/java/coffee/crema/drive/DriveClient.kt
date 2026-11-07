@@ -105,14 +105,22 @@ suspend fun driveUploadBackup(
  *  hold on to a fullest copy it was never shown. Throws if any page fails. */
 suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> {
     val files = mutableListOf<DriveFile>()
+    val seen = HashSet<String>()
     var pageToken: String? = null
+    var pages = 0
     do {
+        if (pages++ >= DRIVE_LIST_MAX_PAGES) throw IOException("Drive list failed: it didn't end")
         val page = driveListPage(accessToken, pageToken, json)
         files += page.files
         pageToken = page.nextPageToken
+        // A token seen before would go round for ever.
+        if (pageToken != null && !seen.add(pageToken)) throw IOException("Drive list failed: it went round")
     } while (pageToken != null)
     return files
 }
+
+/** Pages a listing may take: 10,000 files, far past what Crema makes. */
+internal const val DRIVE_LIST_MAX_PAGES = 100
 
 private class DriveFilePage(val files: List<DriveFile>, val nextPageToken: String?)
 

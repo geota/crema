@@ -59,6 +59,26 @@ class SettingsStoreOrderTest {
         }
     }
 
+    /** Erase all data after a save in flight: that save can't bring old prefs back. */
+    @Test
+    fun `erase waits for a save in flight`() = runBlocking {
+        store.save(AppPrefs(themeMode = "dark"))
+        val file = java.io.File(VmHarness.app().filesDir, "prefs.json")
+        val lock = SettingsStore::class.java.getDeclaredField("saveLock").apply { isAccessible = true }.get(store) as Mutex
+        val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            lock.lock() // a save mid-write
+            val erase = io.async { store.erase() }
+            delay(50)
+            assertEquals(true, file.exists(), "the erase waits for the save")
+            lock.unlock()
+            erase.await()
+            assertEquals(false, file.exists())
+        } finally {
+            io.cancel()
+        }
+    }
+
     @Test
     fun `saves without a number always land`() = runBlocking {
         store.save(AppPrefs(themeMode = "dark"), generation = 5)

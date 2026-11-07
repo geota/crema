@@ -191,7 +191,7 @@ describe('restore pushes hot water', () => {
 			JSON.stringify({ kind: 'crema-backup/v1', createdAt: 1 }),
 			JSON.stringify({ kind: 'settings', _shell: 'web', common })
 		].join('\n');
-		restoreBackup(bundle, 'merge');
+		restoreBackup(bundle, 'wipe');
 		await vi.waitFor(() => expect(sent.length).toBeGreaterThan(0));
 		expect(sent.at(-1)?.hotWater).toMatchObject({ mode: HotWaterMode.Time, timeS: 45, volumeMl: 180, ratio: 2.5 });
 	});
