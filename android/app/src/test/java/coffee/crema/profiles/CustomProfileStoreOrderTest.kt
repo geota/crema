@@ -28,6 +28,8 @@ import kotlin.test.assertEquals
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class CustomProfileStoreOrderTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
 
     private val store = CustomProfileStore(VmHarness.app(), coreJson)
     private val mine = """{"id":"mine","name":"Mine"}"""

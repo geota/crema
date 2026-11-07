@@ -22,6 +22,8 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class LibraryStoreConcurrencyTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     @Test
     fun `overlapping saves leave the library in place`() = runBlocking {
         val app = ApplicationProvider.getApplicationContext<Application>()

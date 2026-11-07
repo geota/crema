@@ -643,6 +643,8 @@ tasks.withType<Test>().configureEach {
     doFirst {
         systemProperty("jna.library.path", hostCoreLibrary.get().asFile.parentFile.absolutePath)
     }
+    // A save refused by the load floor fails the test that made it (SaveFloor).
+    systemProperty("crema.strictSaves", "true")
 }
 
 // ---------------------------------------------------------------------------

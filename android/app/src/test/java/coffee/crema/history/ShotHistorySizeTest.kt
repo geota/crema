@@ -30,6 +30,8 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class ShotHistorySizeTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
 
     private fun shot(i: Int, samples: Int) = StoredShot(
         id = "shot:$i",

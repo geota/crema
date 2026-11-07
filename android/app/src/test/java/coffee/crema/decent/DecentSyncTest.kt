@@ -30,6 +30,8 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class DecentSyncTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
 
     private class MemoryStore(var state: DecentState) : DecentStateStore {
         var saves = 0

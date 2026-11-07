@@ -7,6 +7,7 @@ import coffee.crema.core.Pump
 import coffee.crema.core.Transition
 import coffee.crema.core.newProfileId
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.SafeFile
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -66,8 +67,12 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
      * an empty list if absent / unreadable. Each string is a complete `CremaProfile`
      * object ready for the thin-model decode (display) or `cremaProfileToWire`.
      */
+    /** The profiles are in memory: a save can't carry defaults now. */
+    fun openSaves() = SafeFile.openSaves(file)
+
+    /** The stored profiles. Saves stay refused until [openSaves]. */
     suspend fun load(): List<String> = withContext(Dispatchers.IO) {
-        loadStore(file, "custom profiles") { json.decodeFromString(CustomProfileLibrary.serializer(), it) }
+        loadStore(file, "custom profiles", open = false) { json.decodeFromString(CustomProfileLibrary.serializer(), it) }
             .valueOrNull()?.profiles?.map { it.toString() } ?: emptyList()
     }
 
@@ -84,7 +89,7 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
                     val objs = profiles.mapNotNull {
                         runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull()
                     }
-                    saveStore(file, json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs)))
+                    saveStore(file, "custom profiles", json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs)))
                 }
             }
         }

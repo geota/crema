@@ -30,6 +30,8 @@ import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.MaintenanceStore
 import coffee.crema.persist.KeptAside
 import coffee.crema.persist.KeptAsideNotices
+import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SaveFloor
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.Setting
 import coffee.crema.settings.setting
@@ -90,6 +92,10 @@ import coffee.crema.decent.decentShotRecordJson
  * is readable top to bottom. Splitting these into proper layers is future work.
  */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
+
+    /** First of all: the process can outlive a ViewModel, and this one starts
+     *  from defaults, so no store may take a save until it has loaded here. */
+    private val saveSession = SafeFile.startSession()
 
     // See [coreJson]: lenient enums, and the core enums tagged `kind`.
     private val json = coreJson
@@ -943,6 +949,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val msg = KeptAsideNotices.message(keptAside)
                 appendLog(msg)
                 _ui.update { it.copy(keptAsideNotice = msg) }
+            }
+        }
+        // A save that came before its store loaded was refused: say so, once.
+        viewModelScope.launch {
+            SaveFloor.pending.collect { pending ->
+                if (pending.isNotEmpty()) SaveFloor.drain().forEach { notifyUser(SaveFloor.message(it)) }
             }
         }
         // A hub's remotes hold no live copy of its stock: a change to the active

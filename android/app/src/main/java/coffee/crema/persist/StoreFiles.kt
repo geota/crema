@@ -10,6 +10,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -62,19 +63,75 @@ private fun persistLog(line: String) {
 }
 
 /**
+ * The load floor: no save to a store that hasn't loaded. Saves are whole
+ * snapshots, so a save before the load carries defaults, and landing it later
+ * would be the same loss, which is why a refused save isn't queued. The first
+ * refusal per path logs and queues one notice. Under unit tests (the build's
+ * `crema.strictSaves`) a refusal throws, so it fails the test that caused it.
+ */
+object SaveFloor {
+    private val noticed: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
+    private val strict = System.getProperty("crema.strictSaves") == "true"
+    private val _pending = MutableStateFlow<List<String>>(emptyList())
+
+    /** What a refused save was for, until [drain] takes it. */
+    val pending: StateFlow<List<String>> = _pending
+
+    /** Test seam: a test of refusal itself turns this off. */
+    internal var throwOnRefusal: Boolean = strict
+
+    /** Whether a save to [target] may run; refusing tells whoever should know. */
+    fun admit(target: File, what: String): Boolean {
+        if (SafeFile.savesOpen(target)) return true
+        if (throwOnRefusal) throw AssertionError("saved ${target.name} before it loaded")
+        if (noticed.add(target.path)) {
+            persistLog("refused a save to ${target.name}: it hasn't loaded")
+            _pending.update { it + what }
+        }
+        return false
+    }
+
+    /** Take the refusals so far (the caller shows them). */
+    fun drain(): List<String> {
+        var taken = emptyList<String>()
+        _pending.update { taken = it; emptyList() }
+        return taken
+    }
+
+    /** The line for a refused save to [what]. */
+    fun message(what: String) = "Crema was still loading your $what, so that change wasn't saved. Please make it again."
+
+    /** Test seam: forget the notices between tests. */
+    internal fun resetForTest() {
+        noticed.clear()
+        _pending.value = emptyList()
+        throwOnRefusal = strict
+    }
+}
+
+/**
  * [SafeFile.load] for a store: logs to logcat + the crash-report buffer, and a
  * Corrupt outcome for a store with a user-facing [what] queues a
  * [KeptAsideNotices] entry. Pass `what = null` for caches the app can rebuild
- * silently (e.g. the stolen-serials list).
+ * silently (e.g. the stolen-serials list). See [SafeFile.load] for [open].
  */
-fun <T : Any> loadStore(target: File, what: String?, decode: (String) -> T): SafeLoad<T> {
-    val outcome = SafeFile.load(target, ::persistLog, decode)
+fun <T : Any> loadStore(target: File, what: String?, open: Boolean = true, decode: (String) -> T): SafeLoad<T> {
+    val outcome = SafeFile.load(target, ::persistLog, open, decode)
     if (outcome is SafeLoad.Corrupt && what != null) KeptAsideNotices.report(KeptAside(what, outcome.keptAt))
     return outcome
 }
 
-/** [SafeFile.write], logging (not throwing) a failure; true when stored. */
-fun saveStore(target: File, text: String, keepBackup: Boolean = true): Boolean =
+/** [saveItem] for a store: refused before it has loaded (see [SaveFloor]). */
+fun saveStore(target: File, what: String, text: String, keepBackup: Boolean = true): Boolean =
+    SaveFloor.admit(target, what) && saveItem(target, text, keepBackup)
+
+/**
+ * [SafeFile.write] for a file with no load to wait for, logging (not throwing)
+ * a failure; true when stored. For one file of many, or one that's only read
+ * now and then: `hot-water.json` is written on every save and read when the
+ * mode is missing, so the floor would refuse it on every normal install.
+ */
+fun saveItem(target: File, text: String, keepBackup: Boolean = true): Boolean =
     runCatching { SafeFile.write(target, text, keepBackup) }
         .onFailure { persistLog("couldn't save ${target.name}: ${it.message}") }
         .isSuccess

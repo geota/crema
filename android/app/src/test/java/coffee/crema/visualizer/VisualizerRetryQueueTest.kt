@@ -38,6 +38,8 @@ import java.nio.file.Files
  * (`visualizer_queue_decision`, `classify_token_refresh_failure`, host-built).
  */
 class VisualizerRetryQueueTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val json = Json { ignoreUnknownKeys = true }
     private val dir: File = Files.createTempDirectory("viz-retry").toFile()
     private val context = object : ContextWrapper(null) {

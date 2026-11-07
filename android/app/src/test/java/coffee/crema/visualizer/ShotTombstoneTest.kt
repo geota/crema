@@ -36,6 +36,8 @@ import java.nio.file.Files
  * The reconcile runs through the host-built core planner (`reconcileShots`).
  */
 class ShotTombstoneTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val json = Json { ignoreUnknownKeys = true }
     private val dir: File = Files.createTempDirectory("viz-tombstones").toFile()
     private val context = object : ContextWrapper(null) {

@@ -84,6 +84,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Android can't save a store before it has loaded** — a save that came before
+  a store's load carried defaults, and could replace your data. Every store now
+  refuses it, and the first refusal tells you what wasn't saved. This holds when
+  a new screen starts in a running app too. Reading the network role at launch
+  also goes through the store, so it no longer misses settings caught between
+  the two renames of a save. Android.
 - **Shots no longer upload or back up without their telemetry** — on the web a
   queued upload, a Decent retry or a backup could run before a shot's curve had
   loaded, which posted an empty shot to Visualizer and bound the row to it, or

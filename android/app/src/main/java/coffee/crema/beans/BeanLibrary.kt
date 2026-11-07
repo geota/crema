@@ -7,6 +7,7 @@ import coffee.crema.core.Roaster
 import coffee.crema.core.duplicateBeanJson
 import coffee.crema.core.setBeanFrozenJson
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.SafeFile
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -47,19 +48,22 @@ class LibraryStore(private val context: Context, private val json: Json) {
     private val lock = Mutex()
 
     /** Load the library, or an empty one if absent. An unreadable file is kept
-     *  aside and reported (see [loadStore]). */
+     *  aside and reported (see [loadStore]). Saves stay refused until [openSaves]. */
     suspend fun load(): BeanLibrary = lock.withLock {
         withContext(Dispatchers.IO) {
-            loadStore(file, "bean library") { json.decodeFromString(BeanLibrary.serializer(), it) }
+            loadStore(file, "bean library", open = false) { json.decodeFromString(BeanLibrary.serializer(), it) }
                 .valueOrNull() ?: BeanLibrary()
         }
     }
+
+    /** The library is in the UI state: a save can't carry defaults now. */
+    fun openSaves() = SafeFile.openSaves(file)
 
     /** Persist the library atomically (best-effort; a failure is logged). */
     suspend fun save(library: BeanLibrary) {
         lock.withLock {
             withContext(Dispatchers.IO) {
-                saveStore(file, json.encodeToString(BeanLibrary.serializer(), library))
+                saveStore(file, "bean library", json.encodeToString(BeanLibrary.serializer(), library))
             }
         }
     }
