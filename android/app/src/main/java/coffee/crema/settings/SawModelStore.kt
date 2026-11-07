@@ -32,7 +32,8 @@ class SawModelStore(private val dir: File) {
 
     suspend fun load(): String? = withContext(Dispatchers.IO) {
         // Reads what a load would, as this can land between a save's two renames.
-        (SafeFile.peek(file) { it } as? SafeLoad.Loaded)?.value
+        // Decoded as JSON, so a partial temp file falls through to the backup.
+        (SafeFile.peek(file) { Json.parseToJsonElement(it); it } as? SafeLoad.Loaded)?.value
     }
 
     suspend fun save(json: String) {

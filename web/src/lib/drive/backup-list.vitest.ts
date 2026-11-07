@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { backupDate, backupSubtitle } from './backup-list';
-import { listBackups, type DriveFile } from './rest';
+import { LIST_MAX_PAGES, listBackups, type DriveFile } from './rest';
 
 const file = (name: string, modifiedTime = '2026-11-03T08:00:00.000Z'): DriveFile => ({
 	id: name,
@@ -59,6 +59,29 @@ describe('listBackups', () => {
 		const files = await listBackups('token');
 		expect(files.map((f) => f.name)).toEqual(['a', 'b']);
 		expect(urls[1]).toContain('pageToken=next%20page');
+	});
+
+	it('fails on a reply with no list rather than calling it empty', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+		await expect(listBackups('token')).rejects.toThrow(/couldn’t read the reply/);
+	});
+
+	it('stops when a page token comes round again', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response(JSON.stringify({ files: [file('a')], nextPageToken: 'same' })))
+		);
+		await expect(listBackups('token')).rejects.toThrow(/went round/);
+	});
+
+	it('stops after its page cap', async () => {
+		let n = 0;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response(JSON.stringify({ files: [], nextPageToken: `p${n++}` })))
+		);
+		await expect(listBackups('token')).rejects.toThrow(/didn’t end/);
+		expect(n).toBe(LIST_MAX_PAGES);
 	});
 
 	it('fails rather than returning part of a listing', async () => {

@@ -10,6 +10,8 @@
 const UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files';
 const FILES_URL = 'https://www.googleapis.com/drive/v3/files';
 const BACKUP_MIME = 'application/x-ndjson';
+/** Pages a listing may take: 10,000 files, far past what Crema makes. */
+export const LIST_MAX_PAGES = 100;
 
 /** A backup file in Drive (the subset of fields we request). */
 export interface DriveFile {
@@ -73,8 +75,11 @@ export async function uploadBackup(
 export async function listBackups(accessToken: string): Promise<DriveFile[]> {
 	const q = encodeURIComponent("name contains 'crema-backup' and trashed = false");
 	const files: DriveFile[] = [];
+	const seen = new Set<string>();
 	let pageToken: string | undefined;
+	let pages = 0;
 	do {
+		if (pages++ >= LIST_MAX_PAGES) throw new Error('Drive list failed: it didn’t end.');
 		const page = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
 		const url =
 			`${FILES_URL}?q=${q}` +
@@ -82,9 +87,14 @@ export async function listBackups(accessToken: string): Promise<DriveFile[]> {
 			`&orderBy=modifiedTime%20desc&pageSize=100${page}`;
 		const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
 		if (!res.ok) await failOn(res, 'list');
-		const data = (await res.json()) as { files?: DriveFile[]; nextPageToken?: string };
-		files.push(...(data.files ?? []));
+		const data = (await res.json()) as { files?: unknown; nextPageToken?: string };
+		// A reply with no list is a failed page, not an empty one.
+		if (!Array.isArray(data.files)) throw new Error('Drive list failed: couldn’t read the reply.');
+		files.push(...(data.files as DriveFile[]));
 		pageToken = data.nextPageToken;
+		// A token seen before would go round for ever.
+		if (pageToken && seen.has(pageToken)) throw new Error('Drive list failed: it went round.');
+		if (pageToken) seen.add(pageToken);
 	} while (pageToken);
 	return files;
 }

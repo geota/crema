@@ -64,6 +64,7 @@ class DriveRetentionTest {
     private var emptyBody = false
     private val restored = CopyOnWriteArrayList<Pair<String, Boolean>>()
     private var listFails = false
+    private var loopingToken = false
     private var trashFails = false
 
     private val now = System.currentTimeMillis()
@@ -110,6 +111,11 @@ class DriveRetentionTest {
             }
             if (listFails) {
                 x.respond(500, "{}")
+                return@createContext
+            }
+            if (loopingToken) {
+                Regex("pageToken=([^&]+)").find(x.requestURI.query.orEmpty())?.let { pageTokens += it.groupValues[1] }
+                x.respond(200, """{"files":[],"nextPageToken":"same"}""")
                 return@createContext
             }
             val token = Regex("pageToken=(\\d+)").find(x.requestURI.query.orEmpty())?.groupValues?.get(1)
@@ -386,6 +392,36 @@ class DriveRetentionTest {
         sync.finish()
         assertEquals(null, sync.state.value.backups)
         assertTrue(notices.any { it.startsWith("Couldn't list your Google Drive backups") }, "$notices")
+    }
+
+    @Test
+    fun aListingThatGoesRoundFailsRatherThanSpinning() {
+        loopingToken = true
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        assertEquals(null, sync.state.value.backups)
+        assertTrue(notices.any { it.startsWith("Couldn't list your Google Drive backups") }, "$notices")
+    }
+
+    @Test
+    fun aRepeatedPageTokenStopsAtOnce() {
+        loopingToken = true
+        val e = runCatching { runBlocking { driveListBackups("t", json) } }.exceptionOrNull()
+        assertTrue(e?.message?.contains("went round") == true, "$e")
+        assertEquals(1, pageTokens.size, "one page after the first, not $DRIVE_LIST_MAX_PAGES")
+    }
+
+    @Test
+    fun disconnectingClosesThePicker() {
+        seed(1)
+        val sync = picker()
+        sync.openBackupPicker()
+        sync.finish()
+        assertNotNull(sync.state.value.backups)
+        sync.disconnect(quiet = true)
+        sync.finish()
+        assertEquals(null, sync.state.value.backups)
     }
 
     @Test

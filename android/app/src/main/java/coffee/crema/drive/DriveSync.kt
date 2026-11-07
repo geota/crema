@@ -297,6 +297,7 @@ class DriveSync(
             val tokens = persisted.tokens
             // Also forgets a stored sign-in the keystore couldn't open this start.
             persist { it.copy(tokens = null, unopened = null, needsReconnect = false, health = null) }
+            _state.update { it.copy(backups = null) }
             if (!quiet) notify("Disconnected from Google Drive")
             tokens?.let { revokeGrant(it) }
         }

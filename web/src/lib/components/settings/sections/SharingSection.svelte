@@ -803,7 +803,14 @@
 		{/each}
 		<StRow title="Disconnect Google Drive" sub="Forget the Drive sign-in on this device.">
 			{#snippet control()}
-				<StButton label="Disconnect" icon="sign-out" onClick={() => drive.signOut()} />
+				<StButton
+					label="Disconnect"
+					icon="sign-out"
+					onClick={() => {
+						driveFiles = null;
+						void drive.signOut();
+					}}
+				/>
 			{/snippet}
 		</StRow>
 	{:else}

@@ -595,7 +595,11 @@ function applyBackup(text: string, mode: RestoreMode): RestoreSummary {
 	let settingsApplied = false;
 	// The webhook settings are never applied here (see HeldRestoreChanges).
 	let heldWebhookChange: HeldRestoreChanges['webhook'] = null;
-	if (settings) {
+	// Merge keeps this device's settings, maintenance counters and Visualizer
+	// prefs, as the owner decided: only Replace takes the backup's. (The plan's
+	// "unless still pristine" comes with PR7.)
+	const replacing = mode === 'wipe';
+	if (settings && replacing) {
 		if (settings.common) {
 			// Assemble the full target Settings, then write once (replaceAll) rather
 			// than a persist() per key. `common` is cross-shell; the web-only platform
@@ -643,7 +647,7 @@ function applyBackup(text: string, mode: RestoreMode): RestoreSummary {
 			? getRecipeStore().applyBackup(plan.recipes ?? [], plan.recipeMeta ?? null, mode === 'wipe')
 			: 0;
 	// Maintenance counters — a shared core type, applied verbatim either shell.
-	if (maintenance) {
+	if (maintenance && replacing) {
 		getMaintenanceStore().replaceAll(maintenance as unknown as MaintenanceState);
 	}
 	// Visualizer sync prefs — a shared core type, either shell (no per-shell
@@ -652,7 +656,7 @@ function applyBackup(text: string, mode: RestoreMode): RestoreSummary {
 	// a direction that starts pushing) are held for the user's OK
 	// by the core's guard; the rest apply now.
 	let heldVisualizer: HeldRestoreChanges['visualizer'] = null;
-	if (visualizerPrefs) {
+	if (visualizerPrefs && replacing) {
 		const guarded = JSON.parse(
 			guardRestoredVisualizerPrefs(JSON.stringify(visualizerSyncPrefs()), JSON.stringify(visualizerPrefs))
 		) as GuardedVisualizerPrefs;
