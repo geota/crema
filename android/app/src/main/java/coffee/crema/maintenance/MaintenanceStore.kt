@@ -57,9 +57,7 @@ class MaintenanceStore(private val context: Context, private val json: Json) {
 
     /** Persist the maintenance state atomically (best-effort; a failure is logged). */
     suspend fun save(state: MaintenanceState) {
-        inSaveOrder(file) {
-            saveStore(file, "maintenance log", json.encodeToString(MaintenanceState.serializer(), state))
-        }
+        saveStore(file, "maintenance log") { json.encodeToString(MaintenanceState.serializer(), state) }
     }
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */

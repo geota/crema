@@ -64,6 +64,12 @@ class SawModelStoreTest {
     }
 
     @Test
+    fun aSaveCaughtBetweenItsRenamesStillReads() = runTest {
+        File(tmp.root, SawModelStore.FILE_NAME + ".tmp").writeText("{\"newest\":1}")
+        assertEquals("{\"newest\":1}", store().load())
+    }
+
+    @Test
     fun newestCaptureWins() = runTest {
         quarantined().writeText("older")
         val answer = """{"type":"Corrupt","content":{"raw":"{newer","error":"x"}}"""

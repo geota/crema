@@ -13,6 +13,7 @@ import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -84,17 +85,18 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
      *  numbered snapshot older than the last one saved is skipped. */
     suspend fun save(profiles: List<String>, generation: Long? = null) {
         if (!SaveFloor.admit(file, WHAT)) return
-        withContext(Dispatchers.IO) {
+        // This lock holds the generation check and the write together.
+        withContext(NonCancellable + Dispatchers.IO) {
             saveLock.withLock {
                 if (generation != null) {
                     if (generation < lastGeneration) return@withLock
                     lastGeneration = generation
                 }
-                runCatching {
+                saveStore(file, WHAT) {
                     val objs = profiles.mapNotNull {
                         runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull()
                     }
-                    saveStore(file, WHAT, json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs)))
+                    json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs))
                 }
             }
         }

@@ -91,9 +91,9 @@ class BackupCrossShellTest {
                 """"credit":"Adapted from James Hoffmann","sourceUrl":null}""",
         )
         val state = MainUiState(
-            beans = listOf(bean),
-            roasters = listOf(roaster),
-            history = listOf(shot),
+            beans = rowViewOf(listOf(bean)),
+            roasters = rowViewOf(listOf(roaster)),
+            history = rowViewOf(listOf(shot)),
             customMethods = listOf(method),
             lastRecipeByMethod = mapOf("pourover" to recipe.id),
             maintenance = defaultMaintenanceState(1_790_000_000_000),

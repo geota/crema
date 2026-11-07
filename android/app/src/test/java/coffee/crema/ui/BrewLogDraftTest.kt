@@ -216,7 +216,7 @@ class BrewLogDraftTest {
         val newer = brew("newer", "pourover", null, 15f, 250f).copy(completedAtMs = 2_000)
         val backdated = brew("backdated", "pourover", null, 30f, 500f).copy(completedAtMs = 1_000)
         BrewLogSeeds.seeds(
-            historyWith(listOf(backdated), listOf(newer)), "pourover", null, null, null, null,
+            historyWith(listOf(backdated), rowsForTest(listOf(newer))), "pourover", null, null, null, null,
             seedsJson = core::call, customMethods = emptyList(),
         )
         assertEquals(listOf(15f, 30f), core.inputs.single().rows.map { it.doseG })

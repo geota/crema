@@ -7,14 +7,12 @@ import coffee.crema.core.Roaster
 import coffee.crema.core.duplicateBeanJson
 import coffee.crema.core.setBeanFrozenJson
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.inSaveOrder
 import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.SafeFile
-import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -45,18 +43,12 @@ data class BeanLibrary(
 class LibraryStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
-    /** Saves run on IO and may overlap; one at a time. Two at once share a temp
-     *  file, and the loser moves the library aside with nothing to replace it. */
-    private val lock = Mutex()
-
     /** Load the library, or an empty one if absent. An unreadable file is kept
      *  aside and reported (see [loadStore]). Saves stay refused until [openSaves]. */
-    suspend fun load(): BeanLibrary = lock.withLock {
-        withContext(Dispatchers.IO) {
-            when (val outcome = loadStore(file, WHAT, open = false) { json.decodeFromString(BeanLibrary.serializer(), it) }) {
-                is SafeLoad.Loaded -> outcome.value
-                SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> BeanLibrary()
-            }
+    suspend fun load(): BeanLibrary = withContext(Dispatchers.IO) {
+        when (val outcome = loadStore(file, WHAT, open = false) { json.decodeFromString(BeanLibrary.serializer(), it) }) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> BeanLibrary()
         }
     }
 
@@ -65,17 +57,12 @@ class LibraryStore(private val context: Context, private val json: Json) {
 
     /** Persist the library atomically (best-effort; a failure is logged). */
     suspend fun save(library: BeanLibrary) {
-        if (!SaveFloor.admit(file, WHAT)) return
-        lock.withLock {
-            withContext(Dispatchers.IO) {
-                saveStore(file, WHAT, json.encodeToString(BeanLibrary.serializer(), library))
-            }
-        }
+        saveStore(file, WHAT) { json.encodeToString(BeanLibrary.serializer(), library) }
     }
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {
-        lock.withLock { withContext(Dispatchers.IO) { eraseStore(file) } }
+        inSaveOrder(file) { eraseStore(file) }
     }
 
     internal companion object {
