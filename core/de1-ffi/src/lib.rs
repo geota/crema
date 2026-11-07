@@ -2129,6 +2129,41 @@ pub fn export_backup_bundle(
     serde_json::to_string(&built).map_err(crema_err)
 }
 
+/// A backup's name as an automatic one, carrying a `BackupCounts` JSON. See
+/// [`de1_domain::auto_backup_file_name`].
+///
+/// # Errors
+///
+/// Returns the parse error when `counts_json` is malformed.
+#[uniffi::export]
+pub fn auto_backup_file_name(
+    backup_name: String,
+    tag: String,
+    counts_json: String,
+) -> Result<String, CremaError> {
+    let counts = serde_json::from_str(&counts_json).map_err(crema_err)?;
+    Ok(de1_domain::auto_backup_file_name(
+        &backup_name,
+        &tag,
+        counts,
+    ))
+}
+
+/// What to prune after an automatic upload, as an `AutoBackupRetention` JSON.
+/// See [`de1_domain::auto_backup_retention`].
+///
+/// # Errors
+///
+/// Returns the parse error when `files_json` is malformed.
+#[uniffi::export]
+pub fn auto_backup_retention(
+    files_json: String,
+    uploaded: String,
+    keep: u32,
+) -> Result<String, CremaError> {
+    de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep).map_err(crema_err)
+}
+
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the
 /// library `ImportPlan` plus `profiles` + `settings` sections, so the
 /// shell's reconcile + apply path is reused. See

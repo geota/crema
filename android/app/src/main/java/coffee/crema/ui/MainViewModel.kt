@@ -413,7 +413,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         clientId = coffee.crema.BuildConfig.GOOGLE_DRIVE_CLIENT_ID,
         notify = { msg -> notifyUser(msg) },
-        backupZip = { library.buildBackupZipBytes() },
+        backupZip = { library.buildBackupZip() },
         backupFileName = { library.backupFileName() },
         applyRestore = { bytes, wipe ->
             viewModelScope.launch { library.restoreBackupBytes(bytes, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) }

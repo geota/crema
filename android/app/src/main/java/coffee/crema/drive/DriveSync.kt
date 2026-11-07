@@ -1,11 +1,18 @@
 package coffee.crema.drive
 
+import coffee.crema.core.AutoBackupRetention
+import coffee.crema.core.BackupCounts
+import coffee.crema.core.BackupFile
+import coffee.crema.core.BackupShrink
+import coffee.crema.core.BackupShrinkKind
 import coffee.crema.core.CallbackOutcome
 import coffee.crema.core.RunOutcome
 import coffee.crema.core.RunOutcomeCompleteInner
 import coffee.crema.core.RunOutcomeFailedInner
 import coffee.crema.core.SyncFailure
 import coffee.crema.core.SyncFailureRejectedInner
+import coffee.crema.core.autoBackupFileName
+import coffee.crema.core.autoBackupRetention
 import coffee.crema.core.callbackOutcome
 import coffee.crema.core.reconnectNoticeDue
 import coffee.crema.runCatchingCancellable
@@ -24,8 +31,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.IOException
+import java.time.Instant
+import java.util.UUID
 
 /*
  * Google Drive backup controller — the Android twin of the web shell's
@@ -43,14 +53,29 @@ import java.io.IOException
 /** Minimum gap between two daily auto-backup attempts (issue #36). */
 private const val AUTO_BACKUP_INTERVAL_MS = 24L * 60 * 60 * 1000
 
-/** Filename prefix distinguishing automatic uploads from manual ones —
- *  must keep containing "crema-backup" (the Drive list query matches on
- *  that substring, and restore-latest must see auto files too). */
-private const val AUTO_BACKUP_PREFIX = "crema-backup-auto-"
-
-/** How many auto-backups retention pruning keeps (≈ a week and a half of
- *  daily coverage; Decenza's local equivalent keeps 5 days). */
+/** Automatic copies kept per device, until a Settings choice exists. */
 private const val AUTO_BACKUP_KEEP = 10
+
+/** A built backup, and what's in it for its automatic name. */
+class BackupZip(val bytes: ByteArray, val counts: BackupCounts)
+
+/** A new install's tag: short, as it's in every file name. */
+internal fun newAutoBackupTag(): String = UUID.randomUUID().toString().take(6)
+
+/** A Drive listing's row as the core reads it; null when its time can't be read,
+ *  which leaves that file alone. */
+internal fun DriveFile.toBackupFile(): BackupFile? =
+    runCatching { BackupFile(id, name, Instant.parse(modifiedTime).toEpochMilli()) }.getOrNull()
+
+/** What to tell the user when a backup came out far smaller than the last. */
+internal fun shrinkNotice(shrink: BackupShrink): String {
+    val what = when (shrink.kind) {
+        BackupShrinkKind.Shots -> "shots"
+        BackupShrinkKind.Curves -> "curves"
+    }
+    return "Today's backup has far fewer $what than your last backup (${shrink.now}, was ${shrink.was}). " +
+        "Older copies are being kept."
+}
 
 class DriveSync(
     private val store: DriveStore,
@@ -62,7 +87,7 @@ class DriveSync(
     private val notify: (String) -> Unit,
     /** Produce the `.crema.zip` backup bytes, or null (+ its own notice) when
      *  empty. Suspends: the build runs off Main (LibraryController). */
-    private val backupZip: suspend () -> ByteArray?,
+    private val backupZip: suspend () -> BackupZip?,
     /** A suggested backup filename (the VM's `backupFileName()`). */
     private val backupFileName: () -> String,
     /** Apply a downloaded backup's raw bytes (a `.crema.zip` or legacy text).
@@ -82,8 +107,8 @@ class DriveSync(
     private val uploadBackup: suspend (token: String, name: String, bytes: ByteArray) -> DriveFile =
         { token, name, bytes -> driveUploadBackup(token, name, bytes, json) },
     private val listBackups: suspend (token: String) -> List<DriveFile> = { token -> driveListBackups(token, json) },
-    private val deleteFile: suspend (token: String, fileId: String) -> Unit =
-        { token, id -> driveDeleteFile(token, id, json) },
+    private val trashFile: suspend (token: String, fileId: String) -> Unit =
+        { token, id -> driveTrashFile(token, id, json) },
     private val downloadBackup: suspend (token: String, fileId: String) -> ByteArray =
         { token, id -> driveDownloadBackup(token, id, json) },
     /** Revoke a grant at Google, best-effort (injected so JVM tests make no call). */
@@ -399,12 +424,12 @@ class DriveSync(
             // Busy from the start: building the zip takes a while on a big
             // history (it runs off Main, so the UI stays live meanwhile).
             _state.update { it.copy(busy = true) }
-            val zip = backupZip() ?: run {
+            val built = backupZip() ?: run {
                 _state.update { it.copy(busy = false) } // backupZip already notified "nothing to back up"
                 return@launch
             }
             try {
-                withToken(tokens) { uploadBackup(it, backupFileName(), zip) }
+                withToken(tokens) { uploadBackup(it, backupFileName(), built.bytes) }
                 persist { it.copy(lastBackupSuccessAtMs = now()) }
                 finishRun(backedUp())
                 notify("Backed up to Google Drive")
@@ -450,18 +475,20 @@ class DriveSync(
                 }
             }
             persist { it.copy(lastAutoBackupAtMs = now()) }
-            val zip = backupZip() ?: return@launch
-            // Auto uploads carry a distinct prefix (still containing
-            // "crema-backup" so the restore-latest list query sees them) —
-            // retention pruning below only ever touches this prefix, so
-            // manual backups are never deleted.
-            val name = backupFileName().replaceFirst("crema-backup-", AUTO_BACKUP_PREFIX)
+            val built = backupZip() ?: return@launch
+            // The name carries the counts the retention below compares, and this
+            // install's tag. Its prefix still holds "crema-backup", so the Drive
+            // list query finds it, and only this prefix is ever pruned, so a
+            // manual backup never is.
+            val tag = persisted.autoBackupTag
+                ?: newAutoBackupTag().also { fresh -> persist { it.copy(autoBackupTag = fresh) } }
+            val name = autoBackupFileName(backupFileName(), tag, json.encodeToString(BackupCounts.serializer(), built.counts))
             try {
-                withToken(tokens) { uploadBackup(it, name, zip) }
+                withToken(tokens) { uploadBackup(it, name, built.bytes) }
                 persist { it.copy(lastBackupSuccessAtMs = now()) }
                 finishRun(backedUp())
                 notify("Daily backup saved to Google Drive")
-                pruneAutoBackups(tokens)
+                settleAutoBackups(tokens, name)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
@@ -475,19 +502,25 @@ class DriveSync(
         }
     }
 
-    /** Retention pruning: keep the newest [AUTO_BACKUP_KEEP] auto-backups
-     *  (daily uploads otherwise accumulate ~365 files/year in the user's
-     *  Drive), never touching manual backups. Best-effort — a failed prune
-     *  just retries after tomorrow's upload. */
-    private suspend fun pruneAutoBackups(tokens: DriveTokenSet) {
+    /**
+     * After an automatic upload: the core's retention over the whole listing
+     * ([autoBackupRetention], daily uploads otherwise accumulate ~365 files a
+     * year), and a notice if the copy just made is far smaller than the last.
+     * Pruned copies go to the trash, so a wrong prune can be undone for 30 days.
+     * Best-effort: a failed list or trash just retries after tomorrow's upload.
+     */
+    private suspend fun settleAutoBackups(tokens: DriveTokenSet, uploaded: String) {
         runCatchingCancellable {
-            withToken(tokens) { token ->
-                val stale = listBackups(token)
-                    .filter { it.name.startsWith(AUTO_BACKUP_PREFIX) }
-                    .sortedByDescending { it.modifiedTime }
-                    .drop(AUTO_BACKUP_KEEP)
-                for (file in stale) deleteFile(token, file.id)
-            }
+            val files = withToken(tokens) { listBackups(it) }.mapNotNull { it.toBackupFile() }
+            val filesJson = json.encodeToString(ListSerializer(BackupFile.serializer()), files)
+            val keep = persisted.autoBackupKeep
+                ?: AUTO_BACKUP_KEEP.also { chosen -> persist { it.copy(autoBackupKeep = chosen) } }
+            val plan = json.decodeFromString(
+                AutoBackupRetention.serializer(),
+                autoBackupRetention(filesJson, uploaded, keep.toUInt()),
+            )
+            plan.shrink?.let { notify(shrinkNotice(it)) }
+            withToken(tokens) { token -> plan.delete.forEach { trashFile(token, it) } }
         }
     }
 

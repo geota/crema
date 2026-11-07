@@ -351,6 +351,10 @@ pub struct BackupExport {
     pub degraded: Vec<String>,
     /// The rows left out. The header's `omittedCount` is this list's length.
     pub omitted: Vec<OmittedBackupRow>,
+    /// Shots written.
+    pub shot_count: usize,
+    /// Shots written with a curve.
+    pub curve_count: usize,
 }
 
 /// The parsed contents of a backup bundle. Beans + roasters reuse the library
@@ -531,6 +535,11 @@ pub fn export_backup_jsonl_from_json(
     }
     Ok(BackupExport {
         jsonl: out,
+        shot_count: shots.len(),
+        curve_count: shots
+            .iter()
+            .filter(|s| !s.shot.record.samples.is_empty())
+            .count(),
         degraded: shots
             .iter()
             .filter(|s| s.without_profile)
@@ -852,6 +861,23 @@ mod tests {
         assert!(built.degraded.is_empty());
         assert_eq!(built.omitted.len(), 1);
         assert_eq!(header_of(&built.jsonl).shot_count, 1);
+    }
+
+    #[test]
+    fn an_export_counts_the_shots_it_wrote_and_their_curves() {
+        let mut curved = shot_row("curved");
+        curved["record"]["samples"] = serde_json::json!([{
+            "elapsed": 100,
+            "sample": {
+                "sampleTime": 10, "groupPressure": 9.0, "groupFlow": 2.0, "headTemp": 92.0,
+                "mixTemp": 93.0, "setMixTemp": 93.0, "setHeadTemp": 92.0, "setGroupPressure": 9.0,
+                "setGroupFlow": 0.0, "frameNumber": 1, "steamTemp": 140,
+            },
+        }]);
+        let built = export(&serde_json::json!({
+            "shots": [curved, shot_row("bare"), { "id": "bad", "record": "not a record" }],
+        }));
+        assert_eq!((built.shot_count, built.curve_count), (2, 1));
     }
 
     /// Every kind of row, not just shots.
