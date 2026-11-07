@@ -48,6 +48,9 @@ class VisualizerSessionTest {
         },
     )
     private val store = VisualizerStore(context, json, box)
+
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val uploads = CopyOnWriteArrayList<String>()
     private val deletes = CopyOnWriteArrayList<String>()
     private var me: Pair<HttpStatusCode, String> = HttpStatusCode.OK to """{"id":"u1","name":"Ada","public":true}"""

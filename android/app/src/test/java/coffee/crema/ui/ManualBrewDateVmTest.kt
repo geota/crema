@@ -28,6 +28,8 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class ManualBrewDateVmTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val store = ViewModelStore()
     private val now = 1_700_000_000_000
     private val hour = 3_600_000L

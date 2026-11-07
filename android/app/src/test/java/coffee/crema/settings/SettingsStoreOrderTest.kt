@@ -26,6 +26,8 @@ import kotlin.test.assertEquals
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class SettingsStoreOrderTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
 
     private val store = SettingsStore(VmHarness.app(), coreJson)
 

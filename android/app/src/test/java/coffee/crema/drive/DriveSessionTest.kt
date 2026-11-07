@@ -43,6 +43,9 @@ class DriveSessionTest {
         },
     )
     private val store = DriveStore(context, json, box)
+
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val job = SupervisorJob()
     private val notices = CopyOnWriteArrayList<String>()
     private val uploads = CopyOnWriteArrayList<String>()

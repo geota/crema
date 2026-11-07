@@ -57,6 +57,8 @@ import java.nio.file.Files
  * returned — that is the wiring these tests pin.
  */
 class BeanSyncTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     private val dir: File = Files.createTempDirectory("bean-sync").toFile()
     private val context = object : ContextWrapper(null) {

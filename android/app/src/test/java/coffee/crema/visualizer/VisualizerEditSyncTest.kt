@@ -46,6 +46,8 @@ import java.nio.file.Files
  * a null body means no request, and that nothing reaches the user.
  */
 class VisualizerEditSyncTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val json = Json { ignoreUnknownKeys = true }
     private val dir: File = Files.createTempDirectory("viz-edit-sync").toFile()
     private val context = object : ContextWrapper(null) {

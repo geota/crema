@@ -4,6 +4,7 @@ import android.app.Application
 import coffee.crema.MainSources
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
+import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -19,6 +20,13 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class OwnStateLoadVmTest {
+
+    private val store = ViewModelStore()
+
+    @After fun tearDown() {
+        store.clear()
+        VmHarness.idle()
+    }
 
     @Test
     fun `a cold start routes both services' redirects`() {
@@ -38,7 +46,7 @@ class OwnStateLoadVmTest {
 
         // The row chain ends before it reaches anything after the hold.
         release.cancel()
-        val vm = VmHarness.build(ViewModelStore())
+        val vm = VmHarness.build(store)
 
         VmHarness.idleUntil("own state") { vm.drive.state.value.connected }
         assertEquals(false, vm.startupLoad.isActive)
