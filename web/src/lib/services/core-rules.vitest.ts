@@ -26,14 +26,19 @@ describe('F17 web on the core rules', () => {
 
 	it('the drain asks the core what to do with a failure', () => {
 		const network = new NetworkError({ cause: 'offline', url: 'https://visualizer.coffee/api' });
-		expect(queueDecision('create', network, 1)).toEqual({
+		expect(queueDecision('create', network, 1, 0)).toEqual({
 			kind: 'Retry',
 			details: { delay_ms: 2000, stop_pass: false }
 		});
-		expect(queueDecision('create', network, 3)).toEqual({ kind: 'Drop', details: { stop_pass: false } });
-		expect(queueDecision('create', httpError(429), 1)).toEqual({
+		expect(queueDecision('create', network, 3, 0)).toEqual({ kind: 'Drop', details: { stop_pass: false } });
+		expect(queueDecision('delete', network, 3, 0)).toEqual({ kind: 'Park', details: { delay_ms: 3_600_000 } });
+		expect(queueDecision('create', httpError(429), 1, 0)).toEqual({
 			kind: 'Retry',
-			details: { delay_ms: 120000, stop_pass: true }
+			details: { delay_ms: 60_000, stop_pass: true }
+		});
+		expect(queueDecision('create', httpError(429), 2, 0)).toEqual({
+			kind: 'Retry',
+			details: { delay_ms: 600_000, stop_pass: true }
 		});
 		const src = readFileSync(path.resolve('src/lib/services/upload-queue.ts'), 'utf-8');
 		expect(src).toMatch(/queueDecision\(entry\.op, e, made\)/);

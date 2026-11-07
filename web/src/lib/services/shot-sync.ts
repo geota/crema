@@ -9,7 +9,7 @@
  *    (proactive refresh + one-shot 401 retry), exactly as the old `call()`
  *    funnelled through `withFreshToken`;
  *  - `HttpClient.request` raises `HttpStatusError` on any non-2xx, which `call`
- *    maps back onto the Visualizer error taxonomy: 402/403 → premium-gated,
+ *    maps back onto the Visualizer error taxonomy: a premium 402/403 → premium-gated,
  *    404 → not-found, 401 handled upstream by `TokenVault`, everything else
  *    propagates as `HttpStatusError` (the old `'other'` bucket).
  *
@@ -34,10 +34,16 @@
 import { Context, Effect, Layer, Option } from 'effect';
 import { HttpClient } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
-import { NotAuthenticatedError, ResponseDecodeError, VisualizerNotFoundError } from '../effect/errors.ts';
+import {
+	NotAuthenticatedError,
+	ResponseDecodeError,
+	ShotWithoutSeriesError,
+	VisualizerNotFoundError
+} from '../effect/errors.ts';
 import {
 	API_BASE,
 	describeVisualizerError,
+	isAccountBlocked,
 	isRateLimited,
 	isRecoverable,
 	quotaLimit,
@@ -59,7 +65,7 @@ import { historyFullNotice } from '#lib/history/brew-date.js';
 import { effectiveGrindSetting } from '#lib/history/index.js';
 import { exportStoredShotAsV2Json } from '#lib/history/v2-export.js';
 import type { ShotPatchInputs, TimedSample } from '#lib/core/index.js';
-import { isBrewLog, type ShotBean, type StoredShot } from '#lib/history/model.js';
+import { isBrewLog, refusedNoSamples, type ShotBean, type StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import type { components } from '#lib/visualizer/openapi.js';
@@ -294,9 +300,9 @@ function isAuthError(e: VisualizerCallError): boolean {
 }
 
 /**
- * Auth / premium failures, the free-plan daily quota and the rate limit abort
- * the unsynced-shots loop: every further POST would hit the same wall (and a
- * backlog catch-up would also trip the 50 requests/min limit).
+ * Auth / premium failures, a blocked account, the free-plan daily quota and the
+ * rate limit abort the unsynced-shots loop: every further POST would hit the
+ * same wall (and a backlog catch-up would also trip the 50 requests/min limit).
  */
 function shouldAbortLoop(e: VisualizerCallError | ResponseDecodeError): boolean {
 	return (
@@ -304,6 +310,7 @@ function shouldAbortLoop(e: VisualizerCallError | ResponseDecodeError): boolean 
 		e._tag === 'TokenRefreshFailedError' ||
 		(e._tag === 'HttpStatusError' && e.status === 401) ||
 		e._tag === 'VisualizerPremiumGatedError' ||
+		isAccountBlocked(e) ||
 		quotaLimit(e) != null ||
 		isRateLimited(e)
 	);
@@ -314,7 +321,8 @@ export type UnsyncedStop =
 	| { reason: 'quota'; limit: number }
 	| { reason: 'rate-limited' }
 	| { reason: 'auth' }
-	| { reason: 'premium' };
+	| { reason: 'premium' }
+	| { reason: 'blocked'; message: string };
 
 /** The outcome of `ShotSync.uploadUnsyncedShots`. */
 export interface UnsyncedUploadResult {
@@ -328,12 +336,14 @@ function stopFor(e: VisualizerCallError | ResponseDecodeError): UnsyncedStop {
 	if (limit != null) return { reason: 'quota', limit };
 	if (isRateLimited(e)) return { reason: 'rate-limited' };
 	if (e._tag === 'VisualizerPremiumGatedError') return { reason: 'premium' };
+	if (isAccountBlocked(e)) return { reason: 'blocked', message: describeVisualizerError(e) };
 	return { reason: 'auth' };
 }
 
 /**
- * The user notice for an unsynced-shots pass that stopped on the daily quota or
- * the rate limit (null otherwise — auth / premium already surface elsewhere).
+ * The user notice for an unsynced-shots pass that stopped on the daily quota, the
+ * rate limit or a blocked account (null otherwise — auth / premium already
+ * surface elsewhere).
  */
 export function describeUnsyncedStop(
 	result: UnsyncedUploadResult | null | undefined
@@ -342,6 +352,7 @@ export function describeUnsyncedStop(
 	if (!stop) return null;
 	if (stop.reason === 'quota') return { kind: 'info', message: quotaNotice(stop.limit) };
 	if (stop.reason === 'rate-limited') return { kind: 'info', message: RATE_LIMIT_NOTICE };
+	if (stop.reason === 'blocked') return { kind: 'error', message: stop.message };
 	return null;
 }
 
@@ -577,6 +588,7 @@ export const ShotSyncLive = Layer.effect(
 		 */
 		const uploadShot = Effect.fn('ShotSync.uploadShot')(function* (shot: StoredShot) {
 			yield* requireConnected;
+			if (refusedNoSamples(shot)) return yield* new ShotWithoutSeriesError({ shotId: shot.id });
 			const body = buildShotPayload(shot);
 			const raw = yield* call('/shots/upload', { method: 'POST', body });
 			const result = decodeResponse(ShotUploadResultSchema, raw, 'POST /shots/upload');
@@ -937,10 +949,24 @@ export const ShotSyncLive = Layer.effect(
 		const uploadUnsyncedShots = Effect.fn('ShotSync.uploadUnsyncedShots')(function* (
 			history: HistoryStore
 		) {
+			yield* Effect.promise(() => history.seriesReady());
 			// Brew Log rows (`isBrewLog`) never sync: Visualizer is a
 			// DE1-telemetry service and brews carry none (issue #10 — the same
 			// local-only posture as `nextPlan`).
-			const list = history.all.filter((s) => !s.visualizerId && !isBrewLog(s));
+			const backlog = history.all.filter((s) => !s.visualizerId && !isBrewLog(s));
+			const list = backlog.filter((s) => !refusedNoSamples(s));
+			if (list.length < backlog.length) {
+				// One line for the pass: these would otherwise fill the log on every sync.
+				const n = backlog.length - list.length;
+				appendSyncLog({
+					direction: 'skip',
+					entity: 'shot',
+					id: '',
+					name: 'upload',
+					at: Date.now(),
+					error: `${n} shot${n === 1 ? ' has' : 's have'} no telemetry to upload.`
+				});
+			}
 
 			/**
 			 * Record a non-success outcome: enqueue a recoverable error for a timed

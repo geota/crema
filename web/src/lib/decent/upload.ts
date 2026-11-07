@@ -38,7 +38,7 @@ import { Effect, Schedule } from 'effect';
 import { getHistoryStore } from '#lib/history/store.svelte.js';
 import { reportUploadOutcome } from '#lib/history/upload-toast.js';
 import { appendSyncLog } from '#lib/visualizer/sync-config.js';
-import { isBrewLog, toCoreShotMachine, type StoredShot } from '#lib/history/model.js';
+import { isBrewLog, refusedNoSamples, toCoreShotMachine, type StoredShot } from '#lib/history/model.js';
 import type { ShotMachine, TimedSample } from '#lib/core/crema-core.js';
 import { getMachineReadout } from '#lib/state/machine-readout.svelte.js';
 import {
@@ -225,13 +225,16 @@ async function runUpload(shotId: string, opts: DecentUploadOptions): Promise<Dec
 
 	// Read the shot only now, after the await above and right before the POST,
 	// so the gates and the record see the latest row (a racing upload may have
-	// bound it, or the user deleted it).
+	// bound it, or the user deleted it), and after the stored series, or a
+	// machine shot goes out as a record with no measurements.
 	const history = getHistoryStore();
+	await history.seriesReady();
 	const shot = history.get(shotId);
 	if (!shot || shot.deletedAt) return skipped('Shot not found');
 	// Brew Log rows (issue #10) are not DE1 shots: never uploaded, and never
 	// stamped with the live machine (which the bind below would do).
 	if (isBrewLog(shot)) return skipped('Brew Log entries stay on this device');
+	if (refusedNoSamples(shot, opts.samples?.length)) return skipped('This shot has no telemetry to upload');
 	if (shot.decentId && !opts.replace) return skipped('Already on Decent');
 	if (!opts.manual && shotDurationSeconds(shot) < MIN_SHOT_SECONDS) {
 		return skipped(`Shorter than ${MIN_SHOT_SECONDS} s`);

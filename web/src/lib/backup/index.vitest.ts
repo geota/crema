@@ -77,9 +77,9 @@ function seed(): { beanId: string; roasterId: string; shotId: string; profileId:
 describe('backup round-trip (review #07)', () => {
 	beforeEach(resetAll);
 
-	it('round-trips beans, roasters, shots + profiles through a wipe restore', () => {
+	it('round-trips beans, roasters, shots + profiles through a wipe restore', async () => {
 		const ids = seed();
-		const built = buildBackupJsonl();
+		const built = await buildBackupJsonl();
 		expect(built).not.toBeNull();
 
 		resetAll(); // simulate restoring onto a fresh device
@@ -101,9 +101,9 @@ describe('backup round-trip (review #07)', () => {
 		expect(restoredBean?.roastLevel).toBe(4);
 	});
 
-	it('merge adds new records but preserves existing ones', () => {
+	it('merge adds new records but preserves existing ones', async () => {
 		seed();
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 
 		resetAll();
 		getBeanStore().bulkAdd([{ ...blankBean('bean-2'), name: 'Kenya' }], []); // a different bag
@@ -113,9 +113,9 @@ describe('backup round-trip (review #07)', () => {
 		expect(getBeanStore().beans.map((b) => b.id).sort()).toEqual(['bean-1', 'bean-2']);
 	});
 
-	it('reports the shots it kept and the ones the cap dropped', () => {
+	it('reports the shots it kept and the ones the cap dropped', async () => {
 		seed();
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		resetAll();
 		const history = getHistoryStore();
 		for (let i = 0; i < 300; i++) {
@@ -127,9 +127,9 @@ describe('backup round-trip (review #07)', () => {
 		expect(history.all).toHaveLength(300);
 	});
 
-	it('merge skips records whose ids are already present (idempotent re-restore)', () => {
+	it('merge skips records whose ids are already present (idempotent re-restore)', async () => {
 		seed();
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 
 		// Restore the same bundle without clearing — every id already exists.
 		const summary = restoreBackup(built.jsonl, 'merge');
@@ -139,9 +139,9 @@ describe('backup round-trip (review #07)', () => {
 		expect(getHistoryStore().all.length).toBe(1);
 	});
 
-	it('skips a malformed JSONL line without dropping the rest', () => {
+	it('skips a malformed JSONL line without dropping the rest', async () => {
 		seed();
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 
 		resetAll();
 		const corrupted = built.jsonl.replace('\n', '\n{ this is not valid json \n');
@@ -156,13 +156,13 @@ describe('backup round-trip (review #07)', () => {
 		);
 	});
 
-	it('backs up user recipe copies with their credit, never the built-ins', () => {
+	it('backs up user recipe copies with their credit, never the built-ins', async () => {
 		const recipes = getRecipeStore();
 		const dup = recipes.duplicate('builtin:hoffmann-ultimate-v60')!;
 		const copy = recipes.saveEdit({ ...dup, notes: 'Cafec Abaca filter\nTWW light roast' });
 		recipes.hide('builtin:kasuya-4-6');
 		recipes.touch(copy);
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		expect(built.jsonl).toContain('"kind":"recipe"');
 		expect(built.jsonl).toContain('"kind":"recipeMeta"');
 		// Only the copy rides — the catalogue ships with the app.
@@ -185,7 +185,7 @@ describe('backup round-trip (review #07)', () => {
 		expect(getRecipeStore().isHidden('builtin:kasuya-4-6')).toBe(true);
 	});
 
-	it('round-trips custom methods (tombstones too) and the brew label snapshot', () => {
+	it('round-trips custom methods (tombstones too) and the brew label snapshot', async () => {
 		const methods = getCustomMethodStore();
 		const draft = {
 			style: BrewMethodStyle.Percolation,
@@ -216,7 +216,7 @@ describe('backup round-trip (review #07)', () => {
 		const recipe = getRecipeStore().saveEdit(
 			getCustomMethodStore().blankRecipe(orb.id, 'recipe:orb')!
 		);
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		expect(built.jsonl.match(/"kind":"brewMethod"/g)).toHaveLength(2);
 		expect(built.jsonl).toContain('"brewMethodLabel":"Old brewer"');
 
@@ -241,12 +241,12 @@ describe('one unreadable row (#329)', () => {
 
 	const header = (jsonl: string) => JSON.parse(jsonl.split('\n')[0]) as Record<string, unknown>;
 
-	it('leaves the row out, counts what was written, and the file restores', () => {
+	it('leaves the row out, counts what was written, and the file restores', async () => {
 		const ids = seed();
 		const broken = { ...makeShot('shot:bad'), record: { duration: 'nope', samples: [] } };
 		getHistoryStore().insertPulled(broken as unknown as StoredShot);
 
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		expect(built.contents.shots).toBe(1);
 		expect(built.contents.omitted).toEqual([
 			expect.objectContaining({ kind: 'shot', id: 'shot:bad' })
@@ -259,19 +259,19 @@ describe('one unreadable row (#329)', () => {
 		expect(getHistoryStore().get('shot:bad')).toBeUndefined();
 	});
 
-	it('keeps a shot whose profile will not read, without the profile', () => {
+	it('keeps a shot whose profile will not read, without the profile', async () => {
 		const broken = { ...makeShot('shot:thin'), profile: 'not a profile' };
 		getHistoryStore().insertPulled(broken as unknown as StoredShot);
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		expect(built.contents.shots).toBe(1);
 		expect(built.contents.degraded).toEqual(['shot:thin']);
 		expect(built.contents.omitted).toEqual([]);
 	});
 
-	it('leaves out a bad row of any kind, not just shots', () => {
+	it('leaves out a bad row of any kind, not just shots', async () => {
 		seed();
 		getBeanStore().bulkAdd([{ ...blankBean('bean-bad'), name: 5 } as never], []);
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		expect(built.contents.beans).toBe(1);
 		expect(built.contents.omitted?.map((o) => [o.kind, o.id])).toEqual([['bean', 'bean-bad']]);
 		expect(header(built.jsonl)).toMatchObject({ beanCount: 1, omittedCount: 1 });
@@ -283,13 +283,13 @@ describe('one unreadable row (#329)', () => {
 		const broken = { ...makeShot('shot:bad'), record: { duration: 'nope', samples: [] } };
 		getHistoryStore().insertPulled(broken as unknown as StoredShot);
 
-		expect(() => buildBackupJsonl()).toThrow();
+		await expect(buildBackupJsonl()).rejects.toThrow();
 		expect(await backupNote()).toBe('Backup failed: nothing was saved.');
 	});
 
-	it('keeps a clean backup free of the key', () => {
+	it('keeps a clean backup free of the key', async () => {
 		seed();
-		expect(buildBackupJsonl()!.jsonl).not.toContain('omittedCount');
+		expect((await buildBackupJsonl())!.jsonl).not.toContain('omittedCount');
 	});
 
 	it('words the gaps, and says nothing for a clean backup', () => {
@@ -312,6 +312,6 @@ describe('one unreadable row (#329)', () => {
 
 	it('ends in a message when the build throws, so the UI cannot hang', async () => {
 		const note = await backupNote(() => Promise.reject(new Error('quota')));
-		expect(note).toBe('Backup failed: nothing was saved.');
+		expect(note).toBe('Backup failed: nothing was saved. quota');
 	});
 });

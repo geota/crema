@@ -92,6 +92,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   library, is kept in `<key>.skipped` and offered as a saved copy, rather than
   dropped by the next save. If it can't be kept, saves stop instead. Only full
   storage now drops your oldest shots: a refused save no longer does. Web.
+- **Android can't save a store before it has loaded** — a save that came before
+  a store's load carried defaults, and could replace your data. Every store now
+  refuses it, and the first refusal tells you what wasn't saved. This holds when
+  a new screen starts in a running app too. Reading the network role at launch
+  also goes through the store, so it no longer misses settings caught between
+  the two renames of a save. Android.
 - **One unreadable row can't block a backup** — on the web, one bad row made the
   whole backup fail, and the note stayed on Building backup for good. Now a shot
   whose profile can't be read is backed up without it, and any other bad row, of

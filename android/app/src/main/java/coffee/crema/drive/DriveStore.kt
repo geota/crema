@@ -120,7 +120,7 @@ class DriveStore(
 
     private fun write(state: DriveState): Boolean = try {
         // No `.bak` copies of sealed tokens (review 05 P3-5).
-        SafeFile.writeCredential(file, json.encodeToString(DriveState.serializer(), state.sealedWith(box)))
+        SafeFile.writeCredential(file, json.encodeToString(DriveState.serializer(), state.sealedWith(box)), "Google Drive sign-in")
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.

@@ -38,12 +38,14 @@ import type {
 	NetworkError,
 	NotAuthenticatedError,
 	ResponseDecodeError,
+	ShotWithoutSeriesError,
 	TokenRefreshFailedError,
 	VisualizerNotFoundError,
 	VisualizerPremiumGatedError
 } from '#lib/effect/errors.js';
 import { ShotSync } from '#lib/services/shot-sync.js';
 import {
+	describeRefusal,
 	isRateLimited,
 	isRecoverable as isRecoverableCallError,
 	quotaLimit,
@@ -417,6 +419,7 @@ type ShotPushError =
 	| TokenRefreshFailedError
 	| VisualizerPremiumGatedError
 	| VisualizerNotFoundError
+	| ShotWithoutSeriesError
 	| ResponseDecodeError;
 
 /**
@@ -433,7 +436,7 @@ function isRecoverable(e: ShotPushError): boolean {
 function describePushError(e: ShotPushError): string {
 	switch (e._tag) {
 		case 'HttpStatusError':
-			return `HTTP ${e.status}: ${e.body ?? ''}`.trim();
+			return describeRefusal(e) ?? `HTTP ${e.status}: ${e.body ?? ''}`.trim();
 		case 'NetworkError':
 			return `Network error: ${e.cause instanceof Error ? e.cause.message : String(e.cause)}`;
 		case 'VisualizerPremiumGatedError':
@@ -446,6 +449,8 @@ function describePushError(e: ShotPushError): string {
 			return 'Visualizer session expired.';
 		case 'ResponseDecodeError':
 			return 'Unexpected Visualizer response.';
+		case 'ShotWithoutSeriesError':
+			return 'This shot has no telemetry to upload.';
 	}
 }
 
@@ -486,6 +491,7 @@ export function pushShotToVisualizer(
 				return;
 			}
 		}
+		yield* Effect.promise(() => getHistoryStore().seriesReady());
 		const shot = getHistoryStore().get(shotId);
 		if (!shot) {
 			reportUploadOutcome(shotId, 'Visualizer', { kind: 'skipped', message: 'Shot not found' });

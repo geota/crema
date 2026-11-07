@@ -4574,6 +4574,88 @@ data class WireShot (
 	val barista: String? = null
 )
 
+/// Why a 403 is about the whole account rather than one item. The tokens stay:
+/// each of these is fixed on the website or by signing in again by choice.
+@Serializable
+enum class AccountBlockReason(val string: String) {
+	/// The account was disabled.
+	@SerialName("Disabled")
+	Disabled("Disabled"),
+	/// The account's email address isn't confirmed.
+	@SerialName("Unconfirmed")
+	Unconfirmed("Unconfirmed"),
+	/// The token lacks the scope this call needs.
+	@SerialName("MissingScope")
+	MissingScope("MissingScope"),
+}
+
+/// Generated type representing the anonymous struct variant `AccountBlocked` of the `AttentionReason` Rust enum
+@Serializable
+data class AttentionReasonAccountBlockedInner (
+	/// Why.
+	val reason: AccountBlockReason
+)
+
+/// Generated type representing the anonymous struct variant `Blocked` of the `AttentionReason` Rust enum
+@Serializable
+data class AttentionReasonBlockedInner (
+	/// What stopped it.
+	val why: BlockReason
+)
+
+/// What a service needs from the user. Each has an action in Settings.
+@Serializable
+sealed class AttentionReason {
+	/// The session is over: reconnect. The one that also raises a notice.
+	@Serializable
+	@SerialName("Reconnect")
+	object Reconnect: AttentionReason()
+	/// The run stopped with rows left: Continue.
+	@Serializable
+	@SerialName("RowsLeft")
+	object RowsLeft: AttentionReason()
+	/// The server kept failing, or something else answered for it: Continue.
+	@Serializable
+	@SerialName("ServerTrouble")
+	object ServerTrouble: AttentionReason()
+	/// Rows were counted and passed for good.
+	@Serializable
+	@SerialName("RowsSkipped")
+	object RowsSkipped: AttentionReason()
+	/// The history has no free slot.
+	@Serializable
+	@SerialName("HistoryFull")
+	object HistoryFull: AttentionReason()
+	/// Drive has no room left.
+	@Serializable
+	@SerialName("StorageFull")
+	object StorageFull: AttentionReason()
+	/// The free plan's daily cap was reached.
+	@Serializable
+	@SerialName("Quota")
+	object Quota: AttentionReason()
+	/// The account needs Premium.
+	@Serializable
+	@SerialName("NeedsPremium")
+	object NeedsPremium: AttentionReason()
+	/// The Decent account doesn't have this machine.
+	@Serializable
+	@SerialName("NotOnAccount")
+	object NotOnAccount: AttentionReason()
+	/// The account itself is refused.
+	@Serializable
+	@SerialName("AccountBlocked")
+	data class AccountBlocked(val details: AttentionReasonAccountBlockedInner): AttentionReason()
+	/// The server refused the work, and retrying won't change that.
+	@Serializable
+	@SerialName("Refused")
+	object Refused: AttentionReason()
+	/// A run couldn't start.
+	@Serializable
+	@SerialName("Blocked")
+	data class Blocked(val details: AttentionReasonBlockedInner): AttentionReason()
+}
+
 /// Generated type representing the anonymous struct variant `Low` of the `BagStock` Rust enum
 @Serializable
 data class BagStockLowInner (
@@ -4626,6 +4708,30 @@ enum class BeverageType(val string: String) {
 	/// Pour-over style profile (long, low-pressure).
 	@SerialName("pourover")
 	Pourover("pourover"),
+}
+
+/// Why a run didn't start.
+@Serializable
+enum class BlockReason(val string: String) {
+	/// The service's own state, or a store it needs, is still loading.
+	@SerialName("Loading")
+	Loading("Loading"),
+	/// A data store is damaged, so automatic work leaves it alone.
+	@SerialName("StoreDamaged")
+	StoreDamaged("StoreDamaged"),
+	/// The service's own state was damaged and kept aside: its marks, cursor and
+	/// tombstones went with it.
+	@SerialName("OwnStateLost")
+	OwnStateLost("OwnStateLost"),
+	/// A store can't be read at all.
+	@SerialName("StoreUnavailable")
+	StoreUnavailable("StoreUnavailable"),
+	/// A restore was interrupted and still needs an answer.
+	@SerialName("RestoreLeftover")
+	RestoreLeftover("RestoreLeftover"),
+	/// The signed-in account isn't known yet, so nothing is sent to it.
+	@SerialName("IdentityUnknown")
+	IdentityUnknown("IdentityUnknown"),
 }
 
 /// A cue the shell renders as sound/haptic.
@@ -5344,6 +5450,32 @@ enum class MmrRegister(val string: String) {
 	InactivitySleepTimeout("InactivitySleepTimeout"),
 }
 
+/// Why a run stopped before the end of its work, with the rows it applied kept.
+@Serializable
+enum class PartialReason(val string: String) {
+	/// The rate limit outlasted the run's waits.
+	@SerialName("RateLimited")
+	RateLimited("RateLimited"),
+	/// The network went away.
+	@SerialName("Offline")
+	Offline("Offline"),
+	/// Three transient failures in a row: an outage or a captive portal.
+	@SerialName("ServerTrouble")
+	ServerTrouble("ServerTrouble"),
+	/// The run reached its page limit.
+	@SerialName("PageCap")
+	PageCap("PageCap"),
+	/// Rows failed, and the run walked on past them.
+	@SerialName("RowsFailed")
+	RowsFailed("RowsFailed"),
+	/// The list kept shrinking under the walk.
+	@SerialName("ListShifted")
+	ListShifted("ListShifted"),
+	/// The history has no free slot for rows this run found.
+	@SerialName("HistoryFull")
+	HistoryFull("HistoryFull"),
+}
+
 /// Generated type representing the anonymous struct variant `TooManySteps` of the `ProfileUploadFailure` Rust enum
 @Serializable
 data class ProfileUploadFailureTooManyStepsInner (
@@ -5484,7 +5616,7 @@ sealed class QueueDecision {
 	@SerialName("Drop")
 	data class Drop(val details: QueueDecisionDropInner): QueueDecision()
 	/// Keep it without spending an attempt; look again after `delay_ms` (a
-	/// delete while signed out).
+	/// delete while signed out, or out of attempts).
 	@Serializable
 	@SerialName("Park")
 	data class Park(val details: QueueDecisionParkInner): QueueDecision()
@@ -5689,6 +5821,69 @@ sealed class RelayEvent {
 	@Serializable
 	@SerialName("Failed")
 	data class Failed(val content: RelayEventFailedInner): RelayEvent()
+}
+
+/// Generated type representing the anonymous struct variant `Complete` of the `RunOutcome` Rust enum
+@Serializable
+data class RunOutcomeCompleteInner (
+	/// Where the next run starts.
+	val next_cursor_ms: Long,
+	/// Rows changed by this run.
+	val applied: UInt,
+	/// Rows already up to date.
+	val unchanged: UInt,
+	/// Rows counted and passed for good.
+	val skipped_permanent: UInt
+)
+
+/// Generated type representing the anonymous struct variant `Partial` of the `RunOutcome` Rust enum
+@Serializable
+data class RunOutcomePartialInner (
+	/// Why it stopped.
+	val reason: PartialReason,
+	/// Rows changed by this run.
+	val applied: UInt,
+	/// Rows still to do, as far as the run knows.
+	val left: UInt,
+	/// Rows counted and passed for good.
+	val skipped_permanent: UInt,
+	/// How long to wait before the next run, ms, when something said so.
+	val resume_after_ms: Long? = null
+)
+
+/// Generated type representing the anonymous struct variant `Failed` of the `RunOutcome` Rust enum
+@Serializable
+data class RunOutcomeFailedInner (
+	/// What stopped it.
+	val failure: SyncFailure
+)
+
+/// Generated type representing the anonymous struct variant `Blocked` of the `RunOutcome` Rust enum
+@Serializable
+data class RunOutcomeBlockedInner (
+	/// What stopped it.
+	val why: BlockReason
+)
+
+/// How a sync run ended.
+@Serializable
+sealed class RunOutcome {
+	/// Everything was walked. The only outcome that moves the cursor.
+	@Serializable
+	@SerialName("Complete")
+	data class Complete(val details: RunOutcomeCompleteInner): RunOutcome()
+	/// The run stopped early. What it applied stays; the cursor holds.
+	@Serializable
+	@SerialName("Partial")
+	data class Partial(val details: RunOutcomePartialInner): RunOutcome()
+	/// The run achieved nothing.
+	@Serializable
+	@SerialName("Failed")
+	data class Failed(val details: RunOutcomeFailedInner): RunOutcome()
+	/// The run didn't start.
+	@Serializable
+	@SerialName("Blocked")
+	data class Blocked(val details: RunOutcomeBlockedInner): RunOutcome()
 }
 
 /// Generated type representing the anonymous struct variant `Corrupt` of the `SawModelLoad` Rust enum
@@ -6001,6 +6196,168 @@ enum class SubState(val string: String) {
 	Unknown("Unknown"),
 }
 
+/// Generated type representing the anonymous struct variant `RateLimited` of the `SyncFailure` Rust enum
+@Serializable
+data class SyncFailureRateLimitedInner (
+	/// The server's `Retry-After`, ms, when it sent a usable one.
+	val retry_after_ms: Long? = null
+)
+
+/// Generated type representing the anonymous struct variant `Unavailable` of the `SyncFailure` Rust enum
+@Serializable
+data class SyncFailureUnavailableInner (
+	/// The HTTP status.
+	val status: UShort
+)
+
+/// Generated type representing the anonymous struct variant `Quota` of the `SyncFailure` Rust enum
+@Serializable
+data class SyncFailureQuotaInner (
+	/// The cap.
+	val limit: UInt
+)
+
+/// Generated type representing the anonymous struct variant `AccountBlocked` of the `SyncFailure` Rust enum
+@Serializable
+data class SyncFailureAccountBlockedInner (
+	/// Why.
+	val reason: AccountBlockReason
+)
+
+/// Generated type representing the anonymous struct variant `Rejected` of the `SyncFailure` Rust enum
+@Serializable
+data class SyncFailureRejectedInner (
+	/// The HTTP status, or 0 for a 2xx reply that couldn't be mapped.
+	val status: UShort
+)
+
+/// What a failed cloud call means.
+@Serializable
+sealed class SyncFailure {
+	/// No reply at all.
+	@Serializable
+	@SerialName("Offline")
+	object Offline: SyncFailure()
+	/// Slow down: a 429, or Drive's 403 rate reasons.
+	@Serializable
+	@SerialName("RateLimited")
+	data class RateLimited(val details: SyncFailureRateLimitedInner): SyncFailure()
+	/// The server is in trouble, or something that isn't the server answered: a
+	/// 5xx, a 408, or a success or redirect that isn't the API's (a captive
+	/// portal's 200 HTML). Time fixes it.
+	@Serializable
+	@SerialName("Unavailable")
+	data class Unavailable(val details: SyncFailureUnavailableInner): SyncFailure()
+	/// A 401 on a call: the access token was refused, so refresh once.
+	@Serializable
+	@SerialName("AccessRefused")
+	object AccessRefused: SyncFailure()
+	/// The session is over and the user must sign in again.
+	@Serializable
+	@SerialName("SessionEnded")
+	object SessionEnded: SyncFailure()
+	/// The free plan's daily cap on new shots.
+	@Serializable
+	@SerialName("Quota")
+	data class Quota(val details: SyncFailureQuotaInner): SyncFailure()
+	/// The account needs Premium for this.
+	@Serializable
+	@SerialName("NeedsPremium")
+	object NeedsPremium: SyncFailure()
+	/// Decent: the shot's machine isn't registered to the linked account.
+	@Serializable
+	@SerialName("NotOnAccount")
+	object NotOnAccount: SyncFailure()
+	/// This one item is refused, and the account is fine: a row on another
+	/// account, say. Never reads as "buy Premium".
+	@Serializable
+	@SerialName("Forbidden")
+	object Forbidden: SyncFailure()
+	/// The whole account is refused. See [`AccountBlockReason`].
+	@Serializable
+	@SerialName("AccountBlocked")
+	data class AccountBlocked(val details: SyncFailureAccountBlockedInner): SyncFailure()
+	/// Drive has no room left. Only the user can fix it.
+	@Serializable
+	@SerialName("StorageFull")
+	object StorageFull: SyncFailure()
+	/// The target no longer exists.
+	@Serializable
+	@SerialName("NotFound")
+	object NotFound: SyncFailure()
+	/// The server refused this request for good.
+	@Serializable
+	@SerialName("Rejected")
+	data class Rejected(val details: SyncFailureRejectedInner): SyncFailure()
+}
+
+/// Generated type representing the anonymous struct variant `Ok` of the `SyncHealth` Rust enum
+@Serializable
+data class SyncHealthOkInner (
+	/// When, unix ms.
+	val at_ms: Long
+)
+
+/// Generated type representing the anonymous struct variant `Waiting` of the `SyncHealth` Rust enum
+@Serializable
+data class SyncHealthWaitingInner (
+	/// When, unix ms, if anything said.
+	val until_ms: Long? = null,
+	/// Why.
+	val why: WaitReason
+)
+
+/// Generated type representing the anonymous struct variant `NeedsAttention` of the `SyncHealth` Rust enum
+@Serializable
+data class SyncHealthNeedsAttentionInner (
+	/// What it needs.
+	val why: AttentionReason,
+	/// How many rows that leaves, or the cap for [`AttentionReason::Quota`].
+	val count: UInt
+)
+
+/// The one lasting status a service keeps, shown in Settings.
+@Serializable
+sealed class SyncHealth {
+	/// The last run completed.
+	@Serializable
+	@SerialName("Ok")
+	data class Ok(val details: SyncHealthOkInner): SyncHealth()
+	/// It will try again by itself. A Settings line, no notice.
+	@Serializable
+	@SerialName("Waiting")
+	data class Waiting(val details: SyncHealthWaitingInner): SyncHealth()
+	/// It needs the user. A Settings line with its action.
+	@Serializable
+	@SerialName("NeedsAttention")
+	data class NeedsAttention(val details: SyncHealthNeedsAttentionInner): SyncHealth()
+}
+
+/// What was being attempted when the failure came back.
+@Serializable
+enum class SyncOperation(val string: String) {
+	/// An API call with an access token.
+	@SerialName("Call")
+	Call("Call"),
+	/// A refresh-token grant at the token endpoint.
+	@SerialName("Refresh")
+	Refresh("Refresh"),
+}
+
+/// Which cloud service answered.
+@Serializable
+enum class SyncService(val string: String) {
+	/// visualizer.coffee.
+	@SerialName("Visualizer")
+	Visualizer("Visualizer"),
+	/// decentespresso.com.
+	@SerialName("Decent")
+	Decent("Decent"),
+	/// Google Drive, on Android: web Drive has no refresh token.
+	@SerialName("Drive")
+	Drive("Drive"),
+}
+
 /// Which temperature a step regulates. Variant names match the community
 /// v2 JSON contract used by the legacy de1app TCL + reaprime. The enum
 /// describes "what the step's temperature target represents," not which
@@ -6031,6 +6388,17 @@ enum class Transition(val string: String) {
 	/// Ramp smoothly to the target.
 	@SerialName("smooth")
 	Smooth("smooth"),
+}
+
+/// Why a service is waiting by itself.
+@Serializable
+enum class WaitReason(val string: String) {
+	/// No network.
+	@SerialName("Offline")
+	Offline("Offline"),
+	/// The server asked it to slow down.
+	@SerialName("RateLimited")
+	RateLimited("RateLimited"),
 }
 
 /// Which kind of water-dispensing session the DE1 is running.

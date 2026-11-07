@@ -5,8 +5,10 @@ import type { FetchLike } from './api';
 
 // A tiny in-memory history store — the upload path only needs get/all/bindDecentId.
 const shots = new Map<string, StoredShot>();
+let seriesReady = async (): Promise<boolean> => true;
 vi.mock('#lib/history/store.svelte.js', () => ({
 	getHistoryStore: () => ({
+		seriesReady: () => seriesReady(),
 		get: (id: string) => shots.get(id),
 		get all() {
 			return [...shots.values()];
@@ -88,6 +90,7 @@ function setOnline(on: boolean): void {
 beforeEach(() => {
 	localStorage.clear();
 	shots.clear();
+	seriesReady = async () => true;
 	liveSerial = null;
 	posts = 0;
 	setOnline(true);
@@ -362,6 +365,54 @@ describe('network retry', () => {
 		expect(await retryPendingDecentUploads({ fetchFn: ok })).toMatchObject({ uploaded: 1 });
 		expect(shots.get('a')?.decentId).toBe('77');
 		expect(readDecentAccount().retryShotIds).toEqual([]);
+	});
+});
+
+describe('a shot with no telemetry (#330)', () => {
+	beforeEach(() => {
+		shots.clear();
+		liveSerial = 6262;
+		writeDecentAccount({ ...linked, retryShotIds: ['a'] });
+	});
+
+	it('non_brew_no_samples_refused: no POST and no bind, automatic or manual', async () => {
+		shots.set('a', shot('a', 30_000, { record: { duration: 30_000, samples: [] } }));
+
+		const auto = await uploadShotToDecent('a', { fetchFn: ok });
+		const manual = await uploadShotToDecent('a', { fetchFn: ok, manual: true });
+
+		expect(auto).toEqual({ kind: 'skipped', reason: 'This shot has no telemetry to upload' });
+		expect(manual).toEqual({ kind: 'skipped', reason: 'This shot has no telemetry to upload' });
+		expect(posts).toBe(0);
+		expect(shots.get('a')?.decentId).toBeUndefined();
+	});
+
+	it('goes when the caller holds the full series', async () => {
+		shots.set('a', shot('a', 30_000, { record: { duration: 30_000, samples: [] } }));
+		const held = shot('h', 30_000).record.samples;
+
+		expect(await uploadShotToDecent('a', { fetchFn: ok, samples: held })).toMatchObject({ kind: 'uploaded' });
+	});
+
+	it('the launch retry waits for the series before it reads the row', async () => {
+		const bare = shot('a', 30_000, { record: { duration: 30_000, samples: [] } });
+		shots.set('a', bare);
+		let land = (): void => {};
+		seriesReady = () =>
+			new Promise((resolve) => {
+				land = () => {
+					shots.set('a', { ...bare, record: shot('a', 30_000).record });
+					resolve(true);
+				};
+			});
+
+		const retry = retryPendingDecentUploads({ fetchFn: ok });
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+		expect(posts).toBe(0);
+		land();
+
+		expect(await retry).toMatchObject({ uploaded: 1 });
+		expect(posts).toBe(1);
 	});
 });
 

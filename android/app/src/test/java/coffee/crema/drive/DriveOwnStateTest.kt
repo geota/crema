@@ -39,6 +39,8 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class DriveOwnStateTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     private val dir: File = Files.createTempDirectory("drive-own-state").toFile()
     private val file = File(dir, "drive.json")
