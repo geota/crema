@@ -90,6 +90,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   saved a backup with no curves. They now wait for the curves. A machine shot that
   still has no telemetry is refused on both apps, on Visualizer and Decent, and
   stays unsynced. Android and web.
+- **Replace restore keeps your custom profiles on Android** — restoring your own
+  backup in Replace mode deleted every custom profile and reported "Restored 0
+  profile(s)". They now come back and the report counts them.
 - **Moving a shot off a bag gives back only what it took** — each shot now
   records the grams it actually took, and backups keep them. Moving 5 shots off
   an empty bag used to add about 90 g, and a bag with no tracked weight gained
@@ -127,6 +130,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   it returns to where you left it. The list is shorter, so a picked shot's
   detail shows below it, and the detail's header no longer overprints itself.
   Web.
+- **Overlapping saves can't lose a store** — two saves of one file at once could
+  leave only its backup on disk, and a load could delete a save in progress. A
+  wipe restore lost its recipes this way on the next launch, and pinned and
+  hidden profiles, maintenance and the stop-at-weight model were open to it too.
+  Saves now take turns, and in those stores and shot history the newest save
+  lands last. Android.
 
 ## [0.10.0] — 2026-10-30
 
