@@ -29,6 +29,7 @@ const { HttpClient } = await import('./http-client.ts');
 const { OAuthLive } = await import('./oauth.ts');
 const { TokenVault, TokenVaultLive } = await import('./token-vault.ts');
 const { TOKEN_URL } = await import('../visualizer/oauth.ts');
+const { readSyncConfig, updateSyncConfig } = await import('../visualizer/sync-config.ts');
 
 type TokenSet = import('../visualizer/oauth.ts').TokenSet;
 type TokenVaultService = import('./token-vault.ts').TokenVault;
@@ -228,6 +229,58 @@ describe('TokenVault single-flight refresh (review 03 P1-2)', () => {
 		if (!Exit.isSuccess(exit)) return;
 		expect(exit.value.token).toBe('OTHER');
 		expect(exit.value.stored).toMatchObject({ accessToken: 'OTHER', refreshToken: 'RT-OTHER' });
+	});
+});
+
+describe('TokenVault writes only onto the set it started from', () => {
+	/** Refresh OLD/RT1 while `meanwhile` happens at the token endpoint. */
+	const refreshWhile = (outcome: Outcome, meanwhile: (v: Vault) => Effect.Effect<unknown, unknown>) => {
+		let vault: Vault | null = null;
+		const { bodies, layer } = endpoint([outcome], {
+			onRequest: () => Effect.runPromise(Effect.ignore(meanwhile(vault as Vault)))
+		});
+		const exit = run(layer, (v) =>
+			Effect.gen(function* () {
+				vault = v;
+				yield* v.storeTokens(tokens('OLD', 'RT1', SOON()));
+				return yield* v.withFreshToken(echo);
+			})
+		);
+		return { bodies, layer, exit };
+	};
+
+	it('refresh_after_sign_out_stores_nothing', async () => {
+		const { exit: done, layer } = refreshWhile({ access: 'X', refresh: 'RT2' }, (v) => v.clearTokens);
+		expect(failTag(await done)).toBe('NotAuthenticatedError');
+		const after = await run(layer, (v) => v.getTokens);
+		expect(Exit.isSuccess(after) && after.value).toBeNull();
+		expect(readSyncConfig().needsReconnect).toBe(false);
+	});
+
+	it('refresh_after_sign_out_stores_nothing: a sign-in as Y during the refresh', async () => {
+		const { exit: done, layer } = refreshWhile({ access: 'X', refresh: 'RT2' }, (v) =>
+			v.storeTokens(tokens('Y', 'RT-Y', FAR()))
+		);
+		const exit = await done;
+		expect(Exit.isSuccess(exit) && exit.value).toBe('Y');
+		const after = await run(layer, (v) => v.getTokens);
+		expect(Exit.isSuccess(after) && after.value).toMatchObject({ accessToken: 'Y', refreshToken: 'RT-Y' });
+	});
+
+	it('invalid_grant after a sign-out leaves no banner', async () => {
+		const { exit: done } = refreshWhile(400, (v) => v.clearTokens);
+		await done;
+		expect(readSyncConfig().needsReconnect).toBe(false);
+	});
+
+	it('a session the server ended asks to reconnect, and nothing else goes', async () => {
+		updateSyncConfig({ syncAccountId: 'u1', shotPullCursor: 7 });
+		const { layer } = endpoint([400]);
+		const exit = await run(layer, (v) =>
+			Effect.andThen(v.storeTokens(tokens('OLD', 'RT1', SOON())), v.withFreshToken(echo))
+		);
+		expect(failTag(exit)).toBe('TokenRefreshFailedError');
+		expect(readSyncConfig()).toMatchObject({ needsReconnect: true, syncAccountId: 'u1', shotPullCursor: 7 });
 	});
 });
 

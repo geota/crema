@@ -12,7 +12,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -88,7 +87,7 @@ suspend fun driveUploadBackup(
             val status = conn.responseCode
             val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-            if (status !in 200..299) throw IOException(errorMessage(json, resp, status, "upload"))
+            if (status !in 200..299) throw DriveHttpError(status, resp, errorMessage(json, resp, status, "upload"))
             json.decodeFromString(DriveFile.serializer(), resp)
         } finally {
             conn.disconnect()
@@ -111,7 +110,7 @@ suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> =
             val status = conn.responseCode
             val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-            if (status !in 200..299) throw IOException(errorMessage(json, resp, status, "list"))
+            if (status !in 200..299) throw DriveHttpError(status, resp, errorMessage(json, resp, status, "list"))
             val files = runCatching { json.parseToJsonElement(resp).jsonObject["files"]?.jsonArray }.getOrNull()
                 ?: return@withContext emptyList()
             files.mapNotNull {
@@ -140,7 +139,7 @@ suspend fun driveDeleteFile(accessToken: String, fileId: String, json: Json): Un
             // 204 on success; 404 counts as done (already gone).
             if (status !in 200..299 && status != 404) {
                 val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-                throw IOException(errorMessage(json, err, status, "delete"))
+                throw DriveHttpError(status, err, errorMessage(json, err, status, "delete"))
             }
         } finally {
             conn.disconnect()
@@ -163,7 +162,7 @@ suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json)
                 conn.inputStream.use { it.readBytesCapped(ImportLimits.MAX_FILE_BYTES, "The Drive backup") }
             } else {
                 val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-                throw IOException(errorMessage(json, err, status, "download"))
+                throw DriveHttpError(status, err, errorMessage(json, err, status, "download"))
             }
         } finally {
             conn.disconnect()

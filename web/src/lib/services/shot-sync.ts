@@ -75,7 +75,12 @@ import {
 	storedShotFromWire,
 	type WireShot
 } from '#lib/visualizer/shot-sync-signatures.js';
-import { appendSyncLog, readSyncConfig } from '#lib/visualizer/sync-config.js';
+import {
+	appendSyncLog,
+	excludedFromUpload,
+	readSyncConfig,
+	uploadsHeld
+} from '#lib/visualizer/sync-config.js';
 import { BaristaPending } from '#lib/visualizer/barista-pending.js';
 import {
 	samplesFromVisualizerDetail as wasmSamplesFromVisualizerDetail,
@@ -84,6 +89,7 @@ import {
 	visualizerShotPatchJson as wasmVisualizerShotPatchJson
 } from '#lib/wasm/de1_wasm.js';
 import { enqueueEntry as enqueueSyncOp } from './queue-store.ts';
+import { ACCOUNT_HELD_NOTICE } from './account-held.ts';
 
 // Spec-typed aliases — these ride DIRECTLY on the wire so they stay
 // in lock-step with the OpenAPI spec (regenerate via `pnpm openapi`).
@@ -322,7 +328,8 @@ export type UnsyncedStop =
 	| { reason: 'rate-limited' }
 	| { reason: 'auth' }
 	| { reason: 'premium' }
-	| { reason: 'blocked'; message: string };
+	| { reason: 'blocked'; message: string }
+	| { reason: 'held' };
 
 /** The outcome of `ShotSync.uploadUnsyncedShots`. */
 export interface UnsyncedUploadResult {
@@ -353,6 +360,7 @@ export function describeUnsyncedStop(
 	if (stop.reason === 'quota') return { kind: 'info', message: quotaNotice(stop.limit) };
 	if (stop.reason === 'rate-limited') return { kind: 'info', message: RATE_LIMIT_NOTICE };
 	if (stop.reason === 'blocked') return { kind: 'error', message: stop.message };
+	if (stop.reason === 'held') return { kind: 'info', message: ACCOUNT_HELD_NOTICE };
 	return null;
 }
 
@@ -917,6 +925,8 @@ export const ShotSyncLive = Layer.effect(
 			sinceMs: number,
 			opts: PullOptions = {}
 		) {
+			// Not from an account this device can't name.
+			if (readSyncConfig().accountUnconfirmed) return yield* new NotAuthenticatedError();
 			const { shots, samplesById, profilesById, truncated } = yield* pullAllShotsSince(
 				sinceMs,
 				opts
@@ -949,11 +959,15 @@ export const ShotSyncLive = Layer.effect(
 		const uploadUnsyncedShots = Effect.fn('ShotSync.uploadUnsyncedShots')(function* (
 			history: HistoryStore
 		) {
+			const config = readSyncConfig();
+			if (uploadsHeld(config)) return { uploaded: 0, stopped: { reason: 'held' as const } };
 			yield* Effect.promise(() => history.seriesReady());
 			// Brew Log rows (`isBrewLog`) never sync: Visualizer is a
 			// DE1-telemetry service and brews carry none (issue #10 — the same
 			// local-only posture as `nextPlan`).
-			const backlog = history.all.filter((s) => !s.visualizerId && !isBrewLog(s));
+			const backlog = history.all.filter(
+				(s) => !s.visualizerId && !isBrewLog(s) && !excludedFromUpload(s, config)
+			);
 			const list = backlog.filter((s) => !refusedNoSamples(s));
 			if (list.length < backlog.length) {
 				// One line for the pass: these would otherwise fill the log on every sync.
@@ -1133,7 +1147,7 @@ export const ShotSyncLive = Layer.effect(
 			if (opts.baristaChanged) baristaPending.add(id);
 			const shot = history.all.find((s) => s.id === id);
 			const vid = shot?.visualizerId;
-			if (!shot || !vid) return;
+			if (!shot || !vid || readSyncConfig().accountUnconfirmed) return;
 			const sendBarista = baristaPending.has(id);
 			const sent = baristaOf(shot);
 			yield* patchShot(vid, buildEditPatch(shot, sendBarista));
