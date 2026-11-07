@@ -206,9 +206,9 @@ pub use connect_sweep::{
     ConnectSweepSettings, USB_CHARGER_CHECK_INTERVAL_MS, UsbChargingMode, usb_charger_decision,
 };
 pub use crema_jsonl::{
-    BackupHeader, BackupImportPlan, CremaExportHeader, export_backup_jsonl_from_json, export_jsonl,
-    export_jsonl_from_json, import_backup_jsonl_to_plan_json, import_jsonl_to_plan_json,
-    parse_backup_jsonl, parse_jsonl,
+    BackupExport, BackupHeader, BackupImportPlan, CremaExportHeader, OmittedBackupRow,
+    export_backup_jsonl_from_json, export_jsonl, export_jsonl_from_json,
+    import_backup_jsonl_to_plan_json, import_jsonl_to_plan_json, parse_backup_jsonl, parse_jsonl,
 };
 pub use crema_profile::{
     BrewDefaults, CremaProfile, ProfileSegment, ProfileSource, Roast, blank_crema_profile_json,

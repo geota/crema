@@ -20,7 +20,7 @@
  */
 
 import {
-	exportBackupJsonl,
+	exportBackupBundle,
 	guardRestoredVisualizerPrefs,
 	importBackupJsonl
 } from '#lib/wasm/de1_wasm.js';
@@ -73,6 +73,26 @@ export interface BackupContents {
 	beans: number;
 	roasters: number;
 	shots: number;
+	/** Rows a built backup left out because they can't be read. */
+	omitted?: readonly OmittedBackupRow[];
+	/** Shots a built backup carries without their profile, by id. */
+	degraded?: readonly string[];
+}
+
+/** One row a backup left out (the core's `OmittedBackupRow`). */
+export interface OmittedBackupRow {
+	/** The line kind: `shot`, `bean`, `roaster`, `recipe`, `brewMethod`, `profile`. */
+	kind: string;
+	/** Where the row sat in the list handed to the core. */
+	index: number;
+	id: string | null;
+}
+
+/** The core's `BackupExport`. */
+interface BackupExport {
+	jsonl: string;
+	degraded: string[];
+	omitted: OmittedBackupRow[];
 }
 
 /** A human one-liner for a completed backup. Falls back to "settings &
@@ -81,6 +101,24 @@ export function describeBackup(c: BackupContents): string {
 	return c.profiles || c.beans || c.roasters || c.shots
 		? `${c.profiles} profile(s), ${c.beans} bean(s), ${c.roasters} roaster(s), ${c.shots} shot(s)`
 		: 'settings & favourites';
+}
+
+/** The sentence owed after a backup that left a row out or thinned one, with a
+ *  leading space, or `''` for a clean backup. */
+export function describeBackupGaps(c: BackupContents): string {
+	const omitted = c.omitted ?? [];
+	const degraded = c.degraded?.length ?? 0;
+	const kinds = new Set(omitted.map((o) => o.kind));
+	const noun = kinds.size === 1 ? ([...kinds][0] === 'brewMethod' ? 'method' : [...kinds][0]) : 'item';
+	const left =
+		omitted.length === 0
+			? ''
+			: ` ${omitted.length} ${noun}${omitted.length === 1 ? '' : 's'} couldn’t be read and ${omitted.length === 1 ? 'was' : 'were'} left out.`;
+	const thin =
+		degraded === 0
+			? ''
+			: ` ${degraded} shot${degraded === 1 ? ' was' : 's were'} backed up without ${degraded === 1 ? 'its' : 'their'} profile.`;
+	return left + thin;
 }
 
 /** Count what an export would include — lets the UI disable "Back up" / show a
@@ -115,6 +153,22 @@ function settingsAreDefault(s: Settings): boolean {
 	const d = DEFAULT_SETTINGS as unknown as Record<string, unknown>;
 	const cur = s as unknown as Record<string, unknown>;
 	return Object.keys(d).every((k) => JSON.stringify(cur[k]) === JSON.stringify(d[k]));
+}
+
+/**
+ * Each of `rows` as its own JSON string, for the core to read one at a time, as
+ * Android hands them over, or `null` where encoding threw, which the core
+ * reports as left out. Strings cost the core far less memory than a parsed
+ * tree of every row at once.
+ */
+function rowStrings(rows: readonly unknown[]): (string | null)[] {
+	return rows.map((row) => {
+		try {
+			return JSON.stringify(row) ?? null;
+		} catch {
+			return null;
+		}
+	});
 }
 
 /**
@@ -160,12 +214,12 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 	}
 
 	const envelope = JSON.stringify({
-		profiles: customProfiles,
-		beans,
-		roasters,
-		shots,
-		recipes,
-		customMethods,
+		profiles: rowStrings(customProfiles),
+		beans: rowStrings(beans),
+		roasters: rowStrings(roasters),
+		shots: rowStrings(shots),
+		recipes: rowStrings(recipes),
+		customMethods: rowStrings(customMethods),
 		// Settings line: the shared cross-shell `common` block (CommonSettings —
 		// both shells emit it identically, so common prefs restore web<->Android)
 		// + this shell's `_shell` tag + the web-only platform extras (webhooks,
@@ -191,13 +245,21 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 		visualizerPrefs: visualizerSyncPrefs()
 	});
 
+	const built = JSON.parse(
+		exportBackupBundle(envelope, Date.now(), cremaVersion, WEB_DEVICE_LABEL)
+	) as BackupExport;
+	// What was written, which the core's header counts too.
+	const written = (kind: string, rows: number) =>
+		rows - built.omitted.filter((o) => o.kind === kind).length;
 	return {
-		jsonl: exportBackupJsonl(envelope, Date.now(), cremaVersion, WEB_DEVICE_LABEL),
+		jsonl: built.jsonl,
 		contents: {
-			profiles: customProfiles.length,
-			beans: beans.length,
-			roasters: roasters.length,
-			shots: shots.length
+			profiles: written('profile', customProfiles.length),
+			beans: written('bean', beans.length),
+			roasters: written('roaster', roasters.length),
+			shots: written('shot', shots.length),
+			omitted: built.omitted,
+			degraded: built.degraded
 		}
 	};
 }
@@ -243,6 +305,22 @@ export async function exportBackup(cremaVersion = __APP_VERSION__): Promise<Back
 	if (!built) return null;
 	downloadBlob(backupFileName(), new Blob([built.zip as BlobPart], { type: 'application/zip' }));
 	return built.contents;
+}
+
+/**
+ * Run a backup and word what happened. A build that throws ends in a message
+ * like any other, so the UI can't stay on "Building backup…".
+ */
+export async function backupNote(run: () => Promise<BackupContents | null> = exportBackup): Promise<string> {
+	try {
+		const result = await run();
+		return result
+			? `Backed up — ${describeBackup(result)}.${describeBackupGaps(result)}`
+			: 'Nothing to back up yet.';
+	} catch (err) {
+		console.error('Backup failed', err);
+		return 'Backup failed: nothing was saved.';
+	}
 }
 
 export type RestoreMode = 'merge' | 'wipe';

@@ -20,7 +20,6 @@ import coffee.crema.drive.DriveStore
 import coffee.crema.drive.DriveSync
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
-import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.CommonSettings
 import coffee.crema.core.defaultIdleSleepMin
 import coffee.crema.runCatchingCancellable
@@ -1520,7 +1519,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Full-app backup & restore (crema-backup/v1) ──────────────────────────
     // One portable bundle: custom profiles + beans/roasters + shot history + the
-    // portable settings subset, (de)serialised by the core (exportBackupJsonl /
+    // portable settings subset, (de)serialised by the core (exportBackupBundle /
     // the line-tagged JSONL). OAuth tokens + per-device BLE/proxy state are
     // stripped on export and preserved on import — a backup moves between devices
     // without dragging this device's bindings along.

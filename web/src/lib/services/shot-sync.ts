@@ -1037,6 +1037,23 @@ export const ShotSyncLive = Layer.effect(
 									if (abort) stopped = stopFor(e);
 									return abort;
 								})
+					),
+					// A throw while exporting one shot is a defect, which `Effect.catch`
+					// lets through. Skip that shot, or every pass ends at it and the
+					// shots after it never upload. Not queued: it would only throw again.
+					Effect.catchDefect((cause) =>
+						Effect.sync(() => {
+							console.warn('[shot sync] skipping a shot that could not be exported', shot.id, cause);
+							appendSyncLog({
+								direction: 'skip',
+								entity: 'shot',
+								id: shot.id,
+								name: shot.profileName ?? 'Shot',
+								at: Date.now(),
+								error: 'This shot could not be read for upload.'
+							});
+							return false;
+						})
 					)
 				);
 
