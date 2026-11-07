@@ -84,6 +84,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A store that can't be read is never saved over** — on the web, a storage
+  error while reading was treated as an empty store, so the next save replaced
+  your data. Now the value stays where it is, a strip says "Couldn't read your
+  shot history, so changes aren't being saved", and Try again reads it again,
+  waiting if the machine is busy. A row that can't be read, in shots or the bean
+  library, is kept in `<key>.skipped` and offered as a saved copy, rather than
+  dropped by the next save. If it can't be kept, saves stop instead. Only full
+  storage now drops your oldest shots: a refused save no longer does. Web.
 - **One unreadable row can't block a backup** — on the web, one bad row made the
   whole backup fail, and the note stayed on Building backup for good. Now a shot
   whose profile can't be read is backed up without it, and any other bad row, of

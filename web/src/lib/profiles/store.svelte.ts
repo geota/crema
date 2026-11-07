@@ -27,7 +27,7 @@ import { SvelteSet } from 'svelte/reactivity';
 
 import { loadCore } from '#lib/core/index.js';
 import { refreshStopTargetsProjection } from '#lib/state/ui-state.svelte.js';
-import { isIdOrNull, isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
+import { isIdOrNull, isJsonObject, readJson, readStore, writeJson } from '#lib/utils/storage.js';
 import {
 	builtinCremaProfiles,
 	toCoreProfile,
@@ -85,6 +85,12 @@ interface BuiltinOverride {
 	lastUsed: string | null;
 }
 
+/** A store's value, or `fallback` for any outcome that isn't a loaded value. */
+function storedOr<T>(key: string, fallback: T, what: string, valid: (v: unknown) => boolean): T {
+	const read = readStore<T>(key, { what, valid });
+	return read.kind === 'loaded' ? read.value : fallback;
+}
+
 /**
  * The reactive profile library. One instance per app — {@link getProfileStore}.
  */
@@ -92,10 +98,12 @@ export class ProfileStore {
 	/** The built-in profiles, adapted from the core. Empty until loaded. */
 	private builtins = $state.raw<CremaProfile[]>([]);
 	/** The user's custom profiles, from localStorage. */
-	private custom = $state.raw<CremaProfile[]>(stripLegacyIdPrefix(readJson<CremaProfile[]>(CUSTOM_KEY, [], { what: 'custom profiles', valid: Array.isArray })));
+	private custom = $state.raw<CremaProfile[]>(
+		stripLegacyIdPrefix(storedOr<CremaProfile[]>(CUSTOM_KEY, [], 'custom profiles', Array.isArray))
+	);
 	/** Per-built-in user overrides (pin / last-used). */
 	private overrides = $state.raw<Record<string, BuiltinOverride>>(
-		readJson<Record<string, BuiltinOverride>>(OVERRIDES_KEY, {}, { what: 'profile settings', valid: isJsonObject })
+		storedOr<Record<string, BuiltinOverride>>(OVERRIDES_KEY, {}, 'profile settings', isJsonObject)
 	);
 	/**
 	 * The set of built-in ids the user has hidden from the library.
@@ -105,7 +113,7 @@ export class ProfileStore {
 	 * and stay reactive — no per-toggle full-set allocation.
 	 */
 	private hiddenBuiltins = new SvelteSet<string>(
-		readJson<string[]>(HIDDEN_BUILTINS_KEY, [], { what: 'hidden profiles list', valid: Array.isArray })
+		storedOr<string[]>(HIDDEN_BUILTINS_KEY, [], 'hidden profiles list', Array.isArray)
 	);
 	/** The id of the profile marked active on the Brew dashboard. */
 	activeId = $state<string | null>(stripLegacyIdPrefixOnId(readJson<string | null>(ACTIVE_KEY, null, { valid: isIdOrNull })));

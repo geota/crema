@@ -27,7 +27,7 @@ import {
 	resetSettingsJson,
 	sanitizeCommonSettingsJson
 } from '#lib/wasm/de1_wasm.js';
-import { isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
+import { isJsonObject, readJson, readStore, writeJson } from '#lib/utils/storage.js';
 import { readSyncConfig } from '#lib/visualizer/sync-config.js';
 import type {
 	CommonSettings,
@@ -726,10 +726,11 @@ export function brewCueHapticsOn(s: Pick<Settings, 'brewCueHaptics'>): boolean {
  * rewritten nested on the next persist.
  */
 function loadSettings(): Settings {
-	const stored = readJson<Record<string, unknown> | null>(SETTINGS_KEY, null, {
+	const read = readStore<Record<string, unknown>>(SETTINGS_KEY, {
 		what: 'settings',
 		valid: isJsonObject
 	});
+	const stored = read.kind === 'loaded' ? read.value : null;
 	if (stored && typeof stored === 'object' && stored.common) {
 		const platform: Partial<Settings> = {};
 		for (const k of PLATFORM_KEYS) {

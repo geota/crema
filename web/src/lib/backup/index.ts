@@ -43,7 +43,7 @@ import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '#lib/visualizer/s
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { strToU8, strFromU8, zipSync } from 'fflate';
 import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
-import { readJson } from '#lib/utils/storage.js';
+import { readStored } from '#lib/utils/storage.js';
 import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
 import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 import type { Bean, Roaster } from '#lib/bean/model.js';
@@ -121,12 +121,22 @@ export function describeBackupGaps(c: BackupContents): string {
 	return left + thin;
 }
 
+/**
+ * The custom profiles as stored, with their ids as written. The profile store
+ * has read this key by now and dealt with what it found, so a value that can't
+ * be read is only left out here.
+ */
+function storedCustomProfiles(): unknown[] {
+	const read = readStored(CUSTOM_PROFILES_KEY);
+	return read.kind === 'loaded' && Array.isArray(read.value) ? read.value : [];
+}
+
 /** Count what an export would include — lets the UI disable "Back up" / show a
  *  summary without building the bundle. */
 export function backupContents(): BackupContents {
 	const beanStore = getBeanStore();
 	const history = getHistoryStore();
-	const customProfiles = readJson<unknown[]>(CUSTOM_PROFILES_KEY, []);
+	const customProfiles = storedCustomProfiles();
 	return {
 		profiles: customProfiles.length,
 		beans: beanStore.beans.length,
@@ -180,7 +190,7 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 	const beanStore = getBeanStore();
 	const history = getHistoryStore();
 	const settings = getSettingsStore();
-	const customProfiles = readJson<unknown[]>(CUSTOM_PROFILES_KEY, []);
+	const customProfiles = storedCustomProfiles();
 	const beans = beanStore.beans;
 	const roasters = beanStore.roasters;
 	const shots = history.all;

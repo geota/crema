@@ -17,7 +17,7 @@ import type {
 	CustomMethodLabelCheck
 } from '#lib/core/crema-core.js';
 import { BrewMethodStyle, CustomMethodLabelError } from '#lib/core/crema-core.js';
-import { readJson, writeJsonChecked } from '#lib/utils/storage.js';
+import { readStore, writeJsonChecked } from '#lib/utils/storage.js';
 import {
 	blankRecipeForStyleJson,
 	brewMethodStyleSeedsJson,
@@ -130,10 +130,11 @@ export class CustomMethodStore {
 	private methods = $state<CustomBrewMethod[]>([]);
 
 	constructor() {
-		this.methods = readJson<CustomBrewMethod[]>(METHODS_KEY, [], {
+		const read = readStore<CustomBrewMethod[]>(METHODS_KEY, {
 			what: 'custom brew methods',
 			valid: Array.isArray
 		});
+		this.methods = read.kind === 'loaded' ? read.value : [];
 	}
 
 	/** Live methods, oldest first (the order they join the pickers in). */
