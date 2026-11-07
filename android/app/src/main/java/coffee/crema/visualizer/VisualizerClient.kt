@@ -71,6 +71,9 @@ sealed class VisualizerError(message: String) : Exception(message) {
      * Terminal for the queue; the row stays unsynced, so a later pass offers it.
      */
     class NoSeries : VisualizerError("This shot has no telemetry to upload")
+
+    /** The shot was deleted while its upload waited, so nothing was sent. */
+    class RowDeleted : VisualizerError("This shot was deleted")
 }
 
 class VisualizerClient(

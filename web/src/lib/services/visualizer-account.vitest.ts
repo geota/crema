@@ -18,6 +18,14 @@ import { HttpStatusError, NetworkError } from '../effect/errors.ts';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { BARISTA_PENDING_KEY } from '../visualizer/barista-pending.ts';
 import { excludedFromUpload, readSyncConfig, updateSyncConfig, uploadsHeld } from '../visualizer/sync-config.ts';
+import {
+	expiredTombstones,
+	markUnboundTombstone,
+	markUploadAttempted,
+	parkedTombstones,
+	uploadAttempted,
+	uploadReturned
+} from '../visualizer/upload-marks.ts';
 import { BeanSync } from './bean-sync.ts';
 import { OAuth } from './oauth.ts';
 import { enqueueEntry, readQueue } from './queue-store.ts';
@@ -166,6 +174,21 @@ describe('a different account', () => {
 		expect(uploadsHeld()).toBe(true);
 		await drain(layer as never);
 		expect(uploads).toEqual([]);
+	});
+
+	it('parks unbound tombstones, drops attempt marks, and brings them back with their account', () => {
+		updateSyncConfig({ syncAccountId: 'u1' });
+		markUploadAttempted('gone');
+		markUnboundTombstone('gone', true);
+		uploadReturned('gone');
+		applyAccount('u2');
+		expect(uploadAttempted('gone')).toBe(false);
+		expect(parkedTombstones().has('gone')).toBe(true);
+		expect(expiredTombstones(99, 0)).toEqual([]);
+
+		applyAccount('u1');
+		expect(parkedTombstones().has('gone')).toBe(false);
+		expect(expiredTombstones(99, 0)).toEqual(['gone']);
 	});
 
 	it('a parked delete waits, and runs once its own account is back', async () => {

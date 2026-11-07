@@ -95,6 +95,40 @@ data class ShotTombstone(
 }
 
 /**
+ * A shot deleted here that may be on Visualizer without Crema knowing its id: an
+ * upload was attempted, and no answer has come. The delete recorded the intent,
+ * and the id arrives later: from the upload if it finishes, or from a pull, which
+ * matches the row by upload key and duration instead of adding it back. Kept
+ * apart from [ShotTombstone] so an older build can still read this file.
+ */
+@Serializable
+data class UnboundTombstone(
+    /** The deleted local shot's id. */
+    val id: String,
+    /** With [durationMs], what a pull matches a remote row by. */
+    val completedAtMs: Long,
+    val durationMs: Long,
+    /** Unix ms of the local delete. */
+    val deletedAt: Long,
+    /** The user asked to delete the Visualizer copy too. */
+    val deleteRemote: Boolean = false,
+    /**
+     * [VisualizerState.pullRun] when this was written. Only a complete pull that
+     * started later, covered the window of [attemptedAt], and found no match ends
+     * it. There's no time limit: this row is small, and a shot coming back is the bug.
+     */
+    val writtenRun: Long = 0L,
+    /** When the POST went (unix ms), or null when nothing recorded it. */
+    val attemptedAt: Long? = null,
+    /**
+     * The account the POST went to, while another is signed in. Its rows aren't
+     * this account's to match, and a pull of this one says nothing about it, so it
+     * waits for that account to come back. Null = the signed-in account's.
+     */
+    val parkedFor: String? = null,
+)
+
+/**
  * A shot upload waiting for its retry (F17): a recoverable failure (offline, a
  * 5xx, a 429) is queued here and retried by the drain on the core's backoff
  * (`visualizer_queue_decision`), at most three attempts in all.
@@ -194,6 +228,16 @@ data class VisualizerState(
     val shotTombstones: List<ShotTombstone> = emptyList(),
     /** Shot uploads waiting for a retry — see [QueuedUpload]. */
     val retryQueue: List<QueuedUpload> = emptyList(),
+    /**
+     * Shots a POST may have reached Visualizer for, with when (unix ms). Stored
+     * before each POST and cleared on a bind or a refusal, so a delete during an
+     * upload knows there may be a remote copy, even after a kill.
+     */
+    val uploadAttempted: Map<String, Long> = emptyMap(),
+    /** See [UnboundTombstone]. */
+    val unboundTombstones: List<UnboundTombstone> = emptyList(),
+    /** Counts pulls, to order them against [UnboundTombstone.writtenRun]. */
+    val pullRun: Long = 0L,
     /**
      * The stored state as read, when the keystore couldn't open a secret this
      * start ([SecretBox.Opened.Unavailable]); in memory only. Meanwhile the

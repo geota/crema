@@ -90,6 +90,8 @@ export interface EnqueueInput {
 	error?: string;
 	/** Hold a FRESH entry back this long before its first retry (e.g. a 429). */
 	delayMs?: number;
+	/** See {@link QueueEntry.parkedFor}. */
+	parkedFor?: string | null;
 }
 
 /**
@@ -123,7 +125,8 @@ export function enqueueEntry(input: EnqueueInput): void {
 				attempts: 0,
 				lastError: input.error,
 				enqueuedAt: now,
-				nextAttemptAt: now + Math.max(0, input.delayMs ?? 0)
+				nextAttemptAt: now + Math.max(0, input.delayMs ?? 0),
+				parkedFor: input.parkedFor
 			}
 		];
 	}

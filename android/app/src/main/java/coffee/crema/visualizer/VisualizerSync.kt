@@ -1,6 +1,7 @@
 package coffee.crema.visualizer
 
 import coffee.crema.core.CallbackOutcome
+import coffee.crema.core.pullCoversAttempt
 import coffee.crema.core.accountChangeAction
 import coffee.crema.core.CataloguePage
 import coffee.crema.core.callbackOutcome
@@ -221,6 +222,9 @@ class VisualizerSync(
 
     /** The rows' late arrival has been reported (see [rowsReady]). */
     private val rowsLateTold = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Shots deleted here this session with no id, so an upload holding one stops short. */
+    private val deletedHere: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** Shot ids with an upload running — checked and claimed atomically. */
     private val inFlight = HashSet<String>()
@@ -524,7 +528,15 @@ class VisualizerSync(
         shotPullCursor = null,
         baristaPending = emptySet(),
         retryQueue = emptyList(),
+        uploadAttempted = emptyMap(),
         shotTombstones = shotTombstones.map {
+            when {
+                it.parkedFor == newId -> it.copy(parkedFor = null)
+                it.parkedFor == null -> it.copy(parkedFor = oldId)
+                else -> it
+            }
+        },
+        unboundTombstones = unboundTombstones.map {
             when {
                 it.parkedFor == newId -> it.copy(parkedFor = null)
                 it.parkedFor == null -> it.copy(parkedFor = oldId)
@@ -816,7 +828,7 @@ class VisualizerSync(
             } finally {
                 release(shot.id)
             }
-            result.onSuccess { id -> onShotSynced(shot.id, id) }
+            result.onSuccess { id -> bindUploaded(shot.id, id) }
             // F17: a recoverable failure is queued for a retry; a success is a
             // sync tail that drains what is waiting.
             result.onSuccess { drainSoon() }
@@ -864,8 +876,7 @@ class VisualizerSync(
                 try {
                     val shot = currentShot(snapshot.id) ?: snapshot
                     if (shot.visualizerId != null) return@runUploadPass false
-                    val id = uploadShotNow(shot)
-                    onShotSynced(shot.id, id)
+                    bindUploaded(shot.id, uploadShotNow(shot))
                     true
                 } finally {
                     release(snapshot.id)
@@ -975,7 +986,7 @@ class VisualizerSync(
                     continue
                 }
                 val failure = try {
-                    onShotSynced(shot.id, uploadShotNow(shot))
+                    bindUploaded(shot.id, uploadShotNow(shot))
                     null
                 } catch (c: CancellationException) {
                     throw c
@@ -1052,7 +1063,7 @@ class VisualizerSync(
     private suspend fun pushTracked(shot: StoredShot): Boolean {
         _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
         try {
-            onShotSynced(shot.id, uploadShotNow(shot))
+            bindUploaded(shot.id, uploadShotNow(shot))
             return true
         } finally {
             _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shot.id) }
@@ -1068,11 +1079,45 @@ class VisualizerSync(
         val shot = if (snapshot.samples.isEmpty()) currentShot(snapshot.id) ?: snapshot else snapshot
         if (uploadRefused(shot.isBrewLog, shot.samples.size.toUInt())) throw VisualizerError.NoSeries()
         val payload = buildShotPayload(shot)
-        val id = withFreshToken { client.uploadShot(it, payload) }
+        // Deleted while this held its claim: a POST would only make a copy to delete.
+        if (shot.id in deletedHere) throw VisualizerError.RowDeleted()
+        // Stored first: a kill mid-POST must leave a delete able to see it.
+        persist { it.copy(uploadAttempted = it.uploadAttempted + (shot.id to now())) }
+        val id = try {
+            withFreshToken { client.uploadShot(it, payload) }
+        } catch (e: Exception) {
+            if (uploadPolicy.refusedUpload(e)) persist { it.copy(uploadAttempted = it.uploadAttempted - shot.id) }
+            throw e
+        }
         persist { it.copy(lastShotSyncAt = System.currentTimeMillis()) }
         logSync("push", shot.id, shot.profileName ?: "Shot")
         return id
     }
+
+    /**
+     * The upload of [shotId] came back as [visualizerId]. A row deleted meanwhile
+     * can't take the id, so a tombstone does, and the remote delete runs if the
+     * user asked for one. The shot stays deleted either way.
+     */
+    private suspend fun bindUploaded(shotId: String, visualizerId: String) {
+        onShotSynced(shotId, visualizerId)
+        val gone = currentShot(shotId)?.visualizerId != visualizerId
+        persist { st ->
+            val settled = st.copy(uploadAttempted = st.uploadAttempted - shotId)
+            if (gone) settled.withTombstoneBound(shotId, visualizerId, now()) else settled
+        }
+        if (gone) drainSoon()
+    }
+
+    /** Whether an upload of [shotId] is running. */
+    private fun claimed(shotId: String): Boolean = synchronized(inFlight) { shotId in inFlight }
+
+    /** Whether an upload of [shotId] may have reached Visualizer, or is about to. */
+    private fun uploadPending(st: VisualizerState, shotId: String): Boolean =
+        shotId in st.uploadAttempted || st.retryQueue.any { it.shotId == shotId } || claimed(shotId)
+
+    /** Whether a delete of [shot] should offer Visualizer: an upload may land its copy. */
+    fun uploadPending(shot: StoredShot): Boolean = uploadPending(persisted, shot.id)
 
     /**
      * Mirror a History-panel edit onto the shot's already-uploaded Visualizer
@@ -1172,9 +1217,7 @@ class VisualizerSync(
      * Stops at the cursor, page exhaustion, or the 200-page cap. One failed
      * detail fetch skips that row (auth failures abort — no point continuing).
      */
-    private suspend fun pullAllShotsSince(
-        sinceMs: Long,
-    ): Triple<List<JsonObject>, Map<String, String>, Map<String, JsonObject>> {
+    private suspend fun pullAllShotsSince(sinceMs: Long): PulledShots {
         val cursorSec = sinceMs / 1000
         val wires = mutableListOf<JsonObject>()
         val samplesById = mutableMapOf<String, String>()
@@ -1182,10 +1225,15 @@ class VisualizerSync(
         var page = 1
         var totalPages = 1
         var reachedOlder = false
+        var rowsMissed = false
+        var exhausted = false
         while (!reachedOlder && page <= totalPages.coerceAtMost(MAX_PULL_PAGES)) {
             val (summaries, pages) = withFreshToken { client.listShots(it, page, 50) }
             totalPages = pages
-            if (summaries.isEmpty()) break
+            if (summaries.isEmpty()) {
+                exhausted = true
+                break
+            }
             for (summary in summaries) {
                 if (summary.updatedAtSec < cursorSec) {
                     // Sorted by updated_at desc — crossing the cursor ends the walk.
@@ -1195,6 +1243,7 @@ class VisualizerSync(
                 val detail = runCatchingCancellable { withFreshToken { client.fetchShotDetail(it, summary.id) } }
                     .getOrElse { e ->
                         if (e is VisualizerError.Auth) throw e
+                        rowsMissed = true
                         continue
                     }
                 val detailStr = json.encodeToString(kotlinx.serialization.json.JsonElement.serializer(), detail)
@@ -1213,7 +1262,10 @@ class VisualizerSync(
                     json.parseToJsonElement(
                         coffee.crema.core.wireShotFromDetail(json.encodeToString(JsonObject.serializer(), payload)),
                     ).jsonObject
-                }.getOrNull() ?: continue
+                }.getOrNull() ?: run {
+                    rowsMissed = true
+                    continue
+                }
                 wires += wire
                 runCatchingCancellable { coffee.crema.core.samplesFromVisualizerDetail(detailStr) }
                     .getOrNull()?.let { samplesById[summary.id] = it }
@@ -1228,8 +1280,17 @@ class VisualizerSync(
             }
             page++
         }
-        return Triple(wires, samplesById, profilesById)
+        val walked = reachedOlder || exhausted || page > totalPages
+        return PulledShots(wires, samplesById, profilesById, complete = walked && !rowsMissed)
     }
+
+    /** What [pullAllShotsSince] brought back. [complete]: every row it passed is in [wires]. */
+    private data class PulledShots(
+        val wires: List<JsonObject>,
+        val samples: Map<String, String>,
+        val profiles: Map<String, JsonObject>,
+        val complete: Boolean,
+    )
 
     /**
      * Reconcile pulled wires against the local history via the CORE planner
@@ -1241,15 +1302,17 @@ class VisualizerSync(
         if (wires.isEmpty()) return PullApplied()
         // Tombstones ride along (web F18a): a shot deleted here whose remote copy
         // is still on Visualizer must match that copy (an `update`, skipped
-        // below), not look new and be pulled back in. The planner never binds a
-        // tombstone by signature, so only its Visualizer id matters.
+        // below), not look new and be pulled back in. One deleted during its
+        // upload has no id yet, and matches by upload key instead.
         val tombstones = persisted.shotTombstones
         val tombstoned = tombstones.mapTo(HashSet()) { it.id }
+        val unbound = persisted.unboundTombstones.filter { it.parkedFor == null }
+        val unboundIds = unbound.mapTo(HashSet()) { it.id }
         val payload = buildJsonObject {
             put(
                 "local",
                 kotlinx.serialization.json.buildJsonArray {
-                    localShots.forEach { shot ->
+                    localShots.filterNot { it.isBrewLog }.forEach { shot ->
                         add(
                             buildJsonObject {
                                 put("id", JsonPrimitive(shot.id))
@@ -1275,6 +1338,19 @@ class VisualizerSync(
                             },
                         )
                     }
+                    unbound.forEach { t ->
+                        add(
+                            buildJsonObject {
+                                put("id", JsonPrimitive(t.id))
+                                put("completedAt", JsonPrimitive(t.completedAtMs))
+                                put("duration", JsonPrimitive(t.durationMs))
+                                put("profileName", JsonNull)
+                                put("finalWeight", JsonNull)
+                                put("visualizerId", JsonNull)
+                                put("deletedAt", JsonPrimitive(t.deletedAt))
+                            },
+                        )
+                    }
                 },
             )
             put("remote", kotlinx.serialization.json.JsonArray(wires))
@@ -1283,7 +1359,7 @@ class VisualizerSync(
             json.parseToJsonElement(
                 coffee.crema.core.reconcileShots(json.encodeToString(JsonObject.serializer(), payload)),
             ) as kotlinx.serialization.json.JsonArray
-        }.getOrElse { return PullApplied() }
+        }.getOrElse { return PullApplied(planned = false) }
         val stubs = mutableListOf<StoredShot>()
         for (el in actions) {
             val action = el as? JsonObject ?: continue
@@ -1301,7 +1377,13 @@ class VisualizerSync(
                 "bind" -> {
                     val localId = fld("localId") ?: continue
                     val vid = fld("visualizerId") ?: continue
-                    onShotSynced(localId, vid)
+                    // Deleted during its upload: the id goes on the tombstone,
+                    // and the remote copy stays out of the history.
+                    if (localId in unboundIds) {
+                        persist { it.withTombstoneBound(localId, vid, now()) }
+                        continue
+                    }
+                    bindUploaded(localId, vid)
                     fillBarista(localId, action["remote"] as? JsonObject)
                     logSync("pull", localId, "Shot (bound)")
                 }
@@ -1332,8 +1414,47 @@ class VisualizerSync(
 
     // ── Shot deletion (web history tombstones + upload-queue delete) ───────
 
+    /**
+     * Whether pull [run] from [since], which walked everything, ends this
+     * tombstone: it started later, it covered the window the upload would have
+     * landed in, and no POST is still out, whose id would need somewhere to land.
+     */
+    private fun UnboundTombstone.expiredBy(run: Long, since: Long): Boolean =
+        parkedFor == null && writtenRun < run && !claimed(id) && pullCoversAttempt(since, attemptedAt)
+
     /** The shots deleted here whose Visualizer copy still exists. */
     internal val shotTombstones: List<ShotTombstone> get() = persisted.shotTombstones
+
+    /**
+     * The shot [shot] was deleted here, with [deleteRemote] saying whether its
+     * Visualizer copy goes too. A delete records intent, and a binding can arrive
+     * later. A shot bound or with an upload under way leaves a tombstone. One never
+     * offered to Visualizer just goes.
+     */
+    fun tombstoneDeleted(shot: StoredShot, deleteRemote: Boolean) {
+        val visualizerId = shot.visualizerId
+        if (visualizerId != null) return tombstoneShot(shot.id, visualizerId, deleteRemote)
+        deletedHere += shot.id
+        scope.launch {
+            if (!ownState.await()) return@launch
+            persist { st ->
+                if (!uploadPending(st, shot.id)) return@persist st
+                val tombstone = UnboundTombstone(
+                    id = shot.id,
+                    completedAtMs = shot.completedAtMs,
+                    durationMs = shot.durationMs,
+                    deletedAt = now(),
+                    deleteRemote = deleteRemote,
+                    writtenRun = st.pullRun,
+                    attemptedAt = st.uploadAttempted[shot.id] ?: now().takeIf { claimed(shot.id) },
+                )
+                st.copy(
+                    unboundTombstones = st.unboundTombstones.filterNot { it.id == shot.id } + tombstone,
+                    uploadAttempted = st.uploadAttempted - shot.id,
+                )
+            }
+        }
+    }
 
     /**
      * Record that the shot [id], uploaded as [visualizerId], was deleted here.
@@ -1361,8 +1482,16 @@ class VisualizerSync(
      */
     fun forgetTombstones(ids: Collection<String>) {
         val gone = ids.toHashSet()
-        if (persisted.shotTombstones.none { it.id in gone }) return
-        scope.launch { persist { st -> st.copy(shotTombstones = st.shotTombstones.filterNot { it.id in gone }) } }
+        deletedHere -= gone
+        if (persisted.shotTombstones.none { it.id in gone } && persisted.unboundTombstones.none { it.id in gone }) return
+        scope.launch {
+            persist { st ->
+                st.copy(
+                    shotTombstones = st.shotTombstones.filterNot { it.id in gone },
+                    unboundTombstones = st.unboundTombstones.filterNot { it.id in gone },
+                )
+            }
+        }
     }
 
     /**
@@ -1385,7 +1514,10 @@ class VisualizerSync(
             val decision = failure?.let { uploadPolicy.queueDecision("delete", it, t.attempts + 1) }
             val updated = when (decision) {
                 null -> null
-                is RetryDecision.Drop -> t.copy(deleteRemote = false)
+                is RetryDecision.Drop -> {
+                    notify("Visualizer refused to delete a shot, so its copy stays there: ${failure.message}")
+                    t.copy(deleteRemote = false)
+                }
                 is RetryDecision.Park -> t.copy(nextAttemptAt = now() + decision.delayMs)
                 is RetryDecision.Retry -> t.copy(attempts = t.attempts + 1, nextAttemptAt = now() + decision.delayMs)
             }
@@ -1547,11 +1679,20 @@ class VisualizerSync(
             if (directionPulls(direction)) {
                 runCatchingCancellable {
                     val since = persisted.shotPullCursor ?: 0L
-                    val (wires, samples, profiles) = pullAllShotsSince(since)
-                    val applied = reconcileAndApply(shots, wires, samples, profiles)
+                    val run = persisted.pullRun + 1
+                    persist { it.copy(pullRun = run) }
+                    val pull = pullAllShotsSince(since)
+                    val applied = reconcileAndApply(shots, pull.wires, pull.samples, pull.profiles)
                     pulled = applied.pulled
                     refused = applied.refused
-                    persist { it.copy(shotPullCursor = System.currentTimeMillis()) }
+                    persist { st ->
+                        val complete = pull.complete && applied.planned
+                        st.copy(
+                            shotPullCursor = System.currentTimeMillis(),
+                            // Matches left the list above, so what's here wasn't found.
+                            unboundTombstones = if (complete) st.unboundTombstones.filterNot { it.expiredBy(run, since) } else st.unboundTombstones,
+                        )
+                    }
                 }.onFailure { e ->
                     failed = true
                     logSync("pull", "", "Pull failed", e.message)
@@ -1671,6 +1812,26 @@ class VisualizerSync(
 const val VISUALIZER_RECONNECT_LINE = "Visualizer ended this sign-in. Sign in again to keep syncing. Nothing on this device is lost."
 
 /**
+ * The id arrived for a shot deleted here: from its upload finishing, or from a
+ * pull finding its row. It goes on a tombstone, always, so an upload landing
+ * after a delete is still caught, carrying the intent an unbound one recorded.
+ */
+internal fun VisualizerState.withTombstoneBound(shotId: String, visualizerId: String, now: Long): VisualizerState {
+    val unbound = unboundTombstones.firstOrNull { it.id == shotId }
+    val tombstone = ShotTombstone(
+        id = shotId,
+        visualizerId = visualizerId,
+        deletedAt = unbound?.deletedAt ?: now,
+        deleteRemote = unbound?.deleteRemote ?: false,
+        parkedFor = unbound?.parkedFor,
+    )
+    return copy(
+        shotTombstones = shotTombstones.filterNot { it.id == shotId } + tombstone,
+        unboundTombstones = unboundTombstones.filterNot { it.id == shotId },
+    )
+}
+
+/**
  * The equipment-level grinder model for [shot]'s upload / PATCH: the shot's
  * own (an imported or restored shot carries the grinder it was pulled on),
  * else the Settings default. Blank counts as absent. Mirrors the web
@@ -1713,8 +1874,8 @@ internal fun shotPatchInputs(
     barista = if (sendBarista) baristaOf(shot) else null,
 )
 
-/** What a pull left in the history: rows added, and new rows a full one refused. */
-internal data class PullApplied(val pulled: Int = 0, val refused: Int = 0)
+/** What a pull left in the history: rows added, new rows a full one refused, and whether the core planned it. */
+internal data class PullApplied(val pulled: Int = 0, val refused: Int = 0, val planned: Boolean = true)
 
 /** A shot's barista as the PATCH sends it: trimmed, "" when unset or cleared. */
 internal fun baristaOf(shot: StoredShot): String = shot.barista?.trim().orEmpty()
