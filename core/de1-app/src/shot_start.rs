@@ -15,8 +15,9 @@
 //!    its fingerprint, at most [`START_UPLOAD_TIMEOUT`].
 //! 2. **Pre-flush** (the `pre_flush` setting): a `HotWaterRinse`, then our
 //!    flush's end, at most [`PRESHOT_FLUSH_TIMEOUT`]. A flush that didn't begin
-//!    within [`PRESHOT_FLUSH_ENTRY_TIMEOUT`] ends the start: the request may
-//!    be lost, and the machine may be doing something else by now. A flush
+//!    within [`PRESHOT_FLUSH_ENTRY_TIMEOUT`] of its write ends the start: the
+//!    request may be lost, and the machine may be doing something else by
+//!    now. A flush
 //!    that ended outside Idle (a group-head button took the machine elsewhere)
 //!    does not start the shot, and neither does the ceiling while another flow
 //!    is running.
@@ -54,6 +55,7 @@ use de1_protocol::MachineState;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
+use crate::machine_requests::MAX_HOLD;
 use crate::{CoreOutput, CremaCore, Event, ms_to_duration};
 
 /// How long a start waits for the DE1 to hold its profile.
@@ -61,8 +63,10 @@ pub const START_UPLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 /// The ceiling on the pre-shot flush before Espresso is requested anyway (the
 /// backstop when its end is missed).
 pub const PRESHOT_FLUSH_TIMEOUT: Duration = Duration::from_secs(30);
-/// How long a start waits for its pre-shot flush to begin.
-pub const PRESHOT_FLUSH_ENTRY_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a start waits for its pre-shot flush to begin, from the write.
+/// Generous until a hardware run measures it (a DE1 waking from Sleep may be
+/// slow), since this reaches nightly users first.
+pub const PRESHOT_FLUSH_ENTRY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a start waits for the machine to report Espresso after the
 /// request.
 pub const ESPRESSO_ENTRY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -275,7 +279,9 @@ enum Phase {
         until: Duration,
     },
     /// Our flush was requested; `started` once it began. It must begin by
-    /// `enter_by`, and `until` is the ceiling on the flush itself.
+    /// `enter_by`, which is set from the write; until the write goes out it
+    /// allows for the request's longest hold, so a dropped request ends the
+    /// start too. `until` is the ceiling on the flush itself.
     Flushing {
         started: bool,
         enter_by: Duration,
@@ -451,7 +457,7 @@ impl CremaCore {
             self.set_start_phase(
                 Phase::Flushing {
                     started: false,
-                    enter_by: self.clock + PRESHOT_FLUSH_ENTRY_TIMEOUT,
+                    enter_by: self.clock + MAX_HOLD + PRESHOT_FLUSH_ENTRY_TIMEOUT,
                     until: self.clock + PRESHOT_FLUSH_TIMEOUT,
                 },
                 out,
@@ -526,6 +532,17 @@ impl CremaCore {
         );
         if waiting {
             self.end_start(StartEnd::UploadFailed, out);
+        }
+    }
+
+    /// The flush request went out: the entry clock starts now.
+    pub(crate) fn start_on_flush_written(&mut self) {
+        let deadline = self.clock + PRESHOT_FLUSH_ENTRY_TIMEOUT;
+        if let Some(Start {
+            phase: Phase::Flushing { enter_by, .. },
+        }) = self.starter.start.as_mut()
+        {
+            *enter_by = deadline;
         }
     }
 
@@ -915,7 +932,7 @@ mod tests {
     }
 
     /// #318: the start's flush is lost and steam starts at the group head. The
-    /// start ends at 5 s and writes nothing, so steam carries on.
+    /// start ends 10 s after the write and writes nothing, so steam carries on.
     #[test]
     fn a_flush_that_never_began_ends_the_start_without_a_write() {
         let mut core = connected(true);
@@ -927,13 +944,29 @@ mod tests {
             vec![requested_state(MachineState::HotWaterRinse)]
         );
         let _ = report(&mut core, STEAM, 4_000);
-        // 5 s from the flush stage (entered at the upload's end, 2 100).
-        assert!(ends(&core.on_tick(7_099)).is_empty());
-        let out = core.on_tick(7_100);
+        // 10 s from the write, which waited out the guard until 2 600.
+        assert!(ends(&core.on_tick(12_599)).is_empty());
+        let out = core.on_tick(12_600);
         assert_eq!(ends(&out), vec![StartEnd::FlushNotEntered]);
         assert!(state_writes(&out).is_empty());
         assert!(!core.shot_starting());
         assert!(state_writes(&core.on_tick(40_000)).is_empty());
+    }
+
+    /// Steam starts while the flush waits out the guard: its request is
+    /// dropped, never written, and the start still ends.
+    #[test]
+    fn a_dropped_flush_request_ends_the_start_without_a_write() {
+        let mut core = connected(true);
+        let r = start(&mut core, &profile(36.0), 2_000);
+        let _ = ack(&mut core, &r.output, 2_100);
+        let _ = report(&mut core, STEAM, 2_300);
+        assert!(state_writes(&core.on_tick(2_600)).is_empty());
+        // 3 s of hold and 10 s of entry from the flush stage (2 100).
+        assert!(ends(&core.on_tick(15_099)).is_empty());
+        let out = core.on_tick(15_100);
+        assert_eq!(ends(&out), vec![StartEnd::FlushNotEntered]);
+        assert!(state_writes(&out).is_empty());
     }
 
     #[test]
@@ -950,7 +983,7 @@ mod tests {
         let _ = core.on_tick(2_600);
         assert_eq!(
             core.shot_start_deadline(),
-            Some(Duration::from_millis(7_100))
+            Some(Duration::from_millis(12_600))
         );
         let _ = report(&mut core, FLUSH, 3_000);
         assert_eq!(

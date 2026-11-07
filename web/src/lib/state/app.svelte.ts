@@ -2386,7 +2386,7 @@ export class CremaApp {
 				toast.error(message ?? 'Shot not started — the machine left the flush');
 				break;
 			case 'FlushNotEntered':
-				this.state.log('The pre-shot flush did not begin within 5 s — shot not started.');
+				this.state.log('The pre-shot flush did not begin within 10 s — shot not started.');
 				toast.error(message ?? 'Shot not started — the pre-shot flush didn’t begin');
 				break;
 			case 'NotEntered':
