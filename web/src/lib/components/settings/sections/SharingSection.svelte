@@ -52,8 +52,10 @@
 	import { type SharingPrivacy } from '#lib/settings/index.js';
 	import {
 		backupFileName,
+		backupNote as runBackup,
 		buildBackupZip,
-		exportBackup,
+		driveBackupRefusal,
+		describeBackupGaps,
 		describeBackup,
 		restoreBackupData,
 		applyHeldRestoreChanges,
@@ -143,7 +145,7 @@
 	let catchUpBusy = $state<{ done: number; total: number } | null>(null);
 
 	function vizBacklogCount(): number {
-		return history.all.filter((s) => !s.visualizerId && !s.deletedAt && !isBrewLog(s)).length;
+		return history.visualizerBacklog.length;
 	}
 	/** Offer the Visualizer catch-up if shots would now auto-upload there. */
 	function offerVisualizerCatchUp(): void {
@@ -320,12 +322,7 @@
 	/** Build + download a full `crema-backup/v1` bundle of everything local. */
 	async function backUp(): Promise<void> {
 		backupNote = 'Building backup…';
-		try {
-			const result = await exportBackup();
-			backupNote = result ? `Backed up — ${describeBackup(result)}.` : 'Nothing to back up yet.';
-		} catch (err) {
-			backupNote = err instanceof Error ? `Backup failed: ${err.message}` : 'Backup failed.';
-		}
+		backupNote = await runBackup();
 	}
 
 	let restoreInput = $state<HTMLInputElement | null>(null);
@@ -423,10 +420,15 @@
 				driveNote = 'Nothing to back up yet.';
 				return;
 			}
+			const refusal = driveBackupRefusal(built.contents);
+			if (refusal) {
+				driveNote = refusal;
+				return;
+			}
 			driveNote = 'Backing up to Drive…';
 			const token = await drive.accessToken();
 			await uploadBackup(token, backupFileName(), built.zip, 'application/zip');
-			driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.`;
+			driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.${describeBackupGaps(built.contents)}`;
 		} catch (err) {
 			driveNote = err instanceof Error ? `Drive backup failed: ${err.message}` : 'Drive backup failed.';
 		} finally {

@@ -67,6 +67,14 @@ export function historyDroppedNotice(dropped: number, cap: number): string {
 		: '';
 }
 
+/**
+ * What to say when a full history refused rows a pull brought. The next Sync
+ * won't look for them, because the cursor has moved past them: Re-sync does.
+ */
+export function historyFullNotice(refused: number, cap: number): string {
+	return `History is full at ${cap} shots, so ${refused} shot${refused === 1 ? '' : 's'} from Visualizer ${refused === 1 ? 'wasn\u2019t' : 'weren\u2019t'} added. After freeing up space, use Re-sync shots to fetch ${refused === 1 ? 'it' : 'them'}.`;
+}
+
 /** Newest first; rows with the same date keep their order, so a new row leads. */
 export function newestFirst<T extends { completedAt: number }>(shots: readonly T[]): T[] {
 	return [...shots].sort((a, b) => b.completedAt - a.completedAt);

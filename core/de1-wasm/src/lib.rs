@@ -2012,20 +2012,27 @@ pub fn export_profile_file(profiles_json: &str) -> Result<String, String> {
 /// adds custom-profile lines + a portable settings line, and a richer
 /// header (`deviceLabel`, profile count). One record per line, header
 /// first. The shell strips OAuth tokens + per-device/BLE state before
-/// building the envelope. See `de1_domain::export_backup_jsonl_from_json`.
+/// building the envelope. Returns the `BackupExport` as JSON: `{ jsonl,
+/// degraded, omitted }`. See `de1_domain::export_backup_jsonl_from_json`.
 ///
 /// # Errors
 ///
 /// Returns the JSON parse error string when the envelope is malformed.
-#[wasm_bindgen(js_name = exportBackupJsonl)]
-pub fn export_backup_jsonl(
+#[wasm_bindgen(js_name = exportBackupBundle)]
+pub fn export_backup_bundle(
     envelope_json: &str,
     created_at_unix_ms: f64,
     app_version: &str,
     device_label: &str,
 ) -> Result<String, String> {
     let created_at = f64_to_ms(created_at_unix_ms);
-    de1_domain::export_backup_jsonl_from_json(envelope_json, created_at, app_version, device_label)
+    let built = de1_domain::export_backup_jsonl_from_json(
+        envelope_json,
+        created_at,
+        app_version,
+        device_label,
+    )?;
+    serde_json::to_string(&built).map_err(|e| e.to_string())
 }
 
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the

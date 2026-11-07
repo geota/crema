@@ -1,6 +1,8 @@
 package coffee.crema.visualizer
 
+import coffee.crema.core.CallbackOutcome
 import coffee.crema.core.CataloguePage
+import coffee.crema.core.callbackOutcome
 import coffee.crema.core.ShotPatchInputs
 import coffee.crema.core.parseCatalogueCoffeeBags
 import coffee.crema.core.parseCatalogueRoasters
@@ -14,7 +16,9 @@ import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.StoredShot
 import coffee.crema.history.effectiveGrindSetting
+import coffee.crema.history.historyFullNotice
 import coffee.crema.history.isBrewLog
+import coffee.crema.sync.OwnStateGate
 import coffee.crema.ui.DrainResult
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.UploadDestination
@@ -30,6 +34,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -70,8 +75,8 @@ class VisualizerSync(
     private val onShotSynced: (localId: String, visualizerId: String) -> Unit,
     /** The user's equipment-level grinder model (Settings → Machine); null = unset. */
     private val grinderModel: () -> String? = { null },
-    /** Insert pulled remote stubs into the local history (dedup by id). */
-    private val onPulledShots: (List<StoredShot>) -> Unit = {},
+    /** Insert pulled remote stubs into the local history (dedup by id); answers the ids a full history refused. */
+    private val onPulledShots: (List<StoredShot>) -> Set<String> = { emptySet() },
     /** Backfill a bound local's telemetry from a pull (no-op when it has a curve). */
     private val onBackfillTelemetry: (localId: String, samples: List<coffee.crema.ui.TelemetrySample>, durationMs: Long) -> Unit = { _, _, _ -> },
     /** Fill a bound local's blank barista from a pull (final review 06 #1). */
@@ -125,11 +130,19 @@ class VisualizerSync(
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     /** Core `upload_refused_no_samples`: a machine shot with no telemetry doesn't go. */
     private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?) -> Boolean = ::uploadRefusedNoSamples,
+    /** Whether the stored shots are in the history; a list taken before then is empty. */
+    private val shotsLoaded: () -> Boolean = { true },
+    /** Core `callback_outcome`: what a redirect means for the stored handshake. */
+    private val callbackRule: (expectedState: String?, verifier: String?, code: String?, returnedState: String?, error: String?) -> CallbackOutcome =
+        ::callbackOutcome,
 ) : UploadDestination {
 
     internal companion object {
         /** Backstop on the pull walk — mirrors the web's maxPages default. */
         const val MAX_PULL_PAGES = 200
+
+        /** How long a run waits for the rows before it skips. */
+        const val ROWS_WAIT_MS = 30_000L
 
         /** The app-start Premium re-probe runs at most this often (web `PREMIUM_REFRESH_INTERVAL_MS`). */
         const val PREMIUM_REFRESH_INTERVAL_MS = 24L * 60 * 60 * 1000
@@ -186,6 +199,12 @@ class VisualizerSync(
     private var persisted = VisualizerState()
     private val persistMutex = Mutex()
 
+    /** Holds everything that touches [persisted] until [load] has read the file. */
+    private val ownState = OwnStateGate("Visualizer", notify)
+
+    /** The rows' late arrival has been reported (see [rowsReady]). */
+    private val rowsLateTold = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** Shot ids with an upload running — checked and claimed atomically. */
     private val inFlight = HashSet<String>()
 
@@ -207,7 +226,14 @@ class VisualizerSync(
     override fun isUploaded(shot: StoredShot): Boolean = shot.visualizerId != null
     override fun viewUrl(shot: StoredShot): String? = shot.visualizerId?.let { "https://visualizer.coffee/shots/$it" }
     /** Brew Log rows (issue #10) are local-only — never in the Visualizer backlog. */
-    override fun inBacklog(shot: StoredShot): Boolean = shot.visualizerId == null && !shot.isBrewLog
+    override fun inBacklog(shot: StoredShot): Boolean = shot.visualizerId == null && !shot.isBrewLog && !noTelemetry(shot)
+
+    /** A machine shot no upload can take: no telemetry, now the series have settled. */
+    fun noTelemetry(shot: StoredShot): Boolean =
+        shot.visualizerId == null && shot.samples.isEmpty() && shotsSettled && uploadRefused(shot.isBrewLog, 0u)
+
+    /** The series load has ended; until then a row's curve may be on its way. */
+    val shotsSettled: Boolean get() = shotsLoaded()
     override fun canUpload(shot: StoredShot): Boolean = !shot.isBrewLog
     override fun pushShot(shot: StoredShot, replace: Boolean): Boolean = uploadShot(shot, silent = false)
     override suspend fun setAutoUploadNow(enabled: Boolean) {
@@ -226,23 +252,25 @@ class VisualizerSync(
     }
 
     /**
-     * Hydrate from disk at startup (called from the VM's init coroutine). A
-     * barista edit made before this finished keeps its pending mark, merged
-     * with the stored ones and stored here (round-3 clean check C3 #9).
+     * Hydrate from disk at startup (its own coroutine, so nothing in the row
+     * load can strand a sign-in). A barista edit made before this finished
+     * keeps its pending mark, merged with the stored ones and stored here
+     * (round-3 clean check C3 #9).
      */
     suspend fun load() {
-        val unstored = persistMutex.withLock {
-            persisted = store.load()
-            loaded = true
-            baristaPending += persisted.baristaPending
-            baristaPending.any { it !in persisted.baristaPending }
+        val unstored = try {
+            persistMutex.withLock {
+                persisted = store.load()
+                ownState.opened()
+                baristaPending += persisted.baristaPending
+                baristaPending.any { it !in persisted.baristaPending }
+            }
+        } finally {
+            ownState.failed()
         }
         fold()
         if (unstored) storeBaristaPending()
     }
-
-    /** [load] has read the file: until then a store would overwrite it with defaults. */
-    @Volatile private var loaded = false
 
     private fun fold() {
         val p = persisted
@@ -269,6 +297,7 @@ class VisualizerSync(
 
     /** Apply + store [mutate]; false when the write failed (the in-memory state still applies). */
     private suspend fun persist(mutate: (VisualizerState) -> VisualizerState): Boolean {
+        if (!ownState.await()) return false
         val ok = persistMutex.withLock {
             // New tokens replace a sign-in the keystore couldn't open at start.
             persisted = mutate(persisted).let { if (it.tokens != null && it.unopened != null) it.copy(unopened = null) else it }
@@ -313,6 +342,7 @@ class VisualizerSync(
         val verifier = generateCodeVerifier()
         val csrf = randomState()
         scope.launch {
+            if (!ownState.await()) return@launch
             persist { it.copy(pendingVerifier = verifier, pendingState = csrf) }
             openUrl(buildAuthorizeUrl(clientId, csrf, codeChallengeFromVerifier(verifier)))
         }
@@ -325,20 +355,20 @@ class VisualizerSync(
      */
     fun handleCallback(code: String?, returnedState: String?, error: String?) {
         scope.launch {
+            if (!ownState.await()) return@launch
             val verifier = persisted.pendingVerifier
-            val expected = persisted.pendingState
-            val outcome = callbackOutcome(expected, verifier, code, returnedState, error)
-            // A callback that doesn't carry the pending handshake's state is not
-            // ours (any app or page can fire `crema://visualizer/...`): ignore it
-            // and keep the handshake, so it can't abort a sign-in in progress.
+            val outcome = callbackRule(persisted.pendingState, verifier, code, returnedState, error)
+            // Any app or page can fire `crema://visualizer/...`, and a cold
+            // start or a recreated activity can replay one: with no handshake
+            // of ours it writes nothing, and one in progress survives it.
             if (outcome == CallbackOutcome.NotOurs) return@launch
             // Single-use — clear the handshake whatever happens next.
             persist { it.copy(pendingVerifier = null, pendingState = null) }
             when (outcome) {
                 CallbackOutcome.NotOurs -> Unit
                 CallbackOutcome.Cancelled -> notify("Visualizer sign-in was cancelled")
+                is CallbackOutcome.Refused -> notify("Visualizer sign-in failed: ${outcome.error}")
                 CallbackOutcome.NoCode -> notify("Visualizer sign-in failed — no code returned")
-                CallbackOutcome.Expired -> notify("Visualizer sign-in expired — try again")
                 CallbackOutcome.Exchange -> {
                     code ?: return@launch
                     verifier ?: return@launch
@@ -350,7 +380,12 @@ class VisualizerSync(
                             persist { it.copy(account = account) }
                             refreshPremium()
                             notify("Signed in to Visualizer${account?.let { a -> " as ${a.name}" }.orEmpty()}")
-                            onSignedIn()
+                            // On a cold start the rows can still be loading, and the
+                            // catch-up offer counts them.
+                            scope.launch {
+                                rowsReady()
+                                onSignedIn()
+                            }
                         }
                         .onFailure { notify("Visualizer sign-in failed: ${it.message}") }
                     _state.update { it.copy(busy = false) }
@@ -363,6 +398,7 @@ class VisualizerSync(
      *  skips the snackbar (Erase all data reports once for everything). */
     fun signOut(quiet: Boolean = false) {
         scope.launch {
+            if (!ownState.await()) return@launch
             // Forget first, then revoke from the in-memory copy: the revoke can
             // take up to 20 s, and a kill in that window must not leave the
             // token on disk (final review 04 P3-3).
@@ -382,11 +418,15 @@ class VisualizerSync(
      * (final review 04 P3-3). The revoke runs on [scope] after the wipe.
      */
     suspend fun eraseAll() {
+        // The token to revoke is in the file. The wait is bounded, but a load
+        // that never ends still holds the lock below, so the erase waits for it.
+        ownState.settle()
         val token = persistMutex.withLock {
             val t = persisted.tokens?.accessToken
             persisted = VisualizerState()
             baristaPending.clear()
             store.erase()
+            ownState.opened()
             t
         }
         fold()
@@ -420,11 +460,14 @@ class VisualizerSync(
      * conclusive probe is over 24 h old (or never happened); otherwise nothing.
      */
     fun refreshPremiumIfStale() {
-        val p = persisted
-        if (p.tokens == null) return
-        val checked = p.premiumCheckedAt
-        if (checked != null && now() - checked < PREMIUM_REFRESH_INTERVAL_MS) return
-        scope.launch { refreshPremium() }
+        scope.launch {
+            if (!ownState.await()) return@launch
+            val p = persisted
+            if (p.tokens == null) return@launch
+            val checked = p.premiumCheckedAt
+            if (checked != null && now() - checked < PREMIUM_REFRESH_INTERVAL_MS) return@launch
+            refreshPremium()
+        }
     }
 
     /** The Sharing card's "Test" — a `/me` round-trip plus the Premium probe, with a visible verdict. */
@@ -679,6 +722,7 @@ class VisualizerSync(
         if (!drainMutex.tryLock()) return DrainResult(stopped = "A Visualizer upload pass is already running")
         try {
             if (!enabled) return DrainResult()
+            logNoTelemetry(shots)
             val unsynced = unsent(shots)
             if (unsynced.isEmpty()) return DrainResult()
             _state.update { it.copy(busy = true) }
@@ -742,8 +786,11 @@ class VisualizerSync(
 
     /** Drain soon (a trigger: start, network back, the tick, a sync tail). */
     fun drainSoon() {
-        if (persisted.retryQueue.isEmpty() && persisted.shotTombstones.none { it.deleteRemote }) return
-        scope.launch { drainRetryQueue() }
+        scope.launch {
+            if (!ownState.await()) return@launch
+            if (persisted.retryQueue.isEmpty() && persisted.shotTombstones.none { it.deleteRemote }) return@launch
+            drainRetryQueue()
+        }
     }
 
     /** Run the drain when the earliest entry is due, and never sooner than
@@ -774,6 +821,10 @@ class VisualizerSync(
      * returns the number uploaded.
      */
     internal suspend fun drainRetryQueue(): Int {
+        // Own state loads apart from the rows, and a shot that isn't in the
+        // history leaves the queue: not before the rows are there. A later
+        // trigger tries again.
+        if (!rowsReady()) return 0
         if (!retryMutex.tryLock()) return 0
         var uploaded = 0
         try {
@@ -965,7 +1016,7 @@ class VisualizerSync(
      * made before it.
      */
     private suspend fun storeBaristaPending() {
-        if (!loaded) return
+        if (!ownState.settled) return
         persist { it.copy(baristaPending = baristaPending.toSet()) }
     }
 
@@ -1050,10 +1101,11 @@ class VisualizerSync(
     /**
      * Reconcile pulled wires against the local history via the CORE planner
      * (`reconcile_shots` over the FFI — the identical algorithm the web runs)
-     * and apply the actions through the VM callbacks. Returns pulled-count.
+     * and apply the actions through the VM callbacks. A row a full history
+     * refuses is counted and the rest of the plan still applies.
      */
-    internal suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>, profilesById: Map<String, JsonObject>): Int {
-        if (wires.isEmpty()) return 0
+    internal suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>, profilesById: Map<String, JsonObject>): PullApplied {
+        if (wires.isEmpty()) return PullApplied()
         // Tombstones ride along (web F18a): a shot deleted here whose remote copy
         // is still on Visualizer must match that copy (an `update`, skipped
         // below), not look new and be pulled back in. The planner never binds a
@@ -1098,8 +1150,7 @@ class VisualizerSync(
             json.parseToJsonElement(
                 coffee.crema.core.reconcileShots(json.encodeToString(JsonObject.serializer(), payload)),
             ) as kotlinx.serialization.json.JsonArray
-        }.getOrElse { return 0 }
-        var pulled = 0
+        }.getOrElse { return PullApplied() }
         val stubs = mutableListOf<StoredShot>()
         for (el in actions) {
             val action = el as? JsonObject ?: continue
@@ -1111,10 +1162,7 @@ class VisualizerSync(
                     storedShotFromWire(remote, vid?.let { samplesById[it] }, json)?.let { stub ->
                         // Attach the recipe fetched at pull time (#12) so the shot is
                         // self-contained; absent for profile-less remotes.
-                        val withProfile = vid?.let { profilesById[it] }?.let { stub.copy(profile = it) } ?: stub
-                        stubs += withProfile
-                        pulled++
-                        logSync("pull", stub.id, stub.profileName ?: "Shot")
+                        stubs += vid?.let { profilesById[it] }?.let { stub.copy(profile = it) } ?: stub
                     }
                 }
                 "bind" -> {
@@ -1141,8 +1189,12 @@ class VisualizerSync(
                 }
             }
         }
-        if (stubs.isNotEmpty()) onPulledShots(stubs)
-        return pulled
+        val refused = if (stubs.isEmpty()) emptySet() else onPulledShots(stubs)
+        val added = stubs.filter { it.id !in refused }
+        added.forEach { logSync("pull", it.id, it.profileName ?: "Shot") }
+        // One line for the run: a large pull would push out the whole log.
+        if (refused.isNotEmpty()) logSync("skip", "", "Pull", historyFullNotice(refused.size))
+        return PullApplied(added.size, refused.size)
     }
 
     // ── Shot deletion (web history tombstones + upload-queue delete) ───────
@@ -1315,6 +1367,7 @@ class VisualizerSync(
             notify("Sign in to Visualizer first (Settings → Sharing)")
             return
         }
+        if (!shotsReady()) return
         val direction = persisted.prefs.shotsDirection
         val beansOn = includeBeans &&
             (persisted.prefs.beansDirection != "off" || persisted.prefs.roastersDirection != "off")
@@ -1345,12 +1398,15 @@ class VisualizerSync(
                     }
             }
             var pulled = 0
+            var refused = 0
             var pushed = 0
             if (directionPulls(direction)) {
                 runCatchingCancellable {
                     val since = persisted.shotPullCursor ?: 0L
                     val (wires, samples, profiles) = pullAllShotsSince(since)
-                    pulled = reconcileAndApply(shots, wires, samples, profiles)
+                    val applied = reconcileAndApply(shots, wires, samples, profiles)
+                    pulled = applied.pulled
+                    refused = applied.refused
                     persist { it.copy(shotPullCursor = System.currentTimeMillis()) }
                 }.onFailure { e ->
                     failed = true
@@ -1359,7 +1415,8 @@ class VisualizerSync(
             }
             var stop: PassStop? = null
             if (directionPushes(direction)) {
-                val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
+                logNoTelemetry(shots)
+                val unsynced = unsent(shots)
                 val r = runUploadPass(
                     unsynced,
                     uploadPolicy,
@@ -1382,11 +1439,41 @@ class VisualizerSync(
                 buildString {
                     append("Visualizer sync: ")
                     append(parts.joinToString(" · "))
+                    if (refused > 0) append(" · ${historyFullNotice(refused)}")
                     if (stop != null) append(" · ${stop.notice}")
                     else if (failed) append(" · some steps failed (see log)")
                 },
             )
         }
+    }
+
+    /**
+     * Wait for the rows and their series, up to [ROWS_WAIT_MS]. False when they
+     * didn't arrive: the caller skips this run, spending nothing, and the user
+     * is told once, not once per trigger.
+     */
+    private suspend fun rowsReady(): Boolean {
+        if (withTimeoutOrNull(ROWS_WAIT_MS) { seriesReady() } != null) return true
+        if (rowsLateTold.compareAndSet(false, true)) {
+            notify("Shot data hasn’t loaded, so Visualizer uploads are waiting. They’ll retry on their own.")
+        }
+        return false
+    }
+
+    /** One line for the pass: these would otherwise fill the log on every sync. */
+    private suspend fun logNoTelemetry(shots: List<StoredShot>) {
+        val n = shots.count(::noTelemetry)
+        if (n > 0) logSync("skip", "", "Upload", "$n shot${if (n == 1) " has" else "s have"} no telemetry to upload")
+    }
+
+    /**
+     * The sign-in can load before the rows do, and these actions work from the
+     * list the UI passes in: an empty one would pull every remote shot in as new.
+     */
+    private fun shotsReady(): Boolean {
+        if (shotsLoaded()) return true
+        notify("Shot data is still loading — try again in a moment")
+        return false
     }
 
     private suspend fun logBeanFailure(error: String?) {
@@ -1400,6 +1487,7 @@ class VisualizerSync(
      * reconcile planner de-duplicates against existing locals.
      */
     fun resyncAllShots(shots: List<StoredShot>) {
+        if (!shotsReady()) return
         scope.launch {
             persist { it.copy(shotPullCursor = null) }
             // Shots only — the web's "Re-sync shots" never touches beans.
@@ -1413,7 +1501,9 @@ class VisualizerSync(
             notify("Sign in to Visualizer first (Settings → Sharing)")
             return
         }
-        val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
+        if (!shotsReady()) return
+        scope.launch { logNoTelemetry(shots) }
+        val unsynced = unsent(shots)
         if (unsynced.isEmpty()) {
             notify("Everything is already on Visualizer")
             return
@@ -1472,6 +1562,9 @@ internal fun shotPatchInputs(
     barista = if (sendBarista) baristaOf(shot) else null,
 )
 
+/** What a pull left in the history: rows added, and new rows a full one refused. */
+internal data class PullApplied(val pulled: Int = 0, val refused: Int = 0)
+
 /** A shot's barista as the PATCH sends it: trimmed, "" when unset or cleared. */
 internal fun baristaOf(shot: StoredShot): String = shot.barista?.trim().orEmpty()
 
@@ -1487,27 +1580,4 @@ internal fun baristaToFill(local: StoredShot?, remoteBarista: String?, editedLoc
     val pulled = remoteBarista?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     if (local == null || editedLocally || !local.barista.isNullOrBlank()) return null
     return pulled
-}
-
-/** What a `crema://visualizer/callback` intent means for the pending handshake. */
-internal enum class CallbackOutcome { NotOurs, Cancelled, NoCode, Expired, Exchange }
-
-/**
- * Classify a callback (review 05 note: stray intents aborted sign-in). While a
- * handshake is pending, only a callback echoing its exact `state` counts; any
- * other is [CallbackOutcome.NotOurs] and leaves the handshake alone. With no
- * pending handshake there is nothing to complete ([CallbackOutcome.Expired]).
- */
-internal fun callbackOutcome(
-    expectedState: String?,
-    verifier: String?,
-    code: String?,
-    returnedState: String?,
-    error: String?,
-): CallbackOutcome = when {
-    expectedState != null && returnedState != expectedState -> CallbackOutcome.NotOurs
-    expectedState == null || verifier == null -> CallbackOutcome.Expired
-    error != null -> CallbackOutcome.Cancelled
-    code == null -> CallbackOutcome.NoCode
-    else -> CallbackOutcome.Exchange
 }

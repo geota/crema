@@ -60,6 +60,7 @@ import {
 } from '../effect/schema/visualizer.ts';
 import { getBeanStore } from '#lib/bean/store.svelte.js';
 import { readSyncSettings } from '#lib/bean/visualizer-sync.js';
+import { historyFullNotice } from '#lib/history/brew-date.js';
 import { effectiveGrindSetting } from '#lib/history/index.js';
 import { exportStoredShotAsV2Json } from '#lib/history/v2-export.js';
 import type { ShotPatchInputs, TimedSample } from '#lib/core/index.js';
@@ -432,6 +433,16 @@ export interface PullOptions {
 	onProgress?: (p: PullProgress) => void;
 }
 
+/** What a pull left in the history. */
+export interface PullApplied {
+	/** Rows the walk brought back. */
+	pulled: number;
+	/** More pages remained at the page cap. */
+	truncated: boolean;
+	/** New rows a full history refused. They aren't fetched again by this loop. */
+	refused: number;
+}
+
 export interface PullResult {
 	shots: WireShot[];
 	/** Per-shot telemetry keyed by Visualizer id — applied on the `add` step. */
@@ -518,12 +529,12 @@ export class ShotSync extends Context.Service<
 			remote: WireShot[],
 			samplesById?: ReadonlyMap<string, TimedSample[]>,
 			profilesById?: ReadonlyMap<string, unknown>
-		) => Effect.Effect<void>;
+		) => Effect.Effect<number>;
 		readonly pullAndReconcileShots: (
 			history: HistoryStore,
 			sinceMs: number,
 			opts?: PullOptions
-		) => Effect.Effect<{ pulled: number; truncated: boolean }, VisualizerCallError>;
+		) => Effect.Effect<PullApplied, VisualizerCallError>;
 		readonly uploadUnsyncedShots: (history: HistoryStore) => Effect.Effect<UnsyncedUploadResult>;
 	}
 >()('crema/ShotSync') {}
@@ -808,15 +819,17 @@ export const ShotSyncLive = Layer.effect(
 		 * Apply a {@link reconcileShots} plan against `history`. Logs each action
 		 * via {@link appendSyncLog}; does not throw. Pure planner output translated
 		 * to store mutations — wrapped in `Effect.sync` (calls wasm + the rune
-		 * store synchronously, same as the old module).
+		 * store synchronously, same as the old module). Answers how many new rows
+		 * a full history refused; the rest of the plan still applies.
 		 */
 		const applyShotReconciliation = (
 			history: HistoryStore,
 			remote: WireShot[],
 			samplesById?: ReadonlyMap<string, TimedSample[]>,
 			profilesById?: ReadonlyMap<string, unknown>
-		): Effect.Effect<void> =>
+		): Effect.Effect<number> =>
 			Effect.sync(() => {
+				let refused = 0;
 				// Tombstones included: a shot deleted here whose remote DELETE
 				// hasn't landed yet is still on Visualizer, and without its
 				// tombstone the planner saw it as new and pulled it back. The
@@ -843,7 +856,10 @@ export const ShotSyncLive = Layer.effect(
 							// Attach the recipe fetched at pull time so the shot is
 							// self-contained (#12); absent for profile-less remotes.
 							const profile = profilesById?.get(action.remote.id);
-							history.insertPulled(profile != null ? { ...stored, profile } : stored);
+							if (!history.insertPulled(profile != null ? { ...stored, profile } : stored)) {
+								refused += 1;
+								continue;
+							}
 						}
 						appendSyncLog({
 							direction: 'pull',
@@ -865,10 +881,13 @@ export const ShotSyncLive = Layer.effect(
 					} else if (action.kind === 'update') {
 						// Deleted here; the pending DELETE removes the remote too.
 						if (tombstoned(action.localId)) continue;
-						// Wire `tag_list` defaults to `[]` server-side, so this patch is
-						// idempotent — re-applying an empty list to a local with none is a
-						// no-op write.
-						history.setTags(action.localId, action.remote.tag_list ?? []);
+						// `tag_list` is premium-only and `[]` otherwise, so it says nothing
+						// about what this shot should carry (#326): remote tags only fill
+						// a row with none, and never clear or replace local ones.
+						const remoteTags = action.remote.tag_list ?? [];
+						if (remoteTags.length > 0 && !history.get(action.localId)?.tags?.length) {
+							history.setTags(action.localId, remoteTags);
+						}
 						// A shot pulled before the barista was read gets it now.
 						fillBarista(action.localId, action.remote);
 						// Heal pre-telemetry-import stubs: if this bound row has no curve
@@ -879,6 +898,7 @@ export const ShotSyncLive = Layer.effect(
 						}
 					}
 				}
+				return refused;
 			});
 
 		/**
@@ -895,9 +915,22 @@ export const ShotSyncLive = Layer.effect(
 				sinceMs,
 				opts
 			);
-			if (shots.length > 0)
-				yield* applyShotReconciliation(history, shots, samplesById, profilesById);
-			return { pulled: shots.length, truncated };
+			const refused =
+				shots.length > 0
+					? yield* applyShotReconciliation(history, shots, samplesById, profilesById)
+					: 0;
+			if (refused > 0) {
+				// One line for the run: a large pull would push out the whole log.
+				appendSyncLog({
+					direction: 'skip',
+					entity: 'shot',
+					id: '',
+					name: 'pull',
+					at: Date.now(),
+					error: historyFullNotice(refused, history.capacity)
+				});
+			}
+			return { pulled: shots.length, truncated, refused };
 		});
 
 		/**
@@ -914,7 +947,20 @@ export const ShotSyncLive = Layer.effect(
 			// Brew Log rows (`isBrewLog`) never sync: Visualizer is a
 			// DE1-telemetry service and brews carry none (issue #10 — the same
 			// local-only posture as `nextPlan`).
-			const list = history.all.filter((s) => !s.visualizerId && !isBrewLog(s));
+			const backlog = history.all.filter((s) => !s.visualizerId && !isBrewLog(s));
+			const list = backlog.filter((s) => !refusedNoSamples(s));
+			if (list.length < backlog.length) {
+				// One line for the pass: these would otherwise fill the log on every sync.
+				const n = backlog.length - list.length;
+				appendSyncLog({
+					direction: 'skip',
+					entity: 'shot',
+					id: '',
+					name: 'upload',
+					at: Date.now(),
+					error: `${n} shot${n === 1 ? ' has' : 's have'} no telemetry to upload.`
+				});
+			}
 
 			/**
 			 * Record a non-success outcome: enqueue a recoverable error for a timed
@@ -1011,6 +1057,23 @@ export const ShotSyncLive = Layer.effect(
 									if (abort) stopped = stopFor(e);
 									return abort;
 								})
+					),
+					// A throw while exporting one shot is a defect, which `Effect.catch`
+					// lets through. Skip that shot, or every pass ends at it and the
+					// shots after it never upload. Not queued: it would only throw again.
+					Effect.catchDefect((cause) =>
+						Effect.sync(() => {
+							console.warn('[shot sync] skipping a shot that could not be exported', shot.id, cause);
+							appendSyncLog({
+								direction: 'skip',
+								entity: 'shot',
+								id: shot.id,
+								name: shot.profileName ?? 'Shot',
+								at: Date.now(),
+								error: 'This shot could not be read for upload.'
+							});
+							return false;
+						})
 					)
 				);
 

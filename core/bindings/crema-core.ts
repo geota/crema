@@ -2329,6 +2329,15 @@ export type Event =
 	| { type: "DecodeError", content: {
 	/** Human-readable description of the failure. */
 	message: string;
+}}
+	/**
+	 * The DE1 reported a substate byte this build doesn't know. The report
+	 * was still applied, with [`SubState::Unknown`]; this is a diagnostic,
+	 * once per byte value.
+	 */
+	| { type: "UnknownMachineByte", content: {
+	/** The raw byte. */
+	byte: number;
 }};
 
 /**
@@ -5573,6 +5582,11 @@ export type StartEnd =
 	/** Where the machine went. */
 	state: MachineState;
 }}
+	/**
+	 * The pre-shot flush did not begin within
+	 * [`PRESHOT_FLUSH_ENTRY_TIMEOUT`].
+	 */
+	| { kind: "FlushNotEntered", details?: undefined }
 	/** The machine did not report Espresso within [`ESPRESSO_ENTRY_TIMEOUT`]. */
 	| { kind: "NotEntered", details?: undefined }
 	/** A user's request, a link drop or a reset cancelled it. */
@@ -5682,6 +5696,13 @@ export enum SubState {
 	ErrorBootFill = "ErrorBootFill",
 	/** Front power switch is off. */
 	ErrorNoAc = "ErrorNoAc",
+	/**
+	 * A byte this build doesn't know, from [`StateInfo::parse`]. The
+	 * discriminant is outside the firmware's ranges and is never a decoded
+	 * value: [`TryFrom`] still rejects unknown bytes for strict callers. It
+	 * sits below `200` so it never reads as an error.
+	 */
+	Unknown = "Unknown",
 }
 
 /**

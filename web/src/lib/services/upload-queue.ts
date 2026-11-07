@@ -33,7 +33,7 @@
 import { Context, Effect, Layer, Ref, Schedule, Scope } from 'effect';
 import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
-import type { ResponseDecodeError } from '../effect/errors.ts';
+import { ResponseDecodeError } from '../effect/errors.ts';
 import {
 	describeVisualizerError,
 	queueDecision,
@@ -138,7 +138,17 @@ export const UploadQueueLive = Layer.effect(
 			const ready = readQueue().entries.filter((e) => e.nextAttemptAt <= now);
 			for (const entry of ready) {
 				out.processed += 1;
-				const result = yield* Effect.result(runEntry(entry));
+				// A throw is a defect, which `Effect.result` lets through: one row
+				// that can't be exported must not stop the rest of the queue. It
+				// goes through the decision below as a terminal error, so the entry
+				// is dropped at once; a row that throws won't stop throwing.
+				const result = yield* Effect.result(
+					runEntry(entry).pipe(
+						Effect.catchDefect((cause) =>
+							Effect.fail(new ResponseDecodeError({ url: `${entry.entity}:${entry.id}`, cause }))
+						)
+					)
+				);
 				if (result._tag === 'Success') {
 					yield* dequeue(entry.entity, entry.id, entry.op);
 					out.succeeded += 1;

@@ -6,6 +6,7 @@ import coffee.crema.history.StoredShot
 import coffee.crema.history.BREW_LOG_UPLOAD_SKIP
 import coffee.crema.history.isBrewLog
 import coffee.crema.history.pulledFromVisualizer
+import coffee.crema.sync.OwnStateGate
 import coffee.crema.ui.DrainResult
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.UploadDestination
@@ -137,6 +138,9 @@ class DecentSync(
     private var persisted = DecentState()
     private val persistMutex = Mutex()
 
+    /** Holds everything that touches [persisted] until [load] has read the file. */
+    private val ownState = OwnStateGate("Decent", notify)
+
     /** Shot ids with an upload running — checked and claimed atomically. */
     private val inFlight = HashSet<String>()
 
@@ -160,9 +164,15 @@ class DecentSync(
 
     override var onUploadOutcome: ((shotId: String, outcome: UploadOutcome) -> Unit)? = null
 
-    /** Hydrate from disk at startup (called from the VM's init coroutine). */
+    /** Hydrate from disk at startup (its own coroutine, so nothing in the row
+     *  load can leave the account unread). */
     suspend fun load() {
-        persisted = store.load()
+        try {
+            persisted = store.load()
+            ownState.opened()
+        } finally {
+            ownState.failed()
+        }
         fold()
     }
 
@@ -184,6 +194,7 @@ class DecentSync(
 
     /** Apply + store [mutate]; false when the write failed (the in-memory state still applies). */
     private suspend fun persist(mutate: (DecentState) -> DecentState): Boolean {
+        if (!ownState.await()) return false
         val ok = persistMutex.withLock {
             persisted = mutate(persisted)
             store.save(persisted)
@@ -259,9 +270,11 @@ class DecentSync(
      */
     suspend fun eraseAll() {
         forgetNotOnAccount()
+        ownState.settle()
         persistMutex.withLock {
             persisted = DecentState()
             store.erase()
+            ownState.opened()
         }
         fold()
         _state.update { it.copy(signInError = null) }

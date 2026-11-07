@@ -35,6 +35,7 @@ import { TokenVault } from '../services/token-vault.ts';
 import {
 	ShotSync,
 	type EditPatchOptions,
+	type PullApplied,
 	type PullOptions,
 	type ShotPatch,
 	type UnsyncedUploadResult
@@ -107,7 +108,7 @@ export interface CremaServices {
 			history: HistoryStore,
 			sinceMs: number,
 			opts?: PullOptions
-		): Promise<{ pulled: number; truncated: boolean }>;
+		): Promise<PullApplied>;
 		/**
 		 * Upload every local shot lacking a `visualizerId`. Single-flight: a
 		 * call while one is running (Settings catch-up, History "Upload N" and

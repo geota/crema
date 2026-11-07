@@ -37,7 +37,6 @@ import coffee.crema.core.debitTaken
 import coffee.crema.core.resettleRemaining
 import coffee.crema.core.resettledBagDebit
 import coffee.crema.core.ShotCaptureContext
-import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportProfileFile
 import coffee.crema.core.importProfileFile
 import coffee.crema.core.exportBeanconquerorMainJson
@@ -53,6 +52,7 @@ import coffee.crema.history.brewDateError
 import coffee.crema.history.HistoryMerge
 import coffee.crema.history.historyDroppedNotice
 import coffee.crema.history.historyWith
+import coffee.crema.history.mergePulled
 import coffee.crema.history.mergeHistory
 import coffee.crema.history.isManualLog
 import coffee.crema.history.newestFirst
@@ -308,6 +308,7 @@ class LibraryController(
     suspend fun loadHistory() {
         val rows = historyStore.loadRows()
         updateUi { it.copy(history = rows) }
+        historyStore.markLive(rows.map { it.id })
         val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
         if (missing.isEmpty()) {
             seriesLoaded.complete(Unit)
@@ -998,7 +999,7 @@ class LibraryController(
 
     // ── Full-app backup & restore (crema-backup/v1) ──────────────────────────
     // One portable bundle: custom profiles + beans/roasters + shot history + the
-    // portable settings subset, (de)serialised by the core (exportBackupJsonl /
+    // portable settings subset, (de)serialised by the core (exportBackupBundle /
     // the line-tagged JSONL). OAuth tokens + per-device BLE/proxy state are
     // stripped on export and preserved on import — a backup moves between devices
     // without dragging this device's bindings along.
@@ -1034,7 +1035,12 @@ class LibraryController(
      *  thread. */
     private fun backupBundleJson(snap: BackupSnapshot): String? = runCatching {
         backupBundleJsonl(snap, json, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
-    }.getOrElse { appendLog("Backup failed: ${it.message}"); notify("Backup failed"); null }
+    }.map { built ->
+        built.omitted.forEach { appendLog("Backup left out ${it.kind} ${omittedRowId(it, snap) ?: "at ${it.index}"}") }
+        built.degraded.forEach { appendLog("Backup left out the profile of shot $it") }
+        backupGapsNotice(built)?.let { notify(it) }
+        built.jsonl
+    }.getOrElse { appendLog("Backup failed: ${it.message}"); notify(BACKUP_FAILED); null }
 
     /**
      * Wrap [backupBundleJson]'s JSONL into a `.crema.zip`: `backup.jsonl` plus, for
@@ -1075,7 +1081,7 @@ class LibraryController(
                                 .getOrNull()?.let { bean.id to it }
                         },
                 )
-            }.getOrElse { appendLog("Backup zip failed: ${it.message}"); notify("Backup failed"); null }
+            }.getOrElse { appendLog("Backup zip failed: ${it.message}"); notify(BACKUP_FAILED); null }
         }
 
     /** A suggested filename for the SAF create-document picker. */
@@ -1116,6 +1122,9 @@ class LibraryController(
     /** Parse + apply a `crema-backup` bundle's raw text — shared by the SAF restore
      *  ([restoreBackup]) and the Google Drive restore (the downloaded `.crema`). */
     fun restoreBackupFromText(text: String, mode: MainViewModel.RestoreMode) {
+        // Series a restore removes stay on disk until its own marker can delete
+        // them (restore-safety PR7): no save in this window deletes one.
+        historyStore.pauseDeletes()
         scope.launch {
             // The core parses the bundle (`parseBackup` → importBackupJsonl, the
             // parser web uses); re-bind its result to the names the apply block uses.
@@ -1218,7 +1227,7 @@ class LibraryController(
                     historyDroppedNotice(merged.dropped) +
                     (heldSharingNotice(heldSharing)?.let { ". $it" } ?: ""),
             )
-        }
+        }.invokeOnCompletion { historyStore.resumeDeletes() }
     }
 
     /** Remove a stored shot from the local history. Persisted. */
@@ -1283,20 +1292,24 @@ class LibraryController(
 
     // ── Visualizer sync hooks (pull/backfill/synced stamps) ──────────────────
 
-    /** Insert pulled Visualizer stubs into the history (dedup by id, newest first). Persisted. */
-    fun insertPulledShots(stubs: List<StoredShot>) {
-        if (stubs.isEmpty()) return
+    /**
+     * Insert pulled Visualizer stubs into the history (dedup by id, newest
+     * first) and persist. A pull never removes a row ([mergePulled]), so this
+     * answers the ids a full history refused.
+     */
+    fun insertPulledShots(stubs: List<StoredShot>): Set<String> {
+        if (stubs.isEmpty()) return emptySet()
+        var kept = emptySet<String>()
+        var present = emptySet<String>()
         updateUi { st ->
-            val existing = st.history.map { it.id }.toHashSet()
-            val fresh = stubs.filter { it.id !in existing }
-            if (fresh.isEmpty()) {
-                st
-            } else {
-                st.copy(history = historyWith(fresh, st.history))
-            }
+            val merge = mergePulled(stubs, st.history)
+            kept = merge.kept.mapTo(HashSet()) { it.id }
+            present = st.history.mapTo(HashSet()) { it.id }
+            if (merge.kept.isEmpty()) st else st.copy(history = merge.rows)
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
+        return stubs.mapTo(HashSet()) { it.id } - kept - present
     }
 
     /** Backfill a curve-less local shot's telemetry from a Visualizer pull. Persisted. */

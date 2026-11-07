@@ -33,7 +33,9 @@ beforeAll(async () => {
 const h = vi.hoisted(() => ({
 	reconcile: [] as ReconcileAction[],
 	enqueueEntry: vi.fn(),
-	appendSyncLog: vi.fn()
+	appendSyncLog: vi.fn(),
+	/** The shot id whose export throws, as `profile: "junk"` does. */
+	throwsOn: null as string | null
 }));
 
 vi.mock('#lib/settings/index.js', () => ({
@@ -42,7 +44,10 @@ vi.mock('#lib/settings/index.js', () => ({
 	})
 }));
 vi.mock('#lib/history/v2-export.js', () => ({
-	exportStoredShotAsV2Json: () => JSON.stringify({ profile: { title: 'P' }, metadata: {} })
+	exportStoredShotAsV2Json: (shot: { id: string }) => {
+		if (shot.id === h.throwsOn) throw new TypeError('junk profile');
+		return JSON.stringify({ profile: { title: 'P' }, metadata: {} });
+	}
 }));
 vi.mock('#lib/bean/store.svelte.js', () => ({ getBeanStore: () => ({ getBean: () => null }) }));
 vi.mock('#lib/bean/visualizer-sync.js', () => ({ roastLevelToWire: () => null }));
@@ -157,6 +162,7 @@ function run(history: HistoryStore) {
 }
 
 beforeEach(() => {
+	h.throwsOn = null;
 	h.reconcile = [];
 	h.enqueueEntry.mockClear();
 	h.appendSyncLog.mockClear();
@@ -276,5 +282,28 @@ describe('ShotSync.uploadUnsyncedShots — free-plan daily quota (visualizer 3e9
 		const [entry] = h.enqueueEntry.mock.calls[0];
 		expect(entry).toMatchObject({ entity: 'shot', id: 's1', op: 'create' });
 		expect(entry.delayMs).toBeGreaterThanOrEqual(60_000);
+	});
+});
+
+describe('uploadUnsyncedShots — a shot that throws (#329)', () => {
+	it('skips that shot and uploads the rest of the pass', async () => {
+		h.throwsOn = 'junk';
+		const history = mkHistory([shot({ id: 'junk' }), shot({ id: 'after', completedAt: 2_000_000 })]);
+		const { layer, calls } = mkHttp((req) =>
+			req.method === 'POST' && req.url.endsWith('/shots/upload') ? { id: 'viz-2' } : {}
+		);
+		const program = ShotSync.pipe(Effect.flatMap((s) => s.uploadUnsyncedShots(history)));
+		const exit = await Effect.runPromiseExit(
+			Effect.provide(program, Layer.provide(ShotSyncLive, Layer.merge(layer, vault)))
+		);
+
+		expect(Exit.isSuccess(exit)).toBe(true);
+		expect(Exit.isSuccess(exit) && exit.value.uploaded).toBe(1);
+		expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
+		expect(history.get('after')?.visualizerId).toBe('viz-2');
+		expect(h.enqueueEntry).not.toHaveBeenCalled();
+		expect(h.appendSyncLog).toHaveBeenCalledWith(
+			expect.objectContaining({ direction: 'skip', id: 'junk' })
+		);
 	});
 });

@@ -573,9 +573,9 @@
 			}
 			// Surface diagnostics as flat console lines so an unexpected
 			// miss is debuggable without expanding any objects.
-			// `pruneTo` (orchestrator startup GC) drops captures whose
-			// shot row has been evicted; an ID mismatch is the other
-			// way this branch can fire when the user expects bytes.
+			// A capture goes when its shot row is removed; an ID mismatch
+			// is the other way this branch can fire when the user expects
+			// bytes.
 			const keys = await store.keys().catch(() => [] as string[]);
 			console.log('[replay download] miss — shotId:', shot.id);
 			console.log('[replay download] capture key count:', keys.length);

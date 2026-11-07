@@ -35,11 +35,12 @@ import {
 	clearAllSeries,
 	deleteSeries,
 	getAllSeries,
-	pruneSeriesTo,
 	putSeries
 } from './series-store';
 import {
+	isBrewLog,
 	isManualLog,
+	refusedNoSamples,
 	shotId,
 	snapshotFromBean,
 	toCoreShotMachine,
@@ -49,6 +50,7 @@ import {
 	type StoredShot
 } from './model';
 import type { Bean, Roaster } from '#lib/bean/index.js';
+import { getCaptureStore } from '#lib/capture/store.js';
 
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
 const STORED_SHOT_FORMAT_VERSION = 3;
@@ -92,6 +94,13 @@ function seriesSaveFailed(): void {
 	toast.error('Could not save this shot\u2019s telemetry — storage may be full.');
 }
 
+/** Delete one shot's raw capture, best effort (no IndexedDB, or it refused). */
+function dropCapture(id: string): void {
+	void getCaptureStore()
+		.delete(id)
+		.catch(() => {});
+}
+
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
 export class HistoryStore {
 	/** The recorded shots, newest first. Loaded from localStorage. */
@@ -100,7 +109,26 @@ export class HistoryStore {
 	/** The running series load; null once it has ended, or with no IndexedDB. */
 	private seriesLoading: Promise<void> | null = null;
 
+	/** The series load has ended, either way. Until then a row's curve may be on its way. */
+	private seriesSettled = $state(typeof indexedDB === 'undefined');
+
+	/** The stored series couldn't be read, even on a second try. */
+	private seriesUnreadable = false;
+
+	/**
+	 * Ids of the rows this tab has written, or loaded. A row's series and
+	 * capture are only ever deleted when its id leaves this set, never because
+	 * a listing doesn't name them: rows that a corrupt load lost were never in
+	 * it, so their curves stay and a row that comes back later finds its own
+	 * (#325). P3's `delete(ids)` replaces this.
+	 */
+	private known = new Set<string>();
+
+	/** Above zero while a restore runs: see {@link pauseDeletes}. */
+	private deletesPaused = 0;
+
 	constructor() {
+		this.markLive(this.shots.map((s) => s.id));
 		// Two-phase boot (review #27): summaries loaded synchronously above;
 		// each shot's telemetry series hydrates from IndexedDB in the
 		// background (reassigning `shots` keeps readers reactive). Also the
@@ -110,6 +138,7 @@ export class HistoryStore {
 		if (typeof indexedDB !== 'undefined') {
 			this.seriesLoading = this.hydrateSeries().finally(() => {
 				this.seriesLoading = null;
+				this.seriesSettled = true;
 			});
 		}
 	}
@@ -118,7 +147,8 @@ export class HistoryStore {
 	 * Wait for the stored series. Rows load at once and their curves follow, so
 	 * until this settles a machine shot looks like one with no telemetry.
 	 * Everything that sends or saves a whole shot awaits this first. True when
-	 * the load has ended, either way; false when it outlasted the wait.
+	 * the load has ended, either way ({@link seriesFailed} says which); false
+	 * when it outlasted the wait.
 	 */
 	async seriesReady(timeoutMs: number = SERIES_WAIT_MS): Promise<boolean> {
 		const loading = this.seriesLoading;
@@ -132,24 +162,77 @@ export class HistoryStore {
 		return loaded;
 	}
 
+	/**
+	 * The stored series were there to read and couldn't be, so rows that have
+	 * curves look like rows that don't. History works on from memory, but
+	 * anything written from it now is missing those curves.
+	 */
+	get seriesFailed(): boolean {
+		return this.seriesUnreadable;
+	}
+
+	/** Machine shots no upload can take: no telemetry, now the series have settled. */
+	get withoutTelemetry(): StoredShot[] {
+		if (!this.seriesSettled) return [];
+		return this.all.filter((s) => !s.visualizerId && s.record.samples.length === 0 && refusedNoSamples(s));
+	}
+
+	/** The shots waiting to go to Visualizer. */
+	get visualizerBacklog(): StoredShot[] {
+		const none = new Set(this.withoutTelemetry.map((s) => s.id));
+		return this.all.filter((s) => !s.visualizerId && !isBrewLog(s) && !none.has(s.id));
+	}
+
 	private async hydrateSeries(): Promise<void> {
 		try {
 			const legacy = this.shots.filter((s) => s.record.samples.length > 0);
 			for (const shot of legacy) {
 				await putSeries(shot.id, shot.record.samples);
 			}
-			const series = await getAllSeries();
+			// One retry: a read can fail once and work the next time.
+			const series = await getAllSeries().catch(() => getAllSeries());
 			this.shots = this.shots.map((s) =>
 				s.record.samples.length === 0 && series.has(s.id)
 					? { ...s, record: { ...s.record, samples: series.get(s.id) ?? [] } }
 					: s
 			);
 			if (legacy.length > 0) this.persist();
-			await pruneSeriesTo(new Set(this.shots.map((s) => s.id)));
 		} catch {
 			// IndexedDB unavailable (private mode, etc.) — history still
 			// works this session from memory; only durability degrades.
+			this.seriesUnreadable = true;
 		}
+	}
+
+	/** Point {@link known} at `ids`, writing and deleting nothing. */
+	private markLive(ids: Iterable<string>): void {
+		this.known = new Set(ids);
+	}
+
+	/**
+	 * Take rows another tab wrote. Nothing is deleted: a stale tab's rows must
+	 * not cost this one a good curve, and the tab that removed a row deletes its
+	 * series. PR9's storage listener reads the rows and hydrates the new ids.
+	 */
+	adoptRows(rows: StoredShot[]): void {
+		this.shots = rows;
+		this.markLive(rows.map((s) => s.id));
+	}
+
+	/**
+	 * Turn series and capture deletes off until the returned function runs, for
+	 * a restore: saves still write and still move {@link known} to what they
+	 * wrote, but delete nothing. Restore's own deletes arrive with its marker
+	 * (restore-safety PR7).
+	 */
+	pauseDeletes(): () => void {
+		this.deletesPaused += 1;
+		let resumed = false;
+		return () => {
+			if (resumed) return;
+			resumed = true;
+			this.deletesPaused -= 1;
+		};
 	}
 
 	/**
@@ -178,28 +261,48 @@ export class HistoryStore {
 	 * Persist the shot list to localStorage — WITHOUT the sample series
 	 * (those live in IndexedDB, review #27), so the blob stays a few KB per
 	 * shot and the 300-shot cap is actually reachable. A quota failure
-	 * evicts the oldest shots and retries once, and is never silent.
+	 * evicts the oldest shots and retries once, and is never silent. Returns
+	 * whether the rows were stored; only then does {@link settleDeletes} run,
+	 * as until then the old rows are still there and need their curves.
 	 */
-	private persist(): void {
-		const stripped = this.shots.map((s) => ({
-			...s,
-			record: { ...s.record, samples: [] }
-		}));
-		if (writeJsonChecked(HISTORY_KEY, stripped, false)) return;
+	private persist(): boolean {
+		if (this.writeRows()) {
+			this.settleDeletes();
+			return true;
+		}
 		// Quota hit even without series — evict the oldest 10% and retry.
 		const keep = Math.max(1, Math.floor(this.shots.length * 0.9));
 		const dropped = this.shots.length - keep;
 		this.shots = this.shots.slice(0, keep);
-		const retry = this.shots.map((s) => ({
+		if (!this.writeRows()) {
+			toast.error('Shot history could not be saved — storage is full.');
+			return false;
+		}
+		toast.error(
+			`Shot storage was full — dropped the ${dropped} oldest shot${dropped === 1 ? '' : 's'} to keep saving.`
+		);
+		this.settleDeletes();
+		return true;
+	}
+
+	/** Write the rows to localStorage, without their series. */
+	private writeRows(): boolean {
+		const stripped = this.shots.map((s) => ({
 			...s,
 			record: { ...s.record, samples: [] }
 		}));
-		if (writeJsonChecked(HISTORY_KEY, retry, false)) {
-			toast.error(
-				`Shot storage was full — dropped the ${dropped} oldest shot${dropped === 1 ? '' : 's'} to keep saving.`
-			);
-		} else {
-			toast.error('Shot history could not be saved — storage is full.');
+		return writeJsonChecked(HISTORY_KEY, stripped, false);
+	}
+
+	/** After a stored write: delete the curves of the rows that left {@link known}. */
+	private settleDeletes(): void {
+		const ids = new Set(this.shots.map((s) => s.id));
+		const gone = [...this.known].filter((id) => !ids.has(id));
+		this.markLive(ids);
+		if (this.deletesPaused > 0) return;
+		for (const id of gone) {
+			void deleteSeries(id).catch(() => {});
+			dropCapture(id);
 		}
 	}
 
@@ -225,6 +328,11 @@ export class HistoryStore {
 		return MAX_RECORDS;
 	}
 
+	/** How many live rows fit before the cap. */
+	get freeSlots(): number {
+		return Math.max(0, MAX_RECORDS - this.all.length);
+	}
+
 	/** Whether a new brew dated `at` would stay in the history once added. */
 	fitsHistory(at: number): boolean {
 		return fitsHistory(this.all, at, MAX_RECORDS);
@@ -233,8 +341,7 @@ export class HistoryStore {
 	/** Wipe all recorded shots — for a "replace from backup" restore. */
 	clearAllShots(): void {
 		this.shots = [];
-		this.persist();
-		void clearAllSeries().catch(() => {});
+		if (this.persist()) void clearAllSeries().catch(() => {});
 	}
 
 	/**
@@ -473,7 +580,9 @@ export class HistoryStore {
 				...this.shots.slice(idx + 1)
 			];
 		}
-		this.persist();
+		// A tombstone stays until the remote delete lands, which may be never;
+		// its capture is the row's, and the row is gone for the user.
+		if (this.persist() && target.visualizerId) dropCapture(id);
 	}
 
 	/**
@@ -484,7 +593,6 @@ export class HistoryStore {
 	purgeTombstone(id: string): void {
 		this.shots = this.shots.filter((s) => s.id !== id);
 		this.persist();
-		void deleteSeries(id).catch(() => {});
 	}
 
 	/**
@@ -524,22 +632,26 @@ export class HistoryStore {
 	}
 
 	/**
-	 * Insert a shot that arrived whole from elsewhere — a Visualizer pull,
-	 * a backup restore or a Beanconqueror import. The caller has already
-	 * mapped it onto a `StoredShot` and verified de-dup. Inserts by date
-	 * and persists.
+	 * Insert a shot a Visualizer pull brought in. The caller has already mapped
+	 * it onto a `StoredShot` and verified de-dup. Inserts by date and persists.
+	 *
+	 * A pull never removes a row: the oldest ones can be brew logs or shots that
+	 * never reached Visualizer. So with no free slot the row is refused, and
+	 * this answers false.
 	 *
 	 * The telemetry series rides IndexedDB (review #27): `persist()` strips
 	 * it from the localStorage row, so it is written here too, or the curve
 	 * is gone on the next load — a restored or pulled shot showed an empty
 	 * chart and 0 samples.
 	 */
-	insertPulled(shot: StoredShot): void {
-		this.insert(shot);
-		if (shot.record.samples.length > 0 && this.get(shot.id)) {
+	insertPulled(shot: StoredShot): boolean {
+		if (this.freeSlots === 0) return false;
+		this.shots = newestFirst([shot, ...this.shots]);
+		if (shot.record.samples.length > 0) {
 			void putSeries(shot.id, shot.record.samples).catch(seriesSaveFailed);
 		}
 		this.persist();
+		return true;
 	}
 
 	/**

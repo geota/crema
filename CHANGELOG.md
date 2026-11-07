@@ -88,8 +88,55 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   queued upload, a Decent retry or a backup could run before a shot's curve had
   loaded, which posted an empty shot to Visualizer and bound the row to it, or
   saved a backup with no curves. They now wait for the curves. A machine shot that
-  still has no telemetry is refused on both apps, on Visualizer and Decent, and
-  stays unsynced. Android and web.
+  still has no telemetry is refused on both apps, on Visualizer and Decent, leaves
+  the Visualizer upload count, and shows as its own "without telemetry" count. If
+  the curves can't be read at all, a downloaded backup says how many it's missing,
+  and a Google Drive backup is refused. Android and web.
+- **One unreadable row can't block a backup** — on the web, one bad row made the
+  whole backup fail, and the note stayed on Building backup for good. Now a shot
+  whose profile can't be read is backed up without it, and any other bad row, of
+  any kind, is left out alone, and you're told how many. A file left short says
+  so in its header, in a new `omittedCount`; a clean backup's bytes don't
+  change (#329). If no row of a kind can be read, the backup fails and nothing
+  is saved. On Android, a failed section used to go out empty, so a backup with
+  no shots could upload and replace a good one: it now fails too. A `NaN` in one
+  shot costs that shot, not the backup. One shot that throws no longer stops the
+  web's upload queue or catch-up uploads. Android and web.
+
+- **A Visualizer pull no longer removes shots or tags** — at the 300-shot cap a
+  pull used to push out your oldest rows, including brew logs and shots that
+  never reached Visualizer. It now leaves the history alone, skips the new shots
+  that don't fit, keeps going, and says how many it left out. Re-sync shots
+  fetches them once there's room. On the web, a pull no longer empties a shot's
+  tags on a free account, and remote tags only fill a shot that has none. Android
+  and web.
+- **A damaged shot history keeps every curve on the web** — when the rows
+  couldn't be read, the next load deleted every saved curve and raw capture, so
+  the kept-aside rows could never get them back (#325). A curve or capture now
+  goes only when its own shot leaves the history, once that save has landed, and
+  anything left over stays on disk until Erase all data. A row that comes back
+  finds its curve. Web.
+
+- **A damaged shot history keeps every curve on Android** — when `shots.json`
+  couldn't be read, the next save deleted every shot's curve, so the rows kept
+  aside could never get them back (#325). A curve now goes only when its own
+  shot leaves the history, once that save has landed, and anything left over
+  stays on disk until Erase all data. A row that comes back finds its curve.
+  Android.
+
+- **Finishing a sign-in after the app was killed no longer wipes your Visualizer
+  or Google Drive settings** — a redirect landing on a cold start read the saved
+  sign-in before it had loaded, then wrote defaults over the file, losing tokens,
+  the pull cursor, deleted-shot records and your sharing settings. Everything
+  that touches those files now waits for them to load, and a stray or repeated
+  redirect changes nothing. A Google Drive redirect after the app was killed now
+  completes too. A refused Visualizer sign-in shows the provider's error instead
+  of "cancelled". Android.
+- **A machine state with a new substate is no longer missed** — when the DE1
+  reported a substate this build doesn't know, the whole state report was
+  dropped, so a shot could look like it was still running after the machine had
+  stopped. The report now counts, the phase on screen holds until the next
+  known substate, and the log names the byte once. Android and web.
 - **Replace restore keeps your custom profiles on Android** — restoring your own
   backup in Replace mode deleted every custom profile and reported "Restored 0
   profile(s)". They now come back and the report counts them.
@@ -136,6 +183,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   hidden profiles, maintenance and the stop-at-weight model were open to it too.
   Saves now take turns, and in those stores and shot history the newest save
   lands last. Android.
+
+- **Steam eco leaves a heater you turned off alone** — with the steam target at
+  0, eco used to heat the steam boiler to its eco temperature. Android and web.
+- **A lost pre-shot flush no longer interrupts what the machine is doing** — if
+  the flush doesn't begin within 10 s, the start ends with a message. It used to
+  wait 30 s and then start the shot anyway, which could end steaming started at
+  the group head. Android and web.
+- **A step's weight exit waits for fresh telemetry** — with no recent sample
+  from the machine, a step could be skipped again after it had already moved on,
+  which skipped the next step too. Android and web.
 
 ## [0.10.0] — 2026-10-30
 

@@ -241,6 +241,29 @@ describe('UploadQueue.drain — shot create', () => {
 	});
 });
 
+describe('UploadQueue.drain — a row that throws (#329)', () => {
+	it('drops that entry and carries on past it', async () => {
+		mockHistory.get.mockImplementation((id: string) => ({ id }));
+		enqueueEntry({ entity: 'shot', id: 'throws', op: 'create' });
+		enqueueEntry({ entity: 'shot', id: 'fine', op: 'create' });
+		const uploaded: string[] = [];
+		const result = await drainWith({
+			uploadShot: (shot) =>
+				Effect.sync(() => {
+					const { id } = shot as { id: string };
+					if (id === 'throws') throw new Error('not serialisable');
+					uploaded.push(id);
+					return { visualizerId: 'v' };
+				})
+		});
+		expect(uploaded).toEqual(['fine']);
+		expect(result.processed).toBe(2);
+		expect(result.succeeded).toBe(1);
+		expect(result.dropped).toBe(1);
+		expect(readQueue().entries).toHaveLength(0);
+	});
+});
+
 describe('UploadQueue.drain — shot delete + bean/roaster delete', () => {
 	it('deletes a remote shot and purges the tombstone', async () => {
 		enqueueEntry({ entity: 'shot', id: 's1', op: 'delete', visualizerId: 'viz-9' });

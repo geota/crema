@@ -1281,6 +1281,57 @@ pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -
     de1_domain::upload_refused_no_samples(is_brew_log, sample_count)
 }
 
+/// What an OAuth redirect means for a sign-in in progress — mirrors
+/// [`de1_domain::CallbackOutcome`] across the FFI boundary.
+#[derive(uniffi::Enum)]
+pub enum CallbackOutcome {
+    /// No pending handshake, or a `state` that doesn't match it: write nothing.
+    NotOurs,
+    /// The user declined.
+    Cancelled,
+    /// The provider refused the request.
+    Refused {
+        /// The redirect's `error` value.
+        error: String,
+    },
+    /// The redirect carried neither a code nor an error.
+    NoCode,
+    /// Exchange the code.
+    Exchange,
+}
+
+impl From<de1_domain::CallbackOutcome> for CallbackOutcome {
+    fn from(outcome: de1_domain::CallbackOutcome) -> Self {
+        match outcome {
+            de1_domain::CallbackOutcome::NotOurs => Self::NotOurs,
+            de1_domain::CallbackOutcome::Cancelled => Self::Cancelled,
+            de1_domain::CallbackOutcome::Refused { error } => Self::Refused { error },
+            de1_domain::CallbackOutcome::NoCode => Self::NoCode,
+            de1_domain::CallbackOutcome::Exchange => Self::Exchange,
+        }
+    }
+}
+
+/// What an OAuth redirect means, from the stored handshake and the redirect's
+/// own fields. See [`de1_domain::callback_outcome`].
+#[uniffi::export]
+pub fn callback_outcome(
+    expected_state: Option<String>,
+    verifier: Option<String>,
+    code: Option<String>,
+    returned_state: Option<String>,
+    error: Option<String>,
+) -> CallbackOutcome {
+    de1_domain::callback_outcome(
+        expected_state.as_deref(),
+        verifier.as_deref(),
+        code.as_deref(),
+        returned_state.as_deref(),
+        error.as_deref(),
+    )
+    .into()
+}
+
 /// The Visualizer retry queue's rule for a failed operation: a JSON
 /// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
 /// `attempts_made` counts this attempt. See
@@ -1995,25 +2046,27 @@ pub fn import_crema_jsonl(text: String) -> Result<String, CremaError> {
 /// [`export_crema_jsonl`] that also carries custom profiles + a portable
 /// settings subset, plus a richer header (`deviceLabel`, profile count).
 /// The shell strips OAuth tokens + per-device/BLE state before building
-/// the envelope. See [`de1_domain::export_backup_jsonl_from_json`].
+/// the envelope. Returns the `BackupExport` as JSON: `{ jsonl, degraded,
+/// omitted }`. See [`de1_domain::export_backup_jsonl_from_json`].
 ///
 /// # Errors
 ///
 /// Returns the JSON parse error string when the envelope is malformed.
 #[uniffi::export]
-pub fn export_backup_jsonl(
+pub fn export_backup_bundle(
     envelope_json: String,
     created_at_unix_ms: i64,
     app_version: String,
     device_label: String,
 ) -> Result<String, CremaError> {
-    de1_domain::export_backup_jsonl_from_json(
+    let built = de1_domain::export_backup_jsonl_from_json(
         &envelope_json,
         created_at_unix_ms,
         &app_version,
         &device_label,
     )
-    .map_err(crema_err)
+    .map_err(crema_err)?;
+    serde_json::to_string(&built).map_err(crema_err)
 }
 
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the

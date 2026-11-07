@@ -33,6 +33,8 @@ data class SharingUiState(
     val uploadTargets: Map<String, List<UploadTarget>> = emptyMap(),
     /** Distinct shots missing from at least one enabled destination — the "Upload N" count. */
     val missingUploadTotal: Int = 0,
+    /** Machine shots no upload can take, because they have no telemetry. */
+    val noTelemetryShots: Int = 0,
     /** Shot ids with an upload in flight to any destination. */
     val uploadingShotIds: Set<String> = emptySet(),
     /** The connected DE1's serial, once read. */
@@ -93,11 +95,13 @@ class SharingController(
         val visualizer: VisualizerSync.UiState,
         val decent: DecentSync.UiState,
         val serial: String?,
+        val shotsSettled: Boolean,
     )
 
     private data class Derived(
         val targets: Map<String, List<UploadTarget>>,
         val missing: Int,
+        val noTelemetry: Int,
         val uploading: Set<String>,
         val serial: String?,
         val serialOnDecent: Boolean?,
@@ -108,12 +112,13 @@ class SharingController(
     fun start() {
         scope.launch {
             uiFlow
-                .map { Inputs(it.history, it.visualizer, it.decent, connectedSerial(it)) }
+                .map { Inputs(it.history, it.visualizer, it.decent, connectedSerial(it), visualizer.shotsSettled) }
                 // History by identity: it is replaced, never mutated, and a deep
                 // compare of every shot on each state change would cost more
                 // than the recompute it saves.
                 .distinctUntilChanged { a, b ->
-                    a.history === b.history && a.visualizer == b.visualizer && a.decent == b.decent && a.serial == b.serial
+                    a.history === b.history && a.visualizer == b.visualizer && a.decent == b.decent &&
+                        a.serial == b.serial && a.shotsSettled == b.shotsSettled
                 }
                 .map { derive(it) }
                 .flowOn(Dispatchers.Default)
@@ -122,6 +127,7 @@ class SharingController(
                         it.copy(
                             uploadTargets = d.targets,
                             missingUploadTotal = d.missing,
+                            noTelemetryShots = d.noTelemetry,
                             uploadingShotIds = d.uploading,
                             connectedSerial = d.serial,
                             connectedSerialOnDecent = d.serialOnDecent,
@@ -135,6 +141,7 @@ class SharingController(
     private fun derive(i: Inputs): Derived = Derived(
         targets = i.history.associate { it.id to uploadTargetsFor(it, destinations) },
         missing = missingUploadTotal(i.history, destinations),
+        noTelemetry = i.history.count(visualizer::noTelemetry),
         uploading = i.visualizer.uploadingShotIds + i.decent.uploadingShotIds,
         serial = i.serial,
         serialOnDecent = if (i.serial == null || !i.decent.linked) null else i.serial in i.decent.serials,
