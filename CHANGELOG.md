@@ -84,6 +84,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A shot finishing no longer undoes an edit made meanwhile** — a rating or note
+  set while a shot assembled, a bag debit during a bean sync and a change while
+  an import ran used to be overwritten by a copy read earlier. Each now lands on
+  the rows as they stand. Android.
+- **Saving a bag keeps its debits** — the bean editor used to write back the
+  weight it opened with, undoing any shot pulled since. It now changes only what
+  you changed. Android.
+- **A bean sync that couldn't push an edit tries again** — a failed write used to
+  count as synced, so the edit stayed local until it was edited again. An edit
+  made during a sync now pushes on the next one too. Android and web.
 - **A store Android can't read is left alone** — a passing read error or running
   out of memory while loading used to move a good file aside as damaged. Now
   only a file that doesn't decode is damaged. Anything else leaves it in place

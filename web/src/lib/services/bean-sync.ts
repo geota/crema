@@ -28,6 +28,7 @@ import { ResponseDecodeError, VisualizerNotFoundError } from '../effect/errors.t
 import {
 	API_BASE,
 	describeVisualizerError,
+	isRecoverable,
 	visualizerCall,
 	type VisualizerCallError,
 	type VisualizerCallOptions
@@ -137,12 +138,11 @@ function reconcileBeans(
 	local: Bean[],
 	remote: PulledBag[],
 	roasterNames: Record<string, string>,
-	lastSyncAt: number | null
+	lastSyncAt: number | null,
+	nowMs: number
 ): BeanReconcileAction[] {
 	return JSON.parse(
-		wasmReconcileBeans(
-			JSON.stringify({ local, remote, roasterNames, lastSyncAt, nowMs: Date.now() })
-		)
+		wasmReconcileBeans(JSON.stringify({ local, remote, roasterNames, lastSyncAt, nowMs }))
 	) as BeanReconcileAction[];
 }
 
@@ -475,6 +475,18 @@ export const BeanSyncLive = Layer.effect(
 			// Which legs run (core `bean_sync_scope`): `backup` pushes only, `pull`
 			// pulls only and never writes remote, `two-way` both, `off` neither.
 			const syncConfig = readSyncConfig();
+			// The run's start: an edit made during it is newer, and pushes next time.
+			const startedAt = Date.now();
+			// Writes that can succeed later hold the baseline, so they go again. One
+			// the server refused for good is a counted skip.
+			let writesFailed = 0;
+			const writeFailed = (e: Parameters<typeof isRecoverable>[0]): void => {
+				if (e._tag === 'VisualizerNotFoundError' || (e._tag === 'HttpStatusError' && !isRecoverable(e))) {
+					result.skipped += 1;
+				} else {
+					writesFailed += 1;
+				}
+			};
 			// A pull is fine, but nothing goes up to an account the user hasn't said
 			// yes to, and the baseline waits for the push that's held.
 			const asking = syncConfig.accountChangeAsk;
@@ -545,7 +557,9 @@ export const BeanSyncLive = Layer.effect(
 								log.push({ direction: 'pull', kind: 'roaster', id: action.localId, name: wire.name, at: Date.now() });
 							}
 						} else {
-							const fresh = roasterFromWire(wire);
+							// Stamped at the run's start, so it isn't newer than the baseline
+							// and doesn't push back: a pull is not a local edit.
+							const fresh = { ...roasterFromWire(wire), updatedAt: startedAt };
 							library.replaceRoaster(fresh);
 							remoteRoasterIdToLocal.set(remoteId, fresh.id);
 							pulledRoasterIds.push(fresh.id);
@@ -589,7 +603,9 @@ export const BeanSyncLive = Layer.effect(
 						const res = yield* Effect.result(uploadRoaster(withCatalogueLink(local)));
 						if (res._tag === 'Success') {
 							if (item.create) {
-								library.updateRoaster(local.id, { visualizerId: res.success.visualizerId });
+								// Keeps `updatedAt`: not a local edit, and the row matches the remote.
+								const current = library.getRoaster(local.id);
+								if (current) library.replaceRoaster({ ...current, visualizerId: res.success.visualizerId });
 								remoteRoasterIdToLocal.set(res.success.visualizerId, local.id);
 							}
 							pushedRoasterIds.add(local.id);
@@ -603,6 +619,7 @@ export const BeanSyncLive = Layer.effect(
 							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
 						} else {
 							result.error = describeVisualizerError(res.failure);
+							writeFailed(res.failure);
 							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: result.error });
 						}
 					}
@@ -631,6 +648,8 @@ export const BeanSyncLive = Layer.effect(
 								premiumLocked = true;
 								writeSyncSettings({ premium: false });
 								logPremiumBannerOnce();
+							} else {
+								writeFailed(res.failure);
 							}
 							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.failure) });
 						}
@@ -661,7 +680,7 @@ export const BeanSyncLive = Layer.effect(
 					}));
 					const roasterNames: Record<string, string> = {};
 					for (const r of library.roasters) roasterNames[r.id] = r.name;
-					for (const action of reconcileBeans(library.beans, pulledBags, roasterNames, lastSyncAt)) {
+					for (const action of reconcileBeans(library.beans, pulledBags, roasterNames, lastSyncAt, startedAt)) {
 						const decoded = action.remote;
 						// Stored as the core hands it back — a replace keeps the local
 						// id + `updatedAt`, so the pull doesn't read as a local edit.
@@ -698,7 +717,11 @@ export const BeanSyncLive = Layer.effect(
 						// and PATCHes (id present) or POSTs (id absent).
 						const res = yield* Effect.result(uploadBean(local, remoteRoasterId));
 						if (res._tag === 'Success') {
-							if (item.create) library.updateBean(local.id, { visualizerId: res.success.visualizerId });
+							if (item.create) {
+								// Keeps `updatedAt`: not a local edit, and the row matches the remote.
+								const current = library.getBean(local.id);
+								if (current) library.replaceBean({ ...current, visualizerId: res.success.visualizerId });
+							}
 							result.pushed += 1;
 							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
 						} else if (res.failure._tag === 'VisualizerPremiumGatedError') {
@@ -707,6 +730,7 @@ export const BeanSyncLive = Layer.effect(
 							logPremiumBannerOnce();
 							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: item.create ? 'premium required' : describeVisualizerError(res.failure) });
 						} else {
+							writeFailed(res.failure);
 							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.failure) });
 						}
 					}
@@ -714,7 +738,7 @@ export const BeanSyncLive = Layer.effect(
 
 				// 5) Mark complete.
 				writeSyncSettings({
-					lastSyncAt: asking ? lastSyncAt : Date.now(),
+					lastSyncAt: asking || writesFailed > 0 ? lastSyncAt : startedAt,
 					premium: premiumLocked ? false : (settings.premium ?? true)
 				});
 				result.ok = true;

@@ -1,5 +1,6 @@
 package coffee.crema.visualizer
 
+import coffee.crema.beans.BeanLibrary
 import coffee.crema.core.Bean
 import coffee.crema.core.BeanPushItem
 import coffee.crema.core.BeanSyncScope
@@ -112,7 +113,7 @@ data class BeanSyncSettings(
     val createsFrom: Long? = null,
 )
 
-/** The aggregate outcome of one run (web `SyncResult`), plus the rows it touched. */
+/** The aggregate outcome of one run (web `SyncResult`), plus the rows it touched, as they stand. */
 data class BeanSyncResult(
     val ok: Boolean = false,
     val pulled: Int = 0,
@@ -129,7 +130,10 @@ data class BeanSyncResult(
     val roasters: List<Roaster> = emptyList(),
     /** The Premium flag to cache afterwards (unchanged when the run never learned anything). */
     val premium: Boolean? = null,
-    /** The new last-sync stamp, or null when the run didn't complete. */
+    /** Writes that can succeed later. They hold the baseline, so they go again. */
+    val writesFailed: Int = 0,
+    /** The new baseline: the run's start, on this device's clock, as it's compared
+     *  with local `updatedAt`. Null when the run didn't complete, or a write waits. */
     val lastSyncAt: Long? = null,
 )
 
@@ -156,13 +160,28 @@ class BeanSyncRunner(
     private val beanList = ListSerializer(Bean.serializer())
     private val roasterList = ListSerializer(Roaster.serializer())
 
-    suspend fun run(beans: List<Bean>, roasters: List<Roaster>, settings: BeanSyncSettings): BeanSyncResult =
-        Run(beans, roasters, settings).execute()
+    /**
+     * One run over the live library. [library] reads it as it stands, and [edit]
+     * applies a change to the current rows, so an edit made during the run stands:
+     * the plan works from a read, and each row is merged again as it lands.
+     */
+    suspend fun run(
+        library: () -> BeanLibrary,
+        edit: ((BeanLibrary) -> BeanLibrary) -> Unit,
+        settings: BeanSyncSettings,
+    ): BeanSyncResult = Run(library, edit, settings).execute()
 
-    /** The mutable state of one run — a working copy of the library + the tallies. */
-    private inner class Run(beans0: List<Bean>, roasters0: List<Roaster>, val settings: BeanSyncSettings) {
-        val beans = beans0.toMutableList()
-        val roasters = roasters0.toMutableList()
+    /** The state of one run: the tallies, over the live library. */
+    private inner class Run(
+        val library: () -> BeanLibrary,
+        val edit: ((BeanLibrary) -> BeanLibrary) -> Unit,
+        val settings: BeanSyncSettings,
+    ) {
+        val beans: List<Bean> get() = library().beans
+        val roasters: List<Roaster> get() = library().roasters
+        /** The run's start: an edit made during it is newer, and pushes next time. What
+         *  the run adds is stamped with it, so a pull doesn't push back. */
+        val startedAt = now()
         val changedBeans = LinkedHashSet<String>()
         val changedRoasters = LinkedHashSet<String>()
         val log = mutableListOf<SyncLogEntry>()
@@ -170,6 +189,8 @@ class BeanSyncRunner(
         var pushed = 0
         var skipped = 0
         var error: String? = null
+        /** Writes that can succeed later: the baseline holds, so they retry. */
+        var writesFailed = 0
         var premium: Boolean? = settings.premium
         var premiumLocked = settings.premium == false
         var bannerLogged = settings.premium == false
@@ -181,25 +202,35 @@ class BeanSyncRunner(
         fun roaster(id: String?) = id?.let { r -> roasters.firstOrNull { it.id == r } }
         fun bean(id: String) = beans.firstOrNull { it.id == id }
 
-        /** Replace (or prepend) a roaster, stamping `updatedAt` like the web store. */
-        /**
-         * Replace (or prepend) a roaster exactly as given. Rows applied from a
-         * pull keep the stamp the core hands back — a pull is not a local edit,
-         * and re-stamping it would make the next sync push it straight back.
-         * [stamp] = a local change made by this run (binding a pushed row's id).
-         */
-        fun putRoaster(r: Roaster, stamp: Boolean = false) {
-            val next = if (stamp) r.copy(updatedAt = now()) else r
-            val i = roasters.indexOfFirst { it.id == r.id }
-            if (i >= 0) roasters[i] = next else roasters.add(0, next)
+        /** Change the row [id] as it stands now, if it's still there. Keeps `updatedAt`:
+         *  a pull or a bind isn't a local edit. */
+        fun onRoaster(id: String, change: (Roaster) -> Roaster) {
+            edit { lib -> lib.copy(roasters = lib.roasters.map { if (it.id == id) change(it) else it }) }
+            changedRoasters += id
+        }
+
+        fun onBean(id: String, change: (Bean) -> Bean) {
+            edit { lib -> lib.copy(beans = lib.beans.map { if (it.id == id) change(it) else it }) }
+            changedBeans += id
+        }
+
+        /** Prepend a pulled row, unless one with its id landed meanwhile. */
+        fun addRoaster(r: Roaster) {
+            edit { lib -> if (lib.roasters.any { it.id == r.id }) lib else lib.copy(roasters = listOf(r) + lib.roasters) }
             changedRoasters += r.id
         }
 
-        fun putBean(b: Bean, stamp: Boolean = false) {
-            val next = if (stamp) b.copy(updatedAt = now()) else b
-            val i = beans.indexOfFirst { it.id == b.id }
-            if (i >= 0) beans[i] = next else beans.add(0, next)
+        fun addBean(b: Bean) {
+            edit { lib -> if (lib.beans.any { it.id == b.id }) lib else lib.copy(beans = listOf(b) + lib.beans) }
             changedBeans += b.id
+        }
+
+        /** A write failed. One the server refused for good is a counted skip, and any
+         *  other holds the baseline, so the edit goes out again next run. */
+        fun writeFailed(e: VisualizerError) {
+            val refused = e is VisualizerError.NotFound ||
+                (e is VisualizerError.Http && e.status in 400..499 && e.status != 408 && e.status != 429)
+            if (refused) skipped++ else writesFailed++
         }
 
         /** A create the user kept off this account. */
@@ -239,7 +270,8 @@ class BeanSyncRunner(
                 beans = beans.filter { it.id in changedBeans },
                 roasters = roasters.filter { it.id in changedRoasters },
                 premium = finalPremium,
-                lastSyncAt = if (ok) now() else null,
+                writesFailed = writesFailed,
+                lastSyncAt = startedAt.takeIf { ok && writesFailed == 0 },
             )
         }
 
@@ -286,18 +318,16 @@ class BeanSyncRunner(
                     when (val kind = action.str("kind")) {
                         "update", "bind" -> {
                             val localId = action.str("localId") ?: continue
-                            roaster(localId)?.let { local ->
-                                // Core merge: an update takes the remote fields unless the
-                                // local was edited since the last sync; updatedAt is kept.
-                                putRoaster(
-                                    json.decodeFromString(
-                                        Roaster.serializer(),
-                                        core.mergePulledRoaster(
-                                            json.encodeToString(Roaster.serializer(), local),
-                                            wire.toString(),
-                                            kind == "update",
-                                            lastSync,
-                                        ),
+                            // Core merge, on the row as it stands: an update takes the remote
+                            // fields unless the local was edited since the last sync.
+                            onRoaster(localId) { local ->
+                                json.decodeFromString(
+                                    Roaster.serializer(),
+                                    core.mergePulledRoaster(
+                                        json.encodeToString(Roaster.serializer(), local),
+                                        wire.toString(),
+                                        kind == "update",
+                                        lastSync,
                                     ),
                                 )
                             }
@@ -309,9 +339,9 @@ class BeanSyncRunner(
                         else -> {
                             val fresh = json.decodeFromString(
                                 Roaster.serializer(),
-                                core.roasterFromWire(wire.toString(), mintRoasterId(), now()),
+                                core.roasterFromWire(wire.toString(), mintRoasterId(), startedAt),
                             )
-                            putRoaster(fresh)
+                            addRoaster(fresh)
                             remoteToLocal[remoteId] = fresh.id
                             pulledRoasterIds += fresh.id
                             pulled++
@@ -347,7 +377,8 @@ class BeanSyncRunner(
                     try {
                         val vid = uploadRoaster(withCatalogueLink(local))
                         if (item.create) {
-                            putRoaster(local.copy(visualizerId = vid), stamp = true)
+                            // Not a local edit: the row matches the remote now.
+                            onRoaster(local.id) { it.copy(visualizerId = vid) }
                             remoteToLocal[vid] = local.id
                         }
                         pushedRoasterIds += local.id
@@ -359,6 +390,7 @@ class BeanSyncRunner(
                         entry("skip", "roaster", local.id, local.name, "premium required")
                     } catch (e: VisualizerError) {
                         error = describe(e)
+                        writeFailed(e)
                         entry("skip", "roaster", local.id, local.name, error)
                     }
                 }
@@ -382,12 +414,12 @@ class BeanSyncRunner(
                         uploadRoaster(local.copy(catalogueRoasterId = patch.catalogueRoasterId))
                         if (local.catalogueRoasterId.isNullOrEmpty()) {
                             // updatedAt kept: the link now matches the remote.
-                            putRoaster(local.copy(catalogueRoasterId = patch.catalogueRoasterId))
+                            onRoaster(local.id) { it.copy(catalogueRoasterId = patch.catalogueRoasterId) }
                         }
                         pushed++
                         entry("push", "roaster", local.id, local.name)
                     } catch (e: VisualizerError) {
-                        if (e is VisualizerError.PremiumGated) lockPremium()
+                        if (e is VisualizerError.PremiumGated) lockPremium() else writeFailed(e)
                         entry("skip", "roaster", local.id, local.name, describe(e))
                     }
                 }
@@ -402,41 +434,53 @@ class BeanSyncRunner(
                 }
                 // RAW rows go to the core (key presence matters: an absent key never
                 // clears a local value); it decodes new bags and merges matched ones.
-                val beanActions = json.parseToJsonElement(
-                    core.reconcileBeans(
-                        buildJsonObject {
-                            put("local", json.encodeToJsonElement(beanList, beans))
-                            put(
-                                "remote",
-                                buildJsonArray {
-                                    remoteBags.forEach { wire ->
-                                        add(
-                                            buildJsonObject {
-                                                put("wire", wire)
-                                                wire.str("roaster_id")?.let { remoteToLocal[it] }?.let { put("localRoasterId", it) }
-                                                put("fallbackId", mintBeanId())
-                                            },
-                                        )
-                                    }
-                                },
-                            )
-                            put("roasterNames", buildJsonObject { roasters.forEach { put(it.id, it.name) } })
-                            lastSync?.let { put("lastSyncAt", it) }
-                            put("nowMs", now())
-                        }.toString(),
-                    ),
-                ) as JsonArray
-                for (el in beanActions) {
+                val pulledBags = remoteBags.map { wire ->
+                    buildJsonObject {
+                        put("wire", wire)
+                        wire.str("roaster_id")?.let { remoteToLocal[it] }?.let { put("localRoasterId", it) }
+                        put("fallbackId", mintBeanId())
+                    }
+                }
+                val reconcile = { local: List<Bean>, remote: List<JsonObject> ->
+                    json.parseToJsonElement(
+                        core.reconcileBeans(
+                            buildJsonObject {
+                                put("local", json.encodeToJsonElement(beanList, local))
+                                put("remote", JsonArray(remote))
+                                put("roasterNames", buildJsonObject { roasters.forEach { put(it.id, it.name) } })
+                                lastSync?.let { put("lastSyncAt", it) }
+                                put("nowMs", startedAt)
+                            }.toString(),
+                        ),
+                    ) as JsonArray
+                }
+                val bagByRemoteId = pulledBags.associateBy { (it["wire"] as JsonObject).str("id") }
+                for (el in reconcile(beans, pulledBags)) {
                     val action = el as? JsonObject ?: continue
                     val remote = action["remote"]?.let { json.decodeFromJsonElement(Bean.serializer(), it) } ?: continue
-                    // Stored as the core hands it back (a replace keeps the local id + updatedAt).
-                    putBean(remote)
-                    pulledBeanIds += remote.id
-                    if (action.str("kind") == "replace") {
-                        entry("pull", "bean", remote.id, remote.name)
-                    } else {
+                    if (action.str("kind") != "replace") {
+                        addBean(remote)
+                        pulledBeanIds += remote.id
                         pulled++
                         entry("pull", "bean", remote.id, remote.name)
+                        continue
+                    }
+                    // The plan read the row a moment ago: the core merges it again on
+                    // the row as it stands, with the same edited-since check, so what
+                    // the user changed meanwhile stands. A row edited since is left
+                    // out, and the push leg sends it.
+                    val bag = bagByRemoteId[remote.visualizerId] ?: continue
+                    var landed: Bean? = null
+                    onBean(remote.id) { current ->
+                        val merged = (reconcile(listOf(current), listOf(bag)).firstOrNull() as? JsonObject)
+                            ?.takeIf { it.str("kind") == "replace" }
+                            ?.let { json.decodeFromJsonElement(Bean.serializer(), it.getValue("remote")) }
+                        landed = merged
+                        merged ?: current
+                    }
+                    landed?.let {
+                        pulledBeanIds += it.id
+                        entry("pull", "bean", it.id, it.name)
                     }
                 }
             }
@@ -466,13 +510,15 @@ class BeanSyncRunner(
                     val remoteRoasterId = roaster(local.roasterId)?.visualizerId
                     try {
                         val vid = uploadBean(local, remoteRoasterId)
-                        if (item.create) putBean(local.copy(visualizerId = vid), stamp = true)
+                        // Not a local edit: the row matches the remote now.
+                        if (item.create) onBean(local.id) { it.copy(visualizerId = vid) }
                         pushed++
                         entry("push", "bean", local.id, local.name)
                     } catch (e: VisualizerError.PremiumGated) {
                         lockPremium()
                         entry("skip", "bean", local.id, local.name, if (item.create) "premium required" else describe(e))
                     } catch (e: VisualizerError) {
+                        writeFailed(e)
                         entry("skip", "bean", local.id, local.name, describe(e))
                     }
                 }
@@ -590,17 +636,3 @@ class BeanSyncRunner(
 }
 
 private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
-
-/**
- * Merge a run's touched rows back into the live library: each touched row
- * replaces its current version (by id), and a touched row that was not in the
- * run's starting [snapshotIds] is a pulled addition (prepended, like the web
- * store's upsert). A snapshot row the library no longer holds was deleted by
- * the user mid-run and stays deleted.
- */
-fun <T> mergeSyncedRows(current: List<T>, synced: List<T>, snapshotIds: Set<String>, id: (T) -> String): List<T> {
-    val byId = synced.associateBy(id)
-    val present = current.mapTo(HashSet(), id)
-    val added = synced.filter { id(it) !in snapshotIds && id(it) !in present }
-    return added + current.map { byId[id(it)] ?: it }
-}

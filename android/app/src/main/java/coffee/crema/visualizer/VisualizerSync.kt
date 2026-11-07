@@ -115,14 +115,12 @@ class VisualizerSync(
     /** The refresh-token grant (injected so JVM tests can drive the 401 → refresh → retry). */
     private val refreshTokens: suspend (refreshToken: String) -> TokenSet =
         { refresh -> refreshAccessToken(clientId, refresh, json) },
-    /** The bean library as it stands now — the bean sync's starting snapshot. */
+    /** The bean library as it stands now. */
     private val beanLibrary: () -> coffee.crema.beans.BeanLibrary = { coffee.crema.beans.BeanLibrary() },
-    /**
-     * Merge a finished bean sync back into the library: the rows it touched
-     * ([BeanSyncResult.beans] / [BeanSyncResult.roasters]) and the ids the run
-     * started from (see [mergeSyncedRows]).
-     */
-    private val onBeansSynced: (result: BeanSyncResult, snapshotBeanIds: Set<String>, snapshotRoasterIds: Set<String>) -> Unit = { _, _, _ -> },
+    /** Apply a bean sync's change to the current rows. */
+    private val editBeanLibrary: ((coffee.crema.beans.BeanLibrary) -> coffee.crema.beans.BeanLibrary) -> Unit = {},
+    /** A bean sync ended: its changes are in the library, to be stored. */
+    private val onBeansSynced: () -> Unit = {},
     /** The core's bean-sync surface (injected so JVM tests needn't load the native core). */
     private val beanSyncCore: BeanSyncCore = BeanSyncCore.Native,
     /** When a network comes back (F17's retry trigger); null = no trigger (JVM tests). */
@@ -1574,7 +1572,6 @@ class VisualizerSync(
             // A pull is fine, but nothing goes up to an account the user hasn't
             // said yes to, and the baseline waits for the push that's held.
             val asking = persisted.accountChangeAsk
-            val snapshot = beanLibrary()
             val runner = BeanSyncRunner(
                 core = beanSyncCore,
                 json = json,
@@ -1582,8 +1579,8 @@ class VisualizerSync(
                 now = now,
             )
             val result = runner.run(
-                snapshot.beans,
-                snapshot.roasters,
+                beanLibrary,
+                editBeanLibrary,
                 BeanSyncSettings(
                     lastSyncAt = persisted.beanLastSyncAt,
                     premium = persisted.premium,
@@ -1592,7 +1589,7 @@ class VisualizerSync(
                     createsFrom = persisted.uploadExcludedBefore,
                 ),
             )
-            onBeansSynced(result, snapshot.beans.mapTo(HashSet()) { it.id }, snapshot.roasters.mapTo(HashSet()) { it.id })
+            onBeansSynced()
             val failure = result.error?.takeIf { !result.ok }?.let {
                 SyncLogEntry(direction = "pull", entity = "bean", id = "", name = "Bean sync", at = now(), error = it)
             }
@@ -1673,7 +1670,7 @@ class VisualizerSync(
                     .onSuccess { r ->
                         if (r != null) {
                             parts += "beans ${r.pulled} pulled · ${r.pushed} pushed" + if (r.premiumLocked) " (read-only, free tier)" else ""
-                            if (!r.ok) failed = true
+                            if (!r.ok || r.writesFailed > 0) failed = true
                         }
                     }
                     .onFailure { e ->

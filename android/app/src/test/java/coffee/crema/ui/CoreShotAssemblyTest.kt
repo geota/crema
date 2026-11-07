@@ -104,6 +104,22 @@ class CoreShotAssemblyTest {
         assertEquals(260, back?.samples?.size, "no cut on restore")
     }
 
+    /** The original #324: a rating set while the shot assembled was lost. */
+    @Test
+    fun `shot_edit_during_assembly_survives`() {
+        val vm = VmHarness.build(store)
+        VmHarness.awaitPrefsLoaded(vm)
+        pour(vm, 48)
+        val first = recorded(vm, 0)
+        VmHarness.library(vm).assembling = { vm.updateShot(first.id, 5, "lovely") }
+        pour(vm, 48)
+        recorded(vm, 1)
+        val edited = vm.ui.value.history.single { it.id == first.id }
+        assertEquals(5, edited.rating)
+        assertEquals("lovely", edited.notes)
+        assertEquals(2, vm.ui.value.history.size)
+    }
+
     @Test
     fun `the grinder model is frozen at capture`() {
         val vm = VmHarness.build(store)

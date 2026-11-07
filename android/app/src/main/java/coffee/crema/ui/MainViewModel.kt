@@ -141,7 +141,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         get() = session.dialDebounceContext
         set(value) { session.dialDebounceContext = value }
 
-    private val _ui = MutableStateFlow(MainUiState())
+    private val _ui = UiStore(MainUiState())
 
     /** The high-rate readouts as they arrive: the store every reader and
      *  writer uses, on its own thread and in order ([live] is the screens'
@@ -225,7 +225,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the VM persists. VM code reads it directly for its own values and
      * [effectiveState] for what is on screen (spec §7.2).
      */
-    val ui: StateFlow<MainUiState> = _ui
+    val ui: StateFlow<MainUiState> = _ui.state
         .map { it.effective() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, _ui.value.effective())
 
@@ -237,7 +237,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * store, never this: [_live]'s value is current on the caller's thread.
      */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val live: StateFlow<LiveTelemetry> = _ui
+    val live: StateFlow<LiveTelemetry> = _ui.state
         .map { it.saverVisible }
         .distinctUntilChanged()
         .flatMapLatest { saverUp -> if (saverUp) emptyFlow() else _live }
@@ -245,7 +245,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** This device's own state, for tests (AC-16): what [persistPrefs] saves. */
     @androidx.annotation.VisibleForTesting
-    internal val ownState: StateFlow<MainUiState> = _ui
+    internal val ownState: StateFlow<MainUiState> = _ui.state
 
     /** The readouts as they arrive, for tests: [live] goes quiet behind the saver. */
     @androidx.annotation.VisibleForTesting
@@ -365,7 +365,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         shotsLoaded = { library.seriesReady },
         historyRefused = { library.historyRefused },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
-        onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
+        editBeanLibrary = { edit -> library.editBeanLibrary(edit) },
+        onBeansSynced = { library.persistLibrary() },
         networkWatcher = coffee.crema.visualizer.DefaultNetworkWatcher(app),
     )
 
@@ -379,7 +380,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         visualizer = visualizer,
         decent = decent,
-        uiFlow = _ui,
+        uiFlow = _ui.state,
         updateUi = { transform -> _ui.update(transform) },
         notify = { notifyUser(it) },
     )
@@ -446,6 +447,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         uiState = { _ui.value },
         effectiveState = { effectiveState() },
         updateUi = { transform -> _ui.update(transform) },
+        editRows = { rows, rest -> _ui.edit(rows, rest) },
         notify = { notifyUser(it) },
         appendLog = { appendLog(it) },
         currentPrefs = { currentPrefs() },
@@ -471,7 +473,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         bridge = bridge,
         lane = lane,
-        uiFlow = _ui,
+        uiFlow = _ui.state,
         liveState = { _live.value },
         effectiveState = { effectiveState() },
         updateUi = { transform -> _ui.update(transform) },
@@ -984,7 +986,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // A hub's remotes hold no live copy of its stock: a change to the active
         // bag's weights re-sends the snapshot that carries its empty flag.
         viewModelScope.launch {
-            _ui.map { s -> s.beans.firstOrNull { it.id == s.activeBeanId }?.let { it.remaining to it.bagSize } }
+            _ui.state.map { s -> s.beans.firstOrNull { it.id == s.activeBeanId }?.let { it.remaining to it.bagSize } }
                 .distinctUntilChanged()
                 .collect { proxy.pushConfig() }
         }
@@ -1427,8 +1429,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         id: String,
         roasterName: String,
         roasterPick: coffee.crema.core.CataloguePickRoaster? = null,
+        opened: Bean? = null,
         transform: (Bean) -> Bean,
-    ) = library.updateBean(id, roasterName, roasterPick, transform)
+    ) = library.updateBean(id, roasterName, roasterPick, opened, transform)
 
     /** A FileProvider Uri for the camera to write a bag photo into. */
     fun newCameraOutputUri(beanId: String): Uri? = library.newCameraOutputUri(beanId)
