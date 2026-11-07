@@ -18,7 +18,7 @@
 	 * shared `ActivityLog`.
 	 */
 	import { onMount } from 'svelte';
-	import { getHistoryStore, historyDroppedNotice, isBrewLog } from '#lib/history/index.js';
+	import { getHistoryStore, historyDroppedNotice } from '#lib/history/index.js';
 	import { shotHistoryJsonl } from '#lib/history/crema-jsonl.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import {
@@ -54,6 +54,7 @@
 		backupFileName,
 		backupNote as runBackup,
 		buildBackupZip,
+		driveBackupRefusal,
 		describeBackupGaps,
 		describeBackup,
 		restoreBackupData,
@@ -144,7 +145,7 @@
 	let catchUpBusy = $state<{ done: number; total: number } | null>(null);
 
 	function vizBacklogCount(): number {
-		return history.all.filter((s) => !s.visualizerId && !s.deletedAt && !isBrewLog(s)).length;
+		return history.visualizerBacklog.length;
 	}
 	/** Offer the Visualizer catch-up if shots would now auto-upload there. */
 	function offerVisualizerCatchUp(): void {
@@ -417,6 +418,11 @@
 			const built = await buildBackupZip();
 			if (!built) {
 				driveNote = 'Nothing to back up yet.';
+				return;
+			}
+			const refusal = driveBackupRefusal(built.contents);
+			if (refusal) {
+				driveNote = refusal;
 				return;
 			}
 			driveNote = 'Backing up to Drive…';

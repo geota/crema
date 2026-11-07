@@ -14,7 +14,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import { getBeanStore, readSyncSettings, type SyncResult as BeanSyncResult } from '#lib/bean/index.js';
-	import { getHistoryStore, isBrewLog } from '#lib/history/index.js';
+	import { getHistoryStore } from '#lib/history/index.js';
 	import { historyFullNotice } from '#lib/history/brew-date.js';
 	import {
 		appendSyncLog,
@@ -330,7 +330,8 @@
 		}
 	}
 
-	const unsyncedShotCount = $derived(history.all.filter((s) => !s.visualizerId && !isBrewLog(s)).length);
+	const unsyncedShotCount = $derived(history.visualizerBacklog.length);
+	const noTelemetryCount = $derived(history.withoutTelemetry.length);
 </script>
 
 {#if viz.connected}
@@ -403,7 +404,7 @@
 
 		<StRow
 			title="Shots"
-			sub={`${history.all.length} shot(s) on this device${unsyncedShotCount > 0 ? `, ${unsyncedShotCount} unsynced` : ''}. Last sync: ${syncTimeLabel(config.lastSyncAt.shots)}.`}
+			sub={`${history.all.length} shot(s) on this device${unsyncedShotCount > 0 ? `, ${unsyncedShotCount} unsynced` : ''}${noTelemetryCount > 0 ? `, ${noTelemetryCount} without telemetry` : ''}. Last sync: ${syncTimeLabel(config.lastSyncAt.shots)}.`}
 		>
 			{#snippet control()}
 				<StSegment

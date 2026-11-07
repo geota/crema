@@ -64,6 +64,13 @@ sealed class VisualizerError(message: String) : Exception(message) {
 
     /** Any other non-2xx, with the reply body (the quota 422 is told apart by it). */
     class Http(val status: Int, message: String, val body: String = "") : VisualizerError(message)
+
+    /**
+     * A machine shot with no telemetry, refused before any request: Visualizer
+     * would take it as `elapsed: 0`, and the row would count as uploaded.
+     * Terminal for the queue; the row stays unsynced, so a later pass offers it.
+     */
+    class NoSeries : VisualizerError("This shot has no telemetry to upload")
 }
 
 class VisualizerClient(

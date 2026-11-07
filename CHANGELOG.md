@@ -84,6 +84,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Shots no longer upload or back up without their telemetry** — on the web a
+  queued upload, a Decent retry or a backup could run before a shot's curve had
+  loaded, which posted an empty shot to Visualizer and bound the row to it, or
+  saved a backup with no curves. They now wait for the curves. A machine shot that
+  still has no telemetry is refused on both apps, on Visualizer and Decent, leaves
+  the Visualizer upload count, and shows as its own "without telemetry" count. If
+  the curves can't be read at all, a downloaded backup says how many it's missing,
+  and a Google Drive backup is refused. Android and web.
 - **One unreadable row can't block a backup** — on the web, one bad row made the
   whole backup fail, and the note stayed on Building backup for good. Now a shot
   whose profile can't be read is backed up without it, and any other bad row, of

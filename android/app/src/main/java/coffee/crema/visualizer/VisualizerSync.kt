@@ -11,6 +11,7 @@ import coffee.crema.runCatchingCancellable
 import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.exportV2JsonShotFull
 import coffee.crema.core.signatureForShot
+import coffee.crema.core.uploadRefusedNoSamples
 import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.StoredShot
@@ -127,6 +128,8 @@ class VisualizerSync(
     private val seriesReady: suspend () -> Unit = {},
     /** How the retry timers wait (injected so a JVM test can see each wait). */
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    /** Core `upload_refused_no_samples`: a machine shot with no telemetry doesn't go. */
+    private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?) -> Boolean = ::uploadRefusedNoSamples,
     /** Whether the stored shots are in the history; a list taken before then is empty. */
     private val shotsLoaded: () -> Boolean = { true },
     /** Core `callback_outcome`: what a redirect means for the stored handshake. */
@@ -223,7 +226,14 @@ class VisualizerSync(
     override fun isUploaded(shot: StoredShot): Boolean = shot.visualizerId != null
     override fun viewUrl(shot: StoredShot): String? = shot.visualizerId?.let { "https://visualizer.coffee/shots/$it" }
     /** Brew Log rows (issue #10) are local-only — never in the Visualizer backlog. */
-    override fun inBacklog(shot: StoredShot): Boolean = shot.visualizerId == null && !shot.isBrewLog
+    override fun inBacklog(shot: StoredShot): Boolean = shot.visualizerId == null && !shot.isBrewLog && !noTelemetry(shot)
+
+    /** A machine shot no upload can take: no telemetry, now the series have settled. */
+    fun noTelemetry(shot: StoredShot): Boolean =
+        shot.visualizerId == null && shot.samples.isEmpty() && shotsSettled && uploadRefused(shot.isBrewLog, 0u)
+
+    /** The series load has ended; until then a row's curve may be on its way. */
+    val shotsSettled: Boolean get() = shotsLoaded()
     override fun canUpload(shot: StoredShot): Boolean = !shot.isBrewLog
     override fun pushShot(shot: StoredShot, replace: Boolean): Boolean = uploadShot(shot, silent = false)
     override suspend fun setAutoUploadNow(enabled: Boolean) {
@@ -712,6 +722,7 @@ class VisualizerSync(
         if (!drainMutex.tryLock()) return DrainResult(stopped = "A Visualizer upload pass is already running")
         try {
             if (!enabled) return DrainResult()
+            logNoTelemetry(shots)
             val unsynced = unsent(shots)
             if (unsynced.isEmpty()) return DrainResult()
             _state.update { it.copy(busy = true) }
@@ -922,6 +933,7 @@ class VisualizerSync(
         // A copy taken before the series loaded has none: wait, then re-read.
         seriesReady()
         val shot = if (snapshot.samples.isEmpty()) currentShot(snapshot.id) ?: snapshot else snapshot
+        if (uploadRefused(shot.isBrewLog, shot.samples.size.toUInt())) throw VisualizerError.NoSeries()
         val payload = buildShotPayload(shot)
         val id = withFreshToken { client.uploadShot(it, payload) }
         persist { it.copy(lastShotSyncAt = System.currentTimeMillis()) }
@@ -1403,7 +1415,8 @@ class VisualizerSync(
             }
             var stop: PassStop? = null
             if (directionPushes(direction)) {
-                val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
+                logNoTelemetry(shots)
+                val unsynced = unsent(shots)
                 val r = runUploadPass(
                     unsynced,
                     uploadPolicy,
@@ -1447,6 +1460,12 @@ class VisualizerSync(
         return false
     }
 
+    /** One line for the pass: these would otherwise fill the log on every sync. */
+    private suspend fun logNoTelemetry(shots: List<StoredShot>) {
+        val n = shots.count(::noTelemetry)
+        if (n > 0) logSync("skip", "", "Upload", "$n shot${if (n == 1) " has" else "s have"} no telemetry to upload")
+    }
+
     /**
      * The sign-in can load before the rows do, and these actions work from the
      * list the UI passes in: an empty one would pull every remote shot in as new.
@@ -1483,7 +1502,8 @@ class VisualizerSync(
             return
         }
         if (!shotsReady()) return
-        val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
+        scope.launch { logNoTelemetry(shots) }
+        val unsynced = unsent(shots)
         if (unsynced.isEmpty()) {
             notify("Everything is already on Visualizer")
             return

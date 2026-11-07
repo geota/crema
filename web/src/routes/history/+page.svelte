@@ -462,11 +462,12 @@
 				)
 			: new Set<string>()
 	);
+	const visualizerBacklogIds = $derived(new Set(store.visualizerBacklog.map((s) => s.id)));
 	/** The catch-up backlog: shots missing from at least one ENABLED destination, per destination. */
 	const missingByDestination = $derived.by(() => {
 		const out: { name: string; count: number }[] = [];
 		if (canPushShots) {
-			const n = shots.filter((s) => !s.visualizerId && !isBrewLog(s)).length;
+			const n = visualizerBacklogIds.size;
 			if (n > 0) out.push({ name: 'Visualizer', count: n });
 		}
 		if (decentUnsentIds.size > 0) out.push({ name: 'Decent', count: decentUnsentIds.size });
@@ -474,7 +475,7 @@
 	});
 	const missingTotal = $derived(
 		shots.filter(
-			(s) => (canPushShots && !s.visualizerId && !isBrewLog(s)) || decentUnsentIds.has(s.id)
+			(s) => (canPushShots && visualizerBacklogIds.has(s.id)) || decentUnsentIds.has(s.id)
 		).length
 	);
 	const missingTitle = $derived(

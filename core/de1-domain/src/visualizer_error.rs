@@ -200,6 +200,18 @@ pub fn classify_token_refresh_failure(status: Option<u16>, body: Option<&str>) -
     }
 }
 
+/// Whether a stored row goes out with no telemetry, so an upload must refuse it.
+///
+/// A machine shot with no samples is one whose series hasn't loaded, or was
+/// lost: Visualizer would take it as `elapsed: 0` and Decent as a record with no
+/// measurements, and the row would count as uploaded (geota/crema#330). `None`
+/// reads as no samples. A brew log has none by nature, and stays local for its
+/// own reason, so this says nothing about it.
+#[must_use]
+pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -> bool {
+    !is_brew_log && sample_count.unwrap_or(0) == 0
+}
+
 /// The most attempts a queued Visualizer operation gets before it is dropped.
 pub const MAX_QUEUE_ATTEMPTS: u32 = 3;
 
@@ -314,6 +326,19 @@ pub fn visualizer_queue_decision_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_machine_shot_with_no_samples_is_refused() {
+        assert!(upload_refused_no_samples(false, Some(0)));
+        assert!(upload_refused_no_samples(false, None));
+    }
+
+    #[test]
+    fn a_shot_with_samples_goes_and_a_brew_log_is_not_this_rules_business() {
+        assert!(!upload_refused_no_samples(false, Some(1)));
+        assert!(!upload_refused_no_samples(true, Some(0)));
+        assert!(!upload_refused_no_samples(true, None));
+    }
 
     // Cases pinned by the TS `visualizer-call.vitest.ts` retry-policy table.
 

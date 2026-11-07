@@ -886,7 +886,8 @@ private fun SharingSection(
     }
     if (vz.signedIn) {
         SettingsGroup("Sync") {
-            val unsyncedCount = ui.history.count { it.visualizerId == null }
+            val noTelemetry = ui.sharing.noTelemetryShots
+            val unsyncedCount = ui.history.count { it.visualizerId == null } - noTelemetry
             val lastSyncLabel = vz.lastShotSyncAt?.let {
                 coffee.crema.ui.relativeAgo(it)
             } ?: "never"
@@ -901,7 +902,7 @@ private fun SharingSection(
                 onRoastersDirection = vm.visualizer::setRoastersDirection,
                 stacked = true,
             )
-            CremaSettingsRow("Shots", "${ui.history.size} shot(s)" + (if (unsyncedCount > 0) " · $unsyncedCount unsynced" else "") + ". Last sync: $lastSyncLabel.", stacked = true) {
+            CremaSettingsRow("Shots", "${ui.history.size} shot(s)" + (if (unsyncedCount > 0) " · $unsyncedCount unsynced" else "") + (if (noTelemetry > 0) " · $noTelemetry without telemetry" else "") + ". Last sync: $lastSyncLabel.", stacked = true) {
                 CremaSegmentedButton(
                     options = listOf(SegOption("off", "Off"), SegOption("backup", "Push"), SegOption("pull", "Pull"), SegOption("two-way", "Both")),
                     value = vz.shotsDirection,

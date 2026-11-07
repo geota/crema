@@ -8,6 +8,7 @@ import coffee.crema.security.DeviceSecretBox
 import coffee.crema.security.FakeKeystore
 import java.io.File
 import java.nio.file.Files
+import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.UploadOutcome
 import coffee.crema.ui.UploadOutcomeKind
 import kotlinx.coroutines.CompletableDeferred
@@ -56,8 +57,14 @@ class DecentSyncTest {
         }
     }
 
+    private val sample = TelemetrySample(
+        elapsedMs = 0, pressure = 9f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null,
+        dispensedVolume = 0f, resistance = null, resistanceWeight = null, setHeadTemp = 93f, setGroupPressure = 9f,
+        setGroupFlow = 0f, frameNumber = 1,
+    )
+
     private fun shot(id: String, durationMs: Long = 30_000, at: Long = 1_000) =
-        StoredShot(id = id, completedAtMs = at, durationMs = durationMs, machineSerial = "6262")
+        StoredShot(id = id, completedAtMs = at, durationMs = durationMs, machineSerial = "6262", samples = listOf(sample))
 
     private val linked = DecentState(email = "a@b.c", token = "token-123456", serials = listOf("6262"), autoUpload = true)
 
@@ -230,7 +237,7 @@ class DecentSyncTest {
 
     @Test
     fun `a live serial of 0 is never uploaded - the upload waits and says why`() = runTest {
-        val old = StoredShot(id = "old", completedAtMs = 1, durationMs = 30_000)
+        val old = StoredShot(id = "old", completedAtMs = 1, durationMs = 30_000, samples = listOf(sample))
         val h = harness(listOf(old))
         h.live = ShotMachine("0")
         h.liveUnreadable = true
@@ -323,7 +330,7 @@ class DecentSyncTest {
 
     @Test
     fun `an older shot uploaded with the live DE1 gets that machine stamped`() = runTest {
-        val old = StoredShot(id = "old", completedAtMs = 1, durationMs = 30_000)
+        val old = StoredShot(id = "old", completedAtMs = 1, durationMs = 30_000, samples = listOf(sample))
         val h = harness(listOf(old))
         h.live = ShotMachine("6262", "1352", "DE1PRO")
         h.sync.uploadNow(old, manual = true, replace = false, fullSamples = null)
@@ -605,6 +612,28 @@ class DecentSyncTest {
         assertFalse(h.sync.state.value.linked)
         assertTrue(h.sync.state.value.log.isEmpty())
         assertNull(h.sync.state.value.email)
+    }
+
+    @Test
+    fun `non_brew_no_samples_refused - no POST, and the shot isn't marked uploaded`() = runTest {
+        val bare = shot("s1").copy(samples = emptyList())
+        val h = harness(listOf(bare))
+
+        val o = h.sync.uploadNow(bare, manual = true, replace = false, fullSamples = null)
+
+        assertEquals(DecentSync.Outcome.Skipped(DecentSync.NO_SERIES_REASON), o)
+        assertTrue(h.api.posts.isEmpty())
+        assertTrue(h.stamped.isEmpty())
+    }
+
+    @Test
+    fun `a shot goes on the full samples the caller holds`() = runTest {
+        val bare = shot("s1").copy(samples = emptyList())
+        val h = harness(listOf(bare))
+
+        val o = h.sync.uploadNow(bare, manual = true, replace = false, fullSamples = listOf(sample))
+
+        assertTrue(o is DecentSync.Outcome.Uploaded)
     }
 
     @Test

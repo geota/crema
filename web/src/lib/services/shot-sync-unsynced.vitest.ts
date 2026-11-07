@@ -125,6 +125,7 @@ function mkHistory(initial: StoredShot[]) {
 			const s = map.get(id);
 			if (s) (s as { visualizerId?: string | null }).visualizerId = visualizerId;
 		},
+		seriesReady: async () => true,
 		insertPulled: (s: StoredShot) => map.set(s.id, { ...s }),
 		setTags: () => {},
 		backfillTelemetry: () => {},
@@ -134,7 +135,17 @@ function mkHistory(initial: StoredShot[]) {
 }
 
 const shot = (over: Partial<StoredShot> = {}): StoredShot =>
-	({ id: 's1', completedAt: 1_000_000, profileName: 'P', visualizerId: null, bean: null, tags: [], grinderModel: null, ...over }) as unknown as StoredShot;
+	({
+		id: 's1',
+		completedAt: 1_000_000,
+		profileName: 'P',
+		visualizerId: null,
+		bean: null,
+		tags: [],
+		grinderModel: null,
+		record: { duration: 30_000, samples: [{ t: 0 }] },
+		...over
+	}) as unknown as StoredShot;
 
 /** POST upload → 2xx with NO id; the self-heal list page carries one summary. */
 const handler = (req: HttpRequest): unknown => {
@@ -187,6 +198,43 @@ describe('ShotSync.uploadUnsyncedShots — EF1 self-heal on 2xx-no-id', () => {
 		expect(history.get('s1')?.visualizerId).toBeFalsy();
 		expect(h.enqueueEntry).not.toHaveBeenCalled();
 		expect(h.appendSyncLog.mock.calls.some(([e]) => e.direction === 'skip' && e.id === 's1')).toBe(true);
+	});
+});
+
+describe('ShotSync.uploadUnsyncedShots — the stored series (#330)', () => {
+	it('reads the backlog only after the series have landed', async () => {
+		h.reconcile = [];
+		const history = mkHistory([shot()]);
+		let land: ((ready: boolean) => void) | undefined;
+		const waiting = new Promise<boolean>((resolve) => (land = resolve));
+		(history as unknown as { seriesReady: () => Promise<boolean> }).seriesReady = () => waiting;
+		const all = vi.spyOn(history, 'all', 'get');
+
+		const running = run(history);
+		await Promise.resolve();
+		expect(all).not.toHaveBeenCalled();
+
+		land?.(true);
+		await running;
+		expect(all).toHaveBeenCalled();
+	});
+});
+
+describe('ShotSync.uploadUnsyncedShots — shots with no telemetry (#330)', () => {
+	it('leaves them out of the pass, with one log line for all of them', async () => {
+		h.reconcile = [];
+		const bare = (id: string) => shot({ id, record: { duration: 30_000, samples: [] } } as Partial<StoredShot>);
+		const history = mkHistory([bare('a'), bare('b'), bare('c')]);
+		h.appendSyncLog.mockClear();
+
+		await run(history);
+
+		expect(h.appendSyncLog).toHaveBeenCalledTimes(1);
+		expect(h.appendSyncLog.mock.calls[0][0]).toMatchObject({
+			direction: 'skip',
+			error: '3 shots have no telemetry to upload.'
+		});
+		expect(h.enqueueEntry).not.toHaveBeenCalled();
 	});
 });
 
