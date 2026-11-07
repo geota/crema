@@ -1,10 +1,11 @@
 # Crema CI — quality gates for the Rust core, the SvelteKit web shell and the
 # Android app.
 #
-# This workflow runs on every PR to `main` and on direct pushes to `main`,
-# plus two schedules: a weekly one that runs ONLY the advisory `audit` job and
-# a nightly one that runs ONLY the relay `fuzz` job (every other job is guarded
-# with `if: github.event_name != 'schedule'`). It does NOT
+# This workflow runs on every PR to `main` or `integration/machine-control` and
+# on direct pushes to `main`, plus two schedules: a weekly one that runs ONLY
+# the advisory `audit` job and a nightly one that runs ONLY the relay `fuzz` job
+# and the long `model` run (every other job is guarded with
+# `if: github.event_name != 'schedule'`). It does NOT
 # deploy, and neither does a push to `main`: the web deploys to Cloudflare
 # Pages only from release.yml on a `v*.*.*` tag. See DEPLOY.md.
 #
@@ -20,10 +21,10 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, integration/machine-control]
   # Weekly advisory audit (Mondays 07:00 UTC) so a new advisory surfaces even
   # in a week with no merges. Only the `audit` job runs on this trigger.
-  # Nightly (03:30 UTC): only the de1-relay `fuzz` job.
+  # Nightly (03:30 UTC): only the de1-relay `fuzz` job and the 10k `model` run.
   schedule:
     - cron: '0 7 * * 1'
     - cron: '30 3 * * *'
@@ -185,6 +186,43 @@ jobs:
 
       - name: Check release artifacts for test constructors
         run: scripts/relay-release-symbols-check.sh ci
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Machine-control model test: its own crate and lockfile, outside the core
+  # workspace, because proptest fails `cargo deny`. 256 cases on PRs, 10k
+  # nightly.
+  # ─────────────────────────────────────────────────────────────────────
+  model:
+    name: model (de1-model)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' || github.event.schedule == '30 3 * * *'
+    env:
+      PROPTEST_CASES: ${{ github.event_name == 'schedule' && '10000' || '256' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain (rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/de1-model -> target
+
+      - name: cargo fmt --check
+        working-directory: core/de1-model
+        run: cargo fmt -- --check
+
+      - name: cargo clippy (-D warnings)
+        working-directory: core/de1-model
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: core/de1-model
+        run: cargo test --locked
 
   # ─────────────────────────────────────────────────────────────────────
   # de1-relay fuzzing (relay v4 spec §3.7, AC-21): each cargo-fuzz target for
