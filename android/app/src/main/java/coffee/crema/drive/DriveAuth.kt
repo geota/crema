@@ -107,8 +107,16 @@ private fun formBody(params: Map<String, String>): String =
         "${URLEncoder.encode(k, "UTF-8")}=${URLEncoder.encode(v, "UTF-8")}"
     }
 
+/**
+ * Google answered, but not with what was asked for: its HTTP [status] and reply
+ * [body], so the core can tell what that means (`classify_sync_failure`). A
+ * transport failure stays a plain [IOException].
+ */
+class DriveHttpError(val status: Int, val body: String, message: String) : IOException(message)
+
 /** POST the token endpoint and map the wire response → [DriveTokenSet]. Google
- *  keeps the same refresh token across refreshes, so carry [fallbackRefresh]. */
+ *  keeps the same refresh token across refreshes, so carry [fallbackRefresh].
+ *  Throws [DriveHttpError] on a non-2xx or token-less reply. */
 private suspend fun postToken(
     params: Map<String, String>,
     fallbackRefresh: String?,
@@ -129,11 +137,15 @@ private suspend fun postToken(
             val body = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
             val obj: JsonObject = runCatching { json.parseToJsonElement(body).jsonObject }
-                .getOrElse { throw IOException("Google token endpoint returned non-JSON (HTTP $status).") }
+                .getOrElse { throw DriveHttpError(status, body, "Google token endpoint returned non-JSON (HTTP $status).") }
             fun str(k: String) = obj[k]?.jsonPrimitive?.contentOrNull
             val access = str("access_token")
             if (status !in 200..299 || access == null) {
-                throw IOException("Google token endpoint: ${str("error_description") ?: str("error") ?: "HTTP $status"}")
+                throw DriveHttpError(
+                    status,
+                    body,
+                    "Google token endpoint: ${str("error_description") ?: str("error") ?: "HTTP $status"}",
+                )
             }
             val ttlS = obj["expires_in"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 3600L
             DriveTokenSet(

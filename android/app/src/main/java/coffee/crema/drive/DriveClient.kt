@@ -94,7 +94,7 @@ suspend fun driveUploadBackup(
             val status = conn.responseCode
             val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-            if (status !in 200..299) throw IOException(errorMessage(json, resp, status, "upload"))
+            if (status !in 200..299) throw DriveHttpError(status, resp, errorMessage(json, resp, status, "upload"))
             json.decodeFromString(DriveFile.serializer(), resp)
         } finally {
             conn.disconnect()
@@ -132,7 +132,7 @@ private suspend fun driveListPage(accessToken: String, pageToken: String?, json:
             val status = conn.responseCode
             val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-            if (status !in 200..299) throw IOException(errorMessage(json, resp, status, "list"))
+            if (status !in 200..299) throw DriveHttpError(status, resp, errorMessage(json, resp, status, "list"))
             // A body it can't read is a failed page, not an empty one: whatever
             // acts on this listing takes what's missing for gone.
             val page = runCatching {
@@ -166,7 +166,8 @@ suspend fun driveTrashFile(accessToken: String, fileId: String, json: Json): Uni
         HttpClients.base.newCall(request).execute().use { response ->
             // 404 counts as done (already gone).
             if (!response.isSuccessful && response.code != 404) {
-                throw IOException(errorMessage(json, response.body.string(), response.code, "trash"))
+                val err = response.body.string()
+                throw DriveHttpError(response.code, err, errorMessage(json, err, response.code, "trash"))
             }
         }
     }
@@ -187,7 +188,7 @@ suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json)
                 conn.inputStream.use { it.readBytesCapped(ImportLimits.MAX_FILE_BYTES, "The Drive backup") }
             } else {
                 val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-                throw IOException(errorMessage(json, err, status, "download"))
+                throw DriveHttpError(status, err, errorMessage(json, err, status, "download"))
             }
         } finally {
             conn.disconnect()

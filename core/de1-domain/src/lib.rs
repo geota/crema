@@ -322,8 +322,9 @@ pub use sync_failure::{
     classify_sync_failure, classify_sync_failure_json, parse_retry_after, rate_limit_wait_ms,
 };
 pub use sync_run::{
-    AttentionReason, BlockReason, PartialReason, RunOutcome, SyncHealth, WaitReason,
-    reconnect_notice_due, sync_health_after_run,
+    AccountChange, AttentionReason, BlockReason, PartialReason, RunOutcome, SyncHealth, WaitReason,
+    account_change_action, reconnect_notice_due, reconnect_notice_due_json, sync_health_after_run,
+    sync_health_after_run_json,
 };
 pub use tank::{
     DEFAULT_REFILL_POINT_MM, LowWaterMonitor, REFILL_POINT_MAX_MM, REFILL_POINT_MIN_MM,

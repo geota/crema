@@ -33,6 +33,8 @@ import { blankBean, blankRoaster, type Bean, type Roaster } from '#lib/bean/inde
 import type { BeanLibraryStore } from '#lib/bean/store.svelte.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
 import { initTestWasm } from '#lib/testing/test-init.js';
+import { readSyncSettings } from '#lib/bean/visualizer-sync.js';
+import { updateSyncConfig } from '#lib/visualizer/sync-config.js';
 
 // `runSync` decodes each remote row through the wasm-backed `beanFromWire` /
 // `roasterFromWire` and encodes pushes through `beanToWire` (CORE1), so the
@@ -219,6 +221,41 @@ describe('BeanSync.runSync — push + premium', () => {
 		expect(result.premiumLocked).toBe(true);
 		const cached = JSON.parse(localStorage.getItem('crema.beans.sync.v1') ?? '{}');
 		expect(cached.premium).toBe(false);
+	});
+});
+
+describe('BeanSync.runSync — a change of account', () => {
+	const listOnly = () =>
+		mkHttp((method) =>
+			method === 'POST'
+				? { ok: true, json: { id: 'new' } }
+				: { ok: true, json: { data: [], paging: { pages: 1 } } }
+		);
+	const writes = (calls: { method: string }[]) => calls.filter((c) => c.method !== 'GET');
+
+	beforeEach(() => {
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 5, premium: true }));
+	});
+
+	it('pushes nothing while the ask is open, pulls, and keeps the baseline', async () => {
+		updateSyncConfig({ premium: true, accountChangeAsk: true });
+		const lib = mkLibrary({ roasters: [{ ...blankRoaster('Acme'), visualizerId: null }], beans: [blankBean()] });
+		const { layer, calls } = listOnly();
+		await run(lib, layer);
+		expect(writes(calls)).toEqual([]);
+		expect(calls.some((c) => c.url.includes('/coffee_bags'))).toBe(true);
+		expect(readSyncSettings().lastSyncAt).toBe(5);
+	});
+
+	it("a no keeps the old device's rows off, and new ones go", async () => {
+		const cutoff = Date.now();
+		updateSyncConfig({ premium: true, uploadExcludedBefore: cutoff });
+		const old = { ...blankBean(), name: 'Old', createdAt: cutoff - 1 };
+		const fresh = { ...blankBean(), name: 'New', createdAt: cutoff + 1 };
+		const lib = mkLibrary({ roasters: [{ ...blankRoaster('Acme'), createdAt: cutoff - 1, visualizerId: null }], beans: [old, fresh] });
+		const { layer, calls } = listOnly();
+		await run(lib, layer);
+		expect(writes(calls).map((c) => (c as { body?: { coffee_bag?: { name?: string } } }).body?.coffee_bag?.name)).toEqual(['New']);
 	});
 });
 

@@ -92,6 +92,21 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   out under half the size of your last one, Crema tells you. Pruned copies go to
   Drive's trash, where you can restore them for 30 days. Copies made before this
   update are left alone. Android.
+- **Opening the app offline no longer disconnects Google Drive** — Drive used to
+  sign out on any failed refresh, which ended backups until someone noticed.
+  Only Google saying the sign-in is over ends it now. A daily backup with no
+  network tries again next launch, and a full Drive or a refused backup stays as
+  a line in Settings rather than a notice each day. Android.
+- **A sign-in that really ended says so and stays said** — one notice, then a
+  Reconnect in Settings until you sign in again, with nothing else lost. Google
+  Drive and Visualizer on Android, Visualizer on the web.
+- **A token refresh can't undo a sign-out or a sign-in** — one that finishes
+  afterwards no longer signs you back in or stores the old account's tokens, and
+  two at once on Android no longer sign you out. Android and web.
+- **Signing in as a different Visualizer account asks first** — Crema checks
+  which account it is before anything syncs. A different one starts the pull
+  over and asks before uploading the shots already here; Not now keeps those off
+  it, and new shots still upload. Android and web.
 - **A store that can't be read is never saved over** — on the web, a storage
   error while reading was treated as an empty store, so the next save replaced
   your data. Now the value stays where it is, a strip says "Couldn't read your

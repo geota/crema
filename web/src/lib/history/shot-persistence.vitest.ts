@@ -57,6 +57,7 @@ vi.mock('#lib/services/token-vault.js', async (importOriginal) => ({
 }));
 
 import { pushShotToVisualizer } from './shot-persistence.ts';
+import { updateSyncConfig } from '#lib/visualizer/sync-config.js';
 import { ShotSync } from '#lib/services/shot-sync.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import {
@@ -104,6 +105,7 @@ function run(uploadShot: (shot: unknown) => Effect.Effect<{ visualizerId: string
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	localStorage.clear();
 	h.setDirection('push');
 	h.setAutoUpload(true);
 	h.setTokensReadable(true);
@@ -122,6 +124,19 @@ describe('pushShotToVisualizer — gating', () => {
 	it('no-ops when autoUpload is off', async () => {
 		h.setAutoUpload(false);
 		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
+		await run(uploadShot);
+		expect(uploadShot).not.toHaveBeenCalled();
+	});
+
+	it('unknown_identity_holds_uploads: a held account takes no push, manual or not', async () => {
+		updateSyncConfig({ accountUnconfirmed: true });
+		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
+		await Effect.runPromise(
+			Effect.provide(pushShotToVisualizer('s1', { manual: true }), Layer.merge(fakeShotSync(uploadShot), fakeUploadQueue))
+		);
+		await run(uploadShot);
+		expect(uploadShot).not.toHaveBeenCalled();
+		updateSyncConfig({ accountUnconfirmed: false, accountChangeAsk: true });
 		await run(uploadShot);
 		expect(uploadShot).not.toHaveBeenCalled();
 	});

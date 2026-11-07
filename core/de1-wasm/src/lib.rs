@@ -1812,6 +1812,17 @@ pub fn classify_token_refresh_failure(status: Option<u32>, body: Option<String>)
     )
 }
 
+/// What a confirmed `/me` means: `"First"`, `"Same"` or `"Changed"`. See
+/// `de1_domain::account_change_action`.
+#[wasm_bindgen(js_name = accountChangeAction)]
+#[must_use]
+pub fn account_change_action(stored: Option<String>, me: &str) -> String {
+    format!(
+        "{:?}",
+        de1_domain::account_change_action(stored.as_deref(), me)
+    )
+}
+
 /// The Visualizer retry queue's rule for a failed operation: a JSON
 /// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
 /// `attemptsMade` counts this attempt; `jitterUnit` is a random number in

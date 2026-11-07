@@ -4699,6 +4699,22 @@ export enum AccountBlockReason {
 	MissingScope = "MissingScope",
 }
 
+/** What a confirmed `/me` means for what this device holds. */
+export enum AccountChange {
+	/**
+	 * No account was on record: note this one and carry on. A user signed out
+	 * at upgrade with no cached account lands here, which can't be checked.
+	 */
+	First = "First",
+	/** The account this device already synced with. */
+	Same = "Same",
+	/**
+	 * Another account: the cursor, marks and queue belong to the old one, and
+	 * nothing goes up until the user says so.
+	 */
+	Changed = "Changed",
+}
+
 /** What a service needs from the user. Each has an action in Settings. */
 export type AttentionReason = 
 	/** The session is over: reconnect. The one that also raises a notice. */

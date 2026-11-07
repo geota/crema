@@ -35,6 +35,9 @@
 		takeVisualizerJustConnected,
 		updateSyncConfig
 	} from '#lib/visualizer/index.js';
+	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
+	import { answerAccountChange, applyAccount, settleEmptyAccountChange } from '#lib/services/visualizer-account.js';
+	import { VISUALIZER_RECONNECT_LINE } from '#lib/shell/visualizer-notices.js';
 	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import StSectionHead from '../StSectionHead.svelte';
@@ -150,7 +153,7 @@
 	/** Offer the Visualizer catch-up if shots would now auto-upload there. */
 	function offerVisualizerCatchUp(): void {
 		const cfg = readSyncConfig();
-		if (!directionPushes(cfg.direction.shots) || !cfg.autoUpload) return;
+		if (!directionPushes(cfg.direction.shots) || !cfg.autoUpload || uploadsHeld(cfg)) return;
 		const count = vizBacklogCount();
 		if (count > 0) catchUp = { destination: 'Visualizer', count };
 	}
@@ -167,8 +170,21 @@
 	}
 	// A Visualizer sign-in just completed (the OAuth callback flagged it).
 	onMount(() => {
-		if (takeVisualizerJustConnected()) offerVisualizerCatchUp();
+		const justConnected = takeVisualizerJustConnected();
+		void (async () => {
+			// A different account with nothing to upload has nothing to ask.
+			await settleEmptyAccountChange(history);
+			if (justConnected) offerVisualizerCatchUp();
+		})();
 	});
+
+	/** The user's answer: yes uploads the backlog, no keeps those shots off this account. */
+	async function answerChange(upload: boolean): Promise<void> {
+		answerAccountChange(upload);
+		if (!upload) return;
+		catchUp = { destination: 'Visualizer', count: vizBacklogCount() };
+		await runCatchUp();
+	}
 
 	async function runCatchUp(): Promise<void> {
 		const offer = catchUp;
@@ -204,6 +220,8 @@
 		accountError = null;
 		try {
 			account = await api.beans.fetchAccount();
+			// Settles a hold the sign-in left, or a change no one has seen yet.
+			if (account.id) applyAccount(account.id);
 		} catch (e) {
 			accountError = e instanceof Error ? e.message : String(e);
 		}
@@ -230,6 +248,7 @@
 		// Tier flag is per-account — a fresh sign-in (or the same account
 		// after a tier change on visualizer.coffee) shouldn't inherit it.
 		clearVisualizerPremiumCache();
+		updateSyncConfig({ needsReconnect: false, accountUnconfirmed: false });
 		// Reflect the disconnect optimistically. `clearTokens` above also fires
 		// the connection subscription, but that echoes back a tick later; setting
 		// it here keeps the card snappy (the echo is then a redundant no-op).
@@ -273,6 +292,7 @@
 	     potentially-wrong label. Click "Test" to populate it. */
 	const cardEyebrow = $derived.by(() => {
 		if (!viz.connected) {
+			if (syncCfg.needsReconnect) return 'Sign-in ended';
 			return oauthConfigured ? 'Not connected' : 'OAuth not configured';
 		}
 		if (!account) {
@@ -295,6 +315,7 @@
 			if (!oauthConfigured) {
 				return 'Set `VITE_VISUALIZER_CLIENT_ID` in `web/.env.local` and restart the dev server.';
 			}
+			if (syncCfg.needsReconnect) return VISUALIZER_RECONNECT_LINE;
 			return 'Free community service for sharing and comparing espresso shots';
 		}
 		if (testStatus.kind === 'testing') return 'Testing…';
@@ -552,12 +573,15 @@
 			</button>
 		{:else}
 			<StButton
-				label={signingIn ? 'Redirecting…' : 'Sign in'}
+				label={signingIn ? 'Redirecting…' : syncCfg.needsReconnect ? 'Reconnect' : 'Sign in'}
 				icon="sign-in"
 				variant="primary"
 				disabled={!oauthConfigured || signingIn}
 				onClick={signIn}
 			/>
+			{#if syncCfg.needsReconnect}
+				<StButton label="Forget" onClick={disconnect} />
+			{/if}
 		{/if}
 	</div>
 </div>
@@ -565,6 +589,28 @@
 <!-- Connected-state sync controls (the shared activity log renders below the cards). -->
 {#if viz.connected}
 	<BeanSyncSection onShotPushEnabled={offerVisualizerCatchUp} />
+	{#if syncCfg.accountUnconfirmed}
+		<StGroup title="Account">
+			<StRow
+				title="Checking your account"
+				sub="Crema can't yet confirm which Visualizer account this is, so nothing syncs. It keeps trying."
+			>
+				{#snippet control()}{/snippet}
+			</StRow>
+		</StGroup>
+	{:else if syncCfg.accountChangeAsk}
+		<StGroup title="Account">
+			<StRow
+				title="This is a different Visualizer account"
+				sub={`Upload the ${vizBacklogCount()} shot(s) on this device to ${account?.name ?? 'it'}? Not now keeps them off this account. New shots still upload.`}
+			>
+				{#snippet control()}
+					<StButton label="Not now" onClick={() => answerChange(false)} />
+					<StButton label="Upload" icon="cloud-arrow-up" variant="primary" onClick={() => answerChange(true)} />
+				{/snippet}
+			</StRow>
+		</StGroup>
+	{/if}
 	{#if catchUp?.destination === 'Visualizer'}
 		<StGroup title="Catch up">
 			{@render catchUpRow(catchUp)}

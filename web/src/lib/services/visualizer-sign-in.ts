@@ -1,9 +1,9 @@
 /**
  * `#lib/services/visualizer-sign-in.js` — what happens once the OAuth code
- * exchange has produced a token set: persist it, then refresh the cached
- * Visualizer Premium flag (the bean-sync sentinel probe, `BeanSync.refreshPremium`)
- * so the edit sync knows the new account's tier straight away instead of
- * treating it as free until the next daily check / Test.
+ * exchange has produced a token set: persist it, ask `/me` whose it is, then
+ * refresh the cached Visualizer Premium flag (the bean-sync sentinel probe,
+ * `BeanSync.refreshPremium`) so the edit sync knows the new account's tier
+ * straight away instead of treating it as free until the next daily check / Test.
  *
  * Run by the `/auth/visualizer/callback` route on its short-lived runtime.
  * The premium refresh never fails; only `storeTokens` can, with
@@ -15,6 +15,8 @@ import { Effect } from 'effect';
 import { BeanSync } from './bean-sync.ts';
 import { OAuth } from './oauth.ts';
 import { TokenVault } from './token-vault.ts';
+import { confirmAccount } from './visualizer-account.ts';
+import { readSyncConfig, updateSyncConfig } from '../visualizer/sync-config.ts';
 import type { TokenSet } from '../visualizer/oauth.ts';
 
 export const completeVisualizerSignIn = (tokens: TokenSet) =>
@@ -24,9 +26,20 @@ export const completeVisualizerSignIn = (tokens: TokenSet) =>
 		// Not stored (final review 05 N-6): revoke the grant just issued, so no
 		// live session exists that this device can neither use nor sign out
 		// of, then fail so the callback page shows why.
-		yield* vault
-			.storeTokens(tokens)
-			.pipe(Effect.tapError(() => oauth.revokeToken(tokens.accessToken)));
+		// The hold lands before the tokens, so nothing can upload until `/me` has
+		// said whose they are. If `/me` fails it stays, and the drain asks again.
+		const before = readSyncConfig().accountUnconfirmed;
+		updateSyncConfig({ accountUnconfirmed: true });
+		yield* vault.storeTokens(tokens).pipe(
+			Effect.tapError(() =>
+				Effect.andThen(
+					Effect.sync(() => updateSyncConfig({ accountUnconfirmed: before })),
+					oauth.revokeToken(tokens.accessToken)
+				)
+			)
+		);
+		updateSyncConfig({ needsReconnect: false });
+		yield* confirmAccount;
 		const beans = yield* BeanSync;
 		yield* beans.refreshPremium;
 	});
