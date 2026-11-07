@@ -26,7 +26,7 @@ import type {
 	RecipeTimeEstimate
 } from '#lib/core/crema-core.js';
 import { BrewStepKind, StepAdvance } from '#lib/core/crema-core.js';
-import { isJsonObject, readJson, writeJsonChecked } from '#lib/utils/storage.js';
+import { isJsonObject, readStore, writeJsonChecked } from '#lib/utils/storage.js';
 import {
 	blankRecipeJson,
 	builtinBrewRecipesJson,
@@ -175,9 +175,15 @@ export class RecipeStore {
 	private hidden = $state<string[]>([]);
 
 	constructor() {
-		this.recipes = readJson<BrewRecipe[]>(RECIPES_KEY, [], { what: 'brew recipes', valid: Array.isArray });
-		this.lastUsed = readJson<Record<string, string>>(LAST_USED_KEY, {}, { valid: isJsonObject });
-		this.hidden = readJson<string[]>(HIDDEN_KEY, [], { what: 'hidden recipes list', valid: Array.isArray });
+		const recipes = readStore<BrewRecipe[]>(RECIPES_KEY, { what: 'brew recipes', valid: Array.isArray });
+		const lastUsed = readStore<Record<string, string>>(LAST_USED_KEY, {
+			what: 'recipe defaults',
+			valid: isJsonObject
+		});
+		const hidden = readStore<string[]>(HIDDEN_KEY, { what: 'hidden recipes list', valid: Array.isArray });
+		this.recipes = recipes.kind === 'loaded' ? recipes.value : [];
+		this.lastUsed = lastUsed.kind === 'loaded' ? lastUsed.value : {};
+		this.hidden = hidden.kind === 'loaded' ? hidden.value : [];
 		this.migrate();
 	}
 
