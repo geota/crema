@@ -26,6 +26,9 @@ private val coreJson = Json {
 /** The notice and banner when Google ends the sign-in. */
 const val DRIVE_RECONNECT_LINE = "Google ended the Drive sign-in, so backups have stopped. Reconnect to resume them."
 
+/** The line when Drive refuses a sign-in Google hasn't ended. */
+const val DRIVE_REFUSED_LINE = "Google Drive refused this sign-in. Disconnect and connect again if it keeps happening."
+
 /** What a failed Drive call means. A reply goes to the core; a transport failure is [SyncFailure.Offline]. */
 internal fun driveFailure(e: Throwable, operation: String, nowMs: Long): SyncFailure = when (e) {
     is DriveHttpError -> coreJson.decodeFromString(
@@ -44,14 +47,14 @@ internal fun isTransient(failure: SyncFailure): Boolean =
 internal fun driveHealthAfter(outcome: RunOutcome, nowMs: Long): String =
     syncHealthAfterRun(coreJson.encodeToString(RunOutcome.serializer(), outcome), nowMs)
 
-/** The words for [failure], or null when the reply's own message says more. */
-internal fun driveFailureLine(failure: SyncFailure): String? = when (failure) {
+/** The words for [failure]: its own, else the reply's [message], else a refusal. */
+internal fun driveFailureLine(failure: SyncFailure, message: String?): String = when (failure) {
     SyncFailure.Offline -> "couldn’t reach Google Drive"
     is SyncFailure.RateLimited -> "Google Drive asked Crema to slow down"
     is SyncFailure.Unavailable -> "Google Drive isn’t answering properly"
     SyncFailure.StorageFull -> "your Google Drive is full"
     SyncFailure.SessionEnded -> DRIVE_RECONNECT_LINE
-    else -> null
+    else -> message ?: "Google Drive refused the request"
 }
 
 /** The Settings line for a stored `SyncHealth`, or null when there's nothing to say. */

@@ -768,6 +768,7 @@ fun SettingsScreen(
                             vz = vz,
                             onSignIn = { vm.visualizer.beginSignIn(openUrl) },
                             onSignOut = { vm.visualizer.signOut() },
+                            onForget = { vm.visualizer.signOut(quiet = true) },
                             onTest = { vm.visualizer.testConnection() },
                             onOpenSite = { openUrl("https://visualizer.coffee") },
                         )
@@ -920,7 +921,10 @@ fun SettingsScreen(
                             if (!ds.connected) {
                                 if (ds.needsReconnect) {
                                     CremaSettingsRow("Reconnect Google Drive", DRIVE_RECONNECT_LINE, last = true) {
-                                        CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Reconnect")
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            CremaButton(onClick = { vm.drive.disconnect(quiet = true) }, variant = CremaButtonVariant.Text, enabled = !ds.busy, label = "Forget")
+                                            CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Reconnect")
+                                        }
                                     }
                                 } else {
                                     CremaSettingsRow("Connect Google Drive", "Back up to and restore from your own Google Drive — only the backup files Crema creates (scope drive.file).", last = true) {
@@ -1571,6 +1575,7 @@ private fun VisualizerHeroCard(
     vz: coffee.crema.visualizer.VisualizerSync.UiState,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
+    onForget: () -> Unit,
     onTest: () -> Unit,
     onOpenSite: () -> Unit,
 ) {
@@ -1661,6 +1666,9 @@ private fun VisualizerHeroCard(
                             else -> "Sign in"
                         },
                     )
+                    if (vz.needsReconnect) {
+                        CremaButton(onClick = onForget, variant = CremaButtonVariant.Text, label = "Forget")
+                    }
                 }
             }
         }

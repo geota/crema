@@ -105,6 +105,11 @@ data class BeanSyncSettings(
     /** Beans / roasters directions (`off | backup | pull | two-way`) — which legs run. */
     val beansDirection: String = "two-way",
     val roastersDirection: String = "two-way",
+    /**
+     * Bags and roasters created before this (unix ms) stay off the account: the
+     * user said no to sending this device's rows to a different one. New rows flow.
+     */
+    val createsFrom: Long? = null,
 )
 
 /** The aggregate outcome of one run (web `SyncResult`), plus the rows it touched. */
@@ -196,6 +201,9 @@ class BeanSyncRunner(
             if (i >= 0) beans[i] = next else beans.add(0, next)
             changedBeans += b.id
         }
+
+        /** A create the user kept off this account. */
+        fun keptOff(item: Boolean, createdAt: Long) = item && settings.createsFrom?.let { createdAt < it } == true
 
         fun lockPremium() {
             premiumLocked = true
@@ -328,6 +336,7 @@ class BeanSyncRunner(
                 )
                 for (item in plan) {
                     val local = roaster(item.localId) ?: continue
+                    if (keptOff(item.create, local.createdAt)) continue
                     if (premiumLocked) {
                         if (item.create) {
                             skipped++
@@ -446,6 +455,7 @@ class BeanSyncRunner(
                 )
                 for (item in plan) {
                     val local = bean(item.localId) ?: continue
+                    if (keptOff(item.create, local.createdAt)) continue
                     if (premiumLocked) {
                         if (item.create) {
                             skipped++

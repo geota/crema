@@ -878,8 +878,11 @@ private fun SharingSection(
                 }
             }
             vz.needsReconnect -> {
-                CremaSettingsRow("Sign-in ended", coffee.crema.visualizer.VISUALIZER_RECONNECT_LINE, last = true) {
-                    CremaButton(onClick = { vm.visualizer.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "sign-in", enabled = !vz.busy, label = "Reconnect")
+                CremaSettingsRow("Sign-in ended", coffee.crema.visualizer.VISUALIZER_RECONNECT_LINE, last = true, stacked = true) {
+                    androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                        CremaButton(onClick = { vm.visualizer.signOut(quiet = true) }, variant = CremaButtonVariant.Text, label = "Forget")
+                        CremaButton(onClick = { vm.visualizer.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "sign-in", enabled = !vz.busy, label = "Reconnect")
+                    }
                 }
             }
             else -> {
@@ -1043,8 +1046,11 @@ private fun SharingSection(
     val ds = ui.drive
     SettingsGroup("Google Drive") {
         if (!ds.connected && ds.needsReconnect) {
-            CremaSettingsRow("Reconnect Google Drive", coffee.crema.drive.DRIVE_RECONNECT_LINE, last = true) {
-                CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Reconnect")
+            CremaSettingsRow("Reconnect Google Drive", coffee.crema.drive.DRIVE_RECONNECT_LINE, last = true, stacked = true) {
+                androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                    CremaButton(onClick = { vm.drive.disconnect(quiet = true) }, variant = CremaButtonVariant.Text, enabled = !ds.busy, label = "Forget")
+                    CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Reconnect")
+                }
             }
         } else if (!ds.connected) {
             CremaSettingsRow("Connect Google Drive", "Back up to and restore from your own Google Drive — only the files Crema creates.", last = true) {

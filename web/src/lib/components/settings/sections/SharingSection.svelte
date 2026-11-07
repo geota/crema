@@ -36,7 +36,7 @@
 		updateSyncConfig
 	} from '#lib/visualizer/index.js';
 	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
-	import { answerAccountChange, applyAccount } from '#lib/services/visualizer-account.js';
+	import { answerAccountChange, applyAccount, settleEmptyAccountChange } from '#lib/services/visualizer-account.js';
 	import { VISUALIZER_RECONNECT_LINE } from '#lib/shell/visualizer-notices.js';
 	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
@@ -173,8 +173,7 @@
 		const justConnected = takeVisualizerJustConnected();
 		void (async () => {
 			// A different account with nothing to upload has nothing to ask.
-			await history.seriesReady();
-			if (readSyncConfig().accountChangeAsk && vizBacklogCount() === 0) answerAccountChange(true);
+			await settleEmptyAccountChange(history);
 			if (justConnected) offerVisualizerCatchUp();
 		})();
 	});
@@ -580,6 +579,9 @@
 				disabled={!oauthConfigured || signingIn}
 				onClick={signIn}
 			/>
+			{#if syncCfg.needsReconnect}
+				<StButton label="Forget" onClick={disconnect} />
+			{/if}
 		{/if}
 	</div>
 </div>

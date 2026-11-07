@@ -14,6 +14,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -78,6 +79,7 @@ class VisualizerSessionTest {
     private var clock = 1_800_000_000_000L
     private var refresh: suspend (String) -> TokenSet = { error("no refresh expected") }
     private var issued = TokenSet("y-token", "y-refresh", expiresAt = Long.MAX_VALUE)
+    private var rowsLoad: suspend () -> Unit = {}
 
     private val sample = TelemetrySample(
         elapsedMs = 0, pressure = 9f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null,
@@ -108,6 +110,8 @@ class VisualizerSessionTest {
         onShotSynced = { local, remote -> history[local] = history.getValue(local).copy(visualizerId = remote) },
         currentShot = { history[it] },
         allShots = { history.values.toList() },
+        seriesReady = rowsLoad,
+        rowsWaitMs = 50,
         now = { clock },
         exchangeCode = { _, _ -> issued },
         refreshTokens = {
@@ -419,6 +423,44 @@ class VisualizerSessionTest {
         assertFalse(v.state.value.accountUnconfirmed)
         assertTrue(v.enabled)
         assertEquals("the queue moves again", 1, uploads.size)
+    }
+
+    @Test
+    fun `rows that never loaded leave the ask standing`() {
+        rowsLoad = { awaitCancellation() }
+        sync(VisualizerState(syncAccountId = "u1"))
+        me = HttpStatusCode.OK to """{"id":"u2","name":"Bo","public":false}"""
+        signIn()
+        assertTrue("an empty list read before the rows says nothing", lastSync.state.value.accountChangeAsk)
+        assertFalse(lastSync.enabled)
+    }
+
+    @Test
+    fun `a session with no id on record asks at the drain, with no hold`() {
+        val s = sync(VisualizerState(tokens = live))
+        assertTrue(s.enabled)
+        s.drainSoon()
+        settle()
+        assertEquals("u1", stored().syncAccountId)
+    }
+
+    @Test
+    fun `a failed ask for a session with no id holds nothing`() {
+        me = HttpStatusCode.ServiceUnavailable to "{}"
+        shot("a")
+        val s = sync(VisualizerState(tokens = live, retryQueue = listOf(QueuedUpload("a", 1, 0L))))
+        runBlocking { s.drainRetryQueue() }
+        assertEquals(1, uploads.size)
+    }
+
+    @Test
+    fun `forgetting clears the row and keeps the account on record`() {
+        val account = VisualizerAccount(id = "u1", name = "Ada", public = true, avatarUrl = "")
+        val s = sync(VisualizerState(account = account, needsReconnect = true))
+        s.signOut(quiet = true)
+        settle()
+        assertFalse(s.state.value.needsReconnect)
+        assertEquals("u1", stored().syncAccountId)
     }
 
     @Test

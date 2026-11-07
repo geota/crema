@@ -475,8 +475,15 @@ export const BeanSyncLive = Layer.effect(
 			// Which legs run (core `bean_sync_scope`): `backup` pushes only, `pull`
 			// pulls only and never writes remote, `two-way` both, `off` neither.
 			const syncConfig = readSyncConfig();
-			const scope = beanSyncScope(syncConfig.direction.beans, syncConfig.direction.roasters);
+			// A pull is fine, but nothing goes up to an account the user hasn't said
+			// yes to, and the baseline waits for the push that's held.
+			const asking = syncConfig.accountChangeAsk;
+			const legs = beanSyncScope(syncConfig.direction.beans, syncConfig.direction.roasters);
+			const scope = asking ? { ...legs, pushBeans: false, pushRoasters: false } : legs;
 			const lastSyncAt = settings.lastSyncAt;
+			// Rows the user kept off this account by saying no. New ones flow.
+			const keptOff = (create: boolean, row: { createdAt: number }): boolean =>
+				create && syncConfig.uploadExcludedBefore !== null && row.createdAt < syncConfig.uploadExcludedBefore;
 
 			const program = Effect.gen(function* () {
 				// Rows this run took from the remote (added roasters, every applied
@@ -569,7 +576,7 @@ export const BeanSyncLive = Layer.effect(
 				if (scope.pushRoasters) {
 					for (const item of planRoasterPush(library.roasters, lastSyncAt, pulledRoasterIds)) {
 						const local = library.getRoaster(item.localId);
-						if (!local) continue;
+						if (!local || keptOff(item.create, local)) continue;
 						if (premiumLocked) {
 							if (item.create) {
 								result.skipped += 1;
@@ -676,7 +683,7 @@ export const BeanSyncLive = Layer.effect(
 				if (scope.pushBeans) {
 					for (const item of planBeanPush(library.beans, lastSyncAt, pulledBeanIds)) {
 						const local = library.getBean(item.localId);
-						if (!local) continue;
+						if (!local || keptOff(item.create, local)) continue;
 						if (premiumLocked) {
 							if (item.create) {
 								result.skipped += 1;
@@ -706,7 +713,10 @@ export const BeanSyncLive = Layer.effect(
 				}
 
 				// 5) Mark complete.
-				writeSyncSettings({ lastSyncAt: Date.now(), premium: premiumLocked ? false : (settings.premium ?? true) });
+				writeSyncSettings({
+					lastSyncAt: asking ? lastSyncAt : Date.now(),
+					premium: premiumLocked ? false : (settings.premium ?? true)
+				});
 				result.ok = true;
 				result.premiumLocked = premiumLocked;
 			});

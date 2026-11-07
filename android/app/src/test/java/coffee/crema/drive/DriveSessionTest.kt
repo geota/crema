@@ -263,7 +263,7 @@ class DriveSessionTest {
     }
 
     @Test
-    fun `a 401 that won't clear is not retried for ever`() {
+    fun `a 401 that won't clear is a refusal, said once, not an ended sign-in`() {
         refresh = { set("fresh", refresh = "r2") }
         upload = { throw DriveHttpError(401, "", "Drive upload failed (HTTP 401).") }
         val s = sync(DriveState(tokens = set("live")))
@@ -271,6 +271,40 @@ class DriveSessionTest {
         settle()
         assertEquals(2, uploads.size)
         assertEquals(1, grants.get())
+        assertEquals(listOf("Google Drive backup failed: Drive upload failed (HTTP 401)."), notices)
+        assertEquals("Google Drive refused the last backup.", s.state.value.healthLine)
+        assertNotNull("the session stands", stored().tokens)
+        assertFalse(stored().needsReconnect)
+    }
+
+    @Test
+    fun `an automatic backup says a repeated 401 once, not every launch`() {
+        refresh = { set("fresh", refresh = "r2") }
+        upload = { throw DriveHttpError(401, "", "Drive upload failed (HTTP 401).") }
+        autoBackup(sync(DriveState(tokens = set("live"))))
+        assertEquals(listOf(DRIVE_REFUSED_LINE), notices)
+
+        clock += 2 * 24 * 60 * 60 * 1000L
+        autoBackup(reopen())
+        assertEquals("the second one", 1, notices.size)
+    }
+
+    @Test
+    fun `a tapped backup on a dead session says so once`() {
+        refresh = { throw invalidGrant }
+        val s = sync(DriveState(tokens = stale))
+        s.backupNow()
+        settle()
+        assertEquals(listOf(DRIVE_RECONNECT_LINE), notices)
+    }
+
+    @Test
+    fun `a refresh Google refuses for another reason names no null`() {
+        refresh = { throw DriveHttpError(401, """{"error":"invalid_client"}""", "invalid_client") }
+        val s = sync(DriveState(tokens = stale))
+        s.backupNow()
+        settle()
+        assertEquals(listOf("Google Drive backup failed: Google Drive refused the request"), notices)
     }
 
     @Test

@@ -5,6 +5,7 @@ import coffee.crema.core.RunOutcome
 import coffee.crema.core.RunOutcomeCompleteInner
 import coffee.crema.core.RunOutcomeFailedInner
 import coffee.crema.core.SyncFailure
+import coffee.crema.core.SyncFailureRejectedInner
 import coffee.crema.core.callbackOutcome
 import coffee.crema.core.reconnectNoticeDue
 import coffee.crema.runCatchingCancellable
@@ -288,7 +289,7 @@ class DriveSync(
     }
 
     /** A Drive call that couldn't get a token, or whose retry couldn't. */
-    private class NoDriveToken(val failure: SyncFailure) : Exception()
+    private class NoDriveToken(val failure: SyncFailure, message: String? = null) : Exception(message)
 
     private val refresher = SingleFlightRefresh<DriveTokenSet>(
         stored = { persisted.tokens },
@@ -334,7 +335,15 @@ class DriveSync(
         } catch (e: DriveHttpError) {
             if (driveFailure(e, "call", now()) != SyncFailure.AccessRefused) throw e
             when (val again = refreshed(tokens, rejected = true)) {
-                is FreshToken.Token -> return call(again.set.accessToken)
+                is FreshToken.Token -> try {
+                    return call(again.set.accessToken)
+                } catch (second: DriveHttpError) {
+                    // A fresh token and still a 401: Drive is refusing this
+                    // sign-in, and Google hasn't ended it, so it isn't one to
+                    // word as ended.
+                    if (driveFailure(second, "call", now()) != SyncFailure.AccessRefused) throw second
+                    throw NoDriveToken(SyncFailure.Rejected(SyncFailureRejectedInner(second.status.toUShort())), second.message)
+                }
                 is FreshToken.Waiting -> throw NoDriveToken(again.failure)
                 FreshToken.NeedsReconnect -> throw NoDriveToken(SyncFailure.SessionEnded)
             }
@@ -349,25 +358,34 @@ class DriveSync(
         RunOutcomeCompleteInner(next_cursor_ms = 0, applied = 1u, unchanged = 0u, skipped_permanent = 0u),
     )
 
-    /** Keep the run's lasting status, and raise the one reconnect notice on the way in. */
-    private suspend fun finishRun(outcome: RunOutcome) {
+    /** Keep the run's lasting status, and raise the one reconnect notice on the way
+     *  in. True when the status changed. */
+    private suspend fun finishRun(outcome: RunOutcome): Boolean {
         val previous = persisted.health
         val next = driveHealthAfter(outcome, now())
         persist { it.copy(health = next) }
         if (reconnectNoticeDue(previous, next)) notify(DRIVE_RECONNECT_LINE)
+        return previous != next
     }
 
-    /** The set a user-started [action] runs with; null once it has said why it can't start. */
-    private suspend fun heldForUser(held: FreshToken, action: String): DriveTokenSet? = when (held) {
-        is FreshToken.Token -> held.set
-        FreshToken.NeedsReconnect -> {
-            notify(if (persisted.needsReconnect) DRIVE_RECONNECT_LINE else "Connect Google Drive first")
-            null
-        }
-        is FreshToken.Waiting -> {
-            finishRun(failed(held.failure))
-            notify("Google Drive $action failed: ${driveFailureLine(held.failure)}")
-            null
+    /**
+     * A token for a user-started [action], or null once it has said why it can't
+     * start. A session that ended in this very call has said so already.
+     */
+    private suspend fun tokenForUser(action: String): DriveTokenSet? {
+        val alreadyEnded = persisted.needsReconnect
+        return when (val held = freshToken()) {
+            is FreshToken.Token -> held.set
+            FreshToken.NeedsReconnect -> {
+                if (!persisted.needsReconnect) notify("Connect Google Drive first")
+                else if (alreadyEnded) notify(DRIVE_RECONNECT_LINE)
+                null
+            }
+            is FreshToken.Waiting -> {
+                finishRun(failed(held.failure))
+                notify("Google Drive $action failed: ${driveFailureLine(held.failure, null)}")
+                null
+            }
         }
     }
 
@@ -377,7 +395,7 @@ class DriveSync(
     fun backupNow() {
         scope.launch {
             if (!ownState.await()) return@launch
-            val tokens = heldForUser(freshToken(), "backup") ?: return@launch
+            val tokens = tokenForUser("backup") ?: return@launch
             // Busy from the start: building the zip takes a while on a big
             // history (it runs off Main, so the UI stays live meanwhile).
             _state.update { it.copy(busy = true) }
@@ -397,7 +415,7 @@ class DriveSync(
                 finishRun(failed(failure))
                 // A session that just ended has said so once already.
                 if (failure != SyncFailure.SessionEnded) {
-                    notify("Google Drive backup failed: ${driveFailureLine(failure) ?: e.message}")
+                    notify("Google Drive backup failed: ${driveFailureLine(failure, e.message)}")
                 }
             }
             _state.update { it.copy(busy = false) }
@@ -422,8 +440,14 @@ class DriveSync(
             if (last != null && now() - last < AUTO_BACKUP_INTERVAL_MS) return@launch
             val tokens = when (val held = freshToken()) {
                 is FreshToken.Token -> held.set
-                is FreshToken.Waiting -> return@launch finishRun(failed(held.failure))
-                FreshToken.NeedsReconnect -> return@launch finishRun(failed(SyncFailure.SessionEnded))
+                is FreshToken.Waiting -> {
+                    finishRun(failed(held.failure))
+                    return@launch
+                }
+                FreshToken.NeedsReconnect -> {
+                    finishRun(failed(SyncFailure.SessionEnded))
+                    return@launch
+                }
             }
             persist { it.copy(lastAutoBackupAtMs = now()) }
             val zip = backupZip() ?: return@launch
@@ -443,7 +467,10 @@ class DriveSync(
             } catch (e: Exception) {
                 val failure = failureOf(e)
                 if (isTransient(failure)) persist { it.copy(lastAutoBackupAtMs = last) }
-                finishRun(failed(failure))
+                val changed = finishRun(failed(failure))
+                // Everything else stays a Settings line. This one a user can act
+                // on, and it won't clear by itself: once, on the way in.
+                if (changed && e is NoDriveToken && failure is SyncFailure.Rejected) notify(DRIVE_REFUSED_LINE)
             }
         }
     }
@@ -468,7 +495,7 @@ class DriveSync(
     fun restoreLatest(wipe: Boolean) {
         scope.launch {
             if (!ownState.await()) return@launch
-            val tokens = heldForUser(freshToken(), "restore") ?: return@launch
+            val tokens = tokenForUser("restore") ?: return@launch
             _state.update { it.copy(busy = true) }
             runCatchingCancellable {
                 withToken(tokens) { token ->
@@ -481,7 +508,7 @@ class DriveSync(
                 .onFailure { e ->
                     val failure = (e as? NoDriveToken)?.failure
                     if (failure != SyncFailure.SessionEnded) {
-                        notify("Google Drive restore failed: ${failure?.let(::driveFailureLine) ?: e.message}")
+                        notify("Google Drive restore failed: ${failure?.let { driveFailureLine(it, e.message) } ?: e.message}")
                     }
                 }
             _state.update { it.copy(busy = false) }

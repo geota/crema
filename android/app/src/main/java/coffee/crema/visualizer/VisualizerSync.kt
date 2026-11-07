@@ -137,6 +137,8 @@ class VisualizerSync(
     /** Core `callback_outcome`: what a redirect means for the stored handshake. */
     private val callbackRule: (expectedState: String?, verifier: String?, code: String?, returnedState: String?, error: String?) -> CallbackOutcome =
         ::callbackOutcome,
+    /** How long a run waits for the rows before it skips (tests shrink it). */
+    private val rowsWaitMs: Long = ROWS_WAIT_MS,
     /** Every shot as history holds it now: the backlog a different account is asked about. */
     private val allShots: () -> List<StoredShot> = { emptyList() },
     /** Revoke an access token at the server, best-effort (injected for JVM tests). */
@@ -237,6 +239,10 @@ class VisualizerSync(
 
     override val id: UploadTargetId get() = UploadTargetId.Visualizer
     override val enabled: Boolean get() = persisted.tokens != null && !uploadsHeld && directionPushes(persisted.prefs.shotsDirection)
+
+    /** `/me` still has to say whose this session is. */
+    private val accountToAsk: Boolean
+        get() = persisted.accountUnconfirmed || (persisted.syncAccountId == null && persisted.tokens != null)
 
     /** Nothing goes up until the account is known and any change of it is answered. */
     private val uploadsHeld: Boolean get() = persisted.accountUnconfirmed || persisted.accountChangeAsk
@@ -496,8 +502,10 @@ class VisualizerSync(
             // On a cold start the rows can still be loading, and the backlog
             // counted next needs them.
             scope.launch {
-                rowsReady()
-                if (persisted.accountChangeAsk && unsent(allShots()).isEmpty()) persist { it.copy(accountChangeAsk = false) }
+                // Rows that never loaded say nothing about the backlog: the ask stands.
+                if (rowsReady() && persisted.accountChangeAsk && unsent(allShots()).isEmpty()) {
+                    persist { it.copy(accountChangeAsk = false) }
+                }
                 onSignedIn()
             }
         }
@@ -616,6 +624,9 @@ class VisualizerSync(
 
     private fun directionPushes(d: String) = d == "backup" || d == "two-way"
     private fun directionPulls(d: String) = d == "pull" || d == "two-way"
+
+    /** [d] with its push leg taken off. */
+    private fun pullsOnly(d: String) = if (directionPulls(d)) "pull" else "off"
 
     /** Append a sync-activity line (capped at 20, newest first). Persisted. */
     private suspend fun logSync(direction: String, id: String, name: String, error: String? = null) {
@@ -903,7 +914,7 @@ class VisualizerSync(
         scope.launch {
             if (!ownState.await()) return@launch
             val idle = persisted.retryQueue.isEmpty() && persisted.shotTombstones.none { it.owed }
-            if (idle && !persisted.accountUnconfirmed) return@launch
+            if (idle && !accountToAsk) return@launch
             drainRetryQueue()
         }
     }
@@ -936,8 +947,12 @@ class VisualizerSync(
      * returns the number uploaded.
      */
     internal suspend fun drainRetryQueue(): Int {
-        // Nothing moves until `/me` says whose session this is; each drain asks.
-        if (persisted.accountUnconfirmed && !confirmAccount()) return 0
+        // Nothing moves until `/me` says whose session this is, so each drain
+        // asks. A session from before this was recorded gets its id here too.
+        if (accountToAsk) {
+            val held = persisted.accountUnconfirmed
+            if (!confirmAccount() && held) return 0
+        }
         if (uploadsHeld) return 0
         // Own state loads apart from the rows, and a shot that isn't in the
         // history leaves the queue: not before the rows are there. A later
@@ -1418,6 +1433,9 @@ class VisualizerSync(
         try {
             if (persisted.tokens == null) return BeanSyncResult(error = "Sign in to Visualizer first.")
             if (persisted.accountUnconfirmed) return BeanSyncResult(error = ACCOUNT_HELD_NOTICE)
+            // A pull is fine, but nothing goes up to an account the user hasn't
+            // said yes to, and the baseline waits for the push that's held.
+            val asking = persisted.accountChangeAsk
             val snapshot = beanLibrary()
             val runner = BeanSyncRunner(
                 core = beanSyncCore,
@@ -1431,8 +1449,9 @@ class VisualizerSync(
                 BeanSyncSettings(
                     lastSyncAt = persisted.beanLastSyncAt,
                     premium = persisted.premium,
-                    beansDirection = persisted.prefs.beansDirection,
-                    roastersDirection = persisted.prefs.roastersDirection,
+                    beansDirection = if (asking) pullsOnly(persisted.prefs.beansDirection) else persisted.prefs.beansDirection,
+                    roastersDirection = if (asking) pullsOnly(persisted.prefs.roastersDirection) else persisted.prefs.roastersDirection,
+                    createsFrom = persisted.uploadExcludedBefore,
                 ),
             )
             onBeansSynced(result, snapshot.beans.mapTo(HashSet()) { it.id }, snapshot.roasters.mapTo(HashSet()) { it.id })
@@ -1442,7 +1461,7 @@ class VisualizerSync(
             persist { st ->
                 st.copy(
                     premium = result.premium,
-                    beanLastSyncAt = result.lastSyncAt ?: st.beanLastSyncAt,
+                    beanLastSyncAt = result.lastSyncAt?.takeUnless { asking } ?: st.beanLastSyncAt,
                     log = (listOfNotNull(failure) + result.log.take(10) + st.log).take(20),
                 )
             }
@@ -1578,7 +1597,7 @@ class VisualizerSync(
      * is told once, not once per trigger.
      */
     private suspend fun rowsReady(): Boolean {
-        if (withTimeoutOrNull(ROWS_WAIT_MS) { seriesReady() } != null) return true
+        if (withTimeoutOrNull(rowsWaitMs) { seriesReady() } != null) return true
         if (rowsLateTold.compareAndSet(false, true)) {
             notify("Shot data hasn’t loaded, so Visualizer uploads are waiting. They’ll retry on their own.")
         }

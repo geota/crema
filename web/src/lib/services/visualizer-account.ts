@@ -54,6 +54,20 @@ export function answerAccountChange(upload: boolean): void {
 }
 
 /**
+ * A different account with nothing to upload has nothing to ask. Series that never
+ * loaded say nothing about the backlog, so the ask stands.
+ */
+export async function settleEmptyAccountChange(history: {
+	seriesReady(): Promise<boolean>;
+	readonly visualizerBacklog: readonly unknown[];
+}): Promise<void> {
+	const loaded = await history.seriesReady();
+	if (loaded && readSyncConfig().accountChangeAsk && history.visualizerBacklog.length === 0) {
+		answerAccountChange(true);
+	}
+}
+
+/**
  * Ask `/me` who this session is. `false` when it didn't answer or named no one:
  * any hold stays, and the next drain asks again.
  */

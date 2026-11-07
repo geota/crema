@@ -24,7 +24,7 @@ import { enqueueEntry, readQueue } from './queue-store.ts';
 import { ShotSync } from './shot-sync.ts';
 import { TokenVault } from './token-vault.ts';
 import { UploadQueue, UploadQueueLive } from './upload-queue.ts';
-import { answerAccountChange, applyAccount } from './visualizer-account.ts';
+import { answerAccountChange, applyAccount, settleEmptyAccountChange } from './visualizer-account.ts';
 import { completeVisualizerSignIn } from './visualizer-sign-in.ts';
 import type { TokenSet } from '../visualizer/oauth.ts';
 
@@ -218,6 +218,21 @@ describe('a different account', () => {
 		answerAccountChange(true);
 		expect(uploadsHeld()).toBe(false);
 		expect(excludedFromUpload({ completedAt: 1 })).toBe(false);
+	});
+
+	it('with nothing to upload there is nothing to ask', async () => {
+		updateSyncConfig({ syncAccountId: 'u1' });
+		applyAccount('u2');
+		await settleEmptyAccountChange({ seriesReady: async () => true, visualizerBacklog: [] });
+		expect(readSyncConfig().accountChangeAsk).toBe(false);
+	});
+
+	it('series that never loaded leave the ask standing', async () => {
+		updateSyncConfig({ syncAccountId: 'u1' });
+		applyAccount('u2');
+		await settleEmptyAccountChange({ seriesReady: async () => false, visualizerBacklog: [] });
+		expect(readSyncConfig().accountChangeAsk).toBe(true);
+		expect(uploadsHeld()).toBe(true);
 	});
 
 	it('a later change starts over', () => {
