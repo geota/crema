@@ -21,6 +21,7 @@ import coffee.crema.persist.saveItem
 import coffee.crema.persist.saveStore
 import coffee.crema.ui.TelemetrySample
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -559,29 +560,32 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
     suspend fun save(shots: List<StoredShot>) {
         if (!SaveFloor.admit(file, WHAT)) return
-        // The lock before the hop, so saves land in call order and the newest
-        // snapshot wins.
-        lock.withLock {
-            withContext(Dispatchers.IO) {
-                for (shot in shots) {
-                    val name = seriesFile(shot.id).name
-                    if (shot.samples.isEmpty() || name in written) continue
-                    if (writeSeries(shot.id, shot.samples)) written += name
-                }
-                // Only a shot whose series file is written goes without its
-                // samples; the rest stay inline until a later save writes them
-                // (a full disk must not cost a shot its curve).
-                val saved = runCatching {
-                    json.encodeToString(
-                        ListSerializer(StoredShot.serializer()),
-                        shots.map { if (it.samples.isNotEmpty() && seriesFile(it.id).name in written) it.copy(samples = emptyList()) else it },
-                    )
-                }.map { saveStore(file, WHAT, it) }.getOrDefault(false)
-                // Nothing moves on a failed save: the old rows are still on
-                // disk, so their series have to be as well.
-                if (saved) {
-                    if (deletesPaused.get() == 0) deleteSeriesAfter(shots)
-                    known = shots.mapTo(HashSet()) { it.id }
+        // A save that's been asked for lands, even if its scope is cancelled
+        // while it waits. The lock before the hop, so saves land in call order
+        // and the newest snapshot wins; the series writes block, so they hop.
+        withContext(NonCancellable) {
+            lock.withLock {
+                withContext(Dispatchers.IO) {
+                    for (shot in shots) {
+                        val name = seriesFile(shot.id).name
+                        if (shot.samples.isEmpty() || name in written) continue
+                        if (writeSeries(shot.id, shot.samples)) written += name
+                    }
+                    // Only a shot whose series file is written goes without its
+                    // samples; the rest stay inline until a later save writes them
+                    // (a full disk must not cost a shot its curve).
+                    val saved = saveStore(file, WHAT) {
+                        json.encodeToString(
+                            ListSerializer(StoredShot.serializer()),
+                            shots.map { if (it.samples.isNotEmpty() && seriesFile(it.id).name in written) it.copy(samples = emptyList()) else it },
+                        )
+                    }
+                    // Nothing moves on a failed save: the old rows are still on
+                    // disk, so their series have to be as well.
+                    if (saved) {
+                        if (deletesPaused.get() == 0) deleteSeriesAfter(shots)
+                        known = shots.mapTo(HashSet()) { it.id }
+                    }
                 }
             }
         }

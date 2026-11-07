@@ -10,7 +10,7 @@ import coffee.crema.persist.SafeFile
 import coffee.crema.persist.StoreHealth
 import coffee.crema.persist.Stores
 import coffee.crema.persist.SaveFloor
-import coffee.crema.persist.saveStore
+import coffee.crema.persist.saveNow
 import coffee.crema.ui.components.refusedStoreText
 import coffee.crema.visualizer.HISTORY_REFUSED_NOTICE
 import kotlinx.coroutines.CompletableDeferred
@@ -83,7 +83,7 @@ class RefusedStoreVmTest {
         assertEquals(StoreHealth.UNAVAILABLE, Stores.health(library))
         assertEquals(null, vm.ui.value.activeBeanId)
 
-        assertFalse(saveStore(library, "bean library", """{"beans":[],"roasters":[]}"""))
+        assertFalse(saveNow(library, "bean library", """{"beans":[],"roasters":[]}"""))
         library.setReadable(true)
         assertEquals(aBean, library.readText())
         assertEquals(emptyList(), SafeFile.keptAside(library))
@@ -166,7 +166,7 @@ class RefusedStoreVmTest {
         var landed: Boolean? = null
         SafeFile.afterLoad = { file ->
             // The refusal has just lifted, and the rows aren't in memory yet.
-            if (file == shots && landed == null) landed = saveStore(shots, "shot history", "[]")
+            if (file == shots && landed == null) landed = SaveFloor.admit(shots, "shot history")
         }
         val retry = vm.retryStore(vm.ui.value.refusedStores.single())
         VmHarness.idleUntil("the reload") { retry.isCompleted }
@@ -187,7 +187,7 @@ class RefusedStoreVmTest {
         var landed: Boolean? = null
         SafeFile.afterLoad = { file ->
             // Pinned has loaded; hidden hasn't, and memory holds no ids from it yet.
-            if (file == pinned && landed == null) landed = saveStore(hidden, "hidden profiles list", """{"ids":["new"]}""")
+            if (file == pinned && landed == null) landed = SaveFloor.admit(hidden, "hidden profiles list")
         }
         val retry = vm.retryStore(vm.ui.value.refusedStores.single())
         VmHarness.idleUntil("the reload") { retry.isCompleted }
@@ -323,7 +323,7 @@ class RefusedStoreVmTest {
         assertEquals(emptyList(), vm.refused())
         assertFalse(library.exists())
         assertEquals(StoreHealth.ABSENT, Stores.health(library))
-        assertTrue(saveStore(library, "bean library", """{"beans":[],"roasters":[]}"""))
+        assertTrue(saveNow(library, "bean library", """{"beans":[],"roasters":[]}"""))
         val kept = SafeFile.keptAside(library).single()
         kept.setReadable(true)
         assertEquals(aBean, kept.readText())

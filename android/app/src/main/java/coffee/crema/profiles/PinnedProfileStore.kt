@@ -5,7 +5,6 @@ import coffee.crema.persist.eraseStore
 import coffee.crema.persist.inSaveOrder
 import coffee.crema.persist.SafeFile
 import coffee.crema.persist.SafeLoad
-import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -50,10 +49,7 @@ class PinnedProfileStore(private val context: Context, private val json: Json) {
 
     /** Persist the pinned ids (best-effort). */
     suspend fun save(ids: Set<String>) {
-        if (!SaveFloor.admit(file, WHAT)) return
-        inSaveOrder(file) {
-            saveStore(file, WHAT, json.encodeToString(PinnedProfiles.serializer(), PinnedProfiles(ids.toList())))
-        }
+        saveStore(file, WHAT) { json.encodeToString(PinnedProfiles.serializer(), PinnedProfiles(ids.toList())) }
     }
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
