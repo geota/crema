@@ -1,5 +1,8 @@
 package coffee.crema.drive
 
+import coffee.crema.core.CallbackOutcome
+import coffee.crema.core.callbackOutcome
+import coffee.crema.sync.OwnStateGate
 import coffee.crema.visualizer.codeChallengeFromVerifier
 import coffee.crema.visualizer.generateCodeVerifier
 import coffee.crema.visualizer.randomState
@@ -61,6 +64,9 @@ class DriveSync(
         { code, verifier -> exchangeCodeForDriveToken(clientId, code, verifier, json) },
     /** The refresh-token grant (injected so JVM tests can drive a refresh). */
     private val refreshToken: suspend (refresh: String) -> DriveTokenSet = { refresh -> refreshDriveToken(clientId, refresh, json) },
+    /** Core `callback_outcome`: what a redirect means for the stored handshake. */
+    private val callbackRule: (expectedState: String?, verifier: String?, code: String?, returnedState: String?, error: String?) -> CallbackOutcome =
+        ::callbackOutcome,
 ) {
     /** What the Settings UI binds to (mirrored into MainUiState). */
     data class UiState(
@@ -77,12 +83,26 @@ class DriveSync(
     private val _state = MutableStateFlow(UiState(configured = clientId.isNotBlank()))
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    @Volatile
     private var persisted = DriveState()
     private val persistMutex = Mutex()
 
-    /** Hydrate from disk at startup (called from the VM's init coroutine). */
+    /** Holds everything that touches [persisted] until [load] has read the file. */
+    private val ownState = OwnStateGate("Google Drive", notify)
+
+    /** A sign-in began in this process. One from before a restart is for its redirect to finish. */
+    @Volatile
+    private var signInStartedHere = false
+
+    /** Hydrate from disk at startup (its own coroutine, so nothing in the row
+     *  load can strand a sign-in or the daily backup). */
     suspend fun load() {
-        persisted = store.load()
+        try {
+            persisted = store.load()
+            ownState.opened()
+        } finally {
+            ownState.failed()
+        }
         fold()
     }
 
@@ -95,6 +115,7 @@ class DriveSync(
     }
 
     private suspend fun persist(mutate: (DriveState) -> DriveState) {
+        if (!ownState.await()) return
         persistMutex.withLock {
             // New tokens replace a sign-in the keystore couldn't open at start.
             persisted = mutate(persisted).let { if (it.tokens != null && it.unopened != null) it.copy(unopened = null) else it }
@@ -115,6 +136,8 @@ class DriveSync(
         val verifier = generateCodeVerifier()
         val csrf = randomState()
         scope.launch {
+            if (!ownState.await()) return@launch
+            signInStartedHere = true
             persist {
                 it.copy(
                     pendingVerifier = verifier,
@@ -138,10 +161,13 @@ class DriveSync(
      * [handleCallback], whose clear is a coroutine, so checking synchronously
      * on resume would race it. [GRACE_MS] also keeps a fast tab-open →
      * tab-close round trip from tripping this.
+     *
+     * A handshake from before a restart isn't judged here: the consent page can
+     * still be open, and its redirect can still finish the sign-in.
      */
     fun notePossibleAbandon() {
         scope.launch {
-            if (persisted.pendingVerifier == null) return@launch
+            if (!signInStartedHere || persisted.pendingVerifier == null) return@launch
             delay(GRACE_MS)
             val started = persisted.pendingStartedAtMs ?: 0L
             if (persisted.pendingVerifier == null) return@launch
@@ -155,20 +181,25 @@ class DriveSync(
      *  state, exchanges the single-use code, persists the token. */
     fun handleCallback(code: String?, returnedState: String?, error: String?) {
         scope.launch {
+            if (!ownState.await()) return@launch
             val verifier = persisted.pendingVerifier
-            val expected = persisted.pendingState
+            val outcome = callbackRule(persisted.pendingState, verifier, code, returnedState, error)
+            // With no handshake of ours (a stray redirect, a cold start or a
+            // recreated activity replaying one) it writes nothing, and one in
+            // progress survives it.
+            if (outcome == CallbackOutcome.NotOurs) return@launch
+            // Single-use — clear the handshake whatever happens next.
             persist { it.copy(pendingVerifier = null, pendingState = null, pendingStartedAtMs = null) }
-            when {
-                // `access_denied` IS the user declining; anything else is
-                // Google refusing the request, and saying "cancelled" for that
+            when (outcome) {
+                CallbackOutcome.NotOurs -> Unit
+                CallbackOutcome.Cancelled -> notify("Google Drive sign-in was cancelled")
+                // Google refusing the request: saying "cancelled" for that
                 // hides a real configuration fault (geota/crema#45).
-                error == "access_denied" -> notify("Google Drive sign-in was cancelled")
-                error != null -> notify("Google Drive sign-in failed: $error")
-                code == null -> notify("Google Drive sign-in failed — no code returned")
-                verifier == null -> notify("Google Drive sign-in expired — try again")
-                expected == null || expected != returnedState ->
-                    notify("Google Drive sign-in failed — state mismatch, try again")
-                else -> {
+                is CallbackOutcome.Refused -> notify("Google Drive sign-in failed: ${outcome.error}")
+                CallbackOutcome.NoCode -> notify("Google Drive sign-in failed — no code returned")
+                CallbackOutcome.Exchange -> {
+                    code ?: return@launch
+                    verifier ?: return@launch
                     _state.update { it.copy(busy = true) }
                     runCatching { exchangeCode(code, verifier) }
                         .onSuccess { tokens ->
@@ -189,6 +220,7 @@ class DriveSync(
      */
     fun disconnect(quiet: Boolean = false) {
         scope.launch {
+            if (!ownState.await()) return@launch
             val tokens = persisted.tokens
             // Also forgets a stored sign-in the keystore couldn't open this start.
             persist { it.copy(tokens = null, unopened = null) }
@@ -203,10 +235,14 @@ class DriveSync(
      * grant from the in-memory copy.
      */
     suspend fun eraseAll() {
+        // The grant to revoke is in the file; a load that never ended only
+        // costs the revoke, not the erase.
+        ownState.settle()
         val tokens = persistMutex.withLock {
             val t = persisted.tokens
             persisted = DriveState()
             store.erase()
+            ownState.opened()
             t
         }
         fold()
@@ -264,6 +300,7 @@ class DriveSync(
     fun autoBackupIfDue(enabled: Boolean) {
         if (!enabled) return
         scope.launch {
+            if (!ownState.await()) return@launch
             if (persisted.tokens == null) return@launch
             val last = persisted.lastAutoBackupAtMs
             val now = System.currentTimeMillis()

@@ -203,7 +203,9 @@ impl CremaCore {
     pub(crate) fn desired_shot_settings(&self) -> Option<ShotSettings> {
         let (mut packet, _) = self.shot_settings_intent()?;
         if self.steam.is_eco_mode() {
-            packet.steam_temp_c = self.steam_eco_temp;
+            // An override may lower a heater, never raise one: 0 °C is the
+            // user's "off", and eco must not light it.
+            packet.steam_temp_c = packet.steam_temp_c.min(self.steam_eco_temp);
         }
         if self.maintenance_steam_off {
             packet.steam_temp_c = 0.0;

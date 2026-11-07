@@ -426,6 +426,11 @@ impl World {
             self.link.lose_states -= 1;
             return;
         }
+        // A lost report can leave the core in another flow than the machine's,
+        // so a new state heard is a new episode too.
+        if self.heard != Some(self.de1.state) {
+            self.stopped_this_flow = false;
+        }
         self.heard = Some(self.de1.state);
         self.track_session(bytes[1]);
         let out = self

@@ -5583,6 +5583,11 @@ export type StartEnd =
 	/** Where the machine went. */
 	state: MachineState;
 }}
+	/**
+	 * The pre-shot flush did not begin within
+	 * [`PRESHOT_FLUSH_ENTRY_TIMEOUT`].
+	 */
+	| { kind: "FlushNotEntered", details?: undefined }
 	/** The machine did not report Espresso within [`ESPRESSO_ENTRY_TIMEOUT`]. */
 	| { kind: "NotEntered", details?: undefined }
 	/** A user's request, a link drop or a reset cancelled it. */

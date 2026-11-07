@@ -93,6 +93,7 @@ pub mod idle_sleep;
 pub mod ids;
 pub mod maintenance;
 pub mod mode_targets;
+pub mod oauth_callback;
 pub mod profile;
 pub mod profile_bounds;
 pub mod profile_file;
@@ -270,6 +271,7 @@ pub use mode_targets::{
     ModeTargetInputs, ModeTargets, READY_TOLERANCE_C, group_at_temperature, resolve_mode_targets,
     steam_at_temperature,
 };
+pub use oauth_callback::{CallbackOutcome, callback_outcome};
 pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,
@@ -299,7 +301,7 @@ pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,
     SteamSample,
 };
-pub use step_weight::{SKIP_RETRY_AFTER, SKIP_RETRY_MAX, StepWeightExit};
+pub use step_weight::{SKIP_EVIDENCE_MAX_AGE, SKIP_RETRY_AFTER, SKIP_RETRY_MAX, StepWeightExit};
 pub use stolen_serials::{
     STOLEN_SERIALS_REFRESH_MS, STOLEN_SERIALS_URL, parse_stolen_serials, serial_on_stolen_list,
     stolen_serials_list_is_valid, stolen_serials_refresh_due,

@@ -4,14 +4,7 @@
 //! Each test asserts what the core does **today**, so a change to any of it is
 //! a deliberate change. `Flips in PR n` names the PR that inverts the test;
 //! that PR rewrites it to the "after" in the note. A test with no such line is
-//! expected to stay. The ones marked `#[ignore]` (P8, P9, Q1, R1) flip in PR 1
-//! or PR 2, which branch from the same `main` and carry their own tests for the
-//! fixed behaviour, so these must not block whichever lands second. Run them
-//! with `cargo test -p de1-app --lib machine_control -- --ignored`.
-//!
-//! **Whichever of #338 and #339 lands second rewrites all four to the fixed
-//! behaviour and removes `#[ignore]`.** CI never runs ignored tests, so left
-//! alone they'd assert fixed bugs and nobody would notice.
+//! expected to stay, and `Fixed in PR n` marks one that has already flipped.
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -539,20 +532,19 @@ fn p7_scale_drop_in_settle_wipes_yield() {
     assert_eq!(fw, vec![(None, None)]);
 }
 
-/// P9: an unknown substate byte drops the whole state report.
-/// Flips in PR 1: `ShotCompleted` fires.
-#[ignore = "flips in PR 1"]
+/// P9: an unknown substate byte used to drop the whole state report.
+/// Fixed in PR 1.
 #[test]
-fn p9_unknown_substate_misses_shot_end() {
+fn p9_unknown_substate_still_ends_the_shot() {
     let mut core = CremaCore::new();
     core.on_notification(Source::De1State, &[4, 5], 0);
     let o = core.on_notification(Source::De1State, &[2, 21], 1000); // Idle + a substate this build lacks
     assert!(
-        !o.events
+        o.events
             .iter()
             .any(|e| matches!(e, Event::ShotCompleted { .. }))
     );
-    assert!(core.shot_started.is_some());
+    assert!(core.shot_started.is_none());
 }
 
 /// P11: scale flap around the target.
@@ -608,11 +600,10 @@ fn d1_web_disabled_flag_beats_qc_yield() {
     assert_eq!(core.stop_targets_projection().1.weight, None);
 }
 
-/// P8: step-weight skip repeats with no telemetry since the first skip.
-/// Flips in PR 2: one skip.
-#[ignore = "flips in PR 2"]
+/// P8: a step-weight skip used to repeat with no telemetry since the first
+/// skip. Fixed in PR 2.
 #[test]
-fn p8_skip_retry_without_fresh_frame_info() {
+fn p8_no_skip_retry_without_fresh_frame_info() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
@@ -638,14 +629,12 @@ fn p8_skip_retry_without_fresh_frame_info() {
         g += 0.3;
         t += 100;
     }
-    assert!(skips >= 2);
+    assert_eq!(skips, 1);
 }
 
-/// Q1: eco overrides a steam heater the user turned off.
-/// Flips in PR 2: stays at 0 °C.
-#[ignore = "flips in PR 2"]
+/// Q1: eco used to light a steam heater the user turned off. Fixed in PR 2.
 #[test]
-fn q1_eco_turns_a_disabled_steam_heater_on() {
+fn q1_eco_leaves_a_disabled_steam_heater_off() {
     let mut core = CremaCore::new();
     core.on_notification(Source::De1State, &[2, 0], 0);
     let s = de1_domain::ConnectSweepSettings {
@@ -667,7 +656,16 @@ fn q1_eco_turns_a_disabled_steam_heater_on() {
             .collect::<Vec<_>>()
     };
     let o = core.on_tick(10 + 601_000);
-    assert_eq!(pkt(&o)[0][1], 136);
+    assert!(
+        o.events
+            .iter()
+            .any(|e| matches!(e, Event::SteamEcoModeChanged { eco: true }))
+    );
+    assert!(pkt(&o).iter().all(|packet| packet[1] == 0), "stays at 0 °C");
+    assert_eq!(
+        core.desired_shot_settings().map(|p| p.steam_temp_c),
+        Some(0.0)
+    );
 }
 
 /// Q3: mirror: notifications carry the hub's clock, ticks the remote's.
@@ -774,32 +772,19 @@ fn q7_start_with_rejected_profile_waits_for_timeout() {
     )));
 }
 
-/// R1: pre-flush never began; 30 s later the start bounces whatever is running.
-/// Flips in PR 2: ends 10 s after the write with `FlushNotEntered`, no write.
-#[ignore = "flips in PR 2"]
+/// R1: a lost pre-flush used to request Espresso at 30 s, bouncing whatever was
+/// running. Fixed in PR 2: it ends 10 s after the write, with no write.
 #[test]
-fn r1_flush_ceiling_starts_espresso_over_steam() {
+fn r1_lost_flush_ends_the_start_and_leaves_steam_alone() {
     let mut core = CremaCore::new_with_model(1);
     core.on_notification(Source::De1State, &[2, 0], 0);
     core.connect_sweep(&de1_domain::ConnectSweepSettings::default(), 1);
     core.set_start_settings(true, false, false);
-    let p = de1_domain::CremaProfile {
-        segments: vec![],
-        ..serde_json::from_str::<Vec<de1_domain::CremaProfile>>(
-            &de1_domain::builtin_crema_profiles_json(),
-        )
-        .unwrap()
-        .remove(0)
-    };
-    let p = de1_domain::CremaProfile {
-        segments: serde_json::from_str::<Vec<de1_domain::CremaProfile>>(
-            &de1_domain::builtin_crema_profiles_json(),
-        )
-        .unwrap()
-        .remove(0)
-        .segments,
-        ..p
-    };
+    let p = serde_json::from_str::<Vec<de1_domain::CremaProfile>>(
+        &de1_domain::builtin_crema_profiles_json(),
+    )
+    .unwrap()
+    .remove(0);
     let r = core.start_shot(
         &p,
         &de1_domain::BrewOverrides::default(),
@@ -822,11 +807,24 @@ fn r1_flush_ceiling_starts_espresso_over_steam() {
         }
     }
     t += 600;
-    core.on_tick(t);
+    assert_eq!(
+        state_writes(&core.on_tick(t)),
+        vec![15],
+        "the flush request"
+    );
     // the rinse write was lost; the user starts steam at the group head
-    core.on_notification(Source::De1State, &[5, 7], 20_000);
-    let o = core.on_tick(31_000);
-    assert_eq!(state_writes(&o), vec![2, 4]);
+    core.on_notification(Source::De1State, &[5, 7], 5_000);
+    assert!(core.shot_starting());
+    let o = core.on_tick(t + 10_000);
+    assert!(o.events.iter().any(|e| matches!(
+        e,
+        Event::ShotStartEnded {
+            end: StartEnd::FlushNotEntered,
+            ..
+        }
+    )));
+    assert!(state_writes(&o).is_empty());
+    assert!(state_writes(&core.on_tick(31_000)).is_empty());
 }
 
 /// Review: a 1 s scale gap past a 36 ml limit stops the shot at once, because

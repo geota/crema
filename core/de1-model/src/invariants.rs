@@ -54,8 +54,7 @@ impl Invariant {
     pub const fn status(self) -> Status {
         match self {
             Self::I3 => Status::PendingPr(4),
-            Self::I7 | Self::I9 => Status::PendingPr(2),
-            Self::I6 | Self::I10 | Self::I11 => Status::Enforced,
+            Self::I6 | Self::I7 | Self::I9 | Self::I10 | Self::I11 => Status::Enforced,
             Self::I13 => Status::PendingPr(8),
         }
     }
