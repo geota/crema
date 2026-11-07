@@ -169,6 +169,27 @@ class VisualizerClientTest {
         assertNull(client.request("GET", "/x", "tok"))
     }
 
+    @Test
+    fun `a 403 that isn't about Premium never reads as Premium`() = runTest {
+        status = HttpStatusCode.Forbidden
+        val lines = mapOf(
+            """{"error":"You are not authorized to perform this action."}""" to "Visualizer refused this: it isn't on your account",
+            """{"error":"This account has been disabled. Contact miha@visualizer.coffee for more information."}""" to
+                "This Visualizer account is disabled",
+            """{"error":"Confirm your email address first. Sign in at visualizer.coffee to resend the confirmation email."}""" to
+                "Confirm your email at visualizer.coffee first",
+            "" to "Visualizer needs more access. Please sign in again",
+            "<html>proxy</html>" to "Visualizer refused this: it isn't on your account",
+        )
+        for ((body, line) in lines) {
+            reply = body
+            val e = fails<VisualizerError.Http>()
+            assertEquals(403, e.status)
+            assertEquals(body, e.body)
+            assertEquals(line, e.message)
+        }
+    }
+
     private suspend inline fun <reified E : VisualizerError> fails(): E {
         try {
             client.request("GET", "/me", "tok")
@@ -187,7 +208,9 @@ class VisualizerClientTest {
         status = HttpStatusCode.PaymentRequired
         fails<VisualizerError.PremiumGated>()
         status = HttpStatusCode.Forbidden
+        reply = """{"error":"You must be a premium user to access this feature."}"""
         fails<VisualizerError.PremiumGated>()
+        reply = "{}"
         status = HttpStatusCode.NotFound
         fails<VisualizerError.NotFound>()
         status = HttpStatusCode.InternalServerError

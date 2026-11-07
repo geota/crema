@@ -113,6 +113,8 @@ function drainWith(
 beforeEach(() => {
 	localStorage.clear();
 	vi.restoreAllMocks();
+	// The backoffs carry random jitter; these tests jump the clock to exact times.
+	vi.spyOn(Math, 'random').mockReturnValue(0);
 	mockHistory.get.mockReset();
 	mockHistory.bindVisualizerId.mockReset();
 	mockHistory.purgeTombstone.mockReset();
@@ -238,6 +240,49 @@ describe('UploadQueue.drain — shot create', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe('UploadQueue.drain — a remote delete outlives its attempts (#331)', () => {
+	it('delete_after_3_failures_retries: parks without dropping, and a later try lands', async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(0);
+			enqueueEntry({ entity: 'shot', id: 's1', op: 'delete', visualizerId: 'viz-9' });
+			const down = {
+				deleteShot: () => Effect.fail(new HttpStatusError({ status: 503, url: '/d' }))
+			};
+			for (const at of [0, 60_000, 120_000]) {
+				vi.setSystemTime(at);
+				await drainWith(down);
+			}
+			const parked = readQueue().entries[0];
+			expect(parked?.attempts).toBe(2);
+			expect(parked?.nextAttemptAt).toBe(120_000 + 3_600_000);
+
+			vi.setSystemTime(120_000 + 3_600_000 - 1);
+			expect((await drainWith(down)).processed).toBe(0);
+
+			vi.setSystemTime(120_000 + 3_600_000);
+			expect((await drainWith(down)).dropped).toBe(0);
+			expect(readQueue().entries).toHaveLength(1);
+
+			vi.setSystemTime(120_000 + 2 * 3_600_000);
+			expect((await drainWith({ deleteShot: () => Effect.void })).succeeded).toBe(1);
+			expect(readQueue().entries).toHaveLength(0);
+			expect(mockHistory.purgeTombstone).toHaveBeenCalledWith('s1');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('a terminal failure stops the delete and leaves the tombstone', async () => {
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'delete', visualizerId: 'viz-9' });
+		const result = await drainWith({
+			deleteShot: () => Effect.fail(new HttpStatusError({ status: 403, url: '/d', body: '{"error":"You are not authorized to perform this action."}' }))
+		});
+		expect(result.dropped).toBe(1);
+		expect(mockHistory.purgeTombstone).not.toHaveBeenCalled();
 	});
 });
 

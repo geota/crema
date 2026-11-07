@@ -5,7 +5,7 @@
  * Wraps `fetch` and turns its two failure modes into typed errors:
  *  - the fetch promise rejecting (offline, DNS, CORS) → `NetworkError`
  *  - a non-2xx response → `HttpStatusError` (carrying status + body so callers
- *    can branch: 401 → refresh, 402/403 → premium-gated, …)
+ *    can branch: 401 → refresh, a premium 402/403 → premium-gated, …)
  *
  * No retries here (those live in `UploadQueue`). The fetch is wired to the
  * fiber's `AbortSignal`, so an interrupt or timeout actually cancels the

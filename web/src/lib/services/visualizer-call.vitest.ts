@@ -15,7 +15,7 @@
 
 import { Cause, Duration, Effect, Exit, Fiber, Layer } from 'effect';
 import { TestClock } from 'effect/testing';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
 	describeVisualizerError,
 	isRecoverable,
@@ -138,9 +138,28 @@ describe('visualizerCall — status taxonomy', () => {
 		expect(got.value?.endpoint).toBe('/roasters');
 	});
 
-	it('maps 403 to VisualizerPremiumGatedError', async () => {
-		const got = await failTag(run(visualizerCall('/coffee_bags', { method: 'POST', body: {} }), () => ({ ok: false, status: 403 })));
+	it('maps a 403 naming Premium to VisualizerPremiumGatedError', async () => {
+		const got = await failTag(
+			run(visualizerCall('/coffee_bags', { method: 'POST', body: {} }), () => ({
+				ok: false,
+				status: 403,
+				body: '{"error":"You must be a premium user to access this feature."}'
+			}))
+		);
 		expect(got.tag).toBe('VisualizerPremiumGatedError');
+	});
+
+	it.each([
+		['a row on another account', '{"error":"You are not authorized to perform this action."}'],
+		['a disabled account', '{"error":"This account has been disabled. Contact miha@visualizer.coffee for more information."}'],
+		['a missing scope', ''],
+		['a proxy page', '<html>nope</html>']
+	])('keeps a 403 for %s out of the premium path', async (_name, body) => {
+		const got = await failTag(
+			run(visualizerCall('/shots/abc', { method: 'PATCH', body: {} }), () => ({ ok: false, status: 403, body }))
+		);
+		expect(got.tag).toBe('HttpStatusError');
+		expect(got.value?.status).toBe(403);
 	});
 
 	it('maps 404 to VisualizerNotFoundError (visualizerId = path)', async () => {
@@ -237,14 +256,38 @@ describe('quotaLimit — the free-plan daily cap (visualizer 3e9ba33c)', () => {
 		);
 	});
 	it('backs a 429 off by a minute and up', () => {
-		expect(retryDelayMs(new HttpStatusError({ status: 429, url: 'u' }), 0)).toBe(60_000);
-		expect(retryDelayMs(new HttpStatusError({ status: 503, url: 'u' }), 1)).toBe(2_000);
+		expect(retryDelayMs(new HttpStatusError({ status: 429, url: 'u' }), 0, 0)).toBe(60_000);
+		expect(retryDelayMs(new HttpStatusError({ status: 429, url: 'u' }), 1, 0)).toBe(600_000);
+		expect(retryDelayMs(new HttpStatusError({ status: 503, url: 'u' }), 1, 0)).toBe(2_000);
+	});
+
+	it('adds its own jitter unless told one', () => {
+		const random = vi.spyOn(Math, 'random').mockReturnValue(1);
+		try {
+			expect(retryDelayMs(new HttpStatusError({ status: 429, url: 'u' }), 0)).toBe(72_000);
+			expect(retryDelayMs(new HttpStatusError({ status: 503, url: 'u' }), 1)).toBe(2_500);
+		} finally {
+			random.mockRestore();
+		}
 	});
 });
 
 describe('describeVisualizerError', () => {
 	it('formats an HttpStatusError with status + body', () => {
 		expect(describeVisualizerError(new HttpStatusError({ status: 500, url: 'u', body: 'boom' }))).toBe('HTTP 500: boom');
+	});
+	it('never asks for Premium on a 403 that is not about it', () => {
+		const line = (body: string) => describeVisualizerError(new HttpStatusError({ status: 403, url: 'u', body }));
+		expect(line('{"error":"You are not authorized to perform this action."}')).toBe(
+			"Visualizer refused this: it isn't on your account."
+		);
+		expect(line('{"error":"This account has been disabled. Contact miha@visualizer.coffee for more information."}')).toBe(
+			'This Visualizer account is disabled.'
+		);
+		expect(line('{"error":"Confirm your email address first. Sign in at visualizer.coffee to resend the confirmation email."}')).toBe(
+			'Confirm your email at visualizer.coffee first.'
+		);
+		expect(line('')).toBe('Visualizer needs more access. Please sign in again.');
 	});
 	it('uses the generic "row" wording for not-found', () => {
 		expect(describeVisualizerError(new VisualizerNotFoundError({ visualizerId: 'v9' }))).toBe('Visualizer row not found: v9');

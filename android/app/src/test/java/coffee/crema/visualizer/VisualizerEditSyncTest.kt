@@ -62,6 +62,9 @@ class VisualizerEditSyncTest {
     /** What the server answers the premium probe with. */
     private var probeStatus = HttpStatusCode.UnprocessableEntity
 
+    /** The body of a 403 to the premium probe: `Authorization#check_premium!`'s, by default. */
+    private var probeRefusal = """{"error":"You must be a premium user to access this feature."}"""
+
     /** What the server answers a shot PATCH with (an error = the edit did not land). */
     private var patchStatus = HttpStatusCode.OK
     private val requests = mutableListOf<Pair<String, String>>()
@@ -71,7 +74,11 @@ class VisualizerEditSyncTest {
         val (status, body) = when {
             path.endsWith("/me") -> HttpStatusCode.OK to """{"id":"u1","name":"Ada","public":true}"""
             req.method.value == "POST" && path.endsWith("/roasters") ->
-                probeStatus to (if (probeStatus.value < 300) """{"id":"r-sentinel"}""" else """{"error":"x"}""")
+                probeStatus to when {
+                    probeStatus.value < 300 -> """{"id":"r-sentinel"}"""
+                    probeStatus == HttpStatusCode.Forbidden -> probeRefusal
+                    else -> """{"error":"x"}"""
+                }
             req.method.value == "PATCH" -> patchStatus to "{}"
             else -> HttpStatusCode.OK to "{}"
         }
@@ -221,6 +228,18 @@ class VisualizerEditSyncTest {
         assertEquals(listOf<Boolean?>(null), tiersSeen)
         assertTrue("no request for a Premium-only edit: $requests", requests.isEmpty())
         assertTrue("silent: $notices", notices.isEmpty())
+    }
+
+    @Test
+    fun `a 403 that isn't about Premium leaves the tier unknown`() {
+        seed(premium = null, signedIn = false)
+        probeStatus = HttpStatusCode.Forbidden
+        probeRefusal = """{"error":"Confirm your email address first. Sign in at visualizer.coffee to resend the confirmation email."}"""
+        val s = sync().also { runBlocking { it.load() } }
+        s.handleCallback(code = "code", returnedState = "csrf", error = null)
+        settle()
+        assertEquals(1, probes())
+        assertEquals(null, runBlocking { store.load() }.premium)
     }
 
     @Test

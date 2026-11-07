@@ -8,6 +8,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlin.random.Random
 
 /*
  * The Visualizer backlog loop's stop / retry policy — the Android twin of the
@@ -19,7 +20,7 @@ import kotlinx.serialization.json.longOrNull
  *    visualizer 3e9ba33c — detected by the core's `visualizer_quota_limit`):
  *    stop, leave the rest unsynced for tomorrow, and say so;
  *  - the rate limit (429): wait out the window (core `retry_backoff_ms`: 60 s,
- *    then 120 s) and retry the same shot; still limited → stop, the rest stay
+ *    then 10 min) and retry the same shot; still limited → stop, the rest stay
  *    in the backlog;
  *  - an expired session: stop.
  *
@@ -115,6 +116,7 @@ class UploadPolicy(
                     status?.takeIf { it in 0..0xFFFF }?.toUShort(),
                     body,
                     attempts.coerceAtLeast(0).toUInt(),
+                    Random.nextDouble(),
                 )
             },
             quotaLimit = { status, body ->
@@ -125,6 +127,7 @@ class UploadPolicy(
                 coffee.crema.core.retryBackoffMs(
                     status?.takeIf { it in 0..0xFFFF }?.toUShort(),
                     attempt.coerceAtLeast(0).toUInt(),
+                    Random.nextDouble(),
                 ).toLong()
             },
         )
