@@ -1,6 +1,7 @@
 package coffee.crema.decent
 
 import coffee.crema.core.ShotMachine
+import coffee.crema.core.uploadRefusedNoSamples
 import coffee.crema.history.StoredShot
 import coffee.crema.history.BREW_LOG_UPLOAD_SKIP
 import coffee.crema.history.isBrewLog
@@ -86,6 +87,8 @@ class DecentSync(
     /** The account was just linked — the moment to offer a catch-up of existing shots. */
     private val onLinked: () -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
+    /** Core `upload_refused_no_samples`: a machine shot with no telemetry doesn't go. */
+    private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?) -> Boolean = ::uploadRefusedNoSamples,
 ) : UploadDestination {
     companion object {
         const val MIN_SHOT_SECONDS = 5
@@ -98,6 +101,9 @@ class DecentSync(
 
         /** Why an upload waits for the serial: the DE1 answered its serial read with 0 (web parity). */
         const val SERIAL_UNREAD_REASON = "Crema couldn’t read this DE1’s serial number yet"
+
+        /** Why a shot isn't uploaded: it has no telemetry (web parity). */
+        const val NO_SERIES_REASON = "This shot has no telemetry to upload"
         private const val LOG_CAP = 20
     }
 
@@ -476,6 +482,8 @@ class DecentSync(
         // Brew Log rows (issue #10): never uploaded, and never stamped with
         // the live DE1 (which the bind after a successful POST would do).
         if (shot.isBrewLog) return Outcome.Skipped(BREW_LOG_UPLOAD_SKIP)
+        // A record with no measurements isn't a shot; the row stays in the backlog.
+        if (uploadRefused(false, (fullSamples ?: shot.samples).size.toUInt())) return Outcome.Skipped(NO_SERIES_REASON)
         if (shot.decentId != null && !replace) return Outcome.Skipped("Already on Decent")
         if (!manual && shot.durationMs < MIN_SHOT_SECONDS * 1000L) return Outcome.Skipped("Shorter than $MIN_SHOT_SECONDS s")
         val (machine, fromLive) = resolveMachine(shot) ?: return Outcome.Skipped(

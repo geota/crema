@@ -76,6 +76,12 @@ const HISTORY_KEY = 'crema.history.v2';
 const MAX_RECORDS = 300;
 
 
+/**
+ * How long {@link HistoryStore.seriesReady} waits. A series load that hasn't
+ * ended by then has stuck, and an upload shouldn't wait on it for good.
+ */
+const SERIES_WAIT_MS = 30_000;
+
 /** A shot's telemetry series couldn't be written to IndexedDB (quota, most
  *  likely): say so instead of silently keeping it in memory only. */
 let lastSeriesToastAt = -Infinity;
@@ -91,6 +97,9 @@ export class HistoryStore {
 	/** The recorded shots, newest first. Loaded from localStorage. */
 	private shots = $state.raw<StoredShot[]>(loadShots());
 
+	/** The running series load; null once it has ended, or with no IndexedDB. */
+	private seriesLoading: Promise<void> | null = null;
+
 	constructor() {
 		// Two-phase boot (review #27): summaries loaded synchronously above;
 		// each shot's telemetry series hydrates from IndexedDB in the
@@ -98,7 +107,29 @@ export class HistoryStore {
 		// one-time migration: rows persisted by the old all-in-localStorage
 		// format arrive WITH samples — move them to IndexedDB and re-persist
 		// stripped, freeing the quota that was silently killing saves.
-		if (typeof indexedDB !== 'undefined') void this.hydrateSeries();
+		if (typeof indexedDB !== 'undefined') {
+			this.seriesLoading = this.hydrateSeries().finally(() => {
+				this.seriesLoading = null;
+			});
+		}
+	}
+
+	/**
+	 * Wait for the stored series. Rows load at once and their curves follow, so
+	 * until this settles a machine shot looks like one with no telemetry.
+	 * Everything that sends or saves a whole shot awaits this first. True when
+	 * the load has ended, either way; false when it outlasted the wait.
+	 */
+	async seriesReady(timeoutMs: number = SERIES_WAIT_MS): Promise<boolean> {
+		const loading = this.seriesLoading;
+		if (!loading) return true;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const stuck = new Promise<boolean>((resolve) => {
+			timer = setTimeout(() => resolve(false), timeoutMs);
+		});
+		const loaded = await Promise.race([loading.then(() => true), stuck]);
+		clearTimeout(timer);
+		return loaded;
 	}
 
 	private async hydrateSeries(): Promise<void> {

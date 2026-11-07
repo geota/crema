@@ -19,6 +19,7 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 // runEntry reaches the history store via `#lib/history/index.js`; mock it so no real
 // rune store is instantiated and we can observe the bind / purge calls.
 const mockHistory = {
+	seriesReady: vi.fn(async () => true),
 	get: vi.fn(),
 	bindVisualizerId: vi.fn(),
 	purgeTombstone: vi.fn()
@@ -32,6 +33,7 @@ import {
 	HttpStatusError,
 	NetworkError,
 	NotAuthenticatedError,
+	ShotWithoutSeriesError,
 	TokenRefreshFailedError,
 	VisualizerPremiumGatedError
 } from '../effect/errors.ts';
@@ -131,6 +133,45 @@ describe('UploadQueue.drain — shot create', () => {
 		expect(result.processed).toBe(1);
 		expect(mockHistory.bindVisualizerId).toHaveBeenCalledWith('s1', 'viz-1');
 		expect(readQueue().entries).toHaveLength(0);
+	});
+
+	it('reads the row only after its series have landed, spending no attempt', async () => {
+		let land = (_: boolean): void => {};
+		mockHistory.seriesReady.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
+		const hydrated = { id: 's1', visualizerId: undefined };
+		mockHistory.get.mockReturnValue(hydrated);
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+		const uploads: unknown[] = [];
+
+		const draining = drainWith({
+			uploadShot: (s) => {
+				uploads.push(s);
+				return Effect.succeed({ visualizerId: 'viz-1' });
+			}
+		});
+		await vi.waitFor(() => expect(mockHistory.seriesReady).toHaveBeenCalled());
+		await Promise.resolve();
+		expect(uploads).toEqual([]);
+		expect(mockHistory.get).not.toHaveBeenCalled();
+		expect(readQueue().entries[0].attempts).toBe(0);
+
+		land(true);
+
+		expect((await draining).succeeded).toBe(1);
+		expect(uploads).toEqual([hydrated]);
+	});
+
+	it('non_brew_no_samples_refused: drops the entry on the first try, with no retry', async () => {
+		mockHistory.get.mockReturnValue({ id: 's1', visualizerId: undefined });
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+
+		const result = await drainWith({
+			uploadShot: () => Effect.fail(new ShotWithoutSeriesError({ shotId: 's1' }))
+		});
+
+		expect(result.dropped).toBe(1);
+		expect(readQueue().entries).toHaveLength(0);
+		expect(mockHistory.bindVisualizerId).not.toHaveBeenCalled();
 	});
 
 	it('drops a non-recoverable failure (premium) on the first drain', async () => {

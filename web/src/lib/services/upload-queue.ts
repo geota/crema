@@ -108,6 +108,8 @@ export const UploadQueueLive = Layer.effect(
 			Effect.gen(function* () {
 				if (entry.entity === 'shot') {
 					if (entry.op === 'create') {
+						// Spends no attempt, and a row read before this has no curve.
+						yield* Effect.promise(() => getHistoryStore().seriesReady());
 						const shot = yield* Effect.sync(() => getHistoryStore().get(entry.id));
 						if (!shot) return; // local row vanished — nothing to upload
 						if (shot.visualizerId) return; // raced; already bound

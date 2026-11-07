@@ -1274,6 +1274,13 @@ pub fn classify_token_refresh_failure(status: Option<u16>, body: Option<String>)
     )
 }
 
+/// Whether an upload must refuse a stored row for having no telemetry. See
+/// [`de1_domain::upload_refused_no_samples`].
+#[uniffi::export]
+pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -> bool {
+    de1_domain::upload_refused_no_samples(is_brew_log, sample_count)
+}
+
 /// The Visualizer retry queue's rule for a failed operation: a JSON
 /// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
 /// `attempts_made` counts this attempt. See

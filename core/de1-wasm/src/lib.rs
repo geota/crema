@@ -1739,6 +1739,14 @@ pub fn is_recoverable(tag: &str, status: Option<u32>) -> bool {
     de1_domain::is_recoverable(tag, status.and_then(|s| u16::try_from(s).ok()))
 }
 
+/// Whether an upload must refuse a stored row for having no telemetry. See
+/// `de1_domain::upload_refused_no_samples`.
+#[wasm_bindgen(js_name = uploadRefusedNoSamples)]
+#[must_use]
+pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -> bool {
+    de1_domain::upload_refused_no_samples(is_brew_log, sample_count)
+}
+
 /// Visualizer's free-plan daily upload cap: the cap (e.g. `30`) when a reply
 /// with HTTP `status` and `body` is the quota 422, else `undefined`. See
 /// `de1_domain::visualizer_quota_limit`.

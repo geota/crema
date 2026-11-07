@@ -34,7 +34,12 @@
 import { Context, Effect, Layer, Option } from 'effect';
 import { HttpClient } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
-import { NotAuthenticatedError, ResponseDecodeError, VisualizerNotFoundError } from '../effect/errors.ts';
+import {
+	NotAuthenticatedError,
+	ResponseDecodeError,
+	ShotWithoutSeriesError,
+	VisualizerNotFoundError
+} from '../effect/errors.ts';
 import {
 	API_BASE,
 	describeVisualizerError,
@@ -58,7 +63,7 @@ import { readSyncSettings } from '#lib/bean/visualizer-sync.js';
 import { effectiveGrindSetting } from '#lib/history/index.js';
 import { exportStoredShotAsV2Json } from '#lib/history/v2-export.js';
 import type { ShotPatchInputs, TimedSample } from '#lib/core/index.js';
-import { isBrewLog, type ShotBean, type StoredShot } from '#lib/history/model.js';
+import { isBrewLog, refusedNoSamples, type ShotBean, type StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import type { components } from '#lib/visualizer/openapi.js';
@@ -566,6 +571,7 @@ export const ShotSyncLive = Layer.effect(
 		 */
 		const uploadShot = Effect.fn('ShotSync.uploadShot')(function* (shot: StoredShot) {
 			yield* requireConnected;
+			if (refusedNoSamples(shot)) return yield* new ShotWithoutSeriesError({ shotId: shot.id });
 			const body = buildShotPayload(shot);
 			const raw = yield* call('/shots/upload', { method: 'POST', body });
 			const result = decodeResponse(ShotUploadResultSchema, raw, 'POST /shots/upload');
@@ -904,6 +910,7 @@ export const ShotSyncLive = Layer.effect(
 		const uploadUnsyncedShots = Effect.fn('ShotSync.uploadUnsyncedShots')(function* (
 			history: HistoryStore
 		) {
+			yield* Effect.promise(() => history.seriesReady());
 			// Brew Log rows (`isBrewLog`) never sync: Visualizer is a
 			// DE1-telemetry service and brews carry none (issue #10 — the same
 			// local-only posture as `nextPlan`).

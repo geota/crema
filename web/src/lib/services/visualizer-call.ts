@@ -33,6 +33,7 @@ import {
 	NetworkError,
 	NotAuthenticatedError,
 	ResponseDecodeError,
+	ShotWithoutSeriesError,
 	TokenRefreshFailedError,
 	VisualizerNotFoundError,
 	VisualizerPremiumGatedError
@@ -64,7 +65,8 @@ export type VisualizerCallError =
 	| NotAuthenticatedError
 	| TokenRefreshFailedError
 	| VisualizerPremiumGatedError
-	| VisualizerNotFoundError;
+	| VisualizerNotFoundError
+	| ShotWithoutSeriesError;
 
 /** A single Visualizer request. */
 export interface VisualizerCallOptions {
@@ -236,5 +238,7 @@ export function describeVisualizerError(e: VisualizerCallError | ResponseDecodeE
 			return 'Visualizer rejected the access token. Please sign in again.';
 		case 'ResponseDecodeError':
 			return 'Unexpected Visualizer response.';
+		case 'ShotWithoutSeriesError':
+			return 'This shot has no telemetry to upload.';
 	}
 }

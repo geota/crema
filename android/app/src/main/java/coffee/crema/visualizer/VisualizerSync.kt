@@ -9,6 +9,7 @@ import coffee.crema.runCatchingCancellable
 import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.exportV2JsonShotFull
 import coffee.crema.core.signatureForShot
+import coffee.crema.core.uploadRefusedNoSamples
 import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.StoredShot
@@ -122,6 +123,8 @@ class VisualizerSync(
     private val seriesReady: suspend () -> Unit = {},
     /** How the retry timers wait (injected so a JVM test can see each wait). */
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    /** Core `upload_refused_no_samples`: a machine shot with no telemetry doesn't go. */
+    private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?) -> Boolean = ::uploadRefusedNoSamples,
 ) : UploadDestination {
 
     internal companion object {
@@ -879,6 +882,7 @@ class VisualizerSync(
         // A copy taken before the series loaded has none: wait, then re-read.
         seriesReady()
         val shot = if (snapshot.samples.isEmpty()) currentShot(snapshot.id) ?: snapshot else snapshot
+        if (uploadRefused(shot.isBrewLog, shot.samples.size.toUInt())) throw VisualizerError.NoSeries()
         val payload = buildShotPayload(shot)
         val id = withFreshToken { client.uploadShot(it, payload) }
         persist { it.copy(lastShotSyncAt = System.currentTimeMillis()) }

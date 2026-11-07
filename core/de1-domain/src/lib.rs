@@ -330,8 +330,8 @@ pub use visualizer_catalogue::{
 pub use visualizer_error::{
     AUTH_PARK_MS, MAX_QUEUE_ATTEMPTS, QueueDecision, QueueOp, RefreshFailure,
     VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, classify_token_refresh_failure,
-    is_recoverable, retry_backoff_ms, visualizer_queue_decision, visualizer_queue_decision_json,
-    visualizer_quota_limit,
+    is_recoverable, retry_backoff_ms, upload_refused_no_samples, visualizer_queue_decision,
+    visualizer_queue_decision_json, visualizer_quota_limit,
 };
 pub use visualizer_sync::{
     BeanReconcileAction, GuardedVisualizerPrefs, LocalShotRef, PulledBag, ReconcileAction,

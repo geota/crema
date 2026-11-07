@@ -320,8 +320,12 @@
 	/** Build + download a full `crema-backup/v1` bundle of everything local. */
 	async function backUp(): Promise<void> {
 		backupNote = 'Building backup…';
-		const result = await exportBackup();
-		backupNote = result ? `Backed up — ${describeBackup(result)}.` : 'Nothing to back up yet.';
+		try {
+			const result = await exportBackup();
+			backupNote = result ? `Backed up — ${describeBackup(result)}.` : 'Nothing to back up yet.';
+		} catch (err) {
+			backupNote = err instanceof Error ? `Backup failed: ${err.message}` : 'Backup failed.';
+		}
 	}
 
 	let restoreInput = $state<HTMLInputElement | null>(null);

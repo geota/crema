@@ -84,6 +84,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Shots no longer upload or back up without their telemetry** — on the web a
+  queued upload, a Decent retry or a backup could run before a shot's curve had
+  loaded, which posted an empty shot to Visualizer and bound the row to it, or
+  saved a backup with no curves. They now wait for the curves. A machine shot that
+  still has no telemetry is refused on both apps, on Visualizer and Decent, and
+  stays unsynced. Android and web.
 - **Moving a shot off a bag gives back only what it took** — each shot now
   records the grams it actually took, and backups keep them. Moving 5 shots off
   an empty bag used to add about 90 g, and a bag with no tracked weight gained

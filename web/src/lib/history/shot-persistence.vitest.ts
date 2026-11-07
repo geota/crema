@@ -26,7 +26,7 @@ const h = vi.hoisted(() => {
 		setTokensReadable: (v: boolean) => {
 			tokensReadable = v;
 		},
-		mockHistory: { get: vi.fn(), bindVisualizerId: vi.fn() },
+		mockHistory: { seriesReady: vi.fn(async () => true), get: vi.fn(), bindVisualizerId: vi.fn() },
 		appendSyncLog: vi.fn(),
 		getDirection: () => direction,
 		setDirection: (d: 'push' | 'off') => {
@@ -59,7 +59,12 @@ vi.mock('#lib/services/token-vault.js', async (importOriginal) => ({
 import { pushShotToVisualizer } from './shot-persistence.ts';
 import { ShotSync } from '#lib/services/shot-sync.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
-import { HttpStatusError, NetworkError, VisualizerPremiumGatedError } from '#lib/effect/errors.js';
+import {
+	HttpStatusError,
+	NetworkError,
+	ShotWithoutSeriesError,
+	VisualizerPremiumGatedError
+} from '#lib/effect/errors.js';
 
 const die = (label: string) => () => Effect.die(`unused: ${label}`);
 
@@ -142,6 +147,20 @@ describe('pushShotToVisualizer — gating', () => {
 		}
 	});
 
+	it('reads the row only after its series have landed', async () => {
+		let land = (_: boolean): void => {};
+		mockHistory.seriesReady.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
+		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
+
+		const pushing = run(uploadShot);
+		await vi.waitFor(() => expect(mockHistory.seriesReady).toHaveBeenCalled());
+		expect(mockHistory.get).not.toHaveBeenCalled();
+		land(true);
+		await pushing;
+
+		expect(uploadShot).toHaveBeenCalledTimes(1);
+	});
+
 	it('no-ops when the local row has vanished', async () => {
 		mockHistory.get.mockReturnValue(undefined);
 		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
@@ -183,6 +202,16 @@ describe('pushShotToVisualizer — typed-error routing', () => {
 		expect(enqueue).not.toHaveBeenCalled();
 		expect(appendSyncLog).toHaveBeenCalledWith(
 			expect.objectContaining({ direction: 'skip', id: 's1' })
+		);
+	});
+
+	it('non_brew_no_samples_refused: says so, queues nothing and binds nothing', async () => {
+		await run(() => Effect.fail(new ShotWithoutSeriesError({ shotId: 's1' })));
+
+		expect(enqueue).not.toHaveBeenCalled();
+		expect(mockHistory.bindVisualizerId).not.toHaveBeenCalled();
+		expect(appendSyncLog).toHaveBeenCalledWith(
+			expect.objectContaining({ direction: 'skip', error: 'This shot has no telemetry to upload.' })
 		);
 	});
 

@@ -121,10 +121,15 @@ function settingsAreDefault(s: Settings): boolean {
  * Build the `crema-backup/v1` JSONL for everything local, WITHOUT downloading —
  * custom profiles only (built-ins ship with the app). Shared by the local
  * export and the Drive upload. Returns null when there's nothing to back up.
+ * Waits for the stored series, so no shot goes out without its curve, and
+ * throws when they don't arrive.
  */
-export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | null {
-	const beanStore = getBeanStore();
+export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<BuiltBackup | null> {
 	const history = getHistoryStore();
+	if (!(await history.seriesReady())) {
+		throw new Error('Shot data is still loading — try again in a moment.');
+	}
+	const beanStore = getBeanStore();
 	const settings = getSettingsStore();
 	const customProfiles = readJson<unknown[]>(CUSTOM_PROFILES_KEY, []);
 	const beans = beanStore.beans;
@@ -221,7 +226,7 @@ const BACKUP_JSONL_MEMBER = 'backup.jsonl';
 export async function buildBackupZip(
 	cremaVersion = __APP_VERSION__
 ): Promise<{ zip: Uint8Array; contents: BackupContents } | null> {
-	const built = buildBackupJsonl(cremaVersion);
+	const built = await buildBackupJsonl(cremaVersion);
 	if (!built) return null;
 	const entries: Record<string, Uint8Array> = { [BACKUP_JSONL_MEMBER]: strToU8(built.jsonl) };
 	const imageStore = getBeanImageStore();

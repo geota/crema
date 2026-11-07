@@ -77,9 +77,9 @@ function seed(): { beanId: string; roasterId: string; shotId: string; profileId:
 describe('backup round-trip (review #07)', () => {
 	beforeEach(resetAll);
 
-	it('round-trips beans, roasters, shots + profiles through a wipe restore', () => {
+	it('round-trips beans, roasters, shots + profiles through a wipe restore', async () => {
 		const ids = seed();
-		const built = buildBackupJsonl();
+		const built = await buildBackupJsonl();
 		expect(built).not.toBeNull();
 
 		resetAll(); // simulate restoring onto a fresh device
@@ -101,9 +101,9 @@ describe('backup round-trip (review #07)', () => {
 		expect(restoredBean?.roastLevel).toBe(4);
 	});
 
-	it('merge adds new records but preserves existing ones', () => {
+	it('merge adds new records but preserves existing ones', async () => {
 		seed();
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 
 		resetAll();
 		getBeanStore().bulkAdd([{ ...blankBean('bean-2'), name: 'Kenya' }], []); // a different bag
@@ -113,9 +113,9 @@ describe('backup round-trip (review #07)', () => {
 		expect(getBeanStore().beans.map((b) => b.id).sort()).toEqual(['bean-1', 'bean-2']);
 	});
 
-	it('reports the shots it kept and the ones the cap dropped', () => {
+	it('reports the shots it kept and the ones the cap dropped', async () => {
 		seed();
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		resetAll();
 		const history = getHistoryStore();
 		for (let i = 0; i < 300; i++) {
@@ -127,9 +127,9 @@ describe('backup round-trip (review #07)', () => {
 		expect(history.all).toHaveLength(300);
 	});
 
-	it('merge skips records whose ids are already present (idempotent re-restore)', () => {
+	it('merge skips records whose ids are already present (idempotent re-restore)', async () => {
 		seed();
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 
 		// Restore the same bundle without clearing — every id already exists.
 		const summary = restoreBackup(built.jsonl, 'merge');
@@ -139,9 +139,9 @@ describe('backup round-trip (review #07)', () => {
 		expect(getHistoryStore().all.length).toBe(1);
 	});
 
-	it('skips a malformed JSONL line without dropping the rest', () => {
+	it('skips a malformed JSONL line without dropping the rest', async () => {
 		seed();
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 
 		resetAll();
 		const corrupted = built.jsonl.replace('\n', '\n{ this is not valid json \n');
@@ -156,13 +156,13 @@ describe('backup round-trip (review #07)', () => {
 		);
 	});
 
-	it('backs up user recipe copies with their credit, never the built-ins', () => {
+	it('backs up user recipe copies with their credit, never the built-ins', async () => {
 		const recipes = getRecipeStore();
 		const dup = recipes.duplicate('builtin:hoffmann-ultimate-v60')!;
 		const copy = recipes.saveEdit({ ...dup, notes: 'Cafec Abaca filter\nTWW light roast' });
 		recipes.hide('builtin:kasuya-4-6');
 		recipes.touch(copy);
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		expect(built.jsonl).toContain('"kind":"recipe"');
 		expect(built.jsonl).toContain('"kind":"recipeMeta"');
 		// Only the copy rides — the catalogue ships with the app.
@@ -185,7 +185,7 @@ describe('backup round-trip (review #07)', () => {
 		expect(getRecipeStore().isHidden('builtin:kasuya-4-6')).toBe(true);
 	});
 
-	it('round-trips custom methods (tombstones too) and the brew label snapshot', () => {
+	it('round-trips custom methods (tombstones too) and the brew label snapshot', async () => {
 		const methods = getCustomMethodStore();
 		const draft = {
 			style: BrewMethodStyle.Percolation,
@@ -216,7 +216,7 @@ describe('backup round-trip (review #07)', () => {
 		const recipe = getRecipeStore().saveEdit(
 			getCustomMethodStore().blankRecipe(orb.id, 'recipe:orb')!
 		);
-		const built = buildBackupJsonl()!;
+		const built = (await buildBackupJsonl())!;
 		expect(built.jsonl.match(/"kind":"brewMethod"/g)).toHaveLength(2);
 		expect(built.jsonl).toContain('"brewMethodLabel":"Old brewer"');
 

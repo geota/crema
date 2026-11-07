@@ -38,6 +38,7 @@ import type {
 	NetworkError,
 	NotAuthenticatedError,
 	ResponseDecodeError,
+	ShotWithoutSeriesError,
 	TokenRefreshFailedError,
 	VisualizerNotFoundError,
 	VisualizerPremiumGatedError
@@ -417,6 +418,7 @@ type ShotPushError =
 	| TokenRefreshFailedError
 	| VisualizerPremiumGatedError
 	| VisualizerNotFoundError
+	| ShotWithoutSeriesError
 	| ResponseDecodeError;
 
 /**
@@ -446,6 +448,8 @@ function describePushError(e: ShotPushError): string {
 			return 'Visualizer session expired.';
 		case 'ResponseDecodeError':
 			return 'Unexpected Visualizer response.';
+		case 'ShotWithoutSeriesError':
+			return 'This shot has no telemetry to upload.';
 	}
 }
 
@@ -486,6 +490,7 @@ export function pushShotToVisualizer(
 				return;
 			}
 		}
+		yield* Effect.promise(() => getHistoryStore().seriesReady());
 		const shot = getHistoryStore().get(shotId);
 		if (!shot) {
 			reportUploadOutcome(shotId, 'Visualizer', { kind: 'skipped', message: 'Shot not found' });
