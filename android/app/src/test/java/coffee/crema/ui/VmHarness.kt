@@ -116,28 +116,12 @@ internal object VmHarness {
         return field.get(vm) as GuidedBrewController
     }
 
-    /** The VM's [LibraryController], found by type. */
-    fun library(vm: MainViewModel): LibraryController {
-        val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == LibraryController::class.java }
-            ?: error("MainViewModel no longer holds exactly one LibraryController field: update VmHarness.library")
-        field.isAccessible = true
-        return field.get(vm) as LibraryController
-    }
-
     /** The VM's [MaintenanceController], found by type. */
     fun maintenance(vm: MainViewModel): MaintenanceController {
         val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == MaintenanceController::class.java }
             ?: error("MainViewModel no longer holds exactly one MaintenanceController field: update VmHarness.maintenance")
         field.isAccessible = true
         return field.get(vm) as MaintenanceController
-    }
-
-    /** The VM's [LibraryController], found by type. */
-    fun library(vm: MainViewModel): LibraryController {
-        val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == LibraryController::class.java }
-            ?: error("MainViewModel no longer holds exactly one LibraryController field: update VmHarness.library")
-        field.isAccessible = true
-        return field.get(vm) as LibraryController
     }
 
     /** The VM's [RemoteConfigController], found by type. */
