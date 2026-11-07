@@ -107,7 +107,7 @@ export interface CremaServices {
 			history: HistoryStore,
 			sinceMs: number,
 			opts?: PullOptions
-		): Promise<{ pulled: number; truncated: boolean }>;
+		): Promise<PullApplied>;
 		/**
 		 * Upload every local shot lacking a `visualizerId`. Single-flight: a
 		 * call while one is running (Settings catch-up, History "Upload N" and

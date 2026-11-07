@@ -126,6 +126,21 @@ class ManualBrewDateVmTest {
         assertNull(history(vm).single().brewMethod)
     }
 
+    @Test
+    fun `pull_never_evicts_at_cap`() {
+        val brews = List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now - i * hour) }
+        val oldest = brews.last().copy(id = "brew-log", brewMethod = "pourover")
+        val rows = brews.dropLast(1) + oldest
+        stored(rows)
+        val vm = vm()
+
+        val refused = VmHarness.library(vm).insertPulledShots(listOf(machine("new", now + hour)))
+        VmHarness.idle()
+
+        assertEquals(setOf("new"), refused)
+        assertEquals(rows.map { it.id }, history(vm).map { it.id })
+    }
+
     /** A store file already holding [rows], as a VM built next would load it. */
     private fun stored(rows: List<StoredShot>) = runBlocking { HistoryStore(VmHarness.app(), coreJson).save(rows) }
 

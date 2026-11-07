@@ -194,6 +194,11 @@ export class HistoryStore {
 		return MAX_RECORDS;
 	}
 
+	/** How many live rows fit before the cap. */
+	get freeSlots(): number {
+		return Math.max(0, MAX_RECORDS - this.all.length);
+	}
+
 	/** Whether a new brew dated `at` would stay in the history once added. */
 	fitsHistory(at: number): boolean {
 		return fitsHistory(this.all, at, MAX_RECORDS);
@@ -493,22 +498,26 @@ export class HistoryStore {
 	}
 
 	/**
-	 * Insert a shot that arrived whole from elsewhere — a Visualizer pull,
-	 * a backup restore or a Beanconqueror import. The caller has already
-	 * mapped it onto a `StoredShot` and verified de-dup. Inserts by date
-	 * and persists.
+	 * Insert a shot a Visualizer pull brought in. The caller has already mapped
+	 * it onto a `StoredShot` and verified de-dup. Inserts by date and persists.
+	 *
+	 * A pull never removes a row: the oldest ones can be brew logs or shots that
+	 * never reached Visualizer. So with no free slot the row is refused, and
+	 * this answers false.
 	 *
 	 * The telemetry series rides IndexedDB (review #27): `persist()` strips
 	 * it from the localStorage row, so it is written here too, or the curve
 	 * is gone on the next load — a restored or pulled shot showed an empty
 	 * chart and 0 samples.
 	 */
-	insertPulled(shot: StoredShot): void {
-		this.insert(shot);
-		if (shot.record.samples.length > 0 && this.get(shot.id)) {
+	insertPulled(shot: StoredShot): boolean {
+		if (this.freeSlots === 0) return false;
+		this.shots = newestFirst([shot, ...this.shots]);
+		if (shot.record.samples.length > 0) {
 			void putSeries(shot.id, shot.record.samples).catch(seriesSaveFailed);
 		}
 		this.persist();
+		return true;
 	}
 
 	/**

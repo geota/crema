@@ -67,6 +67,11 @@ export function historyDroppedNotice(dropped: number, cap: number): string {
 		: '';
 }
 
+/** What to say when a full history refused rows a pull brought. */
+export function historyFullNotice(refused: number, cap: number): string {
+	return `History is full at ${cap} shots, so ${refused} shot${refused === 1 ? '' : 's'} from Visualizer ${refused === 1 ? 'wasn\u2019t' : 'weren\u2019t'} added.`;
+}
+
 /** Newest first; rows with the same date keep their order, so a new row leads. */
 export function newestFirst<T extends { completedAt: number }>(shots: readonly T[]): T[] {
 	return [...shots].sort((a, b) => b.completedAt - a.completedAt);

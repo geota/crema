@@ -84,6 +84,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A Visualizer pull no longer removes shots or tags** — at the 300-shot cap a
+  pull used to push out your oldest rows, including brew logs and shots that
+  never reached Visualizer. It now leaves the history alone, skips the new shots
+  that don't fit, keeps going, and says how many it left out. On the web, a pull
+  no longer empties a shot's tags on a free account, and remote tags only fill a
+  shot that has none. Android and web.
 - **Moving a shot off a bag gives back only what it took** — each shot now
   records the grams it actually took, and backups keep them. Moving 5 shots off
   an empty bag used to add about 90 g, and a bag with no tracked weight gained
