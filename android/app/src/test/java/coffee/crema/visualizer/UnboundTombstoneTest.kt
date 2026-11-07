@@ -48,6 +48,9 @@ class UnboundTombstoneTest {
         },
     )
     private val store = VisualizerStore(context, json, box)
+
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val tokens = TokenSet("tok", "rt", expiresAt = Long.MAX_VALUE)
 
     private var uploadGate: CompletableDeferred<Unit>? = null
