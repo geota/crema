@@ -35,13 +35,20 @@ data class DriveState(
      *  the handshake still pending be recognised as "Google never came back"
      *  (geota/crema#45). Additive → nullable. */
     val pendingStartedAtMs: Long? = null,
-    /** Epoch ms of the last daily auto-backup ATTEMPT (issue #36) — stamped
-     *  before the upload so a failing backup retries next day, not on every
-     *  launch. Null = never attempted. Additive → nullable default. */
+    /** Epoch ms of the last daily auto-backup ATTEMPT (issue #36): stamped once
+     *  a token is held, and put back if the upload failed for a reason time can
+     *  fix, so the next launch tries again. Null = never attempted. Additive →
+     *  nullable default. */
     val lastAutoBackupAtMs: Long? = null,
     /** Epoch ms of the last SUCCESSFUL backup upload, manual or automatic —
      *  drives the "Last backed up X ago" readout. Additive → nullable. */
     val lastBackupSuccessAtMs: Long? = null,
+    /** Google ended the sign-in. Signed out, with a lasting banner until the
+     *  user reconnects or disconnects. Additive. */
+    val needsReconnect: Boolean = false,
+    /** The last run's core `SyncHealth` as JSON, shown in Settings. A string so
+     *  a state a later build adds can't make this file unreadable. Additive. */
+    val health: String? = null,
     /**
      * The stored state as read, when the keystore couldn't open a secret this
      * start ([SecretBox.Opened.Unavailable]); in memory only. Meanwhile the

@@ -55,7 +55,7 @@ class DriveUnopenedSignInTest {
         DriveSync(
             store, json, scope, "cid", notify = {}, backupZip = { null }, backupFileName = { "b" }, applyRestore = { _, _ -> },
             exchangeCode = { _, _ -> issued },
-            refreshToken = { throw java.io.IOException("refresh refused") },
+            refreshToken = { throw DriveHttpError(400, """{"error":"invalid_grant"}""", "refresh refused") },
         ).also {
                 it.load()
                 keystore.notReady = false

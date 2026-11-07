@@ -877,6 +877,11 @@ private fun SharingSection(
                     CremaButton(onClick = { vm.visualizer.testConnection() }, variant = CremaButtonVariant.Tonal, icon = "plugs-connected", enabled = !vz.busy, label = "Test")
                 }
             }
+            vz.needsReconnect -> {
+                CremaSettingsRow("Sign-in ended", coffee.crema.visualizer.VISUALIZER_RECONNECT_LINE, last = true) {
+                    CremaButton(onClick = { vm.visualizer.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "sign-in", enabled = !vz.busy, label = "Reconnect")
+                }
+            }
             else -> {
                 CremaSettingsRow("Account", "Back up, share and compare shots on visualizer.coffee.", last = true) {
                     CremaButton(onClick = { vm.visualizer.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "sign-in", enabled = !vz.busy, label = "Sign in")
@@ -913,6 +918,7 @@ private fun SharingSection(
             CremaSettingsRow("Upload finished shots", "Push each shot to Visualizer as it finishes (needs a pushing direction).") {
                 CremaSwitch(vz.autoSync, vm::setVisualizerAutoSync, enabled = vz.shotsDirection == "backup" || vz.shotsDirection == "two-way")
             }
+            coffee.crema.ui.components.VisualizerAccountRows(vz, vm.visualizer.unsent(ui.history).size, vm.visualizer::answerAccountChange)
             ui.sharing.catchUpOffer?.takeIf { it.destination == coffee.crema.ui.UploadTargetId.Visualizer }?.let { offer ->
                 CatchUpRow(offer, busy = ui.sharing.catchUpBusy, onUpload = vm::runCatchUp, onDismiss = vm::dismissCatchUp)
             }
@@ -1036,7 +1042,11 @@ private fun SharingSection(
     }
     val ds = ui.drive
     SettingsGroup("Google Drive") {
-        if (!ds.connected) {
+        if (!ds.connected && ds.needsReconnect) {
+            CremaSettingsRow("Reconnect Google Drive", coffee.crema.drive.DRIVE_RECONNECT_LINE, last = true) {
+                CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Reconnect")
+            }
+        } else if (!ds.connected) {
             CremaSettingsRow("Connect Google Drive", "Back up to and restore from your own Google Drive — only the files Crema creates.", last = true) {
                 CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Connect")
             }
@@ -1044,7 +1054,7 @@ private fun SharingSection(
             val lastBackupSub = ds.lastBackupAtMs
                 ?.let { "Upload a fresh backup file to your Google Drive. Last backed up ${relativeAgo(it)}." }
                 ?: "Upload a fresh backup file to your Google Drive."
-            CremaSettingsRow("Back up to Drive", lastBackupSub) {
+            CremaSettingsRow("Back up to Drive", listOfNotNull(ds.healthLine, lastBackupSub).joinToString(" ")) {
                 CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
             }
             CremaSettingsRow("Restore latest", "Merge the newest Drive backup into your current data.") {

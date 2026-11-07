@@ -30,6 +30,7 @@
 	import ConfirmDialog from '#lib/components/shared/ConfirmDialog.svelte';
 	import { describeError } from '#lib/utils/error.js';
 	import { installStorageNotices } from '#lib/shell/storage-notices.js';
+	import { installVisualizerNotices } from '#lib/shell/visualizer-notices.js';
 	import {
 		installResetListener,
 		resetReportMessage,
@@ -77,6 +78,7 @@
 	let onPageShow: ((e: PageTransitionEvent) => void) | null = null;
 	// Unreadable stores kept aside / failed saves -> toasts (see storage-notices).
 	let stopStorageNotices: (() => void) | null = null;
+	let stopVisualizerNotices: (() => void) | null = null;
 	// A factory reset in another tab freezes this one and reloads it.
 	let stopResetListener: (() => void) | null = null;
 	// The service worker (offline app shell + wasm precache) and its update
@@ -112,6 +114,7 @@
 			return;
 		}
 		stopStorageNotices = installStorageNotices();
+		stopVisualizerNotices = installVisualizerNotices();
 		if (import.meta.env.PROD) {
 			serviceWorker = installServiceWorker({
 				canReload: () => canReloadNow(reloadInputs()),
@@ -233,6 +236,7 @@
 	// (also fires on HMR), so a dev reload doesn't leak runtimes or listeners.
 	onDestroy(() => {
 		stopStorageNotices?.();
+		stopVisualizerNotices?.();
 		stopResetListener?.();
 		serviceWorker?.dispose();
 		if (onOnline) window.removeEventListener('online', onOnline);

@@ -179,7 +179,7 @@ class VisualizerRetryQueueTest {
         s.uploadShot(shot("s1"), silent = true)
         settle()
         assertNull(runBlocking { store.load().tokens })
-        assertTrue(notices.any { "session expired" in it })
+        assertTrue(notices.any { "ended this sign-in" in it })
         assertTrue(queue().isEmpty())
     }
 

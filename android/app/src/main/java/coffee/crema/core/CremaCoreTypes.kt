@@ -4589,6 +4589,22 @@ enum class AccountBlockReason(val string: String) {
 	MissingScope("MissingScope"),
 }
 
+/// What a confirmed `/me` means for what this device holds.
+@Serializable
+enum class AccountChange(val string: String) {
+	/// No account was on record: note this one and carry on. A user signed out
+	/// at upgrade with no cached account lands here, which can't be checked.
+	@SerialName("First")
+	First("First"),
+	/// The account this device already synced with.
+	@SerialName("Same")
+	Same("Same"),
+	/// Another account: the cursor, marks and queue belong to the old one, and
+	/// nothing goes up until the user says so.
+	@SerialName("Changed")
+	Changed("Changed"),
+}
+
 /// Generated type representing the anonymous struct variant `AccountBlocked` of the `AttentionReason` Rust enum
 @Serializable
 data class AttentionReasonAccountBlockedInner (

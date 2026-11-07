@@ -1,11 +1,19 @@
 package coffee.crema.drive
 
 import coffee.crema.core.CallbackOutcome
+import coffee.crema.core.RunOutcome
+import coffee.crema.core.RunOutcomeCompleteInner
+import coffee.crema.core.RunOutcomeFailedInner
+import coffee.crema.core.SyncFailure
 import coffee.crema.core.callbackOutcome
+import coffee.crema.core.reconnectNoticeDue
+import coffee.crema.runCatchingCancellable
 import coffee.crema.sync.OwnStateGate
+import coffee.crema.sync.SingleFlightRefresh
 import coffee.crema.visualizer.codeChallengeFromVerifier
 import coffee.crema.visualizer.generateCodeVerifier
 import coffee.crema.visualizer.randomState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,6 +75,18 @@ class DriveSync(
     /** Core `callback_outcome`: what a redirect means for the stored handshake. */
     private val callbackRule: (expectedState: String?, verifier: String?, code: String?, returnedState: String?, error: String?) -> CallbackOutcome =
         ::callbackOutcome,
+    /** Wall clock (unix ms); tests pin it. */
+    private val now: () -> Long = System::currentTimeMillis,
+    /** The Drive calls (injected so JVM tests can drive a backup). */
+    private val uploadBackup: suspend (token: String, name: String, bytes: ByteArray) -> DriveFile =
+        { token, name, bytes -> driveUploadBackup(token, name, bytes, json) },
+    private val listBackups: suspend (token: String) -> List<DriveFile> = { token -> driveListBackups(token, json) },
+    private val deleteFile: suspend (token: String, fileId: String) -> Unit =
+        { token, id -> driveDeleteFile(token, id, json) },
+    private val downloadBackup: suspend (token: String, fileId: String) -> ByteArray =
+        { token, id -> driveDownloadBackup(token, id, json) },
+    /** Revoke a grant at Google, best-effort (injected so JVM tests make no call). */
+    private val revokeGrant: suspend (DriveTokenSet) -> Unit = { revokeDriveGrant(it) },
 ) {
     /** What the Settings UI binds to (mirrored into MainUiState). */
     data class UiState(
@@ -78,6 +98,10 @@ class DriveSync(
         val connected: Boolean = false,
         /** True while a sign-in / backup / restore runs. */
         val busy: Boolean = false,
+        /** Google ended the sign-in: signed out, and Settings asks to reconnect. */
+        val needsReconnect: Boolean = false,
+        /** The last run's lasting status, or null when there's nothing to say. */
+        val healthLine: String? = null,
     )
 
     private val _state = MutableStateFlow(UiState(configured = clientId.isNotBlank()))
@@ -111,6 +135,8 @@ class DriveSync(
             configured = clientId.isNotBlank(),
             connected = persisted.tokens != null,
             lastBackupAtMs = persisted.lastBackupSuccessAtMs,
+            needsReconnect = persisted.needsReconnect,
+            healthLine = driveHealthLine(persisted.health),
         ) }
     }
 
@@ -201,9 +227,9 @@ class DriveSync(
                     code ?: return@launch
                     verifier ?: return@launch
                     _state.update { it.copy(busy = true) }
-                    runCatching { exchangeCode(code, verifier) }
+                    runCatchingCancellable { exchangeCode(code, verifier) }
                         .onSuccess { tokens ->
-                            persist { it.copy(tokens = tokens) }
+                            persist { it.copy(tokens = tokens, needsReconnect = false, health = null) }
                             notify("Connected to Google Drive")
                         }
                         .onFailure { notify("Google Drive sign-in failed: ${it.message}") }
@@ -223,9 +249,9 @@ class DriveSync(
             if (!ownState.await()) return@launch
             val tokens = persisted.tokens
             // Also forgets a stored sign-in the keystore couldn't open this start.
-            persist { it.copy(tokens = null, unopened = null) }
+            persist { it.copy(tokens = null, unopened = null, needsReconnect = false, health = null) }
             if (!quiet) notify("Disconnected from Google Drive")
-            tokens?.let { revokeDriveGrant(it) }
+            tokens?.let { revokeGrant(it) }
         }
     }
 
@@ -246,25 +272,103 @@ class DriveSync(
             t
         }
         fold()
-        tokens?.let { scope.launch { revokeDriveGrant(it) } }
+        tokens?.let { scope.launch { revokeGrant(it) } }
     }
 
-    /** A valid access token, refreshing within 60 s of expiry; null when signed out
-     *  or the refresh failed (which signs us out). Mirrors the web store's
-     *  `accessToken()`. */
-    private suspend fun freshToken(): String? {
-        val t = persisted.tokens ?: return null
-        if (System.currentTimeMillis() < t.expiresAt - 60_000) return t.accessToken
-        val refresh = t.refreshToken ?: return t.accessToken
-        return runCatching { refreshToken(refresh) }
-            .fold(
-                onSuccess = { fresh -> persist { it.copy(tokens = fresh) }; fresh.accessToken },
-                onFailure = {
-                    persist { it.copy(tokens = null) }
-                    notify("Google Drive session expired — reconnect")
-                    null
-                },
-            )
+    /** What [freshToken] found. */
+    private sealed interface FreshToken {
+        /** A set to call with. */
+        data class Token(val set: DriveTokenSet) : FreshToken
+
+        /** The session stands, but no token for now. */
+        data class Waiting(val failure: SyncFailure) : FreshToken
+
+        /** Signed out, or Google ended the sign-in. */
+        data object NeedsReconnect : FreshToken
+    }
+
+    /** A Drive call that couldn't get a token, or whose retry couldn't. */
+    private class NoDriveToken(val failure: SyncFailure) : Exception()
+
+    private val refresher = SingleFlightRefresh<DriveTokenSet>(
+        stored = { persisted.tokens },
+        refreshTokenOf = { it.refreshToken },
+        expiring = ::expiring,
+        grant = refreshToken,
+        endsSession = { driveFailure(it, "refresh", now()) == SyncFailure.SessionEnded },
+        store = { spent, fresh ->
+            persist { st -> if (st.tokens?.refreshToken == spent) st.copy(tokens = fresh) else st }
+        },
+        end = { rejected ->
+            // Keeps everything else, so a reconnect picks up where this left off.
+            var ended = false
+            persist { st ->
+                ended = st.tokens != null && st.tokens.refreshToken == rejected
+                if (ended) st.copy(tokens = null, needsReconnect = true) else st
+            }
+            if (ended) finishRun(failed(SyncFailure.SessionEnded))
+        },
+    )
+
+    private fun expiring(tokens: DriveTokenSet) = now() >= tokens.expiresAt - 60_000
+
+    /** A token to call with, refreshing within 60 s of expiry. Only Google saying
+     *  the refresh token is dead ends the session (geota/crema#323). */
+    private suspend fun freshToken(): FreshToken {
+        val tokens = persisted.tokens ?: return FreshToken.NeedsReconnect
+        return if (expiring(tokens)) refreshed(tokens, rejected = false) else FreshToken.Token(tokens)
+    }
+
+    private suspend fun refreshed(observed: DriveTokenSet, rejected: Boolean): FreshToken = try {
+        refresher.refresh(observed, rejected)?.let { FreshToken.Token(it) } ?: FreshToken.NeedsReconnect
+    } catch (c: CancellationException) {
+        throw c
+    } catch (e: Exception) {
+        FreshToken.Waiting(driveFailure(e, "refresh", now()))
+    }
+
+    /** Run [call] with [tokens], refreshing and retrying once on a 401. */
+    private suspend fun <T> withToken(tokens: DriveTokenSet, call: suspend (String) -> T): T {
+        try {
+            return call(tokens.accessToken)
+        } catch (e: DriveHttpError) {
+            if (driveFailure(e, "call", now()) != SyncFailure.AccessRefused) throw e
+            when (val again = refreshed(tokens, rejected = true)) {
+                is FreshToken.Token -> return call(again.set.accessToken)
+                is FreshToken.Waiting -> throw NoDriveToken(again.failure)
+                FreshToken.NeedsReconnect -> throw NoDriveToken(SyncFailure.SessionEnded)
+            }
+        }
+    }
+
+    private fun failureOf(e: Throwable): SyncFailure = (e as? NoDriveToken)?.failure ?: driveFailure(e, "call", now())
+
+    private fun failed(failure: SyncFailure) = RunOutcome.Failed(RunOutcomeFailedInner(failure))
+
+    private fun backedUp() = RunOutcome.Complete(
+        RunOutcomeCompleteInner(next_cursor_ms = 0, applied = 1u, unchanged = 0u, skipped_permanent = 0u),
+    )
+
+    /** Keep the run's lasting status, and raise the one reconnect notice on the way in. */
+    private suspend fun finishRun(outcome: RunOutcome) {
+        val previous = persisted.health
+        val next = driveHealthAfter(outcome, now())
+        persist { it.copy(health = next) }
+        if (reconnectNoticeDue(previous, next)) notify(DRIVE_RECONNECT_LINE)
+    }
+
+    /** The set a user-started [action] runs with; null once it has said why it can't start. */
+    private suspend fun heldForUser(held: FreshToken, action: String): DriveTokenSet? = when (held) {
+        is FreshToken.Token -> held.set
+        FreshToken.NeedsReconnect -> {
+            notify(if (persisted.needsReconnect) DRIVE_RECONNECT_LINE else "Connect Google Drive first")
+            null
+        }
+        is FreshToken.Waiting -> {
+            finishRun(failed(held.failure))
+            notify("Google Drive $action failed: ${driveFailureLine(held.failure)}")
+            null
+        }
     }
 
     // ── Backup operations ─────────────────────────────────────────────────────
@@ -272,7 +376,8 @@ class DriveSync(
     /** Upload a fresh `crema-backup/v1` file to Drive (timestamped — keeps a history). */
     fun backupNow() {
         scope.launch {
-            val token = freshToken() ?: run { notify("Connect Google Drive first"); return@launch }
+            if (!ownState.await()) return@launch
+            val tokens = heldForUser(freshToken(), "backup") ?: return@launch
             // Busy from the start: building the zip takes a while on a big
             // history (it runs off Main, so the UI stays live meanwhile).
             _state.update { it.copy(busy = true) }
@@ -280,22 +385,33 @@ class DriveSync(
                 _state.update { it.copy(busy = false) } // backupZip already notified "nothing to back up"
                 return@launch
             }
-            runCatching { driveUploadBackup(token, backupFileName(), zip, json) }
-                .onSuccess {
-                    persist { it.copy(lastBackupSuccessAtMs = System.currentTimeMillis()) }
-                    notify("Backed up to Google Drive")
+            try {
+                withToken(tokens) { uploadBackup(it, backupFileName(), zip) }
+                persist { it.copy(lastBackupSuccessAtMs = now()) }
+                finishRun(backedUp())
+                notify("Backed up to Google Drive")
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                val failure = failureOf(e)
+                finishRun(failed(failure))
+                // A session that just ended has said so once already.
+                if (failure != SyncFailure.SessionEnded) {
+                    notify("Google Drive backup failed: ${driveFailureLine(failure) ?: e.message}")
                 }
-                .onFailure { notify("Google Drive backup failed: ${it.message}") }
+            }
             _state.update { it.copy(busy = false) }
         }
     }
 
     /**
      * Daily automatic backup (issue #36): when Drive is linked and the last
-     * attempt is over 24 h old, run one quiet backup. Called on app start —
-     * no scheduler; a machine tablet gets opened most days, and the refresh
-     * token makes the upload unattended. Stamps the ATTEMPT time up front so
-     * a failing upload retries tomorrow instead of nagging every launch.
+     * attempt is over 24 h old, run one quiet backup. Called on app start — no
+     * scheduler; a machine tablet gets opened most days, and the refresh token
+     * makes the upload unattended. The attempt is stamped once a token is held,
+     * so a launch with no network costs nothing. An upload that fails for a
+     * reason time can fix tries again next launch; any other waits a day, with
+     * its reason in Settings rather than a notice on every launch.
      */
     fun autoBackupIfDue(enabled: Boolean) {
         if (!enabled) return
@@ -303,23 +419,32 @@ class DriveSync(
             if (!ownState.await()) return@launch
             if (persisted.tokens == null) return@launch
             val last = persisted.lastAutoBackupAtMs
-            val now = System.currentTimeMillis()
-            if (last != null && now - last < AUTO_BACKUP_INTERVAL_MS) return@launch
-            persist { it.copy(lastAutoBackupAtMs = now) }
-            val token = freshToken() ?: return@launch
+            if (last != null && now() - last < AUTO_BACKUP_INTERVAL_MS) return@launch
+            val tokens = when (val held = freshToken()) {
+                is FreshToken.Token -> held.set
+                is FreshToken.Waiting -> return@launch finishRun(failed(held.failure))
+                FreshToken.NeedsReconnect -> return@launch finishRun(failed(SyncFailure.SessionEnded))
+            }
+            persist { it.copy(lastAutoBackupAtMs = now()) }
             val zip = backupZip() ?: return@launch
             // Auto uploads carry a distinct prefix (still containing
             // "crema-backup" so the restore-latest list query sees them) —
             // retention pruning below only ever touches this prefix, so
             // manual backups are never deleted.
             val name = backupFileName().replaceFirst("crema-backup-", AUTO_BACKUP_PREFIX)
-            runCatching { driveUploadBackup(token, name, zip, json) }
-                .onSuccess {
-                    persist { it.copy(lastBackupSuccessAtMs = System.currentTimeMillis()) }
-                    notify("Daily backup saved to Google Drive")
-                    pruneAutoBackups(token)
-                }
-                .onFailure { notify("Daily Google Drive backup failed: ${it.message}") }
+            try {
+                withToken(tokens) { uploadBackup(it, name, zip) }
+                persist { it.copy(lastBackupSuccessAtMs = now()) }
+                finishRun(backedUp())
+                notify("Daily backup saved to Google Drive")
+                pruneAutoBackups(tokens)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                val failure = failureOf(e)
+                if (isTransient(failure)) persist { it.copy(lastAutoBackupAtMs = last) }
+                finishRun(failed(failure))
+            }
         }
     }
 
@@ -327,28 +452,38 @@ class DriveSync(
      *  (daily uploads otherwise accumulate ~365 files/year in the user's
      *  Drive), never touching manual backups. Best-effort — a failed prune
      *  just retries after tomorrow's upload. */
-    private suspend fun pruneAutoBackups(token: String) {
-        runCatching {
-            val stale = driveListBackups(token, json)
-                .filter { it.name.startsWith(AUTO_BACKUP_PREFIX) }
-                .sortedByDescending { it.modifiedTime }
-                .drop(AUTO_BACKUP_KEEP)
-            for (file in stale) driveDeleteFile(token, file.id, json)
+    private suspend fun pruneAutoBackups(tokens: DriveTokenSet) {
+        runCatchingCancellable {
+            withToken(tokens) { token ->
+                val stale = listBackups(token)
+                    .filter { it.name.startsWith(AUTO_BACKUP_PREFIX) }
+                    .sortedByDescending { it.modifiedTime }
+                    .drop(AUTO_BACKUP_KEEP)
+                for (file in stale) deleteFile(token, file.id)
+            }
         }
     }
 
     /** Download the newest Drive backup and hand its text to [applyRestore]. */
     fun restoreLatest(wipe: Boolean) {
         scope.launch {
-            val token = freshToken() ?: run { notify("Connect Google Drive first"); return@launch }
+            if (!ownState.await()) return@launch
+            val tokens = heldForUser(freshToken(), "restore") ?: return@launch
             _state.update { it.copy(busy = true) }
-            runCatching {
-                val newest = driveListBackups(token, json).firstOrNull()
-                    ?: throw IOException("No Crema backups found in Google Drive")
-                driveDownloadBackup(token, newest.id, json)
+            runCatchingCancellable {
+                withToken(tokens) { token ->
+                    val newest = listBackups(token).firstOrNull()
+                        ?: throw IOException("No Crema backups found in Google Drive")
+                    downloadBackup(token, newest.id)
+                }
             }
                 .onSuccess { bytes -> applyRestore(bytes, wipe) }
-                .onFailure { notify("Google Drive restore failed: ${it.message}") }
+                .onFailure { e ->
+                    val failure = (e as? NoDriveToken)?.failure
+                    if (failure != SyncFailure.SessionEnded) {
+                        notify("Google Drive restore failed: ${failure?.let(::driveFailureLine) ?: e.message}")
+                    }
+                }
             _state.update { it.copy(busy = false) }
         }
     }

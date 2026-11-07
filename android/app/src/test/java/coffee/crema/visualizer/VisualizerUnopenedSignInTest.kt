@@ -126,12 +126,12 @@ class VisualizerUnopenedSignInTest {
     @Test
     fun `a new sign-in replaces it, and a later session clear doesn't bring it back`() {
         // Tokens already expired, no refresh token: the first authorized call
-        // after sign-in clears the session (refreshOrSignOut).
+        // after sign-in, `/me`, ends the session.
         issued = TokenSet("new-token", null, expiresAt = 0)
         val sync = unopenedStart()
         signIn(sync)
-        waitFor("signed in") { raw().contains("\"New\"") }
-        waitFor("session cleared") { !raw().contains("accessToken") }
+        waitFor("session cleared") { raw().contains("\"needsReconnect\":true") }
+        assertFalse(raw().contains("accessToken"))
         Thread.sleep(200)
         assertNull(stored().tokens)
     }

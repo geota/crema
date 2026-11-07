@@ -23,6 +23,7 @@
 import { Context, Effect, Layer } from 'effect';
 import { HttpClient } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
+import { ACCOUNT_HELD_NOTICE } from './account-held.ts';
 import { ResponseDecodeError, VisualizerNotFoundError } from '../effect/errors.ts';
 import {
 	API_BASE,
@@ -451,6 +452,11 @@ export const BeanSyncLive = Layer.effect(
 			const tokens = yield* vault.getTokens;
 			if (tokens === null) {
 				result.error = 'Sign in to Visualizer first.';
+				return result;
+			}
+			// Not onto an account this device can't name.
+			if (readSyncConfig().accountUnconfirmed) {
+				result.error = ACCOUNT_HELD_NOTICE;
 				return result;
 			}
 

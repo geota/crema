@@ -17,6 +17,7 @@
  * {@link getHistoryStore}. It loads synchronously from `localStorage`.
  */
 
+import { excludedFromUpload, readSyncConfig } from '#lib/visualizer/sync-config.js';
 import type { RustStoredShot, TimedSample } from '#lib/core/index.js';
 import type { BrewSeries } from '#lib/core/crema-core.js';
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
@@ -180,7 +181,10 @@ export class HistoryStore {
 	/** The shots waiting to go to Visualizer. */
 	get visualizerBacklog(): StoredShot[] {
 		const none = new Set(this.withoutTelemetry.map((s) => s.id));
-		return this.all.filter((s) => !s.visualizerId && !isBrewLog(s) && !none.has(s.id));
+		const config = readSyncConfig();
+		return this.all.filter(
+			(s) => !s.visualizerId && !isBrewLog(s) && !none.has(s.id) && !excludedFromUpload(s, config)
+		);
 	}
 
 	private async hydrateSeries(): Promise<void> {

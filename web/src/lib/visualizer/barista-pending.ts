@@ -21,6 +21,11 @@ import { readJson, writeJson } from '../utils/storage.ts';
 /** localStorage key (cleared by a factory reset with every other `crema.*` key). */
 export const BARISTA_PENDING_KEY = 'crema.visualizer.baristaPending.v1';
 
+/** Forget every mark: they were owed to an account this device has left. */
+export function clearBaristaPending(): void {
+	writeJson(BARISTA_PENDING_KEY, []);
+}
+
 const isIdList = (v: unknown): v is string[] =>
 	Array.isArray(v) && v.every((x) => typeof x === 'string');
 
