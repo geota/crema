@@ -2,6 +2,7 @@ package coffee.crema.profiles
 
 import android.content.Context
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.inSaveOrder
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -36,14 +37,14 @@ class HiddenProfileStore(private val context: Context, private val json: Json) {
 
     /** Persist the hidden ids (best-effort). */
     suspend fun save(ids: Set<String>) {
-        withContext(Dispatchers.IO) {
+        inSaveOrder(file) {
             saveStore(file, json.encodeToString(HiddenProfiles.serializer(), HiddenProfiles(ids.toList())))
         }
     }
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {
-        withContext(Dispatchers.IO) { eraseStore(file) }
+        inSaveOrder(file) { eraseStore(file) }
     }
 
     private companion object {
