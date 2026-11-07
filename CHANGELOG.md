@@ -85,31 +85,19 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - **Drive keeps your fullest backups** — daily backups now carry their shot and
-  curve counts in the file name, and each device manages only its own. Past the
-  copies you keep, the newest with the most shots and the newest with the most
-  curves always stay, so a bad week can't push out your last good copy. That's
-  at most 3 more than the setting. If a backup comes out under half the size of
-  the last one, Crema tells you. Installs that already back up keep 10 copies,
-  and an update deletes nothing it wouldn't have before. New installs keep 3.
-  Android.
-<<<<<<< HEAD
-- **Drive keeps your fullest backups** — daily backups now carry their shot and
-  curve counts in the file name, and each device manages only its own. Past the
-  copies you keep, the newest with the most shots and the newest with the most
-  curves always stay, so a bad week can't push out your last good copy. That's
-  at most 3 more than the setting. If a backup comes out under half the size of
-  the last one, Crema tells you. Installs that already back up keep 10 copies,
-  and an update deletes nothing it wouldn't have before. New installs keep 3.
-  Android.
-||||||| 8d551693
-=======
+  curve counts in the file name, and each device manages only its own, even two
+  of the same model. Past the 10 copies you keep, the newest with the most shots
+  and the newest with the most curves always stay, so a bad week can't push out
+  your last good copy. That's at most 3 more than the setting. If a backup comes
+  out under half the size of your last one, Crema tells you. Pruned copies go to
+  Drive's trash, where you can restore them for 30 days. Copies made before this
+  update are left alone. Android.
 - **Android can't save a store before it has loaded** — a save that came before
   a store's load carried defaults, and could replace your data. Every store now
   refuses it, and the first refusal tells you what wasn't saved. This holds when
   a new screen starts in a running app too. Reading the network role at launch
   also goes through the store, so it no longer misses settings caught between
   the two renames of a save. Android.
-||||||| 8d551693
 - **A remote delete no longer stops after three failures** — a Visualizer delete
   that fails for a reason time can fix now waits an hour and tries again, for as
   long as it takes, where it used to stop with no notice. One Visualizer refuses
@@ -123,7 +111,6 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   an upload tries again after a minute, then waits ten, rather than retrying
   into a window that hasn't passed. Retries also vary a little, so two devices
   don't move in step. Android and web.
->>>>>>> origin/main
 - **Shots no longer upload or back up without their telemetry** — on the web a
   queued upload, a Decent retry or a backup could run before a shot's curve had
   loaded, which posted an empty shot to Visualizer and bound the row to it, or

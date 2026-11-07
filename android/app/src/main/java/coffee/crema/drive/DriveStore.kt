@@ -42,10 +42,14 @@ data class DriveState(
     /** Epoch ms of the last SUCCESSFUL backup upload, manual or automatic —
      *  drives the "Last backed up X ago" readout. Additive → nullable. */
     val lastBackupSuccessAtMs: Long? = null,
-    /** Automatic copies kept per device: set by the first retention after this
-     *  field arrived, from the core's `initial_auto_backup_keep`, so an update
-     *  deletes nothing it didn't before. Additive → nullable. */
+    /** Automatic copies kept per device, set by the first retention to run. An
+     *  install with this set has backed up, so PR8c can give the ones without
+     *  it a lower default. Additive → nullable. */
     val autoBackupKeep: Int? = null,
+    /** Random, in this install's automatic backup names, so two devices of one
+     *  model can't prune each other. A reinstall gets a new one and leaves its
+     *  old copies alone. Additive → nullable. */
+    val autoBackupTag: String? = null,
     /**
      * The stored state as read, when the keystore couldn't open a secret this
      * start ([SecretBox.Opened.Unavailable]); in memory only. Meanwhile the

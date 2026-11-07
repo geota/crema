@@ -55,9 +55,9 @@ fn file(device: usize, day: usize, upload: &Upload) -> BackupFile {
     let label = ["tablet", "phone"][device];
     let manual = format!("crema-backup-{label}-{}.crema.zip", stamp(day));
     let name = if upload.legacy {
-        manual.replacen("crema-backup-", "crema-backup-auto-", 1)
+        format!("crema-backup-auto-{label}~a1b2c3-{}.crema.zip", stamp(day))
     } else {
-        auto_backup_file_name(&manual, upload.counts)
+        auto_backup_file_name(&manual, "a1b2c3", upload.counts)
     };
     BackupFile {
         id: format!("{label}-{day}"),
@@ -84,9 +84,8 @@ proptest! {
             let new = file(upload.device, day, upload);
             drive.push(new.clone());
             history.push((new.clone(), upload.counts, upload.legacy));
-            let now = new.modified_ms;
 
-            let plan = auto_backup_retention(&drive, &new.name, keep, now);
+            let plan = auto_backup_retention(&drive, &new.name, keep);
 
             for id in &plan.delete {
                 prop_assert!(id != "manual", "a manual copy was deleted");
@@ -102,11 +101,9 @@ proptest! {
                 .iter()
                 .filter(|f| f.id.split('-').next() == new.id.split('-').next())
                 .collect();
-            let bound = keep as usize + 3;
+            let bound = keep.max(1) as usize + 3;
             prop_assert!(own.len() <= bound, "{} copies, bound {bound}", own.len());
-            if keep > 0 {
-                prop_assert!(own.iter().any(|f| f.id == new.id), "the new copy went");
-            }
+            prop_assert!(own.iter().any(|f| f.id == new.id), "the new copy went");
 
             // The fullest counted copy this device ever made is still there, or
             // an equal one is.
@@ -137,7 +134,7 @@ proptest! {
             .collect();
         let drive: Vec<BackupFile> = files.iter().map(|(f, _, _)| f.clone()).collect();
         let (newest, _, _) = files.last().unwrap();
-        let plan = auto_backup_retention(&drive, &newest.name, keep, newest.modified_ms);
+        let plan = auto_backup_retention(&drive, &newest.name, keep);
 
         let counted: Vec<_> = files.iter().filter(|(_, _, legacy)| !legacy).collect();
         for of in [|c: &BackupCounts| c.shots, |c: &BackupCounts| c.curves] {

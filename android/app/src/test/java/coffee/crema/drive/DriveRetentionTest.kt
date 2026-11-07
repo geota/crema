@@ -25,6 +25,7 @@ import java.nio.file.Files
 import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -54,8 +55,11 @@ class DriveRetentionTest {
 
     /** Drive's files, newest first, as `id` to `name`. */
     private val drive = CopyOnWriteArrayList<Pair<String, String>>()
-    private val deleted = CopyOnWriteArrayList<String>()
+    private val trashed = CopyOnWriteArrayList<String>()
     private val pageTokens = CopyOnWriteArrayList<String>()
+    private var garbledList = false
+    private var uploadFails = false
+    private var emptyBody = false
 
     private val now = System.currentTimeMillis()
     private val day = 24L * 60 * 60 * 1000
@@ -65,17 +69,30 @@ class DriveRetentionTest {
     @Before fun start() {
         server.createContext("/upload/drive/v3/files") { x ->
             val body = x.requestBody.readBytes().decodeToString()
+            if (uploadFails) {
+                x.respond(500, "{}")
+                return@createContext
+            }
             val name = Regex(""""name"\s*:\s*"([^"]+)"""").find(body)!!.groupValues[1]
             drive.add(0, "new" to name)
             x.respond(200, """{"id":"new","name":"$name"}""")
         }
         server.createContext("/drive/v3/files") { x ->
-            if (x.requestMethod == "DELETE") {
+            if (x.requestMethod == "PATCH") {
                 val id = x.requestURI.path.substringAfterLast('/')
-                deleted += id
+                assertEquals("""{"trashed":true}""", x.requestBody.readBytes().decodeToString())
+                trashed += id
                 drive.removeIf { it.first == id }
-                x.sendResponseHeaders(204, -1)
-                x.close()
+                x.respond(200, """{"id":"$id"}""")
+                return@createContext
+            }
+            assertEquals("GET", x.requestMethod, "nothing is deleted for good")
+            if (garbledList) {
+                x.respond(200, "<html>a proxy's page</html>")
+                return@createContext
+            }
+            if (emptyBody) {
+                x.respond(200, "{}")
                 return@createContext
             }
             val token = Regex("pageToken=(\\d+)").find(x.requestURI.query.orEmpty())?.groupValues?.get(1)
@@ -104,11 +121,13 @@ class DriveRetentionTest {
         responseBody.use { it.write(bytes) }
     }
 
-    private fun autoName(i: Int, label: String = "tablet", counts: String = "-s100c100") =
+    /** The label an automatic name holds, for this install or another. */
+    private fun autoName(i: Int, label: String = "tablet~$TAG", counts: String = "-s100c100") =
         "crema-backup-auto-$label-2026${"%04d".format(1000 - i)}-0800$counts.crema.zip"
 
-    private fun seed(count: Int, label: String = "tablet", counts: String = "-s100c100", from: Int = 0) {
-        for (i in from until from + count) drive += "$label$i" to autoName(i, label, counts)
+    private fun seed(count: Int, label: String = "tablet~$TAG", counts: String = "-s100c100", from: Int = 0) {
+        val id = label.substringBefore('~')
+        for (i in from until from + count) drive += "$id$i" to autoName(i, label, counts)
     }
 
     /** One daily run, on a device whose last automatic backup was [lastAuto]. */
@@ -116,9 +135,10 @@ class DriveRetentionTest {
         lastAuto: Long? = now - 2 * day,
         keep: Int? = null,
         built: BackupCounts = BackupCounts(100u, 100u),
+        tag: String? = TAG,
     ): DriveState = runBlocking {
         store.load()
-        store.save(DriveState(tokens = tokens, lastAutoBackupAtMs = lastAuto, autoBackupKeep = keep))
+        store.save(DriveState(tokens = tokens, lastAutoBackupAtMs = lastAuto, autoBackupKeep = keep, autoBackupTag = tag))
         val sync = DriveSync(
             store, json, scope, "cid",
             notify = { notices += it },
@@ -134,40 +154,51 @@ class DriveRetentionTest {
     }
 
     @Test
-    fun theNameCarriesTheCounts() {
+    fun theNameCarriesTheCountsAndTheTag() {
         dailyBackup(built = BackupCounts(240u, 238u))
-        assertEquals("crema-backup-auto-tablet-20261106-0800-s240c238.crema.zip", drive.first().second)
+        assertEquals("crema-backup-auto-tablet~$TAG-20261106-0800-s240c238.crema.zip", drive.first().second)
     }
 
     @Test
-    fun anUpdateDeletesNothingTheOldRuleKept() {
-        // Today's Drive: the newest 10, in names with no counts, across two devices.
-        seed(6, counts = "")
-        seed(4, "phone", counts = "", from = 6)
-        val state = dailyBackup(lastAuto = now - 2 * day)
-        assertEquals(emptyList(), deleted.toList())
+    fun theFirstBackupMakesATagAndKeepsIt() {
+        val first = dailyBackup(tag = null)
+        val tag = assertNotNull(first.autoBackupTag)
+        assertTrue(drive.first().second.startsWith("crema-backup-auto-tablet~$tag-"), drive.first().second)
+        assertTrue(tag != newAutoBackupTag(), "tags differ")
+    }
+
+    @Test
+    fun twoDevicesOfOneModelLeaveEachOtherAlone() {
+        // Newest first, this install's two, then the other tablet's twelve.
+        seed(2)
+        seed(12, "tablet~other1", from = 2)
+        dailyBackup(keep = 1)
+        assertEquals(setOf("tablet0", "tablet1"), trashed.toSet())
+    }
+
+    @Test
+    fun anUpdateDeletesNothing() {
+        // Today's Drive: names with no tag and no counts, from before this.
+        seed(12, "tablet", counts = "")
+        seed(4, "phone", counts = "", from = 12)
+        val state = dailyBackup(lastAuto = now - 2 * day, tag = null)
+        assertEquals(emptyList(), trashed.toList())
         assertEquals(10, state.autoBackupKeep)
     }
 
     @Test
-    fun anExistingInstallStaysAtTen() {
+    fun everyInstallKeepsTenUntilTheDamageSlotExists() {
         seed(12)
-        val state = dailyBackup(lastAuto = now - 2 * day)
-        assertEquals(10, state.autoBackupKeep)
-        assertEquals(setOf("tablet9", "tablet10", "tablet11"), deleted.toSet())
-    }
-
-    @Test
-    fun aNewInstallStartsAtThree() {
-        assertEquals(3, dailyBackup(lastAuto = null).autoBackupKeep)
-    }
-
-    @Test
-    fun aReinstallDeletesNoneOfItsOldCopies() {
-        seed(9, counts = "")
         val state = dailyBackup(lastAuto = null)
         assertEquals(10, state.autoBackupKeep)
-        assertEquals(emptyList(), deleted.toList())
+        assertEquals(setOf("tablet9", "tablet10", "tablet11"), trashed.toSet())
+    }
+
+    @Test
+    fun aFailedFirstUploadSetsNothing() {
+        uploadFails = true
+        val state = dailyBackup(lastAuto = null)
+        assertEquals(null, state.autoBackupKeep)
     }
 
     @Test
@@ -175,28 +206,44 @@ class DriveRetentionTest {
         seed(5)
         val state = dailyBackup(keep = 2)
         assertEquals(2, state.autoBackupKeep)
-        assertEquals(4, deleted.size)
+        assertEquals(4, trashed.size)
     }
 
     @Test
     fun anotherDevicesAndManualCopiesAreLeftAlone() {
-        seed(5, "phone")
+        seed(5, "phone~$TAG")
         drive += "manual" to "crema-backup-tablet-20260101-0800.crema.zip"
         dailyBackup(keep = 1)
-        assertEquals(emptyList(), deleted.toList())
+        assertEquals(emptyList(), trashed.toList())
+    }
+
+    @Test
+    fun aReplyThatWontParseTrashesNothing() {
+        seed(12)
+        garbledList = true
+        dailyBackup(keep = 3)
+        assertEquals(emptyList(), trashed.toList())
+    }
+
+    @Test
+    fun aReplyWithNoFilesIsNotAnEmptyDrive() {
+        seed(12)
+        emptyBody = true
+        val state = dailyBackup()
+        assertEquals(null, state.autoBackupKeep, "a keep chosen from no listing")
     }
 
     @Test
     fun theFullestCopyOnALaterPageIsStillSeen() {
         // Newest first: 150 small copies from another device fill the first page.
         seed(5, counts = "-s10c10")
-        seed(PAGE + 20, "phone")
+        seed(PAGE + 20, "phone~$TAG")
         drive += "fullest" to autoName(900, counts = "-s300c300")
         drive += "older" to autoName(901, counts = "-s9c9")
         dailyBackup(keep = 1)
         assertTrue(pageTokens.isNotEmpty(), "only the first page was read")
-        assertTrue("older" in deleted, "$deleted")
-        assertTrue("fullest" !in deleted, "$deleted")
+        assertTrue("older" in trashed, "$trashed")
+        assertTrue("fullest" !in trashed, "$trashed")
     }
 
     @Test
@@ -204,10 +251,10 @@ class DriveRetentionTest {
         seed(4, counts = "-s240c238")
         dailyBackup(keep = 1, built = BackupCounts(12u, 12u))
         assertTrue(
-            "Today's backup has far fewer shots than yesterday's (12, was 240). Older copies are being kept." in notices,
+            "Today's backup has far fewer shots than your last backup (12, was 240). Older copies are being kept." in notices,
             "$notices",
         )
-        assertTrue("tablet0" !in deleted, "$deleted")
+        assertTrue("tablet0" !in trashed, "$trashed")
     }
 
     @Test
@@ -215,11 +262,12 @@ class DriveRetentionTest {
         seed(12)
         server.removeContext("/drive/v3/files")
         server.createContext("/drive/v3/files") { x -> x.respond(500, "{}") }
-        val state = runCatching { dailyBackup(keep = 3) }
-        assertEquals(emptyList(), deleted.toList(), "$state")
+        dailyBackup(keep = 3)
+        assertEquals(emptyList(), trashed.toList())
     }
 
     private companion object {
         const val PAGE = 100
+        const val TAG = "abc123"
     }
 }

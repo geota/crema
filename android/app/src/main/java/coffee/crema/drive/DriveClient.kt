@@ -5,6 +5,7 @@ import coffee.crema.persist.readBytesCapped
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import coffee.crema.net.HttpClients
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -13,6 +14,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.IOException
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -129,14 +133,18 @@ private suspend fun driveListPage(accessToken: String, pageToken: String?, json:
             val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
             if (status !in 200..299) throw IOException(errorMessage(json, resp, status, "list"))
-            val body = runCatching { json.parseToJsonElement(resp).jsonObject }.getOrNull()
-                ?: return@withContext DriveFilePage(emptyList(), null)
-            DriveFilePage(
-                body["files"]?.jsonArray.orEmpty().mapNotNull {
-                    runCatching { json.decodeFromString(DriveFile.serializer(), it.toString()) }.getOrNull()
-                },
-                body["nextPageToken"]?.jsonPrimitive?.contentOrNull,
-            )
+            // A body it can't read is a failed page, not an empty one: whatever
+            // acts on this listing takes what's missing for gone.
+            val page = runCatching {
+                val body = json.parseToJsonElement(resp).jsonObject
+                DriveFilePage(
+                    body.getValue("files").jsonArray.map {
+                        json.decodeFromString(DriveFile.serializer(), it.toString())
+                    },
+                    body["nextPageToken"]?.jsonPrimitive?.contentOrNull,
+                )
+            }
+            page.getOrElse { throw IOException("Drive list failed: couldn't read the reply", it) }
         } finally {
             conn.disconnect()
         }
@@ -144,26 +152,22 @@ private suspend fun driveListPage(accessToken: String, pageToken: String?, json:
 
 /** Download a backup file's raw bytes by id (a `.crema.zip`, or legacy text — the
  *  caller sniffs the zip magic vs decoding it as text). */
-/** Permanently delete one Drive file (retention pruning of old auto-backups).
- *  Only ever pointed at files Crema itself created under `drive.file` scope. */
-suspend fun driveDeleteFile(accessToken: String, fileId: String, json: Json): Unit =
+/** Move one Drive file to the trash (retention pruning of old auto-backups),
+ *  where the user can restore it for 30 days. `files.update` takes the
+ *  `drive.file` scope, and only the owner can trash a file, which is the user
+ *  for the files Crema creates. Over OkHttp, as HttpURLConnection can't PATCH. */
+suspend fun driveTrashFile(accessToken: String, fileId: String, json: Json): Unit =
     withContext(Dispatchers.IO) {
-        val url = "$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}"
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "DELETE"
-            connectTimeout = 15_000
-            readTimeout = 20_000
-            setRequestProperty("Authorization", "Bearer $accessToken")
-        }
-        try {
-            val status = conn.responseCode
-            // 204 on success; 404 counts as done (already gone).
-            if (status !in 200..299 && status != 404) {
-                val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-                throw IOException(errorMessage(json, err, status, "delete"))
+        val request = Request.Builder()
+            .url("$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}")
+            .header("Authorization", "Bearer $accessToken")
+            .patch("""{"trashed":true}""".toRequestBody("application/json; charset=UTF-8".toMediaType()))
+            .build()
+        HttpClients.base.newCall(request).execute().use { response ->
+            // 404 counts as done (already gone).
+            if (!response.isSuccessful && response.code != 404) {
+                throw IOException(errorMessage(json, response.body.string(), response.code, "trash"))
             }
-        } finally {
-            conn.disconnect()
         }
     }
 

@@ -9,8 +9,11 @@
 //! Per device label, keep the newest `keep`, the newest copy with the most
 //! shots, the newest with the most curves, and the newest with no counts for 90
 //! days, as it can't be compared. So a label holds at most `keep + 3`. A device
-//! only ever deletes its own copies: compared across labels, a phone's small
-//! copy would look like a tablet's shrink, every day.
+//! only ever prunes its own copies: compared across labels, a phone's small copy
+//! would look like a tablet's shrink, every day. The label in a name carries a
+//! random tag after the model (`Pixel_8~a1b2c3`), as two devices of one model
+//! would otherwise prune each other. A copy from before the tag, or from an
+//! earlier install, has another label, so nothing here ever touches it.
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -26,15 +29,12 @@ const BACKUP_PREFIX: &str = "crema-backup-";
 /// The end of every backup's name.
 const BACKUP_SUFFIX: &str = ".crema.zip";
 
-/// How long a copy with no counts is kept for, past the newest `keep`.
+/// Between a device's model and its tag, in a label. Model names never hold it.
+const TAG_SEPARATOR: char = '~';
+
+/// How long a copy with no counts is kept for, past the newest `keep`, counted
+/// from the newest listed copy: this device's clock can be anything.
 const NO_COUNTS_MS: i64 = 90 * 24 * 60 * 60 * 1000;
-
-/// Copies kept on a new install.
-const NEW_INSTALL_KEEP: u32 = 3;
-
-/// Copies kept on an install that already had automatic backups: what it kept
-/// before the setting existed, so an update deletes nothing with no preview.
-const EXISTING_KEEP: u32 = 10;
 
 /// How many shots a backup holds, and how many of those have curves.
 #[typeshare]
@@ -95,17 +95,22 @@ pub struct AutoBackupRetention {
     pub shrink: Option<BackupShrink>,
 }
 
-/// `backup_name` (`crema-backup-<label>-<stamp>.crema.zip`) as an automatic
-/// backup holding `counts`: `crema-backup-auto-<label>-<stamp>-s240c238.crema.zip`.
-/// A name that isn't in that form comes back with only the prefix changed.
+/// `backup_name` (`crema-backup-<model>-<stamp>.crema.zip`) as this install's
+/// automatic backup holding `counts`:
+/// `crema-backup-auto-<model>~<tag>-<stamp>-s240c238.crema.zip`. A name with no
+/// stamp comes back with no label, so nothing can match it for pruning.
 #[must_use]
-pub fn auto_backup_file_name(backup_name: &str, counts: BackupCounts) -> String {
+pub fn auto_backup_file_name(backup_name: &str, tag: &str, counts: BackupCounts) -> String {
     let rest = backup_name
         .strip_prefix(BACKUP_PREFIX)
         .unwrap_or(backup_name);
     let stem = rest.strip_suffix(BACKUP_SUFFIX).unwrap_or(rest);
+    let tagged = match split_stamp(stem) {
+        Some((model, stamp)) => format!("{model}{TAG_SEPARATOR}{tag}-{stamp}"),
+        None => stem.to_owned(),
+    };
     let BackupCounts { shots, curves } = counts;
-    format!("{AUTO_BACKUP_PREFIX}{stem}-s{shots}c{curves}{BACKUP_SUFFIX}")
+    format!("{AUTO_BACKUP_PREFIX}{tagged}-s{shots}c{curves}{BACKUP_SUFFIX}")
 }
 
 /// Read an automatic backup's name, from the end, as the label is free text. A
@@ -140,10 +145,15 @@ fn split_counts(stem: &str) -> Option<(&str, BackupCounts)> {
 
 /// `<label>-YYYYMMDD-HHMM` as the label, which can't be empty.
 fn strip_stamp(rest: &str) -> Option<&str> {
-    let (rest, time) = rest.rsplit_once('-')?;
-    let (label, date) = rest.rsplit_once('-')?;
+    split_stamp(rest).map(|(label, _)| label)
+}
+
+/// `<label>-YYYYMMDD-HHMM` as `(label, stamp)`.
+fn split_stamp(rest: &str) -> Option<(&str, &str)> {
+    let (head, time) = rest.rsplit_once('-')?;
+    let (label, date) = head.rsplit_once('-')?;
     let is_stamp = date.len() == 8 && time.len() == 4 && all_digits(date) && all_digits(time);
-    (is_stamp && !label.is_empty()).then_some(label)
+    (is_stamp && !label.is_empty()).then(|| (label, &rest[label.len() + 1..]))
 }
 
 fn all_digits(s: &str) -> bool {
@@ -152,20 +162,6 @@ fn all_digits(s: &str) -> bool {
 
 fn digits(s: &str) -> Option<u32> {
     if all_digits(s) { s.parse().ok() } else { None }
-}
-
-/// The copies to keep when none is set yet, once. An install that has already
-/// run automatic backups keeps what it did. So does a new install that finds
-/// more of its own copies in Drive than a new install keeps: a reinstall, whose
-/// old copies mustn't go with no preview. `own_copies` counts the upload just
-/// made.
-#[must_use]
-pub fn initial_auto_backup_keep(first_auto_backup: bool, own_copies: u32) -> u32 {
-    if first_auto_backup && own_copies <= NEW_INSTALL_KEEP {
-        NEW_INSTALL_KEEP
-    } else {
-        EXISTING_KEEP
-    }
 }
 
 /// `files`' automatic copies with the same label as `uploaded`, parsed, newest
@@ -190,23 +186,19 @@ fn own_copies<'a>(
     own
 }
 
-/// How many of `files` are automatic copies from the device that made `uploaded`.
-#[must_use]
-pub fn own_auto_backup_count(files: &[BackupFile], uploaded: &str) -> u32 {
-    u32::try_from(own_copies(files, uploaded).len()).unwrap_or(u32::MAX)
-}
-
-/// After uploading `uploaded`, which of `files` to delete, and whether it shrank.
-/// See the module docs for the rule. `files` must be the whole listing: one cut
-/// short would hide a fullest copy.
+/// After uploading `uploaded`, which of `files` to prune, and whether it shrank.
+/// See the module docs for the rule. At least the newest copy is always kept,
+/// whatever `keep` says. `files` must be the whole listing: one cut short would
+/// hide a fullest copy.
 #[must_use]
 pub fn auto_backup_retention(
     files: &[BackupFile],
     uploaded: &str,
     keep: u32,
-    now_ms: i64,
 ) -> AutoBackupRetention {
     let own = own_copies(files, uploaded);
+    let keep = keep.max(1);
+    let newest_ms = own.first().map_or(0, |(f, _)| f.modified_ms);
     let newest_with = |count: fn(BackupCounts) -> u32| {
         // `own` is newest first, and `max_by_key` takes the last of equals.
         own.iter()
@@ -220,7 +212,7 @@ pub fn auto_backup_retention(
     let no_counts = own
         .iter()
         .find(|(_, n)| n.counts.is_none())
-        .filter(|(f, _)| now_ms.saturating_sub(f.modified_ms) <= NO_COUNTS_MS)
+        .filter(|(f, _)| newest_ms.saturating_sub(f.modified_ms) <= NO_COUNTS_MS)
         .map(|(f, _)| f.id.as_str());
 
     let is_slot = |id: &str| [most_shots, most_curves, no_counts].contains(&Some(id));
@@ -232,15 +224,17 @@ pub fn auto_backup_retention(
         .collect();
     AutoBackupRetention {
         delete,
-        shrink: shrink_of(&own),
+        shrink: shrink_of(&own, uploaded),
     }
 }
 
-/// Whether the newest copy holds under half of the counted copy before it.
-fn shrink_of(own: &[(&BackupFile, AutoBackupName)]) -> Option<BackupShrink> {
-    let mut counted = own.iter().map(|(_, n)| n.counts);
-    let now = counted.next()??;
-    let was = counted.flatten().next()?;
+/// Whether `uploaded` holds under half of the newest other copy with counts.
+fn shrink_of(own: &[(&BackupFile, AutoBackupName)], uploaded: &str) -> Option<BackupShrink> {
+    let now = parse_auto_backup_name(uploaded)?.counts?;
+    let was = own
+        .iter()
+        .filter(|(f, _)| f.name != uploaded)
+        .find_map(|(_, n)| n.counts)?;
     let halved = |now: u32, was: u32| u64::from(now) * 2 < u64::from(was);
     if halved(now.shots, was.shots) {
         Some(BackupShrink {
@@ -268,21 +262,9 @@ pub fn auto_backup_retention_json(
     files_json: &str,
     uploaded: &str,
     keep: u32,
-    now_ms: i64,
 ) -> Result<String, String> {
     let files: Vec<BackupFile> = serde_json::from_str(files_json).map_err(|e| e.to_string())?;
-    serde_json::to_string(&auto_backup_retention(&files, uploaded, keep, now_ms))
-        .map_err(|e| e.to_string())
-}
-
-/// [`own_auto_backup_count`] over JSON, for the shells.
-///
-/// # Errors
-///
-/// Returns the parse error when `files_json` isn't a list of [`BackupFile`].
-pub fn own_auto_backup_count_json(files_json: &str, uploaded: &str) -> Result<u32, String> {
-    let files: Vec<BackupFile> = serde_json::from_str(files_json).map_err(|e| e.to_string())?;
-    Ok(own_auto_backup_count(&files, uploaded))
+    serde_json::to_string(&auto_backup_retention(&files, uploaded, keep)).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -291,6 +273,7 @@ mod tests {
 
     const DAY: i64 = 24 * 60 * 60 * 1000;
     const NOW: i64 = 1_000 * DAY;
+    const TAG: &str = "a1b2c3";
 
     fn counts(shots: u32, curves: u32) -> BackupCounts {
         BackupCounts { shots, curves }
@@ -300,8 +283,8 @@ mod tests {
         let stamp = format!("2026{day:04}-0800");
         let manual = format!("crema-backup-{label}-{stamp}.crema.zip");
         match c {
-            Some(c) => auto_backup_file_name(&manual, c),
-            None => format!("{AUTO_BACKUP_PREFIX}{label}-{stamp}.crema.zip"),
+            Some(c) => auto_backup_file_name(&manual, TAG, c),
+            None => format!("{AUTO_BACKUP_PREFIX}{label}{TAG_SEPARATOR}{TAG}-{stamp}.crema.zip"),
         }
     }
 
@@ -329,16 +312,17 @@ mod tests {
     fn a_name_round_trips() {
         let name = auto_backup_file_name(
             "crema-backup-Pixel-Tablet-20261103-0800.crema.zip",
+            TAG,
             counts(240, 238),
         );
         assert_eq!(
             name,
-            "crema-backup-auto-Pixel-Tablet-20261103-0800-s240c238.crema.zip"
+            "crema-backup-auto-Pixel-Tablet~a1b2c3-20261103-0800-s240c238.crema.zip"
         );
         assert_eq!(
             parse_auto_backup_name(&name),
             Some(AutoBackupName {
-                label: "Pixel-Tablet".to_owned(),
+                label: "Pixel-Tablet~a1b2c3".to_owned(),
                 counts: Some(counts(240, 238)),
             })
         );
@@ -360,10 +344,11 @@ mod tests {
         for label in ["a-s1c1", "x-20260101-0000", "s1c1", "a-20260101-0000-s1c1"] {
             let with = auto_backup_file_name(
                 &format!("crema-backup-{label}-20261103-0800.crema.zip"),
+                TAG,
                 counts(2, 1),
             );
             let parsed = parse_auto_backup_name(&with).unwrap();
-            assert_eq!(parsed.label, label);
+            assert_eq!(parsed.label, format!("{label}~{TAG}"));
             assert_eq!(parsed.counts, Some(counts(2, 1)));
 
             let without = format!("crema-backup-auto-{label}-20261103-0800.crema.zip");
@@ -394,14 +379,14 @@ mod tests {
             "a",
             &[(5, 5), (240, 200), (6, 230), (5, 5), (5, 5), (5, 5), (5, 5)],
         );
-        let plan = auto_backup_retention(&files, newest(&files), 3, NOW);
+        let plan = auto_backup_retention(&files, newest(&files), 3);
         assert_eq!(plan.delete, ["a3", "a0"]);
     }
 
     #[test]
     fn the_newest_of_equals_holds_a_slot() {
         let files = copies("a", &[(9, 9), (9, 9), (1, 1), (1, 1)]);
-        let plan = auto_backup_retention(&files, newest(&files), 2, NOW);
+        let plan = auto_backup_retention(&files, newest(&files), 2);
         assert_eq!(plan.delete, ["a0"]);
     }
 
@@ -409,7 +394,7 @@ mod tests {
     fn stays_bounded_at_the_cap_with_curves_falling_a_little_a_day() {
         let list: Vec<(u32, u32)> = (0..280).map(|i| (300, 300 - i)).collect();
         let files = copies("a", &list);
-        let plan = auto_backup_retention(&files, newest(&files), 3, NOW);
+        let plan = auto_backup_retention(&files, newest(&files), 3);
         assert_eq!(plan.delete.len(), 280 - 4);
     }
 
@@ -417,7 +402,7 @@ mod tests {
     fn another_devices_copies_are_left_alone() {
         let mut files = copies("tablet", &[(1, 1); 8]);
         files.extend(copies("phone", &[(1, 1); 8]));
-        let plan = auto_backup_retention(&files, newest(&copies("phone", &[(1, 1); 8])), 3, NOW);
+        let plan = auto_backup_retention(&files, newest(&copies("phone", &[(1, 1); 8])), 3);
         assert_eq!(plan.delete.len(), 8 - 3);
         assert!(plan.delete.iter().all(|id| id.starts_with("phone")));
     }
@@ -434,7 +419,7 @@ mod tests {
             name: (*n).to_owned(),
             modified_ms: 0,
         }));
-        let plan = auto_backup_retention(&files, &name("a", 4, Some(counts(1, 1))), 1, NOW);
+        let plan = auto_backup_retention(&files, &name("a", 4, Some(counts(1, 1))), 1);
         assert_eq!(plan.delete.len(), 4, "{plan:?}");
         assert!(plan.delete.iter().all(|id| id.starts_with('a')));
     }
@@ -443,23 +428,50 @@ mod tests {
     fn nothing_goes_when_the_upload_has_no_label_to_compare() {
         let files = copies("a", &[(1, 1); 5]);
         assert_eq!(
-            auto_backup_retention(&files, "b", 0, NOW),
+            auto_backup_retention(&files, "b", 0),
             AutoBackupRetention::default()
         );
     }
 
     #[test]
-    fn keeping_ten_deletes_nothing_the_old_rule_kept() {
-        // The rule before this one: the newest 10, across every label.
-        let mut files = copies("a", &[(1, 1); 9]);
-        files.extend(copies("b", &[(1, 1); 9]));
-        let plan = auto_backup_retention(
-            &files,
-            &name("a", 8, Some(counts(1, 1))),
-            EXISTING_KEEP,
-            NOW,
+    fn two_devices_of_one_model_leave_each_other_alone() {
+        let mine = name("Pixel", 8, Some(counts(1, 1)));
+        let theirs = BackupFile {
+            id: "theirs".to_owned(),
+            name: auto_backup_file_name(
+                "crema-backup-Pixel-20260101-0800.crema.zip",
+                "ffffff",
+                counts(1, 1),
+            ),
+            modified_ms: NOW - 400 * DAY,
+        };
+        let mut files = copies("Pixel", &[(1, 1); 9]);
+        files.push(theirs);
+        let plan = auto_backup_retention(&files, &mine, 1);
+        assert_eq!(plan.delete.len(), 8);
+        assert!(!plan.delete.contains(&"theirs".to_owned()));
+    }
+
+    #[test]
+    fn a_copy_from_before_the_tag_is_left_alone() {
+        let mut files = copies("Pixel", &[(1, 1); 3]);
+        files.extend((0..20).map(|i| BackupFile {
+            id: format!("old{i}"),
+            name: format!("{AUTO_BACKUP_PREFIX}Pixel-2026{i:04}-0800.crema.zip"),
+            modified_ms: NOW - 200 * DAY,
+        }));
+        let plan = auto_backup_retention(&files, &name("Pixel", 2, Some(counts(1, 1))), 1);
+        assert!(
+            plan.delete.iter().all(|id| !id.starts_with("old")),
+            "{plan:?}"
         );
-        assert!(plan.delete.is_empty());
+    }
+
+    #[test]
+    fn keep_is_never_under_one() {
+        let files = copies("a", &[(9, 9), (1, 1), (1, 1)]);
+        let plan = auto_backup_retention(&files, newest(&files), 0);
+        assert!(!plan.delete.contains(&"a2".to_owned()), "{plan:?}");
     }
 
     #[test]
@@ -471,16 +483,30 @@ mod tests {
         }];
         files.extend(copies("a", &[(1, 1); 5]));
         let uploaded = name("a", 4, Some(counts(1, 1)));
-        assert!(
-            !auto_backup_retention(&files, &uploaded, 1, NOW)
+        let deleted = |files: &[BackupFile]| {
+            auto_backup_retention(files, &uploaded, 1)
                 .delete
                 .contains(&"old".to_owned())
-        );
-        assert!(
-            auto_backup_retention(&files, &uploaded, 1, NOW + 1)
-                .delete
-                .contains(&"old".to_owned())
-        );
+        };
+        assert!(!deleted(&files));
+        files[0].modified_ms -= 1;
+        assert!(deleted(&files));
+    }
+
+    #[test]
+    fn ninety_days_is_counted_from_drive_not_the_devices_clock() {
+        // Every time here is far from any clock: only the listing can say.
+        let mut files: Vec<BackupFile> = copies("a", &[(1, 1); 3]);
+        for f in &mut files {
+            f.modified_ms -= 100_000 * DAY;
+        }
+        files.push(BackupFile {
+            id: "old".to_owned(),
+            name: name("a", 9, None),
+            modified_ms: NOW - 100_000 * DAY - 5 * DAY,
+        });
+        let plan = auto_backup_retention(&files, &name("a", 2, Some(counts(1, 1))), 1);
+        assert!(!plan.delete.contains(&"old".to_owned()), "{plan:?}");
     }
 
     #[test]
@@ -493,7 +519,7 @@ mod tests {
             })
             .collect();
         files.extend(copies("a", &[(1, 1); 2]));
-        let plan = auto_backup_retention(&files, &name("a", 1, Some(counts(1, 1))), 1, NOW);
+        let plan = auto_backup_retention(&files, &name("a", 1, Some(counts(1, 1))), 1);
         assert_eq!(plan.delete, ["a0", "old2", "old1", "old0"]);
     }
 
@@ -501,7 +527,7 @@ mod tests {
     fn says_when_shots_or_curves_fall_under_half() {
         let shrink = |list: &[(u32, u32)]| {
             let files = copies("a", list);
-            auto_backup_retention(&files, newest(&files), 3, NOW).shrink
+            auto_backup_retention(&files, newest(&files), 3).shrink
         };
         assert_eq!(
             shrink(&[(240, 240), (12, 12)]),
@@ -524,11 +550,25 @@ mod tests {
     }
 
     #[test]
+    fn a_shrink_compares_what_was_uploaded() {
+        // A clock behind Drive's: the upload isn't the newest copy listed.
+        let mut files = copies("a", &[(240, 240), (240, 240)]);
+        let uploaded = name("a", 7, Some(counts(12, 12)));
+        files.push(BackupFile {
+            id: "new".to_owned(),
+            name: uploaded.clone(),
+            modified_ms: NOW - 10 * DAY,
+        });
+        let shrink = auto_backup_retention(&files, &uploaded, 3).shrink;
+        assert_eq!(shrink.map(|s| (s.now, s.was)), Some((12, 240)));
+    }
+
+    #[test]
     fn a_shrink_compares_within_a_device() {
         let mut files = copies("tablet", &[(240, 240)]);
         files.extend(copies("phone", &[(12, 12)]));
         let uploaded = &files[1].name.clone();
-        assert_eq!(auto_backup_retention(&files, uploaded, 3, NOW).shrink, None);
+        assert_eq!(auto_backup_retention(&files, uploaded, 3).shrink, None);
     }
 
     #[test]
@@ -544,21 +584,12 @@ mod tests {
             name: name("a", 6, Some(counts(12, 12))),
             modified_ms: NOW + 2 * DAY,
         });
-        let plan = auto_backup_retention(&files, newest(&files), 3, NOW + 2 * DAY);
+        let plan = auto_backup_retention(&files, newest(&files), 3);
         assert_eq!(plan.shrink.map(|s| s.was), Some(240));
     }
 
     #[test]
-    fn only_a_new_install_with_nothing_in_drive_starts_at_three() {
-        assert_eq!(initial_auto_backup_keep(true, 1), 3);
-        assert_eq!(initial_auto_backup_keep(true, 3), 3);
-        assert_eq!(initial_auto_backup_keep(true, 4), 10, "a reinstall");
-        assert_eq!(initial_auto_backup_keep(false, 1), 10, "an update");
-    }
-
-    #[test]
     fn bad_json_is_an_error_not_an_empty_list() {
-        assert!(auto_backup_retention_json("{", "x", 3, 0).is_err());
-        assert!(own_auto_backup_count_json("{", "x").is_err());
+        assert!(auto_backup_retention_json("{", "x", 3).is_err());
     }
 }

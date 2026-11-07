@@ -130,7 +130,6 @@ pub use auto_tare::{
 pub use backup_retention::{
     AutoBackupName, AutoBackupRetention, BackupCounts, BackupFile, BackupShrink, BackupShrinkKind,
     auto_backup_file_name, auto_backup_retention, auto_backup_retention_json,
-    initial_auto_backup_keep, own_auto_backup_count, own_auto_backup_count_json,
     parse_auto_backup_name,
 };
 pub use bean::{

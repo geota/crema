@@ -2103,32 +2103,18 @@ pub fn export_backup_bundle(
 #[uniffi::export]
 pub fn auto_backup_file_name(
     backup_name: String,
+    tag: String,
     counts_json: String,
 ) -> Result<String, CremaError> {
     let counts = serde_json::from_str(&counts_json).map_err(crema_err)?;
-    Ok(de1_domain::auto_backup_file_name(&backup_name, counts))
+    Ok(de1_domain::auto_backup_file_name(
+        &backup_name,
+        &tag,
+        counts,
+    ))
 }
 
-/// How many of a `BackupFile` JSON list are automatic copies from the device
-/// that made `uploaded`. See [`de1_domain::own_auto_backup_count`].
-///
-/// # Errors
-///
-/// Returns the parse error when `files_json` is malformed.
-#[uniffi::export]
-pub fn own_auto_backup_count(files_json: String, uploaded: String) -> Result<u32, CremaError> {
-    de1_domain::own_auto_backup_count_json(&files_json, &uploaded).map_err(crema_err)
-}
-
-/// The copies to keep when none is set yet. See
-/// [`de1_domain::initial_auto_backup_keep`].
-#[uniffi::export]
-#[must_use]
-pub fn initial_auto_backup_keep(first_auto_backup: bool, own_copies: u32) -> u32 {
-    de1_domain::initial_auto_backup_keep(first_auto_backup, own_copies)
-}
-
-/// What to delete after an automatic upload, as an `AutoBackupRetention` JSON.
+/// What to prune after an automatic upload, as an `AutoBackupRetention` JSON.
 /// See [`de1_domain::auto_backup_retention`].
 ///
 /// # Errors
@@ -2139,9 +2125,8 @@ pub fn auto_backup_retention(
     files_json: String,
     uploaded: String,
     keep: u32,
-    now_ms: i64,
 ) -> Result<String, CremaError> {
-    de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep, now_ms).map_err(crema_err)
+    de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep).map_err(crema_err)
 }
 
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the

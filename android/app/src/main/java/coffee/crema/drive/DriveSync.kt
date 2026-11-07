@@ -9,8 +9,6 @@ import coffee.crema.core.CallbackOutcome
 import coffee.crema.core.autoBackupFileName
 import coffee.crema.core.autoBackupRetention
 import coffee.crema.core.callbackOutcome
-import coffee.crema.core.initialAutoBackupKeep
-import coffee.crema.core.ownAutoBackupCount
 import coffee.crema.sync.OwnStateGate
 import coffee.crema.visualizer.codeChallengeFromVerifier
 import coffee.crema.visualizer.generateCodeVerifier
@@ -28,6 +26,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.IOException
 import java.time.Instant
+import java.util.UUID
 
 /*
  * Google Drive backup controller — the Android twin of the web shell's
@@ -45,8 +44,14 @@ import java.time.Instant
 /** Minimum gap between two daily auto-backup attempts (issue #36). */
 private const val AUTO_BACKUP_INTERVAL_MS = 24L * 60 * 60 * 1000
 
+/** Automatic copies kept per device, until a Settings choice exists. */
+private const val AUTO_BACKUP_KEEP = 10
+
 /** A built backup, and what's in it for its automatic name. */
 class BackupZip(val bytes: ByteArray, val counts: BackupCounts)
+
+/** A new install's tag: short, as it's in every file name. */
+internal fun newAutoBackupTag(): String = UUID.randomUUID().toString().take(6)
 
 /** A Drive listing's row as the core reads it; null when its time can't be read,
  *  which leaves that file alone. */
@@ -59,7 +64,7 @@ internal fun shrinkNotice(shrink: BackupShrink): String {
         BackupShrinkKind.Shots -> "shots"
         BackupShrinkKind.Curves -> "curves"
     }
-    return "Today's backup has far fewer $what than yesterday's (${shrink.now}, was ${shrink.was}). " +
+    return "Today's backup has far fewer $what than your last backup (${shrink.now}, was ${shrink.was}). " +
         "Older copies are being kept."
 }
 
@@ -325,19 +330,21 @@ class DriveSync(
             val last = persisted.lastAutoBackupAtMs
             val now = System.currentTimeMillis()
             if (last != null && now - last < AUTO_BACKUP_INTERVAL_MS) return@launch
-            val firstAutoBackup = last == null
             persist { it.copy(lastAutoBackupAtMs = now) }
             val token = freshToken() ?: return@launch
             val built = backupZip() ?: return@launch
-            // The name carries the counts the retention below compares. Its
-            // prefix still holds "crema-backup", so the Drive list query finds
-            // it, and only this prefix is ever pruned, so a manual backup never is.
-            val name = autoBackupFileName(backupFileName(), json.encodeToString(BackupCounts.serializer(), built.counts))
+            // The name carries the counts the retention below compares, and this
+            // install's tag. Its prefix still holds "crema-backup", so the Drive
+            // list query finds it, and only this prefix is ever pruned, so a
+            // manual backup never is.
+            val tag = persisted.autoBackupTag
+                ?: newAutoBackupTag().also { fresh -> persist { it.copy(autoBackupTag = fresh) } }
+            val name = autoBackupFileName(backupFileName(), tag, json.encodeToString(BackupCounts.serializer(), built.counts))
             runCatching { driveUploadBackup(token, name, built.bytes, json) }
                 .onSuccess {
                     persist { it.copy(lastBackupSuccessAtMs = System.currentTimeMillis()) }
                     notify("Daily backup saved to Google Drive")
-                    settleAutoBackups(token, name, firstAutoBackup)
+                    settleAutoBackups(token, name)
                 }
                 .onFailure { notify("Daily Google Drive backup failed: ${it.message}") }
         }
@@ -347,21 +354,21 @@ class DriveSync(
      * After an automatic upload: the core's retention over the whole listing
      * ([autoBackupRetention], daily uploads otherwise accumulate ~365 files a
      * year), and a notice if the copy just made is far smaller than the last.
-     * Best-effort: a failed list or delete just retries after tomorrow's upload.
+     * Pruned copies go to the trash, so a wrong prune can be undone for 30 days.
+     * Best-effort: a failed list or trash just retries after tomorrow's upload.
      */
-    private suspend fun settleAutoBackups(token: String, uploaded: String, firstAutoBackup: Boolean) {
+    private suspend fun settleAutoBackups(token: String, uploaded: String) {
         runCatching {
             val files = driveListBackups(token, json).mapNotNull { it.toBackupFile() }
             val filesJson = json.encodeToString(ListSerializer(BackupFile.serializer()), files)
             val keep = persisted.autoBackupKeep
-                ?: initialAutoBackupKeep(firstAutoBackup, ownAutoBackupCount(filesJson, uploaded)).toInt()
-                    .also { chosen -> persist { it.copy(autoBackupKeep = chosen) } }
+                ?: AUTO_BACKUP_KEEP.also { chosen -> persist { it.copy(autoBackupKeep = chosen) } }
             val plan = json.decodeFromString(
                 AutoBackupRetention.serializer(),
-                autoBackupRetention(filesJson, uploaded, keep.toUInt(), System.currentTimeMillis()),
+                autoBackupRetention(filesJson, uploaded, keep.toUInt()),
             )
             plan.shrink?.let { notify(shrinkNotice(it)) }
-            for (id in plan.delete) driveDeleteFile(token, id, json)
+            for (id in plan.delete) driveTrashFile(token, id, json)
         }
     }
 
