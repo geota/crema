@@ -1988,25 +1988,27 @@ pub fn import_crema_jsonl(text: String) -> Result<String, CremaError> {
 /// [`export_crema_jsonl`] that also carries custom profiles + a portable
 /// settings subset, plus a richer header (`deviceLabel`, profile count).
 /// The shell strips OAuth tokens + per-device/BLE state before building
-/// the envelope. See [`de1_domain::export_backup_jsonl_from_json`].
+/// the envelope. Returns the `BackupExport` as JSON: `{ jsonl, degraded,
+/// omitted }`. See [`de1_domain::export_backup_jsonl_from_json`].
 ///
 /// # Errors
 ///
 /// Returns the JSON parse error string when the envelope is malformed.
 #[uniffi::export]
-pub fn export_backup_jsonl(
+pub fn export_backup_bundle(
     envelope_json: String,
     created_at_unix_ms: i64,
     app_version: String,
     device_label: String,
 ) -> Result<String, CremaError> {
-    de1_domain::export_backup_jsonl_from_json(
+    let built = de1_domain::export_backup_jsonl_from_json(
         &envelope_json,
         created_at_unix_ms,
         &app_version,
         &device_label,
     )
-    .map_err(crema_err)
+    .map_err(crema_err)?;
+    serde_json::to_string(&built).map_err(crema_err)
 }
 
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the

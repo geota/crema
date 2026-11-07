@@ -121,7 +121,7 @@ class BackupCrossShellTest {
     @Test
     fun `regenerates the Android fixture when asked`() {
         if (System.getenv("CREMA_REGEN_BACKUP_FIXTURES") != "1") return
-        val jsonl = backupBundleJsonl(seed(), json, 1_790_000_000_000, "fixture", "Android fixture")
+        val jsonl = backupBundleJsonl(seed(), json, 1_790_000_000_000, "fixture", "Android fixture").jsonl
         File(fixtures, "android-backup.crema.jsonl").writeText(jsonl)
     }
 
@@ -162,7 +162,7 @@ class BackupCrossShellTest {
 
     @Test
     fun `today's Android export restores on Android`() {
-        val jsonl = backupBundleJsonl(seed(), json, 1_790_000_000_000, "test", "Android test")
+        val jsonl = backupBundleJsonl(seed(), json, 1_790_000_000_000, "test", "Android test").jsonl
         assertAndroidSeed(assertNotNull(parseBackup(jsonl, json, 0L)))
     }
 

@@ -37,7 +37,6 @@ import coffee.crema.core.debitTaken
 import coffee.crema.core.resettleRemaining
 import coffee.crema.core.resettledBagDebit
 import coffee.crema.core.ShotCaptureContext
-import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportProfileFile
 import coffee.crema.core.importProfileFile
 import coffee.crema.core.exportBeanconquerorMainJson
@@ -998,7 +997,7 @@ class LibraryController(
 
     // ── Full-app backup & restore (crema-backup/v1) ──────────────────────────
     // One portable bundle: custom profiles + beans/roasters + shot history + the
-    // portable settings subset, (de)serialised by the core (exportBackupJsonl /
+    // portable settings subset, (de)serialised by the core (exportBackupBundle /
     // the line-tagged JSONL). OAuth tokens + per-device BLE/proxy state are
     // stripped on export and preserved on import — a backup moves between devices
     // without dragging this device's bindings along.
@@ -1034,7 +1033,12 @@ class LibraryController(
      *  thread. */
     private fun backupBundleJson(snap: BackupSnapshot): String? = runCatching {
         backupBundleJsonl(snap, json, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
-    }.getOrElse { appendLog("Backup failed: ${it.message}"); notify("Backup failed"); null }
+    }.map { built ->
+        built.omitted.forEach { appendLog("Backup left out ${it.kind} ${it.index}: ${it.id ?: "no id"}") }
+        built.degraded.forEach { appendLog("Backup left out the profile of shot $it") }
+        backupGapsNotice(built)?.let { notify(it) }
+        built.jsonl
+    }.getOrElse { appendLog("Backup failed: ${it.message}"); notify(BACKUP_FAILED); null }
 
     /**
      * Wrap [backupBundleJson]'s JSONL into a `.crema.zip`: `backup.jsonl` plus, for
@@ -1075,7 +1079,7 @@ class LibraryController(
                                 .getOrNull()?.let { bean.id to it }
                         },
                 )
-            }.getOrElse { appendLog("Backup zip failed: ${it.message}"); notify("Backup failed"); null }
+            }.getOrElse { appendLog("Backup zip failed: ${it.message}"); notify(BACKUP_FAILED); null }
         }
 
     /** A suggested filename for the SAF create-document picker. */

@@ -8,11 +8,11 @@ import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
 import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
 import { methodLabel } from '#lib/brew/methods.js';
 import { BrewMethodStyle } from '#lib/core/crema-core.js';
-import { buildBackupJsonl, restoreBackup } from './index';
+import { backupNote, buildBackupJsonl, describeBackupGaps, restoreBackup } from './index';
 
 /**
  * Round-trip tests for the whole-app backup/restore (review #07). The runes
- * store singletons + the wasm `exportBackupJsonl` both work under jsdom, so this
+ * store singletons + the wasm `exportBackupBundle` both work under jsdom, so this
  * drives the real `buildBackupJsonl` → `restoreBackup` path — no mocks. Backup is
  * data-loss-adjacent; a line-parser or merge/wipe dedup regression would silently
  * drop or duplicate records, which these pin.
@@ -233,5 +233,75 @@ describe('backup round-trip (review #07)', () => {
 		expect(methodLabel(restored.brewMethod, restored.brewMethodLabel)).toBe('Old brewer');
 		// A merge re-restore adds nothing.
 		expect(restoreBackup(built.jsonl, 'merge').customMethods).toBe(0);
+	});
+});
+
+describe('one unreadable row (#329)', () => {
+	beforeEach(resetAll);
+
+	const header = (jsonl: string) => JSON.parse(jsonl.split('\n')[0]) as Record<string, unknown>;
+
+	it('leaves the row out, counts what was written, and the file restores', () => {
+		const ids = seed();
+		const broken = { ...makeShot('shot:bad'), record: { duration: 'nope', samples: [] } };
+		getHistoryStore().insertPulled(broken as unknown as StoredShot);
+
+		const built = buildBackupJsonl()!;
+		expect(built.contents.shots).toBe(1);
+		expect(built.contents.omitted).toEqual([
+			expect.objectContaining({ kind: 'shot', id: 'shot:bad' })
+		]);
+		expect(header(built.jsonl)).toMatchObject({ shotCount: 1, omittedCount: 1 });
+
+		resetAll();
+		expect(restoreBackup(built.jsonl, 'wipe').shots).toBe(1);
+		expect(getHistoryStore().get(ids.shotId)).toBeDefined();
+		expect(getHistoryStore().get('shot:bad')).toBeUndefined();
+	});
+
+	it('keeps a shot whose profile will not read, without the profile', () => {
+		const broken = { ...makeShot('shot:thin'), profile: 'not a profile' };
+		getHistoryStore().insertPulled(broken as unknown as StoredShot);
+		const built = buildBackupJsonl()!;
+		expect(built.contents.shots).toBe(1);
+		expect(built.contents.degraded).toEqual(['shot:thin']);
+		expect(built.contents.omitted).toEqual([]);
+	});
+
+	it('leaves out a bad row of any kind, not just shots', () => {
+		seed();
+		getBeanStore().bulkAdd([{ ...blankBean('bean-bad'), name: 5 } as never], []);
+		const built = buildBackupJsonl()!;
+		expect(built.contents.beans).toBe(1);
+		expect(built.contents.omitted?.map((o) => [o.kind, o.id])).toEqual([['bean', 'bean-bad']]);
+		expect(header(built.jsonl)).toMatchObject({ beanCount: 1, omittedCount: 1 });
+	});
+
+	it('keeps a clean backup free of the key', () => {
+		seed();
+		expect(buildBackupJsonl()!.jsonl).not.toContain('omittedCount');
+	});
+
+	it('words the gaps, and says nothing for a clean backup', () => {
+		const clean = { profiles: 0, beans: 0, roasters: 0, shots: 3 };
+		expect(describeBackupGaps(clean)).toBe('');
+		expect(describeBackupGaps({ ...clean, omitted: [{ kind: 'shot', index: 0, id: 'a' }] })).toBe(
+			' 1 shot couldn’t be read and was left out.'
+		);
+		expect(
+			describeBackupGaps({
+				...clean,
+				omitted: [
+					{ kind: 'shot', index: 0, id: 'a' },
+					{ kind: 'bean', index: 0, id: 'b' }
+				],
+				degraded: ['c']
+			})
+		).toBe(' 2 items couldn’t be read and were left out. 1 shot was backed up without its profile.');
+	});
+
+	it('ends in a message when the build throws, so the UI cannot hang', async () => {
+		const note = await backupNote(() => Promise.reject(new Error('quota')));
+		expect(note).toBe('Backup failed: nothing was saved.');
 	});
 });

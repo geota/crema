@@ -84,6 +84,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **One unreadable row can't block a backup** — on the web, one bad row made the
+  whole backup fail, and the note stayed on Building backup for good. Now a shot
+  whose profile can't be read is backed up without it, and any other bad row, of
+  any kind, is left out alone, and you're told how many. A file left short says
+  so in its header, in a new `omittedCount`; a clean backup's bytes don't
+  change (#329). On Android, a failed section used to go out empty, so a backup
+  with no shots could upload and replace a good one: it now fails, and nothing
+  is saved. A `NaN` in one shot costs that shot, not the backup. One shot that
+  throws no longer stops the web's upload queue. Android and web.
+
 - **Replace restore keeps your custom profiles on Android** — restoring your own
   backup in Replace mode deleted every custom profile and reported "Restored 0
   profile(s)". They now come back and the report counts them.
