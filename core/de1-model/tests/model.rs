@@ -193,6 +193,7 @@ fn the_generator_reaches_what_the_invariants_watch() {
         total.volume_stops += c.volume_stops;
         total.retries += c.retries;
         total.skips += c.skips;
+        total.unseen += c.unseen;
         total.tares += c.tares;
         total.stale += c.stale;
         total.dead += c.dead;
@@ -210,6 +211,7 @@ fn the_generator_reaches_what_the_invariants_watch() {
         ("volume stops", total.volume_stops),
         ("retries", total.retries),
         ("skips", total.skips),
+        ("unseen", total.unseen),
         ("tares", total.tares),
         ("stale", total.stale),
         ("dead", total.dead),
@@ -397,4 +399,30 @@ fn the_sim_tail_matches_the_capture() {
         scaled.abs_diff(capture) <= 500,
         "sim {scaled} ms, capture {capture} ms"
     );
+}
+
+/// A world whose core opens on a shot already pouring, with a heavy cup.
+fn unseen_shot() -> World {
+    let mut world = plain_world();
+    world.cup.grams = 60.0;
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    world.apply(&Op::Advance { ms: 3_000 });
+    world.apply(&Op::Attach);
+    world.apply(&Op::SetStepWeight(Some(3.6)));
+    // Past the 5 s arming delay, so a weight leg or a skip could fire.
+    world.apply(&Op::Advance { ms: 8_000 });
+    world
+}
+
+/// I6 on the plainest case: the app opens mid-pour over a cup past target.
+#[test]
+fn an_attach_mid_pour_leaves_the_cup_alone() {
+    let world = unseen_shot();
+    assert_eq!(world.coverage.unseen, 1, "the core attached mid-pour");
+    let broken: Vec<_> = world
+        .violations
+        .iter()
+        .filter(|v| v.invariant == Invariant::I6)
+        .collect();
+    assert!(broken.is_empty(), "{broken:?}");
 }

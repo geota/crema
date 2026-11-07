@@ -11,8 +11,16 @@
 //! what else they accumulate (telemetry samples, profile frames, eco mode,
 //! clog analysis), so this stays deliberately small: it owns the timing, the
 //! monitors own everything else.
+//!
+//! [`Session`] is the other half: what the core knows about the flow the
+//! machine is running, decided once when that flow opens. A link event never
+//! destroys it. Stop ownership joins it in later work
+//! (`.scratch/machine-control/DESIGN.md` §3.3); today it answers one question,
+//! whether the app saw this flow begin.
 
 use std::time::Duration;
+
+use de1_protocol::{MachineState, StateInfo, SubState};
 
 /// Tracks the start time of one in-progress session at a time.
 ///
@@ -61,9 +69,159 @@ impl SessionTimer {
     }
 }
 
+/// The kind of flow a [`Session`] covers, one per water-moving machine state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveMode {
+    /// A shot.
+    Espresso,
+    /// Hot water from the wand.
+    HotWater,
+    /// A group flush.
+    Flush,
+    /// Steam.
+    Steam,
+    /// The steam-wand rinse.
+    SteamRinse,
+}
+
+impl ActiveMode {
+    /// The mode of `state`, or `None` when no water is moving.
+    #[must_use]
+    pub fn of(state: MachineState) -> Option<ActiveMode> {
+        match state {
+            MachineState::Espresso => Some(ActiveMode::Espresso),
+            MachineState::HotWater => Some(ActiveMode::HotWater),
+            MachineState::HotWaterRinse => Some(ActiveMode::Flush),
+            MachineState::Steam => Some(ActiveMode::Steam),
+            MachineState::SteamRinse => Some(ActiveMode::SteamRinse),
+            _ => None,
+        }
+    }
+}
+
+/// Whether the app saw a flow begin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Observed {
+    /// First seen before flow, on a live link.
+    FromStart,
+    /// First seen flowing or winding down: whatever is on the scale can't be
+    /// told from a tare offset.
+    Unseen,
+}
+
+impl Observed {
+    /// How a session opening on `substate` was observed. Only the first state
+    /// on a link can be unseen, and only past the pre-flow substates; an
+    /// unknown substate counts as flowing.
+    #[must_use]
+    pub fn on_open(first_on_link: bool, substate: SubState) -> Observed {
+        let pre_flow = matches!(
+            substate,
+            SubState::Ready | SubState::Heating | SubState::FinalHeating | SubState::Stabilising
+        );
+        if first_on_link && !pre_flow {
+            Observed::Unseen
+        } else {
+            Observed::FromStart
+        }
+    }
+}
+
+/// Why the scale can't speak for a session's cup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blocked {
+    /// The session began before the app saw it.
+    BeganUnseen,
+}
+
+impl Blocked {
+    /// The reason's wire name, as `weightBlocked` carries it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Blocked::BeganUnseen => "began-unseen",
+        }
+    }
+}
+
+/// What the scale's zero means for a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Baseline {
+    /// Tare pending, or no reading yet.
+    Unknown,
+    /// The scale's readings can't be trusted for this session.
+    Refused {
+        /// Why.
+        why: Blocked,
+    },
+}
+
+/// One flow, from its first state until the machine leaves that mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Session {
+    /// The kind of flow.
+    pub mode: ActiveMode,
+    /// Whether the app saw it begin.
+    pub observed: Observed,
+    /// What the scale's zero means for it.
+    pub baseline: Baseline,
+}
+
+impl Session {
+    /// Open a session in `mode`. An unseen one refuses its scale from the
+    /// start.
+    #[must_use]
+    pub fn open(mode: ActiveMode, observed: Observed) -> Session {
+        let baseline = match observed {
+            Observed::FromStart => Baseline::Unknown,
+            Observed::Unseen => Baseline::Refused {
+                why: Blocked::BeganUnseen,
+            },
+        };
+        Session {
+            mode,
+            observed,
+            baseline,
+        }
+    }
+
+    /// The session after a state report. A report in the same mode keeps the
+    /// session, whatever the link did meanwhile; any other closes it, and a
+    /// report in a new mode opens that mode's. `first_on_link` is true for the
+    /// first state on this link generation.
+    #[must_use]
+    pub fn on_state(
+        current: Option<Session>,
+        info: StateInfo,
+        first_on_link: bool,
+    ) -> Option<Session> {
+        let mode = ActiveMode::of(info.state)?;
+        match current {
+            Some(session) if session.mode == mode => Some(session),
+            _ => Some(Session::open(
+                mode,
+                Observed::on_open(first_on_link, info.substate),
+            )),
+        }
+    }
+
+    /// Why this session's scale can't be used, if it can't.
+    #[must_use]
+    pub fn weight_refused(&self) -> Option<Blocked> {
+        match self.baseline {
+            Baseline::Refused { why } => Some(why),
+            Baseline::Unknown => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn info(state: MachineState, substate: SubState) -> StateInfo {
+        StateInfo { state, substate }
+    }
 
     /// Helper: a `Duration` of `ms` milliseconds — the unit every test below
     /// thinks in.
@@ -110,5 +268,93 @@ mod tests {
         timer.start(ms(5_000));
         assert_eq!(timer.elapsed(ms(1_000)), Duration::ZERO);
         assert_eq!(timer.finish(ms(1_000)), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn every_flow_state_has_a_mode_and_nothing_else_does() {
+        for (state, mode) in [
+            (MachineState::Espresso, Some(ActiveMode::Espresso)),
+            (MachineState::HotWater, Some(ActiveMode::HotWater)),
+            (MachineState::HotWaterRinse, Some(ActiveMode::Flush)),
+            (MachineState::Steam, Some(ActiveMode::Steam)),
+            (MachineState::SteamRinse, Some(ActiveMode::SteamRinse)),
+            (MachineState::Idle, None),
+            (MachineState::Sleep, None),
+            (MachineState::Clean, None),
+        ] {
+            assert_eq!(ActiveMode::of(state), mode, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_first_state_past_the_pre_flow_substates_is_unseen() {
+        use Observed::{FromStart, Unseen};
+        for (first, substate, observed) in [
+            (true, SubState::Pouring, Unseen),
+            (true, SubState::Preinfusion, Unseen),
+            (true, SubState::Ending, Unseen),
+            (true, SubState::Unknown, Unseen),
+            (true, SubState::Ready, FromStart),
+            (true, SubState::Heating, FromStart),
+            (true, SubState::FinalHeating, FromStart),
+            (true, SubState::Stabilising, FromStart),
+            (false, SubState::Pouring, FromStart),
+            (false, SubState::Unknown, FromStart),
+        ] {
+            assert_eq!(
+                Observed::on_open(first, substate),
+                observed,
+                "first {first}, {substate:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unseen_session_refuses_its_scale() {
+        let session = Session::open(ActiveMode::Espresso, Observed::Unseen);
+        assert_eq!(session.weight_refused(), Some(Blocked::BeganUnseen));
+        let session = Session::open(ActiveMode::Espresso, Observed::FromStart);
+        assert_eq!(session.weight_refused(), None);
+    }
+
+    #[test]
+    fn a_state_in_the_same_mode_keeps_the_session_across_a_link_change() {
+        let seen = Session::open(ActiveMode::Espresso, Observed::FromStart);
+        let next = Session::on_state(
+            Some(seen),
+            info(MachineState::Espresso, SubState::Pouring),
+            true,
+        );
+        assert_eq!(next, Some(seen));
+    }
+
+    #[test]
+    fn a_state_with_no_mode_closes_the_session() {
+        let seen = Session::open(ActiveMode::Espresso, Observed::FromStart);
+        let next = Session::on_state(Some(seen), info(MachineState::Idle, SubState::Ready), false);
+        assert_eq!(next, None);
+    }
+
+    #[test]
+    fn a_first_state_in_another_mode_opens_that_mode_unseen() {
+        let seen = Session::open(ActiveMode::Espresso, Observed::FromStart);
+        let next = Session::on_state(
+            Some(seen),
+            info(MachineState::HotWater, SubState::Pouring),
+            true,
+        );
+        assert_eq!(
+            next,
+            Some(Session::open(ActiveMode::HotWater, Observed::Unseen))
+        );
+    }
+
+    #[test]
+    fn a_later_state_opens_a_session_seen() {
+        let next = Session::on_state(None, info(MachineState::Espresso, SubState::Pouring), false);
+        assert_eq!(
+            next,
+            Some(Session::open(ActiveMode::Espresso, Observed::FromStart))
+        );
     }
 }

@@ -353,7 +353,7 @@ pub enum Event {
         /// with a reason, rather than silently dropping it.
         weight_configured: Option<f32>,
         /// Why [`weight`] is not armed despite [`weight_configured`] being set
-        /// — `"no-scale"` or `"untared-cup"`. `None` when the leg is armed,
+        /// — `"no-scale"`, `"began-unseen"` or `"untared-cup"`. `None` when the leg is armed,
         /// nothing is configured, or the user turned the stop off (a choice,
         /// not an impediment).
         weight_blocked: Option<String>,
@@ -382,11 +382,12 @@ pub enum Event {
         /// sample of the shot, °C. `None` when no telemetry arrived.
         peak_temp: Option<f32>,
         /// Peak scale weight observed across every ScaleReading of the shot,
-        /// grams. `None` when no scale was paired (no readings arrived).
+        /// grams. `None` when no scale was paired (no readings arrived), or
+        /// the shot began before the app saw it (its readings include the cup).
         peak_weight: Option<f32>,
         /// The final scale weight observed before the shot ended, grams —
         /// the "shot yield". `None` when no scale was paired (no readings
-        /// arrived).
+        /// arrived), or the shot began before the app saw it.
         final_weight: Option<f32>,
         /// What the shell should do with this shot — record it, discard it
         /// as an aborted pull (behind an undo), or skip it entirely as a

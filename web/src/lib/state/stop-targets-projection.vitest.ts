@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getCremaUiState, refreshStopTargetsProjection } from './ui-state.svelte';
+import { getCremaUiState, refreshStopTargetsProjection, weightBlockedNote } from './ui-state.svelte';
 
 /**
  * The stop-condition UI renders ONLY from the core's projection, so the
@@ -62,5 +62,13 @@ describe('refreshStopTargetsProjection', () => {
 		expect(s?.weightG).toBeNull();
 		expect(s?.weightConfiguredG).toBe(36);
 		expect(s?.weightBlocked).toBe('no-scale');
+	});
+});
+
+describe('weightBlockedNote', () => {
+	it('says why each configured weight stop is off', () => {
+		expect(weightBlockedNote('began-unseen')).toBe('Started before Crema connected');
+		expect(weightBlockedNote('untared-cup')).toBe('cup not tared');
+		expect(weightBlockedNote('no-scale')).toBe('no scale');
 	});
 });

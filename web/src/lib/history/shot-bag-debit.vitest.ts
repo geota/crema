@@ -7,6 +7,7 @@ import { initTestWasm } from '#lib/testing/test-init.js';
 import { coerceBean, getBeanStore } from '#lib/bean/index.js';
 import { getToasts, dismissToast } from '#lib/components/shared/toast.svelte.js';
 import { getActiveShotStore } from '#lib/state/active-shot.svelte.js';
+import { ratioLabel, yieldOf } from './model';
 import { getHistoryStore } from './store.svelte';
 
 const promptBagEmpty = vi.fn();
@@ -27,6 +28,8 @@ function captured(id: string, dose: number): Record<string, unknown> {
 	};
 }
 
+const fireWebhook = vi.fn();
+
 function complete(id: string, disposition: 'Record' | 'DiscardAborted', source: 'live' | 'replay'): void {
 	getActiveShotStore().set({
 		bean: { beanId: 'a', name: 'a', tags: [] },
@@ -42,7 +45,7 @@ function complete(id: string, disposition: 'Record' | 'DiscardAborted', source: 
 		shotStartedAtMs: null,
 		lastNotificationAtMs: null,
 		sliceJsonl: async () => '',
-		fireWebhook: () => {},
+		fireWebhook,
 		takeStoredShot: () => captured(id, 18),
 		runtime: null
 	} as unknown as Parameters<typeof commitShotCompletion>[1]);
@@ -66,6 +69,21 @@ beforeEach(() => {
 });
 
 describe('commitShotCompletion', () => {
+	it('takes the dose of a shot with no yield, and reports no ratio', () => {
+		bag(100);
+		fireWebhook.mockClear();
+		complete('shot:1', 'Record', 'live');
+		const shot = getHistoryStore().get('shot:1')!;
+		expect(shot.bagDebit).toBe(18);
+		expect(remaining()).toBe(82);
+		expect(yieldOf(shot)).toBeNull();
+		expect(ratioLabel(shot)).toBe('1:—');
+		expect(fireWebhook).toHaveBeenCalledWith(
+			'shotCompleted',
+			expect.objectContaining({ finalWeight: null, brewRatio: null })
+		);
+	});
+
 	it('records the dose a shot took', () => {
 		bag(100);
 		complete('shot:1', 'Record', 'live');
