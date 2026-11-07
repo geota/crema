@@ -1144,7 +1144,13 @@ class LibraryController(
             }
 
             // Profiles — add customs whose id isn't already known (built-in or custom).
-            val knownProfileIds = uiState().profiles.map { it.id }.toHashSet()
+            // WIPE: the UI list still holds the customs cleared above until
+            // refreshProfiles runs, so only the built-ins are known (#321).
+            val knownProfileIds = if (mode == MainViewModel.RestoreMode.WIPE) {
+                builtinProfiles.map { it.id }.toHashSet()
+            } else {
+                uiState().profiles.map { it.id }.toHashSet()
+            }
             val newProfiles = profiles.filter { p -> profileIdOf(p, json)?.let { it !in knownProfileIds } ?: false }
             customProfilesJson = customProfilesJson + newProfiles.map(::derivedBrewTemp)
 
