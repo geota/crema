@@ -52,6 +52,14 @@ class BrewDateTest {
         assertEquals(0, merge.dropped)
     }
 
+    @Test fun theFullNoticeNamesReSync() {
+        assertEquals(
+            "History is full at 300 shots, so 2 shots from Visualizer weren’t added. After freeing up space, use Re-sync shots to fetch them",
+            historyFullNotice(2, 300),
+        )
+        assertTrue("to fetch it" in historyFullNotice(1, 300))
+    }
+
     @Test fun aPullFillsTheFreeSlotsAndRefusesTheRest() {
         val rows = List(HistoryStore.MAX_SHOTS - 2) { i -> shot("r$i", 1_000_000L - i) }
         val merge = mergePulled(listOf(shot("a", 5), shot("b", 2_000_000), shot("c", 6)), rows)

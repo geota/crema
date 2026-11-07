@@ -12,6 +12,7 @@ import {
 	brewDateError,
 	fitsHistory,
 	fromLocalInput,
+	historyFullNotice,
 	newestFirst,
 	toLocalInput
 } from './brew-date';
@@ -269,6 +270,13 @@ describe('inserting a batch', () => {
 
 		expect(store.all.map((s) => s.id)).toEqual(before);
 		expect(new HistoryStore().all.map((s) => s.id)).toEqual(before);
+	});
+
+	it('the notice says Re-sync, because a plain Sync won’t fetch refused rows', () => {
+		expect(historyFullNotice(2, 300)).toBe(
+			'History is full at 300 shots, so 2 shots from Visualizer weren\u2019t added. After freeing up space, use Re-sync shots to fetch them.'
+		);
+		expect(historyFullNotice(1, 300)).toContain('to fetch it.');
 	});
 
 	it('a pull fills the last free slot by date', () => {

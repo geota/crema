@@ -87,9 +87,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **A Visualizer pull no longer removes shots or tags** — at the 300-shot cap a
   pull used to push out your oldest rows, including brew logs and shots that
   never reached Visualizer. It now leaves the history alone, skips the new shots
-  that don't fit, keeps going, and says how many it left out. On the web, a pull
-  no longer empties a shot's tags on a free account, and remote tags only fill a
-  shot that has none. Android and web.
+  that don't fit, keeps going, and says how many it left out. Re-sync shots
+  fetches them once there's room. On the web, a pull no longer empties a shot's
+  tags on a free account, and remote tags only fill a shot that has none. Android
+  and web.
 - **Replace restore keeps your custom profiles on Android** — restoring your own
   backup in Replace mode deleted every custom profile and reported "Restored 0
   profile(s)". They now come back and the report counts them.

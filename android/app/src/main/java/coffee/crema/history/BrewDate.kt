@@ -79,9 +79,13 @@ fun historyWith(added: List<StoredShot>, history: List<StoredShot>, keepId: Stri
 fun historyDroppedNotice(dropped: Int, cap: Int = HistoryStore.MAX_SHOTS): String =
     if (dropped > 0) ". History keeps the newest $cap, so $dropped older shot${if (dropped == 1) " was" else "s were"} dropped" else ""
 
-/** What to say when a full history refused rows a pull brought. */
+/**
+ * What to say when a full history refused rows a pull brought. The next Sync
+ * won't look for them, because the cursor has moved past them: Re-sync does.
+ */
 fun historyFullNotice(refused: Int, cap: Int = HistoryStore.MAX_SHOTS): String =
-    "History is full at $cap shots, so $refused shot${if (refused == 1) " from Visualizer wasn’t" else "s from Visualizer weren’t"} added"
+    "History is full at $cap shots, so $refused shot${if (refused == 1) " from Visualizer wasn’t" else "s from Visualizer weren’t"} added. " +
+        "After freeing up space, use Re-sync shots to fetch ${if (refused == 1) "it" else "them"}"
 
 /** [atMs]'s local date. */
 fun localDateOf(atMs: Long, zone: ZoneId = ZoneId.systemDefault()): LocalDate =
