@@ -9,9 +9,11 @@ import coffee.crema.core.initialHotWaterDose
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.loadStore
+import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.saveItem
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -678,7 +680,7 @@ class SettingsStore(private val context: Context, private val json: Json) {
     private var lastGeneration = Long.MIN_VALUE
 
     suspend fun load(): AppPrefs = withContext(Dispatchers.IO) {
-        val stored = when (val outcome = loadStore(file, "settings") { text -> decodePrefs(json, text) }) {
+        val stored = when (val outcome = loadStore(file, WHAT) { text -> decodePrefs(json, text) }) {
             is SafeLoad.Loaded -> outcome.value
             SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> null
         }
@@ -704,14 +706,15 @@ class SettingsStore(private val context: Context, private val json: Json) {
      * race can never put older values back (spec §7.5 step 5).
      */
     suspend fun save(prefs: AppPrefs, generation: Long? = null) {
-        withContext(Dispatchers.IO) {
+        if (!SaveFloor.admit(file, WHAT)) return
+        // This lock holds the generation check and both writes together.
+        withContext(NonCancellable + Dispatchers.IO) {
             saveLock.withLock {
                 if (generation != null) {
                     if (generation < lastGeneration) return@withLock
                     lastGeneration = generation
                 }
-                runCatching { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
-                    .onSuccess { saveStore(file, "settings", it) }
+                saveStore(file, WHAT) { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
                 // Every save of a stored dose rewrites the downgrade marker.
                 if (prefs.qcHotWaterMode != null) {
                     runCatching { json.encodeToString(StoredHotWater.serializer(), prefs.storedHotWater()) }
@@ -733,6 +736,7 @@ class SettingsStore(private val context: Context, private val json: Json) {
 
     internal companion object {
         const val FILE_NAME = "prefs.json"
+        const val WHAT = "settings"
         const val MARKER_FILE_NAME = "hot-water.json"
     }
 }

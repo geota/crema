@@ -55,9 +55,7 @@ class StolenSerialsFileStore(private val context: Context) : StolenSerialsCacheS
     }
 
     override suspend fun write(cache: StolenSerialsCache) {
-        withContext(Dispatchers.IO) {
-            saveStore(file, "stolen serials list", Json.encodeToString(StolenSerialsCache.serializer(), cache), keepBackup = false)
-        }
+        saveStore(file, "stolen serials list", keepBackup = false) { Json.encodeToString(StolenSerialsCache.serializer(), cache) }
     }
 }
 

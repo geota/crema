@@ -92,7 +92,7 @@ class LoadOutcomeTest {
         target().writeText("[1,2]")
         SafeFile.load(target()) { throw OutOfMemoryError() }
         assertFailsWith<IOException> { SafeFile.write(target(), "[]") }
-        assertFalse(saveStore(target(), "shot history", "[]"))
+        assertFalse(saveNow(target(), "shot history", "[]"))
         assertEquals("[1,2]", target().readText())
     }
 
@@ -214,7 +214,7 @@ class LoadOutcomeTest {
         SafeFile.load(target()) { throw OutOfMemoryError() }
         SafeFile.setAside(target())
         assertTrue(SafeFile.savesHeld(target()))
-        assertFalse(saveStore(target(), "shot history", "[]"))
+        assertFalse(saveNow(target(), "shot history", "[]"))
     }
 
     @Test
@@ -257,10 +257,10 @@ class LoadOutcomeTest {
         SafeFile.load(target(), decode = ::decodeList)
         assertFalse(SafeFile.savesOpen(target()))
         SaveFloor.resetForTest()
-        assertFalse(saveStore(target(), "shot history", "[]"), "refused, and quietly: this doesn't throw")
+        assertFalse(saveNow(target(), "shot history", "[]"), "refused, and quietly: this doesn't throw")
         assertEquals("[1]", target().readText())
         SafeFile.openSaves(target())
-        assertTrue(saveStore(target(), "shot history", "[]"))
+        assertTrue(saveNow(target(), "shot history", "[]"))
     }
 
     @Test
