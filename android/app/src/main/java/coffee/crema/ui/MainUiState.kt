@@ -349,9 +349,9 @@ data class MainUiState(
      *  unset → [WATER_WARN_DEFAULT_ML]; 0 disables. See [waterWarnThresholdMl]. */
     val waterWarnMl: Float? = null,
     /** The bean library — user bean bags, persisted via [LibraryStore]. */
-    val beans: List<Bean> = emptyList(),
+    val beans: BeanView = rowViewOf(),
     /** The roaster directory (FK target for [beans]). */
-    val roasters: List<Roaster> = emptyList(),
+    val roasters: RoasterView = rowViewOf(),
     /** The active bean id — the Brew bean block + burn-down, or null. */
     val activeBeanId: String? = null,
     /** The bean currently open in the editor (`bean-edit` route), or null. */
@@ -373,7 +373,7 @@ data class MainUiState(
      */
     val draftProfile: CremaProfile? = null,
     /** Completed-shot log (newest first), persisted via [HistoryStore]. */
-    val history: List<StoredShot> = emptyList(),
+    val history: HistoryView = rowViewOf(),
     /** Visualizer sync state (account / prefs / in-flight uploads) — mirrored
      *  from [MainViewModel.visualizer]'s controller flow. */
     val visualizer: VisualizerSync.UiState = VisualizerSync.UiState(),

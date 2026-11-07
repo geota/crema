@@ -1,5 +1,7 @@
 package coffee.crema.history
 
+import coffee.crema.ui.HistoryRows
+import coffee.crema.ui.with
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -71,9 +73,9 @@ fun mergePulled(added: List<StoredShot>, history: List<StoredShot>, cap: Int = H
     return HistoryMerge((kept + history).newestFirst(), kept, 0)
 }
 
-/** The list [mergeHistory] leaves. */
-fun historyWith(added: List<StoredShot>, history: List<StoredShot>, keepId: String? = null): List<StoredShot> =
-    mergeHistory(added, history, keepId).rows
+/** The rows [mergeHistory] leaves, inside an edit. */
+fun historyWith(added: List<StoredShot>, history: HistoryRows, keepId: String? = null): HistoryRows =
+    history.with(mergeHistory(added, history, keepId).rows)
 
 /** What to say when the cap dropped rows, or nothing when it didn't. */
 fun historyDroppedNotice(dropped: Int, cap: Int = HistoryStore.MAX_SHOTS): String =

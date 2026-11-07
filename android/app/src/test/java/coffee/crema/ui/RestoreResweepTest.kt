@@ -53,7 +53,7 @@ class RestoreResweepTest {
         vm.setHotWaterDose(HotWaterUi.defaults)
         VmHarness.idle()
 
-        VmHarness.restore(vm, backup)
+        VmHarness.restore(vm, backup, MainViewModel.RestoreMode.WIPE)
         VmHarness.idle()
         assertEquals(volume, VmHarness.ownState(vm).hotWaterDose(), "restored")
         val bridge = VmHarness.bridge(vm)

@@ -1,5 +1,6 @@
 package coffee.crema.beans
 
+import coffee.crema.ui.rowViewOf
 import coffee.crema.core.BagStock
 import coffee.crema.core.BagStockLowInner
 import coffee.crema.core.MachineState
@@ -17,7 +18,7 @@ class BagStockTest {
         newBean("Gesha", null, null, null, 0L).copy(id = "bean:1", remaining = remaining, bagSize = size)
 
     private fun state(remaining: Float, size: Float, shotInProgress: Boolean = false) =
-        MainUiState(beans = listOf(bag(remaining, size)), activeBeanId = "bean:1", shotInProgress = shotInProgress)
+        MainUiState(beans = rowViewOf(listOf(bag(remaining, size))), activeBeanId = "bean:1", shotInProgress = shotInProgress)
 
     @Test
     fun `an unsized bag at 0 is untracked`() {

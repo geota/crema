@@ -128,9 +128,9 @@ pub use auto_tare::{
     MAX_PRE_SHOT_ZERO_OFFSET_G, TareSettleWindow, pre_shot_zero_offset,
 };
 pub use backup_retention::{
-    AutoBackupName, AutoBackupRetention, BackupCounts, BackupFile, BackupShrink, BackupShrinkKind,
-    auto_backup_file_name, auto_backup_retention, auto_backup_retention_json,
-    parse_auto_backup_name,
+    AutoBackupName, AutoBackupRetention, BackupCounts, BackupFile, BackupFileInfo, BackupShrink,
+    BackupShrinkKind, auto_backup_file_name, auto_backup_retention, auto_backup_retention_json,
+    describe_backup_file, describe_backup_file_json, parse_auto_backup_name,
 };
 pub use bean::{
     BREWS_REMAINING_WINDOW, BagStock, Bean, BeanMix, BeanOrigin, BeanRoastType,

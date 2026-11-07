@@ -65,6 +65,19 @@ pub struct AutoBackupName {
     pub counts: Option<BackupCounts>,
 }
 
+/// What a backup's name says about it, for a list to pick from. Any name will
+/// do: what it doesn't say stays empty.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupFileInfo {
+    /// The device label, as it went into the name.
+    pub device: Option<String>,
+    /// Made by the daily backup, not by hand.
+    pub automatic: bool,
+    pub counts: Option<BackupCounts>,
+}
+
 /// What dropped between a device's last two backups.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +142,51 @@ pub fn parse_auto_backup_name(name: &str) -> Option<AutoBackupName> {
         label: strip_stamp(rest)?.to_owned(),
         counts,
     })
+}
+
+/// What `name` says about a backup, automatic or manual, from either shell.
+#[must_use]
+pub fn describe_backup_file(name: &str) -> BackupFileInfo {
+    if let Some(auto) = parse_auto_backup_name(name) {
+        return BackupFileInfo {
+            device: Some(device_of(&auto.label).to_owned()),
+            automatic: true,
+            counts: auto.counts,
+        };
+    }
+    let stem = name.strip_prefix(BACKUP_PREFIX).and_then(|rest| {
+        [BACKUP_SUFFIX, ".crema.jsonl", ".jsonl"]
+            .iter()
+            .find_map(|suffix| rest.strip_suffix(suffix))
+    });
+    BackupFileInfo {
+        device: stem
+            .and_then(|s| strip_stamp(s).or_else(|| strip_web_stamp(s)))
+            .map(str::to_owned),
+        automatic: false,
+        counts: None,
+    }
+}
+
+/// A label as a person reads it: the device's name, without its install's tag.
+fn device_of(label: &str) -> &str {
+    label
+        .split_once(TAG_SEPARATOR)
+        .map_or(label, |(device, _)| device)
+}
+
+/// `<label>-YYYYMMDDTHHMM`, the web's stamp, as the label.
+fn strip_web_stamp(rest: &str) -> Option<&str> {
+    let (label, stamp) = rest.rsplit_once('-')?;
+    let (date, time) = stamp.split_once('T')?;
+    let is_stamp = date.len() == 8 && time.len() == 4 && all_digits(date) && all_digits(time);
+    (is_stamp && !label.is_empty()).then_some(label)
+}
+
+/// [`describe_backup_file`] as JSON, for the shells.
+#[must_use]
+pub fn describe_backup_file_json(name: &str) -> String {
+    serde_json::to_string(&describe_backup_file(name)).unwrap_or_else(|_| "{}".to_owned())
 }
 
 /// `<rest>-s240c238` as `(rest, counts)`.
@@ -369,6 +427,65 @@ mod tests {
             "crema-backup-auto-Pixel-20261103-0800-s99999999999c1.crema.zip",
         ] {
             assert_eq!(parse_auto_backup_name(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn describes_a_name_from_either_shell() {
+        let info = |name| describe_backup_file(name);
+        assert_eq!(
+            info("crema-backup-auto-Pixel-Tablet~a1b2c3-20261103-0800-s240c238.crema.zip"),
+            BackupFileInfo {
+                device: Some("Pixel-Tablet".to_owned()),
+                automatic: true,
+                counts: Some(counts(240, 238)),
+            }
+        );
+        assert_eq!(
+            info("crema-backup-auto-Pixel-20261103-0800.crema.zip"),
+            BackupFileInfo {
+                device: Some("Pixel".to_owned()),
+                automatic: true,
+                counts: None,
+            }
+        );
+        for (name, device) in [
+            (
+                "crema-backup-Pixel-Tablet-20261103-0800.crema.zip",
+                "Pixel-Tablet",
+            ),
+            ("crema-backup-web-20261103T0800.crema.zip", "web"),
+            ("crema-backup-Pixel-20261103-0800.jsonl", "Pixel"),
+            ("crema-backup-web-20261103T0800.crema.jsonl", "web"),
+        ] {
+            assert_eq!(
+                info(name),
+                BackupFileInfo {
+                    device: Some(device.to_owned()),
+                    automatic: false,
+                    counts: None,
+                },
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_that_says_nothing_describes_nothing() {
+        for name in [
+            "my-backup.zip",
+            "crema-backup.crema.zip",
+            "crema-backup-20261103-0800.crema.zip",
+        ] {
+            assert_eq!(
+                describe_backup_file(name),
+                BackupFileInfo {
+                    device: None,
+                    automatic: false,
+                    counts: None
+                },
+                "{name}"
+            );
         }
     }
 

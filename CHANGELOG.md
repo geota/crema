@@ -9,6 +9,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Pick any Drive backup to restore** — Restore from Drive now lists every
+  backup in your Drive, manual or daily, from any device, newest first, with its
+  date and device and, for daily backups, its shot and curve counts. Pick one,
+  then Merge or Replace. Android gains Replace from Drive here, behind Type
+  ERASE. This replaces Restore latest, which could only reach the newest copy.
+  Merge, from Drive or a file, now keeps your settings, maintenance counters
+  and Visualizer preferences as they are: only Replace takes the backup's.
+  Android and web.
 - **Pick a brew's date and time, and change it later** — Log brew on Android
   now has a When field with a date and time picker in place of "Logged N min
   ago", defaulting to now, as on the web. Both apps can change the date of a
@@ -84,6 +92,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A shot finishing no longer undoes an edit made meanwhile** — a rating or note
+  set while a shot assembled, a bag debit during a bean sync and a change while
+  an import ran used to be overwritten by a copy read earlier. Each now lands on
+  the rows as they stand. Android.
+- **Saving a bag keeps its debits** — the bean editor used to write back the
+  weight it opened with, undoing any shot pulled since. It now changes only what
+  you changed. Android.
+- **A bean sync that couldn't push an edit tries again** — a failed write used to
+  count as synced, so the edit stayed local until it was edited again. An edit
+  made during a sync now pushes on the next one too. Android and web.
 - **Android finishes a save it has started** — leaving a screen could drop a
   save still waiting behind another, so the file stayed behind what you saw. A
   save that's been asked for now always lands. Encoding a store also moved off
