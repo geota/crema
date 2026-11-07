@@ -26,12 +26,21 @@ import coffee.crema.runCatchingCancellable
 import coffee.crema.settings.resetCommon
 import coffee.crema.settings.toCommonSettings
 import androidx.core.content.FileProvider
+import coffee.crema.beans.LibraryStore
+import coffee.crema.brew.RecipeFileStore
+import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
+import coffee.crema.profiles.CustomProfileStore
+import coffee.crema.profiles.HiddenProfileStore
+import coffee.crema.profiles.PinnedProfileStore
 import coffee.crema.maintenance.MaintenanceStore
 import coffee.crema.persist.KeptAside
 import coffee.crema.persist.KeptAsideNotices
+import coffee.crema.persist.RefusedStore
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.SaveFloor
+import coffee.crema.persist.Stores
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.Setting
 import coffee.crema.settings.setting
@@ -75,6 +84,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import android.net.Uri
 import kotlinx.serialization.json.put
 import coffee.crema.decent.DecentClient
@@ -352,6 +363,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         allShots = { _ui.value.history },
         seriesReady = { library.awaitSeries() },
         shotsLoaded = { library.seriesReady },
+        historyRefused = { library.historyRefused },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
         onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
         networkWatcher = coffee.crema.visualizer.DefaultNetworkWatcher(app),
@@ -905,6 +917,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         setBackgroundStartAllowed = { bgConnection.setBackgroundStartAllowed(it) },
     )
 
+    /** One store reload at a time: a double tap, or both banner buttons. */
+    private val storeReload = kotlinx.coroutines.sync.Mutex()
+
     /** Every store file reported unreadable this process (see [KeptAsideNotices]). */
     private var keptAside: List<KeptAside> = emptyList()
 
@@ -952,6 +967,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(keptAsideNotice = msg) }
             }
         }
+        // A store that couldn't be read refuses saves: the banner stays while it does.
+        viewModelScope.launch {
+            Stores.refused.collect { refused -> _ui.update { it.copy(refusedStores = refused) } }
+        }
         // A save that came before its store loaded was refused: say so, once.
         viewModelScope.launch {
             SaveFloor.pending.collect { pending ->
@@ -980,6 +999,69 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (e.present) bgConnection.onCompanionPresence()
             }
         }
+    }
+
+    /** The banner's Try again: load [store] from disk, only once it reads, as a
+     *  load that still fails would empty what's in memory. Reading it first
+     *  changes nothing, so saves stay refused until the real load. */
+    fun retryStore(store: RefusedStore) = viewModelScope.launch {
+        storeReload.withLock {
+            val read = withContext(Dispatchers.IO) { SafeFile.peek(store.file) { it } }
+            if (read is SafeLoad.Unavailable) {
+                appendLog("Still couldn't read ${store.what}: ${read.error}")
+                return@withLock
+            }
+            holdStoreReload?.invoke()
+            reloadStore(store)
+        }
+    }
+
+    /** The banner's Set this aside: move the unreadable file with the other
+     *  kept-aside copies, offer it for sharing, and carry on without it. If the
+     *  rename fails too, the banner stays. */
+    fun putStoreAside(store: RefusedStore) = viewModelScope.launch {
+        storeReload.withLock {
+            val kept = withContext(Dispatchers.IO) { SafeFile.setAside(store.file) }
+            if (kept == null) {
+                appendLog("Couldn't set ${store.what} aside")
+                return@withLock
+            }
+            KeptAsideNotices.report(KeptAside(store.what, kept, setAside = true))
+            reloadStore(store)
+        }
+    }
+
+    /** Load [store] into the UI state. Its saves, and those of any store loaded
+     *  with it, open only once that has landed, and then stay refused if the
+     *  load says so. Not on a ViewModel a newer one has replaced. */
+    private suspend fun reloadStore(store: RefusedStore) {
+        if (!SafeFile.isCurrentSession(saveSession)) return
+        val files = reloadedWith(store.file)
+        files.forEach(SafeFile::closeSaves)
+        try {
+            when (store.file.name) {
+                LibraryStore.FILE_NAME -> library.loadLibrary()
+                HistoryStore.FILE_NAME -> library.reloadHistory()
+                SettingsStore.FILE_NAME -> loadPrefs()
+                PinnedProfileStore.FILE_NAME, HiddenProfileStore.FILE_NAME, CustomProfileStore.FILE_NAME -> {
+                    library.loadProfileMeta()
+                    library.loadCustomProfiles()
+                }
+                RecipeFileStore.FILE_NAME -> guided.loadRecipes()
+                MaintenanceStore.FILE_NAME -> maintenance.load()
+                VisualizerStore.FILE_NAME -> visualizer.load()
+                DecentStore.FILE_NAME -> decent.load()
+                DriveStore.FILE_NAME -> drive.load()
+            }
+        } finally {
+            files.forEach { SafeFile.openSaves(it, saveSession) }
+        }
+    }
+
+    /** The store files a reload of [file] loads: the profile stores go together. */
+    private fun reloadedWith(file: File): List<File> {
+        val profiles = listOf(PinnedProfileStore.FILE_NAME, HiddenProfileStore.FILE_NAME, CustomProfileStore.FILE_NAME)
+        return if (file.name in profiles) profiles.map { File(file.parentFile, it) } else listOf(file)
     }
 
     /** The kept-aside snackbar was dismissed or timed out. */
@@ -2466,6 +2548,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
          */
         @androidx.annotation.VisibleForTesting
         @Volatile internal var holdStartupLoad: kotlinx.coroutines.Deferred<Unit>? = null
+
+        /** Test seam: holds Try again between reading a store and reloading it. */
+        @Volatile internal var holdStoreReload: (suspend () -> Unit)? = null
 
         private const val MAX_LOG_LINES = 200
 

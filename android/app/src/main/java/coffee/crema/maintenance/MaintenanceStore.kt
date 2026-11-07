@@ -4,6 +4,7 @@ import android.content.Context
 import coffee.crema.core.MaintenanceState
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.inSaveOrder
+import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -48,8 +49,10 @@ class MaintenanceStore(private val context: Context, private val json: Json) {
     /** Load the persisted state, or [defaultMaintenanceState] if absent. An
      *  unreadable file is kept aside and reported (see [loadStore]). */
     suspend fun load(): MaintenanceState = withContext(Dispatchers.IO) {
-        loadStore(file, "maintenance log") { json.decodeFromString(MaintenanceState.serializer(), it) }
-            .valueOrNull() ?: defaultMaintenanceState(System.currentTimeMillis())
+        when (val outcome = loadStore(file, "maintenance log") { json.decodeFromString(MaintenanceState.serializer(), it) }) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> defaultMaintenanceState(System.currentTimeMillis())
+        }
     }
 
     /** Persist the maintenance state atomically (best-effort; a failure is logged). */
@@ -64,7 +67,7 @@ class MaintenanceStore(private val context: Context, private val json: Json) {
         inSaveOrder(file) { eraseStore(file) }
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "maintenance.json"
     }
 }

@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.persist.SafeFile
 import coffee.crema.persist.SaveFloor
+import coffee.crema.persist.StoreHealth
+import coffee.crema.persist.Stores
 import coffee.crema.persist.saveStore
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.SettingsStore
@@ -97,6 +99,19 @@ class SaveFloorVmTest {
             VmHarness.idle()
             assertFalse(SafeFile.savesOpen(files("prefs.json")))
         }
+    }
+
+    @Test
+    fun theProxyReadLeavesADamagedFileForTheLoadToReport() {
+        val prefs = files("prefs.json").apply { writeText("{not json") }
+        VmHarness.holdingStartupLoad {
+            build()
+            VmHarness.idle()
+            assertEquals("{not json", prefs.readText())
+            assertEquals(StoreHealth.LOADING, Stores.health(prefs))
+        }
+        // The hold's over: the load runs, and it's the one that finds the damage.
+        VmHarness.idleUntil("the load") { Stores.health(prefs) == StoreHealth.DAMAGED }
     }
 
     @Test

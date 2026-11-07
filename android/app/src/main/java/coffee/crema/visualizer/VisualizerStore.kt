@@ -3,6 +3,8 @@ package coffee.crema.visualizer
 import android.content.Context
 import android.util.Log
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SafeLoad
+import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.security.DeviceSecretBox
 import coffee.crema.security.SecretBox
@@ -316,7 +318,7 @@ class VisualizerStore(
 
     suspend fun load(): VisualizerState = withContext(Dispatchers.IO) {
         // Unreadable: kept aside + reported (see [loadStore]); starts signed out.
-        val raw = loadStore(file, "Visualizer settings") { text ->
+        val outcome = loadStore(file, "Visualizer settings") { text ->
             val state = json.decodeFromString(VisualizerState.serializer(), text)
             // Migrate a pre-unification file (flat `autoSync`/`privacy`/… fields and
             // no `prefs` object) forward into the shared [VisualizerSyncPrefs] shape.
@@ -326,7 +328,11 @@ class VisualizerStore(
             } else {
                 state
             }
-        }.valueOrNull() ?: return@withContext VisualizerState()
+        }
+        val raw = when (outcome) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> return@withContext VisualizerState()
+        }
         // A `.bak` left by an older build may hold a previous (or plaintext) token.
         SafeFile.purgeCopies(file)
         val (state, resave) = raw.openedWith(box)
@@ -355,7 +361,7 @@ class VisualizerStore(
     suspend fun save(state: VisualizerState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
     /** Delete the file and every copy (Erase all data); true when nothing remains. */
-    suspend fun erase(): Boolean = withContext(Dispatchers.IO) { SafeFile.erase(file) }
+    suspend fun erase(): Boolean = withContext(Dispatchers.IO) { eraseStore(file) }
 
     private fun write(state: VisualizerState): Boolean = try {
         // No `.bak` copies of sealed tokens (review 05 P3-5).
@@ -367,7 +373,7 @@ class VisualizerStore(
         false
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "visualizer.json"
         const val TAG = "VisualizerStore"
         val LEGACY_PREF_KEYS = setOf(

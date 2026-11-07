@@ -7,6 +7,7 @@ import coffee.crema.core.HotWaterMode
 import coffee.crema.core.StoredHotWater
 import coffee.crema.core.initialHotWaterDose
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveItem
 import coffee.crema.persist.saveStore
@@ -677,7 +678,10 @@ class SettingsStore(private val context: Context, private val json: Json) {
     private var lastGeneration = Long.MIN_VALUE
 
     suspend fun load(): AppPrefs = withContext(Dispatchers.IO) {
-        val stored = loadStore(file, "settings") { text -> decodePrefs(json, text) }.valueOrNull()
+        val stored = when (val outcome = loadStore(file, "settings") { text -> decodePrefs(json, text) }) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> null
+        }
         val marker = if (stored?.qcHotWaterMode == null) readHotWaterMarker() else null
         val prefs = resolveHotWater(resolveIdleSleep(stored), fileExisted = stored != null, marker = marker)
         // Persist a migration once, so a later screensaver change can't move
@@ -688,7 +692,10 @@ class SettingsStore(private val context: Context, private val json: Json) {
 
     /** The downgrade marker (`hot-water.json`), or null. */
     private fun readHotWaterMarker(): StoredHotWater? =
-        loadStore(markerFile, null) { text -> json.decodeFromString(StoredHotWater.serializer(), text) }.valueOrNull()
+        when (val outcome = loadStore(markerFile, null) { text -> json.decodeFromString(StoredHotWater.serializer(), text) }) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> null
+        }
 
     /**
      * Write [prefs]. Saves run one at a time. A save with a [generation] (the
@@ -724,7 +731,7 @@ class SettingsStore(private val context: Context, private val json: Json) {
 
     private val markerFile get() = File(context.filesDir, MARKER_FILE_NAME)
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "prefs.json"
         const val MARKER_FILE_NAME = "hot-water.json"
     }

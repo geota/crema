@@ -308,14 +308,19 @@ class LibraryController(
      *  series in the background (F10 — ~0.1 s for 300 shots on a desktop JVM,
      *  more on a phone), so the startup sequence (prefs, auto-connect) never
      *  waits on it. Until a series lands its shot shows no curve. */
-    suspend fun loadHistory() {
+    suspend fun loadHistory() = landHistory { _, rows -> rows }
+
+    /** [loadHistory], with [land] deciding the list at the moment the rows
+     *  arrive, from what's in memory by then and the rows. */
+    private suspend fun landHistory(land: (session: List<StoredShot>, rows: List<StoredShot>) -> List<StoredShot>) {
+        val loaded = seriesLoaded
         val rows = historyStore.loadRows()
-        updateUi { it.copy(history = rows) }
+        updateUi { it.copy(history = land(it.history, rows)) }
         historyStore.markLive(rows.map { it.id })
         historyStore.openSaves()
         val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
         if (missing.isEmpty()) {
-            seriesLoaded.complete(Unit)
+            loaded.complete(Unit)
             return
         }
         scope.launch {
@@ -330,14 +335,32 @@ class LibraryController(
                     )
                 }
             } finally {
-                seriesLoaded.complete(Unit)
+                loaded.complete(Unit)
             }
         }
     }
 
+    /** Load the shot log again, once it can be read. Shots made while it
+     *  couldn't be stay, and go into it now. Everything that reads a series
+     *  waits for this load too. */
+    suspend fun reloadHistory() {
+        seriesLoaded = CompletableDeferred()
+        var merge: HistoryMerge? = null
+        landHistory { session, rows ->
+            mergeHistory(madeWhileRefused(session, rows), rows).also { merge = it }.rows
+        }
+        val merged = merge ?: return
+        if (merged.dropped > 0) notify("Shot history reloaded${historyDroppedNotice(merged.dropped)}")
+        if (merged.kept.isNotEmpty()) historyStore.save(merged.rows)
+    }
+
+    /** Whether a Visualizer pull may run: not while the rows couldn't be read,
+     *  as it would match against a list that doesn't hold them. */
+    val historyRefused: Boolean get() = historyStore.savesRefused
+
     /** Completes once [loadHistory]'s background series load has landed in
      *  the history (F10 validation P1-2). */
-    private val seriesLoaded = CompletableDeferred<Unit>()
+    @Volatile private var seriesLoaded = CompletableDeferred<Unit>()
 
     /** Wait for the stored shots' telemetry: everything that reads a shot's
      *  series from the history (backup, export, uploads, a Visualizer pull's
@@ -350,7 +373,9 @@ class LibraryController(
     /** Load the pinned/hidden built-in overlays at startup (before the customs). */
     suspend fun loadProfileMeta() {
         pinnedIds = pinnedProfileStore.load()
+        pinnedProfileStore.openSaves()
         hiddenIds = hiddenProfileStore.load()
+        hiddenProfileStore.openSaves()
     }
 
     /** Load the persisted custom profiles into the merged list at startup. */
@@ -2516,6 +2541,17 @@ class LibraryController(
 /** The message after a profile import: "Imported 2 profiles; 3 already in your
  *  library", with the first error when some didn't import (web words it the
  *  same, F12b). */
+/**
+ * The rows of [session], the list in memory while the shot log couldn't be read,
+ * that aren't in [stored], the log once it could. A row can be in both under
+ * another id, if it came from Visualizer, so that id counts too.
+ */
+internal fun madeWhileRefused(session: List<StoredShot>, stored: List<StoredShot>): List<StoredShot> {
+    val ids = stored.mapTo(HashSet()) { it.id }
+    val remote = stored.mapNotNullTo(HashSet()) { it.visualizerId }
+    return session.filter { it.id !in ids && it.visualizerId !in remote }
+}
+
 internal fun profileImportSummary(imported: Int, skipped: Int, errors: List<String>): String {
     if (imported == 0 && skipped == 0) {
         return errors.firstOrNull()?.let { "Couldn’t import profile — $it" } ?: "No profiles imported"

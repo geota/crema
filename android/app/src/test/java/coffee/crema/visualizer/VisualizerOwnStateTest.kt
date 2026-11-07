@@ -103,6 +103,7 @@ class VisualizerOwnStateTest {
         scope: CoroutineScope = CoroutineScope(job + Dispatchers.Default),
         history: Map<String, StoredShot> = emptyMap(),
         shotsLoaded: () -> Boolean = { true },
+        historyRefused: () -> Boolean = { false },
         seriesReady: suspend () -> Unit = {},
         onSignedIn: () -> Unit = {},
     ) = VisualizerSync(
@@ -122,6 +123,7 @@ class VisualizerOwnStateTest {
         retryTimers = false,
         now = { 1_800_000_000_000L },
         shotsLoaded = shotsLoaded,
+        historyRefused = historyRefused,
         seriesReady = seriesReady,
         onSignedIn = onSignedIn,
     )
@@ -371,6 +373,37 @@ class VisualizerOwnStateTest {
 
         assertEquals(3, notices.count { "still loading" in it })
         assertEquals(emptyList<String>(), requests.toList())
+        assertEquals(1234L, stored().shotPullCursor)
+    }
+
+    @Test
+    fun `a refused history stops shots, says what to do, and leaves the cursor`() {
+        seed(saved)
+        val s = sync(historyRefused = { true })
+        runBlocking { s.load() }
+
+        s.syncNow(emptyList(), includeBeans = false)
+        s.resyncAllShots(emptyList())
+        s.uploadAllUnsynced(emptyList())
+        settle()
+
+        assertEquals(3, notices.count { it == HISTORY_REFUSED_NOTICE })
+        assertEquals(emptyList<String>(), requests.toList())
+        assertEquals(1234L, stored().shotPullCursor)
+    }
+
+    @Test
+    fun `beans still sync while the history is refused`() {
+        seed(saved.copy(prefs = saved.prefs.copy(beansDirection = "pull")))
+        val s = sync(historyRefused = { true })
+        runBlocking { s.load() }
+
+        s.syncNow(emptyList())
+        settle()
+
+        assertEquals(1, notices.count { it == HISTORY_REFUSED_NOTICE })
+        assertTrue("$requests", requests.any { "bean" in it || "roaster" in it })
+        assertTrue("$requests", requests.none { "/shots" in it })
         assertEquals(1234L, stored().shotPullCursor)
     }
 

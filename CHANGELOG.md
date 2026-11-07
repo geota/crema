@@ -92,6 +92,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   out under half the size of your last one, Crema tells you. Pruned copies go to
   Drive's trash, where you can restore them for 30 days. Copies made before this
   update are left alone. Android.
+- **A store Android can't read is left alone** — a passing read error or running
+  out of memory while loading used to move a good file aside as damaged. Now
+  only a file that doesn't decode is damaged. Anything else leaves it in place
+  and refuses saves, and a banner says "Couldn't read your shot history, so
+  changes aren't being saved". Try again reads it again, and Set this aside moves
+  it with the other kept-aside copies and carries on without it, and you can
+  share the file from the app. A set-aside sign-in goes at your next sign-in, so
+  old tokens don't linger. Try again reloads what's saved and discards changes
+  made since, except shots, which stay. A Visualizer pull waits until history
+  can be read. Android also now says when a store came back from its backup, as
+  the newest change is gone. Android.
 - **A shot deleted during its upload stays deleted** — the delete now waits for
   the upload's id, from the upload finishing or from a pull finding the row, so
   the shot no longer comes back, even if the app is killed mid-upload. The delete

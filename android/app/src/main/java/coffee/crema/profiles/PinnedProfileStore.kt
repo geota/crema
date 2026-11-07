@@ -3,6 +3,9 @@ package coffee.crema.profiles
 import android.content.Context
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.inSaveOrder
+import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SafeLoad
+import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -33,16 +36,23 @@ private data class PinnedProfiles(val ids: List<String> = emptyList())
 class PinnedProfileStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
-    /** Load the pinned ids, or an empty set if absent / unreadable. */
+    /** The ids are in memory: a save can't carry defaults now. */
+    fun openSaves() = SafeFile.openSaves(file)
+
+    /** Load the pinned ids, or an empty set if absent / unreadable. Saves stay
+     *  refused until [openSaves]. */
     suspend fun load(): Set<String> = withContext(Dispatchers.IO) {
-        loadStore(file, "pinned profiles list") { json.decodeFromString(PinnedProfiles.serializer(), it) }
-            .valueOrNull()?.ids?.toSet() ?: emptySet()
+        when (val outcome = loadStore(file, WHAT, open = false) { json.decodeFromString(PinnedProfiles.serializer(), it) }) {
+            is SafeLoad.Loaded -> outcome.value.ids.toSet()
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> emptySet()
+        }
     }
 
     /** Persist the pinned ids (best-effort). */
     suspend fun save(ids: Set<String>) {
+        if (!SaveFloor.admit(file, WHAT)) return
         inSaveOrder(file) {
-            saveStore(file, "pinned profiles list", json.encodeToString(PinnedProfiles.serializer(), PinnedProfiles(ids.toList())))
+            saveStore(file, WHAT, json.encodeToString(PinnedProfiles.serializer(), PinnedProfiles(ids.toList())))
         }
     }
 
@@ -51,7 +61,8 @@ class PinnedProfileStore(private val context: Context, private val json: Json) {
         inSaveOrder(file) { eraseStore(file) }
     }
 
-    private companion object {
+    internal companion object {
+        const val WHAT = "pinned profiles list"
         const val FILE_NAME = "pinnedProfiles.json"
     }
 }

@@ -47,6 +47,10 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 
+/** Why a shot sync stopped: this takes the user, not a moment's wait. */
+internal const val HISTORY_REFUSED_NOTICE =
+    "Your shot history couldn't be read, so shots aren't syncing with Visualizer. Use Try again on the banner."
+
 /*
  * The Visualizer sync controller — sign-in lifecycle, token freshness, and
  * shot upload. The Android home for what the web splits across
@@ -135,6 +139,8 @@ class VisualizerSync(
     private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?) -> Boolean = ::uploadRefusedNoSamples,
     /** Whether the stored shots are in the history; a list taken before then is empty. */
     private val shotsLoaded: () -> Boolean = { true },
+    /** The shot log couldn't be read: shots wait for the user, not for a load. */
+    private val historyRefused: () -> Boolean = { false },
     /** Core `callback_outcome`: what a redirect means for the stored handshake. */
     private val callbackRule: (expectedState: String?, verifier: String?, code: String?, returnedState: String?, error: String?) -> CallbackOutcome =
         ::callbackOutcome,
@@ -266,7 +272,7 @@ class VisualizerSync(
         shot.visualizerId == null && shot.samples.isEmpty() && shotsSettled && uploadRefused(shot.isBrewLog, 0u)
 
     /** The series load has ended; until then a row's curve may be on its way. */
-    val shotsSettled: Boolean get() = shotsLoaded()
+    val shotsSettled: Boolean get() = shotsLoaded() && !historyRefused()
     override fun canUpload(shot: StoredShot): Boolean = !shot.isBrewLog
     override fun pushShot(shot: StoredShot, replace: Boolean): Boolean = uploadShot(shot, silent = false)
     override suspend fun setAutoUploadNow(enabled: Boolean) {
@@ -1643,10 +1649,12 @@ class VisualizerSync(
             refreshAccount()
             return
         }
-        if (!shotsReady()) return
-        val direction = persisted.prefs.shotsDirection
+        // Beans don't touch the shot log, so they run without it.
+        val shotsOn = shotsReady()
+        val direction = if (shotsOn) persisted.prefs.shotsDirection else "off"
         val beansOn = includeBeans &&
             (persisted.prefs.beansDirection != "off" || persisted.prefs.roastersDirection != "off")
+        if (!shotsOn && !(beansOn && historyRefused())) return
         if (direction == "off" && !beansOn) {
             notify("Sync is off — pick a direction first")
             return
@@ -1659,7 +1667,7 @@ class VisualizerSync(
             val parts = mutableListOf<String>()
             var failed = false
             // Remote deletes the user asked for that haven't landed yet.
-            runCatchingCancellable { deleteRemoteShots() }
+            if (shotsOn) runCatchingCancellable { deleteRemoteShots() }
             if (beansOn) {
                 runCatchingCancellable { runBeanSync() }
                     .onSuccess { r ->
@@ -1756,6 +1764,10 @@ class VisualizerSync(
      * list the UI passes in: an empty one would pull every remote shot in as new.
      */
     private fun shotsReady(): Boolean {
+        if (historyRefused()) {
+            notify(HISTORY_REFUSED_NOTICE)
+            return false
+        }
         if (shotsLoaded()) return true
         notify("Shot data is still loading — try again in a moment")
         return false
