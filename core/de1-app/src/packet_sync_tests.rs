@@ -793,3 +793,33 @@ fn ghc_espresso_arms_same_rules_as_app_start() {
     assert!(reset_tare);
     assert_eq!(reset_targets, app_targets);
 }
+
+/// The steam target Crema wants on the machine once eco has engaged, for a
+/// user target of `steam_temp_c`.
+fn eco_steam_target(steam_temp_c: f32) -> f32 {
+    let mut core = connected(ratio(3.0));
+    let _ = core.set_steam_hotwater_targets(&SteamHotWaterTargets {
+        steam_temp_c,
+        ..targets(ratio(3.0))
+    });
+    let _ = core.enable_steam_eco_mode(true, 0);
+    let _ = core.on_tick(600_000);
+    assert!(core.steam.is_eco_mode());
+    core.desired_shot_settings().expect("targets").steam_temp_c
+}
+
+/// #318: 0 °C is the user's "off". Eco may lower a heater, never raise one.
+#[test]
+fn eco_leaves_a_steam_heater_set_to_off() {
+    assert_eq!(eco_steam_target(0.0), 0.0);
+}
+
+#[test]
+fn eco_never_raises_a_steam_target_below_the_eco_temperature() {
+    assert_eq!(eco_steam_target(135.0), 135.0);
+}
+
+#[test]
+fn eco_lowers_a_steam_target_above_the_eco_temperature() {
+    assert_eq!(eco_steam_target(148.0), 136.0);
+}

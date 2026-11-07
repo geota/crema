@@ -606,4 +606,62 @@ class DecentSyncTest {
         assertTrue(h.sync.state.value.log.isEmpty())
         assertNull(h.sync.state.value.email)
     }
+
+    @Test
+    fun `a write before the load waits, and lands on the stored account`() = runTest {
+        val h = Harness(this, linked, emptyList())
+        h.sync.setAutoUpload(false)
+        runCurrent()
+        assertEquals("nothing is written before the load", 0, h.store.saves)
+
+        h.sync.load()
+        runCurrent()
+
+        assertEquals(1, h.store.saves)
+        assertEquals("token-123456", h.store.state.token)
+        assertFalse(h.store.state.autoUpload)
+    }
+
+    @Test
+    fun `a load that throws never lets defaults reach the store`() = runTest {
+        val notices = mutableListOf<String>()
+        val store = object : DecentStateStore {
+            var saves = 0
+            override suspend fun load(): DecentState = throw java.io.IOException("unreadable")
+            override suspend fun save(state: DecentState): Boolean {
+                saves++
+                return true
+            }
+        }
+        val sync = DecentSync(
+            store = store,
+            client = FakeApi(),
+            scope = this,
+            buildRecord = { _, _, _ -> "{}" },
+            shotViewUrl = { _, _ -> null },
+            notify = { notices += it },
+            onShotUploaded = { _, _, _ -> },
+            liveMachine = { null },
+            knownSerial = { it },
+            currentShot = { null },
+        )
+        assertTrue(runCatching { sync.load() }.isFailure)
+
+        sync.setAutoUpload(true)
+        runCurrent()
+
+        assertEquals(0, store.saves)
+        assertEquals(1, notices.size)
+    }
+
+    @Test
+    fun `erase waits for the load`() = runTest {
+        val h = Harness(this, linked, emptyList())
+        val erase = launch { h.sync.eraseAll() }
+        runCurrent()
+        assertFalse(erase.isCompleted)
+        h.sync.load()
+        erase.join()
+        assertNull(h.store.state.token)
+    }
 }

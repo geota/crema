@@ -397,6 +397,17 @@ export function applyHeldRestoreChanges(held: HeldRestoreChanges): void {
  * @throws if the text has no `crema-backup/v1` header (not a Crema backup).
  */
 export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
+	// A Replace clears the history and refills it: series and captures the
+	// restore removes stay until its own marker can delete them (PR7).
+	const resumeDeletes = getHistoryStore().pauseDeletes();
+	try {
+		return applyBackup(text, mode);
+	} finally {
+		resumeDeletes();
+	}
+}
+
+function applyBackup(text: string, mode: RestoreMode): RestoreSummary {
 	// F1 (review #06): parse through the shared core (`parse_backup_jsonl`) instead
 	// of a hand-rolled line loop. Beans/roasters/shots come back typed + lossless —
 	// each shot keeps its full `bean` snapshot (the library importer's ImportedShot

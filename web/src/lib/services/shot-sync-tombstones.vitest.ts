@@ -18,7 +18,6 @@ vi.mock('#lib/history/series-store.js', () => ({
 	putSeries: async () => {},
 	getAllSeries: async () => new Map(),
 	deleteSeries: async () => {},
-	pruneSeriesTo: async () => {},
 	clearAllSeries: async () => {}
 }));
 

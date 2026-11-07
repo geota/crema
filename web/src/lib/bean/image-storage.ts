@@ -13,9 +13,7 @@
  * object-store transaction.
  *
  * GC: orphan blobs (refs whose bean was deleted from the library)
- * accumulate until `pruneTo` is called with the live ref set; the
- * bean store's startup path can hook this once the storage pipeline
- * is wired end-to-end.
+ * accumulate. Nothing deletes from a listing (#325): delete by ref.
  */
 
 export const DB_NAME = 'crema-bean-images';
@@ -112,23 +110,6 @@ export class BeanImageStore {
 		const db = await this.getDb();
 		const tx = db.transaction(STORE, 'readonly');
 		return reqp(tx.objectStore(STORE).getAllKeys()) as Promise<string[]>;
-	}
-
-	/**
-	 * Delete every image whose ref is not in `validRefs`. Run at app
-	 * startup to GC blobs for beans that have been deleted from the
-	 * library. Decoupling eviction this way keeps `BeanStore` ignorant
-	 * of image bytes.
-	 */
-	async pruneTo(validRefs: ReadonlySet<string>): Promise<void> {
-		const keys = await this.keys();
-		const stale = keys.filter((k) => !validRefs.has(k));
-		if (stale.length === 0) return;
-		const db = await this.getDb();
-		const tx = db.transaction(STORE, 'readwrite');
-		const store = tx.objectStore(STORE);
-		for (const k of stale) store.delete(k);
-		await txp(tx);
 	}
 }
 

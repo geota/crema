@@ -97,26 +97,6 @@ export async function deleteSeries(id: string): Promise<void> {
 	}
 }
 
-/** Drop every series whose id is not in `liveIds` — lazy startup GC. */
-export async function pruneSeriesTo(liveIds: ReadonlySet<string>): Promise<void> {
-	const db = await openDb();
-	try {
-		const tx = db.transaction(STORE, 'readwrite');
-		const store = tx.objectStore(STORE);
-		const keys = await reqp(store.getAllKeys());
-		for (const k of keys) {
-			if (typeof k === 'string' && !liveIds.has(k)) store.delete(k);
-		}
-		await new Promise<void>((resolve, reject) => {
-			tx.oncomplete = () => resolve();
-			tx.onerror = () => reject(tx.error);
-			tx.onabort = () => reject(tx.error);
-		});
-	} finally {
-		db.close();
-	}
-}
-
 /** Wipe the whole series store (a "replace from backup" restore). */
 export async function clearAllSeries(): Promise<void> {
 	const db = await openDb();

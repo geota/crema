@@ -285,8 +285,7 @@ internal class MachineSessionController(
                 // issue #44's "truncate at the stop" report. Fold in the
                 // latest scale weight/flow so the WEIGHT curves track the
                 // cup. FIFO-capped.
-                val flowing = shot.machineSubstate == "Preinfusion" ||
-                    shot.machineSubstate == "Pouring"
+                val flowing = shot.shotPhase == "Preinfusion" || shot.shotPhase == "Pouring"
                 val nextBuffer = if (shot.shotInProgress && flowing) {
                     val sample = TelemetrySample(
                         elapsedMs = t.elapsed.toLong(),
@@ -483,6 +482,7 @@ internal class MachineSessionController(
         lane.on<Event.SteamClogSuspected> { event -> appendLog("Steam clog suspected: ${event.content.reason.string}") }
         lane.on<Event.SteamEcoModeChanged> { event -> appendLog("Steam eco mode: ${event.content.eco}") }
         lane.on<Event.DecodeError> { event -> appendLog("Decode error: ${event.content.message}") }
+        lane.on<Event.UnknownMachineByte> { event -> appendLog("Unknown machine substate byte: ${event.content.byte}") }
         // The version / MMR read paths now feed the Settings machine rows.
         // The preformatted firmware label is folded straight in; each MMR
         // value lands raw in de1MachineInfo (the UI applies per-register

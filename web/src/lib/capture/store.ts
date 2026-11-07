@@ -7,10 +7,9 @@
  * is typically a large share of free disk, so hundreds of captures fit
  * comfortably.
  *
- * Captures are *not* deleted when a `StoredShot` is evicted from history (the
- * shell does not couple the stores in the hot path). Instead the orchestrator
- * calls {@link CaptureStore.pruneTo} once at startup, dropping any capture
- * whose `StoredShot` no longer exists — a simple lazy GC.
+ * A capture is deleted by name: the history store calls
+ * {@link CaptureStore.delete} once the row's removal is written. Nothing deletes
+ * from a listing, as a history that failed to load lists nothing (#325).
  */
 
 import type { CaptureEntry } from './recorder';
@@ -112,23 +111,6 @@ export class CaptureStore {
 		const db = await this.getDb();
 		const tx = db.transaction(STORE, 'readonly');
 		return reqp(tx.objectStore(STORE).getAllKeys()) as Promise<string[]>;
-	}
-
-	/**
-	 * Delete every capture whose key is not in `validIds`. Run at app startup
-	 * to garbage-collect captures for shots that have been evicted from the
-	 * `HistoryStore`'s capped list (or deleted by the user). Decoupling
-	 * eviction this way keeps `HistoryStore` ignorant of captures.
-	 */
-	async pruneTo(validIds: ReadonlySet<string>): Promise<void> {
-		const keys = await this.keys();
-		const stale = keys.filter((k) => !validIds.has(k));
-		if (stale.length === 0) return;
-		const db = await this.getDb();
-		const tx = db.transaction(STORE, 'readwrite');
-		const store = tx.objectStore(STORE);
-		for (const k of stale) store.delete(k);
-		await txp(tx);
 	}
 }
 

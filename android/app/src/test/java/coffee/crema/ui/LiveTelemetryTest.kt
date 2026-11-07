@@ -50,6 +50,7 @@ class LiveTelemetryTest {
     }
 
     private val pouring = """{"type":"MachineStateChanged","content":{"state":"Espresso","substate":"Pouring"}}"""
+    private val pourPhase = """{"type":"ShotPhaseChanged","content":{"phase":"Pouring"}}"""
     private val reading = """{"type":"ScaleReading","content":{"weight":12.5,"flow":1.5}}"""
 
     @Test
@@ -92,7 +93,7 @@ class LiveTelemetryTest {
     @Test
     fun `a sample in the flow window joins the chart with the scale and the frame`() {
         val vm = build()
-        events(vm, pouring, """{"type":"ShotStarted"}""", reading, """{"type":"ShotFrameChanged","content":{"frame":2}}""")
+        events(vm, pouring, """{"type":"ShotStarted"}""", pourPhase, reading, """{"type":"ShotFrameChanged","content":{"frame":2}}""")
         events(vm, telemetrySample(pressure = 9f, elapsedMs = 5_000))
         val sample = vm.live.value.shotTelemetry.single()
         assertEquals(5_000L, sample.elapsedMs)
@@ -106,7 +107,7 @@ class LiveTelemetryTest {
     fun `a new shot never shows over the last shot's samples`() {
         val vm = build()
         // The frame moves, so the next start changes the state and emits it.
-        events(vm, pouring, """{"type":"ShotStarted"}""", telemetrySample(pressure = 9f), """{"type":"ShotFrameChanged","content":{"frame":2}}""")
+        events(vm, pouring, """{"type":"ShotStarted"}""", pourPhase, telemetrySample(pressure = 9f), """{"type":"ShotFrameChanged","content":{"frame":2}}""")
         assertEquals(1, vm.liveStore.value.shotTelemetry.size)
 
         // What an observer of the state finds in the store as the start lands.
@@ -156,7 +157,7 @@ class LiveTelemetryTest {
         assertNull(vm.live.value.scaleFlowGPerS)
         assertEquals(7f, vm.live.value.pressure, "the scale's clear leaves the machine's readouts")
 
-        events(vm, pouring, """{"type":"ShotStarted"}""", telemetrySample(pressure = 8f), """{"type":"WaterLevel","content":{"level":40.0,"refill_threshold":5.0}}""")
+        events(vm, pouring, """{"type":"ShotStarted"}""", pourPhase, telemetrySample(pressure = 8f), """{"type":"WaterLevel","content":{"level":40.0,"refill_threshold":5.0}}""")
         assertEquals(1, vm.live.value.shotTelemetry.size)
         vm.disconnect()
         VmHarness.drainCoreLane(vm)
@@ -167,5 +168,14 @@ class LiveTelemetryTest {
         assertEquals(emptyList(), live.shotTelemetry)
         assertEquals(false, vm.ui.value.shotInProgress)
         assertNull(live.debugLine(), "the debug line clears with them")
+    }
+
+    /** The core keeps a sample in an unknown substate, so the chart does too. */
+    @Test
+    fun `an unknown substate mid pour keeps growing the chart`() {
+        val vm = build()
+        val unknown = """{"type":"MachineStateChanged","content":{"state":"Espresso","substate":"Unknown"}}"""
+        events(vm, pouring, """{"type":"ShotStarted"}""", pourPhase, unknown, telemetrySample(pressure = 8f))
+        assertEquals(1, vm.live.value.shotTelemetry.size)
     }
 }
