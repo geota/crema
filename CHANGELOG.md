@@ -84,6 +84,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Finishing a sign-in after the app was killed no longer wipes your Visualizer
+  or Google Drive settings** — a redirect landing on a cold start read the saved
+  sign-in before it had loaded, then wrote defaults over the file, losing tokens,
+  the pull cursor, deleted-shot records and your sharing settings. Everything
+  that touches those files now waits for them to load, and a stray or repeated
+  redirect changes nothing. A Google Drive redirect after the app was killed now
+  completes too. A refused Visualizer sign-in shows the provider's error instead
+  of "cancelled". Android.
 - **A machine state with a new substate is no longer missed** — when the DE1
   reported a substate this build doesn't know, the whole state report was
   dropped, so a shot could look like it was still running after the machine had
