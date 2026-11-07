@@ -76,6 +76,20 @@ class BagDebitVmTest {
         assertEquals("Renamed", VmHarness.ownState(vm).beans.single().name)
     }
 
+    @Test
+    fun `saving a bag keeps the roaster it files under when the name is the same`() {
+        val vm = vmWith(listOf(bag("b", remaining = 200f, size = 250f)))
+        vm.addRoaster("Onyx", null, null, null, ""); VmHarness.idle()
+        vm.addRoaster("onyx", null, null, null, ""); VmHarness.idle()
+        val second = VmHarness.ownState(vm).roasters.last()
+        VmHarness.library(vm).mutateBean("b") { it.copy(roasterId = second.id) }
+        VmHarness.idle()
+        val opened = VmHarness.ownState(vm).beans.single()
+        vm.updateBean("b", "Onyx", null, opened) { it.copy(name = "Renamed") }
+        VmHarness.idle()
+        assertEquals(second.id, VmHarness.ownState(vm).beans.single().roasterId)
+    }
+
     private fun MainViewModel.remaining(id: String) = VmHarness.ownState(this).beans.single { it.id == id }.remaining
 
     private fun MainViewModel.shot(id: String) = VmHarness.ownState(this).history.single { it.id == id }

@@ -493,6 +493,9 @@ export const BeanSyncLive = Layer.effect(
 			const legs = beanSyncScope(syncConfig.direction.beans, syncConfig.direction.roasters);
 			const scope = asking ? { ...legs, pushBeans: false, pushRoasters: false } : legs;
 			const lastSyncAt = settings.lastSyncAt;
+			// What the run adds: stamped with the baseline it started from, the one it
+			// moves to or the one it keeps, so a pull never pushes back.
+			const pulledStamp = lastSyncAt ?? startedAt;
 			// Rows the user kept off this account by saying no. New ones flow.
 			const keptOff = (create: boolean, row: { createdAt: number }): boolean =>
 				create && syncConfig.uploadExcludedBefore !== null && row.createdAt < syncConfig.uploadExcludedBefore;
@@ -557,9 +560,9 @@ export const BeanSyncLive = Layer.effect(
 								log.push({ direction: 'pull', kind: 'roaster', id: action.localId, name: wire.name, at: Date.now() });
 							}
 						} else {
-							// Stamped at the run's start, so it isn't newer than the baseline
-							// and doesn't push back: a pull is not a local edit.
-							const fresh = { ...roasterFromWire(wire), updatedAt: startedAt };
+							// Stamped with the baseline the run started from, so it never reads
+							// as a local edit, even when a failed write holds that baseline.
+							const fresh = { ...roasterFromWire(wire), updatedAt: pulledStamp };
 							library.replaceRoaster(fresh);
 							remoteRoasterIdToLocal.set(remoteId, fresh.id);
 							pulledRoasterIds.push(fresh.id);
@@ -680,7 +683,7 @@ export const BeanSyncLive = Layer.effect(
 					}));
 					const roasterNames: Record<string, string> = {};
 					for (const r of library.roasters) roasterNames[r.id] = r.name;
-					for (const action of reconcileBeans(library.beans, pulledBags, roasterNames, lastSyncAt, startedAt)) {
+					for (const action of reconcileBeans(library.beans, pulledBags, roasterNames, lastSyncAt, pulledStamp)) {
 						const decoded = action.remote;
 						// Stored as the core hands it back — a replace keeps the local
 						// id + `updatedAt`, so the pull doesn't read as a local edit.

@@ -642,6 +642,23 @@ class BeanSyncTest {
     }
 
     @Test
+    fun `a bag pulled while a write fails doesn't push back over a website rename`() {
+        seedBound(boundBag(updatedAt = 6_000))
+        remoteBags = listOf(buildJsonObject { put("id", "vb-2"); put("name", "Pulled") })
+        writeStatus = HttpStatusCode.ServiceUnavailable
+        rerun()
+        assertEquals("held", 5_000L, runBlocking { store.load() }.beanLastSyncAt)
+
+        remoteBags = listOf(buildJsonObject { put("id", "vb-2"); put("name", "Renamed on the website") })
+        writeStatus = HttpStatusCode.OK
+        requests.clear()
+        clock += 60_000
+        rerun()
+        assertEquals(listOf("PATCH /coffee_bags/vb-1"), writes().map { "${it.method} ${it.path}" })
+        assertEquals("Renamed on the website", library.beans.single { it.visualizerId == "vb-2" }.name)
+    }
+
+    @Test
     fun `failed_bag_patch_holds_baseline`() {
         seedBound(boundBag(updatedAt = 6_000))
         remoteBags = emptyList()

@@ -179,9 +179,13 @@ class BeanSyncRunner(
     ) {
         val beans: List<Bean> get() = library().beans
         val roasters: List<Roaster> get() = library().roasters
-        /** The run's start: an edit made during it is newer, and pushes next time. What
-         *  the run adds is stamped with it, so a pull doesn't push back. */
+        /** The run's start: an edit made during it is newer, and pushes next time. */
         val startedAt = now()
+        /** What the run adds is stamped with the baseline it started from: the one
+         *  this run moves to, or the one it keeps if a write fails. Either way a
+         *  pulled row never reads as a local edit, which would push it back over a
+         *  website change. */
+        val pulledStamp = settings.lastSyncAt ?: startedAt
         val changedBeans = LinkedHashSet<String>()
         val changedRoasters = LinkedHashSet<String>()
         val log = mutableListOf<SyncLogEntry>()
@@ -339,7 +343,7 @@ class BeanSyncRunner(
                         else -> {
                             val fresh = json.decodeFromString(
                                 Roaster.serializer(),
-                                core.roasterFromWire(wire.toString(), mintRoasterId(), startedAt),
+                                core.roasterFromWire(wire.toString(), mintRoasterId(), pulledStamp),
                             )
                             addRoaster(fresh)
                             remoteToLocal[remoteId] = fresh.id
@@ -449,7 +453,7 @@ class BeanSyncRunner(
                                 put("remote", JsonArray(remote))
                                 put("roasterNames", buildJsonObject { roasters.forEach { put(it.id, it.name) } })
                                 lastSync?.let { put("lastSyncAt", it) }
-                                put("nowMs", startedAt)
+                                put("nowMs", pulledStamp)
                             }.toString(),
                         ),
                     ) as JsonArray

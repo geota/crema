@@ -1612,23 +1612,27 @@ class LibraryController(
         // Apply onto the CURRENT state (not the snapshot `s`) so a concurrent
         // high-rate telemetry / scale update isn't clobbered (issue 11).
         var mergedShots = HistoryMerge(emptyList(), emptyList(), 0)
+        // The merge again, on the rows as they stand: the one above read them a
+        // moment ago, to say whether there was anything to import.
+        var landed = merge
         editRows(
             { rows ->
+                landed = mergeBeanImport(wireBeans, wireRoasters, rows.beans, rows.roasters)
                 mergedShots = mergeHistory(importedShots, rows.history)
                 rows.copy(
-                    beans = rows.beans.with(rows.beans.replacingById(merge.updatedBeans) { it.id } + newBeans),
-                    roasters = rows.roasters.with(rows.roasters.replacingById(merge.updatedRoasters) { it.id } + newRoasters),
+                    beans = rows.beans.with(rows.beans.replacingById(landed.updatedBeans) { it.id } + landed.newBeans),
+                    roasters = rows.roasters.with(rows.roasters.replacingById(landed.updatedRoasters) { it.id } + landed.newRoasters),
                     history = rows.history.with(mergedShots.rows),
                 )
             },
-            { it.copy(activeBeanId = it.activeBeanId ?: newBeans.firstOrNull()?.id) },
+            { it.copy(activeBeanId = it.activeBeanId ?: landed.newBeans.firstOrNull()?.id) },
         )
         persistLibrary()
         if (importedShots.isNotEmpty()) {
             val snapshot = uiState().history
             scope.launch { historyStore.save(snapshot) }
         }
-        val bn = newBeans.size; val rn = newRoasters.size; val sn = mergedShots.kept.size; val un = merge.updatedBeans.size
+        val bn = landed.newBeans.size; val rn = landed.newRoasters.size; val sn = mergedShots.kept.size; val un = landed.updatedBeans.size
         updateUi { it.copy(
             status = buildString {
                 append("Imported $bn bean${if (bn == 1) "" else "s"} · $rn roaster${if (rn == 1) "" else "s"}")
@@ -1770,7 +1774,11 @@ class LibraryController(
                         row.id to rows.roasters.map { if (it.id == row.id) merged else it }
                     }
                 } else {
-                    resolveRoaster(roasterName, rows.roasters, now)
+                    // The name it already files under: keep that roaster, rather than
+                    // whichever row of that name comes first.
+                    val filed = current?.roasterId?.let { rid -> rows.roasters.firstOrNull { it.id == rid } }
+                    if (filed != null && filed.name.equals(roasterName.trim(), ignoreCase = true)) filed.id to rows.roasters.toList()
+                    else resolveRoaster(roasterName, rows.roasters, now)
                 }
                 // The form holds what the bag was when it opened: only what the user
                 // changed lands, so a debit or a sync since then stands.
@@ -2364,36 +2372,48 @@ class LibraryController(
         val shot = s.history.firstOrNull { it.id == id } ?: return
         if (!shot.isManualLog) return
         if (completedAtMs != null && brewDateError(completedAtMs, nowMs) != null) return
-        // Re-settle inventory before the row mutates, using the OLD dose —
-        // the core's resettleRemaining (only the net change moves, and no more
-        // comes back than the row took; null = nothing to persist, including an
-        // unchanged dose).
-        var bagDebit = shot.bagDebitG
-        if (doseG != null) {
-            s.beans.firstOrNull { it.id == shot.bean?.beanId }?.let { bean ->
-                val rem = bean.remaining ?: 0f
-                val size = bean.bagSize ?: 0f
-                bagDebit = resettledBagDebit(rem, size, shot.bagDebitG, shot.doseG ?: 0f, doseG)
-                resettleRemaining(rem, size, shot.bagDebitG, shot.doseG ?: 0f, doseG)?.let { next ->
-                    mutateBean(bean.id) { it.copy(remaining = next) }
+        // Re-settle inventory with the row, using the OLD dose — the core's
+        // resettleRemaining (only the net change moves, and no more comes back
+        // than the row took; null = nothing to persist, including an unchanged
+        // dose). Both from the rows as they stand, in one write.
+        var bagMoved = false
+        editRows(
+            { rows ->
+                val row = rows.history.firstOrNull { it.id == id } ?: return@editRows rows
+                var bagDebit = row.bagDebitG
+                var beans = rows.beans
+                bagMoved = false
+                if (doseG != null) {
+                    rows.beans.firstOrNull { it.id == row.bean?.beanId }?.let { bean ->
+                        val rem = bean.remaining ?: 0f
+                        val size = bean.bagSize ?: 0f
+                        bagDebit = resettledBagDebit(rem, size, row.bagDebitG, row.doseG ?: 0f, doseG)
+                        resettleRemaining(rem, size, row.bagDebitG, row.doseG ?: 0f, doseG)?.let { next ->
+                            bagMoved = true
+                            beans = rows.beans.mapped { if (it.id == bean.id) it.copy(remaining = next, updatedAt = nowMs) else it }
+                        }
+                    }
                 }
-            }
-        }
-        editHistory { rows ->
-            val edited = rows.map {
-                if (it.id != id) it
-                else it.copy(
-                    doseG = doseG ?: it.doseG,
-                    bagDebitG = bagDebit,
-                    waterG = waterG ?: it.waterG,
-                    yieldG = yieldG ?: it.yieldG,
-                    brewTempC = brewTempC ?: it.brewTempC,
-                    durationMs = durationMs ?: it.durationMs,
-                    completedAtMs = completedAtMs ?: it.completedAtMs,
+                val edited = rows.history.map {
+                    if (it.id != id) it
+                    else it.copy(
+                        doseG = doseG ?: it.doseG,
+                        bagDebitG = bagDebit,
+                        waterG = waterG ?: it.waterG,
+                        yieldG = yieldG ?: it.yieldG,
+                        brewTempC = brewTempC ?: it.brewTempC,
+                        durationMs = durationMs ?: it.durationMs,
+                        completedAtMs = completedAtMs ?: it.completedAtMs,
+                    )
+                }
+                rows.copy(
+                    beans = beans,
+                    history = rows.history.with(if (completedAtMs != null) edited.newestFirst() else edited),
                 )
-            }
-            rows.with(if (completedAtMs != null) edited.newestFirst() else edited)
-        }
+            },
+            { it },
+        )
+        if (bagMoved) persistLibrary()
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
     }
@@ -2513,10 +2533,19 @@ class LibraryController(
         // gains nothing, null = nothing changed) and the new bag is debited, with
         // the row recording what it took this time. Web's moveShotBag is the same.
         val dose = shot.doseG ?: 0f
-        s.beans.firstOrNull { it.id == oldBeanId }?.let { old ->
-            creditShotDebit(old.remaining ?: 0f, old.bagSize ?: 0f, shot.bagDebitG, dose)?.let { credited ->
-                mutateBean(old.id) { it.copy(remaining = credited) }
+        // From what the old bag holds now.
+        if (oldBeanId != null) {
+            val now = System.currentTimeMillis()
+            var credited = false
+            editBeans { rows ->
+                credited = false
+                rows.mapped { row ->
+                    if (row.id != oldBeanId) return@mapped row
+                    creditShotDebit(row.remaining ?: 0f, row.bagSize ?: 0f, shot.bagDebitG, dose)
+                        ?.let { credited = true; row.copy(remaining = it, updatedAt = now) } ?: row
+                }
             }
+            if (credited) persistLibrary()
         }
         val bagDebit = bean?.let { debitBag(it, dose) }
         editHistory { rows -> rows.mapped { if (it.id == id) it.copy(bean = beanSnapshot, bagDebitG = bagDebit) else it } }

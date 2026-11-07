@@ -245,6 +245,24 @@ describe('BeanSync.runSync — the baseline', () => {
 		expect(readSyncSettings().lastSyncAt).toBeGreaterThan(5);
 	});
 
+	it("a bag pulled while a write fails doesn't push back over a website rename", async () => {
+		const lib = mkLibrary({ beans: [bound(6)] });
+		const bags = (name: string) => ({ ok: true as const, json: { data: [{ id: 'vb-2', name }], paging: { pages: 1 } } });
+		const first = mkHttp((method, url) =>
+			method === 'PATCH' ? { ok: false, status: 503 } : isList(url, '/coffee_bags') ? bags('Pulled') : lists()
+		);
+		await run(lib, first.layer);
+		expect(readSyncSettings().lastSyncAt).toBe(5);
+
+		const second = mkHttp((method, url) =>
+			method === 'PATCH' ? { ok: true, json: { id: 'x' } } : isList(url, '/coffee_bags') ? bags('Renamed on the website') : lists()
+		);
+		await run(lib, second.layer);
+		const patched = second.calls.filter((c) => c.method === 'PATCH').map((c) => new URL(c.url).pathname);
+		expect(patched).toEqual(['/api/coffee_bags/vb-1']);
+		expect(lib.beans.find((b) => b.visualizerId === 'vb-2')?.name).toBe('Renamed on the website');
+	});
+
 	it('a write refused for good is a counted skip, and the baseline moves', async () => {
 		const lib = mkLibrary({ beans: [bound(6)] });
 		const { layer } = mkHttp((method) =>
