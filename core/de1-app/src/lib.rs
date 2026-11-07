@@ -20,6 +20,8 @@ pub mod firmware_info;
 #[cfg(test)]
 mod hds_sleep_tests;
 mod idle_sleep;
+#[cfg(test)]
+mod machine_control_tests;
 pub mod machine_requests;
 mod maintenance_run;
 mod packet_sync;
