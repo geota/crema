@@ -3419,6 +3419,16 @@ data class HotWaterTarget (
 	val stopWeightG: Float? = null
 )
 
+/// A shot here, as far as a plan needs it. Include tombstoned rows.
+@Serializable
+data class LocalShot (
+	val id: String,
+	val hasSamples: Boolean,
+	val pinned: Boolean? = null,
+	/// Deleted here, with its remote delete still owed.
+	val deleted: Boolean? = null
+)
+
 /// A slim view onto the shell's `StoredShot`: only the fields the
 /// reconcile planner reads. Lets the shell project its full record
 /// (web `StoredShot` in `#lib/history/model.ts`, Android equivalent)
@@ -3448,6 +3458,75 @@ data class LocalShotRef (
 	/// when active. An unbound one is a shot deleted during its upload: it
 	/// binds like any other, so the remote copy stays out of the history.
 	val deletedAt: Long? = null
+)
+
+/// How a store on the device loaded.
+@Serializable
+enum class LocalHealth(val string: String) {
+	@SerialName("loading")
+	Loading("loading"),
+	@SerialName("ok")
+	Ok("ok"),
+	@SerialName("absent")
+	Absent("absent"),
+	@SerialName("damaged")
+	Damaged("damaged"),
+	@SerialName("unavailable")
+	Unavailable("unavailable"),
+}
+
+/// One store's health, named as the shell names it.
+@Serializable
+data class LocalStoreHealth (
+	val store: String,
+	val health: LocalHealth
+)
+
+/// Profile organisation here.
+@Serializable
+data class ProfileMeta (
+	val pinned: List<String>,
+	val hiddenBuiltins: List<String>
+)
+
+/// Recipe organisation here.
+@Serializable
+data class RecipeMeta (
+	/// Method id → recipe id.
+	val defaults: HashMap<String, String>,
+	val hiddenBuiltins: List<String>
+)
+
+/// What the device holds, from the shell. Built once telemetry has loaded:
+/// before that every row looks curveless.
+@Serializable
+data class LocalState (
+	/// `web` or `android`.
+	val shell: String,
+	/// Rows history keeps, or none when it has no cap.
+	val historyCapacity: UInt? = null,
+	/// A shot or a firmware flash is running, in any tab.
+	val machineBusy: Boolean,
+	val health: List<LocalStoreHealth>,
+	val beans: List<String>,
+	val roasters: List<String>,
+	/// Custom profiles only: built-ins aren't the backup's to change.
+	val profiles: List<String>,
+	/// The user's own recipes only.
+	val recipes: List<String>,
+	/// Tombstones included.
+	val customMethods: List<String>,
+	val shots: List<LocalShot>,
+	/// Bean ids with a stored photo.
+	val photos: List<String>,
+	/// Bean ids whose row names a photo that isn't there.
+	val beansMissingPhoto: List<String>,
+	val profileMeta: ProfileMeta,
+	val recipeMeta: RecipeMeta,
+	val common: CommonSettings,
+	val visualizerPrefs: VisualizerSyncPrefs,
+	val totalLitres: Double,
+	val activeBeanId: String? = null
 )
 
 /// A derived maintenance readout — counters, percentages, and due/ok
@@ -3598,6 +3677,74 @@ data class PhaseMarker (
 	val transitionReason: String
 )
 
+/// Bag photos, by bean id.
+@Serializable
+data class PhotoPlan (
+	val put: List<String>,
+	val remove: List<String>
+)
+
+/// Why a plan won't run, or what its report must say.
+@Serializable
+enum class PlanCode(val string: String) {
+	@SerialName("notABackup")
+	NotABackup("notABackup"),
+	/// A History "Export shots" file: use Import.
+	@SerialName("shotsExport")
+	ShotsExport("shotsExport"),
+	@SerialName("newerFormat")
+	NewerFormat("newerFormat"),
+	@SerialName("storeUnavailable")
+	StoreUnavailable("storeUnavailable"),
+	@SerialName("storeLoading")
+	StoreLoading("storeLoading"),
+	@SerialName("machineBusy")
+	MachineBusy("machineBusy"),
+	@SerialName("badLines")
+	BadLines("badLines"),
+	@SerialName("headerDamaged")
+	HeaderDamaged("headerDamaged"),
+	@SerialName("countMismatch")
+	CountMismatch("countMismatch"),
+	@SerialName("overCapacity")
+	OverCapacity("overCapacity"),
+	@SerialName("emptyBackup")
+	EmptyBackup("emptyBackup"),
+	@SerialName("notAdded")
+	NotAdded("notAdded"),
+	@SerialName("omitted")
+	Omitted("omitted"),
+	@SerialName("pinnedRemoved")
+	PinnedRemoved("pinnedRemoved"),
+	@SerialName("unknownKinds")
+	UnknownKinds("unknownKinds"),
+	@SerialName("duplicates")
+	Duplicates("duplicates"),
+	@SerialName("deletedHere")
+	DeletedHere("deletedHere"),
+}
+
+/// One refusal or warning.
+@Serializable
+data class PlanNote (
+	val code: PlanCode,
+	/// A warning the user has to see before it runs, not one only noted.
+	val confirm: Boolean,
+	/// How many, where that's the point.
+	val count: UInt? = null,
+	/// The store, where there's one.
+	val store: String? = null
+)
+
+/// Where the backup came from.
+@Serializable
+data class PlanSource (
+	val createdAt: Long,
+	val appVersion: String,
+	val deviceLabel: String,
+	val omittedCount: UInt
+)
+
 /// The pre-infusion dial for one profile: its range, the profile's own
 /// seconds ([`preinfusion_seconds`]) and whether it can be dialled at all.
 @Serializable
@@ -3648,6 +3795,23 @@ data class ProfileFileError (
 	val item: UInt? = null,
 	/// Why, in words a user can act on.
 	val message: String
+)
+
+/// Apply the backup's, or keep what's here.
+@Serializable
+enum class PlanAction(val string: String) {
+	@SerialName("keep")
+	Keep("keep"),
+	@SerialName("apply")
+	Apply("apply"),
+}
+
+/// Profile organisation after the restore, when it changes.
+@Serializable
+data class ProfileMetaPlan (
+	val action: PlanAction,
+	val pinned: List<String>,
+	val hiddenBuiltins: List<String>
 )
 
 /// The profile sync's state, as a shell sees it.
@@ -3778,6 +3942,14 @@ data class RecipeLibraryMigration (
 	val droppedIds: List<String>
 )
 
+/// Recipe organisation after the restore, when it changes.
+@Serializable
+data class RecipeMetaPlan (
+	val action: PlanAction,
+	val defaults: HashMap<String, String>,
+	val hiddenBuiltins: List<String>
+)
+
 /// A recipe's estimated run time ([`BrewRecipe::estimated_duration`]).
 @Serializable
 data class RecipeTimeEstimate (
@@ -3844,6 +4016,114 @@ data class ReplayMeta (
 	val bean: ReplayMetaBean? = null,
 	/// Equipment-level grinder model at shot start.
 	val grinderModel: String? = null
+)
+
+/// What the user chose in the report.
+@Serializable
+data class RestoreOpts (
+	/// Bring back shots deleted here that the backup has.
+	val reviveDeleted: Boolean
+)
+
+/// Merge adds what's missing; Replace makes the device match the backup.
+@Serializable
+enum class RestoreMode(val string: String) {
+	@SerialName("merge")
+	Merge("merge"),
+	@SerialName("replace")
+	Replace("replace"),
+}
+
+/// Whether the shell may apply the plan at once.
+@Serializable
+enum class Verdict(val string: String) {
+	/// Apply, then report.
+	@SerialName("ok")
+	Ok("ok"),
+	/// Show the report first.
+	@SerialName("confirm")
+	Confirm("confirm"),
+	/// Change nothing.
+	@SerialName("refused")
+	Refused("refused"),
+}
+
+/// One row store's part of a plan.
+@Serializable
+data class StorePlan (
+	/// Ids in the backup and not here.
+	val add: List<String>,
+	/// Ids in both, the backup's row to win. Replace only.
+	val overwrite: List<String>,
+	/// Rows in both that stay as they are.
+	val keep: UInt,
+	/// Ids here to delete, by name. Replace only.
+	val remove: List<String>
+)
+
+/// The shots' part of a plan.
+@Serializable
+data class ShotPlan (
+	val add: List<String>,
+	val overwrite: List<String>,
+	val keep: UInt,
+	val remove: List<String>,
+	/// Rows here with no curve, which take the backup's curve and nothing else.
+	val fill: List<String>,
+	/// Added rows on a bag that's already here: that bag never paid for them,
+	/// so their `bagDebit` becomes 0.
+	val zeroDebit: List<String>,
+	/// Rows the backup has that were deleted here: skipped, and offered back.
+	val deletedHere: List<String>,
+	/// Rows here as tombstones that come back as the backup's row: on Replace,
+	/// and on Merge with "bring back". Their tombstones are cancelled.
+	val revive: List<String>,
+	/// Rows Merge couldn't add, as history is full, revived ones included.
+	val notAdded: UInt,
+	/// Shots asked back that history had no room for: they stay deleted.
+	val notRevived: List<String>,
+	/// Pinned rows Replace removes.
+	val pinnedRemoved: UInt
+)
+
+/// Tombstones to drop, with their queued remote deletes.
+@Serializable
+data class TombstonePlan (
+	val cancel: List<String>
+)
+
+/// The settings line's part of a plan.
+@Serializable
+data class SettingsPlan (
+	/// The shared settings. Replace resets, then applies.
+	val common: PlanAction,
+	/// The shell's own: only from a backup the same shell wrote.
+	val extras: PlanAction
+)
+
+/// One restore, decided: ids and actions, no row data.
+@Serializable
+data class RestorePlan (
+	val mode: RestoreMode,
+	val verdict: Verdict,
+	val refusals: List<PlanNote>,
+	val warnings: List<PlanNote>,
+	val source: PlanSource,
+	val beans: StorePlan,
+	val roasters: StorePlan,
+	val profiles: StorePlan,
+	val recipes: StorePlan,
+	val customMethods: StorePlan,
+	val shots: ShotPlan,
+	val tombstones: TombstonePlan,
+	val photos: PhotoPlan,
+	val settings: SettingsPlan,
+	val maintenance: PlanAction,
+	val visualizerPrefs: PlanAction,
+	val profileMeta: ProfileMetaPlan,
+	val recipeMeta: RecipeMetaPlan,
+	/// Replace clears an active bean the backup doesn't have.
+	val clearActiveBean: Boolean
 )
 
 /// What deleting a roaster does (web `RoasterDeleteSplit` + the store's
