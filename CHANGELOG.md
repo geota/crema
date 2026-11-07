@@ -95,6 +95,15 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   made since, except shots, which stay. A Visualizer pull waits until history
   can be read. Android also now says when a store came back from its backup, as
   the newest change is gone. Android.
+- **A store that can't be read is never saved over** — on the web, a storage
+  error while reading was treated as an empty store, so the next save replaced
+  your data. Now the value stays where it is, a strip says "Couldn't read your
+  shot history, so changes aren't being saved", and Try again reloads what's
+  saved, waiting if the machine is busy. A row that can't be read, in shots or
+  the bean library, is kept in `<key>.skipped` and offered as a saved copy,
+  rather than dropped by the next save. If it can't be kept, saves stop instead.
+  Only full storage now drops your oldest shots: a refused save no longer does.
+  Web.
 - **Android can't save a store before it has loaded** — a save that came before
   a store's load carried defaults, and could replace your data. Every store now
   refuses it, and the first refusal tells you what wasn't saved. This holds when

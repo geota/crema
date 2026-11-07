@@ -34,7 +34,7 @@
  */
 
 import type { MaintenanceState, MaintenanceReadout } from '#lib/core/crema-core.js';
-import { isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
+import { isJsonObject, readJson, readStore, writeJson } from '#lib/utils/storage.js';
 import {
 	defaultMaintenanceState as wasmDefaultMaintenanceState,
 	maintenanceReadout as wasmMaintenanceReadout
@@ -85,11 +85,12 @@ interface MaintenanceStateV1 {
  * suitable for spreading over {@link defaultState}.
  */
 function loadPersisted(): Partial<MaintenanceState> {
-	const v2 = readJson<Partial<MaintenanceState> | null>(MAINTENANCE_KEY, null, {
+	const v2 = readStore<Partial<MaintenanceState>>(MAINTENANCE_KEY, {
 		what: 'maintenance log',
 		valid: isJsonObject
 	});
-	if (v2 != null) return v2;
+	if (v2.kind === 'loaded') return v2.value;
+	if (v2.kind === 'unavailable') return {};
 	// Fallback: migrate the old key. Same fields except `backflush*` → `clean*`.
 	const v1 = readJson<MaintenanceStateV1 | null>(MAINTENANCE_KEY_V1, null);
 	if (v1 == null) return {};
