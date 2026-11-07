@@ -19,7 +19,13 @@
  */
 
 import { isIdOrNull, isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
-import { credit_remaining, debit_remaining, resettle_remaining } from '#lib/wasm/de1_wasm.js';
+import {
+	credit_shot_debit,
+	debit_remaining,
+	debit_taken,
+	resettle_remaining,
+	resettled_bag_debit
+} from '#lib/wasm/de1_wasm.js';
 import {
 	type Bean,
 	type Roaster,
@@ -108,6 +114,14 @@ function readLibrary(): LibraryEnvelope {
  * The reactive bean library. CRUD on `beans` and `roasters`, plus the
  * `activeBeanId` pointer that drives the brew page's bean strip.
  */
+/** What one debit did to a bag. */
+export interface BagDebit {
+	/** Grams actually taken: the dose, what was left, or 0. */
+	taken: number;
+	/** This debit took the bag from above 0 to 0. */
+	emptied: boolean;
+}
+
 export class BeanLibraryStore {
 	private envelope = $state.raw<LibraryEnvelope>(readLibrary());
 	private activeId = $state.raw<string | null>(
@@ -289,37 +303,34 @@ export class BeanLibraryStore {
 	 * Debits the shot's *own* bean (not whatever is active now), so switching
 	 * the active bag after pulling can't bill the wrong bag.
 	 *
-	 * Returns `true` when this shot just **emptied** the bag (remaining went
-	 * from > 0 to exactly 0) — the caller's cue to prompt switch / archive /
-	 * rate.
+	 * Returns the grams actually taken, for the row's `bagDebit` (0 when the
+	 * bag had nothing to give), and whether this shot just **emptied** the bag
+	 * (remaining went from > 0 to exactly 0), the caller's cue to prompt
+	 * switch / archive / rate.
 	 */
-	debitBean(beanId: string, doseG: number): boolean {
+	debitBean(beanId: string, doseG: number): BagDebit {
 		const bean = this.envelope.beans.find((b) => b.id === beanId);
-		if (!bean) return false;
+		if (!bean) return { taken: 0, emptied: false };
 		// The core decides whether there is anything to debit (returns `undefined`
 		// when the bag is already empty or the dose is bad), so we persist — and
 		// touch `updatedAt` — ONLY on a real debit.
 		const next = debit_remaining(bean.remaining, doseG);
-		if (next === undefined) return false;
+		if (next === undefined) return { taken: 0, emptied: false };
+		const taken = debit_taken(bean.remaining, doseG);
 		this.updateBean(bean.id, { remaining: next });
-		return next === 0;
+		return { taken, emptied: next === 0 };
 	}
 
 	/**
-	 * Put `doseG` BACK on a bag — the inverse of {@link debitBean}, for
-	 * re-attributing a logged shot to a different bean (the wrongly-billed
-	 * bag never physically lost the dose). Best-effort by design: capped at
-	 * `bagSize` (the bag may have been refilled since), untracked bags
-	 * (`remaining == null`) are left alone, and a capture-time debit that
-	 * clamped at 0 can't be reconstructed.
+	 * Undo a row's debit when its shot moves off this bag: the grams the row
+	 * took (`bagDebit`) go back, capped at `bagSize`, and an untracked bag gains
+	 * nothing. A row from before `bagDebit` (`null`) credits its dose only while
+	 * the bag holds grams (`de1_domain::credit_shot_debit`).
 	 */
-	creditBean(beanId: string, doseG: number): void {
+	creditShotDebit(beanId: string, bagDebit: number | null, doseG: number): void {
 		const bean = this.envelope.beans.find((b) => b.id === beanId);
-		if (!bean || bean.remaining == null) return;
-		// The shared core rule (`de1_domain::credit_remaining`, the inverse of
-		// the debit): capped at bagSize, `undefined` when nothing changed —
-		// persist (and touch `updatedAt`) only on a real credit.
-		const next = credit_remaining(bean.remaining, doseG, bean.bagSize ?? 0);
+		if (!bean) return;
+		const next = credit_shot_debit(bean.remaining, bean.bagSize, bagDebit ?? undefined, doseG);
 		if (next === undefined) return;
 		this.updateBean(bean.id, { remaining: next });
 	}
@@ -327,21 +338,32 @@ export class BeanLibraryStore {
 	/**
 	 * Re-settle a bag after a logged brew's dose is edited from `oldDoseG`
 	 * to `newDoseG` (`null`/0 = no dose) — the shared core rule
-	 * (`de1_domain::resettle_remaining`): credit the old dose back (capped
-	 * at `bagSize`), then debit the new one. An unchanged dose is a no-op,
-	 * so a full bag never loses grams. Untracked bags are left alone.
+	 * (`de1_domain::resettle_remaining`): only the net change moves, and no
+	 * more comes back than the row took (`bagDebit`). An unchanged dose is a
+	 * no-op, so a full bag never loses grams.
+	 *
+	 * Returns what the row now records as taken, or `null` when the bag is
+	 * gone.
 	 */
-	resettleBean(beanId: string, oldDoseG: number | null, newDoseG: number | null): void {
+	resettleBean(
+		beanId: string,
+		bagDebit: number | null,
+		oldDoseG: number | null,
+		newDoseG: number | null
+	): number | null {
 		const bean = this.envelope.beans.find((b) => b.id === beanId);
-		if (!bean || bean.remaining == null) return;
-		const next = resettle_remaining(
+		if (!bean) return null;
+		const row = [
 			bean.remaining,
-			bean.bagSize ?? 0,
+			bean.bagSize,
+			bagDebit ?? undefined,
 			oldDoseG ?? 0,
 			newDoseG ?? 0
-		);
-		if (next === undefined) return;
-		this.updateBean(bean.id, { remaining: next });
+		] as const;
+		const taken = resettled_bag_debit(...row);
+		const next = resettle_remaining(...row);
+		if (next !== undefined) this.updateBean(bean.id, { remaining: next });
+		return taken;
 	}
 
 	// ── Roaster CRUD ─────────────────────────────────────────────────

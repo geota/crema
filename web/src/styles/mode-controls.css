@@ -325,6 +325,45 @@
 	font-size: 11px;
 }
 
+/* The banner's labelled action ("Switch bag"), in the warning palette. */
+.mc-head-status-action {
+	flex: none;
+	min-height: 32px;
+	padding: 0 12px;
+	border: 1px solid rgba(var(--warning-rgb), 0.5);
+	border-radius: 8px;
+	background: rgba(var(--warning-rgb), 0.16);
+	color: var(--warning);
+	font: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.mc-head-status-action:hover {
+	background: rgba(var(--warning-rgb), 0.28);
+}
+
+/* At phone width the banner is Android's strip: a full-width rounded card with
+   the title over the text, so a long line doesn't squeeze into a pill. */
+.pbrew .mc-head-status {
+	display: flex;
+	width: 100%;
+	gap: 10px;
+	padding: 8px 8px 8px 12px;
+	border-radius: 10px;
+}
+.pbrew .mc-head-status-text {
+	flex: 1;
+	min-width: 0;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+}
+.pbrew .mc-head-status-meta {
+	font-family: var(--font-sans);
+	white-space: normal;
+}
+
 /* Header layout when a mode pill is present — push it into the
    right-aligned middle slot between profile-l and actions-r. */
 .crema-dash-head.has-status .crema-dash-head-mid {

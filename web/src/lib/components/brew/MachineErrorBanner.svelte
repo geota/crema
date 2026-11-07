@@ -25,6 +25,7 @@
 		title = 'Machine error',
 		variant = 'error',
 		onClick,
+		action,
 		onDismiss
 	}: {
 		/** The fault text — `null` when the machine is healthy. */
@@ -49,6 +50,8 @@
 		 * propagation-stops so a tap on it doesn't also fire `onClick`.
 		 */
 		onClick?: () => void;
+		/** Optional labelled button at the banner's end ("Switch bag"). */
+		action?: { label: string; onClick: () => void };
 		/**
 		 * Optional dismiss callback — when present, renders a small `✕`
 		 * button on the right of the banner. Firmware faults clear
@@ -85,6 +88,11 @@
 			<span class="mc-head-status-name">{title}</span>
 			<span class="mc-head-status-meta">{text}</span>
 		</span>
+	{/if}
+	{#if action}
+		<button type="button" class="mc-head-status-action" onclick={action.onClick}>
+			{action.label}
+		</button>
 	{/if}
 	{#if onDismiss}
 		<button

@@ -367,6 +367,13 @@ export interface StoredShot {
 	 * all). Downsampled to ≤200 samples before persisting.
 	 */
 	brewSeries?: BrewSeries | null;
+	/**
+	 * Grams this row actually took from its bag: less than the dose when the
+	 * bag ran out, 0 when it was empty, untracked or never debited. What
+	 * moving the shot off the bag credits back. Absent on a row from before
+	 * the field and on a row with no bag. Core `StoredShot::bag_debit`.
+	 */
+	bagDebit?: number | null;
 }
 
 /**

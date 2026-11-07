@@ -763,9 +763,11 @@ fun CremaConfirmDialog(
     extra: (@Composable () -> Unit)? = null,
     /** The second button's action; defaults to [onDismiss]. */
     onCancel: () -> Unit = onDismiss,
+    /** False keeps the confirm button disabled, whatever else allows it. */
+    armed: Boolean = true,
 ) {
     var typed by remember { mutableStateOf("") }
-    val confirmEnabled = requireTyped == null || typed.trim() == requireTyped
+    val confirmEnabled = armed && (requireTyped == null || typed.trim() == requireTyped)
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,

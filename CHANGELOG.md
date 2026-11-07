@@ -72,9 +72,27 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **Today and 7 days on web History** — the range now offers All time, 30 days,
   7 days and Today, in both layouts, with Android's labels and day boundaries:
   Today starts at local midnight, 7 and 30 days are rolling. Web.
+- **An empty bag now says so on Brew** — while the active bag is at 0 g, Brew
+  shows a banner with Switch bag, which opens the bean picker. It never holds up
+  a shot, steps aside while one runs, and stays away from a bag with no tracked
+  weight. On a remote it follows the hub's bag. The one rule for untracked, ok,
+  low and empty now lives in the core, so web's "reorder?" hint counts in the
+  bag's own doses rather than a fixed 18 g. Android and web.
+- **Android asks what to do with an emptied bag** — the shot that empties a bag
+  offers to archive it, which also drops it as the active bag, and then to rate
+  it if it has no rating, as web does. Android.
 
 ### Fixed
 
+- **Moving a shot off a bag gives back only what it took** — each shot now
+  records the grams it actually took, and backups keep them. Moving 5 shots off
+  an empty bag used to add about 90 g, and a bag with no tracked weight gained
+  grams. Shots logged before this credit their dose only while the bag still
+  holds grams, up to the bag size. Android and web.
+- **A bag's first size fills it on Android** — as on web, so a new bag doesn't
+  read as empty the moment it gets a size. Android.
+- **Two quick bag changes can't drop the bean library file** — overlapping saves
+  could leave only its backup on disk. Android.
 - **History stays in date order** — a pulled, restored or backdated row used
   to land at the top of the list on the web, and on Android when imported,
   restored or logged minutes ago. It could then seed the next log as the last

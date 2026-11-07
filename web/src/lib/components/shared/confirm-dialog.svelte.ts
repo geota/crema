@@ -72,7 +72,8 @@ export interface ActiveDialog {
 	readonly resolve: (value: boolean | string | null) => void;
 }
 
-let active = $state<ActiveDialog | null>(null);
+// Raw: only ever replaced, and `dismissConfirm` matches its `options` by identity.
+let active = $state.raw<ActiveDialog | null>(null);
 
 /** The live active-dialog handle — call from a reactive context to track it. */
 export function getActiveDialog(): ActiveDialog | null {
@@ -97,6 +98,14 @@ export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
 	return new Promise<boolean>((resolve) => {
 		active = { kind: 'confirm', options, resolve: (v) => resolve(v === true) };
 	});
+}
+
+/**
+ * Close the confirm dialog opened with `options`, as a cancel. A no-op once it
+ * has closed or another dialog has replaced it.
+ */
+export function dismissConfirm(options: ConfirmOptions): void {
+	if (active?.options === options) preempt();
 }
 
 /**

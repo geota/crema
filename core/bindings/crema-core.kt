@@ -121,9 +121,10 @@ data class Bean (
 	/// comment, not the field name, per the locked-in naming rule
 	/// (`docs/44-pre-android-handoff.md`).
 	val bagSize: Float? = null,
-	/// Remaining weight in the bag, grams. Auto-debited per shot when
-	/// the shell enables `Track bag remaining weight`. `0.0` when
-	/// unknown.
+	/// Remaining weight in the bag, grams. Debited by every shot and logged
+	/// brew attributed to the bag. `0.0` is both "unknown" and "empty": the
+	/// two only differ by whether the bag declares a [`bag_size`](Self::bag_size),
+	/// and [`bag_stock`] is the one place that reads that difference.
 	val remaining: Float? = null,
 	/// Quality score — free text per Visualizer (`"88"`, `"A-"`).
 	val qualityScore: String? = null,
@@ -4559,6 +4560,35 @@ data class WireShot (
 	/// cached payloads without the field still deserialise.
 	val barista: String? = null
 )
+
+/// Generated type representing the anonymous struct variant `Low` of the `BagStock` Rust enum
+@Serializable
+data class BagStockLowInner (
+	/// Whole brews left ([`brews_remaining_estimate`]); 0 when less than
+	/// one dose remains.
+	val brews: UInt
+)
+
+/// How much is left in a bag, for the shells to warn on.
+@Serializable
+sealed class BagStock {
+	/// No weight to track: no declared size and nothing remaining.
+	@Serializable
+	@SerialName("Untracked")
+	object Untracked: BagStock()
+	/// Plenty left.
+	@Serializable
+	@SerialName("Ok")
+	object Ok: BagStock()
+	/// At or under [`LOW_STOCK_BREWS`] brews left.
+	@Serializable
+	@SerialName("Low")
+	data class Low(val content: BagStockLowInner): BagStock()
+	/// A sized bag with nothing left.
+	@Serializable
+	@SerialName("Empty")
+	object Empty: BagStock()
+}
 
 /// What kind of beverage a profile produces. Mirrors reaprime's
 /// `BeverageType` enum and the community v2 JSON contract's

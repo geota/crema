@@ -102,6 +102,7 @@
 	import SortPill from '#lib/components/shared/SortPill.svelte';
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
 	import { getBeanStore, type Bean, type Roaster } from '#lib/bean/index.js';
+	import { moveShotBag } from '#lib/bean/move-shot-bag.js';
 	import { onMount, untrack } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { readQueue } from '#lib/services/queue-store.js';
@@ -590,16 +591,7 @@
 	function saveBean(id: string, bean: Bean | null, roaster: Roaster | null): void {
 		const shot = liveShot(store.get(id));
 		if (!shot) return;
-		// Move the bag debit with the attribution (Android setShotBean parity):
-		// credit the wrongly-billed old bag, debit the new one, using the dose
-		// the shot recorded. Same-bean picks change nothing.
-		const oldBeanId = shot.bean?.beanId ?? null;
-		const newBeanId = bean?.id ?? null;
-		const dose = shot.metadata?.dose;
-		if (oldBeanId !== newBeanId && dose != null && dose > 0) {
-			if (oldBeanId) beanLibrary.creditBean(oldBeanId, dose);
-			if (newBeanId) beanLibrary.debitBean(newBeanId, dose);
-		}
+		moveShotBag(shot, bean?.id ?? null);
 		store.setBeanFromLive(id, bean, roaster);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
@@ -612,7 +604,13 @@
 		// dose is unchanged).
 		const beanId = shot.bean?.beanId ?? null;
 		if (patch.dose !== undefined && beanId) {
-			beanLibrary.resettleBean(beanId, shot.metadata.dose ?? null, patch.dose);
+			const taken = beanLibrary.resettleBean(
+				beanId,
+				shot.bagDebit ?? null,
+				shot.metadata.dose ?? null,
+				patch.dose
+			);
+			store.setBagDebit(id, taken);
 		}
 		store.updateManualBrew(id, patch);
 		// A new date can move the brew out of the range: its detail stays open

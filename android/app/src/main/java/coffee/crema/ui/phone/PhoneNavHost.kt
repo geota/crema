@@ -35,6 +35,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.ui.BagEmptyDialog
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.NavRestore
 import coffee.crema.ui.SyncNavRoute
@@ -117,6 +118,8 @@ fun PhoneNavHost(
         }
     }
     val onBack: () -> Unit = { nav.popBackStack() }
+
+    BagEmptyDialog(ui, vm, onNav)
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,

@@ -468,9 +468,10 @@ pub struct Bean {
     /// (`docs/44-pre-android-handoff.md`).
     #[serde(default)]
     pub bag_size: f32,
-    /// Remaining weight in the bag, grams. Auto-debited per shot when
-    /// the shell enables `Track bag remaining weight`. `0.0` when
-    /// unknown.
+    /// Remaining weight in the bag, grams. Debited by every shot and logged
+    /// brew attributed to the bag. `0.0` is both "unknown" and "empty": the
+    /// two only differ by whether the bag declares a [`bag_size`](Self::bag_size),
+    /// and [`bag_stock`] is the one place that reads that difference.
     #[serde(default)]
     pub remaining: f32,
     /// Quality score — free text per Visualizer (`"88"`, `"A-"`).
@@ -587,23 +588,30 @@ pub fn debit_remaining(remaining: f32, dose_g: f32) -> Option<f32> {
     Some((remaining - dose_g).max(0.0))
 }
 
-/// The inverse of [`debit_remaining`], for moving a shot's bag debit when the
-/// shot is re-attributed to a different bean: the wrongly-billed bag gets the
-/// dose BACK. Capped at `bag_size` when the bag declares one (`> 0` — the bag
-/// may have been refilled or edited since the pull); a non-positive /
-/// non-finite `bag_size` means "untracked size", no cap. Returns `None` when
-/// there is nothing to credit — a bad dose, a non-finite `remaining`, or a
-/// credit that changes nothing (already at the cap) — so callers persist (and
-/// touch `updated_at`) ONLY on a real credit, mirroring the debit rule.
-/// `remaining` itself must be finite and non-negative: a shell passes the
-/// tracked bag's current value (untracked bags — `None` shell-side — are the
-/// caller's no-op, same as the debit path).
+/// The grams a debit of `dose_g` actually takes from a bag holding `remaining`:
+/// the dose, or what was left when the dose empties the bag, or 0 when
+/// [`debit_remaining`] has nothing to debit. What a shot row records as its
+/// [`bag_debit`](crate::StoredShot::bag_debit), so a later move credits back no
+/// more than the bag lost.
 #[must_use]
-pub fn credit_remaining(remaining: f32, dose_g: f32, bag_size: f32) -> Option<f32> {
-    if !remaining.is_finite() || remaining < 0.0 || !dose_g.is_finite() || dose_g <= 0.0 {
+pub fn debit_taken(remaining: f32, dose_g: f32) -> f32 {
+    debit_remaining(remaining, dose_g).map_or(0.0, |_| dose_g.min(remaining))
+}
+
+/// Put `grams` back on a bag. Capped at `bag_size` when the bag declares one
+/// (`> 0`; the bag may have been refilled or edited since the pull); with no
+/// declared size the credit is uncapped.
+///
+/// Returns `None` when there is nothing to credit: a bad amount, a non-finite
+/// or negative `remaining`, or a credit that changes nothing (already at the
+/// cap). Callers persist (and touch `updated_at`) only on `Some`, as they do for
+/// a debit. The grams come from [`row_debit`], which is what keeps an untracked
+/// bag at 0: a row can only have taken grams from a bag that was tracked.
+fn credit_remaining(remaining: f32, grams: f32, bag_size: f32) -> Option<f32> {
+    if !remaining.is_finite() || remaining < 0.0 || !grams.is_finite() || grams <= 0.0 {
         return None;
     }
-    let uncapped = remaining + dose_g;
+    let uncapped = remaining + grams;
     let next = if bag_size.is_finite() && bag_size > 0.0 {
         uncapped.min(bag_size)
     } else {
@@ -612,41 +620,114 @@ pub fn credit_remaining(remaining: f32, dose_g: f32, bag_size: f32) -> Option<f3
     if next == remaining { None } else { Some(next) }
 }
 
-/// Re-settle a bag when a logged brew's dose is edited after the fact. Only
-/// the NET change moves: a bigger dose debits the difference
-/// ([`debit_remaining`], floored at 0), a smaller one credits the difference
-/// back ([`credit_remaining`], capped at `bag_size`). Crediting the whole old
-/// dose first and then debiting the new one would lose grams on a full bag —
-/// the capped credit swallows part of the old dose. A non-positive /
-/// non-finite dose means "no dose" (0 g on that side).
+/// The grams a row took from its bag, for undoing that debit. A recorded
+/// [`bag_debit`](crate::StoredShot::bag_debit) is the answer. A row from before
+/// the field (`None`) took its whole `dose_g` if the bag still holds grams; an
+/// empty bag counts as 0 because a row pulled on an empty bag took nothing and
+/// can't be told from the row that emptied it, so an old row never invents grams.
+fn row_debit(bag_debit: Option<f32>, remaining: f32, dose_g: f32) -> f32 {
+    let recorded = bag_debit.unwrap_or(if remaining > 0.0 { dose_g } else { 0.0 });
+    if recorded.is_finite() {
+        recorded.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+/// The bag's `remaining` after a shot moves off it: the grams the row took go
+/// back, capped at a declared `bag_size`. A recorded `bag_debit` says how many,
+/// and a positive one proves the bag was tracked, so even a sizeless bag at 0
+/// takes it. A row from before the field (`None`) took its `dose_g` if the bag
+/// still holds grams and nothing if it is empty, so an untracked bag gains
+/// nothing. `None` means nothing changes, so nothing is persisted.
+#[must_use]
+pub fn credit_shot_debit(
+    remaining: f32,
+    bag_size: f32,
+    bag_debit: Option<f32>,
+    dose_g: f32,
+) -> Option<f32> {
+    credit_remaining(remaining, row_debit(bag_debit, remaining, dose_g), bag_size)
+}
+
+/// What a dose edit on a logged brew does to the bag and the row.
+struct Resettle {
+    /// The bag's new `remaining`, or `None` when it stays as it is.
+    remaining: Option<f32>,
+    /// What the row now records as taken from the bag.
+    bag_debit: f32,
+}
+
+fn resettle(
+    remaining: f32,
+    bag_size: f32,
+    bag_debit: Option<f32>,
+    old_dose: f32,
+    new_dose: f32,
+) -> Resettle {
+    let dose = |d: f32| if d.is_finite() && d > 0.0 { d } else { 0.0 };
+    let (old, new) = (dose(old_dose), dose(new_dose));
+    let taken = row_debit(bag_debit, remaining, old);
+    if !remaining.is_finite() || remaining < 0.0 {
+        return Resettle {
+            remaining: None,
+            bag_debit: taken,
+        };
+    }
+    if new < taken {
+        return Resettle {
+            remaining: credit_remaining(remaining, taken - new, bag_size),
+            bag_debit: new,
+        };
+    }
+    if new > old {
+        let extra = new - old;
+        return Resettle {
+            remaining: debit_remaining(remaining, extra),
+            bag_debit: taken + debit_taken(remaining, extra),
+        };
+    }
+    Resettle {
+        remaining: None,
+        bag_debit: taken,
+    }
+}
+
+/// Re-settle a bag when a logged brew's dose is edited after the fact. Only the
+/// NET change moves: a bigger dose debits the difference ([`debit_remaining`],
+/// floored at 0), and a dose below what the row took credits the difference back
+/// (capped at `bag_size`). A dose that drops but stays
+/// above what the row took changes nothing, because those grams never left the
+/// bag. A non-positive / non-finite dose means "no dose" (0 g on that side).
 ///
-/// Returns `None` when there is nothing to persist: the dose did not change,
-/// `remaining` is non-finite / negative, or the adjustment nets out to the
-/// current value (a credit onto an already-full bag). Callers persist (and
-/// touch `updated_at`) only on `Some`.
+/// `bag_debit` is what the row recorded, `None` for a row from before the field.
+/// [`resettled_bag_debit`] is the row's new value.
+///
+/// Returns `None` when there is nothing to persist: `remaining` is non-finite /
+/// negative, or the bag's weight doesn't change. Callers persist (and touch
+/// `updated_at`) only on `Some`.
 #[must_use]
 pub fn resettle_remaining(
     remaining: f32,
     bag_size: f32,
+    bag_debit: Option<f32>,
     old_dose: f32,
     new_dose: f32,
 ) -> Option<f32> {
-    let dose = |d: f32| if d.is_finite() && d > 0.0 { d } else { 0.0 };
-    let (old, new) = (dose(old_dose), dose(new_dose));
-    if (old - new).abs() < f32::EPSILON || !remaining.is_finite() || remaining < 0.0 {
-        return None;
-    }
-    let delta = new - old;
-    let rem = if delta > 0.0 {
-        debit_remaining(remaining, delta)
-    } else {
-        credit_remaining(remaining, -delta, bag_size)
-    }?;
-    if (rem - remaining).abs() < f32::EPSILON {
-        None
-    } else {
-        Some(rem)
-    }
+    resettle(remaining, bag_size, bag_debit, old_dose, new_dose).remaining
+}
+
+/// What a row records as taken from its bag after the dose edit
+/// [`resettle_remaining`] applies.
+#[must_use]
+pub fn resettled_bag_debit(
+    remaining: f32,
+    bag_size: f32,
+    bag_debit: Option<f32>,
+    old_dose: f32,
+    new_dose: f32,
+) -> f32 {
+    resettle(remaining, bag_size, bag_debit, old_dose, new_dose).bag_debit
 }
 
 /// The per-brew dose assumed for a bag with no brew history yet — the
@@ -668,29 +749,85 @@ pub const BREWS_REMAINING_WINDOW: usize = 10;
 /// A non-positive / non-finite `remaining_g` → 0. Whether the bag is tracked
 /// at all (a declared bag size) stays the shell's display gate.
 #[must_use]
-// ≤10 doses: f32 precision is plenty; the floored quotient of a finite
-// positive remaining by a positive mean is a small non-negative count.
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
+// The floored quotient of a finite positive remaining by a positive mean is a
+// small non-negative count.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn brews_remaining_estimate(remaining_g: f32, recent_doses: &[f32]) -> u32 {
     if !remaining_g.is_finite() || remaining_g <= 0.0 {
         return 0;
     }
+    (remaining_g / dose_per_brew(recent_doses)).floor() as u32
+}
+
+/// The bag's mean recorded dose over its newest [`BREWS_REMAINING_WINDOW`]
+/// brews, else [`DEFAULT_DOSE_PER_BREW_G`].
+// ≤10 doses: f32 precision is plenty.
+#[allow(clippy::cast_precision_loss)]
+fn dose_per_brew(recent_doses: &[f32]) -> f32 {
     let doses: Vec<f32> = recent_doses
         .iter()
         .take(BREWS_REMAINING_WINDOW)
         .copied()
         .filter(|d| d.is_finite() && *d > 0.0)
         .collect();
-    let per_brew = if doses.is_empty() {
+    if doses.is_empty() {
         DEFAULT_DOSE_PER_BREW_G
     } else {
         doses.iter().sum::<f32>() / doses.len() as f32
-    };
-    (remaining_g / per_brew).floor() as u32
+    }
+}
+
+/// A bag reads [`BagStock::Low`] at or under this many of its own brews.
+pub const LOW_STOCK_BREWS: f32 = 2.0;
+
+/// How much is left in a bag, for the shells to warn on.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "content")]
+pub enum BagStock {
+    /// No weight to track: no declared size and nothing remaining.
+    Untracked,
+    /// Plenty left.
+    Ok,
+    /// At or under [`LOW_STOCK_BREWS`] brews left.
+    Low {
+        /// Whole brews left ([`brews_remaining_estimate`]); 0 when less than
+        /// one dose remains.
+        brews: u32,
+    },
+    /// A sized bag with nothing left.
+    Empty,
+}
+
+/// The stock rule both apps warn from. `recent_doses` is the bag's brews' doses
+/// newest first, as for [`brews_remaining_estimate`].
+///
+/// `remaining == 0` means "unknown" as well as "empty" ([`Bean::remaining`]), so
+/// a bag only reads [`BagStock::Empty`] when it declares a size; with no size
+/// and nothing remaining it is [`BagStock::Untracked`]. A bag with grams but no
+/// size (an import) is tracked. Frozen bags count like any other: freezing
+/// doesn't change what is in the bag.
+#[must_use]
+pub fn bag_stock(remaining_g: f32, bag_size_g: f32, recent_doses: &[f32]) -> BagStock {
+    let has_grams = remaining_g.is_finite() && remaining_g > 0.0;
+    let sized = bag_size_g.is_finite() && bag_size_g > 0.0;
+    match (has_grams, sized) {
+        (false, false) => BagStock::Untracked,
+        (false, true) => BagStock::Empty,
+        (true, _) if remaining_g / dose_per_brew(recent_doses) <= LOW_STOCK_BREWS => {
+            BagStock::Low {
+                brews: brews_remaining_estimate(remaining_g, recent_doses),
+            }
+        }
+        (true, _) => BagStock::Ok,
+    }
+}
+
+/// [`bag_stock`] as JSON, for the wasm and FFI bridges.
+#[must_use]
+pub fn bag_stock_json(remaining_g: f32, bag_size_g: f32, recent_doses: &[f32]) -> String {
+    serde_json::to_string(&bag_stock(remaining_g, bag_size_g, recent_doses))
+        .unwrap_or_else(|_| r#"{"type":"Untracked"}"#.to_owned())
 }
 
 /// A new bag copied from `source` — the bean library's "Duplicate" action.
@@ -1933,52 +2070,251 @@ mod tests {
         assert_eq!(credit_remaining(f32::NAN, 18.0, 250.0), None);
     }
 
+    #[test]
+    fn a_sizeless_bag_takes_back_a_recorded_debit() {
+        assert_eq!(credit_shot_debit(0.0, 0.0, Some(18.0), 18.0), Some(18.0));
+    }
+
+    #[test]
+    fn a_sizeless_bag_takes_a_recorded_debit_back_on_a_dose_edit() {
+        assert_eq!(
+            resettle_remaining(0.0, 0.0, Some(18.0), 18.0, 10.0),
+            Some(8.0)
+        );
+    }
+
+    // ── bag_debit: what a row took, what a move gives back ────────────
+
+    #[test]
+    fn debit_taken_is_the_dose_while_the_bag_covers_it() {
+        assert_eq!(debit_taken(200.0, 18.0), 18.0);
+        assert_eq!(debit_taken(18.0, 18.0), 18.0);
+    }
+
+    #[test]
+    fn debit_taken_clamps_a_partial_debit_to_what_was_left() {
+        assert_eq!(debit_taken(10.0, 18.0), 10.0);
+    }
+
+    #[test]
+    fn debit_taken_is_zero_when_nothing_was_debited() {
+        assert_eq!(debit_taken(0.0, 18.0), 0.0);
+        assert_eq!(debit_taken(200.0, 0.0), 0.0);
+        assert_eq!(debit_taken(f32::NAN, 18.0), 0.0);
+    }
+
+    #[test]
+    fn a_move_credits_only_what_the_row_took() {
+        // A partial debit: 10 of an 18 g dose.
+        assert_eq!(credit_shot_debit(0.0, 250.0, Some(10.0), 18.0), Some(10.0));
+        // Took nothing: nothing to put back, full dose or not.
+        assert_eq!(credit_shot_debit(100.0, 250.0, Some(0.0), 18.0), None);
+        // Capped at the bag size.
+        assert_eq!(
+            credit_shot_debit(245.0, 250.0, Some(18.0), 18.0),
+            Some(250.0)
+        );
+    }
+
+    #[test]
+    fn a_recorded_debit_refills_an_emptied_bag() {
+        assert_eq!(credit_shot_debit(0.0, 250.0, Some(18.0), 18.0), Some(18.0));
+    }
+
+    #[test]
+    fn a_move_never_credits_an_untracked_bag() {
+        assert_eq!(credit_shot_debit(0.0, 0.0, None, 18.0), None);
+        assert_eq!(credit_shot_debit(0.0, 0.0, Some(0.0), 18.0), None);
+    }
+
+    #[test]
+    fn moving_five_old_shots_off_an_empty_bag_adds_nothing() {
+        let mut remaining = 0.0;
+        for _ in 0..5 {
+            if let Some(next) = credit_shot_debit(remaining, 250.0, None, 18.0) {
+                remaining = next;
+            }
+        }
+        assert_eq!(remaining, 0.0);
+    }
+
+    #[test]
+    fn an_old_row_credits_its_dose_while_the_bag_holds_grams() {
+        assert_eq!(credit_shot_debit(100.0, 250.0, None, 18.0), Some(118.0));
+    }
+
+    #[test]
+    fn an_old_row_is_capped_at_the_bag_size() {
+        assert_eq!(credit_shot_debit(245.0, 250.0, None, 18.0), Some(250.0));
+    }
+
+    #[test]
+    fn an_old_row_with_no_dose_credits_nothing() {
+        assert_eq!(credit_shot_debit(100.0, 250.0, None, 0.0), None);
+    }
+
     // ── resettle_remaining (dose edit, drift bug 7) ───────────────────
 
     #[test]
     fn resettle_is_a_no_op_when_the_dose_is_unchanged() {
         // The drift case: a full bag used to credit (capped → no change)
         // then debit, losing the dose.
-        assert_eq!(resettle_remaining(250.0, 250.0, 18.0, 18.0), None);
-        assert_eq!(resettle_remaining(182.0, 250.0, 18.0, 18.0), None);
+        assert_eq!(resettle_remaining(250.0, 250.0, None, 18.0, 18.0), None);
+        assert_eq!(resettle_remaining(182.0, 250.0, None, 18.0, 18.0), None);
         // "No dose" on both sides is also unchanged.
-        assert_eq!(resettle_remaining(182.0, 250.0, 0.0, f32::NAN), None);
+        assert_eq!(resettle_remaining(182.0, 250.0, None, 0.0, f32::NAN), None);
     }
 
     #[test]
     fn resettle_credits_the_old_dose_then_debits_the_new() {
-        assert_eq!(resettle_remaining(182.0, 250.0, 18.0, 20.0), Some(180.0));
-        assert_eq!(resettle_remaining(182.0, 250.0, 18.0, 15.0), Some(185.0));
+        assert_eq!(
+            resettle_remaining(182.0, 250.0, None, 18.0, 20.0),
+            Some(180.0)
+        );
+        assert_eq!(
+            resettle_remaining(182.0, 250.0, None, 18.0, 15.0),
+            Some(185.0)
+        );
         // Dose added to a row that had none: a plain debit.
-        assert_eq!(resettle_remaining(182.0, 250.0, 0.0, 18.0), Some(164.0));
+        assert_eq!(
+            resettle_remaining(182.0, 250.0, None, 0.0, 18.0),
+            Some(164.0)
+        );
         // Dose cleared: a plain credit.
-        assert_eq!(resettle_remaining(182.0, 250.0, 18.0, 0.0), Some(200.0));
+        assert_eq!(
+            resettle_remaining(182.0, 250.0, None, 18.0, 0.0),
+            Some(200.0)
+        );
     }
 
     #[test]
     fn resettle_keeps_the_floor_and_the_bag_size_cap() {
         // Only the net change moves: +2 g off a near-full bag.
-        assert_eq!(resettle_remaining(245.0, 250.0, 18.0, 20.0), Some(243.0));
+        assert_eq!(
+            resettle_remaining(245.0, 250.0, None, 18.0, 20.0),
+            Some(243.0)
+        );
         // A smaller dose credits the difference, capped at the bag size.
-        assert_eq!(resettle_remaining(245.0, 250.0, 20.0, 10.0), Some(250.0));
+        assert_eq!(
+            resettle_remaining(245.0, 250.0, None, 20.0, 10.0),
+            Some(250.0)
+        );
         // Debit floors at 0.
-        assert_eq!(resettle_remaining(5.0, 250.0, 10.0, 40.0), Some(0.0));
+        assert_eq!(resettle_remaining(5.0, 250.0, None, 10.0, 40.0), Some(0.0));
         // Untracked size: no cap.
-        assert_eq!(resettle_remaining(245.0, 0.0, 18.0, 10.0), Some(253.0));
+        assert_eq!(
+            resettle_remaining(245.0, 0.0, None, 18.0, 10.0),
+            Some(253.0)
+        );
         // A full bag whose dose drops: the capped credit changes nothing,
         // so the edit nets out — nothing to persist.
-        assert_eq!(resettle_remaining(250.0, 250.0, 20.0, 0.0), None);
+        assert_eq!(resettle_remaining(250.0, 250.0, None, 20.0, 0.0), None);
         // Bad remaining.
-        assert_eq!(resettle_remaining(f32::NAN, 250.0, 18.0, 20.0), None);
-        assert_eq!(resettle_remaining(-1.0, 250.0, 18.0, 20.0), None);
+        assert_eq!(resettle_remaining(f32::NAN, 250.0, None, 18.0, 20.0), None);
+        assert_eq!(resettle_remaining(-1.0, 250.0, None, 18.0, 20.0), None);
     }
 
     #[test]
     fn resettle_round_trip_on_a_full_bag_loses_nothing() {
         // +0.5 g then back: the bag ends where it started, not 15 g lighter.
-        let up = resettle_remaining(250.0, 250.0, 15.0, 15.5).unwrap();
+        let up = resettle_remaining(250.0, 250.0, None, 15.0, 15.5).unwrap();
         assert!((up - 249.5).abs() < 1e-4);
-        assert_eq!(resettle_remaining(up, 250.0, 15.5, 15.0), Some(250.0));
+        assert_eq!(resettle_remaining(up, 250.0, None, 15.5, 15.0), Some(250.0));
+    }
+
+    #[test]
+    fn resettle_gives_an_empty_bag_nothing_for_an_old_row() {
+        assert_eq!(resettle_remaining(0.0, 250.0, None, 18.0, 10.0), None);
+    }
+
+    #[test]
+    fn resettle_credits_only_below_what_the_row_took() {
+        // Took 10 of 18 g: dropping the dose to 14 g still used all 10.
+        assert_eq!(resettle_remaining(0.0, 250.0, Some(10.0), 18.0, 14.0), None);
+        assert_eq!(
+            resettled_bag_debit(0.0, 250.0, Some(10.0), 18.0, 14.0),
+            10.0
+        );
+        // Dropping it to 5 g puts 5 back.
+        assert_eq!(
+            resettle_remaining(0.0, 250.0, Some(10.0), 18.0, 5.0),
+            Some(5.0)
+        );
+        assert_eq!(resettled_bag_debit(0.0, 250.0, Some(10.0), 18.0, 5.0), 5.0);
+    }
+
+    #[test]
+    fn resettle_records_only_the_grams_a_raised_dose_found() {
+        // +10 g with 4 g left: the bag empties, the row gains 4.
+        assert_eq!(
+            resettle_remaining(4.0, 250.0, Some(18.0), 18.0, 28.0),
+            Some(0.0)
+        );
+        assert_eq!(
+            resettled_bag_debit(4.0, 250.0, Some(18.0), 18.0, 28.0),
+            22.0
+        );
+    }
+
+    #[test]
+    fn resettle_leaves_an_unchanged_row_alone() {
+        assert_eq!(
+            resettled_bag_debit(100.0, 250.0, Some(10.0), 18.0, 18.0),
+            10.0
+        );
+        // An old row settles on the assumed debit.
+        assert_eq!(resettled_bag_debit(100.0, 250.0, None, 18.0, 18.0), 18.0);
+    }
+
+    // ── bag_stock (#302) ──────────────────────────────────────────────
+
+    #[test]
+    fn bag_stock_is_untracked_with_no_size_and_no_grams() {
+        assert_eq!(bag_stock(0.0, 0.0, &[]), BagStock::Untracked);
+        assert_eq!(bag_stock(f32::NAN, f32::NAN, &[]), BagStock::Untracked);
+    }
+
+    #[test]
+    fn bag_stock_is_empty_for_a_sized_bag_at_zero() {
+        assert_eq!(bag_stock(0.0, 250.0, &[18.0]), BagStock::Empty);
+    }
+
+    #[test]
+    fn bag_stock_is_ok_above_two_brews() {
+        assert_eq!(bag_stock(100.0, 250.0, &[18.0]), BagStock::Ok);
+    }
+
+    #[test]
+    fn bag_stock_is_low_at_two_brews_or_fewer() {
+        assert_eq!(bag_stock(36.0, 250.0, &[18.0]), BagStock::Low { brews: 2 });
+        assert_eq!(bag_stock(20.0, 250.0, &[]), BagStock::Low { brews: 1 });
+    }
+
+    #[test]
+    fn bag_stock_reports_zero_brews_under_one_dose() {
+        assert_eq!(bag_stock(5.0, 250.0, &[18.0]), BagStock::Low { brews: 0 });
+    }
+
+    #[test]
+    fn bag_stock_uses_the_bags_own_dose() {
+        // 45 g is plenty of 18 g shots, and only 1 French press.
+        assert_eq!(bag_stock(45.0, 250.0, &[18.0]), BagStock::Ok);
+        assert_eq!(bag_stock(45.0, 250.0, &[30.0]), BagStock::Low { brews: 1 });
+    }
+
+    #[test]
+    fn bag_stock_tracks_a_sizeless_bag_with_grams() {
+        assert_eq!(bag_stock(100.0, 0.0, &[]), BagStock::Ok);
+        assert_eq!(bag_stock(10.0, 0.0, &[]), BagStock::Low { brews: 0 });
+    }
+
+    #[test]
+    fn bag_stock_json_uses_the_tagged_wire_shape() {
+        assert_eq!(bag_stock_json(0.0, 0.0, &[]), r#"{"type":"Untracked"}"#);
+        assert_eq!(
+            bag_stock_json(36.0, 250.0, &[18.0]),
+            r#"{"type":"Low","content":{"brews":2}}"#
+        );
     }
 
     // ── brews_remaining_estimate ("≈N brews left") ────────────────────
