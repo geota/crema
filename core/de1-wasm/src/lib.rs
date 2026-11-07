@@ -1758,14 +1758,42 @@ pub fn visualizer_quota_limit(status: u32, body: &str) -> Option<u32> {
 
 /// Delay (ms) before retry number `attempt` of a recoverable Visualizer
 /// failure with HTTP `status` (`undefined` for a transport failure) — longer
-/// for a 429. See `de1_domain::retry_backoff_ms`.
+/// for a 429. `jitterUnit` is a random number in `0..1`. See
+/// `de1_domain::retry_backoff_ms`.
 #[wasm_bindgen(js_name = retryBackoffMs)]
 #[must_use]
-pub fn retry_backoff_ms(status: Option<u32>, attempt: u32) -> f64 {
+pub fn retry_backoff_ms(status: Option<u32>, attempt: u32, jitter_unit: f64) -> f64 {
     #[allow(clippy::cast_precision_loss)]
-    let ms =
-        de1_domain::retry_backoff_ms(status.and_then(|s| u16::try_from(s).ok()), attempt) as f64;
+    let ms = de1_domain::retry_backoff_ms(
+        status.and_then(|s| u16::try_from(s).ok()),
+        attempt,
+        jitter_unit,
+    ) as f64;
     ms
+}
+
+/// What a failed cloud call means: a JSON `SyncFailure`. `service` is
+/// `"visualizer"`, `"decent"` or `"drive"`, `operation` `"call"` or `"refresh"`,
+/// `status` `undefined` when the request got no answer, `retryAfter` the raw
+/// header. See `de1_domain::classify_sync_failure`.
+#[wasm_bindgen(js_name = classifySyncFailure)]
+#[must_use]
+pub fn classify_sync_failure(
+    service: &str,
+    operation: &str,
+    status: Option<u32>,
+    body: &str,
+    retry_after: Option<String>,
+    now_ms: f64,
+) -> String {
+    de1_domain::classify_sync_failure_json(
+        service,
+        operation,
+        status.and_then(|s| u16::try_from(s).ok()),
+        body,
+        retry_after.as_deref(),
+        f64_to_ms(now_ms),
+    )
 }
 
 /// What a failed Visualizer refresh-token grant means: `"Definitive"` (sign
@@ -1786,8 +1814,8 @@ pub fn classify_token_refresh_failure(status: Option<u32>, body: Option<String>)
 
 /// The Visualizer retry queue's rule for a failed operation: a JSON
 /// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
-/// `attemptsMade` counts this attempt. See
-/// `de1_domain::visualizer_queue_decision`.
+/// `attemptsMade` counts this attempt; `jitterUnit` is a random number in
+/// `0..1`. See `de1_domain::visualizer_queue_decision`.
 #[wasm_bindgen(js_name = visualizerQueueDecision)]
 #[must_use]
 pub fn visualizer_queue_decision(
@@ -1796,6 +1824,7 @@ pub fn visualizer_queue_decision(
     status: Option<u32>,
     body: &str,
     attempts_made: u32,
+    jitter_unit: f64,
 ) -> String {
     de1_domain::visualizer_queue_decision_json(
         op,
@@ -1803,6 +1832,7 @@ pub fn visualizer_queue_decision(
         status.and_then(|s| u16::try_from(s).ok()),
         body,
         attempts_made,
+        jitter_unit,
     )
 }
 

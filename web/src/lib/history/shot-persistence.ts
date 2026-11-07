@@ -45,6 +45,7 @@ import type {
 } from '#lib/effect/errors.js';
 import { ShotSync } from '#lib/services/shot-sync.js';
 import {
+	describeRefusal,
 	isRateLimited,
 	isRecoverable as isRecoverableCallError,
 	quotaLimit,
@@ -435,7 +436,7 @@ function isRecoverable(e: ShotPushError): boolean {
 function describePushError(e: ShotPushError): string {
 	switch (e._tag) {
 		case 'HttpStatusError':
-			return `HTTP ${e.status}: ${e.body ?? ''}`.trim();
+			return describeRefusal(e) ?? `HTTP ${e.status}: ${e.body ?? ''}`.trim();
 		case 'NetworkError':
 			return `Network error: ${e.cause instanceof Error ? e.cause.message : String(e.cause)}`;
 		case 'VisualizerPremiumGatedError':

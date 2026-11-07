@@ -128,7 +128,7 @@ describe('ShotSync.deleteShot — error taxonomy', () => {
 		const got = await failTag(
 			provide(
 				ShotSync.pipe(Effect.flatMap((s) => s.deleteShot('viz-1'))),
-				() => ({ ok: false, status: 403 })
+				() => ({ ok: false, status: 403, body: '{"error":"You must be a premium user to access this feature."}' })
 			)
 		);
 		expect(got.tag).toBe('VisualizerPremiumGatedError');

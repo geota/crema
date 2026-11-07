@@ -31,6 +31,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use typeshare::typeshare;
 
+use crate::sync_failure::{SyncFailure, SyncOperation, SyncService, classify_sync_failure};
+
 /// Origin of every Decent URL.
 pub const DECENT_BASE: &str = "https://decentespresso.com";
 
@@ -267,21 +269,24 @@ pub fn decent_upload_reply(status: u16, body: &str, replace: bool) -> DecentUplo
             DecentUploadReply::Uploaded { id }
         };
     }
-    if status == 401 {
-        return DecentUploadReply::Auth;
-    }
-    if status == 403 {
-        return DecentUploadReply::NotOnAccount;
-    }
-    if (400..500).contains(&status) && !matches!(status, 408 | 429) {
-        return DecentUploadReply::Rejected {
+    match classify_sync_failure(
+        SyncService::Decent,
+        SyncOperation::Call,
+        Some(status),
+        text,
+        None,
+        0,
+    ) {
+        SyncFailure::SessionEnded => DecentUploadReply::Auth,
+        SyncFailure::NotOnAccount => DecentUploadReply::NotOnAccount,
+        SyncFailure::Rejected { status } => DecentUploadReply::Rejected {
             status,
             body: snippet(text),
-        };
-    }
-    DecentUploadReply::Retry {
-        status,
-        detail: snippet(text),
+        },
+        _ => DecentUploadReply::Retry {
+            status,
+            detail: snippet(text),
+        },
     }
 }
 
