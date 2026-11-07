@@ -2861,7 +2861,7 @@ mod core_tests {
 
     #[test]
     fn busy_refilling_erroring_and_mirrored_machines_are_blocked() {
-        let cases: [(&[u8], FlashBlocker); 6] = [
+        let cases: [(&[u8], FlashBlocker); 7] = [
             (&[4, 5], FlashBlocker::ShotInProgress),
             (&[5, 7], FlashBlocker::ShotInProgress),
             (
@@ -2873,6 +2873,8 @@ mod core_tests {
             (&[17, 0], FlashBlocker::Refilling),
             (&[2, 17], FlashBlocker::Refilling),
             (&[2, 202], FlashBlocker::MachineError),
+            // Unknown might be a newer firmware's fault: don't flash on it.
+            (&[2, 150], FlashBlocker::MachineError),
         ];
         for (state, want) in cases {
             let mut core = ready_core();

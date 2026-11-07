@@ -18,8 +18,9 @@ on:
   workflow_dispatch: {}
 
 # Only the latest commit on main matters for a rolling nightly; cancel older runs.
+# Keyed on the ref, so a stray manual run elsewhere can't cancel a main nightly.
 concurrency:
-  group: nightly
+  group: nightly-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -30,6 +31,14 @@ jobs:
     name: nightly (apk)
     runs-on: ubuntu-latest
     steps:
+      # Nightlies update users in place, and `workflow_dispatch` can run this on
+      # any ref: an untested branch must never publish.
+      - name: Refuse any ref but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::nightly publishes to users, so it runs only on main (got ${GITHUB_REF})"
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
