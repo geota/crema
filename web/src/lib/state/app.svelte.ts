@@ -104,7 +104,13 @@ import {
 } from '#lib/services/profile-write-generations.js';
 import { FirmwareUpdateController } from '#lib/firmware/firmware-update.svelte.js';
 import { readPowerOk } from '#lib/firmware/power.js';
-import { getMachineBusy, shotFinished, shotStarted } from '#lib/restore/tab-safety.js';
+import {
+	getMachineBusy,
+	shotAbandoned,
+	shotFinished,
+	shotLinkDown,
+	shotStarted
+} from '#lib/restore/tab-safety.js';
 import { setFirmwareWakeLock } from '#lib/shell/wake-lock.js';
 import type { FlashShellConditions } from '#lib/core/index.js';
 import {
@@ -425,6 +431,8 @@ export class CremaApp {
 			// The fresh core runs no upload and numbers uploads from 1 again:
 			// no old batch may write, ack or report into it (C2 P3-1).
 			this.#profileWrites.supersede();
+			// A fresh core has no shot to complete.
+			shotAbandoned();
 			this.coreResetNotice.onReset();
 		});
 		// Logged once with the bridge's own message as context; the per-call
@@ -434,6 +442,7 @@ export class CremaApp {
 			this.state.log(
 				`Core stopped after repeated internal errors; reload required${reason ? ` (${reason})` : ''}`
 			);
+			shotAbandoned();
 			this.coreResetNotice.onCoreStopped();
 		});
 		this.sweep = new ConnectSweepRunner({
@@ -478,6 +487,8 @@ export class CremaApp {
 				// DE1 reported is history. Clear it so nothing reads "Idle" from
 				// before the drop until the next StateInfo seed read lands —
 				// mirrors Android's `onDe1Dropped`.
+				// A shot's hold outlives the drop for a while: a reconnect may finish it.
+				shotLinkDown(de1State !== 'ready' && de1State !== 'subscribing');
 				if (de1State !== 'ready' && de1State !== 'subscribing') {
 					this.state.patch({ machineState: null, machineStateName: null, machineSubstate: null });
 					// Nothing the core waited for applies to a link that's gone.
@@ -1277,6 +1288,8 @@ export class CremaApp {
 		}
 		this.sweep.stop();
 		await this.de1.disconnect();
+		// The user ended the session: the shot can't complete now.
+		shotAbandoned();
 		this.stolenSerial = false;
 		this.state.patch(CLEARED_DE1_READOUT);
 	}

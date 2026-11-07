@@ -12,6 +12,7 @@ import {
 	MachineBusy,
 	RESTORE_FALLBACK_MS,
 	RESTORE_LOCK,
+	SHOT_LINK_GRACE_MS,
 	STUCK_AFTER_MS,
 	TAB_ID,
 	announceRestore,
@@ -23,8 +24,10 @@ import {
 	reloadBlocked,
 	resetTabSafetyForTest,
 	restoreFrozen,
+	shotAbandoned,
 	shotFinished,
 	shotIsOpen,
+	shotLinkDown,
 	shotStarted,
 	stashFrozenShot,
 	type RestoreMessage
@@ -155,6 +158,41 @@ describe('a shot, for the reload', () => {
 		await settle();
 		expect(busy.held).toBe(false);
 		expect(blocked({}, { shotOpen: shotIsOpen() })).toBe(false);
+	});
+
+	it('lets the hold go when the session ends with the shot unfinished', async () => {
+		const locks = new FakeLocks();
+		const busy = new MachineBusy(locks);
+		resetTabSafetyForTest(busy);
+		shotStarted();
+		await settle();
+		shotAbandoned();
+		await settle();
+		expect(shotIsOpen()).toBe(false);
+		expect(busy.held).toBe(false);
+	});
+
+	it('keeps the hold while a reconnect could finish the shot, then lets it go', async () => {
+		vi.useFakeTimers();
+		const locks = new FakeLocks();
+		const busy = new MachineBusy(locks);
+		resetTabSafetyForTest(busy);
+		shotStarted();
+		await vi.advanceTimersByTimeAsync(0);
+		// Down, then back within the grace: the shot is still open.
+		shotLinkDown(true);
+		await vi.advanceTimersByTimeAsync(SHOT_LINK_GRACE_MS - 1);
+		shotLinkDown(false);
+		await vi.advanceTimersByTimeAsync(SHOT_LINK_GRACE_MS);
+		expect(shotIsOpen()).toBe(true);
+		expect(busy.held).toBe(true);
+		// Down for the whole grace: gone.
+		shotLinkDown(true);
+		await vi.advanceTimersByTimeAsync(SHOT_LINK_GRACE_MS - 1);
+		expect(busy.held).toBe(true);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(shotIsOpen()).toBe(false);
+		expect(busy.held).toBe(false);
 	});
 
 	it('waits for hot water, steam, a guided brew, a start or a link coming back', () => {

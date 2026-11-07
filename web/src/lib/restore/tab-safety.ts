@@ -176,11 +176,48 @@ export function getMachineBusy(): MachineBusy {
 
 let shotOpen = false;
 const idleListeners = new Set<() => void>();
+let linkDownTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** How long a shot's hold outlives a lost link: a reconnect within it can still finish the shot. */
+export const SHOT_LINK_GRACE_MS = 120_000;
+let shotLinkGraceMs = SHOT_LINK_GRACE_MS;
+
+function clearLinkDownTimer(): void {
+	if (linkDownTimer) clearTimeout(linkDownTimer);
+	linkDownTimer = null;
+}
 
 /** A shot has started: a reload waits until it's recorded, not until the machine stops. */
 export function shotStarted(): void {
+	clearLinkDownTimer();
 	shotOpen = true;
 	getMachineBusy().set(SHOT, true);
+}
+
+/**
+ * The DE1 link went down (`true`) or came back (`false`). A shot's hold stays
+ * while a reconnect could still finish it, then goes after
+ * {@link SHOT_LINK_GRACE_MS}, so a DE1 switched off mid-shot can't refuse a
+ * restore in another tab for good.
+ */
+export function shotLinkDown(down: boolean): void {
+	if (!down) {
+		clearLinkDownTimer();
+		return;
+	}
+	if (!shotOpen || linkDownTimer) return;
+	linkDownTimer = setTimeout(() => {
+		linkDownTimer = null;
+		shotFinished();
+	}, shotLinkGraceMs);
+}
+
+/**
+ * The core's session has ended with the shot unfinished: a user Disconnect,
+ * or a core reset or stop. No `ShotCompleted` will come for it.
+ */
+export function shotAbandoned(): void {
+	if (shotOpen) shotFinished();
 }
 
 /**
@@ -188,6 +225,7 @@ export function shotStarted(): void {
  * up to 3 s after the machine went Idle: the drip settle.
  */
 export function shotFinished(): void {
+	clearLinkDownTimer();
 	shotOpen = false;
 	getMachineBusy().set(SHOT, false);
 	for (const l of idleListeners) l();
@@ -248,12 +286,14 @@ export function markRestoringHere(on: boolean): void {
 }
 
 /** Test seam: forget this module's state. */
-export function resetTabSafetyForTest(busy: MachineBusy | null = null): void {
+export function resetTabSafetyForTest(busy: MachineBusy | null = null, linkGraceMs = SHOT_LINK_GRACE_MS): void {
+	shotLinkGraceMs = linkGraceMs;
 	frozen = false;
 	restoringHere = false;
 	machineBusy = busy;
 	shotOpen = false;
 	idleListeners.clear();
+	clearLinkDownTimer();
 }
 
 export interface RestoreListenerOptions {
