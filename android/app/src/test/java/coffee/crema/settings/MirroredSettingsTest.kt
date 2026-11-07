@@ -36,7 +36,7 @@ class MirroredSettingsTest {
     fun `the ui pipeline is the effective projection`() {
         val vm = MainSources.kotlinFiles().toMap().getValue("coffee/crema/ui/MainViewModel.kt")
         assertTrue(
-            Regex("""val ui: StateFlow<MainUiState> = _ui\s*\.map \{ it\.effective\(\) }""").containsMatchIn(vm),
+            Regex("""val ui: StateFlow<MainUiState> = _ui\.state\s*\.map \{ it\.effective\(\) }""").containsMatchIn(vm),
             "ui = _ui.map { effective() }…",
         )
     }

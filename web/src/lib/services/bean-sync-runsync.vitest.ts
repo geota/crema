@@ -224,6 +224,79 @@ describe('BeanSync.runSync — push + premium', () => {
 	});
 });
 
+describe('BeanSync.runSync — the baseline', () => {
+	const bound = (updatedAt: number) => ({ ...blankBean(), visualizerId: 'vb-1', updatedAt });
+	const lists = () => ({ ok: true as const, json: { data: [], paging: { pages: 1 } } });
+
+	beforeEach(() => {
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 5, premium: true }));
+		updateSyncConfig({ premium: true });
+	});
+
+	it('failed_bag_patch_holds_baseline', async () => {
+		const lib = mkLibrary({ beans: [bound(6)] });
+		const down = mkHttp((method) => (method === 'PATCH' ? { ok: false, status: 503 } : lists()));
+		await run(lib, down.layer);
+		expect(readSyncSettings().lastSyncAt).toBe(5);
+
+		const up = mkHttp((method) => (method === 'PATCH' ? { ok: true, json: { id: 'vb-1' } } : lists()));
+		await run(lib, up.layer);
+		expect(up.calls.filter((c) => c.method === 'PATCH')).toHaveLength(1);
+		expect(readSyncSettings().lastSyncAt).toBeGreaterThan(5);
+	});
+
+	it("a bag pulled while a write fails doesn't push back over a website rename", async () => {
+		const lib = mkLibrary({ beans: [bound(6)] });
+		const bags = (name: string) => ({ ok: true as const, json: { data: [{ id: 'vb-2', name }], paging: { pages: 1 } } });
+		const first = mkHttp((method, url) =>
+			method === 'PATCH' ? { ok: false, status: 503 } : isList(url, '/coffee_bags') ? bags('Pulled') : lists()
+		);
+		await run(lib, first.layer);
+		expect(readSyncSettings().lastSyncAt).toBe(5);
+
+		const second = mkHttp((method, url) =>
+			method === 'PATCH' ? { ok: true, json: { id: 'x' } } : isList(url, '/coffee_bags') ? bags('Renamed on the website') : lists()
+		);
+		await run(lib, second.layer);
+		const patched = second.calls.filter((c) => c.method === 'PATCH').map((c) => new URL(c.url).pathname);
+		expect(patched).toEqual(['/api/coffee_bags/vb-1']);
+		expect(lib.beans.find((b) => b.visualizerId === 'vb-2')?.name).toBe('Renamed on the website');
+	});
+
+	it('a write refused for good is a counted skip, and the baseline moves', async () => {
+		const lib = mkLibrary({ beans: [bound(6)] });
+		const { layer } = mkHttp((method) =>
+			method === 'PATCH' ? { ok: false, status: 422, body: '{"error":"bad"}' } : lists()
+		);
+		const result = await run(lib, layer);
+		expect(result.skipped).toBe(1);
+		expect(readSyncSettings().lastSyncAt).toBeGreaterThan(5);
+	});
+
+	it("the baseline is the run's start", async () => {
+		const lib = mkLibrary({ beans: [bound(1)] });
+		const before = Date.now();
+		let clock = before;
+		const time = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+		// The clock moves once the run has started, as a slow pull's would.
+		const { layer } = mkHttp(() => {
+			clock = before + 60_000;
+			return lists();
+		});
+		await run(lib, layer);
+		time.mockRestore();
+		expect(readSyncSettings().lastSyncAt).toBe(before);
+	});
+
+	it("binding a created row's id leaves its updatedAt", async () => {
+		const fresh = { ...blankBean(), name: 'New', visualizerId: null, updatedAt: 3 };
+		const lib = mkLibrary({ beans: [fresh] });
+		const { layer } = mkHttp((method) => (method === 'POST' ? { ok: true, json: { id: 'vb-9' } } : lists()));
+		await run(lib, layer);
+		expect(lib.getBean(fresh.id)).toMatchObject({ visualizerId: 'vb-9', updatedAt: 3 });
+	});
+});
+
 describe('BeanSync.runSync — a change of account', () => {
 	const listOnly = () =>
 		mkHttp((method) =>

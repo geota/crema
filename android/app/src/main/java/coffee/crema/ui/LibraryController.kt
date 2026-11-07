@@ -54,6 +54,7 @@ import coffee.crema.history.brewDateError
 import coffee.crema.history.HistoryMerge
 import coffee.crema.history.historyDroppedNotice
 import coffee.crema.history.historyWith
+import coffee.crema.beans.applyBeanDraft
 import coffee.crema.history.mergePulled
 import coffee.crema.history.mergeHistory
 import coffee.crema.history.isManualLog
@@ -147,8 +148,10 @@ class LibraryController(
      *  and session settings over this device's own (spec §7.2). Library
      *  actions that act on what is on screen read this. */
     private val effectiveState: () -> MainUiState = uiState,
-    /** Synchronously update the UI snapshot (the VM's `_ui.update`). */
+    /** Synchronously update the UI snapshot (the VM's `_ui.update`). Keeps the rows. */
     private val updateUi: ((MainUiState) -> MainUiState) -> Unit,
+    /** Change the history or the bean library: [UiStore.edit]. */
+    private val editRows: EditRows,
     /** Surface a user-facing message (the VM's snackbar channel). */
     private val notify: (String) -> Unit,
     /** Append to the session event log. */
@@ -293,14 +296,29 @@ class LibraryController(
      *  header); null when the core can't read it. */
     private fun corePreinfusion(raw: String): Float? = runCatching { preinfusionSeconds(raw) }.getOrNull()
 
+    /** Test seam: the window where a shot assembles, off the state it read. */
+    @androidx.annotation.VisibleForTesting
+    internal var assembling: () -> Unit = {}
+
+    private fun editHistory(edit: (HistoryRows) -> HistoryRows) = editRows({ it.copy(history = edit(it.history)) }, { it })
+
+    private fun editBeans(edit: (BeanRows) -> BeanRows) = editRows({ it.copy(beans = edit(it.beans)) }, { it })
+
+    private fun editRoasters(edit: (RoasterRows) -> RoasterRows) = editRows({ it.copy(roasters = edit(it.roasters)) }, { it })
+
+    /** Save the history as it stands. */
+    private fun saveHistory() {
+        val snapshot = uiState().history
+        scope.launch { historyStore.save(snapshot) }
+    }
+
     /** Load the persisted bean library into the UI snapshot at startup. */
     suspend fun loadLibrary() {
         val lib = library.load()
-        updateUi { it.copy(
-            beans = lib.beans,
-            roasters = lib.roasters,
-            activeBeanId = lib.activeBeanId ?: lib.beans.firstOrNull()?.id,
-        ) }
+        editRows(
+            { it.copy(beans = it.beans.with(lib.beans), roasters = it.roasters.with(lib.roasters)) },
+            { it.copy(activeBeanId = lib.activeBeanId ?: lib.beans.firstOrNull()?.id) },
+        )
         library.openSaves()
     }
 
@@ -315,7 +333,7 @@ class LibraryController(
     private suspend fun landHistory(land: (session: List<StoredShot>, rows: List<StoredShot>) -> List<StoredShot>) {
         val loaded = seriesLoaded
         val rows = historyStore.loadRows()
-        updateUi { it.copy(history = land(it.history, rows)) }
+        editHistory { current -> current.with(land(current, rows)) }
         historyStore.markLive(rows.map { it.id })
         historyStore.openSaves()
         val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
@@ -327,12 +345,10 @@ class LibraryController(
             try {
                 val series = historyStore.loadSeries(missing)
                 if (series.isEmpty()) return@launch
-                updateUi { st ->
-                    st.copy(
-                        history = st.history.map { shot ->
-                            if (shot.samples.isEmpty()) series[shot.id]?.let { shot.copy(samples = it) } ?: shot else shot
-                        },
-                    )
+                editHistory { rows ->
+                    rows.mapped { shot ->
+                    if (shot.samples.isEmpty()) series[shot.id]?.let { shot.copy(samples = it) } ?: shot else shot
+                    }
                 }
             } finally {
                 loaded.complete(Unit)
@@ -707,9 +723,7 @@ class LibraryController(
         // Cascade: a deleted custom is gone for good — clear bean links so
         // the auto-load never chases a tombstone (web onDeleted parity).
         if (uiState().beans.any { it.linkedProfileId == id }) {
-            updateUi { st ->
-                st.copy(beans = st.beans.map { if (it.linkedProfileId == id) it.copy(linkedProfileId = null) else it })
-            }
+            editBeans { rows -> rows.mapped { if (it.linkedProfileId == id) it.copy(linkedProfileId = null) else it } }
             persistLibrary()
         }
         refreshProfiles()
@@ -1017,13 +1031,15 @@ class LibraryController(
                     return@launch
                 }
             }
-            val existing = uiState().history.map { it.id }.toHashSet()
-            val toAdd = shots.filterNot { it.id in existing }
-            val merged = mergeHistory(toAdd, uiState().history)
-            updateUi { it.copy(history = merged.rows) }
+            var merged = HistoryMerge(emptyList(), emptyList(), 0)
+            editHistory { rows ->
+                val existing = rows.mapTo(HashSet()) { it.id }
+                merged = mergeHistory(shots.filterNot { it.id in existing }, rows)
+                rows.with(merged.rows)
+            }
             visualizer.forgetTombstones(merged.kept.map { it.id })
             notify("Imported ${merged.kept.size} shot(s)${historyDroppedNotice(merged.dropped)}")
-            historyStore.save(merged.rows)
+            historyStore.save(uiState().history)
         }
     }
 
@@ -1182,7 +1198,10 @@ class LibraryController(
                 hiddenIds = emptySet()
                 pinnedProfileStore.save(emptySet())
                 hiddenProfileStore.save(emptySet())
-                updateUi { it.copy(beans = emptyList(), roasters = emptyList(), history = emptyList(), activeBeanId = null) }
+                editRows(
+                    { it.copy(beans = it.beans.with(emptyList()), roasters = it.roasters.with(emptyList()), history = it.history.with(emptyList())) },
+                    { it.copy(activeBeanId = null) },
+                )
             }
 
             // Profiles — add customs whose id isn't already known (built-in or custom).
@@ -1197,21 +1216,26 @@ class LibraryController(
             customProfilesJson = customProfilesJson + newProfiles.map(::derivedBrewTemp)
 
             // Beans / roasters / shots — id-union (preserves ids, so a re-restore dedups).
-            val s = uiState()
-            val haveBeans = s.beans.map { it.id }.toHashSet()
-            val haveRoasters = s.roasters.map { it.id }.toHashSet()
-            val haveShots = s.history.map { it.id }.toHashSet()
-            val newBeans = beans.filterNot { it.id in haveBeans }
-            val newRoasters = roasters.filterNot { it.id in haveRoasters }
-            val newShots = shots.filterNot { it.id in haveShots }
-            val merged = mergeHistory(newShots, uiState().history)
+            var newBeans = emptyList<Bean>()
+            var newRoasters = emptyList<Roaster>()
+            var merged = HistoryMerge(emptyList(), emptyList(), 0)
+            editRows(
+                { rows ->
+                    val haveBeans = rows.beans.mapTo(HashSet()) { it.id }
+                    val haveRoasters = rows.roasters.mapTo(HashSet()) { it.id }
+                    val haveShots = rows.history.mapTo(HashSet()) { it.id }
+                    newBeans = beans.filterNot { it.id in haveBeans }
+                    newRoasters = roasters.filterNot { it.id in haveRoasters }
+                    merged = mergeHistory(shots.filterNot { it.id in haveShots }, rows.history)
+                    rows.copy(
+                        beans = rows.beans.with(rows.beans + newBeans),
+                        roasters = rows.roasters.with(rows.roasters + newRoasters),
+                        history = rows.history.with(merged.rows),
+                    )
+                },
+                { it.copy(activeBeanId = it.activeBeanId ?: newBeans.firstOrNull()?.id) },
+            )
             visualizer.forgetTombstones(merged.kept.map { it.id })
-            updateUi { it.copy(
-                beans = it.beans + newBeans,
-                roasters = it.roasters + newRoasters,
-                history = merged.rows,
-                activeBeanId = it.activeBeanId ?: newBeans.firstOrNull()?.id,
-            ) }
 
             // Profile organisation — pinned + hidden BUILT-IN ids. WIPE replaces the
             // sets; MERGE unions them. Applied BEFORE refreshProfiles so the star /
@@ -1265,9 +1289,8 @@ class LibraryController(
 
     /** Remove a stored shot from the local history. Persisted. */
     fun deleteShot(id: String) {
-        val next = uiState().history.filterNot { it.id == id }
-        updateUi { it.copy(history = next) }
-        scope.launch { historyStore.save(next) }
+        editHistory { rows -> rows.filtered { it.id != id } }
+        saveHistory()
     }
 
     /** Fire an ACTION_SEND chooser with [text] (application/json). Best-effort. */
@@ -1295,13 +1318,10 @@ class LibraryController(
         // Brew recipes + custom methods: an empty wipe-restore clears them.
         applyRestoredCustomMethods(emptyList(), true)
         applyRestoredRecipes(emptyList(), null, true)
-        updateUi { it.copy(
-            beans = emptyList(),
-            roasters = emptyList(),
-            activeBeanId = null,
-            history = emptyList(),
-            activeProfileId = null,
-        ) }
+        editRows(
+            { it.copy(beans = it.beans.with(emptyList()), roasters = it.roasters.with(emptyList()), history = it.history.with(emptyList())) },
+            { it.copy(activeBeanId = null, activeProfileId = null) },
+        )
         refreshProfiles()
     }
 
@@ -1334,11 +1354,11 @@ class LibraryController(
         if (stubs.isEmpty()) return emptySet()
         var kept = emptySet<String>()
         var present = emptySet<String>()
-        updateUi { st ->
-            val merge = mergePulled(stubs, st.history)
+        editHistory { rows ->
+            val merge = mergePulled(stubs, rows)
             kept = merge.kept.mapTo(HashSet()) { it.id }
-            present = st.history.mapTo(HashSet()) { it.id }
-            if (merge.kept.isEmpty()) st else st.copy(history = merge.rows)
+            present = rows.mapTo(HashSet()) { it.id }
+            rows.with(merge.rows)
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
@@ -1350,20 +1370,18 @@ class LibraryController(
         // Before the stored series load, every shot looks curve-less: a pulled
         // series would replace the shot's own (the pull awaits [awaitSeries]).
         if (!seriesReady) return
-        updateUi { st ->
-            st.copy(
-                history = st.history.map {
-                    if (it.id == localId && it.samples.isEmpty()) {
-                        it.copy(
-                            // The whole pulled series (F10).
-                            samples = samples,
-                            durationMs = if (it.durationMs > 0) it.durationMs else durationMs,
-                        )
-                    } else {
-                        it
-                    }
-                },
-            )
+        editHistory { rows ->
+            rows.mapped {
+            if (it.id == localId && it.samples.isEmpty()) {
+                it.copy(
+                    // The whole pulled series (F10).
+                    samples = samples,
+                    durationMs = if (it.durationMs > 0) it.durationMs else durationMs,
+                )
+            } else {
+                it
+            }
+            }
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
@@ -1375,17 +1393,15 @@ class LibraryController(
      */
     fun fillShotBarista(localId: String, barista: String) {
         var changed = false
-        updateUi { st ->
-            st.copy(
-                history = st.history.map {
-                    if (it.id == localId && it.barista.isNullOrBlank()) {
-                        changed = true
-                        it.copy(barista = barista)
-                    } else {
-                        it
-                    }
-                },
-            )
+        editHistory { rows ->
+            rows.mapped {
+            if (it.id == localId && it.barista.isNullOrBlank()) {
+                changed = true
+                it.copy(barista = barista)
+            } else {
+                it
+            }
+            }
         }
         if (!changed) return
         val snapshot = uiState().history
@@ -1394,27 +1410,25 @@ class LibraryController(
 
     /** Stamp a successful Decent shot-history upload onto the local shot (#84). Persisted. */
     fun markShotDecentUploaded(localId: String, decentId: String, machine: ShotMachine? = null) {
-        updateUi { st ->
-            st.copy(
-                history = st.history.map { shot ->
-                    when {
-                        shot.id != localId -> shot
-                        // Brew Log rows (issue #10) never carry a machine stamp.
-                        shot.isBrewLog -> shot
-                        // The upload used the connected DE1 (DecentSync passes it only
-                        // when the shot had no usable serial — none, or an unknown `0`):
-                        // stamp its identity too, so the share link names the serial the
-                        // server filed it under.
-                        machine != null -> shot.copy(
-                            decentId = decentId,
-                            machineSerial = machine.serialNumber,
-                            machineFirmware = machine.firmwareVersion,
-                            machineModel = machine.model,
-                        )
-                        else -> shot.copy(decentId = decentId)
-                    }
-                },
-            )
+        editHistory { rows ->
+            rows.mapped { shot ->
+            when {
+                shot.id != localId -> shot
+                // Brew Log rows (issue #10) never carry a machine stamp.
+                shot.isBrewLog -> shot
+                // The upload used the connected DE1 (DecentSync passes it only
+                // when the shot had no usable serial — none, or an unknown `0`):
+                // stamp its identity too, so the share link names the serial the
+                // server filed it under.
+                machine != null -> shot.copy(
+                    decentId = decentId,
+                    machineSerial = machine.serialNumber,
+                    machineFirmware = machine.firmwareVersion,
+                    machineModel = machine.model,
+                )
+                else -> shot.copy(decentId = decentId)
+            }
+            }
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
@@ -1422,9 +1436,7 @@ class LibraryController(
 
     /** Stamp a successful Visualizer upload onto the local shot. Persisted. */
     fun markShotSynced(localId: String, visualizerId: String) {
-        updateUi { st ->
-            st.copy(history = st.history.map { if (it.id == localId) it.copy(visualizerId = visualizerId) else it })
-        }
+        editHistory { rows -> rows.mapped { if (it.id == localId) it.copy(visualizerId = visualizerId) else it } }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
     }
@@ -1600,21 +1612,27 @@ class LibraryController(
         // Apply onto the CURRENT state (not the snapshot `s`) so a concurrent
         // high-rate telemetry / scale update isn't clobbered (issue 11).
         var mergedShots = HistoryMerge(emptyList(), emptyList(), 0)
-        updateUi { cur ->
-            mergedShots = mergeHistory(importedShots, cur.history)
-            cur.copy(
-                beans = cur.beans.replacingById(merge.updatedBeans) { it.id } + newBeans,
-                roasters = cur.roasters.replacingById(merge.updatedRoasters) { it.id } + newRoasters,
-                activeBeanId = cur.activeBeanId ?: newBeans.firstOrNull()?.id,
-                history = mergedShots.rows,
-            )
-        }
+        // The merge again, on the rows as they stand: the one above read them a
+        // moment ago, to say whether there was anything to import.
+        var landed = merge
+        editRows(
+            { rows ->
+                landed = mergeBeanImport(wireBeans, wireRoasters, rows.beans, rows.roasters)
+                mergedShots = mergeHistory(importedShots, rows.history)
+                rows.copy(
+                    beans = rows.beans.with(rows.beans.replacingById(landed.updatedBeans) { it.id } + landed.newBeans),
+                    roasters = rows.roasters.with(rows.roasters.replacingById(landed.updatedRoasters) { it.id } + landed.newRoasters),
+                    history = rows.history.with(mergedShots.rows),
+                )
+            },
+            { it.copy(activeBeanId = it.activeBeanId ?: landed.newBeans.firstOrNull()?.id) },
+        )
         persistLibrary()
         if (importedShots.isNotEmpty()) {
             val snapshot = uiState().history
             scope.launch { historyStore.save(snapshot) }
         }
-        val bn = newBeans.size; val rn = newRoasters.size; val sn = mergedShots.kept.size; val un = merge.updatedBeans.size
+        val bn = landed.newBeans.size; val rn = landed.newRoasters.size; val sn = mergedShots.kept.size; val un = landed.updatedBeans.size
         updateUi { it.copy(
             status = buildString {
                 append("Imported $bn bean${if (bn == 1) "" else "s"} · $rn roaster${if (rn == 1) "" else "s"}")
@@ -1716,50 +1734,68 @@ class LibraryController(
 
     /**
      * Apply edits to an existing bean (the editor's Save). Resolves the roaster
-     * by name (find-or-create), stamps `updatedAt`, and persists.
+     * by name (find-or-create), stamps `updatedAt`, and persists. [opened] is the
+     * bag as the form opened on it: see [applyBeanDraft].
      */
     fun updateBean(
         id: String,
         roasterName: String,
         roasterPick: coffee.crema.core.CataloguePickRoaster? = null,
+        opened: Bean? = null,
         transform: (Bean) -> Bean,
     ) {
-        val s = uiState()
-        // Resolve from the library, or from a new-bean draft (the "Add bean" →
-        // full-editor Save path — the bean isn't in [beans] yet).
-        val existing = s.beans.firstOrNull { it.id == id } ?: s.draftBean?.takeIf { it.id == id } ?: return
-        val isNew = s.beans.none { it.id == id }
         val now = System.currentTimeMillis()
-        // A catalogue pick's roaster (the editor only passes it while the
-        // roaster input still names it): write the updated existing row, or
-        // create the seeded one, and file the bag under it. Otherwise resolve
-        // the typed name (find-or-create) as before.
-        val (roasterId, roasters) = if (roasterPick != null) {
-            val row = coffee.crema.beans.pickedRoasterRow(roasterPick) { name -> newRoaster(name, now) }
-            val current = s.roasters.firstOrNull { it.id == row.id }
-            if (current == null) {
-                // A seed is created; a matched row that vanished since → by name.
-                if (roasterPick.isNew) row.id to (s.roasters + row) else resolveRoaster(roasterName, s.roasters, now)
-            } else {
-                // Only the catalogue fields; anything else edited since stays.
-                val merged = current.copy(
-                    name = row.name, website = row.website, country = row.country,
-                    catalogueRoasterId = row.catalogueRoasterId, updatedAt = now,
+        var saved = false
+        editRows(
+            { rows ->
+                // Resolve from the library, or from a new-bean draft (the "Add bean"
+                // → full-editor Save path — the bean isn't in [beans] yet).
+                val current = rows.beans.firstOrNull { it.id == id }
+                val draft = uiState().draftBean?.takeIf { it.id == id }
+                val existing = current ?: draft
+                saved = existing != null
+                if (existing == null) return@editRows rows
+                // A catalogue pick's roaster (the editor only passes it while the
+                // roaster input still names it): write the updated existing row, or
+                // create the seeded one, and file the bag under it. Otherwise resolve
+                // the typed name (find-or-create) as before.
+                val (roasterId, roasters) = if (roasterPick != null) {
+                    val row = coffee.crema.beans.pickedRoasterRow(roasterPick) { name -> newRoaster(name, now) }
+                    val held = rows.roasters.firstOrNull { it.id == row.id }
+                    if (held == null) {
+                        // A seed is created; a matched row that vanished since → by name.
+                        if (roasterPick.isNew) row.id to (rows.roasters + row) else resolveRoaster(roasterName, rows.roasters, now)
+                    } else {
+                        // Only the catalogue fields; anything else edited since stays.
+                        val merged = held.copy(
+                            name = row.name, website = row.website, country = row.country,
+                            catalogueRoasterId = row.catalogueRoasterId, updatedAt = now,
+                        )
+                        row.id to rows.roasters.map { if (it.id == row.id) merged else it }
+                    }
+                } else {
+                    // The name it already files under: keep that roaster, rather than
+                    // whichever row of that name comes first.
+                    val filed = current?.roasterId?.let { rid -> rows.roasters.firstOrNull { it.id == rid } }
+                    if (filed != null && filed.name.equals(roasterName.trim(), ignoreCase = true)) filed.id to rows.roasters.toList()
+                    else resolveRoaster(roasterName, rows.roasters, now)
+                }
+                // The form holds what the bag was when it opened: only what the user
+                // changed lands, so a debit or a sync since then stands.
+                val edited = when {
+                    current == null -> transform(existing)
+                    opened == null -> transform(current)
+                    else -> applyBeanDraft(current, transform(opened), opened, json)
+                }
+                val updated = edited.copy(roasterId = roasterId, updatedAt = now)
+                rows.copy(
+                    beans = rows.beans.with(if (current == null) rows.beans + updated else rows.beans.map { if (it.id == id) updated else it }),
+                    roasters = rows.roasters.with(roasters),
                 )
-                row.id to s.roasters.map { if (it.id == row.id) merged else it }
-            }
-        } else {
-            resolveRoaster(roasterName, s.roasters, now)
-        }
-        // The shell owns the full field mapping (the core Bean already models
-        // every field); we only resolve the roaster + stamp updatedAt here.
-        val updated = transform(existing).copy(roasterId = roasterId, updatedAt = now)
-        updateUi { it.copy(
-            beans = if (isNew) s.beans + updated else s.beans.map { if (it.id == id) updated else it },
-            roasters = roasters,
-            draftBean = null,
-        ) }
-        persistLibrary()
+            },
+            { st -> if (saved) st.copy(draftBean = null) else st },
+        )
+        if (saved) persistLibrary()
     }
 
     // ── Bean bag photos (Phase C) ────────────────────────────────────────────
@@ -1788,12 +1824,10 @@ class LibraryController(
             withContext(Dispatchers.IO) { BeanImageStore.put(app, beanId, bytes) }
             val ref = BeanImageStore.refForBean(beanId)
             val now = System.currentTimeMillis()
-            updateUi { st ->
-                st.copy(
-                    beans = st.beans.map { if (it.id == beanId) it.copy(imageRef = ref, updatedAt = now) else it },
-                    draftBean = st.draftBean?.let { if (it.id == beanId) it.copy(imageRef = ref, updatedAt = now) else it },
-                )
-            }
+            editRows(
+                { rows -> rows.copy(beans = rows.beans.mapped { if (it.id == beanId) it.copy(imageRef = ref, updatedAt = now) else it }) },
+                { st -> st.copy(draftBean = st.draftBean?.let { if (it.id == beanId) it.copy(imageRef = ref, updatedAt = now) else it }) },
+            )
             persistLibrary()
         }
     }
@@ -1803,12 +1837,10 @@ class LibraryController(
         scope.launch {
             withContext(Dispatchers.IO) { BeanImageStore.delete(app, beanId) }
             val now = System.currentTimeMillis()
-            updateUi { st ->
-                st.copy(
-                    beans = st.beans.map { if (it.id == beanId) it.copy(imageRef = null, updatedAt = now) else it },
-                    draftBean = st.draftBean?.let { if (it.id == beanId) it.copy(imageRef = null, updatedAt = now) else it },
-                )
-            }
+            editRows(
+                { rows -> rows.copy(beans = rows.beans.mapped { if (it.id == beanId) it.copy(imageRef = null, updatedAt = now) else it }) },
+                { st -> st.copy(draftBean = st.draftBean?.let { if (it.id == beanId) it.copy(imageRef = null, updatedAt = now) else it }) },
+            )
             persistLibrary()
         }
     }
@@ -1844,12 +1876,16 @@ class LibraryController(
      */
     fun deleteBean(id: String, alsoOnVisualizer: Boolean = false) {
         val doomed = uiState().beans.firstOrNull { it.id == id }
-        val remaining = uiState().beans.filterNot { it.id == id }
         val wasActive = uiState().activeBeanId == id
-        updateUi { it.copy(
-            beans = remaining,
-            activeBeanId = if (wasActive) remaining.firstOrNull()?.id else it.activeBeanId,
-        ) }
+        var firstLeft: String? = null
+        editRows(
+            { rows ->
+                val left = rows.beans.filtered { it.id != id }
+                firstLeft = left.firstOrNull()?.id
+                rows.copy(beans = left)
+            },
+            { if (wasActive) it.copy(activeBeanId = firstLeft) else it },
+        )
         // Drop the bag's photo too, so a deleted bean leaves no orphan blob.
         scope.launch(Dispatchers.IO) { BeanImageStore.delete(app, id) }
         persistLibrary()
@@ -1857,20 +1893,18 @@ class LibraryController(
     }
 
     /**
-     * Merge a finished Visualizer bean sync back into the library
-     * ([coffee.crema.visualizer.mergeSyncedRows]): touched rows replace their
-     * current versions, pulled additions are prepended, rows deleted mid-run
-     * stay deleted. Persisted.
+     * Change the bean library from a Visualizer bean sync: the run applies each
+     * row to the current list as it goes, so an edit made during it stands. The
+     * run persists through [persistLibrary] when it ends.
      */
-    fun applyBeanSync(result: coffee.crema.visualizer.BeanSyncResult, snapshotBeanIds: Set<String>, snapshotRoasterIds: Set<String>) {
-        if (result.beans.isEmpty() && result.roasters.isEmpty()) return
-        updateUi { st ->
-            st.copy(
-                beans = coffee.crema.visualizer.mergeSyncedRows(st.beans, result.beans, snapshotBeanIds) { it.id },
-                roasters = coffee.crema.visualizer.mergeSyncedRows(st.roasters, result.roasters, snapshotRoasterIds) { it.id },
-            )
-        }
-        persistLibrary()
+    fun editBeanLibrary(edit: (BeanLibrary) -> BeanLibrary) {
+        editRows(
+            { rows ->
+                val next = edit(BeanLibrary(rows.beans, rows.roasters, null))
+                rows.copy(beans = rows.beans.with(next.beans), roasters = rows.roasters.with(next.roasters))
+            },
+            { it },
+        )
     }
 
     /**
@@ -1881,7 +1915,7 @@ class LibraryController(
     fun duplicateBean(id: String) {
         val base = uiState().beans.firstOrNull { it.id == id } ?: return
         val copy = coffee.crema.beans.duplicateBean(base, System.currentTimeMillis())
-        updateUi { it.copy(beans = it.beans + copy) }
+        editBeans { rows -> rows.with(rows + copy) }
         persistLibrary()
     }
 
@@ -1910,7 +1944,7 @@ class LibraryController(
     /** Map a single bean through [transform], stamp `updatedAt`, persist. */
     internal fun mutateBean(id: String, transform: (Bean) -> Bean) {
         val now = System.currentTimeMillis()
-        updateUi { s -> s.copy(beans = s.beans.map { if (it.id == id) transform(it).copy(updatedAt = now) else it }) }
+        editBeans { rows -> rows.mapped { if (it.id == id) transform(it).copy(updatedAt = now) else it } }
         persistLibrary()
     }
 
@@ -1936,7 +1970,7 @@ class LibraryController(
             notes = notes,
             catalogueRoasterId = catalogueRoasterId?.takeIf { it.isNotBlank() },
         )
-        updateUi { it.copy(roasters = it.roasters + r) }
+        editRoasters { rows -> rows.with(rows + r) }
         persistLibrary()
     }
 
@@ -1956,8 +1990,8 @@ class LibraryController(
     ) {
         if (name.isBlank()) return
         val now = System.currentTimeMillis()
-        updateUi { it.copy(
-            roasters = it.roasters.map {
+        editRoasters { rows ->
+            rows.mapped {
                 if (it.id == id) it.copy(
                     name = name.trim(),
                     website = website?.takeIf { w -> w.isNotBlank() },
@@ -1967,8 +2001,8 @@ class LibraryController(
                     catalogueRoasterId = catalogueRoasterId?.takeIf { c -> c.isNotBlank() },
                     updatedAt = now,
                 ) else it
-            },
-        ) }
+            }
+        }
         persistLibrary()
     }
 
@@ -1985,17 +2019,18 @@ class LibraryController(
             coffee.crema.beans.planRoasterDelete(json, s.roasters, s.beans, id, cascade)
         }.getOrNull() ?: return
         val name = s.roasters.firstOrNull { it.id == id }?.name.orEmpty()
-        val after = coffee.crema.beans.applyRoasterDelete(
-            BeanLibrary(s.beans, s.roasters, s.activeBeanId), plan, System.currentTimeMillis(),
+        val now = System.currentTimeMillis()
+        var after = BeanLibrary()
+        editRows(
+            { rows ->
+                after = coffee.crema.beans.applyRoasterDelete(BeanLibrary(rows.beans, rows.roasters, s.activeBeanId), plan, now)
+                rows.copy(roasters = rows.roasters.with(after.roasters), beans = rows.beans.with(after.beans))
+            },
+            { st ->
+                val activeGone = st.activeBeanId != null && after.activeBeanId == null
+                st.copy(activeBeanId = if (activeGone) after.beans.firstOrNull()?.id else st.activeBeanId)
+            },
         )
-        val activeGone = s.activeBeanId != null && after.activeBeanId == null
-        updateUi { st ->
-            st.copy(
-                roasters = after.roasters,
-                beans = after.beans,
-                activeBeanId = if (activeGone) after.beans.firstOrNull()?.id else st.activeBeanId,
-            )
-        }
         // Cascaded bags leave no orphan photos.
         if (plan.deletedBeanIds.isNotEmpty()) {
             scope.launch(Dispatchers.IO) { plan.deletedBeanIds.forEach { BeanImageStore.delete(app, it) } }
@@ -2018,12 +2053,15 @@ class LibraryController(
         }.getOrNull() ?: return
         val moving = plan.beanIds.toSet()
         val now = System.currentTimeMillis()
-        updateUi { st ->
-            st.copy(
-                beans = st.beans.map { if (it.id in moving) it.copy(roasterId = plan.canonicalId, updatedAt = now) else it },
-                roasters = st.roasters.map { if (it.id == plan.dupeId) it.copy(canonicalRoasterId = plan.canonicalId, updatedAt = now) else it },
-            )
-        }
+        editRows(
+            { rows ->
+                rows.copy(
+                    beans = rows.beans.mapped { if (it.id in moving) it.copy(roasterId = plan.canonicalId, updatedAt = now) else it },
+                    roasters = rows.roasters.mapped { if (it.id == plan.dupeId) it.copy(canonicalRoasterId = plan.canonicalId, updatedAt = now) else it },
+                )
+            },
+            { it },
+        )
         persistLibrary()
         val names = s.roasters.associate { it.id to it.name }
         notify("Merged “${names[dupeId]}” into “${names[canonicalId]}” — ${moving.size} bag(s) moved")
@@ -2032,9 +2070,7 @@ class LibraryController(
     /** Un-merge a tagged duplicate: clear its duplicate-of pointer (its bags stay where they are). Persisted. */
     fun unmergeRoaster(id: String) {
         val now = System.currentTimeMillis()
-        updateUi { st ->
-            st.copy(roasters = st.roasters.map { if (it.id == id) it.copy(canonicalRoasterId = null, updatedAt = now) else it })
-        }
+        editRoasters { rows -> rows.mapped { if (it.id == id) it.copy(canonicalRoasterId = null, updatedAt = now) else it } }
         persistLibrary()
     }
 
@@ -2119,6 +2155,7 @@ class LibraryController(
             // remote the screen shows the hub's selection).
             profileName = profile?.name,
         )
+        assembling()
         val assembled = runCatching {
             bridge.takeStoredShot(json.encodeToString(ShotCaptureContext.serializer(), ctx))
         }.onFailure { appendLog("Shot assembly failed: ${it.message}") }.getOrNull()
@@ -2158,9 +2195,8 @@ class LibraryController(
             ) }
             appendLog("Shot discarded as aborted (<10 s, <5 g)")
         } else {
-            val next = historyWith(listOf(shot), s.history, keepId = shot.id)
-            updateUi { it.copy(history = next) }
-            scope.launch { historyStore.save(next) }
+            editHistory { rows -> historyWith(listOf(shot), rows, keepId = shot.id) }
+            saveHistory()
             // Auto-upload to every armed destination (Visualizer, Decent), one
             // notice for the batch, with the core's full series.
             autoUploadShot(shot, shot.samples)
@@ -2178,12 +2214,26 @@ class LibraryController(
      * surface it so the user can switch / archive / rate.
      */
     private fun debitBag(bean: Bean, dose: Float?): Float {
-        val remaining = bean.remaining ?: 0f
         val grams = dose ?: return 0f
-        val next = debitRemaining(remaining, grams) ?: return 0f
-        mutateBean(bean.id) { it.copy(remaining = next) }
-        if (next == 0f) onBagEmptied(bean)
-        return debitTaken(remaining, grams)
+        val now = System.currentTimeMillis()
+        var taken: Float? = null
+        var emptied = false
+        // From what the bag holds now: [bean] can be a read from before an edit.
+        editBeans { rows ->
+            rows.mapped { row ->
+                val remaining = row.remaining ?: 0f
+                val next = if (row.id == bean.id) debitRemaining(remaining, grams) else null
+                if (row.id == bean.id) {
+                    taken = next?.let { debitTaken(remaining, grams) }
+                    emptied = next == 0f
+                }
+                if (next == null) row else row.copy(remaining = next, updatedAt = now)
+            }
+        }
+        val debit = taken ?: return 0f
+        persistLibrary()
+        if (emptied) onBagEmptied(bean)
+        return debit
     }
 
     /**
@@ -2285,9 +2335,8 @@ class LibraryController(
             // machineSerial / Firmware / Model stay null — the #84 record-time
             // stamp belongs to the live-shot path only.
         )
-        val next = historyWith(listOf(shot), s.history, keepId = shot.id)
-        updateUi { it.copy(history = next) }
-        scope.launch { historyStore.save(next) }
+        editHistory { rows -> historyWith(listOf(shot), rows, keepId = shot.id) }
+        saveHistory()
         notify("Brew logged")
         return shot
     }
@@ -2297,9 +2346,8 @@ class LibraryController(
      * a method?" offer. Snapshots the label beside the id. Persisted.
      */
     fun retagBrewMethod(id: String, method: String, label: String) {
-        val next = uiState().history.map { if (it.id == id) it.copy(brewMethod = method, brewMethodLabel = label) else it }
-        updateUi { it.copy(history = next) }
-        scope.launch { historyStore.save(next) }
+        editHistory { rows -> rows.mapped { if (it.id == id) it.copy(brewMethod = method, brewMethodLabel = label) else it } }
+        saveHistory()
     }
 
     /**
@@ -2324,36 +2372,48 @@ class LibraryController(
         val shot = s.history.firstOrNull { it.id == id } ?: return
         if (!shot.isManualLog) return
         if (completedAtMs != null && brewDateError(completedAtMs, nowMs) != null) return
-        // Re-settle inventory before the row mutates, using the OLD dose —
-        // the core's resettleRemaining (only the net change moves, and no more
-        // comes back than the row took; null = nothing to persist, including an
-        // unchanged dose).
-        var bagDebit = shot.bagDebitG
-        if (doseG != null) {
-            s.beans.firstOrNull { it.id == shot.bean?.beanId }?.let { bean ->
-                val rem = bean.remaining ?: 0f
-                val size = bean.bagSize ?: 0f
-                bagDebit = resettledBagDebit(rem, size, shot.bagDebitG, shot.doseG ?: 0f, doseG)
-                resettleRemaining(rem, size, shot.bagDebitG, shot.doseG ?: 0f, doseG)?.let { next ->
-                    mutateBean(bean.id) { it.copy(remaining = next) }
+        // Re-settle inventory with the row, using the OLD dose — the core's
+        // resettleRemaining (only the net change moves, and no more comes back
+        // than the row took; null = nothing to persist, including an unchanged
+        // dose). Both from the rows as they stand, in one write.
+        var bagMoved = false
+        editRows(
+            { rows ->
+                val row = rows.history.firstOrNull { it.id == id } ?: return@editRows rows
+                var bagDebit = row.bagDebitG
+                var beans = rows.beans
+                bagMoved = false
+                if (doseG != null) {
+                    rows.beans.firstOrNull { it.id == row.bean?.beanId }?.let { bean ->
+                        val rem = bean.remaining ?: 0f
+                        val size = bean.bagSize ?: 0f
+                        bagDebit = resettledBagDebit(rem, size, row.bagDebitG, row.doseG ?: 0f, doseG)
+                        resettleRemaining(rem, size, row.bagDebitG, row.doseG ?: 0f, doseG)?.let { next ->
+                            bagMoved = true
+                            beans = rows.beans.mapped { if (it.id == bean.id) it.copy(remaining = next, updatedAt = nowMs) else it }
+                        }
+                    }
                 }
-            }
-        }
-        updateUi { st ->
-            val edited = st.history.map {
-                if (it.id != id) it
-                else it.copy(
-                    doseG = doseG ?: it.doseG,
-                    bagDebitG = bagDebit,
-                    waterG = waterG ?: it.waterG,
-                    yieldG = yieldG ?: it.yieldG,
-                    brewTempC = brewTempC ?: it.brewTempC,
-                    durationMs = durationMs ?: it.durationMs,
-                    completedAtMs = completedAtMs ?: it.completedAtMs,
+                val edited = rows.history.map {
+                    if (it.id != id) it
+                    else it.copy(
+                        doseG = doseG ?: it.doseG,
+                        bagDebitG = bagDebit,
+                        waterG = waterG ?: it.waterG,
+                        yieldG = yieldG ?: it.yieldG,
+                        brewTempC = brewTempC ?: it.brewTempC,
+                        durationMs = durationMs ?: it.durationMs,
+                        completedAtMs = completedAtMs ?: it.completedAtMs,
+                    )
+                }
+                rows.copy(
+                    beans = beans,
+                    history = rows.history.with(if (completedAtMs != null) edited.newestFirst() else edited),
                 )
-            }
-            st.copy(history = if (completedAtMs != null) edited.newestFirst() else edited)
-        }
+            },
+            { it },
+        )
+        if (bagMoved) persistLibrary()
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
     }
@@ -2361,12 +2421,10 @@ class LibraryController(
     /** Apply a user rating / tasting-notes edit to a logged shot. Persisted.
      *  An already-uploaded shot mirrors the edit to Visualizer (soft). */
     fun updateShot(id: String, rating: Int, notes: String) {
-        updateUi { st ->
-            st.copy(
-                history = st.history.map {
-                    if (it.id == id) it.copy(rating = rating.coerceIn(0, 5).takeIf { r -> r > 0 }, notes = notes.ifBlank { null }) else it
-                },
-            )
+        editHistory { rows ->
+            rows.mapped {
+            if (it.id == id) it.copy(rating = rating.coerceIn(0, 5).takeIf { r -> r > 0 }, notes = notes.ifBlank { null }) else it
+            }
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
@@ -2381,12 +2439,10 @@ class LibraryController(
      * would be a no-op round trip.
      */
     fun setShotNextPlan(id: String, nextPlan: String) {
-        updateUi { st ->
-            st.copy(
-                history = st.history.map {
-                    if (it.id == id) it.copy(nextPlan = nextPlan.ifBlank { null }) else it
-                },
-            )
+        editHistory { rows ->
+            rows.mapped {
+            if (it.id == id) it.copy(nextPlan = nextPlan.ifBlank { null }) else it
+            }
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
@@ -2400,17 +2456,15 @@ class LibraryController(
      */
     fun setShotPerson(id: String, field: String, name: String?) {
         val value = name?.trim()?.takeIf { it.isNotEmpty() }
-        updateUi { st ->
-            st.copy(
-                history = st.history.map {
-                    when {
-                        it.id != id -> it
-                        field == "barista" -> it.copy(barista = value)
-                        field == "drinker" -> it.copy(drinker = value)
-                        else -> it
-                    }
-                },
-            )
+        editHistory { rows ->
+            rows.mapped {
+            when {
+                it.id != id -> it
+                field == "barista" -> it.copy(barista = value)
+                field == "drinker" -> it.copy(drinker = value)
+                else -> it
+            }
+            }
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
@@ -2427,9 +2481,7 @@ class LibraryController(
      * override. Persisted; mirrors to the uploaded copy like [updateShot].
      */
     fun setShotPrivacy(id: String, privacy: String?) {
-        updateUi { st ->
-            st.copy(history = st.history.map { if (it.id == id) it.copy(privacy = privacy) else it })
-        }
+        editHistory { rows -> rows.mapped { if (it.id == id) it.copy(privacy = privacy) else it } }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
         schedulePatchEdited(id)
@@ -2441,9 +2493,7 @@ class LibraryController(
      * the fact). Persisted; mirrors to the uploaded copy like [updateShot].
      */
     fun setShotGrind(id: String, grind: Float?) {
-        updateUi { st ->
-            st.copy(history = st.history.map { if (it.id == id) it.copy(grindSetting = grind) else it })
-        }
+        editHistory { rows -> rows.mapped { if (it.id == id) it.copy(grindSetting = grind) else it } }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
         schedulePatchEdited(id)
@@ -2483,15 +2533,22 @@ class LibraryController(
         // gains nothing, null = nothing changed) and the new bag is debited, with
         // the row recording what it took this time. Web's moveShotBag is the same.
         val dose = shot.doseG ?: 0f
-        s.beans.firstOrNull { it.id == oldBeanId }?.let { old ->
-            creditShotDebit(old.remaining ?: 0f, old.bagSize ?: 0f, shot.bagDebitG, dose)?.let { credited ->
-                mutateBean(old.id) { it.copy(remaining = credited) }
+        // From what the old bag holds now.
+        if (oldBeanId != null) {
+            val now = System.currentTimeMillis()
+            var credited = false
+            editBeans { rows ->
+                credited = false
+                rows.mapped { row ->
+                    if (row.id != oldBeanId) return@mapped row
+                    creditShotDebit(row.remaining ?: 0f, row.bagSize ?: 0f, shot.bagDebitG, dose)
+                        ?.let { credited = true; row.copy(remaining = it, updatedAt = now) } ?: row
+                }
             }
+            if (credited) persistLibrary()
         }
         val bagDebit = bean?.let { debitBag(it, dose) }
-        updateUi { st ->
-            st.copy(history = st.history.map { if (it.id == id) it.copy(bean = beanSnapshot, bagDebitG = bagDebit) else it })
-        }
+        editHistory { rows -> rows.mapped { if (it.id == id) it.copy(bean = beanSnapshot, bagDebitG = bagDebit) else it } }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
         schedulePatchEdited(id)
@@ -2514,20 +2571,21 @@ class LibraryController(
     fun undoDiscardShot() {
         val shot = discardedShot ?: return
         discardedShot = null
-        val next = historyWith(listOf(shot), uiState().history, keepId = shot.id)
-        updateUi { it.copy(
-            history = next,
-            discardToastMessage = null,
-            lastShot = LastShot(
-                durationMs = shot.durationMs,
-                yieldG = shot.yieldG,
-                peakPressure = shot.peakPressure,
-                peakTemp = shot.peakTemp,
-                completedAtMs = shot.completedAtMs,
-                id = shot.id,
-            ),
-        ) }
-        scope.launch { historyStore.save(next) }
+        editRows(
+            { rows -> rows.copy(history = historyWith(listOf(shot), rows.history, keepId = shot.id)) },
+            { it.copy(
+                discardToastMessage = null,
+                lastShot = LastShot(
+                    durationMs = shot.durationMs,
+                    yieldG = shot.yieldG,
+                    peakPressure = shot.peakPressure,
+                    peakTemp = shot.peakTemp,
+                    completedAtMs = shot.completedAtMs,
+                    id = shot.id,
+                ),
+            ) },
+        )
+        saveHistory()
         autoUploadShot(shot, null)
     }
 
