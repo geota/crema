@@ -8,6 +8,7 @@ import coffee.crema.core.StoredHotWater
 import coffee.crema.core.initialHotWaterDose
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
+import coffee.crema.persist.saveItem
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -703,11 +704,11 @@ class SettingsStore(private val context: Context, private val json: Json) {
                     lastGeneration = generation
                 }
                 runCatching { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
-                    .onSuccess { saveStore(file, it) }
+                    .onSuccess { saveStore(file, "settings", it) }
                 // Every save of a stored dose rewrites the downgrade marker.
                 if (prefs.qcHotWaterMode != null) {
                     runCatching { json.encodeToString(StoredHotWater.serializer(), prefs.storedHotWater()) }
-                        .onSuccess { saveStore(markerFile, it) }
+                        .onSuccess { saveItem(markerFile, it) }
                 }
             }
         }

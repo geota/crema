@@ -282,7 +282,7 @@ class VisualizerStore(
 
     private fun write(state: VisualizerState): Boolean = try {
         // No `.bak` copies of sealed tokens (review 05 P3-5).
-        SafeFile.writeCredential(file, json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)))
+        SafeFile.writeCredential(file, json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)), "Visualizer settings")
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.

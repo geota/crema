@@ -14,6 +14,8 @@ import java.io.File
  * copies that the backup / device-transfer rules cannot name.
  */
 class SafeFileCredentialTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     @get:Rule val tmp = TemporaryFolder()
 
     @Before fun reset() = SafeFile.resetForTest()
