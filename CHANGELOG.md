@@ -84,6 +84,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Replace restore keeps your custom profiles on Android** — restoring your own
+  backup in Replace mode deleted every custom profile and reported "Restored 0
+  profile(s)". They now come back and the report counts them.
 - **Moving a shot off a bag gives back only what it took** — each shot now
   records the grams it actually took, and backups keep them. Moving 5 shots off
   an empty bag used to add about 90 g, and a bag with no tracked weight gained
