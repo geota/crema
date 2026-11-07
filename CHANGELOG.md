@@ -131,6 +131,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   it returns to where you left it. The list is shorter, so a picked shot's
   detail shows below it, and the detail's header no longer overprints itself.
   Web.
+- **Overlapping saves can't lose a store** — two saves of one file at once could
+  leave only its backup on disk, and a load could delete a save in progress. A
+  wipe restore lost its recipes this way on the next launch, and pinned and
+  hidden profiles, maintenance and the stop-at-weight model were open to it too.
+  Saves now take turns, and in those stores and shot history the newest save
+  lands last. Android.
 
 ## [0.10.0] — 2026-10-30
 
