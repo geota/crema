@@ -7,6 +7,7 @@ import coffee.crema.core.Pump
 import coffee.crema.core.Transition
 import coffee.crema.core.newProfileId
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.SafeFile
 import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.loadStore
@@ -73,8 +74,10 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
 
     /** The stored profiles. Saves stay refused until [openSaves]. */
     suspend fun load(): List<String> = withContext(Dispatchers.IO) {
-        loadStore(file, WHAT, open = false) { json.decodeFromString(CustomProfileLibrary.serializer(), it) }
-            .valueOrNull()?.profiles?.map { it.toString() } ?: emptyList()
+        when (val outcome = loadStore(file, WHAT, open = false) { json.decodeFromString(CustomProfileLibrary.serializer(), it) }) {
+            is SafeLoad.Loaded -> outcome.value.profiles.map { it.toString() }
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> emptyList()
+        }
     }
 
     /** Persist the custom profiles (full-JSON strings in; best-effort). A
@@ -102,7 +105,7 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
         withContext(Dispatchers.IO) { saveLock.withLock { eraseStore(file) } }
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "customProfiles.json"
         const val WHAT = "custom profiles"
     }
