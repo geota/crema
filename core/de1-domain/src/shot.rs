@@ -423,7 +423,13 @@ impl ShotMonitor {
         }
 
         let old_phase = self.phase;
-        let new_phase = ShotPhase::classify(info.state, info.substate);
+        // An unknown substate says nothing about the phase: the pour isn't
+        // over because a newer firmware named a moment of it.
+        let new_phase = if in_espresso && info.substate == SubState::Unknown {
+            old_phase
+        } else {
+            ShotPhase::classify(info.state, info.substate)
+        };
         if new_phase != old_phase {
             self.phase = new_phase;
             events.push(ShotEvent::PhaseChanged(new_phase));
@@ -598,6 +604,30 @@ mod tests {
 
     fn state(state: MachineState, substate: SubState) -> StateInfo {
         StateInfo { state, substate }
+    }
+
+    #[test]
+    fn an_unknown_substate_keeps_the_phase_and_the_shot_clock() {
+        let mut monitor = ShotMonitor::new();
+        monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(0));
+        let events =
+            monitor.on_state_info(state(MachineState::Espresso, SubState::Unknown), ms(1_000));
+        assert!(events.is_empty(), "{events:?}");
+        assert_eq!(monitor.phase(), ShotPhase::Pouring);
+        let events = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(5_000));
+        let Some(ShotEvent::Completed(record)) = events.last() else {
+            panic!("the shot ends: {events:?}");
+        };
+        assert_eq!(record.duration, ms(5_000), "the unknown moment was timed");
+    }
+
+    #[test]
+    fn an_unknown_substate_outside_espresso_still_ends_the_shot() {
+        let mut monitor = ShotMonitor::new();
+        monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(0));
+        let events = monitor.on_state_info(state(MachineState::Idle, SubState::Unknown), ms(1_000));
+        assert!(matches!(events.last(), Some(ShotEvent::Completed(_))));
+        assert_eq!(monitor.phase(), ShotPhase::Idle);
     }
 
     /// A telemetry sample carrying the given frame number; other fields zeroed.

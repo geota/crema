@@ -957,7 +957,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// wind-down after the stop) used to keep the curve growing past
 			// the stop point — issue #44's "truncate at the stop" report.
 			const flowing =
-				snapshot.machineSubstate === 'Preinfusion' || snapshot.machineSubstate === 'Pouring';
+				snapshot.shotPhase === 'Preinfusion' || snapshot.shotPhase === 'Pouring';
 			const series =
 				snapshot.shotInProgress && flowing
 					? [...snapshot.shotTelemetry, sample].slice(-MAX_TELEMETRY_SAMPLES)
@@ -1484,6 +1484,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			return {
 				...snapshot,
 				eventLog: appendLog(snapshot.eventLog, `Decode error: ${event.content.message}`)
+			};
+		case 'UnknownMachineByte':
+			return {
+				...snapshot,
+				eventLog: appendLog(snapshot.eventLog, `Unknown machine substate byte: ${event.content.byte}`)
 			};
 		// F16: the core holds a request through the profile-download guard;
 		// the log keeps the record (no toast — it goes out on its own).
