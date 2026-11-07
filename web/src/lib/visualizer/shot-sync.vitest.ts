@@ -431,12 +431,11 @@ describe('reconcileShots', () => {
 		}
 	});
 
-	it('skips tombstoned locals when matching signatures', () => {
+	it('binds an unbound tombstone, so a shot deleted during its upload stays deleted', () => {
 		const local = shot({ id: 'shot:l-1', deletedAt: Date.now() });
 		const remote = wire({ id: 'r-1' });
 		const actions = reconcileShots([local], [remote]);
-		// Tombstoned local should NOT bind — instead we ADD the remote.
-		assert.equal(actions[0].kind, 'add');
+		assert.equal(actions[0].kind, 'bind');
 	});
 
 	it('plans the right actions in order for a mixed pull', () => {

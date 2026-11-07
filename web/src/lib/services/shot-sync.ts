@@ -47,6 +47,7 @@ import {
 	isRateLimited,
 	isRecoverable,
 	quotaLimit,
+	refusedUpload,
 	quotaNotice,
 	RATE_LIMIT_NOTICE,
 	retryDelayMs,
@@ -84,6 +85,13 @@ import {
 	visualizerShotPatchJson as wasmVisualizerShotPatchJson
 } from '#lib/wasm/de1_wasm.js';
 import { enqueueEntry as enqueueSyncOp } from './queue-store.ts';
+import {
+	beginPullRun,
+	clearUploadAttempted,
+	expiredTombstones,
+	markUploadAttempted,
+	uploadReturned
+} from '#lib/visualizer/upload-marks.js';
 
 // Spec-typed aliases — these ride DIRECTLY on the wire so they stay
 // in lock-step with the OpenAPI spec (regenerate via `pnpm openapi`).
@@ -356,31 +364,6 @@ export function describeUnsyncedStop(
 	return null;
 }
 
-/**
- * An AMBIGUOUS-SUCCESS upload failure: a `ResponseDecodeError` (the server
- * returned a 2xx with no parseable `id`) or a `NetworkError` (a malformed 2xx
- * body — `visualizerCall` can't tell that apart from a real transport drop).
- * In both, `POST /shots/upload` may already have created the shot server-side
- * even though we never read its id, so re-POSTing it — exactly what an
- * `op: 'create'` retry-queue entry does — would create a REAL duplicate on the
- * account. These route to the self-heal-by-reconcile path in
- * `uploadUnsyncedShots` instead of the naive enqueue.
- *
- * (Fully duplicate-proof uploads ultimately need a server-side idempotency key
- * on `POST /shots/upload`; that's a Visualizer-side change, out of scope here.)
- */
-function isAmbiguousSuccess(e: VisualizerCallError | ResponseDecodeError): boolean {
-	return e._tag === 'ResponseDecodeError' || e._tag === 'NetworkError';
-}
-
-/**
- * Slop (ms) subtracted from a shot's `completedAt` to seed the self-heal pull
- * cursor. A just-uploaded shot's remote `updated_at` is ~now (≥ `completedAt`),
- * so any non-negative slop already includes it; the margin only guards against
- * clock skew between the device and the server.
- */
-const SELF_HEAL_SLOP_MS = 60_000;
-
 // ── Public surface ──────────────────────────────────────────────────────
 
 export interface ShotPatch {
@@ -590,7 +573,12 @@ export const ShotSyncLive = Layer.effect(
 			yield* requireConnected;
 			if (refusedNoSamples(shot)) return yield* new ShotWithoutSeriesError({ shotId: shot.id });
 			const body = buildShotPayload(shot);
-			const raw = yield* call('/shots/upload', { method: 'POST', body });
+			// Stored first: a kill mid-POST must leave a delete able to see it.
+			markUploadAttempted(shot.id);
+			const raw = yield* call('/shots/upload', { method: 'POST', body }).pipe(
+				Effect.tapError((e) => Effect.sync(() => void (refusedUpload(e) && clearUploadAttempted(shot.id)))),
+				Effect.ensuring(Effect.sync(() => uploadReturned(shot.id)))
+			);
 			const result = decodeResponse(ShotUploadResultSchema, raw, 'POST /shots/upload');
 			if (!result || !result.id) {
 				return yield* new ResponseDecodeError({
@@ -763,6 +751,7 @@ export const ShotSyncLive = Layer.effect(
 			const wireShots: WireShot[] = [];
 			const samplesById = new Map<string, TimedSample[]>();
 			const profilesById = new Map<string, unknown>();
+			let rowsMissed = false;
 
 			const initial: PullState = { page: 1, totalPages: 1, reachedOlder: false, keepGoing: true };
 			const finalState = yield* iterate(initial, {
@@ -789,6 +778,7 @@ export const ShotSyncLive = Layer.effect(
 									() => Effect.succeedNone
 								)
 							);
+							if (Option.isNone(detailOpt)) rowsMissed = true;
 							if (Option.isSome(detailOpt)) {
 								const detail = detailOpt.value;
 								wireShots.push(wireShotFromDetail(summary, detail));
@@ -818,7 +808,7 @@ export const ShotSyncLive = Layer.effect(
 
 			// `keepGoing` is still true only when the loop exited because the
 			// `maxPages` cap was hit — i.e. more pages remained.
-			return { shots: wireShots, samplesById, profilesById, truncated: finalState.keepGoing };
+			return { shots: wireShots, samplesById, profilesById, truncated: finalState.keepGoing, rowsMissed };
 		});
 
 		/**
@@ -838,9 +828,9 @@ export const ShotSyncLive = Layer.effect(
 				let refused = 0;
 				// Tombstones included: a shot deleted here whose remote DELETE
 				// hasn't landed yet is still on Visualizer, and without its
-				// tombstone the planner saw it as new and pulled it back. The
-				// planner never binds to a tombstone; its `update` is skipped below.
-				const local = history.rawAll;
+				// tombstone the planner saw it as new and pulled it back. A bound
+				// one's `update` is skipped below; an unbound one binds by upload key.
+				const local = history.rawAll.filter((s) => !isBrewLog(s));
 				const actions = reconcileShots(local, remote);
 				const tombstoned = (localId: string): boolean =>
 					history.get(localId)?.deletedAt != null;
@@ -875,7 +865,10 @@ export const ShotSyncLive = Layer.effect(
 							at: Date.now()
 						});
 					} else if (action.kind === 'bind') {
+						// A row deleted during its upload keeps the id as a tombstone,
+						// so the remote copy stays out of the history.
 						history.bindVisualizerId(action.localId, action.visualizerId);
+						if (tombstoned(action.localId)) continue;
 						fillBarista(action.localId, action.remote);
 						appendSyncLog({
 							direction: 'pull',
@@ -917,7 +910,8 @@ export const ShotSyncLive = Layer.effect(
 			sinceMs: number,
 			opts: PullOptions = {}
 		) {
-			const { shots, samplesById, profilesById, truncated } = yield* pullAllShotsSince(
+			const run = beginPullRun();
+			const { shots, samplesById, profilesById, truncated, rowsMissed } = yield* pullAllShotsSince(
 				sinceMs,
 				opts
 			);
@@ -935,6 +929,9 @@ export const ShotSyncLive = Layer.effect(
 					at: Date.now(),
 					error: historyFullNotice(refused, history.capacity)
 				});
+			}
+			if (!truncated && !rowsMissed) {
+				for (const id of expiredTombstones(run)) history.purgeTombstone(id);
 			}
 			return { pulled: shots.length, truncated, refused };
 		});
@@ -971,8 +968,6 @@ export const ShotSyncLive = Layer.effect(
 			/**
 			 * Record a non-success outcome: enqueue a recoverable error for a timed
 			 * retry through `UploadQueue`, and append a `skip` line to the sync log.
-			 * Shared by the plain-failure path and the self-heal "couldn't bind"
-			 * fallback.
 			 */
 			const skipOrQueue = (shot: StoredShot, e: VisualizerCallError | ResponseDecodeError): void => {
 				if (isRecoverable(e)) {
@@ -996,22 +991,6 @@ export const ShotSyncLive = Layer.effect(
 				});
 			};
 
-			/**
-			 * Self-heal an {@link isAmbiguousSuccess} upload: the shot may already
-			 * be on the server, so rather than re-POST (→ duplicate) we PULL the
-			 * shots updated around this one's completion and let `reconcileShots`
-			 * bind the unsynced local to its freshly-created remote by djb2
-			 * signature. Resolves `true` once the bind has landed (the local now
-			 * carries a `visualizerId`). Never throws — a failed self-heal pull
-			 * simply means "not bound yet", and the caller falls back to
-			 * {@link skipOrQueue}.
-			 */
-			const selfHealBind = (shot: StoredShot): Effect.Effect<boolean> =>
-				pullAndReconcileShots(history, shot.completedAt - SELF_HEAL_SLOP_MS).pipe(
-					Effect.ignore,
-					Effect.map(() => Boolean(history.get(shot.id)?.visualizerId))
-				);
-
 			let uploaded = 0;
 			let stopped: UnsyncedStop | null = null;
 
@@ -1032,37 +1011,15 @@ export const ShotSyncLive = Layer.effect(
 							return false;
 						})
 					),
+					// A failure that may have landed anyway goes back on the queue and
+					// re-POSTs: Visualizer's `sha` hands the same row back.
 					Effect.catch((e) =>
-						isAmbiguousSuccess(e)
-							? // The POST may already have landed — bind by reconcile, never
-								// re-POST. A successful bind is logged as a push (the reconcile
-								// pull also logs its own `bind` line); a miss falls back to the
-								// queue ONLY when recoverable (so a 2xx-no-id is never re-POSTed).
-								selfHealBind(shot).pipe(
-									Effect.map((bound) => {
-										if (bound) {
-											uploaded += 1;
-											appendSyncLog({
-												direction: 'push',
-												entity: 'shot',
-												id: shot.id,
-												name: shot.profileName ?? 'Shot',
-												at: Date.now()
-											});
-										} else {
-											skipOrQueue(shot, e);
-										}
-										// Ambiguous-success errors never abort the loop: they aren't
-										// an auth/premium wall, and the remaining shots are unaffected.
-										return false;
-									})
-								)
-							: Effect.sync(() => {
-									skipOrQueue(shot, e);
-									const abort = shouldAbortLoop(e);
-									if (abort) stopped = stopFor(e);
-									return abort;
-								})
+						Effect.sync(() => {
+							skipOrQueue(shot, e);
+							const abort = shouldAbortLoop(e);
+							if (abort) stopped = stopFor(e);
+							return abort;
+						})
 					),
 					// A throw while exporting one shot is a defect, which `Effect.catch`
 					// lets through. Skip that shot, or every pass ends at it and the

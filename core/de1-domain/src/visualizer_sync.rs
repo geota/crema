@@ -330,7 +330,8 @@ pub struct LocalShotRef {
     #[serde(default)]
     pub visualizer_id: Option<String>,
     /// Unix epoch ms when this shot was soft-deleted, or `null` / missing
-    /// when active. Tombstoned locals must NOT bind to a remote.
+    /// when active. An unbound one is a shot deleted during its upload: it
+    /// binds like any other, so the remote copy stays out of the history.
     #[serde(default)]
     #[typeshare(serialized_as = "Option<I64>")]
     pub deleted_at: Option<i64>,
@@ -366,7 +367,7 @@ pub enum ReconcileAction {
         /// The remote row carrying the new annotations.
         remote: WireShot,
     },
-    /// An unbound local matches by signature — bind it to this remote
+    /// An unbound local matches by upload key — bind it to this remote
     /// `visualizer_id`.
     Bind {
         /// The local row to bind.
@@ -524,11 +525,11 @@ pub fn signature_for_roaster(name: &str) -> String {
 ///
 /// Three-step planner:
 ///   1. If a local shot's `visualizerId` matches a remote → `Update`
-///      action (the LWW gate on `updated_at_ms` happens caller-side
-///      so the planner stays signature-agnostic on annotation
-///      conflicts — only the editable annotations differ).
-///   2. Else compute the signature; look for an unbound, non-tombstoned
-///      local with a matching signature → `Bind`.
+///      action. A bound tombstone lands here too, and the shell skips it.
+///   2. Else look for an unbound local with the same [`shot_upload_key`]
+///      and a duration within [`UPLOAD_KEY_DURATION_SLACK_MS`] → `Bind`.
+///      An unbound tombstone binds too, so a shot deleted during its
+///      upload doesn't come back: the shell puts the id on the tombstone.
 ///   3. Else → `Add`.
 ///
 /// The action list preserves the input remote order.
@@ -538,25 +539,16 @@ pub fn reconcile_shots(local: &[LocalShotRef], remote: &[WireShot]) -> Vec<Recon
 
     let mut actions = Vec::with_capacity(remote.len());
 
-    // Index 1: bound locals, keyed by visualizer_id, for fast Update
-    // lookup.
+    // Bound locals, keyed by visualizer_id, for fast Update lookup.
     let mut by_vis_id: HashMap<&str, &LocalShotRef> = HashMap::new();
-    // Index 2: unbound, non-tombstoned locals, keyed by signature, for
-    // Bind lookup. Buckets are FIFO — `Vec::remove(0)` mirrors the TS
-    // `candidates.shift()` semantics.
-    let mut by_sig: HashMap<String, Vec<&LocalShotRef>> = HashMap::new();
+    // Unbound locals in input order, each binding once.
+    let mut unbound: Vec<&LocalShotRef> = Vec::new();
 
     for s in local {
         if let Some(vis) = s.visualizer_id.as_deref() {
             by_vis_id.insert(vis, s);
-        } else if s.deleted_at.is_none() {
-            let sig = signature_for_shot(
-                s.completed_at,
-                s.duration,
-                s.profile_name.as_deref(),
-                s.final_weight,
-            );
-            by_sig.entry(sig).or_default().push(s);
+        } else {
+            unbound.push(s);
         }
     }
 
@@ -568,20 +560,11 @@ pub fn reconcile_shots(local: &[LocalShotRef], remote: &[WireShot]) -> Vec<Recon
             });
             continue;
         }
-        let sig = signature_for_shot(
-            r.clock,
-            r.duration_ms,
-            r.profile_title.as_deref(),
-            r.final_weight_g,
-        );
-        // FIFO: take the first candidate, matching the TS
-        // `candidates.shift()`. If multiple unbound locals collide on
-        // the same signature, the de-dup banner on the History page
-        // surfaces it post-bind so the user can merge manually.
-        if let Some(bucket) = by_sig.get_mut(&sig)
-            && !bucket.is_empty()
+        if let Some(at) = unbound
+            .iter()
+            .position(|s| upload_matches(s.completed_at, s.duration, r))
         {
-            let target = bucket.remove(0);
+            let target = unbound.remove(at);
             actions.push(ReconcileAction::Bind {
                 local_id: target.id.clone(),
                 visualizer_id: r.id.clone(),
@@ -593,6 +576,29 @@ pub fn reconcile_shots(local: &[LocalShotRef], remote: &[WireShot]) -> Vec<Recon
     }
 
     actions
+}
+
+/// How far a remote row's duration may sit from the local one and still be the
+/// same shot. Visualizer's differs by the settle tail. Two shots in one start
+/// second need two machines on one account, and a wrong bind would silently
+/// PATCH another shot, so the second alone isn't enough.
+pub const UPLOAD_KEY_DURATION_SLACK_MS: i64 = 1_500;
+
+/// The key of an uploaded shot: its start second, which is the `timestamp`
+/// Crema sends and Visualizer returns as `clock`, on the list row and at no
+/// cost. The server's own duration and weight differ from local ones, so
+/// [`signature_for_shot`] can't match a real upload to its local row.
+#[must_use]
+pub fn shot_upload_key(completed_at_ms: i64, duration_ms: i64) -> i64 {
+    (completed_at_ms - duration_ms).max(0) / 1000
+}
+
+/// Whether the remote row `r` is the upload of a local shot: the same key, or the
+/// `completedAt` form rows carried before geota/crema#44, and a duration in reach.
+fn upload_matches(completed_at_ms: i64, duration_ms: i64, r: &WireShot) -> bool {
+    let clock = r.clock / 1000;
+    (clock == shot_upload_key(completed_at_ms, duration_ms) || clock == completed_at_ms / 1000)
+        && (r.duration_ms - duration_ms).abs() <= UPLOAD_KEY_DURATION_SLACK_MS
 }
 
 // ── JSON facade for the wasm / FFI bridges ────────────────────────────
@@ -1379,29 +1385,97 @@ mod tests {
         );
     }
 
+    /// The remote row of [`local_shot`]: started 30 s before it completed.
+    fn upload(id: &str) -> WireShot {
+        WireShot {
+            clock: 1_699_999_970_000,
+            ..wire(id)
+        }
+    }
+
     #[test]
-    fn reconcile_binds_unbound_locals_by_signature_collision() {
+    fn reconcile_binds_an_unbound_local_by_its_upload_key() {
         let local = local_shot("shot:l-1", None);
-        let remote = wire("r-1");
+        let remote = upload("r-1");
         let actions = reconcile_shots(&[local], std::slice::from_ref(&remote));
-        assert_eq!(actions.len(), 1);
         assert_eq!(
-            actions[0],
-            ReconcileAction::Bind {
+            actions,
+            vec![ReconcileAction::Bind {
                 local_id: "shot:l-1".to_owned(),
                 visualizer_id: "r-1".to_owned(),
                 remote
+            }]
+        );
+    }
+
+    #[test]
+    fn the_key_ignores_what_the_server_settles_differently() {
+        let local = local_shot("shot:l-1", None);
+        let remote = WireShot {
+            duration_ms: 31_200,
+            final_weight_g: Some(38.4),
+            profile_title: None,
+            ..upload("r-1")
+        };
+        assert!(matches!(
+            reconcile_shots(&[local], &[remote])[0],
+            ReconcileAction::Bind { .. }
+        ));
+    }
+
+    #[test]
+    fn a_pre_44_row_binds_by_its_completed_at() {
+        let local = local_shot("shot:l-1", None);
+        assert!(matches!(
+            reconcile_shots(&[local], &[wire("r-1")])[0],
+            ReconcileAction::Bind { .. }
+        ));
+    }
+
+    #[test]
+    fn same_second_other_shot_not_bound() {
+        let local = local_shot("shot:l-1", None);
+        for duration_ms in [28_400, 31_600] {
+            let remote = WireShot {
+                duration_ms,
+                ..upload("r-1")
+            };
+            assert!(
+                matches!(
+                    reconcile_shots(std::slice::from_ref(&local), &[remote])[0],
+                    ReconcileAction::Add { .. }
+                ),
+                "{duration_ms}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_local_binds_once() {
+        let local = local_shot("shot:l-1", None);
+        let actions = reconcile_shots(&[local], &[upload("r-1"), upload("r-2")]);
+        assert!(matches!(actions[0], ReconcileAction::Bind { .. }));
+        assert!(matches!(actions[1], ReconcileAction::Add { .. }));
+    }
+
+    #[test]
+    fn an_unbound_tombstone_binds_rather_than_coming_back() {
+        let mut local = local_shot("shot:l-1", None);
+        local.deleted_at = Some(1_700_000_000_000);
+        assert_eq!(
+            reconcile_shots(&[local], &[upload("r-1")])[0],
+            ReconcileAction::Bind {
+                local_id: "shot:l-1".to_owned(),
+                visualizer_id: "r-1".to_owned(),
+                remote: upload("r-1")
             }
         );
     }
 
     #[test]
-    fn reconcile_skips_tombstoned_locals_when_matching_signatures() {
-        let mut local = local_shot("shot:l-1", None);
-        local.deleted_at = Some(1_700_000_000_000);
-        let actions = reconcile_shots(&[local], &[wire("r-1")]);
-        // Tombstoned local should NOT bind — instead we ADD the remote.
-        assert!(matches!(actions[0], ReconcileAction::Add { .. }));
+    fn the_key_is_the_start_second() {
+        assert_eq!(shot_upload_key(1_700_000_000_500, 30_000), 1_699_999_970);
+        assert_eq!(shot_upload_key(1_000, 5_000), 0, "never before the epoch");
     }
 
     #[test]
@@ -1422,27 +1496,13 @@ mod tests {
                 id: "r-new".to_owned(),
                 clock: 1_700_000_020_000,
                 duration_ms: 28_000,
-                profile_title: Some("q".to_owned()),
-                final_weight_g: Some(42.0),
-                notes: None,
-                rating: None,
-                updated_at_ms: None,
-                tag_list: Vec::new(),
-                bean: None,
-                barista: None,
+                ..wire("r-new")
             },
             WireShot {
                 id: "r-bind".to_owned(),
-                clock: 1_700_000_010_000,
+                clock: 1_699_999_985_000,
                 duration_ms: 25_000,
-                profile_title: Some("p".to_owned()),
-                final_weight_g: Some(40.0),
-                notes: None,
-                rating: None,
-                updated_at_ms: None,
-                tag_list: Vec::new(),
-                bean: None,
-                barista: None,
+                ..wire("r-bind")
             },
         ];
         let actions = reconcile_shots(&[bound, unbound], &remotes);

@@ -76,6 +76,8 @@ class UploadPolicy(
     /** Core `visualizer_queue_decision(op, tag, status, body, attemptsMade)` as JSON. */
     val queueDecisionJson: (op: String, tag: String, status: Int?, body: String, attemptsMade: Int) -> String =
         { _, _, _, _, _ -> "{\"kind\":\"Drop\",\"details\":{\"stop_pass\":false}}" },
+    /** Core `classify_sync_failure` for a Visualizer reply, as JSON. */
+    val classifyJson: (status: Int, body: String) -> String = { _, _ -> "{\"kind\":\"Forbidden\"}" },
 ) {
     /** Whether a failed refresh-token grant ([e] from the refresh) ends the session. */
     fun refreshEndsSession(e: Throwable): Boolean {
@@ -87,6 +89,13 @@ class UploadPolicy(
     fun queueDecision(op: String, e: Throwable, attemptsMade: Int): RetryDecision {
         val http = e as? VisualizerError.Http
         return RetryDecision.parse(queueDecisionJson(op, errorTag(e), http?.status, http?.body.orEmpty(), attemptsMade))
+    }
+
+    /** Whether the server answered [e] and took nothing: the POST can't have landed. */
+    fun refusedUpload(e: Throwable): Boolean {
+        val http = e as? VisualizerError.Http ?: return false
+        val kind = Json.parseToJsonElement(classifyJson(http.status, http.body)).jsonObject["kind"]?.jsonPrimitive?.contentOrNull
+        return kind == "Rejected" || kind == "Quota"
     }
 
     fun quotaLimitOf(e: Throwable): Int? = (e as? VisualizerError.Http)?.let { quotaLimit(it.status, it.body) }
@@ -117,6 +126,16 @@ class UploadPolicy(
                     body,
                     attempts.coerceAtLeast(0).toUInt(),
                     Random.nextDouble(),
+                )
+            },
+            classifyJson = { status, body ->
+                coffee.crema.core.classifySyncFailure(
+                    "visualizer",
+                    "call",
+                    status.takeIf { it in 0..0xFFFF }?.toUShort(),
+                    body,
+                    null,
+                    0L,
                 )
             },
             quotaLimit = { status, body ->

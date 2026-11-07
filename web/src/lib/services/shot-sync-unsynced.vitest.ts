@@ -1,17 +1,9 @@
 /**
- * `#lib/services/shot-sync-unsynced.vitest` — vitest for `ShotSync.uploadUnsyncedShots`'s
- * EF1 self-heal: a `POST /shots/upload` that returns a 2xx with no parseable
- * `id` (→ `ResponseDecodeError`) means the shot is ALREADY on the server but
- * never got its `visualizerId` bound locally. Re-POSTing it (the naive "enqueue
- * create" retry) would create a real duplicate on the account, so instead we
- * PULL the shots updated around this one and let `reconcileShots` bind the local
- * to its freshly-created remote by signature.
- *
- * These two tests pin that contract: an ambiguous-success upload (a) NEVER
- * enqueues a `create` op (which would re-POST → duplicate), and (b) binds via
- * the self-heal pull when the reconcile matches. The wasm reconcile + signature
- * are mocked to fixed outputs (their byte-values are pinned by the node:test
- * `visualizer/shot-sync.test.ts`); we exercise the orchestration around them.
+ * `#lib/services/shot-sync-unsynced.vitest` — vitest for
+ * `ShotSync.uploadUnsyncedShots`. A failure that may have landed anyway goes
+ * back on the queue and re-POSTs: Visualizer's `sha` hands the same row back, so
+ * nothing here pulls to find it. The wasm reconcile + signature are mocked to
+ * fixed outputs; we exercise the orchestration around them.
  * Run: `pnpm test:vitest`.
  */
 
@@ -68,7 +60,13 @@ vi.mock('#lib/visualizer/sync-config.js', () => ({
 }));
 
 import { describeUnsyncedStop, ShotSync, ShotSyncLive, type UnsyncedUploadResult } from './shot-sync.ts';
-import { HttpStatusError } from '../effect/errors.ts';
+import { HttpStatusError, NetworkError } from '../effect/errors.ts';
+import {
+	markUnboundTombstone,
+	markUploadAttempted,
+	uploadAttempted,
+	uploadReturned
+} from '#lib/visualizer/upload-marks.js';
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import type { StoredShot } from '#lib/history/model.js';
@@ -120,6 +118,9 @@ function mkHistory(initial: StoredShot[]) {
 		get all() {
 			return [...map.values()];
 		},
+		get rawAll() {
+			return [...map.values()];
+		},
 		get: (id: string) => map.get(id),
 		bindVisualizerId: (id: string, visualizerId: string) => {
 			const s = map.get(id);
@@ -147,7 +148,7 @@ const shot = (over: Partial<StoredShot> = {}): StoredShot =>
 		...over
 	}) as unknown as StoredShot;
 
-/** POST upload → 2xx with NO id; the self-heal list page carries one summary. */
+/** POST upload → 2xx with NO id. */
 const handler = (req: HttpRequest): unknown => {
 	if (req.method === 'POST' && req.url.endsWith('/shots/upload')) return {}; // 2xx, no id
 	if (req.url.includes('/shots?'))
@@ -162,42 +163,132 @@ function run(history: HistoryStore) {
 }
 
 beforeEach(() => {
+	localStorage.clear();
 	h.throwsOn = null;
 	h.reconcile = [];
 	h.enqueueEntry.mockClear();
 	h.appendSyncLog.mockClear();
 });
 
-describe('ShotSync.uploadUnsyncedShots — EF1 self-heal on 2xx-no-id', () => {
-	it('binds via the self-heal pull instead of re-POSTing (no duplicate enqueue)', async () => {
-		// The reconcile pull matches the just-uploaded shot → emits a bind.
-		h.reconcile = [{ kind: 'bind', localId: 's1', visualizerId: 'viz-1', remote: { id: 'viz-1' } as never }];
+describe('ShotSync.uploadUnsyncedShots — a 2xx with no id', () => {
+	it('leaves the shot in the backlog, with no pull to find it', async () => {
 		const history = mkHistory([shot()]);
-
-		const exit = await run(history);
+		const { layer, calls } = mkHttp(handler);
+		const program = ShotSync.pipe(Effect.flatMap((s) => s.uploadUnsyncedShots(history)));
+		const exit = await Effect.runPromiseExit(
+			Effect.provide(program, Layer.provide(ShotSyncLive, Layer.merge(layer, vault)))
+		);
 		expect(Exit.isSuccess(exit)).toBe(true);
 
-		// The local row is now bound to its freshly-created remote.
-		expect(history.get('s1')?.visualizerId).toBe('viz-1');
-		// Crucially, we did NOT enqueue a `create` op (which would re-POST → dupe).
-		expect(h.enqueueEntry).not.toHaveBeenCalled();
-		// And it is logged as a push (the bind landed).
-		expect(h.appendSyncLog.mock.calls.some(([e]) => e.direction === 'push' && e.id === 's1')).toBe(true);
+		expect(history.get('s1')?.visualizerId).toBeFalsy();
+		expect(calls.filter((c) => c.url.includes('/shots?'))).toEqual([]);
+		// Nothing proves it landed, and the next pass re-POSTs to the same row.
+		expect(h.appendSyncLog.mock.calls.some(([e]) => e.direction === 'skip' && e.id === 's1')).toBe(true);
+	});
+});
+
+describe('the upload attempt mark (#331)', () => {
+	const posting = (reply: () => Effect.Effect<Response, unknown>) => {
+		const seen: boolean[] = [];
+		const layer = Layer.succeed(
+			HttpClient,
+			HttpClient.of({
+				request: () => {
+					seen.push(uploadAttempted('s1'));
+					return reply() as never;
+				}
+			})
+		);
+		return { seen, layer };
+	};
+	const upload = (layer: Layer.Layer<HttpClient>) =>
+		Effect.runPromiseExit(
+			Effect.provide(
+				ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot()))),
+				Layer.provide(ShotSyncLive, Layer.merge(layer, vault))
+			)
+		);
+
+	it('is down before the POST goes, and stays when nothing says it failed', async () => {
+		const { seen, layer } = posting(() =>
+			Effect.fail(new HttpStatusError({ status: 503, url: 'u', body: '' }))
+		);
+		await upload(layer);
+		expect(seen).toEqual([true]);
+		expect(uploadAttempted('s1')).toBe(true);
 	});
 
-	it('does NOT enqueue a create when the self-heal pull finds no match (avoids duplicate)', async () => {
-		// Reconcile finds nothing to bind (e.g. the pull lagged the write).
-		h.reconcile = [];
-		const history = mkHistory([shot()]);
+	it('stays through a dropped connection', async () => {
+		const { layer } = posting(() => Effect.fail(new NetworkError({ cause: 'x', url: 'u' })));
+		await upload(layer);
+		expect(uploadAttempted('s1')).toBe(true);
+	});
 
-		const exit = await run(history);
-		expect(Exit.isSuccess(exit)).toBe(true);
+	it('goes when Visualizer refuses the shot', async () => {
+		const { layer } = posting(() =>
+			Effect.fail(new HttpStatusError({ status: 422, url: 'u', body: '{"error":"bad file"}' }))
+		);
+		await upload(layer);
+		expect(uploadAttempted('s1')).toBe(false);
+	});
+});
 
-		// Still unbound — but a `ResponseDecodeError` is NOT recoverable, so the loop
-		// must NOT enqueue a create (re-POST would duplicate the server-side shot).
-		expect(history.get('s1')?.visualizerId).toBeFalsy();
-		expect(h.enqueueEntry).not.toHaveBeenCalled();
-		expect(h.appendSyncLog.mock.calls.some(([e]) => e.direction === 'skip' && e.id === 's1')).toBe(true);
+describe('ShotSync.pullAndReconcileShots — unbound tombstones (#331)', () => {
+	const pull = (history: HistoryStore, reply: (req: HttpRequest) => Effect.Effect<Response, unknown>) => {
+		const layer = Layer.succeed(HttpClient, HttpClient.of({ request: (req) => reply(req) as never }));
+		return Effect.runPromise(
+			Effect.provide(
+				ShotSync.pipe(Effect.flatMap((s) => s.pullAndReconcileShots(history, 0))),
+				Layer.provide(ShotSyncLive, Layer.merge(layer, vault))
+			)
+		);
+	};
+	const json = (body: unknown) => Effect.succeed(new Response(JSON.stringify(body)));
+	const emptyList = () => json({ data: [], paging: { count: 0, page: 1, limit: 50, pages: 1 } });
+	const oneRow = (req: HttpRequest) =>
+		req.url.includes('/shots?')
+			? json({ data: [{ id: 'viz-1', clock: 1000, updated_at: 2000 }], paging: { count: 1, page: 1, limit: 50, pages: 1 } })
+			: Effect.fail(new HttpStatusError({ status: 503, url: req.url }));
+	const withPurge = (history: HistoryStore) => {
+		const purge = vi.fn();
+		(history as unknown as { purgeTombstone: typeof purge }).purgeTombstone = purge;
+		return purge;
+	};
+
+	it('unbound_tombstone_expires_after_complete_pull', async () => {
+		markUnboundTombstone('gone', false);
+		const history = mkHistory([]);
+		const purge = withPurge(history);
+		await pull(history, emptyList);
+		expect(purge).toHaveBeenCalledWith('gone');
+	});
+
+	it('a pull already running when it was written leaves it', async () => {
+		const history = mkHistory([]);
+		const purge = withPurge(history);
+		await pull(history, () => {
+			markUnboundTombstone('gone', false);
+			return emptyList();
+		});
+		expect(purge).not.toHaveBeenCalled();
+	});
+
+	it('a pull that missed a row leaves it', async () => {
+		markUnboundTombstone('gone', false);
+		const history = mkHistory([]);
+		const purge = withPurge(history);
+		await pull(history, oneRow);
+		expect(purge).not.toHaveBeenCalled();
+	});
+
+	it('leaves one with its POST still out', async () => {
+		markUploadAttempted('gone');
+		markUnboundTombstone('gone', false);
+		const history = mkHistory([]);
+		const purge = withPurge(history);
+		await pull(history, emptyList);
+		expect(purge).not.toHaveBeenCalled();
+		uploadReturned('gone');
 	});
 });
 

@@ -1096,7 +1096,7 @@ private fun PhoneShotDetail(
             title = "Delete shot?",
             body = "This shot will be removed from this device. This can’t be undone.",
             what = "shot",
-            remoteAvailable = vm.canDeleteShotOnVisualizer(shot.visualizerId),
+            remoteAvailable = vm.canDeleteShotOnVisualizer(shot),
             onConfirm = { remote -> vm.deleteShot(shot.id, alsoOnVisualizer = remote); confirmDelete = false; onDeleted() },
             onDismiss = { confirmDelete = false },
         )

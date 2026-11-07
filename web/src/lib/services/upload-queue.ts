@@ -48,6 +48,8 @@ import {
 	type QueueEntry
 } from './queue-store.ts';
 import { getHistoryStore } from '#lib/history/index.js';
+import { toast } from '#lib/components/shared/toast.svelte.js';
+import { appendSyncLog } from '#lib/visualizer/sync-config.js';
 
 export type { EnqueueInput, QueueEntry } from './queue-store.ts';
 
@@ -56,6 +58,13 @@ export interface DrainResult {
 	succeeded: number;
 	dropped: number;
 	deferred: number;
+}
+
+/** A remote delete Visualizer won't take: it says so, and the local delete stands. */
+function reportRefusedDelete(entry: QueueEntry, why: string): void {
+	const name = entry.entity === 'shot' ? 'Shot' : entry.entity === 'bean' ? 'Bag' : 'Roaster';
+	appendSyncLog({ direction: 'delete', entity: entry.entity, id: entry.id, name, at: Date.now(), error: why });
+	toast.error(`Visualizer refused to delete a ${name.toLowerCase()}, so its copy stays there: ${why}`);
 }
 
 const DEFERRED: DrainResult = { processed: 0, succeeded: 0, dropped: 0, deferred: 1 };
@@ -111,7 +120,9 @@ export const UploadQueueLive = Layer.effect(
 						// Spends no attempt, and a row read before this has no curve.
 						yield* Effect.promise(() => getHistoryStore().seriesReady());
 						const shot = yield* Effect.sync(() => getHistoryStore().get(entry.id));
-						if (!shot) return; // local row vanished — nothing to upload
+						// Deleted meanwhile: the row is a tombstone now, and uploading it
+						// would only make a remote copy to delete.
+						if (!shot || shot.deletedAt != null) return;
 						if (shot.visualizerId) return; // raced; already bound
 						const { visualizerId } = yield* shotSync.uploadShot(shot);
 						yield* Effect.sync(() => getHistoryStore().bindVisualizerId(entry.id, visualizerId));
@@ -172,6 +183,10 @@ export const UploadQueueLive = Layer.effect(
 					if (decision.kind === 'Drop') {
 						yield* dequeue(entry.entity, entry.id, entry.op);
 						out.dropped += 1;
+						// The row's tombstone stays, so the copy is never pulled back.
+						if (entry.op === 'delete') {
+							yield* Effect.sync(() => reportRefusedDelete(entry, describeVisualizerError(e)));
+						}
 						if (decision.details.stop_pass) break;
 						continue;
 					}

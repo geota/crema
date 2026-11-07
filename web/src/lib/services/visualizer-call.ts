@@ -195,6 +195,13 @@ export function isRateLimited(e: VisualizerCallError | ResponseDecodeError): boo
 	return e._tag === 'HttpStatusError' && e.status === 429;
 }
 
+/** Whether the server answered `e` and took nothing: a POST can't have landed. */
+export function refusedUpload(e: VisualizerCallError | ResponseDecodeError): boolean {
+	if (e._tag !== 'HttpStatusError') return false;
+	const { kind } = syncFailureOf(e);
+	return kind === 'Rejected' || kind === 'Quota';
+}
+
 /**
  * Whether Visualizer refused the whole account (disabled, unconfirmed, or a
  * token missing a scope): every further request hits the same wall, though the

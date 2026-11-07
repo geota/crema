@@ -866,6 +866,47 @@ mod tests {
         assert!(doc.get("metadata").is_none(), "{doc}");
     }
 
+    /// Through the real export, so a fake can't share the local formula and
+    /// pass: what Crema sends is what `clock` and `duration` come back as.
+    #[test]
+    fn upload_key_binds_real_export() {
+        let mut shot = fixture();
+        shot.record.samples.last_mut().unwrap().elapsed = shot.record.duration;
+        let local = crate::LocalShotRef {
+            id: "l".to_owned(),
+            completed_at: i64::try_from(shot.completed_at).unwrap(),
+            duration: i64::try_from(shot.record.duration.as_millis()).unwrap(),
+            profile_name: None,
+            final_weight: None,
+            visualizer_id: None,
+            deleted_at: None,
+        };
+        let exported: serde_json::Value =
+            serde_json::from_str(&export_v2_json_shot(&shot).unwrap()).unwrap();
+        let elapsed = exported["elapsed"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        // Visualizer's parser takes the last elapsed as the duration, and hands
+        // the `timestamp` back as `clock`.
+        let detail = serde_json::json!({ "duration": elapsed });
+        let clock = exported["timestamp"].as_i64().unwrap();
+        let remote = crate::wire_shot_from_detail("r-1", clock, 0, &detail);
+        assert!(matches!(
+            crate::reconcile_shots(std::slice::from_ref(&local), std::slice::from_ref(&remote))[0],
+            crate::ReconcileAction::Bind { .. }
+        ));
+
+        // A row uploaded before #44 sent `completedAt`.
+        let old = crate::wire_shot_from_detail("r-2", local.completed_at / 1000, 0, &detail);
+        assert!(matches!(
+            crate::reconcile_shots(&[local], &[old])[0],
+            crate::ReconcileAction::Bind { .. }
+        ));
+    }
+
     #[test]
     fn exports_a_v2_document_with_the_expected_top_level_shape() {
         let shot = fixture();

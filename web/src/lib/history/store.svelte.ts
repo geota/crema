@@ -17,6 +17,8 @@
  * {@link getHistoryStore}. It loads synchronously from `localStorage`.
  */
 
+import { enqueueEntry, readQueue } from '#lib/services/queue-store.js';
+import { markUnboundTombstone, settleUploadMarks, uploadAttempted } from '#lib/visualizer/upload-marks.js';
 import type { RustStoredShot, TimedSample } from '#lib/core/index.js';
 import type { BrewSeries } from '#lib/core/crema-core.js';
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
@@ -99,6 +101,14 @@ function dropCapture(id: string): void {
 	void getCaptureStore()
 		.delete(id)
 		.catch(() => {});
+}
+
+/** Whether a shot's upload may have reached Visualizer, or is about to. */
+export function uploadPending(id: string): boolean {
+	return (
+		uploadAttempted(id) ||
+		readQueue().entries.some((e) => e.entity === 'shot' && e.id === id && e.op === 'create')
+	);
 }
 
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
@@ -563,17 +573,24 @@ export class HistoryStore {
 	 * tombstone after the remote acknowledges. The History UI filters
 	 * tombstones out via {@link all}.
 	 *
-	 * If the shot has no `visualizerId` (never uploaded), the row is
-	 * removed outright — there is nothing to propagate to a remote.
+	 * A row with no `visualizerId` whose upload is under way keeps its
+	 * tombstone too, since a binding can arrive later (#331): from the upload
+	 * finishing, or from a pull finding the row. `deleteRemote` records whether
+	 * the remote copy goes as well, once its id is known.
+	 *
+	 * If the shot was never offered to Visualizer, the row is removed
+	 * outright — there is nothing to propagate to a remote.
 	 */
-	delete(id: string): void {
+	delete(id: string, { deleteRemote = false }: { deleteRemote?: boolean } = {}): void {
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
 		const target = this.shots[idx];
-		if (!target.visualizerId) {
+		const keepsTombstone = Boolean(target.visualizerId) || uploadPending(id);
+		if (!keepsTombstone) {
 			// Never synced — hard delete is safe.
 			this.shots = this.shots.filter((s) => s.id !== id);
 		} else {
+			if (!target.visualizerId) markUnboundTombstone(id, deleteRemote);
 			this.shots = [
 				...this.shots.slice(0, idx),
 				{ ...target, deletedAt: Date.now() },
@@ -582,7 +599,7 @@ export class HistoryStore {
 		}
 		// A tombstone stays until the remote delete lands, which may be never;
 		// its capture is the row's, and the row is gone for the user.
-		if (this.persist() && target.visualizerId) dropCapture(id);
+		if (this.persist() && keepsTombstone) dropCapture(id);
 	}
 
 	/**
@@ -592,6 +609,7 @@ export class HistoryStore {
 	 */
 	purgeTombstone(id: string): void {
 		this.shots = this.shots.filter((s) => s.id !== id);
+		settleUploadMarks(id);
 		this.persist();
 	}
 
@@ -601,6 +619,7 @@ export class HistoryStore {
 	 * reload sees the binding.
 	 */
 	bindVisualizerId(id: string, visualizerId: string): void {
+		const tombstone = settleUploadMarks(id);
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
 		this.shots = [
@@ -609,6 +628,8 @@ export class HistoryStore {
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();
+		// Deleted during its upload, with the remote copy to go too.
+		if (tombstone?.deleteRemote) enqueueEntry({ entity: 'shot', id, op: 'delete', visualizerId });
 	}
 
 	/**

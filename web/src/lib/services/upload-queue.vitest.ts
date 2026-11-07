@@ -39,6 +39,7 @@ import {
 } from '../effect/errors.ts';
 import { enqueueEntry, readQueue } from './queue-store.ts';
 import { initTestWasm } from '#lib/testing/test-init.js';
+import { toast } from '#lib/components/shared/toast.svelte.js';
 
 // The drain's recoverable-vs-drop decision goes through the wasm-backed
 // `isRecoverable` (CORE5), so init the bundle first.
@@ -276,13 +277,26 @@ describe('UploadQueue.drain — a remote delete outlives its attempts (#331)', (
 		}
 	});
 
+	it('a shot deleted before its retry is not uploaded', async () => {
+		mockHistory.get.mockReturnValue({ id: 's1', deletedAt: 5 });
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v' }));
+		const result = await drainWith({ uploadShot });
+		expect(uploadShot).not.toHaveBeenCalled();
+		expect(result.succeeded).toBe(1);
+		expect(readQueue().entries).toHaveLength(0);
+	});
+
 	it('a terminal failure stops the delete and leaves the tombstone', async () => {
+		const notice = vi.spyOn(toast, 'error').mockImplementation(() => {});
 		enqueueEntry({ entity: 'shot', id: 's1', op: 'delete', visualizerId: 'viz-9' });
 		const result = await drainWith({
 			deleteShot: () => Effect.fail(new HttpStatusError({ status: 403, url: '/d', body: '{"error":"You are not authorized to perform this action."}' }))
 		});
 		expect(result.dropped).toBe(1);
 		expect(mockHistory.purgeTombstone).not.toHaveBeenCalled();
+		expect(notice).toHaveBeenCalledTimes(1);
+		expect(notice.mock.calls[0][0]).toContain('refused to delete a shot');
 	});
 });
 
