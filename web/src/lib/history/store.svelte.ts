@@ -35,7 +35,6 @@ import {
 	clearAllSeries,
 	deleteSeries,
 	getAllSeries,
-	pruneSeriesTo,
 	putSeries
 } from './series-store';
 import {
@@ -49,6 +48,7 @@ import {
 	type StoredShot
 } from './model';
 import type { Bean, Roaster } from '#lib/bean/index.js';
+import { getCaptureStore } from '#lib/capture/store.js';
 
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
 const STORED_SHOT_FORMAT_VERSION = 3;
@@ -86,12 +86,32 @@ function seriesSaveFailed(): void {
 	toast.error('Could not save this shot\u2019s telemetry — storage may be full.');
 }
 
+/** Delete one shot's raw capture, best effort (no IndexedDB, or it refused). */
+function dropCapture(id: string): void {
+	void getCaptureStore()
+		.delete(id)
+		.catch(() => {});
+}
+
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
 export class HistoryStore {
 	/** The recorded shots, newest first. Loaded from localStorage. */
 	private shots = $state.raw<StoredShot[]>(loadShots());
 
+	/**
+	 * Ids of the rows this tab has written, or loaded. A row's series and
+	 * capture are only ever deleted when its id leaves this set, never because
+	 * a listing doesn't name them: rows that a corrupt load lost were never in
+	 * it, so their curves stay and a row that comes back later finds its own
+	 * (#325). P3's `delete(ids)` replaces this.
+	 */
+	private known = new Set<string>();
+
+	/** Above zero while a restore runs: see {@link pauseDeletes}. */
+	private deletesPaused = 0;
+
 	constructor() {
+		this.markLive(this.shots.map((s) => s.id));
 		// Two-phase boot (review #27): summaries loaded synchronously above;
 		// each shot's telemetry series hydrates from IndexedDB in the
 		// background (reassigning `shots` keeps readers reactive). Also the
@@ -114,11 +134,41 @@ export class HistoryStore {
 					: s
 			);
 			if (legacy.length > 0) this.persist();
-			await pruneSeriesTo(new Set(this.shots.map((s) => s.id)));
 		} catch {
 			// IndexedDB unavailable (private mode, etc.) — history still
 			// works this session from memory; only durability degrades.
 		}
+	}
+
+	/** Point {@link known} at `ids`, writing and deleting nothing. */
+	private markLive(ids: Iterable<string>): void {
+		this.known = new Set(ids);
+	}
+
+	/**
+	 * Take rows another tab wrote. Nothing is deleted: a stale tab's rows must
+	 * not cost this one a good curve, and the tab that removed a row deletes its
+	 * series. PR9's storage listener reads the rows and hydrates the new ids.
+	 */
+	adoptRows(rows: StoredShot[]): void {
+		this.shots = rows;
+		this.markLive(rows.map((s) => s.id));
+	}
+
+	/**
+	 * Turn series and capture deletes off until the returned function runs, for
+	 * a restore: saves still write and still move {@link known} to what they
+	 * wrote, but delete nothing. Restore's own deletes arrive with its marker
+	 * (restore-safety PR7).
+	 */
+	pauseDeletes(): () => void {
+		this.deletesPaused += 1;
+		let resumed = false;
+		return () => {
+			if (resumed) return;
+			resumed = true;
+			this.deletesPaused -= 1;
+		};
 	}
 
 	/**
@@ -147,28 +197,48 @@ export class HistoryStore {
 	 * Persist the shot list to localStorage — WITHOUT the sample series
 	 * (those live in IndexedDB, review #27), so the blob stays a few KB per
 	 * shot and the 300-shot cap is actually reachable. A quota failure
-	 * evicts the oldest shots and retries once, and is never silent.
+	 * evicts the oldest shots and retries once, and is never silent. Returns
+	 * whether the rows were stored; only then does {@link settleDeletes} run,
+	 * as until then the old rows are still there and need their curves.
 	 */
-	private persist(): void {
-		const stripped = this.shots.map((s) => ({
-			...s,
-			record: { ...s.record, samples: [] }
-		}));
-		if (writeJsonChecked(HISTORY_KEY, stripped, false)) return;
+	private persist(): boolean {
+		if (this.writeRows()) {
+			this.settleDeletes();
+			return true;
+		}
 		// Quota hit even without series — evict the oldest 10% and retry.
 		const keep = Math.max(1, Math.floor(this.shots.length * 0.9));
 		const dropped = this.shots.length - keep;
 		this.shots = this.shots.slice(0, keep);
-		const retry = this.shots.map((s) => ({
+		if (!this.writeRows()) {
+			toast.error('Shot history could not be saved — storage is full.');
+			return false;
+		}
+		toast.error(
+			`Shot storage was full — dropped the ${dropped} oldest shot${dropped === 1 ? '' : 's'} to keep saving.`
+		);
+		this.settleDeletes();
+		return true;
+	}
+
+	/** Write the rows to localStorage, without their series. */
+	private writeRows(): boolean {
+		const stripped = this.shots.map((s) => ({
 			...s,
 			record: { ...s.record, samples: [] }
 		}));
-		if (writeJsonChecked(HISTORY_KEY, retry, false)) {
-			toast.error(
-				`Shot storage was full — dropped the ${dropped} oldest shot${dropped === 1 ? '' : 's'} to keep saving.`
-			);
-		} else {
-			toast.error('Shot history could not be saved — storage is full.');
+		return writeJsonChecked(HISTORY_KEY, stripped, false);
+	}
+
+	/** After a stored write: delete the curves of the rows that left {@link known}. */
+	private settleDeletes(): void {
+		const ids = new Set(this.shots.map((s) => s.id));
+		const gone = [...this.known].filter((id) => !ids.has(id));
+		this.markLive(ids);
+		if (this.deletesPaused > 0) return;
+		for (const id of gone) {
+			void deleteSeries(id).catch(() => {});
+			dropCapture(id);
 		}
 	}
 
@@ -202,8 +272,7 @@ export class HistoryStore {
 	/** Wipe all recorded shots — for a "replace from backup" restore. */
 	clearAllShots(): void {
 		this.shots = [];
-		this.persist();
-		void clearAllSeries().catch(() => {});
+		if (this.persist()) void clearAllSeries().catch(() => {});
 	}
 
 	/**
@@ -442,7 +511,9 @@ export class HistoryStore {
 				...this.shots.slice(idx + 1)
 			];
 		}
-		this.persist();
+		// A tombstone stays until the remote delete lands, which may be never;
+		// its capture is the row's, and the row is gone for the user.
+		if (this.persist() && target.visualizerId) dropCapture(id);
 	}
 
 	/**
@@ -453,7 +524,6 @@ export class HistoryStore {
 	purgeTombstone(id: string): void {
 		this.shots = this.shots.filter((s) => s.id !== id);
 		this.persist();
-		void deleteSeries(id).catch(() => {});
 	}
 
 	/**

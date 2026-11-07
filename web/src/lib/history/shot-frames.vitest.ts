@@ -14,7 +14,6 @@ vi.mock('./series-store', () => ({
 	putSeries: async () => {},
 	getAllSeries: async () => new Map(),
 	deleteSeries: async () => {},
-	pruneSeriesTo: async () => {},
 	clearAllSeries: async () => {}
 }));
 

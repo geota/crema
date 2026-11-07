@@ -84,6 +84,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A damaged shot history keeps every curve on the web** — when the rows
+  couldn't be read, the next load deleted every saved curve and raw capture, so
+  the kept-aside rows could never get them back (#325). A curve or capture now
+  goes only when its own shot leaves the history, once that save has landed, and
+  anything left over stays on disk until Erase all data. A row that comes back
+  finds its curve. Web.
+
 - **Replace restore keeps your custom profiles on Android** — restoring your own
   backup in Replace mode deleted every custom profile and reported "Restored 0
   profile(s)". They now come back and the report counts them.

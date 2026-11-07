@@ -44,7 +44,6 @@ import {
 } from '#lib/history/index.js';
 import { commitShotCompletion } from '#lib/history/shot-persistence.js';
 import { isCremaJsonl, shotsFromCremaJsonl } from '#lib/history/crema-jsonl.js';
-import { getCaptureStore } from '#lib/capture/index.js';
 import {
 	getProfileStore,
 	effectiveCremaProfile,
@@ -629,10 +628,9 @@ export class CremaApp {
 		// comes back with its lock (audit M3).
 		void this.firmware.restore();
 		// Best-effort: ask the browser for persistent storage (so IndexedDB
-		// captures aren't evicted under disk pressure), and garbage-collect
-		// any captures whose StoredShot no longer exists. Fire and forget —
-		// neither is on the critical path of app readiness.
-		void this.bootCaptureStore();
+		// captures aren't evicted under disk pressure). Fire and forget — it
+		// isn't on the critical path of app readiness.
+		if (typeof navigator !== 'undefined') void navigator.storage?.persist?.().catch(() => {});
 		// Wire the Visualizer upload-queue lifecycle (drain once on app start +
 		// every 5 min foreground tick). The `online` / `visibilitychange` DOM
 		// listeners are wired at the shell (`+layout.svelte`), which owns the
@@ -654,27 +652,6 @@ export class CremaApp {
 			document.addEventListener('visibilitychange', () => {
 				if (document.hidden) this.wake.cancel();
 			});
-		}
-	}
-
-	/**
-	 * One-shot capture-store housekeeping at app construction: request
-	 * persistent storage, then drop captures whose `StoredShot` has been
-	 * evicted from the history cap (or deleted by the user) since last load.
-	 */
-	private async bootCaptureStore(): Promise<void> {
-		if (typeof navigator !== 'undefined') {
-			try {
-				await navigator.storage?.persist?.();
-			} catch {
-				// Best-effort — a refusal is fine.
-			}
-		}
-		try {
-			const ids = new Set(getHistoryStore().all.map((s) => s.id));
-			await getCaptureStore().pruneTo(ids);
-		} catch {
-			// The captures DB may not be openable (private mode etc.) — fine.
 		}
 	}
 
