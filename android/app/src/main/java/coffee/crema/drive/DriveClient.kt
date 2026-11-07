@@ -24,8 +24,10 @@ import java.net.URLEncoder
  * passes a valid access token (from the Drive auth flow, refreshed as needed).
  */
 
-private const val UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
-private const val FILES_URL = "https://www.googleapis.com/drive/v3/files"
+/** The Drive API's host, which a test points at a local server. */
+@Volatile internal var driveApiRoot = "https://www.googleapis.com"
+private val UPLOAD_URL get() = "$driveApiRoot/upload/drive/v3/files"
+private val FILES_URL get() = "$driveApiRoot/drive/v3/files"
 
 /** A backup file in Drive (the subset of fields we request; newest-first on list). */
 @Serializable
@@ -95,12 +97,27 @@ suspend fun driveUploadBackup(
         }
     }
 
-/** List this app's backup files, newest first. */
-suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> =
+/** List this app's backup files, newest first: all of them, as retention can't
+ *  hold on to a fullest copy it was never shown. Throws if any page fails. */
+suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> {
+    val files = mutableListOf<DriveFile>()
+    var pageToken: String? = null
+    do {
+        val page = driveListPage(accessToken, pageToken, json)
+        files += page.files
+        pageToken = page.nextPageToken
+    } while (pageToken != null)
+    return files
+}
+
+private class DriveFilePage(val files: List<DriveFile>, val nextPageToken: String?)
+
+private suspend fun driveListPage(accessToken: String, pageToken: String?, json: Json): DriveFilePage =
     withContext(Dispatchers.IO) {
         val q = URLEncoder.encode("name contains 'crema-backup' and trashed = false", "UTF-8")
-        val fields = URLEncoder.encode("files(id,name,modifiedTime,size)", "UTF-8")
-        val url = "$FILES_URL?q=$q&fields=$fields&orderBy=modifiedTime%20desc&pageSize=50"
+        val fields = URLEncoder.encode("nextPageToken,files(id,name,modifiedTime,size)", "UTF-8")
+        val page = pageToken?.let { "&pageToken=" + URLEncoder.encode(it, "UTF-8") }.orEmpty()
+        val url = "$FILES_URL?q=$q&fields=$fields&orderBy=modifiedTime%20desc&pageSize=100$page"
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000
@@ -112,11 +129,14 @@ suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> =
             val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
             if (status !in 200..299) throw IOException(errorMessage(json, resp, status, "list"))
-            val files = runCatching { json.parseToJsonElement(resp).jsonObject["files"]?.jsonArray }.getOrNull()
-                ?: return@withContext emptyList()
-            files.mapNotNull {
-                runCatching { json.decodeFromString(DriveFile.serializer(), it.toString()) }.getOrNull()
-            }
+            val body = runCatching { json.parseToJsonElement(resp).jsonObject }.getOrNull()
+                ?: return@withContext DriveFilePage(emptyList(), null)
+            DriveFilePage(
+                body["files"]?.jsonArray.orEmpty().mapNotNull {
+                    runCatching { json.decodeFromString(DriveFile.serializer(), it.toString()) }.getOrNull()
+                },
+                body["nextPageToken"]?.jsonPrimitive?.contentOrNull,
+            )
         } finally {
             conn.disconnect()
         }

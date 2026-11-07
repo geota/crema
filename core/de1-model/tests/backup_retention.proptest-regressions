@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 79c5d7e68a3beb8580dbe3f09b423bf348c854d922fead385161ccf4aed24c40 # shrinks to keep = 0, days = [Upload { device: 1, counts: BackupCounts { shots: 178, curves: 143 }, legacy: false }, Upload { device: 1, counts: BackupCounts { shots: 177, curves: 143 }, legacy: false }]
+cc 8faede4a85ed34f116eb5deb818439de72d9d02a08d23dd0af484db1ca0491e3 # shrinks to keep = 0, days = [Upload { device: 0, counts: BackupCounts { shots: 150, curves: 148 }, legacy: false }, Upload { device: 0, counts: BackupCounts { shots: 149, curves: 148 }, legacy: false }, Upload { device: 0, counts: BackupCounts { shots: 149, curves: 148 }, legacy: false }]

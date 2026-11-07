@@ -54,6 +54,7 @@
 
 pub mod app_settings;
 pub mod auto_tare;
+pub mod backup_retention;
 pub mod bean;
 pub mod bean_coerce;
 pub mod bean_filter;
@@ -123,6 +124,12 @@ pub mod weight_gate;
 pub use auto_tare::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_SETTLE_BAND_G, AUTO_TARE_SETTLE_SAMPLES, AUTO_TARE_THRESHOLD_G,
     MAX_PRE_SHOT_ZERO_OFFSET_G, TareSettleWindow, pre_shot_zero_offset,
+};
+pub use backup_retention::{
+    AutoBackupName, AutoBackupRetention, BackupCounts, BackupFile, BackupShrink, BackupShrinkKind,
+    auto_backup_file_name, auto_backup_retention, auto_backup_retention_json,
+    initial_auto_backup_keep, own_auto_backup_count, own_auto_backup_count_json,
+    parse_auto_backup_name,
 };
 pub use bean::{
     BREWS_REMAINING_WINDOW, BagStock, Bean, BeanMix, BeanOrigin, BeanRoastType,

@@ -7,6 +7,47 @@ package coffee.crema.core
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
+/// What dropped between a device's last two backups.
+@Serializable
+enum class BackupShrinkKind(val string: String) {
+	@SerialName("shots")
+	Shots("shots"),
+	@SerialName("curves")
+	Curves("curves"),
+}
+
+/// A backup holding under half of what the same device's last one held.
+@Serializable
+data class BackupShrink (
+	val kind: BackupShrinkKind,
+	val now: UInt,
+	val was: UInt
+)
+
+/// What to do after an automatic upload.
+@Serializable
+data class AutoBackupRetention (
+	/// Ids of the files to delete: this device's automatic copies, no others.
+	val delete: List<String>,
+	/// Set when the newest copy is far smaller than the one before it.
+	val shrink: BackupShrink? = null
+)
+
+/// How many shots a backup holds, and how many of those have curves.
+@Serializable
+data class BackupCounts (
+	val shots: UInt,
+	val curves: UInt
+)
+
+/// A file in Drive, as a shell lists it.
+@Serializable
+data class BackupFile (
+	val id: String,
+	val name: String,
+	val modifiedMs: Long
+)
+
 /// Whether a bag of coffee is a single-origin lot or a blend. `None` =
 /// unknown / unset. Serialises as the lowercase wire string
 /// (`"single"` / `"blend"`) to match the TS shell's typed string union.

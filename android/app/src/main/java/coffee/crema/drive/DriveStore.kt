@@ -42,6 +42,10 @@ data class DriveState(
     /** Epoch ms of the last SUCCESSFUL backup upload, manual or automatic —
      *  drives the "Last backed up X ago" readout. Additive → nullable. */
     val lastBackupSuccessAtMs: Long? = null,
+    /** Automatic copies kept per device: set by the first retention after this
+     *  field arrived, from the core's `initial_auto_backup_keep`, so an update
+     *  deletes nothing it didn't before. Additive → nullable. */
+    val autoBackupKeep: Int? = null,
     /**
      * The stored state as read, when the keystore couldn't open a secret this
      * start ([SecretBox.Opened.Unavailable]); in memory only. Meanwhile the

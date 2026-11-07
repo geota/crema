@@ -70,6 +70,9 @@ internal data class BuiltBackup(
     val jsonl: String,
     val degraded: List<String> = emptyList(),
     val omitted: List<OmittedBackupRow> = emptyList(),
+    /** Shots written, and how many have a curve. */
+    val shotCount: UInt = 0u,
+    val curveCount: UInt = 0u,
 )
 
 /** The id of a row the core left out, for the log. The core only has one when

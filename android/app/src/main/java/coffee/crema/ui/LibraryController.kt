@@ -13,6 +13,8 @@ import coffee.crema.beans.isCremaLibraryJsonl
 import coffee.crema.beans.mergeBeanImport
 import coffee.crema.beans.newBean
 import coffee.crema.beans.newRoaster
+import coffee.crema.core.BackupCounts
+import coffee.crema.drive.BackupZip
 import coffee.crema.core.Bean
 import coffee.crema.core.BrewTempRange
 import coffee.crema.core.brewTempRange
@@ -1033,17 +1035,17 @@ class LibraryController(
     /** Build the whole-app backup bundle ([backupBundleJsonl]) from [snap], or
      *  null + a notice on failure. Reads only [snap], so it is safe off the main
      *  thread. */
-    private fun backupBundleJson(snap: BackupSnapshot): String? = runCatching {
+    private fun backupBundle(snap: BackupSnapshot): BuiltBackup? = runCatching {
         backupBundleJsonl(snap, json, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
     }.map { built ->
         built.omitted.forEach { appendLog("Backup left out ${it.kind} ${omittedRowId(it, snap) ?: "at ${it.index}"}") }
         built.degraded.forEach { appendLog("Backup left out the profile of shot $it") }
         backupGapsNotice(built)?.let { notify(it) }
-        built.jsonl
+        built
     }.getOrElse { appendLog("Backup failed: ${it.message}"); notify(BACKUP_FAILED); null }
 
     /**
-     * Wrap [backupBundleJson]'s JSONL into a `.crema.zip`: `backup.jsonl` plus, for
+     * Wrap [backupBundle]'s JSONL into a `.crema.zip`: `backup.jsonl` plus, for
      * every bean with a stored photo, `images/<RAW bean id>` (the cross-shell key
      * web + Android restore by). Photos resolve by file existence (not by parsing
      * `imageRef`), so a web-restored bag's photo rides along too. Null + a notice
@@ -1051,12 +1053,15 @@ class LibraryController(
      * Snapshots on the caller's thread, then serialises, exports and zips on
      * [Dispatchers.Default] — never on Main.
      */
-    suspend fun buildBackupZipBytes(): ByteArray? {
+    suspend fun buildBackupZipBytes(): ByteArray? = buildBackupZip()?.bytes
+
+    /** [buildBackupZipBytes], with what's in it. */
+    suspend fun buildBackupZip(): BackupZip? {
         // Never back up shots whose telemetry hasn't loaded yet (F10
         // validation P1-2: the startup auto-backup ran during the load).
         awaitSeries()
         reportUnreadableSeries()
-        return buildBackupZipBytesNow()
+        return buildBackupZipNow()
     }
 
     /** Shots whose telemetry file couldn't be read go into a backup without a
@@ -1068,19 +1073,19 @@ class LibraryController(
         if (n > 0) notify("$n shot(s) have damaged telemetry and are backed up without their curves")
     }
 
-    private suspend fun buildBackupZipBytesNow(): ByteArray? =
+    private suspend fun buildBackupZipNow(): BackupZip? =
         snapshotThenBuild(::backupSnapshot, Dispatchers.Default) { snap ->
-            val jsonl = backupBundleJson(snap) ?: return@snapshotThenBuild null // already notified
+            val built = backupBundle(snap) ?: return@snapshotThenBuild null // already notified
             runCatching {
                 zipBackupBytes(
-                    jsonl,
+                    built.jsonl,
                     snap.state.beans.asSequence()
                         .filter { BeanImageStore.exists(app, it.id) }
                         .mapNotNull { bean ->
                             runCatching { BeanImageStore.beanImageFile(app, bean.id).readBytes() }
                                 .getOrNull()?.let { bean.id to it }
                         },
-                )
+                ).let { BackupZip(it, BackupCounts(built.shotCount, built.curveCount)) }
             }.getOrElse { appendLog("Backup zip failed: ${it.message}"); notify(BACKUP_FAILED); null }
         }
 

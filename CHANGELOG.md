@@ -84,6 +84,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Drive keeps your fullest backups** — daily backups now carry their shot and
+  curve counts in the file name, and each device manages only its own. Past the
+  copies you keep, the newest with the most shots and the newest with the most
+  curves always stay, so a bad week can't push out your last good copy. That's
+  at most 3 more than the setting. If a backup comes out under half the size of
+  the last one, Crema tells you. Installs that already back up keep 10 copies,
+  and an update deletes nothing it wouldn't have before. New installs keep 3.
+  Android.
 - **Shots no longer upload or back up without their telemetry** — on the web a
   queued upload, a Decent retry or a backup could run before a shot's curve had
   loaded, which posted an empty shot to Visualizer and bound the row to it, or
