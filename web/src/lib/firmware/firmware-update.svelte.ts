@@ -32,6 +32,12 @@ export const FLASH_STARTING = 'flash-start';
 export const FLASH_HANDOVER = 'flash-handover';
 export const FLASH_RUNNING = 'flash';
 
+const TERMINAL_FLASH: ReadonlySet<FlashPhase> = new Set([
+	FlashPhase.Succeeded,
+	FlashPhase.Failed,
+	FlashPhase.Cancelled
+]);
+
 
 /** The visible step of the flow. */
 export type FlowStep = 'closed' | 'warning' | 'choose' | 'source' | 'confirm' | 'flash';
@@ -184,6 +190,9 @@ export class FirmwareUpdateController {
 				// The flow stays on screen for as long as the flash holds the
 				// DE1: it's the only place to watch, wait or Exit.
 				if (s?.locksWrites && this.step === 'closed') this.step = 'flash';
+				// Ended, however: the hand-over is over (the layout's own reason
+				// covers a flash that still holds the link).
+				if (s === null || TERMINAL_FLASH.has(s.phase)) deps.machineBusy?.release(FLASH_HANDOVER);
 				if (wasHeld && !(s?.locksWrites ?? false)) {
 					deps.machineBusy?.release(FLASH_HANDOVER);
 					deps.onRelease?.();

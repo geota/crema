@@ -195,7 +195,7 @@
 		// boot knows it isn't frozen too.
 		const bootRuntime = runtime;
 		void bootChecked.then(() => {
-			if (!restoreFrozen()) commitFrozenShots(bootRuntime);
+			if (!restoreFrozen()) void commitFrozenShots(bootRuntime);
 		});
 		// Keep the cached Visualizer Premium flag (it gates the edit sync's
 		// Premium-only PATCH fields) fresh: re-probe at most once per 24 h.

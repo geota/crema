@@ -217,6 +217,22 @@ describe('FirmwareUpdateController', () => {
 		expect(busy.held).toBe(true);
 	});
 
+	it('a flash that ends lets go of the hand-over, even while it still holds writes', async () => {
+		for (const phase of [FlashPhase.Failed, FlashPhase.Cancelled, FlashPhase.Succeeded]) {
+			const locks = new FakeLocks();
+			const busy = new MachineBusy(locks);
+			const flow = new FirmwareUpdateController({ ...deps({}), machineBusy: busy });
+			await flow.open();
+			flow.image = new Uint8Array(16);
+			await flow.startFlash();
+			const driver = flow['driver'] as unknown as { opts: { onStatus(s: FlashStatus | null): void } };
+			// An erase still settling: writes stay locked, the flash itself is over.
+			driver.opts.onStatus(status(phase, { locksWrites: true, eraseSettling: true }));
+			await new Promise((r) => setTimeout(r, 0));
+			expect(busy.held, phase).toBe(false);
+		}
+	});
+
 	it('a flash that fails to start lets the machine go', async () => {
 		const locks = new FakeLocks();
 		const busy = new MachineBusy(locks);

@@ -149,6 +149,11 @@ export class MachineBusy {
 						resolve(false);
 						return undefined;
 					}
+					// A queued retry got there first: one shared hold is enough.
+					if (this.#release) {
+						resolve(true);
+						return undefined;
+					}
 					return new Promise<void>((released) => {
 						this.#release = released;
 						resolve(true);
@@ -177,6 +182,8 @@ export function getMachineBusy(): MachineBusy {
 let shotOpen = false;
 const idleListeners = new Set<() => void>();
 let linkDownTimer: ReturnType<typeof setTimeout> | null = null;
+/** The link-down grace let a shot's hold go: the shot may still be running. */
+let shotLapsed = false;
 
 /** How long a shot's hold outlives a lost link: a reconnect within it can still finish the shot. */
 export const SHOT_LINK_GRACE_MS = 120_000;
@@ -190,6 +197,7 @@ function clearLinkDownTimer(): void {
 /** A shot has started: a reload waits until it's recorded, not until the machine stops. */
 export function shotStarted(): void {
 	clearLinkDownTimer();
+	shotLapsed = false;
 	shotOpen = true;
 	getMachineBusy().set(SHOT, true);
 }
@@ -209,7 +217,16 @@ export function shotLinkDown(down: boolean): void {
 	linkDownTimer = setTimeout(() => {
 		linkDownTimer = null;
 		shotFinished();
+		shotLapsed = true;
 	}, shotLinkGraceMs);
+}
+
+/**
+ * The machine reports Espresso. After an outage longer than the grace, the
+ * shot it let go is still pulling: hold again for its tail.
+ */
+export function machineInEspresso(): void {
+	if (shotLapsed && !shotOpen) shotStarted();
 }
 
 /**
@@ -217,6 +234,7 @@ export function shotLinkDown(down: boolean): void {
  * or a core reset or stop. No `ShotCompleted` will come for it.
  */
 export function shotAbandoned(): void {
+	shotLapsed = false;
 	if (shotOpen) shotFinished();
 }
 
@@ -294,6 +312,7 @@ export function resetTabSafetyForTest(busy: MachineBusy | null = null, linkGrace
 	shotOpen = false;
 	idleListeners.clear();
 	clearLinkDownTimer();
+	shotLapsed = false;
 }
 
 export interface RestoreListenerOptions {

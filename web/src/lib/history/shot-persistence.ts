@@ -56,7 +56,14 @@ import {
 } from '#lib/services/visualizer-call.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import { getHistoryStore } from './store.svelte';
-import { dropFrozenShots, peekFrozenShots, restoreFrozen, stashFrozenShot } from '#lib/restore/tab-safety.js';
+import {
+	FROZEN_SHOTS_KEY,
+	dropFrozenShots,
+	peekFrozenShots,
+	restoreFrozen,
+	stashFrozenShot,
+	type LockManagerLike
+} from '#lib/restore/tab-safety.js';
 import { freezeOverlay } from '#lib/restore/freeze-overlay.svelte.js';
 import { isBrewLog } from './model';
 import type { UiSnapshot } from '#lib/state/ui-state.svelte.js';
@@ -248,7 +255,24 @@ function keepFrozenShot(captured: Record<string, unknown>, activeShot: ActiveSho
  * id history already has (a duplicated tab, a boot that stopped part-way) is
  * only forgotten.
  */
-export function commitFrozenShots(runtime: AppRuntime | null): void {
+export async function commitFrozenShots(
+	runtime: AppRuntime | null,
+	locks: LockManagerLike | undefined = typeof navigator === 'undefined' ? undefined : navigator.locks
+): Promise<void> {
+	// Tabs reloading together each see the same stash: one at a time, so a
+	// kept shot is recorded and uploaded once. Without Web Locks, as before.
+	if (!locks) {
+		commitFrozenShotsNow(runtime);
+		return;
+	}
+	try {
+		await locks.request(FROZEN_SHOTS_KEY, { mode: 'exclusive' }, () => commitFrozenShotsNow(runtime));
+	} catch {
+		// The lock was refused (an opaque origin): the stash stays for a later boot.
+	}
+}
+
+function commitFrozenShotsNow(runtime: AppRuntime | null): void {
 	if (restoreFrozen()) return;
 	const done: unknown[] = [];
 	for (const shot of peekFrozenShots()) {

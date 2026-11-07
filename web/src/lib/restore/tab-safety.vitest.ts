@@ -24,12 +24,14 @@ import {
 	reloadBlocked,
 	resetTabSafetyForTest,
 	restoreFrozen,
+	machineInEspresso,
 	shotAbandoned,
 	shotFinished,
 	shotIsOpen,
 	shotLinkDown,
 	shotStarted,
 	stashFrozenShot,
+	type LockManagerLike,
 	type RestoreMessage
 } from './tab-safety';
 import { MachineState } from '#lib/core/crema-core.js';
@@ -133,6 +135,45 @@ describe('MachineBusy', () => {
 	});
 });
 
+describe('MachineBusy, racing its retry', () => {
+	it('keeps one shared hold when a retry and a fresh request are both granted', async () => {
+		// A lock manager the test answers by hand, in the order it likes.
+		const asks: { options: { ifAvailable?: boolean }; answer: (lock: unknown) => void }[] = [];
+		let outstanding = 0;
+		const locks: LockManagerLike = {
+			request: (_name, options, callback) =>
+				new Promise((done) => {
+					asks.push({
+						options,
+						answer: (lock) => {
+							const held = Promise.resolve(callback(lock));
+							outstanding++;
+							void held.then(() => {
+								outstanding--;
+								done(undefined);
+							});
+						}
+					});
+				})
+		};
+		const busy = new MachineBusy(locks);
+		busy.set('shot', true);
+		asks[0].answer(null); // refused: a restore holds it
+		await settle();
+		expect(asks).toHaveLength(2); // the queued retry
+		void busy.hold('flash'); // a fresh request, in flight
+		expect(asks).toHaveLength(3);
+		asks[1].answer({}); // the retry is granted first
+		asks[2].answer({}); // then the fresh one
+		await settle();
+		expect(busy.held).toBe(true);
+		busy.release('shot');
+		busy.release('flash');
+		await settle();
+		expect(outstanding).toBe(0);
+	});
+});
+
 describe('a shot, for the reload', () => {
 	const parked: ReloadInputs = {
 		link: 'up',
@@ -193,6 +234,26 @@ describe('a shot, for the reload', () => {
 		await vi.advanceTimersByTimeAsync(1);
 		expect(shotIsOpen()).toBe(false);
 		expect(busy.held).toBe(false);
+	});
+
+	it('holds again for the tail of a shot still pulling after a long outage', async () => {
+		vi.useFakeTimers();
+		const busy = new MachineBusy(new FakeLocks());
+		resetTabSafetyForTest(busy);
+		machineInEspresso();
+		expect(shotIsOpen()).toBe(false);
+		shotStarted();
+		shotLinkDown(true);
+		await vi.advanceTimersByTimeAsync(SHOT_LINK_GRACE_MS);
+		expect(shotIsOpen()).toBe(false);
+		shotLinkDown(false);
+		machineInEspresso();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(shotIsOpen()).toBe(true);
+		expect(busy.held).toBe(true);
+		shotFinished();
+		machineInEspresso();
+		expect(shotIsOpen()).toBe(false);
 	});
 
 	it('waits for hot water, steam, a guided brew, a start or a link coming back', () => {

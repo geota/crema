@@ -106,6 +106,7 @@ import { FirmwareUpdateController } from '#lib/firmware/firmware-update.svelte.j
 import { readPowerOk } from '#lib/firmware/power.js';
 import {
 	getMachineBusy,
+	machineInEspresso,
 	shotAbandoned,
 	shotFinished,
 	shotLinkDown,
@@ -829,6 +830,10 @@ export class CremaApp {
 				toast.info(
 					"Tare ignored — a shot is running. Taring now would break stop-at-weight."
 				);
+			}
+			if (event.type === 'MachineStateChanged' && event.content.state === 'Espresso') {
+				// A shot the link-down grace let go, still pulling after the reconnect.
+				machineInEspresso();
 			}
 			if (event.type === 'ShotStarted') {
 				// Until its completion is committed, a reload would lose it.
