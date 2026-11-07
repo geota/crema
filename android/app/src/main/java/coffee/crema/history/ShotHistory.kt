@@ -14,6 +14,7 @@ import coffee.crema.core.historyStats as coreHistoryStats
 import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveItem
 import coffee.crema.persist.saveStore
@@ -500,7 +501,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
      *  moves it out. Saves stay refused until [openSaves]. */
     suspend fun loadRows(): List<StoredShot> = withContext(Dispatchers.IO) {
         lock.withLock {
-            loadStore(file, "shot history", open = false) {
+            loadStore(file, WHAT, open = false) {
                 json.decodeFromString(ListSerializer(StoredShot.serializer()), it)
             }.valueOrNull()?.newestFirst() ?: emptyList() // a save before the list kept its order
         }
@@ -549,6 +550,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
     }
 
     suspend fun save(shots: List<StoredShot>) {
+        if (!SaveFloor.admit(file, WHAT)) return
         // The lock before the hop, so saves land in call order and the newest
         // snapshot wins.
         lock.withLock {
@@ -566,7 +568,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
                         ListSerializer(StoredShot.serializer()),
                         shots.map { if (it.samples.isNotEmpty() && seriesFile(it.id).name in written) it.copy(samples = emptyList()) else it },
                     )
-                }.map { saveStore(file, "shot history", it) }.getOrDefault(false)
+                }.map { saveStore(file, WHAT, it) }.getOrDefault(false)
                 // Nothing moves on a failed save: the old rows are still on
                 // disk, so their series have to be as well.
                 if (saved) {
@@ -676,6 +678,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
         /** Keep the most recent N shots (matches the web cap). */
         const val MAX_SHOTS = 300
         private const val FILE_NAME = "shots.json"
+        private const val WHAT = "shot history"
         private const val SERIES_DIR = "shot-series"
     }
 }

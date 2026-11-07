@@ -8,6 +8,7 @@ import coffee.crema.core.duplicateBeanJson
 import coffee.crema.core.setBeanFrozenJson
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +52,7 @@ class LibraryStore(private val context: Context, private val json: Json) {
      *  aside and reported (see [loadStore]). Saves stay refused until [openSaves]. */
     suspend fun load(): BeanLibrary = lock.withLock {
         withContext(Dispatchers.IO) {
-            loadStore(file, "bean library", open = false) { json.decodeFromString(BeanLibrary.serializer(), it) }
+            loadStore(file, WHAT, open = false) { json.decodeFromString(BeanLibrary.serializer(), it) }
                 .valueOrNull() ?: BeanLibrary()
         }
     }
@@ -61,9 +62,10 @@ class LibraryStore(private val context: Context, private val json: Json) {
 
     /** Persist the library atomically (best-effort; a failure is logged). */
     suspend fun save(library: BeanLibrary) {
+        if (!SaveFloor.admit(file, WHAT)) return
         lock.withLock {
             withContext(Dispatchers.IO) {
-                saveStore(file, "bean library", json.encodeToString(BeanLibrary.serializer(), library))
+                saveStore(file, WHAT, json.encodeToString(BeanLibrary.serializer(), library))
             }
         }
     }
@@ -75,6 +77,7 @@ class LibraryStore(private val context: Context, private val json: Json) {
 
     private companion object {
         const val FILE_NAME = "beanLibrary.json"
+        const val WHAT = "bean library"
     }
 }
 

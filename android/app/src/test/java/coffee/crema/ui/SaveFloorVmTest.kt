@@ -62,6 +62,21 @@ class SaveFloorVmTest {
     }
 
     @Test
+    fun aLeftoverViewModelLeavesTheNoticeToTheNewestOne() {
+        val leftover = build() // never cleared, as a suite can leave one
+        VmHarness.awaitStartupLoaded(leftover)
+        VmHarness.holdingStartupLoad {
+            val newest = build()
+            VmHarness.idle()
+            SaveFloor.throwOnRefusal = false
+            assertFalse(saveStore(files("prefs.json"), "settings", "{}"))
+            VmHarness.idleUntil("the notice") { SaveFloor.message("settings") in newest.ui.value.userMessages }
+            VmHarness.idle()
+            assertFalse(SaveFloor.message("settings") in leftover.ui.value.userMessages)
+        }
+    }
+
+    @Test
     fun prefsSavesWorkOnANormalInstallWithNoHotWaterLoad() {
         // A stored mode: the load never reads the marker, and every save writes it.
         SafeFile.openAllForTest()

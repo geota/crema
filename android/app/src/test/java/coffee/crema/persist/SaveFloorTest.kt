@@ -7,6 +7,7 @@ import coffee.crema.brew.RecipeFileStore
 import coffee.crema.decent.StolenSerialsCache
 import coffee.crema.decent.StolenSerialsFileStore
 import coffee.crema.history.HistoryStore
+import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.maintenance.MaintenanceStore
 import coffee.crema.profiles.CustomProfileStore
@@ -14,6 +15,9 @@ import coffee.crema.profiles.HiddenProfileStore
 import coffee.crema.profiles.PinnedProfileStore
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.SettingsStore
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.After
@@ -74,6 +78,50 @@ class SaveFloorTest {
             save()
             assertEquals(keep, file(name).readText(), name)
             assertEquals(listOf(what), SaveFloor.drain(), name)
+        }
+    }
+
+    /** A save made while the store loads, then the load opening it, as Main runs them. */
+    private fun saveDuringLoad(
+        load: suspend () -> Unit,
+        save: suspend () -> Unit,
+        open: () -> Unit,
+    ) = runBlocking {
+        val loading = launch(start = CoroutineStart.UNDISPATCHED) { load() }
+        val saving = launch(start = CoroutineStart.UNDISPATCHED) { save() }
+        open()
+        loading.join()
+        saving.join()
+    }
+
+    @Test
+    fun aSaveQueuedBehindALoadCannotLandOnceTheLoadOpensIt() {
+        val library = LibraryStore(context, json)
+        val raw = file("beanLibrary.json").apply { writeText("""{"activeBeanId":"bean-1"}""") }
+        saveDuringLoad({ library.load() }, { library.save(BeanLibrary()) }, library::openSaves)
+        assertEquals("""{"activeBeanId":"bean-1"}""", raw.readText())
+        assertEquals(listOf("bean library"), SaveFloor.drain())
+    }
+
+    @Test
+    fun aHistorySaveDuringItsLoadCannotLandEither() {
+        repeat(20) { round ->
+            val raw = file("shots.json").apply { writeText("[]") }
+            val history = HistoryStore(context, json)
+            SafeFile.startSession()
+            saveDuringLoad({ history.loadRows() }, { history.save(listOf(StoredShot("s$round", 1, 1))) }, history::openSaves)
+            assertEquals("[]", raw.readText(), "round $round")
+        }
+    }
+
+    @Test
+    fun aCustomProfileSaveDuringItsLoadCannotLandEither() {
+        repeat(20) { round ->
+            val raw = file("customProfiles.json").apply { writeText("""{"profiles":[]}""") }
+            val custom = CustomProfileStore(context, json)
+            SafeFile.startSession()
+            saveDuringLoad({ custom.load() }, { custom.save(listOf("{}")) }, custom::openSaves)
+            assertEquals("""{"profiles":[]}""", raw.readText(), "round $round")
         }
     }
 
@@ -188,10 +236,40 @@ class SaveFloorTest {
     }
 
     @Test
+    fun aNewSessionMakesARefusalNewsAgain() {
+        val t = file("a.json")
+        assertFalse(saveStore(t, "first", "1"))
+        assertEquals(listOf("first"), SaveFloor.drain())
+        assertFalse(saveStore(t, "first", "2"))
+        assertEquals(emptyList(), SaveFloor.drain())
+
+        SafeFile.startSession()
+        assertFalse(saveStore(t, "first", "3"))
+        assertEquals(listOf("first"), SaveFloor.drain())
+    }
+
+    @Test
+    fun onlyTheNewestSessionIsCurrent() {
+        val first = SafeFile.startSession()
+        assertTrue(SafeFile.isCurrentSession(first))
+        val second = SafeFile.startSession()
+        assertFalse(SafeFile.isCurrentSession(first))
+        assertTrue(SafeFile.isCurrentSession(second))
+    }
+
+    @Test
     fun theMessageNamesTheStore() {
         assertEquals(
             "Crema was still loading your settings, so that change wasn't saved. Please make it again.",
             SaveFloor.message("settings"),
+        )
+    }
+
+    @Test
+    fun aShotIsNotAskedToBeMadeAgain() {
+        assertEquals(
+            "Crema was still loading your shot history, so the latest change to it wasn't saved.",
+            SaveFloor.message("shot history"),
         )
     }
 }

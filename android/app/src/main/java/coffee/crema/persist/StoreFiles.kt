@@ -66,7 +66,10 @@ private fun persistLog(line: String) {
  * The load floor: no save to a store that hasn't loaded. Saves are whole
  * snapshots, so a save before the load carries defaults, and landing it later
  * would be the same loss, which is why a refused save isn't queued. The first
- * refusal per path logs and queues one notice. Under unit tests (the build's
+ * refusal per path logs and queues one notice, until the path opens or a new
+ * session starts. A store with a lock checks on entry, before the lock: a save
+ * that waits there while the store loads would otherwise be let through once
+ * the load had opened it, still carrying its old snapshot. Under unit tests (the build's
  * `crema.strictSaves`) a refusal throws, so it fails the test that caused it.
  */
 object SaveFloor {
@@ -98,8 +101,23 @@ object SaveFloor {
         return taken
     }
 
-    /** The line for a refused save to [what]. */
-    fun message(what: String) = "Crema was still loading your $what, so that change wasn't saved. Please make it again."
+    /** A refusal of [target] is news again. */
+    internal fun forgetNotice(target: File) {
+        noticed -= target.path
+    }
+
+    /** A new session: every refusal is news again. */
+    internal fun forgetNotices() = noticed.clear()
+
+    /** The line for a refused save to [what]. A shot can't be made again. */
+    fun message(what: String) =
+        if (what == HISTORY) {
+            "Crema was still loading your $what, so the latest change to it wasn't saved."
+        } else {
+            "Crema was still loading your $what, so that change wasn't saved. Please make it again."
+        }
+
+    private const val HISTORY = "shot history"
 
     /** Test seam: forget the notices between tests. */
     internal fun resetForTest() {

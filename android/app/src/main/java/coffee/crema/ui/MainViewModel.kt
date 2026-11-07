@@ -954,7 +954,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // A save that came before its store loaded was refused: say so, once.
         viewModelScope.launch {
             SaveFloor.pending.collect { pending ->
-                if (pending.isNotEmpty()) SaveFloor.drain().forEach { notifyUser(SaveFloor.message(it)) }
+                // Only the newest session's: a ViewModel on its way out would take
+                // the notice to a screen that's gone.
+                if (pending.isNotEmpty() && SafeFile.isCurrentSession(saveSession)) {
+                    SaveFloor.drain().forEach { notifyUser(SaveFloor.message(it)) }
+                }
             }
         }
         // A hub's remotes hold no live copy of its stock: a change to the active

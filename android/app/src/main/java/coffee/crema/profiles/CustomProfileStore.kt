@@ -8,6 +8,7 @@ import coffee.crema.core.Transition
 import coffee.crema.core.newProfileId
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -72,13 +73,14 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
 
     /** The stored profiles. Saves stay refused until [openSaves]. */
     suspend fun load(): List<String> = withContext(Dispatchers.IO) {
-        loadStore(file, "custom profiles", open = false) { json.decodeFromString(CustomProfileLibrary.serializer(), it) }
+        loadStore(file, WHAT, open = false) { json.decodeFromString(CustomProfileLibrary.serializer(), it) }
             .valueOrNull()?.profiles?.map { it.toString() } ?: emptyList()
     }
 
     /** Persist the custom profiles (full-JSON strings in; best-effort). A
      *  numbered snapshot older than the last one saved is skipped. */
     suspend fun save(profiles: List<String>, generation: Long? = null) {
+        if (!SaveFloor.admit(file, WHAT)) return
         withContext(Dispatchers.IO) {
             saveLock.withLock {
                 if (generation != null) {
@@ -89,7 +91,7 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
                     val objs = profiles.mapNotNull {
                         runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull()
                     }
-                    saveStore(file, "custom profiles", json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs)))
+                    saveStore(file, WHAT, json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs)))
                 }
             }
         }
@@ -102,6 +104,7 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
 
     private companion object {
         const val FILE_NAME = "customProfiles.json"
+        const val WHAT = "custom profiles"
     }
 }
 

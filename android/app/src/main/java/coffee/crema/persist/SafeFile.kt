@@ -68,6 +68,9 @@ object SafeFile {
     /** Targets loaded this session: only these can take a gated save. */
     private val loaded: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
 
+    /** The newest session's number. */
+    @Volatile private var session = 0
+
     /** See [openAllForTest]. */
     @Volatile private var allOpenForTest = false
 
@@ -79,15 +82,23 @@ object SafeFile {
     /** Test seam: runs after the temp file is synced and before any rename. */
     internal var beforeRename: (File) -> Unit = {}
 
-    /** A new ViewModel starts from defaults, so nothing is loaded for it yet. */
-    fun startSession() {
+    /** A new ViewModel starts from defaults, so nothing is loaded for it yet.
+     *  Returns the session's number, for [isCurrentSession]. */
+    fun startSession(): Int {
         loaded.clear()
         allOpenForTest = false
+        SaveFloor.forgetNotices()
+        session += 1
+        return session
     }
+
+    /** Whether [number] is the newest session: a ViewModel on its way out isn't. */
+    fun isCurrentSession(number: Int): Boolean = number == session
 
     /** [target]'s state is in place: gated saves may run. */
     fun openSaves(target: File) {
         loaded += target.path
+        SaveFloor.forgetNotice(target)
     }
 
     /** Whether a load has finished for [target] this session. */
