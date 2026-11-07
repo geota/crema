@@ -147,7 +147,13 @@ fn apply(d: &Device, b: &Backup, plan: &RestorePlan) -> Device {
     for id in &plan.beans.remove {
         out.beans.remove(id);
     }
-    for id in plan.shots.add.iter().chain(&plan.shots.overwrite) {
+    for id in plan
+        .shots
+        .add
+        .iter()
+        .chain(&plan.shots.overwrite)
+        .chain(&plan.shots.revive)
+    {
         let (_, samples, ..) = row(id);
         out.shots.insert(
             id.clone(),
@@ -214,8 +220,14 @@ proptest! {
     fn merge_past_the_cap_adds_what_fits_and_evicts_nothing(d in device(), b in backup()) {
         let p = plan(&d, &b, RestoreMode::Merge, false);
         prop_assume!(p.verdict != Verdict::Refused);
+        let live_before = d.shots.values().filter(|s| !s.deleted).count();
+        // What Merge may add: rows not here at all, and with "bring back" off,
+        // no tombstones.
+        let candidates = b.shots.iter().filter(|(id, ..)| !d.shots.contains_key(id)).count();
+        let room = d.cap.map_or(usize::MAX, |cap| (cap as usize).saturating_sub(live_before));
+        prop_assert_eq!(p.shots.add.len(), candidates.min(room), "adds what fits, all of it");
+        prop_assert_eq!(p.shots.not_added as usize, candidates - candidates.min(room));
         if let Some(cap) = d.cap {
-            let live_before = d.shots.values().filter(|s| !s.deleted).count();
             let after = apply(&d, &b, &p);
             let live_after = after.shots.values().filter(|s| !s.deleted).count();
             prop_assert!(live_after <= live_before.max(cap as usize));

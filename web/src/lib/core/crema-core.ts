@@ -3593,6 +3593,8 @@ export interface PhotoPlan {
 /** Why a plan won't run, or what its report must say. */
 export enum PlanCode {
 	NotABackup = "notABackup",
+	/** A History "Export shots" file: use Import. */
+	ShotsExport = "shotsExport",
 	NewerFormat = "newerFormat",
 	StoreUnavailable = "storeUnavailable",
 	StoreLoading = "storeLoading",
@@ -3974,8 +3976,15 @@ export interface ShotPlan {
 	zeroDebit: string[];
 	/** Rows the backup has that were deleted here: skipped, and offered back. */
 	deletedHere: string[];
-	/** Rows Merge couldn't add, as history is full. */
+	/**
+	 * Rows here as tombstones that come back as the backup's row: on Replace,
+	 * and on Merge with "bring back". Their tombstones are cancelled.
+	 */
+	revive: string[];
+	/** Rows Merge couldn't add, as history is full, revived ones included. */
 	notAdded: number;
+	/** Shots asked back that history had no room for: they stay deleted. */
+	notRevived: string[];
 	/** Pinned rows Replace removes. */
 	pinnedRemoved: number;
 }

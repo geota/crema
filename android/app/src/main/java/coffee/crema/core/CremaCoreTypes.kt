@@ -3678,6 +3678,9 @@ data class PhotoPlan (
 enum class PlanCode(val string: String) {
 	@SerialName("notABackup")
 	NotABackup("notABackup"),
+	/// A History "Export shots" file: use Import.
+	@SerialName("shotsExport")
+	ShotsExport("shotsExport"),
 	@SerialName("newerFormat")
 	NewerFormat("newerFormat"),
 	@SerialName("storeUnavailable")
@@ -4061,8 +4064,13 @@ data class ShotPlan (
 	val zeroDebit: List<String>,
 	/// Rows the backup has that were deleted here: skipped, and offered back.
 	val deletedHere: List<String>,
-	/// Rows Merge couldn't add, as history is full.
+	/// Rows here as tombstones that come back as the backup's row: on Replace,
+	/// and on Merge with "bring back". Their tombstones are cancelled.
+	val revive: List<String>,
+	/// Rows Merge couldn't add, as history is full, revived ones included.
 	val notAdded: UInt,
+	/// Shots asked back that history had no room for: they stay deleted.
+	val notRevived: List<String>,
 	/// Pinned rows Replace removes.
 	val pinnedRemoved: UInt
 )

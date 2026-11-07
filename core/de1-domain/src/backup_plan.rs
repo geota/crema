@@ -33,6 +33,9 @@ use crate::{
 /// The header kind this build writes and reads.
 const BACKUP_KIND: &str = "crema-backup/v1";
 
+/// The header of a History "Export shots" file, which Import reads.
+const SHOTS_EXPORT_KIND: &str = "crema/v1";
+
 /// The start of every backup header kind; any other version is newer.
 const BACKUP_KIND_PREFIX: &str = "crema-backup/";
 
@@ -88,6 +91,8 @@ pub enum BackupLine {
     Singleton(Singleton, serde_json::Value),
     /// A `kind` this build doesn't know: skipped, and noted.
     Unknown(String),
+    /// The header of a shots export (`crema/v1`): not a backup.
+    ShotsExport,
 }
 
 /// A backup's header, with each store's count `None` when the header doesn't
@@ -123,6 +128,9 @@ pub fn parse_backup_line(line: &[u8]) -> Result<BackupLine, LineError> {
         Some(serde_json::Value::String(k)) => k.clone(),
         _ => return Err(LineError::NoKind),
     };
+    if kind == SHOTS_EXPORT_KIND {
+        return Ok(BackupLine::ShotsExport);
+    }
     if kind.starts_with(BACKUP_KIND_PREFIX) {
         if kind != BACKUP_KIND {
             return Err(LineError::NewerFormat);
@@ -360,6 +368,8 @@ pub struct BackupManifest {
     pub header_damaged: bool,
     /// A header or a shot from a newer build.
     pub newer_format: bool,
+    /// A History "Export shots" file: Import reads it, not restore.
+    pub shots_export: bool,
     /// Ids per store, in file order, first of each id only.
     pub beans: Vec<String>,
     pub roasters: Vec<String>,
@@ -513,6 +523,15 @@ impl BackupScan {
                 } else {
                     self.manifest.bad_lines += 1;
                     self.problem(LineIssue::HeaderNotFirst, None);
+                }
+                return;
+            }
+            BackupLine::ShotsExport => {
+                if first {
+                    self.manifest.shots_export = true;
+                } else {
+                    self.manifest.unknown_kinds += 1;
+                    self.problem(LineIssue::UnknownKind, None);
                 }
                 return;
             }
@@ -839,6 +858,8 @@ pub enum Verdict {
 #[serde(rename_all = "camelCase")]
 pub enum PlanCode {
     NotABackup,
+    /// A History "Export shots" file: use Import.
+    ShotsExport,
     NewerFormat,
     StoreUnavailable,
     StoreLoading,
@@ -944,8 +965,13 @@ pub struct ShotPlan {
     pub zero_debit: Vec<String>,
     /// Rows the backup has that were deleted here: skipped, and offered back.
     pub deleted_here: Vec<String>,
-    /// Rows Merge couldn't add, as history is full.
+    /// Rows here as tombstones that come back as the backup's row: on Replace,
+    /// and on Merge with "bring back". Their tombstones are cancelled.
+    pub revive: Vec<String>,
+    /// Rows Merge couldn't add, as history is full, revived ones included.
     pub not_added: u32,
+    /// Shots asked back that history had no room for: they stay deleted.
+    pub not_revived: Vec<String>,
     /// Pinned rows Replace removes.
     pub pinned_removed: u32,
 }
@@ -1065,11 +1091,26 @@ fn first_run(c: CommonSettings) -> CommonSettings {
     c
 }
 
+/// Whether `id` names a built-in profile: one of the corpus's ids, or the
+/// `builtin:` form older builds wrote.
+fn is_builtin_profile(id: &str) -> bool {
+    static IDS: std::sync::OnceLock<HashSet<&'static str>> = std::sync::OnceLock::new();
+    id.starts_with(BUILTIN_PROFILE_PREFIX)
+        || IDS
+            .get_or_init(|| {
+                crate::builtin_profiles()
+                    .iter()
+                    .map(|p| p.id.as_str())
+                    .collect()
+            })
+            .contains(id)
+}
+
 /// Whether `id` is a row a backup can't put here: a built-in profile or
 /// recipe, or a method that isn't the user's.
 fn not_restorable(store: RowStore, id: &str) -> bool {
     match store {
-        RowStore::Profiles => id.starts_with(BUILTIN_PROFILE_PREFIX),
+        RowStore::Profiles => is_builtin_profile(id),
         RowStore::Recipes => is_builtin_recipe(id),
         RowStore::CustomMethods => !is_custom_method_id(id),
         _ => false,
@@ -1155,7 +1196,9 @@ pub fn plan_restore(
     let mut warnings = Vec::new();
 
     // ── Refusals ──
-    if m.newer_format {
+    if m.shots_export {
+        refusals.push(PlanNote::new(PlanCode::ShotsExport));
+    } else if m.newer_format {
         refusals.push(PlanNote::new(PlanCode::NewerFormat));
     } else if !m.is_backup() {
         refusals.push(PlanNote::new(PlanCode::NotABackup));
@@ -1175,7 +1218,7 @@ pub fn plan_restore(
         refusals.push(PlanNote::new(PlanCode::MachineBusy));
     }
     let row_bad_lines = m.bad_lines.saturating_sub(u32::from(m.header_damaged));
-    if m.header_damaged {
+    if m.header_damaged && !m.shots_export {
         let note = PlanNote::new(PlanCode::HeaderDamaged);
         if replace {
             refusals.push(note);
@@ -1248,7 +1291,9 @@ pub fn plan_restore(
             } else {
                 PlanAction::Keep
             };
-            let same_shell = line.shell.as_deref() == Some(local.shell.as_str());
+            // A settings line from before `_shell` was Android's: only Android
+            // wrote one without it.
+            let same_shell = line.shell.as_deref().unwrap_or("android") == local.shell;
             SettingsPlan {
                 common,
                 extras: if common == PlanAction::Apply && same_shell {
@@ -1340,7 +1385,7 @@ fn shot_plan(
                 if replace || opts.revive_deleted {
                     tombstones.cancel.push(shot.id.clone());
                     if replace {
-                        plan.overwrite.push(shot.id.clone());
+                        plan.revive.push(shot.id.clone());
                     } else {
                         candidates.push(shot);
                     }
@@ -1411,7 +1456,16 @@ fn shot_plan(
     let left: HashSet<&str> = left.iter().map(|s| s.id.as_str()).collect();
     // Keep file order for what's added: a cap decides which, not the order.
     for shot in &m.shots {
-        if added.iter().any(|a| a.id == shot.id) {
+        if !added.iter().any(|a| a.id == shot.id) {
+            if left.contains(shot.id.as_str()) && here.contains_key(shot.id.as_str()) {
+                plan.not_revived.push(shot.id.clone());
+            }
+            continue;
+        }
+        if here.contains_key(shot.id.as_str()) {
+            // A tombstone here, which the backup's row replaces.
+            plan.revive.push(shot.id.clone());
+        } else {
             plan.add.push(shot.id.clone());
             if shot
                 .bean_id

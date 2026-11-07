@@ -356,7 +356,12 @@ fn backup_of(spec: &Value) -> (Vec<u8>, Vec<String>) {
     let mut lines = vec![header];
     if let Some(settings) = spec.get("settings") {
         let mut line = t["settings"].clone();
-        line["_shell"] = settings["_shell"].clone();
+        match settings.get("_shell") {
+            Some(shell) => line["_shell"] = shell.clone(),
+            None => {
+                line.as_object_mut().unwrap().remove("_shell");
+            }
+        }
         lines.push(line);
     }
     for key in ["profileMeta", "recipeMeta"] {
@@ -430,4 +435,95 @@ fn the_matrix() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+// ── The shots export, and the old parser ───────────────────────────────────
+
+#[test]
+fn a_shots_export_is_sent_to_import() {
+    let bytes = include_bytes!("fixtures/shots/web-shots.crema.jsonl");
+    let m = scan_backup_bytes(bytes);
+    assert!(m.shots_export);
+    for mode in [RestoreMode::Merge, RestoreMode::Replace] {
+        let plan = plan_restore(&m, &device_with_rows(), mode, RestoreOpts::default());
+        assert_eq!(plan.verdict, Verdict::Refused);
+        assert_eq!(plan.refusals[0].code, PlanCode::ShotsExport, "{mode:?}");
+        assert!(
+            !plan
+                .refusals
+                .iter()
+                .any(|r| r.code == PlanCode::HeaderDamaged)
+        );
+    }
+}
+
+/// Where `import_backup_bytes` and the old `parse_backup_jsonl` part: each is
+/// the new reader being strict where the old one wasn't. PR7 takes records
+/// only from `import_backup_bytes`, and "is it a backup?" only from the plan.
+mod parsers_differ {
+    use super::*;
+
+    fn both(lines: &[Value]) -> (Value, Value) {
+        let bytes = to_bytes(lines);
+        let new = serde_json::to_value(import_backup_bytes(&bytes)).unwrap();
+        let old =
+            serde_json::to_value(parse_backup_jsonl(std::str::from_utf8(&bytes).unwrap())).unwrap();
+        (new, old)
+    }
+
+    fn with(edit: impl FnOnce(&mut Vec<Value>)) -> (Value, Value) {
+        let mut lines = lines_of(WEB);
+        edit(&mut lines);
+        both(&lines)
+    }
+
+    #[test]
+    fn a_duplicate_row_is_kept_once_not_twice() {
+        let (new, old) = with(|l| {
+            let bean = l.iter().find(|x| x["kind"] == "bean").unwrap().clone();
+            l.push(bean);
+        });
+        assert_eq!(new["beans"].as_array().unwrap().len(), 1);
+        assert_eq!(old["beans"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_second_settings_line_loses_not_wins() {
+        let (new, old) = with(|l| {
+            let mut second = l.iter().find(|x| x["kind"] == "settings").unwrap().clone();
+            second["_shell"] = json!("second");
+            l.push(second);
+        });
+        assert_eq!(new["settings"]["_shell"], "web");
+        assert_eq!(old["settings"]["_shell"], "second");
+    }
+
+    #[test]
+    fn a_header_anywhere_but_first_is_no_header() {
+        let (new, old) = with(|l| {
+            let header = l.remove(0);
+            l.push(header);
+        });
+        assert_eq!(new["hasHeader"], false);
+        assert_eq!(old["hasHeader"], true);
+    }
+
+    #[test]
+    fn a_profile_with_no_id_is_left_out() {
+        let (new, old) = with(|l| {
+            let p = l.iter_mut().find(|x| x["kind"] == "profile").unwrap();
+            p.as_object_mut().unwrap().remove("id");
+        });
+        assert_eq!(new["profiles"].as_array().unwrap().len(), 0);
+        assert_eq!(old["profiles"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_shot_from_a_newer_build_is_left_out() {
+        let (new, old) = with(|l| {
+            l.iter_mut().find(|x| x["kind"] == "shot").unwrap()["formatVersion"] = json!(4);
+        });
+        assert_eq!(new["shots"].as_array().unwrap().len(), 0);
+        assert_eq!(old["shots"].as_array().unwrap().len(), 1);
+    }
 }
