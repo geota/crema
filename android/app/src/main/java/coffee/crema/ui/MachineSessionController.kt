@@ -483,6 +483,7 @@ internal class MachineSessionController(
         lane.on<Event.SteamClogSuspected> { event -> appendLog("Steam clog suspected: ${event.content.reason.string}") }
         lane.on<Event.SteamEcoModeChanged> { event -> appendLog("Steam eco mode: ${event.content.eco}") }
         lane.on<Event.DecodeError> { event -> appendLog("Decode error: ${event.content.message}") }
+        lane.on<Event.UnknownMachineByte> { event -> appendLog("Unknown machine substate byte: ${event.content.byte}") }
         // The version / MMR read paths now feed the Settings machine rows.
         // The preformatted firmware label is folded straight in; each MMR
         // value lands raw in de1MachineInfo (the UI applies per-register

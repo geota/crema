@@ -84,6 +84,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A machine state with a new substate is no longer missed** — when the DE1
+  reported a substate this build doesn't know, the whole state report was
+  dropped, so a shot could look like it was still running after the machine had
+  stopped. The report now counts, the phase on screen holds until the next
+  known substate, and the log names the byte once. Android and web.
 - **Moving a shot off a bag gives back only what it took** — each shot now
   records the grams it actually took, and backups keep them. Moving 5 shots off
   an empty bag used to add about 90 g, and a bag with no tracked weight gained

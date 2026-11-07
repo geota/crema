@@ -157,6 +157,11 @@ pub enum SubState {
     ErrorBootFill = 216,
     /// Front power switch is off.
     ErrorNoAc = 217,
+    /// A byte this build doesn't know, from [`StateInfo::parse`]. The
+    /// discriminant is outside the firmware's ranges and is never a decoded
+    /// value: [`TryFrom`] still rejects unknown bytes for strict callers. It
+    /// sits below `200` so it never reads as an error.
+    Unknown = 199,
 }
 
 impl SubState {
@@ -247,6 +252,7 @@ impl SubState {
             ErrorLoCurrent => "ErrorLoCurrent",
             ErrorBootFill => "ErrorBootFill",
             ErrorNoAc => "ErrorNoAc",
+            Unknown => "Unknown",
         }
     }
 
@@ -356,8 +362,10 @@ impl StateInfo {
     /// # Errors
     ///
     /// Returns [`ProtocolError::PacketTooShort`] if `data` has fewer than
-    /// [`STATE_INFO_LEN`] bytes, or [`ProtocolError::UnknownMachineState`] /
-    /// [`ProtocolError::UnknownSubState`] if a byte is unrecognised.
+    /// [`STATE_INFO_LEN`] bytes, or [`ProtocolError::UnknownMachineState`] if
+    /// the state byte is unrecognised. An unrecognised substate byte is not
+    /// an error: it decodes to [`SubState::Unknown`], because a firmware's new
+    /// substate must not hide that the machine changed state.
     ///
     /// # Examples
     ///
@@ -377,7 +385,7 @@ impl StateInfo {
         }
         Ok(StateInfo {
             state: MachineState::try_from(data[0])?,
-            substate: SubState::try_from(data[1])?,
+            substate: SubState::try_from(data[1]).unwrap_or(SubState::Unknown),
         })
     }
 }
@@ -520,6 +528,42 @@ mod tests {
 
     mod state_info {
         use super::*;
+
+        #[test]
+        fn an_unknown_substate_byte_decodes_to_unknown_for_every_known_state() {
+            for byte in (0u8..=255).filter(|b| SubState::try_from(*b).is_err()) {
+                let info = StateInfo::parse(&[4, byte]).expect("the report still decodes");
+                assert_eq!(info.state, MachineState::Espresso);
+                assert_eq!(info.substate, SubState::Unknown, "byte {byte}");
+            }
+        }
+
+        #[test]
+        fn a_known_substate_byte_never_decodes_to_unknown() {
+            for byte in (0u8..=255).filter(|b| SubState::try_from(*b).is_ok()) {
+                let info = StateInfo::parse(&[4, byte]).expect("known");
+                assert_eq!(Ok(info.substate), SubState::try_from(byte));
+                assert_ne!(info.substate, SubState::Unknown);
+            }
+        }
+
+        #[test]
+        fn an_unknown_state_byte_is_still_an_error() {
+            assert_eq!(
+                StateInfo::parse(&[99, 5]),
+                Err(ProtocolError::UnknownMachineState(99))
+            );
+        }
+
+        #[test]
+        fn unknown_is_not_an_error_substate_and_try_from_stays_strict() {
+            assert!(!SubState::Unknown.is_error());
+            assert_eq!(SubState::Unknown.error_message(), None);
+            assert_eq!(
+                SubState::try_from(SubState::Unknown as u8),
+                Err(ProtocolError::UnknownSubState(199))
+            );
+        }
 
         #[test]
         fn parses_state_and_substate() {

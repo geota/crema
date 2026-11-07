@@ -1485,6 +1485,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				eventLog: appendLog(snapshot.eventLog, `Decode error: ${event.content.message}`)
 			};
+		case 'UnknownMachineByte':
+			return {
+				...snapshot,
+				eventLog: appendLog(snapshot.eventLog, `Unknown machine substate byte: ${event.content.byte}`)
+			};
 		// F16: the core holds a request through the profile-download guard;
 		// the log keeps the record (no toast — it goes out on its own).
 		case 'MachineRequestHeld':
