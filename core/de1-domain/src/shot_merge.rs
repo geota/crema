@@ -117,9 +117,9 @@ pub fn tag_push_list(remote: &[String], marks: &TagMarks) -> Vec<String> {
 }
 
 /// What the marks are after a push of `sent` built from `pushed_from`, given
-/// the server's reply tags. `None` when the reply doesn't hold what was sent:
-/// a tier signal (a free account ignores tags), and the marks stay. Otherwise
-/// the entries sent are cleared, and any made since stay.
+/// the server's reply tags, in any order. `None` when the reply doesn't hold
+/// what was sent: a tier signal (a free account ignores tags), and the marks
+/// stay. Otherwise the entries sent are cleared, and any made since stay.
 #[must_use]
 pub fn settle_tag_push(
     current: &TagMarks,
@@ -127,7 +127,11 @@ pub fn settle_tag_push(
     pushed: &[String],
     reply: &[String],
 ) -> Option<TagMarks> {
-    if normalize_tags(pushed) != normalize_tags(reply) {
+    // `tags.pluck(:name)` has no order, so this compares as sets.
+    let (mut pushed, mut reply) = (normalize_tags(pushed), normalize_tags(reply));
+    pushed.sort_unstable();
+    reply.sort_unstable();
+    if pushed != reply {
         return None;
     }
     Some(TagMarks {
@@ -559,6 +563,18 @@ mod tests {
             settle_tag_push(&sent, &sent, &tags(&["a"]), &[]),
             None,
             "a free account ignored them"
+        );
+    }
+
+    #[test]
+    fn a_reply_in_another_order_settles() {
+        let sent = TagMarks {
+            add: tags(&["b"]),
+            remove: vec![],
+        };
+        assert_eq!(
+            settle_tag_push(&sent, &sent, &tags(&["a", "b"]), &tags(&["B", "a"])),
+            Some(TagMarks::default())
         );
     }
 
