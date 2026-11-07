@@ -263,6 +263,9 @@ impl CremaCore {
             target: WriteTarget::De1RequestedState,
             data: vec![requested_state(state)],
         });
+        if state == MachineState::HotWaterRinse {
+            self.start_on_flush_written();
+        }
     }
 
     /// A request is waiting out the guard.

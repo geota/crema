@@ -129,12 +129,13 @@ pub fn volume_stop_arms(
 /// profile's first `preinfuse_step_count` frames as the preinfusion substate —
 /// for a basic pressure profile that includes the forced-rise frames — so the
 /// water that fills the headspace never trips SAV early. Espresso's other
-/// substates (heating, stabilising, ending) count toward neither. Outside
-/// Espresso (de1app also tracks HotWater) every sample counts.
+/// substates (heating, stabilising, ending) count toward neither, and an
+/// unknown substate counts as flowing. Outside Espresso (de1app also tracks
+/// HotWater) every sample counts.
 #[must_use]
 pub fn sav_counts_volume(state: MachineState, substate: SubState) -> bool {
     match state {
-        MachineState::Espresso => substate == SubState::Pouring,
+        MachineState::Espresso => matches!(substate, SubState::Pouring | SubState::Unknown),
         _ => true,
     }
 }
@@ -645,6 +646,10 @@ mod tests {
             SubState::Preinfusion
         ));
         assert!(sav_counts_volume(MachineState::Espresso, SubState::Pouring));
+        assert!(
+            sav_counts_volume(MachineState::Espresso, SubState::Unknown),
+            "an unknown substate counts as flowing"
+        );
         // Pre-flow and ending substates count toward neither.
         for sub in [
             SubState::Heating,

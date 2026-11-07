@@ -835,6 +835,13 @@ pub enum Event {
         /// Human-readable description of the failure.
         message: String,
     },
+    /// The DE1 reported a substate byte this build doesn't know. The report
+    /// was still applied, with [`SubState::Unknown`]; this is a diagnostic,
+    /// once per byte value.
+    UnknownMachineByte {
+        /// The raw byte.
+        byte: u8,
+    },
 }
 
 /// Why [`Event::ScaleLinkDead`] fired.

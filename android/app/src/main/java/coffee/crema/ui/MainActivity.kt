@@ -191,6 +191,7 @@ class MainActivity : ComponentActivity() {
         // A cold start can itself be the OAuth redirect (process died while
         // the user was in the browser).
         handleVisualizerCallback(intent)
+        handleDriveCallback(intent)
         // Crash-recovery / safe-mode gate. Read BEFORE the ViewModel is touched:
         // if the last launch crashed (report) or didn't stabilise (marker — which
         // also catches a native crash the JVM handler can't), show the recovery

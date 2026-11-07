@@ -1,0 +1,27 @@
+# Model test for machine control (.scratch/machine-control/DESIGN.md §7): seeded
+# op sequences drive the real `CremaCore` against a small simulator. Excluded
+# from the core workspace, with its own lockfile, because proptest fails
+# `cargo deny check bans` there. Dev-only and never shipped.
+#
+#   cd core/de1-model && cargo test
+#   PROPTEST_CASES=10000 cargo test
+[package]
+name = "de1-model"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+de1-app = { path = "../de1-app" }
+de1-domain = { path = "../de1-domain" }
+de1-protocol = { path = "../de1-protocol" }
+
+[dev-dependencies]
+proptest = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Its own workspace root, so the core workspace's settings don't apply.
+[workspace]
