@@ -4,6 +4,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Crash-safe file persistence for every local store (shots, beans, profiles,
@@ -36,6 +37,14 @@ import java.util.Collections
  * decodes does the caller get Corrupt. If the bad file can't be moved aside,
  * [write] refuses to touch that target for the rest of the process, so an
  * empty state can never replace the only copy.
+ *
+ * **Overlap.** Every operation on a target holds that target's lock, because
+ * they share its `.tmp`: without it the loser of two saves moves the target to
+ * `.bak` and finds its temp file gone, and a load can delete a temp file a save
+ * is still writing. Nothing here suspends, and the lock is held only around the
+ * file work (and a load's pure decode), so a caller's own lock can only ever be
+ * taken before it, never after. A wait is one fsync at most, the same disk work
+ * a caller on the main thread already does for itself.
  */
 object SafeFile {
     /** Corrupt copies kept per store; older ones are deleted. */
@@ -47,6 +56,11 @@ object SafeFile {
 
     /** Targets whose corrupt file couldn't be moved aside: saving would destroy it. */
     private val blocked: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
+
+    /** One lock per target path. Bounded by the files the app owns. */
+    private val locks = ConcurrentHashMap<String, Any>()
+
+    private fun lockOf(target: File): Any = locks.getOrPut(target.path) { Any() }
 
     /** Test seam: runs after the temp file is synced and before any rename. */
     internal var beforeRename: (File) -> Unit = {}
@@ -73,7 +87,7 @@ object SafeFile {
      * the previous session after a sign-out, or the plaintext token right
      * after the SecretBox migration re-save.
      */
-    fun writeCredential(target: File, text: String) {
+    fun writeCredential(target: File, text: String) = synchronized(lockOf(target)) {
         writeBytes(target, text.toByteArray(Charsets.UTF_8), keepBackup = false)
         purgeCopies(target, keptAside = true)
     }
@@ -84,7 +98,7 @@ object SafeFile {
      * (`.bak` / `.tmp` only, so a just-reported corrupt copy is still there
      * when the notice names it) and by [writeCredential].
      */
-    fun purgeCopies(target: File, keptAside: Boolean = false) {
+    fun purgeCopies(target: File, keptAside: Boolean = false): Unit = synchronized(lockOf(target)) {
         backupOf(target).delete()
         tmpOf(target).delete()
         if (keptAside) keptAside(target).forEach { it.delete() }
@@ -98,11 +112,11 @@ object SafeFile {
      * Also lifts a save block on [target] (the unreadable file is gone).
      * Returns true when nothing of [target] remains on disk.
      */
-    fun erase(target: File): Boolean {
+    fun erase(target: File): Boolean = synchronized(lockOf(target)) {
         val copies = listOf(target, backupOf(target), tmpOf(target)) + keptAside(target)
         copies.forEach { it.delete() }
         blocked -= target.path
-        return copies.none { it.exists() }
+        copies.none { it.exists() }
     }
 
     /**
@@ -119,7 +133,7 @@ object SafeFile {
     private fun isCopyName(name: String) = name.endsWith(BAK) || name.endsWith(TMP) || CORRUPT in name
 
     /** Atomically replace [target] with [bytes]. Throws on failure; the old target stays intact. */
-    fun writeBytes(target: File, bytes: ByteArray, keepBackup: Boolean = false) {
+    fun writeBytes(target: File, bytes: ByteArray, keepBackup: Boolean = false): Unit = synchronized(lockOf(target)) {
         if (target.path in blocked) {
             throw IOException("${target.name} is unreadable and couldn't be kept aside; not overwriting it")
         }
@@ -147,7 +161,10 @@ object SafeFile {
      * aside (see [SafeLoad.Corrupt]); the backup and a complete leftover temp
      * file are tried before giving up. [log] receives one line per event.
      */
-    fun <T : Any> load(target: File, log: (String) -> Unit = {}, decode: (String) -> T): SafeLoad<T> {
+    fun <T : Any> load(target: File, log: (String) -> Unit = {}, decode: (String) -> T): SafeLoad<T> =
+        synchronized(lockOf(target)) { loadLocked(target, log, decode) }
+
+    private fun <T : Any> loadLocked(target: File, log: (String) -> Unit, decode: (String) -> T): SafeLoad<T> {
         val bak = backupOf(target)
         val tmp = tmpOf(target)
         fun attempt(f: File): Result<T>? =

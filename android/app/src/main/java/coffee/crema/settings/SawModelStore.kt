@@ -3,6 +3,7 @@ package coffee.crema.settings
 import android.content.Context
 import coffee.crema.core.SawModelLoad
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.inSaveOrder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -36,14 +37,14 @@ class SawModelStore(private val dir: File) {
     }
 
     suspend fun save(json: String) {
-        withContext(Dispatchers.IO) {
+        inSaveOrder(file) {
             runCatching { SafeFile.write(file, json) }
         }
     }
 
     /** Delete the model, its backup and any quarantined copy (Erase all data). */
     suspend fun erase() {
-        withContext(Dispatchers.IO) {
+        inSaveOrder(file) {
             SafeFile.erase(file)
             SafeFile.erase(quarantine)
         }
