@@ -89,10 +89,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   whose profile can't be read is backed up without it, and any other bad row, of
   any kind, is left out alone, and you're told how many. A file left short says
   so in its header, in a new `omittedCount`; a clean backup's bytes don't
-  change (#329). On Android, a failed section used to go out empty, so a backup
-  with no shots could upload and replace a good one: it now fails, and nothing
-  is saved. A `NaN` in one shot costs that shot, not the backup. One shot that
-  throws no longer stops the web's upload queue. Android and web.
+  change (#329). If no row of a kind can be read, the backup fails and nothing
+  is saved. On Android, a failed section used to go out empty, so a backup with
+  no shots could upload and replace a good one: it now fails too. A `NaN` in one
+  shot costs that shot, not the backup. One shot that throws no longer stops the
+  web's upload queue or catch-up uploads. Android and web.
 
 - **Replace restore keeps your custom profiles on Android** — restoring your own
   backup in Replace mode deleted every custom profile and reported "Restored 0

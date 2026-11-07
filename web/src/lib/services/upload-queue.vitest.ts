@@ -201,7 +201,7 @@ describe('UploadQueue.drain — shot create', () => {
 });
 
 describe('UploadQueue.drain — a row that throws (#329)', () => {
-	it('carries on past it, and counts it as a failed attempt', async () => {
+	it('drops that entry and carries on past it', async () => {
 		mockHistory.get.mockImplementation((id: string) => ({ id }));
 		enqueueEntry({ entity: 'shot', id: 'throws', op: 'create' });
 		enqueueEntry({ entity: 'shot', id: 'fine', op: 'create' });
@@ -218,7 +218,8 @@ describe('UploadQueue.drain — a row that throws (#329)', () => {
 		expect(uploaded).toEqual(['fine']);
 		expect(result.processed).toBe(2);
 		expect(result.succeeded).toBe(1);
-		expect(readQueue().entries.some((e) => e.id === 'fine')).toBe(false);
+		expect(result.dropped).toBe(1);
+		expect(readQueue().entries).toHaveLength(0);
 	});
 });
 

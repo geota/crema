@@ -1034,7 +1034,7 @@ class LibraryController(
     private fun backupBundleJson(snap: BackupSnapshot): String? = runCatching {
         backupBundleJsonl(snap, json, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
     }.map { built ->
-        built.omitted.forEach { appendLog("Backup left out ${it.kind} ${it.index}: ${it.id ?: "no id"}") }
+        built.omitted.forEach { appendLog("Backup left out ${it.kind} ${omittedRowId(it, snap) ?: "at ${it.index}"}") }
         built.degraded.forEach { appendLog("Backup left out the profile of shot $it") }
         backupGapsNotice(built)?.let { notify(it) }
         built.jsonl

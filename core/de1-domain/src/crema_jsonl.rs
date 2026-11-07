@@ -425,10 +425,13 @@ pub struct BackupImportPlan {
 /// [`BackupExport::degraded`]; any other row that won't read is left out and
 /// reported in [`BackupExport::omitted`]. Everything left out counts in the
 /// header's `omittedCount`, so a file made this way matches its own header.
+/// A section with rows of which none could be read is a failed section, not a
+/// gap: that file would look like a good backup of nothing, and retention
+/// would let it replace the copies that hold those rows.
 ///
 /// # Errors
-/// Returns the JSON parse error string when the envelope is malformed: not
-/// JSON, or a section that isn't a list of rows.
+/// Returns an error string when the envelope is malformed (not JSON, or a
+/// section that isn't a list of rows) or a section with rows kept none.
 pub fn export_backup_jsonl_from_json(
     envelope_json: &str,
     created_at_unix_ms: i64,
@@ -462,13 +465,13 @@ pub fn export_backup_jsonl_from_json(
     }
     let inp: In = serde_json::from_str(envelope_json).map_err(|e| e.to_string())?;
     let mut omitted = Vec::new();
-    let profiles = read_rows(inp.profiles, "profile", &mut omitted, read_profile_row);
-    let beans: Vec<Bean> = read_rows(inp.beans, "bean", &mut omitted, read_row);
-    let roasters: Vec<Roaster> = read_rows(inp.roasters, "roaster", &mut omitted, read_row);
-    let shots: Vec<ShotRow> = read_rows(inp.shots, "shot", &mut omitted, read_shot_row);
-    let recipes: Vec<BrewRecipe> = read_rows(inp.recipes, "recipe", &mut omitted, read_row);
+    let profiles = read_rows(inp.profiles, "profile", &mut omitted, read_profile_row)?;
+    let beans: Vec<Bean> = read_rows(inp.beans, "bean", &mut omitted, read_row)?;
+    let roasters: Vec<Roaster> = read_rows(inp.roasters, "roaster", &mut omitted, read_row)?;
+    let shots: Vec<ShotRow> = read_rows(inp.shots, "shot", &mut omitted, read_shot_row)?;
+    let recipes: Vec<BrewRecipe> = read_rows(inp.recipes, "recipe", &mut omitted, read_row)?;
     let custom_methods: Vec<CustomBrewMethod> =
-        read_rows(inp.custom_methods, "brewMethod", &mut omitted, read_row);
+        read_rows(inp.custom_methods, "brewMethod", &mut omitted, read_row)?;
     let recipes: Vec<&BrewRecipe> = recipes
         .iter()
         .filter(|r| !is_builtin_recipe(&r.id))
@@ -544,14 +547,16 @@ struct ShotRow {
 }
 
 /// Read each row with `read`, recording the ones it can't. A row may be a JSON
-/// string holding the row itself.
+/// string holding the row itself. Fails when there were rows and none could be
+/// read.
 fn read_rows<T>(
     rows: Vec<serde_json::Value>,
     kind: &'static str,
     omitted: &mut Vec<OmittedBackupRow>,
     read: impl Fn(&serde_json::Value) -> Option<T>,
-) -> Vec<T> {
-    let mut out = Vec::with_capacity(rows.len());
+) -> Result<Vec<T>, String> {
+    let total = rows.len();
+    let mut out = Vec::with_capacity(total);
     for (index, row) in rows.into_iter().enumerate() {
         let row = match row {
             serde_json::Value::String(text) => {
@@ -571,7 +576,10 @@ fn read_rows<T>(
             }),
         }
     }
-    out
+    if total > 0 && out.is_empty() {
+        return Err(format!("none of the {total} {kind} rows could be read"));
+    }
+    Ok(out)
 }
 
 fn read_row<T: serde::de::DeserializeOwned>(row: &serde_json::Value) -> Option<T> {
@@ -783,6 +791,13 @@ mod tests {
         serde_json::to_value(shot).unwrap()
     }
 
+    fn custom_method_row() -> serde_json::Value {
+        serde_json::json!({
+            "id": "custom:orb", "label": "ORB", "style": "percolation",
+            "createdAt": 1, "updatedAt": 2,
+        })
+    }
+
     fn header_of(jsonl: &str) -> BackupHeader {
         serde_json::from_str(jsonl.lines().next().unwrap()).unwrap()
     }
@@ -833,28 +848,46 @@ mod tests {
         let mut row = shot_row("s1");
         row["profile"] = serde_json::json!("not a profile");
         row["record"] = serde_json::json!(5);
-        let built = export(&serde_json::json!({ "shots": [row] }));
+        let built = export(&serde_json::json!({ "shots": [shot_row("good"), row] }));
         assert!(built.degraded.is_empty());
         assert_eq!(built.omitted.len(), 1);
-        assert_eq!(header_of(&built.jsonl).shot_count, 0);
+        assert_eq!(header_of(&built.jsonl).shot_count, 1);
     }
 
     /// Every kind of row, not just shots.
     #[test]
     fn an_unreadable_row_of_any_kind_is_left_out() {
         let bad = serde_json::json!({ "id": "bad", "name": 5, "steps": 5, "createdAt": "x" });
-        for (key, kind) in [
-            ("beans", "bean"),
-            ("roasters", "roaster"),
-            ("recipes", "recipe"),
-            ("customMethods", "brewMethod"),
-        ] {
-            let built = export(&serde_json::json!({ key: [bad] }));
+        let recipe = crate::duplicate_recipe(
+            &crate::builtin_brew_recipe("builtin:hoffmann-1-cup-v60").unwrap(),
+            "recipe:copy",
+            1_700,
+        );
+        let cases = [
+            (
+                "beans",
+                "bean",
+                serde_json::to_value(sample_bean("b1", "Good", None)).unwrap(),
+            ),
+            (
+                "roasters",
+                "roaster",
+                serde_json::to_value(sample_roaster("r1", "Good")).unwrap(),
+            ),
+            ("recipes", "recipe", serde_json::to_value(recipe).unwrap()),
+            ("customMethods", "brewMethod", custom_method_row()),
+        ];
+        for (key, kind, good) in cases {
+            let built = export(&serde_json::json!({ key: [good, bad] }));
             assert_eq!(built.omitted.len(), 1, "{key}");
             assert_eq!(built.omitted[0].kind, kind);
             assert_eq!(built.omitted[0].id.as_deref(), Some("bad"));
             assert_eq!(header_of(&built.jsonl).omitted_count, 1);
-            assert_eq!(built.jsonl.lines().count(), 1, "only the header: {key}");
+            assert_eq!(
+                built.jsonl.lines().count(),
+                2,
+                "the header and the good row: {key}"
+            );
         }
     }
 
@@ -898,9 +931,43 @@ mod tests {
     fn a_clean_backup_has_no_omitted_count_and_an_old_header_reads_as_zero() {
         let built = export(&serde_json::json!({ "shots": [shot_row("good")] }));
         assert!(!built.jsonl.contains("omittedCount"));
-        let bad = export(&serde_json::json!({ "shots": [5] }));
+        let bad = export(&serde_json::json!({ "shots": [shot_row("good"), 5] }));
         assert!(bad.jsonl.contains("\"omittedCount\":1"));
         assert_eq!(header_of(&built.jsonl).omitted_count, 0);
+    }
+
+    /// 300 unreadable shots would otherwise be a file with `shotCount: 0`: it
+    /// reports success, uploads, and lets retention drop the good copies.
+    #[test]
+    fn a_section_with_rows_and_none_readable_fails_the_backup() {
+        for key in [
+            "shots",
+            "beans",
+            "roasters",
+            "recipes",
+            "customMethods",
+            "profiles",
+        ] {
+            let envelope = serde_json::json!({ key: [5, "{ not json", serde_json::Value::Null] });
+            let error = export_backup_jsonl_from_json(&envelope.to_string(), 1, "t", "t");
+            assert!(error.is_err(), "{key}");
+        }
+    }
+
+    /// An empty section is an empty library, not a failure.
+    #[test]
+    fn an_empty_section_is_not_a_failure() {
+        let built = export(&serde_json::json!({ "shots": [], "beans": [] }));
+        assert!(built.omitted.is_empty());
+    }
+
+    /// Dropping built-ins isn't losing rows: a list of them backs up as none.
+    #[test]
+    fn a_section_of_only_builtin_recipes_is_not_a_failure() {
+        let builtin = crate::builtin_brew_recipe("builtin:hoffmann-1-cup-v60").unwrap();
+        let built = export(&serde_json::json!({ "recipes": [builtin] }));
+        assert!(built.omitted.is_empty());
+        assert_eq!(header_of(&built.jsonl).recipe_count, 0);
     }
 
     /// A section that isn't a list is the shell's bug: no file at all, not an

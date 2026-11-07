@@ -156,6 +156,22 @@ function settingsAreDefault(s: Settings): boolean {
 }
 
 /**
+ * Each of `rows` as its own JSON string, for the core to read one at a time, as
+ * Android hands them over, or `null` where encoding threw, which the core
+ * reports as left out. Strings cost the core far less memory than a parsed
+ * tree of every row at once.
+ */
+function rowStrings(rows: readonly unknown[]): (string | null)[] {
+	return rows.map((row) => {
+		try {
+			return JSON.stringify(row) ?? null;
+		} catch {
+			return null;
+		}
+	});
+}
+
+/**
  * Build the `crema-backup/v1` JSONL for everything local, WITHOUT downloading —
  * custom profiles only (built-ins ship with the app). Shared by the local
  * export and the Drive upload. Returns null when there's nothing to back up.
@@ -198,12 +214,12 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 	}
 
 	const envelope = JSON.stringify({
-		profiles: customProfiles,
-		beans,
-		roasters,
-		shots,
-		recipes,
-		customMethods,
+		profiles: rowStrings(customProfiles),
+		beans: rowStrings(beans),
+		roasters: rowStrings(roasters),
+		shots: rowStrings(shots),
+		recipes: rowStrings(recipes),
+		customMethods: rowStrings(customMethods),
 		// Settings line: the shared cross-shell `common` block (CommonSettings —
 		// both shells emit it identically, so common prefs restore web<->Android)
 		// + this shell's `_shell` tag + the web-only platform extras (webhooks,

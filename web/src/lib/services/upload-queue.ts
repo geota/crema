@@ -137,7 +137,9 @@ export const UploadQueueLive = Layer.effect(
 			for (const entry of ready) {
 				out.processed += 1;
 				// A throw is a defect, which `Effect.result` lets through: one row
-				// that can't be exported must not stop the rest of the queue.
+				// that can't be exported must not stop the rest of the queue. It
+				// goes through the decision below as a terminal error, so the entry
+				// is dropped at once; a row that throws won't stop throwing.
 				const result = yield* Effect.result(
 					runEntry(entry).pipe(
 						Effect.catchDefect((cause) =>

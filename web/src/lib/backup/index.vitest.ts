@@ -277,6 +277,16 @@ describe('one unreadable row (#329)', () => {
 		expect(header(built.jsonl)).toMatchObject({ beanCount: 1, omittedCount: 1 });
 	});
 
+	it('fails when every row of a section is unreadable, so nothing passes for a backup', async () => {
+		seed();
+		getHistoryStore().clearAllShots();
+		const broken = { ...makeShot('shot:bad'), record: { duration: 'nope', samples: [] } };
+		getHistoryStore().insertPulled(broken as unknown as StoredShot);
+
+		expect(() => buildBackupJsonl()).toThrow();
+		expect(await backupNote()).toBe('Backup failed: nothing was saved.');
+	});
+
 	it('keeps a clean backup free of the key', () => {
 		seed();
 		expect(buildBackupJsonl()!.jsonl).not.toContain('omittedCount');

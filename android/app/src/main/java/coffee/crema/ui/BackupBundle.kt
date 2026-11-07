@@ -72,6 +72,19 @@ internal data class BuiltBackup(
     val omitted: List<OmittedBackupRow> = emptyList(),
 )
 
+/** The id of a row the core left out, for the log. The core only has one when
+ *  the row got far enough to read; the rest are named here by their place in
+ *  the lists [backupBundleJsonl] sent. Custom profiles are raw JSON, so one
+ *  that won't read has no id to give. */
+internal fun omittedRowId(row: OmittedBackupRow, snap: BackupSnapshot): String? = row.id ?: when (row.kind) {
+    "shot" -> snap.state.history.getOrNull(row.index)?.id
+    "bean" -> snap.state.beans.getOrNull(row.index)?.id
+    "roaster" -> snap.state.roasters.getOrNull(row.index)?.id
+    "recipe" -> snap.userRecipes.getOrNull(row.index)?.id
+    "brewMethod" -> snap.state.customMethods.getOrNull(row.index)?.id
+    else -> null
+}
+
 /** The notice owed for a backup that left a row out or thinned one, or null. */
 internal fun backupGapsNotice(built: BuiltBackup): String? {
     val n = built.omitted.size
@@ -98,8 +111,8 @@ private fun <T> rowStrings(rows: List<T>, encode: (T) -> String): JsonArray =
 /** Build the whole-app backup bundle as `crema-backup/v1` JSONL from [snap].
  *  Heavy (every shot's sample series + the core export); reads only [snap],
  *  so it is safe off the main thread. One bad row is left out and reported;
- *  a section that can't be written throws, so no empty backup can go out and
- *  replace a good one. */
+ *  a section that can't be written, or whose rows all failed, throws, so no
+ *  empty backup can go out and replace a good one. */
 internal fun backupBundleJsonl(
     snap: BackupSnapshot,
     json: Json,

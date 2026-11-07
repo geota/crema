@@ -73,6 +73,20 @@ class BackupRowGapsTest {
         assertEquals(listOf("good"), assertNotNull(parseBackup(built.jsonl, json, now)).beans.map { it.id })
     }
 
+    /** That file would report success, upload, and let retention drop the good
+     *  copies: `shotCount: 0`, `omittedCount: 300`. */
+    @Test
+    fun `a section whose rows are all unreadable fails the backup`() {
+        assertFailsWith<Exception> { build(state().copy(history = List(3) { shot("nan$it", Float.NaN) })) }
+    }
+
+    @Test
+    fun `an omitted row is named from its place in the snapshot`() {
+        val snap = snapshot(state().copy(history = listOf(shot("good"), shot("nan", Float.NaN))))
+        val built = backupBundleJsonl(snap, json, now, "test", "Android test")
+        assertEquals(listOf("nan"), built.omitted.map { omittedRowId(it, snap) })
+    }
+
     /** It used to throw for the whole file, from `parseToJsonElement`. */
     @Test
     fun `an unreadable custom profile is left out alone`() {
