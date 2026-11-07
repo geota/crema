@@ -84,6 +84,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A damaged shot history keeps every curve on Android** — when `shots.json`
+  couldn't be read, the next save deleted every shot's curve, so the rows kept
+  aside could never get them back (#325). A curve now goes only when its own
+  shot leaves the history, once that save has landed, and anything left over
+  stays on disk until Erase all data. A row that comes back finds its curve.
+  Android.
+
 - **Replace restore keeps your custom profiles on Android** — restoring your own
   backup in Replace mode deleted every custom profile and reported "Restored 0
   profile(s)". They now come back and the report counts them.
