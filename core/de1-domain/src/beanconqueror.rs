@@ -1321,6 +1321,8 @@ where
 
         // Core metadata: dose / yield / rating / notes / grinder_setting.
         let crema_bean = crema_bean_by_bc_uuid.get(bean_uuid).copied();
+        // An imported brew never debited its bag: moving it off gives nothing back.
+        shot.bag_debit = crema_bean.map(|_| 0.0);
         let grinder_model = mill_by_uuid
             .get(bc_brew.mill.as_str())
             .map(|m| m.name.trim().to_owned())
@@ -1757,6 +1759,11 @@ mod tests {
             "espresso derived from type → shot kept"
         );
         let shot = &plan.shots[0];
+        assert_eq!(
+            shot.stored_shot.bag_debit,
+            Some(0.0),
+            "an imported brew took nothing from its bag"
+        );
         assert_eq!(
             shot.stored_shot.metadata.yield_out,
             Some(36.0),

@@ -356,25 +356,52 @@ pub fn debit_remaining(remaining: f32, dose_g: f32) -> Option<f32> {
     de1_domain::debit_remaining(remaining, dose_g)
 }
 
-/// The inverse credit for shot re-attribution — `de1_domain::credit_remaining`
-/// (dose back on the wrongly-billed bag, capped at `bag_size`; `None` = no
-/// change to persist), so web + Android share one rule.
+/// The grams a debit actually takes — [`de1_domain::debit_taken`]: what a shot
+/// row records as its `bagDebit`.
 #[uniffi::export]
-pub fn credit_remaining(remaining: f32, dose_g: f32, bag_size: f32) -> Option<f32> {
-    de1_domain::credit_remaining(remaining, dose_g, bag_size)
+pub fn debit_taken(remaining: f32, dose_g: f32) -> f32 {
+    de1_domain::debit_taken(remaining, dose_g)
+}
+
+/// The bag's remaining grams after a shot moves off it —
+/// [`de1_domain::credit_shot_debit`]: only the grams the row took go back,
+/// capped at `bag_size`; an untracked bag gains nothing. `bag_debit` is `None`
+/// for a row from before the field. `None` = no change to persist.
+#[uniffi::export]
+pub fn credit_shot_debit(
+    remaining: f32,
+    bag_size: f32,
+    bag_debit: Option<f32>,
+    dose_g: f32,
+) -> Option<f32> {
+    de1_domain::credit_shot_debit(remaining, bag_size, bag_debit, dose_g)
 }
 
 /// Re-settle a bag after a logged brew's dose edit —
-/// [`de1_domain::resettle_remaining`] (credit the old dose, debit the new;
-/// `None` = nothing to persist, including an unchanged dose).
+/// [`de1_domain::resettle_remaining`] (only the net change moves; `None` =
+/// nothing to persist, including an unchanged dose).
 #[uniffi::export]
 pub fn resettle_remaining(
     remaining: f32,
     bag_size: f32,
+    bag_debit: Option<f32>,
     old_dose: f32,
     new_dose: f32,
 ) -> Option<f32> {
-    de1_domain::resettle_remaining(remaining, bag_size, old_dose, new_dose)
+    de1_domain::resettle_remaining(remaining, bag_size, bag_debit, old_dose, new_dose)
+}
+
+/// What the row records as taken from its bag after that dose edit —
+/// [`de1_domain::resettled_bag_debit`].
+#[uniffi::export]
+pub fn resettled_bag_debit(
+    remaining: f32,
+    bag_size: f32,
+    bag_debit: Option<f32>,
+    old_dose: f32,
+    new_dose: f32,
+) -> f32 {
+    de1_domain::resettled_bag_debit(remaining, bag_size, bag_debit, old_dose, new_dose)
 }
 
 /// A new bag copied from a bean (`Bean` JSON in and out): `new_id`,
@@ -431,6 +458,13 @@ pub fn set_bean_frozen_json(
 #[uniffi::export]
 pub fn brews_remaining_estimate(remaining_g: f32, recent_doses: Vec<f32>) -> u32 {
     de1_domain::brews_remaining_estimate(remaining_g, &recent_doses)
+}
+
+/// How much is left in a bag, as `BagStock` JSON — [`de1_domain::bag_stock`].
+/// Mirrors the wasm `bagStockJson`.
+#[uniffi::export]
+pub fn bag_stock_json(remaining_g: f32, bag_size_g: f32, recent_doses: Vec<f32>) -> String {
+    de1_domain::bag_stock_json(remaining_g, bag_size_g, &recent_doses)
 }
 
 /// Restore a backup's Visualizer prefs over the current ones without silently

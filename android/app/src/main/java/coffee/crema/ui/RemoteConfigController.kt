@@ -1,7 +1,9 @@
 package coffee.crema.ui
 
+import coffee.crema.beans.bagStock
 import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.isFrozen
+import coffee.crema.core.BagStock
 import coffee.crema.core.MmrRegister
 import coffee.crema.machine.ConfigEcho
 import coffee.crema.machine.MachineCommand
@@ -81,6 +83,7 @@ internal class RemoteConfigController(
                     ?.let { profileJson(it) },
                 activeBeanId = ui.activeBeanId,
                 activeBeanSummary = activeBeanSummaryLine(),
+                activeBagEmpty = ui.beans.firstOrNull { it.id == ui.activeBeanId }?.let { bagStock(it) == BagStock.Empty } ?: false,
                 stopOnWeight = ui.stopOnWeight,
                 autoTare = ui.autoTare,
                 maxShotDurationS = ui.maxShotDurationS,

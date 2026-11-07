@@ -639,6 +639,25 @@ mod tests {
         );
     }
 
+    /// #303: what a shot took from its bag survives a backup, and a row from
+    /// before the field stays `None` and writes no key.
+    #[test]
+    fn bag_debit_survives_a_backup_round_trip() {
+        let record = || crate::ShotRecord {
+            duration: std::time::Duration::from_secs(30),
+            samples: Vec::new(),
+        };
+        let mut recorded = StoredShot::new(1_700_000_000_000, record());
+        recorded.bag_debit = Some(10.5);
+        let old = StoredShot::new(1_700_000_000_001, record());
+        let envelope = serde_json::json!({ "shots": [recorded, old] }).to_string();
+        let text = export_backup_jsonl_from_json(&envelope, 1, "test", "test").unwrap();
+        assert_eq!(text.matches("\"bagDebit\"").count(), 1);
+        let plan = parse_backup_jsonl(&text);
+        assert_eq!(plan.shots[0].bag_debit, Some(10.5));
+        assert_eq!(plan.shots[1].bag_debit, None);
+    }
+
     fn sample_bean(id: &str, name: &str, roaster_id: Option<&str>) -> Bean {
         let mut b = Bean::new(id.to_owned(), name.to_owned(), 1_700_000_000_000);
         b.roaster_id = roaster_id.map(str::to_owned);

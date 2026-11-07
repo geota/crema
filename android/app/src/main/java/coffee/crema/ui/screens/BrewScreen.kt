@@ -118,6 +118,7 @@ import coffee.crema.ui.StopTargetsView
 import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.DialInCard
+import coffee.crema.ui.components.EmptyBagBanner
 import coffee.crema.ui.components.CremaFreshnessChip
 import coffee.crema.ui.components.CremaHeaderBlock
 import coffee.crema.ui.components.HeaderBlockLine
@@ -225,6 +226,7 @@ fun BrewScreen(
                 onDismiss = { cat -> maintDismissed = maintDismissed + cat },
                 onOpenWater = { onNav("settings") },
             )
+            EmptyBagBanner(ui, onSelectBag = vm::setActiveBean, Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 4.dp))
             Row(
                 modifier = Modifier
                     .weight(1f)

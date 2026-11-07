@@ -274,7 +274,7 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
 
 /** Snapshot fields that are not settings: identity and bookkeeping. */
 val SNAPSHOT_META: Set<String> = setOf(
-    "activeProfileJson", "activeBeanSummary", "primaryName", "authority", "rev",
+    "activeProfileJson", "activeBeanSummary", "activeBagEmpty", "primaryName", "authority", "rev",
     // The hub's resolved hot-water target: a readout of A5 and A22–A25, not a setting.
     "hotWaterTarget",
 )

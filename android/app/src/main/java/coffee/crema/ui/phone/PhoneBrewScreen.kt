@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.components.EmptyBagBanner
 import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.LiveTelemetry
 import kotlinx.coroutines.flow.StateFlow
@@ -174,6 +175,8 @@ fun PhoneBrewScreen(
                     )
                 }
             }
+
+            EmptyBagBanner(ui, onSelectBag = vm::setActiveBean, Modifier.padding(vertical = 4.dp))
 
             // Service-mode status banner (steam / hot water / flush) — the
             // steaming timer the web head pill shows: live elapsed vs the

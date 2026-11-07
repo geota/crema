@@ -56,6 +56,7 @@ private fun MainUiState.withSnapshot(cfg: ConfigSnapshot, m: MirroredSettings): 
         mirroredProfile = overlay,
         mirroredProfileJson = m.profileJson,
         mirroredBeanSummary = m.beanSummary,
+        mirroredBagEmpty = cfg.activeBagEmpty,
         brewParams = brew,
         activeBeanId = cfg.activeBeanId,
         stopOnWeight = cfg.stopOnWeight,

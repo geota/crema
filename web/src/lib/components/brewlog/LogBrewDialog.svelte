@@ -299,8 +299,11 @@
 			barista: getSettingsStore().current.baristaName?.trim() || null
 		});
 		if (bean && dose > 0) {
-			const emptied = library.debitBean(bean.id, dose);
-			if (emptied) void promptBagEmpty(bean.id);
+			const debit = library.debitBean(bean.id, dose);
+			history.setBagDebit(record.id, debit.taken);
+			if (debit.emptied) void promptBagEmpty(bean.id);
+		} else if (bean) {
+			history.setBagDebit(record.id, 0);
 		}
 		rememberMethod(storedMethod);
 		toast.success('Brew logged');

@@ -120,11 +120,22 @@ describe('core-backed brew-log rules', () => {
 	it('resettleBean leaves a full bag alone when the dose is unchanged (drift bug 7)', () => {
 		const lib = new BeanLibraryStore();
 		lib.upsertBean({ ...coerceBean({ id: 'b1', name: 'House' })!, bagSize: 250, remaining: 250 });
-		lib.resettleBean('b1', 18, 18);
+		lib.resettleBean('b1', null, 18, 18);
 		expect(lib.getBean('b1')?.remaining).toBe(250);
 		// Only the net +2 g comes off; the old full-credit-then-debit lost 18 g.
-		lib.resettleBean('b1', 18, 20);
+		lib.resettleBean('b1', null, 18, 20);
 		expect(lib.getBean('b1')?.remaining).toBe(248);
+	});
+
+	it('resettleBean gives back no more than the row took (#303)', () => {
+		const lib = new BeanLibraryStore();
+		lib.upsertBean({ ...coerceBean({ id: 'b1', name: 'House' })!, bagSize: 250, remaining: 0 });
+		// Took 10 of an 18 g dose: 14 g still used all 10.
+		expect(lib.resettleBean('b1', 10, 18, 14)).toBe(10);
+		expect(lib.getBean('b1')?.remaining).toBe(0);
+		// 5 g puts 5 back, and the row now records 5.
+		expect(lib.resettleBean('b1', 10, 18, 5)).toBe(5);
+		expect(lib.getBean('b1')?.remaining).toBe(5);
 	});
 
 	it('brews_remaining_estimate uses the bag’s own mean dose', () => {
