@@ -22,6 +22,19 @@
 	import DebugPanel from '#lib/shell/DebugPanel.svelte';
 	import ReconnectStrip from '#lib/shell/ReconnectStrip.svelte';
 	import RefusedStoresStrip from '#lib/shell/RefusedStoresStrip.svelte';
+	import RestoreFreezeOverlay from '#lib/shell/RestoreFreezeOverlay.svelte';
+	import { freezeOverlay } from '#lib/restore/freeze-overlay.svelte.js';
+	import {
+		getMachineBusy,
+		installRestoreListener,
+		onShotFinished,
+		reloadBlocked,
+		restoreFrozen,
+		shotIsOpen,
+		type RestoreListener
+	} from '#lib/restore/tab-safety.js';
+	import { FLASH_HANDOVER, FLASH_RUNNING } from '#lib/firmware/firmware-update.svelte.js';
+	import { commitFrozenShots } from '#lib/history/shot-persistence.js';
 	import PhoneTopBar from '#lib/shell/PhoneTopBar.svelte';
 	import PhoneTabBar from '#lib/shell/PhoneTabBar.svelte';
 	import { showsPhoneTabs } from '#lib/shell/nav-items.js';
@@ -101,8 +114,32 @@
 		);
 	}
 
+	/** A flash runs, or holds the link for its power cycle. */
+	function flashRunning(): boolean {
+		return (app?.firmware.running ?? false) || (app?.firmware.holdsLink ?? false);
+	}
+
+	/** Whether a frozen tab's reload would interrupt the machine or lose a shot. */
+	function machineRunning(): boolean {
+		return reloadBlocked({ inputs: reloadInputs(), flash: flashRunning(), shotOpen: shotIsOpen() });
+	}
+	let stopShotFinished: (() => void) | null = null;
+
+	// A restore in another tab freezes this one (see `#lib/restore/tab-safety`).
+	let restoreListener: RestoreListener | null = null;
+
 	onMount(async () => {
 		stopResetListener = installResetListener();
+		restoreListener = installRestoreListener({
+			busy: machineRunning,
+			onFrozen: () => freezeOverlay.show(),
+			holdReload: () => freezeOverlay.unsaved !== null,
+			onStuck: () => freezeOverlay.stuck()
+		});
+		stopShotFinished = onShotFinished(() => restoreListener?.idle());
+		// Whether a restore runs elsewhere, before the shots a frozen tab kept
+		// are recorded: a frozen boot would drop them.
+		const bootChecked = restoreListener.checkAtBoot();
 		// What a factory reset in this tab could not finish, told after its reload.
 		const resetReport = takeResetReport();
 		const resetNotice = resetReport && resetReportMessage(resetReport);
@@ -154,6 +191,12 @@
 		// and publish it via context (D-04): components call `services.*` instead
 		// of crossing the Effect boundary by hand.
 		services = createCremaServices(runtime);
+		// Shots a frozen tab finished before it reloaded: recorded once this
+		// boot knows it isn't frozen too.
+		const bootRuntime = runtime;
+		void bootChecked.then(() => {
+			if (!restoreFrozen()) void commitFrozenShots(bootRuntime);
+		});
 		// Keep the cached Visualizer Premium flag (it gates the edit sync's
 		// Premium-only PATCH fields) fresh: re-probe at most once per 24 h.
 		// Fire-and-forget; a no-op when signed out, and it never rejects.
@@ -233,12 +276,26 @@
 		app?.coreResetNotice.onStateChange();
 	});
 
+	// This tab's shared hold on the machine, for a shot or a flash: a restore
+	// in any tab refuses while it's held. And a frozen tab's reload, once
+	// neither runs.
+	$effect(() => {
+		const busy = getMachineBusy();
+		const flash = flashRunning();
+		busy.set(FLASH_RUNNING, flash);
+		// The flash shows as running: the controller's hand-over hold can go.
+		if (flash) busy.release(FLASH_HANDOVER);
+		if (!machineRunning()) restoreListener?.idle();
+	});
+
 	// Tear the runtime's fibers + finalizers down when the shell unmounts
 	// (also fires on HMR), so a dev reload doesn't leak runtimes or listeners.
 	onDestroy(() => {
 		stopStorageNotices?.();
 		stopVisualizerNotices?.();
 		stopResetListener?.();
+		restoreListener?.stop();
+		stopShotFinished?.();
 		serviceWorker?.dispose();
 		if (onOnline) window.removeEventListener('online', onOnline);
 		if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
@@ -279,6 +336,7 @@
 	<!-- The firmware-update flow (alpha) — app-wide so a running flash or its
 	     power-cycle step stays visible on every page. -->
 	<FirmwareUpdateHost {app} />
+	<RestoreFreezeOverlay onSaved={() => restoreListener?.idle()} />
 {/if}
 
 <style>
