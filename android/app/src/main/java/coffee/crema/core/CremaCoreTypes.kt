@@ -3554,7 +3554,9 @@ data class ProfileMeta (
 /// Recipe organisation here.
 @Serializable
 data class RecipeMeta (
-	/// Method id → recipe id.
+	/// Method id → recipe id. Written in order, so a plan serialises the same
+	/// way every time: the shell compares a confirmed plan with a fresh one by
+	/// its JSON.
 	val defaults: HashMap<String, String>,
 	val hiddenBuiltins: List<String>
 )
@@ -4133,6 +4135,7 @@ data class RecipeLibraryMigration (
 @Serializable
 data class RecipeMetaPlan (
 	val action: PlanAction,
+	/// Written in order, as [`RecipeMeta::defaults`].
 	val defaults: HashMap<String, String>,
 	val hiddenBuiltins: List<String>
 )

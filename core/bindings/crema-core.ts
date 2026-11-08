@@ -3450,7 +3450,11 @@ export interface ProfileMeta {
 
 /** Recipe organisation here. */
 export interface RecipeMeta {
-	/** Method id → recipe id. */
+	/**
+	 * Method id → recipe id. Written in order, so a plan serialises the same
+	 * way every time: the shell compares a confirmed plan with a fresh one by
+	 * its JSON.
+	 */
 	defaults: Record<string, string>;
 	hiddenBuiltins: string[];
 }
@@ -4016,6 +4020,7 @@ export interface RecipeLibraryMigration {
 /** Recipe organisation after the restore, when it changes. */
 export interface RecipeMetaPlan {
 	action: PlanAction;
+	/** Written in order, as [`RecipeMeta::defaults`]. */
 	defaults: Record<string, string>;
 	hiddenBuiltins: string[];
 }

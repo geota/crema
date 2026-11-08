@@ -19,7 +19,7 @@
 //! count missing from the header (`Some(0)` is carried and empty); for a
 //! settings-like line it's no line.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -849,7 +849,10 @@ pub struct ProfileMeta {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecipeMeta {
-    /// Method id → recipe id.
+    /// Method id → recipe id. Written in order, so a plan serialises the same
+    /// way every time: the shell compares a confirmed plan with a fresh one by
+    /// its JSON.
+    #[serde(serialize_with = "ordered")]
     pub defaults: HashMap<String, String>,
     pub hidden_builtins: Vec<String>,
 }
@@ -1124,6 +1127,8 @@ pub struct ProfileMetaPlan {
 #[serde(rename_all = "camelCase")]
 pub struct RecipeMetaPlan {
     pub action: PlanAction,
+    /// Written in order, as [`RecipeMeta::defaults`].
+    #[serde(serialize_with = "ordered")]
     pub defaults: HashMap<String, String>,
     pub hidden_builtins: Vec<String>,
 }
@@ -1658,6 +1663,12 @@ fn profile_meta_plan(
     }
 }
 
+/// A map written in key order: a hash map's own order differs from one map to
+/// the next.
+fn ordered<S: serde::Serializer>(map: &HashMap<String, String>, s: S) -> Result<S::Ok, S::Error> {
+    s.collect_map(map.iter().collect::<BTreeMap<_, _>>())
+}
+
 fn recipe_meta_plan(
     backup: Option<&serde_json::Value>,
     local: &RecipeMeta,
@@ -1739,4 +1750,49 @@ pub fn plan_restore_json(
 #[must_use]
 pub fn common_is_pristine_json(common_json: &str) -> bool {
     serde_json::from_str::<CommonSettings>(common_json).is_ok_and(|c| common_is_pristine(&c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A shell compares the plan the user confirmed with a fresh one by its
+    /// JSON, so the same inputs must serialise the same way every time. With
+    /// a hash map, the method order changed from one map to the next, and the
+    /// web restore matrix's "recipe meta: merge keeps a pointer here" came back
+    /// `changed` instead of `done`.
+    #[test]
+    fn a_recipe_meta_plan_serialises_the_same_way_every_time() {
+        let local = RecipeMeta {
+            defaults: [("pourover", "recipe:mine")]
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect(),
+            hidden_builtins: Vec::new(),
+        };
+        let backup = serde_json::json!({
+            "defaults": {
+                "pourover": "recipe:theirs", "moka": "recipe:moka", "v60": "recipe:a",
+                "aeropress": "recipe:b", "chemex": "recipe:c", "clever": "recipe:d"
+            },
+            "hiddenBuiltins": []
+        });
+        let plan = || {
+            serde_json::to_string(&recipe_meta_plan(Some(&backup), &local, RestoreMode::Merge))
+                .unwrap()
+        };
+        let first = plan();
+        for _ in 0..50 {
+            assert_eq!(plan(), first);
+        }
+        let at = |k: &str| first.find(k).unwrap();
+        assert!(
+            at("aeropress") < at("chemex") && at("chemex") < at("v60"),
+            "{first}"
+        );
+        assert!(
+            first.contains(r#""pourover":"recipe:mine""#),
+            "a pointer here wins"
+        );
+    }
 }
