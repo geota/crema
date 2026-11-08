@@ -1253,10 +1253,14 @@ class LibraryController(
             persistCustomProfiles()
             persistLibrary()
             historyStore.save(uiState().history)
-            restoredPrefs?.let { applyRestoredSettings(it) }
+            // Merge keeps this device's settings, maintenance counters and
+            // Visualizer prefs, as the owner decided: only Replace takes the
+            // backup's. (The plan's "unless still pristine" comes with PR7.)
+            val replacing = mode == MainViewModel.RestoreMode.WIPE
+            restoredPrefs?.takeIf { replacing }?.let { applyRestoredSettings(it) }
             // Cross-shell common settings: overlay onto current prefs (keeping this
             // device's platform extras), then apply. qcGrind rides only from Android.
-            restoredCommon?.let { c ->
+            restoredCommon?.takeIf { replacing }?.let { c ->
                 val target = currentPrefs().withCommonSettings(c)
                 applyRestoredSettings(if (restoredQcGrind != null) target.copy(qcGrind = restoredQcGrind) else target)
             }
@@ -1264,10 +1268,10 @@ class LibraryController(
             // Maintenance counters + Visualizer sync prefs — both shared core types,
             // applied verbatim on either shell (no per-shell tag); never the OAuth
             // token (re-auth after restore). Reseed the live water integrator.
-            restoredMaintenance?.let { applyRestoredMaintenance(it) }
+            restoredMaintenance?.takeIf { replacing }?.let { applyRestoredMaintenance(it) }
             // Never widen sharing from a backup (review 05 P3-1): held fields keep
             // this device's value and the notice below says so.
-            val heldSharing = restoredVisualizerPrefs?.let { incoming ->
+            val heldSharing = restoredVisualizerPrefs?.takeIf { replacing }?.let { incoming ->
                 val guarded = guardRestoredPrefs(visualizer.backupPrefs(), incoming, json)
                 visualizer.restorePrefs(guarded.apply)
                 guarded.held

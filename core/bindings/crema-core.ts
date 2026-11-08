@@ -37,6 +37,18 @@ export interface BackupFile {
 }
 
 /**
+ * What a backup's name says about it, for a list to pick from. Any name will
+ * do: what it doesn't say stays empty.
+ */
+export interface BackupFileInfo {
+	/** The device label, as it went into the name. */
+	device?: string;
+	/** Made by the daily backup, not by hand. */
+	automatic: boolean;
+	counts?: BackupCounts;
+}
+
+/**
  * Whether a bag of coffee is a single-origin lot or a blend. `None` =
  * unknown / unset. Serialises as the lowercase wire string
  * (`"single"` / `"blend"`) to match the TS shell's typed string union.
@@ -3353,6 +3365,15 @@ export interface ListRow {
 	updated_at: number;
 }
 
+/** A shot here, as far as a plan needs it. Include tombstoned rows. */
+export interface LocalShot {
+	id: string;
+	hasSamples: boolean;
+	pinned?: boolean;
+	/** Deleted here, with its remote delete still owed. */
+	deleted?: boolean;
+}
+
 /**
  * A slim view onto the shell's `StoredShot`: only the fields the
  * reconcile planner reads. Lets the shell project its full record
@@ -3387,6 +3408,67 @@ export interface LocalShotRef {
 	 * binds like any other, so the remote copy stays out of the history.
 	 */
 	deletedAt?: number;
+}
+
+/** How a store on the device loaded. */
+export enum LocalHealth {
+	Loading = "loading",
+	Ok = "ok",
+	Absent = "absent",
+	Damaged = "damaged",
+	Unavailable = "unavailable",
+}
+
+/** One store's health, named as the shell names it. */
+export interface LocalStoreHealth {
+	store: string;
+	health: LocalHealth;
+}
+
+/** Profile organisation here. */
+export interface ProfileMeta {
+	pinned: string[];
+	hiddenBuiltins: string[];
+}
+
+/** Recipe organisation here. */
+export interface RecipeMeta {
+	/** Method id → recipe id. */
+	defaults: Record<string, string>;
+	hiddenBuiltins: string[];
+}
+
+/**
+ * What the device holds, from the shell. Built once telemetry has loaded:
+ * before that every row looks curveless.
+ */
+export interface LocalState {
+	/** `web` or `android`. */
+	shell: string;
+	/** Rows history keeps, or none when it has no cap. */
+	historyCapacity?: number;
+	/** A shot or a firmware flash is running, in any tab. */
+	machineBusy: boolean;
+	health: LocalStoreHealth[];
+	beans: string[];
+	roasters: string[];
+	/** Custom profiles only: built-ins aren't the backup's to change. */
+	profiles: string[];
+	/** The user's own recipes only. */
+	recipes: string[];
+	/** Tombstones included. */
+	customMethods: string[];
+	shots: LocalShot[];
+	/** Bean ids with a stored photo. */
+	photos: string[];
+	/** Bean ids whose row names a photo that isn't there. */
+	beansMissingPhoto: string[];
+	profileMeta: ProfileMeta;
+	recipeMeta: RecipeMeta;
+	common: CommonSettings;
+	visualizerPrefs: VisualizerSyncPrefs;
+	totalLitres: number;
+	activeBeanId?: string;
 }
 
 /**
@@ -3600,6 +3682,53 @@ export interface PhaseMarker {
 	transitionReason: string;
 }
 
+/** Bag photos, by bean id. */
+export interface PhotoPlan {
+	put: string[];
+	remove: string[];
+}
+
+/** Why a plan won't run, or what its report must say. */
+export enum PlanCode {
+	NotABackup = "notABackup",
+	/** A History "Export shots" file: use Import. */
+	ShotsExport = "shotsExport",
+	NewerFormat = "newerFormat",
+	StoreUnavailable = "storeUnavailable",
+	StoreLoading = "storeLoading",
+	MachineBusy = "machineBusy",
+	BadLines = "badLines",
+	HeaderDamaged = "headerDamaged",
+	CountMismatch = "countMismatch",
+	OverCapacity = "overCapacity",
+	EmptyBackup = "emptyBackup",
+	NotAdded = "notAdded",
+	Omitted = "omitted",
+	PinnedRemoved = "pinnedRemoved",
+	UnknownKinds = "unknownKinds",
+	Duplicates = "duplicates",
+	DeletedHere = "deletedHere",
+}
+
+/** One refusal or warning. */
+export interface PlanNote {
+	code: PlanCode;
+	/** A warning the user has to see before it runs, not one only noted. */
+	confirm: boolean;
+	/** How many, where that's the point. */
+	count?: number;
+	/** The store, where there's one. */
+	store?: string;
+}
+
+/** Where the backup came from. */
+export interface PlanSource {
+	createdAt: number;
+	appVersion: string;
+	deviceLabel: string;
+	omittedCount: number;
+}
+
 /** A row that keeps failing. */
 export interface PoisonEntry {
 	id: string;
@@ -3667,6 +3796,19 @@ export interface ProfileFileError {
 	item?: number;
 	/** Why, in words a user can act on. */
 	message: string;
+}
+
+/** Apply the backup's, or keep what's here. */
+export enum PlanAction {
+	Keep = "keep",
+	Apply = "apply",
+}
+
+/** Profile organisation after the restore, when it changes. */
+export interface ProfileMetaPlan {
+	action: PlanAction;
+	pinned: string[];
+	hiddenBuiltins: string[];
 }
 
 /** The profile sync's state, as a shell sees it. */
@@ -3848,6 +3990,13 @@ export interface RecipeLibraryMigration {
 	droppedIds: string[];
 }
 
+/** Recipe organisation after the restore, when it changes. */
+export interface RecipeMetaPlan {
+	action: PlanAction;
+	defaults: Record<string, string>;
+	hiddenBuiltins: string[];
+}
+
 /** A recipe's estimated run time ([`BrewRecipe::estimated_duration`]). */
 export interface RecipeTimeEstimate {
 	/** The sum of the step durations, milliseconds. */
@@ -3919,6 +4068,105 @@ export interface ReplayMeta {
 	bean?: ReplayMetaBean;
 	/** Equipment-level grinder model at shot start. */
 	grinderModel?: string;
+}
+
+/** What the user chose in the report. */
+export interface RestoreOpts {
+	/** Bring back shots deleted here that the backup has. */
+	reviveDeleted: boolean;
+}
+
+/** Merge adds what's missing; Replace makes the device match the backup. */
+export enum RestoreMode {
+	Merge = "merge",
+	Replace = "replace",
+}
+
+/** Whether the shell may apply the plan at once. */
+export enum Verdict {
+	/** Apply, then report. */
+	Ok = "ok",
+	/** Show the report first. */
+	Confirm = "confirm",
+	/** Change nothing. */
+	Refused = "refused",
+}
+
+/** One row store's part of a plan. */
+export interface StorePlan {
+	/** Ids in the backup and not here. */
+	add: string[];
+	/** Ids in both, the backup's row to win. Replace only. */
+	overwrite: string[];
+	/** Rows in both that stay as they are. */
+	keep: number;
+	/** Ids here to delete, by name. Replace only. */
+	remove: string[];
+}
+
+/** The shots' part of a plan. */
+export interface ShotPlan {
+	add: string[];
+	overwrite: string[];
+	keep: number;
+	remove: string[];
+	/** Rows here with no curve, which take the backup's curve and nothing else. */
+	fill: string[];
+	/**
+	 * Added rows on a bag that's already here: that bag never paid for them,
+	 * so their `bagDebit` becomes 0.
+	 */
+	zeroDebit: string[];
+	/** Rows the backup has that were deleted here: skipped, and offered back. */
+	deletedHere: string[];
+	/**
+	 * Rows here as tombstones that come back as the backup's row: on Replace,
+	 * and on Merge with "bring back". Their tombstones are cancelled.
+	 */
+	revive: string[];
+	/** Rows Merge couldn't add, as history is full, revived ones included. */
+	notAdded: number;
+	/** Shots asked back that history had no room for: they stay deleted. */
+	notRevived: string[];
+	/** Pinned rows Replace removes. */
+	pinnedRemoved: number;
+}
+
+/** Tombstones to drop, with their queued remote deletes. */
+export interface TombstonePlan {
+	cancel: string[];
+}
+
+/** The settings line's part of a plan. */
+export interface SettingsPlan {
+	/** The shared settings. Replace resets, then applies. */
+	common: PlanAction;
+	/** The shell's own: only from a backup the same shell wrote. */
+	extras: PlanAction;
+}
+
+/** One restore, decided: ids and actions, no row data. */
+export interface RestorePlan {
+	mode: RestoreMode;
+	verdict: Verdict;
+	refusals: PlanNote[];
+	warnings: PlanNote[];
+	source: PlanSource;
+	beans: StorePlan;
+	roasters: StorePlan;
+	profiles: StorePlan;
+	recipes: StorePlan;
+	customMethods: StorePlan;
+	shots: ShotPlan;
+	tombstones: TombstonePlan;
+	photos: PhotoPlan;
+	settings: SettingsPlan;
+	maintenance: PlanAction;
+	visualizerPrefs: PlanAction;
+	profileMeta: ProfileMetaPlan;
+	recipeMeta: RecipeMetaPlan;
+	/** Replace clears an active bean the backup doesn't have. */
+	clearActiveBean: boolean;
 }
 
 /**

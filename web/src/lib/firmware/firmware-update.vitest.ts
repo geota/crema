@@ -18,12 +18,15 @@ import {
 import { powerCycleLinkAction, waitingText } from './flash-copy';
 import {
 	AWAITING_KEY,
+	FLASH_RUNNING,
 	markerFor,
 	FirmwareUpdateController,
 	type FirmwareUpdateDeps,
 	type MarkerStore
 } from './firmware-update.svelte';
 import type { FlashIo } from './flash-driver';
+import { FakeLocks } from '#lib/testing/fake-locks.js';
+import { FLASH_REFUSED_FOR_RESTORE, MACHINE_BUSY_LOCK, MachineBusy } from '#lib/restore/tab-safety.js';
 
 beforeAll(initTestWasm);
 
@@ -169,6 +172,77 @@ describe('FirmwareUpdateController', () => {
 		await pending;
 		expect(flow.step).toBe('choose');
 		expect(flow.sourceProblem).toBeNull();
+	});
+
+	it('a flash can not start while a restore in any tab holds the machine', async () => {
+		const locks = new FakeLocks();
+		const release = await locks.hold(MACHINE_BUSY_LOCK);
+		const d = { ...deps({}), machineBusy: new MachineBusy(locks) };
+		const flow = new FirmwareUpdateController(d);
+		await flow.open();
+		flow.image = new Uint8Array(16);
+		await flow.startFlash();
+		expect(flow.startProblem).toBe(FLASH_REFUSED_FOR_RESTORE);
+		expect(flow.step).toBe('confirm');
+		expect(d.core.firmwareFlashStart).not.toHaveBeenCalled();
+		release();
+	});
+
+	it('a flash holds the machine from its start into the flash itself', async () => {
+		const locks = new FakeLocks();
+		const busy = new MachineBusy(locks);
+		const flow = new FirmwareUpdateController({ ...deps({}), machineBusy: busy });
+		await flow.open();
+		flow.image = new Uint8Array(16);
+		await flow.startFlash();
+		expect(flow.step).toBe('flash');
+		expect(busy.held).toBe(true);
+		let refused = false;
+		await locks.request(MACHINE_BUSY_LOCK, { mode: 'exclusive', ifAvailable: true }, (lock) => {
+			refused = lock === null;
+		});
+		expect(refused).toBe(true);
+	});
+
+	it('the shell seeing no flash yet does not drop the hand-over', async () => {
+		const locks = new FakeLocks();
+		const busy = new MachineBusy(locks);
+		const flow = new FirmwareUpdateController({ ...deps({}), machineBusy: busy });
+		await flow.open();
+		flow.image = new Uint8Array(16);
+		await flow.startFlash();
+		// The layout's effect, in the gap before `running` turns true.
+		busy.set(FLASH_RUNNING, false);
+		await new Promise((r) => setTimeout(r, 0));
+		expect(busy.held).toBe(true);
+	});
+
+	it('a flash that ends lets go of the hand-over, even while it still holds writes', async () => {
+		for (const phase of [FlashPhase.Failed, FlashPhase.Cancelled, FlashPhase.Succeeded]) {
+			const locks = new FakeLocks();
+			const busy = new MachineBusy(locks);
+			const flow = new FirmwareUpdateController({ ...deps({}), machineBusy: busy });
+			await flow.open();
+			flow.image = new Uint8Array(16);
+			await flow.startFlash();
+			const driver = flow['driver'] as unknown as { opts: { onStatus(s: FlashStatus | null): void } };
+			// An erase still settling: writes stay locked, the flash itself is over.
+			driver.opts.onStatus(status(phase, { locksWrites: true, eraseSettling: true }));
+			await new Promise((r) => setTimeout(r, 0));
+			expect(busy.held, phase).toBe(false);
+		}
+	});
+
+	it('a flash that fails to start lets the machine go', async () => {
+		const locks = new FakeLocks();
+		const busy = new MachineBusy(locks);
+		const flow = new FirmwareUpdateController({ ...deps({ blockers: [] }), machineBusy: busy });
+		flow['driver'].start = async () => ({ type: 'Blocked', content: { blockers: [{ type: 'LowPower' }] } }) as never;
+		await flow.open();
+		flow.image = new Uint8Array(16);
+		await flow.startFlash();
+		await new Promise((r) => setTimeout(r, 0));
+		expect(busy.held).toBe(false);
 	});
 
 	it('blockers keep the flow on the confirm step', async () => {

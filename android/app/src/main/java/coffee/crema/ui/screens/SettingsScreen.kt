@@ -76,6 +76,7 @@ import coffee.crema.ui.refillPointMm
 import coffee.crema.ui.refillThresholdDepthMm
 import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
+import coffee.crema.ui.components.DRIVE_RESTORE_HINT
 import coffee.crema.ui.components.KEEP_CONNECTED_HINT
 import coffee.crema.ui.components.RememberedDeviceRow
 import coffee.crema.ui.components.CopyDiagnosticsRow
@@ -938,8 +939,8 @@ fun SettingsScreen(
                                 CremaSettingsRow("Back up to Drive", listOfNotNull(ds.healthLine, lastBackupSub).joinToString(" ")) {
                                     CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
                                 }
-                                CremaSettingsRow("Restore latest", "Merge the newest Drive backup into your current data.") {
-                                    CremaButton(onClick = { vm.drive.restoreLatest(false) }, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore")
+                                CremaSettingsRow("Restore from Drive", DRIVE_RESTORE_HINT) {
+                                    CremaButton(onClick = vm.drive::openBackupPicker, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore…")
                                 }
                                 CremaSettingsRow("Automatic daily backup", "Upload a fresh backup once a day when the app opens — so an uninstall can't take your data with it.") {
                                     CremaSwitch(ui.autoDriveBackup, vm::setAutoDriveBackup)

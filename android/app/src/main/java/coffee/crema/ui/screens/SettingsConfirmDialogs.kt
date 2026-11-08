@@ -12,11 +12,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coffee.crema.drive.DriveBackupRow
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaConfirmDialog
+import coffee.crema.ui.components.DriveBackupPicker
+import coffee.crema.ui.components.backupDate
 import kotlinx.coroutines.launch
 
 /**
@@ -57,6 +61,9 @@ class SettingsConfirmState(
     /** A backup file the user picked for a REPLACE (wipe) restore, awaiting the
      *  type-to-confirm. Null ⟺ nothing pending. (Merge restores apply at once.) */
     var pendingRestoreWipe by restoreWipe
+
+    /** A Drive backup picked for a REPLACE restore, awaiting the type-to-confirm. */
+    var pendingDriveReplace by mutableStateOf<DriveBackupRow?>(null)
 }
 
 /** Build the shared confirm-state holder (saveable flags + SAF export launcher). */
@@ -215,6 +222,29 @@ fun SettingsConfirmDialogs(state: SettingsConfirmState, vm: MainViewModel, ui: M
         onConfirm = { vm.visualizer.resyncAllShots(ui.history); state.pendingResync = false },
         onDismiss = { state.pendingResync = false },
     )
+    // The Drive picker: choose a backup, then Merge, or Replace behind the same
+    // type-to-confirm as a file.
+    val driveState by vm.drive.state.collectAsStateWithLifecycle()
+    driveState.backups?.let { rows ->
+        DriveBackupPicker(
+            rows = rows,
+            onMerge = { vm.drive.restoreBackup(it.id, wipe = false) },
+            onReplace = { state.pendingDriveReplace = it },
+            onDismiss = vm.drive::closeBackupPicker,
+        )
+    }
+    state.pendingDriveReplace?.let { row ->
+        CremaConfirmDialog(
+            title = "Replace all data?",
+            body = "Every bean, roaster, shot and custom profile on this device is deleted and replaced with the backup from ${backupDate(row)}. Built-in profiles remain. This can't be undone. Type ERASE to confirm.",
+            confirmLabel = "Replace everything",
+            icon = "trash",
+            danger = true,
+            requireTyped = "ERASE",
+            onConfirm = { vm.drive.restoreBackup(row.id, wipe = true); state.pendingDriveReplace = null },
+            onDismiss = { state.pendingDriveReplace = null },
+        )
+    }
     // Replace-restore (wipe) — the same type-to-confirm gate as Erase all data.
     state.pendingRestoreWipe?.let { uri ->
         CremaConfirmDialog(
