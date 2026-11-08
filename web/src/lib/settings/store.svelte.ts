@@ -27,7 +27,14 @@ import {
 	resetSettingsJson,
 	sanitizeCommonSettingsJson
 } from '#lib/wasm/de1_wasm.js';
-import { isJsonObject, readJson, readStore, writeJson, writeJsonChecked } from '#lib/utils/storage.js';
+import {
+	followOtherTabs,
+	isJsonObject,
+	readJson,
+	readStore,
+	writeJson,
+	writeJsonChecked
+} from '#lib/utils/storage.js';
 import { readSyncConfig } from '#lib/visualizer/sync-config.js';
 import type {
 	CommonSettings,
@@ -727,7 +734,11 @@ function loadSettings(): Settings {
 		what: 'settings',
 		valid: isJsonObject
 	});
-	const stored = read.kind === 'loaded' ? read.value : null;
+	return settingsOf(read.kind === 'loaded' ? read.value : null);
+}
+
+/** The flat `Settings` from a stored bundle, nested or flat, or the defaults. */
+function settingsOf(stored: Record<string, unknown> | null): Settings {
 	if (stored && typeof stored === 'object' && stored.common) {
 		const platform: Partial<Settings> = {};
 		for (const k of PLATFORM_KEYS) {
@@ -800,6 +811,13 @@ export class SettingsStore {
 				if (this.current.theme === 'system') applyTheme('system');
 			});
 		}
+		// Another tab's preferences are taken, not written back over (#333).
+		// Memory only: nothing is pushed to the core or the machine from here.
+		// This tab's next push carries them.
+		followOtherTabs(SETTINGS_KEY, isJsonObject, (v) => {
+			this.current = settingsOf(v as Record<string, unknown>);
+			applyTheme(this.current.theme);
+		});
 	}
 
 	/** Persist the preference bundle to localStorage in the nested cross-shell

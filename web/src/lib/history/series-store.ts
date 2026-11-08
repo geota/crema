@@ -108,6 +108,24 @@ export async function getAllSeries(): Promise<Map<string, TimedSample[]>> {
 	}
 }
 
+/** Load the series of each of `ids` that has one, keyed by shot id. */
+export async function getSeriesOf(ids: readonly string[]): Promise<Map<string, TimedSample[]>> {
+	const out = new Map<string, TimedSample[]>();
+	if (ids.length === 0) return out;
+	const db = await openDb();
+	try {
+		const store = db.transaction(STORE, 'readonly').objectStore(STORE);
+		const values = await Promise.all(ids.map((id) => reqp(store.get(id) as IDBRequest<unknown>)));
+		ids.forEach((id, i) => {
+			const v = values[i];
+			if (Array.isArray(v)) out.set(id, v as TimedSample[]);
+		});
+		return out;
+	} finally {
+		db.close();
+	}
+}
+
 /** Delete one shot's series (a removed / hard-deleted shot). */
 export async function deleteSeries(id: string): Promise<void> {
 	const db = await openDb();

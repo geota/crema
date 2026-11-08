@@ -28,6 +28,7 @@ import { SvelteSet } from 'svelte/reactivity';
 import { loadCore } from '#lib/core/index.js';
 import { refreshStopTargetsProjection } from '#lib/state/ui-state.svelte.js';
 import {
+	followOtherTabs,
 	isIdOrNull,
 	isJsonObject,
 	readJson,
@@ -203,6 +204,21 @@ export class ProfileStore {
 		// `JSON.stringify` once per app boot — negligible).
 		writeJson(CUSTOM_KEY, this.custom);
 		writeJson(ACTIVE_KEY, this.activeId);
+		// Another tab's profiles, pins and hidden list are taken, not written
+		// back over (#333). Not the active id: it's what this tab's machine
+		// runs, pushed to the core and the DE1 only through `setActive`.
+		followOtherTabs(CUSTOM_KEY, Array.isArray, (v) => {
+			const custom = stripLegacyIdPrefix(v as CremaProfile[]);
+			this.custom = this.loaded ? custom.map(withDerivedBrewTemp) : custom;
+		});
+		followOtherTabs(OVERRIDES_KEY, isJsonObject, (v) => {
+			this.overrides = v as Record<string, BuiltinOverride>;
+		});
+		followOtherTabs(HIDDEN_BUILTINS_KEY, Array.isArray, (v) => {
+			const next = new Set(v as string[]);
+			for (const id of [...this.hiddenBuiltins]) if (!next.has(id)) this.hiddenBuiltins.delete(id);
+			for (const id of next) this.hiddenBuiltins.add(id);
+		});
 	}
 
 	/**

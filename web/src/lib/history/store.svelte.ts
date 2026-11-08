@@ -30,7 +30,13 @@ import type { BrewSeries, ShotPatch as RemoteShotPatch } from '#lib/core/crema-c
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
 import type { TelemetrySample } from '#lib/state/index.js';
 import { toWire } from './telemetry-wire';
-import { keepSkippedRows, readStore, writeStore, type StoreWrite } from '#lib/utils/storage.js';
+import {
+	followOtherTabs,
+	keepSkippedRows,
+	readStore,
+	writeStore,
+	type StoreWrite
+} from '#lib/utils/storage.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import {
 	brewDateError,
@@ -43,6 +49,7 @@ import {
 	clearAllSeries,
 	deleteSeries,
 	getAllSeries,
+	getSeriesOf,
 	putManySeries,
 	putSeries
 } from './series-store';
@@ -94,6 +101,9 @@ const MAX_RECORDS = 300;
  * ended by then has stuck, and an upload shouldn't wait on it for good.
  */
 const SERIES_WAIT_MS = 30_000;
+
+/** How long an adopted row waits, twice, for a series its tab hasn't written yet. */
+const ADOPT_SERIES_RETRY_MS = [1_000, 5_000] as const;
 
 /** A shot's telemetry series couldn't be written to IndexedDB (quota, most
  *  likely): say so instead of silently keeping it in memory only. */
@@ -148,6 +158,8 @@ export class HistoryStore {
 
 	constructor() {
 		this.markLive(this.shots.map((s) => s.id));
+		// Another tab's rows are taken, not written back over (#333).
+		followOtherTabs(HISTORY_KEY, Array.isArray, (v) => this.takeOtherTabsRows(v as unknown[]));
 		// Two-phase boot (review #27): summaries loaded synchronously above;
 		// each shot's telemetry series hydrates from IndexedDB in the
 		// background (reassigning `shots` keeps readers reactive). Also the
@@ -239,6 +251,54 @@ export class HistoryStore {
 	adoptRows(rows: StoredShot[]): void {
 		this.shots = rows;
 		this.markLive(rows.map((s) => s.id));
+	}
+
+	/**
+	 * Rows another tab stored (#333). The stored rows carry no series, so a
+	 * row this tab already shows keeps its curve, and the others read theirs
+	 * from IndexedDB. Not during a restore here, which owns the rows until it
+	 * ends.
+	 */
+	private takeOtherTabsRows(items: unknown[]): void {
+		if (this.deletesPaused > 0) return;
+		const mine = new Map(this.shots.map((s) => [s.id, s]));
+		const rows = rowsOf(items).map((row) => {
+			const had = mine.get(row.id)?.record.samples;
+			return row.record.samples.length === 0 && had && had.length > 0
+				? { ...row, record: { ...row.record, samples: had } }
+				: row;
+		});
+		this.adoptRows(rows);
+		const bare = rows.filter((s) => s.record.samples.length === 0).map((s) => s.id);
+		if (bare.length > 0 && typeof indexedDB !== 'undefined') void this.hydrateAdopted(bare);
+	}
+
+	/**
+	 * The series of rows adopted without one. The other tab writes a series
+	 * after its row, so one that isn't there yet is looked for again, twice. A
+	 * row with no series at all (a brew log) just finds none.
+	 */
+	private async hydrateAdopted(ids: string[], waits: readonly number[] = ADOPT_SERIES_RETRY_MS): Promise<void> {
+		let missing = ids;
+		for (let attempt = 0; ; attempt++) {
+			let found: Map<string, TimedSample[]>;
+			try {
+				found = await getSeriesOf(missing);
+			} catch {
+				return;
+			}
+			if (found.size > 0) {
+				this.shots = this.shots.map((s) => {
+					const samples = found.get(s.id);
+					return samples && s.record.samples.length === 0
+						? { ...s, record: { ...s.record, samples } }
+						: s;
+				});
+			}
+			missing = missing.filter((id) => !found.has(id) && this.get(id)?.record.samples.length === 0);
+			if (missing.length === 0 || attempt >= waits.length) return;
+			await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
+		}
 	}
 
 	/**
@@ -1264,10 +1324,14 @@ function coerceShotMachine(raw: unknown): ShotMachine | null {
  */
 function loadShots(): StoredShot[] {
 	const read = readStore<unknown[]>(HISTORY_KEY, { what: HISTORY_WHAT, valid: Array.isArray });
-	if (read.kind !== 'loaded') return [];
+	return read.kind === 'loaded' ? rowsOf(read.value) : [];
+}
+
+/** Stored rows as shots, newest first; a row that can't be read is kept aside. */
+function rowsOf(items: unknown[]): StoredShot[] {
 	const out: StoredShot[] = [];
 	const skipped: unknown[] = [];
-	for (const item of read.value) {
+	for (const item of items) {
 		const migrated = coerceRow(item);
 		if (migrated) out.push(migrated);
 		else skipped.push(item);
