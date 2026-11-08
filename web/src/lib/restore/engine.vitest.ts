@@ -551,6 +551,24 @@ describe('added beans, only for the same backup (DECISIONS §7)', () => {
 		expect(readMarker()?.addedBeans).toEqual([]);
 	});
 
+	it('a backup is known by its header, exactly, and by its file name only without one', async () => {
+		const text = new TextDecoder().decode((await backupOf(['n1'], ['s1'])).jsonl).split('\n');
+		const header = JSON.parse(text[0]) as Record<string, unknown>;
+		const withHeader = (over: Record<string, unknown>) =>
+			[JSON.stringify({ ...header, createdAt: 1790000000000, deviceLabel: 'Tablet', appVersion: '1.2', ...over }), ...text.slice(1)].join('\n');
+		const a = prepareBackup(withHeader({}), 'one name');
+		expect(a.identity).toBe('[1790000000000,"Tablet","1.2"]');
+		expect(prepareBackup(withHeader({}), 'another name').identity).toBe(a.identity);
+		// Each field counts, not `createdAt` alone.
+		expect(prepareBackup(withHeader({ createdAt: 42 }), 'one name').identity).not.toBe(a.identity);
+		expect(prepareBackup(withHeader({ deviceLabel: 'Phone' }), 'one name').identity).not.toBe(a.identity);
+		expect(prepareBackup(withHeader({ appVersion: '1.3' }), 'one name').identity).not.toBe(a.identity);
+		// No header: the file name, and it tells two files apart.
+		const headless = ['{ not a header', ...text.slice(1)].join('\n');
+		expect(prepareBackup(headless, 'x.zip').identity).toBe('["file","x.zip"]');
+		expect(prepareBackup(headless, 'y.zip').identity).toBe('["file","y.zip"]');
+	});
+
 	it('a restore of A from a file, cut off, then run again from Drive, keeps its debits', async () => {
 		const a = await backupOf(['n1'], ['s1'], () => 'n1');
 		captureMessages(new FakeLocks());
