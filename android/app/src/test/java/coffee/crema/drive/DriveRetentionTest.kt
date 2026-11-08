@@ -182,6 +182,7 @@ class DriveRetentionTest {
         damage: Map<String, Long> = newestDamage?.let { mapOf(LIB to it) } ?: emptyMap(),
         seenByStore: Map<String, Long> = damageSeen?.let { mapOf(LIB to it) } ?: emptyMap(),
         preDamage: String? = null,
+        pinReleased: Boolean = false,
         lastSuccess: Long? = null,
         seen: (DriveSync) -> Unit = {},
     ): DriveState = runBlocking {
@@ -189,7 +190,7 @@ class DriveRetentionTest {
         store.save(
             DriveState(
                 tokens = tokens, lastAutoBackupAtMs = lastAuto, lastBackupSuccessAtMs = lastSuccess,
-                autoBackupKeep = keep, autoBackupTag = tag, damageSeen = seenByStore, preDamageCopy = preDamage,
+                autoBackupKeep = keep, autoBackupTag = tag, damageSeen = seenByStore, preDamageCopy = preDamage, pinReleased = pinReleased,
             ),
         )
         val sync = DriveSync(
@@ -354,6 +355,37 @@ class DriveRetentionTest {
         assertEquals("tablet3", state.preDamageCopy)
         assertTrue("tablet3" !in trashed, "$trashed")
         assertEquals(now - day / 2, state.damageSeen[PROFILES])
+    }
+
+    @Test
+    fun aRestoreAfterThePinLetsANewDamagePinYesterdaysCopy() {
+        // REVIEW-366: the user restored from the pin, and the copies are good
+        // again; a damage on day 10 must keep the newest of those, not the pin.
+        seed(8)
+        val state = dailyBackup(
+            keep = 1,
+            preDamage = "tablet3",
+            pinReleased = true,
+            seenByStore = mapOf(LIB to now - 4 * day),
+            damage = mapOf(LIB to now - 4 * day, PROFILES to now - day / 2),
+        )
+        assertEquals("tablet0", state.preDamageCopy)
+        assertEquals(false, state.pinReleased, "the new pin is held again")
+    }
+
+    @Test
+    fun aCompletedRestoreReleasesThePin() = runBlocking {
+        store.load()
+        store.save(DriveState(tokens = tokens, preDamageCopy = "tablet3"))
+        val sync = DriveSync(
+            store, json, scope, "cid",
+            notify = {}, backupZip = { null }, backupFileName = { "b" }, applyRestore = { _, _ -> },
+            refreshToken = { error("no refresh expected") },
+        )
+        sync.load()
+        sync.restoreCompleted()
+        withTimeout(10_000) { job.children.toList().joinAll() }
+        assertEquals(true, store.load().pinReleased)
     }
 
     @Test
