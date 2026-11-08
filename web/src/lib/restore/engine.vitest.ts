@@ -336,6 +336,70 @@ describe('the plan, written per store', () => {
 });
 
 describe('the #363 review', () => {
+	it('a curve the recompute finds is written before step 7 returns, and its failure counted', async () => {
+		const history = getHistoryStore();
+		const late = shot('late');
+		let calls = 0;
+		const writes: string[][] = [];
+		const r = await history.restoreRows(
+			(rows) => (calls++ === 0 ? { next: [...rows], series: [] } : { next: [late, ...rows], series: [late] }),
+			async (rows) => {
+				writes.push(rows.map((s) => s.id));
+				if (rows.length > 0) throw new Error('quota');
+			}
+		);
+		expect(writes).toEqual([[], ['late']]);
+		expect(r).toEqual({ stored: true, curvesFailed: 1 });
+	});
+
+	/** A pull's stub of the backup's own shot lands while step 7 writes its series. */
+	async function stubDuringStep7(mode: 'merge' | 'wipe') {
+		const prepared = await backupOf(['b1'], ['shot:remote:9']);
+		const history = getHistoryStore();
+		captureMessages(new FakeLocks());
+		const plan = await planNow(prepared, mode, false, new FakeLocks());
+		expect(plan.shots.add).toEqual(['shot:remote:9']);
+		const written: string[][] = [];
+		await runRestore(
+			prepared,
+			mode,
+			{ expected: plan },
+			deps(new FakeLocks(), {
+				writeSeries: async (rows) => {
+					written.push(rows.map((r) => r.id));
+					if (written.length === 1) {
+						history.insertPulled(
+							shot('shot:remote:9', {
+								record: { duration: 0, samples: [] },
+								metadata: { ...metadata, notes: 'stub' },
+								bagDebit: 3
+							})
+						);
+					}
+				}
+			})
+		);
+		const rows = history.all.filter((s) => s.id === 'shot:remote:9');
+		expect(rows).toHaveLength(1);
+		return { row: rows[0], written };
+	}
+
+	it('a stub of a backup row landing in step 7, on Merge: the stub stays and its curve is filled', async () => {
+		const { row, written } = await stubDuringStep7('merge');
+		expect(row.metadata.notes).toBe('stub');
+		expect(row.bagDebit).toBe(3);
+		expect(row.record.samples).toHaveLength(1);
+		// The curve in memory is the one written under its id.
+		expect(written.flat()).toContain('shot:remote:9');
+	});
+
+	it('a stub of a backup row landing in step 7, on Replace: the backup\u2019s copy overwrites it', async () => {
+		const { row } = await stubDuringStep7('wipe');
+		expect(row.metadata.notes).not.toBe('stub');
+		expect(row.bagDebit).toBe(18);
+		expect(row.record.samples).toHaveLength(1);
+	});
+
 	it('step 7 keeps a shot recorded and a rating changed while its series were written', async () => {
 		const prepared = await backupOf(['b1'], ['s1']);
 		const history = getHistoryStore();
@@ -404,6 +468,7 @@ describe('the #363 review', () => {
 		try {
 			const out = await runRestore(prepared, 'merge', {}, deps(new FakeLocks()));
 			expect(out).toMatchObject({ kind: 'done', markerDropped: true });
+			expect(outcomeMessage(out)).toContain("couldn't be cleaned up");
 		} finally {
 			spy.mockRestore();
 		}

@@ -973,6 +973,23 @@ export interface BrewTempRange {
 	anchor: number;
 }
 
+/** A recorded BLE session file, as the Android shell lists it. */
+export interface CaptureSession {
+	name: string;
+	/** When it started, unix ms: the stamp in its name. */
+	startedMs: number;
+	/** When it was last written, unix ms. */
+	endedMs: number;
+}
+
+/** A shot with a stored capture, as the web shell lists it. */
+export interface CapturedShot {
+	id: string;
+	/** When the shot completed, unix ms. */
+	completedAtMs: number;
+	pinned?: boolean;
+}
+
 /** The result of [`catalogue_autofill`]. */
 export interface CatalogueAutofill {
 	/** The bean with the picked catalogue entry applied. */
@@ -3469,6 +3486,12 @@ export interface LocalState {
 	visualizerPrefs: VisualizerSyncPrefs;
 	totalLitres: number;
 	activeBeanId?: string;
+	/**
+	 * Beans an earlier, interrupted run of this restore added, from its
+	 * marker. They don't count as here for `zero_debit`: a re-run after any
+	 * prefix of the steps must end where a clean run does.
+	 */
+	addedBeans: string[];
 }
 
 /**
@@ -5313,6 +5336,17 @@ export type CalibrationRefusal =
 	 * (target byte 255).
 	 */
 	| { kind: "FirmwareRejected", details?: undefined };
+
+/** How many raw captures to keep. */
+export type CaptureKeep = 
+	/** Record none, and keep only pinned shots' captures. */
+	| { kind: "Off", details?: undefined }
+	/** The newest this many. */
+	| { kind: "Newest", details: {
+	count: number;
+}}
+	/** Every capture: nothing is deleted by count. */
+	| { kind: "All", details?: undefined };
 
 /**
  * The direction of an exit comparison. Lowercase wire spelling

@@ -885,6 +885,25 @@ data class BrewTempRange (
 	val anchor: Float
 )
 
+/// A recorded BLE session file, as the Android shell lists it.
+@Serializable
+data class CaptureSession (
+	val name: String,
+	/// When it started, unix ms: the stamp in its name.
+	val startedMs: Long,
+	/// When it was last written, unix ms.
+	val endedMs: Long
+)
+
+/// A shot with a stored capture, as the web shell lists it.
+@Serializable
+data class CapturedShot (
+	val id: String,
+	/// When the shot completed, unix ms.
+	val completedAtMs: Long,
+	val pinned: Boolean? = null
+)
+
 /// The result of [`catalogue_autofill`].
 @Serializable
 data class CatalogueAutofill (
@@ -3569,7 +3588,11 @@ data class LocalState (
 	val common: CommonSettings,
 	val visualizerPrefs: VisualizerSyncPrefs,
 	val totalLitres: Double,
-	val activeBeanId: String? = null
+	val activeBeanId: String? = null,
+	/// Beans an earlier, interrupted run of this restore added, from its
+	/// marker. They don't count as here for `zero_debit`: a re-run after any
+	/// prefix of the steps must end where a clean run does.
+	val addedBeans: List<String>
 )
 
 /// A derived maintenance readout — counters, percentages, and due/ok
@@ -5402,6 +5425,29 @@ sealed class CalibrationRefusal {
 	@Serializable
 	@SerialName("FirmwareRejected")
 	object FirmwareRejected: CalibrationRefusal()
+}
+
+/// Generated type representing the anonymous struct variant `Newest` of the `CaptureKeep` Rust enum
+@Serializable
+data class CaptureKeepNewestInner (
+	val count: UInt
+)
+
+/// How many raw captures to keep.
+@Serializable
+sealed class CaptureKeep {
+	/// Record none, and keep only pinned shots' captures.
+	@Serializable
+	@SerialName("Off")
+	object Off: CaptureKeep()
+	/// The newest this many.
+	@Serializable
+	@SerialName("Newest")
+	data class Newest(val details: CaptureKeepNewestInner): CaptureKeep()
+	/// Every capture: nothing is deleted by count.
+	@Serializable
+	@SerialName("All")
+	object All: CaptureKeep()
 }
 
 /// The direction of an exit comparison. Lowercase wire spelling

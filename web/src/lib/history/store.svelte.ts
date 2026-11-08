@@ -40,8 +40,11 @@ import {
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import {
 	brewDateError,
+	cappedCount,
 	cappedHistory,
+	evictOldest,
 	fitsHistory,
+	historyCutNotice,
 	newestFirst,
 	type HistoryInsert
 } from './brew-date';
@@ -67,6 +70,7 @@ import {
 } from './model';
 import type { Bean, Roaster } from '#lib/bean/index.js';
 import { getCaptureStore } from '#lib/capture/store.js';
+import { readCaptureKeep } from '#lib/capture/limit.js';
 
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
 const STORED_SHOT_FORMAT_VERSION = 3;
@@ -83,7 +87,7 @@ const STORED_SHOT_FORMAT_VERSION = 3;
  * (`durationMs` → `duration`, `peakWeightG` → `peakWeight`, etc.); v1 records
  * are simply ignored on first read rather than migrated.
  */
-const HISTORY_KEY = 'crema.history.v2';
+export const HISTORY_KEY = 'crema.history.v2';
 /** The history's name in a storage notice. */
 const HISTORY_WHAT = 'shot history';
 
@@ -160,6 +164,10 @@ export class HistoryStore {
 		this.markLive(this.shots.map((s) => s.id));
 		// Another tab's rows are taken, not written back over (#333).
 		followOtherTabs(HISTORY_KEY, Array.isArray, (v) => this.takeOtherTabsRows(v as unknown[]));
+		// Fixed at the first load after the setting arrived, before anything new
+		// is recorded: rows already here mean today's limit stays (#311).
+		const existing = this.shots.length > 0;
+		readCaptureKeep(() => existing);
 		// Two-phase boot (review #27): summaries loaded synchronously above;
 		// each shot's telemetry series hydrates from IndexedDB in the
 		// background (reassigning `shots` keeps readers reactive). Also the
@@ -360,10 +368,11 @@ export class HistoryStore {
 			toast.error('Shot history could not be saved.');
 			return false;
 		}
-		// Quota hit even without series — evict the oldest 10% and retry.
-		const keep = Math.max(1, Math.floor(this.shots.length * 0.9));
-		const dropped = this.shots.length - keep;
-		this.shots = this.shots.slice(0, keep);
+		// Quota hit even without series — evict the oldest 10% and retry. A
+		// pinned row is never evicted (#311): the oldest unpinned ones go.
+		const before = this.shots.length;
+		this.shots = evictOldest(this.shots, before - Math.max(1, Math.floor(before * 0.9)));
+		const dropped = before - this.shots.length;
 		if (this.writeRows() !== 'ok') {
 			toast.error('Shot history could not be saved — storage is full.');
 			return false;
@@ -402,7 +411,7 @@ export class HistoryStore {
 	 * was dated. A row older than a full history is the one that goes.
 	 */
 	private insert(shot: StoredShot): void {
-		this.shots = cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS);
+		this.capWith(shot, cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS));
 	}
 
 	/**
@@ -410,7 +419,18 @@ export class HistoryStore {
 	 * behind the history can't lose it: the oldest other row goes instead.
 	 */
 	private insertMade(shot: StoredShot): void {
-		this.shots = cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS, shot.id);
+		this.capWith(shot, cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS, shot.id));
+	}
+
+	/** Take `next`, the rows with `shot` added and capped, and say if the cap
+	 *  dropped any (#310 P0): a row never leaves without a word. Pinned rows
+	 *  are never among them (#311). */
+	private capWith(shot: StoredShot, next: StoredShot[]): void {
+		const kept = new Set(next.map((s) => s.id));
+		const droppedOlder = this.shots.filter((s) => !kept.has(s.id)).length;
+		this.shots = next;
+		const notice = historyCutNotice(droppedOlder, kept.has(shot.id), MAX_RECORDS);
+		if (notice) toast.info(notice, 7000);
 	}
 
 	/** The most rows the history keeps. */
@@ -420,7 +440,7 @@ export class HistoryStore {
 
 	/** How many live rows fit before the cap. */
 	get freeSlots(): number {
-		return Math.max(0, MAX_RECORDS - this.all.length);
+		return Math.max(0, MAX_RECORDS - cappedCount(this.shots));
 	}
 
 	/** Whether a new brew dated `at` would stay in the history once added. */
@@ -452,16 +472,19 @@ export class HistoryStore {
 		// were written are in `this.shots`, and the plan runs over them.
 		const { next, series } = plan(this.shots);
 		const written = new Set(first.map((s) => s.id));
-		for (const s of series) {
-			// A row the recompute found anew keeps its curve in memory and
-			// writes it now, as any new row does.
-			if (!written.has(s.id) && s.record.samples.length > 0) {
-				void putSeries(s.id, s.record.samples).catch(seriesSaveFailed);
-			}
-		}
+		// A row the recompute found anew keeps its curve in memory, and it's
+		// written straight after the rows, before the restore says it's done.
+		const late = series.filter((s) => !written.has(s.id) && s.record.samples.length > 0);
 		this.shots = next;
 		if (this.writeRows() !== 'ok') return { stored: false, curvesFailed };
 		this.markLive(next.map((s) => s.id));
+		if (late.length > 0) {
+			try {
+				await writeSeries(late);
+			} catch {
+				curvesFailed += late.length;
+			}
+		}
 		return { stored: true, curvesFailed };
 	}
 
@@ -664,6 +687,23 @@ export class HistoryStore {
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{ ...target, privacy },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
+	 * Pin or unpin a shot (#311). A pinned shot's capture ignores the capture
+	 * limit and it is exempt from cleanup; unpinning makes its capture eligible
+	 * at the next prune. Persists.
+	 */
+	setPinned(id: string, pinned: boolean): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0 || (this.shots[idx].pinned === true) === pinned) return;
+		const { pinned: _was, ...rest } = this.shots[idx];
+		this.shots = [
+			...this.shots.slice(0, idx),
+			pinned ? { ...rest, pinned: true } : rest,
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();
@@ -1407,6 +1447,7 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		typeof obj.visualizerUpdatedAt === 'number' && Number.isFinite(obj.visualizerUpdatedAt)
 			? obj.visualizerUpdatedAt
 			: null;
+	const pinned = obj.pinned === true;
 	const machine = coerceShotMachine(obj.machine);
 	const visualizerId = typeof obj.visualizerId === 'string' ? obj.visualizerId : null;
 	const deletedAt = typeof obj.deletedAt === 'number' ? obj.deletedAt : null;
@@ -1494,6 +1535,7 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		visualizerId,
 		...(decentId ? { decentId } : {}),
 		...(visualizerUpdatedAt != null ? { visualizerUpdatedAt } : {}),
+		...(pinned ? { pinned } : {}),
 		...(machine ? { machine } : {}),
 		deletedAt,
 		...(brewMethod != null ? { brewMethod } : {}),

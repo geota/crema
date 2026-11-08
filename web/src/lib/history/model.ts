@@ -343,6 +343,12 @@ export interface StoredShot {
 	 */
 	visualizerUpdatedAt?: number | null;
 	/**
+	 * The user pinned this shot (#311): its raw capture ignores the capture
+	 * limit, and it is exempt from any cleanup. Core `StoredShot::pinned`;
+	 * absent reads as not pinned, so old backups and rows are unchanged.
+	 */
+	pinned?: boolean;
+	/**
 	 * The DE1 this shot was pulled on, stamped at record time (#84). The
 	 * Decent upload needs the serial (the server checks it belongs to the
 	 * account); a shot recorded before this field falls back to the

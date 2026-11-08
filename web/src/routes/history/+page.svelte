@@ -656,9 +656,10 @@
 	 */
 	async function handleDelete(shot: StoredShot, opts: { remote: boolean }): Promise<void> {
 		const label = shot.profileName ?? (methodOf(shot) ? methodLabel(methodOf(shot), shot.brewMethodLabel) : 'this shot');
+		const pinNote = shot.pinned === true ? ' It is pinned.' : '';
 		const msg = opts.remote
-			? `Delete "${label}" from this device and Visualizer? This cannot be undone.`
-			: `Delete "${label}" from this device? This cannot be undone.`;
+			? `Delete "${label}" from this device and Visualizer?${pinNote} This cannot be undone.`
+			: `Delete "${label}" from this device?${pinNote} This cannot be undone.`;
 		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
 		const visualizerId = shot.visualizerId ?? null;
 		const wasSelected = selected?.id === shot.id;
@@ -718,6 +719,8 @@
 	let q = $state('');
 	/** The active profile filter — `all` or a profile name. */
 	let filterProfile = $state('all');
+	/** Only pinned shots (#311). */
+	let pinnedOnly = $state(false);
 	/**
 	 * The active bean filter — `all` or a bean id, matched against the
 	 * shot's frozen bean-snapshot id. Single-select like the profile
@@ -766,6 +769,7 @@
 			selectedTags: string[];
 			range: HistoryRange;
 			selectedId: string | null;
+			pinnedOnly?: boolean;
 		}>('history', {
 			sortField: 'completedAt',
 			sortDir: 'desc',
@@ -786,6 +790,7 @@
 		selectedTags = saved.selectedTags;
 		range = saved.range;
 		selectedId = saved.selectedId;
+		pinnedOnly = saved.pinnedOnly === true;
 	}
 	persistView('history', () => ({
 		sortField,
@@ -796,7 +801,8 @@
 		filterMethod,
 		selectedTags,
 		range,
-		selectedId
+		selectedId,
+		pinnedOnly
 	}));
 	/** The shot list's scroller (`.hi-list`), bound once the list renders. */
 	let listEl = $state<HTMLElement>();
@@ -808,7 +814,7 @@
 		key: () =>
 			phoneDetail
 				? `history/detail|${phoneShot}`
-				: `history/list|${filterProfile}|${filterBean}|${filterMethod}|${selectedTags.join(',')}|${range}|${sortField}-${sortDir}`,
+				: `history/list|${filterProfile}|${filterBean}|${filterMethod}|${selectedTags.join(',')}|${range}|${pinnedOnly ? 'pinned' : ''}|${sortField}-${sortDir}`,
 		container: () => (phoneLayout.current ? pageEl : listEl)
 	});
 	useScrollMemory({ key: () => 'history/page', pixelOnly: true });
@@ -982,6 +988,17 @@
 				selected: filterProfile === 'all'
 			}
 		];
+		// Pinned shots, once there are any (or while the filter is on).
+		const pinnedCount = shots.filter((s) => s.pinned === true).length;
+		if (pinnedCount > 0 || pinnedOnly) {
+			items.push({
+				id: 'pin:',
+				label: 'Pinned',
+				count: pinnedCount,
+				selected: pinnedOnly,
+				title: 'Only pinned shots'
+			});
+		}
 		for (const name of profilesInUse) {
 			items.push({
 				id: `p:${name}`,
@@ -1041,7 +1058,9 @@
 	});
 
 	function onFilterPillClick(id: string): void {
-		if (id.startsWith('p:')) {
+		if (id === 'pin:') {
+			pinnedOnly = !pinnedOnly;
+		} else if (id.startsWith('p:')) {
 			const v = id.slice(2);
 			filterProfile = v === 'all' ? 'all' : v;
 		} else if (id.startsWith('b:')) {
@@ -1066,6 +1085,7 @@
 		const base = shots.filter((s) => {
 			if (cutoff != null && s.completedAt < cutoff) return false;
 			if (filterProfile !== 'all' && s.profileName !== filterProfile) return false;
+			if (pinnedOnly && s.pinned !== true) return false;
 			if (!matchesBeanFilter(s)) return false;
 			if (filterMethod !== 'all' && (methodOf(s) ?? 'espresso') !== filterMethod)
 				return false;
@@ -1370,7 +1390,7 @@
 
 	/** The chips: profiles and tags. Method, bean and range are dropdown pills. */
 	const phoneChips = $derived([
-		...filterPills.filter((p) => p.id.startsWith('p:') || p.id.startsWith('t:')),
+		...filterPills.filter((p) => p.id.startsWith('p:') || p.id.startsWith('t:') || p.id === 'pin:'),
 		...(selectedTags.length > 0
 			? [{ id: 'clear-tags', label: 'Clear tags', icon: 'ph ph-x', title: 'Clear all selected tag filters' }]
 			: [])
@@ -1820,6 +1840,7 @@
 				{#key selected.id}
 					<ShotDetail
 						shot={selected}
+						onPinnedChange={(id, pinned) => store.setPinned(id, pinned)}
 						bind:phoneMenuOpen={shotMenuOpen}
 						onNotesChange={saveNotes}
 						onNextPlanChange={saveNextPlan}

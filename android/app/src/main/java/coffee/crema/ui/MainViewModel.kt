@@ -420,6 +420,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         },
         autoBackupBlocked = { autoBackupBlocked() },
         damageByStore = { damageByStore() },
+        unmetered = {
+            val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
+            cm != null && !cm.isActiveNetworkMetered
+        },
     )
 
     /** Per store the counts can't see, the newest time it was kept aside as
@@ -760,7 +764,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * single `CremaCore` — important for scale-aware behaviour like shot-start
      * auto-tare.
      */
-    private val bleRecorder = BleSessionRecorder(app)
+    private val bleRecorder = BleSessionRecorder(app).also { rec ->
+        rec.sessionsKeepOf = { _ui.value.bleSessionsKeep }
+        rec.pinnedShotTimes = { _ui.value.history.filter { it.pinned }.map { it.completedAtMs } }
+        rec.historySettled = { library.historySettled }
+    }
 
     private val ble: De1BleManager = De1BleManager(
         transport = proxy.transport,
@@ -1261,7 +1269,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sharing.start()
             // Daily automatic Drive backup (issue #36) — after the prefs (the
             // toggle); it waits for the Drive tokens itself.
-            drive.autoBackupIfDue(_ui.value.autoDriveBackup)
+            drive.autoBackupIfDue(_ui.value.autoDriveBackup, _ui.value.driveBackupWeekly, _ui.value.driveBackupWifiOnly)
             // Daily automatic release check (opt-in, default off).
             maybeAutoUpdateCheck()
         }
@@ -1578,6 +1586,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Set a shot's forward-looking "next time" plan (local-only). */
     fun setShotNextPlan(id: String, nextPlan: String) = library.setShotNextPlan(id, nextPlan)
+    fun setShotPinned(id: String, pinned: Boolean) = library.setShotPinned(id, pinned)
     fun setShotPerson(id: String, field: String, name: String?) = library.setShotPerson(id, field, name)
 
     /**
@@ -2150,8 +2159,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setAutoDriveBackup(on: Boolean) {
         _ui.update { it.copy(autoDriveBackup = on) }
         persistPrefs()
-        if (on) drive.autoBackupIfDue(true)
+        if (on) drive.autoBackupIfDue(true, _ui.value.driveBackupWeekly, _ui.value.driveBackupWifiOnly)
     }
+
+    /** Automatic Drive backup weekly rather than daily (#311). Persisted, device-local. */
+    fun setDriveBackupWeekly(weekly: Boolean) {
+        _ui.update { it.copy(driveBackupWeekly = weekly) }
+        persistPrefs()
+    }
+
+    /** Automatic backups only on Wi-Fi (#311). Persisted, device-local. */
+    fun setDriveBackupWifiOnly(on: Boolean) {
+        _ui.update { it.copy(driveBackupWifiOnly = on) }
+        persistPrefs()
+        if (!on) drive.autoBackupIfDue(_ui.value.autoDriveBackup, _ui.value.driveBackupWeekly, false)
+    }
+
+    /** Automatic Drive copies this device keeps (#311); the next backup prunes to it. */
+    fun setDriveCopiesKeep(keep: Int) = drive.setAutoBackupKeep(keep)
+
+    /** How many automatic copies [keep] would delete at the next backup, or null when Drive can't be listed. */
+    suspend fun driveCopiesOverLimit(keep: Int): Int? = drive.copiesOverLimit(keep)
+
+    /**
+     * BLE sessions whose raw capture is kept (#311). Persisted, device-local;
+     * the sessions past it go now, pinned shots' sessions spared.
+     */
+    fun setBleSessionsKeep(keep: Int) {
+        _ui.update { it.copy(bleSessionsKeep = keep) }
+        persistPrefs()
+        bleRecorder.pruneTo(keep)
+    }
+
+    /** How many session captures [keep] would delete now, for the preview. */
+    fun bleSessionsOverLimit(keep: Int): Int = bleRecorder.sessionsOverLimit(keep).size
 
     /** Fan-on temperature threshold, °C (0..=60). Persisted and written through. */
     fun setFanThreshold(tempC: Float) = machineConfig.setFanThreshold(tempC)

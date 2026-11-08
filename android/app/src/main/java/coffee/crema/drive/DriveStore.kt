@@ -49,6 +49,9 @@ data class DriveState(
      *  for an install that had backed up before, 3 for a new one. Additive →
      *  nullable. */
     val autoBackupKeep: Int? = null,
+    /** The content hash of the last automatic upload that landed (#311): an
+     *  unchanged backup isn't uploaded again. Additive → nullable. */
+    val lastAutoBackupHash: String? = null,
     /** Random, in this install's automatic backup names, so two devices of one
      *  model can't prune each other. A reinstall gets a new one and leaves its
      *  old copies alone. Additive → nullable. */

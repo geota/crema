@@ -176,6 +176,10 @@ data class StoredShot(
      *  (core `StoredShot::visualizer_updated_at`): a pull skips a row at this
      *  version. Kept by backups, never uploaded. */
     val visualizerUpdatedAt: Long? = null,
+    /** The user pinned this shot (#311): the BLE session holding it keeps its
+     *  capture past the limit, and it is exempt from any cleanup. Core
+     *  `StoredShot::pinned`; kept by backups, moves between the apps. */
+    val pinned: Boolean = false,
     /**
      * The DE1 this shot was pulled on, stamped at record time (#84). The Decent
      * upload needs the serial (the server checks it belongs to the account);
@@ -523,6 +527,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
     /** Whether saves are being refused because the rows couldn't be read. */
     val savesRefused: Boolean get() = SafeFile.isBlocked(file)
 
+    /** How the rows' load went this session. */
+    val health: coffee.crema.persist.StoreHealth get() = coffee.crema.persist.Stores.health(file)
+
     /** The series of each of [ids] that has a series file, by id. On IO; at
      *  startup it runs after the rows are shown. */
     suspend fun loadSeries(ids: Collection<String>): Map<String, List<TelemetrySample>> =
@@ -596,12 +603,17 @@ class HistoryStore(private val context: Context, private val json: Json) {
     }
 
     /** Delete the store file, every copy of it and the series files (Erase all
-     *  data; final review 05 N-1). */
+     *  data; final review 05 N-1). Also what a newer build keeps (#310 P0), so
+     *  an erase after a rollback leaves nothing of it: `shots.db` with its
+     *  `-wal`, `-shm` and `-journal`, the store marker, the rows snapshot and
+     *  the pending journal. */
     suspend fun erase() {
         lock.withLock {
             withContext(Dispatchers.IO) {
                 eraseStore(file)
                 seriesDir.listFiles()?.forEach { eraseStore(it) }
+                context.deleteDatabase(NEXT_DB_NAME)
+                NEXT_FILES.forEach { eraseStore(File(context.filesDir, it)) }
                 written.clear()
                 known = emptySet()
                 unreadableSeries = emptySet()
@@ -695,6 +707,14 @@ class HistoryStore(private val context: Context, private val json: Json) {
         /** Keep the most recent N shots (matches the web cap). */
         const val MAX_SHOTS = 300
         const val FILE_NAME = "shots.json"
+
+        /** The SQLite store the rows move to (SPEC §3, P3a). Nothing on this
+         *  build creates it; [erase] removes one a newer build left. */
+        const val NEXT_DB_NAME = "shots.db"
+
+        /** The newer build's store marker, rows snapshot and pending journal
+         *  (SPEC §1 and §6), for [erase] too. */
+        val NEXT_FILES = listOf("history-store.json", "history-rows-snapshot.jsonl.gz", "history-pending.jsonl")
         private const val WHAT = "shot history"
         private const val SERIES_DIR = "shot-series"
     }

@@ -149,6 +149,8 @@ import com.adamglin.phosphoricons.fill.Moon
 import com.adamglin.phosphoricons.fill.Plugs
 import com.adamglin.phosphoricons.fill.Sun
 import com.adamglin.phosphoricons.fill.Star as StarFilled
+import com.adamglin.phosphoricons.fill.PushPin as PushPinFilled
+import com.adamglin.phosphoricons.regular.PushPin
 import com.adamglin.phosphoricons.fill.Scales as ScalesFilled
 import com.adamglin.phosphoricons.fill.ListBullets as ListBulletsFilled
 import com.adamglin.phosphoricons.fill.CoffeeBean as CoffeeBeanFilled
@@ -295,6 +297,8 @@ fun PhIcon(
         "shuffle" -> PhosphorIcons.Regular.Shuffle
         "star" -> PhosphorIcons.Regular.Star
         "star-fill" -> PhosphorIcons.Fill.StarFilled
+        "push-pin" -> PhosphorIcons.Regular.PushPin
+        "push-pin-fill" -> PhosphorIcons.Fill.PushPinFilled
         "upload-simple" -> PhosphorIcons.Regular.UploadSimple
         "list-bullets" -> PhosphorIcons.Regular.ListBullets
         "coffee-bean" -> PhosphorIcons.Regular.CoffeeBean

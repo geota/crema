@@ -40,7 +40,7 @@ import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '#lib/visualizer/s
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { strToU8, strFromU8, zipSync } from 'fflate';
 import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
-import { readStored, unreadableStores } from '#lib/utils/storage.js';
+import { readJson, readStored, unreadableStores, writeJson } from '#lib/utils/storage.js';
 import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
 import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 import type { Bean, Roaster } from '#lib/bean/model.js';
@@ -372,9 +372,25 @@ export async function exportBackup(cremaVersion = __APP_VERSION__): Promise<Back
  * Run a backup and word what happened. A build that throws ends in a message
  * like any other, so the UI can't stay on "Building backup…".
  */
+/** localStorage key: when this device last made a backup, file or Drive (unix ms). */
+export const LAST_BACKUP_KEY = 'crema.backup.last.v1';
+
+/** Note a backup that landed, for Settings' "Last backup". */
+export function noteBackupMade(at: number = Date.now()): void {
+	writeJson(LAST_BACKUP_KEY, at);
+}
+
+/** When this device last made a backup, or `null`. */
+export function lastBackupAt(): number | null {
+	return readJson<number | null>(LAST_BACKUP_KEY, null, {
+		valid: (v): v is number | null => v === null || (typeof v === 'number' && Number.isFinite(v))
+	});
+}
+
 export async function backupNote(run: () => Promise<BackupContents | null> = exportBackup): Promise<string> {
 	try {
 		const result = await run();
+		if (result) noteBackupMade();
 		return result
 			? `Backed up — ${describeBackup(result)}.${describeBackupGaps(result)}`
 			: 'Nothing to back up yet.';
