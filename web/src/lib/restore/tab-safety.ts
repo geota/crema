@@ -303,6 +303,11 @@ export function restoreFrozen(): boolean {
 	return frozen;
 }
 
+/** Whether a restore is applying in this tab: sync waits for it too. */
+export function restoringInThisTab(): boolean {
+	return restoringHere;
+}
+
 /** This tab is the one restoring: its own messages mustn't freeze it. */
 export function markRestoringHere(on: boolean): void {
 	restoringHere = on;

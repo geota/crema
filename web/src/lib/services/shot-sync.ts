@@ -89,7 +89,8 @@ import { pullRules } from '#lib/visualizer/pull-run-core.js';
 import { noteRateLimited, storePace, waitFor } from '#lib/visualizer/pace.js';
 import { acquireRunLock } from '#lib/visualizer/run-lock.js';
 import { readPoison, writePoison } from '#lib/visualizer/poison.js';
-import { restoreFrozen } from '#lib/restore/tab-safety.js';
+import { restoreFrozen, restoringInThisTab } from '#lib/restore/tab-safety.js';
+import { coolingDown } from '#lib/visualizer/pace.js';
 import { isBrewLog, refusedNoSamples, type ShotBean, type StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { getSettingsStore } from '#lib/settings/index.js';
@@ -500,8 +501,12 @@ export interface PullOptions {
 
 /** What a pull did. */
 export interface PullApplied {
-	/** How the run ended (core `RunOutcome`), or `Busy`: another tab is pulling or restoring. */
-	outcome: RunOutcome | { kind: 'Busy' };
+	/**
+	 * How the run ended (core `RunOutcome`), or `Busy`: another tab is
+	 * pulling, or a restore is running (`restore`: it started mid-walk, and
+	 * the rows applied before it stay).
+	 */
+	outcome: RunOutcome | { kind: 'Busy'; restore?: true };
 	/** Rows the run added or changed. */
 	pulled: number;
 	/** New rows a full history had no room for: they wait, holding the cursor. */
@@ -513,6 +518,9 @@ export interface PullApplied {
 /** A pull that didn't run: another tab holds it, or is restoring. */
 const BUSY: PullApplied = { outcome: { kind: 'Busy' }, pulled: 0, refused: 0, repairing: false };
 
+/** A restore is applying, in this tab or another: sync waits for it. */
+const restoring = (): boolean => restoreFrozen() || restoringInThisTab();
+
 /** Rows a list page asks for: the most Visualizer gives. */
 const RUN_PAGE_ITEMS = 100;
 /** A run's safety cap on pages, so a server that never ends can't pin the tab. */
@@ -522,6 +530,13 @@ const MAX_RUN_PAGES = 500;
 type RunReply<A> =
 	| { readonly ok: true; readonly value: A }
 	| { readonly ok: false; readonly failure: RowFailure; readonly action: RowAction };
+
+/** A detail's own `updated_at` (unix s), in either format, or `null`. */
+function detailUpdatedAt(detail: unknown): number | null {
+	const d = detail as { updated_at?: unknown; meta?: { visualizer?: { updated_at?: unknown } } } | null;
+	const v = d?.updated_at ?? d?.meta?.visualizer?.updated_at;
+	return typeof v === 'number' && v > 0 ? v : null;
+}
 
 /** Whether the first pull after this update has yet to walk the whole account. */
 export function pullRepairPending(): boolean {
@@ -1073,8 +1088,11 @@ export const ShotSyncLive = Layer.effect(
 				if (!detail.ok) return detail;
 				let wire: WireShot;
 				let samples: TimedSample[];
+				// A poison retry has no list row: its version comes from the detail.
+				const updatedAt = row.updated_at > 0 ? row.updated_at : detailUpdatedAt(detail.value);
 				try {
-					wire = wireShotFromDetail({ id: row.id, clock: row.clock, updated_at: row.updated_at }, detail.value);
+					wire = wireShotFromDetail({ id: row.id, clock: row.clock, updated_at: updatedAt ?? 0 }, detail.value);
+					if (updatedAt === null) wire = { ...wire, updated_at_ms: null };
 					samples = samplesFromVisualizerDetail(detail.value);
 				} catch {
 					const failure: RowFailure = { kind: 'Unmappable' };
@@ -1123,8 +1141,8 @@ export const ShotSyncLive = Layer.effect(
 			// Not from an account this device can't name.
 			if (readSyncConfig().accountUnconfirmed) return yield* new NotAuthenticatedError();
 			yield* requireConnected;
-			// Another tab restoring: its rows aren't settled yet.
-			if (restoreFrozen()) return BUSY;
+			// A restore, here or in another tab: its rows aren't settled yet.
+			if (restoring()) return { ...BUSY, outcome: { kind: 'Busy', restore: true } } satisfies PullApplied;
 			const release = yield* Effect.promise(acquireRunLock);
 			if (!release) return BUSY;
 			return yield* walk(history, opts).pipe(
@@ -1172,9 +1190,18 @@ export const ShotSyncLive = Layer.effect(
 				let page = 1;
 				let ownDeletes = 0;
 				walk: for (;;) {
-					if (restoreFrozen()) {
-						tally = { ...tally, ended: { kind: 'Partial', details: { reason: PartialReason.ServerTrouble } } };
-						break;
+					if (restoring()) {
+						// What it applied stays; the cursor, the poison list and the
+						// rest wait for the next run, after the restore.
+						appendSyncLog({
+							direction: 'pull',
+							entity: 'shot',
+							id: '',
+							name: `Pulled ${pulled} shot${pulled === 1 ? '' : 's'}, then paused`,
+							at: Date.now(),
+							error: 'A restore started, so the pull stopped. It goes on with the next sync.'
+						});
+						return { outcome: { kind: 'Busy', restore: true }, pulled, refused, repairing } satisfies PullApplied;
 					}
 					if (page > (opts.maxPages ?? MAX_RUN_PAGES)) {
 						tally = { ...tally, ended: { kind: 'Partial', details: { reason: PartialReason.PageCap } } };

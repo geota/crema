@@ -63,7 +63,13 @@
 			onWaiting: (ms) => (pullWaitingUntil = Date.now() + ms)
 		});
 		pullWaitingUntil = null;
-		if (result.outcome.kind === 'Busy') toast.info('Another tab is syncing with Visualizer.');
+		if (result.outcome.kind === 'Busy') {
+			toast.info(
+				result.outcome.restore
+					? 'A restore is running. The pull goes on with the next sync.'
+					: 'Another tab is syncing with Visualizer.'
+			);
+		}
 		if (result.refused > 0) toast.error(historyFullNotice(result.refused, history.capacity));
 		return result;
 	}
