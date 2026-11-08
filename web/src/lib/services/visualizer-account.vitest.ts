@@ -16,7 +16,7 @@ vi.mock('#lib/history/index.js', () => ({ getHistoryStore: () => mockHistory }))
 
 import { HttpStatusError, NetworkError } from '../effect/errors.ts';
 import { initTestWasm } from '#lib/testing/test-init.js';
-import { BARISTA_PENDING_KEY } from '../visualizer/barista-pending.ts';
+import { markShotEdit, pendingEdits } from '../visualizer/pending-edits.ts';
 import { excludedFromUpload, readSyncConfig, updateSyncConfig, uploadsHeld } from '../visualizer/sync-config.ts';
 import {
 	expiredTombstones,
@@ -158,7 +158,8 @@ describe('a sign-in names its account before anything moves', () => {
 describe('a different account', () => {
 	it('reconnect_other_account_asks_first', async () => {
 		updateSyncConfig({ syncAccountId: 'u1', shotPullCursor: 99 });
-		localStorage.setItem(BARISTA_PENDING_KEY, JSON.stringify(['x']));
+		markShotEdit('x', 'barista');
+		markShotEdit('y', { tags: { before: [], after: ['washed'] } });
 		enqueueEntry({ entity: 'shot', id: 'waiting', op: 'create' });
 		enqueueEntry({ entity: 'shot', id: 'edited', op: 'update' });
 		enqueueEntry({ entity: 'shot', id: 'gone', op: 'delete', visualizerId: 'v-gone' });
@@ -168,7 +169,7 @@ describe('a different account', () => {
 
 		const config = readSyncConfig();
 		expect(config).toMatchObject({ syncAccountId: 'u2', accountChangeAsk: true, shotPullCursor: null });
-		expect(localStorage.getItem(BARISTA_PENDING_KEY)).toBe('[]');
+		expect(pendingEdits().size).toBe(0);
 		expect(readQueue().entries.map((e) => [e.id, e.parkedFor])).toEqual([['gone', 'u1']]);
 
 		expect(uploadsHeld()).toBe(true);

@@ -53,7 +53,9 @@ const layer = Layer.provide(
 const reconcile = (history: HistoryStore, remote: WireShot[]) =>
 	Effect.runPromise(
 		Effect.provide(
-			Effect.flatMap(ShotSync, (s) => s.applyShotReconciliation(history, remote)),
+			Effect.flatMap(ShotSync, (s) =>
+				Effect.map(s.applyShotReconciliation(history, remote), (r) => r.refused)
+			),
 			layer
 		)
 	);
@@ -118,14 +120,24 @@ describe('remote tags on a pull', () => {
 		expect(history.get('shot:a')?.tags).toEqual(['washed']);
 	});
 
-	it('remote tags don’t replace local ones', async () => {
+	it('remote tags don’t replace local ones: they only add, compared as Visualizer does', async () => {
 		const history = new HistoryStore();
 		history.insertPulled(localShot('shot:a', 'vis-1'));
-		history.setTags('shot:a', ['mine']);
+		history.setTags('shot:a', ['Mine']);
 
-		await reconcile(history, [remoteShot('vis-1', { tag_list: ['theirs'] })]);
+		await reconcile(history, [remoteShot('vis-1', { tag_list: ['mine', 'theirs'] })]);
 
-		expect(history.get('shot:a')?.tags).toEqual(['mine']);
+		expect(history.get('shot:a')?.tags).toEqual(['Mine', 'theirs']);
+	});
+
+	it('the merge writes the remote version, and nothing it may not change', async () => {
+		const history = new HistoryStore();
+		history.insertPulled(localShot('shot:a', 'vis-1'));
+		history.setRating('shot:a', 4);
+
+		await reconcile(history, [remoteShot('vis-1', { rating: 1, notes: 'theirs', updated_at_ms: 1_700_000_123_456 })]);
+
+		expect(history.get('shot:a')).toMatchObject({ visualizerUpdatedAt: 1_700_000_123, metadata: { rating: 4 } });
 	});
 });
 

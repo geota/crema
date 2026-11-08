@@ -92,6 +92,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Tag edits reach Visualizer without undoing the website's** — on Premium, a
+  tag edit now reads the shot's tags on Visualizer first and sends only what you
+  added and removed, so a tag added on the website stays and comes back to Crema
+  too. Removing a shot's last tag now clears it there as well. A pull only adds
+  tags and never overwrites a tag edit still on its way. On a free account the
+  edit waits and goes up after an upgrade. If Visualizer still won't keep the
+  tags, the sync log says so once. Web.
+- **A shot edit sends only what changed** — a rating, note or bean edit no longer
+  resends the shot's tags or barista, and a failed edit now tries again from the
+  shot as it stands, until it lands. If the shot is gone or refused on
+  Visualizer, the sync log says so. Web.
 - **A shot finishing no longer undoes an edit made meanwhile** — a rating or note
   set while a shot assembled, a bag debit during a bean sync and a change while
   an import ran used to be overwritten by a copy read earlier. Each now lands on
