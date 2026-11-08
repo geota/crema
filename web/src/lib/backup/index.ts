@@ -40,7 +40,7 @@ import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '#lib/visualizer/s
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { strToU8, strFromU8, zipSync } from 'fflate';
 import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
-import { readStored } from '#lib/utils/storage.js';
+import { readStored, unreadableStores } from '#lib/utils/storage.js';
 import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
 import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 import type { Bean, Roaster } from '#lib/bean/model.js';
@@ -86,6 +86,8 @@ export interface BackupContents {
 	degraded?: readonly string[];
 	/** Machine shots a built backup carries with no curve. */
 	noCurves?: number;
+	/** Stores that couldn't be read this session, so aren't in it, by name. */
+	missing?: readonly string[];
 }
 
 /** One row a backup left out (the core's `OmittedBackupRow`). */
@@ -132,7 +134,14 @@ export function describeBackupGaps(c: BackupContents): string {
 		noCurves === 0
 			? ''
 			: ` ${noCurves} shot${noCurves === 1 ? ' was' : 's were'} backed up without ${noCurves === 1 ? 'its' : 'their'} curve.`;
-	return left + thin + flat;
+	const missing = c.missing ?? [];
+	const names =
+		missing.length <= 1 ? (missing[0] ?? '') : `${missing.slice(0, -1).join(', ')} and ${missing.at(-1)}`;
+	const gone =
+		missing.length === 0
+			? ''
+			: ` It doesn’t include your ${names}: ${missing.length === 1 ? 'it' : 'they'} couldn’t be read.`;
+	return left + thin + flat + gone;
 }
 
 /**
@@ -310,7 +319,8 @@ export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<
 			shots: written('shot', shots.length),
 			omitted: built.omitted,
 			degraded: built.degraded,
-			noCurves
+			noCurves,
+			missing: unreadableStores()
 		}
 	};
 }

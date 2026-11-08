@@ -176,9 +176,20 @@ class DriveRetentionTest {
         keep: Int? = null,
         built: BackupCounts = BackupCounts(100u, 100u),
         tag: String? = TAG,
+        blocked: String? = null,
+        newestDamage: Long? = null,
+        damageSeen: Long? = null,
+        preDamage: String? = null,
+        lastSuccess: Long? = null,
+        seen: (DriveSync) -> Unit = {},
     ): DriveState = runBlocking {
         store.load()
-        store.save(DriveState(tokens = tokens, lastAutoBackupAtMs = lastAuto, autoBackupKeep = keep, autoBackupTag = tag))
+        store.save(
+            DriveState(
+                tokens = tokens, lastAutoBackupAtMs = lastAuto, lastBackupSuccessAtMs = lastSuccess,
+                autoBackupKeep = keep, autoBackupTag = tag, damageSeenMs = damageSeen, preDamageCopy = preDamage,
+            ),
+        )
         val sync = DriveSync(
             store, json, scope, "cid",
             notify = { notices += it },
@@ -187,10 +198,13 @@ class DriveRetentionTest {
             backupFileName = { "crema-backup-tablet-20261106-0800.crema.zip" },
             applyRestore = { _, _ -> },
             refreshToken = { error("no refresh expected") },
+            autoBackupBlocked = { blocked },
+            newestDamageMs = { newestDamage },
         )
         sync.load()
         sync.autoBackupIfDue(true)
         withTimeout(10_000) { job.children.toList().joinAll() }
+        seen(sync)
         store.load()
     }
 
@@ -228,11 +242,98 @@ class DriveRetentionTest {
     }
 
     @Test
-    fun everyInstallKeepsTenUntilTheDamageSlotExists() {
+    fun aNewInstallKeepsThree() {
         seed(12)
         val state = dailyBackup(lastAuto = null)
-        assertEquals(10, state.autoBackupKeep)
+        assertEquals(3, state.autoBackupKeep)
+        assertEquals((2..11).map { "tablet$it" }.toSet(), trashed.toSet())
+    }
+
+    @Test
+    fun anInstallThatBackedUpBeforeKeepsTen() {
+        seed(12)
+        assertEquals(10, dailyBackup(lastAuto = now - 2 * day).autoBackupKeep)
         assertEquals(setOf("tablet9", "tablet10", "tablet11"), trashed.toSet())
+        // A manual backup counts too.
+        assertEquals(10, dailyBackup(lastAuto = null, lastSuccess = now - day).autoBackupKeep)
+    }
+
+    @Test
+    fun aDamagedStoreOrARestoreSkipsTheDailyBackupUntilTheNextLaunch() {
+        seed(3)
+        var paused: String? = null
+        val state = dailyBackup(
+            lastAuto = now - 2 * day,
+            blocked = "your bean library couldn't be read",
+            seen = { paused = it.state.value.autoBackupPaused },
+        )
+        assertTrue(drive.none { it.first == "new" }, "nothing uploaded")
+        assertEquals(emptyList(), trashed.toList())
+        assertEquals(now - 2 * day, state.lastAutoBackupAtMs, "not stamped: the next launch tries again")
+        assertEquals("Daily backup paused: your bean library couldn't be read.", paused)
+        // Once it's back, the next launch backs up.
+        dailyBackup(lastAuto = now - 2 * day, seen = { paused = it.state.value.autoBackupPaused })
+        assertTrue(drive.any { it.first == "new" })
+        assertEquals(null, paused)
+    }
+
+    @Test
+    fun aNewDamagePinsTheNewestCopyFromBeforeIt() {
+        // Same counts every day: a bean library that loaded empty can't be seen.
+        seed(8)
+        val state = dailyBackup(keep = 1, newestDamage = now - day / 2)
+        assertEquals("tablet0", state.preDamageCopy)
+        assertEquals(now - day / 2, state.damageSeenMs)
+        assertEquals((1..7).map { "tablet$it" }.toSet(), trashed.toSet())
+    }
+
+    @Test
+    fun thePinnedCopyStaysThroughTheThinDaysAfter() {
+        seed(8)
+        val state = dailyBackup(keep = 1, newestDamage = now - 9 * day, damageSeen = now - 9 * day, preDamage = "tablet6")
+        assertEquals("tablet6", state.preDamageCopy, "an old damage isn't seen again")
+        assertTrue("tablet6" !in trashed, "$trashed")
+        assertTrue("tablet5" in trashed && "tablet7" in trashed, "$trashed")
+    }
+
+    @Test
+    fun aDamageLongSinceFixedDoesNotHideANewOne() {
+        // Review Q2: a `.corrupt-` copy from half a year ago is still on disk,
+        // and the bean library is damaged again today.
+        seed(8)
+        val state = dailyBackup(keep = 1, newestDamage = now - day / 2, damageSeen = now - 180 * day)
+        assertEquals("tablet0", state.preDamageCopy)
+        assertTrue("tablet0" !in trashed, "$trashed")
+        // With nothing new, nothing is pinned: the old damage was dealt with.
+        val calm = dailyBackup(keep = 1, newestDamage = now - 180 * day, damageSeen = now - 180 * day)
+        assertEquals(null, calm.preDamageCopy)
+    }
+
+    @Test
+    fun aDeviceClockAheadOfDrivesStillKeepsTheGoodCopy() {
+        // Review Q3: the damage is stamped 3 h ahead of Drive's time, so every
+        // copy, today's thin one too, looks older than it. The pin is by id.
+        seed(8)
+        val state = dailyBackup(keep = 1, newestDamage = now + 3 * 60 * 60 * 1000)
+        assertEquals("tablet0", state.preDamageCopy)
+        assertTrue("tablet0" !in trashed, "$trashed")
+    }
+
+    @Test
+    fun aNewDamageThatCantBeListedWaitsForTheNextLaunch() {
+        seed(3)
+        listFails = true
+        val state = dailyBackup(lastAuto = now - 2 * day, newestDamage = now - day / 2)
+        assertTrue(drive.none { it.first == "new" }, "nothing uploaded")
+        assertEquals(now - 2 * day, state.lastAutoBackupAtMs, "not stamped")
+        assertEquals(null, state.damageSeenMs)
+    }
+
+    @Test
+    fun withNoDamageThatCopyGoesLikeAnyOther() {
+        seed(8)
+        dailyBackup(keep = 1)
+        assertEquals((0..7).map { "tablet$it" }.toSet(), trashed.toSet())
     }
 
     @Test

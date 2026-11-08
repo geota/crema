@@ -1105,7 +1105,23 @@ class LibraryController(
         // validation P1-2: the startup auto-backup ran during the load).
         awaitSeries()
         reportUnreadableSeries()
+        reportUnhealthyStores()
         return buildBackupZipNow()
+    }
+
+    /** Restores running now: a daily backup waits for them. */
+    private val restoresRunning = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Whether a restore is running, so a backup now would catch it half-applied. */
+    val restoring: Boolean get() = restoresRunning.get() > 0
+
+    /** A store that couldn't be read this session isn't in a backup made now:
+     *  a manual one goes ahead, and says what it's missing. */
+    private fun reportUnhealthyStores() {
+        val missing = coffee.crema.persist.Stores.unhealthy()
+        if (missing.isEmpty()) return
+        val list = if (missing.size == 1) missing[0] else missing.dropLast(1).joinToString(", ") + " and " + missing.last()
+        notify("This backup doesn't include your $list: ${if (missing.size == 1) "it" else "they"} couldn't be read.")
     }
 
     /** Shots whose telemetry file couldn't be read go into a backup without a
@@ -1174,6 +1190,7 @@ class LibraryController(
         // Series a restore removes stay on disk until its own marker can delete
         // them (restore-safety PR7): no save in this window deletes one.
         historyStore.pauseDeletes()
+        restoresRunning.incrementAndGet()
         scope.launch {
             // The core parses the bundle (`parseBackup` → importBackupJsonl, the
             // parser web uses); re-bind its result to the names the apply block uses.
@@ -1288,7 +1305,10 @@ class LibraryController(
                     historyDroppedNotice(merged.dropped) +
                     (heldSharingNotice(heldSharing)?.let { ". $it" } ?: ""),
             )
-        }.invokeOnCompletion { historyStore.resumeDeletes() }
+        }.invokeOnCompletion {
+            restoresRunning.decrementAndGet()
+            historyStore.resumeDeletes()
+        }
     }
 
     /** Remove a stored shot from the local history. Persisted. */
