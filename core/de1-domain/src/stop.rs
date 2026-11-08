@@ -396,6 +396,12 @@ impl AutoStop {
         self.stop_capture
     }
 
+    /// Move the clock's start to `now`: a shot whose flow began on an
+    /// unknown substate gets its real start once a named flowing one arrives.
+    pub fn restart_clock(&mut self, now: Duration) {
+        self.started = now;
+    }
+
     /// When the session's clock started: first flow for espresso, the
     /// session's open for hot water.
     #[must_use]

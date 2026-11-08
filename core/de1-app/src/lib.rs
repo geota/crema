@@ -548,6 +548,9 @@ pub struct CremaCore {
     /// counted in the displayed shot time — matching de1app and the recorded
     /// `ShotRecord.duration` (the `ShotMonitor` times the same window).
     flow_started: Option<Duration>,
+    /// This shot's flow began on an unknown substate, and no named flowing
+    /// one has come since: the first that does re-anchors the clock.
+    flow_began_on_unknown: bool,
     /// The connected scale's codec, once identified.
     scale: Option<Scale>,
     /// Smooths the scale stream into weight + flow for display.
@@ -1064,6 +1067,7 @@ impl CremaCore {
             last_state: None,
             shot_started: None,
             flow_started: None,
+            flow_began_on_unknown: false,
             scale: None,
             flow: FlowEstimator::new(FlowAlgorithm::default()),
             weight_gate: WeightSpikeGate::new(),
@@ -5560,6 +5564,7 @@ impl CremaCore {
                 // the elapsed clock is zeroed at the first preinfusion/pouring
                 // phase below, so the preheat isn't counted. See `flow_started`.
                 self.flow_started = None;
+                self.flow_began_on_unknown = false;
                 self.flow.reset();
                 // Fresh shot → fresh spike-gate baseline (the gate only
                 // rejects while a shot is in progress).
@@ -5623,10 +5628,18 @@ impl CremaCore {
                 // First flow (pump on) zeroes the elapsed clock; the pre-pour
                 // heating/stabilising phases don't. Matches the recorded
                 // `ShotRecord.duration` (the ShotMonitor times the same window).
-                if self.flow_started.is_none()
-                    && matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring)
-                {
+                let named_flow = matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring);
+                if self.flow_started.is_none() && named_flow {
                     self.begin_flow(now, out);
+                } else if named_flow && std::mem::take(&mut self.flow_began_on_unknown) {
+                    // Flow began on an unknown substate, and this is the first
+                    // named one: that was more heating, so the shot clock and
+                    // the auto-stop's start move here (REVIEW-379). A firmware
+                    // that never names its pour keeps the unknown start.
+                    self.flow_started = Some(now);
+                    if let Some(flow_stop) = self.auto_stop.as_mut() {
+                        flow_stop.stop.restart_clock(now);
+                    }
                 }
                 out.events.push(Event::ShotPhaseChanged { phase });
             }
@@ -5757,6 +5770,7 @@ impl CremaCore {
             })
         {
             self.begin_flow(now, out);
+            self.flow_began_on_unknown = true;
         }
     }
 

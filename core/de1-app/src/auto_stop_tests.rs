@@ -164,3 +164,43 @@ fn hot_water_with_a_trusted_weight_stop_lets_weight_decide() {
     assert_eq!(stop, Some(StopReason::Weight));
     assert!(counted > 140.0, "stopped at {counted} ml counted");
 }
+
+/// REVIEW-379: an unknown substate that turns out to be more heating. Max
+/// time 30 s; `[4,2]`; an unknown byte for 20 s; then `[4,5]`. The clock and
+/// the auto-stop's start move to the named pour, so max time ends the shot
+/// 30 s into the real pour, not 10 s into it.
+#[test]
+fn a_named_pour_after_an_unknown_start_re_anchors_the_clock() {
+    let mut core = CremaCore::new();
+    core.set_max_shot_duration(Some(30.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[4, 2], 100);
+    core.on_notification(Source::De1State, &[4, 21], 1_000);
+    assert_eq!(core.flow_started, Some(Duration::from_millis(1_000)));
+    let mut stopped_at = None;
+    for t in (1_100..90_000u64).step_by(100) {
+        if t == 21_000 {
+            core.on_notification(Source::De1State, &[4, 5], t);
+            assert_eq!(core.flow_started, Some(Duration::from_millis(21_000)));
+            let started = core.auto_stop_view().map(|v| v.started);
+            assert_eq!(started, Some(Duration::from_millis(21_000)));
+        }
+        let o = core.on_notification(Source::De1ShotSample, &sample((t / 8) as u16), t);
+        if stop_reasons(&o).contains(&StopReason::MaxTime) {
+            stopped_at = Some(t);
+            break;
+        }
+    }
+    assert_eq!(stopped_at, Some(51_000), "30 s into the real pour");
+}
+
+/// A named substate after flow began on a named one moves nothing.
+#[test]
+fn a_named_pour_after_a_named_start_keeps_the_clock() {
+    let mut core = CremaCore::new();
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[4, 4], 1_000);
+    core.on_notification(Source::De1State, &[4, 21], 2_000);
+    core.on_notification(Source::De1State, &[4, 5], 3_000);
+    assert_eq!(core.flow_started, Some(Duration::from_millis(1_000)));
+}
