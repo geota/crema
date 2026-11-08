@@ -205,6 +205,7 @@ fn the_generator_reaches_what_the_invariants_watch() {
         total.steam += c.steam;
         total.stops += c.stops;
         total.weight_stops += c.weight_stops;
+        total.estimated_stops += c.estimated_stops;
         total.volume_stops += c.volume_stops;
         total.retries += c.retries;
         total.not_honoured += c.not_honoured;
@@ -228,6 +229,7 @@ fn the_generator_reaches_what_the_invariants_watch() {
         ("steam", total.steam),
         ("stops", total.stops),
         ("weight stops", total.weight_stops),
+        ("estimated stops", total.estimated_stops),
         ("volume stops", total.volume_stops),
         ("retries", total.retries),
         ("not honoured", total.not_honoured),
@@ -666,5 +668,164 @@ fn a_shot_begun_during_an_outage_starts_from_zero() {
     world.apply(&Op::GroupHead(MachineState::Espresso));
     world.apply(&Op::Advance { ms: 20_000 });
     assert_eq!(world.coverage.replaced, 1, "split on the frame");
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// §7's model case, `[AppStart, Advance 4 s, Bump 18]`, on the capture's
+/// shape, where water reaches the cup late: a hand on the cup, or a spoon left
+/// on the scale, lands before the gate on a still cup. The settle moves the
+/// zero by the step, weight stays live, and the shot stops at a true 36 g.
+#[test]
+fn a_hand_or_a_spoon_on_a_still_cup_still_stops_at_a_true_36_g() {
+    for load in [
+        ScaleMode::Bump {
+            grams: 18.0,
+            ms: 3_000,
+        },
+        ScaleMode::StepUp { grams: 18.0 },
+    ] {
+        let mut world = World::new(De1Params::default(), 50.0, 5_000, false, false);
+        world.apply(&Op::AppStart { yield_g: 36.0 });
+        world.apply(&Op::Advance { ms: 4_000 });
+        world.apply(&Op::Scale(load));
+        while world.coverage.stops == 0 {
+            world.apply(&Op::Advance { ms: 100 });
+            assert!(world.now_ms() < 120_000, "{load:?}: a stop");
+        }
+        assert_eq!(world.coverage.weight_stops, 1, "{load:?}: by weight");
+        let cup = world.true_cup_g();
+        assert!(
+            (33.0..40.0).contains(&cup),
+            "{load:?}: stopped at a true {cup} g"
+        );
+        assert!(
+            world.violations.is_empty(),
+            "{load:?}: {:?}",
+            world.violations
+        );
+    }
+}
+
+/// The same load landing before the gate while the cup is already filling
+/// can't hold still to the settle's 1 g band, so after 2 s the scale is
+/// refused as disturbed: `Blind`, and the backstop ends the shot at 114 ml.
+/// Never an early weight stop.
+#[test]
+fn a_load_on_a_filling_cup_before_the_gate_leaves_the_shot_to_the_backstop() {
+    let mut world = plain_world();
+    world.apply(&Op::AppStart { yield_g: 36.0 });
+    world.apply(&Op::Advance { ms: 4_000 });
+    world.apply(&Op::Scale(ScaleMode::StepUp { grams: 18.0 }));
+    while world.coverage.stops == 0 {
+        world.apply(&Op::Advance { ms: 100 });
+        assert!(world.now_ms() < 120_000, "a stop");
+    }
+    assert_eq!(world.coverage.volume_stops, 1, "the backstop");
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// Rule (b), the shrunk repro: the scale stalls before the shot pours into the
+/// cup and comes back with a 7 g hand on it, which is adopted (`Tared` has no
+/// returning check). The hand lifts while the cup is still empty, so the zero
+/// stays where it was and the shot stops by weight at a true 36 g, not 7 g
+/// early.
+#[test]
+fn a_hand_lifting_off_an_empty_cup_leaves_the_zero_alone() {
+    let mut world = World::new(
+        De1Params {
+            preinfusion: false,
+            ending: Ending::None,
+            ..De1Params::default()
+        },
+        50.0,
+        5_000,
+        false,
+        false,
+    );
+    for op in [
+        Op::Advance { ms: 200 },
+        Op::AppStart { yield_g: 18.0 },
+        Op::Advance { ms: 500 },
+        Op::Scale(ScaleMode::Stall),
+        Op::Advance { ms: 5_900 },
+        Op::Scale(ScaleMode::Bump {
+            grams: 7.0,
+            ms: 300,
+        }),
+    ] {
+        world.apply(&op);
+    }
+    while world.coverage.stops == 0 {
+        world.apply(&Op::Advance { ms: 100 });
+        assert!(world.now_ms() < 120_000, "a stop");
+    }
+    assert_eq!(world.coverage.weight_stops, 1, "by weight");
+    let cup = world.true_cup_g();
+    assert!((33.0..40.0).contains(&cup), "stopped at a true {cup} g");
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// §3.5's band, 3 g + 12 g/s × dt, after the gate: a 5 g or 7 g load is a
+/// disturbance and the estimate finishes near target. A 4 g one sits on the
+/// band's edge at 10 Hz (4.2 g with the pour's own gain): read as coffee, it
+/// costs at most I13's 6 g.
+#[test]
+fn a_load_after_the_gate_stays_within_tolerance() {
+    // 7 g is the band's own check: under a band widened to 8 g it would read
+    // as coffee and stop the shot about 8 g early, which I13 catches.
+    for grams in [7.0, 4.0, 5.0] {
+        let mut world = plain_world();
+        world.apply(&Op::GroupHead(MachineState::Espresso));
+        while world.true_cup_g() < 25.0 {
+            world.apply(&Op::Advance { ms: 100 });
+        }
+        world.apply(&Op::Scale(ScaleMode::Bump { grams, ms: 2_000 }));
+        while world.coverage.stops == 0 {
+            world.apply(&Op::Advance { ms: 100 });
+            assert!(world.now_ms() < 120_000, "{grams} g: a stop");
+        }
+        // I13 first: the oracle's exemption doesn't cover a load seen
+        // arriving on a live reading.
+        assert!(
+            world.violations.is_empty(),
+            "{grams} g: {:?}",
+            world.violations
+        );
+        let cup = world.true_cup_g();
+        assert!(cup >= 30.0, "{grams} g: stopped at a true {cup} g");
+        if grams >= 5.0 {
+            assert_eq!(world.coverage.estimated_stops, 1, "{grams} g: on estimate");
+        }
+    }
+}
+
+/// Drip learning skips a stop that needed a retry. Three shots lose their
+/// stop's first writes, so each overshoots while the core retries; that
+/// overshoot is not drip. The next, clean shot still stops on target.
+#[test]
+fn a_clean_shot_after_ignored_stops_stops_on_target() {
+    let mut world = plain_world();
+    for shot in 0..4 {
+        world.apply(&Op::GroupHead(MachineState::Espresso));
+        if shot < 3 {
+            // Lost before the stop goes out: two writes per shot, retried.
+            world.apply(&Op::Advance { ms: 15_000 });
+            world.apply(&Op::LoseWrites(2));
+        }
+        let stops = world.coverage.stops;
+        while world.coverage.stops == stops {
+            world.apply(&Op::Advance { ms: 100 });
+            assert!(world.now_ms() < 600_000, "shot {shot} stops");
+        }
+        if shot == 3 {
+            let cup = world.true_cup_g();
+            assert!((33.0..40.0).contains(&cup), "stopped at a true {cup} g");
+        }
+        while world.de1.state != MachineState::Idle {
+            world.apply(&Op::Advance { ms: 100 });
+        }
+        world.apply(&Op::Advance { ms: 15_000 });
+    }
+    assert!(world.coverage.retries >= 3, "the first stops were retried");
     assert!(world.violations.is_empty(), "{:?}", world.violations);
 }

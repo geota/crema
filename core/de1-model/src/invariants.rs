@@ -40,8 +40,9 @@ pub enum Invariant {
     /// Past attempt 30, no retry without two samples at flow since the last
     /// write.
     I17,
-    /// No `Weight` stop while the true cup weight is under target minus
-    /// tolerance. Not checked on a mirror, whose stop is only a display.
+    /// No `Weight` or `EstimatedWeight` espresso stop while the true cup
+    /// weight since the last tare is under target minus 6 g. Not checked on a
+    /// mirror, whose stop is only a display.
     I13,
     /// A new session in the same mode has `pour_ml` at 0 and a fresh
     /// `AutoStop`.
