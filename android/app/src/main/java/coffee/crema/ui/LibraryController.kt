@@ -1207,7 +1207,7 @@ class LibraryController(
                 profiles = customProfilesJson.mapNotNull { profileIdOf(it, json) },
                 recipes = s.brewRecipes.map { it.id }.filterNot { it in builtinRecipeIds },
                 customMethods = s.customMethods.map { it.id },
-                shots = s.history.map { coffee.crema.core.LocalShot(it.id, hasSamples = it.samples.isNotEmpty()) } +
+                shots = s.history.map { coffee.crema.core.LocalShot(it.id, hasSamples = it.samples.isNotEmpty(), pinned = it.pinned) } +
                     deleted.map { coffee.crema.core.LocalShot(it, hasSamples = false, deleted = true) },
                 photos = s.beans.filter { BeanImageStore.exists(app, it.id) }.map { it.id },
                 beansMissingPhoto = s.beans.filter { it.imageRef != null && !BeanImageStore.exists(app, it.id) }.map { it.id },

@@ -105,12 +105,8 @@ class RestoreMatrixTest(private val name: String) {
                 "web only: a line with no _shell is Android's own, so on Android it applies the extras",
         )
 
-        /** Pointers Android can't reproduce in a case it otherwise runs, with why. */
-        private val DROPPED = mapOf(
-            "shots: replace removes by name, pinned counted, and a tombstone the backup lacks stays" to mapOf(
-                "/shots/pinnedRemoved" to "Android history has no shot pins, so LocalShot.pinned is never set",
-            ),
-        )
+        /** Pointers Android can't reproduce in a case it otherwise runs, with why: none, now shots pin (#311). */
+        private val DROPPED = emptyMap<String, Map<String, String>>()
 
         /** The matrix names stores as web does; Android's health list names them its own way. */
         private val ANDROID_STORE_NAMES = mapOf("bean library" to "beans")
@@ -318,6 +314,7 @@ class RestoreMatrixTest(private val name: String) {
                     completedAtMs = 1_700_000_100_000L + n,
                     durationMs = 30_000,
                     samples = if (s["hasSamples"].isTrue()) curve() else emptyList(),
+                    pinned = s["pinned"].isTrue(),
                 )
             }
             val fillers = List(c.localFillers) { n -> StoredShot(id = "filler-$n", completedAtMs = 1_600_000_000_000L + n, durationMs = 30_000) }
