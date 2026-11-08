@@ -524,6 +524,28 @@ describe('the #363 review', () => {
 	});
 });
 
+describe('added beans, only for the same backup (DECISIONS §7)', () => {
+	it('an interrupted restore A says nothing about a Merge of backup B', async () => {
+		const a = await backupOf(['n1'], ['s1'], () => 'n1');
+		captureMessages(new FakeLocks());
+		const clean = await planNow(a, 'merge', false, new FakeLocks());
+		expect(clean.beans.add).toEqual(['n1']);
+		const stopped = await runRestore(a, 'merge', { expected: clean }, deps(new FakeLocks(), { failAt: 'profiles' }));
+		expect(stopped.kind).toBe('stopped');
+		expect(readMarker()?.addedBeans).toEqual(['n1']);
+
+		// A re-run of A: the bean it added isn't the device's own bag.
+		expect((await planNow(a, 'merge', false, new FakeLocks())).shots.zeroDebit).toEqual([]);
+		// Backup B, another file with that bean: for B the bag is here.
+		const b = prepareBackup(a.jsonl, 'another backup');
+		const forB = await planNow(b, 'merge', false, new FakeLocks());
+		expect(forB.shots.zeroDebit).toEqual(['s1']);
+		await runRestore(b, 'merge', { expected: forB }, deps(new FakeLocks(), { failAt: 'profiles' }));
+		expect(readMarker()?.backupName).toBe('another backup');
+		expect(readMarker()?.addedBeans).toEqual([]);
+	});
+});
+
 describe('the marker', () => {
 	const bootDeps = (over: Partial<Parameters<typeof checkMarkerAtBoot>[0]> = {}) => {
 		const deleted: string[] = [];

@@ -62,7 +62,7 @@ import {
 	shotIsOpen,
 	type LockManagerLike
 } from './tab-safety';
-import { beginMarker, dropMarker, finishMarker, readMarker } from './marker';
+import { beginMarker, dropMarker, finishMarker, isRunOf, readMarker } from './marker';
 
 /** The most time between two `progress` posts (rule 4: under 10 s). */
 export const PROGRESS_MS = 5_000;
@@ -81,6 +81,8 @@ export interface PreparedBackup {
 	readonly photos: ReadonlyMap<string, Uint8Array>;
 	/** The core's `BackupManifest`, as JSON. */
 	readonly manifestJson: string;
+	/** The header's `createdAt`, or null when it didn't read: with {@link name}, which backup this is. */
+	readonly createdAt: number | null;
 }
 
 function isZip(b: Uint8Array): boolean {
@@ -114,7 +116,8 @@ export function prepareBackup(data: ArrayBuffer | Uint8Array | string, name: str
 		}
 	}
 	const manifestJson = scanBackupBytes(jsonl, JSON.stringify([...photos.keys()]));
-	return { name, jsonl, photos, manifestJson };
+	const header = (JSON.parse(manifestJson) as { header?: { createdAt?: number } | null }).header;
+	return { name, jsonl, photos, manifestJson, createdAt: header?.createdAt ?? null };
 }
 
 /** Whether another tab has a shot or flash: the busy lock is held somewhere. */
@@ -208,11 +211,8 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		visualizerPrefs: visualizerSyncPrefs(),
 		totalLitres: maintenance.current.totalLitres ?? 0,
 		activeBeanId: beans.activeBeanId,
-		// A re-run after an interrupted one: the beans it added aren't this device's own bag.
-		addedBeans: (() => {
-			const m = readMarker();
-			return m?.phase === 'applying' ? (m.addedBeans ?? []) : [];
-		})()
+		// Filled per backup by planNow, from the marker of a run of that same backup.
+		addedBeans: []
 	} as unknown as LocalState;
 }
 
@@ -239,7 +239,12 @@ export async function planNow(
 	reviveDeleted = false,
 	locks: LockManagerLike | undefined = defaultLocks()
 ): Promise<RestorePlan> {
-	return planFor(prepared, mode, await buildLocalState(locks), reviveDeleted);
+	const local = await buildLocalState(locks);
+	// A re-run after an interrupted one of this same backup (name and header
+	// `createdAt`, DECISIONS §7): the beans it added aren't this device's own bag.
+	const m = readMarker();
+	const addedBeans = m && isRunOf(m, prepared.name, prepared.createdAt) ? (m.addedBeans ?? []) : [];
+	return planFor(prepared, mode, { ...local, addedBeans } as LocalState, reviveDeleted);
 }
 
 /** Whether a fresh install's settings are still as it left them (the core's rule). */
@@ -623,7 +628,8 @@ async function applyPlan(
 				prepared.name,
 				{ shots: plan.shots.remove, photos: plan.photos.remove },
 				now(),
-				plan.beans.add
+				plan.beans.add,
+				prepared.createdAt
 			)
 		))
 	) {
