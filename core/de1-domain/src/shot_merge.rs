@@ -80,22 +80,23 @@ impl TagMarks {
     }
 }
 
-/// Record a tag edit from `before` to `after` onto `marks`. An add cancels a
-/// matching remove, and the reverse: the server never heard of either.
+/// Record a tag edit from `before` to `after` onto `marks`. The latest edit of
+/// a tag wins, and is always marked: re-adding a tag drops its remove mark and
+/// marks the add, and the reverse. Opposite marks never just cancel, since the
+/// first may be on its way to the server already, and its settle would then
+/// leave nothing to undo it.
 #[must_use]
 pub fn mark_tag_edit(marks: &TagMarks, before: &[String], after: &[String]) -> TagMarks {
     let mut out = marks.clone();
     for tag in after.iter().filter(|t| !contains_tag(before, t)) {
-        if contains_tag(&out.remove, tag) {
-            out.remove.retain(|t| !same_tag(t, tag));
-        } else if !contains_tag(&out.add, tag) {
+        out.remove.retain(|t| !same_tag(t, tag));
+        if !contains_tag(&out.add, tag) {
             out.add.push(tag.clone());
         }
     }
     for tag in before.iter().filter(|t| !contains_tag(after, t)) {
-        if contains_tag(&out.add, tag) {
-            out.add.retain(|t| !same_tag(t, tag));
-        } else if !contains_tag(&out.remove, tag) {
+        out.add.retain(|t| !same_tag(t, tag));
+        if !contains_tag(&out.remove, tag) {
             out.remove.push(tag.clone());
         }
     }
@@ -496,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn an_add_cancels_a_remove_and_the_reverse() {
+    fn the_latest_edit_of_a_tag_wins_and_stays_marked() {
         let marks = mark_tag_edit(&TagMarks::default(), &tags(&["a", "b"]), &tags(&["a", "c"]));
         assert_eq!(
             marks,
@@ -506,7 +507,32 @@ mod tests {
             }
         );
         let back = mark_tag_edit(&marks, &tags(&["a", "c"]), &tags(&["a", "b"]));
-        assert!(back.is_empty());
+        assert_eq!(
+            back,
+            TagMarks {
+                add: tags(&["b"]),
+                remove: tags(&["c"])
+            }
+        );
+    }
+
+    #[test]
+    fn a_tag_re_added_while_its_removal_is_out_is_kept() {
+        let sent = mark_tag_edit(&TagMarks::default(), &tags(&["a", "b"]), &tags(&["a"]));
+        // The push of that removal is out when "b" comes back.
+        let current = mark_tag_edit(&sent, &tags(&["a"]), &tags(&["a", "b"]));
+        let pushed = tag_push_list(&tags(&["a", "b"]), &sent);
+        let settled =
+            settle_tag_push(&current, &sent, &pushed, &pushed).expect("the reply matched");
+        assert_eq!(
+            settled,
+            TagMarks {
+                add: tags(&["b"]),
+                remove: vec![]
+            },
+            "the re-add still goes up"
+        );
+        assert_eq!(tag_push_list(&pushed, &settled), tags(&["a", "b"]));
     }
 
     #[test]
