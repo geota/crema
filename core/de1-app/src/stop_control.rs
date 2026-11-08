@@ -13,6 +13,7 @@ use de1_domain::scale_trust::WeightAuthority;
 use de1_domain::session::{
     ActiveMode, Baseline, Blocked, Observed, Session, is_pre_flow, is_wind_down,
 };
+use de1_domain::stop::EstimatedLeg;
 use de1_domain::stop::{
     FLOW_PROOF_ML_S, FLOW_PROOF_SAMPLES, STOP_ALERT_AFTER, STOP_RETRY_CAP, StopCause, StopState,
     stop_retry_interval,
@@ -107,8 +108,9 @@ impl CremaCore {
         {
             return;
         }
-        let targets = self.leg_targets(StopLegs::Espresso);
+        let (targets, estimate) = self.leg_targets(StopLegs::Espresso);
         let mut stop = AutoStop::new(targets, self.stop_config(), flow_started);
+        stop.set_estimate(estimate);
         self.attach_drip_model(&mut stop, targets.weight.is_some());
         self.auto_stop = Some(FlowStop {
             legs: StopLegs::Espresso,
@@ -132,7 +134,9 @@ impl CremaCore {
             .scale
             .as_ref()
             .map_or(DEFAULT_SCALE_LAG, Scale::sensor_lag);
-        let stop = AutoStop::new(self.leg_targets(legs), StopConfig::hot_water(lag), opened);
+        let (targets, estimate) = self.leg_targets(legs);
+        let mut stop = AutoStop::new(targets, StopConfig::hot_water(lag), opened);
+        stop.set_estimate(estimate);
         self.auto_stop = Some(FlowStop { legs, stop });
     }
 
@@ -150,28 +154,40 @@ impl CremaCore {
         None
     }
 
-    /// The legs live now.
+    /// The legs live now, and the estimated leg standing in for weight.
     ///
-    /// - Espresso: [`effective_stop_targets`](Self::effective_stop_targets).
-    /// - Hot water (`DESIGN.md` §3.5): weight under a trusted scale; the
-    ///   volume leg only when the packet on the machine is the 250 ml backstop
-    ///   and no trusted weight stop is armed. If the packet holds `V`, the DE1
-    ///   owns the stop and an app leg would race it.
-    fn leg_targets(&self, legs: StopLegs) -> StopTargets {
+    /// - Espresso: [`resolved_legs`](Self::resolved_legs).
+    /// - Hot water (`DESIGN.md` §3.5): weight under a trusted scale, the
+    ///   estimate once the scale is lost after flow reached the cup, and the
+    ///   volume leg when weight isn't trusted and there's no `last` to
+    ///   estimate from, but only behind the 250 ml packet: if the packet holds
+    ///   `V`, the DE1 owns the stop and an app leg would race it.
+    fn leg_targets(&self, legs: StopLegs) -> (StopTargets, Option<EstimatedLeg>) {
         match legs {
-            StopLegs::Espresso => self.effective_stop_targets().unwrap_or(NO_LEGS),
+            StopLegs::Espresso => {
+                let resolved = self.resolved_legs();
+                (resolved.targets().unwrap_or(NO_LEGS), resolved.estimated)
+            }
             StopLegs::HotWater { weight_g, v_ml } => {
-                let weight =
-                    weight_g.filter(|_| self.hot_water_authority() == WeightAuthority::Trusted);
+                let authority = self.hot_water_authority();
+                let weight = weight_g.filter(|_| authority == WeightAuthority::Trusted);
+                let estimate = match (weight_g, authority) {
+                    (Some(target_g), WeightAuthority::Lost(last)) => {
+                        Some(EstimatedLeg { target_g, last })
+                    }
+                    _ => None,
+                };
                 let packet_is_backstop = self
                     .steam_hotwater_settings
                     .as_ref()
                     .is_some_and(|p| p.hot_water_volume_ml >= HOT_WATER_STOP_ON_SCALE_ML - 0.5);
-                StopTargets {
+                let targets = StopTargets {
                     weight,
-                    volume: v_ml.filter(|_| packet_is_backstop && weight.is_none()),
+                    volume: v_ml
+                        .filter(|_| packet_is_backstop && weight.is_none() && estimate.is_none()),
                     max_time: None,
-                }
+                };
+                (targets, estimate)
             }
         }
     }
@@ -202,16 +218,17 @@ impl CremaCore {
         let Some(legs) = self.auto_stop.as_ref().map(|f| f.legs) else {
             return;
         };
-        let targets = self.leg_targets(legs);
+        let (targets, estimate) = self.leg_targets(legs);
         if self
             .auto_stop
             .as_ref()
-            .is_some_and(|f| f.stop.targets() == targets)
+            .is_some_and(|f| f.stop.targets() == targets && f.stop.estimate() == estimate)
         {
             return;
         }
         if let Some(mut flow_stop) = self.auto_stop.take() {
             flow_stop.stop.set_targets(targets);
+            flow_stop.stop.set_estimate(estimate);
             // A weight leg arriving mid-shot (scale registered late) also
             // needs the learned-drip snapshot it missed at arm time.
             if legs == StopLegs::Espresso {
@@ -279,7 +296,7 @@ impl CremaCore {
             armed,
             weight_configured: self.effective_target_weight(),
             weight_blocked: self.weight_stop_blocked_by().map(str::to_owned),
-            weight_blocked_note: self.weight_blocked().map(|b| b.note().to_owned()),
+            weight_blocked_note: self.weight_blocked_note().map(str::to_owned),
         });
     }
 
@@ -529,8 +546,10 @@ impl CremaCore {
             // A mirror follows the hub, which judged the outage itself.
             _ if read_only => {}
             _ => {
+                // Whose cup it is can't be told, so no `last` either.
                 session.baseline = Baseline::Refused {
                     why: Blocked::BeganUnseen,
+                    last: None,
                 };
             }
         }
@@ -584,6 +603,9 @@ impl CremaCore {
             return;
         };
         *attempts += 1;
+        // The machine didn't honour the first write: what lands after it is
+        // overshoot, not drip.
+        self.stop_retried_this_shot = true;
         *last_write = now;
         let attempt = *attempts;
         self.flow_proof = 0;

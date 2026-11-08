@@ -142,7 +142,13 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
         s.profile_name = non_blank(shot.profile_title.as_deref())
             .or_else(|| non_blank(ctx.profile_name.as_deref()));
     }
-    s.stop_reason = shot.stop_reason;
+    // An estimated stop is stored as `Weight`, which older builds parse,
+    // flagged `stop_estimated` (`DESIGN.md` §3.5).
+    s.stop_estimated = shot.stop_reason == Some(StopReason::EstimatedWeight);
+    s.stop_reason = shot.stop_reason.map(|reason| match reason {
+        StopReason::EstimatedWeight => StopReason::Weight,
+        other => other,
+    });
     s.stop_on_weight = Some(shot.stop_on_weight);
     s.auto_tare = Some(shot.auto_tare);
     s.metadata.yield_out = shot.final_weight.filter(|w| w.is_finite() && *w > 0.0);

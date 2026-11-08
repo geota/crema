@@ -106,4 +106,15 @@ class WireShotTest {
         assertNull(storedShotFromWire(wire("  "), null, json)!!.barista)
         assertNull(storedShotFromWire(wire(null), null, json)!!.barista)
     }
+
+    @Test
+    fun `an estimated weight stop survives a backup round trip`() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val shot = shotWithBean(null).copy(stopReason = "Weight", stopEstimated = true)
+        val back = storedShotFromBackupJson(wireShotJson(shot, forBackup = true), json)!!
+        assertEquals("Weight", back.stopReason)
+        assertTrue(back.stopEstimated)
+        val plain = storedShotFromBackupJson(wireShotJson(shot.copy(stopEstimated = false), forBackup = true), json)!!
+        assertEquals(false, plain.stopEstimated)
+    }
 }
