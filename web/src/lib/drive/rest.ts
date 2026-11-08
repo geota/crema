@@ -76,7 +76,15 @@ export async function uploadBackup(
 		signal
 	});
 	if (!res.ok) await failOn(res, 'upload');
-	return (await res.json()) as DriveFile;
+	return whole((await res.json()) as DriveFile, media);
+}
+
+/** `file`, once Drive's size for it matches what was sent. */
+function whole(file: DriveFile, media: Blob): DriveFile {
+	if (file.size != null && Number(file.size) !== media.size) {
+		throw new Error(`Drive upload failed: Drive holds ${file.size} bytes of ${media.size}.`);
+	}
+	return file;
 }
 
 /** One multipart request: metadata + media, the media part `content` itself. */
@@ -108,7 +116,7 @@ async function uploadMultipart(
 		signal
 	});
 	if (!res.ok) await failOn(res, 'upload');
-	return (await res.json()) as DriveFile;
+	return whole((await res.json()) as DriveFile, media);
 }
 
 /** List this app's backup files, newest first: all of them, so an older good

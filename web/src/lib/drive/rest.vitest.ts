@@ -52,6 +52,18 @@ describe('uploadBackup', () => {
 		expect(text).toContain('"name":"b.crema.zip"');
 	});
 
+	it('a file Drive holds short of what was sent is a failed upload', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string) =>
+				url.includes('uploadType=resumable')
+					? new Response(null, { status: 200, headers: { Location: 'https://upload.example/s' } })
+					: new Response(JSON.stringify({ id: 'f1', name: 'b', modifiedTime: 'now', size: '3' }), { status: 200 })
+			)
+		);
+		await expect(uploadBackup('tok', 'b', new Blob([new Uint8Array(4)]))).rejects.toThrow(/3 bytes of 4/);
+	});
+
 	it('a refused session is a failed upload', async () => {
 		vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { message: 'no' } }), { status: 403 })));
 		await expect(uploadBackup('tok', 'b', 'x')).rejects.toThrow(/upload failed \(403\) — no/);

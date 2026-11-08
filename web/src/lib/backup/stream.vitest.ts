@@ -14,13 +14,17 @@ import { blankProfile } from '#lib/profiles/model.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
 import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
-import { buildBackupFile, buildBackupJsonl } from './index';
+import { buildBackupFile, buildBackupJsonl, driveBackupFailure } from './index';
+import { FakeLocks } from '#lib/testing/fake-locks.js';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
 	BACKUP_JSONL_MEMBER,
 	BACKUP_LIMITS,
 	BACKUP_TEMP_PREFIX,
 	BackupCancelled,
 	BackupTooLarge,
+	backupTempLock,
 	memorySink,
 	openBackupSink,
 	streamBackup,
@@ -232,6 +236,24 @@ describe('cancel and limits leave nothing', () => {
 		expect(sink.discarded).toBe(true);
 	});
 
+	it('a line of the prelude or the tail past the limit refuses it too (#386 review)', async () => {
+		// A shot well inside the limit, so only the prelude or tail line is long.
+		const small = { ...shot(0), record: { duration: 40_000, samples: [] } };
+		await expect(
+			streamBackup(input([small]), { sink: countingSink(), limits: { ...BACKUP_LIMITS, maxLineBytes: 2048 } })
+		).resolves.toBeDefined();
+		for (const envelope of [
+			{ settings: { common: {}, notes: 'x'.repeat(4096) } },
+			{ profiles: [JSON.stringify({ id: 'p1', name: 'x'.repeat(4096) })] }
+		]) {
+			const sink = countingSink();
+			await expect(
+				streamBackup(input([small], envelope), { sink, limits: { ...BACKUP_LIMITS, maxLineBytes: 2048 } })
+			).rejects.toBeInstanceOf(BackupTooLarge);
+			expect(sink.discarded).toBe(true);
+		}
+	});
+
 	it('past the unzipped or the file limit too', async () => {
 		for (const limits of [
 			{ ...BACKUP_LIMITS, maxInflatedBytes: 200_000 },
@@ -337,9 +359,93 @@ describe('the temporary file', () => {
 		expect(Object.keys(entries)).toEqual([BACKUP_JSONL_MEMBER, 'images/bean-1']);
 	});
 
+	it('a file still being read keeps its lock, and the sweep leaves it however old (#386 review)', async () => {
+		const root = fakeRoot();
+		const locks = new FakeLocks();
+		const sink = await openBackupSink(async () => root as unknown as FileSystemDirectoryHandle, locks);
+		const built = await streamBackup(input([shot(0)]), { sink });
+		const name = [...root.files.keys()][0];
+		expect((await locks.query()).held.map((l) => l.name)).toEqual([backupTempLock(name)]);
+		root.files.set(`${BACKUP_TEMP_PREFIX}${NOW - 3_600_000}-old.zip`, []);
+		const later = Date.now() + 3_600_000;
+		const at = async () => root as unknown as FileSystemDirectoryHandle;
+		expect(await sweepBackupTemp(10 * 60_000, later, at, locks)).toBe(1);
+		expect(root.files.has(name), 'an upload an hour long keeps its file').toBe(true);
+		await built.release();
+		expect(root.files.has(name)).toBe(false);
+		expect((await locks.query()).held).toEqual([]);
+	});
+
+	it('one file the sweep can’t remove doesn’t stop the rest', async () => {
+		const root = fakeRoot();
+		root.files.set(`${BACKUP_TEMP_PREFIX}1-a.zip`, []);
+		root.files.set(`${BACKUP_TEMP_PREFIX}2-b.zip`, []);
+		const remove = root.removeEntry.bind(root);
+		root.removeEntry = async (name: string) => {
+			if (name.endsWith('-a.zip')) throw new DOMException('open', 'NoModificationAllowedError');
+			return remove(name);
+		};
+		expect(await sweepBackupTemp(0, NOW, async () => root as unknown as FileSystemDirectoryHandle)).toBe(1);
+		expect([...root.files.keys()]).toEqual([`${BACKUP_TEMP_PREFIX}1-a.zip`]);
+	});
+
 	it('a memory sink holds its parts until finished', async () => {
 		const sink = memorySink();
 		await sink.write(new Uint8Array([1, 2, 3]));
 		expect((await sink.finish()).size).toBe(3);
+	});
+});
+
+/** Each local file header's compression method, in order. */
+function methods(zip: Uint8Array): number[] {
+	const out: number[] = [];
+	for (let i = 0; i + 30 <= zip.length; i++) {
+		if (zip[i] === 0x50 && zip[i + 1] === 0x4b && zip[i + 2] === 0x03 && zip[i + 3] === 0x04) {
+			out.push(zip[i + 8] | (zip[i + 9] << 8));
+			const nameLen = zip[i + 26] | (zip[i + 27] << 8);
+			i += 29 + nameLen;
+		}
+	}
+	return out;
+}
+
+/** The cross-shell fixture Android's reader is tested on (`WebStreamedBackupTest`). */
+const FIXTURE = resolve(process.cwd(), '../android/app/src/test/resources/backup/web-streamed-photo.crema.zip');
+
+describe('a streamed zip Android can read (#386 review)', () => {
+	const build = () =>
+		streamBackup({
+			...input([shot(0)], { beans: [JSON.stringify({ ...blankBean('bean-1'), name: 'Kenya' })] }),
+			photos: async function* () {
+				// Random bytes, as a JPEG barely compresses.
+				yield ['bean-1', Uint8Array.from({ length: 4096 }, (_, i) => (i * 7919 + 13) % 251)] as [
+					string,
+					Uint8Array
+				];
+			}
+		});
+
+	it('every entry is deflated: Java refuses a stored entry with a data descriptor', async () => {
+		const zip = new Uint8Array(await (await build()).file.arrayBuffer());
+		expect(methods(zip)).toEqual([8, 8]);
+	});
+
+	it('the committed fixture is one this build writes', async () => {
+		const zip = new Uint8Array(await (await build()).file.arrayBuffer());
+		if (process.env.CREMA_WRITE_FIXTURE === '1') writeFileSync(FIXTURE, zip);
+		const fixture = new Uint8Array(readFileSync(FIXTURE));
+		expect(methods(fixture)).toEqual([8, 8]);
+		const entries = unzipSync(fixture);
+		expect(Object.keys(entries)).toEqual([BACKUP_JSONL_MEMBER, 'images/bean-1']);
+		expect(entries['images/bean-1'].length).toBe(4096);
+	});
+});
+
+describe('a Drive backup that didn’t finish', () => {
+	it('a cancel during the upload doesn’t promise nothing went up (#386 review)', () => {
+		const abort = new DOMException('aborted', 'AbortError');
+		expect(driveBackupFailure(abort, true)).toMatch(/may have it anyway/);
+		expect(driveBackupFailure(new BackupCancelled(), false)).toBe('Backup cancelled: nothing was uploaded.');
+		expect(driveBackupFailure(new Error('no network'), true)).toBe('Drive backup failed: no network');
 	});
 });

@@ -17,7 +17,8 @@
  * abort, leaving nothing behind.
  */
 
-import { Zip, ZipDeflate, ZipPassThrough } from 'fflate';
+import { Zip, ZipDeflate } from 'fflate';
+import type { LockManagerLike } from '#lib/restore/tab-safety.js';
 import { backupPrelude, backupShotLine, backupTail } from '#lib/wasm/de1_wasm.js';
 
 const MiB = 1024 * 1024;
@@ -37,6 +38,15 @@ export const IN_MEMORY_WARN_BYTES = 512 * MiB;
 
 /** Temporary backup files in the origin private file system start with this. */
 export const BACKUP_TEMP_PREFIX = 'crema-backup-tmp-';
+
+/** The Web Lock a temporary backup file holds until its reader is done. */
+export const backupTempLock = (name: string): string => `crema-backup-tmp:${name}`;
+
+function navigatorLocks(): LockManagerLike | undefined {
+	return typeof navigator === 'undefined'
+		? undefined
+		: (navigator.locks as unknown as LockManagerLike | undefined);
+}
 
 /** The member names inside a `.crema.zip`. */
 export const BACKUP_JSONL_MEMBER = 'backup.jsonl';
@@ -102,11 +112,25 @@ async function privateRoot(): Promise<FileSystemDirectoryHandle | undefined> {
  * where there's none or it can't be written. `root` is for tests.
  */
 export async function openBackupSink(
-	root: () => Promise<FileSystemDirectoryHandle | undefined> = privateRoot
+	root: () => Promise<FileSystemDirectoryHandle | undefined> = privateRoot,
+	locks: LockManagerLike | undefined = navigatorLocks()
 ): Promise<BackupSink> {
 	const dir = await root();
 	if (!dir) return memorySink();
 	const name = `${BACKUP_TEMP_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}.zip`;
+	// Held from creation until the reader is done, so no tab's sweep removes
+	// the file while it's uploaded or downloaded, however long that takes.
+	let unlock = (): void => {};
+	const held = new Promise<void>((resolve) => (unlock = resolve));
+	await new Promise<void>((granted) => {
+		if (!locks) return granted();
+		void locks
+			.request(backupTempLock(name), { mode: 'exclusive' }, () => {
+				granted();
+				return held;
+			})
+			.catch(() => granted());
+	});
 	let writable: FileSystemWritableFileStream;
 	let handle: FileSystemFileHandle;
 	try {
@@ -114,9 +138,13 @@ export async function openBackupSink(
 		writable = await handle.createWritable();
 	} catch {
 		await dir.removeEntry(name).catch(() => {});
+		unlock();
 		return memorySink();
 	}
-	const remove = () => dir.removeEntry(name).catch(() => {});
+	const remove = async (): Promise<void> => {
+		await dir.removeEntry(name).catch(() => {});
+		unlock();
+	};
 	return {
 		inMemory: false,
 		async write(chunk) {
@@ -143,24 +171,38 @@ export async function openBackupSink(
 export async function sweepBackupTemp(
 	keepMs = 10 * 60_000,
 	now = Date.now(),
-	root: () => Promise<FileSystemDirectoryHandle | undefined> = privateRoot
+	root: () => Promise<FileSystemDirectoryHandle | undefined> = privateRoot,
+	locks: LockManagerLike | undefined = navigatorLocks()
 ): Promise<number> {
 	const dir = await root();
 	if (!dir) return 0;
-	let removed = 0;
+	const names: string[] = [];
 	try {
-		const names: string[] = [];
 		for await (const name of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) {
 			if (name.startsWith(BACKUP_TEMP_PREFIX)) names.push(name);
 		}
-		for (const name of names) {
-			const stamp = Number(name.slice(BACKUP_TEMP_PREFIX.length).split('-')[0]);
-			if (Number.isFinite(stamp) && now - stamp < keepMs) continue;
+	} catch {
+		return 0;
+	}
+	// A file whose lock is held is still being read, in this tab or another.
+	let inUse = new Set<string>();
+	try {
+		const held = (await locks?.query?.())?.held ?? [];
+		inUse = new Set(held.map((l) => l.name ?? ''));
+	} catch {
+		// No query: the age rule alone.
+	}
+	let removed = 0;
+	for (const name of names) {
+		if (inUse.has(backupTempLock(name))) continue;
+		const stamp = Number(name.slice(BACKUP_TEMP_PREFIX.length).split('-')[0]);
+		if (Number.isFinite(stamp) && now - stamp < keepMs) continue;
+		try {
 			await dir.removeEntry(name);
 			removed += 1;
+		} catch {
+			// Open for writing, or gone: the next sweep looks again.
 		}
-	} catch {
-		// Best effort: the next sweep tries again.
 	}
 	return removed;
 }
@@ -306,12 +348,21 @@ export async function streamBackup(input: BackupWalkInput, opts: BackupWalkOptio
 		const jsonl = new ZipDeflate(BACKUP_JSONL_MEMBER, { level: 6 });
 		zip.add(jsonl);
 		let inflated = 0;
+		const tooLong = (): BackupTooLarge =>
+			new BackupTooLarge(
+				`A record is larger than ${Math.round(limits.maxLineBytes / MiB)} MB, which a backup can't hold.`
+			);
 		const push = async (text: string, final = false, oneLine = false): Promise<void> => {
 			const bytes = enc.encode(text);
-			if (oneLine && bytes.length > limits.maxLineBytes) {
-				throw new BackupTooLarge(
-					`A shot is larger than ${Math.round(limits.maxLineBytes / MiB)} MB, which a backup can't hold.`
-				);
+			// Each line within the limit the restore reads with: a shot line is
+			// one line and its newline, and the prelude and tail are checked line
+			// by line.
+			if (oneLine) {
+				if (bytes.length - 1 > limits.maxLineBytes) throw tooLong();
+			} else if (bytes.length > limits.maxLineBytes) {
+				for (const line of text.split('\n')) {
+					if (enc.encode(line).length > limits.maxLineBytes) throw tooLong();
+				}
 			}
 			inflated += bytes.length;
 			if (inflated > limits.maxInflatedBytes) {
@@ -348,7 +399,9 @@ export async function streamBackup(input: BackupWalkInput, opts: BackupWalkOptio
 
 		for await (const [beanId, bytes] of input.photos?.() ?? []) {
 			stop();
-			const photo = new ZipPassThrough(`images/${beanId}`);
+			// Deflated, not stored: a stored entry with a data descriptor, which a
+			// streamed entry always has, is refused by Android's ZipInputStream.
+			const photo = new ZipDeflate(`images/${beanId}`, { level: 1 });
 			zip.add(photo);
 			photo.push(bytes, true);
 			await flush();

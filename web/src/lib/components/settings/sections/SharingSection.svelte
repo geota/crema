@@ -60,6 +60,7 @@
 		buildBackupFile,
 		noteBackupMade,
 		driveBackupRefusal,
+		driveBackupFailure,
 		describeBackupGaps,
 		describeBackup,
 		applyHeldRestoreChanges,
@@ -68,7 +69,7 @@
 		type HeldRestoreChanges,
 		type RestoreMode
 	} from '#lib/backup/index.js';
-	import { BackupCancelled, type BackupProgress } from '#lib/backup/stream.js';
+	import type { BackupProgress } from '#lib/backup/stream.js';
 	import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { planNow, prepareBackup, runRestore } from '#lib/restore/engine.js';
 	import { restoreFlow as runRestoreFlow } from '#lib/restore/flow.js';
@@ -466,6 +467,7 @@
 	async function driveBackup(): Promise<void> {
 		driveBusy = true;
 		driveNote = 'Building backup…';
+		let uploading = false;
 		try {
 			const run = new AbortController();
 			backupRun = run;
@@ -485,6 +487,7 @@
 				}
 				driveNote = 'Backing up to Drive…';
 				const token = await drive.accessToken();
+				uploading = true;
 				await uploadBackup(token, backupFileName(), built.file, 'application/zip', run.signal);
 				noteBackupMade();
 				driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.${describeBackupGaps(built.contents)}`;
@@ -492,12 +495,7 @@
 				await built.release();
 			}
 		} catch (err) {
-			driveNote =
-				err instanceof BackupCancelled || (err instanceof DOMException && err.name === 'AbortError')
-					? 'Backup cancelled: nothing was uploaded.'
-					: err instanceof Error
-						? `Drive backup failed: ${err.message}`
-						: 'Drive backup failed.';
+			driveNote = driveBackupFailure(err, uploading);
 		} finally {
 			backupRun = null;
 			driveBusy = false;

@@ -151,6 +151,22 @@ export function describeBackupGaps(c: BackupContents): string {
 }
 
 /**
+ * What to say when a Drive backup didn't finish. A cancel that reached the
+ * upload may have come after Drive had the whole file, so it doesn't promise
+ * nothing was uploaded.
+ */
+export function driveBackupFailure(err: unknown, uploading: boolean): string {
+	const cancelled =
+		err instanceof BackupCancelled || (err instanceof DOMException && err.name === 'AbortError');
+	if (cancelled) {
+		return uploading
+			? 'Backup cancelled during the upload: Drive may have it anyway. Check the list before backing up again.'
+			: 'Backup cancelled: nothing was uploaded.';
+	}
+	return err instanceof Error ? `Drive backup failed: ${err.message}` : 'Drive backup failed.';
+}
+
+/**
  * Why a built backup shouldn't go to Drive, or `null`. A local file is the
  * user's to keep or not, but a restore from Drive starts at whatever is newest,
  * so a copy that lost its curves to a failed read must not land there.
