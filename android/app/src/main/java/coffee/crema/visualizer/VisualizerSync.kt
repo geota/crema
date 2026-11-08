@@ -1,6 +1,8 @@
 package coffee.crema.visualizer
 
 import coffee.crema.core.CallbackOutcome
+import coffee.crema.core.pullCoversAttempt
+import coffee.crema.core.accountChangeAction
 import coffee.crema.core.CataloguePage
 import coffee.crema.core.callbackOutcome
 import coffee.crema.core.ShotPatchInputs
@@ -11,12 +13,15 @@ import coffee.crema.runCatchingCancellable
 import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.exportV2JsonShotFull
 import coffee.crema.core.signatureForShot
+import coffee.crema.core.uploadRefusedNoSamples
 import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.StoredShot
 import coffee.crema.history.effectiveGrindSetting
+import coffee.crema.history.historyFullNotice
 import coffee.crema.history.isBrewLog
 import coffee.crema.sync.OwnStateGate
+import coffee.crema.sync.SingleFlightRefresh
 import coffee.crema.ui.DrainResult
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.UploadDestination
@@ -41,6 +46,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+
+/** Why a shot sync stopped: this takes the user, not a moment's wait. */
+internal const val HISTORY_REFUSED_NOTICE =
+    "Your shot history couldn't be read, so shots aren't syncing with Visualizer. Use Try again on the banner."
 
 /*
  * The Visualizer sync controller — sign-in lifecycle, token freshness, and
@@ -73,8 +82,8 @@ class VisualizerSync(
     private val onShotSynced: (localId: String, visualizerId: String) -> Unit,
     /** The user's equipment-level grinder model (Settings → Machine); null = unset. */
     private val grinderModel: () -> String? = { null },
-    /** Insert pulled remote stubs into the local history (dedup by id). */
-    private val onPulledShots: (List<StoredShot>) -> Unit = {},
+    /** Insert pulled remote stubs into the local history (dedup by id); answers the ids a full history refused. */
+    private val onPulledShots: (List<StoredShot>) -> Set<String> = { emptySet() },
     /** Backfill a bound local's telemetry from a pull (no-op when it has a curve). */
     private val onBackfillTelemetry: (localId: String, samples: List<coffee.crema.ui.TelemetrySample>, durationMs: Long) -> Unit = { _, _, _ -> },
     /** Fill a bound local's blank barista from a pull (final review 06 #1). */
@@ -106,14 +115,12 @@ class VisualizerSync(
     /** The refresh-token grant (injected so JVM tests can drive the 401 → refresh → retry). */
     private val refreshTokens: suspend (refreshToken: String) -> TokenSet =
         { refresh -> refreshAccessToken(clientId, refresh, json) },
-    /** The bean library as it stands now — the bean sync's starting snapshot. */
+    /** The bean library as it stands now. */
     private val beanLibrary: () -> coffee.crema.beans.BeanLibrary = { coffee.crema.beans.BeanLibrary() },
-    /**
-     * Merge a finished bean sync back into the library: the rows it touched
-     * ([BeanSyncResult.beans] / [BeanSyncResult.roasters]) and the ids the run
-     * started from (see [mergeSyncedRows]).
-     */
-    private val onBeansSynced: (result: BeanSyncResult, snapshotBeanIds: Set<String>, snapshotRoasterIds: Set<String>) -> Unit = { _, _, _ -> },
+    /** Apply a bean sync's change to the current rows. */
+    private val editBeanLibrary: ((coffee.crema.beans.BeanLibrary) -> coffee.crema.beans.BeanLibrary) -> Unit = {},
+    /** A bean sync ended: its changes are in the library, to be stored. */
+    private val onBeansSynced: () -> Unit = {},
     /** The core's bean-sync surface (injected so JVM tests needn't load the native core). */
     private val beanSyncCore: BeanSyncCore = BeanSyncCore.Native,
     /** When a network comes back (F17's retry trigger); null = no trigger (JVM tests). */
@@ -126,11 +133,21 @@ class VisualizerSync(
     private val seriesReady: suspend () -> Unit = {},
     /** How the retry timers wait (injected so a JVM test can see each wait). */
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    /** Core `upload_refused_no_samples`: a machine shot with no telemetry doesn't go. */
+    private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?) -> Boolean = ::uploadRefusedNoSamples,
     /** Whether the stored shots are in the history; a list taken before then is empty. */
     private val shotsLoaded: () -> Boolean = { true },
+    /** The shot log couldn't be read: shots wait for the user, not for a load. */
+    private val historyRefused: () -> Boolean = { false },
     /** Core `callback_outcome`: what a redirect means for the stored handshake. */
     private val callbackRule: (expectedState: String?, verifier: String?, code: String?, returnedState: String?, error: String?) -> CallbackOutcome =
         ::callbackOutcome,
+    /** How long a run waits for the rows before it skips (tests shrink it). */
+    private val rowsWaitMs: Long = ROWS_WAIT_MS,
+    /** Every shot as history holds it now: the backlog a different account is asked about. */
+    private val allShots: () -> List<StoredShot> = { emptyList() },
+    /** Revoke an access token at the server, best-effort (injected for JVM tests). */
+    private val revoke: suspend (accessToken: String) -> Unit = { revokeToken(clientId, it) },
 ) : UploadDestination {
 
     internal companion object {
@@ -142,6 +159,9 @@ class VisualizerSync(
 
         /** The app-start Premium re-probe runs at most this often (web `PREMIUM_REFRESH_INTERVAL_MS`). */
         const val PREMIUM_REFRESH_INTERVAL_MS = 24L * 60 * 60 * 1000
+
+        /** Why nothing goes up while the account is unknown or a change of it unanswered. */
+        const val ACCOUNT_HELD_NOTICE = "Visualizer is waiting on your account. See Settings → Sharing."
 
         /** The retry queue's foreground tick (web `UploadQueue`'s 5 minutes). */
         const val RETRY_TICK_MS = 5L * 60 * 1000
@@ -180,6 +200,12 @@ class VisualizerSync(
         val beanLastSyncAt: Long? = null,
         /** Recent sync activity (capped 20, newest first). */
         val log: List<SyncLogEntry> = emptyList(),
+        /** The server ended the session: signed out, and Settings asks to sign in again. */
+        val needsReconnect: Boolean = false,
+        /** Signed in, but `/me` hasn't said as whom yet, so nothing is sent. */
+        val accountUnconfirmed: Boolean = false,
+        /** Signed in as a different account: uploads wait for [answerAccountChange]. */
+        val accountChangeAsk: Boolean = false,
         /** True while a sign-in exchange or bulk upload runs. */
         val busy: Boolean = false,
         /** True while a Sync-now pull/push pass runs. */
@@ -201,6 +227,9 @@ class VisualizerSync(
     /** The rows' late arrival has been reported (see [rowsReady]). */
     private val rowsLateTold = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** Shots deleted here this session with no id, so an upload holding one stops short. */
+    private val deletedHere: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     /** Shot ids with an upload running — checked and claimed atomically. */
     private val inFlight = HashSet<String>()
 
@@ -217,12 +246,31 @@ class VisualizerSync(
     // ── UploadDestination ────────────────────────────────────────────────────
 
     override val id: UploadTargetId get() = UploadTargetId.Visualizer
-    override val enabled: Boolean get() = persisted.tokens != null && directionPushes(persisted.prefs.shotsDirection)
+    override val enabled: Boolean get() = persisted.tokens != null && !uploadsHeld && directionPushes(persisted.prefs.shotsDirection)
+
+    /** `/me` still has to say whose this session is. */
+    private val accountToAsk: Boolean
+        get() = persisted.accountUnconfirmed || (persisted.syncAccountId == null && persisted.tokens != null)
+
+    /** Nothing goes up until the account is known and any change of it is answered. */
+    private val uploadsHeld: Boolean get() = persisted.accountUnconfirmed || persisted.accountChangeAsk
     override val autoUpload: Boolean get() = persisted.prefs.autoUpload
     override fun isUploaded(shot: StoredShot): Boolean = shot.visualizerId != null
     override fun viewUrl(shot: StoredShot): String? = shot.visualizerId?.let { "https://visualizer.coffee/shots/$it" }
     /** Brew Log rows (issue #10) are local-only — never in the Visualizer backlog. */
-    override fun inBacklog(shot: StoredShot): Boolean = shot.visualizerId == null && !shot.isBrewLog
+    override fun inBacklog(shot: StoredShot): Boolean =
+        shot.visualizerId == null && !shot.isBrewLog && !noTelemetry(shot) && !excluded(shot)
+
+    /** The user kept this shot off the account signed in now. */
+    private fun excluded(shot: StoredShot): Boolean =
+        persisted.uploadExcludedBefore?.let { shot.completedAtMs < it } ?: false
+
+    /** A machine shot no upload can take: no telemetry, now the series have settled. */
+    fun noTelemetry(shot: StoredShot): Boolean =
+        shot.visualizerId == null && shot.samples.isEmpty() && shotsSettled && uploadRefused(shot.isBrewLog, 0u)
+
+    /** The series load has ended; until then a row's curve may be on its way. */
+    val shotsSettled: Boolean get() = shotsLoaded() && !historyRefused()
     override fun canUpload(shot: StoredShot): Boolean = !shot.isBrewLog
     override fun pushShot(shot: StoredShot, replace: Boolean): Boolean = uploadShot(shot, silent = false)
     override suspend fun setAutoUploadNow(enabled: Boolean) {
@@ -249,7 +297,9 @@ class VisualizerSync(
     suspend fun load() {
         val unstored = try {
             persistMutex.withLock {
-                persisted = store.load()
+                // Seeded, so a reconnect as someone else is noticed even though
+                // this device never stored the id before.
+                persisted = store.load().let { it.copy(syncAccountId = it.syncAccountId ?: it.account?.id?.ifBlank { null }) }
                 ownState.opened()
                 baristaPending += persisted.baristaPending
                 baristaPending.any { it !in persisted.baristaPending }
@@ -267,6 +317,9 @@ class VisualizerSync(
             it.copy(
                 configured = clientId.isNotBlank(),
                 signedIn = p.tokens != null,
+                needsReconnect = p.needsReconnect,
+                accountUnconfirmed = p.accountUnconfirmed,
+                accountChangeAsk = p.accountChangeAsk,
                 account = p.account,
                 // Android's single auto gate is the shot auto-upload (`autoUpload`).
                 autoSync = p.prefs.autoUpload,
@@ -364,17 +417,18 @@ class VisualizerSync(
                     _state.update { it.copy(busy = true) }
                     runCatchingCancellable { exchangeCode(code, verifier) }
                         .onSuccess { tokens ->
-                            if (!persist { it.copy(tokens = tokens) }) notify("Couldn’t save the Visualizer login on this device")
-                            val account = runCatchingCancellable { client.fetchAccount(tokens.accessToken) }.getOrNull()
-                            persist { it.copy(account = account) }
+                            // The hold lands with the tokens, so nothing can upload
+                            // before `/me` has said whose they are.
+                            val saved = persist { it.copy(tokens = tokens, needsReconnect = false, accountUnconfirmed = true) }
+                            if (!saved) notify("Couldn’t save the Visualizer login on this device")
+                            val known = confirmAccount()
                             refreshPremium()
-                            notify("Signed in to Visualizer${account?.let { a -> " as ${a.name}" }.orEmpty()}")
-                            // On a cold start the rows can still be loading, and the
-                            // catch-up offer counts them.
-                            scope.launch {
-                                rowsReady()
-                                onSignedIn()
-                            }
+                            notify(
+                                when {
+                                    known -> "Signed in to Visualizer${persisted.account?.let { a -> " as ${a.name}" }.orEmpty()}"
+                                    else -> "Signed in to Visualizer. Nothing syncs until Crema can check the account."
+                                },
+                            )
                         }
                         .onFailure { notify("Visualizer sign-in failed: ${it.message}") }
                     _state.update { it.copy(busy = false) }
@@ -394,9 +448,14 @@ class VisualizerSync(
             val token = persisted.tokens?.accessToken
             // The tier is per-account: a later sign-in re-probes it.
             // Also forgets a stored sign-in the keystore couldn't open this start.
-            persist { it.copy(tokens = null, account = null, premium = null, premiumCheckedAt = null, unopened = null) }
+            persist {
+                it.copy(
+                    tokens = null, account = null, premium = null, premiumCheckedAt = null, unopened = null,
+                    needsReconnect = false, accountUnconfirmed = false,
+                )
+            }
             if (!quiet) notify("Signed out of Visualizer")
-            token?.let { revokeToken(clientId, it) }
+            token?.let { revoke(it) }
         }
     }
 
@@ -419,15 +478,89 @@ class VisualizerSync(
             t
         }
         fold()
-        token?.let { scope.launch { revokeToken(clientId, it) } }
+        token?.let { scope.launch { revoke(it) } }
     }
 
     /** Re-fetch `/me` (Settings open). Silent on failure — the cache stands. */
     fun refreshAccount() {
         if (persisted.tokens == null) return
+        scope.launch { confirmAccount() }
+    }
+
+    /**
+     * Ask `/me` who this session is, and settle what that means for what this
+     * device holds (core `account_change_action`). False when it didn't answer,
+     * or named no one: the hold stays, and the drain asks again.
+     */
+    private suspend fun confirmAccount(): Boolean {
+        val account = runCatchingCancellable { withFreshToken { client.fetchAccount(it) } }.getOrNull()
+            ?.takeIf { it.id.isNotBlank() } ?: return false
+        val wasHeld = persisted.accountUnconfirmed
+        var changed = false
+        persist { st ->
+            val settled = st.copy(account = account, syncAccountId = account.id, accountUnconfirmed = false)
+            changed = accountChangeAction(st.syncAccountId, account.id) == "Changed"
+            if (changed) settled.forNewAccount(oldId = st.syncAccountId, newId = account.id) else settled
+        }
+        if (changed) {
+            baristaPending.clear()
+            notify("This is a different Visualizer account. Nothing uploads until you choose in Settings → Sharing.")
+        }
+        if (wasHeld || changed) {
+            // On a cold start the rows can still be loading, and the backlog
+            // counted next needs them.
+            scope.launch {
+                // Rows that never loaded say nothing about the backlog: the ask stands.
+                if (rowsReady() && persisted.accountChangeAsk && unsent(allShots()).isEmpty()) {
+                    persist { it.copy(accountChangeAsk = false) }
+                }
+                onSignedIn()
+            }
+        }
+        return true
+    }
+
+    /**
+     * Everything here belonged to the old account: start the cursor over, drop
+     * what was waiting to reach it and keep its remote deletes for if it comes
+     * back. Rows bound to it stay as they are, and a PATCH to one is refused and
+     * counted. The tombstones of [newId] itself come back into play.
+     */
+    private fun VisualizerState.forNewAccount(oldId: String?, newId: String) = copy(
+        accountChangeAsk = true,
+        uploadExcludedBefore = null,
+        shotPullCursor = null,
+        baristaPending = emptySet(),
+        retryQueue = emptyList(),
+        uploadAttempted = emptyMap(),
+        shotTombstones = shotTombstones.map {
+            when {
+                it.parkedFor == newId -> it.copy(parkedFor = null)
+                it.parkedFor == null -> it.copy(parkedFor = oldId)
+                else -> it
+            }
+        },
+        unboundTombstones = unboundTombstones.map {
+            when {
+                it.parkedFor == newId -> it.copy(parkedFor = null)
+                it.parkedFor == null -> it.copy(parkedFor = oldId)
+                else -> it
+            }
+        },
+    )
+
+    /**
+     * The answer to "upload your shots to this different account?". Yes uploads
+     * the backlog. No, or dismissing it, keeps the shots that exist now off the
+     * account, and new ones flow, so uploads can't stay held for good.
+     */
+    fun answerAccountChange(upload: Boolean) {
         scope.launch {
-            runCatchingCancellable { withFreshToken { client.fetchAccount(it) } }
-                .onSuccess { account -> persist { it.copy(account = account) } }
+            persist { it.copy(accountChangeAsk = false, uploadExcludedBefore = if (upload) null else now()) }
+            if (upload) {
+                rowsReady()
+                uploadAllUnsynced(allShots())
+            }
         }
     }
 
@@ -508,6 +641,9 @@ class VisualizerSync(
     private fun directionPushes(d: String) = d == "backup" || d == "two-way"
     private fun directionPulls(d: String) = d == "pull" || d == "two-way"
 
+    /** [d] with its push leg taken off. */
+    private fun pullsOnly(d: String) = if (directionPulls(d)) "pull" else "off"
+
     /** Append a sync-activity line (capped at 20, newest first). Persisted. */
     private suspend fun logSync(direction: String, id: String, name: String, error: String? = null) {
         val entry = SyncLogEntry(direction = direction, entity = "shot", id = id, name = name, at = System.currentTimeMillis(), error = error)
@@ -557,43 +693,55 @@ class VisualizerSync(
     /**
      * Run [block] with a valid access token: proactive refresh inside a 60 s
      * expiry window, plus a one-shot refresh-and-retry on a 401. Throws
-     * [VisualizerError.Auth] when there is no session or the refresh fails.
+     * [VisualizerError.Auth] when there is no session or it has ended, and a
+     * recoverable [VisualizerError.Network] when the refresh failed and left the
+     * session standing, so the retry queue tries again (F17).
      */
     private suspend fun <T> withFreshToken(block: suspend (String) -> T): T {
         var tokens = persisted.tokens ?: throw VisualizerError.Auth()
-        if (tokens.expiresAt - 60_000 < System.currentTimeMillis()) {
-            tokens = refreshOrSignOut(tokens) ?: throw VisualizerError.Auth()
-        }
+        if (expiring(tokens)) tokens = refreshed(tokens, rejected = false) ?: throw VisualizerError.Auth()
         return try {
             block(tokens.accessToken)
         } catch (e: VisualizerError.Auth) {
-            val fresh = refreshOrSignOut(tokens) ?: throw e
+            val fresh = refreshed(tokens, rejected = true) ?: throw e
             block(fresh.accessToken)
         }
     }
 
+    private fun expiring(tokens: TokenSet) = tokens.expiresAt - 60_000 < System.currentTimeMillis()
+
     /**
-     * Refresh + persist. Clears the session only when the token endpoint
-     * definitively rejected the refresh token (core
-     * `classify_token_refresh_failure`: 400/401 `invalid_grant`); offline, a
-     * 5xx or a proxy page keeps it and fails the call as a recoverable
-     * [VisualizerError.Network], so the retry queue tries again (F17; web
-     * `classifyRefreshFailure`).
+     * One refresh at a time, and only ever onto the set it started from (web
+     * `TokenVault`). Only the token endpoint definitively rejecting the refresh
+     * token ends the session (core `classify_token_refresh_failure`: 400/401
+     * `invalid_grant`). Doorkeeper rotates refresh tokens; one the server leaves
+     * out stays the one in use.
      */
-    private suspend fun refreshOrSignOut(current: TokenSet): TokenSet? {
-        val refresh = current.refreshToken ?: run {
-            persist { it.copy(tokens = null) }
-            return null
-        }
-        val result = runCatchingCancellable { refreshTokens(refresh) }
-        result.onSuccess { fresh -> persist { it.copy(tokens = fresh) } }
-        val error = result.exceptionOrNull() ?: return result.getOrNull()
-        if (uploadPolicy.refreshEndsSession(error)) {
-            persist { it.copy(tokens = null) }
-            notify("Visualizer session expired — sign in again")
-            return null
-        }
-        throw VisualizerError.Network("Couldn’t refresh the Visualizer session: ${error.message}")
+    private val refresher = SingleFlightRefresh<TokenSet>(
+        stored = { persisted.tokens },
+        refreshTokenOf = { it.refreshToken },
+        expiring = ::expiring,
+        grant = { spent -> refreshTokens(spent).let { it.copy(refreshToken = it.refreshToken ?: spent) } },
+        endsSession = { uploadPolicy.refreshEndsSession(it) },
+        store = { spent, fresh ->
+            persist { st -> if (st.tokens?.refreshToken == spent) st.copy(tokens = fresh) else st }
+        },
+        end = { rejected ->
+            var ended = false
+            persist { st ->
+                ended = st.tokens != null && st.tokens.refreshToken == rejected
+                if (ended) st.copy(tokens = null, needsReconnect = true) else st
+            }
+            if (ended) notify(VISUALIZER_RECONNECT_LINE)
+        },
+    )
+
+    private suspend fun refreshed(observed: TokenSet, rejected: Boolean): TokenSet? = try {
+        refresher.refresh(observed, rejected)
+    } catch (c: CancellationException) {
+        throw c
+    } catch (e: Exception) {
+        throw VisualizerError.Network("Couldn’t refresh the Visualizer session: ${e.message}")
     }
 
     // ── Shot upload ──────────────────────────────────────────────────────────
@@ -669,6 +817,10 @@ class VisualizerSync(
             if (!silent) notify("Sign in to Visualizer first (Settings → Sharing)")
             return false
         }
+        if (uploadsHeld) {
+            if (!silent) notify(ACCOUNT_HELD_NOTICE)
+            return false
+        }
         if (!claim(shot.id)) return false
         scope.launch {
             val result = try {
@@ -680,7 +832,7 @@ class VisualizerSync(
             } finally {
                 release(shot.id)
             }
-            result.onSuccess { id -> onShotSynced(shot.id, id) }
+            result.onSuccess { id -> bindUploaded(shot.id, id) }
             // F17: a recoverable failure is queued for a retry; a success is a
             // sync tail that drains what is waiting.
             result.onSuccess { drainSoon() }
@@ -711,6 +863,7 @@ class VisualizerSync(
         if (!drainMutex.tryLock()) return DrainResult(stopped = "A Visualizer upload pass is already running")
         try {
             if (!enabled) return DrainResult()
+            logNoTelemetry(shots)
             val unsynced = unsent(shots)
             if (unsynced.isEmpty()) return DrainResult()
             _state.update { it.copy(busy = true) }
@@ -727,8 +880,7 @@ class VisualizerSync(
                 try {
                     val shot = currentShot(snapshot.id) ?: snapshot
                     if (shot.visualizerId != null) return@runUploadPass false
-                    val id = uploadShotNow(shot)
-                    onShotSynced(shot.id, id)
+                    bindUploaded(shot.id, uploadShotNow(shot))
                     true
                 } finally {
                     release(snapshot.id)
@@ -776,7 +928,8 @@ class VisualizerSync(
     fun drainSoon() {
         scope.launch {
             if (!ownState.await()) return@launch
-            if (persisted.retryQueue.isEmpty() && persisted.shotTombstones.none { it.deleteRemote }) return@launch
+            val idle = persisted.retryQueue.isEmpty() && persisted.shotTombstones.none { it.owed }
+            if (idle && !accountToAsk) return@launch
             drainRetryQueue()
         }
     }
@@ -796,7 +949,7 @@ class VisualizerSync(
      *  delete waiting out a backoff (signed in only); null = nothing waits. */
     private fun nextDrainAt(): Long? {
         val deletes = if (persisted.tokens == null) emptyList()
-        else persisted.shotTombstones.filter { it.deleteRemote && it.nextAttemptAt > 0 }.map { it.nextAttemptAt }
+        else persisted.shotTombstones.filter { it.owed && it.nextAttemptAt > 0 }.map { it.nextAttemptAt }
         return (persisted.retryQueue.map { it.nextAttemptAt } + deletes).minOrNull()
     }
 
@@ -809,6 +962,13 @@ class VisualizerSync(
      * returns the number uploaded.
      */
     internal suspend fun drainRetryQueue(): Int {
+        // Nothing moves until `/me` says whose session this is, so each drain
+        // asks. A session from before this was recorded gets its id here too.
+        if (accountToAsk) {
+            val held = persisted.accountUnconfirmed
+            if (!confirmAccount() && held) return 0
+        }
+        if (uploadsHeld) return 0
         // Own state loads apart from the rows, and a shot that isn't in the
         // history leaves the queue: not before the rows are there. A later
         // trigger tries again.
@@ -830,7 +990,7 @@ class VisualizerSync(
                     continue
                 }
                 val failure = try {
-                    onShotSynced(shot.id, uploadShotNow(shot))
+                    bindUploaded(shot.id, uploadShotNow(shot))
                     null
                 } catch (c: CancellationException) {
                     throw c
@@ -907,7 +1067,7 @@ class VisualizerSync(
     private suspend fun pushTracked(shot: StoredShot): Boolean {
         _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
         try {
-            onShotSynced(shot.id, uploadShotNow(shot))
+            bindUploaded(shot.id, uploadShotNow(shot))
             return true
         } finally {
             _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shot.id) }
@@ -921,12 +1081,47 @@ class VisualizerSync(
         // A copy taken before the series loaded has none: wait, then re-read.
         seriesReady()
         val shot = if (snapshot.samples.isEmpty()) currentShot(snapshot.id) ?: snapshot else snapshot
+        if (uploadRefused(shot.isBrewLog, shot.samples.size.toUInt())) throw VisualizerError.NoSeries()
         val payload = buildShotPayload(shot)
-        val id = withFreshToken { client.uploadShot(it, payload) }
+        // Deleted while this held its claim: a POST would only make a copy to delete.
+        if (shot.id in deletedHere) throw VisualizerError.RowDeleted()
+        // Stored first: a kill mid-POST must leave a delete able to see it.
+        persist { it.copy(uploadAttempted = it.uploadAttempted + (shot.id to now())) }
+        val id = try {
+            withFreshToken { client.uploadShot(it, payload) }
+        } catch (e: Exception) {
+            if (uploadPolicy.refusedUpload(e)) persist { it.copy(uploadAttempted = it.uploadAttempted - shot.id) }
+            throw e
+        }
         persist { it.copy(lastShotSyncAt = System.currentTimeMillis()) }
         logSync("push", shot.id, shot.profileName ?: "Shot")
         return id
     }
+
+    /**
+     * The upload of [shotId] came back as [visualizerId]. A row deleted meanwhile
+     * can't take the id, so a tombstone does, and the remote delete runs if the
+     * user asked for one. The shot stays deleted either way.
+     */
+    private suspend fun bindUploaded(shotId: String, visualizerId: String) {
+        onShotSynced(shotId, visualizerId)
+        val gone = currentShot(shotId)?.visualizerId != visualizerId
+        persist { st ->
+            val settled = st.copy(uploadAttempted = st.uploadAttempted - shotId)
+            if (gone) settled.withTombstoneBound(shotId, visualizerId, now()) else settled
+        }
+        if (gone) drainSoon()
+    }
+
+    /** Whether an upload of [shotId] is running. */
+    private fun claimed(shotId: String): Boolean = synchronized(inFlight) { shotId in inFlight }
+
+    /** Whether an upload of [shotId] may have reached Visualizer, or is about to. */
+    private fun uploadPending(st: VisualizerState, shotId: String): Boolean =
+        shotId in st.uploadAttempted || st.retryQueue.any { it.shotId == shotId } || claimed(shotId)
+
+    /** Whether a delete of [shot] should offer Visualizer: an upload may land its copy. */
+    fun uploadPending(shot: StoredShot): Boolean = uploadPending(persisted, shot.id)
 
     /**
      * Mirror a History-panel edit onto the shot's already-uploaded Visualizer
@@ -944,7 +1139,7 @@ class VisualizerSync(
      */
     fun patchEditedShot(shot: StoredShot) {
         val vid = shot.visualizerId ?: return
-        if (persisted.tokens == null) return
+        if (persisted.tokens == null || persisted.accountUnconfirmed) return
         if (!directionPushes(persisted.prefs.shotsDirection)) return
         // The barista rides only after a barista edit (final review 06 #1): a
         // shot pulled before the barista was read has none locally, and
@@ -1012,7 +1207,7 @@ class VisualizerSync(
      *  the push (and surfaces a failure — a silent miss left users believing
      *  the shot was synced), per the issue #44 follow-up ask. */
     override fun maybeAutoUpload(shot: StoredShot, fullSamples: List<TelemetrySample>?): Boolean {
-        if (persisted.prefs.autoUpload && persisted.tokens != null && directionPushes(persisted.prefs.shotsDirection)) {
+        if (persisted.prefs.autoUpload && enabled) {
             return uploadShot(shot)
         }
         return false
@@ -1026,9 +1221,7 @@ class VisualizerSync(
      * Stops at the cursor, page exhaustion, or the 200-page cap. One failed
      * detail fetch skips that row (auth failures abort — no point continuing).
      */
-    private suspend fun pullAllShotsSince(
-        sinceMs: Long,
-    ): Triple<List<JsonObject>, Map<String, String>, Map<String, JsonObject>> {
+    private suspend fun pullAllShotsSince(sinceMs: Long): PulledShots {
         val cursorSec = sinceMs / 1000
         val wires = mutableListOf<JsonObject>()
         val samplesById = mutableMapOf<String, String>()
@@ -1036,10 +1229,15 @@ class VisualizerSync(
         var page = 1
         var totalPages = 1
         var reachedOlder = false
+        var rowsMissed = false
+        var exhausted = false
         while (!reachedOlder && page <= totalPages.coerceAtMost(MAX_PULL_PAGES)) {
             val (summaries, pages) = withFreshToken { client.listShots(it, page, 50) }
             totalPages = pages
-            if (summaries.isEmpty()) break
+            if (summaries.isEmpty()) {
+                exhausted = true
+                break
+            }
             for (summary in summaries) {
                 if (summary.updatedAtSec < cursorSec) {
                     // Sorted by updated_at desc — crossing the cursor ends the walk.
@@ -1049,6 +1247,7 @@ class VisualizerSync(
                 val detail = runCatchingCancellable { withFreshToken { client.fetchShotDetail(it, summary.id) } }
                     .getOrElse { e ->
                         if (e is VisualizerError.Auth) throw e
+                        rowsMissed = true
                         continue
                     }
                 val detailStr = json.encodeToString(kotlinx.serialization.json.JsonElement.serializer(), detail)
@@ -1067,7 +1266,10 @@ class VisualizerSync(
                     json.parseToJsonElement(
                         coffee.crema.core.wireShotFromDetail(json.encodeToString(JsonObject.serializer(), payload)),
                     ).jsonObject
-                }.getOrNull() ?: continue
+                }.getOrNull() ?: run {
+                    rowsMissed = true
+                    continue
+                }
                 wires += wire
                 runCatchingCancellable { coffee.crema.core.samplesFromVisualizerDetail(detailStr) }
                     .getOrNull()?.let { samplesById[summary.id] = it }
@@ -1082,27 +1284,39 @@ class VisualizerSync(
             }
             page++
         }
-        return Triple(wires, samplesById, profilesById)
+        val walked = reachedOlder || exhausted || page > totalPages
+        return PulledShots(wires, samplesById, profilesById, complete = walked && !rowsMissed)
     }
+
+    /** What [pullAllShotsSince] brought back. [complete]: every row it passed is in [wires]. */
+    private data class PulledShots(
+        val wires: List<JsonObject>,
+        val samples: Map<String, String>,
+        val profiles: Map<String, JsonObject>,
+        val complete: Boolean,
+    )
 
     /**
      * Reconcile pulled wires against the local history via the CORE planner
      * (`reconcile_shots` over the FFI — the identical algorithm the web runs)
-     * and apply the actions through the VM callbacks. Returns pulled-count.
+     * and apply the actions through the VM callbacks. A row a full history
+     * refuses is counted and the rest of the plan still applies.
      */
-    internal suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>, profilesById: Map<String, JsonObject>): Int {
-        if (wires.isEmpty()) return 0
+    internal suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>, profilesById: Map<String, JsonObject>): PullApplied {
+        if (wires.isEmpty()) return PullApplied()
         // Tombstones ride along (web F18a): a shot deleted here whose remote copy
         // is still on Visualizer must match that copy (an `update`, skipped
-        // below), not look new and be pulled back in. The planner never binds a
-        // tombstone by signature, so only its Visualizer id matters.
+        // below), not look new and be pulled back in. One deleted during its
+        // upload has no id yet, and matches by upload key instead.
         val tombstones = persisted.shotTombstones
         val tombstoned = tombstones.mapTo(HashSet()) { it.id }
+        val unbound = persisted.unboundTombstones.filter { it.parkedFor == null }
+        val unboundIds = unbound.mapTo(HashSet()) { it.id }
         val payload = buildJsonObject {
             put(
                 "local",
                 kotlinx.serialization.json.buildJsonArray {
-                    localShots.forEach { shot ->
+                    localShots.filterNot { it.isBrewLog }.forEach { shot ->
                         add(
                             buildJsonObject {
                                 put("id", JsonPrimitive(shot.id))
@@ -1128,6 +1342,19 @@ class VisualizerSync(
                             },
                         )
                     }
+                    unbound.forEach { t ->
+                        add(
+                            buildJsonObject {
+                                put("id", JsonPrimitive(t.id))
+                                put("completedAt", JsonPrimitive(t.completedAtMs))
+                                put("duration", JsonPrimitive(t.durationMs))
+                                put("profileName", JsonNull)
+                                put("finalWeight", JsonNull)
+                                put("visualizerId", JsonNull)
+                                put("deletedAt", JsonPrimitive(t.deletedAt))
+                            },
+                        )
+                    }
                 },
             )
             put("remote", kotlinx.serialization.json.JsonArray(wires))
@@ -1136,8 +1363,7 @@ class VisualizerSync(
             json.parseToJsonElement(
                 coffee.crema.core.reconcileShots(json.encodeToString(JsonObject.serializer(), payload)),
             ) as kotlinx.serialization.json.JsonArray
-        }.getOrElse { return 0 }
-        var pulled = 0
+        }.getOrElse { return PullApplied(planned = false) }
         val stubs = mutableListOf<StoredShot>()
         for (el in actions) {
             val action = el as? JsonObject ?: continue
@@ -1149,16 +1375,19 @@ class VisualizerSync(
                     storedShotFromWire(remote, vid?.let { samplesById[it] }, json)?.let { stub ->
                         // Attach the recipe fetched at pull time (#12) so the shot is
                         // self-contained; absent for profile-less remotes.
-                        val withProfile = vid?.let { profilesById[it] }?.let { stub.copy(profile = it) } ?: stub
-                        stubs += withProfile
-                        pulled++
-                        logSync("pull", stub.id, stub.profileName ?: "Shot")
+                        stubs += vid?.let { profilesById[it] }?.let { stub.copy(profile = it) } ?: stub
                     }
                 }
                 "bind" -> {
                     val localId = fld("localId") ?: continue
                     val vid = fld("visualizerId") ?: continue
-                    onShotSynced(localId, vid)
+                    // Deleted during its upload: the id goes on the tombstone,
+                    // and the remote copy stays out of the history.
+                    if (localId in unboundIds) {
+                        persist { it.withTombstoneBound(localId, vid, now()) }
+                        continue
+                    }
+                    bindUploaded(localId, vid)
                     fillBarista(localId, action["remote"] as? JsonObject)
                     logSync("pull", localId, "Shot (bound)")
                 }
@@ -1179,14 +1408,57 @@ class VisualizerSync(
                 }
             }
         }
-        if (stubs.isNotEmpty()) onPulledShots(stubs)
-        return pulled
+        val refused = if (stubs.isEmpty()) emptySet() else onPulledShots(stubs)
+        val added = stubs.filter { it.id !in refused }
+        added.forEach { logSync("pull", it.id, it.profileName ?: "Shot") }
+        // One line for the run: a large pull would push out the whole log.
+        if (refused.isNotEmpty()) logSync("skip", "", "Pull", historyFullNotice(refused.size))
+        return PullApplied(added.size, refused.size)
     }
 
     // ── Shot deletion (web history tombstones + upload-queue delete) ───────
 
+    /**
+     * Whether pull [run] from [since], which walked everything, ends this
+     * tombstone: it started later, it covered the window the upload would have
+     * landed in, and no POST is still out, whose id would need somewhere to land.
+     */
+    private fun UnboundTombstone.expiredBy(run: Long, since: Long): Boolean =
+        parkedFor == null && writtenRun < run && !claimed(id) && pullCoversAttempt(since, attemptedAt)
+
     /** The shots deleted here whose Visualizer copy still exists. */
     internal val shotTombstones: List<ShotTombstone> get() = persisted.shotTombstones
+
+    /**
+     * The shot [shot] was deleted here, with [deleteRemote] saying whether its
+     * Visualizer copy goes too. A delete records intent, and a binding can arrive
+     * later. A shot bound or with an upload under way leaves a tombstone. One never
+     * offered to Visualizer just goes.
+     */
+    fun tombstoneDeleted(shot: StoredShot, deleteRemote: Boolean) {
+        val visualizerId = shot.visualizerId
+        if (visualizerId != null) return tombstoneShot(shot.id, visualizerId, deleteRemote)
+        deletedHere += shot.id
+        scope.launch {
+            if (!ownState.await()) return@launch
+            persist { st ->
+                if (!uploadPending(st, shot.id)) return@persist st
+                val tombstone = UnboundTombstone(
+                    id = shot.id,
+                    completedAtMs = shot.completedAtMs,
+                    durationMs = shot.durationMs,
+                    deletedAt = now(),
+                    deleteRemote = deleteRemote,
+                    writtenRun = st.pullRun,
+                    attemptedAt = st.uploadAttempted[shot.id] ?: now().takeIf { claimed(shot.id) },
+                )
+                st.copy(
+                    unboundTombstones = st.unboundTombstones.filterNot { it.id == shot.id } + tombstone,
+                    uploadAttempted = st.uploadAttempted - shot.id,
+                )
+            }
+        }
+    }
 
     /**
      * Record that the shot [id], uploaded as [visualizerId], was deleted here.
@@ -1214,8 +1486,16 @@ class VisualizerSync(
      */
     fun forgetTombstones(ids: Collection<String>) {
         val gone = ids.toHashSet()
-        if (persisted.shotTombstones.none { it.id in gone }) return
-        scope.launch { persist { st -> st.copy(shotTombstones = st.shotTombstones.filterNot { it.id in gone }) } }
+        deletedHere -= gone
+        if (persisted.shotTombstones.none { it.id in gone } && persisted.unboundTombstones.none { it.id in gone }) return
+        scope.launch {
+            persist { st ->
+                st.copy(
+                    shotTombstones = st.shotTombstones.filterNot { it.id in gone },
+                    unboundTombstones = st.unboundTombstones.filterNot { it.id in gone },
+                )
+            }
+        }
     }
 
     /**
@@ -1223,21 +1503,25 @@ class VisualizerSync(
      * remotely (web `ShotSync.deleteShot`: open to free accounts, a 404 counts
      * as already gone). A success drops the tombstone. A failure goes by the
      * core's queue rule for a delete (`visualizer_queue_decision`, as web's
-     * queue): retried on its backoff, at most three attempts; a terminal failure
-     * (a 403, …) or the third stops the remote delete but keeps the tombstone,
-     * so the copy is still never pulled back. [dueOnly] (the drain) skips the
+     * queue): retried on its backoff, then parked an hour at a time after the
+     * third attempt, since nothing else re-offers it; a terminal failure (a 403,
+     * …) stops the remote delete but keeps the tombstone, so the copy is still
+     * never pulled back. [dueOnly] (the drain) skips the
      * ones still in their backoff; a sync the user runs tries them all. A no-op
      * when signed out (parked until a sign-in).
      */
     internal suspend fun deleteRemoteShots(dueOnly: Boolean = false) {
-        if (persisted.tokens == null) return
-        for (t in persisted.shotTombstones.filter { it.deleteRemote && (!dueOnly || it.nextAttemptAt <= now()) }) {
+        if (persisted.tokens == null || persisted.accountUnconfirmed) return
+        for (t in persisted.shotTombstones.filter { it.owed && (!dueOnly || it.nextAttemptAt <= now()) }) {
             val failure = runCatchingCancellable { withFreshToken { client.request("DELETE", "/shots/${t.visualizerId}", it) } }
                 .exceptionOrNull()?.takeUnless { it is VisualizerError.NotFound }
             val decision = failure?.let { uploadPolicy.queueDecision("delete", it, t.attempts + 1) }
             val updated = when (decision) {
                 null -> null
-                is RetryDecision.Drop -> t.copy(deleteRemote = false)
+                is RetryDecision.Drop -> {
+                    notify("Visualizer refused to delete a shot, so its copy stays there: ${failure.message}")
+                    t.copy(deleteRemote = false)
+                }
                 is RetryDecision.Park -> t.copy(nextAttemptAt = now() + decision.delayMs)
                 is RetryDecision.Retry -> t.copy(attempts = t.attempts + 1, nextAttemptAt = now() + decision.delayMs)
             }
@@ -1284,7 +1568,10 @@ class VisualizerSync(
         if (!beanSyncMutex.tryLock()) return null
         try {
             if (persisted.tokens == null) return BeanSyncResult(error = "Sign in to Visualizer first.")
-            val snapshot = beanLibrary()
+            if (persisted.accountUnconfirmed) return BeanSyncResult(error = ACCOUNT_HELD_NOTICE)
+            // A pull is fine, but nothing goes up to an account the user hasn't
+            // said yes to, and the baseline waits for the push that's held.
+            val asking = persisted.accountChangeAsk
             val runner = BeanSyncRunner(
                 core = beanSyncCore,
                 json = json,
@@ -1292,23 +1579,24 @@ class VisualizerSync(
                 now = now,
             )
             val result = runner.run(
-                snapshot.beans,
-                snapshot.roasters,
+                beanLibrary,
+                editBeanLibrary,
                 BeanSyncSettings(
                     lastSyncAt = persisted.beanLastSyncAt,
                     premium = persisted.premium,
-                    beansDirection = persisted.prefs.beansDirection,
-                    roastersDirection = persisted.prefs.roastersDirection,
+                    beansDirection = if (asking) pullsOnly(persisted.prefs.beansDirection) else persisted.prefs.beansDirection,
+                    roastersDirection = if (asking) pullsOnly(persisted.prefs.roastersDirection) else persisted.prefs.roastersDirection,
+                    createsFrom = persisted.uploadExcludedBefore,
                 ),
             )
-            onBeansSynced(result, snapshot.beans.mapTo(HashSet()) { it.id }, snapshot.roasters.mapTo(HashSet()) { it.id })
+            onBeansSynced()
             val failure = result.error?.takeIf { !result.ok }?.let {
                 SyncLogEntry(direction = "pull", entity = "bean", id = "", name = "Bean sync", at = now(), error = it)
             }
             persist { st ->
                 st.copy(
                     premium = result.premium,
-                    beanLastSyncAt = result.lastSyncAt ?: st.beanLastSyncAt,
+                    beanLastSyncAt = result.lastSyncAt?.takeUnless { asking } ?: st.beanLastSyncAt,
                     log = (listOfNotNull(failure) + result.log.take(10) + st.log).take(20),
                 )
             }
@@ -1326,7 +1614,7 @@ class VisualizerSync(
      * only log — the local delete already happened.
      */
     fun deleteRemote(beanVisualizerIds: List<String>, roasterVisualizerId: String? = null, label: String = "") {
-        if (persisted.premium == false || persisted.tokens == null) return
+        if (persisted.premium == false || persisted.tokens == null || persisted.accountUnconfirmed) return
         if (beanVisualizerIds.isEmpty() && roasterVisualizerId == null) return
         scope.launch {
             val targets = beanVisualizerIds.map { "bean" to "/coffee_bags/$it" } +
@@ -1353,10 +1641,17 @@ class VisualizerSync(
             notify("Sign in to Visualizer first (Settings → Sharing)")
             return
         }
-        if (!shotsReady()) return
-        val direction = persisted.prefs.shotsDirection
+        if (persisted.accountUnconfirmed) {
+            notify(ACCOUNT_HELD_NOTICE)
+            refreshAccount()
+            return
+        }
+        // Beans don't touch the shot log, so they run without it.
+        val shotsOn = shotsReady()
+        val direction = if (shotsOn) persisted.prefs.shotsDirection else "off"
         val beansOn = includeBeans &&
             (persisted.prefs.beansDirection != "off" || persisted.prefs.roastersDirection != "off")
+        if (!shotsOn && !(beansOn && historyRefused())) return
         if (direction == "off" && !beansOn) {
             notify("Sync is off — pick a direction first")
             return
@@ -1369,13 +1664,13 @@ class VisualizerSync(
             val parts = mutableListOf<String>()
             var failed = false
             // Remote deletes the user asked for that haven't landed yet.
-            runCatchingCancellable { deleteRemoteShots() }
+            if (shotsOn) runCatchingCancellable { deleteRemoteShots() }
             if (beansOn) {
                 runCatchingCancellable { runBeanSync() }
                     .onSuccess { r ->
                         if (r != null) {
                             parts += "beans ${r.pulled} pulled · ${r.pushed} pushed" + if (r.premiumLocked) " (read-only, free tier)" else ""
-                            if (!r.ok) failed = true
+                            if (!r.ok || r.writesFailed > 0) failed = true
                         }
                     }
                     .onFailure { e ->
@@ -1384,21 +1679,34 @@ class VisualizerSync(
                     }
             }
             var pulled = 0
+            var refused = 0
             var pushed = 0
             if (directionPulls(direction)) {
                 runCatchingCancellable {
                     val since = persisted.shotPullCursor ?: 0L
-                    val (wires, samples, profiles) = pullAllShotsSince(since)
-                    pulled = reconcileAndApply(shots, wires, samples, profiles)
-                    persist { it.copy(shotPullCursor = System.currentTimeMillis()) }
+                    val run = persisted.pullRun + 1
+                    persist { it.copy(pullRun = run) }
+                    val pull = pullAllShotsSince(since)
+                    val applied = reconcileAndApply(shots, pull.wires, pull.samples, pull.profiles)
+                    pulled = applied.pulled
+                    refused = applied.refused
+                    persist { st ->
+                        val complete = pull.complete && applied.planned
+                        st.copy(
+                            shotPullCursor = System.currentTimeMillis(),
+                            // Matches left the list above, so what's here wasn't found.
+                            unboundTombstones = if (complete) st.unboundTombstones.filterNot { it.expiredBy(run, since) } else st.unboundTombstones,
+                        )
+                    }
                 }.onFailure { e ->
                     failed = true
                     logSync("pull", "", "Pull failed", e.message)
                 }
             }
             var stop: PassStop? = null
-            if (directionPushes(direction)) {
-                val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
+            if (directionPushes(direction) && !uploadsHeld) {
+                logNoTelemetry(shots)
+                val unsynced = unsent(shots)
                 val r = runUploadPass(
                     unsynced,
                     uploadPolicy,
@@ -1421,6 +1729,7 @@ class VisualizerSync(
                 buildString {
                     append("Visualizer sync: ")
                     append(parts.joinToString(" · "))
+                    if (refused > 0) append(" · ${historyFullNotice(refused)}")
                     if (stop != null) append(" · ${stop.notice}")
                     else if (failed) append(" · some steps failed (see log)")
                 },
@@ -1434,11 +1743,17 @@ class VisualizerSync(
      * is told once, not once per trigger.
      */
     private suspend fun rowsReady(): Boolean {
-        if (withTimeoutOrNull(ROWS_WAIT_MS) { seriesReady() } != null) return true
+        if (withTimeoutOrNull(rowsWaitMs) { seriesReady() } != null) return true
         if (rowsLateTold.compareAndSet(false, true)) {
             notify("Shot data hasn’t loaded, so Visualizer uploads are waiting. They’ll retry on their own.")
         }
         return false
+    }
+
+    /** One line for the pass: these would otherwise fill the log on every sync. */
+    private suspend fun logNoTelemetry(shots: List<StoredShot>) {
+        val n = shots.count(::noTelemetry)
+        if (n > 0) logSync("skip", "", "Upload", "$n shot${if (n == 1) " has" else "s have"} no telemetry to upload")
     }
 
     /**
@@ -1446,6 +1761,10 @@ class VisualizerSync(
      * list the UI passes in: an empty one would pull every remote shot in as new.
      */
     private fun shotsReady(): Boolean {
+        if (historyRefused()) {
+            notify(HISTORY_REFUSED_NOTICE)
+            return false
+        }
         if (shotsLoaded()) return true
         notify("Shot data is still loading — try again in a moment")
         return false
@@ -1476,8 +1795,13 @@ class VisualizerSync(
             notify("Sign in to Visualizer first (Settings → Sharing)")
             return
         }
+        if (uploadsHeld) {
+            notify(ACCOUNT_HELD_NOTICE)
+            return
+        }
         if (!shotsReady()) return
-        val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
+        scope.launch { logNoTelemetry(shots) }
+        val unsynced = unsent(shots)
         if (unsynced.isEmpty()) {
             notify("Everything is already on Visualizer")
             return
@@ -1491,6 +1815,29 @@ class VisualizerSync(
             notify(r.stop?.let { "$summary — ${it.notice}" } ?: summary)
         }
     }
+}
+
+/** The lasting line when the server ends the session. */
+const val VISUALIZER_RECONNECT_LINE = "Visualizer ended this sign-in. Sign in again to keep syncing. Nothing on this device is lost."
+
+/**
+ * The id arrived for a shot deleted here: from its upload finishing, or from a
+ * pull finding its row. It goes on a tombstone, always, so an upload landing
+ * after a delete is still caught, carrying the intent an unbound one recorded.
+ */
+internal fun VisualizerState.withTombstoneBound(shotId: String, visualizerId: String, now: Long): VisualizerState {
+    val unbound = unboundTombstones.firstOrNull { it.id == shotId }
+    val tombstone = ShotTombstone(
+        id = shotId,
+        visualizerId = visualizerId,
+        deletedAt = unbound?.deletedAt ?: now,
+        deleteRemote = unbound?.deleteRemote ?: false,
+        parkedFor = unbound?.parkedFor,
+    )
+    return copy(
+        shotTombstones = shotTombstones.filterNot { it.id == shotId } + tombstone,
+        unboundTombstones = unboundTombstones.filterNot { it.id == shotId },
+    )
 }
 
 /**
@@ -1535,6 +1882,9 @@ internal fun shotPatchInputs(
     // remote value alone. Empty once cleared, so a clear reaches Visualizer.
     barista = if (sendBarista) baristaOf(shot) else null,
 )
+
+/** What a pull left in the history: rows added, new rows a full one refused, and whether the core planned it. */
+internal data class PullApplied(val pulled: Int = 0, val refused: Int = 0, val planned: Boolean = true)
 
 /** A shot's barista as the PATCH sends it: trimmed, "" when unset or cleared. */
 internal fun baristaOf(shot: StoredShot): String = shot.barista?.trim().orEmpty()

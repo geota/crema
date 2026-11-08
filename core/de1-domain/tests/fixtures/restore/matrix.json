@@ -1,0 +1,1171 @@
+{
+  "about": "One case per row: a store, a mode, what's here (a LocalState), what the backup holds, and what the plan must say, as JSON pointers into the RestorePlan. The backup's rows are built from the backup fixtures' rows with these ids. Run against plan_restore in Rust (tests/backup_plan.rs); the shells run the same cases against their real stores (restore-safety PR7).",
+  "cases": [
+    {
+      "name": "beans: merge adds what's missing and keeps what's here",
+      "store": "beans",
+      "mode": "merge",
+      "local": {
+        "beans": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1",
+          "b2"
+        ]
+      },
+      "expect": {
+        "/beans/add": [
+          "b2"
+        ],
+        "/beans/keep": 1,
+        "/beans/overwrite": [],
+        "/beans/remove": [],
+        "/verdict": "ok"
+      }
+    },
+    {
+      "name": "beans: merge never removes a bean only here",
+      "store": "beans",
+      "mode": "merge",
+      "local": {
+        "beans": [
+          "b1",
+          "b3"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ]
+      },
+      "expect": {
+        "/beans/remove": [],
+        "/beans/keep": 1
+      }
+    },
+    {
+      "name": "beans: replace matches the backup",
+      "store": "beans",
+      "mode": "replace",
+      "local": {
+        "beans": [
+          "b1",
+          "b3"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1",
+          "b2"
+        ]
+      },
+      "expect": {
+        "/beans/add": [
+          "b2"
+        ],
+        "/beans/overwrite": [
+          "b1"
+        ],
+        "/beans/remove": [
+          "b3"
+        ],
+        "/verdict": "confirm"
+      }
+    },
+    {
+      "name": "roasters: replace with no roasters in an old header keeps them",
+      "store": "roasters",
+      "mode": "replace",
+      "local": {
+        "roasters": [
+          "r1"
+        ],
+        "beans": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ],
+        "omitCounts": [
+          "roasterCount"
+        ]
+      },
+      "expect": {
+        "/roasters/remove": [],
+        "/roasters/keep": 1
+      }
+    },
+    {
+      "name": "roasters: replace with zero roasters counted removes them",
+      "store": "roasters",
+      "mode": "replace",
+      "local": {
+        "roasters": [
+          "r1"
+        ],
+        "beans": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ]
+      },
+      "expect": {
+        "/roasters/remove": [
+          "r1"
+        ]
+      }
+    },
+    {
+      "name": "shots: merge adds, keeps, and never removes",
+      "store": "shots",
+      "mode": "merge",
+      "local": {
+        "shots": [
+          {
+            "id": "s1",
+            "hasSamples": true
+          },
+          {
+            "id": "s9",
+            "hasSamples": true
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "s1"
+          },
+          {
+            "id": "s2"
+          }
+        ]
+      },
+      "expect": {
+        "/shots/add": [
+          "s2"
+        ],
+        "/shots/keep": 1,
+        "/shots/remove": [],
+        "/shots/fill": []
+      }
+    },
+    {
+      "name": "shots: merge fills a lost curve and nothing else",
+      "store": "shots",
+      "mode": "merge",
+      "local": {
+        "shots": [
+          {
+            "id": "s1",
+            "hasSamples": false
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "s1",
+            "samples": true
+          }
+        ]
+      },
+      "expect": {
+        "/shots/fill": [
+          "s1"
+        ],
+        "/shots/add": [],
+        "/shots/overwrite": []
+      }
+    },
+    {
+      "name": "shots: merge leaves a curve here alone",
+      "store": "shots",
+      "mode": "merge",
+      "local": {
+        "shots": [
+          {
+            "id": "s1",
+            "hasSamples": true
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "s1",
+            "samples": true
+          }
+        ]
+      },
+      "expect": {
+        "/shots/fill": []
+      }
+    },
+    {
+      "name": "shots: merge at the cap adds pinned, then newest, and never evicts",
+      "store": "shots",
+      "mode": "merge",
+      "local": {
+        "historyCapacity": 3,
+        "shots": [
+          {
+            "id": "s1",
+            "hasSamples": true
+          },
+          {
+            "id": "s2",
+            "hasSamples": true
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "old-pinned",
+            "completedAt": 1,
+            "pinned": true
+          },
+          {
+            "id": "new",
+            "completedAt": 9
+          },
+          {
+            "id": "mid",
+            "completedAt": 5
+          }
+        ]
+      },
+      "expect": {
+        "/shots/add": [
+          "old-pinned"
+        ],
+        "/shots/notAdded": 2,
+        "/shots/remove": [],
+        "/verdict": "confirm"
+      }
+    },
+    {
+      "name": "shots: merge leaves a shot deleted here deleted, and says so",
+      "store": "shots",
+      "mode": "merge",
+      "local": {
+        "shots": [
+          {
+            "id": "s1",
+            "hasSamples": true,
+            "deleted": true
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "s1"
+          }
+        ]
+      },
+      "expect": {
+        "/shots/deletedHere": [
+          "s1"
+        ],
+        "/shots/add": [],
+        "/tombstones/cancel": [],
+        "/verdict": "ok"
+      }
+    },
+    {
+      "name": "shots: merge with bring-back revives it",
+      "store": "shots",
+      "mode": "merge",
+      "opts": {
+        "reviveDeleted": true
+      },
+      "local": {
+        "shots": [
+          {
+            "id": "s1",
+            "hasSamples": true,
+            "deleted": true
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "s1"
+          }
+        ]
+      },
+      "expect": {
+        "/shots/deletedHere": [],
+        "/shots/add": [],
+        "/shots/revive": [
+          "s1"
+        ],
+        "/tombstones/cancel": [
+          "s1"
+        ]
+      }
+    },
+    {
+      "name": "shots: replace removes by name, pinned counted, and a tombstone the backup lacks stays",
+      "store": "shots",
+      "mode": "replace",
+      "local": {
+        "shots": [
+          {
+            "id": "s1",
+            "hasSamples": true,
+            "pinned": true
+          },
+          {
+            "id": "s2",
+            "hasSamples": true
+          },
+          {
+            "id": "s4",
+            "hasSamples": true,
+            "deleted": true
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "s2"
+          },
+          {
+            "id": "s3"
+          }
+        ]
+      },
+      "expect": {
+        "/shots/remove": [
+          "s1"
+        ],
+        "/shots/pinnedRemoved": 1,
+        "/shots/add": [
+          "s3"
+        ],
+        "/shots/overwrite": [
+          "s2"
+        ],
+        "/tombstones/cancel": []
+      }
+    },
+    {
+      "name": "shots: replace brings back a tombstoned shot the backup has",
+      "store": "shots",
+      "mode": "replace",
+      "local": {
+        "shots": [
+          {
+            "id": "s1",
+            "hasSamples": true,
+            "deleted": true
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "s1"
+          }
+        ]
+      },
+      "expect": {
+        "/shots/revive": [
+          "s1"
+        ],
+        "/shots/overwrite": [],
+        "/tombstones/cancel": [
+          "s1"
+        ]
+      }
+    },
+    {
+      "name": "shots: merge zeroes the debit of a shot added on a bag already here",
+      "store": "shots",
+      "mode": "merge",
+      "local": {
+        "beans": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1",
+          "b2"
+        ],
+        "shots": [
+          {
+            "id": "on-b1",
+            "bean": "b1"
+          },
+          {
+            "id": "on-b2",
+            "bean": "b2"
+          }
+        ]
+      },
+      "expect": {
+        "/shots/zeroDebit": [
+          "on-b1"
+        ],
+        "/shots/add": [
+          "on-b1",
+          "on-b2"
+        ]
+      }
+    },
+    {
+      "name": "shots: replace refuses more unpinned rows than history keeps",
+      "store": "shots",
+      "mode": "replace",
+      "local": {
+        "historyCapacity": 1
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "a"
+          },
+          {
+            "id": "b"
+          },
+          {
+            "id": "c",
+            "pinned": true
+          }
+        ]
+      },
+      "expect": {
+        "/verdict": "refused",
+        "/refusals/0/code": "overCapacity",
+        "/refusals/0/count": 2
+      }
+    },
+    {
+      "name": "profiles: merge skips a built-in id",
+      "store": "profiles",
+      "mode": "merge",
+      "local": {
+        "profiles": [
+          "p1"
+        ]
+      },
+      "backup": {
+        "profiles": [
+          "p1",
+          "p2",
+          "019e5fb5-63b5-7333-a2ac-34b9f4f0e604",
+          "builtin:londinium"
+        ]
+      },
+      "expect": {
+        "/profiles/add": [
+          "p2"
+        ],
+        "/profiles/keep": 1
+      }
+    },
+    {
+      "name": "profiles: replace leaves built-ins to the app",
+      "store": "profiles",
+      "mode": "replace",
+      "local": {
+        "profiles": [
+          "p1",
+          "p3"
+        ]
+      },
+      "backup": {
+        "profiles": [
+          "p1",
+          "019e5fb5-63b5-7333-a2ac-34b9f4f0e604"
+        ]
+      },
+      "expect": {
+        "/profiles/remove": [
+          "p3"
+        ],
+        "/profiles/add": []
+      }
+    },
+    {
+      "name": "recipes: merge skips a built-in",
+      "store": "recipes",
+      "mode": "merge",
+      "local": {},
+      "backup": {
+        "recipes": [
+          "recipe:mine",
+          "builtin:hoffmann-moka"
+        ]
+      },
+      "expect": {
+        "/recipes/add": [
+          "recipe:mine"
+        ]
+      }
+    },
+    {
+      "name": "recipes: replace keeps recipes an older backup doesn't carry",
+      "store": "recipes",
+      "mode": "replace",
+      "local": {
+        "recipes": [
+          "recipe:mine"
+        ],
+        "beans": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ],
+        "omitCounts": [
+          "recipeCount"
+        ]
+      },
+      "expect": {
+        "/recipes/remove": [],
+        "/recipes/keep": 1
+      }
+    },
+    {
+      "name": "methods: merge adds, tombstones included",
+      "store": "customMethods",
+      "mode": "merge",
+      "local": {},
+      "backup": {
+        "customMethods": [
+          "custom:orb",
+          "custom:gone"
+        ]
+      },
+      "expect": {
+        "/customMethods/add": [
+          "custom:orb",
+          "custom:gone"
+        ]
+      }
+    },
+    {
+      "name": "methods: replace removes one the backup lacks",
+      "store": "customMethods",
+      "mode": "replace",
+      "local": {
+        "customMethods": [
+          "custom:orb",
+          "custom:old"
+        ]
+      },
+      "backup": {
+        "customMethods": [
+          "custom:orb"
+        ]
+      },
+      "expect": {
+        "/customMethods/remove": [
+          "custom:old"
+        ]
+      }
+    },
+    {
+      "name": "photos: merge puts a new bean's photo, and fills a missing one",
+      "store": "photos",
+      "mode": "merge",
+      "local": {
+        "beans": [
+          "b1",
+          "b3"
+        ],
+        "photos": [
+          "b1"
+        ],
+        "beansMissingPhoto": [
+          "b3"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1",
+          "b2",
+          "b3"
+        ],
+        "photos": [
+          "b1",
+          "b2",
+          "b3"
+        ]
+      },
+      "expect": {
+        "/photos/put": [
+          "b2",
+          "b3"
+        ],
+        "/photos/remove": []
+      }
+    },
+    {
+      "name": "photos: replace removes a removed bean's photo and keeps one the backup lacks",
+      "store": "photos",
+      "mode": "replace",
+      "local": {
+        "beans": [
+          "b1",
+          "b3"
+        ],
+        "photos": [
+          "b1",
+          "b3"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ],
+        "photos": []
+      },
+      "expect": {
+        "/photos/put": [],
+        "/photos/remove": [
+          "b3"
+        ]
+      }
+    },
+    {
+      "name": "profile meta: merge is a union",
+      "store": "profileMeta",
+      "mode": "merge",
+      "local": {
+        "profileMeta": {
+          "pinned": [
+            "builtin:a"
+          ],
+          "hiddenBuiltins": [
+            "builtin:x"
+          ]
+        }
+      },
+      "backup": {
+        "profileMeta": {
+          "pinned": [
+            "builtin:b"
+          ],
+          "hiddenBuiltins": []
+        }
+      },
+      "expect": {
+        "/profileMeta/action": "apply",
+        "/profileMeta/pinned": [
+          "builtin:a",
+          "builtin:b"
+        ],
+        "/profileMeta/hiddenBuiltins": [
+          "builtin:x"
+        ]
+      }
+    },
+    {
+      "name": "profile meta: replace takes the backup's sets",
+      "store": "profileMeta",
+      "mode": "replace",
+      "local": {
+        "beans": [
+          "b1"
+        ],
+        "profileMeta": {
+          "pinned": [
+            "builtin:a"
+          ]
+        }
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ],
+        "profileMeta": {
+          "pinned": [
+            "builtin:b"
+          ],
+          "hiddenBuiltins": []
+        }
+      },
+      "expect": {
+        "/profileMeta/pinned": [
+          "builtin:b"
+        ]
+      }
+    },
+    {
+      "name": "profile meta: no line keeps it",
+      "store": "profileMeta",
+      "mode": "replace",
+      "local": {
+        "beans": [
+          "b1"
+        ],
+        "profileMeta": {
+          "pinned": [
+            "builtin:a"
+          ]
+        }
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ]
+      },
+      "expect": {
+        "/profileMeta/action": "keep"
+      }
+    },
+    {
+      "name": "recipe meta: merge keeps a pointer here and fills gaps",
+      "store": "recipeMeta",
+      "mode": "merge",
+      "local": {
+        "recipeMeta": {
+          "defaults": {
+            "pourover": "recipe:mine"
+          }
+        }
+      },
+      "backup": {
+        "recipeMeta": {
+          "defaults": {
+            "pourover": "recipe:theirs",
+            "moka": "recipe:moka"
+          },
+          "hiddenBuiltins": []
+        }
+      },
+      "expect": {
+        "/recipeMeta/defaults/pourover": "recipe:mine",
+        "/recipeMeta/defaults/moka": "recipe:moka"
+      }
+    },
+    {
+      "name": "recipe meta: replace takes the backup's",
+      "store": "recipeMeta",
+      "mode": "replace",
+      "local": {
+        "beans": [
+          "b1"
+        ],
+        "recipeMeta": {
+          "defaults": {
+            "pourover": "recipe:mine"
+          }
+        }
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ],
+        "recipeMeta": {
+          "defaults": {
+            "pourover": "recipe:theirs"
+          },
+          "hiddenBuiltins": []
+        }
+      },
+      "expect": {
+        "/recipeMeta/defaults/pourover": "recipe:theirs"
+      }
+    },
+    {
+      "name": "settings: merge applies on a fresh install",
+      "store": "settings",
+      "mode": "merge",
+      "local": {
+        "shell": "web"
+      },
+      "backup": {
+        "settings": {
+          "_shell": "web"
+        }
+      },
+      "expect": {
+        "/settings/common": "apply",
+        "/settings/extras": "apply"
+      }
+    },
+    {
+      "name": "settings: merge keeps a device's own",
+      "store": "settings",
+      "mode": "merge",
+      "local": {
+        "shell": "web",
+        "common": {
+          "themeMode": "light"
+        }
+      },
+      "backup": {
+        "settings": {
+          "_shell": "web"
+        }
+      },
+      "expect": {
+        "/settings/common": "keep",
+        "/settings/extras": "keep"
+      }
+    },
+    {
+      "name": "settings: replace applies, extras only from the same shell",
+      "store": "settings",
+      "mode": "replace",
+      "local": {
+        "shell": "android",
+        "beans": [
+          "b1"
+        ],
+        "common": {
+          "themeMode": "light"
+        }
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ],
+        "settings": {
+          "_shell": "web"
+        }
+      },
+      "expect": {
+        "/settings/common": "apply",
+        "/settings/extras": "keep"
+      }
+    },
+    {
+      "name": "maintenance: merge applies to a machine with no water through it",
+      "store": "maintenance",
+      "mode": "merge",
+      "local": {
+        "totalLitres": 0
+      },
+      "backup": {
+        "maintenance": true
+      },
+      "expect": {
+        "/maintenance": "apply"
+      }
+    },
+    {
+      "name": "maintenance: merge keeps a used machine's",
+      "store": "maintenance",
+      "mode": "merge",
+      "local": {
+        "totalLitres": 12.5
+      },
+      "backup": {
+        "maintenance": true
+      },
+      "expect": {
+        "/maintenance": "keep"
+      }
+    },
+    {
+      "name": "visualizer prefs: merge keeps prefs someone set",
+      "store": "visualizerPrefs",
+      "mode": "merge",
+      "local": {
+        "visualizerPrefs": {
+          "privacy": "private"
+        }
+      },
+      "backup": {
+        "visualizerPrefs": true
+      },
+      "expect": {
+        "/visualizerPrefs": "keep"
+      }
+    },
+    {
+      "name": "visualizer prefs: merge applies over the defaults",
+      "store": "visualizerPrefs",
+      "mode": "merge",
+      "local": {},
+      "backup": {
+        "visualizerPrefs": true
+      },
+      "expect": {
+        "/visualizerPrefs": "apply"
+      }
+    },
+    {
+      "name": "active bean: replace clears one it removes",
+      "store": "beans",
+      "mode": "replace",
+      "local": {
+        "beans": [
+          "b1",
+          "b3"
+        ],
+        "activeBeanId": "b3"
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ]
+      },
+      "expect": {
+        "/clearActiveBean": true
+      }
+    },
+    {
+      "name": "active bean: merge never touches it",
+      "store": "beans",
+      "mode": "merge",
+      "local": {
+        "beans": [
+          "b3"
+        ],
+        "activeBeanId": "b3"
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ]
+      },
+      "expect": {
+        "/clearActiveBean": false
+      }
+    },
+    {
+      "name": "refused: a store that couldn't be read",
+      "store": "beans",
+      "mode": "merge",
+      "local": {
+        "health": [
+          {
+            "store": "bean library",
+            "health": "unavailable"
+          }
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ]
+      },
+      "expect": {
+        "/verdict": "refused",
+        "/refusals/0/code": "storeUnavailable",
+        "/refusals/0/store": "bean library"
+      }
+    },
+    {
+      "name": "not refused: a store that was damaged and kept aside",
+      "store": "beans",
+      "mode": "merge",
+      "local": {
+        "health": [
+          {
+            "store": "bean library",
+            "health": "damaged"
+          }
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ]
+      },
+      "expect": {
+        "/verdict": "ok"
+      }
+    },
+    {
+      "name": "refused: a shot or a flash running",
+      "store": "shots",
+      "mode": "merge",
+      "local": {
+        "machineBusy": true
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "s1"
+          }
+        ]
+      },
+      "expect": {
+        "/verdict": "refused",
+        "/refusals/0/code": "machineBusy"
+      }
+    },
+    {
+      "name": "refused: replace with a backup of no rows on a device with rows",
+      "store": "beans",
+      "mode": "replace",
+      "local": {
+        "beans": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "settings": {
+          "_shell": "web"
+        }
+      },
+      "expect": {
+        "/verdict": "refused",
+        "/refusals/0/code": "emptyBackup"
+      }
+    },
+    {
+      "name": "shots: the cap's room counts live rows, not tombstones",
+      "store": "shots",
+      "mode": "merge",
+      "local": {
+        "historyCapacity": 2,
+        "shots": [
+          {
+            "id": "s1",
+            "hasSamples": true
+          },
+          {
+            "id": "gone",
+            "hasSamples": true,
+            "deleted": true
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "n1"
+          }
+        ]
+      },
+      "expect": {
+        "/shots/add": [
+          "n1"
+        ],
+        "/shots/notAdded": 0
+      }
+    },
+    {
+      "name": "shots: a shot asked back that doesn't fit stays deleted, and is named",
+      "store": "shots",
+      "mode": "merge",
+      "opts": {
+        "reviveDeleted": true
+      },
+      "local": {
+        "historyCapacity": 1,
+        "shots": [
+          {
+            "id": "s1",
+            "hasSamples": true
+          },
+          {
+            "id": "gone",
+            "hasSamples": true,
+            "deleted": true
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "gone"
+          }
+        ]
+      },
+      "expect": {
+        "/shots/revive": [],
+        "/shots/notRevived": [
+          "gone"
+        ],
+        "/shots/notAdded": 1,
+        "/tombstones/cancel": []
+      }
+    },
+    {
+      "name": "methods: an old header with no method count carries none, and checks none",
+      "store": "customMethods",
+      "mode": "replace",
+      "local": {
+        "customMethods": [
+          "custom:here"
+        ],
+        "beans": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ],
+        "customMethods": [
+          "custom:orb"
+        ],
+        "omitCounts": [
+          "customMethodCount"
+        ]
+      },
+      "expect": {
+        "/customMethods/remove": [],
+        "/customMethods/keep": 1,
+        "/verdict": "confirm",
+        "/refusals": []
+      }
+    },
+    {
+      "name": "settings: a line with no _shell is Android's",
+      "store": "settings",
+      "mode": "replace",
+      "local": {
+        "shell": "android",
+        "beans": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ],
+        "settings": {}
+      },
+      "expect": {
+        "/settings/common": "apply",
+        "/settings/extras": "apply"
+      }
+    },
+    {
+      "name": "settings: a line with no _shell doesn't apply web extras",
+      "store": "settings",
+      "mode": "replace",
+      "local": {
+        "shell": "web",
+        "beans": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1"
+        ],
+        "settings": {}
+      },
+      "expect": {
+        "/settings/common": "apply",
+        "/settings/extras": "keep"
+      }
+    }
+  ]
+}

@@ -3,6 +3,8 @@ package coffee.crema.decent
 import android.content.Context
 import android.util.Log
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SafeLoad
+import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.security.DeviceSecretBox
 import coffee.crema.security.SecretBox
@@ -119,8 +121,11 @@ class DecentStore(
 
     override suspend fun load(): DecentState = withContext(Dispatchers.IO) {
         // Unreadable: kept aside + reported (see [loadStore]); starts signed out.
-        val raw = loadStore(file, "Decent sign-in") { json.decodeFromString(DecentState.serializer(), it) }
-            .valueOrNull() ?: return@withContext DecentState()
+        val outcome = loadStore(file, "Decent sign-in") { json.decodeFromString(DecentState.serializer(), it) }
+        val raw = when (outcome) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> return@withContext DecentState()
+        }
         // A `.bak` left by an older build may hold a previous (or plaintext) token.
         SafeFile.purgeCopies(file)
         val (state, resave) = raw.openedWith(box)
@@ -130,11 +135,11 @@ class DecentStore(
 
     override suspend fun save(state: DecentState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
-    override suspend fun erase(): Boolean = withContext(Dispatchers.IO) { SafeFile.erase(file) }
+    override suspend fun erase(): Boolean = withContext(Dispatchers.IO) { eraseStore(file) }
 
     private fun write(state: DecentState): Boolean = try {
         // No `.bak` copies of sealed tokens (review 05 P3-5).
-        SafeFile.writeCredential(file, json.encodeToString(DecentState.serializer(), state.sealedWith(box)))
+        SafeFile.writeCredential(file, json.encodeToString(DecentState.serializer(), state.sealedWith(box)), "Decent sign-in")
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.
@@ -142,7 +147,7 @@ class DecentStore(
         false
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "decent.json"
         const val TAG = "DecentStore"
     }

@@ -26,6 +26,8 @@ import kotlin.test.assertEquals
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class SettingsStoreOrderTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
 
     private val store = SettingsStore(VmHarness.app(), coreJson)
 
@@ -52,6 +54,26 @@ class SettingsStoreOrderTest {
             newer.await()
             older.await()
             assertEquals("dark", store.load().themeMode, "the adoption save stands")
+        } finally {
+            io.cancel()
+        }
+    }
+
+    /** Erase all data after a save in flight: that save can't bring old prefs back. */
+    @Test
+    fun `erase waits for a save in flight`() = runBlocking {
+        store.save(AppPrefs(themeMode = "dark"))
+        val file = java.io.File(VmHarness.app().filesDir, "prefs.json")
+        val lock = SettingsStore::class.java.getDeclaredField("saveLock").apply { isAccessible = true }.get(store) as Mutex
+        val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            lock.lock() // a save mid-write
+            val erase = io.async { store.erase() }
+            delay(50)
+            assertEquals(true, file.exists(), "the erase waits for the save")
+            lock.unlock()
+            erase.await()
+            assertEquals(false, file.exists())
         } finally {
             io.cancel()
         }

@@ -1255,11 +1255,35 @@ pub fn visualizer_quota_limit(status: u16, body: String) -> Option<u32> {
 }
 
 /// Delay (ms) before retry number `attempt` of a recoverable Visualizer
-/// failure with HTTP `status` (`None` for a transport failure). Mirrors the
-/// wasm `retryBackoffMs`; see [`de1_domain::retry_backoff_ms`].
+/// failure with HTTP `status` (`None` for a transport failure). `jitter_unit`
+/// is a random number in `0..1`. Mirrors the wasm `retryBackoffMs`; see
+/// [`de1_domain::retry_backoff_ms`].
 #[uniffi::export]
-pub fn retry_backoff_ms(status: Option<u16>, attempt: u32) -> u64 {
-    de1_domain::retry_backoff_ms(status, attempt)
+pub fn retry_backoff_ms(status: Option<u16>, attempt: u32, jitter_unit: f64) -> u64 {
+    de1_domain::retry_backoff_ms(status, attempt, jitter_unit)
+}
+
+/// What a failed cloud call means: a JSON `SyncFailure`. `service` is
+/// `"visualizer"`, `"decent"` or `"drive"`, `operation` `"call"` or `"refresh"`,
+/// `status` `None` when the request got no answer, `retry_after` the raw header.
+/// See [`de1_domain::classify_sync_failure`].
+#[uniffi::export]
+pub fn classify_sync_failure(
+    service: String,
+    operation: String,
+    status: Option<u16>,
+    body: String,
+    retry_after: Option<String>,
+    now_ms: i64,
+) -> String {
+    de1_domain::classify_sync_failure_json(
+        &service,
+        &operation,
+        status,
+        &body,
+        retry_after.as_deref(),
+        now_ms,
+    )
 }
 
 /// What a failed Visualizer refresh-token grant means: `"Definitive"` (sign
@@ -1272,6 +1296,48 @@ pub fn classify_token_refresh_failure(status: Option<u16>, body: Option<String>)
         "{:?}",
         de1_domain::classify_token_refresh_failure(status, body.as_deref())
     )
+}
+
+/// Whether a pull from `since_ms` covered the window an upload attempted at
+/// `attempted_at_ms` would have landed in. See
+/// [`de1_domain::pull_covers_attempt`].
+#[uniffi::export]
+pub fn pull_covers_attempt(since_ms: i64, attempted_at_ms: Option<i64>) -> bool {
+    de1_domain::pull_covers_attempt(since_ms, attempted_at_ms)
+}
+
+/// What a run's JSON `RunOutcome` leaves a service showing: a JSON `SyncHealth`.
+/// See [`de1_domain::sync_health_after_run`].
+///
+/// # Errors
+/// When `outcome_json` isn't a `RunOutcome`.
+#[uniffi::export]
+pub fn sync_health_after_run(outcome_json: String, now_ms: i64) -> Result<String, CremaError> {
+    de1_domain::sync_health_after_run_json(&outcome_json, now_ms).map_err(CremaError::from)
+}
+
+/// Whether moving between two JSON `SyncHealth`s raises the one reconnect
+/// notice. See [`de1_domain::reconnect_notice_due`].
+#[uniffi::export]
+pub fn reconnect_notice_due(previous: Option<String>, next: String) -> bool {
+    de1_domain::reconnect_notice_due_json(previous.as_deref(), &next)
+}
+
+/// What a confirmed `/me` means: `"First"`, `"Same"` or `"Changed"`. See
+/// [`de1_domain::account_change_action`].
+#[uniffi::export]
+pub fn account_change_action(stored: Option<String>, me: String) -> String {
+    format!(
+        "{:?}",
+        de1_domain::account_change_action(stored.as_deref(), &me)
+    )
+}
+
+/// Whether an upload must refuse a stored row for having no telemetry. See
+/// [`de1_domain::upload_refused_no_samples`].
+#[uniffi::export]
+pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -> bool {
+    de1_domain::upload_refused_no_samples(is_brew_log, sample_count)
 }
 
 /// What an OAuth redirect means for a sign-in in progress — mirrors
@@ -1327,8 +1393,8 @@ pub fn callback_outcome(
 
 /// The Visualizer retry queue's rule for a failed operation: a JSON
 /// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
-/// `attempts_made` counts this attempt. See
-/// [`de1_domain::visualizer_queue_decision`].
+/// `attempts_made` counts this attempt; `jitter_unit` is a random number in
+/// `0..1`. See [`de1_domain::visualizer_queue_decision`].
 #[uniffi::export]
 pub fn visualizer_queue_decision(
     op: String,
@@ -1336,8 +1402,9 @@ pub fn visualizer_queue_decision(
     status: Option<u16>,
     body: String,
     attempts_made: u32,
+    jitter_unit: f64,
 ) -> String {
-    de1_domain::visualizer_queue_decision_json(&op, &tag, status, &body, attempts_made)
+    de1_domain::visualizer_queue_decision_json(&op, &tag, status, &body, attempts_made, jitter_unit)
 }
 
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` → `"DE1"`),
@@ -2039,25 +2106,113 @@ pub fn import_crema_jsonl(text: String) -> Result<String, CremaError> {
 /// [`export_crema_jsonl`] that also carries custom profiles + a portable
 /// settings subset, plus a richer header (`deviceLabel`, profile count).
 /// The shell strips OAuth tokens + per-device/BLE state before building
-/// the envelope. See [`de1_domain::export_backup_jsonl_from_json`].
+/// the envelope. Returns the `BackupExport` as JSON: `{ jsonl, degraded,
+/// omitted }`. See [`de1_domain::export_backup_jsonl_from_json`].
 ///
 /// # Errors
 ///
 /// Returns the JSON parse error string when the envelope is malformed.
 #[uniffi::export]
-pub fn export_backup_jsonl(
+pub fn export_backup_bundle(
     envelope_json: String,
     created_at_unix_ms: i64,
     app_version: String,
     device_label: String,
 ) -> Result<String, CremaError> {
-    de1_domain::export_backup_jsonl_from_json(
+    let built = de1_domain::export_backup_jsonl_from_json(
         &envelope_json,
         created_at_unix_ms,
         &app_version,
         &device_label,
     )
-    .map_err(crema_err)
+    .map_err(crema_err)?;
+    serde_json::to_string(&built).map_err(crema_err)
+}
+
+/// A backup's name as an automatic one, carrying a `BackupCounts` JSON. See
+/// [`de1_domain::auto_backup_file_name`].
+///
+/// # Errors
+///
+/// Returns the parse error when `counts_json` is malformed.
+#[uniffi::export]
+pub fn auto_backup_file_name(
+    backup_name: String,
+    tag: String,
+    counts_json: String,
+) -> Result<String, CremaError> {
+    let counts = serde_json::from_str(&counts_json).map_err(crema_err)?;
+    Ok(de1_domain::auto_backup_file_name(
+        &backup_name,
+        &tag,
+        counts,
+    ))
+}
+
+/// What a backup's name says about it, as a `BackupFileInfo` JSON. See
+/// [`de1_domain::describe_backup_file`].
+#[uniffi::export]
+#[must_use]
+pub fn describe_backup_file(name: String) -> String {
+    de1_domain::describe_backup_file_json(&name)
+}
+
+/// What to prune after an automatic upload, as an `AutoBackupRetention` JSON.
+/// See [`de1_domain::auto_backup_retention`].
+///
+/// # Errors
+///
+/// Returns the parse error when `files_json` is malformed.
+#[uniffi::export]
+pub fn auto_backup_retention(
+    files_json: String,
+    uploaded: String,
+    keep: u32,
+) -> Result<String, CremaError> {
+    de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep).map_err(crema_err)
+}
+
+/// Scan a backup's bytes into a `BackupManifest` JSON, with the bean ids its
+/// zip holds photos for. See [`de1_domain::scan_backup_bytes`].
+#[uniffi::export]
+#[must_use]
+pub fn scan_backup_bytes(bytes: Vec<u8>, photos: Vec<String>) -> String {
+    de1_domain::scan_backup_bytes_json(&bytes, &photos)
+}
+
+/// A backup's records, under the scan's line rules, as a `BackupImportPlan`
+/// JSON. See [`de1_domain::import_backup_bytes`].
+#[uniffi::export]
+#[must_use]
+pub fn import_backup_bytes(bytes: Vec<u8>) -> String {
+    de1_domain::import_backup_bytes_json(&bytes)
+}
+
+/// One restore, planned: a manifest JSON, a `LocalState` JSON, the mode
+/// (`merge` or `replace`) and a `RestoreOpts` JSON, to a `RestorePlan` JSON.
+/// See [`de1_domain::plan_restore`].
+///
+/// # Errors
+///
+/// Returns the parse error when an input is malformed.
+#[uniffi::export]
+pub fn plan_restore(
+    manifest_json: String,
+    local_json: String,
+    mode: String,
+    opts_json: String,
+) -> Result<String, CremaError> {
+    let mode: de1_domain::RestoreMode =
+        serde_json::from_value(serde_json::Value::String(mode)).map_err(crema_err)?;
+    de1_domain::plan_restore_json(&manifest_json, &local_json, mode, &opts_json).map_err(crema_err)
+}
+
+/// Whether a `CommonSettings` JSON is as a fresh install leaves it. See
+/// [`de1_domain::common_is_pristine`].
+#[uniffi::export]
+#[must_use]
+pub fn common_is_pristine(common_json: String) -> bool {
+    de1_domain::common_is_pristine_json(&common_json)
 }
 
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the

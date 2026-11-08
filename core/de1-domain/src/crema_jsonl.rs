@@ -316,6 +316,45 @@ pub struct BackupHeader {
     /// Absent in bundles made before custom methods existed.
     #[serde(default)]
     pub custom_method_count: usize,
+    /// Rows the export left out because they couldn't be read. The counts
+    /// above are of what was written, so a file with omissions still matches
+    /// its own header. Skipped when 0, so a clean backup keeps its bytes.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted_count: usize,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// One row a backup left out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OmittedBackupRow {
+    /// The row's line kind: `shot`, `bean`, `roaster`, `recipe`, `brewMethod`
+    /// or `profile`.
+    pub kind: &'static str,
+    /// Where the row sat in the envelope's list of that kind.
+    pub index: usize,
+    /// The row's id, when it got far enough to have one.
+    pub id: Option<String>,
+}
+
+/// What [`export_backup_jsonl_from_json`] built, and what it couldn't.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupExport {
+    /// The bundle, one record per line.
+    pub jsonl: String,
+    /// Ids of the shots written without their `profile`, which wouldn't read.
+    pub degraded: Vec<String>,
+    /// The rows left out. The header's `omittedCount` is this list's length.
+    pub omitted: Vec<OmittedBackupRow>,
+    /// Shots written.
+    pub shot_count: usize,
+    /// Shots written with a curve.
+    pub curve_count: usize,
 }
 
 /// The parsed contents of a backup bundle. Beans + roasters reuse the library
@@ -382,28 +421,41 @@ pub struct BackupImportPlan {
 /// recipeMeta:{…}, maintenance:{…}, visualizerPrefs:{…}}`. The last three are opaque to the core — it just
 /// line-tags and passes them through so both shells emit identical bytes.
 ///
+/// **One bad row can't block a backup.** Each row of `profiles`, `beans`,
+/// `roasters`, `shots`, `recipes` and `customMethods` is read on its own, and
+/// may be a JSON string holding the row: a shell that encodes rows separately
+/// keeps one row's invalid JSON (Android's `NaN`) out of the others. A shot
+/// that won't read is retried without its `profile`, and is reported in
+/// [`BackupExport::degraded`]; any other row that won't read is left out and
+/// reported in [`BackupExport::omitted`]. Everything left out counts in the
+/// header's `omittedCount`, so a file made this way matches its own header.
+/// A section with rows of which none could be read is a failed section, not a
+/// gap: that file would look like a good backup of nothing, and retention
+/// would let it replace the copies that hold those rows.
+///
 /// # Errors
-/// Returns the JSON parse error string when the envelope is malformed.
+/// Returns an error string when the envelope is malformed (not JSON, or a
+/// section that isn't a list of rows) or a section with rows kept none.
 pub fn export_backup_jsonl_from_json(
     envelope_json: &str,
     created_at_unix_ms: i64,
     app_version: &str,
     device_label: &str,
-) -> Result<String, String> {
+) -> Result<BackupExport, String> {
     #[derive(Deserialize)]
     struct In {
         #[serde(default)]
         profiles: Vec<serde_json::Value>,
         #[serde(default)]
-        beans: Vec<Bean>,
+        beans: Vec<serde_json::Value>,
         #[serde(default)]
-        roasters: Vec<Roaster>,
+        roasters: Vec<serde_json::Value>,
         #[serde(default)]
-        shots: Vec<StoredShot>,
+        shots: Vec<serde_json::Value>,
         #[serde(default)]
-        recipes: Vec<BrewRecipe>,
+        recipes: Vec<serde_json::Value>,
         #[serde(default, rename = "customMethods")]
-        custom_methods: Vec<CustomBrewMethod>,
+        custom_methods: Vec<serde_json::Value>,
         #[serde(default)]
         settings: serde_json::Value,
         #[serde(default, rename = "profileMeta")]
@@ -416,8 +468,15 @@ pub fn export_backup_jsonl_from_json(
         visualizer_prefs: serde_json::Value,
     }
     let inp: In = serde_json::from_str(envelope_json).map_err(|e| e.to_string())?;
-    let recipes: Vec<&BrewRecipe> = inp
-        .recipes
+    let mut omitted = Vec::new();
+    let profiles = read_rows(inp.profiles, "profile", &mut omitted, read_profile_row)?;
+    let beans: Vec<Bean> = read_rows(inp.beans, "bean", &mut omitted, read_row)?;
+    let roasters: Vec<Roaster> = read_rows(inp.roasters, "roaster", &mut omitted, read_row)?;
+    let shots: Vec<ShotRow> = read_rows(inp.shots, "shot", &mut omitted, read_shot_row)?;
+    let recipes: Vec<BrewRecipe> = read_rows(inp.recipes, "recipe", &mut omitted, read_row)?;
+    let custom_methods: Vec<CustomBrewMethod> =
+        read_rows(inp.custom_methods, "brewMethod", &mut omitted, read_row)?;
+    let recipes: Vec<&BrewRecipe> = recipes
         .iter()
         .filter(|r| !is_builtin_recipe(&r.id))
         .collect();
@@ -426,12 +485,13 @@ pub fn export_backup_jsonl_from_json(
         created_at: created_at_unix_ms,
         app_version: app_version.to_owned(),
         device_label: device_label.to_owned(),
-        profile_count: inp.profiles.len(),
-        bean_count: inp.beans.len(),
-        roaster_count: inp.roasters.len(),
-        shot_count: inp.shots.len(),
+        profile_count: profiles.len(),
+        bean_count: beans.len(),
+        roaster_count: roasters.len(),
+        shot_count: shots.len(),
         recipe_count: recipes.len(),
-        custom_method_count: inp.custom_methods.len(),
+        custom_method_count: custom_methods.len(),
+        omitted_count: omitted.len(),
     };
     let mut out = String::new();
     push_line(&mut out, &header);
@@ -453,27 +513,113 @@ pub fn export_backup_jsonl_from_json(
     if inp.visualizer_prefs.is_object() {
         push_tagged_line(&mut out, "visualizerPrefs", &inp.visualizer_prefs);
     }
-    for r in &inp.roasters {
+    for r in &roasters {
         push_tagged_line(&mut out, "roaster", r);
     }
-    for b in &inp.beans {
+    for b in &beans {
         push_tagged_line(&mut out, "bean", b);
     }
-    for s in &inp.shots {
-        push_tagged_line(&mut out, "shot", s);
+    for s in &shots {
+        push_tagged_line(&mut out, "shot", &s.shot);
     }
     // Custom methods before recipes: a restore that reads top-down meets a
     // recipe's `custom:` method after the method itself.
-    for m in &inp.custom_methods {
+    for m in &custom_methods {
         push_tagged_line(&mut out, "brewMethod", m);
     }
     for r in recipes {
         push_tagged_line(&mut out, "recipe", r);
     }
-    for p in &inp.profiles {
+    for p in &profiles {
         push_tagged_line(&mut out, "profile", p);
     }
+    Ok(BackupExport {
+        jsonl: out,
+        shot_count: shots.len(),
+        curve_count: shots
+            .iter()
+            .filter(|s| !s.shot.record.samples.is_empty())
+            .count(),
+        degraded: shots
+            .iter()
+            .filter(|s| s.without_profile)
+            .map(|s| s.shot.id.clone())
+            .collect(),
+        omitted,
+    })
+}
+
+/// A shot read for a backup, and whether its `profile` had to go.
+struct ShotRow {
+    shot: StoredShot,
+    without_profile: bool,
+}
+
+/// Read each row with `read`, recording the ones it can't. A row may be a JSON
+/// string holding the row itself. Fails when there were rows and none could be
+/// read.
+fn read_rows<T>(
+    rows: Vec<serde_json::Value>,
+    kind: &'static str,
+    omitted: &mut Vec<OmittedBackupRow>,
+    read: impl Fn(&serde_json::Value) -> Option<T>,
+) -> Result<Vec<T>, String> {
+    let total = rows.len();
+    let mut out = Vec::with_capacity(total);
+    for (index, row) in rows.into_iter().enumerate() {
+        let row = match row {
+            serde_json::Value::String(text) => {
+                serde_json::from_str(&text).unwrap_or(serde_json::Value::Null)
+            }
+            other => other,
+        };
+        match read(&row) {
+            Some(value) => out.push(value),
+            None => omitted.push(OmittedBackupRow {
+                kind,
+                index,
+                id: row
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+            }),
+        }
+    }
+    if total > 0 && out.is_empty() {
+        return Err(format!("none of the {total} {kind} rows could be read"));
+    }
     Ok(out)
+}
+
+fn read_row<T: serde::de::DeserializeOwned>(row: &serde_json::Value) -> Option<T> {
+    T::deserialize(row).ok()
+}
+
+/// A profile rides verbatim, so its row only has to be what a restore adopts:
+/// an object with an id.
+fn read_profile_row(row: &serde_json::Value) -> Option<serde_json::Value> {
+    row.get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(|_| row.clone())
+}
+
+/// A shot whose `profile` won't read still has a curve and a journal worth
+/// keeping, so it's retried without the `profile`, as Decent does.
+fn read_shot_row(row: &serde_json::Value) -> Option<ShotRow> {
+    if let Ok(shot) = StoredShot::deserialize(row) {
+        return Some(ShotRow {
+            shot,
+            without_profile: false,
+        });
+    }
+    let mut bare = row.clone();
+    bare.as_object_mut()?.remove("profile");
+    let shot = StoredShot::deserialize(&bare).ok()?;
+    Some(ShotRow {
+        shot,
+        without_profile: true,
+    })
 }
 
 /// Parse a backup bundle. Reuses [`parse_jsonl`] for beans/roasters/shots (it
@@ -628,7 +774,9 @@ mod tests {
             ..crate::ShotBean::default()
         });
         let envelope = serde_json::json!({ "shots": [shot] }).to_string();
-        let text = export_backup_jsonl_from_json(&envelope, 1, "test", "test").unwrap();
+        let text = export_backup_jsonl_from_json(&envelope, 1, "test", "test")
+            .unwrap()
+            .jsonl;
         assert!(text.contains("\"privacy\":\"private\""));
         let plan = parse_backup_jsonl(&text);
         assert_eq!(plan.shots.len(), 1);
@@ -637,6 +785,223 @@ mod tests {
             plan.shots[0].bean.as_ref().and_then(|b| b.notes.as_deref()),
             Some("jasmine")
         );
+    }
+
+    /// A shot row with a curve, the way a shell hands it over.
+    fn shot_row(id: &str) -> serde_json::Value {
+        let mut shot = StoredShot::new(
+            1_700_000_000_000,
+            crate::ShotRecord {
+                duration: std::time::Duration::from_secs(30),
+                samples: Vec::new(),
+            },
+        );
+        shot.id = id.to_owned();
+        serde_json::to_value(shot).unwrap()
+    }
+
+    fn custom_method_row() -> serde_json::Value {
+        serde_json::json!({
+            "id": "custom:orb", "label": "ORB", "style": "percolation",
+            "createdAt": 1, "updatedAt": 2,
+        })
+    }
+
+    fn header_of(jsonl: &str) -> BackupHeader {
+        serde_json::from_str(jsonl.lines().next().unwrap()).unwrap()
+    }
+
+    fn export(envelope: &serde_json::Value) -> BackupExport {
+        export_backup_jsonl_from_json(&envelope.to_string(), 1, "test", "test").unwrap()
+    }
+
+    /// #329: one unreadable row used to throw for the whole file.
+    #[test]
+    fn an_unreadable_shot_is_left_out_and_the_rest_are_backed_up() {
+        let built = export(&serde_json::json!({
+            "shots": [shot_row("good"), { "id": "bad", "record": "not a record" }, shot_row("also")],
+        }));
+        assert_eq!(
+            built.omitted,
+            vec![OmittedBackupRow {
+                kind: "shot",
+                index: 1,
+                id: Some("bad".to_owned()),
+            }]
+        );
+        let header = header_of(&built.jsonl);
+        assert_eq!(header.shot_count, 2, "the header counts what was written");
+        assert_eq!(header.omitted_count, 1);
+        let plan = parse_backup_jsonl(&built.jsonl);
+        let ids: Vec<&str> = plan.shots.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["good", "also"]);
+    }
+
+    /// As Decent does: the curve and the journal outlive a bad `profile`.
+    #[test]
+    fn a_shot_with_an_unreadable_profile_is_backed_up_without_it() {
+        let mut row = shot_row("s1");
+        row["profile"] = serde_json::json!("not a profile");
+        row["profileName"] = serde_json::json!("Londinium");
+        let built = export(&serde_json::json!({ "shots": [row] }));
+        assert_eq!(built.degraded, ["s1"]);
+        assert!(built.omitted.is_empty());
+        assert_eq!(header_of(&built.jsonl).omitted_count, 0);
+        let plan = parse_backup_jsonl(&built.jsonl);
+        assert!(plan.shots[0].profile.is_none());
+        assert_eq!(plan.shots[0].profile_name.as_deref(), Some("Londinium"));
+    }
+
+    #[test]
+    fn a_shot_still_unreadable_without_its_profile_is_left_out() {
+        let mut row = shot_row("s1");
+        row["profile"] = serde_json::json!("not a profile");
+        row["record"] = serde_json::json!(5);
+        let built = export(&serde_json::json!({ "shots": [shot_row("good"), row] }));
+        assert!(built.degraded.is_empty());
+        assert_eq!(built.omitted.len(), 1);
+        assert_eq!(header_of(&built.jsonl).shot_count, 1);
+    }
+
+    #[test]
+    fn an_export_counts_the_shots_it_wrote_and_their_curves() {
+        let mut curved = shot_row("curved");
+        curved["record"]["samples"] = serde_json::json!([{
+            "elapsed": 100,
+            "sample": {
+                "sampleTime": 10, "groupPressure": 9.0, "groupFlow": 2.0, "headTemp": 92.0,
+                "mixTemp": 93.0, "setMixTemp": 93.0, "setHeadTemp": 92.0, "setGroupPressure": 9.0,
+                "setGroupFlow": 0.0, "frameNumber": 1, "steamTemp": 140,
+            },
+        }]);
+        let built = export(&serde_json::json!({
+            "shots": [curved, shot_row("bare"), { "id": "bad", "record": "not a record" }],
+        }));
+        assert_eq!((built.shot_count, built.curve_count), (2, 1));
+    }
+
+    /// Every kind of row, not just shots.
+    #[test]
+    fn an_unreadable_row_of_any_kind_is_left_out() {
+        let bad = serde_json::json!({ "id": "bad", "name": 5, "steps": 5, "createdAt": "x" });
+        let recipe = crate::duplicate_recipe(
+            &crate::builtin_brew_recipe("builtin:hoffmann-1-cup-v60").unwrap(),
+            "recipe:copy",
+            1_700,
+        );
+        let cases = [
+            (
+                "beans",
+                "bean",
+                serde_json::to_value(sample_bean("b1", "Good", None)).unwrap(),
+            ),
+            (
+                "roasters",
+                "roaster",
+                serde_json::to_value(sample_roaster("r1", "Good")).unwrap(),
+            ),
+            ("recipes", "recipe", serde_json::to_value(recipe).unwrap()),
+            ("customMethods", "brewMethod", custom_method_row()),
+        ];
+        for (key, kind, good) in cases {
+            let built = export(&serde_json::json!({ key: [good, bad] }));
+            assert_eq!(built.omitted.len(), 1, "{key}");
+            assert_eq!(built.omitted[0].kind, kind);
+            assert_eq!(built.omitted[0].id.as_deref(), Some("bad"));
+            assert_eq!(header_of(&built.jsonl).omitted_count, 1);
+            assert_eq!(
+                built.jsonl.lines().count(),
+                2,
+                "the header and the good row: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_profile_row_needs_an_id() {
+        let built = export(&serde_json::json!({
+            "profiles": [{ "id": "p1", "title": "Mine" }, { "title": "No id" }, 5],
+        }));
+        assert_eq!(built.omitted.len(), 2);
+        assert_eq!(header_of(&built.jsonl).profile_count, 1);
+        assert_eq!(parse_backup_jsonl(&built.jsonl).profiles.len(), 1);
+    }
+
+    /// Android hands rows over as strings, so one `NaN` costs one row: in a
+    /// single envelope it would make the whole thing invalid JSON.
+    #[test]
+    fn rows_can_arrive_as_strings_and_invalid_json_costs_only_that_row() {
+        let good = shot_row("good");
+        let as_objects = export(&serde_json::json!({ "shots": [good] }));
+        let as_strings = export(&serde_json::json!({ "shots": [good.to_string()] }));
+        assert_eq!(as_strings.jsonl, as_objects.jsonl, "same bytes either way");
+
+        let built = export(&serde_json::json!({
+            "shots": [good.to_string(), r#"{"id":"nan","x":NaN}"#, serde_json::Value::Null],
+        }));
+        let at: Vec<(usize, Option<&str>)> = built
+            .omitted
+            .iter()
+            .map(|o| (o.index, o.id.as_deref()))
+            .collect();
+        assert_eq!(
+            at,
+            [(1, None), (2, None)],
+            "the shell looks an id up by index"
+        );
+        assert_eq!(parse_backup_jsonl(&built.jsonl).shots.len(), 1);
+    }
+
+    /// A clean backup keeps its bytes: the key is written only when it counts.
+    #[test]
+    fn a_clean_backup_has_no_omitted_count_and_an_old_header_reads_as_zero() {
+        let built = export(&serde_json::json!({ "shots": [shot_row("good")] }));
+        assert!(!built.jsonl.contains("omittedCount"));
+        let bad = export(&serde_json::json!({ "shots": [shot_row("good"), 5] }));
+        assert!(bad.jsonl.contains("\"omittedCount\":1"));
+        assert_eq!(header_of(&built.jsonl).omitted_count, 0);
+    }
+
+    /// 300 unreadable shots would otherwise be a file with `shotCount: 0`: it
+    /// reports success, uploads, and lets retention drop the good copies.
+    #[test]
+    fn a_section_with_rows_and_none_readable_fails_the_backup() {
+        for key in [
+            "shots",
+            "beans",
+            "roasters",
+            "recipes",
+            "customMethods",
+            "profiles",
+        ] {
+            let envelope = serde_json::json!({ key: [5, "{ not json", serde_json::Value::Null] });
+            let error = export_backup_jsonl_from_json(&envelope.to_string(), 1, "t", "t");
+            assert!(error.is_err(), "{key}");
+        }
+    }
+
+    /// An empty section is an empty library, not a failure.
+    #[test]
+    fn an_empty_section_is_not_a_failure() {
+        let built = export(&serde_json::json!({ "shots": [], "beans": [] }));
+        assert!(built.omitted.is_empty());
+    }
+
+    /// Dropping built-ins isn't losing rows: a list of them backs up as none.
+    #[test]
+    fn a_section_of_only_builtin_recipes_is_not_a_failure() {
+        let builtin = crate::builtin_brew_recipe("builtin:hoffmann-1-cup-v60").unwrap();
+        let built = export(&serde_json::json!({ "recipes": [builtin] }));
+        assert!(built.omitted.is_empty());
+        assert_eq!(header_of(&built.jsonl).recipe_count, 0);
+    }
+
+    /// A section that isn't a list is the shell's bug: no file at all, not an
+    /// empty one that passes for a backup.
+    #[test]
+    fn a_section_that_is_not_a_list_fails_the_backup() {
+        assert!(export_backup_jsonl_from_json(r#"{"shots":{}}"#, 1, "t", "t").is_err());
+        assert!(export_backup_jsonl_from_json("not json", 1, "t", "t").is_err());
     }
 
     /// #303: what a shot took from its bag survives a backup, and a row from
@@ -651,7 +1016,9 @@ mod tests {
         recorded.bag_debit = Some(10.5);
         let old = StoredShot::new(1_700_000_000_001, record());
         let envelope = serde_json::json!({ "shots": [recorded, old] }).to_string();
-        let text = export_backup_jsonl_from_json(&envelope, 1, "test", "test").unwrap();
+        let text = export_backup_jsonl_from_json(&envelope, 1, "test", "test")
+            .unwrap()
+            .jsonl;
         assert_eq!(text.matches("\"bagDebit\"").count(), 1);
         let plan = parse_backup_jsonl(&text);
         assert_eq!(plan.shots[0].bag_debit, Some(10.5));
@@ -806,7 +1173,8 @@ mod tests {
         });
         let jsonl =
             export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
-                .unwrap();
+                .unwrap()
+                .jsonl;
         assert!(
             jsonl
                 .lines()
@@ -883,7 +1251,8 @@ mod tests {
         });
         let jsonl =
             export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
-                .unwrap();
+                .unwrap()
+                .jsonl;
 
         let plan = parse_backup_jsonl(&jsonl);
         assert_eq!(plan.shots.len(), 1);
@@ -920,7 +1289,8 @@ mod tests {
         });
         let jsonl =
             export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
-                .unwrap();
+                .unwrap()
+                .jsonl;
         assert!(jsonl.contains(r#""decentId":"98765""#), "{jsonl}");
         assert!(jsonl.contains(r#""serialNumber":"6262""#), "{jsonl}");
 
@@ -958,7 +1328,8 @@ mod tests {
             "0.0.1",
             "Pixel",
         )
-        .unwrap();
+        .unwrap()
+        .jsonl;
         assert!(!jsonl.contains("builtin:hoffmann-1-cup-v60"), "{jsonl}");
         let header: BackupHeader = serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
         assert_eq!(header.recipe_count, 2);
@@ -1023,8 +1394,9 @@ mod tests {
             "shots": [shot],
             "recipes": [recipe],
         });
-        let jsonl =
-            export_backup_jsonl_from_json(&envelope.to_string(), 1, "0.0.1", "Pixel").unwrap();
+        let jsonl = export_backup_jsonl_from_json(&envelope.to_string(), 1, "0.0.1", "Pixel")
+            .unwrap()
+            .jsonl;
         let header: BackupHeader = serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
         assert_eq!(header.custom_method_count, 2);
         assert_eq!(jsonl.matches(r#""kind":"brewMethod""#).count(), 2);
@@ -1110,7 +1482,8 @@ mod tests {
         });
         let jsonl =
             export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
-                .unwrap();
+                .unwrap()
+                .jsonl;
         assert!(jsonl.contains(r#""brewMethod":"pourover""#), "{jsonl}");
         assert!(jsonl.contains(r#""recipeName":"Hoffmann V60""#), "{jsonl}");
         assert!(jsonl.contains(r#""waterG":250"#), "{jsonl}");
@@ -1166,7 +1539,8 @@ mod tests {
         });
         let jsonl =
             export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
-                .unwrap();
+                .unwrap()
+                .jsonl;
         // The StoredShot-level brew fields are omitted outright; the
         // metadata's `waterG` follows its siblings (`nextPlan`, `tds`, …)
         // and serialises as null, which older builds ignore.
@@ -1191,7 +1565,8 @@ mod tests {
         });
         let jsonl =
             export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
-                .unwrap();
+                .unwrap()
+                .jsonl;
         assert!(!jsonl.contains("decentId"), "{jsonl}");
         assert!(!jsonl.contains("\"machine\""), "{jsonl}");
         assert_eq!(parse_backup_jsonl(&jsonl).shots[0].machine, None);

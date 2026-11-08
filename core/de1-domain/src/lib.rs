@@ -55,6 +55,8 @@
 
 pub mod app_settings;
 pub mod auto_tare;
+pub mod backup_plan;
+pub mod backup_retention;
 pub mod bean;
 pub mod bean_coerce;
 pub mod bean_filter;
@@ -111,6 +113,8 @@ pub mod steam;
 pub mod step_weight;
 pub mod stolen_serials;
 pub mod stop;
+pub mod sync_failure;
+pub mod sync_run;
 pub mod tank;
 pub mod units;
 pub mod visualizer_catalogue;
@@ -124,6 +128,17 @@ pub mod weight_gate;
 pub use auto_tare::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_SETTLE_BAND_G, AUTO_TARE_SETTLE_SAMPLES, AUTO_TARE_THRESHOLD_G,
     MAX_PRE_SHOT_ZERO_OFFSET_G, TareSettleWindow, pre_shot_zero_offset,
+};
+pub use backup_plan::{
+    BackupLine, BackupManifest, BackupScan, LineError, LocalState, RestoreMode, RestoreOpts,
+    RestorePlan, common_is_pristine, common_is_pristine_json, import_backup_bytes,
+    import_backup_bytes_json, parse_backup_line, plan_restore, plan_restore_json,
+    scan_backup_bytes, scan_backup_bytes_json,
+};
+pub use backup_retention::{
+    AutoBackupName, AutoBackupRetention, BackupCounts, BackupFile, BackupFileInfo, BackupShrink,
+    BackupShrinkKind, auto_backup_file_name, auto_backup_retention, auto_backup_retention_json,
+    describe_backup_file, describe_backup_file_json, parse_auto_backup_name,
 };
 pub use bean::{
     BREWS_REMAINING_WINDOW, BagStock, Bean, BeanMix, BeanOrigin, BeanRoastType,
@@ -207,9 +222,9 @@ pub use connect_sweep::{
     ConnectSweepSettings, USB_CHARGER_CHECK_INTERVAL_MS, UsbChargingMode, usb_charger_decision,
 };
 pub use crema_jsonl::{
-    BackupHeader, BackupImportPlan, CremaExportHeader, export_backup_jsonl_from_json, export_jsonl,
-    export_jsonl_from_json, import_backup_jsonl_to_plan_json, import_jsonl_to_plan_json,
-    parse_backup_jsonl, parse_jsonl,
+    BackupExport, BackupHeader, BackupImportPlan, CremaExportHeader, OmittedBackupRow,
+    export_backup_jsonl_from_json, export_jsonl, export_jsonl_from_json,
+    import_backup_jsonl_to_plan_json, import_jsonl_to_plan_json, parse_backup_jsonl, parse_jsonl,
 };
 pub use crema_profile::{
     BrewDefaults, CremaProfile, ProfileSegment, ProfileSource, Roast, blank_crema_profile_json,
@@ -310,6 +325,15 @@ pub use stop::{
     AutoStop, STOP_WEIGHT_BEFORE, StopCapture, StopConfig, StopReason, StopTargets,
     sav_counts_volume, volume_stop_arms,
 };
+pub use sync_failure::{
+    AccountBlockReason, RETRY_AFTER_CAP_MS, SyncFailure, SyncOperation, SyncService,
+    classify_sync_failure, classify_sync_failure_json, parse_retry_after, rate_limit_wait_ms,
+};
+pub use sync_run::{
+    AccountChange, AttentionReason, BlockReason, PartialReason, RunOutcome, SyncHealth, WaitReason,
+    account_change_action, reconnect_notice_due, reconnect_notice_due_json, sync_health_after_run,
+    sync_health_after_run_json,
+};
 pub use tank::{
     DEFAULT_REFILL_POINT_MM, LowWaterMonitor, REFILL_POINT_MAX_MM, REFILL_POINT_MIN_MM,
     REFILL_SOON_MARGIN_MM, SENSOR_OFFSET_MM, TANK_FULL_ML, TANK_LEVEL_SMOOTHING_TAU_S,
@@ -331,17 +355,18 @@ pub use visualizer_catalogue::{
     parse_catalogue_roasters, parse_catalogue_roasters_json, roaster_match_key,
 };
 pub use visualizer_error::{
-    AUTH_PARK_MS, MAX_QUEUE_ATTEMPTS, QueueDecision, QueueOp, RefreshFailure,
+    AUTH_PARK_MS, DELETE_PARK_MS, MAX_QUEUE_ATTEMPTS, QueueDecision, QueueOp, RefreshFailure,
     VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, classify_token_refresh_failure,
-    is_recoverable, retry_backoff_ms, visualizer_queue_decision, visualizer_queue_decision_json,
-    visualizer_quota_limit,
+    is_recoverable, retry_backoff_ms, upload_refused_no_samples, visualizer_queue_decision,
+    visualizer_queue_decision_json, visualizer_quota_limit,
 };
 pub use visualizer_sync::{
     BeanReconcileAction, GuardedVisualizerPrefs, LocalShotRef, PulledBag, ReconcileAction,
     RoasterReconcileAction, WireShot, guard_restored_visualizer_prefs,
-    guard_restored_visualizer_prefs_json, reconcile_beans, reconcile_beans_json,
-    reconcile_pulled_bags, reconcile_roasters, reconcile_roasters_json, reconcile_shots,
-    reconcile_shots_json, signature_for_bean, signature_for_roaster, signature_for_shot,
+    guard_restored_visualizer_prefs_json, pull_covers_attempt, reconcile_beans,
+    reconcile_beans_json, reconcile_pulled_bags, reconcile_roasters, reconcile_roasters_json,
+    reconcile_shots, reconcile_shots_json, shot_upload_key, signature_for_bean,
+    signature_for_roaster, signature_for_shot,
 };
 pub use visualizer_wire::{
     BagWire, RoasterWire, ShotPatchInputs, VISUALIZER_PREMIUM_SHOT_FIELDS, VISUALIZER_SHOT_FIELDS,

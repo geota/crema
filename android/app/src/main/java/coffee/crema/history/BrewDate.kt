@@ -1,5 +1,7 @@
 package coffee.crema.history
 
+import coffee.crema.ui.HistoryRows
+import coffee.crema.ui.with
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -58,13 +60,34 @@ fun mergeHistory(added: List<StoredShot>, history: List<StoredShot>, keepId: Str
     return HistoryMerge(rows, rows.filter { it.id in addedIds }, added.size + history.size - rows.size)
 }
 
-/** The list [mergeHistory] leaves. */
-fun historyWith(added: List<StoredShot>, history: List<StoredShot>, keepId: String? = null): List<StoredShot> =
-    mergeHistory(added, history, keepId).rows
+/**
+ * [history] with the rows of a Visualizer pull that fit. A pull never removes a
+ * row: the oldest ones can be brew logs or shots that never reached Visualizer.
+ * So the cap refuses what doesn't fit, in the order given, and [HistoryMerge.dropped]
+ * stays 0. Rows already here are left out.
+ */
+fun mergePulled(added: List<StoredShot>, history: List<StoredShot>, cap: Int = HistoryStore.MAX_SHOTS): HistoryMerge {
+    val present = history.mapTo(HashSet()) { it.id }
+    val kept = added.filter { it.id !in present }.take((cap - history.size).coerceAtLeast(0))
+    if (kept.isEmpty()) return HistoryMerge(history, emptyList(), 0)
+    return HistoryMerge((kept + history).newestFirst(), kept, 0)
+}
+
+/** The rows [mergeHistory] leaves, inside an edit. */
+fun historyWith(added: List<StoredShot>, history: HistoryRows, keepId: String? = null): HistoryRows =
+    history.with(mergeHistory(added, history, keepId).rows)
 
 /** What to say when the cap dropped rows, or nothing when it didn't. */
 fun historyDroppedNotice(dropped: Int, cap: Int = HistoryStore.MAX_SHOTS): String =
     if (dropped > 0) ". History keeps the newest $cap, so $dropped older shot${if (dropped == 1) " was" else "s were"} dropped" else ""
+
+/**
+ * What to say when a full history refused rows a pull brought. The next Sync
+ * won't look for them, because the cursor has moved past them: Re-sync does.
+ */
+fun historyFullNotice(refused: Int, cap: Int = HistoryStore.MAX_SHOTS): String =
+    "History is full at $cap shots, so $refused shot${if (refused == 1) " from Visualizer wasn’t" else "s from Visualizer weren’t"} added. " +
+        "After freeing up space, use Re-sync shots to fetch ${if (refused == 1) "it" else "them"}"
 
 /** [atMs]'s local date. */
 fun localDateOf(atMs: Long, zone: ZoneId = ZoneId.systemDefault()): LocalDate =

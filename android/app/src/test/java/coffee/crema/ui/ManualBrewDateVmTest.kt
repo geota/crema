@@ -28,6 +28,8 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class ManualBrewDateVmTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val store = ViewModelStore()
     private val now = 1_700_000_000_000
     private val hour = 3_600_000L
@@ -124,6 +126,21 @@ class ManualBrewDateVmTest {
         vm.updateManualBrew("machine", completedAtMs = now - hour)
         assertEquals(now, history(vm).single().completedAtMs)
         assertNull(history(vm).single().brewMethod)
+    }
+
+    @Test
+    fun `pull_never_evicts_at_cap`() {
+        val brews = List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now - i * hour) }
+        val oldest = brews.last().copy(id = "brew-log", brewMethod = "pourover")
+        val rows = brews.dropLast(1) + oldest
+        stored(rows)
+        val vm = vm()
+
+        val refused = VmHarness.library(vm).insertPulledShots(listOf(machine("new", now + hour)))
+        VmHarness.idle()
+
+        assertEquals(setOf("new"), refused)
+        assertEquals(rows.map { it.id }, history(vm).map { it.id })
     }
 
     /** A store file already holding [rows], as a VM built next would load it. */

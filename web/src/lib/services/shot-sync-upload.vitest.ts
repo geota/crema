@@ -111,7 +111,14 @@ function run<A, E>(program: Effect.Effect<A, E, ShotSync>, http: Layer.Layer<Htt
 
 /** A minimal StoredShot — only the fields uploadShot reads matter here. */
 const shot = (over: Partial<StoredShot> = {}): StoredShot =>
-	({ id: 's1', bean: null, tags: [], grinderModel: null, ...over }) as unknown as StoredShot;
+	({
+		id: 's1',
+		bean: null,
+		tags: [],
+		grinderModel: null,
+		record: { duration: 30_000, samples: [{ t: 0 }] },
+		...over
+	}) as unknown as StoredShot;
 
 const postBody = (calls: HttpRequest[]) =>
 	JSON.parse(calls.find((c) => c.method === 'POST')!.body as string) as Record<string, unknown>;
@@ -152,6 +159,24 @@ describe('ShotSync.uploadShot — payload shaping', () => {
 		const { layer, calls } = mkHttp(() => ({ ok: true, json: { id: 'viz-1' } }));
 		await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot()))), layer);
 		expect((postBody(calls).metadata as Record<string, unknown>).notes).toBeNull();
+	});
+});
+
+describe('ShotSync.uploadShot — the no-telemetry guard (#330)', () => {
+	it('non_brew_no_samples_refused: refuses before any request', async () => {
+		const { layer, calls } = mkHttp(() => ({ ok: true, json: { id: 'viz-1' } }));
+		const bare = shot({ record: { duration: 30_000, samples: [] } } as Partial<StoredShot>);
+
+		const out = await run(
+			ShotSync.pipe(
+				Effect.flatMap((s) => s.uploadShot(bare)),
+				Effect.flip
+			),
+			layer
+		);
+
+		expect(out).toMatchObject({ _tag: 'Success', value: { _tag: 'ShotWithoutSeriesError' } });
+		expect(calls).toEqual([]);
 	});
 });
 

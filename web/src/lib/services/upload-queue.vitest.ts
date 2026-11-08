@@ -19,6 +19,7 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 // runEntry reaches the history store via `#lib/history/index.js`; mock it so no real
 // rune store is instantiated and we can observe the bind / purge calls.
 const mockHistory = {
+	seriesReady: vi.fn(async () => true),
 	get: vi.fn(),
 	bindVisualizerId: vi.fn(),
 	purgeTombstone: vi.fn()
@@ -32,11 +33,13 @@ import {
 	HttpStatusError,
 	NetworkError,
 	NotAuthenticatedError,
+	ShotWithoutSeriesError,
 	TokenRefreshFailedError,
 	VisualizerPremiumGatedError
 } from '../effect/errors.ts';
 import { enqueueEntry, readQueue } from './queue-store.ts';
 import { initTestWasm } from '#lib/testing/test-init.js';
+import { toast } from '#lib/components/shared/toast.svelte.js';
 
 // The drain's recoverable-vs-drop decision goes through the wasm-backed
 // `isRecoverable` (CORE5), so init the bundle first.
@@ -111,6 +114,8 @@ function drainWith(
 beforeEach(() => {
 	localStorage.clear();
 	vi.restoreAllMocks();
+	// The backoffs carry random jitter; these tests jump the clock to exact times.
+	vi.spyOn(Math, 'random').mockReturnValue(0);
 	mockHistory.get.mockReset();
 	mockHistory.bindVisualizerId.mockReset();
 	mockHistory.purgeTombstone.mockReset();
@@ -131,6 +136,45 @@ describe('UploadQueue.drain — shot create', () => {
 		expect(result.processed).toBe(1);
 		expect(mockHistory.bindVisualizerId).toHaveBeenCalledWith('s1', 'viz-1');
 		expect(readQueue().entries).toHaveLength(0);
+	});
+
+	it('reads the row only after its series have landed, spending no attempt', async () => {
+		let land = (_: boolean): void => {};
+		mockHistory.seriesReady.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
+		const hydrated = { id: 's1', visualizerId: undefined };
+		mockHistory.get.mockReturnValue(hydrated);
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+		const uploads: unknown[] = [];
+
+		const draining = drainWith({
+			uploadShot: (s) => {
+				uploads.push(s);
+				return Effect.succeed({ visualizerId: 'viz-1' });
+			}
+		});
+		await vi.waitFor(() => expect(mockHistory.seriesReady).toHaveBeenCalled());
+		await Promise.resolve();
+		expect(uploads).toEqual([]);
+		expect(mockHistory.get).not.toHaveBeenCalled();
+		expect(readQueue().entries[0].attempts).toBe(0);
+
+		land(true);
+
+		expect((await draining).succeeded).toBe(1);
+		expect(uploads).toEqual([hydrated]);
+	});
+
+	it('non_brew_no_samples_refused: drops the entry on the first try, with no retry', async () => {
+		mockHistory.get.mockReturnValue({ id: 's1', visualizerId: undefined });
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+
+		const result = await drainWith({
+			uploadShot: () => Effect.fail(new ShotWithoutSeriesError({ shotId: 's1' }))
+		});
+
+		expect(result.dropped).toBe(1);
+		expect(readQueue().entries).toHaveLength(0);
+		expect(mockHistory.bindVisualizerId).not.toHaveBeenCalled();
 	});
 
 	it('drops a non-recoverable failure (premium) on the first drain', async () => {
@@ -197,6 +241,85 @@ describe('UploadQueue.drain — shot create', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe('UploadQueue.drain — a remote delete outlives its attempts (#331)', () => {
+	it('delete_after_3_failures_retries: parks without dropping, and a later try lands', async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(0);
+			enqueueEntry({ entity: 'shot', id: 's1', op: 'delete', visualizerId: 'viz-9' });
+			const down = {
+				deleteShot: () => Effect.fail(new HttpStatusError({ status: 503, url: '/d' }))
+			};
+			for (const at of [0, 60_000, 120_000]) {
+				vi.setSystemTime(at);
+				await drainWith(down);
+			}
+			const parked = readQueue().entries[0];
+			expect(parked?.attempts).toBe(2);
+			expect(parked?.nextAttemptAt).toBe(120_000 + 3_600_000);
+
+			vi.setSystemTime(120_000 + 3_600_000 - 1);
+			expect((await drainWith(down)).processed).toBe(0);
+
+			vi.setSystemTime(120_000 + 3_600_000);
+			expect((await drainWith(down)).dropped).toBe(0);
+			expect(readQueue().entries).toHaveLength(1);
+
+			vi.setSystemTime(120_000 + 2 * 3_600_000);
+			expect((await drainWith({ deleteShot: () => Effect.void })).succeeded).toBe(1);
+			expect(readQueue().entries).toHaveLength(0);
+			expect(mockHistory.purgeTombstone).toHaveBeenCalledWith('s1');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('a shot deleted before its retry is not uploaded', async () => {
+		mockHistory.get.mockReturnValue({ id: 's1', deletedAt: 5 });
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v' }));
+		const result = await drainWith({ uploadShot });
+		expect(uploadShot).not.toHaveBeenCalled();
+		expect(result.succeeded).toBe(1);
+		expect(readQueue().entries).toHaveLength(0);
+	});
+
+	it('a terminal failure stops the delete and leaves the tombstone', async () => {
+		const notice = vi.spyOn(toast, 'error').mockImplementation(() => {});
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'delete', visualizerId: 'viz-9' });
+		const result = await drainWith({
+			deleteShot: () => Effect.fail(new HttpStatusError({ status: 403, url: '/d', body: '{"error":"You are not authorized to perform this action."}' }))
+		});
+		expect(result.dropped).toBe(1);
+		expect(mockHistory.purgeTombstone).not.toHaveBeenCalled();
+		expect(notice).toHaveBeenCalledTimes(1);
+		expect(notice.mock.calls[0][0]).toContain('refused to delete a shot');
+	});
+});
+
+describe('UploadQueue.drain — a row that throws (#329)', () => {
+	it('drops that entry and carries on past it', async () => {
+		mockHistory.get.mockImplementation((id: string) => ({ id }));
+		enqueueEntry({ entity: 'shot', id: 'throws', op: 'create' });
+		enqueueEntry({ entity: 'shot', id: 'fine', op: 'create' });
+		const uploaded: string[] = [];
+		const result = await drainWith({
+			uploadShot: (shot) =>
+				Effect.sync(() => {
+					const { id } = shot as { id: string };
+					if (id === 'throws') throw new Error('not serialisable');
+					uploaded.push(id);
+					return { visualizerId: 'v' };
+				})
+		});
+		expect(uploaded).toEqual(['fine']);
+		expect(result.processed).toBe(2);
+		expect(result.succeeded).toBe(1);
+		expect(result.dropped).toBe(1);
+		expect(readQueue().entries).toHaveLength(0);
 	});
 });
 

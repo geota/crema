@@ -46,7 +46,7 @@ class SettingsPushTest {
             """{"kind":"crema-backup/v1","createdAt":1}""",
             """{"kind":"settings","_shell":"android","common":{"maxShotDurationS":45,"weightUnit":"oz"}}""",
         ).joinToString("\n")
-        vm.restoreBackupFromText(bundle, MainViewModel.RestoreMode.MERGE)
+        vm.restoreBackupFromText(bundle, MainViewModel.RestoreMode.WIPE)
         VmHarness.idleUntil("restore applied") { vm.ui.value.maxShotDurationS == 45f }
         assertEquals(45f, vm.coreMaxTime())
 

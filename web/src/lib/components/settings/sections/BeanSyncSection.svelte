@@ -14,7 +14,8 @@
 	 */
 	import { onMount } from 'svelte';
 	import { getBeanStore, readSyncSettings, type SyncResult as BeanSyncResult } from '#lib/bean/index.js';
-	import { getHistoryStore, isBrewLog } from '#lib/history/index.js';
+	import { getHistoryStore } from '#lib/history/index.js';
+	import { historyFullNotice } from '#lib/history/brew-date.js';
 	import {
 		appendSyncLog,
 		directionPulls,
@@ -26,7 +27,7 @@
 	} from '#lib/visualizer/index.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
-	import { describeUnsyncedStop, type PullOptions } from '#lib/services/shot-sync.js';
+	import { describeUnsyncedStop, type PullApplied, type PullOptions } from '#lib/services/shot-sync.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -54,10 +55,12 @@
 	async function svcPullAndReconcile(
 		sinceMs: number,
 		opts: PullOptions
-	): Promise<{ pulled: number; truncated: boolean }> {
+	): Promise<PullApplied> {
 		const api = appCtx().services;
 		if (!api) throw new Error('Visualizer runtime unavailable');
-		return api.shots.pullAndReconcile(history, sinceMs, opts);
+		const result = await api.shots.pullAndReconcile(history, sinceMs, opts);
+		if (result.refused > 0) toast.error(historyFullNotice(result.refused, history.capacity));
+		return result;
 	}
 	async function svcUploadUnsynced(): Promise<void> {
 		const result = await appCtx().services?.shots.uploadUnsynced(history);
@@ -327,7 +330,8 @@
 		}
 	}
 
-	const unsyncedShotCount = $derived(history.all.filter((s) => !s.visualizerId && !isBrewLog(s)).length);
+	const unsyncedShotCount = $derived(history.visualizerBacklog.length);
+	const noTelemetryCount = $derived(history.withoutTelemetry.length);
 </script>
 
 {#if viz.connected}
@@ -400,7 +404,7 @@
 
 		<StRow
 			title="Shots"
-			sub={`${history.all.length} shot(s) on this device${unsyncedShotCount > 0 ? `, ${unsyncedShotCount} unsynced` : ''}. Last sync: ${syncTimeLabel(config.lastSyncAt.shots)}.`}
+			sub={`${history.all.length} shot(s) on this device${unsyncedShotCount > 0 ? `, ${unsyncedShotCount} unsynced` : ''}${noTelemetryCount > 0 ? `, ${noTelemetryCount} without telemetry` : ''}. Last sync: ${syncTimeLabel(config.lastSyncAt.shots)}.`}
 		>
 			{#snippet control()}
 				<StSegment

@@ -105,6 +105,8 @@
 	import { moveShotBag } from '#lib/bean/move-shot-bag.js';
 	import { onMount, untrack } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
+	import { uploadPending } from '#lib/history/store.svelte.js';
+	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
 	import { readQueue } from '#lib/services/queue-store.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { describeUnsyncedStop } from '#lib/services/shot-sync.js';
@@ -364,7 +366,7 @@
 		return { pip: off.length === 0 ? 'uploaded' : 'partial', title: title || 'Local only' };
 	}
 	/** Are we connected + push-enabled? Gates the "Upload all" button. */
-	const canPushShots = $derived(connected && directionPushes(syncConfig.direction.shots));
+	const canPushShots = $derived(connected && directionPushes(syncConfig.direction.shots) && !uploadsHeld(syncConfig));
 
 	/**
 	 * Best-effort: mirror a History-panel edit (rating / notes / privacy /
@@ -462,11 +464,12 @@
 				)
 			: new Set<string>()
 	);
+	const visualizerBacklogIds = $derived(new Set(store.visualizerBacklog.map((s) => s.id)));
 	/** The catch-up backlog: shots missing from at least one ENABLED destination, per destination. */
 	const missingByDestination = $derived.by(() => {
 		const out: { name: string; count: number }[] = [];
 		if (canPushShots) {
-			const n = shots.filter((s) => !s.visualizerId && !isBrewLog(s)).length;
+			const n = visualizerBacklogIds.size;
 			if (n > 0) out.push({ name: 'Visualizer', count: n });
 		}
 		if (decentUnsentIds.size > 0) out.push({ name: 'Decent', count: decentUnsentIds.size });
@@ -474,7 +477,7 @@
 	});
 	const missingTotal = $derived(
 		shots.filter(
-			(s) => (canPushShots && !s.visualizerId && !isBrewLog(s)) || decentUnsentIds.has(s.id)
+			(s) => (canPushShots && visualizerBacklogIds.has(s.id)) || decentUnsentIds.has(s.id)
 		).length
 	);
 	const missingTitle = $derived(
@@ -644,7 +647,7 @@
 		const visualizerId = shot.visualizerId ?? null;
 		const wasSelected = selected?.id === shot.id;
 		const onDetailScreen = phoneDetail && phoneShot === shot.id;
-		store.delete(shot.id);
+		store.delete(shot.id, { deleteRemote: opts.remote });
 		if (onDetailScreen) leaveShot();
 		const api = appCtx().services;
 		if (opts.remote && visualizerId && api) {
@@ -1814,7 +1817,7 @@
 						onGrindChange={saveGrind}
 						onBeanChange={saveBean}
 						onDelete={deleteById}
-						canDeleteRemote={canPushShots && !!selected.visualizerId}
+						canDeleteRemote={canPushShots && (!!selected.visualizerId || uploadPending(selected.id))}
 						uploadTargets={uploadTargetsFor(selected)}
 						onUpload={uploadShotTo}
 						onLogAgain={logAgainById}

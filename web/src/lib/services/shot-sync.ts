@@ -9,7 +9,7 @@
  *    (proactive refresh + one-shot 401 retry), exactly as the old `call()`
  *    funnelled through `withFreshToken`;
  *  - `HttpClient.request` raises `HttpStatusError` on any non-2xx, which `call`
- *    maps back onto the Visualizer error taxonomy: 402/403 → premium-gated,
+ *    maps back onto the Visualizer error taxonomy: a premium 402/403 → premium-gated,
  *    404 → not-found, 401 handled upstream by `TokenVault`, everything else
  *    propagates as `HttpStatusError` (the old `'other'` bucket).
  *
@@ -34,13 +34,20 @@
 import { Context, Effect, Layer, Option } from 'effect';
 import { HttpClient } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
-import { NotAuthenticatedError, ResponseDecodeError, VisualizerNotFoundError } from '../effect/errors.ts';
+import {
+	NotAuthenticatedError,
+	ResponseDecodeError,
+	ShotWithoutSeriesError,
+	VisualizerNotFoundError
+} from '../effect/errors.ts';
 import {
 	API_BASE,
 	describeVisualizerError,
+	isAccountBlocked,
 	isRateLimited,
 	isRecoverable,
 	quotaLimit,
+	refusedUpload,
 	quotaNotice,
 	RATE_LIMIT_NOTICE,
 	retryDelayMs,
@@ -55,10 +62,11 @@ import {
 } from '../effect/schema/visualizer.ts';
 import { getBeanStore } from '#lib/bean/store.svelte.js';
 import { readSyncSettings } from '#lib/bean/visualizer-sync.js';
+import { historyFullNotice } from '#lib/history/brew-date.js';
 import { effectiveGrindSetting } from '#lib/history/index.js';
 import { exportStoredShotAsV2Json } from '#lib/history/v2-export.js';
 import type { ShotPatchInputs, TimedSample } from '#lib/core/index.js';
-import { isBrewLog, type ShotBean, type StoredShot } from '#lib/history/model.js';
+import { isBrewLog, refusedNoSamples, type ShotBean, type StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import type { components } from '#lib/visualizer/openapi.js';
@@ -68,7 +76,12 @@ import {
 	storedShotFromWire,
 	type WireShot
 } from '#lib/visualizer/shot-sync-signatures.js';
-import { appendSyncLog, readSyncConfig } from '#lib/visualizer/sync-config.js';
+import {
+	appendSyncLog,
+	excludedFromUpload,
+	readSyncConfig,
+	uploadsHeld
+} from '#lib/visualizer/sync-config.js';
 import { BaristaPending } from '#lib/visualizer/barista-pending.js';
 import {
 	samplesFromVisualizerDetail as wasmSamplesFromVisualizerDetail,
@@ -77,6 +90,16 @@ import {
 	visualizerShotPatchJson as wasmVisualizerShotPatchJson
 } from '#lib/wasm/de1_wasm.js';
 import { enqueueEntry as enqueueSyncOp } from './queue-store.ts';
+import {
+	beginPullRun,
+	clearUploadAttempted,
+	expiredTombstones,
+	markUploadAttempted,
+	parkedTombstones,
+	remoteKeptOut,
+	uploadReturned
+} from '#lib/visualizer/upload-marks.js';
+import { ACCOUNT_HELD_NOTICE } from './account-held.ts';
 
 // Spec-typed aliases — these ride DIRECTLY on the wire so they stay
 // in lock-step with the OpenAPI spec (regenerate via `pnpm openapi`).
@@ -293,9 +316,9 @@ function isAuthError(e: VisualizerCallError): boolean {
 }
 
 /**
- * Auth / premium failures, the free-plan daily quota and the rate limit abort
- * the unsynced-shots loop: every further POST would hit the same wall (and a
- * backlog catch-up would also trip the 50 requests/min limit).
+ * Auth / premium failures, a blocked account, the free-plan daily quota and the
+ * rate limit abort the unsynced-shots loop: every further POST would hit the
+ * same wall (and a backlog catch-up would also trip the 50 requests/min limit).
  */
 function shouldAbortLoop(e: VisualizerCallError | ResponseDecodeError): boolean {
 	return (
@@ -303,6 +326,7 @@ function shouldAbortLoop(e: VisualizerCallError | ResponseDecodeError): boolean 
 		e._tag === 'TokenRefreshFailedError' ||
 		(e._tag === 'HttpStatusError' && e.status === 401) ||
 		e._tag === 'VisualizerPremiumGatedError' ||
+		isAccountBlocked(e) ||
 		quotaLimit(e) != null ||
 		isRateLimited(e)
 	);
@@ -313,7 +337,9 @@ export type UnsyncedStop =
 	| { reason: 'quota'; limit: number }
 	| { reason: 'rate-limited' }
 	| { reason: 'auth' }
-	| { reason: 'premium' };
+	| { reason: 'premium' }
+	| { reason: 'blocked'; message: string }
+	| { reason: 'held' };
 
 /** The outcome of `ShotSync.uploadUnsyncedShots`. */
 export interface UnsyncedUploadResult {
@@ -327,12 +353,14 @@ function stopFor(e: VisualizerCallError | ResponseDecodeError): UnsyncedStop {
 	if (limit != null) return { reason: 'quota', limit };
 	if (isRateLimited(e)) return { reason: 'rate-limited' };
 	if (e._tag === 'VisualizerPremiumGatedError') return { reason: 'premium' };
+	if (isAccountBlocked(e)) return { reason: 'blocked', message: describeVisualizerError(e) };
 	return { reason: 'auth' };
 }
 
 /**
- * The user notice for an unsynced-shots pass that stopped on the daily quota or
- * the rate limit (null otherwise — auth / premium already surface elsewhere).
+ * The user notice for an unsynced-shots pass that stopped on the daily quota, the
+ * rate limit or a blocked account (null otherwise — auth / premium already
+ * surface elsewhere).
  */
 export function describeUnsyncedStop(
 	result: UnsyncedUploadResult | null | undefined
@@ -341,33 +369,10 @@ export function describeUnsyncedStop(
 	if (!stop) return null;
 	if (stop.reason === 'quota') return { kind: 'info', message: quotaNotice(stop.limit) };
 	if (stop.reason === 'rate-limited') return { kind: 'info', message: RATE_LIMIT_NOTICE };
+	if (stop.reason === 'blocked') return { kind: 'error', message: stop.message };
+	if (stop.reason === 'held') return { kind: 'info', message: ACCOUNT_HELD_NOTICE };
 	return null;
 }
-
-/**
- * An AMBIGUOUS-SUCCESS upload failure: a `ResponseDecodeError` (the server
- * returned a 2xx with no parseable `id`) or a `NetworkError` (a malformed 2xx
- * body — `visualizerCall` can't tell that apart from a real transport drop).
- * In both, `POST /shots/upload` may already have created the shot server-side
- * even though we never read its id, so re-POSTing it — exactly what an
- * `op: 'create'` retry-queue entry does — would create a REAL duplicate on the
- * account. These route to the self-heal-by-reconcile path in
- * `uploadUnsyncedShots` instead of the naive enqueue.
- *
- * (Fully duplicate-proof uploads ultimately need a server-side idempotency key
- * on `POST /shots/upload`; that's a Visualizer-side change, out of scope here.)
- */
-function isAmbiguousSuccess(e: VisualizerCallError | ResponseDecodeError): boolean {
-	return e._tag === 'ResponseDecodeError' || e._tag === 'NetworkError';
-}
-
-/**
- * Slop (ms) subtracted from a shot's `completedAt` to seed the self-heal pull
- * cursor. A just-uploaded shot's remote `updated_at` is ~now (≥ `completedAt`),
- * so any non-negative slop already includes it; the margin only guards against
- * clock skew between the device and the server.
- */
-const SELF_HEAL_SLOP_MS = 60_000;
 
 // ── Public surface ──────────────────────────────────────────────────────
 
@@ -425,6 +430,16 @@ export interface PullOptions {
 	itemsPerPage?: number;
 	maxPages?: number;
 	onProgress?: (p: PullProgress) => void;
+}
+
+/** What a pull left in the history. */
+export interface PullApplied {
+	/** Rows the walk brought back. */
+	pulled: number;
+	/** More pages remained at the page cap. */
+	truncated: boolean;
+	/** New rows a full history refused. They aren't fetched again by this loop. */
+	refused: number;
 }
 
 export interface PullResult {
@@ -513,12 +528,12 @@ export class ShotSync extends Context.Service<
 			remote: WireShot[],
 			samplesById?: ReadonlyMap<string, TimedSample[]>,
 			profilesById?: ReadonlyMap<string, unknown>
-		) => Effect.Effect<void>;
+		) => Effect.Effect<number>;
 		readonly pullAndReconcileShots: (
 			history: HistoryStore,
 			sinceMs: number,
 			opts?: PullOptions
-		) => Effect.Effect<{ pulled: number; truncated: boolean }, VisualizerCallError>;
+		) => Effect.Effect<PullApplied, VisualizerCallError>;
 		readonly uploadUnsyncedShots: (history: HistoryStore) => Effect.Effect<UnsyncedUploadResult>;
 	}
 >()('crema/ShotSync') {}
@@ -566,8 +581,14 @@ export const ShotSyncLive = Layer.effect(
 		 */
 		const uploadShot = Effect.fn('ShotSync.uploadShot')(function* (shot: StoredShot) {
 			yield* requireConnected;
+			if (refusedNoSamples(shot)) return yield* new ShotWithoutSeriesError({ shotId: shot.id });
 			const body = buildShotPayload(shot);
-			const raw = yield* call('/shots/upload', { method: 'POST', body });
+			// Stored first: a kill mid-POST must leave a delete able to see it.
+			markUploadAttempted(shot.id);
+			const raw = yield* call('/shots/upload', { method: 'POST', body }).pipe(
+				Effect.tapError((e) => Effect.sync(() => void (refusedUpload(e) && clearUploadAttempted(shot.id)))),
+				Effect.ensuring(Effect.sync(() => uploadReturned(shot.id)))
+			);
 			const result = decodeResponse(ShotUploadResultSchema, raw, 'POST /shots/upload');
 			if (!result || !result.id) {
 				return yield* new ResponseDecodeError({
@@ -740,6 +761,7 @@ export const ShotSyncLive = Layer.effect(
 			const wireShots: WireShot[] = [];
 			const samplesById = new Map<string, TimedSample[]>();
 			const profilesById = new Map<string, unknown>();
+			let rowsMissed = false;
 
 			const initial: PullState = { page: 1, totalPages: 1, reachedOlder: false, keepGoing: true };
 			const finalState = yield* iterate(initial, {
@@ -766,6 +788,7 @@ export const ShotSyncLive = Layer.effect(
 									() => Effect.succeedNone
 								)
 							);
+							if (Option.isNone(detailOpt)) rowsMissed = true;
 							if (Option.isSome(detailOpt)) {
 								const detail = detailOpt.value;
 								wireShots.push(wireShotFromDetail(summary, detail));
@@ -795,28 +818,35 @@ export const ShotSyncLive = Layer.effect(
 
 			// `keepGoing` is still true only when the loop exited because the
 			// `maxPages` cap was hit — i.e. more pages remained.
-			return { shots: wireShots, samplesById, profilesById, truncated: finalState.keepGoing };
+			return { shots: wireShots, samplesById, profilesById, truncated: finalState.keepGoing, rowsMissed };
 		});
 
 		/**
 		 * Apply a {@link reconcileShots} plan against `history`. Logs each action
 		 * via {@link appendSyncLog}; does not throw. Pure planner output translated
 		 * to store mutations — wrapped in `Effect.sync` (calls wasm + the rune
-		 * store synchronously, same as the old module).
+		 * store synchronously, same as the old module). Answers how many new rows
+		 * a full history refused; the rest of the plan still applies.
 		 */
 		const applyShotReconciliation = (
 			history: HistoryStore,
 			remote: WireShot[],
 			samplesById?: ReadonlyMap<string, TimedSample[]>,
 			profilesById?: ReadonlyMap<string, unknown>
-		): Effect.Effect<void> =>
+		): Effect.Effect<number> =>
 			Effect.sync(() => {
+				let refused = 0;
 				// Tombstones included: a shot deleted here whose remote DELETE
 				// hasn't landed yet is still on Visualizer, and without its
-				// tombstone the planner saw it as new and pulled it back. The
-				// planner never binds to a tombstone; its `update` is skipped below.
-				const local = history.rawAll;
-				const actions = reconcileShots(local, remote);
+				// tombstone the planner saw it as new and pulled it back. A bound
+				// one's `update` is skipped below; an unbound one binds by upload key.
+				const parked = parkedTombstones();
+				const local = history.rawAll.filter((s) => !isBrewLog(s) && !parked.has(s.id));
+				const keptOut = remoteKeptOut();
+				const actions = reconcileShots(
+					local,
+					remote.filter((r) => !keptOut.has(r.id))
+				);
 				const tombstoned = (localId: string): boolean =>
 					history.get(localId)?.deletedAt != null;
 				// Read once for the whole pull, not per shot (C3 #10): nothing
@@ -837,7 +867,10 @@ export const ShotSyncLive = Layer.effect(
 							// Attach the recipe fetched at pull time so the shot is
 							// self-contained (#12); absent for profile-less remotes.
 							const profile = profilesById?.get(action.remote.id);
-							history.insertPulled(profile != null ? { ...stored, profile } : stored);
+							if (!history.insertPulled(profile != null ? { ...stored, profile } : stored)) {
+								refused += 1;
+								continue;
+							}
 						}
 						appendSyncLog({
 							direction: 'pull',
@@ -847,7 +880,10 @@ export const ShotSyncLive = Layer.effect(
 							at: Date.now()
 						});
 					} else if (action.kind === 'bind') {
+						// A row deleted during its upload keeps the id as a tombstone,
+						// so the remote copy stays out of the history.
 						history.bindVisualizerId(action.localId, action.visualizerId);
+						if (tombstoned(action.localId)) continue;
 						fillBarista(action.localId, action.remote);
 						appendSyncLog({
 							direction: 'pull',
@@ -859,10 +895,13 @@ export const ShotSyncLive = Layer.effect(
 					} else if (action.kind === 'update') {
 						// Deleted here; the pending DELETE removes the remote too.
 						if (tombstoned(action.localId)) continue;
-						// Wire `tag_list` defaults to `[]` server-side, so this patch is
-						// idempotent — re-applying an empty list to a local with none is a
-						// no-op write.
-						history.setTags(action.localId, action.remote.tag_list ?? []);
+						// `tag_list` is premium-only and `[]` otherwise, so it says nothing
+						// about what this shot should carry (#326): remote tags only fill
+						// a row with none, and never clear or replace local ones.
+						const remoteTags = action.remote.tag_list ?? [];
+						if (remoteTags.length > 0 && !history.get(action.localId)?.tags?.length) {
+							history.setTags(action.localId, remoteTags);
+						}
 						// A shot pulled before the barista was read gets it now.
 						fillBarista(action.localId, action.remote);
 						// Heal pre-telemetry-import stubs: if this bound row has no curve
@@ -873,6 +912,7 @@ export const ShotSyncLive = Layer.effect(
 						}
 					}
 				}
+				return refused;
 			});
 
 		/**
@@ -885,13 +925,32 @@ export const ShotSyncLive = Layer.effect(
 			sinceMs: number,
 			opts: PullOptions = {}
 		) {
-			const { shots, samplesById, profilesById, truncated } = yield* pullAllShotsSince(
+			// Not from an account this device can't name.
+			if (readSyncConfig().accountUnconfirmed) return yield* new NotAuthenticatedError();
+			const run = beginPullRun();
+			const { shots, samplesById, profilesById, truncated, rowsMissed } = yield* pullAllShotsSince(
 				sinceMs,
 				opts
 			);
-			if (shots.length > 0)
-				yield* applyShotReconciliation(history, shots, samplesById, profilesById);
-			return { pulled: shots.length, truncated };
+			const refused =
+				shots.length > 0
+					? yield* applyShotReconciliation(history, shots, samplesById, profilesById)
+					: 0;
+			if (refused > 0) {
+				// One line for the run: a large pull would push out the whole log.
+				appendSyncLog({
+					direction: 'skip',
+					entity: 'shot',
+					id: '',
+					name: 'pull',
+					at: Date.now(),
+					error: historyFullNotice(refused, history.capacity)
+				});
+			}
+			if (!truncated && !rowsMissed) {
+				for (const id of expiredTombstones(run, sinceMs)) history.purgeTombstone(id);
+			}
+			return { pulled: shots.length, truncated, refused };
 		});
 
 		/**
@@ -904,16 +963,32 @@ export const ShotSyncLive = Layer.effect(
 		const uploadUnsyncedShots = Effect.fn('ShotSync.uploadUnsyncedShots')(function* (
 			history: HistoryStore
 		) {
+			const config = readSyncConfig();
+			if (uploadsHeld(config)) return { uploaded: 0, stopped: { reason: 'held' as const } };
+			yield* Effect.promise(() => history.seriesReady());
 			// Brew Log rows (`isBrewLog`) never sync: Visualizer is a
 			// DE1-telemetry service and brews carry none (issue #10 — the same
 			// local-only posture as `nextPlan`).
-			const list = history.all.filter((s) => !s.visualizerId && !isBrewLog(s));
+			const backlog = history.all.filter(
+				(s) => !s.visualizerId && !isBrewLog(s) && !excludedFromUpload(s, config)
+			);
+			const list = backlog.filter((s) => !refusedNoSamples(s));
+			if (list.length < backlog.length) {
+				// One line for the pass: these would otherwise fill the log on every sync.
+				const n = backlog.length - list.length;
+				appendSyncLog({
+					direction: 'skip',
+					entity: 'shot',
+					id: '',
+					name: 'upload',
+					at: Date.now(),
+					error: `${n} shot${n === 1 ? ' has' : 's have'} no telemetry to upload.`
+				});
+			}
 
 			/**
 			 * Record a non-success outcome: enqueue a recoverable error for a timed
 			 * retry through `UploadQueue`, and append a `skip` line to the sync log.
-			 * Shared by the plain-failure path and the self-heal "couldn't bind"
-			 * fallback.
 			 */
 			const skipOrQueue = (shot: StoredShot, e: VisualizerCallError | ResponseDecodeError): void => {
 				if (isRecoverable(e)) {
@@ -937,22 +1012,6 @@ export const ShotSyncLive = Layer.effect(
 				});
 			};
 
-			/**
-			 * Self-heal an {@link isAmbiguousSuccess} upload: the shot may already
-			 * be on the server, so rather than re-POST (→ duplicate) we PULL the
-			 * shots updated around this one's completion and let `reconcileShots`
-			 * bind the unsynced local to its freshly-created remote by djb2
-			 * signature. Resolves `true` once the bind has landed (the local now
-			 * carries a `visualizerId`). Never throws — a failed self-heal pull
-			 * simply means "not bound yet", and the caller falls back to
-			 * {@link skipOrQueue}.
-			 */
-			const selfHealBind = (shot: StoredShot): Effect.Effect<boolean> =>
-				pullAndReconcileShots(history, shot.completedAt - SELF_HEAL_SLOP_MS).pipe(
-					Effect.ignore,
-					Effect.map(() => Boolean(history.get(shot.id)?.visualizerId))
-				);
-
 			let uploaded = 0;
 			let stopped: UnsyncedStop | null = null;
 
@@ -973,37 +1032,32 @@ export const ShotSyncLive = Layer.effect(
 							return false;
 						})
 					),
+					// A failure that may have landed anyway goes back on the queue and
+					// re-POSTs: Visualizer's `sha` hands the same row back.
 					Effect.catch((e) =>
-						isAmbiguousSuccess(e)
-							? // The POST may already have landed — bind by reconcile, never
-								// re-POST. A successful bind is logged as a push (the reconcile
-								// pull also logs its own `bind` line); a miss falls back to the
-								// queue ONLY when recoverable (so a 2xx-no-id is never re-POSTed).
-								selfHealBind(shot).pipe(
-									Effect.map((bound) => {
-										if (bound) {
-											uploaded += 1;
-											appendSyncLog({
-												direction: 'push',
-												entity: 'shot',
-												id: shot.id,
-												name: shot.profileName ?? 'Shot',
-												at: Date.now()
-											});
-										} else {
-											skipOrQueue(shot, e);
-										}
-										// Ambiguous-success errors never abort the loop: they aren't
-										// an auth/premium wall, and the remaining shots are unaffected.
-										return false;
-									})
-								)
-							: Effect.sync(() => {
-									skipOrQueue(shot, e);
-									const abort = shouldAbortLoop(e);
-									if (abort) stopped = stopFor(e);
-									return abort;
-								})
+						Effect.sync(() => {
+							skipOrQueue(shot, e);
+							const abort = shouldAbortLoop(e);
+							if (abort) stopped = stopFor(e);
+							return abort;
+						})
+					),
+					// A throw while exporting one shot is a defect, which `Effect.catch`
+					// lets through. Skip that shot, or every pass ends at it and the
+					// shots after it never upload. Not queued: it would only throw again.
+					Effect.catchDefect((cause) =>
+						Effect.sync(() => {
+							console.warn('[shot sync] skipping a shot that could not be exported', shot.id, cause);
+							appendSyncLog({
+								direction: 'skip',
+								entity: 'shot',
+								id: shot.id,
+								name: shot.profileName ?? 'Shot',
+								at: Date.now(),
+								error: 'This shot could not be read for upload.'
+							});
+							return false;
+						})
 					)
 				);
 
@@ -1057,7 +1111,7 @@ export const ShotSyncLive = Layer.effect(
 			if (opts.baristaChanged) baristaPending.add(id);
 			const shot = history.all.find((s) => s.id === id);
 			const vid = shot?.visualizerId;
-			if (!shot || !vid) return;
+			if (!shot || !vid || readSyncConfig().accountUnconfirmed) return;
 			const sendBarista = baristaPending.has(id);
 			const sent = baristaOf(shot);
 			yield* patchShot(vid, buildEditPatch(shot, sendBarista));

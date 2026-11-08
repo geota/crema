@@ -36,6 +36,8 @@ import java.nio.file.Files
  * The reconcile runs through the host-built core planner (`reconcileShots`).
  */
 class ShotTombstoneTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val json = Json { ignoreUnknownKeys = true }
     private val dir: File = Files.createTempDirectory("viz-tombstones").toFile()
     private val context = object : ContextWrapper(null) {
@@ -60,6 +62,8 @@ class ShotTombstoneTest {
     private val client = VisualizerClient(json, engine, retryBaseDelayMs = 1)
     private val job = SupervisorJob()
     private val pulled = mutableListOf<StoredShot>()
+    private val refused = mutableSetOf<String>()
+    private val filled = mutableListOf<Pair<String, String>>()
 
     private fun sync() = VisualizerSync(
         store = store,
@@ -70,7 +74,12 @@ class ShotTombstoneTest {
         appVersion = "t",
         notify = {},
         onShotSynced = { _, _ -> },
-        onPulledShots = { pulled += it },
+        onPulledShots = {
+            pulled += it
+            refused.intersect(it.map(StoredShot::id).toSet())
+        },
+        onFillBarista = { id, name -> filled += id to name },
+        currentShot = { id -> StoredShot(id = id, completedAtMs = 1, durationMs = 30_000, visualizerId = "v-bound") },
     ).also { s ->
         runBlocking {
             store.save(VisualizerState(tokens = TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000)))
@@ -99,16 +108,41 @@ class ShotTombstoneTest {
     }
 
     @Test
+    fun `cap_refusal_skips_and_continues`() {
+        val s = sync()
+        val bound = StoredShot(id = "local", completedAtMs = 1, durationMs = 30_000, visualizerId = "v-bound")
+        val update = buildJsonObject {
+            put("id", "v-bound")
+            put("clock", 1L)
+            put("duration_ms", 30_000)
+            put("profile_title", "Test")
+            put("updated_at_ms", 1_700_000_000_000L)
+            put("barista", "Ada")
+            put("tag_list", buildJsonArray {})
+        }
+        // The new row's id is the one the pull gives it: refuse it by asking first.
+        val id = storedShotFromWire(wire, null, json)!!.id
+        refused += id
+
+        val applied = runBlocking { s.reconcileAndApply(listOf(bound), listOf(wire, update), emptyMap(), emptyMap()) }
+
+        assertEquals(PullApplied(pulled = 0, refused = 1), applied)
+        assertEquals("a later row in the plan still applies", listOf("local" to "Ada"), filled)
+        val log = runBlocking { store.load() }.log
+        assertEquals("one line for the run, no pull line for the refused row", listOf("skip"), log.map { it.direction })
+    }
+
+    @Test
     fun `a deleted synced shot is not pulled back`() {
         // Control: with no tombstone the planner adds the remote shot.
         val control = sync()
-        assertEquals(1, runBlocking { control.reconcileAndApply(emptyList(), listOf(wire), emptyMap(), emptyMap()) })
+        assertEquals(1, runBlocking { control.reconcileAndApply(emptyList(), listOf(wire), emptyMap(), emptyMap()) }.pulled)
         pulled.clear()
 
         val s = sync()
         s.tombstoneShot("s1", "v-1", deleteRemote = false)
         settle()
-        assertEquals(0, runBlocking { s.reconcileAndApply(emptyList(), listOf(wire), emptyMap(), emptyMap()) })
+        assertEquals(0, runBlocking { s.reconcileAndApply(emptyList(), listOf(wire), emptyMap(), emptyMap()) }.pulled)
         assertTrue("nothing pulled back: $pulled", pulled.isEmpty())
         // A local-only delete never touches the remote copy and keeps its tombstone.
         assertTrue(deletes().isEmpty())

@@ -57,6 +57,8 @@ import java.nio.file.Files
  * returned — that is the wiring these tests pin.
  */
 class BeanSyncTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     private val dir: File = Files.createTempDirectory("bean-sync").toFile()
     private val context = object : ContextWrapper(null) {
@@ -93,7 +95,10 @@ class BeanSyncTest {
         }
         val (status, body) = when {
             method == "GET" && path == "/roasters" -> HttpStatusCode.OK to page(remoteRoasters)
-            method == "GET" && path == "/coffee_bags" -> HttpStatusCode.OK to page(remoteBags)
+            method == "GET" && path == "/coffee_bags" -> {
+                pullHook()
+                HttpStatusCode.OK to page(remoteBags)
+            }
             method == "GET" && Regex("^/(roasters|coffee_bags)/[^/]+$").matches(path) -> {
                 detailGets += path
                 val id = path.substringAfterLast('/')
@@ -125,9 +130,20 @@ class BeanSyncTest {
 
     // ── The library the VM would hold ─────────────────────────────────────────
     private var library = BeanLibrary()
-    private var applied: BeanSyncResult? = null
 
-    private val core = FakeCore(json)
+    /** Runs after the run's first bag plan, in the window before it applies. */
+    private var afterBagPlan: () -> Unit = {}
+    /** Runs as the bag list comes back. */
+    private var pullHook: () -> Unit = {}
+
+    private val fake = FakeCore(json)
+    private val core = object : BeanSyncCore by fake {
+        override fun reconcileBeans(payload: String): String = fake.reconcileBeans(payload).also {
+            val hook = afterBagPlan
+            afterBagPlan = {}
+            hook()
+        }
+    }
 
     private fun sync() = VisualizerSync(
         store = store,
@@ -141,13 +157,7 @@ class BeanSyncTest {
         now = { clock },
         refreshTokens = { rt -> refreshes += rt; TokenSet("tok2", "rt2", expiresAt = System.currentTimeMillis() + 3_600_000) },
         beanLibrary = { library },
-        onBeansSynced = { result, beanIds, roasterIds ->
-            applied = result
-            library = library.copy(
-                beans = mergeSyncedRows(library.beans, result.beans, beanIds) { it.id },
-                roasters = mergeSyncedRows(library.roasters, result.roasters, roasterIds) { it.id },
-            )
-        },
+        editBeanLibrary = { edit -> library = edit(library) },
         beanSyncCore = core,
     )
 
@@ -345,6 +355,38 @@ class BeanSyncTest {
         assertEquals("Onyx Coffee Lab", library.roasters.single().name)
     }
 
+    // ── A change of account ──────────────────────────────────────────────────
+
+    private fun seedAccount(state: VisualizerState) = runBlocking {
+        store.save(state.copy(tokens = TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000), premium = true))
+    }
+
+    @Test
+    fun `nothing is pushed while a change of account is unanswered, and the pull still runs`() {
+        library = BeanLibrary(listOf(bean("Old")), listOf(roaster("Acme")), null)
+        seedAccount(VisualizerState(accountChangeAsk = true, beanLastSyncAt = 5))
+        val s = sync()
+        runBlocking { s.load() }
+        val r = runBlocking { s.runBeanSync() }!!
+        assertTrue(r.ok)
+        assertTrue("no writes: ${writes()}", writes().isEmpty())
+        assertTrue(requests.any { it.path == "/coffee_bags" })
+        assertEquals("the baseline waits for the push", 5L, runBlocking { store.load() }.beanLastSyncAt)
+    }
+
+    @Test
+    fun `a no keeps the old device's rows off the new account, and new ones go`() {
+        val old = bean("Old")
+        val fresh = newBean("New", null, roastLevel = null, roastedOn = null, nowMs = 9_000)
+        library = BeanLibrary(listOf(old, fresh), listOf(roaster("Acme")), null)
+        seedAccount(VisualizerState(uploadExcludedBefore = 5_000, beanLastSyncAt = 0))
+        val s = sync()
+        runBlocking { s.load() }
+        runBlocking { s.runBeanSync() }!!
+        assertEquals(1, writes().size)
+        assertTrue(writes().single().body.contains("New"))
+    }
+
     // ── Direction gates the legs ─────────────────────────────────────────────
 
     private fun runWith(beansDir: String, roastersDir: String): BeanSyncResult {
@@ -436,7 +478,7 @@ class BeanSyncTest {
         // The LOCAL dedup pointer (a roaster row id) is never on the wire.
         assertTrue(requests.none { it.body.contains(canonical.id) })
         // Every body is the core's, verbatim.
-        assertEquals(core.writeBodies, writes().map { json.parseToJsonElement(it.body) }.map { it.toString() })
+        assertEquals(fake.writeBodies, writes().map { json.parseToJsonElement(it.body) }.map { it.toString() })
     }
 
     @Test
@@ -526,20 +568,149 @@ class BeanSyncTest {
 
     // ── Pure shell helpers ───────────────────────────────────────────────────
 
+    // ── A run over the live library (#324) ───────────────────────────────────
+
+    /** Run with [during] happening between the bag plan and its apply. */
+    private fun runWithEditDuringPlan(during: () -> Unit): BeanSyncResult {
+        afterBagPlan = during
+        return rerun()
+    }
+
+    private fun boundBag(updatedAt: Long = 1_000) =
+        bean("Geometry", vid = "vb-1", updatedAt = updatedAt).copy(remaining = 200f, bagSize = 250f)
+
+    private fun seedBound(bag: coffee.crema.core.Bean) = runBlocking {
+        library = BeanLibrary(listOf(bag), emptyList(), null)
+        remoteBags = listOf(buildJsonObject { put("id", "vb-1"); put("name", "Geometry (renamed)") })
+        store.save(VisualizerState(tokens = TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000), premium = true, beanLastSyncAt = 5_000))
+    }
+
     @Test
-    fun `merging synced rows keeps concurrent edits, adds pulls and respects mid-run deletes`() {
-        val a = bean("A")
-        val b = bean("B")
-        val c = bean("C")
-        val pulled = bean("Pulled")
-        val snapshot = setOf(a.id, b.id, c.id)
-        // User renamed B and deleted C while the run was in flight; the run touched A, C and pulled one.
-        val current = listOf(a, b.copy(name = "B edited"))
-        val synced = listOf(a.copy(visualizerId = "v-a"), c.copy(visualizerId = "v-c"), pulled)
-        val out = mergeSyncedRows(current, synced, snapshot) { it.id }
-        assertEquals(listOf(pulled.id, a.id, b.id), out.map { it.id })
-        assertEquals("v-a", out[1].visualizerId)
-        assertEquals("B edited", out[2].name)
+    fun `bean_debit_survives_sync`() {
+        seedBound(boundBag())
+        pullHook = { library = library.copy(beans = library.beans.map { it.copy(remaining = 182f) }) }
+        rerun()
+        val after = library.beans.single()
+        assertEquals("the debit stands", 182f, after.remaining)
+        assertEquals("the pull still lands", "Geometry (renamed)", after.name)
+    }
+
+    @Test
+    fun `a debit between the plan and the apply stands too`() {
+        seedBound(boundBag())
+        runWithEditDuringPlan { library = library.copy(beans = library.beans.map { it.copy(remaining = 182f) }) }
+        assertEquals(182f, library.beans.single().remaining)
+    }
+
+    @Test
+    fun `a row edited between the plan and the apply keeps the edit, which pushes`() {
+        seedBound(boundBag())
+        runWithEditDuringPlan {
+            library = library.copy(beans = library.beans.map { it.copy(name = "Mine", updatedAt = 6_000) })
+        }
+        assertEquals("Mine", library.beans.single().name)
+        assertEquals(listOf("PATCH /coffee_bags/vb-1"), writes().map { "${it.method} ${it.path}" })
+    }
+
+    @Test
+    fun `a row deleted during the run stays deleted`() {
+        seedBound(boundBag())
+        runWithEditDuringPlan { library = library.copy(beans = emptyList()) }
+        assertTrue(library.beans.isEmpty())
+    }
+
+    @Test
+    fun `a pulled row is added to the live list, ahead of a row added meanwhile`() {
+        library = BeanLibrary()
+        remoteBags = listOf(buildJsonObject { put("id", "vb-9"); put("name", "New") })
+        seed(premium = true)
+        val mine = bean("Mine")
+        runWithEditDuringPlan { library = library.copy(beans = library.beans + mine) }
+        assertEquals(listOf("New", "Mine"), library.beans.map { it.name })
+    }
+
+    @Test
+    fun `rows a pull adds don't push back, however long the run took`() {
+        remoteRoasters = listOf(buildJsonObject { put("id", "vr-1"); put("name", "Onyx") })
+        remoteBags = listOf(buildJsonObject { put("id", "vb-1"); put("name", "Geometry"); put("roaster_id", "vr-1") })
+        pullHook = { clock += 60_000 }
+        run(premium = true)
+        pullHook = {}
+        clock += 60_000
+        rerun()
+        assertTrue("second sync wrote: ${writes()}", writes().isEmpty())
+    }
+
+    @Test
+    fun `a bag pulled while a write fails doesn't push back over a website rename`() {
+        seedBound(boundBag(updatedAt = 6_000))
+        remoteBags = listOf(buildJsonObject { put("id", "vb-2"); put("name", "Pulled") })
+        writeStatus = HttpStatusCode.ServiceUnavailable
+        rerun()
+        assertEquals("held", 5_000L, runBlocking { store.load() }.beanLastSyncAt)
+
+        remoteBags = listOf(buildJsonObject { put("id", "vb-2"); put("name", "Renamed on the website") })
+        writeStatus = HttpStatusCode.OK
+        requests.clear()
+        clock += 60_000
+        rerun()
+        assertEquals(listOf("PATCH /coffee_bags/vb-1"), writes().map { "${it.method} ${it.path}" })
+        assertEquals("Renamed on the website", library.beans.single { it.visualizerId == "vb-2" }.name)
+    }
+
+    @Test
+    fun `failed_bag_patch_holds_baseline`() {
+        seedBound(boundBag(updatedAt = 6_000))
+        remoteBags = emptyList()
+        writeStatus = HttpStatusCode.ServiceUnavailable
+        val failed = rerun()
+        assertTrue(failed.ok)
+        assertEquals(1, failed.writesFailed)
+        assertEquals(5_000L, runBlocking { store.load() }.beanLastSyncAt)
+
+        writeStatus = HttpStatusCode.OK
+        requests.clear()
+        rerun()
+        assertEquals("the edit goes again", listOf("PATCH /coffee_bags/vb-1"), writes().map { "${it.method} ${it.path}" })
+        assertEquals(clock, runBlocking { store.load() }.beanLastSyncAt)
+    }
+
+    @Test
+    fun `a write Visualizer refuses for good is a counted skip, not a held baseline`() {
+        seedBound(boundBag(updatedAt = 6_000))
+        remoteBags = emptyList()
+        writeStatus = HttpStatusCode.UnprocessableEntity
+        val r = rerun()
+        assertEquals(0, r.writesFailed)
+        assertEquals(1, r.skipped)
+        assertEquals(clock, runBlocking { store.load() }.beanLastSyncAt)
+    }
+
+    @Test
+    fun `the baseline is the run's start, so an edit during it pushes next time`() {
+        val start = clock
+        seedBound(boundBag())
+        remoteBags = emptyList()
+        pullHook = {
+            clock += 60_000
+            library = library.copy(beans = library.beans.map { it.copy(name = "Mine", updatedAt = clock) })
+        }
+        rerun()
+        assertEquals(start, runBlocking { store.load() }.beanLastSyncAt)
+        pullHook = {}
+        requests.clear()
+        rerun()
+        assertEquals(listOf("PATCH /coffee_bags/vb-1"), writes().map { "${it.method} ${it.path}" })
+    }
+
+    @Test
+    fun `binding a created row's id leaves its updatedAt`() {
+        library = BeanLibrary(listOf(bean("New bag", updatedAt = 1_000)), emptyList(), null)
+        seed(premium = true)
+        rerun()
+        val bound = library.beans.single()
+        assertEquals("vz-1", bound.visualizerId)
+        assertEquals(1_000L, bound.updatedAt)
     }
 
     @Test

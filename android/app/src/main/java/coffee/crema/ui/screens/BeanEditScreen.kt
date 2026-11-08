@@ -127,6 +127,8 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
 
     val isNew = ui.beans.none { it.id == bean.id }
     val roasterName0 = bean.roasterId?.let { rid -> ui.roasters.firstOrNull { it.id == rid }?.name } ?: ""
+    // What the form below opened on: Save lands only what changed from it.
+    val asOpened = remember(bean.id) { bean }
     var name by remember(bean.id) { mutableStateOf(bean.name) }
     var roaster by remember(bean.id) { mutableStateOf(roasterName0) }
     val tags = remember(bean.id) { mutableStateListOf<String>().apply { addAll(bean.tags.orEmpty()) } }
@@ -221,7 +223,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
 
     val save: () -> Unit = {
         commitPendingTag(tags, tagPending)
-        vm.updateBean(bean.id, roaster, pickedRoaster?.takeIf { it.stillNamedBy(roaster) }) { b ->
+        vm.updateBean(bean.id, roaster, pickedRoaster?.takeIf { it.stillNamedBy(roaster) }, asOpened) { b ->
             applyBeanEdits(b, BeanDraft(
                 name = name, roast = roast, mixSel = mixSel, roastTypeSel = roastTypeSel,
                 roasted = roasted, opened = opened, frozen = frozen, archived = archived,

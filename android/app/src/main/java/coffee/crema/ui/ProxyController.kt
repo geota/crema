@@ -47,7 +47,9 @@ import coffee.crema.machine.MachineCommands
 import coffee.crema.machine.RelayMachine
 import coffee.crema.machine.RelayedCommandDispatcher
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SafeLoad
 import coffee.crema.settings.AppPrefs
+import coffee.crema.settings.decodePrefs
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -1735,12 +1737,13 @@ class ProxyController(
      *  served from the construction-time [proxyConfigCache]. */
     private fun readProxyConfigSync(): ProxyConfig = proxyConfigCache
 
-    private fun readProxyConfigUncached(): ProxyConfig = runCatching {
-        val f = File(app.filesDir, "prefs.json")
-        if (!f.exists()) return ProxyConfig("normal", "", 0)
-        val p = json.decodeFromString(AppPrefs.serializer(), f.readText())
-        ProxyConfig(p.proxyRole, p.proxyPrimaryHost, p.proxyPrimaryPort, p.replayPrimary)
-    }.getOrDefault(ProxyConfig("normal", "", 0))
+    private fun readProxyConfigUncached(): ProxyConfig {
+        // Reads what a load would, as this can land between a save's two renames.
+        // Not a load: the VM's hasn't run, and it's the one that says what it found.
+        val read = SafeFile.peek(File(app.filesDir, "prefs.json")) { decodePrefs(json, it) }
+        val p = (read as? SafeLoad.Loaded)?.value ?: return ProxyConfig("normal", "", 0)
+        return ProxyConfig(p.proxyRole, p.proxyPrimaryHost, p.proxyPrimaryPort, p.replayPrimary)
+    }
 
     /** Newest `session-*.jsonl` capture for the replay-backed PRIMARY demo. Checks the
      *  app's INTERNAL `filesDir/captures` FIRST — a newer-Android emulator (scoped

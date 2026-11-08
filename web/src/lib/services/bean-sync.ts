@@ -7,7 +7,7 @@
  * `POST /coffee_bags`, `PATCH /coffee_bags/{id}`, `POST /roasters`) plus the
  * `deleteRemoteBean` / `deleteRemoteRoaster` helpers. Same shape as `ShotSync`:
  * each method funnels through `TokenVault.withFreshToken(token =>
- * HttpClient.request(...))`, and the premium gate (402/403) maps to
+ * HttpClient.request(...))`, and the premium gate (402, or a 403 naming Premium) maps to
  * `VisualizerPremiumGatedError` rather than today's status-code probe.
  *
  * Behavior mirrors the old module: a bag with a `visualizerId` PATCHes (keeping
@@ -23,10 +23,12 @@
 import { Context, Effect, Layer } from 'effect';
 import { HttpClient } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
+import { ACCOUNT_HELD_NOTICE } from './account-held.ts';
 import { ResponseDecodeError, VisualizerNotFoundError } from '../effect/errors.ts';
 import {
 	API_BASE,
 	describeVisualizerError,
+	isRecoverable,
 	visualizerCall,
 	type VisualizerCallError,
 	type VisualizerCallOptions
@@ -136,12 +138,11 @@ function reconcileBeans(
 	local: Bean[],
 	remote: PulledBag[],
 	roasterNames: Record<string, string>,
-	lastSyncAt: number | null
+	lastSyncAt: number | null,
+	nowMs: number
 ): BeanReconcileAction[] {
 	return JSON.parse(
-		wasmReconcileBeans(
-			JSON.stringify({ local, remote, roasterNames, lastSyncAt, nowMs: Date.now() })
-		)
+		wasmReconcileBeans(JSON.stringify({ local, remote, roasterNames, lastSyncAt, nowMs }))
 	) as BeanReconcileAction[];
 }
 
@@ -239,7 +240,7 @@ export class BeanSync extends Context.Service<
 		 * `bean/visualizer-sync.ts` `runSync`): pull every remote roaster + bag and
 		 * reconcile (remote-wins LWW, bind by visualizer-id → signature → name),
 		 * then push every local create/update. Premium-gated writes downshift the
-		 * run to read-only on the first 402/403. Mutates `library` in place and
+		 * run to read-only on the first premium 402/403. Mutates `library` in place and
 		 * returns the aggregate {@link SyncResult}. Never fails (errors land in the
 		 * result's `log` / `error`), so the boundary stays a plain `Promise`.
 		 */
@@ -453,6 +454,11 @@ export const BeanSyncLive = Layer.effect(
 				result.error = 'Sign in to Visualizer first.';
 				return result;
 			}
+			// Not onto an account this device can't name.
+			if (readSyncConfig().accountUnconfirmed) {
+				result.error = ACCOUNT_HELD_NOTICE;
+				return result;
+			}
 
 			/**
 			 * The roaster with its catalogue link resolved for a write: its own
@@ -469,8 +475,30 @@ export const BeanSyncLive = Layer.effect(
 			// Which legs run (core `bean_sync_scope`): `backup` pushes only, `pull`
 			// pulls only and never writes remote, `two-way` both, `off` neither.
 			const syncConfig = readSyncConfig();
-			const scope = beanSyncScope(syncConfig.direction.beans, syncConfig.direction.roasters);
+			// The run's start: an edit made during it is newer, and pushes next time.
+			const startedAt = Date.now();
+			// Writes that can succeed later hold the baseline, so they go again. One
+			// the server refused for good is a counted skip.
+			let writesFailed = 0;
+			const writeFailed = (e: Parameters<typeof isRecoverable>[0]): void => {
+				if (e._tag === 'VisualizerNotFoundError' || (e._tag === 'HttpStatusError' && !isRecoverable(e))) {
+					result.skipped += 1;
+				} else {
+					writesFailed += 1;
+				}
+			};
+			// A pull is fine, but nothing goes up to an account the user hasn't said
+			// yes to, and the baseline waits for the push that's held.
+			const asking = syncConfig.accountChangeAsk;
+			const legs = beanSyncScope(syncConfig.direction.beans, syncConfig.direction.roasters);
+			const scope = asking ? { ...legs, pushBeans: false, pushRoasters: false } : legs;
 			const lastSyncAt = settings.lastSyncAt;
+			// What the run adds: stamped with the baseline it started from, the one it
+			// moves to or the one it keeps, so a pull never pushes back.
+			const pulledStamp = lastSyncAt ?? startedAt;
+			// Rows the user kept off this account by saying no. New ones flow.
+			const keptOff = (create: boolean, row: { createdAt: number }): boolean =>
+				create && syncConfig.uploadExcludedBefore !== null && row.createdAt < syncConfig.uploadExcludedBefore;
 
 			const program = Effect.gen(function* () {
 				// Rows this run took from the remote (added roasters, every applied
@@ -532,7 +560,9 @@ export const BeanSyncLive = Layer.effect(
 								log.push({ direction: 'pull', kind: 'roaster', id: action.localId, name: wire.name, at: Date.now() });
 							}
 						} else {
-							const fresh = roasterFromWire(wire);
+							// Stamped with the baseline the run started from, so it never reads
+							// as a local edit, even when a failed write holds that baseline.
+							const fresh = { ...roasterFromWire(wire), updatedAt: pulledStamp };
 							library.replaceRoaster(fresh);
 							remoteRoasterIdToLocal.set(remoteId, fresh.id);
 							pulledRoasterIds.push(fresh.id);
@@ -563,7 +593,7 @@ export const BeanSyncLive = Layer.effect(
 				if (scope.pushRoasters) {
 					for (const item of planRoasterPush(library.roasters, lastSyncAt, pulledRoasterIds)) {
 						const local = library.getRoaster(item.localId);
-						if (!local) continue;
+						if (!local || keptOff(item.create, local)) continue;
 						if (premiumLocked) {
 							if (item.create) {
 								result.skipped += 1;
@@ -576,7 +606,9 @@ export const BeanSyncLive = Layer.effect(
 						const res = yield* Effect.result(uploadRoaster(withCatalogueLink(local)));
 						if (res._tag === 'Success') {
 							if (item.create) {
-								library.updateRoaster(local.id, { visualizerId: res.success.visualizerId });
+								// Keeps `updatedAt`: not a local edit, and the row matches the remote.
+								const current = library.getRoaster(local.id);
+								if (current) library.replaceRoaster({ ...current, visualizerId: res.success.visualizerId });
 								remoteRoasterIdToLocal.set(res.success.visualizerId, local.id);
 							}
 							pushedRoasterIds.add(local.id);
@@ -590,6 +622,7 @@ export const BeanSyncLive = Layer.effect(
 							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
 						} else {
 							result.error = describeVisualizerError(res.failure);
+							writeFailed(res.failure);
 							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: result.error });
 						}
 					}
@@ -618,6 +651,8 @@ export const BeanSyncLive = Layer.effect(
 								premiumLocked = true;
 								writeSyncSettings({ premium: false });
 								logPremiumBannerOnce();
+							} else {
+								writeFailed(res.failure);
 							}
 							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.failure) });
 						}
@@ -648,7 +683,7 @@ export const BeanSyncLive = Layer.effect(
 					}));
 					const roasterNames: Record<string, string> = {};
 					for (const r of library.roasters) roasterNames[r.id] = r.name;
-					for (const action of reconcileBeans(library.beans, pulledBags, roasterNames, lastSyncAt)) {
+					for (const action of reconcileBeans(library.beans, pulledBags, roasterNames, lastSyncAt, pulledStamp)) {
 						const decoded = action.remote;
 						// Stored as the core hands it back — a replace keeps the local
 						// id + `updatedAt`, so the pull doesn't read as a local edit.
@@ -670,7 +705,7 @@ export const BeanSyncLive = Layer.effect(
 				if (scope.pushBeans) {
 					for (const item of planBeanPush(library.beans, lastSyncAt, pulledBeanIds)) {
 						const local = library.getBean(item.localId);
-						if (!local) continue;
+						if (!local || keptOff(item.create, local)) continue;
 						if (premiumLocked) {
 							if (item.create) {
 								result.skipped += 1;
@@ -685,7 +720,11 @@ export const BeanSyncLive = Layer.effect(
 						// and PATCHes (id present) or POSTs (id absent).
 						const res = yield* Effect.result(uploadBean(local, remoteRoasterId));
 						if (res._tag === 'Success') {
-							if (item.create) library.updateBean(local.id, { visualizerId: res.success.visualizerId });
+							if (item.create) {
+								// Keeps `updatedAt`: not a local edit, and the row matches the remote.
+								const current = library.getBean(local.id);
+								if (current) library.replaceBean({ ...current, visualizerId: res.success.visualizerId });
+							}
 							result.pushed += 1;
 							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
 						} else if (res.failure._tag === 'VisualizerPremiumGatedError') {
@@ -694,13 +733,17 @@ export const BeanSyncLive = Layer.effect(
 							logPremiumBannerOnce();
 							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: item.create ? 'premium required' : describeVisualizerError(res.failure) });
 						} else {
+							writeFailed(res.failure);
 							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.failure) });
 						}
 					}
 				}
 
 				// 5) Mark complete.
-				writeSyncSettings({ lastSyncAt: Date.now(), premium: premiumLocked ? false : (settings.premium ?? true) });
+				writeSyncSettings({
+					lastSyncAt: asking || writesFailed > 0 ? lastSyncAt : startedAt,
+					premium: premiumLocked ? false : (settings.premium ?? true)
+				});
 				result.ok = true;
 				result.premiumLocked = premiumLocked;
 			});
@@ -731,7 +774,7 @@ export const BeanSyncLive = Layer.effect(
 
 		/**
 		 * Premium probe: `POST /roasters` with a sentinel name (one of Visualizer's
-		 * premium-gated endpoints), then delete it. 201→premium, 402/403→free,
+		 * premium-gated endpoints), then delete it. 201→premium, a premium 402/403→free,
 		 * anything else→unknown (null). A failed cleanup is non-fatal — the next
 		 * full sync's reconcile tidies it.
 		 */

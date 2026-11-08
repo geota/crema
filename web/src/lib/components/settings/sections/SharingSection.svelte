@@ -18,7 +18,7 @@
 	 * shared `ActivityLog`.
 	 */
 	import { onMount } from 'svelte';
-	import { getHistoryStore, historyDroppedNotice, isBrewLog } from '#lib/history/index.js';
+	import { getHistoryStore, historyDroppedNotice } from '#lib/history/index.js';
 	import { shotHistoryJsonl } from '#lib/history/crema-jsonl.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import {
@@ -35,6 +35,9 @@
 		takeVisualizerJustConnected,
 		updateSyncConfig
 	} from '#lib/visualizer/index.js';
+	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
+	import { answerAccountChange, applyAccount, settleEmptyAccountChange } from '#lib/services/visualizer-account.js';
+	import { VISUALIZER_RECONNECT_LINE } from '#lib/shell/visualizer-notices.js';
 	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import StSectionHead from '../StSectionHead.svelte';
@@ -52,8 +55,10 @@
 	import { type SharingPrivacy } from '#lib/settings/index.js';
 	import {
 		backupFileName,
+		backupNote as runBackup,
 		buildBackupZip,
-		exportBackup,
+		driveBackupRefusal,
+		describeBackupGaps,
 		describeBackup,
 		restoreBackupData,
 		applyHeldRestoreChanges,
@@ -74,7 +79,8 @@
 		uploadUnsentDecentShots
 	} from '#lib/decent/index.js';
 	import { getMachineReadout } from '#lib/state/index.js';
-	import { downloadBackup, listBackups, uploadBackup } from '#lib/drive/rest.js';
+	import { backupDate, backupSubtitle } from '#lib/drive/backup-list.js';
+	import { downloadBackup, listBackups, uploadBackup, type DriveFile } from '#lib/drive/rest.js';
 
 	const history = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -143,12 +149,12 @@
 	let catchUpBusy = $state<{ done: number; total: number } | null>(null);
 
 	function vizBacklogCount(): number {
-		return history.all.filter((s) => !s.visualizerId && !s.deletedAt && !isBrewLog(s)).length;
+		return history.visualizerBacklog.length;
 	}
 	/** Offer the Visualizer catch-up if shots would now auto-upload there. */
 	function offerVisualizerCatchUp(): void {
 		const cfg = readSyncConfig();
-		if (!directionPushes(cfg.direction.shots) || !cfg.autoUpload) return;
+		if (!directionPushes(cfg.direction.shots) || !cfg.autoUpload || uploadsHeld(cfg)) return;
 		const count = vizBacklogCount();
 		if (count > 0) catchUp = { destination: 'Visualizer', count };
 	}
@@ -165,8 +171,21 @@
 	}
 	// A Visualizer sign-in just completed (the OAuth callback flagged it).
 	onMount(() => {
-		if (takeVisualizerJustConnected()) offerVisualizerCatchUp();
+		const justConnected = takeVisualizerJustConnected();
+		void (async () => {
+			// A different account with nothing to upload has nothing to ask.
+			await settleEmptyAccountChange(history);
+			if (justConnected) offerVisualizerCatchUp();
+		})();
 	});
+
+	/** The user's answer: yes uploads the backlog, no keeps those shots off this account. */
+	async function answerChange(upload: boolean): Promise<void> {
+		answerAccountChange(upload);
+		if (!upload) return;
+		catchUp = { destination: 'Visualizer', count: vizBacklogCount() };
+		await runCatchUp();
+	}
 
 	async function runCatchUp(): Promise<void> {
 		const offer = catchUp;
@@ -202,6 +221,8 @@
 		accountError = null;
 		try {
 			account = await api.beans.fetchAccount();
+			// Settles a hold the sign-in left, or a change no one has seen yet.
+			if (account.id) applyAccount(account.id);
 		} catch (e) {
 			accountError = e instanceof Error ? e.message : String(e);
 		}
@@ -228,6 +249,7 @@
 		// Tier flag is per-account — a fresh sign-in (or the same account
 		// after a tier change on visualizer.coffee) shouldn't inherit it.
 		clearVisualizerPremiumCache();
+		updateSyncConfig({ needsReconnect: false, accountUnconfirmed: false });
 		// Reflect the disconnect optimistically. `clearTokens` above also fires
 		// the connection subscription, but that echoes back a tick later; setting
 		// it here keeps the card snappy (the echo is then a redundant no-op).
@@ -271,6 +293,7 @@
 	     potentially-wrong label. Click "Test" to populate it. */
 	const cardEyebrow = $derived.by(() => {
 		if (!viz.connected) {
+			if (syncCfg.needsReconnect) return 'Sign-in ended';
 			return oauthConfigured ? 'Not connected' : 'OAuth not configured';
 		}
 		if (!account) {
@@ -293,6 +316,7 @@
 			if (!oauthConfigured) {
 				return 'Set `VITE_VISUALIZER_CLIENT_ID` in `web/.env.local` and restart the dev server.';
 			}
+			if (syncCfg.needsReconnect) return VISUALIZER_RECONNECT_LINE;
 			return 'Free community service for sharing and comparing espresso shots';
 		}
 		if (testStatus.kind === 'testing') return 'Testing…';
@@ -320,8 +344,7 @@
 	/** Build + download a full `crema-backup/v1` bundle of everything local. */
 	async function backUp(): Promise<void> {
 		backupNote = 'Building backup…';
-		const result = await exportBackup();
-		backupNote = result ? `Backed up — ${describeBackup(result)}.` : 'Nothing to back up yet.';
+		backupNote = await runBackup();
 	}
 
 	let restoreInput = $state<HTMLInputElement | null>(null);
@@ -419,10 +442,15 @@
 				driveNote = 'Nothing to back up yet.';
 				return;
 			}
+			const refusal = driveBackupRefusal(built.contents);
+			if (refusal) {
+				driveNote = refusal;
+				return;
+			}
 			driveNote = 'Backing up to Drive…';
 			const token = await drive.accessToken();
 			await uploadBackup(token, backupFileName(), built.zip, 'application/zip');
-			driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.`;
+			driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.${describeBackupGaps(built.contents)}`;
 		} catch (err) {
 			driveNote = err instanceof Error ? `Drive backup failed: ${err.message}` : 'Drive backup failed.';
 		} finally {
@@ -430,14 +458,31 @@
 		}
 	}
 
-	/** Restore the most-recent Drive backup — merge (add) or replace (wipe first). */
-	async function driveRestore(mode: RestoreMode): Promise<void> {
+	/** The backups to pick from, newest first, while the list is open. */
+	let driveFiles = $state<DriveFile[] | null>(null);
+
+	/** List what's in Drive: any backup can be restored, not just the newest. */
+	async function driveChoose(): Promise<void> {
+		driveBusy = true;
+		driveNote = 'Fetching from Drive…';
+		try {
+			const files = await listBackups(await drive.accessToken());
+			driveFiles = files.length > 0 ? files : null;
+			driveNote = files.length > 0 ? null : 'No backups found in Drive.';
+		} catch (err) {
+			driveNote = err instanceof Error ? `Drive list failed: ${err.message}` : 'Drive list failed.';
+		} finally {
+			driveBusy = false;
+		}
+	}
+
+	/** Restore the backup `file` — merge (add) or replace (wipe first). */
+	async function driveRestore(file: DriveFile, mode: RestoreMode): Promise<void> {
 		if (
 			mode === 'wipe' &&
 			!(await confirmDialog({
 				title: 'Replace from Drive?',
-				message:
-					"Replace everything on this device with your latest Google Drive backup? Your current profiles, beans, roasters and shots are deleted first. This can't be undone.",
+				message: `Replace everything on this device with your Google Drive backup from ${backupDate(file)}? Your current profiles, beans, roasters and shots are deleted first. This can't be undone.`,
 				confirmLabel: 'Replace',
 				danger: true
 			}))
@@ -448,15 +493,11 @@
 		driveNote = 'Fetching from Drive…';
 		try {
 			const token = await drive.accessToken();
-			const files = await listBackups(token);
-			if (files.length === 0) {
-				driveNote = 'No backups found in Drive.';
-				return;
-			}
-			const bytes = await downloadBackup(token, files[0].id);
+			const bytes = await downloadBackup(token, file.id);
 			const r = await restoreBackupData(bytes, mode);
+			driveFiles = null;
 			driveNote =
-				`Restored from Drive (${files[0].name}) — ${r.profiles} profile(s), ` +
+				`Restored from Drive (${file.name}) — ${r.profiles} profile(s), ` +
 				`${r.beans} bean(s), ${r.shots} shot(s)${r.settingsApplied ? ' + settings.' : '.'}` +
 				historyDroppedNotice(r.droppedShots, history.capacity);
 			if (r.held && !(await confirmHeldRestoreChanges(r.held))) {
@@ -546,12 +587,15 @@
 			</button>
 		{:else}
 			<StButton
-				label={signingIn ? 'Redirecting…' : 'Sign in'}
+				label={signingIn ? 'Redirecting…' : syncCfg.needsReconnect ? 'Reconnect' : 'Sign in'}
 				icon="sign-in"
 				variant="primary"
 				disabled={!oauthConfigured || signingIn}
 				onClick={signIn}
 			/>
+			{#if syncCfg.needsReconnect}
+				<StButton label="Forget" onClick={disconnect} />
+			{/if}
 		{/if}
 	</div>
 </div>
@@ -559,6 +603,28 @@
 <!-- Connected-state sync controls (the shared activity log renders below the cards). -->
 {#if viz.connected}
 	<BeanSyncSection onShotPushEnabled={offerVisualizerCatchUp} />
+	{#if syncCfg.accountUnconfirmed}
+		<StGroup title="Account">
+			<StRow
+				title="Checking your account"
+				sub="Crema can't yet confirm which Visualizer account this is, so nothing syncs. It keeps trying."
+			>
+				{#snippet control()}{/snippet}
+			</StRow>
+		</StGroup>
+	{:else if syncCfg.accountChangeAsk}
+		<StGroup title="Account">
+			<StRow
+				title="This is a different Visualizer account"
+				sub={`Upload the ${vizBacklogCount()} shot(s) on this device to ${account?.name ?? 'it'}? Not now keeps them off this account. New shots still upload.`}
+			>
+				{#snippet control()}
+					<StButton label="Not now" onClick={() => answerChange(false)} />
+					<StButton label="Upload" icon="cloud-arrow-up" variant="primary" onClick={() => answerChange(true)} />
+				{/snippet}
+			</StRow>
+		</StGroup>
+	{/if}
 	{#if catchUp?.destination === 'Visualizer'}
 		<StGroup title="Catch up">
 			{@render catchUpRow(catchUp)}
@@ -690,7 +756,7 @@
 	title="Google Drive"
 	sub={driveNote ??
 		(drive.connected
-			? 'Back up to your Drive or restore your most recent backup. Crema only sees the files it created.'
+			? 'Back up to your Drive or restore a backup from it. Crema only sees the files it created.'
 			: drive.configured
 				? 'Connect Google Drive to back up online (drive.file — Crema only sees its own backups).'
 				: 'Set VITE_GOOGLE_DRIVE_CLIENT_ID in web/.env.local to enable Drive backup.')}
@@ -707,35 +773,44 @@
 				/>
 			{/snippet}
 		</StRow>
-		<StRow
-			title="Restore latest — merge"
-			sub="Add anything from your most-recent Drive backup; keeps your current data."
-		>
+		<StRow title="Restore from Drive" sub="Choose a backup to merge or replace.">
 			{#snippet control()}
 				<StButton
-					label={driveBusy ? 'Working…' : 'Merge'}
+					label={driveBusy ? 'Working…' : 'Restore…'}
 					icon="cloud-arrow-down"
 					disabled={driveBusy}
-					onClick={() => driveRestore('merge')}
+					onClick={driveChoose}
 				/>
 			{/snippet}
 		</StRow>
-		<StRow
-			title="Restore latest — replace"
-			sub="Wipe this device, then restore fully from your most-recent Drive backup."
-		>
-			{#snippet control()}
-				<StButton
-					label={driveBusy ? 'Working…' : 'Replace'}
-					icon="trash"
-					disabled={driveBusy}
-					onClick={() => driveRestore('wipe')}
-				/>
-			{/snippet}
-		</StRow>
+		{#each driveFiles ?? [] as file (file.id)}
+			<StRow title={backupDate(file)} sub={backupSubtitle(file)}>
+				{#snippet control()}
+					<StButton
+						label="Merge"
+						icon="cloud-arrow-down"
+						disabled={driveBusy}
+						onClick={() => driveRestore(file, 'merge')}
+					/>
+					<StButton
+						label="Replace"
+						icon="trash"
+						disabled={driveBusy}
+						onClick={() => driveRestore(file, 'wipe')}
+					/>
+				{/snippet}
+			</StRow>
+		{/each}
 		<StRow title="Disconnect Google Drive" sub="Forget the Drive sign-in on this device.">
 			{#snippet control()}
-				<StButton label="Disconnect" icon="sign-out" onClick={() => drive.signOut()} />
+				<StButton
+					label="Disconnect"
+					icon="sign-out"
+					onClick={() => {
+						driveFiles = null;
+						void drive.signOut();
+					}}
+				/>
 			{/snippet}
 		</StRow>
 	{:else}

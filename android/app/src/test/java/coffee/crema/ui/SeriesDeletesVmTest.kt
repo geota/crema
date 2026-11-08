@@ -29,6 +29,8 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class SeriesDeletesVmTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private var store = ViewModelStore()
     private val app get() = VmHarness.app()
     private val seriesDir get() = File(app.filesDir, "shot-series")

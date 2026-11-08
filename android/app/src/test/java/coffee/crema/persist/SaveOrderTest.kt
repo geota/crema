@@ -31,7 +31,7 @@ class SaveOrderTest {
         val save = launch(start = CoroutineStart.UNDISPATCHED) {
             inSaveOrder(target) {
                 Thread.sleep(20)
-                saveStore(target, "[1]")
+                saveItem(target, "[1]")
             }
         }
         val erase = launch(start = CoroutineStart.UNDISPATCHED) { inSaveOrder(target) { eraseStore(target) } }

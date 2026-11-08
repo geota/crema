@@ -9,6 +9,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Pick any Drive backup to restore** — Restore from Drive now lists every
+  backup in your Drive, manual or daily, from any device, newest first, with its
+  date and device and, for daily backups, its shot and curve counts. Pick one,
+  then Merge or Replace. Android gains Replace from Drive here, behind Type
+  ERASE. This replaces Restore latest, which could only reach the newest copy.
+  Merge, from Drive or a file, now keeps your settings, maintenance counters
+  and Visualizer preferences as they are: only Replace takes the backup's.
+  Android and web.
 - **Pick a brew's date and time, and change it later** — Log brew on Android
   now has a When field with a date and time picker in place of "Logged N min
   ago", defaulting to now, as on the web. Both apps can change the date of a
@@ -83,6 +91,127 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   it if it has no rating, as web does. Android.
 
 ### Fixed
+
+- **A shot finishing no longer undoes an edit made meanwhile** — a rating or note
+  set while a shot assembled, a bag debit during a bean sync and a change while
+  an import ran used to be overwritten by a copy read earlier. Each now lands on
+  the rows as they stand. Android.
+- **Saving a bag keeps its debits** — the bean editor used to write back the
+  weight it opened with, undoing any shot pulled since. It now changes only what
+  you changed. Android.
+- **A bean sync that couldn't push an edit tries again** — a failed write used to
+  count as synced, so the edit stayed local until it was edited again. An edit
+  made during a sync now pushes on the next one too. Android and web.
+- **Android finishes a save it has started** — leaving a screen could drop a
+  save still waiting behind another, so the file stayed behind what you saw. A
+  save that's been asked for now always lands. Encoding a store also moved off
+  the screen's thread, which helps big histories. Android.
+- **Drive keeps your fullest backups** — daily backups now carry their shot and
+  curve counts in the file name, and each device manages only its own, even two
+  of the same model. Past the 10 copies you keep, the newest with the most shots
+  and the newest with the most curves always stay, so a bad week can't push out
+  your last good copy. That's at most 3 more than the setting. If a backup comes
+  out under half the size of your last one, Crema tells you. Pruned copies go to
+  Drive's trash, where you can restore them for 30 days. Copies made before this
+  update are left alone. Android.
+- **A store Android can't read is left alone** — a passing read error or running
+  out of memory while loading used to move a good file aside as damaged. Now
+  only a file that doesn't decode is damaged. Anything else leaves it in place
+  and refuses saves, and a banner says "Couldn't read your shot history, so
+  changes aren't being saved". Try again reads it again, and Set this aside moves
+  it with the other kept-aside copies and carries on without it, and you can
+  share the file from the app. A set-aside sign-in goes at your next sign-in, so
+  old tokens don't linger. Try again reloads what's saved and discards changes
+  made since, except shots, which stay. A Visualizer pull waits until history
+  can be read. Android also now says when a store came back from its backup, as
+  the newest change is gone. Android.
+- **A shot deleted during its upload stays deleted** — the delete now waits for
+  the upload's id, from the upload finishing or from a pull finding the row, so
+  the shot no longer comes back, even if the app is killed mid-upload. The delete
+  dialog also offers Visualizer while an upload is under way, and the remote
+  copy goes once its id arrives. Android and web.
+- **A pull recognises Crema's own uploads** — it matches a remote shot to its
+  local row by start time and duration, where it never matched a real upload
+  before, so a shot uploaded without its id coming back no longer arrives as a
+  duplicate. An upload that may have landed retries and gets the same remote
+  shot back, in place of a pull that never found it. Android and web.
+- **A remote delete Visualizer refuses says so** — one notice, and the shot stays
+  deleted here. Android and web.
+- **Opening the app offline no longer disconnects Google Drive** — Drive used to
+  sign out on any failed refresh, which ended backups until someone noticed.
+  Only Google saying the sign-in is over ends it now. A daily backup with no
+  network tries again next launch, and a full Drive or a refused backup stays as
+  a line in Settings rather than a notice each day. Android.
+- **A sign-in that really ended says so and stays said** — one notice, then a
+  Reconnect in Settings until you sign in again, with nothing else lost. Google
+  Drive and Visualizer on Android, Visualizer on the web.
+- **A token refresh can't undo a sign-out or a sign-in** — one that finishes
+  afterwards no longer signs you back in or stores the old account's tokens, and
+  two at once on Android no longer sign you out. Android and web.
+- **Signing in as a different Visualizer account asks first** — Crema checks
+  which account it is before anything syncs. A different one starts the pull
+  over and asks before uploading the shots already here; Not now keeps those off
+  it, and new shots still upload. Android and web.
+- **A store that can't be read is never saved over** — on the web, a storage
+  error while reading was treated as an empty store, so the next save replaced
+  your data. Now the value stays where it is, a strip says "Couldn't read your
+  shot history, so changes aren't being saved", and Try again reloads what's
+  saved, waiting if the machine is busy. A row that can't be read, in shots or
+  the bean library, is kept in `<key>.skipped` and offered as a saved copy,
+  rather than dropped by the next save. If it can't be kept, saves stop instead.
+  Only full storage now drops your oldest shots: a refused save no longer does.
+  Web.
+- **Android can't save a store before it has loaded** — a save that came before
+  a store's load carried defaults, and could replace your data. Every store now
+  refuses it, and the first refusal tells you what wasn't saved. This holds when
+  a new screen starts in a running app too. Reading the network role at launch
+  also goes through the store, so it no longer misses settings caught between
+  the two renames of a save. Android.
+- **A remote delete no longer stops after three failures** — a Visualizer delete
+  that fails for a reason time can fix now waits an hour and tries again, for as
+  long as it takes, where it used to stop with no notice. One Visualizer refuses
+  still stops, and the shot stays deleted here. Android and web.
+- **Only Visualizer's Premium reply reads as Premium** — every refusal used to
+  mean "Premium required", and could turn bean sync read-only. A shot on another
+  account, a disabled or unconfirmed account and a sign-in without the needed
+  access now each say what happened, and the web's backlog upload stops on an
+  account problem with that line. Android and web.
+- **Visualizer rate-limit waits fit its 10-minute window** — after a rate limit
+  an upload tries again after a minute, then waits ten, rather than retrying
+  into a window that hasn't passed. Retries also vary a little, so two devices
+  don't move in step. Android and web.
+- **Shots no longer upload or back up without their telemetry** — on the web a
+  queued upload, a Decent retry or a backup could run before a shot's curve had
+  loaded, which posted an empty shot to Visualizer and bound the row to it, or
+  saved a backup with no curves. They now wait for the curves. A machine shot that
+  still has no telemetry is refused on both apps, on Visualizer and Decent, leaves
+  the Visualizer upload count, and shows as its own "without telemetry" count. If
+  the curves can't be read at all, a downloaded backup says how many it's missing,
+  and a Google Drive backup is refused. Android and web.
+- **One unreadable row can't block a backup** — on the web, one bad row made the
+  whole backup fail, and the note stayed on Building backup for good. Now a shot
+  whose profile can't be read is backed up without it, and any other bad row, of
+  any kind, is left out alone, and you're told how many. A file left short says
+  so in its header, in a new `omittedCount`; a clean backup's bytes don't
+  change (#329). If no row of a kind can be read, the backup fails and nothing
+  is saved. On Android, a failed section used to go out empty, so a backup with
+  no shots could upload and replace a good one: it now fails too. A `NaN` in one
+  shot costs that shot, not the backup. One shot that throws no longer stops the
+  web's upload queue or catch-up uploads. Android and web.
+
+- **A Visualizer pull no longer removes shots or tags** — at the 300-shot cap a
+  pull used to push out your oldest rows, including brew logs and shots that
+  never reached Visualizer. It now leaves the history alone, skips the new shots
+  that don't fit, keeps going, and says how many it left out. Re-sync shots
+  fetches them once there's room. On the web, a pull no longer empties a shot's
+  tags on a free account, and remote tags only fill a shot that has none. Android
+  and web.
+- **A damaged shot history keeps every curve on the web** — when the rows
+  couldn't be read, the next load deleted every saved curve and raw capture, so
+  the kept-aside rows could never get them back (#325). A curve or capture now
+  goes only when its own shot leaves the history, once that save has landed, and
+  anything left over stays on disk until Erase all data. A row that comes back
+  finds its curve. Web.
 
 - **A damaged shot history keeps every curve on Android** — when `shots.json`
   couldn't be read, the next save deleted every shot's curve, so the rows kept

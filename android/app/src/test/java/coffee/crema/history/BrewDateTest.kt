@@ -1,5 +1,6 @@
 package coffee.crema.history
 
+import coffee.crema.ui.rowsForTest
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -39,13 +40,50 @@ class BrewDateTest {
 
     @Test fun aBackdatedRowGoesToItsPlaceAndANewOneLeadsItsTie() {
         val history = listOf(shot("new", 30), shot("old", 10))
-        assertEquals(listOf("new", "mid", "old"), historyWith(listOf(shot("mid", 20)), history).map { it.id })
-        assertEquals(listOf("tie", "new", "old"), historyWith(listOf(shot("tie", 30)), history).map { it.id })
+        assertEquals(listOf("new", "mid", "old"), historyWith(listOf(shot("mid", 20)), rowsForTest(history)).map { it.id })
+        assertEquals(listOf("tie", "new", "old"), historyWith(listOf(shot("tie", 30)), rowsForTest(history)).map { it.id })
+    }
+
+    @Test fun pull_never_evicts_at_cap() {
+        val brew = shot("brew-log", 1)
+        val full = List(HistoryStore.MAX_SHOTS - 1) { i -> shot("r$i", 1_000_000L - i) } + brew
+        val merge = mergePulled(listOf(shot("new", 2_000_000)), full)
+        assertEquals(full, merge.rows)
+        assertEquals(emptyList(), merge.kept)
+        assertEquals(0, merge.dropped)
+    }
+
+    @Test fun theFullNoticeNamesReSync() {
+        assertEquals(
+            "History is full at 300 shots, so 2 shots from Visualizer weren’t added. After freeing up space, use Re-sync shots to fetch them",
+            historyFullNotice(2, 300),
+        )
+        assertTrue("to fetch it" in historyFullNotice(1, 300))
+    }
+
+    @Test fun aPullFillsTheFreeSlotsAndRefusesTheRest() {
+        val rows = List(HistoryStore.MAX_SHOTS - 2) { i -> shot("r$i", 1_000_000L - i) }
+        val merge = mergePulled(listOf(shot("a", 5), shot("b", 2_000_000), shot("c", 6)), rows)
+        assertEquals(listOf("a", "b"), merge.kept.map { it.id })
+        assertEquals(HistoryStore.MAX_SHOTS, merge.rows.size)
+        assertEquals("b", merge.rows.first().id)
+        assertEquals("a", merge.rows.last().id)
+        assertTrue(rows.all { it in merge.rows })
+    }
+
+    @Test fun aListOverTheCapStaysAsItIsThroughAPull() {
+        val over = List(HistoryStore.MAX_SHOTS + 5) { i -> shot("r$i", 1_000_000L - i) }
+        assertEquals(over, mergePulled(listOf(shot("new", 2_000_000)), over).rows)
+    }
+
+    @Test fun aPulledRowAlreadyHereIsLeftOut() {
+        val rows = listOf(shot("a", 2))
+        assertEquals(rows, mergePulled(listOf(shot("a", 9)), rows).rows)
     }
 
     @Test fun theCapDropsTheOldestNotTheNewest() {
         val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i) }
-        val next = historyWith(listOf(shot("mid", 999_950)), full)
+        val next = historyWith(listOf(shot("mid", 999_950)), rowsForTest(full))
         assertEquals(HistoryStore.MAX_SHOTS, next.size)
         assertEquals("r0", next.first().id)
         assertTrue(next.any { it.id == "mid" })
@@ -85,7 +123,7 @@ class BrewDateTest {
     @Test fun aRowJustMadeStaysWhenTheClockIsBehindAFullHistory() {
         val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i) }
         val made = shot("made", 10)
-        val next = historyWith(listOf(made), full, keepId = made.id)
+        val next = historyWith(listOf(made), rowsForTest(full), keepId = made.id)
         assertEquals(HistoryStore.MAX_SHOTS, next.size)
         assertEquals("made", next.last().id)
         assertFalse(next.any { it.id == full.last().id }, "the oldest other row goes")

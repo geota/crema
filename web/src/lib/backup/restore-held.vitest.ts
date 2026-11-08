@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { getSettingsStore } from '#lib/settings/index.js';
+import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { readSyncConfig, updateSyncConfig } from '#lib/visualizer/sync-config.js';
 import {
 	applyHeldRestoreChanges,
@@ -24,13 +25,13 @@ function deviceDefaults(): void {
 }
 
 /** A backup built on a device whose webhook + Visualizer sharing are wide open. */
-function senderBackup(): string {
+async function senderBackup(): Promise<string> {
 	const settings = getSettingsStore();
 	settings.set('webhookEnabled', true);
 	settings.set('webhookUrl', ATTACKER);
 	updateSyncConfig({ privacy: 'public', includeNotes: true, autoUpload: true });
 	settings.set('density', 'compact' as never);
-	const built = buildBackupJsonl();
+	const built = await buildBackupJsonl();
 	expect(built).not.toBeNull();
 	return built!.jsonl;
 }
@@ -38,8 +39,8 @@ function senderBackup(): string {
 describe('restore holds sharing changes for confirmation', () => {
 	beforeEach(deviceDefaults);
 
-	it.each(['merge', 'wipe'] as const)('%s restore does not change the webhook or widen Visualizer prefs', (mode) => {
-		const jsonl = senderBackup();
+	it.each(['wipe'] as const)('%s restore does not change the webhook or widen Visualizer prefs', async (mode) => {
+		const jsonl = await senderBackup();
 		deviceDefaults();
 
 		const summary = restoreBackup(jsonl, mode);
@@ -62,10 +63,26 @@ describe('restore holds sharing changes for confirmation', () => {
 		expect(text).toContain('public');
 	});
 
-	it('applies the held changes only when asked to', () => {
-		const jsonl = senderBackup();
+	it('merge keeps this device\u2019s settings, counters and Visualizer prefs', async () => {
+		const jsonl = await senderBackup();
 		deviceDefaults();
-		const { held } = restoreBackup(jsonl, 'merge');
+		getMaintenanceStore().replaceAll({ ...getMaintenanceStore().current, totalLitres: 7 });
+
+		const summary = restoreBackup(jsonl, 'merge');
+
+		const s = getSettingsStore().current;
+		expect(summary.settingsApplied).toBe(false);
+		expect(summary.held).toBeNull();
+		expect(s.density).not.toBe('compact');
+		expect(s.webhookUrl).toBe('');
+		expect(readSyncConfig().privacy).toBe('private');
+		expect(getMaintenanceStore().current.totalLitres).toBe(7);
+	});
+
+	it('applies the held changes only when asked to', async () => {
+		const jsonl = await senderBackup();
+		deviceDefaults();
+		const { held } = restoreBackup(jsonl, 'wipe');
 		applyHeldRestoreChanges(held!);
 		expect(getSettingsStore().current.webhookUrl).toBe(ATTACKER);
 		expect(getSettingsStore().current.webhookEnabled).toBe(true);
@@ -73,16 +90,16 @@ describe('restore holds sharing changes for confirmation', () => {
 		expect(readSyncConfig().includeNotes).toBe(true);
 	});
 
-	it('holds nothing when the backup would not widen anything', () => {
+	it('holds nothing when the backup would not widen anything', async () => {
 		getSettingsStore().set('density', 'compact' as never);
-		const built = buildBackupJsonl(); // same device, same sharing settings
+		const built = await buildBackupJsonl(); // same device, same sharing settings
 		expect(built).not.toBeNull();
-		expect(restoreBackup(built!.jsonl, 'merge').held).toBeNull();
+		expect(restoreBackup(built!.jsonl, 'wipe').held).toBeNull();
 	});
 
 	// Final review 05 N-4a: a direction that starts pushing, background sync and
 	// the profile flag turning on all start sending data, so they are held too.
-	it('holds a shots direction that starts pushing, autoSync and includeProfile', () => {
+	it('holds a shots direction that starts pushing, autoSync and includeProfile', async () => {
 		updateSyncConfig({
 			autoUpload: true,
 			autoSync: true,
@@ -90,7 +107,7 @@ describe('restore holds sharing changes for confirmation', () => {
 			direction: { shots: 'two-way', beans: 'backup', roasters: 'two-way' }
 		});
 		getSettingsStore().set('density', 'compact' as never); // something to back up
-		const jsonl = buildBackupJsonl()!.jsonl;
+		const jsonl = (await buildBackupJsonl())!.jsonl;
 		localStorage.clear();
 		getSettingsStore().reset();
 		// The device left auto-upload ON but switched shot sync off.
@@ -101,7 +118,7 @@ describe('restore holds sharing changes for confirmation', () => {
 			direction: { shots: 'off', beans: 'pull', roasters: 'two-way' }
 		});
 
-		const { held } = restoreBackup(jsonl, 'merge');
+		const { held } = restoreBackup(jsonl, 'wipe');
 
 		const viz = readSyncConfig();
 		expect(viz.direction.shots).toBe('off');
@@ -124,21 +141,21 @@ describe('restore holds sharing changes for confirmation', () => {
 describe('held webhook URL display', () => {
 	beforeEach(deviceDefaults);
 
-	function backupWithWebhook(url: string): string {
+	async function backupWithWebhook(url: string): Promise<string> {
 		const settings = getSettingsStore();
 		settings.set('webhookEnabled', true);
 		settings.set('webhookUrl', url);
-		const jsonl = buildBackupJsonl()!.jsonl;
+		const jsonl = (await buildBackupJsonl())!.jsonl;
 		deviceDefaults();
 		return jsonl;
 	}
 
-	it('never offers a URL padded with newlines or tabs', () => {
+	it('never offers a URL padded with newlines or tabs', async () => {
 		const disguised = 'https://hooks.example.com\n\n\n\n.attacker.example/collect';
 		expect(restorableWebhookUrl(disguised)).toBeNull();
 		expect(restorableWebhookUrl('https://ok.example/\tx')).toBeNull();
 		expect(restorableWebhookUrl('https://ok.example/\u202Ex')).toBeNull();
-		const { held } = restoreBackup(backupWithWebhook(disguised), 'merge');
+		const { held } = restoreBackup(await backupWithWebhook(disguised), 'wipe');
 		expect(held?.webhook ?? null).toBeNull();
 		expect(getSettingsStore().current.webhookUrl).toBe('');
 	});
@@ -150,16 +167,16 @@ describe('held webhook URL display', () => {
 		expect(restorableWebhookUrl('  ')).toBe('');
 	});
 
-	it('shows the parsed host first, on its own line, and stores the normalised URL', () => {
-		const { held } = restoreBackup(backupWithWebhook('HTTPS://Hooks.Example.COM:8443/a b'), 'merge');
+	it('shows the parsed host first, on its own line, and stores the normalised URL', async () => {
+		const { held } = restoreBackup(await backupWithWebhook('HTTPS://Hooks.Example.COM:8443/a b'), 'wipe');
 		expect(held?.webhook?.webhookUrl).toBe('https://hooks.example.com:8443/a%20b');
 		const lines = describeHeldRestoreChanges(held!).split('\n');
 		expect(lines[1].trim()).toBe('hooks.example.com:8443');
 		expect(lines[2]).toContain('Full address: https://hooks.example.com:8443/a%20b');
 	});
 
-	it('shows a lookalike (IDN) host in its punycode form', () => {
-		const { held } = restoreBackup(backupWithWebhook('https://ex\u0430mple.com/hook'), 'merge');
+	it('shows a lookalike (IDN) host in its punycode form', async () => {
+		const { held } = restoreBackup(await backupWithWebhook('https://ex\u0430mple.com/hook'), 'wipe');
 		const text = describeHeldRestoreChanges(held!);
 		expect(text).toContain('xn--');
 		expect(text).not.toContain('ex\u0430mple');

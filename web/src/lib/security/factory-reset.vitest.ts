@@ -66,6 +66,7 @@ describe('factoryResetLocalData', () => {
 		localStorage.setItem('crema.settings.v1', '{}');
 		localStorage.setItem('crema.decent.v1', '{"token":"sb1:x"}');
 		localStorage.setItem('other.app', 'keep');
+		localStorage.setItem('crema-frozen-shots', '[{"captured":{"id":"s"}}]');
 		sessionStorage.setItem('crema.drive.token.v1', '{"accessToken":"ya29"}');
 		sessionStorage.setItem('crema.visualizer.oauth.pkce.v1', 'verifier');
 		expect((await cremaDatabases()).length).toBe(5);
@@ -78,6 +79,7 @@ describe('factoryResetLocalData', () => {
 		expect(Object.keys({ ...localStorage })).not.toContain('crema.settings.v1');
 		expect(localStorage.getItem('crema.decent.v1')).toBeNull();
 		expect(localStorage.getItem('other.app')).toBe('keep');
+		expect(localStorage.getItem('crema-frozen-shots')).toBeNull();
 		expect(sessionStorage.getItem('crema.drive.token.v1')).toBeNull();
 		expect(sessionStorage.getItem('crema.visualizer.oauth.pkce.v1')).toBeNull();
 		expect(result.storageKeysRemoved).toBe(4);

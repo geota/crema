@@ -7,9 +7,13 @@ import coffee.crema.core.HotWaterMode
 import coffee.crema.core.StoredHotWater
 import coffee.crema.core.initialHotWaterDose
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.loadStore
+import coffee.crema.persist.SaveFloor
+import coffee.crema.persist.saveItem
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -676,7 +680,10 @@ class SettingsStore(private val context: Context, private val json: Json) {
     private var lastGeneration = Long.MIN_VALUE
 
     suspend fun load(): AppPrefs = withContext(Dispatchers.IO) {
-        val stored = loadStore(file, "settings") { text -> decodePrefs(json, text) }.valueOrNull()
+        val stored = when (val outcome = loadStore(file, WHAT) { text -> decodePrefs(json, text) }) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> null
+        }
         val marker = if (stored?.qcHotWaterMode == null) readHotWaterMarker() else null
         val prefs = resolveHotWater(resolveIdleSleep(stored), fileExisted = stored != null, marker = marker)
         // Persist a migration once, so a later screensaver change can't move
@@ -687,7 +694,10 @@ class SettingsStore(private val context: Context, private val json: Json) {
 
     /** The downgrade marker (`hot-water.json`), or null. */
     private fun readHotWaterMarker(): StoredHotWater? =
-        loadStore(markerFile, null) { text -> json.decodeFromString(StoredHotWater.serializer(), text) }.valueOrNull()
+        when (val outcome = loadStore(markerFile, null) { text -> json.decodeFromString(StoredHotWater.serializer(), text) }) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> null
+        }
 
     /**
      * Write [prefs]. Saves run one at a time. A save with a [generation] (the
@@ -696,18 +706,19 @@ class SettingsStore(private val context: Context, private val json: Json) {
      * race can never put older values back (spec §7.5 step 5).
      */
     suspend fun save(prefs: AppPrefs, generation: Long? = null) {
-        withContext(Dispatchers.IO) {
+        if (!SaveFloor.admit(file, WHAT)) return
+        // This lock holds the generation check and both writes together.
+        withContext(NonCancellable + Dispatchers.IO) {
             saveLock.withLock {
                 if (generation != null) {
                     if (generation < lastGeneration) return@withLock
                     lastGeneration = generation
                 }
-                runCatching { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
-                    .onSuccess { saveStore(file, it) }
+                saveStore(file, WHAT) { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
                 // Every save of a stored dose rewrites the downgrade marker.
                 if (prefs.qcHotWaterMode != null) {
                     runCatching { json.encodeToString(StoredHotWater.serializer(), prefs.storedHotWater()) }
-                        .onSuccess { saveStore(markerFile, it) }
+                        .onSuccess { saveItem(markerFile, it) }
                 }
             }
         }
@@ -715,16 +726,20 @@ class SettingsStore(private val context: Context, private val json: Json) {
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {
-        withContext(Dispatchers.IO) {
-            eraseStore(file)
-            eraseStore(markerFile)
+        // After any save in flight, so an old snapshot can't land after the erase.
+        withContext(NonCancellable + Dispatchers.IO) {
+            saveLock.withLock {
+                eraseStore(file)
+                eraseStore(markerFile)
+            }
         }
     }
 
     private val markerFile get() = File(context.filesDir, MARKER_FILE_NAME)
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "prefs.json"
+        const val WHAT = "settings"
         const val MARKER_FILE_NAME = "hot-water.json"
     }
 }

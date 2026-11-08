@@ -20,17 +20,27 @@ import coffee.crema.drive.DriveStore
 import coffee.crema.drive.DriveSync
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
-import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.CommonSettings
 import coffee.crema.core.defaultIdleSleepMin
 import coffee.crema.runCatchingCancellable
 import coffee.crema.settings.resetCommon
 import coffee.crema.settings.toCommonSettings
 import androidx.core.content.FileProvider
+import coffee.crema.beans.LibraryStore
+import coffee.crema.brew.RecipeFileStore
+import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
+import coffee.crema.profiles.CustomProfileStore
+import coffee.crema.profiles.HiddenProfileStore
+import coffee.crema.profiles.PinnedProfileStore
 import coffee.crema.maintenance.MaintenanceStore
 import coffee.crema.persist.KeptAside
 import coffee.crema.persist.KeptAsideNotices
+import coffee.crema.persist.RefusedStore
+import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SafeLoad
+import coffee.crema.persist.SaveFloor
+import coffee.crema.persist.Stores
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.Setting
 import coffee.crema.settings.setting
@@ -74,6 +84,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import android.net.Uri
 import kotlinx.serialization.json.put
 import coffee.crema.decent.DecentClient
@@ -91,6 +103,10 @@ import coffee.crema.decent.decentShotRecordJson
  * is readable top to bottom. Splitting these into proper layers is future work.
  */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
+
+    /** First of all: the process can outlive a ViewModel, and this one starts
+     *  from defaults, so no store may take a save until it has loaded here. */
+    private val saveSession = SafeFile.startSession()
 
     // See [coreJson]: lenient enums, and the core enums tagged `kind`.
     private val json = coreJson
@@ -125,7 +141,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         get() = session.dialDebounceContext
         set(value) { session.dialDebounceContext = value }
 
-    private val _ui = MutableStateFlow(MainUiState())
+    private val _ui = UiStore(MainUiState())
 
     /** The high-rate readouts as they arrive: the store every reader and
      *  writer uses, on its own thread and in order ([live] is the screens'
@@ -209,7 +225,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the VM persists. VM code reads it directly for its own values and
      * [effectiveState] for what is on screen (spec §7.2).
      */
-    val ui: StateFlow<MainUiState> = _ui
+    val ui: StateFlow<MainUiState> = _ui.state
         .map { it.effective() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, _ui.value.effective())
 
@@ -221,7 +237,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * store, never this: [_live]'s value is current on the caller's thread.
      */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val live: StateFlow<LiveTelemetry> = _ui
+    val live: StateFlow<LiveTelemetry> = _ui.state
         .map { it.saverVisible }
         .distinctUntilChanged()
         .flatMapLatest { saverUp -> if (saverUp) emptyFlow() else _live }
@@ -229,7 +245,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** This device's own state, for tests (AC-16): what [persistPrefs] saves. */
     @androidx.annotation.VisibleForTesting
-    internal val ownState: StateFlow<MainUiState> = _ui
+    internal val ownState: StateFlow<MainUiState> = _ui.state
 
     /** The readouts as they arrive, for tests: [live] goes quiet behind the saver. */
     @androidx.annotation.VisibleForTesting
@@ -344,10 +360,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onFillBarista = { localId, barista -> library.fillShotBarista(localId, barista) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
+        allShots = { _ui.value.history },
         seriesReady = { library.awaitSeries() },
         shotsLoaded = { library.seriesReady },
+        historyRefused = { library.historyRefused },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
-        onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
+        editBeanLibrary = { edit -> library.editBeanLibrary(edit) },
+        onBeansSynced = { library.persistLibrary() },
         networkWatcher = coffee.crema.visualizer.DefaultNetworkWatcher(app),
     )
 
@@ -361,7 +380,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         visualizer = visualizer,
         decent = decent,
-        uiFlow = _ui,
+        uiFlow = _ui.state,
         updateUi = { transform -> _ui.update(transform) },
         notify = { notifyUser(it) },
     )
@@ -394,7 +413,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         clientId = coffee.crema.BuildConfig.GOOGLE_DRIVE_CLIENT_ID,
         notify = { msg -> notifyUser(msg) },
-        backupZip = { library.buildBackupZipBytes() },
+        log = { appendLog(it) },
+        backupZip = { library.buildBackupZip() },
         backupFileName = { library.backupFileName() },
         applyRestore = { bytes, wipe ->
             viewModelScope.launch { library.restoreBackupBytes(bytes, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) }
@@ -428,6 +448,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         uiState = { _ui.value },
         effectiveState = { effectiveState() },
         updateUi = { transform -> _ui.update(transform) },
+        editRows = { rows, rest -> _ui.edit(rows, rest) },
         notify = { notifyUser(it) },
         appendLog = { appendLog(it) },
         currentPrefs = { currentPrefs() },
@@ -453,7 +474,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         bridge = bridge,
         lane = lane,
-        uiFlow = _ui,
+        uiFlow = _ui.state,
         liveState = { _live.value },
         effectiveState = { effectiveState() },
         updateUi = { transform -> _ui.update(transform) },
@@ -899,6 +920,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         setBackgroundStartAllowed = { bgConnection.setBackgroundStartAllowed(it) },
     )
 
+    /** One store reload at a time: a double tap, or both banner buttons. */
+    private val storeReload = kotlinx.coroutines.sync.Mutex()
+
     /** Every store file reported unreadable this process (see [KeptAsideNotices]). */
     private var keptAside: List<KeptAside> = emptyList()
 
@@ -946,10 +970,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(keptAsideNotice = msg) }
             }
         }
+        // A store that couldn't be read refuses saves: the banner stays while it does.
+        viewModelScope.launch {
+            Stores.refused.collect { refused -> _ui.update { it.copy(refusedStores = refused) } }
+        }
+        // A save that came before its store loaded was refused: say so, once.
+        viewModelScope.launch {
+            SaveFloor.pending.collect { pending ->
+                // Only the newest session's: a ViewModel on its way out would take
+                // the notice to a screen that's gone.
+                if (pending.isNotEmpty() && SafeFile.isCurrentSession(saveSession)) {
+                    SaveFloor.drain().forEach { notifyUser(SaveFloor.message(it)) }
+                }
+            }
+        }
         // A hub's remotes hold no live copy of its stock: a change to the active
         // bag's weights re-sends the snapshot that carries its empty flag.
         viewModelScope.launch {
-            _ui.map { s -> s.beans.firstOrNull { it.id == s.activeBeanId }?.let { it.remaining to it.bagSize } }
+            _ui.state.map { s -> s.beans.firstOrNull { it.id == s.activeBeanId }?.let { it.remaining to it.bagSize } }
                 .distinctUntilChanged()
                 .collect { proxy.pushConfig() }
         }
@@ -964,6 +1002,69 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (e.present) bgConnection.onCompanionPresence()
             }
         }
+    }
+
+    /** The banner's Try again: load [store] from disk, only once it reads, as a
+     *  load that still fails would empty what's in memory. Reading it first
+     *  changes nothing, so saves stay refused until the real load. */
+    fun retryStore(store: RefusedStore) = viewModelScope.launch {
+        storeReload.withLock {
+            val read = withContext(Dispatchers.IO) { SafeFile.peek(store.file) { it } }
+            if (read is SafeLoad.Unavailable) {
+                appendLog("Still couldn't read ${store.what}: ${read.error}")
+                return@withLock
+            }
+            holdStoreReload?.invoke()
+            reloadStore(store)
+        }
+    }
+
+    /** The banner's Set this aside: move the unreadable file with the other
+     *  kept-aside copies, offer it for sharing, and carry on without it. If the
+     *  rename fails too, the banner stays. */
+    fun putStoreAside(store: RefusedStore) = viewModelScope.launch {
+        storeReload.withLock {
+            val kept = withContext(Dispatchers.IO) { SafeFile.setAside(store.file) }
+            if (kept == null) {
+                appendLog("Couldn't set ${store.what} aside")
+                return@withLock
+            }
+            KeptAsideNotices.report(KeptAside(store.what, kept, setAside = true))
+            reloadStore(store)
+        }
+    }
+
+    /** Load [store] into the UI state. Its saves, and those of any store loaded
+     *  with it, open only once that has landed, and then stay refused if the
+     *  load says so. Not on a ViewModel a newer one has replaced. */
+    private suspend fun reloadStore(store: RefusedStore) {
+        if (!SafeFile.isCurrentSession(saveSession)) return
+        val files = reloadedWith(store.file)
+        files.forEach(SafeFile::closeSaves)
+        try {
+            when (store.file.name) {
+                LibraryStore.FILE_NAME -> library.loadLibrary()
+                HistoryStore.FILE_NAME -> library.reloadHistory()
+                SettingsStore.FILE_NAME -> loadPrefs()
+                PinnedProfileStore.FILE_NAME, HiddenProfileStore.FILE_NAME, CustomProfileStore.FILE_NAME -> {
+                    library.loadProfileMeta()
+                    library.loadCustomProfiles()
+                }
+                RecipeFileStore.FILE_NAME -> guided.loadRecipes()
+                MaintenanceStore.FILE_NAME -> maintenance.load()
+                VisualizerStore.FILE_NAME -> visualizer.load()
+                DecentStore.FILE_NAME -> decent.load()
+                DriveStore.FILE_NAME -> drive.load()
+            }
+        } finally {
+            files.forEach { SafeFile.openSaves(it, saveSession) }
+        }
+    }
+
+    /** The store files a reload of [file] loads: the profile stores go together. */
+    private fun reloadedWith(file: File): List<File> {
+        val profiles = listOf(PinnedProfileStore.FILE_NAME, HiddenProfileStore.FILE_NAME, CustomProfileStore.FILE_NAME)
+        return if (file.name in profiles) profiles.map { File(file.parentFile, it) } else listOf(file)
     }
 
     /** The kept-aside snackbar was dismissed or timed out. */
@@ -1298,21 +1399,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun restoreBackupFromText(text: String, mode: RestoreMode) = library.restoreBackupFromText(text, mode)
 
     /**
-     * Remove a stored shot from the local history. Persisted. A shot already
-     * on Visualizer leaves a tombstone so the next pull doesn't bring its
-     * remote copy back (web parity); [alsoOnVisualizer] deletes that copy too,
+     * Remove a stored shot from the local history. Persisted. A shot on
+     * Visualizer, or on its way there, leaves a tombstone so a pull doesn't bring
+     * its remote copy back (web parity); [alsoOnVisualizer] deletes that copy too,
      * retried on each sync until it lands. A shot never uploaded just goes.
      */
     fun deleteShot(id: String, alsoOnVisualizer: Boolean = false) {
         val shot = _ui.value.history.firstOrNull { it.id == id } ?: return
         library.deleteShot(id)
-        shot.visualizerId?.let { visualizer.tombstoneShot(id, it, deleteRemote = alsoOnVisualizer) }
+        visualizer.tombstoneDeleted(shot, deleteRemote = alsoOnVisualizer)
     }
 
-    /** Whether a shot's delete can also remove its Visualizer copy: it was
-     *  uploaded and a session is open (shot deletes aren't Premium-gated, unlike bags). */
-    fun canDeleteShotOnVisualizer(visualizerId: String?): Boolean =
-        visualizerId != null && _ui.value.visualizer.signedIn
+    /** Whether a shot's delete can also remove its Visualizer copy: it was uploaded,
+     *  or its upload is under way, and a session is open (shot deletes aren't
+     *  Premium-gated, unlike bags). */
+    fun canDeleteShotOnVisualizer(shot: StoredShot): Boolean =
+        (shot.visualizerId != null || visualizer.uploadPending(shot)) && _ui.value.visualizer.signedIn
 
     /** Import a Beanconqueror export (JSON or chunked .zip) into the library. */
     fun importBeanconquerorUri(uri: Uri) = library.importBeanconquerorUri(uri)
@@ -1328,8 +1430,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         id: String,
         roasterName: String,
         roasterPick: coffee.crema.core.CataloguePickRoaster? = null,
+        opened: Bean? = null,
         transform: (Bean) -> Bean,
-    ) = library.updateBean(id, roasterName, roasterPick, transform)
+    ) = library.updateBean(id, roasterName, roasterPick, opened, transform)
 
     /** A FileProvider Uri for the camera to write a bag photo into. */
     fun newCameraOutputUri(beanId: String): Uri? = library.newCameraOutputUri(beanId)
@@ -1520,7 +1623,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Full-app backup & restore (crema-backup/v1) ──────────────────────────
     // One portable bundle: custom profiles + beans/roasters + shot history + the
-    // portable settings subset, (de)serialised by the core (exportBackupJsonl /
+    // portable settings subset, (de)serialised by the core (exportBackupBundle /
     // the line-tagged JSONL). OAuth tokens + per-device BLE/proxy state are
     // stripped on export and preserved on import — a backup moves between devices
     // without dragging this device's bindings along.
@@ -2449,6 +2552,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
          */
         @androidx.annotation.VisibleForTesting
         @Volatile internal var holdStartupLoad: kotlinx.coroutines.Deferred<Unit>? = null
+
+        /** Test seam: holds Try again between reading a store and reloading it. */
+        @Volatile internal var holdStoreReload: (suspend () -> Unit)? = null
 
         private const val MAX_LOG_LINES = 200
 

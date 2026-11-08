@@ -3,6 +3,8 @@ package coffee.crema.visualizer
 import android.content.Context
 import android.util.Log
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SafeLoad
+import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.security.DeviceSecretBox
 import coffee.crema.security.SecretBox
@@ -80,10 +82,52 @@ data class ShotTombstone(
     val deletedAt: Long,
     /** The user asked to delete the Visualizer copy too ("Also delete on Visualizer"). */
     val deleteRemote: Boolean = false,
-    /** Failed remote deletes so far (F17: at most three, on the core's rule). */
+    /** Failed remote deletes so far (core `visualizer_queue_decision`). */
     val attempts: Int = 0,
     /** Unix ms before which the retry drain leaves the remote delete alone (0 = due). */
     val nextAttemptAt: Long = 0L,
+    /**
+     * The account the remote copy is on, while another is signed in: its delete
+     * waits, since this one would only be refused. Null = the signed-in account's.
+     */
+    val parkedFor: String? = null,
+) {
+    /** A remote delete the signed-in account should carry out. */
+    val owed: Boolean get() = deleteRemote && parkedFor == null
+}
+
+/**
+ * A shot deleted here that may be on Visualizer without Crema knowing its id: an
+ * upload was attempted, and no answer has come. The delete recorded the intent,
+ * and the id arrives later: from the upload if it finishes, or from a pull, which
+ * matches the row by upload key and duration instead of adding it back. Kept
+ * apart from [ShotTombstone] so an older build can still read this file.
+ */
+@Serializable
+data class UnboundTombstone(
+    /** The deleted local shot's id. */
+    val id: String,
+    /** With [durationMs], what a pull matches a remote row by. */
+    val completedAtMs: Long,
+    val durationMs: Long,
+    /** Unix ms of the local delete. */
+    val deletedAt: Long,
+    /** The user asked to delete the Visualizer copy too. */
+    val deleteRemote: Boolean = false,
+    /**
+     * [VisualizerState.pullRun] when this was written. Only a complete pull that
+     * started later, covered the window of [attemptedAt], and found no match ends
+     * it. There's no time limit: this row is small, and a shot coming back is the bug.
+     */
+    val writtenRun: Long = 0L,
+    /** When the POST went (unix ms), or null when nothing recorded it. */
+    val attemptedAt: Long? = null,
+    /**
+     * The account the POST went to, while another is signed in. Its rows aren't
+     * this account's to match, and a pull of this one says nothing about it, so it
+     * waits for that account to come back. Null = the signed-in account's.
+     */
+    val parkedFor: String? = null,
 )
 
 /**
@@ -144,6 +188,31 @@ data class VisualizerState(
      * way: a shared cursor starved the pull).
      */
     val shotPullCursor: Long? = null,
+    /**
+     * The Visualizer account this device's cursor, marks and queue belong to. It
+     * outlives a sign-out, so a sign-in as someone else is noticed; only Erase
+     * clears it. Seeded from [account] at load, so the first reconnect after this
+     * field arrived is covered.
+     */
+    val syncAccountId: String? = null,
+    /**
+     * Signed in, but `/me` hasn't said as whom. Nothing is sent or fetched until
+     * it does: the drain keeps asking.
+     */
+    val accountUnconfirmed: Boolean = false,
+    /** Signed in as a different account: uploads wait for the user's answer. */
+    val accountChangeAsk: Boolean = false,
+    /**
+     * Shots completed before this (unix ms) stay off the account: the user said
+     * no when asked. New shots flow, so uploads can't stay held for good.
+     */
+    val uploadExcludedBefore: Long? = null,
+    /**
+     * The server ended the session. Signed out, with the account, cursor, marks
+     * and tombstones kept, and a lasting banner until the user signs in or
+     * disconnects.
+     */
+    val needsReconnect: Boolean = false,
     /** Recent sync activity — capped at 20 entries, newest first. */
     val log: List<SyncLogEntry> = emptyList(),
     /**
@@ -161,6 +230,16 @@ data class VisualizerState(
     val shotTombstones: List<ShotTombstone> = emptyList(),
     /** Shot uploads waiting for a retry — see [QueuedUpload]. */
     val retryQueue: List<QueuedUpload> = emptyList(),
+    /**
+     * Shots a POST may have reached Visualizer for, with when (unix ms). Stored
+     * before each POST and cleared on a bind or a refusal, so a delete during an
+     * upload knows there may be a remote copy, even after a kill.
+     */
+    val uploadAttempted: Map<String, Long> = emptyMap(),
+    /** See [UnboundTombstone]. */
+    val unboundTombstones: List<UnboundTombstone> = emptyList(),
+    /** Counts pulls, to order them against [UnboundTombstone.writtenRun]. */
+    val pullRun: Long = 0L,
     /**
      * The stored state as read, when the keystore couldn't open a secret this
      * start ([SecretBox.Opened.Unavailable]); in memory only. Meanwhile the
@@ -239,7 +318,7 @@ class VisualizerStore(
 
     suspend fun load(): VisualizerState = withContext(Dispatchers.IO) {
         // Unreadable: kept aside + reported (see [loadStore]); starts signed out.
-        val raw = loadStore(file, "Visualizer settings") { text ->
+        val outcome = loadStore(file, "Visualizer settings") { text ->
             val state = json.decodeFromString(VisualizerState.serializer(), text)
             // Migrate a pre-unification file (flat `autoSync`/`privacy`/… fields and
             // no `prefs` object) forward into the shared [VisualizerSyncPrefs] shape.
@@ -249,7 +328,11 @@ class VisualizerStore(
             } else {
                 state
             }
-        }.valueOrNull() ?: return@withContext VisualizerState()
+        }
+        val raw = when (outcome) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> return@withContext VisualizerState()
+        }
         // A `.bak` left by an older build may hold a previous (or plaintext) token.
         SafeFile.purgeCopies(file)
         val (state, resave) = raw.openedWith(box)
@@ -278,11 +361,11 @@ class VisualizerStore(
     suspend fun save(state: VisualizerState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
     /** Delete the file and every copy (Erase all data); true when nothing remains. */
-    suspend fun erase(): Boolean = withContext(Dispatchers.IO) { SafeFile.erase(file) }
+    suspend fun erase(): Boolean = withContext(Dispatchers.IO) { eraseStore(file) }
 
     private fun write(state: VisualizerState): Boolean = try {
         // No `.bak` copies of sealed tokens (review 05 P3-5).
-        SafeFile.writeCredential(file, json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)))
+        SafeFile.writeCredential(file, json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)), "Visualizer settings")
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.
@@ -290,7 +373,7 @@ class VisualizerStore(
         false
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "visualizer.json"
         const val TAG = "VisualizerStore"
         val LEGACY_PREF_KEYS = setOf(

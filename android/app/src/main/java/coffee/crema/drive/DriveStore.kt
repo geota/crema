@@ -3,6 +3,8 @@ package coffee.crema.drive
 import android.content.Context
 import android.util.Log
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SafeLoad
+import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.security.DeviceSecretBox
 import coffee.crema.security.SecretBox
@@ -35,13 +37,28 @@ data class DriveState(
      *  the handshake still pending be recognised as "Google never came back"
      *  (geota/crema#45). Additive → nullable. */
     val pendingStartedAtMs: Long? = null,
-    /** Epoch ms of the last daily auto-backup ATTEMPT (issue #36) — stamped
-     *  before the upload so a failing backup retries next day, not on every
-     *  launch. Null = never attempted. Additive → nullable default. */
+    /** Epoch ms of the last daily auto-backup ATTEMPT (issue #36): stamped once
+     *  a token is held, and put back if the upload failed for a reason time can
+     *  fix, so the next launch tries again. Null = never attempted. Additive →
+     *  nullable default. */
     val lastAutoBackupAtMs: Long? = null,
     /** Epoch ms of the last SUCCESSFUL backup upload, manual or automatic —
      *  drives the "Last backed up X ago" readout. Additive → nullable. */
     val lastBackupSuccessAtMs: Long? = null,
+    /** Automatic copies kept per device, set by the first retention to run. An
+     *  install with this set has backed up, so PR8c can give the ones without
+     *  it a lower default. Additive → nullable. */
+    val autoBackupKeep: Int? = null,
+    /** Random, in this install's automatic backup names, so two devices of one
+     *  model can't prune each other. A reinstall gets a new one and leaves its
+     *  old copies alone. Additive → nullable. */
+    val autoBackupTag: String? = null,
+    /** Google ended the sign-in. Signed out, with a lasting banner until the
+     *  user reconnects or disconnects. Additive. */
+    val needsReconnect: Boolean = false,
+    /** The last run's core `SyncHealth` as JSON, shown in Settings. A string so
+     *  a state a later build adds can't make this file unreadable. Additive. */
+    val health: String? = null,
     /**
      * The stored state as read, when the keystore couldn't open a secret this
      * start ([SecretBox.Opened.Unavailable]); in memory only. Meanwhile the
@@ -103,8 +120,11 @@ class DriveStore(
 
     suspend fun load(): DriveState = withContext(Dispatchers.IO) {
         // Unreadable: kept aside + reported (see [loadStore]); starts signed out.
-        val raw = loadStore(file, "Google Drive sign-in") { json.decodeFromString(DriveState.serializer(), it) }
-            .valueOrNull() ?: return@withContext DriveState()
+        val outcome = loadStore(file, "Google Drive sign-in") { json.decodeFromString(DriveState.serializer(), it) }
+        val raw = when (outcome) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> return@withContext DriveState()
+        }
         // A `.bak` left by an older build may hold a previous (or plaintext) token.
         SafeFile.purgeCopies(file)
         val (state, resave) = raw.openedWith(box)
@@ -116,11 +136,11 @@ class DriveStore(
     suspend fun save(state: DriveState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
     /** Delete the file and every copy (Erase all data); true when nothing remains. */
-    suspend fun erase(): Boolean = withContext(Dispatchers.IO) { SafeFile.erase(file) }
+    suspend fun erase(): Boolean = withContext(Dispatchers.IO) { eraseStore(file) }
 
     private fun write(state: DriveState): Boolean = try {
         // No `.bak` copies of sealed tokens (review 05 P3-5).
-        SafeFile.writeCredential(file, json.encodeToString(DriveState.serializer(), state.sealedWith(box)))
+        SafeFile.writeCredential(file, json.encodeToString(DriveState.serializer(), state.sealedWith(box)), "Google Drive sign-in")
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.
@@ -128,7 +148,7 @@ class DriveStore(
         false
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "drive.json"
         const val TAG = "DriveStore"
     }

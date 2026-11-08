@@ -2,6 +2,7 @@ package coffee.crema.decent
 
 import android.content.Context
 import coffee.crema.net.HttpClients
+import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import coffee.crema.runCatchingCancellable
@@ -47,13 +48,14 @@ class StolenSerialsFileStore(private val context: Context) : StolenSerialsCacheS
 
     override suspend fun read(): StolenSerialsCache? = withContext(Dispatchers.IO) {
         // A rebuildable cache: an unreadable file is kept aside silently and refetched.
-        loadStore(file, what = null) { Json.decodeFromString<StolenSerialsCache>(it) }.valueOrNull()
+        when (val outcome = loadStore(file, what = null) { Json.decodeFromString<StolenSerialsCache>(it) }) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> null
+        }
     }
 
     override suspend fun write(cache: StolenSerialsCache) {
-        withContext(Dispatchers.IO) {
-            saveStore(file, Json.encodeToString(StolenSerialsCache.serializer(), cache), keepBackup = false)
-        }
+        saveStore(file, "stolen serials list", keepBackup = false) { Json.encodeToString(StolenSerialsCache.serializer(), cache) }
     }
 }
 

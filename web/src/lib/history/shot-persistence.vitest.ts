@@ -26,7 +26,7 @@ const h = vi.hoisted(() => {
 		setTokensReadable: (v: boolean) => {
 			tokensReadable = v;
 		},
-		mockHistory: { get: vi.fn(), bindVisualizerId: vi.fn() },
+		mockHistory: { seriesReady: vi.fn(async () => true), get: vi.fn(), bindVisualizerId: vi.fn() },
 		appendSyncLog: vi.fn(),
 		getDirection: () => direction,
 		setDirection: (d: 'push' | 'off') => {
@@ -57,9 +57,15 @@ vi.mock('#lib/services/token-vault.js', async (importOriginal) => ({
 }));
 
 import { pushShotToVisualizer } from './shot-persistence.ts';
+import { updateSyncConfig } from '#lib/visualizer/sync-config.js';
 import { ShotSync } from '#lib/services/shot-sync.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
-import { HttpStatusError, NetworkError, VisualizerPremiumGatedError } from '#lib/effect/errors.js';
+import {
+	HttpStatusError,
+	NetworkError,
+	ShotWithoutSeriesError,
+	VisualizerPremiumGatedError
+} from '#lib/effect/errors.js';
 
 const die = (label: string) => () => Effect.die(`unused: ${label}`);
 
@@ -99,6 +105,7 @@ function run(uploadShot: (shot: unknown) => Effect.Effect<{ visualizerId: string
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	localStorage.clear();
 	h.setDirection('push');
 	h.setAutoUpload(true);
 	h.setTokensReadable(true);
@@ -117,6 +124,19 @@ describe('pushShotToVisualizer — gating', () => {
 	it('no-ops when autoUpload is off', async () => {
 		h.setAutoUpload(false);
 		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
+		await run(uploadShot);
+		expect(uploadShot).not.toHaveBeenCalled();
+	});
+
+	it('unknown_identity_holds_uploads: a held account takes no push, manual or not', async () => {
+		updateSyncConfig({ accountUnconfirmed: true });
+		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
+		await Effect.runPromise(
+			Effect.provide(pushShotToVisualizer('s1', { manual: true }), Layer.merge(fakeShotSync(uploadShot), fakeUploadQueue))
+		);
+		await run(uploadShot);
+		expect(uploadShot).not.toHaveBeenCalled();
+		updateSyncConfig({ accountUnconfirmed: false, accountChangeAsk: true });
 		await run(uploadShot);
 		expect(uploadShot).not.toHaveBeenCalled();
 	});
@@ -140,6 +160,20 @@ describe('pushShotToVisualizer — gating', () => {
 			expect(uploadShot).not.toHaveBeenCalled();
 			expect(appendSyncLog).not.toHaveBeenCalled();
 		}
+	});
+
+	it('reads the row only after its series have landed', async () => {
+		let land = (_: boolean): void => {};
+		mockHistory.seriesReady.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
+		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
+
+		const pushing = run(uploadShot);
+		await vi.waitFor(() => expect(mockHistory.seriesReady).toHaveBeenCalled());
+		expect(mockHistory.get).not.toHaveBeenCalled();
+		land(true);
+		await pushing;
+
+		expect(uploadShot).toHaveBeenCalledTimes(1);
 	});
 
 	it('no-ops when the local row has vanished', async () => {
@@ -183,6 +217,16 @@ describe('pushShotToVisualizer — typed-error routing', () => {
 		expect(enqueue).not.toHaveBeenCalled();
 		expect(appendSyncLog).toHaveBeenCalledWith(
 			expect.objectContaining({ direction: 'skip', id: 's1' })
+		);
+	});
+
+	it('non_brew_no_samples_refused: says so, queues nothing and binds nothing', async () => {
+		await run(() => Effect.fail(new ShotWithoutSeriesError({ shotId: 's1' })));
+
+		expect(enqueue).not.toHaveBeenCalled();
+		expect(mockHistory.bindVisualizerId).not.toHaveBeenCalled();
+		expect(appendSyncLog).toHaveBeenCalledWith(
+			expect.objectContaining({ direction: 'skip', error: 'This shot has no telemetry to upload.' })
 		);
 	});
 

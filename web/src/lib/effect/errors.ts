@@ -33,6 +33,15 @@ export class ResponseDecodeError extends Data.TaggedError('ResponseDecodeError')
 	readonly cause: unknown;
 }> {}
 
+/**
+ * A machine shot with no telemetry, refused before any request: Visualizer would
+ * take it as `elapsed: 0`, and the row would count as uploaded. Terminal for the
+ * queue. The row stays unsynced, so a later pass offers it again.
+ */
+export class ShotWithoutSeriesError extends Data.TaggedError('ShotWithoutSeriesError')<{
+	readonly shotId: string;
+}> {}
+
 // ── OAuth / auth ────────────────────────────────────────────────────────
 
 export class NotAuthenticatedError extends Data.TaggedError('NotAuthenticatedError')<{}> {}

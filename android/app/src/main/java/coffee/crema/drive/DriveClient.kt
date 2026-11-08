@@ -5,6 +5,7 @@ import coffee.crema.persist.readBytesCapped
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import coffee.crema.net.HttpClients
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -13,6 +14,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.IOException
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -24,8 +28,10 @@ import java.net.URLEncoder
  * passes a valid access token (from the Drive auth flow, refreshed as needed).
  */
 
-private const val UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
-private const val FILES_URL = "https://www.googleapis.com/drive/v3/files"
+/** The Drive API's host, which a test points at a local server. */
+@Volatile internal var driveApiRoot = "https://www.googleapis.com"
+private val UPLOAD_URL get() = "$driveApiRoot/upload/drive/v3/files"
+private val FILES_URL get() = "$driveApiRoot/drive/v3/files"
 
 /** A backup file in Drive (the subset of fields we request; newest-first on list). */
 @Serializable
@@ -88,19 +94,42 @@ suspend fun driveUploadBackup(
             val status = conn.responseCode
             val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-            if (status !in 200..299) throw IOException(errorMessage(json, resp, status, "upload"))
+            if (status !in 200..299) throw DriveHttpError(status, resp, errorMessage(json, resp, status, "upload"))
             json.decodeFromString(DriveFile.serializer(), resp)
         } finally {
             conn.disconnect()
         }
     }
 
-/** List this app's backup files, newest first. */
-suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> =
+/** List this app's backup files, newest first: all of them, as retention can't
+ *  hold on to a fullest copy it was never shown. Throws if any page fails. */
+suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> {
+    val files = mutableListOf<DriveFile>()
+    val seen = HashSet<String>()
+    var pageToken: String? = null
+    var pages = 0
+    do {
+        if (pages++ >= DRIVE_LIST_MAX_PAGES) throw IOException("Drive list failed: it didn't end")
+        val page = driveListPage(accessToken, pageToken, json)
+        files += page.files
+        pageToken = page.nextPageToken
+        // A token seen before would go round for ever.
+        if (pageToken != null && !seen.add(pageToken)) throw IOException("Drive list failed: it went round")
+    } while (pageToken != null)
+    return files
+}
+
+/** Pages a listing may take: 10,000 files, far past what Crema makes. */
+internal const val DRIVE_LIST_MAX_PAGES = 100
+
+private class DriveFilePage(val files: List<DriveFile>, val nextPageToken: String?)
+
+private suspend fun driveListPage(accessToken: String, pageToken: String?, json: Json): DriveFilePage =
     withContext(Dispatchers.IO) {
         val q = URLEncoder.encode("name contains 'crema-backup' and trashed = false", "UTF-8")
-        val fields = URLEncoder.encode("files(id,name,modifiedTime,size)", "UTF-8")
-        val url = "$FILES_URL?q=$q&fields=$fields&orderBy=modifiedTime%20desc&pageSize=50"
+        val fields = URLEncoder.encode("nextPageToken,files(id,name,modifiedTime,size)", "UTF-8")
+        val page = pageToken?.let { "&pageToken=" + URLEncoder.encode(it, "UTF-8") }.orEmpty()
+        val url = "$FILES_URL?q=$q&fields=$fields&orderBy=modifiedTime%20desc&pageSize=100$page"
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000
@@ -111,12 +140,19 @@ suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> =
             val status = conn.responseCode
             val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-            if (status !in 200..299) throw IOException(errorMessage(json, resp, status, "list"))
-            val files = runCatching { json.parseToJsonElement(resp).jsonObject["files"]?.jsonArray }.getOrNull()
-                ?: return@withContext emptyList()
-            files.mapNotNull {
-                runCatching { json.decodeFromString(DriveFile.serializer(), it.toString()) }.getOrNull()
+            if (status !in 200..299) throw DriveHttpError(status, resp, errorMessage(json, resp, status, "list"))
+            // A body it can't read is a failed page, not an empty one: whatever
+            // acts on this listing takes what's missing for gone.
+            val page = runCatching {
+                val body = json.parseToJsonElement(resp).jsonObject
+                DriveFilePage(
+                    body.getValue("files").jsonArray.map {
+                        json.decodeFromString(DriveFile.serializer(), it.toString())
+                    },
+                    body["nextPageToken"]?.jsonPrimitive?.contentOrNull,
+                )
             }
+            page.getOrElse { throw IOException("Drive list failed: couldn't read the reply", it) }
         } finally {
             conn.disconnect()
         }
@@ -124,26 +160,23 @@ suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> =
 
 /** Download a backup file's raw bytes by id (a `.crema.zip`, or legacy text — the
  *  caller sniffs the zip magic vs decoding it as text). */
-/** Permanently delete one Drive file (retention pruning of old auto-backups).
- *  Only ever pointed at files Crema itself created under `drive.file` scope. */
-suspend fun driveDeleteFile(accessToken: String, fileId: String, json: Json): Unit =
+/** Move one Drive file to the trash (retention pruning of old auto-backups),
+ *  where the user can restore it for 30 days. `files.update` takes the
+ *  `drive.file` scope, and only the owner can trash a file, which is the user
+ *  for the files Crema creates. Over OkHttp, as HttpURLConnection can't PATCH. */
+suspend fun driveTrashFile(accessToken: String, fileId: String, json: Json): Unit =
     withContext(Dispatchers.IO) {
-        val url = "$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}"
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "DELETE"
-            connectTimeout = 15_000
-            readTimeout = 20_000
-            setRequestProperty("Authorization", "Bearer $accessToken")
-        }
-        try {
-            val status = conn.responseCode
-            // 204 on success; 404 counts as done (already gone).
-            if (status !in 200..299 && status != 404) {
-                val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-                throw IOException(errorMessage(json, err, status, "delete"))
+        val request = Request.Builder()
+            .url("$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}")
+            .header("Authorization", "Bearer $accessToken")
+            .patch("""{"trashed":true}""".toRequestBody("application/json; charset=UTF-8".toMediaType()))
+            .build()
+        HttpClients.base.newCall(request).execute().use { response ->
+            // 404 counts as done (already gone).
+            if (!response.isSuccessful && response.code != 404) {
+                val err = response.body.string()
+                throw DriveHttpError(response.code, err, errorMessage(json, err, response.code, "trash"))
             }
-        } finally {
-            conn.disconnect()
         }
     }
 
@@ -163,7 +196,7 @@ suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json)
                 conn.inputStream.use { it.readBytesCapped(ImportLimits.MAX_FILE_BYTES, "The Drive backup") }
             } else {
                 val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-                throw IOException(errorMessage(json, err, status, "download"))
+                throw DriveHttpError(status, err, errorMessage(json, err, status, "download"))
             }
         } finally {
             conn.disconnect()

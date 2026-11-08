@@ -7,9 +7,13 @@ import coffee.crema.core.Pump
 import coffee.crema.core.Transition
 import coffee.crema.core.newProfileId
 import coffee.crema.persist.eraseStore
+import coffee.crema.persist.SafeLoad
+import coffee.crema.persist.SafeFile
+import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -66,25 +70,33 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
      * an empty list if absent / unreadable. Each string is a complete `CremaProfile`
      * object ready for the thin-model decode (display) or `cremaProfileToWire`.
      */
+    /** The profiles are in memory: a save can't carry defaults now. */
+    fun openSaves() = SafeFile.openSaves(file)
+
+    /** The stored profiles. Saves stay refused until [openSaves]. */
     suspend fun load(): List<String> = withContext(Dispatchers.IO) {
-        loadStore(file, "custom profiles") { json.decodeFromString(CustomProfileLibrary.serializer(), it) }
-            .valueOrNull()?.profiles?.map { it.toString() } ?: emptyList()
+        when (val outcome = loadStore(file, WHAT, open = false) { json.decodeFromString(CustomProfileLibrary.serializer(), it) }) {
+            is SafeLoad.Loaded -> outcome.value.profiles.map { it.toString() }
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> emptyList()
+        }
     }
 
     /** Persist the custom profiles (full-JSON strings in; best-effort). A
      *  numbered snapshot older than the last one saved is skipped. */
     suspend fun save(profiles: List<String>, generation: Long? = null) {
-        withContext(Dispatchers.IO) {
+        if (!SaveFloor.admit(file, WHAT)) return
+        // This lock holds the generation check and the write together.
+        withContext(NonCancellable + Dispatchers.IO) {
             saveLock.withLock {
                 if (generation != null) {
                     if (generation < lastGeneration) return@withLock
                     lastGeneration = generation
                 }
-                runCatching {
+                saveStore(file, WHAT) {
                     val objs = profiles.mapNotNull {
                         runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull()
                     }
-                    saveStore(file, json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs)))
+                    json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs))
                 }
             }
         }
@@ -95,8 +107,9 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
         withContext(Dispatchers.IO) { saveLock.withLock { eraseStore(file) } }
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "customProfiles.json"
+        const val WHAT = "custom profiles"
     }
 }
 

@@ -8,6 +8,9 @@ import coffee.crema.ui.maintenanceRunAllowed
 import coffee.crema.ui.FirmwareCardCopy
 import coffee.crema.ui.rememberFirmwareCardCopy
 import androidx.compose.ui.text.style.TextOverflow
+import coffee.crema.drive.DRIVE_RECONNECT_LINE
+import coffee.crema.ui.components.VisualizerAccountRows
+import coffee.crema.visualizer.VISUALIZER_RECONNECT_LINE
 import coffee.crema.visualizer.entityLabel
 import coffee.crema.ui.fmt
 import coffee.crema.ui.relativeAgo
@@ -73,6 +76,7 @@ import coffee.crema.ui.refillPointMm
 import coffee.crema.ui.refillThresholdDepthMm
 import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
+import coffee.crema.ui.components.DRIVE_RESTORE_HINT
 import coffee.crema.ui.components.KEEP_CONNECTED_HINT
 import coffee.crema.ui.components.RememberedDeviceRow
 import coffee.crema.ui.components.CopyDiagnosticsRow
@@ -765,6 +769,7 @@ fun SettingsScreen(
                             vz = vz,
                             onSignIn = { vm.visualizer.beginSignIn(openUrl) },
                             onSignOut = { vm.visualizer.signOut() },
+                            onForget = { vm.visualizer.signOut(quiet = true) },
                             onTest = { vm.visualizer.testConnection() },
                             onOpenSite = { openUrl("https://visualizer.coffee") },
                         )
@@ -772,7 +777,8 @@ fun SettingsScreen(
                         // Android v1 = the shots-push controls).
                         if (vz.signedIn) {
                             SetGroup("Sync") {
-                                val unsyncedCount = ui.history.count { it.visualizerId == null }
+                                val noTelemetry = ui.sharing.noTelemetryShots
+                                val unsyncedCount = ui.history.count { it.visualizerId == null } - noTelemetry
                                 val lastSyncLabel = vz.lastShotSyncAt?.let {
                                     coffee.crema.ui.relativeAgo(it)
                                 } ?: "never"
@@ -791,6 +797,7 @@ fun SettingsScreen(
                                     "Shots",
                                     "${ui.history.size} shot(s)" +
                                         (if (unsyncedCount > 0) " · $unsyncedCount unsynced" else "") +
+                                        (if (noTelemetry > 0) " · $noTelemetry without telemetry" else "") +
                                         ". Last sync: $lastSyncLabel. Free.",
                                 ) {
                                     CremaSegmentedButton(
@@ -808,6 +815,7 @@ fun SettingsScreen(
                                 CremaSettingsRow("Upload finished shots", "Push each shot to Visualizer as it finishes (needs a pushing direction).") {
                                     CremaSwitch(vz.autoSync, vm::setVisualizerAutoSync, enabled = vz.shotsDirection == "backup" || vz.shotsDirection == "two-way")
                                 }
+                                VisualizerAccountRows(vz, vm.visualizer.unsent(ui.history).size, vm.visualizer::answerAccountChange)
                                 ui.sharing.catchUpOffer?.takeIf { it.destination == UploadTargetId.Visualizer }?.let { offer ->
                                     CatchUpRow(offer, busy = ui.sharing.catchUpBusy, onUpload = vm::runCatchUp, onDismiss = vm::dismissCatchUp)
                                 }
@@ -912,18 +920,27 @@ fun SettingsScreen(
                         val ds = ui.drive
                         SetGroup("Google Drive") {
                             if (!ds.connected) {
-                                CremaSettingsRow("Connect Google Drive", "Back up to and restore from your own Google Drive — only the backup files Crema creates (scope drive.file).", last = true) {
-                                    CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Connect")
+                                if (ds.needsReconnect) {
+                                    CremaSettingsRow("Reconnect Google Drive", DRIVE_RECONNECT_LINE, last = true) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            CremaButton(onClick = { vm.drive.disconnect(quiet = true) }, variant = CremaButtonVariant.Text, enabled = !ds.busy, label = "Forget")
+                                            CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Reconnect")
+                                        }
+                                    }
+                                } else {
+                                    CremaSettingsRow("Connect Google Drive", "Back up to and restore from your own Google Drive — only the backup files Crema creates (scope drive.file).", last = true) {
+                                        CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Connect")
+                                    }
                                 }
                             } else {
                                 val lastBackupSub = ds.lastBackupAtMs
                                     ?.let { "Upload a fresh backup file to your Google Drive. Last backed up ${relativeAgo(it)}." }
                                     ?: "Upload a fresh backup file to your Google Drive."
-                                CremaSettingsRow("Back up to Drive", lastBackupSub) {
+                                CremaSettingsRow("Back up to Drive", listOfNotNull(ds.healthLine, lastBackupSub).joinToString(" ")) {
                                     CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
                                 }
-                                CremaSettingsRow("Restore latest", "Merge the newest Drive backup into your current data.") {
-                                    CremaButton(onClick = { vm.drive.restoreLatest(false) }, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore")
+                                CremaSettingsRow("Restore from Drive", DRIVE_RESTORE_HINT) {
+                                    CremaButton(onClick = vm.drive::openBackupPicker, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore…")
                                 }
                                 CremaSettingsRow("Automatic daily backup", "Upload a fresh backup once a day when the app opens — so an uninstall can't take your data with it.") {
                                     CremaSwitch(ui.autoDriveBackup, vm::setAutoDriveBackup)
@@ -1559,6 +1576,7 @@ private fun VisualizerHeroCard(
     vz: coffee.crema.visualizer.VisualizerSync.UiState,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
+    onForget: () -> Unit,
     onTest: () -> Unit,
     onOpenSite: () -> Unit,
 ) {
@@ -1580,6 +1598,7 @@ private fun VisualizerHeroCard(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 val eyebrow = when {
                     !vz.configured -> "OAuth not configured"
+                    vz.needsReconnect -> "Sign-in ended"
                     !vz.signedIn -> "Not connected"
                     else -> buildString {
                         append("Connected")
@@ -1605,6 +1624,7 @@ private fun VisualizerHeroCard(
                 Text(
                     when {
                         !vz.configured -> "Build with -PvisualizerClientId=… (or put visualizerClientId in local.properties) to enable sync."
+                        vz.needsReconnect -> VISUALIZER_RECONNECT_LINE
                         !vz.signedIn -> "Free community service for sharing and comparing espresso shots"
                         else -> "Signed in"
                     },
@@ -1641,8 +1661,15 @@ private fun VisualizerHeroCard(
                         variant = CremaButtonVariant.Filled,
                         icon = "sign-in",
                         enabled = vz.configured && !vz.busy,
-                        label = if (vz.busy) "Signing in…" else "Sign in",
+                        label = when {
+                            vz.busy -> "Signing in…"
+                            vz.needsReconnect -> "Reconnect"
+                            else -> "Sign in"
+                        },
                     )
+                    if (vz.needsReconnect) {
+                        CremaButton(onClick = onForget, variant = CremaButtonVariant.Text, label = "Forget")
+                    }
                 }
             }
         }

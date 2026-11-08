@@ -153,29 +153,32 @@ internal class GuidedBrewController(
         }
     }
 
+    /** Read the recipe library from disk into the UI state. */
+    suspend fun loadRecipes() {
+        val loaded = recipeStore.load()
+        // One-time clean-up: untouched legacy "… classic" starters go,
+        // their default pointers move to the method's built-in.
+        val migrated = coffee.crema.brew.RecipeLibraryRules.migrate(loaded)
+        if (migrated != null) recipeStore.save(migrated)
+        val env = migrated ?: loaded
+        coffee.crema.brew.CustomMethods.all = env.customMethods
+        updateUi {
+            it.copy(
+                brewRecipes = env.recipes,
+                lastRecipeByMethod = env.lastUsedByMethod,
+                hiddenBuiltinRecipes = env.hiddenBuiltins,
+                builtinRecipes = coffee.crema.brew.BUILTIN_BREW_RECIPES,
+                customMethods = env.customMethods,
+            )
+        }
+        resolveGuidedSetup()
+    }
+
     /** Seed the recipe library from disk and keep the custom-method label
      *  fallback current. Called from the VM's `init`, where this used to run. */
     fun load() {
         // Seed the recipe library from disk — cheap (a handful of rows).
-        scope.launch {
-            val loaded = recipeStore.load()
-            // One-time clean-up: untouched legacy "… classic" starters go,
-            // their default pointers move to the method's built-in.
-            val migrated = coffee.crema.brew.RecipeLibraryRules.migrate(loaded)
-            if (migrated != null) recipeStore.save(migrated)
-            val env = migrated ?: loaded
-            coffee.crema.brew.CustomMethods.all = env.customMethods
-            updateUi {
-                it.copy(
-                    brewRecipes = env.recipes,
-                    lastRecipeByMethod = env.lastUsedByMethod,
-                    hiddenBuiltinRecipes = env.hiddenBuiltins,
-                    builtinRecipes = coffee.crema.brew.BUILTIN_BREW_RECIPES,
-                    customMethods = env.customMethods,
-                )
-            }
-            resolveGuidedSetup()
-        }
+        scope.launch { loadRecipes() }
         // Rows saved with a custom method snapshot its label; keep the
         // id → label fallback current for methods this device doesn't know.
         scope.launch {

@@ -5,7 +5,7 @@ import coffee.crema.core.CommonSettings
 import coffee.crema.core.MaintenanceState
 import coffee.crema.core.Roaster
 import coffee.crema.core.VisualizerSyncPrefs
-import coffee.crema.core.exportBackupJsonl
+import coffee.crema.core.exportBackupBundle
 import coffee.crema.core.importBackupJsonl
 import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.defaultMaintenanceState
@@ -15,9 +15,12 @@ import coffee.crema.visualizer.DEFAULT_VISUALIZER_SYNC_PREFS
 import coffee.crema.visualizer.storedShotFromBackupJson
 import coffee.crema.visualizer.wireShotJson
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -29,7 +32,7 @@ import kotlinx.serialization.json.put
 /*
  * The whole-app `crema-backup/v1` bundle, both directions. The core owns the
  * format: [backupBundleJsonl] hands it an envelope of this shell's records
- * (`exportBackupJsonl`) and [parseBackup] reads a bundle back through the same
+ * (`exportBackupBundle`) and [parseBackup] reads a bundle back through the same
  * parser web uses (`importBackupJsonl`), so a backup from either shell restores
  * on the other. What stays here is the Android side of the mapping: the
  * envelope's shapes on the way out, the store types and the settings / blob
@@ -53,17 +56,74 @@ internal class BackupSnapshot(
     val userRecipes: List<coffee.crema.core.BrewRecipe>,
 )
 
+/** The notice for a backup that wrote nothing. */
+internal const val BACKUP_FAILED = "Backup failed: nothing was saved."
+
+/** One row the core left out of a backup (`de1_domain::OmittedBackupRow`). */
+@Serializable
+internal data class OmittedBackupRow(val kind: String, val index: Int, val id: String? = null)
+
+/** What the core built (`de1_domain::BackupExport`): the bundle, the shots it
+ *  carries without their profile, and the rows it left out. */
+@Serializable
+internal data class BuiltBackup(
+    val jsonl: String,
+    val degraded: List<String> = emptyList(),
+    val omitted: List<OmittedBackupRow> = emptyList(),
+    /** Shots written, and how many have a curve. */
+    val shotCount: UInt = 0u,
+    val curveCount: UInt = 0u,
+)
+
+/** The id of a row the core left out, for the log. The core only has one when
+ *  the row got far enough to read; the rest are named here by their place in
+ *  the lists [backupBundleJsonl] sent. Custom profiles are raw JSON, so one
+ *  that won't read has no id to give. */
+internal fun omittedRowId(row: OmittedBackupRow, snap: BackupSnapshot): String? = row.id ?: when (row.kind) {
+    "shot" -> snap.state.history.getOrNull(row.index)?.id
+    "bean" -> snap.state.beans.getOrNull(row.index)?.id
+    "roaster" -> snap.state.roasters.getOrNull(row.index)?.id
+    "recipe" -> snap.userRecipes.getOrNull(row.index)?.id
+    "brewMethod" -> snap.state.customMethods.getOrNull(row.index)?.id
+    else -> null
+}
+
+/** The notice owed for a backup that left a row out or thinned one, or null. */
+internal fun backupGapsNotice(built: BuiltBackup): String? {
+    val n = built.omitted.size
+    val noun = when (built.omitted.map { it.kind }.distinct().singleOrNull()) {
+        null -> "item"
+        "brewMethod" -> "method"
+        else -> built.omitted.first().kind
+    }
+    val left = "$n $noun${if (n == 1) "" else "s"} couldn't be read and ${if (n == 1) "was" else "were"} left out of this backup."
+    val d = built.degraded.size
+    val thin = "$d shot${if (d == 1) " was" else "s were"} backed up without ${if (d == 1) "its" else "their"} profile."
+    return listOfNotNull(left.takeIf { n > 0 }, thin.takeIf { d > 0 }).joinToString(" ").ifEmpty { null }
+}
+
+/**
+ * Each of [rows] as its own JSON string, for the core to read one at a time,
+ * or null where encoding threw, which the core reports as left out. Separate
+ * strings because `wireShotJson` has no NaN guard: in one envelope a single
+ * `NaN` would make the whole thing invalid JSON and fail the backup.
+ */
+private fun <T> rowStrings(rows: List<T>, encode: (T) -> String): JsonArray =
+    JsonArray(rows.map { row -> runCatching<JsonElement> { JsonPrimitive(encode(row)) }.getOrDefault(JsonNull) })
+
 /** Build the whole-app backup bundle as `crema-backup/v1` JSONL from [snap].
  *  Heavy (every shot's sample series + the core export); reads only [snap],
- *  so it is safe off the main thread. */
+ *  so it is safe off the main thread. One bad row is left out and reported;
+ *  a section that can't be written, or whose rows all failed, throws, so no
+ *  empty backup can go out and replace a good one. */
 internal fun backupBundleJsonl(
     snap: BackupSnapshot,
     json: Json,
     createdAtMs: Long,
     appVersion: String,
     deviceLabel: String,
-    export: (envelope: String, createdAtMs: Long, appVersion: String, deviceLabel: String) -> String = ::exportBackupJsonl,
-): String {
+    export: (envelope: String, createdAtMs: Long, appVersion: String, deviceLabel: String) -> String = ::exportBackupBundle,
+): BuiltBackup {
     val customs = snap.customs
     val s = snap.state
     val pinnedIds = snap.pinned
@@ -79,31 +139,27 @@ internal fun backupBundleJsonl(
         proxyPrimaryPort = 0,
         replayPrimary = false,
     )
-    val beansJson = runCatching { json.encodeToString(ListSerializer(Bean.serializer()), s.beans) }.getOrElse { "[]" }
-    val roastersJson = runCatching { json.encodeToString(ListSerializer(Roaster.serializer()), s.roasters) }.getOrElse { "[]" }
+    val beans = rowStrings(s.beans) { json.encodeToString(Bean.serializer(), it) }
+    val roasters = rowStrings(s.roasters) { json.encodeToString(Roaster.serializer(), it) }
     // Shots ride in the canonical core `StoredShot` wire shape (the SAME shape
     // the Visualizer path emits via `export_v2_json_shot`), NOT Android's flat
     // store shape: the core backup exporter parses `shots:[StoredShot]`, so the
     // flat shape fails the whole envelope's deserialization → the entire backup
     // aborts once any shot exists (issue 01). `wireShotJson` emits
     // formatVersion/completedAt/record; restore inverts via storedShotFromBackupJson.
-    val shotsJson = runCatching {
-        JsonArray(s.history.map { wireShotJson(it, forBackup = true) }).toString()
-    }.getOrElse { "[]" }
+    val shots = rowStrings(s.history) { wireShotJson(it, forBackup = true).toString() }
     // Settings line: the shared cross-shell CommonSettings `common` block (both
     // shells emit it identically, so common prefs restore web<->Android) + this
     // shell's `_shell` tag + Android-only `qcGrind` (re-applied only on Android).
-    val settingsJson = runCatching {
-        val common = json.parseToJsonElement(json.encodeToString(CommonSettings.serializer(), portable.toCommonSettings()))
-        json.encodeToString(
-            JsonObject.serializer(),
-            buildJsonObject {
-                put("common", common)
-                put("_shell", "android")
-                portable.qcGrind?.let { put("qcGrind", it) }
-            },
-        )
-    }.getOrElse { "{\"_shell\":\"android\"}" }
+    val common = json.parseToJsonElement(json.encodeToString(CommonSettings.serializer(), portable.toCommonSettings()))
+    val settingsJson = json.encodeToString(
+        JsonObject.serializer(),
+        buildJsonObject {
+            put("common", common)
+            put("_shell", "android")
+            portable.qcGrind?.let { put("qcGrind", it) }
+        },
+    )
     // Profile organisation — pinned + hidden BUILT-IN ids (cross-shell; custom
     // pins ride inside the profile JSON). Maintenance — a shared core type,
     // fully portable. Visualizer SYNC prefs — shell-tagged, token-free.
@@ -116,9 +172,7 @@ internal fun backupBundleJsonl(
             ),
         ),
     )
-    val recipesJson = runCatching {
-        json.encodeToString(ListSerializer(coffee.crema.core.BrewRecipe.serializer()), userRecipes)
-    }.getOrElse { "[]" }
+    val recipes = rowStrings(userRecipes) { json.encodeToString(coffee.crema.core.BrewRecipe.serializer(), it) }
     // Recipe organisation — default pointers (may name built-ins) + hidden
     // built-in ids, cross-shell like profileMeta.
     val recipeMetaJson = json.encodeToString(
@@ -130,34 +184,30 @@ internal fun backupBundleJsonl(
             ),
         ),
     )
-    val customMethodsJson = runCatching {
-        json.encodeToString(ListSerializer(coffee.crema.core.CustomBrewMethod.serializer()), s.customMethods)
-    }.getOrElse { "[]" }
-    val maintenanceJson = runCatching { json.encodeToString(MaintenanceState.serializer(), s.maintenance) }.getOrElse { "{}" }
-    val visualizerPrefsJson = runCatching {
-        json.encodeToString(VisualizerSyncPrefs.serializer(), snap.visualizerPrefs)
-    }.getOrElse { "{}" }
+    val customMethods = rowStrings(s.customMethods) { json.encodeToString(coffee.crema.core.CustomBrewMethod.serializer(), it) }
+    val maintenanceJson = json.encodeToString(MaintenanceState.serializer(), s.maintenance)
+    val visualizerPrefsJson = json.encodeToString(VisualizerSyncPrefs.serializer(), snap.visualizerPrefs)
     // Assemble the envelope as a JsonObject rather than raw string concat so a
     // dropped brace / comma can't silently corrupt it (issue 06 F5). Each piece
     // is already a serialized JSON string; parse it back into the tree. The core
     // re-serialises the envelope when it emits the JSONL, so formatting here is
     // immaterial — this only hardens assembly.
     val envelope = buildJsonObject {
-        put("profiles", JsonArray(customs.map { json.parseToJsonElement(it) }))
-        put("beans", json.parseToJsonElement(beansJson))
-        put("roasters", json.parseToJsonElement(roastersJson))
-        put("shots", json.parseToJsonElement(shotsJson))
+        put("profiles", rowStrings(customs) { it })
+        put("beans", beans)
+        put("roasters", roasters)
+        put("shots", shots)
         put("settings", json.parseToJsonElement(settingsJson))
         put("profileMeta", json.parseToJsonElement(profileMetaJson))
-        put("recipes", json.parseToJsonElement(recipesJson))
+        put("recipes", recipes)
         put("recipeMeta", json.parseToJsonElement(recipeMetaJson))
         // The user's own brewing methods, tombstones included (their old
         // brews still resolve) → `kind:"brewMethod"` lines.
-        put("customMethods", json.parseToJsonElement(customMethodsJson))
+        put("customMethods", customMethods)
         put("maintenance", json.parseToJsonElement(maintenanceJson))
         put("visualizerPrefs", json.parseToJsonElement(visualizerPrefsJson))
     }.toString()
-    return export(envelope, createdAtMs, appVersion, deviceLabel)
+    return json.decodeFromString(BuiltBackup.serializer(), export(envelope, createdAtMs, appVersion, deviceLabel))
 }
 
 /**

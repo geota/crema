@@ -1739,6 +1739,14 @@ pub fn is_recoverable(tag: &str, status: Option<u32>) -> bool {
     de1_domain::is_recoverable(tag, status.and_then(|s| u16::try_from(s).ok()))
 }
 
+/// Whether an upload must refuse a stored row for having no telemetry. See
+/// `de1_domain::upload_refused_no_samples`.
+#[wasm_bindgen(js_name = uploadRefusedNoSamples)]
+#[must_use]
+pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -> bool {
+    de1_domain::upload_refused_no_samples(is_brew_log, sample_count)
+}
+
 /// Visualizer's free-plan daily upload cap: the cap (e.g. `30`) when a reply
 /// with HTTP `status` and `body` is the quota 422, else `undefined`. See
 /// `de1_domain::visualizer_quota_limit`.
@@ -1750,14 +1758,42 @@ pub fn visualizer_quota_limit(status: u32, body: &str) -> Option<u32> {
 
 /// Delay (ms) before retry number `attempt` of a recoverable Visualizer
 /// failure with HTTP `status` (`undefined` for a transport failure) — longer
-/// for a 429. See `de1_domain::retry_backoff_ms`.
+/// for a 429. `jitterUnit` is a random number in `0..1`. See
+/// `de1_domain::retry_backoff_ms`.
 #[wasm_bindgen(js_name = retryBackoffMs)]
 #[must_use]
-pub fn retry_backoff_ms(status: Option<u32>, attempt: u32) -> f64 {
+pub fn retry_backoff_ms(status: Option<u32>, attempt: u32, jitter_unit: f64) -> f64 {
     #[allow(clippy::cast_precision_loss)]
-    let ms =
-        de1_domain::retry_backoff_ms(status.and_then(|s| u16::try_from(s).ok()), attempt) as f64;
+    let ms = de1_domain::retry_backoff_ms(
+        status.and_then(|s| u16::try_from(s).ok()),
+        attempt,
+        jitter_unit,
+    ) as f64;
     ms
+}
+
+/// What a failed cloud call means: a JSON `SyncFailure`. `service` is
+/// `"visualizer"`, `"decent"` or `"drive"`, `operation` `"call"` or `"refresh"`,
+/// `status` `undefined` when the request got no answer, `retryAfter` the raw
+/// header. See `de1_domain::classify_sync_failure`.
+#[wasm_bindgen(js_name = classifySyncFailure)]
+#[must_use]
+pub fn classify_sync_failure(
+    service: &str,
+    operation: &str,
+    status: Option<u32>,
+    body: &str,
+    retry_after: Option<String>,
+    now_ms: f64,
+) -> String {
+    de1_domain::classify_sync_failure_json(
+        service,
+        operation,
+        status.and_then(|s| u16::try_from(s).ok()),
+        body,
+        retry_after.as_deref(),
+        f64_to_ms(now_ms),
+    )
 }
 
 /// What a failed Visualizer refresh-token grant means: `"Definitive"` (sign
@@ -1776,10 +1812,29 @@ pub fn classify_token_refresh_failure(status: Option<u32>, body: Option<String>)
     )
 }
 
+/// Whether a pull from `sinceMs` covered the window an upload attempted at
+/// `attemptedAtMs` would have landed in. See `de1_domain::pull_covers_attempt`.
+#[wasm_bindgen(js_name = pullCoversAttempt)]
+#[must_use]
+pub fn pull_covers_attempt(since_ms: f64, attempted_at_ms: Option<f64>) -> bool {
+    de1_domain::pull_covers_attempt(f64_to_ms(since_ms), attempted_at_ms.map(f64_to_ms))
+}
+
+/// What a confirmed `/me` means: `"First"`, `"Same"` or `"Changed"`. See
+/// `de1_domain::account_change_action`.
+#[wasm_bindgen(js_name = accountChangeAction)]
+#[must_use]
+pub fn account_change_action(stored: Option<String>, me: &str) -> String {
+    format!(
+        "{:?}",
+        de1_domain::account_change_action(stored.as_deref(), me)
+    )
+}
+
 /// The Visualizer retry queue's rule for a failed operation: a JSON
 /// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
-/// `attemptsMade` counts this attempt. See
-/// `de1_domain::visualizer_queue_decision`.
+/// `attemptsMade` counts this attempt; `jitterUnit` is a random number in
+/// `0..1`. See `de1_domain::visualizer_queue_decision`.
 #[wasm_bindgen(js_name = visualizerQueueDecision)]
 #[must_use]
 pub fn visualizer_queue_decision(
@@ -1788,6 +1843,7 @@ pub fn visualizer_queue_decision(
     status: Option<u32>,
     body: &str,
     attempts_made: u32,
+    jitter_unit: f64,
 ) -> String {
     de1_domain::visualizer_queue_decision_json(
         op,
@@ -1795,6 +1851,7 @@ pub fn visualizer_queue_decision(
         status.and_then(|s| u16::try_from(s).ok()),
         body,
         attempts_made,
+        jitter_unit,
     )
 }
 
@@ -2004,20 +2061,79 @@ pub fn export_profile_file(profiles_json: &str) -> Result<String, String> {
 /// adds custom-profile lines + a portable settings line, and a richer
 /// header (`deviceLabel`, profile count). One record per line, header
 /// first. The shell strips OAuth tokens + per-device/BLE state before
-/// building the envelope. See `de1_domain::export_backup_jsonl_from_json`.
+/// building the envelope. Returns the `BackupExport` as JSON: `{ jsonl,
+/// degraded, omitted }`. See `de1_domain::export_backup_jsonl_from_json`.
 ///
 /// # Errors
 ///
 /// Returns the JSON parse error string when the envelope is malformed.
-#[wasm_bindgen(js_name = exportBackupJsonl)]
-pub fn export_backup_jsonl(
+#[wasm_bindgen(js_name = exportBackupBundle)]
+pub fn export_backup_bundle(
     envelope_json: &str,
     created_at_unix_ms: f64,
     app_version: &str,
     device_label: &str,
 ) -> Result<String, String> {
     let created_at = f64_to_ms(created_at_unix_ms);
-    de1_domain::export_backup_jsonl_from_json(envelope_json, created_at, app_version, device_label)
+    let built = de1_domain::export_backup_jsonl_from_json(
+        envelope_json,
+        created_at,
+        app_version,
+        device_label,
+    )?;
+    serde_json::to_string(&built).map_err(|e| e.to_string())
+}
+
+/// Scan a backup's bytes into a `BackupManifest` JSON, with the bean ids its
+/// zip holds photos for (a JSON string array). See
+/// `de1_domain::scan_backup_bytes`.
+#[wasm_bindgen(js_name = scanBackupBytes)]
+#[must_use]
+pub fn scan_backup_bytes(bytes: &[u8], photos_json: &str) -> String {
+    let photos: Vec<String> = serde_json::from_str(photos_json).unwrap_or_default();
+    de1_domain::scan_backup_bytes_json(bytes, &photos)
+}
+
+/// A backup's records, under the scan's line rules, as a `BackupImportPlan`
+/// JSON. See `de1_domain::import_backup_bytes`.
+#[wasm_bindgen(js_name = importBackupBytes)]
+#[must_use]
+pub fn import_backup_bytes(bytes: &[u8]) -> String {
+    de1_domain::import_backup_bytes_json(bytes)
+}
+
+/// One restore, planned. See `de1_domain::plan_restore`.
+///
+/// # Errors
+///
+/// Returns the parse error when an input is malformed.
+#[wasm_bindgen(js_name = planRestore)]
+pub fn plan_restore(
+    manifest_json: &str,
+    local_json: &str,
+    mode: &str,
+    opts_json: &str,
+) -> Result<String, String> {
+    let mode: de1_domain::RestoreMode =
+        serde_json::from_value(serde_json::Value::String(mode.to_owned()))
+            .map_err(|e| e.to_string())?;
+    de1_domain::plan_restore_json(manifest_json, local_json, mode, opts_json)
+}
+
+/// Whether a `CommonSettings` JSON is as a fresh install leaves it. See
+/// `de1_domain::common_is_pristine`.
+#[wasm_bindgen(js_name = commonIsPristine)]
+#[must_use]
+pub fn common_is_pristine(common_json: &str) -> bool {
+    de1_domain::common_is_pristine_json(common_json)
+}
+
+/// What a backup's name says about it, as a `BackupFileInfo` JSON. See
+/// `de1_domain::describe_backup_file`.
+#[wasm_bindgen(js_name = describeBackupFile)]
+#[must_use]
+pub fn describe_backup_file(name: &str) -> String {
+    de1_domain::describe_backup_file_json(name)
 }
 
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the

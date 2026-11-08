@@ -31,6 +31,8 @@ import java.util.concurrent.Executors
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class DriveUnopenedSignInTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val dir: File = Files.createTempDirectory("drive-unopened").toFile()
     private val context = object : ContextWrapper(null) {
         override fun getFilesDir(): File = dir
@@ -55,7 +57,7 @@ class DriveUnopenedSignInTest {
         DriveSync(
             store, json, scope, "cid", notify = {}, backupZip = { null }, backupFileName = { "b" }, applyRestore = { _, _ -> },
             exchangeCode = { _, _ -> issued },
-            refreshToken = { throw java.io.IOException("refresh refused") },
+            refreshToken = { throw DriveHttpError(400, """{"error":"invalid_grant"}""", "refresh refused") },
         ).also {
                 it.load()
                 keystore.notReady = false

@@ -38,6 +38,8 @@ import java.util.concurrent.Executors
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class VisualizerUnopenedSignInTest {
+    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+
     private val dir: File = Files.createTempDirectory("vz-unopened").toFile()
     private val context = object : ContextWrapper(null) {
         override fun getFilesDir(): File = dir
@@ -126,12 +128,12 @@ class VisualizerUnopenedSignInTest {
     @Test
     fun `a new sign-in replaces it, and a later session clear doesn't bring it back`() {
         // Tokens already expired, no refresh token: the first authorized call
-        // after sign-in clears the session (refreshOrSignOut).
+        // after sign-in, `/me`, ends the session.
         issued = TokenSet("new-token", null, expiresAt = 0)
         val sync = unopenedStart()
         signIn(sync)
-        waitFor("signed in") { raw().contains("\"New\"") }
-        waitFor("session cleared") { !raw().contains("accessToken") }
+        waitFor("session cleared") { raw().contains("\"needsReconnect\":true") }
+        assertFalse(raw().contains("accessToken"))
         Thread.sleep(200)
         assertNull(stored().tokens)
     }

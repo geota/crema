@@ -20,12 +20,13 @@
  */
 
 import {
-	exportBackupJsonl,
+	exportBackupBundle,
 	guardRestoredVisualizerPrefs,
 	importBackupJsonl
 } from '#lib/wasm/de1_wasm.js';
 import { getBeanStore } from '#lib/bean/index.js';
 import { getHistoryStore } from '#lib/history/index.js';
+import { refusedNoSamples } from '#lib/history/model.js';
 import {
 	getSettingsStore,
 	settingsToCommon,
@@ -43,7 +44,7 @@ import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '#lib/visualizer/s
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { strToU8, strFromU8, zipSync } from 'fflate';
 import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
-import { readJson } from '#lib/utils/storage.js';
+import { readStored } from '#lib/utils/storage.js';
 import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
 import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 import type { Bean, Roaster } from '#lib/bean/model.js';
@@ -73,6 +74,28 @@ export interface BackupContents {
 	beans: number;
 	roasters: number;
 	shots: number;
+	/** Rows a built backup left out because they can't be read. */
+	omitted?: readonly OmittedBackupRow[];
+	/** Shots a built backup carries without their profile, by id. */
+	degraded?: readonly string[];
+	/** Machine shots a built backup carries with no curve. */
+	noCurves?: number;
+}
+
+/** One row a backup left out (the core's `OmittedBackupRow`). */
+export interface OmittedBackupRow {
+	/** The line kind: `shot`, `bean`, `roaster`, `recipe`, `brewMethod`, `profile`. */
+	kind: string;
+	/** Where the row sat in the list handed to the core. */
+	index: number;
+	id: string | null;
+}
+
+/** The core's `BackupExport`. */
+interface BackupExport {
+	jsonl: string;
+	degraded: string[];
+	omitted: OmittedBackupRow[];
 }
 
 /** A human one-liner for a completed backup. Falls back to "settings &
@@ -83,12 +106,55 @@ export function describeBackup(c: BackupContents): string {
 		: 'settings & favourites';
 }
 
+/** The sentence owed after a backup that left a row out or thinned one, with a
+ *  leading space, or `''` for a clean backup. */
+export function describeBackupGaps(c: BackupContents): string {
+	const omitted = c.omitted ?? [];
+	const degraded = c.degraded?.length ?? 0;
+	const kinds = new Set(omitted.map((o) => o.kind));
+	const noun = kinds.size === 1 ? ([...kinds][0] === 'brewMethod' ? 'method' : [...kinds][0]) : 'item';
+	const left =
+		omitted.length === 0
+			? ''
+			: ` ${omitted.length} ${noun}${omitted.length === 1 ? '' : 's'} couldn’t be read and ${omitted.length === 1 ? 'was' : 'were'} left out.`;
+	const thin =
+		degraded === 0
+			? ''
+			: ` ${degraded} shot${degraded === 1 ? ' was' : 's were'} backed up without ${degraded === 1 ? 'its' : 'their'} profile.`;
+	const noCurves = c.noCurves ?? 0;
+	const flat =
+		noCurves === 0
+			? ''
+			: ` ${noCurves} shot${noCurves === 1 ? ' was' : 's were'} backed up without ${noCurves === 1 ? 'its' : 'their'} curve.`;
+	return left + thin + flat;
+}
+
+/**
+ * Why a built backup shouldn't go to Drive, or `null`. A local file is the
+ * user's to keep or not, but a restore from Drive starts at whatever is newest,
+ * so a copy that lost its curves to a failed read must not land there.
+ */
+export function driveBackupRefusal(c: BackupContents): string | null {
+	if (!getHistoryStore().seriesFailed || !c.noCurves) return null;
+	return `Shot curves couldn’t be read, so ${c.noCurves} shot${c.noCurves === 1 ? '' : 's'} would go without ${c.noCurves === 1 ? 'its curve' : 'their curves'}. Nothing was uploaded. Reload the app and try again.`;
+}
+
+/**
+ * The custom profiles as stored, with their ids as written. The profile store
+ * has read this key by now and dealt with what it found, so a value that can't
+ * be read is only left out here.
+ */
+function storedCustomProfiles(): unknown[] {
+	const read = readStored(CUSTOM_PROFILES_KEY);
+	return read.kind === 'loaded' && Array.isArray(read.value) ? read.value : [];
+}
+
 /** Count what an export would include — lets the UI disable "Back up" / show a
  *  summary without building the bundle. */
 export function backupContents(): BackupContents {
 	const beanStore = getBeanStore();
 	const history = getHistoryStore();
-	const customProfiles = readJson<unknown[]>(CUSTOM_PROFILES_KEY, []);
+	const customProfiles = storedCustomProfiles();
 	return {
 		profiles: customProfiles.length,
 		beans: beanStore.beans.length,
@@ -118,15 +184,36 @@ function settingsAreDefault(s: Settings): boolean {
 }
 
 /**
+ * Each of `rows` as its own JSON string, for the core to read one at a time, as
+ * Android hands them over, or `null` where encoding threw, which the core
+ * reports as left out. Strings cost the core far less memory than a parsed
+ * tree of every row at once.
+ */
+function rowStrings(rows: readonly unknown[]): (string | null)[] {
+	return rows.map((row) => {
+		try {
+			return JSON.stringify(row) ?? null;
+		} catch {
+			return null;
+		}
+	});
+}
+
+/**
  * Build the `crema-backup/v1` JSONL for everything local, WITHOUT downloading —
  * custom profiles only (built-ins ship with the app). Shared by the local
  * export and the Drive upload. Returns null when there's nothing to back up.
+ * Waits for the stored series, so no shot goes out without its curve, and
+ * throws when they don't arrive.
  */
-export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | null {
-	const beanStore = getBeanStore();
+export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<BuiltBackup | null> {
 	const history = getHistoryStore();
+	if (!(await history.seriesReady())) {
+		throw new Error('Shot data is still loading — try again in a moment.');
+	}
+	const beanStore = getBeanStore();
 	const settings = getSettingsStore();
-	const customProfiles = readJson<unknown[]>(CUSTOM_PROFILES_KEY, []);
+	const customProfiles = storedCustomProfiles();
 	const beans = beanStore.beans;
 	const roasters = beanStore.roasters;
 	const shots = history.all;
@@ -160,12 +247,12 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 	}
 
 	const envelope = JSON.stringify({
-		profiles: customProfiles,
-		beans,
-		roasters,
-		shots,
-		recipes,
-		customMethods,
+		profiles: rowStrings(customProfiles),
+		beans: rowStrings(beans),
+		roasters: rowStrings(roasters),
+		shots: rowStrings(shots),
+		recipes: rowStrings(recipes),
+		customMethods: rowStrings(customMethods),
 		// Settings line: the shared cross-shell `common` block (CommonSettings —
 		// both shells emit it identically, so common prefs restore web<->Android)
 		// + this shell's `_shell` tag + the web-only platform extras (webhooks,
@@ -191,13 +278,27 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 		visualizerPrefs: visualizerSyncPrefs()
 	});
 
+	const built = JSON.parse(
+		exportBackupBundle(envelope, Date.now(), cremaVersion, WEB_DEVICE_LABEL)
+	) as BackupExport;
+	// What was written, which the core's header counts too.
+	const written = (kind: string, rows: number) =>
+		rows - built.omitted.filter((o) => o.kind === kind).length;
+	const left = new Set(built.omitted.filter((o) => o.kind === 'shot').map((o) => o.id));
+	// A row here can be unreadable: that's what `omitted` is for.
+	const noCurves = shots.filter(
+		(s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0)
+	).length;
 	return {
-		jsonl: exportBackupJsonl(envelope, Date.now(), cremaVersion, WEB_DEVICE_LABEL),
+		jsonl: built.jsonl,
 		contents: {
-			profiles: customProfiles.length,
-			beans: beans.length,
-			roasters: roasters.length,
-			shots: shots.length
+			profiles: written('profile', customProfiles.length),
+			beans: written('bean', beans.length),
+			roasters: written('roaster', roasters.length),
+			shots: written('shot', shots.length),
+			omitted: built.omitted,
+			degraded: built.degraded,
+			noCurves
 		}
 	};
 }
@@ -221,7 +322,7 @@ const BACKUP_JSONL_MEMBER = 'backup.jsonl';
 export async function buildBackupZip(
 	cremaVersion = __APP_VERSION__
 ): Promise<{ zip: Uint8Array; contents: BackupContents } | null> {
-	const built = buildBackupJsonl(cremaVersion);
+	const built = await buildBackupJsonl(cremaVersion);
 	if (!built) return null;
 	const entries: Record<string, Uint8Array> = { [BACKUP_JSONL_MEMBER]: strToU8(built.jsonl) };
 	const imageStore = getBeanImageStore();
@@ -243,6 +344,22 @@ export async function exportBackup(cremaVersion = __APP_VERSION__): Promise<Back
 	if (!built) return null;
 	downloadBlob(backupFileName(), new Blob([built.zip as BlobPart], { type: 'application/zip' }));
 	return built.contents;
+}
+
+/**
+ * Run a backup and word what happened. A build that throws ends in a message
+ * like any other, so the UI can't stay on "Building backup…".
+ */
+export async function backupNote(run: () => Promise<BackupContents | null> = exportBackup): Promise<string> {
+	try {
+		const result = await run();
+		return result
+			? `Backed up — ${describeBackup(result)}.${describeBackupGaps(result)}`
+			: 'Nothing to back up yet.';
+	} catch (err) {
+		console.error('Backup failed', err);
+		return `Backup failed: nothing was saved.${err instanceof Error ? ` ${err.message}` : ''}`;
+	}
 }
 
 export type RestoreMode = 'merge' | 'wipe';
@@ -397,6 +514,17 @@ export function applyHeldRestoreChanges(held: HeldRestoreChanges): void {
  * @throws if the text has no `crema-backup/v1` header (not a Crema backup).
  */
 export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
+	// A Replace clears the history and refills it: series and captures the
+	// restore removes stay until its own marker can delete them (PR7).
+	const resumeDeletes = getHistoryStore().pauseDeletes();
+	try {
+		return applyBackup(text, mode);
+	} finally {
+		resumeDeletes();
+	}
+}
+
+function applyBackup(text: string, mode: RestoreMode): RestoreSummary {
 	// F1 (review #06): parse through the shared core (`parse_backup_jsonl`) instead
 	// of a hand-rolled line loop. Beans/roasters/shots come back typed + lossless —
 	// each shot keeps its full `bean` snapshot (the library importer's ImportedShot
@@ -467,7 +595,11 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	let settingsApplied = false;
 	// The webhook settings are never applied here (see HeldRestoreChanges).
 	let heldWebhookChange: HeldRestoreChanges['webhook'] = null;
-	if (settings) {
+	// Merge keeps this device's settings, maintenance counters and Visualizer
+	// prefs, as the owner decided: only Replace takes the backup's. (The plan's
+	// "unless still pristine" comes with PR7.)
+	const replacing = mode === 'wipe';
+	if (settings && replacing) {
 		if (settings.common) {
 			// Assemble the full target Settings, then write once (replaceAll) rather
 			// than a persist() per key. `common` is cross-shell; the web-only platform
@@ -515,7 +647,7 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 			? getRecipeStore().applyBackup(plan.recipes ?? [], plan.recipeMeta ?? null, mode === 'wipe')
 			: 0;
 	// Maintenance counters — a shared core type, applied verbatim either shell.
-	if (maintenance) {
+	if (maintenance && replacing) {
 		getMaintenanceStore().replaceAll(maintenance as unknown as MaintenanceState);
 	}
 	// Visualizer sync prefs — a shared core type, either shell (no per-shell
@@ -524,7 +656,7 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	// a direction that starts pushing) are held for the user's OK
 	// by the core's guard; the rest apply now.
 	let heldVisualizer: HeldRestoreChanges['visualizer'] = null;
-	if (visualizerPrefs) {
+	if (visualizerPrefs && replacing) {
 		const guarded = JSON.parse(
 			guardRestoredVisualizerPrefs(JSON.stringify(visualizerSyncPrefs()), JSON.stringify(visualizerPrefs))
 		) as GuardedVisualizerPrefs;

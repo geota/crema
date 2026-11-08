@@ -56,7 +56,7 @@ class SafeFileEraseTest {
         // A load that can't move the bad file aside blocks saves to it.
         tmp.root.setWritable(false)
         try {
-            SafeFile.load(target) { error("bad") }
+            SafeFile.load(target) { throw IllegalArgumentException("bad") }
         } finally {
             tmp.root.setWritable(true)
         }

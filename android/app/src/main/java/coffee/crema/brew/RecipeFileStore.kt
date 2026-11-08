@@ -4,6 +4,7 @@ import android.content.Context
 import coffee.crema.core.BrewRecipe
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.inSaveOrder
+import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -38,14 +39,14 @@ class RecipeFileStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
     suspend fun load(): Envelope = withContext(Dispatchers.IO) {
-        loadStore(file, "brew recipes") { json.decodeFromString(Envelope.serializer(), it) }
-            .valueOrNull() ?: Envelope()
+        when (val outcome = loadStore(file, "brew recipes") { json.decodeFromString(Envelope.serializer(), it) }) {
+            is SafeLoad.Loaded -> outcome.value
+            SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> Envelope()
+        }
     }
 
     suspend fun save(envelope: Envelope) {
-        inSaveOrder(file) {
-            saveStore(file, json.encodeToString(Envelope.serializer(), envelope))
-        }
+        saveStore(file, "brew recipes") { json.encodeToString(Envelope.serializer(), envelope) }
     }
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
@@ -53,7 +54,7 @@ class RecipeFileStore(private val context: Context, private val json: Json) {
         inSaveOrder(file) { eraseStore(file) }
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "brew-recipes.json"
     }
 }

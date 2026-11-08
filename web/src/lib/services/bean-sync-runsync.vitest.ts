@@ -33,6 +33,8 @@ import { blankBean, blankRoaster, type Bean, type Roaster } from '#lib/bean/inde
 import type { BeanLibraryStore } from '#lib/bean/store.svelte.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
 import { initTestWasm } from '#lib/testing/test-init.js';
+import { readSyncSettings } from '#lib/bean/visualizer-sync.js';
+import { updateSyncConfig } from '#lib/visualizer/sync-config.js';
 
 // `runSync` decodes each remote row through the wasm-backed `beanFromWire` /
 // `roasterFromWire` and encodes pushes through `beanToWire` (CORE1), so the
@@ -44,7 +46,10 @@ beforeAll(async () => {
 /** A list GET (`/api/roasters?items=…`), not a `/roasters/{id}` detail. */
 const isList = (url: string, base: string) => new URL(url).pathname === `/api${base}`;
 
-type Reply = { ok: true; json?: unknown } | { ok: false; status: number };
+/** Visualizer's reply on a Premium-only write (`Authorization#check_premium!`). */
+const PREMIUM_REPLY = '{"error":"You must be a premium user to access this feature."}';
+
+type Reply = { ok: true; json?: unknown } | { ok: false; status: number; body?: string };
 
 function mkHttp(handler: (method: string, url: string) => Reply) {
 	const calls: { method: string; url: string; body?: unknown }[] = [];
@@ -55,7 +60,7 @@ function mkHttp(handler: (method: string, url: string) => Reply) {
 				const method = req.method ?? 'GET';
 				calls.push({ method, url: req.url, body: req.body ? JSON.parse(req.body) : undefined });
 				const r = handler(method, req.url);
-				if (!r.ok) return Effect.fail(new HttpStatusError({ status: r.status, url: req.url }));
+				if (!r.ok) return Effect.fail(new HttpStatusError({ status: r.status, url: req.url, body: r.body }));
 				return Effect.succeed(
 					new Response(JSON.stringify(r.json ?? {}), {
 						status: 200,
@@ -209,13 +214,121 @@ describe('BeanSync.runSync — push + premium', () => {
 		const local = { ...blankRoaster('Acme'), visualizerId: null };
 		const lib = mkLibrary({ roasters: [local] });
 		const { layer } = mkHttp((method, url) => {
-			if (method === 'POST' && url.includes('/roasters')) return { ok: false, status: 403 };
+			if (method === 'POST' && url.includes('/roasters')) return { ok: false, status: 403, body: PREMIUM_REPLY };
 			return { ok: true, json: { data: [], paging: { pages: 1 } } };
 		});
 		const result = await run(lib, layer);
 		expect(result.premiumLocked).toBe(true);
 		const cached = JSON.parse(localStorage.getItem('crema.beans.sync.v1') ?? '{}');
 		expect(cached.premium).toBe(false);
+	});
+});
+
+describe('BeanSync.runSync — the baseline', () => {
+	const bound = (updatedAt: number) => ({ ...blankBean(), visualizerId: 'vb-1', updatedAt });
+	const lists = () => ({ ok: true as const, json: { data: [], paging: { pages: 1 } } });
+
+	beforeEach(() => {
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 5, premium: true }));
+		updateSyncConfig({ premium: true });
+	});
+
+	it('failed_bag_patch_holds_baseline', async () => {
+		const lib = mkLibrary({ beans: [bound(6)] });
+		const down = mkHttp((method) => (method === 'PATCH' ? { ok: false, status: 503 } : lists()));
+		await run(lib, down.layer);
+		expect(readSyncSettings().lastSyncAt).toBe(5);
+
+		const up = mkHttp((method) => (method === 'PATCH' ? { ok: true, json: { id: 'vb-1' } } : lists()));
+		await run(lib, up.layer);
+		expect(up.calls.filter((c) => c.method === 'PATCH')).toHaveLength(1);
+		expect(readSyncSettings().lastSyncAt).toBeGreaterThan(5);
+	});
+
+	it("a bag pulled while a write fails doesn't push back over a website rename", async () => {
+		const lib = mkLibrary({ beans: [bound(6)] });
+		const bags = (name: string) => ({ ok: true as const, json: { data: [{ id: 'vb-2', name }], paging: { pages: 1 } } });
+		const first = mkHttp((method, url) =>
+			method === 'PATCH' ? { ok: false, status: 503 } : isList(url, '/coffee_bags') ? bags('Pulled') : lists()
+		);
+		await run(lib, first.layer);
+		expect(readSyncSettings().lastSyncAt).toBe(5);
+
+		const second = mkHttp((method, url) =>
+			method === 'PATCH' ? { ok: true, json: { id: 'x' } } : isList(url, '/coffee_bags') ? bags('Renamed on the website') : lists()
+		);
+		await run(lib, second.layer);
+		const patched = second.calls.filter((c) => c.method === 'PATCH').map((c) => new URL(c.url).pathname);
+		expect(patched).toEqual(['/api/coffee_bags/vb-1']);
+		expect(lib.beans.find((b) => b.visualizerId === 'vb-2')?.name).toBe('Renamed on the website');
+	});
+
+	it('a write refused for good is a counted skip, and the baseline moves', async () => {
+		const lib = mkLibrary({ beans: [bound(6)] });
+		const { layer } = mkHttp((method) =>
+			method === 'PATCH' ? { ok: false, status: 422, body: '{"error":"bad"}' } : lists()
+		);
+		const result = await run(lib, layer);
+		expect(result.skipped).toBe(1);
+		expect(readSyncSettings().lastSyncAt).toBeGreaterThan(5);
+	});
+
+	it("the baseline is the run's start", async () => {
+		const lib = mkLibrary({ beans: [bound(1)] });
+		const before = Date.now();
+		let clock = before;
+		const time = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+		// The clock moves once the run has started, as a slow pull's would.
+		const { layer } = mkHttp(() => {
+			clock = before + 60_000;
+			return lists();
+		});
+		await run(lib, layer);
+		time.mockRestore();
+		expect(readSyncSettings().lastSyncAt).toBe(before);
+	});
+
+	it("binding a created row's id leaves its updatedAt", async () => {
+		const fresh = { ...blankBean(), name: 'New', visualizerId: null, updatedAt: 3 };
+		const lib = mkLibrary({ beans: [fresh] });
+		const { layer } = mkHttp((method) => (method === 'POST' ? { ok: true, json: { id: 'vb-9' } } : lists()));
+		await run(lib, layer);
+		expect(lib.getBean(fresh.id)).toMatchObject({ visualizerId: 'vb-9', updatedAt: 3 });
+	});
+});
+
+describe('BeanSync.runSync — a change of account', () => {
+	const listOnly = () =>
+		mkHttp((method) =>
+			method === 'POST'
+				? { ok: true, json: { id: 'new' } }
+				: { ok: true, json: { data: [], paging: { pages: 1 } } }
+		);
+	const writes = (calls: { method: string }[]) => calls.filter((c) => c.method !== 'GET');
+
+	beforeEach(() => {
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 5, premium: true }));
+	});
+
+	it('pushes nothing while the ask is open, pulls, and keeps the baseline', async () => {
+		updateSyncConfig({ premium: true, accountChangeAsk: true });
+		const lib = mkLibrary({ roasters: [{ ...blankRoaster('Acme'), visualizerId: null }], beans: [blankBean()] });
+		const { layer, calls } = listOnly();
+		await run(lib, layer);
+		expect(writes(calls)).toEqual([]);
+		expect(calls.some((c) => c.url.includes('/coffee_bags'))).toBe(true);
+		expect(readSyncSettings().lastSyncAt).toBe(5);
+	});
+
+	it("a no keeps the old device's rows off, and new ones go", async () => {
+		const cutoff = Date.now();
+		updateSyncConfig({ premium: true, uploadExcludedBefore: cutoff });
+		const old = { ...blankBean(), name: 'Old', createdAt: cutoff - 1 };
+		const fresh = { ...blankBean(), name: 'New', createdAt: cutoff + 1 };
+		const lib = mkLibrary({ roasters: [{ ...blankRoaster('Acme'), createdAt: cutoff - 1, visualizerId: null }], beans: [old, fresh] });
+		const { layer, calls } = listOnly();
+		await run(lib, layer);
+		expect(writes(calls).map((c) => (c as { body?: { coffee_bag?: { name?: string } } }).body?.coffee_bag?.name)).toEqual(['New']);
 	});
 });
 
