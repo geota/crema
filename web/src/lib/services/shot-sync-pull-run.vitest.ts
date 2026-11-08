@@ -17,6 +17,7 @@ import { readSyncConfig, updateSyncConfig } from '#lib/visualizer/sync-config.js
 import { readPoison, writePoison } from '#lib/visualizer/poison.js';
 import { RUN_LOCK, setRunLocksForTest } from '#lib/visualizer/run-lock.js';
 import { setWaitForTest } from '#lib/visualizer/pace.js';
+import { markRestoringHere } from '#lib/restore/tab-safety.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
 
 vi.mock('#lib/history/series-store.js', () => ({
@@ -268,5 +269,65 @@ describe('the pull run', () => {
 		expect(v.requests[0]).not.toContain('updated_after');
 		expect(out.outcome).toMatchObject({ kind: 'Complete', details: { applied: 2 } });
 		expect(readPoison()).toEqual([]);
+	});
+
+	it('a restore in this tab: the run waits for it, and says so', async () => {
+		const v = new FakeVisualizer();
+		v.add(3);
+		markRestoringHere(true);
+		try {
+			const out = await pull(v, new HistoryStore());
+			expect(out.outcome).toEqual({ kind: 'Busy', restore: true });
+			expect(v.requests).toEqual([]);
+		} finally {
+			markRestoringHere(false);
+		}
+	});
+
+	it('a restore that starts mid-walk stops the run, keeping what it applied, with its own words', async () => {
+		const v = new FakeVisualizer();
+		v.add(150);
+		const history = new HistoryStore();
+		const real = v.reply.bind(v);
+		// The restore starts while the first page's rows are fetched.
+		v.reply = (req) => {
+			if (req.url.endsWith('/shots/r149')) markRestoringHere(true);
+			return real(req);
+		};
+		try {
+			const before = await pull(v, history);
+			expect(before.outcome).toEqual({ kind: 'Busy', restore: true });
+			expect(before.pulled).toBe(100);
+			expect(readSyncConfig().shotPullCursor).toBeNull();
+			expect(readSyncConfig().log[0].error).toBe('A restore started, so the pull stopped. It goes on with the next sync.');
+		} finally {
+			markRestoringHere(false);
+		}
+	});
+
+	it('a poison row that comes through takes the detail updated_at as its version', async () => {
+		const now = Date.now();
+		writePoison([{ id: 'r0', count: 3, lastCountedAtMs: now - 1, clock: 0, retryAtMs: now - 1 }]);
+		const v = new FakeVisualizer();
+		v.add(1);
+		const real = v.reply.bind(v);
+		v.reply = (req) =>
+			req.url.endsWith('/shots/r0') && v.requests.push('GET /api/shots/r0')
+				? Effect.succeed(
+						new Response(
+							JSON.stringify({
+								id: 'r0',
+								duration: 30,
+								updated_at: T0 + 10_000,
+								timeframe: ['0.0', '0.25'],
+								data: { espresso_pressure: ['9.0', '9.0'] }
+							})
+						)
+					)
+				: real(req);
+		const history = new HistoryStore();
+		await pull(v, history);
+		expect(history.all.find((s) => s.visualizerId === 'r0')?.visualizerUpdatedAt).toBe(T0 + 10_000);
+		expect(v.details()).toEqual(['GET /api/shots/r0']); // the walk skips it: up to date
 	});
 });

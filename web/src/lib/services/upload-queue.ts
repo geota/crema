@@ -175,6 +175,9 @@ export const UploadQueueLive = Layer.effect(
 				if (!signalled?.tierSignal) return;
 				const now = Date.now();
 				if (signalled.tierProbedAt != null && now - signalled.tierProbedAt < TIER_PROBE_SPACING_MS) return;
+				// A probe now would be refused unsent (a 429 earlier in this drain):
+				// it waits, and keeps the day's try for when it can go.
+				if (coolingDown()) return;
 				settlePendingEdit(id, { ...signalled, tierProbedAt: now });
 				if (probe.answer === undefined) probe.answer = yield* beanSync.refreshPremium;
 				const premium = probe.answer;
