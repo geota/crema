@@ -42,9 +42,12 @@
  * an old copy used to put it back over another tab's change. A store that
  * {@link followOtherTabs} takes what another tab wrote: on the `storage` event,
  * and on coming back into view, where an event may have been missed. Taking
- * it writes nothing. A value this tab can't read, or a key that was removed,
- * is left alone: the tab that wrote it owns it, and this tab's memory may be
- * the good copy. True simultaneous edits still go to the last write.
+ * it writes nothing to the key (a row it can't read still goes to
+ * `<key>.skipped`). A value this tab can't read, or a key that was removed,
+ * is left alone, and this tab stops following that key until a reload: the
+ * tab that removed it may have quarantined a damaged value and started empty,
+ * and this tab's copy may be the only good one, which its next write puts
+ * back. True simultaneous edits still go to the last write.
  */
 
 /** What became of a stored value (the web twin of Android's `SafeLoad`). */
@@ -133,6 +136,13 @@ interface Follower {
 const followers = new Map<string, Set<Follower>>();
 /** The value this tab last read or wrote for each followed key. */
 const lastSeen = new Map<string, string | null>();
+/**
+ * Keys this tab stopped following: another tab removed one, or wrote a value
+ * this tab can't take. That tab may have quarantined a damaged value and
+ * started empty, so its next write would cost this tab the good copy it still
+ * holds. Until a reload, this tab's own writes win again (#380 review M1).
+ */
+const unfollowed = new Set<string>();
 /** The window and document listeners, once a store follows a key. */
 let followingInstalled = false;
 const listeners = new Set<(n: StorageNotice) => void>();
@@ -234,7 +244,6 @@ export function readStored(key: string): StoredRead {
 	} catch (e) {
 		return { kind: 'unavailable', error: errorText(e) };
 	}
-	lastSeen.set(key, raw);
 	if (raw == null) return { kind: 'absent' };
 	try {
 		return { kind: 'loaded', value: JSON.parse(raw) as unknown };
@@ -426,10 +435,10 @@ export function writeJson(key: string, value: unknown): void {
  * Take what other tabs write to `key` (#333): `adopt` gets the parsed value
  * whenever another tab stores one that passes `valid`, from the `storage`
  * event or, for an event missed while this tab was hidden or frozen, when it
- * comes back into view. `adopt` must write nothing. A value that doesn't parse
- * or fails `valid`, a removed key, and a key this tab can't save to are left
- * alone, and nothing is kept aside: the tab that wrote it owns it. Returns a
- * function that stops following.
+ * comes back into view. `adopt` must not write the key. A value that doesn't
+ * parse or fails `valid`, and a removed key, are left alone, nothing is kept
+ * aside, and the key isn't followed again until a reload; a key this tab can't
+ * save to isn't followed at all. Returns a function that stops following.
  */
 export function followOtherTabs(
 	key: string,
@@ -438,6 +447,14 @@ export function followOtherTabs(
 ): () => void {
 	installFollowing();
 	const follower: Follower = { valid, adopt };
+	// What the store just loaded: a recheck takes only what differs from it.
+	// Only the store's load, its writes and its adopts move this, never another
+	// reader of the key (#380 review S3).
+	try {
+		if (typeof localStorage !== 'undefined') lastSeen.set(key, localStorage.getItem(key));
+	} catch {
+		// Unreadable: the store's load blocked the key, and nothing is taken.
+	}
 	let set = followers.get(key);
 	if (!set) followers.set(key, (set = new Set()));
 	set.add(follower);
@@ -473,7 +490,7 @@ function installFollowing(): void {
  */
 function takeFromOtherTab(key: string, fromEvent: boolean): void {
 	const set = followers.get(key);
-	if (!set || set.size === 0 || blocked.has(key)) return;
+	if (!set || set.size === 0 || blocked.has(key) || unfollowed.has(key)) return;
 	let raw: string | null;
 	try {
 		raw = localStorage.getItem(key);
@@ -482,21 +499,28 @@ function takeFromOtherTab(key: string, fromEvent: boolean): void {
 	}
 	if (!fromEvent && raw === (lastSeen.get(key) ?? null)) return;
 	lastSeen.set(key, raw);
-	if (raw == null) return;
+	if (raw == null) {
+		stopFollowing(key, 'removed it');
+		return;
+	}
 	let value: unknown;
 	try {
 		value = JSON.parse(raw);
 	} catch {
-		console.warn(`[storage] another tab wrote ${key} in a form this tab can't read; kept this tab's copy`);
+		stopFollowing(key, "wrote it in a form this tab can't read");
 		return;
 	}
-	for (const f of [...set]) {
-		if (!f.valid(value)) {
-			console.warn(`[storage] another tab wrote ${key} in a shape this tab can't take; kept this tab's copy`);
-			continue;
-		}
-		f.adopt(value);
+	const takers = [...set];
+	if (!takers.every((f) => f.valid(value))) {
+		stopFollowing(key, "wrote it in a shape this tab can't take");
+		return;
 	}
+	for (const f of takers) f.adopt(value);
+}
+
+function stopFollowing(key: string, what: string): void {
+	unfollowed.add(key);
+	console.warn(`[storage] another tab ${what} (${key}); this tab keeps its copy and stops following it until a reload`);
 }
 
 /** Test seam: forget blocked keys, health, queued notices and listeners. */
@@ -511,4 +535,5 @@ export function resetStorageStateForTest(): void {
 	refusedListeners.clear();
 	followers.clear();
 	lastSeen.clear();
+	unfollowed.clear();
 }

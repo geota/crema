@@ -19,7 +19,9 @@ import { SettingsStore } from '#lib/settings/store.svelte.js';
 import type { StoredShot } from '#lib/history/model.js';
 import { clearAllSeries, getAllSeries, putSeries } from '#lib/history/series-store.js';
 import { HistoryStore } from '#lib/history/store.svelte.js';
-import { resetStorageStateForTest } from './storage';
+import { readStored, resetStorageStateForTest } from './storage';
+import { resetTabSafetyForTest, shotFinished, shotStarted } from '#lib/restore/tab-safety.js';
+import type { CremaProfile } from '#lib/profiles/model.js';
 
 const BEANS = 'crema.beans.v1';
 const HISTORY = 'crema.history.v2';
@@ -98,6 +100,35 @@ describe('beans', () => {
 		expect(b.getBean('gesha')).not.toBeNull();
 		expect(localStorage.getItem(BEANS)).toBe(JSON.stringify({ schemaVersion: 99, shelves: [] }));
 		expect(localStorage.getItem(`${BEANS}.corrupt`)).toBeNull();
+		// And it isn't followed again: a later write doesn't replace this copy.
+		otherTabWrites(BEANS, { schemaVersion: 1, beans: [], roasters: [] });
+		expect(b.getBean('gesha')).not.toBeNull();
+	});
+
+	it("a value that doesn't parse stops the following too, so a later write isn't taken", () => {
+		const { b } = twoTabs();
+		localStorage.setItem(BEANS, '{"schemaVersion":');
+		announce(BEANS);
+		otherTabWrites(BEANS, { schemaVersion: 1, beans: [], roasters: [] });
+		expect(b.getBean('gesha')).not.toBeNull();
+	});
+
+	it('a tab that quarantined and started empty never leads this one (#380 review M1)', () => {
+		const { a } = twoTabs();
+		// The stored value goes bad: this tab ignores it.
+		localStorage.setItem(BEANS, '{"schemaVersion":');
+		announce(BEANS);
+		// Another tab boots on it, keeps it aside, removes the key, starts empty.
+		const c = new BeanLibraryStore();
+		announce(BEANS);
+		expect(localStorage.getItem(BEANS)).toBeNull();
+		// Its first write must not cost this tab the good copy.
+		c.upsertBean({ ...coerceBean({ id: 'new', name: 'New' })! });
+		announce(BEANS);
+		comeBack();
+		expect(a.getBean('gesha'), 'this tab kept the good copy').not.toBeNull();
+		a.updateBean('kenya', { rating: 5 });
+		expect(storedBean('gesha'), 'and its next write puts it back').toBeDefined();
 	});
 
 	it('a removed key leaves this tab its copy, which may be the good one', () => {
@@ -109,6 +140,20 @@ describe('beans', () => {
 		announce('crema.beans.activeBeanId.v1');
 		expect(b.getBean('gesha')).not.toBeNull();
 		expect(b.activeBeanId, 'null is a valid id, but a removal is not a choice').toBe('gesha');
+		// A later write, from a tab that may have started empty, isn't taken.
+		otherTabWrites(BEANS, { schemaVersion: 1, beans: [], roasters: [] });
+		expect(b.getBean('gesha')).not.toBeNull();
+	});
+
+	it("another reader of a key doesn't hide a missed write from the recheck (#380 review S3)", () => {
+		const { b } = twoTabs();
+		const env = JSON.parse(localStorage.getItem(BEANS)!) as { beans: { id: string; remaining: number }[] };
+		env.beans.find((x) => x.id === 'gesha')!.remaining = 214;
+		localStorage.setItem(BEANS, JSON.stringify(env));
+		// A backup or a sync read of the key, before the tab is shown again.
+		readStored(BEANS);
+		comeBack();
+		expect(b.getBean('gesha')?.remaining).toBe(214);
 	});
 
 	it("a key this tab couldn't read at load isn't taken either", () => {
@@ -139,7 +184,7 @@ describe('the other stores', () => {
 		).toBeCloseTo(0.6);
 	});
 
-	it('settings are taken into memory, and nothing is pushed from it', () => {
+	it("settings are taken, and pushed as a whole bundle, so the core enforces what's shown (#380 review S2)", () => {
 		const a = new SettingsStore();
 		const b = new SettingsStore();
 		const push = vi.fn();
@@ -147,7 +192,7 @@ describe('the other stores', () => {
 		a.set('theme', 'light');
 		announce('crema.settings.v1');
 		expect(b.current.theme).toBe('light');
-		expect(push).not.toHaveBeenCalled();
+		expect(push).toHaveBeenCalledOnce();
 	});
 
 	it('custom methods and recipes, with their defaults and hidden list', () => {
@@ -175,6 +220,63 @@ describe('the other stores', () => {
 		expect((b as unknown as { overrides: Record<string, unknown> }).overrides).toHaveProperty('x');
 		expect(b.isHidden('b1')).toBe(true);
 		expect(b.activeId, "the machine this tab drives runs this tab's choice").toBeNull();
+	});
+});
+
+describe('the active profile, changed in another tab (#380 review M2)', () => {
+	const CUSTOM = 'crema.profiles.custom.v1';
+	/** This tab, driving a machine on custom profile c1 at 36 g. */
+	const thisTab = () => {
+		localStorage.setItem(CUSTOM, JSON.stringify([{ id: 'c1', name: 'Mine', yieldOut: 36 }]));
+		localStorage.setItem('crema.profiles.activeId.v1', JSON.stringify('c1'));
+		resetStorageStateForTest();
+		resetTabSafetyForTest();
+		const store = new ProfileStore();
+		store.loaded = true;
+		const push = vi
+			.spyOn(store as unknown as { pushActiveProfileToCore: () => Promise<void> }, 'pushActiveProfileToCore')
+			.mockResolvedValue(undefined);
+		const uploads: (CremaProfile | null)[] = [];
+		store.onActivate = (p) => uploads.push(p);
+		return { store, push, uploads };
+	};
+
+	it('an edit goes to the core and the machine, as a local save does', () => {
+		const { store, push, uploads } = thisTab();
+		otherTabWrites(CUSTOM, [{ id: 'c1', name: 'Mine', yieldOut: 18 }]);
+		expect(store.get('c1')?.yieldOut).toBe(18);
+		expect(push).toHaveBeenCalledOnce();
+		expect(uploads.map((p) => p?.yieldOut)).toEqual([18]);
+		expect(store.activeId, 'the active id stays this tab’s').toBe('c1');
+	});
+
+	it('an edit to another profile changes nothing on the machine', () => {
+		const { push, uploads } = thisTab();
+		otherTabWrites(CUSTOM, [
+			{ id: 'c1', name: 'Mine', yieldOut: 36 },
+			{ id: 'c2', name: 'Theirs', yieldOut: 40 }
+		]);
+		expect(push).not.toHaveBeenCalled();
+		expect(uploads).toEqual([]);
+	});
+
+	it('mid-shot, it waits for the shot to end', () => {
+		const { push, uploads } = thisTab();
+		shotStarted();
+		otherTabWrites(CUSTOM, [{ id: 'c1', name: 'Mine', yieldOut: 18 }]);
+		otherTabWrites(CUSTOM, [{ id: 'c1', name: 'Mine', yieldOut: 20 }]);
+		expect(push).not.toHaveBeenCalled();
+		expect(uploads).toEqual([]);
+		shotFinished();
+		expect(push).toHaveBeenCalledOnce();
+		expect(uploads.map((p) => p?.yieldOut), 'once, with the latest').toEqual([20]);
+	});
+
+	it('deleted there: no profile here, as a local delete of the active one', () => {
+		const { store, uploads } = thisTab();
+		otherTabWrites(CUSTOM, []);
+		expect(store.activeId).toBeNull();
+		expect(uploads).toEqual([null]);
 	});
 });
 
@@ -262,6 +364,75 @@ describe('history', () => {
 		b.setRating('y', 3);
 		await settle();
 		expect([...(await getAllSeries()).keys()].sort()).toEqual(['x', 'y']);
+	});
+
+	it('a pin made in another tab shows here, and this tab\u2019s next edit keeps it (#376)', async () => {
+		const b = await thisTab('x', 'y');
+		otherTabWrites(HISTORY, [
+			{ ...bare(row('y', 1_700_000_001_000)), pinned: true },
+			bare(row('x', 1_700_000_000_000))
+		]);
+		expect(b.get('y')?.pinned).toBe(true);
+		b.setRating('x', 4);
+		const stored = JSON.parse(localStorage.getItem(HISTORY)!) as StoredShot[];
+		expect(stored.find((s) => s.id === 'y')?.pinned).toBe(true);
+	});
+
+	it('a tab that quarantined and started empty never leads this one (#380 review M1)', async () => {
+		const a = await thisTab('x', 'y');
+		localStorage.setItem(HISTORY, '[{"id":');
+		announce(HISTORY);
+		const c = new HistoryStore();
+		await settle();
+		announce(HISTORY);
+		c.insertPulled(row('z', 1_800_000_000_000));
+		announce(HISTORY);
+		expect(a.all.map((s) => s.id), 'this tab keeps its rows').toEqual(['y', 'x']);
+		a.setRating('x', 3);
+		const stored = (JSON.parse(localStorage.getItem(HISTORY)!) as StoredShot[]).map((s) => s.id);
+		expect(stored, 'and its next write puts them back').toEqual(['y', 'x']);
+	});
+
+	it('a failed look for a curve is tried again (#380 review S1)', async () => {
+		const b = await thisTab('old');
+		await putSeries('new', curve);
+		const idb = (globalThis as { indexedDB: IDBFactory }).indexedDB;
+		const open = idb.open.bind(idb);
+		idb.open = () => {
+			throw new DOMException('busy', 'UnknownError');
+		};
+		otherTabWrites(HISTORY, [bare(row('new', 1_800_000_000_000))]);
+		await settle();
+		expect(b.seriesPending('new'), 'still being looked for').toBe(true);
+		idb.open = open;
+		await settle(1_100);
+		expect(b.get('new')?.record.samples).toHaveLength(1);
+		expect(b.seriesPending('new')).toBe(false);
+	});
+
+	it("a pulled curve never replaces the one another tab stored (#380 review S1)", async () => {
+		const b = await thisTab('old');
+		otherTabWrites(HISTORY, [bare(row('new', 1_800_000_000_000))]);
+		await settle();
+		// The other tab's curve lands after this tab's first look.
+		const own = curve.map((t) => ({ ...t, sample: { ...t.sample, groupPressure: 9 } }));
+		await putSeries('new', own);
+		const pulled = curve.map((t) => ({ ...t, sample: { ...t.sample, groupPressure: 1 } }));
+		b.applyRemote('new', { backfillSamples: true } as never, { samples: pulled, durationMs: 30_000 });
+		await settle();
+		expect((await getAllSeries()).get('new')?.[0].sample.groupPressure, 'the device curve').toBe(9);
+		expect(b.get('new')?.record.samples[0].sample.groupPressure, 'here too').toBe(9);
+		b.backfillTelemetry('new', pulled, 30_000);
+		expect(b.get('new')?.record.samples[0].sample.groupPressure).toBe(9);
+	});
+
+	it('a backfill waits while an adopted row may still get its curve', async () => {
+		const b = await thisTab('old');
+		otherTabWrites(HISTORY, [bare(row('new', 1_800_000_000_000))]);
+		await settle();
+		expect(b.seriesPending('new')).toBe(true);
+		b.backfillTelemetry('new', curve, 30_000);
+		expect(b.get('new')?.record.samples, 'not taken while pending').toHaveLength(0);
 	});
 
 	it('nothing is taken while a restore here owns the rows', async () => {

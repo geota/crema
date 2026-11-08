@@ -931,7 +931,7 @@ export const ShotSyncLive = Layer.effect(
 					const input = mergeInputOf(row, edits.get(localId));
 					// Its curve may still be loading: a backfill now would take
 					// Visualizer's copy over the row's own. It waits, and holds.
-					if (!seriesLoaded && !input.hasSeries && !input.isBrew) {
+					if ((!seriesLoaded || history.seriesPending(localId)) && !input.hasSeries && !input.isBrew) {
 						held += 1;
 						return;
 					}

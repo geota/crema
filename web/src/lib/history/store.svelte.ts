@@ -52,6 +52,7 @@ import {
 	clearAllSeries,
 	deleteSeries,
 	getAllSeries,
+	addSeries,
 	getSeriesOf,
 	putManySeries,
 	putSeries
@@ -159,6 +160,9 @@ export class HistoryStore {
 
 	/** Above zero while a restore runs: see {@link pauseDeletes}. */
 	private deletesPaused = 0;
+
+	/** Ids adopted from another tab whose curve is still being looked for, with how many look-ups. */
+	private hydrating = new Map<string, number>();
 
 	constructor() {
 		this.markLive(this.shots.map((s) => s.id));
@@ -287,26 +291,66 @@ export class HistoryStore {
 	 * row with no series at all (a brew log) just finds none.
 	 */
 	private async hydrateAdopted(ids: string[], waits: readonly number[] = ADOPT_SERIES_RETRY_MS): Promise<void> {
+		for (const id of ids) this.hydrating.set(id, (this.hydrating.get(id) ?? 0) + 1);
 		let missing = ids;
-		for (let attempt = 0; ; attempt++) {
-			let found: Map<string, TimedSample[]>;
-			try {
-				found = await getSeriesOf(missing);
-			} catch {
-				return;
+		try {
+			for (let attempt = 0; ; attempt++) {
+				let found = new Map<string, TimedSample[]>();
+				try {
+					found = await getSeriesOf(missing);
+				} catch {
+					// A read can fail once and work the next time: keep to the schedule.
+				}
+				if (found.size > 0) this.fillCurves(found);
+				missing = missing.filter((id) => !found.has(id) && this.get(id)?.record.samples.length === 0);
+				if (missing.length === 0 || attempt >= waits.length) return;
+				await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
 			}
-			if (found.size > 0) {
-				this.shots = this.shots.map((s) => {
-					const samples = found.get(s.id);
-					return samples && s.record.samples.length === 0
-						? { ...s, record: { ...s.record, samples } }
-						: s;
-				});
+		} finally {
+			for (const id of ids) {
+				const n = (this.hydrating.get(id) ?? 1) - 1;
+				if (n > 0) this.hydrating.set(id, n);
+				else this.hydrating.delete(id);
 			}
-			missing = missing.filter((id) => !found.has(id) && this.get(id)?.record.samples.length === 0);
-			if (missing.length === 0 || attempt >= waits.length) return;
-			await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
 		}
+	}
+
+	/** Give rows without a curve the ones in `found`, by id. */
+	private fillCurves(found: Map<string, TimedSample[]>): void {
+		this.shots = this.shots.map((s) => {
+			const samples = found.get(s.id);
+			return samples && s.record.samples.length === 0
+				? { ...s, record: { ...s.record, samples } }
+				: s;
+		});
+	}
+
+	/**
+	 * Whether `id` adopted from another tab may still have its curve on the
+	 * way. Until it's settled, a pull mustn't take Visualizer's copy for it
+	 * (#380 review S1).
+	 */
+	seriesPending(id: string): boolean {
+		return this.hydrating.has(id);
+	}
+
+	/**
+	 * A pulled curve for a row that had none, stored only if IndexedDB has none
+	 * for it either: another tab may have written the row's own. That one wins,
+	 * here and in memory (#380 review S1).
+	 */
+	private backfillSeries(id: string, samples: TimedSample[]): void {
+		void addSeries(id, samples)
+			.then(async (added) => {
+				if (added) return;
+				const own = await getSeriesOf([id]);
+				if (own.size === 0) return;
+				this.shots = this.shots.map((s) => {
+					const curve = own.get(s.id);
+					return curve ? { ...s, record: { ...s.record, samples: curve } } : s;
+				});
+			})
+			.catch(seriesSaveFailed);
 	}
 
 	/**
@@ -902,7 +946,7 @@ export class HistoryStore {
 		if (patch.remoteVersion != null) next = { ...next, visualizerUpdatedAt: patch.remoteVersion };
 		if (next === target) return;
 		this.shots = [...this.shots.slice(0, idx), next, ...this.shots.slice(idx + 1)];
-		if (backfill) void putSeries(id, [...samples]).catch(seriesSaveFailed);
+		if (backfill) this.backfillSeries(id, [...samples]);
 		this.persist();
 	}
 
@@ -911,7 +955,7 @@ export class HistoryStore {
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
 		const target = this.shots[idx];
-		if (target.record.samples.length > 0) return;
+		if (target.record.samples.length > 0 || this.seriesPending(id)) return;
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{
@@ -923,7 +967,7 @@ export class HistoryStore {
 			},
 			...this.shots.slice(idx + 1)
 		];
-		void putSeries(id, [...samples]).catch(seriesSaveFailed);
+		this.backfillSeries(id, [...samples]);
 		this.persist();
 	}
 

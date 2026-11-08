@@ -811,12 +811,14 @@ export class SettingsStore {
 				if (this.current.theme === 'system') applyTheme('system');
 			});
 		}
-		// Another tab's preferences are taken, not written back over (#333).
-		// Memory only: nothing is pushed to the core or the machine from here.
-		// This tab's next push carries them.
+		// Another tab's preferences are taken, not written back over (#333),
+		// and pushed as a whole-bundle change is (`onReplaced`, the app's
+		// `pushSettings`), so the core's stop rules and the steam and hot-water
+		// packet match what this tab shows (#380 review S2).
 		followOtherTabs(SETTINGS_KEY, isJsonObject, (v) => {
 			this.current = settingsOf(v as Record<string, unknown>);
 			applyTheme(this.current.theme);
+			this.onReplaced?.();
 		});
 	}
 
