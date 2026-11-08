@@ -524,6 +524,31 @@ describe('the #363 review', () => {
 	});
 });
 
+describe('a damaged first line or a BOM (REVIEW-378)', () => {
+	async function damagedBackup(bom: boolean) {
+		const prepared = await backupOf(['b1'], ['s1']);
+		const text = new TextDecoder().decode(prepared.jsonl);
+		const lines = text.split('\n');
+		return prepareBackup(bom ? '\uFEFF' + text : ['{ not a header', ...lines.slice(1)].join('\n'), 'damaged');
+	}
+
+	for (const bom of [false, true]) {
+		it(`${bom ? 'a BOM' : 'a damaged header'}: Merge goes ahead, Replace refuses`, async () => {
+			const prepared = await damagedBackup(bom);
+			getBeanStore().bulkAdd([{ ...blankBean('b9'), name: 'Mine' }], []);
+			const replace = await planNow(prepared, 'wipe', false, new FakeLocks());
+			expect(replace.verdict).toBe(Verdict.Refused);
+			const merge = await planNow(prepared, 'merge', false, new FakeLocks());
+			expect(merge.verdict).toBe(Verdict.Confirm);
+			captureMessages(new FakeLocks());
+			const out = await runRestore(prepared, 'merge', { expected: merge }, deps(new FakeLocks()));
+			expect(out.kind).toBe('done');
+			expect(getBeanStore().getBean('b1')).not.toBeNull();
+			expect(getHistoryStore().get('s1')).toBeDefined();
+		});
+	}
+});
+
 describe('the marker', () => {
 	const bootDeps = (over: Partial<Parameters<typeof checkMarkerAtBoot>[0]> = {}) => {
 		const deleted: string[] = [];
