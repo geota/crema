@@ -35,20 +35,61 @@ async function failOn(res: Response, what: string): Promise<never> {
 }
 
 /**
- * Upload a backup as a NEW Drive file (multipart: metadata + media). Returns
- * the created file. We always create (timestamped names) rather than overwrite,
- * so Drive keeps a short backup history the user can pick from on restore.
+ * Upload a backup as a NEW Drive file. Returns the created file. We always
+ * create (timestamped names) rather than overwrite, so Drive keeps a short
+ * backup history the user can pick from on restore.
+ *
+ * A resumable upload (#310 P2w): the session is opened with the metadata, then
+ * the content goes in one `PUT` straight from `content`, so a disk-backed
+ * `File` streams from disk instead of being copied into a request body. Where
+ * the session's `Location` isn't readable, it falls back to one multipart
+ * request, whose body is also built from `content` without copying it.
  */
 export async function uploadBackup(
 	accessToken: string,
 	name: string,
-	content: string | Uint8Array,
-	mime: string = BACKUP_MIME
+	content: string | Uint8Array | Blob,
+	mime: string = BACKUP_MIME,
+	signal?: AbortSignal
+): Promise<DriveFile> {
+	const media: Blob =
+		content instanceof Blob ? content : new Blob([content as BlobPart], { type: mime });
+	const fields = 'fields=id,name,modifiedTime,size';
+	const start = await fetch(`${UPLOAD_URL}?uploadType=resumable&${fields}`, {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${accessToken}`,
+			'Content-Type': 'application/json; charset=UTF-8',
+			'X-Upload-Content-Type': mime,
+			'X-Upload-Content-Length': String(media.size)
+		},
+		body: JSON.stringify({ name, mimeType: mime }),
+		signal
+	});
+	if (!start.ok) await failOn(start, 'upload');
+	const session = start.headers.get('Location');
+	if (!session) return uploadMultipart(accessToken, name, media, mime, signal);
+	const res = await fetch(session, {
+		method: 'PUT',
+		headers: { 'Content-Type': mime },
+		body: media,
+		signal
+	});
+	if (!res.ok) await failOn(res, 'upload');
+	return (await res.json()) as DriveFile;
+}
+
+/** One multipart request: metadata + media, the media part `content` itself. */
+async function uploadMultipart(
+	accessToken: string,
+	name: string,
+	media: Blob,
+	mime: string,
+	signal?: AbortSignal
 ): Promise<DriveFile> {
 	const boundary = `crema-${Math.random().toString(36).slice(2)}`;
 	const enc = new TextEncoder();
-	// Build the multipart body as a Blob so a BINARY media part (a `.crema.zip`)
-	// rides through intact — a string body would mangle the zip bytes.
+	// A Blob body, so a BINARY media part (a `.crema.zip`) rides through intact.
 	const head = enc.encode(
 		`--${boundary}\r\n` +
 			`Content-Type: application/json; charset=UTF-8\r\n\r\n` +
@@ -56,7 +97,6 @@ export async function uploadBackup(
 			`--${boundary}\r\n` +
 			`Content-Type: ${mime}\r\n\r\n`
 	);
-	const media = typeof content === 'string' ? enc.encode(content) : content;
 	const tail = enc.encode(`\r\n--${boundary}--`);
 	const res = await fetch(`${UPLOAD_URL}?uploadType=multipart&fields=id,name,modifiedTime,size`, {
 		method: 'POST',
@@ -64,7 +104,8 @@ export async function uploadBackup(
 			Authorization: `Bearer ${accessToken}`,
 			'Content-Type': `multipart/related; boundary=${boundary}`
 		},
-		body: new Blob([head, media, tail] as BlobPart[])
+		body: new Blob([head, media, tail] as BlobPart[]),
+		signal
 	});
 	if (!res.ok) await failOn(res, 'upload');
 	return (await res.json()) as DriveFile;

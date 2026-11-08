@@ -56,8 +56,9 @@
 	import {
 		backupFileName,
 		backupNote as runBackup,
+		exportBackup,
+		buildBackupFile,
 		noteBackupMade,
-		buildBackupZip,
 		driveBackupRefusal,
 		describeBackupGaps,
 		describeBackup,
@@ -67,6 +68,7 @@
 		type HeldRestoreChanges,
 		type RestoreMode
 	} from '#lib/backup/index.js';
+	import { BackupCancelled, type BackupProgress } from '#lib/backup/stream.js';
 	import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { planNow, prepareBackup, runRestore } from '#lib/restore/engine.js';
 	import { restoreFlow as runRestoreFlow } from '#lib/restore/flow.js';
@@ -345,10 +347,30 @@
 	 *  where the user clicks — not under "Back up everything"). */
 	let restoreNote = $state<string | null>(null);
 
+	/** The running backup's cancel, file or Drive; null when none runs. */
+	let backupRun = $state<AbortController | null>(null);
+
+	/** "Building backup… 120 of 300 shots", for a walk's progress. */
+	function progressLine(p: BackupProgress): string {
+		return p.shotsTotal > 0 ? `Building backup… ${p.shotsWritten} of ${p.shotsTotal} shots` : 'Building backup…';
+	}
+
 	/** Build + download a full `crema-backup/v1` bundle of everything local. */
 	async function backUp(): Promise<void> {
+		if (backupRun) return;
+		const run = new AbortController();
+		backupRun = run;
 		backupNote = 'Building backup…';
-		backupNote = await runBackup();
+		try {
+			backupNote = await runBackup(() =>
+				exportBackup(undefined, {
+					signal: run.signal,
+					onProgress: (p) => (backupNote = progressLine(p))
+				})
+			);
+		} finally {
+			backupRun = null;
+		}
 	}
 
 	let restoreInput = $state<HTMLInputElement | null>(null);
@@ -445,24 +467,39 @@
 		driveBusy = true;
 		driveNote = 'Building backup…';
 		try {
-			const built = await buildBackupZip();
+			const run = new AbortController();
+			backupRun = run;
+			const built = await buildBackupFile(undefined, {
+				signal: run.signal,
+				onProgress: (p) => (driveNote = progressLine(p))
+			});
 			if (!built) {
 				driveNote = 'Nothing to back up yet.';
 				return;
 			}
-			const refusal = driveBackupRefusal(built.contents);
-			if (refusal) {
-				driveNote = refusal;
-				return;
+			try {
+				const refusal = driveBackupRefusal(built.contents);
+				if (refusal) {
+					driveNote = refusal;
+					return;
+				}
+				driveNote = 'Backing up to Drive…';
+				const token = await drive.accessToken();
+				await uploadBackup(token, backupFileName(), built.file, 'application/zip', run.signal);
+				noteBackupMade();
+				driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.${describeBackupGaps(built.contents)}`;
+			} finally {
+				await built.release();
 			}
-			driveNote = 'Backing up to Drive…';
-			const token = await drive.accessToken();
-			await uploadBackup(token, backupFileName(), built.zip, 'application/zip');
-			noteBackupMade();
-			driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.${describeBackupGaps(built.contents)}`;
 		} catch (err) {
-			driveNote = err instanceof Error ? `Drive backup failed: ${err.message}` : 'Drive backup failed.';
+			driveNote =
+				err instanceof BackupCancelled || (err instanceof DOMException && err.name === 'AbortError')
+					? 'Backup cancelled: nothing was uploaded.'
+					: err instanceof Error
+						? `Drive backup failed: ${err.message}`
+						: 'Drive backup failed.';
 		} finally {
+			backupRun = null;
 			driveBusy = false;
 		}
 	}
@@ -713,7 +750,17 @@
 			'Download a .crema.zip bundle of everything on this device — including bean photos.'}
 	>
 		{#snippet control()}
-			<StButton label="Back up" icon="download-simple" variant="primary" onClick={backUp} />
+			{#if backupRun && !driveBusy}
+				<StButton label="Cancel" icon="x" onClick={() => backupRun?.abort()} />
+			{:else}
+				<StButton
+					label="Back up"
+					icon="download-simple"
+					variant="primary"
+					disabled={backupRun != null}
+					onClick={backUp}
+				/>
+			{/if}
 		{/snippet}
 	</StRow>
 	<StRow
@@ -757,13 +804,17 @@
 	{#if drive.connected}
 		<StRow title="Back up to Drive" sub="Upload a fresh bundle to your Google Drive.">
 			{#snippet control()}
-				<StButton
-					label={driveBusy ? 'Working…' : 'Back up'}
-					icon="cloud-arrow-up"
-					variant="primary"
-					disabled={driveBusy}
-					onClick={driveBackup}
-				/>
+				{#if backupRun && driveBusy}
+					<StButton label="Cancel" icon="x" onClick={() => backupRun?.abort()} />
+				{:else}
+					<StButton
+						label={driveBusy ? 'Working…' : 'Back up'}
+						icon="cloud-arrow-up"
+						variant="primary"
+						disabled={driveBusy || backupRun != null}
+						onClick={driveBackup}
+					/>
+				{/if}
 			{/snippet}
 		</StRow>
 		<StRow title="Restore from Drive" sub="Choose a backup to merge or replace.">
