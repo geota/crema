@@ -197,7 +197,7 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		shots: history.rawAll.map((s) => ({
 			id: s.id,
 			hasSamples: s.record.samples.length > 0,
-			pinned: false,
+			pinned: s.pinned === true,
 			deleted: s.deletedAt != null
 		})),
 		photos: photos.have,

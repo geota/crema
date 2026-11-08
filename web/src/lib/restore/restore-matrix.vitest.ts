@@ -286,7 +286,7 @@ async function writeLocal(spec: LocalSpec): Promise<void> {
 					profiles: spec.profiles,
 					recipes: spec.recipes,
 					customMethods: spec.customMethods,
-					shots: shots.map((s) => ({ id: s.id, samples: s.hasSamples, completedAt: s.completedAt ?? 2 }))
+					shots: shots.map((s) => ({ id: s.id, samples: s.hasSamples, completedAt: s.completedAt ?? 2, pinned: s.pinned }))
 				},
 				'here'
 			),
@@ -434,11 +434,6 @@ const SKIP: Record<string, string> = {
  * a function gives the web's value.
  */
 const ON_WEB: Record<string, Record<string, ((want: unknown, room: number) => unknown) | null>> = {
-	// Web shots have no pin: `buildLocalState` says `pinned: false`, so a local
-	// pinned row is one web can't hold. Its removal by name is still checked.
-	'shots: replace removes by name, pinned counted, and a tombstone the backup lacks stays': {
-		'/shots/pinnedRemoved': null
-	},
 	// Web's cap is fixed (300): the case's cap is made by filling the backup
 	// with that many more unpinned rows, which the refusal counts.
 	'shots: replace refuses more unpinned rows than history keeps': {
