@@ -1865,9 +1865,9 @@ internal fun shotPatchInputs(
     notes = if (includeNotes) (shot.notes ?: "") else null,
     privacy = shot.privacy ?: defaultPrivacy,
     grinderModel = resolveGrinderModel(shot, settingsGrinderModel),
-    // Android has no shot tags; empty = the core omits `tag_list`
-    // (the web sends `patch.tagList ?? []` the same way).
-    tagList = emptyList(),
+    // Android has no shot tags: null omits `tag_list`, which is an absolute
+    // list, so `[]` would clear the remote tags.
+    tagList = null,
     // Inline bean from the structured snapshot frozen at shot time (issue 06).
     beanBrand = shot.bean?.roasterName,
     beanType = shot.bean?.name,

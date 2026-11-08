@@ -1284,6 +1284,10 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 			? obj.privacy
 			: null;
 	const decentId = typeof obj.decentId === 'string' && obj.decentId ? obj.decentId : null;
+	const visualizerUpdatedAt =
+		typeof obj.visualizerUpdatedAt === 'number' && Number.isFinite(obj.visualizerUpdatedAt)
+			? obj.visualizerUpdatedAt
+			: null;
 	const machine = coerceShotMachine(obj.machine);
 	const visualizerId = typeof obj.visualizerId === 'string' ? obj.visualizerId : null;
 	const deletedAt = typeof obj.deletedAt === 'number' ? obj.deletedAt : null;
@@ -1370,6 +1374,7 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		...(privacy ? { privacy } : {}),
 		visualizerId,
 		...(decentId ? { decentId } : {}),
+		...(visualizerUpdatedAt != null ? { visualizerUpdatedAt } : {}),
 		...(machine ? { machine } : {}),
 		deletedAt,
 		...(brewMethod != null ? { brewMethod } : {}),

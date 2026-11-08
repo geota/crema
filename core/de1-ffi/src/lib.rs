@@ -1333,6 +1333,59 @@ pub fn account_change_action(stored: Option<String>, me: String) -> String {
     )
 }
 
+/// What a pulled shot may change on its row: a JSON `ShotPatch` from
+/// `{"local": ShotMergeInput, "remote": WireShot, "profileOffered": bool}`.
+/// See [`de1_domain::merge_remote_shot`].
+///
+/// # Errors
+/// When the input doesn't parse.
+#[uniffi::export]
+pub fn merge_remote_shot(payload: String) -> Result<String, CremaError> {
+    de1_domain::merge_remote_shot_json(&payload).map_err(CremaError::from)
+}
+
+/// A JSON tag list as Visualizer stores it. See [`de1_domain::normalize_tags`].
+///
+/// # Errors
+/// When the input isn't a string array.
+#[uniffi::export]
+pub fn normalize_tags(list: String) -> Result<String, CremaError> {
+    de1_domain::normalize_tags_json(&list).map_err(CremaError::from)
+}
+
+/// Record a tag edit onto JSON `TagMarks`. See [`de1_domain::mark_tag_edit`].
+///
+/// # Errors
+/// When an input doesn't parse.
+#[uniffi::export]
+pub fn mark_tag_edit(marks: String, before: String, after: String) -> Result<String, CremaError> {
+    de1_domain::mark_tag_edit_json(&marks, &before, &after).map_err(CremaError::from)
+}
+
+/// The JSON `tag_list` a tag push sends. See [`de1_domain::tag_push_list`].
+///
+/// # Errors
+/// When an input doesn't parse.
+#[uniffi::export]
+pub fn tag_push_list(remote: String, marks: String) -> Result<String, CremaError> {
+    de1_domain::tag_push_list_json(&remote, &marks).map_err(CremaError::from)
+}
+
+/// JSON `TagMarks` after a tag push, or `null` on a tier signal. See
+/// [`de1_domain::settle_tag_push`].
+///
+/// # Errors
+/// When an input doesn't parse.
+#[uniffi::export]
+pub fn settle_tag_push(
+    current: String,
+    sent: String,
+    pushed: String,
+    reply: String,
+) -> Result<String, CremaError> {
+    de1_domain::settle_tag_push_json(&current, &sent, &pushed, &reply).map_err(CremaError::from)
+}
+
 /// Whether an upload must refuse a stored row for having no telemetry. See
 /// [`de1_domain::upload_refused_no_samples`].
 #[uniffi::export]
