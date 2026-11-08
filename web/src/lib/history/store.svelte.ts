@@ -60,6 +60,7 @@ import {
 } from './model';
 import type { Bean, Roaster } from '#lib/bean/index.js';
 import { getCaptureStore } from '#lib/capture/store.js';
+import { readCaptureKeep } from '#lib/capture/limit.js';
 
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
 const STORED_SHOT_FORMAT_VERSION = 3;
@@ -76,7 +77,7 @@ const STORED_SHOT_FORMAT_VERSION = 3;
  * (`durationMs` → `duration`, `peakWeightG` → `peakWeight`, etc.); v1 records
  * are simply ignored on first read rather than migrated.
  */
-const HISTORY_KEY = 'crema.history.v2';
+export const HISTORY_KEY = 'crema.history.v2';
 /** The history's name in a storage notice. */
 const HISTORY_WHAT = 'shot history';
 
@@ -148,6 +149,10 @@ export class HistoryStore {
 
 	constructor() {
 		this.markLive(this.shots.map((s) => s.id));
+		// Fixed at the first load after the setting arrived, before anything new
+		// is recorded: rows already here mean today's limit stays (#311).
+		const existing = this.shots.length > 0;
+		readCaptureKeep(() => existing);
 		// Two-phase boot (review #27): summaries loaded synchronously above;
 		// each shot's telemetry series hydrates from IndexedDB in the
 		// background (reassigning `shots` keeps readers reactive). Also the
@@ -604,6 +609,23 @@ export class HistoryStore {
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{ ...target, privacy },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
+	 * Pin or unpin a shot (#311). A pinned shot's capture ignores the capture
+	 * limit and it is exempt from cleanup; unpinning makes its capture eligible
+	 * at the next prune. Persists.
+	 */
+	setPinned(id: string, pinned: boolean): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0 || (this.shots[idx].pinned === true) === pinned) return;
+		const { pinned: _was, ...rest } = this.shots[idx];
+		this.shots = [
+			...this.shots.slice(0, idx),
+			pinned ? { ...rest, pinned: true } : rest,
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();
@@ -1343,6 +1365,7 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		typeof obj.visualizerUpdatedAt === 'number' && Number.isFinite(obj.visualizerUpdatedAt)
 			? obj.visualizerUpdatedAt
 			: null;
+	const pinned = obj.pinned === true;
 	const machine = coerceShotMachine(obj.machine);
 	const visualizerId = typeof obj.visualizerId === 'string' ? obj.visualizerId : null;
 	const deletedAt = typeof obj.deletedAt === 'number' ? obj.deletedAt : null;
@@ -1430,6 +1453,7 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		visualizerId,
 		...(decentId ? { decentId } : {}),
 		...(visualizerUpdatedAt != null ? { visualizerUpdatedAt } : {}),
+		...(pinned ? { pinned } : {}),
 		...(machine ? { machine } : {}),
 		deletedAt,
 		...(brewMethod != null ? { brewMethod } : {}),

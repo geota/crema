@@ -48,9 +48,11 @@ import java.util.Locale
  *
  * The files live in app-specific external storage
  * (`Android/data/<package>/files/captures`), which the system deletes with the
- * app. Each new session prunes the directory to the newest [MAX_KEPT] files
- * and drops any older than [MAX_AGE_MS]; Erase all data deletes them all
- * ([eraseCaptures]). The privacy page describes them.
+ * app. Each new session prunes the directory to the newest [sessionsKeep]
+ * sessions, sparing any whose span holds a pinned shot ([pinnedShotTimes], the
+ * core's `sessions_to_drop`, #311). There's no age limit: the count is the only
+ * thing that removes a capture. Off records none. Erase all data deletes them
+ * all ([eraseCaptures]). The privacy page describes them.
  *
  * Recording is a debug aid: file IO failures are logged and swallowed, never
  * propagated, so a recording problem can never crash the app. Notifications
@@ -84,6 +86,38 @@ class BleSessionRecorder(private val context: Context) {
      *  newest-capture loop (issue 14). */
     @Volatile
     var enabled: Boolean = true
+
+    /** BLE sessions to keep ([SESSIONS_OFF], [SESSIONS_ALL] or a count): the
+     *  Settings limit (#311). Off records nothing. */
+    @Volatile
+    var sessionsKeepOf: () -> Int = { NEW_INSTALL_SESSIONS_KEEP }
+
+    private val sessionsKeep: Int get() = sessionsKeepOf()
+
+    /** When each pinned shot completed (unix ms): a session that holds one keeps
+     *  its file whatever the limit. */
+    @Volatile
+    var pinnedShotTimes: () -> List<Long> = { emptyList() }
+
+    /** Core `sessions_to_drop`, injected so a JVM test can stand in for it. */
+    @Volatile
+    var sessionsToDrop: (payload: String) -> String = { coffee.crema.core.sessionsToDrop(it) }
+
+    /** The session files [keep] would delete now, newest kept and pinned spared;
+     *  none for All, or with no captures directory. */
+    fun sessionsOverLimit(keep: Int = sessionsKeep): List<File> {
+        val dir = capturesDir(context) ?: return emptyList()
+        return synchronized(lock) { doomed(dir, keep, pinnedShotTimes(), sessionsToDrop) }
+    }
+
+    /** Delete the session files past [keep] now (the limit was lowered); the count deleted. */
+    fun pruneTo(keep: Int = sessionsKeep): Int {
+        val dir = capturesDir(context) ?: return 0
+        return synchronized(lock) {
+            val current = filePath
+            doomed(dir, keep, pinnedShotTimes(), sessionsToDrop).filter { it.absolutePath != current }.count { it.delete() }
+        }
+    }
 
     /**
      * Register a device connection. On the first connection (0→1) this opens a
@@ -122,15 +156,17 @@ class BleSessionRecorder(private val context: Context) {
      */
     private fun start() {
         synchronized(lock) {
-            if (writer != null || !enabled) return
+            if (writer != null || !enabled || sessionsKeep == SESSIONS_OFF) return
             try {
                 val dir = capturesDir(context) ?: return
                 if (!dir.exists() && !dir.mkdirs()) {
                     Log.w(TAG, "Could not create captures directory ${dir.absolutePath}")
                     return
                 }
-                // Room for the new file within the cap.
-                pruneCaptures(dir, keep = MAX_KEPT - 1, maxAgeMs = MAX_AGE_MS, nowMs = System.currentTimeMillis())
+                // Room for the new file within the limit, pinned shots' sessions spared.
+                if (sessionsKeep != SESSIONS_ALL) {
+                    doomed(dir, sessionsKeep - 1, pinnedShotTimes(), sessionsToDrop).forEach { it.delete() }
+                }
                 val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
                 val file = File(dir, "session-$stamp.jsonl")
                 writer = BufferedWriter(FileWriter(file))
@@ -231,11 +267,21 @@ class BleSessionRecorder(private val context: Context) {
     companion object {
         private const val TAG = "BleSessionRecorder"
 
-        /** Capture files kept, the newest first; older ones are deleted. */
-        const val MAX_KEPT = 10
+        /** [sessionsKeep] for Off: record nothing. */
+        const val SESSIONS_OFF = 0
 
-        /** Capture files older than this are deleted when a session starts. */
-        const val MAX_AGE_MS = 14L * 24 * 60 * 60 * 1000
+        /** [sessionsKeep] for All: delete nothing by count. */
+        const val SESSIONS_ALL = -1
+
+        /** What a new install keeps. */
+        const val NEW_INSTALL_SESSIONS_KEEP = 50
+
+        /** What an install from before the setting keeps: today's limit, so an
+         *  update deletes nothing unasked. */
+        const val EXISTING_SESSIONS_KEEP = 10
+
+        /** The Settings choices, in order. */
+        val SESSIONS_KEEP_CHOICES = listOf(SESSIONS_OFF, 10, 50, 100, 300, SESSIONS_ALL)
 
         private const val CAPTURES_DIR = "captures"
 
@@ -247,16 +293,46 @@ class BleSessionRecorder(private val context: Context) {
             (dir.listFiles { f -> f.isFile && f.name.startsWith("session-") && f.name.endsWith(".jsonl") }
                 ?: emptyArray()).toList()
 
+        private val STAMP = java.util.regex.Pattern.compile("""^session-(\d{8}-\d{6})\.jsonl$""")
+
+        /** When a session file started: its name's stamp, else its last write. */
+        private fun startedMs(f: File): Long {
+            val m = STAMP.matcher(f.name)
+            if (!m.matches()) return f.lastModified()
+            return runCatching { SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).parse(m.group(1)!!)!!.time }
+                .getOrDefault(f.lastModified())
+        }
+
         /**
-         * Keep at most [keep] capture files in [dir], newest (by mtime) first,
-         * and delete any older than [maxAgeMs]. Only `session-*.jsonl` files are
-         * touched. Returns the files deleted.
+         * The `session-*.jsonl` files in [dir] past [keep] (newest by last write
+         * kept), sparing any whose span, from its name's stamp to its last
+         * write, holds one of [pinnedMs]. The rule is the core's.
          */
-        internal fun pruneCaptures(dir: File, keep: Int, maxAgeMs: Long, nowMs: Long): List<File> {
-            val newestFirst = captureFiles(dir).sortedByDescending { it.lastModified() }
-            val doomed = newestFirst.drop(keep.coerceAtLeast(0)) +
-                newestFirst.take(keep.coerceAtLeast(0)).filter { nowMs - it.lastModified() > maxAgeMs }
-            return doomed.filter { it.delete() }
+        internal fun doomed(dir: File, keep: Int, pinnedMs: List<Long>, rule: (String) -> String): List<File> {
+            if (keep == SESSIONS_ALL) return emptyList()
+            val files = captureFiles(dir)
+            val payload = kotlinx.serialization.json.buildJsonObject {
+                put("sessions", kotlinx.serialization.json.buildJsonArray {
+                    files.forEach { f ->
+                        add(kotlinx.serialization.json.buildJsonObject {
+                            put("name", kotlinx.serialization.json.JsonPrimitive(f.name))
+                            put("startedMs", kotlinx.serialization.json.JsonPrimitive(startedMs(f)))
+                            put("endedMs", kotlinx.serialization.json.JsonPrimitive(f.lastModified()))
+                        })
+                    }
+                })
+                put("keep", if (keep <= 0) kotlinx.serialization.json.buildJsonObject { put("kind", kotlinx.serialization.json.JsonPrimitive("Off")) }
+                else kotlinx.serialization.json.buildJsonObject {
+                    put("kind", kotlinx.serialization.json.JsonPrimitive("Newest"))
+                    put("details", kotlinx.serialization.json.buildJsonObject { put("count", kotlinx.serialization.json.JsonPrimitive(keep)) })
+                })
+                put("pinnedMs", kotlinx.serialization.json.JsonArray(pinnedMs.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+            }
+            val names = kotlinx.serialization.json.Json.parseToJsonElement(rule(payload.toString()))
+                .let { it as kotlinx.serialization.json.JsonArray }
+                .map { (it as kotlinx.serialization.json.JsonPrimitive).content }
+                .toSet()
+            return files.filter { it.name in names }
         }
 
         /** Delete every file in [dir] and the directory itself; the count deleted. */

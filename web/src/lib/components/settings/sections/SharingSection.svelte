@@ -56,6 +56,7 @@
 	import {
 		backupFileName,
 		backupNote as runBackup,
+		noteBackupMade,
 		buildBackupZip,
 		driveBackupRefusal,
 		describeBackupGaps,
@@ -70,6 +71,7 @@
 	import { planNow, prepareBackup, runRestore } from '#lib/restore/engine.js';
 	import { restoreFlow as runRestoreFlow } from '#lib/restore/flow.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
+	import StorageSection from './StorageSection.svelte';
 	import { readImportBytes } from '#lib/utils/import-limits.js';
 	import { credentialsStoredUnencrypted } from '#lib/security/credential-status.js';
 	import {
@@ -456,6 +458,7 @@
 			driveNote = 'Backing up to Drive…';
 			const token = await drive.accessToken();
 			await uploadBackup(token, backupFileName(), built.zip, 'application/zip');
+			noteBackupMade();
 			driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.${describeBackupGaps(built.contents)}`;
 		} catch (err) {
 			driveNote = err instanceof Error ? `Drive backup failed: ${err.message}` : 'Drive backup failed.';
@@ -731,6 +734,8 @@
 		{/snippet}
 	</StRow>
 </StGroup>
+
+<StorageSection />
 
 <input
 	bind:this={restoreInput}

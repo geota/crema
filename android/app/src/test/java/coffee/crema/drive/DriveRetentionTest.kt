@@ -184,6 +184,11 @@ class DriveRetentionTest {
         preDamage: String? = null,
         pinReleased: Boolean = false,
         lastSuccess: Long? = null,
+        weekly: Boolean = false,
+        wifiOnly: Boolean = false,
+        onWifi: Boolean = true,
+        hash: String? = null,
+        lastHash: String? = null,
         seen: (DriveSync) -> Unit = {},
     ): DriveState = runBlocking {
         store.load()
@@ -191,24 +196,64 @@ class DriveRetentionTest {
             DriveState(
                 tokens = tokens, lastAutoBackupAtMs = lastAuto, lastBackupSuccessAtMs = lastSuccess,
                 autoBackupKeep = keep, autoBackupTag = tag, damageSeen = seenByStore, preDamageCopy = preDamage, pinReleased = pinReleased,
+                lastAutoBackupHash = lastHash,
             ),
         )
         val sync = DriveSync(
             store, json, scope, "cid",
             notify = { notices += it },
             log = { logged += it },
-            backupZip = { BackupZip(byteArrayOf(1), built) },
+            backupZip = { BackupZip(byteArrayOf(1), built, hash) },
             backupFileName = { "crema-backup-tablet-20261106-0800.crema.zip" },
             applyRestore = { _, _ -> },
             refreshToken = { error("no refresh expected") },
             autoBackupBlocked = { blocked },
             damageByStore = { damage },
+            unmetered = { onWifi },
         )
         sync.load()
-        sync.autoBackupIfDue(true)
+        sync.autoBackupIfDue(true, weekly, wifiOnly)
         withTimeout(10_000) { job.children.toList().joinAll() }
         seen(sync)
         store.load()
+    }
+
+    @Test
+    fun wifiOnly_offWifiSkipsWithoutStamping() {
+        val last = now - 2 * day
+        val state = dailyBackup(lastAuto = last, wifiOnly = true, onWifi = false)
+        assertTrue(drive.isEmpty(), "nothing uploaded")
+        assertEquals(last, state.lastAutoBackupAtMs, "not stamped: the next launch checks again")
+        dailyBackup(lastAuto = last, wifiOnly = true, onWifi = true)
+        assertEquals(1, drive.size)
+    }
+
+    @Test
+    fun weekly_waitsSevenDays() {
+        dailyBackup(lastAuto = now - 2 * day, weekly = true)
+        assertTrue(drive.isEmpty(), "two days in, a weekly backup waits")
+        dailyBackup(lastAuto = now - 8 * day, weekly = true)
+        assertEquals(1, drive.size)
+    }
+
+    @Test
+    fun unchangedDataSkipsTheUpload_changedDataDoesNot() {
+        val skipped = dailyBackup(hash = "h1", lastHash = "h1")
+        assertTrue(drive.isEmpty(), "the same data isn't uploaded again")
+        assertTrue(skipped.lastAutoBackupAtMs!! > now - day, "the attempt is stamped")
+        val uploaded = dailyBackup(hash = "h2", lastHash = "h1")
+        assertEquals(1, drive.size)
+        assertEquals("h2", uploaded.lastAutoBackupHash, "stored only once it landed")
+    }
+
+    @Test
+    fun theCopiesPreviewCountsWhatTheNextPruneDeletes_neverAManualOne() {
+        seed(12)
+        drive += "manual" to "crema-backup-tablet-20250101-0800.crema.zip"
+        var preview: Int? = null
+        dailyBackup(lastAuto = now, keep = 10, seen = { sync -> preview = runBlocking { sync.copiesOverLimit(3) } })
+        assertEquals(9, preview)
+        assertTrue(drive.none { it.first == "manual" && it.first in trashed })
     }
 
     @Test

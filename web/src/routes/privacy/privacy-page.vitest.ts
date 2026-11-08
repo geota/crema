@@ -52,8 +52,9 @@ describe('privacy policy page', () => {
 	it('describes the Android Bluetooth captures and their limits', () => {
 		const t = text();
 		expect(t).not.toMatch(/IndexedDB, web only/);
-		expect(t).toMatch(/10 most recent sessions/);
-		expect(t).toMatch(/14 days/);
+		expect(t).toMatch(/as many as you choose in Settings, Storage and backups/);
+		expect(t).toMatch(/shots you pinned/);
+		expect(t).not.toMatch(/14 days/);
 	});
 
 	it('says disconnecting Drive revokes access on Android too', () => {

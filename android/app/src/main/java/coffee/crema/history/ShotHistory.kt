@@ -176,6 +176,10 @@ data class StoredShot(
      *  (core `StoredShot::visualizer_updated_at`): a pull skips a row at this
      *  version. Kept by backups, never uploaded. */
     val visualizerUpdatedAt: Long? = null,
+    /** The user pinned this shot (#311): the BLE session holding it keeps its
+     *  capture past the limit, and it is exempt from any cleanup. Core
+     *  `StoredShot::pinned`; kept by backups, moves between the apps. */
+    val pinned: Boolean = false,
     /**
      * The DE1 this shot was pulled on, stamped at record time (#84). The Decent
      * upload needs the serial (the server checks it belongs to the account);

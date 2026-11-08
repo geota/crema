@@ -1820,6 +1820,16 @@ pub fn pull_covers_attempt(since_ms: f64, attempted_at_ms: Option<f64>) -> bool 
     de1_domain::pull_covers_attempt(f64_to_ms(since_ms), attempted_at_ms.map(f64_to_ms))
 }
 
+/// The captured shots whose raw captures go under a limit: JSON
+/// `{shots, keep}` in, ids out. See `de1_domain::captures_to_drop`.
+///
+/// # Errors
+/// When the input doesn't parse.
+#[wasm_bindgen(js_name = capturesToDrop)]
+pub fn captures_to_drop(payload: &str) -> Result<String, String> {
+    de1_domain::captures_to_drop_json(payload)
+}
+
 /// The pull run's rules by name (`planPage`, `recordRow`, `finishRun`,
 /// `pace`, …): JSON arguments in, JSON answer out. See
 /// `de1_domain::pull_run_call`.
