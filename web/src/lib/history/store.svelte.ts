@@ -38,6 +38,7 @@ import {
 	cappedHistory,
 	evictOldest,
 	fitsHistory,
+	historyCutNotice,
 	newestFirst,
 	type HistoryInsert
 } from './brew-date';
@@ -350,7 +351,7 @@ export class HistoryStore {
 	 * was dated. A row older than a full history is the one that goes.
 	 */
 	private insert(shot: StoredShot): void {
-		this.shots = cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS);
+		this.capWith(shot, cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS));
 	}
 
 	/**
@@ -358,7 +359,18 @@ export class HistoryStore {
 	 * behind the history can't lose it: the oldest other row goes instead.
 	 */
 	private insertMade(shot: StoredShot): void {
-		this.shots = cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS, shot.id);
+		this.capWith(shot, cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS, shot.id));
+	}
+
+	/** Take `next`, the rows with `shot` added and capped, and say if the cap
+	 *  dropped any (#310 P0): a row never leaves without a word. Pinned rows
+	 *  are never among them (#311). */
+	private capWith(shot: StoredShot, next: StoredShot[]): void {
+		const kept = new Set(next.map((s) => s.id));
+		const droppedOlder = this.shots.filter((s) => !kept.has(s.id)).length;
+		this.shots = next;
+		const notice = historyCutNotice(droppedOlder, kept.has(shot.id), MAX_RECORDS);
+		if (notice) toast.info(notice, 7000);
 	}
 
 	/** The most rows the history keeps. */

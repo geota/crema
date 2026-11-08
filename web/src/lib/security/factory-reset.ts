@@ -14,7 +14,9 @@
  *     history telemetry series, bean bag photos, the secret-box key — plus any
  *     other `crema-*` database the browser lists. The stores that cache a
  *     connection close it on `versionchange`, so this tab never blocks its own
- *     delete; another open Crema tab can, which the result reports.
+ *     delete; another open Crema tab can, which the result reports. Then
+ *     the history's rows snapshot in the origin private file system, which a
+ *     newer build writes (#310).
  *  3. **Web storage.** Every `crema.*` key in localStorage and sessionStorage
  *     (preferences, library, history summaries, the wrapped Visualizer and
  *     Decent tokens, the Drive session token, the OAuth handshake).
@@ -30,12 +32,23 @@ import { DB_NAME as CAPTURES_DB } from '#lib/capture/store.js';
 import { DB_NAME as SERIES_DB } from '#lib/history/series-store.js';
 import { DB_NAME as BEAN_IMAGES_DB } from '#lib/bean/image-storage.js';
 import { DB_NAME as KEYS_DB } from '#lib/security/secret-box.js';
+import { HISTORY_DB_NAME, HISTORY_SNAPSHOT_NAME } from '#lib/history/store-names.js';
 import { withTimeout } from '#lib/utils/timeout.js';
 import { FROZEN_SHOTS_KEY } from '#lib/restore/tab-safety.js';
 
 
-/** Every IndexedDB database the web app creates. */
-export const CREMA_DATABASES: readonly string[] = [CAPTURES_DB, SERIES_DB, BEAN_IMAGES_DB, KEYS_DB];
+/**
+ * Every IndexedDB database the web app creates, and `crema-history`, which a
+ * newer build does: a reset after a rollback must take it too, even where the
+ * browser can't list databases (#310 P0).
+ */
+export const CREMA_DATABASES: readonly string[] = [
+	CAPTURES_DB,
+	SERIES_DB,
+	BEAN_IMAGES_DB,
+	KEYS_DB,
+	HISTORY_DB_NAME
+];
 
 /** Prefix of every Crema web-storage key. */
 const STORAGE_PREFIX = 'crema.';
@@ -54,17 +67,41 @@ export interface FactoryResetDeps {
 	deleteTimeoutMs?: number;
 	/** Runs after the revocations and before the first delete (freeze writers here). */
 	beforeWipe?: () => void;
+	/** The origin private file system's root, or undefined where there is none. */
+	privateFiles?: () => Promise<FileSystemDirectoryHandle | undefined>;
 }
 
 export interface FactoryResetResult {
 	/** Databases that were deleted (or did not exist). */
 	databasesDeleted: string[];
-	/** Databases the browser did not delete in time — usually another open Crema tab. */
+	/** Databases the browser did not delete in time — usually another open Crema tab — and the history snapshot, if it stayed. */
 	databasesFailed: string[];
 	/** `crema.*` keys removed from localStorage + sessionStorage. */
 	storageKeysRemoved: number;
 	/** Revocations that threw or timed out. The local wipe ran regardless. */
 	revokeFailures: number;
+}
+
+/** The origin private file system's root, where the browser has one. */
+async function privateFilesRoot(): Promise<FileSystemDirectoryHandle | undefined> {
+	if (typeof navigator === 'undefined' || typeof navigator.storage?.getDirectory !== 'function') {
+		return undefined;
+	}
+	return navigator.storage.getDirectory();
+}
+
+/** Remove the history's rows snapshot: false only when it's there and stays. */
+async function removeSnapshot(
+	root: () => Promise<FileSystemDirectoryHandle | undefined>
+): Promise<boolean> {
+	try {
+		const dir = await root();
+		await dir?.removeEntry(HISTORY_SNAPSHOT_NAME, { recursive: true });
+		return true;
+	} catch (e) {
+		// None to remove, or no private file system at all.
+		return e instanceof DOMException && (e.name === 'NotFoundError' || e.name === 'SecurityError');
+	}
 }
 
 function deleteDatabase(idb: IDBFactory, name: string, timeoutMs: number): Promise<boolean> {
@@ -142,6 +179,10 @@ export async function factoryResetLocalData(deps: FactoryResetDeps = {}): Promis
 			else databasesFailed.push(name);
 		}
 	}
+
+	// Another tab holding the file is the usual reason it stays, as for a
+	// database, so it's reported with them.
+	if (!(await removeSnapshot(deps.privateFiles ?? privateFilesRoot))) databasesFailed.push(HISTORY_SNAPSHOT_NAME);
 
 	const storageKeysRemoved = clearPrefixed(local) + clearPrefixed(session);
 	// Shots a frozen tab kept: not a `crema.` key, so a freeze can't drop them.

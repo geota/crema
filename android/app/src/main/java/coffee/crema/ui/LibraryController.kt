@@ -53,6 +53,7 @@ import coffee.crema.history.coreShotJson
 import coffee.crema.history.isBrewLog
 import coffee.crema.history.brewDateError
 import coffee.crema.history.HistoryMerge
+import coffee.crema.history.historyCutNotice
 import coffee.crema.history.historyDroppedNotice
 import coffee.crema.history.historyWith
 import coffee.crema.beans.applyBeanDraft
@@ -309,6 +310,26 @@ class LibraryController(
     private fun editBeans(edit: (BeanRows) -> BeanRows) = editRows({ it.copy(beans = edit(it.beans)) }, { it })
 
     private fun editRoasters(edit: (RoasterRows) -> RoasterRows) = editRows({ it.copy(roasters = edit(it.roasters)) }, { it })
+
+    /** How many older rows the cap dropped for a row made here, from the edit's
+     *  last run (an update can run its lambda again). */
+    private inner class CapCut {
+        var dropped = 0
+
+        /** A save that drops a row says so (#310 P0). Pinned rows never go (#311). */
+        fun say() {
+            historyCutNotice(dropped, newKept = true)?.let(notify)
+        }
+    }
+
+    /** These rows with [shot], made here, added by date and capped; [cut]
+     *  counts what the cap dropped. */
+    private fun HistoryRows.withMade(shot: StoredShot, cut: CapCut): HistoryRows {
+        val next = historyWith(listOf(shot), this, keepId = shot.id)
+        val kept = next.mapTo(HashSet()) { it.id }
+        cut.dropped = count { it.id !in kept }
+        return next
+    }
 
     /** Save the history as it stands. */
     private fun saveHistory() {
@@ -2231,8 +2252,10 @@ class LibraryController(
             ) }
             appendLog("Shot discarded as aborted (<10 s, <5 g)")
         } else {
-            editHistory { rows -> historyWith(listOf(shot), rows, keepId = shot.id) }
+            val cut = CapCut()
+            editHistory { rows -> rows.withMade(shot, cut) }
             saveHistory()
+            cut.say()
             // Auto-upload to every armed destination (Visualizer, Decent), one
             // notice for the batch, with the core's full series.
             autoUploadShot(shot, shot.samples)
@@ -2371,9 +2394,11 @@ class LibraryController(
             // machineSerial / Firmware / Model stay null — the #84 record-time
             // stamp belongs to the live-shot path only.
         )
-        editHistory { rows -> historyWith(listOf(shot), rows, keepId = shot.id) }
+        val cut = CapCut()
+        editHistory { rows -> rows.withMade(shot, cut) }
         saveHistory()
         notify("Brew logged")
+        cut.say()
         return shot
     }
 
@@ -2644,8 +2669,9 @@ class LibraryController(
     fun undoDiscardShot() {
         val shot = discardedShot ?: return
         discardedShot = null
+        val cut = CapCut()
         editRows(
-            { rows -> rows.copy(history = historyWith(listOf(shot), rows.history, keepId = shot.id)) },
+            { rows -> rows.copy(history = rows.history.withMade(shot, cut)) },
             { it.copy(
                 discardToastMessage = null,
                 lastShot = LastShot(
