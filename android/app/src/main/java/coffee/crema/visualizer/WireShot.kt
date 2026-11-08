@@ -160,6 +160,7 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
         put("stopOnWeight", shot.stopOnWeight)
         put("autoTare", shot.autoTare)
         shot.stopReason?.let { put("stopReason", it) }
+        if (shot.stopEstimated) put("stopEstimated", true)
         if (forBackup) shot.privacy?.let { put("privacy", it) }
         // Server-assigned on upload (rides as null); preserved for a backup so a
         // restore PATCHes the same Visualizer row instead of duplicating it.
@@ -305,6 +306,7 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         stopOnWeight = boolOf("stopOnWeight"),
         autoTare = boolOf("autoTare"),
         stopReason = str("stopReason")?.takeIf { it.isNotBlank() },
+        stopEstimated = boolOf("stopEstimated") == true,
         visualizerId = str("visualizerId"),
         yieldTargetG = str("yieldTarget")?.toFloatOrNull(),
         decentId = str("decentId")?.takeIf { it.isNotBlank() },

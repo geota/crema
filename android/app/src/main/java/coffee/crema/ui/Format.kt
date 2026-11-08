@@ -182,7 +182,7 @@ fun freshnessColor(frozen: Boolean, level: Int?, days: Int?): Color {
  *  global time cap. Null (manual stop / unclassified) → the card shows a
  *  quiet dash instead. */
 fun stopIcon(reason: StopReason?): String? = when (reason) {
-    StopReason.Weight -> "scales"
+    StopReason.Weight, StopReason.EstimatedWeight -> "scales"
     StopReason.Volume -> "drop-half"
     StopReason.MaxTime -> "timer"
     null -> null

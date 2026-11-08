@@ -148,6 +148,11 @@ pub enum Blocked {
     UntaredCup,
     /// The scale went quiet before the cup had any weight in it.
     ScaleLost,
+    /// A returning scale read outside what the cup could hold: it re-zeroed,
+    /// or something landed on it.
+    ScaleRezeroed,
+    /// Something pressed on, landed on or was lifted off the scale mid-flow.
+    ScaleDisturbed,
 }
 
 impl Blocked {
@@ -160,6 +165,8 @@ impl Blocked {
             Blocked::BeganUnseen => "began-unseen",
             Blocked::UntaredCup => "untared-cup",
             Blocked::ScaleLost => "scale-lost",
+            Blocked::ScaleRezeroed => "scale-rezeroed",
+            Blocked::ScaleDisturbed => "scale-disturbed",
         }
     }
 
@@ -172,36 +179,93 @@ impl Blocked {
             Blocked::BeganUnseen => "Started before Crema connected",
             Blocked::UntaredCup => "cup not tared",
             Blocked::ScaleLost => "Scale stopped reporting. Stop this shot by hand.",
+            Blocked::ScaleRezeroed => "Scale re-zeroed",
+            Blocked::ScaleDisturbed => "Scale disturbed. Stop this shot by hand.",
+        }
+    }
+
+    /// The note while the estimated leg finishes the session in the weight
+    /// leg's place (`DESIGN.md` §3.5, §6).
+    #[must_use]
+    pub const fn estimating_note(self) -> &'static str {
+        match self {
+            Blocked::ScaleRezeroed => "Estimating, scale re-zeroed",
+            Blocked::ScaleDisturbed => "Estimating, scale disturbed",
+            _ => "Estimating, scale stopped reporting",
         }
     }
 
     /// Every reason, for the shells' tests.
-    pub const ALL: [Blocked; 5] = [
+    pub const ALL: [Blocked; 7] = [
         Blocked::NoScale,
         Blocked::ScaleSilent,
         Blocked::BeganUnseen,
         Blocked::UntaredCup,
         Blocked::ScaleLost,
+        Blocked::ScaleRezeroed,
+        Blocked::ScaleDisturbed,
     ];
 }
 
+/// The last weight the session trusted, paired with the pour volume of a
+/// sample under 1 s old (`DESIGN.md` §3.4). The estimated leg counts the rest
+/// of the pour from it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LastTrusted {
+    /// The raw net reading, grams: never the smoothed estimate.
+    pub weight_g: f32,
+    /// The pour volume at that reading, ml.
+    pub pour_ml: f32,
+    /// When it was read.
+    pub at: Duration,
+}
+
+/// Weight at or over this, with scale flow at or over [`GATE_FLOW_G_S`],
+/// held for [`GATE_HOLD`], says water has reached the cup. Provisional.
+pub const GATE_WEIGHT_G: f32 = 5.0;
+/// The gate's scale flow, g/s. Provisional.
+pub const GATE_FLOW_G_S: f32 = 0.5;
+/// How long the gate's condition must hold, so a bump can't open it.
+pub const GATE_HOLD: Duration = Duration::from_secs(1);
+/// A trusted reading under this means the cup is empty again: `last` can't
+/// ride back to it.
+pub const EMPTY_CUP_G: f32 = 3.0;
+
 /// What the scale's zero means for a session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Baseline {
     /// Tare pending, or no reading yet.
     Unknown,
     /// The zero is good: the tare landed or timed out, auto-tare is off, or
-    /// the untared-cup guard latched a virtual zero.
+    /// the untared-cup guard latched a virtual zero. Nothing measured in the
+    /// cup yet.
     Tared,
+    /// Flow has reached the cup: the gate held.
+    Trusted(LastTrusted),
     /// The scale's readings can't be trusted for this session.
     Refused {
         /// Why.
         why: Blocked,
+        /// The last trusted weight, if flow had reached the cup: the
+        /// estimate finishes from it.
+        last: Option<LastTrusted>,
     },
 }
 
+impl Baseline {
+    /// The last trusted weight, if the gate has opened.
+    #[must_use]
+    pub const fn last(self) -> Option<LastTrusted> {
+        match self {
+            Baseline::Trusted(last) => Some(last),
+            Baseline::Refused { last, .. } => last,
+            Baseline::Unknown | Baseline::Tared => None,
+        }
+    }
+}
+
 /// One flow, from its first state until the machine leaves that mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Session {
     /// The kind of flow.
     pub mode: ActiveMode,
@@ -250,6 +314,7 @@ impl Session {
             Observed::FromStart => Baseline::Unknown,
             Observed::Unseen => Baseline::Refused {
                 why: Blocked::BeganUnseen,
+                last: None,
             },
         };
         Session {
@@ -335,8 +400,8 @@ impl Session {
     #[must_use]
     pub fn weight_refused(&self) -> Option<Blocked> {
         match self.baseline {
-            Baseline::Refused { why } => Some(why),
-            Baseline::Unknown | Baseline::Tared => None,
+            Baseline::Refused { why, .. } => Some(why),
+            Baseline::Unknown | Baseline::Tared | Baseline::Trusted(_) => None,
         }
     }
 
@@ -353,8 +418,39 @@ impl Session {
         if matches!(self.baseline, Baseline::Unknown | Baseline::Tared) {
             self.baseline = Baseline::Refused {
                 why: Blocked::UntaredCup,
+                last: None,
             };
         }
+    }
+
+    /// The gate held, or a trusted reading refreshed `last`: `Tared` or
+    /// `Trusted` becomes `Trusted(last)`.
+    pub fn trusted(&mut self, last: LastTrusted) {
+        if matches!(self.baseline, Baseline::Tared | Baseline::Trusted(_)) {
+            self.baseline = Baseline::Trusted(last);
+        }
+    }
+
+    /// A trusted reading under [`EMPTY_CUP_G`]: back to `Tared`, so `last`
+    /// can't ride back to an empty cup.
+    pub fn emptied(&mut self) {
+        if matches!(self.baseline, Baseline::Trusted(_)) {
+            self.baseline = Baseline::Tared;
+        }
+    }
+
+    /// The scale can't speak for the cup for the rest of the session: it
+    /// re-zeroed on return, or was disturbed. A trusted session keeps its
+    /// `last`, so the estimate finishes; a tared one keeps nothing.
+    pub fn refuse(&mut self, why: Blocked) {
+        self.baseline = match self.baseline {
+            Baseline::Trusted(last) => Baseline::Refused {
+                why,
+                last: Some(last),
+            },
+            Baseline::Tared | Baseline::Unknown => Baseline::Refused { why, last: None },
+            refused @ Baseline::Refused { .. } => refused,
+        };
     }
 }
 

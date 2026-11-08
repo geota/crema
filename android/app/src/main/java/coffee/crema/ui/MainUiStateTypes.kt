@@ -40,8 +40,9 @@ data class StopTargetsView(
      *  configured stays on screen when a scale drops instead of vanishing. */
     val weightConfiguredG: Float? = null,
     /** Why [weightG] is null despite [weightConfiguredG] being set —
-     *  `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"` or
-     *  `"scale-lost"`; null when armed, unset, or the user turned the stop off. */
+     *  `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`,
+     *  `"scale-lost"`, `"scale-rezeroed"` or `"scale-disturbed"`; null when
+     *  armed, unset, or the user turned the stop off. */
     val weightBlocked: String? = null,
     /** The core's note for [weightBlocked], the same on both shells. */
     val weightBlockedNote: String? = null,

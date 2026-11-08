@@ -27,7 +27,8 @@ import type {
 	CalTarget,
 	SubState
 } from '#lib/core/index.js';
-import type { HotWaterTarget, StopReason } from '#lib/core/crema-core.js';
+import type { HotWaterTarget } from '#lib/core/crema-core.js';
+import { StopReason } from '#lib/core/crema-core.js';
 import { MaintenanceFailure, ScaleLinkDeadReason } from '#lib/core/crema-core.js';
 import type { De1State, De1Diagnostics } from '#lib/ble/de1.js';
 import { EMPTY_DE1_DIAGNOSTICS } from '#lib/ble/de1.js';
@@ -195,7 +196,7 @@ export interface StopTargetsView {
 	 *  configured stays on screen when a scale drops instead of vanishing. */
 	readonly weightConfiguredG: number | null;
 	/** Why `weightG` is null despite `weightConfiguredG` being set —
-	 *  `'no-scale'`, `'scale-silent'`, `'began-unseen'`, `'untared-cup'` or `'scale-lost'`; null when armed, unset, or the user
+	 *  `'no-scale'`, `'scale-silent'`, `'began-unseen'`, `'untared-cup'`, `'scale-lost'`, `'scale-rezeroed'` or `'scale-disturbed'`; null when armed, unset, or the user
 	 *  turned the stop off (a choice, not an impediment). */
 	readonly weightBlocked: string | null;
 	/** The core's note for `weightBlocked`, the same on both shells. */
@@ -1069,7 +1070,12 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				lastStopReason: snapshot.shotInProgress
 					? event.content.reason
 					: snapshot.lastStopReason,
-				eventLog: appendLog(snapshot.eventLog, `Auto-stop: ${event.content.reason}`)
+				eventLog: appendLog(
+					snapshot.eventLog,
+					event.content.reason === StopReason.EstimatedWeight
+						? 'Auto-stop: on estimate, scale lost'
+						: `Auto-stop: ${event.content.reason}`
+				)
 			};
 		case 'ShotCompleted': {
 			// The shot ended — stop the timer, but keep the buffered series so

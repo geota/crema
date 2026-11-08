@@ -114,50 +114,7 @@ fn p1_a_hot_water_stop_is_retried_until_the_machine_winds_down() {
     assert!(after.is_empty(), "honoured: {after:?}");
 }
 
-/// P2: scale stalls mid-pour. The packet holds the 250 ml backstop, so the
-/// app's `V` ml leg stands in and stops the pour at 120 ml (PR 5). PR 8 makes
-/// it the estimate, near the target.
-#[test]
-fn p2_hot_water_scale_stall_stops_at_the_users_volume() {
-    let mut core = CremaCore::new();
-    core.connect_scale("BOOKOO_SC", &[]);
-    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
-    core.set_auto_tare(false);
-    core.connect_sweep(
-        &de1_domain::ConnectSweepSettings {
-            ..Default::default()
-        },
-        1,
-    );
-    core.set_steam_hotwater_targets(&steam_targets(HotWaterMode::Volume));
-    core.on_notification(Source::De1State, &[2, 0], 10);
-    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 20);
-    core.on_notification(Source::De1State, &[6, 5], 100);
-    core.on_notification(Source::ScaleWeight, &bookoo(10.0), 300);
-    let mut stops = vec![];
-    let mut events = vec![];
-    for i in 1..200u64 {
-        let t = 300 + i * 250;
-        let o = core.on_tick(t);
-        stops.extend(state_writes(&o));
-        events.extend(
-            o.events
-                .iter()
-                .filter(|e| matches!(e, Event::ScaleStale | Event::ScaleLinkDead { .. }))
-                .map(|e| format!("{e:?}")),
-        );
-        let o = core.on_notification(Source::De1ShotSample, &sample((t / 8) as u16), t + 1);
-        stops.extend(state_writes(&o));
-    }
-    // The stop, then its retries: this machine never winds down.
-    assert_eq!(
-        stops.first(),
-        Some(&(MachineState::Idle as u8)),
-        "a stop, at V"
-    );
-    let poured = core.volume_integrator.pour_ml();
-    assert!((120.0..140.0).contains(&poured), "{poured} ml");
-}
+// P2 flipped in PR 8: `scale_estimate_tests::p2_hot_water_whose_scale_stalls_stops_near_target_on_estimate`.
 
 /// A scale write that tares a Bookoo.
 fn tares(o: &CoreOutput) -> usize {
@@ -613,47 +570,8 @@ fn p9_unknown_substate_still_ends_the_shot() {
     assert!(core.shot_started.is_none());
 }
 
-/// P11: scale flap around the target.
-/// Flips in PR 8: stops near 36 g.
-#[test]
-fn p11_scale_flap_at_target_turns_saw_off() {
-    let mut core = CremaCore::new();
-    core.connect_scale("BOOKOO_SC", &[]);
-    core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
-    core.on_notification(Source::De1State, &[4, 5], 0);
-    let mut t = 100;
-    let mut g = 0.0;
-    while g < 30.0 {
-        core.on_notification(Source::ScaleWeight, &bookoo(g), t);
-        g += 0.2;
-        t += 100;
-    }
-    core.disconnect_scale();
-    t += 2500;
-    g += 8.0; // 38 g, 2.5 s later
-    core.connect_scale("BOOKOO_SC", &[]);
-    let mut stops = vec![];
-    let mut ev = vec![];
-    for _ in 0..200 {
-        let o = core.on_notification(Source::ScaleWeight, &bookoo(g), t);
-        stops.extend(state_writes(&o));
-        ev.extend(
-            o.events
-                .iter()
-                .filter(|e| {
-                    matches!(
-                        e,
-                        Event::SawSuppressedUntaredCup { .. } | Event::SawAutoZeroed { .. }
-                    )
-                })
-                .map(|e| format!("{e:?}")),
-        );
-        g += 0.2;
-        t += 100;
-    }
-    assert!(stops.is_empty());
-}
+// P11 flipped in PR 8: `scale_estimate_tests::a_returning_scale_far_over_its_last_is_refused`
+// and `a_returning_scale_within_reach_is_adopted`.
 
 /// D1: the web pushes this pair for a profile with yieldOut 0 + a QC yield.
 /// Flips in PR 10: `weight == 36`.
@@ -789,29 +707,7 @@ fn hot_water_first_seen_heating_arms_its_stop() {
     assert!(core.hot_water_stop_target_g().is_some());
 }
 
-/// Q6: physical tare at 20 g of 36: the overshoot equals what was in the cup.
-/// Deferred (§5): stays as a characterisation test.
-#[test]
-fn q6_physical_tare_mid_shot() {
-    let mut core = CremaCore::new();
-    core.connect_scale("BOOKOO_SC", &[]);
-    core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
-    core.on_notification(Source::De1State, &[2, 0], 0);
-    core.on_notification(Source::De1State, &[4, 5], 0);
-    let (mut t, mut real) = (100u64, 0.0f32);
-    let mut stop_at = None;
-    while real < 100.0 && stop_at.is_none() {
-        let shown = if real > 20.0 { real - 20.0 } else { real };
-        let o = core.on_notification(Source::ScaleWeight, &bookoo(shown), t);
-        if !state_writes(&o).is_empty() {
-            stop_at = Some(real);
-        }
-        real += 0.2;
-        t += 100;
-    }
-    assert!(stop_at.unwrap() > 54.0);
-}
+// Q6 flipped in PR 8: `scale_estimate_tests::q6_a_physical_tare_mid_shot_stops_near_target_on_estimate`.
 
 /// Q7: a profile with no steps fails at once but reports a 15 s timeout.
 /// Deferred (§5), unrelated to stops.

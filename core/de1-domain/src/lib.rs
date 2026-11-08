@@ -379,4 +379,4 @@ pub use visualizer_wire::{
 };
 pub use volume::{LineFreqDetector, VolumeIntegrator};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};
-pub use weight_gate::WeightSpikeGate;
+pub use weight_gate::{WeightSpikeGate, WeightVerdict};

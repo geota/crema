@@ -68,6 +68,8 @@
 	const stopped = $derived(
 		stopReason === StopReason.Weight
 			? 'Yield'
+			: stopReason === StopReason.EstimatedWeight
+				? 'Yield, on estimate'
 			: stopReason === StopReason.Volume
 				? 'Volume'
 				: stopReason === StopReason.MaxTime
@@ -78,7 +80,7 @@
 	 *  wears on the stop-conditions rows (Android `stopIcon`); the word
 	 *  survives as the aria-label. */
 	const stoppedIcon = $derived(
-		stopReason === StopReason.Weight
+		stopReason === StopReason.Weight || stopReason === StopReason.EstimatedWeight
 			? 'scales'
 			: stopReason === StopReason.Volume
 				? 'drop-half'
