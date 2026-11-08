@@ -94,6 +94,8 @@ data class RestoreMarker(
     val backupName: String,
     val startedAt: Long,
     val deletes: MarkerDeletes = MarkerDeletes(),
+    /** Beans this restore added, across re-runs: they aren't this device's own bag for `zeroDebit`. */
+    val addedBeans: List<String> = emptyList(),
 )
 
 /** The marker file, through [SafeFile]: a kill is seen at the next launch. */
@@ -102,8 +104,9 @@ class RestoreMarkerStore(private val file: File, private val json: Json) {
         runCatching { if (file.exists()) json.decodeFromString(RestoreMarker.serializer(), file.readText()) else null }.getOrNull()
 
     /** Step 1: `applying`, keeping deletes an earlier marker owes, as a re-run removes nothing. */
-    fun begin(mode: RestoreKind, backupName: String, deletes: MarkerDeletes, now: Long): Boolean {
-        val prior = read()?.deletes ?: MarkerDeletes()
+    fun begin(mode: RestoreKind, backupName: String, deletes: MarkerDeletes, now: Long, addedBeans: List<String> = emptyList()): Boolean {
+        val earlier = read()
+        val prior = earlier?.deletes ?: MarkerDeletes()
         val marker = RestoreMarker(
             phase = PHASE_APPLYING,
             mode = mode.core,
@@ -113,6 +116,7 @@ class RestoreMarkerStore(private val file: File, private val json: Json) {
                 shots = (prior.shots + deletes.shots).distinct(),
                 photos = (prior.photos + deletes.photos).distinct(),
             ),
+            addedBeans = (earlier?.addedBeans.orEmpty() + addedBeans).distinct(),
         )
         return write(marker)
     }
@@ -231,8 +235,11 @@ class RestoreEngine(
     }
 
     /** The plan against this device as it is now. */
-    suspend fun plan(prepared: PreparedBackup, kind: RestoreKind, reviveDeleted: Boolean = false): RestorePlan =
-        planFor(prepared, kind, sink.localState(), json, reviveDeleted)
+    suspend fun plan(prepared: PreparedBackup, kind: RestoreKind, reviveDeleted: Boolean = false): RestorePlan {
+        // A re-run after an interrupted one: the beans it added aren't the device's own.
+        val added = marker.read()?.takeIf { it.phase == RestoreMarkerStore.PHASE_APPLYING }?.addedBeans.orEmpty()
+        return planFor(prepared, kind, sink.localState().copy(addedBeans = added), json, reviveDeleted)
+    }
 
     /**
      * Run a restore. With [expected], the plan the user confirmed: if the device
@@ -283,7 +290,7 @@ class RestoreEngine(
 
         // 1. The marker, with what this restore will owe to delete.
         if (!step(RestoreStep.MARKER) {
-                marker.begin(kind, prepared.name, MarkerDeletes(plan.shots.remove, plan.photos.remove), now())
+                marker.begin(kind, prepared.name, MarkerDeletes(plan.shots.remove, plan.photos.remove), now(), plan.beans.add)
             }
         ) return stopped(RestoreStep.MARKER)
         // 2. Tombstones the backup brings back: no remote DELETE may follow.

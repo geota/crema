@@ -158,7 +158,7 @@ class DriveRetentionTest {
         notify = { notices += it },
         backupZip = { null },
         backupFileName = { "b" },
-        applyRestore = { bytes, wipe -> restored += bytes.decodeToString() to wipe },
+        applyRestore = { bytes, wipe, _ -> restored += bytes.decodeToString() to wipe },
         refreshToken = { error("no refresh expected") },
     ).also {
         runBlocking {
@@ -199,7 +199,7 @@ class DriveRetentionTest {
             log = { logged += it },
             backupZip = { BackupZip(byteArrayOf(1), built) },
             backupFileName = { "crema-backup-tablet-20261106-0800.crema.zip" },
-            applyRestore = { _, _ -> },
+            applyRestore = { _, _, _ -> },
             refreshToken = { error("no refresh expected") },
             autoBackupBlocked = { blocked },
             damageByStore = { damage },
@@ -373,19 +373,48 @@ class DriveRetentionTest {
         assertEquals(false, state.pinReleased, "the new pin is held again")
     }
 
-    @Test
-    fun aCompletedRestoreReleasesThePin() = runBlocking {
+    /** A restore finished, having written [written], from Drive file [from]: is the pin released? */
+    private fun released(written: Set<String>, from: DriveBackupRow? = null): Boolean = runBlocking {
         store.load()
-        store.save(DriveState(tokens = tokens, preDamageCopy = "tablet3"))
+        store.save(
+            DriveState(
+                tokens = tokens, preDamageCopy = "tablet3", pinStores = setOf(LIB, PROFILES),
+                preDamageCopyAtMs = 5_000L, autoBackupTag = TAG,
+            ),
+        )
         val sync = DriveSync(
             store, json, scope, "cid",
-            notify = {}, backupZip = { null }, backupFileName = { "b" }, applyRestore = { _, _ -> },
+            notify = {}, backupZip = { null }, backupFileName = { "b" }, applyRestore = { _, _, _ -> },
             refreshToken = { error("no refresh expected") },
         )
         sync.load()
-        sync.restoreCompleted()
+        sync.restoreCompleted(written, from)
         withTimeout(10_000) { job.children.toList().joinAll() }
-        assertEquals(true, store.load().pinReleased)
+        store.load().pinReleased
+    }
+
+    private fun row(id: String, name: String, at: Long) =
+        DriveBackupRow(id, at, coffee.crema.core.BackupFileInfo(device = null, automatic = true, counts = null), name)
+
+    @Test
+    fun aRestoreThatWroteEveryDamagedStoreReleasesThePin() {
+        assertEquals(true, released(setOf(LIB, PROFILES, "prefs.json")))
+    }
+
+    @Test
+    fun aRestoreThatMissedADamagedStoreKeepsThePin() {
+        // REVIEW-370: a settings-only file, or a Merge that added no profile.
+        assertEquals(false, released(setOf("prefs.json")))
+        assertEquals(false, released(setOf(LIB)))
+    }
+
+    @Test
+    fun theRestoredPinOrANewerOwnCopyReleasesItWhateverItWrote() {
+        assertEquals(true, released(emptySet(), row("tablet3", "x", 5_000L)))
+        assertEquals(true, released(emptySet(), row("tablet9", "crema-backup-auto-tablet~$TAG-20261107-0800-s1c1.crema.zip", 6_000L)))
+        // Older than the pin, or another device's: no.
+        assertEquals(false, released(emptySet(), row("tablet8", "crema-backup-auto-tablet~$TAG-20261101-0800-s1c1.crema.zip", 4_000L)))
+        assertEquals(false, released(emptySet(), row("phone1", "crema-backup-auto-phone~other1-20261107-0800-s1c1.crema.zip", 6_000L)))
     }
 
     @Test

@@ -116,6 +116,24 @@ private val STEP_NAMES = mapOf(
     RestoreStep.PROFILES to "profiles", RestoreStep.SHOTS to "shots", RestoreStep.SETTINGS to "settings",
 )
 
+/**
+ * The store files a plan wrote, by name, as Drive's pre-damage pin names its
+ * damage: a row store it added to, overwrote or removed from, a line it
+ * applied. Settings and maintenance only when step 8 ran.
+ */
+fun writtenStores(plan: RestorePlan, singletonsSkipped: Boolean): Set<String> {
+    fun coffee.crema.core.StorePlan.changed() = add.isNotEmpty() || overwrite.isNotEmpty() || remove.isNotEmpty()
+    val apply = coffee.crema.core.PlanAction.Apply
+    return buildSet {
+        if (plan.beans.changed() || plan.roasters.changed()) add("beanLibrary.json")
+        if (plan.profiles.changed()) add("customProfiles.json")
+        if (plan.recipes.changed() || plan.customMethods.changed() || plan.recipeMeta.action == apply) add("brew-recipes.json")
+        if (plan.profileMeta.action == apply) { add("pinnedProfiles.json"); add("hiddenProfiles.json") }
+        if (!singletonsSkipped && plan.settings.common == apply) add("prefs.json")
+        if (!singletonsSkipped && plan.maintenance == apply) add("maintenance.json")
+    }
+}
+
 /** The line after a restore, whichever way it ended. */
 fun outcomeMessage(outcome: RestoreOutcome): String = when (outcome) {
     RestoreOutcome.Busy -> "A restore is already running."

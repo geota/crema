@@ -153,6 +153,8 @@ class VisualizerSync(
     private val shotsLoaded: () -> Boolean = { true },
     /** The shot log couldn't be read: shots wait for the user, not for a load. */
     private val historyRefused: () -> Boolean = { false },
+    /** A restore is applying: a pull waits for it, as its rows aren't settled (restore-safety §8). */
+    private val restoreRunning: () -> Boolean = { false },
     /** Core `callback_outcome`: what a redirect means for the stored handshake. */
     private val callbackRule: (expectedState: String?, verifier: String?, code: String?, returnedState: String?, error: String?) -> CallbackOutcome =
         ::callbackOutcome,
@@ -1545,10 +1547,17 @@ class VisualizerSync(
         // One run at a time: a second Sync while one walks does nothing.
         if (!runMutex.tryLock()) return RunResult(buildJsonObject { put("kind", JsonPrimitive("Busy")) }, 0, 0)
         try {
+            if (restoreRunning()) return RunResult(restoreBusy(), 0, 0)
             return walkRun(shots, fromStart)
         } finally {
             runMutex.unlock()
         }
+    }
+
+    /** A run that waits for a restore, or stopped for one mid-walk. */
+    private fun restoreBusy() = buildJsonObject {
+        put("kind", JsonPrimitive("Busy"))
+        put("restore", JsonPrimitive(true))
     }
 
     /** Held by the pull run that is walking. */
@@ -1593,6 +1602,12 @@ class VisualizerSync(
         var page = 1
         var ownDeletes = 0
         walk@ while (true) {
+            // A restore started mid-walk: what this run applied stays; the cursor,
+            // the poison list and the rest wait for the next run, after it.
+            if (restoreRunning()) {
+                logSync("pull", "", "Pulled $pulled shot${if (pulled == 1) "" else "s"}, then paused", "A restore started, so the pull stopped. It goes on with the next sync.")
+                return RunResult(restoreBusy(), pulled, refused)
+            }
             if (page > MAX_PULL_PAGES) {
                 tally = JsonObject(tally.jsonObject + ("ended" to partial("PageCap")))
                 break
@@ -1657,6 +1672,10 @@ class VisualizerSync(
                     val outcome = buildJsonObject { put("kind", JsonPrimitive(if (full) "HistoryFull" else "Unchanged")) }
                     tally = rule("recordRow", buildJsonObject { put("tally", tally); put("row", row); put("outcome", outcome) })
                     continue
+                }
+                if (restoreRunning()) {
+                    logSync("pull", "", "Pulled $pulled shot${if (pulled == 1) "" else "s"}, then paused", "A restore started, so the pull stopped. It goes on with the next sync.")
+                    return RunResult(restoreBusy(), pulled, refused)
                 }
                 when (val r = pullRow(summary, current)) {
                     is RunReply.Ok -> {

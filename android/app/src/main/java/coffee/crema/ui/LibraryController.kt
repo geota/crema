@@ -1204,6 +1204,8 @@ class LibraryController(
                 visualizerPrefs = visualizer.backupPrefs(),
                 totalLitres = deps.totalLitres(),
                 activeBeanId = s.activeBeanId,
+                // The engine fills this from its marker.
+                addedBeans = emptyList(),
             )
         }
 

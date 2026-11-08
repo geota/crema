@@ -363,6 +363,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         seriesReady = { library.awaitSeries() },
         shotsLoaded = { library.seriesReady },
         historyRefused = { library.historyRefused },
+        restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
         editBeanLibrary = { edit -> library.editBeanLibrary(edit) },
         onBeansSynced = { library.persistLibrary() },
@@ -415,8 +416,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         log = { appendLog(it) },
         backupZip = { library.buildBackupZip() },
         backupFileName = { library.backupFileName() },
-        applyRestore = { bytes, wipe ->
-            startRestore(bytes, "your Google Drive backup", if (wipe) RestoreMode.WIPE else RestoreMode.MERGE)
+        applyRestore = { bytes, wipe, from ->
+            startRestore(bytes, from?.name?.ifBlank { null } ?: "your Google Drive backup", if (wipe) RestoreMode.WIPE else RestoreMode.MERGE, from)
         },
         autoBackupBlocked = { autoBackupBlocked() },
         damageByStore = { damageByStore() },
@@ -1453,6 +1454,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val kind: coffee.crema.restore.RestoreKind,
         var plan: coffee.crema.core.RestorePlan,
         var revive: Boolean = false,
+        /** The Drive file it came from, if any: the pre-damage pin reads it. */
+        val from: coffee.crema.drive.DriveBackupRow? = null,
     )
     private var pendingRestore: PendingRestore? = null
 
@@ -1471,7 +1474,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Plan a restore of [bytes]: a refusal says why; a clean Merge runs at once;
      * anything else opens the report, which Replace gates behind Type ERASE.
      */
-    fun startRestore(bytes: ByteArray, name: String, mode: RestoreMode) {
+    fun startRestore(bytes: ByteArray, name: String, mode: RestoreMode, from: coffee.crema.drive.DriveBackupRow? = null) {
         viewModelScope.launch {
             val kind = kindOf(mode)
             val prepared = runCatching {
@@ -1483,7 +1486,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 .getOrElse { notifyUser(it.message ?: "Restore failed."); return@launch }
                 ?: run { notifyUser("Not a Crema backup file."); return@launch }
             val plan = restoreEngine.plan(prepared, kind)
-            val pending = PendingRestore(prepared, records, kind, plan)
+            val pending = PendingRestore(prepared, records, kind, plan, from = from)
             when {
                 plan.verdict == coffee.crema.core.Verdict.Refused -> notifyUser(coffee.crema.restore.refusalMessage(plan))
                 plan.verdict == coffee.crema.core.Verdict.Ok && plan.shots.deletedHere.isEmpty() -> runPending(pending)
@@ -1551,8 +1554,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         pendingRestore = null
-        // The damage Drive's pre-damage pin guarded is dealt with: its hold ends (REVIEW-366).
-        if (outcome is coffee.crema.restore.RestoreOutcome.Done) drive.restoreCompleted()
+        // Only a finished restore can end the pre-damage pin's hold, and only one
+        // that dealt with the damage (REVIEW-366, REVIEW-370).
+        if (outcome is coffee.crema.restore.RestoreOutcome.Done) {
+            drive.restoreCompleted(coffee.crema.restore.writtenStores(outcome.plan, outcome.singletonsSkipped), pending.from)
+        }
         val held = coffee.crema.ui.heldSharingNotice(library.restoreHeldSharing)
         notifyUser(coffee.crema.restore.outcomeMessage(outcome) + (held?.let { " $it" } ?: ""))
     }

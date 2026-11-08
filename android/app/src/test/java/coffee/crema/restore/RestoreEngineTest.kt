@@ -60,6 +60,7 @@ class RestoreEngineTest {
         common = AppPrefs().toCommonSettings(),
         visualizerPrefs = DEFAULT_VISUALIZER_SYNC_PREFS,
         totalLitres = 5.0,
+        addedBeans = emptyList(),
     )
 
     /** The core's Android backup fixture: a bean, a roaster, a shot, a profile, settings. */
@@ -188,10 +189,12 @@ class RestoreEngineTest {
         val plan = e.plan(p, RestoreKind.MERGE)
         val first = async { e.run(p, RestoreKind.MERGE, records(p), expected = plan) }
         while (e.state() != RestoreState.RUNNING) kotlinx.coroutines.yield()
-        // A second one, bounded: without the rule it would wait on the same gate.
-        val second = kotlinx.coroutines.withTimeoutOrNull(5_000) { e.run(p, RestoreKind.MERGE, records(p), expected = plan) }
+        // A second one, bounded from outside its NonCancellable run: without the
+        // rule it would wait on the same gate, and this fails rather than hangs.
+        val second = async { e.run(p, RestoreKind.MERGE, records(p), expected = plan) }
+        val got = kotlinx.coroutines.withTimeoutOrNull(5_000) { second.await() }
         gate.complete(Unit)
-        assertEquals(RestoreOutcome.Busy, second)
+        assertEquals(RestoreOutcome.Busy, got)
         assertIs<RestoreOutcome.Done>(first.await())
     }
 
@@ -207,6 +210,24 @@ class RestoreEngineTest {
         e.dismissLeftover()
         assertEquals(MarkerDeletes(listOf("a", "b"), listOf("p")), sink.deleted)
         assertNull(marker.read())
+    }
+
+    @Test
+    fun aRerunAfterTheBeansLandedKeepsItsShotsDebit() = runBlocking<Unit> {
+        // Merge onto a device without the backup's bean: the shot on it is no zeroDebit.
+        val sink = FakeSink(local(beans = emptyList()))
+        val e = engine(sink)
+        val p = prepared()
+        val clean = e.plan(p, RestoreKind.MERGE)
+        assertEquals(listOf(BEAN), clean.beans.add)
+        assertEquals(emptyList(), clean.shots.zeroDebit)
+        e.failAt = RestoreStep.PROFILES
+        assertIs<RestoreOutcome.Stopped>(e.run(p, RestoreKind.MERGE, records(p), expected = clean))
+        assertEquals(listOf(BEAN), marker.read()?.addedBeans)
+        // The bean landed before the stop: the re-run's plan reads it as the restore's own.
+        sink.state = local(beans = listOf(BEAN))
+        val rerun = e.plan(p, RestoreKind.MERGE)
+        assertEquals(emptyList(), rerun.shots.zeroDebit, "the bag a stopped run added isn't the device's own")
     }
 
     @Test

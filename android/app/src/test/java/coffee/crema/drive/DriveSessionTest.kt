@@ -76,7 +76,7 @@ class DriveSessionTest {
         notify = { notices += it },
         backupZip = { BackupZip(ByteArray(1), coffee.crema.core.BackupCounts(1u, 1u)) },
         backupFileName = { "crema-backup-1" },
-        applyRestore = { _, _ -> },
+        applyRestore = { _, _, _ -> },
         exchangeCode = { _, _ -> set("new") },
         refreshToken = {
             grants.incrementAndGet()
