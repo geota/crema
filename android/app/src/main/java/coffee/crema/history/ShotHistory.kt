@@ -176,6 +176,10 @@ data class StoredShot(
      *  (core `StoredShot::visualizer_updated_at`): a pull skips a row at this
      *  version. Kept by backups, never uploaded. */
     val visualizerUpdatedAt: Long? = null,
+    /** The user pinned this shot (#311): the BLE session holding it keeps its
+     *  capture past the limit, and it is exempt from any cleanup. Core
+     *  `StoredShot::pinned`; kept by backups, moves between the apps. */
+    val pinned: Boolean = false,
     /**
      * The DE1 this shot was pulled on, stamped at record time (#84). The Decent
      * upload needs the serial (the server checks it belongs to the account);
@@ -522,6 +526,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
     /** Whether saves are being refused because the rows couldn't be read. */
     val savesRefused: Boolean get() = SafeFile.isBlocked(file)
+
+    /** How the rows' load went this session. */
+    val health: coffee.crema.persist.StoreHealth get() = coffee.crema.persist.Stores.health(file)
 
     /** The series of each of [ids] that has a series file, by id. On IO; at
      *  startup it runs after the rows are shown. */

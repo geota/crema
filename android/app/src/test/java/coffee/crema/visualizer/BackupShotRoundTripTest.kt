@@ -92,6 +92,16 @@ class BackupShotRoundTripTest {
     }
 
     @Test
+    fun `a pin rides a backup, and an old backup reads as not pinned`() {
+        val pinned = StoredShot(id = "shot:p", completedAtMs = 1, durationMs = 1, pinned = true)
+        assertEquals(true, storedShotFromBackupJson(wireShotJson(pinned, forBackup = true), json)!!.pinned)
+        val plain = StoredShot(id = "shot:q", completedAtMs = 1, durationMs = 1)
+        assertEquals(null, wireShotJson(plain, forBackup = true)["pinned"], "an unpinned row's bytes don't change")
+        assertEquals(false, storedShotFromBackupJson(wireShotJson(plain, forBackup = true), json)!!.pinned)
+        assertEquals(null, wireShotJson(pinned)["pinned"], "never uploaded")
+    }
+
+    @Test
     fun `the Visualizer version survives a backup, through the core, and stays out of uploads`() {
         val s = StoredShot(id = "shot:v", completedAtMs = 1, durationMs = 1, visualizerUpdatedAt = 1_700_000_000)
         assertEquals(1_700_000_000L, storedShotFromBackupJson(wireShotJson(s, forBackup = true), json)!!.visualizerUpdatedAt)

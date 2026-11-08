@@ -9,6 +9,19 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Pin a shot** — pin a shot from its detail to keep it safe: its raw
+  Bluetooth capture stays whatever the limit, and any cleanup skips it, the
+  300-shot history limit included: pinned shots don't count toward it. A small
+  mark shows on the row, History has a Pinned filter, and deleting a pinned shot
+  says so. Pins move with backups, and between the apps. Android and web.
+- **Storage and backups settings** — choose how many raw captures to keep (Off,
+  10, 50, 100, 300 or All; on Android these are Bluetooth sessions), and see the
+  storage used, your pinned shots and the last backup. On Android you also
+  choose how many automatic Google Drive copies to keep (1, 3, 5 or 10), daily
+  or weekly backups, and Wi-Fi only, and an automatic backup with nothing new
+  in it no longer uploads. Lowering a limit says what it will delete first.
+  Existing installs keep today's limits; new ones keep 50 captures and 3 Drive
+  copies. Android's 14-day limit on captures is gone. Android and web.
 - **Pick any Drive backup to restore** — Restore from Drive now lists every
   backup in your Drive, manual or daily, from any device, newest first, with its
   date and device and, for daily backups, its shot and curve counts. Pick one,

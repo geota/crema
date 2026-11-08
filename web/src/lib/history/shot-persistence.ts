@@ -56,6 +56,8 @@ import {
 } from '#lib/services/visualizer-call.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import { getHistoryStore } from './store.svelte';
+import { readCaptureKeep } from '#lib/capture/limit.js';
+import { pruneCaptures } from '#lib/capture/prune.js';
 import {
 	FROZEN_SHOTS_KEY,
 	dropFrozenShots,
@@ -440,10 +442,13 @@ async function persistCaptureSlice(
 		}
 	}
 	if (shotMeta) entries.push(shotMeta);
-	if (entries.length > 0) {
+	// Off: no new capture (a new shot isn't pinned, so it would only be pruned).
+	if (entries.length > 0 && readCaptureKeep(() => true) !== 'off') {
 		// GEN3: surface a rejected `put` instead of dropping it on the floor.
 		void getCaptureStore()
 			.put(shotId, entries)
+			// Then the oldest past the limit go, pinned shots' spared.
+			.then(() => pruneCaptures(getHistoryStore()))
 			.catch((err) => console.warn('[capture gate] failed to persist capture', { shotId, err }));
 	}
 }

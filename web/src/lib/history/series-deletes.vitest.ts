@@ -231,6 +231,22 @@ describe('rebasing', () => {
 		expect(await seriesIds()).toEqual(['kept', 'old']);
 	});
 
+	it('a pin moves with a backup, and an unpinned row comes back unpinned', async () => {
+		const history = getHistoryStore();
+		history.clearAllShots();
+		history.insertPulled(row('pinned'));
+		history.insertPulled(row('plain', 1_700_000_000_001));
+		history.setPinned('pinned', true);
+		await settle();
+		const backup = (await buildBackupJsonl())!;
+		expect(backup.jsonl).toContain('"pinned":true');
+		history.setPinned('pinned', false);
+		await restoreBackup(backup.jsonl, 'wipe');
+		await settle();
+		expect(history.get('pinned')?.pinned).toBe(true);
+		expect(history.get('plain')?.pinned).toBeUndefined();
+	});
+
 	it('a Replace restore keeps a kept row captures and leaves removal to its marker', async () => {
 		const history = getHistoryStore();
 		history.clearAllShots();

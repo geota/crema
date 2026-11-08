@@ -37,6 +37,8 @@ fun filterAndSortShots(
     methodFilter: String? = null,
     /** A shot's coffee key ([shotCoffee] with the live library); snapshot-only by default. */
     coffeeOf: (StoredShot) -> String? = { shotCoffee(it) { null }?.key },
+    /** Only pinned shots (#311). */
+    pinnedOnly: Boolean = false,
 ): List<StoredShot> {
     val dayMs = 24L * 60L * 60L * 1000L
     val startOfDay = Calendar.getInstance().apply {
@@ -59,7 +61,7 @@ fun filterAndSortShots(
             else -> s.bean?.beanId == beanFilter
         }
         val matchesMethod = methodFilter == null || (s.methodOf ?: "espresso") == methodFilter
-        matchesSearch && matchesRange && matchesProfile && matchesBean && matchesMethod
+        matchesSearch && matchesRange && matchesProfile && matchesBean && matchesMethod && (!pinnedOnly || s.pinned)
     }
     val asc = when (sort) {
         "rating" -> filtered.sortedBy { it.rating ?: 0 }

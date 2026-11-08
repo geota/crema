@@ -258,6 +258,12 @@ data class MainUiState(
     val keepConnectedScreenOff: Boolean = false,
     /** Daily automatic Google Drive backup while Drive is linked (issue #36). */
     val autoDriveBackup: Boolean = true,
+    /** Automatic Drive backup weekly rather than daily (#311). */
+    val driveBackupWeekly: Boolean = false,
+    /** Automatic backups only on an unmetered network (#311). */
+    val driveBackupWifiOnly: Boolean = true,
+    /** BLE sessions whose raw capture is kept (#311). */
+    val bleSessionsKeep: Int = coffee.crema.ble.BleSessionRecorder.NEW_INSTALL_SESSIONS_KEEP,
     /** Daily automatic release check against GitHub — default OFF (opt-in
      *  phone-home; the manual About → Check button always works). */
     val autoUpdateCheck: Boolean = false,

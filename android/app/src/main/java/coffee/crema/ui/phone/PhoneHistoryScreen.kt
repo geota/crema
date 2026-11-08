@@ -115,6 +115,7 @@ fun PhoneHistoryScreen(
     var query by rememberListString("history/query", "")
     var searchOpen by rememberListBool("history/searchOpen", false)
     var profileFilter by rememberListOptString("history/profile")
+    var pinnedOnly by rememberListBool("history/pinned", false)
     // Bean filter — scope the log to one bag (bean-workflow-unify §B).
     var beanFilter by rememberListOptString("history/bean")
     var range by rememberListString("history/range", "all")
@@ -182,10 +183,11 @@ fun PhoneHistoryScreen(
     val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
     // Memoized with the minute-bucketed `now`: re-filtering the whole log on
     // every UI-state emission is the expensive part.
-    val filtered = remember(ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee) {
+    val filtered = remember(ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee, pinnedOnly) {
         filterAndSortShots(
             ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,
             coffeeOf = { shotCoffee(it, liveCoffee)?.key },
+            pinnedOnly = pinnedOnly,
         )
     }
 
@@ -294,13 +296,20 @@ fun PhoneHistoryScreen(
                         modifier = Modifier.weight(1f),
                         chips = buildList {
                             add(FilterChipSpec("all", "All", ui.history.size))
+                            // Pinned shots, once there are any (or while the filter is on).
+                            val pinnedCount = ui.history.count { it.pinned }
+                            if (pinnedCount > 0 || pinnedOnly) add(FilterChipSpec("pinned", "Pinned", pinnedCount))
                             byProfile.take(6).forEach { (name, count) -> add(FilterChipSpec("p:$name", name, count)) }
                         },
-                        selected = profileFilter?.let { "p:$it" } ?: "all",
+                        selected = when {
+                            pinnedOnly -> "pinned"
+                            else -> profileFilter?.let { "p:$it" } ?: "all"
+                        },
                         onSelect = { id ->
                             when {
-                                id == "all" -> profileFilter = null
-                                id.startsWith("p:") -> profileFilter = id.removePrefix("p:")
+                                id == "all" -> { profileFilter = null; pinnedOnly = false }
+                                id == "pinned" -> { profileFilter = null; pinnedOnly = true }
+                                id.startsWith("p:") -> { profileFilter = id.removePrefix("p:"); pinnedOnly = false }
                             }
                         },
                         trailing = {
@@ -595,7 +604,7 @@ private fun PhoneShotRow(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 val rowName = coffee.crema.history.shotTitle(shot)
                 Text(
-                    if (shot.isManualLog) "$rowName · logged" else rowName,
+                    (if (shot.isManualLog) "$rowName · logged" else rowName) + if (shot.pinned) " · pinned" else "",
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -1057,6 +1066,7 @@ private fun PhoneShotDetail(
                     // Brew rows (issue #10): the machine + Visualizer actions
                     // don't apply — logged brews are local-only.
                     add(SheetItem("download-simple", "Download brew", sub = "Crema JSON") { onExport() })
+                    add(pinSheetItem(shot) { vm.setShotPinned(shot.id, it) })
                     add(SheetItem(divider = true))
                     add(SheetItem("trash", "Delete brew", danger = true) { confirmDelete = true })
                     return@buildList
@@ -1084,6 +1094,7 @@ private fun PhoneShotDetail(
                         shareUploadedLink(context, t)
                     })
                 }
+                add(pinSheetItem(shot) { vm.setShotPinned(shot.id, it) })
                 add(SheetItem(divider = true))
                 add(SheetItem("trash", "Delete shot", danger = true) { confirmDelete = true })
             },
@@ -1094,7 +1105,7 @@ private fun PhoneShotDetail(
     if (confirmDelete) {
         coffee.crema.ui.components.DeleteWithVisualizerDialog(
             title = "Delete shot?",
-            body = "This shot will be removed from this device. This can’t be undone.",
+            body = coffee.crema.ui.screens.deleteBody(shot),
             what = "shot",
             remoteAvailable = vm.canDeleteShotOnVisualizer(shot),
             onConfirm = { remote -> vm.deleteShot(shot.id, alsoOnVisualizer = remote); confirmDelete = false; onDeleted() },
@@ -1177,3 +1188,11 @@ private fun shotRatioLabel(shot: StoredShot): String? =
     // water-in — the core's ratio_for_method, shared with the tablet and
     // the web's ratioLabel.
     shot.methodRatioLabel()
+
+/** The ⋮ sheet's pin row (#311): pinned shots keep their capture and skip cleanup. */
+private fun pinSheetItem(shot: StoredShot, onChange: (Boolean) -> Unit) =
+    if (shot.pinned) {
+        SheetItem("push-pin-fill", "Unpin", sub = "Its capture then counts toward the limit again") { onChange(false) }
+    } else {
+        SheetItem("push-pin", "Pin", sub = "Keeps its raw capture, and spares it from cleanup") { onChange(true) }
+    }

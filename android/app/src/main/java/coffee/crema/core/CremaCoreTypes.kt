@@ -885,6 +885,25 @@ data class BrewTempRange (
 	val anchor: Float
 )
 
+/// A recorded BLE session file, as the Android shell lists it.
+@Serializable
+data class CaptureSession (
+	val name: String,
+	/// When it started, unix ms: the stamp in its name.
+	val startedMs: Long,
+	/// When it was last written, unix ms.
+	val endedMs: Long
+)
+
+/// A shot with a stored capture, as the web shell lists it.
+@Serializable
+data class CapturedShot (
+	val id: String,
+	/// When the shot completed, unix ms.
+	val completedAtMs: Long,
+	val pinned: Boolean? = null
+)
+
 /// The result of [`catalogue_autofill`].
 @Serializable
 data class CatalogueAutofill (
@@ -5406,6 +5425,29 @@ sealed class CalibrationRefusal {
 	@Serializable
 	@SerialName("FirmwareRejected")
 	object FirmwareRejected: CalibrationRefusal()
+}
+
+/// Generated type representing the anonymous struct variant `Newest` of the `CaptureKeep` Rust enum
+@Serializable
+data class CaptureKeepNewestInner (
+	val count: UInt
+)
+
+/// How many raw captures to keep.
+@Serializable
+sealed class CaptureKeep {
+	/// Record none, and keep only pinned shots' captures.
+	@Serializable
+	@SerialName("Off")
+	object Off: CaptureKeep()
+	/// The newest this many.
+	@Serializable
+	@SerialName("Newest")
+	data class Newest(val details: CaptureKeepNewestInner): CaptureKeep()
+	/// Every capture: nothing is deleted by count.
+	@Serializable
+	@SerialName("All")
+	object All: CaptureKeep()
 }
 
 /// The direction of an exit comparison. Lowercase wire spelling

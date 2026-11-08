@@ -1344,6 +1344,16 @@ pub fn merge_remote_shot(payload: String) -> Result<String, CremaError> {
     de1_domain::merge_remote_shot_json(&payload).map_err(CremaError::from)
 }
 
+/// The BLE capture sessions that go under a limit: JSON
+/// `{sessions, keep, pinnedMs}` in, names out. See [`de1_domain::sessions_to_drop`].
+///
+/// # Errors
+/// When the input doesn't parse.
+#[uniffi::export]
+pub fn sessions_to_drop(payload: String) -> Result<String, CremaError> {
+    de1_domain::sessions_to_drop_json(&payload).map_err(CremaError::from)
+}
+
 /// The pull run's rules by name (`planPage`, `recordRow`, `finishRun`,
 /// `pace`, …): JSON arguments in, JSON answer out. See
 /// [`de1_domain::pull_run_call`].

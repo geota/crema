@@ -1658,7 +1658,7 @@ class VisualizerSync(
                     put("rows", kotlinx.serialization.json.JsonArray(list.rows.map(::listRow)))
                     put("known", known)
                     put("candidates", candidates)
-                    put("freeSlots", JsonPrimitive((coffee.crema.history.HistoryStore.MAX_SHOTS - current.size).coerceAtLeast(0)))
+                    put("freeSlots", JsonPrimitive((coffee.crema.history.HistoryStore.MAX_SHOTS - coffee.crema.history.cappedCount(current)).coerceAtLeast(0)))
                     legacyCursor?.let { put("legacyCursor", JsonPrimitive(it)) }
                 },
             ).jsonObject["rows"]!!.jsonArray
