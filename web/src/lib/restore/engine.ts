@@ -62,7 +62,7 @@ import {
 	shotIsOpen,
 	type LockManagerLike
 } from './tab-safety';
-import { beginMarker, dropMarker, finishMarker } from './marker';
+import { beginMarker, dropMarker, finishMarker, readMarker } from './marker';
 
 /** The most time between two `progress` posts (rule 4: under 10 s). */
 export const PROGRESS_MS = 5_000;
@@ -207,7 +207,12 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		common: settingsToCommon(settings.current),
 		visualizerPrefs: visualizerSyncPrefs(),
 		totalLitres: maintenance.current.totalLitres ?? 0,
-		activeBeanId: beans.activeBeanId
+		activeBeanId: beans.activeBeanId,
+		// A re-run after an interrupted one: the beans it added aren't this device's own bag.
+		addedBeans: (() => {
+			const m = readMarker();
+			return m?.phase === 'applying' ? (m.addedBeans ?? []) : [];
+		})()
 	} as unknown as LocalState;
 }
 
@@ -333,13 +338,19 @@ export function nextRows<T extends { id: string }>(
 export function nextShots(
 	local: readonly StoredShot[],
 	backup: readonly StoredShot[],
-	plan: RestorePlan['shots']
+	plan: RestorePlan['shots'],
+	replace = false
 ): { next: StoredShot[]; series: StoredShot[] } {
 	const theirs = new Map<string, StoredShot>();
 	for (const s of backup) if (!theirs.has(s.id)) theirs.set(s.id, s);
 	const remove = new Set(plan.remove);
-	const replaced = new Set([...plan.overwrite, ...plan.revive]);
-	const fill = new Set(plan.fill);
+	const here = new Set(local.map((s) => s.id));
+	// A row the plan adds that has turned up here since (a pull's stub landing
+	// during step 7) gets what the plan would have given it, had it been here:
+	// Replace overwrites it; Merge keeps it, and fills its curve.
+	const arrived = plan.add.filter((id) => here.has(id));
+	const replaced = new Set([...plan.overwrite, ...plan.revive, ...(replace ? arrived : [])]);
+	const fill = new Set([...plan.fill, ...(replace ? [] : arrived)]);
 	const zero = new Set(plan.zeroDebit);
 	const series: StoredShot[] = [];
 	const kept = local
@@ -348,8 +359,14 @@ export function nextShots(
 			const b = theirs.get(s.id);
 			if (!b) return s;
 			if (replaced.has(s.id)) {
-				series.push(b);
-				return b;
+				// The backup's row; with no curve of its own it keeps the one here,
+				// as the same shot's curve: memory then matches what a reload shows.
+				const row =
+					b.record.samples.length === 0 && s.record.samples.length > 0
+						? { ...b, record: { ...b.record, samples: s.record.samples } }
+						: b;
+				series.push(row);
+				return row;
 			}
 			if (fill.has(s.id) && s.record.samples.length === 0 && b.record.samples.length > 0) {
 				// The backfill rule: the curve only, never over a curve here.
@@ -362,9 +379,6 @@ export function nextShots(
 			}
 			return s;
 		});
-	// A row this tab made with the same id meanwhile is kept, as Merge keeps
-	// what's here: the backup's isn't added beside it.
-	const here = new Set(local.map((s) => s.id));
 	const added = plan.add
 		.filter((id) => !here.has(id))
 		.map((id) => theirs.get(id))
@@ -608,7 +622,8 @@ async function applyPlan(
 				replace ? 'replace' : 'merge',
 				prepared.name,
 				{ shots: plan.shots.remove, photos: plan.photos.remove },
-				now()
+				now(),
+				plan.beans.add
 			)
 		))
 	) {
@@ -701,7 +716,7 @@ async function applyPlan(
 			// recorded or edited meanwhile: the restore's own rows only change
 			// the ids the plan names.
 			const r = await getHistoryStore().restoreRows(
-				(rows) => nextShots(rows, records.shots, plan.shots),
+				(rows) => nextShots(rows, records.shots, plan.shots, replace),
 				deps.writeSeries
 			);
 			curvesFailed = r.curvesFailed;

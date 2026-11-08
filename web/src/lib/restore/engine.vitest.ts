@@ -352,24 +352,52 @@ describe('the #363 review', () => {
 		expect(r).toEqual({ stored: true, curvesFailed: 1 });
 	});
 
-	it('a shot this tab makes with a backup row\u2019s id meanwhile is kept, once', async () => {
-		const prepared = await backupOf(['b1'], ['s1']);
+	/** A pull's stub of the backup's own shot lands while step 7 writes its series. */
+	async function stubDuringStep7(mode: 'merge' | 'wipe') {
+		const prepared = await backupOf(['b1'], ['shot:remote:9']);
 		const history = getHistoryStore();
 		captureMessages(new FakeLocks());
-		const plan = await planNow(prepared, 'merge', false, new FakeLocks());
-		expect(plan.shots.add).toEqual(['s1']);
+		const plan = await planNow(prepared, mode, false, new FakeLocks());
+		expect(plan.shots.add).toEqual(['shot:remote:9']);
+		const written: string[][] = [];
 		await runRestore(
 			prepared,
-			'merge',
+			mode,
 			{ expected: plan },
 			deps(new FakeLocks(), {
-				writeSeries: async () => {
-					history.insertPulled(shot('s1', { metadata: { ...metadata, dose: 20 } }));
+				writeSeries: async (rows) => {
+					written.push(rows.map((r) => r.id));
+					if (written.length === 1) {
+						history.insertPulled(
+							shot('shot:remote:9', {
+								record: { duration: 0, samples: [] },
+								metadata: { ...metadata, notes: 'stub' },
+								bagDebit: 3
+							})
+						);
+					}
 				}
 			})
 		);
-		expect(history.all.filter((s) => s.id === 's1')).toHaveLength(1);
-		expect(history.get('s1')?.metadata.dose).toBe(20);
+		const rows = history.all.filter((s) => s.id === 'shot:remote:9');
+		expect(rows).toHaveLength(1);
+		return { row: rows[0], written };
+	}
+
+	it('a stub of a backup row landing in step 7, on Merge: the stub stays and its curve is filled', async () => {
+		const { row, written } = await stubDuringStep7('merge');
+		expect(row.metadata.notes).toBe('stub');
+		expect(row.bagDebit).toBe(3);
+		expect(row.record.samples).toHaveLength(1);
+		// The curve in memory is the one written under its id.
+		expect(written.flat()).toContain('shot:remote:9');
+	});
+
+	it('a stub of a backup row landing in step 7, on Replace: the backup\u2019s copy overwrites it', async () => {
+		const { row } = await stubDuringStep7('wipe');
+		expect(row.metadata.notes).not.toBe('stub');
+		expect(row.bagDebit).toBe(18);
+		expect(row.record.samples).toHaveLength(1);
 	});
 
 	it('step 7 keeps a shot recorded and a rating changed while its series were written', async () => {

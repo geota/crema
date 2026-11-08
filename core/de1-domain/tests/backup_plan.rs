@@ -527,3 +527,49 @@ mod parsers_differ {
         assert_eq!(old["shots"].as_array().unwrap().len(), 1);
     }
 }
+
+/// A Merge stopped after its beans landed: the re-run's plan must not read the
+/// beans it added as this device's own bag, or the shots on them lose their
+/// debit, and the re-run ends somewhere a clean run doesn't.
+#[test]
+fn beans_a_restore_added_dont_zero_its_shots_debit() {
+    let lines = vec![
+        json!({ "kind": "crema-backup/v1", "createdAt": 1, "beanCount": 1, "shotCount": 1 }),
+        json!({ "kind": "bean", "id": "new-1", "name": "New", "roasterId": null }),
+    ];
+    let mut lines = lines;
+    let shot = lines_of(include_bytes!("fixtures/backup/web-backup.crema.jsonl"))
+        .into_iter()
+        .find(|l| l["kind"] == "shot")
+        .map(|mut s| {
+            s["id"] = json!("sb2");
+            s["bean"] = json!({ "beanId": "new-1", "name": "New" });
+            s
+        })
+        .unwrap();
+    lines.push(shot);
+    let bytes = to_bytes(&lines);
+    let plan = |added: &[&str]| {
+        let local: LocalState = serde_json::from_value(json!({
+            "shell": "web",
+            "beans": ["new-1"],
+            "addedBeans": added,
+        }))
+        .unwrap();
+        plan_restore(
+            &scan_backup_bytes(&bytes),
+            &local,
+            RestoreMode::Merge,
+            RestoreOpts::default(),
+        )
+    };
+    assert_eq!(
+        plan(&[]).shots.zero_debit,
+        vec!["sb2".to_owned()],
+        "a bag that was here already"
+    );
+    assert!(
+        plan(&["new-1"]).shots.zero_debit.is_empty(),
+        "the restore's own bean"
+    );
+}
