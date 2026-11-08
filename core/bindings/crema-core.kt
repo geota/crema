@@ -4857,6 +4857,28 @@ data class ShotStatInput (
 	val rating: UByte? = null
 )
 
+/// What a History row shows of a shot without its series.
+@Serializable
+data class ShotSummary (
+	/// The summary's format: 1.
+	val v: UInt,
+	/// Machine samples in the series. The shell stores `null` when it
+	/// couldn't read the series; the core always counts.
+	val sampleCount: UInt? = null,
+	/// Samples in a brew's scale series; 0 for none.
+	val brewSampleCount: UInt,
+	/// As [`crate::ShotRecord::peaks`].
+	val peakWeight: Float? = null,
+	/// As [`crate::ShotRecord::peaks`].
+	val finalWeight: Float? = null,
+	/// As [`crate::ShotRecord::peaks`].
+	val peakPressure: Float,
+	/// As [`crate::ShotRecord::peaks`].
+	val peakTemp: Float,
+	/// The row chart, as described in the module docs; `None` with no series.
+	val spark: String? = null
+)
+
 /// One horizontal run of the planned-water staircase: level `target_g`
 /// from `t0_ms` to `t1_ms` (session ms).
 @Serializable

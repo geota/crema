@@ -112,6 +112,96 @@ pub struct ManifestHeader {
     pub omitted_count: u32,
 }
 
+/// One backup line, read strictly by [`parse_backup_line`], in the shape the
+/// shells read line by line (#310 §7): tagged by `line`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "line", rename_all = "camelCase")]
+pub enum ParsedBackupLine {
+    Header {
+        header: ManifestHeader,
+    },
+    /// A shot, and whether its raw line said it was pinned.
+    Shot {
+        shot: Box<StoredShot>,
+        pinned: bool,
+    },
+    Bean {
+        bean: Box<Bean>,
+    },
+    Roaster {
+        roaster: Box<Roaster>,
+    },
+    Recipe {
+        recipe: Box<BrewRecipe>,
+    },
+    BrewMethod {
+        method: Box<CustomBrewMethod>,
+    },
+    /// A custom profile, verbatim with `kind` removed.
+    Profile {
+        id: String,
+        profile: serde_json::Value,
+    },
+    /// A settings-like line by its kind (`settings`, `profileMeta`,
+    /// `recipeMeta`, `maintenance`, `visualizerPrefs`), verbatim.
+    Singleton {
+        kind: &'static str,
+        value: serde_json::Value,
+    },
+    /// A `kind` this build doesn't know.
+    Unknown {
+        kind: String,
+    },
+    /// A shots export's header: not a backup.
+    ShotsExport,
+    /// What's wrong with the line.
+    Error {
+        error: LineError,
+    },
+}
+
+impl Singleton {
+    /// The line's `kind`.
+    #[must_use]
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Settings => "settings",
+            Self::ProfileMeta => "profileMeta",
+            Self::RecipeMeta => "recipeMeta",
+            Self::Maintenance => "maintenance",
+            Self::VisualizerPrefs => "visualizerPrefs",
+        }
+    }
+}
+
+/// [`parse_backup_line`] in the shells' shape.
+#[must_use]
+pub fn parse_backup_line_parsed(line: &[u8]) -> ParsedBackupLine {
+    match parse_backup_line(line) {
+        Err(error) => ParsedBackupLine::Error { error },
+        Ok(BackupLine::Header(header)) => ParsedBackupLine::Header { header },
+        Ok(BackupLine::Shot(shot, pinned)) => ParsedBackupLine::Shot { shot, pinned },
+        Ok(BackupLine::Bean(bean)) => ParsedBackupLine::Bean { bean },
+        Ok(BackupLine::Roaster(roaster)) => ParsedBackupLine::Roaster { roaster },
+        Ok(BackupLine::Recipe(recipe)) => ParsedBackupLine::Recipe { recipe },
+        Ok(BackupLine::Method(method)) => ParsedBackupLine::BrewMethod { method },
+        Ok(BackupLine::Profile(profile, id)) => ParsedBackupLine::Profile { id, profile },
+        Ok(BackupLine::Singleton(which, value)) => ParsedBackupLine::Singleton {
+            kind: which.kind(),
+            value,
+        },
+        Ok(BackupLine::Unknown(kind)) => ParsedBackupLine::Unknown { kind },
+        Ok(BackupLine::ShotsExport) => ParsedBackupLine::ShotsExport,
+    }
+}
+
+/// [`parse_backup_line`] over JSON, for the bridges: one line in, without its
+/// newline, a [`ParsedBackupLine`] out.
+#[must_use]
+pub fn parse_backup_line_json(line: &[u8]) -> String {
+    serde_json::to_string(&parse_backup_line_parsed(line)).unwrap_or_default()
+}
+
 /// Read one line, strictly: UTF-8, then a JSON object with a `kind`, then a
 /// row that reads as its kind. Blank lines are the caller's to skip.
 ///

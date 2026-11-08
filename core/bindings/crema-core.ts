@@ -4841,6 +4841,29 @@ export interface ShotStatInput {
 	rating?: number;
 }
 
+/** What a History row shows of a shot without its series. */
+export interface ShotSummary {
+	/** The summary's format: 1. */
+	v: number;
+	/**
+	 * Machine samples in the series. The shell stores `null` when it
+	 * couldn't read the series; the core always counts.
+	 */
+	sampleCount?: number;
+	/** Samples in a brew's scale series; 0 for none. */
+	brewSampleCount: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	peakWeight?: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	finalWeight?: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	peakPressure: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	peakTemp: number;
+	/** The row chart, as described in the module docs; `None` with no series. */
+	spark?: string;
+}
+
 /**
  * One horizontal run of the planned-water staircase: level `target_g`
  * from `t0_ms` to `t1_ms` (session ms).
