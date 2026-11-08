@@ -419,13 +419,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             viewModelScope.launch { library.restoreBackupBytes(bytes, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) }
         },
         autoBackupBlocked = { autoBackupBlocked() },
-        newestDamageMs = { newestDamageMs() },
+        damageByStore = { damageByStore() },
     )
 
-    /** The newest time a store the counts can't see was kept aside as damaged,
-     *  or null. Drive pins its copy from before when this moves. */
-    internal fun newestDamageMs(): Long? =
-        PRE_DAMAGE_STORES.mapNotNull { coffee.crema.persist.SafeFile.keptAsideLatestMs(java.io.File(getApplication<Application>().filesDir, it)) }.maxOrNull()
+    /** Per store the counts can't see, the newest time it was kept aside as
+     *  damaged. Drive pins its copy from before when one moves. */
+    internal fun damageByStore(): Map<String, Long> =
+        PRE_DAMAGE_STORES.mapNotNull { name ->
+            coffee.crema.persist.SafeFile.keptAsideLatestMs(java.io.File(getApplication<Application>().filesDir, name))?.let { name to it }
+        }.toMap()
 
     /** Why a daily backup mustn't run now, or null. */
     internal fun autoBackupBlocked(): String? {
