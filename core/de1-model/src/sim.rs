@@ -28,6 +28,9 @@ pub struct De1Params {
     pub idle_ignored: u32,
     /// Two-tap steam: the first Idle goes to Puffing, a second ends it.
     pub two_tap_steam: bool,
+    /// A newer firmware names espresso's flowing substates with a byte this
+    /// app doesn't know, so the core hears Heating, then `Unknown`.
+    pub unknown_pour: bool,
 }
 
 impl Default for De1Params {
@@ -37,9 +40,13 @@ impl Default for De1Params {
             ending: Ending::Prompt,
             idle_ignored: 0,
             two_tap_steam: false,
+            unknown_pour: false,
         }
     }
 }
+
+/// A substate byte no firmware this app knows sends.
+pub const UNNAMED_SUBSTATE: u8 = 21;
 
 /// The espresso profile's frame length and count.
 const FRAME_MS: u64 = 20_000;
@@ -130,7 +137,15 @@ impl SimDe1 {
     /// The wire form of the state report.
     #[must_use]
     pub fn state_bytes(&self) -> [u8; 2] {
-        [self.state as u8, self.sub as u8]
+        let sub = if self.params.unknown_pour
+            && self.state == MachineState::Espresso
+            && matches!(self.sub, SubState::Preinfusion | SubState::Pouring)
+        {
+            UNNAMED_SUBSTATE
+        } else {
+            self.sub as u8
+        };
+        [self.state as u8, sub]
     }
 
     /// Whether water reaches the cup in this mode.

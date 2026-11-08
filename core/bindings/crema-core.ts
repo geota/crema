@@ -1586,7 +1586,8 @@ export type Event =
 	 * Running shot volume dispensed so far, ml — integrated from the
 	 * telemetry flow stream against the DE1's `sample_time` ticks
 	 * (BLE-jitter-immune when the line-frequency is known, host-clock
-	 * fallback otherwise). Resets to 0 on every `ShotStarted`.
+	 * fallback otherwise). Resets to 0 on every `ShotStarted` and
+	 * `WaterSessionStarted`.
 	 */
 	dispensed_volume: number;
 	/**
@@ -1765,8 +1766,9 @@ export type Event =
 	/** Max shot time, seconds; `None` = no time cap. */
 	max_time?: number;
 	/**
-	 * `true` once an `AutoStop` actually holds these targets (the shot is
-	 * running); `false` while this is the between-shots projection.
+	 * `true` while an espresso flows with at least one leg live (its
+	 * `AutoStop` exists from first flow, legs or not); `false` before
+	 * first flow, between shots, and while no leg is live.
 	 */
 	armed: boolean;
 	/**

@@ -1420,7 +1420,8 @@ data class EventTelemetryInner (
 	/// Running shot volume dispensed so far, ml — integrated from the
 	/// telemetry flow stream against the DE1's `sample_time` ticks
 	/// (BLE-jitter-immune when the line-frequency is known, host-clock
-	/// fallback otherwise). Resets to 0 on every `ShotStarted`.
+	/// fallback otherwise). Resets to 0 on every `ShotStarted` and
+	/// `WaterSessionStarted`.
 	val dispensed_volume: Float,
 	/// Target group-head temperature, °C — the heater setpoint for the
 	/// active frame. Legacy "Goal temperature" curve on the live shot
@@ -1538,8 +1539,9 @@ data class EventStopTargetsArmedInner (
 	val volume: Float? = null,
 	/// Max shot time, seconds; `None` = no time cap.
 	val max_time: Float? = null,
-	/// `true` once an `AutoStop` actually holds these targets (the shot is
-	/// running); `false` while this is the between-shots projection.
+	/// `true` while an espresso flows with at least one leg live (its
+	/// `AutoStop` exists from first flow, legs or not); `false` before
+	/// first flow, between shots, and while no leg is live.
 	val armed: Boolean,
 	/// The weight target that WOULD apply, regardless of whether it can
 	/// fire. Lets a shell keep showing the row the user configured, greyed

@@ -102,6 +102,18 @@ impl StopConfig {
             ..StopConfig::default()
         }
     }
+
+    /// The config for a hot-water pour (`DESIGN.md` §3.3): the weight leg
+    /// projects one sensor lag ahead (reaprime `HotWaterSequencer`), with no
+    /// arming delay, no offset and no drip model.
+    pub fn hot_water(scale_sensor_lag: Duration) -> StopConfig {
+        StopConfig {
+            weight_lead: scale_sensor_lag,
+            weight_offset: 0.0,
+            arming_delay: Duration::ZERO,
+            flow_algorithm: FlowAlgorithm::TheilSen,
+        }
+    }
 }
 
 /// What the user asked to end a session with, before trust is applied.
@@ -382,6 +394,13 @@ impl AutoStop {
     /// (volume / max-time stops capture nothing).
     pub fn stop_capture(&self) -> Option<StopCapture> {
         self.stop_capture
+    }
+
+    /// When the session's clock started: first flow for espresso, the
+    /// session's open for hot water.
+    #[must_use]
+    pub fn started(&self) -> Duration {
+        self.started
     }
 
     /// Whether a stop has already been decided.

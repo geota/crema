@@ -24,6 +24,7 @@ fn params() -> impl Strategy<Value = De1Params> {
                 ending,
                 idle_ignored,
                 two_tap_steam,
+                unknown_pour: false,
             },
         )
 }
@@ -131,15 +132,22 @@ fn case() -> impl Strategy<Value = Case> {
         prop_oneof![9 => Just(false), 1 => Just(true)],
         any::<bool>(),
         prop::collection::vec(op(), 1..60),
+        // Drawn last, so the committed seeds still make their cases.
+        prop_oneof![4 => Just(false), 1 => Just(true)],
     )
         .prop_map(
-            |(params, headspace_ml, lane_timeout_ms, read_only, pre_flush, ops)| Case {
-                params,
-                headspace_ml,
-                lane_timeout_ms,
-                read_only,
-                pre_flush,
-                ops,
+            |(params, headspace_ml, lane_timeout_ms, read_only, pre_flush, ops, unknown_pour)| {
+                Case {
+                    params: De1Params {
+                        unknown_pour,
+                        ..params
+                    },
+                    headspace_ml,
+                    lane_timeout_ms,
+                    read_only,
+                    pre_flush,
+                    ops,
+                }
             },
         )
 }
@@ -203,6 +211,7 @@ fn the_generator_reaches_what_the_invariants_watch() {
         total.read_states += c.read_states;
         total.skips += c.skips;
         total.unseen += c.unseen;
+        total.unknown_flows += c.unknown_flows;
         total.stop_commands += c.stop_commands;
         total.starts_over_a_flow += c.starts_over_a_flow;
         total.tares += c.tares;
@@ -225,6 +234,7 @@ fn the_generator_reaches_what_the_invariants_watch() {
         ("read states", total.read_states),
         ("skips", total.skips),
         ("unseen", total.unseen),
+        ("unknown flows", total.unknown_flows),
         ("stop commands", total.stop_commands),
         ("starts over a flow", total.starts_over_a_flow),
         ("tares", total.tares),
@@ -584,5 +594,77 @@ fn hot_water_started_on_a_stale_scale_still_stops_at_its_volume() {
         .filter(|(_, stop)| *stop)
         .count();
     assert!(stops >= 1, "an app stop: {:?}", &world.requests[before..]);
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// #316.1: a newer firmware's pour substate is a byte the app doesn't know, so
+/// the core hears Heating, then `Unknown`. That is first flow (`DESIGN.md`
+/// §3.3): the shot stops by weight at its 36 g target. Before, it never
+/// armed a stop and ran to the end of its frames.
+#[test]
+fn a_pour_heard_only_as_unknown_stops_at_its_target() {
+    for preinfusion in [false, true] {
+        let mut world = World::new(
+            De1Params {
+                preinfusion,
+                unknown_pour: true,
+                ..De1Params::default()
+            },
+            0.0,
+            5_000,
+            false,
+            false,
+        );
+        world.apply(&Op::GroupHead(MachineState::Espresso));
+        world.apply(&Op::Advance { ms: 90_000 });
+        assert_eq!(world.coverage.weight_stops, 1, "a weight stop");
+        assert!(
+            (34.0..40.0).contains(&world.cup.grams),
+            "stopped at {} g",
+            world.cup.grams
+        );
+        assert!(world.violations.is_empty(), "{:?}", world.violations);
+    }
+}
+
+/// I20 after a lost Idle report: the next shot's pre-flow report opens a new
+/// session, which counts its volume from zero and gets a fresh auto-stop, so
+/// it too stops at its target.
+#[test]
+fn a_shot_after_a_lost_idle_report_gets_its_own_stop() {
+    let mut world = plain_world();
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    while world.coverage.weight_stops == 0 {
+        world.apply(&Op::Advance { ms: 100 });
+        assert!(world.now_ms() < 120_000, "a weight stop");
+    }
+    world.apply(&Op::LoseStates(2));
+    while world.de1.state != MachineState::Idle {
+        world.apply(&Op::Advance { ms: 100 });
+    }
+    world.apply(&Op::Advance { ms: 1_500 });
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    world.apply(&Op::Advance { ms: 60_000 });
+    assert_eq!(world.coverage.replaced, 1, "a new session in espresso");
+    assert_eq!(world.coverage.weight_stops, 2, "the new shot's own stop");
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// I20 on the sample path: a shot ends and another starts during an outage.
+/// The link comes back on the new one's first frame, a lower frame than the
+/// last sample before the drop, so the core splits on that sample.
+#[test]
+fn a_shot_begun_during_an_outage_starts_from_zero() {
+    let mut world = plain_world();
+    world.apply(&Op::SetProfileTarget(None));
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    // Frame 2, 45 s into the mode.
+    world.apply(&Op::Advance { ms: 45_000 });
+    world.apply(&Op::LinkDown { ms: 32_000 });
+    world.apply(&Op::Advance { ms: 24_000 });
+    assert_eq!(world.de1.state, MachineState::Idle, "the first shot ended");
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    world.apply(&Op::Advance { ms: 20_000 });
+    assert_eq!(world.coverage.replaced, 1, "split on the frame");
     assert!(world.violations.is_empty(), "{:?}", world.violations);
 }

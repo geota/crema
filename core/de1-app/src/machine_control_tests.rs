@@ -74,7 +74,7 @@ fn p1_a_hot_water_stop_is_retried_until_the_machine_winds_down() {
     core.on_notification(Source::De1State, &[2, 0], 10);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 20);
     core.on_notification(Source::De1State, &[6, 5], 100); // HotWater
-    assert!(core.hot_water_stop_target_g.is_some(), "armed");
+    assert!(core.hot_water_stop_target_g().is_some(), "armed");
     let mut stops = vec![];
     let mut t = 200;
     let mut g = 0.0;
@@ -463,8 +463,8 @@ fn the_link_records_when_an_outage_began() {
 
 /// P4: nothing armed at first flow; a scale arrives during Pouring. PR 5 arms
 /// an auto-stop for a configured weight target with no leg live yet, so the
-/// leg goes live once the scale is trusted: it stops at 36 g. PR 7 does the
-/// same for every leg.
+/// leg goes live once the scale is trusted: it stops at 36 g. Since PR 7 every
+/// flowing shot has its auto-stop, legs or not.
 #[test]
 fn p4_a_scale_arriving_after_pouring_begins_stops_at_the_target() {
     let mut core = CremaCore::new();
@@ -774,7 +774,7 @@ fn q5_hot_water_begun_during_outage_is_left_alone() {
     let o = core.on_notification(Source::De1State, &[6, 5], 2000);
     assert_eq!(tares(&o), 0);
     assert!(core.tare_gate.is_none());
-    assert_eq!(core.hot_water_stop_target_g, None);
+    assert_eq!(core.hot_water_stop_target_g(), None);
 }
 
 /// Hot water first seen heating is a start the app saw.
@@ -786,7 +786,7 @@ fn hot_water_first_seen_heating_arms_its_stop() {
     core.set_steam_hotwater_targets(&steam_targets(HotWaterMode::Volume));
     let o = core.on_notification(Source::De1State, &[6, 2], 10);
     assert_eq!(tares(&o), 1);
-    assert!(core.hot_water_stop_target_g.is_some());
+    assert!(core.hot_water_stop_target_g().is_some());
 }
 
 /// Q6: physical tare at 20 g of 36: the overshoot equals what was in the cup.

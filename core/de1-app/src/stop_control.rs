@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use de1_domain::scale_trust::WeightAuthority;
 use de1_domain::session::{
     ActiveMode, Baseline, Blocked, Observed, Session, is_pre_flow, is_wind_down,
 };
@@ -16,7 +17,7 @@ use de1_domain::stop::{
     FLOW_PROOF_ML_S, FLOW_PROOF_SAMPLES, STOP_ALERT_AFTER, STOP_RETRY_CAP, StopCause, StopState,
     stop_retry_interval,
 };
-use de1_domain::{AutoStop, ShotPhase, StopReason, StopTargets};
+use de1_domain::{AutoStop, HOT_WATER_STOP_ON_SCALE_ML, StopConfig, StopReason, StopTargets};
 use de1_protocol::{MachineState, StateInfo};
 
 use crate::machine_requests::Initiator;
@@ -37,6 +38,49 @@ pub(crate) const FLUSH_OUTAGE_LIMIT: Duration = Duration::from_secs(60);
 pub(crate) const STOP_NOT_HONOURED: &str =
     "Crema can't stop the machine. Press Stop on the machine.";
 
+/// No legs.
+pub(crate) const NO_LEGS: StopTargets = StopTargets {
+    weight: None,
+    volume: None,
+    max_time: None,
+};
+
+/// Which legs a session's [`AutoStop`] runs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum StopLegs {
+    /// The espresso legs, re-resolved on every input.
+    Espresso,
+    /// A hot-water pour's, latched when it began.
+    HotWater {
+        /// The weight target, grams, if the app saw the pour begin with a
+        /// scale operational.
+        weight_g: Option<f32>,
+        /// The user's volume, ml.
+        v_ml: Option<f32>,
+    },
+}
+
+/// A session's auto-stop and the legs it runs. It exists for as long as the
+/// session flows (`DESIGN.md` §3.3).
+#[derive(Debug)]
+pub(crate) struct FlowStop {
+    pub(crate) legs: StopLegs,
+    pub(crate) stop: AutoStop,
+}
+
+/// A read of the session's auto-stop.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AutoStopView {
+    /// The mode whose legs it runs.
+    pub mode: ActiveMode,
+    /// When its clock started.
+    pub started: Duration,
+    /// It has fired.
+    pub triggered: bool,
+    /// The legs as of the last input.
+    pub targets: StopTargets,
+}
+
 /// A link's first espresso state found a session flowing: is it the same
 /// shot? Decided on the first sample, within [`OUTAGE_SAMPLE_WAIT`].
 #[derive(Debug, Clone, Copy)]
@@ -50,36 +94,85 @@ pub(crate) struct OutageCheck {
 }
 
 impl CremaCore {
-    /// Construct the [`AutoStop`] the first time the shot reaches a flowing
-    /// phase, so its arming delay counts from flow start, not heating start.
-    ///
-    /// The targets are composed fresh from the latched user settings via
-    /// [`effective_stop_targets`](Self::effective_stop_targets), so any
-    /// setting changes between shots are picked up automatically without a
-    /// cached-tuple staleness window.
-    pub(crate) fn arm_auto_stop_if_flowing(&mut self, phase: ShotPhase, now: Duration) {
-        if self.auto_stop.is_some() {
+    /// Build the espresso session's [`AutoStop`] at first flow, whatever its
+    /// legs (`DESIGN.md` §3.3): a leg that resolves later, such as weight
+    /// once the tare lands, goes live on the next input. Its clock is
+    /// `flow_started`, so the arming delay counts from flow, not heating. A
+    /// hot-water pour's stop still held here is replaced.
+    pub(crate) fn arm_espresso_stop(&mut self, flow_started: Duration) {
+        if self
+            .auto_stop
+            .as_ref()
+            .is_some_and(|f| f.legs == StopLegs::Espresso)
+        {
             return;
         }
-        if !matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring) {
-            return;
-        }
-        // A weight target arms an auto-stop even with no leg live yet: at
-        // first flow the tare is often still landing, so weight is pending,
-        // and the leg goes live when it's trusted. Without this the shot
-        // would never stop on weight (the #316.1 shape, which PR 7 closes for
-        // every leg).
-        let targets = self.effective_stop_targets().or_else(|| {
-            self.weight_intent().map(|_| StopTargets {
-                weight: None,
-                volume: None,
-                max_time: None,
-            })
+        let targets = self.leg_targets(StopLegs::Espresso);
+        let mut stop = AutoStop::new(targets, self.stop_config(), flow_started);
+        self.attach_drip_model(&mut stop, targets.weight.is_some());
+        self.auto_stop = Some(FlowStop {
+            legs: StopLegs::Espresso,
+            stop,
         });
-        if let Some(targets) = targets {
-            let mut stop = AutoStop::new(targets, self.stop_config(), now);
-            self.attach_drip_model(&mut stop, targets.weight.is_some());
-            self.auto_stop = Some(stop);
+    }
+
+    /// Build a hot-water pour's [`AutoStop`] when its session opens, at
+    /// `opened`: for an Unseen pour that's the attach. The weight target is
+    /// the pour's only if the app saw it begin; the user's volume `V` stands
+    /// in when the scale can't stop it.
+    pub(crate) fn arm_hot_water_stop(&mut self, opened: Duration) {
+        let target = self.hot_water_target();
+        let legs = StopLegs::HotWater {
+            weight_g: target
+                .and_then(|t| t.stop_weight_g)
+                .filter(|_| !self.began_unseen()),
+            v_ml: target.and_then(|t| t.volume_ml),
+        };
+        let lag = self
+            .scale
+            .as_ref()
+            .map_or(DEFAULT_SCALE_LAG, Scale::sensor_lag);
+        let stop = AutoStop::new(self.leg_targets(legs), StopConfig::hot_water(lag), opened);
+        self.auto_stop = Some(FlowStop { legs, stop });
+    }
+
+    /// Drop the session's auto-stop if it's espresso's (`espresso`) or hot
+    /// water's (`!espresso`), returning it. A mode ending never drops the
+    /// next mode's stop.
+    pub(crate) fn take_auto_stop(&mut self, espresso: bool) -> Option<AutoStop> {
+        if self
+            .auto_stop
+            .as_ref()
+            .is_some_and(|f| (f.legs == StopLegs::Espresso) == espresso)
+        {
+            return self.auto_stop.take().map(|f| f.stop);
+        }
+        None
+    }
+
+    /// The legs live now.
+    ///
+    /// - Espresso: [`effective_stop_targets`](Self::effective_stop_targets).
+    /// - Hot water (`DESIGN.md` §3.5): weight under a trusted scale; the
+    ///   volume leg only when the packet on the machine is the 250 ml backstop
+    ///   and no trusted weight stop is armed. If the packet holds `V`, the DE1
+    ///   owns the stop and an app leg would race it.
+    fn leg_targets(&self, legs: StopLegs) -> StopTargets {
+        match legs {
+            StopLegs::Espresso => self.effective_stop_targets().unwrap_or(NO_LEGS),
+            StopLegs::HotWater { weight_g, v_ml } => {
+                let weight =
+                    weight_g.filter(|_| self.hot_water_authority() == WeightAuthority::Trusted);
+                let packet_is_backstop = self
+                    .steam_hotwater_settings
+                    .as_ref()
+                    .is_some_and(|p| p.hot_water_volume_ml >= HOT_WATER_STOP_ON_SCALE_ML - 0.5);
+                StopTargets {
+                    weight,
+                    volume: v_ml.filter(|_| packet_is_backstop && weight.is_none()),
+                    max_time: None,
+                }
+            }
         }
     }
 
@@ -102,37 +195,59 @@ impl CremaCore {
         stop.set_drip_model(snapshot, lag);
     }
 
-    /// Re-compose an armed [`AutoStop`]'s targets after a mid-shot change to
-    /// stop-relevant state (scale connect / disconnect, the stop toggles, the
-    /// target setters). [`arm_auto_stop_if_flowing`](Self::arm_auto_stop_if_flowing)
-    /// arms exactly once per shot — and since max-shot-time is almost always
-    /// set, it arms even before the scale has registered, which used to bake
-    /// `weight: None` in for the whole shot (issue #15's intermittent SAW
-    /// failure). No-op between shots (no `AutoStop` armed).
+    /// Re-derive the auto-stop's legs before it judges an input, and after a
+    /// change to anything they depend on (scale, toggles, target setters).
+    /// No-op with no session flowing. Hot water has no drip model.
     pub(crate) fn refresh_auto_stop_targets(&mut self) {
-        if self.auto_stop.is_none() {
+        let Some(legs) = self.auto_stop.as_ref().map(|f| f.legs) else {
             return;
-        }
-        let targets = self.effective_stop_targets().unwrap_or(StopTargets {
-            weight: None,
-            volume: None,
-            max_time: None,
-        });
-        let weight_armed = targets.weight.is_some();
+        };
+        let targets = self.leg_targets(legs);
         if self
             .auto_stop
             .as_ref()
-            .is_some_and(|s| s.targets() == targets)
+            .is_some_and(|f| f.stop.targets() == targets)
         {
             return;
         }
-        if let Some(mut stop) = self.auto_stop.take() {
-            stop.set_targets(targets);
+        if let Some(mut flow_stop) = self.auto_stop.take() {
+            flow_stop.stop.set_targets(targets);
             // A weight leg arriving mid-shot (scale registered late) also
             // needs the learned-drip snapshot it missed at arm time.
-            self.attach_drip_model(&mut stop, weight_armed);
-            self.auto_stop = Some(stop);
+            if legs == StopLegs::Espresso {
+                self.attach_drip_model(&mut flow_stop.stop, targets.weight.is_some());
+            }
+            self.auto_stop = Some(flow_stop);
         }
+    }
+
+    /// The hot-water pour's weight target, if the pour has one.
+    pub(crate) fn hot_water_stop_target_g(&self) -> Option<f32> {
+        match self.auto_stop.as_ref()?.legs {
+            StopLegs::HotWater { weight_g, .. } => weight_g,
+            StopLegs::Espresso => None,
+        }
+    }
+
+    /// The session's auto-stop, for the model crate and diagnostics.
+    #[must_use]
+    pub fn auto_stop_view(&self) -> Option<AutoStopView> {
+        self.auto_stop.as_ref().map(|f| AutoStopView {
+            mode: match f.legs {
+                StopLegs::Espresso => ActiveMode::Espresso,
+                StopLegs::HotWater { .. } => ActiveMode::HotWater,
+            },
+            started: f.stop.started(),
+            triggered: f.stop.has_triggered(),
+            targets: f.stop.targets(),
+        })
+    }
+
+    /// The running pour volume, ml: what the volume legs compare. Zero at
+    /// every session's start.
+    #[must_use]
+    pub fn pour_ml(&self) -> f32 {
+        self.volume_integrator.pour_ml()
     }
 
     /// Emit [`Event::StopTargetsArmed`] whenever the armed picture changed —

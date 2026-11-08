@@ -159,7 +159,7 @@ fn hot_water_weight_stop_from_target() {
     let _ = weight(&mut core, 0, 1);
     core.set_profile_target_weight(Some(50.0));
     let out = state(&mut core, 6, 5, 1_000);
-    assert_eq!(core.hot_water_stop_target_g, Some(150.0));
+    assert_eq!(core.hot_water_stop_target_g(), Some(150.0));
     assert!(tared(&out));
     // Auto-tare off: the stop arms, no tare.
     let mut core = connected(volume(200.0));
@@ -167,7 +167,7 @@ fn hot_water_weight_stop_from_target() {
     let _ = weight(&mut core, 0, 1);
     core.set_auto_tare(false);
     let out = state(&mut core, 6, 5, 1_000);
-    assert_eq!(core.hot_water_stop_target_g, Some(200.0));
+    assert_eq!(core.hot_water_stop_target_g(), Some(200.0));
     assert!(!tared(&out));
 }
 
@@ -308,7 +308,7 @@ fn packet_waits_for_a_scale_reading() {
     assert_eq!((t.wire_volume_ml, t.stop_weight_g), (108.0, None));
     // A pour now arms no weight stop that could never fire.
     let _ = state(&mut core, 6, 5, 200);
-    assert_eq!(core.hot_water_stop_target_g, None);
+    assert_eq!(core.hot_water_stop_target_g(), None);
     let _ = state(&mut core, 2, 0, 300);
     // The first reading: the backstop and the weight stop.
     let w = packets(&weight(&mut core, 0, 400));
@@ -391,7 +391,7 @@ fn packet_deferred_in_flow_and_unknown_states() {
         core.set_profile_target_weight(Some(36.0));
         let _ = weight(&mut core, 0, 50);
         let _ = state(&mut core, flow, 5, 100);
-        let armed = core.hot_water_stop_target_g;
+        let armed = core.hot_water_stop_target_g();
         core.set_profile_target_weight(Some(50.0));
         let mut outs = vec![core.on_tick(200), weight(&mut core, 0, 300)];
         outs.push(core.set_steam_hotwater_targets(&targets(ratio(2.0))));
@@ -405,7 +405,7 @@ fn packet_deferred_in_flow_and_unknown_states() {
         for out in &outs {
             assert!(packets(out).is_empty(), "state {flow}");
         }
-        assert_eq!(core.hot_water_stop_target_g, armed, "state {flow}");
+        assert_eq!(core.hot_water_stop_target_g(), armed, "state {flow}");
         let w = packets(&state(&mut core, 2, 0, 1_000));
         assert_eq!(w.len(), 1, "state {flow}");
         assert_eq!(
@@ -671,7 +671,7 @@ fn hot_water_target_event_matches_packet() {
     assert_eq!(events[0].wire_volume_ml, w[0].hot_water_volume_ml);
     assert_eq!(events[0].stop_weight_g, Some(150.0));
     let _ = state(&mut core, 6, 5, 300);
-    assert_eq!(core.hot_water_stop_target_g, events[0].stop_weight_g);
+    assert_eq!(core.hot_water_stop_target_g(), events[0].stop_weight_g);
     assert_eq!(
         core.hot_water_target_json(),
         serde_json::to_string(&events[0]).unwrap()
@@ -689,7 +689,7 @@ fn ghc_hot_water_ratio_stops_at_target_weight() {
     core.set_profile_target_weight(Some(50.0));
     let out = state(&mut core, 6, 5, 0);
     assert!(tared(&out), "auto-tare on the group-head start");
-    assert_eq!(core.hot_water_stop_target_g, Some(150.0));
+    assert_eq!(core.hot_water_stop_target_g(), Some(150.0));
     assert!(!stopped_by_weight(&weight(&mut core, 100, 2_000)));
     // 149 g at a brisk rate: the sensor-lag lead crosses 150.
     let out = weight(&mut core, 149, 4_000);
@@ -704,7 +704,7 @@ fn ghc_hot_water_time_mode_arms_nothing() {
     let _ = weight(&mut core, 0, 0);
     core.set_profile_target_weight(Some(50.0));
     let _ = state(&mut core, 6, 5, 0);
-    assert_eq!(core.hot_water_stop_target_g, None);
+    assert_eq!(core.hot_water_stop_target_g(), None);
     assert!(!stopped_by_weight(&weight(&mut core, 300, 2_000)));
 }
 
@@ -722,7 +722,7 @@ fn hot_water_dose_survives_reset_for_ghc_pour() {
     // a pour that began before the link, see reset_mid_pour_does_not_rearm.)
     let _ = state(&mut core, 2, 0, 600);
     let _ = state(&mut core, 6, 5, 1_000);
-    assert_eq!(core.hot_water_stop_target_g, Some(150.0));
+    assert_eq!(core.hot_water_stop_target_g(), Some(150.0));
 }
 
 /// Validation P3-2: `reset()` mid-pour, then the same HotWater state, is a
@@ -735,17 +735,17 @@ fn reset_mid_pour_does_not_rearm() {
     core.connect_scale("BOOKOO_SC", &[]);
     let _ = weight(&mut core, 0, 0);
     let _ = state(&mut core, 6, 5, 100);
-    assert_eq!(core.hot_water_stop_target_g, Some(150.0));
+    assert_eq!(core.hot_water_stop_target_g(), Some(150.0));
     let _ = core.reset();
     let _ = weight(&mut core, 80, 200);
     let out = state(&mut core, 6, 5, 300);
     assert!(!tared(&out), "no tare mid-pour");
-    assert_eq!(core.hot_water_stop_target_g, None, "not re-armed");
+    assert_eq!(core.hot_water_stop_target_g(), None, "not re-armed");
     let _ = state(&mut core, 2, 0, 400);
     let out = state(&mut core, 6, 5, 500);
     assert!(tared(&out));
     assert_eq!(
-        core.hot_water_stop_target_g,
+        core.hot_water_stop_target_g(),
         Some(150.0),
         "the next pour arms"
     );
@@ -779,6 +779,7 @@ fn ghc_espresso_arms_same_rules_as_app_start() {
             .auto_stop
             .as_ref()
             .expect("an auto-stop is armed")
+            .stop
             .targets();
         (tared(&out), targets)
     };

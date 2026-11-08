@@ -10,6 +10,8 @@
 //! [`Command`]s in a [`CoreOutput`] envelope. It is sans-IO and holds no clock
 //! — every notification carries a monotonic `now_ms` from the shell.
 
+#[cfg(test)]
+mod auto_stop_tests;
 pub mod calibration_guard;
 mod capture;
 pub mod de1_uuids;
@@ -65,13 +67,14 @@ pub use profile_sync::{
 pub use shot_start::{
     StartCheck, StartEnd, StartNoticeLine, StartPhase, StartRefusal, StartShotResult,
 };
+pub use stop_control::AutoStopView;
+use stop_control::{FlowStop, NO_LEGS, StopLegs};
 
 use capture::{CaptureRecorder, slice_to_jsonl};
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use de1_domain::HOT_WATER_STOP_ON_SCALE_ML;
 use de1_domain::connect_sweep::MAX_TANK_TEMP_C;
 use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
 use de1_domain::scale_trust::{
@@ -519,8 +522,6 @@ pub struct CremaCore {
     /// The flow the machine is running, from its first state until it leaves
     /// that mode. A link drop keeps it; [`reset`](Self::reset) drops it.
     session: Option<Session>,
-    /// The hot-water pour running, for its app volume leg.
-    hot_water_pour: Option<HotWaterPour>,
     /// The latest shot began unseen, latched at `ShotEvent::Started` because
     /// the session has closed by the time the shot completes. Its readings
     /// include whatever was already in the cup, so they never reach its
@@ -534,13 +535,6 @@ pub struct CremaCore {
     /// The hot-water target last sent in [`Event::HotWaterTarget`] this
     /// generation.
     last_hot_water_target: Option<de1_domain::HotWaterTarget>,
-    /// Hot-water-by-weight: armed (target grams) while a hot-water session
-    /// pours with a scale connected. The user's volume translates 1 ml ≈ 1 g
-    /// (water density); the wire packet asked the DE1 for far MORE water
-    /// ([`de1_domain::HOT_WATER_STOP_ON_SCALE_ML`]) precisely so this scale-side stop is
-    /// the one that cuts the pour — it was the missing half of that de1app
-    /// convention. Cleared when the session completes or the stop fires.
-    hot_water_stop_target_g: Option<f32>,
     /// The eco-mode steam target temperature, °C.
     steam_eco_temp: f32,
     last_state: Option<StateInfo>,
@@ -647,8 +641,9 @@ pub struct CremaCore {
     /// shell binds this to a user-tunable Settings field (legacy default
     /// 60 s).
     max_shot_duration: Option<f32>,
-    /// The live auto-stop controller, for the duration of one shot.
-    auto_stop: Option<AutoStop>,
+    /// The session's auto-stop: it exists from an espresso's first flow, or a
+    /// hot-water pour's start, until the mode ends (`DESIGN.md` §3.3).
+    auto_stop: Option<FlowStop>,
     /// The learned SAW drip model (Decenza SAW learning): per-(profile,
     /// scale) post-stop drip history that sharpens the weight-stop
     /// threshold shot over shot. Persistent user data — the shell seeds it
@@ -1061,12 +1056,10 @@ impl CremaCore {
             steam_hotwater_targets: None,
             link: LinkSession::default(),
             session: None,
-            hot_water_pour: None,
             shot_began_unseen: false,
             shot_settings_written: None,
             foreign_restore_used: false,
             last_hot_water_target: None,
-            hot_water_stop_target_g: None,
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
             shot_started: None,
@@ -3749,6 +3742,7 @@ impl CremaCore {
         for event in events {
             self.map_shot_event(event, now, out);
         }
+        self.begin_flow_on_unknown(now, out);
         let events = if split {
             self.water.split(info, now)
         } else {
@@ -3790,6 +3784,7 @@ impl CremaCore {
             for event in self.monitor.split(info, now) {
                 self.map_shot_event(event, now, out);
             }
+            self.begin_flow_on_unknown(now, out);
         }
         if self.monitor.is_shot_in_progress() {
             self.last_frame = Some(sample.frame_number);
@@ -3839,9 +3834,8 @@ impl CremaCore {
         let reason = self
             .auto_stop
             .as_mut()
-            .and_then(|stop| stop.on_sample(&sample, now, pour_ml));
+            .and_then(|f| f.stop.on_sample(&sample, now, pour_ml));
         self.push_stop(reason, now, out);
-        self.check_hot_water_volume_leg(pour_ml, now, out);
         self.enforce_owed_stop(now, out);
         self.report_stop_targets(out);
         // `Event::Telemetry.elapsed` is `u32` milliseconds — what the FFI
@@ -4095,30 +4089,11 @@ impl CremaCore {
         let reason = self
             .auto_stop
             .as_mut()
-            .and_then(|stop| stop.on_weight(net_weight, now));
+            .and_then(|f| f.stop.on_weight(net_weight, now));
         self.push_stop(reason, now, out);
         self.enforce_owed_stop(now, out);
         self.report_stop_targets(out);
         self.check_step_weight_exit(estimate, now, out);
-        // Hot-water-by-weight: stop the pour at the user's volume (1 ml ≈
-        // 1 g), projected one sensor-lag beat ahead so it lands ON target
-        // rather than past it (reaprime HotWaterSequencer's projection).
-        // Mutually exclusive with the espresso auto-stop above — the
-        // machine is in exactly one of those states.
-        if let Some(target) = self.hot_water_stop_target_g
-            && self.hot_water_authority() == WeightAuthority::Trusted
-        {
-            let lag_s = self
-                .scale
-                .as_ref()
-                .map_or(0.38, |s| s.sensor_lag().as_secs_f32());
-            if estimate.weight + estimate.flow.max(0.0) * lag_s >= target {
-                // One stop per pour: the volume leg stands down too.
-                self.hot_water_stop_target_g = None;
-                self.hot_water_pour = None;
-                self.push_stop(Some(StopReason::Weight), now, out);
-            }
-        }
         // A deferred completion locks on this fresh reading once the drip has
         // settled (geota/crema#64) — the scale's stream is the primary driver.
         self.maybe_finalize_post_shot_settle(now, out);
@@ -5651,30 +5626,8 @@ impl CremaCore {
                 if self.flow_started.is_none()
                     && matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring)
                 {
-                    self.flow_started = Some(now);
-                    // Zero held? Capture the residual post-tare zero the scale
-                    // had when flow started and correct every reading of the
-                    // shot by it (Decenza `da2e5495`; ±2 g, observed tare only).
-                    self.pre_shot_zero_offset_g = pre_shot_zero_offset(
-                        self.tare_observed && self.tare_gate.is_none(),
-                        self.last_raw_weight,
-                    );
-                    // Fallback: a scale that never settled during preheat (or
-                    // never reported) still gets its shot-start tare now.
-                    if self.auto_tare_pending {
-                        self.fire_auto_tare(now, out);
-                    }
-                    self.auto_tare_window.reset();
-                    // Pump on: start the scale's built-in timer from the same
-                    // anchor the inbuilt clock uses (fires once per shot —
-                    // `flow_started` latches). A shot first seen mid-pour
-                    // leaves the scale's timer alone: it can only be wrong, and
-                    // the command can beep.
-                    if !self.shot_began_unseen {
-                        Self::push_timer_command(&self.scale, TimerCommand::Start, out);
-                    }
+                    self.begin_flow(now, out);
                 }
-                self.arm_auto_stop_if_flowing(phase, now);
                 out.events.push(Event::ShotPhaseChanged { phase });
             }
             ShotEvent::FrameChanged(frame) => {
@@ -5715,8 +5668,10 @@ impl CremaCore {
                 self.untared_settle = None;
                 // Harvest the weight-stop capture before dropping the
                 // controller — it feeds the drip-learning sample below.
-                let stop_capture = self.auto_stop.as_ref().and_then(AutoStop::stop_capture);
-                self.auto_stop = None;
+                let stop_capture = self
+                    .take_auto_stop(true)
+                    .as_ref()
+                    .and_then(AutoStop::stop_capture);
                 // Close any tare gate that never saw its confirmation reading.
                 self.tare_gate = None;
                 self.auto_tare_pending = false;
@@ -5760,11 +5715,58 @@ impl CremaCore {
         }
     }
 
+    /// The espresso session's first flow: the clock starts, the fallback
+    /// tare and the scale's timer go out, and the auto-stop is built, with
+    /// whatever legs it has (`DESIGN.md` §3.3).
+    fn begin_flow(&mut self, now: Duration, out: &mut CoreOutput) {
+        self.flow_started = Some(now);
+        // Zero held? Capture the residual post-tare zero the scale
+        // had when flow started and correct every reading of the
+        // shot by it (Decenza `da2e5495`; ±2 g, observed tare only).
+        self.pre_shot_zero_offset_g = pre_shot_zero_offset(
+            self.tare_observed && self.tare_gate.is_none(),
+            self.last_raw_weight,
+        );
+        // Fallback: a scale that never settled during preheat (or
+        // never reported) still gets its shot-start tare now.
+        if self.auto_tare_pending {
+            self.fire_auto_tare(now, out);
+        }
+        self.auto_tare_window.reset();
+        // Pump on: start the scale's built-in timer from the same
+        // anchor the inbuilt clock uses (fires once per shot —
+        // `flow_started` latches). A shot first seen mid-pour
+        // leaves the scale's timer alone: it can only be wrong, and
+        // the command can beep.
+        if !self.shot_began_unseen {
+            Self::push_timer_command(&self.scale, TimerCommand::Start, out);
+        }
+        self.arm_espresso_stop(now);
+    }
+
+    /// First flow includes an unknown substate after a pre-flow one
+    /// (`DESIGN.md` §3.3). The monitor keeps the previous phase on one, so
+    /// without this a shot that goes from Heating to an unnamed substate
+    /// never starts its clock or its stop. If it was more heating, the cost
+    /// is an early clock and a harmless tare.
+    fn begin_flow_on_unknown(&mut self, now: Duration, out: &mut CoreOutput) {
+        if self.flow_started.is_none()
+            && self.monitor.is_shot_in_progress()
+            && self.last_state.is_some_and(|info| {
+                info.state == MachineState::Espresso && info.substate == SubState::Unknown
+            })
+        {
+            self.begin_flow(now, out);
+        }
+    }
+
     /// Translate a domain [`WaterEvent`] into FFI [`Event`]s, and arm /
     /// disarm the hot-water-by-weight stop around the session.
     fn map_water_event(&mut self, event: WaterEvent, now: Duration, out: &mut CoreOutput) {
         match event {
             WaterEvent::Started(kind) => {
+                // Each session's volume counts from its own start.
+                self.volume_integrator.reset();
                 // Hot water with a scale: the user's volume IS the target,
                 // auto-translated to grams — no separate setting. Tare on
                 // entry (with the settle gate, same as an espresso start)
@@ -5776,24 +5778,15 @@ impl CremaCore {
                 // operational scale; never time mode). Never the machine
                 // echo, which can carry the 250 ml backstop (review #25).
                 if kind == de1_domain::WaterSessionKind::HotWater {
-                    // The pour's own volume, and its V for the app leg that
-                    // stands in when the scale can't stop it.
-                    self.hot_water_pour = Some(HotWaterPour {
-                        started_ml: self.volume_integrator.pour_ml(),
-                        v_ml: self.hot_water_target().and_then(|t| t.volume_ml),
-                    });
                     if !self.auto_tare
                         && let Some(session) = self.session.as_mut()
                     {
                         session.tared();
                     }
-                }
-                if kind == de1_domain::WaterSessionKind::HotWater
-                    && !self.began_unseen()
-                    && let Some(target_g) = self.hot_water_target().and_then(|t| t.stop_weight_g)
-                {
-                    self.hot_water_stop_target_g = Some(target_g);
-                    if self.auto_tare {
+                    // The pour's stop exists from its start (`DESIGN.md`
+                    // §3.3), with its weight target and its V.
+                    self.arm_hot_water_stop(now);
+                    if self.auto_tare && self.hot_water_stop_target_g().is_some() {
                         self.push_tare_command(out);
                         self.tare_gate = Some(now);
                     }
@@ -5804,8 +5797,7 @@ impl CremaCore {
                 }
             }
             WaterEvent::Completed(record) => {
-                self.hot_water_stop_target_g = None;
-                self.hot_water_pour = None;
+                self.take_auto_stop(false);
                 out.events.push(Event::WaterSessionCompleted {
                     kind: record.kind,
                     duration: duration_to_u32_ms(record.duration),
@@ -5882,36 +5874,9 @@ impl CremaCore {
         }
     }
 
-    /// Hot water's app volume leg (`DESIGN.md` §3.5): when the scale can't
-    /// stop the pour and the packet on the machine is the 250 ml backstop,
-    /// stop at the user's `V` ml. If the packet holds `V`, the DE1 owns the
-    /// stop and an app leg would race it.
-    fn check_hot_water_volume_leg(&mut self, pour_ml: f32, now: Duration, out: &mut CoreOutput) {
-        let Some(pour) = self.hot_water_pour else {
-            return;
-        };
-        let Some(v_ml) = pour.v_ml else {
-            return;
-        };
-        let packet_is_backstop = self
-            .steam_hotwater_settings
-            .as_ref()
-            .is_some_and(|p| p.hot_water_volume_ml >= HOT_WATER_STOP_ON_SCALE_ML - 0.5);
-        // Stand down only behind a weight stop that is armed and trusted: a
-        // pour that began with the scale stale has no weight target at all.
-        let weight_stops_it = self.hot_water_stop_target_g.is_some()
-            && self.hot_water_authority() == WeightAuthority::Trusted;
-        if !packet_is_backstop || weight_stops_it || pour_ml - pour.started_ml < v_ml {
-            return;
-        }
-        self.hot_water_stop_target_g = None;
-        self.hot_water_pour = None;
-        self.push_stop(Some(StopReason::Volume), now, out);
-    }
-
-    /// What will end the shot: the live armed targets while a shot is running,
-    /// otherwise what *would* arm if one started now. The `bool` is `true` in
-    /// the former case.
+    /// What will end the shot: the live legs while a shot is running,
+    /// otherwise what *would* arm if one started now. The `bool` is `true`
+    /// while an espresso flows with at least one leg live.
     ///
     /// The single source of truth for every "what will stop this shot" surface.
     /// Pure — safe to call at any time, connected or not.
@@ -5920,12 +5885,15 @@ impl CremaCore {
         // Live, not as of the auto-stop's last refresh: a scale going stale
         // between inputs shows at once. The auto-stop refreshes to the same
         // legs before it judges any input.
-        let targets = self.effective_stop_targets().unwrap_or(StopTargets {
-            weight: None,
-            volume: None,
-            max_time: None,
-        });
-        (self.auto_stop.is_some(), targets)
+        let targets = self.effective_stop_targets().unwrap_or(NO_LEGS);
+        // Armed: an espresso flowing with at least one leg (`DESIGN.md` §3.3).
+        let flowing = self
+            .auto_stop
+            .as_ref()
+            .is_some_and(|f| f.legs == StopLegs::Espresso);
+        let any_leg =
+            targets.weight.is_some() || targets.volume.is_some() || targets.max_time.is_some();
+        (flowing && any_leg, targets)
     }
 
     /// Why the weight leg is not armed even though a target IS configured, or
@@ -5983,15 +5951,6 @@ impl CremaCore {
         })
         .to_string()
     }
-}
-
-/// A hot-water pour, for the app's volume leg (`DESIGN.md` §3.5).
-#[derive(Debug, Clone, Copy)]
-struct HotWaterPour {
-    /// The integrator's pour volume when the pour began, ml.
-    started_ml: f32,
-    /// The user's volume for this pour, ml.
-    v_ml: Option<f32>,
 }
 
 /// The value a Bengle (BLE v2) upload writes to the end-of-shot weight
@@ -6072,6 +6031,7 @@ fn mmr_write_command(register: MmrRegister, value: u32, byte_len: u8) -> CoreOut
 #[cfg(test)]
 mod tests {
     use super::*;
+    use de1_domain::HOT_WATER_STOP_ON_SCALE_ML;
     use de1_domain::{HotWaterMode, ShotPhase};
 
     #[test]
@@ -7183,10 +7143,11 @@ mod tests {
         core.on_notification(Source::De1State, &[4, 5], 1_000);
         // The fallback tare at first flow lands.
         core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 1_100);
-        let armed = core
+        let armed = &core
             .auto_stop
             .as_ref()
-            .expect("a GHC shot after a reconnect must still arm an auto-stop");
+            .expect("a GHC shot after a reconnect must still arm an auto-stop")
+            .stop;
         assert_eq!(
             armed.targets().weight,
             Some(36.0),
