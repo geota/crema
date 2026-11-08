@@ -1,0 +1,207 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Crema M bench: history rows in IndexedDB</title>
+<style>
+	body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+	pre { background: #f4f1ea; padding: 1rem; white-space: pre-wrap; }
+	button { font-size: 1rem; padding: 0.4rem 1rem; margin-right: 0.5rem; }
+</style>
+<h1>M: history rows at 5,000 and 20,000</h1>
+<p>
+	#310, SPEC § Phases, "M". Seeds synthetic rows in the P3w shape (<code>ShotRow</code>: a
+	<code>StoredShot</code> without <code>record.samples</code>, <code>profile</code> and
+	<code>brewSeries</code>, plus the core's <code>summary</code>) into a throwaway IndexedDB
+	database, then times <code>getAll</code>, the text filter and the core's stats, and reads the
+	heap. Run it from <code>pnpm dev</code> in Chrome; see <code>M-RUNBOOK.md</code>.
+</p>
+<button id="run">Run</button><button id="copy" disabled>Copy results</button>
+<pre id="out">Not run yet.</pre>
+<script type="module">
+	import init, { shotSummary, historyStats, brewHistoryStats } from '/src/lib/wasm/de1_wasm.js';
+
+	const DB = 'crema-bench-m';
+	const SIZES = [5000, 20000];
+	const out = document.getElementById('out');
+	const lines = [];
+	const results = { userAgent: navigator.userAgent, runs: [] };
+	const log = (s) => {
+		lines.push(s);
+		out.textContent = lines.join('\n');
+	};
+	const now = () => performance.now();
+	const reqp = (r) => new Promise((y, n) => ((r.onsuccess = () => y(r.result)), (r.onerror = () => n(r.error))));
+	const txp = (t) =>
+		new Promise((y, n) => ((t.oncomplete = () => y()), (t.onerror = () => n(t.error)), (t.onabort = () => n(t.error))));
+	const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+	/** The heap, the precise way where the page can, else performance.memory. */
+	async function heap() {
+		if (globalThis.crossOriginIsolated && performance.measureUserAgentSpecificMemory) {
+			const m = await performance.measureUserAgentSpecificMemory();
+			return { bytes: m.bytes, how: 'measureUserAgentSpecificMemory' };
+		}
+		if (performance.memory) return { bytes: performance.memory.usedJSHeapSize, how: 'performance.memory' };
+		return { bytes: NaN, how: 'unavailable' };
+	}
+
+	/** A 40 s shot's 180 samples, from a smooth curve, with a scale, in the wire shape. */
+	const samples = Array.from({ length: 180 }, (_, i) => {
+		const t = i / 180;
+		return {
+			elapsed: i * 227,
+			sample: {
+				sampleTime: i, groupPressure: 9 * Math.sin(t * 3.1), groupFlow: 2 + t, headTemp: 92, mixTemp: 93,
+				setMixTemp: 93, setHeadTemp: 93, setGroupPressure: 9, setGroupFlow: 0, frameNumber: 1 + Math.floor(i / 30),
+				steamTemp: 140
+			},
+			scaleWeight: 40 * t, scaleFlowWeight: 1.8, dispensedVolume: 45 * t, resistance: 2, resistanceWeight: 2.2
+		};
+	});
+
+	/** A full stored shot, as today's row is, varied by `i`. */
+	function shot(i) {
+		return {
+			formatVersion: 3,
+			id: `shot:019e5fb5-${String(i).padStart(6, '0')}-7000-8000-000000000001`,
+			completedAt: 1767323075678 - i * 21600000,
+			profileName: 'Best Practice',
+			profile: null,
+			stopReason: 'Weight',
+			metadata: {
+				dose: 18, yieldOut: 36.4, grinderSetting: '2.5', rating: 1 + (i % 5),
+				notes: `Slightly sour at the end, go finer next time. #${i}`, nextPlan: null, barista: 'Sam'
+			},
+			record: { duration: 40000, samples },
+			bean: {
+				beanId: `bean:019e5fb5-0000-7000-8000-00000000000${i % 7}`, name: i % 3 ? 'Gesha Village' : 'Kenya AA',
+				roasterName: 'Sey', roastedOn: '2026-09-01', roastLevel: 4, tags: ['comp'], grinderSetting: '2.5', grinder: 'Niche Zero'
+			},
+			grinderModel: 'Niche Zero', tags: ['dial-in'], yieldTarget: 36, brewTempTarget: 93, preinfuseTarget: 8,
+			stopOnWeight: true, autoTare: true, visualizerId: '9a8b7c6d-5e4f-3a2b-1c0d-ffeeddccbbaa', deletedAt: null,
+			machine: { serialNumber: '12345', firmwareVersion: '1333', model: 'DE1XL' }
+		};
+	}
+
+	/** The P3w row: the shot without its heavy fields, with the core's summary. */
+	function row(i, summary) {
+		const { record, profile: _p, brewSeries: _b, ...rest } = shot(i);
+		return { ...rest, record: { duration: record.duration }, summary };
+	}
+
+	/** The web History search's fields (`history/search.ts`). */
+	function matches(r, q) {
+		const fields = [
+			r.profileName, r.recipeName, r.metadata?.notes, r.metadata?.nextPlan, r.metadata?.beans, r.metadata?.barista,
+			r.metadata?.drinker, r.bean?.name, r.bean?.roasterName, r.bean?.grinder, r.grinderModel
+		];
+		return fields.some((f) => typeof f === 'string' && f.toLowerCase().includes(q));
+	}
+
+	async function freshDb() {
+		await reqp(indexedDB.deleteDatabase(DB));
+		return new Promise((y, n) => {
+			const q = indexedDB.open(DB, 1);
+			q.onupgradeneeded = () => q.result.createObjectStore('rows', { keyPath: 'id' });
+			q.onsuccess = () => y(q.result);
+			q.onerror = () => n(q.error);
+		});
+	}
+
+	async function runSize(n) {
+		const summaries = Array.from({ length: 16 }, (_, k) => JSON.parse(shotSummary(JSON.stringify(shot(k)))));
+		let db = await freshDb();
+		const before = (await navigator.storage.estimate()).usage;
+		let t0 = now();
+		for (let i = 0; i < n; i += 500) {
+			const t = db.transaction('rows', 'readwrite');
+			const s = t.objectStore('rows');
+			for (let j = i; j < Math.min(n, i + 500); j++) s.put(row(j, summaries[j % 16]));
+			await txp(t);
+		}
+		const seed = now() - t0;
+		db.close();
+		await sleep(3000);
+		const disk = (await navigator.storage.estimate()).usage - before;
+
+		db = await new Promise((y, n2) => {
+			const q = indexedDB.open(DB, 1);
+			q.onsuccess = () => y(q.result);
+			q.onerror = () => n2(q.error);
+		});
+		const h0 = await heap();
+		const gets = [];
+		let rows;
+		for (let k = 0; k < 3; k++) {
+			rows = null;
+			t0 = now();
+			rows = await reqp(db.transaction('rows').objectStore('rows').getAll());
+			gets.push(now() - t0);
+		}
+		await sleep(500);
+		const h1 = await heap();
+		const filterMiss = median(Array.from({ length: 5 }, () => ((t0 = now()), rows.filter((r) => matches(r, 'zzzz')), now() - t0)));
+		const filterHit = median(Array.from({ length: 5 }, () => ((t0 = now()), rows.filter((r) => matches(r, 'gesha')), now() - t0)));
+		const statsInput = () =>
+			JSON.stringify(rows.map((r) => ({
+				durationMs: r.record.duration, finalWeightG: r.summary.finalWeight ?? undefined, peakWeightG: r.summary.peakWeight ?? undefined,
+				doseG: r.metadata.dose ?? undefined, rating: r.metadata.rating ?? undefined
+			})));
+		const stats = median(Array.from({ length: 5 }, () => ((t0 = now()), historyStats(statsInput()), now() - t0)));
+		const brewInput = () =>
+			JSON.stringify(rows.map((r) => ({
+				durationMs: r.record.duration, finalWeightG: r.metadata.yieldOut ?? r.summary.finalWeight ?? undefined,
+				peakWeightG: r.summary.peakWeight ?? undefined, doseG: r.metadata.dose ?? undefined,
+				waterG: r.metadata.waterG ?? undefined, rating: r.metadata.rating ?? undefined, brewMethod: r.brewMethod ?? undefined
+			})));
+		const brewStats = median(Array.from({ length: 5 }, () => ((t0 = now()), brewHistoryStats(brewInput()), now() - t0)));
+		const rowBytes = JSON.stringify(rows[0]).length;
+		const run = {
+			n, seedMs: Math.round(seed), diskMB: +(disk / 1e6).toFixed(1), getAllMs: gets.map(Math.round),
+			heapHow: h1.how, heapHeldMB: +((h1.bytes - h0.bytes) / 1e6).toFixed(1), heapPerRowKB: +((h1.bytes - h0.bytes) / n / 1e3).toFixed(2),
+			filterMs: { noMatch: +filterMiss.toFixed(1), match: +filterHit.toFixed(1) },
+			statsMs: +stats.toFixed(1), brewStatsMs: +brewStats.toFixed(1), rowJsonBytes: rowBytes
+		};
+		results.runs.push(run);
+		log(
+			`n=${n}: seed ${run.seedMs} ms, disk +${run.diskMB} MB; getAll ${run.getAllMs.join(' / ')} ms; ` +
+				`heap held ${run.heapHeldMB} MB (${run.heapPerRowKB} KB/row, ${run.heapHow}); ` +
+				`filter ${run.filterMs.noMatch} ms no match, ${run.filterMs.match} ms matching; ` +
+				`stats ${run.statsMs} ms, brew stats ${run.brewStatsMs} ms (projection + one wasm call); row JSON ${rowBytes} B`
+		);
+		rows = null;
+		db.close();
+		await reqp(indexedDB.deleteDatabase(DB));
+	}
+
+	const run = async () => {
+		document.getElementById('run').disabled = true;
+		lines.length = 0;
+		results.runs = [];
+		try {
+			await init();
+			log(`${navigator.userAgent}`);
+			log(`crossOriginIsolated ${globalThis.crossOriginIsolated}, deviceMemory ${navigator.deviceMemory ?? '?'} GB, cores ${navigator.hardwareConcurrency}`);
+			for (const n of SIZES) {
+				log(`running n=${n}…`);
+				await runSize(n);
+			}
+			log('done.');
+			document.getElementById('copy').disabled = false;
+			console.log('M-RESULT ' + JSON.stringify(results));
+		} catch (e) {
+			log(`failed: ${e?.stack ?? e}`);
+		} finally {
+			document.getElementById('run').disabled = false;
+		}
+	};
+	document.getElementById('run').onclick = run;
+	// `?auto` runs at once (a smoke test from a headless browser; the result
+	// line is also logged to the console as `M-RESULT {…}`). `?sizes=300,1000`
+	// picks other sizes.
+	const params = new URLSearchParams(location.search);
+	if (params.get('sizes')) SIZES.splice(0, SIZES.length, ...params.get('sizes').split(',').map(Number));
+	if (params.has('auto')) run();
+	document.getElementById('copy').onclick = () =>
+		navigator.clipboard.writeText(JSON.stringify(results, null, 2) + '\n\n' + lines.join('\n'));
+</script>

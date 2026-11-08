@@ -70,6 +70,9 @@ android {
         // local/dev builds fall back to the committed defaults.
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
         versionName = (project.findProperty("versionName") as String?) ?: "0.1"
+        // M, the measurement before #310 P3 (scratch branch only): the bench in
+        // src/androidTest, run on the reference device. See M-RUNBOOK.md.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Stamped into the crash report so it names the exact build that failed.
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
 
@@ -412,6 +415,10 @@ dependencies {
     // construct-and-clear smoke test (cohort review 2026-10-25, P3-2).
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test:core:1.7.0")
+    // M bench (scratch branch only).
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("junit:junit:4.13.2")
 }
 
 // ---------------------------------------------------------------------------
