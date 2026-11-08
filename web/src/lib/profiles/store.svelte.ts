@@ -27,7 +27,14 @@ import { SvelteSet } from 'svelte/reactivity';
 
 import { loadCore } from '#lib/core/index.js';
 import { refreshStopTargetsProjection } from '#lib/state/ui-state.svelte.js';
-import { isIdOrNull, isJsonObject, readJson, readStore, writeJson } from '#lib/utils/storage.js';
+import {
+	isIdOrNull,
+	isJsonObject,
+	readJson,
+	readStore,
+	writeJson,
+	writeJsonChecked
+} from '#lib/utils/storage.js';
 import {
 	builtinCremaProfiles,
 	toCoreProfile,
@@ -342,6 +349,34 @@ export class ProfileStore {
 	 * reconstructs pins from the cross-shell `pinned` id list (an Android bundle).
 	 * Existing `lastUsed` timestamps are preserved on merge.
 	 */
+	/** The custom profiles a restore leaves, in one write. Whether it was stored. */
+	restoreCustom(next: CremaProfile[]): boolean {
+		this.custom = next;
+		return writeJsonChecked(CUSTOM_KEY, next);
+	}
+
+	/**
+	 * A restore's pins and hidden built-ins, as the plan resolved them. A pin's
+	 * `lastUsed` stays this device's. Whether both were stored.
+	 */
+	restoreMeta(pinned: readonly string[], hidden: readonly string[]): boolean {
+		const pins = new Set(pinned);
+		const next: Record<string, BuiltinOverride> = {};
+		for (const [id, ov] of Object.entries(this.overrides)) next[id] = { ...ov, pinned: pins.has(id) };
+		for (const id of pins) next[id] ??= { pinned: true, lastUsed: null };
+		this.overrides = next;
+		this.hiddenBuiltins.clear();
+		for (const id of hidden) this.hiddenBuiltins.add(id);
+		const a = writeJsonChecked(OVERRIDES_KEY, this.overrides);
+		const b = writeJsonChecked(HIDDEN_BUILTINS_KEY, Array.from(this.hiddenBuiltins));
+		return a && b;
+	}
+
+	/** The custom profiles, as stored: a restore plans against these. */
+	get customProfiles(): readonly CremaProfile[] {
+		return this.custom;
+	}
+
 	applyBackupMeta(
 		meta: {
 			pinned?: string[];

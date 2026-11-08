@@ -8,7 +8,32 @@ import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
 import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
 import { methodLabel } from '#lib/brew/methods.js';
 import { BrewMethodStyle } from '#lib/core/crema-core.js';
-import { backupNote, buildBackupJsonl, describeBackupGaps, restoreBackup } from './index';
+import {
+	backupNote,
+	buildBackupJsonl,
+	describeBackupGaps,
+	restoreBackup,
+	type RestoreMode
+} from './index';
+import { refusalMessage } from '#lib/restore/report.js';
+
+/** Restore `text` as the user would say yes to it, with the old summary's counts. */
+async function restore(text: string, mode: RestoreMode) {
+	const { outcome } = await restoreBackup(text, mode);
+	if (outcome.kind !== 'done') {
+		throw new Error(outcome.kind === 'refused' ? refusalMessage(outcome.plan) : outcome.kind);
+	}
+	const p = outcome.plan;
+	return {
+		beans: p.beans.add.length,
+		roasters: p.roasters.add.length,
+		shots: p.shots.add.length + p.shots.revive.length,
+		profiles: p.profiles.add.length,
+		recipes: p.recipes.add.length,
+		customMethods: p.customMethods.add.length,
+		droppedShots: p.shots.notAdded
+	};
+}
 
 /**
  * Round-trip tests for the whole-app backup/restore (review #07). The runes
@@ -83,7 +108,7 @@ describe('backup round-trip (review #07)', () => {
 		expect(built).not.toBeNull();
 
 		resetAll(); // simulate restoring onto a fresh device
-		const summary = restoreBackup(built!.jsonl, 'wipe');
+		const summary = await restore(built!.jsonl, 'wipe');
 
 		expect(summary).toMatchObject({ beans: 1, roasters: 1, shots: 1, profiles: 1 });
 		expect(getBeanStore().beans.map((b) => b.id)).toContain(ids.beanId);
@@ -107,7 +132,7 @@ describe('backup round-trip (review #07)', () => {
 
 		resetAll();
 		getBeanStore().bulkAdd([{ ...blankBean('bean-2'), name: 'Kenya' }], []); // a different bag
-		const summary = restoreBackup(built.jsonl, 'merge');
+		const summary = await restore(built.jsonl, 'merge');
 
 		expect(summary.beans).toBe(1); // bean-1 added; bean-2 untouched
 		expect(getBeanStore().beans.map((b) => b.id).sort()).toEqual(['bean-1', 'bean-2']);
@@ -121,7 +146,7 @@ describe('backup round-trip (review #07)', () => {
 		for (let i = 0; i < 300; i++) {
 			history.insertPulled({ ...makeShot(`full-${i}`), completedAt: 1_700_000_100_000 + i });
 		}
-		const summary = restoreBackup(built.jsonl, 'merge');
+		const summary = await restore(built.jsonl, 'merge');
 		// The backup's shot is older than everything a full history keeps.
 		expect(summary).toMatchObject({ shots: 0, droppedShots: 1 });
 		expect(history.all).toHaveLength(300);
@@ -132,26 +157,29 @@ describe('backup round-trip (review #07)', () => {
 		const built = (await buildBackupJsonl())!;
 
 		// Restore the same bundle without clearing — every id already exists.
-		const summary = restoreBackup(built.jsonl, 'merge');
+		const summary = await restore(built.jsonl, 'merge');
 
 		expect(summary).toMatchObject({ beans: 0, roasters: 0, shots: 0, profiles: 0 });
 		expect(getBeanStore().beans.length).toBe(1);
 		expect(getHistoryStore().all.length).toBe(1);
 	});
 
-	it('skips a malformed JSONL line without dropping the rest', async () => {
+	it('a malformed line: Replace changes nothing, Merge skips it and keeps the rest', async () => {
 		seed();
 		const built = (await buildBackupJsonl())!;
 
 		resetAll();
 		const corrupted = built.jsonl.replace('\n', '\n{ this is not valid json \n');
-		expect(() => restoreBackup(corrupted, 'wipe')).not.toThrow();
+		await expect(restore(corrupted, 'wipe')).rejects.toThrow(/damaged/);
+		expect(getBeanStore().beans.length).toBe(0);
+		expect(getHistoryStore().all.length).toBe(0);
+		await restore(corrupted, 'merge');
 		expect(getBeanStore().beans.length).toBe(1);
 		expect(getHistoryStore().all.length).toBe(1);
 	});
 
-	it('throws on a file without the crema-backup header', () => {
-		expect(() => restoreBackup('{"kind":"something-else"}\n', 'merge')).toThrow(
+	it('refuses a file without the crema-backup header', async () => {
+		await expect(restore('{"kind":"something-else"}\n', 'merge')).rejects.toThrow(
 			/not a crema backup/i
 		);
 	});
@@ -171,7 +199,7 @@ describe('backup round-trip (review #07)', () => {
 
 		resetAll();
 		expect(getRecipeStore().backupRecipes()).toHaveLength(0);
-		const summary = restoreBackup(built.jsonl, 'wipe');
+		const summary = await restore(built.jsonl, 'wipe');
 		expect(summary.recipes).toBe(1);
 		const restored = getRecipeStore().get(copy.id)!;
 		expect(restored.name).toBe('Ultimate V60 (copy)');
@@ -223,7 +251,7 @@ describe('backup round-trip (review #07)', () => {
 		resetAll();
 		expect(methods.backupMethods()).toHaveLength(0);
 		// With the method list gone, the row falls back to its snapshot.
-		const summary = restoreBackup(built.jsonl, 'wipe');
+		const summary = await restore(built.jsonl, 'wipe');
 		expect(summary.customMethods).toBe(2);
 		expect(getCustomMethodStore().live.map((m) => m.label)).toEqual(['ORB']);
 		expect(getCustomMethodStore().get(gone.id)?.deletedAt).toBeTypeOf('number');
@@ -232,7 +260,7 @@ describe('backup round-trip (review #07)', () => {
 		expect(restored.brewMethodLabel).toBe('Old brewer');
 		expect(methodLabel(restored.brewMethod, restored.brewMethodLabel)).toBe('Old brewer');
 		// A merge re-restore adds nothing.
-		expect(restoreBackup(built.jsonl, 'merge').customMethods).toBe(0);
+		expect((await restore(built.jsonl, 'merge')).customMethods).toBe(0);
 	});
 });
 
@@ -254,7 +282,7 @@ describe('one unreadable row (#329)', () => {
 		expect(header(built.jsonl)).toMatchObject({ shotCount: 1, omittedCount: 1 });
 
 		resetAll();
-		expect(restoreBackup(built.jsonl, 'wipe').shots).toBe(1);
+		expect((await restore(built.jsonl, 'wipe')).shots).toBe(1);
 		expect(getHistoryStore().get(ids.shotId)).toBeDefined();
 		expect(getHistoryStore().get('shot:bad')).toBeUndefined();
 	});

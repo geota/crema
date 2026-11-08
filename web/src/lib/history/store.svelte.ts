@@ -367,6 +367,33 @@ export class HistoryStore {
 		return fitsHistory(this.all, at, MAX_RECORDS);
 	}
 
+	/**
+	 * A restore's history (restore-safety step 7). The series go first, with no
+	 * change to memory, so rows never name a series that isn't written; then
+	 * memory, {@link known} and the rows write happen in one task, so an edit
+	 * can't reach a half-applied history. Nothing is deleted here or evicted:
+	 * the restore's marker owns its deletes. `series` are the rows whose curve
+	 * to write. Says whether the rows were stored, and how many curves weren't.
+	 */
+	async restoreRows(
+		next: StoredShot[],
+		series: readonly StoredShot[]
+	): Promise<{ stored: boolean; curvesFailed: number }> {
+		let curvesFailed = 0;
+		for (const shot of series) {
+			if (shot.record.samples.length === 0) continue;
+			try {
+				await putSeries(shot.id, shot.record.samples);
+			} catch {
+				curvesFailed++;
+			}
+		}
+		this.shots = next;
+		if (this.writeRows() !== 'ok') return { stored: false, curvesFailed };
+		this.markLive(next.map((s) => s.id));
+		return { stored: true, curvesFailed };
+	}
+
 	/** Wipe all recorded shots — for a "replace from backup" restore. */
 	clearAllShots(): void {
 		this.shots = [];
@@ -1220,7 +1247,7 @@ function coerceRow(item: unknown): StoredShot | null {
  *
  * Returns `null` only when the record is too corrupt to recover.
  */
-function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
+export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 	const tagsRaw = obj.tags;
 	const tags = Array.isArray(tagsRaw)
 		? tagsRaw.filter((t): t is string => typeof t === 'string')

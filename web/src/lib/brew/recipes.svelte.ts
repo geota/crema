@@ -416,6 +416,27 @@ export class RecipeStore {
 		return added.length;
 	}
 
+	/** The user's own recipes, as stored: a restore plans against these. */
+	get ownRecipes(): readonly BrewRecipe[] {
+		return this.recipes;
+	}
+
+	/**
+	 * The recipes a restore leaves, and its defaults and hidden built-ins when
+	 * the plan applies them. Memory first, then the writes. Whether all landed.
+	 */
+	restore(recipes: BrewRecipe[], meta: { defaults: Record<string, string>; hidden: string[] } | null): boolean {
+		this.recipes = recipes;
+		let ok = writeJsonChecked(RECIPES_KEY, this.recipes);
+		if (meta) {
+			this.lastUsed = { ...meta.defaults };
+			this.hidden = meta.hidden.filter((id) => isBuiltinRecipe(id));
+			ok = writeJsonChecked(LAST_USED_KEY, this.lastUsed) && ok;
+			ok = writeJsonChecked(HIDDEN_KEY, this.hidden) && ok;
+		}
+		return ok;
+	}
+
 	private persist(): void {
 		writeJsonChecked(RECIPES_KEY, this.recipes);
 	}

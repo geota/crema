@@ -81,7 +81,7 @@ describe('settings pushes (F15)', () => {
 			JSON.stringify({ kind: 'crema-backup/v1', createdAt: 1 }),
 			JSON.stringify({ kind: 'settings', _shell: 'web', common, lineFrequencyHz: 50 })
 		].join('\n');
-		restoreBackup(bundle, 'wipe');
+		await restoreBackup(bundle, 'wipe');
 		expect(h.last()).toMatchObject(common);
 		expect(h.lastHz()).toBe(50);
 		// The steam / hot-water packet's push goes with it, the dose included.

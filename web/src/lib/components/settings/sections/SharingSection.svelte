@@ -18,7 +18,7 @@
 	 * shared `ActivityLog`.
 	 */
 	import { onMount } from 'svelte';
-	import { getHistoryStore, historyDroppedNotice } from '#lib/history/index.js';
+	import { getHistoryStore } from '#lib/history/index.js';
 	import { shotHistoryJsonl } from '#lib/history/crema-jsonl.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import {
@@ -60,13 +60,16 @@
 		driveBackupRefusal,
 		describeBackupGaps,
 		describeBackup,
-		restoreBackupData,
 		applyHeldRestoreChanges,
 		describeHeldRestoreChanges,
+		webSingletons,
 		type HeldRestoreChanges,
 		type RestoreMode
 	} from '#lib/backup/index.js';
-	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { planNow, prepareBackup, runRestore } from '#lib/restore/engine.js';
+	import { confirmText, deletedHere, outcomeMessage, refusalMessage } from '#lib/restore/report.js';
+	import { Verdict, type RestorePlan } from '#lib/core/crema-core.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
 	import { readImportBytes } from '#lib/utils/import-limits.js';
 	import { credentialsStoredUnencrypted } from '#lib/security/credential-status.js';
@@ -350,21 +353,9 @@
 	let restoreInput = $state<HTMLInputElement | null>(null);
 	let pendingRestoreMode = $state<RestoreMode>('merge');
 
-	/** Open the file picker for a restore. A REPLACE (wipe) is gated by a
-	 *  confirm first — it deletes everything before loading the backup. */
-	async function pickRestore(mode: RestoreMode): Promise<void> {
-		if (
-			mode === 'wipe' &&
-			!(await confirmDialog({
-				title: 'Replace everything?',
-				message:
-					"Replace everything on this device with a backup? Your current profiles, beans, roasters and shots are deleted first. This can't be undone.",
-				confirmLabel: 'Choose backup',
-				danger: true
-			}))
-		) {
-			return;
-		}
+	/** Open the file picker for a restore. A Replace asks after the pick, with
+	 *  the real numbers. */
+	function pickRestore(mode: RestoreMode): void {
 		pendingRestoreMode = mode;
 		if (restoreInput) {
 			restoreInput.value = '';
@@ -393,22 +384,86 @@
 		return ok;
 	}
 
-	/** Read the chosen `.crema` file + apply it (merge or replace). */
+	/**
+	 * Plan a restore, show the report where the plan or the mode needs a yes,
+	 * then run it and say how it went. A clean Merge runs at once. Replace
+	 * offers Back up first; a Merge with shots deleted here offers to bring
+	 * them back. If the device changed while the report was open, the new
+	 * numbers are shown and asked again.
+	 */
+	async function restoreFlow(
+		data: ArrayBuffer | Uint8Array,
+		mode: RestoreMode,
+		name: string,
+		say: (line: string) => void
+	): Promise<string> {
+		const prepared = prepareBackup(data, name);
+		let revive = false;
+		let plan: RestorePlan = await planNow(prepared, mode);
+		let ask = plan.verdict === Verdict.Confirm || deletedHere(plan) > 0;
+		for (;;) {
+			if (plan.verdict === Verdict.Refused) return refusalMessage(plan);
+			if (ask) {
+				const { title, message } = confirmText(plan);
+				if (mode === 'wipe') {
+					const choice = await choiceDialog({
+						title,
+						message,
+						primaryLabel: 'Back up first',
+						secondaryLabel: 'Replace'
+					});
+					if (choice === null) return 'Nothing was changed.';
+					if (choice === 'primary') {
+						say(await runBackup());
+						plan = await planNow(prepared, mode);
+						continue;
+					}
+				} else if (deletedHere(plan) > 0 && !revive) {
+					const choice = await choiceDialog({
+						title,
+						message,
+						primaryLabel: 'Restore',
+						secondaryLabel: 'Bring them back too'
+					});
+					if (choice === null) return 'Nothing was changed.';
+					if (choice === 'secondary') {
+						revive = true;
+						plan = await planNow(prepared, mode, true);
+					}
+				} else if (!(await confirmDialog({ title, message, confirmLabel: 'Restore' }))) {
+					return 'Nothing was changed.';
+				}
+			}
+			say('Restoring… Other Crema tabs will reload when this finishes.');
+			const singletons = webSingletons();
+			const outcome = await runRestore(
+				prepared,
+				mode,
+				{ reviveDeleted: revive, expected: plan },
+				{ singletons: singletons.sink }
+			);
+			if (outcome.kind === 'changed') {
+				plan = outcome.plan;
+				ask = true;
+				say(outcomeMessage(outcome));
+				continue;
+			}
+			let line = outcomeMessage(outcome);
+			const held = singletons.held();
+			if (held && !(await confirmHeldRestoreChanges(held))) {
+				line += ' Kept your webhook / Visualizer sharing settings.';
+			}
+			return line;
+		}
+	}
+
+	/** Read the chosen `.crema` file and restore it (merge or replace). */
 	async function onRestoreFile(event: Event): Promise<void> {
 		const file = (event.target as HTMLInputElement).files?.[0];
 		if (!file) return;
 		try {
-			const r = await restoreBackupData(await readImportBytes(file), pendingRestoreMode);
-			const verb = pendingRestoreMode === 'wipe' ? 'Replaced —' : 'Merged —';
-			restoreNote =
-				`${verb} ${r.profiles} profile(s), ${r.beans} bean(s), ` +
-				`${r.roasters} roaster(s), ${r.shots} shot(s)` +
-				(r.recipes > 0 ? `, ${r.recipes} recipe(s)` : '') +
-				(r.settingsApplied ? ' + settings.' : '.') +
-				historyDroppedNotice(r.droppedShots, history.capacity);
-			if (r.held && !(await confirmHeldRestoreChanges(r.held))) {
-				restoreNote += ' Kept your webhook / Visualizer sharing settings.';
-			}
+			const say = (line: string) => (restoreNote = line);
+			restoreNote = await restoreFlow(await readImportBytes(file), pendingRestoreMode, file.name, say);
 		} catch (err) {
 			restoreNote = err instanceof Error ? `Restore failed: ${err.message}` : 'Restore failed.';
 		}
@@ -476,33 +531,15 @@
 		}
 	}
 
-	/** Restore the backup `file` — merge (add) or replace (wipe first). */
+	/** Restore the backup `file`, merge or replace, through the same report. */
 	async function driveRestore(file: DriveFile, mode: RestoreMode): Promise<void> {
-		if (
-			mode === 'wipe' &&
-			!(await confirmDialog({
-				title: 'Replace from Drive?',
-				message: `Replace everything on this device with your Google Drive backup from ${backupDate(file)}? Your current profiles, beans, roasters and shots are deleted first. This can't be undone.`,
-				confirmLabel: 'Replace',
-				danger: true
-			}))
-		) {
-			return;
-		}
 		driveBusy = true;
 		driveNote = 'Fetching from Drive…';
 		try {
 			const token = await drive.accessToken();
 			const bytes = await downloadBackup(token, file.id);
-			const r = await restoreBackupData(bytes, mode);
 			driveFiles = null;
-			driveNote =
-				`Restored from Drive (${file.name}) — ${r.profiles} profile(s), ` +
-				`${r.beans} bean(s), ${r.shots} shot(s)${r.settingsApplied ? ' + settings.' : '.'}` +
-				historyDroppedNotice(r.droppedShots, history.capacity);
-			if (r.held && !(await confirmHeldRestoreChanges(r.held))) {
-				driveNote += ' Kept your webhook / Visualizer sharing settings.';
-			}
+			driveNote = await restoreFlow(bytes, mode, file.name, (line) => (driveNote = line));
 		} catch (err) {
 			driveNote = err instanceof Error ? `Drive restore failed: ${err.message}` : 'Drive restore failed.';
 		} finally {
@@ -736,7 +773,7 @@
 	</StRow>
 	<StRow
 		title="Restore — replace"
-		sub={restoreNote ?? "Wipe this device, then restore fully from a backup. Can't be undone."}
+		sub={restoreNote ?? "Make this device match a backup. You'll see what changes first."}
 	>
 		{#snippet control()}
 			<StButton label="Replace" icon="trash" onClick={() => void pickRestore('wipe')} />

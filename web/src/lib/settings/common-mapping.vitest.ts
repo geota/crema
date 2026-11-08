@@ -233,7 +233,7 @@ describe('pre-unification flat settings go through the core sanitize too (F15)',
 			JSON.stringify({ kind: 'crema-backup/v1', createdAt: 1 }),
 			JSON.stringify({ kind: 'settings', _shell: 'web', tempUnit: 'F', fanThresholdC: -5 })
 		].join('\n');
-		restoreBackup(bundle, 'wipe');
+		await restoreBackup(bundle, 'wipe');
 		expect(store.current.tempUnit).toBe('F');
 		expect(store.current.fanThresholdC).toBe(0);
 		store.set('tempUnit', 'C');
