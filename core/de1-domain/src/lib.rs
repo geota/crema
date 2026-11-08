@@ -133,10 +133,11 @@ pub use auto_tare::{
     MAX_PRE_SHOT_ZERO_OFFSET_G, TareSettleWindow, pre_shot_zero_offset,
 };
 pub use backup_plan::{
-    BackupLine, BackupManifest, BackupScan, LineError, LocalState, ParsedBackupLine, RestoreMode,
-    RestoreOpts, RestorePlan, common_is_pristine, common_is_pristine_json, import_backup_bytes,
-    import_backup_bytes_json, parse_backup_line, parse_backup_line_json, parse_backup_line_parsed,
-    plan_restore, plan_restore_json, scan_backup_bytes, scan_backup_bytes_json,
+    BackupImport, BackupLine, BackupManifest, BackupRecord, BackupScan, LineError, LocalState,
+    MAX_BACKUP_LINE_BYTES, ParsedBackupLine, RestoreMode, RestoreOpts, RestorePlan,
+    common_is_pristine, common_is_pristine_json, import_backup_bytes, import_backup_bytes_json,
+    parse_backup_line, parse_backup_line_json, parse_backup_line_parsed, plan_restore,
+    plan_restore_json, scan_backup_bytes, scan_backup_bytes_json,
 };
 pub use backup_retention::{
     AutoBackupName, AutoBackupRetention, BackupCounts, BackupFile, BackupFileInfo, BackupShrink,
