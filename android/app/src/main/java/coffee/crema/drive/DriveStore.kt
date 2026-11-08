@@ -60,6 +60,11 @@ data class DriveState(
     /** This install's newest daily copy on Drive when a damage was seen, by
      *  file id: retention keeps it, as it's from before. Additive. */
     val preDamageCopy: String? = null,
+    /** A restore finished after [preDamageCopy] was pinned: the damage it
+     *  guarded is dealt with, so a newer damage pins again rather than the
+     *  30-day hold keeping the old pin. Retention still keeps the pin until
+     *  then. Additive. */
+    val pinReleased: Boolean = false,
     /** Google ended the sign-in. Signed out, with a lasting banner until the
      *  user reconnects or disconnects. Additive. */
     val needsReconnect: Boolean = false,
