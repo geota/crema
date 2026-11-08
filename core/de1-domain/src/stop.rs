@@ -861,6 +861,7 @@ mod tests {
             volume_limit: limit,
             max_time,
             volume_stop_with_scale: false,
+            limit_from_ml: 0.0,
         }
     }
 
