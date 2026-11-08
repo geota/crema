@@ -278,6 +278,11 @@ class RestoreMatrixTest(private val name: String) {
 
     private fun photoOf(side: String, id: String) = "$side:$id".toByteArray()
 
+    /** `bean-images/`, by file name, with each file's text. */
+    private fun photoFiles(): Map<String, String> =
+        BeanImageStore.beanImageFile(app, "x").parentFile!!.listFiles().orEmpty()
+            .filter { it.isFile }.associate { it.name to it.readText() }
+
     // ── The local state, seeded into the real stores ─────────────────────────
 
     private fun <T> decodeRow(kind: String, id: String, serializer: kotlinx.serialization.KSerializer<T>): T =
@@ -425,6 +430,7 @@ class RestoreMatrixTest(private val name: String) {
         if (c.local["machineBusy"].isTrue()) startShot(vm)
         val before = localState(vm)
         val maintenanceBefore = vm.ui.value.maintenance
+        val photosBefore = photoFiles()
 
         // Plan, and the case's pointers.
         val bytes = backupBytes(c)
@@ -452,6 +458,8 @@ class RestoreMatrixTest(private val name: String) {
         if (!ran) {
             fun LocalState.stores() = copy(health = emptyList(), machineBusy = false)
             assertEquals(before.stores(), after.stores(), "$name: a refused restore changes nothing")
+            // The zip's photos were read before the verdict: none reached the photo store.
+            assertEquals(photosBefore, photoFiles(), "$name: a refused restore's photos stay out of bean-images")
             return
         }
         readBack(c, plan, records, before, after, vm2, maintenanceBefore)
