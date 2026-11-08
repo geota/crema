@@ -96,10 +96,10 @@ impl Invariant {
             | Self::I9
             | Self::I10
             | Self::I11
+            | Self::I13
             | Self::I17
             | Self::I20
             | Self::I21 => Status::Enforced,
-            Self::I13 => Status::PendingPr(8),
         }
     }
 }

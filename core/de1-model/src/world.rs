@@ -105,6 +105,9 @@ pub struct Coverage {
     pub weight_stops: u32,
     /// `StopTriggered` on the estimate.
     pub estimated_stops: u32,
+    /// Espresso sessions with a load that changed while no readings arrived,
+    /// which I13 skips (§3.5's known limit).
+    pub unseen_loads: u32,
     /// `StopTriggered` on volume.
     pub volume_stops: u32,
     /// `StopRetried`.
@@ -235,6 +238,18 @@ pub struct World {
     replacing: bool,
     /// The core heard this espresso session flow on an unknown substate.
     unknown_flow: bool,
+    /// A load changed on this espresso's scale while no readings were
+    /// arriving: §3.5's known limit. It reads as coffee before or after the
+    /// gate, so I13 can't hold; the oracle skips I13 for the rest of the
+    /// session (if the core's gate opened with the load in its reading, `last`
+    /// carries it even after it lifts). A load seen arriving on a live reading
+    /// is still judged. Rule (b)'s own tests judge a lift before the gate.
+    unseen_load: bool,
+    /// This espresso opened from a zeroed cup: a tare, or `|net| ≤ 2 g`.
+    /// Auto-tare off on a loaded scale has no weight-stop guarantee (§3.5).
+    opened_near_zero: bool,
+    /// The load on the scale at the last reading, grams.
+    last_load: f32,
     /// What the run reached.
     pub coverage: Coverage,
     /// What broke.
@@ -310,6 +325,9 @@ impl World {
             stopped_this_flow: false,
             replacing: false,
             unknown_flow: false,
+            unseen_load: false,
+            opened_near_zero: true,
+            last_load: 0.0,
             coverage: Coverage::default(),
             violations: Vec::new(),
             requests: Vec::new(),
@@ -629,12 +647,38 @@ impl World {
         }
     }
 
+    /// A load the core can't see: one that changed while no readings were
+    /// arriving. Called on each reading, before it counts as heard.
+    fn watch_unseen_load(&mut self) {
+        let pouring = self.open_mode == Some(ActiveMode::Espresso) && self.flowed;
+        if !pouring {
+            return;
+        }
+        // A reading missed: the sim's scale reports every step.
+        let gap = self
+            .last_weight_ms
+            .is_none_or(|at| self.now.saturating_sub(at) > STEP_MS);
+        let load = self.scale.as_ref().map_or(0.0, |s| s.load_now(self.now));
+        let changed = load != std::mem::replace(&mut self.last_load, load);
+        if gap && changed && load != 0.0 && !std::mem::replace(&mut self.unseen_load, true) {
+            self.coverage.unseen_loads += 1;
+        }
+    }
+
     /// I13's zero for a new espresso session: what the scale reads now.
     fn scale_zero_at_open(&mut self) {
+        self.unseen_load = false;
+        self.last_load = self.scale.as_ref().map_or(0.0, |s| s.load_now(self.now));
         let (now, cup) = (self.now, self.cup.grams);
-        if let Some(scale) = self.scale.as_mut() {
-            scale.session_opened(now, cup);
-        }
+        let reads = self
+            .scale
+            .as_mut()
+            .map(|scale| scale.session_opened(now, cup));
+        // The gate and rule (b) assume a session starts from a zeroed cup: a
+        // tare at the start, or a scale already near zero (the pre-shot zero
+        // correction's 2 g). With auto-tare off on a loaded scale, the zero is
+        // the user's and the design makes no weight-stop promise.
+        self.opened_near_zero = self.auto_tare || reads.is_none_or(|g| g.abs() <= 2.0);
     }
 
     /// I6 both ways: the core's reading of the session matches the oracle's.
@@ -738,6 +782,7 @@ impl World {
             scale.zero_is_users(cup);
         }
         if let Some(grams) = reading {
+            self.watch_unseen_load();
             self.stale_open = false;
             self.dead_open = false;
             self.weights_heard += 1;
@@ -1181,6 +1226,8 @@ impl World {
                             .as_ref()
                             .map_or(self.cup.grams, |s| s.true_net(self.cup.grams));
                         if !self.read_only
+                            && !self.unseen_load
+                            && self.opened_near_zero
                             && self.open_mode == Some(ActiveMode::Espresso)
                             // Not a stop that lands on another mode the core
                             // didn't hear the machine enter.

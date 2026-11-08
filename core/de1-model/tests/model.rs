@@ -206,6 +206,7 @@ fn the_generator_reaches_what_the_invariants_watch() {
         total.stops += c.stops;
         total.weight_stops += c.weight_stops;
         total.estimated_stops += c.estimated_stops;
+        total.unseen_loads += c.unseen_loads;
         total.volume_stops += c.volume_stops;
         total.retries += c.retries;
         total.not_honoured += c.not_honoured;
@@ -799,6 +800,22 @@ fn a_load_after_the_gate_stays_within_tolerance() {
     }
 }
 
+/// The known limit (`DESIGN.md` §3.5): a scale back from a gap before the gate
+/// already carrying a load reads it as coffee and can stop early. The oracle
+/// skips I13 for exactly this shape, while the load stays.
+#[test]
+fn a_scale_back_loaded_before_the_gate_is_the_known_limit() {
+    let mut world = World::new(De1Params::default(), 50.0, 5_000, false, false);
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    world.apply(&Op::Advance { ms: 3_000 });
+    world.apply(&Op::Scale(ScaleMode::Silent));
+    world.apply(&Op::Advance { ms: 5_000 });
+    world.apply(&Op::Scale(ScaleMode::StepUp { grams: 23.0 }));
+    world.apply(&Op::Advance { ms: 90_000 });
+    assert_eq!(world.coverage.unseen_loads, 1);
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
 /// Drip learning skips a stop that needed a retry. Three shots lose their
 /// stop's first writes, so each overshoots while the core retries; that
 /// overshoot is not drip. The next, clean shot still stops on target.
@@ -828,4 +845,27 @@ fn a_clean_shot_after_ignored_stops_stops_on_target() {
     }
     assert!(world.coverage.retries >= 3, "the first stops were retried");
     assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// The oracle's I13 exemption, as a count per run: `PROPTEST_CASES` cases
+/// (3000 if unset) from a fixed seed. Run with `--ignored --nocapture`.
+#[test]
+#[ignore = "a report, not a gate"]
+fn report_exempted_sessions() {
+    let count = std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(3_000);
+    let (mut exempt, mut shots, mut broken) = (0, 0, 0);
+    for case in sample_cases(count) {
+        let world = run(&case);
+        exempt += world.coverage.unseen_loads;
+        shots += world.coverage.shots;
+        broken += world
+            .violations
+            .iter()
+            .filter(|v| v.invariant.status() == Status::Enforced)
+            .count();
+    }
+    println!("{count} cases: {shots} shots, {exempt} exempted from I13, {broken} violations");
 }
