@@ -51,6 +51,7 @@ fn scale_mode() -> impl Strategy<Value = ScaleMode> {
         }),
         1 => (1u8..250).prop_map(|g| ScaleMode::StepUp { grams: f32::from(g) }),
         1 => Just(ScaleMode::TransientZero),
+        1 => (10u64..60).prop_map(|t| ScaleMode::GapRezero { ms: t * 100 }),
     ]
 }
 
@@ -868,4 +869,45 @@ fn report_exempted_sessions() {
             .count();
     }
     println!("{count} cases: {shots} shots, {exempt} exempted from I13, {broken} violations");
+}
+
+/// The returning check's bounds, each in the model: after the gate the scale
+/// stalls for 2 s and comes back 20 g heavier than the cup could be (the
+/// upper bound), or zeroed (the lower bound). Both are refused, and the
+/// estimate stops the shot near target. Without the upper bound the 20 g is
+/// adopted and I13 fails; without the lower bound the re-zero is adopted and
+/// the shot runs on past target, which only this case's bound sees (I13 is an
+/// early-stop invariant).
+#[test]
+fn a_returning_scale_outside_the_band_is_refused() {
+    for back in [
+        ScaleMode::StepUp { grams: 20.0 },
+        ScaleMode::GapRezero { ms: 2_000 },
+    ] {
+        let mut world = plain_world();
+        world.apply(&Op::GroupHead(MachineState::Espresso));
+        while world.true_cup_g() < 20.0 {
+            world.apply(&Op::Advance { ms: 100 });
+        }
+        if back == (ScaleMode::StepUp { grams: 20.0 }) {
+            world.apply(&Op::Scale(ScaleMode::Stall));
+            world.apply(&Op::Advance { ms: 2_000 });
+        }
+        world.apply(&Op::Scale(back));
+        while world.coverage.stops == 0 {
+            world.apply(&Op::Advance { ms: 100 });
+            assert!(world.now_ms() < 120_000, "{back:?}: a stop");
+        }
+        assert!(
+            world.violations.is_empty(),
+            "{back:?}: {:?}",
+            world.violations
+        );
+        assert_eq!(world.coverage.estimated_stops, 1, "{back:?}: on estimate");
+        let cup = world.true_cup_g();
+        assert!(
+            (33.0..40.0).contains(&cup),
+            "{back:?}: stopped at a true {cup} g"
+        );
+    }
 }

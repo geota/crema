@@ -394,6 +394,12 @@ pub enum ScaleMode {
     },
     /// Reads 0 while this mode lasts.
     TransientZero,
+    /// Silent for `ms`, then back having zeroed itself: a re-zero during a
+    /// gap, which the returning check's lower bound refuses.
+    GapRezero {
+        /// How long it's silent, ms.
+        ms: u64,
+    },
 }
 
 /// The scale.
@@ -477,6 +483,16 @@ impl SimScale {
                 Some(0.0)
             }
             ScaleMode::TransientZero => Some(0.0),
+            ScaleMode::GapRezero { ms } => {
+                if now < *self.bump_ends_at.get_or_insert(now + ms) {
+                    None
+                } else {
+                    self.zero_g = gross;
+                    self.rezeroed = true;
+                    self.mode = ScaleMode::Healthy;
+                    Some(0.0)
+                }
+            }
         }
     }
 

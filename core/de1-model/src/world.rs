@@ -239,12 +239,21 @@ pub struct World {
     /// The core heard this espresso session flow on an unknown substate.
     unknown_flow: bool,
     /// A load changed on this espresso's scale while no readings were
-    /// arriving: §3.5's known limit. It reads as coffee before or after the
-    /// gate, so I13 can't hold; the oracle skips I13 for the rest of the
-    /// session (if the core's gate opened with the load in its reading, `last`
-    /// carries it even after it lifts). A load seen arriving on a live reading
-    /// is still judged. Rule (b)'s own tests judge a lift before the gate.
+    /// arriving, and the core can't see it (§3.5's known limit): before the
+    /// gate, where `Tared` has no returning check; after it, only a load the
+    /// returning check or the step band accepts. It reads as coffee, so I13
+    /// is skipped for the rest of the session: not only while the load stays,
+    /// because once the core's gate opens with the load in its reading, `last`
+    /// carries it, and when the load lifts the estimate counts from there (the
+    /// model shrank that to a true 29.8 g of 36). A load seen arriving on a
+    /// live reading, or one the core refuses, is judged.
     unseen_load: bool,
+    /// The oracle's gate: since when the true cup has held 5 g with the
+    /// scale reporting, and whether that held 1 s.
+    gate_since: Option<u64>,
+    gate_seen: bool,
+    /// The true cup at the last reading, grams.
+    last_cup_g: f32,
     /// This espresso opened from a zeroed cup: a tare, or `|net| ≤ 2 g`.
     /// Auto-tare off on a loaded scale has no weight-stop guarantee (§3.5).
     opened_near_zero: bool,
@@ -326,6 +335,9 @@ impl World {
             replacing: false,
             unknown_flow: false,
             unseen_load: false,
+            gate_since: None,
+            gate_seen: false,
+            last_cup_g: 0.0,
             opened_near_zero: true,
             last_load: 0.0,
             coverage: Coverage::default(),
@@ -654,20 +666,45 @@ impl World {
         if !pouring {
             return;
         }
-        // A reading missed: the sim's scale reports every step.
-        let gap = self
+        let gap_ms = self
             .last_weight_ms
-            .is_none_or(|at| self.now.saturating_sub(at) > STEP_MS);
+            .map_or(u64::MAX, |at| self.now.saturating_sub(at));
         let load = self.scale.as_ref().map_or(0.0, |s| s.load_now(self.now));
-        let changed = load != std::mem::replace(&mut self.last_load, load);
-        if gap && changed && load != 0.0 && !std::mem::replace(&mut self.unseen_load, true) {
-            self.coverage.unseen_loads += 1;
+        let load_step = load - std::mem::replace(&mut self.last_load, load);
+        let cup = self.true_cup_g();
+        let gain = cup - std::mem::replace(&mut self.last_cup_g, cup);
+        // A reading missed (the sim's scale reports every step), and the load
+        // changed meanwhile.
+        if gap_ms > STEP_MS && load_step != 0.0 && load != 0.0 {
+            #[allow(clippy::cast_precision_loss)]
+            let gap_s = gap_ms.min(60_000) as f32 / 1000.0;
+            let step = gain + load_step;
+            let accepted = if gap_ms >= 1_000 {
+                // A return: `Tared` has no check; after the gate, the core's
+                // band, `last − 3 g` to `last + 1.5 × poured + 5 g`.
+                !self.gate_seen || (-3.0..=1.5 * gain.max(0.0) + 5.0).contains(&step)
+            } else {
+                // Not a return: the step band, `3 g + 12 g/s × dt`.
+                step.abs() <= 3.0 + 12.0 * gap_s
+            };
+            if accepted && !std::mem::replace(&mut self.unseen_load, true) {
+                self.coverage.unseen_loads += 1;
+            }
+        }
+        if cup >= 5.0 {
+            let since = *self.gate_since.get_or_insert(self.now);
+            self.gate_seen |= self.now.saturating_sub(since) >= 1_000;
+        } else {
+            self.gate_since = None;
         }
     }
 
     /// I13's zero for a new espresso session: what the scale reads now.
     fn scale_zero_at_open(&mut self) {
         self.unseen_load = false;
+        self.gate_since = None;
+        self.gate_seen = false;
+        self.last_cup_g = self.true_cup_g();
         self.last_load = self.scale.as_ref().map_or(0.0, |s| s.load_now(self.now));
         let (now, cup) = (self.now, self.cup.grams);
         let reads = self
