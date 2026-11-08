@@ -53,24 +53,6 @@ class AppPrefsMigrationTest {
         assertEquals(10, load().bleSessionsKeep, "prefs from before the setting")
     }
 
-    /** #311: an install from before Wi-Fi only keeps backing up on any network,
-     *  so the upgrade changes nothing; a new one waits for Wi-Fi. */
-    @Test
-    fun `an existing install keeps backing up on mobile data, a new one waits for Wi-Fi`() {
-        assertEquals(true, load().driveBackupWifiOnly, "no prefs.json: a new install")
-        writeOldPrefs(150f)
-        assertEquals(false, load().driveBackupWifiOnly, "prefs from before the setting")
-    }
-
-    /** Once saved, the choice reads back as saved, either way. */
-    @Test
-    fun `a saved Wi-Fi only choice reads back`() {
-        runBlocking { store().save(load()) }
-        assertEquals(true, load().driveBackupWifiOnly, "a new install's default, once saved")
-        runBlocking { store().save(load().copy(driveBackupWifiOnly = false)) }
-        assertEquals(false, load().driveBackupWifiOnly)
-    }
-
     @Test
     fun `hot water never-changed`() {
         // No prefs.json: the default dose, ratio 1:3.

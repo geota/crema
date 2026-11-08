@@ -209,9 +209,7 @@ data class AppPrefs(
     /** Automatic Drive backup weekly rather than daily (#311). Per-device. */
     val driveBackupWeekly: Boolean = false,
     /** Automatic backups only on an unmetered network (#311): off it, one is
-     *  skipped without stamping, and checked again at the next launch. On for
-     *  a new install; one from before the setting keeps backing up on any
-     *  network, so an upgrade changes nothing. */
+     *  skipped without stamping, and checked again at the next launch. */
     val driveBackupWifiOnly: Boolean = true,
     /** BLE sessions whose raw capture is kept (#311): a count,
      *  [coffee.crema.ble.BleSessionRecorder.SESSIONS_OFF] or `SESSIONS_ALL`.
@@ -504,9 +502,7 @@ private data class PersistedPrefs(
     val keepConnectedScreenOff: Boolean? = null,
     val autoDriveBackup: Boolean = true,
     val driveBackupWeekly: Boolean = false,
-    /** Absent in a file from before the setting: that install keeps backing up
-     *  on any network. */
-    val driveBackupWifiOnly: Boolean? = null,
+    val driveBackupWifiOnly: Boolean = true,
     /** Absent in a file from before the setting: that install keeps today's 10. */
     val bleSessionsKeep: Int? = null,
     val autoUpdateCheck: Boolean = false,
@@ -564,7 +560,7 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     keepConnectedScreenOff = keepConnectedScreenOff,
     autoDriveBackup = autoDriveBackup,
     driveBackupWeekly = driveBackupWeekly,
-    driveBackupWifiOnly = driveBackupWifiOnly ?: false,
+    driveBackupWifiOnly = driveBackupWifiOnly,
     bleSessionsKeep = bleSessionsKeep ?: coffee.crema.ble.BleSessionRecorder.EXISTING_SESSIONS_KEEP,
     autoUpdateCheck = autoUpdateCheck,
     lastUpdateCheckAtMs = lastUpdateCheckAtMs,
