@@ -337,6 +337,12 @@ export interface StoredShot {
 	 */
 	decentId?: string | null;
 	/**
+	 * The Visualizer row's `updated_at` (unix s) when a pull last merged it:
+	 * a pull skips a row at this version. Core `StoredShot::visualizer_updated_at`
+	 * (so backups keep it); never uploaded.
+	 */
+	visualizerUpdatedAt?: number | null;
+	/**
 	 * The DE1 this shot was pulled on, stamped at record time (#84). The
 	 * Decent upload needs the serial (the server checks it belongs to the
 	 * account); a shot recorded before this field falls back to the

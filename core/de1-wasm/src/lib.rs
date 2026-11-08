@@ -1820,6 +1820,58 @@ pub fn pull_covers_attempt(since_ms: f64, attempted_at_ms: Option<f64>) -> bool 
     de1_domain::pull_covers_attempt(f64_to_ms(since_ms), attempted_at_ms.map(f64_to_ms))
 }
 
+/// What a pulled shot may change on its row: a JSON `ShotPatch`. See
+/// `de1_domain::merge_remote_shot`.
+///
+/// # Errors
+/// When the input doesn't parse.
+#[wasm_bindgen(js_name = mergeRemoteShot)]
+pub fn merge_remote_shot(payload: &str) -> Result<String, String> {
+    de1_domain::merge_remote_shot_json(payload)
+}
+
+/// A JSON tag list as Visualizer stores it. See `de1_domain::normalize_tags`.
+///
+/// # Errors
+/// When the input isn't a string array.
+#[wasm_bindgen(js_name = normalizeTags)]
+pub fn normalize_tags(list: &str) -> Result<String, String> {
+    de1_domain::normalize_tags_json(list)
+}
+
+/// Record a tag edit onto JSON `TagMarks`. See `de1_domain::mark_tag_edit`.
+///
+/// # Errors
+/// When an input doesn't parse.
+#[wasm_bindgen(js_name = markTagEdit)]
+pub fn mark_tag_edit(marks: &str, before: &str, after: &str) -> Result<String, String> {
+    de1_domain::mark_tag_edit_json(marks, before, after)
+}
+
+/// The JSON `tag_list` a tag push sends. See `de1_domain::tag_push_list`.
+///
+/// # Errors
+/// When an input doesn't parse.
+#[wasm_bindgen(js_name = tagPushList)]
+pub fn tag_push_list(remote: &str, marks: &str) -> Result<String, String> {
+    de1_domain::tag_push_list_json(remote, marks)
+}
+
+/// JSON `TagMarks` after a tag push, or `null` on a tier signal. See
+/// `de1_domain::settle_tag_push`.
+///
+/// # Errors
+/// When an input doesn't parse.
+#[wasm_bindgen(js_name = settleTagPush)]
+pub fn settle_tag_push(
+    current: &str,
+    sent: &str,
+    pushed: &str,
+    reply: &str,
+) -> Result<String, String> {
+    de1_domain::settle_tag_push_json(current, sent, pushed, reply)
+}
+
 /// What a confirmed `/me` means: `"First"`, `"Same"` or `"Changed"`. See
 /// `de1_domain::account_change_action`.
 #[wasm_bindgen(js_name = accountChangeAction)]
