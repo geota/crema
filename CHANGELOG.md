@@ -105,6 +105,19 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Restore shows what it will do first (Android)** — as on the web: after you
+  pick a backup, from a file or Google Drive, Crema works out what changes. A
+  clean Merge runs at once and says what it added; a Merge with warnings, and
+  every Replace, shows the numbers first, and Replace still asks you to type
+  ERASE, now with what it will delete in front of you. Merge keeps your
+  settings, maintenance counters, Visualizer preferences and every row you
+  already have, unless the device is still as a fresh install left it, fills in
+  lost curves, and can bring back shots you deleted here. Replace deletes only
+  what the backup doesn't have, and refuses a damaged backup or one that would
+  empty the device. Each store lands in one write, a restore never runs over a
+  shot or a firmware update, a firmware update can't start during one, and a
+  restore cut off part-way says so at the next launch. Crema no longer picks an
+  active bean for you at launch.
 - **Restore shows what it will do first (web)** — after you pick a backup, Crema
   reads it strictly and works out what changes. A clean Merge runs at once and
   then says what it added; a Merge with warnings, and every Replace, shows the

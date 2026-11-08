@@ -573,3 +573,47 @@ fn beans_a_restore_added_dont_zero_its_shots_debit() {
         "the restore's own bean"
     );
 }
+
+/// History's cap counts unpinned rows only (#311): a device full of pinned rows
+/// still has room, and a pinned backup row always fits.
+#[test]
+fn merge_room_counts_unpinned_rows_only() {
+    let shot = lines_of(include_bytes!("fixtures/backup/web-backup.crema.jsonl"))
+        .into_iter()
+        .find(|l| l["kind"] == "shot")
+        .unwrap();
+    let with = |id: &str, pinned: bool, at: i64| {
+        let mut s = shot.clone();
+        s["id"] = json!(id);
+        s["completedAt"] = json!(at);
+        if pinned {
+            s["pinned"] = json!(true);
+        }
+        s
+    };
+    let bytes = to_bytes(&[
+        json!({ "kind": "crema-backup/v1", "createdAt": 1, "shotCount": 3 }),
+        with("n1", false, 3),
+        with("n2", false, 2),
+        with("np", true, 1),
+    ]);
+    let local: LocalState = serde_json::from_value(json!({
+        "shell": "web",
+        "historyCapacity": 2,
+        "shots": [
+            { "id": "p1", "hasSamples": true, "pinned": true },
+            { "id": "p2", "hasSamples": true, "pinned": true },
+            { "id": "u1", "hasSamples": true },
+        ],
+    }))
+    .unwrap();
+    let plan = plan_restore(
+        &scan_backup_bytes(&bytes),
+        &local,
+        RestoreMode::Merge,
+        RestoreOpts::default(),
+    );
+    // One unpinned row here leaves room for one more: the newest, and the pinned one besides.
+    assert_eq!(plan.shots.add, vec!["n1".to_owned(), "np".to_owned()]);
+    assert_eq!(plan.shots.not_added, 1);
+}

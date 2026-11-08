@@ -130,6 +130,12 @@ class VisualizerPullRunTest {
         setGroupFlow = 0f, frameNumber = 1,
     )
 
+    /** A restore applying, as `restoreState()` says. */
+    @Volatile private var restoring = false
+
+    /** Runs after each pulled row lands. */
+    private var afterApply: () -> Unit = {}
+
     private fun sync(state: VisualizerState): VisualizerSync {
         runBlocking { store.save(state.copy(tokens = tokens, syncAccountId = "u1", prefs = DEFAULT_VISUALIZER_SYNC_PREFS.copy(shotsDirection = "pull"))) }
         return VisualizerSync(
@@ -143,6 +149,7 @@ class VisualizerPullRunTest {
             onShotSynced = { local, remote -> history[local]?.let { history[local] = it.copy(visualizerId = remote) } },
             onPulledShots = { stubs ->
                 stubs.forEach { history[it.id] = it }
+                afterApply()
                 emptySet()
             },
             onApplyRemote = { id, patch, pulled ->
@@ -159,6 +166,7 @@ class VisualizerPullRunTest {
             revoke = {},
             retryTimers = false,
             paceDelay = { waits += it },
+            restoreRunning = { restoring },
         ).also { runBlocking { it.load() } }
     }
 
@@ -198,6 +206,39 @@ class VisualizerPullRunTest {
         assertEquals("Complete", kind(again))
         assertEquals(emptyList<String>(), details())
         assertTrue(requests.first(), requests.first().contains("updated_after=${newest - 61}"))
+    }
+
+    @Test
+    fun `a pull while a restore applies waits for it, and walks nothing`() {
+        addRows(5)
+        val v = sync(VisualizerState(pullCursorEpoch = 1))
+        restoring = true
+        val runs = stored().pullRun
+        val r = run(v)
+        assertEquals("Busy", kind(r))
+        assertEquals(emptyList<String>(), requests)
+        assertEquals(null, stored().shotPullCursor)
+        assertEquals("no run started", runs, stored().pullRun)
+        restoring = false
+        assertEquals("Complete", kind(run(v)))
+    }
+
+    @Test
+    fun `a restore that starts mid-walk stops the run before its next apply, and the cursor waits`() {
+        addRows(10)
+        val v = sync(VisualizerState(pullCursorEpoch = 1))
+        // The restore starts once the third row has landed.
+        val original = history
+        var applied = 0
+        afterApply = { if (++applied == 3) restoring = true }
+        val r = run(v)
+        assertEquals("Busy", kind(r))
+        assertTrue("${r.pulled}", r.pulled in 1..3)
+        assertEquals(r.pulled, original.size)
+        assertEquals("the cursor moves only on a complete run", null, stored().shotPullCursor)
+        restoring = false
+        assertEquals("Complete", kind(run(v)))
+        assertEquals(10, original.size)
     }
 
     @Test

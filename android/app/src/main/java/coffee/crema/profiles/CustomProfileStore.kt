@@ -83,13 +83,14 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
 
     /** Persist the custom profiles (full-JSON strings in; best-effort). A
      *  numbered snapshot older than the last one saved is skipped. */
-    suspend fun save(profiles: List<String>, generation: Long? = null) {
-        if (!SaveFloor.admit(file, WHAT)) return
+    /** Whether it landed; a snapshot older than one written counts as landed. */
+    suspend fun save(profiles: List<String>, generation: Long? = null): Boolean {
+        if (!SaveFloor.admit(file, WHAT)) return false
         // This lock holds the generation check and the write together.
-        withContext(NonCancellable + Dispatchers.IO) {
+        return withContext(NonCancellable + Dispatchers.IO) {
             saveLock.withLock {
                 if (generation != null) {
-                    if (generation < lastGeneration) return@withLock
+                    if (generation < lastGeneration) return@withLock true
                     lastGeneration = generation
                 }
                 saveStore(file, WHAT) {

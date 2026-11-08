@@ -223,14 +223,18 @@ proptest! {
         let live_before = d.shots.values().filter(|s| !s.deleted).count();
         // What Merge may add: rows not here at all, and with "bring back" off,
         // no tombstones.
-        let candidates = b.shots.iter().filter(|(id, ..)| !d.shots.contains_key(id)).count();
+        let new: Vec<_> = b.shots.iter().filter(|(id, ..)| !d.shots.contains_key(id)).collect();
+        // The cap counts unpinned rows (#311): a pinned row always fits.
+        let pinned = new.iter().filter(|(_, _, pinned, _)| *pinned).count();
+        let unpinned = new.len() - pinned;
         let room = d.cap.map_or(usize::MAX, |cap| (cap as usize).saturating_sub(live_before));
-        prop_assert_eq!(p.shots.add.len(), candidates.min(room), "adds what fits, all of it");
-        prop_assert_eq!(p.shots.not_added as usize, candidates - candidates.min(room));
+        prop_assert_eq!(p.shots.add.len(), pinned + unpinned.min(room), "adds what fits, all of it");
+        prop_assert_eq!(p.shots.not_added as usize, unpinned - unpinned.min(room));
         if let Some(cap) = d.cap {
             let after = apply(&d, &b, &p);
-            let live_after = after.shots.values().filter(|s| !s.deleted).count();
-            prop_assert!(live_after <= live_before.max(cap as usize));
+            let pins: BTreeSet<&String> = new.iter().filter(|(_, _, pinned, _)| *pinned).map(|(id, ..)| id).collect();
+            let unpinned_after = after.shots.iter().filter(|(id, s)| !s.deleted && !pins.contains(id)).count();
+            prop_assert!(unpinned_after <= live_before.max(cap as usize));
         }
     }
 

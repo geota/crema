@@ -40,6 +40,8 @@ internal object VmHarness {
      *  first test's Application, whose files dir a later test doesn't use. */
     fun build(store: ViewModelStore): MainViewModel {
         RelayKeyStore.backendForTests = keystore
+        // One restore per process: a test's last one never outlives it.
+        coffee.crema.restore.RestoreEngine.resetForTest()
         return ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(app()))[MainViewModel::class.java]
     }
 
@@ -219,6 +221,10 @@ internal object VmHarness {
         fun restored() = vm.ui.value.userMessages.count { it.startsWith("Restored ") }
         val before = restored()
         kotlinx.coroutines.runBlocking { vm.restoreBackupBytes(backup, mode) }
-        idleUntil("the restore") { restored() > before }
+        try {
+            idleUntil("the restore") { restored() > before }
+        } catch (e: IllegalStateException) {
+            throw IllegalStateException("${e.message}; said ${vm.ui.value.userMessages.takeLast(3)}, report ${vm.ui.value.restoreReport}", e)
+        }
     }
 }

@@ -44,7 +44,6 @@ class SettingsConfirmState(
     flowMultiplier: MutableState<Float?>,
     cycle: MutableState<String?>,
     resync: MutableState<Boolean>,
-    restoreWipe: MutableState<Uri?>,
     val launchSave: (name: String, content: String?) -> Unit,
     /** Binary SAF export — the `.crema.zip` backup (bean photos ride along). */
     val launchSaveBytes: (name: String, bytes: ByteArray?) -> Unit,
@@ -57,13 +56,6 @@ class SettingsConfirmState(
     var pendingFlowMultiplier by flowMultiplier
     var pendingCycle by cycle
     var pendingResync by resync
-
-    /** A backup file the user picked for a REPLACE (wipe) restore, awaiting the
-     *  type-to-confirm. Null ⟺ nothing pending. (Merge restores apply at once.) */
-    var pendingRestoreWipe by restoreWipe
-
-    /** A Drive backup picked for a REPLACE restore, awaiting the type-to-confirm. */
-    var pendingDriveReplace by mutableStateOf<DriveBackupRow?>(null)
 }
 
 /** Build the shared confirm-state holder (saveable flags + SAF export launcher). */
@@ -91,20 +83,15 @@ fun rememberSettingsConfirmState(vm: MainViewModel): SettingsConfirmState {
         val b = pendingExportBytes.value; pendingExportBytes.value = null
         if (uri != null && b != null) vm.writeBytesToUri(uri, b)
     }
-    // SAF restore-from-file plumbing. A MERGE applies at once; a REPLACE (wipe)
-    // stashes the picked file so the dialog can gate it behind a typed confirm
-    // before anything is deleted.
-    val restoreWipe = remember { mutableStateOf<Uri?>(null) }
+    // SAF restore-from-file plumbing. The VM plans the picked file and shows
+    // the report, which gates a Replace behind the typed confirm, with numbers.
     val pendingRestoreMode = remember { mutableStateOf(MainViewModel.RestoreMode.MERGE) }
     val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            if (pendingRestoreMode.value == MainViewModel.RestoreMode.WIPE) restoreWipe.value = uri
-            else vm.restoreBackup(uri, MainViewModel.RestoreMode.MERGE)
-        }
+        if (uri != null) vm.restoreBackup(uri, pendingRestoreMode.value)
     }
     return remember(vm) {
         SettingsConfirmState(
-            resetPrefs, erase, heaterVoltage, lineFreq, flowMultiplier, cycle, resync, restoreWipe,
+            resetPrefs, erase, heaterVoltage, lineFreq, flowMultiplier, cycle, resync,
             launchSave = { name, content ->
                 if (content != null) { pendingExport.value = content; saveLauncher.launch(name) }
             },
@@ -229,33 +216,47 @@ fun SettingsConfirmDialogs(state: SettingsConfirmState, vm: MainViewModel, ui: M
         DriveBackupPicker(
             rows = rows,
             onMerge = { vm.drive.restoreBackup(it.id, wipe = false) },
-            onReplace = { state.pendingDriveReplace = it },
+            onReplace = { vm.drive.restoreBackup(it.id, wipe = true) },
             onDismiss = vm.drive::closeBackupPicker,
         )
     }
-    state.pendingDriveReplace?.let { row ->
+    // A restore that didn't finish: run it again, or Dismiss, which lets its
+    // deletes run under the same checks.
+    ui.interruptedRestore?.let { name ->
         CremaConfirmDialog(
-            title = "Replace all data?",
-            body = "Every bean, roaster, shot and custom profile on this device is deleted and replaced with the backup from ${backupDate(row)}. Built-in profiles remain. This can't be undone. Type ERASE to confirm.",
-            confirmLabel = "Replace everything",
-            icon = "trash",
-            danger = true,
-            requireTyped = "ERASE",
-            onConfirm = { vm.drive.restoreBackup(row.id, wipe = true); state.pendingDriveReplace = null },
-            onDismiss = { state.pendingDriveReplace = null },
+            title = "Your last restore didn't finish",
+            body = "Your last restore from $name didn't finish. Run it again to complete it, or dismiss this if you don't have that backup any more.",
+            confirmLabel = "Dismiss",
+            cancelLabel = "Later",
+            onConfirm = vm::dismissInterruptedRestore,
+            onDismiss = vm::laterInterruptedRestore,
         )
     }
-    // Replace-restore (wipe) — the same type-to-confirm gate as Erase all data.
-    state.pendingRestoreWipe?.let { uri ->
+    // The restore report: what a picked backup will do, before it does it.
+    // Replace is gated behind typing ERASE; a Merge with shots deleted here
+    // can bring them back, which shows its own numbers first.
+    ui.restoreReport?.let { report ->
         CremaConfirmDialog(
-            title = "Replace all data?",
-            body = "Every bean, roaster, shot and custom profile on this device is deleted and replaced with the backup. Built-in profiles remain. This can't be undone. Type ERASE to confirm.",
-            confirmLabel = "Replace everything",
-            icon = "trash",
-            danger = true,
-            requireTyped = "ERASE",
-            onConfirm = { vm.restoreBackup(uri, MainViewModel.RestoreMode.WIPE); state.pendingRestoreWipe = null },
-            onDismiss = { state.pendingRestoreWipe = null },
+            title = report.title,
+            body = report.message,
+            confirmLabel = if (report.replace) "Replace everything" else "Restore",
+            icon = if (report.replace) "trash" else null,
+            danger = report.replace,
+            requireTyped = if (report.replace) "ERASE" else null,
+            onConfirm = vm::confirmRestore,
+            onDismiss = vm::dismissRestore,
+            extra = if (report.offerBringBack || report.offerBackUpFirst) {
+                {
+                    if (report.offerBringBack) {
+                        CremaButton(onClick = vm::restoreBringBack, variant = CremaButtonVariant.Outlined, label = "Bring them back too")
+                    }
+                    if (report.offerBackUpFirst) {
+                        CremaButton(onClick = { vm.restoreBackUpFirst() }, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-up", label = "Back up to Drive first")
+                    }
+                }
+            } else {
+                null
+            },
         )
     }
 }
