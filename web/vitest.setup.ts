@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { initSync } from '#lib/wasm/de1_wasm.js';
+import { setPacingForTest } from '#lib/visualizer/pace.js';
 
 /**
  * Instantiate the core's wasm bridge for the whole suite.
@@ -50,3 +51,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 	configurable: true,
 	writable: true
 });
+
+// The pacer would make a suite of many requests sleep for real: off by
+// default, on in the tests that are about it.
+setPacingForTest(false);

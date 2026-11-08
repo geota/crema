@@ -54,6 +54,8 @@ import { getHistoryStore } from '#lib/history/index.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import { appendSyncLog } from '#lib/visualizer/sync-config.js';
 import { directionPushes, readSyncConfig, uploadsHeld } from '#lib/visualizer/sync-config.js';
+import { coolingDown } from '#lib/visualizer/pace.js';
+import { runHeldElsewhere } from '#lib/visualizer/run-lock.js';
 import {
 	hasTagMarks,
 	pendingEdit,
@@ -68,6 +70,8 @@ export interface DrainResult {
 	succeeded: number;
 	dropped: number;
 	deferred: number;
+	/** Remote deletes that landed: a pull between pages counts them as its own. */
+	deletes?: number;
 }
 
 /** A remote delete Visualizer won't take: it says so, and the local delete stands. */
@@ -238,6 +242,7 @@ export const UploadQueueLive = Layer.effect(
 				if (result._tag === 'Success') {
 					yield* dequeue(entry.entity, entry.id, entry.op);
 					out.succeeded += 1;
+					if (entry.op === 'delete') out.deletes = (out.deletes ?? 0) + 1;
 				} else {
 					const e = result.failure;
 					const made = entry.attempts + 1;
@@ -292,6 +297,10 @@ export const UploadQueueLive = Layer.effect(
 				if (!known && config.accountUnconfirmed) return DEFERRED;
 			}
 			if (uploadsHeld()) return DEFERRED;
+			// A 429's cooldown: nothing goes before it ends. And a pull in another
+			// tab runs the drain between its pages, so this one waits.
+			if (coolingDown()) return DEFERRED;
+			if (yield* Effect.promise(runHeldElsewhere)) return DEFERRED;
 			// Atomic non-blocking single-flight: acquire only if not already busy.
 			const acquired = yield* Ref.modify(draining, (busy) =>
 				busy ? [false, true] : [true, true]

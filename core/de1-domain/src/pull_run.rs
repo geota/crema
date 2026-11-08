@@ -549,17 +549,18 @@ pub struct PoisonEntry {
 
 /// The `rowFailures` after a run. A failure counts only if another detail
 /// succeeded in the run, and at most once a day, so restarts, repeated taps
-/// and outages don't add up. A row that succeeded leaves the list.
+/// and outages don't add up. A row in `resolved` leaves the list: it
+/// succeeded, or it is gone (a 404 on its retry), which ends it too.
 #[must_use]
 pub fn settle_poison(
     entries: &[PoisonEntry],
     tally: &PullTally,
-    succeeded: &[String],
+    resolved: &[String],
     now_ms: i64,
 ) -> Vec<PoisonEntry> {
     let mut out: Vec<PoisonEntry> = entries
         .iter()
-        .filter(|e| !succeeded.contains(&e.id))
+        .filter(|e| !resolved.contains(&e.id))
         .cloned()
         .collect();
     if !tally.detail_succeeded {
@@ -605,6 +606,25 @@ pub fn record_health_probe(tally: &PullTally, succeeded: bool) -> PullTally {
     let mut t = tally.clone();
     t.detail_succeeded |= succeeded;
     t
+}
+
+/// A poison row's daily try failed (anything but a success or a 404): it
+/// waits another day, so a row that keeps failing costs one request a day.
+#[must_use]
+pub fn note_poison_retry(entries: &[PoisonEntry], id: &str, now_ms: i64) -> Vec<PoisonEntry> {
+    entries
+        .iter()
+        .map(|e| {
+            if e.id == id {
+                PoisonEntry {
+                    retry_at_ms: now_ms + DAY_MS,
+                    ..e.clone()
+                }
+            } else {
+                e.clone()
+            }
+        })
+        .collect()
 }
 
 /// Poison rows due their daily try, one request each, at run start: the
@@ -713,6 +733,103 @@ pub fn note_rate_limit(bucket: PaceBucket, now_ms: i64, wait_ms: u64) -> PaceBuc
         cooldown_until_ms: Some(bucket.cooldown_until_ms.map_or(until, |c| c.max(until))),
         ..bucket
     }
+}
+
+/// The run API for the bridges, by name: `op` and a JSON object of its
+/// arguments in, its JSON answer out. One entry point, so a shell's loop
+/// adds no bridge per rule:
+///
+/// | `op` | arguments | answer |
+/// | --- | --- | --- |
+/// | `planPage` | `PageInput` | `PagePlan` |
+/// | `chooseBind` | `{candidates, durationMs}` | `KeyCandidate` or `null` |
+/// | `rowFailureAction` | `{failure, attempt, retryAfterMs?, jitter}` | `RowAction` |
+/// | `recordRow` | `{tally, row, outcome}` | `PullTally` |
+/// | `endRun` | `{tally, failure}` | `PullTally` |
+/// | `afterListPage` | `{tally, count, ownDeletes}` | `{tally, step}` |
+/// | `settlePoison` | `{entries, tally, resolved, nowMs}` | `[PoisonEntry]` |
+/// | `notePoisonRetry` | `{entries, id, nowMs}` | `[PoisonEntry]` |
+/// | `poisonDue` | `{entries, nowMs}` | `[id]` |
+/// | `healthProbeDue` | `{tally}` | `bool` |
+/// | `recordHealthProbe` | `{tally, succeeded}` | `PullTally` |
+/// | `finishRun` | `{tally, poison, resumeAfterMs?}` | `RunOutcome` |
+/// | `pace` | `{bucket, nowMs}` | `{bucket, waitMs}` |
+/// | `noteRateLimit` | `{bucket, nowMs, waitMs}` | `PaceBucket` |
+///
+/// # Errors
+/// An unknown `op`, or arguments that don't parse.
+pub fn pull_run_call(op: &str, payload: &str) -> Result<String, String> {
+    use serde_json::{Value, json};
+    let args: Value = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+    fn arg<T: serde::de::DeserializeOwned>(args: &Value, key: &str) -> Result<T, String> {
+        serde_json::from_value(args.get(key).cloned().unwrap_or(Value::Null))
+            .map_err(|e| format!("{key}: {e}"))
+    }
+    let out = match op {
+        "planPage" => json!(plan_page(
+            &serde_json::from_value::<PageInput>(args).map_err(|e| e.to_string())?
+        )),
+        "chooseBind" => json!(choose_bind(
+            &arg::<Vec<KeyCandidate>>(&args, "candidates")?,
+            arg(&args, "durationMs")?
+        )),
+        "rowFailureAction" => json!(row_failure_action(
+            arg(&args, "failure")?,
+            arg(&args, "attempt")?,
+            arg(&args, "retryAfterMs")?,
+            arg(&args, "jitter")?,
+        )),
+        "recordRow" => json!(record_row(
+            &arg(&args, "tally")?,
+            &arg(&args, "row")?,
+            arg(&args, "outcome")?
+        )),
+        "endRun" => json!(end_run(&arg(&args, "tally")?, arg(&args, "failure")?)),
+        "afterListPage" => {
+            let (tally, step) = after_list_page(
+                &arg(&args, "tally")?,
+                arg(&args, "count")?,
+                arg(&args, "ownDeletes")?,
+            );
+            json!({ "tally": tally, "step": step })
+        }
+        "settlePoison" => json!(settle_poison(
+            &arg::<Vec<PoisonEntry>>(&args, "entries")?,
+            &arg(&args, "tally")?,
+            &arg::<Vec<String>>(&args, "resolved")?,
+            arg(&args, "nowMs")?,
+        )),
+        "notePoisonRetry" => json!(note_poison_retry(
+            &arg::<Vec<PoisonEntry>>(&args, "entries")?,
+            &arg::<String>(&args, "id")?,
+            arg(&args, "nowMs")?,
+        )),
+        "poisonDue" => json!(poison_due(
+            &arg::<Vec<PoisonEntry>>(&args, "entries")?,
+            arg(&args, "nowMs")?
+        )),
+        "healthProbeDue" => json!(health_probe_due(&arg(&args, "tally")?)),
+        "recordHealthProbe" => json!(record_health_probe(
+            &arg(&args, "tally")?,
+            arg(&args, "succeeded")?
+        )),
+        "finishRun" => json!(finish_run(
+            &arg(&args, "tally")?,
+            &arg::<Vec<PoisonEntry>>(&args, "poison")?,
+            arg(&args, "resumeAfterMs")?,
+        )),
+        "pace" => {
+            let (bucket, wait_ms) = pace(arg(&args, "bucket")?, arg(&args, "nowMs")?);
+            json!({ "bucket": bucket, "waitMs": wait_ms })
+        }
+        "noteRateLimit" => json!(note_rate_limit(
+            arg(&args, "bucket")?,
+            arg(&args, "nowMs")?,
+            arg(&args, "waitMs")?
+        )),
+        other => return Err(format!("unknown pull run op: {other}")),
+    };
+    serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
