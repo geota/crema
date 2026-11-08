@@ -2454,6 +2454,21 @@ sealed class Command {
 	@Serializable
 	@SerialName("WriteScale")
 	data class WriteScale(val content: CommandWriteScaleInner): Command()
+	/// Stop the machine: write Idle to the requested-state characteristic
+	/// (`0x02`) now, on the urgent lane, ahead of anything queued. Only the
+	/// core emits it, and only while a flow session is open. A shell keeps at
+	/// most one outstanding: a second is dropped while one is queued or in
+	/// flight.
+	@Serializable
+	@SerialName("Stop")
+	object Stop: Command()
+	/// Drop any [`Stop`](Self::Stop) not yet on the air. One already in
+	/// flight can't be recalled. Sent when a session closes, the link drops,
+	/// or the core resets, so a late Idle can't wake a sleeping machine or
+	/// stop the next flow.
+	@Serializable
+	@SerialName("CancelStop")
+	object CancelStop: Command()
 }
 
 /// The result of feeding the core one input: what it observed (`events`) and
@@ -6353,6 +6368,13 @@ data class StartEndFlushLeftIdleInner (
 	val state: MachineState
 )
 
+/// Generated type representing the anonymous struct variant `OtherFlowStarted` of the `StartEnd` Rust enum
+@Serializable
+data class StartEndOtherFlowStartedInner (
+	/// The flow that began.
+	val state: MachineState
+)
+
 /// How a start ended.
 @Serializable
 sealed class StartEnd {
@@ -6389,6 +6411,11 @@ sealed class StartEnd {
 	@Serializable
 	@SerialName("StoodDown")
 	object StoodDown: StartEnd()
+	/// Another flow began after Start was tapped (steam or hot water at the
+	/// group head, say): the start won't stop it.
+	@Serializable
+	@SerialName("OtherFlowStarted")
+	data class OtherFlowStarted(val details: StartEndOtherFlowStartedInner): StartEnd()
 }
 
 /// Where an accepted start stands.

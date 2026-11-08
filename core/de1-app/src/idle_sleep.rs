@@ -19,9 +19,10 @@
 
 use de1_domain::BrewSessionPhase;
 use de1_domain::idle_sleep::{BENGLE_MAX_SLEEP_TIMEOUT_MIN, IdleSleepAction, IdleSleepInput};
-use de1_protocol::{MachineState, MmrRegister, is_bengle_model, requested_state};
+use de1_protocol::{MachineState, MmrRegister, is_bengle_model};
 
-use crate::{Command, CoreOutput, CremaCore, Event, WriteTarget, mmr_write_command};
+use crate::machine_requests::Initiator;
+use crate::{CoreOutput, CremaCore, Event, mmr_write_command};
 
 impl CremaCore {
     /// Feed the idle-sleep timer one input at the shell's `now_ms` (one
@@ -161,10 +162,9 @@ impl CremaCore {
                     out.events.extend(locked.events);
                     return;
                 }
-                out.commands.push(Command::WriteCharacteristic {
-                    target: WriteTarget::De1RequestedState,
-                    data: vec![requested_state(MachineState::Sleep)],
-                });
+                if !self.request_state(MachineState::Sleep, Initiator::Core, out) {
+                    return;
+                }
                 out.events.push(Event::IdleSleepRequested { attempt });
             }
             IdleSleepAction::Blocked { reason, state } => {

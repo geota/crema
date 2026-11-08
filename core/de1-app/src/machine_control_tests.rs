@@ -34,16 +34,7 @@ fn bookoo(g: f32) -> [u8; 20] {
     p
 }
 fn state_writes(o: &CoreOutput) -> Vec<u8> {
-    o.commands
-        .iter()
-        .filter_map(|c| match c {
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data,
-            } => Some(data[0]),
-            _ => None,
-        })
-        .collect()
+    o.state_requests()
 }
 const SAMPLE: [u8; 19] = [
     0x12, 0x34, 0x90, 0x00, 0x28, 0x00, 0x5C, 0x80, 0x00, 0x58, 0x00, 0x5A, 0x00, 0x5D, 0x00, 0x60,
@@ -789,7 +780,8 @@ fn q7_start_with_rejected_profile_waits_for_timeout() {
 }
 
 /// R1: a lost pre-flush used to request Espresso at 30 s, bouncing whatever was
-/// running. Fixed in PR 2: it ends 10 s after the write, with no write.
+/// running. PR 2 ended it 10 s after the write; with `Start.from` (PR 4) steam
+/// begun after the tap ends it at once. No write either way.
 #[test]
 fn r1_lost_flush_ends_the_start_and_leaves_steam_alone() {
     let mut core = CremaCore::new_with_model(1);
@@ -829,17 +821,19 @@ fn r1_lost_flush_ends_the_start_and_leaves_steam_alone() {
         "the flush request"
     );
     // the rinse write was lost; the user starts steam at the group head
-    core.on_notification(Source::De1State, &[5, 7], 5_000);
-    assert!(core.shot_starting());
-    let o = core.on_tick(t + 10_000);
+    let o = core.on_notification(Source::De1State, &[5, 7], 5_000);
+    assert!(!core.shot_starting());
     assert!(o.events.iter().any(|e| matches!(
         e,
         Event::ShotStartEnded {
-            end: StartEnd::FlushNotEntered,
+            end: StartEnd::OtherFlowStarted {
+                state: MachineState::Steam
+            },
             ..
         }
     )));
     assert!(state_writes(&o).is_empty());
+    assert!(state_writes(&core.on_tick(t + 10_000)).is_empty());
     assert!(state_writes(&core.on_tick(31_000)).is_empty());
 }
 

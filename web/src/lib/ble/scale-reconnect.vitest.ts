@@ -187,7 +187,8 @@ describe('scale writes around a reconnect', () => {
 					// Write-result reports come back as empty outputs.
 					if (out.commands.length === 0) return;
 					order.push('query output');
-					for (const c of out.commands) void manager.writeScale(new Uint8Array(c.content.data));
+					for (const c of out.commands)
+						if (c.type === 'WriteScale') void manager.writeScale(new Uint8Array(c.content.data));
 				},
 				onStatus: () => undefined,
 				onState: (s) => order.push(s),

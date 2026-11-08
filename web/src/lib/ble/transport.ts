@@ -219,30 +219,55 @@ type FastConnectServer = BluetoothRemoteGATTServer & {
  * stall the queue). Enqueuing is **synchronous**: the moment {@link enqueue}
  * returns, the operation's place in line is fixed, so a burst of calls made in
  * one synchronous stretch (e.g. the scale's three-command mode sequence) runs
- * in strict call order.
+ * in strict call order. {@link enqueueFront} puts an operation ahead of every
+ * one still waiting, for a stop: Web Bluetooth can't cancel the operation in
+ * flight, but a stop needn't wait behind the rest (Decenza's `writeUrgent`).
+ * An operation never starts inside the call that queued it.
  */
-class GattQueue {
-	/** The tail of the chain — the promise the next operation waits on. */
-	private tail: Promise<unknown> = Promise.resolve();
+export class GattQueue {
+	/** The operations waiting, in the order they will start. */
+	readonly #waiting: Array<() => void> = [];
+	/** An operation is in flight. */
+	#busy = false;
 
-	/**
-	 * Append `operation` to the queue. Returns a promise that settles with the
-	 * operation's result. The operation starts only once all earlier ones have
-	 * settled; a rejection in an earlier operation does not stall later ones.
-	 */
+	/** Append `operation`. Returns a promise that settles with its result. */
 	enqueue<T>(operation: () => Promise<T>): Promise<T> {
-		// Chain onto the tail; `.then(operation, operation)` runs `operation`
-		// whether the previous link resolved or rejected, so one failed GATT
-		// call cannot deadlock the queue.
-		const result = this.tail.then(operation, operation);
-		// Advance the tail synchronously, swallowing rejections so the *next*
-		// enqueue waits only for completion, not for success. Callers still see
-		// the real rejection through `result`.
-		this.tail = result.then(
-			() => undefined,
-			() => undefined
-		);
-		return result;
+		return this.#add(operation, false);
+	}
+
+	/** Put `operation` ahead of every waiting one; it still waits for the one
+	 *  in flight. */
+	enqueueFront<T>(operation: () => Promise<T>): Promise<T> {
+		return this.#add(operation, true);
+	}
+
+	#add<T>(operation: () => Promise<T>, front: boolean): Promise<T> {
+		return new Promise<T>((resolve, reject) => {
+			const start = (): void => {
+				let result: Promise<T>;
+				try {
+					result = operation();
+				} catch (error) {
+					result = Promise.reject(error);
+				}
+				// One failed GATT call must not stall the queue.
+				void result.then(resolve, reject).finally(() => {
+					this.#busy = false;
+					this.#next();
+				});
+			};
+			if (front) this.#waiting.unshift(start);
+			else this.#waiting.push(start);
+			queueMicrotask(() => this.#next());
+		});
+	}
+
+	#next(): void {
+		if (this.#busy) return;
+		const start = this.#waiting.shift();
+		if (start === undefined) return;
+		this.#busy = true;
+		start();
 	}
 }
 
@@ -805,6 +830,23 @@ export class BleDevice implements De1Transport {
 				throw error;
 			}
 			settled?.(true);
+			return true;
+		});
+	}
+
+	/**
+	 * Write `data` ahead of every queued write, only if `guard()` still holds
+	 * when it starts — see {@link De1Transport.writeUrgent}.
+	 */
+	writeUrgent(
+		serviceUuid: string,
+		characteristicUuid: string,
+		data: Uint8Array,
+		guard: () => boolean
+	): Promise<boolean> {
+		return this.gattQueue.enqueueFront(async () => {
+			if (!guard()) return false;
+			await this.writeNow(serviceUuid, characteristicUuid, data, true);
 			return true;
 		});
 	}

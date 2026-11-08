@@ -46,7 +46,6 @@ class MachineConfigControllerTest {
             log = { logs += it },
             writeDe1 = { _, _, _, _ -> true },
             writeScale = {},
-            shotRunning = { false },
             profileWriteFailed = { "" },
             dispatcher = laneDispatcher,
         ),

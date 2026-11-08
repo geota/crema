@@ -15,6 +15,7 @@
  * the screen.
  */
 
+import { StopLane } from '#lib/ble/stop-lane.js';
 import { refreshStopTargetsProjection, setHotWaterTarget } from './ui-state.svelte';
 import {
 	loadCore,
@@ -275,8 +276,11 @@ export class CremaApp {
 	/** The reactive UI state — the screen renders `app.state.current`. */
 	readonly state = getCremaUiState();
 
-	/** One outstanding stop write at a time (issue #15 follow-up). */
-	#stopWriteInFlight = false;
+	/** The core's `Command::Stop` and `CancelStop` (issue #15 follow-up). */
+	readonly #stopLane = new StopLane(
+		(guard) => this.de1.writeStop(guard),
+		(line) => this.state.log(line)
+	);
 	/** Which profile writes may still go out and be acked (#2 N2). */
 	readonly #profileWrites = new ProfileWriteGenerations();
 	/** The 1 s core clock while the DE1 link is up or recovering (#2 N1). */
@@ -1114,24 +1118,15 @@ export class CremaApp {
 				await this.scale.writeScale(data);
 				break;
 			}
+			case 'Stop':
+				// The core says this is a stop: the urgent lane, ahead of the
+				// queue, one at a time.
+				await this.#stopLane.stop();
+				break;
+			case 'CancelStop':
+				this.#stopLane.cancel();
+				break;
 			case 'WriteCharacteristic': {
-				// Stop-write hygiene (issue #15 follow-up, Android parity):
-				// while a shot runs, machine-state writes are the stop. They
-				// COALESCE — the core's enforcer re-commands every second, but
-				// stacking identical Idle bytes behind a stalled write adds
-				// nothing, and every extra copy is a stale-write risk once the
-				// machine stops (a late Idle kills a steam/flush started right
-				// after the shot). Web Bluetooth ops can't be cancelled
-				// mid-flight, so unlike Android the ONE outstanding write
-				// can't be revoked at ShotCompleted — bounding the exposure
-				// to a single write is the strongest guard available here.
-				const isStopWrite =
-					command.content.target === 'De1RequestedState' && this.state.current.shotInProgress;
-				if (isStopWrite && this.#stopWriteInFlight) {
-					this.state.log('Stop write already in flight — not stacking another');
-					break;
-				}
-				if (isStopWrite) this.#stopWriteInFlight = true;
 				// A profile write goes out only while its upload is the live one
 				// and none of its earlier writes failed — checked when it reaches
 				// the head of the GATT queue, since every command of an output is
@@ -1154,22 +1149,17 @@ export class CremaApp {
 						: (written: boolean) => {
 								outcome = this.#profileWrites.settle(profileBatch, written);
 							};
-				let delivered = false;
-				try {
-					const data = new Uint8Array(command.content.data);
-					const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
-					if (profileBatch === null || this.#profileWrites.mayWrite(profileBatch)) {
-						this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
-					}
-					delivered = await this.de1.writeCharacteristic(
-						command.content.target,
-						data,
-						guard,
-						settled
-					);
-				} finally {
-					if (isStopWrite) this.#stopWriteInFlight = false;
+				const data = new Uint8Array(command.content.data);
+				const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
+				if (profileBatch === null || this.#profileWrites.mayWrite(profileBatch)) {
+					this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
 				}
+				const delivered = await this.de1.writeCharacteristic(
+					command.content.target,
+					data,
+					guard,
+					settled
+				);
 				if (profileBatch !== null) {
 					if (skipped) break;
 					// A skip before the queue (no link, firmware lock) never reached
@@ -1224,6 +1214,12 @@ export class CremaApp {
 					this.applyCoreOutput(ackOut);
 				}
 				break;
+			}
+			default: {
+				// Every command the core can send has a case: a new one fails
+				// the build here instead of being dropped, a stop above all.
+				const unhandled: never = command;
+				this.state.log(`Unknown core command dropped: ${JSON.stringify(unhandled)}`);
 			}
 		}
 	}

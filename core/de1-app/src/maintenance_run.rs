@@ -39,10 +39,10 @@ use de1_domain::{
     MaintenanceFailure, MaintenancePhase, cold_maintenance_profile, is_machine_heating,
     is_maintenance_state, needs_cold_workaround,
 };
-use de1_protocol::{MachineState, MmrRegister, StateInfo, requested_state};
+use de1_protocol::{MachineState, MmrRegister, StateInfo};
 
-use crate::machine_requests::Guard;
-use crate::{Command, CoreOutput, CremaCore, Event, WriteTarget, mmr_write_command};
+use crate::machine_requests::{Guard, Initiator};
+use crate::{CoreOutput, CremaCore, Event, mmr_write_command};
 
 /// How long a released (cold-workaround) request may wait for the machine to
 /// enter the state before the core gives up on it and reports `Cancelled`,
@@ -154,8 +154,9 @@ impl CremaCore {
             && self
                 .last_state
                 .is_some_and(|info| !is_machine_heating(info))
+            && let Some(state) = release_held(Some(run), now)
         {
-            release_held(Some(run), now, out);
+            self.request_state(state, Initiator::Core, out);
         }
         // Just loaded, so the profile-download guard is open: ask for the
         // tick that releases it.
@@ -231,14 +232,14 @@ impl CremaCore {
                 self.finish_maintenance(MaintenancePhase::Cancelled, self.clock, &mut out);
                 // A released request may already be on its way in: stop it.
                 if phase == MaintenancePhase::Requested {
-                    push_state_write(MachineState::Idle, &mut out);
+                    self.request_state(MachineState::Idle, Initiator::User, &mut out);
                 }
             }
             MaintenancePhase::Running => {
                 if let Some(run) = self.maintenance.as_mut() {
                     run.cancelled = true;
                 }
-                push_state_write(MachineState::Idle, &mut out);
+                self.request_state(MachineState::Idle, Initiator::User, &mut out);
             }
             MaintenancePhase::Finished | MaintenancePhase::Cancelled | MaintenancePhase::Failed => {
             }
@@ -257,8 +258,11 @@ impl CremaCore {
         // Release a held request on the first packet showing the machine is
         // no longer heating (Decenza `flushPendingMaintenanceState`), once the
         // cold profile is in and the profile-download guard is clear.
-        if !is_machine_heating(info) && self.guard() == Guard::Clear {
-            release_held(self.maintenance.as_mut(), now, out);
+        if !is_machine_heating(info)
+            && self.guard() == Guard::Clear
+            && let Some(state) = release_held(self.maintenance.as_mut(), now)
+        {
+            self.request_state(state, Initiator::Core, out);
         }
         if is_maintenance_state(info.state) {
             let carried_cold = self
@@ -297,8 +301,11 @@ impl CremaCore {
     pub(crate) fn update_maintenance(&mut self, now: Duration, out: &mut CoreOutput) {
         // A held request kept only by the profile-download guard goes out once
         // the guard clears.
-        if self.maintenance_waits_for_guard() && self.guard() == Guard::Clear {
-            release_held(self.maintenance.as_mut(), now, out);
+        if self.maintenance_waits_for_guard()
+            && self.guard() == Guard::Clear
+            && let Some(state) = release_held(self.maintenance.as_mut(), now)
+        {
+            self.request_state(state, Initiator::Core, out);
         }
         let Some(run) = self.maintenance.as_ref() else {
             return;
@@ -389,25 +396,17 @@ impl CremaCore {
     }
 }
 
-/// Send a held request whose cold profile is in: `Requested`, with its entry
-/// timeout running from `now`.
-fn release_held(run: Option<&mut MaintenanceRun>, now: Duration, out: &mut CoreOutput) {
-    if let Some(run) = run
-        && run.phase == MaintenancePhase::WaitingForPreheat
-        && run.cold_loaded
-    {
+/// A held request whose cold profile is in: `Requested`, with its entry
+/// timeout running from `now`. Returns the state to request.
+fn release_held(run: Option<&mut MaintenanceRun>, now: Duration) -> Option<MachineState> {
+    let run = run?;
+    if run.phase == MaintenancePhase::WaitingForPreheat && run.cold_loaded {
         run.phase = MaintenancePhase::Requested;
         run.requested_at = Some(now);
-        push_state_write(run.state, out);
+        Some(run.state)
+    } else {
+        None
     }
-}
-
-/// One `RequestedState` write.
-fn push_state_write(state: MachineState, out: &mut CoreOutput) {
-    out.commands.push(Command::WriteCharacteristic {
-        target: WriteTarget::De1RequestedState,
-        data: vec![requested_state(state)],
-    });
 }
 
 #[cfg(test)]
@@ -447,16 +446,7 @@ mod tests {
     }
 
     fn state_writes(out: &CoreOutput) -> Vec<u8> {
-        out.commands
-            .iter()
-            .filter_map(|c| match c {
-                Command::WriteCharacteristic {
-                    target: WriteTarget::De1RequestedState,
-                    data,
-                } => Some(data[0]),
-                _ => None,
-            })
-            .collect()
+        out.state_requests()
     }
 
     fn uploads_profile(out: &CoreOutput) -> bool {

@@ -68,6 +68,12 @@ fn user_op() -> impl Strategy<Value = Op> {
         5 => flow_mode().prop_map(Op::GroupHead),
         2 => prop_oneof![Just(18.0f32), Just(36.0f32)].prop_map(|yield_g| Op::AppStart { yield_g }),
         2 => Just(Op::UserStop),
+        1 => prop_oneof![
+            Just(MachineState::Steam),
+            Just(MachineState::HotWater),
+            Just(MachineState::HotWaterRinse)
+        ]
+        .prop_map(Op::AppRequest),
         1 => target().prop_map(Op::SetProfileTarget),
         1 => target().prop_map(Op::Dial),
         1 => prop_oneof![Just(None), Just(Some(36.0f32)), Just(Some(80.0f32))]
@@ -194,6 +200,8 @@ fn the_generator_reaches_what_the_invariants_watch() {
         total.retries += c.retries;
         total.skips += c.skips;
         total.unseen += c.unseen;
+        total.stop_commands += c.stop_commands;
+        total.starts_over_a_flow += c.starts_over_a_flow;
         total.tares += c.tares;
         total.stale += c.stale;
         total.dead += c.dead;
@@ -212,6 +220,8 @@ fn the_generator_reaches_what_the_invariants_watch() {
         ("retries", total.retries),
         ("skips", total.skips),
         ("unseen", total.unseen),
+        ("stop commands", total.stop_commands),
+        ("starts over a flow", total.starts_over_a_flow),
         ("tares", total.tares),
         ("stale", total.stale),
         ("dead", total.dead),
@@ -425,4 +435,57 @@ fn an_attach_mid_pour_leaves_the_cup_alone() {
         .filter(|v| v.invariant == Invariant::I6)
         .collect();
     assert!(broken.is_empty(), "{broken:?}");
+}
+
+/// §7, "Start tapped during hot water": Idle and Espresso, as plain writes,
+/// with the pour stopped. Whether a DE1 takes an Espresso that lands while the
+/// pour winds down is H22's question; the sim's doesn't.
+#[test]
+fn a_start_tapped_during_hot_water_stops_it_and_pulls_the_shot() {
+    let mut world = plain_world();
+    // A first shot loads the profile, so the second start needs no upload,
+    // which would wait for the pour to end.
+    world.apply(&Op::AppStart { yield_g: 36.0 });
+    world.apply(&Op::Advance { ms: 3_000 });
+    world.apply(&Op::UserStop);
+    world.apply(&Op::Advance { ms: 10_000 });
+    assert_eq!(world.de1.state, MachineState::Idle);
+    world.apply(&Op::GroupHead(MachineState::HotWater));
+    world.apply(&Op::Advance { ms: 2_000 });
+    let before = world.requests.len();
+    world.apply(&Op::AppStart { yield_g: 36.0 });
+    let idle = MachineState::Idle as u8;
+    let espresso = MachineState::Espresso as u8;
+    assert_eq!(world.requests[before..], [(idle, false), (espresso, false)]);
+    world.apply(&Op::Advance { ms: 3_000 });
+    assert_ne!(world.de1.state, MachineState::HotWater);
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// A flow begun after the tap is never bounced: the start stands down and
+/// steam carries on.
+#[test]
+fn a_flow_begun_after_the_tap_stands_the_start_down() {
+    let mut world = World::new(De1Params::default(), 0.0, 5_000, false, true);
+    world.apply(&Op::LoseWrites(1));
+    world.apply(&Op::AppStart { yield_g: 36.0 });
+    world.apply(&Op::Advance { ms: 1_000 });
+    world.apply(&Op::GroupHead(MachineState::Steam));
+    world.apply(&Op::Advance { ms: 40_000 });
+    assert_eq!(world.coverage.started, 0);
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// Review of #364, departure 4: Steam tapped while hot water pours and a
+/// profile uploads waits out the guard, then goes out as the user's tap.
+#[test]
+fn a_users_held_tap_goes_out_once_the_guard_clears() {
+    let mut world = plain_world();
+    world.apply(&Op::AppStart { yield_g: 36.0 });
+    world.apply(&Op::GroupHead(MachineState::HotWater));
+    world.apply(&Op::Advance { ms: 100 });
+    world.apply(&Op::AppRequest(MachineState::Steam));
+    world.apply(&Op::Advance { ms: 3_000 });
+    assert_eq!(world.coverage.held_releases, 1, "{:?}", world.requests);
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
 }

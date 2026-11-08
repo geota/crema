@@ -1007,6 +1007,17 @@ pub enum Command {
         /// The bytes to write.
         data: Vec<u8>,
     },
+    /// Stop the machine: write Idle to the requested-state characteristic
+    /// (`0x02`) now, on the urgent lane, ahead of anything queued. Only the
+    /// core emits it, and only while a flow session is open. A shell keeps at
+    /// most one outstanding: a second is dropped while one is queued or in
+    /// flight.
+    Stop,
+    /// Drop any [`Stop`](Self::Stop) not yet on the air. One already in
+    /// flight can't be recalled. Sent when a session closes, the link drops,
+    /// or the core resets, so a late Idle can't wake a sleeping machine or
+    /// stop the next flow.
+    CancelStop,
 }
 
 /// The result of feeding the core one input: what it observed (`events`) and
@@ -1026,6 +1037,25 @@ pub struct CoreOutput {
 
 #[cfg(test)]
 impl CoreOutput {
+    /// The machine-state requests this output makes, as requested-state
+    /// bytes, with a [`Command::Stop`] as the Idle byte it writes (tests
+    /// only; a test about the lane matches `Command::Stop` itself).
+    pub(crate) fn state_requests(&self) -> Vec<u8> {
+        self.commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1RequestedState,
+                    data,
+                } => data.first().copied(),
+                Command::Stop => Some(de1_protocol::requested_state(
+                    de1_protocol::MachineState::Idle,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The `upload_id` of the upload this output started (tests only).
     ///
     /// # Panics

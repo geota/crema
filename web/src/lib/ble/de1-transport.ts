@@ -130,6 +130,20 @@ export interface De1Transport {
 	): Promise<boolean>;
 
 	/**
+	 * Write `data` ahead of every write still queued (one in flight still
+	 * goes first), only if `guard()` holds when it starts. Resolves `false`
+	 * when the guard refused. The core's `Command::Stop` rides it; its
+	 * `Command::CancelStop` makes the guard refuse. Optional: without it the
+	 * stop queues like any write.
+	 */
+	writeUrgent?(
+		serviceUuid: string,
+		characteristicUuid: string,
+		data: Uint8Array,
+		guard: () => boolean
+	): Promise<boolean>;
+
+	/**
 	 * One-shot read of `(serviceUuid, characteristicUuid)`. Returns
 	 * the raw bytes the device responded with.
 	 */

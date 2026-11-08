@@ -29,6 +29,8 @@ mod packet_sync;
 mod packet_sync_tests;
 mod profile_sync;
 #[cfg(test)]
+mod request_gate_tests;
+#[cfg(test)]
 mod scale_robustness_tests;
 pub mod shot_start;
 mod sweep;
@@ -83,8 +85,9 @@ use de1_domain::{
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
     SHOT_HEADER_LEN, ShotHeader, ShotSample, ShotSettings, StateInfo, SubState, Version,
-    WaterLevels, mmr, profile, requested_state,
+    WaterLevels, mmr, profile,
 };
+use machine_requests::Initiator;
 use packet_sync::LinkSession;
 
 /// Maximum gap between profile-upload acks before the orchestrator fails the
@@ -1564,7 +1567,8 @@ impl CremaCore {
     /// Waits out the firmware's profile-download guard: during a profile
     /// upload and for 500 ms after it, the request is held and goes out on a
     /// later tick ([`Event::MachineRequestHeld`], [`Event::WakeAt`]). Idle is
-    /// never held. See [`machine_requests`].
+    /// never held. Idle during a flow is [`Command::Stop`]. A read-only mirror
+    /// sends nothing. See [`machine_requests`].
     pub fn request_machine_state(&mut self, state: MachineState) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("request_machine_state") {
             return out;
@@ -1596,7 +1600,7 @@ impl CremaCore {
             self.drop_held_request();
             return out;
         }
-        self.issue_state_request(state, true, &mut out);
+        self.issue_state_request(state, Initiator::User, &mut out);
         out
     }
 
@@ -3351,6 +3355,9 @@ impl CremaCore {
         if self.link.state_seen || self.link.lost_at.is_none() {
             self.link.lost_at = Some(self.clock);
         }
+        // A shell holds a queued write for 5 s (Android) or 10 s (web): one
+        // left queued could land on the next link.
+        out.commands.push(Command::CancelStop);
         // A new connection generation: what was pushed is forgotten.
         self.link_lost_session(&mut out);
         self.stop_scale_timer_for_link_loss(&mut out);
@@ -3398,6 +3405,8 @@ impl CremaCore {
         self.firmware_flash_link_lost();
         let firmware_flash = self.firmware_flash.take();
         let mut out = CoreOutput::default();
+        // No session survives a reset, so no stop is owed.
+        out.commands.push(Command::CancelStop);
         self.stop_scale_timer_for_link_loss(&mut out);
         self.abandon_maintenance(&mut out);
         // A pending shot start is over; its settings are user config.
@@ -3599,7 +3608,13 @@ impl CremaCore {
             out.events.push(Event::UnknownMachineByte { byte });
         }
         let first_on_link = self.link_state_seen(info, out);
+        let before = self.session.map(|s| s.mode);
         self.session = Session::on_state(self.session, info, first_on_link);
+        // A closed session owes nothing: a stop still queued would land on
+        // whatever the machine does next (§3.3).
+        if before.is_some() && before != self.session.map(|s| s.mode) {
+            out.commands.push(Command::CancelStop);
+        }
         if self.last_state != Some(info) {
             let prev_info = self.last_state;
             let prev_state = prev_info.map(|s| s.state);
@@ -5835,10 +5850,7 @@ impl CremaCore {
             .step_weight
             .on_weight(projected, now, scale_usable, saw_armed)
         {
-            out.commands.push(Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::SkipToNext)],
-            });
+            self.request_state(MachineState::SkipToNext, Initiator::Core, out);
         }
     }
 
@@ -5852,10 +5864,7 @@ impl CremaCore {
             self.stop_triggered_this_shot = true;
             self.shot_stop_reason.get_or_insert(reason);
             out.events.push(Event::StopTriggered { reason });
-            out.commands.push(Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::Idle)],
-            });
+            self.request_state(MachineState::Idle, Initiator::Core, out);
             if self.pending_stop.is_none() {
                 self.pending_stop = Some(PendingStop {
                     reason,
@@ -5896,10 +5905,7 @@ impl CremaCore {
         pending.last_push = now;
         let (reason, attempt) = (pending.reason, pending.attempts);
         out.events.push(Event::StopRetried { reason, attempt });
-        out.commands.push(Command::WriteCharacteristic {
-            target: WriteTarget::De1RequestedState,
-            data: vec![requested_state(MachineState::Idle)],
-        });
+        self.request_state(MachineState::Idle, Initiator::Core, out);
     }
 
     /// Emit [`Event::StopTargetsArmed`] whenever the armed picture changed —
@@ -6142,7 +6148,7 @@ mod tests {
         assert_eq!(core.weight_unit_pref(), WeightUnit::Grams);
         assert_eq!(core.low_water.warn_ml(), None);
     }
-    use de1_protocol::{MachineState, SubState, heater_voltage_from_raw};
+    use de1_protocol::{MachineState, SubState, heater_voltage_from_raw, requested_state};
     // Per-scale protocol modules used by the tests; the production lib
     // no longer reaches into these directly (the capability-driven
     // refactor consolidated everything through `Scale::*_command`).
@@ -7008,7 +7014,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteScale { data } => Some(data.as_slice()),
-                Command::WriteCharacteristic { .. } => None,
+                _ => None,
             })
             .collect();
         assert!(writes.contains(&bookoo::QUERY_SERIAL.as_slice()));
@@ -7254,7 +7260,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteScale { data } => Some(data.as_slice()),
-                Command::WriteCharacteristic { .. } => None,
+                _ => None,
             })
             .collect();
         assert_eq!(writes.len(), 1, "expected exactly one WriteScale command");
@@ -7382,7 +7388,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteScale { data } => Some(data.as_slice()),
-                Command::WriteCharacteristic { .. } => None,
+                _ => None,
             })
             .collect();
         assert!(
@@ -7405,7 +7411,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteScale { data } => Some(data.as_slice()),
-                Command::WriteCharacteristic { .. } => None,
+                _ => None,
             })
             .collect();
         assert!(
@@ -7427,7 +7433,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteScale { data } => Some(data.as_slice()),
-                Command::WriteCharacteristic { .. } => None,
+                _ => None,
             })
             .collect();
         assert!(
@@ -7452,7 +7458,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteScale { data } => Some(data.as_slice()),
-                Command::WriteCharacteristic { .. } => None,
+                _ => None,
             })
             .collect();
         for expected in [
@@ -7508,7 +7514,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteScale { data } => Some(data.as_slice()),
-                Command::WriteCharacteristic { .. } => None,
+                _ => None,
             })
             .filter(|w| {
                 *w == decent_scale::LCD_ENABLE_GRAMS.as_slice()
@@ -7529,7 +7535,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteScale { data } => Some(data.as_slice()),
-                Command::WriteCharacteristic { .. } => None,
+                _ => None,
             })
             .collect()
     }
@@ -9008,13 +9014,7 @@ mod tests {
         assert!(out.events.contains(&Event::StopTriggered {
             reason: StopReason::Weight,
         }));
-        assert!(out.commands.iter().any(|c| matches!(
-            c,
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                ..
-            }
-        )));
+        assert!(out.commands.iter().any(|c| matches!(c, Command::Stop)));
     }
 
     /// A 19-byte `ShotSample` packet with the given `sample_time`, group
@@ -9186,13 +9186,7 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::StopRetried { .. }))
         );
-        assert!(!out.commands.iter().any(|c| matches!(
-            c,
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                ..
-            }
-        )));
+        assert!(!out.commands.iter().any(|c| matches!(c, Command::Stop)));
         // Past the window the stop is re-commanded, with the retry visible.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_700), 7_100);
         assert!(out.events.iter().any(|e| matches!(
@@ -9202,13 +9196,7 @@ mod tests {
                 attempt: 1
             }
         )));
-        assert!(out.commands.iter().any(|c| matches!(
-            c,
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                ..
-            }
-        )));
+        assert!(out.commands.iter().any(|c| matches!(c, Command::Stop)));
         // The machine finally honours it (Idle → the shot completes) — the
         // enforcer stands down; later readings re-command nothing.
         core.on_notification(Source::De1State, &[2, 0], 8_000);
@@ -9218,13 +9206,7 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::StopRetried { .. }))
         );
-        assert!(!out.commands.iter().any(|c| matches!(
-            c,
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                ..
-            }
-        )));
+        assert!(!out.commands.iter().any(|c| matches!(c, Command::Stop)));
     }
 
     #[test]
@@ -9900,13 +9882,7 @@ mod tests {
         assert!(out.events.contains(&Event::StopTriggered {
             reason: StopReason::Weight,
         }));
-        assert!(out.commands.iter().any(|c| matches!(
-            c,
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                ..
-            }
-        )));
+        assert!(out.commands.iter().any(|c| matches!(c, Command::Stop)));
         // Fired once — later readings must not re-stop.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(15_200), 4_500);
         assert!(
@@ -10447,7 +10423,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteScale { data } => Some(data.as_slice()),
-                Command::WriteCharacteristic { .. } => None,
+                _ => None,
             })
             .collect();
         // The first WriteScale is the auto-tare (TARE), then the two timer
@@ -10474,7 +10450,7 @@ mod tests {
                 .iter()
                 .filter_map(|c| match c {
                     Command::WriteScale { data } => Some(data.as_slice()),
-                    Command::WriteCharacteristic { .. } => None,
+                    _ => None,
                 })
                 .collect()
         }
@@ -10778,7 +10754,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteScale { data } => Some(data.as_slice()),
-                Command::WriteCharacteristic { .. } => None,
+                _ => None,
             })
             .collect();
         // A tare may have been emitted (Acaia supports tare), but no timer

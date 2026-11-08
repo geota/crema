@@ -35,6 +35,17 @@
 //! rule); any other request is refused with
 //! [`Event::MachineRequestRefused`] and nothing is written.
 //!
+//! **Request gate** (`.scratch/machine-control/DESIGN.md` §3.7). Every
+//! machine-state write, the user's and the core's, goes through
+//! [`CremaCore::request_state`], the only place one is built (bar the firmware
+//! flash's own Sleep). A mirror sends none. Idle with a flow session open is
+//! [`Command::Stop`], which a shell sends on its urgent lane; a session closing,
+//! a link drop and a reset send [`Command::CancelStop`]. The core alone never
+//! bounces a flow through Idle, never sleeps a session, and runs maintenance
+//! only from Idle or Sleep; a start may bounce its own flush and the flow that
+//! ran when Start was tapped. A request released from the guard keeps its
+//! standing: it goes out only in the state it was made in.
+//!
 //! **Wake hint.** Whenever the earliest deadline the core is waiting for
 //! changes, it emits [`Event::WakeAt`] with that time (the shell's clock, the
 //! one it passes to `on_tick`). The shell keeps one one-shot timer, replaced
@@ -112,6 +123,20 @@ fn is_flow_state(state: MachineState) -> bool {
     )
 }
 
+/// Who asked for a machine state request, for the request gate
+/// ([`CremaCore::request_state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Initiator {
+    /// The user: a control, or one relayed from a peer.
+    User,
+    /// The app's own shot start: its flush and its Espresso, which may bounce
+    /// the flow that was running when the user tapped Start.
+    Start,
+    /// The core on its own: a stop, a skip, the purge, idle sleep or a
+    /// maintenance release.
+    Core,
+}
+
 /// A request waiting out the guard.
 #[derive(Debug, Clone, Copy)]
 struct Held {
@@ -120,8 +145,8 @@ struct Held {
     from: Option<MachineState>,
     /// When it was held.
     at: Duration,
-    /// The user asked for it (not the core itself).
-    user: bool,
+    /// Who asked for it.
+    initiator: Initiator,
 }
 
 /// Where the guard stands.
@@ -133,6 +158,14 @@ pub(crate) enum Guard {
     Uploading,
     /// Requests wait until this time.
     Until(Duration),
+}
+
+/// The one machine-state write: the requested-state characteristic.
+fn push_requested_state(state: MachineState, out: &mut CoreOutput) {
+    out.commands.push(Command::WriteCharacteristic {
+        target: WriteTarget::De1RequestedState,
+        data: vec![requested_state(state)],
+    });
 }
 
 impl CremaCore {
@@ -176,24 +209,24 @@ impl CremaCore {
 
     /// Send `state` through the guard: Idle at once (dropping a held
     /// request), anything else at once when the guard is clear, else held.
-    /// `user`: the user asked for it (a held or dropped request is reported).
+    /// A user's held or dropped request is reported.
     pub(crate) fn issue_state_request(
         &mut self,
         state: MachineState,
-        user: bool,
+        initiator: Initiator,
         out: &mut CoreOutput,
     ) {
         if state == MachineState::Idle || self.guard() == Guard::Clear {
             self.request_guard.held = None;
-            self.write_state_now(state, out);
+            self.request_state(state, initiator, out);
         } else {
             self.request_guard.held = Some(Held {
                 state,
                 from: self.last_state.map(|info| info.state),
                 at: self.clock,
-                user,
+                initiator,
             });
-            if user {
+            if initiator == Initiator::User {
                 out.events.push(Event::MachineRequestHeld { state });
             }
         }
@@ -221,7 +254,7 @@ impl CremaCore {
             };
             if let Some(reason) = drop {
                 self.request_guard.held = None;
-                if held.user {
+                if held.initiator == Initiator::User {
                     out.events.push(Event::MachineRequestDropped {
                         state: held.state,
                         reason,
@@ -229,7 +262,10 @@ impl CremaCore {
                 }
             } else if clear {
                 self.request_guard.held = None;
-                self.write_state_now(held.state, out);
+                // The release keeps the request's standing: the machine is
+                // still in the state it was tapped in (a change drops it, and
+                // the user hears), so the user's intent still stands.
+                self.request_state(held.state, held.initiator, out);
                 // The profile sync waited for it — but not after a flow
                 // state: the last state report still reads Idle, and an
                 // upload must not chase a machine entering Steam (F7.5). The
@@ -242,15 +278,51 @@ impl CremaCore {
         self.emit_wake(out);
     }
 
-    /// The request itself: a flow state from anything but Idle goes via Idle
-    /// first (the DE1 only enters a flow state from Idle), then the state.
-    pub(crate) fn write_state_now(&mut self, state: MachineState, out: &mut CoreOutput) {
+    /// The request gate (`DESIGN.md` §3.7): every machine-state write goes
+    /// through here, and only here builds one. Returns whether anything was
+    /// sent.
+    ///
+    /// - A mirror sends nothing, whoever asked.
+    /// - Idle with a flow session open is [`Command::Stop`]; with none, a
+    ///   plain write.
+    /// - Sleep with a session open only from the user (the power button).
+    /// - A maintenance cycle only from Idle or Sleep.
+    /// - A flow state from Idle is written; from anything else it goes via
+    ///   Idle first (the DE1 only enters a flow state from Idle). Bouncing
+    ///   another flow needs the user, or a start bouncing its own flush or the
+    ///   flow that ran when Start was tapped; the core alone never does, and a
+    ///   start refused here is over.
+    pub(crate) fn request_state(
+        &mut self,
+        state: MachineState,
+        initiator: Initiator,
+        out: &mut CoreOutput,
+    ) -> bool {
+        if self.read_only {
+            return false;
+        }
         let current = self.last_state.map(|info| info.state);
+        let session_open = self.session.is_some();
+        if state == MachineState::Idle && session_open {
+            out.commands.push(Command::Stop);
+            return true;
+        }
+        if state == MachineState::Sleep && session_open && initiator != Initiator::User {
+            return false;
+        }
+        if is_run_now_state(state) && !maintenance_request_allowed(current) {
+            return false;
+        }
         if is_flow_state(state) && current != Some(MachineState::Idle) {
-            out.commands.push(Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::Idle)],
-            });
+            if let Some(running) = current.filter(|s| s.is_flow_state())
+                && !self.may_bounce(running, initiator)
+            {
+                if initiator == Initiator::Start {
+                    self.start_refused_by_flow(running, out);
+                }
+                return false;
+            }
+            push_requested_state(MachineState::Idle, out);
         }
         // The pending packet goes between the Idle bounce and the pour, so
         // "change the profile, then tap Hot water" pours the new target. It
@@ -259,12 +331,19 @@ impl CremaCore {
         if state == MachineState::HotWater {
             self.drive_shot_settings(out, true);
         }
-        out.commands.push(Command::WriteCharacteristic {
-            target: WriteTarget::De1RequestedState,
-            data: vec![requested_state(state)],
-        });
+        push_requested_state(state, out);
         if state == MachineState::HotWaterRinse {
             self.start_on_flush_written();
+        }
+        true
+    }
+
+    /// Whether `initiator` may bounce the `running` flow through Idle.
+    fn may_bounce(&self, running: MachineState, initiator: Initiator) -> bool {
+        match initiator {
+            Initiator::User => true,
+            Initiator::Start => self.start_may_bounce(running),
+            Initiator::Core => false,
         }
     }
 
@@ -338,16 +417,7 @@ mod tests {
     const ESPRESSO: [u8; 2] = [4, 4];
 
     fn state_writes(out: &CoreOutput) -> Vec<u8> {
-        out.commands
-            .iter()
-            .filter_map(|c| match c {
-                Command::WriteCharacteristic {
-                    target: WriteTarget::De1RequestedState,
-                    data,
-                } => Some(data[0]),
-                _ => None,
-            })
-            .collect()
+        out.state_requests()
     }
 
     fn wakes(out: &CoreOutput) -> Vec<f64> {
@@ -667,7 +737,7 @@ mod tests {
     fn only_the_users_requests_are_reported() {
         let (mut core, _upload) = uploading(1_000);
         let mut out = CoreOutput::default();
-        core.issue_state_request(MachineState::HotWaterRinse, false, &mut out);
+        core.issue_state_request(MachineState::HotWaterRinse, Initiator::Core, &mut out);
         assert!(held(&out).is_empty());
         let _ = core.on_notification(Source::De1State, &ESPRESSO, 1_100);
         let out = core.on_tick(1_200);

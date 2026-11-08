@@ -499,6 +499,8 @@ pub struct Write {
     pub settings: Option<Vec<u8>>,
     /// Goes to the profile characteristics, and is acked.
     pub profile: Option<(bool, Vec<u8>)>,
+    /// A `Command::Stop`: the urgent lane, at most one outstanding.
+    pub stop: bool,
 }
 
 /// A shell's GATT lane: one write at a time. A stop goes to the front of the
@@ -522,7 +524,7 @@ pub struct SimLane {
 const WRITE_MS: u64 = 40;
 
 fn is_stop(write: &Write) -> bool {
-    write.requested == Some(MachineState::Idle as u8)
+    write.stop
 }
 
 impl SimLane {
@@ -550,6 +552,11 @@ impl SimLane {
         } else {
             self.queue.push_back(write);
         }
+    }
+
+    /// `Command::CancelStop`: a stop not yet on the air is dropped.
+    pub fn cancel_stop(&mut self) {
+        self.queue.retain(|w| !is_stop(w));
     }
 
     /// The link went: what's queued dies with it.
@@ -845,6 +852,14 @@ mod tests {
             requested: Some(byte),
             settings: None,
             profile: None,
+            stop: false,
+        }
+    }
+
+    fn stop() -> Write {
+        Write {
+            stop: true,
+            ..request(MachineState::Idle as u8)
         }
     }
 
@@ -853,19 +868,43 @@ mod tests {
         let mut lane = SimLane::new(5_000);
         lane.push(request(14));
         lane.push(request(4));
+        lane.push(stop());
+        lane.push(stop());
+        let landed: Vec<Write> = (0..10).flat_map(|i| lane.step(i * 100)).collect();
+        assert_eq!(landed, vec![stop(), request(14), request(4)]);
+    }
+
+    #[test]
+    fn a_plain_idle_keeps_its_place() {
+        let mut lane = SimLane::new(5_000);
         lane.push(request(2));
+        lane.push(request(4));
         lane.push(request(2));
         let landed: Vec<Write> = (0..10).flat_map(|i| lane.step(i * 100)).collect();
-        assert_eq!(landed, vec![request(2), request(14), request(4)]);
+        assert_eq!(landed, vec![request(2), request(4), request(2)]);
+    }
+
+    #[test]
+    fn cancel_stop_drops_a_queued_stop_but_not_one_on_the_air() {
+        let mut lane = SimLane::new(5_000);
+        lane.push(stop());
+        assert!(lane.step(0).is_empty(), "on the air");
+        lane.cancel_stop();
+        assert_eq!(lane.step(100), vec![stop()]);
+        lane.push(request(14));
+        lane.push(stop());
+        lane.cancel_stop();
+        let landed: Vec<Write> = (2..10).flat_map(|i| lane.step(i * 100)).collect();
+        assert_eq!(landed, vec![request(14)]);
     }
 
     #[test]
     fn a_hung_write_holds_the_lane_until_the_timeout_and_is_lost() {
         let mut lane = SimLane::new(5_000);
         lane.hang_next = true;
-        lane.push(request(2));
+        lane.push(stop());
         assert!(lane.step(0).is_empty());
-        lane.push(request(2));
+        lane.push(stop());
         lane.push(request(14));
         assert!(lane.step(4_900).is_empty());
         assert!(

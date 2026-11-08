@@ -287,7 +287,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteCharacteristic { target, .. } => Some(*target),
-                Command::WriteScale { .. } => None,
+                _ => None,
             })
             .collect()
     }
