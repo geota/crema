@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getCremaUiState, refreshStopTargetsProjection, weightBlockedNote } from './ui-state.svelte';
+import { getCremaUiState, refreshStopTargetsProjection } from './ui-state.svelte';
 
 /**
  * The stop-condition UI renders ONLY from the core's projection, so the
@@ -23,6 +23,7 @@ describe('refreshStopTargetsProjection', () => {
 			maxTime: null,
 			weightConfigured: null,
 			weightBlocked: null,
+			weightBlockedNote: null,
 			...p
 		})
 	});
@@ -65,10 +66,30 @@ describe('refreshStopTargetsProjection', () => {
 	});
 });
 
-describe('weightBlockedNote', () => {
-	it('says why each configured weight stop is off', () => {
-		expect(weightBlockedNote('began-unseen')).toBe('Started before Crema connected');
-		expect(weightBlockedNote('untared-cup')).toBe('cup not tared');
-		expect(weightBlockedNote('no-scale')).toBe('no scale');
+describe('the blocked note', () => {
+	it('is the core\'s, carried through to the snapshot', async () => {
+		const fakeCore = (p: Record<string, unknown>) => ({
+			stopTargetsProjection: async () => ({
+				armed: false,
+				weight: null,
+				volume: null,
+				maxTime: null,
+				weightConfigured: null,
+				weightBlocked: null,
+				weightBlockedNote: null,
+				...p
+			})
+		});
+		await refreshStopTargetsProjection(
+			fakeCore({
+				weightConfigured: 36,
+				weightBlocked: 'scale-lost',
+				weightBlockedNote: 'Scale lost before the cup had weight. Stop this shot by hand.'
+			}) as Parameters<typeof refreshStopTargetsProjection>[0]
+		);
+		const s = getCremaUiState().current.stopTargets;
+		expect(s?.weightBlockedNote).toBe(
+			'Scale lost before the cup had weight. Stop this shot by hand.'
+		);
 	});
 });

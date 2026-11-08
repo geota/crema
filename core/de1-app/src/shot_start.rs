@@ -339,7 +339,7 @@ impl CremaCore {
                 output: self.gate_read_only(out),
             };
         }
-        if self.stops_on_weight(profile, qc) && self.scale.is_none() {
+        if self.stops_on_weight(profile, qc) && !self.scale_link().is_fresh() {
             out.events.push(Event::StartNotice {
                 notice: StartCheck::NoScale.into(),
             });
@@ -452,7 +452,7 @@ impl CremaCore {
             })
         } else if self.starter.settings.require_scale
             && self.stops_on_weight(profile, qc)
-            && self.scale.is_none()
+            && !self.scale_link().is_fresh()
         {
             Some(StartRefusal::ScaleRequired)
         } else {
@@ -669,7 +669,7 @@ impl CremaCore {
         if self.stop_on_weight
             && !self.weight_target_disabled
             && weight_target.is_some()
-            && self.scale.is_none()
+            && !self.scale_link().is_fresh()
         {
             notices.push(StartCheck::NoScale.into());
         }

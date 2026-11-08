@@ -169,6 +169,7 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
             armed: false,
             weight_configured: None,
             weight_blocked: None,
+            weight_blocked_note: None,
         },
         Event::MachineStateChanged {
             state: MachineState::Idle,
@@ -245,6 +246,7 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
             armed: false,
             weight_configured: None,
             weight_blocked: None,
+            weight_blocked_note: None,
         },
         Event::MachineStateChanged {
             state: MachineState::Sleep,

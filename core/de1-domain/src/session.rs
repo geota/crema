@@ -99,6 +99,15 @@ impl ActiveMode {
     }
 }
 
+/// The substates before water flows. An unknown substate counts as flowing.
+#[must_use]
+pub fn is_pre_flow(substate: SubState) -> bool {
+    matches!(
+        substate,
+        SubState::Ready | SubState::Heating | SubState::FinalHeating | SubState::Stabilising
+    )
+}
+
 /// Whether the app saw a flow begin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Observed {
@@ -115,11 +124,7 @@ impl Observed {
     /// unknown substate counts as flowing.
     #[must_use]
     pub fn on_open(first_on_link: bool, substate: SubState) -> Observed {
-        let pre_flow = matches!(
-            substate,
-            SubState::Ready | SubState::Heating | SubState::FinalHeating | SubState::Stabilising
-        );
-        if first_on_link && !pre_flow {
+        if first_on_link && !is_pre_flow(substate) {
             Observed::Unseen
         } else {
             Observed::FromStart
@@ -130,8 +135,17 @@ impl Observed {
 /// Why the scale can't speak for a session's cup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Blocked {
+    /// No scale is connected.
+    NoScale,
+    /// A scale is connected but isn't reporting weight.
+    ScaleSilent,
     /// The session began before the app saw it.
     BeganUnseen,
+    /// A heavy reading right after first flow never settled: the cup wasn't
+    /// tared, and its weight can't be told from coffee.
+    UntaredCup,
+    /// The scale went quiet before the cup had any weight in it.
+    ScaleLost,
 }
 
 impl Blocked {
@@ -139,9 +153,34 @@ impl Blocked {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Blocked::NoScale => "no-scale",
+            Blocked::ScaleSilent => "scale-silent",
             Blocked::BeganUnseen => "began-unseen",
+            Blocked::UntaredCup => "untared-cup",
+            Blocked::ScaleLost => "scale-lost",
         }
     }
+
+    /// The note a shell shows on the weight row, the same on both shells.
+    #[must_use]
+    pub const fn note(self) -> &'static str {
+        match self {
+            Blocked::NoScale => "no scale",
+            Blocked::ScaleSilent => "Scale isn't reporting",
+            Blocked::BeganUnseen => "Started before Crema connected",
+            Blocked::UntaredCup => "cup not tared",
+            Blocked::ScaleLost => "Scale lost before the cup had weight. Stop this shot by hand.",
+        }
+    }
+
+    /// Every reason, for the shells' tests.
+    pub const ALL: [Blocked; 5] = [
+        Blocked::NoScale,
+        Blocked::ScaleSilent,
+        Blocked::BeganUnseen,
+        Blocked::UntaredCup,
+        Blocked::ScaleLost,
+    ];
 }
 
 /// What the scale's zero means for a session.
@@ -149,6 +188,9 @@ impl Blocked {
 pub enum Baseline {
     /// Tare pending, or no reading yet.
     Unknown,
+    /// The zero is good: the tare landed or timed out, auto-tare is off, or
+    /// the untared-cup guard latched a virtual zero.
+    Tared,
     /// The scale's readings can't be trusted for this session.
     Refused {
         /// Why.
@@ -210,7 +252,24 @@ impl Session {
     pub fn weight_refused(&self) -> Option<Blocked> {
         match self.baseline {
             Baseline::Refused { why } => Some(why),
-            Baseline::Unknown => None,
+            Baseline::Unknown | Baseline::Tared => None,
+        }
+    }
+
+    /// The zero is known: `Unknown` becomes `Tared`. A refused baseline stays
+    /// refused for the session.
+    pub fn tared(&mut self) {
+        if self.baseline == Baseline::Unknown {
+            self.baseline = Baseline::Tared;
+        }
+    }
+
+    /// The untared-cup guard tripped: weight is refused for the session.
+    pub fn untared_cup(&mut self) {
+        if matches!(self.baseline, Baseline::Unknown | Baseline::Tared) {
+            self.baseline = Baseline::Refused {
+                why: Blocked::UntaredCup,
+            };
         }
     }
 }

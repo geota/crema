@@ -6,8 +6,7 @@ use de1_domain::{HotWaterDose, HotWaterMode};
 use de1_protocol::{MachineState, ShotSettings, requested_state};
 
 use crate::{
-    Command, CoreOutput, CremaCore, Event, SCALE_STALE_TIMEOUT, Source, SteamHotWaterTargets,
-    StopReason, WriteTarget,
+    Command, CoreOutput, CremaCore, Event, Source, SteamHotWaterTargets, StopReason, WriteTarget,
 };
 
 fn ratio(r: f32) -> HotWaterDose {
@@ -276,7 +275,8 @@ fn packet_follows_operational_scale() {
     let w = packets(&weight(&mut core, 0, 1_000));
     assert_eq!(w.len(), 1, "connect");
     assert_eq!(w[0].hot_water_volume_ml, 250.0);
-    let stale_ms = 1_000 + u64::try_from(SCALE_STALE_TIMEOUT.as_millis()).unwrap() + 10;
+    let stale_ms =
+        1_000 + u64::try_from(de1_domain::scale_trust::STALE_AFTER.as_millis()).unwrap() + 10;
     let out = core.on_tick(stale_ms);
     assert!(out.events.contains(&Event::ScaleStale));
     let w = packets(&out);
@@ -318,7 +318,8 @@ fn packet_waits_for_a_scale_reading() {
 
     // Stale, then reset() keeping the scale: still not operational until a
     // fresh reading.
-    let stale_ms = 400 + u64::try_from(SCALE_STALE_TIMEOUT.as_millis()).unwrap() + 10;
+    let stale_ms =
+        400 + u64::try_from(de1_domain::scale_trust::STALE_AFTER.as_millis()).unwrap() + 10;
     let _ = core.on_tick(stale_ms);
     assert!(!core.scale_operational(), "stale");
     core.reset();
@@ -772,6 +773,8 @@ fn ghc_espresso_arms_same_rules_as_app_start() {
         }
         let started = state(core, 4, 5, 1_000);
         out.commands.extend(started.commands);
+        // Weight goes live once the start's tare lands.
+        let _ = weight(core, 0, 1_100);
         let targets = core
             .auto_stop
             .as_ref()

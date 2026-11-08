@@ -243,7 +243,8 @@ impl SimDe1 {
         }
     }
 
-    fn flowing(&self) -> bool {
+    #[must_use]
+    pub fn flowing(&self) -> bool {
         matches!(
             self.sub,
             SubState::Preinfusion | SubState::Pouring | SubState::Steaming

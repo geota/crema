@@ -839,19 +839,6 @@ pub fn resolve_hot_water_json(dose_json: String, ctx_json: String) -> Result<Str
     de1_domain::resolve_hot_water_json(&dose_json, &ctx_json).map_err(crema_err)
 }
 
-/// Whether the profile's volume limit (SAV) will actually arm — the
-/// Max-Volume card's display gate, mirroring the core's stop-target
-/// demotion rule instead of each shell re-implementing it. See
-/// [`de1_domain::volume_stop_arms`].
-#[uniffi::export]
-pub fn volume_stop_arms(
-    scale_connected: bool,
-    weight_target_set: bool,
-    volume_stop_with_scale: bool,
-) -> bool {
-    de1_domain::volume_stop_arms(scale_connected, weight_target_set, volume_stop_with_scale)
-}
-
 /// Assemble the Visualizer `PATCH /shots/{id}` body from a
 /// `ShotPatchInputs` JSON (rating→flavor rule, inline-bean block,
 /// key naming — one builder for both shells; review #42), fitted to the

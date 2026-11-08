@@ -140,11 +140,10 @@ impl CremaCore {
         });
     }
 
-    /// A scale is connected, has sent a reading since it connected (or since
-    /// [`reset`](Self::reset)), and isn't stale (de1app `is_operational`): the
-    /// packet carries the 250 ml backstop and the core stops by weight.
+    /// The scale's link is fresh (de1app `is_operational`): the packet
+    /// carries the 250 ml backstop and the core stops by weight.
     pub(crate) fn scale_operational(&self) -> bool {
-        self.scale.is_some() && self.scale_reading_seen && !self.scale_stale_reported
+        self.scale_link().is_fresh()
     }
 
     /// The resolved hot-water target: the dose over the next shot's target

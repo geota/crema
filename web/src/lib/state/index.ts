@@ -33,8 +33,7 @@ export {
 	type De1Calibration,
 	type SensorCalibration,
 	type ReplayStatus,
-	type ReplayPhase,
-	weightBlockedNote
+	type ReplayPhase
 } from './ui-state.svelte';
 export {
 	CremaApp,
