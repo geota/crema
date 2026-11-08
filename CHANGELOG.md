@@ -135,6 +135,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Running a cut-off restore again keeps its shots' bag debits.** Beans the
+  first run added used to count as already on this device, so the second run
+  set those shots' debits to zero. Crema now knows the same backup by its date,
+  device and app version, from Drive or from a file, and a different backup
+  holding the same bean still counts it as yours. Android and web.
 - **Two web tabs no longer undo each other's changes.** Each store saved its
   whole copy, so a tab left open put its old copy back over what another tab
   had saved: a bag's debit, a rating, a recipe, a maintenance count. Each tab
