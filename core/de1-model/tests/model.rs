@@ -80,6 +80,7 @@ fn user_op() -> impl Strategy<Value = Op> {
             .prop_map(Op::SetVolumeLimit),
         1 => prop_oneof![Just(None), Just(Some(30.0f32))].prop_map(Op::SetMaxTime),
         1 => prop_oneof![Just(0.0f32), Just(148.0f32)].prop_map(Op::SetSteamTarget),
+        1 => any::<bool>().prop_map(Op::SetAutoTare),
         1 => prop_oneof![Just(None), Just(Some(3.6f32))].prop_map(Op::SetStepWeight),
         1 => Just(Op::Attach),
     ]
@@ -189,7 +190,7 @@ fn sample_cases(count: u32) -> Vec<Case> {
 #[test]
 fn the_generator_reaches_what_the_invariants_watch() {
     let mut total = de1_model::Coverage::default();
-    for case in sample_cases(200) {
+    for case in sample_cases(300) {
         let c = run(&case).coverage;
         total.shots += c.shots;
         total.water += c.water;
@@ -550,4 +551,38 @@ fn the_outage_evidence_boundary_is_settled_the_same_way() {
         world.apply(&Op::Advance { ms: 20_000 });
         assert!(world.violations.is_empty(), "{:?}", world.violations);
     }
+}
+
+/// Review of #369, with auto-tare off: a hot-water pour that starts while the
+/// scale's last reading is stale gets no weight target. When readings come
+/// back, the weight is trusted but no weight stop is armed, so the app's `V`
+/// leg must stay live. Without it, only the machine's 250 ml packet would
+/// end the pour.
+#[test]
+fn hot_water_started_on_a_stale_scale_still_stops_at_its_volume() {
+    let mut world = plain_world();
+    // A dose the sim pours well inside the packet's 60 s timeout.
+    world.set_hot_water_ml(60.0);
+    world.apply(&Op::SetAutoTare(false));
+    world.apply(&Op::SetSteamTarget(148.0));
+    world.apply(&Op::Advance { ms: 2_000 });
+    // The scale goes quiet right after a tick, and the pour's first report
+    // lands a second later, before a tick can rewrite the packet to V: the
+    // gap a connection-priority change or an HDS wake makes at a flow's start.
+    while !world.now_ms().is_multiple_of(1_000) {
+        world.apply(&Op::Advance { ms: 100 });
+    }
+    world.apply(&Op::Scale(ScaleMode::Stall));
+    world.apply(&Op::Advance { ms: 900 });
+    let before = world.requests.len();
+    world.apply(&Op::GroupHead(MachineState::HotWater));
+    world.apply(&Op::Advance { ms: 300 });
+    world.apply(&Op::Scale(ScaleMode::Healthy));
+    world.apply(&Op::Advance { ms: 120_000 });
+    let stops = world.requests[before..]
+        .iter()
+        .filter(|(_, stop)| *stop)
+        .count();
+    assert!(stops >= 1, "an app stop: {:?}", &world.requests[before..]);
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
 }
