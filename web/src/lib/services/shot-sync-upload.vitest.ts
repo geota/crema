@@ -225,7 +225,7 @@ describe('ShotSync.uploadShot — post-upload PATCH', () => {
 		expect(pendingEdit('s1')).toMatchObject({ annotations: true, tags: { add: ['x'], remove: [] } });
 	});
 
-	it('a re-upload of a bound shot sends no tags: they go as marks, onto the server list', async () => {
+	it('a re-upload of a bound shot sends no tags and marks none, so a website removal stands', async () => {
 		setPremium(true);
 		const { layer, calls } = mkHttp((req) =>
 			req.method === 'POST' ? { ok: true, json: { id: 'viz-1' } } : { ok: true, json: {} }
@@ -235,7 +235,7 @@ describe('ShotSync.uploadShot — post-upload PATCH', () => {
 		await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(bound))), layer);
 		const body = (JSON.parse(patchCall(calls)!.body as string) as { shot: Record<string, unknown> }).shot;
 		expect(body).not.toHaveProperty('tag_list');
-		expect(pendingEdit('s1')?.tags).toEqual({ add: ['espresso'], remove: [] });
+		expect(pendingEdit('s1')?.tags).toBeUndefined();
 	});
 
 	it('fails ResponseDecodeError when upload returns no id', async () => {

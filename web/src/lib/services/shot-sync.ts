@@ -637,15 +637,10 @@ export const ShotSyncLive = Layer.effect(
 			// skip cleanly (no risk of overwriting a Visualizer-side edit —
 			// the core builder additionally drops blank inline-bean fields).
 			const coffeeBagId = resolveCoffeeBagId(shot);
-			// Tags go absolute only onto a new row. A re-upload of a bound shot
-			// would undo tag changes made on the website, so its tags go as
-			// marks: the drain adds them onto the server's own list.
-			const rebind = shot.visualizerId != null;
-			const localTags = resolveTagList(shot);
-			if (rebind && localTags != null && localTags.length > 0) {
-				markShotEdit(shot.id, { tags: { before: [], after: localTags } });
-			}
-			const tagList = rebind ? null : localTags;
+			// Tags go absolute only onto a new row. A bound shot's tags already
+			// went up, or wait in marks: a re-upload sends none and marks none,
+			// or it would bring back tags removed on the website.
+			const tagList = shot.visualizerId != null ? null : resolveTagList(shot);
 			const grinderModel = resolveGrinderModel(shot, getSettingsStore().current.grinderModel);
 			if (
 				coffeeBagId != null ||
