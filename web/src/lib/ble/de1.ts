@@ -572,6 +572,38 @@ export class De1Manager {
 		}
 	}
 
+	/**
+	 * The core's `Command::ReadState`: read StateInfo and feed it back as a
+	 * state report, so a stop not honoured heals a report that was lost.
+	 * Resolves `false` when there's no link or the read fails; never throws.
+	 */
+	async readState(): Promise<boolean> {
+		const device = this.device;
+		if (device === null || this.firmwareExclusive) return false;
+		try {
+			const data = await device.readCharacteristic(De1Uuids.SERVICE, De1Uuids.STATE_INFO);
+			if (this.device !== device) return false;
+			this.feedState(data);
+			return true;
+		} catch (error) {
+			this.callbacks.onStatus(`DE1 state read failed: ${describeError(error)}`);
+			return false;
+		}
+	}
+
+	/** Feed a StateInfo read to the core, as its notification would be. */
+	private feedState(data: Uint8Array): void {
+		const atMs = performance.now();
+		this.lastInboundAtMs = atMs;
+		void this.core
+			.onNotification('De1State', data, atMs)
+			.then(this.callbacks.onCoreOutput)
+			.catch((error: unknown) => {
+				if (isCoreStopped(error)) return;
+				this.callbacks.onStatus(`DE1 state read processing failed: ${describeError(error)}`);
+			});
+	}
+
 	// ── Firmware flash I/O ──────────────────────────────────────────────
 	// The flash driver (`#lib/firmware/flash-driver`) performs the core's
 	// `FlashAction`s through these. Unlike `writeCharacteristic` they throw,
@@ -753,7 +785,13 @@ export class De1Manager {
 		const liveness = new De1Liveness({
 			now: () => performance.now(),
 			lastInboundAtMs: () => this.lastInboundAtMs,
-			probe: () => device.readCharacteristic(De1Uuids.SERVICE, De1Uuids.STATE_INFO),
+			// The probe's reply is a state report like any other: it heals one
+			// lost while a stop is owed.
+			probe: async () => {
+				const data = await device.readCharacteristic(De1Uuids.SERVICE, De1Uuids.STATE_INFO);
+				this.feedState(data);
+				return data;
+			},
 			paused: () => this.firmwareExclusive || device.connectionState !== 'connected',
 			onProbeFailed: (failures, quietMs) => {
 				if (this.device !== device) return;

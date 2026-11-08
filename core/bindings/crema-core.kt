@@ -1558,10 +1558,17 @@ data class EventStopTargetsArmedInner (
 /// Generated type representing the anonymous struct variant `StopRetried` of the `Event` Rust enum
 @Serializable
 data class EventStopRetriedInner (
-	/// The stop reason being enforced.
-	val reason: StopReason,
+	/// The leg's reason, or `None` for the user's Stop.
+	val reason: StopReason? = null,
 	/// 1-based retry attempt.
 	val attempt: UInt
+)
+
+/// Generated type representing the anonymous struct variant `StopNotHonoured` of the `Event` Rust enum
+@Serializable
+data class EventStopNotHonouredInner (
+	/// What to tell the user.
+	val message: String
 )
 
 /// Generated type representing the anonymous struct variant `ShotCompleted` of the `Event` Rust enum
@@ -2119,6 +2126,12 @@ sealed class Event {
 	@Serializable
 	@SerialName("StopRetried")
 	data class StopRetried(val content: EventStopRetriedInner): Event()
+	/// The machine hasn't honoured a stop after five retries, or an outage
+	/// left the core unsure the flow is the one it owed a stop to. The shell
+	/// alerts the user with `message`. Once per episode.
+	@Serializable
+	@SerialName("StopNotHonoured")
+	data class StopNotHonoured(val content: EventStopNotHonouredInner): Event()
 	/// The espresso shot finished.
 	@Serializable
 	@SerialName("ShotCompleted")
@@ -2467,12 +2480,18 @@ sealed class Command {
 	@SerialName("Stop")
 	object Stop: Command()
 	/// Drop any [`Stop`](Self::Stop) not yet on the air. One already in
-	/// flight can't be recalled. Sent when a session closes, the link drops,
-	/// or the core resets, so a late Idle can't wake a sleeping machine or
-	/// stop the next flow.
+	/// flight can't be recalled. Sent when the machine winds down, a session
+	/// closes, the link drops, or the core resets, so a late Idle can't wake
+	/// a sleeping machine or stop the next flow.
 	@Serializable
 	@SerialName("CancelStop")
 	object CancelStop: Command()
+	/// Read the DE1's `StateInfo` characteristic and feed the reply back as a
+	/// [`Source::De1State`] notification: a stop not honoured may only have
+	/// lost its state report.
+	@Serializable
+	@SerialName("ReadState")
+	object ReadState: Command()
 }
 
 /// The result of feeding the core one input: what it observed (`events`) and

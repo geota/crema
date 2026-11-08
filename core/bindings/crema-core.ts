@@ -1792,10 +1792,19 @@ export type Event =
 	 * or stalled BLE write must not let the shot pour past its target).
 	 */
 	| { type: "StopRetried", content: {
-	/** The stop reason being enforced. */
-	reason: StopReason;
+	/** The leg's reason, or `None` for the user's Stop. */
+	reason?: StopReason;
 	/** 1-based retry attempt. */
 	attempt: number;
+}}
+	/**
+	 * The machine hasn't honoured a stop after five retries, or an outage
+	 * left the core unsure the flow is the one it owed a stop to. The shell
+	 * alerts the user with `message`. Once per episode.
+	 */
+	| { type: "StopNotHonoured", content: {
+	/** What to tell the user. */
+	message: string;
 }}
 	/** The espresso shot finished. */
 	| { type: "ShotCompleted", content: {
@@ -2420,11 +2429,17 @@ export type Command =
 	| { type: "Stop", content?: undefined }
 	/**
 	 * Drop any [`Stop`](Self::Stop) not yet on the air. One already in
-	 * flight can't be recalled. Sent when a session closes, the link drops,
-	 * or the core resets, so a late Idle can't wake a sleeping machine or
-	 * stop the next flow.
+	 * flight can't be recalled. Sent when the machine winds down, a session
+	 * closes, the link drops, or the core resets, so a late Idle can't wake
+	 * a sleeping machine or stop the next flow.
 	 */
-	| { type: "CancelStop", content?: undefined };
+	| { type: "CancelStop", content?: undefined }
+	/**
+	 * Read the DE1's `StateInfo` characteristic and feed the reply back as a
+	 * [`Source::De1State`] notification: a stop not honoured may only have
+	 * lost its state report.
+	 */
+	| { type: "ReadState", content?: undefined };
 
 /**
  * The result of feeding the core one input: what it observed (`events`) and

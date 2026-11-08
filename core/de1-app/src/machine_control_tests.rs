@@ -61,10 +61,11 @@ fn steam_targets(mode: HotWaterMode) -> SteamHotWaterTargets {
     }
 }
 
-/// P1: the hot-water weight stop is one write: lost, it is never repeated.
-/// Flips in PR 6: retries until the machine confirms.
+/// P1: the hot-water weight stop used to be one write: lost, never repeated.
+/// The session owns it now (PR 6): retried every second until the machine
+/// winds down, then never again.
 #[test]
-fn p1_hot_water_stop_is_never_reenforced() {
+fn p1_a_hot_water_stop_is_retried_until_the_machine_winds_down() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
@@ -77,6 +78,7 @@ fn p1_hot_water_stop_is_never_reenforced() {
     let mut stops = vec![];
     let mut t = 200;
     let mut g = 0.0;
+    let mut first_stop = None;
     for _ in 0..60 {
         g += 4.0;
         t += 500;
@@ -84,8 +86,32 @@ fn p1_hot_water_stop_is_never_reenforced() {
         stops.extend(state_writes(&o));
         let o = core.on_notification(Source::De1ShotSample, &sample((t / 8) as u16), t + 10);
         stops.extend(state_writes(&o));
+        if first_stop.is_none() && !stops.is_empty() {
+            first_stop = Some(t);
+        }
     }
-    assert_eq!(stops.len(), 1, "exactly one write, no retry");
+    let first = first_stop.expect("the weight stop");
+    // The machine never winds down here: one write a second after the first.
+    let expected = (t - first) / 1_000;
+    assert!(
+        (stops.len() as u64).abs_diff(expected + 1) <= 1,
+        "{} writes over {} ms",
+        stops.len(),
+        t - first
+    );
+    // Ending honours it: nothing more, and the queue is told.
+    let o = core.on_notification(Source::De1State, &[6, 6], t + 100);
+    assert!(o.commands.contains(&Command::CancelStop));
+    let mut after = vec![];
+    for i in 1..20u64 {
+        let o = core.on_notification(
+            Source::De1ShotSample,
+            &sample(1_000 + i as u16),
+            t + 100 + i * 250,
+        );
+        after.extend(state_writes(&o));
+    }
+    assert!(after.is_empty(), "honoured: {after:?}");
 }
 
 /// P2: scale stalls mid-pour. The packet holds the 250 ml backstop, so the
@@ -123,7 +149,12 @@ fn p2_hot_water_scale_stall_stops_at_the_users_volume() {
         let o = core.on_notification(Source::De1ShotSample, &sample((t / 8) as u16), t + 1);
         stops.extend(state_writes(&o));
     }
-    assert_eq!(stops, [MachineState::Idle as u8], "one stop, at V");
+    // The stop, then its retries: this machine never winds down.
+    assert_eq!(
+        stops.first(),
+        Some(&(MachineState::Idle as u8)),
+        "a stop, at V"
+    );
     let poured = core.volume_integrator.pour_ml();
     assert!((120.0..140.0).contains(&poured), "{poured} ml");
 }
@@ -371,6 +402,8 @@ fn a_shot_seen_from_its_start_keeps_its_weight_stop_across_a_drop() {
     // A 1 s gap: weight is off but nothing is shown, and a reading restores it.
     assert_eq!(core.weight_stop_blocked_by(), None);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 3_050);
+    // The first sample back settles it: the same shot.
+    core.on_notification(Source::De1ShotSample, &sample(10), 3_060);
     assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
     let mut stops = vec![];
     for i in 0..60u64 {
@@ -934,6 +967,236 @@ fn review_owed_stop_survives_a_25_s_outage() {
     assert_eq!(state_writes(&o), vec![2]);
 }
 
+/// Outage evidence (`DESIGN.md` §3.3): an espresso shot coming back on a lower
+/// frame is a new shot begun during the outage. It starts unseen, with no
+/// tare and no weight stop, and a queued stop is cancelled.
+#[test]
+fn a_lower_frame_on_return_is_a_new_shot_begun_unseen() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    let mut f = sample(100);
+    f[17] = 4;
+    core.on_notification(Source::De1ShotSample, &f, 500);
+    core.de1_link_lost();
+    core.on_notification(Source::De1State, &[4, 5], 10_000);
+    let mut f = sample(200);
+    f[17] = 1;
+    let o = core.on_notification(Source::De1ShotSample, &f, 10_100);
+    assert!(o.commands.contains(&Command::CancelStop));
+    assert!(
+        o.events
+            .iter()
+            .any(|e| matches!(e, Event::ShotCompleted { .. }))
+    );
+    assert!(o.events.contains(&Event::ShotStarted));
+    assert_eq!(tares(&o), 0);
+    assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
+}
+
+/// No sample within a second of the return: unsure. With nothing owed, weight
+/// is refused; time and volume go on.
+#[test]
+fn no_sample_after_a_return_refuses_weight() {
+    let mut core = core_with_cup();
+    core.set_max_shot_duration(Some(60.0));
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    core.de1_link_lost();
+    core.on_notification(Source::De1State, &[4, 5], 3_000);
+    core.on_tick(4_000);
+    assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
+    assert_eq!(core.stop_targets_projection().1.max_time, Some(60.0));
+}
+
+/// Unsure with a stop owed: the stop is kept, sent at once, and raised.
+#[test]
+fn an_owed_stop_after_a_long_outage_is_sent_and_raised() {
+    let mut core = CremaCore::new();
+    core.set_max_shot_duration(Some(2.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[4, 5], 0);
+    core.on_notification(Source::De1ShotSample, &sample(10), 100);
+    let o = core.on_notification(Source::De1ShotSample, &sample(300), 2_200);
+    assert_eq!(
+        state_writes(&o),
+        [MachineState::Idle as u8],
+        "the time stop"
+    );
+    core.de1_link_lost();
+    core.on_notification(Source::De1State, &[4, 5], 2_300 + 90_000);
+    let o = core.on_notification(Source::De1ShotSample, &sample(400), 2_400 + 90_000);
+    assert_eq!(state_writes(&o), [MachineState::Idle as u8]);
+    assert!(
+        o.events
+            .iter()
+            .any(|e| matches!(e, Event::StopNotHonoured { .. }))
+    );
+}
+
+/// Retries are held while the evidence is out: none before the first sample.
+#[test]
+fn no_retry_goes_out_before_the_return_is_settled() {
+    let mut core = CremaCore::new();
+    core.set_max_shot_duration(Some(2.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[4, 5], 0);
+    core.on_notification(Source::De1ShotSample, &sample(10), 100);
+    core.on_notification(Source::De1ShotSample, &sample(300), 2_200);
+    core.de1_link_lost();
+    let o = core.on_notification(Source::De1State, &[4, 5], 9_000);
+    assert!(state_writes(&o).is_empty());
+    let o = core.on_tick(9_500);
+    assert!(state_writes(&o).is_empty(), "held for the frame");
+    let o = core.on_notification(Source::De1ShotSample, &sample(400), 9_600);
+    assert_eq!(
+        state_writes(&o),
+        [MachineState::Idle as u8],
+        "the same shot: at once"
+    );
+}
+
+/// A shot that winds down honours its stop: no retry in `Ending`, where the
+/// old enforcer kept writing until the state left Espresso.
+#[test]
+fn ending_honours_the_stop() {
+    let mut core = CremaCore::new();
+    core.set_max_shot_duration(Some(2.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[4, 5], 0);
+    core.on_notification(Source::De1ShotSample, &sample(10), 100);
+    core.on_notification(Source::De1ShotSample, &sample(300), 2_200);
+    let o = core.on_notification(Source::De1State, &[4, 6], 2_500);
+    assert!(o.commands.contains(&Command::CancelStop));
+    let mut writes = vec![];
+    for i in 1..20u64 {
+        let o = core.on_notification(
+            Source::De1ShotSample,
+            &sample(400 + i as u16),
+            2_500 + i * 250,
+        );
+        writes.extend(state_writes(&o));
+    }
+    assert!(writes.is_empty(), "{writes:?}");
+}
+
+/// Honoured, then flowing again (`Ending` back to `Pouring`): owed again, at
+/// once. Not in steam, where a person at the machine resumes a paused steam.
+#[test]
+fn flowing_after_an_honoured_stop_owes_it_again_except_in_steam() {
+    let mut core = CremaCore::new();
+    core.set_max_shot_duration(Some(2.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[4, 5], 0);
+    core.on_notification(Source::De1ShotSample, &sample(10), 100);
+    core.on_notification(Source::De1ShotSample, &sample(300), 2_200);
+    core.on_notification(Source::De1State, &[4, 6], 2_500);
+    let o = core.on_notification(Source::De1State, &[4, 5], 2_700);
+    assert_eq!(state_writes(&o), [MachineState::Idle as u8]);
+
+    let mut core = CremaCore::new();
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[5, 7], 100);
+    let o = core.request_machine_state(MachineState::Idle);
+    assert_eq!(state_writes(&o), [MachineState::Idle as u8]);
+    core.on_notification(Source::De1State, &[5, 18], 500);
+    let o = core.on_notification(Source::De1State, &[5, 7], 900);
+    assert!(state_writes(&o).is_empty(), "steam resumed at the machine");
+    let o = core.on_tick(5_000);
+    assert!(state_writes(&o).is_empty());
+}
+
+/// The second tap of two-tap steam: one write while it winds down, no
+/// retries.
+#[test]
+fn a_tap_while_steam_winds_down_is_one_write() {
+    let mut core = CremaCore::new();
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[5, 7], 100);
+    core.request_machine_state(MachineState::Idle);
+    core.on_notification(Source::De1State, &[5, 20], 300);
+    let o = core.request_machine_state(MachineState::Idle);
+    assert_eq!(state_writes(&o), [MachineState::Idle as u8]);
+    let mut writes = vec![];
+    for t in (400..10_000).step_by(500) {
+        writes.extend(state_writes(&core.on_tick(t)));
+    }
+    assert!(writes.is_empty(), "{writes:?}");
+}
+
+/// Review: a lost state report after the machine stopped. Past attempt 30,
+/// a write needs two samples at flow since the last write, so a lost report
+/// can't mean Idle every second for ever. From attempt 5 each retry reads the
+/// state back, and the alert fires once.
+#[test]
+fn past_thirty_attempts_a_retry_needs_proof_of_flow() {
+    let mut core = CremaCore::new();
+    core.set_max_shot_duration(Some(2.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[4, 5], 0);
+    core.on_notification(Source::De1ShotSample, &sample(10), 100);
+    core.on_notification(Source::De1ShotSample, &sample(300), 2_200);
+    let mut writes = 0;
+    let mut reads = 0;
+    let mut alerts = 0;
+    let mut t = 2_200;
+    for _ in 0..60 {
+        t += 1_000;
+        let o = core.on_tick(t);
+        writes += state_writes(&o).len();
+        reads += o
+            .commands
+            .iter()
+            .filter(|c| **c == Command::ReadState)
+            .count();
+        alerts += o
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::StopNotHonoured { .. }))
+            .count();
+    }
+    assert_eq!(writes, 30, "on the clock, then stop");
+    assert_eq!(reads, 26, "from attempt 5");
+    assert_eq!(alerts, 1);
+    // Two samples at flow prove water still runs: one more write.
+    let mut idle = sample(500);
+    idle[4..6].copy_from_slice(&0u16.to_be_bytes());
+    for i in 0..3u64 {
+        core.on_notification(Source::De1ShotSample, &idle, t + 100 + i * 100);
+    }
+    assert!(
+        state_writes(&core.on_tick(t + 2_000)).is_empty(),
+        "no flow, no write"
+    );
+    let one = core.on_notification(Source::De1ShotSample, &sample(600), t + 2_100);
+    assert!(state_writes(&one).is_empty(), "one sample isn't proof");
+    let two = core.on_notification(Source::De1ShotSample, &sample(610), t + 2_200);
+    assert_eq!(state_writes(&two).len(), 1, "the second is");
+    assert!(
+        state_writes(&core.on_tick(t + 3_000)).is_empty(),
+        "and the proof is spent"
+    );
+}
+
+/// A mirror never owes a stop: a leg firing is shown, nothing is written.
+#[test]
+fn a_mirror_never_owes_a_stop() {
+    let mut core = CremaCore::new();
+    core.set_read_only(true);
+    core.set_max_shot_duration(Some(2.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[4, 5], 0);
+    core.on_notification(Source::De1ShotSample, &sample(10), 100);
+    let o = core.on_notification(Source::De1ShotSample, &sample(300), 2_200);
+    assert!(
+        o.events
+            .iter()
+            .any(|e| matches!(e, Event::StopTriggered { .. }))
+    );
+    assert!(o.commands.is_empty());
+    assert_eq!(core.stop_state(), Some(de1_domain::stop::StopState::Armed));
+}
+
 /// Review: a pour first seen mid-flow never skips a step: the reading is the
 /// cup, not the step's yield. PR 5 lists this, but it has to land with the
 /// removed tare, or an untared cup would skip at once.
@@ -960,4 +1223,50 @@ fn review_unseen_pour_sends_no_skip_to_next() {
         skips += state_writes(&o).iter().filter(|b| **b == 14).count();
     }
     assert_eq!(skips, 0);
+}
+
+/// Steam: a Stop the machine ignores is retried every 2 s, not every second
+/// (an extra Idle can end a two-tap steam early), and steam never counts as
+/// winding down.
+#[test]
+fn an_ignored_steam_stop_is_retried_every_two_seconds() {
+    let mut core = CremaCore::new();
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[5, 7], 100);
+    core.request_machine_state(MachineState::Idle);
+    let mut writes = vec![];
+    for t in (200..10_200).step_by(100) {
+        // The machine keeps steaming and says so.
+        let o = core.on_notification(Source::De1State, &[5, 7], t);
+        writes.extend(state_writes(&o).into_iter().map(|_| t));
+        let o = core.on_tick(t);
+        writes.extend(state_writes(&o).into_iter().map(|_| t));
+    }
+    assert_eq!(writes.len(), 5, "{writes:?}");
+    assert!(
+        writes.windows(2).all(|w| w[1] - w[0] >= 2_000),
+        "{writes:?}"
+    );
+}
+
+/// A pre-flow state on return is a new pour: flow can't go backwards. The old
+/// shot completes with its record, the new one starts and is tared, and a
+/// queued stop is cancelled.
+#[test]
+fn a_pre_flow_state_on_return_is_a_new_shot() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    core.on_notification(Source::De1ShotSample, &sample(100), 200);
+    core.de1_link_lost();
+    core.on_notification(Source::ScaleWeight, &bookoo(20.0), 59_900);
+    let o = core.on_notification(Source::De1State, &[4, 2], 60_000);
+    assert!(o.commands.contains(&Command::CancelStop));
+    assert!(
+        o.events
+            .iter()
+            .any(|e| matches!(e, Event::ShotCompleted { .. }))
+    );
+    assert!(o.events.contains(&Event::ShotStarted));
+    assert_eq!(core.weight_stop_blocked_by(), None, "seen from its start");
 }

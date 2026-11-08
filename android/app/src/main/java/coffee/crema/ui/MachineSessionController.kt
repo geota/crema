@@ -401,7 +401,12 @@ internal class MachineSessionController(
         lane.on<Event.StopRetried> { event ->
             // The machine hasn't honoured a commanded stop — the core is
             // re-commanding it (issue #15). Loud on purpose.
-            appendLog("Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason.string})")
+            appendLog("Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason?.string ?: "your Stop"})")
+        }
+        lane.on<Event.StopNotHonoured> { event ->
+            // The machine ignores Crema's stop: the user must press it.
+            appendLog("Stop not honoured: ${event.content.message}")
+            notify(event.content.message)
         }
         lane.on<Event.StopTriggered> { event ->
             appendLog("Auto-stop: ${event.content.reason.string}")
@@ -415,8 +420,8 @@ internal class MachineSessionController(
             }
         }
         lane.on<Event.ShotCompleted> { event ->
-            // The machine stopped: no stop write still queued may land late.
-            lane.cancelStaleStop()
+            // A stop still queued was cancelled when the machine wound down
+            // (`Command.CancelStop`).
             val c = event.content
             val now = System.currentTimeMillis()
             // One UUID-v7 shot id (core minter), shared by the "Last shot"

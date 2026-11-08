@@ -462,6 +462,21 @@ impl ShotMonitor {
         events
     }
 
+    /// A new shot in the same state (`DESIGN.md` §3.3): the running one
+    /// completes, the phase resets, and `info` starts the next, so `Started`
+    /// and its phase fire as for any shot and the old one keeps its record.
+    pub fn split(&mut self, info: StateInfo, now: Duration) -> Vec<ShotEvent> {
+        let mut events = self.on_state_info(
+            StateInfo {
+                state: MachineState::Idle,
+                substate: SubState::Ready,
+            },
+            now,
+        );
+        events.extend(self.on_state_info(info, now));
+        events
+    }
+
     /// Feed a [`ShotSample`] telemetry notification. Samples are recorded only
     /// while a shot is in progress.
     ///
@@ -899,6 +914,27 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<ShotDisposition>("\"SkipCleaning\"").unwrap(),
             ShotDisposition::SkipCleaning
+        );
+    }
+
+    #[test]
+    fn a_split_completes_the_shot_and_starts_the_next() {
+        let mut monitor = ShotMonitor::new();
+        monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(0));
+        let events = monitor.split(state(MachineState::Espresso, SubState::Heating), ms(5_000));
+        let completed = events
+            .iter()
+            .position(|e| matches!(e, ShotEvent::Completed(_)))
+            .expect("the old shot completes");
+        let started = events
+            .iter()
+            .position(|e| *e == ShotEvent::Started)
+            .expect("the new one starts");
+        assert!(completed < started);
+        assert!(monitor.is_shot_in_progress());
+        assert_eq!(
+            monitor.phase(),
+            ShotPhase::classify(MachineState::Espresso, SubState::Heating)
         );
     }
 }

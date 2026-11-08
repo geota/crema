@@ -157,6 +157,24 @@ class CoreLaneTest {
     }
 
     @Test
+    fun `a read-state command reads the state back`() = runTest {
+        var reads = 0
+        val lane = CoreLane(
+            scope = this,
+            json = coreJson,
+            log = { log += it },
+            writeDe1 = { _, _, _, _ -> true },
+            writeScale = {},
+            readState = { reads++ },
+            profileWriteFailed = { EMPTY },
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+        lane.applyOutput(CoreOutput(emptyList(), listOf(Command.ReadState)))
+        advanceUntilIdle()
+        assertEquals(1, reads)
+    }
+
+    @Test
     fun `the stop byte is the core's Idle request`() {
         val out = coreJson.decodeFromString(
             CoreOutput.serializer(),

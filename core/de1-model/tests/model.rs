@@ -198,6 +198,8 @@ fn the_generator_reaches_what_the_invariants_watch() {
         total.weight_stops += c.weight_stops;
         total.volume_stops += c.volume_stops;
         total.retries += c.retries;
+        total.not_honoured += c.not_honoured;
+        total.read_states += c.read_states;
         total.skips += c.skips;
         total.unseen += c.unseen;
         total.stop_commands += c.stop_commands;
@@ -218,6 +220,8 @@ fn the_generator_reaches_what_the_invariants_watch() {
         ("weight stops", total.weight_stops),
         ("volume stops", total.volume_stops),
         ("retries", total.retries),
+        ("not honoured", total.not_honoured),
+        ("read states", total.read_states),
         ("skips", total.skips),
         ("unseen", total.unseen),
         ("stop commands", total.stop_commands),

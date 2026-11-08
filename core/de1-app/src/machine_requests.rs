@@ -374,7 +374,11 @@ impl CremaCore {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
-        match (guard, self.shot_start_deadline()) {
+        let guard = match (guard, self.shot_start_deadline()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        match (guard, self.stop_deadline()) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }

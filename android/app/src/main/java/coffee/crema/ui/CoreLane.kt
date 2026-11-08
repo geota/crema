@@ -42,6 +42,9 @@ internal class CoreLane(
     private val writeDe1: suspend (WriteTarget, ByteArray, Boolean, () -> UInt?) -> Boolean,
     /** One scale write ([coffee.crema.ble.ScaleBleManager.writeCommand]). */
     private val writeScale: suspend (ByteArray) -> Unit,
+    /** `Command.ReadState`: read StateInfo and feed it to the core
+     *  ([coffee.crema.ble.De1BleManager.readState]). */
+    private val readState: suspend () -> Unit = {},
     /** The core's output for a failed profile write of upload [UInt]. */
     private val profileWriteFailed: (UInt) -> String,
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -143,6 +146,7 @@ internal class CoreLane(
             when (command) {
                 Command.Stop -> executeStop()
                 Command.CancelStop -> cancelStaleStop()
+                Command.ReadState -> executeReadState()
                 // Run below, the scale writes on their own, the DE1 writes as
                 // one ordered batch. No `else`: a new command must fail the
                 // build here, not be dropped.
@@ -152,6 +156,20 @@ internal class CoreLane(
         val de1Writes = output.commands.filterIsInstance<Command.WriteCharacteristic>()
         output.commands.filterIsInstance<Command.WriteScale>().forEach(::executeCommand)
         if (de1Writes.isNotEmpty()) executeDe1Writes(de1Writes, startedUploadId(output.events))
+    }
+
+    /** `Command.ReadState`: a stop not honoured may only have lost its state
+     *  report, so read it back. */
+    private fun executeReadState() {
+        scope.launch {
+            try {
+                readState()
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                log("State read failed: ${e.message}")
+            }
+        }
     }
 
     /** `Command.Stop`: write Idle now on the urgent lane, unless one is
@@ -213,6 +231,7 @@ internal class CoreLane(
             is Command.WriteCharacteristic -> executeDe1Writes(listOf(command))
             Command.Stop -> executeStop()
             Command.CancelStop -> cancelStaleStop()
+            Command.ReadState -> executeReadState()
         }
     }
 

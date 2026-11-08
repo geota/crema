@@ -244,6 +244,75 @@ pub enum StopReason {
     MaxTime,
 }
 
+/// Why a session owes a stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopCause {
+    /// A leg fired.
+    Auto(StopReason),
+    /// The user tapped Stop.
+    User,
+}
+
+impl StopCause {
+    /// The leg's reason, or `None` for the user's Stop.
+    #[must_use]
+    pub const fn reason(self) -> Option<StopReason> {
+        match self {
+            StopCause::Auto(reason) => Some(reason),
+            StopCause::User => None,
+        }
+    }
+}
+
+/// Where a session's stop stands (`DESIGN.md` §3.3). An enum with data: the
+/// attempts exist only while a stop is owed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopState {
+    /// Nothing owed: the legs are live.
+    Armed,
+    /// A stop was sent and the machine hasn't wound down yet.
+    Owed {
+        /// Why.
+        cause: StopCause,
+        /// When the last `Stop` went out.
+        last_write: Duration,
+        /// Retries after the first write.
+        attempts: u32,
+    },
+    /// The machine is winding down.
+    Honoured {
+        /// The stop it honoured, or `None` if it wound down on its own.
+        cause: Option<StopCause>,
+    },
+}
+
+/// Retries on the clock before a retry needs proof of flow.
+pub const STOP_RETRY_CAP: u32 = 30;
+
+/// Retries before [`StopState::Owed`] alerts the user and starts reading the
+/// state back.
+pub const STOP_ALERT_AFTER: u32 = 5;
+
+/// Samples at or over [`FLOW_PROOF_ML_S`], newer than the last write, that
+/// prove water still flows past [`STOP_RETRY_CAP`]. Idle has a brief tail
+/// after `Ending`, so one isn't enough.
+pub const FLOW_PROOF_SAMPLES: u32 = 2;
+
+/// The group flow that proves water flows, ml/s. Both captures average
+/// 0.03 ml/s at Idle and 1.6 ml/s pouring.
+pub const FLOW_PROOF_ML_S: f32 = 0.3;
+
+/// The retry interval: 1 s, 2 s in steam, where an extra Idle can end a
+/// two-tap steam early.
+#[must_use]
+pub const fn stop_retry_interval(steam: bool) -> Duration {
+    if steam {
+        Duration::from_secs(2)
+    } else {
+        Duration::from_secs(1)
+    }
+}
+
 /// Decides when to stop a shot, from the scale and telemetry streams.
 ///
 /// Construct one when flow begins; feed it [`on_weight`](Self::on_weight) and

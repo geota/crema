@@ -5,6 +5,14 @@ use std::fmt;
 /// An invariant from `DESIGN.md` §7 that this crate can observe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Invariant {
+    /// With a stop owed, the link up and the machine flowing, a `Stop` goes
+    /// out within the retry interval until wind-down, session close or attempt
+    /// 30, give or take the core's clock.
+    I1,
+    /// No `Stop` with no session open, and none from the core once the
+    /// machine winds down (the honoured-to-flowing re-send comes with a
+    /// flowing state).
+    I2,
     /// A core-initiated request is never sent while the last reported state is
     /// a foreign flow state.
     I3,
@@ -26,8 +34,12 @@ pub enum Invariant {
     /// A mirror emits no machine-state, stop or profile write, even for its
     /// user's tap, and no command of its own at all. No carve-out.
     I10,
-    /// `Stale`, `Dead` and `StopTriggered` fire once per episode.
+    /// `Stale`, `Dead`, `StopTriggered` and `StopNotHonoured` fire once per
+    /// episode.
     I11,
+    /// Past attempt 30, no retry without two samples at flow since the last
+    /// write.
+    I17,
     /// No `Weight` stop while the true cup weight is under target minus
     /// tolerance. Not checked on a mirror, whose stop is only a display.
     I13,
@@ -45,7 +57,9 @@ pub enum Status {
 
 impl Invariant {
     /// Every invariant, for reports.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 12] = [
+        Self::I1,
+        Self::I2,
         Self::I3,
         Self::I4,
         Self::I5,
@@ -55,21 +69,25 @@ impl Invariant {
         Self::I10,
         Self::I11,
         Self::I13,
+        Self::I17,
     ];
 
-    /// Where this invariant stands. I1, I2, I8, I12 and I14 to I21
+    /// Where this invariant stands. I8, I12, I14 to I16 and I18 to I21
     /// need types later PRs add; I12's "no panic" holds by running at all.
     #[must_use]
     pub const fn status(self) -> Status {
         match self {
-            Self::I3
+            Self::I1
+            | Self::I2
+            | Self::I3
             | Self::I4
             | Self::I5
             | Self::I6
             | Self::I7
             | Self::I9
             | Self::I10
-            | Self::I11 => Status::Enforced,
+            | Self::I11
+            | Self::I17 => Status::Enforced,
             Self::I13 => Status::PendingPr(8),
         }
     }

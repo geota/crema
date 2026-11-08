@@ -1045,6 +1045,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				)
 			};
 		}
+		case 'StopNotHonoured':
+			return {
+				...snapshot,
+				eventLog: appendLog(snapshot.eventLog, `Stop not honoured: ${event.content.message}`)
+			};
 		case 'StopRetried':
 			// The machine hasn't honoured a commanded stop — the core is
 			// re-commanding it (issue #15). Loud on purpose.
@@ -1052,7 +1057,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				eventLog: appendLog(
 					snapshot.eventLog,
-					`Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason})`
+					`Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason ?? 'your Stop'})`
 				)
 			};
 		case 'StopTriggered':

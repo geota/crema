@@ -22,6 +22,8 @@ use std::time::Duration;
 
 use de1_protocol::{MachineState, StateInfo, SubState};
 
+use crate::stop::StopState;
+
 /// Tracks the start time of one in-progress session at a time.
 ///
 /// Sans-IO: it holds no clock. The caller supplies a monotonic `now` from
@@ -207,6 +209,34 @@ pub struct Session {
     pub observed: Observed,
     /// What the scale's zero means for it.
     pub baseline: Baseline,
+    /// Where its stop stands.
+    pub stop: StopState,
+}
+
+/// How a state report changed the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionChange {
+    /// No session before or after.
+    None,
+    /// The same session continues.
+    Kept,
+    /// A session opened where there was none.
+    Opened,
+    /// The session closed; another may have opened in a new mode.
+    Closed,
+    /// A new session in the same mode: flow can't go backwards, so a
+    /// pre-flow substate on return is a new pour.
+    Replaced,
+}
+
+/// The substates in which the machine winds a flow down. An unknown substate
+/// is never one.
+#[must_use]
+pub fn is_wind_down(substate: SubState) -> bool {
+    matches!(
+        substate,
+        SubState::Ending | SubState::Puffing | SubState::PausedSteam
+    )
 }
 
 impl Session {
@@ -224,26 +254,58 @@ impl Session {
             mode,
             observed,
             baseline,
+            stop: StopState::Armed,
         }
     }
 
+    /// Open a session in `mode` on its first state, `substate`: one first
+    /// seen winding down is already honoured.
+    #[must_use]
+    pub fn open_on(mode: ActiveMode, first_on_link: bool, substate: SubState) -> Session {
+        let mut session = Session::open(mode, Observed::on_open(first_on_link, substate));
+        if is_wind_down(substate) {
+            session.stop = StopState::Honoured { cause: None };
+        }
+        session
+    }
+
     /// The session after a state report. A report in the same mode keeps the
-    /// session, whatever the link did meanwhile; any other closes it, and a
-    /// report in a new mode opens that mode's. `first_on_link` is true for the
-    /// first state on this link generation.
+    /// session, whatever the link did meanwhile, except a pre-flow substate on
+    /// a link's first state: flow can't go backwards, so that's a new pour.
+    /// Any other mode closes it, and a report in a new mode opens that mode's.
+    /// `first_on_link` is true for the first state on this link generation.
     #[must_use]
     pub fn on_state(
         current: Option<Session>,
         info: StateInfo,
         first_on_link: bool,
-    ) -> Option<Session> {
-        let mode = ActiveMode::of(info.state)?;
+    ) -> (Option<Session>, SessionChange) {
+        let Some(mode) = ActiveMode::of(info.state) else {
+            let change = if current.is_some() {
+                SessionChange::Closed
+            } else {
+                SessionChange::None
+            };
+            return (None, change);
+        };
         match current {
-            Some(session) if session.mode == mode => Some(session),
-            _ => Some(Session::open(
-                mode,
-                Observed::on_open(first_on_link, info.substate),
-            )),
+            Some(session)
+                if session.mode == mode && first_on_link && is_pre_flow(info.substate) =>
+            {
+                (
+                    Some(Session::open(mode, Observed::FromStart)),
+                    SessionChange::Replaced,
+                )
+            }
+            Some(session) if session.mode == mode => (Some(session), SessionChange::Kept),
+            Some(_) => (
+                Some(Session::open_on(mode, first_on_link, info.substate)),
+                SessionChange::Closed,
+            ),
+            None => (
+                Some(Session::open_on(mode, first_on_link, info.substate)),
+                SessionChange::Opened,
+            ),
         }
     }
 
@@ -383,14 +445,16 @@ mod tests {
             Some(seen),
             info(MachineState::Espresso, SubState::Pouring),
             true,
-        );
+        )
+        .0;
         assert_eq!(next, Some(seen));
     }
 
     #[test]
     fn a_state_with_no_mode_closes_the_session() {
         let seen = Session::open(ActiveMode::Espresso, Observed::FromStart);
-        let next = Session::on_state(Some(seen), info(MachineState::Idle, SubState::Ready), false);
+        let next =
+            Session::on_state(Some(seen), info(MachineState::Idle, SubState::Ready), false).0;
         assert_eq!(next, None);
     }
 
@@ -401,7 +465,8 @@ mod tests {
             Some(seen),
             info(MachineState::HotWater, SubState::Pouring),
             true,
-        );
+        )
+        .0;
         assert_eq!(
             next,
             Some(Session::open(ActiveMode::HotWater, Observed::Unseen))
@@ -410,10 +475,54 @@ mod tests {
 
     #[test]
     fn a_later_state_opens_a_session_seen() {
-        let next = Session::on_state(None, info(MachineState::Espresso, SubState::Pouring), false);
+        let next =
+            Session::on_state(None, info(MachineState::Espresso, SubState::Pouring), false).0;
         assert_eq!(
             next,
             Some(Session::open(ActiveMode::Espresso, Observed::FromStart))
         );
+    }
+
+    #[test]
+    fn a_pre_flow_state_on_return_is_a_new_pour() {
+        let mut seen = Session::open(ActiveMode::Espresso, Observed::FromStart);
+        seen.baseline = Baseline::Tared;
+        let (next, change) = Session::on_state(
+            Some(seen),
+            info(MachineState::Espresso, SubState::Heating),
+            true,
+        );
+        assert_eq!(change, SessionChange::Replaced);
+        assert_eq!(
+            next,
+            Some(Session::open(ActiveMode::Espresso, Observed::FromStart))
+        );
+        // Not on the same link: a heating substate mid-session is just that.
+        let (_, change) = Session::on_state(
+            Some(seen),
+            info(MachineState::Espresso, SubState::Heating),
+            false,
+        );
+        assert_eq!(change, SessionChange::Kept);
+    }
+
+    #[test]
+    fn a_session_first_seen_winding_down_is_honoured() {
+        let (next, change) =
+            Session::on_state(None, info(MachineState::Espresso, SubState::Ending), true);
+        assert_eq!(change, SessionChange::Opened);
+        let session = next.expect("a session");
+        assert_eq!(session.observed, Observed::Unseen);
+        assert_eq!(session.stop, StopState::Honoured { cause: None });
+    }
+
+    #[test]
+    fn only_ending_puffing_and_paused_steam_wind_down() {
+        assert!(is_wind_down(SubState::Ending));
+        assert!(is_wind_down(SubState::Puffing));
+        assert!(is_wind_down(SubState::PausedSteam));
+        assert!(!is_wind_down(SubState::Steaming));
+        assert!(!is_wind_down(SubState::Pouring));
+        assert!(!is_wind_down(SubState::Unknown));
     }
 }
