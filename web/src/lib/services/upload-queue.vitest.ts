@@ -428,6 +428,22 @@ describe('UploadQueue.drain — edits waiting to reach Visualizer', () => {
 		expect(readSyncConfig().log[0]).toMatchObject({ id: 's1', direction: 'skip' });
 	});
 
+	it('a Premium refusal with Premium confirmed clears the journal mark and says so, as on Android', async () => {
+		settlePendingEdit('s1', { annotations: true, barista: true, tierSignal: true, premiumRefused: true });
+		const { ids, push } = pushed();
+		await drainWith({ pushPendingEdit: push }, { refreshPremium: Effect.succeed(true) });
+		expect(pendingEdit('s1')).toEqual({ barista: true });
+		expect(ids).toEqual(['s1']);
+		expect(readSyncConfig().log[0]).toMatchObject({ id: 's1', direction: 'skip' });
+		expect(readSyncConfig().log[0].error).toContain('Premium-only');
+	});
+
+	it('a tag signal with Premium confirmed keeps the journal mark', async () => {
+		settlePendingEdit('s1', { annotations: true, tags: { add: ['a'], remove: [] }, tierSignal: true });
+		await drainWith({ pushPendingEdit: pushed().push }, { refreshPremium: Effect.succeed(true) });
+		expect(pendingEdit('s1')).toEqual({ annotations: true });
+	});
+
 	it('a tier signal on Free keeps the tags until an upgrade', async () => {
 		writeSyncSettings({ premium: true, premiumCheckedAt: Date.now() });
 		settlePendingEdit('s1', { tags: { add: ['a'], remove: [] }, tierSignal: true });

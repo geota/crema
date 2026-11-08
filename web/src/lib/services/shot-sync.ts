@@ -1479,6 +1479,7 @@ export const ShotSyncLive = Layer.effect(
 					settlePendingEdit(id, {
 						...current,
 						tierSignal: true,
+						...(e._tag === 'VisualizerPremiumGatedError' ? { premiumRefused: true as const } : {}),
 						attempts,
 						nextAttemptAt: Date.now() + retryDelayMs(e, attempts - 1)
 					});

@@ -180,19 +180,38 @@ export const UploadQueueLive = Layer.effect(
 				const premium = probe.answer;
 				const edit = pendingEdit(id);
 				if (!edit?.tierSignal || premium === null) return;
+				const signal = { tierSignal: undefined, tierProbedAt: undefined, premiumRefused: undefined };
 				if (!premium) {
-					settlePendingEdit(id, { ...edit, tierSignal: undefined, tierProbedAt: undefined });
+					settlePendingEdit(id, { ...edit, ...signal });
 					return;
 				}
-				settlePendingEdit(id, { ...edit, tags: undefined, tierSignal: undefined, tierProbedAt: undefined });
+				// Premium, and still refused: what was refused never takes, as on
+				// Android. The journal mark clears for a Premium refusal.
+				settlePendingEdit(id, {
+					...edit,
+					...signal,
+					tags: undefined,
+					...(edit.premiumRefused ? { annotations: undefined } : {})
+				});
+				const name = getHistoryStore().get(id)?.profileName ?? 'Shot';
 				if (hasTagMarks(edit.tags)) {
 					appendSyncLog({
 						direction: 'skip',
 						entity: 'shot',
 						id,
-						name: getHistoryStore().get(id)?.profileName ?? 'Shot',
+						name,
 						at: Date.now(),
 						error: "Visualizer didn't keep this shot's tags, so Crema stopped sending them."
+					});
+				}
+				if (edit.premiumRefused && edit.annotations) {
+					appendSyncLog({
+						direction: 'skip',
+						entity: 'shot',
+						id,
+						name,
+						at: Date.now(),
+						error: "This edit can't reach Visualizer: it refused it as Premium-only, so Crema stopped sending it."
 					});
 				}
 			});
