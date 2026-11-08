@@ -26,7 +26,7 @@ import type {
 	RecipeTimeEstimate
 } from '#lib/core/crema-core.js';
 import { BrewStepKind, StepAdvance } from '#lib/core/crema-core.js';
-import { isJsonObject, readStore, writeJsonChecked } from '#lib/utils/storage.js';
+import { followOtherTabs, isJsonObject, readStore, writeJsonChecked } from '#lib/utils/storage.js';
 import {
 	blankRecipeJson,
 	builtinBrewRecipesJson,
@@ -185,6 +185,16 @@ export class RecipeStore {
 		this.lastUsed = lastUsed.kind === 'loaded' ? lastUsed.value : {};
 		this.hidden = hidden.kind === 'loaded' ? hidden.value : [];
 		this.migrate();
+		// Another tab's recipes are taken, not written back over (#333).
+		followOtherTabs(RECIPES_KEY, Array.isArray, (v) => {
+			this.recipes = v as BrewRecipe[];
+		});
+		followOtherTabs(LAST_USED_KEY, isJsonObject, (v) => {
+			this.lastUsed = v as Record<string, string>;
+		});
+		followOtherTabs(HIDDEN_KEY, Array.isArray, (v) => {
+			this.hidden = v as string[];
+		});
 	}
 
 	/**

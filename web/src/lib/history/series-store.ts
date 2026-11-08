@@ -108,6 +108,52 @@ export async function getAllSeries(): Promise<Map<string, TimedSample[]>> {
 	}
 }
 
+/**
+ * Store a shot's series only if it has none: false when one is already there,
+ * which stays (a pulled backfill never replaces a device's own curve).
+ */
+export async function addSeries(id: string, samples: readonly TimedSample[]): Promise<boolean> {
+	const db = await openDb();
+	try {
+		const tx = db.transaction(STORE, 'readwrite');
+		const store = tx.objectStore(STORE);
+		let added = false;
+		// The look and the write in one transaction, from the look's callback.
+		const look = store.count(id);
+		look.onsuccess = () => {
+			if (look.result > 0) return;
+			store.put(samples as TimedSample[], id);
+			added = true;
+		};
+		await new Promise<void>((resolve, reject) => {
+			tx.oncomplete = () => resolve();
+			tx.onerror = () => reject(tx.error);
+			tx.onabort = () => reject(tx.error);
+		});
+		return added;
+	} finally {
+		db.close();
+	}
+}
+
+/** Load the series of each of `ids` that has one, keyed by shot id. */
+export async function getSeriesOf(ids: readonly string[]): Promise<Map<string, TimedSample[]>> {
+	const out = new Map<string, TimedSample[]>();
+	if (ids.length === 0) return out;
+	const db = await openDb();
+	try {
+		const store = db.transaction(STORE, 'readonly').objectStore(STORE);
+		const values = await Promise.all(ids.map((id) => reqp(store.get(id) as IDBRequest<unknown>)));
+		ids.forEach((id, i) => {
+			const v = values[i];
+			if (Array.isArray(v)) out.set(id, v as TimedSample[]);
+		});
+		return out;
+	} finally {
+		db.close();
+	}
+}
+
 /** Delete one shot's series (a removed / hard-deleted shot). */
 export async function deleteSeries(id: string): Promise<void> {
 	const db = await openDb();

@@ -549,6 +549,222 @@ pub fn export_backup_jsonl_from_json(
     })
 }
 
+// ── Line by line (#310 §7) ──────────────────────────────────────────────────
+//
+// The same bytes as [`export_backup_jsonl_from_json`], built a piece at a
+// time, so a shell can walk a large history one shot at a time instead of
+// holding every shot, and the whole file, in memory:
+//
+//   backup_prelude_jsonl(envelope without shots, shot count, shots left out)
+//   + backup_shot_line(shot), for each shot, in order
+//   + backup_tail_jsonl(envelope)
+//
+// The header goes first and counts the shots, so the shell snapshots its row
+// list before the walk, and counts any shot it couldn't write as left out.
+
+/// The envelope rows the line-by-line pieces read: everything but the shots.
+#[derive(Deserialize)]
+struct EnvelopeRows {
+    #[serde(default)]
+    profiles: Vec<serde_json::Value>,
+    #[serde(default)]
+    beans: Vec<serde_json::Value>,
+    #[serde(default)]
+    roasters: Vec<serde_json::Value>,
+    #[serde(default)]
+    recipes: Vec<serde_json::Value>,
+    #[serde(default, rename = "customMethods")]
+    custom_methods: Vec<serde_json::Value>,
+    #[serde(default)]
+    settings: serde_json::Value,
+    #[serde(default, rename = "profileMeta")]
+    profile_meta: serde_json::Value,
+    #[serde(default, rename = "recipeMeta")]
+    recipe_meta: serde_json::Value,
+    #[serde(default)]
+    maintenance: serde_json::Value,
+    #[serde(default, rename = "visualizerPrefs")]
+    visualizer_prefs: serde_json::Value,
+}
+
+/// The rows of each kind after the shots, read as the full export reads them.
+struct TailRows {
+    profiles: Vec<serde_json::Value>,
+    recipes: Vec<BrewRecipe>,
+    custom_methods: Vec<CustomBrewMethod>,
+}
+
+fn read_tail(
+    inp: &mut EnvelopeRows,
+    omitted: &mut Vec<OmittedBackupRow>,
+) -> Result<TailRows, String> {
+    let profiles = read_rows(
+        std::mem::take(&mut inp.profiles),
+        "profile",
+        omitted,
+        read_profile_row,
+    )?;
+    let recipes: Vec<BrewRecipe> = read_rows(
+        std::mem::take(&mut inp.recipes),
+        "recipe",
+        omitted,
+        read_row,
+    )?;
+    let custom_methods: Vec<CustomBrewMethod> = read_rows(
+        std::mem::take(&mut inp.custom_methods),
+        "brewMethod",
+        omitted,
+        read_row,
+    )?;
+    Ok(TailRows {
+        profiles,
+        recipes: recipes
+            .into_iter()
+            .filter(|r| !is_builtin_recipe(&r.id))
+            .collect(),
+        custom_methods,
+    })
+}
+
+/// What [`backup_prelude_jsonl`] built.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupPrelude {
+    /// The header, the settings-like lines, the roasters and the beans.
+    pub jsonl: String,
+    /// The rows of the envelope left out, of every kind but shots. The
+    /// header's `omittedCount` is this list's length plus the shots left out.
+    pub omitted: Vec<OmittedBackupRow>,
+}
+
+/// The lines of a backup before its shots: the header, the settings-like
+/// lines, roasters and beans. `envelope_json` is the envelope
+/// [`export_backup_jsonl_from_json`] takes; its `shots`, if any, are ignored.
+/// The header counts `shot_count` shots and `shots_omitted` more left out, so
+/// it matches the [`backup_shot_line`]s the shell then writes.
+///
+/// # Errors
+/// As [`export_backup_jsonl_from_json`]: a malformed envelope, or a section
+/// with rows of which none could be read.
+pub fn backup_prelude_jsonl(
+    envelope_json: &str,
+    shot_count: usize,
+    shots_omitted: usize,
+    created_at_unix_ms: i64,
+    app_version: &str,
+    device_label: &str,
+) -> Result<BackupPrelude, String> {
+    let mut inp: EnvelopeRows = serde_json::from_str(envelope_json).map_err(|e| e.to_string())?;
+    let mut omitted = Vec::new();
+    let beans: Vec<Bean> = read_rows(
+        std::mem::take(&mut inp.beans),
+        "bean",
+        &mut omitted,
+        read_row,
+    )?;
+    let roasters: Vec<Roaster> = read_rows(
+        std::mem::take(&mut inp.roasters),
+        "roaster",
+        &mut omitted,
+        read_row,
+    )?;
+    let tail = read_tail(&mut inp, &mut omitted)?;
+    let header = BackupHeader {
+        kind: "crema-backup/v1".to_owned(),
+        created_at: created_at_unix_ms,
+        app_version: app_version.to_owned(),
+        device_label: device_label.to_owned(),
+        profile_count: tail.profiles.len(),
+        bean_count: beans.len(),
+        roaster_count: roasters.len(),
+        shot_count,
+        recipe_count: tail.recipes.len(),
+        custom_method_count: tail.custom_methods.len(),
+        omitted_count: omitted.len() + shots_omitted,
+    };
+    let mut out = String::new();
+    push_line(&mut out, &header);
+    for (kind, blob) in [
+        ("settings", &inp.settings),
+        ("profileMeta", &inp.profile_meta),
+        ("recipeMeta", &inp.recipe_meta),
+        ("maintenance", &inp.maintenance),
+        ("visualizerPrefs", &inp.visualizer_prefs),
+    ] {
+        if blob.is_object() {
+            push_tagged_line(&mut out, kind, blob);
+        }
+    }
+    for r in &roasters {
+        push_tagged_line(&mut out, "roaster", r);
+    }
+    for b in &beans {
+        push_tagged_line(&mut out, "bean", b);
+    }
+    Ok(BackupPrelude {
+        jsonl: out,
+        omitted,
+    })
+}
+
+/// One shot's backup line, from [`backup_shot_line`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupShotLine {
+    /// The line, newline included.
+    pub line: String,
+    /// Written without its `profile`, which wouldn't read.
+    pub without_profile: bool,
+    /// It carries a curve.
+    pub has_curve: bool,
+}
+
+/// One shot's line, as [`export_backup_jsonl_from_json`] writes it: the shot
+/// as stored, or without its `profile` when that won't read. `shot_json` may
+/// also be a JSON string holding the shot.
+///
+/// # Errors
+/// When the shot won't read even without its `profile`: the shell leaves it
+/// out and counts it in the prelude's `shots_omitted`.
+pub fn backup_shot_line(shot_json: &str) -> Result<BackupShotLine, String> {
+    let row: serde_json::Value = serde_json::from_str(shot_json).map_err(|e| e.to_string())?;
+    let row = match row {
+        serde_json::Value::String(text) => {
+            serde_json::from_str(&text).map_err(|e| e.to_string())?
+        }
+        other => other,
+    };
+    let read = read_shot_row(&row).ok_or_else(|| "the shot doesn't read".to_owned())?;
+    let mut line = String::new();
+    push_tagged_line(&mut line, "shot", &read.shot);
+    Ok(BackupShotLine {
+        line,
+        without_profile: read.without_profile,
+        has_curve: !read.shot.record.samples.is_empty(),
+    })
+}
+
+/// The lines of a backup after its shots: custom methods, user recipes and
+/// custom profiles, from the same envelope as [`backup_prelude_jsonl`].
+///
+/// # Errors
+/// As [`backup_prelude_jsonl`].
+pub fn backup_tail_jsonl(envelope_json: &str) -> Result<String, String> {
+    let mut inp: EnvelopeRows = serde_json::from_str(envelope_json).map_err(|e| e.to_string())?;
+    let tail = read_tail(&mut inp, &mut Vec::new())?;
+    let mut out = String::new();
+    for m in &tail.custom_methods {
+        push_tagged_line(&mut out, "brewMethod", m);
+    }
+    for r in &tail.recipes {
+        push_tagged_line(&mut out, "recipe", r);
+    }
+    for p in &tail.profiles {
+        push_tagged_line(&mut out, "profile", p);
+    }
+    Ok(out)
+}
+
 /// A shot read for a backup, and whether its `profile` had to go.
 struct ShotRow {
     shot: StoredShot,

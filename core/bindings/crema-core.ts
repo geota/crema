@@ -3450,7 +3450,11 @@ export interface ProfileMeta {
 
 /** Recipe organisation here. */
 export interface RecipeMeta {
-	/** Method id → recipe id. */
+	/**
+	 * Method id → recipe id. Written in order, so a plan serialises the same
+	 * way every time: the shell compares a confirmed plan with a fresh one by
+	 * its JSON.
+	 */
 	defaults: Record<string, string>;
 	hiddenBuiltins: string[];
 }
@@ -4016,6 +4020,7 @@ export interface RecipeLibraryMigration {
 /** Recipe organisation after the restore, when it changes. */
 export interface RecipeMetaPlan {
 	action: PlanAction;
+	/** Written in order, as [`RecipeMeta::defaults`]. */
 	defaults: Record<string, string>;
 	hiddenBuiltins: string[];
 }
@@ -4845,6 +4850,29 @@ export interface ShotStatInput {
 	doseG?: number;
 	/** Star rating 1..=5; `None` / 0 = unrated. */
 	rating?: number;
+}
+
+/** What a History row shows of a shot without its series. */
+export interface ShotSummary {
+	/** The summary's format: 1. */
+	v: number;
+	/**
+	 * Machine samples in the series. The shell stores `null` when it
+	 * couldn't read the series; the core always counts.
+	 */
+	sampleCount?: number;
+	/** Samples in a brew's scale series; 0 for none. */
+	brewSampleCount: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	peakWeight?: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	finalWeight?: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	peakPressure: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	peakTemp: number;
+	/** The row chart, as described in the module docs; `None` with no series. */
+	spark?: string;
 }
 
 /**
