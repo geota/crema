@@ -2211,8 +2211,8 @@ pub fn describe_backup_file(name: String) -> String {
 }
 
 /// What to prune after an automatic upload, as an `AutoBackupRetention` JSON.
-/// `damaged_since_ms` is the oldest kept-aside damaged copy of a store the
-/// counts can't see, if any. See [`de1_domain::auto_backup_retention`].
+/// `pre_damage` is the copy the shell pinned when it saw a damage the counts
+/// can't. See [`de1_domain::auto_backup_retention`].
 ///
 /// # Errors
 ///
@@ -2222,10 +2222,25 @@ pub fn auto_backup_retention(
     files_json: String,
     uploaded: String,
     keep: u32,
-    damaged_since_ms: Option<i64>,
+    pre_damage: Option<String>,
 ) -> Result<String, CremaError> {
-    de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep, damaged_since_ms)
+    de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep, pre_damage.as_deref())
         .map_err(crema_err)
+}
+
+/// The id of the newest automatic copy with `upload_name`'s label, to pin
+/// before an upload once a new damage is seen. See
+/// [`de1_domain::newest_auto_backup`].
+///
+/// # Errors
+///
+/// Returns the parse error when `files_json` is malformed.
+#[uniffi::export]
+pub fn newest_auto_backup(
+    files_json: String,
+    upload_name: String,
+) -> Result<Option<String>, CremaError> {
+    de1_domain::newest_auto_backup_json(&files_json, &upload_name).map_err(crema_err)
 }
 
 /// Scan a backup's bytes into a `BackupManifest` JSON, with the bean ids its

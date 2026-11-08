@@ -53,6 +53,12 @@ data class DriveState(
      *  model can't prune each other. A reinstall gets a new one and leaves its
      *  old copies alone. Additive → nullable. */
     val autoBackupTag: String? = null,
+    /** The newest damage time (a kept-aside store copy, this device's clock)
+     *  already acted on. A newer one pins [preDamageCopy] again. Additive. */
+    val damageSeenMs: Long? = null,
+    /** This install's newest daily copy on Drive when a damage was seen, by
+     *  file id: retention keeps it, as it's from before. Additive. */
+    val preDamageCopy: String? = null,
     /** Google ended the sign-in. Signed out, with a lasting banner until the
      *  user reconnects or disconnects. Additive. */
     val needsReconnect: Boolean = false,

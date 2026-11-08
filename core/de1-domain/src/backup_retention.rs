@@ -7,11 +7,12 @@
 //! copies always stay.
 //!
 //! Per device label, keep the newest `keep`, the newest copy with the most
-//! shots, the newest with the most curves, and one more: while a store's
-//! damaged copy is kept aside, the newest copy older than the damage, as the
-//! counts can't see beans, profiles or recipes; otherwise the newest with no
-//! counts for 90 days, as it can't be compared. So a label holds at most
-//! `keep + 3`. A device
+//! shots, the newest with the most curves, and one more: the copy the shell
+//! pinned, by id, when it saw a damage the counts can't (a bean library or
+//! settings that loaded empty), as the newest copy from before it; otherwise
+//! the newest with no counts for 90 days, as it can't be compared. So a label
+//! holds at most `keep + 3`. The pin is an id, not a date: a device's clock
+//! and Drive's can disagree, and a damage long since fixed must not count. A device
 //! only ever prunes its own copies: compared across labels, a phone's small copy
 //! would look like a tablet's shrink, every day. The label in a name carries a
 //! random tag after the model (`Pixel_8~a1b2c3`), as two devices of one model
@@ -256,7 +257,7 @@ pub fn auto_backup_retention(
     files: &[BackupFile],
     uploaded: &str,
     keep: u32,
-    damaged_since_ms: Option<i64>,
+    pre_damage: Option<&str>,
 ) -> AutoBackupRetention {
     let own = own_copies(files, uploaded);
     let keep = keep.max(1);
@@ -271,9 +272,10 @@ pub fn auto_backup_retention(
     };
     let most_shots = newest_with(|c| c.shots);
     let most_curves = newest_with(|c| c.curves);
-    let pre_damage = damaged_since_ms.and_then(|since| {
+    // Only while it's still one of this label's copies.
+    let pre_damage = pre_damage.and_then(|id| {
         own.iter()
-            .find(|(f, _)| f.modified_ms < since)
+            .find(|(f, _)| f.id == id)
             .map(|(f, _)| f.id.as_str())
     });
     let no_counts = || {
@@ -295,6 +297,15 @@ pub fn auto_backup_retention(
         delete,
         shrink: shrink_of(&own, uploaded),
     }
+}
+
+/// The id of the newest automatic copy with `upload_name`'s label: what a shell
+/// pins as the pre-damage copy when it sees a new damage, before it uploads.
+#[must_use]
+pub fn newest_auto_backup(files: &[BackupFile], upload_name: &str) -> Option<String> {
+    own_copies(files, upload_name)
+        .first()
+        .map(|(f, _)| f.id.clone())
 }
 
 /// Whether `uploaded` holds under half of the newest other copy with counts.
@@ -331,16 +342,24 @@ pub fn auto_backup_retention_json(
     files_json: &str,
     uploaded: &str,
     keep: u32,
-    damaged_since_ms: Option<i64>,
+    pre_damage: Option<&str>,
 ) -> Result<String, String> {
     let files: Vec<BackupFile> = serde_json::from_str(files_json).map_err(|e| e.to_string())?;
-    serde_json::to_string(&auto_backup_retention(
-        &files,
-        uploaded,
-        keep,
-        damaged_since_ms,
-    ))
-    .map_err(|e| e.to_string())
+    serde_json::to_string(&auto_backup_retention(&files, uploaded, keep, pre_damage))
+        .map_err(|e| e.to_string())
+}
+
+/// [`newest_auto_backup`] over JSON.
+///
+/// # Errors
+///
+/// Returns the parse error when `files_json` is malformed.
+pub fn newest_auto_backup_json(
+    files_json: &str,
+    upload_name: &str,
+) -> Result<Option<String>, String> {
+    let files: Vec<BackupFile> = serde_json::from_str(files_json).map_err(|e| e.to_string())?;
+    Ok(newest_auto_backup(&files, upload_name))
 }
 
 #[cfg(test)]
@@ -732,11 +751,10 @@ mod tests {
     }
 
     #[test]
-    fn the_newest_copy_from_before_a_damage_is_kept() {
+    fn the_pinned_pre_damage_copy_is_kept() {
         // Ten good days, then a damaged bean library loads empty: same counts.
         let files = copies("a", &[(5, 5); 12]);
-        let damaged_since = files[9].modified_ms;
-        let plan = auto_backup_retention(&files, newest(&files), 1, Some(damaged_since));
+        let plan = auto_backup_retention(&files, newest(&files), 1, Some("a8"));
         assert!(!plan.delete.contains(&"a8".to_owned()), "{:?}", plan.delete);
         for old in ["a0", "a1", "a7", "a9", "a10"] {
             assert!(
@@ -754,11 +772,28 @@ mod tests {
     fn the_pre_damage_copy_takes_the_place_of_one_with_no_counts() {
         let mut files = copies("a", &[(5, 5); 6]);
         files[4].name = name("a", 4, None);
-        let plan = auto_backup_retention(&files, newest(&files), 1, Some(files[2].modified_ms));
+        let plan = auto_backup_retention(&files, newest(&files), 1, Some("a1"));
         assert!(!plan.delete.contains(&"a1".to_owned()));
         assert!(plan.delete.contains(&"a4".to_owned()), "{:?}", plan.delete);
-        // No copy from before it: the one with no counts keeps its place.
-        let plan = auto_backup_retention(&files, newest(&files), 1, Some(files[0].modified_ms));
-        assert!(!plan.delete.contains(&"a4".to_owned()));
+        // A pinned copy that's gone from Drive, or another label's: the one with
+        // no counts keeps its place.
+        for gone in ["gone", "b1"] {
+            let plan = auto_backup_retention(&files, newest(&files), 1, Some(gone));
+            assert!(!plan.delete.contains(&"a4".to_owned()), "{gone}");
+        }
+    }
+
+    #[test]
+    fn the_newest_own_copy_is_what_gets_pinned() {
+        let mut files = copies("a", &[(5, 5); 3]);
+        files.extend(copies("b", &[(9, 9); 4]));
+        assert_eq!(
+            newest_auto_backup(&files, newest(&copies("a", &[(1, 1); 3]))),
+            Some("a2".to_owned())
+        );
+        assert_eq!(
+            newest_auto_backup(&files, &name("c", 1, Some(counts(1, 1)))),
+            None
+        );
     }
 }

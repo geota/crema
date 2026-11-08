@@ -3,7 +3,9 @@
 //! The review's scenarios are random walks of these: at the 300 cap with curves
 //! wandering, a delete a day, and two devices sharing Drive.
 
-use de1_domain::{BackupCounts, BackupFile, auto_backup_file_name, auto_backup_retention};
+use de1_domain::{
+    BackupCounts, BackupFile, auto_backup_file_name, auto_backup_retention, newest_auto_backup,
+};
 use proptest::prelude::*;
 
 const DAY: i64 = 24 * 60 * 60 * 1000;
@@ -79,8 +81,9 @@ proptest! {
         days in uploads(),
         damage in prop::option::of(0_usize..120),
     ) {
-        // A store's damaged copy, kept aside from that day on.
-        let since = |day: usize| damage.filter(|&d| d <= day).map(|d| START + i64::try_from(d).unwrap() * DAY);
+        // Device 0 sees a damage on that day: before its upload, the shell pins
+        // its newest copy, which can only be from before the damage.
+        let mut pinned: Option<String> = None;
         let mut drive = vec![BackupFile {
             id: "manual".to_owned(),
             name: MANUAL.to_owned(),
@@ -89,24 +92,19 @@ proptest! {
         let mut history: Vec<(BackupFile, BackupCounts, bool)> = Vec::new();
         for (day, upload) in days.iter().enumerate() {
             let new = file(upload.device, day, upload);
+            if upload.device == 0 && damage == Some(day) {
+                pinned = newest_auto_backup(&drive, &new.name);
+            }
             drive.push(new.clone());
             history.push((new.clone(), upload.counts, upload.legacy));
 
-            let damaged_since_ms = since(day);
-            let plan = auto_backup_retention(&drive, &new.name, keep, damaged_since_ms);
+            let pin = if upload.device == 0 { pinned.as_deref() } else { None };
+            let plan = auto_backup_retention(&drive, &new.name, keep, pin);
 
-            // The newest copy from before the damage stays while it's kept aside.
-            if let Some(since) = damaged_since_ms {
-                let label = new.id.split('-').next();
-                let pre = drive
-                    .iter()
-                    .filter(|f| f.id != "manual" && f.id.split('-').next() == label && f.modified_ms < since)
-                    .max_by_key(|f| f.modified_ms);
-                if let Some(pre) = pre {
-                    prop_assert!(!plan.delete.contains(&pre.id), "the pre-damage copy went");
-                }
+            // The pinned copy stays, however many thin copies follow.
+            if let Some(pin) = pin {
+                prop_assert!(!plan.delete.iter().any(|id| id == pin), "the pre-damage copy went");
             }
-
             for id in &plan.delete {
                 prop_assert!(id != "manual", "a manual copy was deleted");
                 prop_assert_eq!(

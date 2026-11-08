@@ -39,6 +39,7 @@ class BackupGateVmTest {
 
     @After fun tearDown() {
         library.setReadable(true)
+        app.filesDir.listFiles { f -> ".corrupt-" in f.name }?.forEach { it.delete() }
         stores.forEach { it.clear() }
         VmHarness.idle()
         SafeFile.resetForTest()
@@ -54,7 +55,7 @@ class BackupGateVmTest {
     fun aHealthyAppBacksUp() {
         val vm = vm()
         assertEquals(null, vm.autoBackupBlocked())
-        assertEquals(null, vm.damagedSinceMs())
+        assertEquals(null, vm.newestDamageMs())
     }
 
     @Test
@@ -85,7 +86,7 @@ class BackupGateVmTest {
         val before = System.currentTimeMillis()
         val vm = vm()
         assertEquals("your bean library couldn't be read", vm.autoBackupBlocked())
-        val since = assertNotNull(vm.damagedSinceMs())
+        val since = assertNotNull(vm.newestDamageMs())
         assertTrue(since >= before, "$since < $before")
 
         // The next launch reads the store fine, but the kept copy still dates it.
@@ -95,16 +96,21 @@ class BackupGateVmTest {
         Stores.resetForTest()
         val next = vm()
         assertEquals(null, next.autoBackupBlocked())
-        assertEquals(since, next.damagedSinceMs())
+        assertEquals(since, next.newestDamageMs())
         SafeFile.keptAside(library).forEach { it.delete() }
-        assertEquals(null, next.damagedSinceMs())
+        assertEquals(null, next.newestDamageMs())
     }
 
     @Test
-    fun theOldestDamageAcrossTheStoresCounts() {
+    fun theNewestDamageAcrossTheStoresCountsSettingsToo() {
         File(app.filesDir, "customProfiles.json.corrupt-1000").writeText("x")
         File(app.filesDir, "beanLibrary.json.corrupt-kept-2000").writeText("x")
-        assertEquals(1000L, vm().damagedSinceMs())
+        assertEquals(2000L, vm().newestDamageMs())
+        // A store's newest kept copy counts, not its oldest.
+        File(app.filesDir, "prefs.json.corrupt-500").writeText("x")
+        File(app.filesDir, "prefs.json.corrupt-3000").writeText("x")
+        File(app.filesDir, "maintenance.json.corrupt-2500").writeText("x")
+        assertEquals(3000L, vm().newestDamageMs())
         assertTrue(profiles.parentFile!!.listFiles()!!.any { it.name.endsWith("corrupt-1000") })
     }
 

@@ -14,6 +14,7 @@ import coffee.crema.core.SyncFailure
 import coffee.crema.core.SyncFailureRejectedInner
 import coffee.crema.core.autoBackupFileName
 import coffee.crema.core.autoBackupRetention
+import coffee.crema.core.newestAutoBackup
 import coffee.crema.core.describeBackupFile
 import coffee.crema.core.callbackOutcome
 import coffee.crema.core.reconnectNoticeDue
@@ -59,6 +60,9 @@ private const val AUTO_BACKUP_KEEP = 3
 
 /** What an install that backed up before the pre-damage copy existed keeps: unchanged. */
 private const val AUTO_BACKUP_KEEP_BEFORE = 10
+
+/** Counts for a name that's only read for its label. */
+private const val ZERO_COUNTS = """{"shots":0,"curves":0}"""
 
 /** A built backup, and what's in it for its automatic name. */
 class BackupZip(val bytes: ByteArray, val counts: BackupCounts)
@@ -139,9 +143,10 @@ class DriveSync(
      *  restore running), or null. A copy made then would hold less than the
      *  last, and could push a good one out. */
     private val autoBackupBlocked: () -> String? = { null },
-    /** When a store the counts can't see (beans, profiles, recipes) was first
-     *  kept aside as damaged, or null: retention then keeps a copy from before. */
-    private val damagedSinceMs: () -> Long? = { null },
+    /** The newest time a store the counts can't see (beans, profiles, recipes,
+     *  settings) was kept aside as damaged, on this device's clock, or null.
+     *  One newer than the last seen is a new damage. */
+    private val newestDamageMs: () -> Long? = { null },
 ) {
     /** What the Settings UI binds to (mirrored into MainUiState). */
     data class UiState(
@@ -517,14 +522,17 @@ class DriveSync(
                     return@launch
                 }
             }
-            persist { it.copy(lastAutoBackupAtMs = now()) }
-            val built = backupZip() ?: return@launch
             // The name carries the counts the retention below compares, and this
             // install's tag. Its prefix still holds "crema-backup", so the Drive
             // list query finds it, and only this prefix is ever pruned, so a
             // manual backup never is.
             val tag = persisted.autoBackupTag
                 ?: newAutoBackupTag().also { fresh -> persist { it.copy(autoBackupTag = fresh) } }
+            // Not stamped when it can't look: the next launch tries again, as an
+            // upload now would push the copy it should keep out of reach.
+            if (!pinPreDamageCopy(tokens, autoBackupFileName(backupFileName(), tag, ZERO_COUNTS))) return@launch
+            persist { it.copy(lastAutoBackupAtMs = now()) }
+            val built = backupZip() ?: return@launch
             val name = autoBackupFileName(backupFileName(), tag, json.encodeToString(BackupCounts.serializer(), built.counts))
             try {
                 withToken(tokens) { uploadBackup(it, name, built.bytes) }
@@ -564,11 +572,36 @@ class DriveSync(
                     .also { chosen -> persist { it.copy(autoBackupKeep = chosen) } }
             val plan = json.decodeFromString(
                 AutoBackupRetention.serializer(),
-                autoBackupRetention(filesJson, uploaded, keep.toUInt(), damagedSinceMs()),
+                autoBackupRetention(filesJson, uploaded, keep.toUInt(), persisted.preDamageCopy),
             )
             plan.shrink?.let { notify(shrinkNotice(it)) }
             withToken(tokens) { token -> plan.delete.forEach { trashFile(token, it) } }
         }.onFailure { log("Drive backup prune failed: ${it.message}") }
+    }
+
+    /**
+     * A damage the counts can't see, new since the last look: pin this
+     * install's newest copy on Drive, by id, for retention to keep. It's from
+     * before the damage, as the launch that found it didn't back up, and no
+     * clock is compared: the device's and Drive's can disagree, and a damage
+     * long since fixed isn't new. False when Drive couldn't be listed.
+     */
+    private suspend fun pinPreDamageCopy(tokens: DriveTokenSet, nameLike: String): Boolean {
+        val damage = newestDamageMs() ?: return true
+        if (damage <= (persisted.damageSeenMs ?: Long.MIN_VALUE)) return true
+        return runCatchingCancellable {
+            val files = withToken(tokens) { listBackups(it) }.mapNotNull { it.toBackupFile() }
+            newestAutoBackup(json.encodeToString(ListSerializer(BackupFile.serializer()), files), nameLike)
+        }.fold(
+            onSuccess = { pin ->
+                persist { it.copy(damageSeenMs = damage, preDamageCopy = pin) }
+                true
+            },
+            onFailure = {
+                log("Daily Drive backup waits: couldn't list Drive to keep the copy from before a damage (${it.message})")
+                false
+            },
+        )
     }
 
     /** List what's in Drive and open the picker: every backup, manual or daily,
