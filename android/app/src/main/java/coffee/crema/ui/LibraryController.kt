@@ -1325,18 +1325,28 @@ class LibraryController(
             return ok
         }
 
-        override suspend fun runDeletes(deletes: coffee.crema.restore.MarkerDeletes) {
-            // Only over rows that loaded: a corrupt load reads as "not listed" (#325).
-            val historyFile = java.io.File(app.filesDir, coffee.crema.history.HistoryStore.FILE_NAME)
-            if (coffee.crema.persist.Stores.health(historyFile) == coffee.crema.persist.StoreHealth.OK) {
+        override suspend fun runDeletes(deletes: coffee.crema.restore.MarkerDeletes): Boolean {
+            // Only over a store that loaded: a corrupt load reads as "not listed" (#325).
+            fun loaded(file: String) =
+                coffee.crema.persist.Stores.health(java.io.File(app.filesDir, file)) == coffee.crema.persist.StoreHealth.OK
+            val shotsOk = deletes.shots.isEmpty() || loaded(coffee.crema.history.HistoryStore.FILE_NAME)
+            val photosOk = deletes.photos.isEmpty() || loaded(LibraryStore.FILE_NAME)
+            if (shotsOk && deletes.shots.isNotEmpty()) {
                 val listed = uiState().history.mapTo(HashSet()) { it.id }
                 historyStore.deleteSeriesOf(deletes.shots.filterNot { it in listed })
             }
-            val listedBeans = uiState().beans.mapTo(HashSet()) { it.id }
-            withContext(Dispatchers.IO) {
-                deletes.photos.filterNot { it in listedBeans }.forEach { BeanImageStore.beanImageFile(app, it).delete() }
+            if (photosOk && deletes.photos.isNotEmpty()) {
+                val listedBeans = uiState().beans.mapTo(HashSet()) { it.id }
+                withContext(Dispatchers.IO) {
+                    deletes.photos.filterNot { it in listedBeans }.forEach { BeanImageStore.beanImageFile(app, it).delete() }
+                }
             }
+            return shotsOk && photosOk
         }
+
+        override fun pauseDeletes() = historyStore.pauseDeletes()
+
+        override fun resumeDeletes() = historyStore.resumeDeletes()
 
         override fun changedDirs(): List<java.io.File> =
             listOf(app.filesDir, historyStore.seriesDirectory, BeanImageStore.beanImageFile(app, "x").parentFile!!)

@@ -160,8 +160,12 @@ interface RestoreSink {
     suspend fun applyShots(plan: RestorePlan, records: RestoreRecords): Int?
     /** Step 8's three writes. */
     suspend fun applySingletons(plan: RestorePlan, records: RestoreRecords): Boolean
-    /** Step 9: the deletes the marker owes, only for ids no longer listed. */
-    suspend fun runDeletes(deletes: MarkerDeletes)
+    /** Step 9: the deletes the marker owes, only for ids no longer listed. False when a store
+     *  they depend on didn't load, so they wait, with the marker, for a launch where it does. */
+    suspend fun runDeletes(deletes: MarkerDeletes): Boolean
+    /** Steps 1 to 9: the history's save diff deletes nothing; the marker owns the restore's deletes. */
+    fun pauseDeletes()
+    fun resumeDeletes()
     /** Step 9: the directories whose renames must be durable before any delete. */
     fun changedDirs(): List<File>
 }
@@ -222,8 +226,8 @@ class RestoreEngine(
         if (running.get()) return null
         val m = marker.read() ?: return null
         if (m.phase == RestoreMarkerStore.PHASE_APPLYING) return m.backupName
-        sink.runDeletes(m.deletes)
-        marker.clear()
+        // Skipped deletes keep the marker, so a later launch still owes them.
+        if (sink.runDeletes(m.deletes)) marker.clear()
         return null
     }
 
@@ -287,6 +291,24 @@ class RestoreEngine(
             return ok
         }
         fun stopped(at: RestoreStep) = RestoreOutcome.Stopped(plan, at, landed.toList())
+        // From step 1 to the end, no save deletes by its diff: the marker owns them.
+        sink.pauseDeletes()
+        try {
+            return applySteps(prepared, kind, plan, records, landed, ::step, ::stopped)
+        } finally {
+            sink.resumeDeletes()
+        }
+    }
+
+    private suspend fun applySteps(
+        prepared: PreparedBackup,
+        kind: RestoreKind,
+        plan: RestorePlan,
+        records: RestoreRecords,
+        landed: MutableList<RestoreStep>,
+        step: suspend (RestoreStep, suspend () -> Boolean) -> Boolean,
+        stopped: (RestoreStep) -> RestoreOutcome,
+    ): RestoreOutcome {
 
         // 1. The marker, with what this restore will owe to delete.
         if (!step(RestoreStep.MARKER) {
@@ -326,8 +348,8 @@ class RestoreEngine(
         // 9. Finishing: the renames made durable, then the deletes, then the marker goes.
         marker.finishing()
         withContext(Dispatchers.IO) { sink.changedDirs().forEach(::syncDir) }
-        marker.read()?.deletes?.let { sink.runDeletes(it) }
-        marker.clear()
+        val owed = marker.read()?.deletes
+        if (owed == null || sink.runDeletes(owed)) marker.clear()
         return RestoreOutcome.Done(plan, curvesFailed, skipped)
     }
 

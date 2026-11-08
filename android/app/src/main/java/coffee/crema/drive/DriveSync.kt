@@ -173,6 +173,8 @@ class DriveSync(
      *  device's clock. A store's time newer than the one last seen for that
      *  store is a new damage; one store's clock never hides another's. */
     private val damageByStore: () -> Map<String, Long> = { emptyMap() },
+    /** A restore is running: a backup now would upload it half-applied. */
+    private val restoreRunning: () -> Boolean = { false },
 ) {
     /** What the Settings UI binds to (mirrored into MainUiState). */
     data class UiState(
@@ -518,6 +520,10 @@ class DriveSync(
     fun backupNow() {
         scope.launch {
             if (!ownState.await()) return@launch
+            if (restoreRunning()) {
+                notify("A restore is running. Back up once it's done.")
+                return@launch
+            }
             val tokens = tokenForUser("backup") ?: return@launch
             // Busy from the start: building the zip takes a while on a big
             // history (it runs off Main, so the UI stays live meanwhile).

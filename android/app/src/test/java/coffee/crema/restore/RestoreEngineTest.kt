@@ -71,6 +71,9 @@ class RestoreEngineTest {
         val calls = mutableListOf<String>()
         var busy = false
         var deleted: MarkerDeletes? = null
+        var deletesOk = true
+        var paused = 0
+        val pausedAt = mutableListOf<String>()
         var beforeLibrary: suspend () -> Unit = {}
         override suspend fun localState() = state
         override fun machineBusy() = busy
@@ -83,9 +86,18 @@ class RestoreEngineTest {
             return true
         }
         override suspend fun applyProfiles(plan: RestorePlan, records: RestoreRecords) = true.also { calls += "profiles" }
-        override suspend fun applyShots(plan: RestorePlan, records: RestoreRecords): Int? = 0.also { calls += "shots" }
+        override suspend fun applyShots(plan: RestorePlan, records: RestoreRecords): Int? = 0.also {
+            calls += "shots"
+            if (paused > 0) pausedAt += "shots"
+        }
         override suspend fun applySingletons(plan: RestorePlan, records: RestoreRecords) = true.also { calls += "settings" }
-        override suspend fun runDeletes(deletes: MarkerDeletes) { deleted = deletes; calls += "deletes" }
+        override suspend fun runDeletes(deletes: MarkerDeletes): Boolean {
+            deleted = deletes
+            calls += "deletes"
+            return deletesOk
+        }
+        override fun pauseDeletes() { paused++ }
+        override fun resumeDeletes() { paused-- }
         override fun changedDirs(): List<File> = emptyList()
     }
 
@@ -228,6 +240,33 @@ class RestoreEngineTest {
         sink.state = local(beans = listOf(BEAN))
         val rerun = e.plan(p, RestoreKind.MERGE)
         assertEquals(emptyList(), rerun.shots.zeroDebit, "the bag a stopped run added isn't the device's own")
+    }
+
+    @Test
+    fun theSaveDiffDeletesNothingFromStepOneAndResumesHoweverItEnds() = runBlocking<Unit> {
+        for (stop in listOf(null, RestoreStep.SHOTS, RestoreStep.SETTINGS)) {
+            marker.clear()
+            val sink = FakeSink(local(beans = emptyList()))
+            val e = engine(sink)
+            val p = prepared()
+            e.failAt = stop
+            e.run(p, RestoreKind.REPLACE, records(p), expected = e.plan(p, RestoreKind.REPLACE))
+            if (stop != RestoreStep.SHOTS) assertEquals(listOf("shots"), sink.pausedAt, "$stop")
+            assertEquals(0, sink.paused, "resumed after $stop")
+        }
+    }
+
+    @Test
+    fun aFinishingMarkerWhoseDeletesWaitedIsKept() = runBlocking<Unit> {
+        assertTrue(marker.begin(RestoreKind.REPLACE, "Pixel", MarkerDeletes(shots = listOf("a")), 1))
+        assertTrue(marker.finishing())
+        val sink = FakeSink(local()).apply { deletesOk = false }
+        val e = engine(sink)
+        assertNull(e.checkAtBoot())
+        assertEquals(RestoreMarkerStore.PHASE_FINISHING, marker.read()?.phase, "the deletes are still owed")
+        sink.deletesOk = true
+        e.checkAtBoot()
+        assertNull(marker.read())
     }
 
     @Test

@@ -110,6 +110,62 @@ class RestoreVmTest {
         assertEquals(3, rows.size, rows.map { it.id }.toString())
     }
 
+    /** The fixture with its first line made unreadable, or a BOM before it. */
+    private fun damaged(bom: Boolean): ByteArray {
+        val lines = fixture.readText().lines()
+        val text = if (bom) "\uFEFF" + lines.joinToString("\n") else (listOf("{ not a header") + lines.drop(1)).joinToString("\n")
+        return text.toByteArray()
+    }
+
+    @Test
+    fun aDamagedHeaderOrABomStillMergesAndReplaceRefuses() {
+        for (bom in listOf(false, true)) {
+            store.clear(); VmHarness.idle(); store = ViewModelStore()
+            SafeFile.resetForTest(); Stores.resetForTest(); SaveFloor.resetForTest()
+            val vm = vm()
+            val before = vm.ui.value.userMessages.size
+            vm.startRestore(damaged(bom), "damaged", MainViewModel.RestoreMode.WIPE)
+            VmHarness.idleUntil("the refusal") { vm.ui.value.userMessages.size > before }
+            assertTrue("damaged" in vm.ui.value.userMessages.last(), "bom=$bom: ${vm.ui.value.userMessages.last()}")
+            vm.startRestore(damaged(bom), "damaged", MainViewModel.RestoreMode.MERGE)
+            VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
+            vm.confirmRestore()
+            VmHarness.idleUntil("the merge") { VmHarness.ownState(vm).history.any { it.id == "shot:android-1" } }
+        }
+    }
+
+    @Test
+    fun aReplaceStoppedBeforeTheEndLeavesTheRemovedCurveToItsMarker() {
+        SafeFile.openAllForTest()
+        val curve = listOf(TelemetrySample(elapsedMs = 0, pressure = 9f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null, dispensedVolume = 0f, resistance = null, resistanceWeight = null, setHeadTemp = 93f, setGroupPressure = 9f, setGroupFlow = 0f, frameNumber = 1))
+        runBlocking { HistoryStore(app, coffee.crema.ui.coreJson).save(listOf(shot("old", 1_700_000_100_000).copy(samples = curve))) }
+        val series = File(app.filesDir, "shot-series").listFiles().orEmpty().map { it.name }
+        assertTrue(series.isNotEmpty(), "old's curve is on disk")
+        val vm = vm()
+        vm.restoreEngine.failAt = coffee.crema.restore.RestoreStep.SETTINGS
+        val before = vm.ui.value.userMessages.size
+        vm.startRestore(fixture.readBytes(), "fixture", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
+        vm.confirmRestore()
+        VmHarness.idleUntil("the stop") { vm.ui.value.userMessages.size > before }
+        assertTrue(vm.ui.value.userMessages.last().startsWith("Restore stopped"), vm.ui.value.userMessages.last())
+        assertTrue(VmHarness.ownState(vm).history.none { it.id == "old" }, "the rows were replaced")
+        assertEquals(series, File(app.filesDir, "shot-series").listFiles().orEmpty().map { it.name }.filter { it in series }, "no save deleted the removed row's curve")
+    }
+
+    @Test
+    fun aPhotoTheMarkerOwesWaitsForTheBeanLibraryToLoad() {
+        File(app.filesDir, "beanLibrary.json").writeText("not json")
+        val photo = coffee.crema.beans.BeanImageStore.beanImageFile(app, "b9").also { it.parentFile!!.mkdirs(); it.writeBytes(byteArrayOf(1, 2)) }
+        coffee.crema.restore.RestoreMarkerStore(File(app.filesDir, coffee.crema.restore.RestoreMarkerStore.FILE_NAME), coffee.crema.ui.coreJson).apply {
+            assertTrue(begin(coffee.crema.restore.RestoreKind.REPLACE, "x", coffee.crema.restore.MarkerDeletes(photos = listOf("b9")), 1))
+            assertTrue(finishing())
+        }
+        vm()
+        assertTrue(photo.exists(), "a library that didn't load can't say b9 is gone")
+        assertTrue(File(app.filesDir, coffee.crema.restore.RestoreMarkerStore.FILE_NAME).exists(), "the marker still owes it")
+    }
+
     @Test
     fun aFreshInstallHasNothingToBackUp() {
         val vm = vm()

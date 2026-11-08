@@ -248,18 +248,22 @@ fun parseBackup(
     json: Json,
     nowMs: Long,
     import: (String) -> String = ::importBackupJsonl,
-): ParsedBackup? = parseImportPlan(json.parseToJsonElement(import(text)).jsonObject, json, nowMs, strict = false)
+): ParsedBackup? = parseImportPlan(json.parseToJsonElement(import(text)).jsonObject, json, nowMs, strict = false, requireHeader = true)
 
-/** A restore's records: the core's `importBackupBytes`, every row decoded, or [BackupDecodeError]. */
-fun parseBackupBytes(bytes: ByteArray, json: Json, nowMs: Long): ParsedBackup? =
-    parseImportPlan(json.parseToJsonElement(coffee.crema.core.importBackupBytes(bytes)).jsonObject, json, nowMs, strict = true)
+/**
+ * A restore's records: the core's `importBackupBytes`, every row decoded, or
+ * [BackupDecodeError]. No header gate: the plan's verdict says whether it's a
+ * backup, and a damaged first line or a BOM can still Merge (REVIEW-378).
+ */
+fun parseBackupBytes(bytes: ByteArray, json: Json, nowMs: Long): ParsedBackup =
+    parseImportPlan(json.parseToJsonElement(coffee.crema.core.importBackupBytes(bytes)).jsonObject, json, nowMs, strict = true, requireHeader = false)!!
 
 /** A row the core read that this shell can't take. A restore stops before its first write: the plan counted it. */
 class BackupDecodeError(what: String, id: String?) :
     IllegalArgumentException("A $what in this backup can't be read here (${id ?: "?"}). Nothing was changed.")
 
-private fun parseImportPlan(plan: JsonObject, json: Json, nowMs: Long, strict: Boolean): ParsedBackup? {
-    if ((plan["hasHeader"] as? JsonPrimitive)?.booleanOrNull != true) return null
+private fun parseImportPlan(plan: JsonObject, json: Json, nowMs: Long, strict: Boolean, requireHeader: Boolean): ParsedBackup? {
+    if (requireHeader && (plan["hasHeader"] as? JsonPrimitive)?.booleanOrNull != true) return null
     fun array(key: String): List<JsonObject> = (plan[key] as? JsonArray).orEmpty().filterIsInstance<JsonObject>()
     fun obj(key: String): JsonObject? = plan[key] as? JsonObject
     fun idOf(o: JsonObject) = (o["id"] as? JsonPrimitive)?.content

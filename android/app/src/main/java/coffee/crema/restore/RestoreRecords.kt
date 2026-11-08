@@ -15,8 +15,8 @@ class RestoreRecords(val parsed: ParsedBackup) {
             (parsed.visualizerPrefs != null && plan.visualizerPrefs == PlanAction.Apply)
 
     companion object {
-        /** Null when the bytes carry no backup header; throws [coffee.crema.ui.BackupDecodeError] on a row this shell can't take. */
-        fun read(prepared: PreparedBackup, json: Json, nowMs: Long): RestoreRecords? =
-            parseBackupBytes(prepared.jsonl, json, nowMs)?.let(::RestoreRecords)
+        /** Read after the plan, which says whether it's a backup; throws [coffee.crema.ui.BackupDecodeError] on a row this shell can't take. */
+        fun read(prepared: PreparedBackup, json: Json, nowMs: Long): RestoreRecords =
+            RestoreRecords(parseBackupBytes(prepared.jsonl, json, nowMs))
     }
 }

@@ -170,6 +170,28 @@ class DriveRetentionTest {
 
     private fun DriveSync.finish() = runBlocking { withTimeout(10_000) { job.children.toList().joinAll() } }
 
+    @Test
+    fun aManualBackupWaitsWhileARestoreRuns() {
+        var restoring = true
+        val sync = DriveSync(
+            store, json, scope, "cid",
+            notify = { notices += it },
+            backupZip = { BackupZip(byteArrayOf(1), BackupCounts(1u, 1u)) },
+            backupFileName = { "crema-backup-tablet-20261108-0800.crema.zip" },
+            applyRestore = { _, _, _ -> },
+            refreshToken = { error("no refresh expected") },
+            restoreRunning = { restoring },
+        ).also { runBlocking { store.load(); store.save(DriveState(tokens = tokens)); it.load() } }
+        sync.backupNow()
+        sync.finish()
+        assertTrue(drive.isEmpty(), "nothing uploaded half-applied")
+        assertTrue("A restore is running. Back up once it's done." in notices, "$notices")
+        restoring = false
+        sync.backupNow()
+        sync.finish()
+        assertEquals(1, drive.size)
+    }
+
     /** One daily run, on a device whose last automatic backup was [lastAuto]. */
     private fun dailyBackup(
         lastAuto: Long? = now - 2 * day,

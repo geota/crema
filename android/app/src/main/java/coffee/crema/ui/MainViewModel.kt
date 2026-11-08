@@ -421,6 +421,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         },
         autoBackupBlocked = { autoBackupBlocked() },
         damageByStore = { damageByStore() },
+        restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
         unmetered = {
             val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
             cm != null && !cm.isActiveNetworkMetered
@@ -1490,13 +1491,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     bytes, name, java.io.File(getApplication<Application>().cacheDir, "restore-photos"),
                 )
             }.getOrElse { notifyUser("Restore failed: ${it.message}"); return@launch }
+            // The plan first: its verdict says whether this is a backup at all.
+            val plan = restoreEngine.plan(prepared, kind)
+            if (plan.verdict == coffee.crema.core.Verdict.Refused) {
+                notifyUser(coffee.crema.restore.refusalMessage(plan))
+                return@launch
+            }
             val records = runCatching { coffee.crema.restore.RestoreRecords.read(prepared, json, System.currentTimeMillis()) }
                 .getOrElse { notifyUser(it.message ?: "Restore failed."); return@launch }
-                ?: run { notifyUser("Not a Crema backup file."); return@launch }
-            val plan = restoreEngine.plan(prepared, kind)
             val pending = PendingRestore(prepared, records, kind, plan, from = from)
             when {
-                plan.verdict == coffee.crema.core.Verdict.Refused -> notifyUser(coffee.crema.restore.refusalMessage(plan))
                 plan.verdict == coffee.crema.core.Verdict.Ok && plan.shots.deletedHere.isEmpty() -> runPending(pending)
                 else -> showReport(pending)
             }
@@ -1579,22 +1583,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return settings.persistRestoredPrefs()
     }
 
-    /** Apply a backup from raw bytes, confirming whatever its plan allows: for tests and imports. */
-    suspend fun restoreBackupBytes(bytes: ByteArray, mode: RestoreMode) {
+    /** Apply a backup from raw bytes, confirming whatever its plan allows: tests only. */
+    internal suspend fun restoreBackupBytes(bytes: ByteArray, mode: RestoreMode) {
         val kind = kindOf(mode)
         val prepared = coffee.crema.restore.prepareBackup(bytes, "a backup", java.io.File(getApplication<Application>().cacheDir, "restore-photos"))
-        val records = coffee.crema.restore.RestoreRecords.read(prepared, json, System.currentTimeMillis())
-            ?: run { notifyUser("Not a Crema backup file."); return }
         val plan = restoreEngine.plan(prepared, kind)
         if (plan.verdict == coffee.crema.core.Verdict.Refused) {
             notifyUser(coffee.crema.restore.refusalMessage(plan))
             return
         }
+        val records = coffee.crema.restore.RestoreRecords.read(prepared, json, System.currentTimeMillis())
         runPending(PendingRestore(prepared, records, kind, plan))
     }
 
-    /** [restoreBackupBytes] for a bundle's raw text. */
-    fun restoreBackupFromText(text: String, mode: RestoreMode) {
+    /** [restoreBackupBytes] for a bundle's raw text: tests only, as it confirms its own plan. */
+    internal fun restoreBackupFromText(text: String, mode: RestoreMode) {
         viewModelScope.launch { restoreBackupBytes(text.toByteArray(Charsets.UTF_8), mode) }
     }
 
