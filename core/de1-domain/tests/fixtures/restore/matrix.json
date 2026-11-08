@@ -1009,6 +1009,34 @@
       }
     },
     {
+      "name": "refused: a zip's photos stay out of the photo store",
+      "store": "photos",
+      "mode": "replace",
+      "local": {
+        "machineBusy": true,
+        "beans": [
+          "b1"
+        ],
+        "photos": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1",
+          "b2"
+        ],
+        "photos": [
+          "b1",
+          "b2"
+        ]
+      },
+      "expect": {
+        "/verdict": "refused",
+        "/refusals/0/code": "machineBusy"
+      }
+    },
+    {
       "name": "refused: replace with a backup of no rows on a device with rows",
       "store": "beans",
       "mode": "replace",
