@@ -419,7 +419,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         applyRestore = { bytes, wipe ->
             viewModelScope.launch { library.restoreBackupBytes(bytes, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) }
         },
+        autoBackupBlocked = { autoBackupBlocked() },
+        damagedSinceMs = { damagedSinceMs() },
     )
+
+    /** When the first damaged copy still kept aside of a store the counts can't
+     *  see was put there, or null. */
+    internal fun damagedSinceMs(): Long? =
+        PRE_DAMAGE_STORES.mapNotNull { coffee.crema.persist.SafeFile.keptAsideSinceMs(java.io.File(getApplication<Application>().filesDir, it)) }.minOrNull()
+
+    /** Why a daily backup mustn't run now, or null. */
+    internal fun autoBackupBlocked(): String? {
+        val unhealthy = Stores.unhealthy()
+        return when {
+            unhealthy.isNotEmpty() -> "your ${unhealthy.joinToString(" and ")} couldn't be read"
+            library.restoring -> "a restore is running"
+            else -> null
+        }
+    }
 
     /**
      * The library controller (review #43) — profiles (built-in + custom +
@@ -2544,6 +2561,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     internal companion object {
+        /** The stores a backup's counts can't see: while one has a damaged copy
+         *  kept aside, Drive keeps a daily backup from before it. */
+        val PRE_DAMAGE_STORES = listOf(
+            coffee.crema.beans.LibraryStore.FILE_NAME,
+            coffee.crema.profiles.CustomProfileStore.FILE_NAME,
+            coffee.crema.brew.RecipeFileStore.FILE_NAME,
+        )
+
         /**
          * Tests set this before building a VM to hold its startup load until
          * they complete it, so they can act while the prefs are still unloaded

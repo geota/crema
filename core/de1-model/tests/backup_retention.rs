@@ -71,9 +71,16 @@ fn counts_of(uploads: &[(BackupFile, BackupCounts, bool)], id: &str) -> BackupCo
 }
 
 proptest! {
-    /// Day after day, as a device runs it: delete what the plan says, upload again.
+    /// Day after day, as a device runs it: delete what the plan says, upload
+    /// again, with a store damaged on some day or never.
     #[test]
-    fn a_daily_run_stays_bounded_and_keeps_the_fullest(keep in 0_u32..12, days in uploads()) {
+    fn a_daily_run_stays_bounded_and_keeps_the_fullest(
+        keep in 0_u32..12,
+        days in uploads(),
+        damage in prop::option::of(0_usize..120),
+    ) {
+        // A store's damaged copy, kept aside from that day on.
+        let since = |day: usize| damage.filter(|&d| d <= day).map(|d| START + i64::try_from(d).unwrap() * DAY);
         let mut drive = vec![BackupFile {
             id: "manual".to_owned(),
             name: MANUAL.to_owned(),
@@ -85,7 +92,20 @@ proptest! {
             drive.push(new.clone());
             history.push((new.clone(), upload.counts, upload.legacy));
 
-            let plan = auto_backup_retention(&drive, &new.name, keep);
+            let damaged_since_ms = since(day);
+            let plan = auto_backup_retention(&drive, &new.name, keep, damaged_since_ms);
+
+            // The newest copy from before the damage stays while it's kept aside.
+            if let Some(since) = damaged_since_ms {
+                let label = new.id.split('-').next();
+                let pre = drive
+                    .iter()
+                    .filter(|f| f.id != "manual" && f.id.split('-').next() == label && f.modified_ms < since)
+                    .max_by_key(|f| f.modified_ms);
+                if let Some(pre) = pre {
+                    prop_assert!(!plan.delete.contains(&pre.id), "the pre-damage copy went");
+                }
+            }
 
             for id in &plan.delete {
                 prop_assert!(id != "manual", "a manual copy was deleted");
@@ -134,7 +154,7 @@ proptest! {
             .collect();
         let drive: Vec<BackupFile> = files.iter().map(|(f, _, _)| f.clone()).collect();
         let (newest, _, _) = files.last().unwrap();
-        let plan = auto_backup_retention(&drive, &newest.name, keep);
+        let plan = auto_backup_retention(&drive, &newest.name, keep, None);
 
         let counted: Vec<_> = files.iter().filter(|(_, _, legacy)| !legacy).collect();
         for of in [|c: &BackupCounts| c.shots, |c: &BackupCounts| c.curves] {

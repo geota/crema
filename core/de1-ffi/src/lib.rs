@@ -2158,7 +2158,8 @@ pub fn describe_backup_file(name: String) -> String {
 }
 
 /// What to prune after an automatic upload, as an `AutoBackupRetention` JSON.
-/// See [`de1_domain::auto_backup_retention`].
+/// `damaged_since_ms` is the oldest kept-aside damaged copy of a store the
+/// counts can't see, if any. See [`de1_domain::auto_backup_retention`].
 ///
 /// # Errors
 ///
@@ -2168,8 +2169,10 @@ pub fn auto_backup_retention(
     files_json: String,
     uploaded: String,
     keep: u32,
+    damaged_since_ms: Option<i64>,
 ) -> Result<String, CremaError> {
-    de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep).map_err(crema_err)
+    de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep, damaged_since_ms)
+        .map_err(crema_err)
 }
 
 /// Scan a backup's bytes into a `BackupManifest` JSON, with the bean ids its

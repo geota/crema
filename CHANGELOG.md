@@ -114,6 +114,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   out under half the size of your last one, Crema tells you. Pruned copies go to
   Drive's trash, where you can restore them for 30 days. Copies made before this
   update are left alone. Android.
+- **A daily backup never holds less than the damage left** — while Android
+  couldn't read one of your stores this session, or a restore is running, the
+  daily Drive backup waits and Settings says why; it tries again at the next
+  launch. While a damaged bean library, profile list or recipe file is kept
+  aside, Drive also keeps the newest daily backup from before the damage, as the
+  shot counts can't see those. A backup you start yourself still goes, and says
+  what it couldn't include, on Android and the web. New installs now keep 3 daily
+  copies; an install that has backed up before keeps its 10. Android.
 - **A store Android can't read is left alone** — a passing read error or running
   out of memory while loading used to move a good file aside as damaged. Now
   only a file that doesn't decode is damaged. Anything else leaves it in place

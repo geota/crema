@@ -942,7 +942,7 @@ fun SettingsScreen(
                                 CremaSettingsRow("Restore from Drive", DRIVE_RESTORE_HINT) {
                                     CremaButton(onClick = vm.drive::openBackupPicker, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore…")
                                 }
-                                CremaSettingsRow("Automatic daily backup", "Upload a fresh backup once a day when the app opens — so an uninstall can't take your data with it.") {
+                                CremaSettingsRow("Automatic daily backup", listOfNotNull(ds.autoBackupPaused, "Upload a fresh backup once a day when the app opens — so an uninstall can't take your data with it.").joinToString(" ")) {
                                     CremaSwitch(ui.autoDriveBackup, vm::setAutoDriveBackup)
                                 }
                                 CremaSettingsRow("Disconnect", "Forget the Google Drive connection on this device.", last = true) {

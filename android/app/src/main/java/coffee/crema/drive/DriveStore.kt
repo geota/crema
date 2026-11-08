@@ -45,9 +45,9 @@ data class DriveState(
     /** Epoch ms of the last SUCCESSFUL backup upload, manual or automatic —
      *  drives the "Last backed up X ago" readout. Additive → nullable. */
     val lastBackupSuccessAtMs: Long? = null,
-    /** Automatic copies kept per device, set by the first retention to run. An
-     *  install with this set has backed up, so PR8c can give the ones without
-     *  it a lower default. Additive → nullable. */
+    /** Automatic copies kept per device, set by the first retention to run: 10
+     *  for an install that had backed up before, 3 for a new one. Additive →
+     *  nullable. */
     val autoBackupKeep: Int? = null,
     /** Random, in this install's automatic backup names, so two devices of one
      *  model can't prune each other. A reinstall gets a new one and leaves its
