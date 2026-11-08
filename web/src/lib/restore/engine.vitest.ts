@@ -21,7 +21,10 @@ import {
 	resetTabSafetyForTest,
 	type RestoreMessage
 } from './tab-safety';
-import { planNow, prepareBackup, runRestore, type RestoreDeps } from './engine';
+import { decodeRows, planNow, prepareBackup, runRestore, type RestoreDeps } from './engine';
+import { restoreFlow } from './flow';
+import { readStore } from '#lib/utils/storage.js';
+import { coerceBean } from '#lib/bean/model.js';
 import { DELETE_AFTER_MS, MARKER_KEY, beginMarker, checkMarkerAtBoot, readMarker } from './marker';
 import { confirmText, outcomeMessage, refusalMessage } from './report';
 
@@ -227,7 +230,8 @@ describe('the restoring tab and the others (PR7w rules)', () => {
 		captureMessages(locks, (m) => {
 			if (m.type === 'started') void locks.hold(MACHINE_BUSY_LOCK, 'shared');
 		});
-		const out = await runRestore(prepared, 'wipe', {}, deps(locks, { machineWaitMs: 30 }));
+		const expected = await planNow(prepared, 'wipe', false, new FakeLocks());
+		const out = await runRestore(prepared, 'wipe', { expected }, deps(locks, { machineWaitMs: 30 }));
 		expect(out).toMatchObject({ kind: 'done', singletonsSkipped: true, settingsApplied: false });
 		expect(outcomeMessage(out)).toContain("settings and maintenance weren't changed");
 		expect(getBeanStore().beans.map((b) => b.id)).toEqual(['b1']);
@@ -328,6 +332,130 @@ describe('the plan, written per store', () => {
 		expect(plan.verdict).toBe(Verdict.Refused);
 		expect(refusalMessage(plan)).toContain('Replace would empty this device');
 		expect(plan.mode).toBe(RestoreMode.Replace);
+	});
+});
+
+describe('the #363 review', () => {
+	it('step 7 keeps a shot recorded and a rating changed while its series were written', async () => {
+		const prepared = await backupOf(['b1'], ['s1']);
+		const history = getHistoryStore();
+		history.insertPulled(shot('s2'));
+		captureMessages(new FakeLocks());
+		const plan = await planNow(prepared, 'merge', false, new FakeLocks());
+		const out = await runRestore(
+			prepared,
+			'merge',
+			{ expected: plan },
+			deps(new FakeLocks(), {
+				writeSeries: async () => {
+					// This tab goes on while the series land.
+					history.insertPulled(shot('s3', { bagDebit: 17 }));
+					history.setRating('s2', 5);
+					await settle();
+				}
+			})
+		);
+		expect(out.kind).toBe('done');
+		expect(history.all.map((s) => s.id).sort()).toEqual(['s1', 's2', 's3']);
+		expect(history.get('s2')?.metadata.rating).toBe(5);
+		expect(history.get('s3')?.bagDebit).toBe(17);
+		const stored = JSON.parse(localStorage.getItem('crema.history.v2')!) as StoredShot[];
+		expect(stored.map((s) => s.id).sort()).toEqual(['s1', 's2', 's3']);
+	});
+
+	it('a plan that needs a yes does nothing without one', async () => {
+		const prepared = await backupOf(['b1'], ['s1']);
+		getBeanStore().bulkAdd([{ ...blankBean('b9'), name: 'Only here' }], []);
+		captureMessages(new FakeLocks());
+		const out = await runRestore(prepared, 'wipe', {}, deps(new FakeLocks()));
+		expect(out.kind).toBe('unconfirmed');
+		expect(getBeanStore().getBean('b9')).not.toBeNull();
+		expect(readMarker()).toBeNull();
+	});
+
+	it('an unreadable settings store refuses the restore up front', async () => {
+		const prepared = await backupOf(['b1'], ['s1']);
+		const proto = Object.getPrototypeOf(localStorage) as Storage;
+		const real = proto.getItem;
+		const spy = vi.spyOn(proto, 'getItem').mockImplementation(function (this: Storage, key: string) {
+			if (key === 'crema.settings.v1') throw new Error('read failed');
+			return real.call(this, key);
+		});
+		readStore('crema.settings.v1', { what: 'settings' });
+		spy.mockRestore();
+		try {
+			const plan = await planNow(prepared, 'merge', false, new FakeLocks());
+			expect(plan.verdict).toBe(Verdict.Refused);
+			expect(plan.refusals.map((r) => r.store)).toContain('settings');
+		} finally {
+			readStore('crema.settings.v1', { what: 'settings' });
+		}
+	});
+
+	it('a finish that can not be written takes the marker away, so no boot says it did not finish', async () => {
+		const prepared = await backupOf(['b1'], ['s1']);
+		const proto = Object.getPrototypeOf(localStorage) as Storage;
+		const real = proto.setItem;
+		const spy = vi.spyOn(proto, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+			if (key === MARKER_KEY && value.includes('"finishing"')) throw new DOMException('full', 'QuotaExceededError');
+			return real.call(this, key, value);
+		});
+		captureMessages(new FakeLocks());
+		try {
+			const out = await runRestore(prepared, 'merge', {}, deps(new FakeLocks()));
+			expect(out).toMatchObject({ kind: 'done', markerDropped: true });
+		} finally {
+			spy.mockRestore();
+		}
+		expect(readMarker()).toBeNull();
+		expect(
+			(await checkMarkerAtBoot({
+				restoreRunning: async () => false,
+				listedShots: () => new Set(),
+				listedBeans: () => new Set(),
+				deleteSeries: async () => {},
+				deleteCapture: async () => {},
+				deletePhoto: async () => {}
+			})).kind
+		).toBe('none');
+	});
+
+	it('a row the shell can not take refuses the whole restore before any write', () => {
+		expect(decodeRows([{ id: 'b1', name: 'ok' }], 'bean', coerceBean)).toHaveLength(1);
+		expect(() => decodeRows([{ id: 'b1', name: 'ok' }, { nope: true }], 'bean', coerceBean)).toThrow(
+			/bean in this backup can't be read/
+		);
+	});
+
+	it('bringing deleted shots back shows those numbers before it runs', async () => {
+		const prepared = await backupOf(['b1'], ['s1']);
+		getHistoryStore().insertPulled(shot('s1', { visualizerId: 'v1' } as never));
+		getHistoryStore().delete('s1', { deleteRemote: true });
+		const seen: string[] = [];
+		const runs: boolean[] = [];
+		const { outcome } = await restoreFlow('merge', {
+			plan: (revive) => planNow(prepared, 'merge', revive, new FakeLocks()),
+			run: (revive, expected) => {
+				runs.push(revive);
+				captureMessages(new FakeLocks());
+				return runRestore(prepared, 'merge', { reviveDeleted: revive, expected }, deps(new FakeLocks()));
+			},
+			choose: async (o) => {
+				seen.push(`choose:${o.message}`);
+				return 'secondary';
+			},
+			confirm: async (o) => {
+				seen.push(`confirm:${o.message}`);
+				return true;
+			},
+			backUp: async () => '',
+			say: () => {}
+		});
+		expect(seen).toHaveLength(2);
+		expect(seen[0]).toContain('stays deleted');
+		expect(seen[1]).toMatch(/^confirm:Adds 1 shot/);
+		expect(runs).toEqual([true]);
+		expect(outcome?.kind).toBe('done');
 	});
 });
 

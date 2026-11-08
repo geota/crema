@@ -43,6 +43,7 @@ import {
 	clearAllSeries,
 	deleteSeries,
 	getAllSeries,
+	putManySeries,
 	putSeries
 } from './series-store';
 import {
@@ -376,16 +377,26 @@ export class HistoryStore {
 	 * to write. Says whether the rows were stored, and how many curves weren't.
 	 */
 	async restoreRows(
-		next: StoredShot[],
-		series: readonly StoredShot[]
+		plan: (rows: readonly StoredShot[]) => { next: StoredShot[]; series: StoredShot[] },
+		writeSeries: (rows: readonly StoredShot[]) => Promise<void> = (rows) =>
+			putManySeries(rows.map((s) => ({ id: s.id, samples: s.record.samples })))
 	): Promise<{ stored: boolean; curvesFailed: number }> {
+		const first = plan(this.shots).series.filter((s) => s.record.samples.length > 0);
 		let curvesFailed = 0;
-		for (const shot of series) {
-			if (shot.record.samples.length === 0) continue;
-			try {
-				await putSeries(shot.id, shot.record.samples);
-			} catch {
-				curvesFailed++;
+		try {
+			await writeSeries(first);
+		} catch {
+			curvesFailed = first.length;
+		}
+		// After the last await: rows recorded, rated or bound while the series
+		// were written are in `this.shots`, and the plan runs over them.
+		const { next, series } = plan(this.shots);
+		const written = new Set(first.map((s) => s.id));
+		for (const s of series) {
+			// A row the recompute found anew keeps its curve in memory and
+			// writes it now, as any new row does.
+			if (!written.has(s.id) && s.record.samples.length > 0) {
+				void putSeries(s.id, s.record.samples).catch(seriesSaveFailed);
 			}
 		}
 		this.shots = next;

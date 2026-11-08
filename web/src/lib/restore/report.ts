@@ -174,6 +174,8 @@ export function outcomeMessage(outcome: RestoreOutcome): string {
 			return refusalMessage(outcome.plan);
 		case 'changed':
 			return 'This device changed while you were deciding. Here are the new numbers.';
+		case 'unconfirmed':
+			return 'Nothing was changed: this restore needs your yes first.';
 		case 'stopped': {
 			const landed = outcome.landed.filter((s) => s !== 'marker' && s !== 'tombstones').map((s) => STEP_NAMES[s]);
 			const done = landed.length > 0 ? ` ${landed.join(', ')} were restored; the rest weren't.` : '';

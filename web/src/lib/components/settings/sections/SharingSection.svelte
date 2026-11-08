@@ -68,8 +68,7 @@
 	} from '#lib/backup/index.js';
 	import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { planNow, prepareBackup, runRestore } from '#lib/restore/engine.js';
-	import { confirmText, deletedHere, outcomeMessage, refusalMessage } from '#lib/restore/report.js';
-	import { Verdict, type RestorePlan } from '#lib/core/crema-core.js';
+	import { restoreFlow as runRestoreFlow } from '#lib/restore/flow.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
 	import { readImportBytes } from '#lib/utils/import-limits.js';
 	import { credentialsStoredUnencrypted } from '#lib/security/credential-status.js';
@@ -384,13 +383,7 @@
 		return ok;
 	}
 
-	/**
-	 * Plan a restore, show the report where the plan or the mode needs a yes,
-	 * then run it and say how it went. A clean Merge runs at once. Replace
-	 * offers Back up first; a Merge with shots deleted here offers to bring
-	 * them back. If the device changed while the report was open, the new
-	 * numbers are shown and asked again.
-	 */
+	/** Plan, report, run (`#lib/restore/flow`), then the held sharing changes. */
 	async function restoreFlow(
 		data: ArrayBuffer | Uint8Array,
 		mode: RestoreMode,
@@ -398,63 +391,21 @@
 		say: (line: string) => void
 	): Promise<string> {
 		const prepared = prepareBackup(data, name);
-		let revive = false;
-		let plan: RestorePlan = await planNow(prepared, mode);
-		let ask = plan.verdict === Verdict.Confirm || deletedHere(plan) > 0;
-		for (;;) {
-			if (plan.verdict === Verdict.Refused) return refusalMessage(plan);
-			if (ask) {
-				const { title, message } = confirmText(plan);
-				if (mode === 'wipe') {
-					const choice = await choiceDialog({
-						title,
-						message,
-						primaryLabel: 'Back up first',
-						secondaryLabel: 'Replace'
-					});
-					if (choice === null) return 'Nothing was changed.';
-					if (choice === 'primary') {
-						say(await runBackup());
-						plan = await planNow(prepared, mode);
-						continue;
-					}
-				} else if (deletedHere(plan) > 0 && !revive) {
-					const choice = await choiceDialog({
-						title,
-						message,
-						primaryLabel: 'Restore',
-						secondaryLabel: 'Bring them back too'
-					});
-					if (choice === null) return 'Nothing was changed.';
-					if (choice === 'secondary') {
-						revive = true;
-						plan = await planNow(prepared, mode, true);
-					}
-				} else if (!(await confirmDialog({ title, message, confirmLabel: 'Restore' }))) {
-					return 'Nothing was changed.';
-				}
-			}
-			say('Restoring… Other Crema tabs will reload when this finishes.');
-			const singletons = webSingletons();
-			const outcome = await runRestore(
-				prepared,
-				mode,
-				{ reviveDeleted: revive, expected: plan },
-				{ singletons: singletons.sink }
-			);
-			if (outcome.kind === 'changed') {
-				plan = outcome.plan;
-				ask = true;
-				say(outcomeMessage(outcome));
-				continue;
-			}
-			let line = outcomeMessage(outcome);
-			const held = singletons.held();
-			if (held && !(await confirmHeldRestoreChanges(held))) {
-				line += ' Kept your webhook / Visualizer sharing settings.';
-			}
-			return line;
+		const singletons = webSingletons();
+		const { line, outcome } = await runRestoreFlow(mode, {
+			plan: (revive) => planNow(prepared, mode, revive),
+			run: (revive, expected) =>
+				runRestore(prepared, mode, { reviveDeleted: revive, expected }, { singletons: singletons.sink }),
+			choose: (o) => choiceDialog(o),
+			confirm: (o) => confirmDialog(o),
+			backUp: () => runBackup(),
+			say
+		});
+		const held = outcome ? singletons.held() : null;
+		if (held && !(await confirmHeldRestoreChanges(held))) {
+			return line + ' Kept your webhook / Visualizer sharing settings.';
 		}
+		return line;
 	}
 
 	/** Read the chosen `.crema` file and restore it (merge or replace). */

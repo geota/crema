@@ -36,14 +36,14 @@ import {
 	type StorePlan
 } from '#lib/core/crema-core.js';
 import { getBeanStore } from '#lib/bean/index.js';
-import type { Bean, Roaster } from '#lib/bean/model.js';
+import { coerceBean, coerceRoaster, type Bean, type Roaster } from '#lib/bean/model.js';
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { getHistoryStore, type StoredShot } from '#lib/history/index.js';
 import { coerceStoredShot } from '#lib/history/store.svelte.js';
 import { getProfileStore } from '#lib/profiles/index.js';
 import type { CremaProfile } from '#lib/profiles/model.js';
 import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
-import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
+import { getCustomMethodStore, isCustomMethodId } from '#lib/brew/custom-methods.svelte.js';
 import type { BrewRecipe, CustomBrewMethod } from '#lib/core/crema-core.js';
 import { getSettingsStore, settingsToCommon } from '#lib/settings/index.js';
 import { getMaintenanceStore } from '#lib/maintenance/index.js';
@@ -62,7 +62,7 @@ import {
 	shotIsOpen,
 	type LockManagerLike
 } from './tab-safety';
-import { beginMarker, finishMarker } from './marker';
+import { beginMarker, dropMarker, finishMarker } from './marker';
 
 /** The most time between two `progress` posts (rule 4: under 10 s). */
 export const PROGRESS_MS = 5_000;
@@ -164,6 +164,8 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 	const recipes = getRecipeStore();
 	const methods = getCustomMethodStore();
 	const settings = getSettingsStore();
+	// Each store reads its keys when it's made: their health is known after.
+	const maintenance = getMaintenanceStore();
 	const photos = await storedPhotoBeans(beans.beans);
 	const profileMeta = profiles.backupMeta();
 	const recipeMeta = recipes.backupMeta();
@@ -173,7 +175,13 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 			['beans', 'crema.beans.v1'],
 			['profiles', 'crema.profiles.custom.v1'],
 			['recipes', 'crema.brewRecipes.v1'],
-			['customMethods', 'crema.brewMethods.custom.v1']
+			['customMethods', 'crema.brewMethods.custom.v1'],
+			['settings', 'crema.settings.v1'],
+			['maintenance', 'crema.maintenance.v2'],
+			['profileMeta', 'crema.profiles.builtinOverrides.v1'],
+			['profileMeta', 'crema.profiles.hiddenBuiltins.v1'],
+			['recipeMeta', 'crema.brewRecipes.lastUsed.v1'],
+			['recipeMeta', 'crema.brewRecipes.hiddenBuiltins.v1']
 		] as const
 	).map(([store, key]) => ({ store, health: storeHealth(key) }));
 	return {
@@ -198,7 +206,7 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		recipeMeta: { defaults: recipeMeta.defaults ?? {}, hiddenBuiltins: recipeMeta.hiddenBuiltins ?? [] },
 		common: settingsToCommon(settings.current),
 		visualizerPrefs: visualizerSyncPrefs(),
-		totalLitres: getMaintenanceStore().current.totalLitres ?? 0,
+		totalLitres: maintenance.current.totalLitres ?? 0,
 		activeBeanId: beans.activeBeanId
 	} as unknown as LocalState;
 }
@@ -266,17 +274,42 @@ export function readRecords(prepared: PreparedBackup): BackupRecords {
 		shots.push(shot);
 	}
 	const obj = (v: unknown) => (typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : null);
+	const decoded = decodeRows;
+	/** A row the stores keep as the core typed it: an object with an id. */
+	const withId = <T>(row: unknown): T | null => {
+		const o = obj(row);
+		return o && typeof o.id === 'string' && o.id.length > 0 ? (o as T) : null;
+	};
 	return {
-		profiles: list<CremaProfile>(raw.profiles).filter((p) => typeof p?.id === 'string'),
-		beans: list<Bean>(raw.beans),
-		roasters: list<Roaster>(raw.roasters),
+		profiles: decoded(raw.profiles, 'profile', withId<CremaProfile>),
+		beans: decoded(raw.beans, 'bean', coerceBean),
+		roasters: decoded(raw.roasters, 'roaster', coerceRoaster),
 		shots,
-		recipes: list<BrewRecipe>(raw.recipes),
-		customMethods: list<CustomBrewMethod>(raw.customMethods),
+		recipes: decoded(raw.recipes, 'recipe', withId<BrewRecipe>),
+		customMethods: decoded(raw.customMethods, 'brew method', (r) => {
+			const m = withId<CustomBrewMethod>(r);
+			return m && isCustomMethodId(m.id) ? m : null;
+		}),
 		settings: obj(raw.settings),
 		maintenance: obj(raw.maintenance),
 		visualizerPrefs: obj(raw.visualizerPrefs)
 	};
+}
+
+/**
+ * Every row decoded to the shell's type, or the whole restore refused before
+ * its first write: the plan counted them all, so a row dropped here would be
+ * one the report promised.
+ */
+export function decodeRows<T>(rows: unknown, what: string, decode: (row: unknown) => T | null): T[] {
+	return (Array.isArray(rows) ? rows : []).map((row) => {
+		const out = decode(row);
+		if (out === null) {
+			const id = typeof row === 'object' && row !== null ? (row as { id?: unknown }).id : undefined;
+			throw new Error(`A ${what} in this backup can't be read here (${String(id ?? '?')}). Nothing was changed.`);
+		}
+		return out;
+	});
 }
 
 /** `local − remove + overwrite + add`, from the backup's rows. First of a repeated id wins. */
@@ -356,6 +389,8 @@ export type RestoreOutcome =
 	| { kind: 'refused'; plan: RestorePlan }
 	/** The device changed while the report was open: here are the new numbers. */
 	| { kind: 'changed'; plan: RestorePlan }
+	/** The plan asks for the user's yes, and none was given: nothing ran. */
+	| { kind: 'unconfirmed'; plan: RestorePlan }
 	/** Another tab is restoring. */
 	| { kind: 'busy' }
 	| {
@@ -366,6 +401,8 @@ export type RestoreOutcome =
 			singletonsSkipped: boolean;
 			/** What the settings line held for the user's OK. */
 			settingsApplied: boolean;
+			/** The marker couldn't be moved to `finishing`, so it was removed. */
+			markerDropped: boolean;
 	  }
 	| { kind: 'stopped'; plan: RestorePlan; at: RestoreStep; landed: RestoreStep[] };
 
@@ -381,6 +418,8 @@ export interface RestoreDeps {
 	locks?: LockManagerLike;
 	/** Test seam: throw at a step, as a kill or a full disk would stop it there. */
 	failAt?: RestoreStep;
+	/** Test seam: the series writes of step 7, batched by default. */
+	writeSeries?: (rows: readonly StoredShot[]) => Promise<void>;
 	machineWaitMs?: number;
 	progressMs?: number;
 	now?: () => number;
@@ -507,6 +546,8 @@ async function holdingRestore(
 	const plan = await planNow(prepared, mode, opts.reviveDeleted ?? false, locks);
 	if (plan.verdict === Verdict.Refused) return { kind: 'refused', plan };
 	if (opts.expected && !sameNumbers(opts.expected, plan)) return { kind: 'changed', plan };
+	// Only a plan the core calls `ok` runs without the user having seen it.
+	if (!opts.expected && plan.verdict !== Verdict.Ok) return { kind: 'unconfirmed', plan };
 	const records = readRecords(prepared);
 
 	let started = false;
@@ -652,9 +693,13 @@ async function applyPlan(
 	let curvesFailed = 0;
 	if (
 		!(await step('shots', async () => {
-			const history = getHistoryStore();
-			const { next, series } = nextShots(history.rawAll, records.shots, plan.shots);
-			const r = await history.restoreRows(next, series);
+			// Computed again after the series land, over whatever this tab
+			// recorded or edited meanwhile: the restore's own rows only change
+			// the ids the plan names.
+			const r = await getHistoryStore().restoreRows(
+				(rows) => nextShots(rows, records.shots, plan.shots),
+				deps.writeSeries
+			);
 			curvesFailed = r.curvesFailed;
 			return r.stored;
 		}))
@@ -690,7 +735,13 @@ async function applyPlan(
 		if (ran) landed.push('settings');
 	}
 
-	// 9. Finishing: the deletes wait their hour.
-	finishMarker(now());
-	return { kind: 'done', plan, curvesFailed, singletonsSkipped, settingsApplied };
+	// 9. Finishing: the deletes wait their hour. A marker left at `applying`
+	// would say "didn't finish" at every boot, so a failed write tries again,
+	// then goes: its deletes are lost, which only leaves old curves on disk.
+	let markerDropped = false;
+	if (!finishMarker(now()) && !finishMarker(now())) {
+		dropMarker();
+		markerDropped = true;
+	}
+	return { kind: 'done', plan, curvesFailed, singletonsSkipped, settingsApplied, markerDropped };
 }

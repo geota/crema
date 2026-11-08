@@ -91,6 +91,11 @@ export function finishMarker(now: number = Date.now()): boolean {
 	return writeJsonChecked(MARKER_KEY, { ...m, phase: 'finishing', finishingAt: now } satisfies RestoreMarker);
 }
 
+/** Remove the marker, its deletes with it. */
+export function dropMarker(): void {
+	clearMarker();
+}
+
 function clearMarker(): void {
 	try {
 		localStorage.removeItem(MARKER_KEY);
