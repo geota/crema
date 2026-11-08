@@ -42,7 +42,15 @@ class PreparedBackup(
     val photos: Map<String, File>,
     /** The core's `BackupManifest`, as JSON. */
     val manifestJson: String,
-)
+) {
+    /** The header's `createdAt`, or null when the header didn't read: with [name], which backup this is. */
+    val createdAt: Long? = runCatching {
+        kotlinx.serialization.json.Json.parseToJsonElement(manifestJson)
+            .let { it as? kotlinx.serialization.json.JsonObject }
+            ?.get("header")?.let { it as? kotlinx.serialization.json.JsonObject }
+            ?.get("createdAt")?.let { (it as kotlinx.serialization.json.JsonPrimitive).content.toLong() }
+    }.getOrNull()
+}
 
 private fun isZip(bytes: ByteArray): Boolean =
     bytes.size >= 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte() &&
@@ -96,7 +104,13 @@ data class RestoreMarker(
     val deletes: MarkerDeletes = MarkerDeletes(),
     /** Beans this restore added, across re-runs: they aren't this device's own bag for `zeroDebit`. */
     val addedBeans: List<String> = emptyList(),
-)
+    /** The backup's header `createdAt`: with [backupName], which backup [addedBeans] belong to. */
+    val backupCreatedAt: Long? = null,
+) {
+    /** Whether this marker is an interrupted run of the backup [name], made at [createdAt]. */
+    fun isRunOf(name: String, createdAt: Long?): Boolean =
+        phase == RestoreMarkerStore.PHASE_APPLYING && backupName == name && backupCreatedAt == createdAt
+}
 
 /** The marker file, through [SafeFile]: a kill is seen at the next launch. */
 class RestoreMarkerStore(private val file: File, private val json: Json) {
@@ -104,8 +118,17 @@ class RestoreMarkerStore(private val file: File, private val json: Json) {
         runCatching { if (file.exists()) json.decodeFromString(RestoreMarker.serializer(), file.readText()) else null }.getOrNull()
 
     /** Step 1: `applying`, keeping deletes an earlier marker owes, as a re-run removes nothing. */
-    fun begin(mode: RestoreKind, backupName: String, deletes: MarkerDeletes, now: Long, addedBeans: List<String> = emptyList()): Boolean {
+    fun begin(
+        mode: RestoreKind,
+        backupName: String,
+        deletes: MarkerDeletes,
+        now: Long,
+        addedBeans: List<String> = emptyList(),
+        backupCreatedAt: Long? = null,
+    ): Boolean {
         val earlier = read()
+        // Deletes owed stay whatever the backup; added beans only for a re-run of the same one.
+        val sameBackup = earlier?.isRunOf(backupName, backupCreatedAt) == true
         val prior = earlier?.deletes ?: MarkerDeletes()
         val marker = RestoreMarker(
             phase = PHASE_APPLYING,
@@ -116,7 +139,8 @@ class RestoreMarkerStore(private val file: File, private val json: Json) {
                 shots = (prior.shots + deletes.shots).distinct(),
                 photos = (prior.photos + deletes.photos).distinct(),
             ),
-            addedBeans = (earlier?.addedBeans.orEmpty() + addedBeans).distinct(),
+            addedBeans = ((if (sameBackup) earlier?.addedBeans.orEmpty() else emptyList()) + addedBeans).distinct(),
+            backupCreatedAt = backupCreatedAt,
         )
         return write(marker)
     }
@@ -241,7 +265,8 @@ class RestoreEngine(
     /** The plan against this device as it is now. */
     suspend fun plan(prepared: PreparedBackup, kind: RestoreKind, reviveDeleted: Boolean = false): RestorePlan {
         // A re-run after an interrupted one: the beans it added aren't the device's own.
-        val added = marker.read()?.takeIf { it.phase == RestoreMarkerStore.PHASE_APPLYING }?.addedBeans.orEmpty()
+        // Only an interrupted run of this same backup: name and header `createdAt` (DECISIONS §7).
+        val added = marker.read()?.takeIf { it.isRunOf(prepared.name, prepared.createdAt) }?.addedBeans.orEmpty()
         return planFor(prepared, kind, sink.localState().copy(addedBeans = added), json, reviveDeleted)
     }
 
@@ -312,7 +337,7 @@ class RestoreEngine(
 
         // 1. The marker, with what this restore will owe to delete.
         if (!step(RestoreStep.MARKER) {
-                marker.begin(kind, prepared.name, MarkerDeletes(plan.shots.remove, plan.photos.remove), now(), plan.beans.add)
+                marker.begin(kind, prepared.name, MarkerDeletes(plan.shots.remove, plan.photos.remove), now(), plan.beans.add, prepared.createdAt)
             }
         ) return stopped(RestoreStep.MARKER)
         // 2. Tombstones the backup brings back: no remote DELETE may follow.

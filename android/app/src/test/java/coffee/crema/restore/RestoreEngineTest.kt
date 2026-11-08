@@ -270,6 +270,26 @@ class RestoreEngineTest {
     }
 
     @Test
+    fun addedBeansCountOnlyForARerunOfTheSameBackup() = runBlocking<Unit> {
+        // Restore A stops after its beans landed.
+        val sink = FakeSink(local(beans = emptyList()))
+        val e = engine(sink)
+        val a = prepared()
+        e.failAt = RestoreStep.PROFILES
+        assertIs<RestoreOutcome.Stopped>(e.run(a, RestoreKind.MERGE, records(a), expected = e.plan(a, RestoreKind.MERGE)))
+        sink.state = local(beans = listOf(BEAN))
+        // Backup B, another file holding the same bean: for B the bag is this device's.
+        val b = prepareBackup(backup, "another backup", File(dir, "stage-b"))
+        val forB = e.plan(b, RestoreKind.MERGE)
+        assertTrue(forB.shots.zeroDebit.isNotEmpty(), "A's marker says nothing about B")
+        // B's own marker then carries none of A's beans.
+        e.failAt = RestoreStep.PROFILES
+        e.run(b, RestoreKind.MERGE, records(b), expected = forB)
+        assertEquals(emptyList(), marker.read()?.addedBeans)
+        assertEquals("another backup", marker.read()?.backupName)
+    }
+
+    @Test
     fun aRefusedBackupChangesNothing() = runBlocking<Unit> {
         val sink = FakeSink(local(beans = listOf(BEAN, "b9")))
         val e = engine(sink)
