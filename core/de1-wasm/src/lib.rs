@@ -2136,6 +2136,58 @@ pub fn export_backup_bundle(
     serde_json::to_string(&built).map_err(|e| e.to_string())
 }
 
+/// Scan a backup's bytes into a `BackupManifest` JSON, with the bean ids its
+/// zip holds photos for (a JSON string array). See
+/// `de1_domain::scan_backup_bytes`.
+#[wasm_bindgen(js_name = scanBackupBytes)]
+#[must_use]
+pub fn scan_backup_bytes(bytes: &[u8], photos_json: &str) -> String {
+    let photos: Vec<String> = serde_json::from_str(photos_json).unwrap_or_default();
+    de1_domain::scan_backup_bytes_json(bytes, &photos)
+}
+
+/// A backup's records, under the scan's line rules, as a `BackupImportPlan`
+/// JSON. See `de1_domain::import_backup_bytes`.
+#[wasm_bindgen(js_name = importBackupBytes)]
+#[must_use]
+pub fn import_backup_bytes(bytes: &[u8]) -> String {
+    de1_domain::import_backup_bytes_json(bytes)
+}
+
+/// One restore, planned. See `de1_domain::plan_restore`.
+///
+/// # Errors
+///
+/// Returns the parse error when an input is malformed.
+#[wasm_bindgen(js_name = planRestore)]
+pub fn plan_restore(
+    manifest_json: &str,
+    local_json: &str,
+    mode: &str,
+    opts_json: &str,
+) -> Result<String, String> {
+    let mode: de1_domain::RestoreMode =
+        serde_json::from_value(serde_json::Value::String(mode.to_owned()))
+            .map_err(|e| e.to_string())?;
+    de1_domain::plan_restore_json(manifest_json, local_json, mode, opts_json)
+}
+
+/// Whether a `CommonSettings` JSON is as a fresh install leaves it. See
+/// `de1_domain::common_is_pristine`.
+#[wasm_bindgen(js_name = commonIsPristine)]
+#[must_use]
+pub fn common_is_pristine(common_json: &str) -> bool {
+    de1_domain::common_is_pristine_json(common_json)
+}
+
+/// What a backup's name says about it, as a `BackupFileInfo` JSON. See
+/// `de1_domain::describe_backup_file`.
+#[wasm_bindgen(js_name = describeBackupFile)]
+#[must_use]
+pub fn describe_backup_file(name: &str) -> String {
+    de1_domain::describe_backup_file_json(name)
+}
+
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the
 /// library `ImportPlan` (beans / roasters / shots) plus `profiles` and
 /// `settings` sections, so the shell's reconcile + apply path is reused.

@@ -726,9 +726,12 @@ class SettingsStore(private val context: Context, private val json: Json) {
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {
-        withContext(Dispatchers.IO) {
-            eraseStore(file)
-            eraseStore(markerFile)
+        // After any save in flight, so an old snapshot can't land after the erase.
+        withContext(NonCancellable + Dispatchers.IO) {
+            saveLock.withLock {
+                eraseStore(file)
+                eraseStore(markerFile)
+            }
         }
     }
 

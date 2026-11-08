@@ -2202,6 +2202,14 @@ pub fn auto_backup_file_name(
     ))
 }
 
+/// What a backup's name says about it, as a `BackupFileInfo` JSON. See
+/// [`de1_domain::describe_backup_file`].
+#[uniffi::export]
+#[must_use]
+pub fn describe_backup_file(name: String) -> String {
+    de1_domain::describe_backup_file_json(&name)
+}
+
 /// What to prune after an automatic upload, as an `AutoBackupRetention` JSON.
 /// See [`de1_domain::auto_backup_retention`].
 ///
@@ -2215,6 +2223,49 @@ pub fn auto_backup_retention(
     keep: u32,
 ) -> Result<String, CremaError> {
     de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep).map_err(crema_err)
+}
+
+/// Scan a backup's bytes into a `BackupManifest` JSON, with the bean ids its
+/// zip holds photos for. See [`de1_domain::scan_backup_bytes`].
+#[uniffi::export]
+#[must_use]
+pub fn scan_backup_bytes(bytes: Vec<u8>, photos: Vec<String>) -> String {
+    de1_domain::scan_backup_bytes_json(&bytes, &photos)
+}
+
+/// A backup's records, under the scan's line rules, as a `BackupImportPlan`
+/// JSON. See [`de1_domain::import_backup_bytes`].
+#[uniffi::export]
+#[must_use]
+pub fn import_backup_bytes(bytes: Vec<u8>) -> String {
+    de1_domain::import_backup_bytes_json(&bytes)
+}
+
+/// One restore, planned: a manifest JSON, a `LocalState` JSON, the mode
+/// (`merge` or `replace`) and a `RestoreOpts` JSON, to a `RestorePlan` JSON.
+/// See [`de1_domain::plan_restore`].
+///
+/// # Errors
+///
+/// Returns the parse error when an input is malformed.
+#[uniffi::export]
+pub fn plan_restore(
+    manifest_json: String,
+    local_json: String,
+    mode: String,
+    opts_json: String,
+) -> Result<String, CremaError> {
+    let mode: de1_domain::RestoreMode =
+        serde_json::from_value(serde_json::Value::String(mode)).map_err(crema_err)?;
+    de1_domain::plan_restore_json(&manifest_json, &local_json, mode, &opts_json).map_err(crema_err)
+}
+
+/// Whether a `CommonSettings` JSON is as a fresh install leaves it. See
+/// [`de1_domain::common_is_pristine`].
+#[uniffi::export]
+#[must_use]
+pub fn common_is_pristine(common_json: String) -> bool {
+    de1_domain::common_is_pristine_json(&common_json)
 }
 
 /// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the

@@ -304,6 +304,24 @@ describe('CremaApp wiring', () => {
 		await app.reconnectLastOnLaunch({} as Bluetooth);
 		expect(spies.de1Known).not.toHaveBeenCalled();
 	});
+
+	it('a shot left open lets the machine go on Disconnect, or after the link is down 2 minutes', async () => {
+		const tab = await import('#lib/restore/tab-safety.js');
+		// A short grace stands in for the 2 minutes: fake timers would strand the app's own.
+		tab.resetTabSafetyForTest(null, 30);
+		const { app } = await makeApp();
+		tab.shotStarted();
+		await app.disconnectDe1();
+		expect(tab.shotIsOpen()).toBe(false);
+
+		const callbacks = (app as unknown as { de1: { callbacks: { onState(s: string): void } } }).de1
+			.callbacks;
+		tab.shotStarted();
+		callbacks.onState('reconnecting');
+		expect(tab.shotIsOpen()).toBe(true);
+		await vi.waitFor(() => expect(tab.shotIsOpen()).toBe(false));
+		tab.resetTabSafetyForTest();
+	});
 });
 
 describe('forgetDevice', () => {

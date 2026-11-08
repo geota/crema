@@ -1063,8 +1063,8 @@ private fun SharingSection(
             CremaSettingsRow("Back up to Drive", listOfNotNull(ds.healthLine, lastBackupSub).joinToString(" ")) {
                 CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
             }
-            CremaSettingsRow("Restore latest", "Merge the newest Drive backup into your current data.") {
-                CremaButton(onClick = { vm.drive.restoreLatest(false) }, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore")
+            CremaSettingsRow("Restore from Drive", DRIVE_RESTORE_HINT) {
+                CremaButton(onClick = vm.drive::openBackupPicker, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore…")
             }
             CremaSettingsRow("Automatic daily backup", "Upload a fresh backup once a day when the app opens.") {
                 CremaSwitch(ui.autoDriveBackup, vm::setAutoDriveBackup)

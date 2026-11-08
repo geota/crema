@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { getSettingsStore } from '#lib/settings/index.js';
+import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { readSyncConfig, updateSyncConfig } from '#lib/visualizer/sync-config.js';
 import {
 	applyHeldRestoreChanges,
@@ -38,7 +39,7 @@ async function senderBackup(): Promise<string> {
 describe('restore holds sharing changes for confirmation', () => {
 	beforeEach(deviceDefaults);
 
-	it.each(['merge', 'wipe'] as const)('%s restore does not change the webhook or widen Visualizer prefs', async (mode) => {
+	it.each(['wipe'] as const)('%s restore does not change the webhook or widen Visualizer prefs', async (mode) => {
 		const jsonl = await senderBackup();
 		deviceDefaults();
 
@@ -62,10 +63,26 @@ describe('restore holds sharing changes for confirmation', () => {
 		expect(text).toContain('public');
 	});
 
+	it('merge keeps this device\u2019s settings, counters and Visualizer prefs', async () => {
+		const jsonl = await senderBackup();
+		deviceDefaults();
+		getMaintenanceStore().replaceAll({ ...getMaintenanceStore().current, totalLitres: 7 });
+
+		const summary = restoreBackup(jsonl, 'merge');
+
+		const s = getSettingsStore().current;
+		expect(summary.settingsApplied).toBe(false);
+		expect(summary.held).toBeNull();
+		expect(s.density).not.toBe('compact');
+		expect(s.webhookUrl).toBe('');
+		expect(readSyncConfig().privacy).toBe('private');
+		expect(getMaintenanceStore().current.totalLitres).toBe(7);
+	});
+
 	it('applies the held changes only when asked to', async () => {
 		const jsonl = await senderBackup();
 		deviceDefaults();
-		const { held } = restoreBackup(jsonl, 'merge');
+		const { held } = restoreBackup(jsonl, 'wipe');
 		applyHeldRestoreChanges(held!);
 		expect(getSettingsStore().current.webhookUrl).toBe(ATTACKER);
 		expect(getSettingsStore().current.webhookEnabled).toBe(true);
@@ -77,7 +94,7 @@ describe('restore holds sharing changes for confirmation', () => {
 		getSettingsStore().set('density', 'compact' as never);
 		const built = await buildBackupJsonl(); // same device, same sharing settings
 		expect(built).not.toBeNull();
-		expect(restoreBackup(built!.jsonl, 'merge').held).toBeNull();
+		expect(restoreBackup(built!.jsonl, 'wipe').held).toBeNull();
 	});
 
 	// Final review 05 N-4a: a direction that starts pushing, background sync and
@@ -101,7 +118,7 @@ describe('restore holds sharing changes for confirmation', () => {
 			direction: { shots: 'off', beans: 'pull', roasters: 'two-way' }
 		});
 
-		const { held } = restoreBackup(jsonl, 'merge');
+		const { held } = restoreBackup(jsonl, 'wipe');
 
 		const viz = readSyncConfig();
 		expect(viz.direction.shots).toBe('off');
@@ -138,7 +155,7 @@ describe('held webhook URL display', () => {
 		expect(restorableWebhookUrl(disguised)).toBeNull();
 		expect(restorableWebhookUrl('https://ok.example/\tx')).toBeNull();
 		expect(restorableWebhookUrl('https://ok.example/\u202Ex')).toBeNull();
-		const { held } = restoreBackup(await backupWithWebhook(disguised), 'merge');
+		const { held } = restoreBackup(await backupWithWebhook(disguised), 'wipe');
 		expect(held?.webhook ?? null).toBeNull();
 		expect(getSettingsStore().current.webhookUrl).toBe('');
 	});
@@ -151,7 +168,7 @@ describe('held webhook URL display', () => {
 	});
 
 	it('shows the parsed host first, on its own line, and stores the normalised URL', async () => {
-		const { held } = restoreBackup(await backupWithWebhook('HTTPS://Hooks.Example.COM:8443/a b'), 'merge');
+		const { held } = restoreBackup(await backupWithWebhook('HTTPS://Hooks.Example.COM:8443/a b'), 'wipe');
 		expect(held?.webhook?.webhookUrl).toBe('https://hooks.example.com:8443/a%20b');
 		const lines = describeHeldRestoreChanges(held!).split('\n');
 		expect(lines[1].trim()).toBe('hooks.example.com:8443');
@@ -159,7 +176,7 @@ describe('held webhook URL display', () => {
 	});
 
 	it('shows a lookalike (IDN) host in its punycode form', async () => {
-		const { held } = restoreBackup(await backupWithWebhook('https://ex\u0430mple.com/hook'), 'merge');
+		const { held } = restoreBackup(await backupWithWebhook('https://ex\u0430mple.com/hook'), 'wipe');
 		const text = describeHeldRestoreChanges(held!);
 		expect(text).toContain('xn--');
 		expect(text).not.toContain('ex\u0430mple');
