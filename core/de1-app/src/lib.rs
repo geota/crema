@@ -687,6 +687,9 @@ pub struct CremaCore {
     /// A reading arrived after a gap, and the spike gate hasn't passed one
     /// since: the next it passes goes to the returning check.
     scale_returning: bool,
+    /// The scale's latest raw reading, grams, for the auto-tare-off check
+    /// when a session opens.
+    last_reading_g: Option<f32>,
     /// This shot's owed stop needed a retry.
     stop_retried_this_shot: bool,
     /// Set when a scale (re)connects while a shot is already running
@@ -1121,6 +1124,7 @@ impl CremaCore {
             gate_since: None,
             last_sample_at: None,
             scale_returning: false,
+            last_reading_g: None,
             stop_retried_this_shot: false,
             untared_window_reopened: false,
             last_unit_recovery_write: None,
@@ -1320,6 +1324,7 @@ impl CremaCore {
     /// AND4 — and benefits every shell.)
     pub fn disconnect_scale(&mut self) {
         self.scale = None;
+        self.last_reading_g = None;
         self.hds = None;
         self.flow = FlowEstimator::new(FlowAlgorithm::default());
         self.scale_watch.disconnect();
@@ -3987,7 +3992,9 @@ impl CremaCore {
                 }
             }
         }
-        let Some(reading) = scale.parse_reading(data) else {
+        let parsed = scale.parse_reading(data);
+        self.last_reading_g = parsed.as_ref().map(|r| r.weight_g).or(self.last_reading_g);
+        let Some(reading) = parsed else {
             // Not a weight packet — delegate to the per-device absorber.
             // The Decent variant uses this to snap the firmware version
             // from its `0x0A` LCD-ack frame (mirroring legacy
@@ -5713,10 +5720,10 @@ impl CremaCore {
                 self.shot_began_unseen = self.began_unseen();
                 self.auto_tare_pending = self.auto_tare && !self.shot_began_unseen;
                 // With auto-tare off the user's own zero stands.
-                if !self.auto_tare
-                    && let Some(session) = self.session.as_mut()
-                {
-                    session.tared();
+                // With auto-tare off the user's own zero stands, unless the
+                // scale reads a load when the shot opens (§3.5).
+                if !self.auto_tare {
+                    self.take_users_zero();
                 }
                 self.auto_tare_window.reset();
                 self.last_auto_tare = None;
@@ -5909,10 +5916,8 @@ impl CremaCore {
                 // operational scale; never time mode). Never the machine
                 // echo, which can carry the 250 ml backstop (review #25).
                 if kind == de1_domain::WaterSessionKind::HotWater {
-                    if !self.auto_tare
-                        && let Some(session) = self.session.as_mut()
-                    {
-                        session.tared();
+                    if !self.auto_tare {
+                        self.take_users_zero();
                     }
                     // The pour's stop exists from its start (`DESIGN.md`
                     // §3.3), with its weight target and its V.

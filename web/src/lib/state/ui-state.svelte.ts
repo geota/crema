@@ -196,7 +196,7 @@ export interface StopTargetsView {
 	 *  configured stays on screen when a scale drops instead of vanishing. */
 	readonly weightConfiguredG: number | null;
 	/** Why `weightG` is null despite `weightConfiguredG` being set —
-	 *  `'no-scale'`, `'scale-silent'`, `'began-unseen'`, `'untared-cup'`, `'scale-lost'`, `'scale-rezeroed'` or `'scale-disturbed'`; null when armed, unset, or the user
+	 *  `'no-scale'`, `'scale-silent'`, `'began-unseen'`, `'untared-cup'`, `'scale-lost'`, `'scale-rezeroed'`, `'scale-disturbed'` or `'scale-not-tared'`; null when armed, unset, or the user
 	 *  turned the stop off (a choice, not an impediment). */
 	readonly weightBlocked: string | null;
 	/** The core's note for `weightBlocked`, the same on both shells. */

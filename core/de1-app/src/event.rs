@@ -356,7 +356,8 @@ pub enum Event {
         weight_configured: Option<f32>,
         /// Why [`weight`] is not armed despite [`weight_configured`] being set
         /// — `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`,
-        /// `"scale-lost"`, `"scale-rezeroed"` or `"scale-disturbed"`. `None` when the leg is armed, nothing is
+        /// `"scale-lost"`, `"scale-rezeroed"`, `"scale-disturbed"` or
+        /// `"scale-not-tared"`. `None` when the leg is armed, nothing is
         /// configured, or the user turned the stop off (a choice, not an
         /// impediment).
         weight_blocked: Option<String>,

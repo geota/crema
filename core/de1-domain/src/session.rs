@@ -153,6 +153,9 @@ pub enum Blocked {
     ScaleRezeroed,
     /// Something pressed on, landed on or was lifted off the scale mid-flow.
     ScaleDisturbed,
+    /// Auto-tare is off and the scale read over 5 g when the session opened:
+    /// whatever was on it can't be told from coffee.
+    ScaleNotTared,
 }
 
 impl Blocked {
@@ -167,6 +170,7 @@ impl Blocked {
             Blocked::ScaleLost => "scale-lost",
             Blocked::ScaleRezeroed => "scale-rezeroed",
             Blocked::ScaleDisturbed => "scale-disturbed",
+            Blocked::ScaleNotTared => "scale-not-tared",
         }
     }
 
@@ -181,6 +185,7 @@ impl Blocked {
             Blocked::ScaleLost => "Scale stopped reporting. Stop this shot by hand.",
             Blocked::ScaleRezeroed => "Scale re-zeroed",
             Blocked::ScaleDisturbed => "Scale disturbed. Stop this shot by hand.",
+            Blocked::ScaleNotTared => "Scale wasn't tared — weight stop off for this shot",
         }
     }
 
@@ -196,7 +201,7 @@ impl Blocked {
     }
 
     /// Every reason, for the shells' tests.
-    pub const ALL: [Blocked; 7] = [
+    pub const ALL: [Blocked; 8] = [
         Blocked::NoScale,
         Blocked::ScaleSilent,
         Blocked::BeganUnseen,
@@ -204,6 +209,7 @@ impl Blocked {
         Blocked::ScaleLost,
         Blocked::ScaleRezeroed,
         Blocked::ScaleDisturbed,
+        Blocked::ScaleNotTared,
     ];
 }
 
@@ -227,6 +233,10 @@ pub const GATE_WEIGHT_G: f32 = 5.0;
 pub const GATE_FLOW_G_S: f32 = 0.5;
 /// How long the gate's condition must hold, so a bump can't open it.
 pub const GATE_HOLD: Duration = Duration::from_secs(1);
+/// With auto-tare off, a scale reading over this when a session opens refuses
+/// the weight stop for that session: the user's zero has something on it.
+pub const UNTARED_AT_OPEN_G: f32 = 5.0;
+
 /// A trusted reading under this means the cup is empty again: `last` can't
 /// ride back to it.
 pub const EMPTY_CUP_G: f32 = 3.0;

@@ -1549,7 +1549,8 @@ data class EventStopTargetsArmedInner (
 	val weight_configured: Float? = null,
 	/// Why [`weight`] is not armed despite [`weight_configured`] being set
 	/// — `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`,
-	/// `"scale-lost"`, `"scale-rezeroed"` or `"scale-disturbed"`. `None` when the leg is armed, nothing is
+	/// `"scale-lost"`, `"scale-rezeroed"`, `"scale-disturbed"` or
+	/// `"scale-not-tared"`. `None` when the leg is armed, nothing is
 	/// configured, or the user turned the stop off (a choice, not an
 	/// impediment).
 	val weight_blocked: String? = null,

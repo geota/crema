@@ -466,7 +466,10 @@ fn a_fast_hot_water_pour_is_never_a_disturbance() {
         core.on_notification(Source::De1State, &[6, 5], 100);
         let mut stop = None;
         for t in (200..30_000u64).step_by(100) {
-            let o = core.on_notification(Source::De1ShotSample, &sample((t / 8) as u16), t);
+            // The DE1's samples report the same flow the cup gets.
+            let mut s = sample((t / 8) as u16);
+            s[4..6].copy_from_slice(&((rate * 4096.0) as u16).to_be_bytes());
+            let o = core.on_notification(Source::De1ShotSample, &s, t);
             stop = stop.or(stop_reasons(&o).first().copied());
             // 5 Hz, and nothing between 3 s and 4 s.
             if t % 200 == 0 && !(3_000..4_000).contains(&t) {
@@ -516,30 +519,82 @@ fn a_retried_stop_never_trains_the_drip_model() {
     assert_eq!(core.saw_model_json(), before, "no drip learning");
 }
 
-/// §3.5's known limit, auto-tare off on a loaded scale: the untared-cup guard
-/// (PR 5) acts only over 50 g in the first 3 s of flow. Last shot's 35 g is
-/// under it, so the session takes it as the user's zero and weight stops the
-/// shot almost at once; there is no weight-stop guarantee, so tare first. A
-/// 60 g cup is over it: the guard latches a virtual zero, and the shot stops
-/// on target.
+/// An auto-tare-off espresso opened at `load` g, with a 36 g target, a 40 ml
+/// limit and 60 s max time, pouring past a 10 ml headspace.
+fn auto_tare_off_shot(load: f32) -> (CremaCore, Option<(StopReason, f32)>) {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    core.set_auto_tare(false);
+    core.set_profile_target_weight(Some(36.0));
+    core.set_profile_volume_limit(Some(40.0));
+    core.set_max_shot_duration(Some(60.0));
+    core.on_notification(Source::ScaleWeight, &bookoo(load), 0);
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::ScaleWeight, &bookoo(load), 50);
+    core.on_notification(Source::De1State, &[4, 5], 100);
+    let mut pour = Pour::from(100, 10.0);
+    let stop = run(&mut core, &mut pour, 90_000, |_, cup| Step {
+        sample: true,
+        reading: Some(cup + load),
+    });
+    (core, stop)
+}
+
+/// §3.5: with auto-tare off, last shot's 35 g left on the scale when the shot
+/// opens refuses the weight stop: it can't be told from coffee, and weight
+/// would have stopped the shot at a true 2.7 g. The volume limit ends it
+/// instead, and the row says so.
 #[test]
-fn a_loaded_scale_with_auto_tare_off_is_guarded_only_over_50_g() {
-    for (load, early) in [(35.0f32, true), (60.0, false)] {
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC", &[]);
-        core.set_auto_tare(false);
-        core.set_profile_target_weight(Some(36.0));
-        core.on_notification(Source::ScaleWeight, &bookoo(load), 0);
-        core.on_notification(Source::De1State, &[2, 0], 10);
-        core.on_notification(Source::ScaleWeight, &bookoo(load), 50);
-        core.on_notification(Source::De1State, &[4, 5], 100);
-        let mut pour = Pour::from(100, 10.0);
-        let (reason, cup) = run(&mut core, &mut pour, 90_000, |_, cup| Step {
-            sample: true,
-            reading: Some(cup + load),
-        })
-        .expect("a stop");
+fn an_untared_cup_with_auto_tare_off_refuses_the_weight_stop() {
+    let (core, stop) = auto_tare_off_shot(35.0);
+    let (reason, _) = stop.expect("a stop");
+    assert_eq!(reason, StopReason::Volume, "the limit, not weight");
+    assert_eq!(core.weight_stop_blocked_by(), Some("scale-not-tared"));
+    let json: serde_json::Value =
+        serde_json::from_str(&core.stop_targets_projection_json()).expect("json");
+    assert_eq!(
+        json["weightBlockedNote"],
+        "Scale wasn't tared \u{2014} weight stop off for this shot"
+    );
+}
+
+/// The same shot on a tared cup still stops on its 36 g target, and a scale
+/// within the 5 g allowance at open still counts.
+#[test]
+fn a_tared_cup_with_auto_tare_off_still_stops_on_target() {
+    for load in [0.0f32, 4.0] {
+        let (_, stop) = auto_tare_off_shot(load);
+        let (reason, cup) = stop.expect("a stop");
         assert_eq!(reason, StopReason::Weight, "{load} g");
-        assert_eq!(cup < 10.0, early, "{load} g: stopped at a true {cup} g");
+        assert!(
+            cup + load > 33.0 && cup + load < 37.0,
+            "{load} g: read {}",
+            cup + load
+        );
     }
+}
+
+/// With no limit and no max time, a refused untared cup gets the backstop an
+/// unseen session gets, `60 + 1.5 × target` (114 ml at 36 g), never a weight
+/// stop.
+#[test]
+fn an_untared_cup_with_no_limits_stops_at_the_backstop() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    core.set_auto_tare(false);
+    core.set_profile_target_weight(Some(36.0));
+    core.on_notification(Source::ScaleWeight, &bookoo(35.0), 0);
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 100);
+    let mut pour = Pour::from(100, 10.0);
+    let stop = run(&mut core, &mut pour, 90_000, |_, cup| Step {
+        sample: true,
+        reading: Some(cup + 35.0),
+    });
+    assert_eq!(stop.map(|s| s.0), Some(StopReason::Volume));
+    assert!(
+        (114.0..117.0).contains(&core.pour_ml()),
+        "{} ml",
+        core.pour_ml()
+    );
 }

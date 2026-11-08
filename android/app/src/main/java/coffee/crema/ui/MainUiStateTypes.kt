@@ -41,7 +41,7 @@ data class StopTargetsView(
     val weightConfiguredG: Float? = null,
     /** Why [weightG] is null despite [weightConfiguredG] being set —
      *  `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`,
-     *  `"scale-lost"`, `"scale-rezeroed"` or `"scale-disturbed"`; null when
+     *  `"scale-lost"`, `"scale-rezeroed"`, `"scale-disturbed"` or `"scale-not-tared"`; null when
      *  armed, unset, or the user turned the stop off. */
     val weightBlocked: String? = null,
     /** The core's note for [weightBlocked], the same on both shells. */

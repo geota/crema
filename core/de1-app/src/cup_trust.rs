@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use de1_domain::session::{
     ActiveMode, Baseline, Blocked, EMPTY_CUP_G, GATE_FLOW_G_S, GATE_HOLD, GATE_WEIGHT_G,
-    LastTrusted,
+    LastTrusted, UNTARED_AT_OPEN_G,
 };
 
 use crate::{CremaCore, UntaredSettle};
@@ -22,8 +22,13 @@ pub(crate) const LAST_SAMPLE_FRESH: Duration = Duration::from_secs(1);
 /// A returning scale may read this far under `last`, grams.
 pub(crate) const RETURN_BELOW_G: f32 = 3.0;
 
-/// And this far over `last` plus twice the water poured since, grams.
-pub(crate) const RETURN_ABOVE_G: f32 = 10.0;
+/// And this far over `last` plus [`RETURN_POUR_FACTOR`] × the water poured
+/// since, grams. Provisional: tuned on H7, H19 and H20 (REVIEW-387).
+pub(crate) const RETURN_ABOVE_G: f32 = 5.0;
+
+/// Weight gained over water poured that a returning scale may show. The
+/// capture's weight-to-pour ratio after saturation is 1.13. Provisional.
+pub(crate) const RETURN_POUR_FACTOR: f32 = 1.5;
 
 impl CremaCore {
     /// The mode whose cup the scale weighs now: an espresso past first flow,
@@ -37,7 +42,7 @@ impl CremaCore {
     }
 
     /// The first reading after a gap decides, once, on the raw net reading:
-    /// within `last.weight − 3 g` and `last.weight + 2 × poured since + 10 g`
+    /// within `last.weight − 3 g` and `last.weight + 1.5 × poured since + 5 g`
     /// it's adopted and weight is trusted again. Outside, the scale re-zeroed
     /// or something landed on it: weight is off for the session and the
     /// estimate continues.
@@ -51,7 +56,7 @@ impl CremaCore {
         };
         let poured = (pour_ml - last.pour_ml).max(0.0);
         let low = last.weight_g - RETURN_BELOW_G;
-        let high = last.weight_g + 2.0 * poured + RETURN_ABOVE_G;
+        let high = last.weight_g + RETURN_POUR_FACTOR * poured + RETURN_ABOVE_G;
         if !(low..=high).contains(&net_g) {
             session.refuse(Blocked::ScaleRezeroed);
         }
@@ -141,6 +146,29 @@ impl CremaCore {
                 false
             }
             _ => false,
+        }
+    }
+}
+
+impl CremaCore {
+    /// Auto-tare is off: the user's zero stands, so the session is `Tared`,
+    /// unless the scale reads over 5 g as it opens. Then whatever is on it,
+    /// last shot's cup or a spoon, can't be told from coffee, and the weight
+    /// stop is refused for the session; the volume and time limits stay live
+    /// (`DESIGN.md` §3.5).
+    pub(crate) fn take_users_zero(&mut self) {
+        let loaded = self
+            .scale
+            .as_ref()
+            .and(self.last_reading_g)
+            .is_some_and(|g| g > UNTARED_AT_OPEN_G);
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        if loaded {
+            session.refuse(Blocked::ScaleNotTared);
+        } else {
+            session.tared();
         }
     }
 }

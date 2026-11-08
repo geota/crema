@@ -247,7 +247,9 @@ pub fn resolve_legs(intent: StopIntent, ctx: LegContext) -> ResolvedLegs {
         WeightAuthority::Blind if ctx.scale_gone || disturbed => {
             Some(espresso_backstop_ml(intent.volume_limit, target))
         }
-        WeightAuthority::Refused(Blocked::BeganUnseen)
+        // A cup the app can't weigh, first seen mid-pour or never tared, with
+        // nothing else to end it.
+        WeightAuthority::Refused(Blocked::BeganUnseen | Blocked::ScaleNotTared)
             if intent.volume_limit.is_none() && intent.max_time.is_none() =>
         {
             Some(espresso_backstop_ml(None, target))
