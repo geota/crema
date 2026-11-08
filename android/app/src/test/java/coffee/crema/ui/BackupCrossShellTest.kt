@@ -127,7 +127,7 @@ class BackupCrossShellTest {
 
     @Test
     fun `a web backup restores on Android`() {
-        val parsed = assertNotNull(parseBackup(fixture("web-backup.crema.jsonl"), json, 0L))
+        val parsed = parseBackupBytes(fixture("web-backup.crema.jsonl").toByteArray(), json, 0L)
         assertEquals(listOf("bean:web-1"), parsed.beans.map { it.id })
         val bean = parsed.beans.single()
         assertEquals("Gesha Village", bean.name)
@@ -156,14 +156,14 @@ class BackupCrossShellTest {
 
     @Test
     fun `the Android backup fixture restores on Android`() {
-        val parsed = assertNotNull(parseBackup(fixture("android-backup.crema.jsonl"), json, 0L))
+        val parsed = parseBackupBytes(fixture("android-backup.crema.jsonl").toByteArray(), json, 0L)
         assertAndroidSeed(parsed)
     }
 
     @Test
     fun `today's Android export restores on Android`() {
         val jsonl = backupBundleJsonl(seed(), json, 1_790_000_000_000, "test", "Android test").jsonl
-        assertAndroidSeed(assertNotNull(parseBackup(jsonl, json, 0L)))
+        assertAndroidSeed(parseBackupBytes(jsonl.toByteArray(), json, 0L))
     }
 
     private fun assertAndroidSeed(parsed: ParsedBackup) {
