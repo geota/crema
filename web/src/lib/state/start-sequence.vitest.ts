@@ -57,6 +57,12 @@ async function harness(opts: {
 			return true;
 		}
 	);
+	// The core's `Command::Stop` rides its own urgent write: Idle.
+	vi.spyOn(De1Manager.prototype, 'writeStop').mockImplementation(async (guard: () => boolean) => {
+		if (!guard()) return false;
+		requested.push(IDLE);
+		return true;
+	});
 	const core = await loadCore();
 	core.reset();
 	// The bridge outlives one test; a reset keeps the desired profile.

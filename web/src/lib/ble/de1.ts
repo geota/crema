@@ -140,6 +140,9 @@ export interface De1ManagerCallbacks {
  * Owns the DE1 connection and its notification observation. One instance per
  * app; `connect()` / `disconnect()` are driven by the orchestrator.
  */
+/** The requested-state byte `Command::Stop` writes: Idle. */
+export const STOP_BYTE = 0x02;
+
 export class De1Manager {
 	private device: De1Transport | null = null;
 
@@ -534,6 +537,37 @@ export class De1Manager {
 			this.callbacks.onStatus(
 				`DE1 write to ${target} failed: ${describeError(error)}`
 			);
+			return false;
+		}
+	}
+
+	/**
+	 * The core's `Command::Stop`: Idle (`0x02`, the byte the core's own Idle
+	 * request carries) to the requested-state characteristic, ahead of every
+	 * queued write. `guard` is checked when it starts, so a `CancelStop`
+	 * drops it until then. Resolves `true` only once written; never throws.
+	 */
+	async writeStop(guard: () => boolean): Promise<boolean> {
+		if (this.firmwareExclusive) {
+			this.callbacks.onStatus('DE1 stop skipped: firmware update in progress');
+			return false;
+		}
+		const uuid = uuidForWriteTarget(WriteTarget.De1RequestedState);
+		const device = this.device;
+		if (uuid === null || device === null) {
+			this.callbacks.onStatus('DE1 stop skipped: not connected');
+			return false;
+		}
+		const data = new Uint8Array([STOP_BYTE]);
+		try {
+			if (device.writeUrgent) {
+				return await device.writeUrgent(De1Uuids.SERVICE, uuid, data, guard);
+			}
+			if (!guard()) return false;
+			await device.write(De1Uuids.SERVICE, uuid, data);
+			return true;
+		} catch (error) {
+			this.callbacks.onStatus(`DE1 stop write failed: ${describeError(error)}`);
 			return false;
 		}
 	}

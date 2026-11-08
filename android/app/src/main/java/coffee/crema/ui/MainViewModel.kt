@@ -130,7 +130,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ble.writeCharacteristic(target, bytes, urgent = urgent, ackUploadId = ackUploadId)
         },
         writeScale = { bytes -> scale.writeCommand(bytes) },
-        shotRunning = { _ui.value.shotInProgress },
         profileWriteFailed = { id -> bridge.profileWriteFailed(SystemClock.elapsedRealtime().toULong(), id) },
     )
 

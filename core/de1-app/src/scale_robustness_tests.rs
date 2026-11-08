@@ -11,7 +11,7 @@ fn scale_writes(out: &CoreOutput) -> Vec<Vec<u8>> {
         .iter()
         .filter_map(|c| match c {
             Command::WriteScale { data } => Some(data.clone()),
-            Command::WriteCharacteristic { .. } => None,
+            _ => None,
         })
         .collect()
 }

@@ -2405,7 +2405,22 @@ export type Command =
 	| { type: "WriteScale", content: {
 	/** The bytes to write. */
 	data: number[];
-}};
+}}
+	/**
+	 * Stop the machine: write Idle to the requested-state characteristic
+	 * (`0x02`) now, on the urgent lane, ahead of anything queued. Only the
+	 * core emits it, and only while a flow session is open. A shell keeps at
+	 * most one outstanding: a second is dropped while one is queued or in
+	 * flight.
+	 */
+	| { type: "Stop", content?: undefined }
+	/**
+	 * Drop any [`Stop`](Self::Stop) not yet on the air. One already in
+	 * flight can't be recalled. Sent when a session closes, the link drops,
+	 * or the core resets, so a late Idle can't wake a sleeping machine or
+	 * stop the next flow.
+	 */
+	| { type: "CancelStop", content?: undefined };
 
 /**
  * The result of feeding the core one input: what it observed (`events`) and
@@ -6012,7 +6027,15 @@ export type StartEnd =
 	/** A user's request, a link drop or a reset cancelled it. */
 	| { kind: "Cancelled", details?: undefined }
 	/** The shot was started at the group head first. */
-	| { kind: "StoodDown", details?: undefined };
+	| { kind: "StoodDown", details?: undefined }
+	/**
+	 * Another flow began after Start was tapped (steam or hot water at the
+	 * group head, say): the start won't stop it.
+	 */
+	| { kind: "OtherFlowStarted", details: {
+	/** The flow that began. */
+	state: MachineState;
+}};
 
 /** Where an accepted start stands. */
 export enum StartPhase {

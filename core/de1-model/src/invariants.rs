@@ -15,9 +15,8 @@ pub enum Invariant {
     I7,
     /// Every packet's steam temperature is at most the user's target.
     I9,
-    /// A mirror emits no commands of its own. A tap on the remote does return
-    /// commands, because `request_machine_state` isn't read-only gated, but
-    /// they go nowhere: a mirror's transport refuses every write.
+    /// A mirror emits no machine-state, stop or profile write, even for its
+    /// user's tap, and no command of its own at all. No carve-out.
     I10,
     /// `Stale`, `Dead` and `StopTriggered` fire once per episode.
     I11,
@@ -53,8 +52,7 @@ impl Invariant {
     #[must_use]
     pub const fn status(self) -> Status {
         match self {
-            Self::I3 => Status::PendingPr(4),
-            Self::I6 | Self::I7 | Self::I9 | Self::I10 | Self::I11 => Status::Enforced,
+            Self::I3 | Self::I6 | Self::I7 | Self::I9 | Self::I10 | Self::I11 => Status::Enforced,
             Self::I13 => Status::PendingPr(8),
         }
     }

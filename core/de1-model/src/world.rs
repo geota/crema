@@ -105,6 +105,10 @@ pub struct Coverage {
     pub retries: u32,
     /// `SkipToNext` writes.
     pub skips: u32,
+    /// `Command::Stop`.
+    pub stop_commands: u32,
+    /// App starts tapped while another flow ran.
+    pub starts_over_a_flow: u32,
     /// Sessions first seen flowing.
     pub unseen: u32,
     /// Tares.
@@ -147,6 +151,12 @@ pub struct World {
     was_down: bool,
     /// A state has reached the core on this link.
     state_heard_on_link: bool,
+    /// An app start is pending.
+    starting: bool,
+    /// The profiles an app start has used, one per yield.
+    profiles: Vec<CremaProfile>,
+    /// The flow heard when Start was tapped, until the machine leaves it.
+    start_from: Option<MachineState>,
     /// I6's own reading of the session the core should have open.
     open_mode: Option<ActiveMode>,
     /// Whether that session began before the core saw it.
@@ -172,6 +182,9 @@ pub struct World {
     pub coverage: Coverage,
     /// What broke.
     pub violations: Vec<Violation>,
+    /// Every requested-state write the core sent, in order, with a
+    /// `Command::Stop` as its Idle byte and `true` for a stop.
+    pub requests: Vec<(u8, bool)>,
 }
 
 fn weight_is_tare(data: &[u8]) -> bool {
@@ -202,6 +215,9 @@ impl World {
             pre_flush,
             was_down: false,
             state_heard_on_link: false,
+            starting: false,
+            start_from: None,
+            profiles: Vec::new(),
             open_mode: None,
             unseen: false,
             reported: None,
@@ -221,6 +237,7 @@ impl World {
             stopped_this_flow: false,
             coverage: Coverage::default(),
             violations: Vec::new(),
+            requests: Vec::new(),
         };
         world.core.set_start_settings(pre_flush, false, false);
         world.attach();
@@ -351,6 +368,8 @@ impl World {
                 self.reported = None;
                 self.heard = None;
                 self.state_heard_on_link = false;
+                self.starting = false;
+                self.start_from = None;
                 self.open_mode = None;
                 self.unseen = false;
                 self.lane.clear();
@@ -365,9 +384,18 @@ impl World {
     }
 
     fn app_start(&mut self, yield_g: f32) {
-        let profile = CremaProfile {
-            yield_out: yield_g,
-            ..de1_domain::blank_profile(&BrewDefaults::default())
+        // The same library profile each time for a yield, as a user taps
+        // Start on the profile they brew: a second start needs no upload.
+        let profile = match self.profiles.iter().find(|p| p.yield_out == yield_g) {
+            Some(p) => p.clone(),
+            None => {
+                let p = CremaProfile {
+                    yield_out: yield_g,
+                    ..de1_domain::blank_profile(&BrewDefaults::default())
+                };
+                self.profiles.push(p.clone());
+                p
+            }
         };
         let result = self.core.start_shot(
             &profile,
@@ -376,6 +404,11 @@ impl World {
         );
         if result.accepted {
             self.coverage.starts += 1;
+            self.starting = true;
+            self.start_from = self.heard.filter(|s| s.is_flow_state());
+            if self.start_from.is_some() {
+                self.coverage.starts_over_a_flow += 1;
+            }
             self.cup = SimCup {
                 grams: self.cup.grams,
                 headspace_ml: self.headspace_ml,
@@ -432,6 +465,9 @@ impl World {
             self.stopped_this_flow = false;
         }
         self.heard = Some(self.de1.state);
+        if self.start_from != self.heard {
+            self.start_from = None;
+        }
         self.track_session(bytes[1]);
         let out = self
             .core
@@ -577,10 +613,21 @@ impl World {
 
     /// Take a core output: watch it, then queue its writes.
     fn ingest(&mut self, out: CoreOutput, who: Who) {
-        // A remote's own tap is left out: `request_machine_state` isn't gated,
-        // so it returns commands. They go nowhere, because a mirror's transport
-        // refuses every write.
-        if self.read_only && who == Who::Core && !out.commands.is_empty() {
+        // A mirror's core sends nothing of its own, and nothing that drives
+        // the machine even for its user's tap: no carve-out.
+        let drives_machine = out.commands.iter().any(|c| {
+            matches!(
+                c,
+                Command::Stop
+                    | Command::WriteCharacteristic {
+                        target: WriteTarget::De1RequestedState
+                            | WriteTarget::De1ProfileHeader
+                            | WriteTarget::De1ProfileFrame,
+                        ..
+                    }
+            )
+        });
+        if self.read_only && (drives_machine || (who == Who::Core && !out.commands.is_empty())) {
             self.violate(Invariant::I10, format!("{:?}", out.commands));
         }
         for event in &out.events {
@@ -595,21 +642,25 @@ impl World {
                             requested: data.first().copied(),
                             settings: None,
                             profile: None,
+                            stop: false,
                         }),
                         WriteTarget::De1ShotSettings => Some(Write {
                             requested: None,
                             settings: Some(data),
                             profile: None,
+                            stop: false,
                         }),
                         WriteTarget::De1ProfileHeader => Some(Write {
                             requested: None,
                             settings: None,
                             profile: Some((true, data)),
+                            stop: false,
                         }),
                         WriteTarget::De1ProfileFrame => Some(Write {
                             requested: None,
                             settings: None,
                             profile: Some((false, data)),
+                            stop: false,
                         }),
                         _ => None,
                     };
@@ -619,6 +670,19 @@ impl World {
                         self.lane.push(write);
                     }
                 }
+                Command::Stop => {
+                    self.coverage.stop_commands += 1;
+                    self.requests.push((MachineState::Idle as u8, true));
+                    if !self.read_only {
+                        self.lane.push(Write {
+                            requested: Some(MachineState::Idle as u8),
+                            settings: None,
+                            profile: None,
+                            stop: true,
+                        });
+                    }
+                }
+                Command::CancelStop => self.lane.cancel_stop(),
                 Command::WriteScale { data } => {
                     if weight_is_tare(&data) && self.unseen {
                         self.violate(Invariant::I6, "tare while unseen".into());
@@ -641,10 +705,13 @@ impl World {
             Event::WaterSessionStarted { .. } => self.coverage.water += 1,
             Event::SteamSessionStarted => self.coverage.steam += 1,
             Event::StopRetried { .. } => self.coverage.retries += 1,
-            Event::ShotStartEnded {
-                end: de1_app::StartEnd::Started,
-                ..
-            } => self.coverage.started += 1,
+            Event::ShotStartEnded { end, .. } => {
+                self.starting = false;
+                self.start_from = None;
+                if *end == de1_app::StartEnd::Started {
+                    self.coverage.started += 1;
+                }
+            }
             Event::ScaleStale => {
                 self.coverage.stale += 1;
                 if std::mem::replace(&mut self.stale_open, true) {
@@ -694,6 +761,7 @@ impl World {
         match target {
             WriteTarget::De1RequestedState => {
                 let Some(&byte) = data.first() else { return };
+                self.requests.push((byte, false));
                 if byte == MachineState::SkipToNext as u8 {
                     self.coverage.skips += 1;
                     if self.unseen {
@@ -712,8 +780,13 @@ impl World {
                 ]
                 .iter()
                 .any(|s| *s as u8 == byte);
+                // A start may bounce the flow that ran when Start was tapped:
+                // the user asked.
+                let start_bounce =
+                    self.starting && self.heard.is_some() && self.heard == self.start_from;
                 if who == Who::Core
                     && flow_request
+                    && !start_bounce
                     && let Some(heard) = self.heard
                     && heard.is_flow_state()
                     && heard != MachineState::HotWaterRinse
