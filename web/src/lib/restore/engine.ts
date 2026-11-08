@@ -362,7 +362,11 @@ export function nextShots(
 			}
 			return s;
 		});
+	// A row this tab made with the same id meanwhile is kept, as Merge keeps
+	// what's here: the backup's isn't added beside it.
+	const here = new Set(local.map((s) => s.id));
 	const added = plan.add
+		.filter((id) => !here.has(id))
 		.map((id) => theirs.get(id))
 		.filter((s): s is StoredShot => s !== undefined)
 		// A bean already here never paid for a shot from elsewhere.

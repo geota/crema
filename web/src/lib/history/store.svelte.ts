@@ -392,16 +392,19 @@ export class HistoryStore {
 		// were written are in `this.shots`, and the plan runs over them.
 		const { next, series } = plan(this.shots);
 		const written = new Set(first.map((s) => s.id));
-		for (const s of series) {
-			// A row the recompute found anew keeps its curve in memory and
-			// writes it now, as any new row does.
-			if (!written.has(s.id) && s.record.samples.length > 0) {
-				void putSeries(s.id, s.record.samples).catch(seriesSaveFailed);
-			}
-		}
+		// A row the recompute found anew keeps its curve in memory, and it's
+		// written straight after the rows, before the restore says it's done.
+		const late = series.filter((s) => !written.has(s.id) && s.record.samples.length > 0);
 		this.shots = next;
 		if (this.writeRows() !== 'ok') return { stored: false, curvesFailed };
 		this.markLive(next.map((s) => s.id));
+		if (late.length > 0) {
+			try {
+				await writeSeries(late);
+			} catch {
+				curvesFailed += late.length;
+			}
+		}
 		return { stored: true, curvesFailed };
 	}
 

@@ -336,6 +336,42 @@ describe('the plan, written per store', () => {
 });
 
 describe('the #363 review', () => {
+	it('a curve the recompute finds is written before step 7 returns, and its failure counted', async () => {
+		const history = getHistoryStore();
+		const late = shot('late');
+		let calls = 0;
+		const writes: string[][] = [];
+		const r = await history.restoreRows(
+			(rows) => (calls++ === 0 ? { next: [...rows], series: [] } : { next: [late, ...rows], series: [late] }),
+			async (rows) => {
+				writes.push(rows.map((s) => s.id));
+				if (rows.length > 0) throw new Error('quota');
+			}
+		);
+		expect(writes).toEqual([[], ['late']]);
+		expect(r).toEqual({ stored: true, curvesFailed: 1 });
+	});
+
+	it('a shot this tab makes with a backup row\u2019s id meanwhile is kept, once', async () => {
+		const prepared = await backupOf(['b1'], ['s1']);
+		const history = getHistoryStore();
+		captureMessages(new FakeLocks());
+		const plan = await planNow(prepared, 'merge', false, new FakeLocks());
+		expect(plan.shots.add).toEqual(['s1']);
+		await runRestore(
+			prepared,
+			'merge',
+			{ expected: plan },
+			deps(new FakeLocks(), {
+				writeSeries: async () => {
+					history.insertPulled(shot('s1', { metadata: { ...metadata, dose: 20 } }));
+				}
+			})
+		);
+		expect(history.all.filter((s) => s.id === 's1')).toHaveLength(1);
+		expect(history.get('s1')?.metadata.dose).toBe(20);
+	});
+
 	it('step 7 keeps a shot recorded and a rating changed while its series were written', async () => {
 		const prepared = await backupOf(['b1'], ['s1']);
 		const history = getHistoryStore();
@@ -404,6 +440,7 @@ describe('the #363 review', () => {
 		try {
 			const out = await runRestore(prepared, 'merge', {}, deps(new FakeLocks()));
 			expect(out).toMatchObject({ kind: 'done', markerDropped: true });
+			expect(outcomeMessage(out)).toContain("couldn't be cleaned up");
 		} finally {
 			spy.mockRestore();
 		}
