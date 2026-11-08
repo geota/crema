@@ -397,6 +397,17 @@ describe('ShotSync.patchEditedShot — pending-only PATCHes', () => {
 		expect(pendingEdit('s1')).toBeUndefined();
 	});
 
+	it('the row takes the tags as the reply confirms them', async () => {
+		setPremium(true);
+		const s = edited({ tags: ['mine'] });
+		// A tag stored before Visualizer normalised names reads back as stored.
+		const { layer } = mkHttp((req) =>
+			req.method === 'PATCH' ? { ok: true, json: { tags: ['web', 'mine'] } } : { ok: true, json: { tags: ['Web'] } }
+		);
+		await editAndPush(s, layer, { tags: { before: [], after: ['mine'] } });
+		expect(s.tags).toEqual(['mine', 'web']);
+	});
+
 	it('tag_clear_reaches_remote: removing the last tag sends []', async () => {
 		setPremium(true);
 		const s = edited({ tags: [] });
@@ -418,6 +429,19 @@ describe('ShotSync.patchEditedShot — pending-only PATCHes', () => {
 			return { ok: true, json: { tags: ['a'] } };
 		});
 		await editAndPush(s, layer, { tags: { before: [], after: ['a'] } });
+		expect(pendingEdit('s1')?.tags).toEqual({ add: ['b'], remove: [] });
+	});
+
+	it('a tag re-added while its removal was out is sent again', async () => {
+		setPremium(true);
+		const s = edited({ tags: ['a'] });
+		const { layer } = mkHttp((req) => {
+			if (req.method !== 'PATCH') return { ok: true, json: { tags: ['a', 'b'] } };
+			markShotEdit('s1', { tags: { before: ['a'], after: ['a', 'b'] } });
+			(s as { tags?: string[] }).tags = ['a', 'b'];
+			return { ok: true, json: { tags: ['a'] } };
+		});
+		await editAndPush(s, layer, { tags: { before: ['a', 'b'], after: ['a'] } });
 		expect(pendingEdit('s1')?.tags).toEqual({ add: ['b'], remove: [] });
 	});
 

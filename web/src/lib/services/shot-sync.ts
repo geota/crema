@@ -1257,7 +1257,7 @@ export const ShotSyncLive = Layer.effect(
 					outcome = 'tier';
 				} else {
 					next = { ...next, tags: settled, tierSignal: undefined };
-					if (now) repairTags(history, now, pushed, settled);
+					if (now) repairTags(history, now, tagsOf(result.success), settled);
 				}
 			}
 			settlePendingEdit(id, next);
@@ -1265,20 +1265,20 @@ export const ShotSyncLive = Layer.effect(
 		});
 
 		/**
-		 * After a tag push landed, the row takes what the server now holds
+		 * After a tag push landed, the row takes what the confirmed reply holds
 		 * besides its own, so a tag added on the website arrives too. A tag
 		 * removed here since the push stays removed.
 		 */
 		const repairTags = (
 			history: HistoryStore,
 			shot: StoredShot,
-			pushed: readonly string[],
+			confirmed: readonly string[],
 			marks: TagMarks
 		): void => {
 			const norm = (list: readonly string[]): string[] =>
 				JSON.parse(wasmNormalizeTags(JSON.stringify(list))) as string[];
 			const have = new Set(norm([...(shot.tags ?? []), ...(marks.remove ?? [])]));
-			const extra = pushed.filter((t) => {
+			const extra = confirmed.filter((t) => {
 				const [key] = norm([t]);
 				return key !== undefined && !have.has(key) && !!have.add(key);
 			});

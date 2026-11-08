@@ -41,17 +41,14 @@ describe('pending edits', () => {
 		expect([...all.keys()].sort()).toEqual(['a', 'b']);
 	});
 
-	it('a tag add cancels a matching removal, and the reverse', () => {
+	it('the latest edit of a tag wins and stays marked, so a removal on its way is undone', () => {
 		markShotEdit('x', { tags: { before: ['a', 'b'], after: ['a'] } });
 		expect(pendingEdit('x')?.tags).toEqual({ add: [], remove: ['b'] });
 		markShotEdit('x', { tags: { before: ['a'], after: ['a', 'B', 'c'] } });
-		expect(pendingEdit('x')?.tags).toEqual({ add: ['c'], remove: [] });
+		expect(pendingEdit('x')?.tags).toEqual({ add: ['B', 'c'], remove: [] });
 	});
 
 	it('a shot that owes nothing drops out', () => {
-		markShotEdit('x', { tags: { before: [], after: ['a'] } });
-		markShotEdit('x', { tags: { before: ['a'], after: [] } });
-		expect(pendingEdit('x')).toBeUndefined();
 		markShotEdit('y', 'annotations');
 		settlePendingEdit('y', { annotations: undefined });
 		expect(pendingEdits().size).toBe(0);
