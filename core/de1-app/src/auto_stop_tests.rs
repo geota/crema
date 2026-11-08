@@ -204,3 +204,68 @@ fn a_named_pour_after_a_named_start_keeps_the_clock() {
     core.on_notification(Source::De1State, &[4, 5], 3_000);
     assert_eq!(core.flow_started, Some(Duration::from_millis(1_000)));
 }
+
+/// A shot sample at 1.6 ml/s, so 20 s of unknown substate stays under a 36 ml
+/// limit.
+fn slow_sample(t: u16) -> [u8; 19] {
+    let mut s = sample(t);
+    s[4..6].copy_from_slice(&6_554u16.to_be_bytes());
+    s
+}
+
+/// Run samples (1.6 ml/s) to `to` ms, the unknown span first from 1 s, then
+/// `[4,5]` at `named`. Returns the first stop's reason, its time, and the pour
+/// then.
+fn unknown_then_named(core: &mut CremaCore, named: u64, to: u64) -> Option<(StopReason, u64, f32)> {
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[4, 2], 100);
+    core.on_notification(Source::De1State, &[4, 21], 1_000);
+    for t in (1_100..to).step_by(100) {
+        if t == named {
+            core.on_notification(Source::De1State, &[4, 5], t);
+        }
+        let o = core.on_notification(Source::De1ShotSample, &slow_sample((t / 8) as u16), t);
+        if let Some(reason) = stop_reasons(&o).first() {
+            return Some((*reason, t, core.pour_ml()));
+        }
+    }
+    None
+}
+
+/// REVIEW-385: the unknown span was heating, so the user's 36 ml limit counts
+/// from the named pour, not from the water counted while unknown.
+#[test]
+fn a_named_pour_after_an_unknown_start_re_anchors_the_volume_limit() {
+    let mut core = CremaCore::new();
+    core.set_profile_volume_limit(Some(36.0));
+    let (reason, at, _) = unknown_then_named(&mut core, 21_000, 90_000).expect("a stop");
+    assert_eq!(reason, StopReason::Volume);
+    // 36 ml at 1.6 ml/s is about 22 s of real pour.
+    assert!(
+        at >= 41_000,
+        "stopped {} ms into the real pour",
+        at - 21_000
+    );
+}
+
+/// The backstop never resets: with the scale lost, it still counts the water
+/// poured while the substate was unknown, and stops at 114 ml in all.
+#[test]
+fn the_backstop_counts_the_unknown_span_too() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    core.set_auto_tare(false);
+    core.set_profile_target_weight(Some(36.0));
+    core.on_notification(
+        Source::ScaleWeight,
+        &crate::scale_trust_tests::bookoo(0.0),
+        0,
+    );
+    core.disconnect_scale();
+    let (reason, _, pour) = unknown_then_named(&mut core, 21_000, 120_000).expect("a stop");
+    assert_eq!(reason, StopReason::Volume);
+    assert!(
+        (114.0..117.0).contains(&pour),
+        "stopped at {pour} ml in all"
+    );
+}

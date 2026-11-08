@@ -551,6 +551,9 @@ pub struct CremaCore {
     /// This shot's flow began on an unknown substate, and no named flowing
     /// one has come since: the first that does re-anchors the clock.
     flow_began_on_unknown: bool,
+    /// The pour the volume limit counts from, ml — see
+    /// [`StopIntent::limit_from_ml`].
+    limit_from_ml: f32,
     /// The connected scale's codec, once identified.
     scale: Option<Scale>,
     /// Smooths the scale stream into weight + flow for display.
@@ -1068,6 +1071,7 @@ impl CremaCore {
             shot_started: None,
             flow_started: None,
             flow_began_on_unknown: false,
+            limit_from_ml: 0.0,
             scale: None,
             flow: FlowEstimator::new(FlowAlgorithm::default()),
             weight_gate: WeightSpikeGate::new(),
@@ -1461,6 +1465,7 @@ impl CremaCore {
             volume_limit: self.profile_volume_limit,
             max_time: self.max_shot_duration,
             volume_stop_with_scale: self.volume_stop_with_scale,
+            limit_from_ml: self.limit_from_ml,
         };
         resolve_legs(
             intent,
@@ -5565,6 +5570,7 @@ impl CremaCore {
                 // phase below, so the preheat isn't counted. See `flow_started`.
                 self.flow_started = None;
                 self.flow_began_on_unknown = false;
+                self.limit_from_ml = 0.0;
                 self.flow.reset();
                 // Fresh shot → fresh spike-gate baseline (the gate only
                 // rejects while a shot is in progress).
@@ -5640,6 +5646,10 @@ impl CremaCore {
                     if let Some(flow_stop) = self.auto_stop.as_mut() {
                         flow_stop.stop.restart_clock(now);
                     }
+                    // The user's volume limit counts from here too; the
+                    // backstop keeps counting every ml (REVIEW-385).
+                    self.limit_from_ml = self.volume_integrator.pour_ml();
+                    self.refresh_auto_stop_targets();
                 }
                 out.events.push(Event::ShotPhaseChanged { phase });
             }
