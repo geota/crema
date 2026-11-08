@@ -82,6 +82,18 @@ fun mergePulled(added: List<StoredShot>, history: List<StoredShot>, cap: Int = H
 fun historyWith(added: List<StoredShot>, history: HistoryRows, keepId: String? = null): HistoryRows =
     history.with(mergeHistory(added, history, keepId).rows)
 
+/**
+ * What to say when a normal save made the cap drop a row (#310 P0): the oldest
+ * rows here, or the new row itself, dated before everything a full history
+ * keeps. Null when nothing was dropped. Restore and import say it their way.
+ */
+fun historyCutNotice(droppedOlder: Int, newKept: Boolean, cap: Int = HistoryStore.MAX_SHOTS): String? = when {
+    !newKept -> "History keeps the newest $cap shots, and this one is older than all of them, so it wasn’t kept"
+    droppedOlder == 0 -> null
+    droppedOlder == 1 -> "History keeps the newest $cap shots, so the oldest shot was dropped"
+    else -> "History keeps the newest $cap shots, so the oldest $droppedOlder were dropped"
+}
+
 /** What to say when the cap dropped rows, or nothing when it didn't. */
 fun historyDroppedNotice(dropped: Int, cap: Int = HistoryStore.MAX_SHOTS): String =
     if (dropped > 0) ". History keeps the newest $cap, so $dropped older shot${if (dropped == 1) " was" else "s were"} dropped" else ""
