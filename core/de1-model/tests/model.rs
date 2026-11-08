@@ -926,3 +926,23 @@ fn a_load_set_down_just_before_flow_is_the_known_limit() {
     assert_eq!(world.coverage.unseen_loads, 1);
     assert!(world.violations.is_empty(), "{:?}", world.violations);
 }
+
+/// The known limit stops at the untared-cup guard: a 60 g cup set down just
+/// before flow, too late for the late-cup re-tare, is the guard's. It settles,
+/// the guard latches a virtual zero, and the shot stops at a true 36 g. I13
+/// judges it; with the guard off, the shot stops at once.
+#[test]
+fn a_heavy_cup_set_down_just_before_flow_is_the_untared_guards() {
+    let mut world = World::new(De1Params::default(), 50.0, 5_000, false, false);
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    world.apply(&Op::Advance { ms: 1_100 });
+    world.apply(&Op::Scale(ScaleMode::StepUp { grams: 60.0 }));
+    while world.coverage.stops == 0 {
+        world.apply(&Op::Advance { ms: 100 });
+        assert!(world.now_ms() < 120_000, "a stop");
+    }
+    assert_eq!(world.coverage.unseen_loads, 0, "judged by I13");
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+    let cup = world.true_cup_g();
+    assert!((33.0..40.0).contains(&cup), "stopped at a true {cup} g");
+}

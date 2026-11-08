@@ -517,11 +517,11 @@ impl SimScale {
         self.tared_cup_g = cup_g;
     }
 
-    /// Whether the load on the scale differs from the one its zero was set
-    /// with: something landed or lifted since the last tare.
+    /// How far the load on the scale has moved from the one its zero was set
+    /// with, grams: something landed or lifted since the last tare.
     #[must_use]
-    pub fn load_moved_since_zero(&self, now: u64) -> bool {
-        self.load_now(now) != self.zeroed_load_g
+    pub fn load_moved_since_zero(&self, now: u64) -> f32 {
+        (self.load_now(now) - self.zeroed_load_g).abs()
     }
 
     /// What's on the scale besides the cup at `now`, grams, without moving

@@ -15,6 +15,9 @@ const STEP_MS: u64 = 100;
 const SAMPLE_MS: u64 = 200;
 /// The shells' tick.
 const TICK_MS: u64 = 1_000;
+/// The untared-cup guard's threshold, grams: a heavy first reading in the
+/// first 3 s of flow is the guard's to catch.
+const UNTARED_GUARD_G: f32 = 50.0;
 /// I13's tolerance to start with (`DESIGN.md` §7).
 const WEIGHT_TOLERANCE_G: f32 = 6.0;
 /// The reply to the machine-model read, from the capture: a DE1 model 2.
@@ -673,12 +676,13 @@ impl World {
         // A load that moved between the last zero and first flow, with no tare
         // after it, reads as coffee: the late-cup re-tare missed it and the
         // step detector watches only a flowing session (§3.5's known limit,
-        // #389).
+        // #389). Only under the untared-cup guard's 50 g: a heavier one is the
+        // guard's, which the model must still see.
         if !std::mem::replace(&mut self.flow_checked, true)
-            && self
-                .scale
-                .as_ref()
-                .is_some_and(|s| s.load_moved_since_zero(self.now))
+            && self.scale.as_ref().is_some_and(|s| {
+                let moved = s.load_moved_since_zero(self.now);
+                moved > 0.0 && moved < UNTARED_GUARD_G
+            })
             && !std::mem::replace(&mut self.unseen_load, true)
         {
             self.coverage.unseen_loads += 1;
