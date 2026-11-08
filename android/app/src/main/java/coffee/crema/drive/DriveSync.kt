@@ -61,6 +61,9 @@ private const val AUTO_BACKUP_KEEP = 3
 /** What an install that backed up before the pre-damage copy existed keeps: unchanged. */
 private const val AUTO_BACKUP_KEEP_BEFORE = 10
 
+/** How long a pre-damage pin holds against a newer damage, on Drive's clock. */
+private const val PIN_KEEPS_MS = 30L * 24 * 60 * 60 * 1000
+
 /** Counts for a name that's only read for its label. */
 private const val ZERO_COUNTS = """{"shots":0,"curves":0}"""
 
@@ -143,10 +146,11 @@ class DriveSync(
      *  restore running), or null. A copy made then would hold less than the
      *  last, and could push a good one out. */
     private val autoBackupBlocked: () -> String? = { null },
-    /** The newest time a store the counts can't see (beans, profiles, recipes,
-     *  settings) was kept aside as damaged, on this device's clock, or null.
-     *  One newer than the last seen is a new damage. */
-    private val newestDamageMs: () -> Long? = { null },
+    /** Per store the counts can't see (beans, profiles, recipes, settings), by
+     *  file name: the newest time it was kept aside as damaged, on this
+     *  device's clock. A store's time newer than the one last seen for that
+     *  store is a new damage; one store's clock never hides another's. */
+    private val damageByStore: () -> Map<String, Long> = { emptyMap() },
 ) {
     /** What the Settings UI binds to (mirrored into MainUiState). */
     data class UiState(
@@ -587,18 +591,30 @@ class DriveSync(
      * long since fixed isn't new. False when Drive couldn't be listed.
      */
     private suspend fun pinPreDamageCopy(tokens: DriveTokenSet, nameLike: String): Boolean {
-        val damage = newestDamageMs() ?: return true
-        if (damage <= (persisted.damageSeenMs ?: Long.MIN_VALUE)) return true
+        val damage = damageByStore()
+        val seen = persisted.damageSeen
+        if (damage.none { (store, at) -> at > (seen[store] ?: Long.MIN_VALUE) }) return true
         return runCatchingCancellable {
             val files = withToken(tokens) { listBackups(it) }.mapNotNull { it.toBackupFile() }
-            newestAutoBackup(json.encodeToString(ListSerializer(BackupFile.serializer()), files), nameLike)
+            // A recent pin stays: the copies made since it may all be thin, and
+            // a second damage then would move the slot onto one of them. Its
+            // age is read on Drive's clock, against the newest copy listed.
+            val current = persisted.preDamageCopy?.let { id -> files.find { it.id == id } }
+            val newest = files.maxOfOrNull { it.modifiedMs }
+            if (current != null && newest != null && newest - current.modifiedMs < PIN_KEEPS_MS) {
+                current.id
+            } else {
+                newestAutoBackup(json.encodeToString(ListSerializer(BackupFile.serializer()), files), nameLike)
+            }
         }.fold(
             onSuccess = { pin ->
-                persist { it.copy(damageSeenMs = damage, preDamageCopy = pin) }
+                persist { it.copy(damageSeen = seen + damage, preDamageCopy = pin) }
+                _state.update { it.copy(autoBackupPaused = null) }
                 true
             },
             onFailure = {
                 log("Daily Drive backup waits: couldn't list Drive to keep the copy from before a damage (${it.message})")
+                _state.update { it.copy(autoBackupPaused = "Daily backup paused: couldn't check Google Drive.") }
                 false
             },
         )

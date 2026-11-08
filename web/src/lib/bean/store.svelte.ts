@@ -24,7 +24,8 @@ import {
 	keepSkippedRows,
 	readJson,
 	readStore,
-	writeJson
+	writeJson,
+	writeJsonChecked
 } from '#lib/utils/storage.js';
 import {
 	credit_shot_debit,
@@ -207,6 +208,21 @@ export class BeanLibraryStore {
 		this.activeId = null;
 		this.persist();
 		this.persistActive();
+	}
+
+	/**
+	 * A restore's library: beans and roasters in one write, after memory, so an
+	 * edit made while it lands stacks on the restored state. `clearActive` for a
+	 * Replace whose backup lacks the active bean. Whether it was stored.
+	 */
+	restoreLibrary(beans: Bean[], roasters: Roaster[], clearActive: boolean): boolean {
+		this.envelope = { ...this.envelope, beans, roasters };
+		const stored = writeJsonChecked(LIBRARY_KEY, this.envelope);
+		if (clearActive && this.activeId !== null) {
+			this.activeId = null;
+			return writeJsonChecked(ACTIVE_KEY, null) && stored;
+		}
+		return stored;
 	}
 
 	// ── Bean CRUD ────────────────────────────────────────────────────
