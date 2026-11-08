@@ -49,9 +49,39 @@ describe('factoryResetLocalData', () => {
 		expect([...CREMA_DATABASES].sort()).toEqual([
 			'crema-bean-images',
 			'crema-captures',
+			'crema-history',
 			'crema-history-series',
 			'crema-keys'
 		]);
+	});
+
+	it("takes a newer build's history database and snapshot, after a rollback (#310 P0)", async () => {
+		await createDb('crema-history');
+		const files = new Map<string, string>([['crema-history-snapshot', 'rows'], ['other', 'kept']]);
+		const root = {
+			removeEntry: async (name: string, opts?: { recursive?: boolean }) => {
+				expect(opts?.recursive, 'the snapshot is written in chunks').toBe(true);
+				if (!files.delete(name)) throw new DOMException('gone', 'NotFoundError');
+			}
+		} as unknown as FileSystemDirectoryHandle;
+		// A browser that can't list databases still loses the known one.
+		const listless = Object.assign(Object.create(idb) as IDBFactory, { databases: undefined });
+		const result = await factoryResetLocalData({ indexedDB: listless, privateFiles: async () => root });
+		expect(await cremaDatabases()).toEqual([]);
+		expect([...files.keys()]).toEqual(['other']);
+		expect(result.databasesFailed).toEqual([]);
+		const again = await factoryResetLocalData({ privateFiles: async () => root });
+		expect(again.databasesFailed, 'no snapshot is not a failure').toEqual([]);
+	});
+
+	it('a snapshot that stays is reported, like a database another tab holds', async () => {
+		const root = {
+			removeEntry: async () => {
+				throw new DOMException('held', 'NoModificationAllowedError');
+			}
+		} as unknown as FileSystemDirectoryHandle;
+		const result = await factoryResetLocalData({ privateFiles: async () => root });
+		expect(result.databasesFailed).toEqual(['crema-history-snapshot']);
 	});
 
 	it('leaves no Crema IndexedDB database and no crema.* storage key behind', async () => {
