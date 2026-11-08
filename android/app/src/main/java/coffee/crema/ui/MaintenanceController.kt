@@ -73,10 +73,12 @@ internal class MaintenanceController(
         ) }
     }
 
-    /** A backup's maintenance state: reseed the live water integrator + persist. */
-    fun restore(state: MaintenanceState) {
+    /** A backup's maintenance state, a restore's step 8: reseed the live water
+     *  integrator and persist. Whether it landed. */
+    suspend fun restoreNow(state: MaintenanceState): Boolean {
         lane.post { totalLitres = state.totalLitres }
-        save(state)
+        updateUi { it.copy(maintenance = state, maintenanceReadout = computeReadout(state)) }
+        return store.save(state)
     }
 
     /**

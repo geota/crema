@@ -1543,9 +1543,15 @@ fn shot_plan(
         return (plan, tombstones);
     }
 
-    // Merge never evicts: past the cap, pinned rows first, then the newest.
+    // Merge never evicts. The cap counts unpinned rows only, as history keeps
+    // them (`fits_history`): a pinned row always fits, and the newest unpinned
+    // ones fill the room the device's unpinned rows leave.
     let room = local.history_capacity.map_or(usize::MAX, |cap| {
-        let live = local.shots.iter().filter(|s| !s.deleted).count();
+        let live = local
+            .shots
+            .iter()
+            .filter(|s| !s.deleted && !s.pinned)
+            .count();
         usize::try_from(cap)
             .unwrap_or(usize::MAX)
             .saturating_sub(live)
@@ -1555,7 +1561,8 @@ fn shot_plan(
             .cmp(&a.pinned)
             .then(b.completed_at.cmp(&a.completed_at))
     });
-    let fits = candidates.len().min(room);
+    let pinned = candidates.iter().filter(|s| s.pinned).count();
+    let fits = pinned + (candidates.len() - pinned).min(room);
     let (added, left) = candidates.split_at(fits);
     plan.not_added = u32::try_from(left.len()).unwrap_or(u32::MAX);
     let left: HashSet<&str> = left.iter().map(|s| s.id.as_str()).collect();

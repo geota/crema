@@ -7,15 +7,15 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The backup restore parse [parseBackup] — the core's `importBackupJsonl` (the
+ * The backup restore parse [parseBackupBytes] — the core's `importBackupBytes` (the
  * host build, the same parser web restores with) plus the Android mapping.
  * Backup/restore is data-loss-adjacent: each tagged JSONL line must land in its
  * record bucket, and a malformed line must be skipped without dropping a whole
@@ -46,7 +46,7 @@ class BackupRoundTripTest {
             shotLine("shot:t1"),
         ).joinToString("\n")
 
-        val parsed = parseBackup(bundle, json, 0L)!!
+        val parsed = parseBackupBytes(bundle.toByteArray(), json, 0L)
 
         assertEquals(1, parsed.profiles.size)
         assertEquals(1, parsed.shots.size)
@@ -66,7 +66,7 @@ class BackupRoundTripTest {
             shotLine("shot:t2"),
         ).joinToString("\n")
 
-        val parsed = parseBackup(bundle, json, 0L)!!
+        val parsed = parseBackupBytes(bundle.toByteArray(), json, 0L)
 
         assertEquals(1, parsed.profiles.size)
         assertEquals(1, parsed.shots.size)
@@ -80,7 +80,7 @@ class BackupRoundTripTest {
             line("profile", buildJsonObject { put("id", "p1") }),
         ).joinToString("\n")
 
-        val parsed = parseBackup(bundle, json, 0L)!!
+        val parsed = parseBackupBytes(bundle.toByteArray(), json, 0L)
 
         assertEquals(0, parsed.beans.size)
         assertEquals(1, parsed.profiles.size)
@@ -88,7 +88,10 @@ class BackupRoundTripTest {
 
     @Test
     fun `reports no header for a non-Crema file`() {
-        assertNull(parseBackup(line("profile", buildJsonObject { put("id", "p1") }), json, 0L))
+        // The restore's gate: the plan reads the manifest's header (BackupBundle's parse has none).
+        val bytes = line("profile", buildJsonObject { put("id", "p1") }).toByteArray()
+        val header = json.parseToJsonElement(coffee.crema.core.scanBackupBytes(bytes, emptyList())).jsonObject["header"]
+        assertTrue(header == null || header is kotlinx.serialization.json.JsonNull, "$header")
     }
 
     @Test
@@ -117,7 +120,7 @@ class BackupRoundTripTest {
                 put("hiddenBuiltins", buildJsonArray { })
             }),
         ).joinToString("\n")
-        val parsed = parseBackup(bundle, json, 0L)!!
+        val parsed = parseBackupBytes(bundle.toByteArray(), json, 0L)
         assertEquals(1, parsed.recipes.size)
         val r = parsed.recipes.first()
         assertEquals("Adapted from James Hoffmann — A Better 1 Cup V60 Technique (2022)", r.credit)
@@ -125,7 +128,7 @@ class BackupRoundTripTest {
         assertEquals("Cafec Abaca filter\nTWW light roast", r.notes)
         assertNotNull(parsed.recipeMeta)
         // A bundle from before recipes were backed up restores none.
-        assertTrue(parseBackup(line("crema-backup/v1"), json, 0L)!!.recipes.isEmpty())
+        assertTrue(parseBackupBytes(line("crema-backup/v1").toByteArray(), json, 0L).recipes.isEmpty())
     }
 
     @Test
@@ -171,7 +174,7 @@ class BackupRoundTripTest {
             line("brewMethod", spoof),
             json.encodeToString(JsonObject.serializer(), JsonObject(wire + ("kind" to JsonPrimitive("shot")))),
         ).joinToString("\n")
-        val parsed = parseBackup(bundle, json, 0L)!!
+        val parsed = parseBackupBytes(bundle.toByteArray(), json, 0L)
         assertEquals(listOf("ORB", "Old brewer"), parsed.customMethods.map { it.label })
         assertEquals(3L, parsed.customMethods[1].deletedAt)
         assertEquals(coffee.crema.core.BrewMethodStyle.Immersion, parsed.customMethods[1].style)
@@ -182,7 +185,7 @@ class BackupRoundTripTest {
         assertEquals(94f, back.brewTempC)
         assertEquals("Mine", back.recipeName)
         // A bundle from before custom methods restores none.
-        assertTrue(parseBackup(line("crema-backup/v1"), json, 0L)!!.customMethods.isEmpty())
+        assertTrue(parseBackupBytes(line("crema-backup/v1").toByteArray(), json, 0L).customMethods.isEmpty())
     }
 
     @Test
@@ -198,7 +201,7 @@ class BackupRoundTripTest {
                 put("_shell", "web")
             }),
         ).joinToString("\n")
-        val common = assertNotNull(parseBackup(bundle, json, 0L)!!.common)
+        val common = assertNotNull(parseBackupBytes(bundle.toByteArray(), json, 0L).common)
         assertEquals("F", common.tempUnit)
         assertEquals(true, common.autoTare)
         assertEquals(30f, common.maxShotDurationS)

@@ -75,7 +75,8 @@ class OwnStateReadsTest {
             "activateReseeded" to setOf("activeProfileId"),
             "deleteBean" to setOf("activeBeanId"),
             // Own-state writers (§7.4): a restore and a bean import.
-            "restoreBackupFromText" to setOf("activeBeanId"),
+            // A restore writes the library's own active bean, and plans against it.
+            "restoreSink" to setOf("activeBeanId"),
             "applyBeanImportPlan" to setOf("activeBeanId"),
         ),
         "PresenceController.kt" to mapOf(

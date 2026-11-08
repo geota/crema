@@ -211,7 +211,7 @@
       }
     },
     {
-      "name": "shots: merge at the cap adds pinned, then newest, and never evicts",
+      "name": "shots: merge at the cap adds every pinned row, then the newest, and never evicts",
       "store": "shots",
       "mode": "merge",
       "local": {
@@ -246,9 +246,10 @@
       },
       "expect": {
         "/shots/add": [
-          "old-pinned"
+          "old-pinned",
+          "new"
         ],
-        "/shots/notAdded": 2,
+        "/shots/notAdded": 1,
         "/shots/remove": [],
         "/verdict": "confirm"
       }
@@ -1008,6 +1009,34 @@
       }
     },
     {
+      "name": "refused: a zip's photos stay out of the photo store",
+      "store": "photos",
+      "mode": "replace",
+      "local": {
+        "machineBusy": true,
+        "beans": [
+          "b1"
+        ],
+        "photos": [
+          "b1"
+        ]
+      },
+      "backup": {
+        "beans": [
+          "b1",
+          "b2"
+        ],
+        "photos": [
+          "b1",
+          "b2"
+        ]
+      },
+      "expect": {
+        "/verdict": "refused",
+        "/refusals/0/code": "machineBusy"
+      }
+    },
+    {
       "name": "refused: replace with a backup of no rows on a device with rows",
       "store": "beans",
       "mode": "replace",
@@ -1041,6 +1070,38 @@
             "id": "gone",
             "hasSamples": true,
             "deleted": true
+          }
+        ]
+      },
+      "backup": {
+        "shots": [
+          {
+            "id": "n1"
+          }
+        ]
+      },
+      "expect": {
+        "/shots/add": [
+          "n1"
+        ],
+        "/shots/notAdded": 0
+      }
+    },
+    {
+      "name": "shots: the cap's room counts unpinned rows only",
+      "store": "shots",
+      "mode": "merge",
+      "local": {
+        "historyCapacity": 2,
+        "shots": [
+          {
+            "id": "p1",
+            "hasSamples": true,
+            "pinned": true
+          },
+          {
+            "id": "u1",
+            "hasSamples": true
           }
         ]
       },

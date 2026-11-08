@@ -68,6 +68,11 @@ data class DriveState(
      *  30-day hold keeping the old pin. Retention still keeps the pin until
      *  then. Additive. */
     val pinReleased: Boolean = false,
+    /** The stores whose damage [preDamageCopy] guards, by file name: a restore
+     *  releases the pin only once it has written them all. Additive. */
+    val pinStores: Set<String> = emptySet(),
+    /** [preDamageCopy]'s modified time on Drive, to tell a newer own copy. Additive. */
+    val preDamageCopyAtMs: Long? = null,
     /** Google ended the sign-in. Signed out, with a lasting banner until the
      *  user reconnects or disconnects. Additive. */
     val needsReconnect: Boolean = false,
