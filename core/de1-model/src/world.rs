@@ -51,6 +51,8 @@ pub enum Op {
     SetMaxTime(Option<f32>),
     /// The steam heater target changes.
     SetSteamTarget(f32),
+    /// The user turns auto-tare on or off.
+    SetAutoTare(bool),
     /// A profile with a step weight goes active.
     SetStepWeight(Option<f32>),
     /// The scale starts misbehaving this way.
@@ -175,6 +177,10 @@ pub struct World {
     unguarded_since: Option<u64>,
     /// The open session has been heard past its pre-flow substates.
     flowed: bool,
+    /// The user's auto-tare setting.
+    auto_tare: bool,
+    /// The hot-water dose, ml.
+    hot_water_ml: f32,
     /// The frame of the last sample the core heard.
     last_sample_frame: Option<u8>,
     /// Back from an outage on a flowing shot: the frame before, when the state
@@ -256,6 +262,8 @@ impl World {
             was_down: false,
             state_heard_on_link: false,
             flowed: false,
+            auto_tare: true,
+            hot_water_ml: 120.0,
             last_sample_frame: None,
             return_check: None,
             down_at: None,
@@ -320,10 +328,16 @@ impl World {
     }
 
     fn apply_targets(&mut self) {
+        self.core.set_auto_tare(self.auto_tare);
         self.core.set_profile_target_weight(self.profile_target_g);
         self.core.set_shot_target_weight(self.dial_g);
         self.core.set_profile_volume_limit(self.volume_limit_ml);
         self.core.set_max_shot_duration(self.max_time_s);
+    }
+
+    /// Set the hot-water dose the next [`Op::SetSteamTarget`] sends, ml.
+    pub fn set_hot_water_ml(&mut self, ml: f32) {
+        self.hot_water_ml = ml;
     }
 
     /// The world's clock, ms.
@@ -390,6 +404,10 @@ impl World {
                 self.apply_targets();
             }
             Op::SetSteamTarget(c) => self.set_steam_target(c),
+            Op::SetAutoTare(on) => {
+                self.auto_tare = on;
+                self.core.set_auto_tare(on);
+            }
             Op::SetStepWeight(g) => self.set_step_weight(g),
             Op::Scale(mode) => {
                 if let Some(scale) = &mut self.scale {
@@ -493,7 +511,7 @@ impl World {
             hot_water_temp_c: 85.0,
             hot_water: de1_domain::HotWaterDose {
                 mode: de1_domain::HotWaterMode::Volume,
-                volume_ml: 120.0,
+                volume_ml: self.hot_water_ml,
                 ..de1_domain::HotWaterDose::default()
             },
         };
