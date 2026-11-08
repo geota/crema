@@ -10,7 +10,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - **Pin a shot** — pin a shot from its detail to keep it safe: its raw
-  Bluetooth capture stays whatever the limit, and any cleanup skips it. A small
+  Bluetooth capture stays whatever the limit, and any cleanup skips it, the
+  300-shot history limit included: pinned shots don't count toward it. A small
   mark shows on the row, History has a Pinned filter, and deleting a pinned shot
   says so. Pins move with backups, and between the apps. Android and web.
 - **Storage and backups settings** — choose how many raw captures to keep (Off,

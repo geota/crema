@@ -50,7 +50,8 @@ import java.util.Locale
  * (`Android/data/<package>/files/captures`), which the system deletes with the
  * app. Each new session prunes the directory to the newest [sessionsKeep]
  * sessions, sparing any whose span holds a pinned shot ([pinnedShotTimes], the
- * core's `sessions_to_drop`, #311). There's no age limit: the count is the only
+ * core's `sessions_to_drop`, #311), once the history has loaded well enough
+ * to say which those are ([historySettled]). There's no age limit: the count is the only
  * thing that removes a capture. Off records none. Erase all data deletes them
  * all ([eraseCaptures]). The privacy page describes them.
  *
@@ -99,6 +100,11 @@ class BleSessionRecorder(private val context: Context) {
     @Volatile
     var pinnedShotTimes: () -> List<Long> = { emptyList() }
 
+    /** Whether the history has loaded well enough to know its pinned shots:
+     *  until it has, no session is deleted (#311). */
+    @Volatile
+    var historySettled: () -> Boolean = { false }
+
     /** Core `sessions_to_drop`, injected so a JVM test can stand in for it. */
     @Volatile
     var sessionsToDrop: (payload: String) -> String = { coffee.crema.core.sessionsToDrop(it) }
@@ -110,8 +116,10 @@ class BleSessionRecorder(private val context: Context) {
         return synchronized(lock) { doomed(dir, keep, pinnedShotTimes(), sessionsToDrop) }
     }
 
-    /** Delete the session files past [keep] now (the limit was lowered); the count deleted. */
+    /** Delete the session files past [keep] now (the limit was lowered); the
+     *  count deleted. None until [historySettled]: the next session prunes. */
     fun pruneTo(keep: Int = sessionsKeep): Int {
+        if (!historySettled()) return 0
         val dir = capturesDir(context) ?: return 0
         return synchronized(lock) {
             val current = filePath
@@ -163,8 +171,9 @@ class BleSessionRecorder(private val context: Context) {
                     Log.w(TAG, "Could not create captures directory ${dir.absolutePath}")
                     return
                 }
-                // Room for the new file within the limit, pinned shots' sessions spared.
-                if (sessionsKeep != SESSIONS_ALL) {
+                // Room for the new file within the limit, pinned shots' sessions
+                // spared. Not until the history says which those are.
+                if (sessionsKeep != SESSIONS_ALL && historySettled()) {
                     doomed(dir, sessionsKeep - 1, pinnedShotTimes(), sessionsToDrop).forEach { it.delete() }
                 }
                 val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())

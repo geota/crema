@@ -3,7 +3,7 @@
  * stays newest first however a row was dated, because the core's "last brew"
  * and the 300-row cap both follow list order.
  */
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { brewLogSeeds } from '#lib/brew/methods.js';
 import { brews_remaining_estimate } from '#lib/wasm/de1_wasm.js';
@@ -216,6 +216,69 @@ describe('the cap counts live rows', () => {
 		for (let i = 0; i < 20; i++) store.addManualBrew(brew(NOW + (i + 1) * 60_000));
 		expect(store.all).toHaveLength(300);
 		expect(store.rawAll).toHaveLength(310);
+	});
+});
+
+describe('a pinned row is never cut (#311)', () => {
+	afterEach(() => vi.restoreAllMocks());
+	const fullWithTheOldestPinned = () => {
+		const store = new HistoryStore();
+		for (let i = 0; i < 300; i++) store.addManualBrew(brew(NOW - i * HOUR));
+		const oldest = store.all.at(-1)!;
+		store.setPinned(oldest.id, true);
+		return { store, oldest };
+	};
+
+	it('stays when a brew is logged on a full history, in memory and on disk', () => {
+		const { store, oldest } = fullWithTheOldestPinned();
+		const next = store.all.at(-2)!;
+		store.addManualBrew(brew(NOW + HOUR));
+		store.addManualBrew(brew(NOW + 2 * HOUR));
+		expect(store.get(oldest.id)?.pinned).toBe(true);
+		expect(store.get(next.id), 'the oldest unpinned row goes instead').toBeUndefined();
+		expect(store.all).toHaveLength(301);
+		expect(new HistoryStore().get(oldest.id)?.pinned).toBe(true);
+	});
+
+	it("doesn't count against the cap", () => {
+		const { store } = fullWithTheOldestPinned();
+		expect(store.freeSlots).toBe(1);
+		store.addManualBrew(brew(NOW + HOUR));
+		expect(store.freeSlots).toBe(0);
+		expect(store.fitsHistory(NOW - 298 * HOUR), 'the oldest unpinned row is the cut').toBe(true);
+		expect(store.fitsHistory(NOW - 299 * HOUR), 'not the pinned row behind it').toBe(false);
+	});
+
+	it('a newer pinned row leaves the cut at the 300th unpinned one', () => {
+		const store = new HistoryStore();
+		for (let i = 0; i < 300; i++) store.addManualBrew(brew(NOW - i * HOUR));
+		store.setPinned(store.all[0].id, true);
+		store.addManualBrew(brew(NOW + HOUR));
+		expect(store.fitsHistory(NOW - 299 * HOUR)).toBe(true);
+		expect(store.fitsHistory(NOW - 299 * HOUR - 1)).toBe(false);
+	});
+
+	it('stays when a batch overfills the history', () => {
+		const { store, oldest } = fullWithTheOldestPinned();
+		const template = store.all[0];
+		store.insertMany([{ ...template, id: 'new', completedAt: NOW + HOUR }]);
+		expect(store.get(oldest.id)).toBeDefined();
+	});
+
+	it('is not evicted when the store is full', () => {
+		const { store, oldest } = fullWithTheOldestPinned();
+		const realSet = localStorage.setItem.bind(localStorage);
+		let fail = true;
+		vi.spyOn(localStorage, 'setItem').mockImplementation((k: string, v: string) => {
+			if (fail && k === 'crema.history.v2') {
+				fail = false;
+				throw new DOMException('full', 'QuotaExceededError');
+			}
+			realSet(k, v);
+		});
+		store.setRating(store.all[0].id, 3);
+		expect(store.rawAll.length).toBeLessThan(300);
+		expect(store.get(oldest.id)?.pinned).toBe(true);
 	});
 });
 

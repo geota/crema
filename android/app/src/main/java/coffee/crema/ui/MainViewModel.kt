@@ -767,6 +767,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val bleRecorder = BleSessionRecorder(app).also { rec ->
         rec.sessionsKeepOf = { _ui.value.bleSessionsKeep }
         rec.pinnedShotTimes = { _ui.value.history.filter { it.pinned }.map { it.completedAtMs } }
+        rec.historySettled = { library.historySettled }
     }
 
     private val ble: De1BleManager = De1BleManager(

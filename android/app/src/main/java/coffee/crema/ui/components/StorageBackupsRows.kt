@@ -76,11 +76,7 @@ fun StorageBackupsRows(vm: MainViewModel, ui: MainUiState, ds: DriveSync.UiState
                             val doomed = vm.driveCopiesOverLimit(next)
                             pending = PendingLimit(
                                 "Keep $next automatic cop${if (next == 1) "y" else "ies"}?",
-                                when (doomed) {
-                                    null -> "Older automatic copies past $next are deleted at the next backup. Drive couldn't be listed to count them."
-                                    0 -> "Nothing is deleted now; later backups keep $next."
-                                    else -> "The next backup deletes $doomed older automatic cop${if (doomed == 1) "y" else "ies"} from Drive. They go to Drive's trash, where they stay 30 days."
-                                },
+                                copiesPreviewBody(next, doomed),
                             ) { vm.setDriveCopiesKeep(next) }
                         }
                     }
@@ -124,6 +120,17 @@ fun StorageBackupsRows(vm: MainViewModel, ui: MainUiState, ds: DriveSync.UiState
             onDismiss = { pending = null },
         )
     }
+}
+
+/**
+ * What lowering the Drive copies to [next] deletes, from [doomed], the copies
+ * today's listing puts past it (null when Drive couldn't be listed). The next
+ * backup adds a copy, which can push one more out, so a count is "at least".
+ */
+internal fun copiesPreviewBody(next: Int, doomed: Int?): String = when (doomed) {
+    null -> "Older automatic copies past $next are deleted at the next backup. Drive couldn't be listed to count them."
+    0 -> "Later backups keep $next; the next one may delete the oldest automatic copy. Deleted copies go to Drive's trash, where they stay 30 days."
+    else -> "The next backup deletes at least $doomed older automatic cop${if (doomed == 1) "y" else "ies"} from Drive. They go to Drive's trash, where they stay 30 days."
 }
 
 /** A read-only value, as a settings row's trailing text. */

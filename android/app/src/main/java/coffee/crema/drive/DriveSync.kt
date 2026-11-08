@@ -78,6 +78,14 @@ class BackupZip(
 /** What a new install keeps of its automatic copies. */
 internal const val NEW_INSTALL_DRIVE_COPIES = 3
 
+/**
+ * The automatic copies retention keeps: the [stored] choice, else 10 for an
+ * install that has backed up before (as it had before #362) and 3 for a new one.
+ * The setting shows this, so it shows what retention uses.
+ */
+internal fun autoBackupKeepFor(stored: Int?, backedUpBefore: Boolean): Int =
+    stored ?: if (backedUpBefore) AUTO_BACKUP_KEEP_BEFORE else AUTO_BACKUP_KEEP
+
 /** The copies-to-keep choices Settings offers (#311). */
 val DRIVE_COPIES_CHOICES = listOf(1, 3, 5, 10)
 
@@ -183,7 +191,8 @@ class DriveSync(
         val backups: List<DriveBackupRow>? = null,
         /** Why today's daily backup didn't run, or null. */
         val autoBackupPaused: String? = null,
-        /** Automatic copies kept (#311); null until set, which shows the new-install default. */
+        /** Automatic copies kept (#311): the stored choice, else what the next
+         *  retention would choose ([autoBackupKeepFor]). Null until loaded. */
         val autoBackupKeep: Int? = null,
     )
 
@@ -218,7 +227,10 @@ class DriveSync(
             configured = clientId.isNotBlank(),
             connected = persisted.tokens != null,
             lastBackupAtMs = persisted.lastBackupSuccessAtMs,
-            autoBackupKeep = persisted.autoBackupKeep,
+            autoBackupKeep = autoBackupKeepFor(
+                persisted.autoBackupKeep,
+                persisted.lastAutoBackupAtMs != null || persisted.lastBackupSuccessAtMs != null,
+            ),
             needsReconnect = persisted.needsReconnect,
             healthLine = driveHealthLine(persisted.health),
         ) }
@@ -313,7 +325,9 @@ class DriveSync(
                     _state.update { it.copy(busy = true) }
                     runCatchingCancellable { exchangeCode(code, verifier) }
                         .onSuccess { tokens ->
-                            persist { it.copy(tokens = tokens, needsReconnect = false, health = null) }
+                            // A new sign-in may be another account: the next
+                            // backup uploads whatever it finds (#311).
+                            persist { it.copy(tokens = tokens, needsReconnect = false, health = null, lastAutoBackupHash = null) }
                             notify("Connected to Google Drive")
                         }
                         .onFailure { notify("Google Drive sign-in failed: ${it.message}") }
@@ -345,7 +359,8 @@ class DriveSync(
             if (!ownState.await()) return@launch
             val tokens = persisted.tokens
             // Also forgets a stored sign-in the keystore couldn't open this start.
-            persist { it.copy(tokens = null, unopened = null, needsReconnect = false, health = null) }
+            // The hash goes too: the next account's Drive holds none of it (#311).
+            persist { it.copy(tokens = null, unopened = null, needsReconnect = false, health = null, lastAutoBackupHash = null) }
             _state.update { it.copy(backups = null) }
             if (!quiet) notify("Disconnected from Google Drive")
             tokens?.let { revokeGrant(it) }
@@ -571,8 +586,9 @@ class DriveSync(
             if (!pinPreDamageCopy(tokens, autoBackupFileName(backupFileName(), tag, ZERO_COUNTS))) return@launch
             persist { it.copy(lastAutoBackupAtMs = now()) }
             val built = backupZip() ?: return@launch
-            // Nothing changed since the last upload that landed: no new copy (#311).
-            if (built.contentHash != null && built.contentHash == persisted.lastAutoBackupHash) {
+            // Nothing changed since the last upload that landed: no new copy
+            // (#311), as long as Drive still holds one of this device's.
+            if (built.contentHash != null && built.contentHash == persisted.lastAutoBackupHash && holdsOwnCopy(tokens, tag)) {
                 log("Automatic Drive backup skipped: nothing changed since the last one")
                 return@launch
             }
@@ -596,6 +612,13 @@ class DriveSync(
             }
         }
     }
+
+    /** Whether Drive lists one of this device's automatic copies. A list that
+     *  fails counts as none, so the backup goes ahead. */
+    private suspend fun holdsOwnCopy(tokens: DriveTokenSet, tag: String): Boolean =
+        runCatchingCancellable {
+            withToken(tokens) { listBackups(it) }.mapNotNull { it.toBackupFile() }.any { it.name.contains("~$tag") }
+        }.getOrDefault(false)
 
     /**
      * Set how many automatic copies this device keeps (#311). The next
@@ -641,8 +664,7 @@ class DriveSync(
             // now that a copy from before any damage stays too; 10, as it had,
             // for one that backed up before this.
             val keep = persisted.autoBackupKeep
-                ?: (if (backedUpBefore) AUTO_BACKUP_KEEP_BEFORE else AUTO_BACKUP_KEEP)
-                    .also { chosen -> persist { it.copy(autoBackupKeep = chosen) } }
+                ?: autoBackupKeepFor(null, backedUpBefore).also { chosen -> persist { it.copy(autoBackupKeep = chosen) } }
             val plan = json.decodeFromString(
                 AutoBackupRetention.serializer(),
                 autoBackupRetention(filesJson, uploaded, keep.toUInt(), persisted.preDamageCopy),

@@ -238,12 +238,37 @@ class DriveRetentionTest {
 
     @Test
     fun unchangedDataSkipsTheUpload_changedDataDoesNot() {
+        seed(1)
         val skipped = dailyBackup(hash = "h1", lastHash = "h1")
-        assertTrue(drive.isEmpty(), "the same data isn't uploaded again")
+        assertEquals(1, drive.size, "the same data isn't uploaded again")
         assertTrue(skipped.lastAutoBackupAtMs!! > now - day, "the attempt is stamped")
         val uploaded = dailyBackup(hash = "h2", lastHash = "h1")
-        assertEquals(1, drive.size)
+        assertEquals(2, drive.size)
         assertEquals("h2", uploaded.lastAutoBackupHash, "stored only once it landed")
+    }
+
+    /** #311 review: a hash that outlived this device's copies (deleted on
+     *  Drive, or another account) must not stop backups for good. */
+    @Test
+    fun unchangedDataStillUploadsWhenDriveHoldsNoneOfThisDevicesCopies() {
+        seed(2, label = "phone~other")
+        drive += "manual" to "crema-backup-tablet-20250101-0800.crema.zip"
+        dailyBackup(hash = "h1", lastHash = "h1")
+        assertEquals(4, drive.size, "uploaded: another device's copies and a manual one don't count")
+        assertTrue(drive.first().second.contains("~$TAG"))
+    }
+
+    /** #311 review: the row shows the copies retention uses, not 3 for an
+     *  install that keeps 10 because it backed up before. */
+    @Test
+    fun theCopiesSettingShowsWhatRetentionUses() {
+        var shown: Int? = null
+        dailyBackup(lastAuto = now, keep = null, seen = { shown = it.state.value.autoBackupKeep })
+        assertEquals(10, shown, "backed up before, nothing stored")
+        dailyBackup(lastAuto = null, keep = null, blocked = "paused", seen = { shown = it.state.value.autoBackupKeep })
+        assertEquals(3, shown, "a new install")
+        dailyBackup(lastAuto = now, keep = 5, seen = { shown = it.state.value.autoBackupKeep })
+        assertEquals(5, shown, "the stored choice")
     }
 
     @Test

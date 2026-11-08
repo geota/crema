@@ -34,7 +34,9 @@ import { keepSkippedRows, readStore, writeStore, type StoreWrite } from '#lib/ut
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import {
 	brewDateError,
+	cappedCount,
 	cappedHistory,
+	evictOldest,
 	fitsHistory,
 	newestFirst,
 	type HistoryInsert
@@ -305,10 +307,11 @@ export class HistoryStore {
 			toast.error('Shot history could not be saved.');
 			return false;
 		}
-		// Quota hit even without series — evict the oldest 10% and retry.
-		const keep = Math.max(1, Math.floor(this.shots.length * 0.9));
-		const dropped = this.shots.length - keep;
-		this.shots = this.shots.slice(0, keep);
+		// Quota hit even without series — evict the oldest 10% and retry. A
+		// pinned row is never evicted (#311): the oldest unpinned ones go.
+		const before = this.shots.length;
+		this.shots = evictOldest(this.shots, before - Math.max(1, Math.floor(before * 0.9)));
+		const dropped = before - this.shots.length;
 		if (this.writeRows() !== 'ok') {
 			toast.error('Shot history could not be saved — storage is full.');
 			return false;
@@ -365,7 +368,7 @@ export class HistoryStore {
 
 	/** How many live rows fit before the cap. */
 	get freeSlots(): number {
-		return Math.max(0, MAX_RECORDS - this.all.length);
+		return Math.max(0, MAX_RECORDS - cappedCount(this.shots));
 	}
 
 	/** Whether a new brew dated `at` would stay in the history once added. */

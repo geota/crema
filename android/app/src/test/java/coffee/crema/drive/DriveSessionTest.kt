@@ -188,6 +188,22 @@ class DriveSessionTest {
         assertNotNull(stored().tokens)
     }
 
+    /** #311 review: the unchanged-backup hash belongs to the Drive it was
+     *  uploaded to. After a disconnect or a new sign-in the next backup uploads. */
+    @Test
+    fun `a disconnect and a sign-in forget the backup hash`() {
+        val out = sync(DriveState(tokens = set("old"), lastAutoBackupHash = "h1"))
+        out.disconnect(quiet = true)
+        settle()
+        assertNull(stored().lastAutoBackupHash)
+
+        val back = sync(DriveState(lastAutoBackupHash = "h1", pendingVerifier = "v", pendingState = "st"))
+        back.handleCallback("code", "st", null)
+        settle()
+        assertNotNull(stored().tokens)
+        assertNull(stored().lastAutoBackupHash)
+    }
+
     @Test
     fun `a disconnect clears the banner`() {
         val s = sync(DriveState(needsReconnect = true))

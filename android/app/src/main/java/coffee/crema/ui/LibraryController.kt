@@ -336,8 +336,11 @@ class LibraryController(
      *  arrive, from what's in memory by then and the rows. */
     private suspend fun landHistory(land: (session: List<StoredShot>, rows: List<StoredShot>) -> List<StoredShot>) {
         val loaded = seriesLoaded
+        historySettled = false
         val rows = historyStore.loadRows()
+        val health = historyStore.health
         editHistory { current -> current.with(land(current, rows)) }
+        historySettled = health == coffee.crema.persist.StoreHealth.OK || health == coffee.crema.persist.StoreHealth.ABSENT
         historyStore.markLive(rows.map { it.id })
         historyStore.openSaves()
         val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
@@ -373,6 +376,16 @@ class LibraryController(
         if (merged.dropped > 0) notify("Shot history reloaded${historyDroppedNotice(merged.dropped)}")
         if (merged.kept.isNotEmpty()) historyStore.save(merged.rows)
     }
+
+    /**
+     * Whether a cleanup that spares pinned shots may run (#311): the rows are in
+     * the history, from a load that read them or found no file. Not before, as
+     * an early BLE connect would see no pinned shots, and not after a damaged or
+     * unavailable load, as an unread row may be a pinned one. Set as the rows
+     * land, so a load in progress never counts.
+     */
+    @Volatile var historySettled: Boolean = false
+        private set
 
     /** Whether a Visualizer pull may run: not while the rows couldn't be read,
      *  as it would match against a list that doesn't hold them. */

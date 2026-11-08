@@ -527,6 +527,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
     /** Whether saves are being refused because the rows couldn't be read. */
     val savesRefused: Boolean get() = SafeFile.isBlocked(file)
 
+    /** How the rows' load went this session. */
+    val health: coffee.crema.persist.StoreHealth get() = coffee.crema.persist.Stores.health(file)
+
     /** The series of each of [ids] that has a series file, by id. On IO; at
      *  startup it runs after the rows are shown. */
     suspend fun loadSeries(ids: Collection<String>): Map<String, List<TelemetrySample>> =
