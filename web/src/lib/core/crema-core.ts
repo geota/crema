@@ -1731,7 +1731,7 @@ export type Event =
 	weight_configured?: number;
 	/**
 	 * Why [`weight`] is not armed despite [`weight_configured`] being set
-	 * — `"no-scale"` or `"untared-cup"`. `None` when the leg is armed,
+	 * — `"no-scale"`, `"began-unseen"` or `"untared-cup"`. `None` when the leg is armed,
 	 * nothing is configured, or the user turned the stop off (a choice,
 	 * not an impediment).
 	 */
@@ -1768,13 +1768,14 @@ export type Event =
 	peak_temp?: number;
 	/**
 	 * Peak scale weight observed across every ScaleReading of the shot,
-	 * grams. `None` when no scale was paired (no readings arrived).
+	 * grams. `None` when no scale was paired (no readings arrived), or
+	 * the shot began before the app saw it (its readings include the cup).
 	 */
 	peak_weight?: number;
 	/**
 	 * The final scale weight observed before the shot ended, grams —
 	 * the "shot yield". `None` when no scale was paired (no readings
-	 * arrived).
+	 * arrived), or the shot began before the app saw it.
 	 */
 	final_weight?: number;
 	/**

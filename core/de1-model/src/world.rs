@@ -1,8 +1,9 @@
 //! One simulated session: the real core against the simulator.
 
 use de1_app::{Command, CoreOutput, CremaCore, Event, Source, WriteTarget};
+use de1_domain::session::ActiveMode;
 use de1_domain::{BrewDefaults, BrewOverrides, ConnectSweepSettings, CremaProfile, StopReason};
-use de1_protocol::{MachineState, ShotSettings};
+use de1_protocol::{MachineState, ShotSettings, SubState};
 use std::time::Duration;
 
 use crate::invariants::{Invariant, Violation};
@@ -104,6 +105,8 @@ pub struct Coverage {
     pub retries: u32,
     /// `SkipToNext` writes.
     pub skips: u32,
+    /// Sessions first seen flowing.
+    pub unseen: u32,
     /// Tares.
     pub tares: u32,
     /// `ScaleStale`.
@@ -142,6 +145,12 @@ pub struct World {
     read_only: bool,
     pre_flush: bool,
     was_down: bool,
+    /// A state has reached the core on this link.
+    state_heard_on_link: bool,
+    /// I6's own reading of the session the core should have open.
+    open_mode: Option<ActiveMode>,
+    /// Whether that session began before the core saw it.
+    unseen: bool,
     reported: Option<[u8; 2]>,
     heard: Option<MachineState>,
     /// Shot samples the core has received.
@@ -192,6 +201,9 @@ impl World {
             read_only,
             pre_flush,
             was_down: false,
+            state_heard_on_link: false,
+            open_mode: None,
+            unseen: false,
             reported: None,
             heard: None,
             samples_heard: 0,
@@ -325,6 +337,7 @@ impl World {
                     self.coverage.drops += 1;
                     self.link.down_until = Some(self.now + ms);
                     self.lane.clear();
+                    self.state_heard_on_link = false;
                     let out = self.core.de1_link_lost();
                     self.ingest(out, Who::Core);
                     self.was_down = true;
@@ -337,6 +350,9 @@ impl World {
                 self.apply_targets();
                 self.reported = None;
                 self.heard = None;
+                self.state_heard_on_link = false;
+                self.open_mode = None;
+                self.unseen = false;
                 self.lane.clear();
                 self.stale_open = false;
                 self.dead_open = false;
@@ -416,10 +432,55 @@ impl World {
             self.stopped_this_flow = false;
         }
         self.heard = Some(self.de1.state);
+        self.track_session(bytes[1]);
         let out = self
             .core
             .on_notification(Source::De1State, &bytes, self.now);
         self.ingest(out, Who::Core);
+    }
+
+    /// I6's oracle, apart from the core's own session: a mode opens unseen
+    /// only on the first state of a link, past the pre-flow substates.
+    fn track_session(&mut self, substate: u8) {
+        let first = !std::mem::replace(&mut self.state_heard_on_link, true);
+        let mode = ActiveMode::of(self.de1.state);
+        if mode == self.open_mode {
+            return;
+        }
+        self.open_mode = mode;
+        let pre_flow = [
+            SubState::Ready,
+            SubState::Heating,
+            SubState::FinalHeating,
+            SubState::Stabilising,
+        ]
+        .iter()
+        .any(|s| *s as u8 == substate);
+        self.unseen = !self.read_only && mode.is_some() && first && !pre_flow;
+        let weighs = matches!(mode, Some(ActiveMode::Espresso | ActiveMode::HotWater))
+            && self.scale.is_some()
+            && self.weight_target().is_some();
+        if self.unseen && weighs {
+            self.coverage.unseen += 1;
+        }
+    }
+
+    /// I6 both ways: the core's reading of the session matches the oracle's.
+    /// "No scale" outranks the reason, and a core attached during an outage
+    /// has no scale until the shells' next connect.
+    fn check_session(&mut self) {
+        let blocked = self.core.weight_stop_blocked_by();
+        if self.scale.is_none() || self.weight_target().is_none() || blocked == Some("no-scale") {
+            return;
+        }
+        let core_unseen = blocked == Some("began-unseen");
+        if core_unseen != self.unseen {
+            let unseen = self.unseen;
+            self.violate(
+                Invariant::I6,
+                format!("core says unseen {core_unseen}, oracle {unseen}"),
+            );
+        }
     }
 
     fn step(&mut self) {
@@ -470,6 +531,7 @@ impl World {
             let out = self.core.on_tick(self.now);
             self.ingest(out, Who::Core);
         }
+        self.check_session();
     }
 
     fn land(&mut self, write: Write) {
@@ -558,6 +620,9 @@ impl World {
                     }
                 }
                 Command::WriteScale { data } => {
+                    if weight_is_tare(&data) && self.unseen {
+                        self.violate(Invariant::I6, "tare while unseen".into());
+                    }
                     if weight_is_tare(&data)
                         && let Some(scale) = &mut self.scale
                     {
@@ -600,6 +665,9 @@ impl World {
                 match reason {
                     StopReason::Weight => {
                         self.coverage.weight_stops += 1;
+                        if self.unseen {
+                            self.violate(Invariant::I6, "weight stop while unseen".into());
+                        }
                         if !self.read_only
                             && let Some(target) = self.weight_target()
                             && self.cup.grams < target - WEIGHT_TOLERANCE_G
@@ -628,6 +696,9 @@ impl World {
                 let Some(&byte) = data.first() else { return };
                 if byte == MachineState::SkipToNext as u8 {
                     self.coverage.skips += 1;
+                    if self.unseen {
+                        self.violate(Invariant::I6, "SkipToNext while unseen".into());
+                    }
                     self.skips_since_sample += 1;
                     if self.skips_since_sample > 1 {
                         self.violate(Invariant::I7, "two skips with no sample between".into());

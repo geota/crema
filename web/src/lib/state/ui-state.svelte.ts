@@ -195,7 +195,7 @@ export interface StopTargetsView {
 	 *  configured stays on screen when a scale drops instead of vanishing. */
 	readonly weightConfiguredG: number | null;
 	/** Why `weightG` is null despite `weightConfiguredG` being set —
-	 *  `'no-scale'` or `'untared-cup'`; null when armed, unset, or the user
+	 *  `'no-scale'`, `'began-unseen'` or `'untared-cup'`; null when armed, unset, or the user
 	 *  turned the stop off (a choice, not an impediment). */
 	readonly weightBlocked: string | null;
 }
@@ -1662,4 +1662,16 @@ export function setHotWaterTarget(target: HotWaterTarget | null): void {
 export function getCremaUiState(): CremaUiState {
 	if (!cremaUiState) cremaUiState = new CremaUiState();
 	return cremaUiState;
+}
+
+/** The note on a configured weight stop that can't fire. */
+export function weightBlockedNote(blocked: string | null): string {
+	switch (blocked) {
+		case 'began-unseen':
+			return 'Started before Crema connected';
+		case 'untared-cup':
+			return 'cup not tared';
+		default:
+			return 'no scale';
+	}
 }

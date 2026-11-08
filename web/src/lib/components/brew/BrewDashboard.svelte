@@ -54,6 +54,7 @@
 		NoActiveProfileError,
 		ProfileSyncFailedError,
 		ScaleRequiredError,
+		weightBlockedNote,
 		type UiSnapshot
 	} from '#lib/state/index.js';
 	import { ShotPhase, MachineState, MmrRegister, HotWaterMode } from '#lib/core/crema-core.js';
@@ -1164,7 +1165,7 @@
 				target: yieldTarget.value,
 				unit: yieldTarget.unit,
 				pct: 0,
-				note: stopTargets.weightBlocked === 'untared-cup' ? 'cup not tared' : 'no scale'
+				note: weightBlockedNote(stopTargets.weightBlocked)
 			});
 		if (maxVolumeCardVisible)
 			out.push({

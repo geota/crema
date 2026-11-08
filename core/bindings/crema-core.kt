@@ -1494,7 +1494,7 @@ data class EventStopTargetsArmedInner (
 	/// with a reason, rather than silently dropping it.
 	val weight_configured: Float? = null,
 	/// Why [`weight`] is not armed despite [`weight_configured`] being set
-	/// — `"no-scale"` or `"untared-cup"`. `None` when the leg is armed,
+	/// — `"no-scale"`, `"began-unseen"` or `"untared-cup"`. `None` when the leg is armed,
 	/// nothing is configured, or the user turned the stop off (a choice,
 	/// not an impediment).
 	val weight_blocked: String? = null
@@ -1525,11 +1525,12 @@ data class EventShotCompletedInner (
 	/// sample of the shot, °C. `None` when no telemetry arrived.
 	val peak_temp: Float? = null,
 	/// Peak scale weight observed across every ScaleReading of the shot,
-	/// grams. `None` when no scale was paired (no readings arrived).
+	/// grams. `None` when no scale was paired (no readings arrived), or
+	/// the shot began before the app saw it (its readings include the cup).
 	val peak_weight: Float? = null,
 	/// The final scale weight observed before the shot ended, grams —
 	/// the "shot yield". `None` when no scale was paired (no readings
-	/// arrived).
+	/// arrived), or the shot began before the app saw it.
 	val final_weight: Float? = null,
 	/// What the shell should do with this shot — record it, discard it
 	/// as an aborted pull (behind an undo), or skip it entirely as a

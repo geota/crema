@@ -34,6 +34,8 @@
 //!   [`Event::HotWaterTarget`] carries it; a shell re-reads
 //!   [`CremaCore::hot_water_target_json`] after its own input changes.
 
+use std::time::Duration;
+
 use de1_domain::{
     HOT_WATER_FIRMWARE, HotWaterContext, HotWaterTarget, resolve_hot_water, sanitize_hot_water_dose,
 };
@@ -43,14 +45,21 @@ use crate::{
     Command, CoreOutput, CremaCore, Event, STEAM_TIMEOUT_MAX_S, SteamHotWaterTargets, WriteTarget,
 };
 
-/// The DE1 connection the profile sync and the packet sync share: the link
-/// generation (bumped by every drop and teardown, kept across
-/// [`CremaCore::reset`]) and whether this generation's on-ready connect
-/// sweep has run.
+/// The DE1 connection the profile sync, the packet sync and the session share:
+/// the link generation (bumped by every drop and teardown, kept across
+/// [`CremaCore::reset`]), whether this generation's on-ready connect sweep has
+/// run, whether a `StateInfo` has arrived on it, and when the last drop was.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LinkSession {
     pub(crate) generation: u32,
     pub(crate) settled: bool,
+    /// A `StateInfo` arrived on this generation's link: the core's last state
+    /// is this connection's, not one from before the drop. "Link up" means
+    /// this; it comes before the on-ready sweep.
+    pub(crate) state_seen: bool,
+    /// When the last drop happened, for an outage's length. A teardown has no
+    /// outage to measure: no session survives it.
+    pub(crate) lost_at: Option<Duration>,
 }
 
 /// The states a packet write waits out: water is flowing.
