@@ -238,9 +238,9 @@ pub struct World {
     replacing: bool,
     /// The core heard this espresso session flow on an unknown substate.
     unknown_flow: bool,
-    /// A load changed on this espresso's scale while no readings were
-    /// arriving, and the core can't see it (§3.5's known limit): before the
-    /// gate, where `Tared` has no returning check; after it, only a load the
+    /// A load moved on this espresso's scale where the core can't see it
+    /// (§3.5's known limits): between the last zero and first flow with no
+    /// tare after it; or while no readings were arriving, before the gate, where `Tared` has no returning check; after it, only a load the
     /// returning check or the step band accepts. It reads as coffee, so I13
     /// is skipped for the rest of the session: not only while the load stays,
     /// because once the core's gate opens with the load in its reading, `last`
@@ -248,6 +248,9 @@ pub struct World {
     /// model shrank that to a true 29.8 g of 36). A load seen arriving on a
     /// live reading, or one the core refuses, is judged.
     unseen_load: bool,
+    /// This espresso's first reading at flow has been checked for a load that
+    /// moved since the last zero.
+    flow_checked: bool,
     /// The oracle's gate: since when the true cup has held 5 g with the
     /// scale reporting, and whether that held 1 s.
     gate_since: Option<u64>,
@@ -335,6 +338,7 @@ impl World {
             replacing: false,
             unknown_flow: false,
             unseen_load: false,
+            flow_checked: false,
             gate_since: None,
             gate_seen: false,
             last_cup_g: 0.0,
@@ -666,6 +670,19 @@ impl World {
         if !pouring {
             return;
         }
+        // A load that moved between the last zero and first flow, with no tare
+        // after it, reads as coffee: the late-cup re-tare missed it and the
+        // step detector watches only a flowing session (§3.5's known limit,
+        // #389).
+        if !std::mem::replace(&mut self.flow_checked, true)
+            && self
+                .scale
+                .as_ref()
+                .is_some_and(|s| s.load_moved_since_zero(self.now))
+            && !std::mem::replace(&mut self.unseen_load, true)
+        {
+            self.coverage.unseen_loads += 1;
+        }
         let gap_ms = self
             .last_weight_ms
             .map_or(u64::MAX, |at| self.now.saturating_sub(at));
@@ -702,6 +719,7 @@ impl World {
     /// I13's zero for a new espresso session: what the scale reads now.
     fn scale_zero_at_open(&mut self) {
         self.unseen_load = false;
+        self.flow_checked = false;
         self.gate_since = None;
         self.gate_seen = false;
         self.last_cup_g = self.true_cup_g();

@@ -911,3 +911,18 @@ fn a_returning_scale_outside_the_band_is_refused() {
         );
     }
 }
+
+/// §3.5's known limit (#389): a spoon set down during preheat, just before
+/// flow, too late for the late-cup re-tare and before the step detector
+/// watches, reads as coffee. The oracle skips I13 for exactly that: a load
+/// that moved between the last zero and first flow, with no tare after it.
+#[test]
+fn a_load_set_down_just_before_flow_is_the_known_limit() {
+    let mut world = World::new(De1Params::default(), 50.0, 5_000, false, false);
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    world.apply(&Op::Advance { ms: 1_100 });
+    world.apply(&Op::Scale(ScaleMode::StepUp { grams: 5.0 }));
+    world.apply(&Op::Advance { ms: 90_000 });
+    assert_eq!(world.coverage.unseen_loads, 1);
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}

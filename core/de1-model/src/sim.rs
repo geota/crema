@@ -413,6 +413,8 @@ pub struct SimScale {
     /// user's own zero, with auto-tare off). A re-zero or a load arriving later
     /// doesn't move it.
     tared_cup_g: f32,
+    /// The load on the scale when that zero was set, grams.
+    zeroed_load_g: f32,
     /// It zeroed itself since the world last asked.
     rezeroed: bool,
     tare_at: Option<u64>,
@@ -429,6 +431,7 @@ impl SimScale {
             bump_ends_at: None,
             zero_g: 0.0,
             tared_cup_g: 0.0,
+            zeroed_load_g: 0.0,
             rezeroed: false,
             tare_at: None,
             tare_latency_ms,
@@ -470,6 +473,7 @@ impl SimScale {
             self.tare_at = None;
             self.zero_g = gross;
             self.tared_cup_g = cup_g;
+            self.zeroed_load_g = gross - cup_g;
         }
         let net = gross - self.zero_g;
         match self.mode {
@@ -513,6 +517,13 @@ impl SimScale {
         self.tared_cup_g = cup_g;
     }
 
+    /// Whether the load on the scale differs from the one its zero was set
+    /// with: something landed or lifted since the last tare.
+    #[must_use]
+    pub fn load_moved_since_zero(&self, now: u64) -> bool {
+        self.load_now(now) != self.zeroed_load_g
+    }
+
     /// What's on the scale besides the cup at `now`, grams, without moving
     /// the bump's clock.
     #[must_use]
@@ -529,6 +540,7 @@ impl SimScale {
     pub fn session_opened(&mut self, now: u64, cup_g: f32) -> f32 {
         let reads = cup_g + self.load_now(now) - self.zero_g;
         self.tared_cup_g = cup_g - reads;
+        self.zeroed_load_g = self.load_now(now);
         reads
     }
 
