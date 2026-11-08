@@ -237,7 +237,7 @@ fn the_projection_carries_the_blocked_note() {
     assert_eq!(json["weightBlocked"], "scale-lost");
     assert_eq!(
         json["weightBlockedNote"],
-        "Scale lost before the cup had weight. Stop this shot by hand."
+        "Scale stopped reporting. Stop this shot by hand."
     );
 }
 
@@ -306,4 +306,61 @@ fn unit_recovery_frames_are_alive_but_never_fresh() {
             .any(|e| matches!(e, Event::ScaleLinkDead { .. })),
         "alive: no teardown"
     );
+}
+
+/// Review of #369: auto-tare off, the packet at 250 ml, and the scale's last
+/// reading 2 s old as the pour starts, so no weight target is armed. Fresh
+/// readings then make the weight trusted, but with no weight stop armed the
+/// `V` leg must stay live: the pour stops at 120 ml, not at 250.
+#[test]
+fn hot_water_with_no_armed_weight_stop_keeps_its_volume_leg() {
+    let mut core = hot_water_core();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    assert_eq!(
+        core.steam_hotwater_settings
+            .as_ref()
+            .map(|p| p.hot_water_volume_ml),
+        Some(250.0),
+        "the backstop packet"
+    );
+    core.on_notification(Source::De1State, &[6, 5], 2_000);
+    assert_eq!(core.hot_water_stop_target_g, None, "stale at the start");
+    let stops = pour(&mut core, 2_100, 62_000, |t| {
+        Some((t.saturating_sub(2_100)) as f32 * 0.006)
+    });
+    let (reason, ml) = stops.first().copied().expect("an app stop");
+    assert_eq!(reason, StopReason::Volume);
+    assert!((120.0..130.0).contains(&ml), "stopped at {ml} ml");
+}
+
+/// Review of #369: a Half Decent Scale asleep while water flows isn't
+/// dormant: its wake is due at state entry, and a lost one must reach the
+/// dead timeout and the backstop.
+#[test]
+fn a_sleeping_hds_in_a_flowing_shot_reaches_the_dead_timeout() {
+    let mut core = CremaCore::new();
+    core.connect_scale("Decent Scale", &[]);
+    core.set_profile_target_weight(Some(36.0));
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(
+        Source::ScaleWeight,
+        &[0x03, 0x0A, 0x01, 0x01, 0x50, 0x03, 0x1E],
+        10,
+    );
+    core.on_notification(
+        Source::ScaleWeight,
+        &[0x03, 0x22, 0x00, 0x29, 0x00, 0x00, 0x08],
+        20,
+    );
+    core.on_notification(Source::De1State, &[4, 5], 100);
+    // The scale goes to SoftSleep and its wake is lost.
+    let _ = core.hds.as_mut().and_then(HdsNegotiation::enter_sleep);
+    core.session.as_mut().expect("a session").tared();
+    assert_ne!(
+        core.scale_link(),
+        de1_domain::scale_trust::ScaleLink::Dormant
+    );
+    core.on_tick(7_000);
+    assert!(core.scale_link().is_gone());
+    assert_eq!(core.stop_targets_projection().1.volume, Some(114.0));
 }

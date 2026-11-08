@@ -11,7 +11,7 @@ import org.junit.Test
 class StopTargetsViewLabelTest {
     @Test
     fun theLabelIsTheCoresNote() {
-        val note = "Scale lost before the cup had weight. Stop this shot by hand."
+        val note = "Scale stopped reporting. Stop this shot by hand."
         assertEquals(note, StopTargetsView(weightBlocked = "scale-lost", weightBlockedNote = note).weightBlockedLabel)
         assertEquals(null, StopTargetsView().weightBlockedLabel)
     }
