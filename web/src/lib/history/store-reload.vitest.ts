@@ -46,6 +46,12 @@ describe('HistoryStore reload', () => {
 		expect(reload().get('shot:private')?.privacy).toBe('private');
 	});
 
+	it('the Visualizer version survives a reload', () => {
+		const store = new HistoryStore();
+		store.insertPulled(makeShot('shot:v', { visualizerUpdatedAt: 1_700_000_000 }));
+		expect(reload().get('shot:v')?.visualizerUpdatedAt).toBe(1_700_000_000);
+	});
+
 	it('AC-F1.2 decentId, machine and bean grinder survive a reload', () => {
 		const store = new HistoryStore();
 		store.insertPulled(
@@ -119,6 +125,7 @@ describe('HistoryStore reload', () => {
 			privacy: 'unlisted',
 			visualizerId: 'vis-1',
 			decentId: 'dec-1',
+			visualizerUpdatedAt: 1_700_000_000,
 			machine,
 			deletedAt: 1_700_000_100_000,
 			brewMethod: 'custom:abc',
