@@ -61,6 +61,33 @@ export async function putSeries(id: string, samples: readonly TimedSample[]): Pr
 	}
 }
 
+/**
+ * Store many series on one connection, in strict transactions of `batch`
+ * rows each: a restore's 300 shots in 12 commits, not 300 connections.
+ * Throws at the first batch that fails; the ones before it stand.
+ */
+export async function putManySeries(
+	rows: readonly { id: string; samples: readonly TimedSample[] }[],
+	batch = 25
+): Promise<void> {
+	if (rows.length === 0) return;
+	const db = await openDb();
+	try {
+		for (let i = 0; i < rows.length; i += batch) {
+			const tx = db.transaction(STORE, 'readwrite', { durability: 'strict' });
+			const store = tx.objectStore(STORE);
+			for (const r of rows.slice(i, i + batch)) store.put(r.samples as TimedSample[], r.id);
+			await new Promise<void>((resolve, reject) => {
+				tx.oncomplete = () => resolve();
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error);
+			});
+		}
+	} finally {
+		db.close();
+	}
+}
+
 /** Load every stored series, keyed by shot id. */
 export async function getAllSeries(): Promise<Map<string, TimedSample[]>> {
 	const db = await openDb();

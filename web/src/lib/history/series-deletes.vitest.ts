@@ -3,6 +3,7 @@
  * write that removes the row, and never because a listing doesn't name them.
  * Runs the real stores over an in-memory IndexedDB.
  */
+import { readMarker } from '#lib/restore/marker.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import type { TimedSample } from '#lib/core/index.js';
@@ -241,10 +242,12 @@ describe('rebasing', () => {
 		await getCaptureStore().put('later', []);
 		await settle();
 
-		restoreBackup(backup.jsonl, 'wipe');
+		await restoreBackup(backup.jsonl, 'wipe');
 		await settle();
 		expect(history.rawAll.map((s) => s.id)).toEqual(['kept']);
+		// The removed row's curve and capture wait for the marker's hour.
 		expect(await captureIds()).toEqual(['kept', 'later']);
-		expect(await seriesIds()).toEqual(['kept']);
+		expect(await seriesIds()).toEqual(['kept', 'later']);
+		expect(readMarker()?.deletes.shots).toEqual(['later']);
 	});
 });

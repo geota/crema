@@ -257,6 +257,12 @@ export class CustomMethodStore {
 		return added.length;
 	}
 
+	/** The methods a restore leaves, tombstones included, in one write. Whether it was stored. */
+	restore(methods: CustomBrewMethod[]): boolean {
+		this.methods = methods;
+		return writeJsonChecked(METHODS_KEY, this.methods);
+	}
+
 	private persist(): void {
 		writeJsonChecked(METHODS_KEY, this.methods);
 	}

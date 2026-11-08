@@ -43,6 +43,7 @@ import {
 	clearAllSeries,
 	deleteSeries,
 	getAllSeries,
+	putManySeries,
 	putSeries
 } from './series-store';
 import {
@@ -365,6 +366,43 @@ export class HistoryStore {
 	/** Whether a new brew dated `at` would stay in the history once added. */
 	fitsHistory(at: number): boolean {
 		return fitsHistory(this.all, at, MAX_RECORDS);
+	}
+
+	/**
+	 * A restore's history (restore-safety step 7). The series go first, with no
+	 * change to memory, so rows never name a series that isn't written; then
+	 * memory, {@link known} and the rows write happen in one task, so an edit
+	 * can't reach a half-applied history. Nothing is deleted here or evicted:
+	 * the restore's marker owns its deletes. `series` are the rows whose curve
+	 * to write. Says whether the rows were stored, and how many curves weren't.
+	 */
+	async restoreRows(
+		plan: (rows: readonly StoredShot[]) => { next: StoredShot[]; series: StoredShot[] },
+		writeSeries: (rows: readonly StoredShot[]) => Promise<void> = (rows) =>
+			putManySeries(rows.map((s) => ({ id: s.id, samples: s.record.samples })))
+	): Promise<{ stored: boolean; curvesFailed: number }> {
+		const first = plan(this.shots).series.filter((s) => s.record.samples.length > 0);
+		let curvesFailed = 0;
+		try {
+			await writeSeries(first);
+		} catch {
+			curvesFailed = first.length;
+		}
+		// After the last await: rows recorded, rated or bound while the series
+		// were written are in `this.shots`, and the plan runs over them.
+		const { next, series } = plan(this.shots);
+		const written = new Set(first.map((s) => s.id));
+		for (const s of series) {
+			// A row the recompute found anew keeps its curve in memory and
+			// writes it now, as any new row does.
+			if (!written.has(s.id) && s.record.samples.length > 0) {
+				void putSeries(s.id, s.record.samples).catch(seriesSaveFailed);
+			}
+		}
+		this.shots = next;
+		if (this.writeRows() !== 'ok') return { stored: false, curvesFailed };
+		this.markLive(next.map((s) => s.id));
+		return { stored: true, curvesFailed };
 	}
 
 	/** Wipe all recorded shots — for a "replace from backup" restore. */
@@ -1264,7 +1302,7 @@ function coerceRow(item: unknown): StoredShot | null {
  *
  * Returns `null` only when the record is too corrupt to recover.
  */
-function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
+export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 	const tagsRaw = obj.tags;
 	const tags = Array.isArray(tagsRaw)
 		? tagsRaw.filter((t): t is string => typeof t === 'string')

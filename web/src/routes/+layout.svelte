@@ -35,6 +35,7 @@
 	} from '#lib/restore/tab-safety.js';
 	import { FLASH_HANDOVER, FLASH_RUNNING } from '#lib/firmware/firmware-update.svelte.js';
 	import { commitFrozenShots } from '#lib/history/shot-persistence.js';
+	import { checkRestoreMarker } from '#lib/restore/boot.js';
 	import PhoneTopBar from '#lib/shell/PhoneTopBar.svelte';
 	import PhoneTabBar from '#lib/shell/PhoneTabBar.svelte';
 	import { showsPhoneTabs } from '#lib/shell/nav-items.js';
@@ -195,7 +196,10 @@
 		// boot knows it isn't frozen too.
 		const bootRuntime = runtime;
 		void bootChecked.then(() => {
-			if (!restoreFrozen()) void commitFrozenShots(bootRuntime);
+			if (restoreFrozen()) return;
+			void commitFrozenShots(bootRuntime);
+			// A restore this browser didn't finish, or deletes one still owes.
+			void checkRestoreMarker();
 		});
 		// Keep the cached Visualizer Premium flag (it gates the edit sync's
 		// Premium-only PATCH fields) fresh: re-probe at most once per 24 h.

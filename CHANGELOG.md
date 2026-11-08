@@ -90,6 +90,23 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   offers to archive it, which also drops it as the active bag, and then to rate
   it if it has no rating, as web does. Android.
 
+### Changed
+
+- **Restore shows what it will do first (web)** — after you pick a backup, Crema
+  reads it strictly and works out what changes. A clean Merge runs at once and
+  then says what it added; a Merge with warnings, and every Replace, shows the
+  numbers first, and Replace offers Back up first. Merge now keeps your
+  settings, maintenance counters, Visualizer preferences and every bean or shot
+  you already have, unless the device is still as a fresh install left it, and
+  it fills in curves this device lost. A shot you deleted here stays deleted,
+  unless you choose to bring it back. Replace deletes only what the backup
+  doesn't have, keeps what an older backup never carried, and refuses a
+  damaged backup or one that would empty the device. Shots that a restore
+  removes keep their curves for an hour, in case the browser loses the
+  restore. A restore interrupted part-way says so at the next launch. Other
+  Crema tabs reload once it finishes. Shots a frozen tab kept come back
+  without their raw capture and don't resend the webhook.
+
 ### Fixed
 
 - **Tag edits reach Visualizer without undoing the website's** — on Premium, a
