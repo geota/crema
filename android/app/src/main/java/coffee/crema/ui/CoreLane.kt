@@ -143,7 +143,10 @@ internal class CoreLane(
             when (command) {
                 Command.Stop -> executeStop()
                 Command.CancelStop -> cancelStaleStop()
-                else -> {}
+                // Run below, the scale writes on their own, the DE1 writes as
+                // one ordered batch. No `else`: a new command must fail the
+                // build here, not be dropped.
+                is Command.WriteScale, is Command.WriteCharacteristic -> {}
             }
         }
         val de1Writes = output.commands.filterIsInstance<Command.WriteCharacteristic>()

@@ -1215,6 +1215,12 @@ export class CremaApp {
 				}
 				break;
 			}
+			default: {
+				// Every command the core can send has a case: a new one fails
+				// the build here instead of being dropped, a stop above all.
+				const unhandled: never = command;
+				this.state.log(`Unknown core command dropped: ${JSON.stringify(unhandled)}`);
+			}
 		}
 	}
 
