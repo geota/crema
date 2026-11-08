@@ -15,6 +15,8 @@ import { TokenVault } from './token-vault.ts';
 
 vi.mock('#lib/history/series-store.js', () => ({
 	putSeries: async () => {},
+	addSeries: async () => true,
+	getSeriesOf: async () => new Map(),
 	getAllSeries: async () => new Map(),
 	deleteSeries: async () => {},
 	pruneSeriesTo: async () => {},
@@ -188,5 +190,24 @@ describe('a pull at the cap', () => {
 
 		expect(refused).toBe(0);
 		expect(history.all).toHaveLength(2);
+	});
+});
+
+describe('a row another tab just wrote (#380 review S1)', () => {
+	it('is held while its curve may still be on its way, and not backfilled', async () => {
+		const history = new HistoryStore();
+		history.insertPulled(localShot('shot:a', 'vis-1'));
+		vi.spyOn(history, 'seriesPending').mockImplementation((id) => id === 'shot:a');
+		const pulled = [{ elapsed: 0, sample: { groupPressure: 1 } }] as never;
+		const applied = await Effect.runPromise(
+			Effect.provide(
+				Effect.flatMap(ShotSync, (s) =>
+					s.applyShotReconciliation(history, [remoteShot('vis-1')], new Map([['vis-1', pulled]]), undefined, undefined, true)
+				),
+				layer
+			)
+		);
+		expect(applied.held).toBe(1);
+		expect(history.get('shot:a')?.record.samples).toEqual([]);
 	});
 });
