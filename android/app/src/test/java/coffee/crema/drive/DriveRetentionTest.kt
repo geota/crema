@@ -179,6 +179,8 @@ class DriveRetentionTest {
         blocked: String? = null,
         newestDamage: Long? = null,
         damageSeen: Long? = null,
+        damage: Map<String, Long> = newestDamage?.let { mapOf(LIB to it) } ?: emptyMap(),
+        seenByStore: Map<String, Long> = damageSeen?.let { mapOf(LIB to it) } ?: emptyMap(),
         preDamage: String? = null,
         lastSuccess: Long? = null,
         seen: (DriveSync) -> Unit = {},
@@ -187,7 +189,7 @@ class DriveRetentionTest {
         store.save(
             DriveState(
                 tokens = tokens, lastAutoBackupAtMs = lastAuto, lastBackupSuccessAtMs = lastSuccess,
-                autoBackupKeep = keep, autoBackupTag = tag, damageSeenMs = damageSeen, preDamageCopy = preDamage,
+                autoBackupKeep = keep, autoBackupTag = tag, damageSeen = seenByStore, preDamageCopy = preDamage,
             ),
         )
         val sync = DriveSync(
@@ -199,7 +201,7 @@ class DriveRetentionTest {
             applyRestore = { _, _ -> },
             refreshToken = { error("no refresh expected") },
             autoBackupBlocked = { blocked },
-            newestDamageMs = { newestDamage },
+            damageByStore = { damage },
         )
         sync.load()
         sync.autoBackupIfDue(true)
@@ -283,7 +285,7 @@ class DriveRetentionTest {
         seed(8)
         val state = dailyBackup(keep = 1, newestDamage = now - day / 2)
         assertEquals("tablet0", state.preDamageCopy)
-        assertEquals(now - day / 2, state.damageSeenMs)
+        assertEquals(mapOf(LIB to now - day / 2), state.damageSeen)
         assertEquals((1..7).map { "tablet$it" }.toSet(), trashed.toSet())
     }
 
@@ -326,7 +328,57 @@ class DriveRetentionTest {
         val state = dailyBackup(lastAuto = now - 2 * day, newestDamage = now - day / 2)
         assertTrue(drive.none { it.first == "new" }, "nothing uploaded")
         assertEquals(now - 2 * day, state.lastAutoBackupAtMs, "not stamped")
-        assertEquals(null, state.damageSeenMs)
+        assertEquals(emptyMap(), state.damageSeen)
+    }
+
+    @Test
+    fun aListingThatKeepsFailingSaysSoInSettings() {
+        seed(3)
+        listFails = true
+        var paused: String? = null
+        dailyBackup(newestDamage = now - day / 2, seen = { paused = it.state.value.autoBackupPaused })
+        assertEquals("Daily backup paused: couldn't check Google Drive.", paused)
+    }
+
+    @Test
+    fun aSecondDamageSoonAfterKeepsThePinOnTheGoodCopy() {
+        // Review fix check: damage A pinned tablet3; the copies since are thin.
+        // Damage B, in another store, mustn't move the slot onto one of them.
+        seed(8)
+        val state = dailyBackup(
+            keep = 1,
+            preDamage = "tablet3",
+            seenByStore = mapOf(LIB to now - 4 * day),
+            damage = mapOf(LIB to now - 4 * day, PROFILES to now - day / 2),
+        )
+        assertEquals("tablet3", state.preDamageCopy)
+        assertTrue("tablet3" !in trashed, "$trashed")
+        assertEquals(now - day / 2, state.damageSeen[PROFILES])
+    }
+
+    @Test
+    fun aPinOlderThanThirtyDaysGivesWayToANewDamage() {
+        seed(40)
+        val state = dailyBackup(
+            keep = 1,
+            preDamage = "tablet35",
+            seenByStore = mapOf(LIB to now - 36 * day),
+            damage = mapOf(LIB to now - day / 2),
+        )
+        assertEquals("tablet0", state.preDamageCopy)
+    }
+
+    @Test
+    fun aDamageStampedEarlierByAClockSetBackStillCounts() {
+        // Review low item: the clock went back, so the profiles' quarantine has
+        // an earlier time than the library's from before. Per store, it's new.
+        seed(8)
+        val state = dailyBackup(
+            keep = 1,
+            seenByStore = mapOf(LIB to now),
+            damage = mapOf(LIB to now, PROFILES to now - 5 * day),
+        )
+        assertEquals("tablet0", state.preDamageCopy)
     }
 
     @Test
@@ -536,6 +588,8 @@ class DriveRetentionTest {
     }
 
     private companion object {
+        const val LIB = "beanLibrary.json"
+        const val PROFILES = "customProfiles.json"
         const val PAGE = 100
         const val TAG = "abc123"
     }

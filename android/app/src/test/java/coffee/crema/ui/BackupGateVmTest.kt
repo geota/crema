@@ -55,7 +55,7 @@ class BackupGateVmTest {
     fun aHealthyAppBacksUp() {
         val vm = vm()
         assertEquals(null, vm.autoBackupBlocked())
-        assertEquals(null, vm.newestDamageMs())
+        assertEquals(emptyMap(), vm.damageByStore())
     }
 
     @Test
@@ -86,7 +86,7 @@ class BackupGateVmTest {
         val before = System.currentTimeMillis()
         val vm = vm()
         assertEquals("your bean library couldn't be read", vm.autoBackupBlocked())
-        val since = assertNotNull(vm.newestDamageMs())
+        val since = assertNotNull(vm.damageByStore()["beanLibrary.json"])
         assertTrue(since >= before, "$since < $before")
 
         // The next launch reads the store fine, but the kept copy still dates it.
@@ -96,21 +96,22 @@ class BackupGateVmTest {
         Stores.resetForTest()
         val next = vm()
         assertEquals(null, next.autoBackupBlocked())
-        assertEquals(since, next.newestDamageMs())
+        assertEquals(since, next.damageByStore()["beanLibrary.json"])
         SafeFile.keptAside(library).forEach { it.delete() }
-        assertEquals(null, next.newestDamageMs())
+        assertEquals(emptyMap(), next.damageByStore())
     }
 
     @Test
     fun theNewestDamageAcrossTheStoresCountsSettingsToo() {
         File(app.filesDir, "customProfiles.json.corrupt-1000").writeText("x")
         File(app.filesDir, "beanLibrary.json.corrupt-kept-2000").writeText("x")
-        assertEquals(2000L, vm().newestDamageMs())
+        assertEquals(mapOf("customProfiles.json" to 1000L, "beanLibrary.json" to 2000L), vm().damageByStore())
         // A store's newest kept copy counts, not its oldest.
         File(app.filesDir, "prefs.json.corrupt-500").writeText("x")
         File(app.filesDir, "prefs.json.corrupt-3000").writeText("x")
         File(app.filesDir, "maintenance.json.corrupt-2500").writeText("x")
-        assertEquals(3000L, vm().newestDamageMs())
+        assertEquals(3000L, vm().damageByStore()["prefs.json"])
+        assertEquals(2500L, vm().damageByStore()["maintenance.json"])
         assertTrue(profiles.parentFile!!.listFiles()!!.any { it.name.endsWith("corrupt-1000") })
     }
 
