@@ -525,7 +525,7 @@ describe('the #363 review', () => {
 });
 
 describe('added beans, only for the same backup (DECISIONS §7)', () => {
-	it('an interrupted restore A says nothing about a Merge of backup B', async () => {
+	it('an interrupted restore A carries to A again, from a file or Drive, and not to backup B', async () => {
 		const a = await backupOf(['n1'], ['s1'], () => 'n1');
 		captureMessages(new FakeLocks());
 		const clean = await planNow(a, 'merge', false, new FakeLocks());
@@ -536,13 +536,31 @@ describe('added beans, only for the same backup (DECISIONS §7)', () => {
 
 		// A re-run of A: the bean it added isn't the device's own bag.
 		expect((await planNow(a, 'merge', false, new FakeLocks())).shots.zeroDebit).toEqual([]);
-		// Backup B, another file with that bean: for B the bag is here.
-		const b = prepareBackup(a.jsonl, 'another backup');
+		// The same backup from Drive: still the same backup, by its header.
+		const fromDrive = prepareBackup(a.jsonl, 'crema-backup-tablet-20261108-0800.crema.zip');
+		const again = await planNow(fromDrive, 'merge', false, new FakeLocks());
+		expect(again.shots.zeroDebit).toEqual([]);
+		// Backup B, made at another time, with that bean: for B the bag is here.
+		const text = new TextDecoder().decode(a.jsonl).split('\n');
+		const header = JSON.parse(text[0]) as Record<string, unknown>;
+		const b = prepareBackup([JSON.stringify({ ...header, createdAt: 42 }), ...text.slice(1)].join('\n'), 'another backup');
 		const forB = await planNow(b, 'merge', false, new FakeLocks());
 		expect(forB.shots.zeroDebit).toEqual(['s1']);
 		await runRestore(b, 'merge', { expected: forB }, deps(new FakeLocks(), { failAt: 'profiles' }));
 		expect(readMarker()?.backupName).toBe('another backup');
 		expect(readMarker()?.addedBeans).toEqual([]);
+	});
+
+	it('a restore of A from a file, cut off, then run again from Drive, keeps its debits', async () => {
+		const a = await backupOf(['n1'], ['s1'], () => 'n1');
+		captureMessages(new FakeLocks());
+		const fromFile = prepareBackup(a.jsonl, 'crema-backup.crema.zip');
+		const first = await planNow(fromFile, 'merge', false, new FakeLocks());
+		await runRestore(fromFile, 'merge', { expected: first }, deps(new FakeLocks(), { failAt: 'profiles' }));
+		const fromDrive = prepareBackup(a.jsonl, 'crema-backup-tablet-20261108-0800.crema.zip');
+		const again = await planNow(fromDrive, 'merge', false, new FakeLocks());
+		expect((await runRestore(fromDrive, 'merge', { expected: again }, deps(new FakeLocks()))).kind).toBe('done');
+		expect(getHistoryStore().get('s1')?.bagDebit).toBe(18);
 	});
 });
 

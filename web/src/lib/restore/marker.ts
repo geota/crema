@@ -38,13 +38,13 @@ export interface RestoreMarker {
 	deletes: MarkerDeletes;
 	/** Beans this restore added, across re-runs: not this device's own bag for `zeroDebit`. */
 	addedBeans?: string[];
-	/** The backup's header `createdAt`: with `backupName`, which backup `addedBeans` belong to. */
-	backupCreatedAt?: number | null;
+	/** Which backup `addedBeans` belong to: its header's identity (see `PreparedBackup.identity`). */
+	backupId?: string;
 }
 
-/** Whether `m` is an interrupted run of the backup `name`, made at `createdAt`. */
-export function isRunOf(m: RestoreMarker, name: string, createdAt: number | null): boolean {
-	return m.phase === 'applying' && m.backupName === name && (m.backupCreatedAt ?? null) === createdAt;
+/** Whether `m` is an interrupted run of the backup with `identity`, from Drive or a file alike. */
+export function isRunOf(m: RestoreMarker, identity: string): boolean {
+	return m.phase === 'applying' && m.backupId === identity;
 }
 
 const union = (a: readonly string[], b: readonly string[]): string[] => [...new Set([...a, ...b])];
@@ -79,11 +79,11 @@ export function beginMarker(
 	deletes: MarkerDeletes,
 	now: number = Date.now(),
 	addedBeans: readonly string[] = [],
-	backupCreatedAt: number | null = null
+	backupId = ''
 ): boolean {
 	const prior = readMarker();
 	// Deletes owed stay whatever the backup; added beans only for a re-run of the same one.
-	const same = prior !== null && isRunOf(prior, backupName, backupCreatedAt);
+	const same = prior !== null && backupId !== '' && isRunOf(prior, backupId);
 	const marker: RestoreMarker = {
 		phase: 'applying',
 		mode,
@@ -94,7 +94,7 @@ export function beginMarker(
 			photos: union(prior?.deletes.photos ?? [], deletes.photos)
 		},
 		addedBeans: union(same ? (prior?.addedBeans ?? []) : [], addedBeans),
-		backupCreatedAt
+		backupId
 	};
 	return writeJsonChecked(MARKER_KEY, marker);
 }

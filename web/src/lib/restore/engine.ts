@@ -81,8 +81,12 @@ export interface PreparedBackup {
 	readonly photos: ReadonlyMap<string, Uint8Array>;
 	/** The core's `BackupManifest`, as JSON. */
 	readonly manifestJson: string;
-	/** The header's `createdAt`, or null when it didn't read: with {@link name}, which backup this is. */
-	readonly createdAt: number | null;
+	/**
+	 * Which backup this is, by its header (`createdAt`, device, app version),
+	 * so the same backup from Drive or from a file is the same; the file name
+	 * stands in only when the header didn't read.
+	 */
+	readonly identity: string;
 }
 
 function isZip(b: Uint8Array): boolean {
@@ -116,8 +120,15 @@ export function prepareBackup(data: ArrayBuffer | Uint8Array | string, name: str
 		}
 	}
 	const manifestJson = scanBackupBytes(jsonl, JSON.stringify([...photos.keys()]));
-	const header = (JSON.parse(manifestJson) as { header?: { createdAt?: number } | null }).header;
-	return { name, jsonl, photos, manifestJson, createdAt: header?.createdAt ?? null };
+	const header = (
+		JSON.parse(manifestJson) as {
+			header?: { createdAt?: number; deviceLabel?: string; appVersion?: string } | null;
+		}
+	).header;
+	const identity = header
+		? JSON.stringify([header.createdAt ?? null, header.deviceLabel ?? '', header.appVersion ?? ''])
+		: JSON.stringify(['file', name]);
+	return { name, jsonl, photos, manifestJson, identity };
 }
 
 /** Whether another tab has a shot or flash: the busy lock is held somewhere. */
@@ -240,10 +251,10 @@ export async function planNow(
 	locks: LockManagerLike | undefined = defaultLocks()
 ): Promise<RestorePlan> {
 	const local = await buildLocalState(locks);
-	// A re-run after an interrupted one of this same backup (name and header
-	// `createdAt`, DECISIONS §7): the beans it added aren't this device's own bag.
+	// A re-run after an interrupted one of this same backup, by its header
+	// (DECISIONS §7): the beans it added aren't this device's own bag.
 	const m = readMarker();
-	const addedBeans = m && isRunOf(m, prepared.name, prepared.createdAt) ? (m.addedBeans ?? []) : [];
+	const addedBeans = m && isRunOf(m, prepared.identity) ? (m.addedBeans ?? []) : [];
 	return planFor(prepared, mode, { ...local, addedBeans } as LocalState, reviveDeleted);
 }
 
@@ -629,7 +640,7 @@ async function applyPlan(
 				{ shots: plan.shots.remove, photos: plan.photos.remove },
 				now(),
 				plan.beans.add,
-				prepared.createdAt
+				prepared.identity
 			)
 		))
 	) {
