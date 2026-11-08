@@ -43,8 +43,8 @@
 //! a link drop and a reset send [`Command::CancelStop`]. The core alone never
 //! bounces a flow through Idle, never sleeps a session, and runs maintenance
 //! only from Idle or Sleep; a start may bounce its own flush and the flow that
-//! ran when Start was tapped. A user's request released from the guard counts
-//! as the core's.
+//! ran when Start was tapped. A request released from the guard keeps its
+//! standing: it goes out only in the state it was made in.
 //!
 //! **Wake hint.** Whenever the earliest deadline the core is waiting for
 //! changes, it emits [`Event::WakeAt`] with that time (the shell's clock, the
@@ -132,8 +132,8 @@ pub(crate) enum Initiator {
     /// The app's own shot start: its flush and its Espresso, which may bounce
     /// the flow that was running when the user tapped Start.
     Start,
-    /// The core on its own: a stop, a skip, the purge, idle sleep, a
-    /// maintenance release, or a user's request released from the guard.
+    /// The core on its own: a stop, a skip, the purge, idle sleep or a
+    /// maintenance release.
     Core,
 }
 
@@ -262,13 +262,10 @@ impl CremaCore {
                 }
             } else if clear {
                 self.request_guard.held = None;
-                // The release is the core's (§3.7); a start keeps its own
-                // standing, since its release is still the user's start.
-                let initiator = match held.initiator {
-                    Initiator::User => Initiator::Core,
-                    other => other,
-                };
-                self.request_state(held.state, initiator, out);
+                // The release keeps the request's standing: the machine is
+                // still in the state it was tapped in (a change drops it, and
+                // the user hears), so the user's intent still stands.
+                self.request_state(held.state, held.initiator, out);
                 // The profile sync waited for it — but not after a flow
                 // state: the last state report still reads Idle, and an
                 // upload must not chase a machine entering Steam (F7.5). The

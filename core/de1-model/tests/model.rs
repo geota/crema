@@ -68,6 +68,12 @@ fn user_op() -> impl Strategy<Value = Op> {
         5 => flow_mode().prop_map(Op::GroupHead),
         2 => prop_oneof![Just(18.0f32), Just(36.0f32)].prop_map(|yield_g| Op::AppStart { yield_g }),
         2 => Just(Op::UserStop),
+        1 => prop_oneof![
+            Just(MachineState::Steam),
+            Just(MachineState::HotWater),
+            Just(MachineState::HotWaterRinse)
+        ]
+        .prop_map(Op::AppRequest),
         1 => target().prop_map(Op::SetProfileTarget),
         1 => target().prop_map(Op::Dial),
         1 => prop_oneof![Just(None), Just(Some(36.0f32)), Just(Some(80.0f32))]
@@ -467,5 +473,19 @@ fn a_flow_begun_after_the_tap_stands_the_start_down() {
     world.apply(&Op::GroupHead(MachineState::Steam));
     world.apply(&Op::Advance { ms: 40_000 });
     assert_eq!(world.coverage.started, 0);
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// Review of #364, departure 4: Steam tapped while hot water pours and a
+/// profile uploads waits out the guard, then goes out as the user's tap.
+#[test]
+fn a_users_held_tap_goes_out_once_the_guard_clears() {
+    let mut world = plain_world();
+    world.apply(&Op::AppStart { yield_g: 36.0 });
+    world.apply(&Op::GroupHead(MachineState::HotWater));
+    world.apply(&Op::Advance { ms: 100 });
+    world.apply(&Op::AppRequest(MachineState::Steam));
+    world.apply(&Op::Advance { ms: 3_000 });
+    assert_eq!(world.coverage.held_releases, 1, "{:?}", world.requests);
     assert!(world.violations.is_empty(), "{:?}", world.violations);
 }

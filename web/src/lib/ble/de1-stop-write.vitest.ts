@@ -6,10 +6,10 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { CremaCore } from '#lib/core/index.js';
-import { WriteTarget } from '#lib/core/crema-core.js';
+import { MachineState, WriteTarget } from '#lib/core/crema-core.js';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { de1WriteTargetUuid } from '#lib/wasm/de1_wasm.js';
-import { De1Manager } from './de1';
+import { De1Manager, STOP_BYTE } from './de1';
 
 type Written = { uuid: string; data: number[]; urgent: boolean };
 
@@ -29,6 +29,18 @@ beforeAll(async () => {
 });
 
 describe('De1Manager.writeStop', () => {
+	it("writes the byte the core's own Idle request carries", async () => {
+		const { loadCore } = await import('#lib/core/index.js');
+		const core = await loadCore();
+		core.reset();
+		// No flow session: the core's Idle is a plain write of its Idle byte.
+		const out = await core.requestMachineState(MachineState.Idle);
+		const idle = out.commands.find(
+			(c) => c.type === 'WriteCharacteristic' && c.content.target === WriteTarget.De1RequestedState
+		);
+		expect(idle?.type === 'WriteCharacteristic' && idle.content.data).toEqual([STOP_BYTE]);
+	});
+
 	it('writes Idle to the requested-state characteristic on the urgent lane', async () => {
 		const written: Written[] = [];
 		const m = manager({
@@ -41,7 +53,7 @@ describe('De1Manager.writeStop', () => {
 		});
 		await expect(m.writeStop(() => true)).resolves.toBe(true);
 		expect(written).toEqual([
-			{ uuid: de1WriteTargetUuid(WriteTarget.De1RequestedState), data: [0x02], urgent: true }
+			{ uuid: de1WriteTargetUuid(WriteTarget.De1RequestedState), data: [STOP_BYTE], urgent: true }
 		]);
 	});
 
@@ -67,6 +79,6 @@ describe('De1Manager.writeStop', () => {
 			}
 		});
 		await expect(m.writeStop(() => true)).resolves.toBe(true);
-		expect(written.map((w) => w.data)).toEqual([[0x02]]);
+		expect(written.map((w) => w.data)).toEqual([[STOP_BYTE]]);
 	});
 });

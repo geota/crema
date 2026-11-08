@@ -177,10 +177,11 @@ fn a_mirror_sends_no_machine_state_request() {
     }
 }
 
-/// A user's request held by the guard is released by the core, so it can't
-/// bounce a flow, even the one that was running when it was made.
+/// A user's request held by the guard goes out as the user's: tapped Steam
+/// while hot water pours and a profile uploads, it bounces the pour once the
+/// guard clears, as an unheld tap would.
 #[test]
-fn a_held_request_released_into_a_flow_is_refused() {
+fn a_users_held_request_goes_out_as_tapped() {
     let mut core = connected();
     let upload = core
         .upload_profile(
@@ -198,8 +199,15 @@ fn a_held_request_released_into_a_flow_is_refused() {
     );
     ack(&mut core, &upload, 2_200);
     let out = core.on_tick(3_000);
-    assert!(plain_writes(&out).is_empty(), "{:?}", out.commands);
-    // The same request with the machine idle goes out on release.
+    assert_eq!(
+        plain_writes(&out),
+        [byte(MachineState::Idle), byte(MachineState::Steam)]
+    );
+}
+
+/// A held request whose machine moved on is dropped, and the user hears.
+#[test]
+fn a_held_request_is_dropped_if_the_machine_moves_on() {
     let mut core = connected();
     let upload = core
         .upload_profile(
@@ -208,9 +216,15 @@ fn a_held_request_released_into_a_flow_is_refused() {
         )
         .expect("an upload");
     core.request_machine_state(MachineState::Steam);
+    report(&mut core, HOT_WATER, 2_100);
     ack(&mut core, &upload, 2_200);
     let out = core.on_tick(3_000);
-    assert_eq!(plain_writes(&out), [byte(MachineState::Steam)]);
+    assert!(plain_writes(&out).is_empty());
+    assert!(
+        out.events
+            .iter()
+            .any(|e| matches!(e, Event::MachineRequestDropped { .. }))
+    );
 }
 
 fn profile(yield_out: f32) -> CremaProfile {

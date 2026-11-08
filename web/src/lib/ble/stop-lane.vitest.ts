@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GattQueue } from './transport';
 import { StopLane } from './stop-lane';
-import { STOP_BYTE } from './de1';
 
 /** A write that waits for `release`, recording its guard's verdict. */
 function gate() {
@@ -96,9 +95,5 @@ describe('StopLane', () => {
 		hold.release();
 		await expect(stop).resolves.toBe(false);
 		expect(sent).toBe(false);
-	});
-
-	it('writes the Idle byte', () => {
-		expect(STOP_BYTE).toBe(0x02);
 	});
 });

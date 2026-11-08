@@ -39,6 +39,8 @@ pub enum Op {
     },
     /// The user taps Stop.
     UserStop,
+    /// The user taps a mode in the app: Steam, Hot water or Flush.
+    AppRequest(MachineState),
     /// The profile's yield changes.
     SetProfileTarget(Option<f32>),
     /// The user dials a yield.
@@ -109,6 +111,8 @@ pub struct Coverage {
     pub stop_commands: u32,
     /// App starts tapped while another flow ran.
     pub starts_over_a_flow: u32,
+    /// A user's held request released into a flow request.
+    pub held_releases: u32,
     /// Sessions first seen flowing.
     pub unseen: u32,
     /// Tares.
@@ -155,6 +159,9 @@ pub struct World {
     starting: bool,
     /// The profiles an app start has used, one per yield.
     profiles: Vec<CremaProfile>,
+    /// A user's request the core is holding for the profile-download guard:
+    /// its release is still the user's.
+    user_held: Option<u8>,
     /// The flow heard when Start was tapped, until the machine leaves it.
     start_from: Option<MachineState>,
     /// I6's own reading of the session the core should have open.
@@ -218,6 +225,7 @@ impl World {
             starting: false,
             start_from: None,
             profiles: Vec::new(),
+            user_held: None,
             open_mode: None,
             unseen: false,
             reported: None,
@@ -307,6 +315,10 @@ impl World {
             Op::AppStart { yield_g } => self.app_start(yield_g),
             Op::UserStop => {
                 let out = self.core.request_machine_state(MachineState::Idle);
+                self.ingest(out, Who::User);
+            }
+            Op::AppRequest(state) => {
+                let out = self.core.request_machine_state(state);
                 self.ingest(out, Who::User);
             }
             Op::SetProfileTarget(g) => {
@@ -705,6 +717,8 @@ impl World {
             Event::WaterSessionStarted { .. } => self.coverage.water += 1,
             Event::SteamSessionStarted => self.coverage.steam += 1,
             Event::StopRetried { .. } => self.coverage.retries += 1,
+            Event::MachineRequestHeld { state } => self.user_held = Some(*state as u8),
+            Event::MachineRequestDropped { .. } => self.user_held = None,
             Event::ShotStartEnded { end, .. } => {
                 self.starting = false;
                 self.start_from = None;
@@ -784,9 +798,16 @@ impl World {
                 // the user asked.
                 let start_bounce =
                     self.starting && self.heard.is_some() && self.heard == self.start_from;
+                // A user's request released from the guard is still the user's.
+                let user_release = who == Who::Core && self.user_held == Some(byte);
+                if user_release {
+                    self.user_held = None;
+                    self.coverage.held_releases += 1;
+                }
                 if who == Who::Core
                     && flow_request
                     && !start_bounce
+                    && !user_release
                     && let Some(heard) = self.heard
                     && heard.is_flow_state()
                     && heard != MachineState::HotWaterRinse
