@@ -14,6 +14,7 @@ import io.ktor.http.headersOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
@@ -67,8 +68,12 @@ class VisualizerPullRunTest {
 
     private fun addRows(n: Int) = repeat(n) { k -> rows += Triple("r$k", t0 + k * 100, t0 + 10_000 + k) }
 
+    /** Holds every list request until completed, when set. */
+    @Volatile private var listGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
     private val engine = MockEngine { req ->
         val url = req.url
+        if (url.encodedPath == "/api/shots") listGate?.await()
         requests += "${req.method.value} ${url.encodedPath}${url.encodedQuery.takeIf { it.isNotEmpty() }?.let { "?$it" }.orEmpty()}"
         val headers = headersOf(HttpHeaders.ContentType, "application/json")
         val path = url.encodedPath
@@ -99,6 +104,7 @@ class VisualizerPullRunTest {
                     else -> respond(
                         buildJsonObject {
                             put("id", id); put("duration", 30); put("profile_title", "P"); put("drink_weight", "36")
+                            rows.firstOrNull { it.first == id }?.let { put("updated_at", it.third) }
                             putJsonArray("timeframe") { add("0.0"); add("0.25") }
                             putJsonObject("data") {
                                 putJsonArray("espresso_pressure") { add("9.0"); add("9.0") }
@@ -134,7 +140,7 @@ class VisualizerPullRunTest {
             clientId = "cid",
             appVersion = "t",
             notify = {},
-            onShotSynced = { _, _ -> },
+            onShotSynced = { local, remote -> history[local]?.let { history[local] = it.copy(visualizerId = remote) } },
             onPulledShots = { stubs ->
                 stubs.forEach { history[it.id] = it }
                 emptySet()
@@ -321,6 +327,45 @@ class VisualizerPullRunTest {
         assertEquals(0, runBlocking { v.drainRetryQueue() })
         assertEquals(0, stored().retryQueue.single().attempts)
         assertEquals(emptyList<String>(), requests)
+    }
+
+    @Test
+    fun `two remote copies of one shot bind it once - the second is added`() {
+        val completedAt = 1_700_000_000_000L
+        history["local"] = StoredShot(id = "local", completedAtMs = completedAt, durationMs = 30_000, samples = listOf(sample))
+        val key = (completedAt - 30_000) / 1000
+        rows += Triple("copy-a", key, t0 + 1)
+        rows += Triple("copy-b", key, t0 + 2)
+        val v = sync(VisualizerState(pullCursorEpoch = 1))
+        run(v)
+        assertEquals("copy-b", history["local"]?.visualizerId)
+        assertEquals(listOf("copy-a"), history.values.filter { it.id != "local" }.mapNotNull { it.visualizerId })
+    }
+
+    @Test
+    fun `a poison row that comes through takes the detail's updated_at as its version`() {
+        addRows(1)
+        val v = sync(VisualizerState(pullCursorEpoch = 1, rowFailures = listOf(PoisonEntry("r0", 3u, clock - 1, 0, clock - 1))))
+        run(v)
+        assertEquals(t0 + 10_000, history.values.single { it.visualizerId == "r0" }.visualizerUpdatedAt)
+        assertEquals("the walk skips it: up to date", listOf("GET /api/shots/r0"), details())
+    }
+
+    @Test
+    fun `one run at a time - a second while one walks is Busy and sends nothing`() {
+        addRows(2)
+        val v = sync(VisualizerState(pullCursorEpoch = 1))
+        listGate = kotlinx.coroutines.CompletableDeferred()
+        val first = CoroutineScope(Dispatchers.Default).launch { v.pullRun(emptyList()) }
+        repeat(200) { if (requests.isEmpty()) Thread.sleep(10) }
+        val sent = requests.size
+        // Bounded: without the lock, the second run would wait on the gate too.
+        val second = runBlocking { kotlinx.coroutines.withTimeoutOrNull(5_000) { v.pullRun(emptyList()) } }
+        val whileHeld = requests.size
+        listGate!!.complete(Unit)
+        runBlocking { first.join() }
+        assertEquals("Busy", second?.let(::kind))
+        assertEquals("the second sent nothing", sent, whileHeld)
     }
 
     private suspend fun withFreshTokenList(v: VisualizerSync) = client.listShotsPage("tok", 1, 100, null)
