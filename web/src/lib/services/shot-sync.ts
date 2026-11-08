@@ -1142,7 +1142,7 @@ export const ShotSyncLive = Layer.effect(
 			if (readSyncConfig().accountUnconfirmed) return yield* new NotAuthenticatedError();
 			yield* requireConnected;
 			// A restore, here or in another tab: its rows aren't settled yet.
-			if (restoring()) return { ...BUSY, outcome: { kind: 'Busy', restore: true } };
+			if (restoring()) return { ...BUSY, outcome: { kind: 'Busy', restore: true } } satisfies PullApplied;
 			const release = yield* Effect.promise(acquireRunLock);
 			if (!release) return BUSY;
 			return yield* walk(history, opts).pipe(
