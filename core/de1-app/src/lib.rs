@@ -35,6 +35,7 @@ mod scale_robustness_tests;
 #[cfg(test)]
 mod scale_trust_tests;
 pub mod shot_start;
+mod stop_control;
 mod sweep;
 #[cfg(test)]
 mod unknown_substate_tests;
@@ -76,6 +77,7 @@ use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
 use de1_domain::scale_trust::{
     ScaleLink, ScaleWatch, WeightAuthority, prospective_authority, weight_authority,
 };
+use de1_domain::session::SessionChange;
 use de1_domain::session::{ActiveMode, Baseline, Blocked, Observed, Session, is_pre_flow};
 use de1_domain::stop::{LegContext, ResolvedLegs, StopIntent, resolve_legs};
 use de1_domain::{
@@ -131,7 +133,7 @@ pub use de1_scale::Scale as ScaleId;
 
 /// Scale sensor lag assumed when no scale is connected — a representative
 /// value across the supported scales (380 ms, the legacy default).
-const DEFAULT_SCALE_LAG: Duration = Duration::from_millis(380);
+pub(crate) const DEFAULT_SCALE_LAG: Duration = Duration::from_millis(380);
 /// How long an `ErrorNoAc` (217) episode must persist before it is surfaced
 /// as a fault. The DE1 reports it spuriously for "about three seconds" while
 /// waking or heating (Decenza #1893, firmware v1363); a snapshot cannot tell
@@ -587,20 +589,23 @@ pub struct CremaCore {
     /// SAW only fires if a scale is connected and an effective target
     /// weight resolves > 0 (see [`effective_target_weight`](Self::effective_target_weight)).
     stop_on_weight: bool,
-    /// A stop we commanded that the machine has not honoured yet — the
-    /// re-emit enforcer's state (issue #15: one lost or stalled BLE write
-    /// must not let the shot pour past its target; the stop is re-commanded
-    /// until the shot actually ends).
-    pending_stop: Option<PendingStop>,
+    /// A link's first espresso state found the session flowing: the frame
+    /// evidence it waits for before any retry (see [`stop_control`]).
+    outage_check: Option<stop_control::OutageCheck>,
+    /// The frame the last espresso sample was on.
+    last_frame: Option<u8>,
+    /// Samples at or over the flow-proof threshold since the last stop write.
+    flow_proof: u32,
+    /// The flush timeout the core last wrote, the bound on a flush outage.
+    flush_timeout: Option<Duration>,
     /// The last [`Event::StopTargetsArmed`] payload pushed, so the reporter
     /// only emits on change (arming, a late scale, a toggle) — compared on
     /// every scale reading / telemetry sample, both cheap `Copy` structs.
     reported_stop_targets: Option<(bool, StopTargets, Option<f32>, Option<&'static str>)>,
     /// Whether [`push_stop`](Self::push_stop) fired at least once THIS shot
     /// (reset at `ShotEvent::Started`, set in `push_stop` alongside
-    /// [`Event::StopTriggered`]). Distinct from [`pending_stop`](Self::pending_stop),
-    /// which can already be cleared by the time `ShotEvent::Completed` is
-    /// handled — this survives to that point so `Completed` can tell "the app
+    /// [`Event::StopTriggered`]). Distinct from the session's stop, which
+    /// has closed by the time `ShotEvent::Completed` is handled — this survives to that point so `Completed` can tell "the app
     /// stopped this shot" apart from "the DE1's own profile timing ended it
     /// on its own", the latter being invisible to the app's own stop-target
     /// arming (a profile whose frames physically can't reach an armed target
@@ -1072,7 +1077,10 @@ impl CremaCore {
             auto_tare: true,
             tare_gate: None,
             stop_on_weight: true,
-            pending_stop: None,
+            outage_check: None,
+            last_frame: None,
+            flow_proof: 0,
+            flush_timeout: None,
             reported_stop_targets: None,
             stop_triggered_this_shot: false,
             weight_target_disabled: false,
@@ -1631,6 +1639,13 @@ impl CremaCore {
             self.drop_held_request();
             return out;
         }
+        // A Stop with a flow running is the session's: owed until the machine
+        // winds down.
+        if state == MachineState::Idle && self.session.is_some() && !self.read_only {
+            self.drop_held_request();
+            self.user_stop(self.clock, &mut out);
+            return out;
+        }
         self.issue_state_request(state, Initiator::User, &mut out);
         out
     }
@@ -1983,10 +1998,12 @@ impl CremaCore {
     /// MMR `0x803848`, 4-byte LE (one MMR word). TCL `de1_comms.tcl:1199`
     /// and reaprime `de1.models.dart:flushTimeout writeScale: 10.0`
     /// both write a 4-byte payload with Len=4; matched here.
-    pub fn set_flush_timeout(&self, dur: Duration) -> CoreOutput {
+    pub fn set_flush_timeout(&mut self, dur: Duration) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_flush_timeout") {
             return out;
         }
+        // The bound on a flush outage (see `stop_control`).
+        self.flush_timeout = Some(dur);
         // Scale ms-resolution into deciseconds (the legacy `int(10 * s)` form).
         // RS6: `try_from` over `as` — the `.min(65_535)` already bounds it, so the
         // `unwrap_or(MAX)` is unreachable, but it drops the cast + the `#[allow]`.
@@ -3248,6 +3265,8 @@ impl CremaCore {
         self.poll_scale_watch(now, &mut out);
         // A scale going stale or dead changes the legs with no reading.
         self.refresh_auto_stop_targets();
+        // An owed stop is retried on the clock, with no telemetry at all.
+        self.enforce_owed_stop(now, &mut out);
         for event in self.steam.on_tick(now) {
             self.map_steam_event(event, &mut out);
         }
@@ -3609,12 +3628,19 @@ impl CremaCore {
             out.events.push(Event::UnknownMachineByte { byte });
         }
         let first_on_link = self.link_state_seen(info, out);
-        let before = self.session.map(|s| s.mode);
-        self.session = Session::on_state(self.session, info, first_on_link);
-        // A closed session owes nothing: a stop still queued would land on
-        // whatever the machine does next (§3.3).
-        if before.is_some() && before != self.session.map(|s| s.mode) {
+        let (session, change) = Session::on_state(self.session, info, first_on_link);
+        self.session = session;
+        // A closed or replaced session owes nothing: a stop still queued would
+        // land on whatever the machine does next (§3.3).
+        if matches!(change, SessionChange::Closed | SessionChange::Replaced) {
             out.commands.push(Command::CancelStop);
+            self.outage_check = None;
+        }
+        if change == SessionChange::Kept {
+            self.stop_on_state(info, now, out);
+            if first_on_link {
+                self.stop_on_return(info, now, out);
+            }
         }
         if self.last_state != Some(info) {
             let prev_info = self.last_state;
@@ -3712,15 +3738,34 @@ impl CremaCore {
         } else {
             self.no_ac_since = None;
         }
-        for event in self.monitor.on_state_info(info, now) {
+        // A new pour in the same mode: the monitor completes the old one and
+        // starts this, so every per-shot reset runs on the one path.
+        let split = change == SessionChange::Replaced;
+        let events = if split {
+            self.monitor.split(info, now)
+        } else {
+            self.monitor.on_state_info(info, now)
+        };
+        for event in events {
             self.map_shot_event(event, now, out);
         }
-        for event in self.water.on_state_info(info, now) {
+        let events = if split {
+            self.water.split(info, now)
+        } else {
+            self.water.on_state_info(info, now)
+        };
+        for event in events {
             self.map_water_event(event, now, out);
         }
-        for event in self.steam.on_state_info(info, now) {
+        let events = if split {
+            self.steam.split(info, now)
+        } else {
+            self.steam.on_state_info(info, now)
+        };
+        for event in events {
             self.map_steam_event(event, out);
         }
+        self.enforce_owed_stop(now, out);
     }
 
     /// Decode and process a `ShotSample` telemetry notification.
@@ -3734,6 +3779,21 @@ impl CremaCore {
                 return;
             }
         };
+        // Proof of flow counts before anything this sample sends.
+        self.note_flow_proof(sample.group_flow);
+        // A link's first espresso state waits for this sample's frame: a lower
+        // one is a new shot, begun unseen during the outage.
+        if self.monitor.is_shot_in_progress()
+            && self.settle_outage_on_sample(sample.frame_number, now, out)
+            && let Some(info) = self.last_state
+        {
+            for event in self.monitor.split(info, now) {
+                self.map_shot_event(event, now, out);
+            }
+        }
+        if self.monitor.is_shot_in_progress() {
+            self.last_frame = Some(sample.frame_number);
+        }
         // A skip needs telemetry newer than its last write.
         self.step_weight.on_evidence(now);
         // The mixed-frame skip deferral reads the live pressure / flow.
@@ -3782,7 +3842,7 @@ impl CremaCore {
             .and_then(|stop| stop.on_sample(&sample, now, pour_ml));
         self.push_stop(reason, now, out);
         self.check_hot_water_volume_leg(pour_ml, now, out);
-        self.enforce_pending_stop(now, out);
+        self.enforce_owed_stop(now, out);
         self.report_stop_targets(out);
         // `Event::Telemetry.elapsed` is `u32` milliseconds — what the FFI
         // surface carries — so convert the `Duration` once at this boundary.
@@ -4037,7 +4097,7 @@ impl CremaCore {
             .as_mut()
             .and_then(|stop| stop.on_weight(net_weight, now));
         self.push_stop(reason, now, out);
-        self.enforce_pending_stop(now, out);
+        self.enforce_owed_stop(now, out);
         self.report_stop_targets(out);
         self.check_step_weight_exit(estimate, now, out);
         // Hot-water-by-weight: stop the pour at the user's volume (1 ml ≈
@@ -5641,10 +5701,9 @@ impl CremaCore {
                                     || targets.max_time.is_some())
                         })
                         && !self.stop_triggered_this_shot;
-                // The stop was honoured (or the shot ended some other way) —
-                // stand the enforcer down and reset the arming reporter so
-                // the NEXT shot re-announces its targets.
-                self.pending_stop = None;
+                // Reset the arming reporter so the NEXT shot re-announces its
+                // targets.
+                self.last_frame = None;
                 self.reported_stop_targets = None;
                 // End-of-shot latch reset (review #26): the untared-cup
                 // guard's virtual zero is a PER-SHOT correction — left
@@ -5787,91 +5846,6 @@ impl CremaCore {
         }
     }
 
-    /// Construct the [`AutoStop`] the first time the shot reaches a flowing
-    /// phase, so its arming delay counts from flow start, not heating start.
-    ///
-    /// The targets are composed fresh from the latched user settings via
-    /// [`effective_stop_targets`](Self::effective_stop_targets), so any
-    /// setting changes between shots are picked up automatically without a
-    /// cached-tuple staleness window.
-    fn arm_auto_stop_if_flowing(&mut self, phase: ShotPhase, now: Duration) {
-        if self.auto_stop.is_some() {
-            return;
-        }
-        if !matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring) {
-            return;
-        }
-        // A weight target arms an auto-stop even with no leg live yet: at
-        // first flow the tare is often still landing, so weight is pending,
-        // and the leg goes live when it's trusted. Without this the shot
-        // would never stop on weight (the #316.1 shape, which PR 7 closes for
-        // every leg).
-        let targets = self.effective_stop_targets().or_else(|| {
-            self.weight_intent().map(|_| StopTargets {
-                weight: None,
-                volume: None,
-                max_time: None,
-            })
-        });
-        if let Some(targets) = targets {
-            let mut stop = AutoStop::new(targets, self.stop_config(), now);
-            self.attach_drip_model(&mut stop, targets.weight.is_some());
-            self.auto_stop = Some(stop);
-        }
-    }
-
-    /// Attach the learned-drip snapshot to an [`AutoStop`] whose weight leg
-    /// is armed — the SAW-learning threshold (see `de1_domain::saw_learning`).
-    /// Keyed by (active profile title, scale label); a shot with no weight
-    /// target keeps the legacy config untouched.
-    fn attach_drip_model(&self, stop: &mut AutoStop, weight_armed: bool) {
-        if !weight_armed {
-            return;
-        }
-        let profile = self.last_active_profile_title.as_deref().unwrap_or("");
-        let scale_label = self.scale.as_ref().map_or("", |s| s.label());
-        let snapshot = self.saw_model.snapshot(profile, scale_label);
-        let lag = self
-            .scale
-            .as_ref()
-            .map_or(DEFAULT_SCALE_LAG, Scale::sensor_lag)
-            .as_secs_f64();
-        stop.set_drip_model(snapshot, lag);
-    }
-
-    /// Re-compose an armed [`AutoStop`]'s targets after a mid-shot change to
-    /// stop-relevant state (scale connect / disconnect, the stop toggles, the
-    /// target setters). [`arm_auto_stop_if_flowing`](Self::arm_auto_stop_if_flowing)
-    /// arms exactly once per shot — and since max-shot-time is almost always
-    /// set, it arms even before the scale has registered, which used to bake
-    /// `weight: None` in for the whole shot (issue #15's intermittent SAW
-    /// failure). No-op between shots (no `AutoStop` armed).
-    fn refresh_auto_stop_targets(&mut self) {
-        if self.auto_stop.is_none() {
-            return;
-        }
-        let targets = self.effective_stop_targets().unwrap_or(StopTargets {
-            weight: None,
-            volume: None,
-            max_time: None,
-        });
-        let weight_armed = targets.weight.is_some();
-        if self
-            .auto_stop
-            .as_ref()
-            .is_some_and(|s| s.targets() == targets)
-        {
-            return;
-        }
-        if let Some(mut stop) = self.auto_stop.take() {
-            stop.set_targets(targets);
-            // A weight leg arriving mid-shot (scale registered late) also
-            // needs the learned-drip snapshot it missed at arm time.
-            self.attach_drip_model(&mut stop, weight_armed);
-            self.auto_stop = Some(stop);
-        }
-    }
-
     /// The [`StopConfig`] for a new [`AutoStop`] — the legacy four-term SAW
     /// lead, using the connected scale's sensor lag.
     fn stop_config(&self) -> StopConfig {
@@ -5889,8 +5863,7 @@ impl CremaCore {
     /// frame, re-sent while the DE1 stays on the frame, never with no scale,
     /// and never on the last frame while a SAW target is armed.
     fn check_step_weight_exit(&mut self, estimate: Estimate, now: Duration, out: &mut CoreOutput) {
-        if self.shot_started.is_none() || self.flow_started.is_none() || self.pending_stop.is_some()
-        {
+        if self.shot_started.is_none() || self.flow_started.is_none() || self.stop_in_hand() {
             return;
         }
         let projected =
@@ -5934,93 +5907,6 @@ impl CremaCore {
         self.hot_water_stop_target_g = None;
         self.hot_water_pour = None;
         self.push_stop(Some(StopReason::Volume), now, out);
-    }
-
-    /// Push a [`StopReason`], when one occurred, as a [`Event::StopTriggered`]
-    /// plus the [`Command`] that actually stops the machine — and arm the
-    /// re-emit enforcer: from here the stop is OWED, and
-    /// [`enforce_pending_stop`](Self::enforce_pending_stop) re-commands it
-    /// until the shot actually ends (issue #15).
-    fn push_stop(&mut self, reason: Option<StopReason>, now: Duration, out: &mut CoreOutput) {
-        if let Some(reason) = reason {
-            self.stop_triggered_this_shot = true;
-            self.shot_stop_reason.get_or_insert(reason);
-            out.events.push(Event::StopTriggered { reason });
-            self.request_state(MachineState::Idle, Initiator::Core, out);
-            if self.pending_stop.is_none() {
-                self.pending_stop = Some(PendingStop {
-                    reason,
-                    last_push: now,
-                    attempts: 0,
-                });
-            }
-        }
-    }
-
-    /// The stop enforcer (issue #15): while a commanded stop is pending and
-    /// the shot is still running, re-push the Idle write every
-    /// [`STOP_REENFORCE_AFTER`] (up to [`STOP_REENFORCE_MAX`] times). Runs on
-    /// every scale reading and telemetry sample — the streams that are, by
-    /// definition, still flowing if the machine ignored us. A lost write, a
-    /// stalled GATT queue, or a mid-write drop all self-heal on the next
-    /// beat; the retries are visible as [`Event::StopRetried`] so a field
-    /// report shows exactly how hard the app fought.
-    fn enforce_pending_stop(&mut self, now: Duration, out: &mut CoreOutput) {
-        if self.pending_stop.is_none() {
-            return;
-        }
-        // The shot ended (state machine cleared it) — the stop was honoured.
-        if self.shot_started.is_none() {
-            self.pending_stop = None;
-            return;
-        }
-        let Some(pending) = self.pending_stop.as_mut() else {
-            return;
-        };
-        if now.saturating_sub(pending.last_push) < STOP_REENFORCE_AFTER {
-            return;
-        }
-        if pending.attempts >= STOP_REENFORCE_MAX {
-            return;
-        }
-        pending.attempts += 1;
-        pending.last_push = now;
-        let (reason, attempt) = (pending.reason, pending.attempts);
-        out.events.push(Event::StopRetried { reason, attempt });
-        self.request_state(MachineState::Idle, Initiator::Core, out);
-    }
-
-    /// Emit [`Event::StopTargetsArmed`] whenever the armed picture changed —
-    /// called from the scale-reading and telemetry paths (cheap `Copy`
-    /// compare), so arming, a late-registering scale, and every stop toggle
-    /// all surface in the shells' event logs within a beat (issue #15:
-    /// arming failures used to be silent).
-    fn report_stop_targets(&mut self, out: &mut CoreOutput) {
-        let (armed, t) = self.stop_targets_projection();
-        // The blocked REASON is part of the reported picture: a scale dropping
-        // mid-shot changes only that, and the shell needs to hear about it.
-        let current = (
-            armed,
-            t,
-            self.effective_target_weight(),
-            self.weight_stop_blocked_by(),
-        );
-        if Some(current) == self.reported_stop_targets {
-            return;
-        }
-        self.reported_stop_targets = Some(current);
-        // Emitted even when every leg is `None` — "nothing will stop this
-        // shot" is the single most important thing this event can say, and
-        // suppressing it is what let geota/crema#56 run silently.
-        out.events.push(Event::StopTargetsArmed {
-            weight: t.weight,
-            volume: t.volume,
-            max_time: t.max_time,
-            armed,
-            weight_configured: self.effective_target_weight(),
-            weight_blocked: self.weight_stop_blocked_by().map(str::to_owned),
-            weight_blocked_note: self.weight_blocked().map(|b| b.note().to_owned()),
-        });
     }
 
     /// What will end the shot: the live armed targets while a shot is running,
@@ -6107,28 +5993,6 @@ struct HotWaterPour {
     /// The user's volume for this pour, ml.
     v_ml: Option<f32>,
 }
-
-/// A commanded-but-unhonoured stop being enforced (issue #15).
-#[derive(Debug)]
-struct PendingStop {
-    /// The stop reason being enforced (re-logged on each retry).
-    reason: StopReason,
-    /// When the stop command was last pushed.
-    last_push: Duration,
-    /// Retries pushed so far (capped at [`STOP_REENFORCE_MAX`]).
-    attempts: u32,
-}
-
-/// Re-command an unhonoured stop after this long. One second is ~5 telemetry
-/// beats — late enough not to double-fire on a healthy link (the DE1 leaves
-/// the shot within a beat of the write), early enough that a single lost
-/// write costs ~2 g at typical flow.
-const STOP_REENFORCE_AFTER: Duration = Duration::from_secs(1);
-
-/// Give up re-commanding after this many retries (~30 s of enforcement —
-/// past that the pour has physically ended or the link is gone and the
-/// reconnect supervisor owns the problem).
-const STOP_REENFORCE_MAX: u32 = 30;
 
 /// The value a Bengle (BLE v2) upload writes to the end-of-shot weight
 /// register (MMR `0x803864`, grams × 100, 0 = off). de1app
@@ -9303,7 +9167,7 @@ mod tests {
         assert!(out.events.iter().any(|e| matches!(
             e,
             Event::StopRetried {
-                reason: StopReason::Weight,
+                reason: Some(StopReason::Weight),
                 attempt: 1
             }
         )));
@@ -11637,7 +11501,7 @@ mod tests {
 
     #[test]
     fn set_flush_timeout_emits_one_flush_timeout_write() {
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
         let out = core.set_flush_timeout(Duration::from_secs(5));
         // 5 s = 5000 ms / 100 = 50 → 4-byte LE.
         assert_single_mmr_write(&out, MmrRegister::FlushTimeout, &[50, 0, 0, 0]);
@@ -11668,7 +11532,7 @@ mod tests {
     /// `set_steam_flow_scales_by_one_hundred_into_a_four_byte_slot`).
     #[test]
     fn heater_tweak_setters_emit_len_byte_4_and_4_byte_payload() {
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
         let cases: [CoreOutput; 8] = [
             core.set_phase_1_flow_rate(2.0),
             core.set_phase_2_flow_rate(4.0),
@@ -11801,7 +11665,7 @@ mod tests {
     /// always no-ops.
     #[test]
     fn heater_tweak_setters_emit_a_write_when_not_locked_out() {
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
         // firmware_lock_override defaults to false, so this is the open path.
         let cases: [(CoreOutput, MmrRegister); 8] = [
             (core.set_phase_1_flow_rate(2.0), MmrRegister::Phase1FlowRate),

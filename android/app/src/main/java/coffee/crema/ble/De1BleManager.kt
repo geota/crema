@@ -546,6 +546,29 @@ class De1BleManager(
         )
     }
 
+    /**
+     * The core's `Command.ReadState`: read StateInfo and feed it back as a
+     * state report, so a stop not honoured heals a lost report. A no-op with
+     * no link or while a firmware flash holds it.
+     */
+    suspend fun readState() {
+        val d = device ?: return
+        if (firmwareExclusive) return
+        val bytes = kotlinx.coroutines.withTimeoutOrNull(SEED_READ_TIMEOUT_MS) {
+            transport.read(d, De1Uuids.SERVICE, De1Uuids.STATE_INFO)
+        } ?: error("state read timed out")
+        if (device != d) return
+        feedState(bytes)
+    }
+
+    /** Feed a StateInfo read to the core, as its notification would be. */
+    private fun feedState(bytes: ByteArray) {
+        val tMs = SystemClock.elapsedRealtime()
+        lastInboundMs = tMs
+        recorder.recordInbound(NotificationSource.DE1_STATE, bytes, tMs)
+        onCoreOutput(bridge.onNotification(NotificationSource.DE1_STATE, bytes, tMs.toULong()))
+    }
+
     /** One time-boxed seed read, fed to the core on success. */
     private suspend fun seedRead(
         device: BleTransport.DeviceHandle,
@@ -865,7 +888,9 @@ class De1BleManager(
             now = SystemClock::elapsedRealtime,
             lastInboundMs = { lastInboundMs },
             paused = { firmwareExclusive },
-            probe = { transport.read(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO) },
+            // The probe's reply is a state report like any other: it heals one
+            // lost while a stop is owed.
+            probe = { feedState(transport.read(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO)) },
         )
         while (true) {
             delay(De1LivenessCheck.CHECK_INTERVAL_MS)

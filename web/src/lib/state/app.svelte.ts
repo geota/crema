@@ -714,6 +714,10 @@ export class CremaApp {
 			if (event.type === 'MachineRequestRefused') {
 				toast.error(machineRequestRefusalText(event.content.state, event.content.reason));
 			}
+			if (event.type === 'StopNotHonoured') {
+				// The machine ignores Crema's stop: the user must press it.
+				toast.error(event.content.message, 15_000);
+			}
 			if (event.type === 'MachineRequestHeld') {
 				// The user's request waits for the profile to load (up to 3 s).
 				toast.info(REQUEST_HELD_TEXT, 2500);
@@ -1125,6 +1129,11 @@ export class CremaApp {
 				break;
 			case 'CancelStop':
 				this.#stopLane.cancel();
+				break;
+			case 'ReadState':
+				// A stop not honoured: read the state back in case its report
+				// was lost.
+				await this.de1.readState();
 				break;
 			case 'WriteCharacteristic': {
 				// A profile write goes out only while its upload is the live one

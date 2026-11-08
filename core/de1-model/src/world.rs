@@ -105,6 +105,10 @@ pub struct Coverage {
     pub volume_stops: u32,
     /// `StopRetried`.
     pub retries: u32,
+    /// `StopNotHonoured`.
+    pub not_honoured: u32,
+    /// `ReadState` commands.
+    pub read_states: u32,
     /// `SkipToNext` writes.
     pub skips: u32,
     /// `Command::Stop`.
@@ -169,6 +173,30 @@ pub struct World {
     /// Since when a flowing shot with a weight target has shown no live leg
     /// and no reason, ms.
     unguarded_since: Option<u64>,
+    /// The open session has been heard past its pre-flow substates.
+    flowed: bool,
+    /// The frame of the last sample the core heard.
+    last_sample_frame: Option<u8>,
+    /// Back from an outage on a flowing shot: the frame before, when the state
+    /// came back, and how long the link was down (`DESIGN.md` §3.3).
+    return_check: Option<(Option<u8>, u64, u64)>,
+    /// When the link last went down.
+    down_at: Option<u64>,
+    /// The tick the core asked for with `WakeAt`, ms, as a shell's one-shot
+    /// timer.
+    wake_at: Option<u64>,
+    /// A state read the core asked for, due on the next step.
+    read_requested: bool,
+    /// The substate the core last heard.
+    heard_sub: Option<SubState>,
+    /// The stop the core owes, by its writes: when the last `Stop` went out.
+    owed_last: Option<u64>,
+    /// `Stop`s in this owed episode.
+    stops_in_episode: u32,
+    /// Samples the core heard at flow since the last `Stop`.
+    flow_samples_since_stop: u32,
+    /// `StopNotHonoured` since the episode or the link began.
+    alerts: u32,
     /// I6's own reading of the session the core should have open.
     open_mode: Option<ActiveMode>,
     /// Whether that session began before the core saw it.
@@ -227,6 +255,17 @@ impl World {
             pre_flush,
             was_down: false,
             state_heard_on_link: false,
+            flowed: false,
+            last_sample_frame: None,
+            return_check: None,
+            down_at: None,
+            wake_at: None,
+            read_requested: false,
+            heard_sub: None,
+            owed_last: None,
+            stops_in_episode: 0,
+            flow_samples_since_stop: 0,
+            alerts: 0,
             last_weight_ms: None,
             unguarded_since: None,
             starting: false,
@@ -285,6 +324,12 @@ impl World {
         self.core.set_shot_target_weight(self.dial_g);
         self.core.set_profile_volume_limit(self.volume_limit_ml);
         self.core.set_max_shot_duration(self.max_time_s);
+    }
+
+    /// The world's clock, ms.
+    #[must_use]
+    pub fn now_ms(&self) -> u64 {
+        self.now
     }
 
     /// The state the core last heard, which a lost report leaves behind the
@@ -374,6 +419,9 @@ impl World {
                     self.link.down_until = Some(self.now + ms);
                     self.lane.clear();
                     self.state_heard_on_link = false;
+                    // The outage may raise the alert again.
+                    self.alerts = 0;
+                    self.down_at = Some(self.now);
                     let out = self.core.de1_link_lost();
                     self.ingest(out, Who::Core);
                     self.was_down = true;
@@ -387,6 +435,7 @@ impl World {
                 self.reported = None;
                 self.heard = None;
                 self.state_heard_on_link = false;
+                self.last_sample_frame = None;
                 self.starting = false;
                 self.start_from = None;
                 self.open_mode = None;
@@ -484,6 +533,7 @@ impl World {
             self.stopped_this_flow = false;
         }
         self.heard = Some(self.de1.state);
+        self.track_stop(bytes[1]);
         if self.start_from != self.heard {
             self.start_from = None;
         }
@@ -499,10 +549,6 @@ impl World {
     fn track_session(&mut self, substate: u8) {
         let first = !std::mem::replace(&mut self.state_heard_on_link, true);
         let mode = ActiveMode::of(self.de1.state);
-        if mode == self.open_mode {
-            return;
-        }
-        self.open_mode = mode;
         let pre_flow = [
             SubState::Ready,
             SubState::Heating,
@@ -511,6 +557,25 @@ impl World {
         ]
         .iter()
         .any(|s| *s as u8 == substate);
+        if mode == self.open_mode {
+            // A pre-flow state on return is a new pour, seen from its start,
+            // and so is one after an espresso flowed, on any report.
+            let replaced = (first && mode.is_some() && pre_flow)
+                || (mode == Some(ActiveMode::Espresso) && self.flowed && pre_flow);
+            self.flowed = (self.flowed || !pre_flow) && !replaced;
+            if replaced {
+                self.unseen = false;
+                self.owed_last = None;
+                self.stops_in_episode = 0;
+                self.stopped_this_flow = false;
+                self.alerts = 0;
+            }
+            return;
+        }
+        self.open_mode = mode;
+        self.flowed = !pre_flow;
+        // The core's frame memory ends with its shot.
+        self.last_sample_frame = None;
         self.unseen = !self.read_only && mode.is_some() && first && !pre_flow;
         let weighs = matches!(mode, Some(ActiveMode::Espresso | ActiveMode::HotWater))
             && self.scale.is_some()
@@ -559,6 +624,10 @@ impl World {
                 self.was_down = false;
                 self.reported = None;
             }
+            if std::mem::take(&mut self.read_requested) {
+                // A read's reply comes whatever was reported before.
+                self.reported = None;
+            }
             self.report_state();
             if self.now.is_multiple_of(SAMPLE_MS)
                 && self.de1.sends_samples()
@@ -568,6 +637,28 @@ impl World {
                 self.skips_since_sample = 0;
                 self.samples_heard += 1;
                 let sample = self.de1.sample(self.sample_clock);
+                if self.de1.group_flow() >= 0.3 {
+                    self.flow_samples_since_stop += 1;
+                }
+                if let Some((before, at, outage)) = self.return_check.take() {
+                    if self.now.saturating_sub(at) >= 1_000 {
+                        // Too late to settle it: the core's rule too.
+                        self.outage_unsure();
+                    } else if before.is_some_and(|b| self.de1.frame < b) {
+                        // A new shot, begun during the outage: it owes nothing.
+                        // A mirror follows the hub, which saw it begin.
+                        self.unseen = !self.read_only;
+                        self.owed_last = None;
+                        self.stops_in_episode = 0;
+                        self.stopped_this_flow = false;
+                        self.alerts = 0;
+                    } else if outage > 60_000 {
+                        self.outage_unsure();
+                    }
+                }
+                if self.de1.state == MachineState::Espresso {
+                    self.last_sample_frame = Some(self.de1.frame);
+                }
                 let out = self
                     .core
                     .on_notification(Source::De1ShotSample, &sample, self.now);
@@ -589,12 +680,117 @@ impl World {
                 .on_notification(Source::ScaleWeight, &frame, self.now);
             self.ingest(out, Who::Core);
         }
-        if self.now.is_multiple_of(TICK_MS) {
+        let woken = self.wake_at.is_some_and(|at| at <= self.now);
+        if self.now.is_multiple_of(TICK_MS) || woken {
+            if woken {
+                self.wake_at = None;
+            }
             let out = self.core.on_tick(self.now);
             self.ingest(out, Who::Core);
         }
+        if self
+            .return_check
+            .is_some_and(|(_, at, _)| self.now.saturating_sub(at) >= 1_000)
+        {
+            self.return_check = None;
+            self.outage_unsure();
+        }
         self.check_session();
         self.check_legs();
+        self.check_retries(down);
+    }
+
+    /// No sample settled a return, or the outage was too long to tell: with
+    /// nothing owed, the core refuses the scale for the rest of the shot.
+    fn outage_unsure(&mut self) {
+        if self.owed_last.is_none() && !self.read_only {
+            self.unseen = true;
+        }
+    }
+
+    /// The owed episode by the core's writes, from each state it hears.
+    fn track_stop(&mut self, substate: u8) {
+        let sub = SubState::try_from(substate).ok();
+        let first = !self.state_heard_on_link;
+        let flowing = sub.is_some_and(|s| {
+            !de1_domain::session::is_pre_flow(s) && !de1_domain::session::is_wind_down(s)
+        });
+        if first {
+            self.return_check = None;
+        }
+        if first
+            && self.de1.state == MachineState::Espresso
+            && self.open_mode == Some(ActiveMode::Espresso)
+            && flowing
+        {
+            let outage = self.down_at.map_or(u64::MAX, |at| self.now - at);
+            self.return_check = Some((self.last_sample_frame, self.now, outage));
+        }
+        if ActiveMode::of(self.de1.state) != Some(ActiveMode::Espresso) {
+            self.return_check = None;
+        }
+        let ended = ActiveMode::of(self.de1.state) != self.open_mode
+            || sub.is_some_and(de1_domain::session::is_wind_down);
+        if ended {
+            self.owed_last = None;
+            self.stops_in_episode = 0;
+            self.alerts = 0;
+        } else if first && self.owed_last.is_some() {
+            // Back from an outage: the retry clock restarts here.
+            self.owed_last = Some(self.now);
+        }
+        self.heard_sub = sub;
+    }
+
+    /// I2 on a `Stop`, and the start or the next beat of an owed episode.
+    fn watch_stop(&mut self, who: Who) {
+        let mode = self.heard.and_then(ActiveMode::of);
+        let winding = self
+            .heard_sub
+            .is_some_and(de1_domain::session::is_wind_down);
+        if mode.is_none() {
+            self.violate(Invariant::I2, "Stop with no session".into());
+        }
+        if who == Who::Core && winding {
+            self.violate(
+                Invariant::I2,
+                "Stop from the core while winding down".into(),
+            );
+        }
+        if !winding && mode.is_some() {
+            self.owed_last = Some(self.now);
+            self.stops_in_episode += 1;
+        }
+        self.flow_samples_since_stop = 0;
+    }
+
+    /// I1: an owed stop is retried within its interval while the machine, as
+    /// the core heard it, still flows.
+    fn check_retries(&mut self, down: bool) {
+        let Some(last) = self.owed_last else {
+            return;
+        };
+        let flowing = self.heard_sub.is_some_and(|s| {
+            !de1_domain::session::is_pre_flow(s) && !de1_domain::session::is_wind_down(s)
+        });
+        let steam = self.heard == Some(MachineState::Steam);
+        // "Link up" is the core's: a state heard on this link (DESIGN.md §3.3).
+        if self.read_only
+            || down
+            || !self.state_heard_on_link
+            || !flowing
+            || self.stops_in_episode > 30
+        {
+            return;
+        }
+        let interval = if steam { 2_000 } else { 1_000 };
+        // The core's clock moves on an input: a tick at worst, and an outage
+        // check waits a second for its sample.
+        if self.now.saturating_sub(last) > interval + TICK_MS + 1_100 {
+            let gap = self.now - last;
+            self.violate(Invariant::I1, format!("no Stop for {gap} ms with one owed"));
+            self.owed_last = Some(self.now);
+        }
     }
 
     /// Whether the core's weight could be trusted now, by the world's own
@@ -744,6 +940,7 @@ impl World {
                 }
                 Command::Stop => {
                     self.coverage.stop_commands += 1;
+                    self.watch_stop(who);
                     self.requests.push((MachineState::Idle as u8, true));
                     if !self.read_only {
                         self.lane.push(Write {
@@ -755,6 +952,10 @@ impl World {
                     }
                 }
                 Command::CancelStop => self.lane.cancel_stop(),
+                Command::ReadState => {
+                    self.coverage.read_states += 1;
+                    self.read_requested = true;
+                }
                 Command::WriteScale { data } => {
                     if weight_is_tare(&data) && self.unseen {
                         self.violate(Invariant::I6, "tare while unseen".into());
@@ -776,7 +977,31 @@ impl World {
             Event::ShotStarted => self.coverage.shots += 1,
             Event::WaterSessionStarted { .. } => self.coverage.water += 1,
             Event::SteamSessionStarted => self.coverage.steam += 1,
-            Event::StopRetried { .. } => self.coverage.retries += 1,
+            Event::WakeAt { at_ms } => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let at = at_ms.max(0.0).ceil() as u64;
+                self.wake_at = Some(at);
+            }
+            Event::StopRetried { attempt, .. } => {
+                self.coverage.retries += 1;
+                if *attempt > 30 && self.flow_samples_since_stop < 2 {
+                    let samples = self.flow_samples_since_stop;
+                    self.violate(
+                        Invariant::I17,
+                        format!("retry {attempt} on {samples} samples at flow"),
+                    );
+                }
+            }
+            Event::StopNotHonoured { .. } => {
+                self.coverage.not_honoured += 1;
+                self.alerts += 1;
+                if self.alerts > 1 {
+                    self.violate(
+                        Invariant::I11,
+                        "StopNotHonoured twice in one episode".into(),
+                    );
+                }
+            }
             Event::MachineRequestHeld { state } => self.user_held = Some(*state as u8),
             Event::MachineRequestDropped { .. } => self.user_held = None,
             Event::ShotStartEnded { end, .. } => {

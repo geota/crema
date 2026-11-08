@@ -291,6 +291,20 @@ impl SteamMonitor {
         self.eco_mode
     }
 
+    /// A new session in the same state: the running one completes and `info`
+    /// starts the next.
+    pub fn split(&mut self, info: StateInfo, now: Duration) -> Vec<SteamEvent> {
+        let mut events = self.on_state_info(
+            StateInfo {
+                state: MachineState::Idle,
+                substate: SubState::Ready,
+            },
+            now,
+        );
+        events.extend(self.on_state_info(info, now));
+        events
+    }
+
     /// Feed a [`StateInfo`] notification. `now` is a monotonic timestamp
     /// supplied by the shell (a [`Duration`] from a shell-chosen epoch).
     ///

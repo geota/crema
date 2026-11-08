@@ -198,6 +198,8 @@ fn the_generator_reaches_what_the_invariants_watch() {
         total.weight_stops += c.weight_stops;
         total.volume_stops += c.volume_stops;
         total.retries += c.retries;
+        total.not_honoured += c.not_honoured;
+        total.read_states += c.read_states;
         total.skips += c.skips;
         total.unseen += c.unseen;
         total.stop_commands += c.stop_commands;
@@ -218,6 +220,8 @@ fn the_generator_reaches_what_the_invariants_watch() {
         ("weight stops", total.weight_stops),
         ("volume stops", total.volume_stops),
         ("retries", total.retries),
+        ("not honoured", total.not_honoured),
+        ("read states", total.read_states),
         ("skips", total.skips),
         ("unseen", total.unseen),
         ("stop commands", total.stop_commands),
@@ -488,4 +492,62 @@ fn a_users_held_tap_goes_out_once_the_guard_clears() {
     world.apply(&Op::Advance { ms: 3_000 });
     assert_eq!(world.coverage.held_releases, 1, "{:?}", world.requests);
     assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// Review of #373, must-fix 1: the machine honours a stop but its `Ending`
+/// and `Idle` reports are lost, and the user starts a new shot soon after. The
+/// new shot's pre-flow report is a new session, so the old owed stop never
+/// fires at it.
+#[test]
+fn a_lost_idle_report_never_lets_an_old_stop_end_the_next_shot() {
+    let mut world = plain_world();
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    while world.coverage.weight_stops == 0 {
+        world.apply(&Op::Advance { ms: 100 });
+        assert!(world.now_ms() < 120_000, "a weight stop");
+    }
+    world.apply(&Op::LoseStates(2));
+    while world.de1.state != MachineState::Idle {
+        world.apply(&Op::Advance { ms: 100 });
+    }
+    // Back within the read-back's reach: attempt 5 would read the new
+    // shot's state, which is Espresso too.
+    world.apply(&Op::Advance { ms: 1_500 });
+    let before = world.requests.len();
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    world.apply(&Op::Advance { ms: 15_000 });
+    let stops = world.requests[before..]
+        .iter()
+        .filter(|(_, stop)| *stop)
+        .count();
+    assert_eq!(stops, 0, "{:?}", &world.requests[before..]);
+    assert_eq!(world.de1.state, MachineState::Espresso, "the new shot runs");
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// Review of #373, must-fix 2: the shrunk case where the core and the oracle
+/// settled the 1 s outage-evidence boundary differently. A sample at or past
+/// the wait is late for both.
+#[test]
+fn the_outage_evidence_boundary_is_settled_the_same_way() {
+    for read_only in [false, true] {
+        let mut world = World::new(
+            De1Params {
+                preinfusion: false,
+                ending: Ending::None,
+                ..De1Params::default()
+            },
+            0.0,
+            5_000,
+            read_only,
+            false,
+        );
+        world.apply(&Op::Scale(ScaleMode::Stall));
+        world.apply(&Op::GroupHead(MachineState::Espresso));
+        world.apply(&Op::Advance { ms: 1_200 });
+        world.apply(&Op::MuteSamples { ms: 7_400 });
+        world.apply(&Op::LinkDown { ms: 6_500 });
+        world.apply(&Op::Advance { ms: 20_000 });
+        assert!(world.violations.is_empty(), "{:?}", world.violations);
+    }
 }
