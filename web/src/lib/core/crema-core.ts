@@ -3486,6 +3486,12 @@ export interface LocalState {
 	visualizerPrefs: VisualizerSyncPrefs;
 	totalLitres: number;
 	activeBeanId?: string;
+	/**
+	 * Beans an earlier, interrupted run of this restore added, from its
+	 * marker. They don't count as here for `zero_debit`: a re-run after any
+	 * prefix of the steps must end where a clean run does.
+	 */
+	addedBeans: string[];
 }
 
 /**

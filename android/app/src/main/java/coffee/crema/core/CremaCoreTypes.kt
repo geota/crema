@@ -3588,7 +3588,11 @@ data class LocalState (
 	val common: CommonSettings,
 	val visualizerPrefs: VisualizerSyncPrefs,
 	val totalLitres: Double,
-	val activeBeanId: String? = null
+	val activeBeanId: String? = null,
+	/// Beans an earlier, interrupted run of this restore added, from its
+	/// marker. They don't count as here for `zero_debit`: a re-run after any
+	/// prefix of the steps must end where a clean run does.
+	val addedBeans: List<String>
 )
 
 /// A derived maintenance readout — counters, percentages, and due/ok
