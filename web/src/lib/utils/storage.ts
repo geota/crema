@@ -110,6 +110,8 @@ const blocked = new Set<string>();
 const refused = new Map<string, string>();
 /** Each key {@link readStore} has read, and how it went. */
 const health = new Map<string, StoreHealth>();
+/** The user-facing name of each key {@link readStore} has read, where it has one. */
+const whats = new Map<string, string>();
 /** Keys a quota notice was already queued for this session. */
 const quotaNoticed = new Set<string>();
 let pending: StorageNotice[] = [];
@@ -139,6 +141,19 @@ export function onStorageNotice(listener: (n: StorageNotice) => void): () => voi
 /** How `key`'s store loaded. Keys that use {@link readJson} stay `loading`. */
 export function storeHealth(key: string): StoreHealth {
 	return health.get(key) ?? 'loading';
+}
+
+/**
+ * What a backup made now is missing: the named stores whose read this session
+ * came out damaged or unavailable, sorted.
+ */
+export function unreadableStores(): string[] {
+	const names = new Set<string>();
+	for (const [key, h] of health) {
+		const what = whats.get(key);
+		if (what && (h === 'damaged' || h === 'unavailable')) names.add(what);
+	}
+	return [...names].sort();
 }
 
 /** The stores whose saves are being refused right now. */
@@ -268,6 +283,7 @@ export function readJson<T>(key: string, fallback: T, opts: ReadJsonOptions = {}
  */
 export function readStore<T>(key: string, opts: ReadStoreOptions): StoreRead<T> {
 	const r = readStored(key);
+	whats.set(key, opts.what);
 	if (r.kind === 'unavailable') {
 		console.warn(`[storage] ${key} couldn't be read (${r.error}); saving disabled`);
 		health.set(key, 'unavailable');
@@ -388,6 +404,7 @@ export function resetStorageStateForTest(): void {
 	blocked.clear();
 	refused.clear();
 	health.clear();
+	whats.clear();
 	quotaNoticed.clear();
 	pending = [];
 	listeners.clear();

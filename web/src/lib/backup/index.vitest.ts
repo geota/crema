@@ -9,6 +9,7 @@ import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
 import { methodLabel } from '#lib/brew/methods.js';
 import { BrewMethodStyle } from '#lib/core/crema-core.js';
 import { backupNote, buildBackupJsonl, describeBackupGaps, restoreBackup } from './index';
+import { readStore, resetStorageStateForTest } from '#lib/utils/storage.js';
 
 /**
  * Round-trip tests for the whole-app backup/restore (review #07). The runes
@@ -308,6 +309,24 @@ describe('one unreadable row (#329)', () => {
 				degraded: ['c']
 			})
 		).toBe(' 2 items couldn’t be read and were left out. 1 shot was backed up without its profile.');
+	});
+
+	it('goes ahead without a store that could not be read, and says so', async () => {
+		seed();
+		localStorage.setItem('crema.test-recipes.v1', 'not json');
+		readStore('crema.test-recipes.v1', { what: 'recipes' });
+		localStorage.setItem('crema.test-beans.v1', 'not json');
+		readStore('crema.test-beans.v1', { what: 'bean library' });
+		const built = await buildBackupJsonl();
+		expect(built).not.toBeNull();
+		expect(built!.contents.missing).toEqual(['bean library', 'recipes']);
+		expect(describeBackupGaps(built!.contents)).toContain(
+			' It doesn’t include your bean library and recipes: they couldn’t be read.'
+		);
+		expect(describeBackupGaps({ profiles: 0, beans: 0, roasters: 0, shots: 0, missing: ['recipes'] })).toBe(
+			' It doesn’t include your recipes: it couldn’t be read.'
+		);
+		resetStorageStateForTest();
 	});
 
 	it('ends in a message when the build throws, so the UI cannot hang', async () => {

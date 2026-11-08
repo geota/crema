@@ -45,14 +45,20 @@ data class DriveState(
     /** Epoch ms of the last SUCCESSFUL backup upload, manual or automatic —
      *  drives the "Last backed up X ago" readout. Additive → nullable. */
     val lastBackupSuccessAtMs: Long? = null,
-    /** Automatic copies kept per device, set by the first retention to run. An
-     *  install with this set has backed up, so PR8c can give the ones without
-     *  it a lower default. Additive → nullable. */
+    /** Automatic copies kept per device, set by the first retention to run: 10
+     *  for an install that had backed up before, 3 for a new one. Additive →
+     *  nullable. */
     val autoBackupKeep: Int? = null,
     /** Random, in this install's automatic backup names, so two devices of one
      *  model can't prune each other. A reinstall gets a new one and leaves its
      *  old copies alone. Additive → nullable. */
     val autoBackupTag: String? = null,
+    /** The newest damage time (a kept-aside store copy, this device's clock)
+     *  already acted on. A newer one pins [preDamageCopy] again. Additive. */
+    val damageSeenMs: Long? = null,
+    /** This install's newest daily copy on Drive when a damage was seen, by
+     *  file id: retention keeps it, as it's from before. Additive. */
+    val preDamageCopy: String? = null,
     /** Google ended the sign-in. Signed out, with a lasting banner until the
      *  user reconnects or disconnects. Additive. */
     val needsReconnect: Boolean = false,
