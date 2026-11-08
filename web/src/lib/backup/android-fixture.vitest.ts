@@ -21,8 +21,11 @@ describe('an Android-streamed backup', () => {
 		const lines = strFromU8(entries['backup.jsonl']).split('\n');
 		expect(JSON.parse(lines[0]).kind).toBe('crema-backup/v1');
 		expect(lines.some((l) => l.includes('"kind":"shot"'))).toBe(true);
-		const photo = entries['images/bean-1'];
-		expect(photo.length).toBe(4096);
-		expect(photo.every((b, i) => b === (i * 7919 + 13) % 251)).toBe(true);
+		let x = 20_261_108;
+		const photo = Uint8Array.from({ length: 4096 }, () => {
+			x = (Math.imul(x, 1_103_515_245) + 12_345) & 0x7fffffff;
+			return (x >>> 16) & 0xff;
+		});
+		expect(Buffer.from(entries['images/bean-1']).equals(Buffer.from(photo))).toBe(true);
 	});
 });

@@ -170,21 +170,45 @@ class BackupStreamTest {
         assertTrue(fresh.exists() && other.exists())
     }
 
-    /** The cross-shell fixture the web reads (`android-fixture.vitest.ts`). */
+    /** Random-looking bytes from a fixed seed, as the web's fixture tests make them. */
+    private fun fixturePhoto(length: Int = 4096): ByteArray {
+        var x = 20_261_108
+        return ByteArray(length) {
+            x = (x * 1_103_515_245 + 12_345) and 0x7fffffff
+            ((x ushr 16) and 0xff).toByte()
+        }
+    }
+
+    /** Each entry's name and method, from the central directory, and its bytes. */
+    private fun described(file: File): List<Triple<String, Int, String>> =
+        java.util.zip.ZipFile(file).use { zip ->
+            zip.entries().toList().map { e ->
+                Triple(e.name, e.method, zip.getInputStream(e).use { it.readBytes() }.contentHashCode().toString())
+            }
+        }
+
+    /**
+     * The cross-shell fixture the web reads (`android-fixture.vitest.ts`) is
+     * what this build writes: entry by entry, by name, method and inflated
+     * bytes, so it can't go stale without a test noticing.
+     */
     @Test
-    fun `an Android-streamed backup with a photo reads back, and is the committed fixture's kind`() {
+    fun `the committed Android-streamed fixture is what this build writes`() {
         val bean = coffee.crema.beans.newBean("Kenya", "r1", 4, null, now).copy(id = "bean-1")
-        val photo = File(tmp.root, "photo").apply { writeBytes(ByteArray(4096) { ((it * 7919 + 13) % 251).toByte() }) }
+        val photo = File(tmp.root, "photo").apply { writeBytes(fixturePhoto()) }
         val built = stream(snapshot(listOf(shot(0)), listOf(bean)), listOf("bean-1" to photo))
-        System.getenv("CREMA_WRITE_FIXTURE")?.takeIf { it == "1" }?.let {
-            File("../../web/src/lib/backup/fixtures/android-streamed-photo.crema.zip").apply { parentFile.mkdirs() }
-                .writeBytes(built.file.readBytes())
+        val fixture = File("../../web/src/lib/backup/fixtures/android-streamed-photo.crema.zip")
+        if (System.getenv("CREMA_WRITE_FIXTURE") == "1") {
+            fixture.parentFile.mkdirs()
+            fixture.writeBytes(built.file.readBytes())
         }
-        for (file in listOf(built.file, File("../../web/src/lib/backup/fixtures/android-streamed-photo.crema.zip"))) {
-            val zip = entries(file)
-            assertEquals(listOf("backup.jsonl", "images/bean-1"), zip.keys.toList(), file.path)
-            assertTrue(zip.getValue("backup.jsonl").decodeToString().lines().any { "\"kind\":\"shot\"" in it })
-            assertTrue(zip.getValue("images/bean-1").contentEquals(photo.readBytes()))
-        }
+        assertEquals(
+            described(built.file), described(fixture),
+            "The fixture is stale: rerun BackupStreamTest with CREMA_WRITE_FIXTURE=1 and commit it.",
+        )
+        val zip = entries(fixture)
+        assertEquals(listOf("backup.jsonl", "images/bean-1"), zip.keys.toList())
+        assertTrue(zip.getValue("images/bean-1").contentEquals(fixturePhoto()))
+        assertEquals(listOf(java.util.zip.ZipEntry.DEFLATED, java.util.zip.ZipEntry.DEFLATED), described(fixture).map { it.second })
     }
 }
