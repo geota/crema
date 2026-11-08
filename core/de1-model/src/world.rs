@@ -173,6 +173,8 @@ pub struct World {
     /// Since when a flowing shot with a weight target has shown no live leg
     /// and no reason, ms.
     unguarded_since: Option<u64>,
+    /// The open session has been heard past its pre-flow substates.
+    flowed: bool,
     /// The frame of the last sample the core heard.
     last_sample_frame: Option<u8>,
     /// Back from an outage on a flowing shot: the frame before, when the state
@@ -180,6 +182,9 @@ pub struct World {
     return_check: Option<(Option<u8>, u64, u64)>,
     /// When the link last went down.
     down_at: Option<u64>,
+    /// The tick the core asked for with `WakeAt`, ms, as a shell's one-shot
+    /// timer.
+    wake_at: Option<u64>,
     /// A state read the core asked for, due on the next step.
     read_requested: bool,
     /// The substate the core last heard.
@@ -250,9 +255,11 @@ impl World {
             pre_flush,
             was_down: false,
             state_heard_on_link: false,
+            flowed: false,
             last_sample_frame: None,
             return_check: None,
             down_at: None,
+            wake_at: None,
             read_requested: false,
             heard_sub: None,
             owed_last: None,
@@ -317,6 +324,12 @@ impl World {
         self.core.set_shot_target_weight(self.dial_g);
         self.core.set_profile_volume_limit(self.volume_limit_ml);
         self.core.set_max_shot_duration(self.max_time_s);
+    }
+
+    /// The world's clock, ms.
+    #[must_use]
+    pub fn now_ms(&self) -> u64 {
+        self.now
     }
 
     /// The state the core last heard, which a lost report leaves behind the
@@ -545,26 +558,24 @@ impl World {
         .iter()
         .any(|s| *s as u8 == substate);
         if mode == self.open_mode {
-            // A pre-flow state on return is a new pour, seen from its start.
-            if first && mode.is_some() && pre_flow {
+            // A pre-flow state on return is a new pour, seen from its start,
+            // and so is one after an espresso flowed, on any report.
+            let replaced = (first && mode.is_some() && pre_flow)
+                || (mode == Some(ActiveMode::Espresso) && self.flowed && pre_flow);
+            self.flowed = (self.flowed || !pre_flow) && !replaced;
+            if replaced {
                 self.unseen = false;
                 self.owed_last = None;
                 self.stops_in_episode = 0;
                 self.stopped_this_flow = false;
+                self.alerts = 0;
             }
             return;
         }
         self.open_mode = mode;
+        self.flowed = !pre_flow;
         // The core's frame memory ends with its shot.
         self.last_sample_frame = None;
-        let pre_flow = [
-            SubState::Ready,
-            SubState::Heating,
-            SubState::FinalHeating,
-            SubState::Stabilising,
-        ]
-        .iter()
-        .any(|s| *s as u8 == substate);
         self.unseen = !self.read_only && mode.is_some() && first && !pre_flow;
         let weighs = matches!(mode, Some(ActiveMode::Espresso | ActiveMode::HotWater))
             && self.scale.is_some()
@@ -629,13 +640,18 @@ impl World {
                 if self.de1.group_flow() >= 0.3 {
                     self.flow_samples_since_stop += 1;
                 }
-                if let Some((before, _, outage)) = self.return_check.take() {
-                    if before.is_some_and(|b| self.de1.frame < b) {
+                if let Some((before, at, outage)) = self.return_check.take() {
+                    if self.now.saturating_sub(at) >= 1_000 {
+                        // Too late to settle it: the core's rule too.
+                        self.outage_unsure();
+                    } else if before.is_some_and(|b| self.de1.frame < b) {
                         // A new shot, begun during the outage: it owes nothing.
-                        self.unseen = true;
+                        // A mirror follows the hub, which saw it begin.
+                        self.unseen = !self.read_only;
                         self.owed_last = None;
                         self.stops_in_episode = 0;
                         self.stopped_this_flow = false;
+                        self.alerts = 0;
                     } else if outage > 60_000 {
                         self.outage_unsure();
                     }
@@ -664,7 +680,11 @@ impl World {
                 .on_notification(Source::ScaleWeight, &frame, self.now);
             self.ingest(out, Who::Core);
         }
-        if self.now.is_multiple_of(TICK_MS) {
+        let woken = self.wake_at.is_some_and(|at| at <= self.now);
+        if self.now.is_multiple_of(TICK_MS) || woken {
+            if woken {
+                self.wake_at = None;
+            }
             let out = self.core.on_tick(self.now);
             self.ingest(out, Who::Core);
         }
@@ -957,6 +977,11 @@ impl World {
             Event::ShotStarted => self.coverage.shots += 1,
             Event::WaterSessionStarted { .. } => self.coverage.water += 1,
             Event::SteamSessionStarted => self.coverage.steam += 1,
+            Event::WakeAt { at_ms } => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let at = at_ms.max(0.0).ceil() as u64;
+                self.wake_at = Some(at);
+            }
             Event::StopRetried { attempt, .. } => {
                 self.coverage.retries += 1;
                 if *attempt > 30 && self.flow_samples_since_stop < 2 {

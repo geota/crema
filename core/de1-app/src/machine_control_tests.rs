@@ -1030,6 +1030,20 @@ fn an_owed_stop_after_a_long_outage_is_sent_and_raised() {
     assert!(
         o.events
             .iter()
+            .any(|e| matches!(e, Event::StopRetried { attempt: 4, .. })),
+        "the send is attempt 4"
+    );
+    assert!(
+        !o.events
+            .iter()
+            .any(|e| matches!(e, Event::StopNotHonoured { .. })),
+        "it hasn't failed yet"
+    );
+    // Still flowing a second later: attempt 5 raises it.
+    let o = core.on_notification(Source::De1ShotSample, &sample(500), 3_500 + 90_000);
+    assert!(
+        o.events
+            .iter()
             .any(|e| matches!(e, Event::StopNotHonoured { .. }))
     );
 }
@@ -1269,4 +1283,116 @@ fn a_pre_flow_state_on_return_is_a_new_shot() {
     );
     assert!(o.events.contains(&Event::ShotStarted));
     assert_eq!(core.weight_stop_blocked_by(), None, "seen from its start");
+}
+
+/// Review of #373, must-fix 1: the machine honours a weight stop, but its
+/// `Ending` and `Idle` reports are lost. The user starts a new shot 4 s later.
+/// Its pre-flow report is a new session, on the same link: no `Stop` is sent
+/// at it, then or later, and the queued one is cancelled.
+#[test]
+fn a_new_shot_after_a_lost_idle_report_is_never_stopped() {
+    let mut core = CremaCore::new();
+    core.set_max_shot_duration(Some(18.5));
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    core.on_notification(Source::De1State, &[4, 5], 0);
+    let mut t = 0;
+    while state_writes(&core.on_notification(Source::De1ShotSample, &sample((t / 8) as u16), t))
+        .is_empty()
+    {
+        t += 200;
+        assert!(t < 30_000, "the time stop");
+    }
+    // `[4,6]` and `[2,0]` are lost; the next report is the new shot's.
+    let o = core.on_notification(Source::De1State, &[4, 2], t + 4_000);
+    assert!(state_writes(&o).is_empty(), "{:?}", o.commands);
+    assert!(o.commands.contains(&Command::CancelStop));
+    let mut later = vec![];
+    for i in 1..60u64 {
+        let at = t + 4_000 + i * 250;
+        later.extend(state_writes(&core.on_tick(at)));
+        later.extend(state_writes(&core.on_notification(
+            Source::De1ShotSample,
+            &sample((at / 8) as u16),
+            at + 1,
+        )));
+    }
+    assert!(later.is_empty(), "{later:?}");
+}
+
+/// Review of #373: a leg firing while a return is still being judged writes
+/// nothing until the check settles, at most a second.
+#[test]
+fn a_leg_firing_during_an_outage_check_waits_for_it() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 50);
+    core.on_notification(Source::De1ShotSample, &sample(10), 100);
+    core.de1_link_lost();
+    core.on_notification(Source::De1State, &[4, 5], 5_500);
+    // Past the target, before any sample is back: the weight leg fires.
+    let mut held = vec![];
+    for (i, g) in [30.0, 34.0, 38.0, 42.0].into_iter().enumerate() {
+        let o = core.on_notification(Source::ScaleWeight, &bookoo(g), 5_600 + i as u64 * 100);
+        held.extend(state_writes(&o));
+    }
+    assert!(core.stop_in_hand(), "owed");
+    assert!(held.is_empty(), "held: {held:?}");
+    let o = core.on_notification(Source::De1ShotSample, &sample(500), 6_100);
+    assert_eq!(
+        state_writes(&o),
+        [MachineState::Idle as u8],
+        "the same shot: sent"
+    );
+}
+
+/// Review of #373: the flush outage bound is the flush timeout the core wrote.
+#[test]
+fn a_flush_outage_is_judged_on_the_written_flush_timeout() {
+    let run = |timeout: Option<u64>| {
+        let mut core = CremaCore::new();
+        if let Some(s) = timeout {
+            core.set_flush_timeout(Duration::from_secs(s));
+        }
+        core.on_notification(Source::De1State, &[2, 0], 0);
+        core.on_notification(Source::De1State, &[15, 5], 100);
+        core.request_machine_state(MachineState::Idle);
+        core.de1_link_lost();
+        let o = core.on_notification(Source::De1State, &[15, 5], 20_000);
+        o.events.iter().find_map(|e| match e {
+            Event::StopRetried { attempt, .. } => Some(*attempt),
+            _ => None,
+        })
+    };
+    assert_eq!(run(Some(10)), Some(4), "past a 10 s timeout: unsure");
+    assert_eq!(
+        run(None),
+        Some(1),
+        "within the 60 s default: the same flush"
+    );
+}
+
+/// The outage evidence rests on the sample's time alone: one at or past the
+/// 1 s wait is too late to settle it, as the clock would have been.
+#[test]
+fn a_sample_at_the_wait_is_too_late_to_settle_a_return() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 50);
+    core.on_notification(Source::De1ShotSample, &sample(10), 100);
+    core.de1_link_lost();
+    core.on_notification(Source::De1State, &[4, 5], 3_000);
+    core.on_notification(Source::De1ShotSample, &sample(400), 4_000);
+    assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
+    // Just inside the wait it settles as the same shot.
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 50);
+    core.on_notification(Source::De1ShotSample, &sample(10), 100);
+    core.de1_link_lost();
+    core.on_notification(Source::De1State, &[4, 5], 3_000);
+    core.on_notification(Source::De1ShotSample, &sample(400), 3_999);
+    assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
 }

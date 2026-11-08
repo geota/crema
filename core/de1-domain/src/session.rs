@@ -211,6 +211,8 @@ pub struct Session {
     pub baseline: Baseline,
     /// Where its stop stands.
     pub stop: StopState,
+    /// The machine has reported this session past its pre-flow substates.
+    pub flowed: bool,
 }
 
 /// How a state report changed the session.
@@ -255,6 +257,7 @@ impl Session {
             observed,
             baseline,
             stop: StopState::Armed,
+            flowed: false,
         }
     }
 
@@ -263,6 +266,7 @@ impl Session {
     #[must_use]
     pub fn open_on(mode: ActiveMode, first_on_link: bool, substate: SubState) -> Session {
         let mut session = Session::open(mode, Observed::on_open(first_on_link, substate));
+        session.flowed = !is_pre_flow(substate);
         if is_wind_down(substate) {
             session.stop = StopState::Honoured { cause: None };
         }
@@ -297,7 +301,25 @@ impl Session {
                     SessionChange::Replaced,
                 )
             }
-            Some(session) if session.mode == mode => (Some(session), SessionChange::Kept),
+            // Flow can't go backwards: an espresso session that has flowed
+            // and reports a pre-flow substate is a new shot, on any report.
+            // A lost Idle report would otherwise leave the old shot's owed
+            // stop firing at the new one. Steam's heating and pauses recur.
+            Some(session)
+                if session.mode == mode
+                    && mode == ActiveMode::Espresso
+                    && session.flowed
+                    && is_pre_flow(info.substate) =>
+            {
+                (
+                    Some(Session::open(mode, Observed::FromStart)),
+                    SessionChange::Replaced,
+                )
+            }
+            Some(mut session) if session.mode == mode => {
+                session.flowed |= !is_pre_flow(info.substate);
+                (Some(session), SessionChange::Kept)
+            }
             Some(_) => (
                 Some(Session::open_on(mode, first_on_link, info.substate)),
                 SessionChange::Closed,
@@ -447,7 +469,13 @@ mod tests {
             true,
         )
         .0;
-        assert_eq!(next, Some(seen));
+        assert_eq!(
+            next,
+            Some(Session {
+                flowed: true,
+                ..seen
+            })
+        );
     }
 
     #[test]
@@ -469,7 +497,10 @@ mod tests {
         .0;
         assert_eq!(
             next,
-            Some(Session::open(ActiveMode::HotWater, Observed::Unseen))
+            Some(Session {
+                flowed: true,
+                ..Session::open(ActiveMode::HotWater, Observed::Unseen)
+            })
         );
     }
 
@@ -479,7 +510,10 @@ mod tests {
             Session::on_state(None, info(MachineState::Espresso, SubState::Pouring), false).0;
         assert_eq!(
             next,
-            Some(Session::open(ActiveMode::Espresso, Observed::FromStart))
+            Some(Session {
+                flowed: true,
+                ..Session::open(ActiveMode::Espresso, Observed::FromStart)
+            })
         );
     }
 
@@ -524,5 +558,36 @@ mod tests {
         assert!(!is_wind_down(SubState::Steaming));
         assert!(!is_wind_down(SubState::Pouring));
         assert!(!is_wind_down(SubState::Unknown));
+    }
+
+    #[test]
+    fn an_espresso_session_that_flowed_is_replaced_by_a_pre_flow_report_on_any_link() {
+        let (pouring, _) =
+            Session::on_state(None, info(MachineState::Espresso, SubState::Pouring), false);
+        let (next, change) = Session::on_state(
+            pouring,
+            info(MachineState::Espresso, SubState::Heating),
+            false,
+        );
+        assert_eq!(change, SessionChange::Replaced);
+        assert_eq!(next.map(|s| s.flowed), Some(false));
+        // Before it flowed, heating is just heating.
+        let (heating, _) =
+            Session::on_state(None, info(MachineState::Espresso, SubState::Heating), false);
+        let (_, change) = Session::on_state(
+            heating,
+            info(MachineState::Espresso, SubState::Stabilising),
+            false,
+        );
+        assert_eq!(change, SessionChange::Kept);
+        // Steam's pauses and heating recur within one session.
+        let (steaming, _) =
+            Session::on_state(None, info(MachineState::Steam, SubState::Steaming), false);
+        let (_, change) = Session::on_state(
+            steaming,
+            info(MachineState::Steam, SubState::Heating),
+            false,
+        );
+        assert_eq!(change, SessionChange::Kept);
     }
 }

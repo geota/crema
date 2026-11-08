@@ -29,8 +29,8 @@ pub(crate) const OUTAGE_SAMPLE_WAIT: Duration = Duration::from_secs(1);
 /// The longest espresso outage the same shot can survive on frame evidence.
 pub(crate) const ESPRESSO_OUTAGE_LIMIT: Duration = Duration::from_secs(60);
 
-/// The bound for a flush outage: the flush timeout isn't read back, so the
-/// longest the machine's own flush runs, the 60 s of its widest setting.
+/// The bound for a flush outage when the core hasn't written the flush
+/// timeout (the connect sweep does): 60 s.
 pub(crate) const FLUSH_OUTAGE_LIMIT: Duration = Duration::from_secs(60);
 
 /// What [`Event::StopNotHonoured`] tells the user.
@@ -225,6 +225,13 @@ impl CremaCore {
                     last_write: now,
                     attempts: 0,
                 };
+                // A leg judged the old session while the core can't yet tell
+                // it from a new one: its write waits for the outage check,
+                // at most a second. A user Stop goes at once.
+                if matches!(cause, StopCause::Auto(_)) && self.outage_check.is_some() {
+                    self.flow_proof = 0;
+                    return;
+                }
             }
             StopState::Owed {
                 ref mut last_write, ..
@@ -311,7 +318,7 @@ impl CremaCore {
                     255.0
                 }
             }),
-            ActiveMode::Flush => return FLUSH_OUTAGE_LIMIT,
+            ActiveMode::Flush => return self.flush_timeout.unwrap_or(FLUSH_OUTAGE_LIMIT),
             ActiveMode::Espresso => return ESPRESSO_OUTAGE_LIMIT,
         };
         Duration::from_secs_f32(secs.max(0.0))
@@ -329,6 +336,12 @@ impl CremaCore {
         let Some(check) = self.outage_check.take() else {
             return false;
         };
+        // A sample at or past the wait is too late to settle it: the same rule
+        // as the clock's, so the outcome rests on the sample's time alone.
+        if now.saturating_sub(check.returned_at) >= OUTAGE_SAMPLE_WAIT {
+            self.outage_unsure(now, out);
+            return false;
+        }
         if check.frame_before.is_some_and(|before| frame < before) {
             self.session = Some(Session::open(ActiveMode::Espresso, Observed::Unseen));
             out.commands.push(Command::CancelStop);
@@ -383,6 +396,7 @@ impl CremaCore {
     /// With nothing owed, the scale can't speak for this cup: weight is
     /// refused, time and volume continue.
     fn outage_unsure(&mut self, now: Duration, out: &mut CoreOutput) {
+        let read_only = self.read_only;
         let Some(session) = self.session.as_mut() else {
             return;
         };
@@ -390,14 +404,15 @@ impl CremaCore {
             StopState::Owed {
                 ref mut attempts, ..
             } => {
-                *attempts = (*attempts).max(STOP_ALERT_AFTER);
-                out.events.push(Event::StopNotHonoured {
-                    message: STOP_NOT_HONOURED.to_owned(),
-                });
+                // The send is attempt 4, so attempt 5, one interval later,
+                // raises the alert only if the machine still flows.
+                *attempts = (*attempts).max(STOP_ALERT_AFTER - 2);
                 if self.may_retry() {
                     self.retry_stop(now, out);
                 }
             }
+            // A mirror follows the hub, which judged the outage itself.
+            _ if read_only => {}
             _ => {
                 session.baseline = Baseline::Refused {
                     why: Blocked::BeganUnseen,

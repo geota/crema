@@ -596,6 +596,8 @@ pub struct CremaCore {
     last_frame: Option<u8>,
     /// Samples at or over the flow-proof threshold since the last stop write.
     flow_proof: u32,
+    /// The flush timeout the core last wrote, the bound on a flush outage.
+    flush_timeout: Option<Duration>,
     /// The last [`Event::StopTargetsArmed`] payload pushed, so the reporter
     /// only emits on change (arming, a late scale, a toggle) — compared on
     /// every scale reading / telemetry sample, both cheap `Copy` structs.
@@ -1078,6 +1080,7 @@ impl CremaCore {
             outage_check: None,
             last_frame: None,
             flow_proof: 0,
+            flush_timeout: None,
             reported_stop_targets: None,
             stop_triggered_this_shot: false,
             weight_target_disabled: false,
@@ -1995,10 +1998,12 @@ impl CremaCore {
     /// MMR `0x803848`, 4-byte LE (one MMR word). TCL `de1_comms.tcl:1199`
     /// and reaprime `de1.models.dart:flushTimeout writeScale: 10.0`
     /// both write a 4-byte payload with Len=4; matched here.
-    pub fn set_flush_timeout(&self, dur: Duration) -> CoreOutput {
+    pub fn set_flush_timeout(&mut self, dur: Duration) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_flush_timeout") {
             return out;
         }
+        // The bound on a flush outage (see `stop_control`).
+        self.flush_timeout = Some(dur);
         // Scale ms-resolution into deciseconds (the legacy `int(10 * s)` form).
         // RS6: `try_from` over `as` — the `.min(65_535)` already bounds it, so the
         // `unwrap_or(MAX)` is unreachable, but it drops the cast + the `#[allow]`.
@@ -11496,7 +11501,7 @@ mod tests {
 
     #[test]
     fn set_flush_timeout_emits_one_flush_timeout_write() {
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
         let out = core.set_flush_timeout(Duration::from_secs(5));
         // 5 s = 5000 ms / 100 = 50 → 4-byte LE.
         assert_single_mmr_write(&out, MmrRegister::FlushTimeout, &[50, 0, 0, 0]);
@@ -11527,7 +11532,7 @@ mod tests {
     /// `set_steam_flow_scales_by_one_hundred_into_a_four_byte_slot`).
     #[test]
     fn heater_tweak_setters_emit_len_byte_4_and_4_byte_payload() {
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
         let cases: [CoreOutput; 8] = [
             core.set_phase_1_flow_rate(2.0),
             core.set_phase_2_flow_rate(4.0),
@@ -11660,7 +11665,7 @@ mod tests {
     /// always no-ops.
     #[test]
     fn heater_tweak_setters_emit_a_write_when_not_locked_out() {
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
         // firmware_lock_override defaults to false, so this is the open path.
         let cases: [(CoreOutput, MmrRegister); 8] = [
             (core.set_phase_1_flow_rate(2.0), MmrRegister::Phase1FlowRate),
