@@ -122,6 +122,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Two web tabs no longer undo each other's changes.** Each store saved its
+  whole copy, so a tab left open put its old copy back over what another tab
+  had saved: a bag's debit, a rating, a recipe, a maintenance count. Each tab
+  now takes what another tab saves, as it's saved and when the tab comes back
+  into view, and a shot recorded in one tab shows in the other with its curve.
+  Two edits at the very same moment still go to the later one. The active
+  profile stays each tab's own, as it's what that tab's machine runs. (#333)
 - **Bean dates show the right day west of Greenwich.** The bean drawer read a
   stored roast, opened, frozen or defrosted day as midnight UTC, so in the
   Americas it showed the day before (a bag roasted on Nov 8 read "Nov 7 · 0d
