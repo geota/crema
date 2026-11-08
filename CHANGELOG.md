@@ -129,6 +129,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   into view, and a shot recorded in one tab shows in the other with its curve.
   Two edits at the very same moment still go to the later one. The active
   profile stays each tab's own, as it's what that tab's machine runs. (#333)
+- **Bean dates show the right day west of Greenwich.** The bean drawer read a
+  stored roast, opened, frozen or defrosted day as midnight UTC, so in the
+  Americas it showed the day before (a bag roasted on Nov 8 read "Nov 7 · 0d
+  ago"). The day is now read as local. Web.
 - **A full history says when a new shot pushes the oldest out.** History keeps
   the newest 300 shots (pinned shots don't count), and a shot or brew saved on a
   full history dropped the oldest without a word; restore and import already

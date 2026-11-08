@@ -35,6 +35,7 @@ import {
 	writeJson,
 	writeJsonChecked
 } from '#lib/utils/storage.js';
+import { onShotFinished, shotIsOpen } from '#lib/restore/tab-safety.js';
 import { readSyncConfig } from '#lib/visualizer/sync-config.js';
 import type {
 	CommonSettings,
@@ -814,10 +815,29 @@ export class SettingsStore {
 		// Another tab's preferences are taken, not written back over (#333),
 		// and pushed as a whole-bundle change is (`onReplaced`, the app's
 		// `pushSettings`), so the core's stop rules and the steam and hot-water
-		// packet match what this tab shows (#380 review S2).
+		// packet match what this tab shows (#380 review S2). Not while a shot
+		// runs here: the push re-targets its auto-stop. Once it ends, once.
 		followOtherTabs(SETTINGS_KEY, isJsonObject, (v) => {
 			this.current = settingsOf(v as Record<string, unknown>);
 			applyTheme(this.current.theme);
+			this.pushAdopted();
+		});
+	}
+
+	/** An adopt's push waits for the shot running here. */
+	private adoptPushHeld = false;
+
+	/** Push adopted settings, after the shot if one runs here. */
+	private pushAdopted(): void {
+		if (!shotIsOpen()) {
+			this.onReplaced?.();
+			return;
+		}
+		if (this.adoptPushHeld) return;
+		this.adoptPushHeld = true;
+		const stop = onShotFinished(() => {
+			stop();
+			this.adoptPushHeld = false;
 			this.onReplaced?.();
 		});
 	}

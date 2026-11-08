@@ -226,12 +226,19 @@ export class ProfileStore {
 		});
 	}
 
-	/** The active profile as it stands, to tell whether an adopt changed it. */
+	/**
+	 * The active profile as the machine sees it, to tell whether an adopt
+	 * changed it. Not its pin or last-used stamp: another tab pinning it, or
+	 * activating the same built-in, changes nothing it runs, and a push would
+	 * reset this tab's per-shot yield dot (#380 fix check).
+	 */
 	private activeContent(): string | undefined {
 		const id = this.activeId;
 		if (id == null) return undefined;
 		const p = this.get(id);
-		return p ? JSON.stringify(p) : undefined;
+		if (!p) return undefined;
+		const { pinned: _pinned, lastUsed: _lastUsed, ...runs } = p;
+		return JSON.stringify(runs);
 	}
 
 	/** An adopt changed the active profile, and this tab's push waits for its shot. */

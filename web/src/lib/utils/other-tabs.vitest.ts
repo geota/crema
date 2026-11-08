@@ -195,6 +195,24 @@ describe('the other stores', () => {
 		expect(push).toHaveBeenCalledOnce();
 	});
 
+	it('a settings adopt mid-shot is pushed once the shot ends, as the profile push is', () => {
+		resetTabSafetyForTest();
+		const a = new SettingsStore();
+		const b = new SettingsStore();
+		let pushes = 0;
+		b.onReplaced = () => (pushes += 1);
+		shotStarted();
+		a.set('stopOnWeight', !a.current.stopOnWeight);
+		announce('crema.settings.v1');
+		a.set('theme', 'light');
+		announce('crema.settings.v1');
+		expect(pushes, 'no push to the core while a shot runs').toBe(0);
+		expect(b.current.theme, 'memory follows at once').toBe('light');
+		shotFinished();
+		expect(pushes, 'once, after the shot').toBe(1);
+		resetTabSafetyForTest();
+	});
+
 	it('custom methods and recipes, with their defaults and hidden list', () => {
 		const methods = new CustomMethodStore();
 		const recipes = new RecipeStore();
@@ -248,6 +266,15 @@ describe('the active profile, changed in another tab (#380 review M2)', () => {
 		expect(push).toHaveBeenCalledOnce();
 		expect(uploads.map((p) => p?.yieldOut)).toEqual([18]);
 		expect(store.activeId, 'the active id stays this tab’s').toBe('c1');
+	});
+
+	it('a pin or a last-used stamp changes nothing on the machine', () => {
+		const { push, uploads } = thisTab();
+		otherTabWrites(CUSTOM, [
+			{ id: 'c1', name: 'Mine', yieldOut: 36, pinned: true, lastUsed: '2026-11-08T10:00:00Z' }
+		]);
+		expect(push).not.toHaveBeenCalled();
+		expect(uploads).toEqual([]);
 	});
 
 	it('an edit to another profile changes nothing on the machine', () => {
