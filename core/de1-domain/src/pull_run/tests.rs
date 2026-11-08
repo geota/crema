@@ -521,6 +521,75 @@ fn a_quiet_device_poisons_with_a_probe() {
 }
 
 #[test]
+fn a_failed_poison_retry_waits_a_day() {
+    let mut entries = vec![];
+    for day in 0..3 {
+        entries = poison_run(&entries, true, NOW + day * DAY_MS);
+    }
+    let due_at = NOW + 3 * DAY_MS;
+    assert_eq!(poison_due(&entries, due_at), ["bad"]);
+    let after = note_poison_retry(&entries, "bad", due_at);
+    assert!(
+        poison_due(&after, due_at + DAY_MS - 1).is_empty(),
+        "one try a day"
+    );
+    assert_eq!(poison_due(&after, due_at + DAY_MS), ["bad"]);
+    assert_eq!(after[0].count, entries[0].count, "a retry counts nothing");
+}
+
+#[test]
+fn a_poison_rows_404_resolves_it() {
+    let mut entries = vec![];
+    for day in 0..3 {
+        entries = poison_run(&entries, true, NOW + day * DAY_MS);
+    }
+    // Its retry answered 404: the shell passes it as resolved.
+    let t = PullTally::starting(0);
+    assert!(settle_poison(&entries, &t, &["bad".to_owned()], NOW + 3 * DAY_MS).is_empty());
+}
+
+#[test]
+fn the_run_api_answers_by_name_in_the_shells_json() {
+    let plan = pull_run_call(
+        "planPage",
+        r#"{"rows":[{"id":"v1","clock":5,"updated_at":10}],"known":[{"remoteId":"v1","remoteVersion":10,"hasSeries":true}],"freeSlots":3}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        plan,
+        r#"{"freeSlots":3,"rows":[{"details":{"id":"v1","why":"UpToDate"},"kind":"Skip"}]}"#
+    );
+    let action = pull_run_call(
+        "rowFailureAction",
+        r#"{"failure":{"kind":"Call","details":{"failure":{"kind":"Unavailable","details":{"status":503}}}},"attempt":0,"jitter":0.5}"#,
+    )
+    .unwrap();
+    assert_eq!(action, r#"{"kind":"RetryNow"}"#);
+    let tally = pull_run_call(
+        "recordRow",
+        r#"{"tally":{"sinceMs":0},"row":{"id":"v1","clock":5,"updated_at":10},"outcome":{"kind":"Applied"}}"#,
+    )
+    .unwrap();
+    let outcome =
+        pull_run_call("finishRun", &format!(r#"{{"tally":{tally},"poison":[]}}"#)).unwrap();
+    assert!(
+        outcome.starts_with(r#"{"details":{"applied":1,"#),
+        "{outcome}"
+    );
+    let paced = pull_run_call(
+        "pace",
+        r#"{"bucket":{"tatMs":0,"lastNowMs":0},"nowMs":1000}"#,
+    )
+    .unwrap();
+    assert!(paced.contains(r#""waitMs":0"#), "{paced}");
+    assert!(pull_run_call("nope", "{}").is_err());
+    assert!(
+        pull_run_call("endRun", r#"{"tally":{}}"#).is_err(),
+        "a missing argument says so"
+    );
+}
+
+#[test]
 fn poison_retries_daily() {
     let mut entries = vec![];
     for day in 0..3 {

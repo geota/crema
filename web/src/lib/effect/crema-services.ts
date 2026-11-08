@@ -102,12 +102,11 @@ export interface CremaServices {
 	};
 	/** Shot sync (the `ShotSync` service). */
 	readonly shots: {
-		/** Pull shots updated since `sinceMs` and reconcile them into `history`. */
-		pullAndReconcile(
-			history: HistoryStore,
-			sinceMs: number,
-			opts?: PullOptions
-		): Promise<PullApplied>;
+		/**
+		 * Pull from Visualizer into `history`, one run at a time across tabs;
+		 * the retry queue drains between its pages.
+		 */
+		pullAndReconcile(history: HistoryStore, opts?: PullOptions): Promise<PullApplied>;
 		/**
 		 * Upload every local shot lacking a `visualizerId`. Single-flight: a
 		 * call while one is running (Settings catch-up, History "Upload N" and
@@ -193,8 +192,16 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 			runSync: (library) => run(Effect.flatMap(BeanSync, (b) => b.runSync(library)))
 		},
 		shots: {
-			pullAndReconcile: (history, sinceMs, opts) =>
-				run(Effect.flatMap(ShotSync, (s) => s.pullAndReconcileShots(history, sinceMs, opts))),
+			pullAndReconcile: (history, opts) =>
+				run(
+					Effect.flatMap(ShotSync, (s) =>
+						s.pullAndReconcileShots(history, {
+							betweenPages: () =>
+								run(Effect.flatMap(UploadQueue, (q) => q.drain)).then((r) => r.deletes ?? 0),
+							...opts
+						})
+					)
+				),
 			uploadUnsynced: (history) => {
 				if (unsyncedRun) return unsyncedRun;
 				const current = run(Effect.flatMap(ShotSync, (s) => s.uploadUnsyncedShots(history))).finally(() => {

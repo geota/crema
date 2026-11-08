@@ -486,7 +486,7 @@ describe('ShotSync.patchEditedShot — pending-only PATCHes', () => {
 		const exit = await editAndPush(edited(), layer);
 		expect(Exit.isFailure(exit)).toBe(true);
 		const edit = pendingEdit('s1');
-		expect(edit).toMatchObject({ annotations: true, tierSignal: true, attempts: 1 });
+		expect(edit).toMatchObject({ annotations: true, tierSignal: true, premiumRefused: true, attempts: 1 });
 		expect(edit?.nextAttemptAt ?? 0).toBeGreaterThan(Date.now() - 1);
 	});
 
