@@ -219,6 +219,22 @@ data class VisualizerState(
      */
     val shotPullCursor: Long? = null,
     /**
+     * Which cursor [shotPullCursor] is. Null: one from before row versions,
+     * which passed rows a pull never applied (#328) and could sit ahead of the
+     * server, so the next pull walks the whole account once, taking bound rows
+     * at or below it as applied. 1: the server's clock, moved only by a
+     * complete run.
+     */
+    val pullCursorEpoch: Int? = null,
+    /** The request pacer's bucket (see [Pacer]), so a relaunch doesn't start with a full burst. */
+    val paceBucket: coffee.crema.core.PaceBucket? = null,
+    /**
+     * Rows that keep failing to pull (core `PoisonEntry`): counted at most once
+     * a day, and only when another detail succeeded, so an outage poisons
+     * nothing. At three a row stops holding the cursor and is tried once a day.
+     */
+    val rowFailures: List<coffee.crema.core.PoisonEntry> = emptyList(),
+    /**
      * The Visualizer account this device's cursor, marks and queue belong to. It
      * outlives a sign-out, so a sign-in as someone else is noticed; only Erase
      * clears it. Seeded from [account] at load, so the first reconnect after this

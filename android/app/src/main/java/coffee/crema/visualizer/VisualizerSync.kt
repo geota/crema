@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -48,6 +49,9 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.boolean
 
 /** Why a shot sync stopped: this takes the user, not a moment's wait. */
 internal const val HISTORY_REFUSED_NOTICE =
@@ -94,6 +98,10 @@ class VisualizerSync(
     private val onApplyRemote: (localId: String, patch: ShotPatch, pulled: PulledParts) -> Unit = { _, _, _ -> },
     /** Core `merge_remote_shot_json` (injected so a JVM test can watch it). */
     private val mergeRemote: (payloadJson: String) -> String = { coffee.crema.core.mergeRemoteShot(it) },
+    /** Core `pull_run_call`: the pull run's rules by name, JSON in and out. */
+    private val pullRunCall: (op: String, payload: String) -> String = { op, p -> coffee.crema.core.pullRunCall(op, p) },
+    /** How a pacing or rate-limit wait is slept (a JVM test records it instead). */
+    private val paceDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     /** Sign-in just completed — the moment to offer a catch-up of existing shots. */
     private val onSignedIn: () -> Unit = {},
     /** The shot as history holds it now (null = deleted) — re-read before a backlog POST. */
@@ -158,7 +166,10 @@ class VisualizerSync(
 
     internal companion object {
         /** Backstop on the pull walk — mirrors the web's maxPages default. */
-        const val MAX_PULL_PAGES = 200
+        const val MAX_PULL_PAGES = 500
+
+        /** Rows a run's list page asks for: the most Visualizer gives. */
+        const val RUN_PAGE_ITEMS = 100
 
         /** How long a run waits for the rows before it skips. */
         const val ROWS_WAIT_MS = 30_000L
@@ -216,6 +227,8 @@ class VisualizerSync(
         val busy: Boolean = false,
         /** True while a Sync-now pull/push pass runs. */
         val syncing: Boolean = false,
+        /** Set while a pull sits out Visualizer's rate limit: when it goes on (unix ms). */
+        val pullWaitingUntil: Long? = null,
         /** Shot ids with an upload in flight (History pip spinners). */
         val uploadingShotIds: Set<String> = emptySet(),
     )
@@ -306,6 +319,7 @@ class VisualizerSync(
                 // Seeded, so a reconnect as someone else is noticed even though
                 // this device never stored the id before.
                 persisted = store.load().let { it.copy(syncAccountId = it.syncAccountId ?: it.account?.id?.ifBlank { null }) }
+                pacer.restore(persisted.paceBucket)
                 ownState.opened()
                 val stored = persisted.pendingEdits.toMutableMap()
                 for (id in persisted.baristaPending) stored[id] = (stored[id] ?: PendingEdit()).with(PendingEdit(barista = true))
@@ -543,6 +557,8 @@ class VisualizerSync(
         shotPullCursor = null,
         baristaPending = emptySet(),
         pendingEdits = emptyMap(),
+        rowFailures = emptyList(),
+        pullCursorEpoch = 1,
         retryQueue = emptyList(),
         uploadAttempted = emptyMap(),
         shotTombstones = shotTombstones.map {
@@ -983,6 +999,11 @@ class VisualizerSync(
             if (!confirmAccount() && held) return 0
         }
         if (uploadsHeld) return 0
+        // A 429's cooldown: nothing goes before it ends.
+        if (pacer.coolingDown()) {
+            nextDrainAt()?.let(::scheduleDrain)
+            return 0
+        }
         // Own state loads apart from the rows, and a shot that isn't in the
         // history leaves the queue: not before the rows are there. A later
         // trigger tries again.
@@ -1266,6 +1287,15 @@ class VisualizerSync(
      */
     private val pendingEdits = java.util.concurrent.ConcurrentHashMap<String, PendingEdit>()
 
+    /** Every Visualizer request's pacer; its bucket is stored in [VisualizerState.paceBucket]. */
+    private val pacer = Pacer(
+        json = json,
+        rules = { op, payload -> pullRunCall(op, payload) },
+        now = { now() },
+        sleep = { paceDelay(it) },
+        store = { bucket -> if (ownState.settled) persist { it.copy(paceBucket = bucket) } },
+    ).also { client.pacer = it }
+
     /**
      * Mark what a History edit of [localId] changed: the journal fields
      * ([annotations]) or the barista. In memory at once, so a pull from now on
@@ -1342,86 +1372,349 @@ class VisualizerSync(
 
     // ── Pull / reconcile (web pullAllShotsSince + applyShotReconciliation) ──
 
-    /**
-     * Walk `GET /shots` newest-updated-first, collecting every shot updated at
-     * or after [sinceMs] as core `WireShot` JSON (+ reconstructed telemetry).
-     * Stops at the cursor, page exhaustion, or the 200-page cap. One failed
-     * detail fetch skips that row (auth failures abort — no point continuing).
-     */
-    private suspend fun pullAllShotsSince(sinceMs: Long): PulledShots {
-        val cursorSec = sinceMs / 1000
-        val wires = mutableListOf<JsonObject>()
-        val samplesById = mutableMapOf<String, String>()
-        val profilesById = mutableMapOf<String, JsonObject>()
-        var page = 1
-        var totalPages = 1
-        var reachedOlder = false
-        var rowsMissed = false
-        var exhausted = false
-        while (!reachedOlder && page <= totalPages.coerceAtMost(MAX_PULL_PAGES)) {
-            val (summaries, pages) = withFreshToken { client.listShots(it, page, 50) }
-            totalPages = pages
-            if (summaries.isEmpty()) {
-                exhausted = true
-                break
-            }
-            for (summary in summaries) {
-                if (summary.updatedAtSec < cursorSec) {
-                    // Sorted by updated_at desc — crossing the cursor ends the walk.
-                    reachedOlder = true
-                    continue
-                }
-                val detail = runCatchingCancellable { withFreshToken { client.fetchShotDetail(it, summary.id) } }
-                    .getOrElse { e ->
-                        if (e is VisualizerError.Auth) throw e
-                        rowsMissed = true
-                        continue
-                    }
-                val detailStr = json.encodeToString(kotlinx.serialization.json.JsonElement.serializer(), detail)
-                val payload = buildJsonObject {
-                    put(
-                        "summary",
-                        buildJsonObject {
-                            put("id", JsonPrimitive(summary.id))
-                            put("clock", JsonPrimitive(summary.clockSec))
-                            put("updated_at", JsonPrimitive(summary.updatedAtSec))
-                        },
-                    )
-                    put("detail", detail)
-                }
-                val wire = runCatchingCancellable {
-                    json.parseToJsonElement(
-                        coffee.crema.core.wireShotFromDetail(json.encodeToString(JsonObject.serializer(), payload)),
-                    ).jsonObject
-                }.getOrNull() ?: run {
-                    rowsMissed = true
-                    continue
-                }
-                wires += wire
-                runCatchingCancellable { coffee.crema.core.samplesFromVisualizerDetail(detailStr) }
-                    .getOrNull()?.let { samplesById[summary.id] = it }
-                // Pull the recipe too (the detail carries no step list) so the shot
-                // is self-contained (#12); a profile-less stub / error → name-only.
-                runCatchingCancellable {
-                    val v2 = withFreshToken {
-                        client.request("GET", "/shots/${summary.id}/profile?format=json", it)
-                    } ?: return@runCatchingCancellable null
-                    json.parseToJsonElement(coffee.crema.core.parseV2Profile(v2.toString())).jsonObject
-                }.getOrNull()?.let { profilesById[summary.id] = it }
-            }
-            page++
+    // ── The pull run (web `ShotSync.pullAndReconcileShots`) ───────────────────
+
+    /** One of the core's pull rules: [op] with [args], its JSON answer. */
+    private fun rule(op: String, args: JsonObject): JsonElement =
+        json.parseToJsonElement(pullRunCall(op, json.encodeToString(JsonObject.serializer(), args)))
+
+    /** What a run request's failure means to the core (`RowFailure`). */
+    private fun rowFailureOf(e: Throwable): JsonObject {
+        fun call(failure: JsonElement) = buildJsonObject {
+            put("kind", JsonPrimitive("Call"))
+            put("details", buildJsonObject { put("failure", failure) })
         }
-        val walked = reachedOlder || exhausted || page > totalPages
-        return PulledShots(wires, samplesById, profilesById, complete = walked && !rowsMissed)
+        fun kind(k: String) = buildJsonObject { put("kind", JsonPrimitive(k)) }
+        return when (e) {
+            is VisualizerError.NotFound -> call(kind("NotFound"))
+            is VisualizerError.Http -> call(json.parseToJsonElement(uploadPolicy.classifyJson(e.status, e.body)))
+            is VisualizerError.Network -> if (e.message == MALFORMED_BODY) kind("NotJson") else call(kind("Offline"))
+            is VisualizerError.PremiumGated -> call(kind("NeedsPremium"))
+            is VisualizerError.Auth -> call(kind("SessionEnded"))
+            else -> call(kind("Offline"))
+        }
     }
 
-    /** What [pullAllShotsSince] brought back. [complete]: every row it passed is in [wires]. */
-    private data class PulledShots(
-        val wires: List<JsonObject>,
-        val samples: Map<String, String>,
-        val profiles: Map<String, JsonObject>,
-        val complete: Boolean,
-    )
+    /** A run request's answer: the value, or the failure and what the core says to do. */
+    private sealed interface RunReply<out A> {
+        data class Ok<A>(val value: A) : RunReply<A>
+        data class Fail(val failure: JsonObject, val action: JsonObject) : RunReply<Nothing>
+    }
+
+    /**
+     * One request of a pull run, paced patiently, with the core's rule for a
+     * failure: a 5xx retries once in place, a 429 sits its wait out and tries
+     * the same request again (three times), anything else comes back.
+     */
+    private suspend fun <A> runRequest(block: suspend () -> A): RunReply<A> {
+        var attempt = 0
+        while (true) {
+            val failure = try {
+                // A 429's wait is the pacer's cooldown: the next slot sits it out.
+                return RunReply.Ok(withContext(PatientRun) { block() })
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                e
+            } finally {
+                if (_state.value.pullWaitingUntil != null) _state.update { it.copy(pullWaitingUntil = null) }
+            }
+            val f = rowFailureOf(failure)
+            val action = rule(
+                "rowFailureAction",
+                buildJsonObject {
+                    put("failure", f)
+                    put("attempt", JsonPrimitive(attempt))
+                    put("jitter", JsonPrimitive(kotlin.random.Random.nextDouble()))
+                },
+            ).jsonObject
+            when ((action["kind"] as? JsonPrimitive)?.contentOrNull) {
+                "RetryNow" -> attempt += 1
+                "Wait" -> {
+                    val wait = action["details"]!!.jsonObject["wait_ms"]!!.jsonPrimitive.content.toLong()
+                    pacer.noteRateLimited(wait)
+                    _state.update { it.copy(pullWaitingUntil = now() + wait) }
+                    attempt += 1
+                }
+                else -> return RunReply.Fail(f, action)
+            }
+        }
+    }
+
+    /** The `SyncFailure` a run ends on, from a failed request's `RowFailure`. */
+    private fun endFailure(f: JsonObject): JsonElement =
+        if ((f["kind"] as? JsonPrimitive)?.contentOrNull == "Call") {
+            f["details"]!!.jsonObject["failure"]!!
+        } else {
+            buildJsonObject {
+                put("kind", JsonPrimitive("Unavailable"))
+                put("details", buildJsonObject { put("status", JsonPrimitive(200)) })
+            }
+        }
+
+    /** A list row as the core reads it. */
+    private fun listRow(s: VisualizerClient.ShotSummary) = buildJsonObject {
+        put("id", JsonPrimitive(s.id))
+        put("clock", JsonPrimitive(s.clockSec))
+        put("updated_at", JsonPrimitive(s.updatedAtSec))
+    }
+
+    /**
+     * Fetch one row's detail and apply it, as the run does for each row: the
+     * recipe only when offered and the row has none, the row re-read just
+     * before the request so an edit made meanwhile wins. The core outcome.
+     */
+    private suspend fun pullRow(summary: VisualizerClient.ShotSummary, shots: List<StoredShot>): RunReply<JsonObject> {
+        val bound = shots.firstOrNull { it.visualizerId == summary.id }?.let { currentShot(it.id) ?: it }
+        val before = bound?.let { mapOf(it.id to mergeInputOf(it, pendingEdits[it.id]?.barista == true)) }.orEmpty()
+        val detail = when (val r = runRequest { withFreshToken { client.fetchShotDetail(it, summary.id) } }) {
+            is RunReply.Ok -> r.value
+            is RunReply.Fail -> return r
+        }
+        val payload = buildJsonObject {
+            put("summary", listRow(summary))
+            put("detail", detail)
+        }
+        val wire = runCatching {
+            json.parseToJsonElement(coffee.crema.core.wireShotFromDetail(json.encodeToString(JsonObject.serializer(), payload))).jsonObject
+        }.getOrNull()
+        if (wire == null) {
+            val f = buildJsonObject { put("kind", JsonPrimitive("Unmappable")) }
+            val action = rule("rowFailureAction", buildJsonObject { put("failure", f); put("attempt", JsonPrimitive(0)); put("jitter", JsonPrimitive(0.5)) })
+            return RunReply.Fail(f, action.jsonObject)
+        }
+        val detailStr = json.encodeToString(JsonElement.serializer(), detail)
+        val samples = runCatching { coffee.crema.core.samplesFromVisualizerDetail(detailStr) }.getOrNull()
+        val offered = ((detail as? JsonObject)?.get("profile_url") as? JsonPrimitive)?.isString == true
+        val profile = if (offered && bound?.profile == null) {
+            // A recipe that won't come leaves the row name-only.
+            (runRequest { withFreshToken { client.request("GET", "/shots/${summary.id}/profile?format=json", it) } } as? RunReply.Ok)
+                ?.value?.let { v2 -> runCatching { json.parseToJsonElement(coffee.crema.core.parseV2Profile(v2.toString())).jsonObject }.getOrNull() }
+        } else {
+            null
+        }
+        val applied = reconcileAndApply(
+            shots,
+            listOf(wire),
+            samples?.let { mapOf(summary.id to it) }.orEmpty(),
+            profile?.let { mapOf(summary.id to it) }.orEmpty(),
+            before,
+        )
+        val outcome = when {
+            applied.refused > 0 -> buildJsonObject { put("kind", JsonPrimitive("HistoryFull")) }
+            applied.held > 0 -> buildJsonObject {
+                put("kind", JsonPrimitive("EditedDuringFetch"))
+                put("details", buildJsonObject { put("has_series", JsonPrimitive(false)) })
+            }
+            else -> buildJsonObject { put("kind", JsonPrimitive("Applied")) }
+        }
+        return RunReply.Ok(outcome)
+    }
+
+    /** What a run did: the core's `RunOutcome`, rows applied, rows a full history refused. */
+    internal data class RunResult(val outcome: JsonObject, val pulled: Int, val refused: Int)
+
+    /**
+     * Pull as the core's run rules say: paced, walking `GET /shots` newest
+     * first from the cursor (`updated_after`). Each row applies as it goes,
+     * its version written last, so a run that stops keeps what it did and the
+     * next one skips it. The cursor moves only on a complete run, on the
+     * server's clock. A row that keeps failing becomes poison after three
+     * counted days and is retried alone once a day. The first run after this
+     * changed (`pullCursorEpoch` unset) walks the whole account once.
+     */
+    internal suspend fun pullRun(shots: List<StoredShot>, fromStart: Boolean = false): RunResult {
+        val st0 = persisted
+        val repairing = st0.pullCursorEpoch == null
+        val legacyCursor = if (repairing) st0.shotPullCursor?.div(1000) else null
+        val since = if (fromStart || repairing) 0L else (st0.shotPullCursor ?: 0L)
+        if (repairing || fromStart) {
+            notify("Crema is checking your whole Visualizer account once. On a large account this takes a while, and shots it was missing come back.")
+        }
+        val run = st0.pullRun + 1
+        persist { it.copy(pullRun = run) }
+        var poison = if (fromStart) emptyList() else st0.rowFailures
+        fun poisonJson() = json.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(coffee.crema.core.PoisonEntry.serializer()), poison)
+        fun poisonFrom(el: JsonElement) =
+            json.decodeFromJsonElement(kotlinx.serialization.builtins.ListSerializer(coffee.crema.core.PoisonEntry.serializer()), el)
+        val resolved = mutableListOf<String>()
+        var tally: JsonElement = buildJsonObject { put("sinceMs", JsonPrimitive(since)) }
+        var pulled = 0
+        var refused = 0
+        /** Versions this run wrote, for the plan of a later page. */
+        val seen = mutableMapOf<String, Long>()
+
+        // Poison rows due their daily try, alone, before the walk.
+        val due = rule("poisonDue", buildJsonObject { put("entries", poisonJson()); put("nowMs", JsonPrimitive(now())) })
+        for (id in due.jsonArray.map { it.jsonPrimitive.content }) {
+            val clock = poison.firstOrNull { it.id == id }?.clock ?: 0L
+            val r = pullRow(VisualizerClient.ShotSummary(id, clock, 0L), shots)
+            val gone = r is RunReply.Fail && failureKind(r.failure) == "NotFound"
+            if (r is RunReply.Ok || gone) {
+                resolved += id
+                if (r is RunReply.Ok && (r.value["kind"] as? JsonPrimitive)?.contentOrNull == "Applied") pulled += 1
+            } else {
+                poison = poisonFrom(rule("notePoisonRetry", buildJsonObject { put("entries", poisonJson()); put("id", JsonPrimitive(id)); put("nowMs", JsonPrimitive(now())) }))
+            }
+        }
+
+        val tombstoned = persisted.shotTombstones.mapTo(HashSet()) { it.visualizerId }
+        var page = 1
+        var ownDeletes = 0
+        walk@ while (true) {
+            if (page > MAX_PULL_PAGES) {
+                tally = JsonObject(tally.jsonObject + ("ended" to partial("PageCap")))
+                break
+            }
+            val after = if (since > 0) since / 1000 - 1 else null
+            val list = when (val r = runRequest { withFreshToken { client.listShotsPage(it, page, RUN_PAGE_ITEMS, after) } }) {
+                is RunReply.Ok -> r.value
+                is RunReply.Fail -> {
+                    tally = rule("endRun", buildJsonObject { put("tally", tally); put("failure", endFailure(r.failure)) })
+                    break@walk
+                }
+            }
+            val shift = rule("afterListPage", buildJsonObject { put("tally", tally); put("count", JsonPrimitive(list.count)); put("ownDeletes", JsonPrimitive(ownDeletes)) }).jsonObject
+            tally = shift["tally"]!!
+            ownDeletes = 0
+            when (shift["step"]!!.jsonPrimitive.content) {
+                "Restart" -> { page = 1; continue@walk }
+                "Stop" -> break@walk
+            }
+            val current = allShots().ifEmpty { shots }
+            val known = kotlinx.serialization.json.buildJsonArray {
+                for (row in list.rows) {
+                    val local = current.firstOrNull { it.visualizerId == row.id }
+                    when {
+                        row.id in tombstoned -> add(buildJsonObject { put("remoteId", JsonPrimitive(row.id)); put("tombstoned", JsonPrimitive(true)) })
+                        local != null || row.id in seen -> add(
+                            buildJsonObject {
+                                put("remoteId", JsonPrimitive(row.id))
+                                (seen[row.id] ?: local?.visualizerUpdatedAt)?.let { put("remoteVersion", JsonPrimitive(it)) }
+                                put("hasSeries", JsonPrimitive(local == null || local.samples.isNotEmpty()))
+                                put("isBrew", JsonPrimitive(local?.isBrewLog == true))
+                            },
+                        )
+                    }
+                }
+            }
+            val candidates = kotlinx.serialization.json.buildJsonArray {
+                current.filter { it.visualizerId == null && !it.isBrewLog }.forEach { s ->
+                    add(buildJsonObject { put("localId", JsonPrimitive(s.id)); put("completedAtMs", JsonPrimitive(s.completedAtMs)); put("durationMs", JsonPrimitive(s.durationMs)) })
+                }
+                persisted.unboundTombstones.filter { it.parkedFor == null }.forEach { t ->
+                    add(buildJsonObject { put("localId", JsonPrimitive(t.id)); put("completedAtMs", JsonPrimitive(t.completedAtMs)); put("durationMs", JsonPrimitive(t.durationMs)); put("tombstone", JsonPrimitive(true)) })
+                }
+            }
+            val plan = rule(
+                "planPage",
+                buildJsonObject {
+                    put("rows", kotlinx.serialization.json.JsonArray(list.rows.map(::listRow)))
+                    put("known", known)
+                    put("candidates", candidates)
+                    put("freeSlots", JsonPrimitive((coffee.crema.history.HistoryStore.MAX_SHOTS - current.size).coerceAtLeast(0)))
+                    legacyCursor?.let { put("legacyCursor", JsonPrimitive(it)) }
+                },
+            ).jsonObject["rows"]!!.jsonArray
+            for ((i, planned) in plan.withIndex()) {
+                val summary = list.rows[i]
+                val row = listRow(summary)
+                val p = planned.jsonObject
+                if (p["kind"]!!.jsonPrimitive.content == "Skip") {
+                    val full = p["details"]!!.jsonObject["why"]!!.jsonPrimitive.content == "HistoryFull"
+                    if (full) refused += 1
+                    val outcome = buildJsonObject { put("kind", JsonPrimitive(if (full) "HistoryFull" else "Unchanged")) }
+                    tally = rule("recordRow", buildJsonObject { put("tally", tally); put("row", row); put("outcome", outcome) })
+                    continue
+                }
+                when (val r = pullRow(summary, current)) {
+                    is RunReply.Ok -> {
+                        when ((r.value["kind"] as? JsonPrimitive)?.contentOrNull) {
+                            "Applied" -> {
+                                pulled += 1
+                                resolved += summary.id
+                                seen[summary.id] = summary.updatedAtSec
+                            }
+                            "HistoryFull" -> refused += 1
+                        }
+                        tally = rule("recordRow", buildJsonObject { put("tally", tally); put("row", row); put("outcome", r.value) })
+                    }
+                    is RunReply.Fail -> {
+                        tally = if ((r.action["kind"] as? JsonPrimitive)?.contentOrNull == "Skip") {
+                            val outcome = buildJsonObject { put("kind", JsonPrimitive("Failed")); put("details", r.action["details"]!!) }
+                            rule("recordRow", buildJsonObject { put("tally", tally); put("row", row); put("outcome", outcome) })
+                        } else {
+                            rule("endRun", buildJsonObject { put("tally", tally); put("failure", endFailure(r.failure)) })
+                        }
+                    }
+                }
+                if (tally.jsonObject["ended"] != null && tally.jsonObject["ended"] !is JsonNull) break@walk
+            }
+            if (page >= list.pages || list.rows.isEmpty()) break
+            page += 1
+        }
+
+        // The only failing row may be the only one changed: one known-good
+        // detail says whether the server works, for the poison count.
+        if (rule("healthProbeDue", buildJsonObject { put("tally", tally) }).jsonPrimitive.boolean) {
+            val good = allShots().ifEmpty { shots }.firstOrNull { it.visualizerId != null && it.visualizerUpdatedAt != null }
+            if (good?.visualizerId != null) {
+                val ok = runCatchingCancellable { withContext(PatientRun) { withFreshToken { client.fetchShotDetail(it, good.visualizerId) } } }.isSuccess
+                tally = rule("recordHealthProbe", buildJsonObject { put("tally", tally); put("succeeded", JsonPrimitive(ok)) })
+            }
+        }
+
+        poison = poisonFrom(
+            rule("settlePoison", buildJsonObject {
+                put("entries", poisonJson()); put("tally", tally)
+                put("resolved", kotlinx.serialization.json.JsonArray(resolved.map(::JsonPrimitive))); put("nowMs", JsonPrimitive(now()))
+            }),
+        )
+        val outcome = rule("finishRun", buildJsonObject { put("tally", tally); put("poison", poisonJson()) }).jsonObject
+        val complete = outcome["kind"]!!.jsonPrimitive.content == "Complete"
+        persist { st ->
+            st.copy(
+                rowFailures = poison,
+                shotPullCursor = if (complete) outcome["details"]!!.jsonObject["next_cursor_ms"]!!.jsonPrimitive.content.toLong() else st.shotPullCursor,
+                pullCursorEpoch = if (complete) 1 else st.pullCursorEpoch,
+                // Matches left the list above, so what's here wasn't found.
+                unboundTombstones = if (complete) st.unboundTombstones.filterNot { it.expiredBy(run, since) } else st.unboundTombstones,
+            )
+        }
+        pacer.flush()
+        return RunResult(outcome, pulled, refused)
+    }
+
+    /** The run's one line in the sync log: a large run would push out every other line. */
+    private suspend fun logRun(result: RunResult) {
+        val kind = result.outcome["kind"]?.jsonPrimitive?.contentOrNull
+        val details = result.outcome["details"] as? JsonObject
+        val shotsN = "${result.pulled} shot${if (result.pulled == 1) "" else "s"}"
+        if (kind == "Complete") {
+            val skipped = details?.get("skipped_permanent")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            logSync("pull", "", if (result.pulled == 0) "No new shots from Visualizer" else "Pulled $shotsN", if (skipped > 0) "$skipped couldn't be read and were skipped." else null)
+            return
+        }
+        val why = when (details?.get("reason")?.jsonPrimitive?.contentOrNull) {
+            "RateLimited" -> "Visualizer is limiting requests. The rest come with the next sync."
+            "Offline" -> "The connection dropped. The rest come with the next sync."
+            "ServerTrouble" -> "Visualizer isn't answering properly. The rest come with the next sync."
+            "PageCap" -> "The pull reached its page limit. Run Sync again to continue."
+            "RowsFailed" -> "Some shots couldn't be read. They're tried again with the next sync."
+            "ListShifted" -> "Shots changed on Visualizer while pulling. The rest come with the next sync."
+            "HistoryFull" -> historyFullNotice(result.refused)
+            else -> "Visualizer couldn't be reached."
+        }
+        logSync("pull", "", "Pulled $shotsN, then stopped", why)
+    }
+
+    private fun partial(reason: String) = buildJsonObject {
+        put("kind", JsonPrimitive("Partial"))
+        put("details", buildJsonObject { put("reason", JsonPrimitive(reason)) })
+    }
+
+    private fun failureKind(f: JsonObject): String? =
+        f["details"]?.jsonObject?.get("failure")?.jsonObject?.get("kind")?.jsonPrimitive?.contentOrNull
 
     /**
      * Reconcile pulled wires against the local history via the CORE planner
@@ -1506,7 +1799,10 @@ class VisualizerSync(
                 "add" -> {
                     val remote = action["remote"] as? JsonObject ?: continue
                     val vid = (remote["id"] as? JsonPrimitive)?.contentOrNull
-                    storedShotFromWire(remote, vid?.let { samplesById[it] }, json)?.let { stub ->
+                    storedShotFromWire(remote, vid?.let { samplesById[it] }, json)?.let { found ->
+                        // Its version too, or every run would fetch it again.
+                        val version = (remote["updated_at_ms"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong()?.div(1000)
+                        val stub = found.copy(visualizerUpdatedAt = version)
                         // Attach the recipe fetched at pull time (#12) so the shot is
                         // self-contained; absent for profile-less remotes.
                         stubs += vid?.let { profilesById[it] }?.let { stub.copy(profile = it) } ?: stub
@@ -1716,11 +2012,6 @@ class VisualizerSync(
         return false
     }
 
-    /** Each bound row as a pull begins, with its pending marks, for [mergeAndApply]. */
-    private fun mergeInputsOf(shots: List<StoredShot>): Map<String, ShotMergeInput> =
-        shots.filter { it.visualizerId != null && !it.isBrewLog }
-            .associate { it.id to mergeInputOf(it, pendingEdits[it.id]?.barista == true) }
-
     // ── Bean / roaster sync (web BeanSync.runSync) ────────────────────────────
 
     /** True while a bean / roaster run is in flight (one at a time). */
@@ -1805,7 +2096,7 @@ class VisualizerSync(
      * advances ONLY on a successful pull — never on a push. Soft per-step: a
      * failure logs + notifies, the other steps still run.
      */
-    fun syncNow(shots: List<StoredShot>, includeBeans: Boolean = true) {
+    fun syncNow(shots: List<StoredShot>, includeBeans: Boolean = true, fromStart: Boolean = false) {
         if (persisted.tokens == null) {
             notify("Sign in to Visualizer first (Settings → Sharing)")
             return
@@ -1852,24 +2143,11 @@ class VisualizerSync(
             var pushed = 0
             if (directionPulls(direction)) {
                 runCatchingCancellable {
-                    val since = persisted.shotPullCursor ?: 0L
-                    val run = persisted.pullRun + 1
-                    persist { it.copy(pullRun = run) }
-                    val before = mergeInputsOf(shots)
-                    val pull = pullAllShotsSince(since)
-                    val applied = reconcileAndApply(shots, pull.wires, pull.samples, pull.profiles, before)
-                    pulled = applied.pulled
-                    refused = applied.refused
-                    persist { st ->
-                        val complete = pull.complete && applied.planned && applied.held == 0
-                        st.copy(
-                            // A row edited mid-pull still lacks its curve: the
-                            // next pull fetches it again.
-                            shotPullCursor = if (applied.held > 0) st.shotPullCursor else System.currentTimeMillis(),
-                            // Matches left the list above, so what's here wasn't found.
-                            unboundTombstones = if (complete) st.unboundTombstones.filterNot { it.expiredBy(run, since) } else st.unboundTombstones,
-                        )
-                    }
+                    val result = pullRun(shots, fromStart = fromStart)
+                    pulled = result.pulled
+                    refused = result.refused
+                    logRun(result)
+                    if (result.outcome["kind"]?.jsonPrimitive?.contentOrNull != "Complete") failed = true
                 }.onFailure { e ->
                     failed = true
                     logSync("pull", "", "Pull failed", e.message)
@@ -1954,11 +2232,9 @@ class VisualizerSync(
      */
     fun resyncAllShots(shots: List<StoredShot>) {
         if (!shotsReady()) return
-        scope.launch {
-            persist { it.copy(shotPullCursor = null) }
-            // Shots only — the web's "Re-sync shots" never touches beans.
-            syncNow(shots, includeBeans = false)
-        }
+        // Shots only — the web's "Re-sync shots" never touches beans. From the
+        // start, forgetting the rows marked as failing.
+        syncNow(shots, includeBeans = false, fromStart = true)
     }
 
     /** Upload every shot without a `visualizerId`, sequentially, with a summary. */
