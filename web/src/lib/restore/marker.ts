@@ -36,6 +36,8 @@ export interface RestoreMarker {
 	startedAt: number;
 	finishingAt?: number;
 	deletes: MarkerDeletes;
+	/** Beans this restore added, across re-runs: not this device's own bag for `zeroDebit`. */
+	addedBeans?: string[];
 }
 
 const union = (a: readonly string[], b: readonly string[]): string[] => [...new Set([...a, ...b])];
@@ -68,7 +70,8 @@ export function beginMarker(
 	mode: RestoreMarker['mode'],
 	backupName: string,
 	deletes: MarkerDeletes,
-	now: number = Date.now()
+	now: number = Date.now(),
+	addedBeans: readonly string[] = []
 ): boolean {
 	const prior = readMarker();
 	const marker: RestoreMarker = {
@@ -79,7 +82,8 @@ export function beginMarker(
 		deletes: {
 			shots: union(prior?.deletes.shots ?? [], deletes.shots),
 			photos: union(prior?.deletes.photos ?? [], deletes.photos)
-		}
+		},
+		addedBeans: union(prior?.addedBeans ?? [], addedBeans)
 	};
 	return writeJsonChecked(MARKER_KEY, marker);
 }

@@ -17,6 +17,8 @@ import {
 	toLocalInput
 } from './brew-date';
 import { HistoryStore } from './store.svelte';
+import { dismissToast, getToasts } from '#lib/components/shared/toast.svelte.js';
+import { historyCutNotice } from './brew-date';
 import type { StoredShot } from './model';
 
 const HOUR = 60 * 60 * 1000;
@@ -216,6 +218,43 @@ describe('the cap counts live rows', () => {
 		for (let i = 0; i < 20; i++) store.addManualBrew(brew(NOW + (i + 1) * 60_000));
 		expect(store.all).toHaveLength(300);
 		expect(store.rawAll).toHaveLength(310);
+	});
+});
+
+describe('a save that drops a row says so (#310 P0)', () => {
+	const notices = () => getToasts().map((t) => t.message);
+	beforeEach(() => {
+		for (const t of getToasts()) dismissToast(t.id);
+	});
+	const full = () => {
+		const store = new HistoryStore();
+		for (let i = 0; i < 300; i++) store.addManualBrew(brew(NOW - i * HOUR));
+		for (const t of getToasts()) dismissToast(t.id);
+		return store;
+	};
+
+	it('a brew logged on a full history names the row it dropped', () => {
+		const store = full();
+		store.addManualBrew(brew(NOW + HOUR));
+		expect(notices()).toEqual(['History keeps the newest 300 shots, so the oldest shot was dropped.']);
+	});
+
+	it('nothing dropped, nothing said: below the cap, or with a pinned row that leaves room', () => {
+		const store = new HistoryStore();
+		store.addManualBrew(brew(NOW));
+		expect(notices()).toEqual([]);
+		const pinned = full();
+		pinned.setPinned(pinned.all.at(-1)!.id, true);
+		pinned.addManualBrew(brew(NOW + HOUR));
+		expect(notices(), 'a pinned row does not count against the cap').toEqual([]);
+	});
+
+	it('the wording for several rows, and for a new row older than all of them', () => {
+		expect(historyCutNotice(2, true, 300)).toBe('History keeps the newest 300 shots, so the oldest 2 were dropped.');
+		expect(historyCutNotice(0, false, 300)).toBe(
+			'History keeps the newest 300 shots, and this one is older than all of them, so it wasn\u2019t kept.'
+		);
+		expect(historyCutNotice(0, true, 300)).toBeNull();
 	});
 });
 

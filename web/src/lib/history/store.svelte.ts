@@ -38,6 +38,7 @@ import {
 	cappedHistory,
 	evictOldest,
 	fitsHistory,
+	historyCutNotice,
 	newestFirst,
 	type HistoryInsert
 } from './brew-date';
@@ -350,7 +351,7 @@ export class HistoryStore {
 	 * was dated. A row older than a full history is the one that goes.
 	 */
 	private insert(shot: StoredShot): void {
-		this.shots = cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS);
+		this.capWith(shot, cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS));
 	}
 
 	/**
@@ -358,7 +359,18 @@ export class HistoryStore {
 	 * behind the history can't lose it: the oldest other row goes instead.
 	 */
 	private insertMade(shot: StoredShot): void {
-		this.shots = cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS, shot.id);
+		this.capWith(shot, cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS, shot.id));
+	}
+
+	/** Take `next`, the rows with `shot` added and capped, and say if the cap
+	 *  dropped any (#310 P0): a row never leaves without a word. Pinned rows
+	 *  are never among them (#311). */
+	private capWith(shot: StoredShot, next: StoredShot[]): void {
+		const kept = new Set(next.map((s) => s.id));
+		const droppedOlder = this.shots.filter((s) => !kept.has(s.id)).length;
+		this.shots = next;
+		const notice = historyCutNotice(droppedOlder, kept.has(shot.id), MAX_RECORDS);
+		if (notice) toast.info(notice, 7000);
 	}
 
 	/** The most rows the history keeps. */
@@ -400,16 +412,19 @@ export class HistoryStore {
 		// were written are in `this.shots`, and the plan runs over them.
 		const { next, series } = plan(this.shots);
 		const written = new Set(first.map((s) => s.id));
-		for (const s of series) {
-			// A row the recompute found anew keeps its curve in memory and
-			// writes it now, as any new row does.
-			if (!written.has(s.id) && s.record.samples.length > 0) {
-				void putSeries(s.id, s.record.samples).catch(seriesSaveFailed);
-			}
-		}
+		// A row the recompute found anew keeps its curve in memory, and it's
+		// written straight after the rows, before the restore says it's done.
+		const late = series.filter((s) => !written.has(s.id) && s.record.samples.length > 0);
 		this.shots = next;
 		if (this.writeRows() !== 'ok') return { stored: false, curvesFailed };
 		this.markLive(next.map((s) => s.id));
+		if (late.length > 0) {
+			try {
+				await writeSeries(late);
+			} catch {
+				curvesFailed += late.length;
+			}
+		}
 		return { stored: true, curvesFailed };
 	}
 
