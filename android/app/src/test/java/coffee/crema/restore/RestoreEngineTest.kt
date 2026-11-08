@@ -278,8 +278,8 @@ class RestoreEngineTest {
         e.failAt = RestoreStep.PROFILES
         assertIs<RestoreOutcome.Stopped>(e.run(a, RestoreKind.MERGE, records(a), expected = e.plan(a, RestoreKind.MERGE)))
         sink.state = local(beans = listOf(BEAN))
-        // Backup B, another file holding the same bean: for B the bag is this device's.
-        val b = prepareBackup(backup, "another backup", File(dir, "stage-b"))
+        // Backup B, made at another time, holding the same bean: for B the bag is this device's.
+        val b = prepareBackup(madeAt(42), "another backup", File(dir, "stage-b"))
         val forB = e.plan(b, RestoreKind.MERGE)
         assertTrue(forB.shots.zeroDebit.isNotEmpty(), "A's marker says nothing about B")
         // B's own marker then carries none of A's beans.
@@ -287,6 +287,43 @@ class RestoreEngineTest {
         e.run(b, RestoreKind.MERGE, records(b), expected = forB)
         assertEquals(emptyList(), marker.read()?.addedBeans)
         assertEquals("another backup", marker.read()?.backupName)
+    }
+
+    /** The fixture with its header's `createdAt` set to [at]: another backup. */
+    private fun madeAt(at: Long): ByteArray =
+        String(backup).replaceFirst("\"createdAt\":1790000000000", "\"createdAt\":$at").toByteArray().also {
+            assertTrue(!it.contentEquals(backup))
+        }
+
+    @Test
+    fun aRestoreOfAFromAFileCutOffThenRunAgainFromDriveKeepsItsDebits() = runBlocking<Unit> {
+        // DECISIONS §7: the same backup by its header, whatever the file is called.
+        val sink = FakeSink(local(beans = emptyList()))
+        val e = engine(sink)
+        val fromFile = prepareBackup(backup, "crema-backup.crema.zip", File(dir, "stage-file"))
+        e.failAt = RestoreStep.PROFILES
+        assertIs<RestoreOutcome.Stopped>(e.run(fromFile, RestoreKind.MERGE, records(fromFile), expected = e.plan(fromFile, RestoreKind.MERGE)))
+        assertEquals(listOf(BEAN), marker.read()?.addedBeans)
+        sink.state = local(beans = listOf(BEAN))
+        // The same bytes from Drive, under Drive's file name.
+        val fromDrive = prepareBackup(backup, "crema-backup-tablet-20261108-0800.crema.zip", File(dir, "stage-drive"))
+        assertEquals(fromFile.identity, fromDrive.identity)
+        val again = e.plan(fromDrive, RestoreKind.MERGE)
+        assertEquals(emptyList(), again.shots.zeroDebit, "the bag the file's run added isn't the device's own")
+        e.failAt = null
+        assertIs<RestoreOutcome.Done>(e.run(fromDrive, RestoreKind.MERGE, records(fromDrive), expected = again))
+        assertNull(marker.read())
+    }
+
+    @Test
+    fun aBackupIsIdentifiedByItsHeaderAndByItsFileNameOnlyWithoutOne() {
+        val a = prepareBackup(backup, "one name", File(dir, "s1"))
+        assertEquals("""[1790000000000,"Android fixture","fixture"]""", a.identity)
+        assertEquals(a.identity, prepareBackup(backup, "another name", File(dir, "s2")).identity)
+        assertTrue(a.identity != prepareBackup(madeAt(42), "one name", File(dir, "s3")).identity)
+        val headless = ("{ not a header\n" + String(backup).substringAfter('\n')).toByteArray()
+        assertEquals("""["file","x.zip"]""", prepareBackup(headless, "x.zip", File(dir, "s4")).identity)
+        assertTrue(prepareBackup(headless, "x.zip", File(dir, "s5")).identity != prepareBackup(headless, "y.zip", File(dir, "s6")).identity)
     }
 
     @Test

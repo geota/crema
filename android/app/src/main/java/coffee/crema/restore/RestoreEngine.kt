@@ -16,6 +16,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
@@ -43,13 +47,30 @@ class PreparedBackup(
     /** The core's `BackupManifest`, as JSON. */
     val manifestJson: String,
 ) {
-    /** The header's `createdAt`, or null when the header didn't read: with [name], which backup this is. */
-    val createdAt: Long? = runCatching {
-        kotlinx.serialization.json.Json.parseToJsonElement(manifestJson)
-            .let { it as? kotlinx.serialization.json.JsonObject }
-            ?.get("header")?.let { it as? kotlinx.serialization.json.JsonObject }
-            ?.get("createdAt")?.let { (it as kotlinx.serialization.json.JsonPrimitive).content.toLong() }
+    /**
+     * Which backup this is, by its header (`createdAt`, device, app version),
+     * so the same backup from Drive or from a file is the same (DECISIONS §7);
+     * the file name stands in only when the header didn't read. The web's
+     * `PreparedBackup.identity`, in the same form.
+     */
+    val identity: String = backupIdentity(manifestJson, name)
+}
+
+/** `[createdAt, deviceLabel, appVersion]` from the manifest's header, or `["file", name]`. */
+internal fun backupIdentity(manifestJson: String, name: String): String {
+    val header = runCatching {
+        (Json.parseToJsonElement(manifestJson) as? JsonObject)?.get("header") as? JsonObject
     }.getOrNull()
+    if (header == null) return JsonArray(listOf(JsonPrimitive("file"), JsonPrimitive(name))).toString()
+    fun field(key: String) = (header[key] as? JsonPrimitive)?.takeUnless { it is JsonNull }
+    val createdAt = field("createdAt")?.content?.toLongOrNull()
+    return JsonArray(
+        listOf(
+            createdAt?.let { JsonPrimitive(it) } ?: JsonNull,
+            JsonPrimitive(field("deviceLabel")?.content ?: ""),
+            JsonPrimitive(field("appVersion")?.content ?: ""),
+        ),
+    ).toString()
 }
 
 private fun isZip(bytes: ByteArray): Boolean =
@@ -104,12 +125,12 @@ data class RestoreMarker(
     val deletes: MarkerDeletes = MarkerDeletes(),
     /** Beans this restore added, across re-runs: they aren't this device's own bag for `zeroDebit`. */
     val addedBeans: List<String> = emptyList(),
-    /** The backup's header `createdAt`: with [backupName], which backup [addedBeans] belong to. */
-    val backupCreatedAt: Long? = null,
+    /** Which backup [addedBeans] belong to: its [PreparedBackup.identity]. */
+    val backupId: String = "",
 ) {
-    /** Whether this marker is an interrupted run of the backup [name], made at [createdAt]. */
-    fun isRunOf(name: String, createdAt: Long?): Boolean =
-        phase == RestoreMarkerStore.PHASE_APPLYING && backupName == name && backupCreatedAt == createdAt
+    /** Whether this marker is an interrupted run of the backup with [identity], from Drive or a file alike. */
+    fun isRunOf(identity: String): Boolean =
+        phase == RestoreMarkerStore.PHASE_APPLYING && backupId.isNotEmpty() && backupId == identity
 }
 
 /** The marker file, through [SafeFile]: a kill is seen at the next launch. */
@@ -124,11 +145,11 @@ class RestoreMarkerStore(private val file: File, private val json: Json) {
         deletes: MarkerDeletes,
         now: Long,
         addedBeans: List<String> = emptyList(),
-        backupCreatedAt: Long? = null,
+        backupId: String = "",
     ): Boolean {
         val earlier = read()
         // Deletes owed stay whatever the backup; added beans only for a re-run of the same one.
-        val sameBackup = earlier?.isRunOf(backupName, backupCreatedAt) == true
+        val sameBackup = backupId.isNotEmpty() && earlier?.isRunOf(backupId) == true
         val prior = earlier?.deletes ?: MarkerDeletes()
         val marker = RestoreMarker(
             phase = PHASE_APPLYING,
@@ -140,7 +161,7 @@ class RestoreMarkerStore(private val file: File, private val json: Json) {
                 photos = (prior.photos + deletes.photos).distinct(),
             ),
             addedBeans = ((if (sameBackup) earlier?.addedBeans.orEmpty() else emptyList()) + addedBeans).distinct(),
-            backupCreatedAt = backupCreatedAt,
+            backupId = backupId,
         )
         return write(marker)
     }
@@ -265,8 +286,8 @@ class RestoreEngine(
     /** The plan against this device as it is now. */
     suspend fun plan(prepared: PreparedBackup, kind: RestoreKind, reviveDeleted: Boolean = false): RestorePlan {
         // A re-run after an interrupted one: the beans it added aren't the device's own.
-        // Only an interrupted run of this same backup: name and header `createdAt` (DECISIONS §7).
-        val added = marker.read()?.takeIf { it.isRunOf(prepared.name, prepared.createdAt) }?.addedBeans.orEmpty()
+        // Only an interrupted run of this same backup, by its header (DECISIONS §7).
+        val added = marker.read()?.takeIf { it.isRunOf(prepared.identity) }?.addedBeans.orEmpty()
         return planFor(prepared, kind, sink.localState().copy(addedBeans = added), json, reviveDeleted)
     }
 
@@ -337,7 +358,7 @@ class RestoreEngine(
 
         // 1. The marker, with what this restore will owe to delete.
         if (!step(RestoreStep.MARKER) {
-                marker.begin(kind, prepared.name, MarkerDeletes(plan.shots.remove, plan.photos.remove), now(), plan.beans.add, prepared.createdAt)
+                marker.begin(kind, prepared.name, MarkerDeletes(plan.shots.remove, plan.photos.remove), now(), plan.beans.add, prepared.identity)
             }
         ) return stopped(RestoreStep.MARKER)
         // 2. Tombstones the backup brings back: no remote DELETE may follow.
