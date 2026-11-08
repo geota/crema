@@ -414,9 +414,12 @@ impl PullTally {
 
 /// Note list row `row` with how it went. A transient failure counts towards
 /// the streak and three end the run as `ServerTrouble`; anything else resets it.
+/// A row seen again after a restart replaces what it did before, so it holds
+/// once at most, and not at all once it went through.
 #[must_use]
 pub fn record_row(tally: &PullTally, row: &ListRow, outcome: RowOutcome) -> PullTally {
     let mut t = tally.clone();
+    t.failed.retain(|f| f.id != row.id);
     t.walked += 1;
     t.highest_seen = Some(
         t.highest_seen
@@ -580,6 +583,28 @@ pub fn settle_poison(
         }
     }
     out
+}
+
+/// Whether the run should fetch one known-good row's detail before it ends: a
+/// row failed in a way that may be poison, and nothing else succeeded, so there
+/// is no evidence yet that the server works. On a quiet device the failing row
+/// may be the only one changed, and without this it would hold the cursor for
+/// good. One request, made only in that case.
+#[must_use]
+pub fn health_probe_due(tally: &PullTally) -> bool {
+    tally.ended.is_none()
+        && !tally.detail_succeeded
+        && tally.failed.iter().any(|r| r.poison_candidate)
+}
+
+/// The known-good detail fetched for [`health_probe_due`] answered: the server
+/// works, so this run's failures count towards poison. A failed probe changes
+/// nothing, and nothing counts.
+#[must_use]
+pub fn record_health_probe(tally: &PullTally, succeeded: bool) -> PullTally {
+    let mut t = tally.clone();
+    t.detail_succeeded |= succeeded;
+    t
 }
 
 /// Poison rows due their daily try, one request each, at run start: the

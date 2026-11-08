@@ -454,6 +454,73 @@ fn outage_poisons_nothing() {
 }
 
 #[test]
+fn a_row_seen_again_after_a_restart_holds_once() {
+    let bad = row("bad", 5, 90);
+    let mut t = record_row(&PullTally::starting(0), &bad, failed(true, true, false));
+    t = record_row(&t, &bad, failed(true, true, false));
+    assert_eq!(t.failed.len(), 1, "the rewalk replaced it");
+    assert!(matches!(
+        finish_run(&t, &[], None),
+        RunOutcome::Partial { left: 1, .. }
+    ));
+    t = record_row(&t, &bad, RowOutcome::Applied);
+    assert!(t.failed.is_empty(), "it went through on the rewalk");
+    assert!(matches!(
+        finish_run(&t, &[], None),
+        RunOutcome::Complete { .. }
+    ));
+}
+
+/// The only changed row fails: with no other detail, a known-good probe is
+/// the evidence that the server works.
+#[test]
+fn a_quiet_device_poisons_with_a_probe() {
+    let alone = |probe_ok: Option<bool>| {
+        let t = record_row(
+            &PullTally::starting(0),
+            &row("bad", 5, 90),
+            failed(true, true, true),
+        );
+        assert!(health_probe_due(&t));
+        probe_ok.map_or(t.clone(), |ok| record_health_probe(&t, ok))
+    };
+    let mut entries = vec![];
+    for day in 0..3 {
+        entries = settle_poison(&entries, &alone(None), &[], NOW + day * DAY_MS);
+    }
+    assert!(entries.is_empty(), "no probe, nothing counts");
+    for day in 0..3 {
+        entries = settle_poison(&entries, &alone(Some(false)), &[], NOW + day * DAY_MS);
+    }
+    assert!(entries.is_empty(), "a failed probe is an outage");
+    for day in 0..3 {
+        entries = settle_poison(&entries, &alone(Some(true)), &[], NOW + day * DAY_MS);
+    }
+    assert_eq!(entries[0].count, POISON_COUNT);
+    assert!(matches!(
+        finish_run(&alone(Some(true)), &entries, None),
+        RunOutcome::Complete {
+            skipped_permanent: 1,
+            ..
+        }
+    ));
+    let good = record_row(
+        &PullTally::starting(0),
+        &row("good", 1, 100),
+        RowOutcome::Applied,
+    );
+    assert!(!health_probe_due(&good), "nothing failed");
+    assert!(
+        !health_probe_due(&record_row(
+            &good,
+            &row("bad", 5, 90),
+            failed(true, true, true)
+        )),
+        "another detail went through"
+    );
+}
+
+#[test]
 fn poison_retries_daily() {
     let mut entries = vec![];
     for day in 0..3 {
@@ -995,9 +1062,11 @@ fn every_row_arrives_and_the_cursor_never_passes_one() {
                 run(&mut v, &mut d, &mut now, &faults)
             {
                 for r in &v.rows {
+                    // The next run lists `updated_after = cursor_s - 1`
+                    // (strict): every row it hasn't applied must be in it.
                     if d.versions.get(&r.id) != Some(&r.updated_at) {
                         assert!(
-                            r.updated_at * 1000 >= next_cursor_ms - CURSOR_OVERLAP_S * 1000,
+                            r.updated_at * 1000 > next_cursor_ms - 1000,
                             "seed {seed}: {} passed",
                             r.id
                         );
