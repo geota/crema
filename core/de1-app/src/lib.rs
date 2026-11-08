@@ -1476,11 +1476,22 @@ impl CremaCore {
         self.scale_watch.link(self.clock, self.scale_dormant())
     }
 
-    /// A Half Decent Scale in SoftSleep: silent by design.
+    /// A Half Decent Scale in SoftSleep: silent by design. Not while water
+    /// flows: a wake is due at state entry, and a lost one must reach the
+    /// dead timeout and the backstop like any silent scale.
     fn scale_dormant(&self) -> bool {
         self.hds
             .as_ref()
             .is_some_and(HdsNegotiation::is_soft_sleeping)
+            && !self.flow_running()
+    }
+
+    /// A session is open past its pre-flow substates.
+    fn flow_running(&self) -> bool {
+        self.session.is_some()
+            && self
+                .last_state
+                .is_some_and(|info| !is_pre_flow(info.substate))
     }
 
     /// What the weight may do for a session in `mode`: its own if one is
@@ -5881,10 +5892,11 @@ impl CremaCore {
             .steam_hotwater_settings
             .as_ref()
             .is_some_and(|p| p.hot_water_volume_ml >= HOT_WATER_STOP_ON_SCALE_ML - 0.5);
-        if !packet_is_backstop
-            || self.hot_water_authority() == WeightAuthority::Trusted
-            || pour_ml - pour.started_ml < v_ml
-        {
+        // Stand down only behind a weight stop that is armed and trusted: a
+        // pour that began with the scale stale has no weight target at all.
+        let weight_stops_it = self.hot_water_stop_target_g.is_some()
+            && self.hot_water_authority() == WeightAuthority::Trusted;
+        if !packet_is_backstop || weight_stops_it || pour_ml - pour.started_ml < v_ml {
             return;
         }
         self.hot_water_stop_target_g = None;

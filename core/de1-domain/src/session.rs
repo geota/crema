@@ -171,7 +171,7 @@ impl Blocked {
             Blocked::ScaleSilent => "Scale isn't reporting",
             Blocked::BeganUnseen => "Started before Crema connected",
             Blocked::UntaredCup => "cup not tared",
-            Blocked::ScaleLost => "Scale lost before the cup had weight. Stop this shot by hand.",
+            Blocked::ScaleLost => "Scale stopped reporting. Stop this shot by hand.",
         }
     }
 

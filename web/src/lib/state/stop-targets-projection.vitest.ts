@@ -84,12 +84,12 @@ describe('the blocked note', () => {
 			fakeCore({
 				weightConfigured: 36,
 				weightBlocked: 'scale-lost',
-				weightBlockedNote: 'Scale lost before the cup had weight. Stop this shot by hand.'
+				weightBlockedNote: 'Scale stopped reporting. Stop this shot by hand.'
 			}) as Parameters<typeof refreshStopTargetsProjection>[0]
 		);
 		const s = getCremaUiState().current.stopTargets;
 		expect(s?.weightBlockedNote).toBe(
-			'Scale lost before the cup had weight. Stop this shot by hand.'
+			'Scale stopped reporting. Stop this shot by hand.'
 		);
 	});
 });
