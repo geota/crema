@@ -135,6 +135,31 @@ data class UnboundTombstone(
  * 5xx, a 429) is queued here and retried by the drain on the core's backoff
  * (`visualizer_queue_decision`), at most three attempts in all.
  */
+/**
+ * What a History edit changed on a shot already on Visualizer, until a PATCH
+ * carrying it lands. A PATCH sends only what is marked: the journal fields for
+ * [annotations], `barista` for [barista]. Android has no tag editor, so it never
+ * marks tags. The set is also the PATCH retry list, walked by the drain.
+ */
+@Serializable
+data class PendingEdit(
+    /** The rating, notes, privacy, bean or grind changed. */
+    val annotations: Boolean = false,
+    /** The barista changed. */
+    val barista: Boolean = false,
+    /** Failed attempts since the last success. */
+    val attempts: Int = 0,
+    /** Unix ms before which the drain leaves this shot alone; 0 = due. */
+    val nextAttemptAt: Long = 0,
+) {
+    /** Whether this still owes Visualizer anything. */
+    val owes: Boolean get() = annotations || barista
+
+    /** This and [other] together, due at once (a new edit). */
+    fun with(other: PendingEdit) =
+        PendingEdit(annotations = annotations || other.annotations, barista = barista || other.barista)
+}
+
 @Serializable
 data class QueuedUpload(
     /** The local shot's id. */
@@ -216,12 +241,17 @@ data class VisualizerState(
     /** Recent sync activity — capped at 20 entries, newest first. */
     val log: List<SyncLogEntry> = emptyList(),
     /**
-     * Shots whose barista was edited here and has not reached Visualizer yet
-     * (see [VisualizerSync.markBaristaEdited]). Persisted so a pull after a
-     * restart does not refill a cleared barista (round-2 verification V2 P3-4);
-     * the web keeps the same set in `crema.visualizer.baristaPending.v1`.
+     * The old form of [pendingEdits]: shots whose barista edit hadn't reached
+     * Visualizer. Read once, on load, into [pendingEdits], and stored empty.
      */
     val baristaPending: Set<String> = emptySet(),
+    /**
+     * Edits of uploaded shots waiting to reach Visualizer, by shot id (see
+     * [PendingEdit]). Persisted, so a restart keeps them and a pull after one
+     * still doesn't refill a cleared barista (round-2 verification V2 P3-4);
+     * the web keeps the same set in `crema.visualizer.pendingEdits.v1`.
+     */
+    val pendingEdits: Map<String, PendingEdit> = emptyMap(),
     /**
      * Shots deleted here whose Visualizer copy still exists — see
      * [ShotTombstone]. Not part of the history, so nothing user-visible ever

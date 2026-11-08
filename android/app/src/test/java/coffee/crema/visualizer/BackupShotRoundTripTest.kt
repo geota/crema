@@ -1,6 +1,7 @@
 package coffee.crema.visualizer
 
 import coffee.crema.core.ShotBean
+import coffee.crema.core.ShotPatchInputs
 import coffee.crema.history.StoredShot
 import coffee.crema.ui.TelemetrySample
 import kotlinx.serialization.json.Json
@@ -127,16 +128,12 @@ class BackupShotRoundTripTest {
     }
 
     @Test
-    fun `a pull fills a blank local barista and never overwrites a set one (final review 06 #1)`() {
-        val blank = StoredShot(id = "shot:q", completedAtMs = 1, durationMs = 1)
-        assertEquals("Ana", baristaToFill(blank, " Ana "))
-        assertEquals("Ana", baristaToFill(blank.copy(barista = "  "), "Ana"))
-        assertNull(baristaToFill(blank.copy(barista = "Bo"), "Ana"))
-        assertNull(baristaToFill(blank, null))
-        assertNull(baristaToFill(blank, "  "))
-        assertNull(baristaToFill(null, "Ana"))
-        // A barista edited here and not yet on Visualizer is never filled (V3 #6).
-        assertNull(baristaToFill(blank, "Ana", editedLocally = true))
+    fun `a barista-only PATCH leaves every journal field out`() {
+        val shot = StoredShot(
+            id = "shot:j", completedAtMs = 1, durationMs = 1, rating = 4, notes = "juicy", barista = "Ana", grinderModel = "Niche Zero",
+        )
+        val inputs = shotPatchInputs(shot, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = "EK43", sendBarista = true, sendJournal = false)
+        assertEquals(ShotPatchInputs(barista = "Ana"), inputs)
     }
 
     @Test

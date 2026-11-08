@@ -23,6 +23,7 @@ import coffee.crema.core.CremaBridge
 import coffee.crema.core.MaintenanceState
 import coffee.crema.core.Roaster
 import coffee.crema.core.ShotBean
+import coffee.crema.core.ShotPatch
 import coffee.crema.core.ShotDisposition
 import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.VisualizerSyncPrefs
@@ -79,6 +80,7 @@ import coffee.crema.profiles.setProfilePinnedJson
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.toCommonSettings
 import coffee.crema.settings.withCommonSettings
+import coffee.crema.visualizer.PulledParts
 import coffee.crema.visualizer.VisualizerSync
 import coffee.crema.visualizer.shotHistoryJsonl
 import coffee.crema.visualizer.shotsFromCremaJsonl
@@ -1369,42 +1371,36 @@ class LibraryController(
         return stubs.mapTo(HashSet()) { it.id } - kept - present
     }
 
-    /** Backfill a curve-less local shot's telemetry from a Visualizer pull. Persisted. */
-    fun backfillShotTelemetry(localId: String, samples: List<TelemetrySample>, durationMs: Long) {
-        // Before the stored series load, every shot looks curve-less: a pulled
-        // series would replace the shot's own (the pull awaits [awaitSeries]).
-        if (!seriesReady) return
-        editHistory { rows ->
-            rows.mapped {
-            if (it.id == localId && it.samples.isEmpty()) {
-                it.copy(
-                    // The whole pulled series (F10).
-                    samples = samples,
-                    durationMs = if (it.durationMs > 0) it.durationMs else durationMs,
-                )
-            } else {
-                it
-            }
-            }
-        }
-        val snapshot = uiState().history
-        scope.launch { historyStore.save(snapshot) }
-    }
-
     /**
-     * Fill a pulled shot's blank barista from Visualizer (final review 06 #1).
-     * A barista already set here is kept. Persisted.
+     * Apply what a Visualizer pull may change on a bound shot (the core's
+     * `merge_remote_shot`), in one write on the rows as they stand: tags it
+     * adds, a barista into a blank one, the curve and recipe when the row has
+     * none, and the remote version last. Persisted when anything changed.
      */
-    fun fillShotBarista(localId: String, barista: String) {
+    fun applyRemoteShot(localId: String, patch: ShotPatch, pulled: PulledParts) {
         var changed = false
         editHistory { rows ->
             rows.mapped {
-            if (it.id == localId && it.barista.isNullOrBlank()) {
-                changed = true
-                it.copy(barista = barista)
-            } else {
-                it
-            }
+                if (it.id != localId) return@mapped it
+                var next = it
+                patch.tags?.let { tags -> next = next.copy(tags = tags) }
+                patch.barista?.takeIf { next.barista.isNullOrBlank() }?.let { b -> next = next.copy(barista = b) }
+                // Before the stored series load, every shot looks curve-less: a
+                // pulled series would replace the shot's own (the pull awaits
+                // [awaitSeries]).
+                if (patch.backfillSamples == true && seriesReady && next.samples.isEmpty() && pulled.samples.isNotEmpty()) {
+                    next = next.copy(
+                        // The whole pulled series (F10).
+                        samples = pulled.samples,
+                        durationMs = if (next.durationMs > 0) next.durationMs else pulled.durationMs,
+                    )
+                }
+                if (patch.fillProfile == true && next.profile == null && pulled.profile != null) {
+                    next = next.copy(profile = pulled.profile)
+                }
+                patch.remoteVersion?.let { v -> next = next.copy(visualizerUpdatedAt = v) }
+                if (next != it) changed = true
+                next
             }
         }
         if (!changed) return
@@ -2425,6 +2421,7 @@ class LibraryController(
     /** Apply a user rating / tasting-notes edit to a logged shot. Persisted.
      *  An already-uploaded shot mirrors the edit to Visualizer (soft). */
     fun updateShot(id: String, rating: Int, notes: String) {
+        markForVisualizer(id, annotations = true)
         editHistory { rows ->
             rows.mapped {
             if (it.id == id) it.copy(rating = rating.coerceIn(0, 5).takeIf { r -> r > 0 }, notes = notes.ifBlank { null }) else it
@@ -2460,6 +2457,8 @@ class LibraryController(
      */
     fun setShotPerson(id: String, field: String, name: String?) {
         val value = name?.trim()?.takeIf { it.isNotEmpty() }
+        // Only a barista edit sends the barista (final review 06 #1).
+        if (field == "barista") markForVisualizer(id, barista = true)
         editHistory { rows ->
             rows.mapped {
             when {
@@ -2472,11 +2471,7 @@ class LibraryController(
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
-        if (field == "barista") {
-            // Only a barista edit sends the barista (final review 06 #1).
-            visualizer.markBaristaEdited(id)
-            schedulePatchEdited(id)
-        }
+        if (field == "barista") schedulePatchEdited(id)
         onShotAnnotationsEdited(id)
     }
 
@@ -2485,6 +2480,7 @@ class LibraryController(
      * override. Persisted; mirrors to the uploaded copy like [updateShot].
      */
     fun setShotPrivacy(id: String, privacy: String?) {
+        markForVisualizer(id, annotations = true)
         editHistory { rows -> rows.mapped { if (it.id == id) it.copy(privacy = privacy) else it } }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
@@ -2497,6 +2493,7 @@ class LibraryController(
      * the fact). Persisted; mirrors to the uploaded copy like [updateShot].
      */
     fun setShotGrind(id: String, grind: Float?) {
+        markForVisualizer(id, annotations = true)
         editHistory { rows -> rows.mapped { if (it.id == id) it.copy(grindSetting = grind) else it } }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
@@ -2552,11 +2549,21 @@ class LibraryController(
             if (credited) persistLibrary()
         }
         val bagDebit = bean?.let { debitBag(it, dose) }
+        markForVisualizer(id, annotations = true)
         editHistory { rows -> rows.mapped { if (it.id == id) it.copy(bean = beanSnapshot, bagDebitG = bagDebit) else it } }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
         schedulePatchEdited(id)
         onShotAnnotationsEdited(id)
+    }
+
+    /**
+     * Mark what an edit of an uploaded shot changed, before the row saves, so
+     * the PATCH sends only that and a failed one is retried by the drain.
+     */
+    private fun markForVisualizer(id: String, annotations: Boolean = false, barista: Boolean = false) {
+        if (uiState().history.firstOrNull { it.id == id }?.visualizerId == null) return
+        visualizer.markShotEdited(id, annotations = annotations, barista = barista)
     }
 
     /** Debounced edit→Visualizer mirror: the notes field fires per keystroke

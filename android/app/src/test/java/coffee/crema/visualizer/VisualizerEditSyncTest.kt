@@ -1,6 +1,7 @@
 package coffee.crema.visualizer
 
 import android.content.ContextWrapper
+import coffee.crema.core.ShotMergeInput
 import coffee.crema.history.StoredShot
 import coffee.crema.security.SecretBox
 import coffee.crema.security.SecretCipher
@@ -69,6 +70,10 @@ class VisualizerEditSyncTest {
 
     /** What the server answers a shot PATCH with (an error = the edit did not land). */
     private var patchStatus = HttpStatusCode.OK
+    private var patchBody = "{}"
+
+    /** Runs as a PATCH arrives: an edit made while it is out. */
+    private var onPatch: () -> Unit = {}
     private val requests = mutableListOf<Pair<String, String>>()
     private val engine = MockEngine { req ->
         val path = req.url.encodedPath
@@ -81,7 +86,10 @@ class VisualizerEditSyncTest {
                     probeStatus == HttpStatusCode.Forbidden -> probeRefusal
                     else -> """{"error":"x"}"""
                 }
-            req.method.value == "PATCH" -> patchStatus to "{}"
+            req.method.value == "PATCH" -> {
+                onPatch()
+                patchStatus to patchBody
+            }
             else -> HttpStatusCode.OK to "{}"
         }
         respond(body, status, headersOf(HttpHeaders.ContentType, "application/json"))
@@ -121,7 +129,7 @@ class VisualizerEditSyncTest {
 
     private fun sync(grinder: String? = null) = VisualizerSync(
         currentShot = { history[it] },
-        onFillBarista = { id, name -> fills += id to name },
+        onApplyRemote = { id, patch, _ -> patch.barista?.let { fills += id to it } },
         store = store,
         client = client,
         json = json,
@@ -133,6 +141,8 @@ class VisualizerEditSyncTest {
         grinderModel = { grinder },
         shotPatchBody = fakeCore,
         now = { clock },
+        // The tests drain by hand; a timer would outlive a "restart".
+        retryTimers = false,
         exchangeCode = { _, _ -> TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000) },
         parseCatalogue = { body -> catalogueBodies += body; coffee.crema.core.CataloguePage(emptyList(), 0u, 1u, 1u) },
         parseCatalogueRoasterPage = { body ->
@@ -170,6 +180,14 @@ class VisualizerEditSyncTest {
         notes = "juicy",
         visualizerId = "v-1",
     )
+
+    /** A pulled shot as the core's `WireShot`. */
+    private fun wire(barista: String?) = buildJsonObject {
+        put("id", "v-1")
+        put("clock", 1)
+        put("duration_ms", 30_000)
+        put("barista", barista)
+    }
 
     private fun probes() = requests.count { it.first == "POST /api/roasters" }
 
@@ -225,6 +243,7 @@ class VisualizerEditSyncTest {
     fun `an unprobed tier counts as free - a rating and notes edit sends nothing and says nothing`() {
         seed(premium = null)
         val s = sync().also { runBlocking { it.load() } }
+        s.markShotEdited(edited.id, annotations = true)
         s.patchEditedShot(edited)
         settle()
         assertEquals(listOf<Boolean?>(null), tiersSeen)
@@ -257,6 +276,7 @@ class VisualizerEditSyncTest {
         assertEquals(1, probes())
         assertTrue("no coffee-bag probe any more: $requests", requests.none { it.first.contains("/coffee_bags") })
 
+        s.markShotEdited(edited.id, annotations = true)
         s.patchEditedShot(edited)
         settle()
         assertEquals(false, tiersSeen.last())
@@ -271,6 +291,7 @@ class VisualizerEditSyncTest {
         seed(premium = true)
         val s = sync().also { runBlocking { it.load() } }
         // A shot pulled before the barista was read: none locally.
+        s.markShotEdited(edited.id, annotations = true)
         s.patchEditedShot(edited.copy(barista = null))
         settle()
         assertEquals(1, patches().size)
@@ -290,6 +311,7 @@ class VisualizerEditSyncTest {
         settle()
         assertEquals("Ana", shotBody(1)["barista"]!!.jsonPrimitive.content)
         // Landed: a later rating edit on a free account has nothing left to send.
+        s.markShotEdited(edited.id, annotations = true)
         s.patchEditedShot(edited.copy(barista = "Ana"))
         settle()
         assertEquals(2, patches().size)
@@ -305,6 +327,7 @@ class VisualizerEditSyncTest {
         assertEquals(true, runBlocking { store.load() }.premium)
         assertTrue("sentinel cleaned up", requests.any { it.first == "DELETE /api/roasters/r-sentinel" })
 
+        s.markShotEdited(edited.id, annotations = true)
         s.patchEditedShot(edited)
         settle()
         assertEquals(true, tiersSeen.last())
@@ -376,32 +399,32 @@ class VisualizerEditSyncTest {
         seed(premium = false)
         val cleared = edited.copy(barista = null)
         history[cleared.id] = cleared
-        val remote = buildJsonObject { put("id", "v-1"); put("barista", "Ana") }
+        val remote = wire("Ana")
 
         // The clear's PATCH fails (Visualizer unreachable).
-        patchStatus = HttpStatusCode.UnprocessableEntity
+        patchStatus = HttpStatusCode.ServiceUnavailable
         val s = sync().also { runBlocking { it.load() } }
         s.markBaristaEdited(cleared.id)
         s.patchEditedShot(cleared)
         settle()
         assertEquals("", shotBody(0)["barista"]!!.jsonPrimitive.content)
         // A pull this session: the remote still says "Ana", the local is blank.
-        s.fillBarista(cleared.id, remote)
+        s.mergeAndApply(cleared.id, remote)
         assertEquals(emptyList<Pair<String, String>>(), fills)
 
         // A restart: the pending mark was stored, so the pull still leaves the
         // clear alone, and the next edit carries it.
         patchStatus = HttpStatusCode.OK
         val restarted = sync().also { runBlocking { it.load() } }
-        restarted.fillBarista(cleared.id, remote)
+        restarted.mergeAndApply(cleared.id, remote)
         assertEquals(emptyList<Pair<String, String>>(), fills)
         restarted.patchEditedShot(cleared)
         settle()
         assertEquals("", shotBody(1)["barista"]!!.jsonPrimitive.content)
 
         // The clear landed: the mark is gone (also on disk) and the fill rule applies again.
-        assertEquals(emptySet<String>(), runBlocking { store.load() }.baristaPending)
-        restarted.fillBarista(cleared.id, remote)
+        assertEquals(emptyMap<String, PendingEdit>(), runBlocking { store.load() }.pendingEdits)
+        restarted.mergeAndApply(cleared.id, remote)
         assertEquals(listOf(cleared.id to "Ana"), fills)
     }
 
@@ -418,10 +441,10 @@ class VisualizerEditSyncTest {
         settle()
         // The pull leaves the clear alone, and the mark is on disk next to
         // the stored state (the early store did not overwrite it with defaults).
-        s.fillBarista(cleared.id, buildJsonObject { put("id", "v-1"); put("barista", "Ana") })
+        s.mergeAndApply(cleared.id, wire("Ana"))
         assertEquals(emptyList<Pair<String, String>>(), fills)
         val stored = runBlocking { store.load() }
-        assertEquals(setOf(cleared.id), stored.baristaPending)
+        assertEquals(mapOf(cleared.id to PendingEdit(barista = true)), stored.pendingEdits)
         assertTrue("still signed in", stored.tokens != null)
     }
 
@@ -431,10 +454,115 @@ class VisualizerEditSyncTest {
         val s = sync().also { runBlocking { it.load() } }
         s.markBaristaEdited(edited.id)
         settle()
-        assertEquals(setOf(edited.id), runBlocking { store.load() }.baristaPending)
+        assertEquals(mapOf(edited.id to PendingEdit(barista = true)), runBlocking { store.load() }.pendingEdits)
         runBlocking { s.eraseAll() }
         history[edited.id] = edited.copy(barista = null)
-        s.fillBarista(edited.id, buildJsonObject { put("barista", "Ana") })
+        s.mergeAndApply(edited.id, wire("Ana"))
         assertEquals(listOf(edited.id to "Ana"), fills)
+    }
+
+    @Test
+    fun `the old barista marks migrate into pending edits on load`() {
+        runBlocking {
+            store.save(
+                VisualizerState(
+                    tokens = TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000),
+                    baristaPending = setOf("s1"),
+                    pendingEdits = mapOf("s2" to PendingEdit(annotations = true)),
+                ),
+            )
+        }
+        val s = sync().also { runBlocking { it.load() } }
+        settle()
+        val stored = runBlocking { store.load() }
+        assertEquals(mapOf("s1" to PendingEdit(barista = true), "s2" to PendingEdit(annotations = true)), stored.pendingEdits)
+        assertEquals(emptySet<String>(), stored.baristaPending)
+        // The migrated mark still keeps a pull off the barista.
+        history["s1"] = edited.copy(id = "s1", barista = null)
+        s.mergeAndApply("s1", wire("Ana"))
+        assertEquals(emptyList<Pair<String, String>>(), fills)
+    }
+
+    @Test
+    fun `a barista edit sends no journal field`() {
+        seed(premium = true)
+        val s = sync().also { runBlocking { it.load() } }
+        s.markBaristaEdited(edited.id)
+        s.patchEditedShot(edited.copy(barista = "Ana"))
+        settle()
+        assertEquals(setOf("barista"), shotBody().keys)
+    }
+
+    @Test
+    fun `terminal_patch_clears_mark - 404, 403 and 422 clear the barista mark and say so`() {
+        for ((status, body) in listOf(
+            HttpStatusCode.NotFound to "{}",
+            HttpStatusCode.Forbidden to """{"error":"You are not authorized to perform this action."}""",
+            HttpStatusCode.UnprocessableEntity to """{"error":"Invalid"}""",
+        )) {
+            dir.listFiles()?.forEach { it.deleteRecursively() }
+            notices.clear()
+            seed(premium = true)
+            patchStatus = status
+            patchBody = body
+            val s = sync().also { runBlocking { it.load() } }
+            s.markBaristaEdited(edited.id)
+            s.patchEditedShot(edited.copy(barista = "Ana"))
+            settle()
+            val stored = runBlocking { store.load() }
+            assertEquals("$status clears it", emptyMap<String, PendingEdit>(), stored.pendingEdits)
+            assertTrue("$status says so: $notices", notices.any { it.startsWith("Visualizer won't take this shot's edit") })
+            assertTrue("$status logged", stored.log.any { it.error?.startsWith("This edit can't reach Visualizer") == true })
+        }
+    }
+
+    @Test
+    fun `failed_patch_retries_from_current_row - the drain sends the newest values`() {
+        seed(premium = true)
+        history[edited.id] = edited.copy(rating = 3)
+        patchStatus = HttpStatusCode.ServiceUnavailable
+        val s = sync().also { runBlocking { it.load() } }
+        s.markShotEdited(edited.id, annotations = true)
+        s.patchEditedShot(history.getValue(edited.id))
+        settle()
+        val failed = runBlocking { store.load() }.pendingEdits.getValue(edited.id)
+        assertTrue("kept, backed off: $failed", failed.annotations && failed.attempts == 1 && failed.nextAttemptAt > clock)
+        // Edited again meanwhile; the drain runs once the backoff is over.
+        history[edited.id] = edited.copy(rating = 5)
+        patchStatus = HttpStatusCode.OK
+        val before = patches().size
+        runBlocking { s.drainRetryQueue() }
+        assertEquals("not before it's due", before, patches().size)
+        clock = failed.nextAttemptAt
+        runBlocking { s.drainRetryQueue() }
+        assertEquals(15, shotBody(patches().size - 1)["flavor"]!!.jsonPrimitive.intOrNull)
+        assertEquals(emptyMap<String, PendingEdit>(), runBlocking { store.load() }.pendingEdits)
+    }
+
+    @Test
+    fun `an edit made while its PATCH was out stays marked`() {
+        seed(premium = true)
+        history[edited.id] = edited.copy(rating = 3)
+        val s = sync().also { runBlocking { it.load() } }
+        s.markShotEdited(edited.id, annotations = true)
+        onPatch = { history[edited.id] = edited.copy(rating = 4) }
+        runBlocking { s.pushPendingEdit(edited.id) }
+        assertEquals(1, patches().size)
+        assertEquals(mapOf(edited.id to PendingEdit(annotations = true)), runBlocking { store.load() }.pendingEdits)
+    }
+
+    @Test
+    fun `a pull leaves a row edited since it began alone, and holds the cursor when it lacks its curve`() {
+        seed(premium = true)
+        val s = sync().also { runBlocking { it.load() } }
+        history["s1"] = edited.copy(id = "s1", barista = "Bo")
+        val before = ShotMergeInput(tags = emptyList(), tagsPending = false, barista = null, baristaPending = false, hasSeries = false, hasProfile = false, isBrew = false)
+        assertTrue("held: no curve", s.mergeAndApply("s1", wire("Ana"), before = before))
+        assertEquals(emptyList<Pair<String, String>>(), fills)
+        // Not edited: the merge applies.
+        history["s2"] = edited.copy(id = "s2", barista = null)
+        val unchanged = ShotMergeInput(tags = emptyList(), tagsPending = false, barista = null, baristaPending = false, hasSeries = false, hasProfile = false, isBrew = false)
+        assertFalse(s.mergeAndApply("s2", wire("Ana"), before = unchanged))
+        assertEquals(listOf("s2" to "Ana"), fills)
     }
 }

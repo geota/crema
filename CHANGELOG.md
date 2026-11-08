@@ -92,6 +92,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A shot edit Visualizer didn't get tries again** — a rating, note, bean,
+  grind or barista edit that couldn't reach Visualizer now retries from the shot
+  as it stands, until it lands, where it used to wait for the next edit. A
+  barista edit no longer resends the rest, and a shot gone or refused on
+  Visualizer is reported. A pull now adds the tags from Visualizer and fills a
+  missing recipe, and never touches a rating, note or bean. Android.
 - **A shot finishing no longer undoes an edit made meanwhile** — a rating or note
   set while a shot assembled, a bag debit during a bean sync and a change while
   an import ran used to be overwritten by a copy read earlier. Each now lands on

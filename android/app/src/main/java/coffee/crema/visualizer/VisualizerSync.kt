@@ -5,6 +5,8 @@ import coffee.crema.core.pullCoversAttempt
 import coffee.crema.core.accountChangeAction
 import coffee.crema.core.CataloguePage
 import coffee.crema.core.callbackOutcome
+import coffee.crema.core.ShotMergeInput
+import coffee.crema.core.ShotPatch
 import coffee.crema.core.ShotPatchInputs
 import coffee.crema.core.parseCatalogueCoffeeBags
 import coffee.crema.core.parseCatalogueRoasters
@@ -84,10 +86,14 @@ class VisualizerSync(
     private val grinderModel: () -> String? = { null },
     /** Insert pulled remote stubs into the local history (dedup by id); answers the ids a full history refused. */
     private val onPulledShots: (List<StoredShot>) -> Set<String> = { emptySet() },
-    /** Backfill a bound local's telemetry from a pull (no-op when it has a curve). */
-    private val onBackfillTelemetry: (localId: String, samples: List<coffee.crema.ui.TelemetrySample>, durationMs: Long) -> Unit = { _, _, _ -> },
-    /** Fill a bound local's blank barista from a pull (final review 06 #1). */
-    private val onFillBarista: (localId: String, barista: String) -> Unit = { _, _ -> },
+    /**
+     * Apply what a pull may change on a bound local (the core's
+     * `merge_remote_shot`), in one write: tags it adds, a barista into a blank
+     * one, the curve or recipe when the row has none, then the remote version.
+     */
+    private val onApplyRemote: (localId: String, patch: ShotPatch, pulled: PulledParts) -> Unit = { _, _, _ -> },
+    /** Core `merge_remote_shot_json` (injected so a JVM test can watch it). */
+    private val mergeRemote: (payloadJson: String) -> String = { coffee.crema.core.mergeRemoteShot(it) },
     /** Sign-in just completed — the moment to offer a catch-up of existing shots. */
     private val onSignedIn: () -> Unit = {},
     /** The shot as history holds it now (null = deleted) — re-read before a backlog POST. */
@@ -290,9 +296,9 @@ class VisualizerSync(
 
     /**
      * Hydrate from disk at startup (its own coroutine, so nothing in the row
-     * load can strand a sign-in). A barista edit made before this finished
-     * keeps its pending mark, merged with the stored ones and stored here
-     * (round-3 clean check C3 #9).
+     * load can strand a sign-in). An edit marked before this finished keeps its
+     * mark, merged with the stored ones and stored here (round-3 clean check
+     * C3 #9). The old `baristaPending` set migrates in.
      */
     suspend fun load() {
         val unstored = try {
@@ -301,14 +307,19 @@ class VisualizerSync(
                 // this device never stored the id before.
                 persisted = store.load().let { it.copy(syncAccountId = it.syncAccountId ?: it.account?.id?.ifBlank { null }) }
                 ownState.opened()
-                baristaPending += persisted.baristaPending
-                baristaPending.any { it !in persisted.baristaPending }
+                val stored = persisted.pendingEdits.toMutableMap()
+                for (id in persisted.baristaPending) stored[id] = (stored[id] ?: PendingEdit()).with(PendingEdit(barista = true))
+                val early = pendingEdits.toMap()
+                pendingEdits.clear()
+                pendingEdits.putAll(stored)
+                for ((id, edit) in early) pendingEdits.merge(id, edit) { a, b -> a.with(b) }
+                persisted.baristaPending.isNotEmpty() || pendingEdits != persisted.pendingEdits
             }
         } finally {
             ownState.failed()
         }
         fold()
-        if (unstored) storeBaristaPending()
+        if (unstored) storePendingEdits()
     }
 
     private fun fold() {
@@ -472,7 +483,7 @@ class VisualizerSync(
         val token = persistMutex.withLock {
             val t = persisted.tokens?.accessToken
             persisted = VisualizerState()
-            baristaPending.clear()
+            pendingEdits.clear()
             store.erase()
             ownState.opened()
             t
@@ -503,7 +514,7 @@ class VisualizerSync(
             if (changed) settled.forNewAccount(oldId = st.syncAccountId, newId = account.id) else settled
         }
         if (changed) {
-            baristaPending.clear()
+            pendingEdits.clear()
             notify("This is a different Visualizer account. Nothing uploads until you choose in Settings → Sharing.")
         }
         if (wasHeld || changed) {
@@ -531,6 +542,7 @@ class VisualizerSync(
         uploadExcludedBefore = null,
         shotPullCursor = null,
         baristaPending = emptySet(),
+        pendingEdits = emptyMap(),
         retryQueue = emptyList(),
         uploadAttempted = emptyMap(),
         shotTombstones = shotTombstones.map {
@@ -950,7 +962,9 @@ class VisualizerSync(
     private fun nextDrainAt(): Long? {
         val deletes = if (persisted.tokens == null) emptyList()
         else persisted.shotTombstones.filter { it.owed && it.nextAttemptAt > 0 }.map { it.nextAttemptAt }
-        return (persisted.retryQueue.map { it.nextAttemptAt } + deletes).minOrNull()
+        val edits = if (persisted.tokens == null) emptyList()
+        else pendingEdits.values.filter { it.nextAttemptAt > 0 }.map { it.nextAttemptAt }
+        return (persisted.retryQueue.map { it.nextAttemptAt } + deletes + edits).minOrNull()
     }
 
     /**
@@ -975,6 +989,7 @@ class VisualizerSync(
         if (!rowsReady()) return 0
         if (!retryMutex.tryLock()) return 0
         var uploaded = 0
+        var limited = false
         try {
             val due = persisted.retryQueue.filter { it.nextAttemptAt <= now() }
             for (entry in due) {
@@ -1017,10 +1032,14 @@ class VisualizerSync(
                     is RetryDecision.Park -> updateRetry(entry.copy(nextAttemptAt = now() + d.delayMs))
                     is RetryDecision.Retry -> {
                         updateRetry(QueuedUpload(entry.shotId, made, now() + d.delayMs))
-                        if (d.stopPass) break
+                        if (d.stopPass) {
+                            limited = true
+                            break
+                        }
                     }
                 }
             }
+            if (!limited) drainPendingEdits()
             deleteRemoteShots(dueOnly = true)
         } finally {
             retryMutex.unlock()
@@ -1124,82 +1143,149 @@ class VisualizerSync(
     fun uploadPending(shot: StoredShot): Boolean = uploadPending(persisted, shot.id)
 
     /**
-     * Mirror a History-panel edit onto the shot's already-uploaded Visualizer
-     * copy (web ShotSync.patchEditedShot). The body assembly — rating →
-     * `flavor` with a cleared rating OMITTED, the full inline-bean block
-     * (brand/type/roast date/roast level/grinder setting — this builder
-     * previously sent only brand+type), key names, blank-skipping — lives in
-     * the core (`de1_domain::visualizer_shot_patch`, review #42) so both
-     * shells emit an identical wire body. What stays here is the config:
-     * notes gated on include-notes (an opt-out never leaks via an edit) and
-     * the effective privacy, and the cached premium tier (Premium-only fields
-     * are dropped for a free / unknown account; nothing left = no request).
-     * No-op for never-uploaded shots; soft — a failure notifies but never
-     * blocks the local edit.
+     * Send a History edit to the shot's Visualizer copy (web
+     * `ShotSync.patchEditedShot`): what the edit marked ([markShotEdited]) and
+     * nothing else. The body assembly lives in the core
+     * (`de1_domain::visualizer_shot_patch`, review #42), fitted to the cached
+     * tier: Premium-only fields are dropped for a free or unknown account, and
+     * nothing left means no request. No-op for never-uploaded shots; soft — a
+     * failure notifies, the mark stays and the drain tries again.
      */
     fun patchEditedShot(shot: StoredShot) {
-        val vid = shot.visualizerId ?: return
-        if (persisted.tokens == null || persisted.accountUnconfirmed) return
-        if (!directionPushes(persisted.prefs.shotsDirection)) return
-        // The barista rides only after a barista edit (final review 06 #1): a
-        // shot pulled before the barista was read has none locally, and
-        // sending "" with a rating change wiped the one on Visualizer.
-        val sendBarista = shot.id in baristaPending
-        val sentBarista = baristaOf(shot)
-        val inputs = shotPatchInputs(
-            shot,
-            includeNotes = persisted.prefs.includeNotes,
-            defaultPrivacy = persisted.prefs.privacy,
-            settingsGrinderModel = grinderModel(),
-            sendBarista = sendBarista,
-        )
-        // Fitted to the account tier in core: a free account — or one whose tier
-        // isn't probed yet — silently loses the Premium-only fields
-        // (private_notes, the tasting scores incl. flavor, tag_list,
-        // coffee_bag_id …); null = nothing left the server would apply, so no
-        // request and no notice.
-        val body = runCatchingCancellable {
-            shotPatchBody(json.encodeToString(ShotPatchInputs.serializer(), inputs), persisted.premium)
-                ?.let { json.decodeFromString(JsonObject.serializer(), it) }
-        }.getOrElse { notify("Visualizer update failed: ${it.message}"); return } ?: return
-        scope.launch {
-            runCatchingCancellable { withFreshToken { client.patchShot(it, vid, body) } }
-                .onSuccess {
-                    // Landed: stop sending it, unless the barista was edited
-                    // again while this PATCH was out.
-                    if (sendBarista && (currentShot(shot.id)?.let(::baristaOf) ?: sentBarista) == sentBarista) {
-                        baristaPending.remove(shot.id)
-                        storeBaristaPending()
-                    }
-                }
-                .onFailure { notify("Visualizer update failed: ${it.message}") }
-        }
+        if (shot.visualizerId == null) return
+        scope.launch { pushPendingEdit(shot.id, fallback = shot, fromEdit = true) }
     }
 
     /**
-     * Shots whose barista was edited here and has not reached Visualizer yet:
-     * only these PATCHes carry `barista` (the name, or "" once cleared, so a
-     * clear still reaches Visualizer), and a pull does not fill a barista into
-     * them (V3 #6: a failed clear was refilled by the next pull, and the next
-     * edit then sent the old name back). A failed PATCH leaves the shot
-     * pending, so the next edit's PATCH carries it. Mirrored into
-     * [VisualizerState.baristaPending] so it survives a restart (V2 P3-4).
+     * Send what is pending for [localId], built from the row as it stands
+     * ([fallback] when history has no copy to hand). A mark clears once what was
+     * sent is still the row's; one made since stays. A failure for good (the row
+     * is gone or refused) clears and reports; any other keeps the mark, backed
+     * off on the core's schedule. Returns the failure, if any.
      */
-    private val baristaPending: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    internal suspend fun pushPendingEdit(localId: String, fallback: StoredShot? = null, fromEdit: Boolean = false): Throwable? {
+        val edit = pendingEdits[localId] ?: return null
+        val shot = currentShot(localId) ?: fallback ?: return null
+        val vid = shot.visualizerId ?: return null
+        if (persisted.tokens == null || persisted.accountUnconfirmed) return null
+        if (!directionPushes(persisted.prefs.shotsDirection)) return null
+        val inputs = editInputs(shot, edit)
+        // Fitted to the account tier in core: a free account — or one whose tier
+        // isn't probed yet — silently loses the Premium-only fields
+        // (private_notes, the tasting scores incl. flavor, coffee_bag_id …);
+        // null = nothing left the server would apply, so no request.
+        val body = runCatchingCancellable {
+            shotPatchBody(json.encodeToString(ShotPatchInputs.serializer(), inputs), persisted.premium)
+                ?.let { json.decodeFromString(JsonObject.serializer(), it) }
+        }.getOrElse {
+            if (fromEdit) notify("Visualizer update failed: ${it.message}")
+            return it
+        }
+        val failure = body?.let {
+            runCatchingCancellable { withFreshToken { t -> client.patchShot(t, vid, it) } }.exceptionOrNull()
+        }
+        if (failure == null) {
+            settleSentEdit(localId, edit, inputs)
+            return null
+        }
+        if (uploadPolicy.editFailureIsTerminal(failure)) {
+            pendingEdits.remove(localId)
+            storePendingEdits()
+            logSync("skip", localId, shot.profileName ?: "Shot", "This edit can't reach Visualizer: ${failure.message}")
+            if (fromEdit) notify("Visualizer won't take this shot's edit: ${failure.message}")
+        } else {
+            pendingEdits.computeIfPresent(localId) { _, cur ->
+                val made = cur.attempts + 1
+                cur.copy(attempts = made, nextAttemptAt = now() + uploadPolicy.backoffMs((failure as? VisualizerError.Http)?.status, made - 1))
+            }
+            storePendingEdits()
+            if (fromEdit) notify("Visualizer update failed: ${failure.message}")
+            nextDrainAt()?.let(::scheduleDrain)
+        }
+        return failure
+    }
+
+    /** The PATCH inputs for [edit] on [shot]: only the marked fields. */
+    private fun editInputs(shot: StoredShot, edit: PendingEdit) = shotPatchInputs(
+        shot,
+        includeNotes = persisted.prefs.includeNotes,
+        defaultPrivacy = persisted.prefs.privacy,
+        settingsGrinderModel = grinderModel(),
+        sendJournal = edit.annotations,
+        sendBarista = edit.barista,
+    )
+
+    /**
+     * A PATCH built from [sent] landed (or had nothing the tier applies): clear
+     * each mark whose field is still what was sent. One edited again meanwhile
+     * stays, for the drain.
+     */
+    private suspend fun settleSentEdit(localId: String, sent: PendingEdit, sentInputs: ShotPatchInputs) {
+        val now = currentShot(localId)
+        pendingEdits.computeIfPresent(localId) { _, cur ->
+            val current = now?.let { editInputs(it, sent) }
+            val journalSame = current == null || current.copy(barista = null) == sentInputs.copy(barista = null)
+            val baristaSame = current == null || current.barista == sentInputs.barista
+            PendingEdit(
+                annotations = cur.annotations && !(sent.annotations && journalSame),
+                barista = cur.barista && !(sent.barista && baristaSame),
+            ).takeIf { it.owes }
+        }
+        storePendingEdits()
+    }
+
+    /**
+     * Edits of uploaded shots that haven't reached Visualizer yet: only these
+     * fields ride a PATCH (the barista only after a barista edit, as the name or
+     * "" once cleared, so a clear still reaches Visualizer), and a pull doesn't
+     * fill a barista into a shot whose edit is pending (V3 #6: a failed clear
+     * was refilled by the next pull, and the next edit sent the old name back).
+     * Mirrored into [VisualizerState.pendingEdits] so it survives a restart
+     * (V2 P3-4).
+     */
+    private val pendingEdits = java.util.concurrent.ConcurrentHashMap<String, PendingEdit>()
+
+    /**
+     * Mark what a History edit of [localId] changed: the journal fields
+     * ([annotations]) or the barista. Call it before the row is saved; the mark
+     * is in memory at once and stored next.
+     */
+    fun markShotEdited(localId: String, annotations: Boolean = false, barista: Boolean = false) {
+        val edit = PendingEdit(annotations = annotations, barista = barista)
+        if (!edit.owes) return
+        pendingEdits.merge(localId, edit) { a, b -> a.with(b) }
+        scope.launch { storePendingEdits() }
+    }
 
     /** The History barista edit — call before [patchEditedShot] for that shot. */
-    fun markBaristaEdited(localId: String) {
-        if (baristaPending.add(localId)) scope.launch { storeBaristaPending() }
-    }
+    fun markBaristaEdited(localId: String) = markShotEdited(localId, barista = true)
 
     /**
      * Store the live pending set (read under the persist lock, so the last write
      * wins with the latest set). Before [load], a no-op: [load] stores the marks
      * made before it.
      */
-    private suspend fun storeBaristaPending() {
+    private suspend fun storePendingEdits() {
         if (!ownState.settled) return
-        persist { it.copy(baristaPending = baristaPending.toSet()) }
+        persist { it.copy(pendingEdits = pendingEdits.toMap(), baristaPending = emptySet()) }
+    }
+
+    /**
+     * The PATCH retry list: every due edit, sent from the row as it stands. A
+     * shot no longer in the history owes nothing; a 429 leaves the rest.
+     */
+    private suspend fun drainPendingEdits() {
+        if (!directionPushes(persisted.prefs.shotsDirection)) return
+        for ((id, edit) in pendingEdits.toMap()) {
+            if (edit.nextAttemptAt > now()) continue
+            if (currentShot(id) == null) {
+                pendingEdits.remove(id)
+                storePendingEdits()
+                continue
+            }
+            val failure = pushPendingEdit(id)
+            if (failure != null && uploadPolicy.isRateLimited(failure)) break
+        }
     }
 
     /** Called on `ShotCompleted` — uploads when auto-sync is armed, signed in,
@@ -1302,7 +1388,13 @@ class VisualizerSync(
      * and apply the actions through the VM callbacks. A row a full history
      * refuses is counted and the rest of the plan still applies.
      */
-    internal suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>, profilesById: Map<String, JsonObject>): PullApplied {
+    internal suspend fun reconcileAndApply(
+        localShots: List<StoredShot>,
+        wires: List<JsonObject>,
+        samplesById: Map<String, String>,
+        profilesById: Map<String, JsonObject>,
+        before: Map<String, ShotMergeInput> = emptyMap(),
+    ): PullApplied {
         if (wires.isEmpty()) return PullApplied()
         // Tombstones ride along (web F18a): a shot deleted here whose remote copy
         // is still on Visualizer must match that copy (an `update`, skipped
@@ -1365,6 +1457,7 @@ class VisualizerSync(
             ) as kotlinx.serialization.json.JsonArray
         }.getOrElse { return PullApplied(planned = false) }
         val stubs = mutableListOf<StoredShot>()
+        var held = 0
         for (el in actions) {
             val action = el as? JsonObject ?: continue
             fun fld(k: String) = (action[k] as? JsonPrimitive)?.contentOrNull
@@ -1388,7 +1481,7 @@ class VisualizerSync(
                         continue
                     }
                     bindUploaded(localId, vid)
-                    fillBarista(localId, action["remote"] as? JsonObject)
+                    if (mergeAndApply(localId, action["remote"] as? JsonObject, samplesById[vid], profilesById[vid], before[localId])) held += 1
                     logSync("pull", localId, "Shot (bound)")
                 }
                 "update" -> {
@@ -1397,14 +1490,8 @@ class VisualizerSync(
                     // out of the history.
                     if (localId in tombstoned) continue
                     val remote = action["remote"] as? JsonObject ?: continue
-                    // A shot pulled before the barista was read gets it now.
-                    fillBarista(localId, remote)
                     val vid = (remote["id"] as? JsonPrimitive)?.contentOrNull
-                    val durationMs = (remote["duration_ms"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong() ?: 0L
-                    vid?.let { samplesById[it] }?.let { samplesJson ->
-                        val samples = parseTimedSamples(samplesJson, json)
-                        if (samples.isNotEmpty()) onBackfillTelemetry(localId, samples, durationMs)
-                    }
+                    if (mergeAndApply(localId, remote, vid?.let { samplesById[it] }, vid?.let { profilesById[it] }, before[localId])) held += 1
                 }
             }
         }
@@ -1413,7 +1500,7 @@ class VisualizerSync(
         added.forEach { logSync("pull", it.id, it.profileName ?: "Shot") }
         // One line for the run: a large pull would push out the whole log.
         if (refused.isNotEmpty()) logSync("skip", "", "Pull", historyFullNotice(refused.size))
-        return PullApplied(added.size, refused.size)
+        return PullApplied(added.size, refused.size, held = held)
     }
 
     // ── Shot deletion (web history tombstones + upload-queue delete) ───────
@@ -1542,15 +1629,56 @@ class VisualizerSync(
     }
 
     /**
-     * Fill [localId]'s barista from a pulled remote when it has none (final
-     * review 06 #1), unless a barista edit made here is still pending (V3 #6).
-     * Internal for the JVM tests (the reconcile that calls it is native).
+     * What the merge reads of a local row (core `ShotMergeInput`), with its
+     * pending barista edit. Android marks no tags.
      */
-    internal fun fillBarista(localId: String, remote: JsonObject?) {
-        val remoteBarista = (remote?.get("barista") as? JsonPrimitive)?.contentOrNull
-        baristaToFill(currentShot(localId), remoteBarista, editedLocally = localId in baristaPending)
-            ?.let { onFillBarista(localId, it) }
+    private fun mergeInputOf(shot: StoredShot, baristaPending: Boolean) = ShotMergeInput(
+        tags = shot.tags,
+        tagsPending = false,
+        barista = shot.barista?.trim()?.ifEmpty { null },
+        baristaPending = baristaPending,
+        hasSeries = shot.samples.isNotEmpty(),
+        hasProfile = shot.profile != null,
+        isBrew = shot.isBrewLog,
+    )
+
+    /**
+     * Merge a pulled copy onto the bound local [localId] through the core
+     * (`merge_remote_shot`): tags only add, a pending barista edit wins, a curve
+     * or recipe fills only a row without one, and nothing else changes. A row
+     * edited since [before] (as the pull began) is newer here and is left
+     * alone; true when such a row still lacks its curve, so the cursor holds.
+     * Internal for the JVM tests.
+     */
+    internal fun mergeAndApply(
+        localId: String,
+        remote: JsonObject?,
+        samplesJson: String? = null,
+        profile: JsonObject? = null,
+        before: ShotMergeInput? = null,
+    ): Boolean {
+        remote ?: return false
+        val local = currentShot(localId) ?: return false
+        val input = mergeInputOf(local, pendingEdits[localId]?.barista == true)
+        if (before != null && editedDuringFetch(before, input)) return local.samples.isEmpty() && !local.isBrewLog
+        val payload = buildJsonObject {
+            put("local", json.encodeToJsonElement(ShotMergeInput.serializer(), input))
+            put("remote", remote)
+            put("profileOffered", JsonPrimitive(profile != null))
+        }
+        val patch = runCatching {
+            json.decodeFromString(ShotPatch.serializer(), mergeRemote(json.encodeToString(JsonObject.serializer(), payload)))
+        }.getOrElse { return false }
+        val durationMs = (remote["duration_ms"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong() ?: 0L
+        val samples = if (patch.backfillSamples == true) samplesJson?.let { parseTimedSamples(it, json) }.orEmpty() else emptyList()
+        onApplyRemote(localId, patch, PulledParts(samples, durationMs, profile.takeIf { patch.fillProfile == true }))
+        return false
     }
+
+    /** Each bound row as a pull begins, with its pending marks, for [mergeAndApply]. */
+    private fun mergeInputsOf(shots: List<StoredShot>): Map<String, ShotMergeInput> =
+        shots.filter { it.visualizerId != null && !it.isBrewLog }
+            .associate { it.id to mergeInputOf(it, pendingEdits[it.id]?.barista == true) }
 
     // ── Bean / roaster sync (web BeanSync.runSync) ────────────────────────────
 
@@ -1686,14 +1814,17 @@ class VisualizerSync(
                     val since = persisted.shotPullCursor ?: 0L
                     val run = persisted.pullRun + 1
                     persist { it.copy(pullRun = run) }
+                    val before = mergeInputsOf(shots)
                     val pull = pullAllShotsSince(since)
-                    val applied = reconcileAndApply(shots, pull.wires, pull.samples, pull.profiles)
+                    val applied = reconcileAndApply(shots, pull.wires, pull.samples, pull.profiles, before)
                     pulled = applied.pulled
                     refused = applied.refused
                     persist { st ->
-                        val complete = pull.complete && applied.planned
+                        val complete = pull.complete && applied.planned && applied.held == 0
                         st.copy(
-                            shotPullCursor = System.currentTimeMillis(),
+                            // A row edited mid-pull still lacks its curve: the
+                            // next pull fetches it again.
+                            shotPullCursor = if (applied.held > 0) st.shotPullCursor else System.currentTimeMillis(),
                             // Matches left the list above, so what's here wasn't found.
                             unboundTombstones = if (complete) st.unboundTombstones.filterNot { it.expiredBy(run, since) } else st.unboundTombstones,
                         )
@@ -1851,8 +1982,10 @@ internal fun resolveGrinderModel(shot: StoredShot, settingsDefault: String?): St
         ?: settingsDefault?.trim()?.takeIf { it.isNotEmpty() }
 
 /**
- * The shell-side inputs of an edit-sync PATCH (web `buildEditPatch`); the
- * body itself is assembled in the core. Pure, for the JVM tests.
+ * The shell-side inputs of an edit-sync PATCH (web `annotationsPatch`); the
+ * body itself is assembled in the core. [sendJournal] off leaves out every
+ * journal field, for a PATCH that carries only the barista. Pure, for the JVM
+ * tests.
  */
 internal fun shotPatchInputs(
     shot: StoredShot,
@@ -1860,45 +1993,57 @@ internal fun shotPatchInputs(
     defaultPrivacy: String?,
     settingsGrinderModel: String?,
     sendBarista: Boolean = false,
+    sendJournal: Boolean = true,
 ): ShotPatchInputs = ShotPatchInputs(
-    rating = shot.rating?.toUByte(),
-    notes = if (includeNotes) (shot.notes ?: "") else null,
-    privacy = shot.privacy ?: defaultPrivacy,
-    grinderModel = resolveGrinderModel(shot, settingsGrinderModel),
-    // Android has no shot tags: null omits `tag_list`, which is an absolute
-    // list, so `[]` would clear the remote tags.
+    rating = shot.rating?.toUByte()?.takeIf { sendJournal },
+    notes = if (includeNotes && sendJournal) (shot.notes ?: "") else null,
+    privacy = (shot.privacy ?: defaultPrivacy)?.takeIf { sendJournal },
+    grinderModel = resolveGrinderModel(shot, settingsGrinderModel)?.takeIf { sendJournal },
+    // Android has no tag editor, so it never sends tags: null omits
+    // `tag_list`, which is an absolute list, and `[]` would clear the remote tags.
     tagList = null,
     // Inline bean from the structured snapshot frozen at shot time (issue 06).
-    beanBrand = shot.bean?.roasterName,
-    beanType = shot.bean?.name,
-    roastDate = shot.bean?.roastedOn,
-    roastLevel = shot.bean?.roastLevel?.toDouble(),
+    beanBrand = shot.bean?.roasterName?.takeIf { sendJournal },
+    beanType = shot.bean?.name?.takeIf { sendJournal },
+    roastDate = shot.bean?.roastedOn?.takeIf { sendJournal },
+    roastLevel = shot.bean?.roastLevel?.toDouble()?.takeIf { sendJournal },
     // The shot's own recorded/edited grind wins over the bean's
     // reference setting — the same precedence History displays
     // (issue #16: a grind edit must reach the uploaded copy).
-    grinderSetting = shot.effectiveGrindSetting,
+    grinderSetting = shot.effectiveGrindSetting?.takeIf { sendJournal },
     // Who made it → `barista` (a free-account field; no drinker field).
     // Only after a barista edit ([sendBarista]); null = the core leaves the
     // remote value alone. Empty once cleared, so a clear reaches Visualizer.
     barista = if (sendBarista) baristaOf(shot) else null,
 )
 
-/** What a pull left in the history: rows added, new rows a full one refused, and whether the core planned it. */
-internal data class PullApplied(val pulled: Int = 0, val refused: Int = 0, val planned: Boolean = true)
+/**
+ * Whether a row changed while its copy was fetched (core `edited_during_fetch`):
+ * its tags, its barista, or what is pending on them.
+ */
+internal fun editedDuringFetch(was: ShotMergeInput, now: ShotMergeInput): Boolean =
+    was.tags.orEmpty() != now.tags.orEmpty() ||
+        (was.tagsPending ?: false) != (now.tagsPending ?: false) ||
+        was.barista.orEmpty() != now.barista.orEmpty() ||
+        (was.baristaPending ?: false) != (now.baristaPending ?: false)
+
+/**
+ * What a pull left in the history: rows added, new rows a full one refused,
+ * whether the core planned it, and rows edited mid-pull that still lack their
+ * curve, so the cursor holds.
+ */
+internal data class PullApplied(val pulled: Int = 0, val refused: Int = 0, val planned: Boolean = true, val held: Int = 0)
+
+/** What a pull fetched besides the detail, for [VisualizerSync]'s `onApplyRemote`. */
+data class PulledParts(
+    /** The pulled telemetry, when the merge takes it. */
+    val samples: List<coffee.crema.ui.TelemetrySample> = emptyList(),
+    /** The remote duration, ms, kept with a backfilled curve. */
+    val durationMs: Long = 0,
+    /** The pulled recipe, when the merge takes it. */
+    val profile: JsonObject? = null,
+)
 
 /** A shot's barista as the PATCH sends it: trimmed, "" when unset or cleared. */
 internal fun baristaOf(shot: StoredShot): String = shot.barista?.trim().orEmpty()
 
-/**
- * The barista to fill into [local] from a pulled remote one (final review
- * 06 #1), or null for no change: only when the local shot has none, so a name
- * set or edited here is never overwritten by a pull. [editedLocally] is true
- * while a barista edit made here has not reached Visualizer: a blank barista
- * is then the user's clear, not a gap to fill (V3 #6). Mirrors the web
- * `baristaToFill`.
- */
-internal fun baristaToFill(local: StoredShot?, remoteBarista: String?, editedLocally: Boolean = false): String? {
-    val pulled = remoteBarista?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    if (local == null || editedLocally || !local.barista.isNullOrBlank()) return null
-    return pulled
-}
