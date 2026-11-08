@@ -3554,7 +3554,9 @@ data class ProfileMeta (
 /// Recipe organisation here.
 @Serializable
 data class RecipeMeta (
-	/// Method id → recipe id.
+	/// Method id → recipe id. Written in order, so a plan serialises the same
+	/// way every time: the shell compares a confirmed plan with a fresh one by
+	/// its JSON.
 	val defaults: HashMap<String, String>,
 	val hiddenBuiltins: List<String>
 )
@@ -4133,6 +4135,7 @@ data class RecipeLibraryMigration (
 @Serializable
 data class RecipeMetaPlan (
 	val action: PlanAction,
+	/// Written in order, as [`RecipeMeta::defaults`].
 	val defaults: HashMap<String, String>,
 	val hiddenBuiltins: List<String>
 )
@@ -4859,6 +4862,28 @@ data class ShotStatInput (
 	val doseG: Float? = null,
 	/// Star rating 1..=5; `None` / 0 = unrated.
 	val rating: UByte? = null
+)
+
+/// What a History row shows of a shot without its series.
+@Serializable
+data class ShotSummary (
+	/// The summary's format: 1.
+	val v: UInt,
+	/// Machine samples in the series. The shell stores `null` when it
+	/// couldn't read the series; the core always counts.
+	val sampleCount: UInt? = null,
+	/// Samples in a brew's scale series; 0 for none.
+	val brewSampleCount: UInt,
+	/// As [`crate::ShotRecord::peaks`].
+	val peakWeight: Float? = null,
+	/// As [`crate::ShotRecord::peaks`].
+	val finalWeight: Float? = null,
+	/// As [`crate::ShotRecord::peaks`].
+	val peakPressure: Float,
+	/// As [`crate::ShotRecord::peaks`].
+	val peakTemp: Float,
+	/// The row chart, as described in the module docs; `None` with no series.
+	val spark: String? = null
 )
 
 /// One horizontal run of the planned-water staircase: level `target_g`

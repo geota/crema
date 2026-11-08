@@ -2203,6 +2203,78 @@ pub fn export_backup_bundle(
     serde_json::to_string(&built).map_err(crema_err)
 }
 
+/// The lines of a backup before its shots, as a `BackupPrelude` JSON
+/// (`{ jsonl, omitted }`). With [`backup_shot_line`] and [`backup_tail`],
+/// joined, the bytes of [`export_backup_bundle`] (#310). See
+/// [`de1_domain::backup_prelude_jsonl`].
+///
+/// # Errors
+///
+/// Returns the error when the envelope is malformed.
+#[uniffi::export]
+pub fn backup_prelude(
+    envelope_json: String,
+    shot_count: u32,
+    shots_omitted: u32,
+    created_at_unix_ms: i64,
+    app_version: String,
+    device_label: String,
+) -> Result<String, CremaError> {
+    let built = de1_domain::backup_prelude_jsonl(
+        &envelope_json,
+        shot_count as usize,
+        shots_omitted as usize,
+        created_at_unix_ms,
+        &app_version,
+        &device_label,
+    )
+    .map_err(crema_err)?;
+    serde_json::to_string(&built).map_err(crema_err)
+}
+
+/// One shot's backup line, as a `BackupShotLine` JSON. See
+/// [`de1_domain::backup_shot_line`].
+///
+/// # Errors
+///
+/// Returns the error when the shot doesn't read: leave it out and count it
+/// in the prelude's `shots_omitted`.
+#[uniffi::export]
+pub fn backup_shot_line(shot_json: String) -> Result<String, CremaError> {
+    let line = de1_domain::backup_shot_line(&shot_json).map_err(crema_err)?;
+    serde_json::to_string(&line).map_err(crema_err)
+}
+
+/// The lines of a backup after its shots. See
+/// [`de1_domain::backup_tail_jsonl`].
+///
+/// # Errors
+///
+/// Returns the error when the envelope is malformed.
+#[uniffi::export]
+pub fn backup_tail(envelope_json: String) -> Result<String, CremaError> {
+    de1_domain::backup_tail_jsonl(&envelope_json).map_err(crema_err)
+}
+
+/// One backup line, read strictly, as a `ParsedBackupLine` JSON. See
+/// [`de1_domain::parse_backup_line`].
+#[uniffi::export]
+#[must_use]
+pub fn parse_backup_line(line: Vec<u8>) -> String {
+    de1_domain::parse_backup_line_json(&line)
+}
+
+/// A History row's summary of a `StoredShot`, as a `ShotSummary` JSON (#310).
+/// See [`de1_domain::shot_summary`].
+///
+/// # Errors
+///
+/// Returns the parse error when the shot is malformed.
+#[uniffi::export]
+pub fn shot_summary(stored_shot_json: String) -> Result<String, CremaError> {
+    de1_domain::shot_summary_json(&stored_shot_json).map_err(crema_err)
+}
+
 /// A backup's name as an automatic one, carrying a `BackupCounts` JSON. See
 /// [`de1_domain::auto_backup_file_name`].
 ///

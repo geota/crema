@@ -2157,6 +2157,76 @@ pub fn export_backup_bundle(
     serde_json::to_string(&built).map_err(|e| e.to_string())
 }
 
+/// The lines of a backup before its shots, as a `BackupPrelude` JSON
+/// (`{ jsonl, omitted }`). With [`backup_shot_line`] and [`backup_tail`],
+/// joined, the bytes of [`export_backup_bundle`] (#310). See
+/// `de1_domain::backup_prelude_jsonl`.
+///
+/// # Errors
+///
+/// Returns the error string when the envelope is malformed.
+#[wasm_bindgen(js_name = backupPrelude)]
+pub fn backup_prelude(
+    envelope_json: &str,
+    shot_count: u32,
+    shots_omitted: u32,
+    created_at_unix_ms: f64,
+    app_version: &str,
+    device_label: &str,
+) -> Result<String, String> {
+    let built = de1_domain::backup_prelude_jsonl(
+        envelope_json,
+        shot_count as usize,
+        shots_omitted as usize,
+        f64_to_ms(created_at_unix_ms),
+        app_version,
+        device_label,
+    )?;
+    serde_json::to_string(&built).map_err(|e| e.to_string())
+}
+
+/// One shot's backup line, as a `BackupShotLine` JSON (`{ line,
+/// withoutProfile, hasCurve }`). See `de1_domain::backup_shot_line`.
+///
+/// # Errors
+///
+/// Returns the error string when the shot doesn't read: leave it out and
+/// count it in the prelude's `shotsOmitted`.
+#[wasm_bindgen(js_name = backupShotLine)]
+pub fn backup_shot_line(shot_json: &str) -> Result<String, String> {
+    let line = de1_domain::backup_shot_line(shot_json)?;
+    serde_json::to_string(&line).map_err(|e| e.to_string())
+}
+
+/// The lines of a backup after its shots. See `de1_domain::backup_tail_jsonl`.
+///
+/// # Errors
+///
+/// Returns the error string when the envelope is malformed.
+#[wasm_bindgen(js_name = backupTail)]
+pub fn backup_tail(envelope_json: &str) -> Result<String, String> {
+    de1_domain::backup_tail_jsonl(envelope_json)
+}
+
+/// One backup line, read strictly, as a `ParsedBackupLine` JSON. See
+/// `de1_domain::parse_backup_line`.
+#[wasm_bindgen(js_name = parseBackupLine)]
+#[must_use]
+pub fn parse_backup_line(line: &[u8]) -> String {
+    de1_domain::parse_backup_line_json(line)
+}
+
+/// A History row's summary of a `StoredShot`, as a `ShotSummary` JSON (#310).
+/// See `de1_domain::shot_summary`.
+///
+/// # Errors
+///
+/// Returns the parse error string when the shot is malformed.
+#[wasm_bindgen(js_name = shotSummary)]
+pub fn shot_summary(stored_shot_json: &str) -> Result<String, String> {
+    de1_domain::shot_summary_json(stored_shot_json)
+}
+
 /// Scan a backup's bytes into a `BackupManifest` JSON, with the bean ids its
 /// zip holds photos for (a JSON string array). See
 /// `de1_domain::scan_backup_bytes`.

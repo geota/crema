@@ -111,6 +111,7 @@ pub mod shot;
 pub mod shot_capture;
 pub mod shot_merge;
 pub mod shot_quality;
+pub mod shot_summary;
 pub mod steam;
 pub mod step_weight;
 pub mod stolen_serials;
@@ -132,10 +133,10 @@ pub use auto_tare::{
     MAX_PRE_SHOT_ZERO_OFFSET_G, TareSettleWindow, pre_shot_zero_offset,
 };
 pub use backup_plan::{
-    BackupLine, BackupManifest, BackupScan, LineError, LocalState, RestoreMode, RestoreOpts,
-    RestorePlan, common_is_pristine, common_is_pristine_json, import_backup_bytes,
-    import_backup_bytes_json, parse_backup_line, plan_restore, plan_restore_json,
-    scan_backup_bytes, scan_backup_bytes_json,
+    BackupLine, BackupManifest, BackupScan, LineError, LocalState, ParsedBackupLine, RestoreMode,
+    RestoreOpts, RestorePlan, common_is_pristine, common_is_pristine_json, import_backup_bytes,
+    import_backup_bytes_json, parse_backup_line, parse_backup_line_json, parse_backup_line_parsed,
+    plan_restore, plan_restore_json, scan_backup_bytes, scan_backup_bytes_json,
 };
 pub use backup_retention::{
     AutoBackupName, AutoBackupRetention, BackupCounts, BackupFile, BackupFileInfo, BackupShrink,
@@ -229,7 +230,8 @@ pub use connect_sweep::{
     ConnectSweepSettings, USB_CHARGER_CHECK_INTERVAL_MS, UsbChargingMode, usb_charger_decision,
 };
 pub use crema_jsonl::{
-    BackupExport, BackupHeader, BackupImportPlan, CremaExportHeader, OmittedBackupRow,
+    BackupExport, BackupHeader, BackupImportPlan, BackupPrelude, BackupShotLine, CremaExportHeader,
+    OmittedBackupRow, backup_prelude_jsonl, backup_shot_line, backup_tail_jsonl,
     export_backup_jsonl_from_json, export_jsonl, export_jsonl_from_json,
     import_backup_jsonl_to_plan_json, import_jsonl_to_plan_json, parse_backup_jsonl, parse_jsonl,
 };
@@ -331,6 +333,7 @@ pub use shot_merge::{
     merge_remote_shot, merge_remote_shot_json, normalize_tag, normalize_tags, normalize_tags_json,
     settle_tag_push, settle_tag_push_json, tag_push_list, tag_push_list_json, tag_union,
 };
+pub use shot_summary::{ShotSummary, Spark, decode_spark, shot_summary, shot_summary_json};
 pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,
     SteamSample,
