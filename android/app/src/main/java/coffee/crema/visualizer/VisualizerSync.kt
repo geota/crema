@@ -1943,6 +1943,23 @@ class VisualizerSync(
      * tombstones, so a pending remote delete doesn't remove the copy a
      * restored shot now points at, and the pull treats them as live again.
      */
+    /** Shots deleted here whose tombstone is still owed: a restore's plan counts them as deleted. */
+    fun deletedShotIds(): Set<String> =
+        deletedHere.toSet() + persisted.shotTombstones.map { it.id } + persisted.unboundTombstones.map { it.id }
+
+    /** [forgetTombstones], awaited: a restore's step 2. Whether it landed. */
+    suspend fun forgetTombstonesNow(ids: Collection<String>): Boolean {
+        val gone = ids.toHashSet()
+        deletedHere -= gone
+        if (persisted.shotTombstones.none { it.id in gone } && persisted.unboundTombstones.none { it.id in gone }) return true
+        return persist { st ->
+            st.copy(
+                shotTombstones = st.shotTombstones.filterNot { it.id in gone },
+                unboundTombstones = st.unboundTombstones.filterNot { it.id in gone },
+            )
+        }
+    }
+
     fun forgetTombstones(ids: Collection<String>) {
         val gone = ids.toHashSet()
         deletedHere -= gone

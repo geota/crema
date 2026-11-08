@@ -152,7 +152,7 @@ class ManualBrewDateVmTest {
     private fun bundle(vararg shots: StoredShot): String {
         fun line(body: JsonObject, kind: String) =
             Json.encodeToString(JsonObject.serializer(), JsonObject(body + ("kind" to JsonPrimitive(kind))))
-        return (listOf(line(JsonObject(emptyMap()), "crema-backup/v1")) + shots.map { line(wireShotJson(it, forBackup = true), "shot") })
+        return (listOf(line(JsonObject(mapOf("createdAt" to JsonPrimitive(1))), "crema-backup/v1")) + shots.map { line(wireShotJson(it, forBackup = true), "shot") })
             .joinToString("\n")
     }
 
@@ -190,7 +190,7 @@ class ManualBrewDateVmTest {
         stored(rows)
         val vm = vm()
         val told = restore(vm, bundle(rows.first()))
-        assertTrue("0 shot(s)" in told, told)
+        assertTrue(told.startsWith("Restored nothing new"), told)
         assertEquals(350, history(vm).size)
     }
 
@@ -199,8 +199,7 @@ class ManualBrewDateVmTest {
         stored(List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now - i * hour) })
         val vm = vm()
         val told = restore(vm, bundle(machine("old", now - 1_000 * hour)))
-        assertTrue("0 shot(s)" in told, told)
-        assertTrue("1 older shot was dropped" in told, told)
+        assertTrue("History is full at 300 shots, so no shots were added" in told, told)
         assertEquals(HistoryStore.MAX_SHOTS, history(vm).size)
     }
 }

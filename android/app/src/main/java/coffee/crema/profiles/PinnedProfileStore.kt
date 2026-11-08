@@ -48,9 +48,9 @@ class PinnedProfileStore(private val context: Context, private val json: Json) {
     }
 
     /** Persist the pinned ids (best-effort). */
-    suspend fun save(ids: Set<String>) {
+    /** Whether it landed. */
+    suspend fun save(ids: Set<String>): Boolean =
         saveStore(file, WHAT) { json.encodeToString(PinnedProfiles.serializer(), PinnedProfiles(ids.toList())) }
-    }
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {

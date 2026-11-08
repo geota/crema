@@ -56,9 +56,9 @@ class LibraryStore(private val context: Context, private val json: Json) {
     fun openSaves() = SafeFile.openSaves(file)
 
     /** Persist the library atomically (best-effort; a failure is logged). */
-    suspend fun save(library: BeanLibrary) {
+    /** Whether it landed. */
+    suspend fun save(library: BeanLibrary): Boolean =
         saveStore(file, WHAT) { json.encodeToString(BeanLibrary.serializer(), library) }
-    }
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {

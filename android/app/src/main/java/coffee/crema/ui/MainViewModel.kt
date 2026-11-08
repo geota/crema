@@ -416,7 +416,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         backupZip = { library.buildBackupZip() },
         backupFileName = { library.backupFileName() },
         applyRestore = { bytes, wipe ->
-            viewModelScope.launch { library.restoreBackupBytes(bytes, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) }
+            startRestore(bytes, "your Google Drive backup", if (wipe) RestoreMode.WIPE else RestoreMode.MERGE)
         },
         autoBackupBlocked = { autoBackupBlocked() },
         damageByStore = { damageByStore() },
@@ -434,7 +434,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val unhealthy = Stores.unhealthy()
         return when {
             unhealthy.isNotEmpty() -> "your ${unhealthy.joinToString(" and ")} couldn't be read"
-            library.restoring -> "a restore is running"
+            restoreState() == coffee.crema.restore.RestoreState.RUNNING -> "a restore is running"
+            restoreState() == coffee.crema.restore.RestoreState.LEFTOVER -> "a restore didn't finish"
             else -> null
         }
     }
@@ -470,9 +471,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         notify = { notifyUser(it) },
         appendLog = { appendLog(it) },
         currentPrefs = { currentPrefs() },
-        applyRestoredSettings = { applyRestoredSettings(it) },
-        applyRestoredMaintenance = { m -> maintenance.restore(m) },
-        onRestoreCompleted = { drive.restoreCompleted() },
         persistSawModel = {
             runCatching { sawModelStore.save(bridge.sawModelJson()) }
                 .onFailure { appendLog("SAW model save failed: ${it.message}") }
@@ -793,6 +791,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog = { appendLog(it) },
         setFlashActive = { active -> bgConnection.setFirmwareFlashActive(active) },
         afterRelease = { session.afterFirmwareRelease() },
+        restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
     )
 
     /** Settings → Machine → "Update firmware…" (alpha). */
@@ -1254,6 +1253,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // (geota/crema#56). Pure core state; safe while disconnected.
             session.pushStopTargets()
             maintenance.load()
+            // A restore a kill left part-way says so; one that finished runs its deletes.
+            restoreEngine.checkAtBoot()?.let { name ->
+                _ui.update { it.copy(interruptedRestore = name) }
+                notifyUser("Your last restore from $name didn't finish. Run it again to complete it.")
+            }
             // Uploads that failed last time retry now (F17).
             visualizer.drainSoon()
             // Daily Visualizer Premium check (gates the edit sync's Premium-only fields).
@@ -1408,14 +1412,177 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** A suggested filename for the SAF create-document picker. */
     fun backupFileName(): String = library.backupFileName()
 
-    /** Restore a `crema-backup` bundle from a SAF [uri]. */
-    fun restoreBackup(uri: Uri, mode: RestoreMode) = library.restoreBackup(uri, mode)
+    // ── Restore through the core's plan (restore-safety PR7a) ──────────────
 
-    /** Apply a backup from raw bytes (SAF file or Google Drive). */
-    suspend fun restoreBackupBytes(bytes: ByteArray, mode: RestoreMode) = library.restoreBackupBytes(bytes, mode)
+    private val restoreMarker by lazy {
+        coffee.crema.restore.RestoreMarkerStore(
+            java.io.File(getApplication<Application>().filesDir, coffee.crema.restore.RestoreMarkerStore.FILE_NAME),
+            json,
+        )
+    }
 
-    /** Parse + apply a `crema-backup` bundle's raw text. */
-    fun restoreBackupFromText(text: String, mode: RestoreMode) = library.restoreBackupFromText(text, mode)
+    /** The restore engine, over this ViewModel's stores. */
+    internal val restoreEngine: coffee.crema.restore.RestoreEngine by lazy {
+        coffee.crema.restore.RestoreEngine(
+            library.restoreSink(
+                LibraryController.RestoreDeps(
+                    machineBusy = { _ui.value.shotInProgress || firmware.ui.value.holdsLink || firmware.ui.value.running },
+                    totalLitres = { _ui.value.maintenance.totalLitres },
+                    restoreRecipes = { r, m, d, h -> guided.restoreRecipes(r, m, d, h) },
+                    restoreSettings = { p -> restoreSettingsNow(p) },
+                    restoreMaintenance = { m -> maintenance.restoreNow(m) },
+                ),
+            ),
+            restoreMarker,
+            json,
+        )
+    }
+
+    /** Test seam: [LibraryController.afterRestoreSeries]. */
+    internal var afterRestoreSeries: (suspend () -> Unit)?
+        get() = library.afterRestoreSeries
+        set(value) { library.afterRestoreSeries = value }
+
+    /** `idle | running | leftover`: what auto-backup, sync and a flash start read. */
+    fun restoreState(): coffee.crema.restore.RestoreState = restoreEngine.state()
+
+    /** A backup picked and planned, waiting on the report. */
+    private class PendingRestore(
+        val prepared: coffee.crema.restore.PreparedBackup,
+        val records: coffee.crema.restore.RestoreRecords,
+        val kind: coffee.crema.restore.RestoreKind,
+        var plan: coffee.crema.core.RestorePlan,
+        var revive: Boolean = false,
+    )
+    private var pendingRestore: PendingRestore? = null
+
+    private fun kindOf(mode: RestoreMode) =
+        if (mode == RestoreMode.WIPE) coffee.crema.restore.RestoreKind.REPLACE else coffee.crema.restore.RestoreKind.MERGE
+
+    /** Restore a `crema-backup` bundle from a SAF [uri]: read, plan, then the report. */
+    fun restoreBackup(uri: Uri, mode: RestoreMode) {
+        viewModelScope.launch {
+            val bytes = library.readBackupBytes(uri) ?: return@launch
+            startRestore(bytes, uri.lastPathSegment ?: "the backup", mode)
+        }
+    }
+
+    /**
+     * Plan a restore of [bytes]: a refusal says why; a clean Merge runs at once;
+     * anything else opens the report, which Replace gates behind Type ERASE.
+     */
+    fun startRestore(bytes: ByteArray, name: String, mode: RestoreMode) {
+        viewModelScope.launch {
+            val kind = kindOf(mode)
+            val prepared = runCatching {
+                coffee.crema.restore.prepareBackup(
+                    bytes, name, java.io.File(getApplication<Application>().cacheDir, "restore-photos"),
+                )
+            }.getOrElse { notifyUser("Restore failed: ${it.message}"); return@launch }
+            val records = runCatching { coffee.crema.restore.RestoreRecords.read(prepared, json, System.currentTimeMillis()) }
+                .getOrElse { notifyUser(it.message ?: "Restore failed."); return@launch }
+                ?: run { notifyUser("Not a Crema backup file."); return@launch }
+            val plan = restoreEngine.plan(prepared, kind)
+            val pending = PendingRestore(prepared, records, kind, plan)
+            when {
+                plan.verdict == coffee.crema.core.Verdict.Refused -> notifyUser(coffee.crema.restore.refusalMessage(plan))
+                plan.verdict == coffee.crema.core.Verdict.Ok && plan.shots.deletedHere.isEmpty() -> runPending(pending)
+                else -> showReport(pending)
+            }
+        }
+    }
+
+    private fun showReport(pending: PendingRestore, lead: String? = null) {
+        pendingRestore = pending
+        val (title, message) = coffee.crema.restore.confirmText(pending.plan)
+        _ui.update {
+            it.copy(
+                restoreReport = RestoreReportUi(
+                    title = title,
+                    message = listOfNotNull(lead, message).joinToString(" "),
+                    replace = pending.kind == coffee.crema.restore.RestoreKind.REPLACE,
+                    offerBringBack = pending.plan.shots.deletedHere.isNotEmpty() && !pending.revive,
+                    offerBackUpFirst = pending.kind == coffee.crema.restore.RestoreKind.REPLACE && drive.state.value.connected,
+                ),
+            )
+        }
+    }
+
+    /** The report's Restore / Replace: run what it showed. */
+    fun confirmRestore() {
+        val pending = pendingRestore ?: return
+        _ui.update { it.copy(restoreReport = null) }
+        viewModelScope.launch { runPending(pending) }
+    }
+
+    /** The report's "Bring them back too": show what that would do first. */
+    fun restoreBringBack() {
+        val pending = pendingRestore ?: return
+        viewModelScope.launch {
+            pending.revive = true
+            pending.plan = restoreEngine.plan(pending.prepared, pending.kind, reviveDeleted = true)
+            showReport(pending)
+        }
+    }
+
+    /** The report's "Back up first": a Drive backup now; the report stays. */
+    fun restoreBackUpFirst() = drive.backupNow()
+
+    /** The interrupted-restore notice's Dismiss: its marker finishes, so its deletes still run. */
+    fun dismissInterruptedRestore() {
+        _ui.update { it.copy(interruptedRestore = null) }
+        viewModelScope.launch { restoreEngine.dismissLeftover() }
+    }
+
+    /** The notice's Later: hidden until the next launch, the marker kept. */
+    fun laterInterruptedRestore() = _ui.update { it.copy(interruptedRestore = null) }
+
+    /** The report was dismissed: nothing runs. */
+    fun dismissRestore() {
+        pendingRestore = null
+        _ui.update { it.copy(restoreReport = null) }
+    }
+
+    private suspend fun runPending(pending: PendingRestore) {
+        val outcome = restoreEngine.run(pending.prepared, pending.kind, pending.records, pending.revive, expected = pending.plan)
+        if (outcome is coffee.crema.restore.RestoreOutcome.Changed) {
+            pending.plan = outcome.plan
+            showReport(pending, lead = coffee.crema.restore.outcomeMessage(outcome))
+            return
+        }
+        pendingRestore = null
+        // The damage Drive's pre-damage pin guarded is dealt with: its hold ends (REVIEW-366).
+        if (outcome is coffee.crema.restore.RestoreOutcome.Done) drive.restoreCompleted()
+        val held = coffee.crema.ui.heldSharingNotice(library.restoreHeldSharing)
+        notifyUser(coffee.crema.restore.outcomeMessage(outcome) + (held?.let { " $it" } ?: ""))
+    }
+
+    /** A restore's settings, awaited: the live UI, the core, the machine's registers, then the file. */
+    private suspend fun restoreSettingsNow(p: AppPrefs): Boolean {
+        settings.restoreValues(p)
+        machineConfig.pushCoreInputs(effectiveState())
+        session.seedMachineSettings(onReady = false)
+        return settings.persistRestoredPrefs()
+    }
+
+    /** Apply a backup from raw bytes, confirming whatever its plan allows: for tests and imports. */
+    suspend fun restoreBackupBytes(bytes: ByteArray, mode: RestoreMode) {
+        val kind = kindOf(mode)
+        val prepared = coffee.crema.restore.prepareBackup(bytes, "a backup", java.io.File(getApplication<Application>().cacheDir, "restore-photos"))
+        val records = coffee.crema.restore.RestoreRecords.read(prepared, json, System.currentTimeMillis())
+            ?: run { notifyUser("Not a Crema backup file."); return }
+        val plan = restoreEngine.plan(prepared, kind)
+        if (plan.verdict == coffee.crema.core.Verdict.Refused) {
+            notifyUser(coffee.crema.restore.refusalMessage(plan))
+            return
+        }
+        runPending(PendingRestore(prepared, records, kind, plan))
+    }
+
+    /** [restoreBackupBytes] for a bundle's raw text. */
+    fun restoreBackupFromText(text: String, mode: RestoreMode) {
+        viewModelScope.launch { restoreBackupBytes(text.toByteArray(Charsets.UTF_8), mode) }
+    }
 
     /**
      * Remove a stored shot from the local history. Persisted. A shot on

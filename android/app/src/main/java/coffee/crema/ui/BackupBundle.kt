@@ -248,13 +248,26 @@ fun parseBackup(
     json: Json,
     nowMs: Long,
     import: (String) -> String = ::importBackupJsonl,
-): ParsedBackup? {
-    val plan = json.parseToJsonElement(import(text)).jsonObject
+): ParsedBackup? = parseImportPlan(json.parseToJsonElement(import(text)).jsonObject, json, nowMs, strict = false)
+
+/** A restore's records: the core's `importBackupBytes`, every row decoded, or [BackupDecodeError]. */
+fun parseBackupBytes(bytes: ByteArray, json: Json, nowMs: Long): ParsedBackup? =
+    parseImportPlan(json.parseToJsonElement(coffee.crema.core.importBackupBytes(bytes)).jsonObject, json, nowMs, strict = true)
+
+/** A row the core read that this shell can't take. A restore stops before its first write: the plan counted it. */
+class BackupDecodeError(what: String, id: String?) :
+    IllegalArgumentException("A $what in this backup can't be read here (${id ?: "?"}). Nothing was changed.")
+
+private fun parseImportPlan(plan: JsonObject, json: Json, nowMs: Long, strict: Boolean): ParsedBackup? {
     if ((plan["hasHeader"] as? JsonPrimitive)?.booleanOrNull != true) return null
     fun array(key: String): List<JsonObject> = (plan[key] as? JsonArray).orEmpty().filterIsInstance<JsonObject>()
     fun obj(key: String): JsonObject? = plan[key] as? JsonObject
+    fun idOf(o: JsonObject) = (o["id"] as? JsonPrimitive)?.content
     fun <T> typed(key: String, serializer: KSerializer<T>): List<T> =
-        array(key).mapNotNull { runCatching { json.decodeFromJsonElement(serializer, it) }.getOrNull() }
+        array(key).mapNotNull { row ->
+            runCatching { json.decodeFromJsonElement(serializer, row) }.getOrNull()
+                ?: if (strict) throw BackupDecodeError(key.removeSuffix("s"), idOf(row)) else null
+        }
 
     var prefs: AppPrefs? = null
     var common: CommonSettings? = null
@@ -277,7 +290,9 @@ fun parseBackup(
         profiles = array("profiles").map { json.encodeToString(JsonObject.serializer(), it) },
         beans = typed("beans", Bean.serializer()),
         roasters = typed("roasters", Roaster.serializer()),
-        shots = array("shots").mapNotNull { storedShotFromBackupJson(it, json) },
+        shots = array("shots").mapNotNull { row ->
+            storedShotFromBackupJson(row, json) ?: if (strict) throw BackupDecodeError("shot", idOf(row)) else null
+        },
         prefs = prefs,
         common = common,
         qcGrind = qcGrind,

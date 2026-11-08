@@ -245,12 +245,19 @@ internal class SettingsController(
     /** [persistPrefs], awaited: the T6 commit saves the adopted values before
      *  the role switch starts (I3). Numbered like every save, so an earlier
      *  fire-and-forget one can never land after it. */
-    suspend fun persistPrefsNow() {
+    suspend fun persistPrefsNow(): Boolean {
         // Like persistPrefs: never save a half-default AppPrefs before the load.
-        if (!loaded) return
+        if (!loaded) return false
         val snapshot = currentPrefs()
         val generation = ++prefsGeneration
-        store.save(snapshot, generation)
+        return store.save(snapshot, generation)
+    }
+
+    /** [persistPrefsNow] for a restore: the save awaited, and a hub's mirrors told, as [persistPrefs] tells them. */
+    suspend fun persistRestoredPrefs(): Boolean {
+        val saved = persistPrefsNow()
+        pushConfig()
+        return saved
     }
 
     /** Persist the current prefs snapshot (best-effort, off the main thread).

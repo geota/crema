@@ -705,21 +705,23 @@ class SettingsStore(private val context: Context, private val json: Json) {
      * snapshot was already written, so a fire-and-forget save that loses the
      * race can never put older values back (spec §7.5 step 5).
      */
-    suspend fun save(prefs: AppPrefs, generation: Long? = null) {
-        if (!SaveFloor.admit(file, WHAT)) return
+    /** Whether it landed; a snapshot older than one written counts as landed. */
+    suspend fun save(prefs: AppPrefs, generation: Long? = null): Boolean {
+        if (!SaveFloor.admit(file, WHAT)) return false
         // This lock holds the generation check and both writes together.
-        withContext(NonCancellable + Dispatchers.IO) {
+        return withContext(NonCancellable + Dispatchers.IO) {
             saveLock.withLock {
                 if (generation != null) {
-                    if (generation < lastGeneration) return@withLock
+                    if (generation < lastGeneration) return@withLock true
                     lastGeneration = generation
                 }
-                saveStore(file, WHAT) { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
+                val saved = saveStore(file, WHAT) { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
                 // Every save of a stored dose rewrites the downgrade marker.
                 if (prefs.qcHotWaterMode != null) {
                     runCatching { json.encodeToString(StoredHotWater.serializer(), prefs.storedHotWater()) }
                         .onSuccess { saveItem(markerFile, it) }
                 }
+                saved
             }
         }
     }

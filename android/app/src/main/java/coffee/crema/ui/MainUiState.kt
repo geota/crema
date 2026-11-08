@@ -51,6 +51,10 @@ data class MainUiState(
     val shotFrame: Int = 0,
     /** True between `ShotStarted` and `ShotCompleted` — drives resting↔extracting UI. */
     val shotInProgress: Boolean = false,
+    /** A planned restore waiting on the user's yes: the report. */
+    val restoreReport: RestoreReportUi? = null,
+    /** A restore a kill left part-way, by its backup's name: the notice with Dismiss. */
+    val interruptedRestore: String? = null,
     /** Raw machine-state name (e.g. `"Espresso"`) for `==` comparisons, or null. */
     val machineStateName: MachineState? = null,
     /** Raw machine-substate name (e.g. `"Pouring"`), or null. */
@@ -617,4 +621,16 @@ data class MainUiState(
      * a mode, after which the response confirms it.
      */
     val scaleActiveMode: Int? = null,
+)
+
+/** The restore report: what a restore will do, before it does it (restore-safety PR7a). */
+data class RestoreReportUi(
+    val title: String,
+    val message: String,
+    /** Replace: gated behind typing ERASE. */
+    val replace: Boolean,
+    /** Shots in the backup were deleted here: offer to bring them back. */
+    val offerBringBack: Boolean,
+    /** Replace with Drive connected: offer a Drive backup first. */
+    val offerBackUpFirst: Boolean,
 )
