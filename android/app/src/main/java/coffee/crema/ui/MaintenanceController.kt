@@ -79,6 +79,13 @@ internal class MaintenanceController(
         save(state)
     }
 
+    /** [restore], awaited: a restore's step 8. Whether it landed. */
+    suspend fun restoreNow(state: MaintenanceState): Boolean {
+        lane.post { totalLitres = state.totalLitres }
+        updateUi { it.copy(maintenance = state, maintenanceReadout = computeReadout(state)) }
+        return store.save(state)
+    }
+
     /**
      * Erase all data, the memory half: a fresh-install state (baselines and
      * total zeroed, the three *AtMs = now so the readouts read "0 since").

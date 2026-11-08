@@ -555,6 +555,7 @@ describe('ShotSync pull merges through the core', () => {
 			get: (id: string) => shots.find((x) => x.id === id),
 			bindVisualizerId: vi.fn(),
 			insertPulled: vi.fn(),
+			seriesPending: () => false,
 			applyRemote: (id: string, patch: Record<string, unknown>) => {
 				applied.push([id, patch]);
 				const s = shots.find((x) => x.id === id)!;
@@ -658,6 +659,7 @@ describe('ShotSync: an offline barista clear survives the next pull (V3 #6, V2 P
 			get: (id: string) => (id === shot.id ? shot : undefined),
 			bindVisualizerId: vi.fn(),
 			insertPulled: vi.fn(),
+			seriesPending: () => false,
 			applyRemote: filled
 		} as unknown as HistoryStore;
 		return { shot, history, filled };

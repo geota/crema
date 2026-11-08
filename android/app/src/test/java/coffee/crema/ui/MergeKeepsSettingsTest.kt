@@ -51,8 +51,11 @@ class MergeKeepsSettingsTest {
         val s = vm.ui.value
         assertEquals(30f, s.maxShotDurationS)
         assertEquals("g", s.weightUnit)
-        assertEquals(0.0, s.maintenance.totalLitres)
-        assertEquals("backup", kotlinx.coroutines.runBlocking { vm.visualizer.backupPrefs() }.shotsDirection)
+        // A device that has never counted any water takes the backup's counters
+        // (the plan's rule: maintenance applies while `totalLitres` is 0).
+        assertEquals(99.0, s.maintenance.totalLitres)
+        // Visualizer prefs still as the core's defaults count as never set: the backup's apply.
+        assertEquals("off", kotlinx.coroutines.runBlocking { vm.visualizer.backupPrefs() }.shotsDirection)
     }
 
     @Test

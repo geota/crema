@@ -271,8 +271,9 @@ pub struct BrewHistoryStats {
 }
 
 /// Derive the method-aware History stat strip over `brews`.
-// Display averages over ≤300 rows: f32 mantissa is plenty.
-#[allow(clippy::cast_precision_loss)]
+// Sums run in f64 (#310): a 20,000-row history drifts in f32. Results are
+// display values and stay f32.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 #[must_use]
 pub fn brew_history_stats(brews: &[BrewStatInput]) -> BrewHistoryStats {
     let family = |b: &BrewStatInput| {
@@ -332,19 +333,13 @@ pub fn brew_history_stats(brews: &[BrewStatInput]) -> BrewHistoryStats {
         .iter()
         .filter_map(|b| b.dose_g.filter(|d| d.is_finite() && *d > 0.0))
         .collect();
-    let mean = |v: &[f32]| {
-        if v.is_empty() {
-            None
-        } else {
-            Some(v.iter().sum::<f32>() / v.len() as f32)
-        }
-    };
+    let mean = crate::history::mean_f64;
     BrewHistoryStats {
         count: u32::try_from(brews.len()).unwrap_or(u32::MAX),
         beans_used_g: if doses.is_empty() {
             None
         } else {
-            Some(doses.iter().sum())
+            Some(crate::history::sum_f64(&doses) as f32)
         },
         avg_weight_g: mean(&yields),
         avg_ratio: mean(&ratios),
@@ -1107,6 +1102,34 @@ mod tests {
             brew_method: Some(method.to_owned()),
             ..BrewStatInput::default()
         }
+    }
+
+    /// #310: a 20,000-row history's beans used, within 0.1% of an exact sum,
+    /// and in fact the exact sum rounded once, as an f64 sum gives.
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    fn a_20000_row_history_sums_its_beans_without_drift() {
+        let rows: Vec<BrewStatInput> = (0..20_000_u64)
+            .map(|i| {
+                esp(
+                    25_000 + (i % 41) * 997,
+                    36.0,
+                    15.0 + (i % 89) as f32 * 0.113,
+                    None,
+                )
+            })
+            .collect();
+        let exact: f64 = rows.iter().map(|r| f64::from(r.dose_g.unwrap())).sum();
+        let exact_time: f64 = rows
+            .iter()
+            .map(|r| r.duration_ms as f64 / 1000.0)
+            .sum::<f64>()
+            / 20_000.0;
+        let s = brew_history_stats(&rows);
+        let used = f64::from(s.beans_used_g.unwrap());
+        assert!((used - exact).abs() / exact < 0.001);
+        assert_eq!(s.beans_used_g, Some(exact as f32));
+        assert!((f64::from(s.avg_time_s.unwrap()) - exact_time).abs() / exact_time < 0.001);
     }
 
     #[test]

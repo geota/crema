@@ -569,12 +569,13 @@ class HistoryStore(private val context: Context, private val json: Json) {
         deletesPaused.decrementAndGet()
     }
 
-    suspend fun save(shots: List<StoredShot>) {
-        if (!SaveFloor.admit(file, WHAT)) return
+    /** Whether the rows landed. */
+    suspend fun save(shots: List<StoredShot>): Boolean {
+        if (!SaveFloor.admit(file, WHAT)) return false
         // A save that's been asked for lands, even if its scope is cancelled
         // while it waits. The lock before the hop, so saves land in call order
         // and the newest snapshot wins; the series writes block, so they hop.
-        withContext(NonCancellable) {
+        return withContext(NonCancellable) {
             lock.withLock {
                 withContext(Dispatchers.IO) {
                     for (shot in shots) {
@@ -597,10 +598,48 @@ class HistoryStore(private val context: Context, private val json: Json) {
                         if (deletesPaused.get() == 0) deleteSeriesAfter(shots)
                         known = shots.mapTo(HashSet()) { it.id }
                     }
+                    saved
                 }
             }
         }
     }
+
+    /**
+     * A restore's step 7, first half: write these shots' series files, and
+     * nothing else, so the rows written after never name one that isn't
+     * there. Returns how many couldn't be written; those stay inline in the
+     * rows until a later save writes them.
+     */
+    suspend fun writeSeriesOf(shots: List<StoredShot>): Int = withContext(NonCancellable) {
+        lock.withLock {
+            withContext(Dispatchers.IO) {
+                var failed = 0
+                for (shot in shots) {
+                    if (shot.samples.isEmpty()) continue
+                    val name = seriesFile(shot.id).name
+                    if (writeSeries(shot.id, shot.samples)) written += name else failed++
+                }
+                failed
+            }
+        }
+    }
+
+    /** The restore marker's deletes: these shots' series, by name, the rows no longer listing them. */
+    suspend fun deleteSeriesOf(ids: Collection<String>) {
+        lock.withLock {
+            withContext(Dispatchers.IO) {
+                for (id in ids) {
+                    for (f in listOf(seriesFile(id), legacySeriesFile(id))) {
+                        f.delete()
+                        written.remove(f.name)
+                    }
+                }
+            }
+        }
+    }
+
+    /** The series directory, for a restore's directory sync. */
+    val seriesDirectory: File get() = seriesDir
 
     /** Delete the store file, every copy of it and the series files (Erase all
      *  data; final review 05 N-1). Also what a newer build keeps (#310 P0), so

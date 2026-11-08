@@ -105,6 +105,19 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Restore shows what it will do first (Android)** — as on the web: after you
+  pick a backup, from a file or Google Drive, Crema works out what changes. A
+  clean Merge runs at once and says what it added; a Merge with warnings, and
+  every Replace, shows the numbers first, and Replace still asks you to type
+  ERASE, now with what it will delete in front of you. Merge keeps your
+  settings, maintenance counters, Visualizer preferences and every row you
+  already have, unless the device is still as a fresh install left it, fills in
+  lost curves, and can bring back shots you deleted here. Replace deletes only
+  what the backup doesn't have, and refuses a damaged backup or one that would
+  empty the device. Each store lands in one write, a restore never runs over a
+  shot or a firmware update, a firmware update can't start during one, and a
+  restore cut off part-way says so at the next launch. Crema no longer picks an
+  active bean for you at launch.
 - **Restore shows what it will do first (web)** — after you pick a backup, Crema
   reads it strictly and works out what changes. A clean Merge runs at once and
   then says what it added; a Merge with warnings, and every Replace, shows the
@@ -122,6 +135,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Two web tabs no longer undo each other's changes.** Each store saved its
+  whole copy, so a tab left open put its old copy back over what another tab
+  had saved: a bag's debit, a rating, a recipe, a maintenance count. Each tab
+  now takes what another tab saves, as it's saved and when the tab comes back
+  into view, and a shot recorded in one tab shows in the other with its curve.
+  Two edits at the very same moment still go to the later one. The active
+  profile stays each tab's own, as it's what that tab's machine runs. (#333)
+- **Bean dates show the right day west of Greenwich.** The bean drawer read a
+  stored roast, opened, frozen or defrosted day as midnight UTC, so in the
+  Americas it showed the day before (a bag roasted on Nov 8 read "Nov 7 · 0d
+  ago"). The day is now read as local. Web.
 - **A full history says when a new shot pushes the oldest out.** History keeps
   the newest 300 shots (pinned shots don't count), and a shot or brew saved on a
   full history dropped the oldest without a word; restore and import already

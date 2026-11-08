@@ -30,7 +30,13 @@ import type { BrewSeries, ShotPatch as RemoteShotPatch } from '#lib/core/crema-c
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
 import type { TelemetrySample } from '#lib/state/index.js';
 import { toWire } from './telemetry-wire';
-import { keepSkippedRows, readStore, writeStore, type StoreWrite } from '#lib/utils/storage.js';
+import {
+	followOtherTabs,
+	keepSkippedRows,
+	readStore,
+	writeStore,
+	type StoreWrite
+} from '#lib/utils/storage.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import {
 	brewDateError,
@@ -46,6 +52,8 @@ import {
 	clearAllSeries,
 	deleteSeries,
 	getAllSeries,
+	addSeries,
+	getSeriesOf,
 	putManySeries,
 	putSeries
 } from './series-store';
@@ -99,6 +107,9 @@ const MAX_RECORDS = 300;
  */
 const SERIES_WAIT_MS = 30_000;
 
+/** How long an adopted row waits, twice, for a series its tab hasn't written yet. */
+const ADOPT_SERIES_RETRY_MS = [1_000, 5_000] as const;
+
 /** A shot's telemetry series couldn't be written to IndexedDB (quota, most
  *  likely): say so instead of silently keeping it in memory only. */
 let lastSeriesToastAt = -Infinity;
@@ -150,8 +161,13 @@ export class HistoryStore {
 	/** Above zero while a restore runs: see {@link pauseDeletes}. */
 	private deletesPaused = 0;
 
+	/** Ids adopted from another tab whose curve is still being looked for, with how many look-ups. */
+	private hydrating = new Map<string, number>();
+
 	constructor() {
 		this.markLive(this.shots.map((s) => s.id));
+		// Another tab's rows are taken, not written back over (#333).
+		followOtherTabs(HISTORY_KEY, Array.isArray, (v) => this.takeOtherTabsRows(v as unknown[]));
 		// Fixed at the first load after the setting arrived, before anything new
 		// is recorded: rows already here mean today's limit stays (#311).
 		const existing = this.shots.length > 0;
@@ -247,6 +263,94 @@ export class HistoryStore {
 	adoptRows(rows: StoredShot[]): void {
 		this.shots = rows;
 		this.markLive(rows.map((s) => s.id));
+	}
+
+	/**
+	 * Rows another tab stored (#333). The stored rows carry no series, so a
+	 * row this tab already shows keeps its curve, and the others read theirs
+	 * from IndexedDB. Not during a restore here, which owns the rows until it
+	 * ends.
+	 */
+	private takeOtherTabsRows(items: unknown[]): void {
+		if (this.deletesPaused > 0) return;
+		const mine = new Map(this.shots.map((s) => [s.id, s]));
+		const rows = rowsOf(items).map((row) => {
+			const had = mine.get(row.id)?.record.samples;
+			return row.record.samples.length === 0 && had && had.length > 0
+				? { ...row, record: { ...row.record, samples: had } }
+				: row;
+		});
+		this.adoptRows(rows);
+		const bare = rows.filter((s) => s.record.samples.length === 0).map((s) => s.id);
+		if (bare.length > 0 && typeof indexedDB !== 'undefined') void this.hydrateAdopted(bare);
+	}
+
+	/**
+	 * The series of rows adopted without one. The other tab writes a series
+	 * after its row, so one that isn't there yet is looked for again, twice. A
+	 * row with no series at all (a brew log) just finds none.
+	 */
+	private async hydrateAdopted(ids: string[], waits: readonly number[] = ADOPT_SERIES_RETRY_MS): Promise<void> {
+		for (const id of ids) this.hydrating.set(id, (this.hydrating.get(id) ?? 0) + 1);
+		let missing = ids;
+		try {
+			for (let attempt = 0; ; attempt++) {
+				let found = new Map<string, TimedSample[]>();
+				try {
+					found = await getSeriesOf(missing);
+				} catch {
+					// A read can fail once and work the next time: keep to the schedule.
+				}
+				if (found.size > 0) this.fillCurves(found);
+				missing = missing.filter((id) => !found.has(id) && this.get(id)?.record.samples.length === 0);
+				if (missing.length === 0 || attempt >= waits.length) return;
+				await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
+			}
+		} finally {
+			for (const id of ids) {
+				const n = (this.hydrating.get(id) ?? 1) - 1;
+				if (n > 0) this.hydrating.set(id, n);
+				else this.hydrating.delete(id);
+			}
+		}
+	}
+
+	/** Give rows without a curve the ones in `found`, by id. */
+	private fillCurves(found: Map<string, TimedSample[]>): void {
+		this.shots = this.shots.map((s) => {
+			const samples = found.get(s.id);
+			return samples && s.record.samples.length === 0
+				? { ...s, record: { ...s.record, samples } }
+				: s;
+		});
+	}
+
+	/**
+	 * Whether `id` adopted from another tab may still have its curve on the
+	 * way. Until it's settled, a pull mustn't take Visualizer's copy for it
+	 * (#380 review S1).
+	 */
+	seriesPending(id: string): boolean {
+		return this.hydrating.has(id);
+	}
+
+	/**
+	 * A pulled curve for a row that had none, stored only if IndexedDB has none
+	 * for it either: another tab may have written the row's own. That one wins,
+	 * here and in memory (#380 review S1).
+	 */
+	private backfillSeries(id: string, samples: TimedSample[]): void {
+		void addSeries(id, samples)
+			.then(async (added) => {
+				if (added) return;
+				const own = await getSeriesOf([id]);
+				if (own.size === 0) return;
+				this.shots = this.shots.map((s) => {
+					const curve = own.get(s.id);
+					return curve ? { ...s, record: { ...s.record, samples: curve } } : s;
+				});
+			})
+			.catch(seriesSaveFailed);
 	}
 
 	/**
@@ -842,7 +946,7 @@ export class HistoryStore {
 		if (patch.remoteVersion != null) next = { ...next, visualizerUpdatedAt: patch.remoteVersion };
 		if (next === target) return;
 		this.shots = [...this.shots.slice(0, idx), next, ...this.shots.slice(idx + 1)];
-		if (backfill) void putSeries(id, [...samples]).catch(seriesSaveFailed);
+		if (backfill) this.backfillSeries(id, [...samples]);
 		this.persist();
 	}
 
@@ -851,7 +955,7 @@ export class HistoryStore {
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
 		const target = this.shots[idx];
-		if (target.record.samples.length > 0) return;
+		if (target.record.samples.length > 0 || this.seriesPending(id)) return;
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{
@@ -863,7 +967,7 @@ export class HistoryStore {
 			},
 			...this.shots.slice(idx + 1)
 		];
-		void putSeries(id, [...samples]).catch(seriesSaveFailed);
+		this.backfillSeries(id, [...samples]);
 		this.persist();
 	}
 
@@ -1304,10 +1408,14 @@ function coerceShotMachine(raw: unknown): ShotMachine | null {
  */
 function loadShots(): StoredShot[] {
 	const read = readStore<unknown[]>(HISTORY_KEY, { what: HISTORY_WHAT, valid: Array.isArray });
-	if (read.kind !== 'loaded') return [];
+	return read.kind === 'loaded' ? rowsOf(read.value) : [];
+}
+
+/** Stored rows as shots, newest first; a row that can't be read is kept aside. */
+function rowsOf(items: unknown[]): StoredShot[] {
 	const out: StoredShot[] = [];
 	const skipped: unknown[] = [];
-	for (const item of read.value) {
+	for (const item of items) {
 		const migrated = coerceRow(item);
 		if (migrated) out.push(migrated);
 		else skipped.push(item);

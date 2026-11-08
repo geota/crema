@@ -34,7 +34,13 @@
  */
 
 import type { MaintenanceState, MaintenanceReadout } from '#lib/core/crema-core.js';
-import { isJsonObject, readJson, readStore, writeJsonChecked } from '#lib/utils/storage.js';
+import {
+	followOtherTabs,
+	isJsonObject,
+	readJson,
+	readStore,
+	writeJsonChecked
+} from '#lib/utils/storage.js';
 import {
 	defaultMaintenanceState as wasmDefaultMaintenanceState,
 	maintenanceReadout as wasmMaintenanceReadout
@@ -120,6 +126,14 @@ export class MaintenanceStore {
 		...defaultState(),
 		...loadPersisted()
 	});
+
+	constructor() {
+		// Another tab's counters are taken, so this tab's next shot adds to
+		// them rather than putting old ones back (#333).
+		followOtherTabs(MAINTENANCE_KEY, isJsonObject, (v) => {
+			this.state = { ...defaultState(), ...(v as Partial<MaintenanceState>) };
+		});
+	}
 
 	/** The current maintenance state. Reactive: a counter change re-renders readers. */
 	get current(): MaintenanceState {

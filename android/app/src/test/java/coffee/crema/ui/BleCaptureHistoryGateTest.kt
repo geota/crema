@@ -94,16 +94,19 @@ class BleCaptureHistoryGateTest {
         assertTrue(pinned.exists() && a.exists() && b.exists(), "an unread row may be a pinned one")
     }
 
+    /** The startup load is held, so the connect really comes first: on a fast
+     *  runner the whole load can finish inside the constructor (808cb779). */
     @Test
-    fun aConnectBeforeTheRowsLoadPrunesNothing() {
+    fun aConnectBeforeTheRowsLoadPrunesNothing() = VmHarness.holdingStartupLoad { release ->
         shots.writeText(pinnedRow())
         val (pinned, a, b) = sessions()
-        // Before the main looper runs the startup load: the history is empty.
         val vm = build()
-        assertTrue(vm.ui.value.history.isEmpty())
+        VmHarness.idle()
+        assertTrue(vm.ui.value.history.isEmpty(), "the rows haven't loaded")
         vm.setBleSessionsKeep(BleSessionRecorder.SESSIONS_OFF)
         assertTrue(pinned.exists() && a.exists() && b.exists(), "no pinned shots are known yet")
 
+        release.complete(Unit)
         VmHarness.idle()
         VmHarness.awaitStartupLoaded(vm)
         vm.setBleSessionsKeep(BleSessionRecorder.SESSIONS_OFF)

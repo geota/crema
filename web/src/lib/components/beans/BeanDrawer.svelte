@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatCalendarDay } from '#lib/utils/calendar-day.js';
 	import { safeExternalUrl } from '#lib/utils/safe-url.js';
 	import Icon from '#lib/icons/Icon.svelte';
 	import StarRating from '#lib/components/common/StarRating.svelte';
@@ -140,12 +141,8 @@
 	let openBuyAgain = $state(false);
 	let openShots = $state(true);
 
-	function fmtDate(s: string | null): string {
-		if (!s) return '—';
-		const d = new Date(s);
-		if (Number.isNaN(d.getTime())) return '—';
-		return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-	}
+	// A stored day is a calendar day: read it as local midnight, not UTC.
+	const fmtDate = (s: string | null): string => formatCalendarDay(s);
 
 	function onKey(e: KeyboardEvent): void {
 		// A dialog stacked on top (ConfirmDialog) handles its own Escape first.

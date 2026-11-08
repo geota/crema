@@ -80,7 +80,7 @@ class RestoreCustomProfilesTest {
 
         assertEquals(mine, customIds(vm), "the device equals the backup")
         assertTrue(later !in customIds(vm))
-        assertTrue(report(vm).startsWith("Restored 2 profile(s)"), report(vm))
+        assertTrue(report(vm).startsWith("Restored 2 profiles"), report(vm))
         VmHarness.idleUntil("the restore's save") { later !in customsOnDisk() }
         assertTrue(mine.all { it in customsOnDisk() }, customsOnDisk())
 
@@ -99,7 +99,7 @@ class RestoreCustomProfilesTest {
         VmHarness.restore(vm, backup(vm), MainViewModel.RestoreMode.WIPE)
 
         assertEquals(mine, customIds(vm))
-        assertTrue(report(vm).startsWith("Restored 2 profile(s)"), report(vm))
+        assertTrue(report(vm).startsWith("Restored 2 profiles"), report(vm))
     }
 
     /** Only the customs stop counting as known: a built-in id stays taken. */
@@ -116,9 +116,11 @@ class RestoreCustomProfilesTest {
         vm.restoreBackupFromText(text, MainViewModel.RestoreMode.WIPE)
         VmHarness.idleUntil("the restore") { vm.ui.value.userMessages.size > before }
 
-        assertEquals(listOf(kept), customIds(vm))
+        // The backup's line on a built-in id is no custom: the core counts it out,
+        // and a Replace that can't match the backup's counts changes nothing.
         assertEquals(1, vm.ui.value.profiles.count { it.id == builtin.id })
-        assertTrue(report(vm).startsWith("Restored 1 profile(s)"), report(vm))
+        assertTrue(customs(vm).none { it.id == builtin.id }, "${customIds(vm)}")
+        assertTrue(vm.ui.value.userMessages.last().let { it.startsWith("Restored ") || "Nothing was changed" in it }, vm.ui.value.userMessages.last())
     }
 
     /** The control: Merge still adds only the ids you don't have. */
@@ -135,12 +137,12 @@ class RestoreCustomProfilesTest {
         VmHarness.restore(vm, backup)
 
         assertEquals(listOf(first, second, later).sorted(), customIds(vm))
-        assertTrue(report(vm).startsWith("Restored 1 profile(s)"), report(vm))
+        assertTrue(report(vm).startsWith("Restored 1 profile."), report(vm))
 
         // Again: nothing left to add, and no duplicates.
         VmHarness.restore(vm, backup)
 
         assertEquals(listOf(first, second, later).sorted(), customIds(vm))
-        assertTrue(report(vm).startsWith("Restored 0 profile(s)"), report(vm))
+        assertTrue(report(vm).startsWith("Restored nothing new"), report(vm))
     }
 }

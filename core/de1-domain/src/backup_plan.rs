@@ -19,7 +19,7 @@
 //! count missing from the header (`Some(0)` is carried and empty); for a
 //! settings-like line it's no line.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -110,6 +110,96 @@ pub struct ManifestHeader {
     pub recipe_count: Option<u32>,
     pub custom_method_count: Option<u32>,
     pub omitted_count: u32,
+}
+
+/// One backup line, read strictly by [`parse_backup_line`], in the shape the
+/// shells read line by line (#310 §7): tagged by `line`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "line", rename_all = "camelCase")]
+pub enum ParsedBackupLine {
+    Header {
+        header: ManifestHeader,
+    },
+    /// A shot, and whether its raw line said it was pinned.
+    Shot {
+        shot: Box<StoredShot>,
+        pinned: bool,
+    },
+    Bean {
+        bean: Box<Bean>,
+    },
+    Roaster {
+        roaster: Box<Roaster>,
+    },
+    Recipe {
+        recipe: Box<BrewRecipe>,
+    },
+    BrewMethod {
+        method: Box<CustomBrewMethod>,
+    },
+    /// A custom profile, verbatim with `kind` removed.
+    Profile {
+        id: String,
+        profile: serde_json::Value,
+    },
+    /// A settings-like line by its kind (`settings`, `profileMeta`,
+    /// `recipeMeta`, `maintenance`, `visualizerPrefs`), verbatim.
+    Singleton {
+        kind: &'static str,
+        value: serde_json::Value,
+    },
+    /// A `kind` this build doesn't know.
+    Unknown {
+        kind: String,
+    },
+    /// A shots export's header: not a backup.
+    ShotsExport,
+    /// What's wrong with the line.
+    Error {
+        error: LineError,
+    },
+}
+
+impl Singleton {
+    /// The line's `kind`.
+    #[must_use]
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Settings => "settings",
+            Self::ProfileMeta => "profileMeta",
+            Self::RecipeMeta => "recipeMeta",
+            Self::Maintenance => "maintenance",
+            Self::VisualizerPrefs => "visualizerPrefs",
+        }
+    }
+}
+
+/// [`parse_backup_line`] in the shells' shape.
+#[must_use]
+pub fn parse_backup_line_parsed(line: &[u8]) -> ParsedBackupLine {
+    match parse_backup_line(line) {
+        Err(error) => ParsedBackupLine::Error { error },
+        Ok(BackupLine::Header(header)) => ParsedBackupLine::Header { header },
+        Ok(BackupLine::Shot(shot, pinned)) => ParsedBackupLine::Shot { shot, pinned },
+        Ok(BackupLine::Bean(bean)) => ParsedBackupLine::Bean { bean },
+        Ok(BackupLine::Roaster(roaster)) => ParsedBackupLine::Roaster { roaster },
+        Ok(BackupLine::Recipe(recipe)) => ParsedBackupLine::Recipe { recipe },
+        Ok(BackupLine::Method(method)) => ParsedBackupLine::BrewMethod { method },
+        Ok(BackupLine::Profile(profile, id)) => ParsedBackupLine::Profile { id, profile },
+        Ok(BackupLine::Singleton(which, value)) => ParsedBackupLine::Singleton {
+            kind: which.kind(),
+            value,
+        },
+        Ok(BackupLine::Unknown(kind)) => ParsedBackupLine::Unknown { kind },
+        Ok(BackupLine::ShotsExport) => ParsedBackupLine::ShotsExport,
+    }
+}
+
+/// [`parse_backup_line`] over JSON, for the bridges: one line in, without its
+/// newline, a [`ParsedBackupLine`] out.
+#[must_use]
+pub fn parse_backup_line_json(line: &[u8]) -> String {
+    serde_json::to_string(&parse_backup_line_parsed(line)).unwrap_or_default()
 }
 
 /// Read one line, strictly: UTF-8, then a JSON object with a `kind`, then a
@@ -759,7 +849,10 @@ pub struct ProfileMeta {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecipeMeta {
-    /// Method id → recipe id.
+    /// Method id → recipe id. Written in order, so a plan serialises the same
+    /// way every time: the shell compares a confirmed plan with a fresh one by
+    /// its JSON.
+    #[serde(serialize_with = "ordered")]
     pub defaults: HashMap<String, String>,
     pub hidden_builtins: Vec<String>,
 }
@@ -1034,6 +1127,8 @@ pub struct ProfileMetaPlan {
 #[serde(rename_all = "camelCase")]
 pub struct RecipeMetaPlan {
     pub action: PlanAction,
+    /// Written in order, as [`RecipeMeta::defaults`].
+    #[serde(serialize_with = "ordered")]
     pub defaults: HashMap<String, String>,
     pub hidden_builtins: Vec<String>,
 }
@@ -1448,9 +1543,15 @@ fn shot_plan(
         return (plan, tombstones);
     }
 
-    // Merge never evicts: past the cap, pinned rows first, then the newest.
+    // Merge never evicts. The cap counts unpinned rows only, as history keeps
+    // them (`fits_history`): a pinned row always fits, and the newest unpinned
+    // ones fill the room the device's unpinned rows leave.
     let room = local.history_capacity.map_or(usize::MAX, |cap| {
-        let live = local.shots.iter().filter(|s| !s.deleted).count();
+        let live = local
+            .shots
+            .iter()
+            .filter(|s| !s.deleted && !s.pinned)
+            .count();
         usize::try_from(cap)
             .unwrap_or(usize::MAX)
             .saturating_sub(live)
@@ -1460,7 +1561,8 @@ fn shot_plan(
             .cmp(&a.pinned)
             .then(b.completed_at.cmp(&a.completed_at))
     });
-    let fits = candidates.len().min(room);
+    let pinned = candidates.iter().filter(|s| s.pinned).count();
+    let fits = pinned + (candidates.len() - pinned).min(room);
     let (added, left) = candidates.split_at(fits);
     plan.not_added = u32::try_from(left.len()).unwrap_or(u32::MAX);
     let left: HashSet<&str> = left.iter().map(|s| s.id.as_str()).collect();
@@ -1568,6 +1670,12 @@ fn profile_meta_plan(
     }
 }
 
+/// A map written in key order: a hash map's own order differs from one map to
+/// the next.
+fn ordered<S: serde::Serializer>(map: &HashMap<String, String>, s: S) -> Result<S::Ok, S::Error> {
+    s.collect_map(map.iter().collect::<BTreeMap<_, _>>())
+}
+
 fn recipe_meta_plan(
     backup: Option<&serde_json::Value>,
     local: &RecipeMeta,
@@ -1649,4 +1757,49 @@ pub fn plan_restore_json(
 #[must_use]
 pub fn common_is_pristine_json(common_json: &str) -> bool {
     serde_json::from_str::<CommonSettings>(common_json).is_ok_and(|c| common_is_pristine(&c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A shell compares the plan the user confirmed with a fresh one by its
+    /// JSON, so the same inputs must serialise the same way every time. With
+    /// a hash map, the method order changed from one map to the next, and the
+    /// web restore matrix's "recipe meta: merge keeps a pointer here" came back
+    /// `changed` instead of `done`.
+    #[test]
+    fn a_recipe_meta_plan_serialises_the_same_way_every_time() {
+        let local = RecipeMeta {
+            defaults: [("pourover", "recipe:mine")]
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect(),
+            hidden_builtins: Vec::new(),
+        };
+        let backup = serde_json::json!({
+            "defaults": {
+                "pourover": "recipe:theirs", "moka": "recipe:moka", "v60": "recipe:a",
+                "aeropress": "recipe:b", "chemex": "recipe:c", "clever": "recipe:d"
+            },
+            "hiddenBuiltins": []
+        });
+        let plan = || {
+            serde_json::to_string(&recipe_meta_plan(Some(&backup), &local, RestoreMode::Merge))
+                .unwrap()
+        };
+        let first = plan();
+        for _ in 0..50 {
+            assert_eq!(plan(), first);
+        }
+        let at = |k: &str| first.find(k).unwrap();
+        assert!(
+            at("aeropress") < at("chemex") && at("chemex") < at("v60"),
+            "{first}"
+        );
+        assert!(
+            first.contains(r#""pourover":"recipe:mine""#),
+            "a pointer here wins"
+        );
+    }
 }
