@@ -444,6 +444,26 @@ describe('UploadQueue.drain — edits waiting to reach Visualizer', () => {
 		expect(pendingEdit('s1')).toEqual({ annotations: true });
 	});
 
+	it('a probe a 429 earlier in the drain would refuse keeps the day\'s try', async () => {
+		setPacingForTest(true);
+		settlePendingEdit('a', { annotations: true });
+		settlePendingEdit('b', { tags: { add: ['x'], remove: [] }, tierSignal: true });
+		const probe = vi.fn(() => null);
+		await drainWith(
+			{
+				pushPendingEdit: (_h: unknown, id: string) =>
+					Effect.sync(() => {
+						if (id === 'a') noteRateLimited(60_000); // its PATCH met a 429
+						return 'sent';
+					})
+			},
+			{ refreshPremium: Effect.sync(probe) }
+		);
+		setPacingForTest(false);
+		expect(probe).not.toHaveBeenCalled();
+		expect(pendingEdit('b')?.tierProbedAt).toBeUndefined();
+	});
+
 	it('a tier signal on Free keeps the tags until an upgrade', async () => {
 		writeSyncSettings({ premium: true, premiumCheckedAt: Date.now() });
 		settlePendingEdit('s1', { tags: { add: ['a'], remove: [] }, tierSignal: true });
