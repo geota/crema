@@ -36,6 +36,7 @@ import { BeanSync } from './bean-sync.ts';
 import { ResponseDecodeError } from '../effect/errors.ts';
 import {
 	describeVisualizerError,
+	isRateLimited,
 	queueDecision,
 	type VisualizerCallError
 } from './visualizer-call.ts';
@@ -52,7 +53,13 @@ import { hasStoredVisualizerTokens } from './token-vault.ts';
 import { getHistoryStore } from '#lib/history/index.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import { appendSyncLog } from '#lib/visualizer/sync-config.js';
-import { readSyncConfig, uploadsHeld } from '#lib/visualizer/sync-config.js';
+import { directionPushes, readSyncConfig, uploadsHeld } from '#lib/visualizer/sync-config.js';
+import {
+	hasTagMarks,
+	pendingEdit,
+	pendingEdits,
+	settlePendingEdit
+} from '#lib/visualizer/pending-edits.js';
 
 export type { EnqueueInput, QueueEntry } from './queue-store.ts';
 
@@ -71,6 +78,9 @@ function reportRefusedDelete(entry: QueueEntry, why: string): void {
 }
 
 const DEFERRED: DrainResult = { processed: 0, succeeded: 0, dropped: 0, deferred: 1 };
+
+/** How often one tier signal may probe the tier (`POST /roasters`, a write). */
+const TIER_PROBE_SPACING_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Every failure `runEntry` can surface (from ShotSync / BeanSync). What the
@@ -146,9 +156,71 @@ export const UploadQueueLive = Layer.effect(
 				}
 			});
 
+		/**
+		 * Visualizer didn't keep what was sent for `id`: ask the tier with a real
+		 * probe (a cached answer, however fresh, may predate a lapse), at most
+		 * once a day per signal, since the probe is a sentinel write. The
+		 * attempt is stamped before it goes, so a probe that gets no answer
+		 * waits a day too. One probe serves every shot in a drain (`probe`).
+		 * Premium confirmed means the tags will never take, so the mark clears
+		 * and says so rather than loop; Free leaves the mark until an upgrade.
+		 */
+		const settleTierSignal = (id: string, probe: { answer?: boolean | null }): Effect.Effect<void> =>
+			Effect.gen(function* () {
+				const signalled = pendingEdit(id);
+				if (!signalled?.tierSignal) return;
+				const now = Date.now();
+				if (signalled.tierProbedAt != null && now - signalled.tierProbedAt < TIER_PROBE_SPACING_MS) return;
+				settlePendingEdit(id, { ...signalled, tierProbedAt: now });
+				if (probe.answer === undefined) probe.answer = yield* beanSync.refreshPremium;
+				const premium = probe.answer;
+				const edit = pendingEdit(id);
+				if (!edit?.tierSignal || premium === null) return;
+				if (!premium) {
+					settlePendingEdit(id, { ...edit, tierSignal: undefined, tierProbedAt: undefined });
+					return;
+				}
+				settlePendingEdit(id, { ...edit, tags: undefined, tierSignal: undefined, tierProbedAt: undefined });
+				if (hasTagMarks(edit.tags)) {
+					appendSyncLog({
+						direction: 'skip',
+						entity: 'shot',
+						id,
+						name: getHistoryStore().get(id)?.profileName ?? 'Shot',
+						at: Date.now(),
+						error: "Visualizer didn't keep this shot's tags, so Crema stopped sending them."
+					});
+				}
+			});
+
+		/**
+		 * The PATCH retry list: every shot with an edit due, sent from the row as
+		 * it stands. Not counted in the drain's result, which is the queue's.
+		 */
+		const drainEdits = Effect.gen(function* () {
+			if (!directionPushes(readSyncConfig().direction.shots)) return;
+			const history = getHistoryStore();
+			const now = Date.now();
+			const probe: { answer?: boolean | null } = {};
+			for (const [id, edit] of pendingEdits()) {
+				if ((edit.nextAttemptAt ?? 0) > now) continue;
+				if (edit.tierSignal) yield* settleTierSignal(id, probe);
+				const result = yield* Effect.result(
+					shotSync.pushPendingEdit(history, id).pipe(
+						Effect.catchDefect((cause) =>
+							Effect.fail(new ResponseDecodeError({ url: `shot:${id}`, cause }))
+						)
+					)
+				);
+				// The rest wait out the limit.
+				if (result._tag === 'Failure' && isRateLimited(result.failure)) return;
+			}
+		});
+
 		const doDrain = Effect.gen(function* () {
 			const out: DrainResult = { processed: 0, succeeded: 0, dropped: 0, deferred: 0 };
 			const now = Date.now();
+			let limited = false;
 			const ready = readQueue().entries.filter((e) => e.nextAttemptAt <= now && !e.parkedFor);
 			for (const entry of ready) {
 				out.processed += 1;
@@ -196,9 +268,13 @@ export const UploadQueueLive = Layer.effect(
 					yield* Effect.sync(() =>
 						persistRetry(entry, made, describeVisualizerError(e), decision.details.delay_ms)
 					);
-					if (decision.details.stop_pass) break;
+					if (decision.details.stop_pass) {
+						limited = true;
+						break;
+					}
 				}
 			}
+			if (!limited) yield* drainEdits;
 			return out;
 		});
 

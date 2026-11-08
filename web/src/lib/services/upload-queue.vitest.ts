@@ -38,6 +38,9 @@ import {
 	VisualizerPremiumGatedError
 } from '../effect/errors.ts';
 import { enqueueEntry, readQueue } from './queue-store.ts';
+import { pendingEdit, settlePendingEdit } from '#lib/visualizer/pending-edits.js';
+import { readSyncConfig, updateSyncConfig } from '#lib/visualizer/sync-config.js';
+import { writeSyncSettings } from '#lib/bean/visualizer-sync.js';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 
@@ -53,6 +56,7 @@ const die = (label: string) => () => Effect.die(`unused: ${label}`);
 function fakeShotSync(over: {
 	uploadShot?: (shot: unknown) => Effect.Effect<{ visualizerId: string }, unknown>;
 	deleteShot?: (id: string) => Effect.Effect<void, unknown>;
+	pushPendingEdit?: (history: unknown, id: string) => Effect.Effect<unknown, unknown>;
 }) {
 	return Layer.succeed(
 		ShotSync,
@@ -60,6 +64,7 @@ function fakeShotSync(over: {
 			uploadShot: (over.uploadShot ?? die('uploadShot')) as never,
 			deleteShot: (over.deleteShot ?? die('deleteShot')) as never,
 			patchEditedShot: undefined as never,
+			pushPendingEdit: (over.pushPendingEdit ?? die('pushPendingEdit')) as never,
 			patchShot: die('patchShot') as never,
 			pullShots: die('pullShots') as never,
 			fetchShotDetail: die('fetchShotDetail') as never,
@@ -74,6 +79,7 @@ function fakeShotSync(over: {
 function fakeBeanSync(over: {
 	deleteBean?: (id: string) => Effect.Effect<void, unknown>;
 	deleteRoaster?: (id: string) => Effect.Effect<void, unknown>;
+	refreshPremium?: Effect.Effect<boolean | null>;
 }) {
 	return Layer.succeed(
 		BeanSync,
@@ -86,7 +92,8 @@ function fakeBeanSync(over: {
 			deleteRoaster: (over.deleteRoaster ?? die('deleteRoaster')) as never,
 			runSync: die('runSync') as never,
 			fetchAccount: Effect.die('unused: fetchAccount') as never,
-			refreshPremium: Effect.die('unused: refreshPremium') as never,
+			refreshPremium: (over.refreshPremium ?? Effect.die('unused: refreshPremium')) as never,
+			// Never a tier check's answer: a fresh cache may predate a lapse.
 			refreshPremiumIfStale: Effect.die('unused: refreshPremiumIfStale') as never,
 			testConnection: Effect.die('unused: testConnection') as never
 		})
@@ -376,6 +383,83 @@ describe('UploadQueue.drain — remote deletes survive auth trouble (review 03 P
 		});
 		expect(result.dropped).toBe(1);
 		expect(readQueue().entries).toHaveLength(0);
+	});
+});
+
+describe('UploadQueue.drain — edits waiting to reach Visualizer', () => {
+	const pushed = () => {
+		const ids: string[] = [];
+		const push = (_history: unknown, id: string) =>
+			Effect.sync(() => {
+				ids.push(id);
+				return 'sent';
+			});
+		return { ids, push };
+	};
+
+	it('failed_patch_retries_from_current_row: sends the shots that are due, and only those', async () => {
+		settlePendingEdit('due', { annotations: true, attempts: 1, nextAttemptAt: Date.now() - 1 });
+		settlePendingEdit('later', { annotations: true, attempts: 1, nextAttemptAt: Date.now() + 60_000 });
+		const { ids, push } = pushed();
+		await drainWith({ pushPendingEdit: push });
+		expect(ids).toEqual(['due']);
+	});
+
+	it('a direction that never pushes sends nothing', async () => {
+		updateSyncConfig({ direction: { ...readSyncConfig().direction, shots: 'pull' } });
+		settlePendingEdit('s1', { annotations: true });
+		const { ids, push } = pushed();
+		await drainWith({ pushPendingEdit: push });
+		expect(ids).toEqual([]);
+	});
+
+	it('tag_400_is_a_tier_signal: a real probe confirming Premium clears the tags and reports, so nothing loops', async () => {
+		// A fresh cached Premium, as right after a lapse: it doesn't count.
+		writeSyncSettings({ premium: true, premiumCheckedAt: Date.now() });
+		settlePendingEdit('s1', { annotations: true, tags: { add: ['a'], remove: [] }, tierSignal: true });
+		const probe = vi.fn(() => true);
+		const { ids, push } = pushed();
+		await drainWith({ pushPendingEdit: push }, { refreshPremium: Effect.sync(probe) });
+		expect(probe).toHaveBeenCalledTimes(1);
+		expect(pendingEdit('s1')).toEqual({ annotations: true });
+		expect(ids).toEqual(['s1']);
+		expect(readSyncConfig().log[0]).toMatchObject({ id: 's1', direction: 'skip' });
+	});
+
+	it('a tier signal on Free keeps the tags until an upgrade', async () => {
+		writeSyncSettings({ premium: true, premiumCheckedAt: Date.now() });
+		settlePendingEdit('s1', { tags: { add: ['a'], remove: [] }, tierSignal: true });
+		await drainWith({ pushPendingEdit: pushed().push }, { refreshPremium: Effect.succeed(false) });
+		expect(pendingEdit('s1')).toEqual({ tags: { add: ['a'], remove: [] } });
+	});
+
+	it('a probe with no answer waits a day before the next, and one probe serves the drain', async () => {
+		settlePendingEdit('a', { tags: { add: ['x'], remove: [] }, tierSignal: true });
+		settlePendingEdit('b', { tags: { add: ['y'], remove: [] }, tierSignal: true });
+		const probe = vi.fn((): boolean | null => null);
+		const bean = { refreshPremium: Effect.sync(() => probe()) };
+		await drainWith({ pushPendingEdit: pushed().push }, bean);
+		expect(probe).toHaveBeenCalledTimes(1);
+		expect(pendingEdit('a')).toMatchObject({ tierSignal: true });
+		await drainWith({ pushPendingEdit: pushed().push }, bean);
+		expect(probe, 'stamped, though unanswered').toHaveBeenCalledTimes(1);
+		const later = Date.now() + 24 * 60 * 60 * 1000 + 1;
+		vi.spyOn(Date, 'now').mockReturnValue(later);
+		await drainWith({ pushPendingEdit: pushed().push }, bean);
+		expect(probe).toHaveBeenCalledTimes(2);
+	});
+
+	it('a 429 leaves the rest for a later drain', async () => {
+		settlePendingEdit('a', { annotations: true });
+		settlePendingEdit('b', { annotations: true });
+		const ids: string[] = [];
+		await drainWith({
+			pushPendingEdit: (_h, id) => {
+				ids.push(id);
+				return Effect.fail(new HttpStatusError({ status: 429, url: 'x' }));
+			}
+		});
+		expect(ids).toEqual(['a']);
 	});
 });
 
