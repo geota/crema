@@ -472,6 +472,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         currentPrefs = { currentPrefs() },
         applyRestoredSettings = { applyRestoredSettings(it) },
         applyRestoredMaintenance = { m -> maintenance.restore(m) },
+        onRestoreCompleted = { drive.restoreCompleted() },
         persistSawModel = {
             runCatching { sawModelStore.save(bridge.sawModelJson()) }
                 .onFailure { appendLog("SAW model save failed: ${it.message}") }

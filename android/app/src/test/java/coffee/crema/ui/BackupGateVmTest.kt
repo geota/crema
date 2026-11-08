@@ -40,6 +40,7 @@ class BackupGateVmTest {
     @After fun tearDown() {
         library.setReadable(true)
         app.filesDir.listFiles { f -> ".corrupt-" in f.name }?.forEach { it.delete() }
+        app.filesDir.listFiles { f -> f.name.startsWith("drive.json") }?.forEach { it.delete() }
         stores.forEach { it.clear() }
         VmHarness.idle()
         SafeFile.resetForTest()
@@ -70,6 +71,21 @@ class BackupGateVmTest {
         VmHarness.idleUntil("the restore to end") { vm.ui.value.userMessages.any { it.startsWith("Restored ") } }
         VmHarness.idle()
         assertEquals(null, vm.autoBackupBlocked())
+    }
+
+    @Test
+    fun aCompletedRestoreReleasesDrivesPreDamagePin() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        runBlocking { coffee.crema.drive.DriveStore(app, json).let { it.load(); it.save(coffee.crema.drive.DriveState(preDamageCopy = "p")) } }
+        val vm = vm()
+        val bundle = listOf(
+            """{"kind":"crema-backup/v1","createdAt":1,"beanCount":0}""",
+            """{"kind":"settings","_shell":"android","common":{"weightUnit":"oz"}}""",
+        ).joinToString("\n")
+        vm.restoreBackupFromText(bundle, MainViewModel.RestoreMode.MERGE)
+        VmHarness.idleUntil("the pin to be released") {
+            runBlocking { coffee.crema.drive.DriveStore(app, json).load().pinReleased }
+        }
     }
 
     @Test

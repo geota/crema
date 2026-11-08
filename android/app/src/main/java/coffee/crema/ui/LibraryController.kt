@@ -165,6 +165,8 @@ class LibraryController(
     /** Apply a restored backup's maintenance state (reseeds the live water
      *  integrator + persists; VM — maintenance stays VM-owned). */
     private val applyRestoredMaintenance: (MaintenanceState) -> Unit,
+    /** A restore applied: Drive's pre-damage hold can end. */
+    private val onRestoreCompleted: () -> Unit = {},
     /** Persist the learned SAW drip model (bridge + SawModelStore; VM). */
     private val persistSawModel: suspend () -> Unit,
     /** The VM's setActiveProfile — relay guard + persistPrefs + stop targets. */
@@ -1307,6 +1309,7 @@ class LibraryController(
                     historyDroppedNotice(merged.dropped) +
                     (heldSharingNotice(heldSharing)?.let { ". $it" } ?: ""),
             )
+            onRestoreCompleted()
         }.invokeOnCompletion {
             restoresRunning.decrementAndGet()
             historyStore.resumeDeletes()
