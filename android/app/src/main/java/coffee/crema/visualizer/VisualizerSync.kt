@@ -1242,6 +1242,9 @@ class VisualizerSync(
     private suspend fun checkTierFor(localId: String): Boolean? {
         val cur = pendingEdits[localId] ?: return null
         if (cur.tierProbedAt > 0 && now() - cur.tierProbedAt < PREMIUM_REFRESH_INTERVAL_MS) return null
+        // A probe now would be refused unsent (the 429 cooldown): it waits, and
+        // keeps the day's try for when it can go.
+        if (pacer.coolingDown()) return null
         pendingEdits.computeIfPresent(localId) { _, c -> c.copy(tierProbedAt = now()) }
         storePendingEdits()
         return refreshPremium()
@@ -1452,6 +1455,14 @@ class VisualizerSync(
             }
         }
 
+    /** A detail's own `updated_at` (unix s), in either format, or null. */
+    private fun detailUpdatedAt(detail: JsonElement): Long? {
+        val d = detail as? JsonObject ?: return null
+        val v = (d["updated_at"] as? JsonPrimitive)
+            ?: ((d["meta"] as? JsonObject)?.get("visualizer") as? JsonObject)?.get("updated_at") as? JsonPrimitive
+        return v?.contentOrNull?.toDoubleOrNull()?.toLong()?.takeIf { it > 0 }
+    }
+
     /** A list row as the core reads it. */
     private fun listRow(s: VisualizerClient.ShotSummary) = buildJsonObject {
         put("id", JsonPrimitive(s.id))
@@ -1464,19 +1475,26 @@ class VisualizerSync(
      * recipe only when offered and the row has none, the row re-read just
      * before the request so an edit made meanwhile wins. The core outcome.
      */
-    private suspend fun pullRow(summary: VisualizerClient.ShotSummary, shots: List<StoredShot>): RunReply<JsonObject> {
+    private suspend fun pullRow(summary: VisualizerClient.ShotSummary, startShots: List<StoredShot>): RunReply<JsonObject> {
+        // The rows as they stand now, not as the page began: a row bound by an
+        // earlier row of this page can't bind a second remote copy.
+        val shots = allShots().ifEmpty { startShots }
         val bound = shots.firstOrNull { it.visualizerId == summary.id }?.let { currentShot(it.id) ?: it }
         val before = bound?.let { mapOf(it.id to mergeInputOf(it, pendingEdits[it.id]?.barista == true)) }.orEmpty()
         val detail = when (val r = runRequest { withFreshToken { client.fetchShotDetail(it, summary.id) } }) {
             is RunReply.Ok -> r.value
             is RunReply.Fail -> return r
         }
+        // A poison retry has no list row: its version comes from the detail.
+        val updatedAt = summary.updatedAtSec.takeIf { it > 0 } ?: detailUpdatedAt(detail)
         val payload = buildJsonObject {
-            put("summary", listRow(summary))
+            put("summary", listRow(summary.copy(updatedAtSec = updatedAt ?: 0L)))
             put("detail", detail)
         }
         val wire = runCatching {
             json.parseToJsonElement(coffee.crema.core.wireShotFromDetail(json.encodeToString(JsonObject.serializer(), payload))).jsonObject
+                // No version known: none is written, and the walk fetches it when listed.
+                .let { if (updatedAt == null) JsonObject(it + ("updated_at_ms" to JsonNull)) else it }
         }.getOrNull()
         if (wire == null) {
             val f = buildJsonObject { put("kind", JsonPrimitive("Unmappable")) }
@@ -1524,6 +1542,19 @@ class VisualizerSync(
      * changed (`pullCursorEpoch` unset) walks the whole account once.
      */
     internal suspend fun pullRun(shots: List<StoredShot>, fromStart: Boolean = false): RunResult {
+        // One run at a time: a second Sync while one walks does nothing.
+        if (!runMutex.tryLock()) return RunResult(buildJsonObject { put("kind", JsonPrimitive("Busy")) }, 0, 0)
+        try {
+            return walkRun(shots, fromStart)
+        } finally {
+            runMutex.unlock()
+        }
+    }
+
+    /** Held by the pull run that is walking. */
+    private val runMutex = Mutex()
+
+    private suspend fun walkRun(shots: List<StoredShot>, fromStart: Boolean): RunResult {
         val st0 = persisted
         val repairing = st0.pullCursorEpoch == null
         val legacyCursor = if (repairing) st0.shotPullCursor?.div(1000) else null
@@ -1688,6 +1719,10 @@ class VisualizerSync(
     /** The run's one line in the sync log: a large run would push out every other line. */
     private suspend fun logRun(result: RunResult) {
         val kind = result.outcome["kind"]?.jsonPrimitive?.contentOrNull
+        if (kind == "Busy") {
+            notify("A Visualizer sync is already running.")
+            return
+        }
         val details = result.outcome["details"] as? JsonObject
         val shotsN = "${result.pulled} shot${if (result.pulled == 1) "" else "s"}"
         if (kind == "Complete") {
@@ -2147,7 +2182,7 @@ class VisualizerSync(
                     pulled = result.pulled
                     refused = result.refused
                     logRun(result)
-                    if (result.outcome["kind"]?.jsonPrimitive?.contentOrNull != "Complete") failed = true
+                    if (result.outcome["kind"]?.jsonPrimitive?.contentOrNull !in setOf("Complete", "Busy")) failed = true
                 }.onFailure { e ->
                     failed = true
                     logSync("pull", "", "Pull failed", e.message)
