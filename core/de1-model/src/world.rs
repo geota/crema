@@ -121,6 +121,10 @@ pub struct Coverage {
     pub held_releases: u32,
     /// Sessions first seen flowing.
     pub unseen: u32,
+    /// Espresso flows the core first heard on an unknown substate.
+    pub unknown_flows: u32,
+    /// New sessions in the same mode.
+    pub replaced: u32,
     /// Tares.
     pub tares: u32,
     /// `ScaleStale`.
@@ -224,6 +228,11 @@ pub struct World {
     stale_open: bool,
     dead_open: bool,
     stopped_this_flow: bool,
+    /// The oracle saw a new session open in the same mode on the input in
+    /// hand: I20 is checked once the core has it.
+    replacing: bool,
+    /// The core heard this espresso session flow on an unknown substate.
+    unknown_flow: bool,
     /// What the run reached.
     pub coverage: Coverage,
     /// What broke.
@@ -297,6 +306,8 @@ impl World {
             stale_open: false,
             dead_open: false,
             stopped_this_flow: false,
+            replacing: false,
+            unknown_flow: false,
             coverage: Coverage::default(),
             violations: Vec::new(),
             requests: Vec::new(),
@@ -560,6 +571,7 @@ impl World {
             .core
             .on_notification(Source::De1State, &bytes, self.now);
         self.ingest(out, Who::Core);
+        self.check_replaced();
     }
 
     /// I6's oracle, apart from the core's own session: a mode opens unseen
@@ -582,6 +594,8 @@ impl World {
                 || (mode == Some(ActiveMode::Espresso) && self.flowed && pre_flow);
             self.flowed = (self.flowed || !pre_flow) && !replaced;
             if replaced {
+                self.replacing = true;
+                self.unknown_flow = false;
                 self.unseen = false;
                 self.owed_last = None;
                 self.stops_in_episode = 0;
@@ -665,6 +679,7 @@ impl World {
                     } else if before.is_some_and(|b| self.de1.frame < b) {
                         // A new shot, begun during the outage: it owes nothing.
                         // A mirror follows the hub, which saw it begin.
+                        self.replacing = true;
                         self.unseen = !self.read_only;
                         self.owed_last = None;
                         self.stops_in_episode = 0;
@@ -681,6 +696,7 @@ impl World {
                     .core
                     .on_notification(Source::De1ShotSample, &sample, self.now);
                 self.ingest(out, Who::Core);
+                self.check_replaced();
             }
         }
         let reading = self
@@ -715,7 +731,64 @@ impl World {
         }
         self.check_session();
         self.check_legs();
+        self.check_auto_stop();
         self.check_retries(down);
+    }
+
+    /// I20, once the core has the input that opened a new session in the
+    /// same mode: its volume is 0, and its auto-stop, if it has one yet, began
+    /// now. The integrator restarts too, so even the sample that settled an
+    /// outage adds nothing.
+    fn check_replaced(&mut self) {
+        if !std::mem::take(&mut self.replacing) {
+            return;
+        }
+        self.coverage.replaced += 1;
+        let pour = self.core.pour_ml();
+        if pour > 0.001 {
+            self.violate(Invariant::I20, format!("new session has {pour} ml poured"));
+        }
+        if let Some(view) = self.core.auto_stop_view()
+            && view.started != Duration::from_millis(self.now)
+        {
+            let started = view.started;
+            self.violate(
+                Invariant::I20,
+                format!("new session's auto-stop began at {started:?}"),
+            );
+        }
+    }
+
+    /// I21: a session the core heard flowing has its auto-stop, for its own
+    /// mode: espresso from first flow, an unknown substate included, and hot
+    /// water from its start.
+    fn check_auto_stop(&mut self) {
+        let mode = self.heard.and_then(ActiveMode::of);
+        let flowing = self.heard_sub.is_some_and(|s| {
+            !de1_domain::session::is_pre_flow(s) && !de1_domain::session::is_wind_down(s)
+        });
+        let needs = match mode {
+            Some(ActiveMode::Espresso) => flowing,
+            Some(ActiveMode::HotWater) => true,
+            _ => false,
+        };
+        if mode == Some(ActiveMode::Espresso)
+            && flowing
+            && self.heard_sub == Some(SubState::Unknown)
+            && !std::mem::replace(&mut self.unknown_flow, true)
+        {
+            self.coverage.unknown_flows += 1;
+        }
+        if !needs || self.open_mode != mode {
+            return;
+        }
+        let has = self.core.auto_stop_view().map(|v| v.mode);
+        if has != mode {
+            self.violate(
+                Invariant::I21,
+                format!("{mode:?} session flowing with auto-stop {has:?}"),
+            );
+        }
     }
 
     /// No sample settled a return, or the outage was too long to tell: with
@@ -728,7 +801,8 @@ impl World {
 
     /// The owed episode by the core's writes, from each state it hears.
     fn track_stop(&mut self, substate: u8) {
-        let sub = SubState::try_from(substate).ok();
+        // An unnamed byte is `Unknown`, as the core decodes it.
+        let sub = Some(SubState::try_from(substate).unwrap_or(SubState::Unknown));
         let first = !self.state_heard_on_link;
         let flowing = sub.is_some_and(|s| {
             !de1_domain::session::is_pre_flow(s) && !de1_domain::session::is_wind_down(s)
@@ -835,8 +909,13 @@ impl World {
         let flowing = self.heard == Some(MachineState::Espresso)
             && self.de1.state == MachineState::Espresso
             && self.de1.flowing();
+        // `armed` needs a leg now, so the core's flowing is its auto-stop.
+        let core_flowing = self
+            .core
+            .auto_stop_view()
+            .is_some_and(|v| v.mode == ActiveMode::Espresso);
         let unguarded = flowing
-            && armed
+            && core_flowing
             && self.weight_target().is_some()
             && targets.weight.is_none()
             && targets.volume.is_none()

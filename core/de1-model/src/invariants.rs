@@ -43,6 +43,12 @@ pub enum Invariant {
     /// No `Weight` stop while the true cup weight is under target minus
     /// tolerance. Not checked on a mirror, whose stop is only a display.
     I13,
+    /// A new session in the same mode has `pour_ml` at 0 and a fresh
+    /// `AutoStop`.
+    I20,
+    /// A flowing espresso or hot-water session always has an `AutoStop`,
+    /// including after `Unknown`. Steam and flush have no app legs.
+    I21,
 }
 
 /// Whether a test failure on this invariant means a regression.
@@ -57,7 +63,7 @@ pub enum Status {
 
 impl Invariant {
     /// Every invariant, for reports.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::I1,
         Self::I2,
         Self::I3,
@@ -70,10 +76,12 @@ impl Invariant {
         Self::I11,
         Self::I13,
         Self::I17,
+        Self::I20,
+        Self::I21,
     ];
 
-    /// Where this invariant stands. I8, I12, I14 to I16 and I18 to I21
-    /// need types later PRs add; I12's "no panic" holds by running at all.
+    /// Where this invariant stands. I8, I12, I14 to I16, I18 and I19 need
+    /// types later PRs add; I12's "no panic" holds by running at all.
     #[must_use]
     pub const fn status(self) -> Status {
         match self {
@@ -87,7 +95,9 @@ impl Invariant {
             | Self::I9
             | Self::I10
             | Self::I11
-            | Self::I17 => Status::Enforced,
+            | Self::I17
+            | Self::I20
+            | Self::I21 => Status::Enforced,
             Self::I13 => Status::PendingPr(8),
         }
     }

@@ -11,7 +11,7 @@ use de1_protocol::MachineState;
 
 use crate::*;
 
-fn bookoo(g: f32) -> [u8; 20] {
+pub(super) fn bookoo(g: f32) -> [u8; 20] {
     let c = (g * 100.0).round() as u32;
     let mut p = [0u8; 20];
     p[..10].copy_from_slice(&[
@@ -31,7 +31,7 @@ fn bookoo(g: f32) -> [u8; 20] {
 }
 
 /// A shot sample at 2.5 ml/s.
-fn sample(t: u16) -> [u8; 19] {
+pub(super) fn sample(t: u16) -> [u8; 19] {
     let mut s = [
         0x12, 0x34, 0x90, 0x00, 0x28, 0x00, 0x5C, 0x80, 0x00, 0x58, 0x00, 0x5A, 0x00, 0x5D, 0x00,
         0x60, 0x40, 0x03, 0x96,
@@ -40,7 +40,7 @@ fn sample(t: u16) -> [u8; 19] {
     s
 }
 
-fn stop_reasons(o: &CoreOutput) -> Vec<StopReason> {
+pub(super) fn stop_reasons(o: &CoreOutput) -> Vec<StopReason> {
     o.events
         .iter()
         .filter_map(|e| match e {
@@ -241,7 +241,7 @@ fn the_projection_carries_the_blocked_note() {
     );
 }
 
-fn hot_water_core() -> CremaCore {
+pub(super) fn hot_water_core() -> CremaCore {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
@@ -324,7 +324,7 @@ fn hot_water_with_no_armed_weight_stop_keeps_its_volume_leg() {
         "the backstop packet"
     );
     core.on_notification(Source::De1State, &[6, 5], 2_000);
-    assert_eq!(core.hot_water_stop_target_g, None, "stale at the start");
+    assert_eq!(core.hot_water_stop_target_g(), None, "stale at the start");
     let stops = pour(&mut core, 2_100, 62_000, |t| {
         Some((t.saturating_sub(2_100)) as f32 * 0.006)
     });
