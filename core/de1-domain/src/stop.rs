@@ -19,6 +19,8 @@ use typeshare::typeshare;
 
 use crate::flow::{FlowAlgorithm, FlowEstimator};
 use crate::saw_learning::{SawLearningModel, SawSnapshot};
+use crate::scale_trust::WeightAuthority;
+use crate::session::Blocked;
 
 /// The targets that end a shot automatically. A `None` field disables that mode.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -102,22 +104,107 @@ impl StopConfig {
     }
 }
 
-/// Whether the profile's volume limit (SAV) will actually arm for the
-/// next shot — the shells' Max-Volume card display gate. Mirrors the
-/// core orchestrator's `effective_stop_targets` demotion rule: volume is
-/// a NO-SCALE FALLBACK, never a competitor to stop-at-weight
-/// (reference-app consensus), so it is demoted only when the weight leg
-/// resolves — a scale connected AND a weight target set — unless the
-/// user opted into both caps racing (`volume_stop_with_scale`). A scale
-/// connected *without* a weight target keeps volume armed (review #29:
-/// dropping it would leave the shot with no stop at all).
+/// What the user asked to end a session with, before trust is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StopIntent {
+    /// The weight target, grams: set, on, and not dotted off.
+    pub weight: Option<f32>,
+    /// The profile's volume limit, ml.
+    pub volume_limit: Option<f32>,
+    /// The max shot time, seconds.
+    pub max_time: Option<f32>,
+    /// The user wants the volume limit live alongside the weight target.
+    pub volume_stop_with_scale: bool,
+}
+
+/// What can end the session now, and why the weight leg can't, if it can't.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedLegs {
+    /// The weight leg, grams.
+    pub weight: Option<f32>,
+    /// The volume leg, ml: the limit, or a backstop.
+    pub volume: Option<f32>,
+    /// The time leg, seconds.
+    pub max_time: Option<f32>,
+    /// Why a configured weight target isn't live.
+    pub blocked: Option<Blocked>,
+}
+
+impl ResolvedLegs {
+    /// The legs as [`StopTargets`], or `None` when nothing is live.
+    #[must_use]
+    pub fn targets(&self) -> Option<StopTargets> {
+        (self.weight.is_some() || self.volume.is_some() || self.max_time.is_some()).then_some(
+            StopTargets {
+                weight: self.weight,
+                volume: self.volume,
+                max_time: self.max_time,
+            },
+        )
+    }
+}
+
+/// The pour the espresso backstop stops at: `max(limit, 60 + 1.5 × target)`,
+/// ml (114 ml at 36 g). Provisional, from one shot (`DESIGN.md` §3.5).
 #[must_use]
-pub fn volume_stop_arms(
-    scale_connected: bool,
-    weight_target_set: bool,
-    volume_stop_with_scale: bool,
-) -> bool {
-    !(scale_connected && weight_target_set) || volume_stop_with_scale
+pub fn espresso_backstop_ml(limit: Option<f32>, target_g: f32) -> f32 {
+    let backstop = 60.0 + 1.5 * target_g;
+    limit.map_or(backstop, |l| l.max(backstop))
+}
+
+/// Where a session stands, for [`resolve_legs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LegContext {
+    /// What the weight may do.
+    pub authority: WeightAuthority,
+    /// The scale link is gone for good (dead or absent), not on a blip.
+    pub scale_gone: bool,
+}
+
+/// The espresso legs, re-derived on every input (`DESIGN.md` §3.3, §3.4).
+///
+/// - The weight leg is live only under [`WeightAuthority::Trusted`].
+/// - The volume limit is live when there is no weight target, when the user
+///   races both, or while weight is pending or refused. It stays off when the
+///   scale went quiet before the cup had weight ([`WeightAuthority::Blind`]):
+///   a 36 ml limit would stop a preinfusion-free shot at an empty cup.
+/// - Blind with the link gone, a weight target gets the backstop instead.
+///   So does a session first seen flowing with no limit and no max time,
+///   counted from attach.
+#[must_use]
+pub fn resolve_legs(intent: StopIntent, ctx: LegContext) -> ResolvedLegs {
+    let trusted = ctx.authority == WeightAuthority::Trusted;
+    let weight = intent.weight.filter(|_| trusted);
+    let limit_live = intent.weight.is_none()
+        || intent.volume_stop_with_scale
+        || matches!(
+            ctx.authority,
+            WeightAuthority::Pending | WeightAuthority::Refused(_)
+        );
+    let limit = intent.volume_limit.filter(|_| limit_live);
+    let backstop = intent.weight.and_then(|target| match ctx.authority {
+        WeightAuthority::Blind if ctx.scale_gone => {
+            Some(espresso_backstop_ml(intent.volume_limit, target))
+        }
+        WeightAuthority::Refused(Blocked::BeganUnseen)
+            if intent.volume_limit.is_none() && intent.max_time.is_none() =>
+        {
+            Some(espresso_backstop_ml(None, target))
+        }
+        _ => None,
+    });
+    let blocked = match (intent.weight, ctx.authority) {
+        (Some(_), WeightAuthority::Refused(why)) => Some(why),
+        // A blip shows nothing (`DESIGN.md` §6); a lost link asks for a hand.
+        (Some(_), WeightAuthority::Blind) if ctx.scale_gone => Some(Blocked::ScaleLost),
+        _ => None,
+    };
+    ResolvedLegs {
+        weight,
+        volume: limit.or(backstop),
+        max_time: intent.max_time,
+        blocked,
+    }
 }
 
 /// Whether water dispensed in this machine state counts toward stop-at-volume.
@@ -625,19 +712,6 @@ mod tests {
     }
 
     #[test]
-    fn volume_arms_unless_the_weight_leg_resolves_without_opt_in() {
-        // No scale → volume is the fallback stop.
-        assert!(volume_stop_arms(false, false, false));
-        assert!(volume_stop_arms(false, true, false));
-        // Scale + weight target → SAW owns the stop; volume demoted …
-        assert!(!volume_stop_arms(true, true, false));
-        // … unless the user opted into both caps racing.
-        assert!(volume_stop_arms(true, true, true));
-        // Scale WITHOUT a weight target keeps volume armed (review #29).
-        assert!(volume_stop_arms(true, false, false));
-    }
-
-    #[test]
     fn sav_counts_espresso_pour_only() {
         // de1app: preinfusion substate -> preinfusion_volume, pouring ->
         // pour_volume; SAV compares pour_volume.
@@ -678,5 +752,102 @@ mod tests {
             stop.on_sample(&s, ms(2_000), 36.0),
             Some(StopReason::Volume)
         );
+    }
+
+    fn intent(weight: Option<f32>, limit: Option<f32>, max_time: Option<f32>) -> StopIntent {
+        StopIntent {
+            weight,
+            volume_limit: limit,
+            max_time,
+            volume_stop_with_scale: false,
+        }
+    }
+
+    fn legs(intent: StopIntent, authority: WeightAuthority, scale_gone: bool) -> ResolvedLegs {
+        resolve_legs(
+            intent,
+            LegContext {
+                authority,
+                scale_gone,
+            },
+        )
+    }
+
+    #[test]
+    fn weight_is_live_only_when_trusted() {
+        use WeightAuthority::{Blind, Pending, Refused, Trusted};
+        let i = intent(Some(36.0), None, None);
+        assert_eq!(legs(i, Trusted, false).weight, Some(36.0));
+        for authority in [Pending, Blind, Refused(Blocked::NoScale)] {
+            assert_eq!(legs(i, authority, false).weight, None, "{authority:?}");
+        }
+    }
+
+    #[test]
+    fn the_volume_limit_stands_down_behind_trusted_or_blind_weight() {
+        use WeightAuthority::{Blind, Pending, Refused, Trusted};
+        let i = intent(Some(36.0), Some(36.0), None);
+        assert_eq!(legs(i, Trusted, false).volume, None);
+        assert_eq!(legs(i, Blind, false).volume, None, "a blip never rearms it");
+        assert_eq!(legs(i, Pending, false).volume, Some(36.0));
+        assert_eq!(
+            legs(i, Refused(Blocked::ScaleSilent), false).volume,
+            Some(36.0)
+        );
+        // No weight target, or the user races both: the limit is live.
+        assert_eq!(
+            legs(intent(None, Some(36.0), None), Trusted, false).volume,
+            Some(36.0)
+        );
+        let racing = StopIntent {
+            volume_stop_with_scale: true,
+            ..i
+        };
+        assert_eq!(legs(racing, Trusted, false).volume, Some(36.0));
+    }
+
+    #[test]
+    fn blind_with_the_link_gone_stops_at_the_backstop() {
+        let i = intent(Some(36.0), Some(36.0), None);
+        assert_eq!(legs(i, WeightAuthority::Blind, true).volume, Some(114.0));
+        assert_eq!(
+            legs(i, WeightAuthority::Blind, true).blocked,
+            Some(Blocked::ScaleLost)
+        );
+        // A blip: no backstop and no note.
+        assert_eq!(legs(i, WeightAuthority::Blind, false).volume, None);
+        assert_eq!(legs(i, WeightAuthority::Blind, false).blocked, None);
+        // A limit over the backstop stands.
+        let high = intent(Some(36.0), Some(150.0), None);
+        assert_eq!(legs(high, WeightAuthority::Blind, true).volume, Some(150.0));
+    }
+
+    #[test]
+    fn an_unseen_session_with_no_limits_gets_the_backstop() {
+        let unseen = WeightAuthority::Refused(Blocked::BeganUnseen);
+        assert_eq!(
+            legs(intent(Some(36.0), None, None), unseen, false).volume,
+            Some(114.0)
+        );
+        assert_eq!(
+            legs(intent(Some(36.0), Some(40.0), None), unseen, false).volume,
+            Some(40.0)
+        );
+        assert_eq!(
+            legs(intent(Some(36.0), None, Some(30.0)), unseen, false).volume,
+            None
+        );
+        assert_eq!(legs(intent(None, None, None), unseen, false).volume, None);
+    }
+
+    #[test]
+    fn a_refusal_is_the_blocked_reason() {
+        let l = legs(
+            intent(Some(36.0), None, None),
+            WeightAuthority::Refused(Blocked::UntaredCup),
+            false,
+        );
+        assert_eq!(l.blocked, Some(Blocked::UntaredCup));
+        assert_eq!(l.targets(), None);
     }
 }

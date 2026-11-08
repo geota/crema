@@ -394,7 +394,7 @@ internal class MachineSessionController(
             // renders the core's answer instead of its own (#56).
             updateUi { it.copy(stopTargets = StopTargetsView(
                 c.weight, c.volume, c.max_time, c.armed,
-                c.weight_configured, c.weight_blocked,
+                c.weight_configured, c.weight_blocked, c.weight_blocked_note,
             )) }
             appendLog((if (c.armed) "Stop targets armed: " else "Stop targets (next shot): ") + armed)
         }
@@ -706,6 +706,7 @@ internal class MachineSessionController(
                 armed = o["armed"]?.jsonPrimitive?.booleanOrNull ?: false,
                 weightConfiguredG = f("weightConfigured"),
                 weightBlocked = o["weightBlocked"]?.jsonPrimitive?.contentOrNull,
+                weightBlockedNote = o["weightBlockedNote"]?.jsonPrimitive?.contentOrNull,
             )) }
         }.onFailure { appendLog("Stop-target projection parse failed: ${it.message}") }
     }

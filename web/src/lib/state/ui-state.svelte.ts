@@ -195,9 +195,11 @@ export interface StopTargetsView {
 	 *  configured stays on screen when a scale drops instead of vanishing. */
 	readonly weightConfiguredG: number | null;
 	/** Why `weightG` is null despite `weightConfiguredG` being set —
-	 *  `'no-scale'`, `'began-unseen'` or `'untared-cup'`; null when armed, unset, or the user
+	 *  `'no-scale'`, `'scale-silent'`, `'began-unseen'`, `'untared-cup'` or `'scale-lost'`; null when armed, unset, or the user
 	 *  turned the stop off (a choice, not an impediment). */
 	readonly weightBlocked: string | null;
+	/** The core's note for `weightBlocked`, the same on both shells. */
+	readonly weightBlockedNote: string | null;
 }
 
 export interface UiSnapshot {
@@ -1034,7 +1036,8 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					maxTimeS: c.max_time ?? null,
 					armed: c.armed,
 					weightConfiguredG: c.weight_configured ?? null,
-					weightBlocked: c.weight_blocked ?? null
+					weightBlocked: c.weight_blocked ?? null,
+					weightBlockedNote: c.weight_blocked_note ?? null
 				},
 				eventLog: appendLog(
 					snapshot.eventLog,
@@ -1623,6 +1626,7 @@ export async function refreshStopTargetsProjection(core: {
 		maxTime: number | null;
 		weightConfigured: number | null;
 		weightBlocked: string | null;
+		weightBlockedNote: string | null;
 	}>;
 	/** The core's hot-water target, re-read alongside (see below). */
 	hotWaterTarget?(): Promise<HotWaterTarget | null>;
@@ -1636,7 +1640,8 @@ export async function refreshStopTargetsProjection(core: {
 				maxTimeS: p.maxTime ?? null,
 				armed: p.armed,
 				weightConfiguredG: p.weightConfigured ?? null,
-				weightBlocked: p.weightBlocked ?? null
+				weightBlocked: p.weightBlocked ?? null,
+				weightBlockedNote: p.weightBlockedNote ?? null
 			}
 		});
 	} catch {
@@ -1662,16 +1667,4 @@ export function setHotWaterTarget(target: HotWaterTarget | null): void {
 export function getCremaUiState(): CremaUiState {
 	if (!cremaUiState) cremaUiState = new CremaUiState();
 	return cremaUiState;
-}
-
-/** The note on a configured weight stop that can't fire. */
-export function weightBlockedNote(blocked: string | null): string {
-	switch (blocked) {
-		case 'began-unseen':
-			return 'Started before Crema connected';
-		case 'untared-cup':
-			return 'cup not tared';
-		default:
-			return 'no scale';
-	}
 }

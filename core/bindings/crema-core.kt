@@ -1546,10 +1546,13 @@ data class EventStopTargetsArmedInner (
 	/// with a reason, rather than silently dropping it.
 	val weight_configured: Float? = null,
 	/// Why [`weight`] is not armed despite [`weight_configured`] being set
-	/// — `"no-scale"`, `"began-unseen"` or `"untared-cup"`. `None` when the leg is armed,
-	/// nothing is configured, or the user turned the stop off (a choice,
-	/// not an impediment).
-	val weight_blocked: String? = null
+	/// — `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`
+	/// or `"scale-lost"`. `None` when the leg is armed, nothing is
+	/// configured, or the user turned the stop off (a choice, not an
+	/// impediment).
+	val weight_blocked: String? = null,
+	/// The note to show for [`weight_blocked`], the same on both shells.
+	val weight_blocked_note: String? = null
 )
 
 /// Generated type representing the anonymous struct variant `StopRetried` of the `Event` Rust enum
@@ -2177,10 +2180,11 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleStale")
 	object ScaleStale: Event()
-	/// The scale link looks dead: still no reading 5 s after
-	/// [`Event::ScaleStale`], or three scale writes in a row failed with no
-	/// reading in between. Emitted once per episode — a fresh reading re-arms
-	/// it. The shell drops the link at the transport (not a user disconnect)
+	/// The scale link looks dead: no sign of life 6 s after the last frame,
+	/// or after connect for a scale that never reported, or three scale
+	/// writes in a row failed with no reading in between. Emitted once until
+	/// a reading arrives, even across a reconnect, so a scale that never
+	/// reports isn't torn down every 6 s. The shell drops the link at the transport (not a user disconnect)
 	/// so its reconnect loop recovers it, but only while its link still
 	/// claims ready.
 	@Serializable
@@ -6292,7 +6296,7 @@ sealed class SawModelLoad {
 /// Why [`Event::ScaleLinkDead`] fired.
 @Serializable
 enum class ScaleLinkDeadReason(val string: String) {
-	/// No weight reading for the stale timeout plus the 5 s grace.
+	/// No sign of life for 6 s: the stale timeout plus the 5 s grace.
 	@SerialName("Silent")
 	Silent("Silent"),
 	/// Three scale writes in a row failed with no reading in between.

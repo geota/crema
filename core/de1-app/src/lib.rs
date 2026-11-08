@@ -32,6 +32,8 @@ mod profile_sync;
 mod request_gate_tests;
 #[cfg(test)]
 mod scale_robustness_tests;
+#[cfg(test)]
+mod scale_trust_tests;
 pub mod shot_start;
 mod sweep;
 #[cfg(test)]
@@ -68,9 +70,14 @@ use capture::{CaptureRecorder, slice_to_jsonl};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use de1_domain::HOT_WATER_STOP_ON_SCALE_ML;
 use de1_domain::connect_sweep::MAX_TANK_TEMP_C;
 use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
-use de1_domain::session::{Observed, Session};
+use de1_domain::scale_trust::{
+    ScaleLink, ScaleWatch, WeightAuthority, prospective_authority, weight_authority,
+};
+use de1_domain::session::{ActiveMode, Baseline, Blocked, Observed, Session, is_pre_flow};
+use de1_domain::stop::{LegContext, ResolvedLegs, StopIntent, resolve_legs};
 use de1_domain::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AsRunShot, AutoStop, BeverageType, BrewOverrides,
     BrewRecipe, BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, CompletedShot,
@@ -135,21 +142,6 @@ const NO_AC_SETTLE: Duration = Duration::from_secs(6);
 /// Below this firmware build `ErrorNoAc` is not trusted at all — de1app's own
 /// gate, ported by Decenza `98215217` (`firmwareBuildNumber() >= 1337`).
 const NO_AC_MIN_FIRMWARE: u32 = 1337;
-/// How long the scale may go without reporting weight before it is considered
-/// stale — the legacy app warns after roughly one second of silence.
-const SCALE_STALE_TIMEOUT: Duration = Duration::from_secs(1);
-
-/// How long a stale scale may stay silent before its link is presumed dead
-/// ([`Event::ScaleLinkDead`]): Android's grace, so a scale whose stream only
-/// hiccuped resumes before anything is torn down.
-const SCALE_DEAD_GRACE: Duration = Duration::from_secs(5);
-
-/// Consecutive failed scale writes, with no reading in between, that presume
-/// the link dead. The scale keep-alives (Decent 2 s, Acaia 3 s) write on a
-/// steady cadence, so a wedged link trips this within seconds (Android's
-/// detector; reaprime runs the same on GATT op timeouts).
-const MAX_SCALE_WRITE_FAILURES: u32 = 3;
-
 /// Minimum spacing between unit-recovery nudge writes — one per
 /// notification (~10 Hz) hammered a stubborn scale for no benefit.
 const UNIT_RECOVERY_THROTTLE: Duration = Duration::from_millis(500);
@@ -525,6 +517,8 @@ pub struct CremaCore {
     /// The flow the machine is running, from its first state until it leaves
     /// that mode. A link drop keeps it; [`reset`](Self::reset) drops it.
     session: Option<Session>,
+    /// The hot-water pour running, for its app volume leg.
+    hot_water_pour: Option<HotWaterPour>,
     /// The latest shot began unseen, latched at `ShotEvent::Started` because
     /// the session has closed by the time the shot completes. Its readings
     /// include whatever was already in the cup, so they never reach its
@@ -684,9 +678,10 @@ pub struct CremaCore {
     /// reconnects (the [`Scale`] is rebuilt on every connect) and seeded at
     /// 253 like de1app's app-lifetime counter — scales appendix F-14.
     decent_tare_counter: u8,
-    /// Timestamp of the most recent scale-weight reading, for the lost-scale
-    /// watchdog. `None` until the connected scale reports once.
-    last_scale_weight: Option<Duration>,
+    /// The scale link's facts: when it connected, its last reading and its
+    /// failed writes ([`ScaleWatch`]). A scale-device link, so it outlives a
+    /// DE1 [`reset`](Self::reset).
+    scale_watch: ScaleWatch,
     /// The most recent smoothed scale weight (g) and mass-flow rate (g/s)
     /// from the [`FlowEstimator`]. Both `None` until a scale has reported
     /// at least once. Fed by [`handle_scale_weight`](Self::handle_scale_weight);
@@ -699,27 +694,6 @@ pub struct CremaCore {
     /// returns an `Estimate` *as a sample is fed* — we need the last
     /// returned value for the cross-event lookup.
     last_scale_estimate: Option<Estimate>,
-    /// Whether an [`Event::ScaleStale`] has already been emitted for the
-    /// current stale episode — cleared by the next fresh reading.
-    scale_stale_reported: bool,
-    /// Whether the connected scale has sent a weight reading since it
-    /// connected (de1app `is_operational`'s `_watchdog_updates_seen`). The
-    /// stale watchdog only runs once a reading exists, so without this a
-    /// scale that never streams would count as operational. `false` from
-    /// [`connect_scale`](Self::connect_scale), [`disconnect_scale`](Self::disconnect_scale)
-    /// and [`reset`](Self::reset) (which keeps the scale but needs a fresh reading).
-    scale_reading_seen: bool,
-    /// The `last_scale_weight` a silent [`Event::ScaleLinkDead`] was emitted
-    /// for. A fresh reading moves `last_scale_weight` on, which re-arms it, so
-    /// a scale that reconnects but stays silent is not torn down again.
-    scale_dead_reported_for: Option<Duration>,
-    /// Consecutive failed scale writes the shell reported
-    /// ([`CremaCore::on_scale_write_result`]), counted since
-    /// `scale_write_failures_anchor`: a reading moves `last_scale_weight` on
-    /// and restarts the count.
-    scale_write_failures: u32,
-    /// The `last_scale_weight` the write-failure count started from.
-    scale_write_failures_anchor: Option<Duration>,
     /// Whether the one-shot connect-time scale-config queries (`0x0a` serial /
     /// `0x0f` settings) have already been issued for the connected scale.
     /// There is no scale-connected notification, so the queries are emitted on
@@ -1082,6 +1056,7 @@ impl CremaCore {
             steam_hotwater_targets: None,
             link: LinkSession::default(),
             session: None,
+            hot_water_pour: None,
             shot_began_unseen: false,
             shot_settings_written: None,
             foreign_restore_used: false,
@@ -1114,13 +1089,8 @@ impl CremaCore {
             untared_window_reopened: false,
             last_unit_recovery_write: None,
             decent_tare_counter: 253,
-            last_scale_weight: None,
+            scale_watch: ScaleWatch::new(),
             last_scale_estimate: None,
-            scale_stale_reported: false,
-            scale_reading_seen: false,
-            scale_dead_reported_for: None,
-            scale_write_failures: 0,
-            scale_write_failures_anchor: None,
             scale_config_queried: false,
             profile_upload: None,
             last_active_profile_title: None,
@@ -1275,8 +1245,13 @@ impl CremaCore {
         // A newly connected scale has not yet been asked for its serial /
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
-        self.scale_write_failures = 0;
-        self.scale_reading_seen = false;
+        // The dead timeout starts at connect, so a scale that never reports
+        // is caught too (#316).
+        if self.scale.is_some() {
+            self.scale_watch.connect(self.clock);
+        } else {
+            self.scale_watch.disconnect();
+        }
         // A scale arriving MID-SHOT was never tared for this shot — reopen
         // the untared-cup window so its first reading is sanity-checked
         // before the re-armed weight leg can fire (review #29).
@@ -1307,13 +1282,8 @@ impl CremaCore {
         self.scale = None;
         self.hds = None;
         self.flow = FlowEstimator::new(FlowAlgorithm::default());
-        self.last_scale_weight = None;
+        self.scale_watch.disconnect();
         self.last_scale_estimate = None;
-        self.scale_stale_reported = false;
-        self.scale_reading_seen = false;
-        self.scale_dead_reported_for = None;
-        self.scale_write_failures = 0;
-        self.scale_write_failures_anchor = None;
         self.scale_config_queried = false;
         self.shot_metrics.reset_scale();
         // The untared-cup guard's latches describe THIS scale's readings —
@@ -1466,44 +1436,105 @@ impl CremaCore {
     /// SAW is additionally gated on `stop_on_weight && scale.is_some()`;
     /// SAV and max-time are independent of the scale.
     fn effective_stop_targets(&self) -> Option<StopTargets> {
-        let weight = if self.stop_on_weight
-            && !self.weight_target_disabled
-            && !self.untared_cup_tripped
-            && !self.began_unseen()
-            && self.scale.is_some()
-        {
+        self.resolved_legs().targets()
+    }
+
+    /// The weight target the user asked for: set, on, and not dotted off.
+    fn weight_intent(&self) -> Option<f32> {
+        if self.stop_on_weight && !self.weight_target_disabled {
             self.effective_target_weight()
         } else {
             None
+        }
+    }
+
+    /// The espresso legs and why weight is off, from the intent and the
+    /// weight's authority (`de1_domain::stop::resolve_legs`).
+    fn resolved_legs(&self) -> ResolvedLegs {
+        let intent = StopIntent {
+            weight: self.weight_intent(),
+            volume_limit: self.profile_volume_limit,
+            max_time: self.max_shot_duration,
+            volume_stop_with_scale: self.volume_stop_with_scale,
         };
-        // Volume (SAV) is a NO-SCALE FALLBACK by default, never a competitor
-        // to SAW — the reference-app consensus (reaprime arms volume only
-        // when the scale is absent/lost; de1app zeroes the volume target when
-        // weight stopping is in use, "since it's not as accurate"; Decenza's
-        // ignoreVolumeWithScale). With a scale registered, the profile's
-        // volume limit would routinely pre-empt the weight target because the
-        // integrated-flow estimate runs ahead of true yield.
-        // `volume_stop_with_scale` opts back into both caps racing. A scale
-        // lost mid-shot re-arms this leg via refresh_auto_stop_targets — the
-        // same degrade-to-volume reaprime does.
-        // Demote ONLY when the weight leg actually resolved (review #29):
-        // a scale connected without a weight target must not silently drop
-        // the profile's volume limit — that left the shot with no stop at
-        // all (until max-time, if set).
-        let volume = if weight.is_some() && !self.volume_stop_with_scale {
-            None
-        } else {
-            self.profile_volume_limit
-        };
-        let max_time = self.max_shot_duration;
-        if weight.is_none() && volume.is_none() && max_time.is_none() {
-            None
-        } else {
-            Some(StopTargets {
-                weight,
-                volume,
-                max_time,
-            })
+        resolve_legs(
+            intent,
+            LegContext {
+                authority: self.espresso_authority(),
+                scale_gone: self.scale_link().is_gone(),
+            },
+        )
+    }
+
+    /// The scale link at the core's clock.
+    pub(crate) fn scale_link(&self) -> ScaleLink {
+        self.scale_watch.link(self.clock, self.scale_dormant())
+    }
+
+    /// A Half Decent Scale in SoftSleep: silent by design. Not while water
+    /// flows: a wake is due at state entry, and a lost one must reach the
+    /// dead timeout and the backstop like any silent scale.
+    fn scale_dormant(&self) -> bool {
+        self.hds
+            .as_ref()
+            .is_some_and(HdsNegotiation::is_soft_sleeping)
+            && !self.flow_running()
+    }
+
+    /// A session is open past its pre-flow substates.
+    fn flow_running(&self) -> bool {
+        self.session.is_some()
+            && self
+                .last_state
+                .is_some_and(|info| !is_pre_flow(info.substate))
+    }
+
+    /// What the weight may do for a session in `mode`: its own if one is
+    /// open, else what a new one would start with. A mirror that joined
+    /// mid-pour follows the hub, which saw the start.
+    fn authority_for(&self, mode: ActiveMode, flowing: bool) -> WeightAuthority {
+        let link = self.scale_link();
+        match self.session.filter(|s| s.mode == mode) {
+            Some(session) => {
+                let baseline = if self.read_only && session.observed == Observed::Unseen {
+                    Baseline::Tared
+                } else {
+                    session.baseline
+                };
+                weight_authority(baseline, link, flowing)
+            }
+            None => prospective_authority(link),
+        }
+    }
+
+    /// The espresso session's weight authority.
+    fn espresso_authority(&self) -> WeightAuthority {
+        self.authority_for(ActiveMode::Espresso, self.flow_started.is_some())
+    }
+
+    /// The hot-water session's weight authority.
+    fn hot_water_authority(&self) -> WeightAuthority {
+        let flowing = self
+            .last_state
+            .is_some_and(|info| !is_pre_flow(info.substate));
+        self.authority_for(ActiveMode::HotWater, flowing)
+    }
+
+    /// Run the scale watchdog at `now`: [`Event::ScaleStale`] once per stale
+    /// episode, [`Event::ScaleLinkDead`] once until a reading arrives. On
+    /// every DE1 sample as well as the tick, so a hidden tab still notices.
+    fn poll_scale_watch(&mut self, now: Duration, out: &mut CoreOutput) {
+        if self.scale.is_none() {
+            return;
+        }
+        let events = self.scale_watch.poll(now, self.scale_dormant());
+        if events.stale {
+            out.events.push(Event::ScaleStale);
+        }
+        if events.dead {
+            out.events.push(Event::ScaleLinkDead {
+                reason: ScaleLinkDeadReason::Silent,
+            });
         }
     }
 
@@ -3182,7 +3213,7 @@ impl CremaCore {
     }
 
     /// Report how one scale write the shell sent went. After
-    /// [`MAX_SCALE_WRITE_FAILURES`] failures in a row with no reading in
+    /// [`MAX_WRITE_FAILURES`](de1_domain::scale_trust::MAX_WRITE_FAILURES) failures in a row with no reading in
     /// between, emit [`Event::ScaleLinkDead`] (`WritesFailing`) and start the
     /// count over. A reading restarts the count too, so a scale that streams
     /// weight but rejects one command is not torn down over and over. Report
@@ -3193,16 +3224,7 @@ impl CremaCore {
         if self.scale.is_none() {
             return out;
         }
-        if ok || self.scale_write_failures_anchor != self.last_scale_weight {
-            self.scale_write_failures = 0;
-            self.scale_write_failures_anchor = self.last_scale_weight;
-        }
-        if ok {
-            return out;
-        }
-        self.scale_write_failures += 1;
-        if self.scale_write_failures >= MAX_SCALE_WRITE_FAILURES {
-            self.scale_write_failures = 0;
+        if self.scale_watch.write_result(ok) {
             out.events.push(Event::ScaleLinkDead {
                 reason: ScaleLinkDeadReason::WritesFailing,
             });
@@ -3211,7 +3233,7 @@ impl CremaCore {
     }
 
     /// Feed a periodic clock tick. Drives the lost-scale watchdog (if a scale
-    /// is connected but has not reported weight for [`SCALE_STALE_TIMEOUT`],
+    /// is connected but has not reported weight for [`STALE_AFTER`](de1_domain::scale_trust::STALE_AFTER),
     /// emit [`Event::ScaleStale`] once per stale episode), the steam
     /// eco-mode transition, the profile-upload ack watchdog, the wait for the
     /// machine model, and the repeat of an outstanding re-upload request.
@@ -3223,35 +3245,9 @@ impl CremaCore {
         let now = ms_to_duration(now_ms);
         self.clock = self.clock.max(now);
         let mut out = CoreOutput::default();
-        // A Half Decent Scale in SoftSleep stops streaming on purpose — its
-        // silence is not a dead link (decaid suspends its watchdog there).
-        let watched = self.scale.is_some()
-            && !self
-                .hds
-                .as_ref()
-                .is_some_and(HdsNegotiation::is_soft_sleeping);
-        if watched
-            && !self.scale_stale_reported
-            && let Some(last) = self.last_scale_weight
-            && now.saturating_sub(last) >= SCALE_STALE_TIMEOUT
-        {
-            self.scale_stale_reported = true;
-            out.events.push(Event::ScaleStale);
-        }
-        // Still silent SCALE_DEAD_GRACE later: presume the link dead (Android's
-        // rule; Decenza treats an in-shot feed stall as a link fault). Covers
-        // scales with no keep-alive writes (Bookoo), which the write-failure
-        // count never probes. Once per silent episode.
-        if watched
-            && let Some(last) = self.last_scale_weight
-            && self.scale_dead_reported_for != Some(last)
-            && now.saturating_sub(last) >= SCALE_STALE_TIMEOUT + SCALE_DEAD_GRACE
-        {
-            self.scale_dead_reported_for = Some(last);
-            out.events.push(Event::ScaleLinkDead {
-                reason: ScaleLinkDeadReason::Silent,
-            });
-        }
+        self.poll_scale_watch(now, &mut out);
+        // A scale going stale or dead changes the legs with no reading.
+        self.refresh_auto_stop_targets();
         for event in self.steam.on_tick(now) {
             self.map_steam_event(event, &mut out);
         }
@@ -3438,6 +3434,10 @@ impl CremaCore {
         // (and its one-shot config-query latch) across; the scale's own drop
         // path ([`disconnect_scale`](Self::disconnect_scale)) still clears it.
         let scale = self.scale.take();
+        // The scale link outlives a DE1 reset, but a fresh reading is needed
+        // before it counts again; a dead report stays reported.
+        let mut scale_watch = self.scale_watch;
+        scale_watch.woken(self.clock);
         let hds = self.hds.take();
         let scale_config_queried = self.scale_config_queried;
         // The learned SAW drip model is persistent user data, not session
@@ -3502,6 +3502,7 @@ impl CremaCore {
         self.read_only = read_only;
         self.brew_session = brew_session;
         self.scale = scale;
+        self.scale_watch = scale_watch;
         self.hds = hds;
         self.scale_config_queried = scale_config_queried;
         self.saw_model = saw_model;
@@ -3648,8 +3649,7 @@ impl CremaCore {
                     && let Some(wake) = self.hds.as_mut().and_then(HdsNegotiation::wake)
                 {
                     Self::push_scale_write(out, wake.to_vec());
-                    self.last_scale_weight = Some(now);
-                    self.scale_stale_reported = false;
+                    self.scale_watch.woken(now);
                     if info.state != MachineState::Idle
                         && let Some(writes) = scale.lcd_enable_command(grams)
                     {
@@ -3774,11 +3774,14 @@ impl CremaCore {
             .map(|_| increment_ml.min(sample.group_flow.max(0.0) * MAX_COUNTED_GAP_S))
             .filter(|ml| *ml > 0.0);
         let pour_ml = self.volume_integrator.pour_ml();
+        self.poll_scale_watch(now, out);
+        self.refresh_auto_stop_targets();
         let reason = self
             .auto_stop
             .as_mut()
             .and_then(|stop| stop.on_sample(&sample, now, pour_ml));
         self.push_stop(reason, now, out);
+        self.check_hot_water_volume_leg(pour_ml, now, out);
         self.enforce_pending_stop(now, out);
         self.report_stop_targets(out);
         // `Event::Telemetry.elapsed` is `u32` milliseconds — what the FFI
@@ -3855,8 +3858,7 @@ impl CremaCore {
             // doesn't also false-report ScaleStale, run the one-shot
             // connect queries, and throttle the nudge so a stubborn scale
             // isn't hammered with one recovery write per notification.
-            self.last_scale_weight = Some(now);
-            self.scale_stale_reported = false;
+            self.scale_watch.alive(now);
             let throttled = self
                 .last_unit_recovery_write
                 .is_some_and(|at| now.saturating_sub(at) < UNIT_RECOVERY_THROTTLE);
@@ -3899,9 +3901,7 @@ impl CremaCore {
             return;
         };
         // A fresh reading re-arms the lost-scale watchdog.
-        self.last_scale_weight = Some(now);
-        self.scale_stale_reported = false;
-        self.scale_reading_seen = true;
+        self.scale_watch.reading(now);
         // The first weight notification stands in for a scale-connected hook:
         // fire the one-shot serial / settings queries so the anti-mistouch
         // state and active mode are fetched as soon as the scale is reporting.
@@ -3943,6 +3943,10 @@ impl CremaCore {
                 // Only an OBSERVED landing qualifies the pre-shot zero capture.
                 self.tare_gate = None;
                 self.tare_observed = landed;
+                // The session's zero is known.
+                if let Some(session) = self.session.as_mut() {
+                    session.tared();
+                }
                 self.flow.reset();
                 // The baseline legitimately stepped to ~0 — don't let the
                 // spike gate read the drop as a corrupt jump.
@@ -4027,6 +4031,7 @@ impl CremaCore {
         // ScaleReading event carries (issue #10). No DE1 coupling: this
         // runs identically with the machine absent.
         self.feed_brew_session_weight(estimate.weight, estimate.flow, now, out);
+        self.refresh_auto_stop_targets();
         let reason = self
             .auto_stop
             .as_mut()
@@ -4040,13 +4045,17 @@ impl CremaCore {
         // rather than past it (reaprime HotWaterSequencer's projection).
         // Mutually exclusive with the espresso auto-stop above — the
         // machine is in exactly one of those states.
-        if let Some(target) = self.hot_water_stop_target_g {
+        if let Some(target) = self.hot_water_stop_target_g
+            && self.hot_water_authority() == WeightAuthority::Trusted
+        {
             let lag_s = self
                 .scale
                 .as_ref()
                 .map_or(0.38, |s| s.sensor_lag().as_secs_f32());
             if estimate.weight + estimate.flow.max(0.0) * lag_s >= target {
+                // One stop per pour: the volume leg stands down too.
                 self.hot_water_stop_target_g = None;
+                self.hot_water_pour = None;
                 self.push_stop(Some(StopReason::Weight), now, out);
             }
         }
@@ -4170,6 +4179,9 @@ impl CremaCore {
                 // spike gate: the net baseline just stepped by -offset.
                 self.flow.reset();
                 self.weight_gate.reset();
+                if let Some(session) = self.session.as_mut() {
+                    session.tared();
+                }
                 out.events.push(Event::SawAutoZeroed { offset_g: offset });
                 return Some(raw_g - offset);
             }
@@ -4178,6 +4190,9 @@ impl CremaCore {
                 // shot, everything else (volume / max-time) still bounds it.
                 self.untared_settle = None;
                 self.untared_cup_tripped = true;
+                if let Some(session) = self.session.as_mut() {
+                    session.untared_cup();
+                }
                 self.refresh_auto_stop_targets();
                 out.events
                     .push(Event::SawSuppressedUntaredCup { weight_g: raw_g });
@@ -5547,6 +5562,12 @@ impl CremaCore {
                 // no tare, here or at first flow (#317).
                 self.shot_began_unseen = self.began_unseen();
                 self.auto_tare_pending = self.auto_tare && !self.shot_began_unseen;
+                // With auto-tare off the user's own zero stands.
+                if !self.auto_tare
+                    && let Some(session) = self.session.as_mut()
+                {
+                    session.tared();
+                }
                 self.auto_tare_window.reset();
                 self.last_auto_tare = None;
                 self.tare_observed = false;
@@ -5695,6 +5716,19 @@ impl CremaCore {
                 // target's weight (volume and ratio modes with an
                 // operational scale; never time mode). Never the machine
                 // echo, which can carry the 250 ml backstop (review #25).
+                if kind == de1_domain::WaterSessionKind::HotWater {
+                    // The pour's own volume, and its V for the app leg that
+                    // stands in when the scale can't stop it.
+                    self.hot_water_pour = Some(HotWaterPour {
+                        started_ml: self.volume_integrator.pour_ml(),
+                        v_ml: self.hot_water_target().and_then(|t| t.volume_ml),
+                    });
+                    if !self.auto_tare
+                        && let Some(session) = self.session.as_mut()
+                    {
+                        session.tared();
+                    }
+                }
                 if kind == de1_domain::WaterSessionKind::HotWater
                     && !self.began_unseen()
                     && let Some(target_g) = self.hot_water_target().and_then(|t| t.stop_weight_g)
@@ -5712,6 +5746,7 @@ impl CremaCore {
             }
             WaterEvent::Completed(record) => {
                 self.hot_water_stop_target_g = None;
+                self.hot_water_pour = None;
                 out.events.push(Event::WaterSessionCompleted {
                     kind: record.kind,
                     duration: duration_to_u32_ms(record.duration),
@@ -5766,7 +5801,19 @@ impl CremaCore {
         if !matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring) {
             return;
         }
-        if let Some(targets) = self.effective_stop_targets() {
+        // A weight target arms an auto-stop even with no leg live yet: at
+        // first flow the tare is often still landing, so weight is pending,
+        // and the leg goes live when it's trusted. Without this the shot
+        // would never stop on weight (the #316.1 shape, which PR 7 closes for
+        // every leg).
+        let targets = self.effective_stop_targets().or_else(|| {
+            self.weight_intent().map(|_| StopTargets {
+                weight: None,
+                volume: None,
+                max_time: None,
+            })
+        });
+        if let Some(targets) = targets {
             let mut stop = AutoStop::new(targets, self.stop_config(), now);
             self.attach_drip_model(&mut stop, targets.weight.is_some());
             self.auto_stop = Some(stop);
@@ -5809,6 +5856,13 @@ impl CremaCore {
             max_time: None,
         });
         let weight_armed = targets.weight.is_some();
+        if self
+            .auto_stop
+            .as_ref()
+            .is_some_and(|s| s.targets() == targets)
+        {
+            return;
+        }
         if let Some(mut stop) = self.auto_stop.take() {
             stop.set_targets(targets);
             // A weight leg arriving mid-shot (scale registered late) also
@@ -5844,14 +5898,42 @@ impl CremaCore {
         let saw_armed = self
             .effective_stop_targets()
             .is_some_and(|t| t.weight.is_some());
-        // An untared cup would read as a step's weight at once.
-        let scale_usable = self.scale.is_some() && !self.began_unseen();
+        // Only a trusted weight: an untared cup or a lost scale would read as
+        // a step's weight, or never reach it.
+        let scale_usable = self.espresso_authority() == WeightAuthority::Trusted;
         if self
             .step_weight
             .on_weight(projected, now, scale_usable, saw_armed)
         {
             self.request_state(MachineState::SkipToNext, Initiator::Core, out);
         }
+    }
+
+    /// Hot water's app volume leg (`DESIGN.md` §3.5): when the scale can't
+    /// stop the pour and the packet on the machine is the 250 ml backstop,
+    /// stop at the user's `V` ml. If the packet holds `V`, the DE1 owns the
+    /// stop and an app leg would race it.
+    fn check_hot_water_volume_leg(&mut self, pour_ml: f32, now: Duration, out: &mut CoreOutput) {
+        let Some(pour) = self.hot_water_pour else {
+            return;
+        };
+        let Some(v_ml) = pour.v_ml else {
+            return;
+        };
+        let packet_is_backstop = self
+            .steam_hotwater_settings
+            .as_ref()
+            .is_some_and(|p| p.hot_water_volume_ml >= HOT_WATER_STOP_ON_SCALE_ML - 0.5);
+        // Stand down only behind a weight stop that is armed and trusted: a
+        // pour that began with the scale stale has no weight target at all.
+        let weight_stops_it = self.hot_water_stop_target_g.is_some()
+            && self.hot_water_authority() == WeightAuthority::Trusted;
+        if !packet_is_backstop || weight_stops_it || pour_ml - pour.started_ml < v_ml {
+            return;
+        }
+        self.hot_water_stop_target_g = None;
+        self.hot_water_pour = None;
+        self.push_stop(Some(StopReason::Volume), now, out);
     }
 
     /// Push a [`StopReason`], when one occurred, as a [`Event::StopTriggered`]
@@ -5937,6 +6019,7 @@ impl CremaCore {
             armed,
             weight_configured: self.effective_target_weight(),
             weight_blocked: self.weight_stop_blocked_by().map(str::to_owned),
+            weight_blocked_note: self.weight_blocked().map(|b| b.note().to_owned()),
         });
     }
 
@@ -5948,17 +6031,15 @@ impl CremaCore {
     /// Pure — safe to call at any time, connected or not.
     #[must_use]
     pub fn stop_targets_projection(&self) -> (bool, StopTargets) {
-        match self.auto_stop.as_ref() {
-            Some(stop) => (true, stop.targets()),
-            None => (
-                false,
-                self.effective_stop_targets().unwrap_or(StopTargets {
-                    weight: None,
-                    volume: None,
-                    max_time: None,
-                }),
-            ),
-        }
+        // Live, not as of the auto-stop's last refresh: a scale going stale
+        // between inputs shows at once. The auto-stop refreshes to the same
+        // legs before it judges any input.
+        let targets = self.effective_stop_targets().unwrap_or(StopTargets {
+            weight: None,
+            volume: None,
+            max_time: None,
+        });
+        (self.auto_stop.is_some(), targets)
     }
 
     /// Why the weight leg is not armed even though a target IS configured, or
@@ -5977,18 +6058,15 @@ impl CremaCore {
         if !self.stop_on_weight || self.weight_target_disabled {
             return None; // deliberately off
         }
-        if self.scale.is_none() {
-            return Some("no-scale");
+        self.weight_blocked().map(Blocked::as_str)
+    }
+
+    /// Why the configured weight target isn't live, if it isn't.
+    fn weight_blocked(&self) -> Option<Blocked> {
+        if !self.stop_on_weight || self.weight_target_disabled {
+            return None;
         }
-        if self.began_unseen()
-            && let Some(why) = self.session.and_then(|s| s.weight_refused())
-        {
-            return Some(why.as_str());
-        }
-        if self.untared_cup_tripped {
-            return Some("untared-cup");
-        }
-        None
+        self.resolved_legs().blocked
     }
 
     /// Whether the open session began before the app saw it, so nothing on
@@ -6015,9 +6093,19 @@ impl CremaCore {
             "maxTime": t.max_time,
             "weightConfigured": self.effective_target_weight(),
             "weightBlocked": self.weight_stop_blocked_by(),
+            "weightBlockedNote": self.weight_blocked().map(Blocked::note),
         })
         .to_string()
     }
+}
+
+/// A hot-water pour, for the app's volume leg (`DESIGN.md` §3.5).
+#[derive(Debug, Clone, Copy)]
+struct HotWaterPour {
+    /// The integrator's pour volume when the pour began, ml.
+    started_ml: f32,
+    /// The user's volume for this pour, ml.
+    v_ml: Option<f32>,
 }
 
 /// A commanded-but-unhonoured stop being enforced (issue #15).
@@ -6120,7 +6208,7 @@ fn mmr_write_command(register: MmrRegister, value: u32, byte_len: u8) -> CoreOut
 #[cfg(test)]
 mod tests {
     use super::*;
-    use de1_domain::{HOT_WATER_STOP_ON_SCALE_ML, HotWaterMode, ShotPhase};
+    use de1_domain::{HotWaterMode, ShotPhase};
 
     #[test]
     fn apply_common_settings_latches_every_settings_input() {
@@ -6164,7 +6252,7 @@ mod tests {
     // The three `as u8` casts are a standard big-endian byte split — each
     // shifted byte is masked to 8 bits by the cast, which is the intent.
     #[allow(clippy::cast_possible_truncation)]
-    fn bookoo_packet(centigrams: u32) -> [u8; 20] {
+    pub(crate) fn bookoo_packet(centigrams: u32) -> [u8; 20] {
         // A full 20-byte weight frame: 03 0b header (review #32), '+' sign,
         // the 24-bit weight, zeroed settings, and the trailing XOR the
         // parser verifies.
@@ -6489,12 +6577,21 @@ mod tests {
     }
 
     #[test]
-    fn on_tick_does_nothing_before_the_scale_first_reports() {
+    fn a_scale_that_never_reports_is_dead_six_seconds_after_connect_once() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        // No reading yet — the watchdog has nothing to time against.
-        let out = core.on_tick(1_000_000);
-        assert!(out.events.is_empty());
+        // Silent from connect (#316): no stale episode, the link is presumed
+        // dead at 5 s + 1 s, and only once, however often the shell reconnects.
+        assert!(core.on_tick(5_999).events.is_empty());
+        let out = core.on_tick(6_000);
+        assert_eq!(
+            out.events,
+            [Event::ScaleLinkDead {
+                reason: ScaleLinkDeadReason::Silent
+            }]
+        );
+        core.connect_scale("BOOKOO_SC", &[]);
+        assert!(core.on_tick(20_000).events.is_empty());
     }
 
     #[test]
@@ -6610,7 +6707,7 @@ mod tests {
         // The scale slice is populated.
         assert!(core.scale_capabilities().is_some());
         assert!(core.scale_uuids().is_some());
-        assert!(core.last_scale_weight.is_some());
+        assert!(core.scale_link().is_fresh());
         // A user pref to confirm it survives the disconnect.
         core.set_auto_tare(false);
 
@@ -6619,7 +6716,7 @@ mod tests {
         // Scale identity + every scale-derived reading is cleared...
         assert!(core.scale_capabilities().is_none());
         assert!(core.scale_uuids().is_none());
-        assert!(core.last_scale_weight.is_none());
+        assert_eq!(core.scale_link(), ScaleLink::Absent);
         assert!(core.last_scale_estimate.is_none());
         assert!(!core.scale_config_queried);
         // ...the stale watchdog is disarmed (no scale → no stale episode)...
@@ -7119,7 +7216,8 @@ mod tests {
             )
         );
 
-        core.connect_scale("Skale", &[]);
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
         core.set_profile_target_weight(Some(36.0));
         core.set_max_shot_duration(Some(80.0));
         core.set_profile_volume_limit(Some(36.0));
@@ -7135,6 +7233,8 @@ mod tests {
         // Once the shot runs, the same call reports the live armed picture.
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 1_000);
+        // The fallback tare at first flow lands.
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 1_100);
         let (armed, t) = core.stop_targets_projection();
         assert!(armed, "the shot is running");
         assert_eq!(t.weight, Some(36.0));
@@ -7146,10 +7246,11 @@ mod tests {
     #[test]
     fn a_scale_drop_mid_shot_reports_the_target_and_the_reason() {
         let mut core = CremaCore::new();
-        core.connect_scale("Skale", &[]);
+        core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(36.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 1_000);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 1_100);
         assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
         assert_eq!(core.weight_stop_blocked_by(), None);
 
@@ -7158,8 +7259,9 @@ mod tests {
         // The armed leg is gone — that part is honest, SAW genuinely cannot fire.
         assert_eq!(core.stop_targets_projection().1.weight, None);
         // …but the target the user set, and the reason, are still reportable.
+        // The cup had no weight yet: the user is asked to stop by hand.
         assert_eq!(core.effective_target_weight(), Some(36.0));
-        assert_eq!(core.weight_stop_blocked_by(), Some("no-scale"));
+        assert_eq!(core.weight_stop_blocked_by(), Some("scale-lost"));
     }
 
     /// Turning the stop OFF is a choice, not an impediment — no warning.
@@ -7180,7 +7282,13 @@ mod tests {
         // No scale: SAW cannot arm, so the projection must not promise it.
         let (_, t) = core.stop_targets_projection();
         assert_eq!(t.weight, None, "no scale, so no weight stop");
-        core.connect_scale("Skale", &[]);
+        core.connect_scale("BOOKOO_SC", &[]);
+        assert_eq!(
+            core.stop_targets_projection().1.weight,
+            None,
+            "connected, but not reporting"
+        );
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
         assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
     }
 
@@ -7191,7 +7299,7 @@ mod tests {
     #[test]
     fn stop_targets_survive_a_reset_so_a_ghc_shot_still_arms() {
         let mut core = CremaCore::new();
-        core.connect_scale("Skale", &[]);
+        core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(36.0));
         core.set_max_shot_duration(Some(80.0));
         core.set_profile_volume_limit(Some(36.0));
@@ -7207,7 +7315,10 @@ mod tests {
 
         // A GHC start: nothing but the machine's own state notification.
         core.on_notification(Source::De1State, &[2, 0], 0);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 500);
         core.on_notification(Source::De1State, &[4, 5], 1_000);
+        // The fallback tare at first flow lands.
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 1_100);
         let armed = core
             .auto_stop
             .as_ref()
@@ -9722,6 +9833,7 @@ mod tests {
         // Scale registered but NO weight target: the volume limit must STAY
         // — demoting it would leave the shot with no stop at all (review #29).
         core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
         assert_eq!(
             core.effective_stop_targets().and_then(|t| t.volume),
             Some(36.0)
@@ -9899,11 +10011,11 @@ mod tests {
         // characteristic. That echo must not become the by-weight target.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
         set_packet(&mut core, hotwater_settings(150.0));
         // The machine echoes the settings we actually wrote — 250 ml.
         let echo = hotwater_settings(HOT_WATER_STOP_ON_SCALE_ML).encode();
         core.on_notification(Source::De1ShotSettings, &echo, 500);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 900);
         core.on_notification(Source::De1State, &[6, 5], 1_000);
         // 155 g raw (≥ the user's 150 g target, far under 250): must stop.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(15_500), 3_000);

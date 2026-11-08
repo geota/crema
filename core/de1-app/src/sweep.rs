@@ -439,7 +439,12 @@ mod tests {
     fn sweep_after_drop_writes_current_packet() {
         let mut core = idle_core();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.scale_reading_seen = true; // it has reported a weight
+        // It has reported a weight.
+        core.on_notification(
+            crate::Source::ScaleWeight,
+            &crate::tests::bookoo_packet(1_000),
+            100,
+        );
         let first = core.connect_sweep(&snapshot(), 100);
         assert_eq!(packets(&first)[0].hot_water_volume_ml, 250.0);
         let _ = core.de1_link_lost();

@@ -164,6 +164,11 @@ pub struct World {
     user_held: Option<u8>,
     /// The flow heard when Start was tapped, until the machine leaves it.
     start_from: Option<MachineState>,
+    /// When the core last got a weight reading, ms.
+    last_weight_ms: Option<u64>,
+    /// Since when a flowing shot with a weight target has shown no live leg
+    /// and no reason, ms.
+    unguarded_since: Option<u64>,
     /// I6's own reading of the session the core should have open.
     open_mode: Option<ActiveMode>,
     /// Whether that session began before the core saw it.
@@ -222,6 +227,8 @@ impl World {
             pre_flush,
             was_down: false,
             state_heard_on_link: false,
+            last_weight_ms: None,
+            unguarded_since: None,
             starting: false,
             start_from: None,
             profiles: Vec::new(),
@@ -518,7 +525,13 @@ impl World {
     /// has no scale until the shells' next connect.
     fn check_session(&mut self) {
         let blocked = self.core.weight_stop_blocked_by();
-        if self.scale.is_none() || self.weight_target().is_none() || blocked == Some("no-scale") {
+        // The weight row is espresso's; a hot-water pour's own effects are
+        // checked at the tare, the skip and the stop.
+        if self.open_mode != Some(ActiveMode::Espresso)
+            || self.scale.is_none()
+            || self.weight_target().is_none()
+            || blocked == Some("no-scale")
+        {
             return;
         }
         let core_unseen = blocked == Some("began-unseen");
@@ -569,6 +582,7 @@ impl World {
             self.stale_open = false;
             self.dead_open = false;
             self.weights_heard += 1;
+            self.last_weight_ms = Some(self.now);
             let frame = SimScale::frame(grams);
             let out = self
                 .core
@@ -580,6 +594,52 @@ impl World {
             self.ingest(out, Who::Core);
         }
         self.check_session();
+        self.check_legs();
+    }
+
+    /// Whether the core's weight could be trusted now, by the world's own
+    /// facts. `slack_ms` allows for the core's clock, which only moves on an
+    /// input: with samples muted that's the next tick.
+    fn weight_trustable(&self, slack_ms: u64) -> bool {
+        self.scale.is_some()
+            && !self.unseen
+            && self
+                .last_weight_ms
+                .is_some_and(|at| self.now.saturating_sub(at) < 1_000 + slack_ms)
+    }
+
+    /// I4 and I5 over the core's projection.
+    fn check_legs(&mut self) {
+        if self.read_only {
+            return;
+        }
+        let (armed, targets) = self.core.stop_targets_projection();
+        if armed && targets.weight.is_some() && !self.weight_trustable(TICK_MS + 100) {
+            let detail = format!("weight leg live with scale {:?}", self.last_weight_ms);
+            self.violate(Invariant::I5, detail);
+        }
+        let flowing = self.heard == Some(MachineState::Espresso)
+            && self.de1.state == MachineState::Espresso
+            && self.de1.flowing();
+        let unguarded = flowing
+            && armed
+            && self.weight_target().is_some()
+            && targets.weight.is_none()
+            && targets.volume.is_none()
+            && targets.max_time.is_none()
+            && self.core.weight_stop_blocked_by().is_none();
+        if !unguarded {
+            self.unguarded_since = None;
+            return;
+        }
+        let since = *self.unguarded_since.get_or_insert(self.now);
+        if self.now.saturating_sub(since) > 6_500 {
+            self.violate(
+                Invariant::I4,
+                format!("no leg and no reason since {since} ms"),
+            );
+            self.unguarded_since = None;
+        }
     }
 
     fn land(&mut self, write: Write) {
@@ -778,6 +838,9 @@ impl World {
                 self.requests.push((byte, false));
                 if byte == MachineState::SkipToNext as u8 {
                     self.coverage.skips += 1;
+                    if !self.read_only && !self.weight_trustable(TICK_MS + 100) {
+                        self.violate(Invariant::I5, "SkipToNext on an untrusted weight".into());
+                    }
                     if self.unseen {
                         self.violate(Invariant::I6, "SkipToNext while unseen".into());
                     }

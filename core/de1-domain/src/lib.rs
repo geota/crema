@@ -104,6 +104,7 @@ pub mod profile_import;
 pub mod profile_roast;
 pub mod replay;
 pub mod saw_learning;
+pub mod scale_trust;
 pub mod session;
 pub mod settings_import;
 pub mod shot;
@@ -323,7 +324,7 @@ pub use stolen_serials::{
 };
 pub use stop::{
     AutoStop, STOP_WEIGHT_BEFORE, StopCapture, StopConfig, StopReason, StopTargets,
-    sav_counts_volume, volume_stop_arms,
+    sav_counts_volume,
 };
 pub use sync_failure::{
     AccountBlockReason, RETRY_AFTER_CAP_MS, SyncFailure, SyncOperation, SyncService,

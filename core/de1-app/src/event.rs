@@ -353,10 +353,13 @@ pub enum Event {
         /// with a reason, rather than silently dropping it.
         weight_configured: Option<f32>,
         /// Why [`weight`] is not armed despite [`weight_configured`] being set
-        /// — `"no-scale"`, `"began-unseen"` or `"untared-cup"`. `None` when the leg is armed,
-        /// nothing is configured, or the user turned the stop off (a choice,
-        /// not an impediment).
+        /// — `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`
+        /// or `"scale-lost"`. `None` when the leg is armed, nothing is
+        /// configured, or the user turned the stop off (a choice, not an
+        /// impediment).
         weight_blocked: Option<String>,
+        /// The note to show for [`weight_blocked`], the same on both shells.
+        weight_blocked_note: Option<String>,
     },
     /// A commanded stop has not been honoured — the machine is still in the
     /// shot — so the stop write is being re-commanded (issue #15: one lost
@@ -484,10 +487,11 @@ pub enum Event {
     /// for roughly a second. Emitted once per stale episode; a fresh reading
     /// re-arms it.
     ScaleStale,
-    /// The scale link looks dead: still no reading 5 s after
-    /// [`Event::ScaleStale`], or three scale writes in a row failed with no
-    /// reading in between. Emitted once per episode — a fresh reading re-arms
-    /// it. The shell drops the link at the transport (not a user disconnect)
+    /// The scale link looks dead: no sign of life 6 s after the last frame,
+    /// or after connect for a scale that never reported, or three scale
+    /// writes in a row failed with no reading in between. Emitted once until
+    /// a reading arrives, even across a reconnect, so a scale that never
+    /// reports isn't torn down every 6 s. The shell drops the link at the transport (not a user disconnect)
     /// so its reconnect loop recovers it, but only while its link still
     /// claims ready.
     ScaleLinkDead {
@@ -850,7 +854,7 @@ pub enum Event {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ScaleLinkDeadReason {
-    /// No weight reading for the stale timeout plus the 5 s grace.
+    /// No sign of life for 6 s: the stale timeout plus the 5 s grace.
     Silent,
     /// Three scale writes in a row failed with no reading in between.
     WritesFailing,

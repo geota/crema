@@ -8,6 +8,14 @@ pub enum Invariant {
     /// A core-initiated request is never sent while the last reported state is
     /// a foreign flow state.
     I3,
+    /// A flowing shot with a configured weight target has a live leg or a
+    /// blocked reason, past the link's dead timeout (6 s): a blip or a tare
+    /// still landing shows nothing (`DESIGN.md` §6).
+    I4,
+    /// The weight leg and the step-weight exit are live only on a trusted
+    /// weight: a scale connected, reporting within the last second, on a shot
+    /// the app saw begin.
+    I5,
     /// In a session first seen flowing: no tare, no `SkipToNext`, no
     /// weight-class stop.
     I6,
@@ -37,8 +45,10 @@ pub enum Status {
 
 impl Invariant {
     /// Every invariant, for reports.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::I3,
+        Self::I4,
+        Self::I5,
         Self::I6,
         Self::I7,
         Self::I9,
@@ -47,12 +57,19 @@ impl Invariant {
         Self::I13,
     ];
 
-    /// Where this invariant stands. I1, I2, I4, I5, I8, I12 and I14 to I21
+    /// Where this invariant stands. I1, I2, I8, I12 and I14 to I21
     /// need types later PRs add; I12's "no panic" holds by running at all.
     #[must_use]
     pub const fn status(self) -> Status {
         match self {
-            Self::I3 | Self::I6 | Self::I7 | Self::I9 | Self::I10 | Self::I11 => Status::Enforced,
+            Self::I3
+            | Self::I4
+            | Self::I5
+            | Self::I6
+            | Self::I7
+            | Self::I9
+            | Self::I10
+            | Self::I11 => Status::Enforced,
             Self::I13 => Status::PendingPr(8),
         }
     }

@@ -684,6 +684,7 @@ export interface CremaCore {
 		maxTime: number | null;
 		weightConfigured: number | null;
 		weightBlocked: string | null;
+		weightBlockedNote: string | null;
 	}>;
 	/**
 	 * Opt-in: arm the profile's volume limit (stop-at-volume) even while a

@@ -54,7 +54,6 @@
 		NoActiveProfileError,
 		ProfileSyncFailedError,
 		ScaleRequiredError,
-		weightBlockedNote,
 		type UiSnapshot
 	} from '#lib/state/index.js';
 	import { ShotPhase, MachineState, MmrRegister, HotWaterMode } from '#lib/core/crema-core.js';
@@ -1165,7 +1164,7 @@
 				target: yieldTarget.value,
 				unit: yieldTarget.unit,
 				pct: 0,
-				note: weightBlockedNote(stopTargets.weightBlocked)
+				note: stopTargets.weightBlockedNote ?? ''
 			});
 		if (maxVolumeCardVisible)
 			out.push({

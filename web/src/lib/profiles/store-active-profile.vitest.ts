@@ -25,7 +25,8 @@ const core = {
 		volume: null,
 		maxTime: null,
 		weightConfigured: null,
-		weightBlocked: null
+		weightBlocked: null,
+		weightBlockedNote: null
 	}))
 };
 

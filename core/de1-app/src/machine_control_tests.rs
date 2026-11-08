@@ -88,10 +88,11 @@ fn p1_hot_water_stop_is_never_reenforced() {
     assert_eq!(stops.len(), 1, "exactly one write, no retry");
 }
 
-/// P2: scale stalls mid-pour: nothing bounds the pour but the 250 ml packet.
-/// Flips in PR 8: stops near the target on the estimate.
+/// P2: scale stalls mid-pour. The packet holds the 250 ml backstop, so the
+/// app's `V` ml leg stands in and stops the pour at 120 ml (PR 5). PR 8 makes
+/// it the estimate, near the target.
 #[test]
-fn p2_hot_water_scale_stall_has_no_fallback() {
+fn p2_hot_water_scale_stall_stops_at_the_users_volume() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
@@ -122,7 +123,9 @@ fn p2_hot_water_scale_stall_has_no_fallback() {
         let o = core.on_notification(Source::De1ShotSample, &sample((t / 8) as u16), t + 1);
         stops.extend(state_writes(&o));
     }
-    assert!(stops.is_empty());
+    assert_eq!(stops, [MachineState::Idle as u8], "one stop, at V");
+    let poured = core.volume_integrator.pour_ml();
+    assert!((120.0..140.0).contains(&poured), "{poured} ml");
 }
 
 /// A scale write that tares a Bookoo.
@@ -346,6 +349,12 @@ fn a_shot_first_seen_heating_is_tared_and_stops_on_weight() {
     assert_eq!(core.weight_stop_blocked_by(), None);
     let o2 = core.on_notification(Source::De1State, &[4, 5], 200);
     assert_eq!(tares(&o) + tares(&o2), 1, "the fallback tare at first flow");
+    assert_eq!(
+        core.stop_targets_projection().1.weight,
+        None,
+        "pending until the tare lands"
+    );
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 300);
     assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
 }
 
@@ -359,7 +368,9 @@ fn a_shot_seen_from_its_start_keeps_its_weight_stop_across_a_drop() {
     core.de1_link_lost();
     let o = core.on_notification(Source::De1State, &[4, 5], 3_000);
     assert_eq!(tares(&o), 0);
+    // A 1 s gap: weight is off but nothing is shown, and a reading restores it.
     assert_eq!(core.weight_stop_blocked_by(), None);
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 3_050);
     assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
     let mut stops = vec![];
     for i in 0..60u64 {
@@ -377,6 +388,7 @@ fn the_shot_after_an_unseen_one_is_seen() {
     core.on_notification(Source::De1State, &[4, 5], 100);
     assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
     core.on_notification(Source::De1State, &[2, 0], 5_000);
+    core.on_notification(Source::ScaleWeight, &bookoo(20.0), 5_000);
     assert_eq!(core.weight_stop_blocked_by(), None);
     assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
     let o = core.on_notification(Source::De1State, &[4, 5], 9_000);
@@ -416,10 +428,12 @@ fn the_link_records_when_an_outage_began() {
     assert_eq!(core.link.lost_at, None);
 }
 
-/// P4: nothing armed at first flow; a scale arrives during Pouring.
-/// Flips in PR 7: stops at 36 g.
+/// P4: nothing armed at first flow; a scale arrives during Pouring. PR 5 arms
+/// an auto-stop for a configured weight target with no leg live yet, so the
+/// leg goes live once the scale is trusted: it stops at 36 g. PR 7 does the
+/// same for every leg.
 #[test]
-fn p4_scale_after_pouring_begins_never_arms_saw_with_default_settings() {
+fn p4_a_scale_arriving_after_pouring_begins_stops_at_the_target() {
     let mut core = CremaCore::new();
     core.set_profile_target_weight(Some(36.0));
     // Default settings: max shot 0 = None; no volume limit.
@@ -427,10 +441,14 @@ fn p4_scale_after_pouring_begins_never_arms_saw_with_default_settings() {
     core.on_notification(Source::De1State, &[4, 5], 100);
     core.connect_scale("BOOKOO_SC", &[]);
     let mut stops = vec![];
+    let mut stopped_at = None;
     let mut g = 20.0;
     for i in 0..300u64 {
         g += 0.2;
         let o = core.on_notification(Source::ScaleWeight, &bookoo(g), 200 + i * 100);
+        if !state_writes(&o).is_empty() && stopped_at.is_none() {
+            stopped_at = Some(g);
+        }
         stops.extend(state_writes(&o));
         let o = core.on_notification(
             Source::De1ShotSample,
@@ -439,14 +457,16 @@ fn p4_scale_after_pouring_begins_never_arms_saw_with_default_settings() {
         );
         stops.extend(state_writes(&o));
     }
-    assert!(core.auto_stop.is_none());
-    assert!(stops.is_empty());
+    assert!(core.auto_stop.is_some());
+    let g = stopped_at.expect("a weight stop");
+    assert!((33.0..37.0).contains(&g), "stopped at {g} g");
 }
 
-/// P5: a connected scale that never reports: volume stays demoted, no watchdog.
-/// Flips in PR 5: stops at 40 ml, `ScaleSilent`.
+/// P5: a connected scale that never reports doesn't demote the volume limit:
+/// the shot stops at 40 ml. The link is dead 6 s after connect, once, and the
+/// weight row says the scale isn't reporting (PR 5).
 #[test]
-fn p5_silent_scale_demotes_volume_and_is_never_flagged() {
+fn p5_a_silent_scale_leaves_the_volume_limit_live() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_profile_target_weight(Some(36.0));
@@ -459,6 +479,12 @@ fn p5_silent_scale_demotes_volume_and_is_never_flagged() {
         let t = i * 100;
         let o = core.on_notification(Source::De1ShotSample, &sample((i * 12) as u16), t);
         stops.extend(state_writes(&o));
+        watchdog.extend(
+            o.events
+                .iter()
+                .filter(|e| matches!(e, Event::ScaleStale | Event::ScaleLinkDead { .. }))
+                .map(|e| format!("{e:?}")),
+        );
         let o = core.on_tick(t + 1);
         stops.extend(state_writes(&o));
         watchdog.extend(
@@ -468,9 +494,10 @@ fn p5_silent_scale_demotes_volume_and_is_never_flagged() {
                 .map(|e| format!("{e:?}")),
         );
     }
-    assert!(core.volume_integrator.pour_ml() > 40.0);
-    assert!(stops.is_empty());
-    assert!(watchdog.is_empty());
+    assert_eq!(stops.first(), Some(&(MachineState::Idle as u8)));
+    assert!(core.volume_integrator.pour_ml() >= 40.0);
+    assert_eq!(watchdog, ["ScaleLinkDead { reason: Silent }"]);
+    assert_eq!(core.weight_stop_blocked_by(), Some("scale-silent"));
 }
 
 fn run_shot(core: &mut CremaCore) -> u64 {
@@ -837,10 +864,11 @@ fn r1_lost_flush_ends_the_start_and_leaves_steam_alone() {
     assert!(state_writes(&core.on_tick(31_000)).is_empty());
 }
 
-/// Review: a 1 s scale gap past a 36 ml limit stops the shot at once, because
-/// the volume leg rearms when the scale goes. Flips in PR 5: no volume stop.
+/// Review: a scale lost past a 36 ml limit doesn't rearm the limit, which
+/// would stop the shot at an empty cup on a preinfusion-free profile. The
+/// backstop (114 ml at 36 g) bounds it instead (PR 5).
 #[test]
-fn review_scale_gap_rearms_a_passed_volume_limit() {
+fn review_a_lost_scale_never_rearms_a_passed_volume_limit() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
@@ -875,7 +903,9 @@ fn review_scale_gap_rearms_a_passed_volume_limit() {
             )
         });
     }
-    assert!(volume_stop);
+    assert!(!volume_stop);
+    assert_eq!(core.weight_stop_blocked_by(), Some("scale-lost"));
+    assert_eq!(core.stop_targets_projection().1.volume, Some(114.0));
 }
 
 /// Review: a stop owed across a 25 s DE1 outage goes out on the first sample

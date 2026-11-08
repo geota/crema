@@ -40,17 +40,14 @@ data class StopTargetsView(
      *  configured stays on screen when a scale drops instead of vanishing. */
     val weightConfiguredG: Float? = null,
     /** Why [weightG] is null despite [weightConfiguredG] being set —
-     *  `"no-scale"`, `"began-unseen"` or `"untared-cup"`; null when armed, unset, or the user
-     *  turned the stop off. */
+     *  `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"` or
+     *  `"scale-lost"`; null when armed, unset, or the user turned the stop off. */
     val weightBlocked: String? = null,
+    /** The core's note for [weightBlocked], the same on both shells. */
+    val weightBlockedNote: String? = null,
 ) {
-    /** Human reason for a configured-but-unarmable weight stop. */
-    val weightBlockedLabel: String? get() = when (weightBlocked) {
-        "no-scale" -> "no scale"
-        "began-unseen" -> "Started before Crema connected"
-        "untared-cup" -> "cup not tared"
-        else -> null
-    }
+    /** Human reason for a configured-but-unarmable weight stop: the core's. */
+    val weightBlockedLabel: String? get() = weightBlockedNote
 
     /** True when no leg will fire — the shot would run until the machine's own
      *  profile limits end it. */
