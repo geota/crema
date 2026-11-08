@@ -151,13 +151,18 @@ data class PendingEdit(
     val attempts: Int = 0,
     /** Unix ms before which the drain leaves this shot alone; 0 = due. */
     val nextAttemptAt: Long = 0,
+    /** Unix ms of the last tier probe a Premium refusal of this edit made; 0 = none. */
+    val tierProbedAt: Long = 0,
 ) {
     /** Whether this still owes Visualizer anything. */
     val owes: Boolean get() = annotations || barista
 
-    /** This and [other] together, due at once (a new edit). */
-    fun with(other: PendingEdit) =
-        PendingEdit(annotations = annotations || other.annotations, barista = barista || other.barista)
+    /** This and [other] together, due at once (a new edit). A probe stamp stays: one a day. */
+    fun with(other: PendingEdit) = PendingEdit(
+        annotations = annotations || other.annotations,
+        barista = barista || other.barista,
+        tierProbedAt = maxOf(tierProbedAt, other.tierProbedAt),
+    )
 }
 
 @Serializable

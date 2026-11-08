@@ -14,6 +14,7 @@ import io.ktor.http.headersOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -564,5 +565,79 @@ class VisualizerEditSyncTest {
         val unchanged = ShotMergeInput(tags = emptyList(), tagsPending = false, barista = null, baristaPending = false, hasSeries = false, hasProfile = false, isBrew = false)
         assertFalse(s.mergeAndApply("s2", wire("Ana"), before = unchanged))
         assertEquals(listOf("s2" to "Ana"), fills)
+    }
+
+    @Test
+    fun `storeMarks has the mark on disk when it returns, even before load`() {
+        seed(premium = false)
+        val s = sync()
+        assertTrue(s.markShotEdited(edited.id, barista = true))
+        val stored = CoroutineScope(Dispatchers.Default).async {
+            s.storeMarks()
+            store.load().pendingEdits
+        }
+        runBlocking { s.load() }
+        assertEquals(mapOf(edited.id to PendingEdit(barista = true)), runBlocking { stored.await() })
+    }
+
+    @Test
+    fun `a stored barista clear is not refilled by a pull after a kill (V3 #6)`() {
+        seed(premium = false)
+        val cleared = edited.copy(barista = null)
+        history[cleared.id] = cleared
+        val s = sync().also { runBlocking { it.load() } }
+        // The edit path: the mark first, stored, then the row's save; a kill after.
+        s.markShotEdited(cleared.id, barista = true)
+        runBlocking { s.storeMarks() }
+        val restarted = sync().also { runBlocking { it.load() } }
+        restarted.mergeAndApply(cleared.id, wire("Ana"))
+        assertEquals(emptyList<Pair<String, String>>(), fills)
+    }
+
+    @Test
+    fun `a mark already set and due asks for no store, so a keystroke rewrites nothing`() {
+        seed(premium = false)
+        val s = sync().also { runBlocking { it.load() } }
+        assertTrue(s.markShotEdited(edited.id, annotations = true))
+        assertFalse(s.markShotEdited(edited.id, annotations = true))
+        assertTrue("a new field is a change", s.markShotEdited(edited.id, barista = true))
+    }
+
+    @Test
+    fun `a Premium refusal probes the tier once a day - Free retries what a free account takes`() {
+        seed(premium = true)
+        patchStatus = HttpStatusCode.Forbidden
+        patchBody = probeRefusal
+        probeStatus = HttpStatusCode.Forbidden
+        val s = sync().also { runBlocking { it.load() } }
+        s.markShotEdited(edited.id, annotations = true)
+        runBlocking { s.pushPendingEdit(edited.id, fallback = edited) }
+        assertEquals(1, probes())
+        val stored = runBlocking { store.load() }
+        assertEquals(false, stored.premium)
+        assertEquals("due again at once", 0L, stored.pendingEdits.getValue(edited.id).nextAttemptAt)
+        // Free now: the journal's Premium-only fields drop, nothing is left, and the mark clears.
+        runBlocking { s.pushPendingEdit(edited.id, fallback = edited) }
+        assertEquals(emptyMap<String, PendingEdit>(), runBlocking { store.load() }.pendingEdits)
+    }
+
+    @Test
+    fun `a Premium refusal with Premium confirmed is for good, and an unanswered probe waits a day`() {
+        seed(premium = true)
+        patchStatus = HttpStatusCode.Forbidden
+        patchBody = probeRefusal
+        probeStatus = HttpStatusCode.InternalServerError
+        val s = sync().also { runBlocking { it.load() } }
+        s.markShotEdited(edited.id, annotations = true)
+        runBlocking { s.pushPendingEdit(edited.id, fallback = edited) }
+        runBlocking { s.pushPendingEdit(edited.id, fallback = edited) }
+        assertEquals("stamped, though unanswered", 1, probes())
+        assertTrue(runBlocking { store.load() }.pendingEdits.containsKey(edited.id))
+        clock += VisualizerSync.PREMIUM_REFRESH_INTERVAL_MS
+        probeStatus = HttpStatusCode.Created
+        runBlocking { s.pushPendingEdit(edited.id, fallback = edited) }
+        assertEquals(2, probes())
+        assertEquals(emptyMap<String, PendingEdit>(), runBlocking { store.load() }.pendingEdits)
+        assertTrue(runBlocking { store.load() }.log.any { it.error?.startsWith("This edit can't reach Visualizer") == true })
     }
 }

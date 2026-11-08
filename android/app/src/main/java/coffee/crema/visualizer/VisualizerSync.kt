@@ -1188,11 +1188,17 @@ class VisualizerSync(
             settleSentEdit(localId, edit, inputs)
             return null
         }
-        if (uploadPolicy.editFailureIsTerminal(failure)) {
+        val tier = if (failure is VisualizerError.PremiumGated) checkTierFor(localId) else null
+        if (uploadPolicy.editFailureIsTerminal(failure) || tier == true) {
             pendingEdits.remove(localId)
             storePendingEdits()
             logSync("skip", localId, shot.profileName ?: "Shot", "This edit can't reach Visualizer: ${failure.message}")
             if (fromEdit) notify("Visualizer won't take this shot's edit: ${failure.message}")
+        } else if (tier == false) {
+            // Free after all: the next try sends only what a free account takes.
+            pendingEdits.computeIfPresent(localId) { _, cur -> cur.copy(nextAttemptAt = 0) }
+            storePendingEdits()
+            nextDrainAt()?.let(::scheduleDrain)
         } else {
             pendingEdits.computeIfPresent(localId) { _, cur ->
                 val made = cur.attempts + 1
@@ -1203,6 +1209,21 @@ class VisualizerSync(
             nextDrainAt()?.let(::scheduleDrain)
         }
         return failure
+    }
+
+    /**
+     * A Premium refusal on [localId]'s edit: the cached tier was wrong. Probe it
+     * for real (a sentinel write), at most once a day per mark, stamped before
+     * it goes so an unanswered probe waits too. True: Premium confirmed and
+     * still refused, so the edit is for good; false: free, now cached; null: no
+     * probe or no answer.
+     */
+    private suspend fun checkTierFor(localId: String): Boolean? {
+        val cur = pendingEdits[localId] ?: return null
+        if (cur.tierProbedAt > 0 && now() - cur.tierProbedAt < PREMIUM_REFRESH_INTERVAL_MS) return null
+        pendingEdits.computeIfPresent(localId) { _, c -> c.copy(tierProbedAt = now()) }
+        storePendingEdits()
+        return refreshPremium()
     }
 
     /** The PATCH inputs for [edit] on [shot]: only the marked fields. */
@@ -1247,18 +1268,38 @@ class VisualizerSync(
 
     /**
      * Mark what a History edit of [localId] changed: the journal fields
-     * ([annotations]) or the barista. Call it before the row is saved; the mark
-     * is in memory at once and stored next.
+     * ([annotations]) or the barista. In memory at once, so a pull from now on
+     * sees it. True when the stored set must change: the caller then runs
+     * [storeMarks] before it queues the row's save, so a kill can't leave the
+     * row saved without its mark (a barista clear would be refilled by the next
+     * pull, V3 #6). False when the mark was already there, due: a notes
+     * keystroke then rewrites nothing.
      */
-    fun markShotEdited(localId: String, annotations: Boolean = false, barista: Boolean = false) {
+    fun markShotEdited(localId: String, annotations: Boolean = false, barista: Boolean = false): Boolean {
         val edit = PendingEdit(annotations = annotations, barista = barista)
-        if (!edit.owes) return
-        pendingEdits.merge(localId, edit) { a, b -> a.with(b) }
-        scope.launch { storePendingEdits() }
+        if (!edit.owes) return false
+        var changed = false
+        pendingEdits.compute(localId) { _, cur ->
+            val next = cur?.with(edit) ?: edit
+            changed = next != cur
+            next
+        }
+        return changed
+    }
+
+    /**
+     * Store the marks made so far, waiting for own state to load first (a
+     * store before it is a no-op, and [load] keeps marks made early). Run it
+     * before the save of a row [markShotEdited] marked.
+     */
+    suspend fun storeMarks() {
+        if (ownState.await()) storePendingEdits()
     }
 
     /** The History barista edit — call before [patchEditedShot] for that shot. */
-    fun markBaristaEdited(localId: String) = markShotEdited(localId, barista = true)
+    fun markBaristaEdited(localId: String) {
+        if (markShotEdited(localId, barista = true)) scope.launch { storeMarks() }
+    }
 
     /**
      * Store the live pending set (read under the persist lock, so the last write

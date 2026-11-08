@@ -63,4 +63,21 @@ class ApplyRemoteShotTest {
         library.applyRemoteShot("s1", ShotPatch(barista = "Bo"), PulledParts())
         assertEquals("Ana", vm.ui.value.history.single { it.id == "s1" }.barista)
     }
+
+    /** The barista clear's mark is on disk by the time the row's save runs (V3 #6). */
+    @Test
+    fun `a barista edit stores its mark with the row`() {
+        val vm = VmHarness.build(store)
+        VmHarness.awaitStartupLoaded(vm)
+        val library = VmHarness.library(vm)
+        library.insertPulledShots(listOf(StoredShot(id = "s1", completedAtMs = 1, durationMs = 1, barista = "Ana", visualizerId = "v-1")))
+        VmHarness.idleUntil("the row") { vm.ui.value.history.any { it.id == "s1" } }
+
+        vm.setShotPerson("s1", "barista", null)
+        val disk = coffee.crema.visualizer.VisualizerStore(VmHarness.app(), kotlinx.serialization.json.Json { ignoreUnknownKeys = true })
+        VmHarness.idleUntil("the mark on disk") {
+            kotlinx.coroutines.runBlocking { disk.load() }.pendingEdits.containsKey("s1")
+        }
+        assertEquals(coffee.crema.visualizer.PendingEdit(barista = true), kotlinx.coroutines.runBlocking { disk.load() }.pendingEdits["s1"])
+    }
 }

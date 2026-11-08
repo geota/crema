@@ -2421,14 +2421,13 @@ class LibraryController(
     /** Apply a user rating / tasting-notes edit to a logged shot. Persisted.
      *  An already-uploaded shot mirrors the edit to Visualizer (soft). */
     fun updateShot(id: String, rating: Int, notes: String) {
-        markForVisualizer(id, annotations = true)
+        val marked = markForVisualizer(id, annotations = true)
         editHistory { rows ->
             rows.mapped {
             if (it.id == id) it.copy(rating = rating.coerceIn(0, 5).takeIf { r -> r > 0 }, notes = notes.ifBlank { null }) else it
             }
         }
-        val snapshot = uiState().history
-        scope.launch { historyStore.save(snapshot) }
+        saveMarkedEdit(marked)
         schedulePatchEdited(id)
         onShotAnnotationsEdited(id)
     }
@@ -2458,7 +2457,7 @@ class LibraryController(
     fun setShotPerson(id: String, field: String, name: String?) {
         val value = name?.trim()?.takeIf { it.isNotEmpty() }
         // Only a barista edit sends the barista (final review 06 #1).
-        if (field == "barista") markForVisualizer(id, barista = true)
+        val marked = field == "barista" && markForVisualizer(id, barista = true)
         editHistory { rows ->
             rows.mapped {
             when {
@@ -2469,8 +2468,7 @@ class LibraryController(
             }
             }
         }
-        val snapshot = uiState().history
-        scope.launch { historyStore.save(snapshot) }
+        saveMarkedEdit(marked)
         if (field == "barista") schedulePatchEdited(id)
         onShotAnnotationsEdited(id)
     }
@@ -2480,10 +2478,9 @@ class LibraryController(
      * override. Persisted; mirrors to the uploaded copy like [updateShot].
      */
     fun setShotPrivacy(id: String, privacy: String?) {
-        markForVisualizer(id, annotations = true)
+        val marked = markForVisualizer(id, annotations = true)
         editHistory { rows -> rows.mapped { if (it.id == id) it.copy(privacy = privacy) else it } }
-        val snapshot = uiState().history
-        scope.launch { historyStore.save(snapshot) }
+        saveMarkedEdit(marked)
         schedulePatchEdited(id)
     }
 
@@ -2493,10 +2490,9 @@ class LibraryController(
      * the fact). Persisted; mirrors to the uploaded copy like [updateShot].
      */
     fun setShotGrind(id: String, grind: Float?) {
-        markForVisualizer(id, annotations = true)
+        val marked = markForVisualizer(id, annotations = true)
         editHistory { rows -> rows.mapped { if (it.id == id) it.copy(grindSetting = grind) else it } }
-        val snapshot = uiState().history
-        scope.launch { historyStore.save(snapshot) }
+        saveMarkedEdit(marked)
         schedulePatchEdited(id)
         onShotAnnotationsEdited(id)
     }
@@ -2549,21 +2545,40 @@ class LibraryController(
             if (credited) persistLibrary()
         }
         val bagDebit = bean?.let { debitBag(it, dose) }
-        markForVisualizer(id, annotations = true)
+        val marked = markForVisualizer(id, annotations = true)
         editHistory { rows -> rows.mapped { if (it.id == id) it.copy(bean = beanSnapshot, bagDebitG = bagDebit) else it } }
-        val snapshot = uiState().history
-        scope.launch { historyStore.save(snapshot) }
+        saveMarkedEdit(marked)
         schedulePatchEdited(id)
         onShotAnnotationsEdited(id)
     }
 
     /**
-     * Mark what an edit of an uploaded shot changed, before the row saves, so
-     * the PATCH sends only that and a failed one is retried by the drain.
+     * Mark what an edit of an uploaded shot changed, before the row changes, so
+     * the PATCH sends only that and a failed one is retried by the drain. True
+     * when the stored marks must change first ([saveMarkedEdit]).
      */
-    private fun markForVisualizer(id: String, annotations: Boolean = false, barista: Boolean = false) {
-        if (uiState().history.firstOrNull { it.id == id }?.visualizerId == null) return
-        visualizer.markShotEdited(id, annotations = annotations, barista = barista)
+    private fun markForVisualizer(id: String, annotations: Boolean = false, barista: Boolean = false): Boolean {
+        if (uiState().history.firstOrNull { it.id == id }?.visualizerId == null) return false
+        return visualizer.markShotEdited(id, annotations = annotations, barista = barista)
+    }
+
+    /**
+     * Save the history after an edit, the mark ([marked]) on disk first: a kill
+     * between the two then leaves at most a mark with nothing new to send, never
+     * a saved barista clear without its mark, which the next pull would refill
+     * (V3 #6). The rows are read as the save runs, so a later edit's save that
+     * got there first is never undone by this one.
+     */
+    private fun saveMarkedEdit(marked: Boolean) {
+        if (!marked) {
+            val snapshot = uiState().history
+            scope.launch { historyStore.save(snapshot) }
+            return
+        }
+        scope.launch {
+            visualizer.storeMarks()
+            historyStore.save(uiState().history)
+        }
     }
 
     /** Debounced edit→Visualizer mirror: the notes field fires per keystroke
