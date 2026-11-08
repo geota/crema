@@ -396,48 +396,80 @@ describe('the temporary file', () => {
 	});
 });
 
-/** Each local file header's compression method, in order. */
-function methods(zip: Uint8Array): number[] {
-	const out: number[] = [];
-	for (let i = 0; i + 30 <= zip.length; i++) {
-		if (zip[i] === 0x50 && zip[i + 1] === 0x4b && zip[i + 2] === 0x03 && zip[i + 3] === 0x04) {
-			out.push(zip[i + 8] | (zip[i + 9] << 8));
-			const nameLen = zip[i + 26] | (zip[i + 27] << 8);
-			i += 29 + nameLen;
-		}
+/** Each entry's name, method and flags, from the central directory. */
+function directory(zip: Uint8Array): { name: string; method: number; flags: number }[] {
+	const u16 = (at: number) => zip[at] | (zip[at + 1] << 8);
+	const u32 = (at: number) => (u16(at) | (u16(at + 2) << 16)) >>> 0;
+	let end = zip.length - 22;
+	while (end >= 0 && u32(end) !== 0x06054b50) end--;
+	if (end < 0) throw new Error('no end of central directory');
+	const out: { name: string; method: number; flags: number }[] = [];
+	let at = u32(end + 16);
+	for (let n = u16(end + 10); n > 0; n--) {
+		if (u32(at) !== 0x02014b50) throw new Error('bad central directory');
+		const nameLen = u16(at + 28);
+		out.push({
+			name: new TextDecoder().decode(zip.subarray(at + 46, at + 46 + nameLen)),
+			method: u16(at + 10),
+			flags: u16(at + 8)
+		});
+		at += 46 + nameLen + u16(at + 30) + u16(at + 32);
 	}
 	return out;
+}
+
+/** Random-looking bytes from a fixed seed, as a JPEG barely compresses. Android's
+ *  `WebStreamedBackupTest` makes the same ones. */
+function fixturePhoto(length = 4096): Uint8Array {
+	let x = 20_261_108;
+	return Uint8Array.from({ length }, () => {
+		x = (Math.imul(x, 1_103_515_245) + 12_345) & 0x7fffffff;
+		return (x >>> 16) & 0xff;
+	});
 }
 
 /** The cross-shell fixture Android's reader is tested on (`WebStreamedBackupTest`). */
 const FIXTURE = resolve(process.cwd(), '../android/app/src/test/resources/backup/web-streamed-photo.crema.zip');
 
 describe('a streamed zip Android can read (#386 review)', () => {
-	const build = () =>
-		streamBackup({
-			...input([shot(0)], { beans: [JSON.stringify({ ...blankBean('bean-1'), name: 'Kenya' })] }),
-			photos: async function* () {
-				// Random bytes, as a JPEG barely compresses.
-				yield ['bean-1', Uint8Array.from({ length: 4096 }, (_, i) => (i * 7919 + 13) % 251)] as [
-					string,
-					Uint8Array
-				];
-			}
-		});
+	beforeEach(() => {
+		// Entries carry the time they were written: pinned, the build's zip is
+		// the same from one run to the next.
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(NOW);
+	});
+	afterEach(() => vi.useRealTimers());
+
+	const build = async () =>
+		new Uint8Array(
+			await (
+				await streamBackup({
+					...input([shot(0)], { beans: [JSON.stringify({ ...blankBean('bean-1'), name: 'Kenya' })] }),
+					photos: async function* () {
+						yield ['bean-1', fixturePhoto()] as [string, Uint8Array];
+					}
+				})
+			).file.arrayBuffer()
+		);
 
 	it('every entry is deflated: Java refuses a stored entry with a data descriptor', async () => {
-		const zip = new Uint8Array(await (await build()).file.arrayBuffer());
-		expect(methods(zip)).toEqual([8, 8]);
+		expect(directory(await build()).map((e) => e.method)).toEqual([8, 8]);
 	});
 
-	it('the committed fixture is one this build writes', async () => {
-		const zip = new Uint8Array(await (await build()).file.arrayBuffer());
+	it('the committed fixture is what this build writes (#386 fix check)', async () => {
+		const zip = await build();
 		if (process.env.CREMA_WRITE_FIXTURE === '1') writeFileSync(FIXTURE, zip);
 		const fixture = new Uint8Array(readFileSync(FIXTURE));
-		expect(methods(fixture)).toEqual([8, 8]);
-		const entries = unzipSync(fixture);
-		expect(Object.keys(entries)).toEqual([BACKUP_JSONL_MEMBER, 'images/bean-1']);
-		expect(entries['images/bean-1'].length).toBe(4096);
+		const stale = 'The fixture is stale: rerun this test with CREMA_WRITE_FIXTURE=1 and commit it.';
+		// Entry by entry, so a fflate bump that only moves bytes around doesn't count.
+		expect(directory(fixture), stale).toEqual(directory(zip));
+		const ours = unzipSync(zip);
+		const theirs = unzipSync(fixture);
+		expect(Object.keys(theirs), stale).toEqual([BACKUP_JSONL_MEMBER, 'images/bean-1']);
+		for (const name of Object.keys(ours)) {
+			expect(Buffer.from(theirs[name]).equals(Buffer.from(ours[name])), `${name}: ${stale}`).toBe(true);
+		}
+		expect(Buffer.from(theirs['images/bean-1']).equals(Buffer.from(fixturePhoto()))).toBe(true);
 	});
 });
 
