@@ -37,6 +37,11 @@ export interface PendingEdit {
 	 * day) before tags are sent again.
 	 */
 	readonly tierSignal?: true;
+	/**
+	 * Unix ms of the last tier probe for {@link tierSignal}, answered or not:
+	 * one probe a day per signal, and a fresh cached tier never stands in.
+	 */
+	readonly tierProbedAt?: number;
 	/** Failed attempts since the last success. */
 	readonly attempts?: number;
 	/** Unix ms before which the drain leaves this shot alone. */

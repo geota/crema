@@ -262,6 +262,24 @@ describe('ShotSync.pullAndReconcileShots — unbound tombstones (#331)', () => {
 		return purge;
 	};
 
+	it('a row whose curve is still loading waits for it, and holds the cursor', async () => {
+		const history = mkHistory([shot({ visualizerId: 'viz-1', metadata: {}, record: { duration: 30_000, samples: [] } } as Partial<StoredShot>)]);
+		const store = history as unknown as { seriesReady: () => Promise<boolean>; applyRemote: ReturnType<typeof vi.fn> };
+		store.seriesReady = async () => false; // the load timed out
+		store.applyRemote = vi.fn();
+		h.reconcile = [{ kind: 'update', localId: 's1', remote: { id: 'viz-1' } } as unknown as ReconcileAction];
+		const reply = (req: HttpRequest) =>
+			req.url.includes('/shots?')
+				? json({ data: [{ id: 'viz-1', clock: 1000, updated_at: 2000 }], paging: { count: 1, page: 1, limit: 50, pages: 1 } })
+				: req.url.includes('/profile')
+					? Effect.fail(new HttpStatusError({ status: 422, url: req.url }))
+					: json({ id: 'viz-1', duration: 30, data: { espresso_pressure: [9] }, timeframe: [0] });
+		const out = await pull(history, reply);
+		h.reconcile = [];
+		expect(out.held).toBe(true);
+		expect(store.applyRemote).not.toHaveBeenCalled();
+	});
+
 	it('unbound_tombstone_expires_after_complete_pull', async () => {
 		markUnboundTombstone('gone', false);
 		const history = mkHistory([]);

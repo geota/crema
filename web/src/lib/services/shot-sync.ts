@@ -571,7 +571,8 @@ export class ShotSync extends Context.Service<
 			remote: WireShot[],
 			samplesById?: ReadonlyMap<string, TimedSample[]>,
 			profilesById?: ReadonlyMap<string, unknown>,
-			before?: ReadonlyMap<string, ShotMergeInput>
+			before?: ReadonlyMap<string, ShotMergeInput>,
+			seriesLoaded?: boolean
 		) => Effect.Effect<ReconcileApplied>;
 		readonly pullAndReconcileShots: (
 			history: HistoryStore,
@@ -636,7 +637,15 @@ export const ShotSyncLive = Layer.effect(
 			// skip cleanly (no risk of overwriting a Visualizer-side edit —
 			// the core builder additionally drops blank inline-bean fields).
 			const coffeeBagId = resolveCoffeeBagId(shot);
-			const tagList = resolveTagList(shot);
+			// Tags go absolute only onto a new row. A re-upload of a bound shot
+			// would undo tag changes made on the website, so its tags go as
+			// marks: the drain adds them onto the server's own list.
+			const rebind = shot.visualizerId != null;
+			const localTags = resolveTagList(shot);
+			if (rebind && localTags != null && localTags.length > 0) {
+				markShotEdit(shot.id, { tags: { before: [], after: localTags } });
+			}
+			const tagList = rebind ? null : localTags;
 			const grinderModel = resolveGrinderModel(shot, getSettingsStore().current.grinderModel);
 			if (
 				coffeeBagId != null ||
@@ -872,15 +881,17 @@ export const ShotSyncLive = Layer.effect(
 		 * to store mutations — wrapped in `Effect.sync` (calls wasm + the rune
 		 * store synchronously, same as the old module). Answers how many new rows
 		 * a full history refused (the rest of the plan still applies), and how
-		 * many rows edited mid-pull still need their curve. `before` is each row
-		 * as the pull began, for that check.
+		 * many rows still need their curve: edited mid-pull, or not loaded yet
+		 * (`seriesLoaded` false: the load timed out). `before` is each row as
+		 * the pull began, for the edit check.
 		 */
 		const applyShotReconciliation = (
 			history: HistoryStore,
 			remote: WireShot[],
 			samplesById?: ReadonlyMap<string, TimedSample[]>,
 			profilesById?: ReadonlyMap<string, unknown>,
-			before?: ReadonlyMap<string, ShotMergeInput>
+			before?: ReadonlyMap<string, ShotMergeInput>,
+			seriesLoaded = true
 		): Effect.Effect<ReconcileApplied> =>
 			Effect.sync(() => {
 				let refused = 0;
@@ -912,6 +923,12 @@ export const ShotSyncLive = Layer.effect(
 					const row = history.get(localId);
 					if (!row) return;
 					const input = mergeInputOf(row, edits.get(localId));
+					// Its curve may still be loading: a backfill now would take
+					// Visualizer's copy over the row's own. It waits, and holds.
+					if (!seriesLoaded && !input.hasSeries && !input.isBrew) {
+						held += 1;
+						return;
+					}
 					const was = before?.get(localId);
 					if (was && editedDuringFetch(was, input)) {
 						if (!input.hasSeries && !input.isBrew) held += 1;
@@ -982,8 +999,9 @@ export const ShotSyncLive = Layer.effect(
 		) {
 			// Not from an account this device can't name.
 			if (readSyncConfig().accountUnconfirmed) return yield* new NotAuthenticatedError();
-			// A row read before its curve loaded would look like it has none.
-			yield* Effect.promise(() => history.seriesReady());
+			// A row read before its curve loaded would look like it has none:
+			// if the load timed out, a row with no curve may yet have one.
+			const seriesLoaded = yield* Effect.promise(() => history.seriesReady());
 			const run = beginPullRun();
 			const before = mergeInputsOf(history);
 			const { shots, samplesById, profilesById, truncated, rowsMissed } = yield* pullAllShotsSince(
@@ -992,7 +1010,7 @@ export const ShotSyncLive = Layer.effect(
 			);
 			const { refused, held } =
 				shots.length > 0
-					? yield* applyShotReconciliation(history, shots, samplesById, profilesById, before)
+					? yield* applyShotReconciliation(history, shots, samplesById, profilesById, before, seriesLoaded)
 					: { refused: 0, held: 0 };
 			if (refused > 0) {
 				// One line for the run: a large pull would push out the whole log.
@@ -1221,7 +1239,14 @@ export const ShotSyncLive = Layer.effect(
 						error: `This edit can't reach Visualizer: ${describeVisualizerError(e)}`
 					});
 				} else if (kind === 'tier') {
-					settlePendingEdit(id, { ...current, tierSignal: true });
+					// Backed off too: the journal fields would only meet the same refusal.
+					const attempts = (current.attempts ?? 0) + 1;
+					settlePendingEdit(id, {
+						...current,
+						tierSignal: true,
+						attempts,
+						nextAttemptAt: Date.now() + retryDelayMs(e, attempts - 1)
+					});
 				} else {
 					const attempts = (current.attempts ?? 0) + 1;
 					settlePendingEdit(id, {

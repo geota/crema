@@ -40,6 +40,7 @@ import {
 import { enqueueEntry, readQueue } from './queue-store.ts';
 import { pendingEdit, settlePendingEdit } from '#lib/visualizer/pending-edits.js';
 import { readSyncConfig, updateSyncConfig } from '#lib/visualizer/sync-config.js';
+import { writeSyncSettings } from '#lib/bean/visualizer-sync.js';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 
@@ -78,7 +79,7 @@ function fakeShotSync(over: {
 function fakeBeanSync(over: {
 	deleteBean?: (id: string) => Effect.Effect<void, unknown>;
 	deleteRoaster?: (id: string) => Effect.Effect<void, unknown>;
-	refreshPremiumIfStale?: Effect.Effect<boolean | null>;
+	refreshPremium?: Effect.Effect<boolean | null>;
 }) {
 	return Layer.succeed(
 		BeanSync,
@@ -91,9 +92,9 @@ function fakeBeanSync(over: {
 			deleteRoaster: (over.deleteRoaster ?? die('deleteRoaster')) as never,
 			runSync: die('runSync') as never,
 			fetchAccount: Effect.die('unused: fetchAccount') as never,
-			refreshPremium: Effect.die('unused: refreshPremium') as never,
-			refreshPremiumIfStale: (over.refreshPremiumIfStale ??
-				Effect.die('unused: refreshPremiumIfStale')) as never,
+			refreshPremium: (over.refreshPremium ?? Effect.die('unused: refreshPremium')) as never,
+			// Never a tier check's answer: a fresh cache may predate a lapse.
+			refreshPremiumIfStale: Effect.die('unused: refreshPremiumIfStale') as never,
 			testConnection: Effect.die('unused: testConnection') as never
 		})
 	);
@@ -412,11 +413,13 @@ describe('UploadQueue.drain — edits waiting to reach Visualizer', () => {
 		expect(ids).toEqual([]);
 	});
 
-	it('tag_400_is_a_tier_signal: confirmed Premium clears the tags and reports, so nothing loops', async () => {
+	it('tag_400_is_a_tier_signal: a real probe confirming Premium clears the tags and reports, so nothing loops', async () => {
+		// A fresh cached Premium, as right after a lapse: it doesn't count.
+		writeSyncSettings({ premium: true, premiumCheckedAt: Date.now() });
 		settlePendingEdit('s1', { annotations: true, tags: { add: ['a'], remove: [] }, tierSignal: true });
 		const probe = vi.fn(() => true);
 		const { ids, push } = pushed();
-		await drainWith({ pushPendingEdit: push }, { refreshPremiumIfStale: Effect.sync(probe) });
+		await drainWith({ pushPendingEdit: push }, { refreshPremium: Effect.sync(probe) });
 		expect(probe).toHaveBeenCalledTimes(1);
 		expect(pendingEdit('s1')).toEqual({ annotations: true });
 		expect(ids).toEqual(['s1']);
@@ -424,21 +427,26 @@ describe('UploadQueue.drain — edits waiting to reach Visualizer', () => {
 	});
 
 	it('a tier signal on Free keeps the tags until an upgrade', async () => {
+		writeSyncSettings({ premium: true, premiumCheckedAt: Date.now() });
 		settlePendingEdit('s1', { tags: { add: ['a'], remove: [] }, tierSignal: true });
-		await drainWith(
-			{ pushPendingEdit: pushed().push },
-			{ refreshPremiumIfStale: Effect.succeed(false) }
-		);
+		await drainWith({ pushPendingEdit: pushed().push }, { refreshPremium: Effect.succeed(false) });
 		expect(pendingEdit('s1')).toEqual({ tags: { add: ['a'], remove: [] } });
 	});
 
-	it('a tier check with no answer asks again later', async () => {
-		settlePendingEdit('s1', { tags: { add: ['a'], remove: [] }, tierSignal: true });
-		await drainWith(
-			{ pushPendingEdit: pushed().push },
-			{ refreshPremiumIfStale: Effect.succeed(null) }
-		);
-		expect(pendingEdit('s1')).toMatchObject({ tierSignal: true });
+	it('a probe with no answer waits a day before the next, and one probe serves the drain', async () => {
+		settlePendingEdit('a', { tags: { add: ['x'], remove: [] }, tierSignal: true });
+		settlePendingEdit('b', { tags: { add: ['y'], remove: [] }, tierSignal: true });
+		const probe = vi.fn((): boolean | null => null);
+		const bean = { refreshPremium: Effect.sync(() => probe()) };
+		await drainWith({ pushPendingEdit: pushed().push }, bean);
+		expect(probe).toHaveBeenCalledTimes(1);
+		expect(pendingEdit('a')).toMatchObject({ tierSignal: true });
+		await drainWith({ pushPendingEdit: pushed().push }, bean);
+		expect(probe, 'stamped, though unanswered').toHaveBeenCalledTimes(1);
+		const later = Date.now() + 24 * 60 * 60 * 1000 + 1;
+		vi.spyOn(Date, 'now').mockReturnValue(later);
+		await drainWith({ pushPendingEdit: pushed().push }, bean);
+		expect(probe).toHaveBeenCalledTimes(2);
 	});
 
 	it('a 429 leaves the rest for a later drain', async () => {

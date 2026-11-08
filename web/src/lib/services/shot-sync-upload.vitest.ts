@@ -225,6 +225,19 @@ describe('ShotSync.uploadShot — post-upload PATCH', () => {
 		expect(pendingEdit('s1')).toMatchObject({ annotations: true, tags: { add: ['x'], remove: [] } });
 	});
 
+	it('a re-upload of a bound shot sends no tags: they go as marks, onto the server list', async () => {
+		setPremium(true);
+		const { layer, calls } = mkHttp((req) =>
+			req.method === 'POST' ? { ok: true, json: { id: 'viz-1' } } : { ok: true, json: {} }
+		);
+		h.beanVisualizerId = 'bag-1';
+		const bound = shot({ visualizerId: 'viz-1', tags: ['espresso'], bean: { beanId: 'b1', name: 'Bag' } } as Partial<StoredShot>);
+		await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(bound))), layer);
+		const body = (JSON.parse(patchCall(calls)!.body as string) as { shot: Record<string, unknown> }).shot;
+		expect(body).not.toHaveProperty('tag_list');
+		expect(pendingEdit('s1')?.tags).toEqual({ add: ['espresso'], remove: [] });
+	});
+
 	it('fails ResponseDecodeError when upload returns no id', async () => {
 		const { layer } = mkHttp(() => ({ ok: true, json: {} }));
 		const exit = await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot()))), layer);
@@ -461,6 +474,20 @@ describe('ShotSync.patchEditedShot — pending-only PATCHes', () => {
 		);
 		expect(again).toMatchObject({ _tag: 'Success', value: 'waiting' });
 		expect(calls).toHaveLength(2);
+	});
+
+	it('a Premium refusal is a tier signal, backed off, not a retry for ever', async () => {
+		setPremium(true);
+		const { layer } = mkHttp(() => ({
+			ok: false,
+			status: 403,
+			body: '{"error":"You must be a premium user to access this feature."}'
+		}));
+		const exit = await editAndPush(edited(), layer);
+		expect(Exit.isFailure(exit)).toBe(true);
+		const edit = pendingEdit('s1');
+		expect(edit).toMatchObject({ annotations: true, tierSignal: true, attempts: 1 });
+		expect(edit?.nextAttemptAt ?? 0).toBeGreaterThan(Date.now() - 1);
 	});
 
 	it('a reply without the tags sent is a tier signal too', async () => {

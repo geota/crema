@@ -79,6 +79,9 @@ function reportRefusedDelete(entry: QueueEntry, why: string): void {
 
 const DEFERRED: DrainResult = { processed: 0, succeeded: 0, dropped: 0, deferred: 1 };
 
+/** How often one tier signal may probe the tier (`POST /roasters`, a write). */
+const TIER_PROBE_SPACING_MS = 24 * 60 * 60 * 1000;
+
 /**
  * Every failure `runEntry` can surface (from ShotSync / BeanSync). What the
  * queue does with one is the core's rule (`queueDecision` in
@@ -154,18 +157,31 @@ export const UploadQueueLive = Layer.effect(
 			});
 
 		/**
-		 * Visualizer didn't keep the tags sent for `id`: ask the tier, at most
-		 * once a day (the probe is a sentinel write). Premium confirmed means
-		 * the tags will never take, so the mark clears and says so rather than
-		 * loop; Free leaves the mark until an upgrade; no answer asks again later.
+		 * Visualizer didn't keep what was sent for `id`: ask the tier with a real
+		 * probe (a cached answer, however fresh, may predate a lapse), at most
+		 * once a day per signal, since the probe is a sentinel write. The
+		 * attempt is stamped before it goes, so a probe that gets no answer
+		 * waits a day too. One probe serves every shot in a drain (`probe`).
+		 * Premium confirmed means the tags will never take, so the mark clears
+		 * and says so rather than loop; Free leaves the mark until an upgrade.
 		 */
-		const settleTierSignal = (id: string): Effect.Effect<void> =>
+		const settleTierSignal = (id: string, probe: { answer?: boolean | null }): Effect.Effect<void> =>
 			Effect.gen(function* () {
-				const premium = yield* beanSync.refreshPremiumIfStale;
+				const signalled = pendingEdit(id);
+				if (!signalled?.tierSignal) return;
+				const now = Date.now();
+				if (signalled.tierProbedAt != null && now - signalled.tierProbedAt < TIER_PROBE_SPACING_MS) return;
+				settlePendingEdit(id, { ...signalled, tierProbedAt: now });
+				if (probe.answer === undefined) probe.answer = yield* beanSync.refreshPremium;
+				const premium = probe.answer;
 				const edit = pendingEdit(id);
 				if (!edit?.tierSignal || premium === null) return;
-				if (premium) {
-					settlePendingEdit(id, { ...edit, tags: undefined, tierSignal: undefined });
+				if (!premium) {
+					settlePendingEdit(id, { ...edit, tierSignal: undefined, tierProbedAt: undefined });
+					return;
+				}
+				settlePendingEdit(id, { ...edit, tags: undefined, tierSignal: undefined, tierProbedAt: undefined });
+				if (hasTagMarks(edit.tags)) {
 					appendSyncLog({
 						direction: 'skip',
 						entity: 'shot',
@@ -174,8 +190,6 @@ export const UploadQueueLive = Layer.effect(
 						at: Date.now(),
 						error: "Visualizer didn't keep this shot's tags, so Crema stopped sending them."
 					});
-				} else {
-					settlePendingEdit(id, { ...edit, tierSignal: undefined });
 				}
 			});
 
@@ -187,9 +201,10 @@ export const UploadQueueLive = Layer.effect(
 			if (!directionPushes(readSyncConfig().direction.shots)) return;
 			const history = getHistoryStore();
 			const now = Date.now();
+			const probe: { answer?: boolean | null } = {};
 			for (const [id, edit] of pendingEdits()) {
 				if ((edit.nextAttemptAt ?? 0) > now) continue;
-				if (edit.tierSignal && hasTagMarks(edit.tags)) yield* settleTierSignal(id);
+				if (edit.tierSignal) yield* settleTierSignal(id, probe);
 				const result = yield* Effect.result(
 					shotSync.pushPendingEdit(history, id).pipe(
 						Effect.catchDefect((cause) =>
