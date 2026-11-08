@@ -127,6 +127,10 @@ pub struct StopIntent {
     pub max_time: Option<f32>,
     /// The user wants the volume limit live alongside the weight target.
     pub volume_stop_with_scale: bool,
+    /// The pour the volume limit counts from, ml: 0, or the pour when a shot
+    /// whose flow began on an unknown substate re-anchored (REVIEW-385). The
+    /// backstop always counts every ml.
+    pub limit_from_ml: f32,
 }
 
 /// What can end the session now, and why the weight leg can't, if it can't.
@@ -193,7 +197,10 @@ pub fn resolve_legs(intent: StopIntent, ctx: LegContext) -> ResolvedLegs {
             ctx.authority,
             WeightAuthority::Pending | WeightAuthority::Refused(_)
         );
-    let limit = intent.volume_limit.filter(|_| limit_live);
+    let limit = intent
+        .volume_limit
+        .filter(|_| limit_live)
+        .map(|l| l + intent.limit_from_ml);
     let backstop = intent.weight.and_then(|target| match ctx.authority {
         WeightAuthority::Blind if ctx.scale_gone => {
             Some(espresso_backstop_ml(intent.volume_limit, target))
@@ -394,6 +401,12 @@ impl AutoStop {
     /// (volume / max-time stops capture nothing).
     pub fn stop_capture(&self) -> Option<StopCapture> {
         self.stop_capture
+    }
+
+    /// Move the clock's start to `now`: a shot whose flow began on an
+    /// unknown substate gets its real start once a named flowing one arrives.
+    pub fn restart_clock(&mut self, now: Duration) {
+        self.started = now;
     }
 
     /// When the session's clock started: first flow for espresso, the
@@ -848,6 +861,7 @@ mod tests {
             volume_limit: limit,
             max_time,
             volume_stop_with_scale: false,
+            limit_from_ml: 0.0,
         }
     }
 

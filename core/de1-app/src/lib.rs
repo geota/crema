@@ -548,6 +548,12 @@ pub struct CremaCore {
     /// counted in the displayed shot time — matching de1app and the recorded
     /// `ShotRecord.duration` (the `ShotMonitor` times the same window).
     flow_started: Option<Duration>,
+    /// This shot's flow began on an unknown substate, and no named flowing
+    /// one has come since: the first that does re-anchors the clock.
+    flow_began_on_unknown: bool,
+    /// The pour the volume limit counts from, ml — see
+    /// [`StopIntent::limit_from_ml`].
+    limit_from_ml: f32,
     /// The connected scale's codec, once identified.
     scale: Option<Scale>,
     /// Smooths the scale stream into weight + flow for display.
@@ -1064,6 +1070,8 @@ impl CremaCore {
             last_state: None,
             shot_started: None,
             flow_started: None,
+            flow_began_on_unknown: false,
+            limit_from_ml: 0.0,
             scale: None,
             flow: FlowEstimator::new(FlowAlgorithm::default()),
             weight_gate: WeightSpikeGate::new(),
@@ -1457,6 +1465,7 @@ impl CremaCore {
             volume_limit: self.profile_volume_limit,
             max_time: self.max_shot_duration,
             volume_stop_with_scale: self.volume_stop_with_scale,
+            limit_from_ml: self.limit_from_ml,
         };
         resolve_legs(
             intent,
@@ -5560,6 +5569,8 @@ impl CremaCore {
                 // the elapsed clock is zeroed at the first preinfusion/pouring
                 // phase below, so the preheat isn't counted. See `flow_started`.
                 self.flow_started = None;
+                self.flow_began_on_unknown = false;
+                self.limit_from_ml = 0.0;
                 self.flow.reset();
                 // Fresh shot → fresh spike-gate baseline (the gate only
                 // rejects while a shot is in progress).
@@ -5623,10 +5634,22 @@ impl CremaCore {
                 // First flow (pump on) zeroes the elapsed clock; the pre-pour
                 // heating/stabilising phases don't. Matches the recorded
                 // `ShotRecord.duration` (the ShotMonitor times the same window).
-                if self.flow_started.is_none()
-                    && matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring)
-                {
+                let named_flow = matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring);
+                if self.flow_started.is_none() && named_flow {
                     self.begin_flow(now, out);
+                } else if named_flow && std::mem::take(&mut self.flow_began_on_unknown) {
+                    // Flow began on an unknown substate, and this is the first
+                    // named one: that was more heating, so the shot clock and
+                    // the auto-stop's start move here (REVIEW-379). A firmware
+                    // that never names its pour keeps the unknown start.
+                    self.flow_started = Some(now);
+                    if let Some(flow_stop) = self.auto_stop.as_mut() {
+                        flow_stop.stop.restart_clock(now);
+                    }
+                    // The user's volume limit counts from here too; the
+                    // backstop keeps counting every ml (REVIEW-385).
+                    self.limit_from_ml = self.volume_integrator.pour_ml();
+                    self.refresh_auto_stop_targets();
                 }
                 out.events.push(Event::ShotPhaseChanged { phase });
             }
@@ -5757,6 +5780,7 @@ impl CremaCore {
             })
         {
             self.begin_flow(now, out);
+            self.flow_began_on_unknown = true;
         }
     }
 
