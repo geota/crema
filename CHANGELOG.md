@@ -122,6 +122,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Bean dates show the right day west of Greenwich.** The bean drawer read a
+  stored roast, opened, frozen or defrosted day as midnight UTC, so in the
+  Americas it showed the day before (a bag roasted on Nov 8 read "Nov 7 · 0d
+  ago"). The day is now read as local. Web.
+- **A full history says when a new shot pushes the oldest out.** History keeps
+  the newest 300 shots (pinned shots don't count), and a shot or brew saved on a
+  full history dropped the oldest without a word; restore and import already
+  said so. Erase all data and the web's factory reset also remove what a later
+  version's history storage keeps, so going back to this version leaves nothing
+  behind. Android and web. (#310)
 - **Pulls from Visualizer finish on Android too** — a pull walks every page,
   paced under Visualizer's limits, and each shot lands as it arrives, so one
   that stops keeps what it got and the next picks up only what's left. A rate

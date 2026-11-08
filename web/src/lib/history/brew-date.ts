@@ -93,6 +93,19 @@ export function historyDroppedNotice(dropped: number, cap: number): string {
 }
 
 /**
+ * What to say when a normal save made the cap drop a row (#310 P0): the oldest
+ * rows here, or the new row itself, dated before everything a full history
+ * keeps. Null when nothing was dropped. Restore and import say it their way.
+ */
+export function historyCutNotice(droppedOlder: number, newKept: boolean, cap: number): string | null {
+	if (!newKept) {
+		return `History keeps the newest ${cap} shots, and this one is older than all of them, so it wasn\u2019t kept.`;
+	}
+	if (droppedOlder === 0) return null;
+	return `History keeps the newest ${cap} shots, so the oldest${droppedOlder === 1 ? ' shot was' : ` ${droppedOlder} were`} dropped.`;
+}
+
+/**
  * What to say when a full history refused rows a pull brought. The next Sync
  * won't look for them, because the cursor has moved past them: Re-sync does.
  */

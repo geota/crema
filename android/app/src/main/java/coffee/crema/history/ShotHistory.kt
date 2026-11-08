@@ -603,12 +603,17 @@ class HistoryStore(private val context: Context, private val json: Json) {
     }
 
     /** Delete the store file, every copy of it and the series files (Erase all
-     *  data; final review 05 N-1). */
+     *  data; final review 05 N-1). Also what a newer build keeps (#310 P0), so
+     *  an erase after a rollback leaves nothing of it: `shots.db` with its
+     *  `-wal`, `-shm` and `-journal`, the store marker, the rows snapshot and
+     *  the pending journal. */
     suspend fun erase() {
         lock.withLock {
             withContext(Dispatchers.IO) {
                 eraseStore(file)
                 seriesDir.listFiles()?.forEach { eraseStore(it) }
+                context.deleteDatabase(NEXT_DB_NAME)
+                NEXT_FILES.forEach { eraseStore(File(context.filesDir, it)) }
                 written.clear()
                 known = emptySet()
                 unreadableSeries = emptySet()
@@ -702,6 +707,14 @@ class HistoryStore(private val context: Context, private val json: Json) {
         /** Keep the most recent N shots (matches the web cap). */
         const val MAX_SHOTS = 300
         const val FILE_NAME = "shots.json"
+
+        /** The SQLite store the rows move to (SPEC §3, P3a). Nothing on this
+         *  build creates it; [erase] removes one a newer build left. */
+        const val NEXT_DB_NAME = "shots.db"
+
+        /** The newer build's store marker, rows snapshot and pending journal
+         *  (SPEC §1 and §6), for [erase] too. */
+        val NEXT_FILES = listOf("history-store.json", "history-rows-snapshot.jsonl.gz", "history-pending.jsonl")
         private const val WHAT = "shot history"
         private const val SERIES_DIR = "shot-series"
     }

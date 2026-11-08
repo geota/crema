@@ -195,6 +195,9 @@ export function outcomeMessage(outcome: RestoreOutcome): string {
 			}
 			if (plan.shots.fill.length > 0) parts.push(`Filled in ${plural(plan.shots.fill.length, 'curve')}.`);
 			if (outcome.curvesFailed > 0) parts.push(`${plural(outcome.curvesFailed, 'curve')} couldn't be saved.`);
+			if (outcome.markerDropped) {
+				parts.push("Some old files from before the restore couldn't be cleaned up; they only take space.");
+			}
 			if (outcome.singletonsSkipped) {
 				parts.push("A shot was still running, so settings and maintenance weren't changed. Run it again to apply them.");
 			}

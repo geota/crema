@@ -886,6 +886,10 @@ pub struct LocalState {
     pub visualizer_prefs: VisualizerSyncPrefs,
     pub total_litres: f64,
     pub active_bean_id: Option<String>,
+    /// Beans an earlier, interrupted run of this restore added, from its
+    /// marker. They don't count as here for `zero_debit`: a re-run after any
+    /// prefix of the steps must end where a clean run does.
+    pub added_beans: Vec<String>,
 }
 
 impl LocalState {
@@ -1465,7 +1469,13 @@ fn shot_plan(
 ) -> (ShotPlan, TombstonePlan) {
     let replace = mode == RestoreMode::Replace;
     let here: HashMap<&str, &LocalShot> = local.shots.iter().map(|s| (s.id.as_str(), s)).collect();
-    let beans_here: HashSet<&str> = local.beans.iter().map(String::as_str).collect();
+    let added: HashSet<&str> = local.added_beans.iter().map(String::as_str).collect();
+    let beans_here: HashSet<&str> = local
+        .beans
+        .iter()
+        .map(String::as_str)
+        .filter(|b| !added.contains(b))
+        .collect();
     let mut plan = ShotPlan::default();
     let mut tombstones = TombstonePlan::default();
     let mut candidates: Vec<&ManifestShot> = Vec::new();
