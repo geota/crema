@@ -336,8 +336,11 @@ class LibraryController(
      *  arrive, from what's in memory by then and the rows. */
     private suspend fun landHistory(land: (session: List<StoredShot>, rows: List<StoredShot>) -> List<StoredShot>) {
         val loaded = seriesLoaded
+        historySettled = false
         val rows = historyStore.loadRows()
+        val health = historyStore.health
         editHistory { current -> current.with(land(current, rows)) }
+        historySettled = health == coffee.crema.persist.StoreHealth.OK || health == coffee.crema.persist.StoreHealth.ABSENT
         historyStore.markLive(rows.map { it.id })
         historyStore.openSaves()
         val missing = rows.filter { it.samples.isEmpty() }.map { it.id }
@@ -373,6 +376,16 @@ class LibraryController(
         if (merged.dropped > 0) notify("Shot history reloaded${historyDroppedNotice(merged.dropped)}")
         if (merged.kept.isNotEmpty()) historyStore.save(merged.rows)
     }
+
+    /**
+     * Whether a cleanup that spares pinned shots may run (#311): the rows are in
+     * the history, from a load that read them or found no file. Not before, as
+     * an early BLE connect would see no pinned shots, and not after a damaged or
+     * unavailable load, as an unread row may be a pinned one. Set as the rows
+     * land, so a load in progress never counts.
+     */
+    @Volatile var historySettled: Boolean = false
+        private set
 
     /** Whether a Visualizer pull may run: not while the rows couldn't be read,
      *  as it would match against a list that doesn't hold them. */
@@ -1141,15 +1154,15 @@ class LibraryController(
         snapshotThenBuild(::backupSnapshot, Dispatchers.Default) { snap ->
             val built = backupBundle(snap) ?: return@snapshotThenBuild null // already notified
             runCatching {
-                zipBackupBytes(
-                    built.jsonl,
-                    snap.state.beans.asSequence()
-                        .filter { BeanImageStore.exists(app, it.id) }
-                        .mapNotNull { bean ->
-                            runCatching { BeanImageStore.beanImageFile(app, bean.id).readBytes() }
-                                .getOrNull()?.let { bean.id to it }
-                        },
-                ).let { BackupZip(it, BackupCounts(built.shotCount, built.curveCount)) }
+                val images = snap.state.beans.asSequence()
+                    .filter { BeanImageStore.exists(app, it.id) }
+                    .mapNotNull { bean ->
+                        runCatching { BeanImageStore.beanImageFile(app, bean.id).readBytes() }
+                            .getOrNull()?.let { bean.id to it }
+                    }
+                    .toList()
+                zipBackupBytes(built.jsonl, images.asSequence())
+                    .let { BackupZip(it, BackupCounts(built.shotCount, built.curveCount), backupContentHash(built.jsonl, images)) }
             }.getOrElse { appendLog("Backup zip failed: ${it.message}"); notify(BACKUP_FAILED); null }
         }
 
@@ -2472,6 +2485,17 @@ class LibraryController(
     }
 
     /**
+     * Pin or unpin a shot (#311): a pinned shot's BLE session keeps its capture
+     * past the limit, and it is exempt from any cleanup. Persisted; local only,
+     * so nothing goes to Visualizer.
+     */
+    fun setShotPinned(id: String, pinned: Boolean) {
+        editHistory { rows -> rows.mapped { if (it.id == id) it.copy(pinned = pinned) else it } }
+        val snapshot = uiState().history
+        scope.launch { historyStore.save(snapshot) }
+    }
+
+    /**
      * Set (or with null / blank, clear) who made (`"barista"`) or drank
      * (`"drinker"`) a shot. Persisted. The barista mirrors to Visualizer
      * (its `barista` field); both re-send the Decent copy, whose workflow
@@ -2668,4 +2692,20 @@ internal fun profileImportSummary(imported: Int, skipped: Int, errors: List<Stri
     val already = if (skipped > 0) "; $skipped already in your library" else ""
     val tail = errors.firstOrNull()?.let { " — $it" }.orEmpty()
     return head + already + tail
+}
+
+/**
+ * What a backup holds, without when it was made (#311): SHA-256 over its JSONL
+ * past the header line, which carries the export time, and over each photo.
+ * The same data gives the same hash, so an unchanged daily backup isn't
+ * uploaded again.
+ */
+internal fun backupContentHash(jsonl: String, images: List<Pair<String, ByteArray>>): String {
+    val md = java.security.MessageDigest.getInstance("SHA-256")
+    md.update(jsonl.substringAfter('\n').toByteArray(Charsets.UTF_8))
+    for ((id, bytes) in images.sortedBy { it.first }) {
+        md.update(id.toByteArray(Charsets.UTF_8))
+        md.update(bytes)
+    }
+    return md.digest().joinToString("") { "%02x".format(it) }
 }

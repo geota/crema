@@ -24,32 +24,57 @@ export function brewDateTooOld(cap: number): string {
 
 /**
  * Whether a new row dated `at` survives the cap, given `live` rows newest
- * first. Only the newest `cap` stay, and a new row leads its ties, so it has to
- * reach the row at the cut. A list can be over the cap, so that isn't the last.
+ * first. Only the newest `cap` unpinned rows stay, and a new row leads its
+ * ties, so it has to reach the unpinned row at the cut. Pinned rows don't count
+ * (#311). A list can be over the cap, so that isn't the last.
  */
 export function fitsHistory(
-	live: readonly { completedAt: number }[],
+	live: readonly { completedAt: number; pinned?: boolean }[],
 	at: number,
 	cap: number
 ): boolean {
-	const cut = live[cap - 1];
+	const cut = live.filter((s) => !s.pinned)[cap - 1];
 	return cut == null || at >= cut.completedAt;
 }
 
 /**
  * `shots`, newest first, cut to `cap` live rows. Tombstones don't count and
- * always stay: they carry a remote delete that hasn't gone out yet. `keepId`, a
- * row just made here, stays whatever its date, for a device whose clock is
- * behind its history: the oldest other row goes instead.
+ * always stay: they carry a remote delete that hasn't gone out yet. Pinned rows
+ * don't count and always stay either, as nothing cleans up a pinned shot
+ * (#311). `keepId`, a row just made here, stays whatever its date, for a device
+ * whose clock is behind its history: the oldest other row goes instead.
  */
-export function cappedHistory<T extends { id: string; deletedAt?: unknown }>(
+export function cappedHistory<T extends { id: string; deletedAt?: unknown; pinned?: boolean }>(
 	shots: readonly T[],
 	cap: number,
 	keepId?: string
 ): T[] {
 	const room = keepId == null ? cap : cap - 1;
 	let live = 0;
-	return shots.filter((s) => s.deletedAt != null || s.id === keepId || ++live <= room);
+	return shots.filter(
+		(s) => s.deletedAt != null || s.pinned === true || s.id === keepId || ++live <= room
+	);
+}
+
+/**
+ * `shots`, newest first, without its `count` oldest unpinned rows: what a full
+ * store evicts. Pinned rows stay (#311), so fewer can go than asked.
+ */
+export function evictOldest<T extends { pinned?: boolean }>(shots: readonly T[], count: number): T[] {
+	const out = [...shots];
+	let left = count;
+	for (let i = out.length - 1; i >= 0 && left > 0; i--) {
+		if (!out[i].pinned) {
+			out.splice(i, 1);
+			left--;
+		}
+	}
+	return out;
+}
+
+/** How many rows count against the cap: live and unpinned. */
+export function cappedCount(shots: readonly { deletedAt?: unknown; pinned?: boolean }[]): number {
+	return shots.filter((s) => s.deletedAt == null && !s.pinned).length;
 }
 
 /** How the cap ended a restore or an import. */

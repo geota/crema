@@ -71,6 +71,7 @@ pub mod brew_builtin;
 pub mod brew_custom;
 pub mod brew_session;
 pub mod builtin;
+pub mod capture_retention;
 /// Lenient number-or-string deserialization shared by the JSON importers.
 mod coerce;
 pub mod cold_maintenance;
@@ -214,6 +215,10 @@ pub use brew_session::{
     BrewSessionPhase, BrewSessionSummary, MAX_BREW_SAMPLES, START_ON_POUR_THRESHOLD_G,
 };
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
+pub use capture_retention::{
+    CaptureKeep, CaptureSession, CapturedShot, captures_to_drop, captures_to_drop_json,
+    sessions_to_drop, sessions_to_drop_json,
+};
 pub use cold_maintenance::{
     COLD_MAINTENANCE_MIN_FIRMWARE_BUILD, DESCALE_SCHEDULE, DESCALE_TOTAL_SECONDS, DescaleProgress,
     DescaleTracker, MaintenanceFailure, MaintenancePhase, cold_maintenance_profile,

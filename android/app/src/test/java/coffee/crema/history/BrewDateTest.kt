@@ -129,6 +129,43 @@ class BrewDateTest {
         assertFalse(next.any { it.id == full.last().id }, "the oldest other row goes")
     }
 
+    /** #311: a full history whose oldest row is pinned, then a brew logged here. */
+    @Test fun aPinnedRowStaysWhenABrewIsLoggedOnAFullHistory() {
+        val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i) }
+            .mapIndexed { i, s -> if (i == HistoryStore.MAX_SHOTS - 1) s.copy(pinned = true) else s }
+        val first = historyWith(listOf(shot("made", 2_000_000)), rowsForTest(full), keepId = "made")
+        assertTrue(first.any { it.id == "r299" }, "the pinned row stays")
+        assertEquals(HistoryStore.MAX_SHOTS + 1, first.size, "the pinned row doesn't count")
+        val second = historyWith(listOf(shot("next", 2_000_001)), rowsForTest(first), keepId = "next")
+        assertTrue(second.any { it.id == "r299" }, "the pinned row stays")
+        assertFalse(second.any { it.id == "r298" }, "the oldest unpinned row goes instead")
+    }
+
+    @Test fun aPinnedRowStaysWhenAnImportOverfillsTheHistory() {
+        val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i) }
+            .map { if (it.id == "r299") it.copy(pinned = true) else it }
+        val merged = mergeHistory(listOf(shot("new", 2_000_000), shot("next", 2_000_001)), full)
+        assertTrue(merged.rows.any { it.id == "r299" })
+        assertEquals(1, merged.dropped)
+    }
+
+    @Test fun aNewerPinnedRowLeavesTheCutAtTheLastUnpinnedOneKept() {
+        val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i * 10) }
+            .map { if (it.id == "r0") it.copy(pinned = true) else it }
+        val filled = mergeHistory(listOf(shot("new", 2_000_000)), full).rows
+        assertTrue(fitsHistory(filled, 1_000_000L - 2_990), "the 300th unpinned row is the cut")
+        assertFalse(fitsHistory(filled, 1_000_000L - 2_991))
+    }
+
+    @Test fun aPinnedRowDoesntTakeRoomFromAPullOrADate() {
+        val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i * 10) }
+            .map { if (it.id == "r299") it.copy(pinned = true) else it }
+        assertEquals(1, mergePulled(listOf(shot("a", 2_000_000), shot("b", 2_000_001)), full).kept.size)
+        val filled = mergeHistory(listOf(shot("new", 2_000_000)), full).rows
+        assertTrue(fitsHistory(filled, 1_000_000L - 2_980), "the oldest unpinned row is the cut")
+        assertFalse(fitsHistory(filled, 1_000_000L - 2_990), "not the pinned row behind it")
+    }
+
     @Test fun anImportedRowOlderThanAFullHistoryIsTheOneThatGoes() {
         val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i) }
         val merged = mergeHistory(listOf(shot("old", 10)), full)
