@@ -19,6 +19,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -35,7 +36,9 @@ import java.io.Closeable
  * needs).
  *
  * Retries are the shared policy's (`net/HttpClients.kt`): GETs are retried on
- * 5xx / 408 / 429 and transport failures; POST / PATCH carry no safe-resend
+ * 5xx / 408 and transport failures, but not on 429: every request is paced
+ * ([pacer]) and a 429 sets the pacer's cooldown, which the caller waits out
+ * (a pull run sits it out, anything else backs off). POST / PATCH carry no safe-resend
  * marker, so they are retried only when the request provably never reached
  * the server (a failed DNS lookup or connect) — never after a response or a
  * maybe-sent failure, since a re-POST could duplicate a shot.
@@ -47,6 +50,9 @@ import java.io.Closeable
 
 /** Visualizer API base (one SaaS; no self-hosting story). */
 const val API_BASE = "https://visualizer.coffee/api"
+
+/** A 2xx whose body isn't JSON: a captive portal's page looks like this. */
+const val MALFORMED_BODY = "Visualizer returned a malformed body"
 
 /** The closed error union (web `VisualizerCallError`). */
 sealed class VisualizerError(message: String) : Exception(message) {
@@ -92,7 +98,11 @@ class VisualizerClient(
         engine = engine,
         retryBaseDelayMs = retryBaseDelayMs,
         httpsOnly = apiBase == API_BASE,
+        retryRateLimited = false,
     )
+
+    /** The request pacer, set by [VisualizerSync] when it owns this client; null = unpaced. */
+    @Volatile var pacer: Pacer? = null
 
     override fun close() = http.close()
 
@@ -106,6 +116,7 @@ class VisualizerClient(
         accessToken: String,
         body: JsonElement? = null,
     ): JsonElement? = withContext(Dispatchers.IO) {
+        pacer?.take()
         val (status, text) = try {
             val res = http.request("$apiBase$path") {
                 this.method = HttpMethod.parse(method)
@@ -127,10 +138,15 @@ class VisualizerClient(
             status == 402 -> throw VisualizerError.PremiumGated()
             status == 403 -> throw forbidden(text)
             status == 404 -> throw VisualizerError.NotFound()
+            status == 429 -> {
+                // Every call waits it out: a minute first, as the core's schedule says.
+                pacer?.noteRateLimited(coffee.crema.core.retryBackoffMs(429.toUShort(), 0u, kotlin.random.Random.nextDouble()).toLong())
+                throw VisualizerError.Http(status, "Visualizer HTTP $status", text)
+            }
             status !in 200..299 -> throw VisualizerError.Http(status, "Visualizer HTTP $status", text)
             text.isBlank() -> null
             else -> runCatching { json.parseToJsonElement(text) }
-                .getOrElse { throw VisualizerError.Network("Visualizer returned a malformed body") }
+                .getOrElse { throw VisualizerError.Network(MALFORMED_BODY) }
         }
     }
 
@@ -271,6 +287,33 @@ class VisualizerClient(
     }
 
     /** `GET /api/shots/{id}` — the full detail, passed VERBATIM to the core. */
+    /** One page of `GET /shots`, for the pull run: the rows, the list's count and pages. */
+    data class ListPage(val rows: List<ShotSummary>, val count: Int, val pages: Int)
+
+    /**
+     * `GET /api/shots?page=…&items=…&sort=updated_at[&updated_after=…]`
+     * (strict `>`, unix s). A body that isn't a list is a portal's page, and
+     * throws [MALFORMED_BODY].
+     */
+    suspend fun listShotsPage(accessToken: String, page: Int, items: Int, updatedAfter: Long?): ListPage {
+        val after = updatedAfter?.let { "&updated_after=$it" }.orEmpty()
+        val body = request("GET", "/shots?page=$page&items=$items&sort=updated_at$after", accessToken) as? JsonObject
+        val data = body?.get("data") as? kotlinx.serialization.json.JsonArray
+            ?: throw VisualizerError.Network(MALFORMED_BODY)
+        val rows = data.mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            val id = o["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            ShotSummary(
+                id = id,
+                clockSec = o["clock"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()?.toLong() ?: 0L,
+                updatedAtSec = o["updated_at"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()?.toLong() ?: 0L,
+            )
+        }
+        val paging = body["paging"] as? JsonObject
+        fun num(k: String) = (paging?.get(k) as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+        return ListPage(rows, num("count") ?: rows.size, num("pages") ?: 1)
+    }
+
     suspend fun fetchShotDetail(accessToken: String, id: String): JsonElement =
         request("GET", "/shots/$id", accessToken)
             ?: throw VisualizerError.Network("Empty shot detail")

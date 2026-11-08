@@ -341,7 +341,7 @@ class UnboundTombstoneTest {
     /** The upload went at [attemptedAt]; the row may have landed behind this cursor. */
     private fun pullFrom(cursor: Long?, attemptedAt: Long?): List<String> {
         val written = UnboundTombstone("s1", completedAt, 30_000, 1L, writtenRun = 3, attemptedAt = attemptedAt)
-        val v = sync(VisualizerState(tokens = tokens, pullRun = 3, shotPullCursor = cursor, unboundTombstones = listOf(written)))
+        val v = sync(VisualizerState(tokens = tokens, pullRun = 3, shotPullCursor = cursor, pullCursorEpoch = 1, unboundTombstones = listOf(written)))
         pull(v)
         return stored().unboundTombstones.map { it.id }
     }

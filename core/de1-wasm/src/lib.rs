@@ -1820,6 +1820,17 @@ pub fn pull_covers_attempt(since_ms: f64, attempted_at_ms: Option<f64>) -> bool 
     de1_domain::pull_covers_attempt(f64_to_ms(since_ms), attempted_at_ms.map(f64_to_ms))
 }
 
+/// The pull run's rules by name (`planPage`, `recordRow`, `finishRun`,
+/// `pace`, …): JSON arguments in, JSON answer out. See
+/// `de1_domain::pull_run_call`.
+///
+/// # Errors
+/// An unknown op, or arguments that don't parse.
+#[wasm_bindgen(js_name = pullRunCall)]
+pub fn pull_run_call(op: &str, payload: &str) -> Result<String, String> {
+    de1_domain::pull_run_call(op, payload)
+}
+
 /// What a pulled shot may change on its row: a JSON `ShotPatch`. See
 /// `de1_domain::merge_remote_shot`.
 ///

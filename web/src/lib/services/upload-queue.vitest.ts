@@ -13,7 +13,7 @@
  * Run: `cd web && pnpm test:vitest` (or `vitest run upload-queue`).
  */
 
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 
 // runEntry reaches the history store via `#lib/history/index.js`; mock it so no real
@@ -38,6 +38,9 @@ import {
 	VisualizerPremiumGatedError
 } from '../effect/errors.ts';
 import { enqueueEntry, readQueue } from './queue-store.ts';
+import { noteRateLimited, setPacingForTest } from '#lib/visualizer/pace.js';
+import { RUN_LOCK, setRunLocksForTest } from '#lib/visualizer/run-lock.js';
+import { FakeLocks } from '#lib/testing/fake-locks.js';
 import { pendingEdit, settlePendingEdit } from '#lib/visualizer/pending-edits.js';
 import { readSyncConfig, updateSyncConfig } from '#lib/visualizer/sync-config.js';
 import { writeSyncSettings } from '#lib/bean/visualizer-sync.js';
@@ -68,7 +71,6 @@ function fakeShotSync(over: {
 			patchShot: die('patchShot') as never,
 			pullShots: die('pullShots') as never,
 			fetchShotDetail: die('fetchShotDetail') as never,
-			pullAllShotsSince: die('pullAllShotsSince') as never,
 			applyShotReconciliation: die('applyShotReconciliation') as never,
 			pullAndReconcileShots: die('pullAndReconcileShots') as never,
 			uploadUnsyncedShots: die('uploadUnsyncedShots') as never
@@ -426,6 +428,42 @@ describe('UploadQueue.drain — edits waiting to reach Visualizer', () => {
 		expect(readSyncConfig().log[0]).toMatchObject({ id: 's1', direction: 'skip' });
 	});
 
+	it('a Premium refusal with Premium confirmed clears the journal mark and says so, as on Android', async () => {
+		settlePendingEdit('s1', { annotations: true, barista: true, tierSignal: true, premiumRefused: true });
+		const { ids, push } = pushed();
+		await drainWith({ pushPendingEdit: push }, { refreshPremium: Effect.succeed(true) });
+		expect(pendingEdit('s1')).toEqual({ barista: true });
+		expect(ids).toEqual(['s1']);
+		expect(readSyncConfig().log[0]).toMatchObject({ id: 's1', direction: 'skip' });
+		expect(readSyncConfig().log[0].error).toContain('Premium-only');
+	});
+
+	it('a tag signal with Premium confirmed keeps the journal mark', async () => {
+		settlePendingEdit('s1', { annotations: true, tags: { add: ['a'], remove: [] }, tierSignal: true });
+		await drainWith({ pushPendingEdit: pushed().push }, { refreshPremium: Effect.succeed(true) });
+		expect(pendingEdit('s1')).toEqual({ annotations: true });
+	});
+
+	it('a probe a 429 earlier in the drain would refuse keeps the day\'s try', async () => {
+		setPacingForTest(true);
+		settlePendingEdit('a', { annotations: true });
+		settlePendingEdit('b', { tags: { add: ['x'], remove: [] }, tierSignal: true });
+		const probe = vi.fn(() => null);
+		await drainWith(
+			{
+				pushPendingEdit: (_h: unknown, id: string) =>
+					Effect.sync(() => {
+						if (id === 'a') noteRateLimited(60_000); // its PATCH met a 429
+						return 'sent';
+					})
+			},
+			{ refreshPremium: Effect.sync(probe) }
+		);
+		setPacingForTest(false);
+		expect(probe).not.toHaveBeenCalled();
+		expect(pendingEdit('b')?.tierProbedAt).toBeUndefined();
+	});
+
 	it('a tier signal on Free keeps the tags until an upgrade', async () => {
 		writeSyncSettings({ premium: true, premiumCheckedAt: Date.now() });
 		settlePendingEdit('s1', { tags: { add: ['a'], remove: [] }, tierSignal: true });
@@ -460,6 +498,32 @@ describe('UploadQueue.drain — edits waiting to reach Visualizer', () => {
 			}
 		});
 		expect(ids).toEqual(['a']);
+	});
+});
+
+describe('UploadQueue.drain — waits for a cooldown and for another tab\'s run', () => {
+	afterEach(() => {
+		setPacingForTest(false);
+		setRunLocksForTest(null);
+	});
+
+	it('a 429 cooldown defers the drain', async () => {
+		setPacingForTest(true);
+		noteRateLimited(60_000);
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+		const result = await drainWith({ uploadShot: () => Effect.die('sent during a cooldown') });
+		expect(result.deferred).toBe(1);
+	});
+
+	it('a pull in another tab runs the drain between its pages: this one waits', async () => {
+		const locks = new FakeLocks();
+		let release = (): void => {};
+		void locks.request(RUN_LOCK, {}, () => new Promise<void>((r) => (release = r)));
+		setRunLocksForTest(locks);
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+		const result = await drainWith({ uploadShot: () => Effect.die('sent beside another tab\'s run') });
+		expect(result.deferred).toBe(1);
+		release();
 	});
 });
 

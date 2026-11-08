@@ -27,7 +27,7 @@
 	} from '#lib/visualizer/index.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
-	import { describeUnsyncedStop, type PullApplied, type PullOptions } from '#lib/services/shot-sync.js';
+	import { describeUnsyncedStop, pullRepairPending, type PullApplied, type PullOptions } from '#lib/services/shot-sync.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -52,16 +52,31 @@
 	// Shot pull / push / queue drain run on the app runtime. The card only
 	// renders when connected (which requires the runtime), so a missing runtime
 	// is the defensive unsupported-browser case.
-	async function svcPullAndReconcile(
-		sinceMs: number,
-		opts: PullOptions
-	): Promise<PullApplied> {
+	async function svcPullAndReconcile(opts: PullOptions): Promise<PullApplied> {
 		const api = appCtx().services;
 		if (!api) throw new Error('Visualizer runtime unavailable');
-		const result = await api.shots.pullAndReconcile(history, sinceMs, opts);
+		// Said before it starts: the first pull after this update can take long.
+		if (pullRepairPending() || opts.fromStart) toast.info(FULL_WALK_NOTICE);
+		const result = await api.shots.pullAndReconcile(history, {
+			...opts,
+			onProgress: (p) => (pullProgress = { fetched: p.fetched, page: p.page }),
+			onWaiting: (ms) => (pullWaitingUntil = Date.now() + ms)
+		});
+		pullWaitingUntil = null;
+		if (result.outcome.kind === 'Busy') {
+			toast.info(
+				result.outcome.restore
+					? 'A restore is running. The pull goes on with the next sync.'
+					: 'Another tab is syncing with Visualizer.'
+			);
+		}
 		if (result.refused > 0) toast.error(historyFullNotice(result.refused, history.capacity));
 		return result;
 	}
+
+	/** What the first pull after the update, or a re-pull, says before it starts. */
+	const FULL_WALK_NOTICE =
+		'Crema is checking your whole Visualizer account once. On a large account this takes a while, and shots it was missing come back. You can keep using the app.';
 	async function svcUploadUnsynced(): Promise<void> {
 		const result = await appCtx().services?.shots.uploadUnsynced(history);
 		// The free-plan daily cap / rate limit stopped the pass — say why.
@@ -84,6 +99,8 @@
 	let lastResult = $state<BeanSyncResult | null>(null);
 	/** Pull-pagination progress — non-null only while shots are streaming in. */
 	let pullProgress = $state<{ fetched: number; page: number } | null>(null);
+	/** Set while the pull sits out Visualizer's rate limit: when it resumes. */
+	let pullWaitingUntil = $state<number | null>(null);
 
 	onMount(() => {
 		// Refresh in case another tab edited it while this one was open.
@@ -200,50 +217,10 @@
 			//     `next_cursor` and reconciles each page against the local
 			//     history store. Progress drives a status line below.
 			if (directionPulls(config.direction.shots)) {
-				// Capture the cursor BEFORE fetching so shots updated mid-pull
-				// aren't skipped next time. Minus a 60s slop for client/server
-				// clock skew — re-pulling a row is a no-op (reconcile is
-				// idempotent), missing one is data loss.
-				const pullStartedAt = Date.now() - 60_000;
+				// The run moves the cursor itself, only when it walked everything,
+				// and writes its own line to the sync log.
 				try {
-					const { pulled, truncated, held } = await svcPullAndReconcile(
-						config.shotPullCursor ?? 0,
-						{
-							itemsPerPage: 50,
-							onProgress: (p) =>
-								(pullProgress = { fetched: p.fetched, page: p.page })
-						}
-					);
-					if (truncated) {
-						// Hit the page cap — older shots remain unpulled, so DON'T
-						// advance the cursor or the next run would skip them.
-						appendSyncLog({
-							direction: 'skip',
-							entity: 'shot',
-							id: '',
-							name: 'pull',
-							at: Date.now(),
-							error: 'Pull truncated at safety cap — re-run Sync to continue.'
-						});
-					} else if (held) {
-						// A row edited during the pull still lacks its curve: the
-						// cursor stays, so the next pull fetches it again.
-					} else {
-						// Caught up to the end — advance the cursor (added rows log
-						// themselves via reconciliation).
-						config = updateSyncConfig({ shotPullCursor: pullStartedAt });
-						if (pulled === 0) {
-							// A zero-row pull otherwise leaves no trace, which reads
-							// as "nothing happened" — log it so every run has a result.
-							appendSyncLog({
-								direction: 'pull',
-								entity: 'shot',
-								id: '',
-								name: 'No new shots from Visualizer',
-								at: Date.now()
-							});
-						}
-					}
+					await svcPullAndReconcile({});
 				} catch (err) {
 					logError('pull', 'shot', err);
 				} finally {
@@ -275,10 +252,9 @@
 
 	/**
 	 * Re-pull EVERY shot from Visualizer, ignoring the saved cursor (starts
-	 * from time 0). Reconciliation still de-dupes by signature, so this only
-	 * fills gaps — e.g. after clearing local history or switching devices —
-	 * rather than creating duplicates. On a clean (non-truncated) finish the
-	 * cursor is advanced to now so the next incremental "Sync now" is cheap.
+	 * from time 0), and try again the rows marked as failing. Rows already
+	 * here bind or skip, so this only fills gaps — e.g. after clearing local
+	 * history or switching devices — rather than creating duplicates.
 	 */
 	async function resyncAllShots(): Promise<void> {
 		if (syncing || resyncing) return;
@@ -292,33 +268,8 @@
 			return;
 		}
 		resyncing = true;
-		const pullStartedAt = Date.now() - 60_000;
 		try {
-			const { pulled, truncated, held } = await svcPullAndReconcile(0, {
-				itemsPerPage: 50,
-				onProgress: (p) => (pullProgress = { fetched: p.fetched, page: p.page })
-			});
-			if (truncated) {
-				appendSyncLog({
-					direction: 'skip',
-					entity: 'shot',
-					id: '',
-					name: 'Full re-pull',
-					at: Date.now(),
-					error: 'Pull truncated at safety cap — run again to continue.'
-				});
-			} else if (held) {
-				// A row edited during the pull still lacks its curve: run again.
-			} else {
-				config = updateSyncConfig({ shotPullCursor: pullStartedAt });
-				appendSyncLog({
-					direction: 'pull',
-					entity: 'shot',
-					id: '',
-					name: `Full re-pull — ${pulled} shot${pulled === 1 ? '' : 's'} reconciled`,
-					at: Date.now()
-				});
-			}
+			await svcPullAndReconcile({ fromStart: true });
 		} catch (err) {
 			appendSyncLog({
 				direction: 'pull',
@@ -425,9 +376,11 @@
 
 		<StRow
 			title="Sync now"
-			sub={pullProgress
-				? `Pulling shots — ${pullProgress.fetched} fetched (page ${pullProgress.page + 1})…`
-				: 'Run a one-shot full sync across every enabled entity.'}
+			sub={pullWaitingUntil
+				? `Visualizer asked Crema to slow down. The pull goes on at ${new Date(pullWaitingUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`
+				: pullProgress
+					? `Pulling shots — ${pullProgress.fetched} pulled (page ${pullProgress.page})…`
+					: 'Run a one-shot full sync across every enabled entity.'}
 		>
 			{#snippet control()}
 				<button

@@ -42,6 +42,11 @@ export interface PendingEdit {
 	 * one probe a day per signal, and a fresh cached tier never stands in.
 	 */
 	readonly tierProbedAt?: number;
+	/**
+	 * The signal was Visualizer refusing the journal fields as Premium-only.
+	 * Premium confirmed then means they never take: the journal mark clears.
+	 */
+	readonly premiumRefused?: true;
 	/** Failed attempts since the last success. */
 	readonly attempts?: number;
 	/** Unix ms before which the drain leaves this shot alone. */

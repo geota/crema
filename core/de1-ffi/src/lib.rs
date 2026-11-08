@@ -1344,6 +1344,17 @@ pub fn merge_remote_shot(payload: String) -> Result<String, CremaError> {
     de1_domain::merge_remote_shot_json(&payload).map_err(CremaError::from)
 }
 
+/// The pull run's rules by name (`planPage`, `recordRow`, `finishRun`,
+/// `pace`, …): JSON arguments in, JSON answer out. See
+/// [`de1_domain::pull_run_call`].
+///
+/// # Errors
+/// An unknown op, or arguments that don't parse.
+#[uniffi::export]
+pub fn pull_run_call(op: String, payload: String) -> Result<String, CremaError> {
+    de1_domain::pull_run_call(&op, &payload).map_err(CremaError::from)
+}
+
 /// A JSON tag list as Visualizer stores it. See [`de1_domain::normalize_tags`].
 ///
 /// # Errors

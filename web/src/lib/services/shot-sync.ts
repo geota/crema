@@ -35,6 +35,7 @@ import { Context, Effect, Layer, Option } from 'effect';
 import { HttpClient } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import {
+	NetworkError,
 	NotAuthenticatedError,
 	ResponseDecodeError,
 	ShotWithoutSeriesError,
@@ -48,6 +49,7 @@ import {
 	isRecoverable,
 	pendingEditFailure,
 	quotaLimit,
+	rowFailureOf,
 	refusedUpload,
 	quotaNotice,
 	RATE_LIMIT_NOTICE,
@@ -67,7 +69,28 @@ import { historyFullNotice } from '#lib/history/brew-date.js';
 import { effectiveGrindSetting } from '#lib/history/index.js';
 import { exportStoredShotAsV2Json } from '#lib/history/v2-export.js';
 import type { ShotPatchInputs, TimedSample } from '#lib/core/index.js';
-import type { ShotMergeInput, ShotPatch as RemoteShotPatch, TagMarks } from '#lib/core/crema-core.js';
+import {
+	ListStep,
+	PartialReason,
+	SkipReason,
+	type KeyCandidate,
+	type KnownRow,
+	type ListRow,
+	type PullTally,
+	type RowAction,
+	type RowFailure,
+	type RowOutcome,
+	type RunOutcome,
+	type ShotMergeInput,
+	type ShotPatch as RemoteShotPatch,
+	type TagMarks
+} from '#lib/core/crema-core.js';
+import { pullRules } from '#lib/visualizer/pull-run-core.js';
+import { noteRateLimited, storePace, waitFor } from '#lib/visualizer/pace.js';
+import { acquireRunLock } from '#lib/visualizer/run-lock.js';
+import { readPoison, writePoison } from '#lib/visualizer/poison.js';
+import { restoreFrozen, restoringInThisTab } from '#lib/restore/tab-safety.js';
+import { coolingDown } from '#lib/visualizer/pace.js';
 import { isBrewLog, refusedNoSamples, type ShotBean, type StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { getSettingsStore } from '#lib/settings/index.js';
@@ -82,6 +105,7 @@ import {
 	appendSyncLog,
 	excludedFromUpload,
 	readSyncConfig,
+	updateSyncConfig,
 	uploadsHeld
 } from '#lib/visualizer/sync-config.js';
 import {
@@ -461,25 +485,104 @@ export interface PullProgress {
 }
 
 export interface PullOptions {
-	itemsPerPage?: number;
+	/** Pages walked at most, a safety cap: past it the run ends `PageCap`. */
 	maxPages?: number;
 	onProgress?: (p: PullProgress) => void;
+	/** The run is sitting out a rate limit for this long. */
+	onWaiting?: (waitMs: number) => void;
+	/**
+	 * Run between pages, by the tab holding the run: the retry queue's drain.
+	 * Answers how many remote deletes it sent, which shift the list.
+	 */
+	betweenPages?: () => Promise<number>;
+	/** Walk the whole account, and forget the rows marked as failing. */
+	fromStart?: boolean;
 }
 
-/** What a pull left in the history. */
+/** What a pull did. */
 export interface PullApplied {
-	/** Rows the walk brought back. */
-	pulled: number;
-	/** More pages remained at the page cap. */
-	truncated: boolean;
-	/** New rows a full history refused. They aren't fetched again by this loop. */
-	refused: number;
 	/**
-	 * A row edited during the pull still lacks its curve, so its copy wasn't
-	 * taken: the cursor holds and the next pull fetches it again.
+	 * How the run ended (core `RunOutcome`), or `Busy`: another tab is
+	 * pulling, or a restore is running (`restore`: it started mid-walk, and
+	 * the rows applied before it stay).
 	 */
-	held: boolean;
+	outcome: RunOutcome | { kind: 'Busy'; restore?: true };
+	/** Rows the run added or changed. */
+	pulled: number;
+	/** New rows a full history had no room for: they wait, holding the cursor. */
+	refused: number;
+	/** The first run after this update: it walks the whole account once. */
+	repairing: boolean;
 }
+
+/** A pull that didn't run: another tab holds it, or is restoring. */
+const BUSY: PullApplied = { outcome: { kind: 'Busy' }, pulled: 0, refused: 0, repairing: false };
+
+/** A restore is applying, in this tab or another: sync waits for it. */
+const restoring = (): boolean => restoreFrozen() || restoringInThisTab();
+
+/** Rows a list page asks for: the most Visualizer gives. */
+const RUN_PAGE_ITEMS = 100;
+/** A run's safety cap on pages, so a server that never ends can't pin the tab. */
+const MAX_RUN_PAGES = 500;
+
+/** One run request's answer: its value, or the failure and what the core says to do. */
+type RunReply<A> =
+	| { readonly ok: true; readonly value: A }
+	| { readonly ok: false; readonly failure: RowFailure; readonly action: RowAction };
+
+/** A detail's own `updated_at` (unix s), in either format, or `null`. */
+function detailUpdatedAt(detail: unknown): number | null {
+	const d = detail as { updated_at?: unknown; meta?: { visualizer?: { updated_at?: unknown } } } | null;
+	const v = d?.updated_at ?? d?.meta?.visualizer?.updated_at;
+	return typeof v === 'number' && v > 0 ? v : null;
+}
+
+/** Whether the first pull after this update has yet to walk the whole account. */
+export function pullRepairPending(): boolean {
+	return readSyncConfig().pullCursorEpoch == null;
+}
+
+/** The run's one line in the sync log: a large run would push out every other line. */
+function runLogLine(
+	outcome: RunOutcome,
+	pulled: number,
+	refused: number,
+	capacity: number
+): Parameters<typeof appendSyncLog>[0] {
+	const at = Date.now();
+	const shots = `${pulled} shot${pulled === 1 ? '' : 's'}`;
+	if (outcome.kind === 'Complete') {
+		const skipped = outcome.details.skipped_permanent;
+		return {
+			direction: 'pull',
+			entity: 'shot',
+			id: '',
+			name: pulled === 0 ? 'No new shots from Visualizer' : `Pulled ${shots}`,
+			at,
+			...(skipped > 0 ? { error: `${skipped} couldn't be read and were skipped.` } : {})
+		};
+	}
+	const why =
+		outcome.kind === 'Partial'
+			? refused > 0 && outcome.details.reason === PartialReason.HistoryFull
+				? historyFullNotice(refused, capacity)
+				: PARTIAL_WHY[outcome.details.reason]
+			: outcome.kind === 'Failed'
+				? `Visualizer couldn't be reached (${outcome.details.failure.kind}).`
+				: 'The pull was blocked.';
+	return { direction: 'pull', entity: 'shot', id: '', name: `Pulled ${shots}, then stopped`, at, error: why };
+}
+
+const PARTIAL_WHY: Record<PartialReason, string> = {
+	[PartialReason.RateLimited]: 'Visualizer is limiting requests. The rest come with the next sync.',
+	[PartialReason.Offline]: 'The connection dropped. The rest come with the next sync.',
+	[PartialReason.ServerTrouble]: "Visualizer isn't answering properly. The rest come with the next sync.",
+	[PartialReason.PageCap]: 'The pull reached its page limit. Run Sync again to continue.',
+	[PartialReason.RowsFailed]: "Some shots couldn't be read. They're tried again with the next sync.",
+	[PartialReason.ListShifted]: 'Shots changed on Visualizer while pulling. The rest come with the next sync.',
+	[PartialReason.HistoryFull]: 'The history is full.'
+};
 
 /** What {@link ShotSync.applyShotReconciliation} left undone. */
 export interface ReconcileApplied {
@@ -489,15 +592,6 @@ export interface ReconcileApplied {
 	held: number;
 }
 
-export interface PullResult {
-	shots: WireShot[];
-	/** Per-shot telemetry keyed by Visualizer id — applied on the `add` step. */
-	samplesById: Map<string, TimedSample[]>;
-	/** Per-shot recipe (core `Profile` JSON) keyed by Visualizer id — fetched at
-	 *  pull time so a pulled shot carries its recipe (#12). */
-	profilesById: Map<string, unknown>;
-	truncated: boolean;
-}
 
 /**
  * What {@link ShotSync.pushPendingEdit} did: `none` (nothing owed, or the row
@@ -561,11 +655,7 @@ export class ShotSync extends Context.Service<
 			page?: number,
 			itemsPerPage?: number
 		) => Effect.Effect<{ summaries: ShotSummary[]; paging: Paging }, VisualizerCallError>;
-		readonly fetchShotDetail: (id: string) => Effect.Effect<ShotDetail, VisualizerCallError>;
-		readonly pullAllShotsSince: (
-			sinceMs: number,
-			opts?: PullOptions
-		) => Effect.Effect<PullResult, VisualizerCallError>;
+		readonly fetchShotDetail: (id: string, patient?: boolean) => Effect.Effect<ShotDetail, VisualizerCallError>;
 		readonly applyShotReconciliation: (
 			history: HistoryStore,
 			remote: WireShot[],
@@ -576,9 +666,8 @@ export class ShotSync extends Context.Service<
 		) => Effect.Effect<ReconcileApplied>;
 		readonly pullAndReconcileShots: (
 			history: HistoryStore,
-			sinceMs: number,
 			opts?: PullOptions
-		) => Effect.Effect<PullApplied, VisualizerCallError>;
+		) => Effect.Effect<PullApplied, NotAuthenticatedError>;
 		readonly uploadUnsyncedShots: (history: HistoryStore) => Effect.Effect<UnsyncedUploadResult>;
 	}
 >()('crema/ShotSync') {}
@@ -768,9 +857,9 @@ export const ShotSyncLive = Layer.effect(
 		 * than validated — `ShotDetail` is a two-variant (Default/Beanconqueror)
 		 * shape and a stripping schema would drop fields wasm needs (handoff §T-12).
 		 */
-		const fetchShotDetail = Effect.fn('ShotSync.fetchShotDetail')(function* (id: string) {
+		const fetchShotDetail = Effect.fn('ShotSync.fetchShotDetail')(function* (id: string, patient = false) {
 			yield* requireConnected;
-			const raw = yield* call(`/shots/${id}`);
+			const raw = yield* call(`/shots/${id}`, { patient });
 			return raw as ShotDetail;
 		});
 
@@ -780,9 +869,9 @@ export const ShotSyncLive = Layer.effect(
 		 * a pulled shot is self-contained (#12). Throws on a profile-less stub (the
 		 * v2 parser rejects an empty step list) — the caller skips it.
 		 */
-		const fetchShotProfile = Effect.fn('ShotSync.fetchShotProfile')(function* (id: string) {
+		const fetchShotProfile = Effect.fn('ShotSync.fetchShotProfile')(function* (id: string, patient = false) {
 			yield* requireConnected;
-			const v2 = yield* call(`/shots/${id}/profile?format=json`);
+			const v2 = yield* call(`/shots/${id}/profile?format=json`, { patient });
 			// `parseV2Profile` throws on a profile-less stub / invalid v2; swallow it
 			// (the shot stays name-only) so a sync defect can't escape the pull walk.
 			try {
@@ -790,84 +879,6 @@ export const ShotSyncLive = Layer.effect(
 			} catch {
 				return null;
 			}
-		});
-
-		/**
-		 * Pull every remote shot updated since `sinceMs` (Crema-side unix-ms
-		 * cursor). Walks pages of `/shots?sort=updated_at` until either the server
-		 * runs out OR a summary's `updated_at` is older than the cursor. **Safety
-		 * cap**: walks at most `maxPages` pages (default 200) so a buggy server
-		 * can't pin the tab — when the cap is hit while more pages remain, returns
-		 * `truncated: true`.
-		 */
-		const pullAllShotsSince = Effect.fn('ShotSync.pullAllShotsSince')(function* (
-			sinceMs: number,
-			opts: PullOptions = {}
-		) {
-			const items = Math.min(100, Math.max(1, Math.floor(opts.itemsPerPage ?? 50)));
-			const maxPages = opts.maxPages ?? 200;
-			const cursorSec = Math.floor(sinceMs / 1000);
-			const wireShots: WireShot[] = [];
-			const samplesById = new Map<string, TimedSample[]>();
-			const profilesById = new Map<string, unknown>();
-			let rowsMissed = false;
-
-			const initial: PullState = { page: 1, totalPages: 1, reachedOlder: false, keepGoing: true };
-			const finalState = yield* iterate(initial, {
-				while: (s) => s.keepGoing && s.page <= maxPages,
-				body: (s) =>
-					Effect.gen(function* () {
-						const { summaries, paging } = yield* pullShots(s.page, items);
-						const totalPages = paging.pages || s.totalPages;
-						let reachedOlder = s.reachedOlder;
-						for (const summary of summaries) {
-							if (summary.updated_at < cursorSec) {
-								// Sorted by updated_at desc, so once we see an older row we've
-								// crossed the cursor.
-								reachedOlder = true;
-								continue;
-							}
-							// One failed detail fetch shouldn't blow up the whole sync —
-							// re-throw only on auth (no point continuing); other errors skip
-							// the row and the next sync retries.
-							const detailOpt = yield* fetchShotDetail(summary.id).pipe(
-								Effect.map((d) => Option.some(d)),
-								Effect.catchIf(
-									(e) => !isAuthError(e),
-									() => Effect.succeedNone
-								)
-							);
-							if (Option.isNone(detailOpt)) rowsMissed = true;
-							if (Option.isSome(detailOpt)) {
-								const detail = detailOpt.value;
-								wireShots.push(wireShotFromDetail(summary, detail));
-								samplesById.set(summary.id, samplesFromVisualizerDetail(detail));
-								// Pull the recipe too so the shot is self-contained (#12); a
-								// profile-less stub / fetch error just leaves it name-only.
-								const profileOpt = yield* fetchShotProfile(summary.id).pipe(
-									Effect.map(Option.fromNullishOr),
-									Effect.catchIf(
-										(e) => !isAuthError(e),
-										() => Effect.succeedNone
-									)
-								);
-								if (Option.isSome(profileOpt)) profilesById.set(summary.id, profileOpt.value);
-							}
-						}
-						const hasMore = !reachedOlder && s.page < totalPages && summaries.length > 0;
-						opts.onProgress?.({
-							fetched: wireShots.length,
-							page: s.page,
-							totalPages,
-							hasMore
-						});
-						return { page: s.page + 1, totalPages, reachedOlder, keepGoing: hasMore };
-					})
-			});
-
-			// `keepGoing` is still true only when the loop exited because the
-			// `maxPages` cap was hit — i.e. more pages remained.
-			return { shots: wireShots, samplesById, profilesById, truncated: finalState.keepGoing, rowsMissed };
 		});
 
 		/**
@@ -948,7 +959,11 @@ export const ShotSyncLive = Layer.effect(
 							// Attach the recipe fetched at pull time so the shot is
 							// self-contained (#12); absent for profile-less remotes.
 							const profile = profilesById?.get(action.remote.id);
-							if (!history.insertPulled(profile != null ? { ...stored, profile } : stored)) {
+							// Its version too, or every run would fetch it again.
+							const version =
+								action.remote.updated_at_ms != null ? Math.floor(action.remote.updated_at_ms / 1000) : null;
+							const row = { ...stored, visualizerUpdatedAt: version, ...(profile != null ? { profile } : {}) };
+							if (!history.insertPulled(row)) {
 								refused += 1;
 								continue;
 							}
@@ -983,46 +998,298 @@ export const ShotSyncLive = Layer.effect(
 			});
 
 		/**
-		 * Pull every shot updated since `sinceMs`, reconcile against `history`, and
-		 * apply the resulting actions. Returns the shape callers need to surface a
-		 * truncation warning.
+		 * One request of a pull run, paced (patient), with the core's rule for
+		 * a failure: a 5xx retries once in place, a 429 sits its wait out and
+		 * tries the same request again (three times), and anything else comes
+		 * back with what to do about it.
+		 */
+		const runRequest = <A>(
+			request: Effect.Effect<A, VisualizerCallError | ResponseDecodeError>,
+			onWaiting?: (waitMs: number) => void
+		): Effect.Effect<RunReply<A>> =>
+			Effect.gen(function* () {
+				for (let attempt = 0; ; attempt += 1) {
+					const result = yield* Effect.result(request);
+					if (result._tag === 'Success') return { ok: true as const, value: result.success };
+					const failure = rowFailureOf(result.failure);
+					const action = pullRules.rowFailureAction(failure, attempt);
+					if (action.kind === 'RetryNow') continue;
+					if (action.kind === 'Wait') {
+						noteRateLimited(action.details.wait_ms);
+						onWaiting?.(action.details.wait_ms);
+						yield* waitFor(action.details.wait_ms);
+						continue;
+					}
+					return { ok: false as const, failure, action };
+				}
+			});
+
+		/** A list page, for the run: a body that doesn't decode is a portal's page. */
+		const listPage = (page: number, sinceMs: number) =>
+			Effect.gen(function* () {
+				const after = sinceMs > 0 ? `&updated_after=${Math.floor(sinceMs / 1000) - 1}` : '';
+				const raw = yield* call(`/shots?page=${page}&items=${RUN_PAGE_ITEMS}&sort=updated_at${after}`, {
+					patient: true
+				});
+				const body = decodeResponse(ShotListResponseSchema, raw, 'GET /shots');
+				if (!body) {
+					return yield* new NetworkError({ cause: new SyntaxError('not a list'), url: `${API_BASE}/shots` });
+				}
+				return body;
+			});
+
+		/** What the plan knows of the rows this device holds, by remote id. */
+		const knownRowsOf = (history: HistoryStore, seriesLoaded: boolean): Map<string, KnownRow> => {
+			const keptOut = remoteKeptOut();
+			const out = new Map<string, KnownRow>();
+			for (const shot of history.rawAll) {
+				if (!shot.visualizerId) continue;
+				out.set(shot.visualizerId, {
+					remoteId: shot.visualizerId,
+					remoteVersion: shot.visualizerUpdatedAt ?? undefined,
+					// Not loaded yet: fetched, then held until the curve is there.
+					hasSeries: seriesLoaded && shot.record.samples.length > 0,
+					isBrew: isBrewLog(shot),
+					tombstoned: shot.deletedAt != null
+				});
+			}
+			for (const id of keptOut) out.set(id, { remoteId: id, tombstoned: true });
+			return out;
+		};
+
+		/** Unbound rows and unbound tombstones a remote row may be the upload of. */
+		const keyCandidatesOf = (history: HistoryStore): KeyCandidate[] =>
+			history.rawAll
+				.filter((s) => !s.visualizerId && !isBrewLog(s))
+				.map((s) => ({
+					localId: s.id,
+					completedAtMs: s.completedAt,
+					durationMs: s.record.duration,
+					tombstone: s.deletedAt != null
+				}));
+
+		/**
+		 * Fetch one row's detail and apply it, as the run does for each row: the
+		 * recipe only when offered and the row has none, the row re-read just
+		 * before the request so an edit made meanwhile wins.
+		 */
+		const pullRow = (
+			history: HistoryStore,
+			row: ListRow,
+			seriesLoaded: boolean,
+			onWaiting?: (waitMs: number) => void
+		): Effect.Effect<RunReply<RowOutcome>> =>
+			Effect.gen(function* () {
+				const bound = history.rawAll.find((s) => s.visualizerId === row.id);
+				const before = bound
+					? new Map([[bound.id, mergeInputOf(bound, pendingEdit(bound.id))]])
+					: undefined;
+				const detail = yield* runRequest(fetchShotDetail(row.id, true), onWaiting);
+				if (!detail.ok) return detail;
+				let wire: WireShot;
+				let samples: TimedSample[];
+				// A poison retry has no list row: its version comes from the detail.
+				const updatedAt = row.updated_at > 0 ? row.updated_at : detailUpdatedAt(detail.value);
+				try {
+					wire = wireShotFromDetail({ id: row.id, clock: row.clock, updated_at: updatedAt ?? 0 }, detail.value);
+					if (updatedAt === null) wire = { ...wire, updated_at_ms: null };
+					samples = samplesFromVisualizerDetail(detail.value);
+				} catch {
+					const failure: RowFailure = { kind: 'Unmappable' };
+					return { ok: false as const, failure, action: pullRules.rowFailureAction(failure, 0) };
+				}
+				const offered = typeof (detail.value as { profile_url?: unknown }).profile_url === 'string';
+				let profile: unknown = null;
+				if (offered && (bound?.profile ?? null) == null) {
+					// A recipe that won't come leaves the row name-only.
+					const got = yield* runRequest(fetchShotProfile(row.id, true), onWaiting);
+					profile = got.ok ? got.value : null;
+				}
+				const { refused, held } = yield* applyShotReconciliation(
+					history,
+					[wire],
+					new Map([[row.id, samples]]),
+					profile != null ? new Map([[row.id, profile]]) : undefined,
+					before,
+					seriesLoaded
+				);
+				const outcome: RowOutcome =
+					refused > 0
+						? { kind: 'HistoryFull' }
+						: held > 0
+							? { kind: 'EditedDuringFetch', details: { has_series: false } }
+							: { kind: 'Applied' };
+				return { ok: true as const, value: outcome };
+			});
+
+		/**
+		 * Pull from Visualizer as the core's run rules say (`#lib/visualizer/
+		 * pull-run-core.js`): one run at a time across tabs, paced, walking
+		 * `GET /shots` newest first from the cursor (`updated_after`). Each row
+		 * applies as it goes, its version written last, so a run that stops keeps
+		 * what it did and the next one skips it. The cursor moves only on a
+		 * complete run, on the server's clock. A row that keeps failing becomes
+		 * poison after three counted days and is retried alone once a day.
+		 *
+		 * The first run after this changed (`pullCursorEpoch` unset) walks the
+		 * whole account once: an old cursor passed rows no pull applied (#328).
 		 */
 		const pullAndReconcileShots = Effect.fn('ShotSync.pullAndReconcileShots')(function* (
 			history: HistoryStore,
-			sinceMs: number,
 			opts: PullOptions = {}
 		) {
 			// Not from an account this device can't name.
 			if (readSyncConfig().accountUnconfirmed) return yield* new NotAuthenticatedError();
-			// A row read before its curve loaded would look like it has none:
-			// if the load timed out, a row with no curve may yet have one.
-			const seriesLoaded = yield* Effect.promise(() => history.seriesReady());
-			const run = beginPullRun();
-			const before = mergeInputsOf(history);
-			const { shots, samplesById, profilesById, truncated, rowsMissed } = yield* pullAllShotsSince(
-				sinceMs,
-				opts
+			yield* requireConnected;
+			// A restore, here or in another tab: its rows aren't settled yet.
+			if (restoring()) return { ...BUSY, outcome: { kind: 'Busy', restore: true } } satisfies PullApplied;
+			const release = yield* Effect.promise(acquireRunLock);
+			if (!release) return BUSY;
+			return yield* walk(history, opts).pipe(
+				Effect.ensuring(
+					Effect.sync(() => {
+						storePace();
+						release();
+					})
+				)
 			);
-			const { refused, held } =
-				shots.length > 0
-					? yield* applyShotReconciliation(history, shots, samplesById, profilesById, before, seriesLoaded)
-					: { refused: 0, held: 0 };
-			if (refused > 0) {
-				// One line for the run: a large pull would push out the whole log.
-				appendSyncLog({
-					direction: 'skip',
-					entity: 'shot',
-					id: '',
-					name: 'pull',
-					at: Date.now(),
-					error: historyFullNotice(refused, history.capacity)
-				});
-			}
-			if (!truncated && !rowsMissed && held === 0) {
-				for (const id of expiredTombstones(run, sinceMs)) history.purgeTombstone(id);
-			}
-			return { pulled: shots.length, truncated, refused, held: held > 0 };
 		});
+
+		const walk = (history: HistoryStore, opts: PullOptions) =>
+			Effect.gen(function* () {
+				const config = readSyncConfig();
+				const repairing = config.pullCursorEpoch == null;
+				const legacyCursor =
+					repairing && config.shotPullCursor ? Math.floor(config.shotPullCursor / 1000) : undefined;
+				const sinceMs = opts.fromStart || repairing ? 0 : (config.shotPullCursor ?? 0);
+				// A row read before its curve loaded would look like it has none:
+				// if the load timed out, a row with no curve may yet have one.
+				const seriesLoaded = yield* Effect.promise(() => history.seriesReady());
+				const pullRun = beginPullRun();
+				let poison = opts.fromStart ? [] : readPoison();
+				const resolved: string[] = [];
+				let tally: PullTally = { sinceMs };
+				let pulled = 0;
+				let refused = 0;
+				const waiting = opts.onWaiting;
+
+				// Poison rows due their daily try, alone, before the walk.
+				for (const id of pullRules.poisonDue(poison, Date.now())) {
+					const entry = poison.find((e) => e.id === id);
+					const row: ListRow = { id, clock: entry?.clock ?? 0, updated_at: 0 };
+					const got = yield* pullRow(history, row, seriesLoaded, waiting);
+					const gone = !got.ok && got.failure.kind === 'Call' && got.failure.details.failure.kind === 'NotFound';
+					if (got.ok || gone) {
+						resolved.push(id);
+						if (got.ok && got.value.kind === 'Applied') pulled += 1;
+					} else {
+						poison = pullRules.notePoisonRetry(poison, id, Date.now());
+					}
+				}
+
+				let page = 1;
+				let ownDeletes = 0;
+				walk: for (;;) {
+					if (restoring()) {
+						// What it applied stays; the cursor, the poison list and the
+						// rest wait for the next run, after the restore.
+						appendSyncLog({
+							direction: 'pull',
+							entity: 'shot',
+							id: '',
+							name: `Pulled ${pulled} shot${pulled === 1 ? '' : 's'}, then paused`,
+							at: Date.now(),
+							error: 'A restore started, so the pull stopped. It goes on with the next sync.'
+						});
+						return { outcome: { kind: 'Busy', restore: true }, pulled, refused, repairing } satisfies PullApplied;
+					}
+					if (page > (opts.maxPages ?? MAX_RUN_PAGES)) {
+						tally = { ...tally, ended: { kind: 'Partial', details: { reason: PartialReason.PageCap } } };
+						break;
+					}
+					const list = yield* runRequest(listPage(page, sinceMs), waiting);
+					if (!list.ok) {
+						const f = list.failure;
+						tally = pullRules.endRun(
+							tally,
+							f.kind === 'Call' ? f.details.failure : { kind: 'Unavailable', details: { status: 200 } }
+						);
+						break;
+					}
+					const { data, paging } = list.value;
+					const shift = pullRules.afterListPage(tally, paging.count, ownDeletes);
+					tally = shift.tally;
+					ownDeletes = 0;
+					if (shift.step === ListStep.Restart) {
+						page = 1;
+						continue;
+					}
+					if (shift.step === ListStep.Stop) break;
+					const rows: ListRow[] = data.map((r) => ({ id: r.id, clock: r.clock, updated_at: r.updated_at }));
+					const known = knownRowsOf(history, seriesLoaded);
+					const plan = pullRules.planPage({
+						rows,
+						known: rows.map((r) => known.get(r.id)).filter((k): k is KnownRow => k !== undefined),
+						candidates: keyCandidatesOf(history),
+						freeSlots: history.freeSlots,
+						legacyCursor
+					});
+					for (const [i, planned] of plan.rows.entries()) {
+						const row = rows[i];
+						if (planned.kind === 'Skip') {
+							const full = planned.details.why === SkipReason.HistoryFull;
+							if (full) refused += 1;
+							tally = pullRules.recordRow(tally, row, full ? { kind: 'HistoryFull' } : { kind: 'Unchanged' });
+							continue;
+						}
+						const got = yield* pullRow(history, row, seriesLoaded, waiting);
+						if (got.ok) {
+							if (got.value.kind === 'Applied') {
+								pulled += 1;
+								resolved.push(row.id);
+							}
+							if (got.value.kind === 'HistoryFull') refused += 1;
+							tally = pullRules.recordRow(tally, row, got.value);
+						} else if (got.action.kind === 'Skip') {
+							tally = pullRules.recordRow(tally, row, { kind: 'Failed', details: got.action.details });
+						} else {
+							const f = got.failure;
+							tally = pullRules.endRun(
+								tally,
+								f.kind === 'Call' ? f.details.failure : { kind: 'Unavailable', details: { status: 200 } }
+							);
+						}
+						if (tally.ended) break walk;
+					}
+					opts.onProgress?.({ fetched: pulled, page, totalPages: paging.pages, hasMore: page < paging.pages });
+					// The drain runs here, between pages, from the tab holding the run.
+					if (opts.betweenPages) ownDeletes += yield* Effect.promise(opts.betweenPages);
+					if (page >= paging.pages || data.length === 0) break;
+					page += 1;
+				}
+
+				// The only failing row may be the only one changed: one known-good
+				// detail says whether the server works, for the poison count.
+				if (pullRules.healthProbeDue(tally)) {
+					const good = history.rawAll.find(
+						(s) => s.visualizerId && s.deletedAt == null && s.visualizerUpdatedAt != null
+					);
+					if (good?.visualizerId) {
+						const probe = yield* Effect.result(fetchShotDetail(good.visualizerId, true));
+						tally = pullRules.recordHealthProbe(tally, probe._tag === 'Success');
+					}
+				}
+
+				poison = pullRules.settlePoison(poison, tally, resolved, Date.now());
+				writePoison(poison);
+				const outcome = pullRules.finishRun(tally, poison);
+				if (outcome.kind === 'Complete') {
+					updateSyncConfig({ shotPullCursor: outcome.details.next_cursor_ms, pullCursorEpoch: 1 });
+					for (const id of expiredTombstones(pullRun, sinceMs)) history.purgeTombstone(id);
+				}
+				appendSyncLog(runLogLine(outcome, pulled, refused, history.capacity));
+				return { outcome, pulled, refused, repairing } satisfies PullApplied;
+			});
 
 		/**
 		 * Upload every local shot that lacks a `visualizerId`. Recoverable
@@ -1239,6 +1506,7 @@ export const ShotSyncLive = Layer.effect(
 					settlePendingEdit(id, {
 						...current,
 						tierSignal: true,
+						...(e._tag === 'VisualizerPremiumGatedError' ? { premiumRefused: true as const } : {}),
 						attempts,
 						nextAttemptAt: Date.now() + retryDelayMs(e, attempts - 1)
 					});
@@ -1321,7 +1589,6 @@ export const ShotSyncLive = Layer.effect(
 			pushPendingEdit,
 			pullShots,
 			fetchShotDetail,
-			pullAllShotsSince,
 			applyShotReconciliation,
 			pullAndReconcileShots,
 			uploadUnsyncedShots

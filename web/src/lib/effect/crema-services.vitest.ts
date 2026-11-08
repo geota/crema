@@ -50,10 +50,10 @@ function harness(tokens: TokenSet | null = aToken) {
 		clearTokens: Effect.sync(() => spy.clearTokens())
 	} as never);
 	const shotSync = Layer.succeed(ShotSync, {
-		pullAndReconcileShots: (h: unknown, since: number, opts: unknown) =>
-			Effect.sync(() => {
-				spy.pullAndReconcile(h, since, opts);
-				return { pulled: 2, truncated: false };
+		pullAndReconcileShots: (h: unknown, opts: { betweenPages?: () => Promise<number> }) =>
+			Effect.promise(async () => {
+				spy.pullAndReconcile(h, opts);
+				return { pulled: 2, deletes: await opts.betweenPages?.() };
 			}),
 		uploadUnsyncedShots: (h: unknown) => Effect.sync(() => spy.uploadUnsynced(h))
 	} as never);
@@ -136,13 +136,13 @@ describe('createCremaServices — beans (no method transposition)', () => {
 });
 
 describe('createCremaServices — shots + queue', () => {
-	it('pullAndReconcile forwards history, cursor and opts and returns the result', async () => {
+	it('pullAndReconcile forwards history and opts, with the queue drain between pages', async () => {
 		const { services, spy } = harness();
 		const h = { tag: 'history' } as never;
-		const opts = { itemsPerPage: 50 } as never;
-		const out = await services.shots.pullAndReconcile(h, 1234, opts);
-		expect(spy.pullAndReconcile).toHaveBeenCalledWith(h, 1234, opts);
-		expect(out).toEqual({ pulled: 2, truncated: false });
+		const out = await services.shots.pullAndReconcile(h, { fromStart: true });
+		expect(spy.pullAndReconcile).toHaveBeenCalledWith(h, expect.objectContaining({ fromStart: true }));
+		expect(spy.drain).toHaveBeenCalledTimes(1);
+		expect(out).toMatchObject({ pulled: 2 });
 	});
 	it('uploadUnsynced forwards the history store', async () => {
 		const { services, spy } = harness();

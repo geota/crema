@@ -80,7 +80,6 @@ function fakeShotSync(uploadShot: (shot: unknown) => Effect.Effect<{ visualizerI
 			patchShot: die('patchShot') as never,
 			pullShots: die('pullShots') as never,
 			fetchShotDetail: die('fetchShotDetail') as never,
-			pullAllShotsSince: die('pullAllShotsSince') as never,
 			applyShotReconciliation: die('applyShotReconciliation') as never,
 			pullAndReconcileShots: die('pullAndReconcileShots') as never,
 			uploadUnsyncedShots: die('uploadUnsyncedShots') as never

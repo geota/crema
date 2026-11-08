@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.visualizer.pullWaitingLine
 import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.CoreBounds
 import coffee.crema.ui.RelayPairingRows
@@ -927,7 +928,8 @@ private fun SharingSection(
             }
             CremaSettingsRow(
                 "Sync now",
-                "Beans, roasters, then shots." + (if (unsyncedCount == 0) " All ${ui.history.size} local shots are on Visualizer." else " $unsyncedCount local shot(s) not uploaded yet."),
+                vz.pullWaitingUntil?.let(::pullWaitingLine)
+                    ?: ("Beans, roasters, then shots." + (if (unsyncedCount == 0) " All ${ui.history.size} local shots are on Visualizer." else " $unsyncedCount local shot(s) not uploaded yet.")),
             ) {
                 CremaButton(
                     onClick = { vm.visualizer.syncNow(ui.history) },

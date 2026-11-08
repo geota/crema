@@ -640,4 +640,18 @@ class VisualizerEditSyncTest {
         assertEquals(emptyMap<String, PendingEdit>(), runBlocking { store.load() }.pendingEdits)
         assertTrue(runBlocking { store.load() }.log.any { it.error?.startsWith("This edit can't reach Visualizer") == true })
     }
+
+    @Test
+    fun `a Premium refusal during a 429 cooldown keeps the day's tier probe`() {
+        seed(premium = true)
+        patchStatus = HttpStatusCode.Forbidden
+        patchBody = probeRefusal
+        val s = sync().also { runBlocking { it.load() } }
+        // Another request's 429 lands while this PATCH is out.
+        onPatch = { runBlocking { client.pacer!!.noteRateLimited(600_000) } }
+        s.markShotEdited(edited.id, annotations = true)
+        runBlocking { s.pushPendingEdit(edited.id, fallback = edited) }
+        assertEquals(0, probes())
+        assertEquals(0L, runBlocking { store.load() }.pendingEdits.getValue(edited.id).tierProbedAt)
+    }
 }

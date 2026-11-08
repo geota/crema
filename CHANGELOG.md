@@ -109,6 +109,21 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Pulls from Visualizer finish on Android too** — a pull walks every page,
+  paced under Visualizer's limits, and each shot lands as it arrives, so one
+  that stops keeps what it got and the next picks up only what's left. A rate
+  limit pauses it, and Settings says until when; it's no longer retried a few
+  seconds later. A shot that keeps failing stops holding the pull back after
+  three days and is tried once a day. The cursor follows Visualizer's clock, so
+  a phone with a wrong clock no longer skips shots. The first sync after this
+  update checks your whole account once, and says so. Android.
+- **Pulls from Visualizer finish** — a web pull now walks every page, paced
+  under Visualizer's limits, instead of quietly stopping. Each shot lands as it
+  arrives, so a pull that stops keeps what it got, and the next one picks up
+  only what's left. A rate limit pauses the pull and the Sync card says until
+  when. A shot that keeps failing stops holding the pull back after three days,
+  and is tried once a day. One tab pulls at a time. The first sync after this
+  update checks your whole account once, and says so when it starts. Web.
 - **Tag edits reach Visualizer without undoing the website's** — on Premium, a
   tag edit now reads the shot's tags on Visualizer first and sends only what you
   added and removed, so a tag added on the website stays and comes back to Crema

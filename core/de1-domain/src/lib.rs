@@ -306,8 +306,9 @@ pub use profile_roast::roast_from_profile;
 pub use pull_run::{
     KeyCandidate, KnownRow, ListRow, ListStep, PaceBucket, PageInput, PagePlan, PoisonEntry,
     PullTally, RowAction, RowFailure, RowOutcome, RowPlan, RunEnd, SkipReason, after_list_page,
-    choose_bind, end_run, finish_run, health_probe_due, note_rate_limit, pace, plan_page,
-    poison_due, record_health_probe, record_row, row_failure_action, settle_poison,
+    choose_bind, end_run, finish_run, health_probe_due, note_poison_retry, note_rate_limit, pace,
+    plan_page, poison_due, pull_run_call, record_health_probe, record_row, row_failure_action,
+    settle_poison,
 };
 pub use replay::{ReplayMeta, ReplayMetaBean, fold_meta_jsonl, fold_meta_jsonl_json};
 pub use session::SessionTimer;

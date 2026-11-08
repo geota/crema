@@ -308,6 +308,18 @@ class DriveSync(
     }
 
     /**
+     * A restore finished: whatever damage the pre-damage pin guarded is dealt
+     * with, so its 30-day hold ends. The pin stays in retention's slot until a
+     * new damage pins yesterday's copy (REVIEW-366).
+     */
+    fun restoreCompleted() {
+        scope.launch {
+            if (!ownState.await()) return@launch
+            if (persisted.preDamageCopy != null && !persisted.pinReleased) persist { it.copy(pinReleased = true) }
+        }
+    }
+
+    /**
      * Forget the token, then revoke the grant at Google (best-effort, from the
      * in-memory copy so a slow or failed revoke never leaves it on disk).
      * Revoking the refresh token ends the whole grant (final review 05 N-5).
@@ -601,14 +613,18 @@ class DriveSync(
             // age is read on Drive's clock, against the newest copy listed.
             val current = persisted.preDamageCopy?.let { id -> files.find { it.id == id } }
             val newest = files.maxOfOrNull { it.modifiedMs }
-            if (current != null && newest != null && newest - current.modifiedMs < PIN_KEEPS_MS) {
-                current.id
+            val held = current != null && newest != null && !persisted.pinReleased &&
+                newest - current.modifiedMs < PIN_KEEPS_MS
+            if (held) {
+                current!!.id
             } else {
                 newestAutoBackup(json.encodeToString(ListSerializer(BackupFile.serializer()), files), nameLike)
             }
         }.fold(
             onSuccess = { pin ->
-                persist { it.copy(damageSeen = seen + damage, preDamageCopy = pin) }
+                persist {
+                    it.copy(damageSeen = seen + damage, preDamageCopy = pin, pinReleased = it.pinReleased && pin == it.preDamageCopy)
+                }
                 _state.update { it.copy(autoBackupPaused = null) }
                 true
             },
