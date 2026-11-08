@@ -983,6 +983,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         proxy.start()
         // Seed the recipe library from disk and keep the custom-method labels current.
         guided.load()
+        // Temporary backup files a killed process left (#310 P2a).
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { sweepBackupTemp(app.cacheDir, keepMs = 0) }
     }
 
     init {
@@ -1400,8 +1402,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Write export [text] to a SAF document Uri (large-payload safe). */
     fun writeTextToUri(uri: Uri, text: String) = library.writeTextToUri(uri, text)
 
-    /** Write raw [bytes] to a SAF document Uri — the binary backup save. */
-    fun writeBytesToUri(uri: Uri, bytes: ByteArray) = library.writeBytesToUri(uri, bytes)
+    /** Copy a built backup [file] to a SAF document Uri, then remove it. */
+    fun writeFileToUri(uri: Uri, file: java.io.File) = library.writeFileToUri(uri, file)
 
     /** Import profiles (Crema / community-v2 / legacy .tcl, via the core). */
     fun importProfiles(uri: Uri) = library.importProfiles(uri)
@@ -1409,9 +1411,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Import shots from a Crema / de1app / legacy export. */
     fun importShots(uri: Uri) = library.importShots(uri)
 
-    /** Wrap the backup JSONL + bean photos into a `.crema.zip`, or null + a
-     *  notice. Suspends: the build runs off the main thread. */
-    suspend fun buildBackupZipBytes(): ByteArray? = library.buildBackupZipBytes()
+    /** Build the `.crema.zip` into a temporary file, line by line (#310 P2a),
+     *  or null + a notice. Suspends: the build runs off the main thread. */
+    suspend fun buildBackupZipFile(): java.io.File? = library.buildBackupZipFile()
+
+    /** Stop the backup being built, keeping nothing. */
+    fun cancelBackup() = library.cancelBackup()
+
+    /** [buildBackupZipFile] read into memory, and the file removed: for tests,
+     *  which restore what they back up. The app never holds a backup whole. */
+    @androidx.annotation.VisibleForTesting
+    suspend fun buildBackupZipBytes(): ByteArray? =
+        buildBackupZipFile()?.let { f -> try { f.readBytes() } finally { f.delete() } }
 
     /** A suggested filename for the SAF create-document picker. */
     fun backupFileName(): String = library.backupFileName()

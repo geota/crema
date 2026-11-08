@@ -74,7 +74,9 @@ class DriveSessionTest {
     private fun reopen() = DriveSync(
         store, json, CoroutineScope(job + Dispatchers.Default), "cid",
         notify = { notices += it },
-        backupZip = { BackupZip(ByteArray(1), coffee.crema.core.BackupCounts(1u, 1u)) },
+        backupZip = {
+            BackupZip(java.io.File.createTempFile("backup", ".zip").apply { writeBytes(ByteArray(1)) }, coffee.crema.core.BackupCounts(1u, 1u))
+        },
         backupFileName = { "crema-backup-1" },
         applyRestore = { _, _ -> },
         exchangeCode = { _, _ -> set("new") },
