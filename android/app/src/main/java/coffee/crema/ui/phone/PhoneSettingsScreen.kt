@@ -1068,13 +1068,16 @@ private fun SharingSection(
             CremaSettingsRow("Restore from Drive", DRIVE_RESTORE_HINT) {
                 CremaButton(onClick = vm.drive::openBackupPicker, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore…")
             }
-            CremaSettingsRow("Automatic daily backup", listOfNotNull(ds.autoBackupPaused, "Upload a fresh backup once a day when the app opens.").joinToString(" ")) {
+            CremaSettingsRow("Automatic Drive backup", listOfNotNull(ds.autoBackupPaused, "Upload a fresh backup when the app opens, daily or weekly.").joinToString(" ")) {
                 CremaSwitch(ui.autoDriveBackup, vm::setAutoDriveBackup)
             }
             CremaSettingsRow("Disconnect", "Forget the Google Drive connection on this device.", last = true) {
                 CremaButton(onClick = { vm.drive.disconnect() }, variant = CremaButtonVariant.Outlined, icon = "sign-out", enabled = !ds.busy, label = "Disconnect")
             }
         }
+    }
+    SettingsGroup("Storage and backups") {
+        coffee.crema.ui.components.StorageBackupsRows(vm, ui, ui.drive)
     }
     SettingsGroup("Local export") {
         CremaSettingsRow("History export", "Your entire shot history as JSON — for spreadsheets and other tools.", last = true) {

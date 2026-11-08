@@ -429,6 +429,12 @@ pub struct StoredShot {
     /// don't change; a downgrade drops it, which costs a refetch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visualizer_updated_at: Option<i64>,
+    /// The user pinned this shot: its raw capture ignores the capture limit,
+    /// and it is exempt from any cleanup (#311). It moves with backups and
+    /// between the apps. Omitted when false, so existing bytes don't change;
+    /// an old backup reads as not pinned.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
     /// The DE1 this shot was pulled on, stamped by the shell at record
     /// time (#84) — the provenance the Decent upload sends. `None` for
     /// shots recorded before the field existed (the shell then falls back
@@ -531,6 +537,7 @@ impl StoredShot {
             deleted_at: None,
             decent_id: None,
             visualizer_updated_at: None,
+            pinned: false,
             machine: None,
             brew_method: None,
             brew_method_label: None,
@@ -885,6 +892,22 @@ mod tests {
         let parsed: Vec<StoredShot> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, shots);
         assert_eq!(parsed.len(), 3);
+    }
+
+    #[test]
+    fn a_pin_round_trips_and_an_old_row_reads_as_not_pinned() {
+        let mut shot = StoredShot::new(1, sample_record());
+        let unpinned = serde_json::to_string(&shot).unwrap();
+        assert!(!unpinned.contains("pinned"), "existing bytes don't change");
+        assert!(
+            !serde_json::from_str::<StoredShot>(&unpinned)
+                .unwrap()
+                .pinned
+        );
+        shot.pinned = true;
+        let json = serde_json::to_string(&shot).unwrap();
+        assert!(json.contains(r#""pinned":true"#));
+        assert!(serde_json::from_str::<StoredShot>(&json).unwrap().pinned);
     }
 
     #[test]

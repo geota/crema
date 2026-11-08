@@ -79,8 +79,10 @@
 				telemetry if the page is reloaded mid-shot (IndexedDB). On Android,
 				a recording of each Bluetooth session with the machine and scale,
 				used to diagnose and replay problems; it is kept in the app's own
-				folder on shared storage (<code>Android/data</code>), limited to the
-				10 most recent sessions and to the last 14 days, and is never sent
+				folder on shared storage (<code>Android/data</code>). Both keep only
+				as many as you choose in Settings, Storage and backups (shots on
+				the web, sessions on Android; a new install keeps 50, and Off keeps
+				none), plus those of shots you pinned. They are never sent
 				anywhere.
 			</li>
 			<li>

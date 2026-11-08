@@ -170,6 +170,8 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
         // nested core `ShotMachine` built from the flat stamped fields.
         if (forBackup) shot.decentId?.let { put("decentId", it) }
         if (forBackup) shot.visualizerUpdatedAt?.let { put("visualizerUpdatedAt", it) }
+        // Omitted when false, as the core does, so an unpinned row's bytes don't change.
+        if (forBackup && shot.pinned) put("pinned", true)
         if (forBackup) shot.bagDebitG?.let { put("bagDebit", it) }
         // Brew Log fields (issue #10) — local-only rows, so backup only; the
         // core StoredShot carries them, and the restore inverts them below.
@@ -310,6 +312,7 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         yieldTargetG = str("yieldTarget")?.toFloatOrNull(),
         decentId = str("decentId")?.takeIf { it.isNotBlank() },
         visualizerUpdatedAt = str("visualizerUpdatedAt")?.toLongOrNull(),
+        pinned = boolOf("pinned") == true,
         bagDebitG = str("bagDebit")?.toFloatOrNull(),
         machineSerial = machineStr("serialNumber"),
         machineFirmware = machineStr("serialNumber")?.let { machineStr("firmwareVersion") },
