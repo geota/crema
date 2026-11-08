@@ -1268,14 +1268,14 @@ class LibraryController(
 
         override suspend fun applyShots(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords): Int? {
             // Series first, with no change to memory.
-            val first = coffee.crema.restore.nextShots(uiState().history, records.parsed.shots, plan.shots)
+            val first = coffee.crema.restore.nextShots(uiState().history, records.parsed.shots, plan.shots, plan.mode == coffee.crema.core.RestoreMode.Replace)
             var failed = historyStore.writeSeriesOf(first.series)
             afterRestoreSeries?.invoke()
             // Then, over the rows as they are now, memory and the rows write together.
             var second = first
             editRows(
                 { rows ->
-                    second = coffee.crema.restore.nextShots(rows.history, records.parsed.shots, plan.shots)
+                    second = coffee.crema.restore.nextShots(rows.history, records.parsed.shots, plan.shots, plan.mode == coffee.crema.core.RestoreMode.Replace)
                     rows.copy(history = rows.history.with(second.next))
                 },
                 { it },
