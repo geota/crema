@@ -105,6 +105,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Web backups are built a piece at a time** — the backup file is written as
+  it's built, into the browser's own storage where it has one, rather than held
+  in memory whole, so a large history backs up without running the tab out of
+  memory. Back up shows how far it's got and can be cancelled, leaving nothing
+  behind, and a Drive backup uploads straight from the file. (#310)
 - **Restore shows what it will do first (Android)** — as on the web: after you
   pick a backup, from a file or Google Drive, Crema works out what changes. A
   clean Merge runs at once and says what it added; a Merge with warnings, and

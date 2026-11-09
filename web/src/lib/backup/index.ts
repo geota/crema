@@ -39,6 +39,7 @@ import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '#lib/visualizer/sync-config.js';
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { strToU8, strFromU8, zipSync } from 'fflate';
+import { BackupCancelled, streamBackup, sweepBackupTemp, type BackupWalkOptions } from './stream';
 import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
 import { readJson, readStored, unreadableStores, writeJson } from '#lib/utils/storage.js';
 import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
@@ -88,6 +89,8 @@ export interface BackupContents {
 	noCurves?: number;
 	/** Stores that couldn't be read this session, so aren't in it, by name. */
 	missing?: readonly string[];
+	/** Built in memory, as this browser has no private file system, and large. */
+	largeInMemory?: boolean;
 }
 
 /** One row a backup left out (the core's `OmittedBackupRow`). */
@@ -141,7 +144,26 @@ export function describeBackupGaps(c: BackupContents): string {
 		missing.length === 0
 			? ''
 			: ` It doesn’t include your ${names}: ${missing.length === 1 ? 'it' : 'they'} couldn’t be read.`;
-	return left + thin + flat + gone;
+	const large = c.largeInMemory
+		? ' This browser built it in memory, so a backup this size may not go through on a small device.'
+		: '';
+	return left + thin + flat + gone + large;
+}
+
+/**
+ * What to say when a Drive backup didn't finish. A cancel that reached the
+ * upload may have come after Drive had the whole file, so it doesn't promise
+ * nothing was uploaded.
+ */
+export function driveBackupFailure(err: unknown, uploading: boolean): string {
+	const cancelled =
+		err instanceof BackupCancelled || (err instanceof DOMException && err.name === 'AbortError');
+	if (cancelled) {
+		return uploading
+			? 'Backup cancelled during the upload: Drive may have it anyway. Check the list before backing up again.'
+			: 'Backup cancelled: nothing was uploaded.';
+	}
+	return err instanceof Error ? `Drive backup failed: ${err.message}` : 'Drive backup failed.';
 }
 
 /**
@@ -228,6 +250,56 @@ function rowStrings(rows: readonly unknown[]): (string | null)[] {
  * throws when they don't arrive.
  */
 export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<BuiltBackup | null> {
+	const parts = await backupParts();
+	if (!parts) return null;
+	const { envelope, shots, customProfiles, beans, roasters } = parts;
+	const built = JSON.parse(
+		exportBackupBundle(
+			JSON.stringify({ ...envelope, shots: rowStrings(shots) }),
+			Date.now(),
+			cremaVersion,
+			WEB_DEVICE_LABEL
+		)
+	) as BackupExport;
+	// What was written, which the core's header counts too.
+	const written = (kind: string, rows: number) =>
+		rows - built.omitted.filter((o) => o.kind === kind).length;
+	const left = new Set(built.omitted.filter((o) => o.kind === 'shot').map((o) => o.id));
+	// A row here can be unreadable: that's what `omitted` is for.
+	const noCurves = shots.filter(
+		(s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0)
+	).length;
+	return {
+		jsonl: built.jsonl,
+		contents: {
+			profiles: written('profile', customProfiles.length),
+			beans: written('bean', beans.length),
+			roasters: written('roaster', roasters.length),
+			shots: written('shot', shots.length),
+			omitted: built.omitted,
+			degraded: built.degraded,
+			noCurves,
+			missing: unreadableStores()
+		}
+	};
+}
+
+/** Everything a backup carries, as a snapshot: the envelope without its shots, and the shots. */
+interface BackupParts {
+	/** The export envelope, rows as JSON strings, without `shots`. */
+	envelope: Record<string, unknown>;
+	shots: readonly StoredShot[];
+	customProfiles: readonly unknown[];
+	beans: readonly Bean[];
+	roasters: readonly Roaster[];
+}
+
+/**
+ * Snapshot what a backup carries, or null when there's nothing to back up.
+ * Waits for the stored series, so no shot goes out without its curve, and
+ * throws when they don't arrive.
+ */
+async function backupParts(): Promise<BackupParts | null> {
 	const history = getHistoryStore();
 	if (!(await history.seriesReady())) {
 		throw new Error('Shot data is still loading — try again in a moment.');
@@ -267,11 +339,10 @@ export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<
 		return null;
 	}
 
-	const envelope = JSON.stringify({
+	const envelope = {
 		profiles: rowStrings(customProfiles),
 		beans: rowStrings(beans),
 		roasters: rowStrings(roasters),
-		shots: rowStrings(shots),
 		recipes: rowStrings(recipes),
 		customMethods: rowStrings(customMethods),
 		// Settings line: the shared cross-shell `common` block (CommonSettings —
@@ -297,30 +368,76 @@ export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<
 		// `VisualizerSyncPrefs` shape both shells serialise identically, so this
 		// line restores on web or Android with no per-shell tag.
 		visualizerPrefs: visualizerSyncPrefs()
-	});
+	};
+	// A snapshot: a shot saved during a long walk is in the next backup.
+	return { envelope, shots: [...shots], customProfiles, beans: [...beans], roasters: [...roasters] };
+}
 
-	const built = JSON.parse(
-		exportBackupBundle(envelope, Date.now(), cremaVersion, WEB_DEVICE_LABEL)
-	) as BackupExport;
-	// What was written, which the core's header counts too.
-	const written = (kind: string, rows: number) =>
-		rows - built.omitted.filter((o) => o.kind === kind).length;
-	const left = new Set(built.omitted.filter((o) => o.kind === 'shot').map((o) => o.id));
-	// A row here can be unreadable: that's what `omitted` is for.
+/** A backup built as a file, and what's in it. */
+export interface BuiltBackupFile {
+	file: Blob;
+	contents: BackupContents;
+	/** Remove its temporary file, once whatever reads it is done. */
+	release(): Promise<void>;
+}
+
+/**
+ * Build the `.crema.zip` one line at a time into a temporary file (#310 P2w):
+ * the same bytes as {@link buildBackupJsonl}'s, with the bean photos. Null
+ * when there's nothing to back up. Progress and cancel as {@link streamBackup}.
+ */
+export async function buildBackupFile(
+	cremaVersion = __APP_VERSION__,
+	opts: BackupWalkOptions = {}
+): Promise<BuiltBackupFile | null> {
+	const parts = await backupParts();
+	if (!parts) return null;
+	await sweepBackupTemp();
+	const { envelope, shots, customProfiles, beans, roasters } = parts;
+	const imageStore = getBeanImageStore();
+	const withPhotos = beans.filter((b) => b.imageRef);
+	const built = await streamBackup(
+		{
+			envelope: JSON.stringify(envelope),
+			shots,
+			createdAt: Date.now(),
+			appVersion: cremaVersion,
+			deviceLabel: WEB_DEVICE_LABEL,
+			photos: async function* () {
+				for (const bean of withPhotos) {
+					try {
+						const blob = await imageStore.get(bean.imageRef!);
+						if (blob) yield [bean.id, new Uint8Array(await blob.arrayBuffer())];
+					} catch {
+						// IDB miss / read error — skip this bean's photo, don't fail the backup.
+					}
+				}
+			}
+		},
+		opts
+	);
+	const omitted: OmittedBackupRow[] = [
+		...built.omitted,
+		...built.shotsOmitted.map((o) => ({ kind: 'shot', index: o.index, id: o.id }))
+	];
+	const written = (kind: string, rows: number) => rows - omitted.filter((o) => o.kind === kind).length;
+	const left = new Set(built.shotsOmitted.map((o) => o.id));
 	const noCurves = shots.filter(
 		(s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0)
 	).length;
 	return {
-		jsonl: built.jsonl,
+		file: built.file,
+		release: built.release,
 		contents: {
 			profiles: written('profile', customProfiles.length),
 			beans: written('bean', beans.length),
 			roasters: written('roaster', roasters.length),
-			shots: written('shot', shots.length),
-			omitted: built.omitted,
+			shots: built.shotsWritten,
+			omitted,
 			degraded: built.degraded,
 			noCurves,
-			missing: unreadableStores()
+			missing: unreadableStores(),
+			largeInMemory: built.largeInMemory
 		}
 	};
 }
@@ -360,11 +477,18 @@ export async function buildBackupZip(
 	return { zip: zipSync(entries), contents: built.contents };
 }
 
-/** Build + download a `.crema.zip` bundle of everything local (incl. bean photos). */
-export async function exportBackup(cremaVersion = __APP_VERSION__): Promise<BackupContents | null> {
-	const built = await buildBackupZip(cremaVersion);
+/**
+ * Build a `.crema.zip` bundle of everything local (incl. bean photos) as a
+ * file, and download it. The temporary file stays while the browser saves it,
+ * and goes at the next backup or boot ({@link sweepBackupTemp}).
+ */
+export async function exportBackup(
+	cremaVersion = __APP_VERSION__,
+	opts: BackupWalkOptions = {}
+): Promise<BackupContents | null> {
+	const built = await buildBackupFile(cremaVersion, opts);
 	if (!built) return null;
-	downloadBlob(backupFileName(), new Blob([built.zip as BlobPart], { type: 'application/zip' }));
+	downloadBlob(backupFileName(), built.file);
 	return built.contents;
 }
 
@@ -395,6 +519,7 @@ export async function backupNote(run: () => Promise<BackupContents | null> = exp
 			? `Backed up — ${describeBackup(result)}.${describeBackupGaps(result)}`
 			: 'Nothing to back up yet.';
 	} catch (err) {
+		if (err instanceof BackupCancelled) return 'Backup cancelled: nothing was saved.';
 		console.error('Backup failed', err);
 		return `Backup failed: nothing was saved.${err instanceof Error ? ` ${err.message}` : ''}`;
 	}
