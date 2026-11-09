@@ -191,7 +191,7 @@ class DriveRetentionTest {
         val sync = DriveSync(
             store, json, scope, "cid",
             notify = { notices += it },
-            backupZip = { BackupZip(byteArrayOf(1), BackupCounts(1u, 1u)) },
+            backupZip = { BackupZip(zipFile(), BackupCounts(1u, 1u)) },
             backupFileName = { "crema-backup-tablet-20261108-0800.crema.zip" },
             applyRestore = { _, _, _ -> },
             refreshToken = { error("no refresh expected") },
