@@ -18,10 +18,11 @@
  */
 
 import { Inflate } from 'fflate';
+import { IMPORT_LIMITS } from '#lib/utils/import-limits.js';
+import { BACKUP_LIMITS } from './stream';
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
-const GiB = 1024 * MiB;
 
 export interface BackupReadLimits {
 	/** Largest backup file read. */
@@ -36,12 +37,11 @@ export interface BackupReadLimits {
 	maxPhotoBytes: number;
 }
 
+/** #386's export limits, which a restore reads up to, and the import caps for a zip's entries and photos. */
 export const BACKUP_READ_LIMITS: BackupReadLimits = {
-	maxFileBytes: 2 * GiB,
-	maxInflatedBytes: 3 * GiB,
-	maxLineBytes: 16 * MiB,
-	maxEntries: 10_000,
-	maxPhotoBytes: 100 * MiB
+	...BACKUP_LIMITS,
+	maxEntries: IMPORT_LIMITS.maxEntries,
+	maxPhotoBytes: IMPORT_LIMITS.maxEntryBytes
 };
 
 /** A backup that won't read: damaged, or past a limit. Nothing was written. */

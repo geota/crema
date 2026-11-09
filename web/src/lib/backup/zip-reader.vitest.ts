@@ -343,3 +343,10 @@ describe('backup lines', () => {
 		);
 	});
 });
+
+describe('the read limits', () => {
+	it('are the export’s (#386), so a restore reads what a backup may hold', async () => {
+		const { BACKUP_LIMITS } = await import('./stream');
+		expect(BACKUP_READ_LIMITS).toMatchObject(BACKUP_LIMITS);
+	});
+});
