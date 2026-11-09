@@ -2245,6 +2245,95 @@ pub fn import_backup_bytes(bytes: &[u8]) -> String {
     de1_domain::import_backup_bytes_json(bytes)
 }
 
+/// The longest line a backup may hold, in bytes. See
+/// `de1_domain::MAX_BACKUP_LINE_BYTES`.
+#[wasm_bindgen(js_name = backupMaxLineBytes)]
+#[must_use]
+pub fn backup_max_line_bytes() -> u32 {
+    u32::try_from(de1_domain::MAX_BACKUP_LINE_BYTES).unwrap_or(u32::MAX)
+}
+
+/// [`scan_backup_bytes`], a line at a time, for a backup read in pieces (#310
+/// P2w). See `de1_domain::BackupScan`.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct BackupScanner {
+    scan: de1_domain::BackupScan,
+}
+
+#[wasm_bindgen]
+impl BackupScanner {
+    /// A new scan.
+    #[wasm_bindgen(constructor)]
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Read the next line, without its `0x0A`.
+    #[wasm_bindgen(js_name = pushLine)]
+    pub fn push_line(&mut self, line: &[u8]) {
+        self.scan.push_line(line);
+    }
+
+    /// The next line was too long to read, and its bytes were skipped.
+    #[wasm_bindgen(js_name = pushOversizedLine)]
+    pub fn push_oversized_line(&mut self) {
+        self.scan.push_oversized_line();
+    }
+
+    /// The `BackupManifest` JSON, with the bean ids the zip holds photos for
+    /// (a JSON string array). The scanner is used up.
+    #[must_use]
+    pub fn finish(self, photos_json: &str) -> String {
+        let mut manifest = self.scan.finish();
+        manifest.photos = serde_json::from_str(photos_json).unwrap_or_default();
+        serde_json::to_string(&manifest).unwrap_or_default()
+    }
+}
+
+/// [`import_backup_bytes`], a line at a time: each line's record, so the
+/// shell holds one line, not the whole file (#310 P2w). See
+/// `de1_domain::BackupImport`.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct BackupImporter {
+    import: de1_domain::BackupImport,
+}
+
+#[wasm_bindgen]
+impl BackupImporter {
+    /// A new import.
+    #[wasm_bindgen(constructor)]
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Read the next line, without its `0x0A`: the `BackupRecord` JSON the
+    /// restore takes from it, or `undefined`.
+    #[wasm_bindgen(js_name = pushLine)]
+    #[must_use]
+    pub fn push_line(&mut self, line: &[u8]) -> Option<String> {
+        self.import
+            .push_line(line)
+            .and_then(|record| serde_json::to_string(&record).ok())
+    }
+
+    /// The next line was too long to read, and its bytes were skipped.
+    #[wasm_bindgen(js_name = pushOversizedLine)]
+    pub fn push_oversized_line(&mut self) {
+        self.import.push_oversized_line();
+    }
+
+    /// Whether the first line that wasn't blank was a header.
+    #[wasm_bindgen(js_name = hasHeader)]
+    #[must_use]
+    pub fn has_header(&self) -> bool {
+        self.import.has_header()
+    }
+}
+
 /// One restore, planned. See `de1_domain::plan_restore`.
 ///
 /// # Errors

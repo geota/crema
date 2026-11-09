@@ -9,6 +9,11 @@
 //! device holds ([`LocalState`]) and returns one [`RestorePlan`] of ids and
 //! decisions, no row data, which the shells apply and decide nothing about.
 //!
+//! **A line at a time.** [`BackupScan`] and [`BackupImport`] are the same two
+//! reads fed one line at a time, so a shell streaming a large backup holds a
+//! line, not the file (#310 P2w). A line past [`MAX_BACKUP_LINE_BYTES`] is a
+//! bad line; a reader that won't buffer one skips its bytes and says so.
+//!
 //! **Merge only adds what's missing.** It never changes or removes what's
 //! here, whatever the timestamps say. The one exception is a curve: a row here
 //! with none takes the backup's ([`ShotPlan::fill`]). Replace makes the device
@@ -45,6 +50,12 @@ const BUILTIN_PROFILE_PREFIX: &str = "builtin:";
 /// Problems a manifest lists by line; the totals count them all.
 const PROBLEMS_LISTED: usize = 20;
 
+/// The longest line a backup may hold, `0x0A` not included (#310 §7, the
+/// same in both shells). A reader that won't buffer a longer one skips its
+/// bytes and calls [`BackupScan::push_oversized_line`] and
+/// [`BackupImport::push_oversized_line`] in its place.
+pub const MAX_BACKUP_LINE_BYTES: usize = 16 * 1024 * 1024;
+
 // ── Lines ──────────────────────────────────────────────────────────────────
 
 /// What's wrong with one line.
@@ -63,10 +74,14 @@ pub enum LineError {
     BadRow,
     /// A header or shot from a newer build than this one.
     NewerFormat,
+    /// Longer than [`MAX_BACKUP_LINE_BYTES`].
+    TooLong,
 }
 
 /// The settings-like lines: one of each, applied whole or not at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Serialised as its line's [`kind`](Self::kind).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Singleton {
     Settings,
     ProfileMeta,
@@ -202,13 +217,17 @@ pub fn parse_backup_line_json(line: &[u8]) -> String {
     serde_json::to_string(&parse_backup_line_parsed(line)).unwrap_or_default()
 }
 
-/// Read one line, strictly: UTF-8, then a JSON object with a `kind`, then a
-/// row that reads as its kind. Blank lines are the caller's to skip.
+/// Read one line, strictly: at most [`MAX_BACKUP_LINE_BYTES`], UTF-8, then a
+/// JSON object with a `kind`, then a row that reads as its kind. Blank lines
+/// are the caller's to skip.
 ///
 /// # Errors
 ///
 /// What's wrong with the line.
 pub fn parse_backup_line(line: &[u8]) -> Result<BackupLine, LineError> {
+    if line.len() > MAX_BACKUP_LINE_BYTES {
+        return Err(LineError::TooLong);
+    }
     let text = std::str::from_utf8(line).map_err(|_| LineError::Utf8)?;
     let value: serde_json::Value = serde_json::from_str(text).map_err(|_| LineError::Json)?;
     let serde_json::Value::Object(mut map) = value else {
@@ -323,15 +342,6 @@ fn read_header(
     })
 }
 
-/// `bytes` split on `0x0A`, numbered from 1, blank lines left out.
-fn lines(bytes: &[u8]) -> impl Iterator<Item = (u32, &[u8])> {
-    bytes
-        .split(|&b| b == b'\n')
-        .zip(1_u32..)
-        .filter(|(line, _)| !line.iter().all(u8::is_ascii_whitespace))
-        .map(|(line, n)| (n, line))
-}
-
 // ── The manifest ───────────────────────────────────────────────────────────
 
 /// A store that holds rows.
@@ -411,6 +421,8 @@ pub enum LineIssue {
     UnknownKind,
     /// A second settings-like line of one kind: the first one wins.
     DuplicateLine,
+    /// Longer than [`MAX_BACKUP_LINE_BYTES`].
+    TooLong,
 }
 
 impl From<LineError> for LineIssue {
@@ -422,6 +434,7 @@ impl From<LineError> for LineIssue {
             LineError::NoKind => LineIssue::NoKind,
             LineError::BadRow => LineIssue::BadRow,
             LineError::NewerFormat => LineIssue::NewerFormat,
+            LineError::TooLong => LineIssue::TooLong,
         }
     }
 }
@@ -552,6 +565,18 @@ enum SingletonKey {
     VisualizerPrefs,
 }
 
+impl SingletonKey {
+    fn of(kind: Singleton) -> Self {
+        match kind {
+            Singleton::Settings => Self::Settings,
+            Singleton::ProfileMeta => Self::ProfileMeta,
+            Singleton::RecipeMeta => Self::RecipeMeta,
+            Singleton::Maintenance => Self::Maintenance,
+            Singleton::VisualizerPrefs => Self::VisualizerPrefs,
+        }
+    }
+}
+
 impl BackupScan {
     /// A new scan.
     #[must_use]
@@ -585,9 +610,20 @@ impl BackupScan {
         if line.iter().all(u8::is_ascii_whitespace) {
             return;
         }
+        self.read(parse_backup_line(line));
+    }
+
+    /// The next line was longer than [`MAX_BACKUP_LINE_BYTES`], and the reader
+    /// skipped it: a bad line, as [`push_line`](Self::push_line) would count it.
+    pub fn push_oversized_line(&mut self) {
+        self.line += 1;
+        self.read(Err(LineError::TooLong));
+    }
+
+    fn read(&mut self, parsed: Result<BackupLine, LineError>) {
         let first = !self.seen_content;
         self.seen_content = true;
-        let parsed = match parse_backup_line(line) {
+        let parsed = match parsed {
             Ok(parsed) => parsed,
             Err(e) => {
                 if e == LineError::NewerFormat {
@@ -672,13 +708,7 @@ impl BackupScan {
     }
 
     fn singleton(&mut self, kind: Singleton, value: serde_json::Value) {
-        let key = match kind {
-            Singleton::Settings => SingletonKey::Settings,
-            Singleton::ProfileMeta => SingletonKey::ProfileMeta,
-            Singleton::RecipeMeta => SingletonKey::RecipeMeta,
-            Singleton::Maintenance => SingletonKey::Maintenance,
-            Singleton::VisualizerPrefs => SingletonKey::VisualizerPrefs,
-        };
+        let key = SingletonKey::of(kind);
         if self.singletons_seen.contains(&key) {
             self.manifest.duplicates += 1;
             self.problem(LineIssue::DuplicateLine, None);
@@ -750,37 +780,135 @@ pub fn scan_backup_bytes(bytes: &[u8]) -> BackupManifest {
     scan.finish()
 }
 
+/// A record a restore takes from a backup, in the shells' shape: tagged by
+/// `line`, with [`ParsedBackupLine`]'s fields.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "line", rename_all = "camelCase")]
+pub enum BackupRecord {
+    Shot {
+        shot: Box<StoredShot>,
+    },
+    Bean {
+        bean: Box<Bean>,
+    },
+    Roaster {
+        roaster: Box<Roaster>,
+    },
+    Recipe {
+        recipe: Box<BrewRecipe>,
+    },
+    BrewMethod {
+        method: Box<CustomBrewMethod>,
+    },
+    /// A custom profile, verbatim with `kind` removed.
+    Profile {
+        profile: serde_json::Value,
+    },
+    /// A settings-like line by its kind, verbatim.
+    Singleton {
+        kind: Singleton,
+        value: serde_json::Value,
+    },
+}
+
+/// [`import_backup_bytes`], a line at a time, for a backup read in pieces:
+/// each line gives the record a restore takes from it, if any, so a shell
+/// holds one line, not the whole file. The rules are the scan's: a line that
+/// doesn't read is left out, and the first row of an id, or the first
+/// settings-like line of a kind, wins.
+#[derive(Debug, Default)]
+pub struct BackupImport {
+    seen: HashMap<RowStore, HashSet<String>>,
+    singletons: Vec<SingletonKey>,
+    seen_content: bool,
+    has_header: bool,
+}
+
+impl BackupImport {
+    /// A new import.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether the first line that wasn't blank was a header.
+    #[must_use]
+    pub fn has_header(&self) -> bool {
+        self.has_header
+    }
+
+    /// Read the next line, `0x0A` not included: its record, when the restore
+    /// takes one from it.
+    pub fn push_line(&mut self, line: &[u8]) -> Option<BackupRecord> {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            return None;
+        }
+        let first = !std::mem::replace(&mut self.seen_content, true);
+        match parse_backup_line(line).ok()? {
+            BackupLine::Header(_) => {
+                self.has_header |= first;
+                None
+            }
+            BackupLine::Shot(shot, _) => self
+                .fresh(RowStore::Shots, &shot.id)
+                .then_some(BackupRecord::Shot { shot }),
+            BackupLine::Bean(bean) => self
+                .fresh(RowStore::Beans, &bean.id)
+                .then_some(BackupRecord::Bean { bean }),
+            BackupLine::Roaster(roaster) => self
+                .fresh(RowStore::Roasters, &roaster.id)
+                .then_some(BackupRecord::Roaster { roaster }),
+            BackupLine::Recipe(recipe) => (!is_builtin_recipe(&recipe.id)
+                && self.fresh(RowStore::Recipes, &recipe.id))
+            .then_some(BackupRecord::Recipe { recipe }),
+            BackupLine::Method(method) => (is_custom_method_id(&method.id)
+                && self.fresh(RowStore::CustomMethods, &method.id))
+            .then_some(BackupRecord::BrewMethod { method }),
+            BackupLine::Profile(profile, id) => self
+                .fresh(RowStore::Profiles, &id)
+                .then_some(BackupRecord::Profile { profile }),
+            BackupLine::Singleton(kind, value) => {
+                let key = SingletonKey::of(kind);
+                if self.singletons.contains(&key) {
+                    return None;
+                }
+                self.singletons.push(key);
+                Some(BackupRecord::Singleton { kind, value })
+            }
+            BackupLine::Unknown(_) | BackupLine::ShotsExport => None,
+        }
+    }
+
+    /// The next line was longer than [`MAX_BACKUP_LINE_BYTES`], and the reader
+    /// skipped it: no record, and no header after it is first.
+    pub fn push_oversized_line(&mut self) {
+        self.seen_content = true;
+    }
+
+    fn fresh(&mut self, store: RowStore, id: &str) -> bool {
+        self.seen.entry(store).or_default().insert(id.to_owned())
+    }
+}
+
 /// A backup's records, under the same line rules as [`scan_backup_bytes`]: a
 /// line that doesn't read is left out, and the first row of an id wins. The
-/// shell applies a plan's ids from these.
+/// shell applies a plan's ids from these. See [`BackupImport`].
 #[must_use]
 pub fn import_backup_bytes(bytes: &[u8]) -> BackupImportPlan {
+    let mut import = BackupImport::new();
     let mut plan = BackupImportPlan::default();
-    let mut seen: HashMap<RowStore, HashSet<String>> = HashMap::new();
-    let mut fresh =
-        |store: RowStore, id: &str| seen.entry(store).or_default().insert(id.to_owned());
-    let mut first = true;
-    for (_, line) in lines(bytes) {
-        let parsed = parse_backup_line(line);
-        let was_first = std::mem::replace(&mut first, false);
-        let Ok(parsed) = parsed else { continue };
-        match parsed {
-            BackupLine::Header(_) => plan.has_header |= was_first,
-            BackupLine::Shot(s, _) if fresh(RowStore::Shots, &s.id) => plan.shots.push(*s),
-            BackupLine::Bean(b) if fresh(RowStore::Beans, &b.id) => plan.beans.push(*b),
-            BackupLine::Roaster(r) if fresh(RowStore::Roasters, &r.id) => plan.roasters.push(*r),
-            BackupLine::Recipe(r)
-                if !is_builtin_recipe(&r.id) && fresh(RowStore::Recipes, &r.id) =>
-            {
-                plan.recipes.push(*r);
-            }
-            BackupLine::Method(m)
-                if is_custom_method_id(&m.id) && fresh(RowStore::CustomMethods, &m.id) =>
-            {
-                plan.custom_methods.push(*m);
-            }
-            BackupLine::Profile(p, id) if fresh(RowStore::Profiles, &id) => plan.profiles.push(p),
-            BackupLine::Singleton(kind, value) => {
+    for line in bytes.split(|&b| b == b'\n') {
+        let Some(record) = import.push_line(line) else {
+            continue;
+        };
+        match record {
+            BackupRecord::Shot { shot } => plan.shots.push(*shot),
+            BackupRecord::Bean { bean } => plan.beans.push(*bean),
+            BackupRecord::Roaster { roaster } => plan.roasters.push(*roaster),
+            BackupRecord::Recipe { recipe } => plan.recipes.push(*recipe),
+            BackupRecord::BrewMethod { method } => plan.custom_methods.push(*method),
+            BackupRecord::Profile { profile } => plan.profiles.push(profile),
+            BackupRecord::Singleton { kind, value } => {
                 let slot = match kind {
                     Singleton::Settings => &mut plan.settings,
                     Singleton::ProfileMeta => &mut plan.profile_meta,
@@ -788,13 +916,11 @@ pub fn import_backup_bytes(bytes: &[u8]) -> BackupImportPlan {
                     Singleton::Maintenance => &mut plan.maintenance,
                     Singleton::VisualizerPrefs => &mut plan.visualizer_prefs,
                 };
-                if slot.is_none() {
-                    *slot = Some(value);
-                }
+                *slot = Some(value);
             }
-            _ => {}
         }
     }
+    plan.has_header = import.has_header();
     plan
 }
 
@@ -1543,9 +1669,15 @@ fn shot_plan(
         return (plan, tombstones);
     }
 
-    // Merge never evicts: past the cap, pinned rows first, then the newest.
+    // Merge never evicts. The cap counts unpinned rows only, as history keeps
+    // them (`fits_history`): a pinned row always fits, and the newest unpinned
+    // ones fill the room the device's unpinned rows leave.
     let room = local.history_capacity.map_or(usize::MAX, |cap| {
-        let live = local.shots.iter().filter(|s| !s.deleted).count();
+        let live = local
+            .shots
+            .iter()
+            .filter(|s| !s.deleted && !s.pinned)
+            .count();
         usize::try_from(cap)
             .unwrap_or(usize::MAX)
             .saturating_sub(live)
@@ -1555,7 +1687,8 @@ fn shot_plan(
             .cmp(&a.pinned)
             .then(b.completed_at.cmp(&a.completed_at))
     });
-    let fits = candidates.len().min(room);
+    let pinned = candidates.iter().filter(|s| s.pinned).count();
+    let fits = pinned + (candidates.len() - pinned).min(room);
     let (added, left) = candidates.split_at(fits);
     plan.not_added = u32::try_from(left.len()).unwrap_or(u32::MAX);
     let left: HashSet<&str> = left.iter().map(|s| s.id.as_str()).collect();

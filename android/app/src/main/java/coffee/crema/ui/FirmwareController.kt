@@ -32,6 +32,8 @@ internal class FirmwareController(
     private val setFlashActive: (Boolean) -> Unit,
     /** The flash let go of the link: run the connect-time work it held off. */
     private val afterRelease: () -> Unit,
+    /** A restore is running: no flash starts under it. */
+    private val restoreRunning: () -> Boolean = { false },
 ) {
     // The core's flash state machine (`de1_app::firmware_flash`) driven over
     // the DE1 link by its FirmwareFlashDriver; [update] is the Settings flow. The
@@ -100,6 +102,7 @@ internal class FirmwareController(
         markers = coffee.crema.firmware.SharedPrefsAwaitingMarkers(app),
         machineId = { ble.connectedAddress },
         linkUp = { ble.state.value == De1BleManager.State.READY },
+        restoreRunning = restoreRunning,
         // The flash let go of the link: run the connect-time work it held off.
         onRelease = { scope.launch { afterRelease() } },
         driverFactory = { onStatus ->

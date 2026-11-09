@@ -78,7 +78,7 @@ class DriveSessionTest {
             BackupZip(java.io.File.createTempFile("backup", ".zip").apply { writeBytes(ByteArray(1)) }, coffee.crema.core.BackupCounts(1u, 1u))
         },
         backupFileName = { "crema-backup-1" },
-        applyRestore = { _, _ -> },
+        applyRestore = { _, _, _ -> },
         exchangeCode = { _, _ -> set("new") },
         refreshToken = {
             grants.incrementAndGet()

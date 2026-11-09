@@ -162,13 +162,6 @@ class LibraryController(
     private val appendLog: (String) -> Unit,
     /** The current prefs snapshot (the backup's portable-settings source). */
     private val currentPrefs: () -> AppPrefs,
-    /** Apply a restored backup's portable settings (mirrors loadPrefs; VM). */
-    private val applyRestoredSettings: (AppPrefs) -> Unit,
-    /** Apply a restored backup's maintenance state (reseeds the live water
-     *  integrator + persists; VM — maintenance stays VM-owned). */
-    private val applyRestoredMaintenance: (MaintenanceState) -> Unit,
-    /** A restore applied: Drive's pre-damage hold can end. */
-    private val onRestoreCompleted: () -> Unit = {},
     /** Persist the learned SAW drip model (bridge + SawModelStore; VM). */
     private val persistSawModel: suspend () -> Unit,
     /** The VM's setActiveProfile — relay guard + persistPrefs + stop targets. */
@@ -343,7 +336,9 @@ class LibraryController(
         val lib = library.load()
         editRows(
             { it.copy(beans = it.beans.with(lib.beans), roasters = it.roasters.with(lib.roasters)) },
-            { it.copy(activeBeanId = lib.activeBeanId ?: lib.beans.firstOrNull()?.id) },
+            // No bean is picked for the user: "none", once chosen or left by a
+            // restore or an archive, lasts (restore-safety §3, #312).
+            { it.copy(activeBeanId = lib.activeBeanId) },
         )
         library.openSaves()
     }
@@ -981,39 +976,6 @@ class LibraryController(
         capped { app.contentResolver.openInputStream(uri)?.use { it.readBytesCapped(ImportLimits.MAX_FILE_BYTES) } }
     }
 
-    /** `.crema.zip` local-file magic: `PK\x03\x04`. */
-    private fun isZip(bytes: ByteArray): Boolean =
-        bytes.size >= 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte() &&
-            bytes[2] == 0x03.toByte() && bytes[3] == 0x04.toByte()
-
-    /**
-     * Unzip a `.crema.zip`: return its `backup.jsonl` text, and stash each
-     * `images/<beanId>` blob via [BeanImageStore] (keyed by the RAW bean id) so a
-     * backup's bean photos land exactly where the library display + the next
-     * backup resolve them. Null when there's no backup.jsonl.
-     */
-    private suspend fun extractBackupJsonl(bytes: ByteArray): String? = withContext(Dispatchers.IO) {
-        capped {
-            var jsonl: String? = null
-            // Only the backup members are inflated, each within the size caps
-            // (review 05 P3-2): a zip bomb stops with a clear error, not an OOM.
-            java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(bytes)).use { zis ->
-                readZipCapped(
-                    zis,
-                    accept = { it == "backup.jsonl" || it == "crema.jsonl" || it.startsWith("images/") },
-                ) { name, entryBytes ->
-                    if (name.startsWith("images/")) {
-                        val beanId = name.substringAfter("images/")
-                        if (beanId.isNotEmpty()) runCatching { BeanImageStore.put(app, beanId, entryBytes) }
-                    } else {
-                        jsonl = String(entryBytes, Charsets.UTF_8)
-                    }
-                }
-            }
-            jsonl
-        }
-    }
-
     /** Import profiles from any profile file — community-v2 `.json`, a `.jsonl`
      *  bundle, a de1app `.tcl`, a Crema backup, an old Android export — read by
      *  the core, which returns fresh custom profiles (core id, brew temp from the
@@ -1113,8 +1075,11 @@ class LibraryController(
             userRecipes.isEmpty() && s.customMethods.isEmpty()
         val noProfileOrg = pinnedIds.isEmpty() && hiddenIds.isEmpty() &&
             s.lastRecipeByMethod.isEmpty() && s.hiddenBuiltinRecipes.isEmpty()
-        val settingsDefault =
-            currentPrefs().toCommonSettings() == AppPrefs().toCommonSettings() && currentPrefs().qcGrind == null
+        // As a fresh install leaves them, by the core's rule: a first launch fills
+        // the hot-water fields, so they never equal the raw defaults.
+        val settingsDefault = coffee.crema.core.commonIsPristine(
+            json.encodeToString(coffee.crema.core.CommonSettings.serializer(), currentPrefs().toCommonSettings()),
+        ) && currentPrefs().qcGrind == null
         if (noData && noProfileOrg && settingsDefault) {
             notify("Nothing to back up yet"); return null
         }
@@ -1142,12 +1107,6 @@ class LibraryController(
         reportUnhealthyStores()
         return buildBackupZipNow(kind)
     }
-
-    /** Restores running now: a daily backup waits for them. */
-    private val restoresRunning = java.util.concurrent.atomic.AtomicInteger()
-
-    /** Whether a restore is running, so a backup now would catch it half-applied. */
-    val restoring: Boolean get() = restoresRunning.get() > 0
 
     /** A store that couldn't be read this session isn't in a backup made now:
      *  a manual one goes ahead, and says what it's missing. */
@@ -1235,154 +1194,218 @@ class LibraryController(
         return "crema-backup-$label-$stamp.crema.zip"
     }
 
-    /** Restore a `crema-backup` bundle from a SAF [uri]. MERGE adds only records
-     *  whose ids aren't already present (lossless re-restore); WIPE clears the
-     *  local library / history / custom profiles first (destructive — the UI
-     *  gates it behind a type-to-confirm). The portable settings subset is
-     *  applied in both modes; this device's BLE/proxy bindings are always kept. */
-    fun restoreBackup(uri: Uri, mode: MainViewModel.RestoreMode) {
-        scope.launch {
-            val bytes = readUriBytes(uri)
-            if (bytes == null || bytes.isEmpty()) { notify(readFailure("Restore failed — couldn't read that file")); return@launch }
-            restoreBackupBytes(bytes, mode)
+    /** A SAF [uri]'s bytes, for a restore, or null once it has said why it couldn't read them. */
+    suspend fun readBackupBytes(uri: Uri): ByteArray? {
+        val bytes = readUriBytes(uri)
+        if (bytes == null || bytes.isEmpty()) {
+            notify(readFailure("Restore failed — couldn't read that file"))
+            return null
         }
+        return bytes
     }
 
-    /** Apply a backup from raw bytes — a `.crema.zip` (web full backup: JSONL +
-     *  bean photos) or a bare `.crema.jsonl` / `.crema`. Shared by the SAF file
-     *  restore and the Google Drive restore. */
-    suspend fun restoreBackupBytes(bytes: ByteArray, mode: MainViewModel.RestoreMode) {
-        val text = (if (isZip(bytes)) extractBackupJsonl(bytes) else String(bytes, Charsets.UTF_8))?.trim()
-        if (text.isNullOrBlank()) { notify(readFailure("Restore failed — not a Crema backup")); return }
-        restoreBackupFromText(text, mode)
-    }
+    // ── Restore through the core's plan (restore-safety PR7a) ─────────────────
 
-    /** Parse + apply a `crema-backup` bundle's raw text — shared by the SAF restore
-     *  ([restoreBackup]) and the Google Drive restore (the downloaded `.crema`). */
-    fun restoreBackupFromText(text: String, mode: MainViewModel.RestoreMode) {
-        // Series a restore removes stay on disk until its own marker can delete
-        // them (restore-safety PR7): no save in this window deletes one.
-        historyStore.pauseDeletes()
-        restoresRunning.incrementAndGet()
-        scope.launch {
-            // The core parses the bundle (`parseBackup` → importBackupJsonl, the
-            // parser web uses); re-bind its result to the names the apply block uses.
-            val parsed = parseBackup(text, json, System.currentTimeMillis())
-                ?: run { notify("Restore failed — not a Crema backup"); return@launch }
-            val profiles = parsed.profiles
-            val beans = parsed.beans
-            val roasters = parsed.roasters
-            val shots = parsed.shots
-            val restoredPrefs = parsed.prefs
-            val restoredCommon = parsed.common
-            val restoredQcGrind = parsed.qcGrind
-            val restoredProfileMeta = parsed.profileMeta
-            val restoredMaintenance = parsed.maintenance
-            val restoredVisualizerPrefs = parsed.visualizerPrefs
+    /** What a restore's sink needs from outside the library. */
+    class RestoreDeps(
+        val machineBusy: () -> Boolean,
+        val totalLitres: () -> Double,
+        val restoreRecipes: suspend (
+            recipes: List<coffee.crema.core.BrewRecipe>,
+            methods: List<coffee.crema.core.CustomBrewMethod>,
+            defaults: Map<String, String>?,
+            hidden: Set<String>?,
+        ) -> Boolean,
+        val restoreSettings: suspend (AppPrefs) -> Boolean,
+        val restoreMaintenance: suspend (MaintenanceState) -> Boolean,
+    )
 
-            if (mode == MainViewModel.RestoreMode.WIPE) {
-                customProfilesJson = emptyList()
-                // Clear pin/hidden overlays too — a profileMeta line (if present)
-                // re-applies the bundle's below; a bundle without one leaves them cleared.
-                pinnedIds = emptySet()
-                hiddenIds = emptySet()
-                pinnedProfileStore.save(emptySet())
-                hiddenProfileStore.save(emptySet())
-                editRows(
-                    { it.copy(beans = it.beans.with(emptyList()), roasters = it.roasters.with(emptyList()), history = it.history.with(emptyList())) },
-                    { it.copy(activeBeanId = null) },
-                )
+    /** Test seam: runs between step 7's series writes and its rows. */
+    @Volatile internal var afterRestoreSeries: (suspend () -> Unit)? = null
+
+    /** Sharing a restored Visualizer line wanted and didn't get: for the report. */
+    @Volatile var restoreHeldSharing: List<String> = emptyList()
+        private set
+
+    /** The stores a restore writes, through the library's state. */
+    fun restoreSink(deps: RestoreDeps): coffee.crema.restore.RestoreSink = object : coffee.crema.restore.RestoreSink {
+        override suspend fun localState(): coffee.crema.core.LocalState {
+            awaitSeries()
+            val s = uiState()
+            fun health(store: String, file: String) = coffee.crema.core.LocalStoreHealth(
+                store,
+                when (coffee.crema.persist.Stores.health(java.io.File(app.filesDir, file))) {
+                    coffee.crema.persist.StoreHealth.LOADING -> coffee.crema.core.LocalHealth.Loading
+                    coffee.crema.persist.StoreHealth.OK -> coffee.crema.core.LocalHealth.Ok
+                    coffee.crema.persist.StoreHealth.ABSENT -> coffee.crema.core.LocalHealth.Absent
+                    coffee.crema.persist.StoreHealth.DAMAGED -> coffee.crema.core.LocalHealth.Damaged
+                    coffee.crema.persist.StoreHealth.UNAVAILABLE -> coffee.crema.core.LocalHealth.Unavailable
+                },
+            )
+            val builtinRecipeIds = s.builtinRecipes.map { it.id }.toHashSet()
+            val deleted = visualizer.deletedShotIds() - s.history.mapTo(HashSet()) { it.id }
+            return coffee.crema.core.LocalState(
+                shell = "android",
+                historyCapacity = coffee.crema.history.HistoryStore.MAX_SHOTS.toUInt(),
+                machineBusy = deps.machineBusy(),
+                health = listOf(
+                    health("shots", coffee.crema.history.HistoryStore.FILE_NAME),
+                    health("beans", LibraryStore.FILE_NAME),
+                    health("profiles", CustomProfileStore.FILE_NAME),
+                    health("recipes", coffee.crema.brew.RecipeFileStore.FILE_NAME),
+                    health("settings", coffee.crema.settings.SettingsStore.FILE_NAME),
+                    health("maintenance", coffee.crema.maintenance.MaintenanceStore.FILE_NAME),
+                    health("profileMeta", PinnedProfileStore.FILE_NAME),
+                    health("profileMeta", HiddenProfileStore.FILE_NAME),
+                ),
+                beans = s.beans.map { it.id },
+                roasters = s.roasters.map { it.id },
+                profiles = customProfilesJson.mapNotNull { profileIdOf(it, json) },
+                recipes = s.brewRecipes.map { it.id }.filterNot { it in builtinRecipeIds },
+                customMethods = s.customMethods.map { it.id },
+                shots = s.history.map { coffee.crema.core.LocalShot(it.id, hasSamples = it.samples.isNotEmpty(), pinned = it.pinned) } +
+                    deleted.map { coffee.crema.core.LocalShot(it, hasSamples = false, deleted = true) },
+                photos = s.beans.filter { BeanImageStore.exists(app, it.id) }.map { it.id },
+                beansMissingPhoto = s.beans.filter { it.imageRef != null && !BeanImageStore.exists(app, it.id) }.map { it.id },
+                profileMeta = coffee.crema.core.ProfileMeta(pinnedIds.toList(), hiddenIds.toList()),
+                recipeMeta = coffee.crema.core.RecipeMeta(HashMap(s.lastRecipeByMethod), s.hiddenBuiltinRecipes.toList()),
+                common = currentPrefs().toCommonSettings(),
+                visualizerPrefs = visualizer.backupPrefs(),
+                totalLitres = deps.totalLitres(),
+                activeBeanId = s.activeBeanId,
+                // The engine fills this from its marker.
+                addedBeans = emptyList(),
+            )
+        }
+
+        override fun machineBusy(): Boolean = deps.machineBusy()
+
+        override suspend fun cancelTombstones(ids: List<String>): Boolean = visualizer.forgetTombstonesNow(ids)
+
+        override suspend fun putPhotos(plan: coffee.crema.core.RestorePlan, staged: Map<String, java.io.File>): Boolean =
+            withContext(Dispatchers.IO) {
+                plan.photos.put.all { id ->
+                    val file = staged[id] ?: return@all true
+                    runCatching { BeanImageStore.put(app, id, file.readBytes()) }.isSuccess
+                }
             }
 
-            // Profiles — add customs whose id isn't already known (built-in or custom).
-            // WIPE: the UI list still holds the customs cleared above until
-            // refreshProfiles runs, so only the built-ins are known (#321).
-            val knownProfileIds = if (mode == MainViewModel.RestoreMode.WIPE) {
-                builtinProfiles.map { it.id }.toHashSet()
-            } else {
-                uiState().profiles.map { it.id }.toHashSet()
-            }
-            val newProfiles = profiles.filter { p -> profileIdOf(p, json)?.let { it !in knownProfileIds } ?: false }
-            customProfilesJson = customProfilesJson + newProfiles.map(::derivedBrewTemp)
+        override suspend fun applyRecipes(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords): Boolean {
+            val s = uiState()
+            val builtinIds = s.builtinRecipes.map { it.id }.toHashSet()
+            val meta = plan.recipeMeta.takeIf { it.action == coffee.crema.core.PlanAction.Apply }
+            return deps.restoreRecipes(
+                coffee.crema.restore.nextRows(s.brewRecipes.filterNot { it.id in builtinIds }, records.parsed.recipes, plan.recipes) { it.id },
+                coffee.crema.restore.nextRows(s.customMethods, records.parsed.customMethods, plan.customMethods) { it.id },
+                meta?.defaults,
+                meta?.hiddenBuiltins?.toSet(),
+            )
+        }
 
-            // Beans / roasters / shots — id-union (preserves ids, so a re-restore dedups).
-            var newBeans = emptyList<Bean>()
-            var newRoasters = emptyList<Roaster>()
-            var merged = HistoryMerge(emptyList(), emptyList(), 0)
+        override suspend fun applyLibrary(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords): Boolean {
             editRows(
                 { rows ->
-                    val haveBeans = rows.beans.mapTo(HashSet()) { it.id }
-                    val haveRoasters = rows.roasters.mapTo(HashSet()) { it.id }
-                    val haveShots = rows.history.mapTo(HashSet()) { it.id }
-                    newBeans = beans.filterNot { it.id in haveBeans }
-                    newRoasters = roasters.filterNot { it.id in haveRoasters }
-                    merged = mergeHistory(shots.filterNot { it.id in haveShots }, rows.history)
                     rows.copy(
-                        beans = rows.beans.with(rows.beans + newBeans),
-                        roasters = rows.roasters.with(rows.roasters + newRoasters),
-                        history = rows.history.with(merged.rows),
+                        beans = rows.beans.with(coffee.crema.restore.nextRows(rows.beans, records.parsed.beans, plan.beans) { it.id }),
+                        roasters = rows.roasters.with(coffee.crema.restore.nextRows(rows.roasters, records.parsed.roasters, plan.roasters) { it.id }),
                     )
                 },
-                { it.copy(activeBeanId = it.activeBeanId ?: newBeans.firstOrNull()?.id) },
+                // No bean is picked for the user: an active bean the backup lacks goes, and "none" lasts.
+                { if (plan.clearActiveBean) it.copy(activeBeanId = null) else it },
             )
-            visualizer.forgetTombstones(merged.kept.map { it.id })
-
-            // Profile organisation — pinned + hidden BUILT-IN ids. WIPE replaces the
-            // sets; MERGE unions them. Applied BEFORE refreshProfiles so the star /
-            // hidden overlay reflects the restored choices on the next list build.
-            restoredProfileMeta?.let { pm ->
-                val bundledPinned = (pm["pinned"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }?.toSet().orEmpty()
-                val bundledHidden = (pm["hiddenBuiltins"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }?.toSet().orEmpty()
-                pinnedIds = if (mode == MainViewModel.RestoreMode.WIPE) bundledPinned else pinnedIds + bundledPinned
-                hiddenIds = if (mode == MainViewModel.RestoreMode.WIPE) bundledHidden else hiddenIds + bundledHidden
-                pinnedProfileStore.save(pinnedIds)
-                hiddenProfileStore.save(hiddenIds)
-            }
-
-            refreshProfiles()
-            persistCustomProfiles()
-            persistLibrary()
-            historyStore.save(uiState().history)
-            // Merge keeps this device's settings, maintenance counters and
-            // Visualizer prefs, as the owner decided: only Replace takes the
-            // backup's. (The plan's "unless still pristine" comes with PR7.)
-            val replacing = mode == MainViewModel.RestoreMode.WIPE
-            restoredPrefs?.takeIf { replacing }?.let { applyRestoredSettings(it) }
-            // Cross-shell common settings: overlay onto current prefs (keeping this
-            // device's platform extras), then apply. qcGrind rides only from Android.
-            restoredCommon?.takeIf { replacing }?.let { c ->
-                val target = currentPrefs().withCommonSettings(c)
-                applyRestoredSettings(if (restoredQcGrind != null) target.copy(qcGrind = restoredQcGrind) else target)
-            }
-
-            // Maintenance counters + Visualizer sync prefs — both shared core types,
-            // applied verbatim on either shell (no per-shell tag); never the OAuth
-            // token (re-auth after restore). Reseed the live water integrator.
-            restoredMaintenance?.takeIf { replacing }?.let { applyRestoredMaintenance(it) }
-            // Never widen sharing from a backup (review 05 P3-1): held fields keep
-            // this device's value and the notice below says so.
-            val heldSharing = restoredVisualizerPrefs?.takeIf { replacing }?.let { incoming ->
-                val guarded = guardRestoredPrefs(visualizer.backupPrefs(), incoming, json)
-                visualizer.restorePrefs(guarded.apply)
-                guarded.held
-            }.orEmpty()
-            // Methods before recipes, so a restored recipe's `custom:` method resolves.
-            val newMethods = applyRestoredCustomMethods(parsed.customMethods, mode == MainViewModel.RestoreMode.WIPE)
-            val newRecipes = applyRestoredRecipes(parsed.recipes, parsed.recipeMeta, mode == MainViewModel.RestoreMode.WIPE)
-
-            notify(
-                "Restored ${newProfiles.size} profile(s) · ${newBeans.size} bean(s) · " +
-                    "${newRoasters.size} roaster(s) · ${merged.kept.size} shot(s)" +
-                    (if (newRecipes > 0) " · $newRecipes recipe(s)" else "") +
-                    (if (newMethods > 0) " · $newMethods method(s)" else "") +
-                    historyDroppedNotice(merged.dropped) +
-                    (heldSharingNotice(heldSharing)?.let { ". $it" } ?: ""),
-            )
-            onRestoreCompleted()
-        }.invokeOnCompletion {
-            restoresRunning.decrementAndGet()
-            historyStore.resumeDeletes()
+            val s = uiState()
+            return library.save(BeanLibrary(s.beans, s.roasters, s.activeBeanId))
         }
+
+        override suspend fun applyProfiles(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords): Boolean {
+            val added = plan.profiles.add.toHashSet()
+            val incoming = records.parsed.profiles.map { raw -> if (profileIdOf(raw, json) in added) derivedBrewTemp(raw) else raw }
+            customProfilesJson = coffee.crema.restore.nextRows(customProfilesJson, incoming, plan.profiles) { profileIdOf(it, json).orEmpty() }
+            val meta = plan.profileMeta.takeIf { it.action == coffee.crema.core.PlanAction.Apply }
+            if (meta != null) {
+                pinnedIds = meta.pinned.toSet()
+                hiddenIds = meta.hiddenBuiltins.toSet()
+            }
+            refreshProfiles()
+            var ok = customProfileStore.save(customProfilesJson, ++customProfilesGeneration)
+            if (meta != null) {
+                ok = pinnedProfileStore.save(pinnedIds) && ok
+                ok = hiddenProfileStore.save(hiddenIds) && ok
+            }
+            return ok
+        }
+
+        override suspend fun applyShots(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords): Int? {
+            // Series first, with no change to memory.
+            val first = coffee.crema.restore.nextShots(uiState().history, records.parsed.shots, plan.shots, plan.mode == coffee.crema.core.RestoreMode.Replace)
+            var failed = historyStore.writeSeriesOf(first.series)
+            afterRestoreSeries?.invoke()
+            // Then, over the rows as they are now, memory and the rows write together.
+            var second = first
+            editRows(
+                { rows ->
+                    second = coffee.crema.restore.nextShots(rows.history, records.parsed.shots, plan.shots, plan.mode == coffee.crema.core.RestoreMode.Replace)
+                    rows.copy(history = rows.history.with(second.next))
+                },
+                { it },
+            )
+            if (!historyStore.save(second.next)) return null
+            // A curve the recompute found anew went inline with the rows; its file now, before done.
+            val written = first.series.mapTo(HashSet()) { it.id }
+            failed += historyStore.writeSeriesOf(second.series.filterNot { it.id in written })
+            return failed
+        }
+
+        override suspend fun applySingletons(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords): Boolean {
+            val p = records.parsed
+            var ok = true
+            if (plan.settings.common == coffee.crema.core.PlanAction.Apply) {
+                val extras = plan.settings.extras == coffee.crema.core.PlanAction.Apply
+                val target = p.common?.let { c ->
+                    val withCommon = currentPrefs().withCommonSettings(c)
+                    if (extras && p.qcGrind != null) withCommon.copy(qcGrind = p.qcGrind) else withCommon
+                } ?: p.prefs?.takeIf { extras }
+                if (target != null) ok = deps.restoreSettings(target) && ok
+            }
+            if (plan.maintenance == coffee.crema.core.PlanAction.Apply) {
+                p.maintenance?.let { ok = deps.restoreMaintenance(it) && ok }
+            }
+            if (plan.visualizerPrefs == coffee.crema.core.PlanAction.Apply) {
+                p.visualizerPrefs?.let { incoming ->
+                    // Never widen sharing from a backup: held fields keep this device's value.
+                    val guarded = guardRestoredPrefs(visualizer.backupPrefs(), incoming, json)
+                    visualizer.restorePrefs(guarded.apply)
+                    restoreHeldSharing = guarded.held
+                }
+            }
+            return ok
+        }
+
+        override suspend fun runDeletes(deletes: coffee.crema.restore.MarkerDeletes): Boolean {
+            // Only over a store that loaded: a corrupt load reads as "not listed" (#325).
+            fun loaded(file: String) =
+                coffee.crema.persist.Stores.health(java.io.File(app.filesDir, file)) == coffee.crema.persist.StoreHealth.OK
+            val shotsOk = deletes.shots.isEmpty() || loaded(coffee.crema.history.HistoryStore.FILE_NAME)
+            val photosOk = deletes.photos.isEmpty() || loaded(LibraryStore.FILE_NAME)
+            if (shotsOk && deletes.shots.isNotEmpty()) {
+                val listed = uiState().history.mapTo(HashSet()) { it.id }
+                historyStore.deleteSeriesOf(deletes.shots.filterNot { it in listed })
+            }
+            if (photosOk && deletes.photos.isNotEmpty()) {
+                val listedBeans = uiState().beans.mapTo(HashSet()) { it.id }
+                withContext(Dispatchers.IO) {
+                    deletes.photos.filterNot { it in listedBeans }.forEach { BeanImageStore.beanImageFile(app, it).delete() }
+                }
+            }
+            return shotsOk && photosOk
+        }
+
+        override fun pauseDeletes() = historyStore.pauseDeletes()
+
+        override fun resumeDeletes() = historyStore.resumeDeletes()
+
+        override fun changedDirs(): List<java.io.File> =
+            listOf(app.filesDir, historyStore.seriesDirectory, BeanImageStore.beanImageFile(app, "x").parentFile!!)
     }
 
     /** Remove a stored shot from the local history. Persisted. */

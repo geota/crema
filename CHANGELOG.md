@@ -110,6 +110,24 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   history backs up without running the app out of memory. Back up shows how
   far it's got and can be cancelled, leaving nothing behind, and a Drive
   backup uploads straight from the file. (#310)
+- **Web backups are built a piece at a time** — the backup file is written as
+  it's built, into the browser's own storage where it has one, rather than held
+  in memory whole, so a large history backs up without running the tab out of
+  memory. Back up shows how far it's got and can be cancelled, leaving nothing
+  behind, and a Drive backup uploads straight from the file. (#310)
+- **Restore shows what it will do first (Android)** — as on the web: after you
+  pick a backup, from a file or Google Drive, Crema works out what changes. A
+  clean Merge runs at once and says what it added; a Merge with warnings, and
+  every Replace, shows the numbers first, and Replace still asks you to type
+  ERASE, now with what it will delete in front of you. Merge keeps your
+  settings, maintenance counters, Visualizer preferences and every row you
+  already have, unless the device is still as a fresh install left it, fills in
+  lost curves, and can bring back shots you deleted here. Replace deletes only
+  what the backup doesn't have, and refuses a damaged backup or one that would
+  empty the device. Each store lands in one write, a restore never runs over a
+  shot or a firmware update, a firmware update can't start during one, and a
+  restore cut off part-way says so at the next launch. Crema no longer picks an
+  active bean for you at launch.
 - **Restore shows what it will do first (web)** — after you pick a backup, Crema
   reads it strictly and works out what changes. A clean Merge runs at once and
   then says what it added; a Merge with warnings, and every Replace, shows the
@@ -127,6 +145,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Running a cut-off restore again keeps its shots' bag debits.** Beans the
+  first run added used to count as already on this device, so the second run
+  set those shots' debits to zero. Crema now knows the same backup by its date,
+  device and app version, from Drive or from a file, and a different backup
+  holding the same bean still counts it as yours. Android and web.
 - **Two web tabs no longer undo each other's changes.** Each store saved its
   whole copy, so a tab left open put its old copy back over what another tab
   had saved: a bag's debit, a rating, a recipe, a maintenance count. Each tab

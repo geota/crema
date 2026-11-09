@@ -524,6 +524,89 @@ describe('the #363 review', () => {
 	});
 });
 
+describe('added beans, only for the same backup (DECISIONS §7)', () => {
+	it('an interrupted restore A carries to A again, from a file or Drive, and not to backup B', async () => {
+		const a = await backupOf(['n1'], ['s1'], () => 'n1');
+		captureMessages(new FakeLocks());
+		const clean = await planNow(a, 'merge', false, new FakeLocks());
+		expect(clean.beans.add).toEqual(['n1']);
+		const stopped = await runRestore(a, 'merge', { expected: clean }, deps(new FakeLocks(), { failAt: 'profiles' }));
+		expect(stopped.kind).toBe('stopped');
+		expect(readMarker()?.addedBeans).toEqual(['n1']);
+
+		// A re-run of A: the bean it added isn't the device's own bag.
+		expect((await planNow(a, 'merge', false, new FakeLocks())).shots.zeroDebit).toEqual([]);
+		// The same backup from Drive: still the same backup, by its header.
+		const fromDrive = prepareBackup(a.jsonl, 'crema-backup-tablet-20261108-0800.crema.zip');
+		const again = await planNow(fromDrive, 'merge', false, new FakeLocks());
+		expect(again.shots.zeroDebit).toEqual([]);
+		// Backup B, made at another time, with that bean: for B the bag is here.
+		const text = new TextDecoder().decode(a.jsonl).split('\n');
+		const header = JSON.parse(text[0]) as Record<string, unknown>;
+		const b = prepareBackup([JSON.stringify({ ...header, createdAt: 42 }), ...text.slice(1)].join('\n'), 'another backup');
+		const forB = await planNow(b, 'merge', false, new FakeLocks());
+		expect(forB.shots.zeroDebit).toEqual(['s1']);
+		await runRestore(b, 'merge', { expected: forB }, deps(new FakeLocks(), { failAt: 'profiles' }));
+		expect(readMarker()?.backupName).toBe('another backup');
+		expect(readMarker()?.addedBeans).toEqual([]);
+	});
+
+	it('a backup is known by its header, exactly, and by its file name only without one', async () => {
+		const text = new TextDecoder().decode((await backupOf(['n1'], ['s1'])).jsonl).split('\n');
+		const header = JSON.parse(text[0]) as Record<string, unknown>;
+		const withHeader = (over: Record<string, unknown>) =>
+			[JSON.stringify({ ...header, createdAt: 1790000000000, deviceLabel: 'Tablet', appVersion: '1.2', ...over }), ...text.slice(1)].join('\n');
+		const a = prepareBackup(withHeader({}), 'one name');
+		expect(a.identity).toBe('[1790000000000,"Tablet","1.2"]');
+		expect(prepareBackup(withHeader({}), 'another name').identity).toBe(a.identity);
+		// Each field counts, not `createdAt` alone.
+		expect(prepareBackup(withHeader({ createdAt: 42 }), 'one name').identity).not.toBe(a.identity);
+		expect(prepareBackup(withHeader({ deviceLabel: 'Phone' }), 'one name').identity).not.toBe(a.identity);
+		expect(prepareBackup(withHeader({ appVersion: '1.3' }), 'one name').identity).not.toBe(a.identity);
+		// No header: the file name, and it tells two files apart.
+		const headless = ['{ not a header', ...text.slice(1)].join('\n');
+		expect(prepareBackup(headless, 'x.zip').identity).toBe('["file","x.zip"]');
+		expect(prepareBackup(headless, 'y.zip').identity).toBe('["file","y.zip"]');
+	});
+
+	it('a restore of A from a file, cut off, then run again from Drive, keeps its debits', async () => {
+		const a = await backupOf(['n1'], ['s1'], () => 'n1');
+		captureMessages(new FakeLocks());
+		const fromFile = prepareBackup(a.jsonl, 'crema-backup.crema.zip');
+		const first = await planNow(fromFile, 'merge', false, new FakeLocks());
+		await runRestore(fromFile, 'merge', { expected: first }, deps(new FakeLocks(), { failAt: 'profiles' }));
+		const fromDrive = prepareBackup(a.jsonl, 'crema-backup-tablet-20261108-0800.crema.zip');
+		const again = await planNow(fromDrive, 'merge', false, new FakeLocks());
+		expect((await runRestore(fromDrive, 'merge', { expected: again }, deps(new FakeLocks()))).kind).toBe('done');
+		expect(getHistoryStore().get('s1')?.bagDebit).toBe(18);
+	});
+});
+
+describe('a damaged first line or a BOM (REVIEW-378)', () => {
+	async function damagedBackup(bom: boolean) {
+		const prepared = await backupOf(['b1'], ['s1']);
+		const text = new TextDecoder().decode(prepared.jsonl);
+		const lines = text.split('\n');
+		return prepareBackup(bom ? '\uFEFF' + text : ['{ not a header', ...lines.slice(1)].join('\n'), 'damaged');
+	}
+
+	for (const bom of [false, true]) {
+		it(`${bom ? 'a BOM' : 'a damaged header'}: Merge goes ahead, Replace refuses`, async () => {
+			const prepared = await damagedBackup(bom);
+			getBeanStore().bulkAdd([{ ...blankBean('b9'), name: 'Mine' }], []);
+			const replace = await planNow(prepared, 'wipe', false, new FakeLocks());
+			expect(replace.verdict).toBe(Verdict.Refused);
+			const merge = await planNow(prepared, 'merge', false, new FakeLocks());
+			expect(merge.verdict).toBe(Verdict.Confirm);
+			captureMessages(new FakeLocks());
+			const out = await runRestore(prepared, 'merge', { expected: merge }, deps(new FakeLocks()));
+			expect(out.kind).toBe('done');
+			expect(getBeanStore().getBean('b1')).not.toBeNull();
+			expect(getHistoryStore().get('s1')).toBeDefined();
+		});
+	}
+});
+
 describe('the marker', () => {
 	const bootDeps = (over: Partial<Parameters<typeof checkMarkerAtBoot>[0]> = {}) => {
 		const deleted: string[] = [];

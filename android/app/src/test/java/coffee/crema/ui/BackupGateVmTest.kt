@@ -76,7 +76,12 @@ class BackupGateVmTest {
     @Test
     fun aCompletedRestoreReleasesDrivesPreDamagePin() {
         val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-        runBlocking { coffee.crema.drive.DriveStore(app, json).let { it.load(); it.save(coffee.crema.drive.DriveState(preDamageCopy = "p")) } }
+        runBlocking {
+            coffee.crema.drive.DriveStore(app, json).let {
+                it.load()
+                it.save(coffee.crema.drive.DriveState(preDamageCopy = "p", pinStores = setOf("prefs.json")))
+            }
+        }
         val vm = vm()
         val bundle = listOf(
             """{"kind":"crema-backup/v1","createdAt":1,"beanCount":0}""",
@@ -86,6 +91,29 @@ class BackupGateVmTest {
         VmHarness.idleUntil("the pin to be released") {
             runBlocking { coffee.crema.drive.DriveStore(app, json).load().pinReleased }
         }
+    }
+
+    @Test
+    fun aRestoreThatStoppedKeepsDrivesPreDamagePin() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        runBlocking {
+            coffee.crema.drive.DriveStore(app, json).let {
+                it.load()
+                it.save(coffee.crema.drive.DriveState(preDamageCopy = "p", pinStores = setOf("prefs.json")))
+            }
+        }
+        val vm = vm()
+        vm.restoreEngine.failAt = coffee.crema.restore.RestoreStep.SETTINGS
+        val bundle = listOf(
+            """{"kind":"crema-backup/v1","createdAt":1,"beanCount":0}""",
+            """{"kind":"settings","_shell":"android","common":{"weightUnit":"oz"}}""",
+        ).joinToString("\n")
+        val before = vm.ui.value.userMessages.size
+        vm.restoreBackupFromText(bundle, MainViewModel.RestoreMode.MERGE)
+        VmHarness.idleUntil("the restore stopped") { vm.ui.value.userMessages.size > before }
+        assertTrue(vm.ui.value.userMessages.last().startsWith("Restore stopped"), vm.ui.value.userMessages.last())
+        repeat(5) { VmHarness.idle() }
+        assertEquals(false, runBlocking { coffee.crema.drive.DriveStore(app, json).load().pinReleased })
     }
 
     @Test

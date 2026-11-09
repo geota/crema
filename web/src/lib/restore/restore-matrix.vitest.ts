@@ -597,8 +597,10 @@ describe('the shared matrix, on real web stores', () => {
 			let app: App;
 			let prepared: PreparedBackup;
 			let plan: RestorePlan;
+			let photoPuts: ReturnType<typeof vi.spyOn>;
 			try {
 				app = await boot();
+				photoPuts = vi.spyOn(app.images.getBeanImageStore(), 'put');
 				prepared = app.engine.prepareBackup(backupFile(backup), c.name);
 				const locks = new FakeLocks();
 				// A shot running in another tab.
@@ -620,6 +622,9 @@ describe('the shared matrix, on real web stores', () => {
 			if (plan.verdict === 'refused') {
 				// Nothing runs, and nothing changed.
 				expect(await reload()).toEqual(before);
+				// The zip's photos were read before the verdict: none reached the photo store
+				// (fake-indexeddb drops a Blob's bytes, so the store's writes are watched instead).
+				expect(photoPuts, 'photo writes').not.toHaveBeenCalled();
 				return;
 			}
 			const out = await app.engine.runRestore(prepared, mode, { reviveDeleted: revive, expected: plan }, depsFor(app));

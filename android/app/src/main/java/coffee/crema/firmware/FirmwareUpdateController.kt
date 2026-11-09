@@ -126,6 +126,8 @@ class FirmwareUpdateController(
     private val wallClock: () -> Long = System::currentTimeMillis,
     /** Whether the DE1 link is up right now. */
     private val linkUp: () -> Boolean = { false },
+    /** A restore is running: a flash can't start under it (restore-safety §2). */
+    private val restoreRunning: () -> Boolean = { false },
     driverFactory: ((FlashStatus?) -> Unit) -> FirmwareFlashDriver,
 ) {
     private val _ui = MutableStateFlow(FirmwareFlowUi())
@@ -295,6 +297,10 @@ class FirmwareUpdateController(
     /** Start (or retry) with the verified image. */
     fun start() = scope.launch {
         val img = image ?: return@launch
+        if (restoreRunning()) {
+            _ui.update { it.copy(step = FlowStep.Confirm, startProblem = "A restore is running. Try again when it's done.") }
+            return@launch
+        }
         val blockers = core.blockers(conditions())
         if (blockers.isNotEmpty()) {
             _ui.update { it.copy(step = FlowStep.Confirm, blockers = blockers) }

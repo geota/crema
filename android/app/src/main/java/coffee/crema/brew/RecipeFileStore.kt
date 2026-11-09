@@ -45,9 +45,9 @@ class RecipeFileStore(private val context: Context, private val json: Json) {
         }
     }
 
-    suspend fun save(envelope: Envelope) {
+    /** Whether it landed. */
+    suspend fun save(envelope: Envelope): Boolean =
         saveStore(file, "brew recipes") { json.encodeToString(Envelope.serializer(), envelope) }
-    }
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {

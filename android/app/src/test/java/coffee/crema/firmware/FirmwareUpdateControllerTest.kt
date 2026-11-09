@@ -131,6 +131,7 @@ class FirmwareUpdateControllerTest {
         machineId: () -> String? = { null },
         linkUp: () -> Boolean = { false },
         wall: () -> Long = { 1_000_000L },
+        restoreRunning: () -> Boolean = { false },
     ) = FirmwareUpdateController(
         scope = this,
         core = core,
@@ -146,6 +147,7 @@ class FirmwareUpdateControllerTest {
         machineId = machineId,
         wallClock = wall,
         linkUp = linkUp,
+        restoreRunning = restoreRunning,
         driverFactory = { onStatus -> FirmwareFlashDriver(core, NoIo, backgroundScope, { 0L }, onStatus = onStatus) },
     )
 
@@ -224,6 +226,27 @@ class FirmwareUpdateControllerTest {
         c.start(); runCurrent()
         assertEquals(FlowStep.Confirm, c.ui.value.step)
         assertEquals(0, core.starts)
+    }
+
+    @Test
+    fun aFlashCantStartWhileARestoreRuns() = runTest {
+        val core = StubCore()
+        var restoring = true
+        val c = controller(
+            core = core,
+            fetcher = { _, _, _ -> ByteArray(16) },
+            check = FirmwareImageCheck(ok = true, artifact = nightly, byteLength = 16u, sha256 = "a"),
+            restoreRunning = { restoring },
+        )
+        c.open(); runCurrent()
+        c.download(); runCurrent()
+        c.start(); runCurrent()
+        assertEquals(FlowStep.Confirm, c.ui.value.step)
+        assertEquals("A restore is running. Try again when it's done.", c.ui.value.startProblem)
+        assertEquals(0, core.starts)
+        restoring = false
+        c.start(); runCurrent()
+        assertEquals(1, core.starts)
     }
 
     @Test
