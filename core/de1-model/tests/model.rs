@@ -946,3 +946,42 @@ fn a_heavy_cup_set_down_just_before_flow_is_the_untared_guards() {
     let cup = world.true_cup_g();
     assert!((33.0..40.0).contains(&cup), "stopped at a true {cup} g");
 }
+
+/// Two drops with no state heard between them are one outage, measured from
+/// the first, as the core measures it. Six lost reports hide everything after
+/// the first drop: shot 1's pour, Idle, a steam session and a new shot's
+/// pre-flow. The core next hears the new shot pouring 60.1 s after the first
+/// drop, past the 60 s limit, so it can't tell the shot and refuses its weight
+/// as unseen. A new shot did begin unseen; the oracle had counted the outage
+/// from the second drop and called it the same shot (I6).
+#[test]
+fn two_drops_with_nothing_heard_between_are_one_outage() {
+    let mut world = World::new(
+        De1Params {
+            preinfusion: false,
+            ending: Ending::None,
+            ..De1Params::default()
+        },
+        0.0,
+        5_000,
+        false,
+        false,
+    );
+    for op in [
+        Op::Scale(ScaleMode::TransientZero),
+        Op::GroupHead(MachineState::Espresso),
+        Op::Advance { ms: 200 },
+        Op::LoseStates(6),
+        Op::LinkDown { ms: 1_300 },
+        Op::Advance { ms: 1_200 },
+        Op::AppRequest(MachineState::Steam),
+        Op::Advance { ms: 3_500 },
+        Op::LinkDown { ms: 8_800 },
+        Op::Advance { ms: 53_900 },
+        Op::GroupHead(MachineState::Espresso),
+        Op::Advance { ms: 5_000 },
+    ] {
+        world.apply(&op);
+    }
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}

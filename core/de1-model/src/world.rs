@@ -495,10 +495,15 @@ impl World {
                     self.coverage.drops += 1;
                     self.link.down_until = Some(self.now + ms);
                     self.lane.clear();
+                    // An outage runs from the first drop, as the core's does:
+                    // a link that drops again before any state arrived is the
+                    // same outage, since nothing was heard in between.
+                    if self.state_heard_on_link || self.down_at.is_none() {
+                        self.down_at = Some(self.now);
+                    }
                     self.state_heard_on_link = false;
                     // The outage may raise the alert again.
                     self.alerts = 0;
-                    self.down_at = Some(self.now);
                     let out = self.core.de1_link_lost();
                     self.ingest(out, Who::Core);
                     self.was_down = true;
