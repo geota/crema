@@ -89,7 +89,7 @@ fun rememberSettingsConfirmState(vm: MainViewModel): SettingsConfirmState {
     val pendingExportFile = remember { mutableStateOf<java.io.File?>(null) }
     val saveFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         val f = pendingExportFile.value; pendingExportFile.value = null
-        if (f != null) { if (uri != null) vm.writeFileToUri(uri, f) else f.delete() }
+        if (f != null) { if (uri != null) vm.writeFileToUri(uri, f) else vm.releaseBackupFile(f) }
     }
     // SAF restore-from-file plumbing. A MERGE applies at once; a REPLACE (wipe)
     // stashes the picked file so the dialog can gate it behind a typed confirm
@@ -275,10 +275,10 @@ fun BackUpEverythingButton(
     val scope = rememberCoroutineScope()
     var building by remember { mutableStateOf(false) }
     val ui by vm.ui.collectAsStateWithLifecycle()
-    val progress = ui.backupProgress
+    val progress = ui.backupProgress[coffee.crema.ui.BackupKind.FILE]
     if (building) {
         CremaButton(
-            onClick = { vm.cancelBackup() },
+            onClick = { vm.cancelBackup(coffee.crema.ui.BackupKind.FILE) },
             variant = CremaButtonVariant.Outlined,
             icon = "x",
             label = progress?.let { "Cancel · ${it.shotsWritten} of ${it.shotsTotal}" } ?: "Cancel",

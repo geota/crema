@@ -115,9 +115,10 @@ suspend fun driveUploadBackup(
                 "multipart/related; boundary=$boundary", head, content, tail, accessToken, json,
             )
         }
-        file.size?.toLongOrNull()?.let { stored ->
-            if (stored != length) throw IOException("Drive upload failed: Drive holds $stored bytes of $length.")
-        }
+        // Unverified is not verified: a reply without the size fails too (#391 review).
+        val stored = file.size?.toLongOrNull()
+            ?: throw IOException("Drive upload failed: Drive didn't say how large the file is.")
+        if (stored != length) throw IOException("Drive upload failed: Drive holds $stored bytes of $length.")
         file
     }
 

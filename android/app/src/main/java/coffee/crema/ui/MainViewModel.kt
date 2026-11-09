@@ -413,7 +413,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         clientId = coffee.crema.BuildConfig.GOOGLE_DRIVE_CLIENT_ID,
         notify = { msg -> notifyUser(msg) },
         log = { appendLog(it) },
-        backupZip = { library.buildBackupZip() },
+        backupZip = { daily -> library.buildBackupZip(if (daily) BackupKind.DAILY else BackupKind.DRIVE) },
         backupFileName = { library.backupFileName() },
         applyRestore = { bytes, wipe ->
             viewModelScope.launch { library.restoreBackupBytes(bytes, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) }
@@ -1415,14 +1415,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  or null + a notice. Suspends: the build runs off the main thread. */
     suspend fun buildBackupZipFile(): java.io.File? = library.buildBackupZipFile()
 
-    /** Stop the backup being built, keeping nothing. */
-    fun cancelBackup() = library.cancelBackup()
+    /** Stop the [kind] backup being built, keeping nothing. */
+    fun cancelBackup(kind: BackupKind) = library.cancelBackup(kind)
+
+    /** Done with a built backup's temporary file without saving it. */
+    fun releaseBackupFile(file: java.io.File) = coffee.crema.ui.releaseBackupFile(file)
 
     /** [buildBackupZipFile] read into memory, and the file removed: for tests,
      *  which restore what they back up. The app never holds a backup whole. */
     @androidx.annotation.VisibleForTesting
     suspend fun buildBackupZipBytes(): ByteArray? =
-        buildBackupZipFile()?.let { f -> try { f.readBytes() } finally { f.delete() } }
+        buildBackupZipFile()?.let { f -> try { f.readBytes() } finally { releaseBackupFile(f) } }
 
     /** A suggested filename for the SAF create-document picker. */
     fun backupFileName(): String = library.backupFileName()

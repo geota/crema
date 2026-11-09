@@ -78,17 +78,62 @@ internal class StreamedBackup(
     val degraded: List<String>,
     /** Rows left out, of every kind, shots included. */
     val omitted: List<OmittedBackupRow>,
+    /** Photos that couldn't be read, so went without: bean id and why. */
+    val photosSkipped: List<String> = emptyList(),
 )
 
-/** A temporary file for a backup, in [cacheDir]. */
+/** Which build a backup is: each has its own cancel and progress (#391 review). */
+enum class BackupKind { FILE, DRIVE, DAILY }
+
+/**
+ * The running builds' cancels, one per kind: a cancel reaches only its own
+ * build, and a build starting doesn't clear another's (#391 review).
+ */
+internal class BackupRuns {
+    private val cancels = java.util.concurrent.ConcurrentHashMap<BackupKind, java.util.concurrent.atomic.AtomicBoolean>()
+
+    /** A [kind] build starts: its own cancel. */
+    fun start(kind: BackupKind): java.util.concurrent.atomic.AtomicBoolean =
+        java.util.concurrent.atomic.AtomicBoolean().also { cancels[kind] = it }
+
+    /** Cancel the [kind] build running now, if one is. */
+    fun cancel(kind: BackupKind) {
+        cancels[kind]?.set(true)
+    }
+
+    /** The build that started with [token] is over. */
+    fun end(kind: BackupKind, token: java.util.concurrent.atomic.AtomicBoolean) {
+        cancels.remove(kind, token)
+    }
+}
+
+/**
+ * Temporary backup files this process is still building, saving or
+ * uploading, by path: the sweep leaves them, however old (#391 review). Added
+ * by [backupTempFile], removed by [releaseBackupFile].
+ */
+private val liveBackupFiles: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+/** A temporary file for a backup, in [cacheDir], live until [releaseBackupFile]. */
 internal fun backupTempFile(cacheDir: File, now: Long = System.currentTimeMillis()): File =
     File(cacheDir, "$BACKUP_TEMP_PREFIX$now-${(0..0xffffff).random().toString(16)}.zip")
+        .also { liveBackupFiles += it.absolutePath }
 
-/** Remove the temporary backup files in [cacheDir] older than [keepMs]: at startup and before a backup. */
+/** Done with a backup's temporary file: remove it. */
+internal fun releaseBackupFile(file: File) {
+    file.delete()
+    liveBackupFiles -= file.absolutePath
+}
+
+/**
+ * Remove the temporary backup files in [cacheDir] older than [keepMs], and
+ * not live in this process: at startup and before a backup.
+ */
 internal fun sweepBackupTemp(cacheDir: File, keepMs: Long = 10 * 60_000L, now: Long = System.currentTimeMillis()): Int {
     var removed = 0
     for (f in cacheDir.listFiles().orEmpty()) {
         if (!f.isFile || !f.name.startsWith(BACKUP_TEMP_PREFIX)) continue
+        if (f.absolutePath in liveBackupFiles) continue
         val stamp = f.name.removePrefix(BACKUP_TEMP_PREFIX).substringBefore('-').toLongOrNull()
         if (stamp != null && now - stamp < keepMs) continue
         if (f.delete()) removed += 1
@@ -136,7 +181,7 @@ internal fun streamBackupZip(
     try {
         return walk(snap, json, createdAtMs, appVersion, deviceLabel, photos, out, limits, batch, stop, onProgress, shotJson)
     } catch (t: Throwable) {
-        out.delete()
+        releaseBackupFile(out)
         throw t
     }
 }
@@ -182,12 +227,15 @@ private fun walk(
     val hash = MessageDigest.getInstance("SHA-256")
     var inflated = 0L
     val degraded = mutableListOf<String>()
+    val photosSkipped = mutableListOf<String>()
     var curves = 0u
     var shotsWritten = 0
     CountingOut(BufferedOutputStream(FileOutputStream(out), 64 * 1024), limits.maxFileBytes).use { counted ->
         ZipOutputStream(counted).use { zip ->
             zip.setLevel(Deflater.DEFAULT_COMPRESSION)
-            zip.putNextEntry(ZipEntry(BACKUP_JSONL_ENTRY))
+            // Entries carry the backup's own time, not the clock's, so the same
+            // data gives the same zip (the cross-shell fixture is compared with it).
+            zip.putNextEntry(ZipEntry(BACKUP_JSONL_ENTRY).apply { time = createdAtMs })
             var header = true
             /** Each line in the limit, counted, hashed after the header, and zipped. */
             fun push(text: String) {
@@ -230,12 +278,14 @@ private fun walk(
             onProgress(BackupProgress(shotsWritten, written))
             for ((beanId, file) in photos.sortedBy { it.first }) {
                 stop()
-                val bytes = runCatching { file.readBytes() }.getOrNull() ?: continue
+                val bytes = runCatching { file.readBytes() }
+                    .onFailure { photosSkipped += "$beanId (${it.message})" }
+                    .getOrNull() ?: continue
                 hash.update(beanId.toByteArray(Charsets.UTF_8))
                 hash.update(bytes)
                 // Deflated: the web's streamed zips are too, and a stored entry
                 // needs its size and CRC up front.
-                zip.putNextEntry(ZipEntry("images/$beanId"))
+                zip.putNextEntry(ZipEntry("images/$beanId").apply { time = createdAtMs })
                 zip.write(bytes)
                 zip.closeEntry()
             }
@@ -247,6 +297,7 @@ private fun walk(
         contentHash = hash.digest().joinToString("") { "%02x".format(it) },
         degraded = degraded,
         omitted = prelude.omitted + omitted,
+        photosSkipped = photosSkipped,
     )
 }
 

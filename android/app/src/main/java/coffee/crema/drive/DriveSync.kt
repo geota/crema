@@ -69,11 +69,13 @@ private const val ZERO_COUNTS = """{"shots":0,"curves":0}"""
 
 /** A built backup, and what's in it for its automatic name. */
 class BackupZip(
-    /** The `.crema.zip`, a temporary file (#310 P2a): removed once uploaded or skipped. */
+    /** The `.crema.zip`, a temporary file (#310 P2a): released once uploaded or skipped. */
     val file: java.io.File,
     val counts: BackupCounts,
     /** What's in it, without its export time: the same data gives the same hash (#311). */
     val contentHash: String? = null,
+    /** Done with [file]: removes it. */
+    val release: () -> Unit = { file.delete() },
 )
 
 /** What a new install keeps of its automatic copies. */
@@ -136,7 +138,8 @@ class DriveSync(
     private val log: (String) -> Unit = {},
     /** Produce the `.crema.zip` backup bytes, or null (+ its own notice) when
      *  empty. Suspends: the build runs off Main (LibraryController). */
-    private val backupZip: suspend () -> BackupZip?,
+    /** Build a backup; [daily] for the automatic one, which has its own cancel and progress. */
+    private val backupZip: suspend (daily: Boolean) -> BackupZip?,
     /** A suggested backup filename (the VM's `backupFileName()`). */
     private val backupFileName: () -> String,
     /** Apply a downloaded backup's raw bytes (a `.crema.zip` or legacy text).
@@ -511,7 +514,7 @@ class DriveSync(
             // Busy from the start: building the zip takes a while on a big
             // history (it runs off Main, so the UI stays live meanwhile).
             _state.update { it.copy(busy = true) }
-            val built = backupZip() ?: run {
+            val built = backupZip(false) ?: run {
                 _state.update { it.copy(busy = false) } // backupZip already notified "nothing to back up"
                 return@launch
             }
@@ -530,7 +533,7 @@ class DriveSync(
                     notify("Google Drive backup failed: ${driveFailureLine(failure, e.message)}")
                 }
             } finally {
-                built.file.delete()
+                built.release()
             }
             _state.update { it.copy(busy = false) }
         }
@@ -588,11 +591,11 @@ class DriveSync(
             // upload now would push the copy it should keep out of reach.
             if (!pinPreDamageCopy(tokens, autoBackupFileName(backupFileName(), tag, ZERO_COUNTS))) return@launch
             persist { it.copy(lastAutoBackupAtMs = now()) }
-            val built = backupZip() ?: return@launch
+            val built = backupZip(true) ?: return@launch
             // Nothing changed since the last upload that landed: no new copy
             // (#311), as long as Drive still holds one of this device's.
             if (built.contentHash != null && built.contentHash == persisted.lastAutoBackupHash && holdsOwnCopy(tokens, tag)) {
-                built.file.delete()
+                built.release()
                 log("Automatic Drive backup skipped: nothing changed since the last one")
                 return@launch
             }
@@ -614,7 +617,7 @@ class DriveSync(
                 // on, and it won't clear by itself: once, on the way in.
                 if (changed && e is NoDriveToken && failure is SyncFailure.Rejected) notify(DRIVE_REFUSED_LINE)
             } finally {
-                built.file.delete()
+                built.release()
             }
         }
     }

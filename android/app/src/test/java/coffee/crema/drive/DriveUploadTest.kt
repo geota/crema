@@ -27,6 +27,7 @@ class DriveUploadTest {
     private val json = Json { ignoreUnknownKeys = true }
     private var giveLocation = true
     private var reportSize: String? = null
+    private var omitSize = false
     private val requests = mutableListOf<Triple<String, String, ByteArray>>()
 
     private fun HttpExchange.respond(status: Int, body: String) {
@@ -45,6 +46,7 @@ class DriveUploadTest {
                     if (giveLocation) x.responseHeaders.add("Location", "$driveApiRoot/upload/drive/v3/files?upload_id=s1")
                     x.respond(200, "")
                 }
+                omitSize -> x.respond(200, """{"id":"f1","name":"b.crema.zip"}""")
                 else -> x.respond(200, """{"id":"f1","name":"b.crema.zip","size":"${reportSize ?: body.size}"}""")
             }
         }
@@ -82,6 +84,12 @@ class DriveUploadTest {
         assertTrue(body.size > f.length())
         val start = body.indexOfFirst { it == 0.toByte() }
         assertTrue(body.copyOfRange(start, start + f.length().toInt()).contentEquals(f.readBytes()))
+    }
+
+    @Test
+    fun `a reply without the size is unverified, so a failed upload (#391 review)`() {
+        omitSize = true
+        assertFailsWith<IOException> { runBlocking { driveUploadBackup("tok", "b.crema.zip", file(), json) } }
     }
 
     @Test

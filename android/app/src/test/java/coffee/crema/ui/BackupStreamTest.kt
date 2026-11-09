@@ -161,6 +161,46 @@ class BackupStreamTest {
     }
 
     @Test
+    fun `a file still in use in this process stays, however old, until released (#391 review)`() {
+        val live = backupTempFile(tmp.root, now = now - 3_600_000)
+        live.writeText("being saved")
+        val stale = File(tmp.root, "${BACKUP_TEMP_PREFIX}${now - 3_600_000}-z.zip").apply { writeText("x") }
+        assertEquals(1, sweepBackupTemp(tmp.root, now = now))
+        assertTrue(live.exists())
+        assertFalse(stale.exists())
+        releaseBackupFile(live)
+        assertFalse(live.exists())
+        File(live.path).writeText("a later file at the same path")
+        assertEquals(1, sweepBackupTemp(tmp.root, now = now), "released, it's an ordinary leftover")
+    }
+
+    @Test
+    fun `each kind of build has its own cancel (#391 review)`() {
+        val runs = BackupRuns()
+        val file = runs.start(BackupKind.FILE)
+        val drive = runs.start(BackupKind.DRIVE)
+        runs.cancel(BackupKind.FILE)
+        assertTrue(file.get())
+        assertFalse(drive.get(), "a file backup's cancel doesn't reach Drive's")
+        val daily = runs.start(BackupKind.DAILY)
+        assertTrue(file.get(), "a build starting doesn't clear another's cancel")
+        runs.end(BackupKind.DRIVE, java.util.concurrent.atomic.AtomicBoolean())
+        runs.cancel(BackupKind.DRIVE)
+        assertTrue(drive.get(), "only the build that started can end its entry")
+        runs.end(BackupKind.DAILY, daily)
+        runs.cancel(BackupKind.DAILY)
+        assertFalse(daily.get(), "a cancel after the build ended reaches nothing")
+    }
+
+    @Test
+    fun `entries carry the backup's own time`() {
+        val built = stream(snapshot(listOf(shot(0))))
+        java.util.zip.ZipFile(built.file).use { z ->
+            assertTrue(z.entries().toList().all { kotlin.math.abs(it.time - now) < 2_000 }, "zip times are in 2 s steps")
+        }
+    }
+
+    @Test
     fun `the sweep removes old temporary files and leaves new and other ones`() {
         val old = File(tmp.root, "${BACKUP_TEMP_PREFIX}${now - 3_600_000}-a.zip").apply { writeText("x") }
         val fresh = File(tmp.root, "${BACKUP_TEMP_PREFIX}${now - 60_000}-b.zip").apply { writeText("x") }
@@ -179,13 +219,27 @@ class BackupStreamTest {
         }
     }
 
-    /** Each entry's name and method, from the central directory, and its bytes. */
-    private fun described(file: File): List<Triple<String, Int, String>> =
-        java.util.zip.ZipFile(file).use { zip ->
-            zip.entries().toList().map { e ->
-                Triple(e.name, e.method, zip.getInputStream(e).use { it.readBytes() }.contentHashCode().toString())
-            }
+    /** Each entry's name, method and flags, from the central directory, and a hash of its inflated bytes. */
+    private fun described(file: File): List<String> {
+        val zip = file.readBytes()
+        fun u16(at: Int) = (zip[at].toInt() and 0xff) or ((zip[at + 1].toInt() and 0xff) shl 8)
+        fun u32(at: Int) = u16(at).toLong() or (u16(at + 2).toLong() shl 16)
+        var end = zip.size - 22
+        while (end >= 0 && u32(end) != 0x06054b50L) end--
+        check(end >= 0) { "no end of central directory" }
+        val contents = java.util.zip.ZipFile(file).use { z ->
+            z.entries().toList().associate { e -> e.name to z.getInputStream(e).use { it.readBytes() }.contentHashCode() }
         }
+        var at = u32(end + 16).toInt()
+        return List(u16(end + 10)) {
+            check(u32(at) == 0x02014b50L) { "bad central directory" }
+            val nameLen = u16(at + 28)
+            val name = String(zip, at + 46, nameLen, Charsets.UTF_8)
+            val line = "$name method ${u16(at + 10)} flags 0x${u16(at + 8).toString(16)} bytes ${contents[name]}"
+            at += 46 + nameLen + u16(at + 30) + u16(at + 32)
+            line
+        }
+    }
 
     /**
      * The cross-shell fixture the web reads (`android-fixture.vitest.ts`) is
@@ -209,6 +263,6 @@ class BackupStreamTest {
         val zip = entries(fixture)
         assertEquals(listOf("backup.jsonl", "images/bean-1"), zip.keys.toList())
         assertTrue(zip.getValue("images/bean-1").contentEquals(fixturePhoto()))
-        assertEquals(listOf(java.util.zip.ZipEntry.DEFLATED, java.util.zip.ZipEntry.DEFLATED), described(fixture).map { it.second })
+        assertTrue(described(fixture).all { " method 8 " in it }, "deflated, as the web's are")
     }
 }

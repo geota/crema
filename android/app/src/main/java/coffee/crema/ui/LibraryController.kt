@@ -940,8 +940,14 @@ class LibraryController(
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    app.contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } } != null
-                }.getOrDefault(false).also { file.delete() }
+                    // "wt": a provider that doesn't truncate on "w" would leave an
+                    // older, longer backup's tail, and its central directory, behind.
+                    app.contentResolver.openOutputStream(uri, "wt")?.use { out -> file.inputStream().use { it.copyTo(out) } } != null
+                }.getOrDefault(false).also { ok ->
+                    releaseBackupFile(file)
+                    // No half-written document under a failure notice.
+                    if (!ok) runCatching { android.provider.DocumentsContract.deleteDocument(app.contentResolver, uri) }
+                }
             }
             notify(if (ok) "Backed up to file" else "Backup failed — couldn't write")
         }
@@ -1125,16 +1131,16 @@ class LibraryController(
      * Snapshots on the caller's thread, then serialises, exports and zips on
      * [Dispatchers.Default] — never on Main.
      */
-    suspend fun buildBackupZipFile(): File? = buildBackupZip()?.file
+    suspend fun buildBackupZipFile(): File? = buildBackupZip(BackupKind.FILE)?.file
 
     /** The backup as a temporary file ([buildBackupZipFile]), with what's in it. */
-    suspend fun buildBackupZip(): BackupZip? {
+    suspend fun buildBackupZip(kind: BackupKind): BackupZip? {
         // Never back up shots whose telemetry hasn't loaded yet (F10
         // validation P1-2: the startup auto-backup ran during the load).
         awaitSeries()
         reportUnreadableSeries()
         reportUnhealthyStores()
-        return buildBackupZipNow()
+        return buildBackupZipNow(kind)
     }
 
     /** Restores running now: a daily backup waits for them. */
@@ -1161,27 +1167,29 @@ class LibraryController(
         if (n > 0) notify("$n shot(s) have damaged telemetry and are backed up without their curves")
     }
 
-    /** Set by [cancelBackup]: the running build stops at its next batch. */
-    private val backupCancel = java.util.concurrent.atomic.AtomicBoolean()
+    /** Each running build's cancel, by kind: a cancel stops only its own build (#391 review). */
+    private val backupRuns = BackupRuns()
 
-    /** Stop the backup being built, keeping nothing. */
-    fun cancelBackup() = backupCancel.set(true)
+    /** Stop the [kind] backup being built, keeping nothing. */
+    fun cancelBackup(kind: BackupKind) = backupRuns.cancel(kind)
 
     /**
      * Build the backup one line at a time into a temporary file in the cache
-     * directory ([streamBackupZip], #310 P2a), reporting progress in the UI
-     * state. A cancel, a failure or a backup past the limits keeps nothing.
+     * directory ([streamBackupZip], #310 P2a), reporting its progress in the UI
+     * state under its [kind]. A cancel, a failure or a backup past the limits
+     * keeps nothing.
      */
-    private suspend fun buildBackupZipNow(): BackupZip? {
-        backupCancel.set(false)
+    private suspend fun buildBackupZipNow(kind: BackupKind): BackupZip? {
+        val cancel = backupRuns.start(kind)
         return try {
-            snapshotThenBuild(::backupSnapshot, Dispatchers.Default) { snap -> streamBackupNow(snap) }
+            snapshotThenBuild(::backupSnapshot, Dispatchers.Default) { snap -> streamBackupNow(snap, kind, cancel) }
         } finally {
-            updateUi { it.copy(backupProgress = null) }
+            backupRuns.end(kind, cancel)
+            updateUi { it.copy(backupProgress = it.backupProgress - kind) }
         }
     }
 
-    private fun streamBackupNow(snap: BackupSnapshot): BackupZip? {
+    private fun streamBackupNow(snap: BackupSnapshot, kind: BackupKind, cancel: java.util.concurrent.atomic.AtomicBoolean): BackupZip? {
         val cache = app.cacheDir
         sweepBackupTemp(cache)
         val photos = snap.state.beans
@@ -1191,16 +1199,17 @@ class LibraryController(
             streamBackupZip(
                 snap, json, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel(),
                 photos, backupTempFile(cache),
-                stop = { if (backupCancel.get()) throw BackupCancelled() },
-                onProgress = { p -> updateUi { it.copy(backupProgress = p) } },
+                stop = { if (cancel.get()) throw BackupCancelled() },
+                onProgress = { p -> updateUi { it.copy(backupProgress = it.backupProgress + (kind to p)) } },
             )
         }.fold(
             onSuccess = { built ->
                 val gaps = BuiltBackup(jsonl = "", degraded = built.degraded, omitted = built.omitted)
                 built.omitted.forEach { appendLog("Backup left out ${it.kind} ${omittedRowId(it, snap) ?: "at ${it.index}"}") }
                 built.degraded.forEach { appendLog("Backup left out the profile of shot $it") }
+                built.photosSkipped.forEach { appendLog("Backup left out the photo of bean $it") }
                 backupGapsNotice(gaps)?.let { notify(it) }
-                BackupZip(built.file, built.counts, built.contentHash)
+                BackupZip(built.file, built.counts, built.contentHash, release = { releaseBackupFile(built.file) })
             },
             onFailure = {
                 when (it) {

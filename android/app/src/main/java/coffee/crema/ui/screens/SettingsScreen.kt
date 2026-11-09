@@ -940,9 +940,9 @@ fun SettingsScreen(
                                     ?: "Upload a fresh backup file to your Google Drive."
                                 CremaSettingsRow("Back up to Drive", listOfNotNull(ds.healthLine, lastBackupSub).joinToString(" ")) {
                                     // While its backup builds, Cancel, with how far it is (#310 P2a).
-                                    val building = ui.backupProgress
+                                    val building = ui.backupProgress[coffee.crema.ui.BackupKind.DRIVE]
                                     if (ds.busy && building != null) {
-                                        CremaButton(onClick = { vm.cancelBackup() }, variant = CremaButtonVariant.Outlined, icon = "x", label = "Cancel · ${building.shotsWritten} of ${building.shotsTotal}")
+                                        CremaButton(onClick = { vm.cancelBackup(coffee.crema.ui.BackupKind.DRIVE) }, variant = CremaButtonVariant.Outlined, icon = "x", label = "Cancel · ${building.shotsWritten} of ${building.shotsTotal}")
                                     } else {
                                         CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
                                     }
