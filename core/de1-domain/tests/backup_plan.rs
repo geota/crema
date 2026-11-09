@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use de1_domain::app_settings::CommonSettings;
 use de1_domain::backup_plan::{LineError, LineIssue, PlanCode, RowStore, Verdict};
 use de1_domain::{
-    BackupLine, LocalState, RestoreMode, RestoreOpts, common_is_pristine,
-    export_backup_jsonl_from_json, import_backup_bytes, parse_backup_jsonl, parse_backup_line,
-    plan_restore, scan_backup_bytes,
+    BackupImport, BackupLine, BackupRecord, BackupScan, LocalState, MAX_BACKUP_LINE_BYTES,
+    RestoreMode, RestoreOpts, common_is_pristine, export_backup_jsonl_from_json,
+    import_backup_bytes, parse_backup_jsonl, parse_backup_line, plan_restore, scan_backup_bytes,
 };
 use serde_json::{Value, json};
 
@@ -246,6 +246,209 @@ fn a_line_with_no_kind_is_a_bad_line_not_a_skip() {
     bytes.extend(b"{\"id\":\"stray\"}\n");
     assert_eq!(scan_backup_bytes(&bytes).bad_lines, 1);
     assert_eq!(replace(&bytes), Verdict::Refused);
+}
+
+// ── A line at a time (#310 P2w) ────────────────────────────────────────────
+
+/// What [`BackupImport`] gives for each line of `bytes`, as JSON.
+fn records(bytes: &[u8]) -> Vec<Value> {
+    let mut import = BackupImport::new();
+    bytes
+        .split(|&b| b == b'\n')
+        .filter_map(|line| import.push_line(line))
+        .map(|r| serde_json::to_value(r).unwrap())
+        .collect()
+}
+
+#[test]
+fn the_import_a_line_at_a_time_is_the_whole_import() {
+    for bytes in [WEB, ANDROID] {
+        let whole = serde_json::to_value(import_backup_bytes(bytes)).unwrap();
+        let mut by_line = json!({
+            "hasHeader": true, "profiles": [], "beans": [], "roasters": [], "shots": [],
+            "recipes": [], "customMethods": [],
+            "settings": null, "profileMeta": null, "maintenance": null,
+            "visualizerPrefs": null, "recipeMeta": null,
+        });
+        let lists = [
+            ("shot", "shot", "shots"),
+            ("bean", "bean", "beans"),
+            ("roaster", "roaster", "roasters"),
+            ("recipe", "recipe", "recipes"),
+            ("brewMethod", "method", "customMethods"),
+            ("profile", "profile", "profiles"),
+        ];
+        for r in records(bytes) {
+            let line = r["line"].as_str().unwrap();
+            if line == "singleton" {
+                by_line[r["kind"].as_str().unwrap()] = r["value"].clone();
+                continue;
+            }
+            let (_, field, list) = lists.iter().find(|(l, _, _)| *l == line).unwrap();
+            by_line[*list]
+                .as_array_mut()
+                .unwrap()
+                .push(r[*field].clone());
+        }
+        assert_eq!(by_line, whole);
+    }
+}
+
+#[test]
+fn the_import_takes_the_first_of_each_and_skips_what_the_scan_skips() {
+    let mut lines = lines_of(WEB);
+    let bean = lines.iter().find(|l| l["kind"] == "bean").unwrap().clone();
+    let settings = lines
+        .iter()
+        .find(|l| l["kind"] == "settings")
+        .unwrap()
+        .clone();
+    lines.push(json!({ "kind": "bean", "id": bean["id"], "name": "second" }));
+    lines.push(settings);
+    lines.push(json!({ "kind": "later" }));
+    lines.push(json!({ "kind": "crema-backup/v1", "createdAt": 1 }));
+    let mut bytes = to_bytes(&lines);
+    bytes.extend(b"{ not json\n\n   \n");
+    let mut import = BackupImport::new();
+    let got: Vec<BackupRecord> = bytes
+        .split(|&b| b == b'\n')
+        .filter_map(|line| import.push_line(line))
+        .collect();
+    assert!(import.has_header());
+    let beans: Vec<_> = got
+        .iter()
+        .filter_map(|r| match r {
+            BackupRecord::Bean { bean } => Some(bean.name.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(beans.len(), 1);
+    assert_ne!(beans[0], "second", "the first row of an id wins");
+    let settings = got
+        .iter()
+        .filter(|r| matches!(r, BackupRecord::Singleton { .. }))
+        .filter(|r| serde_json::to_value(r).unwrap()["kind"] == "settings")
+        .count();
+    assert_eq!(settings, 1, "the first settings line wins");
+    assert_eq!(records(&bytes).len(), records(WEB).len());
+}
+
+#[test]
+fn a_record_is_in_the_shells_line_shape() {
+    let all = records(WEB);
+    let kinds: Vec<&str> = all.iter().map(|r| r["line"].as_str().unwrap()).collect();
+    for kind in [
+        "shot",
+        "bean",
+        "roaster",
+        "recipe",
+        "brewMethod",
+        "profile",
+        "singleton",
+    ] {
+        assert!(kinds.contains(&kind), "{kind} in {kinds:?}");
+    }
+    // A singleton's kind is its line's kind, as `parseBackupLine` says it.
+    for r in all.iter().filter(|r| r["line"] == "singleton") {
+        let kind = r["kind"].as_str().unwrap();
+        let line = lines_of(WEB)
+            .into_iter()
+            .find(|l| l["kind"] == kind)
+            .unwrap();
+        let parsed = serde_json::from_str::<Value>(&de1_domain::parse_backup_line_json(
+            &serde_json::to_vec(&line).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(parsed["kind"], r["kind"]);
+        assert_eq!(parsed["value"], r["value"]);
+    }
+}
+
+/// The fixture's bean line padded with JSON whitespace to exactly `len` bytes.
+fn bean_line_of(len: usize) -> Vec<u8> {
+    let bean = lines_of(WEB)
+        .into_iter()
+        .find(|l| l["kind"] == "bean")
+        .unwrap();
+    let mut line = serde_json::to_vec(&bean).unwrap();
+    line.resize(len, b' ');
+    line
+}
+
+#[test]
+fn a_line_past_the_limit_is_too_long_and_one_at_it_reads() {
+    assert!(matches!(
+        parse_backup_line(&bean_line_of(MAX_BACKUP_LINE_BYTES)),
+        Ok(BackupLine::Bean(_))
+    ));
+    assert_eq!(
+        parse_backup_line(&bean_line_of(MAX_BACKUP_LINE_BYTES + 1)),
+        Err(LineError::TooLong)
+    );
+}
+
+#[test]
+fn a_line_too_long_to_buffer_counts_as_a_bad_line_read_or_skipped() {
+    let long = bean_line_of(MAX_BACKUP_LINE_BYTES + 1);
+    // In the middle of the file, and before its header.
+    for at in [2, 0] {
+        let mut file: Vec<Option<&[u8]>> = WEB.split(|&b| b == b'\n').map(Some).collect();
+        file.insert(at, None);
+        let mut whole = Vec::new();
+        let mut scan = BackupScan::new();
+        let mut import = BackupImport::new();
+        let mut taken = 0;
+        for line in &file {
+            match line {
+                Some(line) => {
+                    whole.extend(*line);
+                    scan.push_line(line);
+                    taken += usize::from(import.push_line(line).is_some());
+                }
+                None => {
+                    whole.extend(&long);
+                    scan.push_oversized_line();
+                    import.push_oversized_line();
+                }
+            }
+            whole.push(b'\n');
+        }
+        whole.pop();
+        let pushed = scan.finish();
+        assert_eq!(
+            pushed,
+            scan_backup_bytes(&whole),
+            "skipping the line is reading it, at {at}"
+        );
+        let whole_import = serde_json::to_value(import_backup_bytes(&whole)).unwrap();
+        assert_eq!(
+            import.has_header(),
+            whole_import["hasHeader"] == true,
+            "at {at}"
+        );
+        assert_eq!(
+            import.has_header(),
+            at != 0,
+            "a header after it isn't first"
+        );
+        assert_eq!(taken, records(&whole).len());
+        let issue = if at == 0 {
+            LineIssue::HeaderDamaged
+        } else {
+            LineIssue::TooLong
+        };
+        assert_eq!(pushed.problems[0].issue, issue, "{:?}", pushed.problems);
+        // Replace refuses it; Merge goes ahead, and says so.
+        assert_eq!(replace(&whole), Verdict::Refused, "at {at}");
+        let merge = plan_restore(
+            &pushed,
+            &LocalState::default(),
+            RestoreMode::Merge,
+            RestoreOpts::default(),
+        );
+        assert_ne!(merge.verdict, Verdict::Refused, "at {at}");
+        assert!(!merge.warnings.is_empty(), "at {at}");
+    }
 }
 
 #[test]
