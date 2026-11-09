@@ -20,8 +20,9 @@
  *    while step 8 waits is refused the lock, and a frozen tab stashes it.
  */
 import {
+	BackupImporter,
+	BackupScanner,
 	commonIsPristine,
-	importBackupBytes,
 	planRestore,
 	scanBackupBytes
 } from '#lib/wasm/de1_wasm.js';
@@ -54,6 +55,19 @@ import { newestFirst } from '#lib/history/brew-date.js';
 import { storeHealth } from '#lib/utils/storage.js';
 import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
 import {
+	BACKUP_READ_LIMITS,
+	BackupReadError,
+	backupLines,
+	blobBytes,
+	checkEntries,
+	entryBytes,
+	isZipStart,
+	readCentralDirectory,
+	type BackupLinePiece,
+	type BackupReadLimits,
+	type ZipEntry
+} from '#lib/backup/zip-reader.js';
+import {
 	MACHINE_BUSY_LOCK,
 	RESTORE_LOCK,
 	announceRestore,
@@ -72,13 +86,14 @@ export const MACHINE_WAIT_MS = 120_000;
 const BACKUP_MEMBER = 'backup.jsonl';
 const LEGACY_MEMBER = 'crema.jsonl';
 
-/** A backup read off its file: the JSONL bytes and the zip's photos. */
+/**
+ * A backup read off its file and scanned: what a plan needs, and a way back
+ * to its lines and photos for the run. A file is read a piece at a time
+ * ({@link prepareBackupFile}), so a restore holds a line, not the backup.
+ */
 export interface PreparedBackup {
 	/** For the marker and the report: the file's name. */
 	readonly name: string;
-	readonly jsonl: Uint8Array;
-	/** Bean id → photo bytes. */
-	readonly photos: ReadonlyMap<string, Uint8Array>;
 	/** The core's `BackupManifest`, as JSON. */
 	readonly manifestJson: string;
 	/**
@@ -87,17 +102,47 @@ export interface PreparedBackup {
 	 * stands in only when the header didn't read.
 	 */
 	readonly identity: string;
+	/** The backup's lines, read again from the start. */
+	lines(): AsyncIterable<BackupLinePiece>;
+	/** A bean's photo from the zip, or null. */
+	photo(beanId: string): Promise<Uint8Array | null>;
 }
 
-function isZip(b: Uint8Array): boolean {
-	return b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04;
+/** A backup held in memory whole: its JSONL bytes and the zip's photos. */
+export interface InMemoryBackup extends PreparedBackup {
+	readonly jsonl: Uint8Array;
+	/** Bean id → photo bytes. */
+	readonly photos: ReadonlyMap<string, Uint8Array>;
+}
+
+function identityOf(manifestJson: string, name: string): string {
+	const header = (
+		JSON.parse(manifestJson) as {
+			header?: { createdAt?: number; deviceLabel?: string; appVersion?: string } | null;
+		}
+	).header;
+	return header
+		? JSON.stringify([header.createdAt ?? null, header.deviceLabel ?? '', header.appVersion ?? ''])
+		: JSON.stringify(['file', name]);
+}
+
+/** `bytes` split on `0x0A`, as the core splits them. */
+async function* linesOfBytes(bytes: Uint8Array): AsyncGenerator<BackupLinePiece> {
+	let from = 0;
+	for (let nl = bytes.indexOf(0x0a); nl >= 0; nl = bytes.indexOf(0x0a, from)) {
+		yield { line: bytes.subarray(from, nl) };
+		from = nl + 1;
+	}
+	yield { line: bytes.subarray(from) };
 }
 
 /**
- * Read a backup: a `.crema.zip` (its `backup.jsonl` and `images/<beanId>`) or
- * bare JSONL. The bytes go to the core undecoded: one bad byte is one bad line.
+ * Read a backup held in memory: a `.crema.zip` (its `backup.jsonl` and
+ * `images/<beanId>`) or bare JSONL. The bytes go to the core undecoded: one
+ * bad byte is one bad line. For tests and small imports; a file the user
+ * picks, or one from Drive, goes through {@link prepareBackupFile}.
  */
-export function prepareBackup(data: ArrayBuffer | Uint8Array | string, name: string): PreparedBackup {
+export function prepareBackup(data: ArrayBuffer | Uint8Array | string, name: string): InMemoryBackup {
 	const bytes =
 		typeof data === 'string'
 			? new TextEncoder().encode(data)
@@ -107,7 +152,7 @@ export function prepareBackup(data: ArrayBuffer | Uint8Array | string, name: str
 	assertImportSize(bytes.length, 'The backup');
 	let jsonl = bytes;
 	const photos = new Map<string, Uint8Array>();
-	if (isZip(bytes)) {
+	if (isZipStart(bytes)) {
 		const files = unzipImportSync(
 			bytes,
 			(n) => n === BACKUP_MEMBER || n === LEGACY_MEMBER || n.startsWith('images/')
@@ -120,15 +165,93 @@ export function prepareBackup(data: ArrayBuffer | Uint8Array | string, name: str
 		}
 	}
 	const manifestJson = scanBackupBytes(jsonl, JSON.stringify([...photos.keys()]));
-	const header = (
-		JSON.parse(manifestJson) as {
-			header?: { createdAt?: number; deviceLabel?: string; appVersion?: string } | null;
+	return {
+		name,
+		jsonl,
+		photos,
+		manifestJson,
+		identity: identityOf(manifestJson, name),
+		lines: () => linesOfBytes(jsonl),
+		photo: async (beanId) => photos.get(beanId) ?? null
+	};
+}
+
+/** Feed `lines` to a scan, a line at a time. */
+async function scanLines(lines: AsyncIterable<BackupLinePiece>, photoIds: readonly string[]): Promise<string> {
+	const scanner = new BackupScanner();
+	try {
+		for await (const piece of lines) {
+			if ('line' in piece) scanner.pushLine(piece.line);
+			else scanner.pushOversizedLine();
 		}
-	).header;
-	const identity = header
-		? JSON.stringify([header.createdAt ?? null, header.deviceLabel ?? '', header.appVersion ?? ''])
-		: JSON.stringify(['file', name]);
-	return { name, jsonl, photos, manifestJson, identity };
+	} catch (e) {
+		scanner.free();
+		throw e;
+	}
+	return scanner.finish(JSON.stringify(photoIds));
+}
+
+/**
+ * Read a backup from a `File` or `Blob` (#310 P2w-b): a `.crema.zip` through
+ * its central directory, or bare JSONL, a piece at a time. Every byte the
+ * restore will use is read here once, checked (each zip entry's CRC and size,
+ * the limits) and scanned, before a plan is made; the run reads it again.
+ */
+export async function prepareBackupFile(
+	file: Blob,
+	name: string,
+	limits: BackupReadLimits = BACKUP_READ_LIMITS
+): Promise<PreparedBackup> {
+	const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+	if (!isZipStart(head)) {
+		if (file.size > limits.maxFileBytes) {
+			throw new BackupReadError(
+				`This backup is ${Math.ceil(file.size / 2 ** 20)} MB. Crema restores backups up to ${Math.ceil(limits.maxFileBytes / 2 ** 20)} MB.`
+			);
+		}
+		const lines = () => backupLines(blobBytes(file), limits.maxLineBytes);
+		const manifestJson = await scanLines(lines(), []);
+		return { name, manifestJson, identity: identityOf(manifestJson, name), lines, photo: async () => null };
+	}
+	const entries = await readCentralDirectory(file, limits);
+	const kind = (e: ZipEntry) =>
+		e.name === BACKUP_MEMBER || e.name === LEGACY_MEMBER ? 'backup' : e.name.startsWith('images/') ? 'photo' : null;
+	checkEntries(entries, kind, limits);
+	const member =
+		entries.find((e) => e.name === BACKUP_MEMBER) ?? entries.find((e) => e.name === LEGACY_MEMBER);
+	if (!member) throw new Error('Not a Crema backup zip (no backup.jsonl inside).');
+	if (member.size > limits.maxInflatedBytes) {
+		throw new BackupReadError(`This backup unpacks to more than ${Math.ceil(limits.maxInflatedBytes / 2 ** 20)} MB.`);
+	}
+	const photos = new Map<string, ZipEntry>();
+	for (const e of entries) {
+		const beanId = kind(e) === 'photo' ? e.name.slice('images/'.length) : '';
+		if (!beanId || e.size === 0) continue;
+		// Its CRC now, so step 3 never meets a bad photo after the first write.
+		for await (const piece of entryBytes(file, e)) void piece;
+		photos.set(beanId, e);
+	}
+	const lines = () => backupLines(entryBytes(file, member), limits.maxLineBytes);
+	const manifestJson = await scanLines(lines(), [...photos.keys()]);
+	return {
+		name,
+		manifestJson,
+		identity: identityOf(manifestJson, name),
+		lines,
+		photo: async (beanId) => {
+			const e = photos.get(beanId);
+			if (!e) return null;
+			const parts: Uint8Array[] = [];
+			for await (const piece of entryBytes(file, e)) parts.push(piece);
+			const out = new Uint8Array(e.size);
+			let at = 0;
+			for (const p of parts) {
+				out.set(p, at);
+				at += p.length;
+			}
+			return out;
+		}
+	};
 }
 
 /** Whether another tab has a shot or flash: the busy lock is held somewhere. */
@@ -278,43 +401,105 @@ export interface BackupRecords {
 	visualizerPrefs: Record<string, unknown> | null;
 }
 
+/** A record the core's importer gives for a line: `BackupRecord`, tagged by `line`. */
+type ImportedRecord =
+	| { line: 'shot'; shot: Record<string, unknown> }
+	| { line: 'bean'; bean: unknown }
+	| { line: 'roaster'; roaster: unknown }
+	| { line: 'recipe'; recipe: unknown }
+	| { line: 'brewMethod'; method: unknown }
+	| { line: 'profile'; profile: unknown }
+	| { line: 'singleton'; kind: string; value: unknown };
+
 /**
- * The records, each decoded to the shell's own type before the first write.
- * A shot the shell can't take is a refusal for the whole restore: the plan
- * counted it.
+ * The records, read from the backup's lines through the core's importer and
+ * each decoded to the shell's own type before the first write. A row the
+ * shell can't take is a refusal for the whole restore: the plan counted it.
+ *
+ * Only the shots in `shots` are kept, as those are all a plan's step 7 can
+ * write: every shot is still decoded, but a large backup's others go as they
+ * are read, so what a restore holds is bounded by the history it keeps, not
+ * by the backup.
  */
-export function readRecords(prepared: PreparedBackup): BackupRecords {
-	const raw = JSON.parse(importBackupBytes(prepared.jsonl)) as Partial<
-		Record<keyof BackupRecords, unknown>
-	>;
-	const list = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
-	const shots: StoredShot[] = [];
-	for (const s of list<Record<string, unknown>>(raw.shots)) {
-		const shot = coerceStoredShot(s);
-		if (!shot) throw new Error(`A shot in this backup can't be read here (${String(s.id ?? '?')}). Nothing was changed.`);
-		shots.push(shot);
-	}
+export async function readRecords(prepared: PreparedBackup, shots?: ReadonlySet<string>): Promise<BackupRecords> {
+	const importer = new BackupImporter();
+	const out: BackupRecords = {
+		profiles: [],
+		beans: [],
+		roasters: [],
+		shots: [],
+		recipes: [],
+		customMethods: [],
+		settings: null,
+		maintenance: null,
+		visualizerPrefs: null
+	};
 	const obj = (v: unknown) => (typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : null);
-	const decoded = decodeRows;
 	/** A row the stores keep as the core typed it: an object with an id. */
 	const withId = <T>(row: unknown): T | null => {
 		const o = obj(row);
 		return o && typeof o.id === 'string' && o.id.length > 0 ? (o as T) : null;
 	};
-	return {
-		profiles: decoded(raw.profiles, 'profile', withId<CremaProfile>),
-		beans: decoded(raw.beans, 'bean', coerceBean),
-		roasters: decoded(raw.roasters, 'roaster', coerceRoaster),
-		shots,
-		recipes: decoded(raw.recipes, 'recipe', withId<BrewRecipe>),
-		customMethods: decoded(raw.customMethods, 'brew method', (r) => {
-			const m = withId<CustomBrewMethod>(r);
-			return m && isCustomMethodId(m.id) ? m : null;
-		}),
-		settings: obj(raw.settings),
-		maintenance: obj(raw.maintenance),
-		visualizerPrefs: obj(raw.visualizerPrefs)
-	};
+	const one = <T>(row: unknown, what: string, decode: (row: unknown) => T | null): T => decodeRows([row], what, decode)[0];
+	try {
+		for await (const piece of prepared.lines()) {
+			if (!('line' in piece)) {
+				importer.pushOversizedLine();
+				continue;
+			}
+			const json = importer.pushLine(piece.line);
+			if (json === undefined) continue;
+			const r = JSON.parse(json) as ImportedRecord;
+			switch (r.line) {
+				case 'shot': {
+					const shot = coerceStoredShot(r.shot);
+					if (!shot) {
+						throw new Error(`A shot in this backup can't be read here (${String(r.shot.id ?? '?')}). Nothing was changed.`);
+					}
+					if (!shots || shots.has(shot.id)) out.shots.push(shot);
+					break;
+				}
+				case 'bean':
+					out.beans.push(one(r.bean, 'bean', coerceBean));
+					break;
+				case 'roaster':
+					out.roasters.push(one(r.roaster, 'roaster', coerceRoaster));
+					break;
+				case 'recipe':
+					out.recipes.push(one(r.recipe, 'recipe', withId<BrewRecipe>));
+					break;
+				case 'brewMethod':
+					out.customMethods.push(
+						one(r.method, 'brew method', (m) => {
+							const method = withId<CustomBrewMethod>(m);
+							return method && isCustomMethodId(method.id) ? method : null;
+						})
+					);
+					break;
+				case 'profile':
+					out.profiles.push(one(r.profile, 'profile', withId<CremaProfile>));
+					break;
+				case 'singleton':
+					if (r.kind === 'settings') out.settings = obj(r.value);
+					else if (r.kind === 'maintenance') out.maintenance = obj(r.value);
+					else if (r.kind === 'visualizerPrefs') out.visualizerPrefs = obj(r.value);
+					break;
+				default: {
+					const never: never = r;
+					throw new Error(`An unknown record in this backup: ${JSON.stringify(never)}`);
+				}
+			}
+		}
+	} finally {
+		importer.free();
+	}
+	return out;
+}
+
+/** The backup shots a plan's step 7 can write. */
+export function shotsTheRunWrites(plan: RestorePlan): Set<string> {
+	const s = plan.shots;
+	return new Set([...s.add, ...s.overwrite, ...s.revive, ...s.fill]);
 }
 
 /**
@@ -582,7 +767,8 @@ async function holdingRestore(
 	if (opts.expected && !sameNumbers(opts.expected, plan)) return { kind: 'changed', plan };
 	// Only a plan the core calls `ok` runs without the user having seen it.
 	if (!opts.expected && plan.verdict !== Verdict.Ok) return { kind: 'unconfirmed', plan };
-	const records = readRecords(prepared);
+	// Read again, and checked again: a file changed since the plan is refused here.
+	const records = await readRecords(prepared, shotsTheRunWrites(plan));
 
 	let started = false;
 	const free = await machineFree(locks, () => {
@@ -665,9 +851,9 @@ async function applyPlan(
 		!(await step('photos', async () => {
 			const images = getBeanImageStore();
 			for (const beanId of plan.photos.put) {
-				const bytes = prepared.photos.get(beanId);
-				if (!bytes) continue;
 				try {
+					const bytes = await prepared.photo(beanId);
+					if (!bytes) continue;
 					await images.put(refForBean(beanId), new Blob([bytes as BlobPart]));
 				} catch {
 					return false;

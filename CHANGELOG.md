@@ -110,6 +110,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   in memory whole, so a large history backs up without running the tab out of
   memory. Back up shows how far it's got and can be cancelled, leaving nothing
   behind, and a Drive backup uploads straight from the file. (#310)
+- **Web restores read a backup a piece at a time** — a backup from a file or
+  Google Drive is read in small pieces, not loaded whole, so a large one
+  restores without running the tab out of memory: up to 2 GB, where the limit
+  was 200 MB. Every part of the zip is checked against its checksum before
+  anything changes, and a damaged or cut-off file is refused with nothing
+  written. A record over 16 MB counts as a damaged line. (#310)
 - **Restore shows what it will do first (Android)** — as on the web: after you
   pick a backup, from a file or Google Drive, Crema works out what changes. A
   clean Merge runs at once and says what it added; a Merge with warnings, and

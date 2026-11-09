@@ -2284,11 +2284,14 @@ impl BackupScanner {
 
     /// The `BackupManifest` JSON, with the bean ids the zip holds photos for
     /// (a JSON string array). The scanner is used up.
-    #[must_use]
-    pub fn finish(self, photos_json: &str) -> String {
+    ///
+    /// # Errors
+    ///
+    /// When `photos_json` isn't a string array, or the manifest won't serialise.
+    pub fn finish(self, photos_json: &str) -> Result<String, String> {
         let mut manifest = self.scan.finish();
-        manifest.photos = serde_json::from_str(photos_json).unwrap_or_default();
-        serde_json::to_string(&manifest).unwrap_or_default()
+        manifest.photos = serde_json::from_str(photos_json).map_err(|e| format!("photos: {e}"))?;
+        serde_json::to_string(&manifest).map_err(|e| e.to_string())
     }
 }
 
@@ -2312,12 +2315,16 @@ impl BackupImporter {
 
     /// Read the next line, without its `0x0A`: the `BackupRecord` JSON the
     /// restore takes from it, or `undefined`.
+    ///
+    /// # Errors
+    ///
+    /// When the record won't serialise, rather than dropping it unseen.
     #[wasm_bindgen(js_name = pushLine)]
-    #[must_use]
-    pub fn push_line(&mut self, line: &[u8]) -> Option<String> {
+    pub fn push_line(&mut self, line: &[u8]) -> Result<Option<String>, String> {
         self.import
             .push_line(line)
-            .and_then(|record| serde_json::to_string(&record).ok())
+            .map(|record| serde_json::to_string(&record).map_err(|e| e.to_string()))
+            .transpose()
     }
 
     /// The next line was too long to read, and its bytes were skipped.
