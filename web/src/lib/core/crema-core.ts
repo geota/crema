@@ -1779,8 +1779,9 @@ export type Event =
 	weight_configured?: number;
 	/**
 	 * Why [`weight`] is not armed despite [`weight_configured`] being set
-	 * — `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`
-	 * or `"scale-lost"`. `None` when the leg is armed, nothing is
+	 * — `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`,
+	 * `"scale-lost"`, `"scale-rezeroed"`, `"scale-disturbed"` or
+	 * `"scale-not-tared"`. `None` when the leg is armed, nothing is
 	 * configured, or the user turned the stop off (a choice, not an
 	 * impediment).
 	 */
@@ -6096,6 +6097,12 @@ export enum StopReason {
 	Volume = "Volume",
 	/** The maximum shot time was reached (legacy `espresso_max_time`). */
 	MaxTime = "MaxTime",
+	/**
+	 * The scale was lost after flow reached the cup, and the pour reached
+	 * the weight target by estimate (`DESIGN.md` §3.5). Never trains the drip
+	 * model; a stored shot records it as `Weight` with `stop_estimated`.
+	 */
+	EstimatedWeight = "EstimatedWeight",
 }
 
 /**

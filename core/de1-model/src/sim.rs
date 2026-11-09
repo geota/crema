@@ -394,6 +394,12 @@ pub enum ScaleMode {
     },
     /// Reads 0 while this mode lasts.
     TransientZero,
+    /// Silent for `ms`, then back having zeroed itself: a re-zero during a
+    /// gap, which the returning check's lower bound refuses.
+    GapRezero {
+        /// How long it's silent, ms.
+        ms: u64,
+    },
 }
 
 /// The scale.
@@ -402,6 +408,15 @@ pub struct SimScale {
     mode: ScaleMode,
     bump_ends_at: Option<u64>,
     zero_g: f32,
+    /// The cup weight a healthy, undisturbed scale reads as zero: set by a
+    /// tare, and by a session opening on whatever the scale reads then (the
+    /// user's own zero, with auto-tare off). A re-zero or a load arriving later
+    /// doesn't move it.
+    tared_cup_g: f32,
+    /// The load on the scale when that zero was set, grams.
+    zeroed_load_g: f32,
+    /// It zeroed itself since the world last asked.
+    rezeroed: bool,
     tare_at: Option<u64>,
     /// Write-to-effect tare latency, ms.
     pub tare_latency_ms: u64,
@@ -415,6 +430,9 @@ impl SimScale {
             mode: ScaleMode::Healthy,
             bump_ends_at: None,
             zero_g: 0.0,
+            tared_cup_g: 0.0,
+            zeroed_load_g: 0.0,
+            rezeroed: false,
             tare_at: None,
             tare_latency_ms,
         }
@@ -454,6 +472,8 @@ impl SimScale {
         if self.tare_at.is_some_and(|at| now >= at) {
             self.tare_at = None;
             self.zero_g = gross;
+            self.tared_cup_g = cup_g;
+            self.zeroed_load_g = gross - cup_g;
         }
         let net = gross - self.zero_g;
         match self.mode {
@@ -462,11 +482,66 @@ impl SimScale {
             ScaleMode::Flap { period_ms } => (now % period_ms >= period_ms / 2).then_some(net),
             ScaleMode::Rezero => {
                 self.zero_g = gross;
+                self.rezeroed = true;
                 self.mode = ScaleMode::Healthy;
                 Some(0.0)
             }
             ScaleMode::TransientZero => Some(0.0),
+            ScaleMode::GapRezero { ms } => {
+                if now < *self.bump_ends_at.get_or_insert(now + ms) {
+                    None
+                } else {
+                    self.zero_g = gross;
+                    self.rezeroed = true;
+                    self.mode = ScaleMode::Healthy;
+                    Some(0.0)
+                }
+            }
         }
+    }
+
+    /// What's really in the cup against the zero a person means, grams: what
+    /// a healthy, undisturbed scale would read.
+    #[must_use]
+    pub fn true_net(&self, cup_g: f32) -> f32 {
+        cup_g - self.tared_cup_g
+    }
+
+    /// Whether it zeroed itself since the last call.
+    pub fn take_rezero(&mut self) -> bool {
+        std::mem::take(&mut self.rezeroed)
+    }
+
+    /// A re-zero with no flow running is the user's zero, as a tare is.
+    pub fn zero_is_users(&mut self, cup_g: f32) {
+        self.tared_cup_g = cup_g;
+    }
+
+    /// How far the load on the scale has moved from the one its zero was set
+    /// with, grams: something landed or lifted since the last tare.
+    #[must_use]
+    pub fn load_moved_since_zero(&self, now: u64) -> f32 {
+        (self.load_now(now) - self.zeroed_load_g).abs()
+    }
+
+    /// What's on the scale besides the cup at `now`, grams, without moving
+    /// the bump's clock.
+    #[must_use]
+    pub fn load_now(&self, now: u64) -> f32 {
+        match self.mode {
+            ScaleMode::Bump { grams, .. } if self.bump_ends_at.is_none_or(|end| now < end) => grams,
+            ScaleMode::StepUp { grams } => grams,
+            _ => 0.0,
+        }
+    }
+
+    /// A session opened at `now`: what the scale reads then, load included, is
+    /// the zero until a tare lands. Returns that reading, grams.
+    pub fn session_opened(&mut self, now: u64, cup_g: f32) -> f32 {
+        let reads = cup_g + self.load_now(now) - self.zero_g;
+        self.tared_cup_g = cup_g - reads;
+        self.zeroed_load_g = self.load_now(now);
+        reads
     }
 
     /// A Bookoo weight frame, the scale the probes use.
