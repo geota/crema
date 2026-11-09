@@ -30,8 +30,44 @@ export const BACKUP_LIMITS = {
 	/** `backup.jsonl` inflated: below zip64, which fflate can't write. */
 	maxInflatedBytes: 3 * 1024 * MiB,
 	/** The `.crema.zip` file. */
-	maxFileBytes: 2 * 1024 * MiB
+	maxFileBytes: 2 * 1024 * MiB,
+	/** Entries in the zip, `backup.jsonl` and every photo. */
+	maxEntries: 10_000 as number,
+	/** One photo, inflated. */
+	maxPhotoBytes: 100 * MiB
 } as const;
+
+/**
+ * The limits' rules for a zip's entries, the same for the export and the
+ * restore (#394, DECISIONS §13): every entry counts toward `maxEntries`, every
+ * entry's inflated bytes toward `maxInflatedBytes`, and a photo past
+ * `maxPhotoBytes` is too large. `add` returns why an entry doesn't fit, or null.
+ */
+export class EntryBudget {
+	private entries = 0;
+	private inflated = 0;
+	constructor(private readonly limits: typeof BACKUP_LIMITS) {}
+
+	add(kind: 'backup' | 'photo', name: string, bytes: number): string | null {
+		if (++this.entries > this.limits.maxEntries) return `holds more than ${this.limits.maxEntries} files`;
+		if (kind === 'photo' && bytes > this.limits.maxPhotoBytes) {
+			return `"${name}" unpacks to more than ${Math.ceil(this.limits.maxPhotoBytes / MiB)} MB`;
+		}
+		this.inflated += bytes;
+		if (this.inflated > this.limits.maxInflatedBytes) {
+			return `unpacks to more than ${Math.ceil(this.limits.maxInflatedBytes / MiB)} MB`;
+		}
+		return null;
+	}
+
+	/** Bytes `backup.jsonl` adds as it's written, after its `add`. */
+	grow(bytes: number): string | null {
+		this.inflated += bytes;
+		return this.inflated > this.limits.maxInflatedBytes
+			? `unpacks to more than ${Math.ceil(this.limits.maxInflatedBytes / MiB)} MB`
+			: null;
+	}
+}
 
 /** Past this, a backup built in memory may not fit: say so. */
 export const IN_MEMORY_WARN_BYTES = 512 * MiB;
@@ -347,7 +383,10 @@ export async function streamBackup(input: BackupWalkInput, opts: BackupWalkOptio
 
 		const jsonl = new ZipDeflate(BACKUP_JSONL_MEMBER, { level: 6 });
 		zip.add(jsonl);
-		let inflated = 0;
+		// The reader's rules for the entries, so nothing written here is refused there.
+		const budget = new EntryBudget(limits);
+		budget.add('backup', BACKUP_JSONL_MEMBER, 0);
+		const tooLarge = (why: string) => new BackupTooLarge(`The backup ${why}, which a restore can't read.`);
 		const tooLong = (): BackupTooLarge =>
 			new BackupTooLarge(
 				`A record is larger than ${Math.round(limits.maxLineBytes / MiB)} MB, which a backup can't hold.`
@@ -364,12 +403,8 @@ export async function streamBackup(input: BackupWalkInput, opts: BackupWalkOptio
 					if (enc.encode(line).length > limits.maxLineBytes) throw tooLong();
 				}
 			}
-			inflated += bytes.length;
-			if (inflated > limits.maxInflatedBytes) {
-				throw new BackupTooLarge(
-					`The backup would pass ${Math.round(limits.maxInflatedBytes / MiB)} MB unzipped.`
-				);
-			}
+			const over = budget.grow(bytes.length);
+			if (over) throw tooLarge(over);
 			jsonl.push(bytes, final);
 			await flush();
 		};
@@ -399,6 +434,8 @@ export async function streamBackup(input: BackupWalkInput, opts: BackupWalkOptio
 
 		for await (const [beanId, bytes] of input.photos?.() ?? []) {
 			stop();
+			const over = budget.add('photo', `images/${beanId}`, bytes.length);
+			if (over) throw tooLarge(over);
 			// Deflated, not stored: a stored entry with a data descriptor, which a
 			// streamed entry always has, is refused by Android's ZipInputStream.
 			const photo = new ZipDeflate(`images/${beanId}`, { level: 1 });

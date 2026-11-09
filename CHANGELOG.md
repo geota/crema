@@ -115,7 +115,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   restores without running the tab out of memory: up to 2 GB, where the limit
   was 200 MB. Every part of the zip is checked against its checksum before
   anything changes, and a damaged or cut-off file is refused with nothing
-  written. A record over 16 MB counts as a damaged line. (#310)
+  written. A record over 16 MB counts as a damaged line, and a backup is never
+  written that a restore would refuse: no photo over 100 MB, no more than
+  10,000 files. (#310)
 - **Restore shows what it will do first (Android)** — as on the web: after you
   pick a backup, from a file or Google Drive, Crema works out what changes. A
   clean Merge runs at once and says what it added; a Merge with warnings, and

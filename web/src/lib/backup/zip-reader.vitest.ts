@@ -160,6 +160,14 @@ describe('the zip reader', () => {
 		expect(photoBytes).not.toEqual(photo());
 	});
 
+	it('a local header whose name disagrees with the directory is damage', async () => {
+		// One flipped byte would otherwise put the photo on another bean.
+		const zip = zipSyncFixture();
+		const entry = (await readCentralDirectory(blob(zip))).find((e) => e.name === PHOTO)!;
+		zip[entry.localOffset + 30 + PHOTO.length - 1] ^= 0x01;
+		expect(await refusal(read(zip, PHOTO))).toMatch(/names disagree/);
+	});
+
 	it('a corrupted byte fails the checksum, deflated or stored', async () => {
 		// Android's photo is deflate in stored blocks (method 8); zipSync level 0 stores it (method 0).
 		for (const [zip, method] of [
@@ -219,7 +227,7 @@ describe('the zip reader', () => {
 				...BACKUP_READ_LIMITS,
 				maxPhotoBytes: 1000
 			})
-		).toThrow(/the limit is/);
+		).toThrow(/"images\/bean:android-1" unpacks to more than 1 MB/);
 		const twice = [...entries, entries[1]];
 		expect(() => checkEntries(twice, kind)).toThrow(/twice/);
 		expect(() => checkEntries([{ ...entries[1], method: 12 }], kind)).toThrow(/compressed a way/);

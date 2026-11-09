@@ -227,6 +227,47 @@ describe('a streamed restore', () => {
 		await expect(prepareBackupFile(new Blob([zip as BlobPart]), 'photo.crema.zip')).rejects.toThrow(/checksum/);
 	});
 
+	it('a file that changes between the plan and the run is refused before the first write', async () => {
+		// The reviewer's probe: Merge planned 4 shots, the second read held 3, and it said done.
+		const four = await backupWithShots(4, 1_790_000_000_000);
+		const lines = four.split('\n');
+		const three = lines.filter((l) => !l.includes('"id":"s3"')).join('\n');
+		for (const [a, b] of [
+			[strToU8(four), strToU8(three)],
+			[zipOf(four), zipOf(three)]
+		]) {
+			resetAll();
+			let reads = 0;
+			// The first full read sees `a`; every read after sees `b`.
+			const real = [new Blob([a as BlobPart]), new Blob([b as BlobPart])];
+			let current = real[0];
+			const file = {
+				get size() {
+					return current.size;
+				},
+				type: '',
+				slice(start?: number, end?: number) {
+					return current.slice(start, end);
+				}
+			} as unknown as Blob;
+			const prepared = await prepareBackupFile(file, 'moving');
+			const plan = await planNow(prepared, 'merge', false, new FakeLocks());
+			expect(plan.shots.add).toHaveLength(4);
+			current = real[1];
+			reads += 1;
+			await expect(runRestore(prepared, 'merge', { expected: plan }, deps())).rejects.toBeInstanceOf(BackupReadError);
+			expect(getHistoryStore().all).toHaveLength(0);
+			expect(reads).toBe(1);
+		}
+	});
+
+	it('a zip whose first bytes are damaged is refused as a zip, not read as text', async () => {
+		const jsonl = await backupWithShots(2, 1_790_000_000_000);
+		const zip = zipOf(jsonl);
+		zip[0] = 0x00;
+		await expect(prepareBackupFile(new Blob([zip as BlobPart]), 'head.crema.zip')).rejects.toBeInstanceOf(BackupReadError);
+	});
+
 	it('a bare JSONL file streams the same as its zip', async () => {
 		const jsonl = await backupWithShots(4, 1_790_000_000_000);
 		const fromText = await prepareBackupFile(new Blob([jsonl]), 'plain.jsonl');

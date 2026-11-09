@@ -18,8 +18,7 @@
  */
 
 import { Inflate } from 'fflate';
-import { IMPORT_LIMITS } from '#lib/utils/import-limits.js';
-import { BACKUP_LIMITS } from './stream';
+import { BACKUP_LIMITS, EntryBudget } from './stream';
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
@@ -37,12 +36,8 @@ export interface BackupReadLimits {
 	maxPhotoBytes: number;
 }
 
-/** #386's export limits, which a restore reads up to, and the import caps for a zip's entries and photos. */
-export const BACKUP_READ_LIMITS: BackupReadLimits = {
-	...BACKUP_LIMITS,
-	maxEntries: IMPORT_LIMITS.maxEntries,
-	maxPhotoBytes: IMPORT_LIMITS.maxEntryBytes
-};
+/** #386's export limits: a restore reads exactly what an export may write. */
+export const BACKUP_READ_LIMITS: BackupReadLimits = BACKUP_LIMITS;
 
 /** A backup that won't read: damaged, or past a limit. Nothing was written. */
 export class BackupReadError extends Error {
@@ -105,6 +100,29 @@ export function isZipStart(bytes: Uint8Array): boolean {
 	return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
 }
 
+/** The end-of-central-directory record: the last one whose comment ends the file. */
+async function findEndRecord(file: Blob): Promise<{ view: DataView; at: number; tailStart: number } | null> {
+	if (file.size < EOCD_BYTES) return null;
+	const tailStart = Math.max(0, file.size - EOCD_BYTES - MAX_COMMENT);
+	const tail = await bytesAt(file, tailStart, file.size);
+	const view = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
+	for (let i = tail.length - EOCD_BYTES; i >= 0; i--) {
+		if (view.getUint32(i, true) === EOCD && i + EOCD_BYTES + view.getUint16(i + 20, true) === tail.length) {
+			return { view, at: i, tailStart };
+		}
+	}
+	return null;
+}
+
+/**
+ * Whether `file` is a zip: it starts like one, or it ends like one, so a zip
+ * whose first bytes are damaged is read, and refused, as a zip, not as text.
+ */
+export async function looksLikeZip(file: Blob): Promise<boolean> {
+	if (isZipStart(new Uint8Array(await file.slice(0, 4).arrayBuffer()))) return true;
+	return (await findEndRecord(file)) !== null;
+}
+
 /** The zip's entries, from its central directory, within `limits`. */
 export async function readCentralDirectory(
 	file: Blob,
@@ -115,18 +133,9 @@ export async function readCentralDirectory(
 			`This backup is ${mb(file.size)}. Crema restores backups up to ${mb(limits.maxFileBytes)}.`
 		);
 	}
-	if (file.size < EOCD_BYTES) throw damaged('too short for a zip');
-	const tailStart = Math.max(0, file.size - EOCD_BYTES - MAX_COMMENT);
-	const tail = await bytesAt(file, tailStart, file.size);
-	const view = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
-	let at = -1;
-	for (let i = tail.length - EOCD_BYTES; i >= 0; i--) {
-		if (view.getUint32(i, true) === EOCD && i + EOCD_BYTES + view.getUint16(i + 20, true) === tail.length) {
-			at = i;
-			break;
-		}
-	}
-	if (at < 0) throw damaged('no end of central directory');
+	const end = await findEndRecord(file);
+	if (!end) throw damaged(file.size < EOCD_BYTES ? 'too short for a zip' : 'no end of central directory');
+	const { view, at, tailStart } = end;
 	const disk = view.getUint16(at + 4, true);
 	const cdDisk = view.getUint16(at + 6, true);
 	const count = view.getUint16(at + 10, true);
@@ -184,25 +193,16 @@ export function checkEntries(
 	limits: BackupReadLimits = BACKUP_READ_LIMITS
 ): void {
 	const names = new Set<string>();
-	let total = 0;
+	// The export's rules (stream.ts), so a backup it wrote always reads here.
+	const budget = new EntryBudget(limits);
 	for (const e of entries) {
 		const kind = read(e);
 		if (!kind) continue;
 		if (names.has(e.name)) throw damaged(`"${e.name}" twice`);
 		names.add(e.name);
 		if (e.method !== 0 && e.method !== 8) throw damaged(`"${e.name}" is compressed a way Crema can’t read`);
-		if (e.method === 0 && e.compressedSize !== e.size) throw damaged(`"${e.name}"'s sizes disagree`);
-		if (kind === 'photo' && e.size > limits.maxPhotoBytes) {
-			throw new BackupReadError(
-				`"${e.name}" in this backup unpacks to ${mb(e.size)}; the limit is ${mb(limits.maxPhotoBytes)}.`
-			);
-		}
-		total += e.size;
-		if (total > limits.maxInflatedBytes) {
-			throw new BackupReadError(
-				`This backup unpacks to more than ${mb(limits.maxInflatedBytes)}, too large to restore.`
-			);
-		}
+		const over = budget.add(kind, e.name, e.size);
+		if (over) throw new BackupReadError(`This backup ${over}, too large to restore.`);
 	}
 }
 
@@ -225,7 +225,12 @@ export async function* entryBytes(file: Blob, entry: ZipEntry, sliceBytes = SLIC
 	const head = await bytesAt(file, entry.localOffset, entry.localOffset + 30);
 	const hv = new DataView(head.buffer, head.byteOffset, head.byteLength);
 	if (head.length < 30 || hv.getUint32(0, true) !== LOCAL) throw damaged(`"${entry.name}"'s local header`);
-	const start = entry.localOffset + 30 + hv.getUint16(26, true) + hv.getUint16(28, true);
+	const nameLen = hv.getUint16(26, true);
+	// The local header names the entry too: one that disagrees with the
+	// directory is damage, which would put a photo on another bean.
+	const localName = await bytesAt(file, entry.localOffset + 30, entry.localOffset + 30 + nameLen);
+	if (new TextDecoder().decode(localName) !== entry.name) throw damaged(`"${entry.name}"'s names disagree`);
+	const start = entry.localOffset + 30 + nameLen + hv.getUint16(28, true);
 	const end = start + entry.compressedSize;
 	if (end > file.size) throw damaged(`"${entry.name}" is cut short`);
 

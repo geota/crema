@@ -60,8 +60,10 @@ import {
 	backupLines,
 	blobBytes,
 	checkEntries,
+	crc32,
 	entryBytes,
 	isZipStart,
+	looksLikeZip,
 	readCentralDirectory,
 	type BackupLinePiece,
 	type BackupReadLimits,
@@ -202,14 +204,29 @@ export async function prepareBackupFile(
 	name: string,
 	limits: BackupReadLimits = BACKUP_READ_LIMITS
 ): Promise<PreparedBackup> {
-	const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
-	if (!isZipStart(head)) {
+	if (!(await looksLikeZip(file))) {
 		if (file.size > limits.maxFileBytes) {
 			throw new BackupReadError(
 				`This backup is ${Math.ceil(file.size / 2 ** 20)} MB. Crema restores backups up to ${Math.ceil(limits.maxFileBytes / 2 ** 20)} MB.`
 			);
 		}
-		const lines = () => backupLines(blobBytes(file), limits.maxLineBytes);
+		// The first read keeps the file's CRC and length; every later read must
+		// match them, or the run stops before its first write (REVIEW-394).
+		let seen: { crc: number; length: number } | null = null;
+		async function* checked(): AsyncGenerator<Uint8Array> {
+			let crc = 0;
+			let length = 0;
+			for await (const piece of blobBytes(file)) {
+				crc = crc32(crc, piece);
+				length += piece.length;
+				yield piece;
+			}
+			if (!seen) seen = { crc, length };
+			else if (seen.crc !== crc || seen.length !== length) {
+				throw new BackupReadError('This backup changed since it was checked. Nothing was changed.');
+			}
+		}
+		const lines = () => backupLines(checked(), limits.maxLineBytes);
 		const manifestJson = await scanLines(lines(), []);
 		return { name, manifestJson, identity: identityOf(manifestJson, name), lines, photo: async () => null };
 	}
