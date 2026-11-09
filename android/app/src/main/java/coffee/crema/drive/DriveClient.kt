@@ -180,7 +180,12 @@ suspend fun driveTrashFile(accessToken: String, fileId: String, json: Json): Uni
         }
     }
 
-suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json): ByteArray =
+/**
+ * Download the backup [fileId] into [dest], a piece at a time, so a large one
+ * never sits in memory whole (#310 P2a-b); within the restore's file limit.
+ * Returns [dest].
+ */
+suspend fun driveDownloadBackupTo(accessToken: String, fileId: String, dest: java.io.File, json: Json): java.io.File =
     withContext(Dispatchers.IO) {
         val url = "$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}?alt=media"
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -192,8 +197,7 @@ suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json)
         try {
             val status = conn.responseCode
             if (status in 200..299) {
-                // Size-capped like every import (review 05 P3-2).
-                conn.inputStream.use { it.readBytesCapped(ImportLimits.MAX_FILE_BYTES, "The Drive backup") }
+                conn.inputStream.use { coffee.crema.restore.copyBackupTo(it, dest) }
             } else {
                 val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
                 throw DriveHttpError(status, err, errorMessage(json, err, status, "download"))

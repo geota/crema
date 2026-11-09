@@ -1,10 +1,16 @@
 package coffee.crema.restore
 
+import coffee.crema.core.BackupImporter
 import coffee.crema.core.PlanAction
 import coffee.crema.core.RestorePlan
+import coffee.crema.ui.BackupDecodeError
 import coffee.crema.ui.ParsedBackup
 import coffee.crema.ui.parseBackupBytes
+import coffee.crema.visualizer.storedShotFromBackupJson
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 
 /** A backup's records, decoded to this shell's types before the first write. */
 class RestoreRecords(val parsed: ParsedBackup) {
@@ -15,8 +21,49 @@ class RestoreRecords(val parsed: ParsedBackup) {
             (parsed.visualizerPrefs != null && plan.visualizerPrefs == PlanAction.Apply)
 
     companion object {
-        /** Read after the plan, which says whether it's a backup; throws [coffee.crema.ui.BackupDecodeError] on a row this shell can't take. */
-        fun read(prepared: PreparedBackup, json: Json, nowMs: Long): RestoreRecords =
-            RestoreRecords(parseBackupBytes(prepared.jsonl, json, nowMs))
+        /**
+         * Read after the plan, which says whether it's a backup, through the
+         * core's line-at-a-time importer (#310 P2a-b); throws
+         * [coffee.crema.ui.BackupDecodeError] on a row this shell can't take.
+         *
+         * With [shots], only those shots are kept. Every shot is still decoded,
+         * so one this shell can't take refuses the restore as before, but the
+         * others go as they're read: what a restore holds is bounded by the
+         * history it keeps, not by the backup. The lines kept are then decoded
+         * as a backup of their own, by the same parse.
+         */
+        fun read(prepared: PreparedBackup, json: Json, nowMs: Long, shots: Set<String>? = null): RestoreRecords {
+            val kept = java.io.ByteArrayOutputStream()
+            BackupImporter().use { importer ->
+                prepared.forEachLine { piece ->
+                    when (piece) {
+                        BackupLinePiece.Oversized -> importer.pushOversizedLine()
+                        is BackupLinePiece.Line -> {
+                            val record = importer.pushLine(piece.bytes)
+                            if (record != null && keep(record, json, shots)) {
+                                kept.write(piece.bytes)
+                                kept.write('\n'.code)
+                            }
+                        }
+                    }
+                }
+            }
+            return RestoreRecords(parseBackupBytes(kept.toByteArray(), json, nowMs))
+        }
+
+        /** Whether the line behind [record], a `BackupRecord` JSON, is one the run needs. */
+        private fun keep(record: String, json: Json, shots: Set<String>?): Boolean {
+            val o = json.parseToJsonElement(record).jsonObject
+            if ((o["line"] as? JsonPrimitive)?.content != "shot") return true
+            val shot = o["shot"] as? JsonObject
+            val id = (shot?.get("id") as? JsonPrimitive)?.content
+            if (shot == null || storedShotFromBackupJson(shot, json) == null) throw BackupDecodeError("shot", id)
+            return shots == null || id in shots
+        }
+
+        /** The backup shots a plan's step 7 can write, bring-back included, so one read serves either answer. */
+        fun shotsTheRunWrites(plan: RestorePlan): Set<String> = with(plan.shots) {
+            (add + overwrite + revive + fill + deletedHere).toSet()
+        }
     }
 }

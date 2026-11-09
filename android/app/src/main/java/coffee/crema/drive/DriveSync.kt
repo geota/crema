@@ -141,7 +141,8 @@ class DriveSync(
     private val backupFileName: () -> String,
     /** Apply a downloaded backup's raw bytes (a `.crema.zip` or legacy text).
      *  `wipe` = replace vs merge. */
-    private val applyRestore: (bytes: ByteArray, wipe: Boolean, from: DriveBackupRow?) -> Unit,
+    /** Restore the downloaded backup in the file, read a piece at a time (#310 P2a-b). */
+    private val applyRestore: (file: java.io.File, wipe: Boolean, from: DriveBackupRow?) -> Unit,
     /** Whether the active network is unmetered (Wi-Fi): a Wi-Fi only backup waits for it. */
     private val unmetered: () -> Boolean = { true },
     /** The OAuth code → token exchange (injected so JVM tests can drive a sign-in). */
@@ -160,8 +161,10 @@ class DriveSync(
     private val listBackups: suspend (token: String) -> List<DriveFile> = { token -> driveListBackups(token, json) },
     private val trashFile: suspend (token: String, fileId: String) -> Unit =
         { token, id -> driveTrashFile(token, id, json) },
-    private val downloadBackup: suspend (token: String, fileId: String) -> ByteArray =
-        { token, id -> driveDownloadBackup(token, id, json) },
+    /** Where a backup downloads to before its restore reads it; the next download replaces it. */
+    private val restoreDownloadFile: () -> java.io.File = { java.io.File.createTempFile("crema-drive-restore", ".crema") },
+    private val downloadBackup: suspend (token: String, fileId: String, dest: java.io.File) -> java.io.File =
+        { token, id, dest -> driveDownloadBackupTo(token, id, dest, json) },
     /** Revoke a grant at Google, best-effort (injected so JVM tests make no call). */
     private val revokeGrant: suspend (DriveTokenSet) -> Unit = { revokeDriveGrant(it) },
     /** Why a daily backup mustn't run now (a store that couldn't be read, a
@@ -768,15 +771,15 @@ class DriveSync(
     /** The picker was dismissed. */
     fun closeBackupPicker() = _state.update { it.copy(backups = null) }
 
-    /** Download the backup [fileId] and hand its bytes to [applyRestore]. */
+    /** Download the backup [fileId] to a file, a piece at a time, and hand it to [applyRestore]. */
     fun restoreBackup(fileId: String, wipe: Boolean) {
         scope.launch {
             if (!ownState.await()) return@launch
             val tokens = tokenForUser("restore") ?: return@launch
             val picked = _state.value.backups?.firstOrNull { it.id == fileId }
             _state.update { it.copy(busy = true, backups = null) }
-            runCatchingCancellable { withToken(tokens) { downloadBackup(it, fileId) } }
-                .onSuccess { bytes -> applyRestore(bytes, wipe, picked) }
+            runCatchingCancellable { withToken(tokens) { downloadBackup(it, fileId, restoreDownloadFile()) } }
+                .onSuccess { file -> applyRestore(file, wipe, picked) }
                 .onFailure { e ->
                     val failure = (e as? NoDriveToken)?.failure
                     if (failure != SyncFailure.SessionEnded) {

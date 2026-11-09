@@ -10,7 +10,6 @@ import coffee.crema.core.Verdict
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.toCommonSettings
 import coffee.crema.visualizer.DEFAULT_VISUALIZER_SYNC_PREFS
-import coffee.crema.ui.parseBackupBytes
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -102,7 +101,7 @@ class RestoreEngineTest {
     }
 
     private fun prepared() = prepareBackup(backup, "test", File(dir, "stage"))
-    private fun records(p: PreparedBackup) = RestoreRecords(parseBackupBytes(p.jsonl, json, 0L)!!)
+    private fun records(p: PreparedBackup) = RestoreRecords.read(p, json, 0L)
 
     private fun engine(sink: FakeSink, waitMs: Long = 200) =
         RestoreEngine(sink, marker, json, machineWaitMs = waitMs)

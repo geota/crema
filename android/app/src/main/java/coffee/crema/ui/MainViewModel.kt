@@ -416,9 +416,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         log = { appendLog(it) },
         backupZip = { library.buildBackupZip() },
         backupFileName = { library.backupFileName() },
-        applyRestore = { bytes, wipe, from ->
-            startRestore(bytes, from?.name?.ifBlank { null } ?: "your Google Drive backup", if (wipe) RestoreMode.WIPE else RestoreMode.MERGE, from)
+        applyRestore = { file, wipe, from ->
+            startRestoreFile(file, from?.name?.ifBlank { null } ?: "your Google Drive backup", if (wipe) RestoreMode.WIPE else RestoreMode.MERGE, from)
         },
+        restoreDownloadFile = { restoreIncoming("restore-drive.crema") },
         autoBackupBlocked = { autoBackupBlocked() },
         damageByStore = { damageByStore() },
         restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
@@ -1459,12 +1460,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** A backup picked and planned, waiting on the report. */
     private class PendingRestore(
         val prepared: coffee.crema.restore.PreparedBackup,
-        val records: coffee.crema.restore.RestoreRecords,
+        var records: coffee.crema.restore.RestoreRecords,
         val kind: coffee.crema.restore.RestoreKind,
         var plan: coffee.crema.core.RestorePlan,
         var revive: Boolean = false,
         /** The Drive file it came from, if any: the pre-damage pin reads it. */
         val from: coffee.crema.drive.DriveBackupRow? = null,
+        /** The shots [records] holds: those the plan read for could write. */
+        var recordShots: Set<String> = coffee.crema.restore.RestoreRecords.shotsTheRunWrites(plan),
     )
     private var pendingRestore: PendingRestore? = null
 
@@ -1474,30 +1477,56 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Restore a `crema-backup` bundle from a SAF [uri]: read, plan, then the report. */
     fun restoreBackup(uri: Uri, mode: RestoreMode) {
         viewModelScope.launch {
-            val bytes = library.readBackupBytes(uri) ?: return@launch
-            startRestore(bytes, uri.lastPathSegment ?: "the backup", mode)
+            // Copied to a file a piece at a time, then read the same way (#310 P2a-b).
+            val dest = restoreIncoming("restore-picked.crema")
+            val file = withContext(Dispatchers.IO) {
+                runCatching {
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use {
+                        coffee.crema.restore.copyBackupTo(it, dest)
+                    }
+                }
+            }.getOrElse { e ->
+                notifyUser(if (e is coffee.crema.restore.BackupReadException) "Restore failed: ${e.message}" else "Restore failed — couldn't read that file.")
+                return@launch
+            } ?: run { notifyUser("Restore failed — couldn't read that file."); return@launch }
+            startRestoreFile(file, uri.lastPathSegment ?: "the backup", mode)
         }
     }
 
+    /** Where an incoming backup waits for its restore: one file per source, replaced by the next. */
+    private fun restoreIncoming(name: String) = java.io.File(getApplication<Application>().cacheDir, name)
+
+    private fun restoreStage() = java.io.File(getApplication<Application>().cacheDir, "restore-photos")
+
+    /** [startRestoreFile] for bytes already in memory. */
+    fun startRestore(bytes: ByteArray, name: String, mode: RestoreMode, from: coffee.crema.drive.DriveBackupRow? = null) =
+        startRestoreFrom(name, mode, from) { coffee.crema.restore.prepareBackup(bytes, name, restoreStage()) }
+
     /**
-     * Plan a restore of [bytes]: a refusal says why; a clean Merge runs at once;
-     * anything else opens the report, which Replace gates behind Type ERASE.
+     * Plan a restore of the backup in [file], read a piece at a time: a refusal
+     * says why; a clean Merge runs at once; anything else opens the report,
+     * which Replace gates behind Type ERASE.
      */
-    fun startRestore(bytes: ByteArray, name: String, mode: RestoreMode, from: coffee.crema.drive.DriveBackupRow? = null) {
+    fun startRestoreFile(file: java.io.File, name: String, mode: RestoreMode, from: coffee.crema.drive.DriveBackupRow? = null) =
+        startRestoreFrom(name, mode, from) { coffee.crema.restore.prepareBackupFile(file, name, restoreStage()) }
+
+    private fun startRestoreFrom(
+        name: String,
+        mode: RestoreMode,
+        from: coffee.crema.drive.DriveBackupRow?,
+        prepare: () -> coffee.crema.restore.PreparedBackup,
+    ) {
         viewModelScope.launch {
             val kind = kindOf(mode)
-            val prepared = runCatching {
-                coffee.crema.restore.prepareBackup(
-                    bytes, name, java.io.File(getApplication<Application>().cacheDir, "restore-photos"),
-                )
-            }.getOrElse { notifyUser("Restore failed: ${it.message}"); return@launch }
+            val prepared = runCatching { withContext(Dispatchers.IO) { prepare() } }
+                .getOrElse { notifyUser("Restore failed: ${it.message}"); return@launch }
             // The plan first: its verdict says whether this is a backup at all.
             val plan = restoreEngine.plan(prepared, kind)
             if (plan.verdict == coffee.crema.core.Verdict.Refused) {
                 notifyUser(coffee.crema.restore.refusalMessage(plan))
                 return@launch
             }
-            val records = runCatching { coffee.crema.restore.RestoreRecords.read(prepared, json, System.currentTimeMillis()) }
+            val records = runCatching { readRecords(prepared, plan) }
                 .getOrElse { notifyUser(it.message ?: "Restore failed."); return@launch }
             val pending = PendingRestore(prepared, records, kind, plan, from = from)
             when {
@@ -1558,7 +1587,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(restoreReport = null) }
     }
 
+    /** The records a run of [plan] needs, read off the main thread. */
+    private suspend fun readRecords(prepared: coffee.crema.restore.PreparedBackup, plan: coffee.crema.core.RestorePlan) =
+        withContext(Dispatchers.IO) {
+            coffee.crema.restore.RestoreRecords.read(
+                prepared, json, System.currentTimeMillis(), coffee.crema.restore.RestoreRecords.shotsTheRunWrites(plan),
+            )
+        }
+
     private suspend fun runPending(pending: PendingRestore) {
+        // A plan that changed since the records were read may name other shots.
+        val want = coffee.crema.restore.RestoreRecords.shotsTheRunWrites(pending.plan)
+        if (want != pending.recordShots) {
+            pending.records = runCatching { readRecords(pending.prepared, pending.plan) }
+                .getOrElse { pendingRestore = null; notifyUser(it.message ?: "Restore failed."); return }
+            pending.recordShots = want
+        }
         val outcome = restoreEngine.run(pending.prepared, pending.kind, pending.records, pending.revive, expected = pending.plan)
         if (outcome is coffee.crema.restore.RestoreOutcome.Changed) {
             pending.plan = outcome.plan
@@ -1592,7 +1636,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             notifyUser(coffee.crema.restore.refusalMessage(plan))
             return
         }
-        val records = coffee.crema.restore.RestoreRecords.read(prepared, json, System.currentTimeMillis())
+        // In memory and test-only: read here, so the run starts before this suspends.
+        val records = coffee.crema.restore.RestoreRecords.read(
+            prepared, json, System.currentTimeMillis(), coffee.crema.restore.RestoreRecords.shotsTheRunWrites(plan),
+        )
         runPending(PendingRestore(prepared, records, kind, plan))
     }
 

@@ -158,7 +158,7 @@ class DriveRetentionTest {
         notify = { notices += it },
         backupZip = { null },
         backupFileName = { "b" },
-        applyRestore = { bytes, wipe, _ -> restored += bytes.decodeToString() to wipe },
+        applyRestore = { file, wipe, _ -> restored += file.readText() to wipe },
         refreshToken = { error("no refresh expected") },
     ).also {
         runBlocking {

@@ -1159,16 +1159,6 @@ class LibraryController(
         return "crema-backup-$label-$stamp.crema.zip"
     }
 
-    /** A SAF [uri]'s bytes, for a restore, or null once it has said why it couldn't read them. */
-    suspend fun readBackupBytes(uri: Uri): ByteArray? {
-        val bytes = readUriBytes(uri)
-        if (bytes == null || bytes.isEmpty()) {
-            notify(readFailure("Restore failed — couldn't read that file"))
-            return null
-        }
-        return bytes
-    }
-
     // ── Restore through the core's plan (restore-safety PR7a) ─────────────────
 
     /** What a restore's sink needs from outside the library. */

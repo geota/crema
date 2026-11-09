@@ -6,6 +6,7 @@ import coffee.crema.core.PlanNote
 import coffee.crema.core.RestorePlan
 import coffee.crema.core.Verdict
 import coffee.crema.core.planRestore
+import coffee.crema.core.BackupScanner
 import coffee.crema.core.scanBackupBytes
 import coffee.crema.persist.SafeFile
 import coffee.crema.persist.readZipCapped
@@ -20,7 +21,9 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileInputStream
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.atomic.AtomicBoolean
@@ -37,16 +40,24 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** The two restore buttons, in the core's words. */
 enum class RestoreKind(val core: String) { MERGE("merge"), REPLACE("replace") }
 
-/** A backup read off its file: the JSONL bytes, and the zip's photos staged on disk. */
+/**
+ * A backup read off its file and scanned: what a plan needs, the zip's photos
+ * staged on disk, and a way back to its lines for the run. A file is read a
+ * piece at a time ([prepareBackupFile]), so a restore holds a line, not the
+ * backup.
+ */
 class PreparedBackup(
     /** For the marker and the report. */
     val name: String,
-    val jsonl: ByteArray,
     /** Bean id → its staged photo, outside the photos directory until step 3. */
     val photos: Map<String, File>,
     /** The core's `BackupManifest`, as JSON. */
     val manifestJson: String,
+    private val readLines: ((BackupLinePiece) -> Unit) -> Unit,
 ) {
+    /** The backup's lines, read again from the start. */
+    fun forEachLine(onPiece: (BackupLinePiece) -> Unit) = readLines(onPiece)
+
     /**
      * Which backup this is, by its header (`createdAt`, device, app version),
      * so the same backup from Drive or from a file is the same (DECISIONS §7);
@@ -77,11 +88,25 @@ private fun isZip(bytes: ByteArray): Boolean =
     bytes.size >= 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte() &&
         bytes[2] == 0x03.toByte() && bytes[3] == 0x04.toByte()
 
+/** [bytes] split on `0x0A`, as the core splits them. */
+private fun linesOf(bytes: ByteArray, onPiece: (BackupLinePiece) -> Unit) {
+    var from = 0
+    for (i in bytes.indices) {
+        if (bytes[i] == 0x0a.toByte()) {
+            onPiece(BackupLinePiece.Line(bytes.copyOfRange(from, i)))
+            from = i + 1
+        }
+    }
+    onPiece(BackupLinePiece.Line(bytes.copyOfRange(from, bytes.size)))
+}
+
 /**
- * Read a backup: a `.crema.zip` (its `backup.jsonl` and `images/<beanId>`) or
- * bare JSONL. The bytes go to the core undecoded, so one bad byte is one bad
- * line. Photos go to [stageDir], not into the photo directory: a refused
- * restore must touch nothing. Throws on a zip with no backup inside.
+ * Read a backup held in memory: a `.crema.zip` (its `backup.jsonl` and
+ * `images/<beanId>`) or bare JSONL. The bytes go to the core undecoded, so one
+ * bad byte is one bad line. Photos go to [stageDir], not into the photo
+ * directory: a refused restore must touch nothing. Throws on a zip with no
+ * backup inside. For tests and small imports; a file the user picks, or one
+ * from Drive, goes through [prepareBackupFile].
  */
 fun prepareBackup(bytes: ByteArray, name: String, stageDir: File): PreparedBackup {
     var jsonl = bytes
@@ -91,7 +116,7 @@ fun prepareBackup(bytes: ByteArray, name: String, stageDir: File): PreparedBacku
         stageDir.mkdirs()
         var member: ByteArray? = null
         java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(bytes)).use { zis ->
-            readZipCapped(zis, accept = { it == "backup.jsonl" || it == "crema.jsonl" || it.startsWith("images/") }) { entry, data ->
+            readZipCapped(zis, accept = { it == BACKUP_MEMBER || it == LEGACY_MEMBER || it.startsWith("images/") }) { entry, data ->
                 if (entry.startsWith("images/")) {
                     val beanId = entry.substringAfter("images/")
                     if (beanId.isNotEmpty() && data.isNotEmpty()) {
@@ -99,14 +124,82 @@ fun prepareBackup(bytes: ByteArray, name: String, stageDir: File): PreparedBacku
                         staged.writeBytes(data)
                         photos[beanId] = staged
                     }
-                } else if (member == null || entry == "backup.jsonl") {
+                } else if (member == null || entry == BACKUP_MEMBER) {
                     member = data
                 }
             }
         }
         jsonl = member ?: throw IllegalArgumentException("Not a Crema backup zip (no backup.jsonl inside).")
     }
-    return PreparedBackup(name, jsonl, photos, scanBackupBytes(jsonl, photos.keys.toList()))
+    val lines = jsonl
+    return PreparedBackup(name, photos, scanBackupBytes(lines, photos.keys.toList())) { linesOf(lines, it) }
+}
+
+/** Feed the lines [read] gives to [scanner], a line at a time. */
+private fun scanInto(scanner: BackupScanner, read: ((BackupLinePiece) -> Unit) -> Unit) = read { piece ->
+    when (piece) {
+        is BackupLinePiece.Line -> scanner.pushLine(piece.bytes)
+        BackupLinePiece.Oversized -> scanner.pushOversizedLine()
+    }
+}
+
+/** A whole scan of the lines [read] gives. */
+private fun scanLines(read: ((BackupLinePiece) -> Unit) -> Unit, photoIds: List<String>): String =
+    BackupScanner().use { scanner ->
+        scanInto(scanner, read)
+        scanner.finish(photoIds)
+    }
+
+/**
+ * Read a backup from [file] (#310 P2a-b): a `.crema.zip` through
+ * [ZipInputStream][java.util.zip.ZipInputStream], or bare JSONL, a piece at a
+ * time. Every byte the restore will use is read here once, checked (each zip
+ * entry's CRC, the end record, the limits) and scanned, before a plan is
+ * made; photos are staged in [stageDir]; the run reads the lines again.
+ * Throws [BackupReadException] for a damaged backup or one past a limit.
+ */
+fun prepareBackupFile(file: File, name: String, stageDir: File, limits: BackupReadLimits = BackupReadLimits()): PreparedBackup {
+    checkFileSize(file, limits)
+    if (!isZipFile(file)) {
+        val read: ((BackupLinePiece) -> Unit) -> Unit = { onPiece ->
+            BufferedInputStream(FileInputStream(file), 64 * 1024).use { forEachBackupLine(it, limits.maxLineBytes, onPiece) }
+        }
+        return PreparedBackup(name, emptyMap(), scanLines(read, emptyList()), read)
+    }
+    stageDir.deleteRecursively()
+    stageDir.mkdirs()
+    val photos = LinkedHashMap<String, File>()
+    // A scan per backup member: the first pass reads them all, so a zip holding
+    // both takes `backup.jsonl`'s, as the old reader did. Each finishes once
+    // the whole zip has been read and its photos are known.
+    val scans = HashMap<String, BackupScanner>()
+    val manifest = try {
+        walkBackupZip(file, limits) { entry, kind, data ->
+            when (kind) {
+                EntryKind.PHOTO -> {
+                    val beanId = entry.substringAfter("images/")
+                    val staged = File(stageDir, "photo-${photos.size}")
+                    staged.outputStream().use { data.copyTo(it, 64 * 1024) }
+                    if (beanId.isNotEmpty() && staged.length() > 0) photos[beanId] = staged else staged.delete()
+                }
+                EntryKind.BACKUP -> scanInto(scans.getOrPut(entry) { BackupScanner() }) { onPiece ->
+                    forEachBackupLine(data, limits.maxLineBytes, onPiece)
+                }
+            }
+        }
+        val scanner = scans[BACKUP_MEMBER] ?: scans[LEGACY_MEMBER]
+            ?: throw IllegalArgumentException("Not a Crema backup zip (no backup.jsonl inside).")
+        scanner.finish(photos.keys.toList())
+    } finally {
+        scans.values.forEach { it.destroy() }
+    }
+    val member = if (BACKUP_MEMBER in scans) BACKUP_MEMBER else LEGACY_MEMBER
+    val read: ((BackupLinePiece) -> Unit) -> Unit = { onPiece ->
+        walkBackupZip(file, limits) { entry, kind, data ->
+            if (kind == EntryKind.BACKUP && entry == member) forEachBackupLine(data, limits.maxLineBytes, onPiece)
+        }
+    }
+    return PreparedBackup(name, photos, manifest, read)
 }
 
 // ── The marker ───────────────────────────────────────────────────────────────
