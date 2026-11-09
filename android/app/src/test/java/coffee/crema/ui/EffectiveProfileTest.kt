@@ -56,7 +56,9 @@ class EffectiveProfileTest {
         bridge.onNotification(NotificationSource.DE1_MMR_READ, modelReply(1), 0uL)
         bridge.settleForUploads()
         val out = json.decodeFromString(ProfileSyncOutput.serializer(), bridge.setDesiredProfile(crema, qcJson, 0uL))
-        val frames = out.output.commands.filterIsInstance<Command.WriteCharacteristic>()
+        // The core uploads once the profile has rested.
+        val tick = json.decodeFromString(coffee.crema.core.CoreOutput.serializer(), bridge.onTick(DESIRED_SETTLE_MS))
+        val frames = tick.commands.filterIsInstance<Command.WriteCharacteristic>()
             .filter { it.content.target == WriteTarget.De1ProfileFrame }
             .map { w -> w.content.data.map { it.toByte() }.toByteArray() }
             .dropLast(1) // the tail

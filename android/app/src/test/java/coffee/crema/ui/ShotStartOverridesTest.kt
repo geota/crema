@@ -102,10 +102,11 @@ class ShotStartOverridesTest {
     private fun drainCoreLane(vm: MainViewModel) = VmHarness.drainCoreLane(vm)
 
     /** F7 (validation P2): the dial is part of the desired profile. A dial
-     *  change while connected becomes the desired profile once the dial rests
-     *  0.5 s, so the core pushes it and a group-head start runs it. */
+     *  change while connected becomes the core's desired profile at once; the
+     *  core waits for the dial to rest 0.5 s before it uploads (its own
+     *  tests), so the shell keeps no timer. */
     @Test
-    fun `f7_dial a dial change becomes the desired profile after 0_5 s`() {
+    fun `f7_dial a dial change becomes the desired profile at once`() {
         val vm = build()
         val dial = pickProfile(vm)
         val active = assertNotNull(vm.ui.value.activeProfile())
@@ -114,36 +115,11 @@ class ShotStartOverridesTest {
         val profileJson = builtinJson(active.id)
         fun desired() = json.decodeFromString(ProfileSyncStatus.serializer(), bridge.profileSyncStatus()).desired
         assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "the bare profile at first")
-
-        // The debounce on virtual time: every wait below is exact, so a push
-        // that skips the debounce fails here on any machine.
-        val clock = kotlinx.coroutines.test.TestCoroutineScheduler()
-        vm.dialDebounceContext = kotlinx.coroutines.test.StandardTestDispatcher(clock)
-        fun settle() {
-            VmHarness.idle()
-            drainCoreLane(vm)
-        }
-        // Settle what the last call queued (its debounce starts now), move the
-        // clock, then settle the push the move released.
-        fun advance(ms: Long) {
-            settle()
-            clock.advanceTimeBy(ms)
-            clock.runCurrent()
-            settle()
-        }
-        vm.quickAdjustBrew(active.dose.toDouble(), active.yieldOut.toDouble(), dial.anchor + 1, null)
-        advance(300)
         vm.quickAdjustBrew(active.dose.toDouble(), active.yieldOut.toDouble(), dial.anchor + 2, null)
-        advance(0)
-        assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "not while the dial moves")
-        // 0.3 s after the first step, 0.499 s after the second: still waiting
-        // (the second step restarted the wait).
-        advance(499)
-        assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "not before the dial rests 0.5 s")
-
+        VmHarness.idle()
+        drainCoreLane(vm)
         val dialled = effectiveProfileFingerprint(profileJson, vm.ui.value.brewParams.overridesJson(json))
-        advance(1)
-        assertEquals(dialled, desired(), "the dialled profile once it rests")
+        assertEquals(dialled, desired(), "the dialled profile, with no shell wait")
     }
 
     /** Ack every profile write of [o] on [bridge], as the write executor does. */

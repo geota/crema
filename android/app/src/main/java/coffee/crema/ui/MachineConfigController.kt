@@ -17,11 +17,6 @@ import kotlin.math.roundToInt
 import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.json.Json
 
-/** How long the Quick-Controls dial must rest before its override
- *  becomes the desired profile (de1app debounces its temperature dial by
- *  0.5 s too), so a run of stepper taps uploads once. */
-private const val DIAL_PUSH_DEBOUNCE_MS = 500L
-
 /**
  * The machine's configuration on the device that owns it (MainViewModel
  * breakup step 9c): what a config command does here ([showConfig],
@@ -54,7 +49,7 @@ internal class MachineConfigController(
     /** Load the profile linked to the bean just activated, if any. */
     private val maybeLoadLinkedProfile: (String) -> Unit,
     /** Push the stop targets from a state, the desired profile after a delay in ms. */
-    private val pushStopTargets: (state: MainUiState, desiredDelayMs: Long) -> Unit,
+    private val pushStopTargets: (state: MainUiState) -> Unit,
     private val refreshStopTargetProjection: () -> Unit,
     /** Latch the start settings in the core, from this device's own state. */
     private val pushStartSettings: () -> Unit,
@@ -111,7 +106,7 @@ internal class MachineConfigController(
         when (cmd) {
             is MachineCommand.SetActiveProfile -> {
                 persistPrefs()
-                pushStopTargets(effectiveState(), 0) // new profile's recipe yield/volume become the stop targets
+                pushStopTargets(effectiveState()) // new profile's recipe yield/volume become the stop targets
             }
             is MachineCommand.SetActiveBean -> {
                 persistLibrary()
@@ -153,12 +148,12 @@ internal class MachineConfigController(
             }
             is MachineCommand.AdjustBrew -> {
                 // The new yield override becomes the live stop-at-weight target
-                // now; the dialled profile goes to the DE1 once the dial rests.
-                pushStopTargets(effectiveState(), DIAL_PUSH_DEBOUNCE_MS)
+                // now; the core uploads the dialled profile once the dial rests.
+                pushStopTargets(effectiveState())
                 pushConfig() // mirrors track the primary's live override (issue 06)
             }
             MachineCommand.ResetBrew -> {
-                pushStopTargets(effectiveState(), 0) // drop the per-shot override; the profile recipe target takes over
+                pushStopTargets(effectiveState()) // drop the per-shot override; the profile recipe target takes over
                 pushConfig() // mirrors drop their override too (issue 06)
             }
         }
@@ -184,7 +179,7 @@ internal class MachineConfigController(
         // restore, reset or erase that changes the dose must not leave the old
         // packet for the group-head button.
         applySteamHotWater(state)
-        pushStopTargets(state, 0)
+        pushStopTargets(state)
         configureIdleSleep(state.idleSleepMin)
     }
 

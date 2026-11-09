@@ -134,13 +134,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         profileWriteFailed = { id -> bridge.profileWriteFailed(SystemClock.elapsedRealtime().toULong(), id) },
     )
 
-    /** Where the dial's debounce wait runs ([MachineSessionController.dialDebounceContext]).
-     *  Test seam: a test dispatcher makes the 0.5 s virtual time. */
-    @androidx.annotation.VisibleForTesting
-    internal var dialDebounceContext: kotlin.coroutines.CoroutineContext
-        get() = session.dialDebounceContext
-        set(value) { session.dialDebounceContext = value }
-
     private val _ui = UiStore(MainUiState())
 
     /** The high-rate readouts as they arrive: the store every reader and
@@ -169,7 +162,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         profileJson = { library.profileJson(it) },
         persistLibrary = { library.persistLibrary() },
         maybeLoadLinkedProfile = { library.maybeLoadLinkedProfile(it) },
-        pushStopTargets = { state, desiredDelayMs -> session.pushStopTargets(state, desiredDelayMs) },
+        pushStopTargets = { state -> session.pushStopTargets(state) },
         refreshStopTargetProjection = { session.refreshStopTargetProjection() },
         pushStartSettings = { session.pushStartSettings() },
         configureIdleSleep = { presence.configureIdleSleep(it) },

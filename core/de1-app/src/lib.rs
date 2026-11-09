@@ -13024,7 +13024,9 @@ mod tests {
                 qc: &BrewOverrides,
                 now_ms: u64,
             ) -> CoreOutput {
-                core.set_desired_profile(Some(p), qc, Duration::from_millis(now_ms))
+                // Settled at once: these tests are about the sync, not the
+                // dial's settle (`profile_sync::tests` cover that).
+                core.set_desired_profile_settling(Some(p), qc, Duration::from_millis(now_ms), false)
             }
 
             fn uploads(out: &CoreOutput) -> usize {
@@ -13060,6 +13062,70 @@ mod tests {
                 let mut core = CremaCore::new_with_model(1);
                 let _ = idle(&mut core, 0);
                 core
+            }
+
+            /// The dial's settle, moved into the core (`DESIGN.md` §3.10):
+            /// three steps 100 ms apart upload once, the last one, 500 ms
+            /// after the last change. A `WakeAt` asks for that tick, so the
+            /// shells need no timer.
+            #[test]
+            fn a_run_of_dial_steps_uploads_once_after_the_settle() {
+                let p = library("Daily");
+                let mut core = connected();
+                let first = sweep(&mut core, 10);
+                assert_eq!(uploads(&first), 0, "nothing desired yet");
+                let mut early = 0;
+                let mut wake = None;
+                for (i, temp) in [92.0, 93.0, 94.0].into_iter().enumerate() {
+                    let out = core.set_desired_profile(
+                        Some(&p),
+                        &qc(temp),
+                        Duration::from_millis(1_000 + 100 * i as u64),
+                    );
+                    early += uploads(&out);
+                    wake = out
+                        .events
+                        .iter()
+                        .find_map(|e| match e {
+                            Event::WakeAt { at_ms } => Some(*at_ms),
+                            _ => None,
+                        })
+                        .or(wake);
+                }
+                assert_eq!(early, 0, "nothing while the dial moves");
+                assert_eq!(wake, Some(1_700.0), "a tick at the last change + 500 ms");
+                assert_eq!(uploads(&core.on_tick(1_650)), 0, "not before the settle");
+                let settled = core.on_tick(1_700);
+                assert_eq!(uploads(&settled), 1, "one upload when it rests");
+                let done = ack_every_frame(&mut core, &settled.commands, 1_800);
+                assert_eq!(
+                    holds(&done),
+                    Some(fingerprint(&p, &qc(94.0))),
+                    "the last step"
+                );
+            }
+
+            /// Pushing the same profile again doesn't restart the settle.
+            #[test]
+            fn an_unchanged_desired_profile_keeps_its_deadline() {
+                let p = library("Daily");
+                let mut core = connected();
+                let _ = sweep(&mut core, 10);
+                let _ = core.set_desired_profile(Some(&p), &qc(93.0), Duration::from_millis(1_000));
+                let _ = core.set_desired_profile(Some(&p), &qc(93.0), Duration::from_millis(1_400));
+                assert_eq!(uploads(&core.on_tick(1_500)), 1);
+            }
+
+            /// A shot start doesn't wait for the settle: its profile uploads
+            /// at once.
+            #[test]
+            fn a_start_uploads_without_the_settle() {
+                let p = library("Daily");
+                let mut core = connected();
+                let _ = sweep(&mut core, 10);
+                let start = core.start_shot(&p, &qc(93.0), Duration::from_millis(1_000));
+                assert!(start.accepted);
+                assert_eq!(uploads(&start.output), 1);
             }
 
             /// AC-F7.1: the desired profile goes out after the connect sweep

@@ -174,7 +174,8 @@ describe('the dial is part of the desired profile (F7, validation P2)', () => {
 			await core.onNotification('De1State', new Uint8Array([IDLE, 0]), performance.now())
 		);
 		await app.setDesiredProfile(profile);
-		await vi.advanceTimersByTimeAsync(10);
+		// The core lets a new desired profile rest 0.5 s before it uploads.
+		await vi.advanceTimersByTimeAsync(600);
 		expect((await core.profileSyncStatus()).lastPushed).toBe(profileFingerprint(profile, {}));
 		frames.length = 0;
 
@@ -185,7 +186,7 @@ describe('the dial is part of the desired profile (F7, validation P2)', () => {
 		const qc = { brewTemp: anchor + 2 };
 		app.setBrewOverrides(profile, qc);
 		await vi.advanceTimersByTimeAsync(400);
-		expect(frames, 'debounced: nothing before the dial rests 0.5 s').toEqual([]);
+		expect(frames, "the core's settle: nothing before the dial rests 0.5 s").toEqual([]);
 		await vi.advanceTimersByTimeAsync(200);
 		const first = frames.find((f) => f[0] === 0);
 		expect(first, 'the dialled profile went out').toBeDefined();
