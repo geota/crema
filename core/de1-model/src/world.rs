@@ -15,6 +15,9 @@ const STEP_MS: u64 = 100;
 const SAMPLE_MS: u64 = 200;
 /// The shells' tick.
 const TICK_MS: u64 = 1_000;
+/// The untared-cup guard's threshold, grams: a heavy first reading in the
+/// first 3 s of flow is the guard's to catch.
+const UNTARED_GUARD_G: f32 = 50.0;
 /// I13's tolerance to start with (`DESIGN.md` §7).
 const WEIGHT_TOLERANCE_G: f32 = 6.0;
 /// The reply to the machine-model read, from the capture: a DE1 model 2.
@@ -101,8 +104,13 @@ pub struct Coverage {
     pub steam: u32,
     /// `StopTriggered`.
     pub stops: u32,
-    /// `StopTriggered` on weight.
+    /// `StopTriggered` on weight, estimated included.
     pub weight_stops: u32,
+    /// `StopTriggered` on the estimate.
+    pub estimated_stops: u32,
+    /// Espresso sessions with a load that changed while no readings arrived,
+    /// which I13 skips (§3.5's known limit).
+    pub unseen_loads: u32,
     /// `StopTriggered` on volume.
     pub volume_stops: u32,
     /// `StopRetried`.
@@ -233,6 +241,30 @@ pub struct World {
     replacing: bool,
     /// The core heard this espresso session flow on an unknown substate.
     unknown_flow: bool,
+    /// A load moved on this espresso's scale where the core can't see it
+    /// (§3.5's known limits): between the last zero and first flow with no
+    /// tare after it; or while no readings were arriving, before the gate, where `Tared` has no returning check; after it, only a load the
+    /// returning check or the step band accepts. It reads as coffee, so I13
+    /// is skipped for the rest of the session: not only while the load stays,
+    /// because once the core's gate opens with the load in its reading, `last`
+    /// carries it, and when the load lifts the estimate counts from there (the
+    /// model shrank that to a true 29.8 g of 36). A load seen arriving on a
+    /// live reading, or one the core refuses, is judged.
+    unseen_load: bool,
+    /// This espresso's first reading at flow has been checked for a load that
+    /// moved since the last zero.
+    flow_checked: bool,
+    /// The oracle's gate: since when the true cup has held 5 g with the
+    /// scale reporting, and whether that held 1 s.
+    gate_since: Option<u64>,
+    gate_seen: bool,
+    /// The true cup at the last reading, grams.
+    last_cup_g: f32,
+    /// This espresso opened from a zeroed cup: a tare, or `|net| ≤ 2 g`.
+    /// Auto-tare off on a loaded scale has no weight-stop guarantee (§3.5).
+    opened_near_zero: bool,
+    /// The load on the scale at the last reading, grams.
+    last_load: f32,
     /// What the run reached.
     pub coverage: Coverage,
     /// What broke.
@@ -308,6 +340,13 @@ impl World {
             stopped_this_flow: false,
             replacing: false,
             unknown_flow: false,
+            unseen_load: false,
+            flow_checked: false,
+            gate_since: None,
+            gate_seen: false,
+            last_cup_g: 0.0,
+            opened_near_zero: true,
+            last_load: 0.0,
             coverage: Coverage::default(),
             violations: Vec::new(),
             requests: Vec::new(),
@@ -351,6 +390,14 @@ impl World {
         self.hot_water_ml = ml;
     }
 
+    /// What's really in the cup since the last tare, grams.
+    #[must_use]
+    pub fn true_cup_g(&self) -> f32 {
+        self.scale
+            .as_ref()
+            .map_or(self.cup.grams, |s| s.true_net(self.cup.grams))
+    }
+
     /// The world's clock, ms.
     #[must_use]
     pub fn now_ms(&self) -> u64 {
@@ -383,11 +430,12 @@ impl World {
                 }
             }
             Op::GroupHead(state) => {
-                self.cup = SimCup {
-                    grams: self.cup.grams,
-                    headspace_ml: self.headspace_ml,
-                };
+                // A press that starts nothing leaves the pour's cup alone.
+                let idle = self.de1.state == MachineState::Idle;
                 self.de1.enter(state);
+                if idle && self.de1.active() {
+                    self.cup.headspace_ml = self.headspace_ml;
+                }
             }
             Op::AppStart { yield_g } => self.app_start(yield_g),
             Op::UserStop => {
@@ -511,10 +559,7 @@ impl World {
             if self.start_from.is_some() {
                 self.coverage.starts_over_a_flow += 1;
             }
-            self.cup = SimCup {
-                grams: self.cup.grams,
-                headspace_ml: self.headspace_ml,
-            };
+            // The headspace refills when the machine enters the flow (`land`).
         }
         self.ingest(result.output, Who::User);
     }
@@ -599,6 +644,7 @@ impl World {
                 || (mode == Some(ActiveMode::Espresso) && self.flowed && pre_flow);
             self.flowed = (self.flowed || !pre_flow) && !replaced;
             if replaced {
+                self.scale_zero_at_open();
                 self.replacing = true;
                 self.unknown_flow = false;
                 self.unseen = false;
@@ -610,6 +656,9 @@ impl World {
             return;
         }
         self.open_mode = mode;
+        if mode == Some(ActiveMode::Espresso) {
+            self.scale_zero_at_open();
+        }
         self.flowed = !pre_flow;
         // The core's frame memory ends with its shot.
         self.last_sample_frame = None;
@@ -620,6 +669,80 @@ impl World {
         if self.unseen && weighs {
             self.coverage.unseen += 1;
         }
+    }
+
+    /// A load the core can't see: one that changed while no readings were
+    /// arriving. Called on each reading, before it counts as heard.
+    fn watch_unseen_load(&mut self) {
+        let pouring = self.open_mode == Some(ActiveMode::Espresso) && self.flowed;
+        if !pouring {
+            return;
+        }
+        // A load that moved between the last zero and first flow, with no tare
+        // after it, reads as coffee: the late-cup re-tare missed it and the
+        // step detector watches only a flowing session (§3.5's known limit,
+        // #389). Only under the untared-cup guard's 50 g: a heavier one is the
+        // guard's, which the model must still see.
+        if !std::mem::replace(&mut self.flow_checked, true)
+            && self.scale.as_ref().is_some_and(|s| {
+                let moved = s.load_moved_since_zero(self.now);
+                moved > 0.0 && moved < UNTARED_GUARD_G
+            })
+            && !std::mem::replace(&mut self.unseen_load, true)
+        {
+            self.coverage.unseen_loads += 1;
+        }
+        let gap_ms = self
+            .last_weight_ms
+            .map_or(u64::MAX, |at| self.now.saturating_sub(at));
+        let load = self.scale.as_ref().map_or(0.0, |s| s.load_now(self.now));
+        let load_step = load - std::mem::replace(&mut self.last_load, load);
+        let cup = self.true_cup_g();
+        let gain = cup - std::mem::replace(&mut self.last_cup_g, cup);
+        // A reading missed (the sim's scale reports every step), and the load
+        // changed meanwhile.
+        if gap_ms > STEP_MS && load_step != 0.0 && load != 0.0 {
+            #[allow(clippy::cast_precision_loss)]
+            let gap_s = gap_ms.min(60_000) as f32 / 1000.0;
+            let step = gain + load_step;
+            let accepted = if gap_ms >= 1_000 {
+                // A return: `Tared` has no check; after the gate, the core's
+                // band, `last − 3 g` to `last + 1.5 × poured + 5 g`.
+                !self.gate_seen || (-3.0..=1.5 * gain.max(0.0) + 5.0).contains(&step)
+            } else {
+                // Not a return: the step band, `3 g + 12 g/s × dt`.
+                step.abs() <= 3.0 + 12.0 * gap_s
+            };
+            if accepted && !std::mem::replace(&mut self.unseen_load, true) {
+                self.coverage.unseen_loads += 1;
+            }
+        }
+        if cup >= 5.0 {
+            let since = *self.gate_since.get_or_insert(self.now);
+            self.gate_seen |= self.now.saturating_sub(since) >= 1_000;
+        } else {
+            self.gate_since = None;
+        }
+    }
+
+    /// I13's zero for a new espresso session: what the scale reads now.
+    fn scale_zero_at_open(&mut self) {
+        self.unseen_load = false;
+        self.flow_checked = false;
+        self.gate_since = None;
+        self.gate_seen = false;
+        self.last_cup_g = self.true_cup_g();
+        self.last_load = self.scale.as_ref().map_or(0.0, |s| s.load_now(self.now));
+        let (now, cup) = (self.now, self.cup.grams);
+        let reads = self
+            .scale
+            .as_mut()
+            .map(|scale| scale.session_opened(now, cup));
+        // The gate and rule (b) assume a session starts from a zeroed cup: a
+        // tare at the start, or a scale already near zero (the pre-shot zero
+        // correction's 2 g). With auto-tare off on a loaded scale, the zero is
+        // the user's and the design makes no weight-stop promise.
+        self.opened_near_zero = self.auto_tare || reads.is_none_or(|g| g.abs() <= 2.0);
     }
 
     /// I6 both ways: the core's reading of the session matches the oracle's.
@@ -670,7 +793,12 @@ impl World {
                 && self.de1.sends_samples()
                 && self.now >= self.link.samples_muted_until
             {
-                self.sample_clock = self.sample_clock.wrapping_add(24);
+                // The DE1's own counter: mains half-cycles, 120 a second at
+                // 60 Hz, running whether or not samples are sent.
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    self.sample_clock = (self.now * 120 / 1_000) as u16;
+                }
                 self.skips_since_sample = 0;
                 self.samples_heard += 1;
                 let sample = self.de1.sample(self.sample_clock);
@@ -708,7 +836,17 @@ impl World {
             .scale
             .as_mut()
             .and_then(|s| s.reading(self.now, self.cup.grams));
+        // A re-zero mid-pour is a disturbance; between pours it's the zero.
+        let pouring = self.open_mode == Some(ActiveMode::Espresso) && self.flowed;
+        let cup = self.cup.grams;
+        if let Some(scale) = self.scale.as_mut()
+            && scale.take_rezero()
+            && !pouring
+        {
+            scale.zero_is_users(cup);
+        }
         if let Some(grams) = reading {
+            self.watch_unseen_load();
             self.stale_open = false;
             self.dead_open = false;
             self.weights_heard += 1;
@@ -1130,20 +1268,40 @@ impl World {
                 if std::mem::replace(&mut self.stopped_this_flow, true) {
                     self.violate(Invariant::I11, "StopTriggered twice in one flow".into());
                 }
+                // A leg firing makes the session owe its stop, even while the
+                // outage check holds the first write (`DESIGN.md` §3.3): an
+                // unsure return then keeps the stop rather than refusing weight.
+                if !self.read_only && self.owed_last.is_none() {
+                    self.owed_last = Some(self.now);
+                }
                 match reason {
-                    StopReason::Weight => {
+                    StopReason::Weight | StopReason::EstimatedWeight => {
                         self.coverage.weight_stops += 1;
-                        if self.unseen {
-                            self.violate(Invariant::I6, "weight stop while unseen".into());
+                        if *reason == StopReason::EstimatedWeight {
+                            self.coverage.estimated_stops += 1;
                         }
+                        if self.unseen {
+                            self.violate(Invariant::I6, format!("{reason:?} stop while unseen"));
+                        }
+                        // Espresso's target; what's in the cup since the
+                        // last tare a person meant.
+                        let grams = self
+                            .scale
+                            .as_ref()
+                            .map_or(self.cup.grams, |s| s.true_net(self.cup.grams));
                         if !self.read_only
+                            && !self.unseen_load
+                            && self.opened_near_zero
+                            && self.open_mode == Some(ActiveMode::Espresso)
+                            // Not a stop that lands on another mode the core
+                            // didn't hear the machine enter.
+                            && self.de1.state == MachineState::Espresso
                             && let Some(target) = self.weight_target()
-                            && self.cup.grams < target - WEIGHT_TOLERANCE_G
+                            && grams < target - WEIGHT_TOLERANCE_G
                         {
-                            let grams = self.cup.grams;
                             self.violate(
                                 Invariant::I13,
-                                format!("weight stop at {grams} g of {target} g"),
+                                format!("{reason:?} stop at a true {grams} g of {target} g"),
                             );
                         }
                     }

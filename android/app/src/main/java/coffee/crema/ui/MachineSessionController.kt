@@ -21,6 +21,7 @@ import coffee.crema.core.ShotDisposition
 import coffee.crema.core.StartPhase
 import coffee.crema.core.StartRefusal
 import coffee.crema.core.StartShotResult
+import coffee.crema.core.StopReason
 import coffee.crema.core.WriteTarget
 import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.newShotId
@@ -409,7 +410,13 @@ internal class MachineSessionController(
             notify(event.content.message)
         }
         lane.on<Event.StopTriggered> { event ->
-            appendLog("Auto-stop: ${event.content.reason.string}")
+            appendLog(
+                if (event.content.reason == StopReason.EstimatedWeight) {
+                    "Auto-stop: on estimate, scale lost"
+                } else {
+                    "Auto-stop: ${event.content.reason.string}"
+                },
+            )
             // Attribute the stop ON the stop-conditions UI (the fired
             // row/card gets a gold highlight) instead of a toast — an
             // unexplained early stop reads as a bug, but a snackbar over

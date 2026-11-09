@@ -14,6 +14,7 @@
 mod auto_stop_tests;
 pub mod calibration_guard;
 mod capture;
+mod cup_trust;
 pub mod de1_uuids;
 pub mod error;
 pub mod event;
@@ -32,6 +33,8 @@ mod packet_sync_tests;
 mod profile_sync;
 #[cfg(test)]
 mod request_gate_tests;
+#[cfg(test)]
+mod scale_estimate_tests;
 #[cfg(test)]
 mod scale_robustness_tests;
 #[cfg(test)]
@@ -81,7 +84,9 @@ use de1_domain::scale_trust::{
     ScaleLink, ScaleWatch, WeightAuthority, prospective_authority, weight_authority,
 };
 use de1_domain::session::SessionChange;
-use de1_domain::session::{ActiveMode, Baseline, Blocked, Observed, Session, is_pre_flow};
+use de1_domain::session::{
+    ActiveMode, Baseline, Blocked, GATE_WEIGHT_G, Observed, Session, is_pre_flow,
+};
 use de1_domain::stop::{LegContext, ResolvedLegs, StopIntent, resolve_legs};
 use de1_domain::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AsRunShot, AutoStop, BeverageType, BrewOverrides,
@@ -91,8 +96,8 @@ use de1_domain::{
     ShotCaptureContext, ShotEvent, ShotMonitor, ShotPhase, ShotRecord, SteamEvent, SteamMonitor,
     StepWeightExit, StopCapture, StopConfig, StopReason, StopTargets, StoredShot,
     TankLevelSmoother, TareSettleWindow, VolumeIntegrator, WaterEvent, WaterMonitor,
-    WeightSpikeGate, WeightUnit, clamp_refill_point_mm, counts_toward_water, pre_shot_zero_offset,
-    sav_counts_volume, shot_disposition, water_tank_depth_mm,
+    WeightSpikeGate, WeightUnit, WeightVerdict, clamp_refill_point_mm, counts_toward_water,
+    pre_shot_zero_offset, sav_counts_volume, shot_disposition, water_tank_depth_mm,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -452,6 +457,9 @@ struct PostShotSettle {
     /// The shot began before the app saw it: its readings include the cup, so
     /// it completes with no weight.
     began_unseen: bool,
+    /// The stop was honoured on its first write, so the drip after it is the
+    /// cup's and can train the drip model.
+    learn_drip: bool,
 }
 
 /// Hard cap on the post-stop drip settle (reaprime uses ≤4 s, despresso ≤2 s).
@@ -670,6 +678,20 @@ pub struct CremaCore {
     /// whether it stabilises into a cup baseline (→ virtual zero) or keeps
     /// moving (→ suppress). `None` when not settling.
     untared_settle: Option<UntaredSettle>,
+    /// Since when the cup-trust gate's condition has held, this session
+    /// (`DESIGN.md` §3.4).
+    gate_since: Option<Duration>,
+    /// When the last DE1 sample arrived: `last` pairs only with one under
+    /// 1 s old.
+    last_sample_at: Option<Duration>,
+    /// A reading arrived after a gap, and the spike gate hasn't passed one
+    /// since: the next it passes goes to the returning check.
+    scale_returning: bool,
+    /// The scale's latest raw reading, grams, for the auto-tare-off check
+    /// when a session opens.
+    last_reading_g: Option<f32>,
+    /// This shot's owed stop needed a retry.
+    stop_retried_this_shot: bool,
     /// Set when a scale (re)connects while a shot is already running
     /// (review #29): the guard's 3 s trip window has long closed, but the
     /// reconnect did NOT re-tare, so the first reading may be the cup's
@@ -966,6 +988,10 @@ struct UntaredSettle {
     band_min: f32,
     band_max: f32,
     band_count: u32,
+    /// A disturbance mid-flow, not an untared cup: the net weight before the
+    /// step. Settled, the zero moves by the step alone; never settled, the
+    /// scale is refused as disturbed (`DESIGN.md` §3.5).
+    disturbed_from: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -1095,6 +1121,11 @@ impl CremaCore {
             untared_cup_tripped: false,
             saw_zero_offset_g: 0.0,
             untared_settle: None,
+            gate_since: None,
+            last_sample_at: None,
+            scale_returning: false,
+            last_reading_g: None,
+            stop_retried_this_shot: false,
             untared_window_reopened: false,
             last_unit_recovery_write: None,
             decent_tare_counter: 253,
@@ -1263,8 +1294,12 @@ impl CremaCore {
         }
         // A scale arriving MID-SHOT was never tared for this shot — reopen
         // the untared-cup window so its first reading is sanity-checked
-        // before the re-armed weight leg can fire (review #29).
-        if self.scale.is_some() && self.shot_started.is_some() {
+        // before the re-armed weight leg can fire (review #29). One returning
+        // to a cup the session already trusted is the returning check's.
+        if self.scale.is_some()
+            && self.shot_started.is_some()
+            && self.session.and_then(|s| s.baseline.last()).is_none()
+        {
             self.untared_window_reopened = true;
         }
         // A scale arriving mid-shot unlocks the SAW leg of an already-armed
@@ -1289,6 +1324,7 @@ impl CremaCore {
     /// AND4 — and benefits every shell.)
     pub fn disconnect_scale(&mut self) {
         self.scale = None;
+        self.last_reading_g = None;
         self.hds = None;
         self.flow = FlowEstimator::new(FlowAlgorithm::default());
         self.scale_watch.disconnect();
@@ -1297,9 +1333,13 @@ impl CremaCore {
         self.shot_metrics.reset_scale();
         // The untared-cup guard's latches describe THIS scale's readings —
         // a different scale (or the same one re-taring on reconnect) must
-        // start clean (review #26).
-        self.untared_cup_tripped = false;
-        self.saw_zero_offset_g = 0.0;
+        // start clean (review #26). Mid-session they stay until it closes,
+        // so a scale returning to a virtual-zero shot nets the same and the
+        // returning check compares like with like (§3.5).
+        if self.session.is_none() {
+            self.untared_cup_tripped = false;
+            self.saw_zero_offset_g = 0.0;
+        }
         self.untared_settle = None;
         // A scale vanishing mid-shot drops the SAW leg of an armed AutoStop
         // (its weight stream is gone; volume / max-time keep the shot bounded).
@@ -1467,11 +1507,16 @@ impl CremaCore {
             volume_stop_with_scale: self.volume_stop_with_scale,
             limit_from_ml: self.limit_from_ml,
         };
+        let refused = self
+            .session
+            .filter(|s| s.mode == ActiveMode::Espresso)
+            .and_then(|s| s.weight_refused());
         resolve_legs(
             intent,
             LegContext {
                 authority: self.espresso_authority(),
                 scale_gone: self.scale_link().is_gone(),
+                refused,
             },
         )
     }
@@ -3782,6 +3827,7 @@ impl CremaCore {
                 return;
             }
         };
+        self.last_sample_at = Some(now);
         // Proof of flow counts before anything this sample sends.
         self.note_flow_proof(sample.group_flow);
         // A link's first espresso state waits for this sample's frame: a lower
@@ -3946,7 +3992,9 @@ impl CremaCore {
                 }
             }
         }
-        let Some(reading) = scale.parse_reading(data) else {
+        let parsed = scale.parse_reading(data);
+        self.last_reading_g = parsed.as_ref().map(|r| r.weight_g).or(self.last_reading_g);
+        let Some(reading) = parsed else {
             // Not a weight packet — delegate to the per-device absorber.
             // The Decent variant uses this to snap the firmware version
             // from its `0x0A` LCD-ack frame (mirroring legacy
@@ -3963,6 +4011,10 @@ impl CremaCore {
             }
             return;
         };
+        // The first reading after a gap is checked against the cup's last
+        // trusted weight before anything else reads it (§3.5): the first one
+        // the spike gate passes, so a corrupt frame can't stand in for it.
+        self.scale_returning |= !self.scale_watch.link(now, self.scale_dormant()).is_fresh();
         // A fresh reading re-arms the lost-scale watchdog.
         self.scale_watch.reading(now);
         // The first weight notification stands in for a scale-connected hook:
@@ -4030,21 +4082,7 @@ impl CremaCore {
         let Some(net_weight) = self.untared_guard(raw_g, now, out) else {
             // Mid-settle: show the raw reading (the user should see the cup
             // land) but keep the estimator / metrics / auto-stop out of it.
-            self.last_scale_estimate = Some(Estimate {
-                weight: raw_g,
-                flow: 0.0,
-            });
-            out.events.push(Event::ScaleReading {
-                weight: raw_g,
-                flow: 0.0,
-                device_flow: reading.flow_g_per_s,
-                device_timer: reading.timer_ms,
-                device_volume: reading.volume,
-                device_standby: reading.standby_minutes,
-                device_battery: reading.battery_percent,
-                device_flow_smoothing: reading.flow_smoothing,
-                device_auto_stop: reading.auto_stop,
-            });
+            Self::push_settling_reading(&mut self.last_scale_estimate, &reading, raw_g, out);
             return;
         };
         // Spike gate (Decenza weightprocessor parity, their issue #610): a
@@ -4052,14 +4090,35 @@ impl CremaCore {
         // corrupt BLE frame — drop the whole reading so it reaches neither
         // the estimator, the chart, nor stop-at-weight. A genuine step
         // change (cup swapped mid-shot) recovers after three agreeing
-        // samples; at rest the gate only tracks the baseline.
-        if self
-            .weight_gate
-            .rejects(net_weight, self.shot_started.is_some())
-        {
+        // samples; at rest the gate only tracks the baseline. While a
+        // session flows, a step over the band is a disturbance (§3.5).
+        // The returning check owns the first reading after a gap, not the
+        // step detector.
+        let from_net = self.weight_gate.last_accepted();
+        let verdict = self.weight_gate.check(
+            net_weight,
+            now,
+            self.shot_started.is_some(),
+            self.weighing_mode().is_some() && !self.scale_returning,
+        );
+        if verdict == WeightVerdict::Reject {
             return;
         }
+        if std::mem::take(&mut self.scale_returning) {
+            self.check_returning_scale(net_weight);
+        }
+        match verdict {
+            WeightVerdict::Reject => return,
+            WeightVerdict::Disturbed if self.on_disturbed(from_net, raw_g, now) => {
+                Self::push_settling_reading(&mut self.last_scale_estimate, &reading, raw_g, out);
+                return;
+            }
+            WeightVerdict::Disturbed | WeightVerdict::Accept => {}
+        }
         let estimate = self.flow.update(net_weight, now);
+        if verdict == WeightVerdict::Accept {
+            self.update_trust(net_weight, estimate.flow, now);
+        }
         // Cache the latest smoothed weight + flow so the DE1 telemetry
         // handler can fold them onto the next `Event::Telemetry` —
         // powers the weight-based puck-resistance metric (see
@@ -4106,6 +4165,31 @@ impl CremaCore {
         // A deferred completion locks on this fresh reading once the drip has
         // settled (geota/crema#64) — the scale's stream is the primary driver.
         self.maybe_finalize_post_shot_settle(now, out);
+    }
+
+    /// Report a reading held in a settle: the raw weight, so the user sees the
+    /// cup land, with no flow, and nothing downstream reads it.
+    fn push_settling_reading(
+        last_scale_estimate: &mut Option<Estimate>,
+        reading: &de1_scale::ScaleReading,
+        raw_g: f32,
+        out: &mut CoreOutput,
+    ) {
+        *last_scale_estimate = Some(Estimate {
+            weight: raw_g,
+            flow: 0.0,
+        });
+        out.events.push(Event::ScaleReading {
+            weight: raw_g,
+            flow: 0.0,
+            device_flow: reading.flow_g_per_s,
+            device_timer: reading.timer_ms,
+            device_volume: reading.volume,
+            device_standby: reading.standby_minutes,
+            device_battery: reading.battery_percent,
+            device_flow_smoothing: reading.flow_smoothing,
+            device_auto_stop: reading.auto_stop,
+        });
     }
 
     /// Report a scale reading as zero weight — the pre-tare suppression shared
@@ -4214,8 +4298,19 @@ impl CremaCore {
             if settle.band_count >= UNTARED_STABLE_MIN_READINGS
                 && now.saturating_sub(settle.band_started) >= UNTARED_STABLE_MIN
             {
-                // A cup at rest: latch the software zero and carry on.
-                let offset = (settle.band_min + settle.band_max) / 2.0;
+                // A cup at rest: latch the software zero and carry on. After a
+                // disturbance the zero moves by the step alone.
+                let at_rest = (settle.band_min + settle.band_max) / 2.0;
+                let mut offset = settle.disturbed_from.map_or(at_rest, |from| at_rest - from);
+                // A disturbance settling back into what an empty cup reads
+                // before the gate is a load leaving: the zero stays. Moving
+                // it would carry the load into every later reading.
+                if settle.disturbed_from.is_some()
+                    && (-1.0..=GATE_WEIGHT_G).contains(&(at_rest - self.saw_zero_offset_g))
+                {
+                    offset = self.saw_zero_offset_g;
+                }
+                let moved = offset - self.saw_zero_offset_g;
                 self.saw_zero_offset_g = offset;
                 self.untared_settle = None;
                 // Fresh flow trend from net values — the -offset step would
@@ -4226,8 +4321,20 @@ impl CremaCore {
                 if let Some(session) = self.session.as_mut() {
                     session.tared();
                 }
-                out.events.push(Event::SawAutoZeroed { offset_g: offset });
+                out.events.push(Event::SawAutoZeroed { offset_g: moved });
                 return Some(raw_g - offset);
+            }
+            if settle.disturbed_from.is_some()
+                && now.saturating_sub(settle.started) >= UNTARED_SETTLE_WINDOW
+            {
+                // Still moving: a hand, not a cup at rest. Weight is off for
+                // the session and the backstop bounds it.
+                self.untared_settle = None;
+                if let Some(session) = self.session.as_mut() {
+                    session.refuse(Blocked::ScaleDisturbed);
+                }
+                self.refresh_auto_stop_targets();
+                return Some(raw_g - self.saw_zero_offset_g);
             }
             if now.saturating_sub(settle.started) >= UNTARED_SETTLE_WINDOW {
                 // Never settled: the conservative fallback — SAW off for the
@@ -4274,6 +4381,7 @@ impl CremaCore {
                 band_min: raw_g,
                 band_max: raw_g,
                 band_count: 1,
+                disturbed_from: None,
             });
             return None;
         }
@@ -5455,6 +5563,7 @@ impl CremaCore {
             ended_without_triggering_stop,
             record,
             began_unseen,
+            learn_drip,
             ..
         } = settle;
         // Drain the running peak / final-weight tracker into the event — one
@@ -5497,7 +5606,7 @@ impl CremaCore {
         // settled weight rather than the machine-idle snapshot, sharpening the
         // learned drip; the model's own validity gates (flow ≥ 0.5, dispersion,
         // outlier-vs-expected) reject bad samples.
-        if let (Some(capture), Some(final_g)) = (stop_capture, final_weight) {
+        if let (true, Some(capture), Some(final_g)) = (learn_drip, stop_capture, final_weight) {
             let profile = self.last_active_profile_title.clone().unwrap_or_default();
             let scale_label = self.scale.as_ref().map_or("", |s| s.label()).to_owned();
             let drip = f64::from((final_g - capture.weight_g).max(0.0));
@@ -5589,9 +5698,11 @@ impl CremaCore {
                 self.saw_zero_offset_g = 0.0;
                 self.untared_settle = None;
                 self.untared_window_reopened = false;
+                self.gate_since = None;
                 // Re-arm the "did the app stop this shot" latch — see the
                 // field doc.
                 self.stop_triggered_this_shot = false;
+                self.stop_retried_this_shot = false;
                 // Fresh shot → every step's weight exit re-arms.
                 self.step_weight.reset_shot();
                 self.scale_timer_stopped_for_drop = false;
@@ -5609,10 +5720,10 @@ impl CremaCore {
                 self.shot_began_unseen = self.began_unseen();
                 self.auto_tare_pending = self.auto_tare && !self.shot_began_unseen;
                 // With auto-tare off the user's own zero stands.
-                if !self.auto_tare
-                    && let Some(session) = self.session.as_mut()
-                {
-                    session.tared();
+                // With auto-tare off the user's own zero stands, unless the
+                // scale reads a load when the shot opens (§3.5).
+                if !self.auto_tare {
+                    self.take_users_zero();
                 }
                 self.auto_tare_window.reset();
                 self.last_auto_tare = None;
@@ -5716,6 +5827,7 @@ impl CremaCore {
                     best_weight: self.shot_metrics.final_weight.unwrap_or(f32::MIN),
                     last_rise: now,
                     began_unseen: self.shot_began_unseen,
+                    learn_drip: !self.stop_retried_this_shot,
                 };
                 // Post-stop drip settle (geota/crema#64): crema's drip-compensated
                 // stop-at-weight halts the pump EARLY, so with a scale paired the
@@ -5789,8 +5901,10 @@ impl CremaCore {
     fn map_water_event(&mut self, event: WaterEvent, now: Duration, out: &mut CoreOutput) {
         match event {
             WaterEvent::Started(kind) => {
-                // Each session's volume counts from its own start.
+                // Each session's volume counts from its own start, and its cup
+                // from its own gate.
                 self.volume_integrator.reset();
+                self.gate_since = None;
                 // Hot water with a scale: the user's volume IS the target,
                 // auto-translated to grams — no separate setting. Tare on
                 // entry (with the settle gate, same as an espresso start)
@@ -5802,10 +5916,8 @@ impl CremaCore {
                 // operational scale; never time mode). Never the machine
                 // echo, which can carry the 250 ml backstop (review #25).
                 if kind == de1_domain::WaterSessionKind::HotWater {
-                    if !self.auto_tare
-                        && let Some(session) = self.session.as_mut()
-                    {
-                        session.tared();
+                    if !self.auto_tare {
+                        self.take_users_zero();
                     }
                     // The pour's stop exists from its start (`DESIGN.md`
                     // §3.3), with its weight target and its V.
@@ -5915,8 +6027,10 @@ impl CremaCore {
             .auto_stop
             .as_ref()
             .is_some_and(|f| f.legs == StopLegs::Espresso);
-        let any_leg =
-            targets.weight.is_some() || targets.volume.is_some() || targets.max_time.is_some();
+        let any_leg = targets.weight.is_some()
+            || targets.volume.is_some()
+            || targets.max_time.is_some()
+            || self.resolved_legs().estimated.is_some();
         (flowing && any_leg, targets)
     }
 
@@ -5947,6 +6061,15 @@ impl CremaCore {
         self.resolved_legs().blocked
     }
 
+    /// The weight row's note: what the estimate is doing in the weight leg's
+    /// place, or why weight is blocked.
+    pub(crate) fn weight_blocked_note(&self) -> Option<&'static str> {
+        if !self.stop_on_weight || self.weight_target_disabled {
+            return None;
+        }
+        self.resolved_legs().note()
+    }
+
     /// Whether the open session began before the app saw it, so nothing on
     /// the scale can be told from its tare. Never on a mirror: joining late
     /// says nothing about the shot, which the hub saw and stops on weight.
@@ -5971,7 +6094,7 @@ impl CremaCore {
             "maxTime": t.max_time,
             "weightConfigured": self.effective_target_weight(),
             "weightBlocked": self.weight_stop_blocked_by(),
-            "weightBlockedNote": self.weight_blocked().map(Blocked::note),
+            "weightBlockedNote": self.weight_blocked_note(),
         })
         .to_string()
     }
@@ -6762,7 +6885,12 @@ mod tests {
         }
         core.on_notification(Source::De1State, &[4, 4], t); // first flow
         assert!((core.pre_shot_zero_offset_g + 0.4).abs() < 1e-4);
-        // A steady raw 10.0 g reads as 10.4 g — the true yield.
+        // A pour to a steady raw 10.0 g reads as 10.4 g — the true yield. (A
+        // jump straight to it would be a disturbance, `DESIGN.md` §3.5.)
+        for i in 1..=25u8 {
+            t += 100;
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(f32::from(i) * 0.4), t);
+        }
         let mut w = None;
         for _ in 0..40 {
             t += 100;
@@ -9484,9 +9612,11 @@ mod tests {
     }
 
     #[test]
-    fn the_virtual_zero_dies_with_the_scale() {
-        // Review #26, second leg: disconnecting the scale clears the
-        // latches — a replacement scale starts clean.
+    fn the_virtual_zero_survives_a_reconnect_mid_shot_and_dies_with_the_shot() {
+        // `DESIGN.md` §3.5: the zero offsets stay until the session closes,
+        // so a scale returning to a virtual-zero shot nets the same. Review
+        // #26's second leg still holds between sessions: a disconnect then
+        // clears the latches, so a replacement scale starts clean.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
@@ -9496,17 +9626,25 @@ mod tests {
             core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
         }
         core.on_notification(Source::ScaleWeight, &bookoo_packet(30_010), 2_700);
+        let reading = |out: &CoreOutput| {
+            out.events
+                .iter()
+                .find_map(|e| match e {
+                    Event::ScaleReading { weight, .. } => Some(*weight),
+                    _ => None,
+                })
+                .expect("a scale reading")
+        };
         core.disconnect_scale();
         core.connect_scale("BOOKOO_SC", &[]);
-        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(10_000), 5_000);
-        let weight = out
-            .events
-            .iter()
-            .find_map(|e| match e {
-                Event::ScaleReading { weight, .. } => Some(*weight),
-                _ => None,
-            })
-            .expect("a scale reading");
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(30_100), 5_000);
+        let weight = reading(&out);
+        assert!(weight.abs() < 1.0, "the shot's zero nets the cup: {weight}");
+        core.on_notification(Source::De1State, &[2, 0], 6_000);
+        core.disconnect_scale();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(10_000), 9_000);
+        let weight = reading(&out);
         assert!(weight > 0.0, "offset must not survive the scale: {weight}");
     }
 
@@ -9560,16 +9698,11 @@ mod tests {
         // …while the following sane ramp passes the gate and SAW (which
         // crosses on its ROBUST smoothed weight, so it needs the ramp, not
         // one sample) still stops at the genuine target.
+        // At a pour's 4 g/s: a jump of 7 g in 0.3 s is a disturbance now
+        // (`DESIGN.md` §3.5).
         let mut stopped = false;
-        for (cg, at) in [
-            (1_500u32, 4_700u64),
-            (2_200, 5_000),
-            (2_900, 5_300),
-            (3_500, 5_600),
-            (3_800, 5_900),
-            (4_000, 6_200),
-            (4_100, 6_500),
-        ] {
+        for i in 1..=30u32 {
+            let (cg, at) = (1_100 + i * 100, 4_700 + u64::from(i) * 250);
             let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
             stopped |= out.events.contains(&Event::StopTriggered {
                 reason: StopReason::Weight,
@@ -9595,11 +9728,20 @@ mod tests {
         // The reconnect reopened the untared window (review #29): the first
         // reading is the sanity check. A plausible 10 g consumes it and arms.
         core.on_notification(Source::ScaleWeight, &bookoo_packet(1_000), 5_500);
-        // A 35 g reading past the arming delay must now trip SAW.
-        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
-        assert!(out.events.contains(&Event::StopTriggered {
-            reason: StopReason::Weight,
-        }));
+        // The pour climbing at 4 g/s, past the arming delay, must trip SAW. (A
+        // jump straight to 35 g would be a disturbance, `DESIGN.md` §3.5.)
+        let mut stopped = false;
+        for i in 1..=60u32 {
+            let out = core.on_notification(
+                Source::ScaleWeight,
+                &bookoo_packet(1_000 + i * 40),
+                5_500 + u64::from(i) * 100,
+            );
+            stopped |= out.events.contains(&Event::StopTriggered {
+                reason: StopReason::Weight,
+            });
+        }
+        assert!(stopped);
     }
 
     #[test]
@@ -10548,10 +10690,16 @@ mod tests {
         // The auto-tare lands: the scale reports ~zero, clearing the settling
         // gate (otherwise the pre-tare readings below would be suppressed).
         core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 1_050);
-        // Weight rises to 32 g then settles at 30 g — peak ≥ 32, final = 30.
-        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_100);
-        core.on_notification(Source::ScaleWeight, &bookoo_packet(3_200), 1_200);
-        core.on_notification(Source::ScaleWeight, &bookoo_packet(3_000), 1_300);
+        // Weight rises to 32 g then settles at 30 g — peak ≥ 32, final = 30 —
+        // at a pour's pace (a jump would be a disturbance, `DESIGN.md` §3.5).
+        let mut at = 1_050;
+        for cg in (40..=3_200u32)
+            .step_by(40)
+            .chain((3_000..3_200).step_by(40).rev())
+        {
+            at += 100;
+            core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
+        }
         // Transition to Idle to complete the shot. With a scale paired the
         // completion is deferred for the post-stop drip settle (#64) — no more
         // readings arrive, so the backstop tick finalizes it with the last

@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use crate::session::{Baseline, Blocked};
+use crate::session::{Baseline, Blocked, LastTrusted};
 
 /// A connected scale with no reading for this long is stale.
 pub const STALE_AFTER: Duration = Duration::from_secs(1);
@@ -69,24 +69,39 @@ impl ScaleLink {
 }
 
 /// What the weight may do for the session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WeightAuthority {
     /// Weight can stop the session.
     Trusted,
     /// May yet become trusted: the tare is pending, or the first reading.
     Pending,
-    /// The scale went quiet before flow reached the cup.
+    /// Flow had reached the cup and the scale can't speak for it now: the
+    /// estimate finishes from the last trusted weight.
+    Lost(LastTrusted),
+    /// The scale went quiet before flow reached the cup, or was disturbed
+    /// then.
     Blind,
     /// Weight can't be used for this session.
     Refused(Blocked),
 }
 
-/// The authority for an open session: the design's table, before PR 8 adds
-/// `Baseline::Trusted` and `Lost`. `flowing`: the session's flow has started.
+/// The authority for an open session (`DESIGN.md` §3.4's table). `flowing`:
+/// the session's flow has started.
 #[must_use]
 pub fn weight_authority(baseline: Baseline, link: ScaleLink, flowing: bool) -> WeightAuthority {
     match baseline {
-        Baseline::Refused { why } => WeightAuthority::Refused(why),
+        Baseline::Refused {
+            last: Some(last), ..
+        } => WeightAuthority::Lost(last),
+        Baseline::Refused {
+            why: Blocked::ScaleDisturbed,
+            last: None,
+        } => WeightAuthority::Blind,
+        Baseline::Refused { why, last: None } => WeightAuthority::Refused(why),
+        Baseline::Trusted(last) => match link {
+            ScaleLink::Fresh { .. } => WeightAuthority::Trusted,
+            _ => WeightAuthority::Lost(last),
+        },
         Baseline::Unknown => match link {
             ScaleLink::Fresh { .. } | ScaleLink::Silent { .. } | ScaleLink::Dormant => {
                 WeightAuthority::Pending
@@ -402,7 +417,12 @@ mod tests {
     #[test]
     fn the_authority_table() {
         use Baseline::{Tared, Unknown};
-        use WeightAuthority::{Blind, Pending, Refused, Trusted};
+        use WeightAuthority::{Blind, Lost, Pending, Refused, Trusted};
+        let last = LastTrusted {
+            weight_g: 20.0,
+            pour_ml: 30.0,
+            at: ms(0),
+        };
         let fresh = ScaleLink::Fresh {
             last_reading: ms(0),
         };
@@ -425,6 +445,17 @@ mod tests {
             (Tared, stale, false, Blind),
             (Tared, dead, true, Blind),
             (Tared, ScaleLink::Absent, true, Blind),
+            (Baseline::Trusted(last), fresh, true, Trusted),
+            (Baseline::Trusted(last), silent, true, Lost(last)),
+            (
+                Baseline::Trusted(last),
+                ScaleLink::Dormant,
+                true,
+                Lost(last),
+            ),
+            (Baseline::Trusted(last), stale, true, Lost(last)),
+            (Baseline::Trusted(last), dead, true, Lost(last)),
+            (Baseline::Trusted(last), ScaleLink::Absent, true, Lost(last)),
         ];
         for (baseline, link, flowing, authority) in cases {
             assert_eq!(
@@ -435,12 +466,23 @@ mod tests {
         }
         let refused = Baseline::Refused {
             why: Blocked::BeganUnseen,
+            last: None,
+        };
+        let rezeroed = Baseline::Refused {
+            why: Blocked::ScaleRezeroed,
+            last: Some(last),
+        };
+        let disturbed_early = Baseline::Refused {
+            why: Blocked::ScaleDisturbed,
+            last: None,
         };
         for link in [fresh, silent, stale, dead, ScaleLink::Absent] {
             assert_eq!(
                 weight_authority(refused, link, true),
                 Refused(Blocked::BeganUnseen)
             );
+            assert_eq!(weight_authority(rezeroed, link, true), Lost(last));
+            assert_eq!(weight_authority(disturbed_early, link, true), Blind);
         }
     }
 

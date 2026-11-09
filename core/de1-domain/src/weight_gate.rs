@@ -18,12 +18,36 @@
 //! always rejected and never count toward recovery — a NaN plateau is
 //! never a real cup.
 
+use std::time::Duration;
+
 /// Largest believable single-sample weight change during a shot, grams.
 /// Espresso flow peaks ~4 g/s and scales report at 5–10 Hz, so a real
 /// between-sample delta is <1 g; 100 g leaves two orders of magnitude of
 /// headroom while still catching codec glitches (Decenza uses the same
 /// figure).
 pub const MAX_SAMPLE_JUMP_G: f32 = 100.0;
+
+/// A step between consecutive readings over this, plus
+/// [`DISTURB_RATE_G_S`] × the time between them, means something pressed on,
+/// landed on or was lifted off the scale (`DESIGN.md` §3.5). Real steps are
+/// far smaller: 0.31 g at most in the capture's 42 s of flow.
+pub const DISTURB_STEP_G: f32 = 3.0;
+
+/// The flow allowance on the disturbance step, g/s: covers a delayed reading
+/// in a fast hot-water pour.
+pub const DISTURB_RATE_G_S: f32 = 12.0;
+
+/// What the gate makes of a reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeightVerdict {
+    /// A believable reading.
+    Accept,
+    /// A spike: drop it.
+    Reject,
+    /// Passed on, but the scale was disturbed: a step over the band, or an
+    /// accepted plateau past [`MAX_SAMPLE_JUMP_G`].
+    Disturbed,
+}
 
 /// Consecutive out-of-band samples that *agree with each other's plateau*
 /// (i.e. keep arriving) before the gate accepts the new level — a real
@@ -38,8 +62,9 @@ const RECOVERY_SAMPLES: u8 = 3;
 /// [`reset`]: WeightSpikeGate::reset
 #[derive(Debug, Default)]
 pub struct WeightSpikeGate {
-    /// The last weight that passed the gate, grams.
+    /// The last weight that passed the gate, grams, and when.
     last_accepted_g: Option<f32>,
+    last_accepted_at: Option<Duration>,
     /// Consecutive rejected samples since the last accepted one.
     rejected_run: u8,
 }
@@ -89,11 +114,49 @@ impl WeightSpikeGate {
         }
     }
 
+    /// Feed one net weight sample at `now`. `gating`: a shot is in progress,
+    /// so spikes are rejected. `watching`: a session is flowing, so a step
+    /// over the band is a disturbance, in either direction.
+    pub fn check(
+        &mut self,
+        weight_g: f32,
+        now: Duration,
+        gating: bool,
+        watching: bool,
+    ) -> WeightVerdict {
+        let before = self.last_accepted_g.zip(self.last_accepted_at);
+        let recovering = self.rejected_run > 0;
+        if self.rejects(weight_g, gating) {
+            return WeightVerdict::Reject;
+        }
+        self.last_accepted_at = Some(now);
+        let Some((last_g, last_at)) = before else {
+            return WeightVerdict::Accept;
+        };
+        let dt = now.saturating_sub(last_at).as_secs_f32();
+        let step = (weight_g - last_g).abs();
+        // An accepted plateau after rejected spikes compares against the
+        // level before them.
+        let plateau = recovering && step > MAX_SAMPLE_JUMP_G;
+        if watching && (plateau || step > DISTURB_STEP_G + DISTURB_RATE_G_S * dt) {
+            WeightVerdict::Disturbed
+        } else {
+            WeightVerdict::Accept
+        }
+    }
+
+    /// The last weight that passed, grams.
+    #[must_use]
+    pub fn last_accepted(&self) -> Option<f32> {
+        self.last_accepted_g
+    }
+
     /// Forget the baseline — call when the weight legitimately steps
     /// (shot start, tare landed, software re-zero) so the next sample
     /// re-baselines instead of reading as a jump.
     pub fn reset(&mut self) {
         self.last_accepted_g = None;
+        self.last_accepted_at = None;
         self.rejected_run = 0;
     }
 }
@@ -101,6 +164,84 @@ impl WeightSpikeGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ms(ms: u64) -> Duration {
+        Duration::from_millis(ms)
+    }
+
+    /// The band at a scale's 10 Hz: 3 g + 12 g/s × 0.1 s = 4.2 g.
+    #[test]
+    fn the_band_at_10_hz_is_4_2_g_either_way() {
+        let mut gate = WeightSpikeGate::new();
+        assert_eq!(gate.check(10.0, ms(0), true, true), WeightVerdict::Accept);
+        assert_eq!(gate.check(14.1, ms(100), true, true), WeightVerdict::Accept);
+        assert_eq!(
+            gate.check(18.5, ms(200), true, true),
+            WeightVerdict::Disturbed
+        );
+        assert_eq!(
+            gate.check(14.2, ms(300), true, true),
+            WeightVerdict::Disturbed
+        );
+        assert_eq!(gate.check(10.1, ms(400), true, true), WeightVerdict::Accept);
+    }
+
+    /// At 5 Hz the band widens with the time between readings: 5.4 g.
+    #[test]
+    fn the_band_at_5_hz_is_5_4_g() {
+        let mut gate = WeightSpikeGate::new();
+        assert_eq!(gate.check(10.0, ms(0), true, true), WeightVerdict::Accept);
+        assert_eq!(gate.check(15.3, ms(200), true, true), WeightVerdict::Accept);
+        assert_eq!(
+            gate.check(20.9, ms(400), true, true),
+            WeightVerdict::Disturbed
+        );
+        // A reading 2 s late in a 10 g/s pour is inside 3 + 24 g.
+        assert_eq!(
+            gate.check(40.9, ms(2_400), true, true),
+            WeightVerdict::Accept
+        );
+    }
+
+    #[test]
+    fn a_step_is_only_a_disturbance_while_a_session_flows() {
+        let mut gate = WeightSpikeGate::new();
+        assert_eq!(gate.check(0.0, ms(0), false, false), WeightVerdict::Accept);
+        assert_eq!(
+            gate.check(300.0, ms(100), false, false),
+            WeightVerdict::Accept
+        );
+        assert_eq!(
+            gate.check(320.0, ms(200), false, true),
+            WeightVerdict::Disturbed
+        );
+    }
+
+    #[test]
+    fn an_accepted_plateau_past_the_spike_limit_is_a_disturbance() {
+        let mut gate = WeightSpikeGate::new();
+        assert_eq!(gate.check(10.0, ms(0), true, true), WeightVerdict::Accept);
+        assert_eq!(
+            gate.check(320.0, ms(100), true, true),
+            WeightVerdict::Reject
+        );
+        assert_eq!(
+            gate.check(321.0, ms(200), true, true),
+            WeightVerdict::Reject
+        );
+        assert_eq!(
+            gate.check(322.0, ms(300), true, true),
+            WeightVerdict::Disturbed
+        );
+    }
+
+    #[test]
+    fn a_reset_clears_the_comparison() {
+        let mut gate = WeightSpikeGate::new();
+        assert_eq!(gate.check(10.0, ms(0), true, true), WeightVerdict::Accept);
+        gate.reset();
+        assert_eq!(gate.check(40.0, ms(100), true, true), WeightVerdict::Accept);
+    }
 
     #[test]
     fn passes_normal_shot_weights() {
