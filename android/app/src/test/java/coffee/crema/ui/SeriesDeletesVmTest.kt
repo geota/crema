@@ -72,7 +72,23 @@ class SeriesDeletesVmTest {
         VmHarness.idle()
     }
 
-    private fun rowsOnDisk() = rowsFile.takeIf { it.exists() }?.readText().orEmpty()
+    /**
+     * The rows file as saved, or "" when there's none yet. A save renames the
+     * old file aside, then the new one into place, so between an exists() and a
+     * read the file can be missing for a moment (FileNotFoundException on CI,
+     * #383): a read that misses while a file is due tries again.
+     */
+    private fun rowsOnDisk(): String {
+        repeat(100) {
+            try {
+                return rowsFile.readText()
+            } catch (_: java.io.FileNotFoundException) {
+                if (!SafeFile.backupOf(rowsFile).exists() && !rowsFile.exists()) return ""
+                Thread.sleep(5)
+            }
+        }
+        return rowsFile.readText()
+    }
 
     @Test
     fun `deleting a loaded shot deletes its series`() {
@@ -132,6 +148,7 @@ class SeriesDeletesVmTest {
         VmHarness.idleUntil("the restored row's series went") { !series("restored").exists() }
         assertTrue(series("both").exists())
         assertEquals(listOf("both"), VmHarness.ownState(vm).history.map { it.id })
-        assertFalse("\"restored\"" in rowsOnDisk() && "\"old\"" in rowsOnDisk())
+        val onDisk = rowsOnDisk()
+        assertFalse("\"restored\"" in onDisk && "\"old\"" in onDisk)
     }
 }
