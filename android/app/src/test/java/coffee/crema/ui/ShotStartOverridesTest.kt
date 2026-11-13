@@ -153,7 +153,9 @@ class ShotStartOverridesTest {
         // upload of the desired profile lands.
         bridge.onNotification(coffee.crema.core.NotificationSource.DE1_MMR_READ, modelReply, 0uL)
         bridge.onNotification(coffee.crema.core.NotificationSource.DE1_STATE, idle, 0uL)
-        val first = out(bridge.connectSweep("{}", 0uL))
+        // Past any desired-profile settle the startup began (the core waits
+        // DESIRED_SETTLE_MS after each change; the startup can change it twice).
+        val first = out(bridge.connectSweep("{}", 10_000uL))
         assertEquals(1, uploads(first), "the connect uploads")
         ackAll(bridge, first)
         assertNotNull(json.decodeFromString(ProfileSyncStatus.serializer(), bridge.profileSyncStatus()).lastPushed)
@@ -168,8 +170,9 @@ class ShotStartOverridesTest {
         drainCoreLane(vm)
 
         // The real reconnect: its on-ready sweep uploads the profile.
-        bridge.onNotification(coffee.crema.core.NotificationSource.DE1_STATE, idle, 0uL)
-        val again = out(bridge.connectSweep("{}", 0uL))
+        // Later than any settle the restore's re-push could start.
+        bridge.onNotification(coffee.crema.core.NotificationSource.DE1_STATE, idle, 20_000uL)
+        val again = out(bridge.connectSweep("{}", 20_000uL))
         assertEquals(1, uploads(again), "the reconnect uploads")
     }
 
