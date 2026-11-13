@@ -1402,6 +1402,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The core's shot-quality analysis over a stored shot (review #39). */
     fun analyzeShotQuality(shot: StoredShot): ShotQualityReport? = library.analyzeShotQuality(shot)
+    fun pourAverages(shot: StoredShot): coffee.crema.core.PourAverages? = library.pourAverages(shot)
 
     /** All profiles (built-ins + customs) as the core's `.jsonl` profile file, or null when empty. */
     fun allProfilesFile(): String? = library.allProfilesFile()

@@ -29,6 +29,7 @@
 		shotFilename,
 		exportStoredShotAsV2Json,
 		peaksOf,
+		pourAveragesOf,
 		shotStamp,
 		yieldOf,
 		flatSamplesOf,
@@ -407,6 +408,21 @@
 	const peakPressureM = $derived(convertPressure(peaks.peakPressure, settings.current.pressureUnit));
 	/** Peak temperature in the chosen temperature unit. */
 	const peakTempM = $derived(convertTemp(peaks.peakTemp, settings.current.tempUnit));
+	/**
+	 * The pour's averages (#299), first flow to last, as one line in the
+	 * chosen units — or null with no pour in the samples, so nothing shows.
+	 */
+	const pourAverageLine = $derived.by(() => {
+		const a = pourAveragesOf(shot);
+		if (a === null) return null;
+		const p = convertPressure(a.pressure, settings.current.pressureUnit);
+		const parts = [`${p.value} ${p.unit}`, `${a.flow.toFixed(1)} ml/s`];
+		if (a.headTemp != null) {
+			const t = convertTemp(a.headTemp, settings.current.tempUnit);
+			parts.push(`${t.value}${t.unit}`);
+		}
+		return parts.join(' · ');
+	});
 
 	// ── Grinder model override (#81) ─────────────────────────────────────
 	// The shot's own override wins; empty input clears it and the
@@ -1175,6 +1191,9 @@
 				<p class="pshot-more">
 					Peak weight {peakWeightM.value} {peakWeightM.unit} · Ratio {ratioLabel(shot)} · {flatSeries.length} samples
 				</p>
+				{#if pourAverageLine}
+					<p class="pshot-more" data-testid="pour-averages">Pour average {pourAverageLine}</p>
+				{/if}
 			{/if}
 
 			{@render qualityCard()}
@@ -1563,6 +1582,10 @@
 			<div class="hi-metric-v">{flatSeries.length}</div>
 		</div>
 	</div>
+	{#if pourAverageLine}
+		<!-- The pour's averages (#299), beside the peaks above. -->
+		<p class="hi-pour-avg" data-testid="pour-averages">Pour average {pourAverageLine}</p>
+	{/if}
 	{/if}
 
 	<!-- Rating (left) + the grind stepper (right) share one line (issue
@@ -1811,6 +1834,12 @@
 		display: grid;
 		grid-template-columns: repeat(7, minmax(0, 1fr));
 		gap: 6px;
+	}
+	.hi-pour-avg {
+		margin: -4px 0 0;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--fg-muted);
 	}
 	/* Brew rows carry 6 method-shaped tiles (issue #10); editable ones
 	   hold a QuickStepper, so give the row a touch more room. */

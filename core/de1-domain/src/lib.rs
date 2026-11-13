@@ -96,6 +96,7 @@ pub mod ids;
 pub mod maintenance;
 pub mod mode_targets;
 pub mod oauth_callback;
+pub mod pour_averages;
 pub mod profile;
 pub mod profile_bounds;
 pub mod profile_file;

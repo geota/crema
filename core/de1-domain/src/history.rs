@@ -654,6 +654,13 @@ impl StoredShot {
         self.record.peaks()
     }
 
+    /// The pour's averages, derived on read like [`peaks`](Self::peaks) —
+    /// see [`crate::pour_averages`].
+    #[must_use]
+    pub fn pour_averages(&self) -> Option<crate::pour_averages::PourAverages> {
+        crate::pour_averages::pour_averages(&self.record)
+    }
+
     /// Serialize to pretty JSON — a stable, human-readable format the shell
     /// can persist wherever it likes.
     ///

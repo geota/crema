@@ -62,6 +62,7 @@ import coffee.crema.ui.rememberListOptString
 import coffee.crema.ui.rememberListString
 import coffee.crema.ui.convertPressure
 import coffee.crema.ui.convertTemp
+import coffee.crema.ui.pourAverageLine
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.relativeAgo
@@ -878,6 +879,19 @@ private fun PhoneShotDetail(
                 DetailMetric(shot.peakPressure?.let { dPeakP.value } ?: "—", "Peak ${dPeakP.unit}", tel.pressure, Modifier.weight(1f))
                 DetailMetric(shot.peakTemp?.let { "${dPeakT.value}${dPeakT.unit}" } ?: "—", "Peak temp", tel.temp, Modifier.weight(1f))
                 DetailMetric(shot.yieldG?.let { "${dYield.value}${dYield.unit}" } ?: "—", "Yield", tel.weight, Modifier.weight(1f))
+            }
+            // The pour's averages (#299), beside the peaks; nothing without a pour.
+            val pourAverage = remember(shot.id, shot.samples.size, pressureUnit, tempUnit) {
+                pourAverageLine(vm.pourAverages(shot), pressureUnit, tempUnit)
+            }
+            pourAverage?.let {
+                Text(
+                    "Pour average $it",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
             }
             }
             // Manual rows keep their user-entered facts editable (issue #10) —

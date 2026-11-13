@@ -9,6 +9,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Pour averages in shot detail** — a shot's detail now shows its average
+  pressure, flow and head temperature over the pour, from first flow to the
+  end of flow, beside the peaks. The preheat is left out, so the numbers aren't
+  pulled toward zero, and a pause inside the pour counts for its length. They
+  are worked out when you open the shot, so old shots show them too; a shot
+  with no recorded telemetry shows nothing. Android and web.
 - **Pin a shot** — pin a shot from its detail to keep it safe: its raw
   Bluetooth capture stays whatever the limit, and any cleanup skips it, the
   300-shot history limit included: pinned shots don't count toward it. A small

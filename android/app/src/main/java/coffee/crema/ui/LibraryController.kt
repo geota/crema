@@ -911,6 +911,22 @@ class LibraryController(
         }.getOrNull()
     }
 
+    /**
+     * The pour's averages (pressure, flow, head temperature), first flow to
+     * last, from the core (`de1_domain::pour_averages`, #299) — derived on
+     * view like the quality analysis, nothing stored. Null when the shot's
+     * samples hold no pour (no telemetry, an import without it), so the detail
+     * shows nothing rather than zeros.
+     */
+    fun pourAverages(shot: StoredShot): coffee.crema.core.PourAverages? {
+        return runCatching {
+            when (val averages = bridge.pourAveragesForShot(shot.coreShotJson().toString())) {
+                "null" -> null
+                else -> json.decodeFromString(coffee.crema.core.PourAverages.serializer(), averages)
+            }
+        }.getOrNull()
+    }
+
     /** All profiles (built-ins + customs) as the core's profile file: one
      *  community-v2 profile per line (`.jsonl`), the file web exports. */
     fun allProfilesFile(): String? = profilesFile(uiState().profiles.map { it.id }) { notify(it) }

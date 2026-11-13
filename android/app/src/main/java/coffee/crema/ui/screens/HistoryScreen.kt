@@ -54,6 +54,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.convertPressure
 import coffee.crema.ui.convertTemp
+import coffee.crema.ui.pourAverageLine
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.formatWeight
@@ -570,9 +571,12 @@ fun HistoryScreen(
                         // Core shot-quality analysis (Decenza port) — computed once
                         // per selection; null (thin/malformed shot) renders nothing.
                         val quality = remember(selected.id) { vm.analyzeShotQuality(selected) }
+                        // The pour's averages (#299), from the core, likewise.
+                        val pourAverages = remember(selected.id, selected.samples.size) { vm.pourAverages(selected) }
                         ShotDetail(
                             shot = selected,
                             quality = quality,
+                            pourAverages = pourAverages,
                             weightUnit = ui.weightUnit,
                             tempUnit = ui.tempUnit,
                             pressureUnit = ui.pressureUnit,
@@ -894,6 +898,8 @@ private fun ShotDetail(
     shot: StoredShot,
     /** The core's shot-quality report, or null when unanalyzable (no block). */
     quality: ShotQualityReport?,
+    /** The pour's averages (#299), or null with no pour (no line). */
+    pourAverages: coffee.crema.core.PourAverages?,
     weightUnit: String,
     tempUnit: String,
     pressureUnit: String,
@@ -1277,6 +1283,14 @@ private fun ShotDetail(
             MetricCard("Yield", mYield.value, shot.yieldG?.let { mYield.unit }, Modifier.weight(1f))
             MetricCard("Ratio", shotRatio(shot) ?: "—", null, Modifier.weight(1f), isText = true)
             MetricCard("Samples", "${shot.samples.size}", null, Modifier.weight(1f))
+        }
+        // The pour's averages (#299), beside the peaks; nothing without a pour.
+        pourAverageLine(pourAverages, pressureUnit, tempUnit)?.let {
+            Text(
+                "Pour average $it",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         Surface(
             // Fixed height inside the scrolling pane — the chart's dominant,

@@ -129,6 +129,16 @@ fun formatTemp(celsius: Float?, unit: String): String = convertTemp(celsius, uni
 /** Format a pressure (canonical bar) as one string in the chosen unit, e.g. "9.0 bar". */
 fun formatPressure(bar: Float?, unit: String): String = convertPressure(bar, unit).joined()
 
+/** The pour's averages (#299) as one line in the chosen units — "9.0 bar ·
+ *  2.0 ml/s · 92.0°C", the head temperature left out when the shot has none —
+ *  the web's wording. Null with no averages, so the detail shows nothing. */
+fun pourAverageLine(averages: coffee.crema.core.PourAverages?, pressureUnit: String, tempUnit: String): String? {
+    val a = averages ?: return null
+    val parts = mutableListOf(convertPressure(a.pressure, pressureUnit).joined(), "${fmt("%.1f", a.flow)} ml/s")
+    a.headTemp?.let { t -> convertTemp(t, tempUnit).let { parts += "${it.value}${it.unit}" } }
+    return parts.joinToString(" · ")
+}
+
 /** Format a volume (canonical ml) as one string in the chosen unit, e.g. "250 ml". */
 fun formatVolume(ml: Float?, unit: String): String = convertVolume(ml, unit).joined()
 

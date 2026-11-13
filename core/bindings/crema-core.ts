@@ -3766,6 +3766,19 @@ export interface PoisonEntry {
 	retryAtMs: number;
 }
 
+/** The pour's time-weighted averages. */
+export interface PourAverages {
+	/** Group pressure, bar. */
+	pressure: number;
+	/** Group flow, ml/s. */
+	flow: number;
+	/**
+	 * Group-head temperature, °C. `None` when the series carries none (an
+	 * import that recorded no head temperature reads 0).
+	 */
+	headTemp?: number;
+}
+
 /**
  * The pre-infusion dial for one profile: its range, the profile's own
  * seconds ([`preinfusion_seconds`]) and whether it can be dialled at all.
