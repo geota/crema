@@ -130,6 +130,18 @@ export function parkedTombstones(): ReadonlySet<string> {
 	);
 }
 
+/**
+ * A restore brings the shot back: drop its unbound tombstone, so no pull
+ * deletes the Visualizer copy. Its upload mark stays, so the copy that may be
+ * there is still matched rather than sent again.
+ */
+export function cancelUnboundTombstone(id: string): void {
+	const marks = read();
+	if (!(id in marks.unbound)) return;
+	const { [id]: _gone, ...unbound } = marks.unbound;
+	writeJson(MARKS_KEY, { ...marks, unbound });
+}
+
 /** `visualizerId` came back for a row that's gone: a pull must not add it. */
 export function keepRemoteOut(visualizerId: string): void {
 	const marks = read();

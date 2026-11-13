@@ -61,6 +61,33 @@ export async function putSeries(id: string, samples: readonly TimedSample[]): Pr
 	}
 }
 
+/**
+ * Store many series on one connection, in strict transactions of `batch`
+ * rows each: a restore's 300 shots in 12 commits, not 300 connections.
+ * Throws at the first batch that fails; the ones before it stand.
+ */
+export async function putManySeries(
+	rows: readonly { id: string; samples: readonly TimedSample[] }[],
+	batch = 25
+): Promise<void> {
+	if (rows.length === 0) return;
+	const db = await openDb();
+	try {
+		for (let i = 0; i < rows.length; i += batch) {
+			const tx = db.transaction(STORE, 'readwrite', { durability: 'strict' });
+			const store = tx.objectStore(STORE);
+			for (const r of rows.slice(i, i + batch)) store.put(r.samples as TimedSample[], r.id);
+			await new Promise<void>((resolve, reject) => {
+				tx.oncomplete = () => resolve();
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error);
+			});
+		}
+	} finally {
+		db.close();
+	}
+}
+
 /** Load every stored series, keyed by shot id. */
 export async function getAllSeries(): Promise<Map<string, TimedSample[]>> {
 	const db = await openDb();
@@ -74,6 +101,52 @@ export async function getAllSeries(): Promise<Map<string, TimedSample[]>> {
 		keys.forEach((k, i) => {
 			const v = values[i];
 			if (typeof k === 'string' && Array.isArray(v)) out.set(k, v);
+		});
+		return out;
+	} finally {
+		db.close();
+	}
+}
+
+/**
+ * Store a shot's series only if it has none: false when one is already there,
+ * which stays (a pulled backfill never replaces a device's own curve).
+ */
+export async function addSeries(id: string, samples: readonly TimedSample[]): Promise<boolean> {
+	const db = await openDb();
+	try {
+		const tx = db.transaction(STORE, 'readwrite');
+		const store = tx.objectStore(STORE);
+		let added = false;
+		// The look and the write in one transaction, from the look's callback.
+		const look = store.count(id);
+		look.onsuccess = () => {
+			if (look.result > 0) return;
+			store.put(samples as TimedSample[], id);
+			added = true;
+		};
+		await new Promise<void>((resolve, reject) => {
+			tx.oncomplete = () => resolve();
+			tx.onerror = () => reject(tx.error);
+			tx.onabort = () => reject(tx.error);
+		});
+		return added;
+	} finally {
+		db.close();
+	}
+}
+
+/** Load the series of each of `ids` that has one, keyed by shot id. */
+export async function getSeriesOf(ids: readonly string[]): Promise<Map<string, TimedSample[]>> {
+	const out = new Map<string, TimedSample[]>();
+	if (ids.length === 0) return out;
+	const db = await openDb();
+	try {
+		const store = db.transaction(STORE, 'readonly').objectStore(STORE);
+		const values = await Promise.all(ids.map((id) => reqp(store.get(id) as IDBRequest<unknown>)));
+		ids.forEach((id, i) => {
+			const v = values[i];
+			if (Array.isArray(v)) out.set(id, v as TimedSample[]);
 		});
 		return out;
 	} finally {

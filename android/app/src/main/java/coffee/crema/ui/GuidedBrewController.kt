@@ -686,6 +686,40 @@ internal class GuidedBrewController(
         return added.size
     }
 
+    /**
+     * A restore's methods and recipes (restore-safety step 4): the lists the
+     * plan leaves, and its defaults and hidden built-ins when it applies them.
+     * One file holds them all, so one awaited write. Whether it landed.
+     */
+    suspend fun restoreRecipes(
+        recipes: List<coffee.crema.core.BrewRecipe>,
+        methods: List<coffee.crema.core.CustomBrewMethod>,
+        defaults: Map<String, String>?,
+        hidden: Set<String>?,
+    ): Boolean {
+        coffee.crema.brew.CustomMethods.all = methods
+        updateUi { st ->
+            val builtinIds = st.builtinRecipes.map { it.id }.toHashSet()
+            st.copy(
+                brewRecipes = recipes,
+                customMethods = methods,
+                lastRecipeByMethod = defaults ?: st.lastRecipeByMethod,
+                hiddenBuiltinRecipes = hidden?.filter { it in builtinIds }?.toSet() ?: st.hiddenBuiltinRecipes,
+            )
+        }
+        val st = uiState()
+        val saved = recipeStore.save(
+            coffee.crema.brew.RecipeFileStore.Envelope(
+                st.brewRecipes.filterNot { r -> st.builtinRecipes.any { it.id == r.id } },
+                st.lastRecipeByMethod,
+                st.hiddenBuiltinRecipes,
+                st.customMethods,
+            ),
+        )
+        resolveGuidedSetup()
+        return saved
+    }
+
     /** Erase All Data: the recipe store (recipes, pointers, hidden built-ins, custom methods). */
     suspend fun eraseStoredData() = recipeStore.erase()
 

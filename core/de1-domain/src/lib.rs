@@ -72,6 +72,7 @@ pub mod brew_builtin;
 pub mod brew_custom;
 pub mod brew_session;
 pub mod builtin;
+pub mod capture_retention;
 /// Lenient number-or-string deserialization shared by the JSON importers.
 mod coerce;
 pub mod cold_maintenance;
@@ -96,12 +97,14 @@ pub mod ids;
 pub mod maintenance;
 pub mod mode_targets;
 pub mod oauth_callback;
+pub mod pour_averages;
 pub mod profile;
 pub mod profile_bounds;
 pub mod profile_file;
 pub mod profile_fingerprint;
 pub mod profile_import;
 pub mod profile_roast;
+pub mod pull_run;
 pub mod replay;
 pub mod saw_learning;
 pub mod scale_trust;
@@ -109,7 +112,9 @@ pub mod session;
 pub mod settings_import;
 pub mod shot;
 pub mod shot_capture;
+pub mod shot_merge;
 pub mod shot_quality;
+pub mod shot_summary;
 pub mod steam;
 pub mod step_weight;
 pub mod stolen_serials;
@@ -131,15 +136,17 @@ pub use auto_tare::{
     MAX_PRE_SHOT_ZERO_OFFSET_G, TareSettleWindow, pre_shot_zero_offset,
 };
 pub use backup_plan::{
-    BackupLine, BackupManifest, BackupScan, LineError, LocalState, RestoreMode, RestoreOpts,
-    RestorePlan, common_is_pristine, common_is_pristine_json, import_backup_bytes,
-    import_backup_bytes_json, parse_backup_line, plan_restore, plan_restore_json,
-    scan_backup_bytes, scan_backup_bytes_json,
+    BackupImport, BackupLine, BackupManifest, BackupRecord, BackupScan, LineError, LocalState,
+    MAX_BACKUP_LINE_BYTES, ParsedBackupLine, RestoreMode, RestoreOpts, RestorePlan,
+    common_is_pristine, common_is_pristine_json, import_backup_bytes, import_backup_bytes_json,
+    parse_backup_line, parse_backup_line_json, parse_backup_line_parsed, plan_restore,
+    plan_restore_json, scan_backup_bytes, scan_backup_bytes_json,
 };
 pub use backup_retention::{
     AutoBackupName, AutoBackupRetention, BackupCounts, BackupFile, BackupFileInfo, BackupShrink,
     BackupShrinkKind, auto_backup_file_name, auto_backup_retention, auto_backup_retention_json,
-    describe_backup_file, describe_backup_file_json, parse_auto_backup_name,
+    describe_backup_file, describe_backup_file_json, newest_auto_backup, newest_auto_backup_json,
+    parse_auto_backup_name,
 };
 pub use bean::{
     BREWS_REMAINING_WINDOW, BagStock, Bean, BeanMix, BeanOrigin, BeanRoastType,
@@ -213,6 +220,10 @@ pub use brew_session::{
     BrewSessionPhase, BrewSessionSummary, MAX_BREW_SAMPLES, START_ON_POUR_THRESHOLD_G,
 };
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
+pub use capture_retention::{
+    CaptureKeep, CaptureSession, CapturedShot, captures_to_drop, captures_to_drop_json,
+    sessions_to_drop, sessions_to_drop_json,
+};
 pub use cold_maintenance::{
     COLD_MAINTENANCE_MIN_FIRMWARE_BUILD, DESCALE_SCHEDULE, DESCALE_TOTAL_SECONDS, DescaleProgress,
     DescaleTracker, MaintenanceFailure, MaintenancePhase, cold_maintenance_profile,
@@ -223,7 +234,8 @@ pub use connect_sweep::{
     ConnectSweepSettings, USB_CHARGER_CHECK_INTERVAL_MS, UsbChargingMode, usb_charger_decision,
 };
 pub use crema_jsonl::{
-    BackupExport, BackupHeader, BackupImportPlan, CremaExportHeader, OmittedBackupRow,
+    BackupExport, BackupHeader, BackupImportPlan, BackupPrelude, BackupShotLine, CremaExportHeader,
+    OmittedBackupRow, backup_prelude_jsonl, backup_shot_line, backup_tail_jsonl,
     export_backup_jsonl_from_json, export_jsonl, export_jsonl_from_json,
     import_backup_jsonl_to_plan_json, import_jsonl_to_plan_json, parse_backup_jsonl, parse_jsonl,
 };
@@ -302,6 +314,13 @@ pub use profile_import::{
     export_v2_json, import_legacy_tcl, import_v2_json, import_v2_json_embedded,
 };
 pub use profile_roast::roast_from_profile;
+pub use pull_run::{
+    KeyCandidate, KnownRow, ListRow, ListStep, PaceBucket, PageInput, PagePlan, PoisonEntry,
+    PullTally, RowAction, RowFailure, RowOutcome, RowPlan, RunEnd, SkipReason, after_list_page,
+    choose_bind, end_run, finish_run, health_probe_due, note_poison_retry, note_rate_limit, pace,
+    plan_page, poison_due, pull_run_call, record_health_probe, record_row, row_failure_action,
+    settle_poison,
+};
 pub use replay::{ReplayMeta, ReplayMetaBean, fold_meta_jsonl, fold_meta_jsonl_json};
 pub use session::SessionTimer;
 pub use settings_import::{ImportedDe1AppSettings, import_settings_tdb};
@@ -313,6 +332,12 @@ pub use shot::{
 pub use shot_capture::{
     AsRunShot, CompletedShot, ShotCaptureContext, assemble_stored_shot, parse_shot_capture_context,
 };
+pub use shot_merge::{
+    ShotMergeInput, ShotPatch, TagMarks, edited_during_fetch, mark_tag_edit, mark_tag_edit_json,
+    merge_remote_shot, merge_remote_shot_json, normalize_tag, normalize_tags, normalize_tags_json,
+    settle_tag_push, settle_tag_push_json, tag_push_list, tag_push_list_json, tag_union,
+};
+pub use shot_summary::{ShotSummary, Spark, decode_spark, shot_summary, shot_summary_json};
 pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,
     SteamSample,

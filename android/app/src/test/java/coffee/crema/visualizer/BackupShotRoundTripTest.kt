@@ -1,6 +1,7 @@
 package coffee.crema.visualizer
 
 import coffee.crema.core.ShotBean
+import coffee.crema.core.ShotPatchInputs
 import coffee.crema.history.StoredShot
 import coffee.crema.ui.TelemetrySample
 import kotlinx.serialization.json.Json
@@ -91,6 +92,23 @@ class BackupShotRoundTripTest {
     }
 
     @Test
+    fun `a pin rides a backup, and an old backup reads as not pinned`() {
+        val pinned = StoredShot(id = "shot:p", completedAtMs = 1, durationMs = 1, pinned = true)
+        assertEquals(true, storedShotFromBackupJson(wireShotJson(pinned, forBackup = true), json)!!.pinned)
+        val plain = StoredShot(id = "shot:q", completedAtMs = 1, durationMs = 1)
+        assertEquals(null, wireShotJson(plain, forBackup = true)["pinned"], "an unpinned row's bytes don't change")
+        assertEquals(false, storedShotFromBackupJson(wireShotJson(plain, forBackup = true), json)!!.pinned)
+        assertEquals(null, wireShotJson(pinned)["pinned"], "never uploaded")
+    }
+
+    @Test
+    fun `the Visualizer version survives a backup, through the core, and stays out of uploads`() {
+        val s = StoredShot(id = "shot:v", completedAtMs = 1, durationMs = 1, visualizerUpdatedAt = 1_700_000_000)
+        assertEquals(1_700_000_000L, storedShotFromBackupJson(wireShotJson(s, forBackup = true), json)!!.visualizerUpdatedAt)
+        assertEquals(null, wireShotJson(s)["visualizerUpdatedAt"], "never uploaded")
+    }
+
+    @Test
     fun `a shot's own grinder model survives a backup round trip and wins over the Settings grinder`() {
         val s = StoredShot(id = "shot:g", completedAtMs = 1, durationMs = 1, grinderModel = "Niche Zero")
         val restored = storedShotFromBackupJson(wireShotJson(s, forBackup = true), json)!!
@@ -120,16 +138,12 @@ class BackupShotRoundTripTest {
     }
 
     @Test
-    fun `a pull fills a blank local barista and never overwrites a set one (final review 06 #1)`() {
-        val blank = StoredShot(id = "shot:q", completedAtMs = 1, durationMs = 1)
-        assertEquals("Ana", baristaToFill(blank, " Ana "))
-        assertEquals("Ana", baristaToFill(blank.copy(barista = "  "), "Ana"))
-        assertNull(baristaToFill(blank.copy(barista = "Bo"), "Ana"))
-        assertNull(baristaToFill(blank, null))
-        assertNull(baristaToFill(blank, "  "))
-        assertNull(baristaToFill(null, "Ana"))
-        // A barista edited here and not yet on Visualizer is never filled (V3 #6).
-        assertNull(baristaToFill(blank, "Ana", editedLocally = true))
+    fun `a barista-only PATCH leaves every journal field out`() {
+        val shot = StoredShot(
+            id = "shot:j", completedAtMs = 1, durationMs = 1, rating = 4, notes = "juicy", barista = "Ana", grinderModel = "Niche Zero",
+        )
+        val inputs = shotPatchInputs(shot, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = "EK43", sendBarista = true, sendJournal = false)
+        assertEquals(ShotPatchInputs(barista = "Ana"), inputs)
     }
 
     @Test

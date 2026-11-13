@@ -5,6 +5,7 @@
 	 * figures, with a cloud status glyph at the end.
 	 */
 	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
+	import PushPinIcon from 'phosphor-svelte/lib/PushPinIcon';
 	import CircleIcon from 'phosphor-svelte/lib/CircleIcon';
 	import CloudArrowUpIcon from 'phosphor-svelte/lib/CloudArrowUpIcon';
 	import CloudCheckIcon from 'phosphor-svelte/lib/CloudCheckIcon';
@@ -112,7 +113,9 @@
 	<span class="psr-main">
 		<span class="psr-top">
 			<span class="psr-name">
-				{shotTitle(shot)}{#if isManualLog(shot)}<span class="psr-logged"> · logged</span>{/if}
+				{shotTitle(shot)}{#if isManualLog(shot)}<span class="psr-logged"> · logged</span>{/if}{#if shot.pinned}<span class="psr-pin" title="Pinned"
+						><PushPinIcon weight="fill" aria-label="Pinned" /></span
+					>{/if}
 			</span>
 			<span class="psr-ago">{relativeAgo(shot.completedAt)}</span>
 		</span>
@@ -213,6 +216,11 @@
 		font-weight: 500;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.psr-pin {
+		margin-left: 4px;
+		font-size: 12px;
+		color: var(--accent);
 	}
 	.psr-logged {
 		font-weight: 400;

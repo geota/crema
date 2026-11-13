@@ -34,7 +34,13 @@
  */
 
 import type { MaintenanceState, MaintenanceReadout } from '#lib/core/crema-core.js';
-import { isJsonObject, readJson, readStore, writeJson } from '#lib/utils/storage.js';
+import {
+	followOtherTabs,
+	isJsonObject,
+	readJson,
+	readStore,
+	writeJsonChecked
+} from '#lib/utils/storage.js';
 import {
 	defaultMaintenanceState as wasmDefaultMaintenanceState,
 	maintenanceReadout as wasmMaintenanceReadout
@@ -121,14 +127,22 @@ export class MaintenanceStore {
 		...loadPersisted()
 	});
 
+	constructor() {
+		// Another tab's counters are taken, so this tab's next shot adds to
+		// them rather than putting old ones back (#333).
+		followOtherTabs(MAINTENANCE_KEY, isJsonObject, (v) => {
+			this.state = { ...defaultState(), ...(v as Partial<MaintenanceState>) };
+		});
+	}
+
 	/** The current maintenance state. Reactive: a counter change re-renders readers. */
 	get current(): MaintenanceState {
 		return this.state;
 	}
 
 	/** Persist the maintenance state to localStorage. */
-	private persist(): void {
-		writeJson(MAINTENANCE_KEY, this.state);
+	private persist(): boolean {
+		return writeJsonChecked(MAINTENANCE_KEY, this.state);
 	}
 
 	/**
@@ -137,9 +151,10 @@ export class MaintenanceStore {
 	 * shared core type, so a bundle from either shell applies directly;
 	 * {@link defaultState} backfills any field the bundle omitted.
 	 */
-	replaceAll(state: Partial<MaintenanceState>): void {
+	/** Take `state` whole. Whether it was stored. */
+	replaceAll(state: Partial<MaintenanceState>): boolean {
 		this.state = { ...defaultState(), ...state };
-		this.persist();
+		return this.persist();
 	}
 
 	/**

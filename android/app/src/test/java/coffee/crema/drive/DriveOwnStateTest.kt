@@ -72,7 +72,7 @@ class DriveOwnStateTest {
             null
         },
         backupFileName = { "b" },
-        applyRestore = { _, _ -> },
+        applyRestore = { _, _, _ -> },
         exchangeCode = { code, verifier ->
             exchanged += "$code/$verifier"
             DriveTokenSet(accessToken = "new", refreshToken = "new-r", expiresAt = Long.MAX_VALUE)

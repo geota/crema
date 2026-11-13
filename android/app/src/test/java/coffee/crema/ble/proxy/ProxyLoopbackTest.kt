@@ -47,7 +47,10 @@ class ProxyLoopbackTest {
                 isSnapshotChar = { _, c -> c == stateChar }, // sample stream is NOT snapshotted
             )
             scope.launch { hub.serve(serverEnd, TEST_PEER) }
-            val proxy = ProxyTransport(clientEnd, scope)
+            // This device booted long after the hub: its clock reads ~9,000 s
+            // while the hub stamps ~1 s (#319).
+            val local = java.util.concurrent.atomic.AtomicLong(9_000_000L)
+            val proxy = ProxyTransport(clientEnd, scope, now = { local.get() })
 
             // 1) Roster → scan surfaces the primary's DE1.
             val match = withTimeout(2_000) { proxy.scan { it == "DE1" }.first() }
@@ -74,12 +77,18 @@ class ProxyLoopbackTest {
 
             // 4) Stream N counted samples; assert losslessness + order + timestamps.
             val n = 500
-            repeat(n) { i -> hub.onInbound(addr, service, sampleChar, byteArrayOf(i.toByte()), atMs = 1_000L + i) }
+            repeat(n) { i ->
+                local.set(9_000_000L + i)
+                hub.onInbound(addr, service, sampleChar, byteArrayOf(i.toByte()), atMs = 1_000L + i)
+            }
             withTimeout(5_000) { while (received.count { it.characteristic == sampleChar } < n) delay(5) }
 
             val samples = received.filter { it.characteristic == sampleChar }
             assertEquals(n, samples.size, "every sample arrives — no loss, no conflation")
-            assertEquals((0 until n).map { 1_000L + it }, samples.map { it.atMs }, "order + verbatim timestamps")
+            assertEquals((0 until n).map { it.toByte() }, samples.map { it.data.single() }, "in order")
+            // Times are rebased onto this device's clock (MirrorClockTest); here they only never run back.
+            assertEquals(samples.map { it.atMs }.sorted(), samples.map { it.atMs }, "times never run back")
+            assertTrue(samples.all { it.atMs in 9_000_000L..9_000_000L + n }, "on this device's clock: ${samples.first().atMs}")
 
             // snapshot-on-attach delivered the cached state value.
             assertTrue(

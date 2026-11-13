@@ -15,6 +15,8 @@ import { TokenVault } from './token-vault.ts';
 
 vi.mock('#lib/history/series-store.js', () => ({
 	putSeries: async () => {},
+	addSeries: async () => true,
+	getSeriesOf: async () => new Map(),
 	getAllSeries: async () => new Map(),
 	deleteSeries: async () => {},
 	pruneSeriesTo: async () => {},
@@ -53,7 +55,9 @@ const layer = Layer.provide(
 const reconcile = (history: HistoryStore, remote: WireShot[]) =>
 	Effect.runPromise(
 		Effect.provide(
-			Effect.flatMap(ShotSync, (s) => s.applyShotReconciliation(history, remote)),
+			Effect.flatMap(ShotSync, (s) =>
+				Effect.map(s.applyShotReconciliation(history, remote), (r) => r.refused)
+			),
 			layer
 		)
 	);
@@ -118,14 +122,24 @@ describe('remote tags on a pull', () => {
 		expect(history.get('shot:a')?.tags).toEqual(['washed']);
 	});
 
-	it('remote tags don’t replace local ones', async () => {
+	it('remote tags don’t replace local ones: they only add, compared as Visualizer does', async () => {
 		const history = new HistoryStore();
 		history.insertPulled(localShot('shot:a', 'vis-1'));
-		history.setTags('shot:a', ['mine']);
+		history.setTags('shot:a', ['Mine']);
 
-		await reconcile(history, [remoteShot('vis-1', { tag_list: ['theirs'] })]);
+		await reconcile(history, [remoteShot('vis-1', { tag_list: ['mine', 'theirs'] })]);
 
-		expect(history.get('shot:a')?.tags).toEqual(['mine']);
+		expect(history.get('shot:a')?.tags).toEqual(['Mine', 'theirs']);
+	});
+
+	it('the merge writes the remote version, and nothing it may not change', async () => {
+		const history = new HistoryStore();
+		history.insertPulled(localShot('shot:a', 'vis-1'));
+		history.setRating('shot:a', 4);
+
+		await reconcile(history, [remoteShot('vis-1', { rating: 1, notes: 'theirs', updated_at_ms: 1_700_000_123_456 })]);
+
+		expect(history.get('shot:a')).toMatchObject({ visualizerUpdatedAt: 1_700_000_123, metadata: { rating: 4 } });
 	});
 });
 
@@ -176,5 +190,24 @@ describe('a pull at the cap', () => {
 
 		expect(refused).toBe(0);
 		expect(history.all).toHaveLength(2);
+	});
+});
+
+describe('a row another tab just wrote (#380 review S1)', () => {
+	it('is held while its curve may still be on its way, and not backfilled', async () => {
+		const history = new HistoryStore();
+		history.insertPulled(localShot('shot:a', 'vis-1'));
+		vi.spyOn(history, 'seriesPending').mockImplementation((id) => id === 'shot:a');
+		const pulled = [{ elapsed: 0, sample: { groupPressure: 1 } }] as never;
+		const applied = await Effect.runPromise(
+			Effect.provide(
+				Effect.flatMap(ShotSync, (s) =>
+					s.applyShotReconciliation(history, [remoteShot('vis-1')], new Map([['vis-1', pulled]]), undefined, undefined, true)
+				),
+				layer
+			)
+		);
+		expect(applied.held).toBe(1);
+		expect(history.get('shot:a')?.record.samples).toEqual([]);
 	});
 });

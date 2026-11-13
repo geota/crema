@@ -107,6 +107,7 @@
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { uploadPending } from '#lib/history/store.svelte.js';
 	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
+	import { markShotEdit, type ShotEdit } from '#lib/visualizer/pending-edits.js';
 	import { readQueue } from '#lib/services/queue-store.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { describeUnsyncedStop } from '#lib/services/shot-sync.js';
@@ -375,7 +376,14 @@
 	 * a no-op for never-uploaded shots; success and failure both land in
 	 * the sync activity log.
 	 */
-	function syncEditToVisualizer(id: string, opts?: { baristaChanged?: boolean }): void {
+	/**
+	 * Mark what an edit of an uploaded shot changed, before the row saves, so
+	 * the PATCH sends only that and a failed one is retried by the drain.
+	 */
+	function markForVisualizer(id: string, edit: ShotEdit): void {
+		if (store.get(id)?.visualizerId) markShotEdit(id, edit);
+	}
+	function syncEditToVisualizer(id: string): void {
 		if (!canPushShots) return;
 		const shot = store.all.find((s) => s.id === id);
 		if (!shot?.visualizerId) return;
@@ -383,7 +391,7 @@
 		if (!api) return;
 		const name = shot.profileName ?? 'Shot';
 		void api.shots
-			.patchEdited(store, id, opts)
+			.patchEdited(store, id)
 			.then(() =>
 				appendSyncLog({ direction: 'push', entity: 'shot', id, name, at: Date.now() })
 			)
@@ -545,6 +553,7 @@
 	const isLive = (id: string): boolean => liveShot(store.get(id)) !== undefined;
 	function saveNotes(id: string, notes: string): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
 		store.setNotes(id, notes);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
@@ -557,36 +566,42 @@
 	}
 	function saveRating(id: string, rating: number): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
 		store.setRating(id, rating);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function savePrivacy(id: string, privacy: StoredShot['privacy']): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
 		store.setPrivacy(id, privacy ?? null);
 		syncEditToVisualizer(id);
 	}
 	function saveGrinderModel(id: string, grinderModel: string | null): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
 		store.setGrinderModel(id, grinderModel);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function savePerson(id: string, field: 'barista' | 'drinker', name: string | null): void {
 		if (!isLive(id)) return;
-		store.setPerson(id, field, name);
 		// Visualizer has a barista field but no drinker; the Decent record
 		// carries both.
-		if (field === 'barista') syncEditToVisualizer(id, { baristaChanged: true });
+		if (field === 'barista') markForVisualizer(id, 'barista');
+		store.setPerson(id, field, name);
+		if (field === 'barista') syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
 	function saveTags(id: string, tags: string[]): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, { tags: { before: store.get(id)?.tags ?? [], after: tags } });
 		store.setTags(id, tags);
 		syncEditToVisualizer(id);
 	}
 	function saveGrind(id: string, grinderSetting: string | null): void {
 		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
 		store.setGrindSetting(id, grinderSetting);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
@@ -595,6 +610,7 @@
 		const shot = liveShot(store.get(id));
 		if (!shot) return;
 		moveShotBag(shot, bean?.id ?? null);
+		markForVisualizer(id, 'annotations');
 		store.setBeanFromLive(id, bean, roaster);
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
@@ -640,9 +656,10 @@
 	 */
 	async function handleDelete(shot: StoredShot, opts: { remote: boolean }): Promise<void> {
 		const label = shot.profileName ?? (methodOf(shot) ? methodLabel(methodOf(shot), shot.brewMethodLabel) : 'this shot');
+		const pinNote = shot.pinned === true ? ' It is pinned.' : '';
 		const msg = opts.remote
-			? `Delete "${label}" from this device and Visualizer? This cannot be undone.`
-			: `Delete "${label}" from this device? This cannot be undone.`;
+			? `Delete "${label}" from this device and Visualizer?${pinNote} This cannot be undone.`
+			: `Delete "${label}" from this device?${pinNote} This cannot be undone.`;
 		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
 		const visualizerId = shot.visualizerId ?? null;
 		const wasSelected = selected?.id === shot.id;
@@ -702,6 +719,8 @@
 	let q = $state('');
 	/** The active profile filter — `all` or a profile name. */
 	let filterProfile = $state('all');
+	/** Only pinned shots (#311). */
+	let pinnedOnly = $state(false);
 	/**
 	 * The active bean filter — `all` or a bean id, matched against the
 	 * shot's frozen bean-snapshot id. Single-select like the profile
@@ -750,6 +769,7 @@
 			selectedTags: string[];
 			range: HistoryRange;
 			selectedId: string | null;
+			pinnedOnly?: boolean;
 		}>('history', {
 			sortField: 'completedAt',
 			sortDir: 'desc',
@@ -770,6 +790,7 @@
 		selectedTags = saved.selectedTags;
 		range = saved.range;
 		selectedId = saved.selectedId;
+		pinnedOnly = saved.pinnedOnly === true;
 	}
 	persistView('history', () => ({
 		sortField,
@@ -780,7 +801,8 @@
 		filterMethod,
 		selectedTags,
 		range,
-		selectedId
+		selectedId,
+		pinnedOnly
 	}));
 	/** The shot list's scroller (`.hi-list`), bound once the list renders. */
 	let listEl = $state<HTMLElement>();
@@ -792,7 +814,7 @@
 		key: () =>
 			phoneDetail
 				? `history/detail|${phoneShot}`
-				: `history/list|${filterProfile}|${filterBean}|${filterMethod}|${selectedTags.join(',')}|${range}|${sortField}-${sortDir}`,
+				: `history/list|${filterProfile}|${filterBean}|${filterMethod}|${selectedTags.join(',')}|${range}|${pinnedOnly ? 'pinned' : ''}|${sortField}-${sortDir}`,
 		container: () => (phoneLayout.current ? pageEl : listEl)
 	});
 	useScrollMemory({ key: () => 'history/page', pixelOnly: true });
@@ -966,6 +988,17 @@
 				selected: filterProfile === 'all'
 			}
 		];
+		// Pinned shots, once there are any (or while the filter is on).
+		const pinnedCount = shots.filter((s) => s.pinned === true).length;
+		if (pinnedCount > 0 || pinnedOnly) {
+			items.push({
+				id: 'pin:',
+				label: 'Pinned',
+				count: pinnedCount,
+				selected: pinnedOnly,
+				title: 'Only pinned shots'
+			});
+		}
 		for (const name of profilesInUse) {
 			items.push({
 				id: `p:${name}`,
@@ -1025,7 +1058,9 @@
 	});
 
 	function onFilterPillClick(id: string): void {
-		if (id.startsWith('p:')) {
+		if (id === 'pin:') {
+			pinnedOnly = !pinnedOnly;
+		} else if (id.startsWith('p:')) {
 			const v = id.slice(2);
 			filterProfile = v === 'all' ? 'all' : v;
 		} else if (id.startsWith('b:')) {
@@ -1050,6 +1085,7 @@
 		const base = shots.filter((s) => {
 			if (cutoff != null && s.completedAt < cutoff) return false;
 			if (filterProfile !== 'all' && s.profileName !== filterProfile) return false;
+			if (pinnedOnly && s.pinned !== true) return false;
 			if (!matchesBeanFilter(s)) return false;
 			if (filterMethod !== 'all' && (methodOf(s) ?? 'espresso') !== filterMethod)
 				return false;
@@ -1354,7 +1390,7 @@
 
 	/** The chips: profiles and tags. Method, bean and range are dropdown pills. */
 	const phoneChips = $derived([
-		...filterPills.filter((p) => p.id.startsWith('p:') || p.id.startsWith('t:')),
+		...filterPills.filter((p) => p.id.startsWith('p:') || p.id.startsWith('t:') || p.id === 'pin:'),
 		...(selectedTags.length > 0
 			? [{ id: 'clear-tags', label: 'Clear tags', icon: 'ph ph-x', title: 'Clear all selected tag filters' }]
 			: [])
@@ -1804,6 +1840,7 @@
 				{#key selected.id}
 					<ShotDetail
 						shot={selected}
+						onPinnedChange={(id, pinned) => store.setPinned(id, pinned)}
 						bind:phoneMenuOpen={shotMenuOpen}
 						onNotesChange={saveNotes}
 						onNextPlanChange={saveNextPlan}

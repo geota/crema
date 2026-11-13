@@ -30,7 +30,10 @@ const h = vi.hoisted(() => ({
 	throwsOn: null as string | null,
 	/** `uploadsHeld`, and the cut-off `excludedFromUpload` reads. */
 	held: false,
-	excludedBefore: 0
+	excludedBefore: 0,
+	/** The pull cursor and its epoch the run reads. */
+	cursor: null as number | null,
+	epoch: 1 as number | null
 }));
 
 vi.mock('#lib/settings/index.js', () => ({
@@ -61,7 +64,14 @@ vi.mock('#lib/visualizer/sync-config.js', () => ({
 	uploadsHeld: () => h.held,
 	excludedFromUpload: (s: { completedAt: number }) => s.completedAt < h.excludedBefore,
 	appendSyncLog: h.appendSyncLog,
-	readSyncConfig: () => ({ includeProfile: true, includeNotes: true, privacy: 'unlisted' })
+	updateSyncConfig: vi.fn(),
+	readSyncConfig: () => ({
+		includeProfile: true,
+		includeNotes: true,
+		privacy: 'unlisted',
+		shotPullCursor: h.cursor,
+		pullCursorEpoch: h.epoch
+	})
 }));
 
 import { describeUnsyncedStop, ShotSync, ShotSyncLive, type UnsyncedUploadResult } from './shot-sync.ts';
@@ -132,6 +142,7 @@ function mkHistory(initial: StoredShot[]) {
 			if (s) (s as { visualizerId?: string | null }).visualizerId = visualizerId;
 		},
 		seriesReady: async () => true,
+		freeSlots: 100,
 		insertPulled: (s: StoredShot) => map.set(s.id, { ...s }),
 		setTags: () => {},
 		backfillTelemetry: () => {},
@@ -243,9 +254,11 @@ describe('the upload attempt mark (#331)', () => {
 describe('ShotSync.pullAndReconcileShots — unbound tombstones (#331)', () => {
 	const pull = (history: HistoryStore, reply: (req: HttpRequest) => Effect.Effect<Response, unknown>, since = 0) => {
 		const layer = Layer.succeed(HttpClient, HttpClient.of({ request: (req) => reply(req) as never }));
+		h.cursor = since > 0 ? since : null;
+		h.epoch = 1;
 		return Effect.runPromise(
 			Effect.provide(
-				ShotSync.pipe(Effect.flatMap((s) => s.pullAndReconcileShots(history, since))),
+				ShotSync.pipe(Effect.flatMap((s) => s.pullAndReconcileShots(history))),
 				Layer.provide(ShotSyncLive, Layer.merge(layer, vault))
 			)
 		);
@@ -261,6 +274,24 @@ describe('ShotSync.pullAndReconcileShots — unbound tombstones (#331)', () => {
 		(history as unknown as { purgeTombstone: typeof purge }).purgeTombstone = purge;
 		return purge;
 	};
+
+	it('a row whose curve is still loading waits for it, and holds the cursor', async () => {
+		const history = mkHistory([shot({ visualizerId: 'viz-1', metadata: {}, record: { duration: 30_000, samples: [] } } as Partial<StoredShot>)]);
+		const store = history as unknown as { seriesReady: () => Promise<boolean>; applyRemote: ReturnType<typeof vi.fn> };
+		store.seriesReady = async () => false; // the load timed out
+		store.applyRemote = vi.fn();
+		h.reconcile = [{ kind: 'update', localId: 's1', remote: { id: 'viz-1' } } as unknown as ReconcileAction];
+		const reply = (req: HttpRequest) =>
+			req.url.includes('/shots?')
+				? json({ data: [{ id: 'viz-1', clock: 1000, updated_at: 2000 }], paging: { count: 1, page: 1, limit: 50, pages: 1 } })
+				: req.url.includes('/profile')
+					? Effect.fail(new HttpStatusError({ status: 422, url: req.url }))
+					: json({ id: 'viz-1', duration: 30, data: { espresso_pressure: [9] }, timeframe: [0] });
+		const out = await pull(history, reply);
+		h.reconcile = [];
+		expect(out.outcome).toMatchObject({ kind: 'Partial', details: { reason: 'RowsFailed' } });
+		expect(store.applyRemote).not.toHaveBeenCalled();
+	});
 
 	it('unbound_tombstone_expires_after_complete_pull', async () => {
 		markUnboundTombstone('gone', false);

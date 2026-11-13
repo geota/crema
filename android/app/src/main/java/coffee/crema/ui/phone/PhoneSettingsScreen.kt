@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.visualizer.pullWaitingLine
 import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.CoreBounds
 import coffee.crema.ui.RelayPairingRows
@@ -180,7 +181,7 @@ fun PhoneSettingsScreen(
                             volumeUnit = ui.volumeUnit,
                             waterLevelUnit = ui.waterLevelUnit,
                         )
-                        "sharing" -> SharingSection(vm, ui.let { it }, confirm.launchSave, confirm.launchSaveBytes, confirm.launchRestore, onResync = { confirm.pendingResync = true })
+                        "sharing" -> SharingSection(vm, ui.let { it }, confirm.launchSave, confirm.launchSaveFile, confirm.launchRestore, onResync = { confirm.pendingResync = true })
                         "calibration" -> CalibrationSection(
                             vm, ui.let { it }, connected,
                             tempOffset, { tempOffset = it },
@@ -852,7 +853,7 @@ private fun SharingSection(
     vm: MainViewModel,
     ui: coffee.crema.ui.MainUiState,
     launchSave: (String, String?) -> Unit,
-    launchSaveBytes: (String, ByteArray?) -> Unit,
+    launchSaveFile: (String, java.io.File?) -> Unit,
     launchRestore: (MainViewModel.RestoreMode) -> Unit,
     onResync: () -> Unit,
 ) {
@@ -927,7 +928,8 @@ private fun SharingSection(
             }
             CremaSettingsRow(
                 "Sync now",
-                "Beans, roasters, then shots." + (if (unsyncedCount == 0) " All ${ui.history.size} local shots are on Visualizer." else " $unsyncedCount local shot(s) not uploaded yet."),
+                vz.pullWaitingUntil?.let(::pullWaitingLine)
+                    ?: ("Beans, roasters, then shots." + (if (unsyncedCount == 0) " All ${ui.history.size} local shots are on Visualizer." else " $unsyncedCount local shot(s) not uploaded yet.")),
             ) {
                 CremaButton(
                     onClick = { vm.visualizer.syncNow(ui.history) },
@@ -1034,7 +1036,7 @@ private fun SharingSection(
     }
     SettingsGroup("Backup & restore") {
         CremaSettingsRow("Back up everything", "All custom profiles, beans, roasters, shots, settings and bag photos in one .crema.zip.") {
-            coffee.crema.ui.screens.BackUpEverythingButton(vm, launchSaveBytes)
+            coffee.crema.ui.screens.BackUpEverythingButton(vm, launchSaveFile)
         }
         CremaSettingsRow("Restore — merge", "Add anything from a backup you don't already have; keeps your current data.") {
             CremaButton(onClick = { launchRestore(MainViewModel.RestoreMode.MERGE) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Merge")
@@ -1061,18 +1063,27 @@ private fun SharingSection(
                 ?.let { "Upload a fresh backup file to your Google Drive. Last backed up ${relativeAgo(it)}." }
                 ?: "Upload a fresh backup file to your Google Drive."
             CremaSettingsRow("Back up to Drive", listOfNotNull(ds.healthLine, lastBackupSub).joinToString(" ")) {
-                CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
+                // While its backup builds, Cancel, with how far it is (#310 P2a).
+                val building = ui.backupProgress[coffee.crema.ui.BackupKind.DRIVE]
+                if (ds.busy && building != null) {
+                    CremaButton(onClick = { vm.cancelBackup(coffee.crema.ui.BackupKind.DRIVE) }, variant = CremaButtonVariant.Outlined, icon = "x", label = "Cancel · ${building.shotsWritten} of ${building.shotsTotal}")
+                } else {
+                    CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
+                }
             }
             CremaSettingsRow("Restore from Drive", DRIVE_RESTORE_HINT) {
                 CremaButton(onClick = vm.drive::openBackupPicker, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore…")
             }
-            CremaSettingsRow("Automatic daily backup", "Upload a fresh backup once a day when the app opens.") {
+            CremaSettingsRow("Automatic Drive backup", listOfNotNull(ds.autoBackupPaused, "Upload a fresh backup when the app opens, daily or weekly.").joinToString(" ")) {
                 CremaSwitch(ui.autoDriveBackup, vm::setAutoDriveBackup)
             }
             CremaSettingsRow("Disconnect", "Forget the Google Drive connection on this device.", last = true) {
                 CremaButton(onClick = { vm.drive.disconnect() }, variant = CremaButtonVariant.Outlined, icon = "sign-out", enabled = !ds.busy, label = "Disconnect")
             }
         }
+    }
+    SettingsGroup("Storage and backups") {
+        coffee.crema.ui.components.StorageBackupsRows(vm, ui, ui.drive)
     }
     SettingsGroup("Local export") {
         CremaSettingsRow("History export", "Your entire shot history as JSON — for spreadsheets and other tools.", last = true) {

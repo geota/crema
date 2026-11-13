@@ -1320,6 +1320,80 @@ pub fn account_change_action(stored: Option<String>, me: String) -> String {
     )
 }
 
+/// What a pulled shot may change on its row: a JSON `ShotPatch` from
+/// `{"local": ShotMergeInput, "remote": WireShot, "profileOffered": bool}`.
+/// See [`de1_domain::merge_remote_shot`].
+///
+/// # Errors
+/// When the input doesn't parse.
+#[uniffi::export]
+pub fn merge_remote_shot(payload: String) -> Result<String, CremaError> {
+    de1_domain::merge_remote_shot_json(&payload).map_err(CremaError::from)
+}
+
+/// The BLE capture sessions that go under a limit: JSON
+/// `{sessions, keep, pinnedMs}` in, names out. See [`de1_domain::sessions_to_drop`].
+///
+/// # Errors
+/// When the input doesn't parse.
+#[uniffi::export]
+pub fn sessions_to_drop(payload: String) -> Result<String, CremaError> {
+    de1_domain::sessions_to_drop_json(&payload).map_err(CremaError::from)
+}
+
+/// The pull run's rules by name (`planPage`, `recordRow`, `finishRun`,
+/// `pace`, …): JSON arguments in, JSON answer out. See
+/// [`de1_domain::pull_run_call`].
+///
+/// # Errors
+/// An unknown op, or arguments that don't parse.
+#[uniffi::export]
+pub fn pull_run_call(op: String, payload: String) -> Result<String, CremaError> {
+    de1_domain::pull_run_call(&op, &payload).map_err(CremaError::from)
+}
+
+/// A JSON tag list as Visualizer stores it. See [`de1_domain::normalize_tags`].
+///
+/// # Errors
+/// When the input isn't a string array.
+#[uniffi::export]
+pub fn normalize_tags(list: String) -> Result<String, CremaError> {
+    de1_domain::normalize_tags_json(&list).map_err(CremaError::from)
+}
+
+/// Record a tag edit onto JSON `TagMarks`. See [`de1_domain::mark_tag_edit`].
+///
+/// # Errors
+/// When an input doesn't parse.
+#[uniffi::export]
+pub fn mark_tag_edit(marks: String, before: String, after: String) -> Result<String, CremaError> {
+    de1_domain::mark_tag_edit_json(&marks, &before, &after).map_err(CremaError::from)
+}
+
+/// The JSON `tag_list` a tag push sends. See [`de1_domain::tag_push_list`].
+///
+/// # Errors
+/// When an input doesn't parse.
+#[uniffi::export]
+pub fn tag_push_list(remote: String, marks: String) -> Result<String, CremaError> {
+    de1_domain::tag_push_list_json(&remote, &marks).map_err(CremaError::from)
+}
+
+/// JSON `TagMarks` after a tag push, or `null` on a tier signal. See
+/// [`de1_domain::settle_tag_push`].
+///
+/// # Errors
+/// When an input doesn't parse.
+#[uniffi::export]
+pub fn settle_tag_push(
+    current: String,
+    sent: String,
+    pushed: String,
+    reply: String,
+) -> Result<String, CremaError> {
+    de1_domain::settle_tag_push_json(&current, &sent, &pushed, &reply).map_err(CremaError::from)
+}
+
 /// Whether an upload must refuse a stored row for having no telemetry. See
 /// [`de1_domain::upload_refused_no_samples`].
 #[uniffi::export]
@@ -2116,6 +2190,78 @@ pub fn export_backup_bundle(
     serde_json::to_string(&built).map_err(crema_err)
 }
 
+/// The lines of a backup before its shots, as a `BackupPrelude` JSON
+/// (`{ jsonl, omitted }`). With [`backup_shot_line`] and [`backup_tail`],
+/// joined, the bytes of [`export_backup_bundle`] (#310). See
+/// [`de1_domain::backup_prelude_jsonl`].
+///
+/// # Errors
+///
+/// Returns the error when the envelope is malformed.
+#[uniffi::export]
+pub fn backup_prelude(
+    envelope_json: String,
+    shot_count: u32,
+    shots_omitted: u32,
+    created_at_unix_ms: i64,
+    app_version: String,
+    device_label: String,
+) -> Result<String, CremaError> {
+    let built = de1_domain::backup_prelude_jsonl(
+        &envelope_json,
+        shot_count as usize,
+        shots_omitted as usize,
+        created_at_unix_ms,
+        &app_version,
+        &device_label,
+    )
+    .map_err(crema_err)?;
+    serde_json::to_string(&built).map_err(crema_err)
+}
+
+/// One shot's backup line, as a `BackupShotLine` JSON. See
+/// [`de1_domain::backup_shot_line`].
+///
+/// # Errors
+///
+/// Returns the error when the shot doesn't read: leave it out and count it
+/// in the prelude's `shots_omitted`.
+#[uniffi::export]
+pub fn backup_shot_line(shot_json: String) -> Result<String, CremaError> {
+    let line = de1_domain::backup_shot_line(&shot_json).map_err(crema_err)?;
+    serde_json::to_string(&line).map_err(crema_err)
+}
+
+/// The lines of a backup after its shots. See
+/// [`de1_domain::backup_tail_jsonl`].
+///
+/// # Errors
+///
+/// Returns the error when the envelope is malformed.
+#[uniffi::export]
+pub fn backup_tail(envelope_json: String) -> Result<String, CremaError> {
+    de1_domain::backup_tail_jsonl(&envelope_json).map_err(crema_err)
+}
+
+/// One backup line, read strictly, as a `ParsedBackupLine` JSON. See
+/// [`de1_domain::parse_backup_line`].
+#[uniffi::export]
+#[must_use]
+pub fn parse_backup_line(line: Vec<u8>) -> String {
+    de1_domain::parse_backup_line_json(&line)
+}
+
+/// A History row's summary of a `StoredShot`, as a `ShotSummary` JSON (#310).
+/// See [`de1_domain::shot_summary`].
+///
+/// # Errors
+///
+/// Returns the parse error when the shot is malformed.
+#[uniffi::export]
+pub fn shot_summary(stored_shot_json: String) -> Result<String, CremaError> {
+    de1_domain::shot_summary_json(&stored_shot_json).map_err(crema_err)
+}
+
 /// A backup's name as an automatic one, carrying a `BackupCounts` JSON. See
 /// [`de1_domain::auto_backup_file_name`].
 ///
@@ -2145,7 +2291,8 @@ pub fn describe_backup_file(name: String) -> String {
 }
 
 /// What to prune after an automatic upload, as an `AutoBackupRetention` JSON.
-/// See [`de1_domain::auto_backup_retention`].
+/// `pre_damage` is the copy the shell pinned when it saw a damage the counts
+/// can't. See [`de1_domain::auto_backup_retention`].
 ///
 /// # Errors
 ///
@@ -2155,8 +2302,25 @@ pub fn auto_backup_retention(
     files_json: String,
     uploaded: String,
     keep: u32,
+    pre_damage: Option<String>,
 ) -> Result<String, CremaError> {
-    de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep).map_err(crema_err)
+    de1_domain::auto_backup_retention_json(&files_json, &uploaded, keep, pre_damage.as_deref())
+        .map_err(crema_err)
+}
+
+/// The id of the newest automatic copy with `upload_name`'s label, to pin
+/// before an upload once a new damage is seen. See
+/// [`de1_domain::newest_auto_backup`].
+///
+/// # Errors
+///
+/// Returns the parse error when `files_json` is malformed.
+#[uniffi::export]
+pub fn newest_auto_backup(
+    files_json: String,
+    upload_name: String,
+) -> Result<Option<String>, CremaError> {
+    de1_domain::newest_auto_backup_json(&files_json, &upload_name).map_err(crema_err)
 }
 
 /// Scan a backup's bytes into a `BackupManifest` JSON, with the bean ids its
@@ -2173,6 +2337,149 @@ pub fn scan_backup_bytes(bytes: Vec<u8>, photos: Vec<String>) -> String {
 #[must_use]
 pub fn import_backup_bytes(bytes: Vec<u8>) -> String {
     de1_domain::import_backup_bytes_json(&bytes)
+}
+
+/// The longest line a backup may hold, in bytes. See
+/// [`de1_domain::MAX_BACKUP_LINE_BYTES`].
+#[uniffi::export]
+#[must_use]
+pub fn backup_max_line_bytes() -> u32 {
+    u32::try_from(de1_domain::MAX_BACKUP_LINE_BYTES).unwrap_or(u32::MAX)
+}
+
+/// The error a backup reader throws once its lock was poisoned by a panic.
+fn reader_poisoned() -> CremaError {
+    CremaError::Failed("The backup reader stopped after an error.".to_owned())
+}
+
+/// [`scan_backup_bytes`], a line at a time, for a backup read in pieces (#310
+/// P2a). See [`de1_domain::BackupScan`]. Used up by [`finish`](Self::finish).
+#[derive(Debug, uniffi::Object)]
+pub struct BackupScanner {
+    scan: Mutex<Option<de1_domain::BackupScan>>,
+}
+
+#[uniffi::export]
+impl BackupScanner {
+    /// A new scan.
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            scan: Mutex::new(Some(de1_domain::BackupScan::new())),
+        })
+    }
+
+    /// Read the next line, without its `0x0A`.
+    ///
+    /// # Errors
+    ///
+    /// After [`finish`](Self::finish), or once a panic poisoned it.
+    pub fn push_line(&self, line: Vec<u8>) -> Result<(), CremaError> {
+        self.with(|scan| scan.push_line(&line))
+    }
+
+    /// The next line was too long to read, and its bytes were skipped. A line
+    /// of only whitespace is blank at any length: push an empty line instead.
+    ///
+    /// # Errors
+    ///
+    /// After [`finish`](Self::finish), or once a panic poisoned it.
+    pub fn push_oversized_line(&self) -> Result<(), CremaError> {
+        self.with(de1_domain::BackupScan::push_oversized_line)
+    }
+
+    /// The `BackupManifest` JSON, with the bean ids the zip holds photos for.
+    ///
+    /// # Errors
+    ///
+    /// When already finished, or the manifest won't serialise.
+    pub fn finish(&self, photos: Vec<String>) -> Result<String, CremaError> {
+        let scan = self
+            .scan
+            .lock()
+            .map_err(|_| reader_poisoned())?
+            .take()
+            .ok_or_else(|| CremaError::Failed("The backup scan already finished.".to_owned()))?;
+        let mut manifest = scan.finish();
+        manifest.photos = photos;
+        serde_json::to_string(&manifest).map_err(|e| CremaError::Failed(e.to_string()))
+    }
+}
+
+impl BackupScanner {
+    fn with(&self, f: impl FnOnce(&mut de1_domain::BackupScan)) -> Result<(), CremaError> {
+        let mut scan = self.scan.lock().map_err(|_| reader_poisoned())?;
+        let scan = scan
+            .as_mut()
+            .ok_or_else(|| CremaError::Failed("The backup scan already finished.".to_owned()))?;
+        f(scan);
+        Ok(())
+    }
+}
+
+/// [`import_backup_bytes`], a line at a time: each line's record, so the
+/// shell holds a line, not the file (#310 P2a). See
+/// [`de1_domain::BackupImport`].
+#[derive(Debug, uniffi::Object)]
+pub struct BackupImporter {
+    import: Mutex<de1_domain::BackupImport>,
+}
+
+#[uniffi::export]
+impl BackupImporter {
+    /// A new import.
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            import: Mutex::new(de1_domain::BackupImport::new()),
+        })
+    }
+
+    /// Read the next line, without its `0x0A`: the `BackupRecord` JSON the
+    /// restore takes from it, or null.
+    ///
+    /// # Errors
+    ///
+    /// When the record won't serialise, rather than dropping it unseen, or
+    /// once a panic poisoned it.
+    pub fn push_line(&self, line: Vec<u8>) -> Result<Option<String>, CremaError> {
+        let mut import = self.import.lock().map_err(|_| reader_poisoned())?;
+        import
+            .push_line(&line)
+            .map(|record| {
+                serde_json::to_string(&record).map_err(|e| CremaError::Failed(e.to_string()))
+            })
+            .transpose()
+    }
+
+    /// The next line was too long to read, and its bytes were skipped. A
+    /// blank line, however long, is an empty line instead.
+    ///
+    /// # Errors
+    ///
+    /// Once a panic poisoned it.
+    pub fn push_oversized_line(&self) -> Result<(), CremaError> {
+        self.import
+            .lock()
+            .map_err(|_| reader_poisoned())?
+            .push_oversized_line();
+        Ok(())
+    }
+
+    /// Whether the first line that wasn't blank was a header.
+    ///
+    /// # Errors
+    ///
+    /// Once a panic poisoned it.
+    pub fn has_header(&self) -> Result<bool, CremaError> {
+        Ok(self
+            .import
+            .lock()
+            .map_err(|_| reader_poisoned())?
+            .has_header())
+    }
 }
 
 /// One restore, planned: a manifest JSON, a `LocalState` JSON, the mode
@@ -3006,6 +3313,14 @@ impl CremaBridge {
             Some(report) => serde_json::to_string(&report).map_err(crema_err),
             None => Ok("null".to_string()),
         }
+    }
+
+    /// The pour's averages (pressure, flow, head temperature) over a
+    /// core-shape `StoredShot` JSON, as a `PourAverages` JSON, or the string
+    /// `"null"` when its samples hold no pour (#299). Derived on view,
+    /// nothing persisted. See `de1_domain::pour_averages`.
+    pub fn pour_averages_for_shot(&self, shot_json: String) -> Result<String, CremaError> {
+        de1_domain::pour_averages::pour_averages_json(&shot_json).map_err(CremaError::Failed)
     }
 
     /// Clear the running scale-derived peaks (peak weight + final

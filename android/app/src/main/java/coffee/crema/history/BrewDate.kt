@@ -31,11 +31,15 @@ fun brewDateTooOld(cap: Int = HistoryStore.MAX_SHOTS): String =
 
 /**
  * Whether a new row dated [atMs] survives the cap, given [history] newest first.
- * Only the newest [cap] stay, and a new row leads its ties, so it has to reach
- * the row at the cut. A stored list can be over the cap, so that isn't the last.
+ * Only the newest [cap] unpinned rows stay, and a new row leads its ties, so it
+ * has to reach the unpinned row at the cut. Pinned rows don't count (#311). A
+ * stored list can be over the cap, so that isn't the last.
  */
 fun fitsHistory(history: List<StoredShot>, atMs: Long, cap: Int = HistoryStore.MAX_SHOTS): Boolean =
-    history.getOrNull(cap - 1)?.let { atMs >= it.completedAtMs } ?: true
+    history.filterNot { it.pinned }.getOrNull(cap - 1)?.let { atMs >= it.completedAtMs } ?: true
+
+/** How many rows count against the cap: the unpinned ones (#311). */
+fun cappedCount(history: List<StoredShot>): Int = history.count { !it.pinned }
 
 /** What the cap made of an insert: the new list, the added rows still in it, and rows of any kind dropped. */
 data class HistoryMerge(val rows: List<StoredShot>, val kept: List<StoredShot>, val dropped: Int)
@@ -48,14 +52,15 @@ fun List<StoredShot>.newestFirst(): List<StoredShot> = sortedByDescending { it.c
  * cap drops the oldest rows and the core's last brew is the newest one, however
  * a row was dated. A row older than a full history is the one that goes, except
  * [keepId], a row just made here: it stays whatever its date, for a device whose
- * clock is behind its history, and the oldest other row goes instead. With
- * nothing to add this changes nothing, so a list over the cap stays as it is.
+ * clock is behind its history, and the oldest other row goes instead. A pinned
+ * row doesn't count and always stays, as nothing cleans up a pinned shot (#311).
+ * With nothing to add this changes nothing, so a list over the cap stays as it is.
  */
 fun mergeHistory(added: List<StoredShot>, history: List<StoredShot>, keepId: String? = null): HistoryMerge {
     if (added.isEmpty()) return HistoryMerge(history, emptyList(), 0)
     val room = if (keepId == null) HistoryStore.MAX_SHOTS else HistoryStore.MAX_SHOTS - 1
     var others = 0
-    val rows = (added + history).newestFirst().filter { it.id == keepId || ++others <= room }
+    val rows = (added + history).newestFirst().filter { it.pinned || it.id == keepId || ++others <= room }
     val addedIds = added.mapTo(HashSet()) { it.id }
     return HistoryMerge(rows, rows.filter { it.id in addedIds }, added.size + history.size - rows.size)
 }
@@ -64,11 +69,11 @@ fun mergeHistory(added: List<StoredShot>, history: List<StoredShot>, keepId: Str
  * [history] with the rows of a Visualizer pull that fit. A pull never removes a
  * row: the oldest ones can be brew logs or shots that never reached Visualizer.
  * So the cap refuses what doesn't fit, in the order given, and [HistoryMerge.dropped]
- * stays 0. Rows already here are left out.
+ * stays 0. Pinned rows don't take room. Rows already here are left out.
  */
 fun mergePulled(added: List<StoredShot>, history: List<StoredShot>, cap: Int = HistoryStore.MAX_SHOTS): HistoryMerge {
     val present = history.mapTo(HashSet()) { it.id }
-    val kept = added.filter { it.id !in present }.take((cap - history.size).coerceAtLeast(0))
+    val kept = added.filter { it.id !in present }.take((cap - cappedCount(history)).coerceAtLeast(0))
     if (kept.isEmpty()) return HistoryMerge(history, emptyList(), 0)
     return HistoryMerge((kept + history).newestFirst(), kept, 0)
 }
@@ -76,6 +81,18 @@ fun mergePulled(added: List<StoredShot>, history: List<StoredShot>, cap: Int = H
 /** The rows [mergeHistory] leaves, inside an edit. */
 fun historyWith(added: List<StoredShot>, history: HistoryRows, keepId: String? = null): HistoryRows =
     history.with(mergeHistory(added, history, keepId).rows)
+
+/**
+ * What to say when a normal save made the cap drop a row (#310 P0): the oldest
+ * rows here, or the new row itself, dated before everything a full history
+ * keeps. Null when nothing was dropped. Restore and import say it their way.
+ */
+fun historyCutNotice(droppedOlder: Int, newKept: Boolean, cap: Int = HistoryStore.MAX_SHOTS): String? = when {
+    !newKept -> "History keeps the newest $cap shots, and this one is older than all of them, so it wasn’t kept"
+    droppedOlder == 0 -> null
+    droppedOlder == 1 -> "History keeps the newest $cap shots, so the oldest shot was dropped"
+    else -> "History keeps the newest $cap shots, so the oldest $droppedOlder were dropped"
+}
 
 /** What to say when the cap dropped rows, or nothing when it didn't. */
 fun historyDroppedNotice(dropped: Int, cap: Int = HistoryStore.MAX_SHOTS): String =

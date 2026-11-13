@@ -44,10 +44,9 @@ class SettingsConfirmState(
     flowMultiplier: MutableState<Float?>,
     cycle: MutableState<String?>,
     resync: MutableState<Boolean>,
-    restoreWipe: MutableState<Uri?>,
     val launchSave: (name: String, content: String?) -> Unit,
-    /** Binary SAF export — the `.crema.zip` backup (bean photos ride along). */
-    val launchSaveBytes: (name: String, bytes: ByteArray?) -> Unit,
+    /** Binary SAF export — the `.crema.zip` backup (bean photos ride along), a temporary file. */
+    val launchSaveFile: (name: String, file: java.io.File?) -> Unit,
     val launchRestore: (mode: MainViewModel.RestoreMode) -> Unit,
 ) {
     var confirmResetPrefs by resetPrefs
@@ -57,13 +56,6 @@ class SettingsConfirmState(
     var pendingFlowMultiplier by flowMultiplier
     var pendingCycle by cycle
     var pendingResync by resync
-
-    /** A backup file the user picked for a REPLACE (wipe) restore, awaiting the
-     *  type-to-confirm. Null ⟺ nothing pending. (Merge restores apply at once.) */
-    var pendingRestoreWipe by restoreWipe
-
-    /** A Drive backup picked for a REPLACE restore, awaiting the type-to-confirm. */
-    var pendingDriveReplace by mutableStateOf<DriveBackupRow?>(null)
 }
 
 /** Build the shared confirm-state holder (saveable flags + SAF export launcher). */
@@ -84,32 +76,27 @@ fun rememberSettingsConfirmState(vm: MainViewModel): SettingsConfirmState {
         val t = pendingExport.value; pendingExport.value = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
-    // Binary SAF export — the `.crema.zip` backup. Held in plain `remember` (not
-    // saveable): the zip can be multi-MB and would blow the Binder cap on save.
-    val pendingExportBytes = remember { mutableStateOf<ByteArray?>(null) }
-    val saveBytesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        val b = pendingExportBytes.value; pendingExportBytes.value = null
-        if (uri != null && b != null) vm.writeBytesToUri(uri, b)
+    // Binary SAF export — the `.crema.zip` backup, a temporary file in the
+    // cache (#310 P2a). Held in plain `remember`; a dismissed picker removes it.
+    val pendingExportFile = remember { mutableStateOf<java.io.File?>(null) }
+    val saveFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val f = pendingExportFile.value; pendingExportFile.value = null
+        if (f != null) { if (uri != null) vm.writeFileToUri(uri, f) else vm.releaseBackupFile(f) }
     }
-    // SAF restore-from-file plumbing. A MERGE applies at once; a REPLACE (wipe)
-    // stashes the picked file so the dialog can gate it behind a typed confirm
-    // before anything is deleted.
-    val restoreWipe = remember { mutableStateOf<Uri?>(null) }
+    // SAF restore-from-file plumbing. The VM plans the picked file and shows
+    // the report, which gates a Replace behind the typed confirm, with numbers.
     val pendingRestoreMode = remember { mutableStateOf(MainViewModel.RestoreMode.MERGE) }
     val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            if (pendingRestoreMode.value == MainViewModel.RestoreMode.WIPE) restoreWipe.value = uri
-            else vm.restoreBackup(uri, MainViewModel.RestoreMode.MERGE)
-        }
+        if (uri != null) vm.restoreBackup(uri, pendingRestoreMode.value)
     }
     return remember(vm) {
         SettingsConfirmState(
-            resetPrefs, erase, heaterVoltage, lineFreq, flowMultiplier, cycle, resync, restoreWipe,
+            resetPrefs, erase, heaterVoltage, lineFreq, flowMultiplier, cycle, resync,
             launchSave = { name, content ->
                 if (content != null) { pendingExport.value = content; saveLauncher.launch(name) }
             },
-            launchSaveBytes = { name, bytes ->
-                if (bytes != null) { pendingExportBytes.value = bytes; saveBytesLauncher.launch(name) }
+            launchSaveFile = { name, file ->
+                if (file != null) { pendingExportFile.value = file; saveFileLauncher.launch(name) }
             },
             launchRestore = { mode ->
                 pendingRestoreMode.value = mode
@@ -229,56 +216,82 @@ fun SettingsConfirmDialogs(state: SettingsConfirmState, vm: MainViewModel, ui: M
         DriveBackupPicker(
             rows = rows,
             onMerge = { vm.drive.restoreBackup(it.id, wipe = false) },
-            onReplace = { state.pendingDriveReplace = it },
+            onReplace = { vm.drive.restoreBackup(it.id, wipe = true) },
             onDismiss = vm.drive::closeBackupPicker,
         )
     }
-    state.pendingDriveReplace?.let { row ->
+    // A restore that didn't finish: run it again, or Dismiss, which lets its
+    // deletes run under the same checks.
+    ui.interruptedRestore?.let { name ->
         CremaConfirmDialog(
-            title = "Replace all data?",
-            body = "Every bean, roaster, shot and custom profile on this device is deleted and replaced with the backup from ${backupDate(row)}. Built-in profiles remain. This can't be undone. Type ERASE to confirm.",
-            confirmLabel = "Replace everything",
-            icon = "trash",
-            danger = true,
-            requireTyped = "ERASE",
-            onConfirm = { vm.drive.restoreBackup(row.id, wipe = true); state.pendingDriveReplace = null },
-            onDismiss = { state.pendingDriveReplace = null },
+            title = "Your last restore didn't finish",
+            body = "Your last restore from $name didn't finish. Run it again to complete it, or dismiss this if you don't have that backup any more.",
+            confirmLabel = "Dismiss",
+            cancelLabel = "Later",
+            onConfirm = vm::dismissInterruptedRestore,
+            onDismiss = vm::laterInterruptedRestore,
         )
     }
-    // Replace-restore (wipe) — the same type-to-confirm gate as Erase all data.
-    state.pendingRestoreWipe?.let { uri ->
+    // The restore report: what a picked backup will do, before it does it.
+    // Replace is gated behind typing ERASE; a Merge with shots deleted here
+    // can bring them back, which shows its own numbers first.
+    ui.restoreReport?.let { report ->
         CremaConfirmDialog(
-            title = "Replace all data?",
-            body = "Every bean, roaster, shot and custom profile on this device is deleted and replaced with the backup. Built-in profiles remain. This can't be undone. Type ERASE to confirm.",
-            confirmLabel = "Replace everything",
-            icon = "trash",
-            danger = true,
-            requireTyped = "ERASE",
-            onConfirm = { vm.restoreBackup(uri, MainViewModel.RestoreMode.WIPE); state.pendingRestoreWipe = null },
-            onDismiss = { state.pendingRestoreWipe = null },
+            title = report.title,
+            body = report.message,
+            confirmLabel = if (report.replace) "Replace everything" else "Restore",
+            icon = if (report.replace) "trash" else null,
+            danger = report.replace,
+            requireTyped = if (report.replace) "ERASE" else null,
+            onConfirm = vm::confirmRestore,
+            onDismiss = vm::dismissRestore,
+            extra = if (report.offerBringBack || report.offerBackUpFirst) {
+                {
+                    if (report.offerBringBack) {
+                        CremaButton(onClick = vm::restoreBringBack, variant = CremaButtonVariant.Outlined, label = "Bring them back too")
+                    }
+                    if (report.offerBackUpFirst) {
+                        CremaButton(onClick = { vm.restoreBackUpFirst() }, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-up", label = "Back up to Drive first")
+                    }
+                }
+            } else {
+                null
+            },
         )
     }
 }
 
 /**
- * "Back up" — builds the `.crema.zip` (off the main thread, see
- * [MainViewModel.buildBackupZipBytes]) and hands the bytes to the SAF save
- * picker. Disabled while a build runs so a double tap can't queue a second
- * full serialisation. Shared by the tablet and phone Settings screens.
+ * "Back up" — builds the `.crema.zip` into a temporary file (off the main
+ * thread, see [MainViewModel.buildBackupZipFile]) and hands it to the SAF save
+ * picker. While it builds, it shows how far it is and offers Cancel, so a
+ * double tap can't queue a second walk. Shared by the tablet and phone
+ * Settings screens.
  */
 @Composable
 fun BackUpEverythingButton(
     vm: MainViewModel,
-    launchSaveBytes: (name: String, bytes: ByteArray?) -> Unit,
+    launchSaveFile: (name: String, file: java.io.File?) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var building by remember { mutableStateOf(false) }
+    val ui by vm.ui.collectAsStateWithLifecycle()
+    val progress = ui.backupProgress[coffee.crema.ui.BackupKind.FILE]
+    if (building) {
+        CremaButton(
+            onClick = { vm.cancelBackup(coffee.crema.ui.BackupKind.FILE) },
+            variant = CremaButtonVariant.Outlined,
+            icon = "x",
+            label = progress?.let { "Cancel · ${it.shotsWritten} of ${it.shotsTotal}" } ?: "Cancel",
+        )
+        return
+    }
     CremaButton(
         onClick = {
             building = true
             scope.launch {
                 try {
-                    launchSaveBytes(vm.backupFileName(), vm.buildBackupZipBytes())
+                    launchSaveFile(vm.backupFileName(), vm.buildBackupZipFile())
                 } finally {
                     building = false
                 }
@@ -286,7 +299,6 @@ fun BackUpEverythingButton(
         },
         variant = CremaButtonVariant.Filled,
         icon = "download-simple",
-        enabled = !building,
-        label = if (building) "Backing up…" else "Back up",
+        label = "Back up",
     )
 }

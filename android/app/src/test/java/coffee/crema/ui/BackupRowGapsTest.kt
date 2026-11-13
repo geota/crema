@@ -62,7 +62,7 @@ class BackupRowGapsTest {
         assertEquals(listOf(OmittedBackupRow("shot", 1, null)), built.omitted)
         assertEquals(2, header(built.jsonl).getValue("shotCount").jsonPrimitive.int)
         assertEquals(1, header(built.jsonl).getValue("omittedCount").jsonPrimitive.int)
-        assertEquals(listOf("good", "also"), assertNotNull(parseBackup(built.jsonl, json, now)).shots.map { it.id })
+        assertEquals(listOf("good", "also"), parseBackupBytes(built.jsonl.toByteArray(), json, now).shots.map { it.id })
     }
 
     @Test
@@ -70,7 +70,7 @@ class BackupRowGapsTest {
         val good = coffee.crema.beans.newBean("Good", "r1", 4, null, now).copy(id = "good")
         val built = build(state().copy(beans = rowViewOf(listOf(good, good.copy(id = "nan", bagSize = Float.NaN)))))
         assertEquals(listOf(OmittedBackupRow("bean", 1, null)), built.omitted)
-        assertEquals(listOf("good"), assertNotNull(parseBackup(built.jsonl, json, now)).beans.map { it.id })
+        assertEquals(listOf("good"), parseBackupBytes(built.jsonl.toByteArray(), json, now).beans.map { it.id })
     }
 
     /** That file would report success, upload, and let retention drop the good

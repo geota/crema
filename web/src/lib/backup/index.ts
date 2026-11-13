@@ -19,11 +19,7 @@
  * (the cross-shell DATA still restores either way).
  */
 
-import {
-	exportBackupBundle,
-	guardRestoredVisualizerPrefs,
-	importBackupJsonl
-} from '#lib/wasm/de1_wasm.js';
+import { exportBackupBundle, guardRestoredVisualizerPrefs } from '#lib/wasm/de1_wasm.js';
 import { getBeanStore } from '#lib/bean/index.js';
 import { getHistoryStore } from '#lib/history/index.js';
 import { refusedNoSamples } from '#lib/history/model.js';
@@ -43,13 +39,24 @@ import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '#lib/visualizer/sync-config.js';
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { strToU8, strFromU8, zipSync } from 'fflate';
+import { BackupCancelled, streamBackup, sweepBackupTemp, type BackupWalkOptions } from './stream';
 import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
-import { readStored } from '#lib/utils/storage.js';
+import { readJson, readStored, unreadableStores, writeJson } from '#lib/utils/storage.js';
 import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
 import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 import type { Bean, Roaster } from '#lib/bean/model.js';
 import type { StoredShot } from '#lib/history/index.js';
 import type { CremaProfile } from '#lib/profiles/model.js';
+import { PlanAction, Verdict, type RestorePlan } from '#lib/core/crema-core.js';
+import {
+	planNow,
+	prepareBackup,
+	runRestore,
+	settingsPristine,
+	type RestoreDeps,
+	type RestoreOutcome,
+	type SingletonSink
+} from '#lib/restore/engine.js';
 import type {
 	BrewRecipe,
 	CommonSettings,
@@ -80,6 +87,10 @@ export interface BackupContents {
 	degraded?: readonly string[];
 	/** Machine shots a built backup carries with no curve. */
 	noCurves?: number;
+	/** Stores that couldn't be read this session, so aren't in it, by name. */
+	missing?: readonly string[];
+	/** Built in memory, as this browser has no private file system, and large. */
+	largeInMemory?: boolean;
 }
 
 /** One row a backup left out (the core's `OmittedBackupRow`). */
@@ -126,7 +137,33 @@ export function describeBackupGaps(c: BackupContents): string {
 		noCurves === 0
 			? ''
 			: ` ${noCurves} shot${noCurves === 1 ? ' was' : 's were'} backed up without ${noCurves === 1 ? 'its' : 'their'} curve.`;
-	return left + thin + flat;
+	const missing = c.missing ?? [];
+	const names =
+		missing.length <= 1 ? (missing[0] ?? '') : `${missing.slice(0, -1).join(', ')} and ${missing.at(-1)}`;
+	const gone =
+		missing.length === 0
+			? ''
+			: ` It doesn’t include your ${names}: ${missing.length === 1 ? 'it' : 'they'} couldn’t be read.`;
+	const large = c.largeInMemory
+		? ' This browser built it in memory, so a backup this size may not go through on a small device.'
+		: '';
+	return left + thin + flat + gone + large;
+}
+
+/**
+ * What to say when a Drive backup didn't finish. A cancel that reached the
+ * upload may have come after Drive had the whole file, so it doesn't promise
+ * nothing was uploaded.
+ */
+export function driveBackupFailure(err: unknown, uploading: boolean): string {
+	const cancelled =
+		err instanceof BackupCancelled || (err instanceof DOMException && err.name === 'AbortError');
+	if (cancelled) {
+		return uploading
+			? 'Backup cancelled during the upload: Drive may have it anyway. Check the list before backing up again.'
+			: 'Backup cancelled: nothing was uploaded.';
+	}
+	return err instanceof Error ? `Drive backup failed: ${err.message}` : 'Drive backup failed.';
 }
 
 /**
@@ -174,12 +211,18 @@ export interface BuiltBackup {
 	contents: BackupContents;
 }
 
-/** Whether settings are still at their canonical defaults — used by the empty
- *  check so a customised theme / units / brew default counts as backup-worthy
- *  even before the user has created any profiles / beans / shots. */
+/**
+ * Whether settings are still as a fresh install leaves them — used by the empty
+ * check so a customised theme / units / brew default counts as backup-worthy
+ * even before the user has created any profiles / beans / shots. The shared
+ * part goes by the core's `common_is_pristine`, as a first boot fills the
+ * hot-water fields and they never equal the raw defaults; the web extras by
+ * their defaults.
+ */
 function settingsAreDefault(s: Settings): boolean {
-	const d = DEFAULT_SETTINGS as unknown as Record<string, unknown>;
-	const cur = s as unknown as Record<string, unknown>;
+	if (!settingsPristine()) return false;
+	const d = settingsPlatformExtras(DEFAULT_SETTINGS) as Record<string, unknown>;
+	const cur = settingsPlatformExtras(s) as Record<string, unknown>;
 	return Object.keys(d).every((k) => JSON.stringify(cur[k]) === JSON.stringify(d[k]));
 }
 
@@ -207,6 +250,56 @@ function rowStrings(rows: readonly unknown[]): (string | null)[] {
  * throws when they don't arrive.
  */
 export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<BuiltBackup | null> {
+	const parts = await backupParts();
+	if (!parts) return null;
+	const { envelope, shots, customProfiles, beans, roasters } = parts;
+	const built = JSON.parse(
+		exportBackupBundle(
+			JSON.stringify({ ...envelope, shots: rowStrings(shots) }),
+			Date.now(),
+			cremaVersion,
+			WEB_DEVICE_LABEL
+		)
+	) as BackupExport;
+	// What was written, which the core's header counts too.
+	const written = (kind: string, rows: number) =>
+		rows - built.omitted.filter((o) => o.kind === kind).length;
+	const left = new Set(built.omitted.filter((o) => o.kind === 'shot').map((o) => o.id));
+	// A row here can be unreadable: that's what `omitted` is for.
+	const noCurves = shots.filter(
+		(s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0)
+	).length;
+	return {
+		jsonl: built.jsonl,
+		contents: {
+			profiles: written('profile', customProfiles.length),
+			beans: written('bean', beans.length),
+			roasters: written('roaster', roasters.length),
+			shots: written('shot', shots.length),
+			omitted: built.omitted,
+			degraded: built.degraded,
+			noCurves,
+			missing: unreadableStores()
+		}
+	};
+}
+
+/** Everything a backup carries, as a snapshot: the envelope without its shots, and the shots. */
+interface BackupParts {
+	/** The export envelope, rows as JSON strings, without `shots`. */
+	envelope: Record<string, unknown>;
+	shots: readonly StoredShot[];
+	customProfiles: readonly unknown[];
+	beans: readonly Bean[];
+	roasters: readonly Roaster[];
+}
+
+/**
+ * Snapshot what a backup carries, or null when there's nothing to back up.
+ * Waits for the stored series, so no shot goes out without its curve, and
+ * throws when they don't arrive.
+ */
+async function backupParts(): Promise<BackupParts | null> {
 	const history = getHistoryStore();
 	if (!(await history.seriesReady())) {
 		throw new Error('Shot data is still loading — try again in a moment.');
@@ -246,11 +339,10 @@ export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<
 		return null;
 	}
 
-	const envelope = JSON.stringify({
+	const envelope = {
 		profiles: rowStrings(customProfiles),
 		beans: rowStrings(beans),
 		roasters: rowStrings(roasters),
-		shots: rowStrings(shots),
 		recipes: rowStrings(recipes),
 		customMethods: rowStrings(customMethods),
 		// Settings line: the shared cross-shell `common` block (CommonSettings —
@@ -276,29 +368,76 @@ export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<
 		// `VisualizerSyncPrefs` shape both shells serialise identically, so this
 		// line restores on web or Android with no per-shell tag.
 		visualizerPrefs: visualizerSyncPrefs()
-	});
+	};
+	// A snapshot: a shot saved during a long walk is in the next backup.
+	return { envelope, shots: [...shots], customProfiles, beans: [...beans], roasters: [...roasters] };
+}
 
-	const built = JSON.parse(
-		exportBackupBundle(envelope, Date.now(), cremaVersion, WEB_DEVICE_LABEL)
-	) as BackupExport;
-	// What was written, which the core's header counts too.
-	const written = (kind: string, rows: number) =>
-		rows - built.omitted.filter((o) => o.kind === kind).length;
-	const left = new Set(built.omitted.filter((o) => o.kind === 'shot').map((o) => o.id));
-	// A row here can be unreadable: that's what `omitted` is for.
+/** A backup built as a file, and what's in it. */
+export interface BuiltBackupFile {
+	file: Blob;
+	contents: BackupContents;
+	/** Remove its temporary file, once whatever reads it is done. */
+	release(): Promise<void>;
+}
+
+/**
+ * Build the `.crema.zip` one line at a time into a temporary file (#310 P2w):
+ * the same bytes as {@link buildBackupJsonl}'s, with the bean photos. Null
+ * when there's nothing to back up. Progress and cancel as {@link streamBackup}.
+ */
+export async function buildBackupFile(
+	cremaVersion = __APP_VERSION__,
+	opts: BackupWalkOptions = {}
+): Promise<BuiltBackupFile | null> {
+	const parts = await backupParts();
+	if (!parts) return null;
+	await sweepBackupTemp();
+	const { envelope, shots, customProfiles, beans, roasters } = parts;
+	const imageStore = getBeanImageStore();
+	const withPhotos = beans.filter((b) => b.imageRef);
+	const built = await streamBackup(
+		{
+			envelope: JSON.stringify(envelope),
+			shots,
+			createdAt: Date.now(),
+			appVersion: cremaVersion,
+			deviceLabel: WEB_DEVICE_LABEL,
+			photos: async function* () {
+				for (const bean of withPhotos) {
+					try {
+						const blob = await imageStore.get(bean.imageRef!);
+						if (blob) yield [bean.id, new Uint8Array(await blob.arrayBuffer())];
+					} catch {
+						// IDB miss / read error — skip this bean's photo, don't fail the backup.
+					}
+				}
+			}
+		},
+		opts
+	);
+	const omitted: OmittedBackupRow[] = [
+		...built.omitted,
+		...built.shotsOmitted.map((o) => ({ kind: 'shot', index: o.index, id: o.id }))
+	];
+	const written = (kind: string, rows: number) => rows - omitted.filter((o) => o.kind === kind).length;
+	const left = new Set(built.shotsOmitted.map((o) => o.id));
 	const noCurves = shots.filter(
 		(s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0)
 	).length;
 	return {
-		jsonl: built.jsonl,
+		file: built.file,
+		release: built.release,
 		contents: {
 			profiles: written('profile', customProfiles.length),
 			beans: written('bean', beans.length),
 			roasters: written('roaster', roasters.length),
-			shots: written('shot', shots.length),
-			omitted: built.omitted,
+			shots: built.shotsWritten,
+			omitted,
 			degraded: built.degraded,
-			noCurves
+			noCurves,
+			missing: unreadableStores(),
+			largeInMemory: built.largeInMemory
 		}
 	};
 }
@@ -338,11 +477,18 @@ export async function buildBackupZip(
 	return { zip: zipSync(entries), contents: built.contents };
 }
 
-/** Build + download a `.crema.zip` bundle of everything local (incl. bean photos). */
-export async function exportBackup(cremaVersion = __APP_VERSION__): Promise<BackupContents | null> {
-	const built = await buildBackupZip(cremaVersion);
+/**
+ * Build a `.crema.zip` bundle of everything local (incl. bean photos) as a
+ * file, and download it. The temporary file stays while the browser saves it,
+ * and goes at the next backup or boot ({@link sweepBackupTemp}).
+ */
+export async function exportBackup(
+	cremaVersion = __APP_VERSION__,
+	opts: BackupWalkOptions = {}
+): Promise<BackupContents | null> {
+	const built = await buildBackupFile(cremaVersion, opts);
 	if (!built) return null;
-	downloadBlob(backupFileName(), new Blob([built.zip as BlobPart], { type: 'application/zip' }));
+	downloadBlob(backupFileName(), built.file);
 	return built.contents;
 }
 
@@ -350,13 +496,30 @@ export async function exportBackup(cremaVersion = __APP_VERSION__): Promise<Back
  * Run a backup and word what happened. A build that throws ends in a message
  * like any other, so the UI can't stay on "Building backup…".
  */
+/** localStorage key: when this device last made a backup, file or Drive (unix ms). */
+export const LAST_BACKUP_KEY = 'crema.backup.last.v1';
+
+/** Note a backup that landed, for Settings' "Last backup". */
+export function noteBackupMade(at: number = Date.now()): void {
+	writeJson(LAST_BACKUP_KEY, at);
+}
+
+/** When this device last made a backup, or `null`. */
+export function lastBackupAt(): number | null {
+	return readJson<number | null>(LAST_BACKUP_KEY, null, {
+		valid: (v): v is number | null => v === null || (typeof v === 'number' && Number.isFinite(v))
+	});
+}
+
 export async function backupNote(run: () => Promise<BackupContents | null> = exportBackup): Promise<string> {
 	try {
 		const result = await run();
+		if (result) noteBackupMade();
 		return result
 			? `Backed up — ${describeBackup(result)}.${describeBackupGaps(result)}`
 			: 'Nothing to back up yet.';
 	} catch (err) {
+		if (err instanceof BackupCancelled) return 'Backup cancelled: nothing was saved.';
 		console.error('Backup failed', err);
 		return `Backup failed: nothing was saved.${err instanceof Error ? ` ${err.message}` : ''}`;
 	}
@@ -365,15 +528,8 @@ export async function backupNote(run: () => Promise<BackupContents | null> = exp
 export type RestoreMode = 'merge' | 'wipe';
 
 export interface RestoreSummary {
-	profiles: number;
-	beans: number;
-	roasters: number;
-	shots: number;
-	/** Rows of any kind the 300-row cap dropped. */
-	droppedShots: number;
-	recipes: number;
-	customMethods: number;
-	settingsApplied: boolean;
+	/** The plan that ran, or was refused: the report words it. */
+	outcome: RestoreOutcome;
 	/** Changes the restore did NOT apply because they need the user's OK. */
 	held: HeldRestoreChanges | null;
 }
@@ -500,189 +656,65 @@ export function applyHeldRestoreChanges(held: HeldRestoreChanges): void {
 }
 
 /**
- * Restore a `crema-backup` bundle. Parses the line-tagged JSONL directly into
- * typed records (lossless — matching Android's restore), then applies it:
- *
- *  - **merge** — adds only records whose id isn't already present (a lossless
- *    re-restore): `bulkAdd` dedups beans/roasters; profiles + shots key on id.
- *  - **wipe** — clears the local library / history / custom profiles + resets
- *    settings first (destructive — the caller gates it), then loads the bundle.
- *
- * Settings apply only from a `_shell: 'web'` bundle (Android's `AppPrefs` shape
- * differs); the DATA restores cross-shell either way.
- *
- * @throws if the text has no `crema-backup/v1` header (not a Crema backup).
+ * The settings-like lines a restore applies at step 8, by the plan. A backup's
+ * webhook and wider Visualizer sharing are never applied here: they come back
+ * as {@link HeldRestoreChanges} for the user's OK, as a backup can come from
+ * someone else. `common` is cross-shell; the web extras apply only when the
+ * plan says the backup is the web's.
  */
-export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
-	// A Replace clears the history and refills it: series and captures the
-	// restore removes stay until its own marker can delete them (PR7).
-	const resumeDeletes = getHistoryStore().pauseDeletes();
-	try {
-		return applyBackup(text, mode);
-	} finally {
-		resumeDeletes();
-	}
-}
-
-function applyBackup(text: string, mode: RestoreMode): RestoreSummary {
-	// F1 (review #06): parse through the shared core (`parse_backup_jsonl`) instead
-	// of a hand-rolled line loop. Beans/roasters/shots come back typed + lossless —
-	// each shot keeps its full `bean` snapshot (the library importer's ImportedShot
-	// wrapper would bury it under `storedShot` and reflatten it to loose strings) —
-	// while profiles + the config blobs ride as the verbatim JSON the shell owns.
-	// Android's restore parses the IDENTICAL bytes off this same core function.
-	const plan = JSON.parse(importBackupJsonl(text)) as {
-		hasHeader?: boolean;
-		profiles?: CremaProfile[];
-		beans?: Bean[];
-		roasters?: Roaster[];
-		shots?: StoredShot[];
-		recipes?: BrewRecipe[];
-		recipeMeta?: Partial<RecipeBackupMeta> | null;
-		customMethods?: CustomBrewMethod[];
-		settings?: Record<string, unknown> | null;
-		profileMeta?: Record<string, unknown> | null;
-		maintenance?: Record<string, unknown> | null;
-		visualizerPrefs?: Record<string, unknown> | null;
-	};
-	// The core parse is tolerant (a foreign or empty file gives an empty plan);
-	// its header flag tells "not a Crema backup" from "an empty one".
-	if (!plan.hasHeader) {
-		throw new Error('Not a Crema backup file.');
-	}
-	const profiles = plan.profiles ?? [];
-	const beans = plan.beans ?? [];
-	const roasters = plan.roasters ?? [];
-	const shots = plan.shots ?? [];
-	const settings = plan.settings ?? null;
-	const profileMeta = plan.profileMeta ?? null;
-	const maintenance = plan.maintenance ?? null;
-	const visualizerPrefs = plan.visualizerPrefs ?? null;
-
-	const beanStore = getBeanStore();
-	const history = getHistoryStore();
-	const profileStore = getProfileStore();
-	const settingsStore = getSettingsStore();
-
-	if (mode === 'wipe') {
-		beanStore.clearAll();
-		history.clearAllShots();
-		profileStore.clearAllCustom();
-		settingsStore.reset();
-	}
-
-	// Profiles — add customs whose id isn't already known.
-	let addedProfiles = 0;
-	for (const p of profiles) {
-		if (p.id && !profileStore.get(p.id)) {
-			profileStore.save(p);
-			addedProfiles++;
-		}
-	}
-	// Beans + roasters — bulkAdd dedups by id (idempotent merge).
-	const beforeBeans = beanStore.beans.length;
-	const beforeRoasters = beanStore.roasters.length;
-	beanStore.bulkAdd(beans, roasters);
-	const addedBeans = beanStore.beans.length - beforeBeans;
-	const addedRoasters = beanStore.roasters.length - beforeRoasters;
-	// Shots — insert those not already present.
-	const { kept: restoredShots, dropped: droppedShots } = history.insertMany(shots);
-	const addedShots = restoredShots.length;
-	// Settings. The unified line carries `common` (shared CommonSettings — applied
-	// cross-shell, no tag) plus the web-only platform extras (applied only from a
-	// `_shell:'web'` bundle). A pre-unification line had no `common` key — fall back
-	// to the old flat-apply, still web-tagged.
-	let settingsApplied = false;
-	// The webhook settings are never applied here (see HeldRestoreChanges).
-	let heldWebhookChange: HeldRestoreChanges['webhook'] = null;
-	// Merge keeps this device's settings, maintenance counters and Visualizer
-	// prefs, as the owner decided: only Replace takes the backup's. (The plan's
-	// "unless still pristine" comes with PR7.)
-	const replacing = mode === 'wipe';
-	if (settings && replacing) {
-		if (settings.common) {
-			// Assemble the full target Settings, then write once (replaceAll) rather
-			// than a persist() per key. `common` is cross-shell; the web-only platform
-			// extras apply only from a web bundle.
-			const next = applyCommonToSettings(
-				settings.common as unknown as CommonSettings,
-				settingsStore.current
-			) as unknown as Record<string, unknown>;
-			if (settings._shell === 'web') {
-				for (const key of Object.keys(settingsPlatformExtras(settingsStore.current))) {
-					if (key in settings && !isWebhookKey(key)) next[key] = settings[key];
+export function webSingletons(): { sink: SingletonSink; held: () => HeldRestoreChanges | null } {
+	let webhook: HeldRestoreChanges['webhook'] = null;
+	let visualizer: HeldRestoreChanges['visualizer'] = null;
+	const sink: SingletonSink = {
+		settings(settings, plan, replace) {
+			const store = getSettingsStore();
+			// Replace starts from a reset; `LOC` entries always stay (the core's reset rule).
+			if (replace) store.reset();
+			const extras = plan.extras === PlanAction.Apply;
+			if (settings.common) {
+				const next = applyCommonToSettings(
+					settings.common as unknown as CommonSettings,
+					store.current
+				) as unknown as Record<string, unknown>;
+				if (extras) {
+					for (const key of Object.keys(settingsPlatformExtras(store.current))) {
+						if (key in settings && !isWebhookKey(key)) next[key] = settings[key];
+					}
+					webhook = heldWebhook(settings, store.current);
 				}
-				heldWebhookChange = heldWebhook(settings, settingsStore.current);
+				return store.replaceAll(next as unknown as typeof store.current);
 			}
-			settingsStore.replaceAll(next as unknown as typeof settingsStore.current);
-			settingsApplied = true;
-		} else if (settings._shell === 'web') {
-			// Pre-unification flat line — overlay the recognised keys, write once.
-			const next = { ...settingsStore.current } as Record<string, unknown>;
-			for (const key of Object.keys(settingsStore.current)) {
+			if (!extras) return true;
+			// A line from before `common`: the recognised keys, over this device's.
+			const next = { ...store.current } as Record<string, unknown>;
+			for (const key of Object.keys(store.current)) {
 				if (key in settings && !isWebhookKey(key)) next[key] = settings[key];
 			}
-			heldWebhookChange = heldWebhook(settings, settingsStore.current);
-			settingsStore.replaceAll(sanitizeFlat(next as unknown as typeof settingsStore.current));
-			settingsApplied = true;
-		}
-	}
-
-	// Profile organisation — pins + hidden built-ins (cross-shell). A wipe restore
-	// replaces the sets; a merge unions them. On wipe with no profileMeta line (an
-	// older bundle), still clear the existing pins/hidden via an empty replace.
-	if (profileMeta || mode === 'wipe') {
-		profileStore.applyBackupMeta(profileMeta ?? {}, mode === 'wipe');
-	}
-	// Custom brew methods — before recipes, which may name them. Merge adds
-	// unknown ids (local edits win); wipe replaces the list.
-	const methodsAdded =
-		(plan.customMethods?.length ?? 0) > 0 || mode === 'wipe'
-			? getCustomMethodStore().applyBackup(plan.customMethods ?? [], mode === 'wipe')
-			: 0;
-	// Brew recipes + their organisation. Merge adds unknown ids and unions the
-	// hidden set (local default pointers win); wipe replaces the library.
-	const recipesAdded =
-		(plan.recipes?.length ?? 0) > 0 || plan.recipeMeta || mode === 'wipe'
-			? getRecipeStore().applyBackup(plan.recipes ?? [], plan.recipeMeta ?? null, mode === 'wipe')
-			: 0;
-	// Maintenance counters — a shared core type, applied verbatim either shell.
-	if (maintenance && replacing) {
-		getMaintenanceStore().replaceAll(maintenance as unknown as MaintenanceState);
-	}
-	// Visualizer sync prefs — a shared core type, either shell (no per-shell
-	// tag); never the OAuth token (re-authorise after a restore). Fields that
-	// would share more (privacy, notes, profile, auto-upload, background sync,
-	// a direction that starts pushing) are held for the user's OK
-	// by the core's guard; the rest apply now.
-	let heldVisualizer: HeldRestoreChanges['visualizer'] = null;
-	if (visualizerPrefs && replacing) {
-		const guarded = JSON.parse(
-			guardRestoredVisualizerPrefs(JSON.stringify(visualizerSyncPrefs()), JSON.stringify(visualizerPrefs))
-		) as GuardedVisualizerPrefs;
-		applyVisualizerSyncPrefs(guarded.apply);
-		if (guarded.held.length > 0) {
-			// The backup's values with any missing field filled from the core
-			// defaults (guarding a blob against itself holds nothing).
-			const incoming = JSON.parse(
-				guardRestoredVisualizerPrefs(JSON.stringify(visualizerPrefs), JSON.stringify(visualizerPrefs))
+			webhook = heldWebhook(settings, store.current);
+			return store.replaceAll(sanitizeFlat(next as unknown as typeof store.current));
+		},
+		maintenance(state) {
+			return getMaintenanceStore().replaceAll(state as unknown as MaintenanceState);
+		},
+		visualizerPrefs(prefs) {
+			const guarded = JSON.parse(
+				guardRestoredVisualizerPrefs(JSON.stringify(visualizerSyncPrefs()), JSON.stringify(prefs))
 			) as GuardedVisualizerPrefs;
-			heldVisualizer = { fields: guarded.held, incoming: incoming.apply };
+			applyVisualizerSyncPrefs(guarded.apply);
+			if (guarded.held.length > 0) {
+				// The backup's values with any missing field filled from the core
+				// defaults (guarding a blob against itself holds nothing).
+				const incoming = JSON.parse(
+					guardRestoredVisualizerPrefs(JSON.stringify(prefs), JSON.stringify(prefs))
+				) as GuardedVisualizerPrefs;
+				visualizer = { fields: guarded.held, incoming: incoming.apply };
+			}
+			return true;
 		}
-	}
-	const held: HeldRestoreChanges | null =
-		heldWebhookChange || heldVisualizer ? { webhook: heldWebhookChange, visualizer: heldVisualizer } : null;
-
+	};
 	return {
-		profiles: addedProfiles,
-		beans: addedBeans,
-		roasters: addedRoasters,
-		shots: addedShots,
-		droppedShots,
-		recipes: recipesAdded,
-		customMethods: methodsAdded,
-		settingsApplied,
-		held
+		sink,
+		held: () => (webhook || visualizer ? { webhook, visualizer } : null)
 	};
 }
 
@@ -690,53 +722,34 @@ function isWebhookKey(key: string): boolean {
 	return (WEBHOOK_KEYS as readonly string[]).includes(key);
 }
 
-/** Local-file `.crema.zip` magic: `PK\x03\x04`. */
-function isZip(bytes: Uint8Array): boolean {
-	return (
-		bytes.length >= 4 &&
-		bytes[0] === 0x50 &&
-		bytes[1] === 0x4b &&
-		bytes[2] === 0x03 &&
-		bytes[3] === 0x04
-	);
-}
-
 /**
- * Restore a backup from raw bytes (or text) — the entry point the file picker +
- * Drive download use. Detects a `.crema.zip` (unzips → restores `backup.jsonl` +
- * replays bean photos into IndexedDB) vs a legacy `.crema.jsonl` / `.crema` text
- * bundle. Photos key on bean id, so they survive a cross-device restore.
+ * Restore a backup from raw bytes or text, with no report first: the plan
+ * runs if the core says it may (`ok`), or `confirm` is passed for a plan the
+ * user has seen. The file picker and Drive go through the report in the
+ * Settings section; this is the path for both once the user has said yes.
  */
 export async function restoreBackupData(
 	data: ArrayBuffer | Uint8Array | string,
-	mode: RestoreMode
+	mode: RestoreMode,
+	opts: { name?: string; confirmed?: RestorePlan | null; reviveDeleted?: boolean; deps?: Partial<RestoreDeps> } = {}
 ): Promise<RestoreSummary> {
-	if (typeof data === 'string') return restoreBackup(data, mode);
-	const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-	// Size caps (review 05 P3-2): a crafted file or zip bomb fails with a clear
-	// error instead of exhausting memory. Only the backup members are inflated.
-	assertImportSize(bytes.length, 'The backup');
-	if (!isZip(bytes)) return restoreBackup(strFromU8(bytes), mode);
-
-	const files = unzipImportSync(
-		bytes,
-		(name) => name === BACKUP_JSONL_MEMBER || name === 'crema.jsonl' || name.startsWith('images/')
+	const prepared = prepareBackup(data, opts.name ?? 'a backup');
+	const singletons = webSingletons();
+	const outcome = await runRestore(
+		prepared,
+		mode,
+		{ reviveDeleted: opts.reviveDeleted, expected: opts.confirmed ?? null },
+		{ singletons: singletons.sink, ...opts.deps }
 	);
-	const jsonl = files[BACKUP_JSONL_MEMBER] ?? files['crema.jsonl'];
-	if (!jsonl) throw new Error('Not a Crema backup zip (no backup.jsonl inside).');
-	const summary = restoreBackup(strFromU8(jsonl), mode);
+	return { outcome, held: singletons.held() };
+}
 
-	// Replay bean photos into IndexedDB, keyed by bean id (the restored bean's
-	// imageRef already points at this canonical web key for a web-origin backup).
-	const imageStore = getBeanImageStore();
-	for (const [path, fileBytes] of Object.entries(files)) {
-		if (!path.startsWith('images/') || fileBytes.length === 0) continue;
-		const beanId = path.slice('images/'.length);
-		try {
-			await imageStore.put(refForBean(beanId), new Blob([fileBytes as BlobPart]));
-		} catch {
-			// IDB write error — skip this photo, the rest of the restore stands.
-		}
+/** {@link restoreBackupData} for JSONL text, applying whatever the plan allows: for tests and imports. */
+export async function restoreBackup(text: string, mode: RestoreMode): Promise<RestoreSummary> {
+	const prepared = prepareBackup(text, 'a backup');
+	const plan = await planNow(prepared, mode);
+	if (plan.verdict === Verdict.Refused) {
+		return { outcome: { kind: 'refused', plan }, held: null };
 	}
-	return summary;
+	return restoreBackupData(text, mode, { confirmed: plan });
 }

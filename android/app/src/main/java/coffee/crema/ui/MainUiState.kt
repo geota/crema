@@ -51,6 +51,10 @@ data class MainUiState(
     val shotFrame: Int = 0,
     /** True between `ShotStarted` and `ShotCompleted` — drives resting↔extracting UI. */
     val shotInProgress: Boolean = false,
+    /** A planned restore waiting on the user's yes: the report. */
+    val restoreReport: RestoreReportUi? = null,
+    /** A restore a kill left part-way, by its backup's name: the notice with Dismiss. */
+    val interruptedRestore: String? = null,
     /** Raw machine-state name (e.g. `"Espresso"`) for `==` comparisons, or null. */
     val machineStateName: MachineState? = null,
     /** Raw machine-substate name (e.g. `"Pouring"`), or null. */
@@ -254,6 +258,12 @@ data class MainUiState(
     val keepConnectedScreenOff: Boolean = false,
     /** Daily automatic Google Drive backup while Drive is linked (issue #36). */
     val autoDriveBackup: Boolean = true,
+    /** Automatic Drive backup weekly rather than daily (#311). */
+    val driveBackupWeekly: Boolean = false,
+    /** Automatic backups only on an unmetered network (#311). */
+    val driveBackupWifiOnly: Boolean = true,
+    /** BLE sessions whose raw capture is kept (#311). */
+    val bleSessionsKeep: Int = coffee.crema.ble.BleSessionRecorder.NEW_INSTALL_SESSIONS_KEEP,
     /** Daily automatic release check against GitHub — default OFF (opt-in
      *  phone-home; the manual About → Check button always works). */
     val autoUpdateCheck: Boolean = false,
@@ -312,6 +322,8 @@ data class MainUiState(
      * A queue, not a single field, so two rapid notifications both surface.
      */
     val userMessages: List<String> = emptyList(),
+    /** The backups being built, by kind, with how far each is (#310 P2a). */
+    val backupProgress: Map<BackupKind, BackupProgress> = emptyMap(),
     /** Result of the last on-demand release check (Settings → About,
      *  issue #36) — null until the user taps Check. */
     val updateInfo: coffee.crema.update.UpdateInfo? = null,
@@ -619,4 +631,16 @@ data class MainUiState(
      * a mode, after which the response confirms it.
      */
     val scaleActiveMode: Int? = null,
+)
+
+/** The restore report: what a restore will do, before it does it (restore-safety PR7a). */
+data class RestoreReportUi(
+    val title: String,
+    val message: String,
+    /** Replace: gated behind typing ERASE. */
+    val replace: Boolean,
+    /** Shots in the backup were deleted here: offer to bring them back. */
+    val offerBringBack: Boolean,
+    /** Replace with Drive connected: offer a Drive backup first. */
+    val offerBackUpFirst: Boolean,
 )

@@ -98,6 +98,18 @@ class UploadPolicy(
         return kind == "Rejected" || kind == "Quota"
     }
 
+    /**
+     * Whether a failed edit PATCH is for good: the row is gone (404), on another
+     * account (a 403 that isn't about the account) or refused (400, 422). Its
+     * marks then clear and the user is told; anything else is retried.
+     */
+    fun editFailureIsTerminal(e: Throwable): Boolean {
+        if (e is VisualizerError.NotFound) return true
+        val http = e as? VisualizerError.Http ?: return false
+        val kind = Json.parseToJsonElement(classifyJson(http.status, http.body)).jsonObject["kind"]?.jsonPrimitive?.contentOrNull
+        return kind == "Forbidden" || kind == "Rejected"
+    }
+
     fun quotaLimitOf(e: Throwable): Int? = (e as? VisualizerError.Http)?.let { quotaLimit(it.status, it.body) }
 
     fun isRateLimited(e: Throwable): Boolean = e is VisualizerError.Http && e.status == 429

@@ -885,6 +885,25 @@ data class BrewTempRange (
 	val anchor: Float
 )
 
+/// A recorded BLE session file, as the Android shell lists it.
+@Serializable
+data class CaptureSession (
+	val name: String,
+	/// When it started, unix ms: the stamp in its name.
+	val startedMs: Long,
+	/// When it was last written, unix ms.
+	val endedMs: Long
+)
+
+/// A shot with a stored capture, as the web shell lists it.
+@Serializable
+data class CapturedShot (
+	val id: String,
+	/// When the shot completed, unix ms.
+	val completedAtMs: Long,
+	val pinned: Boolean? = null
+)
+
 /// The result of [`catalogue_autofill`].
 @Serializable
 data class CatalogueAutofill (
@@ -2693,6 +2712,15 @@ data class DetectorResults (
 	val skipFirstFrame: Boolean
 )
 
+/// A row that failed this run and may hold the cursor.
+@Serializable
+data class FailedRow (
+	val id: String,
+	val clock: Long,
+	val holds: Boolean,
+	val poisonCandidate: Boolean
+)
+
 /// Which recorded field a [`FieldHit`] came from. Shells key display
 /// decisions off this (name/roaster hits highlight in place; everything else
 /// gets a "matched in" line), so it is a closed enum rather than a string.
@@ -3461,6 +3489,40 @@ data class HotWaterTarget (
 	val stopWeightG: Float? = null
 )
 
+/// An unbound local row, or unbound tombstone, a remote row may be the upload of.
+@Serializable
+data class KeyCandidate (
+	val localId: String,
+	val completedAtMs: Long,
+	val durationMs: Long,
+	/// A tombstone binds only by today's key: the bind can delete the remote row.
+	val tombstone: Boolean? = null
+)
+
+/// What this device holds for a remote id.
+@Serializable
+data class KnownRow (
+	/// The remote id.
+	val remoteId: String,
+	/// `visualizerUpdatedAt`: the version last applied, unix s.
+	val remoteVersion: Long? = null,
+	val hasSeries: Boolean? = null,
+	val isBrew: Boolean? = null,
+	/// Deleted here: the remote copy stays out.
+	val tombstoned: Boolean? = null
+)
+
+/// A `GET /shots` list row.
+@Serializable
+data class ListRow (
+	/// Remote id.
+	val id: String,
+	/// The shot's start, unix s: the upload key of a shot Crema sent.
+	val clock: Long,
+	/// Unix s.
+	val updated_at: Long
+)
+
 /// A shot here, as far as a plan needs it. Include tombstoned rows.
 @Serializable
 data class LocalShot (
@@ -3534,7 +3596,9 @@ data class ProfileMeta (
 /// Recipe organisation here.
 @Serializable
 data class RecipeMeta (
-	/// Method id → recipe id.
+	/// Method id → recipe id. Written in order, so a plan serialises the same
+	/// way every time: the shell compares a confirmed plan with a fresh one by
+	/// its JSON.
 	val defaults: HashMap<String, String>,
 	val hiddenBuiltins: List<String>
 )
@@ -3568,7 +3632,11 @@ data class LocalState (
 	val common: CommonSettings,
 	val visualizerPrefs: VisualizerSyncPrefs,
 	val totalLitres: Double,
-	val activeBeanId: String? = null
+	val activeBeanId: String? = null,
+	/// Beans an earlier, interrupted run of this restore added, from its
+	/// marker. They don't count as here for `zero_debit`: a re-run after any
+	/// prefix of the steps must end where a clean run does.
+	val addedBeans: List<String>
 )
 
 /// A derived maintenance readout — counters, percentages, and due/ok
@@ -3698,6 +3766,66 @@ data class ModeTargets (
 	val flushTimeS: Float
 )
 
+/// The request pacer: a GCRA bucket of [`PACE_BURST`] with one token every
+/// [`PACE_INTERVAL_MS`], plus a rate-limit cooldown. Persist it every tenth
+/// request and when a run stops.
+@Serializable
+data class PaceBucket (
+	/// The theoretical arrival time, unix ms.
+	val tatMs: Long,
+	/// The latest clock reading seen: a clock going back counts as no time.
+	val lastNowMs: Long,
+	/// No request before this, after a 429.
+	val cooldownUntilMs: Long? = null
+)
+
+/// One list page to plan.
+@Serializable
+data class PageInput (
+	val rows: List<ListRow>,
+	val known: List<KnownRow>? = null,
+	val candidates: List<KeyCandidate>? = null,
+	/// Rows the history can still add; `None` once the cap is view-only.
+	val freeSlots: UInt? = null,
+	/// A cursor from before row versions existed (unix s): bound rows at or
+	/// below it are taken as applied, with no version written.
+	val legacyCursor: Long? = null
+)
+
+/// Generated type representing the anonymous struct variant `Skip` of the `RowPlan` Rust enum
+@Serializable
+data class RowPlanSkipInner (
+	val id: String,
+	val why: SkipReason
+)
+
+/// Generated type representing the anonymous struct variant `FetchDetail` of the `RowPlan` Rust enum
+@Serializable
+data class RowPlanFetchDetailInner (
+	val id: String,
+	val candidates: List<KeyCandidate>
+)
+
+/// What to do with one list row.
+@Serializable
+sealed class RowPlan {
+	@Serializable
+	@SerialName("Skip")
+	data class Skip(val details: RowPlanSkipInner): RowPlan()
+	/// Fetch the detail. [`choose_bind`] picks among `candidates` with its duration.
+	@Serializable
+	@SerialName("FetchDetail")
+	data class FetchDetail(val details: RowPlanFetchDetailInner): RowPlan()
+}
+
+/// A planned page.
+@Serializable
+data class PagePlan (
+	val rows: List<RowPlan>,
+	/// The slots left after the rows this page will add.
+	val freeSlots: UInt? = null
+)
+
 /// A profile phase boundary observed during the shot — the port of Decenza's
 /// `HistoryPhaseMarker`. Decenza inserts a synthetic first marker with
 /// `label == "Start"` and `frame_number == 0` at extraction start
@@ -3785,6 +3913,29 @@ data class PlanSource (
 	val appVersion: String,
 	val deviceLabel: String,
 	val omittedCount: UInt
+)
+
+/// A row that keeps failing.
+@Serializable
+data class PoisonEntry (
+	val id: String,
+	val count: UInt,
+	val lastCountedAtMs: Long,
+	val clock: Long,
+	/// When a poison row is next tried, alone.
+	val retryAtMs: Long
+)
+
+/// The pour's time-weighted averages.
+@Serializable
+data class PourAverages (
+	/// Group pressure, bar.
+	val pressure: Float,
+	/// Group flow, ml/s.
+	val flow: Float,
+	/// Group-head temperature, °C. `None` when the series carries none (an
+	/// import that recorded no head temperature reads 0).
+	val headTemp: Float? = null
 )
 
 /// The pre-infusion dial for one profile: its range, the profile's own
@@ -3879,6 +4030,56 @@ data class ProfileSyncOutput (
 	val output: CoreOutput,
 	/// The sync's status after the call.
 	val status: ProfileSyncStatus
+)
+
+/// Generated type representing the anonymous struct variant `Partial` of the `RunEnd` Rust enum
+@Serializable
+data class RunEndPartialInner (
+	val reason: PartialReason
+)
+
+/// Generated type representing the anonymous struct variant `Failed` of the `RunEnd` Rust enum
+@Serializable
+data class RunEndFailedInner (
+	val failure: SyncFailure
+)
+
+/// Why a walk stopped early.
+@Serializable
+sealed class RunEnd {
+	@Serializable
+	@SerialName("Partial")
+	data class Partial(val details: RunEndPartialInner): RunEnd()
+	@Serializable
+	@SerialName("Failed")
+	data class Failed(val details: RunEndFailedInner): RunEnd()
+}
+
+/// What a run has done so far.
+@Serializable
+data class PullTally (
+	/// Where the run started, unix ms (0 = from the start).
+	val sinceMs: Long,
+	/// The newest `updated_at` seen, unix s.
+	val highestSeen: Long? = null,
+	val applied: UInt? = null,
+	val unchanged: UInt? = null,
+	val skippedPermanent: UInt? = null,
+	/// New rows the history had no room for.
+	val historyFull: UInt? = null,
+	/// Rows edited during their fetch that had no series, so their backfill waits.
+	val editedWithoutSeries: UInt? = null,
+	val failed: List<FailedRow>? = null,
+	/// Transient failures in a row.
+	val streak: UInt? = null,
+	/// A detail succeeded: the condition for a failure to count towards poison.
+	val detailSucceeded: Boolean? = null,
+	/// Rows looked at.
+	val walked: UInt? = null,
+	val lastCount: UInt? = null,
+	val restarts: UInt? = null,
+	/// Why the walk stopped early.
+	val ended: RunEnd? = null
 )
 
 /// The four badge booleans the shells surface as chips. Projection rules:
@@ -3988,6 +4189,7 @@ data class RecipeLibraryMigration (
 @Serializable
 data class RecipeMetaPlan (
 	val action: PlanAction,
+	/// Written in order, as [`RecipeMeta::defaults`].
 	val defaults: HashMap<String, String>,
 	val hiddenBuiltins: List<String>
 )
@@ -4485,6 +4687,41 @@ data class ShotCaptureContext (
 	val profileName: String? = null
 )
 
+/// What the merge reads of the local row.
+@Serializable
+data class ShotMergeInput (
+	/// The local tags.
+	val tags: List<String>? = null,
+	/// A tag edit here waits to reach Visualizer.
+	val tagsPending: Boolean? = null,
+	/// The local barista.
+	val barista: String? = null,
+	/// A barista edit here waits to reach Visualizer.
+	val baristaPending: Boolean? = null,
+	/// The row has its telemetry.
+	val hasSeries: Boolean? = null,
+	/// The row has its recipe.
+	val hasProfile: Boolean? = null,
+	/// A brew log: no telemetry by nature.
+	val isBrew: Boolean? = null
+)
+
+/// What a pull may change on a row, and nothing else: a merge can't touch a
+/// rating, notes, a bean or a bag debit, because there is no field for them.
+@Serializable
+data class ShotPatch (
+	/// The new tag list, when the remote adds any.
+	val tags: List<String>? = null,
+	/// A barista to fill into a blank one.
+	val barista: String? = null,
+	/// Take the pulled telemetry: the row has none.
+	val backfillSamples: Boolean? = null,
+	/// Fetch and store the recipe: the row has none and the detail offers one.
+	val fillProfile: Boolean? = null,
+	/// The remote row's `updated_at` (unix s), written last, once the rest landed.
+	val remoteVersion: Long? = null
+)
+
 /// Everything a shot-annotation PATCH can carry, gathered by the shell
 /// (which owns the config lookups — include-notes opt-out, effective
 /// privacy, bag/tag resolution) and assembled here so both shells emit
@@ -4509,8 +4746,9 @@ data class ShotPatchInputs (
 	val grinderModel: String? = null,
 	/// Visualizer coffee-bag id to (re)link → `coffee_bag_id`.
 	val coffeeBagId: String? = null,
-	/// Tags → `tag_list`. Empty = omit.
-	val tagList: List<String>,
+	/// Tags → `tag_list`, an absolute list. `None` omits it; `Some([])` sends
+	/// `[]`, which clears the remote tags, so only a tag push should pass one.
+	val tagList: List<String>? = null,
 	/// Inline bean: roaster display name → `bean_brand`.
 	val beanBrand: String? = null,
 	/// Inline bean: bean/bag name → `bean_type`.
@@ -4680,6 +4918,28 @@ data class ShotStatInput (
 	val rating: UByte? = null
 )
 
+/// What a History row shows of a shot without its series.
+@Serializable
+data class ShotSummary (
+	/// The summary's format: 1.
+	val v: UInt,
+	/// Machine samples in the series. The shell stores `null` when it
+	/// couldn't read the series; the core always counts.
+	val sampleCount: UInt? = null,
+	/// Samples in a brew's scale series; 0 for none.
+	val brewSampleCount: UInt,
+	/// As [`crate::ShotRecord::peaks`].
+	val peakWeight: Float? = null,
+	/// As [`crate::ShotRecord::peaks`].
+	val finalWeight: Float? = null,
+	/// As [`crate::ShotRecord::peaks`].
+	val peakPressure: Float,
+	/// As [`crate::ShotRecord::peaks`].
+	val peakTemp: Float,
+	/// The row chart, as described in the module docs; `None` with no series.
+	val spark: String? = null
+)
+
 /// One horizontal run of the planned-water staircase: level `target_g`
 /// from `t0_ms` to `t1_ms` (session ms).
 @Serializable
@@ -4801,6 +5061,15 @@ data class StoredHotWater (
 	val timeNoLimit: Boolean? = null,
 	/// The stored ratio.
 	val ratio: Float? = null
+)
+
+/// What a tag edit here changed, waiting to reach Visualizer.
+@Serializable
+data class TagMarks (
+	/// Tags added here.
+	val add: List<String>? = null,
+	/// Tags removed here.
+	val remove: List<String>? = null
 )
 
 /// A telemetry sample tagged with its time since the shot began.
@@ -4930,8 +5199,9 @@ data class WireShot (
 	/// mutable metadata, NOT part of the de-dup signature: a remote
 	/// re-tagging doesn't change the shot's identity.
 	/// 
-	/// `#[serde(default)]` so older shells / responses without the
-	/// field still deserialise cleanly to an empty Vec.
+	/// `None` when the detail carried no `tags`. `Some([])` says no more: a
+	/// free account always answers `[]`, so remote tags only ever add
+	/// ([`crate::merge_remote_shot`]).
 	val tag_list: List<String>? = null,
 	/// The bean / grinder journal fields the remote carries, or `None`
 	/// when the detail had none of them. Mutable metadata like `tag_list`
@@ -5234,6 +5504,29 @@ sealed class CalibrationRefusal {
 	@Serializable
 	@SerialName("FirmwareRejected")
 	object FirmwareRejected: CalibrationRefusal()
+}
+
+/// Generated type representing the anonymous struct variant `Newest` of the `CaptureKeep` Rust enum
+@Serializable
+data class CaptureKeepNewestInner (
+	val count: UInt
+)
+
+/// How many raw captures to keep.
+@Serializable
+sealed class CaptureKeep {
+	/// Record none, and keep only pinned shots' captures.
+	@Serializable
+	@SerialName("Off")
+	object Off: CaptureKeep()
+	/// The newest this many.
+	@Serializable
+	@SerialName("Newest")
+	data class Newest(val details: CaptureKeepNewestInner): CaptureKeep()
+	/// Every capture: nothing is deleted by count.
+	@Serializable
+	@SerialName("All")
+	object All: CaptureKeep()
 }
 
 /// The direction of an exit comparison. Lowercase wire spelling
@@ -5573,6 +5866,19 @@ sealed class IdleSleepInput {
 	@Serializable
 	@SerialName("Tick")
 	object Tick: IdleSleepInput()
+}
+
+/// What to do after a list page.
+@Serializable
+enum class ListStep(val string: String) {
+	@SerialName("Continue")
+	Continue("Continue"),
+	/// Start again from page 1: applied rows skip, so it costs list requests only.
+	@SerialName("Restart")
+	Restart("Restart"),
+	/// It kept shrinking: end `Partial(ListShifted)`.
+	@SerialName("Stop")
+	Stop("Stop"),
 }
 
 /// Generated type representing the anonymous struct variant `StateChanged` of the `MachineRequestDrop` Rust enum
@@ -6214,6 +6520,105 @@ sealed class RelayEvent {
 	data class Failed(val content: RelayEventFailedInner): RelayEvent()
 }
 
+/// Generated type representing the anonymous struct variant `Wait` of the `RowAction` Rust enum
+@Serializable
+data class RowActionWaitInner (
+	val wait_ms: Long
+)
+
+/// Generated type representing the anonymous struct variant `Skip` of the `RowAction` Rust enum
+@Serializable
+data class RowActionSkipInner (
+	val holds: Boolean,
+	val transient: Boolean,
+	val poison_candidate: Boolean
+)
+
+/// What to do about a failed detail.
+@Serializable
+sealed class RowAction {
+	/// Try the same request again now.
+	@Serializable
+	@SerialName("RetryNow")
+	object RetryNow: RowAction()
+	/// Sit the rate limit out, then retry the same request. The run stays Waiting.
+	@Serializable
+	@SerialName("Wait")
+	data class Wait(val details: RowActionWaitInner): RowAction()
+	/// Pass the row, counted. `holds`: the cursor can't move past it.
+	/// `transient`: it counts towards the failure streak. `poison_candidate`:
+	/// repeated, it may become poison.
+	@Serializable
+	@SerialName("Skip")
+	data class Skip(val details: RowActionSkipInner): RowAction()
+	/// Stop the walk.
+	@Serializable
+	@SerialName("EndRun")
+	object EndRun: RowAction()
+}
+
+/// Generated type representing the anonymous struct variant `Call` of the `RowFailure` Rust enum
+@Serializable
+data class RowFailureCallInner (
+	val failure: SyncFailure
+)
+
+/// Why a detail failed.
+@Serializable
+sealed class RowFailure {
+	/// A 2xx that isn't JSON or doesn't parse: a captive portal looks like this.
+	@Serializable
+	@SerialName("NotJson")
+	object NotJson: RowFailure()
+	/// Valid JSON that can't be mapped onto a shot.
+	@Serializable
+	@SerialName("Unmappable")
+	object Unmappable: RowFailure()
+	/// What the classification said about any other reply.
+	@Serializable
+	@SerialName("Call")
+	data class Call(val details: RowFailureCallInner): RowFailure()
+}
+
+/// Generated type representing the anonymous struct variant `EditedDuringFetch` of the `RowOutcome` Rust enum
+@Serializable
+data class RowOutcomeEditedDuringFetchInner (
+	val has_series: Boolean
+)
+
+/// Generated type representing the anonymous struct variant `Failed` of the `RowOutcome` Rust enum
+@Serializable
+data class RowOutcomeFailedInner (
+	val holds: Boolean,
+	val transient: Boolean,
+	val poison_candidate: Boolean
+)
+
+/// How a row went.
+@Serializable
+sealed class RowOutcome {
+	/// The merge changed it.
+	@Serializable
+	@SerialName("Applied")
+	object Applied: RowOutcome()
+	/// Nothing to change, or a skip that needs no detail.
+	@Serializable
+	@SerialName("Unchanged")
+	object Unchanged: RowOutcome()
+	/// The plan passed it for want of a slot.
+	@Serializable
+	@SerialName("HistoryFull")
+	object HistoryFull: RowOutcome()
+	/// It changed here while the detail was fetched: no version written.
+	@Serializable
+	@SerialName("EditedDuringFetch")
+	data class EditedDuringFetch(val details: RowOutcomeEditedDuringFetchInner): RowOutcome()
+	/// The detail failed, and [`row_failure_action`] said to pass it.
+	@Serializable
+	@SerialName("Failed")
+	data class Failed(val details: RowOutcomeFailedInner): RowOutcome()
+}
+
 /// Generated type representing the anonymous struct variant `Complete` of the `RunOutcome` Rust enum
 @Serializable
 data class RunOutcomeCompleteInner (
@@ -6385,6 +6790,23 @@ enum class ShotPrivacy(val string: String) {
 	/// Visible to the owner only.
 	@SerialName("private")
 	Private("private"),
+}
+
+/// Why a row is passed without a detail.
+@Serializable
+enum class SkipReason(val string: String) {
+	/// Deleted here.
+	@SerialName("Tombstoned")
+	Tombstoned("Tombstoned"),
+	/// The version applied is the remote's.
+	@SerialName("UpToDate")
+	UpToDate("UpToDate"),
+	/// At or below a legacy cursor.
+	@SerialName("LegacyCursor")
+	LegacyCursor("LegacyCursor"),
+	/// New, and the history has no room. It waits, holding the cursor.
+	@SerialName("HistoryFull")
+	HistoryFull("HistoryFull"),
 }
 
 /// Generated type representing the anonymous struct variant `FlushLeftIdle` of the `StartEnd` Rust enum

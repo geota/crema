@@ -19,12 +19,14 @@
  */
 
 import {
+	followOtherTabs,
 	isIdOrNull,
 	isJsonObject,
 	keepSkippedRows,
 	readJson,
 	readStore,
-	writeJson
+	writeJson,
+	writeJsonChecked
 } from '#lib/utils/storage.js';
 import {
 	credit_shot_debit,
@@ -99,20 +101,7 @@ function readLibrary(): LibraryEnvelope {
 		valid: isLibraryEnvelope
 	});
 	if (read.kind === 'unavailable') return { schemaVersion: LIBRARY_SCHEMA, beans: [], roasters: [] };
-	if (read.kind === 'loaded') {
-		const env = read.value;
-		const skipped: unknown[] = [];
-		const coerced = <T,>(rows: unknown[], coerce: (row: unknown) => T | null): T[] =>
-			rows.flatMap((row) => {
-				const out = coerce(row);
-				if (out === null) skipped.push(row);
-				return out === null ? [] : [out];
-			});
-		const beans = dedupById(coerced(env.beans, coerceBean));
-		const roasters = dedupById(coerced(env.roasters, coerceRoaster));
-		keepSkippedRows(LIBRARY_KEY, skipped, LIBRARY_WHAT);
-		return { schemaVersion: LIBRARY_SCHEMA, beans, roasters };
-	}
+	if (read.kind === 'loaded') return libraryOf(read.value);
 	// First load — try the legacy single-bean migration.
 	const migrated = migrateLegacyCurrentBean(readJson<unknown>(LEGACY_KEY, null));
 	if (migrated) {
@@ -123,6 +112,21 @@ function readLibrary(): LibraryEnvelope {
 		};
 	}
 	return { schemaVersion: LIBRARY_SCHEMA, beans: [], roasters: [] };
+}
+
+/** A stored envelope, its rows coerced; a row that can't be is kept aside. */
+function libraryOf(env: LibraryEnvelope): LibraryEnvelope {
+	const skipped: unknown[] = [];
+	const coerced = <T,>(rows: unknown[], coerce: (row: unknown) => T | null): T[] =>
+		rows.flatMap((row) => {
+			const out = coerce(row);
+			if (out === null) skipped.push(row);
+			return out === null ? [] : [out];
+		});
+	const beans = dedupById(coerced(env.beans, coerceBean));
+	const roasters = dedupById(coerced(env.roasters, coerceRoaster));
+	keepSkippedRows(LIBRARY_KEY, skipped, LIBRARY_WHAT);
+	return { schemaVersion: LIBRARY_SCHEMA, beans, roasters };
 }
 
 // ── BeanLibraryStore ───────────────────────────────────────────────────
@@ -144,6 +148,16 @@ export class BeanLibraryStore {
 	private activeId = $state.raw<string | null>(
 		readJson<string | null>(ACTIVE_KEY, null, { valid: isIdOrNull })
 	);
+
+	constructor() {
+		// Another tab's debit or edit is taken, not written back over (#333).
+		followOtherTabs(LIBRARY_KEY, isLibraryEnvelope, (v) => {
+			this.envelope = libraryOf(v as LibraryEnvelope);
+		});
+		followOtherTabs(ACTIVE_KEY, isIdOrNull, (v) => {
+			this.activeId = v as string | null;
+		});
+	}
 
 	// ── Reads ────────────────────────────────────────────────────────
 
@@ -207,6 +221,21 @@ export class BeanLibraryStore {
 		this.activeId = null;
 		this.persist();
 		this.persistActive();
+	}
+
+	/**
+	 * A restore's library: beans and roasters in one write, after memory, so an
+	 * edit made while it lands stacks on the restored state. `clearActive` for a
+	 * Replace whose backup lacks the active bean. Whether it was stored.
+	 */
+	restoreLibrary(beans: Bean[], roasters: Roaster[], clearActive: boolean): boolean {
+		this.envelope = { ...this.envelope, beans, roasters };
+		const stored = writeJsonChecked(LIBRARY_KEY, this.envelope);
+		if (clearActive && this.activeId !== null) {
+			this.activeId = null;
+			return writeJsonChecked(ACTIVE_KEY, null) && stored;
+		}
+		return stored;
 	}
 
 	// ── Bean CRUD ────────────────────────────────────────────────────

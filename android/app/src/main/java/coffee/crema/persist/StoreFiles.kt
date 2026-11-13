@@ -39,6 +39,7 @@ data class RefusedStore(val what: String, val file: File)
  */
 object Stores {
     private val health = ConcurrentHashMap<String, StoreHealth>()
+    private val whats = ConcurrentHashMap<String, String>()
     private val _refused = MutableStateFlow<List<RefusedStore>>(emptyList())
 
     /** The stores whose saves are being refused: while it isn't empty, the banner stays. */
@@ -46,7 +47,14 @@ object Stores {
 
     fun health(file: File): StoreHealth = health[file.path] ?: StoreHealth.LOADING
 
+    /** What a backup made now would be missing: the stores whose load came out
+     *  damaged or unavailable this session, by name. */
+    fun unhealthy(): List<String> =
+        health.filterValues { it == StoreHealth.DAMAGED || it == StoreHealth.UNAVAILABLE }
+            .keys.mapNotNull { whats[it] }.distinct().sorted()
+
     internal fun record(target: File, what: String, outcome: SafeLoad<*>) {
+        whats[target.path] = what
         health[target.path] = when (outcome) {
             SafeLoad.Absent -> StoreHealth.ABSENT
             is SafeLoad.Loaded -> StoreHealth.OK
@@ -67,12 +75,14 @@ object Stores {
     /** [target] has gone (Erase all data): nothing is left to refuse. */
     internal fun forget(target: File) {
         health.remove(target.path)
+        whats.remove(target.path)
         _refused.update { list -> list.filterNot { it.file == target } }
     }
 
     /** Test seam: forget everything between tests. */
     internal fun resetForTest() {
         health.clear()
+        whats.clear()
         _refused.value = emptyList()
     }
 }

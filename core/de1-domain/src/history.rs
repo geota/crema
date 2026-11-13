@@ -191,9 +191,10 @@ pub struct HistoryStats {
 /// average skips unrated (`None` / 0) rows; the time average runs over
 /// every shot. Mirrors the web history page's derivations, which were
 /// the verified reference.
-// The casts feed display averages: the history cap is 300 rows and a
-// real shot is minutes, both far inside f32's 23-bit mantissa.
-#[allow(clippy::cast_precision_loss)]
+// Sums run in f64 (#310): at 20,000 rows the duration total passes 8e8 ms,
+// where an f32 step is 64 ms, so an f32 total drifts. Results are display
+// values and stay f32.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 #[must_use]
 pub fn history_stats(shots: &[ShotStatInput]) -> HistoryStats {
     let yield_of = |s: &ShotStatInput| {
@@ -214,32 +215,40 @@ pub fn history_stats(shots: &[ShotStatInput]) -> HistoryStats {
         .iter()
         .filter_map(|s| s.rating.filter(|r| *r > 0).map(f32::from))
         .collect();
-    let mean = |v: &[f32]| {
-        if v.is_empty() {
-            None
-        } else {
-            Some(v.iter().sum::<f32>() / v.len() as f32)
-        }
-    };
     HistoryStats {
         count: u32::try_from(shots.len()).unwrap_or(u32::MAX),
         total_weight_g: if yields.is_empty() {
             None
         } else {
-            Some(yields.iter().sum())
+            Some(sum_f64(&yields) as f32)
         },
-        avg_weight_g: mean(&yields),
-        avg_ratio: mean(&ratios),
+        avg_weight_g: mean_f64(&yields),
+        avg_ratio: mean_f64(&ratios),
         avg_time_s: if shots.is_empty() {
             None
         } else {
             Some(
-                shots.iter().map(|s| s.duration_ms as f32).sum::<f32>()
-                    / shots.len() as f32
-                    / 1000.0,
+                (shots.iter().map(|s| s.duration_ms as f64).sum::<f64>()
+                    / shots.len() as f64
+                    / 1000.0) as f32,
             )
         },
-        avg_rating: mean(&ratings),
+        avg_rating: mean_f64(&ratings),
+    }
+}
+
+/// `v`'s sum, in f64.
+pub(crate) fn sum_f64(v: &[f32]) -> f64 {
+    v.iter().map(|x| f64::from(*x)).sum()
+}
+
+/// `v`'s mean, summed in f64, or `None` for no values.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+pub(crate) fn mean_f64(v: &[f32]) -> Option<f32> {
+    if v.is_empty() {
+        None
+    } else {
+        Some((sum_f64(v) / v.len() as f64) as f32)
     }
 }
 
@@ -260,6 +269,49 @@ mod stats_tests {
             peak_weight_g: peak_g,
             dose_g,
             rating,
+        }
+    }
+
+    /// #310: at 20,000 rows an f32 sum drifts. The totals stay within 0.1%
+    /// of an exact sum.
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn a_20000_row_history_sums_within_a_tenth_of_a_percent() {
+        let rows: Vec<ShotStatInput> = (0..20_000_u64)
+            .map(|i| {
+                let yield_g = 30.0 + (i % 97) as f32 * 0.137;
+                shot(
+                    25_000 + (i % 41) * 997,
+                    Some(yield_g),
+                    None,
+                    Some(18.0),
+                    None,
+                )
+            })
+            .collect();
+        let exact_weight: f64 = rows
+            .iter()
+            .map(|r| f64::from(r.final_weight_g.unwrap()))
+            .sum();
+        let exact_time: f64 =
+            rows.iter().map(|r| r.duration_ms as f64).sum::<f64>() / 20_000.0 / 1000.0;
+        let s = history_stats(&rows);
+        let off = |got: f32, want: f64| (f64::from(got) - want).abs() / want;
+        assert!(
+            off(s.total_weight_g.unwrap(), exact_weight) < 0.001,
+            "{s:?} vs {exact_weight}"
+        );
+        assert!(
+            off(s.avg_time_s.unwrap(), exact_time) < 0.001,
+            "{s:?} vs {exact_time}"
+        );
+        assert!(off(s.avg_weight_g.unwrap(), exact_weight / 20_000.0) < 0.001);
+        // And no drift at all: summed in f64, each is the exact value rounded
+        // once. Summed in f32 they're off by more than one rounding.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            assert_eq!(s.total_weight_g, Some(exact_weight as f32));
+            assert_eq!(s.avg_time_s, Some(exact_time as f32));
         }
     }
 
@@ -428,6 +480,18 @@ pub struct StoredShot {
     /// fixtures serialise byte-identically.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decent_id: Option<String>,
+    /// The Visualizer row's `updated_at` (unix s) when a pull last merged it,
+    /// written last, once the merge landed: a pull skips a row whose remote
+    /// version is this. Never uploaded. Omitted when absent, so existing bytes
+    /// don't change; a downgrade drops it, which costs a refetch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visualizer_updated_at: Option<i64>,
+    /// The user pinned this shot: its raw capture ignores the capture limit,
+    /// and it is exempt from any cleanup (#311). It moves with backups and
+    /// between the apps. Omitted when false, so existing bytes don't change;
+    /// an old backup reads as not pinned.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
     /// The DE1 this shot was pulled on, stamped by the shell at record
     /// time (#84) — the provenance the Decent upload sends. `None` for
     /// shots recorded before the field existed (the shell then falls back
@@ -530,6 +594,8 @@ impl StoredShot {
             visualizer_id: None,
             deleted_at: None,
             decent_id: None,
+            visualizer_updated_at: None,
+            pinned: false,
             machine: None,
             brew_method: None,
             brew_method_label: None,
@@ -592,6 +658,13 @@ impl StoredShot {
     #[must_use]
     pub fn peaks(&self) -> crate::shot::ShotPeaks {
         self.record.peaks()
+    }
+
+    /// The pour's averages, derived on read like [`peaks`](Self::peaks) —
+    /// see [`crate::pour_averages`].
+    #[must_use]
+    pub fn pour_averages(&self) -> Option<crate::pour_averages::PourAverages> {
+        crate::pour_averages::pour_averages(&self.record)
     }
 
     /// Serialize to pretty JSON — a stable, human-readable format the shell
@@ -884,5 +957,40 @@ mod tests {
         let parsed: Vec<StoredShot> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, shots);
         assert_eq!(parsed.len(), 3);
+    }
+
+    #[test]
+    fn a_pin_round_trips_and_an_old_row_reads_as_not_pinned() {
+        let mut shot = StoredShot::new(1, sample_record());
+        let unpinned = serde_json::to_string(&shot).unwrap();
+        assert!(!unpinned.contains("pinned"), "existing bytes don't change");
+        assert!(
+            !serde_json::from_str::<StoredShot>(&unpinned)
+                .unwrap()
+                .pinned
+        );
+        shot.pinned = true;
+        let json = serde_json::to_string(&shot).unwrap();
+        assert!(json.contains(r#""pinned":true"#));
+        assert!(serde_json::from_str::<StoredShot>(&json).unwrap().pinned);
+    }
+
+    #[test]
+    fn the_remote_version_round_trips_and_is_omitted_when_absent() {
+        let mut shot = StoredShot::new(1, sample_record());
+        assert!(
+            !serde_json::to_string(&shot)
+                .unwrap()
+                .contains("visualizerUpdatedAt")
+        );
+        shot.visualizer_updated_at = Some(1_700_000_000);
+        let json = serde_json::to_string(&shot).unwrap();
+        assert!(json.contains(r#""visualizerUpdatedAt":1700000000"#));
+        assert_eq!(
+            serde_json::from_str::<StoredShot>(&json)
+                .unwrap()
+                .visualizer_updated_at,
+            Some(1_700_000_000)
+        );
     }
 }

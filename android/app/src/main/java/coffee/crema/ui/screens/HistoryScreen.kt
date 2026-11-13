@@ -54,6 +54,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.convertPressure
 import coffee.crema.ui.convertTemp
+import coffee.crema.ui.pourAverageLine
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.formatWeight
@@ -181,6 +182,7 @@ fun HistoryScreen(
     var range by rememberListString("history/range", "all")
     // Web history: per-profile filter pills ahead of the range chips.
     var profileFilter by rememberListOptString("history/profile")
+    var pinnedOnly by rememberListBool("history/pinned", false)
     // Bean filter — scope the log to one bag (bean-workflow-unify §B).
     var beanFilter by rememberListOptString("history/bean")
     // Brew Log method filter (issue #10) — rendered only once a second
@@ -240,15 +242,16 @@ fun HistoryScreen(
     // `now` is minute-bucketed so it doesn't bust the cache, and ticks by
     // itself so a range stays right on a screen nothing else recomposes.
     val nowBucket = coffee.crema.ui.rememberMinuteBucket()
-    val shots = remember(ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee) {
+    val shots = remember(ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee, pinnedOnly) {
         filterAndSortShots(
             ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,
             coffeeOf = { shotCoffee(it, liveCoffee)?.key },
+            pinnedOnly = pinnedOnly,
         )
     }
     // A brew re-dated out of the filtered list, held open until a filter changes.
     var heldShotId by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(query, range, profileFilter, beanFilter, methodFilter) { heldShotId = null }
+    LaunchedEffect(query, range, profileFilter, beanFilter, methodFilter, pinnedOnly) { heldShotId = null }
     // Default the detail to the newest (top) shot until the user picks one.
     val selected = shots.firstOrNull { it.id == selectedId }
         ?: heldShotId?.takeIf { it == selectedId }?.let { id -> ui.history.firstOrNull { it.id == id } }
@@ -414,6 +417,16 @@ fun HistoryScreen(
                             count = ui.history.size,
                             onClick = { profileFilter = null },
                         )
+                        // Pinned shots, once there are any (or while the filter is on).
+                        val pinnedCount = ui.history.count { it.pinned }
+                        if (pinnedCount > 0 || pinnedOnly) {
+                            CremaFilterChip(
+                                label = "Pinned",
+                                selected = pinnedOnly,
+                                count = pinnedCount,
+                                onClick = { pinnedOnly = !pinnedOnly },
+                            )
+                        }
                         byProfile.take(6).forEach { (name, count) ->
                             CremaFilterChip(
                                 label = name,
@@ -558,9 +571,12 @@ fun HistoryScreen(
                         // Core shot-quality analysis (Decenza port) — computed once
                         // per selection; null (thin/malformed shot) renders nothing.
                         val quality = remember(selected.id) { vm.analyzeShotQuality(selected) }
+                        // The pour's averages (#299), from the core, likewise.
+                        val pourAverages = remember(selected.id, selected.samples.size) { vm.pourAverages(selected) }
                         ShotDetail(
                             shot = selected,
                             quality = quality,
+                            pourAverages = pourAverages,
                             weightUnit = ui.weightUnit,
                             tempUnit = ui.tempUnit,
                             pressureUnit = ui.pressureUnit,
@@ -574,6 +590,7 @@ fun HistoryScreen(
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
                             onExport = { vm.exportShot(selected.id) },
                             onDelete = { remote -> vm.deleteShot(selected.id, alsoOnVisualizer = remote); selectedId = null },
+                            onPinnedChange = { p -> vm.setShotPinned(selected.id, p) },
                             remoteDeleteAvailable = vm.canDeleteShotOnVisualizer(selected),
                             // One Upload row over Visualizer + Decent (a re-upload for a
                             // destination that already has the shot: Visualizer de-dupes
@@ -793,7 +810,7 @@ private fun ShotRow(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             val rowName = coffee.crema.history.shotTitle(shot)
             Text(
-                if (shot.isManualLog) "$rowName · logged" else rowName,
+                (if (shot.isManualLog) "$rowName · logged" else rowName) + if (shot.pinned) " · pinned" else "",
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium),
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
@@ -881,6 +898,8 @@ private fun ShotDetail(
     shot: StoredShot,
     /** The core's shot-quality report, or null when unanalyzable (no block). */
     quality: ShotQualityReport?,
+    /** The pour's averages (#299), or null with no pour (no line). */
+    pourAverages: coffee.crema.core.PourAverages?,
     weightUnit: String,
     tempUnit: String,
     pressureUnit: String,
@@ -889,6 +908,8 @@ private fun ShotDetail(
     onLoadOnBrew: () -> Unit,
     onExport: () -> Unit,
     onDelete: (alsoOnVisualizer: Boolean) -> Unit,
+    /** Pin or unpin (#311); null hides the action. */
+    onPinnedChange: ((Boolean) -> Unit)? = null,
     /** Whether the delete confirm offers "Also delete on Visualizer". */
     remoteDeleteAvailable: Boolean = false,
     /**
@@ -1079,6 +1100,7 @@ private fun ShotDetail(
                         // brews never touch Visualizer.
                         onLogAgain?.let { add(OverflowItem("arrow-counter-clockwise", "Log again", it)) }
                         add(OverflowItem("download-simple", "Export", onExport))
+                        onPinnedChange?.let { add(OverflowItem(if (shot.pinned) "push-pin-fill" else "push-pin", if (shot.pinned) "Unpin" else "Pin", { it(!shot.pinned) })) }
                         add(OverflowItem("trash", "Delete brew", { confirmDelete = true }, danger = true))
                         return@buildList
                     }
@@ -1105,6 +1127,7 @@ private fun ShotDetail(
                     shareable.forEach { t ->
                         add(OverflowItem("share-network", if (shareable.size == 1) "Share link" else "Share ${t.name} link", { onShareUploaded(t) }))
                     }
+                    onPinnedChange?.let { add(OverflowItem(if (shot.pinned) "push-pin-fill" else "push-pin", if (shot.pinned) "Unpin" else "Pin", { it(!shot.pinned) })) }
                     add(OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true))
                 })
             }
@@ -1128,7 +1151,7 @@ private fun ShotDetail(
         if (confirmDelete) {
             coffee.crema.ui.components.DeleteWithVisualizerDialog(
                 title = "Delete shot?",
-                body = "This shot will be removed from this device. This can’t be undone.",
+                body = deleteBody(shot),
                 what = "shot",
                 remoteAvailable = remoteDeleteAvailable,
                 onConfirm = { remote -> onDelete(remote); confirmDelete = false },
@@ -1260,6 +1283,14 @@ private fun ShotDetail(
             MetricCard("Yield", mYield.value, shot.yieldG?.let { mYield.unit }, Modifier.weight(1f))
             MetricCard("Ratio", shotRatio(shot) ?: "—", null, Modifier.weight(1f), isText = true)
             MetricCard("Samples", "${shot.samples.size}", null, Modifier.weight(1f))
+        }
+        // The pour's averages (#299), beside the peaks; nothing without a pour.
+        pourAverageLine(pourAverages, pressureUnit, tempUnit)?.let {
+            Text(
+                "Pour average $it",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         Surface(
             // Fixed height inside the scrolling pane — the chart's dominant,
@@ -1432,3 +1463,7 @@ private fun shotRatio(shot: StoredShot): String? =
     // water-in — the core's ratio_for_method, which the web's ratioLabel
     // also calls.
     shot.methodRatioLabel()
+
+/** The delete confirmation's body: a pinned shot says so (#311). */
+internal fun deleteBody(shot: StoredShot): String =
+    "This shot will be removed from this device." + (if (shot.pinned) " It is pinned." else "") + " This can’t be undone."

@@ -14,6 +14,7 @@ import coffee.crema.core.SyncFailure
 import coffee.crema.core.SyncFailureRejectedInner
 import coffee.crema.core.autoBackupFileName
 import coffee.crema.core.autoBackupRetention
+import coffee.crema.core.newestAutoBackup
 import coffee.crema.core.describeBackupFile
 import coffee.crema.core.callbackOutcome
 import coffee.crema.core.reconnectNoticeDue
@@ -54,11 +55,42 @@ import java.util.UUID
 /** Minimum gap between two daily auto-backup attempts (issue #36). */
 private const val AUTO_BACKUP_INTERVAL_MS = 24L * 60 * 60 * 1000
 
-/** Automatic copies kept per device, until a Settings choice exists. */
-private const val AUTO_BACKUP_KEEP = 10
+/** Automatic copies kept per device for a new install, until a Settings choice exists. */
+private const val AUTO_BACKUP_KEEP = 3
+
+/** What an install that backed up before the pre-damage copy existed keeps: unchanged. */
+private const val AUTO_BACKUP_KEEP_BEFORE = 10
+
+/** How long a pre-damage pin holds against a newer damage, on Drive's clock. */
+private const val PIN_KEEPS_MS = 30L * 24 * 60 * 60 * 1000
+
+/** Counts for a name that's only read for its label. */
+private const val ZERO_COUNTS = """{"shots":0,"curves":0}"""
 
 /** A built backup, and what's in it for its automatic name. */
-class BackupZip(val bytes: ByteArray, val counts: BackupCounts)
+class BackupZip(
+    /** The `.crema.zip`, a temporary file (#310 P2a): released once uploaded or skipped. */
+    val file: java.io.File,
+    val counts: BackupCounts,
+    /** What's in it, without its export time: the same data gives the same hash (#311). */
+    val contentHash: String? = null,
+    /** Done with [file]: removes it. */
+    val release: () -> Unit = { file.delete() },
+)
+
+/** What a new install keeps of its automatic copies. */
+internal const val NEW_INSTALL_DRIVE_COPIES = 3
+
+/**
+ * The automatic copies retention keeps: the [stored] choice, else 10 for an
+ * install that has backed up before (as it had before #362) and 3 for a new one.
+ * The setting shows this, so it shows what retention uses.
+ */
+internal fun autoBackupKeepFor(stored: Int?, backedUpBefore: Boolean): Int =
+    stored ?: if (backedUpBefore) AUTO_BACKUP_KEEP_BEFORE else AUTO_BACKUP_KEEP
+
+/** The copies-to-keep choices Settings offers (#311). */
+val DRIVE_COPIES_CHOICES = listOf(1, 3, 5, 10)
 
 /** A new install's tag: short, as it's in every file name. */
 internal fun newAutoBackupTag(): String = UUID.randomUUID().toString().take(6)
@@ -69,12 +101,13 @@ internal fun DriveFile.toBackupFile(): BackupFile? =
     runCatching { BackupFile(id, name, Instant.parse(modifiedTime).toEpochMilli()) }.getOrNull()
 
 /** One backup in the picker. [modifiedMs] is null when Drive's time can't be read. */
-data class DriveBackupRow(val id: String, val modifiedMs: Long?, val info: BackupFileInfo)
+data class DriveBackupRow(val id: String, val modifiedMs: Long?, val info: BackupFileInfo, val name: String = "")
 
 internal fun DriveFile.toBackupRow(json: Json) = DriveBackupRow(
     id = id,
     modifiedMs = toBackupFile()?.modifiedMs,
     info = json.decodeFromString(BackupFileInfo.serializer(), describeBackupFile(name)),
+    name = name,
 )
 
 /** The picker's second line: what's known of a backup, of device, counts, kind. */
@@ -106,12 +139,16 @@ class DriveSync(
     private val log: (String) -> Unit = {},
     /** Produce the `.crema.zip` backup bytes, or null (+ its own notice) when
      *  empty. Suspends: the build runs off Main (LibraryController). */
-    private val backupZip: suspend () -> BackupZip?,
+    /** Build a backup; [daily] for the automatic one, which has its own cancel and progress. */
+    private val backupZip: suspend (daily: Boolean) -> BackupZip?,
     /** A suggested backup filename (the VM's `backupFileName()`). */
     private val backupFileName: () -> String,
     /** Apply a downloaded backup's raw bytes (a `.crema.zip` or legacy text).
      *  `wipe` = replace vs merge. */
-    private val applyRestore: (bytes: ByteArray, wipe: Boolean) -> Unit,
+    /** Restore the downloaded backup in the file, read a piece at a time (#310 P2a-b). */
+    private val applyRestore: (file: java.io.File, wipe: Boolean, from: DriveBackupRow?) -> Unit,
+    /** Whether the active network is unmetered (Wi-Fi): a Wi-Fi only backup waits for it. */
+    private val unmetered: () -> Boolean = { true },
     /** The OAuth code → token exchange (injected so JVM tests can drive a sign-in). */
     private val exchangeCode: suspend (code: String, verifier: String) -> DriveTokenSet =
         { code, verifier -> exchangeCodeForDriveToken(clientId, code, verifier, json) },
@@ -123,15 +160,28 @@ class DriveSync(
     /** Wall clock (unix ms); tests pin it. */
     private val now: () -> Long = System::currentTimeMillis,
     /** The Drive calls (injected so JVM tests can drive a backup). */
-    private val uploadBackup: suspend (token: String, name: String, bytes: ByteArray) -> DriveFile =
-        { token, name, bytes -> driveUploadBackup(token, name, bytes, json) },
+    private val uploadBackup: suspend (token: String, name: String, file: java.io.File) -> DriveFile =
+        { token, name, file -> driveUploadBackup(token, name, file, json) },
     private val listBackups: suspend (token: String) -> List<DriveFile> = { token -> driveListBackups(token, json) },
     private val trashFile: suspend (token: String, fileId: String) -> Unit =
         { token, id -> driveTrashFile(token, id, json) },
-    private val downloadBackup: suspend (token: String, fileId: String) -> ByteArray =
-        { token, id -> driveDownloadBackup(token, id, json) },
+    /** Where a backup downloads to before its restore reads it; the next download replaces it. */
+    private val restoreDownloadFile: () -> java.io.File = { java.io.File.createTempFile("crema-drive-restore", ".crema") },
+    private val downloadBackup: suspend (token: String, fileId: String, dest: java.io.File) -> java.io.File =
+        { token, id, dest -> driveDownloadBackupTo(token, id, dest, json) },
     /** Revoke a grant at Google, best-effort (injected so JVM tests make no call). */
     private val revokeGrant: suspend (DriveTokenSet) -> Unit = { revokeDriveGrant(it) },
+    /** Why a daily backup mustn't run now (a store that couldn't be read, a
+     *  restore running), or null. A copy made then would hold less than the
+     *  last, and could push a good one out. */
+    private val autoBackupBlocked: () -> String? = { null },
+    /** Per store the counts can't see (beans, profiles, recipes, settings), by
+     *  file name: the newest time it was kept aside as damaged, on this
+     *  device's clock. A store's time newer than the one last seen for that
+     *  store is a new damage; one store's clock never hides another's. */
+    private val damageByStore: () -> Map<String, Long> = { emptyMap() },
+    /** A restore is running: a backup now would upload it half-applied. */
+    private val restoreRunning: () -> Boolean = { false },
 ) {
     /** What the Settings UI binds to (mirrored into MainUiState). */
     data class UiState(
@@ -149,6 +199,11 @@ class DriveSync(
         val healthLine: String? = null,
         /** The backups to pick from, newest first, while the picker is open. */
         val backups: List<DriveBackupRow>? = null,
+        /** Why today's daily backup didn't run, or null. */
+        val autoBackupPaused: String? = null,
+        /** Automatic copies kept (#311): the stored choice, else what the next
+         *  retention would choose ([autoBackupKeepFor]). Null until loaded. */
+        val autoBackupKeep: Int? = null,
     )
 
     private val _state = MutableStateFlow(UiState(configured = clientId.isNotBlank()))
@@ -182,6 +237,10 @@ class DriveSync(
             configured = clientId.isNotBlank(),
             connected = persisted.tokens != null,
             lastBackupAtMs = persisted.lastBackupSuccessAtMs,
+            autoBackupKeep = autoBackupKeepFor(
+                persisted.autoBackupKeep,
+                persisted.lastAutoBackupAtMs != null || persisted.lastBackupSuccessAtMs != null,
+            ),
             needsReconnect = persisted.needsReconnect,
             healthLine = driveHealthLine(persisted.health),
         ) }
@@ -276,13 +335,38 @@ class DriveSync(
                     _state.update { it.copy(busy = true) }
                     runCatchingCancellable { exchangeCode(code, verifier) }
                         .onSuccess { tokens ->
-                            persist { it.copy(tokens = tokens, needsReconnect = false, health = null) }
+                            // A new sign-in may be another account: the next
+                            // backup uploads whatever it finds (#311).
+                            persist { it.copy(tokens = tokens, needsReconnect = false, health = null, lastAutoBackupHash = null) }
                             notify("Connected to Google Drive")
                         }
                         .onFailure { notify("Google Drive sign-in failed: ${it.message}") }
                     _state.update { it.copy(busy = false) }
                 }
             }
+        }
+    }
+
+    /**
+     * A restore finished: whatever damage the pre-damage pin guarded is dealt
+     * with, so its 30-day hold ends. The pin stays in retention's slot until a
+     * new damage pins yesterday's copy (REVIEW-366).
+     */
+    fun restoreCompleted(written: Set<String>, from: DriveBackupRow?) {
+        scope.launch {
+            if (!ownState.await()) return@launch
+            val st = persisted
+            val pin = st.preDamageCopy ?: return@launch
+            if (st.pinReleased) return@launch
+            // The damage is dealt with only if the restore wrote every store it
+            // hit (REVIEW-370), or the file was the pin itself, or a newer copy
+            // of this device's: a Merge that adds nothing, or a settings-only
+            // file, leaves it standing.
+            val wroteAll = st.pinStores.isNotEmpty() && written.containsAll(st.pinStores)
+            val tag = st.autoBackupTag
+            val newerOwn = from != null && tag != null && "~$tag-" in from.name &&
+                (from.modifiedMs ?: Long.MIN_VALUE) >= (st.preDamageCopyAtMs ?: Long.MAX_VALUE)
+            if (wroteAll || from?.id == pin || newerOwn) persist { it.copy(pinReleased = true) }
         }
     }
 
@@ -296,7 +380,8 @@ class DriveSync(
             if (!ownState.await()) return@launch
             val tokens = persisted.tokens
             // Also forgets a stored sign-in the keystore couldn't open this start.
-            persist { it.copy(tokens = null, unopened = null, needsReconnect = false, health = null) }
+            // The hash goes too: the next account's Drive holds none of it (#311).
+            persist { it.copy(tokens = null, unopened = null, needsReconnect = false, health = null, lastAutoBackupHash = null) }
             _state.update { it.copy(backups = null) }
             if (!quiet) notify("Disconnected from Google Drive")
             tokens?.let { revokeGrant(it) }
@@ -442,16 +527,20 @@ class DriveSync(
     fun backupNow() {
         scope.launch {
             if (!ownState.await()) return@launch
+            if (restoreRunning()) {
+                notify("A restore is running. Back up once it's done.")
+                return@launch
+            }
             val tokens = tokenForUser("backup") ?: return@launch
             // Busy from the start: building the zip takes a while on a big
             // history (it runs off Main, so the UI stays live meanwhile).
             _state.update { it.copy(busy = true) }
-            val built = backupZip() ?: run {
+            val built = backupZip(false) ?: run {
                 _state.update { it.copy(busy = false) } // backupZip already notified "nothing to back up"
                 return@launch
             }
             try {
-                withToken(tokens) { uploadBackup(it, backupFileName(), built.bytes) }
+                withToken(tokens) { uploadBackup(it, backupFileName(), built.file) }
                 persist { it.copy(lastBackupSuccessAtMs = now()) }
                 finishRun(backedUp())
                 notify("Backed up to Google Drive")
@@ -464,6 +553,8 @@ class DriveSync(
                 if (failure != SyncFailure.SessionEnded) {
                     notify("Google Drive backup failed: ${driveFailureLine(failure, e.message)}")
                 }
+            } finally {
+                built.release()
             }
             _state.update { it.copy(busy = false) }
         }
@@ -478,13 +569,28 @@ class DriveSync(
      * reason time can fix tries again next launch; any other waits a day, with
      * its reason in Settings rather than a notice on every launch.
      */
-    fun autoBackupIfDue(enabled: Boolean) {
+    fun autoBackupIfDue(enabled: Boolean, weekly: Boolean = false, wifiOnly: Boolean = false) {
         if (!enabled) return
         scope.launch {
             if (!ownState.await()) return@launch
             if (persisted.tokens == null) return@launch
             val last = persisted.lastAutoBackupAtMs
-            if (last != null && now() - last < AUTO_BACKUP_INTERVAL_MS) return@launch
+            val interval = if (weekly) 7 * AUTO_BACKUP_INTERVAL_MS else AUTO_BACKUP_INTERVAL_MS
+            if (last != null && now() - last < interval) return@launch
+            // Not stamped: the next launch checks again (#311).
+            if (wifiOnly && !unmetered()) {
+                log("Automatic Drive backup waits for Wi-Fi")
+                return@launch
+            }
+            // Not stamped: the next launch tries again, once the store is back.
+            autoBackupBlocked()?.let { why ->
+                log("Daily Drive backup skipped: $why")
+                _state.update { it.copy(autoBackupPaused = "Daily backup paused: $why.") }
+                return@launch
+            }
+            _state.update { it.copy(autoBackupPaused = null) }
+            // An install that has backed up before keeps the 10 copies it had.
+            val backedUpBefore = last != null || persisted.lastBackupSuccessAtMs != null
             val tokens = when (val held = freshToken()) {
                 is FreshToken.Token -> held.set
                 is FreshToken.Waiting -> {
@@ -496,21 +602,39 @@ class DriveSync(
                     return@launch
                 }
             }
-            persist { it.copy(lastAutoBackupAtMs = now()) }
-            val built = backupZip() ?: return@launch
             // The name carries the counts the retention below compares, and this
             // install's tag. Its prefix still holds "crema-backup", so the Drive
             // list query finds it, and only this prefix is ever pruned, so a
             // manual backup never is.
             val tag = persisted.autoBackupTag
                 ?: newAutoBackupTag().also { fresh -> persist { it.copy(autoBackupTag = fresh) } }
+            // Not stamped when it can't look: the next launch tries again, as an
+            // upload now would push the copy it should keep out of reach.
+            if (!pinPreDamageCopy(tokens, autoBackupFileName(backupFileName(), tag, ZERO_COUNTS))) return@launch
+            persist { it.copy(lastAutoBackupAtMs = now()) }
+            val built = backupZip(true) ?: return@launch
+            // Nothing changed since the last upload that landed: no new copy
+            // (#311), as long as Drive still holds one of this device's. The
+            // check can be cancelled: the file is released either way (#391 review).
+            val unchanged = try {
+                built.contentHash != null && built.contentHash == persisted.lastAutoBackupHash && holdsOwnCopy(tokens, tag)
+            } catch (c: CancellationException) {
+                built.release()
+                throw c
+            }
+            if (unchanged) {
+                built.release()
+                log("Automatic Drive backup skipped: nothing changed since the last one")
+                return@launch
+            }
             val name = autoBackupFileName(backupFileName(), tag, json.encodeToString(BackupCounts.serializer(), built.counts))
             try {
-                withToken(tokens) { uploadBackup(it, name, built.bytes) }
-                persist { it.copy(lastBackupSuccessAtMs = now()) }
+                withToken(tokens) { uploadBackup(it, name, built.file) }
+                // The hash only after it landed, from the data as the build read it.
+                persist { it.copy(lastBackupSuccessAtMs = now(), lastAutoBackupHash = built.contentHash) }
                 finishRun(backedUp())
                 notify("Daily backup saved to Google Drive")
-                settleAutoBackups(tokens, name)
+                settleAutoBackups(tokens, name, backedUpBefore)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
@@ -520,8 +644,46 @@ class DriveSync(
                 // Everything else stays a Settings line. This one a user can act
                 // on, and it won't clear by itself: once, on the way in.
                 if (changed && e is NoDriveToken && failure is SyncFailure.Rejected) notify(DRIVE_REFUSED_LINE)
+            } finally {
+                built.release()
             }
         }
+    }
+
+    /** Whether Drive lists one of this device's automatic copies. A list that
+     *  fails counts as none, so the backup goes ahead. */
+    private suspend fun holdsOwnCopy(tokens: DriveTokenSet, tag: String): Boolean =
+        runCatchingCancellable {
+            withToken(tokens) { listBackups(it) }.mapNotNull { it.toBackupFile() }.any { it.name.contains("~$tag") }
+        }.getOrDefault(false)
+
+    /**
+     * Set how many automatic copies this device keeps (#311). The next
+     * automatic backup prunes to it; manual backups are never touched.
+     */
+    fun setAutoBackupKeep(keep: Int) {
+        scope.launch { persist { it.copy(autoBackupKeep = keep) } }
+    }
+
+    /**
+     * How many of this device's automatic copies on Drive [keep] would delete at
+     * the next backup, for the preview before a lower limit is saved: the
+     * core's retention over the listing, as the next prune runs it. Null when
+     * it can't look (signed out, or the list failed).
+     */
+    suspend fun copiesOverLimit(keep: Int): Int? {
+        if (!ownState.await()) return null
+        val tag = persisted.autoBackupTag ?: return 0
+        val tokens = (freshToken() as? FreshToken.Token)?.set ?: return null
+        return runCatchingCancellable {
+            val files = withToken(tokens) { listBackups(it) }.mapNotNull { it.toBackupFile() }
+            val newestOwn = files.filter { it.name.contains("~$tag") }.maxByOrNull { it.modifiedMs } ?: return@runCatchingCancellable 0
+            val filesJson = json.encodeToString(ListSerializer(BackupFile.serializer()), files)
+            json.decodeFromString(
+                AutoBackupRetention.serializer(),
+                autoBackupRetention(filesJson, newestOwn.name, keep.toUInt(), persisted.preDamageCopy),
+            ).delete.size
+        }.getOrNull()
     }
 
     /**
@@ -531,19 +693,73 @@ class DriveSync(
      * Pruned copies go to the trash, so a wrong prune can be undone for 30 days.
      * Best-effort: a failed list or trash just retries after tomorrow's upload.
      */
-    private suspend fun settleAutoBackups(tokens: DriveTokenSet, uploaded: String) {
+    private suspend fun settleAutoBackups(tokens: DriveTokenSet, uploaded: String, backedUpBefore: Boolean) {
         runCatchingCancellable {
             val files = withToken(tokens) { listBackups(it) }.mapNotNull { it.toBackupFile() }
             val filesJson = json.encodeToString(ListSerializer(BackupFile.serializer()), files)
+            // Chosen once, by the first retention to run: 3 for a new install,
+            // now that a copy from before any damage stays too; 10, as it had,
+            // for one that backed up before this.
             val keep = persisted.autoBackupKeep
-                ?: AUTO_BACKUP_KEEP.also { chosen -> persist { it.copy(autoBackupKeep = chosen) } }
+                ?: autoBackupKeepFor(null, backedUpBefore).also { chosen -> persist { it.copy(autoBackupKeep = chosen) } }
             val plan = json.decodeFromString(
                 AutoBackupRetention.serializer(),
-                autoBackupRetention(filesJson, uploaded, keep.toUInt()),
+                autoBackupRetention(filesJson, uploaded, keep.toUInt(), persisted.preDamageCopy),
             )
             plan.shrink?.let { notify(shrinkNotice(it)) }
             withToken(tokens) { token -> plan.delete.forEach { trashFile(token, it) } }
         }.onFailure { log("Drive backup prune failed: ${it.message}") }
+    }
+
+    /**
+     * A damage the counts can't see, new since the last look: pin this
+     * install's newest copy on Drive, by id, for retention to keep. It's from
+     * before the damage, as the launch that found it didn't back up, and no
+     * clock is compared: the device's and Drive's can disagree, and a damage
+     * long since fixed isn't new. False when Drive couldn't be listed.
+     */
+    private suspend fun pinPreDamageCopy(tokens: DriveTokenSet, nameLike: String): Boolean {
+        val damage = damageByStore()
+        val seen = persisted.damageSeen
+        if (damage.none { (store, at) -> at > (seen[store] ?: Long.MIN_VALUE) }) return true
+        return runCatchingCancellable {
+            val files = withToken(tokens) { listBackups(it) }.mapNotNull { it.toBackupFile() }
+            // A recent pin stays: the copies made since it may all be thin, and
+            // a second damage then would move the slot onto one of them. Its
+            // age is read on Drive's clock, against the newest copy listed.
+            val current = persisted.preDamageCopy?.let { id -> files.find { it.id == id } }
+            val newest = files.maxOfOrNull { it.modifiedMs }
+            val held = current != null && newest != null && !persisted.pinReleased &&
+                newest - current.modifiedMs < PIN_KEEPS_MS
+            val pin = if (held) {
+                current!!.id
+            } else {
+                newestAutoBackup(json.encodeToString(ListSerializer(BackupFile.serializer()), files), nameLike)
+            }
+            pin to (files.find { it.id == pin }?.modifiedMs)
+        }.fold(
+            onSuccess = { (pin, pinAt) ->
+                val fresh = damage.filter { (store, at) -> at > (seen[store] ?: Long.MIN_VALUE) }.keys
+                persist {
+                    val same = pin == it.preDamageCopy
+                    it.copy(
+                        damageSeen = seen + damage,
+                        preDamageCopy = pin,
+                        pinReleased = it.pinReleased && same,
+                        // A held pin guards the new damage too; a new pin, only it.
+                        pinStores = if (same && !it.pinReleased) it.pinStores + fresh else fresh,
+                        preDamageCopyAtMs = pinAt,
+                    )
+                }
+                _state.update { it.copy(autoBackupPaused = null) }
+                true
+            },
+            onFailure = {
+                log("Daily Drive backup waits: couldn't list Drive to keep the copy from before a damage (${it.message})")
+                _state.update { it.copy(autoBackupPaused = "Daily backup paused: couldn't check Google Drive.") }
+                false
+            },
+        )
     }
 
     /** List what's in Drive and open the picker: every backup, manual or daily,
@@ -571,14 +787,15 @@ class DriveSync(
     /** The picker was dismissed. */
     fun closeBackupPicker() = _state.update { it.copy(backups = null) }
 
-    /** Download the backup [fileId] and hand its bytes to [applyRestore]. */
+    /** Download the backup [fileId] to a file, a piece at a time, and hand it to [applyRestore]. */
     fun restoreBackup(fileId: String, wipe: Boolean) {
         scope.launch {
             if (!ownState.await()) return@launch
             val tokens = tokenForUser("restore") ?: return@launch
+            val picked = _state.value.backups?.firstOrNull { it.id == fileId }
             _state.update { it.copy(busy = true, backups = null) }
-            runCatchingCancellable { withToken(tokens) { downloadBackup(it, fileId) } }
-                .onSuccess { bytes -> applyRestore(bytes, wipe) }
+            runCatchingCancellable { withToken(tokens) { downloadBackup(it, fileId, restoreDownloadFile()) } }
+                .onSuccess { file -> applyRestore(file, wipe, picked) }
                 .onFailure { e ->
                     val failure = (e as? NoDriveToken)?.failure
                     if (failure != SyncFailure.SessionEnded) {

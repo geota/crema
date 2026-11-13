@@ -26,16 +26,25 @@ import {
 } from '#lib/visualizer/upload-marks.js';
 import { excludedFromUpload, readSyncConfig } from '#lib/visualizer/sync-config.js';
 import type { RustStoredShot, TimedSample } from '#lib/core/index.js';
-import type { BrewSeries } from '#lib/core/crema-core.js';
+import type { BrewSeries, ShotPatch as RemoteShotPatch } from '#lib/core/crema-core.js';
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
 import type { TelemetrySample } from '#lib/state/index.js';
 import { toWire } from './telemetry-wire';
-import { keepSkippedRows, readStore, writeStore, type StoreWrite } from '#lib/utils/storage.js';
+import {
+	followOtherTabs,
+	keepSkippedRows,
+	readStore,
+	writeStore,
+	type StoreWrite
+} from '#lib/utils/storage.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import {
 	brewDateError,
+	cappedCount,
 	cappedHistory,
+	evictOldest,
 	fitsHistory,
+	historyCutNotice,
 	newestFirst,
 	type HistoryInsert
 } from './brew-date';
@@ -43,6 +52,9 @@ import {
 	clearAllSeries,
 	deleteSeries,
 	getAllSeries,
+	addSeries,
+	getSeriesOf,
+	putManySeries,
 	putSeries
 } from './series-store';
 import {
@@ -59,6 +71,7 @@ import {
 } from './model';
 import type { Bean, Roaster } from '#lib/bean/index.js';
 import { getCaptureStore } from '#lib/capture/store.js';
+import { readCaptureKeep } from '#lib/capture/limit.js';
 
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
 const STORED_SHOT_FORMAT_VERSION = 3;
@@ -75,7 +88,7 @@ const STORED_SHOT_FORMAT_VERSION = 3;
  * (`durationMs` → `duration`, `peakWeightG` → `peakWeight`, etc.); v1 records
  * are simply ignored on first read rather than migrated.
  */
-const HISTORY_KEY = 'crema.history.v2';
+export const HISTORY_KEY = 'crema.history.v2';
 /** The history's name in a storage notice. */
 const HISTORY_WHAT = 'shot history';
 
@@ -93,6 +106,9 @@ const MAX_RECORDS = 300;
  * ended by then has stuck, and an upload shouldn't wait on it for good.
  */
 const SERIES_WAIT_MS = 30_000;
+
+/** How long an adopted row waits, twice, for a series its tab hasn't written yet. */
+const ADOPT_SERIES_RETRY_MS = [1_000, 5_000] as const;
 
 /** A shot's telemetry series couldn't be written to IndexedDB (quota, most
  *  likely): say so instead of silently keeping it in memory only. */
@@ -145,8 +161,17 @@ export class HistoryStore {
 	/** Above zero while a restore runs: see {@link pauseDeletes}. */
 	private deletesPaused = 0;
 
+	/** Ids adopted from another tab whose curve is still being looked for, with how many look-ups. */
+	private hydrating = new Map<string, number>();
+
 	constructor() {
 		this.markLive(this.shots.map((s) => s.id));
+		// Another tab's rows are taken, not written back over (#333).
+		followOtherTabs(HISTORY_KEY, Array.isArray, (v) => this.takeOtherTabsRows(v as unknown[]));
+		// Fixed at the first load after the setting arrived, before anything new
+		// is recorded: rows already here mean today's limit stays (#311).
+		const existing = this.shots.length > 0;
+		readCaptureKeep(() => existing);
 		// Two-phase boot (review #27): summaries loaded synchronously above;
 		// each shot's telemetry series hydrates from IndexedDB in the
 		// background (reassigning `shots` keeps readers reactive). Also the
@@ -241,6 +266,94 @@ export class HistoryStore {
 	}
 
 	/**
+	 * Rows another tab stored (#333). The stored rows carry no series, so a
+	 * row this tab already shows keeps its curve, and the others read theirs
+	 * from IndexedDB. Not during a restore here, which owns the rows until it
+	 * ends.
+	 */
+	private takeOtherTabsRows(items: unknown[]): void {
+		if (this.deletesPaused > 0) return;
+		const mine = new Map(this.shots.map((s) => [s.id, s]));
+		const rows = rowsOf(items).map((row) => {
+			const had = mine.get(row.id)?.record.samples;
+			return row.record.samples.length === 0 && had && had.length > 0
+				? { ...row, record: { ...row.record, samples: had } }
+				: row;
+		});
+		this.adoptRows(rows);
+		const bare = rows.filter((s) => s.record.samples.length === 0).map((s) => s.id);
+		if (bare.length > 0 && typeof indexedDB !== 'undefined') void this.hydrateAdopted(bare);
+	}
+
+	/**
+	 * The series of rows adopted without one. The other tab writes a series
+	 * after its row, so one that isn't there yet is looked for again, twice. A
+	 * row with no series at all (a brew log) just finds none.
+	 */
+	private async hydrateAdopted(ids: string[], waits: readonly number[] = ADOPT_SERIES_RETRY_MS): Promise<void> {
+		for (const id of ids) this.hydrating.set(id, (this.hydrating.get(id) ?? 0) + 1);
+		let missing = ids;
+		try {
+			for (let attempt = 0; ; attempt++) {
+				let found = new Map<string, TimedSample[]>();
+				try {
+					found = await getSeriesOf(missing);
+				} catch {
+					// A read can fail once and work the next time: keep to the schedule.
+				}
+				if (found.size > 0) this.fillCurves(found);
+				missing = missing.filter((id) => !found.has(id) && this.get(id)?.record.samples.length === 0);
+				if (missing.length === 0 || attempt >= waits.length) return;
+				await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
+			}
+		} finally {
+			for (const id of ids) {
+				const n = (this.hydrating.get(id) ?? 1) - 1;
+				if (n > 0) this.hydrating.set(id, n);
+				else this.hydrating.delete(id);
+			}
+		}
+	}
+
+	/** Give rows without a curve the ones in `found`, by id. */
+	private fillCurves(found: Map<string, TimedSample[]>): void {
+		this.shots = this.shots.map((s) => {
+			const samples = found.get(s.id);
+			return samples && s.record.samples.length === 0
+				? { ...s, record: { ...s.record, samples } }
+				: s;
+		});
+	}
+
+	/**
+	 * Whether `id` adopted from another tab may still have its curve on the
+	 * way. Until it's settled, a pull mustn't take Visualizer's copy for it
+	 * (#380 review S1).
+	 */
+	seriesPending(id: string): boolean {
+		return this.hydrating.has(id);
+	}
+
+	/**
+	 * A pulled curve for a row that had none, stored only if IndexedDB has none
+	 * for it either: another tab may have written the row's own. That one wins,
+	 * here and in memory (#380 review S1).
+	 */
+	private backfillSeries(id: string, samples: TimedSample[]): void {
+		void addSeries(id, samples)
+			.then(async (added) => {
+				if (added) return;
+				const own = await getSeriesOf([id]);
+				if (own.size === 0) return;
+				this.shots = this.shots.map((s) => {
+					const curve = own.get(s.id);
+					return curve ? { ...s, record: { ...s.record, samples: curve } } : s;
+				});
+			})
+			.catch(seriesSaveFailed);
+	}
+
+	/**
 	 * Turn series and capture deletes off until the returned function runs, for
 	 * a restore: saves still write and still move {@link known} to what they
 	 * wrote, but delete nothing. Restore's own deletes arrive with its marker
@@ -299,10 +412,11 @@ export class HistoryStore {
 			toast.error('Shot history could not be saved.');
 			return false;
 		}
-		// Quota hit even without series — evict the oldest 10% and retry.
-		const keep = Math.max(1, Math.floor(this.shots.length * 0.9));
-		const dropped = this.shots.length - keep;
-		this.shots = this.shots.slice(0, keep);
+		// Quota hit even without series — evict the oldest 10% and retry. A
+		// pinned row is never evicted (#311): the oldest unpinned ones go.
+		const before = this.shots.length;
+		this.shots = evictOldest(this.shots, before - Math.max(1, Math.floor(before * 0.9)));
+		const dropped = before - this.shots.length;
 		if (this.writeRows() !== 'ok') {
 			toast.error('Shot history could not be saved — storage is full.');
 			return false;
@@ -341,7 +455,7 @@ export class HistoryStore {
 	 * was dated. A row older than a full history is the one that goes.
 	 */
 	private insert(shot: StoredShot): void {
-		this.shots = cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS);
+		this.capWith(shot, cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS));
 	}
 
 	/**
@@ -349,7 +463,18 @@ export class HistoryStore {
 	 * behind the history can't lose it: the oldest other row goes instead.
 	 */
 	private insertMade(shot: StoredShot): void {
-		this.shots = cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS, shot.id);
+		this.capWith(shot, cappedHistory(newestFirst([shot, ...this.shots]), MAX_RECORDS, shot.id));
+	}
+
+	/** Take `next`, the rows with `shot` added and capped, and say if the cap
+	 *  dropped any (#310 P0): a row never leaves without a word. Pinned rows
+	 *  are never among them (#311). */
+	private capWith(shot: StoredShot, next: StoredShot[]): void {
+		const kept = new Set(next.map((s) => s.id));
+		const droppedOlder = this.shots.filter((s) => !kept.has(s.id)).length;
+		this.shots = next;
+		const notice = historyCutNotice(droppedOlder, kept.has(shot.id), MAX_RECORDS);
+		if (notice) toast.info(notice, 7000);
 	}
 
 	/** The most rows the history keeps. */
@@ -359,12 +484,52 @@ export class HistoryStore {
 
 	/** How many live rows fit before the cap. */
 	get freeSlots(): number {
-		return Math.max(0, MAX_RECORDS - this.all.length);
+		return Math.max(0, MAX_RECORDS - cappedCount(this.shots));
 	}
 
 	/** Whether a new brew dated `at` would stay in the history once added. */
 	fitsHistory(at: number): boolean {
 		return fitsHistory(this.all, at, MAX_RECORDS);
+	}
+
+	/**
+	 * A restore's history (restore-safety step 7). The series go first, with no
+	 * change to memory, so rows never name a series that isn't written; then
+	 * memory, {@link known} and the rows write happen in one task, so an edit
+	 * can't reach a half-applied history. Nothing is deleted here or evicted:
+	 * the restore's marker owns its deletes. `series` are the rows whose curve
+	 * to write. Says whether the rows were stored, and how many curves weren't.
+	 */
+	async restoreRows(
+		plan: (rows: readonly StoredShot[]) => { next: StoredShot[]; series: StoredShot[] },
+		writeSeries: (rows: readonly StoredShot[]) => Promise<void> = (rows) =>
+			putManySeries(rows.map((s) => ({ id: s.id, samples: s.record.samples })))
+	): Promise<{ stored: boolean; curvesFailed: number }> {
+		const first = plan(this.shots).series.filter((s) => s.record.samples.length > 0);
+		let curvesFailed = 0;
+		try {
+			await writeSeries(first);
+		} catch {
+			curvesFailed = first.length;
+		}
+		// After the last await: rows recorded, rated or bound while the series
+		// were written are in `this.shots`, and the plan runs over them.
+		const { next, series } = plan(this.shots);
+		const written = new Set(first.map((s) => s.id));
+		// A row the recompute found anew keeps its curve in memory, and it's
+		// written straight after the rows, before the restore says it's done.
+		const late = series.filter((s) => !written.has(s.id) && s.record.samples.length > 0);
+		this.shots = next;
+		if (this.writeRows() !== 'ok') return { stored: false, curvesFailed };
+		this.markLive(next.map((s) => s.id));
+		if (late.length > 0) {
+			try {
+				await writeSeries(late);
+			} catch {
+				curvesFailed += late.length;
+			}
+		}
+		return { stored: true, curvesFailed };
 	}
 
 	/** Wipe all recorded shots — for a "replace from backup" restore. */
@@ -571,6 +736,23 @@ export class HistoryStore {
 		this.persist();
 	}
 
+	/**
+	 * Pin or unpin a shot (#311). A pinned shot's capture ignores the capture
+	 * limit and it is exempt from cleanup; unpinning makes its capture eligible
+	 * at the next prune. Persists.
+	 */
+	setPinned(id: string, pinned: boolean): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0 || (this.shots[idx].pinned === true) === pinned) return;
+		const { pinned: _was, ...rest } = this.shots[idx];
+		this.shots = [
+			...this.shots.slice(0, idx),
+			pinned ? { ...rest, pinned: true } : rest,
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
 	/** Update a shot's star rating (0–5) and persist. */
 	setRating(id: string, rating: number): void {
 		const idx = this.shots.findIndex((s) => s.id === id);
@@ -734,12 +916,46 @@ export class HistoryStore {
 	 * has samples — never clobber a locally-recorded curve with a pulled
 	 * one.
 	 */
+	/**
+	 * Apply what a pull may change on a row (the core's `merge_remote_shot`), in
+	 * one write: tags it adds, a barista into a blank one, the curve and the
+	 * recipe when the row has none. The remote version goes last, so a row is
+	 * never marked current without the rest. Nothing else can change here.
+	 */
+	applyRemote(id: string, patch: RemoteShotPatch, pulled: PulledParts = {}): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const target = this.shots[idx];
+		let next: StoredShot = target;
+		if (patch.tags) next = { ...next, tags: [...patch.tags] };
+		if (patch.barista && !next.metadata.barista?.trim()) {
+			next = { ...next, metadata: { ...next.metadata, barista: patch.barista } };
+		}
+		const samples = pulled.samples ?? [];
+		const backfill =
+			patch.backfillSamples === true && samples.length > 0 && next.record.samples.length === 0;
+		if (backfill) {
+			next = {
+				...next,
+				record: { duration: pulled.durationMs || next.record.duration, samples: [...samples] }
+			};
+		}
+		if (patch.fillProfile && pulled.profile != null && next.profile == null) {
+			next = { ...next, profile: pulled.profile };
+		}
+		if (patch.remoteVersion != null) next = { ...next, visualizerUpdatedAt: patch.remoteVersion };
+		if (next === target) return;
+		this.shots = [...this.shots.slice(0, idx), next, ...this.shots.slice(idx + 1)];
+		if (backfill) this.backfillSeries(id, [...samples]);
+		this.persist();
+	}
+
 	backfillTelemetry(id: string, samples: readonly TimedSample[], durationMs: number): void {
 		if (samples.length === 0) return;
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
 		const target = this.shots[idx];
-		if (target.record.samples.length > 0) return;
+		if (target.record.samples.length > 0 || this.seriesPending(id)) return;
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{
@@ -751,7 +967,7 @@ export class HistoryStore {
 			},
 			...this.shots.slice(idx + 1)
 		];
-		void putSeries(id, [...samples]).catch(seriesSaveFailed);
+		this.backfillSeries(id, [...samples]);
 		this.persist();
 	}
 
@@ -919,6 +1135,16 @@ export class HistoryStore {
 		this.shots = this.shots.map((s, i) => (i === idx ? next : s));
 		this.persist();
 	}
+}
+
+/** What a pull fetched besides the detail, for {@link HistoryStore.applyRemote}. */
+export interface PulledParts {
+	/** The pulled telemetry. */
+	readonly samples?: readonly TimedSample[];
+	/** The remote duration, ms, kept with a backfilled curve. */
+	readonly durationMs?: number;
+	/** The pulled recipe (core `Profile` JSON). */
+	readonly profile?: unknown;
 }
 
 /** Input to {@link HistoryStore.addManualBrew}. */
@@ -1182,10 +1408,14 @@ function coerceShotMachine(raw: unknown): ShotMachine | null {
  */
 function loadShots(): StoredShot[] {
 	const read = readStore<unknown[]>(HISTORY_KEY, { what: HISTORY_WHAT, valid: Array.isArray });
-	if (read.kind !== 'loaded') return [];
+	return read.kind === 'loaded' ? rowsOf(read.value) : [];
+}
+
+/** Stored rows as shots, newest first; a row that can't be read is kept aside. */
+function rowsOf(items: unknown[]): StoredShot[] {
 	const out: StoredShot[] = [];
 	const skipped: unknown[] = [];
-	for (const item of read.value) {
+	for (const item of items) {
 		const migrated = coerceRow(item);
 		if (migrated) out.push(migrated);
 		else skipped.push(item);
@@ -1220,7 +1450,7 @@ function coerceRow(item: unknown): StoredShot | null {
  *
  * Returns `null` only when the record is too corrupt to recover.
  */
-function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
+export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 	const tagsRaw = obj.tags;
 	const tags = Array.isArray(tagsRaw)
 		? tagsRaw.filter((t): t is string => typeof t === 'string')
@@ -1257,6 +1487,11 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 			? obj.privacy
 			: null;
 	const decentId = typeof obj.decentId === 'string' && obj.decentId ? obj.decentId : null;
+	const visualizerUpdatedAt =
+		typeof obj.visualizerUpdatedAt === 'number' && Number.isFinite(obj.visualizerUpdatedAt)
+			? obj.visualizerUpdatedAt
+			: null;
+	const pinned = obj.pinned === true;
 	const machine = coerceShotMachine(obj.machine);
 	const visualizerId = typeof obj.visualizerId === 'string' ? obj.visualizerId : null;
 	const deletedAt = typeof obj.deletedAt === 'number' ? obj.deletedAt : null;
@@ -1344,6 +1579,8 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 		...(privacy ? { privacy } : {}),
 		visualizerId,
 		...(decentId ? { decentId } : {}),
+		...(visualizerUpdatedAt != null ? { visualizerUpdatedAt } : {}),
+		...(pinned ? { pinned } : {}),
 		...(machine ? { machine } : {}),
 		deletedAt,
 		...(brewMethod != null ? { brewMethod } : {}),
