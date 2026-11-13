@@ -270,8 +270,20 @@ class BackupReaderTest {
         )) {
             val zip = File(path)
             val p = prepareBackupFile(zip, name, File(dir, "stage-$name"))
-            assertTrue(p.photos.isNotEmpty(), "$name: its photo is staged")
-            assertTrue(linesOf(p).isNotEmpty(), "$name: its lines read")
+            // Read the same zip with the JDK's ZipFile, an independent reader:
+            // every photo and the backup's lines must come out byte for byte.
+            java.util.zip.ZipFile(zip).use { z ->
+                val images = z.entries().toList().filter { it.name.startsWith("images/") }
+                assertEquals(images.map { it.name.removePrefix("images/") }.toSet(), p.photos.keys, "$name: the photos staged")
+                for (e in images) {
+                    assertContentEquals(z.getInputStream(e).readBytes(), p.photos.getValue(e.name.removePrefix("images/")).readBytes(), "$name: ${e.name}")
+                }
+                val want = z.getInputStream(z.getEntry("backup.jsonl")).readBytes()
+                val got = linesOf(p).joinToString("\n") { String(it) }
+                assertEquals(String(want).trimEnd('\n'), got.trimEnd('\n'), "$name: its lines")
+            }
+            val header = Json.parseToJsonElement(p.manifestJson).jsonObject["header"]
+            assertTrue(header != null && header.toString() != "null", "$name: its header read")
         }
     }
 }

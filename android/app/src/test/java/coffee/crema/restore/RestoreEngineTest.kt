@@ -354,6 +354,8 @@ class RestoreEngineTest {
     fun `the kept-records cap is an eighth of the heap, with a floor`() {
         assertEquals(64L * 1024 * 1024, RestoreRecords.defaultMaxKeptBytes(512L * 1024 * 1024))
         assertEquals(RestoreRecords.MIN_KEPT_BYTES, RestoreRecords.defaultMaxKeptBytes(128L * 1024 * 1024))
+        // A 256 MB heap ran out of memory at 46 MB kept: its cap must stay well under that.
+        assertTrue(RestoreRecords.defaultMaxKeptBytes(256L * 1024 * 1024) <= 32L * 1024 * 1024)
         // The default, on this heap, stays well below what 7x would exhaust.
         assertTrue(RestoreRecords.defaultMaxKeptBytes() * 7 <= Runtime.getRuntime().maxMemory() || RestoreRecords.defaultMaxKeptBytes() == RestoreRecords.MIN_KEPT_BYTES)
     }

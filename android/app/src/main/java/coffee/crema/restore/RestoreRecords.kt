@@ -70,12 +70,13 @@ class RestoreRecords(val parsed: ParsedBackup) {
             return RestoreRecords(parseBackupBytes(kept.toByteArray(), json, nowMs))
         }
 
-        /** Kept records a restore may hold: an eighth of the heap, at least 48 MB. */
+        /** Kept records a restore may hold: an eighth of the heap, at least 24 MB. */
         fun defaultMaxKeptBytes(maxHeap: Long = Runtime.getRuntime().maxMemory()): Long =
             maxOf(MIN_KEPT_BYTES, maxHeap / 8)
 
-        /** The floor: 300 shots at about 120 KB, plus a library, fit under it. */
-        const val MIN_KEPT_BYTES = 48L * 1024 * 1024
+        /** The floor: a full 300-shot history is about 16 MB kept, so 24 MB fits it
+         *  with a library, and a 256 MB heap still parses it (REVIEW-395). */
+        const val MIN_KEPT_BYTES = 24L * 1024 * 1024
 
         /** Whether the line behind [record], a `BackupRecord` JSON, is one the run needs. */
         private fun keep(record: String, json: Json, shots: Set<String>?): Boolean {
