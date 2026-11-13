@@ -105,7 +105,8 @@ async function harness(opts: {
 	h.onState('ready');
 	await h.report(IDLE);
 	internals.applyCoreOutput((await core.setDesiredProfile(profile, {}, performance.now())).output);
-	await vi.advanceTimersByTimeAsync(10);
+	// The core lets a new desired profile rest 0.5 s before it uploads.
+	await vi.advanceTimersByTimeAsync(510);
 	if (!(await core.profileSyncStatus()).lastPushed) throw new Error('the profile did not land');
 	// Past the firmware's profile-download guard, which the core now holds
 	// state requests through (F16).

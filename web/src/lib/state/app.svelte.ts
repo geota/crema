@@ -233,13 +233,6 @@ const CLEARED_DE1_READOUT = {
  */
 const SCALE_LOW_BATTERY_PCT = 25;
 
-/**
- * How long the Quick Controls dial must rest before its overrides become the
- * desired profile (de1app debounces its temperature dial by 0.5 s too), so a
- * run of stepper taps uploads once.
- */
-const DIAL_PUSH_DEBOUNCE_MS = 500;
-
 /** The five Quick Sheet values a shot records as they were at its start. */
 interface ShotStartBrewParams {
 	yieldTarget: number;
@@ -1494,24 +1487,18 @@ export class CremaApp {
 	/** The profile and overrides last given to the core as its desired profile. */
 	#desiredOverrides: { profileId: string; qc: ProfileFingerprintOverrides } | null = null;
 
-	/** The pending debounced push of a dial change ({@link setBrewOverrides}). */
-	#overridesPush: ReturnType<typeof setTimeout> | null = null;
-
 	/**
 	 * Set the live overrides for `profile` (the dial moved). They become the
-	 * core's desired profile after the dial rests {@link DIAL_PUSH_DEBOUNCE_MS}
-	 * (de1app's 0.5 s), so stepping the dial uploads once, not per step. A
-	 * repeat of the current overrides changes nothing.
+	 * core's desired profile at once; the core waits for the dial to rest
+	 * (de1app's 0.5 s) before it uploads, on a `WakeAt` deadline, so stepping
+	 * the dial uploads once, not per step. A repeat of the current overrides
+	 * changes nothing.
 	 */
 	setBrewOverrides(profile: CremaProfile, qc: ProfileFingerprintOverrides): void {
 		const cur = this.#brewOverrides;
 		if (cur?.profileId === profile.id && sameOverrides(cur.qc, qc)) return;
 		this.#brewOverrides = { profileId: profile.id, qc };
-		if (this.#overridesPush !== null) clearTimeout(this.#overridesPush);
-		this.#overridesPush = setTimeout(() => {
-			this.#overridesPush = null;
-			void this.setDesiredProfile(profile, qc);
-		}, DIAL_PUSH_DEBOUNCE_MS);
+		void this.setDesiredProfile(profile, qc);
 	}
 
 	/**
@@ -2324,11 +2311,6 @@ export class CremaApp {
 		if (!profile) {
 			this.brewParamsAtShotStart = null;
 			throw new NoActiveProfileError();
-		}
-		// The start's own push supersedes a dial push still settling.
-		if (this.#overridesPush !== null) {
-			clearTimeout(this.#overridesPush);
-			this.#overridesPush = null;
 		}
 		this.#desiredOverrides = { profileId: profile.id, qc };
 		await this.pushStartSettings();

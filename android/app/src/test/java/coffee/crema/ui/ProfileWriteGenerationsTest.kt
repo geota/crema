@@ -129,18 +129,19 @@ class ProfileWriteGenerationsTest {
 
         // The shot start's upload, applied on the lane before the report lands.
         bridge.cancelProfileUpload()
-        val n1 = json.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(profile("N+1"), 10uL, N1_DIAL))
+        // After N's upload tick (0 + DESIRED_SETTLE_MS): the core's clock never runs back.
+        val n1 = json.decodeFromString(CoreOutput.serializer(), bridge.uploadWire(profile("N+1"), 1_000uL, N1_DIAL))
         val batchN1 = assertNotNull(g.begin(n1.writeTargets(), startedUploadId(n1.events)))
 
         val late = json.decodeFromString(
             CoreOutput.serializer(),
-            bridge.profileWriteFailed(20uL, assertNotNull(batchN.uploadId)),
+            bridge.profileWriteFailed(1_600uL, assertNotNull(batchN.uploadId)),
         )
         assertTrue(late.events.isEmpty(), "the report is about N, not N+1: ${late.events}")
         assertTrue(bridge.profileUploadInProgress(), "N+1 still uploading")
 
         // N+1's own failure still fails N+1.
-        val own = bridge.profileWriteFailed(30uL, assertNotNull(batchN1.uploadId))
+        val own = bridge.profileWriteFailed(1_700uL, assertNotNull(batchN1.uploadId))
         assertTrue("WriteFailed" in own, own)
         assertFalse(bridge.profileUploadInProgress())
     }
@@ -162,12 +163,13 @@ class ProfileWriteGenerationsTest {
         // N ends and N+1 is armed on the lane; its batch has not begun, so N
         // still "may write".
         bridge.cancelProfileUpload()
-        bridge.uploadWire(profile("N+1"), 10uL, N1_DIAL)
+        // After N's upload tick (0 + DESIRED_SETTLE_MS): the core's clock never runs back.
+        bridge.uploadWire(profile("N+1"), 1_000uL, N1_DIAL)
         assertTrue(g.mayWrite(batchN))
         val ackId = batchN.uploadId.takeIf { g.mayWrite(batchN) } // the VM's ackUploadId
         val late = json.decodeFromString(
             CoreOutput.serializer(),
-            bridge.onProfileWriteAck(NotificationSource.DE1_HEADER_ACK, nHeader, 20uL, assertNotNull(ackId)),
+            bridge.onProfileWriteAck(NotificationSource.DE1_HEADER_ACK, nHeader, 1_600uL, assertNotNull(ackId)),
         )
         assertTrue(late.events.isEmpty(), late.events.toString())
         // N+1's header is still unconfirmed: its watchdog would say HeaderNotAcked,

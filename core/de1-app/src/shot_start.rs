@@ -362,7 +362,8 @@ impl CremaCore {
                 .filter(|s| s.is_flow_state()),
             own_flush: false,
         });
-        let desired = self.set_desired_profile(Some(profile), qc, self.clock);
+        // A start doesn't wait for the dial's settle (`DESIGN.md` §3.10).
+        let desired = self.set_desired_profile_settling(Some(profile), qc, self.clock, false);
         out.events.extend(desired.events);
         out.commands.extend(desired.commands);
         let status = self.profile_sync_status();
@@ -906,7 +907,7 @@ mod tests {
     fn f16_5_a_held_profile_skips_the_wait_but_not_the_guard() {
         let mut core = connected(false);
         let p = profile(36.0);
-        let first = core.set_desired_profile(
+        let first = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_500),
@@ -1157,7 +1158,7 @@ mod tests {
     fn f16_5_espresso_not_entered_in_5_s_fails() {
         let mut core = connected(false);
         let p = profile(36.0);
-        let first = core.set_desired_profile(
+        let first = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_100),
@@ -1290,7 +1291,7 @@ mod tests {
     fn a_start_drops_a_held_request() {
         let mut core = connected(false);
         let p = profile(36.0);
-        let first = core.set_desired_profile(
+        let first = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_500),
@@ -1320,7 +1321,7 @@ mod tests {
         let p = profile(36.0);
         // The dial's upload is in flight when Coffee is tapped with another
         // brew temperature: the start waits for its own profile.
-        let _ = core.set_desired_profile(
+        let _ = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_500),
@@ -1348,7 +1349,7 @@ mod tests {
         core.set_stop_on_weight(true);
         core.set_profile_target_weight(Some(36.0));
         let p = profile(36.0);
-        let _ = core.set_desired_profile(
+        let _ = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_500),
@@ -1365,7 +1366,7 @@ mod tests {
         assert!(out.commands.is_empty(), "it never writes");
         // Nothing applies: no banner.
         let mut core = connected(false);
-        let first = core.set_desired_profile(
+        let first = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_500),

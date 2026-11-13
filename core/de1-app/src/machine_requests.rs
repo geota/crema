@@ -378,7 +378,12 @@ impl CremaCore {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
-        match (guard, self.stop_deadline()) {
+        let guard = match (guard, self.stop_deadline()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        // A settling desired profile uploads at its deadline.
+        match (guard, self.profile_sync.settle_deadline()) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }
@@ -646,7 +651,7 @@ mod tests {
         let _ = core.request_machine_state(MachineState::Sleep);
         let _ = core.connect_sweep(&de1_domain::ConnectSweepSettings::default(), 1_200);
         let profile = blank_profile(&BrewDefaults::default());
-        let out = core.set_desired_profile(
+        let out = core.set_desired_profile_settled(
             Some(&profile),
             &de1_domain::BrewOverrides::default(),
             Duration::from_millis(1_300),
@@ -763,7 +768,7 @@ mod tests {
         let _ = core.on_notification(Source::De1State, &IDLE, 1_000);
         let _ = core.connect_sweep(&ConnectSweepSettings::default(), 1_000);
         let p = blank_profile(&BrewDefaults::default());
-        let upload = core.set_desired_profile(
+        let upload = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_100),
@@ -775,7 +780,7 @@ mod tests {
             brew_temp: Some(p.segments[0].temp + 1.0),
             ..BrewOverrides::default()
         };
-        let _ = core.set_desired_profile(Some(&p), &dialled, Duration::from_millis(1_200));
+        let _ = core.set_desired_profile_settled(Some(&p), &dialled, Duration::from_millis(1_200));
         let done = complete(&mut core, &upload, 1_300);
         assert!(!uploads_header(&done), "the held request goes first");
         let release = core.on_tick(1_800);

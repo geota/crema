@@ -43,8 +43,9 @@ class CoreJsonTest {
         assertIs<ProfileUploadFailure.Aborted>(failed.content.reason)
         assertEquals("Aborted", uploadFailureLabel(failed.content.reason))
         assertTrue(aborted.events.any { it is Event.ProfileSyncWarning })
-        // The core's retry, 3 s later.
-        val out = coreJson.decodeFromString(CoreOutput.serializer(), bridge.onTick(3_000uL))
+        // The core's retry, 3 s after the abort (the upload began at the
+        // desired profile's settle).
+        val out = coreJson.decodeFromString(CoreOutput.serializer(), bridge.onTick(DESIRED_SETTLE_MS + 3_000uL))
         assertTrue(out.events.any { it is Event.ProfileUploadStarted })
         assertTrue(out.commands.filterIsInstance<Command.WriteCharacteristic>().size >= 3, "the header, frame and tail")
     }

@@ -521,7 +521,7 @@ mod tests {
         let mut core = CremaCore::new_with_model(1);
         let _ = core.on_notification(Source::De1State, &[2, 0], 0);
         let profile = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
-        let _ = core.set_desired_profile(
+        let _ = core.set_desired_profile_settled(
             Some(&profile),
             &de1_domain::BrewOverrides::default(),
             std::time::Duration::ZERO,
@@ -560,7 +560,7 @@ mod tests {
         let mut core = CremaCore::new_with_model(1);
         let _ = core.on_notification(Source::De1State, &[2, 0], 0);
         let profile = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
-        let _ = core.set_desired_profile(
+        let _ = core.set_desired_profile_settled(
             Some(&profile),
             &de1_domain::BrewOverrides::default(),
             std::time::Duration::ZERO,
