@@ -21,6 +21,10 @@
 //!   twice.
 //! - **Coalescing.** A change while an upload runs waits for it; the latest
 //!   desired profile goes out when it finishes.
+//! - **Settle.** A changed desired profile waits [`DESIRED_SETTLE`] (500 ms,
+//!   de1app's dial debounce) after the last change, on an [`Event::WakeAt`]
+//!   deadline, so a run of dial steps uploads once. The shells keep no timer
+//!   of their own. A shot start doesn't wait (`DESIGN.md` §3.10).
 //! - **Retry.** A failed upload is retried after 3 s, 10 s, then every 30 s
 //!   ([`RETRY_DELAYS`]), driven by [`CremaCore::on_tick`]. The first failure
 //!   of a streak raises one [`Event::ProfileSyncWarning`]; a success (or a
@@ -128,7 +132,13 @@ pub(crate) struct ProfileSync {
     warned: bool,
     /// A desired fingerprint the core rejected outright — not retried.
     rejected: Option<String>,
+    /// A changed desired profile uploads no sooner than this.
+    settle_at: Option<Duration>,
 }
+
+/// How long a changed desired profile rests before it uploads: de1app's 0.5 s
+/// dial debounce, moved into the core (`DESIGN.md` §3.10).
+pub const DESIRED_SETTLE: Duration = Duration::from_millis(500);
 
 impl ProfileSync {
     fn status(&self) -> ProfileSyncStatus {
@@ -153,9 +163,9 @@ impl ProfileSync {
         self.desired.as_ref().map(|d| (&d.profile, &d.qc))
     }
 
-    /// A new desired profile. A changed fingerprint starts a fresh attempt
-    /// count (reaprime `_onChange`).
-    fn set_desired(&mut self, desired: Option<Desired>) {
+    /// A new desired profile at `now`. A changed fingerprint starts a fresh
+    /// attempt count (reaprime `_onChange`) and waits [`DESIRED_SETTLE`].
+    fn set_desired(&mut self, desired: Option<Desired>, now: Duration) {
         let changed = self.desired.as_ref().map(|d| &d.fingerprint)
             != desired.as_ref().map(|d| &d.fingerprint);
         self.desired = desired;
@@ -163,7 +173,21 @@ impl ProfileSync {
             self.attempt = 0;
             self.retry_at = None;
             self.rejected = None;
+            self.settle_at = Some(now + DESIRED_SETTLE);
         }
+    }
+
+    /// Upload without waiting for the settle: a shot start.
+    fn settle_now(&mut self) {
+        self.settle_at = None;
+    }
+
+    /// When the core needs a tick to upload a settling desired profile.
+    pub(crate) fn settle_deadline(&self) -> Option<Duration> {
+        let desired = self.desired.as_ref()?;
+        let pending = self.last_pushed.as_ref() != Some(&desired.fingerprint)
+            && self.rejected.as_ref() != Some(&desired.fingerprint);
+        self.settle_at.filter(|_| pending)
     }
 
     /// The link is gone: a new generation. Returns whether a raised warning
@@ -195,6 +219,7 @@ impl ProfileSync {
             && self.in_flight.is_none()
             && self.last_pushed.as_ref() != Some(&desired.fingerprint)
             && self.rejected.as_ref() != Some(&desired.fingerprint)
+            && self.settle_at.is_none_or(|at| now >= at)
             && self.retry_at.is_none_or(|at| now >= at);
         due.then(|| desired.clone())
     }
@@ -285,6 +310,30 @@ impl CremaCore {
         qc: &BrewOverrides,
         now: Duration,
     ) -> CoreOutput {
+        self.set_desired_profile_settling(profile, qc, now, true)
+    }
+
+    /// [`set_desired_profile`](Self::set_desired_profile), already settled:
+    /// for tests about the sync rather than the dial's settle.
+    #[cfg(test)]
+    pub(crate) fn set_desired_profile_settled(
+        &mut self,
+        profile: Option<&CremaProfile>,
+        qc: &BrewOverrides,
+        now: Duration,
+    ) -> CoreOutput {
+        self.set_desired_profile_settling(profile, qc, now, false)
+    }
+
+    /// [`set_desired_profile`](Self::set_desired_profile), with or without
+    /// the [`DESIRED_SETTLE`] wait: a shot start uploads at once.
+    pub(crate) fn set_desired_profile_settling(
+        &mut self,
+        profile: Option<&CremaProfile>,
+        qc: &BrewOverrides,
+        now: Duration,
+        settle: bool,
+    ) -> CoreOutput {
         self.clock = self.clock.max(now);
         let desired = profile.map(|p| {
             let qc = de1_domain::normalize_brew_overrides(p, qc);
@@ -294,12 +343,17 @@ impl CremaCore {
                 qc,
             }
         });
-        self.profile_sync.set_desired(desired);
+        self.profile_sync.set_desired(desired, self.clock);
+        if !settle {
+            self.profile_sync.settle_now();
+        }
         let mut out = CoreOutput::default();
         // The packet's group target follows the profile (F5.3); it goes
         // before any upload, as in the connect sweep.
         self.drive_shot_settings(&mut out, false);
         self.drive_profile_sync(&mut out);
+        // A settling profile needs a tick at its deadline.
+        self.emit_wake(&mut out);
         self.gate_read_only(out)
     }
 
@@ -525,7 +579,7 @@ mod tests {
     fn f7_3_stale_generation_results_are_ignored() {
         let mut sync = ProfileSync::default();
         sync.settled();
-        sync.set_desired(Some(desired("a")));
+        sync.set_desired(Some(desired("a")), Duration::ZERO);
         let old = sync.started("a".into(), 0);
         assert!(!sync.disconnected());
         sync.settled();
@@ -547,7 +601,11 @@ mod tests {
         let mut core = crate::CremaCore::new_with_model(1);
         let _ = core.on_notification(crate::Source::De1State, &[2, 0], 0);
         let profile = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
-        let _ = core.set_desired_profile(Some(&profile), &BrewOverrides::default(), Duration::ZERO);
+        let _ = core.set_desired_profile_settled(
+            Some(&profile),
+            &BrewOverrides::default(),
+            Duration::ZERO,
+        );
         let _ = core.connect_sweep(&de1_domain::ConnectSweepSettings::default(), 10);
         let tag = core
             .profile_upload
@@ -575,7 +633,7 @@ mod tests {
             state_seen: true,
             ..LinkSession::default()
         };
-        sync.set_desired(Some(desired("a")));
+        sync.set_desired(Some(desired("a")), Duration::ZERO);
         let mut now = Duration::ZERO;
         let mut warnings = 0;
         for expected in [3, 10, 30, 30, 30] {

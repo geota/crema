@@ -56,7 +56,7 @@ private val MIRRORED_REGISTERS = setOf(MmrRegister.HeaterVoltage, MmrRegister.Ca
  * machine-request outcomes, and profile uploads.
  *
  * What the shell asks of the machine (9b): the shot start, the desired
- * profile and the dial's debounce, the stop targets, machine-state writes
+ * profile (the core waits for the dial to rest), the stop targets, machine-state writes
  * (sleep-on-quit's included), and the connect-time setup (identity reads,
  * the settings sweep, the USB-charger minute tick) with its session clear.
  *
@@ -151,11 +151,6 @@ internal class MachineSessionController(
      *  how geota/crema#56 hid — worth recording per shot. */
     @Volatile
     private var shotStartedByApp: Boolean = false
-
-    /** Where the dial's debounce wait runs ([pushDesiredProfile]); the push
-     *  itself always runs on the core lane. Test seam (via the VM): a test
-     *  dispatcher makes the 0.5 s virtual time. */
-    var dialDebounceContext: kotlin.coroutines.CoroutineContext = lane.dispatcher
 
     // Declared above `init`: a property below it is unset while it runs (P3-2).
 
@@ -668,7 +663,7 @@ internal class MachineSessionController(
      * shot target is the Quick-Controls dial override (null when unset, so the
      * profile recipe wins). Safe while disconnected — pure core state, no BLE.
      */
-    fun pushStopTargets(s: MainUiState = effectiveState(), desiredDelayMs: Long = 0) {
+    fun pushStopTargets(s: MainUiState = effectiveState()) {
         // On a remote, a hub's custom profile this library lacks is the overlay.
         val active = s.activeProfile()
         val profileYield = active?.yieldOut?.takeIf { it.isFinite() && it > 0f }
@@ -692,7 +687,7 @@ internal class MachineSessionController(
             setActiveProfile = { bridge.setActiveProfile(it) },
             log = { appendLog(it) },
         )
-        pushDesiredProfile(s, desiredDelayMs)
+        pushDesiredProfile(s)
         refreshStopTargetProjection()
     }
 
@@ -804,17 +799,14 @@ internal class MachineSessionController(
      * nothing: its core is a read-only mirror that never uploads (the hub holds
      * the machine), and it pushes again once it stops being a remote.
      */
-    private fun pushDesiredProfile(s: MainUiState = effectiveState(), delayMs: Long = 0) {
+    private fun pushDesiredProfile(s: MainUiState = effectiveState()) {
         if (uiState().mirror != null) return
         val cremaJson = s.activeProfile()?.id?.let { profileJson(it) } ?: s.mirroredProfileJson
         val qcJson = s.brewParams.overridesJson(json)
-        // The latest push wins: a dial change waits [delayMs] for the dial to
-        // rest (de1app's 0.5 s), and any later push replaces a pending one.
+        // The latest push wins. The core waits for a dial to rest (de1app's
+        // 0.5 s) before it uploads, on a WakeAt deadline: no timer here.
         desiredPushJob?.cancel()
-        desiredPushJob = scope.launch(if (delayMs > 0) dialDebounceContext else lane.dispatcher) {
-            if (delayMs > 0) delay(delayMs)
-            kotlinx.coroutines.withContext(lane.dispatcher) { setDesiredOnLane(cremaJson, qcJson) }
-        }
+        desiredPushJob = scope.launch(lane.dispatcher) { setDesiredOnLane(cremaJson, qcJson) }
     }
 
     /** A DE1 disconnect closed the session: stop the in-flight connect-time

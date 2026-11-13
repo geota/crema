@@ -119,9 +119,11 @@ async function connect(h: Harness): Promise<void> {
 	await vi.advanceTimersByTimeAsync(0);
 }
 
-/** Make a profile titled `title` the desired one: the core's sync uploads it. */
+/** Make a profile titled `title` the desired one: the core's sync uploads it,
+ *  after its 0.5 s settle. */
 async function upload(h: Harness, title: string): Promise<void> {
 	await h.app.setDesiredProfile(twoStepProfile(title), {});
+	await vi.advanceTimersByTimeAsync(500);
 }
 
 /** Note a profile write that reached the DE1: `H<count>` / `F<FrameToWrite>`. */
@@ -411,11 +413,11 @@ describe('the shell uploads the effective profile (AC-F6.3)', () => {
 				(status) => status.desired ?? null
 			);
 		const bareFp = await desired({});
-		await vi.advanceTimersByTimeAsync(10);
+		await vi.advanceTimersByTimeAsync(510); // the core's settle, then the upload
 		const bare = frames.splice(0);
 		const qc = { brewTemp: 94, preinf: 12 };
 		const fp = await desired(qc);
-		await vi.advanceTimersByTimeAsync(10);
+		await vi.advanceTimersByTimeAsync(510);
 		const dialled = frames.splice(0);
 
 		// ShotFrame bytes: [3] temperature (U8P1, half degrees), [4] duration
