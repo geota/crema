@@ -233,14 +233,17 @@ class RemoteSettingsTest {
         fixture.push()
         // The core's projection: the weight target and the max-duration cap
         // (S: 40 g, 44 s; this device's own: no override, 33 s).
-        fun core() = vm.ui.value.stopTargets?.let { it.weightConfiguredG to it.maxTimeS }
-        VmHarness.idle()
+        // The yield rides the desired profile, set on the core lane.
+        fun core(): Pair<Float?, Float?>? {
+            VmHarness.drainCoreLane(vm)
+            VmHarness.idle()
+            return vm.ui.value.stopTargets?.let { it.weightConfiguredG to it.maxTimeS }
+        }
         assertEquals(40f to 44f, core(), "after the snapshot")
         val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
         VmHarness.restore(vm, backup)
         assertEquals(40f to 44f, core(), "after a restore")
         vm.resetPreferences()
-        VmHarness.idle()
         assertEquals(40f to 44f, core(), "after a reset")
         stopKeepingMine(vm)
         val ownYield = vm.ui.value.profiles.first { it.id == RemoteFixture.PROFILE_P }.yieldOut.takeIf { it > 0f }
@@ -271,10 +274,15 @@ class RemoteSettingsTest {
         val vm = fixture.start()
         fixture.push()
         val custom = vm.ui.value.profiles.first { it.id == RemoteFixture.PROFILE_S }.copy(id = "custom-on-the-hub", source = "custom", yieldOut = 37f)
-        val customJson = coreJson.encodeToString(coffee.crema.profiles.CremaProfile.serializer(), custom)
+        // Whole, as the hub's library holds it (the core's own JSON): the remote
+        // core reads it as its desired profile.
+        val customJson = kotlinx.serialization.json.Json { encodeDefaults = true }
+            .encodeToString(coffee.crema.profiles.CremaProfile.serializer(), custom)
         fixture.push(S.copy(activeProfileId = "custom-on-the-hub", activeProfileJson = customJson, brewDoseG = null, brewYieldG = null, brewTempC = null, brewPreinfuseS = null, rev = 2))
         VmHarness.idle()
         assertEquals("custom-on-the-hub", vm.ui.value.activeProfileId)
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
         assertEquals(37f, vm.ui.value.stopTargets?.weightConfiguredG, "the overlay's yield")
     }
 

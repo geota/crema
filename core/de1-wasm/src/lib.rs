@@ -2974,24 +2974,6 @@ impl CremaBridge {
         self.state().core.reset_scale_peaks();
     }
 
-    /// Set the active profile's recipe target weight, in grams.
-    /// `None` (or a non-finite / non-positive value) means "no target."
-    pub fn set_profile_target_weight(&self, grams: Option<f32>) {
-        self.state().core.set_profile_target_weight(grams);
-    }
-
-    /// Set the per-shot dial override weight, in grams. `None` clears the
-    /// override (falls back to the profile recipe target).
-    pub fn set_shot_target_weight(&self, grams: Option<f32>) {
-        self.state().core.set_shot_target_weight(grams);
-    }
-
-    /// Set the active profile's volume limit (SAV), in millilitres.
-    /// `None` means "no limit."
-    pub fn set_profile_volume_limit(&self, milliliters: Option<f32>) {
-        self.state().core.set_profile_volume_limit(milliliters);
-    }
-
     /// Set the global maximum shot duration, in seconds. `None` means
     /// "no max." Legacy default is 60 s.
     pub fn set_max_shot_duration(&self, seconds: Option<f32>) {

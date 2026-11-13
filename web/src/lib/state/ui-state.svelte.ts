@@ -201,6 +201,9 @@ export interface StopTargetsView {
 	readonly weightBlocked: string | null;
 	/** The core's note for `weightBlocked`, the same on both shells. */
 	readonly weightBlockedNote: string | null;
+	/** The yield dot is off. The core turns it back on for each new desired
+	 *  profile (`DESIGN.md` §3.10), so the dot reads it from here. */
+	readonly weightTargetDisabled: boolean;
 }
 
 export interface UiSnapshot {
@@ -1038,7 +1041,10 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					armed: c.armed,
 					weightConfiguredG: c.weight_configured ?? null,
 					weightBlocked: c.weight_blocked ?? null,
-					weightBlockedNote: c.weight_blocked_note ?? null
+					weightBlockedNote: c.weight_blocked_note ?? null,
+					// The event doesn't carry the dot; only a shell action or a
+					// new desired profile moves it, and both re-read the projection.
+					weightTargetDisabled: snapshot.stopTargets?.weightTargetDisabled ?? false
 				},
 				eventLog: appendLog(
 					snapshot.eventLog,
@@ -1638,6 +1644,7 @@ export async function refreshStopTargetsProjection(core: {
 		weightConfigured: number | null;
 		weightBlocked: string | null;
 		weightBlockedNote: string | null;
+		weightTargetDisabled?: boolean;
 	}>;
 	/** The core's hot-water target, re-read alongside (see below). */
 	hotWaterTarget?(): Promise<HotWaterTarget | null>;
@@ -1652,7 +1659,8 @@ export async function refreshStopTargetsProjection(core: {
 				armed: p.armed,
 				weightConfiguredG: p.weightConfigured ?? null,
 				weightBlocked: p.weightBlocked ?? null,
-				weightBlockedNote: p.weightBlockedNote ?? null
+				weightBlockedNote: p.weightBlockedNote ?? null,
+				weightTargetDisabled: p.weightTargetDisabled ?? false
 			}
 		});
 	} catch {

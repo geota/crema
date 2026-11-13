@@ -16,6 +16,8 @@ pub mod calibration_guard;
 mod capture;
 mod cup_trust;
 pub mod de1_uuids;
+#[cfg(test)]
+mod desired_targets_tests;
 pub mod error;
 pub mod event;
 pub mod firmware_flash;
@@ -621,12 +623,12 @@ pub struct CremaCore {
     /// what the profile's frame timing produces — ends the pour with no
     /// stop ever fired).
     stop_triggered_this_shot: bool,
-    /// Per-shot SAW kill switch. Latched flag, default `false`; the shell
-    /// pushes `true` when the user toggles the QC yield dot OFF, back to
-    /// `false` when it turns ON. Independent of
-    /// [`stop_on_weight`](Self::stop_on_weight): either flag suppresses
-    /// SAW arming. Reseeded to `false` on every active-profile change so
-    /// each profile load starts with the user's last persistent intent.
+    /// Per-shot SAW kill switch: the Quick Controls yield dot, off. The shell
+    /// pushes `true` when the user turns the dot OFF, back to `false` when it
+    /// turns ON. Independent of [`stop_on_weight`](Self::stop_on_weight):
+    /// either flag suppresses SAW arming. The core clears it when the desired
+    /// profile's id changes (`DESIGN.md` §3.10), so each profile starts with
+    /// its weight target on.
     weight_target_disabled: bool,
     /// Opt-in: arm the profile's volume limit (SAV) even while a scale is
     /// registered. Default `false` — the reference-app consensus treats
@@ -636,20 +638,6 @@ pub struct CremaCore {
     /// (inverted sense). Set via
     /// [`set_volume_stop_with_scale`](Self::set_volume_stop_with_scale).
     volume_stop_with_scale: bool,
-    /// The active profile's recipe target weight, grams. `None` = no
-    /// recipe target. Set via
-    /// [`set_profile_target_weight`](Self::set_profile_target_weight) when
-    /// the shell activates or edits a profile.
-    profile_target_weight: Option<f32>,
-    /// The per-shot dial override weight, grams. `None` = no override
-    /// (fall back to the profile recipe). Set via
-    /// [`set_shot_target_weight`](Self::set_shot_target_weight) when the
-    /// QC stepper moves.
-    shot_target_weight: Option<f32>,
-    /// The active profile's volume limit, millilitres (SAV). `None` = no
-    /// limit. Set via
-    /// [`set_profile_volume_limit`](Self::set_profile_volume_limit).
-    profile_volume_limit: Option<f32>,
     /// The global maximum shot duration, seconds. `None` = no max. Set
     /// via [`set_max_shot_duration`](Self::set_max_shot_duration); the
     /// shell binds this to a user-tunable Settings field (legacy default
@@ -1112,9 +1100,6 @@ impl CremaCore {
             stop_triggered_this_shot: false,
             weight_target_disabled: false,
             volume_stop_with_scale: false,
-            profile_target_weight: None,
-            shot_target_weight: None,
-            profile_volume_limit: None,
             max_shot_duration: None,
             auto_stop: None,
             saw_model: SawLearningModel::default(),
@@ -1412,31 +1397,6 @@ impl CremaCore {
         self.shot_metrics.reset_scale();
     }
 
-    /// Set the active profile's recipe target weight, in grams. `None` =
-    /// no recipe target. Defensive: a finite value `<= 0` normalises to
-    /// `None`, mirroring the legacy wire convention where `0` means
-    /// "disabled."
-    pub fn set_profile_target_weight(&mut self, grams: Option<f32>) {
-        self.profile_target_weight = grams.filter(|g| g.is_finite() && *g > 0.0);
-        self.refresh_auto_stop_targets();
-    }
-
-    /// Set the per-shot dial override weight, in grams. `None` clears the
-    /// override and falls back to the profile recipe target. Same defensive
-    /// `<= 0 → None` normalisation as
-    /// [`set_profile_target_weight`](Self::set_profile_target_weight).
-    pub fn set_shot_target_weight(&mut self, grams: Option<f32>) {
-        self.shot_target_weight = grams.filter(|g| g.is_finite() && *g > 0.0);
-        self.refresh_auto_stop_targets();
-    }
-
-    /// Set the active profile's volume limit (SAV), in millilitres.
-    /// `None` = no limit. Defensive `<= 0 → None`.
-    pub fn set_profile_volume_limit(&mut self, milliliters: Option<f32>) {
-        self.profile_volume_limit = milliliters.filter(|v| v.is_finite() && *v > 0.0);
-        self.refresh_auto_stop_targets();
-    }
-
     /// Set the global maximum shot duration, in seconds. `None` = no max.
     /// Defensive `<= 0 → None`. The legacy app default is 60 s.
     pub fn set_max_shot_duration(&mut self, seconds: Option<f32>) {
@@ -1464,18 +1424,22 @@ impl CremaCore {
         outcome
     }
 
-    /// The target weight currently in effect for SAW. Priority:
+    /// The target yield, from the desired profile (`DESIGN.md` §3.10): the
+    /// Quick Controls yield when it is set, else the profile's `yield_out`. A
+    /// yield of 0 is no target. The hot-water ratio's basis too.
     ///
-    /// 1. Per-shot dial override ([`shot_target_weight`](Self::shot_target_weight))
-    ///    wins when set.
-    /// 2. Otherwise the active profile's recipe target
-    ///    ([`profile_target_weight`](Self::profile_target_weight)).
-    /// 3. If both are `None`, no weight target.
-    ///
-    /// Does not consider `stop_on_weight` or scale-connected — that's
-    /// [`effective_stop_targets`](Self::effective_stop_targets)'s job.
+    /// Does not consider `stop_on_weight`, the dot or the scale — that's
+    /// [`weight_intent`](Self::weight_intent) and
+    /// [`effective_stop_targets`](Self::effective_stop_targets).
     fn effective_target_weight(&self) -> Option<f32> {
-        self.shot_target_weight.or(self.profile_target_weight)
+        let (profile, qc) = self.profile_sync.desired_profile()?;
+        Some(qc.yield_g.unwrap_or(profile.yield_out)).filter(|g| g.is_finite() && *g > 0.0)
+    }
+
+    /// The desired profile's volume limit (SAV), ml. 0 is no limit.
+    fn profile_volume_limit(&self) -> Option<f32> {
+        let (profile, _) = self.profile_sync.desired_profile()?;
+        Some(f32::from(profile.max_total_volume_ml)).filter(|ml| *ml > 0.0)
     }
 
     /// Compose the [`StopTargets`] that should arm the [`AutoStop`] on the
@@ -1502,7 +1466,7 @@ impl CremaCore {
     fn resolved_legs(&self) -> ResolvedLegs {
         let intent = StopIntent {
             weight: self.weight_intent(),
-            volume_limit: self.profile_volume_limit,
+            volume_limit: self.profile_volume_limit(),
             max_time: self.max_shot_duration,
             volume_stop_with_scale: self.volume_stop_with_scale,
             limit_from_ml: self.limit_from_ml,
@@ -3518,9 +3482,9 @@ impl CremaCore {
         // The low-water threshold is a user preference; the warning itself
         // re-arms for the next link.
         let water_warn_ml = self.low_water.warn_ml();
-        // The stop targets and their switches are USER INTENT — the active
-        // recipe's yield, the Quick-Controls override, the volume cap, the
-        // max-time guard, and the three behaviour toggles. A DE1 dropping and
+        // The stop switches are USER INTENT — the max-time guard, the dot and
+        // the three behaviour toggles; the yield and the volume cap come from
+        // the desired profile, which the profile sync carries. A DE1 dropping and
         // reconnecting changes none of them, and the shells hold the same
         // values in their own state the whole time.
         //
@@ -3543,9 +3507,6 @@ impl CremaCore {
         let auto_tare = self.auto_tare;
         let volume_stop_with_scale = self.volume_stop_with_scale;
         let weight_target_disabled = self.weight_target_disabled;
-        let profile_target_weight = self.profile_target_weight;
-        let shot_target_weight = self.shot_target_weight;
-        let profile_volume_limit = self.profile_volume_limit;
         let max_shot_duration = self.max_shot_duration;
         // A guided brew session is scale/timer state, not DE1 session
         // state — the BLE managers reset the core on a DE1 drop, and a
@@ -3579,9 +3540,6 @@ impl CremaCore {
         self.auto_tare = auto_tare;
         self.volume_stop_with_scale = volume_stop_with_scale;
         self.weight_target_disabled = weight_target_disabled;
-        self.profile_target_weight = profile_target_weight;
-        self.shot_target_weight = shot_target_weight;
-        self.profile_volume_limit = profile_volume_limit;
         self.max_shot_duration = max_shot_duration;
         self.profile_sync = profile_sync;
         self.link = link;
@@ -6095,6 +6053,7 @@ impl CremaCore {
             "weightConfigured": self.effective_target_weight(),
             "weightBlocked": self.weight_stop_blocked_by(),
             "weightBlockedNote": self.weight_blocked_note(),
+            "weightTargetDisabled": self.weight_target_disabled,
         })
         .to_string()
     }
@@ -7194,9 +7153,9 @@ mod tests {
 
         core.connect_scale("BOOKOO_SC", &[]);
         core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         core.set_max_shot_duration(Some(80.0));
-        core.set_profile_volume_limit(Some(36.0));
+        core.set_test_volume_limit(Some(36.0));
 
         // Still idle — but the shell can now show exactly what would fire,
         // including the volume leg's demotion behind the resolved weight leg.
@@ -7223,7 +7182,7 @@ mod tests {
     fn a_scale_drop_mid_shot_reports_the_target_and_the_reason() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 1_000);
         core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 1_100);
@@ -7244,7 +7203,7 @@ mod tests {
     #[test]
     fn a_deliberately_disabled_weight_stop_is_not_reported_as_blocked() {
         let mut core = CremaCore::new();
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         core.set_stop_on_weight(false);
         assert_eq!(core.weight_stop_blocked_by(), None);
     }
@@ -7254,7 +7213,7 @@ mod tests {
     #[test]
     fn projection_shows_an_unarmable_weight_leg_while_idle() {
         let mut core = CremaCore::new();
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         // No scale: SAW cannot arm, so the projection must not promise it.
         let (_, t) = core.stop_targets_projection();
         assert_eq!(t.weight, None, "no scale, so no weight stop");
@@ -7276,16 +7235,16 @@ mod tests {
     fn stop_targets_survive_a_reset_so_a_ghc_shot_still_arms() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         core.set_max_shot_duration(Some(80.0));
-        core.set_profile_volume_limit(Some(36.0));
+        core.set_test_volume_limit(Some(36.0));
 
         // The DE1 drops and reconnects — the BLE manager resets the core.
         core.reset();
 
-        assert_eq!(core.profile_target_weight, Some(36.0));
+        assert_eq!(core.effective_target_weight(), Some(36.0));
         assert_eq!(core.max_shot_duration, Some(80.0));
-        assert_eq!(core.profile_volume_limit, Some(36.0));
+        assert_eq!(core.profile_volume_limit(), Some(36.0));
         assert!(core.stop_on_weight);
         assert!(core.auto_tare);
 
@@ -9094,7 +9053,7 @@ mod tests {
         core.connect_scale("BOOKOO_SC", &[]);
         // Default settings (auto_tare=true, stop_on_weight=true) — push only
         // the profile recipe target.
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // A 35 g reading well past the 5 s arming delay crosses the 30 g target.
@@ -9121,7 +9080,7 @@ mod tests {
         // de1app parity (issue 10): water dispensed while the DE1 reports
         // the preinfusion substate never counts toward SAV.
         let mut core = CremaCore::new();
-        core.set_profile_volume_limit(Some(10.0));
+        core.set_test_volume_limit(Some(10.0));
         // Espresso / Preinfusion: the shot starts and SAV arms.
         core.on_notification(Source::De1State, &[4, 4], 0);
         let mut volume_stops = 0;
@@ -9204,7 +9163,7 @@ mod tests {
     fn ended_without_triggering_stop_is_false_when_the_app_stopped_the_shot() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // Crosses the target — the app's own SAW fires the stop.
@@ -9223,7 +9182,7 @@ mod tests {
     fn ended_without_triggering_stop_is_true_when_an_armed_target_never_fires() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // A real shot has telemetry/scale readings flowing throughout — this
@@ -9256,7 +9215,7 @@ mod tests {
     fn an_unhonoured_stop_is_recommanded_until_the_shot_ends() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // Cross the target — the first stop command goes out and the
@@ -9301,7 +9260,7 @@ mod tests {
     fn arming_emits_the_stop_targets_event() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // The first reading that clears the tare/settle gates reports what
@@ -9330,8 +9289,8 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         // Profile says 30 g; dial overrides to 50 g.
-        core.set_profile_target_weight(Some(30.0));
-        core.set_shot_target_weight(Some(50.0));
+        core.set_test_profile_yield(Some(30.0));
+        core.set_test_dial_yield(Some(50.0));
         core.on_notification(Source::De1State, &[4, 5], 0);
         // 35 g would have stopped the 30 g shot — verify it doesn't here.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
@@ -9347,7 +9306,7 @@ mod tests {
     fn stop_on_weight_disabled_suppresses_saw_even_with_a_target() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.set_stop_on_weight(false);
         core.on_notification(Source::De1State, &[4, 5], 0);
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
@@ -9363,7 +9322,7 @@ mod tests {
     fn saw_does_not_arm_without_a_connected_scale() {
         let mut core = CremaCore::new();
         // No connect_scale call.
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[4, 5], 0);
         // Without a scale there's nothing to feed the AutoStop; assert no
         // controller was ever constructed by checking SAV / max-time
@@ -9489,7 +9448,7 @@ mod tests {
     fn an_untared_cup_that_settles_latches_a_virtual_zero() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // A ~300 g cup lands after the tare and HOLDS STILL: the guard
@@ -9522,7 +9481,7 @@ mod tests {
     fn an_unsettled_heavy_reading_falls_back_to_suppression() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // The heavy reading keeps moving (a hand, a bump, a cup still being
@@ -9557,7 +9516,7 @@ mod tests {
     fn a_heavy_reading_after_the_window_does_not_trip_the_guard() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // 60 g at 4 s — outside the 3 s window: a legitimately heavy pour,
@@ -9582,7 +9541,7 @@ mod tests {
         // a hot-water pour right after must not inherit the offset.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // Settle a ~300 g cup → the guard latches the virtual zero.
@@ -9619,7 +9578,7 @@ mod tests {
         // clears the latches, so a replacement scale starts clean.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         for (cg, at) in [(30_000, 1_600u64), (30_030, 2_000), (29_990, 2_400)] {
@@ -9652,7 +9611,7 @@ mod tests {
     fn the_untared_guard_rearms_on_the_next_shot() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[4, 5], 0);
         core.on_notification(Source::ScaleWeight, &bookoo_packet(6_000), 2_000);
         // Shot ends…
@@ -9674,7 +9633,7 @@ mod tests {
         // SAW still fires at the real target.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         // A sane pour ramp, past the untared-cup window, under target.
@@ -9720,7 +9679,7 @@ mod tests {
         // Target + max-time set, but NO scale yet: the AutoStop arms at first
         // flow with `weight: None` (max-time keeps the targets Some) — the
         // issue #15 shape, where the scale registers a beat after first flow.
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.set_max_shot_duration(Some(45.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
@@ -9750,7 +9709,7 @@ mod tests {
         // (untared) cup+coffee already reading over the target must not
         // stop the shot on its first frame — the settle machine decides.
         let mut core = CremaCore::new();
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.set_max_shot_duration(Some(45.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
@@ -9783,7 +9742,7 @@ mod tests {
         // in the next session without a scale reconnect (issue #15).
         core.reset();
         assert!(core.scale_capabilities().is_some());
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.on_notification(Source::De1State, &[2, 0], 0);
         core.on_notification(Source::De1State, &[4, 5], 0);
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
@@ -9796,7 +9755,7 @@ mod tests {
     fn a_scale_disconnect_mid_shot_drops_the_saw_leg() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         core.set_max_shot_duration(Some(45.0));
         core.on_notification(Source::De1State, &[4, 5], 0);
         core.disconnect_scale();
@@ -9815,7 +9774,7 @@ mod tests {
     #[test]
     fn a_registered_scale_demotes_the_volume_leg_to_a_fallback() {
         let mut core = CremaCore::new();
-        core.set_profile_volume_limit(Some(36.0));
+        core.set_test_volume_limit(Some(36.0));
         // No scale: SAV is the fallback stop.
         assert_eq!(
             core.effective_stop_targets().and_then(|t| t.volume),
@@ -9830,7 +9789,7 @@ mod tests {
             Some(36.0)
         );
         // With a weight target armed, volume steps aside so the caps don't race.
-        core.set_profile_target_weight(Some(30.0));
+        core.set_test_profile_yield(Some(30.0));
         assert_eq!(core.effective_stop_targets().and_then(|t| t.volume), None);
         // …unless the user opts into both caps.
         core.set_volume_stop_with_scale(true);
@@ -9850,9 +9809,9 @@ mod tests {
     #[test]
     fn defensive_normalisation_treats_zero_and_negative_as_none() {
         let mut core = CremaCore::new();
-        core.set_profile_target_weight(Some(0.0));
-        core.set_shot_target_weight(Some(-5.0));
-        core.set_profile_volume_limit(Some(f32::NAN));
+        core.set_test_profile_yield(Some(0.0));
+        core.set_test_dial_yield(Some(-5.0));
+        core.set_test_volume_limit(Some(f32::NAN));
         core.set_max_shot_duration(Some(0.0));
         // None of these arms anything.
         core.on_notification(Source::De1State, &[4, 5], 0);
@@ -14244,7 +14203,7 @@ mod tests {
             // SAW armed at 30 g: a 5 g weight on the LAST step must not end
             // the shot early; SAW owns the stop.
             let mut core = scale_core(&[None, Some(5.0)]);
-            core.set_profile_target_weight(Some(30.0));
+            core.set_test_profile_yield(Some(30.0));
             pour_on_frame(&mut core, 1);
             assert!(feed_weights(&mut core, 0.0, 0.2, 1_100, 50).is_empty());
         }
@@ -14261,7 +14220,7 @@ mod tests {
         #[test]
         fn an_earlier_step_weight_skips_alongside_saw() {
             let mut core = scale_core(&[None, Some(3.6), None]);
-            core.set_profile_target_weight(Some(36.0));
+            core.set_test_profile_yield(Some(36.0));
             pour_on_frame(&mut core, 1);
             assert_eq!(feed_weights(&mut core, 4.0, 0.0, 1_100, 1).len(), 1);
         }

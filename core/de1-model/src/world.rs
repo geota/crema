@@ -175,8 +175,6 @@ pub struct World {
     state_heard_on_link: bool,
     /// An app start is pending.
     starting: bool,
-    /// The profiles an app start has used, one per yield.
-    profiles: Vec<CremaProfile>,
     /// A user's request the core is holding for the profile-download guard:
     /// its release is still the user's.
     user_held: Option<u8>,
@@ -319,7 +317,6 @@ impl World {
             unguarded_since: None,
             starting: false,
             start_from: None,
-            profiles: Vec::new(),
             user_held: None,
             open_mode: None,
             unseen: false,
@@ -379,10 +376,31 @@ impl World {
 
     fn apply_targets(&mut self) {
         self.core.set_auto_tare(self.auto_tare);
-        self.core.set_profile_target_weight(self.profile_target_g);
-        self.core.set_shot_target_weight(self.dial_g);
-        self.core.set_profile_volume_limit(self.volume_limit_ml);
         self.core.set_max_shot_duration(self.max_time_s);
+        // The yield, the dial and the volume limit are the desired profile's
+        // (`DESIGN.md` §3.10), as a shell sets it on every change.
+        let (profile, qc) = self.desired();
+        let out =
+            self.core
+                .set_desired_profile(Some(&profile), &qc, Duration::from_millis(self.now));
+        self.ingest(out, Who::User);
+    }
+
+    /// The profile on screen and its Quick Controls: one library profile,
+    /// whose yield and volume limit the ops change, and the dialled yield.
+    fn desired(&self) -> (CremaProfile, BrewOverrides) {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let profile = CremaProfile {
+            id: "model-profile".to_owned(),
+            yield_out: self.profile_target_g.unwrap_or(0.0),
+            max_total_volume_ml: self.volume_limit_ml.map_or(0, |ml| ml as u16),
+            ..de1_domain::blank_profile(&BrewDefaults::default())
+        };
+        let qc = BrewOverrides {
+            yield_g: self.dial_g,
+            ..BrewOverrides::default()
+        };
+        (profile, qc)
     }
 
     /// Set the hot-water dose the next [`Op::SetSteamTarget`] sends, ml.
@@ -534,24 +552,15 @@ impl World {
     }
 
     fn app_start(&mut self, yield_g: f32) {
-        // The same library profile each time for a yield, as a user taps
-        // Start on the profile they brew: a second start needs no upload.
-        let profile = match self.profiles.iter().find(|p| p.yield_out == yield_g) {
-            Some(p) => p.clone(),
-            None => {
-                let p = CremaProfile {
-                    yield_out: yield_g,
-                    ..de1_domain::blank_profile(&BrewDefaults::default())
-                };
-                self.profiles.push(p.clone());
-                p
-            }
-        };
-        let result = self.core.start_shot(
-            &profile,
-            &BrewOverrides::default(),
-            Duration::from_millis(self.now),
-        );
+        // The user sets the profile's yield, which a shell makes the desired
+        // profile at once, and taps Start on it with the dial as it is: a
+        // second start of the same one needs no upload.
+        self.profile_target_g = Some(yield_g);
+        self.apply_targets();
+        let (profile, qc) = self.desired();
+        let result = self
+            .core
+            .start_shot(&profile, &qc, Duration::from_millis(self.now));
         if result.accepted {
             self.coverage.starts += 1;
             self.starting = true;

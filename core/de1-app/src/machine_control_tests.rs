@@ -128,7 +128,7 @@ fn tares(o: &CoreOutput) -> usize {
 fn core_with_cup() -> CremaCore {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::ScaleWeight, &bookoo(20.0), 0);
     core
 }
@@ -425,7 +425,7 @@ fn the_link_records_when_an_outage_began() {
 #[test]
 fn p4_a_scale_arriving_after_pouring_begins_stops_at_the_target() {
     let mut core = CremaCore::new();
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     // Default settings: max shot 0 = None; no volume limit.
     core.on_notification(Source::De1State, &[4, 1], 0);
     core.on_notification(Source::De1State, &[4, 5], 100);
@@ -459,8 +459,8 @@ fn p4_a_scale_arriving_after_pouring_begins_stops_at_the_target() {
 fn p5_a_silent_scale_leaves_the_volume_limit_live() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_profile_target_weight(Some(36.0));
-    core.set_profile_volume_limit(Some(40.0));
+    core.set_test_profile_yield(Some(36.0));
+    core.set_test_volume_limit(Some(40.0));
     core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let mut stops = vec![];
@@ -491,7 +491,7 @@ fn p5_a_silent_scale_leaves_the_volume_limit_live() {
 }
 
 fn run_shot(core: &mut CremaCore) -> u64 {
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::De1State, &[4, 1], 0);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 10);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 20);
@@ -573,15 +573,37 @@ fn p9_unknown_substate_still_ends_the_shot() {
 // P11 flipped in PR 8: `scale_estimate_tests::a_returning_scale_far_over_its_last_is_refused`
 // and `a_returning_scale_within_reach_is_adopted`.
 
-/// D1: the web pushes this pair for a profile with yieldOut 0 + a QC yield.
-/// Flips in PR 10: `weight == 36`.
+/// A profile with `yield_out` 0 at its id, and `dial` as its Quick Controls
+/// yield, as the desired profile.
+fn no_target_profile(core: &mut CremaCore, id: &str, dial: Option<f32>) {
+    let profile = de1_domain::CremaProfile {
+        id: id.to_owned(),
+        yield_out: 0.0,
+        ..de1_domain::blank_profile(&de1_domain::BrewDefaults::default())
+    };
+    let qc = de1_domain::BrewOverrides {
+        yield_g: dial,
+        ..Default::default()
+    };
+    core.set_desired_profile(Some(&profile), &qc, Duration::ZERO);
+}
+
+/// D1: the web pushed the dot off for a profile with `yield_out` 0, so its
+/// Quick Controls yield never stopped the shot, while Android's did (#318).
+/// Fixed in PR 10: the core turns the dot back on for each new profile, and
+/// both shells stop at the dialled 36 g.
 #[test]
-fn d1_web_disabled_flag_beats_qc_yield() {
+fn d1_a_no_target_profile_stops_at_its_dialled_yield() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_weight_target_disabled(true); // profile.yieldOut <= 0 (web only)
-    core.set_shot_target_weight(Some(36.0));
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
+    core.set_weight_target_disabled(true); // the dot, off on the last profile
+    no_target_profile(&mut core, "no-target", Some(36.0));
+    assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
+    // With no dial it has no target at all.
+    no_target_profile(&mut core, "no-target", None);
     assert_eq!(core.stop_targets_projection().1.weight, None);
+    assert_eq!(core.effective_target_weight(), None);
 }
 
 /// P8: a step-weight skip used to repeat with no telemetry since the first
@@ -801,8 +823,8 @@ fn review_a_lost_scale_never_rearms_a_passed_volume_limit() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
-    core.set_profile_volume_limit(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
+    core.set_test_volume_limit(Some(36.0));
     core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let mut t = 100;
@@ -844,7 +866,7 @@ fn review_owed_stop_survives_a_25_s_outage() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let mut t = 0;

@@ -127,13 +127,13 @@ fn tared(out: &CoreOutput) -> bool {
 #[test]
 fn hot_water_basis_follows_effective_target() {
     let mut core = connected(ratio(3.0));
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     assert_eq!(ml(&core), 108.0);
-    core.set_shot_target_weight(Some(40.0));
+    core.set_test_dial_yield(Some(40.0));
     assert_eq!(ml(&core), 120.0);
     let t = core.hot_water_target().unwrap();
     assert_eq!(t.basis_g, Some(40.0));
-    core.set_shot_target_weight(None);
+    core.set_test_dial_yield(None);
     assert_eq!(ml(&core), 108.0);
 }
 
@@ -142,7 +142,7 @@ fn hot_water_basis_follows_effective_target() {
 fn hot_water_ignores_last_shot_weight() {
     let mut core = connected(ratio(3.0));
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     let _ = state(&mut core, 4, 5, 1_000);
     let _ = weight(&mut core, 42, 20_000);
     let _ = state(&mut core, 2, 0, 30_000);
@@ -157,7 +157,7 @@ fn hot_water_weight_stop_from_target() {
     let mut core = connected(ratio(3.0));
     core.connect_scale("BOOKOO_SC", &[]);
     let _ = weight(&mut core, 0, 1);
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     let out = state(&mut core, 6, 5, 1_000);
     assert_eq!(core.hot_water_stop_target_g(), Some(150.0));
     assert!(tared(&out));
@@ -176,17 +176,17 @@ fn hot_water_weight_stop_from_target() {
 #[test]
 fn profile_load_moves_ratio_not_setting() {
     let mut core = connected(ratio(3.0));
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     assert_eq!(ml(&core), 108.0);
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     assert_eq!(ml(&core), 150.0);
     assert_eq!(
         core.steam_hotwater_targets.as_ref().unwrap().hot_water,
         ratio(3.0)
     );
     let mut core = connected(volume(200.0));
-    core.set_profile_target_weight(Some(36.0));
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(36.0));
+    core.set_test_profile_yield(Some(50.0));
     assert_eq!(ml(&core), 200.0);
     assert_eq!(
         core.steam_hotwater_targets.as_ref().unwrap().hot_water,
@@ -205,7 +205,7 @@ fn no_packet_write_without_settled_link() {
     let _ = core.de1_link_lost();
     assert!(core.shot_settings_written.is_none());
     core.disconnect_scale();
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     let mut outs = vec![state(&mut core, 2, 0, 2_000), core.on_tick(3_000)];
     outs.push(core.set_steam_hotwater_targets(&targets(volume(180.0))));
     for out in &outs {
@@ -231,19 +231,19 @@ fn reset_carries_link_session() {
 #[test]
 fn packet_follows_target_yield_on_notification() {
     let mut core = connected(ratio(3.0));
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     assert_eq!(
         packets(&state(&mut core, 2, 0, 100))[0].hot_water_volume_ml,
         108.0
     );
-    core.set_shot_target_weight(Some(50.0));
+    core.set_test_dial_yield(Some(50.0));
     let out = core.on_notification(Source::De1WaterLevels, &[0, 0, 0, 0], 200);
     let w = packets(&out);
     assert_eq!(w.len(), 1);
     assert_eq!(w[0].hot_water_volume_ml, 150.0);
     assert!(packets(&state(&mut core, 2, 0, 300)).is_empty());
     // The tick is the backstop.
-    core.set_shot_target_weight(Some(40.0));
+    core.set_test_dial_yield(Some(40.0));
     let w = packets(&core.on_tick(1_000));
     assert_eq!(w.len(), 1);
     assert_eq!(w[0].hot_water_volume_ml, 120.0);
@@ -253,9 +253,9 @@ fn packet_follows_target_yield_on_notification() {
 #[test]
 fn packet_dedupes_on_encoded_bytes() {
     let mut core = connected(ratio(3.0));
-    core.set_profile_target_weight(Some(40.0));
+    core.set_test_profile_yield(Some(40.0));
     assert_eq!(packets(&core.on_tick(100)).len(), 1);
-    core.set_profile_target_weight(Some(40.0));
+    core.set_test_profile_yield(Some(40.0));
     assert!(packets(&core.on_tick(200)).is_empty());
     // A different dose with the same bytes (1:3 of 40 g = 120 ml) writes
     // nothing; a different amount does.
@@ -299,7 +299,7 @@ fn packet_follows_operational_scale() {
 #[test]
 fn packet_waits_for_a_scale_reading() {
     let mut core = connected(ratio(3.0));
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     let _ = core.on_tick(50); // the new yield's packet
     core.connect_scale("BOOKOO_SC", &[]);
     assert!(!core.scale_operational(), "connected, no reading");
@@ -343,7 +343,7 @@ fn eco_change_flushes_only_in_steam() {
         "eco engaged at Idle"
     );
     let _ = state(&mut core, 6, 5, 601_000);
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     let out = core.enable_steam_eco_mode(false, 602_000);
     assert!(
         out.events
@@ -388,17 +388,19 @@ fn packet_deferred_in_flow_and_unknown_states() {
     for flow in [4u8, 5, 6, 15, 16] {
         let mut core = connected(ratio(3.0));
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         let _ = weight(&mut core, 0, 50);
         let _ = state(&mut core, flow, 5, 100);
         let armed = core.hot_water_stop_target_g();
-        core.set_profile_target_weight(Some(50.0));
+        core.set_test_profile_yield(Some(50.0));
         let mut outs = vec![core.on_tick(200), weight(&mut core, 0, 300)];
         outs.push(core.set_steam_hotwater_targets(&targets(ratio(2.0))));
+        // Another profile, at another group temperature: the packet changes.
         outs.push(core.set_desired_profile(
-            Some(&de1_domain::blank_profile(
-                &de1_domain::BrewDefaults::default(),
-            )),
+            Some(&de1_domain::blank_profile(&de1_domain::BrewDefaults {
+                brew_temp_c: 90.0,
+                ..de1_domain::BrewDefaults::default()
+            })),
             &de1_domain::BrewOverrides::default(),
             std::time::Duration::from_millis(400),
         ));
@@ -443,7 +445,7 @@ fn hot_water_request_orders_bounce_packet_state() {
     // (Connected with no target yield, 1:3 poured the 150 ml volume value.)
     let mut core = connected(ratio(3.0));
     let _ = state(&mut core, 4, 5, 100);
-    core.set_profile_target_weight(Some(40.0));
+    core.set_test_profile_yield(Some(40.0));
     let out = core.request_machine_state(MachineState::HotWater);
     assert_eq!(
         order(&out),
@@ -455,7 +457,7 @@ fn hot_water_request_orders_bounce_packet_state() {
     );
     assert_eq!(packets(&out)[0].hot_water_volume_ml, 120.0);
     let mut core = connected(ratio(3.0));
-    core.set_profile_target_weight(Some(40.0));
+    core.set_test_profile_yield(Some(40.0));
     let out = core.request_machine_state(MachineState::HotWater);
     assert_eq!(
         order(&out),
@@ -474,7 +476,7 @@ fn remote_never_writes_or_records_packet() {
     core.link.settled = true;
     let mut outs = vec![state(&mut core, 2, 0, 0)];
     outs.push(core.set_steam_hotwater_targets(&targets(ratio(3.0))));
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     core.connect_scale("BOOKOO_SC", &[]);
     outs.push(weight(&mut core, 0, 100));
     outs.push(core.on_tick(200));
@@ -587,10 +589,10 @@ fn failed_seed_read_doesnt_swallow_a_foreign_change() {
 #[test]
 fn flash_gate_neither_writes_nor_records() {
     let mut core = connected(ratio(3.0));
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     let _ = core.on_tick(10);
     core.firmware_lock_override = true;
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     assert!(
         packets(&core.on_tick(100)).is_empty(),
         "nothing during the flash"
@@ -633,7 +635,7 @@ fn next_generation_can_restore_again() {
 #[test]
 fn reconnect_retells_the_target() {
     let mut core = connected(ratio(3.0));
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     let _ = core.on_tick(10);
     assert!(
         target_events(&core.on_tick(20)).is_empty(),
@@ -655,7 +657,7 @@ fn hot_water_target_event_matches_packet() {
     let mut core = CremaCore::new();
     core.link.settled = true;
     let _ = state(&mut core, 2, 0, 0);
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     let out = core.set_steam_hotwater_targets(&targets(ratio(3.0)));
     let events = target_events(&out);
     assert_eq!(events.len(), 1);
@@ -686,7 +688,7 @@ fn ghc_hot_water_ratio_stops_at_target_weight() {
     let mut core = connected(ratio(3.0));
     core.connect_scale("BOOKOO_SC", &[]);
     let _ = weight(&mut core, 0, 0);
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     let out = state(&mut core, 6, 5, 0);
     assert!(tared(&out), "auto-tare on the group-head start");
     assert_eq!(core.hot_water_stop_target_g(), Some(150.0));
@@ -702,7 +704,7 @@ fn ghc_hot_water_time_mode_arms_nothing() {
     let mut core = connected(time(45.0));
     core.connect_scale("BOOKOO_SC", &[]);
     let _ = weight(&mut core, 0, 0);
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     let _ = state(&mut core, 6, 5, 0);
     assert_eq!(core.hot_water_stop_target_g(), None);
     assert!(!stopped_by_weight(&weight(&mut core, 300, 2_000)));
@@ -713,7 +715,7 @@ fn ghc_hot_water_time_mode_arms_nothing() {
 #[test]
 fn hot_water_dose_survives_reset_for_ghc_pour() {
     let mut core = connected(ratio(3.0));
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     core.connect_scale("BOOKOO_SC", &[]);
     let _ = core.reset();
     core.connect_scale("BOOKOO_SC", &[]);
@@ -731,7 +733,7 @@ fn hot_water_dose_survives_reset_for_ghc_pour() {
 #[test]
 fn reset_mid_pour_does_not_rearm() {
     let mut core = connected(ratio(3.0));
-    core.set_profile_target_weight(Some(50.0));
+    core.set_test_profile_yield(Some(50.0));
     core.connect_scale("BOOKOO_SC", &[]);
     let _ = weight(&mut core, 0, 0);
     let _ = state(&mut core, 6, 5, 100);
@@ -759,9 +761,9 @@ fn ghc_espresso_arms_same_rules_as_app_start() {
     let setup = || {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         core.set_max_shot_duration(Some(80.0));
-        core.set_profile_volume_limit(Some(60.0));
+        core.set_test_volume_limit(Some(60.0));
         core.set_volume_stop_with_scale(true);
         let _ = state(&mut core, 2, 0, 0);
         core

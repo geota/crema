@@ -7,6 +7,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
+/** A library profile whose yield is 36 g, as the core's desired profile. */
+private const val PROFILE_36G =
+    """{"id":"p","name":"p","source":"custom","dose":18,"yieldOut":36,"segments":[]}"""
+
 /** The weight row's note is the core's: the shell shows it as given. */
 class StopTargetsViewLabelTest {
     @Test
@@ -19,7 +23,7 @@ class StopTargetsViewLabelTest {
     @Test
     fun theCoresProjectionCarriesTheNote() {
         val bridge = CremaBridge()
-        bridge.setProfileTargetWeight(36f)
+        bridge.setDesiredProfile(PROFILE_36G, null, 0uL)
         val o = coreJson.parseToJsonElement(bridge.stopTargetsProjection()).jsonObject
         assertEquals("no-scale", o["weightBlocked"]?.jsonPrimitive?.contentOrNull)
         assertEquals("no scale", o["weightBlockedNote"]?.jsonPrimitive?.contentOrNull)

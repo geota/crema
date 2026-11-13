@@ -3007,24 +3007,6 @@ impl CremaBridge {
         self.core().reset_scale_peaks();
     }
 
-    /// Set the active profile's recipe target weight, in grams.
-    /// `None` (or a non-finite / non-positive value) means "no target."
-    pub fn set_profile_target_weight(&self, grams: Option<f32>) {
-        self.core().set_profile_target_weight(grams);
-    }
-
-    /// Set the per-shot dial override weight, in grams. `None` clears the
-    /// override (falls back to the profile recipe target).
-    pub fn set_shot_target_weight(&self, grams: Option<f32>) {
-        self.core().set_shot_target_weight(grams);
-    }
-
-    /// Set the active profile's volume limit (SAV), in millilitres.
-    /// `None` means "no limit."
-    pub fn set_profile_volume_limit(&self, milliliters: Option<f32>) {
-        self.core().set_profile_volume_limit(milliliters);
-    }
-
     /// Set the global maximum shot duration, in seconds. `None` means
     /// "no max." Legacy default is 60 s.
     pub fn set_max_shot_duration(&self, seconds: Option<f32>) {
@@ -4308,7 +4290,11 @@ mod tests {
         assert_eq!(t.volume_ml, Some(150.0));
         let bridge = CremaBridge::new();
         assert_eq!(bridge.hot_water_target_json(), "null");
-        bridge.set_profile_target_weight(Some(50.0));
+        let profile = de1_domain::CremaProfile {
+            yield_out: 50.0,
+            ..de1_domain::blank_profile(&de1_domain::BrewDefaults::default())
+        };
+        bridge.set_desired_profile(Some(serde_json::to_string(&profile).unwrap()), None, 0);
         bridge.set_steam_hotwater_targets(
             r#"{"steamTempC":150,"steamTimeoutS":120,"hotWaterTempC":85,
                 "hotWater":{"mode":"ratio","timeS":30,"timeNoLimit":false,"volumeMl":150,"ratio":3}}"#

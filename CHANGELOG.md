@@ -92,6 +92,15 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The weight stop follows the yield on screen** — dialling the yield, then
+  tapping Reset or picking another profile, used to leave the web's
+  stop-at-weight on the old dial until a reload. The stop now comes from the
+  profile and the Quick Controls yield as they stand, and so does the hot-water
+  ratio. A profile with no yield of its own now stops at a dialled yield on both
+  apps; the web used to turn the yield dot off for it. The dot now turns back on
+  for each new profile, and on a remote, the hub's profile sets the stop
+  targets shown. Both apps also stop waking the core in a tight loop while a
+  profile upload runs or waits for the machine. Android and web.
 - **A shot finishing no longer undoes an edit made meanwhile** — a rating or note
   set while a shot assembled, a bag debit during a bean sync and a change while
   an import ran used to be overwritten by a copy read earlier. Each now lands on

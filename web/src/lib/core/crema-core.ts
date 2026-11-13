@@ -1745,7 +1745,7 @@ export type Event =
 	 * own copy of the inputs. The demotion rule is shared
 	 * ([`de1_domain::volume_stop_arms`]), but the inputs were not: a shell
 	 * evaluating it over its own active-profile yield can disagree with the
-	 * core evaluating it over `profile_target_weight`, and did — the Brew
+	 * core evaluating it over its own target, and did — the Brew
 	 * card showed a confident 36 g target while the core had armed nothing
 	 * at all (geota/crema#56).
 	 * 

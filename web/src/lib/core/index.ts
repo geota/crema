@@ -685,6 +685,9 @@ export interface CremaCore {
 		weightConfigured: number | null;
 		weightBlocked: string | null;
 		weightBlockedNote: string | null;
+		/** The yield dot is off (`setWeightTargetDisabled`); the core turns it
+		 *  back on for each new desired profile. */
+		weightTargetDisabled: boolean;
 	}>;
 	/**
 	 * Opt-in: arm the profile's volume limit (stop-at-volume) even while a
@@ -734,22 +737,6 @@ export interface CremaCore {
 	 * settings to the DE1.
 	 */
 	enableSteamEcoMode(enabled: boolean): Promise<CoreOutput>;
-	/**
-	 * Set the active profile's recipe target weight, grams. `undefined`
-	 * (or a `<=0` / non-finite value) means "no target." Called when the
-	 * shell activates or edits a profile.
-	 */
-	setProfileTargetWeight(grams: number | undefined): Promise<void>;
-	/**
-	 * Set the per-shot dial-override weight, grams. `undefined` clears
-	 * the override and falls back to the profile recipe target.
-	 */
-	setShotTargetWeight(grams: number | undefined): Promise<void>;
-	/**
-	 * Set the active profile's volume limit (SAV), millilitres.
-	 * `undefined` means "no limit."
-	 */
-	setProfileVolumeLimit(milliliters: number | undefined): Promise<void>;
 	/**
 	 * Set the global maximum shot duration, seconds. `undefined` means
 	 * "no max." Legacy default is 60 s.
@@ -1376,15 +1363,6 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async enableSteamEcoMode(enabled) {
 			return parseOutput(bridge.enable_steam_eco_mode(enabled, performance.now()));
-		},
-		async setProfileTargetWeight(grams) {
-			bridge.set_profile_target_weight(grams);
-		},
-		async setShotTargetWeight(grams) {
-			bridge.set_shot_target_weight(grams);
-		},
-		async setProfileVolumeLimit(milliliters) {
-			bridge.set_profile_volume_limit(milliliters);
 		},
 		async setMaxShotDuration(seconds) {
 			bridge.set_max_shot_duration(seconds);

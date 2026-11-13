@@ -238,30 +238,25 @@ export class ProfileStore {
 		} finally {
 			this.loaded = true;
 			// Now that the library is hydrated, push the persisted active
-			// profile's recipe targets into the core. The boot sequence in
-			// `createCremaApp` pushes app-level settings, but the active
-			// profile's `yieldOut` / `maxTotalVolumeMl` can only resolve
-			// once `builtins` and `custom` are both loaded.
+			// profile into the core. The boot sequence in `createCremaApp`
+			// pushes app-level settings, but the active profile can only
+			// resolve once `builtins` and `custom` are both loaded.
 			void this.pushActiveProfileToCore();
 		}
 	}
 
 	/**
-	 * Push the currently active profile's recipe targets (yield + volume
-	 * limit) into the core via the wasm bridge, so SAW + SAV arming uses
-	 * the right values on the next shot. `undefined` for both when no
-	 * profile is active or its fields are at 0 (the disabled sentinel).
-	 * Fire-and-forget — the core consults its latched values lazily on
-	 * the next `ShotEvent::Started` / first flowing phase.
+	 * Push the currently active profile into the core as its active profile
+	 * (beverage type, step weights). Its stop targets come from the core's
+	 * desired profile, which the app sets on activation (`DESIGN.md` §3.10).
+	 * Fire-and-forget.
 	 */
 	private async pushActiveProfileToCore(): Promise<void> {
 		const core = await loadCore();
 		const id = this.activeId;
 		if (id == null) {
-			// No active profile → disable everything.
-			await core.setWeightTargetDisabled(true);
-			await core.setProfileTargetWeight(undefined);
-			await core.setProfileVolumeLimit(undefined);
+			// No active profile. The stop targets come from the core's desired
+			// profile, which the app sets on activation (`DESIGN.md` §3.10).
 			await core.setActiveProfile(undefined);
 			await refreshStopTargetsProjection(core);
 			return;
@@ -274,21 +269,13 @@ export class ProfileStore {
 		// upload — because activation can skip the upload entirely: after a
 		// page reload the DE1 still holds the profile and `syncActiveProfile`
 		// / `ensureLoadedMatches` skip it on the fingerprint match.
-		// A profile the core can't convert must not block the stop targets
-		// below — fall back to "no active profile" (espresso, no exits).
+		// A profile the core can't convert falls back to "no active profile"
+		// (espresso, no exits).
 		try {
 			await core.setActiveProfile(JSON.stringify(toCoreProfile(p)));
 		} catch {
 			await core.setActiveProfile(undefined);
 		}
-		// The per-shot weight-target dot follows the profile's intent on
-		// load: a profile with `yieldOut > 0` engages the target (dot ON,
-		// `disabled = false`); a profile with `yieldOut === 0` disables it
-		// (dot OFF, `disabled = true`). The user can still flip it per
-		// shot via the QC card.
-		await core.setWeightTargetDisabled(p.yieldOut <= 0);
-		await core.setProfileTargetWeight(p.yieldOut > 0 ? p.yieldOut : undefined);
-		await core.setProfileVolumeLimit(p.maxTotalVolumeMl > 0 ? p.maxTotalVolumeMl : undefined);
 		// Mirror the new picture into the snapshot: this path bypasses
 		// `CremaApp`'s setters, so without it the stop-condition UI has no
 		// projection to render at startup.
