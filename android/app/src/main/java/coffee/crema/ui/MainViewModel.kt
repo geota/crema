@@ -126,6 +126,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * controller is built and before any output can apply. The writers reach
      * later fields ([ble], [scale]) only when invoked.
      */
+    /** Debug-build fault injection for the hardware run (DESIGN.md §7);
+     *  never drops anything in a shipped build ([coffee.crema.faults]). */
+    internal val faults: coffee.crema.faults.FaultInjector = coffee.crema.faults.installedFaults { appendLog(it) }
+
     private val lane: CoreLane = CoreLane(
         scope = viewModelScope,
         json = json,
@@ -136,6 +140,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         writeScale = { bytes -> scale.writeCommand(bytes) },
         readState = { ble.readState() },
         profileWriteFailed = { id -> bridge.profileWriteFailed(SystemClock.elapsedRealtime().toULong(), id) },
+        faults = faults,
     )
 
     private val _ui = UiStore(MainUiState())
@@ -827,6 +832,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onStatus = { line -> _ui.update { it.copy(status = line) } },
         onScaleIdentified = { scaleController.refreshScaleCapabilities(it) },
         timeline = coffee.crema.diag.ReconnectTimelines.recorder,
+        faults = faults,
     )
 
     /** The scale session's UI, settings and verbs ([ScaleController]). */

@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -633,6 +634,11 @@ class MainActivity : ComponentActivity() {
                         onKeepMine = { viewModel.resolveAdoption(useHub = false) },
                     )
                 }
+                // Debug builds: while a hardware-test fault is armed, say so
+                // across the app (DESIGN.md §7). A shipped build draws nothing.
+                Box(Modifier.align(Alignment.TopCenter).statusBarsPadding()) {
+                    coffee.crema.faults.FaultInjectionBanner(viewModel.faults)
+                }
                 // Fullscreen expanded chart — drawn last, over everything.
                 fullscreenChart?.let { fc ->
                     ChartExpandOverlay(chart = fc, onClose = { fullscreenChart = null })
@@ -771,6 +777,10 @@ private fun MainScreen(
             Button(onClick = viewModel::startEspresso, enabled = de1Ready) { Text("Espresso") }
             OutlinedButton(onClick = viewModel::stopShot, enabled = de1Ready) { Text("Stop") }
         }
+
+        // Debug builds: the hardware test list's fault hooks (DESIGN.md §7).
+        // A shipped build draws nothing here.
+        coffee.crema.faults.FaultInjectionPanel(viewModel.faults)
 
         LiveReadouts(viewModel.live) { live ->
             ScaleSection(

@@ -250,6 +250,15 @@ android {
         }
     }
 
+    // Debug-build fault injection (`coffee.crema.faults`, DESIGN.md §7): the
+    // armable injector lives in src/debug; release and nightly, the shipped
+    // builds, get src/shipped's no-op twin instead, so they carry no code that
+    // drops a write or a frame (ShippedHasNoFaultInjectionTest).
+    sourceSets {
+        getByName("release").kotlin.directories.add("src/shipped/java")
+        getByName("nightly").kotlin.directories.add("src/shipped/java")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
