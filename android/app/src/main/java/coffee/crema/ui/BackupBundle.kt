@@ -121,7 +121,18 @@ internal fun backupBundleJsonl(
     appVersion: String,
     deviceLabel: String,
     export: (envelope: String, createdAtMs: Long, appVersion: String, deviceLabel: String) -> String = ::exportBackupBundle,
-): BuiltBackup {
+): BuiltBackup =
+    json.decodeFromString(
+        BuiltBackup.serializer(),
+        export(backupEnvelope(snap, json, withShots = true), createdAtMs, appVersion, deviceLabel),
+    )
+
+/**
+ * The export envelope for [snap] (see `exportBackupBundle`), rows as JSON
+ * strings. Without its shots for the line-by-line build ([streamBackupZip]),
+ * which hands the core one shot at a time.
+ */
+internal fun backupEnvelope(snap: BackupSnapshot, json: Json, withShots: Boolean): String {
     val customs = snap.customs
     val s = snap.state
     val pinnedIds = snap.pinned
@@ -145,7 +156,7 @@ internal fun backupBundleJsonl(
     // flat shape fails the whole envelope's deserialization → the entire backup
     // aborts once any shot exists (issue 01). `wireShotJson` emits
     // formatVersion/completedAt/record; restore inverts via storedShotFromBackupJson.
-    val shots = rowStrings(s.history) { wireShotJson(it, forBackup = true).toString() }
+    val shots = if (withShots) rowStrings(s.history) { wireShotJson(it, forBackup = true).toString() } else null
     // Settings line: the shared cross-shell CommonSettings `common` block (both
     // shells emit it identically, so common prefs restore web<->Android) + this
     // shell's `_shell` tag + Android-only `qcGrind` (re-applied only on Android).
@@ -194,7 +205,7 @@ internal fun backupBundleJsonl(
         put("profiles", rowStrings(customs) { it })
         put("beans", beans)
         put("roasters", roasters)
-        put("shots", shots)
+        shots?.let { put("shots", it) }
         put("settings", json.parseToJsonElement(settingsJson))
         put("profileMeta", json.parseToJsonElement(profileMetaJson))
         put("recipes", recipes)
@@ -205,7 +216,7 @@ internal fun backupBundleJsonl(
         put("maintenance", json.parseToJsonElement(maintenanceJson))
         put("visualizerPrefs", json.parseToJsonElement(visualizerPrefsJson))
     }.toString()
-    return json.decodeFromString(BuiltBackup.serializer(), export(envelope, createdAtMs, appVersion, deviceLabel))
+    return envelope
 }
 
 /**
