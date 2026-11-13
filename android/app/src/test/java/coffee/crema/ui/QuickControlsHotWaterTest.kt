@@ -172,6 +172,9 @@ class QuickControlsHotWaterTest {
         VmHarness.idle()
         assertEquals(HotWaterMode.Volume, vm.ui.value.qcHotWaterMode)
         assertEquals(HotWaterMode.Volume, coreTarget().mode, "pushed to the core")
+        // The readout is the core's answer, which comes back through the core
+        // lane's thread: one idle() can return before it lands (CI on #344, #379).
+        VmHarness.idleUntil("the readout follows the core's target") { vm.ui.value.hotWaterTarget?.mode == HotWaterMode.Volume }
         assertEquals(HotWaterMode.Volume, vm.ui.value.hotWaterTarget?.mode, "the readout follows the core's target")
         VmHarness.idleUntil("the mode saved") { savedPrefs().qcHotWaterMode == HotWaterMode.Volume }
 

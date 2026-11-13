@@ -204,8 +204,20 @@ class RemoteToStandaloneTest {
         fixture.push(coffee.crema.settings.v4Snapshot(own))
         vm.switchToNormal()
         VmHarness.idle()
-        assertNull(vm.ui.value.adoptPrompt, "nothing differs")
+        assertNull(vm.ui.value.adoptPrompt, "nothing differs: ${pendingChanges(vm)}; own then ${own.diffFrom(VmHarness.ownState(vm))}")
     }
+
+    /** What a pending leave would adopt, for a failure's message. */
+    private fun pendingChanges(vm: MainViewModel): Any? = VmHarness.pendingLeave(vm)?.let { leave ->
+        leave.javaClass.getDeclaredField("changes").apply { isAccessible = true }.get(leave)
+    }
+
+    /** The fields of two states that differ, for a failure's message. */
+    private fun MainUiState.diffFrom(other: MainUiState): List<String> =
+        MainUiState::class.java.declaredFields.filter { f ->
+            f.isAccessible = true
+            f.get(this) != f.get(other)
+        }.map { it.name }
 
     /** AC-25: a Denied makes the device normal without asking; one arriving
      *  while the confirmation is open cancels it (no adoption, one switch). */
