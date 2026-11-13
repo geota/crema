@@ -14,9 +14,10 @@
  *     core shifts every step by its difference from the profile's own brew
  *     temperature, inside the range {@link BrewParamState.brewTempBounds}
  *     reports.
- *   - `yield` — wired BOTH ways: `applyShotTargetWeight` arms the core's
- *     SAW target immediately on edit, and it's also one of the four
- *     `qcOverrides()` keys baked in at shot start.
+ *   - `yield` — one of the four `qcOverrides()` keys. The overrides become
+ *     the core's desired profile on every change (Reset included), and the
+ *     core takes the SAW target and the hot-water ratio's basis from there
+ *     (`DESIGN.md` §3.10).
  *   - `grind` — log-only; never reaches the machine or a profile.
  *   - steam (`steamTime` / `steamFlow` / `steamTemp`), hot water
  *     (`waterTemp`; the hot-water dose lives in the settings store —

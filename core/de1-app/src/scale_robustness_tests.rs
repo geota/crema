@@ -50,7 +50,7 @@ fn implausible_skale_weights_never_reach_the_shells() {
     // Mid-shot, weight target armed, inside the untared-cup window.
     let mut core = CremaCore::new();
     core.connect_scale("Skale", &[]);
-    core.set_profile_target_weight(Some(30.0));
+    core.set_test_profile_yield(Some(30.0));
     core.on_notification(Source::De1State, &[4, 5], 0);
     for (frame, at) in [(inf_frame, 1_600u64), (huge_frame, 2_000)] {
         let out = core.on_notification(Source::ScaleWeight, &frame, at);

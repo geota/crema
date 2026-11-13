@@ -47,6 +47,10 @@ class ProfileSwitchKeepsHotWaterTest {
             vm.setActiveProfile(p.id)
             VmHarness.idle()
             VmHarness.idleUntil("${p.name} saved") { savedPrefs().activeProfileId == p.id }
+            // The ratio's basis is the desired profile's yield, set on the
+            // core lane; the target is re-read once it has run.
+            VmHarness.drainCoreLane(vm)
+            VmHarness.idle()
             assertEquals((2.5f * p.yieldOut).roundToInt().toFloat(), assertNotNull(vm.ui.value.hotWaterTarget).volumeMl, "${p.name}: 1:2.5 of ${p.yieldOut} g")
             assertEquals(stored, savedPrefs().hotWater(), "${p.name}: prefs.json's hot-water fields")
             assertEquals(180f, vm.ui.value.qcHotWaterVolumeMl, "the volume mode's value is kept")

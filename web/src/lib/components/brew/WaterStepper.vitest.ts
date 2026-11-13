@@ -227,27 +227,30 @@ describe('the Hot water card', () => {
 		await app.pushSteamHotwater();
 		// No profile load writes the settings: snapshot before the first.
 		const stored = localStorage.getItem('crema.settings.v1');
-		await app.applyProfileTargetWeight(36);
+		const { blankProfile } = await import('#lib/profiles/model.js');
+		const profile = { ...blankProfile(), id: 'p', yieldOut: 36 };
+		await app.setDesiredProfile(profile);
 		const root = render();
 		expect(root.querySelector('.qhw-sub-short')?.textContent).toBe('→ 108 ml');
 		expect(root.querySelector('.qhw-sub-long')?.textContent).toBe('1:3 → 108 ml for a 36 g shot');
 		expect(root.querySelector('.qhw-sub')?.getAttribute('title')).toBe('1:3 → 108 ml for a 36 g shot');
-		await app.applyProfileTargetWeight(50);
+		await app.setDesiredProfile({ ...profile, yieldOut: 50 });
 		flushSync();
 		expect(root.querySelector('.qhw-sub-long')?.textContent).toBe('1:3 → 150 ml for a 50 g shot');
 		expect(localStorage.getItem('crema.settings.v1')).toBe(stored);
 	});
 
 	it('offline readout re-reads the target', async () => {
-		// The profile store's select path: set the target weight on the core,
-		// then re-read — no DE1 or scale, so no event carries the target.
+		// The select path: the desired profile's yield is the target, then
+		// re-read — no DE1 or scale, so no event carries the target.
 		const { loadCore } = await import('#lib/core/index.js');
 		const { CremaApp } = await import('#lib/state/app.svelte.js');
 		const core = await loadCore();
 		core.reset();
 		const app = new CremaApp(core, null);
 		await app.pushSteamHotwater();
-		await core.setProfileTargetWeight(50);
+		const { blankProfile } = await import('#lib/profiles/model.js');
+		await core.setDesiredProfile({ ...blankProfile(), id: 'p', yieldOut: 50 }, {}, 0);
 		await refreshStopTargetsProjection(core);
 		expect(getCremaUiState().current.hotWaterTarget?.volumeMl).toBe(150);
 	});

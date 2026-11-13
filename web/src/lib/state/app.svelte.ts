@@ -1551,6 +1551,8 @@ export class CremaApp {
 		this.#desiredOverrides = profile === null ? null : { profileId: profile.id, qc };
 		const { output, status } = await this.core.setDesiredProfile(profile, qc, performance.now());
 		this.applyCoreOutput(output);
+		// The stop targets and the dot come from the desired profile (§3.10).
+		await this.refreshStopTargets();
 		return status;
 	}
 
@@ -1642,6 +1644,7 @@ export class CremaApp {
 	 */
 	async applyWeightTargetDisabled(disabled: boolean): Promise<void> {
 		await this.core.setWeightTargetDisabled(disabled);
+		await this.refreshStopTargets();
 	}
 
 	/**
@@ -1715,12 +1718,6 @@ export class CremaApp {
 	}
 
 	/**
-	 * Push the active profile's recipe target weight (yield, grams) into
-	 * the core. Called whenever the active profile changes or its yield
-	 * value is edited. `0` clears the target (SAW becomes a no-op for the
-	 * profile recipe — the per-shot dial may still override).
-	 */
-	/**
 	 * Re-read the core's stop-target projection into the snapshot.
 	 *
 	 * The core pushes `StopTargetsArmed` on every change, but only from the
@@ -1732,31 +1729,6 @@ export class CremaApp {
 		// Re-reads the hot-water target too (the target yield is the ratio's
 		// basis).
 		await refreshStopTargetsProjection(this.core);
-	}
-
-	async applyProfileTargetWeight(grams: number): Promise<void> {
-		await this.core.setProfileTargetWeight(grams > 0 ? grams : undefined);
-		await this.refreshStopTargets();
-	}
-
-	/**
-	 * Push the active profile's volume limit (SAV, millilitres) into the
-	 * core. Called whenever the active profile changes or its
-	 * `maxTotalVolumeMl` is edited. `0` clears the limit.
-	 */
-	async applyProfileVolumeLimit(milliliters: number): Promise<void> {
-		await this.core.setProfileVolumeLimit(milliliters > 0 ? milliliters : undefined);
-		await this.refreshStopTargets();
-	}
-
-	/**
-	 * Push the per-shot dial-override target weight (grams) into the
-	 * core. Called by the QC yield stepper. `0` clears the override and
-	 * lets the profile recipe target take effect.
-	 */
-	async applyShotTargetWeight(grams: number): Promise<void> {
-		await this.core.setShotTargetWeight(grams > 0 ? grams : undefined);
-		await this.refreshStopTargets();
 	}
 
 	/**

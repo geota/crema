@@ -17,7 +17,7 @@ pub(super) fn espresso(target: f32) -> CremaCore {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(target));
+    core.set_test_profile_yield(Some(target));
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
     core.on_notification(Source::De1State, &[2, 0], 10);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 50);
@@ -184,7 +184,7 @@ fn a_bump_never_opens_the_gate() {
 #[test]
 fn a_passed_limit_never_rearms_under_lost() {
     let mut core = espresso(36.0);
-    core.set_profile_volume_limit(Some(36.0));
+    core.set_test_volume_limit(Some(36.0));
     let mut pour = Pour::from(100, 20.0);
     let stop = run(&mut core, &mut pour, 90_000, lost_at(20.0));
     near_target(stop, StopReason::EstimatedWeight);
@@ -525,8 +525,8 @@ fn auto_tare_off_shot(load: f32) -> (CremaCore, Option<(StopReason, f32)>) {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
-    core.set_profile_volume_limit(Some(40.0));
+    core.set_test_profile_yield(Some(36.0));
+    core.set_test_volume_limit(Some(40.0));
     core.set_max_shot_duration(Some(60.0));
     core.on_notification(Source::ScaleWeight, &bookoo(load), 0);
     core.on_notification(Source::De1State, &[2, 0], 10);
@@ -582,7 +582,7 @@ fn an_untared_cup_with_no_limits_stops_at_the_backstop() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::ScaleWeight, &bookoo(35.0), 0);
     core.on_notification(Source::De1State, &[2, 0], 10);
     core.on_notification(Source::De1State, &[4, 5], 100);
@@ -601,7 +601,7 @@ fn an_untared_cup_with_no_limits_stops_at_the_backstop() {
 
 /// A weight stop the machine honours, its Idle, and the first drips: the
 /// shot is in its post-shot settle. Returns the clock and the cup's weight.
-fn honoured_stop_into_settle(core: &mut CremaCore) -> (u64, f32) {
+pub(super) fn honoured_stop_into_settle(core: &mut CremaCore) -> (u64, f32) {
     let mut pour = Pour::from(100, 10.0);
     let stop = run(core, &mut pour, 90_000, |_, cup| Step {
         sample: true,

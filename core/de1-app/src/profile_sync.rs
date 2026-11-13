@@ -100,6 +100,11 @@ pub struct ProfileSyncOutput {
     pub status: ProfileSyncStatus,
 }
 
+/// The targets a running shot holds to while the desired profile has moved
+/// to another id: its profile and Quick Controls (`None` = it ran with none).
+#[derive(Debug, Clone)]
+pub(crate) struct TargetHold(Option<(CremaProfile, BrewOverrides)>);
+
 /// The profile the shell wants on the DE1.
 #[derive(Debug, Clone)]
 struct Desired {
@@ -158,8 +163,9 @@ impl ProfileSync {
             .then_some((&desired.profile, &desired.qc))
     }
 
-    /// The desired library profile and its overrides, if any.
-    fn desired_profile(&self) -> Option<(&CremaProfile, &BrewOverrides)> {
+    /// The desired library profile and its overrides, if any: what the stop
+    /// targets derive from (`DESIGN.md` §3.10).
+    pub(crate) fn desired_profile(&self) -> Option<(&CremaProfile, &BrewOverrides)> {
         self.desired.as_ref().map(|d| (&d.profile, &d.qc))
     }
 
@@ -182,12 +188,21 @@ impl ProfileSync {
         self.settle_at = None;
     }
 
-    /// When the core needs a tick to upload a settling desired profile.
-    pub(crate) fn settle_deadline(&self) -> Option<Duration> {
+    /// When the core needs a tick to upload the desired profile: the end of
+    /// its settle, or its retry. Only a deadline still ahead of `now`: once it
+    /// has passed, the tick at it has tried, and an upload that couldn't go
+    /// then (one running, the machine busy, a mirror) goes on the state
+    /// change, the upload's end or the regular tick. A past wake would be
+    /// answered at once, on every tick, for as long as it couldn't go.
+    pub(crate) fn upload_deadline(&self, now: Duration) -> Option<Duration> {
         let desired = self.desired.as_ref()?;
         let pending = self.last_pushed.as_ref() != Some(&desired.fingerprint)
             && self.rejected.as_ref() != Some(&desired.fingerprint);
-        self.settle_at.filter(|_| pending)
+        [self.settle_at, self.retry_at]
+            .into_iter()
+            .flatten()
+            .filter(|at| pending && *at > now)
+            .min()
     }
 
     /// The link is gone: a new generation. Returns whether a raised warning
@@ -335,15 +350,7 @@ impl CremaCore {
         settle: bool,
     ) -> CoreOutput {
         self.clock = self.clock.max(now);
-        let desired = profile.map(|p| {
-            let qc = de1_domain::normalize_brew_overrides(p, qc);
-            Desired {
-                fingerprint: de1_domain::effective_profile_fingerprint(p, &qc).unwrap_or_default(),
-                profile: p.clone(),
-                qc,
-            }
-        });
-        self.profile_sync.set_desired(desired, self.clock);
+        self.adopt_desired_profile(profile, qc);
         if !settle {
             self.profile_sync.settle_now();
         }
@@ -355,6 +362,79 @@ impl CremaCore {
         // A settling profile needs a tick at its deadline.
         self.emit_wake(&mut out);
         self.gate_read_only(out)
+    }
+
+    /// Make `profile` with `qc` the desired profile, and its targets the
+    /// live ones at once: the yield, the volume limit and the hot-water
+    /// ratio's basis (`DESIGN.md` §3.10). Another profile turns the yield dot
+    /// back on. Only the upload waits for the settle.
+    pub(crate) fn adopt_desired_profile(
+        &mut self,
+        profile: Option<&CremaProfile>,
+        qc: &BrewOverrides,
+    ) {
+        let desired = profile.map(|p| {
+            let qc = de1_domain::normalize_brew_overrides(p, qc);
+            Desired {
+                fingerprint: de1_domain::effective_profile_fingerprint(p, &qc).unwrap_or_default(),
+                profile: p.clone(),
+                qc,
+            }
+        });
+        let new_id = desired.as_ref().map(|d| d.profile.id.clone());
+        let old_id = self
+            .profile_sync
+            .desired
+            .as_ref()
+            .map(|d| d.profile.id.clone());
+        if self.shot_started.is_some() {
+            // A shot runs the profile it was given: a pick of another id keeps
+            // that profile's targets, and its dot, until the shot ends. Dial
+            // steps on the running profile apply at once (REVIEW-401 S1).
+            let running_id = match &self.target_hold {
+                Some(hold) => hold.0.as_ref().map(|(p, _)| p.id.clone()),
+                None => old_id,
+            };
+            if new_id == running_id {
+                self.target_hold = None;
+            } else if self.target_hold.is_none() {
+                let held = self
+                    .profile_sync
+                    .desired_profile()
+                    .map(|(p, qc)| (p.clone(), *qc));
+                self.target_hold = Some(TargetHold(held));
+            }
+        } else if old_id != new_id {
+            self.weight_target_disabled = false;
+        }
+        self.profile_sync.set_desired(desired, self.clock);
+        self.refresh_auto_stop_targets();
+    }
+
+    /// The profile the stop targets come from: the one a running shot holds
+    /// to, else the desired profile.
+    pub(crate) fn target_source(&self) -> Option<(&CremaProfile, &BrewOverrides)> {
+        match &self.target_hold {
+            Some(hold) => hold.0.as_ref().map(|(p, qc)| (p, qc)),
+            None => self.profile_sync.desired_profile(),
+        }
+    }
+
+    /// The shot ended: a profile picked during it takes over the targets, and
+    /// another id turns the dot back on.
+    pub(crate) fn release_target_hold(&mut self) {
+        let Some(hold) = self.target_hold.take() else {
+            return;
+        };
+        let held_id = hold.0.as_ref().map(|(p, _)| p.id.as_str());
+        let desired_id = self
+            .profile_sync
+            .desired_profile()
+            .map(|(p, _)| p.id.as_str());
+        if held_id != desired_id {
+            self.weight_target_disabled = false;
+        }
+        self.refresh_auto_stop_targets();
     }
 
     /// The JSON face of [`set_desired_profile`](Self::set_desired_profile)
@@ -550,6 +630,46 @@ impl CremaCore {
                 }
             }
         }
+    }
+}
+
+/// Test seams for the stop targets: each edits one field of the desired
+/// profile (a blank one with no targets when none is desired) the way a shell
+/// would, without driving the sync.
+#[cfg(test)]
+impl CremaCore {
+    fn edit_test_desired(&mut self, edit: impl FnOnce(&mut CremaProfile, &mut BrewOverrides)) {
+        let (mut profile, mut qc) = self.profile_sync.desired.as_ref().map_or_else(
+            || {
+                let blank = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
+                let profile = CremaProfile {
+                    id: "test-profile".to_owned(),
+                    yield_out: 0.0,
+                    max_total_volume_ml: 0,
+                    ..blank
+                };
+                (profile, BrewOverrides::default())
+            },
+            |d| (d.profile.clone(), d.qc),
+        );
+        edit(&mut profile, &mut qc);
+        self.adopt_desired_profile(Some(&profile), &qc);
+    }
+
+    /// The desired profile's own yield, g (`None` = 0, no target).
+    pub(crate) fn set_test_profile_yield(&mut self, grams: Option<f32>) {
+        self.edit_test_desired(|p, _| p.yield_out = grams.unwrap_or(0.0));
+    }
+
+    /// The Quick Controls yield, g (`None` = the profile's).
+    pub(crate) fn set_test_dial_yield(&mut self, grams: Option<f32>) {
+        self.edit_test_desired(|_, qc| qc.yield_g = grams);
+    }
+
+    /// The desired profile's volume limit, ml (`None` = 0, no limit).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub(crate) fn set_test_volume_limit(&mut self, ml: Option<f32>) {
+        self.edit_test_desired(|p, _| p.max_total_volume_ml = ml.map_or(0, |v| v as u16));
     }
 }
 
