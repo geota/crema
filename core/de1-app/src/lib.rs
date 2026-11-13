@@ -466,6 +466,12 @@ struct PostShotSettle {
     learn_drip: bool,
 }
 
+/// A profile's target yield with its Quick Controls: the dialled yield, else
+/// its own; 0 is none.
+fn target_yield(profile: &CremaProfile, qc: &BrewOverrides) -> Option<f32> {
+    Some(qc.yield_g.unwrap_or(profile.yield_out)).filter(|g| g.is_finite() && *g > 0.0)
+}
+
 /// Hard cap on the post-stop drip settle (reaprime uses ≤4 s, despresso ≤2 s).
 const POST_SHOT_SETTLE_MAX: Duration = Duration::from_millis(3000);
 /// The settled weight is locked once it has not climbed for this long — the
@@ -798,6 +804,12 @@ pub struct CremaCore {
     /// the brief window after a scale-paired shot completes. See
     /// [`PostShotSettle`].
     post_shot_settle: Option<PostShotSettle>,
+    /// While a shot runs, the targets of the profile it runs, when the
+    /// desired profile has moved to another id: the machine keeps running the
+    /// profile it was given (the sync never uploads while busy), so the pick
+    /// waits for the shot's end (REVIEW-401 S1). `None` when the targets
+    /// follow the desired profile.
+    target_hold: Option<profile_sync::TargetHold>,
     /// The profile and Quick Controls the DE1 held when the current shot
     /// started (F10) — snapshotted at `ShotStarted` from the profile sync,
     /// `None` when the DE1 holds a profile the core didn't push.
@@ -1136,6 +1148,7 @@ impl CremaCore {
             line_freq_override: None,
             shot_metrics: ShotMetricsAccumulator::default(),
             post_shot_settle: None,
+            target_hold: None,
             shot_as_run: None,
             shot_stop_reason: None,
             pending_shot: None,
@@ -1433,21 +1446,29 @@ impl CremaCore {
         outcome
     }
 
-    /// The target yield, from the desired profile (`DESIGN.md` §3.10): the
-    /// Quick Controls yield when it is set, else the profile's `yield_out`. A
-    /// yield of 0 is no target. The hot-water ratio's basis too.
+    /// The espresso weight target (`DESIGN.md` §3.10): the Quick Controls
+    /// yield when it is set, else the profile's `yield_out`, of the profile the
+    /// targets come from ([`target_source`](Self::target_source): a running
+    /// shot's own while another is picked). A yield of 0 is no target.
     ///
     /// Does not consider `stop_on_weight`, the dot or the scale — that's
     /// [`weight_intent`](Self::weight_intent) and
     /// [`effective_stop_targets`](Self::effective_stop_targets).
     fn effective_target_weight(&self) -> Option<f32> {
+        let (profile, qc) = self.target_source()?;
+        target_yield(profile, qc)
+    }
+
+    /// The desired profile's target yield: the hot-water ratio's basis, for
+    /// the next pour, so a pick mid-shot moves it at once.
+    pub(crate) fn desired_target_yield(&self) -> Option<f32> {
         let (profile, qc) = self.profile_sync.desired_profile()?;
-        Some(qc.yield_g.unwrap_or(profile.yield_out)).filter(|g| g.is_finite() && *g > 0.0)
+        target_yield(profile, qc)
     }
 
     /// The desired profile's volume limit (SAV), ml. 0 is no limit.
     fn profile_volume_limit(&self) -> Option<f32> {
-        let (profile, _) = self.profile_sync.desired_profile()?;
+        let (profile, _) = self.target_source()?;
         Some(f32::from(profile.max_total_volume_ml)).filter(|ml| *ml > 0.0)
     }
 
@@ -5842,6 +5863,9 @@ impl CremaCore {
                 } else {
                     self.finalize_shot_completed(settle, now, out);
                 }
+                // A profile picked during the shot takes over now, after the
+                // shot's own stop has been harvested.
+                self.release_target_hold();
             }
         }
     }

@@ -792,7 +792,10 @@ internal class MachineSessionController(
      * read-only mirror that never uploads, but it shows the hub's targets.
      */
     private fun pushDesiredProfile(s: MainUiState = effectiveState()) {
-        val cremaJson = s.activeProfile()?.id?.let { profileJson(it) } ?: s.mirroredProfileJson
+        // On a remote the hub's copy of its custom profile wins over this
+        // library's (possibly out-of-date) one, as in [MachineConfigController.brewDial].
+        val cremaJson = s.mirroredProfileJson?.takeIf { uiState().mirror != null }
+            ?: s.activeProfile()?.id?.let { profileJson(it) } ?: s.mirroredProfileJson
         val qcJson = s.brewParams.overridesJson(json)
         // The latest push wins. The core waits for a dial to rest (de1app's
         // 0.5 s) before it uploads, on a WakeAt deadline: no timer here.

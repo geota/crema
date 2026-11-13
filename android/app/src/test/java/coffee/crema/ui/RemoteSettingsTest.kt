@@ -286,6 +286,23 @@ class RemoteSettingsTest {
         assertEquals(37f, vm.ui.value.stopTargets?.weightConfiguredG, "the overlay's yield")
     }
 
+    /** REVIEW-401 S2: a remote whose library holds an older copy of the hub's
+     *  custom profile takes the hub's copy for its core's targets, as the brew
+     *  dial does. */
+    @Test
+    fun `the hub's copy of a profile beats this library's older one`() {
+        val vm = fixture.start()
+        fixture.push()
+        val own = vm.ui.value.profiles.first { it.id == RemoteFixture.PROFILE_S }
+        val hubs = own.copy(yieldOut = own.yieldOut + 3f)
+        val hubJson = kotlinx.serialization.json.Json { encodeDefaults = true }
+            .encodeToString(coffee.crema.profiles.CremaProfile.serializer(), hubs)
+        fixture.push(S.copy(activeProfileJson = hubJson, brewDoseG = null, brewYieldG = null, brewTempC = null, brewPreinfuseS = null, rev = 2))
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
+        assertEquals(hubs.yieldOut, vm.ui.value.stopTargets?.weightConfiguredG, "the hub's yield")
+    }
+
     /** AC-32: restore, reset and erase on a remote change own values only;
      *  the screens keep showing the hub's. */
     @Test

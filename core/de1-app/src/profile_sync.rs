@@ -100,6 +100,11 @@ pub struct ProfileSyncOutput {
     pub status: ProfileSyncStatus,
 }
 
+/// The targets a running shot holds to while the desired profile has moved
+/// to another id: its profile and Quick Controls (`None` = it ran with none).
+#[derive(Debug, Clone)]
+pub(crate) struct TargetHold(Option<(CremaProfile, BrewOverrides)>);
+
 /// The profile the shell wants on the DE1.
 #[derive(Debug, Clone)]
 struct Desired {
@@ -376,11 +381,59 @@ impl CremaCore {
                 qc,
             }
         });
-        let id = |d: &Option<Desired>| d.as_ref().map(|d| d.profile.id.clone());
-        if id(&self.profile_sync.desired) != id(&desired) {
+        let new_id = desired.as_ref().map(|d| d.profile.id.clone());
+        let old_id = self
+            .profile_sync
+            .desired
+            .as_ref()
+            .map(|d| d.profile.id.clone());
+        if self.shot_started.is_some() {
+            // A shot runs the profile it was given: a pick of another id keeps
+            // that profile's targets, and its dot, until the shot ends. Dial
+            // steps on the running profile apply at once (REVIEW-401 S1).
+            let running_id = match &self.target_hold {
+                Some(hold) => hold.0.as_ref().map(|(p, _)| p.id.clone()),
+                None => old_id,
+            };
+            if new_id == running_id {
+                self.target_hold = None;
+            } else if self.target_hold.is_none() {
+                let held = self
+                    .profile_sync
+                    .desired_profile()
+                    .map(|(p, qc)| (p.clone(), *qc));
+                self.target_hold = Some(TargetHold(held));
+            }
+        } else if old_id != new_id {
             self.weight_target_disabled = false;
         }
         self.profile_sync.set_desired(desired, self.clock);
+        self.refresh_auto_stop_targets();
+    }
+
+    /// The profile the stop targets come from: the one a running shot holds
+    /// to, else the desired profile.
+    pub(crate) fn target_source(&self) -> Option<(&CremaProfile, &BrewOverrides)> {
+        match &self.target_hold {
+            Some(hold) => hold.0.as_ref().map(|(p, qc)| (p, qc)),
+            None => self.profile_sync.desired_profile(),
+        }
+    }
+
+    /// The shot ended: a profile picked during it takes over the targets, and
+    /// another id turns the dot back on.
+    pub(crate) fn release_target_hold(&mut self) {
+        let Some(hold) = self.target_hold.take() else {
+            return;
+        };
+        let held_id = hold.0.as_ref().map(|(p, _)| p.id.as_str());
+        let desired_id = self
+            .profile_sync
+            .desired_profile()
+            .map(|(p, _)| p.id.as_str());
+        if held_id != desired_id {
+            self.weight_target_disabled = false;
+        }
         self.refresh_auto_stop_targets();
     }
 

@@ -171,3 +171,107 @@ fn a_settle_that_cannot_upload_asks_for_no_past_wake() {
         assert!(!past, "a wake at or before {now} ms");
     }
 }
+
+/// A shot of a 36 g profile, flowing, with its stop armed.
+fn shot_running(core: &mut CremaCore, p: &CremaProfile) {
+    core.set_desired_profile(Some(p), &BrewOverrides::default(), Duration::ZERO);
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 100);
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 150);
+    core.on_notification(Source::De1ShotSample, &sample(20), 200);
+}
+
+fn armed(core: &CremaCore) -> Option<f32> {
+    core.auto_stop
+        .as_ref()
+        .and_then(|a| a.stop.targets().weight)
+}
+
+/// REVIEW-401 S1: the machine keeps running the profile it was given, so a
+/// pick of another profile mid-shot (here one with no yield) leaves the
+/// running shot's stop, and its dot, as they were; the pick takes over when
+/// the shot ends.
+#[test]
+fn a_profile_picked_mid_shot_waits_for_the_shots_end() {
+    let mut core = with_scale();
+    let p36 = profile("p36", 36.0, 0);
+    shot_running(&mut core, &p36);
+    assert_eq!(armed(&core), Some(36.0));
+    let none = profile("none", 0.0, 0);
+    core.set_desired_profile(
+        Some(&none),
+        &BrewOverrides::default(),
+        Duration::from_millis(300),
+    );
+    assert_eq!(armed(&core), Some(36.0), "the running shot keeps its stop");
+    assert_eq!(core.effective_target_weight(), Some(36.0));
+    // The shot ends: the pick takes over.
+    core.on_notification(Source::De1State, &[2, 0], 5_000);
+    core.on_tick(9_000);
+    assert_eq!(
+        core.effective_target_weight(),
+        None,
+        "the picked profile has none"
+    );
+}
+
+/// The dot a user turned off for the running shot stays off through a pick
+/// of another profile, and turns on when the shot ends.
+#[test]
+fn a_pick_mid_shot_leaves_the_dot_until_the_shots_end() {
+    let mut core = with_scale();
+    shot_running(&mut core, &profile("p36", 36.0, 0));
+    core.set_weight_target_disabled(true);
+    assert_eq!(armed(&core), None);
+    core.set_desired_profile(
+        Some(&profile("q", 30.0, 0)),
+        &BrewOverrides::default(),
+        Duration::from_millis(300),
+    );
+    assert!(core.weight_target_disabled, "the dot stays off");
+    assert_eq!(armed(&core), None);
+    core.on_notification(Source::De1State, &[2, 0], 5_000);
+    core.on_tick(9_000);
+    assert!(!core.weight_target_disabled, "another profile turns it on");
+    assert_eq!(core.effective_target_weight(), Some(30.0));
+}
+
+/// Back on the running profile mid-shot, its dial applies at once again.
+#[test]
+fn picking_the_running_profile_back_mid_shot_takes_its_dial() {
+    let mut core = with_scale();
+    let p36 = profile("p36", 36.0, 0);
+    shot_running(&mut core, &p36);
+    core.set_desired_profile(
+        Some(&profile("q", 30.0, 0)),
+        &BrewOverrides::default(),
+        Duration::from_millis(300),
+    );
+    core.set_desired_profile(Some(&p36), &dial(40.0), Duration::from_millis(400));
+    assert_eq!(armed(&core), Some(40.0));
+}
+
+/// The hot-water ratio's basis is for the next pour: a pick mid-shot moves it
+/// at once, while the running shot keeps its own stop.
+#[test]
+fn a_pick_mid_shot_moves_the_hot_water_basis_at_once() {
+    let mut core = with_scale();
+    let _ = core.set_steam_hotwater_targets(&SteamHotWaterTargets {
+        steam_temp_c: 148.0,
+        steam_timeout_s: 12.0,
+        hot_water_temp_c: 80.0,
+        hot_water: HotWaterDose {
+            mode: HotWaterMode::Ratio,
+            ratio: 3.0,
+            ..HotWaterDose::default()
+        },
+    });
+    shot_running(&mut core, &profile("p36", 36.0, 0));
+    core.set_desired_profile(
+        Some(&profile("q", 30.0, 0)),
+        &BrewOverrides::default(),
+        Duration::from_millis(300),
+    );
+    assert_eq!(armed(&core), Some(36.0));
+    assert_eq!(core.hot_water_target().and_then(|t| t.basis_g), Some(30.0));
+}
