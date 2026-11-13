@@ -71,11 +71,10 @@
 	} from '#lib/backup/index.js';
 	import type { BackupProgress } from '#lib/backup/stream.js';
 	import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
-	import { planNow, prepareBackup, runRestore } from '#lib/restore/engine.js';
+	import { planNow, prepareBackupFile, runRestore } from '#lib/restore/engine.js';
 	import { restoreFlow as runRestoreFlow } from '#lib/restore/flow.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
 	import StorageSection from './StorageSection.svelte';
-	import { readImportBytes } from '#lib/utils/import-limits.js';
 	import { credentialsStoredUnencrypted } from '#lib/security/credential-status.js';
 	import {
 		describeDecentDrain,
@@ -410,12 +409,13 @@
 
 	/** Plan, report, run (`#lib/restore/flow`), then the held sharing changes. */
 	async function restoreFlow(
-		data: ArrayBuffer | Uint8Array,
+		file: Blob,
 		mode: RestoreMode,
 		name: string,
 		say: (line: string) => void
 	): Promise<string> {
-		const prepared = prepareBackup(data, name);
+		// Read a piece at a time and checked before the plan (#310 P2w-b).
+		const prepared = await prepareBackupFile(file, name);
 		const singletons = webSingletons();
 		const { line, outcome } = await runRestoreFlow(mode, {
 			plan: (revive) => planNow(prepared, mode, revive),
@@ -439,7 +439,7 @@
 		if (!file) return;
 		try {
 			const say = (line: string) => (restoreNote = line);
-			restoreNote = await restoreFlow(await readImportBytes(file), pendingRestoreMode, file.name, say);
+			restoreNote = await restoreFlow(file, pendingRestoreMode, file.name, say);
 		} catch (err) {
 			restoreNote = err instanceof Error ? `Restore failed: ${err.message}` : 'Restore failed.';
 		}
@@ -526,9 +526,9 @@
 		driveNote = 'Fetching from Drive…';
 		try {
 			const token = await drive.accessToken();
-			const bytes = await downloadBackup(token, file.id);
+			const backup = await downloadBackup(token, file.id);
 			driveFiles = null;
-			driveNote = await restoreFlow(bytes, mode, file.name, (line) => (driveNote = line));
+			driveNote = await restoreFlow(backup, mode, file.name, (line) => (driveNote = line));
 		} catch (err) {
 			driveNote = err instanceof Error ? `Drive restore failed: ${err.message}` : 'Drive restore failed.';
 		} finally {
