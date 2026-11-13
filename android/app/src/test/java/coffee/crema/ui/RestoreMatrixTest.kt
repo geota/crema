@@ -31,7 +31,7 @@ import coffee.crema.restore.RestoreKind
 import coffee.crema.restore.RestoreOutcome
 import coffee.crema.restore.RestoreRecords
 import coffee.crema.restore.RestoreState
-import coffee.crema.restore.prepareBackup
+import coffee.crema.restore.prepareBackupFile
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.SettingsStore
 import coffee.crema.visualizer.DEFAULT_VISUALIZER_SYNC_PREFS
@@ -434,9 +434,12 @@ class RestoreMatrixTest(private val name: String) {
 
         // Plan, and the case's pointers.
         val bytes = backupBytes(c)
-        val prepared = prepareBackup(bytes, "matrix", File(app.cacheDir, "restore-photos"))
-        val records = RestoreRecords.read(prepared, json, System.currentTimeMillis()) ?: fail("$name: no backup header")
+        // The file path: the zip or JSONL read a piece at a time (#310 P2a-b).
+        val file = File(app.cacheDir, "matrix.crema").apply { writeBytes(bytes) }
+        val prepared = prepareBackupFile(file, "matrix", File(app.cacheDir, "restore-photos"))
         val plan = onMain(vm, "the plan") { vm.restoreEngine.plan(prepared, c.mode, c.revive) }
+        // Only the shots the run writes, as the app reads them.
+        val records = RestoreRecords.read(prepared, json, System.currentTimeMillis(), RestoreRecords.shotsTheRunWrites(plan))
         val encoded = plain.parseToJsonElement(json.encodeToString(RestorePlan.serializer(), plan))
         val failures = c.expect.mapNotNull { (pointer, want) ->
             val got = encoded.at(pointer)

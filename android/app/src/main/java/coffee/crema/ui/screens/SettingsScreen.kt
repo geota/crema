@@ -910,7 +910,7 @@ fun SettingsScreen(
                         }
                         SetGroup("Backup & restore") {
                             CremaSettingsRow("Back up everything", "All custom profiles, beans, roasters, shots, settings and bag photos in one .crema.zip.") {
-                                BackUpEverythingButton(vm, confirm.launchSaveBytes)
+                                BackUpEverythingButton(vm, confirm.launchSaveFile)
                             }
                             CremaSettingsRow("Restore — merge", "Add anything from a backup you don't already have; keeps your current data.") {
                                 CremaButton(onClick = { confirm.launchRestore(MainViewModel.RestoreMode.MERGE) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Merge")
@@ -939,7 +939,13 @@ fun SettingsScreen(
                                     ?.let { "Upload a fresh backup file to your Google Drive. Last backed up ${relativeAgo(it)}." }
                                     ?: "Upload a fresh backup file to your Google Drive."
                                 CremaSettingsRow("Back up to Drive", listOfNotNull(ds.healthLine, lastBackupSub).joinToString(" ")) {
-                                    CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
+                                    // While its backup builds, Cancel, with how far it is (#310 P2a).
+                                    val building = ui.backupProgress[coffee.crema.ui.BackupKind.DRIVE]
+                                    if (ds.busy && building != null) {
+                                        CremaButton(onClick = { vm.cancelBackup(coffee.crema.ui.BackupKind.DRIVE) }, variant = CremaButtonVariant.Outlined, icon = "x", label = "Cancel · ${building.shotsWritten} of ${building.shotsTotal}")
+                                    } else {
+                                        CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
+                                    }
                                 }
                                 CremaSettingsRow("Restore from Drive", DRIVE_RESTORE_HINT) {
                                     CremaButton(onClick = vm.drive::openBackupPicker, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore…")

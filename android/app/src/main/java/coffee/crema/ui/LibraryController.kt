@@ -14,6 +14,7 @@ import coffee.crema.beans.mergeBeanImport
 import coffee.crema.beans.newBean
 import coffee.crema.beans.newRoaster
 import coffee.crema.core.BackupCounts
+import java.io.File
 import coffee.crema.drive.BackupZip
 import coffee.crema.core.Bean
 import coffee.crema.core.BrewTempRange
@@ -929,13 +930,19 @@ class LibraryController(
 
     /** Write raw [bytes] to a SAF document Uri — the binary backup save (a
      *  `.crema.zip`). Off the main thread; large-payload safe. */
-    fun writeBytesToUri(uri: Uri, bytes: ByteArray) {
+    /** Copy a built backup [file] to the picked [uri], then remove the temporary file. */
+    fun writeFileToUri(uri: Uri, file: File) {
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
-                runCatching {
-                    app.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-                    true
-                }.getOrDefault(false)
+                try {
+                    copyBackupToDocument(
+                        file,
+                        open = { mode -> app.contentResolver.openOutputStream(uri, mode) },
+                        delete = { android.provider.DocumentsContract.deleteDocument(app.contentResolver, uri) },
+                    )
+                } finally {
+                    releaseBackupFile(file)
+                }
             }
             notify(if (ok) "Backed up to file" else "Backup failed — couldn't write")
         }
@@ -1079,17 +1086,6 @@ class LibraryController(
         return BackupSnapshot(customs, s, pinnedIds, hiddenIds, currentPrefs(), visualizer.backupPrefs(), userRecipes)
     }
 
-    /** Build the whole-app backup bundle ([backupBundleJsonl]) from [snap], or
-     *  null + a notice on failure. Reads only [snap], so it is safe off the main
-     *  thread. */
-    private fun backupBundle(snap: BackupSnapshot): BuiltBackup? = runCatching {
-        backupBundleJsonl(snap, json, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
-    }.map { built ->
-        built.omitted.forEach { appendLog("Backup left out ${it.kind} ${omittedRowId(it, snap) ?: "at ${it.index}"}") }
-        built.degraded.forEach { appendLog("Backup left out the profile of shot $it") }
-        backupGapsNotice(built)?.let { notify(it) }
-        built
-    }.getOrElse { appendLog("Backup failed: ${it.message}"); notify(BACKUP_FAILED); null }
 
     /**
      * Wrap [backupBundle]'s JSONL into a `.crema.zip`: `backup.jsonl` plus, for
@@ -1100,16 +1096,27 @@ class LibraryController(
      * Snapshots on the caller's thread, then serialises, exports and zips on
      * [Dispatchers.Default] — never on Main.
      */
-    suspend fun buildBackupZipBytes(): ByteArray? = buildBackupZip()?.bytes
+    suspend fun buildBackupZipFile(): File? = buildBackupZip(BackupKind.FILE)?.file
 
-    /** [buildBackupZipBytes], with what's in it. */
-    suspend fun buildBackupZip(): BackupZip? {
-        // Never back up shots whose telemetry hasn't loaded yet (F10
-        // validation P1-2: the startup auto-backup ran during the load).
-        awaitSeries()
-        reportUnreadableSeries()
-        reportUnhealthyStores()
-        return buildBackupZipNow()
+    /** The backup as a temporary file ([buildBackupZipFile]), with what's in it. */
+    suspend fun buildBackupZip(kind: BackupKind): BackupZip? {
+        // The cancel exists from here, so a Cancel tapped while the series
+        // still load isn't lost (#391 review).
+        val cancel = backupRuns.start(kind)
+        try {
+            // Never back up shots whose telemetry hasn't loaded yet (F10
+            // validation P1-2: the startup auto-backup ran during the load).
+            awaitSeries()
+            if (cancel.get()) {
+                notify("Backup cancelled: nothing was saved.")
+                return null
+            }
+            reportUnreadableSeries()
+            reportUnhealthyStores()
+            return buildBackupZipNow(kind, cancel)
+        } finally {
+            backupRuns.end(kind, cancel)
+        }
     }
 
     /** A store that couldn't be read this session isn't in a backup made now:
@@ -1130,21 +1137,64 @@ class LibraryController(
         if (n > 0) notify("$n shot(s) have damaged telemetry and are backed up without their curves")
     }
 
-    private suspend fun buildBackupZipNow(): BackupZip? =
-        snapshotThenBuild(::backupSnapshot, Dispatchers.Default) { snap ->
-            val built = backupBundle(snap) ?: return@snapshotThenBuild null // already notified
-            runCatching {
-                val images = snap.state.beans.asSequence()
-                    .filter { BeanImageStore.exists(app, it.id) }
-                    .mapNotNull { bean ->
-                        runCatching { BeanImageStore.beanImageFile(app, bean.id).readBytes() }
-                            .getOrNull()?.let { bean.id to it }
-                    }
-                    .toList()
-                zipBackupBytes(built.jsonl, images.asSequence())
-                    .let { BackupZip(it, BackupCounts(built.shotCount, built.curveCount), backupContentHash(built.jsonl, images)) }
-            }.getOrElse { appendLog("Backup zip failed: ${it.message}"); notify(BACKUP_FAILED); null }
+    /** Each running build's cancel, by kind: a cancel stops only its own build (#391 review). */
+    private val backupRuns = BackupRuns()
+
+    /** Stop the [kind] backup being built, keeping nothing. */
+    fun cancelBackup(kind: BackupKind) = backupRuns.cancel(kind)
+
+    /**
+     * Build the backup one line at a time into a temporary file in the cache
+     * directory ([streamBackupZip], #310 P2a), reporting its progress in the UI
+     * state under its [kind]. A cancel, a failure or a backup past the limits
+     * keeps nothing.
+     */
+    private suspend fun buildBackupZipNow(kind: BackupKind, cancel: java.util.concurrent.atomic.AtomicBoolean): BackupZip? {
+        // A build that finished as its caller was cancelled never reaches anyone
+        // who'd release it: release it here, so the sweep can take it (#391 review).
+        var built: BackupZip? = null
+        return try {
+            snapshotThenBuild(::backupSnapshot, Dispatchers.Default) { snap -> streamBackupNow(snap, kind, cancel).also { built = it } }
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            built?.release()
+            throw c
+        } finally {
+            updateUi { it.copy(backupProgress = it.backupProgress - kind) }
         }
+    }
+
+    private fun streamBackupNow(snap: BackupSnapshot, kind: BackupKind, cancel: java.util.concurrent.atomic.AtomicBoolean): BackupZip? {
+        val cache = app.cacheDir
+        sweepBackupTemp(cache)
+        val photos = snap.state.beans
+            .filter { BeanImageStore.exists(app, it.id) }
+            .map { it.id to BeanImageStore.beanImageFile(app, it.id) }
+        return runCatching {
+            streamBackupZip(
+                snap, json, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel(),
+                photos, backupTempFile(cache),
+                stop = { if (cancel.get()) throw BackupCancelled() },
+                onProgress = { p -> updateUi { it.copy(backupProgress = it.backupProgress + (kind to p)) } },
+            )
+        }.fold(
+            onSuccess = { built ->
+                val gaps = BuiltBackup(jsonl = "", degraded = built.degraded, omitted = built.omitted)
+                built.omitted.forEach { appendLog("Backup left out ${it.kind} ${omittedRowId(it, snap) ?: "at ${it.index}"}") }
+                built.degraded.forEach { appendLog("Backup left out the profile of shot $it") }
+                built.photosSkipped.forEach { appendLog("Backup left out the photo of bean $it") }
+                backupGapsNotice(gaps)?.let { notify(it) }
+                BackupZip(built.file, built.counts, built.contentHash, release = { releaseBackupFile(built.file) })
+            },
+            onFailure = {
+                when (it) {
+                    is BackupCancelled -> notify("Backup cancelled: nothing was saved.")
+                    is BackupTooLarge -> notify("Backup failed: ${it.message}")
+                    else -> { appendLog("Backup failed: ${it.message}"); notify(BACKUP_FAILED) }
+                }
+                null
+            },
+        )
+    }
 
     /** A suggested filename for the SAF create-document picker. */
     fun backupFileName(): String {
@@ -1157,16 +1207,6 @@ class LibraryController(
         // `.crema.zip` (backup.jsonl + images/<beanId> photos); the `crema-backup`
         // prefix keeps it recognisable + is what the Drive list query matches on.
         return "crema-backup-$label-$stamp.crema.zip"
-    }
-
-    /** A SAF [uri]'s bytes, for a restore, or null once it has said why it couldn't read them. */
-    suspend fun readBackupBytes(uri: Uri): ByteArray? {
-        val bytes = readUriBytes(uri)
-        if (bytes == null || bytes.isEmpty()) {
-            notify(readFailure("Restore failed — couldn't read that file"))
-            return null
-        }
-        return bytes
     }
 
     // ── Restore through the core's plan (restore-safety PR7a) ─────────────────

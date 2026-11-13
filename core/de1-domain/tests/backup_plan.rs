@@ -452,6 +452,24 @@ fn a_line_too_long_to_buffer_counts_as_a_bad_line_read_or_skipped() {
 }
 
 #[test]
+fn a_blank_line_is_blank_at_any_length() {
+    // A reader that skipped it pushes an empty line, as reading it would count it.
+    let blank = vec![b' '; MAX_BACKUP_LINE_BYTES + 1];
+    let mut with_blank = WEB.to_vec();
+    with_blank.extend(&blank);
+    with_blank.push(b'\n');
+    let mut with_empty = WEB.to_vec();
+    with_empty.push(b'\n');
+    assert_eq!(
+        scan_backup_bytes(&with_blank),
+        scan_backup_bytes(&with_empty)
+    );
+    assert_eq!(scan_backup_bytes(&with_blank).bad_lines, 0);
+    assert_eq!(replace(&with_blank), Verdict::Confirm);
+    assert_eq!(records(&with_blank), records(WEB));
+}
+
+#[test]
 fn a_duplicate_id_keeps_the_first_and_is_noted() {
     let mut lines = lines_of(WEB);
     let bean = lines.iter().find(|l| l["kind"] == "bean").unwrap().clone();

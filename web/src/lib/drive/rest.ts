@@ -148,12 +148,13 @@ export async function listBackups(accessToken: string): Promise<DriveFile[]> {
 	return files;
 }
 
-/** Download a backup file's raw bytes by id (a `.crema.zip`, or legacy text). The
- *  caller (`restoreBackupData`) sniffs the zip magic vs decoding it as text. */
-export async function downloadBackup(accessToken: string, fileId: string): Promise<ArrayBuffer> {
+/** Download a backup file by id (a `.crema.zip`, or legacy text), as a `Blob`:
+ *  the browser may keep a large one on disk, and the restore reads it a piece
+ *  at a time (`prepareBackupFile`, #310 P2w-b), never as one buffer. */
+export async function downloadBackup(accessToken: string, fileId: string): Promise<Blob> {
 	const res = await fetch(`${FILES_URL}/${encodeURIComponent(fileId)}?alt=media`, {
 		headers: { Authorization: `Bearer ${accessToken}` }
 	});
 	if (!res.ok) await failOn(res, 'download');
-	return res.arrayBuffer();
+	return res.blob();
 }

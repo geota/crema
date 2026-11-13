@@ -322,6 +322,8 @@ data class MainUiState(
      * A queue, not a single field, so two rapid notifications both surface.
      */
     val userMessages: List<String> = emptyList(),
+    /** The backups being built, by kind, with how far each is (#310 P2a). */
+    val backupProgress: Map<BackupKind, BackupProgress> = emptyMap(),
     /** Result of the last on-demand release check (Settings → About,
      *  issue #36) — null until the user taps Check. */
     val updateInfo: coffee.crema.update.UpdateInfo? = null,

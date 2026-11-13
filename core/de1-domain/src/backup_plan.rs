@@ -12,7 +12,8 @@
 //! **A line at a time.** [`BackupScan`] and [`BackupImport`] are the same two
 //! reads fed one line at a time, so a shell streaming a large backup holds a
 //! line, not the file (#310 P2w). A line past [`MAX_BACKUP_LINE_BYTES`] is a
-//! bad line; a reader that won't buffer one skips its bytes and says so.
+//! bad line, unless it's all whitespace, which is blank at any length; a
+//! reader that won't buffer one skips its bytes and says which it was.
 //!
 //! **Merge only adds what's missing.** It never changes or removes what's
 //! here, whatever the timestamps say. The one exception is a curve: a row here
@@ -615,6 +616,10 @@ impl BackupScan {
 
     /// The next line was longer than [`MAX_BACKUP_LINE_BYTES`], and the reader
     /// skipped it: a bad line, as [`push_line`](Self::push_line) would count it.
+    ///
+    /// Only for a line with something in it: a line of nothing but ASCII
+    /// whitespace is blank however long, as `push_line` reads it, so a reader
+    /// that skipped one pushes an empty line instead.
     pub fn push_oversized_line(&mut self) {
         self.line += 1;
         self.read(Err(LineError::TooLong));
@@ -880,7 +885,9 @@ impl BackupImport {
     }
 
     /// The next line was longer than [`MAX_BACKUP_LINE_BYTES`], and the reader
-    /// skipped it: no record, and no header after it is first.
+    /// skipped it: no record, and no header after it is first. As for
+    /// [`BackupScan::push_oversized_line`], a blank line, however long, is an
+    /// empty line instead.
     pub fn push_oversized_line(&mut self) {
         self.seen_content = true;
     }

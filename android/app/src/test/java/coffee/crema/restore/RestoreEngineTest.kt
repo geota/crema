@@ -10,7 +10,6 @@ import coffee.crema.core.Verdict
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.toCommonSettings
 import coffee.crema.visualizer.DEFAULT_VISUALIZER_SYNC_PREFS
-import coffee.crema.ui.parseBackupBytes
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -25,6 +24,7 @@ import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -102,7 +102,7 @@ class RestoreEngineTest {
     }
 
     private fun prepared() = prepareBackup(backup, "test", File(dir, "stage"))
-    private fun records(p: PreparedBackup) = RestoreRecords(parseBackupBytes(p.jsonl, json, 0L)!!)
+    private fun records(p: PreparedBackup) = RestoreRecords.read(p, json, 0L)
 
     private fun engine(sink: FakeSink, waitMs: Long = 200) =
         RestoreEngine(sink, marker, json, machineWaitMs = waitMs)
@@ -336,5 +336,27 @@ class RestoreEngineTest {
         assertTrue("This backup is damaged" in refusalMessage(plan), refusalMessage(plan))
         assertIs<RestoreOutcome.Refused>(e.run(damaged, RestoreKind.REPLACE, records(damaged), expected = plan))
         assertEquals(emptyList(), sink.calls)
+    }
+
+    /** What a restore keeps is capped, so a backup can't make it hold without bound (security review of #395). */
+    @Test
+    fun `records past the restore's budget refuse the read before any write`() {
+        val p = prepared()
+        val whole = RestoreRecords.read(p, json, 0L)
+        assertTrue(whole.parsed.beans.isNotEmpty(), "under the budget, the backup reads")
+        assertFailsWith<coffee.crema.persist.ImportTooLargeException> {
+            RestoreRecords.read(p, json, 0L, maxKeptBytes = 64)
+        }
+    }
+
+    /** The cap follows the heap, so it can trip before the parse runs out of memory (REVIEW-395). */
+    @Test
+    fun `the kept-records cap is an eighth of the heap, with a floor`() {
+        assertEquals(64L * 1024 * 1024, RestoreRecords.defaultMaxKeptBytes(512L * 1024 * 1024))
+        assertEquals(RestoreRecords.MIN_KEPT_BYTES, RestoreRecords.defaultMaxKeptBytes(128L * 1024 * 1024))
+        // A 256 MB heap ran out of memory at 46 MB kept: its cap must stay well under that.
+        assertTrue(RestoreRecords.defaultMaxKeptBytes(256L * 1024 * 1024) <= 32L * 1024 * 1024)
+        // The default, on this heap, stays well below what 7x would exhaust.
+        assertTrue(RestoreRecords.defaultMaxKeptBytes() * 7 <= Runtime.getRuntime().maxMemory() || RestoreRecords.defaultMaxKeptBytes() == RestoreRecords.MIN_KEPT_BYTES)
     }
 }
