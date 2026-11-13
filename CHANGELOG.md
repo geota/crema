@@ -110,7 +110,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   loaded whole, so a large one restores without running out of memory: up to
   2 GB, where the limit was 200 MB. Every part of the zip is checked against
   its checksum, and a damaged or cut-off file is refused before anything
-  changes. A record over 16 MB counts as a damaged line. (#310)
+  changes. A record over 16 MB counts as a damaged line. As on the web, a zip
+  is read through its central directory, so a photo whose name is damaged in
+  one place is refused rather than put on another bean, and a zip with damaged
+  first bytes is refused as a damaged zip; a backup file that changes between
+  the check and the restore is refused before any write; and picking a second
+  backup while a restore's report is open no longer deletes the first one's
+  photos. (#310, #396)
 - **Android backups are built a piece at a time** — the backup is written to a
   temporary file as it's built, rather than held in memory whole, so a large
   history backs up without running the app out of memory. Back up shows how

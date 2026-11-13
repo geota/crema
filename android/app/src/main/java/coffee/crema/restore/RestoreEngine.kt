@@ -24,6 +24,9 @@ import kotlinx.serialization.json.JsonPrimitive
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.FilterInputStream
+import java.io.InputStream
+import java.util.zip.CRC32
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.atomic.AtomicBoolean
@@ -151,18 +154,51 @@ private fun scanLines(read: ((BackupLinePiece) -> Unit) -> Unit, photoIds: List<
     }
 
 /**
- * Read a backup from [file] (#310 P2a-b): a `.crema.zip` through
- * [ZipInputStream][java.util.zip.ZipInputStream], or bare JSONL, a piece at a
- * time. Every byte the restore will use is read here once, checked (each zip
- * entry's CRC, the end record, the limits) and scanned, before a plan is
- * made; photos are staged in [stageDir]; the run reads the lines again.
- * Throws [BackupReadException] for a damaged backup or one past a limit.
+ * The bytes a backup's lines come from, the same on every read: the first
+ * read keeps their CRC-32 and length, and a later one that differs is
+ * refused at its end, before the run writes anything (REVIEW-395, as the
+ * web's #394 does). The file is an app-private copy, but a second pick or
+ * download from the same source replaces it.
+ */
+private class SameBytesEachRead {
+    @Volatile private var seen: Pair<Long, Long>? = null
+
+    /** [block] over [input], read to its end, then checked against the first read. */
+    fun read(input: InputStream, block: (InputStream) -> Unit) {
+        val crc = CRC32()
+        var length = 0L
+        val counted = object : FilterInputStream(input) {
+            override fun read(): Int = super.read().also { if (it >= 0) { crc.update(it); length++ } }
+            override fun read(b: ByteArray, off: Int, len: Int): Int =
+                super.read(b, off, len).also { if (it > 0) { crc.update(b, off, it); length += it } }
+        }
+        block(counted)
+        val sink = ByteArray(64 * 1024)
+        while (counted.read(sink) >= 0) Unit
+        val now = crc.value to length
+        val was = seen
+        if (was == null) seen = now
+        else if (was != now) throw BackupReadException("This backup changed since it was checked. Nothing was changed.")
+    }
+}
+
+/**
+ * Read a backup from [file] (#310 P2a-b): a `.crema.zip` through its central
+ * directory, or bare JSONL, a piece at a time. Every byte the restore will
+ * use is read here once, checked (each zip entry's CRC and size, its names,
+ * the limits) and scanned, before a plan is made; photos are staged in
+ * [stageDir]; the run reads the lines again, and they must be the bytes
+ * scanned here. Throws [BackupReadException] for a damaged backup or one past
+ * a limit.
  */
 fun prepareBackupFile(file: File, name: String, stageDir: File, limits: BackupReadLimits = BackupReadLimits()): PreparedBackup {
     checkFileSize(file, limits)
-    if (!isZipFile(file)) {
+    if (!looksLikeZip(file)) {
+        val same = SameBytesEachRead()
         val read: ((BackupLinePiece) -> Unit) -> Unit = { onPiece ->
-            BufferedInputStream(FileInputStream(file), 64 * 1024).use { forEachBackupLine(it, limits.maxLineBytes, onPiece) }
+            BufferedInputStream(FileInputStream(file), 64 * 1024).use { input ->
+                same.read(input) { forEachBackupLine(it, limits.maxLineBytes, onPiece) }
+            }
         }
         return PreparedBackup(name, emptyMap(), scanLines(read, emptyList()), read)
     }
@@ -173,6 +209,7 @@ fun prepareBackupFile(file: File, name: String, stageDir: File, limits: BackupRe
     // both takes `backup.jsonl`'s, as the old reader did. Each finishes once
     // the whole zip has been read and its photos are known.
     val scans = HashMap<String, BackupScanner>()
+    val same = HashMap<String, SameBytesEachRead>()
     val manifest = try {
         walkBackupZip(file, limits) { entry, kind, data ->
             when (kind) {
@@ -182,8 +219,10 @@ fun prepareBackupFile(file: File, name: String, stageDir: File, limits: BackupRe
                     staged.outputStream().use { data.copyTo(it, 64 * 1024) }
                     if (beanId.isNotEmpty() && staged.length() > 0) photos[beanId] = staged else staged.delete()
                 }
-                EntryKind.BACKUP -> scanInto(scans.getOrPut(entry) { BackupScanner() }) { onPiece ->
-                    forEachBackupLine(data, limits.maxLineBytes, onPiece)
+                EntryKind.BACKUP -> same.getOrPut(entry) { SameBytesEachRead() }.read(data) { member ->
+                    scanInto(scans.getOrPut(entry) { BackupScanner() }) { onPiece ->
+                        forEachBackupLine(member, limits.maxLineBytes, onPiece)
+                    }
                 }
             }
         }
@@ -194,10 +233,16 @@ fun prepareBackupFile(file: File, name: String, stageDir: File, limits: BackupRe
         scans.values.forEach { it.destroy() }
     }
     val member = if (BACKUP_MEMBER in scans) BACKUP_MEMBER else LEGACY_MEMBER
+    val check = same.getValue(member)
     val read: ((BackupLinePiece) -> Unit) -> Unit = { onPiece ->
+        var found = false
         walkBackupZip(file, limits) { entry, kind, data ->
-            if (kind == EntryKind.BACKUP && entry == member) forEachBackupLine(data, limits.maxLineBytes, onPiece)
+            if (kind == EntryKind.BACKUP && entry == member) {
+                found = true
+                check.read(data) { forEachBackupLine(it, limits.maxLineBytes, onPiece) }
+            }
         }
+        if (!found) throw BackupReadException("This backup changed since it was checked. Nothing was changed.")
     }
     return PreparedBackup(name, photos, manifest, read)
 }

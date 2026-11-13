@@ -99,8 +99,9 @@ class BackupReaderTest {
 
     @Test
     fun aZipThatStopsEarlyInsideAnIntactFileIsRefused() {
-        // A later local header that reads as the central directory: ZipInputStream
-        // ends there quietly, and the photo after it would just be missing.
+        // A later local header that reads as the central directory: a reader
+        // that walks local headers ends there quietly, and the photo after it
+        // would just be missing. Read by the directory, its header is damage.
         val out = java.io.ByteArrayOutputStream()
         ZipOutputStream(out).use { z ->
             z.putNextEntry(ZipEntry("backup.jsonl")); z.write(jsonl); z.closeEntry()
@@ -111,7 +112,7 @@ class BackupReaderTest {
             bytes[i] == 0x50.toByte() && bytes[i + 1] == 0x4b.toByte() && bytes[i + 2] == 3.toByte() && bytes[i + 3] == 4.toByte()
         }
         bytes[photoLocal + 2] = 1; bytes[photoLocal + 3] = 2
-        assertTrue("cut short" in refusal { prepareBackupFile(copy(bytes), "early", File(dir, "s")) })
+        assertTrue("local header" in refusal { prepareBackupFile(copy(bytes), "early", File(dir, "s")) })
     }
 
     @Test
@@ -174,6 +175,106 @@ class BackupReaderTest {
         val a = Json.parseToJsonElement(plain.manifestJson).jsonObject - "photos"
         val b = Json.parseToJsonElement(zipped.manifestJson).jsonObject - "photos"
         assertEquals(a, b)
+    }
+
+    // ── REVIEW-395's parity items (#396) ─────────────────────────────────────
+
+    @Test
+    fun theLinesReadAgainMustBeTheBytesScanned() {
+        // Plain JSONL: the run's read is refused at its end when the file changed.
+        val plainFile = copy(jsonl, "again.jsonl")
+        val plain = prepareBackupFile(plainFile, "plain", File(dir, "s"))
+        linesOf(plain) // the same bytes read again are fine
+        plainFile.writeBytes(String(jsonl).replace("android-1", "android-2").toByteArray())
+        assertTrue("changed since it was checked" in refusal { linesOf(plain) })
+        assertTrue("changed since it was checked" in refusal {
+            RestoreRecords.read(plain, Json { ignoreUnknownKeys = true }, 0L)
+        })
+        // A zip: its CRCs are the new file's own, so they can't tell; the scan's can.
+        val zipFile = copy(File(fixtures, "android-zipoutputstream.crema.zip").readBytes(), "again.zip")
+        val zipped = prepareBackupFile(zipFile, "zip", File(dir, "s2"))
+        linesOf(zipped)
+        val other = java.io.ByteArrayOutputStream()
+        ZipOutputStream(other).use { z ->
+            z.putNextEntry(ZipEntry("backup.jsonl")); z.write(String(jsonl).replace("android-1", "android-2").toByteArray()); z.closeEntry()
+        }
+        zipFile.writeBytes(other.toByteArray())
+        assertTrue("changed since it was checked" in refusal { linesOf(zipped) })
+    }
+
+    /** Where the photo entry's name sits in its local header, and in the central directory. */
+    private fun photoNameAt(bytes: ByteArray, header: Int): Int {
+        val name = "images/bean:android-1"
+        val sig = if (header == 3) 30 else 46
+        val at = (0 until bytes.size - sig).first { i ->
+            bytes[i] == 0x50.toByte() && bytes[i + 1] == 0x4b.toByte() && bytes[i + 2] == header.toByte() && bytes[i + 3] == (header + 1).toByte() &&
+                String(bytes, i + sig, name.length, Charsets.ISO_8859_1) == name
+        }
+        return at + sig
+    }
+
+    @Test
+    fun aNameTheLocalHeaderAndTheDirectoryDisagreeOnIsRefused() {
+        // REVIEW-395's fuzz case: one flipped byte moved the photo to another bean.
+        val fixture = File(fixtures, "android-zipoutputstream.crema.zip").readBytes()
+        for (header in listOf(3, 1)) {
+            val bytes = fixture.copyOf()
+            val at = photoNameAt(bytes, header) + "images/b".length
+            bytes[at] = 'd'.code.toByte() // images/bdan:android-1
+            assertTrue("names disagree" in refusal { prepareBackupFile(copy(bytes), "renamed", File(dir, "s")) }, "header $header")
+        }
+    }
+
+    @Test
+    fun aZipWhoseFirstBytesAreDamagedIsReadAsAZipNotAsText() {
+        for ((name, zip) in writers) {
+            val bytes = zip.readBytes().also { for (i in 0 until 4) it[i] = 0 }
+            refusal { prepareBackupFile(copy(bytes), name, File(dir, "s")) }
+        }
+    }
+
+    @Test
+    fun aFileNameThatIsNotUtf8IsDamagedNotARawError() {
+        val bytes = File(fixtures, "android-zipoutputstream.crema.zip").readBytes()
+        // The same bad byte in both names: they agree, and neither decodes.
+        for (header in listOf(3, 1)) bytes[photoNameAt(bytes, header) + "images/b".length] = 0xff.toByte()
+        assertTrue("a file name" in refusal { prepareBackupFile(copy(bytes), "bad name", File(dir, "s")) })
+    }
+
+    /** A zip of stored entries, each followed by a data descriptor, as no Crema writer makes but the web reads. */
+    private fun storedWithDescriptors(entries: List<Pair<String, ByteArray>>): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val central = java.io.ByteArrayOutputStream()
+        fun u16(o: java.io.ByteArrayOutputStream, v: Int) { o.write(v and 0xff); o.write((v ushr 8) and 0xff) }
+        fun u32(o: java.io.ByteArrayOutputStream, v: Long) { u16(o, (v and 0xffff).toInt()); u16(o, ((v ushr 16) and 0xffff).toInt()) }
+        for ((name, data) in entries) {
+            val offset = out.size().toLong()
+            val crc = java.util.zip.CRC32().apply { update(data) }.value
+            val n = name.toByteArray()
+            // Local header: flag 0x08, method 0, CRC and sizes left zero for the descriptor.
+            u32(out, 0x04034b50); u16(out, 20); u16(out, 0x08); u16(out, 0); u16(out, 0); u16(out, 0)
+            u32(out, 0); u32(out, 0); u32(out, 0); u16(out, n.size); u16(out, 0); out.write(n)
+            out.write(data)
+            u32(out, 0x08074b50); u32(out, crc); u32(out, data.size.toLong()); u32(out, data.size.toLong())
+            u32(central, 0x02014b50); u16(central, 20); u16(central, 20); u16(central, 0x08); u16(central, 0); u16(central, 0); u16(central, 0)
+            u32(central, crc); u32(central, data.size.toLong()); u32(central, data.size.toLong())
+            u16(central, n.size); u16(central, 0); u16(central, 0); u16(central, 0); u16(central, 0); u32(central, 0); u32(central, offset)
+            central.write(n)
+        }
+        val cdOffset = out.size().toLong()
+        val cd = central.toByteArray()
+        out.write(cd)
+        u32(out, 0x06054b50); u16(out, 0); u16(out, 0); u16(out, entries.size); u16(out, entries.size)
+        u32(out, cd.size.toLong()); u32(out, cdOffset); u16(out, 0)
+        return out.toByteArray()
+    }
+
+    @Test
+    fun aStoredEntryWithADataDescriptorReadsAsOnTheWeb() {
+        val zip = copy(storedWithDescriptors(listOf("backup.jsonl" to jsonl, "images/bean:android-1" to photo())))
+        val p = prepareBackupFile(zip, "descriptors", File(dir, "s"))
+        assertContentEquals(photo(), p.photos.getValue("bean:android-1").readBytes())
+        assertEquals(String(jsonl).split('\n'), linesOf(p).map { String(it) })
     }
 
     // ── Lines ────────────────────────────────────────────────────────────────

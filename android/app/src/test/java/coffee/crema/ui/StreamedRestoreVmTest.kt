@@ -188,5 +188,77 @@ class StreamedRestoreVmTest {
         assertTrue(merge.warnings.isNotEmpty())
     }
 
+    /** Restore [file], confirming the report if one opens; the message it ends with. */
+    private fun restoreAll(vm: MainViewModel, file: File, mode: MainViewModel.RestoreMode): String {
+        val before = vm.ui.value.userMessages.size
+        vm.startRestoreFile(file, file.name, mode)
+        VmHarness.idleUntil("the report or the restore", 60_000) { vm.ui.value.restoreReport != null || vm.ui.value.userMessages.size > before }
+        if (vm.ui.value.restoreReport != null) {
+            vm.confirmRestore()
+            VmHarness.idleUntil("the restore", 60_000) { vm.ui.value.userMessages.size > before }
+        }
+        return vm.ui.value.userMessages.last()
+    }
+
+    @Test
+    fun bringThemBackTooRunsFromTheStreamedRecords() {
+        // REVIEW-395 nit 2: "Bring them back too" through a file read a piece at a time.
+        val vm = vm()
+        val file = backupWithShots(3, 1_790_000_000_000)
+        restoreAll(vm, file, MainViewModel.RestoreMode.MERGE)
+        assertEquals(setOf("s0", "s1", "s2"), VmHarness.ownState(vm).history.map { it.id }.toSet())
+        vm.deleteShot("s1")
+        VmHarness.idle()
+
+        // The records the first plan reads already hold the shot deleted here,
+        // so either answer to the report runs from one read.
+        val prepared = prepareBackupFile(file, "three", File(app.cacheDir, "stage-bring-back"))
+        val plan = onMain(vm, "the plan") { vm.restoreEngine.plan(prepared, RestoreKind.MERGE) }
+        assertEquals(listOf("s1"), plan.shots.deletedHere)
+        val revived = onMain(vm, "the bring-back plan") { vm.restoreEngine.plan(prepared, RestoreKind.MERGE, reviveDeleted = true) }
+        assertEquals(listOf("s1"), revived.shots.revive)
+        val read = RestoreRecords.shotsTheRunWrites(plan)
+        assertTrue(read.containsAll(RestoreRecords.shotsTheRunWrites(revived)), "$read")
+        assertTrue("s1" in RestoreRecords.read(prepared, json, 0L, read).parsed.shots.map { it.id })
+
+        // And on the real report.
+        val before = vm.ui.value.userMessages.size
+        vm.startRestoreFile(file, "three", MainViewModel.RestoreMode.MERGE)
+        VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
+        assertTrue(vm.ui.value.restoreReport!!.offerBringBack)
+        vm.restoreBringBack()
+        VmHarness.idleUntil("the bring-back report") { vm.ui.value.restoreReport?.offerBringBack == false }
+        vm.confirmRestore()
+        VmHarness.idleUntil("the restore", 60_000) { vm.ui.value.userMessages.size > before }
+        assertEquals(setOf("s0", "s1", "s2"), VmHarness.ownState(vm).history.map { it.id }.toSet(), vm.ui.value.userMessages.last())
+    }
+
+    @Test
+    fun aSecondPickWhileTheReportIsOpenLeavesTheFirstsStagedPhotos() {
+        // REVIEW-395 nit 4: each prepare cleared the one shared stage.
+        val vm = vm()
+        val fixtureZip = File("../../core/de1-domain/tests/fixtures/backup/android-zipoutputstream.crema.zip")
+        val first = File(app.cacheDir, "first.crema.zip").apply { writeBytes(fixtureZip.readBytes()) }
+        vm.startRestoreFile(first, "first", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
+
+        // A second pick, refused after it began staging: a zip with no backup inside.
+        val second = File(app.cacheDir, "second.crema.zip").apply {
+            ZipOutputStream(outputStream()).use { z -> z.putNextEntry(ZipEntry("images/bean:other")); z.write(1); z.closeEntry() }
+        }
+        val before = vm.ui.value.userMessages.size
+        vm.startRestoreFile(second, "second", MainViewModel.RestoreMode.MERGE)
+        VmHarness.idleUntil("the refusal") { vm.ui.value.userMessages.size > before }
+        assertNotNull(vm.ui.value.restoreReport, "the first report is still open")
+
+        val again = vm.ui.value.userMessages.size
+        vm.confirmRestore()
+        VmHarness.idleUntil("the restore", 60_000) { vm.ui.value.userMessages.size > again }
+        val message = vm.ui.value.userMessages.last()
+        assertTrue(coffee.crema.beans.BeanImageStore.exists(app, "bean:android-1"), message)
+        // Done with, the stages go.
+        assertEquals(emptyList(), File(app.cacheDir, "restore-photos").listFiles()?.toList().orEmpty(), message)
+    }
+
     private fun shot(id: String, at: Long) = StoredShot(id = id, completedAtMs = at, durationMs = 30_000)
 }
