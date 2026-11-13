@@ -115,12 +115,34 @@ suspend fun driveUploadBackup(
                 "multipart/related; boundary=$boundary", head, content, tail, accessToken, json,
             )
         }
-        // Unverified is not verified: a reply without the size fails too (#391 review).
+        // Unverified is not verified (#391 review): a reply without the size asks
+        // Drive for it, and fails only if Drive still won't say.
         val stored = file.size?.toLongOrNull()
+            ?: driveFileSize(accessToken, file.id, json)
             ?: throw IOException("Drive upload failed: Drive didn't say how large the file is.")
         if (stored != length) throw IOException("Drive upload failed: Drive holds $stored bytes of $length.")
         file
     }
+
+/** Drive's stored size for [fileId] (`files.get?fields=size`), or null if it won't say. */
+private fun driveFileSize(accessToken: String, fileId: String, json: Json): Long? {
+    val url = "$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}?fields=size"
+    val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 15_000
+        readTimeout = 20_000
+        setRequestProperty("Authorization", "Bearer $accessToken")
+    }
+    return try {
+        val status = conn.responseCode
+        val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
+            ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
+        if (status !in 200..299) throw DriveHttpError(status, resp, errorMessage(json, resp, status, "upload check"))
+        runCatching { json.parseToJsonElement(resp).jsonObject["size"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() }.getOrNull()
+    } finally {
+        conn.disconnect()
+    }
+}
 
 /** One request whose body is [head], then [content] streamed, then [tail], at a fixed length. */
 private fun send(

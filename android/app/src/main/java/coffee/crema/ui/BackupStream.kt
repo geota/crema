@@ -303,3 +303,28 @@ private fun walk(
 
 /** The member name of the lines inside a `.crema.zip`. */
 internal const val BACKUP_JSONL_ENTRY = "backup.jsonl"
+
+/**
+ * Copy a built backup [file] into a picked document (#391 review). "wt"
+ * first: a provider that doesn't truncate on "w" would leave an older, longer
+ * backup's tail, and its central directory, behind. A provider that refuses
+ * "wt" gets "w". Only a document this save opened can be half written, so
+ * only that one is deleted on a failure: one it never opened is the user's,
+ * untouched. True when the whole file was written.
+ */
+internal fun copyBackupToDocument(
+    file: File,
+    open: (mode: String) -> java.io.OutputStream?,
+    delete: () -> Unit,
+): Boolean {
+    var opened = false
+    val ok = runCatching {
+        val out = runCatching { open("wt") }.getOrNull() ?: open("w")
+        out?.use { stream ->
+            opened = true
+            file.inputStream().use { it.copyTo(stream) }
+        } != null
+    }.getOrDefault(false)
+    if (!ok && opened) runCatching(delete)
+    return ok
+}

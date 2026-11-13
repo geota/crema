@@ -934,14 +934,14 @@ class LibraryController(
     fun writeFileToUri(uri: Uri, file: File) {
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
-                runCatching {
-                    // "wt": a provider that doesn't truncate on "w" would leave an
-                    // older, longer backup's tail, and its central directory, behind.
-                    app.contentResolver.openOutputStream(uri, "wt")?.use { out -> file.inputStream().use { it.copyTo(out) } } != null
-                }.getOrDefault(false).also { ok ->
+                try {
+                    copyBackupToDocument(
+                        file,
+                        open = { mode -> app.contentResolver.openOutputStream(uri, mode) },
+                        delete = { android.provider.DocumentsContract.deleteDocument(app.contentResolver, uri) },
+                    )
+                } finally {
                     releaseBackupFile(file)
-                    // No half-written document under a failure notice.
-                    if (!ok) runCatching { android.provider.DocumentsContract.deleteDocument(app.contentResolver, uri) }
                 }
             }
             notify(if (ok) "Backed up to file" else "Backup failed — couldn't write")
@@ -1100,12 +1100,23 @@ class LibraryController(
 
     /** The backup as a temporary file ([buildBackupZipFile]), with what's in it. */
     suspend fun buildBackupZip(kind: BackupKind): BackupZip? {
-        // Never back up shots whose telemetry hasn't loaded yet (F10
-        // validation P1-2: the startup auto-backup ran during the load).
-        awaitSeries()
-        reportUnreadableSeries()
-        reportUnhealthyStores()
-        return buildBackupZipNow(kind)
+        // The cancel exists from here, so a Cancel tapped while the series
+        // still load isn't lost (#391 review).
+        val cancel = backupRuns.start(kind)
+        try {
+            // Never back up shots whose telemetry hasn't loaded yet (F10
+            // validation P1-2: the startup auto-backup ran during the load).
+            awaitSeries()
+            if (cancel.get()) {
+                notify("Backup cancelled: nothing was saved.")
+                return null
+            }
+            reportUnreadableSeries()
+            reportUnhealthyStores()
+            return buildBackupZipNow(kind, cancel)
+        } finally {
+            backupRuns.end(kind, cancel)
+        }
     }
 
     /** A store that couldn't be read this session isn't in a backup made now:
@@ -1138,12 +1149,16 @@ class LibraryController(
      * state under its [kind]. A cancel, a failure or a backup past the limits
      * keeps nothing.
      */
-    private suspend fun buildBackupZipNow(kind: BackupKind): BackupZip? {
-        val cancel = backupRuns.start(kind)
+    private suspend fun buildBackupZipNow(kind: BackupKind, cancel: java.util.concurrent.atomic.AtomicBoolean): BackupZip? {
+        // A build that finished as its caller was cancelled never reaches anyone
+        // who'd release it: release it here, so the sweep can take it (#391 review).
+        var built: BackupZip? = null
         return try {
-            snapshotThenBuild(::backupSnapshot, Dispatchers.Default) { snap -> streamBackupNow(snap, kind, cancel) }
+            snapshotThenBuild(::backupSnapshot, Dispatchers.Default) { snap -> streamBackupNow(snap, kind, cancel).also { built = it } }
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            built?.release()
+            throw c
         } finally {
-            backupRuns.end(kind, cancel)
             updateUi { it.copy(backupProgress = it.backupProgress - kind) }
         }
     }

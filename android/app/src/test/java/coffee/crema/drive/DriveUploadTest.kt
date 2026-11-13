@@ -28,6 +28,8 @@ class DriveUploadTest {
     private var giveLocation = true
     private var reportSize: String? = null
     private var omitSize = false
+    /** What `files.get?fields=size` answers: null is a reply without the size. */
+    private var getSize: String? = null
     private val requests = mutableListOf<Triple<String, String, ByteArray>>()
 
     private fun HttpExchange.respond(status: Int, body: String) {
@@ -49,6 +51,10 @@ class DriveUploadTest {
                 omitSize -> x.respond(200, """{"id":"f1","name":"b.crema.zip"}""")
                 else -> x.respond(200, """{"id":"f1","name":"b.crema.zip","size":"${reportSize ?: body.size}"}""")
             }
+        }
+        server.createContext("/drive/v3/files/") { x ->
+            requests += Triple(x.requestMethod, x.requestURI.toString(), ByteArray(0))
+            x.respond(200, getSize?.let { """{"size":"$it"}""" } ?: "{}")
         }
         server.start()
         driveApiRoot = "http://127.0.0.1:${server.address.port}"
@@ -87,8 +93,24 @@ class DriveUploadTest {
     }
 
     @Test
-    fun `a reply without the size is unverified, so a failed upload (#391 review)`() {
+    fun `a reply without the size asks Drive for it, and the upload checks out (#391 review)`() {
         omitSize = true
+        getSize = "100000"
+        val out = runBlocking { driveUploadBackup("tok", "b.crema.zip", file(), json) }
+        assertEquals("f1", out.id)
+        assertTrue(requests.last().second.contains("/drive/v3/files/f1?fields=size"), "it asked: ${requests.last().second}")
+    }
+
+    @Test
+    fun `when Drive still won't say the size, the upload is unverified, so failed (#391 review)`() {
+        omitSize = true
+        assertFailsWith<IOException> { runBlocking { driveUploadBackup("tok", "b.crema.zip", file(), json) } }
+    }
+
+    @Test
+    fun `a size Drive gives on asking that is short is a failed upload`() {
+        omitSize = true
+        getSize = "99"
         assertFailsWith<IOException> { runBlocking { driveUploadBackup("tok", "b.crema.zip", file(), json) } }
     }
 

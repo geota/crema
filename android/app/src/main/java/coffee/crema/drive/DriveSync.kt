@@ -611,8 +611,15 @@ class DriveSync(
             persist { it.copy(lastAutoBackupAtMs = now()) }
             val built = backupZip(true) ?: return@launch
             // Nothing changed since the last upload that landed: no new copy
-            // (#311), as long as Drive still holds one of this device's.
-            if (built.contentHash != null && built.contentHash == persisted.lastAutoBackupHash && holdsOwnCopy(tokens, tag)) {
+            // (#311), as long as Drive still holds one of this device's. The
+            // check can be cancelled: the file is released either way (#391 review).
+            val unchanged = try {
+                built.contentHash != null && built.contentHash == persisted.lastAutoBackupHash && holdsOwnCopy(tokens, tag)
+            } catch (c: CancellationException) {
+                built.release()
+                throw c
+            }
+            if (unchanged) {
                 built.release()
                 log("Automatic Drive backup skipped: nothing changed since the last one")
                 return@launch
