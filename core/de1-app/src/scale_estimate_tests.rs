@@ -810,7 +810,7 @@ fn a_pour_heard_as_heating_is_not_preheat() {
             } else {
                 // Heating: samples with no flow.
                 let mut still = sample((t / 8) as u16);
-                still[4..6].copy_from_slice(&[0, 0]);
+                still[2..6].copy_from_slice(&[0, 0, 0, 0]);
                 core.on_notification(Source::De1ShotSample, &still, t);
             }
             if tare_at.is_some_and(|at| t >= at) {
@@ -872,4 +872,104 @@ fn a_flows_tail_into_heating_is_not_the_pour() {
         reading: Some(cup + 6.0),
     });
     near_target(stop, StopReason::Weight);
+}
+
+/// A shot sample with this group pressure, bar, and flow, ml/s.
+fn sample_at(t: u64, bar: f32, ml_s: f32) -> [u8; 19] {
+    let mut s = sample((t / 8) as u16);
+    s[2..4].copy_from_slice(&((bar * 4096.0) as u16).to_be_bytes());
+    s[4..6].copy_from_slice(&((ml_s * 4096.0) as u16).to_be_bytes());
+    s
+}
+
+/// REVIEW-404 M3, in the captures' shape: espresso goes from Idle straight
+/// to FinalHeating, 5.5 s of it, whose samples report about 2 ml/s at 0 bar
+/// while nothing reaches the cup. A spoon or a light cup set down 3 s in is
+/// still preheat's: the step detector and the late-cup re-tare see it, and
+/// the shot stops at a true 36 g. Counting FinalHeating's flow as the pour
+/// (no pressure floor) ended preheat 0.4 s in: the spoon read as coffee
+/// (28.9 g) and the cup stopped the shot at once.
+#[test]
+fn final_heatings_flow_is_still_preheat() {
+    for load in [6.0f32, 40.0] {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_test_profile_yield(Some(36.0));
+        core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
+        core.on_notification(Source::De1State, &[2, 0], 10);
+        core.on_notification(Source::De1State, &[4, 2], 100);
+        let (mut cup, mut zero, mut tare_at) = (0.0f32, 0.0f32, None::<u64>);
+        let mut stops = vec![];
+        for t in (200..90_000).step_by(100) {
+            if t == 5_600 {
+                core.on_notification(Source::De1State, &[4, 5], t);
+            }
+            if t.is_multiple_of(200) {
+                let s = match t {
+                    ..5_600 if t == 200 => sample_at(t, 0.0, 0.14),
+                    ..5_600 => sample_at(t, 0.0, 2.0),
+                    _ => sample_at(t, 6.0, 2.0),
+                };
+                stops.extend(stop_reasons(&core.on_notification(
+                    Source::De1ShotSample,
+                    &s,
+                    t,
+                )));
+            }
+            if t >= 5_600 {
+                cup += 0.2;
+            }
+            let gross = cup + if t >= 3_000 { load } else { 0.0 };
+            if tare_at.is_some_and(|at| t >= at) {
+                zero = gross;
+                tare_at = None;
+            }
+            let o = core.on_notification(Source::ScaleWeight, &bookoo(gross - zero), t + 1);
+            if o.commands
+                .iter()
+                .any(|c| matches!(c, Command::WriteScale { .. }))
+            {
+                tare_at = Some(t + 300);
+            }
+            stops.extend(stop_reasons(&o));
+            if !stops.is_empty() {
+                break;
+            }
+        }
+        let cup_true = cup;
+        assert!(
+            (33.0..39.0).contains(&cup_true),
+            "{load} g set down: stopped at a true {cup_true} g ({stops:?})"
+        );
+    }
+}
+
+/// A shot-start tare still waiting (the scale never settled in preheat) when
+/// the samples show the pour, with the Preinfusion report lost: it fires on
+/// that sample, as at first flow, before the cup gains weight.
+#[test]
+fn a_waiting_shot_start_tare_fires_when_the_samples_show_the_pour() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    core.set_test_profile_yield(Some(36.0));
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 2], 100);
+    let mut tared_at = None;
+    for t in (200..4_000).step_by(100) {
+        // A ringing scale: four readings never sit within 1 g.
+        let g = if (t / 100) % 2 == 0 { 1.5 } else { -1.5 };
+        let o = core.on_notification(Source::ScaleWeight, &bookoo(g), t);
+        assert!(o.commands.is_empty(), "no tare on an unsettled reading");
+        // FinalHeating to 2 s, then a pour the state never reports.
+        let bar = if t >= 2_000 { 2.0 } else { 0.0 };
+        let o = core.on_notification(Source::De1ShotSample, &sample_at(t, bar, 2.0), t + 1);
+        if o.commands
+            .iter()
+            .any(|c| matches!(c, Command::WriteScale { .. }))
+        {
+            tared_at.get_or_insert(t);
+        }
+    }
+    assert_eq!(tared_at, Some(2_100), "on the second sample of the pour");
 }

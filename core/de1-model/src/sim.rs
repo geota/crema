@@ -31,9 +31,11 @@ pub struct De1Params {
     /// A newer firmware names espresso's flowing substates with a byte this
     /// app doesn't know, so the core hears Heating, then `Unknown`.
     pub unknown_pour: bool,
-    /// How long espresso heats before it stabilises, ms. A real preheat can
-    /// run for seconds, long enough for a cup or a spoon to land after the
-    /// tare and for the late-cup re-tare to fire (#389).
+    /// Espresso's preheat before its last 500 ms, ms: a second of Heating,
+    /// then FinalHeating for the rest and those 500 ms. A real preheat can run
+    /// for seconds, long enough for a cup or a spoon to land after the tare
+    /// and for the late-cup re-tare to fire (#389); the capture on disk has
+    /// 5.5 s of FinalHeating.
     pub heating_ms: u64,
 }
 
@@ -62,6 +64,15 @@ const FLUSH_MS: u64 = 10_000;
 /// [`ENDING_FLOW`]. Both captures on disk show it: the pump is off, but the
 /// reported flow reaches 4 ml/s, so reported flow alone can't prove water.
 const ENDING_RAMP: f32 = 1.15;
+/// The flow FinalHeating reports, ml/s, at 0 bar with no water reaching the
+/// cup: 1 to 3.4 ml/s in both captures.
+const FINAL_HEATING_FLOW: f32 = 2.0;
+/// A pour holds 0 bar this long, ms, then builds at [`PRESSURE_RAMP_BAR_S`]
+/// to [`PRESSURE_BAR`]: both captures stay under 1 bar for their first 4 to
+/// 6 s of flow and reach about 6 bar.
+const PRESSURE_AFTER_MS: u64 = 3_000;
+const PRESSURE_RAMP_BAR_S: f32 = 2.0;
+const PRESSURE_BAR: f32 = 6.0;
 const ENDING_FLOW: f32 = 4.0;
 /// After `Ending`, samples keep coming while `group_flow` decays with this time
 /// constant, ms. The 2026-05-17 capture crosses 0.3 ml/s about 2.3 s into Idle.
@@ -83,6 +94,8 @@ pub struct SimDe1 {
     /// last one ending returns the machine to Idle.
     script: VecDeque<(SubState, u64)>,
     in_mode_ms: u64,
+    /// Time in Preinfusion or Pouring this flow, ms.
+    flowing_ms: u64,
     poured_ml: f32,
     settings: Option<ShotSettings>,
     ignored_left: u32,
@@ -101,6 +114,7 @@ impl SimDe1 {
             frame: 0,
             script: VecDeque::new(),
             in_mode_ms: 0,
+            flowing_ms: 0,
             poured_ml: 0.0,
             settings: None,
             ignored_left: params.idle_ignored,
@@ -121,6 +135,21 @@ impl SimDe1 {
         match self.sub {
             SubState::Preinfusion | SubState::Pouring => 2.0,
             SubState::Ending => 0.5,
+            _ => 0.0,
+        }
+    }
+
+    /// The group pressure it reports, bar. Both captures pour at 0 bar for
+    /// their first few seconds, while the headspace fills, then build to
+    /// about 6 bar; preheat, FinalHeating's flow included, is 0 bar.
+    #[must_use]
+    pub fn group_pressure(&self) -> f32 {
+        match self.sub {
+            SubState::Preinfusion | SubState::Pouring => {
+                #[allow(clippy::cast_precision_loss)]
+                let building_s = self.flowing_ms.saturating_sub(PRESSURE_AFTER_MS) as f32 / 1000.0;
+                (PRESSURE_RAMP_BAR_S * building_s).min(PRESSURE_BAR)
+            }
             _ => 0.0,
         }
     }
@@ -168,13 +197,18 @@ impl SimDe1 {
         self.state = state;
         self.frame = 0;
         self.in_mode_ms = 0;
+        self.flowing_ms = 0;
         self.poured_ml = 0.0;
         self.winding_down = false;
         self.script = match state {
             MachineState::Espresso => {
+                let heating = self.params.heating_ms.min(1_000);
                 let mut s = VecDeque::from([
-                    (SubState::Heating, self.params.heating_ms),
-                    (SubState::Stabilising, 500),
+                    (SubState::Heating, heating),
+                    (
+                        SubState::FinalHeating,
+                        self.params.heating_ms - heating + 500,
+                    ),
                 ]);
                 let pour = FRAME_MS * u64::from(FRAMES);
                 if self.params.preinfusion {
@@ -285,6 +319,9 @@ impl SimDe1 {
         let dt_ms = dt_ms as f32;
         self.group_flow = match self.sub {
             SubState::Preinfusion | SubState::Pouring => self.flow_ml_s(),
+            // Both captures: FinalHeating runs water through the group at
+            // 0 bar, reported at 1 to 3.4 ml/s, and none reaches the cup.
+            SubState::FinalHeating => FINAL_HEATING_FLOW,
             SubState::Ending => (self.group_flow + ENDING_RAMP * dt_ms / 1000.0).min(ENDING_FLOW),
             _ => {
                 let decayed = self.group_flow * (-dt_ms / TAIL_TAU_MS).exp();
@@ -298,6 +335,9 @@ impl SimDe1 {
             return 0.0;
         }
         self.in_mode_ms += dt_ms;
+        if matches!(self.sub, SubState::Preinfusion | SubState::Pouring) {
+            self.flowing_ms += dt_ms;
+        }
         #[allow(clippy::cast_precision_loss)]
         let delivered = self.flow_ml_s() * dt_ms as f32 / 1000.0;
         self.poured_ml += delivered;
@@ -346,6 +386,9 @@ impl SimDe1 {
         p[0..2].copy_from_slice(&sample_time.to_be_bytes());
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let flow = (self.group_flow * 4096.0) as u16;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let pressure = (self.group_pressure() * 4096.0) as u16;
+        p[2..4].copy_from_slice(&pressure.to_be_bytes());
         p[4..6].copy_from_slice(&flow.to_be_bytes());
         p[17] = self.frame;
         p

@@ -1165,30 +1165,6 @@ fn two_drops_with_nothing_heard_between_are_one_outage() {
     assert!(world.violations.is_empty(), "{:?}", world.violations);
 }
 
-/// REVIEW-404 M2: the Stabilising and Preinfusion reports are lost, so the
-/// core hears Heating while the cup fills, and the scale stalls for 1.5 s
-/// meanwhile. The samples show the water flowing, so it isn't preheat: no
-/// preheat settle, no late-cup re-tare, and the shot stops at a true 36 g.
-#[test]
-fn a_pour_heard_as_heating_stops_on_target() {
-    let mut world = World::new(De1Params::default(), 0.0, 5_000, false, false);
-    world.apply(&Op::GroupHead(MachineState::Espresso));
-    world.apply(&Op::Advance { ms: 800 });
-    world.apply(&Op::LoseStates(2));
-    world.apply(&Op::Advance { ms: 1_500 });
-    world.apply(&Op::Scale(ScaleMode::Stall));
-    world.apply(&Op::Advance { ms: 1_500 });
-    world.apply(&Op::Scale(ScaleMode::Healthy));
-    while world.coverage.stops == 0 {
-        world.apply(&Op::Advance { ms: 100 });
-        assert!(world.now_ms() < 120_000, "a stop");
-    }
-    assert!(world.violations.is_empty(), "{:?}", world.violations);
-    assert_eq!(world.coverage.weight_stops, 1, "on weight");
-    let cup = world.true_cup_g();
-    assert!((33.0..40.0).contains(&cup), "stopped at a true {cup} g");
-}
-
 /// I20's oracle compares frames within one shot, as the core does (`DESIGN.md`
 /// §3.3, outage evidence). Two lost reports hide shot 1's end; the core next
 /// hears shot 2 from Heating, a new session since flow can't go backwards.

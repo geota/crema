@@ -166,6 +166,13 @@ const UNIT_RECOVERY_THROTTLE: Duration = Duration::from_millis(500);
 /// reading carries the cup's mass and the weight stop would fire
 /// nonsensically, so SAW is suppressed for the rest of the shot.
 const UNTARED_CUP_THRESHOLD_G: f32 = 50.0;
+/// The group pressure, bar, that a shot sample needs, beside the flow proof,
+/// to count as the pour (REVIEW-404 M3). Both captures show FinalHeating
+/// flowing up to 3.4 ml/s at 0.00 bar, and pours crossing 1 bar after 4 to
+/// 6 s of filling the headspace, well before the cup gains weight.
+/// Provisional: tune on H-captures across profiles. A pour that stays under
+/// it is only left to the state's word, as before.
+const SAMPLE_FLOW_BAR: f32 = 1.0;
 /// How long after first flow the untared-cup guard watches.
 const UNTARED_CUP_WINDOW: Duration = Duration::from_secs(3);
 /// Stability band for the guard's virtual-zero settle: consecutive readings
@@ -3857,8 +3864,11 @@ impl CremaCore {
         // Proof of flow counts before anything this sample sends.
         self.note_flow_proof(sample.group_flow);
         // Two in a row, as for the retry's proof of flow, and only once the
-        // tail of an earlier flow has died.
-        let flowing = sample.group_flow >= de1_domain::stop::FLOW_PROOF_ML_S;
+        // tail of an earlier flow has died. With pressure too: FinalHeating
+        // runs 1 to 3.4 ml/s through the group at 0 bar with nothing reaching
+        // the cup (REVIEW-404 M3).
+        let flowing = sample.group_flow >= de1_domain::stop::FLOW_PROOF_ML_S
+            && sample.group_pressure >= SAMPLE_FLOW_BAR;
         self.sample_flow_run = match self.sample_flow_run {
             _ if !flowing => Some(0),
             Some(run) => Some(run.saturating_add(1)),
