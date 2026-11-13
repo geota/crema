@@ -10,9 +10,6 @@ import { blankBean } from './model';
 
 const core = {
 	setActiveProfile: vi.fn(async (_json: string | undefined) => {}),
-	setWeightTargetDisabled: vi.fn(async () => {}),
-	setProfileTargetWeight: vi.fn(async () => {}),
-	setProfileVolumeLimit: vi.fn(async () => {}),
 	stopTargetsProjection: vi.fn(async () => ({
 		armed: false,
 		weight: null,

@@ -17,7 +17,7 @@ pub(super) fn espresso(target: f32) -> CremaCore {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(target));
+    core.set_test_profile_yield(Some(target));
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
     core.on_notification(Source::De1State, &[2, 0], 10);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 50);
@@ -184,7 +184,7 @@ fn a_bump_never_opens_the_gate() {
 #[test]
 fn a_passed_limit_never_rearms_under_lost() {
     let mut core = espresso(36.0);
-    core.set_profile_volume_limit(Some(36.0));
+    core.set_test_volume_limit(Some(36.0));
     let mut pour = Pour::from(100, 20.0);
     let stop = run(&mut core, &mut pour, 90_000, lost_at(20.0));
     near_target(stop, StopReason::EstimatedWeight);
@@ -525,8 +525,8 @@ fn auto_tare_off_shot(load: f32) -> (CremaCore, Option<(StopReason, f32)>) {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
-    core.set_profile_volume_limit(Some(40.0));
+    core.set_test_profile_yield(Some(36.0));
+    core.set_test_volume_limit(Some(40.0));
     core.set_max_shot_duration(Some(60.0));
     core.on_notification(Source::ScaleWeight, &bookoo(load), 0);
     core.on_notification(Source::De1State, &[2, 0], 10);
@@ -582,7 +582,7 @@ fn an_untared_cup_with_no_limits_stops_at_the_backstop() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::ScaleWeight, &bookoo(35.0), 0);
     core.on_notification(Source::De1State, &[2, 0], 10);
     core.on_notification(Source::De1State, &[4, 5], 100);
@@ -610,7 +610,7 @@ fn preheat_then_flow(
 ) -> (CremaCore, Vec<u64>, Vec<f32>) {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
     core.on_notification(Source::De1State, &[2, 0], 10);
     core.on_notification(Source::De1State, &[4, 1], 100);
@@ -708,4 +708,48 @@ fn a_hand_lifted_in_preheat_leaves_the_zero_quietly() {
         reading: Some(cup),
     });
     near_target(stop, StopReason::Weight);
+}
+
+/// A weight stop the machine honours, its Idle, and the first drips: the
+/// shot is in its post-shot settle. Returns the clock and the cup's weight.
+pub(super) fn honoured_stop_into_settle(core: &mut CremaCore) -> (u64, f32) {
+    let mut pour = Pour::from(100, 10.0);
+    let stop = run(core, &mut pour, 90_000, |_, cup| Step {
+        sample: true,
+        reading: Some(cup),
+    });
+    assert_eq!(stop.map(|s| s.0), Some(StopReason::Weight));
+    let (t, cup) = (pour.t, pour.cup_g());
+    core.on_notification(Source::De1State, &[4, 6], t + 100);
+    core.on_notification(Source::De1State, &[2, 0], t + 300);
+    core.on_notification(Source::ScaleWeight, &bookoo(cup + 0.4), t + 400);
+    core.on_notification(Source::ScaleWeight, &bookoo(cup + 0.8), t + 500);
+    assert!(core.post_shot_settle.is_some());
+    (t + 500, cup + 0.8)
+}
+
+/// A settle that runs its course trains the drip model; one a Disconnect cut
+/// short (#320) measured only part of the drip, so it never does (REVIEW-399
+/// S1).
+#[test]
+fn a_settle_cut_short_by_a_reset_never_trains_the_drip_model() {
+    let mut settled = espresso(36.0);
+    let before = settled.saw_model_json();
+    let (t, cup) = honoured_stop_into_settle(&mut settled);
+    for at in (t + 100..t + 4_000).step_by(100) {
+        settled.on_notification(Source::ScaleWeight, &bookoo(cup + 1.0), at);
+        settled.on_tick(at);
+    }
+    assert!(settled.post_shot_settle.is_none());
+    assert_ne!(settled.saw_model_json(), before, "a full settle learns");
+
+    let mut cut = espresso(36.0);
+    honoured_stop_into_settle(&mut cut);
+    let o = cut.reset();
+    assert!(
+        o.events
+            .iter()
+            .any(|e| matches!(e, Event::ShotCompleted { .. }))
+    );
+    assert_eq!(cut.saw_model_json(), before, "no drip learning");
 }

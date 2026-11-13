@@ -55,7 +55,7 @@ pub(super) fn stop_reasons(o: &CoreOutput) -> Vec<StopReason> {
 fn tared_shot() -> CremaCore {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
     core.on_notification(Source::De1State, &[2, 0], 10);
     core.on_notification(Source::De1State, &[4, 5], 200);
@@ -91,7 +91,7 @@ fn pour(
 #[test]
 fn a_scale_lost_before_the_cup_had_weight_stops_at_the_backstop() {
     let mut core = tared_shot();
-    core.set_profile_volume_limit(Some(36.0));
+    core.set_test_volume_limit(Some(36.0));
     core.disconnect_scale();
     assert_eq!(core.weight_stop_blocked_by(), Some("scale-lost"));
     let stops = pour(&mut core, 400, 60_000, |_| None);
@@ -119,7 +119,7 @@ fn a_stale_scale_arms_no_backstop_and_shows_nothing() {
 #[test]
 fn a_scale_gap_returns_to_trusted_on_the_next_reading() {
     let mut core = tared_shot();
-    core.set_profile_volume_limit(Some(36.0));
+    core.set_test_volume_limit(Some(36.0));
     let stops = pour(&mut core, 400, 1_600, |_| None);
     assert!(stops.is_empty());
     assert_eq!(core.stop_targets_projection().1.weight, None);
@@ -134,15 +134,15 @@ fn a_scale_gap_returns_to_trusted_on_the_next_reading() {
 fn an_unseen_shot_with_no_limits_stops_at_the_backstop() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::De1State, &[4, 5], 0);
     assert_eq!(core.stop_targets_projection().1.volume, Some(114.0));
     let stops = pour(&mut core, 100, 60_000, |_| Some(250.0));
     assert_eq!(stops.first().map(|s| s.0), Some(StopReason::Volume));
     // With a limit set, the limit stands instead.
     let mut core = CremaCore::new();
-    core.set_profile_target_weight(Some(36.0));
-    core.set_profile_volume_limit(Some(40.0));
+    core.set_test_profile_yield(Some(36.0));
+    core.set_test_volume_limit(Some(40.0));
     core.on_notification(Source::De1State, &[4, 5], 0);
     assert_eq!(core.stop_targets_projection().1.volume, Some(40.0));
 }
@@ -154,7 +154,7 @@ fn an_untared_cup_skips_no_step() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     let mut p = de1_domain::cold_maintenance_profile();
     p.steps[0].weight = Some(3.0);
     let s = p.steps[0].clone();
@@ -290,7 +290,7 @@ fn the_hot_water_volume_leg_stands_down_when_the_packet_holds_v() {
 fn unit_recovery_frames_are_alive_but_never_fresh() {
     let mut core = CremaCore::new();
     core.connect_scale("HIROIA JIMMY", &[]);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     let mut ounces = [0u8; 16];
     ounces[0] = 0x09;
     let mut events = vec![];
@@ -340,7 +340,7 @@ fn hot_water_with_no_armed_weight_stop_keeps_its_volume_leg() {
 fn a_sleeping_hds_in_a_flowing_shot_reaches_the_dead_timeout() {
     let mut core = CremaCore::new();
     core.connect_scale("Decent Scale", &[]);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(
         Source::ScaleWeight,

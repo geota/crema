@@ -43,7 +43,7 @@ fn first_stop(
 fn heating_then_an_unknown_substate_stops_at_the_target() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
     core.on_notification(Source::De1State, &[2, 0], 10);
     core.on_notification(Source::De1State, &[4, 1], 100);
@@ -237,7 +237,7 @@ fn unknown_then_named(core: &mut CremaCore, named: u64, to: u64) -> Option<(Stop
 #[test]
 fn a_named_pour_after_an_unknown_start_re_anchors_the_volume_limit() {
     let mut core = CremaCore::new();
-    core.set_profile_volume_limit(Some(36.0));
+    core.set_test_volume_limit(Some(36.0));
     let (reason, at, _) = unknown_then_named(&mut core, 21_000, 90_000).expect("a stop");
     assert_eq!(reason, StopReason::Volume);
     // 36 ml at 1.6 ml/s is about 22 s of real pour.
@@ -255,7 +255,7 @@ fn the_backstop_counts_the_unknown_span_too() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(
         Source::ScaleWeight,
         &crate::scale_trust_tests::bookoo(0.0),

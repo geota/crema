@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn sweep_writes_hot_water_target() {
         let mut core = idle_core();
-        core.set_profile_target_weight(Some(50.0));
+        core.set_test_profile_yield(Some(50.0));
         let ratio = de1_domain::HotWaterDose::default();
         let w = packets(&core.connect_sweep(&with_dose(ratio), 100));
         assert_eq!(

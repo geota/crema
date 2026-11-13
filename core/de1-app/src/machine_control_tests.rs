@@ -128,7 +128,7 @@ fn tares(o: &CoreOutput) -> usize {
 fn core_with_cup() -> CremaCore {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::ScaleWeight, &bookoo(20.0), 0);
     core
 }
@@ -425,7 +425,7 @@ fn the_link_records_when_an_outage_began() {
 #[test]
 fn p4_a_scale_arriving_after_pouring_begins_stops_at_the_target() {
     let mut core = CremaCore::new();
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     // Default settings: max shot 0 = None; no volume limit.
     core.on_notification(Source::De1State, &[4, 1], 0);
     core.on_notification(Source::De1State, &[4, 5], 100);
@@ -459,8 +459,8 @@ fn p4_a_scale_arriving_after_pouring_begins_stops_at_the_target() {
 fn p5_a_silent_scale_leaves_the_volume_limit_live() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_profile_target_weight(Some(36.0));
-    core.set_profile_volume_limit(Some(40.0));
+    core.set_test_profile_yield(Some(36.0));
+    core.set_test_volume_limit(Some(40.0));
     core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let mut stops = vec![];
@@ -491,7 +491,7 @@ fn p5_a_silent_scale_leaves_the_volume_limit_live() {
 }
 
 fn run_shot(core: &mut CremaCore) -> u64 {
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::De1State, &[4, 1], 0);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 10);
     core.on_notification(Source::ScaleWeight, &bookoo(0.0), 20);
@@ -510,38 +510,9 @@ fn run_shot(core: &mut CremaCore) -> u64 {
     t
 }
 
-/// P6/P7: a link teardown in the settle window, a scale drop near the end.
-/// Flips in PR 11: the shot is kept.
-#[test]
-fn p6_reset_in_post_shot_settle_loses_the_shot() {
-    let mut core = CremaCore::new();
-    core.connect_scale("BOOKOO_SC", &[]);
-    let t = run_shot(&mut core);
-    let o = core.on_notification(Source::De1State, &[2, 0], t);
-    let done = o
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::ShotCompleted { .. }));
-    let settling = core.post_shot_settle.is_some();
-    let o2 = core.reset();
-    let done2 = o2
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::ShotCompleted { .. }));
-    assert!(settling && !done && !done2 && core.pending_shot.is_none());
-}
-
-/// Flips in PR 11: the yield is kept.
-#[test]
-fn p7_scale_drop_in_settle_wipes_yield() {
-    let mut core = CremaCore::new();
-    core.connect_scale("BOOKOO_SC", &[]);
-    let t = run_shot(&mut core);
-    core.on_notification(Source::De1State, &[2, 0], t);
-    core.disconnect_scale();
-    let o = core.on_tick(t + 3100);
-    let fw: Vec<_> = o
-        .events
+/// The `(final_weight, peak_weight)` of each `ShotCompleted` in `o`.
+fn completed_weights(o: &CoreOutput) -> Vec<(Option<f32>, Option<f32>)> {
+    o.events
         .iter()
         .filter_map(|e| match e {
             Event::ShotCompleted {
@@ -551,8 +522,107 @@ fn p7_scale_drop_in_settle_wipes_yield() {
             } => Some((*final_weight, *peak_weight)),
             _ => None,
         })
-        .collect();
-    assert_eq!(fw, vec![(None, None)]);
+        .collect()
+}
+
+/// The weights a shot run by `run_shot` completes with, settle undisturbed.
+fn settled_weights() -> (Option<f32>, Option<f32>) {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    let t = run_shot(&mut core);
+    core.on_notification(Source::De1State, &[2, 0], t);
+    let w = completed_weights(&core.on_tick(t + 3100));
+    assert_eq!(w.len(), 1);
+    assert!(w[0].0.is_some_and(|g| g > 20.0), "{w:?}");
+    w[0]
+}
+
+/// P6: a link teardown (a user Disconnect) in the settle window used to lose
+/// the shot. Fixed in PR 11: the reset finalizes the settle with the weight
+/// so far, and the stored shot survives the rebuild.
+#[test]
+fn p6_reset_in_post_shot_settle_keeps_the_shot() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    let t = run_shot(&mut core);
+    let o = core.on_notification(Source::De1State, &[2, 0], t);
+    assert!(completed_weights(&o).is_empty());
+    assert!(core.post_shot_settle.is_some());
+    let o = core.reset();
+    assert_eq!(completed_weights(&o), vec![settled_weights()]);
+    assert!(core.post_shot_settle.is_none());
+    let shot = core.take_stored_shot(ShotCaptureContext::default());
+    assert_eq!(
+        shot.and_then(|s| s.metadata.yield_out),
+        settled_weights().0,
+        "the stored shot keeps its yield"
+    );
+}
+
+/// P7: a scale drop in the settle window used to wipe the yield. Fixed in
+/// PR 11: the shot completes on the settle's deadline with its weights.
+#[test]
+fn p7_scale_drop_in_settle_keeps_yield() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    let t = run_shot(&mut core);
+    core.on_notification(Source::De1State, &[2, 0], t);
+    core.disconnect_scale();
+    let o = core.on_tick(t + 3100);
+    assert_eq!(completed_weights(&o), vec![settled_weights()]);
+}
+
+/// A scale drop mid-pour keeps the readings so far for the shot's yield.
+#[test]
+fn a_scale_drop_mid_pour_keeps_the_yield_so_far() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    let t = run_shot(&mut core);
+    core.disconnect_scale();
+    let o = core.on_notification(Source::De1State, &[2, 0], t);
+    let w = completed_weights(&o);
+    assert_eq!(w.len(), 1, "no scale, so no settle");
+    assert!(
+        w[0].0.is_some_and(|g| g > 20.0) && w[0].1.is_some(),
+        "{w:?}"
+    );
+}
+
+/// Outside a shot a scale drop still clears its peaks.
+#[test]
+fn a_scale_drop_between_shots_clears_the_peaks() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    let t = run_shot(&mut core);
+    core.on_notification(Source::De1State, &[2, 0], t);
+    core.on_tick(t + 3100);
+    core.shot_metrics.peak_weight = Some(5.0);
+    core.disconnect_scale();
+    assert_eq!(core.shot_metrics.peak_weight, None);
+}
+
+/// The Disconnect prompt's getter (#320): asks only while the machine pours a
+/// session this core drives.
+#[test]
+fn disconnect_asks_first_only_while_pouring() {
+    let mut core = CremaCore::new();
+    assert!(!core.disconnect_needs_confirm(), "no session");
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    assert!(!core.disconnect_needs_confirm(), "idle");
+    core.on_notification(Source::De1State, &[4, 1], 10);
+    assert!(!core.disconnect_needs_confirm(), "heating");
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    assert!(core.disconnect_needs_confirm(), "pouring");
+    core.set_read_only(true);
+    assert!(
+        !core.disconnect_needs_confirm(),
+        "a mirror's stops are the hub's"
+    );
+    core.set_read_only(false);
+    core.on_notification(Source::De1State, &[2, 0], 30);
+    assert!(!core.disconnect_needs_confirm(), "the shot ended");
+    core.on_notification(Source::De1State, &[5, 5], 40);
+    assert!(core.disconnect_needs_confirm(), "steaming");
 }
 
 /// P9: an unknown substate byte used to drop the whole state report.
@@ -573,15 +643,37 @@ fn p9_unknown_substate_still_ends_the_shot() {
 // P11 flipped in PR 8: `scale_estimate_tests::a_returning_scale_far_over_its_last_is_refused`
 // and `a_returning_scale_within_reach_is_adopted`.
 
-/// D1: the web pushes this pair for a profile with yieldOut 0 + a QC yield.
-/// Flips in PR 10: `weight == 36`.
+/// A profile with `yield_out` 0 at its id, and `dial` as its Quick Controls
+/// yield, as the desired profile.
+fn no_target_profile(core: &mut CremaCore, id: &str, dial: Option<f32>) {
+    let profile = de1_domain::CremaProfile {
+        id: id.to_owned(),
+        yield_out: 0.0,
+        ..de1_domain::blank_profile(&de1_domain::BrewDefaults::default())
+    };
+    let qc = de1_domain::BrewOverrides {
+        yield_g: dial,
+        ..Default::default()
+    };
+    core.set_desired_profile(Some(&profile), &qc, Duration::ZERO);
+}
+
+/// D1: the web pushed the dot off for a profile with `yield_out` 0, so its
+/// Quick Controls yield never stopped the shot, while Android's did (#318).
+/// Fixed in PR 10: the core turns the dot back on for each new profile, and
+/// both shells stop at the dialled 36 g.
 #[test]
-fn d1_web_disabled_flag_beats_qc_yield() {
+fn d1_a_no_target_profile_stops_at_its_dialled_yield() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
-    core.set_weight_target_disabled(true); // profile.yieldOut <= 0 (web only)
-    core.set_shot_target_weight(Some(36.0));
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
+    core.set_weight_target_disabled(true); // the dot, off on the last profile
+    no_target_profile(&mut core, "no-target", Some(36.0));
+    assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
+    // With no dial it has no target at all.
+    no_target_profile(&mut core, "no-target", None);
     assert_eq!(core.stop_targets_projection().1.weight, None);
+    assert_eq!(core.effective_target_weight(), None);
 }
 
 /// P8: a step-weight skip used to repeat with no telemetry since the first
@@ -801,8 +893,8 @@ fn review_a_lost_scale_never_rearms_a_passed_volume_limit() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
-    core.set_profile_volume_limit(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
+    core.set_test_volume_limit(Some(36.0));
     core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let mut t = 100;
@@ -844,7 +936,7 @@ fn review_owed_stop_survives_a_25_s_outage() {
     let mut core = CremaCore::new();
     core.connect_scale("BOOKOO_SC", &[]);
     core.set_auto_tare(false);
-    core.set_profile_target_weight(Some(36.0));
+    core.set_test_profile_yield(Some(36.0));
     core.on_notification(Source::De1State, &[2, 0], 0);
     core.on_notification(Source::De1State, &[4, 5], 0);
     let mut t = 0;

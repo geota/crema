@@ -759,7 +759,7 @@ fn a_hand_lifting_off_an_empty_cup_leaves_the_zero_alone() {
     );
     for op in [
         Op::Advance { ms: 200 },
-        Op::AppStart { yield_g: 18.0 },
+        Op::AppStart { yield_g: 36.0 },
         Op::Advance { ms: 500 },
         Op::Scale(ScaleMode::Stall),
         Op::Advance { ms: 5_900 },

@@ -666,12 +666,7 @@ impl CremaCore {
     /// The checks a group-head start skipped that applied.
     fn group_head_banner(&self, out: &mut CoreOutput) {
         let mut notices = Vec::new();
-        let weight_target = self.shot_target_weight.or(self.profile_target_weight);
-        if self.stop_on_weight
-            && !self.weight_target_disabled
-            && weight_target.is_some()
-            && !self.scale_link().is_fresh()
-        {
+        if self.weight_intent().is_some() && !self.scale_link().is_fresh() {
             notices.push(StartCheck::NoScale.into());
         }
         if self.starter.settings.pre_flush {
@@ -1347,7 +1342,7 @@ mod tests {
         // No scale for a weight stop, the pre-flush, a profile upload pending.
         let mut core = connected(true);
         core.set_stop_on_weight(true);
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         let p = profile(36.0);
         let _ = core.set_desired_profile_settled(
             Some(&p),
@@ -1380,7 +1375,7 @@ mod tests {
     fn f16_7_an_app_start_or_a_mirror_shows_no_banner() {
         let mut core = connected(true);
         core.set_stop_on_weight(true);
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         let r = start(&mut core, &profile(36.0), 2_000);
         let _ = ack(&mut core, &r.output, 2_100);
         let _ = core.on_tick(2_600);

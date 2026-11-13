@@ -382,8 +382,8 @@ impl CremaCore {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
-        // A settling desired profile uploads at its deadline.
-        match (guard, self.profile_sync.settle_deadline()) {
+        // A settling or retrying desired profile uploads at its deadline.
+        match (guard, self.profile_sync.upload_deadline(self.clock)) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }

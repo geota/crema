@@ -558,14 +558,10 @@
 		() => paramSeed,
 		(key, value) => {
 			if (typeof value !== 'number') return;
+			// The yield needs no push of its own: it rides the overrides into the
+			// core's desired profile (the effect below), and the core takes the
+			// stop target from there (`DESIGN.md` §3.10), Reset included.
 			switch (key) {
-				case // Yield → the core's per-shot dial override. The core composes
-				// (dial > profile-recipe) at shot-start, so a QC bump on top of
-				// an active profile takes effect on the very next shot — GHC
-				// shots included.
-				'yield':
-					void app?.applyShotTargetWeight(value);
-					break;
 				case // Steam temp/time + the hot-water temperature share the one
 				// cuuid_0B packet with the hot-water dose — persist, then the
 				// app's one push sends them from the settings store (issue 14).
@@ -1076,23 +1072,14 @@
 	const yieldPct = $derived(shotWeight == null ? 0 : Math.min(100, shotWeight / p.yield * 100));
 
 	/**
-	 * Whether the per-shot weight target is engaged for the next / current
-	 * shot. Reseeds on every active-profile change to mirror the profile's
-	 * own intent: a profile with `yieldOut > 0` engages the target on
-	 * load; a profile with `yieldOut === 0` (or none active) leaves it
-	 * off. Reassigning via {@link onToggleYieldTarget} breaks the
-	 * `$derived` track until the next reseed, so per-shot flips persist
-	 * until the user activates a different profile.
+	 * Whether the per-shot weight target is engaged, from the core's
+	 * projection: the core turns it back on for each new profile (`DESIGN.md`
+	 * §3.10), so both shells agree on a profile with no yield of its own.
 	 */
-	let yieldTargetOn = $derived.by(() => (activeProfile?.yieldOut ?? 0) > 0);
-	/**
-	 * Flip the yield-target dot for the current shot. Pushes the inverse
-	 * to the core so SAW arming consults the same value next time
-	 * `ShotEvent::Started` fires (Crema-tap or GHC-tap).
-	 */
+	const yieldTargetOn = $derived(!(ui.stopTargets?.weightTargetDisabled ?? false));
+	/** Flip the yield-target dot; the core keeps it until another profile. */
 	function onToggleYieldTarget(): void {
-		yieldTargetOn = !yieldTargetOn;
-		void app?.applyWeightTargetDisabled(!yieldTargetOn);
+		void app?.applyWeightTargetDisabled(yieldTargetOn);
 	}
 
 	/**

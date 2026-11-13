@@ -2896,6 +2896,13 @@ impl CremaBridge {
         self.core().disconnect_scale();
     }
 
+    /// Whether a user Disconnect should ask first: the machine is pouring and
+    /// Crema's stops need this link (#320). See
+    /// [`de1_app::CremaCore::disconnect_needs_confirm`].
+    pub fn disconnect_needs_confirm(&self) -> bool {
+        self.core().disconnect_needs_confirm()
+    }
+
     /// Set the low-water warning threshold, ml (`None` = the 110 ml default,
     /// `0` = off); re-arms the warning. See `CremaCore::set_water_warn_ml`.
     pub fn set_water_warn_ml(&self, warn_ml: Option<f32>) {
@@ -3005,24 +3012,6 @@ impl CremaBridge {
     /// weight). The Scale page's "Reset peak" button.
     pub fn reset_scale_peaks(&self) {
         self.core().reset_scale_peaks();
-    }
-
-    /// Set the active profile's recipe target weight, in grams.
-    /// `None` (or a non-finite / non-positive value) means "no target."
-    pub fn set_profile_target_weight(&self, grams: Option<f32>) {
-        self.core().set_profile_target_weight(grams);
-    }
-
-    /// Set the per-shot dial override weight, in grams. `None` clears the
-    /// override (falls back to the profile recipe target).
-    pub fn set_shot_target_weight(&self, grams: Option<f32>) {
-        self.core().set_shot_target_weight(grams);
-    }
-
-    /// Set the active profile's volume limit (SAV), in millilitres.
-    /// `None` means "no limit."
-    pub fn set_profile_volume_limit(&self, milliliters: Option<f32>) {
-        self.core().set_profile_volume_limit(milliliters);
     }
 
     /// Set the global maximum shot duration, in seconds. `None` means
@@ -4308,7 +4297,11 @@ mod tests {
         assert_eq!(t.volume_ml, Some(150.0));
         let bridge = CremaBridge::new();
         assert_eq!(bridge.hot_water_target_json(), "null");
-        bridge.set_profile_target_weight(Some(50.0));
+        let profile = de1_domain::CremaProfile {
+            yield_out: 50.0,
+            ..de1_domain::blank_profile(&de1_domain::BrewDefaults::default())
+        };
+        bridge.set_desired_profile(Some(serde_json::to_string(&profile).unwrap()), None, 0);
         bridge.set_steam_hotwater_targets(
             r#"{"steamTempC":150,"steamTimeoutS":120,"hotWaterTempC":85,
                 "hotWater":{"mode":"ratio","timeS":30,"timeNoLimit":false,"volumeMl":150,"ratio":3}}"#

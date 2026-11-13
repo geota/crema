@@ -6,9 +6,9 @@ import coffee.crema.profiles.CremaProfile
  * Transient Quick-Controls brew override — the dose / yield / brew-temp the user
  * nudged in the Quick Controls sheet. NOT persisted to any profile (mirrors the
  * web shell's BrewParamState): it is baked into the NEXT shot's uploaded profile
- * at [MainViewModel.startShot] and cleared on profile switch / Reset. The yield
- * is also pushed to the core as the stop-at-weight target (web
- * `setShotTargetWeight`) by [MainViewModel.pushStopTargets], so SAW arms on it.
+ * at [MainViewModel.startShot] and cleared on profile switch / Reset. It rides
+ * into the core's desired profile, which the core takes the stop-at-weight
+ * target from (`DESIGN.md` §3.10), so SAW arms on its yield.
  */
 /**
  * The transient Quick-Controls brew override baked into the next shot's upload

@@ -2877,6 +2877,13 @@ impl CremaBridge {
         self.state().core.disconnect_scale();
     }
 
+    /// Whether a user Disconnect should ask first: the machine is pouring and
+    /// Crema's stops need this link (#320). See
+    /// `CremaCore::disconnect_needs_confirm`.
+    pub fn disconnect_needs_confirm(&self) -> bool {
+        self.state().core.disconnect_needs_confirm()
+    }
+
     /// Set the low-water warning threshold, ml (`undefined` = the 110 ml
     /// default, `0` = off); re-arms the warning. See
     /// `CremaCore::set_water_warn_ml`.
@@ -2972,24 +2979,6 @@ impl CremaBridge {
     /// weight). The Scale page's "Reset peak" button.
     pub fn reset_scale_peaks(&self) {
         self.state().core.reset_scale_peaks();
-    }
-
-    /// Set the active profile's recipe target weight, in grams.
-    /// `None` (or a non-finite / non-positive value) means "no target."
-    pub fn set_profile_target_weight(&self, grams: Option<f32>) {
-        self.state().core.set_profile_target_weight(grams);
-    }
-
-    /// Set the per-shot dial override weight, in grams. `None` clears the
-    /// override (falls back to the profile recipe target).
-    pub fn set_shot_target_weight(&self, grams: Option<f32>) {
-        self.state().core.set_shot_target_weight(grams);
-    }
-
-    /// Set the active profile's volume limit (SAV), in millilitres.
-    /// `None` means "no limit."
-    pub fn set_profile_volume_limit(&self, milliliters: Option<f32>) {
-        self.state().core.set_profile_volume_limit(milliliters);
     }
 
     /// Set the global maximum shot duration, in seconds. `None` means

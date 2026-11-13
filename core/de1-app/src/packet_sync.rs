@@ -154,7 +154,7 @@ impl CremaCore {
         Some(resolve_hot_water(
             &targets.hot_water,
             &HotWaterContext {
-                target_yield_g: self.effective_target_weight(),
+                target_yield_g: self.desired_target_yield(),
                 scale_operational: self.scale_operational(),
             },
             &HOT_WATER_FIRMWARE,
