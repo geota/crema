@@ -2896,6 +2896,13 @@ impl CremaBridge {
         self.core().disconnect_scale();
     }
 
+    /// Whether a user Disconnect should ask first: the machine is pouring and
+    /// Crema's stops need this link (#320). See
+    /// [`de1_app::CremaCore::disconnect_needs_confirm`].
+    pub fn disconnect_needs_confirm(&self) -> bool {
+        self.core().disconnect_needs_confirm()
+    }
+
     /// Set the low-water warning threshold, ml (`None` = the 110 ml default,
     /// `0` = off); re-arms the warning. See `CremaCore::set_water_warn_ml`.
     pub fn set_water_warn_ml(&self, warn_ml: Option<f32>) {

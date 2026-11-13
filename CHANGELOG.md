@@ -92,6 +92,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A Disconnect or scale drop as a shot ends keeps the shot** — disconnecting
+  the DE1 in the few seconds after a shot, while Crema waits for the last drips,
+  used to lose the shot, and a scale dropping then saved it with no yield. The
+  shot is now saved with the weight seen so far. A Disconnect while the machine
+  is pouring asks first: "The machine is pouring. Disconnect, and Crema's stops
+  won't run?". On the web, a Disconnect mid-shot no longer leaves that shot's
+  bean behind to bill the next shot's bag. Android and web.
 - **A shot finishing no longer undoes an edit made meanwhile** — a rating or note
   set while a shot assembled, a bag debit during a bean sync and a change while
   an import ran used to be overwritten by a copy read earlier. Each now lands on

@@ -510,38 +510,9 @@ fn run_shot(core: &mut CremaCore) -> u64 {
     t
 }
 
-/// P6/P7: a link teardown in the settle window, a scale drop near the end.
-/// Flips in PR 11: the shot is kept.
-#[test]
-fn p6_reset_in_post_shot_settle_loses_the_shot() {
-    let mut core = CremaCore::new();
-    core.connect_scale("BOOKOO_SC", &[]);
-    let t = run_shot(&mut core);
-    let o = core.on_notification(Source::De1State, &[2, 0], t);
-    let done = o
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::ShotCompleted { .. }));
-    let settling = core.post_shot_settle.is_some();
-    let o2 = core.reset();
-    let done2 = o2
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::ShotCompleted { .. }));
-    assert!(settling && !done && !done2 && core.pending_shot.is_none());
-}
-
-/// Flips in PR 11: the yield is kept.
-#[test]
-fn p7_scale_drop_in_settle_wipes_yield() {
-    let mut core = CremaCore::new();
-    core.connect_scale("BOOKOO_SC", &[]);
-    let t = run_shot(&mut core);
-    core.on_notification(Source::De1State, &[2, 0], t);
-    core.disconnect_scale();
-    let o = core.on_tick(t + 3100);
-    let fw: Vec<_> = o
-        .events
+/// The `(final_weight, peak_weight)` of each `ShotCompleted` in `o`.
+fn completed_weights(o: &CoreOutput) -> Vec<(Option<f32>, Option<f32>)> {
+    o.events
         .iter()
         .filter_map(|e| match e {
             Event::ShotCompleted {
@@ -551,8 +522,107 @@ fn p7_scale_drop_in_settle_wipes_yield() {
             } => Some((*final_weight, *peak_weight)),
             _ => None,
         })
-        .collect();
-    assert_eq!(fw, vec![(None, None)]);
+        .collect()
+}
+
+/// The weights a shot run by `run_shot` completes with, settle undisturbed.
+fn settled_weights() -> (Option<f32>, Option<f32>) {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    let t = run_shot(&mut core);
+    core.on_notification(Source::De1State, &[2, 0], t);
+    let w = completed_weights(&core.on_tick(t + 3100));
+    assert_eq!(w.len(), 1);
+    assert!(w[0].0.is_some_and(|g| g > 20.0), "{w:?}");
+    w[0]
+}
+
+/// P6: a link teardown (a user Disconnect) in the settle window used to lose
+/// the shot. Fixed in PR 11: the reset finalizes the settle with the weight
+/// so far, and the stored shot survives the rebuild.
+#[test]
+fn p6_reset_in_post_shot_settle_keeps_the_shot() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    let t = run_shot(&mut core);
+    let o = core.on_notification(Source::De1State, &[2, 0], t);
+    assert!(completed_weights(&o).is_empty());
+    assert!(core.post_shot_settle.is_some());
+    let o = core.reset();
+    assert_eq!(completed_weights(&o), vec![settled_weights()]);
+    assert!(core.post_shot_settle.is_none());
+    let shot = core.take_stored_shot(ShotCaptureContext::default());
+    assert_eq!(
+        shot.and_then(|s| s.metadata.yield_out),
+        settled_weights().0,
+        "the stored shot keeps its yield"
+    );
+}
+
+/// P7: a scale drop in the settle window used to wipe the yield. Fixed in
+/// PR 11: the shot completes on the settle's deadline with its weights.
+#[test]
+fn p7_scale_drop_in_settle_keeps_yield() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    let t = run_shot(&mut core);
+    core.on_notification(Source::De1State, &[2, 0], t);
+    core.disconnect_scale();
+    let o = core.on_tick(t + 3100);
+    assert_eq!(completed_weights(&o), vec![settled_weights()]);
+}
+
+/// A scale drop mid-pour keeps the readings so far for the shot's yield.
+#[test]
+fn a_scale_drop_mid_pour_keeps_the_yield_so_far() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    let t = run_shot(&mut core);
+    core.disconnect_scale();
+    let o = core.on_notification(Source::De1State, &[2, 0], t);
+    let w = completed_weights(&o);
+    assert_eq!(w.len(), 1, "no scale, so no settle");
+    assert!(
+        w[0].0.is_some_and(|g| g > 20.0) && w[0].1.is_some(),
+        "{w:?}"
+    );
+}
+
+/// Outside a shot a scale drop still clears its peaks.
+#[test]
+fn a_scale_drop_between_shots_clears_the_peaks() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    let t = run_shot(&mut core);
+    core.on_notification(Source::De1State, &[2, 0], t);
+    core.on_tick(t + 3100);
+    core.shot_metrics.peak_weight = Some(5.0);
+    core.disconnect_scale();
+    assert_eq!(core.shot_metrics.peak_weight, None);
+}
+
+/// The Disconnect prompt's getter (#320): asks only while the machine pours a
+/// session this core drives.
+#[test]
+fn disconnect_asks_first_only_while_pouring() {
+    let mut core = CremaCore::new();
+    assert!(!core.disconnect_needs_confirm(), "no session");
+    core.on_notification(Source::De1State, &[2, 0], 0);
+    assert!(!core.disconnect_needs_confirm(), "idle");
+    core.on_notification(Source::De1State, &[4, 1], 10);
+    assert!(!core.disconnect_needs_confirm(), "heating");
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    assert!(core.disconnect_needs_confirm(), "pouring");
+    core.set_read_only(true);
+    assert!(
+        !core.disconnect_needs_confirm(),
+        "a mirror's stops are the hub's"
+    );
+    core.set_read_only(false);
+    core.on_notification(Source::De1State, &[2, 0], 30);
+    assert!(!core.disconnect_needs_confirm(), "the shot ended");
+    core.on_notification(Source::De1State, &[5, 5], 40);
+    assert!(core.disconnect_needs_confirm(), "steaming");
 }
 
 /// P9: an unknown substate byte used to drop the whole state report.
