@@ -598,3 +598,47 @@ fn an_untared_cup_with_no_limits_stops_at_the_backstop() {
         core.pour_ml()
     );
 }
+
+/// A weight stop the machine honours, its Idle, and the first drips: the
+/// shot is in its post-shot settle. Returns the clock and the cup's weight.
+pub(super) fn honoured_stop_into_settle(core: &mut CremaCore) -> (u64, f32) {
+    let mut pour = Pour::from(100, 10.0);
+    let stop = run(core, &mut pour, 90_000, |_, cup| Step {
+        sample: true,
+        reading: Some(cup),
+    });
+    assert_eq!(stop.map(|s| s.0), Some(StopReason::Weight));
+    let (t, cup) = (pour.t, pour.cup_g());
+    core.on_notification(Source::De1State, &[4, 6], t + 100);
+    core.on_notification(Source::De1State, &[2, 0], t + 300);
+    core.on_notification(Source::ScaleWeight, &bookoo(cup + 0.4), t + 400);
+    core.on_notification(Source::ScaleWeight, &bookoo(cup + 0.8), t + 500);
+    assert!(core.post_shot_settle.is_some());
+    (t + 500, cup + 0.8)
+}
+
+/// A settle that runs its course trains the drip model; one a Disconnect cut
+/// short (#320) measured only part of the drip, so it never does (REVIEW-399
+/// S1).
+#[test]
+fn a_settle_cut_short_by_a_reset_never_trains_the_drip_model() {
+    let mut settled = espresso(36.0);
+    let before = settled.saw_model_json();
+    let (t, cup) = honoured_stop_into_settle(&mut settled);
+    for at in (t + 100..t + 4_000).step_by(100) {
+        settled.on_notification(Source::ScaleWeight, &bookoo(cup + 1.0), at);
+        settled.on_tick(at);
+    }
+    assert!(settled.post_shot_settle.is_none());
+    assert_ne!(settled.saw_model_json(), before, "a full settle learns");
+
+    let mut cut = espresso(36.0);
+    honoured_stop_into_settle(&mut cut);
+    let o = cut.reset();
+    assert!(
+        o.events
+            .iter()
+            .any(|e| matches!(e, Event::ShotCompleted { .. }))
+    );
+    assert_eq!(cut.saw_model_json(), before, "no drip learning");
+}

@@ -470,6 +470,11 @@ export interface CremaCore {
 	 */
 	disconnectScale(): Promise<void>;
 	/**
+	 * Whether a user Disconnect of the DE1 should ask first: the machine is
+	 * pouring and Crema's stops need the link (#320). The core owns the rule.
+	 */
+	disconnectNeedsConfirm(): Promise<boolean>;
+	/**
 	 * What the connected scale can do beyond reporting a bare weight, or
 	 * `undefined` when no scale is connected. Drives capability-gated UI.
 	 */
@@ -1204,6 +1209,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async disconnectScale() {
 			bridge.disconnect_scale();
+		},
+		async disconnectNeedsConfirm() {
+			return bridge.disconnect_needs_confirm();
 		},
 		async scaleCapabilities() {
 			const raw = bridge.scale_capabilities();
