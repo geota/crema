@@ -4,7 +4,7 @@
  * file streams from disk. Without a readable session URL, one multipart POST.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { uploadBackup } from './rest';
+import { downloadBackup, uploadBackup } from './rest';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -67,5 +67,18 @@ describe('uploadBackup', () => {
 	it('a refused session is a failed upload', async () => {
 		vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { message: 'no' } }), { status: 403 })));
 		await expect(uploadBackup('tok', 'b', 'x')).rejects.toThrow(/upload failed \(403\) — no/);
+	});
+});
+
+describe('downloadBackup', () => {
+	it('gives the body as a Blob, never as one ArrayBuffer (#310 P2w-b)', async () => {
+		const body = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]);
+		const response = new Response(body);
+		const arrayBuffer = vi.spyOn(response, 'arrayBuffer');
+		vi.stubGlobal('fetch', vi.fn(async () => response));
+		const got = await downloadBackup('token', 'file-1');
+		expect(got).toBeInstanceOf(Blob);
+		expect(new Uint8Array(await got.arrayBuffer())).toEqual(body);
+		expect(arrayBuffer).not.toHaveBeenCalled();
 	});
 });

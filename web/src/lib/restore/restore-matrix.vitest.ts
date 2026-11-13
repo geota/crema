@@ -277,7 +277,7 @@ async function writeLocal(spec: LocalSpec): Promise<void> {
 	const app = await boot();
 	const shots = spec.shots ?? [];
 	// The shell's own rows, decoded by the engine's reader from the same template.
-	const rows = app.engine.readRecords(
+	const rows = await app.engine.readRecords(
 		app.engine.prepareBackup(
 			jsonlOf(
 				{
@@ -314,7 +314,7 @@ async function writeLocal(spec: LocalSpec): Promise<void> {
 	const history = app.history();
 	const room = spec.historyCapacity == null ? 0 : history.capacity - spec.historyCapacity;
 	// Rows that only take up room: curveless, and in no backup.
-	const filler = fillerShot(app);
+	const filler = await fillerShot(app);
 	const fillers = Array.from({ length: room }, (_, i) => ({ ...filler, id: `filler-${i}` }));
 	// A shot deleted here keeps its tombstone only if it reached Visualizer.
 	const deleted = new Set(shots.filter((x) => x.deleted).map((x) => x.id));
@@ -338,9 +338,11 @@ async function writeLocal(spec: LocalSpec): Promise<void> {
 }
 
 /** A history row for a device with no shots of its own named. */
-function fillerShot(app: App): StoredShot {
-	const [shot] = app.engine.readRecords(
-		app.engine.prepareBackup(jsonlOf({ shots: [{ id: 'filler', completedAt: 2 }] }, 'here'), 'filler')
+async function fillerShot(app: App): Promise<StoredShot> {
+	const [shot] = (
+		await app.engine.readRecords(
+			app.engine.prepareBackup(jsonlOf({ shots: [{ id: 'filler', completedAt: 2 }] }, 'here'), 'filler')
+		)
 	).shots;
 	return shot;
 }
@@ -601,7 +603,8 @@ describe('the shared matrix, on real web stores', () => {
 			try {
 				app = await boot();
 				photoPuts = vi.spyOn(app.images.getBeanImageStore(), 'put');
-				prepared = app.engine.prepareBackup(backupFile(backup), c.name);
+				// The file path: the zip read a piece at a time through its central directory (#310 P2w-b).
+				prepared = await app.engine.prepareBackupFile(new Blob([backupFile(backup) as BlobPart]), c.name);
 				const locks = new FakeLocks();
 				// A shot running in another tab.
 				if (c.local.machineBusy) releases.push(await locks.hold(app.tabs.MACHINE_BUSY_LOCK, 'shared'));
@@ -711,7 +714,7 @@ async function freshDevice(): Promise<Device> {
 /** Plan on a fresh page and run what it says, stopping at `failAt`. */
 async function restoreOnce(mode: WebMode, failAt?: RestoreStep) {
 	const app = await boot();
-	const prepared = app.engine.prepareBackup(backupFile(BACKUP), 'every store');
+	const prepared = await app.engine.prepareBackupFile(new Blob([backupFile(BACKUP) as BlobPart]), 'every store');
 	// Merge brings the deleted shot back, so both modes cancel a tombstone.
 	const revive = mode === 'merge';
 	const plan = await app.engine.planNow(prepared, mode, revive, new FakeLocks());

@@ -4,7 +4,7 @@
  * limits that leave nothing, and the temporary files swept.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, unzipSync, zipSync } from 'fflate';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { exportBackupBundle } from '#lib/wasm/de1_wasm.js';
 import { getBeanStore, blankBean, blankRoaster } from '#lib/bean/index.js';
@@ -251,6 +251,50 @@ describe('cancel and limits leave nothing', () => {
 				streamBackup(input([small], envelope), { sink, limits: { ...BACKUP_LIMITS, maxLineBytes: 2048 } })
 			).rejects.toBeInstanceOf(BackupTooLarge);
 			expect(sink.discarded).toBe(true);
+		}
+	});
+
+	it('writes only what the restore reads: the same entry rules, at every limit (DECISIONS §13)', async () => {
+		const { checkEntries, readCentralDirectory } = await import('./zip-reader');
+		const photo = (n: number) => new Uint8Array(n).fill(9);
+		const one = [{ ...shot(0), record: { duration: 40_000, samples: [] } }];
+		const walk = (photos: number[], limits: typeof BACKUP_LIMITS) =>
+			streamBackup(
+				{
+					...input(one),
+					photos: async function* () {
+						for (const [i, n] of photos.entries()) yield [`b${i}`, photo(n)] as [string, Uint8Array];
+					}
+				},
+				{ sink: memorySink(), limits }
+			);
+		// backup.jsonl's own size, so the inflated limit lands between the cases.
+		const plain = await walk([], BACKUP_LIMITS);
+		const jsonlBytes = unzipSync(new Uint8Array(await plain.file.arrayBuffer()))[BACKUP_JSONL_MEMBER].length;
+		const tiny = { ...BACKUP_LIMITS, maxEntries: 3, maxPhotoBytes: 1000, maxInflatedBytes: jsonlBytes + 1500 };
+		for (const photos of [[], [1000], [1001], [700, 700], [500, 500, 500], [800, 800]]) {
+			const exported = await walk(photos, tiny).then(
+				(r) => r,
+				(e: unknown) => {
+					expect(e).toBeInstanceOf(BackupTooLarge);
+					return null;
+				}
+			);
+			// The reader's rules on the same entries: the export's file, or the same entries zipped plainly.
+			const zip = exported
+				? new Uint8Array(await exported.file.arrayBuffer())
+				: zipSync({
+						[BACKUP_JSONL_MEMBER]: new Uint8Array(jsonlBytes).fill(0x20),
+						...Object.fromEntries(photos.map((n, i) => [`images/b${i}`, photo(n)]))
+					});
+			let readerOk = true;
+			try {
+				const entries = await readCentralDirectory(new Blob([zip as BlobPart]), tiny);
+				checkEntries(entries, (e) => (e.name === BACKUP_JSONL_MEMBER ? 'backup' : 'photo'), tiny);
+			} catch {
+				readerOk = false;
+			}
+			expect(readerOk, `photos ${photos}`).toBe(exported !== null);
 		}
 	});
 
