@@ -104,6 +104,9 @@ class ScaleBleManager(
     private val onScaleIdentified: (advertisedName: String) -> Unit = {},
     /** Per-episode reconnect timelines (Settings → Advanced, diagnostics). */
     private val timeline: ReconnectTimelineRecorder? = null,
+    /** Debug-build fault injection (DESIGN.md §7): whether to drop a weight
+     *  frame. [coffee.crema.faults.NoFaults] in a shipped build. */
+    private val faults: coffee.crema.faults.FaultInjector = coffee.crema.faults.NoFaults,
 ) {
     enum class State { IDLE, SCANNING, CONNECTING, DISCOVERING, SUBSCRIBING, READY, DISCONNECTED }
 
@@ -651,11 +654,15 @@ class ScaleBleManager(
     }
 
     /** Weight-notify (`ff11`) path: record as `SCALE_WEIGHT` and drive the core. */
-    private fun handleWeightNotification(notification: BleTransport.Notification) {
+    @androidx.annotation.VisibleForTesting
+    internal fun handleWeightNotification(notification: BleTransport.Notification) {
         // The timestamp was stamped at delivery inside the transport; the same
         // value goes to the recorder and the core, so a replayed capture
         // decodes identically to the live session.
         val tMs = notification.atMs
+        // A debug build's armed fault drops the frame as if it never came:
+        // not recorded, not fed to the core (logged).
+        if (faults.dropWeightFrame(tMs)) return
         recorder.recordInbound(NotificationSource.SCALE_WEIGHT, notification.data, tMs)
         feedCore(NotificationSource.SCALE_WEIGHT, notification.data, tMs, "Scale weight")
     }
