@@ -27,7 +27,15 @@ import {
 	resetSettingsJson,
 	sanitizeCommonSettingsJson
 } from '#lib/wasm/de1_wasm.js';
-import { isJsonObject, readJson, readStore, writeJson } from '#lib/utils/storage.js';
+import {
+	followOtherTabs,
+	isJsonObject,
+	readJson,
+	readStore,
+	writeJson,
+	writeJsonChecked
+} from '#lib/utils/storage.js';
+import { onShotFinished, shotIsOpen } from '#lib/restore/tab-safety.js';
 import { readSyncConfig } from '#lib/visualizer/sync-config.js';
 import type {
 	CommonSettings,
@@ -727,7 +735,11 @@ function loadSettings(): Settings {
 		what: 'settings',
 		valid: isJsonObject
 	});
-	const stored = read.kind === 'loaded' ? read.value : null;
+	return settingsOf(read.kind === 'loaded' ? read.value : null);
+}
+
+/** The flat `Settings` from a stored bundle, nested or flat, or the defaults. */
+function settingsOf(stored: Record<string, unknown> | null): Settings {
 	if (stored && typeof stored === 'object' && stored.common) {
 		const platform: Partial<Settings> = {};
 		for (const k of PLATFORM_KEYS) {
@@ -800,12 +812,40 @@ export class SettingsStore {
 				if (this.current.theme === 'system') applyTheme('system');
 			});
 		}
+		// Another tab's preferences are taken, not written back over (#333),
+		// and pushed as a whole-bundle change is (`onReplaced`, the app's
+		// `pushSettings`), so the core's stop rules and the steam and hot-water
+		// packet match what this tab shows (#380 review S2). Not while a shot
+		// runs here: the push re-targets its auto-stop. Once it ends, once.
+		followOtherTabs(SETTINGS_KEY, isJsonObject, (v) => {
+			this.current = settingsOf(v as Record<string, unknown>);
+			applyTheme(this.current.theme);
+			this.pushAdopted();
+		});
+	}
+
+	/** An adopt's push waits for the shot running here. */
+	private adoptPushHeld = false;
+
+	/** Push adopted settings, after the shot if one runs here. */
+	private pushAdopted(): void {
+		if (!shotIsOpen()) {
+			this.onReplaced?.();
+			return;
+		}
+		if (this.adoptPushHeld) return;
+		this.adoptPushHeld = true;
+		const stop = onShotFinished(() => {
+			stop();
+			this.adoptPushHeld = false;
+			this.onReplaced?.();
+		});
 	}
 
 	/** Persist the preference bundle to localStorage in the nested cross-shell
 	 *  shape: the shared `common` block + the web-only platform extras. */
-	private persist(): void {
-		writeJson(SETTINGS_KEY, {
+	private persist(): boolean {
+		const stored = writeJsonChecked(SETTINGS_KEY, {
 			common: settingsToCommon(this.current),
 			...settingsPlatformExtras(this.current)
 		});
@@ -813,6 +853,7 @@ export class SettingsStore {
 		if (this.current.qcHotWaterMode != null) {
 			writeJson(HOT_WATER_MARKER_KEY, storedHotWater(this.current));
 		}
+		return stored;
 	}
 
 	/**
@@ -859,13 +900,14 @@ export class SettingsStore {
 	 * that has already assembled the full target {@link Settings}. Avoids the
 	 * per-key `set()` fan-out (one `persist()` instead of ~30 localStorage writes).
 	 */
-	replaceAll(next: Settings): void {
+	replaceAll(next: Settings): boolean {
 		// A backup with no hot-water mode goes through the core's rule — its
 		// own fields, never this device's marker.
 		this.current = next.qcHotWaterMode == null ? withHotWaterDose(next, hotWaterDoseOf(next)) : next;
 		applyTheme(this.current.theme);
-		this.persist();
+		const stored = this.persist();
 		this.onReplaced?.();
+		return stored;
 	}
 
 	/**

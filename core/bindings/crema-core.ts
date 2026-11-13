@@ -973,6 +973,23 @@ export interface BrewTempRange {
 	anchor: number;
 }
 
+/** A recorded BLE session file, as the Android shell lists it. */
+export interface CaptureSession {
+	name: string;
+	/** When it started, unix ms: the stamp in its name. */
+	startedMs: number;
+	/** When it was last written, unix ms. */
+	endedMs: number;
+}
+
+/** A shot with a stored capture, as the web shell lists it. */
+export interface CapturedShot {
+	id: string;
+	/** When the shot completed, unix ms. */
+	completedAtMs: number;
+	pinned?: boolean;
+}
+
 /** The result of [`catalogue_autofill`]. */
 export interface CatalogueAutofill {
 	/** The bean with the picked catalogue entry applied. */
@@ -2672,6 +2689,14 @@ export interface DetectorResults {
 	skipFirstFrame: boolean;
 }
 
+/** A row that failed this run and may hold the cursor. */
+export interface FailedRow {
+	id: string;
+	clock: number;
+	holds: boolean;
+	poisonCandidate: boolean;
+}
+
 /**
  * Which recorded field a [`FieldHit`] came from. Shells key display
  * decisions off this (name/roaster hits highlight in place; everything else
@@ -3364,6 +3389,37 @@ export interface HotWaterTarget {
 	stopWeightG?: number;
 }
 
+/** An unbound local row, or unbound tombstone, a remote row may be the upload of. */
+export interface KeyCandidate {
+	localId: string;
+	completedAtMs: number;
+	durationMs: number;
+	/** A tombstone binds only by today's key: the bind can delete the remote row. */
+	tombstone?: boolean;
+}
+
+/** What this device holds for a remote id. */
+export interface KnownRow {
+	/** The remote id. */
+	remoteId: string;
+	/** `visualizerUpdatedAt`: the version last applied, unix s. */
+	remoteVersion?: number;
+	hasSeries?: boolean;
+	isBrew?: boolean;
+	/** Deleted here: the remote copy stays out. */
+	tombstoned?: boolean;
+}
+
+/** A `GET /shots` list row. */
+export interface ListRow {
+	/** Remote id. */
+	id: string;
+	/** The shot's start, unix s: the upload key of a shot Crema sent. */
+	clock: number;
+	/** Unix s. */
+	updated_at: number;
+}
+
 /** A shot here, as far as a plan needs it. Include tombstoned rows. */
 export interface LocalShot {
 	id: string;
@@ -3432,7 +3488,11 @@ export interface ProfileMeta {
 
 /** Recipe organisation here. */
 export interface RecipeMeta {
-	/** Method id → recipe id. */
+	/**
+	 * Method id → recipe id. Written in order, so a plan serialises the same
+	 * way every time: the shell compares a confirmed plan with a fresh one by
+	 * its JSON.
+	 */
 	defaults: Record<string, string>;
 	hiddenBuiltins: string[];
 }
@@ -3468,6 +3528,12 @@ export interface LocalState {
 	visualizerPrefs: VisualizerSyncPrefs;
 	totalLitres: number;
 	activeBeanId?: string;
+	/**
+	 * Beans an earlier, interrupted run of this restore added, from its
+	 * marker. They don't count as here for `zero_debit`: a re-run after any
+	 * prefix of the steps must end where a clean run does.
+	 */
+	addedBeans: string[];
 }
 
 /**
@@ -3609,6 +3675,53 @@ export interface ModeTargets {
 }
 
 /**
+ * The request pacer: a GCRA bucket of [`PACE_BURST`] with one token every
+ * [`PACE_INTERVAL_MS`], plus a rate-limit cooldown. Persist it every tenth
+ * request and when a run stops.
+ */
+export interface PaceBucket {
+	/** The theoretical arrival time, unix ms. */
+	tatMs: number;
+	/** The latest clock reading seen: a clock going back counts as no time. */
+	lastNowMs: number;
+	/** No request before this, after a 429. */
+	cooldownUntilMs?: number;
+}
+
+/** One list page to plan. */
+export interface PageInput {
+	rows: ListRow[];
+	known?: KnownRow[];
+	candidates?: KeyCandidate[];
+	/** Rows the history can still add; `None` once the cap is view-only. */
+	freeSlots?: number;
+	/**
+	 * A cursor from before row versions existed (unix s): bound rows at or
+	 * below it are taken as applied, with no version written.
+	 */
+	legacyCursor?: number;
+}
+
+/** What to do with one list row. */
+export type RowPlan = 
+	| { kind: "Skip", details: {
+	id: string;
+	why: SkipReason;
+}}
+	/** Fetch the detail. [`choose_bind`] picks among `candidates` with its duration. */
+	| { kind: "FetchDetail", details: {
+	id: string;
+	candidates: KeyCandidate[];
+}};
+
+/** A planned page. */
+export interface PagePlan {
+	rows: RowPlan[];
+	/** The slots left after the rows this page will add. */
+	freeSlots?: number;
+}
+
+/**
  * A profile phase boundary observed during the shot — the port of Decenza's
  * `HistoryPhaseMarker`. Decenza inserts a synthetic first marker with
  * `label == "Start"` and `frame_number == 0` at extraction start
@@ -3679,6 +3792,29 @@ export interface PlanSource {
 	appVersion: string;
 	deviceLabel: string;
 	omittedCount: number;
+}
+
+/** A row that keeps failing. */
+export interface PoisonEntry {
+	id: string;
+	count: number;
+	lastCountedAtMs: number;
+	clock: number;
+	/** When a poison row is next tried, alone. */
+	retryAtMs: number;
+}
+
+/** The pour's time-weighted averages. */
+export interface PourAverages {
+	/** Group pressure, bar. */
+	pressure: number;
+	/** Group flow, ml/s. */
+	flow: number;
+	/**
+	 * Group-head temperature, °C. `None` when the series carries none (an
+	 * import that recorded no head temperature reads 0).
+	 */
+	headTemp?: number;
 }
 
 /**
@@ -3780,6 +3916,41 @@ export interface ProfileSyncOutput {
 	output: CoreOutput;
 	/** The sync's status after the call. */
 	status: ProfileSyncStatus;
+}
+
+/** Why a walk stopped early. */
+export type RunEnd = 
+	| { kind: "Partial", details: {
+	reason: PartialReason;
+}}
+	| { kind: "Failed", details: {
+	failure: SyncFailure;
+}};
+
+/** What a run has done so far. */
+export interface PullTally {
+	/** Where the run started, unix ms (0 = from the start). */
+	sinceMs: number;
+	/** The newest `updated_at` seen, unix s. */
+	highestSeen?: number;
+	applied?: number;
+	unchanged?: number;
+	skippedPermanent?: number;
+	/** New rows the history had no room for. */
+	historyFull?: number;
+	/** Rows edited during their fetch that had no series, so their backfill waits. */
+	editedWithoutSeries?: number;
+	failed?: FailedRow[];
+	/** Transient failures in a row. */
+	streak?: number;
+	/** A detail succeeded: the condition for a failure to count towards poison. */
+	detailSucceeded?: boolean;
+	/** Rows looked at. */
+	walked?: number;
+	lastCount?: number;
+	restarts?: number;
+	/** Why the walk stopped early. */
+	ended?: RunEnd;
 }
 
 /**
@@ -3900,6 +4071,7 @@ export interface RecipeLibraryMigration {
 /** Recipe organisation after the restore, when it changes. */
 export interface RecipeMetaPlan {
 	action: PlanAction;
+	/** Written in order, as [`RecipeMeta::defaults`]. */
 	defaults: Record<string, string>;
 	hiddenBuiltins: string[];
 }
@@ -4460,6 +4632,41 @@ export interface ShotCaptureContext {
 	profileName?: string;
 }
 
+/** What the merge reads of the local row. */
+export interface ShotMergeInput {
+	/** The local tags. */
+	tags?: string[];
+	/** A tag edit here waits to reach Visualizer. */
+	tagsPending?: boolean;
+	/** The local barista. */
+	barista?: string;
+	/** A barista edit here waits to reach Visualizer. */
+	baristaPending?: boolean;
+	/** The row has its telemetry. */
+	hasSeries?: boolean;
+	/** The row has its recipe. */
+	hasProfile?: boolean;
+	/** A brew log: no telemetry by nature. */
+	isBrew?: boolean;
+}
+
+/**
+ * What a pull may change on a row, and nothing else: a merge can't touch a
+ * rating, notes, a bean or a bag debit, because there is no field for them.
+ */
+export interface ShotPatch {
+	/** The new tag list, when the remote adds any. */
+	tags?: string[];
+	/** A barista to fill into a blank one. */
+	barista?: string;
+	/** Take the pulled telemetry: the row has none. */
+	backfillSamples?: boolean;
+	/** Fetch and store the recipe: the row has none and the detail offers one. */
+	fillProfile?: boolean;
+	/** The remote row's `updated_at` (unix s), written last, once the rest landed. */
+	remoteVersion?: number;
+}
+
 /**
  * Everything a shot-annotation PATCH can carry, gathered by the shell
  * (which owns the config lookups — include-notes opt-out, effective
@@ -4489,8 +4696,11 @@ export interface ShotPatchInputs {
 	grinderModel?: string;
 	/** Visualizer coffee-bag id to (re)link → `coffee_bag_id`. */
 	coffeeBagId?: string;
-	/** Tags → `tag_list`. Empty = omit. */
-	tagList: string[];
+	/**
+	 * Tags → `tag_list`, an absolute list. `None` omits it; `Some([])` sends
+	 * `[]`, which clears the remote tags, so only a tag push should pass one.
+	 */
+	tagList?: string[];
 	/** Inline bean: roaster display name → `bean_brand`. */
 	beanBrand?: string;
 	/** Inline bean: bean/bag name → `bean_type`. */
@@ -4693,6 +4903,29 @@ export interface ShotStatInput {
 	rating?: number;
 }
 
+/** What a History row shows of a shot without its series. */
+export interface ShotSummary {
+	/** The summary's format: 1. */
+	v: number;
+	/**
+	 * Machine samples in the series. The shell stores `null` when it
+	 * couldn't read the series; the core always counts.
+	 */
+	sampleCount?: number;
+	/** Samples in a brew's scale series; 0 for none. */
+	brewSampleCount: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	peakWeight?: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	finalWeight?: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	peakPressure: number;
+	/** As [`crate::ShotRecord::peaks`]. */
+	peakTemp: number;
+	/** The row chart, as described in the module docs; `None` with no series. */
+	spark?: string;
+}
+
 /**
  * One horizontal run of the planned-water staircase: level `target_g`
  * from `t0_ms` to `t1_ms` (session ms).
@@ -4803,6 +5036,14 @@ export interface StoredHotWater {
 	timeNoLimit?: boolean;
 	/** The stored ratio. */
 	ratio?: number;
+}
+
+/** What a tag edit here changed, waiting to reach Visualizer. */
+export interface TagMarks {
+	/** Tags added here. */
+	add?: string[];
+	/** Tags removed here. */
+	remove?: string[];
 }
 
 /**
@@ -4949,8 +5190,9 @@ export interface WireShot {
 	 * mutable metadata, NOT part of the de-dup signature: a remote
 	 * re-tagging doesn't change the shot's identity.
 	 * 
-	 * `#[serde(default)]` so older shells / responses without the
-	 * field still deserialise cleanly to an empty Vec.
+	 * `None` when the detail carried no `tags`. `Some([])` says no more: a
+	 * free account always answers `[]`, so remote tags only ever add
+	 * ([`crate::merge_remote_shot`]).
 	 */
 	tag_list?: string[];
 	/**
@@ -5173,6 +5415,17 @@ export type CalibrationRefusal =
 	 * (target byte 255).
 	 */
 	| { kind: "FirmwareRejected", details?: undefined };
+
+/** How many raw captures to keep. */
+export type CaptureKeep = 
+	/** Record none, and keep only pinned shots' captures. */
+	| { kind: "Off", details?: undefined }
+	/** The newest this many. */
+	| { kind: "Newest", details: {
+	count: number;
+}}
+	/** Every capture: nothing is deleted by count. */
+	| { kind: "All", details?: undefined };
 
 /**
  * The direction of an exit comparison. Lowercase wire spelling
@@ -5409,6 +5662,15 @@ export type IdleSleepInput =
 	 * shell regains the CPU (a tab turning visible, the app resuming).
 	 */
 	| { type: "Tick", content?: undefined };
+
+/** What to do after a list page. */
+export enum ListStep {
+	Continue = "Continue",
+	/** Start again from page 1: applied rows skip, so it costs list requests only. */
+	Restart = "Restart",
+	/** It kept shrinking: end `Partial(ListShifted)`. */
+	Stop = "Stop",
+}
 
 /** Why a held machine state request was dropped instead of sent. */
 export type MachineRequestDrop = 
@@ -5900,6 +6162,57 @@ export type RelayEvent =
 	error: string;
 }};
 
+/** What to do about a failed detail. */
+export type RowAction = 
+	/** Try the same request again now. */
+	| { kind: "RetryNow", details?: undefined }
+	/** Sit the rate limit out, then retry the same request. The run stays Waiting. */
+	| { kind: "Wait", details: {
+	wait_ms: number;
+}}
+	/**
+	 * Pass the row, counted. `holds`: the cursor can't move past it.
+	 * `transient`: it counts towards the failure streak. `poison_candidate`:
+	 * repeated, it may become poison.
+	 */
+	| { kind: "Skip", details: {
+	holds: boolean;
+	transient: boolean;
+	poison_candidate: boolean;
+}}
+	/** Stop the walk. */
+	| { kind: "EndRun", details?: undefined };
+
+/** Why a detail failed. */
+export type RowFailure = 
+	/** A 2xx that isn't JSON or doesn't parse: a captive portal looks like this. */
+	| { kind: "NotJson", details?: undefined }
+	/** Valid JSON that can't be mapped onto a shot. */
+	| { kind: "Unmappable", details?: undefined }
+	/** What the classification said about any other reply. */
+	| { kind: "Call", details: {
+	failure: SyncFailure;
+}};
+
+/** How a row went. */
+export type RowOutcome = 
+	/** The merge changed it. */
+	| { kind: "Applied", details?: undefined }
+	/** Nothing to change, or a skip that needs no detail. */
+	| { kind: "Unchanged", details?: undefined }
+	/** The plan passed it for want of a slot. */
+	| { kind: "HistoryFull", details?: undefined }
+	/** It changed here while the detail was fetched: no version written. */
+	| { kind: "EditedDuringFetch", details: {
+	has_series: boolean;
+}}
+	/** The detail failed, and [`row_failure_action`] said to pass it. */
+	| { kind: "Failed", details: {
+	holds: boolean;
+	transient: boolean;
+	poison_candidate: boolean;
+}};
+
 /** How a sync run ended. */
 export type RunOutcome = 
 	/** Everything was walked. The only outcome that moves the cursor. */
@@ -6024,6 +6337,18 @@ export enum ShotPrivacy {
 	Unlisted = "unlisted",
 	/** Visible to the owner only. */
 	Private = "private",
+}
+
+/** Why a row is passed without a detail. */
+export enum SkipReason {
+	/** Deleted here. */
+	Tombstoned = "Tombstoned",
+	/** The version applied is the remote's. */
+	UpToDate = "UpToDate",
+	/** At or below a legacy cursor. */
+	LegacyCursor = "LegacyCursor",
+	/** New, and the history has no room. It waits, holding the cursor. */
+	HistoryFull = "HistoryFull",
 }
 
 /** How a start ended. */

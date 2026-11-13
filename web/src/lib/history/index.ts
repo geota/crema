@@ -19,6 +19,7 @@ export {
 	shotFilename,
 	snapshotFromBean,
 	peaksOf,
+	pourAveragesOf,
 	yieldOf,
 	statsOf,
 	brewStatsOf,

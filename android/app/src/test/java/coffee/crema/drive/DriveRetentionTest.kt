@@ -74,14 +74,23 @@ class DriveRetentionTest {
 
     @Before fun start() {
         server.createContext("/upload/drive/v3/files") { x ->
-            val body = x.requestBody.readBytes().decodeToString()
+            val body = x.requestBody.readBytes()
             if (uploadFails) {
                 x.respond(500, "{}")
                 return@createContext
             }
-            val name = Regex(""""name"\s*:\s*"([^"]+)"""").find(body)!!.groupValues[1]
+            val query = x.requestURI.query.orEmpty()
+            // A resumable upload (#310 P2a): the session, then the file's PUT.
+            if ("uploadType=resumable" in query) {
+                val name = Regex(""""name"\s*:\s*"([^"]+)"""").find(body.decodeToString())!!.groupValues[1]
+                x.responseHeaders.add("Location", "$driveApiRoot/upload/drive/v3/files?upload_id=" + java.net.URLEncoder.encode(name, "UTF-8"))
+                x.respond(200, "")
+                return@createContext
+            }
+            val name = java.net.URLDecoder.decode(query.substringAfter("upload_id="), "UTF-8")
+            assertEquals("PUT", x.requestMethod)
             drive.add(0, "new" to name)
-            x.respond(200, """{"id":"new","name":"$name"}""")
+            x.respond(200, """{"id":"new","name":"$name","size":"${body.size}"}""")
         }
         server.createContext("/drive/v3/files") { x ->
             if (x.requestMethod == "PATCH") {
@@ -158,7 +167,7 @@ class DriveRetentionTest {
         notify = { notices += it },
         backupZip = { null },
         backupFileName = { "b" },
-        applyRestore = { bytes, wipe -> restored += bytes.decodeToString() to wipe },
+        applyRestore = { file, wipe, _ -> restored += file.readText() to wipe },
         refreshToken = { error("no refresh expected") },
     ).also {
         runBlocking {
@@ -168,7 +177,35 @@ class DriveRetentionTest {
         }
     }
 
+    /** The temporary files the daily runs were handed, to check each goes. */
+    private val zips = mutableListOf<java.io.File>()
+
+    private fun zipFile(): java.io.File =
+        java.io.File.createTempFile("backup-tmp-", ".zip").apply { writeBytes(byteArrayOf(1, 2, 3)) }.also { zips += it }
+
     private fun DriveSync.finish() = runBlocking { withTimeout(10_000) { job.children.toList().joinAll() } }
+
+    @Test
+    fun aManualBackupWaitsWhileARestoreRuns() {
+        var restoring = true
+        val sync = DriveSync(
+            store, json, scope, "cid",
+            notify = { notices += it },
+            backupZip = { BackupZip(zipFile(), BackupCounts(1u, 1u)) },
+            backupFileName = { "crema-backup-tablet-20261108-0800.crema.zip" },
+            applyRestore = { _, _, _ -> },
+            refreshToken = { error("no refresh expected") },
+            restoreRunning = { restoring },
+        ).also { runBlocking { store.load(); store.save(DriveState(tokens = tokens)); it.load() } }
+        sync.backupNow()
+        sync.finish()
+        assertTrue(drive.isEmpty(), "nothing uploaded half-applied")
+        assertTrue("A restore is running. Back up once it's done." in notices, "$notices")
+        restoring = false
+        sync.backupNow()
+        sync.finish()
+        assertEquals(1, drive.size)
+    }
 
     /** One daily run, on a device whose last automatic backup was [lastAuto]. */
     private fun dailyBackup(
@@ -176,22 +213,120 @@ class DriveRetentionTest {
         keep: Int? = null,
         built: BackupCounts = BackupCounts(100u, 100u),
         tag: String? = TAG,
+        blocked: String? = null,
+        newestDamage: Long? = null,
+        damageSeen: Long? = null,
+        damage: Map<String, Long> = newestDamage?.let { mapOf(LIB to it) } ?: emptyMap(),
+        seenByStore: Map<String, Long> = damageSeen?.let { mapOf(LIB to it) } ?: emptyMap(),
+        preDamage: String? = null,
+        pinReleased: Boolean = false,
+        lastSuccess: Long? = null,
+        weekly: Boolean = false,
+        wifiOnly: Boolean = false,
+        onWifi: Boolean = true,
+        hash: String? = null,
+        lastHash: String? = null,
+        seen: (DriveSync) -> Unit = {},
     ): DriveState = runBlocking {
         store.load()
-        store.save(DriveState(tokens = tokens, lastAutoBackupAtMs = lastAuto, autoBackupKeep = keep, autoBackupTag = tag))
+        store.save(
+            DriveState(
+                tokens = tokens, lastAutoBackupAtMs = lastAuto, lastBackupSuccessAtMs = lastSuccess,
+                autoBackupKeep = keep, autoBackupTag = tag, damageSeen = seenByStore, preDamageCopy = preDamage, pinReleased = pinReleased,
+                lastAutoBackupHash = lastHash,
+            ),
+        )
         val sync = DriveSync(
             store, json, scope, "cid",
             notify = { notices += it },
             log = { logged += it },
-            backupZip = { BackupZip(byteArrayOf(1), built) },
+            backupZip = { BackupZip(zipFile(), built, hash) },
             backupFileName = { "crema-backup-tablet-20261106-0800.crema.zip" },
-            applyRestore = { _, _ -> },
+            applyRestore = { _, _, _ -> },
             refreshToken = { error("no refresh expected") },
+            autoBackupBlocked = { blocked },
+            damageByStore = { damage },
+            unmetered = { onWifi },
         )
         sync.load()
-        sync.autoBackupIfDue(true)
+        sync.autoBackupIfDue(true, weekly, wifiOnly)
         withTimeout(10_000) { job.children.toList().joinAll() }
+        seen(sync)
         store.load()
+    }
+
+    /** #310 P2a: the backup is a temporary file, which goes once uploaded or skipped. */
+    @Test
+    fun theTemporaryFileGoesOnceUploadedOrSkipped() {
+        seed(1)
+        dailyBackup(hash = "h1", lastHash = "h1")
+        dailyBackup(hash = "h2", lastHash = "h1")
+        assertEquals(2, zips.size)
+        assertTrue(zips.none { it.exists() }, "skipped, then uploaded: both gone")
+        assertTrue(drive.any { it.second.contains("~$TAG") && it.first == "new" }, "uploaded through the resumable session")
+    }
+
+    @Test
+    fun wifiOnly_offWifiSkipsWithoutStamping() {
+        val last = now - 2 * day
+        val state = dailyBackup(lastAuto = last, wifiOnly = true, onWifi = false)
+        assertTrue(drive.isEmpty(), "nothing uploaded")
+        assertEquals(last, state.lastAutoBackupAtMs, "not stamped: the next launch checks again")
+        dailyBackup(lastAuto = last, wifiOnly = true, onWifi = true)
+        assertEquals(1, drive.size)
+    }
+
+    @Test
+    fun weekly_waitsSevenDays() {
+        dailyBackup(lastAuto = now - 2 * day, weekly = true)
+        assertTrue(drive.isEmpty(), "two days in, a weekly backup waits")
+        dailyBackup(lastAuto = now - 8 * day, weekly = true)
+        assertEquals(1, drive.size)
+    }
+
+    @Test
+    fun unchangedDataSkipsTheUpload_changedDataDoesNot() {
+        seed(1)
+        val skipped = dailyBackup(hash = "h1", lastHash = "h1")
+        assertEquals(1, drive.size, "the same data isn't uploaded again")
+        assertTrue(skipped.lastAutoBackupAtMs!! > now - day, "the attempt is stamped")
+        val uploaded = dailyBackup(hash = "h2", lastHash = "h1")
+        assertEquals(2, drive.size)
+        assertEquals("h2", uploaded.lastAutoBackupHash, "stored only once it landed")
+    }
+
+    /** #311 review: a hash that outlived this device's copies (deleted on
+     *  Drive, or another account) must not stop backups for good. */
+    @Test
+    fun unchangedDataStillUploadsWhenDriveHoldsNoneOfThisDevicesCopies() {
+        seed(2, label = "phone~other")
+        drive += "manual" to "crema-backup-tablet-20250101-0800.crema.zip"
+        dailyBackup(hash = "h1", lastHash = "h1")
+        assertEquals(4, drive.size, "uploaded: another device's copies and a manual one don't count")
+        assertTrue(drive.first().second.contains("~$TAG"))
+    }
+
+    /** #311 review: the row shows the copies retention uses, not 3 for an
+     *  install that keeps 10 because it backed up before. */
+    @Test
+    fun theCopiesSettingShowsWhatRetentionUses() {
+        var shown: Int? = null
+        dailyBackup(lastAuto = now, keep = null, seen = { shown = it.state.value.autoBackupKeep })
+        assertEquals(10, shown, "backed up before, nothing stored")
+        dailyBackup(lastAuto = null, keep = null, blocked = "paused", seen = { shown = it.state.value.autoBackupKeep })
+        assertEquals(3, shown, "a new install")
+        dailyBackup(lastAuto = now, keep = 5, seen = { shown = it.state.value.autoBackupKeep })
+        assertEquals(5, shown, "the stored choice")
+    }
+
+    @Test
+    fun theCopiesPreviewCountsWhatTheNextPruneDeletes_neverAManualOne() {
+        seed(12)
+        drive += "manual" to "crema-backup-tablet-20250101-0800.crema.zip"
+        var preview: Int? = null
+        dailyBackup(lastAuto = now, keep = 10, seen = { sync -> preview = runBlocking { sync.copiesOverLimit(3) } })
+        assertEquals(9, preview)
+        assertTrue(drive.none { it.first == "manual" && it.first in trashed })
     }
 
     @Test
@@ -228,11 +363,208 @@ class DriveRetentionTest {
     }
 
     @Test
-    fun everyInstallKeepsTenUntilTheDamageSlotExists() {
+    fun aNewInstallKeepsThree() {
         seed(12)
         val state = dailyBackup(lastAuto = null)
-        assertEquals(10, state.autoBackupKeep)
+        assertEquals(3, state.autoBackupKeep)
+        assertEquals((2..11).map { "tablet$it" }.toSet(), trashed.toSet())
+    }
+
+    @Test
+    fun anInstallThatBackedUpBeforeKeepsTen() {
+        seed(12)
+        assertEquals(10, dailyBackup(lastAuto = now - 2 * day).autoBackupKeep)
         assertEquals(setOf("tablet9", "tablet10", "tablet11"), trashed.toSet())
+        // A manual backup counts too.
+        assertEquals(10, dailyBackup(lastAuto = null, lastSuccess = now - day).autoBackupKeep)
+    }
+
+    @Test
+    fun aDamagedStoreOrARestoreSkipsTheDailyBackupUntilTheNextLaunch() {
+        seed(3)
+        var paused: String? = null
+        val state = dailyBackup(
+            lastAuto = now - 2 * day,
+            blocked = "your bean library couldn't be read",
+            seen = { paused = it.state.value.autoBackupPaused },
+        )
+        assertTrue(drive.none { it.first == "new" }, "nothing uploaded")
+        assertEquals(emptyList(), trashed.toList())
+        assertEquals(now - 2 * day, state.lastAutoBackupAtMs, "not stamped: the next launch tries again")
+        assertEquals("Daily backup paused: your bean library couldn't be read.", paused)
+        // Once it's back, the next launch backs up.
+        dailyBackup(lastAuto = now - 2 * day, seen = { paused = it.state.value.autoBackupPaused })
+        assertTrue(drive.any { it.first == "new" })
+        assertEquals(null, paused)
+    }
+
+    @Test
+    fun aNewDamagePinsTheNewestCopyFromBeforeIt() {
+        // Same counts every day: a bean library that loaded empty can't be seen.
+        seed(8)
+        val state = dailyBackup(keep = 1, newestDamage = now - day / 2)
+        assertEquals("tablet0", state.preDamageCopy)
+        assertEquals(mapOf(LIB to now - day / 2), state.damageSeen)
+        assertEquals((1..7).map { "tablet$it" }.toSet(), trashed.toSet())
+    }
+
+    @Test
+    fun thePinnedCopyStaysThroughTheThinDaysAfter() {
+        seed(8)
+        val state = dailyBackup(keep = 1, newestDamage = now - 9 * day, damageSeen = now - 9 * day, preDamage = "tablet6")
+        assertEquals("tablet6", state.preDamageCopy, "an old damage isn't seen again")
+        assertTrue("tablet6" !in trashed, "$trashed")
+        assertTrue("tablet5" in trashed && "tablet7" in trashed, "$trashed")
+    }
+
+    @Test
+    fun aDamageLongSinceFixedDoesNotHideANewOne() {
+        // Review Q2: a `.corrupt-` copy from half a year ago is still on disk,
+        // and the bean library is damaged again today.
+        seed(8)
+        val state = dailyBackup(keep = 1, newestDamage = now - day / 2, damageSeen = now - 180 * day)
+        assertEquals("tablet0", state.preDamageCopy)
+        assertTrue("tablet0" !in trashed, "$trashed")
+        // With nothing new, nothing is pinned: the old damage was dealt with.
+        val calm = dailyBackup(keep = 1, newestDamage = now - 180 * day, damageSeen = now - 180 * day)
+        assertEquals(null, calm.preDamageCopy)
+    }
+
+    @Test
+    fun aDeviceClockAheadOfDrivesStillKeepsTheGoodCopy() {
+        // Review Q3: the damage is stamped 3 h ahead of Drive's time, so every
+        // copy, today's thin one too, looks older than it. The pin is by id.
+        seed(8)
+        val state = dailyBackup(keep = 1, newestDamage = now + 3 * 60 * 60 * 1000)
+        assertEquals("tablet0", state.preDamageCopy)
+        assertTrue("tablet0" !in trashed, "$trashed")
+    }
+
+    @Test
+    fun aNewDamageThatCantBeListedWaitsForTheNextLaunch() {
+        seed(3)
+        listFails = true
+        val state = dailyBackup(lastAuto = now - 2 * day, newestDamage = now - day / 2)
+        assertTrue(drive.none { it.first == "new" }, "nothing uploaded")
+        assertEquals(now - 2 * day, state.lastAutoBackupAtMs, "not stamped")
+        assertEquals(emptyMap(), state.damageSeen)
+    }
+
+    @Test
+    fun aListingThatKeepsFailingSaysSoInSettings() {
+        seed(3)
+        listFails = true
+        var paused: String? = null
+        dailyBackup(newestDamage = now - day / 2, seen = { paused = it.state.value.autoBackupPaused })
+        assertEquals("Daily backup paused: couldn't check Google Drive.", paused)
+    }
+
+    @Test
+    fun aSecondDamageSoonAfterKeepsThePinOnTheGoodCopy() {
+        // Review fix check: damage A pinned tablet3; the copies since are thin.
+        // Damage B, in another store, mustn't move the slot onto one of them.
+        seed(8)
+        val state = dailyBackup(
+            keep = 1,
+            preDamage = "tablet3",
+            seenByStore = mapOf(LIB to now - 4 * day),
+            damage = mapOf(LIB to now - 4 * day, PROFILES to now - day / 2),
+        )
+        assertEquals("tablet3", state.preDamageCopy)
+        assertTrue("tablet3" !in trashed, "$trashed")
+        assertEquals(now - day / 2, state.damageSeen[PROFILES])
+    }
+
+    @Test
+    fun aRestoreAfterThePinLetsANewDamagePinYesterdaysCopy() {
+        // REVIEW-366: the user restored from the pin, and the copies are good
+        // again; a damage on day 10 must keep the newest of those, not the pin.
+        seed(8)
+        val state = dailyBackup(
+            keep = 1,
+            preDamage = "tablet3",
+            pinReleased = true,
+            seenByStore = mapOf(LIB to now - 4 * day),
+            damage = mapOf(LIB to now - 4 * day, PROFILES to now - day / 2),
+        )
+        assertEquals("tablet0", state.preDamageCopy)
+        assertEquals(false, state.pinReleased, "the new pin is held again")
+    }
+
+    /** A restore finished, having written [written], from Drive file [from]: is the pin released? */
+    private fun released(written: Set<String>, from: DriveBackupRow? = null): Boolean = runBlocking {
+        store.load()
+        store.save(
+            DriveState(
+                tokens = tokens, preDamageCopy = "tablet3", pinStores = setOf(LIB, PROFILES),
+                preDamageCopyAtMs = 5_000L, autoBackupTag = TAG,
+            ),
+        )
+        val sync = DriveSync(
+            store, json, scope, "cid",
+            notify = {}, backupZip = { null }, backupFileName = { "b" }, applyRestore = { _, _, _ -> },
+            refreshToken = { error("no refresh expected") },
+        )
+        sync.load()
+        sync.restoreCompleted(written, from)
+        withTimeout(10_000) { job.children.toList().joinAll() }
+        store.load().pinReleased
+    }
+
+    private fun row(id: String, name: String, at: Long) =
+        DriveBackupRow(id, at, coffee.crema.core.BackupFileInfo(device = null, automatic = true, counts = null), name)
+
+    @Test
+    fun aRestoreThatWroteEveryDamagedStoreReleasesThePin() {
+        assertEquals(true, released(setOf(LIB, PROFILES, "prefs.json")))
+    }
+
+    @Test
+    fun aRestoreThatMissedADamagedStoreKeepsThePin() {
+        // REVIEW-370: a settings-only file, or a Merge that added no profile.
+        assertEquals(false, released(setOf("prefs.json")))
+        assertEquals(false, released(setOf(LIB)))
+    }
+
+    @Test
+    fun theRestoredPinOrANewerOwnCopyReleasesItWhateverItWrote() {
+        assertEquals(true, released(emptySet(), row("tablet3", "x", 5_000L)))
+        assertEquals(true, released(emptySet(), row("tablet9", "crema-backup-auto-tablet~$TAG-20261107-0800-s1c1.crema.zip", 6_000L)))
+        // Older than the pin, or another device's: no.
+        assertEquals(false, released(emptySet(), row("tablet8", "crema-backup-auto-tablet~$TAG-20261101-0800-s1c1.crema.zip", 4_000L)))
+        assertEquals(false, released(emptySet(), row("phone1", "crema-backup-auto-phone~other1-20261107-0800-s1c1.crema.zip", 6_000L)))
+    }
+
+    @Test
+    fun aPinOlderThanThirtyDaysGivesWayToANewDamage() {
+        seed(40)
+        val state = dailyBackup(
+            keep = 1,
+            preDamage = "tablet35",
+            seenByStore = mapOf(LIB to now - 36 * day),
+            damage = mapOf(LIB to now - day / 2),
+        )
+        assertEquals("tablet0", state.preDamageCopy)
+    }
+
+    @Test
+    fun aDamageStampedEarlierByAClockSetBackStillCounts() {
+        // Review low item: the clock went back, so the profiles' quarantine has
+        // an earlier time than the library's from before. Per store, it's new.
+        seed(8)
+        val state = dailyBackup(
+            keep = 1,
+            seenByStore = mapOf(LIB to now),
+            damage = mapOf(LIB to now, PROFILES to now - 5 * day),
+        )
+        assertEquals("tablet0", state.preDamageCopy)
+    }
+
+    @Test
+    fun withNoDamageThatCopyGoesLikeAnyOther() {
+        seed(8)
+        dailyBackup(keep = 1)
+        assertEquals((0..7).map { "tablet$it" }.toSet(), trashed.toSet())
     }
 
     @Test
@@ -435,6 +767,8 @@ class DriveRetentionTest {
     }
 
     private companion object {
+        const val LIB = "beanLibrary.json"
+        const val PROFILES = "customProfiles.json"
         const val PAGE = 100
         const val TAG = "abc123"
     }

@@ -139,11 +139,17 @@ object HttpClients {
         engine: HttpClientEngine? = null,
         retryBaseDelayMs: Long = RETRY_BASE_DELAY_MS,
         httpsOnly: Boolean = true,
+        /**
+         * Retry a 429 here. Off for a service whose caller paces itself and
+         * owns the rate-limit wait (Visualizer): a retry a few seconds later
+         * only spends the window it was told to wait out.
+         */
+        retryRateLimited: Boolean = true,
     ): HttpClient = HttpClient(engine ?: restEngine) {
         expectSuccess = false
         followRedirects = true
         if (httpsOnly) install(HttpsOnly)
-        installRetryPolicy(retryBaseDelayMs)
+        installRetryPolicy(retryBaseDelayMs, retryRateLimited)
         // After HttpRequestRetry, so a timeout is seen (and judged) by the policy.
         install(HttpTimeout) {
             connectTimeoutMillis = connectTimeoutMs
@@ -243,7 +249,8 @@ private val MayHaveReachedServer: AttributeKey<Unit> = AttributeKey("MayHaveReac
 
 private val IDEMPOTENT = setOf(HttpMethod.Get, HttpMethod.Head, HttpMethod.Put, HttpMethod.Options)
 
-private fun retryableStatus(status: Int) = status in 500..599 || status == 408 || status == 429
+private fun retryableStatus(status: Int, rateLimited: Boolean) =
+    status in 500..599 || status == 408 || (rateLimited && status == 429)
 
 private fun resendable(method: HttpMethod, attributes: Attributes) =
     method in IDEMPOTENT || attributes.contains(SafeResend)
@@ -264,12 +271,12 @@ private fun resendable(method: HttpMethod, attributes: Attributes) =
  *    (seconds) when longer, clamped to [HttpClients.MAX_RETRY_AFTER_MS].
  *    The backoff is a coroutine delay, so cancelling the caller stops it.
  */
-private fun HttpClientConfig<*>.installRetryPolicy(baseDelayMs: Long) {
+private fun HttpClientConfig<*>.installRetryPolicy(baseDelayMs: Long, rateLimited: Boolean) {
     require(baseDelayMs > 0)
     install(HttpRequestRetry) {
         maxRetries = HttpClients.MAX_RETRIES
         retryIf { request, response ->
-            retryableStatus(response.status.value) && resendable(request.method, request.attributes)
+            retryableStatus(response.status.value, rateLimited) && resendable(request.method, request.attributes)
         }
         retryOnExceptionIf { request, cause ->
             when {

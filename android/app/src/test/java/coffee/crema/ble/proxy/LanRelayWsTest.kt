@@ -77,7 +77,9 @@ class LanRelayWsTest {
 
             val samples = received.filter { it.characteristic == sampleChar }
             assertEquals(n, samples.size, "every sample relayed over the wire — no loss")
-            assertEquals((0 until n).map { 1_000L + it }, samples.map { it.atMs }, "order + verbatim timestamps")
+            assertEquals((0 until n).map { it.toByte() }, samples.map { it.data.single() }, "in order")
+            // Times are rebased onto this device's clock (MirrorClockTest); here they only never run back.
+            assertEquals(samples.map { it.atMs }.sorted(), samples.map { it.atMs }, "times never run back")
             assertTrue(
                 received.any { it.characteristic == stateChar && it.data.contentEquals(byteArrayOf(0x01, 0x02)) },
                 "attach snapshot crossed the wire",

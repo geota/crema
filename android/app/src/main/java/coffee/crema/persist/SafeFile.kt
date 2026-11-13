@@ -158,6 +158,11 @@ object SafeFile {
         (target.parentFile?.listFiles { f -> f.name.startsWith(target.name + CORRUPT) } ?: emptyArray())
             .sortedByDescending { it.name.substringAfterLast('-').toLongOrNull() ?: 0L }
 
+    /** When the newest kept-aside copy of [target] was put there (its name's
+     *  epoch ms, this device's clock), or null when there's none. */
+    fun keptAsideLatestMs(target: File): Long? =
+        keptAside(target).mapNotNull { it.name.substringAfterLast('-').toLongOrNull() }.maxOrNull()
+
     /** Atomically replace [target] with [text] (UTF-8). Throws on failure. */
     fun write(target: File, text: String, keepBackup: Boolean = true) =
         writeBytes(target, text.toByteArray(Charsets.UTF_8), keepBackup)

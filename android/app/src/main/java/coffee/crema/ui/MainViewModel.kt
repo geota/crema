@@ -353,14 +353,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onShotSynced = { localId, visualizerId -> library.markShotSynced(localId, visualizerId) },
         grinderModel = { effectiveState().grinderModel.trim().takeIf { it.isNotEmpty() } },
         onPulledShots = { stubs -> library.insertPulledShots(stubs) },
-        onBackfillTelemetry = { localId, samples, durationMs -> library.backfillShotTelemetry(localId, samples, durationMs) },
-        onFillBarista = { localId, barista -> library.fillShotBarista(localId, barista) },
+        onApplyRemote = { localId, patch, pulled -> library.applyRemoteShot(localId, patch, pulled) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
         allShots = { _ui.value.history },
         seriesReady = { library.awaitSeries() },
         shotsLoaded = { library.seriesReady },
         historyRefused = { library.historyRefused },
+        restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
         editBeanLibrary = { edit -> library.editBeanLibrary(edit) },
         onBeansSynced = { library.persistLibrary() },
@@ -411,12 +411,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         clientId = coffee.crema.BuildConfig.GOOGLE_DRIVE_CLIENT_ID,
         notify = { msg -> notifyUser(msg) },
         log = { appendLog(it) },
-        backupZip = { library.buildBackupZip() },
+        backupZip = { daily -> library.buildBackupZip(if (daily) BackupKind.DAILY else BackupKind.DRIVE) },
         backupFileName = { library.backupFileName() },
-        applyRestore = { bytes, wipe ->
-            viewModelScope.launch { library.restoreBackupBytes(bytes, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) }
+        applyRestore = { file, wipe, from ->
+            startRestoreFile(file, from?.name?.ifBlank { null } ?: "your Google Drive backup", if (wipe) RestoreMode.WIPE else RestoreMode.MERGE, from)
+        },
+        restoreDownloadFile = { restoreIncoming("restore-drive.crema") },
+        autoBackupBlocked = { autoBackupBlocked() },
+        damageByStore = { damageByStore() },
+        restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
+        unmetered = {
+            val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
+            cm != null && !cm.isActiveNetworkMetered
         },
     )
+
+    /** Per store the counts can't see, the newest time it was kept aside as
+     *  damaged. Drive pins its copy from before when one moves. */
+    internal fun damageByStore(): Map<String, Long> =
+        PRE_DAMAGE_STORES.mapNotNull { name ->
+            coffee.crema.persist.SafeFile.keptAsideLatestMs(java.io.File(getApplication<Application>().filesDir, name))?.let { name to it }
+        }.toMap()
+
+    /** Why a daily backup mustn't run now, or null. */
+    internal fun autoBackupBlocked(): String? {
+        val unhealthy = Stores.unhealthy()
+        return when {
+            unhealthy.isNotEmpty() -> "your ${unhealthy.joinToString(" and ")} couldn't be read"
+            restoreState() == coffee.crema.restore.RestoreState.RUNNING -> "a restore is running"
+            restoreState() == coffee.crema.restore.RestoreState.LEFTOVER -> "a restore didn't finish"
+            else -> null
+        }
+    }
 
     /**
      * The library controller (review #43) — profiles (built-in + custom +
@@ -449,8 +475,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         notify = { notifyUser(it) },
         appendLog = { appendLog(it) },
         currentPrefs = { currentPrefs() },
-        applyRestoredSettings = { applyRestoredSettings(it) },
-        applyRestoredMaintenance = { m -> maintenance.restore(m) },
         persistSawModel = {
             runCatching { sawModelStore.save(bridge.sawModelJson()) }
                 .onFailure { appendLog("SAW model save failed: ${it.message}") }
@@ -738,7 +762,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * single `CremaCore` — important for scale-aware behaviour like shot-start
      * auto-tare.
      */
-    private val bleRecorder = BleSessionRecorder(app)
+    private val bleRecorder = BleSessionRecorder(app).also { rec ->
+        rec.sessionsKeepOf = { _ui.value.bleSessionsKeep }
+        rec.pinnedShotTimes = { _ui.value.history.filter { it.pinned }.map { it.completedAtMs } }
+        rec.historySettled = { library.historySettled }
+    }
 
     private val ble: De1BleManager = De1BleManager(
         transport = proxy.transport,
@@ -771,6 +799,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog = { appendLog(it) },
         setFlashActive = { active -> bgConnection.setFirmwareFlashActive(active) },
         afterRelease = { session.afterFirmwareRelease() },
+        restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
     )
 
     /** Settings → Machine → "Update firmware…" (alpha). */
@@ -953,6 +982,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         proxy.start()
         // Seed the recipe library from disk and keep the custom-method labels current.
         guided.load()
+        // Temporary backup files a killed process left (#310 P2a).
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { sweepBackupTemp(app.cacheDir, keepMs = 0) }
     }
 
     init {
@@ -1232,6 +1263,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // (geota/crema#56). Pure core state; safe while disconnected.
             session.pushStopTargets()
             maintenance.load()
+            // A restore a kill left part-way says so; one that finished runs its deletes.
+            restoreEngine.checkAtBoot()?.let { name ->
+                _ui.update { it.copy(interruptedRestore = name) }
+                notifyUser("Your last restore from $name didn't finish. Run it again to complete it.")
+            }
             // Uploads that failed last time retry now (F17).
             visualizer.drainSoon()
             // Daily Visualizer Premium check (gates the edit sync's Premium-only fields).
@@ -1239,7 +1275,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sharing.start()
             // Daily automatic Drive backup (issue #36) — after the prefs (the
             // toggle); it waits for the Drive tokens itself.
-            drive.autoBackupIfDue(_ui.value.autoDriveBackup)
+            drive.autoBackupIfDue(_ui.value.autoDriveBackup, _ui.value.driveBackupWeekly, _ui.value.driveBackupWifiOnly)
             // Daily automatic release check (opt-in, default off).
             maybeAutoUpdateCheck()
         }
@@ -1363,6 +1399,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The core's shot-quality analysis over a stored shot (review #39). */
     fun analyzeShotQuality(shot: StoredShot): ShotQualityReport? = library.analyzeShotQuality(shot)
+    fun pourAverages(shot: StoredShot): coffee.crema.core.PourAverages? = library.pourAverages(shot)
 
     /** All profiles (built-ins + customs) as the core's `.jsonl` profile file, or null when empty. */
     fun allProfilesFile(): String? = library.allProfilesFile()
@@ -1370,8 +1407,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Write export [text] to a SAF document Uri (large-payload safe). */
     fun writeTextToUri(uri: Uri, text: String) = library.writeTextToUri(uri, text)
 
-    /** Write raw [bytes] to a SAF document Uri — the binary backup save. */
-    fun writeBytesToUri(uri: Uri, bytes: ByteArray) = library.writeBytesToUri(uri, bytes)
+    /** Copy a built backup [file] to a SAF document Uri, then remove it. */
+    fun writeFileToUri(uri: Uri, file: java.io.File) = library.writeFileToUri(uri, file)
 
     /** Import profiles (Crema / community-v2 / legacy .tcl, via the core). */
     fun importProfiles(uri: Uri) = library.importProfiles(uri)
@@ -1379,21 +1416,249 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Import shots from a Crema / de1app / legacy export. */
     fun importShots(uri: Uri) = library.importShots(uri)
 
-    /** Wrap the backup JSONL + bean photos into a `.crema.zip`, or null + a
-     *  notice. Suspends: the build runs off the main thread. */
-    suspend fun buildBackupZipBytes(): ByteArray? = library.buildBackupZipBytes()
+    /** Build the `.crema.zip` into a temporary file, line by line (#310 P2a),
+     *  or null + a notice. Suspends: the build runs off the main thread. */
+    suspend fun buildBackupZipFile(): java.io.File? = library.buildBackupZipFile()
+
+    /** Stop the [kind] backup being built, keeping nothing. */
+    fun cancelBackup(kind: BackupKind) = library.cancelBackup(kind)
+
+    /** Done with a built backup's temporary file without saving it. */
+    fun releaseBackupFile(file: java.io.File) = coffee.crema.ui.releaseBackupFile(file)
+
+    /** [buildBackupZipFile] read into memory, and the file removed: for tests,
+     *  which restore what they back up. The app never holds a backup whole. */
+    @androidx.annotation.VisibleForTesting
+    suspend fun buildBackupZipBytes(): ByteArray? =
+        buildBackupZipFile()?.let { f -> try { f.readBytes() } finally { releaseBackupFile(f) } }
 
     /** A suggested filename for the SAF create-document picker. */
     fun backupFileName(): String = library.backupFileName()
 
-    /** Restore a `crema-backup` bundle from a SAF [uri]. */
-    fun restoreBackup(uri: Uri, mode: RestoreMode) = library.restoreBackup(uri, mode)
+    // ── Restore through the core's plan (restore-safety PR7a) ──────────────
 
-    /** Apply a backup from raw bytes (SAF file or Google Drive). */
-    suspend fun restoreBackupBytes(bytes: ByteArray, mode: RestoreMode) = library.restoreBackupBytes(bytes, mode)
+    private val restoreMarker by lazy {
+        coffee.crema.restore.RestoreMarkerStore(
+            java.io.File(getApplication<Application>().filesDir, coffee.crema.restore.RestoreMarkerStore.FILE_NAME),
+            json,
+        )
+    }
 
-    /** Parse + apply a `crema-backup` bundle's raw text. */
-    fun restoreBackupFromText(text: String, mode: RestoreMode) = library.restoreBackupFromText(text, mode)
+    /** The restore engine, over this ViewModel's stores. */
+    internal val restoreEngine: coffee.crema.restore.RestoreEngine by lazy {
+        coffee.crema.restore.RestoreEngine(
+            library.restoreSink(
+                LibraryController.RestoreDeps(
+                    machineBusy = { _ui.value.shotInProgress || firmware.ui.value.holdsLink || firmware.ui.value.running },
+                    totalLitres = { _ui.value.maintenance.totalLitres },
+                    restoreRecipes = { r, m, d, h -> guided.restoreRecipes(r, m, d, h) },
+                    restoreSettings = { p -> restoreSettingsNow(p) },
+                    restoreMaintenance = { m -> maintenance.restoreNow(m) },
+                ),
+            ),
+            restoreMarker,
+            json,
+        )
+    }
+
+    /** Test seam: [LibraryController.afterRestoreSeries]. */
+    internal var afterRestoreSeries: (suspend () -> Unit)?
+        get() = library.afterRestoreSeries
+        set(value) { library.afterRestoreSeries = value }
+
+    /** `idle | running | leftover`: what auto-backup, sync and a flash start read. */
+    fun restoreState(): coffee.crema.restore.RestoreState = restoreEngine.state()
+
+    /** A backup picked and planned, waiting on the report. */
+    private class PendingRestore(
+        val prepared: coffee.crema.restore.PreparedBackup,
+        var records: coffee.crema.restore.RestoreRecords,
+        val kind: coffee.crema.restore.RestoreKind,
+        var plan: coffee.crema.core.RestorePlan,
+        var revive: Boolean = false,
+        /** The Drive file it came from, if any: the pre-damage pin reads it. */
+        val from: coffee.crema.drive.DriveBackupRow? = null,
+        /** The shots [records] holds: those the plan read for could write. */
+        var recordShots: Set<String> = coffee.crema.restore.RestoreRecords.shotsTheRunWrites(plan),
+    )
+    private var pendingRestore: PendingRestore? = null
+
+    private fun kindOf(mode: RestoreMode) =
+        if (mode == RestoreMode.WIPE) coffee.crema.restore.RestoreKind.REPLACE else coffee.crema.restore.RestoreKind.MERGE
+
+    /** Restore a `crema-backup` bundle from a SAF [uri]: read, plan, then the report. */
+    fun restoreBackup(uri: Uri, mode: RestoreMode) {
+        viewModelScope.launch {
+            // Copied to a file a piece at a time, then read the same way (#310 P2a-b).
+            val dest = restoreIncoming("restore-picked.crema")
+            val file = withContext(Dispatchers.IO) {
+                runCatching {
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use {
+                        coffee.crema.restore.copyBackupTo(it, dest)
+                    }
+                }
+            }.getOrElse { e ->
+                notifyUser(if (e is coffee.crema.restore.BackupReadException) "Restore failed: ${e.message}" else "Restore failed — couldn't read that file.")
+                return@launch
+            } ?: run { notifyUser("Restore failed — couldn't read that file."); return@launch }
+            startRestoreFile(file, uri.lastPathSegment ?: "the backup", mode)
+        }
+    }
+
+    /** Where an incoming backup waits for its restore: one file per source, replaced by the next. */
+    private fun restoreIncoming(name: String) = java.io.File(getApplication<Application>().cacheDir, name)
+
+    private fun restoreStage() = java.io.File(getApplication<Application>().cacheDir, "restore-photos")
+
+    /** [startRestoreFile] for bytes already in memory. */
+    fun startRestore(bytes: ByteArray, name: String, mode: RestoreMode, from: coffee.crema.drive.DriveBackupRow? = null) =
+        startRestoreFrom(name, mode, from) { coffee.crema.restore.prepareBackup(bytes, name, restoreStage()) }
+
+    /**
+     * Plan a restore of the backup in [file], read a piece at a time: a refusal
+     * says why; a clean Merge runs at once; anything else opens the report,
+     * which Replace gates behind Type ERASE.
+     */
+    fun startRestoreFile(file: java.io.File, name: String, mode: RestoreMode, from: coffee.crema.drive.DriveBackupRow? = null) =
+        startRestoreFrom(name, mode, from) { coffee.crema.restore.prepareBackupFile(file, name, restoreStage()) }
+
+    private fun startRestoreFrom(
+        name: String,
+        mode: RestoreMode,
+        from: coffee.crema.drive.DriveBackupRow?,
+        prepare: () -> coffee.crema.restore.PreparedBackup,
+    ) {
+        viewModelScope.launch {
+            val kind = kindOf(mode)
+            val prepared = runCatching { withContext(Dispatchers.IO) { prepare() } }
+                .getOrElse { notifyUser("Restore failed: ${it.message}"); return@launch }
+            // The plan first: its verdict says whether this is a backup at all.
+            val plan = restoreEngine.plan(prepared, kind)
+            if (plan.verdict == coffee.crema.core.Verdict.Refused) {
+                notifyUser(coffee.crema.restore.refusalMessage(plan))
+                return@launch
+            }
+            val records = runCatching { readRecords(prepared, plan) }
+                .getOrElse { notifyUser(it.message ?: "Restore failed."); return@launch }
+            val pending = PendingRestore(prepared, records, kind, plan, from = from)
+            when {
+                plan.verdict == coffee.crema.core.Verdict.Ok && plan.shots.deletedHere.isEmpty() -> runPending(pending)
+                else -> showReport(pending)
+            }
+        }
+    }
+
+    private fun showReport(pending: PendingRestore, lead: String? = null) {
+        pendingRestore = pending
+        val (title, message) = coffee.crema.restore.confirmText(pending.plan)
+        _ui.update {
+            it.copy(
+                restoreReport = RestoreReportUi(
+                    title = title,
+                    message = listOfNotNull(lead, message).joinToString(" "),
+                    replace = pending.kind == coffee.crema.restore.RestoreKind.REPLACE,
+                    offerBringBack = pending.plan.shots.deletedHere.isNotEmpty() && !pending.revive,
+                    offerBackUpFirst = pending.kind == coffee.crema.restore.RestoreKind.REPLACE && drive.state.value.connected,
+                ),
+            )
+        }
+    }
+
+    /** The report's Restore / Replace: run what it showed. */
+    fun confirmRestore() {
+        val pending = pendingRestore ?: return
+        _ui.update { it.copy(restoreReport = null) }
+        viewModelScope.launch { runPending(pending) }
+    }
+
+    /** The report's "Bring them back too": show what that would do first. */
+    fun restoreBringBack() {
+        val pending = pendingRestore ?: return
+        viewModelScope.launch {
+            pending.revive = true
+            pending.plan = restoreEngine.plan(pending.prepared, pending.kind, reviveDeleted = true)
+            showReport(pending)
+        }
+    }
+
+    /** The report's "Back up first": a Drive backup now; the report stays. */
+    fun restoreBackUpFirst() = drive.backupNow()
+
+    /** The interrupted-restore notice's Dismiss: its marker finishes, so its deletes still run. */
+    fun dismissInterruptedRestore() {
+        _ui.update { it.copy(interruptedRestore = null) }
+        viewModelScope.launch { restoreEngine.dismissLeftover() }
+    }
+
+    /** The notice's Later: hidden until the next launch, the marker kept. */
+    fun laterInterruptedRestore() = _ui.update { it.copy(interruptedRestore = null) }
+
+    /** The report was dismissed: nothing runs. */
+    fun dismissRestore() {
+        pendingRestore = null
+        _ui.update { it.copy(restoreReport = null) }
+    }
+
+    /** The records a run of [plan] needs, read off the main thread. */
+    private suspend fun readRecords(prepared: coffee.crema.restore.PreparedBackup, plan: coffee.crema.core.RestorePlan) =
+        withContext(Dispatchers.IO) {
+            coffee.crema.restore.RestoreRecords.read(
+                prepared, json, System.currentTimeMillis(), coffee.crema.restore.RestoreRecords.shotsTheRunWrites(plan),
+            )
+        }
+
+    private suspend fun runPending(pending: PendingRestore) {
+        // A plan that changed since the records were read may name other shots.
+        val want = coffee.crema.restore.RestoreRecords.shotsTheRunWrites(pending.plan)
+        if (want != pending.recordShots) {
+            pending.records = runCatching { readRecords(pending.prepared, pending.plan) }
+                .getOrElse { pendingRestore = null; notifyUser(it.message ?: "Restore failed."); return }
+            pending.recordShots = want
+        }
+        val outcome = restoreEngine.run(pending.prepared, pending.kind, pending.records, pending.revive, expected = pending.plan)
+        if (outcome is coffee.crema.restore.RestoreOutcome.Changed) {
+            pending.plan = outcome.plan
+            showReport(pending, lead = coffee.crema.restore.outcomeMessage(outcome))
+            return
+        }
+        pendingRestore = null
+        // Only a finished restore can end the pre-damage pin's hold, and only one
+        // that dealt with the damage (REVIEW-366, REVIEW-370).
+        if (outcome is coffee.crema.restore.RestoreOutcome.Done) {
+            drive.restoreCompleted(coffee.crema.restore.writtenStores(outcome.plan, outcome.singletonsSkipped), pending.from)
+        }
+        val held = coffee.crema.ui.heldSharingNotice(library.restoreHeldSharing)
+        notifyUser(coffee.crema.restore.outcomeMessage(outcome) + (held?.let { " $it" } ?: ""))
+    }
+
+    /** A restore's settings, awaited: the live UI, the core, the machine's registers, then the file. */
+    private suspend fun restoreSettingsNow(p: AppPrefs): Boolean {
+        settings.restoreValues(p)
+        machineConfig.pushCoreInputs(effectiveState())
+        session.seedMachineSettings(onReady = false)
+        return settings.persistRestoredPrefs()
+    }
+
+    /** Apply a backup from raw bytes, confirming whatever its plan allows: tests only. */
+    internal suspend fun restoreBackupBytes(bytes: ByteArray, mode: RestoreMode) {
+        val kind = kindOf(mode)
+        val prepared = coffee.crema.restore.prepareBackup(bytes, "a backup", java.io.File(getApplication<Application>().cacheDir, "restore-photos"))
+        val plan = restoreEngine.plan(prepared, kind)
+        if (plan.verdict == coffee.crema.core.Verdict.Refused) {
+            notifyUser(coffee.crema.restore.refusalMessage(plan))
+            return
+        }
+        // In memory and test-only: read here, so the run starts before this suspends.
+        val records = coffee.crema.restore.RestoreRecords.read(
+            prepared, json, System.currentTimeMillis(), coffee.crema.restore.RestoreRecords.shotsTheRunWrites(plan),
+        )
+        runPending(PendingRestore(prepared, records, kind, plan))
+    }
+
+    /** [restoreBackupBytes] for a bundle's raw text: tests only, as it confirms its own plan. */
+    internal fun restoreBackupFromText(text: String, mode: RestoreMode) {
+        viewModelScope.launch { restoreBackupBytes(text.toByteArray(Charsets.UTF_8), mode) }
+    }
 
     /**
      * Remove a stored shot from the local history. Persisted. A shot on
@@ -1556,6 +1821,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Set a shot's forward-looking "next time" plan (local-only). */
     fun setShotNextPlan(id: String, nextPlan: String) = library.setShotNextPlan(id, nextPlan)
+    fun setShotPinned(id: String, pinned: Boolean) = library.setShotPinned(id, pinned)
     fun setShotPerson(id: String, field: String, name: String?) = library.setShotPerson(id, field, name)
 
     /**
@@ -2144,8 +2410,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setAutoDriveBackup(on: Boolean) {
         _ui.update { it.copy(autoDriveBackup = on) }
         persistPrefs()
-        if (on) drive.autoBackupIfDue(true)
+        if (on) drive.autoBackupIfDue(true, _ui.value.driveBackupWeekly, _ui.value.driveBackupWifiOnly)
     }
+
+    /** Automatic Drive backup weekly rather than daily (#311). Persisted, device-local. */
+    fun setDriveBackupWeekly(weekly: Boolean) {
+        _ui.update { it.copy(driveBackupWeekly = weekly) }
+        persistPrefs()
+    }
+
+    /** Automatic backups only on Wi-Fi (#311). Persisted, device-local. */
+    fun setDriveBackupWifiOnly(on: Boolean) {
+        _ui.update { it.copy(driveBackupWifiOnly = on) }
+        persistPrefs()
+        if (!on) drive.autoBackupIfDue(_ui.value.autoDriveBackup, _ui.value.driveBackupWeekly, false)
+    }
+
+    /** Automatic Drive copies this device keeps (#311); the next backup prunes to it. */
+    fun setDriveCopiesKeep(keep: Int) = drive.setAutoBackupKeep(keep)
+
+    /** How many automatic copies [keep] would delete at the next backup, or null when Drive can't be listed. */
+    suspend fun driveCopiesOverLimit(keep: Int): Int? = drive.copiesOverLimit(keep)
+
+    /**
+     * BLE sessions whose raw capture is kept (#311). Persisted, device-local;
+     * the sessions past it go now, pinned shots' sessions spared.
+     */
+    fun setBleSessionsKeep(keep: Int) {
+        _ui.update { it.copy(bleSessionsKeep = keep) }
+        persistPrefs()
+        bleRecorder.pruneTo(keep)
+    }
+
+    /** How many session captures [keep] would delete now, for the preview. */
+    fun bleSessionsOverLimit(keep: Int): Int = bleRecorder.sessionsOverLimit(keep).size
 
     /** Fan-on temperature threshold, °C (0..=60). Persisted and written through. */
     fun setFanThreshold(tempC: Float) = machineConfig.setFanThreshold(tempC)
@@ -2557,6 +2855,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     internal companion object {
+        /** The stores a backup's counts can't see: when one is newly kept aside
+         *  as damaged, Drive keeps the daily backup from before it. */
+        val PRE_DAMAGE_STORES = listOf(
+            coffee.crema.beans.LibraryStore.FILE_NAME,
+            coffee.crema.profiles.CustomProfileStore.FILE_NAME,
+            coffee.crema.brew.RecipeFileStore.FILE_NAME,
+            coffee.crema.settings.SettingsStore.FILE_NAME,
+            coffee.crema.profiles.PinnedProfileStore.FILE_NAME,
+            coffee.crema.profiles.HiddenProfileStore.FILE_NAME,
+            coffee.crema.maintenance.MaintenanceStore.FILE_NAME,
+        )
+
         /**
          * Tests set this before building a VM to hold its startup load until
          * they complete it, so they can act while the prefs are still unloaded

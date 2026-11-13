@@ -69,6 +69,13 @@ export interface VisualizerSyncConfig {
 	 */
 	shotPullCursor: number | null;
 	/**
+	 * Which cursor `shotPullCursor` is. `null`: one from before row versions,
+	 * which passed rows a pull never applied (#328), so the next pull walks the
+	 * whole account once, taking bound rows at or below it as applied. `1`:
+	 * the server's clock, moved only by a complete run.
+	 */
+	pullCursorEpoch: number | null;
+	/**
 	 * The account this device's cursor, marks and queue belong to. It outlives a
 	 * sign-out, so a sign-in as someone else is noticed; a factory reset clears it.
 	 */
@@ -105,6 +112,7 @@ export const DEFAULT_SYNC_CONFIG: VisualizerSyncConfig = {
 	},
 	lastSyncAt: { beans: null, roasters: null, shots: null },
 	shotPullCursor: null,
+	pullCursorEpoch: null,
 	syncAccountId: null,
 	accountUnconfirmed: false,
 	accountChangeAsk: false,

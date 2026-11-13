@@ -3,7 +3,9 @@
 //! The review's scenarios are random walks of these: at the 300 cap with curves
 //! wandering, a delete a day, and two devices sharing Drive.
 
-use de1_domain::{BackupCounts, BackupFile, auto_backup_file_name, auto_backup_retention};
+use de1_domain::{
+    BackupCounts, BackupFile, auto_backup_file_name, auto_backup_retention, newest_auto_backup,
+};
 use proptest::prelude::*;
 
 const DAY: i64 = 24 * 60 * 60 * 1000;
@@ -71,9 +73,17 @@ fn counts_of(uploads: &[(BackupFile, BackupCounts, bool)], id: &str) -> BackupCo
 }
 
 proptest! {
-    /// Day after day, as a device runs it: delete what the plan says, upload again.
+    /// Day after day, as a device runs it: delete what the plan says, upload
+    /// again, with a store damaged on some day or never.
     #[test]
-    fn a_daily_run_stays_bounded_and_keeps_the_fullest(keep in 0_u32..12, days in uploads()) {
+    fn a_daily_run_stays_bounded_and_keeps_the_fullest(
+        keep in 0_u32..12,
+        days in uploads(),
+        damage in prop::option::of(0_usize..120),
+    ) {
+        // Device 0 sees a damage on that day: before its upload, the shell pins
+        // its newest copy, which can only be from before the damage.
+        let mut pinned: Option<String> = None;
         let mut drive = vec![BackupFile {
             id: "manual".to_owned(),
             name: MANUAL.to_owned(),
@@ -82,11 +92,19 @@ proptest! {
         let mut history: Vec<(BackupFile, BackupCounts, bool)> = Vec::new();
         for (day, upload) in days.iter().enumerate() {
             let new = file(upload.device, day, upload);
+            if upload.device == 0 && damage == Some(day) {
+                pinned = newest_auto_backup(&drive, &new.name);
+            }
             drive.push(new.clone());
             history.push((new.clone(), upload.counts, upload.legacy));
 
-            let plan = auto_backup_retention(&drive, &new.name, keep);
+            let pin = if upload.device == 0 { pinned.as_deref() } else { None };
+            let plan = auto_backup_retention(&drive, &new.name, keep, pin);
 
+            // The pinned copy stays, however many thin copies follow.
+            if let Some(pin) = pin {
+                prop_assert!(!plan.delete.iter().any(|id| id == pin), "the pre-damage copy went");
+            }
             for id in &plan.delete {
                 prop_assert!(id != "manual", "a manual copy was deleted");
                 prop_assert_eq!(
@@ -134,7 +152,7 @@ proptest! {
             .collect();
         let drive: Vec<BackupFile> = files.iter().map(|(f, _, _)| f.clone()).collect();
         let (newest, _, _) = files.last().unwrap();
-        let plan = auto_backup_retention(&drive, &newest.name, keep);
+        let plan = auto_backup_retention(&drive, &newest.name, keep, None);
 
         let counted: Vec<_> = files.iter().filter(|(_, _, legacy)| !legacy).collect();
         for of in [|c: &BackupCounts| c.shots, |c: &BackupCounts| c.curves] {

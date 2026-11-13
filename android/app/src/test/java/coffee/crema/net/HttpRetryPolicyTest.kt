@@ -28,7 +28,6 @@ import org.junit.Test
 import java.io.IOException
 import java.net.ConnectException
 import java.net.InetAddress
-import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketAddress
 import java.util.concurrent.TimeUnit
@@ -201,22 +200,27 @@ class HttpRetryPolicyTest {
     }
 
     @Test
-    fun `POST to a dead port fails after three attempts, provably unsent`() = runBlocking {
-        val dead = ServerSocket(0).use { it.localPort } // bound then released: nothing listens
+    fun `POST to a dead port fails after three attempts, provably unsent`() = runBlocking<Unit> {
+        // A port that refuses every connect. Not a real port bound then
+        // released: under a full suite something else could take it in
+        // between, answer, and close ("unexpected end of stream", #378).
+        val sockets = RefusingSocketFactory(refusals = Int.MAX_VALUE)
         val calls = AtomicInteger()
         val base = HttpClients.newBaseOkHttp().newBuilder()
+            .socketFactory(sockets)
             .eventListenerFactory { object : okhttp3.EventListener() {
                 override fun callStart(call: okhttp3.Call) { calls.incrementAndGet() }
             } }
             .build()
         try {
-            client(base).post("http://127.0.0.1:$dead/upload")
+            client(base).post("http://127.0.0.1:9/upload")
             fail("expected a failure")
         } catch (e: IOException) {
             assertTrue("$e", e.requestNotSent())
             assertTrue("${e.unwrapNotSent()}", e.unwrapNotSent() is ConnectException)
         }
         assertEquals(3, calls.get())
+        assertEquals("each attempt dialled, and was refused", 3, sockets.connects.get())
     }
 
     @Test

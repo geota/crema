@@ -45,14 +45,34 @@ data class DriveState(
     /** Epoch ms of the last SUCCESSFUL backup upload, manual or automatic —
      *  drives the "Last backed up X ago" readout. Additive → nullable. */
     val lastBackupSuccessAtMs: Long? = null,
-    /** Automatic copies kept per device, set by the first retention to run. An
-     *  install with this set has backed up, so PR8c can give the ones without
-     *  it a lower default. Additive → nullable. */
+    /** Automatic copies kept per device, set by the first retention to run: 10
+     *  for an install that had backed up before, 3 for a new one. Additive →
+     *  nullable. */
     val autoBackupKeep: Int? = null,
+    /** The content hash of the last automatic upload that landed (#311): an
+     *  unchanged backup isn't uploaded again. Additive → nullable. */
+    val lastAutoBackupHash: String? = null,
     /** Random, in this install's automatic backup names, so two devices of one
      *  model can't prune each other. A reinstall gets a new one and leaves its
      *  old copies alone. Additive → nullable. */
     val autoBackupTag: String? = null,
+    /** Per store file, the newest damage time (a kept-aside copy, this
+     *  device's clock) already acted on. A newer one for any store is a new
+     *  damage. Additive. */
+    val damageSeen: Map<String, Long> = emptyMap(),
+    /** This install's newest daily copy on Drive when a damage was seen, by
+     *  file id: retention keeps it, as it's from before. Additive. */
+    val preDamageCopy: String? = null,
+    /** A restore finished after [preDamageCopy] was pinned: the damage it
+     *  guarded is dealt with, so a newer damage pins again rather than the
+     *  30-day hold keeping the old pin. Retention still keeps the pin until
+     *  then. Additive. */
+    val pinReleased: Boolean = false,
+    /** The stores whose damage [preDamageCopy] guards, by file name: a restore
+     *  releases the pin only once it has written them all. Additive. */
+    val pinStores: Set<String> = emptySet(),
+    /** [preDamageCopy]'s modified time on Drive, to tell a newer own copy. Additive. */
+    val preDamageCopyAtMs: Long? = null,
     /** Google ended the sign-in. Signed out, with a lasting banner until the
      *  user reconnects or disconnects. Additive. */
     val needsReconnect: Boolean = false,

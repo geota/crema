@@ -72,7 +72,23 @@ class SeriesDeletesVmTest {
         VmHarness.idle()
     }
 
-    private fun rowsOnDisk() = rowsFile.takeIf { it.exists() }?.readText().orEmpty()
+    /**
+     * The rows file as saved, or "" when there's none yet. A save renames the
+     * old file aside, then the new one into place, so between an exists() and a
+     * read the file can be missing for a moment (FileNotFoundException on CI,
+     * #383): a read that misses while a file is due tries again.
+     */
+    private fun rowsOnDisk(): String {
+        repeat(100) {
+            try {
+                return rowsFile.readText()
+            } catch (_: java.io.FileNotFoundException) {
+                if (!SafeFile.backupOf(rowsFile).exists() && !rowsFile.exists()) return ""
+                Thread.sleep(5)
+            }
+        }
+        return rowsFile.readText()
+    }
 
     @Test
     fun `deleting a loaded shot deletes its series`() {
@@ -109,26 +125,30 @@ class SeriesDeletesVmTest {
     }
 
     @Test
-    fun `a Replace restore deletes no series, and the next delete is by name`() {
+    fun `a Replace restore deletes a removed row's series by its marker, and the next delete by name`() {
         stored(shot("old"), shot("both"))
         val vm = launch()
         fun line(body: JsonObject, kind: String) =
             Json.encodeToString(JsonObject.serializer(), JsonObject(body + ("kind" to JsonPrimitive(kind))))
-        val text = (listOf(line(JsonObject(emptyMap()), "crema-backup/v1")) +
+        val text = (listOf(line(JsonObject(mapOf("createdAt" to JsonPrimitive(1), "shotCount" to JsonPrimitive(2))), "crema-backup/v1")) +
             listOf(shot("both"), shot("restored")).map { line(wireShotJson(it, forBackup = true), "shot") }).joinToString("\n")
 
         val before = VmHarness.ownState(vm).userMessages.size
         vm.restoreBackupFromText(text, MainViewModel.RestoreMode.WIPE)
         VmHarness.idleUntil("the restore reported") { VmHarness.ownState(vm).userMessages.size > before }
+        val told = VmHarness.ownState(vm).userMessages.last()
+        assertTrue(told.startsWith("Restored "), told)
         VmHarness.idleUntil("the restore's save") { "\"restored\"" in rowsOnDisk() }
-        assertTrue(series("old").exists(), "restore's deletes aren't the diff's")
+        // The removed row's curve goes by the marker, by name, once the rows no longer list it.
+        VmHarness.idleUntil("the marker's delete") { !series("old").exists() }
         assertTrue(series("restored").exists())
+        assertTrue(series("both").exists())
 
         vm.deleteShot("restored")
         VmHarness.idleUntil("the restored row's series went") { !series("restored").exists() }
-        assertTrue(series("old").exists())
         assertTrue(series("both").exists())
         assertEquals(listOf("both"), VmHarness.ownState(vm).history.map { it.id })
-        assertFalse("\"restored\"" in rowsOnDisk() && "\"old\"" in rowsOnDisk())
+        val onDisk = rowsOnDisk()
+        assertFalse("\"restored\"" in onDisk && "\"old\"" in onDisk)
     }
 }

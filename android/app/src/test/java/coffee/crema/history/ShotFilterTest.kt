@@ -31,6 +31,14 @@ class ShotFilterTest {
         filterAndSortShots(history, query, "all", null, "date", true, 0L, beanFilter).map { it.id }
 
     @Test
+    fun `the Pinned chip keeps only pinned shots`() {
+        val shots = listOf(shot("a"), shot("b").copy(pinned = true), shot("c"))
+        val pinned = filterAndSortShots(shots, "", "all", null, "date", true, 0L, pinnedOnly = true)
+        assertEquals(listOf("b"), pinned.map { it.id })
+        assertEquals(3, filterAndSortShots(shots, "", "all", null, "date", true, 0L).size)
+    }
+
+    @Test
     fun `search reaches the bean, roaster, grinder and people`() {
         val s = shot("a", bean("b1", "Kenya AA", "Sey", grinder = "Niche Zero"), barista = "Ana", drinker = "Ben")
         for (q in listOf("kenya", "SEY", "niche", "ana", " ben ", "adaptive")) {

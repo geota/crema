@@ -61,6 +61,7 @@
 	import SparkleIcon from 'phosphor-svelte/lib/SparkleIcon';
 	import SquareIcon from 'phosphor-svelte/lib/SquareIcon';
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
+	import PushPinIcon from 'phosphor-svelte/lib/PushPinIcon';
 	import TagIcon from 'phosphor-svelte/lib/TagIcon';
 	import ThermometerIcon from 'phosphor-svelte/lib/ThermometerIcon';
 	import TimerIcon from 'phosphor-svelte/lib/TimerIcon';
@@ -171,6 +172,7 @@
 		sun: SunIcon,
 		square: SquareIcon,
 		star: StarIcon,
+		'push-pin': PushPinIcon,
 		stop: StopIcon,
 		tag: TagIcon,
 		thermometer: ThermometerIcon,

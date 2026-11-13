@@ -45,7 +45,8 @@ import {
 	visualizerQueueDecision as wasmVisualizerQueueDecision,
 	visualizerQuotaLimit as wasmVisualizerQuotaLimit
 } from '#lib/wasm/de1_wasm.js';
-import { AccountBlockReason, type QueueDecision, type SyncFailure } from '#lib/core/crema-core.js';
+import { AccountBlockReason, type QueueDecision, type RowFailure, type SyncFailure } from '#lib/core/crema-core.js';
+import { noteRateLimited, takeSlot, waitFor } from '../visualizer/pace.ts';
 
 /** Visualizer API base. */
 export const API_BASE = 'https://visualizer.coffee/api';
@@ -74,7 +75,29 @@ export interface VisualizerCallOptions {
 	method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
 	/** Decoded JSON body — stringified before it rides the wire. */
 	body?: unknown;
+	/**
+	 * Part of a pull run: wait for the pacer's slot however long it takes.
+	 * Any other call fails as rate limited, unsent, rather than wait past
+	 * `INLINE_WAIT_MAX_MS` (a cooldown after a 429).
+	 */
+	patient?: boolean;
 }
+
+/** The body of a rate-limited failure the pacer made, with nothing sent. */
+const PACED_BODY = 'crema:paced';
+
+/**
+ * The pacer's slot for one request: the wait, slept here, or a rate-limited
+ * failure (status 429, nothing sent) for a call that won't wait that long.
+ */
+const paced = (path: string, patient: boolean): Effect.Effect<void, HttpStatusError> =>
+	Effect.suspend(() => {
+		const wait = takeSlot(patient);
+		if (wait === null) {
+			return Effect.fail(new HttpStatusError({ status: 429, url: `${API_BASE}${path}`, body: PACED_BODY }));
+		}
+		return wait > 0 ? waitFor(wait) : Effect.void;
+	});
 
 /**
  * Perform one authenticated Visualizer request. Succeeds with the parsed JSON
@@ -98,12 +121,25 @@ export const visualizerCall = (
 					Accept: 'application/json'
 				};
 				if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
-				return http.request({
-					url: `${API_BASE}${path}`,
-					method: opts.method ?? 'GET',
-					headers,
-					body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined
-				});
+				// Paced per request sent, a 401's retry included.
+				return paced(path, opts.patient === true).pipe(
+					Effect.flatMap(() =>
+						http.request({
+							url: `${API_BASE}${path}`,
+							method: opts.method ?? 'GET',
+							headers,
+							body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined
+						})
+					),
+					// Visualizer said slow down: every call waits it out (60 s first).
+					Effect.tapError((e) =>
+						Effect.sync(() => {
+							if (e._tag === 'HttpStatusError' && e.status === 429 && e.body !== PACED_BODY) {
+								noteRateLimited(wasmRetryBackoffMs(429, 0, Math.random()));
+							}
+						})
+					)
+				);
 			})
 			.pipe(
 				Effect.catchTag(
@@ -148,8 +184,31 @@ export const visualizerCall = (
 			);
 	});
 
+/**
+ * What a failed detail or list request means to the pull run (core
+ * `RowFailure`): a 2xx that isn't JSON is a captive portal's page, and
+ * anything else goes by the core's classification.
+ */
+export function rowFailureOf(e: VisualizerCallError | ResponseDecodeError): RowFailure {
+	const failure = (f: SyncFailure): RowFailure => ({ kind: 'Call', details: { failure: f } });
+	switch (e._tag) {
+		case 'HttpStatusError':
+			return failure(syncFailureOf(e));
+		case 'NetworkError':
+			return e.cause instanceof SyntaxError ? { kind: 'NotJson' } : failure({ kind: 'Offline' });
+		case 'ResponseDecodeError':
+			return { kind: 'Unmappable' };
+		case 'VisualizerNotFoundError':
+			return failure({ kind: 'NotFound' });
+		case 'VisualizerPremiumGatedError':
+			return failure({ kind: 'NeedsPremium' });
+		default:
+			return failure({ kind: 'SessionEnded' });
+	}
+}
+
 /** What a Visualizer HTTP failure means (core `classify_sync_failure`). */
-function syncFailureOf(e: HttpStatusError): SyncFailure {
+export function syncFailureOf(e: HttpStatusError): SyncFailure {
 	return JSON.parse(
 		wasmClassifySyncFailure('visualizer', 'call', e.status, e.body ?? '', undefined, Date.now())
 	) as SyncFailure;
@@ -200,6 +259,26 @@ export function refusedUpload(e: VisualizerCallError | ResponseDecodeError): boo
 	if (e._tag !== 'HttpStatusError') return false;
 	const { kind } = syncFailureOf(e);
 	return kind === 'Rejected' || kind === 'Quota';
+}
+
+/**
+ * What a failed edit PATCH (or the GET before a tag push) means for its marks:
+ * `terminal` clears them and reports (the row is gone, on another account, or
+ * refused for good); `tier` is a 400 on a tags-only PATCH, which a free account
+ * answers, or a Premium refusal; `retry` waits and tries again, the marks kept.
+ */
+export function pendingEditFailure(
+	e: VisualizerCallError | ResponseDecodeError,
+	tagsOnly: boolean
+): 'terminal' | 'tier' | 'retry' {
+	if (e._tag === 'VisualizerNotFoundError') return 'terminal';
+	// The cached tier was wrong: check it, rather than send the same again.
+	if (e._tag === 'VisualizerPremiumGatedError') return 'tier';
+	if (e._tag !== 'HttpStatusError') return 'retry';
+	const failure = syncFailureOf(e);
+	if (failure.kind === 'Forbidden') return 'terminal';
+	if (failure.kind === 'Rejected') return tagsOnly && e.status === 400 ? 'tier' : 'terminal';
+	return 'retry';
 }
 
 /**

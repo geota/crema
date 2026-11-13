@@ -26,7 +26,7 @@ import type {
 	RecipeTimeEstimate
 } from '#lib/core/crema-core.js';
 import { BrewStepKind, StepAdvance } from '#lib/core/crema-core.js';
-import { isJsonObject, readStore, writeJsonChecked } from '#lib/utils/storage.js';
+import { followOtherTabs, isJsonObject, readStore, writeJsonChecked } from '#lib/utils/storage.js';
 import {
 	blankRecipeJson,
 	builtinBrewRecipesJson,
@@ -185,6 +185,16 @@ export class RecipeStore {
 		this.lastUsed = lastUsed.kind === 'loaded' ? lastUsed.value : {};
 		this.hidden = hidden.kind === 'loaded' ? hidden.value : [];
 		this.migrate();
+		// Another tab's recipes are taken, not written back over (#333).
+		followOtherTabs(RECIPES_KEY, Array.isArray, (v) => {
+			this.recipes = v as BrewRecipe[];
+		});
+		followOtherTabs(LAST_USED_KEY, isJsonObject, (v) => {
+			this.lastUsed = v as Record<string, string>;
+		});
+		followOtherTabs(HIDDEN_KEY, Array.isArray, (v) => {
+			this.hidden = v as string[];
+		});
 	}
 
 	/**
@@ -414,6 +424,27 @@ export class RecipeStore {
 		writeJsonChecked(LAST_USED_KEY, this.lastUsed);
 		writeJsonChecked(HIDDEN_KEY, this.hidden);
 		return added.length;
+	}
+
+	/** The user's own recipes, as stored: a restore plans against these. */
+	get ownRecipes(): readonly BrewRecipe[] {
+		return this.recipes;
+	}
+
+	/**
+	 * The recipes a restore leaves, and its defaults and hidden built-ins when
+	 * the plan applies them. Memory first, then the writes. Whether all landed.
+	 */
+	restore(recipes: BrewRecipe[], meta: { defaults: Record<string, string>; hidden: string[] } | null): boolean {
+		this.recipes = recipes;
+		let ok = writeJsonChecked(RECIPES_KEY, this.recipes);
+		if (meta) {
+			this.lastUsed = { ...meta.defaults };
+			this.hidden = meta.hidden.filter((id) => isBuiltinRecipe(id));
+			ok = writeJsonChecked(LAST_USED_KEY, this.lastUsed) && ok;
+			ok = writeJsonChecked(HIDDEN_KEY, this.hidden) && ok;
+		}
+		return ok;
 	}
 
 	private persist(): void {

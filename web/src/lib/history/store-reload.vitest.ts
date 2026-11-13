@@ -46,6 +46,23 @@ describe('HistoryStore reload', () => {
 		expect(reload().get('shot:private')?.privacy).toBe('private');
 	});
 
+	it('a pin survives a reload, and an old row reads as not pinned', () => {
+		const store = new HistoryStore();
+		store.insertPulled(makeShot('shot:p'));
+		store.insertPulled(makeShot('shot:q'));
+		store.setPinned('shot:p', true);
+		expect(reload().get('shot:p')?.pinned).toBe(true);
+		expect(reload().get('shot:q')?.pinned).toBeUndefined();
+		store.setPinned('shot:p', false);
+		expect(reload().get('shot:p')?.pinned).toBeUndefined();
+	});
+
+	it('the Visualizer version survives a reload', () => {
+		const store = new HistoryStore();
+		store.insertPulled(makeShot('shot:v', { visualizerUpdatedAt: 1_700_000_000 }));
+		expect(reload().get('shot:v')?.visualizerUpdatedAt).toBe(1_700_000_000);
+	});
+
 	it('AC-F1.2 decentId, machine and bean grinder survive a reload', () => {
 		const store = new HistoryStore();
 		store.insertPulled(
@@ -120,6 +137,8 @@ describe('HistoryStore reload', () => {
 			privacy: 'unlisted',
 			visualizerId: 'vis-1',
 			decentId: 'dec-1',
+			visualizerUpdatedAt: 1_700_000_000,
+			pinned: true,
 			machine,
 			deletedAt: 1_700_000_100_000,
 			brewMethod: 'custom:abc',

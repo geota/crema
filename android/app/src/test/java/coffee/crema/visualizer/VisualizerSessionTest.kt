@@ -285,7 +285,7 @@ class VisualizerSessionTest {
                 syncAccountId = "u1",
                 shotPullCursor = 99L,
                 shotTombstones = listOf(tomb),
-                baristaPending = setOf("x"),
+                pendingEdits = mapOf("x" to PendingEdit(barista = true), "y" to PendingEdit(annotations = true)),
                 retryQueue = listOf(QueuedUpload("old-shot", 1, 0L)),
             ),
         )
@@ -296,7 +296,7 @@ class VisualizerSessionTest {
         val after = stored()
         assertEquals("u2", after.syncAccountId)
         assertNull("the cursor starts over", after.shotPullCursor)
-        assertTrue("marks go", after.baristaPending.isEmpty())
+        assertTrue("marks go", after.pendingEdits.isEmpty())
         assertTrue("what was queued for the old account goes", after.retryQueue.isEmpty())
         assertEquals("kept for the old account", "u1", after.shotTombstones.single().parkedFor)
         assertTrue(v.state.value.accountChangeAsk)

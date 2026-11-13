@@ -74,9 +74,11 @@ class DriveSessionTest {
     private fun reopen() = DriveSync(
         store, json, CoroutineScope(job + Dispatchers.Default), "cid",
         notify = { notices += it },
-        backupZip = { BackupZip(ByteArray(1), coffee.crema.core.BackupCounts(1u, 1u)) },
+        backupZip = {
+            BackupZip(java.io.File.createTempFile("backup", ".zip").apply { writeBytes(ByteArray(1)) }, coffee.crema.core.BackupCounts(1u, 1u))
+        },
         backupFileName = { "crema-backup-1" },
-        applyRestore = { _, _ -> },
+        applyRestore = { _, _, _ -> },
         exchangeCode = { _, _ -> set("new") },
         refreshToken = {
             grants.incrementAndGet()
@@ -186,6 +188,22 @@ class DriveSessionTest {
         settle()
         assertFalse(s.state.value.needsReconnect)
         assertNotNull(stored().tokens)
+    }
+
+    /** #311 review: the unchanged-backup hash belongs to the Drive it was
+     *  uploaded to. After a disconnect or a new sign-in the next backup uploads. */
+    @Test
+    fun `a disconnect and a sign-in forget the backup hash`() {
+        val out = sync(DriveState(tokens = set("old"), lastAutoBackupHash = "h1"))
+        out.disconnect(quiet = true)
+        settle()
+        assertNull(stored().lastAutoBackupHash)
+
+        val back = sync(DriveState(lastAutoBackupHash = "h1", pendingVerifier = "v", pendingState = "st"))
+        back.handleCallback("code", "st", null)
+        settle()
+        assertNotNull(stored().tokens)
+        assertNull(stored().lastAutoBackupHash)
     }
 
     @Test

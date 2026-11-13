@@ -9,6 +9,25 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Pour averages in shot detail** — a shot's detail now shows its average
+  pressure, flow and head temperature over the pour, from first flow to the
+  end of flow, beside the peaks. The preheat is left out, so the numbers aren't
+  pulled toward zero, and a pause inside the pour counts for its length. They
+  are worked out when you open the shot, so old shots show them too; a shot
+  with no recorded telemetry shows nothing. Android and web.
+- **Pin a shot** — pin a shot from its detail to keep it safe: its raw
+  Bluetooth capture stays whatever the limit, and any cleanup skips it, the
+  300-shot history limit included: pinned shots don't count toward it. A small
+  mark shows on the row, History has a Pinned filter, and deleting a pinned shot
+  says so. Pins move with backups, and between the apps. Android and web.
+- **Storage and backups settings** — choose how many raw captures to keep (Off,
+  10, 50, 100, 300 or All; on Android these are Bluetooth sessions), and see the
+  storage used, your pinned shots and the last backup. On Android you also
+  choose how many automatic Google Drive copies to keep (1, 3, 5 or 10), daily
+  or weekly backups, and Wi-Fi only, and an automatic backup with nothing new
+  in it no longer uploads. Lowering a limit says what it will delete first.
+  Existing installs keep today's limits; new ones keep 50 captures and 3 Drive
+  copies. Android's 14-day limit on captures is gone. Android and web.
 - **Pick any Drive backup to restore** — Restore from Drive now lists every
   backup in your Drive, manual or daily, from any device, newest first, with its
   date and device and, for daily backups, its shot and curve counts. Pick one,
@@ -90,6 +109,60 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   offers to archive it, which also drops it as the active bag, and then to rate
   it if it has no rating, as web does. Android.
 
+### Changed
+
+- **Android restores read a backup a piece at a time** — a backup from a file
+  or Google Drive is copied to the app's cache and read in small pieces, not
+  loaded whole, so a large one restores without running out of memory: up to
+  2 GB, where the limit was 200 MB. Every part of the zip is checked against
+  its checksum, and a damaged or cut-off file is refused before anything
+  changes. A record over 16 MB counts as a damaged line. (#310)
+- **Android backups are built a piece at a time** — the backup is written to a
+  temporary file as it's built, rather than held in memory whole, so a large
+  history backs up without running the app out of memory. Back up shows how
+  far it's got and can be cancelled, leaving nothing behind, and a Drive
+  backup uploads straight from the file. (#310)
+- **Web backups are built a piece at a time** — the backup file is written as
+  it's built, into the browser's own storage where it has one, rather than held
+  in memory whole, so a large history backs up without running the tab out of
+  memory. Back up shows how far it's got and can be cancelled, leaving nothing
+  behind, and a Drive backup uploads straight from the file. (#310)
+- **Web restores read a backup a piece at a time** — a backup from a file or
+  Google Drive is read in small pieces, not loaded whole, so a large one
+  restores without running the tab out of memory: up to 2 GB, where the limit
+  was 200 MB. Every part of the zip is checked against its checksum before
+  anything changes, and a damaged or cut-off file is refused with nothing
+  written. A record over 16 MB counts as a damaged line, and a backup is never
+  written that a restore would refuse: no photo over 100 MB, no more than
+  10,000 files. (#310)
+- **Restore shows what it will do first (Android)** — as on the web: after you
+  pick a backup, from a file or Google Drive, Crema works out what changes. A
+  clean Merge runs at once and says what it added; a Merge with warnings, and
+  every Replace, shows the numbers first, and Replace still asks you to type
+  ERASE, now with what it will delete in front of you. Merge keeps your
+  settings, maintenance counters, Visualizer preferences and every row you
+  already have, unless the device is still as a fresh install left it, fills in
+  lost curves, and can bring back shots you deleted here. Replace deletes only
+  what the backup doesn't have, and refuses a damaged backup or one that would
+  empty the device. Each store lands in one write, a restore never runs over a
+  shot or a firmware update, a firmware update can't start during one, and a
+  restore cut off part-way says so at the next launch. Crema no longer picks an
+  active bean for you at launch.
+- **Restore shows what it will do first (web)** — after you pick a backup, Crema
+  reads it strictly and works out what changes. A clean Merge runs at once and
+  then says what it added; a Merge with warnings, and every Replace, shows the
+  numbers first, and Replace offers Back up first. Merge now keeps your
+  settings, maintenance counters, Visualizer preferences and every bean or shot
+  you already have, unless the device is still as a fresh install left it, and
+  it fills in curves this device lost. A shot you deleted here stays deleted,
+  unless you choose to bring it back. Replace deletes only what the backup
+  doesn't have, keeps what an older backup never carried, and refuses a
+  damaged backup or one that would empty the device. Shots that a restore
+  removes keep their curves for an hour, in case the browser loses the
+  restore. A restore interrupted part-way says so at the next launch. Other
+  Crema tabs reload once it finishes. Shots a frozen tab kept come back
+  without their raw capture and don't resend the webhook.
+
 ### Fixed
 
 - **The weight stop follows the yield on screen** — dialling the yield, then
@@ -108,6 +181,65 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   is pouring asks first: "The machine is pouring. Disconnect, and Crema's stops
   won't run?". On the web, a Disconnect mid-shot no longer leaves that shot's
   bean behind to bill the next shot's bag. Android and web.
+- **A remote's scale no longer drops out over and over** — a remote device
+  judged the hub's Bluetooth readings against its own clock, but they carried
+  the hub's. When the remote had been up a few seconds longer than the hub, its
+  scale looked stale on every tick and was detached. Readings now move onto the
+  remote's clock as they arrive, keeping their spacing. Android (#319).
+- **Running a cut-off restore again keeps its shots' bag debits.** Beans the
+  first run added used to count as already on this device, so the second run
+  set those shots' debits to zero. Crema now knows the same backup by its date,
+  device and app version, from Drive or from a file, and a different backup
+  holding the same bean still counts it as yours. Android and web.
+- **Two web tabs no longer undo each other's changes.** Each store saved its
+  whole copy, so a tab left open put its old copy back over what another tab
+  had saved: a bag's debit, a rating, a recipe, a maintenance count. Each tab
+  now takes what another tab saves, as it's saved and when the tab comes back
+  into view, and a shot recorded in one tab shows in the other with its curve.
+  Two edits at the very same moment still go to the later one. The active
+  profile stays each tab's own, as it's what that tab's machine runs. (#333)
+- **Bean dates show the right day west of Greenwich.** The bean drawer read a
+  stored roast, opened, frozen or defrosted day as midnight UTC, so in the
+  Americas it showed the day before (a bag roasted on Nov 8 read "Nov 7 · 0d
+  ago"). The day is now read as local. Web.
+- **A full history says when a new shot pushes the oldest out.** History keeps
+  the newest 300 shots (pinned shots don't count), and a shot or brew saved on a
+  full history dropped the oldest without a word; restore and import already
+  said so. Erase all data and the web's factory reset also remove what a later
+  version's history storage keeps, so going back to this version leaves nothing
+  behind. Android and web. (#310)
+- **Pulls from Visualizer finish on Android too** — a pull walks every page,
+  paced under Visualizer's limits, and each shot lands as it arrives, so one
+  that stops keeps what it got and the next picks up only what's left. A rate
+  limit pauses it, and Settings says until when; it's no longer retried a few
+  seconds later. A shot that keeps failing stops holding the pull back after
+  three days and is tried once a day. The cursor follows Visualizer's clock, so
+  a phone with a wrong clock no longer skips shots. The first sync after this
+  update checks your whole account once, and says so. Android.
+- **Pulls from Visualizer finish** — a web pull now walks every page, paced
+  under Visualizer's limits, instead of quietly stopping. Each shot lands as it
+  arrives, so a pull that stops keeps what it got, and the next one picks up
+  only what's left. A rate limit pauses the pull and the Sync card says until
+  when. A shot that keeps failing stops holding the pull back after three days,
+  and is tried once a day. One tab pulls at a time. The first sync after this
+  update checks your whole account once, and says so when it starts. Web.
+- **Tag edits reach Visualizer without undoing the website's** — on Premium, a
+  tag edit now reads the shot's tags on Visualizer first and sends only what you
+  added and removed, so a tag added on the website stays and comes back to Crema
+  too. Removing a shot's last tag now clears it there as well. A pull only adds
+  tags and never overwrites a tag edit still on its way. On a free account the
+  edit waits and goes up after an upgrade. If Visualizer still won't keep the
+  tags, the sync log says so once. Web.
+- **A shot edit sends only what changed** — a rating, note or bean edit no longer
+  resends the shot's tags or barista, and a failed edit now tries again from the
+  shot as it stands, until it lands. If the shot is gone or refused on
+  Visualizer, the sync log says so. Web.
+- **A shot edit Visualizer didn't get tries again** — a rating, note, bean,
+  grind or barista edit that couldn't reach Visualizer now retries from the shot
+  as it stands, until it lands, where it used to wait for the next edit. A
+  barista edit no longer resends the rest, and a shot gone or refused on
+  Visualizer is reported. A pull now adds the tags from Visualizer and fills a
+  missing recipe, and never touches a rating, note or bean. Android.
 - **A shot finishing no longer undoes an edit made meanwhile** — a rating or note
   set while a shot assembled, a bag debit during a bean sync and a change while
   an import ran used to be overwritten by a copy read earlier. Each now lands on
@@ -130,6 +262,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   out under half the size of your last one, Crema tells you. Pruned copies go to
   Drive's trash, where you can restore them for 30 days. Copies made before this
   update are left alone. Android.
+- **A daily backup never holds less than the damage left** — while Android
+  couldn't read one of your stores this session, or a restore is running, the
+  daily Drive backup waits and Settings says why; it tries again at the next
+  launch. When Android finds your bean library, profiles, recipes or settings
+  damaged, Drive also keeps the newest daily backup from before the damage, as
+  the shot counts can't see those. A backup you start yourself still goes, and says
+  what it couldn't include, on Android and the web. New installs now keep 3 daily
+  copies; an install that has backed up before keeps its 10. Android.
 - **A store Android can't read is left alone** — a passing read error or running
   out of memory while loading used to move a good file aside as damaged. Now
   only a file that doesn't decode is damaged. Anything else leaves it in place

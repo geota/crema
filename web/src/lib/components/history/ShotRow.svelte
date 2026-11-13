@@ -180,6 +180,9 @@
 		<div class="hi-row-name">
 			{shotTitle(shot)}
 			{#if manual}<span class="hi-row-logged">· logged</span>{/if}
+			{#if shot.pinned}<span class="hi-row-pin" title="Pinned"
+					><Icon cls="ph-fill ph-push-pin" aria-label="Pinned" /></span
+				>{/if}
 		</div>
 		<div class="hi-row-bean">{rowBeanLine}</div>
 		{#if noteSnippet}
@@ -323,6 +326,11 @@
 		text-overflow: ellipsis;
 	}
 	/* Quiet provenance tag on manually logged brews. */
+	.hi-row-pin {
+		margin-left: 4px;
+		font-size: 12px;
+		color: var(--accent);
+	}
 	.hi-row-logged {
 		font-weight: 400;
 		font-size: 11px;

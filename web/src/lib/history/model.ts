@@ -26,9 +26,15 @@ import type {
 	TimedSample
 } from '#lib/core/index.js';
 import type { ShotMachine as CoreShotMachine } from '#lib/core/crema-core.js';
-import type { BrewHistoryStats, BrewSeries, BrewStatInput } from '#lib/core/crema-core.js';
+import type {
+	BrewHistoryStats,
+	BrewSeries,
+	BrewStatInput,
+	PourAverages
+} from '#lib/core/crema-core.js';
 import {
 	peaksForShot as wasmPeaksForShot,
+	pourAveragesForShot as wasmPourAveragesForShot,
 	historyStats as wasmHistoryStats,
 	brewHistoryStats as wasmBrewHistoryStats,
 	ratioForMethod as wasmRatioForMethod,
@@ -340,6 +346,18 @@ export interface StoredShot {
 	 */
 	decentId?: string | null;
 	/**
+	 * The Visualizer row's `updated_at` (unix s) when a pull last merged it:
+	 * a pull skips a row at this version. Core `StoredShot::visualizer_updated_at`
+	 * (so backups keep it); never uploaded.
+	 */
+	visualizerUpdatedAt?: number | null;
+	/**
+	 * The user pinned this shot (#311): its raw capture ignores the capture
+	 * limit, and it is exempt from any cleanup. Core `StoredShot::pinned`;
+	 * absent reads as not pinned, so old backups and rows are unchanged.
+	 */
+	pinned?: boolean;
+	/**
 	 * The DE1 this shot was pulled on, stamped at record time (#84). The
 	 * Decent upload needs the serial (the server checks it belongs to the
 	 * account); a shot recorded before this field falls back to the
@@ -500,6 +518,27 @@ export function peaksOf(shot: StoredShot): ShotPeaks {
 			peakTemp: 0
 		};
 		return fallback;
+	}
+}
+
+const pourAveragesCache = new BoundedCache<PourAverages | null>(64);
+/**
+ * The pour's averages (pressure, flow, head temperature), from the first flow
+ * to the last — derived on display by the core (`de1_domain::pour_averages`,
+ * #299), like {@link peaksOf}; nothing is stored. `null` when the shot's
+ * samples hold no pour (no telemetry, an import without it), so the detail
+ * shows nothing rather than zeros.
+ */
+export function pourAveragesOf(shot: StoredShot): PourAverages | null {
+	const key = `${shot.id}:${shot.record.samples.length}`;
+	const cached = pourAveragesCache.get(key);
+	if (cached !== undefined) return cached;
+	try {
+		const averages = JSON.parse(wasmPourAveragesForShot(JSON.stringify(shot))) as PourAverages | null;
+		pourAveragesCache.set(key, averages);
+		return averages;
+	} catch {
+		return null;
 	}
 }
 

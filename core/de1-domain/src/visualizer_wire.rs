@@ -492,12 +492,15 @@ pub fn wire_shot_from_detail(
     let rating = flavor_raw.map(|f| ((f / 3.0).round() as i32).clamp(0, 5));
 
     // Read-side detail field is `tags`; the BC variant carries none.
-    let tag_list: Vec<String> = match detail.get("tags") {
-        Some(Value::Array(arr)) => arr
-            .iter()
-            .filter_map(|t| t.as_str().map(str::to_owned))
-            .collect(),
-        _ => Vec::new(),
+    // Absent is `None`; `[]` is `Some([])`, which says nothing either: a free
+    // account always answers `[]`.
+    let tag_list: Option<Vec<String>> = match detail.get("tags") {
+        Some(Value::Array(arr)) => Some(
+            arr.iter()
+                .filter_map(|t| t.as_str().map(str::to_owned))
+                .collect(),
+        ),
+        _ => None,
     };
 
     // Bean / grinder journal fields — Visualizer's native serializer
@@ -925,8 +928,9 @@ pub struct ShotPatchInputs {
     pub grinder_model: Option<String>,
     /// Visualizer coffee-bag id to (re)link → `coffee_bag_id`.
     pub coffee_bag_id: Option<String>,
-    /// Tags → `tag_list`. Empty = omit.
-    pub tag_list: Vec<String>,
+    /// Tags → `tag_list`, an absolute list. `None` omits it; `Some([])` sends
+    /// `[]`, which clears the remote tags, so only a tag push should pass one.
+    pub tag_list: Option<Vec<String>>,
     /// Inline bean: roaster display name → `bean_brand`.
     pub bean_brand: Option<String>,
     /// Inline bean: bean/bag name → `bean_type`.
@@ -1000,16 +1004,10 @@ pub fn visualizer_shot_patch(inputs: &ShotPatchInputs) -> Value {
     if let Some(bag) = &inputs.coffee_bag_id {
         body.insert("coffee_bag_id".to_owned(), Value::String(bag.clone()));
     }
-    if !inputs.tag_list.is_empty() {
+    if let Some(tags) = &inputs.tag_list {
         body.insert(
             "tag_list".to_owned(),
-            Value::Array(
-                inputs
-                    .tag_list
-                    .iter()
-                    .map(|t| Value::String(t.clone()))
-                    .collect(),
-            ),
+            Value::Array(tags.iter().map(|t| Value::String(t.clone())).collect()),
         );
     }
     if let Some(privacy) = &inputs.privacy {
@@ -1757,7 +1755,10 @@ mod tests {
         assert_eq!(w.final_weight_g, Some(36.2));
         assert_eq!(w.notes.as_deref(), Some("tasty"));
         assert_eq!(w.rating, Some(4));
-        assert_eq!(w.tag_list, vec!["daily-driver", "lever"]); // non-strings dropped
+        assert_eq!(
+            w.tag_list,
+            Some(vec!["daily-driver".to_owned(), "lever".to_owned()])
+        ); // non-strings dropped
     }
 
     #[test]
@@ -1775,7 +1776,7 @@ mod tests {
         assert_eq!(w.notes.as_deref(), Some("bc notes"));
         assert_eq!(w.rating, Some(3));
         assert_eq!(w.final_weight_g, None); // no drink_weight
-        assert!(w.tag_list.is_empty());
+        assert!(w.tag_list.is_none_or(|t| t.is_empty()));
     }
 
     #[test]
@@ -1954,7 +1955,7 @@ mod tests {
             privacy: Some("unlisted".to_owned()),
             grinder_model: Some("Niche Zero".to_owned()),
             coffee_bag_id: Some("bag-1".to_owned()),
-            tag_list: vec!["crema".to_owned()],
+            tag_list: Some(vec!["crema".to_owned()]),
             bean_brand: Some("Sey".to_owned()),
             bean_type: Some("Kenya AA".to_owned()),
             roast_date: Some("2026-06-17".to_owned()),
@@ -2089,7 +2090,7 @@ mod tests {
             privacy: Some("unlisted".to_owned()),
             grinder_model: Some("Niche Zero".to_owned()),
             coffee_bag_id: Some("bag-1".to_owned()),
-            tag_list: vec!["crema".to_owned()],
+            tag_list: Some(vec!["crema".to_owned()]),
             bean_brand: Some("Sey".to_owned()),
             bean_type: Some("Kenya AA".to_owned()),
             roast_date: Some("2026-06-17".to_owned()),
@@ -2138,7 +2139,7 @@ mod tests {
         let only_premium = visualizer_shot_patch(&ShotPatchInputs {
             rating: Some(5),
             notes: Some("juicy".to_owned()),
-            tag_list: vec!["x".to_owned()],
+            tag_list: Some(vec!["x".to_owned()]),
             coffee_bag_id: Some("bag-1".to_owned()),
             privacy: Some("public".to_owned()),
             ..ShotPatchInputs::default()
@@ -2334,6 +2335,26 @@ mod tests {
         assert_eq!(
             bean_from_wire(&old, None, "bean:fallback", 1).notes,
             "plain old"
+        );
+    }
+
+    #[test]
+    fn tag_clear_reaches_remote() {
+        let cleared = ShotPatchInputs {
+            tag_list: Some(vec![]),
+            ..ShotPatchInputs::default()
+        };
+        assert_eq!(
+            visualizer_shot_patch(&cleared)["tag_list"],
+            serde_json::json!([])
+        );
+        let untouched = ShotPatchInputs {
+            rating: Some(4),
+            ..ShotPatchInputs::default()
+        };
+        assert!(
+            visualizer_shot_patch(&untouched).get("tag_list").is_none(),
+            "a rating edit sends no tags"
         );
     }
 }
