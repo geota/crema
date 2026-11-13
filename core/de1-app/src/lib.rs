@@ -1313,7 +1313,8 @@ impl CremaCore {
     /// scale-derived runtime reading back to the fresh state [`CremaCore::new`]
     /// seeds (the stream smoother, the last weight / estimate, the
     /// stale-watchdog flag, the one-shot connect-time query latch, and the
-    /// scale-derived peaks). User prefs (auto-tare, stop-on-weight) and the
+    /// scale-derived peaks, unless a shot still owes them to its
+    /// `ShotCompleted`). User prefs (auto-tare, stop-on-weight) and the
     /// shot / profile config are intentionally NOT touched — only the live
     /// scale connection + its readings.
     ///
@@ -1330,7 +1331,13 @@ impl CremaCore {
         self.scale_watch.disconnect();
         self.last_scale_estimate = None;
         self.scale_config_queried = false;
-        self.shot_metrics.reset_scale();
+        // The shot's yield survives a scale drop until `ShotCompleted` (#320):
+        // while a session is open or a drip settle is pending, the readings
+        // so far are the shot's, and the settle finalizes on its deadline.
+        // The next shot's start clears them.
+        if !self.shot_metrics_open() {
+            self.shot_metrics.reset_scale();
+        }
         // The untared-cup guard's latches describe THIS scale's readings —
         // a different scale (or the same one re-taring on reconnect) must
         // start clean (review #26). Mid-session they stay until it closes,
@@ -1534,6 +1541,20 @@ impl CremaCore {
             .as_ref()
             .is_some_and(HdsNegotiation::is_soft_sleeping)
             && !self.flow_running()
+    }
+
+    /// The shot's metrics are still owed to a `ShotCompleted`: a session or
+    /// shot is open, or its drip settle is pending.
+    fn shot_metrics_open(&self) -> bool {
+        self.session.is_some() || self.shot_started.is_some() || self.post_shot_settle.is_some()
+    }
+
+    /// Whether a user Disconnect should ask first (#320): the machine is
+    /// pouring a session this core drives, and Crema's stops for it need the
+    /// link. A mirror's stops are the hub's, so a mirror never asks. Both
+    /// shells read this before a user Disconnect, so the rule lives here.
+    pub fn disconnect_needs_confirm(&self) -> bool {
+        !self.read_only && self.flow_running()
     }
 
     /// A session is open past its pre-flow substates.
@@ -3457,16 +3478,28 @@ impl CremaCore {
     /// buffer is wiped (a fresh [`CaptureRecorder`] is part of
     /// [`CremaCore::new`]).
     ///
-    /// Returns the one output a teardown can carry: a stop for the scale's
-    /// timer when the DE1 went away mid-shot (Decenza `29878266`) — the
-    /// scale link usually survives a DE1 drop, and without it the on-scale
-    /// clock keeps counting. Empty otherwise.
+    /// Returns what a teardown can carry: a stop for the scale's timer when
+    /// the DE1 went away mid-shot (Decenza `29878266`) — the scale link
+    /// usually survives a DE1 drop, and without it the on-scale clock keeps
+    /// counting — and the `ShotCompleted` of a shot still in its drip settle
+    /// (#320), whose stored shot stays for
+    /// [`take_stored_shot`](Self::take_stored_shot).
     pub fn reset(&mut self) -> CoreOutput {
         // A reset is the shells' disconnect path: tell a running flash, and
         // carry it across the rebuild (see the `firmware_flash` field).
         self.firmware_flash_link_lost();
         let firmware_flash = self.firmware_flash.take();
         let mut out = CoreOutput::default();
+        // A shot in its drip settle is complete: finalize it with the weight
+        // seen so far, so a Disconnect in the 3 s after a shot keeps it
+        // (#320). Its stored shot survives the rebuild for the shell's
+        // `take_stored_shot`. The drip was cut short, so it trains nothing.
+        if let Some(mut settle) = self.post_shot_settle.take() {
+            settle.learn_drip = false;
+            let now = self.clock;
+            self.finalize_shot_completed(settle, now, &mut out);
+        }
+        let pending_shot = self.pending_shot.take();
         // No session survives a reset, so no stop is owed.
         out.commands.push(Command::CancelStop);
         self.stop_scale_timer_for_link_loss(&mut out);
@@ -3560,6 +3593,7 @@ impl CremaCore {
         // A diagnostic: a reconnect doesn't make a byte new again.
         let unknown_substates_reported = std::mem::take(&mut self.unknown_substates_reported);
         *self = CremaCore::new();
+        self.pending_shot = pending_shot;
         self.next_upload_id = next_upload_id;
         self.unknown_substates_reported = unknown_substates_reported;
         self.starter.settings = start_settings;

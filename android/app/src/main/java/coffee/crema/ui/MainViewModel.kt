@@ -94,6 +94,10 @@ import coffee.crema.decent.DecentSync
 import coffee.crema.decent.UniffiDecentCore
 import coffee.crema.decent.decentShotRecordJson
 
+/** The question a user Disconnect asks while the machine pours (#320; web's
+ *  `DISCONNECT_WHILE_POURING`). */
+const val DISCONNECT_WHILE_POURING = "The machine is pouring. Disconnect, and Crema's stops won't run?"
+
 /**
  * Owns the [CremaBridge] and the [De1BleManager], parses the JSON `CoreOutput`
  * the bridge returns, and projects decoded [Event]s into [MainUiState].
@@ -1713,6 +1717,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun connectFirmwareDe1() {
         val address = firmware.machineAddress
         if (address != null) connection.connectTo(address) else connection.connect()
+    }
+
+    /** A user Disconnect (#320): while the machine pours it asks first, on the
+     *  core's word that Crema's stops need the link; otherwise it disconnects. */
+    fun requestDisconnect() {
+        if (runCatching { bridge.disconnectNeedsConfirm() }.getOrDefault(false)) {
+            _ui.update { it.copy(disconnectConfirm = true) }
+        } else {
+            disconnect()
+        }
+    }
+
+    /** The answer to [requestDisconnect]'s question, [DISCONNECT_WHILE_POURING]. */
+    fun answerDisconnect(disconnect: Boolean) {
+        _ui.update { it.copy(disconnectConfirm = false) }
+        if (disconnect) disconnect()
     }
 
     /** Disconnect the DE1 — delegate of [ConnectionController.disconnect]. */

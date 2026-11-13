@@ -58,6 +58,7 @@ import { isSerialStolen } from '#lib/decent/stolen-serials.js';
 import { SAW_MODEL_KEY, seedSawModel } from './saw-model-store';
 import { getSettingsStore, settingsToCommon } from '#lib/settings/index.js';
 import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
+import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 import { CoreRecoveryWatch } from '#lib/core/recovery-watch.js';
 import { CoreResetNotice } from '#lib/core/reset-notice.js';
 import { canReloadNow, reloadInputsOf } from '#lib/pwa/update-gate.js';
@@ -232,6 +233,13 @@ const CLEARED_DE1_READOUT = {
  * late enough not to nag.
  */
 const SCALE_LOW_BATTERY_PCT = 25;
+
+/** The question a user Disconnect asks while the machine pours (#320). */
+export const DISCONNECT_WHILE_POURING = {
+	message: "The machine is pouring. Disconnect, and Crema's stops won't run?",
+	confirmLabel: 'Disconnect',
+	danger: true
+} as const;
 
 /** The five Quick Sheet values a shot records as they were at its start. */
 interface ShotStartBrewParams {
@@ -1273,8 +1281,15 @@ export class CremaApp {
 	/**
 	 * Disconnect the DE1 and clear its readout fields. Every caller is a user
 	 * action (rail menu, Settings), so the next launch won't reconnect it.
+	 *
+	 * While the machine is pouring, asks first: the core says when Crema's
+	 * stops need the link (#320). Resolves `false` when the user keeps it.
 	 */
-	async disconnectDe1(): Promise<void> {
+	async disconnectDe1(): Promise<boolean> {
+		// A core that can't answer (stopped after repeated panics) runs no
+		// stops: never let it block the teardown (REVIEW-399 M1).
+		const pouring = (await this.core.disconnectNeedsConfirm().catch(() => false)) === true;
+		if (pouring && !(await confirmDialog(DISCONNECT_WHILE_POURING))) return false;
 		this.#launch.cancel('de1');
 		markUserDisconnect('de1');
 		// Leave the DE1's USB port charging (Decenza
@@ -1293,8 +1308,12 @@ export class CremaApp {
 		await this.de1.disconnect();
 		// The user ended the session: the shot can't complete now.
 		shotAbandoned();
+		// Nor can its context bill the next shot's bag (#320). A shot the
+		// reset completed has already taken it.
+		if (this.replayFiber === null) getActiveShotStore().clear();
 		this.stolenSerial = false;
 		this.state.patch(CLEARED_DE1_READOUT);
+		return true;
 	}
 
 	// ---- Reconnect on launch ----------------------------------------------
@@ -1360,7 +1379,7 @@ export class CremaApp {
 	 */
 	async forgetDe1(): Promise<void> {
 		const live = this.de1.bluetoothDevice();
-		await this.disconnectDe1();
+		if (!(await this.disconnectDe1())) return;
 		const revoked = await forgetDevice('de1', live, currentBluetooth());
 		this.state.log(revoked ? 'DE1 forgotten and its Bluetooth permission revoked' : 'DE1 forgotten');
 	}
