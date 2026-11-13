@@ -3,6 +3,7 @@
  * write that removes the row, and never because a listing doesn't name them.
  * Runs the real stores over an in-memory IndexedDB.
  */
+import { readMarker } from '#lib/restore/marker.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import type { TimedSample } from '#lib/core/index.js';
@@ -230,6 +231,22 @@ describe('rebasing', () => {
 		expect(await seriesIds()).toEqual(['kept', 'old']);
 	});
 
+	it('a pin moves with a backup, and an unpinned row comes back unpinned', async () => {
+		const history = getHistoryStore();
+		history.clearAllShots();
+		history.insertPulled(row('pinned'));
+		history.insertPulled(row('plain', 1_700_000_000_001));
+		history.setPinned('pinned', true);
+		await settle();
+		const backup = (await buildBackupJsonl())!;
+		expect(backup.jsonl).toContain('"pinned":true');
+		history.setPinned('pinned', false);
+		await restoreBackup(backup.jsonl, 'wipe');
+		await settle();
+		expect(history.get('pinned')?.pinned).toBe(true);
+		expect(history.get('plain')?.pinned).toBeUndefined();
+	});
+
 	it('a Replace restore keeps a kept row captures and leaves removal to its marker', async () => {
 		const history = getHistoryStore();
 		history.clearAllShots();
@@ -241,10 +258,12 @@ describe('rebasing', () => {
 		await getCaptureStore().put('later', []);
 		await settle();
 
-		restoreBackup(backup.jsonl, 'wipe');
+		await restoreBackup(backup.jsonl, 'wipe');
 		await settle();
 		expect(history.rawAll.map((s) => s.id)).toEqual(['kept']);
+		// The removed row's curve and capture wait for the marker's hour.
 		expect(await captureIds()).toEqual(['kept', 'later']);
-		expect(await seriesIds()).toEqual(['kept']);
+		expect(await seriesIds()).toEqual(['kept', 'later']);
+		expect(readMarker()?.deletes.shots).toEqual(['later']);
 	});
 });

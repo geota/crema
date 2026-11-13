@@ -6,7 +6,6 @@ import coffee.crema.core.MaintenanceState
 import coffee.crema.core.Roaster
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.core.exportBackupBundle
-import coffee.crema.core.importBackupJsonl
 import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.settings.AppPrefs
@@ -23,7 +22,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.jsonObject
@@ -32,8 +30,8 @@ import kotlinx.serialization.json.put
 /*
  * The whole-app `crema-backup/v1` bundle, both directions. The core owns the
  * format: [backupBundleJsonl] hands it an envelope of this shell's records
- * (`exportBackupBundle`) and [parseBackup] reads a bundle back through the same
- * parser web uses (`importBackupJsonl`), so a backup from either shell restores
+ * (`exportBackupBundle`) and [parseBackupBytes] reads a bundle back through the same
+ * parser web uses (`importBackupBytes`), so a backup from either shell restores
  * on the other. What stays here is the Android side of the mapping: the
  * envelope's shapes on the way out, the store types and the settings / blob
  * defaults on the way in. The wipe/merge apply lives in [LibraryController].
@@ -123,7 +121,18 @@ internal fun backupBundleJsonl(
     appVersion: String,
     deviceLabel: String,
     export: (envelope: String, createdAtMs: Long, appVersion: String, deviceLabel: String) -> String = ::exportBackupBundle,
-): BuiltBackup {
+): BuiltBackup =
+    json.decodeFromString(
+        BuiltBackup.serializer(),
+        export(backupEnvelope(snap, json, withShots = true), createdAtMs, appVersion, deviceLabel),
+    )
+
+/**
+ * The export envelope for [snap] (see `exportBackupBundle`), rows as JSON
+ * strings. Without its shots for the line-by-line build ([streamBackupZip]),
+ * which hands the core one shot at a time.
+ */
+internal fun backupEnvelope(snap: BackupSnapshot, json: Json, withShots: Boolean): String {
     val customs = snap.customs
     val s = snap.state
     val pinnedIds = snap.pinned
@@ -147,7 +156,7 @@ internal fun backupBundleJsonl(
     // flat shape fails the whole envelope's deserialization → the entire backup
     // aborts once any shot exists (issue 01). `wireShotJson` emits
     // formatVersion/completedAt/record; restore inverts via storedShotFromBackupJson.
-    val shots = rowStrings(s.history) { wireShotJson(it, forBackup = true).toString() }
+    val shots = if (withShots) rowStrings(s.history) { wireShotJson(it, forBackup = true).toString() } else null
     // Settings line: the shared cross-shell CommonSettings `common` block (both
     // shells emit it identically, so common prefs restore web<->Android) + this
     // shell's `_shell` tag + Android-only `qcGrind` (re-applied only on Android).
@@ -196,7 +205,7 @@ internal fun backupBundleJsonl(
         put("profiles", rowStrings(customs) { it })
         put("beans", beans)
         put("roasters", roasters)
-        put("shots", shots)
+        shots?.let { put("shots", it) }
         put("settings", json.parseToJsonElement(settingsJson))
         put("profileMeta", json.parseToJsonElement(profileMetaJson))
         put("recipes", recipes)
@@ -207,12 +216,12 @@ internal fun backupBundleJsonl(
         put("maintenance", json.parseToJsonElement(maintenanceJson))
         put("visualizerPrefs", json.parseToJsonElement(visualizerPrefsJson))
     }.toString()
-    return json.decodeFromString(BuiltBackup.serializer(), export(envelope, createdAtMs, appVersion, deviceLabel))
+    return envelope
 }
 
 /**
  * A `crema-backup/v1` bundle's records mapped onto the Android stores' types,
- * before they're applied. Pure data, so [parseBackup] is testable without the
+ * before they're applied. Pure data, so [parseBackupBytes] is testable without the
  * ViewModel.
  */
 data class ParsedBackup(
@@ -236,25 +245,26 @@ data class ParsedBackup(
 )
 
 /**
- * Parse a `crema-backup/v1` bundle through the core's `importBackupJsonl` (the
- * parser web restores with) and map its plan onto the Android types, or null
- * when the text has no backup header. [nowMs] seeds the maintenance default for
- * any field an older bundle omits. Shots arrive in the core `StoredShot` shape
- * and invert through [storedShotFromBackupJson]; a record this shell can't
- * decode is skipped, never thrown. [import] is injectable for tests.
+ * A restore's records: the core's `importBackupBytes`, every row decoded, or
+ * [BackupDecodeError]. No header gate: the plan's verdict says whether it's a
+ * backup, and a damaged first line or a BOM can still Merge (REVIEW-378).
  */
-fun parseBackup(
-    text: String,
-    json: Json,
-    nowMs: Long,
-    import: (String) -> String = ::importBackupJsonl,
-): ParsedBackup? {
-    val plan = json.parseToJsonElement(import(text)).jsonObject
-    if ((plan["hasHeader"] as? JsonPrimitive)?.booleanOrNull != true) return null
+fun parseBackupBytes(bytes: ByteArray, json: Json, nowMs: Long): ParsedBackup =
+    parseImportPlan(json.parseToJsonElement(coffee.crema.core.importBackupBytes(bytes)).jsonObject, json, nowMs)
+
+/** A row the core read that this shell can't take. A restore stops before its first write: the plan counted it. */
+class BackupDecodeError(what: String, id: String?) :
+    IllegalArgumentException("A $what in this backup can't be read here (${id ?: "?"}). Nothing was changed.")
+
+private fun parseImportPlan(plan: JsonObject, json: Json, nowMs: Long): ParsedBackup {
     fun array(key: String): List<JsonObject> = (plan[key] as? JsonArray).orEmpty().filterIsInstance<JsonObject>()
     fun obj(key: String): JsonObject? = plan[key] as? JsonObject
+    fun idOf(o: JsonObject) = (o["id"] as? JsonPrimitive)?.content
     fun <T> typed(key: String, serializer: KSerializer<T>): List<T> =
-        array(key).mapNotNull { runCatching { json.decodeFromJsonElement(serializer, it) }.getOrNull() }
+        array(key).map { row ->
+            runCatching { json.decodeFromJsonElement(serializer, row) }.getOrNull()
+                ?: throw BackupDecodeError(key.removeSuffix("s"), idOf(row))
+        }
 
     var prefs: AppPrefs? = null
     var common: CommonSettings? = null
@@ -277,7 +287,7 @@ fun parseBackup(
         profiles = array("profiles").map { json.encodeToString(JsonObject.serializer(), it) },
         beans = typed("beans", Bean.serializer()),
         roasters = typed("roasters", Roaster.serializer()),
-        shots = array("shots").mapNotNull { storedShotFromBackupJson(it, json) },
+        shots = array("shots").map { row -> storedShotFromBackupJson(row, json) ?: throw BackupDecodeError("shot", idOf(row)) },
         prefs = prefs,
         common = common,
         qcGrind = qcGrind,

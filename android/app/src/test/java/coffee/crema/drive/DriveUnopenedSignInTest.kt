@@ -55,7 +55,7 @@ class DriveUnopenedSignInTest {
         store.save(DriveState(tokens = DriveTokenSet(accessToken = "g", refreshToken = "r", expiresAt = 1)))
         keystore.notReady = true
         DriveSync(
-            store, json, scope, "cid", notify = {}, backupZip = { null }, backupFileName = { "b" }, applyRestore = { _, _ -> },
+            store, json, scope, "cid", notify = {}, backupZip = { null }, backupFileName = { "b" }, applyRestore = { _, _, _ -> },
             exchangeCode = { _, _ -> issued },
             refreshToken = { throw DriveHttpError(400, """{"error":"invalid_grant"}""", "refresh refused") },
         ).also {

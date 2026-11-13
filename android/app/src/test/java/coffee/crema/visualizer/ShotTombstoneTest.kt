@@ -78,7 +78,7 @@ class ShotTombstoneTest {
             pulled += it
             refused.intersect(it.map(StoredShot::id).toSet())
         },
-        onFillBarista = { id, name -> filled += id to name },
+        onApplyRemote = { id, patch, _ -> patch.barista?.let { filled += id to it } },
         currentShot = { id -> StoredShot(id = id, completedAtMs = 1, durationMs = 30_000, visualizerId = "v-bound") },
     ).also { s ->
         runBlocking {

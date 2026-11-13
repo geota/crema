@@ -10,7 +10,22 @@ import { getSettingsStore } from '#lib/settings/index.js';
 import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
 import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
 import { BrewMethodStyle } from '#lib/core/crema-core.js';
-import { buildBackupJsonl, restoreBackup } from './index';
+import { buildBackupJsonl, restoreBackup, type RestoreSummary } from './index';
+
+/** What a restore added, by store, as the old summary counted it. */
+function counts({ outcome }: RestoreSummary) {
+	if (outcome.kind !== 'done') throw new Error(`restore ${outcome.kind}`);
+	const p = outcome.plan;
+	return {
+		beans: p.beans.add.length,
+		roasters: p.roasters.add.length,
+		shots: p.shots.add.length,
+		profiles: p.profiles.add.length,
+		recipes: p.recipes.add.length,
+		customMethods: p.customMethods.add.length,
+		settingsApplied: outcome.settingsApplied
+	};
+}
 
 /**
  * F11a: a backup from either shell restores on web. The fixtures live in
@@ -130,8 +145,8 @@ describe('cross-shell backup restore (F11a)', () => {
 		writeFileSync(resolve(FIXTURES, 'web-backup.crema.jsonl'), (await buildBackupJsonl('fixture'))!.jsonl);
 	});
 
-	it('restores an Android backup', () => {
-		const summary = restoreBackup(fixture('android-backup.crema.jsonl'), 'wipe');
+	it('restores an Android backup', async () => {
+		const summary = counts(await restoreBackup(fixture('android-backup.crema.jsonl'), 'wipe'));
 		expect(summary).toMatchObject({
 			beans: 1,
 			roasters: 1,
@@ -167,8 +182,8 @@ describe('cross-shell backup restore (F11a)', () => {
 		expect(getSettingsStore().current.maxShotDurationS).toBe(90);
 	});
 
-	it('restores its own web backup fixture', () => {
-		const summary = restoreBackup(fixture('web-backup.crema.jsonl'), 'wipe');
+	it('restores its own web backup fixture', async () => {
+		const summary = counts(await restoreBackup(fixture('web-backup.crema.jsonl'), 'wipe'));
 		expect(summary).toMatchObject({ beans: 1, roasters: 1, shots: 1, profiles: 1, recipes: 1 });
 		expect(getHistoryStore().get('shot:web-1')?.bean?.name).toBe('Gesha Village');
 		expect(getHistoryStore().get('shot:web-1')?.bagDebit).toBe(12.5);

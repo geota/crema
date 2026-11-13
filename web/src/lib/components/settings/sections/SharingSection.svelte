@@ -18,7 +18,7 @@
 	 * shared `ActivityLog`.
 	 */
 	import { onMount } from 'svelte';
-	import { getHistoryStore, historyDroppedNotice } from '#lib/history/index.js';
+	import { getHistoryStore } from '#lib/history/index.js';
 	import { shotHistoryJsonl } from '#lib/history/crema-jsonl.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import {
@@ -56,19 +56,25 @@
 	import {
 		backupFileName,
 		backupNote as runBackup,
-		buildBackupZip,
+		exportBackup,
+		buildBackupFile,
+		noteBackupMade,
 		driveBackupRefusal,
+		driveBackupFailure,
 		describeBackupGaps,
 		describeBackup,
-		restoreBackupData,
 		applyHeldRestoreChanges,
 		describeHeldRestoreChanges,
+		webSingletons,
 		type HeldRestoreChanges,
 		type RestoreMode
 	} from '#lib/backup/index.js';
-	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import type { BackupProgress } from '#lib/backup/stream.js';
+	import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { planNow, prepareBackupFile, runRestore } from '#lib/restore/engine.js';
+	import { restoreFlow as runRestoreFlow } from '#lib/restore/flow.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
-	import { readImportBytes } from '#lib/utils/import-limits.js';
+	import StorageSection from './StorageSection.svelte';
 	import { credentialsStoredUnencrypted } from '#lib/security/credential-status.js';
 	import {
 		describeDecentDrain,
@@ -341,30 +347,38 @@
 	 *  where the user clicks — not under "Back up everything"). */
 	let restoreNote = $state<string | null>(null);
 
+	/** The running backup's cancel, file or Drive; null when none runs. */
+	let backupRun = $state<AbortController | null>(null);
+
+	/** "Building backup… 120 of 300 shots", for a walk's progress. */
+	function progressLine(p: BackupProgress): string {
+		return p.shotsTotal > 0 ? `Building backup… ${p.shotsWritten} of ${p.shotsTotal} shots` : 'Building backup…';
+	}
+
 	/** Build + download a full `crema-backup/v1` bundle of everything local. */
 	async function backUp(): Promise<void> {
+		if (backupRun) return;
+		const run = new AbortController();
+		backupRun = run;
 		backupNote = 'Building backup…';
-		backupNote = await runBackup();
+		try {
+			backupNote = await runBackup(() =>
+				exportBackup(undefined, {
+					signal: run.signal,
+					onProgress: (p) => (backupNote = progressLine(p))
+				})
+			);
+		} finally {
+			backupRun = null;
+		}
 	}
 
 	let restoreInput = $state<HTMLInputElement | null>(null);
 	let pendingRestoreMode = $state<RestoreMode>('merge');
 
-	/** Open the file picker for a restore. A REPLACE (wipe) is gated by a
-	 *  confirm first — it deletes everything before loading the backup. */
-	async function pickRestore(mode: RestoreMode): Promise<void> {
-		if (
-			mode === 'wipe' &&
-			!(await confirmDialog({
-				title: 'Replace everything?',
-				message:
-					"Replace everything on this device with a backup? Your current profiles, beans, roasters and shots are deleted first. This can't be undone.",
-				confirmLabel: 'Choose backup',
-				danger: true
-			}))
-		) {
-			return;
-		}
+	/** Open the file picker for a restore. A Replace asks after the pick, with
+	 *  the real numbers. */
+	function pickRestore(mode: RestoreMode): void {
 		pendingRestoreMode = mode;
 		if (restoreInput) {
 			restoreInput.value = '';
@@ -393,22 +407,39 @@
 		return ok;
 	}
 
-	/** Read the chosen `.crema` file + apply it (merge or replace). */
+	/** Plan, report, run (`#lib/restore/flow`), then the held sharing changes. */
+	async function restoreFlow(
+		file: Blob,
+		mode: RestoreMode,
+		name: string,
+		say: (line: string) => void
+	): Promise<string> {
+		// Read a piece at a time and checked before the plan (#310 P2w-b).
+		const prepared = await prepareBackupFile(file, name);
+		const singletons = webSingletons();
+		const { line, outcome } = await runRestoreFlow(mode, {
+			plan: (revive) => planNow(prepared, mode, revive),
+			run: (revive, expected) =>
+				runRestore(prepared, mode, { reviveDeleted: revive, expected }, { singletons: singletons.sink }),
+			choose: (o) => choiceDialog(o),
+			confirm: (o) => confirmDialog(o),
+			backUp: () => runBackup(),
+			say
+		});
+		const held = outcome ? singletons.held() : null;
+		if (held && !(await confirmHeldRestoreChanges(held))) {
+			return line + ' Kept your webhook / Visualizer sharing settings.';
+		}
+		return line;
+	}
+
+	/** Read the chosen `.crema` file and restore it (merge or replace). */
 	async function onRestoreFile(event: Event): Promise<void> {
 		const file = (event.target as HTMLInputElement).files?.[0];
 		if (!file) return;
 		try {
-			const r = await restoreBackupData(await readImportBytes(file), pendingRestoreMode);
-			const verb = pendingRestoreMode === 'wipe' ? 'Replaced —' : 'Merged —';
-			restoreNote =
-				`${verb} ${r.profiles} profile(s), ${r.beans} bean(s), ` +
-				`${r.roasters} roaster(s), ${r.shots} shot(s)` +
-				(r.recipes > 0 ? `, ${r.recipes} recipe(s)` : '') +
-				(r.settingsApplied ? ' + settings.' : '.') +
-				historyDroppedNotice(r.droppedShots, history.capacity);
-			if (r.held && !(await confirmHeldRestoreChanges(r.held))) {
-				restoreNote += ' Kept your webhook / Visualizer sharing settings.';
-			}
+			const say = (line: string) => (restoreNote = line);
+			restoreNote = await restoreFlow(file, pendingRestoreMode, file.name, say);
 		} catch (err) {
 			restoreNote = err instanceof Error ? `Restore failed: ${err.message}` : 'Restore failed.';
 		}
@@ -436,24 +467,37 @@
 	async function driveBackup(): Promise<void> {
 		driveBusy = true;
 		driveNote = 'Building backup…';
+		let uploading = false;
 		try {
-			const built = await buildBackupZip();
+			const run = new AbortController();
+			backupRun = run;
+			const built = await buildBackupFile(undefined, {
+				signal: run.signal,
+				onProgress: (p) => (driveNote = progressLine(p))
+			});
 			if (!built) {
 				driveNote = 'Nothing to back up yet.';
 				return;
 			}
-			const refusal = driveBackupRefusal(built.contents);
-			if (refusal) {
-				driveNote = refusal;
-				return;
+			try {
+				const refusal = driveBackupRefusal(built.contents);
+				if (refusal) {
+					driveNote = refusal;
+					return;
+				}
+				driveNote = 'Backing up to Drive…';
+				const token = await drive.accessToken();
+				uploading = true;
+				await uploadBackup(token, backupFileName(), built.file, 'application/zip', run.signal);
+				noteBackupMade();
+				driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.${describeBackupGaps(built.contents)}`;
+			} finally {
+				await built.release();
 			}
-			driveNote = 'Backing up to Drive…';
-			const token = await drive.accessToken();
-			await uploadBackup(token, backupFileName(), built.zip, 'application/zip');
-			driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.${describeBackupGaps(built.contents)}`;
 		} catch (err) {
-			driveNote = err instanceof Error ? `Drive backup failed: ${err.message}` : 'Drive backup failed.';
+			driveNote = driveBackupFailure(err, uploading);
 		} finally {
+			backupRun = null;
 			driveBusy = false;
 		}
 	}
@@ -476,33 +520,15 @@
 		}
 	}
 
-	/** Restore the backup `file` — merge (add) or replace (wipe first). */
+	/** Restore the backup `file`, merge or replace, through the same report. */
 	async function driveRestore(file: DriveFile, mode: RestoreMode): Promise<void> {
-		if (
-			mode === 'wipe' &&
-			!(await confirmDialog({
-				title: 'Replace from Drive?',
-				message: `Replace everything on this device with your Google Drive backup from ${backupDate(file)}? Your current profiles, beans, roasters and shots are deleted first. This can't be undone.`,
-				confirmLabel: 'Replace',
-				danger: true
-			}))
-		) {
-			return;
-		}
 		driveBusy = true;
 		driveNote = 'Fetching from Drive…';
 		try {
 			const token = await drive.accessToken();
-			const bytes = await downloadBackup(token, file.id);
-			const r = await restoreBackupData(bytes, mode);
+			const backup = await downloadBackup(token, file.id);
 			driveFiles = null;
-			driveNote =
-				`Restored from Drive (${file.name}) — ${r.profiles} profile(s), ` +
-				`${r.beans} bean(s), ${r.shots} shot(s)${r.settingsApplied ? ' + settings.' : '.'}` +
-				historyDroppedNotice(r.droppedShots, history.capacity);
-			if (r.held && !(await confirmHeldRestoreChanges(r.held))) {
-				driveNote += ' Kept your webhook / Visualizer sharing settings.';
-			}
+			driveNote = await restoreFlow(backup, mode, file.name, (line) => (driveNote = line));
 		} catch (err) {
 			driveNote = err instanceof Error ? `Drive restore failed: ${err.message}` : 'Drive restore failed.';
 		} finally {
@@ -722,7 +748,17 @@
 			'Download a .crema.zip bundle of everything on this device — including bean photos.'}
 	>
 		{#snippet control()}
-			<StButton label="Back up" icon="download-simple" variant="primary" onClick={backUp} />
+			{#if backupRun && !driveBusy}
+				<StButton label="Cancel" icon="x" onClick={() => backupRun?.abort()} />
+			{:else}
+				<StButton
+					label="Back up"
+					icon="download-simple"
+					variant="primary"
+					disabled={backupRun != null}
+					onClick={backUp}
+				/>
+			{/if}
 		{/snippet}
 	</StRow>
 	<StRow
@@ -736,13 +772,15 @@
 	</StRow>
 	<StRow
 		title="Restore — replace"
-		sub={restoreNote ?? "Wipe this device, then restore fully from a backup. Can't be undone."}
+		sub={restoreNote ?? "Make this device match a backup. You'll see what changes first."}
 	>
 		{#snippet control()}
 			<StButton label="Replace" icon="trash" onClick={() => void pickRestore('wipe')} />
 		{/snippet}
 	</StRow>
 </StGroup>
+
+<StorageSection />
 
 <input
 	bind:this={restoreInput}
@@ -764,13 +802,17 @@
 	{#if drive.connected}
 		<StRow title="Back up to Drive" sub="Upload a fresh bundle to your Google Drive.">
 			{#snippet control()}
-				<StButton
-					label={driveBusy ? 'Working…' : 'Back up'}
-					icon="cloud-arrow-up"
-					variant="primary"
-					disabled={driveBusy}
-					onClick={driveBackup}
-				/>
+				{#if backupRun && driveBusy}
+					<StButton label="Cancel" icon="x" onClick={() => backupRun?.abort()} />
+				{:else}
+					<StButton
+						label={driveBusy ? 'Working…' : 'Back up'}
+						icon="cloud-arrow-up"
+						variant="primary"
+						disabled={driveBusy || backupRun != null}
+						onClick={driveBackup}
+					/>
+				{/if}
 			{/snippet}
 		</StRow>
 		<StRow title="Restore from Drive" sub="Choose a backup to merge or replace.">

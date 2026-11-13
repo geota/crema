@@ -51,55 +51,134 @@ private fun errorMessage(json: Json, body: String, status: Int, what: String): S
 }
 
 /**
- * Upload a backup as a NEW Drive file (multipart: metadata + media). We always
- * create (timestamped names) rather than overwrite, so Drive keeps a short
- * backup history the user can pick from on restore.
+ * Upload a backup as a NEW Drive file. We always create (timestamped names)
+ * rather than overwrite, so Drive keeps a short backup history the user can
+ * pick from on restore.
+ *
+ * A resumable upload (#310 P2a): the session opens with the metadata, then the
+ * file goes in one `PUT` streamed from disk with a fixed length, so a large
+ * backup is never held in memory. Without a `Location` for the session, one
+ * multipart request, also streamed from the file. Drive's size for the new
+ * file must be the file's.
  */
 suspend fun driveUploadBackup(
     accessToken: String,
     name: String,
-    content: ByteArray,
+    content: java.io.File,
     json: Json,
     mime: String = "application/zip",
 ): DriveFile =
     withContext(Dispatchers.IO) {
-        val boundary = "crema" + System.nanoTime().toString(16)
         val meta = buildJsonObject {
             put("name", name)
             put("mimeType", mime)
-        }.toString()
-        // Build the multipart body in BYTES so the binary media part (the
-        // `.crema.zip`) rides through intact — a String body would mangle it.
-        val head = (
-            "--$boundary\r\n" +
-                "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
-                "$meta\r\n" +
-                "--$boundary\r\n" +
-                "Content-Type: $mime\r\n\r\n"
-            ).toByteArray(Charsets.UTF_8)
-        val tail = "\r\n--$boundary--".toByteArray(Charsets.UTF_8)
-        val conn = (
-            URL("$UPLOAD_URL?uploadType=multipart&fields=id,name,modifiedTime,size")
-                .openConnection() as HttpURLConnection
-        ).apply {
+        }.toString().toByteArray(Charsets.UTF_8)
+        val length = content.length()
+        val start = (
+            URL("$UPLOAD_URL?uploadType=resumable&fields=id,name,modifiedTime,size").openConnection() as HttpURLConnection
+            ).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
             readTimeout = 30_000
             doOutput = true
+            setFixedLengthStreamingMode(meta.size)
             setRequestProperty("Authorization", "Bearer $accessToken")
-            setRequestProperty("Content-Type", "multipart/related; boundary=$boundary")
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+            setRequestProperty("X-Upload-Content-Type", mime)
+            setRequestProperty("X-Upload-Content-Length", length.toString())
         }
-        try {
-            conn.outputStream.use { out -> out.write(head); out.write(content); out.write(tail) }
-            val status = conn.responseCode
-            val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
-                ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-            if (status !in 200..299) throw DriveHttpError(status, resp, errorMessage(json, resp, status, "upload"))
-            json.decodeFromString(DriveFile.serializer(), resp)
+        val session = try {
+            start.outputStream.use { it.write(meta) }
+            val status = start.responseCode
+            if (status !in 200..299) {
+                val resp = start.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
+                throw DriveHttpError(status, resp, errorMessage(json, resp, status, "upload"))
+            }
+            start.getHeaderField("Location")
         } finally {
-            conn.disconnect()
+            start.disconnect()
         }
+        val file = if (session != null) {
+            send(URL(session), "PUT", mime, null, content, null, accessToken = null, json)
+        } else {
+            val boundary = "crema" + System.nanoTime().toString(16)
+            val head = (
+                "--$boundary\r\n" +
+                    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+                    "${String(meta, Charsets.UTF_8)}\r\n" +
+                    "--$boundary\r\n" +
+                    "Content-Type: $mime\r\n\r\n"
+                ).toByteArray(Charsets.UTF_8)
+            val tail = "\r\n--$boundary--".toByteArray(Charsets.UTF_8)
+            send(
+                URL("$UPLOAD_URL?uploadType=multipart&fields=id,name,modifiedTime,size"), "POST",
+                "multipart/related; boundary=$boundary", head, content, tail, accessToken, json,
+            )
+        }
+        // Unverified is not verified (#391 review): a reply without the size asks
+        // Drive for it, and fails only if Drive still won't say.
+        val stored = file.size?.toLongOrNull()
+            ?: driveFileSize(accessToken, file.id, json)
+            ?: throw IOException("Drive upload failed: Drive didn't say how large the file is.")
+        if (stored != length) throw IOException("Drive upload failed: Drive holds $stored bytes of $length.")
+        file
     }
+
+/** Drive's stored size for [fileId] (`files.get?fields=size`), or null if it won't say. */
+private fun driveFileSize(accessToken: String, fileId: String, json: Json): Long? {
+    val url = "$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}?fields=size"
+    val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 15_000
+        readTimeout = 20_000
+        setRequestProperty("Authorization", "Bearer $accessToken")
+    }
+    return try {
+        val status = conn.responseCode
+        val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
+            ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
+        if (status !in 200..299) throw DriveHttpError(status, resp, errorMessage(json, resp, status, "upload check"))
+        runCatching { json.parseToJsonElement(resp).jsonObject["size"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() }.getOrNull()
+    } finally {
+        conn.disconnect()
+    }
+}
+
+/** One request whose body is [head], then [content] streamed, then [tail], at a fixed length. */
+private fun send(
+    url: URL,
+    method: String,
+    contentType: String,
+    head: ByteArray?,
+    content: java.io.File,
+    tail: ByteArray?,
+    accessToken: String?,
+    json: Json,
+): DriveFile {
+    val conn = (url.openConnection() as HttpURLConnection).apply {
+        requestMethod = method
+        connectTimeout = 15_000
+        readTimeout = 60_000
+        doOutput = true
+        setFixedLengthStreamingMode((head?.size ?: 0) + content.length() + (tail?.size ?: 0))
+        accessToken?.let { setRequestProperty("Authorization", "Bearer $it") }
+        setRequestProperty("Content-Type", contentType)
+    }
+    try {
+        conn.outputStream.use { out ->
+            head?.let { out.write(it) }
+            content.inputStream().use { it.copyTo(out, 64 * 1024) }
+            tail?.let { out.write(it) }
+        }
+        val status = conn.responseCode
+        val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
+            ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
+        if (status !in 200..299) throw DriveHttpError(status, resp, errorMessage(json, resp, status, "upload"))
+        return json.decodeFromString(DriveFile.serializer(), resp)
+    } finally {
+        conn.disconnect()
+    }
+}
 
 /** List this app's backup files, newest first: all of them, as retention can't
  *  hold on to a fullest copy it was never shown. Throws if any page fails. */
@@ -180,7 +259,12 @@ suspend fun driveTrashFile(accessToken: String, fileId: String, json: Json): Uni
         }
     }
 
-suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json): ByteArray =
+/**
+ * Download the backup [fileId] into [dest], a piece at a time, so a large one
+ * never sits in memory whole (#310 P2a-b); within the restore's file limit.
+ * Returns [dest].
+ */
+suspend fun driveDownloadBackupTo(accessToken: String, fileId: String, dest: java.io.File, json: Json): java.io.File =
     withContext(Dispatchers.IO) {
         val url = "$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}?alt=media"
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -192,8 +276,7 @@ suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json)
         try {
             val status = conn.responseCode
             if (status in 200..299) {
-                // Size-capped like every import (review 05 P3-2).
-                conn.inputStream.use { it.readBytesCapped(ImportLimits.MAX_FILE_BYTES, "The Drive backup") }
+                conn.inputStream.use { coffee.crema.restore.copyBackupTo(it, dest) }
             } else {
                 val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
                 throw DriveHttpError(status, err, errorMessage(json, err, status, "download"))

@@ -313,7 +313,16 @@ class ProxySessionTest {
             val starting = async(Dispatchers.Default) { runCatching { server.start() } }
             server.stop() // a fast primary -> normal switch
             starting.await()
-            val accepted = runCatching { java.net.Socket("127.0.0.1", port).close() }.isSuccess
+            // CIO closes its listening socket as its engine winds down, which
+            // under load can trail stop() by a moment: the port must stop
+            // accepting within 2 s, and stay closed. A listener left running
+            // would keep accepting and fail this.
+            val deadline = System.nanoTime() + 2_000_000_000L
+            var accepted = true
+            while (accepted && System.nanoTime() < deadline) {
+                accepted = runCatching { java.net.Socket("127.0.0.1", port).close() }.isSuccess
+                if (accepted) Thread.sleep(20)
+            }
             assertTrue(!accepted, "no listener left on :$port (round $it)")
         }
     }

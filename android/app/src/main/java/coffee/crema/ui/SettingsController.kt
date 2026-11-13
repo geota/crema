@@ -76,6 +76,9 @@ internal class SettingsController(
             // Resolve the nullable pref against the form-factor default (#65).
             keepConnectedScreenOff = p.keepConnectedScreenOff ?: isTablet,
             autoDriveBackup = p.autoDriveBackup,
+            driveBackupWeekly = p.driveBackupWeekly,
+            driveBackupWifiOnly = p.driveBackupWifiOnly,
+            bleSessionsKeep = p.bleSessionsKeep,
             autoUpdateCheck = p.autoUpdateCheck,
             lastUpdateCheckAtMs = p.lastUpdateCheckAtMs,
             lastSeenLatestVersion = p.lastSeenLatestVersion,
@@ -196,6 +199,9 @@ internal class SettingsController(
         sleepOnQuit = uiState().sleepOnQuit,
         keepConnectedScreenOff = uiState().keepConnectedScreenOff,
         autoDriveBackup = uiState().autoDriveBackup,
+        driveBackupWeekly = uiState().driveBackupWeekly,
+        driveBackupWifiOnly = uiState().driveBackupWifiOnly,
+        bleSessionsKeep = uiState().bleSessionsKeep,
         autoUpdateCheck = uiState().autoUpdateCheck,
         lastUpdateCheckAtMs = uiState().lastUpdateCheckAtMs,
         lastSeenLatestVersion = uiState().lastSeenLatestVersion,
@@ -245,12 +251,19 @@ internal class SettingsController(
     /** [persistPrefs], awaited: the T6 commit saves the adopted values before
      *  the role switch starts (I3). Numbered like every save, so an earlier
      *  fire-and-forget one can never land after it. */
-    suspend fun persistPrefsNow() {
+    suspend fun persistPrefsNow(): Boolean {
         // Like persistPrefs: never save a half-default AppPrefs before the load.
-        if (!loaded) return
+        if (!loaded) return false
         val snapshot = currentPrefs()
         val generation = ++prefsGeneration
-        store.save(snapshot, generation)
+        return store.save(snapshot, generation)
+    }
+
+    /** [persistPrefsNow] for a restore: the save awaited, and a hub's mirrors told, as [persistPrefs] tells them. */
+    suspend fun persistRestoredPrefs(): Boolean {
+        val saved = persistPrefsNow()
+        pushConfig()
+        return saved
     }
 
     /** Persist the current prefs snapshot (best-effort, off the main thread).

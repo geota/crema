@@ -20,8 +20,8 @@ import java.io.File
  *    (`file:bean-image:…`) differ, but both shells find the photo by id.
  *
  * One [sanitize]/[beanImageFile] pair keeps capture (Phase C), the zip restore
- * ([coffee.crema.ui.MainViewModel.extractBackupJsonl]) and the zip backup
- * (Phase D) byte-for-byte aligned.
+ * ([coffee.crema.restore.prepareBackup] stages a zip's photos, and the restore's
+ * step 3 puts them here) and the zip backup (Phase D) byte-for-byte aligned.
  */
 object BeanImageStore {
     private const val DIR = "bean-images"

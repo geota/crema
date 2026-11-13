@@ -57,7 +57,9 @@ class ReconnectingClientLinkTest {
             repeat(n) { i -> hub.onInbound(addr, service, sampleChar, byteArrayOf(i.toByte()), atMs = 1_000L + i) }
             withTimeout(5_000) { while (received.size < n) delay(5) }
             assertEquals(n, received.size)
-            assertEquals((0 until n).map { 1_000L + it }, received.map { it.atMs })
+            assertEquals((0 until n).map { it.toByte() }, received.map { it.data.single() }, "in order")
+            // Times are rebased onto this device's clock (MirrorClockTest); here they only never run back.
+            assertEquals(received.map { it.atMs }.sorted(), received.map { it.atMs }, "times never run back")
 
             val read = withTimeout(5_000) { proxy.read(match.device, service, stateChar) }
             assertContentEquals(versionBytes, read)

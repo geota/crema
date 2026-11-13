@@ -6,8 +6,8 @@
 // Kotlin version IS these plugin versions (the Compose compiler is lock-stepped
 // with Kotlin); keep them equal and bump together.
 plugins {
-    id("com.android.application") version "9.5.0" apply false
+    id("com.android.application") version "9.5.1" apply false
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.21" apply false
     id("org.jetbrains.kotlin.plugin.serialization") version "2.4.21" apply false
-    id("net.mullvad.rust-android") version "0.11.0" apply false
+    id("net.mullvad.rust-android") version "0.11.1" apply false
 }

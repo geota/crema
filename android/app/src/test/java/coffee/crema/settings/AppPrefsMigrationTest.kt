@@ -44,6 +44,15 @@ class AppPrefsMigrationTest {
         markerFile.delete()
     }
 
+    /** #311: an install from before the capture limit keeps today's 10 sessions;
+     *  a new one keeps 50. */
+    @Test
+    fun `an existing install keeps its 10 capture sessions, a new one keeps 50`() {
+        assertEquals(50, load().bleSessionsKeep, "no prefs.json: a new install")
+        writeOldPrefs(150f)
+        assertEquals(10, load().bleSessionsKeep, "prefs from before the setting")
+    }
+
     @Test
     fun `hot water never-changed`() {
         // No prefs.json: the default dose, ratio 1:3.

@@ -137,6 +137,11 @@ export class MachineBusy {
 	}
 
 	/** Whether this tab holds the lock. */
+	/** Whether this tab has a shot or a flash running, Web Locks or not. */
+	get busy(): boolean {
+		return this.#reasons.size > 0;
+	}
+
 	get held(): boolean {
 		return this.#release !== null;
 	}
@@ -296,6 +301,11 @@ let restoringHere = false;
 /** Whether a restore in another tab has frozen this one. */
 export function restoreFrozen(): boolean {
 	return frozen;
+}
+
+/** Whether a restore is applying in this tab: sync waits for it too. */
+export function restoringInThisTab(): boolean {
+	return restoringHere;
 }
 
 /** This tab is the one restoring: its own messages mustn't freeze it. */

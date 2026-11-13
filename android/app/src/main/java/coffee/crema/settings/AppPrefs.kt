@@ -206,6 +206,15 @@ data class AppPrefs(
      *  CommonSettings. Default ON: linking Drive expresses backup intent,
      *  and the toggle is a no-op until it's linked. */
     val autoDriveBackup: Boolean = true,
+    /** Automatic Drive backup weekly rather than daily (#311). Per-device. */
+    val driveBackupWeekly: Boolean = false,
+    /** Automatic backups only on an unmetered network (#311): off it, one is
+     *  skipped without stamping, and checked again at the next launch. */
+    val driveBackupWifiOnly: Boolean = true,
+    /** BLE sessions whose raw capture is kept (#311): a count,
+     *  [coffee.crema.ble.BleSessionRecorder.SESSIONS_OFF] or `SESSIONS_ALL`.
+     *  A new install keeps 50; one from before the setting keeps today's 10. */
+    val bleSessionsKeep: Int = coffee.crema.ble.BleSessionRecorder.NEW_INSTALL_SESSIONS_KEEP,
     /** Daily automatic release check against GitHub (issue #36 follow-up).
      *  Default OFF — Crema never phones home unless the user opts in; the
      *  manual About → Check button always works. Platform extra (update
@@ -492,6 +501,10 @@ private data class PersistedPrefs(
     val sleepOnQuit: Boolean = true,
     val keepConnectedScreenOff: Boolean? = null,
     val autoDriveBackup: Boolean = true,
+    val driveBackupWeekly: Boolean = false,
+    val driveBackupWifiOnly: Boolean = true,
+    /** Absent in a file from before the setting: that install keeps today's 10. */
+    val bleSessionsKeep: Int? = null,
     val autoUpdateCheck: Boolean = false,
     val lastUpdateCheckAtMs: Long? = null,
     val lastSeenLatestVersion: String? = null,
@@ -518,6 +531,9 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     sleepOnQuit = sleepOnQuit,
     keepConnectedScreenOff = keepConnectedScreenOff,
     autoDriveBackup = autoDriveBackup,
+    driveBackupWeekly = driveBackupWeekly,
+    driveBackupWifiOnly = driveBackupWifiOnly,
+    bleSessionsKeep = bleSessionsKeep,
     autoUpdateCheck = autoUpdateCheck,
     lastUpdateCheckAtMs = lastUpdateCheckAtMs,
     lastSeenLatestVersion = lastSeenLatestVersion,
@@ -543,6 +559,9 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     sleepOnQuit = sleepOnQuit,
     keepConnectedScreenOff = keepConnectedScreenOff,
     autoDriveBackup = autoDriveBackup,
+    driveBackupWeekly = driveBackupWeekly,
+    driveBackupWifiOnly = driveBackupWifiOnly,
+    bleSessionsKeep = bleSessionsKeep ?: coffee.crema.ble.BleSessionRecorder.EXISTING_SESSIONS_KEEP,
     autoUpdateCheck = autoUpdateCheck,
     lastUpdateCheckAtMs = lastUpdateCheckAtMs,
     lastSeenLatestVersion = lastSeenLatestVersion,
@@ -705,21 +724,23 @@ class SettingsStore(private val context: Context, private val json: Json) {
      * snapshot was already written, so a fire-and-forget save that loses the
      * race can never put older values back (spec §7.5 step 5).
      */
-    suspend fun save(prefs: AppPrefs, generation: Long? = null) {
-        if (!SaveFloor.admit(file, WHAT)) return
+    /** Whether it landed; a snapshot older than one written counts as landed. */
+    suspend fun save(prefs: AppPrefs, generation: Long? = null): Boolean {
+        if (!SaveFloor.admit(file, WHAT)) return false
         // This lock holds the generation check and both writes together.
-        withContext(NonCancellable + Dispatchers.IO) {
+        return withContext(NonCancellable + Dispatchers.IO) {
             saveLock.withLock {
                 if (generation != null) {
-                    if (generation < lastGeneration) return@withLock
+                    if (generation < lastGeneration) return@withLock true
                     lastGeneration = generation
                 }
-                saveStore(file, WHAT) { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
+                val saved = saveStore(file, WHAT) { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
                 // Every save of a stored dose rewrites the downgrade marker.
                 if (prefs.qcHotWaterMode != null) {
                     runCatching { json.encodeToString(StoredHotWater.serializer(), prefs.storedHotWater()) }
                         .onSuccess { saveItem(markerFile, it) }
                 }
+                saved
             }
         }
     }

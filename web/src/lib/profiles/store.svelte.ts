@@ -27,7 +27,16 @@ import { SvelteSet } from 'svelte/reactivity';
 
 import { loadCore } from '#lib/core/index.js';
 import { refreshStopTargetsProjection } from '#lib/state/ui-state.svelte.js';
-import { isIdOrNull, isJsonObject, readJson, readStore, writeJson } from '#lib/utils/storage.js';
+import { onShotFinished, shotIsOpen } from '#lib/restore/tab-safety.js';
+import {
+	followOtherTabs,
+	isIdOrNull,
+	isJsonObject,
+	readJson,
+	readStore,
+	writeJson,
+	writeJsonChecked
+} from '#lib/utils/storage.js';
 import {
 	builtinCremaProfiles,
 	toCoreProfile,
@@ -196,6 +205,85 @@ export class ProfileStore {
 		// `JSON.stringify` once per app boot — negligible).
 		writeJson(CUSTOM_KEY, this.custom);
 		writeJson(ACTIVE_KEY, this.activeId);
+		// Another tab's profiles, pins and hidden list are taken, not written
+		// back over (#333). Not the active id: it's what this tab's machine
+		// runs. Its content is, and goes to the machine as a local save's does.
+		followOtherTabs(CUSTOM_KEY, Array.isArray, (v) => {
+			const before = this.activeContent();
+			const custom = stripLegacyIdPrefix(v as CremaProfile[]);
+			this.custom = this.loaded ? custom.map(withDerivedBrewTemp) : custom;
+			this.activeChangedElsewhere(before);
+		});
+		followOtherTabs(OVERRIDES_KEY, isJsonObject, (v) => {
+			const before = this.activeContent();
+			this.overrides = v as Record<string, BuiltinOverride>;
+			this.activeChangedElsewhere(before);
+		});
+		followOtherTabs(HIDDEN_BUILTINS_KEY, Array.isArray, (v) => {
+			const next = new Set(v as string[]);
+			for (const id of [...this.hiddenBuiltins]) if (!next.has(id)) this.hiddenBuiltins.delete(id);
+			for (const id of next) this.hiddenBuiltins.add(id);
+		});
+	}
+
+	/**
+	 * The active profile as the machine sees it, to tell whether an adopt
+	 * changed it. Not its pin or last-used stamp: another tab pinning it, or
+	 * activating the same built-in, changes nothing it runs (#380 fix check).
+	 * The core keeps this tab's yield dot across a push of the same profile
+	 * id (`DESIGN.md` §3.10).
+	 */
+	private activeContent(): string | undefined {
+		const id = this.activeId;
+		if (id == null) return undefined;
+		const p = this.get(id);
+		if (!p) return undefined;
+		const { pinned: _pinned, lastUsed: _lastUsed, ...runs } = p;
+		return JSON.stringify(runs);
+	}
+
+	/** An adopt changed the active profile, and this tab's push waits for its shot. */
+	private activePushHeld = false;
+
+	/**
+	 * Another tab changed or deleted this tab's active profile (#380 review
+	 * M2). Do what a local save or delete does: push it to the core and hand
+	 * it to `onActivate`, which makes it the core's desired profile (its stop
+	 * targets come from there, `DESIGN.md` §3.10) and uploads it when the core
+	 * allows, or fall back to no profile. Never while a shot runs here: once
+	 * it ends.
+	 */
+	private activeChangedElsewhere(before: string | undefined): void {
+		if (this.activeId == null || this.activeContent() === before) return;
+		if (shotIsOpen()) {
+			if (this.activePushHeld) return;
+			this.activePushHeld = true;
+			const stop = onShotFinished(() => {
+				stop();
+				this.activePushHeld = false;
+				this.pushAdoptedActive();
+			});
+			return;
+		}
+		this.pushAdoptedActive();
+	}
+
+	private pushAdoptedActive(): void {
+		const id = this.activeId;
+		if (id == null) return;
+		const profile = this.get(id);
+		if (!profile) {
+			// Deleted in the other tab: as a local delete of the active one.
+			if (this.loaded) {
+				this.setActive(null);
+			} else {
+				this.activeId = null;
+				writeJson(ACTIVE_KEY, null);
+			}
+			return;
+		}
+		void this.pushActiveProfileToCore();
+		this.onActivate?.(profile);
 	}
 
 	/**
@@ -329,6 +417,34 @@ export class ProfileStore {
 	 * reconstructs pins from the cross-shell `pinned` id list (an Android bundle).
 	 * Existing `lastUsed` timestamps are preserved on merge.
 	 */
+	/** The custom profiles a restore leaves, in one write. Whether it was stored. */
+	restoreCustom(next: CremaProfile[]): boolean {
+		this.custom = next;
+		return writeJsonChecked(CUSTOM_KEY, next);
+	}
+
+	/**
+	 * A restore's pins and hidden built-ins, as the plan resolved them. A pin's
+	 * `lastUsed` stays this device's. Whether both were stored.
+	 */
+	restoreMeta(pinned: readonly string[], hidden: readonly string[]): boolean {
+		const pins = new Set(pinned);
+		const next: Record<string, BuiltinOverride> = {};
+		for (const [id, ov] of Object.entries(this.overrides)) next[id] = { ...ov, pinned: pins.has(id) };
+		for (const id of pins) next[id] ??= { pinned: true, lastUsed: null };
+		this.overrides = next;
+		this.hiddenBuiltins.clear();
+		for (const id of hidden) this.hiddenBuiltins.add(id);
+		const a = writeJsonChecked(OVERRIDES_KEY, this.overrides);
+		const b = writeJsonChecked(HIDDEN_BUILTINS_KEY, Array.from(this.hiddenBuiltins));
+		return a && b;
+	}
+
+	/** The custom profiles, as stored: a restore plans against these. */
+	get customProfiles(): readonly CremaProfile[] {
+		return this.custom;
+	}
+
 	applyBackupMeta(
 		meta: {
 			pinned?: string[];

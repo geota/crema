@@ -120,6 +120,9 @@ class RelayedVerbPrimaryDispatchTest {
     private fun relay(text: String): Frame {
         val before = replies.size
         scope.launch { client.sendRaw(text) }
+        // The reply can wait on work off the main looper (the core lane, a
+        // store): one idle() may return before it (main CI after #381).
+        VmHarness.idleUntil("the reply to $text") { replies.drop(before).any { it is Frame.ControlOk || it is Frame.ControlErr } }
         VmHarness.idle()
         val reply = replies.drop(before).filter { it is Frame.ControlOk || it is Frame.ControlErr }
         assertEquals(1, reply.size, "one reply to $text, got ${replies.drop(before)}")
@@ -133,7 +136,7 @@ class RelayedVerbPrimaryDispatchTest {
             val effect = effects[sample.fixture]
             effect?.let {
                 it.prime(vm)
-                VmHarness.idle()
+                VmHarness.idleUntil("${sample.fixture}: the prime") { !it.applied(vm.ui.value) }
                 assertFalse(it.applied(vm.ui.value), "${sample.fixture}: prime the state away from the sample first")
             }
             val kept = unchanged[sample.fixture]?.invoke(vm.ui.value)
@@ -146,7 +149,10 @@ class RelayedVerbPrimaryDispatchTest {
                 assertTrue(refusal in err.reason, "${sample.fixture}: ${err.reason}")
                 unchanged[sample.fixture]?.let { assertEquals(kept, it(vm.ui.value), "${sample.fixture} changed the primary") }
             }
-            if (effect != null) assertTrue(effect.applied(vm.ui.value), "${sample.fixture} did not reach the primary's state")
+            if (effect != null) {
+                VmHarness.idleUntil("${sample.fixture} reaching the primary's state") { effect.applied(vm.ui.value) }
+                assertTrue(effect.applied(vm.ui.value), "${sample.fixture} did not reach the primary's state")
+            }
         }
     }
 

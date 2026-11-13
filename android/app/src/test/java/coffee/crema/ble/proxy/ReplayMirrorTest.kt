@@ -23,7 +23,7 @@ import kotlin.test.assertTrue
  * **proxy secondary** (`ProxyTransport`) over an `InMemoryFrameLink`. This is the
  * 2-emulator demo minus the socket (the socket is covered by [LanRelayWsTest]):
  * it proves the replayed DE1 stream reaches the secondary losslessly, in order,
- * with verbatim timestamps, plus the state snapshot.
+ * with times rebased onto the secondary's clock, plus the state snapshot.
  */
 class ReplayMirrorTest {
 
@@ -89,7 +89,7 @@ class ReplayMirrorTest {
                 ).collect { primarySeen.add(it) }
             }
 
-            // The secondary mirrors every telemetry sample, in order, verbatim t.
+            // The secondary mirrors every telemetry sample, in order.
             // The state line rides its own characteristic channel, so it can land
             // after the last sample: wait for both.
             withTimeout(8_000) {
@@ -97,7 +97,13 @@ class ReplayMirrorTest {
             }
             val mirroredSamples = mirrored.filter { it.characteristic == sampleChar }
             assertEquals(nSamples, mirroredSamples.size, "secondary sees every replayed telemetry sample")
-            assertEquals((0 until nSamples).map { 10L + it }, mirroredSamples.map { it.atMs }, "order + verbatim timestamps")
+            assertEquals(
+                primarySeen.filter { it.characteristic == sampleChar }.map { it.data.toList() },
+                mirroredSamples.map { it.data.toList() },
+                "the primary's samples, in order",
+            )
+            // Times are rebased onto this device's clock (MirrorClockTest); here they only never run back.
+            assertEquals(mirroredSamples.map { it.atMs }.sorted(), mirroredSamples.map { it.atMs }, "times never run back")
             assertTrue(mirrored.any { it.characteristic == stateChar }, "machine-state line reached the secondary")
 
             // The primary's own core path saw the same stream (the tap is a copy,

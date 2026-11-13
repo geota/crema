@@ -38,7 +38,7 @@ class EraseAllDataTest {
         "last-shot.txt",
         // The relay key store and the v3 pairing leftovers (SR-3a).
         "relay-v4.json", "proxy-pairing.json", "deviceId",
-    )
+    ) + coffee.crema.history.HistoryStore.NEXT_FILES // A newer build's (#310 P0).
 
     @Test
     fun eraseLeavesNoCopyOfTheOldData() {
@@ -63,6 +63,9 @@ class EraseAllDataTest {
         File(files, "bean-images/bean_1").writeText(old)
         File(files, "relay-lost").mkdirs()
         File(files, "relay-lost/relay-v4-1700000000000.json").writeText(old)
+        // A newer build's SQLite history, after a rollback (#310 P0).
+        val db = app.getDatabasePath("shots.db").apply { parentFile!!.mkdirs() }
+        val dbFiles = listOf("", "-wal", "-shm", "-journal").map { File(db.path + it).apply { writeText(old) } }
         val captures = File(app.getExternalFilesDir(null), "captures").apply { mkdirs() }
         File(captures, "session-20261001-120000.jsonl").writeText(old)
 
@@ -82,6 +85,7 @@ class EraseAllDataTest {
             .filter { it.endsWith(".bak") || it.endsWith(".tmp") || ".corrupt-" in it }
         assertEquals(emptyList(), copies, "store copies left behind")
         assertTrue(captures.listFiles().isNullOrEmpty(), "BLE captures left behind")
+        assertEquals(emptyList(), dbFiles.filter { it.exists() }.map { it.name }, "shots.db left behind")
         assertTrue(!File(files, "relay-lost").exists(), "relay-lost/ left behind")
         assertTrue(vm.ui.value.history.isEmpty())
         assertTrue(vm.ui.value.beans.isEmpty())

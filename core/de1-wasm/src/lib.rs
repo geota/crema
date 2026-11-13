@@ -1807,6 +1807,79 @@ pub fn pull_covers_attempt(since_ms: f64, attempted_at_ms: Option<f64>) -> bool 
     de1_domain::pull_covers_attempt(f64_to_ms(since_ms), attempted_at_ms.map(f64_to_ms))
 }
 
+/// The captured shots whose raw captures go under a limit: JSON
+/// `{shots, keep}` in, ids out. See `de1_domain::captures_to_drop`.
+///
+/// # Errors
+/// When the input doesn't parse.
+#[wasm_bindgen(js_name = capturesToDrop)]
+pub fn captures_to_drop(payload: &str) -> Result<String, String> {
+    de1_domain::captures_to_drop_json(payload)
+}
+
+/// The pull run's rules by name (`planPage`, `recordRow`, `finishRun`,
+/// `pace`, …): JSON arguments in, JSON answer out. See
+/// `de1_domain::pull_run_call`.
+///
+/// # Errors
+/// An unknown op, or arguments that don't parse.
+#[wasm_bindgen(js_name = pullRunCall)]
+pub fn pull_run_call(op: &str, payload: &str) -> Result<String, String> {
+    de1_domain::pull_run_call(op, payload)
+}
+
+/// What a pulled shot may change on its row: a JSON `ShotPatch`. See
+/// `de1_domain::merge_remote_shot`.
+///
+/// # Errors
+/// When the input doesn't parse.
+#[wasm_bindgen(js_name = mergeRemoteShot)]
+pub fn merge_remote_shot(payload: &str) -> Result<String, String> {
+    de1_domain::merge_remote_shot_json(payload)
+}
+
+/// A JSON tag list as Visualizer stores it. See `de1_domain::normalize_tags`.
+///
+/// # Errors
+/// When the input isn't a string array.
+#[wasm_bindgen(js_name = normalizeTags)]
+pub fn normalize_tags(list: &str) -> Result<String, String> {
+    de1_domain::normalize_tags_json(list)
+}
+
+/// Record a tag edit onto JSON `TagMarks`. See `de1_domain::mark_tag_edit`.
+///
+/// # Errors
+/// When an input doesn't parse.
+#[wasm_bindgen(js_name = markTagEdit)]
+pub fn mark_tag_edit(marks: &str, before: &str, after: &str) -> Result<String, String> {
+    de1_domain::mark_tag_edit_json(marks, before, after)
+}
+
+/// The JSON `tag_list` a tag push sends. See `de1_domain::tag_push_list`.
+///
+/// # Errors
+/// When an input doesn't parse.
+#[wasm_bindgen(js_name = tagPushList)]
+pub fn tag_push_list(remote: &str, marks: &str) -> Result<String, String> {
+    de1_domain::tag_push_list_json(remote, marks)
+}
+
+/// JSON `TagMarks` after a tag push, or `null` on a tier signal. See
+/// `de1_domain::settle_tag_push`.
+///
+/// # Errors
+/// When an input doesn't parse.
+#[wasm_bindgen(js_name = settleTagPush)]
+pub fn settle_tag_push(
+    current: &str,
+    sent: &str,
+    pushed: &str,
+    reply: &str,
+) -> Result<String, String> {
+    de1_domain::settle_tag_push_json(current, sent, pushed, reply)
+}
+
 /// What a confirmed `/me` means: `"First"`, `"Same"` or `"Changed"`. See
 /// `de1_domain::account_change_action`.
 #[wasm_bindgen(js_name = accountChangeAction)]
@@ -2071,6 +2144,76 @@ pub fn export_backup_bundle(
     serde_json::to_string(&built).map_err(|e| e.to_string())
 }
 
+/// The lines of a backup before its shots, as a `BackupPrelude` JSON
+/// (`{ jsonl, omitted }`). With [`backup_shot_line`] and [`backup_tail`],
+/// joined, the bytes of [`export_backup_bundle`] (#310). See
+/// `de1_domain::backup_prelude_jsonl`.
+///
+/// # Errors
+///
+/// Returns the error string when the envelope is malformed.
+#[wasm_bindgen(js_name = backupPrelude)]
+pub fn backup_prelude(
+    envelope_json: &str,
+    shot_count: u32,
+    shots_omitted: u32,
+    created_at_unix_ms: f64,
+    app_version: &str,
+    device_label: &str,
+) -> Result<String, String> {
+    let built = de1_domain::backup_prelude_jsonl(
+        envelope_json,
+        shot_count as usize,
+        shots_omitted as usize,
+        f64_to_ms(created_at_unix_ms),
+        app_version,
+        device_label,
+    )?;
+    serde_json::to_string(&built).map_err(|e| e.to_string())
+}
+
+/// One shot's backup line, as a `BackupShotLine` JSON (`{ line,
+/// withoutProfile, hasCurve }`). See `de1_domain::backup_shot_line`.
+///
+/// # Errors
+///
+/// Returns the error string when the shot doesn't read: leave it out and
+/// count it in the prelude's `shotsOmitted`.
+#[wasm_bindgen(js_name = backupShotLine)]
+pub fn backup_shot_line(shot_json: &str) -> Result<String, String> {
+    let line = de1_domain::backup_shot_line(shot_json)?;
+    serde_json::to_string(&line).map_err(|e| e.to_string())
+}
+
+/// The lines of a backup after its shots. See `de1_domain::backup_tail_jsonl`.
+///
+/// # Errors
+///
+/// Returns the error string when the envelope is malformed.
+#[wasm_bindgen(js_name = backupTail)]
+pub fn backup_tail(envelope_json: &str) -> Result<String, String> {
+    de1_domain::backup_tail_jsonl(envelope_json)
+}
+
+/// One backup line, read strictly, as a `ParsedBackupLine` JSON. See
+/// `de1_domain::parse_backup_line`.
+#[wasm_bindgen(js_name = parseBackupLine)]
+#[must_use]
+pub fn parse_backup_line(line: &[u8]) -> String {
+    de1_domain::parse_backup_line_json(line)
+}
+
+/// A History row's summary of a `StoredShot`, as a `ShotSummary` JSON (#310).
+/// See `de1_domain::shot_summary`.
+///
+/// # Errors
+///
+/// Returns the parse error string when the shot is malformed.
+#[wasm_bindgen(js_name = shotSummary)]
+pub fn shot_summary(stored_shot_json: &str) -> Result<String, String> {
+    de1_domain::shot_summary_json(stored_shot_json)
+}
+
 /// Scan a backup's bytes into a `BackupManifest` JSON, with the bean ids its
 /// zip holds photos for (a JSON string array). See
 /// `de1_domain::scan_backup_bytes`.
@@ -2087,6 +2230,102 @@ pub fn scan_backup_bytes(bytes: &[u8], photos_json: &str) -> String {
 #[must_use]
 pub fn import_backup_bytes(bytes: &[u8]) -> String {
     de1_domain::import_backup_bytes_json(bytes)
+}
+
+/// The longest line a backup may hold, in bytes. See
+/// `de1_domain::MAX_BACKUP_LINE_BYTES`.
+#[wasm_bindgen(js_name = backupMaxLineBytes)]
+#[must_use]
+pub fn backup_max_line_bytes() -> u32 {
+    u32::try_from(de1_domain::MAX_BACKUP_LINE_BYTES).unwrap_or(u32::MAX)
+}
+
+/// [`scan_backup_bytes`], a line at a time, for a backup read in pieces (#310
+/// P2w). See `de1_domain::BackupScan`.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct BackupScanner {
+    scan: de1_domain::BackupScan,
+}
+
+#[wasm_bindgen]
+impl BackupScanner {
+    /// A new scan.
+    #[wasm_bindgen(constructor)]
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Read the next line, without its `0x0A`.
+    #[wasm_bindgen(js_name = pushLine)]
+    pub fn push_line(&mut self, line: &[u8]) {
+        self.scan.push_line(line);
+    }
+
+    /// The next line was too long to read, and its bytes were skipped.
+    #[wasm_bindgen(js_name = pushOversizedLine)]
+    pub fn push_oversized_line(&mut self) {
+        self.scan.push_oversized_line();
+    }
+
+    /// The `BackupManifest` JSON, with the bean ids the zip holds photos for
+    /// (a JSON string array). The scanner is used up.
+    ///
+    /// # Errors
+    ///
+    /// When `photos_json` isn't a string array, or the manifest won't serialise.
+    pub fn finish(self, photos_json: &str) -> Result<String, String> {
+        let mut manifest = self.scan.finish();
+        manifest.photos = serde_json::from_str(photos_json).map_err(|e| format!("photos: {e}"))?;
+        serde_json::to_string(&manifest).map_err(|e| e.to_string())
+    }
+}
+
+/// [`import_backup_bytes`], a line at a time: each line's record, so the
+/// shell holds one line, not the whole file (#310 P2w). See
+/// `de1_domain::BackupImport`.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct BackupImporter {
+    import: de1_domain::BackupImport,
+}
+
+#[wasm_bindgen]
+impl BackupImporter {
+    /// A new import.
+    #[wasm_bindgen(constructor)]
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Read the next line, without its `0x0A`: the `BackupRecord` JSON the
+    /// restore takes from it, or `undefined`.
+    ///
+    /// # Errors
+    ///
+    /// When the record won't serialise, rather than dropping it unseen.
+    #[wasm_bindgen(js_name = pushLine)]
+    pub fn push_line(&mut self, line: &[u8]) -> Result<Option<String>, String> {
+        self.import
+            .push_line(line)
+            .map(|record| serde_json::to_string(&record).map_err(|e| e.to_string()))
+            .transpose()
+    }
+
+    /// The next line was too long to read, and its bytes were skipped.
+    #[wasm_bindgen(js_name = pushOversizedLine)]
+    pub fn push_oversized_line(&mut self) {
+        self.import.push_oversized_line();
+    }
+
+    /// Whether the first line that wasn't blank was a header.
+    #[wasm_bindgen(js_name = hasHeader)]
+    #[must_use]
+    pub fn has_header(&self) -> bool {
+        self.import.has_header()
+    }
 }
 
 /// One restore, planned. See `de1_domain::plan_restore`.
@@ -2434,6 +2673,20 @@ pub fn peaks_for_shot(stored_shot_json: &str) -> Result<String, String> {
         serde_json::from_str(stored_shot_json).map_err(|e| e.to_string())?;
     let peaks = shot.peaks();
     serde_json::to_string(&peaks).map_err(|e| e.to_string())
+}
+
+/// The pour's averages (pressure, flow, head temperature) over a
+/// [`de1_domain::StoredShot`] JSON, as a `PourAverages` JSON, or `null` when
+/// its samples hold no pour (#299). Derived on read, like
+/// [`peaks_for_shot`]. See `de1_domain::pour_averages`.
+///
+/// # Errors
+///
+/// The JSON parse error string when `stored_shot_json` is not a
+/// `StoredShot`.
+#[wasm_bindgen(js_name = pourAveragesForShot)]
+pub fn pour_averages_for_shot(stored_shot_json: &str) -> Result<String, String> {
+    de1_domain::pour_averages::pour_averages_json(stored_shot_json)
 }
 
 /// Hard wire-protocol bounds for DE1 profile fields, exposed to shells as

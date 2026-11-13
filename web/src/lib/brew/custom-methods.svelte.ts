@@ -17,7 +17,7 @@ import type {
 	CustomMethodLabelCheck
 } from '#lib/core/crema-core.js';
 import { BrewMethodStyle, CustomMethodLabelError } from '#lib/core/crema-core.js';
-import { readStore, writeJsonChecked } from '#lib/utils/storage.js';
+import { followOtherTabs, readStore, writeJsonChecked } from '#lib/utils/storage.js';
 import {
 	blankRecipeForStyleJson,
 	brewMethodStyleSeedsJson,
@@ -135,6 +135,10 @@ export class CustomMethodStore {
 			valid: Array.isArray
 		});
 		this.methods = read.kind === 'loaded' ? read.value : [];
+		// Another tab's methods are taken, not written back over (#333).
+		followOtherTabs(METHODS_KEY, Array.isArray, (v) => {
+			this.methods = v as CustomBrewMethod[];
+		});
 	}
 
 	/** Live methods, oldest first (the order they join the pickers in). */
@@ -255,6 +259,12 @@ export class CustomMethodStore {
 		this.methods = [...base, ...added];
 		this.persist();
 		return added.length;
+	}
+
+	/** The methods a restore leaves, tombstones included, in one write. Whether it was stored. */
+	restore(methods: CustomBrewMethod[]): boolean {
+		this.methods = methods;
+		return writeJsonChecked(METHODS_KEY, this.methods);
 	}
 
 	private persist(): void {

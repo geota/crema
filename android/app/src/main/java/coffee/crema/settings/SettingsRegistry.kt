@@ -129,7 +129,7 @@ enum class Setting(
         uiField = "brewParams", snapshotExtras = listOf("brewYieldG", "brewTempC", "brewPreinfuseS"),
     ),
 
-    // ── C: personal (53) ─────────────────────────────────────────────────────
+    // ── C: personal (57) ─────────────────────────────────────────────────────
     THEME_MODE(C, LOC, AP, "themeMode", NONE, null, false, listOf("$VM.setThemeMode(String)")),
     WEIGHT_UNIT(C, LOC, AP, "weightUnit", NONE, null, false, listOf("$VM.setWeightUnit(String)")),
     TEMP_UNIT(C, LOC, AP, "tempUnit", NONE, null, false, listOf("$VM.setTempUnit(String)")),
@@ -150,6 +150,10 @@ enum class Setting(
     USB_CHARGING_MODE(C, LOC, AP, "usbChargingMode", NONE, null, false, listOf("$VM.setUsbChargingMode(String)")),
     SHOW_DEBUG_PANEL(C, LOC, AP, "showDebugPanel", NONE, null, false, listOf("$VM.setShowDebugPanel(Boolean)")),
     AUTO_DRIVE_BACKUP(C, LOC, AP, "autoDriveBackup", NONE, null, false, listOf("$VM.setAutoDriveBackup(Boolean)")),
+    DRIVE_BACKUP_WEEKLY(C, LOC, AP, "driveBackupWeekly", NONE, null, false, listOf("$VM.setDriveBackupWeekly(Boolean)")),
+    DRIVE_BACKUP_WIFI_ONLY(C, LOC, AP, "driveBackupWifiOnly", NONE, null, false, listOf("$VM.setDriveBackupWifiOnly(Boolean)")),
+    DRIVE_COPIES_KEEP(C, LOC, SettingStore.MEMORY, null, NONE, null, false, listOf("$VM.setDriveCopiesKeep(Int)"), uiField = "drive"),
+    BLE_SESSIONS_KEEP(C, LOC, AP, "bleSessionsKeep", NONE, null, false, listOf("$VM.setBleSessionsKeep(Int)")),
     AUTO_UPDATE_CHECK(C, LOC, AP, "autoUpdateCheck", NONE, null, false, listOf("$VM.setAutoUpdateCheck(Boolean)")),
     LAST_UPDATE_CHECK_AT(C, LOC, AP, "lastUpdateCheckAtMs", NONE, null, false, emptyList()),
     LAST_SEEN_LATEST_VERSION(C, LOC, AP, "lastSeenLatestVersion", NONE, null, false, emptyList()),
@@ -252,6 +256,7 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
     "$VM.setShotGrind(String, Float?)" to "library data (a shot)",
     "$VM.setShotBean(String, String?)" to "library data (a shot)",
     "$VM.setShotNextPlan(String, String)" to "library data (a shot)",
+    "$VM.setShotPinned(String, Boolean)" to "library data (a shot)",
     "$VM.setShotPerson(String, String, String?)" to "library data (a shot)",
     "$VM.setAppForeground(Boolean)" to "app lifecycle",
     "LibraryController.togglePinProfile(String)" to "library data",
@@ -261,6 +266,7 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
     "LibraryController.setShotGrind(String, Float?)" to "library data (a shot)",
     "LibraryController.setShotBean(String, String?)" to "library data (a shot)",
     "LibraryController.setShotNextPlan(String, String)" to "library data (a shot)",
+    "LibraryController.setShotPinned(String, Boolean)" to "library data (a shot)",
     "LibraryController.setShotPerson(String, String, String?)" to "library data (a shot)",
     "FirmwareUpdateController.setAcknowledged(Boolean)" to "screen-local flash dialog state",
     "CatalogueSearchController.setQuery(String)" to "screen-local search text",
