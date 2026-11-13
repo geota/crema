@@ -56,7 +56,7 @@ private val MIRRORED_REGISTERS = setOf(MmrRegister.HeaterVoltage, MmrRegister.Ca
  * machine-request outcomes, and profile uploads.
  *
  * What the shell asks of the machine (9b): the shot start, the desired
- * profile and the dial's debounce, the stop targets, machine-state writes
+ * profile (the core waits for the dial to rest), the stop targets, machine-state writes
  * (sleep-on-quit's included), and the connect-time setup (identity reads,
  * the settings sweep, the USB-charger minute tick) with its session clear.
  *

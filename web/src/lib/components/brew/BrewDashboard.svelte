@@ -622,8 +622,8 @@
 	/**
 	 * The dial is part of what the DE1 should hold: every change of the active
 	 * profile or its overrides is reported to the app, which makes them the
-	 * core's desired profile once the dial rests 0.5 s (de1app's debounce), and
-	 * the core's profile sync uploads them (coalesced while an upload runs,
+	 * core's desired profile at once; the core uploads them once they rest
+	 * 0.5 s (de1app's dial debounce) through its profile sync (coalesced while an upload runs,
 	 * never while the machine is busy) — like Decenza re-uploading on a
 	 * temperature override. So a group-head start runs the dialled profile.
 	 */
