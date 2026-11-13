@@ -3321,6 +3321,14 @@ impl CremaBridge {
         }
     }
 
+    /// The pour's averages (pressure, flow, head temperature) over a
+    /// core-shape `StoredShot` JSON, as a `PourAverages` JSON, or the string
+    /// `"null"` when its samples hold no pour (#299). Derived on view,
+    /// nothing persisted. See `de1_domain::pour_averages`.
+    pub fn pour_averages_for_shot(&self, shot_json: String) -> Result<String, CremaError> {
+        de1_domain::pour_averages::pour_averages_json(&shot_json).map_err(CremaError::Failed)
+    }
+
     /// Clear the running scale-derived peaks (peak weight + final
     /// weight). The Scale page's "Reset peak" button.
     pub fn reset_scale_peaks(&self) {

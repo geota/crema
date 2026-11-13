@@ -3884,6 +3884,18 @@ data class PoisonEntry (
 	val retryAtMs: Long
 )
 
+/// The pour's time-weighted averages.
+@Serializable
+data class PourAverages (
+	/// Group pressure, bar.
+	val pressure: Float,
+	/// Group flow, ml/s.
+	val flow: Float,
+	/// Group-head temperature, °C. `None` when the series carries none (an
+	/// import that recorded no head temperature reads 0).
+	val headTemp: Float? = null
+)
+
 /// The pre-infusion dial for one profile: its range, the profile's own
 /// seconds ([`preinfusion_seconds`]) and whether it can be dialled at all.
 @Serializable

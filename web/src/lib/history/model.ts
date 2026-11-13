@@ -26,9 +26,15 @@ import type {
 	TimedSample
 } from '#lib/core/index.js';
 import type { ShotMachine as CoreShotMachine } from '#lib/core/crema-core.js';
-import type { BrewHistoryStats, BrewSeries, BrewStatInput } from '#lib/core/crema-core.js';
+import type {
+	BrewHistoryStats,
+	BrewSeries,
+	BrewStatInput,
+	PourAverages
+} from '#lib/core/crema-core.js';
 import {
 	peaksForShot as wasmPeaksForShot,
+	pourAveragesForShot as wasmPourAveragesForShot,
 	historyStats as wasmHistoryStats,
 	brewHistoryStats as wasmBrewHistoryStats,
 	ratioForMethod as wasmRatioForMethod,
@@ -509,6 +515,27 @@ export function peaksOf(shot: StoredShot): ShotPeaks {
 			peakTemp: 0
 		};
 		return fallback;
+	}
+}
+
+const pourAveragesCache = new BoundedCache<PourAverages | null>(64);
+/**
+ * The pour's averages (pressure, flow, head temperature), from the first flow
+ * to the last — derived on display by the core (`de1_domain::pour_averages`,
+ * #299), like {@link peaksOf}; nothing is stored. `null` when the shot's
+ * samples hold no pour (no telemetry, an import without it), so the detail
+ * shows nothing rather than zeros.
+ */
+export function pourAveragesOf(shot: StoredShot): PourAverages | null {
+	const key = `${shot.id}:${shot.record.samples.length}`;
+	const cached = pourAveragesCache.get(key);
+	if (cached !== undefined) return cached;
+	try {
+		const averages = JSON.parse(wasmPourAveragesForShot(JSON.stringify(shot))) as PourAverages | null;
+		pourAveragesCache.set(key, averages);
+		return averages;
+	} catch {
+		return null;
 	}
 }
 

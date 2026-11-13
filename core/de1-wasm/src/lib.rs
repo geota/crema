@@ -2688,6 +2688,20 @@ pub fn peaks_for_shot(stored_shot_json: &str) -> Result<String, String> {
     serde_json::to_string(&peaks).map_err(|e| e.to_string())
 }
 
+/// The pour's averages (pressure, flow, head temperature) over a
+/// [`de1_domain::StoredShot`] JSON, as a `PourAverages` JSON, or `null` when
+/// its samples hold no pour (#299). Derived on read, like
+/// [`peaks_for_shot`]. See `de1_domain::pour_averages`.
+///
+/// # Errors
+///
+/// The JSON parse error string when `stored_shot_json` is not a
+/// `StoredShot`.
+#[wasm_bindgen(js_name = pourAveragesForShot)]
+pub fn pour_averages_for_shot(stored_shot_json: &str) -> Result<String, String> {
+    de1_domain::pour_averages::pour_averages_json(stored_shot_json)
+}
+
 /// Hard wire-protocol bounds for DE1 profile fields, exposed to shells as
 /// a single JSON snapshot so steppers / validators / form widgets reach
 /// for the same numbers. The shell parses the result once at module load
