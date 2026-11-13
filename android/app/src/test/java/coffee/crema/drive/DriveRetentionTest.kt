@@ -74,14 +74,23 @@ class DriveRetentionTest {
 
     @Before fun start() {
         server.createContext("/upload/drive/v3/files") { x ->
-            val body = x.requestBody.readBytes().decodeToString()
+            val body = x.requestBody.readBytes()
             if (uploadFails) {
                 x.respond(500, "{}")
                 return@createContext
             }
-            val name = Regex(""""name"\s*:\s*"([^"]+)"""").find(body)!!.groupValues[1]
+            val query = x.requestURI.query.orEmpty()
+            // A resumable upload (#310 P2a): the session, then the file's PUT.
+            if ("uploadType=resumable" in query) {
+                val name = Regex(""""name"\s*:\s*"([^"]+)"""").find(body.decodeToString())!!.groupValues[1]
+                x.responseHeaders.add("Location", "$driveApiRoot/upload/drive/v3/files?upload_id=" + java.net.URLEncoder.encode(name, "UTF-8"))
+                x.respond(200, "")
+                return@createContext
+            }
+            val name = java.net.URLDecoder.decode(query.substringAfter("upload_id="), "UTF-8")
+            assertEquals("PUT", x.requestMethod)
             drive.add(0, "new" to name)
-            x.respond(200, """{"id":"new","name":"$name"}""")
+            x.respond(200, """{"id":"new","name":"$name","size":"${body.size}"}""")
         }
         server.createContext("/drive/v3/files") { x ->
             if (x.requestMethod == "PATCH") {
@@ -168,6 +177,12 @@ class DriveRetentionTest {
         }
     }
 
+    /** The temporary files the daily runs were handed, to check each goes. */
+    private val zips = mutableListOf<java.io.File>()
+
+    private fun zipFile(): java.io.File =
+        java.io.File.createTempFile("backup-tmp-", ".zip").apply { writeBytes(byteArrayOf(1, 2, 3)) }.also { zips += it }
+
     private fun DriveSync.finish() = runBlocking { withTimeout(10_000) { job.children.toList().joinAll() } }
 
     @Test
@@ -176,7 +191,7 @@ class DriveRetentionTest {
         val sync = DriveSync(
             store, json, scope, "cid",
             notify = { notices += it },
-            backupZip = { BackupZip(byteArrayOf(1), BackupCounts(1u, 1u)) },
+            backupZip = { BackupZip(zipFile(), BackupCounts(1u, 1u)) },
             backupFileName = { "crema-backup-tablet-20261108-0800.crema.zip" },
             applyRestore = { _, _, _ -> },
             refreshToken = { error("no refresh expected") },
@@ -225,7 +240,7 @@ class DriveRetentionTest {
             store, json, scope, "cid",
             notify = { notices += it },
             log = { logged += it },
-            backupZip = { BackupZip(byteArrayOf(1), built, hash) },
+            backupZip = { BackupZip(zipFile(), built, hash) },
             backupFileName = { "crema-backup-tablet-20261106-0800.crema.zip" },
             applyRestore = { _, _, _ -> },
             refreshToken = { error("no refresh expected") },
@@ -238,6 +253,17 @@ class DriveRetentionTest {
         withTimeout(10_000) { job.children.toList().joinAll() }
         seen(sync)
         store.load()
+    }
+
+    /** #310 P2a: the backup is a temporary file, which goes once uploaded or skipped. */
+    @Test
+    fun theTemporaryFileGoesOnceUploadedOrSkipped() {
+        seed(1)
+        dailyBackup(hash = "h1", lastHash = "h1")
+        dailyBackup(hash = "h2", lastHash = "h1")
+        assertEquals(2, zips.size)
+        assertTrue(zips.none { it.exists() }, "skipped, then uploaded: both gone")
+        assertTrue(drive.any { it.second.contains("~$TAG") && it.first == "new" }, "uploaded through the resumable session")
     }
 
     @Test

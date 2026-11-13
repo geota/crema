@@ -45,8 +45,8 @@ class SettingsConfirmState(
     cycle: MutableState<String?>,
     resync: MutableState<Boolean>,
     val launchSave: (name: String, content: String?) -> Unit,
-    /** Binary SAF export — the `.crema.zip` backup (bean photos ride along). */
-    val launchSaveBytes: (name: String, bytes: ByteArray?) -> Unit,
+    /** Binary SAF export — the `.crema.zip` backup (bean photos ride along), a temporary file. */
+    val launchSaveFile: (name: String, file: java.io.File?) -> Unit,
     val launchRestore: (mode: MainViewModel.RestoreMode) -> Unit,
 ) {
     var confirmResetPrefs by resetPrefs
@@ -76,12 +76,12 @@ fun rememberSettingsConfirmState(vm: MainViewModel): SettingsConfirmState {
         val t = pendingExport.value; pendingExport.value = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
-    // Binary SAF export — the `.crema.zip` backup. Held in plain `remember` (not
-    // saveable): the zip can be multi-MB and would blow the Binder cap on save.
-    val pendingExportBytes = remember { mutableStateOf<ByteArray?>(null) }
-    val saveBytesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        val b = pendingExportBytes.value; pendingExportBytes.value = null
-        if (uri != null && b != null) vm.writeBytesToUri(uri, b)
+    // Binary SAF export — the `.crema.zip` backup, a temporary file in the
+    // cache (#310 P2a). Held in plain `remember`; a dismissed picker removes it.
+    val pendingExportFile = remember { mutableStateOf<java.io.File?>(null) }
+    val saveFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val f = pendingExportFile.value; pendingExportFile.value = null
+        if (f != null) { if (uri != null) vm.writeFileToUri(uri, f) else vm.releaseBackupFile(f) }
     }
     // SAF restore-from-file plumbing. The VM plans the picked file and shows
     // the report, which gates a Replace behind the typed confirm, with numbers.
@@ -95,8 +95,8 @@ fun rememberSettingsConfirmState(vm: MainViewModel): SettingsConfirmState {
             launchSave = { name, content ->
                 if (content != null) { pendingExport.value = content; saveLauncher.launch(name) }
             },
-            launchSaveBytes = { name, bytes ->
-                if (bytes != null) { pendingExportBytes.value = bytes; saveBytesLauncher.launch(name) }
+            launchSaveFile = { name, file ->
+                if (file != null) { pendingExportFile.value = file; saveFileLauncher.launch(name) }
             },
             launchRestore = { mode ->
                 pendingRestoreMode.value = mode
@@ -262,24 +262,36 @@ fun SettingsConfirmDialogs(state: SettingsConfirmState, vm: MainViewModel, ui: M
 }
 
 /**
- * "Back up" — builds the `.crema.zip` (off the main thread, see
- * [MainViewModel.buildBackupZipBytes]) and hands the bytes to the SAF save
- * picker. Disabled while a build runs so a double tap can't queue a second
- * full serialisation. Shared by the tablet and phone Settings screens.
+ * "Back up" — builds the `.crema.zip` into a temporary file (off the main
+ * thread, see [MainViewModel.buildBackupZipFile]) and hands it to the SAF save
+ * picker. While it builds, it shows how far it is and offers Cancel, so a
+ * double tap can't queue a second walk. Shared by the tablet and phone
+ * Settings screens.
  */
 @Composable
 fun BackUpEverythingButton(
     vm: MainViewModel,
-    launchSaveBytes: (name: String, bytes: ByteArray?) -> Unit,
+    launchSaveFile: (name: String, file: java.io.File?) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var building by remember { mutableStateOf(false) }
+    val ui by vm.ui.collectAsStateWithLifecycle()
+    val progress = ui.backupProgress[coffee.crema.ui.BackupKind.FILE]
+    if (building) {
+        CremaButton(
+            onClick = { vm.cancelBackup(coffee.crema.ui.BackupKind.FILE) },
+            variant = CremaButtonVariant.Outlined,
+            icon = "x",
+            label = progress?.let { "Cancel · ${it.shotsWritten} of ${it.shotsTotal}" } ?: "Cancel",
+        )
+        return
+    }
     CremaButton(
         onClick = {
             building = true
             scope.launch {
                 try {
-                    launchSaveBytes(vm.backupFileName(), vm.buildBackupZipBytes())
+                    launchSaveFile(vm.backupFileName(), vm.buildBackupZipFile())
                 } finally {
                     building = false
                 }
@@ -287,7 +299,6 @@ fun BackUpEverythingButton(
         },
         variant = CremaButtonVariant.Filled,
         icon = "download-simple",
-        enabled = !building,
-        label = if (building) "Backing up…" else "Back up",
+        label = "Back up",
     )
 }

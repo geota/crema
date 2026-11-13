@@ -111,6 +111,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   2 GB, where the limit was 200 MB. Every part of the zip is checked against
   its checksum, and a damaged or cut-off file is refused before anything
   changes. A record over 16 MB counts as a damaged line. (#310)
+- **Android backups are built a piece at a time** — the backup is written to a
+  temporary file as it's built, rather than held in memory whole, so a large
+  history backs up without running the app out of memory. Back up shows how
+  far it's got and can be cancelled, leaving nothing behind, and a Drive
+  backup uploads straight from the file. (#310)
 - **Web backups are built a piece at a time** — the backup file is written as
   it's built, into the browser's own storage where it has one, rather than held
   in memory whole, so a large history backs up without running the tab out of
