@@ -255,4 +255,16 @@ class BackupReaderTest {
         fun u16(o: Int) = (bytes[o].toInt() and 0xff) or ((bytes[o + 1].toInt() and 0xff) shl 8)
         return at + 30 + u16(at + 26) + u16(at + 28)
     }
+
+    /**
+     * The web's real streamed backup, kept current by `stream.vitest.ts`, reads
+     * through the new reader too, not only the old one (REVIEW-395).
+     */
+    @Test
+    fun theWebsStreamedBackupReadsThroughThisReader() {
+        val zip = File("src/test/resources/backup/web-streamed-photo.crema.zip")
+        val p = prepareBackupFile(zip, "web-streamed", File(dir, "stage-web"))
+        assertTrue(p.photos.isNotEmpty(), "its photo is staged")
+        assertTrue(linesOf(p).isNotEmpty(), "its lines read")
+    }
 }

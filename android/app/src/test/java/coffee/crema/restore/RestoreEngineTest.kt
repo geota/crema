@@ -348,4 +348,13 @@ class RestoreEngineTest {
             RestoreRecords.read(p, json, 0L, maxKeptBytes = 64)
         }
     }
+
+    /** The cap follows the heap, so it can trip before the parse runs out of memory (REVIEW-395). */
+    @Test
+    fun `the kept-records cap is an eighth of the heap, with a floor`() {
+        assertEquals(64L * 1024 * 1024, RestoreRecords.defaultMaxKeptBytes(512L * 1024 * 1024))
+        assertEquals(RestoreRecords.MIN_KEPT_BYTES, RestoreRecords.defaultMaxKeptBytes(128L * 1024 * 1024))
+        // The default, on this heap, stays well below what 7x would exhaust.
+        assertTrue(RestoreRecords.defaultMaxKeptBytes() * 7 <= Runtime.getRuntime().maxMemory() || RestoreRecords.defaultMaxKeptBytes() == RestoreRecords.MIN_KEPT_BYTES)
+    }
 }
