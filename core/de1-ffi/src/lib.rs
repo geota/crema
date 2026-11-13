@@ -2352,6 +2352,149 @@ pub fn import_backup_bytes(bytes: Vec<u8>) -> String {
     de1_domain::import_backup_bytes_json(&bytes)
 }
 
+/// The longest line a backup may hold, in bytes. See
+/// [`de1_domain::MAX_BACKUP_LINE_BYTES`].
+#[uniffi::export]
+#[must_use]
+pub fn backup_max_line_bytes() -> u32 {
+    u32::try_from(de1_domain::MAX_BACKUP_LINE_BYTES).unwrap_or(u32::MAX)
+}
+
+/// The error a backup reader throws once its lock was poisoned by a panic.
+fn reader_poisoned() -> CremaError {
+    CremaError::Failed("The backup reader stopped after an error.".to_owned())
+}
+
+/// [`scan_backup_bytes`], a line at a time, for a backup read in pieces (#310
+/// P2a). See [`de1_domain::BackupScan`]. Used up by [`finish`](Self::finish).
+#[derive(Debug, uniffi::Object)]
+pub struct BackupScanner {
+    scan: Mutex<Option<de1_domain::BackupScan>>,
+}
+
+#[uniffi::export]
+impl BackupScanner {
+    /// A new scan.
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            scan: Mutex::new(Some(de1_domain::BackupScan::new())),
+        })
+    }
+
+    /// Read the next line, without its `0x0A`.
+    ///
+    /// # Errors
+    ///
+    /// After [`finish`](Self::finish), or once a panic poisoned it.
+    pub fn push_line(&self, line: Vec<u8>) -> Result<(), CremaError> {
+        self.with(|scan| scan.push_line(&line))
+    }
+
+    /// The next line was too long to read, and its bytes were skipped. A line
+    /// of only whitespace is blank at any length: push an empty line instead.
+    ///
+    /// # Errors
+    ///
+    /// After [`finish`](Self::finish), or once a panic poisoned it.
+    pub fn push_oversized_line(&self) -> Result<(), CremaError> {
+        self.with(de1_domain::BackupScan::push_oversized_line)
+    }
+
+    /// The `BackupManifest` JSON, with the bean ids the zip holds photos for.
+    ///
+    /// # Errors
+    ///
+    /// When already finished, or the manifest won't serialise.
+    pub fn finish(&self, photos: Vec<String>) -> Result<String, CremaError> {
+        let scan = self
+            .scan
+            .lock()
+            .map_err(|_| reader_poisoned())?
+            .take()
+            .ok_or_else(|| CremaError::Failed("The backup scan already finished.".to_owned()))?;
+        let mut manifest = scan.finish();
+        manifest.photos = photos;
+        serde_json::to_string(&manifest).map_err(|e| CremaError::Failed(e.to_string()))
+    }
+}
+
+impl BackupScanner {
+    fn with(&self, f: impl FnOnce(&mut de1_domain::BackupScan)) -> Result<(), CremaError> {
+        let mut scan = self.scan.lock().map_err(|_| reader_poisoned())?;
+        let scan = scan
+            .as_mut()
+            .ok_or_else(|| CremaError::Failed("The backup scan already finished.".to_owned()))?;
+        f(scan);
+        Ok(())
+    }
+}
+
+/// [`import_backup_bytes`], a line at a time: each line's record, so the
+/// shell holds a line, not the file (#310 P2a). See
+/// [`de1_domain::BackupImport`].
+#[derive(Debug, uniffi::Object)]
+pub struct BackupImporter {
+    import: Mutex<de1_domain::BackupImport>,
+}
+
+#[uniffi::export]
+impl BackupImporter {
+    /// A new import.
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            import: Mutex::new(de1_domain::BackupImport::new()),
+        })
+    }
+
+    /// Read the next line, without its `0x0A`: the `BackupRecord` JSON the
+    /// restore takes from it, or null.
+    ///
+    /// # Errors
+    ///
+    /// When the record won't serialise, rather than dropping it unseen, or
+    /// once a panic poisoned it.
+    pub fn push_line(&self, line: Vec<u8>) -> Result<Option<String>, CremaError> {
+        let mut import = self.import.lock().map_err(|_| reader_poisoned())?;
+        import
+            .push_line(&line)
+            .map(|record| {
+                serde_json::to_string(&record).map_err(|e| CremaError::Failed(e.to_string()))
+            })
+            .transpose()
+    }
+
+    /// The next line was too long to read, and its bytes were skipped. A
+    /// blank line, however long, is an empty line instead.
+    ///
+    /// # Errors
+    ///
+    /// Once a panic poisoned it.
+    pub fn push_oversized_line(&self) -> Result<(), CremaError> {
+        self.import
+            .lock()
+            .map_err(|_| reader_poisoned())?
+            .push_oversized_line();
+        Ok(())
+    }
+
+    /// Whether the first line that wasn't blank was a header.
+    ///
+    /// # Errors
+    ///
+    /// Once a panic poisoned it.
+    pub fn has_header(&self) -> Result<bool, CremaError> {
+        Ok(self
+            .import
+            .lock()
+            .map_err(|_| reader_poisoned())?
+            .has_header())
+    }
+}
+
 /// One restore, planned: a manifest JSON, a `LocalState` JSON, the mode
 /// (`merge` or `replace`) and a `RestoreOpts` JSON, to a `RestorePlan` JSON.
 /// See [`de1_domain::plan_restore`].
