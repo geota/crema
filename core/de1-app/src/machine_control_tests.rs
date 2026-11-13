@@ -982,6 +982,36 @@ fn a_lower_frame_on_return_is_a_new_shot_begun_unseen() {
     assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
 }
 
+/// Outage evidence compares frames within one shot. A shot heard on frame 4,
+/// then a new one heard from Heating (flow can't go backwards, so a new
+/// session), then an outage before any sample of the new shot: the first
+/// sample back, on frame 0, is the new shot carrying on, not one begun during
+/// the outage. Its seen session, auto-stop and weight stop stand.
+#[test]
+fn a_replaced_shot_forgets_the_old_shots_frame() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    let mut f = sample(100);
+    f[17] = 4;
+    core.on_notification(Source::De1ShotSample, &f, 500);
+    core.on_notification(Source::De1State, &[4, 1], 1_000);
+    core.on_notification(Source::De1State, &[4, 5], 2_000);
+    let started = core
+        .auto_stop_view()
+        .expect("the new shot's auto-stop")
+        .started;
+    core.de1_link_lost();
+    core.on_notification(Source::De1State, &[4, 5], 8_000);
+    let mut f = sample(200);
+    f[17] = 0;
+    let o = core.on_notification(Source::De1ShotSample, &f, 8_100);
+    assert!(!o.commands.contains(&Command::CancelStop));
+    assert!(!o.events.contains(&Event::ShotStarted), "the same shot");
+    assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
+    assert_eq!(core.auto_stop_view().map(|v| v.started), Some(started));
+}
+
 /// No sample within a second of the return: unsure. With nothing owed, weight
 /// is refused; time and volume go on.
 #[test]

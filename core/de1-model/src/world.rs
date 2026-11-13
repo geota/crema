@@ -661,6 +661,9 @@ impl World {
                 self.stops_in_episode = 0;
                 self.stopped_this_flow = false;
                 self.alerts = 0;
+                // The core's frame memory ends with its shot, a replaced one
+                // too: an outage later in the new shot has no frame to compare.
+                self.last_sample_frame = None;
             }
             return;
         }
