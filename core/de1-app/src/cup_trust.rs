@@ -41,13 +41,14 @@ impl CremaCore {
         }
     }
 
-    /// An espresso whose zero is known and that hasn't flowed yet. The step
-    /// detector watches it from the tare onward, so a load set down during
-    /// preheat settles and moves the zero instead of reading as coffee
-    /// (`DESIGN.md` §3.5, #389).
+    /// An espresso whose zero is known and that hasn't flowed yet, by its
+    /// state or its samples. The step detector watches it from the tare
+    /// onward, so a load set down during preheat settles and moves the zero
+    /// instead of reading as coffee (`DESIGN.md` §3.5, #389).
     pub(crate) fn watching_preheat(&self) -> bool {
         self.shot_started.is_some()
             && self.flow_started.is_none()
+            && self.sample_flow_at.is_none()
             && self
                 .session
                 .is_some_and(|s| s.mode == ActiveMode::Espresso && s.baseline == Baseline::Tared)

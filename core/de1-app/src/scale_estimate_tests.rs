@@ -753,3 +753,123 @@ fn a_settle_cut_short_by_a_reset_never_trains_the_drip_model() {
     );
     assert_eq!(cut.saw_model_json(), before, "no drip learning");
 }
+
+/// REVIEW-404 M1: the slow scale's re-tare lands, but the scale reads 0.5 g
+/// after it, over the wait's 0.3 g, so the wait times out with the drop of
+/// the load inside it. The reading is nearer 0 than the virtual zero, so the
+/// scale zeroed the load and the virtual zero goes. Kept, it would count the
+/// load twice: a true 41 g of 36 with a 6 g spoon, 54 g with 20 g.
+#[test]
+fn a_retare_that_lands_a_little_over_zero_clears_the_virtual_zero() {
+    for load in [6.0, 20.0] {
+        let (mut core, tares, zeroed) = preheat_then_flow(500, 6_000, |t| match t {
+            ..3_000 => 0.0,
+            3_000..5_000 => load,
+            _ => 0.5,
+        });
+        assert_eq!(tares, vec![2_000, 4_500], "{load} g");
+        assert_eq!(zeroed, vec![load], "{load} g");
+        let mut pour = Pour::from(6_000, 30.0);
+        let stop = run(&mut core, &mut pour, 90_000, |t, cup| Step {
+            sample: true,
+            reading: t.is_multiple_of(500).then_some(cup + 0.5),
+        });
+        near_target(stop, StopReason::Weight);
+    }
+}
+
+/// REVIEW-404 M2: the Preinfusion report is lost, so the state says Heating
+/// from 1.5 s to 9 s while the cup fills at 2.6 g/s, and the scale goes quiet
+/// for 1.5 s at 2 s. Two samples showing flow, after the still ones of
+/// heating, end the preheat, so the step
+/// detector stops judging the readings as preheat, and the late-cup re-tare
+/// stops too. The shot stops at a true 36 g, on a scale that ignores tares and
+/// on one that honours them. Still judged as preheat, the reading back went
+/// to a settle that never held, so weight was refused and the backstop
+/// stopped the pour at 133 g; and a scale that honours the re-tare zeroed
+/// 18 g of coffee, to stop at 54 g.
+#[test]
+fn a_pour_heard_as_heating_is_not_preheat() {
+    for honours_tares in [false, true] {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_test_profile_yield(Some(36.0));
+        core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
+        core.on_notification(Source::De1State, &[2, 0], 10);
+        core.on_notification(Source::De1State, &[4, 1], 100);
+        let (mut cup, mut zero, mut tare_at) = (0.0f32, 0.0f32, None::<u64>);
+        let mut stops = vec![];
+        for t in (200..90_000).step_by(100) {
+            if t == 9_000 {
+                core.on_notification(Source::De1State, &[4, 5], t);
+            }
+            if t >= 1_500 {
+                let o = core.on_notification(Source::De1ShotSample, &sample((t / 8) as u16), t);
+                stops.extend(stop_reasons(&o));
+                cup += 0.26;
+            } else {
+                // Heating: samples with no flow.
+                let mut still = sample((t / 8) as u16);
+                still[4..6].copy_from_slice(&[0, 0]);
+                core.on_notification(Source::De1ShotSample, &still, t);
+            }
+            if tare_at.is_some_and(|at| t >= at) {
+                zero = cup;
+                tare_at = None;
+            }
+            if !(2_000..3_500).contains(&t) {
+                let o = core.on_notification(Source::ScaleWeight, &bookoo(cup - zero), t + 1);
+                if honours_tares
+                    && o.commands
+                        .iter()
+                        .any(|c| matches!(c, Command::WriteScale { .. }))
+                {
+                    tare_at = Some(t + 200);
+                }
+                stops.extend(stop_reasons(&o));
+            }
+            if !stops.is_empty() {
+                break;
+            }
+        }
+        let stop = stops.first().map(|r| (*r, cup));
+        assert_eq!(
+            stop.map(|s| s.0),
+            Some(StopReason::Weight),
+            "tares honoured: {honours_tares}, true {cup} g"
+        );
+        near_target(stop, StopReason::Weight);
+    }
+}
+
+/// The tail of a flow just before the shot (a flush, the last shot) runs
+/// into its heating with the reported flow still high. That isn't this
+/// shot's pour: preheat is watched until a still sample has come and two
+/// flowing ones after it. So a spoon set down 0.3 s before flow still moves
+/// the zero, and the shot stops at a true 36 g; taking the tail for flow, the
+/// spoon read as coffee and stopped the shot 6 g early.
+#[test]
+fn a_flows_tail_into_heating_is_not_the_pour() {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    core.set_test_profile_yield(Some(36.0));
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 1], 100);
+    for t in (200..1_500).step_by(100) {
+        let mut s = sample((t / 8) as u16);
+        if t >= 1_000 {
+            s[4..6].copy_from_slice(&[0, 0]);
+        }
+        core.on_notification(Source::De1ShotSample, &s, t);
+        let g = if t >= 1_200 { 6.0 } else { 0.0 };
+        core.on_notification(Source::ScaleWeight, &bookoo(g), t + 1);
+    }
+    core.on_notification(Source::De1State, &[4, 5], 1_500);
+    let mut pour = Pour::from(1_500, 30.0);
+    let stop = run(&mut core, &mut pour, 90_000, |_, cup| Step {
+        sample: true,
+        reading: Some(cup + 6.0),
+    });
+    near_target(stop, StopReason::Weight);
+}

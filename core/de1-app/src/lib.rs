@@ -566,6 +566,15 @@ pub struct CremaCore {
     /// counted in the displayed shot time — matching de1app and the recorded
     /// `ShotRecord.duration` (the `ShotMonitor` times the same window).
     flow_started: Option<Duration>,
+    /// The first shot sample that showed water flowing this shot, before or
+    /// after the state said so: a lost Preinfusion report leaves the pour on
+    /// Heating's word, and it isn't preheat any more (#389, REVIEW-404 M2).
+    sample_flow_at: Option<Duration>,
+    /// Consecutive shot samples at or over the flow proof, toward
+    /// [`sample_flow_at`](Self::sample_flow_at). `None` until this shot has
+    /// had a still sample: the tail of a flow just before it (a flush, the
+    /// last shot) is not its pour.
+    sample_flow_run: Option<u32>,
     /// This shot's flow began on an unknown substate, and no named flowing
     /// one has come since: the first that does re-anchors the clock.
     flow_began_on_unknown: bool,
@@ -1098,6 +1107,8 @@ impl CremaCore {
             last_state: None,
             shot_started: None,
             flow_started: None,
+            sample_flow_at: None,
+            sample_flow_run: None,
             flow_began_on_unknown: false,
             limit_from_ml: 0.0,
             scale: None,
@@ -3845,6 +3856,28 @@ impl CremaCore {
         self.last_sample_at = Some(now);
         // Proof of flow counts before anything this sample sends.
         self.note_flow_proof(sample.group_flow);
+        // Two in a row, as for the retry's proof of flow, and only once the
+        // tail of an earlier flow has died.
+        let flowing = sample.group_flow >= de1_domain::stop::FLOW_PROOF_ML_S;
+        self.sample_flow_run = match self.sample_flow_run {
+            _ if !flowing => Some(0),
+            Some(run) => Some(run.saturating_add(1)),
+            None => None,
+        };
+        if self.shot_started.is_some()
+            && self.sample_flow_at.is_none()
+            && self
+                .sample_flow_run
+                .is_some_and(|run| run >= de1_domain::stop::FLOW_PROOF_SAMPLES)
+        {
+            self.sample_flow_at = Some(now);
+            // The pre-flow tares end here too: a late-cup re-tare would zero
+            // the coffee. A shot-start tare still waiting fires now, as at
+            // first flow.
+            if self.flow_started.is_none() && self.auto_tare_pending {
+                self.fire_auto_tare(now, out);
+            }
+        }
         // A link's first espresso state waits for this sample's frame: a lower
         // one is a new shot, begun unseen during the outage.
         if self.monitor.is_shot_in_progress()
@@ -4040,7 +4073,10 @@ impl CremaCore {
         // [`evaluate_auto_tare`](Self::evaluate_auto_tare). While the
         // shot-start tare waits for a still reading, and on the reading that
         // fires a tare, report zero exactly as the tare gate below does.
-        if self.shot_started.is_some() && self.flow_started.is_none() {
+        if self.shot_started.is_some()
+            && self.flow_started.is_none()
+            && self.sample_flow_at.is_none()
+        {
             let fired = self.evaluate_auto_tare(reading.weight_g, now, out);
             if fired || self.auto_tare_pending {
                 self.push_suppressed_reading(&reading, out);
@@ -4077,7 +4113,13 @@ impl CremaCore {
                 // set down in preheat, so a virtual zero it latched would
                 // count the load twice. One that never landed leaves the
                 // detector's zero, and a settle in flight, standing (#389).
-                if landed {
+                // A tare that lands reading a little over 0.3 g times out
+                // the wait instead, with the drop of the load inside it, so
+                // the reading decides: nearer 0 than the offset, the scale
+                // zeroed the load (REVIEW-404 M1).
+                let zeroed = self.saw_zero_offset_g != 0.0
+                    && reading.weight_g.abs() < (reading.weight_g - self.saw_zero_offset_g).abs();
+                if landed || zeroed {
                     self.saw_zero_offset_g = 0.0;
                 }
                 // The session's zero is known.
@@ -4358,8 +4400,13 @@ impl CremaCore {
                 // Still moving: a hand, not a cup at rest. Weight is off for
                 // the session and the backstop bounds it. Before flow there's
                 // no coffee to lose, so a hand in preheat has until 2 s into
-                // the flow (#389).
-                let since = self.flow_started.map(|fs| fs.max(settle.started));
+                // the flow (#389), whichever of the state and the samples
+                // showed it first.
+                let flowing = [self.flow_started, self.sample_flow_at]
+                    .into_iter()
+                    .flatten()
+                    .min();
+                let since = flowing.map(|fs| fs.max(settle.started));
                 if since.is_some_and(|at| now.saturating_sub(at) >= UNTARED_SETTLE_WINDOW) {
                     self.untared_settle = None;
                     if let Some(session) = self.session.as_mut() {
@@ -5764,6 +5811,8 @@ impl CremaCore {
                 self.tare_observed = false;
                 self.last_raw_weight = None;
                 self.pre_shot_zero_offset_g = 0.0;
+                self.sample_flow_at = None;
+                self.sample_flow_run = None;
                 // Reset the scale's built-in timer so any residual from a
                 // prior shot clears — but do NOT start it yet: the start
                 // waits for first flow below, so the on-scale timer matches
