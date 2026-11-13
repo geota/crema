@@ -2,7 +2,7 @@
 // web writes a backup: fflate `zipSync` (sizes in the local header) and `Zip`
 // with `ZipDeflate` (#386's streamed export, data descriptors). The photo comes
 // first and holds all three zip signatures, stored (level 0), so they show in
-// its compressed bytes; it's MakeZip.java's photo. Rerun from web/ with
+// its compressed bytes; it's the Android fixture's photo (AndroidZipFixtureTest). Rerun from web/ with
 //   node ../core/de1-domain/tests/fixtures/backup/make-fflate-zips.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

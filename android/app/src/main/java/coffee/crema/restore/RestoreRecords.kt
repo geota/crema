@@ -1,6 +1,8 @@
 package coffee.crema.restore
 
 import coffee.crema.core.BackupImporter
+import coffee.crema.persist.ImportLimits
+import coffee.crema.persist.ImportTooLargeException
 import coffee.crema.core.PlanAction
 import coffee.crema.core.RestorePlan
 import coffee.crema.ui.BackupDecodeError
@@ -31,8 +33,19 @@ class RestoreRecords(val parsed: ParsedBackup) {
          * others go as they're read: what a restore holds is bounded by the
          * history it keeps, not by the backup. The lines kept are then decoded
          * as a backup of their own, by the same parse.
+         *
+         * What's kept is capped at [maxKeptBytes], the import budget, as
+         * everything but the shots is held whole: past it the restore is
+         * refused with [ImportTooLargeException] before any write (security
+         * review of #395).
          */
-        fun read(prepared: PreparedBackup, json: Json, nowMs: Long, shots: Set<String>? = null): RestoreRecords {
+        fun read(
+            prepared: PreparedBackup,
+            json: Json,
+            nowMs: Long,
+            shots: Set<String>? = null,
+            maxKeptBytes: Long = ImportLimits.MAX_TOTAL_BYTES,
+        ): RestoreRecords {
             val kept = java.io.ByteArrayOutputStream()
             BackupImporter().use { importer ->
                 prepared.forEachLine { piece ->
@@ -41,6 +54,11 @@ class RestoreRecords(val parsed: ParsedBackup) {
                         is BackupLinePiece.Line -> {
                             val record = importer.pushLine(piece.bytes)
                             if (record != null && keep(record, json, shots)) {
+                                if (kept.size().toLong() + piece.bytes.size + 1 > maxKeptBytes) {
+                                    throw ImportTooLargeException(
+                                        "This backup holds more than ${ImportLimits.mb(maxKeptBytes)} of records to restore, more than a restore reads.",
+                                    )
+                                }
                                 kept.write(piece.bytes)
                                 kept.write('\n'.code)
                             }

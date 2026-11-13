@@ -76,9 +76,10 @@ class BackupReaderTest {
     fun aCorruptedByteFailsTheChecksum() {
         for ((name, zip) in writers) {
             val bytes = zip.readBytes()
-            // Inside the photo's data, past its local header and any deflate block header.
-            val local = 30 + "images/bean:android-1".length
-            bytes[local + 300] = (bytes[local + 300].toInt() xor 0x01).toByte()
+            // Inside the photo's data, past its local header and any deflate
+            // block header, wherever the writer put the photo's entry.
+            val data = photoDataStart(bytes)
+            bytes[data + 300] = (bytes[data + 300].toInt() xor 0x01).toByte()
             assertTrue("checksum" in refusal { prepareBackupFile(copy(bytes), name, File(dir, "s")) }, name)
         }
     }
@@ -242,5 +243,16 @@ class BackupReaderTest {
         assertFailsWith<Exception> { scanner.finish(emptyList()) }
         assertEquals(16 * 1024 * 1024, backupMaxLineBytes().toInt())
         scanner.destroy(); importer.destroy()
+    }
+
+    /** Where the photo entry's data starts: after its local header, its name and its extra field. */
+    private fun photoDataStart(bytes: ByteArray): Int {
+        val name = "images/bean:android-1"
+        val at = (0 until bytes.size - 30).first { i ->
+            bytes[i] == 0x50.toByte() && bytes[i + 1] == 0x4b.toByte() && bytes[i + 2] == 3.toByte() && bytes[i + 3] == 4.toByte() &&
+                String(bytes, i + 30, name.length, Charsets.ISO_8859_1) == name
+        }
+        fun u16(o: Int) = (bytes[o].toInt() and 0xff) or ((bytes[o + 1].toInt() and 0xff) shl 8)
+        return at + 30 + u16(at + 26) + u16(at + 28)
     }
 }

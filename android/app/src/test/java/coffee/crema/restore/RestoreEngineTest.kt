@@ -24,6 +24,7 @@ import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -335,5 +336,16 @@ class RestoreEngineTest {
         assertTrue("This backup is damaged" in refusalMessage(plan), refusalMessage(plan))
         assertIs<RestoreOutcome.Refused>(e.run(damaged, RestoreKind.REPLACE, records(damaged), expected = plan))
         assertEquals(emptyList(), sink.calls)
+    }
+
+    /** What a restore keeps is capped, so a backup can't make it hold without bound (security review of #395). */
+    @Test
+    fun `records past the restore's budget refuse the read before any write`() {
+        val p = prepared()
+        val whole = RestoreRecords.read(p, json, 0L)
+        assertTrue(whole.parsed.beans.isNotEmpty(), "under the budget, the backup reads")
+        assertFailsWith<coffee.crema.persist.ImportTooLargeException> {
+            RestoreRecords.read(p, json, 0L, maxKeptBytes = 64)
+        }
     }
 }
