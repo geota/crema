@@ -47,6 +47,9 @@ internal class CoreLane(
     private val readState: suspend () -> Unit = {},
     /** The core's output for a failed profile write of upload [UInt]. */
     private val profileWriteFailed: (UInt) -> String,
+    /** Debug-build fault injection (DESIGN.md §7): whether to drop a Stop
+     *  or a plain requested-state write. [NoFaults] in a shipped build. */
+    private val faults: coffee.crema.faults.FaultInjector = coffee.crema.faults.NoFaults,
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val dispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
 ) {
@@ -179,6 +182,8 @@ internal class CoreLane(
             log("Stop write already in flight — not stacking another")
             return
         }
+        // A debug build's armed fault drops it here, as a lost write (logged).
+        if (faults.dropStop()) return
         val job = scope.launch { deliverDe1Write(STOP_WRITE, stopWrite = true) }
         pendingStopWrite.set(job)
         job.invokeOnCompletion { pendingStopWrite.compareAndSet(job, null) }
@@ -253,6 +258,12 @@ internal class CoreLane(
         scope.launch {
             executeInOrder(batch) { c ->
                 val profile = profileBatch?.takeIf { isProfileWriteTarget(c.content.target) }
+                // A debug build's armed fault drops a plain requested-state
+                // write here, as a lost write (logged). A Stop never comes
+                // this way: it has its own lane above.
+                if (c.content.target == WriteTarget.De1RequestedState && faults.dropRequestedState()) {
+                    return@executeInOrder
+                }
                 if (profile == null) {
                     deliverDe1Write(c, stopWrite = false)
                     return@executeInOrder

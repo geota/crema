@@ -1188,3 +1188,47 @@ fn a_pour_heard_as_heating_stops_on_target() {
     let cup = world.true_cup_g();
     assert!((33.0..40.0).contains(&cup), "stopped at a true {cup} g");
 }
+
+/// I20's oracle compares frames within one shot, as the core does (`DESIGN.md`
+/// §3.3, outage evidence). Two lost reports hide shot 1's end; the core next
+/// hears shot 2 from Heating, a new session since flow can't go backwards.
+/// Its samples are muted, then the link drops before the core hears one. The
+/// first sample back is on frame 0 of shot 2, lower than shot 1's last, but
+/// shot 2 was seen from its start: the core keeps its session and the
+/// auto-stop it built at first flow. The oracle had kept shot 1's frame across
+/// the replacement and called shot 2 one begun during the outage.
+#[test]
+fn a_replaced_shot_forgets_the_old_shots_frame() {
+    let mut world = World::new(
+        De1Params {
+            preinfusion: false,
+            ending: Ending::Prompt,
+            ..De1Params::default()
+        },
+        0.0,
+        5_000,
+        true,
+        false,
+    );
+    for op in [
+        Op::Advance { ms: 8_700 },
+        Op::GroupHead(MachineState::Espresso),
+        Op::Advance { ms: 7_100 },
+        Op::LoseStates(2),
+        Op::Advance { ms: 3_300 },
+        Op::Advance { ms: 13_200 },
+        Op::Advance { ms: 12_700 },
+        Op::Advance { ms: 28_400 },
+        Op::Advance { ms: 2_900 },
+        Op::GroupHead(MachineState::Espresso),
+        Op::MuteSamples { ms: 3_400 },
+        Op::Advance { ms: 2_000 },
+        Op::LinkDown { ms: 5_600 },
+        Op::Advance { ms: 100 },
+    ] {
+        world.apply(&op);
+    }
+    world.apply(&Op::Advance { ms: 90_000 });
+    assert!(world.coverage.replaced >= 1, "shot 2 replaced shot 1");
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
