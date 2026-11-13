@@ -18,6 +18,8 @@ mod cup_trust;
 pub mod de1_uuids;
 #[cfg(test)]
 mod desired_targets_tests;
+#[cfg(test)]
+mod drip_learning_tests;
 pub mod error;
 pub mod event;
 pub mod firmware_flash;
@@ -5618,7 +5620,9 @@ impl CremaCore {
                 // A new shot before the previous shot's drip settle finalized —
                 // flush it now so its (settled-so-far) completion is never lost
                 // and the accumulator reset below starts from a clean slate (#64).
-                if let Some(settle) = self.post_shot_settle.take() {
+                // Its drip was cut short, so it trains nothing (REVIEW-399 S1).
+                if let Some(mut settle) = self.post_shot_settle.take() {
+                    settle.learn_drip = false;
                     self.finalize_shot_completed(settle, now, out);
                 }
                 self.shot_started = Some(now);
