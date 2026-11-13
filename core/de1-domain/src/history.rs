@@ -406,6 +406,11 @@ pub struct StoredShot {
     /// `serde(default)` — same tolerance rationale as `profile`.
     #[serde(default)]
     pub stop_reason: Option<StopReason>,
+    /// The weight stop was the estimate, with the scale lost
+    /// (`StopReason::EstimatedWeight`): `stop_reason` stays `Weight`, which
+    /// older builds parse. Additive; absent means `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stop_estimated: bool,
     /// Barista journal metadata. `#[serde(default)]` so a legacy shot that
     /// predates this field (or a foreign import that omits it) still loads
     /// rather than failing the whole history read; `ShotMetadata` is all-Option
@@ -574,6 +579,7 @@ impl StoredShot {
             profile_name: None,
             profile: None,
             stop_reason: None,
+            stop_estimated: false,
             metadata: ShotMetadata::default(),
             record,
             bean: None,

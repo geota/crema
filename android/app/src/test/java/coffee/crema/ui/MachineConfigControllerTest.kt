@@ -46,7 +46,6 @@ class MachineConfigControllerTest {
             log = { logs += it },
             writeDe1 = { _, _, _, _ -> true },
             writeScale = {},
-            shotRunning = { false },
             profileWriteFailed = { "" },
             dispatcher = laneDispatcher,
         ),
@@ -62,7 +61,7 @@ class MachineConfigControllerTest {
         profileJson = { null },
         persistLibrary = { calls += "persistLibrary" },
         maybeLoadLinkedProfile = { calls += "linkedProfile($it)" },
-        pushStopTargets = { s, delayMs -> pushed = s; calls += "pushStopTargets($delayMs)" },
+        pushStopTargets = { s -> pushed = s; calls += "pushStopTargets" },
         refreshStopTargetProjection = { calls += "refreshStopTargetProjection" },
         pushStartSettings = { calls += "pushStartSettings" },
         configureIdleSleep = { calls += "configureIdleSleep($it)" },
@@ -74,7 +73,7 @@ class MachineConfigControllerTest {
     @Test
     fun `a new active profile persists, then its recipe becomes the stop targets`() {
         controller.commitConfig(MachineCommand.SetActiveProfile("p"))
-        assertEquals(listOf("persistPrefs", "pushStopTargets(0)"), calls)
+        assertEquals(listOf("persistPrefs", "pushStopTargets"), calls)
     }
 
     @Test
@@ -92,13 +91,13 @@ class MachineConfigControllerTest {
     @Test
     fun `the dial debounces the desired profile before mirrors hear of it`() {
         controller.commitConfig(MachineCommand.AdjustBrew(18.0, 36.0, 92.0, null))
-        assertEquals(listOf("pushStopTargets(500)", "pushConfig"), calls)
+        assertEquals(listOf("pushStopTargets", "pushConfig"), calls)
     }
 
     @Test
     fun `resetting the brew override drops the debounce`() {
         controller.commitConfig(MachineCommand.ResetBrew)
-        assertEquals(listOf("pushStopTargets(0)", "pushConfig"), calls)
+        assertEquals(listOf("pushStopTargets", "pushConfig"), calls)
     }
 
     @Test
@@ -134,7 +133,7 @@ class MachineConfigControllerTest {
         controller.pushCoreInputs(shown)
         assertSame(shown, pushed)
         // The packet goes first; its new hot-water target reaches the mirrors on the way.
-        assertEquals(listOf("pushConfig", "pushStopTargets(0)", "configureIdleSleep(${shown.idleSleepMin})"), calls)
+        assertEquals(listOf("pushConfig", "pushStopTargets", "configureIdleSleep(${shown.idleSleepMin})"), calls)
         assertEquals(emptyList(), logs)
     }
 

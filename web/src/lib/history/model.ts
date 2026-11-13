@@ -295,6 +295,9 @@ export interface StoredShot {
 	readonly profile?: unknown | null;
 	/** Why the shot stopped, if an AutoStop drove it. */
 	readonly stopReason?: unknown | null;
+	/** The `Weight` stop was the core's estimate, the scale lost mid-shot
+	 *  (core `StoredShot.stop_estimated`; older builds read it as `Weight`). */
+	readonly stopEstimated?: boolean;
 	/** Barista journal metadata (dose / yield / rating / notes …). */
 	metadata: ShotMetadata;
 	/**

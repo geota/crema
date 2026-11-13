@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use de1_protocol::{MachineState, StateInfo};
+use de1_protocol::{MachineState, StateInfo, SubState};
 use typeshare::typeshare;
 
 use crate::session::SessionTimer;
@@ -96,6 +96,20 @@ impl WaterMonitor {
     /// The kind of session in progress, if any.
     pub fn session_kind(&self) -> Option<WaterSessionKind> {
         self.session.as_ref().map(|s| s.kind)
+    }
+
+    /// A new session in the same state: the running one completes and `info`
+    /// starts the next.
+    pub fn split(&mut self, info: StateInfo, now: Duration) -> Vec<WaterEvent> {
+        let mut events = self.on_state_info(
+            StateInfo {
+                state: MachineState::Idle,
+                substate: SubState::Ready,
+            },
+            now,
+        );
+        events.extend(self.on_state_info(info, now));
+        events
     }
 
     /// Feed a [`StateInfo`] notification. `now` is a monotonic timestamp

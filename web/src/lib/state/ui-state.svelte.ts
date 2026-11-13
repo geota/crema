@@ -27,7 +27,8 @@ import type {
 	CalTarget,
 	SubState
 } from '#lib/core/index.js';
-import type { HotWaterTarget, StopReason } from '#lib/core/crema-core.js';
+import type { HotWaterTarget } from '#lib/core/crema-core.js';
+import { StopReason } from '#lib/core/crema-core.js';
 import { MaintenanceFailure, ScaleLinkDeadReason } from '#lib/core/crema-core.js';
 import type { De1State, De1Diagnostics } from '#lib/ble/de1.js';
 import { EMPTY_DE1_DIAGNOSTICS } from '#lib/ble/de1.js';
@@ -195,9 +196,14 @@ export interface StopTargetsView {
 	 *  configured stays on screen when a scale drops instead of vanishing. */
 	readonly weightConfiguredG: number | null;
 	/** Why `weightG` is null despite `weightConfiguredG` being set —
-	 *  `'no-scale'` or `'untared-cup'`; null when armed, unset, or the user
+	 *  `'no-scale'`, `'scale-silent'`, `'began-unseen'`, `'untared-cup'`, `'scale-lost'`, `'scale-rezeroed'`, `'scale-disturbed'` or `'scale-not-tared'`; null when armed, unset, or the user
 	 *  turned the stop off (a choice, not an impediment). */
 	readonly weightBlocked: string | null;
+	/** The core's note for `weightBlocked`, the same on both shells. */
+	readonly weightBlockedNote: string | null;
+	/** The yield dot is off. The core turns it back on for each new desired
+	 *  profile (`DESIGN.md` §3.10), so the dot reads it from here. */
+	readonly weightTargetDisabled: boolean;
 }
 
 export interface UiSnapshot {
@@ -1034,7 +1040,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					maxTimeS: c.max_time ?? null,
 					armed: c.armed,
 					weightConfiguredG: c.weight_configured ?? null,
-					weightBlocked: c.weight_blocked ?? null
+					weightBlocked: c.weight_blocked ?? null,
+					weightBlockedNote: c.weight_blocked_note ?? null,
+					// The event doesn't carry the dot; only a shell action or a
+					// new desired profile moves it, and both re-read the projection.
+					weightTargetDisabled: snapshot.stopTargets?.weightTargetDisabled ?? false
 				},
 				eventLog: appendLog(
 					snapshot.eventLog,
@@ -1042,6 +1052,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				)
 			};
 		}
+		case 'StopNotHonoured':
+			return {
+				...snapshot,
+				eventLog: appendLog(snapshot.eventLog, `Stop not honoured: ${event.content.message}`)
+			};
 		case 'StopRetried':
 			// The machine hasn't honoured a commanded stop — the core is
 			// re-commanding it (issue #15). Loud on purpose.
@@ -1049,7 +1064,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				eventLog: appendLog(
 					snapshot.eventLog,
-					`Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason})`
+					`Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason ?? 'your Stop'})`
 				)
 			};
 		case 'StopTriggered':
@@ -1061,7 +1076,12 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				lastStopReason: snapshot.shotInProgress
 					? event.content.reason
 					: snapshot.lastStopReason,
-				eventLog: appendLog(snapshot.eventLog, `Auto-stop: ${event.content.reason}`)
+				eventLog: appendLog(
+					snapshot.eventLog,
+					event.content.reason === StopReason.EstimatedWeight
+						? 'Auto-stop: on estimate, scale lost'
+						: `Auto-stop: ${event.content.reason}`
+				)
 			};
 		case 'ShotCompleted': {
 			// The shot ended — stop the timer, but keep the buffered series so
@@ -1623,6 +1643,8 @@ export async function refreshStopTargetsProjection(core: {
 		maxTime: number | null;
 		weightConfigured: number | null;
 		weightBlocked: string | null;
+		weightBlockedNote: string | null;
+		weightTargetDisabled?: boolean;
 	}>;
 	/** The core's hot-water target, re-read alongside (see below). */
 	hotWaterTarget?(): Promise<HotWaterTarget | null>;
@@ -1636,7 +1658,9 @@ export async function refreshStopTargetsProjection(core: {
 				maxTimeS: p.maxTime ?? null,
 				armed: p.armed,
 				weightConfiguredG: p.weightConfigured ?? null,
-				weightBlocked: p.weightBlocked ?? null
+				weightBlocked: p.weightBlocked ?? null,
+				weightBlockedNote: p.weightBlockedNote ?? null,
+				weightTargetDisabled: p.weightTargetDisabled ?? false
 			}
 		});
 	} catch {

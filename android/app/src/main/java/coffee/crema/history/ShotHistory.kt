@@ -156,6 +156,9 @@ data class StoredShot(
     /** Why the core stopped the shot — the core `StopReason` name (`"Weight"`,
      *  `"Volume"`, `"MaxTime"`, …) — or null when it ended on its own. */
     val stopReason: String? = null,
+    /** The `Weight` stop was the core's estimate, the scale lost mid-shot
+     *  (core `StoredShot.stop_estimated`; older builds read it as `Weight`). */
+    val stopEstimated: Boolean = false,
     /**
      * Per-shot Visualizer privacy override — `"public" | "unlisted" |
      * "private"`, or null to inherit the Sharing default at upload/patch

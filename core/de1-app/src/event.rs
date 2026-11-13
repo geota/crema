@@ -208,7 +208,8 @@ pub enum Event {
         /// Running shot volume dispensed so far, ml — integrated from the
         /// telemetry flow stream against the DE1's `sample_time` ticks
         /// (BLE-jitter-immune when the line-frequency is known, host-clock
-        /// fallback otherwise). Resets to 0 on every `ShotStarted`.
+        /// fallback otherwise). Resets to 0 on every `ShotStarted` and
+        /// `WaterSessionStarted`.
         dispensed_volume: f32,
         /// Target group-head temperature, °C — the heater setpoint for the
         /// active frame. Legacy "Goal temperature" curve on the live shot
@@ -328,7 +329,7 @@ pub enum Event {
     /// own copy of the inputs. The demotion rule is shared
     /// ([`de1_domain::volume_stop_arms`]), but the inputs were not: a shell
     /// evaluating it over its own active-profile yield can disagree with the
-    /// core evaluating it over `profile_target_weight`, and did — the Brew
+    /// core evaluating it over its own target, and did — the Brew
     /// card showed a confident 36 g target while the core had armed nothing
     /// at all (geota/crema#56).
     ///
@@ -345,27 +346,39 @@ pub enum Event {
         volume: Option<f32>,
         /// Max shot time, seconds; `None` = no time cap.
         max_time: Option<f32>,
-        /// `true` once an `AutoStop` actually holds these targets (the shot is
-        /// running); `false` while this is the between-shots projection.
+        /// `true` while an espresso flows with at least one leg live (its
+        /// `AutoStop` exists from first flow, legs or not); `false` before
+        /// first flow, between shots, and while no leg is live.
         armed: bool,
         /// The weight target that WOULD apply, regardless of whether it can
         /// fire. Lets a shell keep showing the row the user configured, greyed
         /// with a reason, rather than silently dropping it.
         weight_configured: Option<f32>,
         /// Why [`weight`] is not armed despite [`weight_configured`] being set
-        /// — `"no-scale"` or `"untared-cup"`. `None` when the leg is armed,
-        /// nothing is configured, or the user turned the stop off (a choice,
-        /// not an impediment).
+        /// — `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`,
+        /// `"scale-lost"`, `"scale-rezeroed"`, `"scale-disturbed"` or
+        /// `"scale-not-tared"`. `None` when the leg is armed, nothing is
+        /// configured, or the user turned the stop off (a choice, not an
+        /// impediment).
         weight_blocked: Option<String>,
+        /// The note to show for [`weight_blocked`], the same on both shells.
+        weight_blocked_note: Option<String>,
     },
     /// A commanded stop has not been honoured — the machine is still in the
     /// shot — so the stop write is being re-commanded (issue #15: one lost
     /// or stalled BLE write must not let the shot pour past its target).
     StopRetried {
-        /// The stop reason being enforced.
-        reason: StopReason,
+        /// The leg's reason, or `None` for the user's Stop.
+        reason: Option<StopReason>,
         /// 1-based retry attempt.
         attempt: u32,
+    },
+    /// The machine hasn't honoured a stop after five retries, or an outage
+    /// left the core unsure the flow is the one it owed a stop to. The shell
+    /// alerts the user with `message`. Once per episode.
+    StopNotHonoured {
+        /// What to tell the user.
+        message: String,
     },
     /// The espresso shot finished.
     ShotCompleted {
@@ -382,11 +395,12 @@ pub enum Event {
         /// sample of the shot, °C. `None` when no telemetry arrived.
         peak_temp: Option<f32>,
         /// Peak scale weight observed across every ScaleReading of the shot,
-        /// grams. `None` when no scale was paired (no readings arrived).
+        /// grams. `None` when no scale was paired (no readings arrived), or
+        /// the shot began before the app saw it (its readings include the cup).
         peak_weight: Option<f32>,
         /// The final scale weight observed before the shot ended, grams —
         /// the "shot yield". `None` when no scale was paired (no readings
-        /// arrived).
+        /// arrived), or the shot began before the app saw it.
         final_weight: Option<f32>,
         /// What the shell should do with this shot — record it, discard it
         /// as an aborted pull (behind an undo), or skip it entirely as a
@@ -483,10 +497,11 @@ pub enum Event {
     /// for roughly a second. Emitted once per stale episode; a fresh reading
     /// re-arms it.
     ScaleStale,
-    /// The scale link looks dead: still no reading 5 s after
-    /// [`Event::ScaleStale`], or three scale writes in a row failed with no
-    /// reading in between. Emitted once per episode — a fresh reading re-arms
-    /// it. The shell drops the link at the transport (not a user disconnect)
+    /// The scale link looks dead: no sign of life 6 s after the last frame,
+    /// or after connect for a scale that never reported, or three scale
+    /// writes in a row failed with no reading in between. Emitted once until
+    /// a reading arrives, even across a reconnect, so a scale that never
+    /// reports isn't torn down every 6 s. The shell drops the link at the transport (not a user disconnect)
     /// so its reconnect loop recovers it, but only while its link still
     /// claims ready.
     ScaleLinkDead {
@@ -849,7 +864,7 @@ pub enum Event {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ScaleLinkDeadReason {
-    /// No weight reading for the stale timeout plus the 5 s grace.
+    /// No sign of life for 6 s: the stale timeout plus the 5 s grace.
     Silent,
     /// Three scale writes in a row failed with no reading in between.
     WritesFailing,
@@ -1006,6 +1021,21 @@ pub enum Command {
         /// The bytes to write.
         data: Vec<u8>,
     },
+    /// Stop the machine: write Idle to the requested-state characteristic
+    /// (`0x02`) now, on the urgent lane, ahead of anything queued. Only the
+    /// core emits it, and only while a flow session is open. A shell keeps at
+    /// most one outstanding: a second is dropped while one is queued or in
+    /// flight.
+    Stop,
+    /// Drop any [`Stop`](Self::Stop) not yet on the air. One already in
+    /// flight can't be recalled. Sent when the machine winds down, a session
+    /// closes, the link drops, or the core resets, so a late Idle can't wake
+    /// a sleeping machine or stop the next flow.
+    CancelStop,
+    /// Read the DE1's `StateInfo` characteristic and feed the reply back as a
+    /// [`Source::De1State`] notification: a stop not honoured may only have
+    /// lost its state report.
+    ReadState,
 }
 
 /// The result of feeding the core one input: what it observed (`events`) and
@@ -1025,6 +1055,25 @@ pub struct CoreOutput {
 
 #[cfg(test)]
 impl CoreOutput {
+    /// The machine-state requests this output makes, as requested-state
+    /// bytes, with a [`Command::Stop`] as the Idle byte it writes (tests
+    /// only; a test about the lane matches `Command::Stop` itself).
+    pub(crate) fn state_requests(&self) -> Vec<u8> {
+        self.commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1RequestedState,
+                    data,
+                } => data.first().copied(),
+                Command::Stop => Some(de1_protocol::requested_state(
+                    de1_protocol::MachineState::Idle,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The `upload_id` of the upload this output started (tests only).
     ///
     /// # Panics

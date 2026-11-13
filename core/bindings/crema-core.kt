@@ -1439,7 +1439,8 @@ data class EventTelemetryInner (
 	/// Running shot volume dispensed so far, ml — integrated from the
 	/// telemetry flow stream against the DE1's `sample_time` ticks
 	/// (BLE-jitter-immune when the line-frequency is known, host-clock
-	/// fallback otherwise). Resets to 0 on every `ShotStarted`.
+	/// fallback otherwise). Resets to 0 on every `ShotStarted` and
+	/// `WaterSessionStarted`.
 	val dispensed_volume: Float,
 	/// Target group-head temperature, °C — the heater setpoint for the
 	/// active frame. Legacy "Goal temperature" curve on the live shot
@@ -1557,27 +1558,39 @@ data class EventStopTargetsArmedInner (
 	val volume: Float? = null,
 	/// Max shot time, seconds; `None` = no time cap.
 	val max_time: Float? = null,
-	/// `true` once an `AutoStop` actually holds these targets (the shot is
-	/// running); `false` while this is the between-shots projection.
+	/// `true` while an espresso flows with at least one leg live (its
+	/// `AutoStop` exists from first flow, legs or not); `false` before
+	/// first flow, between shots, and while no leg is live.
 	val armed: Boolean,
 	/// The weight target that WOULD apply, regardless of whether it can
 	/// fire. Lets a shell keep showing the row the user configured, greyed
 	/// with a reason, rather than silently dropping it.
 	val weight_configured: Float? = null,
 	/// Why [`weight`] is not armed despite [`weight_configured`] being set
-	/// — `"no-scale"` or `"untared-cup"`. `None` when the leg is armed,
-	/// nothing is configured, or the user turned the stop off (a choice,
-	/// not an impediment).
-	val weight_blocked: String? = null
+	/// — `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`,
+	/// `"scale-lost"`, `"scale-rezeroed"`, `"scale-disturbed"` or
+	/// `"scale-not-tared"`. `None` when the leg is armed, nothing is
+	/// configured, or the user turned the stop off (a choice, not an
+	/// impediment).
+	val weight_blocked: String? = null,
+	/// The note to show for [`weight_blocked`], the same on both shells.
+	val weight_blocked_note: String? = null
 )
 
 /// Generated type representing the anonymous struct variant `StopRetried` of the `Event` Rust enum
 @Serializable
 data class EventStopRetriedInner (
-	/// The stop reason being enforced.
-	val reason: StopReason,
+	/// The leg's reason, or `None` for the user's Stop.
+	val reason: StopReason? = null,
 	/// 1-based retry attempt.
 	val attempt: UInt
+)
+
+/// Generated type representing the anonymous struct variant `StopNotHonoured` of the `Event` Rust enum
+@Serializable
+data class EventStopNotHonouredInner (
+	/// What to tell the user.
+	val message: String
 )
 
 /// Generated type representing the anonymous struct variant `ShotCompleted` of the `Event` Rust enum
@@ -1596,11 +1609,12 @@ data class EventShotCompletedInner (
 	/// sample of the shot, °C. `None` when no telemetry arrived.
 	val peak_temp: Float? = null,
 	/// Peak scale weight observed across every ScaleReading of the shot,
-	/// grams. `None` when no scale was paired (no readings arrived).
+	/// grams. `None` when no scale was paired (no readings arrived), or
+	/// the shot began before the app saw it (its readings include the cup).
 	val peak_weight: Float? = null,
 	/// The final scale weight observed before the shot ended, grams —
 	/// the "shot yield". `None` when no scale was paired (no readings
-	/// arrived).
+	/// arrived), or the shot began before the app saw it.
 	val final_weight: Float? = null,
 	/// What the shell should do with this shot — record it, discard it
 	/// as an aborted pull (behind an undo), or skip it entirely as a
@@ -2116,7 +2130,7 @@ sealed class Event {
 	/// own copy of the inputs. The demotion rule is shared
 	/// ([`de1_domain::volume_stop_arms`]), but the inputs were not: a shell
 	/// evaluating it over its own active-profile yield can disagree with the
-	/// core evaluating it over `profile_target_weight`, and did — the Brew
+	/// core evaluating it over its own target, and did — the Brew
 	/// card showed a confident 36 g target while the core had armed nothing
 	/// at all (geota/crema#56).
 	/// 
@@ -2134,6 +2148,12 @@ sealed class Event {
 	@Serializable
 	@SerialName("StopRetried")
 	data class StopRetried(val content: EventStopRetriedInner): Event()
+	/// The machine hasn't honoured a stop after five retries, or an outage
+	/// left the core unsure the flow is the one it owed a stop to. The shell
+	/// alerts the user with `message`. Once per episode.
+	@Serializable
+	@SerialName("StopNotHonoured")
+	data class StopNotHonoured(val content: EventStopNotHonouredInner): Event()
 	/// The espresso shot finished.
 	@Serializable
 	@SerialName("ShotCompleted")
@@ -2195,10 +2215,11 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleStale")
 	object ScaleStale: Event()
-	/// The scale link looks dead: still no reading 5 s after
-	/// [`Event::ScaleStale`], or three scale writes in a row failed with no
-	/// reading in between. Emitted once per episode — a fresh reading re-arms
-	/// it. The shell drops the link at the transport (not a user disconnect)
+	/// The scale link looks dead: no sign of life 6 s after the last frame,
+	/// or after connect for a scale that never reported, or three scale
+	/// writes in a row failed with no reading in between. Emitted once until
+	/// a reading arrives, even across a reconnect, so a scale that never
+	/// reports isn't torn down every 6 s. The shell drops the link at the transport (not a user disconnect)
 	/// so its reconnect loop recovers it, but only while its link still
 	/// claims ready.
 	@Serializable
@@ -2472,6 +2493,27 @@ sealed class Command {
 	@Serializable
 	@SerialName("WriteScale")
 	data class WriteScale(val content: CommandWriteScaleInner): Command()
+	/// Stop the machine: write Idle to the requested-state characteristic
+	/// (`0x02`) now, on the urgent lane, ahead of anything queued. Only the
+	/// core emits it, and only while a flow session is open. A shell keeps at
+	/// most one outstanding: a second is dropped while one is queued or in
+	/// flight.
+	@Serializable
+	@SerialName("Stop")
+	object Stop: Command()
+	/// Drop any [`Stop`](Self::Stop) not yet on the air. One already in
+	/// flight can't be recalled. Sent when the machine winds down, a session
+	/// closes, the link drops, or the core resets, so a late Idle can't wake
+	/// a sleeping machine or stop the next flow.
+	@Serializable
+	@SerialName("CancelStop")
+	object CancelStop: Command()
+	/// Read the DE1's `StateInfo` characteristic and feed the reply back as a
+	/// [`Source::De1State`] notification: a stop not honoured may only have
+	/// lost its state report.
+	@Serializable
+	@SerialName("ReadState")
+	object ReadState: Command()
 }
 
 /// The result of feeding the core one input: what it observed (`events`) and
@@ -6681,7 +6723,7 @@ sealed class SawModelLoad {
 /// Why [`Event::ScaleLinkDead`] fired.
 @Serializable
 enum class ScaleLinkDeadReason(val string: String) {
-	/// No weight reading for the stale timeout plus the 5 s grace.
+	/// No sign of life for 6 s: the stale timeout plus the 5 s grace.
 	@SerialName("Silent")
 	Silent("Silent"),
 	/// Three scale writes in a row failed with no reading in between.
@@ -6774,6 +6816,13 @@ data class StartEndFlushLeftIdleInner (
 	val state: MachineState
 )
 
+/// Generated type representing the anonymous struct variant `OtherFlowStarted` of the `StartEnd` Rust enum
+@Serializable
+data class StartEndOtherFlowStartedInner (
+	/// The flow that began.
+	val state: MachineState
+)
+
 /// How a start ended.
 @Serializable
 sealed class StartEnd {
@@ -6810,6 +6859,11 @@ sealed class StartEnd {
 	@Serializable
 	@SerialName("StoodDown")
 	object StoodDown: StartEnd()
+	/// Another flow began after Start was tapped (steam or hot water at the
+	/// group head, say): the start won't stop it.
+	@Serializable
+	@SerialName("OtherFlowStarted")
+	data class OtherFlowStarted(val details: StartEndOtherFlowStartedInner): StartEnd()
 }
 
 /// Where an accepted start stands.
@@ -6857,6 +6911,11 @@ enum class StopReason(val string: String) {
 	/// The maximum shot time was reached (legacy `espresso_max_time`).
 	@SerialName("MaxTime")
 	MaxTime("MaxTime"),
+	/// The scale was lost after flow reached the cup, and the pour reached
+	/// the weight target by estimate (`DESIGN.md` §3.5). Never trains the drip
+	/// model; a stored shot records it as `Weight` with `stop_estimated`.
+	@SerialName("EstimatedWeight")
+	EstimatedWeight("EstimatedWeight"),
 }
 
 /// DE1 substate. Discriminants match the firmware enum (see protocol §4.2):

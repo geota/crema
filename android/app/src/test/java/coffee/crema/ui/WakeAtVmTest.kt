@@ -58,4 +58,20 @@ class WakeAtVmTest {
         assertTrue(messages.any { it == "Steam cancelled: a shot started" }, "$messages")
         assertTrue(messages.any { it.startsWith("HotWater cancelled: the profile is still loading") }, "$messages")
     }
+
+    /** PR 6: the machine ignoring Crema's stop is told to the user, in the
+     *  core's words. */
+    @Test
+    fun `a stop not honoured is told to the user`() {
+        val vm = VmHarness.build(store)
+        VmHarness.idle()
+        VmHarness.awaitStartupLoaded(vm)
+        deliver(
+            vm,
+            """{"events":[{"type":"StopNotHonoured","content":{"message":"Crema can't stop the machine. Press Stop on the machine."}}],"commands":[]}""",
+        )
+        VmHarness.idle()
+        val messages = vm.ui.value.userMessages
+        assertTrue(messages.any { it == "Crema can't stop the machine. Press Stop on the machine." }, "$messages")
+    }
 }

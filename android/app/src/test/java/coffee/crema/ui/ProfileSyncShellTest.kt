@@ -64,8 +64,18 @@ class ProfileSyncShellTest {
         val early = json.decodeFromString(ProfileSyncOutput.serializer(), bridge.setDesiredProfile(cremaProfileFromWire(wire), null, 0uL))
         assertEquals(0, started(early.output))
         val sweeps = mutableListOf<CoreOutput>()
-        val runner = ConnectSweepRunner(TestScope(testScheduler), sweep = { sweeps += out(bridge.connectSweep("{}", 0uL)) }, tick = {})
+        // The sweeps run past the desired profile's 500 ms settle (DESIRED_SETTLE).
+        val runner = ConnectSweepRunner(TestScope(testScheduler), sweep = { sweeps += out(bridge.connectSweep("{}", 1_000uL)) }, tick = {})
+        // The runner's minute check loops until onDropped; a failed assert must
+        // still stop it, or runTest's final advanceUntilIdle never returns.
+        try {
+            connectsAndReconnects(bridge, runner, sweeps)
+        } finally {
+            runner.onDropped()
+        }
+    }
 
+    private fun connectsAndReconnects(bridge: CremaBridge, runner: ConnectSweepRunner, sweeps: List<CoreOutput>) {
         runner.onReady()
         assertEquals(1, started(sweeps.last()), "the connect sweep is followed by the upload")
         assertTrue(ackAll(bridge, sweeps.last()).any { it is Event.ProfileSyncHolds })
@@ -85,7 +95,6 @@ class ProfileSyncShellTest {
         bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(2, 0), 0uL)
         runner.onReady()
         assertEquals(1, started(sweeps.last()), "a new connection re-sends")
-        runner.onDropped()
     }
 
     @Test

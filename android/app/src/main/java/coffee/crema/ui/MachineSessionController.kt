@@ -21,6 +21,7 @@ import coffee.crema.core.ShotDisposition
 import coffee.crema.core.StartPhase
 import coffee.crema.core.StartRefusal
 import coffee.crema.core.StartShotResult
+import coffee.crema.core.StopReason
 import coffee.crema.core.WriteTarget
 import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.newShotId
@@ -55,7 +56,7 @@ private val MIRRORED_REGISTERS = setOf(MmrRegister.HeaterVoltage, MmrRegister.Ca
  * machine-request outcomes, and profile uploads.
  *
  * What the shell asks of the machine (9b): the shot start, the desired
- * profile and the dial's debounce, the stop targets, machine-state writes
+ * profile (the core waits for the dial to rest), the stop targets, machine-state writes
  * (sleep-on-quit's included), and the connect-time setup (identity reads,
  * the settings sweep, the USB-charger minute tick) with its session clear.
  *
@@ -150,11 +151,6 @@ internal class MachineSessionController(
      *  how geota/crema#56 hid — worth recording per shot. */
     @Volatile
     private var shotStartedByApp: Boolean = false
-
-    /** Where the dial's debounce wait runs ([pushDesiredProfile]); the push
-     *  itself always runs on the core lane. Test seam (via the VM): a test
-     *  dispatcher makes the 0.5 s virtual time. */
-    var dialDebounceContext: kotlin.coroutines.CoroutineContext = lane.dispatcher
 
     // Declared above `init`: a property below it is unset while it runs (P3-2).
 
@@ -394,17 +390,28 @@ internal class MachineSessionController(
             // renders the core's answer instead of its own (#56).
             updateUi { it.copy(stopTargets = StopTargetsView(
                 c.weight, c.volume, c.max_time, c.armed,
-                c.weight_configured, c.weight_blocked,
+                c.weight_configured, c.weight_blocked, c.weight_blocked_note,
             )) }
             appendLog((if (c.armed) "Stop targets armed: " else "Stop targets (next shot): ") + armed)
         }
         lane.on<Event.StopRetried> { event ->
             // The machine hasn't honoured a commanded stop — the core is
             // re-commanding it (issue #15). Loud on purpose.
-            appendLog("Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason.string})")
+            appendLog("Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason?.string ?: "your Stop"})")
+        }
+        lane.on<Event.StopNotHonoured> { event ->
+            // The machine ignores Crema's stop: the user must press it.
+            appendLog("Stop not honoured: ${event.content.message}")
+            notify(event.content.message)
         }
         lane.on<Event.StopTriggered> { event ->
-            appendLog("Auto-stop: ${event.content.reason.string}")
+            appendLog(
+                if (event.content.reason == StopReason.EstimatedWeight) {
+                    "Auto-stop: on estimate, scale lost"
+                } else {
+                    "Auto-stop: ${event.content.reason.string}"
+                },
+            )
             // Attribute the stop ON the stop-conditions UI (the fired
             // row/card gets a gold highlight) instead of a toast — an
             // unexplained early stop reads as a bug, but a snackbar over
@@ -415,8 +422,8 @@ internal class MachineSessionController(
             }
         }
         lane.on<Event.ShotCompleted> { event ->
-            // The machine stopped: no stop write still queued may land late.
-            lane.cancelStaleStop()
+            // A stop still queued was cancelled when the machine wound down
+            // (`Command.CancelStop`).
             val c = event.content
             val now = System.currentTimeMillis()
             // One UUID-v7 shot id (core minter), shared by the "Last shot"
@@ -646,27 +653,14 @@ internal class MachineSessionController(
     }
 
     /**
-     * Push the stop-at-weight (SAW) / stop-at-volume (SAV) targets into the core
-     * so a shot actually auto-stops. The core arms its `AutoStop` from these on
-     * the next shot's first flowing phase and resolves the weight target as
-     * `shotTarget.or(profileTarget)` — with neither pushed it can't arm and the
-     * shot never stops on weight (the bug: Android never wired these, unlike the
-     * web's applyProfileTargetWeight / applyShotTargetWeight / applyProfileVolume-
-     * Limit). Profile yield + volume come from the active profile's recipe; the
-     * shot target is the Quick-Controls dial override (null when unset, so the
-     * profile recipe wins). Safe while disconnected — pure core state, no BLE.
+     * Push the profile on screen into the core, which takes the stop targets
+     * from it (`DESIGN.md` §3.10): the yield is the Quick-Controls dial's, else
+     * the profile's, and the volume limit is the profile's. Safe while
+     * disconnected — pure core state, no BLE.
      */
-    fun pushStopTargets(s: MainUiState = effectiveState(), desiredDelayMs: Long = 0) {
+    fun pushStopTargets(s: MainUiState = effectiveState()) {
         // On a remote, a hub's custom profile this library lacks is the overlay.
         val active = s.activeProfile()
-        val profileYield = active?.yieldOut?.takeIf { it.isFinite() && it > 0f }
-        val volumeLimit = active?.maxTotalVolumeMl?.takeIf { it > 0 }?.toFloat()
-        val shotYield = s.brewParams?.yieldOut?.toFloat()?.takeIf { it.isFinite() && it > 0f }
-        runCatching {
-            bridge.setProfileTargetWeight(profileYield)
-            bridge.setProfileVolumeLimit(volumeLimit)
-            bridge.setShotTargetWeight(shotYield)
-        }.onFailure { appendLog("Push stop targets failed: ${it.message}") }
         // The active profile itself: the core latches its beverage type (a
         // cleaning run must never be recorded as a shot — review #40) and its
         // per-step weight exits (issue 11). Pushed alongside the stop targets —
@@ -680,7 +674,10 @@ internal class MachineSessionController(
             setActiveProfile = { bridge.setActiveProfile(it) },
             log = { appendLog(it) },
         )
-        pushDesiredProfile(s, desiredDelayMs)
+        // The desired profile carries the yield and the volume limit; the
+        // projection is re-read now for the settings, and again once the core
+        // has the profile.
+        pushDesiredProfile(s)
         refreshStopTargetProjection()
     }
 
@@ -706,6 +703,7 @@ internal class MachineSessionController(
                 armed = o["armed"]?.jsonPrimitive?.booleanOrNull ?: false,
                 weightConfiguredG = f("weightConfigured"),
                 weightBlocked = o["weightBlocked"]?.jsonPrimitive?.contentOrNull,
+                weightBlockedNote = o["weightBlockedNote"]?.jsonPrimitive?.contentOrNull,
             )) }
         }.onFailure { appendLog("Stop-target projection parse failed: ${it.message}") }
     }
@@ -742,6 +740,8 @@ internal class MachineSessionController(
             return CommandOutcome.Refused("Can\u2019t start shot \u2014 profile conversion failed")
         }
         lane.post { lane.applyOutput(result.output) }
+        // The start made its profile the desired one: the targets with it.
+        refreshStopTargetProjection()
         if (result.accepted) return CommandOutcome.Accepted
         val remembered = scaleRemembered()
         if (result.refusal is StartRefusal.ScaleRequired && remembered) {
@@ -785,22 +785,25 @@ internal class MachineSessionController(
 
     /**
      * The profile on screen — the active profile and its Quick-Controls
-     * override — as the core's desired profile. Pushed with the stop targets
-     * (select, override change, startup restore, every DE1 connect, every shot
-     * start): the core's profile sync decides when to upload. A remote pushes
-     * nothing: its core is a read-only mirror that never uploads (the hub holds
-     * the machine), and it pushes again once it stops being a remote.
+     * override — as the core's desired profile, which the stop targets come
+     * from. Pushed on select, override change, startup restore, every DE1
+     * connect and every shot start: the core's profile sync decides when to
+     * upload. A remote pushes too, the hub's selection: its core is a
+     * read-only mirror that never uploads, but it shows the hub's targets.
      */
-    private fun pushDesiredProfile(s: MainUiState = effectiveState(), delayMs: Long = 0) {
-        if (uiState().mirror != null) return
-        val cremaJson = s.activeProfile()?.id?.let { profileJson(it) } ?: s.mirroredProfileJson
+    private fun pushDesiredProfile(s: MainUiState = effectiveState()) {
+        // On a remote the hub's copy of its custom profile wins over this
+        // library's (possibly out-of-date) one, as in [MachineConfigController.brewDial].
+        val cremaJson = s.mirroredProfileJson?.takeIf { uiState().mirror != null }
+            ?: s.activeProfile()?.id?.let { profileJson(it) } ?: s.mirroredProfileJson
         val qcJson = s.brewParams.overridesJson(json)
-        // The latest push wins: a dial change waits [delayMs] for the dial to
-        // rest (de1app's 0.5 s), and any later push replaces a pending one.
+        // The latest push wins. The core waits for a dial to rest (de1app's
+        // 0.5 s) before it uploads, on a WakeAt deadline: no timer here.
         desiredPushJob?.cancel()
-        desiredPushJob = scope.launch(if (delayMs > 0) dialDebounceContext else lane.dispatcher) {
-            if (delayMs > 0) delay(delayMs)
-            kotlinx.coroutines.withContext(lane.dispatcher) { setDesiredOnLane(cremaJson, qcJson) }
+        desiredPushJob = scope.launch(lane.dispatcher) {
+            setDesiredOnLane(cremaJson, qcJson)
+            // The targets came with it: re-read them on the UI side.
+            scope.launch { refreshStopTargetProjection() }
         }
     }
 

@@ -119,9 +119,11 @@ async function connect(h: Harness): Promise<void> {
 	await vi.advanceTimersByTimeAsync(0);
 }
 
-/** Make a profile titled `title` the desired one: the core's sync uploads it. */
+/** Make a profile titled `title` the desired one: the core's sync uploads it,
+ *  after its 0.5 s settle. */
 async function upload(h: Harness, title: string): Promise<void> {
 	await h.app.setDesiredProfile(twoStepProfile(title), {});
+	await vi.advanceTimersByTimeAsync(500);
 }
 
 /** Note a profile write that reached the DE1: `H<count>` / `F<FrameToWrite>`. */
@@ -166,6 +168,21 @@ describe('the app ticks the core while the DE1 is connected (#2 N1)', () => {
 		h.onState('disconnected');
 		await vi.advanceTimersByTimeAsync(60_000);
 		expect(await h.core.profileUploadInProgress()).toBe(true);
+	});
+});
+
+describe('the core wakes the app only for a deadline ahead', () => {
+	it('an upload running past its settle does not tick the core in a loop', async () => {
+		// The writes never return, so the upload stays in flight past the
+		// settle. A wake asked for in the past fires at once, and the tick it
+		// runs asked for it again: hundreds of ticks a second.
+		const h = await harness(() => new Promise<boolean>(() => {}));
+		await connect(h);
+		await upload(h, 'Held');
+		expect(await h.core.profileUploadInProgress()).toBe(true);
+		const ticks = vi.spyOn(h.core, 'onTick');
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(ticks.mock.calls.length).toBeLessThanOrEqual(4);
 	});
 });
 
@@ -411,11 +428,11 @@ describe('the shell uploads the effective profile (AC-F6.3)', () => {
 				(status) => status.desired ?? null
 			);
 		const bareFp = await desired({});
-		await vi.advanceTimersByTimeAsync(10);
+		await vi.advanceTimersByTimeAsync(510); // the core's settle, then the upload
 		const bare = frames.splice(0);
 		const qc = { brewTemp: 94, preinf: 12 };
 		const fp = await desired(qc);
-		await vi.advanceTimersByTimeAsync(10);
+		await vi.advanceTimersByTimeAsync(510);
 		const dialled = frames.splice(0);
 
 		// ShotFrame bytes: [3] temperature (U8P1, half degrees), [4] duration

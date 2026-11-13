@@ -23,7 +23,8 @@ import kotlin.test.assertTrue
  * The core lane (MainViewModel breakup step 1): events reach the handlers
  * registered for them in order, everything sent to the lane runs FIFO on it,
  * a bad payload never kills it, and an output's writes keep the DE1 rules
- * (one ordered batch, stop writes coalesced and cancelled once the shot ends).
+ * (one ordered batch; `Command.Stop` urgent, one at a time, and dropped by
+ * `Command.CancelStop`).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CoreLaneTest {
@@ -33,7 +34,6 @@ class CoreLaneTest {
     private val scaleWrites = mutableListOf<List<Byte>>()
 
     private fun TestScope.lane(
-        shotRunning: Boolean = false,
         writeDe1: suspend (WriteTarget, Boolean) -> Boolean = { target, urgent -> de1 += target to urgent; true },
     ) = CoreLane(
         scope = this,
@@ -41,7 +41,6 @@ class CoreLaneTest {
         log = { log += it },
         writeDe1 = { target, _, urgent, _ -> writeDe1(target, urgent) },
         writeScale = { scaleWrites += it.toList() },
-        shotRunning = { shotRunning },
         profileWriteFailed = { EMPTY },
         dispatcher = StandardTestDispatcher(testScheduler),
     )
@@ -115,24 +114,73 @@ class CoreLaneTest {
     }
 
     @Test
-    fun `a stop write coalesces while one is in flight and is cancelled once the shot ends`() = runTest {
+    fun `a stop command is urgent, one at a time, and cancelled by a cancel`() = runTest {
         val wedged = CompletableDeferred<Boolean>()
-        val lane = lane(shotRunning = true) { target, urgent -> de1 += target to urgent; wedged.await() }
-        val stop = CoreOutput(emptyList(), listOf(write(WriteTarget.De1RequestedState, 0)))
+        val bytes = mutableListOf<List<Byte>>()
+        val lane = CoreLane(
+            scope = this,
+            json = coreJson,
+            log = { log += it },
+            writeDe1 = { target, data, urgent, _ -> de1 += target to urgent; bytes += data.toList(); wedged.await() },
+            writeScale = {},
+            profileWriteFailed = { EMPTY },
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+        val stop = CoreOutput(emptyList(), listOf(Command.Stop))
         lane.applyOutput(stop)
         runCurrent()
         lane.applyOutput(stop)
         runCurrent()
         assertEquals(listOf(WriteTarget.De1RequestedState to true), de1, "one urgent stop, not two")
+        assertEquals(listOf(listOf<Byte>(0x02)), bytes, "the Idle byte")
         assertTrue("Stop write already in flight — not stacking another" in log)
-        lane.cancelStaleStop()
+        lane.applyOutput(CoreOutput(emptyList(), listOf(Command.CancelStop)))
         assertTrue("Stale stop write cancelled — machine already stopped" in log)
         runCurrent()
         lane.applyOutput(stop)
         runCurrent()
-        assertEquals(2, de1.size, "the next shot's stop is not held back by the cancelled one")
+        assertEquals(2, de1.size, "the next stop is not held back by the cancelled one")
         wedged.complete(true)
         advanceUntilIdle()
+    }
+
+    @Test
+    fun `a plain machine-state write is never the stop, whatever the shell thinks is running`() = runTest {
+        val lane = lane()
+        lane.applyOutput(CoreOutput(emptyList(), listOf(write(WriteTarget.De1RequestedState, 2), write(WriteTarget.De1RequestedState, 14))))
+        advanceUntilIdle()
+        assertEquals(
+            listOf(WriteTarget.De1RequestedState to false, WriteTarget.De1RequestedState to false),
+            de1,
+            "a skip or an Idle bounce rides the ordered batch",
+        )
+    }
+
+    @Test
+    fun `a read-state command reads the state back`() = runTest {
+        var reads = 0
+        val lane = CoreLane(
+            scope = this,
+            json = coreJson,
+            log = { log += it },
+            writeDe1 = { _, _, _, _ -> true },
+            writeScale = {},
+            readState = { reads++ },
+            profileWriteFailed = { EMPTY },
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+        lane.applyOutput(CoreOutput(emptyList(), listOf(Command.ReadState)))
+        advanceUntilIdle()
+        assertEquals(1, reads)
+    }
+
+    @Test
+    fun `the stop byte is the core's Idle request`() {
+        val out = coreJson.decodeFromString(
+            CoreOutput.serializer(),
+            coffee.crema.core.CremaBridge().requestMachineState(coffee.crema.core.MachineRequest.IDLE),
+        )
+        assertEquals(listOf(write(WriteTarget.De1RequestedState, 2)), out.commands)
     }
 
     private companion object {

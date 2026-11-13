@@ -15,6 +15,7 @@
  * the screen.
  */
 
+import { StopLane } from '#lib/ble/stop-lane.js';
 import { refreshStopTargetsProjection, setHotWaterTarget } from './ui-state.svelte';
 import {
 	loadCore,
@@ -57,6 +58,7 @@ import { isSerialStolen } from '#lib/decent/stolen-serials.js';
 import { SAW_MODEL_KEY, seedSawModel } from './saw-model-store';
 import { getSettingsStore, settingsToCommon } from '#lib/settings/index.js';
 import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
+import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 import { CoreRecoveryWatch } from '#lib/core/recovery-watch.js';
 import { CoreResetNotice } from '#lib/core/reset-notice.js';
 import { canReloadNow, reloadInputsOf } from '#lib/pwa/update-gate.js';
@@ -232,12 +234,12 @@ const CLEARED_DE1_READOUT = {
  */
 const SCALE_LOW_BATTERY_PCT = 25;
 
-/**
- * How long the Quick Controls dial must rest before its overrides become the
- * desired profile (de1app debounces its temperature dial by 0.5 s too), so a
- * run of stepper taps uploads once.
- */
-const DIAL_PUSH_DEBOUNCE_MS = 500;
+/** The question a user Disconnect asks while the machine pours (#320). */
+export const DISCONNECT_WHILE_POURING = {
+	message: "The machine is pouring. Disconnect, and Crema's stops won't run?",
+	confirmLabel: 'Disconnect',
+	danger: true
+} as const;
 
 /** The five Quick Sheet values a shot records as they were at its start. */
 interface ShotStartBrewParams {
@@ -275,8 +277,11 @@ export class CremaApp {
 	/** The reactive UI state — the screen renders `app.state.current`. */
 	readonly state = getCremaUiState();
 
-	/** One outstanding stop write at a time (issue #15 follow-up). */
-	#stopWriteInFlight = false;
+	/** The core's `Command::Stop` and `CancelStop` (issue #15 follow-up). */
+	readonly #stopLane = new StopLane(
+		(guard) => this.de1.writeStop(guard),
+		(line) => this.state.log(line)
+	);
 	/** Which profile writes may still go out and be acked (#2 N2). */
 	readonly #profileWrites = new ProfileWriteGenerations();
 	/** The 1 s core clock while the DE1 link is up or recovering (#2 N1). */
@@ -710,6 +715,10 @@ export class CremaApp {
 			if (event.type === 'MachineRequestRefused') {
 				toast.error(machineRequestRefusalText(event.content.state, event.content.reason));
 			}
+			if (event.type === 'StopNotHonoured') {
+				// The machine ignores Crema's stop: the user must press it.
+				toast.error(event.content.message, 15_000);
+			}
 			if (event.type === 'MachineRequestHeld') {
 				// The user's request waits for the profile to load (up to 3 s).
 				toast.info(REQUEST_HELD_TEXT, 2500);
@@ -1114,24 +1123,20 @@ export class CremaApp {
 				await this.scale.writeScale(data);
 				break;
 			}
+			case 'Stop':
+				// The core says this is a stop: the urgent lane, ahead of the
+				// queue, one at a time.
+				await this.#stopLane.stop();
+				break;
+			case 'CancelStop':
+				this.#stopLane.cancel();
+				break;
+			case 'ReadState':
+				// A stop not honoured: read the state back in case its report
+				// was lost.
+				await this.de1.readState();
+				break;
 			case 'WriteCharacteristic': {
-				// Stop-write hygiene (issue #15 follow-up, Android parity):
-				// while a shot runs, machine-state writes are the stop. They
-				// COALESCE — the core's enforcer re-commands every second, but
-				// stacking identical Idle bytes behind a stalled write adds
-				// nothing, and every extra copy is a stale-write risk once the
-				// machine stops (a late Idle kills a steam/flush started right
-				// after the shot). Web Bluetooth ops can't be cancelled
-				// mid-flight, so unlike Android the ONE outstanding write
-				// can't be revoked at ShotCompleted — bounding the exposure
-				// to a single write is the strongest guard available here.
-				const isStopWrite =
-					command.content.target === 'De1RequestedState' && this.state.current.shotInProgress;
-				if (isStopWrite && this.#stopWriteInFlight) {
-					this.state.log('Stop write already in flight — not stacking another');
-					break;
-				}
-				if (isStopWrite) this.#stopWriteInFlight = true;
 				// A profile write goes out only while its upload is the live one
 				// and none of its earlier writes failed — checked when it reaches
 				// the head of the GATT queue, since every command of an output is
@@ -1154,22 +1159,17 @@ export class CremaApp {
 						: (written: boolean) => {
 								outcome = this.#profileWrites.settle(profileBatch, written);
 							};
-				let delivered = false;
-				try {
-					const data = new Uint8Array(command.content.data);
-					const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
-					if (profileBatch === null || this.#profileWrites.mayWrite(profileBatch)) {
-						this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
-					}
-					delivered = await this.de1.writeCharacteristic(
-						command.content.target,
-						data,
-						guard,
-						settled
-					);
-				} finally {
-					if (isStopWrite) this.#stopWriteInFlight = false;
+				const data = new Uint8Array(command.content.data);
+				const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
+				if (profileBatch === null || this.#profileWrites.mayWrite(profileBatch)) {
+					this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
 				}
+				const delivered = await this.de1.writeCharacteristic(
+					command.content.target,
+					data,
+					guard,
+					settled
+				);
 				if (profileBatch !== null) {
 					if (skipped) break;
 					// A skip before the queue (no link, firmware lock) never reached
@@ -1225,6 +1225,12 @@ export class CremaApp {
 				}
 				break;
 			}
+			default: {
+				// Every command the core can send has a case: a new one fails
+				// the build here instead of being dropped, a stop above all.
+				const unhandled: never = command;
+				this.state.log(`Unknown core command dropped: ${JSON.stringify(unhandled)}`);
+			}
 		}
 	}
 
@@ -1275,8 +1281,15 @@ export class CremaApp {
 	/**
 	 * Disconnect the DE1 and clear its readout fields. Every caller is a user
 	 * action (rail menu, Settings), so the next launch won't reconnect it.
+	 *
+	 * While the machine is pouring, asks first: the core says when Crema's
+	 * stops need the link (#320). Resolves `false` when the user keeps it.
 	 */
-	async disconnectDe1(): Promise<void> {
+	async disconnectDe1(): Promise<boolean> {
+		// A core that can't answer (stopped after repeated panics) runs no
+		// stops: never let it block the teardown (REVIEW-399 M1).
+		const pouring = (await this.core.disconnectNeedsConfirm().catch(() => false)) === true;
+		if (pouring && !(await confirmDialog(DISCONNECT_WHILE_POURING))) return false;
 		this.#launch.cancel('de1');
 		markUserDisconnect('de1');
 		// Leave the DE1's USB port charging (Decenza
@@ -1295,8 +1308,12 @@ export class CremaApp {
 		await this.de1.disconnect();
 		// The user ended the session: the shot can't complete now.
 		shotAbandoned();
+		// Nor can its context bill the next shot's bag (#320). A shot the
+		// reset completed has already taken it.
+		if (this.replayFiber === null) getActiveShotStore().clear();
 		this.stolenSerial = false;
 		this.state.patch(CLEARED_DE1_READOUT);
+		return true;
 	}
 
 	// ---- Reconnect on launch ----------------------------------------------
@@ -1362,7 +1379,7 @@ export class CremaApp {
 	 */
 	async forgetDe1(): Promise<void> {
 		const live = this.de1.bluetoothDevice();
-		await this.disconnectDe1();
+		if (!(await this.disconnectDe1())) return;
 		const revoked = await forgetDevice('de1', live, currentBluetooth());
 		this.state.log(revoked ? 'DE1 forgotten and its Bluetooth permission revoked' : 'DE1 forgotten');
 	}
@@ -1489,24 +1506,18 @@ export class CremaApp {
 	/** The profile and overrides last given to the core as its desired profile. */
 	#desiredOverrides: { profileId: string; qc: ProfileFingerprintOverrides } | null = null;
 
-	/** The pending debounced push of a dial change ({@link setBrewOverrides}). */
-	#overridesPush: ReturnType<typeof setTimeout> | null = null;
-
 	/**
 	 * Set the live overrides for `profile` (the dial moved). They become the
-	 * core's desired profile after the dial rests {@link DIAL_PUSH_DEBOUNCE_MS}
-	 * (de1app's 0.5 s), so stepping the dial uploads once, not per step. A
-	 * repeat of the current overrides changes nothing.
+	 * core's desired profile at once; the core waits for the dial to rest
+	 * (de1app's 0.5 s) before it uploads, on a `WakeAt` deadline, so stepping
+	 * the dial uploads once, not per step. A repeat of the current overrides
+	 * changes nothing.
 	 */
 	setBrewOverrides(profile: CremaProfile, qc: ProfileFingerprintOverrides): void {
 		const cur = this.#brewOverrides;
 		if (cur?.profileId === profile.id && sameOverrides(cur.qc, qc)) return;
 		this.#brewOverrides = { profileId: profile.id, qc };
-		if (this.#overridesPush !== null) clearTimeout(this.#overridesPush);
-		this.#overridesPush = setTimeout(() => {
-			this.#overridesPush = null;
-			void this.setDesiredProfile(profile, qc);
-		}, DIAL_PUSH_DEBOUNCE_MS);
+		void this.setDesiredProfile(profile, qc);
 	}
 
 	/**
@@ -1540,6 +1551,8 @@ export class CremaApp {
 		this.#desiredOverrides = profile === null ? null : { profileId: profile.id, qc };
 		const { output, status } = await this.core.setDesiredProfile(profile, qc, performance.now());
 		this.applyCoreOutput(output);
+		// The stop targets and the dot come from the desired profile (§3.10).
+		await this.refreshStopTargets();
 		return status;
 	}
 
@@ -1631,6 +1644,7 @@ export class CremaApp {
 	 */
 	async applyWeightTargetDisabled(disabled: boolean): Promise<void> {
 		await this.core.setWeightTargetDisabled(disabled);
+		await this.refreshStopTargets();
 	}
 
 	/**
@@ -1704,12 +1718,6 @@ export class CremaApp {
 	}
 
 	/**
-	 * Push the active profile's recipe target weight (yield, grams) into
-	 * the core. Called whenever the active profile changes or its yield
-	 * value is edited. `0` clears the target (SAW becomes a no-op for the
-	 * profile recipe — the per-shot dial may still override).
-	 */
-	/**
 	 * Re-read the core's stop-target projection into the snapshot.
 	 *
 	 * The core pushes `StopTargetsArmed` on every change, but only from the
@@ -1721,31 +1729,6 @@ export class CremaApp {
 		// Re-reads the hot-water target too (the target yield is the ratio's
 		// basis).
 		await refreshStopTargetsProjection(this.core);
-	}
-
-	async applyProfileTargetWeight(grams: number): Promise<void> {
-		await this.core.setProfileTargetWeight(grams > 0 ? grams : undefined);
-		await this.refreshStopTargets();
-	}
-
-	/**
-	 * Push the active profile's volume limit (SAV, millilitres) into the
-	 * core. Called whenever the active profile changes or its
-	 * `maxTotalVolumeMl` is edited. `0` clears the limit.
-	 */
-	async applyProfileVolumeLimit(milliliters: number): Promise<void> {
-		await this.core.setProfileVolumeLimit(milliliters > 0 ? milliliters : undefined);
-		await this.refreshStopTargets();
-	}
-
-	/**
-	 * Push the per-shot dial-override target weight (grams) into the
-	 * core. Called by the QC yield stepper. `0` clears the override and
-	 * lets the profile recipe target take effect.
-	 */
-	async applyShotTargetWeight(grams: number): Promise<void> {
-		await this.core.setShotTargetWeight(grams > 0 ? grams : undefined);
-		await this.refreshStopTargets();
 	}
 
 	/**
@@ -2319,11 +2302,6 @@ export class CremaApp {
 		if (!profile) {
 			this.brewParamsAtShotStart = null;
 			throw new NoActiveProfileError();
-		}
-		// The start's own push supersedes a dial push still settling.
-		if (this.#overridesPush !== null) {
-			clearTimeout(this.#overridesPush);
-			this.#overridesPush = null;
 		}
 		this.#desiredOverrides = { profileId: profile.id, qc };
 		await this.pushStartSettings();

@@ -122,6 +122,7 @@ describe('HistoryStore reload', () => {
 			profileName: 'Test Profile',
 			profile: { title: 'Test Profile', steps: [] },
 			stopReason: { kind: 'weight' },
+			stopEstimated: true,
 			metadata,
 			// Persisted rows are stripped of samples (they live in IndexedDB).
 			record: { duration: 30_000, samples: [] },

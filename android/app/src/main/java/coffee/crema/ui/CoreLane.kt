@@ -42,10 +42,14 @@ internal class CoreLane(
     private val writeDe1: suspend (WriteTarget, ByteArray, Boolean, () -> UInt?) -> Boolean,
     /** One scale write ([coffee.crema.ble.ScaleBleManager.writeCommand]). */
     private val writeScale: suspend (ByteArray) -> Unit,
-    /** Whether a shot is running: a machine-state write then IS the stop. */
-    private val shotRunning: () -> Boolean,
+    /** `Command.ReadState`: read StateInfo and feed it to the core
+     *  ([coffee.crema.ble.De1BleManager.readState]). */
+    private val readState: suspend () -> Unit = {},
     /** The core's output for a failed profile write of upload [UInt]. */
     private val profileWriteFailed: (UInt) -> String,
+    /** Debug-build fault injection (DESIGN.md §7): whether to drop a Stop
+     *  or a plain requested-state write. [NoFaults] in a shipped build. */
+    private val faults: coffee.crema.faults.FaultInjector = coffee.crema.faults.NoFaults,
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val dispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
 ) {
@@ -57,13 +61,12 @@ internal class CoreLane(
     private var applying = false
 
     /**
-     * The outstanding stop write, if any (issue #15 follow-up). Two rules:
-     * stop writes COALESCE (the enforcer re-commands every second, but
-     * stacking identical Idle bytes behind a wedged op adds nothing — at most
-     * one is ever queued/waiting), and the survivor is CANCELLED the moment
-     * the shot ends ([cancelStaleStop]) — a stale Idle delivered seconds late
-     * is not harmless: it wakes a sleeping machine and kills a steam/flush the
-     * user starts right after the shot.
+     * The outstanding `Command.Stop` write, if any (issue #15 follow-up). Two
+     * rules: at most one is outstanding (the core re-commands every second,
+     * but stacking identical Idle bytes behind a wedged op adds nothing), and
+     * `Command.CancelStop` cancels it ([cancelStaleStop]) — a stale Idle
+     * delivered seconds late is not harmless: it wakes a sleeping machine and
+     * kills a steam/flush the user starts right after the shot.
      */
     private val pendingStopWrite = AtomicReference<Job?>(null)
 
@@ -139,15 +142,57 @@ internal class CoreLane(
         // its Espresso would stop the shot that just started, and a retried
         // profile frame would arrive out of order. Scale writes are another
         // device and keep their own coroutines.
+        // A stop and its cancel run in their order in the output, on the
+        // urgent lane, apart from the ordered batch: the core says which write
+        // is a stop, so the shell never guesses it from its own state.
+        output.commands.forEach { command ->
+            when (command) {
+                Command.Stop -> executeStop()
+                Command.CancelStop -> cancelStaleStop()
+                Command.ReadState -> executeReadState()
+                // Run below, the scale writes on their own, the DE1 writes as
+                // one ordered batch. No `else`: a new command must fail the
+                // build here, not be dropped.
+                is Command.WriteScale, is Command.WriteCharacteristic -> {}
+            }
+        }
         val de1Writes = output.commands.filterIsInstance<Command.WriteCharacteristic>()
         output.commands.filterIsInstance<Command.WriteScale>().forEach(::executeCommand)
         if (de1Writes.isNotEmpty()) executeDe1Writes(de1Writes, startedUploadId(output.events))
     }
 
-    /** The machine stopped: cancel any stop write still queued or waiting on
-     *  the GATT mutex. Delivered late, that same Idle byte would wake a
-     *  sleeping machine or kill a steam/flush the user starts next (issue #15
-     *  follow-up). */
+    /** `Command.ReadState`: a stop not honoured may only have lost its state
+     *  report, so read it back. */
+    private fun executeReadState() {
+        scope.launch {
+            try {
+                readState()
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                log("State read failed: ${e.message}")
+            }
+        }
+    }
+
+    /** `Command.Stop`: write Idle now on the urgent lane, unless one is
+     *  already queued or in flight. */
+    private fun executeStop() {
+        if (pendingStopWrite.get()?.isActive == true) {
+            log("Stop write already in flight — not stacking another")
+            return
+        }
+        // A debug build's armed fault drops it here, as a lost write (logged).
+        if (faults.dropStop()) return
+        val job = scope.launch { deliverDe1Write(STOP_WRITE, stopWrite = true) }
+        pendingStopWrite.set(job)
+        job.invokeOnCompletion { pendingStopWrite.compareAndSet(job, null) }
+    }
+
+    /** `Command.CancelStop`, or the machine stopped: cancel any stop write
+     *  still queued or waiting on the GATT mutex. Delivered late, that same
+     *  Idle byte would wake a sleeping machine or kill a steam/flush the user
+     *  starts next (issue #15 follow-up). */
     fun cancelStaleStop() {
         pendingStopWrite.getAndSet(null)?.let { job ->
             if (job.isActive) {
@@ -189,6 +234,9 @@ internal class CoreLane(
                 }
             }
             is Command.WriteCharacteristic -> executeDe1Writes(listOf(command))
+            Command.Stop -> executeStop()
+            Command.CancelStop -> cancelStaleStop()
+            Command.ReadState -> executeReadState()
         }
     }
 
@@ -202,31 +250,22 @@ internal class CoreLane(
      * synthesized ack. This is the machine-control path (AND5).
      */
     private fun executeDe1Writes(writes: List<Command.WriteCharacteristic>, uploadId: UInt? = null) {
-        // A machine-state write during a shot IS the stop (issue #15).
-        val shotRunning = shotRunning()
-        fun isStop(c: Command.WriteCharacteristic) =
-            c.content.target == WriteTarget.De1RequestedState && shotRunning
-        // Coalesce stop writes: if one is already queued/waiting, a second
-        // copy of the same Idle byte buys nothing — and every extra copy is a
-        // stale-write risk after the machine stops.
-        val batch = writes.filter { c ->
-            if (isStop(c) && pendingStopWrite.get()?.isActive == true) {
-                log("Stop write already in flight — not stacking another")
-                false
-            } else {
-                true
-            }
-        }
-        if (batch.isEmpty()) return
+        val batch = writes
         // The profile writes of this output: a header write supersedes every
         // older upload's remaining writes (cohort review 2026-10-28, #2 N2).
         val profileBatch = profileWrites.begin(batch.map { it.content.target }, uploadId)
         if (profileWrites.unnamed(profileBatch)) log(UNNAMED_PROFILE_BATCH_LOG)
-        val job = scope.launch {
+        scope.launch {
             executeInOrder(batch) { c ->
                 val profile = profileBatch?.takeIf { isProfileWriteTarget(c.content.target) }
+                // A debug build's armed fault drops a plain requested-state
+                // write here, as a lost write (logged). A Stop never comes
+                // this way: it has its own lane above.
+                if (c.content.target == WriteTarget.De1RequestedState && faults.dropRequestedState()) {
+                    return@executeInOrder
+                }
                 if (profile == null) {
-                    deliverDe1Write(c, stopWrite = isStop(c))
+                    deliverDe1Write(c, stopWrite = false)
                     return@executeInOrder
                 }
                 // Superseded, or an earlier write of this upload failed:
@@ -244,10 +283,6 @@ internal class CoreLane(
                     profile.uploadId?.let { id -> deliver(profileWriteFailed(id)) }
                 }
             }
-        }
-        if (batch.any(::isStop)) {
-            pendingStopWrite.set(job)
-            job.invokeOnCompletion { pendingStopWrite.compareAndSet(job, null) }
         }
     }
 
@@ -291,6 +326,14 @@ internal class CoreLane(
                     },
                 )
             },
+        )
+    }
+
+    private companion object {
+        /** `Command.Stop`'s write: Idle (`0x02`) to the requested-state
+         *  characteristic, the byte the core's own Idle request carries. */
+        val STOP_WRITE = Command.WriteCharacteristic(
+            coffee.crema.core.CommandWriteCharacteristicInner(WriteTarget.De1RequestedState, listOf(0x02u)),
         )
     }
 }

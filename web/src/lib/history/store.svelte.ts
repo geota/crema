@@ -1565,6 +1565,7 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		profileName: typeof obj.profileName === 'string' ? (obj.profileName as string) : null,
 		profile: (obj.profile as unknown) ?? null,
 		stopReason: (obj.stopReason as unknown) ?? null,
+		...(obj.stopEstimated === true ? { stopEstimated: true } : {}),
 		metadata,
 		record: recordField,
 		bean,

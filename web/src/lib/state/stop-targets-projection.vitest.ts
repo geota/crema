@@ -23,6 +23,7 @@ describe('refreshStopTargetsProjection', () => {
 			maxTime: null,
 			weightConfigured: null,
 			weightBlocked: null,
+			weightBlockedNote: null,
 			...p
 		})
 	});
@@ -62,5 +63,33 @@ describe('refreshStopTargetsProjection', () => {
 		expect(s?.weightG).toBeNull();
 		expect(s?.weightConfiguredG).toBe(36);
 		expect(s?.weightBlocked).toBe('no-scale');
+	});
+});
+
+describe('the blocked note', () => {
+	it('is the core\'s, carried through to the snapshot', async () => {
+		const fakeCore = (p: Record<string, unknown>) => ({
+			stopTargetsProjection: async () => ({
+				armed: false,
+				weight: null,
+				volume: null,
+				maxTime: null,
+				weightConfigured: null,
+				weightBlocked: null,
+				weightBlockedNote: null,
+				...p
+			})
+		});
+		await refreshStopTargetsProjection(
+			fakeCore({
+				weightConfigured: 36,
+				weightBlocked: 'scale-lost',
+				weightBlockedNote: 'Scale stopped reporting. Stop this shot by hand.'
+			}) as Parameters<typeof refreshStopTargetsProjection>[0]
+		);
+		const s = getCremaUiState().current.stopTargets;
+		expect(s?.weightBlockedNote).toBe(
+			'Scale stopped reporting. Stop this shot by hand.'
+		);
 	});
 });

@@ -1603,7 +1603,8 @@ export type Event =
 	 * Running shot volume dispensed so far, ml — integrated from the
 	 * telemetry flow stream against the DE1's `sample_time` ticks
 	 * (BLE-jitter-immune when the line-frequency is known, host-clock
-	 * fallback otherwise). Resets to 0 on every `ShotStarted`.
+	 * fallback otherwise). Resets to 0 on every `ShotStarted` and
+	 * `WaterSessionStarted`.
 	 */
 	dispensed_volume: number;
 	/**
@@ -1761,7 +1762,7 @@ export type Event =
 	 * own copy of the inputs. The demotion rule is shared
 	 * ([`de1_domain::volume_stop_arms`]), but the inputs were not: a shell
 	 * evaluating it over its own active-profile yield can disagree with the
-	 * core evaluating it over `profile_target_weight`, and did — the Brew
+	 * core evaluating it over its own target, and did — the Brew
 	 * card showed a confident 36 g target while the core had armed nothing
 	 * at all (geota/crema#56).
 	 * 
@@ -1782,8 +1783,9 @@ export type Event =
 	/** Max shot time, seconds; `None` = no time cap. */
 	max_time?: number;
 	/**
-	 * `true` once an `AutoStop` actually holds these targets (the shot is
-	 * running); `false` while this is the between-shots projection.
+	 * `true` while an espresso flows with at least one leg live (its
+	 * `AutoStop` exists from first flow, legs or not); `false` before
+	 * first flow, between shots, and while no leg is live.
 	 */
 	armed: boolean;
 	/**
@@ -1794,11 +1796,15 @@ export type Event =
 	weight_configured?: number;
 	/**
 	 * Why [`weight`] is not armed despite [`weight_configured`] being set
-	 * — `"no-scale"` or `"untared-cup"`. `None` when the leg is armed,
-	 * nothing is configured, or the user turned the stop off (a choice,
-	 * not an impediment).
+	 * — `"no-scale"`, `"scale-silent"`, `"began-unseen"`, `"untared-cup"`,
+	 * `"scale-lost"`, `"scale-rezeroed"`, `"scale-disturbed"` or
+	 * `"scale-not-tared"`. `None` when the leg is armed, nothing is
+	 * configured, or the user turned the stop off (a choice, not an
+	 * impediment).
 	 */
 	weight_blocked?: string;
+	/** The note to show for [`weight_blocked`], the same on both shells. */
+	weight_blocked_note?: string;
 }}
 	/**
 	 * A commanded stop has not been honoured — the machine is still in the
@@ -1806,10 +1812,19 @@ export type Event =
 	 * or stalled BLE write must not let the shot pour past its target).
 	 */
 	| { type: "StopRetried", content: {
-	/** The stop reason being enforced. */
-	reason: StopReason;
+	/** The leg's reason, or `None` for the user's Stop. */
+	reason?: StopReason;
 	/** 1-based retry attempt. */
 	attempt: number;
+}}
+	/**
+	 * The machine hasn't honoured a stop after five retries, or an outage
+	 * left the core unsure the flow is the one it owed a stop to. The shell
+	 * alerts the user with `message`. Once per episode.
+	 */
+	| { type: "StopNotHonoured", content: {
+	/** What to tell the user. */
+	message: string;
 }}
 	/** The espresso shot finished. */
 	| { type: "ShotCompleted", content: {
@@ -1831,13 +1846,14 @@ export type Event =
 	peak_temp?: number;
 	/**
 	 * Peak scale weight observed across every ScaleReading of the shot,
-	 * grams. `None` when no scale was paired (no readings arrived).
+	 * grams. `None` when no scale was paired (no readings arrived), or
+	 * the shot began before the app saw it (its readings include the cup).
 	 */
 	peak_weight?: number;
 	/**
 	 * The final scale weight observed before the shot ended, grams —
 	 * the "shot yield". `None` when no scale was paired (no readings
-	 * arrived).
+	 * arrived), or the shot began before the app saw it.
 	 */
 	final_weight?: number;
 	/**
@@ -1954,10 +1970,11 @@ export type Event =
 	 */
 	| { type: "ScaleStale", content?: undefined }
 	/**
-	 * The scale link looks dead: still no reading 5 s after
-	 * [`Event::ScaleStale`], or three scale writes in a row failed with no
-	 * reading in between. Emitted once per episode — a fresh reading re-arms
-	 * it. The shell drops the link at the transport (not a user disconnect)
+	 * The scale link looks dead: no sign of life 6 s after the last frame,
+	 * or after connect for a scale that never reported, or three scale
+	 * writes in a row failed with no reading in between. Emitted once until
+	 * a reading arrives, even across a reconnect, so a scale that never
+	 * reports isn't torn down every 6 s. The shell drops the link at the transport (not a user disconnect)
 	 * so its reconnect loop recovers it, but only while its link still
 	 * claims ready.
 	 */
@@ -2421,7 +2438,28 @@ export type Command =
 	| { type: "WriteScale", content: {
 	/** The bytes to write. */
 	data: number[];
-}};
+}}
+	/**
+	 * Stop the machine: write Idle to the requested-state characteristic
+	 * (`0x02`) now, on the urgent lane, ahead of anything queued. Only the
+	 * core emits it, and only while a flow session is open. A shell keeps at
+	 * most one outstanding: a second is dropped while one is queued or in
+	 * flight.
+	 */
+	| { type: "Stop", content?: undefined }
+	/**
+	 * Drop any [`Stop`](Self::Stop) not yet on the air. One already in
+	 * flight can't be recalled. Sent when the machine winds down, a session
+	 * closes, the link drops, or the core resets, so a late Idle can't wake
+	 * a sleeping machine or stop the next flow.
+	 */
+	| { type: "CancelStop", content?: undefined }
+	/**
+	 * Read the DE1's `StateInfo` characteristic and feed the reply back as a
+	 * [`Source::De1State`] notification: a stop not honoured may only have
+	 * lost its state report.
+	 */
+	| { type: "ReadState", content?: undefined };
 
 /**
  * The result of feeding the core one input: what it observed (`events`) and
@@ -6244,7 +6282,7 @@ export type SawModelLoad =
 
 /** Why [`Event::ScaleLinkDead`] fired. */
 export enum ScaleLinkDeadReason {
-	/** No weight reading for the stale timeout plus the 5 s grace. */
+	/** No sign of life for 6 s: the stale timeout plus the 5 s grace. */
 	Silent = "Silent",
 	/** Three scale writes in a row failed with no reading in between. */
 	WritesFailing = "WritesFailing",
@@ -6336,7 +6374,15 @@ export type StartEnd =
 	/** A user's request, a link drop or a reset cancelled it. */
 	| { kind: "Cancelled", details?: undefined }
 	/** The shot was started at the group head first. */
-	| { kind: "StoodDown", details?: undefined };
+	| { kind: "StoodDown", details?: undefined }
+	/**
+	 * Another flow began after Start was tapped (steam or hot water at the
+	 * group head, say): the start won't stop it.
+	 */
+	| { kind: "OtherFlowStarted", details: {
+	/** The flow that began. */
+	state: MachineState;
+}};
 
 /** Where an accepted start stands. */
 export enum StartPhase {
@@ -6376,6 +6422,12 @@ export enum StopReason {
 	Volume = "Volume",
 	/** The maximum shot time was reached (legacy `espresso_max_time`). */
 	MaxTime = "MaxTime",
+	/**
+	 * The scale was lost after flow reached the cup, and the pour reached
+	 * the weight target by estimate (`DESIGN.md` §3.5). Never trains the drip
+	 * model; a stored shot records it as `Weight` with `stop_estimated`.
+	 */
+	EstimatedWeight = "EstimatedWeight",
 }
 
 /**

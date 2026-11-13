@@ -21,6 +21,10 @@
 //!   twice.
 //! - **Coalescing.** A change while an upload runs waits for it; the latest
 //!   desired profile goes out when it finishes.
+//! - **Settle.** A changed desired profile waits [`DESIRED_SETTLE`] (500 ms,
+//!   de1app's dial debounce) after the last change, on an [`Event::WakeAt`]
+//!   deadline, so a run of dial steps uploads once. The shells keep no timer
+//!   of their own. A shot start doesn't wait (`DESIGN.md` §3.10).
 //! - **Retry.** A failed upload is retried after 3 s, 10 s, then every 30 s
 //!   ([`RETRY_DELAYS`]), driven by [`CremaCore::on_tick`]. The first failure
 //!   of a streak raises one [`Event::ProfileSyncWarning`]; a success (or a
@@ -48,6 +52,7 @@ use de1_domain::{BrewOverrides, CremaProfile};
 use de1_protocol::{MachineState, StateInfo};
 use typeshare::typeshare;
 
+use crate::packet_sync::LinkSession;
 use crate::{CoreOutput, CremaCore, Event, ms_to_duration};
 
 /// Waits before the retries of a failed sync upload: the first three
@@ -95,6 +100,11 @@ pub struct ProfileSyncOutput {
     pub status: ProfileSyncStatus,
 }
 
+/// The targets a running shot holds to while the desired profile has moved
+/// to another id: its profile and Quick Controls (`None` = it ran with none).
+#[derive(Debug, Clone)]
+pub(crate) struct TargetHold(Option<(CremaProfile, BrewOverrides)>);
+
 /// The profile the shell wants on the DE1.
 #[derive(Debug, Clone)]
 struct Desired {
@@ -117,9 +127,6 @@ pub(crate) struct SyncTag {
 pub(crate) struct ProfileSync {
     desired: Option<Desired>,
     last_pushed: Option<String>,
-    /// A `StateInfo` arrived on this generation's link: the core's last
-    /// state is this connection's, not one from before the drop.
-    state_seen: bool,
     /// The sync upload running, if any.
     in_flight: Option<SyncTag>,
     /// Failures since the last success.
@@ -130,7 +137,13 @@ pub(crate) struct ProfileSync {
     warned: bool,
     /// A desired fingerprint the core rejected outright — not retried.
     rejected: Option<String>,
+    /// A changed desired profile uploads no sooner than this.
+    settle_at: Option<Duration>,
 }
+
+/// How long a changed desired profile rests before it uploads: de1app's 0.5 s
+/// dial debounce, moved into the core (`DESIGN.md` §3.10).
+pub const DESIRED_SETTLE: Duration = Duration::from_millis(500);
 
 impl ProfileSync {
     fn status(&self) -> ProfileSyncStatus {
@@ -150,14 +163,15 @@ impl ProfileSync {
             .then_some((&desired.profile, &desired.qc))
     }
 
-    /// The desired library profile and its overrides, if any.
-    fn desired_profile(&self) -> Option<(&CremaProfile, &BrewOverrides)> {
+    /// The desired library profile and its overrides, if any: what the stop
+    /// targets derive from (`DESIGN.md` §3.10).
+    pub(crate) fn desired_profile(&self) -> Option<(&CremaProfile, &BrewOverrides)> {
         self.desired.as_ref().map(|d| (&d.profile, &d.qc))
     }
 
-    /// A new desired profile. A changed fingerprint starts a fresh attempt
-    /// count (reaprime `_onChange`).
-    fn set_desired(&mut self, desired: Option<Desired>) {
+    /// A new desired profile at `now`. A changed fingerprint starts a fresh
+    /// attempt count (reaprime `_onChange`) and waits [`DESIRED_SETTLE`].
+    fn set_desired(&mut self, desired: Option<Desired>, now: Duration) {
         let changed = self.desired.as_ref().map(|d| &d.fingerprint)
             != desired.as_ref().map(|d| &d.fingerprint);
         self.desired = desired;
@@ -165,13 +179,35 @@ impl ProfileSync {
             self.attempt = 0;
             self.retry_at = None;
             self.rejected = None;
+            self.settle_at = Some(now + DESIRED_SETTLE);
         }
+    }
+
+    /// Upload without waiting for the settle: a shot start.
+    fn settle_now(&mut self) {
+        self.settle_at = None;
+    }
+
+    /// When the core needs a tick to upload the desired profile: the end of
+    /// its settle, or its retry. Only a deadline still ahead of `now`: once it
+    /// has passed, the tick at it has tried, and an upload that couldn't go
+    /// then (one running, the machine busy, a mirror) goes on the state
+    /// change, the upload's end or the regular tick. A past wake would be
+    /// answered at once, on every tick, for as long as it couldn't go.
+    pub(crate) fn upload_deadline(&self, now: Duration) -> Option<Duration> {
+        let desired = self.desired.as_ref()?;
+        let pending = self.last_pushed.as_ref() != Some(&desired.fingerprint)
+            && self.rejected.as_ref() != Some(&desired.fingerprint);
+        [self.settle_at, self.retry_at]
+            .into_iter()
+            .flatten()
+            .filter(|at| pending && *at > now)
+            .min()
     }
 
     /// The link is gone: a new generation. Returns whether a raised warning
     /// must be cleared.
     fn disconnected(&mut self) -> bool {
-        self.state_seen = false;
         self.last_pushed = None;
         self.in_flight = None;
         self.attempt = 0;
@@ -188,22 +224,17 @@ impl ProfileSync {
         self.retry_at = None;
     }
 
-    /// A `StateInfo` arrived. Returns whether it is the first of this
-    /// generation.
-    fn state_seen(&mut self) -> bool {
-        !std::mem::replace(&mut self.state_seen, true)
-    }
-
     /// The desired profile to upload now, if one is due and the machine can
     /// take it (`ready`).
-    fn due(&self, now: Duration, ready: bool, settled: bool) -> Option<Desired> {
+    fn due(&self, now: Duration, ready: bool, link: LinkSession) -> Option<Desired> {
         let desired = self.desired.as_ref()?;
-        let due = settled
-            && self.state_seen
+        let due = link.settled
+            && link.state_seen
             && ready
             && self.in_flight.is_none()
             && self.last_pushed.as_ref() != Some(&desired.fingerprint)
             && self.rejected.as_ref() != Some(&desired.fingerprint)
+            && self.settle_at.is_none_or(|at| now >= at)
             && self.retry_at.is_none_or(|at| now >= at);
         due.then(|| desired.clone())
     }
@@ -294,7 +325,54 @@ impl CremaCore {
         qc: &BrewOverrides,
         now: Duration,
     ) -> CoreOutput {
+        self.set_desired_profile_settling(profile, qc, now, true)
+    }
+
+    /// [`set_desired_profile`](Self::set_desired_profile), already settled:
+    /// for tests about the sync rather than the dial's settle.
+    #[cfg(test)]
+    pub(crate) fn set_desired_profile_settled(
+        &mut self,
+        profile: Option<&CremaProfile>,
+        qc: &BrewOverrides,
+        now: Duration,
+    ) -> CoreOutput {
+        self.set_desired_profile_settling(profile, qc, now, false)
+    }
+
+    /// [`set_desired_profile`](Self::set_desired_profile), with or without
+    /// the [`DESIRED_SETTLE`] wait: a shot start uploads at once.
+    pub(crate) fn set_desired_profile_settling(
+        &mut self,
+        profile: Option<&CremaProfile>,
+        qc: &BrewOverrides,
+        now: Duration,
+        settle: bool,
+    ) -> CoreOutput {
         self.clock = self.clock.max(now);
+        self.adopt_desired_profile(profile, qc);
+        if !settle {
+            self.profile_sync.settle_now();
+        }
+        let mut out = CoreOutput::default();
+        // The packet's group target follows the profile (F5.3); it goes
+        // before any upload, as in the connect sweep.
+        self.drive_shot_settings(&mut out, false);
+        self.drive_profile_sync(&mut out);
+        // A settling profile needs a tick at its deadline.
+        self.emit_wake(&mut out);
+        self.gate_read_only(out)
+    }
+
+    /// Make `profile` with `qc` the desired profile, and its targets the
+    /// live ones at once: the yield, the volume limit and the hot-water
+    /// ratio's basis (`DESIGN.md` §3.10). Another profile turns the yield dot
+    /// back on. Only the upload waits for the settle.
+    pub(crate) fn adopt_desired_profile(
+        &mut self,
+        profile: Option<&CremaProfile>,
+        qc: &BrewOverrides,
+    ) {
         let desired = profile.map(|p| {
             let qc = de1_domain::normalize_brew_overrides(p, qc);
             Desired {
@@ -303,13 +381,60 @@ impl CremaCore {
                 qc,
             }
         });
-        self.profile_sync.set_desired(desired);
-        let mut out = CoreOutput::default();
-        // The packet's group target follows the profile (F5.3); it goes
-        // before any upload, as in the connect sweep.
-        self.drive_shot_settings(&mut out, false);
-        self.drive_profile_sync(&mut out);
-        self.gate_read_only(out)
+        let new_id = desired.as_ref().map(|d| d.profile.id.clone());
+        let old_id = self
+            .profile_sync
+            .desired
+            .as_ref()
+            .map(|d| d.profile.id.clone());
+        if self.shot_started.is_some() {
+            // A shot runs the profile it was given: a pick of another id keeps
+            // that profile's targets, and its dot, until the shot ends. Dial
+            // steps on the running profile apply at once (REVIEW-401 S1).
+            let running_id = match &self.target_hold {
+                Some(hold) => hold.0.as_ref().map(|(p, _)| p.id.clone()),
+                None => old_id,
+            };
+            if new_id == running_id {
+                self.target_hold = None;
+            } else if self.target_hold.is_none() {
+                let held = self
+                    .profile_sync
+                    .desired_profile()
+                    .map(|(p, qc)| (p.clone(), *qc));
+                self.target_hold = Some(TargetHold(held));
+            }
+        } else if old_id != new_id {
+            self.weight_target_disabled = false;
+        }
+        self.profile_sync.set_desired(desired, self.clock);
+        self.refresh_auto_stop_targets();
+    }
+
+    /// The profile the stop targets come from: the one a running shot holds
+    /// to, else the desired profile.
+    pub(crate) fn target_source(&self) -> Option<(&CremaProfile, &BrewOverrides)> {
+        match &self.target_hold {
+            Some(hold) => hold.0.as_ref().map(|(p, qc)| (p, qc)),
+            None => self.profile_sync.desired_profile(),
+        }
+    }
+
+    /// The shot ended: a profile picked during it takes over the targets, and
+    /// another id turns the dot back on.
+    pub(crate) fn release_target_hold(&mut self) {
+        let Some(hold) = self.target_hold.take() else {
+            return;
+        };
+        let held_id = hold.0.as_ref().map(|(p, _)| p.id.as_str());
+        let desired_id = self
+            .profile_sync
+            .desired_profile()
+            .map(|(p, _)| p.id.as_str());
+        if held_id != desired_id {
+            self.weight_target_disabled = false;
+        }
+        self.refresh_auto_stop_targets();
     }
 
     /// The JSON face of [`set_desired_profile`](Self::set_desired_profile)
@@ -358,6 +483,7 @@ impl CremaCore {
     pub(crate) fn link_lost_session(&mut self, out: &mut CoreOutput) {
         self.link.generation = self.link.generation.wrapping_add(1);
         self.link.settled = false;
+        self.link.state_seen = false;
         self.packet_sync_new_generation();
         if self.profile_sync.disconnected() {
             out.events.push(Event::ProfileSyncWarning { active: false });
@@ -365,14 +491,16 @@ impl CremaCore {
     }
 
     /// A `StateInfo` notification arrived, before
-    /// [`handle_state`](Self::handle_state) records it. The first of a
-    /// generation makes the machine's state known again after a drop; when
-    /// it repeats the state from before the drop (no change for
-    /// `handle_state` to act on) a deferred upload is driven here.
-    pub(crate) fn profile_sync_state_seen(&mut self, info: StateInfo, out: &mut CoreOutput) {
-        if self.profile_sync.state_seen() && self.last_state == Some(info) {
+    /// [`handle_state`](Self::handle_state) records it. Returns whether it is
+    /// the first of this generation, which makes the machine's state known
+    /// again after a drop; when it repeats the state from before the drop (no
+    /// change for `handle_state` to act on) a deferred upload is driven here.
+    pub(crate) fn link_state_seen(&mut self, info: StateInfo, out: &mut CoreOutput) -> bool {
+        let first = !std::mem::replace(&mut self.link.state_seen, true);
+        if first && self.last_state == Some(info) {
             self.drive_profile_sync(out);
         }
+        first
     }
 
     /// Settle this generation's link: the on-ready connect sweep calls it
@@ -475,7 +603,7 @@ impl CremaCore {
             // A start past its sync stage is flushing or requesting Espresso.
             && !self.start_past_sync()
             && self.last_state.is_some_and(|s| idle_enough(s.state));
-        let Some(desired) = self.profile_sync.due(self.clock, ready, self.link.settled) else {
+        let Some(desired) = self.profile_sync.due(self.clock, ready, self.link) else {
             return;
         };
         match self.upload_crema_profile(&desired.profile, &desired.qc, self.clock) {
@@ -505,6 +633,46 @@ impl CremaCore {
     }
 }
 
+/// Test seams for the stop targets: each edits one field of the desired
+/// profile (a blank one with no targets when none is desired) the way a shell
+/// would, without driving the sync.
+#[cfg(test)]
+impl CremaCore {
+    fn edit_test_desired(&mut self, edit: impl FnOnce(&mut CremaProfile, &mut BrewOverrides)) {
+        let (mut profile, mut qc) = self.profile_sync.desired.as_ref().map_or_else(
+            || {
+                let blank = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
+                let profile = CremaProfile {
+                    id: "test-profile".to_owned(),
+                    yield_out: 0.0,
+                    max_total_volume_ml: 0,
+                    ..blank
+                };
+                (profile, BrewOverrides::default())
+            },
+            |d| (d.profile.clone(), d.qc),
+        );
+        edit(&mut profile, &mut qc);
+        self.adopt_desired_profile(Some(&profile), &qc);
+    }
+
+    /// The desired profile's own yield, g (`None` = 0, no target).
+    pub(crate) fn set_test_profile_yield(&mut self, grams: Option<f32>) {
+        self.edit_test_desired(|p, _| p.yield_out = grams.unwrap_or(0.0));
+    }
+
+    /// The Quick Controls yield, g (`None` = the profile's).
+    pub(crate) fn set_test_dial_yield(&mut self, grams: Option<f32>) {
+        self.edit_test_desired(|_, qc| qc.yield_g = grams);
+    }
+
+    /// The desired profile's volume limit, ml (`None` = 0, no limit).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub(crate) fn set_test_volume_limit(&mut self, ml: Option<f32>) {
+        self.edit_test_desired(|p, _| p.max_total_volume_ml = ml.map_or(0, |v| v as u16));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,7 +699,7 @@ mod tests {
     fn f7_3_stale_generation_results_are_ignored() {
         let mut sync = ProfileSync::default();
         sync.settled();
-        sync.set_desired(Some(desired("a")));
+        sync.set_desired(Some(desired("a")), Duration::ZERO);
         let old = sync.started("a".into(), 0);
         assert!(!sync.disconnected());
         sync.settled();
@@ -553,7 +721,11 @@ mod tests {
         let mut core = crate::CremaCore::new_with_model(1);
         let _ = core.on_notification(crate::Source::De1State, &[2, 0], 0);
         let profile = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
-        let _ = core.set_desired_profile(Some(&profile), &BrewOverrides::default(), Duration::ZERO);
+        let _ = core.set_desired_profile_settled(
+            Some(&profile),
+            &BrewOverrides::default(),
+            Duration::ZERO,
+        );
         let _ = core.connect_sweep(&de1_domain::ConnectSweepSettings::default(), 10);
         let tag = core
             .profile_upload
@@ -576,9 +748,12 @@ mod tests {
     fn f7_4_retry_backoff_schedule() {
         let mut sync = ProfileSync::default();
         sync.settled();
-        assert!(sync.state_seen(), "the first state of the generation");
-        assert!(!sync.state_seen(), "only the first");
-        sync.set_desired(Some(desired("a")));
+        let link = LinkSession {
+            settled: true,
+            state_seen: true,
+            ..LinkSession::default()
+        };
+        sync.set_desired(Some(desired("a")), Duration::ZERO);
         let mut now = Duration::ZERO;
         let mut warnings = 0;
         for expected in [3, 10, 30, 30, 30] {
@@ -589,10 +764,10 @@ mod tests {
             let at = sync.retry_at.expect("a retry is scheduled");
             assert_eq!(at - now, Duration::from_secs(expected));
             assert!(
-                sync.due(at - Duration::from_millis(1), true, true)
+                sync.due(at - Duration::from_millis(1), true, link)
                     .is_none()
             );
-            assert!(sync.due(at, true, true).is_some());
+            assert!(sync.due(at, true, link).is_some());
             now = at;
         }
         assert_eq!(warnings, 1, "one warning for the streak");

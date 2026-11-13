@@ -19,6 +19,8 @@ use typeshare::typeshare;
 
 use crate::flow::{FlowAlgorithm, FlowEstimator};
 use crate::saw_learning::{SawLearningModel, SawSnapshot};
+use crate::scale_trust::WeightAuthority;
+use crate::session::{Blocked, LastTrusted};
 
 /// The targets that end a shot automatically. A `None` field disables that mode.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -100,24 +102,175 @@ impl StopConfig {
             ..StopConfig::default()
         }
     }
+
+    /// The config for a hot-water pour (`DESIGN.md` §3.3): the weight leg
+    /// projects one sensor lag ahead (reaprime `HotWaterSequencer`), with no
+    /// arming delay, no offset and no drip model.
+    pub fn hot_water(scale_sensor_lag: Duration) -> StopConfig {
+        StopConfig {
+            weight_lead: scale_sensor_lag,
+            weight_offset: 0.0,
+            arming_delay: Duration::ZERO,
+            flow_algorithm: FlowAlgorithm::TheilSen,
+        }
+    }
 }
 
-/// Whether the profile's volume limit (SAV) will actually arm for the
-/// next shot — the shells' Max-Volume card display gate. Mirrors the
-/// core orchestrator's `effective_stop_targets` demotion rule: volume is
-/// a NO-SCALE FALLBACK, never a competitor to stop-at-weight
-/// (reference-app consensus), so it is demoted only when the weight leg
-/// resolves — a scale connected AND a weight target set — unless the
-/// user opted into both caps racing (`volume_stop_with_scale`). A scale
-/// connected *without* a weight target keeps volume armed (review #29:
-/// dropping it would leave the shot with no stop at all).
+/// What the user asked to end a session with, before trust is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StopIntent {
+    /// The weight target, grams: set, on, and not dotted off.
+    pub weight: Option<f32>,
+    /// The profile's volume limit, ml.
+    pub volume_limit: Option<f32>,
+    /// The max shot time, seconds.
+    pub max_time: Option<f32>,
+    /// The user wants the volume limit live alongside the weight target.
+    pub volume_stop_with_scale: bool,
+    /// The pour the volume limit counts from, ml: 0, or the pour when a shot
+    /// whose flow began on an unknown substate re-anchored (REVIEW-385). The
+    /// backstop always counts every ml.
+    pub limit_from_ml: f32,
+}
+
+/// The estimated leg (`DESIGN.md` §3.5): with the scale lost after flow
+/// reached the cup, stop when `pour_ml ≥ last.pour_ml + (target − lead_g −
+/// last.weight_g)`. Only the remainder is estimated, 1 ml to 1 g.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EstimatedLeg {
+    /// The weight target, grams.
+    pub target_g: f32,
+    /// The last trusted weight and its pour.
+    pub last: LastTrusted,
+}
+
+impl EstimatedLeg {
+    /// The pour at which the leg fires, given the weight leg's lead in grams.
+    #[must_use]
+    pub fn stop_at_ml(&self, lead_g: f32) -> f32 {
+        self.last.pour_ml + (self.target_g - lead_g - self.last.weight_g)
+    }
+}
+
+/// What can end the session now, and why the weight leg can't, if it can't.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedLegs {
+    /// The weight leg, grams.
+    pub weight: Option<f32>,
+    /// The estimated leg, standing in for weight under `Lost`.
+    pub estimated: Option<EstimatedLeg>,
+    /// The volume leg, ml: the limit, or a backstop.
+    pub volume: Option<f32>,
+    /// The time leg, seconds.
+    pub max_time: Option<f32>,
+    /// Why a configured weight target isn't live.
+    pub blocked: Option<Blocked>,
+}
+
+impl ResolvedLegs {
+    /// The legs as [`StopTargets`], or `None` when nothing is live.
+    #[must_use]
+    pub fn targets(&self) -> Option<StopTargets> {
+        (self.weight.is_some() || self.volume.is_some() || self.max_time.is_some()).then_some(
+            StopTargets {
+                weight: self.weight,
+                volume: self.volume,
+                max_time: self.max_time,
+            },
+        )
+    }
+
+    /// The weight row's note: what the estimate is doing in weight's place,
+    /// or why weight is blocked.
+    #[must_use]
+    pub fn note(&self) -> Option<&'static str> {
+        let blocked = self.blocked?;
+        Some(if self.estimated.is_some() {
+            blocked.estimating_note()
+        } else {
+            blocked.note()
+        })
+    }
+}
+
+/// The pour the espresso backstop stops at: `max(limit, 60 + 1.5 × target)`,
+/// ml (114 ml at 36 g). Provisional, from one shot (`DESIGN.md` §3.5).
 #[must_use]
-pub fn volume_stop_arms(
-    scale_connected: bool,
-    weight_target_set: bool,
-    volume_stop_with_scale: bool,
-) -> bool {
-    !(scale_connected && weight_target_set) || volume_stop_with_scale
+pub fn espresso_backstop_ml(limit: Option<f32>, target_g: f32) -> f32 {
+    let backstop = 60.0 + 1.5 * target_g;
+    limit.map_or(backstop, |l| l.max(backstop))
+}
+
+/// Where a session stands, for [`resolve_legs`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LegContext {
+    /// What the weight may do.
+    pub authority: WeightAuthority,
+    /// The scale link is gone for good (dead or absent), not on a blip.
+    pub scale_gone: bool,
+    /// Why the session refused its scale, if it did.
+    pub refused: Option<Blocked>,
+}
+
+/// The espresso legs, re-derived on every input (`DESIGN.md` §3.3, §3.4,
+/// §3.5).
+///
+/// - The weight leg is live only under [`WeightAuthority::Trusted`].
+/// - Under [`WeightAuthority::Lost`] the estimated leg stands in for it.
+/// - The volume limit is live when there is no weight target, when the user
+///   races both, or while weight is pending or refused. It stays off under
+///   `Lost` and [`WeightAuthority::Blind`]: a 36 ml limit would stop a
+///   preinfusion-free shot at an empty cup.
+/// - Blind with the link gone, or after a disturbance before the cup had
+///   weight, a weight target gets the backstop instead. So does a session
+///   first seen flowing with no limit and no max time, counted from attach.
+#[must_use]
+pub fn resolve_legs(intent: StopIntent, ctx: LegContext) -> ResolvedLegs {
+    let trusted = ctx.authority == WeightAuthority::Trusted;
+    let weight = intent.weight.filter(|_| trusted);
+    let estimated = match (intent.weight, ctx.authority) {
+        (Some(target_g), WeightAuthority::Lost(last)) => Some(EstimatedLeg { target_g, last }),
+        _ => None,
+    };
+    let limit_live = intent.weight.is_none()
+        || intent.volume_stop_with_scale
+        || matches!(
+            ctx.authority,
+            WeightAuthority::Pending | WeightAuthority::Refused(_)
+        );
+    let limit = intent
+        .volume_limit
+        .filter(|_| limit_live)
+        .map(|l| l + intent.limit_from_ml);
+    let disturbed = ctx.refused == Some(Blocked::ScaleDisturbed);
+    let backstop = intent.weight.and_then(|target| match ctx.authority {
+        WeightAuthority::Blind if ctx.scale_gone || disturbed => {
+            Some(espresso_backstop_ml(intent.volume_limit, target))
+        }
+        // A cup the app can't weigh, first seen mid-pour or never tared, with
+        // nothing else to end it.
+        WeightAuthority::Refused(Blocked::BeganUnseen | Blocked::ScaleNotTared)
+            if intent.volume_limit.is_none() && intent.max_time.is_none() =>
+        {
+            Some(espresso_backstop_ml(None, target))
+        }
+        _ => None,
+    });
+    let blocked = match (intent.weight, ctx.authority) {
+        (Some(_), WeightAuthority::Refused(why)) => Some(why),
+        (Some(_), WeightAuthority::Blind) if disturbed => Some(Blocked::ScaleDisturbed),
+        // A blip shows nothing (`DESIGN.md` §6); a lost link asks for a hand.
+        (Some(_), WeightAuthority::Blind) if ctx.scale_gone => Some(Blocked::ScaleLost),
+        (Some(_), WeightAuthority::Lost(_)) => Some(ctx.refused.unwrap_or(Blocked::ScaleLost)),
+        _ => None,
+    };
+    ResolvedLegs {
+        weight,
+        estimated,
+        volume: limit.or(backstop),
+        max_time: intent.max_time,
+        blocked,
+    }
 }
 
 /// Whether water dispensed in this machine state counts toward stop-at-volume.
@@ -155,6 +308,79 @@ pub enum StopReason {
     Volume,
     /// The maximum shot time was reached (legacy `espresso_max_time`).
     MaxTime,
+    /// The scale was lost after flow reached the cup, and the pour reached
+    /// the weight target by estimate (`DESIGN.md` §3.5). Never trains the drip
+    /// model; a stored shot records it as `Weight` with `stop_estimated`.
+    EstimatedWeight,
+}
+
+/// Why a session owes a stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopCause {
+    /// A leg fired.
+    Auto(StopReason),
+    /// The user tapped Stop.
+    User,
+}
+
+impl StopCause {
+    /// The leg's reason, or `None` for the user's Stop.
+    #[must_use]
+    pub const fn reason(self) -> Option<StopReason> {
+        match self {
+            StopCause::Auto(reason) => Some(reason),
+            StopCause::User => None,
+        }
+    }
+}
+
+/// Where a session's stop stands (`DESIGN.md` §3.3). An enum with data: the
+/// attempts exist only while a stop is owed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopState {
+    /// Nothing owed: the legs are live.
+    Armed,
+    /// A stop was sent and the machine hasn't wound down yet.
+    Owed {
+        /// Why.
+        cause: StopCause,
+        /// When the last `Stop` went out.
+        last_write: Duration,
+        /// Retries after the first write.
+        attempts: u32,
+    },
+    /// The machine is winding down.
+    Honoured {
+        /// The stop it honoured, or `None` if it wound down on its own.
+        cause: Option<StopCause>,
+    },
+}
+
+/// Retries on the clock before a retry needs proof of flow.
+pub const STOP_RETRY_CAP: u32 = 30;
+
+/// Retries before [`StopState::Owed`] alerts the user and starts reading the
+/// state back.
+pub const STOP_ALERT_AFTER: u32 = 5;
+
+/// Samples at or over [`FLOW_PROOF_ML_S`], newer than the last write, that
+/// prove water still flows past [`STOP_RETRY_CAP`]. Idle has a brief tail
+/// after `Ending`, so one isn't enough.
+pub const FLOW_PROOF_SAMPLES: u32 = 2;
+
+/// The group flow that proves water flows, ml/s. Both captures average
+/// 0.03 ml/s at Idle and 1.6 ml/s pouring.
+pub const FLOW_PROOF_ML_S: f32 = 0.3;
+
+/// The retry interval: 1 s, 2 s in steam, where an extra Idle can end a
+/// two-tap steam early.
+#[must_use]
+pub const fn stop_retry_interval(steam: bool) -> Duration {
+    if steam {
+        Duration::from_secs(2)
+    } else {
+        Duration::from_secs(1)
+    }
 }
 
 /// Decides when to stop a shot, from the scale and telemetry streams.
@@ -181,6 +407,11 @@ pub struct AutoStop {
     /// Captured at the weight trigger, for post-shot drip learning — see
     /// [`StopCapture`]. `None` until SAW fires.
     stop_capture: Option<StopCapture>,
+    /// The estimated leg, while the scale is lost after flow reached the cup.
+    estimate: Option<EstimatedLeg>,
+    /// The weight leg's lead at its last live reading, grams: what the
+    /// estimate stops short of the target by.
+    lead_g: f32,
 }
 
 /// The instant the weight leg fired, captured for post-shot drip learning
@@ -210,7 +441,27 @@ impl AutoStop {
             drip_snapshot: None,
             sensor_lag_s: 0.38,
             stop_capture: None,
+            estimate: None,
+            lead_g: 0.0,
         }
+    }
+
+    /// Set or clear the estimated leg. Like [`set_targets`](Self::set_targets),
+    /// re-derived on every input.
+    pub fn set_estimate(&mut self, estimate: Option<EstimatedLeg>) {
+        self.estimate = estimate;
+    }
+
+    /// The estimated leg, if live.
+    #[must_use]
+    pub fn estimate(&self) -> Option<EstimatedLeg> {
+        self.estimate
+    }
+
+    /// The weight leg's lead at its last live reading, grams.
+    #[must_use]
+    pub fn lead_g(&self) -> f32 {
+        self.lead_g
     }
 
     /// Attach a learned-drip snapshot (Decenza SAW learning) — the weight
@@ -226,6 +477,19 @@ impl AutoStop {
     /// (volume / max-time stops capture nothing).
     pub fn stop_capture(&self) -> Option<StopCapture> {
         self.stop_capture
+    }
+
+    /// Move the clock's start to `now`: a shot whose flow began on an
+    /// unknown substate gets its real start once a named flowing one arrives.
+    pub fn restart_clock(&mut self, now: Duration) {
+        self.started = now;
+    }
+
+    /// When the session's clock started: first flow for espresso, the
+    /// session's open for hot water.
+    #[must_use]
+    pub fn started(&self) -> Duration {
+        self.started
     }
 
     /// Whether a stop has already been decided.
@@ -284,9 +548,8 @@ impl AutoStop {
         }
 
         let target = self.targets.weight?;
-        if !self.is_armed(now) {
-            return None;
-        }
+        // How far short of the target the leg stops, kept for the estimate:
+        // the drip it expects, or the legacy look-ahead along the flow.
         let crossed = if let Some(snapshot) = &self.drip_snapshot {
             // Learned-drip threshold (Decenza weightprocessor.cpp:283-308):
             // stop when the robust weight reaches `target − expected_drip`,
@@ -295,12 +558,17 @@ impl AutoStop {
             // lead's intent (`min(flow · (sensor_lag + 0.1), 8)`).
             let flow = f64::from(estimate.flow.max(0.0)).min(12.0);
             let expected = SawLearningModel::expected_drip(snapshot, flow, self.sensor_lag_s);
-            f64::from(estimate.weight) >= f64::from(target) - expected
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                self.lead_g = expected as f32;
+            }
+            self.is_armed(now) && f64::from(estimate.weight) >= f64::from(target) - expected
         } else {
             // Legacy: project the robust weight one look-ahead along the flow.
-            let projected =
-                estimate.weight + estimate.flow.max(0.0) * self.config.weight_lead.as_secs_f32();
-            projected >= target - self.config.weight_offset
+            let ahead = estimate.flow.max(0.0) * self.config.weight_lead.as_secs_f32();
+            self.lead_g = ahead + self.config.weight_offset;
+            let projected = estimate.weight + ahead;
+            self.is_armed(now) && projected >= target - self.config.weight_offset
         };
         if crossed {
             self.triggered = true;
@@ -335,13 +603,19 @@ impl AutoStop {
             return Some(reason);
         }
 
-        let target = self.targets.volume?;
         if !self.is_armed(now) {
             return None;
         }
-        if pour_ml >= target {
+        if self.targets.volume.is_some_and(|target| pour_ml >= target) {
             self.triggered = true;
             return Some(StopReason::Volume);
+        }
+        if self
+            .estimate
+            .is_some_and(|e| pour_ml >= e.stop_at_ml(self.lead_g))
+        {
+            self.triggered = true;
+            return Some(StopReason::EstimatedWeight);
         }
         None
     }
@@ -625,19 +899,6 @@ mod tests {
     }
 
     #[test]
-    fn volume_arms_unless_the_weight_leg_resolves_without_opt_in() {
-        // No scale → volume is the fallback stop.
-        assert!(volume_stop_arms(false, false, false));
-        assert!(volume_stop_arms(false, true, false));
-        // Scale + weight target → SAW owns the stop; volume demoted …
-        assert!(!volume_stop_arms(true, true, false));
-        // … unless the user opted into both caps racing.
-        assert!(volume_stop_arms(true, true, true));
-        // Scale WITHOUT a weight target keeps volume armed (review #29).
-        assert!(volume_stop_arms(true, false, false));
-    }
-
-    #[test]
     fn sav_counts_espresso_pour_only() {
         // de1app: preinfusion substate -> preinfusion_volume, pouring ->
         // pour_volume; SAV compares pour_volume.
@@ -678,5 +939,213 @@ mod tests {
             stop.on_sample(&s, ms(2_000), 36.0),
             Some(StopReason::Volume)
         );
+    }
+
+    fn intent(weight: Option<f32>, limit: Option<f32>, max_time: Option<f32>) -> StopIntent {
+        StopIntent {
+            weight,
+            volume_limit: limit,
+            max_time,
+            volume_stop_with_scale: false,
+            limit_from_ml: 0.0,
+        }
+    }
+
+    fn legs(intent: StopIntent, authority: WeightAuthority, scale_gone: bool) -> ResolvedLegs {
+        let refused = match authority {
+            WeightAuthority::Refused(why) => Some(why),
+            _ => None,
+        };
+        resolve_legs(
+            intent,
+            LegContext {
+                authority,
+                scale_gone,
+                refused,
+            },
+        )
+    }
+
+    fn last(weight_g: f32, pour_ml: f32) -> LastTrusted {
+        LastTrusted {
+            weight_g,
+            pour_ml,
+            at: Duration::ZERO,
+        }
+    }
+
+    /// §3.5: under `Lost` the estimate stands in for weight, and a limit
+    /// stays down unless the user races both.
+    #[test]
+    fn lost_weight_is_estimated_and_keeps_the_limit_down() {
+        let lost = WeightAuthority::Lost(last(20.0, 40.0));
+        let i = intent(Some(36.0), Some(36.0), None);
+        let l = legs(i, lost, false);
+        assert_eq!(l.weight, None);
+        assert_eq!(
+            l.estimated,
+            Some(EstimatedLeg {
+                target_g: 36.0,
+                last: last(20.0, 40.0)
+            })
+        );
+        assert_eq!(l.volume, None, "no limit under Lost");
+        assert_eq!(l.blocked, Some(Blocked::ScaleLost));
+        assert_eq!(l.note(), Some("Estimating, scale stopped reporting"));
+        let racing = StopIntent {
+            volume_stop_with_scale: true,
+            ..i
+        };
+        assert_eq!(legs(racing, lost, false).volume, Some(36.0));
+        // A re-zeroed return keeps estimating, under its own reason.
+        let rezeroed = resolve_legs(
+            i,
+            LegContext {
+                authority: lost,
+                scale_gone: false,
+                refused: Some(Blocked::ScaleRezeroed),
+            },
+        );
+        assert_eq!(rezeroed.note(), Some("Estimating, scale re-zeroed"));
+        // No target, nothing to estimate.
+        assert_eq!(legs(intent(None, None, None), lost, false).estimated, None);
+    }
+
+    /// §3.5: disturbed before the gate is `Blind`, and gets the backstop at
+    /// once, not on a blip.
+    #[test]
+    fn a_disturbance_before_the_gate_gets_the_backstop() {
+        let l = resolve_legs(
+            intent(Some(36.0), None, None),
+            LegContext {
+                authority: WeightAuthority::Blind,
+                scale_gone: false,
+                refused: Some(Blocked::ScaleDisturbed),
+            },
+        );
+        assert_eq!(l.volume, Some(114.0));
+        assert_eq!(l.blocked, Some(Blocked::ScaleDisturbed));
+        assert_eq!(l.note(), Some("Scale disturbed. Stop this shot by hand."));
+    }
+
+    /// The estimate fires at `last.pour + (target − lead − last.weight)`,
+    /// with the lead the weight leg had at its last live reading, as
+    /// `EstimatedWeight`, and records no drip-learning capture.
+    #[test]
+    fn the_estimate_finishes_the_remainder_short_by_the_lead() {
+        let config = StopConfig {
+            weight_lead: Duration::from_secs(1),
+            arming_delay: Duration::ZERO,
+            ..StopConfig::default()
+        };
+        let weight = StopTargets {
+            weight: Some(36.0),
+            volume: None,
+            max_time: None,
+        };
+        let mut stop = AutoStop::new(weight, config, Duration::ZERO);
+        // 2 g/s into the cup, up to 20 g.
+        for i in 0..=100u64 {
+            #[allow(clippy::cast_precision_loss)]
+            let g = i as f32 * 0.2;
+            assert_eq!(stop.on_weight(g, ms(i * 100)), None);
+        }
+        let lead = stop.lead_g();
+        assert!((1.5..2.5).contains(&lead), "lead {lead} g");
+        // The scale is lost: weight off, the estimate on.
+        stop.set_targets(StopTargets {
+            weight: None,
+            ..weight
+        });
+        stop.set_estimate(Some(EstimatedLeg {
+            target_g: 36.0,
+            last: last(20.0, 40.0),
+        }));
+        let at = 40.0 + (36.0 - lead - 20.0);
+        let sample = sample_with_flow(2.0);
+        assert_eq!(stop.on_sample(&sample, ms(11_000), at - 0.1), None);
+        assert_eq!(
+            stop.on_sample(&sample, ms(11_100), at),
+            Some(StopReason::EstimatedWeight)
+        );
+        assert_eq!(stop.stop_capture(), None, "never trains the drip model");
+    }
+
+    #[test]
+    fn weight_is_live_only_when_trusted() {
+        use WeightAuthority::{Blind, Pending, Refused, Trusted};
+        let i = intent(Some(36.0), None, None);
+        assert_eq!(legs(i, Trusted, false).weight, Some(36.0));
+        for authority in [Pending, Blind, Refused(Blocked::NoScale)] {
+            assert_eq!(legs(i, authority, false).weight, None, "{authority:?}");
+        }
+    }
+
+    #[test]
+    fn the_volume_limit_stands_down_behind_trusted_or_blind_weight() {
+        use WeightAuthority::{Blind, Pending, Refused, Trusted};
+        let i = intent(Some(36.0), Some(36.0), None);
+        assert_eq!(legs(i, Trusted, false).volume, None);
+        assert_eq!(legs(i, Blind, false).volume, None, "a blip never rearms it");
+        assert_eq!(legs(i, Pending, false).volume, Some(36.0));
+        assert_eq!(
+            legs(i, Refused(Blocked::ScaleSilent), false).volume,
+            Some(36.0)
+        );
+        // No weight target, or the user races both: the limit is live.
+        assert_eq!(
+            legs(intent(None, Some(36.0), None), Trusted, false).volume,
+            Some(36.0)
+        );
+        let racing = StopIntent {
+            volume_stop_with_scale: true,
+            ..i
+        };
+        assert_eq!(legs(racing, Trusted, false).volume, Some(36.0));
+    }
+
+    #[test]
+    fn blind_with_the_link_gone_stops_at_the_backstop() {
+        let i = intent(Some(36.0), Some(36.0), None);
+        assert_eq!(legs(i, WeightAuthority::Blind, true).volume, Some(114.0));
+        assert_eq!(
+            legs(i, WeightAuthority::Blind, true).blocked,
+            Some(Blocked::ScaleLost)
+        );
+        // A blip: no backstop and no note.
+        assert_eq!(legs(i, WeightAuthority::Blind, false).volume, None);
+        assert_eq!(legs(i, WeightAuthority::Blind, false).blocked, None);
+        // A limit over the backstop stands.
+        let high = intent(Some(36.0), Some(150.0), None);
+        assert_eq!(legs(high, WeightAuthority::Blind, true).volume, Some(150.0));
+    }
+
+    #[test]
+    fn an_unseen_session_with_no_limits_gets_the_backstop() {
+        let unseen = WeightAuthority::Refused(Blocked::BeganUnseen);
+        assert_eq!(
+            legs(intent(Some(36.0), None, None), unseen, false).volume,
+            Some(114.0)
+        );
+        assert_eq!(
+            legs(intent(Some(36.0), Some(40.0), None), unseen, false).volume,
+            Some(40.0)
+        );
+        assert_eq!(
+            legs(intent(Some(36.0), None, Some(30.0)), unseen, false).volume,
+            None
+        );
+        assert_eq!(legs(intent(None, None, None), unseen, false).volume, None);
+    }
+
+    #[test]
+    fn a_refusal_is_the_blocked_reason() {
+        let l = legs(
+            intent(Some(36.0), None, None),
+            WeightAuthority::Refused(Blocked::UntaredCup),
+            false,
+        );
+        assert_eq!(l.blocked, Some(Blocked::UntaredCup));
+        assert_eq!(l.targets(), None);
     }
 }

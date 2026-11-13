@@ -94,6 +94,10 @@ import coffee.crema.decent.DecentSync
 import coffee.crema.decent.UniffiDecentCore
 import coffee.crema.decent.decentShotRecordJson
 
+/** The question a user Disconnect asks while the machine pours (#320; web's
+ *  `DISCONNECT_WHILE_POURING`). */
+const val DISCONNECT_WHILE_POURING = "The machine is pouring. Disconnect, and Crema's stops won't run?"
+
 /**
  * Owns the [CremaBridge] and the [De1BleManager], parses the JSON `CoreOutput`
  * the bridge returns, and projects decoded [Event]s into [MainUiState].
@@ -122,6 +126,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * controller is built and before any output can apply. The writers reach
      * later fields ([ble], [scale]) only when invoked.
      */
+    /** Debug-build fault injection for the hardware run (DESIGN.md §7);
+     *  never drops anything in a shipped build ([coffee.crema.faults]). */
+    internal val faults: coffee.crema.faults.FaultInjector = coffee.crema.faults.installedFaults { appendLog(it) }
+
     private val lane: CoreLane = CoreLane(
         scope = viewModelScope,
         json = json,
@@ -130,16 +138,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ble.writeCharacteristic(target, bytes, urgent = urgent, ackUploadId = ackUploadId)
         },
         writeScale = { bytes -> scale.writeCommand(bytes) },
-        shotRunning = { _ui.value.shotInProgress },
+        readState = { ble.readState() },
         profileWriteFailed = { id -> bridge.profileWriteFailed(SystemClock.elapsedRealtime().toULong(), id) },
+        faults = faults,
     )
-
-    /** Where the dial's debounce wait runs ([MachineSessionController.dialDebounceContext]).
-     *  Test seam: a test dispatcher makes the 0.5 s virtual time. */
-    @androidx.annotation.VisibleForTesting
-    internal var dialDebounceContext: kotlin.coroutines.CoroutineContext
-        get() = session.dialDebounceContext
-        set(value) { session.dialDebounceContext = value }
 
     private val _ui = UiStore(MainUiState())
 
@@ -169,7 +171,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         profileJson = { library.profileJson(it) },
         persistLibrary = { library.persistLibrary() },
         maybeLoadLinkedProfile = { library.maybeLoadLinkedProfile(it) },
-        pushStopTargets = { state, desiredDelayMs -> session.pushStopTargets(state, desiredDelayMs) },
+        pushStopTargets = { state -> session.pushStopTargets(state) },
         refreshStopTargetProjection = { session.refreshStopTargetProjection() },
         pushStartSettings = { session.pushStartSettings() },
         configureIdleSleep = { presence.configureIdleSleep(it) },
@@ -830,6 +832,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onStatus = { line -> _ui.update { it.copy(status = line) } },
         onScaleIdentified = { scaleController.refreshScaleCapabilities(it) },
         timeline = coffee.crema.diag.ReconnectTimelines.recorder,
+        faults = faults,
     )
 
     /** The scale session's UI, settings and verbs ([ScaleController]). */
@@ -1986,6 +1989,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun connectFirmwareDe1() {
         val address = firmware.machineAddress
         if (address != null) connection.connectTo(address) else connection.connect()
+    }
+
+    /** A user Disconnect (#320): while the machine pours it asks first, on the
+     *  core's word that Crema's stops need the link; otherwise it disconnects. */
+    fun requestDisconnect() {
+        if (runCatching { bridge.disconnectNeedsConfirm() }.getOrDefault(false)) {
+            _ui.update { it.copy(disconnectConfirm = true) }
+        } else {
+            disconnect()
+        }
+    }
+
+    /** The answer to [requestDisconnect]'s question, [DISCONNECT_WHILE_POURING]. */
+    fun answerDisconnect(disconnect: Boolean) {
+        _ui.update { it.copy(disconnectConfirm = false) }
+        if (disconnect) disconnect()
     }
 
     /** Disconnect the DE1 — delegate of [ConnectionController.disconnect]. */

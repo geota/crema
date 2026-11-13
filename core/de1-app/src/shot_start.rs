@@ -55,7 +55,7 @@ use de1_protocol::MachineState;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-use crate::machine_requests::MAX_HOLD;
+use crate::machine_requests::{Initiator, MAX_HOLD};
 use crate::{CoreOutput, CremaCore, Event, ms_to_duration};
 
 /// How long a start waits for the DE1 to hold its profile.
@@ -168,6 +168,12 @@ pub enum StartEnd {
     Cancelled,
     /// The shot was started at the group head first.
     StoodDown,
+    /// Another flow began after Start was tapped (steam or hot water at the
+    /// group head, say): the start won't stop it.
+    OtherFlowStarted {
+        /// The flow that began.
+        state: MachineState,
+    },
 }
 
 impl StartEnd {
@@ -188,6 +194,9 @@ impl StartEnd {
             }
             Self::NotEntered => {
                 Some("The machine didn’t start the shot — start it on the machine".to_owned())
+            }
+            Self::OtherFlowStarted { .. } => {
+                Some("Shot not started — the machine started something else".to_owned())
             }
             Self::Started | Self::Cancelled | Self::StoodDown => None,
         }
@@ -269,6 +278,12 @@ pub(crate) struct StartSettings {
 #[derive(Debug, Clone)]
 struct Start {
     phase: Phase,
+    /// The flow running when Start was tapped, which the start may bounce
+    /// through Idle: the user asked. Cleared once the machine leaves it, so a
+    /// flow begun after the tap is never bounced.
+    from: Option<MachineState>,
+    /// The start's own flush began, so the ceiling may bounce it.
+    own_flush: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -324,7 +339,7 @@ impl CremaCore {
                 output: self.gate_read_only(out),
             };
         }
-        if self.stops_on_weight(profile, qc) && self.scale.is_none() {
+        if self.stops_on_weight(profile, qc) && !self.scale_link().is_fresh() {
             out.events.push(Event::StartNotice {
                 notice: StartCheck::NoScale.into(),
             });
@@ -341,8 +356,14 @@ impl CremaCore {
                 fingerprint: String::new(),
                 until: self.clock + START_UPLOAD_TIMEOUT,
             },
+            from: self
+                .last_state
+                .map(|info| info.state)
+                .filter(|s| s.is_flow_state()),
+            own_flush: false,
         });
-        let desired = self.set_desired_profile(Some(profile), qc, self.clock);
+        // A start doesn't wait for the dial's settle (`DESIGN.md` §3.10).
+        let desired = self.set_desired_profile_settling(Some(profile), qc, self.clock, false);
         out.events.extend(desired.events);
         out.commands.extend(desired.commands);
         let status = self.profile_sync_status();
@@ -350,6 +371,7 @@ impl CremaCore {
             self.start_after_sync(&mut out);
         } else if let Some(Start {
             phase: Phase::Syncing { fingerprint, .. },
+            ..
         }) = self.starter.start.as_mut()
         {
             *fingerprint = status.desired.unwrap_or_default();
@@ -431,7 +453,7 @@ impl CremaCore {
             })
         } else if self.starter.settings.require_scale
             && self.stops_on_weight(profile, qc)
-            && self.scale.is_none()
+            && !self.scale_link().is_fresh()
         {
             Some(StartRefusal::ScaleRequired)
         } else {
@@ -462,7 +484,7 @@ impl CremaCore {
                 },
                 out,
             );
-            self.issue_state_request(MachineState::HotWaterRinse, false, out);
+            self.issue_state_request(MachineState::HotWaterRinse, Initiator::Start, out);
         } else {
             self.request_start_espresso(out);
         }
@@ -475,7 +497,7 @@ impl CremaCore {
             },
             out,
         );
-        self.issue_state_request(MachineState::Espresso, false, out);
+        self.issue_state_request(MachineState::Espresso, Initiator::Start, out);
     }
 
     fn set_start_phase(&mut self, phase: Phase, out: &mut CoreOutput) {
@@ -540,6 +562,7 @@ impl CremaCore {
         let deadline = self.clock + PRESHOT_FLUSH_ENTRY_TIMEOUT;
         if let Some(Start {
             phase: Phase::Flushing { enter_by, .. },
+            ..
         }) = self.starter.start.as_mut()
         {
             *enter_by = deadline;
@@ -550,9 +573,12 @@ impl CremaCore {
     pub(crate) fn start_on_flush_started(&mut self) {
         if let Some(Start {
             phase: Phase::Flushing { started, .. },
+            own_flush,
+            ..
         }) = self.starter.start.as_mut()
         {
             *started = true;
+            *own_flush = true;
         }
     }
 
@@ -574,15 +600,50 @@ impl CremaCore {
         }
     }
 
+    /// Whether a pending start may bounce the `running` flow: its own flush,
+    /// or the flow that ran when Start was tapped.
+    pub(crate) fn start_may_bounce(&self, running: MachineState) -> bool {
+        self.starter.start.as_ref().is_some_and(|s| {
+            s.from == Some(running)
+                || (running == MachineState::HotWaterRinse
+                    && (s.own_flush || matches!(s.phase, Phase::Flushing { .. })))
+        })
+    }
+
+    /// The request gate refused the start's request: another flow runs.
+    pub(crate) fn start_refused_by_flow(&mut self, state: MachineState, out: &mut CoreOutput) {
+        self.end_start(StartEnd::OtherFlowStarted { state }, out);
+    }
+
     /// The machine entered `state` (from `prev`): Espresso ends a requested
     /// start, makes an earlier one stand down, and — when this core did not
-    /// start the shot — raises the group-head banner.
+    /// start the shot — raises the group-head banner. Any other flow begun
+    /// after the tap, bar the start's own flush, ends the start.
     pub(crate) fn start_on_state_entry(
         &mut self,
         prev: Option<MachineState>,
         state: MachineState,
         out: &mut CoreOutput,
     ) {
+        if let Some(start) = self.starter.start.as_mut()
+            && start.from.is_some_and(|from| from != state)
+        {
+            start.from = None;
+        }
+        // The start's own flush ending somewhere else is the flush's end to
+        // judge (`FlushLeftIdle`), not a new flow.
+        let own_flush_ended = prev == Some(MachineState::HotWaterRinse)
+            && self
+                .starter
+                .start
+                .as_ref()
+                .is_some_and(|s| matches!(s.phase, Phase::Flushing { started: true, .. }));
+        if state != MachineState::Espresso && state.is_flow_state() && prev != Some(state) {
+            if !own_flush_ended && !self.start_may_bounce(state) {
+                self.end_start(StartEnd::OtherFlowStarted { state }, out);
+            }
+            return;
+        }
         if state != MachineState::Espresso || prev == Some(MachineState::Espresso) {
             return;
         }
@@ -605,12 +666,7 @@ impl CremaCore {
     /// The checks a group-head start skipped that applied.
     fn group_head_banner(&self, out: &mut CoreOutput) {
         let mut notices = Vec::new();
-        let weight_target = self.shot_target_weight.or(self.profile_target_weight);
-        if self.stop_on_weight
-            && !self.weight_target_disabled
-            && weight_target.is_some()
-            && self.scale.is_none()
-        {
+        if self.weight_intent().is_some() && !self.scale_link().is_fresh() {
             notices.push(StartCheck::NoScale.into());
         }
         if self.starter.settings.pre_flush {
@@ -667,7 +723,7 @@ impl CremaCore {
             self.starter.purge_at = None;
             let idle = self.last_state.map(|info| info.state) == Some(MachineState::Idle);
             if idle && self.starter.start.is_none() && !self.request_held() {
-                self.issue_state_request(MachineState::HotWaterRinse, false, out);
+                self.issue_state_request(MachineState::HotWaterRinse, Initiator::Core, out);
             }
         }
     }
@@ -722,16 +778,7 @@ mod tests {
     const STEAM: [u8; 2] = [5, 7];
 
     fn state_writes(out: &CoreOutput) -> Vec<u8> {
-        out.commands
-            .iter()
-            .filter_map(|c| match c {
-                Command::WriteCharacteristic {
-                    target: WriteTarget::De1RequestedState,
-                    data,
-                } => Some(data[0]),
-                _ => None,
-            })
-            .collect()
+        out.state_requests()
     }
 
     fn phases(out: &CoreOutput) -> Vec<StartPhase> {
@@ -855,7 +902,7 @@ mod tests {
     fn f16_5_a_held_profile_skips_the_wait_but_not_the_guard() {
         let mut core = connected(false);
         let p = profile(36.0);
-        let first = core.set_desired_profile(
+        let first = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_500),
@@ -931,8 +978,9 @@ mod tests {
         );
     }
 
-    /// #318: the start's flush is lost and steam starts at the group head. The
-    /// start ends 10 s after the write and writes nothing, so steam carries on.
+    /// #318: the start's flush is lost and steam starts at the group head.
+    /// Steam is a flow begun after the tap, so the start ends at once and
+    /// writes nothing, and steam carries on.
     #[test]
     fn a_flush_that_never_began_ends_the_start_without_a_write() {
         let mut core = connected(true);
@@ -943,11 +991,13 @@ mod tests {
             state_writes(&flush),
             vec![requested_state(MachineState::HotWaterRinse)]
         );
-        let _ = report(&mut core, STEAM, 4_000);
-        // 10 s from the write, which waited out the guard until 2 600.
-        assert!(ends(&core.on_tick(12_599)).is_empty());
-        let out = core.on_tick(12_600);
-        assert_eq!(ends(&out), vec![StartEnd::FlushNotEntered]);
+        let out = report(&mut core, STEAM, 4_000);
+        assert_eq!(
+            ends(&out),
+            vec![StartEnd::OtherFlowStarted {
+                state: MachineState::Steam
+            }]
+        );
         assert!(state_writes(&out).is_empty());
         assert!(!core.shot_starting());
         assert!(state_writes(&core.on_tick(40_000)).is_empty());
@@ -960,11 +1010,27 @@ mod tests {
         let mut core = connected(true);
         let r = start(&mut core, &profile(36.0), 2_000);
         let _ = ack(&mut core, &r.output, 2_100);
-        let _ = report(&mut core, STEAM, 2_300);
+        let out = report(&mut core, STEAM, 2_300);
+        assert_eq!(
+            ends(&out),
+            vec![StartEnd::OtherFlowStarted {
+                state: MachineState::Steam
+            }]
+        );
         assert!(state_writes(&core.on_tick(2_600)).is_empty());
-        // 3 s of hold and 10 s of entry from the flush stage (2 100).
-        assert!(ends(&core.on_tick(15_099)).is_empty());
-        let out = core.on_tick(15_100);
+        assert!(state_writes(&core.on_tick(15_100)).is_empty());
+    }
+
+    /// A flush that never began with nothing else happening still ends 10 s
+    /// after its write.
+    #[test]
+    fn a_lost_flush_with_the_machine_idle_ends_after_its_entry_timeout() {
+        let mut core = connected(true);
+        let r = start(&mut core, &profile(36.0), 2_000);
+        let _ = ack(&mut core, &r.output, 2_100);
+        let _ = core.on_tick(2_600);
+        assert!(ends(&core.on_tick(12_599)).is_empty());
+        let out = core.on_tick(12_600);
         assert_eq!(ends(&out), vec![StartEnd::FlushNotEntered]);
         assert!(state_writes(&out).is_empty());
     }
@@ -1087,7 +1153,7 @@ mod tests {
     fn f16_5_espresso_not_entered_in_5_s_fails() {
         let mut core = connected(false);
         let p = profile(36.0);
-        let first = core.set_desired_profile(
+        let first = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_100),
@@ -1220,7 +1286,7 @@ mod tests {
     fn a_start_drops_a_held_request() {
         let mut core = connected(false);
         let p = profile(36.0);
-        let first = core.set_desired_profile(
+        let first = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_500),
@@ -1250,7 +1316,7 @@ mod tests {
         let p = profile(36.0);
         // The dial's upload is in flight when Coffee is tapped with another
         // brew temperature: the start waits for its own profile.
-        let _ = core.set_desired_profile(
+        let _ = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_500),
@@ -1276,9 +1342,9 @@ mod tests {
         // No scale for a weight stop, the pre-flush, a profile upload pending.
         let mut core = connected(true);
         core.set_stop_on_weight(true);
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         let p = profile(36.0);
-        let _ = core.set_desired_profile(
+        let _ = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_500),
@@ -1295,7 +1361,7 @@ mod tests {
         assert!(out.commands.is_empty(), "it never writes");
         // Nothing applies: no banner.
         let mut core = connected(false);
-        let first = core.set_desired_profile(
+        let first = core.set_desired_profile_settled(
             Some(&p),
             &BrewOverrides::default(),
             Duration::from_millis(1_500),
@@ -1309,7 +1375,7 @@ mod tests {
     fn f16_7_an_app_start_or_a_mirror_shows_no_banner() {
         let mut core = connected(true);
         core.set_stop_on_weight(true);
-        core.set_profile_target_weight(Some(36.0));
+        core.set_test_profile_yield(Some(36.0));
         let r = start(&mut core, &profile(36.0), 2_000);
         let _ = ack(&mut core, &r.output, 2_100);
         let _ = core.on_tick(2_600);

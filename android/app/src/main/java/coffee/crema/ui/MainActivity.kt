@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -81,6 +82,7 @@ import coffee.crema.ui.phone.TabletDevicesSheet
 import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.BrewScreen
+import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.components.SaverOverlay
 import coffee.crema.ui.components.RefusedStoresBanner
 import coffee.crema.ui.components.RemoteStatusChip
@@ -255,7 +257,7 @@ class MainActivity : ComponentActivity() {
                 val onRailConnect: (String) -> Unit = { which ->
                     when (which) {
                         "machine" ->
-                            if (machineConnected) viewModel.disconnect()
+                            if (machineConnected) viewModel.requestDisconnect()
                             else withBlePermission(viewModel::connect)
                         "scale" ->
                             if (scaleConnected) viewModel.disconnectScale()
@@ -341,9 +343,20 @@ class MainActivity : ComponentActivity() {
                     FirmwareLinkControls(
                         state = ui.bleState,
                         onConnect = { withBlePermission(viewModel::connectFirmwareDe1) },
-                        onDisconnect = viewModel::disconnect,
+                        onDisconnect = viewModel::requestDisconnect,
                     ),
                 )
+                // A user Disconnect while the machine pours asks first (#320).
+                if (ui.disconnectConfirm) {
+                    CremaConfirmDialog(
+                        title = "Disconnect?",
+                        body = DISCONNECT_WHILE_POURING,
+                        confirmLabel = "Disconnect",
+                        danger = true,
+                        onConfirm = { viewModel.answerDisconnect(true) },
+                        onDismiss = { viewModel.answerDisconnect(false) },
+                    )
+                }
                 // Re-usable debug-panel slot (Phase-0 readout) — hosted at the
                 // `debug` route on both form factors.
                 val debugSlot: @Composable () -> Unit = {
@@ -351,7 +364,7 @@ class MainActivity : ComponentActivity() {
                         MainScreen(
                             viewModel = viewModel,
                             onConnect = { withBlePermission(viewModel::connect) },
-                            onDisconnect = viewModel::disconnect,
+                            onDisconnect = viewModel::requestDisconnect,
                             onConnectScale = { withBlePermission(viewModel::connectScale) },
                             onDisconnectScale = viewModel::disconnectScale,
                             onTareScale = viewModel::tareScale,
@@ -621,6 +634,11 @@ class MainActivity : ComponentActivity() {
                         onKeepMine = { viewModel.resolveAdoption(useHub = false) },
                     )
                 }
+                // Debug builds: while a hardware-test fault is armed, say so
+                // across the app (DESIGN.md §7). A shipped build draws nothing.
+                Box(Modifier.align(Alignment.TopCenter).statusBarsPadding()) {
+                    coffee.crema.faults.FaultInjectionBanner(viewModel.faults)
+                }
                 // Fullscreen expanded chart — drawn last, over everything.
                 fullscreenChart?.let { fc ->
                     ChartExpandOverlay(chart = fc, onClose = { fullscreenChart = null })
@@ -759,6 +777,10 @@ private fun MainScreen(
             Button(onClick = viewModel::startEspresso, enabled = de1Ready) { Text("Espresso") }
             OutlinedButton(onClick = viewModel::stopShot, enabled = de1Ready) { Text("Stop") }
         }
+
+        // Debug builds: the hardware test list's fault hooks (DESIGN.md §7).
+        // A shipped build draws nothing here.
+        coffee.crema.faults.FaultInjectionPanel(viewModel.faults)
 
         LiveReadouts(viewModel.live) { live ->
             ScaleSection(

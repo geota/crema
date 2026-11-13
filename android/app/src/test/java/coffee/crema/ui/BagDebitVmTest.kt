@@ -8,6 +8,7 @@ import coffee.crema.beans.newBean
 import coffee.crema.core.ShotBean
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
+import coffee.crema.history.methodRatioLabel
 import coffee.crema.visualizer.storedShotFromBackupJson
 import coffee.crema.visualizer.wireShotJson
 import kotlinx.coroutines.runBlocking
@@ -94,10 +95,10 @@ class BagDebitVmTest {
 
     private fun MainViewModel.shot(id: String) = VmHarness.ownState(this).history.single { it.id == id }
 
-    private fun MainViewModel.logBrew(beanId: String, doseG: Float): StoredShot = addManualBrew(
+    private fun MainViewModel.logBrew(beanId: String, doseG: Float, yieldG: Float? = 36f): StoredShot = addManualBrew(
         LibraryController.ManualBrewInput(
             method = "espresso", completedAtMs = 1_700_000_000_000, beanId = beanId, doseG = doseG, waterG = null,
-            yieldG = 36f, grindSetting = null, brewTempC = null, durationMs = 28_000, rating = null, notes = null, nextPlan = null,
+            yieldG = yieldG, grindSetting = null, brewTempC = null, durationMs = 28_000, rating = null, notes = null, nextPlan = null,
         ),
     )
 
@@ -105,6 +106,16 @@ class BagDebitVmTest {
     fun `a brew records the dose it took`() {
         val vm = vmWith(listOf(bag("a", 100f, 250f)))
         assertEquals(18f, vm.logBrew("a", 18f).bagDebitG)
+    }
+
+    @Test
+    fun `a brew with no yield still takes its dose and has no ratio`() {
+        val vm = vmWith(listOf(bag("a", 100f, 250f)))
+        val brew = vm.logBrew("a", 18f, yieldG = null)
+        assertEquals(18f, brew.bagDebitG)
+        assertEquals(82f, vm.remaining("a"))
+        assertEquals(null, brew.yieldG)
+        assertEquals(null, brew.methodRatioLabel())
     }
 
     @Test

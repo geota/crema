@@ -165,6 +165,22 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The weight stop follows the yield on screen** — dialling the yield, then
+  tapping Reset or picking another profile, used to leave the web's
+  stop-at-weight on the old dial until a reload. The stop now comes from the
+  profile and the Quick Controls yield as they stand, and so does the hot-water
+  ratio. A profile with no yield of its own now stops at a dialled yield on both
+  apps; the web used to turn the yield dot off for it. The dot now turns back on
+  for each new profile, and on a remote, the hub's profile sets the stop
+  targets shown. Both apps also stop waking the core in a tight loop while a
+  profile upload runs or waits for the machine. Android and web.
+- **A Disconnect or scale drop as a shot ends keeps the shot** — disconnecting
+  the DE1 in the few seconds after a shot, while Crema waits for the last drips,
+  used to lose the shot, and a scale dropping then saved it with no yield. The
+  shot is now saved with the weight seen so far. A Disconnect while the machine
+  is pouring asks first: "The machine is pouring. Disconnect, and Crema's stops
+  won't run?". On the web, a Disconnect mid-shot no longer leaves that shot's
+  bean behind to bill the next shot's bag. Android and web.
 - **A remote's scale no longer drops out over and over** — a remote device
   judged the hub's Bluetooth readings against its own clock, but they carried
   the hub's. When the remote had been up a few seconds longer than the hub, its

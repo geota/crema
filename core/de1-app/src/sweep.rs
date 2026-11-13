@@ -287,7 +287,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Command::WriteCharacteristic { target, .. } => Some(*target),
-                Command::WriteScale { .. } => None,
+                _ => None,
             })
             .collect()
     }
@@ -439,7 +439,12 @@ mod tests {
     fn sweep_after_drop_writes_current_packet() {
         let mut core = idle_core();
         core.connect_scale("BOOKOO_SC", &[]);
-        core.scale_reading_seen = true; // it has reported a weight
+        // It has reported a weight.
+        core.on_notification(
+            crate::Source::ScaleWeight,
+            &crate::tests::bookoo_packet(1_000),
+            100,
+        );
         let first = core.connect_sweep(&snapshot(), 100);
         assert_eq!(packets(&first)[0].hot_water_volume_ml, 250.0);
         let _ = core.de1_link_lost();
@@ -490,7 +495,7 @@ mod tests {
     #[test]
     fn sweep_writes_hot_water_target() {
         let mut core = idle_core();
-        core.set_profile_target_weight(Some(50.0));
+        core.set_test_profile_yield(Some(50.0));
         let ratio = de1_domain::HotWaterDose::default();
         let w = packets(&core.connect_sweep(&with_dose(ratio), 100));
         assert_eq!(
@@ -516,7 +521,7 @@ mod tests {
         let mut core = CremaCore::new_with_model(1);
         let _ = core.on_notification(Source::De1State, &[2, 0], 0);
         let profile = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
-        let _ = core.set_desired_profile(
+        let _ = core.set_desired_profile_settled(
             Some(&profile),
             &de1_domain::BrewOverrides::default(),
             std::time::Duration::ZERO,
@@ -555,7 +560,7 @@ mod tests {
         let mut core = CremaCore::new_with_model(1);
         let _ = core.on_notification(Source::De1State, &[2, 0], 0);
         let profile = de1_domain::blank_profile(&de1_domain::BrewDefaults::default());
-        let _ = core.set_desired_profile(
+        let _ = core.set_desired_profile_settled(
             Some(&profile),
             &de1_domain::BrewOverrides::default(),
             std::time::Duration::ZERO,

@@ -140,6 +140,9 @@ export interface De1ManagerCallbacks {
  * Owns the DE1 connection and its notification observation. One instance per
  * app; `connect()` / `disconnect()` are driven by the orchestrator.
  */
+/** The requested-state byte `Command::Stop` writes: Idle. */
+export const STOP_BYTE = 0x02;
+
 export class De1Manager {
 	private device: De1Transport | null = null;
 
@@ -538,6 +541,69 @@ export class De1Manager {
 		}
 	}
 
+	/**
+	 * The core's `Command::Stop`: Idle (`0x02`, the byte the core's own Idle
+	 * request carries) to the requested-state characteristic, ahead of every
+	 * queued write. `guard` is checked when it starts, so a `CancelStop`
+	 * drops it until then. Resolves `true` only once written; never throws.
+	 */
+	async writeStop(guard: () => boolean): Promise<boolean> {
+		if (this.firmwareExclusive) {
+			this.callbacks.onStatus('DE1 stop skipped: firmware update in progress');
+			return false;
+		}
+		const uuid = uuidForWriteTarget(WriteTarget.De1RequestedState);
+		const device = this.device;
+		if (uuid === null || device === null) {
+			this.callbacks.onStatus('DE1 stop skipped: not connected');
+			return false;
+		}
+		const data = new Uint8Array([STOP_BYTE]);
+		try {
+			if (device.writeUrgent) {
+				return await device.writeUrgent(De1Uuids.SERVICE, uuid, data, guard);
+			}
+			if (!guard()) return false;
+			await device.write(De1Uuids.SERVICE, uuid, data);
+			return true;
+		} catch (error) {
+			this.callbacks.onStatus(`DE1 stop write failed: ${describeError(error)}`);
+			return false;
+		}
+	}
+
+	/**
+	 * The core's `Command::ReadState`: read StateInfo and feed it back as a
+	 * state report, so a stop not honoured heals a report that was lost.
+	 * Resolves `false` when there's no link or the read fails; never throws.
+	 */
+	async readState(): Promise<boolean> {
+		const device = this.device;
+		if (device === null || this.firmwareExclusive) return false;
+		try {
+			const data = await device.readCharacteristic(De1Uuids.SERVICE, De1Uuids.STATE_INFO);
+			if (this.device !== device) return false;
+			this.feedState(data);
+			return true;
+		} catch (error) {
+			this.callbacks.onStatus(`DE1 state read failed: ${describeError(error)}`);
+			return false;
+		}
+	}
+
+	/** Feed a StateInfo read to the core, as its notification would be. */
+	private feedState(data: Uint8Array): void {
+		const atMs = performance.now();
+		this.lastInboundAtMs = atMs;
+		void this.core
+			.onNotification('De1State', data, atMs)
+			.then(this.callbacks.onCoreOutput)
+			.catch((error: unknown) => {
+				if (isCoreStopped(error)) return;
+				this.callbacks.onStatus(`DE1 state read processing failed: ${describeError(error)}`);
+			});
+	}
+
 	// ── Firmware flash I/O ──────────────────────────────────────────────
 	// The flash driver (`#lib/firmware/flash-driver`) performs the core's
 	// `FlashAction`s through these. Unlike `writeCharacteristic` they throw,
@@ -719,7 +785,13 @@ export class De1Manager {
 		const liveness = new De1Liveness({
 			now: () => performance.now(),
 			lastInboundAtMs: () => this.lastInboundAtMs,
-			probe: () => device.readCharacteristic(De1Uuids.SERVICE, De1Uuids.STATE_INFO),
+			// The probe's reply is a state report like any other: it heals one
+			// lost while a stop is owed.
+			probe: async () => {
+				const data = await device.readCharacteristic(De1Uuids.SERVICE, De1Uuids.STATE_INFO);
+				this.feedState(data);
+				return data;
+			},
 			paused: () => this.firmwareExclusive || device.connectionState !== 'connected',
 			onProbeFailed: (failures, quietMs) => {
 				if (this.device !== device) return;

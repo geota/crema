@@ -528,6 +528,8 @@ data class MainUiState(
     val mirroredBagEmpty: Boolean = false,
     /** A debit just emptied a bag: the prompt after the shot (#302). */
     val bagEmptyPrompt: coffee.crema.beans.BagEmptyPrompt? = null,
+    /** A user Disconnect while the machine pours waits on this question (#320). */
+    val disconnectConfirm: Boolean = false,
     /** Crema instances discovered on the LAN (NSD) — the device picker's list. */
     val peers: List<Peer> = emptyList(),
     /**

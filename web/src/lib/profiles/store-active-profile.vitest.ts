@@ -15,9 +15,6 @@ import type { Profile } from './core-types';
 /** Every core call the store makes, recorded; nothing ever uploads here. */
 const core = {
 	setActiveProfile: vi.fn(async (_json: string | undefined) => {}),
-	setWeightTargetDisabled: vi.fn(async (_v: boolean) => {}),
-	setProfileTargetWeight: vi.fn(async (_v: number | undefined) => {}),
-	setProfileVolumeLimit: vi.fn(async (_v: number | undefined) => {}),
 	uploadCremaProfile: vi.fn(async () => ({ output: { commands: [], events: [] }, fingerprint: null })),
 	stopTargetsProjection: vi.fn(async () => ({
 		armed: false,
@@ -25,7 +22,8 @@ const core = {
 		volume: null,
 		maxTime: null,
 		weightConfigured: null,
-		weightBlocked: null
+		weightBlocked: null,
+		weightBlockedNote: null
 	}))
 };
 

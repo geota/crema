@@ -94,7 +94,15 @@ fn no_notification_panics_the_core() {
         for _ in 0..ROUNDS {
             let mut core = CremaCore::new();
             let _ = core.connect_scale(name, &[]);
-            core.set_profile_target_weight(Some(36.0));
+            let profile = de1_domain::CremaProfile {
+                yield_out: 36.0,
+                ..de1_domain::blank_profile(&de1_domain::BrewDefaults::default())
+            };
+            let _ = core.set_desired_profile(
+                Some(&profile),
+                &de1_domain::BrewOverrides::default(),
+                std::time::Duration::ZERO,
+            );
             let mut now_ms = 0u64;
             for _ in 0..NOTIFICATIONS {
                 now_ms += r.below(300) as u64;

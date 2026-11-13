@@ -28,7 +28,8 @@
 //! - [`flow`] — [`FlowEstimator`], robust weight/mass-flow estimation for SAW.
 //! - [`filter`] — [`median`](filter::median) computation, for smoothing a
 //!   vibration-noisy signal.
-//! - [`session`] — [`SessionTimer`], the timing core shared by the monitors.
+//! - [`session`] — [`SessionTimer`], the timing core shared by the monitors,
+//!   and [`Session`](session::Session), what's known about the running flow.
 //! - [`bean`] — pure roast-classification helpers ([`roast_band`],
 //!   [`days_off_roast`], [`roast_freshness`]) plus the bean library
 //!   types ([`Bean`], [`Roaster`], [`ShotBean`], [`BeanOrigin`],
@@ -106,6 +107,7 @@ pub mod profile_roast;
 pub mod pull_run;
 pub mod replay;
 pub mod saw_learning;
+pub mod scale_trust;
 pub mod session;
 pub mod settings_import;
 pub mod shot;
@@ -347,7 +349,7 @@ pub use stolen_serials::{
 };
 pub use stop::{
     AutoStop, STOP_WEIGHT_BEFORE, StopCapture, StopConfig, StopReason, StopTargets,
-    sav_counts_volume, volume_stop_arms,
+    sav_counts_volume,
 };
 pub use sync_failure::{
     AccountBlockReason, RETRY_AFTER_CAP_MS, SyncFailure, SyncOperation, SyncService,
@@ -402,4 +404,4 @@ pub use visualizer_wire::{
 };
 pub use volume::{LineFreqDetector, VolumeIntegrator};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};
-pub use weight_gate::WeightSpikeGate;
+pub use weight_gate::{WeightSpikeGate, WeightVerdict};

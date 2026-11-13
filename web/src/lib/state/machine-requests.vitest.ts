@@ -73,7 +73,8 @@ describe('state requests wait out the profile-download guard (F16a, web)', () =>
 	it('a request right after an upload goes out 500 ms later, on the wake tick', async () => {
 		const { app, requests, profile, internals } = await setup();
 		await app.setDesiredProfile(profile);
-		await vi.advanceTimersByTimeAsync(0); // the upload's acks land
+		// The core's 0.5 s settle, then the upload's acks land.
+		await vi.advanceTimersByTimeAsync(500);
 		requests.length = 0;
 		await app.requestMachineState('Steam' as never);
 		expect(requests, 'held inside the guard').toEqual([]);
@@ -87,7 +88,7 @@ describe('state requests wait out the profile-download guard (F16a, web)', () =>
 	it('Stop is never held', async () => {
 		const { app, requests, profile } = await setup();
 		await app.setDesiredProfile(profile);
-		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(500); // the core's settle, then the upload
 		requests.length = 0;
 		await app.requestMachineState('Idle' as never);
 		expect(requests).toEqual([STOP]);
@@ -95,9 +96,10 @@ describe('state requests wait out the profile-download guard (F16a, web)', () =>
 
 	it('the wake tick is cancelled when the link goes or the tab is hidden', async () => {
 		const { app, core, internals, profile } = await setup();
-		const ticks = vi.spyOn(core, 'onTick');
 		await app.setDesiredProfile(profile);
-		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(500); // the core's settle, then the upload
+		// Counted from here: the settle's own tick is behind us.
+		const ticks = vi.spyOn(core, 'onTick');
 		await app.requestMachineState('Steam' as never);
 		expect(internals.wake.pending).toBe(true);
 		internals.de1.callbacks.onState('disconnected');
@@ -133,6 +135,8 @@ describe('the user hears about a held, dropped or refused request (F16a validati
 			}
 		);
 		await app.setDesiredProfile(profile);
+		// The core's 0.5 s settle: then the upload starts, and its acks hang.
+		await vi.advanceTimersByTimeAsync(500);
 		requests.length = 0;
 		await app.requestMachineState('Steam' as never);
 		expect(info).toHaveBeenCalledWith('Waiting for the profile to load…', 2500);
