@@ -1,5 +1,6 @@
 package coffee.crema.ble.proxy
 
+import android.os.SystemClock
 import android.util.Log
 import coffee.crema.ble.BleTransport
 import kotlinx.coroutines.CancellationException
@@ -57,8 +58,9 @@ sealed interface ControlReply {
  *   buffered before the manager subscribes is not lost, and the Rust core sees
  *   every sample. (Unbounded locally mirrors `NordicBleTransport`'s buffer; the
  *   primary, not the secondary, sheds load by dropping a lagging client.)
- * - **`atMs` is forwarded verbatim** (the primary's `elapsedRealtime`), never
- *   re-stamped, so a mirrored stream decodes identically to a replayed capture.
+ * - **`atMs` is rebased onto this device's clock** ([MirrorClock], #319): the
+ *   primary's spacing is kept, but its uptime is not, because this device's
+ *   core judges staleness against its own `elapsedRealtime`.
  * - **`read` round-trips**; **`write` is a read-only-mirror no-op** in M1 — the
  *   relay rejects it (`not-authoritative`) and this swallows the rejection so the
  *   unmodified core/manager write path is undisturbed and never throws. (M2's
@@ -99,7 +101,12 @@ class ProxyTransport(
      *  notice (issue 11, loose multi-controller). Display-only; the VM surfaces it
      *  as a snackbar. Default no-op. */
     private val onEvent: (text: String) -> Unit = {},
+    /** This device's clock, the one its core ticks on. */
+    now: () -> Long = { SystemClock.elapsedRealtime() },
 ) : BleTransport {
+
+    /** Moves the hub's notification times onto [now]'s clock (#319). */
+    private val clock = MirrorClock(now)
 
     /** Devices the primary holds, from [Frame.Welcome] / [Frame.Roster]; drives [scan]. */
     private val roster = MutableStateFlow<List<DeviceInfo>>(emptyList())
@@ -205,6 +212,8 @@ class ProxyTransport(
             is Frame.Welcome -> {
                 val state = handshake.value
                 if (state !is Handshake.Pending) return
+                // A new session: the hub may have restarted, its clock with it.
+                clock.reset()
                 applyRoster(frame.roster)
                 // Only "control" grants control; anything else is view-only (R6).
                 onWelcome(if (frame.grantsControl) SCOPE_CONTROL else SCOPE_MIRROR, frame.primaryName)
@@ -224,7 +233,7 @@ class ProxyTransport(
             is Frame.WriteErr -> pending.remove(frame.id)?.reply?.complete(frame)
             is Frame.ControlOk -> pending.remove(frame.id)?.reply?.complete(frame)
             is Frame.ControlErr -> pending.remove(frame.id)?.reply?.complete(frame)
-            is Frame.Notify -> channelFor(frame.address, frame.char).trySend(frame)
+            is Frame.Notify -> channelFor(frame.address, frame.char).trySend(frame.copy(t = clock.rebase(frame.t)))
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
             is Frame.Config -> onConfig(frame.json)
             is Frame.Event -> onEvent(frame.text)

@@ -159,6 +159,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A remote's scale no longer drops out over and over** — a remote device
+  judged the hub's Bluetooth readings against its own clock, but they carried
+  the hub's. When the remote had been up a few seconds longer than the hub, its
+  scale looked stale on every tick and was detached. Readings now move onto the
+  remote's clock as they arrive, keeping their spacing. Android (#319).
 - **Running a cut-off restore again keeps its shots' bag debits.** Beans the
   first run added used to count as already on this device, so the second run
   set those shots' debits to zero. Crema now knows the same backup by its date,
