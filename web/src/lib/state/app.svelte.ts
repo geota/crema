@@ -1293,7 +1293,9 @@ export class CremaApp {
 	 * stops need the link (#320). Resolves `false` when the user keeps it.
 	 */
 	async disconnectDe1(): Promise<boolean> {
-		const pouring = (await this.core.disconnectNeedsConfirm()) === true;
+		// A core that can't answer (stopped after repeated panics) runs no
+		// stops: never let it block the teardown (REVIEW-399 M1).
+		const pouring = (await this.core.disconnectNeedsConfirm().catch(() => false)) === true;
 		if (pouring && !(await confirmDialog(DISCONNECT_WHILE_POURING))) return false;
 		this.#launch.cancel('de1');
 		markUserDisconnect('de1');

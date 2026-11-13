@@ -3493,8 +3493,9 @@ impl CremaCore {
         // A shot in its drip settle is complete: finalize it with the weight
         // seen so far, so a Disconnect in the 3 s after a shot keeps it
         // (#320). Its stored shot survives the rebuild for the shell's
-        // `take_stored_shot`.
-        if let Some(settle) = self.post_shot_settle.take() {
+        // `take_stored_shot`. The drip was cut short, so it trains nothing.
+        if let Some(mut settle) = self.post_shot_settle.take() {
+            settle.learn_drip = false;
             let now = self.clock;
             self.finalize_shot_completed(settle, now, &mut out);
         }

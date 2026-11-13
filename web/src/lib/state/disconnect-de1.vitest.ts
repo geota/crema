@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getActiveDialog, resolveActive } from '#lib/components/shared/confirm-dialog.svelte.js';
+import { CoreStoppedError } from '#lib/core/stopped-guard.js';
 import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
 
 /**
@@ -16,7 +17,7 @@ const LIVE_SHOT: ActiveShotData = {
 	source: 'live'
 };
 
-async function makeApp(pouring: boolean) {
+async function makeApp(pouring: boolean | (() => Promise<boolean>)) {
 	const { CremaApp } = await import('#lib/state/app.svelte.js');
 	const { De1Manager } = await import('#lib/ble/index.js');
 	const de1Disconnect = vi.spyOn(De1Manager.prototype, 'disconnect').mockResolvedValue();
@@ -25,7 +26,11 @@ async function makeApp(pouring: boolean) {
 		{},
 		{
 			get: (_target, key) =>
-				key === 'disconnectNeedsConfirm' ? async () => pouring : async () => ({})
+				key === 'disconnectNeedsConfirm'
+					? typeof pouring === 'function'
+						? pouring
+						: async () => pouring
+					: async () => ({})
 		}
 	);
 	const app = new CremaApp(core as never, null);
@@ -60,6 +65,15 @@ describe('disconnectDe1', () => {
 		expect(await done).toBe(false);
 		expect(de1Disconnect).not.toHaveBeenCalled();
 		expect(getActiveShotStore().current).toEqual(LIVE_SHOT);
+	});
+
+	it('a stopped core never blocks the Disconnect (REVIEW-399 M1)', async () => {
+		const { app, de1Disconnect } = await makeApp(async () => {
+			throw new CoreStoppedError();
+		});
+		expect(await app.disconnectDe1()).toBe(true);
+		expect(getActiveDialog()).toBeNull();
+		expect(de1Disconnect).toHaveBeenCalledOnce();
 	});
 
 	it('disconnects once the user confirms', async () => {
