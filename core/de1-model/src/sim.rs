@@ -31,6 +31,10 @@ pub struct De1Params {
     /// A newer firmware names espresso's flowing substates with a byte this
     /// app doesn't know, so the core hears Heating, then `Unknown`.
     pub unknown_pour: bool,
+    /// How long espresso heats before it stabilises, ms. A real preheat can
+    /// run for seconds, long enough for a cup or a spoon to land after the
+    /// tare and for the late-cup re-tare to fire (#389).
+    pub heating_ms: u64,
 }
 
 impl Default for De1Params {
@@ -41,6 +45,7 @@ impl Default for De1Params {
             idle_ignored: 0,
             two_tap_steam: false,
             unknown_pour: false,
+            heating_ms: 1_000,
         }
     }
 }
@@ -167,8 +172,10 @@ impl SimDe1 {
         self.winding_down = false;
         self.script = match state {
             MachineState::Espresso => {
-                let mut s =
-                    VecDeque::from([(SubState::Heating, 1_000), (SubState::Stabilising, 500)]);
+                let mut s = VecDeque::from([
+                    (SubState::Heating, self.params.heating_ms),
+                    (SubState::Stabilising, 500),
+                ]);
                 let pour = FRAME_MS * u64::from(FRAMES);
                 if self.params.preinfusion {
                     s.push_back((SubState::Preinfusion, 5_000));
@@ -413,10 +420,11 @@ pub struct SimScale {
     /// user's own zero, with auto-tare off). A re-zero or a load arriving later
     /// doesn't move it.
     tared_cup_g: f32,
-    /// The load on the scale when that zero was set, grams.
+    /// The load on the scale when its zero was last set, grams.
     zeroed_load_g: f32,
-    /// It zeroed itself since the world last asked.
-    rezeroed: bool,
+    /// It zeroed itself since the world last asked: how far the load had
+    /// moved from the one the old zero was set with, grams.
+    rezeroed: Option<f32>,
     tare_at: Option<u64>,
     /// Write-to-effect tare latency, ms.
     pub tare_latency_ms: u64,
@@ -432,7 +440,7 @@ impl SimScale {
             zero_g: 0.0,
             tared_cup_g: 0.0,
             zeroed_load_g: 0.0,
-            rezeroed: false,
+            rezeroed: None,
             tare_at: None,
             tare_latency_ms,
         }
@@ -482,7 +490,7 @@ impl SimScale {
             ScaleMode::Flap { period_ms } => (now % period_ms >= period_ms / 2).then_some(net),
             ScaleMode::Rezero => {
                 self.zero_g = gross;
-                self.rezeroed = true;
+                self.rezeroed(gross - cup_g);
                 self.mode = ScaleMode::Healthy;
                 Some(0.0)
             }
@@ -492,7 +500,7 @@ impl SimScale {
                     None
                 } else {
                     self.zero_g = gross;
-                    self.rezeroed = true;
+                    self.rezeroed(gross - cup_g);
                     self.mode = ScaleMode::Healthy;
                     Some(0.0)
                 }
@@ -507,21 +515,23 @@ impl SimScale {
         cup_g - self.tared_cup_g
     }
 
-    /// Whether it zeroed itself since the last call.
-    pub fn take_rezero(&mut self) -> bool {
-        std::mem::take(&mut self.rezeroed)
+    /// It zeroed itself with `load_g` on it besides the cup.
+    fn rezeroed(&mut self, load_g: f32) {
+        self.rezeroed = Some((load_g - self.zeroed_load_g).abs());
+        self.zeroed_load_g = load_g;
+    }
+
+    /// Whether it zeroed itself since the last call: how far the load had
+    /// moved from the one the old zero was set with, grams. A zero that
+    /// carried a load since lifted, or missed one since set down, leaves a
+    /// virtual zero the core latched for it wrong once the scale re-zeroes.
+    pub fn take_rezero(&mut self) -> Option<f32> {
+        self.rezeroed.take()
     }
 
     /// A re-zero with no flow running is the user's zero, as a tare is.
     pub fn zero_is_users(&mut self, cup_g: f32) {
         self.tared_cup_g = cup_g;
-    }
-
-    /// How far the load on the scale has moved from the one its zero was set
-    /// with, grams: something landed or lifted since the last tare.
-    #[must_use]
-    pub fn load_moved_since_zero(&self, now: u64) -> f32 {
-        (self.load_now(now) - self.zeroed_load_g).abs()
     }
 
     /// What's on the scale besides the cup at `now`, grams, without moving

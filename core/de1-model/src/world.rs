@@ -15,9 +15,6 @@ const STEP_MS: u64 = 100;
 const SAMPLE_MS: u64 = 200;
 /// The shells' tick.
 const TICK_MS: u64 = 1_000;
-/// The untared-cup guard's threshold, grams: a heavy first reading in the
-/// first 3 s of flow is the guard's to catch.
-const UNTARED_GUARD_G: f32 = 50.0;
 /// I13's tolerance to start with (`DESIGN.md` §7).
 const WEIGHT_TOLERANCE_G: f32 = 6.0;
 /// The reply to the machine-model read, from the capture: a DE1 model 2.
@@ -242,18 +239,17 @@ pub struct World {
     /// The core heard this espresso session flow on an unknown substate.
     unknown_flow: bool,
     /// A load moved on this espresso's scale where the core can't see it
-    /// (§3.5's known limits): between the last zero and first flow with no
-    /// tare after it; or while no readings were arriving, before the gate, where `Tared` has no returning check; after it, only a load the
-    /// returning check or the step band accepts. It reads as coffee, so I13
-    /// is skipped for the rest of the session: not only while the load stays,
+    /// (§3.5's known limits): while no readings were arriving in a flowing
+    /// session, before the gate, where `Tared` has no returning check; after
+    /// it, only a load the returning check or the step band accepts. A load
+    /// that moves in preheat is judged, a gap included: the step detector
+    /// watches from the tare (#389). It reads as coffee, so I13 is skipped
+    /// for the rest of the session: not only while the load stays,
     /// because once the core's gate opens with the load in its reading, `last`
     /// carries it, and when the load lifts the estimate counts from there (the
     /// model shrank that to a true 29.8 g of 36). A load seen arriving on a
     /// live reading, or one the core refuses, is judged.
     unseen_load: bool,
-    /// This espresso's first reading at flow has been checked for a load that
-    /// moved since the last zero.
-    flow_checked: bool,
     /// The oracle's gate: since when the true cup has held 5 g with the
     /// scale reporting, and whether that held 1 s.
     gate_since: Option<u64>,
@@ -341,7 +337,6 @@ impl World {
             replacing: false,
             unknown_flow: false,
             unseen_load: false,
-            flow_checked: false,
             gate_since: None,
             gate_seen: false,
             last_cup_g: 0.0,
@@ -674,24 +669,6 @@ impl World {
     /// A load the core can't see: one that changed while no readings were
     /// arriving. Called on each reading, before it counts as heard.
     fn watch_unseen_load(&mut self) {
-        let pouring = self.open_mode == Some(ActiveMode::Espresso) && self.flowed;
-        if !pouring {
-            return;
-        }
-        // A load that moved between the last zero and first flow, with no tare
-        // after it, reads as coffee: the late-cup re-tare missed it and the
-        // step detector watches only a flowing session (§3.5's known limit,
-        // #389). Only under the untared-cup guard's 50 g: a heavier one is the
-        // guard's, which the model must still see.
-        if !std::mem::replace(&mut self.flow_checked, true)
-            && self.scale.as_ref().is_some_and(|s| {
-                let moved = s.load_moved_since_zero(self.now);
-                moved > 0.0 && moved < UNTARED_GUARD_G
-            })
-            && !std::mem::replace(&mut self.unseen_load, true)
-        {
-            self.coverage.unseen_loads += 1;
-        }
         let gap_ms = self
             .last_weight_ms
             .map_or(u64::MAX, |at| self.now.saturating_sub(at));
@@ -699,6 +676,12 @@ impl World {
         let load_step = load - std::mem::replace(&mut self.last_load, load);
         let cup = self.true_cup_g();
         let gain = cup - std::mem::replace(&mut self.last_cup_g, cup);
+        // Before flow the step detector judges every reading, the first after
+        // a gap included (#389), so preheat only moves the comparison on.
+        let pouring = self.open_mode == Some(ActiveMode::Espresso) && self.flowed;
+        if !pouring {
+            return;
+        }
         // A reading missed (the sim's scale reports every step), and the load
         // changed meanwhile.
         if gap_ms > STEP_MS && load_step != 0.0 && load != 0.0 {
@@ -728,7 +711,6 @@ impl World {
     /// I13's zero for a new espresso session: what the scale reads now.
     fn scale_zero_at_open(&mut self) {
         self.unseen_load = false;
-        self.flow_checked = false;
         self.gate_since = None;
         self.gate_seen = false;
         self.last_cup_g = self.true_cup_g();
@@ -839,11 +821,27 @@ impl World {
         // A re-zero mid-pour is a disturbance; between pours it's the zero.
         let pouring = self.open_mode == Some(ActiveMode::Espresso) && self.flowed;
         let cup = self.cup.grams;
+        let rezero = self.scale.as_mut().and_then(SimScale::take_rezero);
         if let Some(scale) = self.scale.as_mut()
-            && scale.take_rezero()
+            && rezero.is_some()
             && !pouring
         {
             scale.zero_is_users(cup);
+        }
+        // §3.5's known limit: a re-zero during a gap before the gate. `Tared`
+        // has no returning check, so the core can't see it, and a virtual zero
+        // it latched for a load that moved since the old zero (a hand tared in
+        // and lifted, a spoon) is then off by that load (#389).
+        let gap_ms = self
+            .last_weight_ms
+            .map_or(u64::MAX, |at| self.now.saturating_sub(at));
+        if pouring
+            && !self.gate_seen
+            && gap_ms >= 1_000
+            && rezero.is_some_and(|moved| moved > 0.0)
+            && !std::mem::replace(&mut self.unseen_load, true)
+        {
+            self.coverage.unseen_loads += 1;
         }
         if let Some(grams) = reading {
             self.watch_unseen_load();

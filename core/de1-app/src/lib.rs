@@ -4058,6 +4058,13 @@ impl CremaCore {
                 // Only an OBSERVED landing qualifies the pre-shot zero capture.
                 self.tare_gate = None;
                 self.tare_observed = landed;
+                // A tare that landed zeroed whatever the step detector saw
+                // set down in preheat, so a virtual zero it latched would
+                // count the load twice. One that never landed leaves the
+                // detector's zero, and a settle in flight, standing (#389).
+                if landed {
+                    self.saw_zero_offset_g = 0.0;
+                }
                 // The session's zero is known.
                 if let Some(session) = self.session.as_mut() {
                     session.tared();
@@ -4093,14 +4100,18 @@ impl CremaCore {
         // samples; at rest the gate only tracks the baseline. While a
         // session flows, a step over the band is a disturbance (§3.5).
         // The returning check owns the first reading after a gap, not the
-        // step detector.
+        // step detector. An espresso's preheat is watched from its tare
+        // (#389): nothing pours yet, so the band is 3 g at any gap, and a
+        // returning reading is judged too.
         let from_net = self.weight_gate.last_accepted();
-        let verdict = self.weight_gate.check(
-            net_weight,
-            now,
-            self.shot_started.is_some(),
-            self.weighing_mode().is_some() && !self.scale_returning,
-        );
+        let rate_g_s = if self.weighing_mode().is_some() {
+            (!self.scale_returning).then_some(de1_domain::weight_gate::DISTURB_RATE_G_S)
+        } else {
+            self.watching_preheat().then_some(0.0)
+        };
+        let verdict =
+            self.weight_gate
+                .check_at_rate(net_weight, now, self.shot_started.is_some(), rate_g_s);
         if verdict == WeightVerdict::Reject {
             return;
         }
@@ -4321,22 +4332,28 @@ impl CremaCore {
                 if let Some(session) = self.session.as_mut() {
                     session.tared();
                 }
-                out.events.push(Event::SawAutoZeroed { offset_g: moved });
+                // A zero that stayed has nothing to tell: a hand lifting in
+                // preheat would toast "0 g was on it".
+                if moved != 0.0 {
+                    out.events.push(Event::SawAutoZeroed { offset_g: moved });
+                }
                 return Some(raw_g - offset);
             }
-            if settle.disturbed_from.is_some()
-                && now.saturating_sub(settle.started) >= UNTARED_SETTLE_WINDOW
-            {
+            if settle.disturbed_from.is_some() {
                 // Still moving: a hand, not a cup at rest. Weight is off for
-                // the session and the backstop bounds it.
-                self.untared_settle = None;
-                if let Some(session) = self.session.as_mut() {
-                    session.refuse(Blocked::ScaleDisturbed);
+                // the session and the backstop bounds it. Before flow there's
+                // no coffee to lose, so a hand in preheat has until 2 s into
+                // the flow (#389).
+                let since = self.flow_started.map(|fs| fs.max(settle.started));
+                if since.is_some_and(|at| now.saturating_sub(at) >= UNTARED_SETTLE_WINDOW) {
+                    self.untared_settle = None;
+                    if let Some(session) = self.session.as_mut() {
+                        session.refuse(Blocked::ScaleDisturbed);
+                    }
+                    self.refresh_auto_stop_targets();
+                    return Some(raw_g - self.saw_zero_offset_g);
                 }
-                self.refresh_auto_stop_targets();
-                return Some(raw_g - self.saw_zero_offset_g);
-            }
-            if now.saturating_sub(settle.started) >= UNTARED_SETTLE_WINDOW {
+            } else if now.saturating_sub(settle.started) >= UNTARED_SETTLE_WINDOW {
                 // Never settled: the conservative fallback — SAW off for the
                 // shot, everything else (volume / max-time) still bounds it.
                 self.untared_settle = None;

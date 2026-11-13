@@ -598,3 +598,114 @@ fn an_untared_cup_with_no_limits_stops_at_the_backstop() {
         core.pour_ml()
     );
 }
+
+/// An espresso with auto-tare on that heats from 100 ms and flows at
+/// `flow_at`. Before flow the scale reads `preheat(t)` every `period` ms; the
+/// test plays the scale, so a tare lands only where `preheat` says it does.
+/// Returns the core, flowing, and the times the core sent a tare.
+fn preheat_then_flow(
+    period: u64,
+    flow_at: u64,
+    preheat: impl Fn(u64) -> f32,
+) -> (CremaCore, Vec<u64>, Vec<f32>) {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    core.set_profile_target_weight(Some(36.0));
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 0);
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 1], 100);
+    let (mut tares, mut zeroed) = (vec![], vec![]);
+    for t in (period..flow_at).step_by(period as usize) {
+        let o = core.on_notification(Source::ScaleWeight, &bookoo(preheat(t)), t);
+        if o.commands
+            .iter()
+            .any(|c| matches!(c, Command::WriteScale { .. }))
+        {
+            tares.push(t);
+        }
+        zeroed.extend(o.events.iter().filter_map(|e| match e {
+            Event::SawAutoZeroed { offset_g } => Some(*offset_g),
+            _ => None,
+        }));
+    }
+    core.on_notification(Source::De1State, &[4, 5], flow_at);
+    (core, tares, zeroed)
+}
+
+/// #389: a spoon set down in preheat after the tare reads as coffee unless
+/// the step detector watches from the tare. It does, so the spoon settles, the
+/// zero moves by it, and the shot stops at a true 36 g.
+#[test]
+fn a_spoon_set_down_in_preheat_moves_the_zero() {
+    // 10 Hz; the shot-start tare fires at 400 ms. The spoon lands 0.3 s
+    // before flow, too late for the re-tare's four settled readings.
+    let (mut core, tares, zeroed) =
+        preheat_then_flow(100, 1_500, |t| if t >= 1_200 { 6.0 } else { 0.0 });
+    assert_eq!(tares.len(), 1, "the shot-start tare only: {tares:?}");
+    assert!(zeroed.is_empty(), "the settle is still in flight at flow");
+    let mut pour = Pour::from(1_500, 30.0);
+    let stop = run(&mut core, &mut pour, 90_000, |_, cup| Step {
+        sample: true,
+        reading: Some(cup + 6.0),
+    });
+    near_target(stop, StopReason::Weight);
+}
+
+/// A slow scale (2 Hz) settles the spoon into a virtual zero before the
+/// late-cup re-tare's four readings are in. The re-tare then lands and zeroes
+/// the spoon too, so the virtual zero goes: kept, it would count the spoon
+/// twice and the shot would run 6 g over.
+#[test]
+fn a_retare_that_lands_over_a_virtual_zero_clears_it() {
+    // The shot-start tare fires at 2 s and lands at 2.5 s; the spoon lands at
+    // 3 s; the virtual zero latches at 4 s and the re-tare fires at 4.5 s.
+    let (mut core, tares, zeroed) = preheat_then_flow(500, 6_000, |t| match t {
+        3_000..5_000 => 6.0,
+        _ => 0.0,
+    });
+    assert_eq!(tares, vec![2_000, 4_500]);
+    assert_eq!(zeroed, vec![6.0]);
+    let mut pour = Pour::from(6_000, 30.0);
+    let stop = run(&mut core, &mut pour, 90_000, |t, cup| Step {
+        sample: true,
+        reading: t.is_multiple_of(500).then_some(cup),
+    });
+    near_target(stop, StopReason::Weight);
+}
+
+/// A late-cup re-tare the scale never honours times out, and the settle it
+/// fired over still stands: the spoon latches a virtual zero and the shot
+/// stops at a true 36 g. Ending the settle when the re-tare fired would leave
+/// the spoon reading as coffee, 6 g early.
+#[test]
+fn a_retare_that_never_lands_leaves_the_virtual_zero() {
+    let (mut core, tares, zeroed) =
+        preheat_then_flow(100, 4_500, |t| if t >= 2_000 { 6.0 } else { 0.0 });
+    assert_eq!(tares.first(), Some(&400), "the shot-start tare");
+    assert_eq!(tares.get(1), Some(&2_300), "the re-tare, which never lands");
+    assert_eq!(zeroed, vec![6.0]);
+    let mut pour = Pour::from(4_500, 30.0);
+    let stop = run(&mut core, &mut pour, 90_000, |_, cup| Step {
+        sample: true,
+        reading: Some(cup + 6.0),
+    });
+    near_target(stop, StopReason::Weight);
+}
+
+/// A hand rested on the cup in preheat and lifted again settles back at the
+/// empty cup, so the zero stays (rule (b)) and the core says nothing: no
+/// "re-zeroed, 0 g was on it". The shot stops at a true 36 g.
+#[test]
+fn a_hand_lifted_in_preheat_leaves_the_zero_quietly() {
+    let (mut core, _, zeroed) = preheat_then_flow(100, 4_000, |t| match t {
+        2_000..2_500 => 8.0,
+        _ => 0.0,
+    });
+    assert!(zeroed.is_empty(), "{zeroed:?}");
+    let mut pour = Pour::from(4_000, 30.0);
+    let stop = run(&mut core, &mut pour, 90_000, |_, cup| Step {
+        sample: true,
+        reading: Some(cup),
+    });
+    near_target(stop, StopReason::Weight);
+}

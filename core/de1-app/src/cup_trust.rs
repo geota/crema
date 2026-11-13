@@ -41,6 +41,18 @@ impl CremaCore {
         }
     }
 
+    /// An espresso whose zero is known and that hasn't flowed yet. The step
+    /// detector watches it from the tare onward, so a load set down during
+    /// preheat settles and moves the zero instead of reading as coffee
+    /// (`DESIGN.md` §3.5, #389).
+    pub(crate) fn watching_preheat(&self) -> bool {
+        self.shot_started.is_some()
+            && self.flow_started.is_none()
+            && self
+                .session
+                .is_some_and(|s| s.mode == ActiveMode::Espresso && s.baseline == Baseline::Tared)
+    }
+
     /// The first reading after a gap decides, once, on the raw net reading:
     /// within `last.weight − 3 g` and `last.weight + 1.5 × poured since + 5 g`
     /// it's adopted and weight is trusted again. Outside, the scale re-zeroed
@@ -105,12 +117,14 @@ impl CremaCore {
         }
     }
 
-    /// The step detector fired on a flowing session (`DESIGN.md` §3.5).
+    /// The step detector fired on a flowing session, or on an espresso's
+    /// preheat after its tare (`DESIGN.md` §3.5).
     ///
     /// - After the gate: weight is refused for the session and the estimate
     ///   finishes from `last`.
-    /// - Before it, in espresso: the untared-cup settle tells a load at rest
-    ///   from a hand. Returns `true`: the reading is held while it settles.
+    /// - Before it, in espresso, preheat included: the untared-cup settle
+    ///   tells a load at rest from a hand. Returns `true`: the reading is held
+    ///   while it settles.
     /// - Before it, in hot water: `Blind`, so the `V` leg takes over.
     pub(crate) fn on_disturbed(
         &mut self,
@@ -118,7 +132,11 @@ impl CremaCore {
         raw_g: f32,
         now: Duration,
     ) -> bool {
-        let mode = self.weighing_mode();
+        let mode = if self.watching_preheat() {
+            Some(ActiveMode::Espresso)
+        } else {
+            self.weighing_mode()
+        };
         let Some(session) = self.session.as_mut() else {
             return false;
         };
