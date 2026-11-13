@@ -264,8 +264,11 @@ class BackupReaderTest {
     fun theRealStreamedBackupsReadThroughThisReader() {
         // Each is kept current by its writer's own test: web by stream.vitest.ts,
         // Android by BackupStreamTest.
-        for (name in listOf("web-streamed-photo", "android-streamed-photo")) {
-            val zip = File("src/test/resources/backup/$name.crema.zip")
+        for ((name, path) in listOf(
+            "web-streamed-photo" to "src/test/resources/backup/web-streamed-photo.crema.zip",
+            "android-streamed-photo" to "../../web/src/lib/backup/fixtures/android-streamed-photo.crema.zip",
+        )) {
+            val zip = File(path)
             val p = prepareBackupFile(zip, name, File(dir, "stage-$name"))
             assertTrue(p.photos.isNotEmpty(), "$name: its photo is staged")
             assertTrue(linesOf(p).isNotEmpty(), "$name: its lines read")
