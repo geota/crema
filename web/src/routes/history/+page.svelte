@@ -1557,7 +1557,23 @@
 	{/if}
 
 
-	{#if shots.length === 0}
+	{#if !store.loaded}
+		<!-- Not loaded is not empty (#310): a skeleton until the rows land. -->
+		<div class="hi-loading" role="status" aria-live="polite" aria-busy="true">
+			{#each { length: 6 } as _, i (i)}
+				<div class="hi-loading-row" aria-hidden="true"></div>
+			{/each}
+			<div class="hi-loading-label">
+				{#if store.health === 'lost' || store.health === 'unavailable'}
+					Shot history isn’t available right now.
+				{:else if store.loadingSlowly}
+					Still loading your shot history…
+				{:else}
+					Loading shot history…
+				{/if}
+			</div>
+		</div>
+	{:else if shots.length === 0}
 		<!-- Empty state — no shots recorded yet. -->
 		<div class="hi-empty-page">
 			<div class="hi-empty-glyph"><ChartLineIcon aria-hidden="true" /></div>
@@ -1911,7 +1927,8 @@
 	/>
 {/if}
 
-{#if logBrewOpen}
+<!-- Opens once the rows load: its seeds read them (#310). -->
+{#if logBrewOpen && store.loaded}
 	<LogBrewDialog
 		prefill={logBrewPrefill}
 		onClose={() => (logBrewOpen = false)}
@@ -2221,6 +2238,25 @@
 	}
 
 	/* Empty page state */
+	.hi-loading {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		padding: 24px 20px;
+		flex: 1 1 auto;
+	}
+	.hi-loading-row {
+		height: 56px;
+		border-radius: 10px;
+		background: rgba(var(--tint-rgb), 0.05);
+	}
+	.hi-loading-label {
+		font-family: var(--font-sans);
+		font-size: 13px;
+		color: var(--fg-muted);
+		text-align: center;
+		padding-top: 8px;
+	}
 	.hi-empty-page {
 		display: flex;
 		flex-direction: column;

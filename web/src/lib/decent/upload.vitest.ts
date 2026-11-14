@@ -6,10 +6,17 @@ import type { FetchLike } from './api';
 // A tiny in-memory history store — the upload path only needs get/all/bindDecentId.
 const shots = new Map<string, StoredShot>();
 let seriesReady = async (): Promise<boolean> => true;
+/** Whether the rows have loaded, for the `ready` gates (#310 P3w). */
+let rowsReady = true;
 vi.mock('#lib/history/store.svelte.js', () => ({
 	getHistoryStore: () => ({
 		seriesReady: () => seriesReady(),
+		readyWithin: async () => rowsReady,
+		get loaded() {
+			return rowsReady;
+		},
 		get: (id: string) => shots.get(id),
+		loadShot: async (id: string) => shots.get(id),
 		get all() {
 			return [...shots.values()];
 		},
@@ -91,6 +98,7 @@ beforeEach(() => {
 	localStorage.clear();
 	shots.clear();
 	seriesReady = async () => true;
+	rowsReady = true;
 	liveSerial = null;
 	posts = 0;
 	setOnline(true);
@@ -365,6 +373,29 @@ describe('network retry', () => {
 		expect(await retryPendingDecentUploads({ fetchFn: ok })).toMatchObject({ uploaded: 1 });
 		expect(shots.get('a')?.decentId).toBe('77');
 		expect(readDecentAccount().retryShotIds).toEqual([]);
+	});
+});
+
+describe('the rows not loaded yet (#310 P3w)', () => {
+	it('the launch retry waits: it sends nothing and keeps every shot to retry', async () => {
+		writeDecentAccount({ ...linked, retryShotIds: ['a'] });
+		rowsReady = false;
+		expect(await retryPendingDecentUploads({ fetchFn: ok })).toBeNull();
+		expect(posts).toBe(0);
+		expect(readDecentAccount().retryShotIds).toEqual(['a']);
+	});
+	it('the backlog sends nothing', async () => {
+		writeDecentAccount(linked);
+		rowsReady = false;
+		expect(await uploadUnsentDecentShots({ fetchFn: ok })).toMatchObject({ uploaded: 0, failed: 0, skipped: 0 });
+		expect(posts).toBe(0);
+	});
+	it('one upload fails on the network, so the shot stays to retry, and is not skipped as gone', async () => {
+		writeDecentAccount(linked);
+		rowsReady = false;
+		expect(await uploadShotToDecent('a', { fetchFn: ok, appVersion: 't' })).toMatchObject({ kind: 'failed' });
+		expect(posts).toBe(0);
+		expect(readDecentAccount().retryShotIds).toEqual(['a']);
 	});
 });
 

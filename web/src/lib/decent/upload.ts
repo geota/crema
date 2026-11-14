@@ -52,6 +52,7 @@ import {
 } from './account';
 import {
 	DecentAuthError,
+	DecentNetworkError,
 	decentKnownSerial,
 	decentNotOnAccountMessage,
 	decentShotViewUrl,
@@ -228,8 +229,15 @@ async function runUpload(shotId: string, opts: DecentUploadOptions): Promise<Dec
 	// bound it, or the user deleted it), and after the stored series, or a
 	// machine shot goes out as a record with no measurements.
 	const history = getHistoryStore();
+	// Not loaded is not empty: a shot not found yet must stay to try again.
+	if (!(await history.readyWithin())) {
+		// Kept for the next retry, as a shot that met no connection is.
+		setDecentShotState(shotId, 'retry');
+		return { kind: 'failed', error: new DecentNetworkError({ status: null, detail: 'Shot history is still loading.' }) };
+	}
 	await history.seriesReady();
-	const shot = history.get(shotId);
+	// Whole, as a row past the view is held without its samples (#310).
+	const shot = await history.loadShot(shotId);
 	if (!shot || shot.deletedAt) return skipped('Shot not found');
 	// Brew Log rows (issue #10) are not DE1 shots: never uploaded, and never
 	// stamped with the live machine (which the bind below would do).
@@ -539,7 +547,11 @@ async function drain(
 export function uploadUnsentDecentShots(
 	opts: { fetchFn?: FetchLike; onProgress?: (done: number, total: number) => void } = {}
 ): Promise<DecentDrainResult> {
-	return withDrainLock(() => {
+	return withDrainLock(async () => {
+		// Sends nothing until the rows load: an empty list isn't an empty backlog.
+		if (!(await getHistoryStore().readyWithin())) {
+			return { uploaded: 0, failed: 0, skipped: 0, notOnAccount: [], stopped: null, lastError: null };
+		}
 		const backlog = unsentDecentShots(getHistoryStore().all).sort((a, b) => a.completedAt - b.completedAt);
 		return drain(
 			backlog.map((s) => s.id),
@@ -561,6 +573,8 @@ export async function retryPendingDecentUploads(
 	const account = readDecentAccount();
 	if (!isDecentLinked(account) || !account.autoUpload || account.needsReauth) return null;
 	if (account.retryShotIds.length === 0 || isOffline()) return null;
+	// A row not loaded yet would read as gone, and its retry would clear.
+	if (!(await getHistoryStore().readyWithin())) return null;
 	const ids = [...account.retryShotIds];
 	const result = await withDrainLock(() => drain(ids, { fetchFn: opts.fetchFn }));
 	// Anything the gates skipped (deleted, already uploaded, …) will never go — forget it.

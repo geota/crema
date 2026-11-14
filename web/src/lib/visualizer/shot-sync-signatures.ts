@@ -132,6 +132,24 @@ export function signatureForShot(shot: StoredShot): string {
 	);
 }
 
+/**
+ * The same signature for a row held without its samples (#310): the final
+ * weight comes from its stored summary, then `peakWeight`, then the yield, as
+ * {@link signatureForShot} reads them off the curve.
+ */
+export function signatureForRow(
+	shot: StoredShot,
+	summary: { finalWeight?: number | null; peakWeight?: number | null }
+): string {
+	const finalWeight = summary.finalWeight ?? summary.peakWeight ?? shot.metadata?.yieldOut ?? null;
+	return wasmSignatureForShot(
+		shot.completedAt,
+		shot.record.duration,
+		shot.profileName ?? undefined,
+		finalWeight ?? undefined
+	);
+}
+
 /** Bean de-dup signature: `(name, roasterName, roastedOn)`. */
 export function signatureForBean(bean: {
 	name: string;

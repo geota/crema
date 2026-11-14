@@ -42,6 +42,14 @@ export function readCaptureKeep(existingInstall: () => boolean): CaptureKeepChoi
 	return first;
 }
 
+/** The stored limit, or today's for an existing install, without storing anything. */
+export function peekCaptureKeep(): CaptureKeepChoice {
+	const stored = readJson<CaptureKeepChoice | null>(CAPTURE_KEEP_KEY, null, {
+		valid: (v): v is CaptureKeepChoice | null => v === null || isChoice(v)
+	});
+	return stored ?? EXISTING_CAPTURE_KEEP;
+}
+
 export function writeCaptureKeep(choice: CaptureKeepChoice): void {
 	writeJson(CAPTURE_KEEP_KEY, choice);
 }

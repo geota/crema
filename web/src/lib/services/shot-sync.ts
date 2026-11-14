@@ -93,6 +93,7 @@ import { restoreFrozen, restoringInThisTab } from '#lib/restore/tab-safety.js';
 import { coolingDown } from '#lib/visualizer/pace.js';
 import { isBrewLog, refusedNoSamples, type ShotBean, type StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
+import { sampleCountOf } from '#lib/history/light-rows.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import type { components } from '#lib/visualizer/openapi.js';
 import {
@@ -403,7 +404,8 @@ function mergeInputOf(shot: StoredShot, edit: PendingEdit | undefined): ShotMerg
 		tagsPending: hasTagMarks(edit?.tags),
 		barista: shot.metadata.barista?.trim() || undefined,
 		baristaPending: edit?.barista === true,
-		hasSeries: shot.record.samples.length > 0,
+		// A row past the view is light, with its curve in the store (#310).
+		hasSeries: sampleCountOf(shot) > 0,
 		hasProfile: shot.profile != null,
 		isBrew: isBrewLog(shot)
 	};
@@ -1048,7 +1050,7 @@ export const ShotSyncLive = Layer.effect(
 					remoteId: shot.visualizerId,
 					remoteVersion: shot.visualizerUpdatedAt ?? undefined,
 					// Not loaded yet: fetched, then held until the curve is there.
-					hasSeries: seriesLoaded && shot.record.samples.length > 0,
+					hasSeries: seriesLoaded && sampleCountOf(shot) > 0,
 					isBrew: isBrewLog(shot),
 					tombstoned: shot.deletedAt != null
 				});
@@ -1143,6 +1145,8 @@ export const ShotSyncLive = Layer.effect(
 			yield* requireConnected;
 			// A restore, here or in another tab: its rows aren't settled yet.
 			if (restoring()) return { ...BUSY, outcome: { kind: 'Busy', restore: true } } satisfies PullApplied;
+			// Not loaded is not empty: with no rows, every remote shot would look new.
+			if (!(yield* Effect.promise(() => history.readyWithin()))) return BUSY;
 			const release = yield* Effect.promise(acquireRunLock);
 			if (!release) return BUSY;
 			return yield* walk(history, opts).pipe(
@@ -1303,6 +1307,10 @@ export const ShotSyncLive = Layer.effect(
 		) {
 			const config = readSyncConfig();
 			if (uploadsHeld(config)) return { uploaded: 0, stopped: { reason: 'held' as const } };
+			// Nothing to send isn't the same as rows not loaded yet.
+			if (!(yield* Effect.promise(() => history.readyWithin()))) {
+				return { uploaded: 0, stopped: { reason: 'held' as const } };
+			}
 			yield* Effect.promise(() => history.seriesReady());
 			// Brew Log rows (`isBrewLog`) never sync: Visualizer is a
 			// DE1-telemetry service and brews carry none (issue #10 — the same
@@ -1456,7 +1464,11 @@ export const ShotSyncLive = Layer.effect(
 		) {
 			const edit = pendingEdit(id);
 			if (!edit) return 'none' as const;
-			const shot = history.all.find((s) => s.id === id);
+			// Not loaded is not gone: the edit waits for the rows.
+			if (!history.loaded) return 'waiting' as const;
+			// A live row, shown or past the view: only its fields go, not its curve.
+			const live = history.get(id);
+			const shot = live && live.deletedAt == null ? live : undefined;
 			// Gone here: nothing is owed.
 			if (!shot) {
 				settlePendingEdit(id, undefined);
@@ -1520,7 +1532,8 @@ export const ShotSyncLive = Layer.effect(
 				}
 				return yield* Effect.fail(e);
 			}
-			const now = history.all.find((s) => s.id === id);
+			const row = history.get(id);
+			const now = row && row.deletedAt == null ? row : undefined;
 			let next: PendingEdit = { ...current, attempts: undefined, nextAttemptAt: undefined };
 			// Sent and still the row's: done. Changed since: the drain sends it again.
 			if (journal && (!now || JSON.stringify(annotationsPatch(now)) === JSON.stringify(journal))) {

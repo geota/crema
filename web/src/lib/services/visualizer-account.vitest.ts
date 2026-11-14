@@ -10,6 +10,9 @@ const mockHistory = {
 	get: vi.fn(),
 	bindVisualizerId: vi.fn(),
 	seriesReady: vi.fn(async () => {}),
+	readyWithin: vi.fn(async () => true),
+	loaded: true,
+	loadShot: vi.fn(async (id: string): Promise<unknown> => mockHistory.get(id)),
 	purgeTombstone: vi.fn()
 };
 vi.mock('#lib/history/index.js', () => ({ getHistoryStore: () => mockHistory }));

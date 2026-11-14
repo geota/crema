@@ -27,12 +27,18 @@ const WASM = new WebAssembly.Module(readFileSync(resolve(process.cwd(), 'src/lib
 
 // ── Page loads ──────────────────────────────────────────────────────────────
 
+/**
+ * Which history backend the pages run (#310 P3w): `legacy`, the old copy and
+ * its series database; `idb`, `crema-history`, moved into on the first page.
+ */
+let BACKEND: 'legacy' | 'idb' = 'legacy';
+
 /** A fresh page over the same storage: every module, and so every store, new. */
 async function boot() {
 	vi.resetModules();
 	const wasm = await import('#lib/wasm/de1_wasm.js');
 	wasm.initSync({ module: WASM });
-	const [engine, backup, bean, model, images, history, series, profiles, recipes, methods, settings, maintenance, viz, queue, marks, marker, restoreBoot, tabs] =
+	const [engine, backup, bean, model, images, history, series, profiles, recipes, methods, settings, maintenance, viz, queue, marks, marker, restoreBoot, tabs, historyStore, historyDb] =
 		await Promise.all([
 			import('./engine'),
 			import('#lib/backup/index.js'),
@@ -51,8 +57,11 @@ async function boot() {
 			import('#lib/visualizer/upload-marks.js'),
 			import('./marker'),
 			import('./boot'),
-			import('./tab-safety')
+			import('./tab-safety'),
+			import('#lib/history/store.svelte.js'),
+			import('#lib/history/history-db.js')
 		]);
+	historyStore.setHistoryStoreDefaultsForTest({ backend: BACKEND === 'legacy' ? 'legacy' : 'auto', locks: null });
 	// What the app's start-up does before anything reads settings.
 	settings.getSettingsStore().migrateHotWater();
 	// Every store reads its keys as the app starts, so their health is known.
@@ -61,8 +70,22 @@ async function boot() {
 	recipes.getRecipeStore();
 	methods.getCustomMethodStore();
 	maintenance.getMaintenanceStore();
+	await history.getHistoryStore().whenReady();
 	await history.getHistoryStore().seriesReady();
+	/** The ids whose curve storage holds: the series database, or `crema-history`'s details. */
+	const storedCurves = async (): Promise<string[]> => {
+		if (BACKEND === 'legacy') return [...(await series.getAllSeries()).keys()];
+		const db = new historyDb.HistoryDb({ expectExisting: () => false });
+		try {
+			const ids = await db.detailIds();
+			const details = await db.detailsOf(ids);
+			return [...details.values()].filter((d) => d.samples.length > 0).map((d) => d.id);
+		} finally {
+			db.close();
+		}
+	};
 	return {
+		storedCurves,
 		wasm,
 		engine,
 		backup,
@@ -393,7 +416,7 @@ async function readBack(app: App) {
 		},
 		shots: {
 			rows: byId(history.rawAll),
-			series: sorted((await app.series.getAllSeries()).keys())
+			series: sorted(await app.storedCurves())
 		},
 		settings: {
 			settings: app.settings().current,
@@ -508,9 +531,13 @@ function expectApplied(plan: RestorePlan, before: Device, after: Device, backup:
 	for (const id of plan.shots.fill) want[id] = { ...want[id], curve: true };
 	for (const id of plan.shots.add) want[id] = fromBackup(id, plan.shots.zeroDebit.includes(id) ? 0 : BEAN_DEBIT);
 	expect(labels(after.shots.rows, row), 'shots').toEqual(Object.fromEntries(Object.entries(want).sort(([a], [b]) => a.localeCompare(b))));
-	// Every listed curve is in IndexedDB; removed rows' curves wait for the marker.
+	// Every listed curve is in IndexedDB. On the legacy backend removed rows'
+	// curves wait for the marker; on `crema-history` they went with the
+	// restore's one explicit delete.
 	const curves = Object.entries(want).filter(([, r]) => r.curve).map(([id]) => id);
-	expect(after.shots.series, 'series').toEqual(sorted(new Set([...before.shots.series, ...curves])));
+	expect(after.shots.series, 'series').toEqual(
+		BACKEND === 'legacy' ? sorted(new Set([...before.shots.series, ...curves])) : sorted(curves)
+	);
 
 	// Photos: put now, removed only by the marker, an hour on.
 	expect(after.photos, 'photos').toEqual(sorted(new Set([...before.photos, ...plan.photos.put])));
@@ -556,7 +583,11 @@ function expectApplied(plan: RestorePlan, before: Device, after: Device, backup:
 	expect(after.tombstones.queued.filter((id) => plan.tombstones.cancel.includes(id)), 'tombstones').toEqual([]);
 }
 
-describe('the shared matrix, on real web stores', () => {
+for (const backend of ['legacy', 'idb'] as const)
+describe(`the shared matrix, on real web stores (${backend})`, () => {
+	beforeEach(() => {
+		BACKEND = backend;
+	});
 	it('reads every case, and every web exception names one', () => {
 		expect(MATRIX.cases.length).toBeGreaterThanOrEqual(40);
 		const names = new Set(MATRIX.cases.map((c) => c.name));
@@ -564,7 +595,8 @@ describe('the shared matrix, on real web stores', () => {
 	});
 
 	for (const c of MATRIX.cases) {
-		const skipped = SKIP[c.name];
+		// A capped build is the legacy backend: `crema-history` keeps every row (SPEC §7).
+		const skipped = SKIP[c.name] ?? (backend === 'idb' && c.local.historyCapacity != null ? 'capped' : undefined);
 		(skipped ? it.skip : it)(c.name, async () => {
 			const mode = webMode(c.mode);
 			const revive = c.opts?.reviveDeleted ?? false;
@@ -646,6 +678,7 @@ describe('the shared matrix, on real web stores', () => {
 				now: (after.marker!.finishingAt ?? 0) + later.marker.DELETE_AFTER_MS,
 				restoreRunning: async () => false,
 				listedShots: () => new Set(later.history().rawAll.map((s) => s.id)),
+				shotsHealth: () => later.history().rowsHealth(),
 				listedBeans: () => new Set(later.beans().beans.map((b) => b.id)),
 				deleteSeries: later.series.deleteSeries,
 				deleteCapture: async () => {},
@@ -725,7 +758,11 @@ async function restoreOnce(mode: WebMode, failAt?: RestoreStep) {
 
 const asSets = (m: Device['marker']) => m && { phase: m.phase, shots: sorted(m.deletes.shots), photos: sorted(m.deletes.photos) };
 
-describe.each(['merge', 'wipe'] as const)('a %s restore stopped at each step', (mode) => {
+for (const backend of ['legacy', 'idb'] as const)
+describe.each(['merge', 'wipe'] as const)(`a %s restore stopped at each step (${backend})`, (mode) => {
+	beforeEach(() => {
+		BACKEND = backend;
+	});
 	it('changes every part of the device when it runs clean', async () => {
 		const old = await freshDevice();
 		const { out } = await restoreOnce(mode);
@@ -759,7 +796,9 @@ describe.each(['merge', 'wipe'] as const)('a %s restore stopped at each step', (
 				expect(after[part], part).toEqual(i < at ? fresh[part] : old[part]);
 			}
 			// No delete ran: every curve and photo the device had is still stored.
-			expect(after.shots.series).toEqual(expect.arrayContaining(old.shots.series));
+			// On `crema-history` a removed row's curve goes with the shots step's
+			// explicit delete, which the per-store check above covers.
+			if (backend === 'legacy') expect(after.shots.series).toEqual(expect.arrayContaining(old.shots.series));
 			expect(after.photos).toEqual(expect.arrayContaining(old.photos));
 
 			// The next boot says the restore didn't finish, and deletes nothing.

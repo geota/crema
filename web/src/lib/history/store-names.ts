@@ -1,10 +1,9 @@
 /**
- * Names the history's next storage will use (#310, SPEC §2 and §6). Nothing
- * on this build creates them. They're named now so that a factory reset here
- * removes what a newer build left behind, if the user rolls back (P0).
+ * Names of the history's storage (#310, SPEC §2 and §6). Named apart from the
+ * store, so a factory reset removes them without loading it (P0).
  */
 
-/** The IndexedDB database the rows and details move to (P3w). */
+/** The IndexedDB database the rows and details live in (P3w). */
 export const HISTORY_DB_NAME = 'crema-history';
 
 /** The daily rows snapshot, in the origin private file system (§6). */

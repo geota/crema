@@ -41,6 +41,7 @@ import { coerceBean, coerceRoaster, type Bean, type Roaster } from '#lib/bean/mo
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { getHistoryStore, type StoredShot } from '#lib/history/index.js';
 import { coerceStoredShot } from '#lib/history/store.svelte.js';
+import { sampleCountOf } from '#lib/history/light-rows.js';
 import { getProfileStore } from '#lib/profiles/index.js';
 import type { CremaProfile } from '#lib/profiles/model.js';
 import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
@@ -312,6 +313,8 @@ async function storedPhotoBeans(beans: readonly Bean[]): Promise<{ have: string[
  */
 export async function buildLocalState(locks: LockManagerLike | undefined = defaultLocks()): Promise<LocalState> {
 	const history = getHistoryStore();
+	// Not loaded is not empty: a plan over no rows would add every shot again.
+	await history.whenReady();
 	await history.seriesReady();
 	const beans = getBeanStore();
 	const profiles = getProfileStore();
@@ -323,9 +326,8 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 	const photos = await storedPhotoBeans(beans.beans);
 	const profileMeta = profiles.backupMeta();
 	const recipeMeta = recipes.backupMeta();
-	const health = (
+	const health: { store: string; health: string }[] = (
 		[
-			['shots', 'crema.history.v2'],
 			['beans', 'crema.beans.v1'],
 			['profiles', 'crema.profiles.custom.v1'],
 			['recipes', 'crema.brewRecipes.v1'],
@@ -338,9 +340,12 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 			['recipeMeta', 'crema.brewRecipes.hiddenBuiltins.v1']
 		] as const
 	).map(([store, key]) => ({ store, health: storeHealth(key) }));
+	// The rows' health is the history store's: `crema-history`, or the old copy on the legacy backend.
+	health.unshift({ store: 'shots', health: history.rowsHealth() });
 	return {
 		shell: 'web',
-		historyCapacity: history.capacity,
+		// Every row is kept on `crema-history`, past the view (SPEC §7).
+		historyCapacity: history.restoreCapacity,
 		machineBusy: getMachineBusy().busy || shotIsOpen() || (await busyElsewhere(locks)),
 		health,
 		beans: beans.beans.map((b) => b.id),
@@ -350,7 +355,8 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		customMethods: methods.everything.map((m) => m.id),
 		shots: history.rawAll.map((s) => ({
 			id: s.id,
-			hasSamples: s.record.samples.length > 0,
+			// A hidden row is light in memory, with its curve in the store.
+			hasSamples: sampleCountOf(s) > 0,
 			pinned: s.pinned === true,
 			deleted: s.deletedAt != null
 		})),
@@ -936,7 +942,7 @@ async function applyPlan(
 			// recorded or edited meanwhile: the restore's own rows only change
 			// the ids the plan names.
 			const r = await getHistoryStore().restoreRows(
-				(rows) => nextShots(rows, records.shots, plan.shots, replace),
+				(rows) => ({ ...nextShots(rows, records.shots, plan.shots, replace), remove: plan.shots.remove }),
 				deps.writeSeries
 			);
 			curvesFailed = r.curvesFailed;
