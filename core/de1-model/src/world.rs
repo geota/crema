@@ -248,6 +248,9 @@ pub struct World {
     /// model shrank that to a true 29.8 g of 36). A load seen arriving on a
     /// live reading, or one the core refuses, is judged.
     unseen_load: bool,
+    /// A scale connected since the last reading: its first reading is a
+    /// return with nothing before it, as the core sees it.
+    scale_fresh: bool,
     /// The oracle's gate: since when the true cup has held 5 g with the
     /// scale reporting, and whether that held 1 s.
     gate_since: Option<u64>,
@@ -334,6 +337,7 @@ impl World {
             replacing: false,
             unknown_flow: false,
             unseen_load: false,
+            scale_fresh: false,
             gate_since: None,
             gate_seen: false,
             last_cup_g: 0.0,
@@ -494,6 +498,8 @@ impl World {
                 if self.scale.is_none() {
                     self.scale = Some(SimScale::new(self.tare_latency_ms));
                     self.core.connect_scale("BOOKOO_SC", &[]);
+                    self.scale_fresh = true;
+                    self.last_load = 0.0;
                 }
             }
             Op::LoseWrites(n) => self.link.lose_writes += n,
@@ -681,8 +687,12 @@ impl World {
     /// A load the core can't see: one that changed while no readings were
     /// arriving. Called on each reading, before it counts as heard.
     fn watch_unseen_load(&mut self) {
+        // A scale connected mid-session is a return too, however soon its
+        // first reading comes: the core has nothing from it to compare with.
+        let fresh = std::mem::take(&mut self.scale_fresh);
         let gap_ms = self
             .last_weight_ms
+            .filter(|_| !fresh)
             .map_or(u64::MAX, |at| self.now.saturating_sub(at));
         let load = self.scale.as_ref().map_or(0.0, |s| s.load_now(self.now));
         let load_step = load - std::mem::replace(&mut self.last_load, load);
@@ -708,7 +718,13 @@ impl World {
                 // Not a return: the step band, `3 g + 12 g/s × dt`.
                 step.abs() <= 3.0 + 12.0 * gap_s
             };
-            if accepted && !std::mem::replace(&mut self.unseen_load, true) {
+            // A new scale's first reading over the target (or 50 g) is the
+            // untared-cup guard's, which the model must still see.
+            let guarded = fresh
+                && self
+                    .weight_target()
+                    .is_some_and(|t| self.cup.grams + load > t.min(50.0));
+            if accepted && !guarded && !std::mem::replace(&mut self.unseen_load, true) {
                 self.coverage.unseen_loads += 1;
             }
         }

@@ -1208,3 +1208,46 @@ fn a_replaced_shot_forgets_the_old_shots_frame() {
     assert!(world.coverage.replaced >= 1, "shot 2 replaced shot 1");
     assert!(world.violations.is_empty(), "{:?}", world.violations);
 }
+
+/// §3.5's known limit, a scale back loaded before the gate, where the gap is
+/// a reconnect: mid-shot, before water reaches the cup, the scale drops and a
+/// new connection comes back with a hand on the cup. Its first reading has
+/// nothing before it to compare with, so the hand reads as coffee; when it
+/// lifts, the step detector moves the zero by the step alone, keeping the
+/// hand in, and the shot stops 6 g early. The oracle counts a connect as a
+/// gap and skips I13 for it, as for a scale back from a gap.
+#[test]
+fn a_scale_connected_mid_shot_with_a_hand_on_it_is_the_known_limit() {
+    let mut world = World::new(
+        De1Params {
+            preinfusion: false,
+            ending: Ending::None,
+            ..De1Params::default()
+        },
+        50.0,
+        5_000,
+        false,
+        false,
+    );
+    for op in [
+        Op::AppStart { yield_g: 18.0 },
+        Op::Advance { ms: 5_600 },
+        Op::Advance { ms: 27_700 },
+        Op::Advance { ms: 8_900 },
+        Op::Advance { ms: 100 },
+        Op::AppStart { yield_g: 36.0 },
+        Op::Advance { ms: 8_200 },
+        Op::ScaleDisconnect,
+        Op::ScaleConnect,
+        Op::Scale(ScaleMode::Bump {
+            grams: 6.0,
+            ms: 300,
+        }),
+        Op::Advance { ms: 100 },
+    ] {
+        world.apply(&op);
+    }
+    world.apply(&Op::Advance { ms: 90_000 });
+    assert_eq!(world.coverage.unseen_loads, 1);
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
