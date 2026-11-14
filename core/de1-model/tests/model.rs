@@ -25,6 +25,7 @@ fn params() -> impl Strategy<Value = De1Params> {
                 idle_ignored,
                 two_tap_steam,
                 unknown_pour: false,
+                heating_ms: 1_000,
             },
         )
 }
@@ -134,13 +135,25 @@ fn case() -> impl Strategy<Value = Case> {
         any::<bool>(),
         prop::collection::vec(op(), 1..60),
         // Drawn last, so the committed seeds still make their cases.
-        prop_oneof![4 => Just(false), 1 => Just(true)],
+        (
+            prop_oneof![4 => Just(false), 1 => Just(true)],
+            prop_oneof![3 => Just(1_000u64), 1 => Just(6_000u64)],
+        ),
     )
         .prop_map(
-            |(params, headspace_ml, lane_timeout_ms, read_only, pre_flush, ops, unknown_pour)| {
+            |(
+                params,
+                headspace_ml,
+                lane_timeout_ms,
+                read_only,
+                pre_flush,
+                ops,
+                (unknown_pour, heating_ms),
+            )| {
                 Case {
                     params: De1Params {
                         unknown_pour,
+                        heating_ms,
                         ..params
                     },
                     headspace_ml,
@@ -912,36 +925,202 @@ fn a_returning_scale_outside_the_band_is_refused() {
     }
 }
 
-/// §3.5's known limit (#389): a spoon set down during preheat, just before
-/// flow, too late for the late-cup re-tare and before the step detector
-/// watches, reads as coffee. The oracle skips I13 for exactly that: a load
-/// that moved between the last zero and first flow, with no tare after it.
-#[test]
-fn a_load_set_down_just_before_flow_is_the_known_limit() {
-    let mut world = World::new(De1Params::default(), 50.0, 5_000, false, false);
+/// Run an espresso to its stop, the ops after `GroupHead` applied at their
+/// times (ms after it); the shot must stop near target with nothing broken.
+fn preheat_case(name: &str, auto_tare: bool, heating_ms: u64, at: &[(u64, Op)]) -> World {
+    let params = De1Params {
+        heating_ms,
+        ..De1Params::default()
+    };
+    let mut world = World::new(params, 50.0, 5_000, false, false);
+    world.apply(&Op::SetAutoTare(auto_tare));
     world.apply(&Op::GroupHead(MachineState::Espresso));
-    world.apply(&Op::Advance { ms: 1_100 });
-    world.apply(&Op::Scale(ScaleMode::StepUp { grams: 5.0 }));
+    let start = world.now_ms();
+    for (when, op) in at {
+        while world.now_ms() < start + when {
+            world.apply(&Op::Advance { ms: 100 });
+        }
+        world.apply(op);
+    }
+    while world.coverage.stops == 0 {
+        world.apply(&Op::Advance { ms: 100 });
+        assert!(world.now_ms() < 120_000, "{name}: a stop");
+    }
+    world.apply(&Op::Advance { ms: 5_000 });
+    assert_eq!(world.coverage.unseen_loads, 0, "{name}: judged by I13");
+    assert!(
+        world.violations.is_empty(),
+        "{name}: {:?}",
+        world.violations
+    );
+    world
+}
+
+/// #389: a load set down during preheat, after the tare, too late for the
+/// late-cup re-tare (the reading hasn't settled, or it's inside the hold-off)
+/// and too light for the untared-cup guard. The step detector watches the
+/// session from the tare onward, so the load settles and moves the zero, and
+/// the shot stops at a true 36 g. The sim's preheat is 1.5 s, the tare lands
+/// at about 0.6 s, and its hold-off runs to about 1.4 s, so this sweeps every
+/// path: a load inside the hold-off, one the re-tare catches, one landing at
+/// first flow, and the untared-cup guard's 60 g, with auto-tare on and off.
+/// A long preheat lets the late-cup re-tare fire over a settle in flight or a
+/// virtual zero already latched: the tare outranks it. With preheat
+/// unwatched, the loads from 6 g to 40 g stop early, past I13's 6 g.
+#[test]
+fn a_load_set_down_in_preheat_moves_the_zero() {
+    let times = [
+        (1_000, &[700, 900, 1_100, 1_300, 1_400, 1_500][..]),
+        (6_000, &[2_000, 5_000, 6_100, 6_400][..]),
+    ];
+    for auto_tare in [true, false] {
+        for grams in [4.5, 5.0, 6.0, 20.0, 40.0, 60.0] {
+            for (heating_ms, ats) in times {
+                for &at in ats {
+                    let name = format!(
+                        "{grams} g at {at} ms of {heating_ms} ms heating, auto-tare {auto_tare}"
+                    );
+                    let world = preheat_case(
+                        &name,
+                        auto_tare,
+                        heating_ms,
+                        &[(at, Op::Scale(ScaleMode::StepUp { grams }))],
+                    );
+                    // Rule (b): a level that settles inside the empty cup's
+                    // range (up to 5 g) keeps the zero, so a load that light
+                    // reads as coffee and stops the shot up to its weight
+                    // early, inside I13's 6 g.
+                    let early = if grams <= 5.0 { grams } else { 0.0 };
+                    let cup = world.true_cup_g();
+                    assert!(
+                        (33.0 - early..40.0).contains(&cup),
+                        "{name}: stopped at a true {cup} g"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A hand on the cup for 3 s of a long preheat, moving, then lifted before
+/// flow. Before flow there's no coffee to lose, so the settle doesn't
+/// give up after 2 s: the hand lifts, the reading settles back at the empty
+/// cup, and the zero stays (rule (b)). Giving up at 2 s from the step would
+/// refuse the weight stop for a harmless hand.
+#[test]
+fn a_hand_in_preheat_keeps_the_weight_stop() {
+    let mut ops = Vec::new();
+    for i in 0..30u64 {
+        let grams = if i % 2 == 0 { 8.0 } else { 14.0 };
+        ops.push((1_000 + 100 * i, Op::Scale(ScaleMode::StepUp { grams })));
+    }
+    ops.push((4_000, Op::Scale(ScaleMode::Healthy)));
+    let world = preheat_case("a hand", true, 6_000, &ops);
+    assert_eq!(world.coverage.weight_stops, 1, "on weight");
+    let cup = world.true_cup_g();
+    assert!((33.0..40.0).contains(&cup), "stopped at a true {cup} g");
+}
+
+/// A gap in preheat is judged: nothing pours before flow, so the step band is
+/// 3 g however long the gap, and the first reading back is judged too (in a
+/// flowing session it's the returning check's). Auto-tare is off, so no
+/// late-cup re-tare steps in. A spoon that lands while the scale is silent,
+/// back on a reading 1.2 s later (a return) or 0.5 s later (not one), moves
+/// the zero; with the flow's 12 g/s allowance, the band would take both as
+/// coffee and stop the shot 7 to 10 g early. A sim re-zero during a gap,
+/// after a 20 g load had moved the zero: the scale comes back reading 0 with
+/// the load gone, and the zero moves back; taken as it reads, the shot would
+/// run 20 g over.
+#[test]
+fn a_gap_in_preheat_is_judged() {
+    let cases = [
+        (
+            "a spoon back on a return",
+            1_000,
+            vec![
+                (200, Op::Scale(ScaleMode::Stall)),
+                (1_300, Op::Scale(ScaleMode::StepUp { grams: 10.0 })),
+            ],
+        ),
+        (
+            "a spoon back inside the stale window",
+            1_000,
+            vec![
+                (900, Op::Scale(ScaleMode::Stall)),
+                (1_300, Op::Scale(ScaleMode::StepUp { grams: 7.0 })),
+            ],
+        ),
+        (
+            "a re-zero in a gap",
+            6_000,
+            vec![
+                (700, Op::Scale(ScaleMode::StepUp { grams: 20.0 })),
+                (3_000, Op::Scale(ScaleMode::GapRezero { ms: 1_500 })),
+            ],
+        ),
+    ];
+    for (name, heating_ms, ops) in cases {
+        let world = preheat_case(name, false, heating_ms, &ops);
+        let cup = world.true_cup_g();
+        assert!(
+            (33.0..40.0).contains(&cup),
+            "{name}: stopped at a true {cup} g"
+        );
+    }
+}
+
+/// §3.5's known limit, from the model: a hand on the cup when the tare lands
+/// is zeroed in; it lifts in preheat, and the step detector moves the zero
+/// back by 6 g. Then, before the gate, the scale goes silent and comes back
+/// re-zeroed. `Tared` has no returning check, so the core keeps the virtual
+/// zero, which no longer applies, and the shot stops 6 g early. The oracle
+/// skips I13 for exactly that: a re-zero during a gap before the gate, with
+/// the load moved since the old zero.
+#[test]
+fn a_rezero_in_a_gap_before_the_gate_is_the_known_limit() {
+    let mut world = World::new(
+        De1Params {
+            preinfusion: false,
+            ending: Ending::None,
+            ..De1Params::default()
+        },
+        50.0,
+        5_000,
+        false,
+        false,
+    );
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    world.apply(&Op::Scale(ScaleMode::Bump {
+        grams: 6.0,
+        ms: 1_400,
+    }));
+    world.apply(&Op::Advance { ms: 2_500 });
+    world.apply(&Op::Scale(ScaleMode::GapRezero { ms: 1_000 }));
     world.apply(&Op::Advance { ms: 90_000 });
     assert_eq!(world.coverage.unseen_loads, 1);
     assert!(world.violations.is_empty(), "{:?}", world.violations);
 }
 
-/// The known limit stops at the untared-cup guard: a 60 g cup set down just
-/// before flow, too late for the late-cup re-tare, is the guard's. It settles,
-/// the guard latches a virtual zero, and the shot stops at a true 36 g. I13
-/// judges it; with the guard off, the shot stops at once.
+/// The untared-cup guard still has a part: a scale that stalls across first
+/// flow and comes back in its first 3 s with a 60 g cup on it. The returning
+/// reading belongs to the returning check, which `Tared` doesn't have, so the
+/// step detector doesn't judge it; the guard does, latches a virtual zero once
+/// the cup is at rest, and the shot stops at a true 36 g. The oracle can't
+/// judge a load that landed while no readings arrived (§3.5's known limit), so
+/// this test does: with the guard off, the cup reads as coffee and the shot
+/// stops at once.
 #[test]
-fn a_heavy_cup_set_down_just_before_flow_is_the_untared_guards() {
+fn a_heavy_cup_on_a_scale_back_in_early_flow_is_the_untared_guards() {
     let mut world = World::new(De1Params::default(), 50.0, 5_000, false, false);
     world.apply(&Op::GroupHead(MachineState::Espresso));
-    world.apply(&Op::Advance { ms: 1_100 });
+    world.apply(&Op::Advance { ms: 1_000 });
+    world.apply(&Op::Scale(ScaleMode::Stall));
+    world.apply(&Op::Advance { ms: 1_600 });
     world.apply(&Op::Scale(ScaleMode::StepUp { grams: 60.0 }));
     while world.coverage.stops == 0 {
         world.apply(&Op::Advance { ms: 100 });
         assert!(world.now_ms() < 120_000, "a stop");
     }
-    assert_eq!(world.coverage.unseen_loads, 0, "judged by I13");
     assert!(world.violations.is_empty(), "{:?}", world.violations);
     let cup = world.true_cup_g();
     assert!((33.0..40.0).contains(&cup), "stopped at a true {cup} g");

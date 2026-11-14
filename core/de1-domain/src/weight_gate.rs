@@ -124,6 +124,20 @@ impl WeightSpikeGate {
         gating: bool,
         watching: bool,
     ) -> WeightVerdict {
+        self.check_at_rate(weight_g, now, gating, watching.then_some(DISTURB_RATE_G_S))
+    }
+
+    /// [`check`](Self::check) with the band's flow allowance given, g/s:
+    /// `None` doesn't watch. Before flow nothing pours, so `Some(0.0)` holds
+    /// the band at [`DISTURB_STEP_G`] however long the readings took
+    /// (`DESIGN.md` §3.5, #389).
+    pub fn check_at_rate(
+        &mut self,
+        weight_g: f32,
+        now: Duration,
+        gating: bool,
+        rate_g_s: Option<f32>,
+    ) -> WeightVerdict {
         let before = self.last_accepted_g.zip(self.last_accepted_at);
         let recovering = self.rejected_run > 0;
         if self.rejects(weight_g, gating) {
@@ -138,7 +152,7 @@ impl WeightSpikeGate {
         // An accepted plateau after rejected spikes compares against the
         // level before them.
         let plateau = recovering && step > MAX_SAMPLE_JUMP_G;
-        if watching && (plateau || step > DISTURB_STEP_G + DISTURB_RATE_G_S * dt) {
+        if rate_g_s.is_some_and(|rate| plateau || step > DISTURB_STEP_G + rate * dt) {
             WeightVerdict::Disturbed
         } else {
             WeightVerdict::Accept
@@ -214,6 +228,30 @@ mod tests {
         assert_eq!(
             gate.check(320.0, ms(200), false, true),
             WeightVerdict::Disturbed
+        );
+    }
+
+    /// Before flow nothing pours: a step over 3 g is a load however long the
+    /// readings took, a gap included.
+    #[test]
+    fn with_nothing_pouring_the_band_is_3_g_at_any_gap() {
+        let mut gate = WeightSpikeGate::new();
+        let still = Some(0.0);
+        assert_eq!(
+            gate.check_at_rate(0.0, ms(0), true, still),
+            WeightVerdict::Accept
+        );
+        assert_eq!(
+            gate.check_at_rate(2.9, ms(100), true, still),
+            WeightVerdict::Accept
+        );
+        assert_eq!(
+            gate.check_at_rate(6.0, ms(2_100), true, still),
+            WeightVerdict::Disturbed
+        );
+        assert_eq!(
+            gate.check_at_rate(6.0, ms(2_200), true, None),
+            WeightVerdict::Accept
         );
     }
 

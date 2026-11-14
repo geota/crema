@@ -165,6 +165,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A spoon set down during preheat no longer stops the shot early** — a spoon
+  or a hand that landed on the cup after the tare, just before the pump
+  started, was weighed as coffee, and the shot stopped 5 to 7 g short. Crema
+  now watches the scale from the tare onward: a load that settles moves the
+  zero by its weight, a hand that lifts again leaves the zero where it was, and
+  a re-tare that lands takes over from both. A load of 5 g or less still reads
+  as coffee. Web, tablet and phone.
 - **The weight stop follows the yield on screen** — dialling the yield, then
   tapping Reset or picking another profile, used to leave the web's
   stop-at-weight on the old dial until a reload. The stop now comes from the
