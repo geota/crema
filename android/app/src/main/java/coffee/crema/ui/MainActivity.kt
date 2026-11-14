@@ -479,11 +479,27 @@ class MainActivity : ComponentActivity() {
                     onTryAgain = viewModel::retryStore,
                     onSetAside = viewModel::putStoreAside,
                 )
+                val historyBanner = coffee.crema.ui.components.historyBannerText(
+                    ui.historyHealth, ui.historyLost, ui.historyError, ui.historyUnsaved.size,
+                ) != null
+                if (ui.refusedStores.isEmpty()) {
+                    coffee.crema.ui.components.HistoryStoreBanner(
+                        health = ui.historyHealth,
+                        lost = ui.historyLost,
+                        error = ui.historyError,
+                        unsaved = ui.historyUnsaved.size,
+                        busy = ui.shotInProgress,
+                        onTryAgain = { viewModel.retryHistory() },
+                        onSnapshot = { viewModel.resolveLostHistory(LibraryController.LostChoice.SNAPSHOT) },
+                        onOldCopy = { viewModel.resolveLostHistory(LibraryController.LostChoice.OLD_COPY) },
+                        onStartEmpty = { viewModel.resolveLostHistory(LibraryController.LostChoice.START_EMPTY) },
+                    )
+                }
                 Box(
                     Modifier
                         .weight(1f)
                         // The banner took the status-bar inset: don't pad under it twice.
-                        .then(if (ui.refusedStores.isEmpty()) Modifier else Modifier.consumeWindowInsets(WindowInsets.statusBars)),
+                        .then(if (ui.refusedStores.isEmpty() && !historyBanner) Modifier else Modifier.consumeWindowInsets(WindowInsets.statusBars)),
                 ) {
                 CompositionLocalProvider(
                     LocalListMemory provides listMemory,

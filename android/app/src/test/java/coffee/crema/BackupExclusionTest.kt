@@ -37,6 +37,20 @@ class BackupExclusionTest {
         }
     }
 
+    /** #310 P3a: the history's store moves with a device transfer, as `shots.json` did. */
+    @Test
+    fun `the shot history's store, marker, snapshot and journal transfer with the device`() {
+        val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(rules)
+        val node = doc.getElementsByTagName("device-transfer").item(0) as Element
+        val excludes = node.getElementsByTagName("exclude")
+        val all = (0 until excludes.length).map { excludes.item(it) as Element }
+        for (e in all) {
+            val path = e.getAttribute("path")
+            assertTrue("device transfer excludes ${e.getAttribute("domain")}:$path", !path.startsWith("shots") && !path.startsWith("history-") && path != "shot-series/")
+            assertTrue("device transfer excludes the whole database domain", !(e.getAttribute("domain") == "database" && (path.isEmpty() || path == "." || path.startsWith("shots.db"))))
+        }
+    }
+
     @Test
     fun `the account tokens and the v3 pairing file stay excluded`() {
         val required = listOf("visualizer.json", "decent.json", "drive.json", "proxy-pairing.json").flatMap(::withSiblings)

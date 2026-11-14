@@ -331,7 +331,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         liveMachine = { sharing.liveMachine() },
         knownSerial = UniffiDecentCore::knownSerial,
         liveSerialUnreadable = { sharing.liveSerialUnreadable() },
-        currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
+        // A row past the view's cap is still here (#310 P3a): light, so its upload waits for P4a's loadShot.
+        currentShot = { id -> library.findShot(id) },
         seriesReady = { library.awaitSeries() },
         onLinked = { sharing.offerCatchUp(UploadTargetId.Decent) },
     )
@@ -360,8 +361,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onPulledShots = { stubs -> library.insertPulledShots(stubs) },
         onApplyRemote = { localId, patch, pulled -> library.applyRemoteShot(localId, patch, pulled) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
-        currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
-        allShots = { _ui.value.history },
+        currentShot = { id -> library.findShot(id) },
+        allShots = { library.allShots() },
+        viewShots = { _ui.value.history },
+        hasSeries = { shot -> library.hasCurve(shot) },
         seriesReady = { library.awaitSeries() },
         shotsLoaded = { library.seriesReady },
         historyRefused = { library.historyRefused },
@@ -977,6 +980,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @androidx.annotation.VisibleForTesting
     internal lateinit var ownStateLoads: List<kotlinx.coroutines.Job>
 
+    /** The shot history's load (and, on the first launch, its move to
+     *  `shots.db`), apart from [startupLoad] so prefs and auto-connect never
+     *  wait on it (#310 P3a). */
+    @androidx.annotation.VisibleForTesting
+    internal lateinit var historyLoad: kotlinx.coroutines.Job
+
     // ── `init` blocks: every property is declared above this point (P3-2) ──
 
     init {
@@ -1052,6 +1061,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             reloadStore(store)
         }
     }
+
+    /** Try the history's store again: Settings' Try again after a failed move, or the unavailable banner's. */
+    fun retryHistory() = viewModelScope.launch { library.retryHistory() }
+
+    /** The lost banner's choice: rebuild from the snapshot, recover the old copy, or start empty. */
+    fun resolveLostHistory(choice: LibraryController.LostChoice) = viewModelScope.launch { library.resolveLostHistory(choice) }
 
     /** The banner's Set this aside: move the unreadable file with the other
      *  kept-aside copies, offer it for sharing, and carry on without it. If the
@@ -1247,12 +1262,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             loadOwnState("Decent") { decent.load() },
             loadOwnState("Google Drive") { drive.load() },
         )
-        // Load both persisted stores in one coroutine, sequentially, so their
-        // _ui copies don't race (read-modify-write of the shared snapshot).
+        // The shot history loads on its own (#310 P3a): a first launch moves it
+        // into shots.db, which mustn't hold up the prefs or auto-connect. Its
+        // rows land atomically (UiStore.edit) and merge with what's there.
+        historyLoad = viewModelScope.launch {
+            holdStartupLoad?.await()
+            library.loadHistory()
+        }
+        // The other persisted stores in one coroutine, sequentially.
         startupLoad = viewModelScope.launch {
             holdStartupLoad?.await()
             library.loadLibrary()
-            library.loadHistory()
             loadPrefs()
             // Seed the learned SAW drip model into the core (it survives
             // bridge.reset() in-core, so startup is the only seed point).
@@ -1280,8 +1300,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             visualizer.refreshPremiumIfStale()
             sharing.start()
             // Daily automatic Drive backup (issue #36) — after the prefs (the
-            // toggle); it waits for the Drive tokens itself.
-            drive.autoBackupIfDue(_ui.value.autoDriveBackup, _ui.value.driveBackupWeekly, _ui.value.driveBackupWifiOnly)
+            // toggle); it waits for the Drive tokens itself, and for the rows,
+            // so a store that came up lost or unavailable blocks it.
+            viewModelScope.launch {
+                library.awaitRows()
+                drive.autoBackupIfDue(_ui.value.autoDriveBackup, _ui.value.driveBackupWeekly, _ui.value.driveBackupWifiOnly)
+            }
             // Daily automatic release check (opt-in, default off).
             maybeAutoUpdateCheck()
         }
@@ -1466,6 +1490,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             json,
         )
     }
+
+    /** Test seam: [LibraryController.beforeRestoreRemove]. */
+    internal var beforeRestoreRemove: (suspend () -> Unit)?
+        get() = library.beforeRestoreRemove
+        set(value) { library.beforeRestoreRemove = value }
 
     /** Test seam: [LibraryController.afterRestoreSeries]. */
     internal var afterRestoreSeries: (suspend () -> Unit)?
@@ -2595,6 +2624,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  counting in the background for as long as the process lives. */
     fun setAppForeground(foreground: Boolean) {
         presence.appInForeground = foreground
+        // A history store that wouldn't open is tried again on each return (#310 P3a).
+        if (foreground && historyLoad.isCompleted && _ui.value.historyHealth == coffee.crema.history.HistoryHealth.UNAVAILABLE) {
+            retryHistory()
+        }
         // The Visualizer retry queue's tick and network trigger run only in
         // the foreground (F17).
         visualizer.onForegroundChanged(foreground)

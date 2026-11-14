@@ -27,7 +27,15 @@ import kotlin.test.assertFalse
  * hundred, so every test runs [ROUNDS].
  */
 class StoreSaveOrderTest {
-    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+    @org.junit.Before fun openStoreSaves() {
+        coffee.crema.persist.SafeFile.openAllForTest()
+        // These cover the history's legacy backend (shots.json), which runs when the move to shots.db fails (#310 P3a).
+        coffee.crema.history.HistoryStore.legacyOnlyForTest = true
+    }
+
+    @org.junit.After fun sqlAgain() {
+        coffee.crema.history.HistoryStore.legacyOnlyForTest = false
+    }
 
     @get:Rule val tmp = TemporaryFolder()
 

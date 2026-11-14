@@ -33,6 +33,19 @@ fun StorageBackupsRows(vm: MainViewModel, ui: MainUiState, ds: DriveSync.UiState
     val scope = rememberCoroutineScope()
     var pending by remember { mutableStateOf<PendingLimit?>(null) }
 
+    // The history's move to shots.db didn't finish (#310 P3a): it runs as before, capped, and retries.
+    if (ui.historyHealth == coffee.crema.history.HistoryHealth.LEGACY) {
+        CremaSettingsRow(
+            "Shot history storage",
+            listOfNotNull(
+                "Still in its old format, which keeps the newest ${coffee.crema.history.HistoryStore.MAX_SHOTS} shots. Crema tries again at the next launches, then once a day.",
+                ui.historyError?.let { "Last error: $it" },
+            ).joinToString(" "),
+        ) {
+            androidx.compose.material3.TextButton(onClick = { vm.retryHistory() }) { androidx.compose.material3.Text("Try again") }
+        }
+    }
+
     CremaSettingsRow(
         "Raw captures to keep",
         "BLE sessions whose raw Bluetooth capture stays, for replays and bug reports. A session holding a pinned shot keeps its capture whatever the limit. Off records none.",

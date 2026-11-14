@@ -88,27 +88,47 @@ class StreamedRestoreVmTest {
 
     @Test
     fun fiveThousandShotsStreamThroughAndTheRunHoldsOnlyWhatHistoryKeeps() {
+        // On the legacy backend (shots.json, with the cap), which runs when the move to shots.db fails (#310 P3a).
+        coffee.crema.history.HistoryStore.legacyOnlyForTest = true
+        try {
+            val vm = vm()
+            val file = backupWithShots(5000, 1_790_000_000_000)
+            assertTrue(file.length() > 4L * 1024 * 1024, "${file.length()}")
+            val stage = File(app.cacheDir, "stage-test")
+            val prepared = prepareBackupFile(file, "big", stage)
+            val plan = onMain(vm, "the plan") { vm.restoreEngine.plan(prepared, RestoreKind.MERGE) }
+            val capacity = plan.shots.add.size
+            assertEquals(5000 - capacity, plan.shots.notAdded.toInt())
+            // What the run reads: the shots it writes, not the backup's 5,000.
+            val records = RestoreRecords.read(prepared, json, 0L, RestoreRecords.shotsTheRunWrites(plan))
+            assertEquals(capacity, records.parsed.shots.size)
+    
+            val before = vm.ui.value.userMessages.size
+            vm.startRestoreFile(file, "big", MainViewModel.RestoreMode.MERGE)
+            VmHarness.idleUntil("the report", 120_000) { vm.ui.value.restoreReport != null }
+            vm.confirmRestore()
+            VmHarness.idleUntil("the restore", 120_000) { vm.ui.value.userMessages.size > before }
+            assertTrue(vm.ui.value.userMessages.last().startsWith("Restored $capacity shots"), vm.ui.value.userMessages.last())
+            val history = VmHarness.ownState(vm).history
+            assertEquals(capacity, history.size)
+            assertEquals("s0", history.first().id)
+        } finally {
+            coffee.crema.history.HistoryStore.legacyOnlyForTest = false
+        }
+    }
+
+    /** #310 P3a: on shots.db nothing caps a merge. All 5,000 rows land in the store; the view shows 300. */
+    @Test
+    fun fiveThousandShotsMergeWholeIntoTheStore() {
         val vm = vm()
         val file = backupWithShots(5000, 1_790_000_000_000)
-        assertTrue(file.length() > 4L * 1024 * 1024, "${file.length()}")
-        val stage = File(app.cacheDir, "stage-test")
-        val prepared = prepareBackupFile(file, "big", stage)
-        val plan = onMain(vm, "the plan") { vm.restoreEngine.plan(prepared, RestoreKind.MERGE) }
-        val capacity = plan.shots.add.size
-        assertEquals(5000 - capacity, plan.shots.notAdded.toInt())
-        // What the run reads: the shots it writes, not the backup's 5,000.
-        val records = RestoreRecords.read(prepared, json, 0L, RestoreRecords.shotsTheRunWrites(plan))
-        assertEquals(capacity, records.parsed.shots.size)
-
         val before = vm.ui.value.userMessages.size
         vm.startRestoreFile(file, "big", MainViewModel.RestoreMode.MERGE)
-        VmHarness.idleUntil("the report", 120_000) { vm.ui.value.restoreReport != null }
-        vm.confirmRestore()
-        VmHarness.idleUntil("the restore", 120_000) { vm.ui.value.userMessages.size > before }
-        assertTrue(vm.ui.value.userMessages.last().startsWith("Restored $capacity shots"), vm.ui.value.userMessages.last())
-        val history = VmHarness.ownState(vm).history
-        assertEquals(capacity, history.size)
-        assertEquals("s0", history.first().id)
+        VmHarness.idleUntil("the restore", 240_000) { vm.ui.value.userMessages.size > before }
+        assertTrue(vm.ui.value.userMessages.last().startsWith("Restored 5000 shots"), vm.ui.value.userMessages.last())
+        assertEquals(coffee.crema.history.HistoryStore.MAX_SHOTS, VmHarness.ownState(vm).history.size)
+        assertEquals("s0", VmHarness.ownState(vm).history.first().id)
+        assertEquals(5000, VmHarness.library(vm).allShots().size)
     }
 
     @Test
@@ -133,28 +153,34 @@ class StreamedRestoreVmTest {
 
     @Test
     fun aPlanThatGrowsBeforeTheRunReadsTheShotsItNowWrites() {
-        // Merge at the cap: room for 5 of the backup's 10. Rows deleted while the
-        // report is open make room for all 10; the run's records must have them.
-        SafeFile.openAllForTest()
-        runBlocking {
-            val rows = (0 until 295).map { shot("here$it", 1_600_000_000_000 - it * 60_000L) }
-            assertTrue(coffee.crema.history.HistoryStore(app, json).save(rows))
+        // On the legacy backend (shots.json, with the cap), which runs when the move to shots.db fails (#310 P3a).
+        coffee.crema.history.HistoryStore.legacyOnlyForTest = true
+        try {
+            // Merge at the cap: room for 5 of the backup's 10. Rows deleted while the
+            // report is open make room for all 10; the run's records must have them.
+            SafeFile.openAllForTest()
+            runBlocking {
+                val rows = (0 until 295).map { shot("here$it", 1_600_000_000_000 - it * 60_000L) }
+                assertTrue(coffee.crema.history.HistoryStore(app, json).save(rows))
+            }
+            val vm = vm()
+            val file = backupWithShots(10, 1_790_000_000_000)
+            vm.startRestoreFile(file, "ten", MainViewModel.RestoreMode.MERGE)
+            VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
+            for (i in 0 until 5) vm.deleteShot("here$i")
+            VmHarness.idle()
+            val before = vm.ui.value.userMessages.size
+            vm.confirmRestore()
+            VmHarness.idleUntil("the report again", 60_000) { vm.ui.value.restoreReport != null || vm.ui.value.userMessages.size > before }
+            assertNotNull(vm.ui.value.restoreReport, "the numbers changed: the report shows them")
+            val again = vm.ui.value.userMessages.size
+            vm.confirmRestore()
+            VmHarness.idleUntil("the restore", 60_000) { vm.ui.value.userMessages.size > again }
+            val history = VmHarness.ownState(vm).history.map { it.id }
+            assertEquals((0 until 10).map { "s$it" }.toSet(), history.filter { it.startsWith("s") }.toSet(), vm.ui.value.userMessages.last())
+        } finally {
+            coffee.crema.history.HistoryStore.legacyOnlyForTest = false
         }
-        val vm = vm()
-        val file = backupWithShots(10, 1_790_000_000_000)
-        vm.startRestoreFile(file, "ten", MainViewModel.RestoreMode.MERGE)
-        VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
-        for (i in 0 until 5) vm.deleteShot("here$i")
-        VmHarness.idle()
-        val before = vm.ui.value.userMessages.size
-        vm.confirmRestore()
-        VmHarness.idleUntil("the report again", 60_000) { vm.ui.value.restoreReport != null || vm.ui.value.userMessages.size > before }
-        assertNotNull(vm.ui.value.restoreReport, "the numbers changed: the report shows them")
-        val again = vm.ui.value.userMessages.size
-        vm.confirmRestore()
-        VmHarness.idleUntil("the restore", 60_000) { vm.ui.value.userMessages.size > again }
-        val history = VmHarness.ownState(vm).history.map { it.id }
-        assertEquals((0 until 10).map { "s$it" }.toSet(), history.filter { it.startsWith("s") }.toSet(), vm.ui.value.userMessages.last())
     }
 
     @Test

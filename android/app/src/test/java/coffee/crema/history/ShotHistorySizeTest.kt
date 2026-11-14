@@ -91,7 +91,7 @@ class ShotHistorySizeTest {
         var back: List<StoredShot> = emptyList()
         val load = measureNanoTime { back = fresh.load() }
         assertEquals(added.size, back.size)
-        val rows = File(app.filesDir, "shots.json").length()
+        val rows = app.getDatabasePath(HistoryStore.NEXT_DB_NAME).let { db -> db.length() + File(db.path + "-wal").length() }
         val series = File(app.filesDir, "shot-series").listFiles().orEmpty().sumOf { it.length() }
         store.erase()
         "split: rows=${"%.2f".format(rows / 1e6)}MB series=${"%.1f".format(series / 1e6)}MB " +
@@ -111,33 +111,33 @@ class ShotHistorySizeTest {
     }
 
     @Test
-    fun `the history file holds no series and load rejoins them`() = runBlocking {
+    fun `the store holds no series and load rejoins them`() = runBlocking {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val store = HistoryStore(app, coreJson)
         store.erase()
         val shots = List(3) { shot(it, 260) }
         store.save(shots)
-        val rowsText = File(app.filesDir, "shots.json").readText()
-        assertTrue("\"elapsedMs\"" !in rowsText, "the history file holds the rows only")
+        val db = app.getDatabasePath(HistoryStore.NEXT_DB_NAME)
+        val rowsText = (db.readBytes() + (File(db.path + "-wal").takeIf { it.exists() }?.readBytes() ?: ByteArray(0))).toString(Charsets.ISO_8859_1)
+        assertTrue("\"elapsedMs\"" !in rowsText, "the store holds the rows only")
         val back = HistoryStore(app, coreJson).load()
-        assertEquals(shots.map { it.samples.size }, back.map { it.samples.size }, "the full series rejoined")
+        assertEquals(shots.map { it.samples.size }.sorted(), back.map { it.samples.size }.sorted(), "the full series rejoined")
         // Startup reads the rows first (no series), then the series apart.
         val reader = HistoryStore(app, coreJson)
         val rows = reader.loadRows()
         assertTrue(rows.all { it.samples.isEmpty() }, "rows come without their series")
         assertEquals(List(3) { 260 }, reader.loadSeries(rows.map { it.id }).values.map { it.size })
-        // Removing a shot drops its series file.
-        store.save(shots.drop(1))
+        // Deleting a shot, by name, drops its series file.
+        store.delete(listOf(shots[0].id))
         assertEquals(2, File(app.filesDir, "shot-series").listFiles().orEmpty().size)
-        // A row saved before the split, series inline, moves out on the next save.
+        store.erase()
+        // A row saved before the split, series inline in shots.json, moves out at the migration.
         File(app.filesDir, "shots.json").writeText(
             coreJson.encodeToString(ListSerializer(StoredShot.serializer()), listOf(shot(9, 260))),
         )
         val legacy = HistoryStore(app, coreJson)
-        val loaded = legacy.load()
-        assertEquals(260, loaded.single().samples.size)
-        legacy.save(loaded)
-        assertTrue("\"elapsedMs\"" !in File(app.filesDir, "shots.json").readText(), "moved out")
+        assertEquals(260, legacy.load().single().samples.size)
+        assertTrue(File(app.filesDir, "shot-series").listFiles().orEmpty().any { it.name.endsWith(".series.gz") }, "moved out")
         assertEquals(260, HistoryStore(app, coreJson).load().single().samples.size)
         store.erase()
     }

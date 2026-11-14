@@ -34,9 +34,14 @@ class SafeFileTest {
     @Before fun reset() {
         SafeFile.resetForTest()
         KeptAsideNotices.drain()
+        // These cover the history's legacy backend (shots.json), which runs when the move to shots.db fails (#310 P3a).
+        coffee.crema.history.HistoryStore.legacyOnlyForTest = true
     }
 
-    @After fun cleanup() = SafeFile.resetForTest()
+    @After fun cleanup() {
+        SafeFile.resetForTest()
+        coffee.crema.history.HistoryStore.legacyOnlyForTest = false
+    }
 
     @Test
     fun missingFileIsAbsent() {

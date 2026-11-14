@@ -74,10 +74,11 @@ import kotlin.test.fail
  * every store back through a fresh ViewModel over the same files.
  *
  * Where Android's state differs from the matrix's terms:
- * - History has a fixed cap ([HistoryStore.MAX_SHOTS]). A case's
- *   `historyCapacity` C is reached with `MAX_SHOTS - C` filler rows: local
- *   rows for Merge, unpinned backup rows for Replace, whose over-capacity
- *   count moves by the same number.
+ * - From #310 P3a the history's store has no cap, as the matrix's default.
+ *   A case with a `historyCapacity` runs on the legacy backend, which keeps
+ *   the fixed cap ([HistoryStore.MAX_SHOTS]): its C is reached with
+ *   `MAX_SHOTS - C` filler rows, local rows for Merge, unpinned backup rows
+ *   for Replace, whose over-capacity count moves by the same number.
  * - A store's health is named as Android names it: the matrix's "bean library" is "beans".
  * - A same-shell settings case written for web runs as android on both sides.
  */
@@ -135,6 +136,7 @@ class RestoreMatrixTest(private val name: String) {
     @After fun tearDown() {
         store.clear()
         VmHarness.idle()
+        HistoryStore.legacyOnlyForTest = false
     }
 
     // ── JSON helpers ─────────────────────────────────────────────────────────
@@ -425,6 +427,8 @@ class RestoreMatrixTest(private val name: String) {
     fun case() {
         SKIPPED[name]?.let { assumeTrue("skipped on Android: $it", false) }
         val c = androidCase(cases.getValue(name))
+        // A capped history is the legacy backend's; shots.db has no cap.
+        HistoryStore.legacyOnlyForTest = c.local["historyCapacity"] != null
         seed(c)
         val vm = launch()
         if (c.local["machineBusy"].isTrue()) startShot(vm)

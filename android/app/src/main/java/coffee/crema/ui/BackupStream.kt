@@ -200,9 +200,9 @@ private fun walk(
     onProgress: (BackupProgress) -> Unit,
     shotJson: (StoredShot) -> String,
 ): StreamedBackup {
-    val shots = snap.state.history.toList()
+    val shots = snap.shots.toList()
     val lineOf = { shot: StoredShot ->
-        runCatching { json.decodeFromString(ShotLine.serializer(), backupShotLine(shotJson(shot))) }.getOrNull()
+        runCatching { json.decodeFromString(ShotLine.serializer(), backupShotLine(shotJson(snap.full(shot)))) }.getOrNull()
     }
     stop()
     // Pass 1: which shots the core can write, so the header counts them.

@@ -52,7 +52,14 @@ internal class BackupSnapshot(
     val prefs: AppPrefs,
     val visualizerPrefs: VisualizerSyncPrefs,
     val userRecipes: List<coffee.crema.core.BrewRecipe>,
-)
+    /** Rows past the view's cap (#310 P3a), light: a backup holds them too. */
+    val hiddenShots: List<StoredShot> = emptyList(),
+    /** A light row with its profile, brew series and curve, read from the store. */
+    val full: (StoredShot) -> StoredShot = { it },
+) {
+    /** Every shot the backup holds, in its order: the view's, then those past its cap. */
+    val shots: List<StoredShot> get() = if (hiddenShots.isEmpty()) state.history else state.history + hiddenShots
+}
 
 /** The notice for a backup that wrote nothing. */
 internal const val BACKUP_FAILED = "Backup failed: nothing was saved."
@@ -78,7 +85,7 @@ internal data class BuiltBackup(
  *  the lists [backupBundleJsonl] sent. Custom profiles are raw JSON, so one
  *  that won't read has no id to give. */
 internal fun omittedRowId(row: OmittedBackupRow, snap: BackupSnapshot): String? = row.id ?: when (row.kind) {
-    "shot" -> snap.state.history.getOrNull(row.index)?.id
+    "shot" -> snap.shots.getOrNull(row.index)?.id
     "bean" -> snap.state.beans.getOrNull(row.index)?.id
     "roaster" -> snap.state.roasters.getOrNull(row.index)?.id
     "recipe" -> snap.userRecipes.getOrNull(row.index)?.id
@@ -156,7 +163,7 @@ internal fun backupEnvelope(snap: BackupSnapshot, json: Json, withShots: Boolean
     // flat shape fails the whole envelope's deserialization → the entire backup
     // aborts once any shot exists (issue 01). `wireShotJson` emits
     // formatVersion/completedAt/record; restore inverts via storedShotFromBackupJson.
-    val shots = if (withShots) rowStrings(s.history) { wireShotJson(it, forBackup = true).toString() } else null
+    val shots = if (withShots) rowStrings(snap.shots) { wireShotJson(snap.full(it), forBackup = true).toString() } else null
     // Settings line: the shared cross-shell CommonSettings `common` block (both
     // shells emit it identically, so common prefs restore web<->Android) + this
     // shell's `_shell` tag + Android-only `qcGrind` (re-applied only on Android).
