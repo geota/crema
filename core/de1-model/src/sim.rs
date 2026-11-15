@@ -195,7 +195,12 @@ impl SimDe1 {
             return;
         }
         self.state = state;
-        self.frame = 0;
+        // The DE1 keeps the last shot's frame through Idle and an espresso's
+        // heating, and starts its flow on frame 0 (the capture: frame 3 in
+        // FinalHeating, 0 at Preinfusion). Other modes have no capture.
+        if state != MachineState::Espresso {
+            self.frame = 0;
+        }
         self.in_mode_ms = 0;
         self.flowing_ms = 0;
         self.poured_ml = 0.0;
@@ -244,7 +249,15 @@ impl SimDe1 {
 
     fn sync_sub(&mut self) {
         match self.script.front() {
-            Some((sub, _)) => self.sub = *sub,
+            Some((sub, _)) => {
+                if self.state == MachineState::Espresso
+                    && de1_domain::session::is_pre_flow(self.sub)
+                    && matches!(sub, SubState::Preinfusion | SubState::Pouring)
+                {
+                    self.frame = 0;
+                }
+                self.sub = *sub;
+            }
             None => {
                 self.state = MachineState::Idle;
                 self.sub = SubState::Ready;
@@ -822,6 +835,25 @@ mod tests {
         assert_eq!(de1.sub, SubState::Ending);
         run(&mut de1, 2_000);
         assert_eq!(de1.state, MachineState::Idle);
+    }
+
+    /// The capture: the DE1 reports the last shot's frame through Idle and
+    /// the next shot's heating, and starts the flow on frame 0.
+    #[test]
+    fn the_last_shots_frame_holds_until_the_next_flow() {
+        let mut de1 = SimDe1::new(De1Params::default());
+        de1.enter(MachineState::Espresso);
+        run(&mut de1, 70_000);
+        assert_eq!(de1.state, MachineState::Idle);
+        assert_eq!(de1.frame, FRAMES - 1);
+        de1.enter(MachineState::Espresso);
+        run(&mut de1, 500);
+        assert_eq!(de1.sub, SubState::Heating);
+        assert_eq!(de1.frame, FRAMES - 1);
+        while !de1.flowing() {
+            run(&mut de1, 100);
+        }
+        assert_eq!(de1.frame, 0);
     }
 
     #[test]

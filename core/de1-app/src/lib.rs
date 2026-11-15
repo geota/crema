@@ -626,8 +626,8 @@ pub struct CremaCore {
     /// A link's first espresso state found the session flowing: the frame
     /// evidence it waits for before any retry (see [`stop_control`]).
     outage_check: Option<stop_control::OutageCheck>,
-    /// The frame the last espresso sample was on, for the outage check. Before
-    /// a link's first state, a sample only raises it.
+    /// The frame the last espresso sample heard in flow was on, for the frame
+    /// checks. Before a link's first state, a sample only raises it.
     last_frame: Option<u8>,
     /// This shot's last samples came on a link with no state yet, so the
     /// flow they and any stop owed on them belong to is unknown.
@@ -3894,9 +3894,10 @@ impl CremaCore {
             }
         }
         // A link's first espresso state waits for this sample's frame: a lower
-        // one is a new shot, begun unseen during the outage.
+        // one is a new shot, begun unseen during the outage. On a link that's
+        // up, a lower frame is a boundary the lost states missed.
         if self.monitor.is_shot_in_progress()
-            && self.settle_outage_on_sample(sample.frame_number, now, out)
+            && self.settle_frame(sample.frame_number, now, out)
             && let Some(info) = self.last_state
         {
             for event in self.monitor.split(info, now) {
@@ -3909,13 +3910,20 @@ impl CremaCore {
         // flow's: they only raise it, since the same shot's frame never goes
         // back (#427: hot water's frame 0, heard with its states lost, matched
         // the next shot's). They mark the session too, so a stop owed on them
-        // survives the return (`settle_outage_on_sample`).
+        // survives the return (`settle_outage_on_sample`). Only a sample heard
+        // in flow counts: the DE1 reports the last shot's frame until flow
+        // begins on frame 0 (the capture: frame 3 in FinalHeating).
+        let in_flow = self
+            .last_state
+            .is_some_and(|s| !de1_domain::session::is_pre_flow(s.substate));
         if self.monitor.is_shot_in_progress() && self.link.state_seen {
-            self.last_frame = Some(sample.frame_number);
+            if in_flow {
+                self.last_frame = Some(sample.frame_number);
+            }
             self.samples_without_state = false;
         } else if self.monitor.is_shot_in_progress() {
             self.samples_without_state = true;
-            if self.last_frame.is_none_or(|f| sample.frame_number > f) {
+            if in_flow && self.last_frame.is_none_or(|f| sample.frame_number > f) {
                 self.last_frame = Some(sample.frame_number);
             }
         }

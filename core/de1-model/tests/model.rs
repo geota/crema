@@ -1587,3 +1587,26 @@ fn a_flow_heard_on_a_lower_frame_on_a_live_link_is_a_new_session() {
     }
     assert!(world.violations.is_empty(), "{:?}", world.violations);
 }
+
+/// REVIEW-433 gap (2): shot A's Idle and shot B's two heating reports are
+/// lost on a link that stays up, so B is first heard pouring, as A's session.
+/// B's first sample, on a lower frame than A's, opens B's own session: no
+/// pour, auto-stop clock or tare from A (I20).
+#[test]
+fn a_shot_whose_start_was_lost_on_a_live_link_is_its_own_session() {
+    let mut world = bare_world();
+    world.apply(&Op::SetProfileTarget(None));
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    while world.de1.frame < 2 {
+        world.apply(&Op::Advance { ms: 100 });
+    }
+    world.apply(&Op::LoseStates(3));
+    while world.de1.state != MachineState::Idle {
+        world.apply(&Op::Advance { ms: 100 });
+    }
+    world.apply(&Op::Advance { ms: 1_000 });
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    world.apply(&Op::Advance { ms: 60_000 });
+    assert_eq!(world.coverage.replaced, 1, "B is a new session");
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
