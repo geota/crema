@@ -225,6 +225,44 @@ jobs:
         run: cargo test --locked
 
   # ─────────────────────────────────────────────────────────────────────
+  # The shot history's property tests (#310 C1): cursors, the search fold,
+  # derive_row on arbitrary JSON, and the stats combination. Their own crate and
+  # lockfile, as de1-model, because proptest fails `cargo deny`. 256 cases on
+  # PRs, 10k nightly.
+  # ─────────────────────────────────────────────────────────────────────
+  history-model:
+    name: model (de1-history-model)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' || github.event.schedule == '30 3 * * *'
+    env:
+      PROPTEST_CASES: ${{ github.event_name == 'schedule' && '10000' || '256' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain (rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/de1-history-model -> target
+
+      - name: cargo fmt --check
+        working-directory: core/de1-history-model
+        run: cargo fmt -- --check
+
+      - name: cargo clippy (-D warnings)
+        working-directory: core/de1-history-model
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: core/de1-history-model
+        run: cargo test --locked
+
+  # ─────────────────────────────────────────────────────────────────────
   # de1-relay fuzzing (relay v4 spec §3.7, AC-21): each cargo-fuzz target for
   # 60 s, nightly only. The seed corpus also replays in `cargo test` on every
   # PR (tests/fuzz_corpus.rs). New inputs go to a scratch corpus; a crash

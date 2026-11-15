@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc bcd058d9c78c51c01100f521e3c1c1e2c07f09145ba826334ec3e80536b1d103 # shrinks to hash = 0, key = Real(-2.725951355265183e-33), at = 0, id = ""
+cc bff88d6dfe072f3dc1846d0edb3f213fe462b0db0c4f153b07c6afd55acd55d7 # shrinks to v = Object {"summary": Object {"finalWeight": Number(1.24543271874243e+126)}}

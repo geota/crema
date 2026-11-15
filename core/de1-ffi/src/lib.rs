@@ -4983,3 +4983,9 @@ mod tests {
         assert!(brew_method_presets_with_custom_json("nope".to_owned()).is_err());
     }
 }
+
+// The SQLite history's dev oracle (#310 N7): dev and test builds only. Declared
+// last, so the release library's panic locations (this file's line numbers)
+// don't move.
+#[cfg(feature = "dev-oracle")]
+mod history_oracle;

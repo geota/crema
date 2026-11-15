@@ -1,0 +1,35 @@
+# The SQLite history's core (#310, `.scratch/history-sqlite/SPEC.md`): the
+# rules that turn a shot row into columns, the typed queries and their SQL, the
+# cursor, the change kinds and a reference filter the SQL is tested against.
+#
+# C1 is the pure half only. Nothing here opens a database.
+[package]
+name = "de1-history"
+version = "0.1.0"
+description = "Crema shot history: derived columns, typed queries, SQL text and reference rules"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+de1-domain = { path = "../de1-domain" }
+serde.workspace = true
+serde_json.workspace = true
+# NFD, for the search fold (SPEC §5). Pure tables, no IO.
+unicode-normalization = "0.1.24"
+
+[features]
+# C2's `rusqlite` store. Off, and empty, in C1: nothing here runs SQL yet.
+store = []
+# The reference rules (`reference`), for the stage-1 dev oracle (SPEC §3, N7).
+# `de1-wasm` and `de1-ffi` turn it on only in dev and test builds, so the
+# production bundles link none of this crate.
+dev-oracle = []
+
+[dev-dependencies]
+# The crate's own tests use the reference rules.
+de1-history = { path = ".", features = ["dev-oracle"] }
+
+[lints]
+workspace = true

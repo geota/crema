@@ -1,0 +1,26 @@
+# Property tests for the shot history's core rules (#310 C1, PLAN C1 Tests):
+# cursors round-trip, the fold is idempotent, `derive_row` is total and fits the
+# schema, and the per-family stats combination equals `brew_history_stats`.
+# Excluded from the core workspace, with its own lockfile, as `de1-model` is,
+# because proptest fails `cargo deny check bans` there. Dev-only, never shipped.
+#
+#   cd core/de1-history-model && cargo test
+#   PROPTEST_CASES=10000 cargo test
+[package]
+name = "de1-history-model"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+de1-domain = { path = "../de1-domain" }
+de1-history = { path = "../de1-history", features = ["dev-oracle"] }
+
+[dev-dependencies]
+proptest = "1"
+serde_json = "1"
+
+# Its own workspace root, so the core workspace's settings don't apply.
+[workspace]

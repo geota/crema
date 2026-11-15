@@ -5125,3 +5125,9 @@ mod tests {
         assert!(out.contains("DecodeError"));
     }
 }
+
+// The SQLite history's dev oracle (#310 N7): dev and test builds only. Declared
+// last, so the production bundle stays byte-identical: its panic locations
+// carry this file's line numbers.
+#[cfg(feature = "dev-oracle")]
+mod history_oracle;
