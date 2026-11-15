@@ -336,6 +336,20 @@ const ops: Record<string, (a: Args) => Promise<unknown> | unknown> = {
 	opfsList: (a) => opfsList(String(a.prefix ?? '.crema-history-')),
 	slots: (a) => slots(String(a.dir)),
 	plant: (a) => plant(String(a.path), Number(a.size), Number(a.fill ?? 0x41)),
+	/** Writes `text` to a new file at `path` (a repair generation's `.repair-done`, W1). */
+	async writeText(a) {
+		const parts = String(a.path).split('/');
+		const name = parts.pop()!;
+		const d = (await dirAt(parts.join('/'), true))!;
+		const fh = await d.getFileHandle(name, { create: true });
+		const sah = await syncHandle(fh);
+		try {
+			sah.write(new TextEncoder().encode(String(a.text)), { at: 0 });
+			sah.flush();
+		} finally {
+			sah.close();
+		}
+	},
 	corruptSlot: (a) =>
 		corruptSlot(String(a.dir), String(a.name), Number(a.offset), Number(a.length), Number(a.fill ?? 0x5a)),
 	versions: (a) => versions(String(a.h), Number(a.k)),
