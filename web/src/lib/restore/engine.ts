@@ -41,7 +41,7 @@ import { coerceBean, coerceRoaster, type Bean, type Roaster } from '#lib/bean/mo
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { getHistoryStore, type StoredShot } from '#lib/history/index.js';
 import { coerceStoredShot } from '#lib/history/store.svelte.js';
-import { sampleCountOf } from '#lib/history/light-rows.js';
+import { sampleCountOf, type AnyShot } from '#lib/history/model.js';
 import { getProfileStore } from '#lib/profiles/index.js';
 import type { CremaProfile } from '#lib/profiles/model.js';
 import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
@@ -355,8 +355,9 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		customMethods: methods.everything.map((m) => m.id),
 		shots: history.rawAll.map((s) => ({
 			id: s.id,
-			// A hidden row is light in memory, with its curve in the store.
-			hasSamples: sampleCountOf(s) > 0,
+			// A row's count is its summary's (#310 P4w); an unknown one
+			// (`null`) counts as a curve, which a fill must never replace.
+			hasSamples: (sampleCountOf(s) ?? 1) > 0,
 			pinned: s.pinned === true,
 			deleted: s.deletedAt != null
 		})),
@@ -560,11 +561,11 @@ export function nextRows<T extends { id: string }>(
 
 /** The history a plan leaves, and the rows whose curve to write first. */
 export function nextShots(
-	local: readonly StoredShot[],
+	local: readonly AnyShot[],
 	backup: readonly StoredShot[],
 	plan: RestorePlan['shots'],
 	replace = false
-): { next: StoredShot[]; series: StoredShot[] } {
+): { next: AnyShot[]; series: StoredShot[] } {
 	const theirs = new Map<string, StoredShot>();
 	for (const s of backup) if (!theirs.has(s.id)) theirs.set(s.id, s);
 	const remove = new Set(plan.remove);
@@ -579,25 +580,21 @@ export function nextShots(
 	const series: StoredShot[] = [];
 	const kept = local
 		.filter((s) => !remove.has(s.id))
-		.map((s) => {
+		.map((s): AnyShot => {
 			const b = theirs.get(s.id);
 			if (!b) return s;
 			if (replaced.has(s.id)) {
-				// The backup's row; with no curve of its own it keeps the one here,
-				// as the same shot's curve: memory then matches what a reload shows.
-				const row =
-					b.record.samples.length === 0 && s.record.samples.length > 0
-						? { ...b, record: { ...b.record, samples: s.record.samples } }
-						: b;
-				series.push(row);
-				return row;
+				// The backup's row. With no curve of its own it keeps the one here,
+				// as the same shot's curve: the store merges a heavy part the
+				// backup lacks from the row it holds (`keepHeavy`, and the legacy
+				// backend's merge on write), so memory matches what a reload shows.
+				series.push(b);
+				return b;
 			}
-			if (fill.has(s.id) && s.record.samples.length === 0 && b.record.samples.length > 0) {
-				// The backfill rule: the curve only, never over a curve here.
-				const filled = {
-					...s,
-					record: { duration: b.record.duration || s.record.duration, samples: [...b.record.samples] }
-				};
+			// The backfill rule: the curve only, never over a curve here. A row
+			// whose count is unknown (`null`) is never filled.
+			if (fill.has(s.id) && sampleCountOf(s) === 0 && b.record.samples.length > 0) {
+				const filled = withCurveOf(s, b);
 				series.push(filled);
 				return filled;
 			}
@@ -611,6 +608,21 @@ export function nextShots(
 		.map((s) => (zero.has(s.id) ? { ...s, bagDebit: 0 } : s));
 	series.push(...added);
 	return { next: newestFirst([...added, ...kept]), series };
+}
+
+/**
+ * `row` with `backup`'s curve, as a whole shot for the store to fill: the
+ * row's fields, the backup's samples, and no profile or brew series, which the
+ * store keeps from what it holds.
+ */
+function withCurveOf(row: AnyShot, backup: StoredShot): StoredShot {
+	const { summary: _s, ...fields } = row as AnyShot & { summary?: unknown };
+	const { brewSeries: _b, profile: _p, ...rest } = fields as StoredShot;
+	return {
+		...rest,
+		profile: null,
+		record: { duration: backup.record.duration || row.record.duration, samples: [...backup.record.samples] }
+	};
 }
 
 // ── Applying ────────────────────────────────────────────────────────────────

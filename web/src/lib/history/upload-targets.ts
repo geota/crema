@@ -12,7 +12,7 @@
  */
 
 import { DECENT_HISTORY_URL, decentShotViewUrl } from '#lib/decent/api.js';
-import { isBrewLog, type StoredShot } from './model';
+import { isBrewLog, type AnyShot } from './model';
 
 export interface UploadTarget {
 	id: 'visualizer' | 'decent';
@@ -87,7 +87,7 @@ export function viewableTargets(all: readonly UploadTarget[]): UploadTarget[] {
 }
 
 /** The Visualizer destination for a shot — its page is public by link. */
-export function visualizerUploadTarget(shot: StoredShot, enabled: boolean): UploadTarget {
+export function visualizerUploadTarget(shot: AnyShot, enabled: boolean): UploadTarget {
 	return {
 		id: 'visualizer',
 		name: 'Visualizer',
@@ -104,7 +104,7 @@ export function visualizerUploadTarget(shot: StoredShot, enabled: boolean): Uplo
  * serial stamped, or the reply carried no id) opens the account's shot
  * history instead.
  */
-export function decentUploadTarget(shot: StoredShot, enabled: boolean): UploadTarget {
+export function decentUploadTarget(shot: AnyShot, enabled: boolean): UploadTarget {
 	const publicUrl = shot.decentId ? decentShotViewUrl(shot.machine?.serialNumber, shot.decentId) : null;
 	return {
 		id: 'decent',
@@ -123,7 +123,7 @@ export function decentUploadTarget(shot: StoredShot, enabled: boolean): UploadTa
  * the row pip read.
  */
 export function shotUploadTargets(
-	shot: StoredShot,
+	shot: AnyShot,
 	enabled: { visualizer: boolean; decent: boolean }
 ): UploadTarget[] {
 	if (isBrewLog(shot)) return [];

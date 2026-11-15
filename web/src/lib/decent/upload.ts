@@ -38,7 +38,7 @@ import { Effect, Schedule } from 'effect';
 import { getHistoryStore } from '#lib/history/store.svelte.js';
 import { reportUploadOutcome } from '#lib/history/upload-toast.js';
 import { appendSyncLog } from '#lib/visualizer/sync-config.js';
-import { isBrewLog, refusedNoSamples, toCoreShotMachine, type StoredShot } from '#lib/history/model.js';
+import { isBrewLog, refusedNoSamples, toCoreShotMachine, type AnyShot, type StoredShot } from '#lib/history/model.js';
 import type { ShotMachine, TimedSample } from '#lib/core/crema-core.js';
 import { getMachineReadout } from '#lib/state/machine-readout.svelte.js';
 import {
@@ -125,7 +125,7 @@ export function liveSerialUnreadable(): boolean {
 }
 
 /** Pulled from Visualizer (`storedShotFromWire` mints `shot:remote:<id>`), not recorded here. */
-export function isPulledShot(shot: StoredShot): boolean {
+export function isPulledShot(shot: Pick<StoredShot, 'id'>): boolean {
 	return shot.id.startsWith('shot:remote:');
 }
 
@@ -422,13 +422,13 @@ export interface DecentBacklogContext {
  * refused, shots pulled from Visualizer without a stamped machine, and
  * unstamped rows while no DE1 serial is known.
  */
-export function unsentDecentShots(
-	shots: readonly StoredShot[],
+export function unsentDecentShots<T extends AnyShot>(
+	shots: readonly T[],
 	ctx: DecentBacklogContext = {
 		hasLiveMachine: liveMachineIdentity() !== null,
 		rejectedShotIds: readDecentAccount().rejectedShotIds
 	}
-): StoredShot[] {
+): T[] {
 	const rejected = new Set(ctx.rejectedShotIds);
 	return shots.filter(
 		(s) =>

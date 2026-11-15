@@ -140,6 +140,17 @@ export function keepHeavy(incoming: DetailsRecord, stored: DetailsRecord | undef
 }
 
 /**
+ * What a filling details write keeps: the stored parts, and the incoming ones
+ * only where the store has none. A pulled curve or recipe fills a row; it
+ * never replaces the shot's own (#310 P4w: a light row's memory can't say
+ * whether the store holds one).
+ */
+export function fillHeavy(incoming: DetailsRecord, stored: DetailsRecord | undefined): DetailsRecord {
+	if (!stored) return incoming;
+	return keepHeavy({ ...stored, id: incoming.id }, incoming);
+}
+
+/**
  * A test seam: called before each transaction this wrapper opens, by kind,
  * and may throw (a full disk, a crash) to stop it there.
  */
@@ -177,6 +188,8 @@ export interface ShotWrite {
 	details: boolean;
 	/** The summary to store with a row-only write. */
 	summary?: ShotSummary;
+	/** With `details`: only fill, so a heavy part the store holds stays ({@link fillHeavy}). */
+	fill?: boolean;
 }
 
 /** The details as they ended up, for rows whose heavy parts were written. */
@@ -367,7 +380,7 @@ export class HistoryDb {
 			const look = details.get(w.shot.id) as IDBRequest<DetailsRecord | undefined>;
 			look.onsuccess = () => {
 				try {
-					const kept = keepHeavy(incoming, look.result);
+					const kept = w.fill ? fillHeavy(incoming, look.result) : keepHeavy(incoming, look.result);
 					const summary = summarize(withDetails(w.shot, kept));
 					details.put(kept);
 					rows.put(rowOf(w.shot, summary));

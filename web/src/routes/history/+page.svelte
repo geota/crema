@@ -79,7 +79,7 @@
 		filterScopeKey,
 		type SelectionPin
 	} from '#lib/history/index.js';
-	import type { ManualBrewPatch, StoredShot } from '#lib/history/index.js';
+	import type { AnyShot, ManualBrewPatch, StoredShot } from '#lib/history/index.js';
 	import { ShotRow, ShotDetail, CompareOverlay } from '#lib/components/history/index.js';
 	import PhoneShotRow from '#lib/components/history/PhoneShotRow.svelte';
 	import { groupShots } from '#lib/history/phone-list.js';
@@ -133,7 +133,7 @@
 	 * UI filter — it never writes the result back into the snapshot,
 	 * so a later bean rename / retag doesn't rewrite history.
 	 */
-	function effectiveShotTags(shot: StoredShot): readonly string[] {
+	function effectiveShotTags(shot: AnyShot): readonly string[] {
 		if (shot.tags && shot.tags.length > 0) return shot.tags;
 		const beanId = shot.bean?.beanId ?? null;
 		if (!beanId) return [];
@@ -179,7 +179,7 @@
 		if (shots.length === 0 || exporting) return;
 		exporting = true;
 		try {
-			exportAllAsV2Jsonl();
+			await exportAllAsV2Jsonl();
 		} catch (err) {
 			console.error('History export failed', err);
 			toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -200,11 +200,20 @@
 		}
 	}
 
-	function exportAllAsV2Jsonl(): void {
-		const jsonl = shots
-			.map((s) => exportStoredShotAsV2Json(s))
-			.map((s) => JSON.stringify(JSON.parse(s)))
-			.join('\n');
+	/**
+	 * The rows carry no samples (#310 P4w): each shot is loaded whole, a batch
+	 * at a time. A read that fails stops the export, so no file goes out with
+	 * empty curves.
+	 */
+	async function exportAllAsV2Jsonl(): Promise<void> {
+		const ids = shots.map((s) => s.id);
+		const lines: string[] = [];
+		for (let i = 0; i < ids.length; i += 25) {
+			for (const whole of await store.loadMany(ids.slice(i, i + 25))) {
+				lines.push(JSON.stringify(JSON.parse(exportStoredShotAsV2Json(whole))));
+			}
+		}
+		const jsonl = lines.join('\n');
 		const blob = new Blob([jsonl], { type: 'application/x-ndjson' });
 		downloadBlob(`crema-history-${filenameStamp()}.jsonl`, blob);
 	}
@@ -348,7 +357,7 @@
 	 * all of them → uploaded; on some → partial; queued → pending; none
 	 * enabled → local. The title spells out which is which.
 	 */
-	function pipFor(shot: StoredShot): { pip: 'uploaded' | 'partial' | 'pending' | 'local'; title: string } {
+	function pipFor(shot: AnyShot): { pip: 'uploaded' | 'partial' | 'pending' | 'local'; title: string } {
 		// Brew Log rows are local-only (issue #10): no destination, no pip state.
 		if (isBrewLog(shot)) return { pip: 'local', title: 'Brew Log — stays on this device' };
 		const enabled = uploadTargetsFor(shot).filter((t) => t.enabled);
@@ -439,7 +448,7 @@
 	 * shot is already there. The detail folds these into a single Upload
 	 * menu entry (`uploadMenuEntry`) plus a Share / View row per holder.
 	 */
-	function uploadTargetsFor(shot: StoredShot): UploadTarget[] {
+	function uploadTargetsFor(shot: AnyShot): UploadTarget[] {
 		return shotUploadTargets(shot, { visualizer: canPushShots, decent: decentLinked });
 	}
 	/** Push one shot to the chosen destinations (the menu picked them) — one toast for all. */
@@ -501,7 +510,7 @@
 		logBrewOpen = true;
 	}
 	/** "Log again" — re-open the form seeded from a prior brew, dated now. */
-	function logAgain(shot: StoredShot): void {
+	function logAgain(shot: AnyShot): void {
 		logBrewPrefill = {
 			method: methodOf(shot) ?? 'espresso',
 			// No bag on the prior brew → the form opens on the active bag.
@@ -654,7 +663,7 @@
 	 * hard-removed). `remote: true` additionally enqueues a Visualizer DELETE
 	 * and drains it now, so the uploaded copy is removed too.
 	 */
-	async function handleDelete(shot: StoredShot, opts: { remote: boolean }): Promise<void> {
+	async function handleDelete(shot: AnyShot, opts: { remote: boolean }): Promise<void> {
 		const label = shot.profileName ?? (methodOf(shot) ? methodLabel(methodOf(shot), shot.brewMethodLabel) : 'this shot');
 		const pinNote = shot.pinned === true ? ' It is pinned.' : '';
 		const msg = opts.remote
@@ -934,7 +943,7 @@
 	});
 
 	/** Whether `s` passes the bean filter: one bag, one coffee, or off. */
-	function matchesBeanFilter(s: StoredShot): boolean {
+	function matchesBeanFilter(s: AnyShot): boolean {
 		if (filterBean === 'all') return true;
 		if (filterBean.startsWith(COFFEE_FILTER_PREFIX)) {
 			return coffeeKeyById.get(s.id) === filterBean.slice(COFFEE_FILTER_PREFIX.length);
@@ -1293,14 +1302,33 @@
 		}
 	}
 
+	/**
+	 * The compared shots, whole: the rows carry no samples (#310 P4w), so the
+	 * overlay draws once every selected shot has loaded.
+	 */
+	let compareWhole = $state.raw<StoredShot[] | null>(null);
 	/** Open the compare overlay — only meaningful with ≥2 selected. */
-	function openCompare(): void {
+	async function openCompare(): Promise<void> {
 		if (selectedIds.length < 2) return;
+		const ids = [...selectedIds];
 		compareOpen = true;
+		compareWhole = null;
+		let whole: StoredShot[];
+		try {
+			whole = await store.loadMany(ids);
+		} catch {
+			if (compareOpen) toast.error('These shots couldn’t be loaded to compare. Try again.');
+			compareOpen = false;
+			return;
+		}
+		// Still the same pick: a later open, or a close, wins.
+		if (!compareOpen || ids.join('\n') !== selectedIds.join('\n')) return;
+		compareWhole = whole;
 	}
 
 	function closeCompare(): void {
 		compareOpen = false;
+		compareWhole = null;
 	}
 
 	/** The selected shots, in selection order, resolved from the store. */
@@ -1915,8 +1943,8 @@
 	/>
 {/if}
 
-{#if compareOpen && compareShots.length >= 2}
-	<CompareOverlay shots={compareShots} onClose={closeCompare} />
+{#if compareOpen && compareWhole && compareWhole.length >= 2}
+	<CompareOverlay shots={compareWhole} onClose={closeCompare} />
 {/if}
 
 {#if importOpen}

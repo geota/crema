@@ -335,10 +335,21 @@
 
 	/** Export the local shot history as the core's Crema `crema/v1` JSONL —
 	 *  the file Android's shot import reads too (F10). */
-	function exportHistory(): void {
+	async function exportHistory(): Promise<void> {
 		// Not loaded is not empty: an export now would hold no shots.
 		if (!history.loaded) return;
-		const blob = new Blob([shotHistoryJsonl(history.all, Date.now(), __APP_VERSION__)], {
+		// The rows carry no samples (#310 P4w): each shot goes whole, loaded a
+		// batch at a time. A read that fails stops the export, so no file goes
+		// out with empty curves.
+		const ids = history.all.map((s) => s.id);
+		const whole = [];
+		try {
+			for (let i = 0; i < ids.length; i += 25) whole.push(...(await history.loadMany(ids.slice(i, i + 25))));
+		} catch {
+			toast.error('The shot history couldn’t be read, so nothing was exported. Try again.');
+			return;
+		}
+		const blob = new Blob([shotHistoryJsonl(whole, Date.now(), __APP_VERSION__)], {
 			type: 'application/x-ndjson'
 		});
 		downloadBlob('crema-history.crema.jsonl', blob);

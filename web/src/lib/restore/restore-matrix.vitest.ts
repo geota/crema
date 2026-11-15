@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeLocks } from '#lib/testing/fake-locks.js';
 import type { RestorePlan, StorePlan, VisualizerSyncPrefs } from '#lib/core/crema-core.js';
 import type { Bean, Roaster } from '#lib/bean/model.js';
-import type { StoredShot } from '#lib/history/index.js';
+import { sampleCountOf, type AnyShot, type StoredShot } from '#lib/history/index.js';
 import type { CremaProfile } from '#lib/profiles/model.js';
 import type { BrewRecipe, CustomBrewMethod } from '#lib/core/crema-core.js';
 import type { PreparedBackup, RestoreStep, WebMode } from './engine';
@@ -505,10 +505,11 @@ function expectApplied(plan: RestorePlan, before: Device, after: Device, backup:
 
 	// History: what each row is, whose copy, and whether its curve is stored.
 	type Row = { from: unknown; deleted: boolean; curve: boolean; debit: unknown };
-	const row = (s: StoredShot): Row => ({
+	// A row's curve is its summary's count (#310 P4w): rows carry no samples.
+	const row = (s: AnyShot): Row => ({
 		from: s.metadata.notes,
 		deleted: s.deletedAt != null,
-		curve: s.record.samples.length > 0,
+		curve: (sampleCountOf(s) ?? 0) > 0,
 		debit: s.bagDebit ?? null
 	});
 	const theirs = new Map((backup.shots ?? []).map((s) => [s.id, s]));
@@ -526,7 +527,7 @@ function expectApplied(plan: RestorePlan, before: Device, after: Device, backup:
 	// same shot's curve, in memory and after a reload alike.
 	for (const id of [...plan.shots.overwrite, ...plan.shots.revive]) {
 		const mine = before.shots.rows[id];
-		want[id] = { ...fromBackup(id), curve: fromBackup(id).curve || (mine?.record.samples.length ?? 0) > 0 };
+		want[id] = { ...fromBackup(id), curve: fromBackup(id).curve || (mine ? (sampleCountOf(mine) ?? 0) > 0 : false) };
 	}
 	for (const id of plan.shots.fill) want[id] = { ...want[id], curve: true };
 	for (const id of plan.shots.add) want[id] = fromBackup(id, plan.shots.zeroDebit.includes(id) ? 0 : BEAN_DEBIT);

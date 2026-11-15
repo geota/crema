@@ -17,7 +17,7 @@
 	import { relativeAgo } from '#lib/brew/phone-brew.js';
 	import StarRating from '#lib/components/common/StarRating.svelte';
 	import StaticShotChart from '#lib/components/history/StaticShotChart.svelte';
-	import type { StoredShot } from '#lib/history/index.js';
+	import type { AnyShot } from '#lib/history/index.js';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import PhoneStat from './PhoneStat.svelte';
 
@@ -39,7 +39,7 @@
 		 *  card (user direction, all shells). Null = manual / unclassified. */
 		stopReason?: StopReason | null;
 		/** Phone: the shot's history row, for the context line and the rating. */
-		stored?: StoredShot | null;
+		stored?: AnyShot | null;
 		/** Phone: the recorded telemetry, drawn on the card. */
 		series?: readonly TelemetrySample[];
 		/** Phone: open the shot in History. */

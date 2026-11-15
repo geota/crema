@@ -74,7 +74,7 @@ async function recordedShot() {
 	t.settings.set('baristaName', 'Sam');
 	await t.pour(1_000, 48);
 	const shot = {
-		...t.history.all[0],
+		...(await t.history.loadShot(t.history.all[0].id))!,
 		tags: ['dial-in'],
 		bean: { name: 'Gesha', roasterName: 'Onyx', roastedOn: '2026-10-01', roastLevel: 3 }
 	};
@@ -114,7 +114,7 @@ describe('shot history between the shells (F10)', () => {
 		);
 		expect(result.error).toBeNull();
 		expect(result.imported).toBe(1);
-		const shot = t.history.all[0];
+		const shot = (await t.history.loadShot(t.history.all[0].id))!;
 		expect(shot.record.samples).toHaveLength(48);
 		// DE1 frames count from 0: the first frame survives the trip.
 		expect(shot.record.samples.slice(0, 4).map((s) => s.sample.frameNumber)).toEqual([0, 2, 2, 3]);
@@ -137,7 +137,7 @@ describe('shot history between the shells (F10)', () => {
 			fileOf(fixture('web-shots.crema.jsonl'), 'web-shots.crema.jsonl')
 		);
 		expect(result.imported).toBe(1);
-		const shot = t.history.all[0];
+		const shot = (await t.history.loadShot(t.history.all[0].id))!;
 		expect(shot.record.samples).toHaveLength(48);
 		expect(shot.record.samples.slice(0, 4).map((s) => s.sample.frameNumber)).toEqual([0, 2, 2, 3]);
 		expect(shot.grinderModel).toBe('EK43');

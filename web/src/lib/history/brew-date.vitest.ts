@@ -299,7 +299,8 @@ describe('a pinned row is never cut (#311)', () => {
 
 	it('stays when a batch overfills the history', () => {
 		const { store, oldest } = fullWithTheOldestPinned();
-		const template = store.all[0];
+		// A whole shot: `addManualBrew` returns one, where `all` holds rows.
+		const template = new HistoryStore().addManualBrew(brew(NOW));
 		store.insertMany([{ ...template, id: 'new', completedAt: NOW + HOUR }]);
 		expect(store.get(oldest.id)).toBeDefined();
 	});

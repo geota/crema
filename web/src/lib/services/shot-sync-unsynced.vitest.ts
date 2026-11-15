@@ -138,6 +138,8 @@ function mkHistory(initial: StoredShot[]) {
 			return [...map.values()];
 		},
 		get: (id: string) => map.get(id),
+		loadShot: async (id: string) => map.get(id),
+		loadMany: async (ids: readonly string[]) => ids.map((id) => map.get(id)).filter((s) => s !== undefined),
 		bindVisualizerId: (id: string, visualizerId: string) => {
 			const s = map.get(id);
 			if (s) (s as { visualizerId?: string | null }).visualizerId = visualizerId;
