@@ -28,7 +28,7 @@
 
 	const history = getHistoryStore();
 	let busy = $state(false);
-	let snapshots = $state<{ which: 'latest' | 'previous'; at: number; rows: number }[]>([]);
+	let snapshots = $state<{ name: string; at: number; rows: number }[]>([]);
 
 	$effect(() => {
 		if (history.health !== 'lost') return;
@@ -85,9 +85,7 @@
 	}
 
 	function downloadUnsaved(): void {
-		for (const id of history.unsavedShots) {
-			const shot = history.get(id);
-			if (!shot) continue;
+		for (const shot of history.unsavedRows()) {
 			const blob = new Blob([exportStoredShotAsV2Json(shot, { fullSeries: true })], { type: 'application/json' });
 			downloadBlob(shotFilename(shot), blob);
 		}
@@ -108,9 +106,9 @@
 			{/if}
 		</span>
 		<div class="hs-actions">
-			{#each snapshots as snap (snap.which)}
-				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot(snap.which), 'History restored from the daily copy.')}>
-					{snap.which === 'previous' ? 'Earlier daily copy' : 'Daily copy'} ({dateOf(snap.at)}, {snap.rows} shots, without their curves)
+			{#each snapshots as snap (snap.name)}
+				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot(snap.name), 'History restored from the daily copy.')}>
+					Daily copy ({dateOf(snap.at)}, {snap.rows} shots, without their curves)
 				</button>
 			{/each}
 			<button type="button" class="hs-btn" disabled={busy} onclick={() => void restoreBackup()}>Restore a backup</button>

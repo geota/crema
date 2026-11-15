@@ -1,74 +1,38 @@
 /**
- * `#lib/history/rows-snapshot.js` — a daily copy of every row, outside the
+ * `#lib/history/rows-snapshot.js` — daily copies of every row, outside the
  * database (#310 P3w, SPEC §6).
  *
  * After the first save each day, every row (its fields, summary and as-run
- * profile, no series) is written, gzipped, to one file in the origin private
- * file system. A store with fewer rows than the last snapshot, less the
- * deletes by name since (Start empty, a recovery, a restore to fewer rows),
- * keeps the last one aside as the previous snapshot and writes its own beside
- * it, so there is never a day without a copy and the copy from before stays.
- * If the database is lost, this is one of the lost banner's ways back. Written
- * in chunks of {@link SNAPSHOT_CHUNK} rows with a yield between them, and to
- * a writable that only replaces the file when it closes, so a tab closed
- * part-way leaves yesterday's whole. Skipped where there is no private file
- * system.
+ * profile, no series) is written, gzipped, to that day's file,
+ * `rows-YYYYMMDD.jsonl.gz`, in the `crema-history-snapshot` directory of the
+ * origin private file system. A day's file, once there, is never written
+ * again, and nothing else ever deletes or overwrites one: a recovery that
+ * leaves the store smaller only means the next day's copy is smaller. Once a
+ * day's copy is written and read back whole, the oldest beyond
+ * {@link SNAPSHOTS_KEPT} go.
+ *
+ * If the database is lost, each copy is one of the lost banner's ways back,
+ * newest first, with the date and row count read from the copy itself.
+ * Written in chunks of {@link SNAPSHOT_CHUNK} rows with a yield between them,
+ * to a writable that only lands when it closes, so a tab closed part-way
+ * leaves no half copy. Skipped where there is no private file system.
  */
 import { Gzip, gunzipSync, strFromU8, strToU8 } from 'fflate';
-import { HISTORY_SNAPSHOT_NAME, HISTORY_SNAPSHOT_PREV_NAME } from './store-names';
+import { HISTORY_SNAPSHOT_NAME } from './store-names';
 import type { RowRecord } from './history-db';
 
 export const SNAPSHOT_CHUNK = 500;
-/** The local day the last snapshot was written. */
-export const SNAPSHOT_DAY_KEY = 'crema.history.snapshotDay';
-/** How many rows the last snapshot held. */
-export const SNAPSHOT_ROWS_KEY = 'crema.history.snapshotRows';
-
-/** The previous snapshot's row count and date, as `{ rows, at }`. */
-export const SNAPSHOT_PREV_KEY = 'crema.history.snapshotPrev';
-
-/** Which snapshot: today's, or the one kept aside when a smaller store's was written. */
-export type SnapshotWhich = 'latest' | 'previous';
-
-const fileOf = (which: SnapshotWhich): string => (which === 'previous' ? HISTORY_SNAPSHOT_PREV_NAME : HISTORY_SNAPSHOT_NAME);
-
-function readPrevMeta(): { rows: number; at: number } | null {
-	try {
-		const v = JSON.parse(localStorage.getItem(SNAPSHOT_PREV_KEY) ?? 'null') as { rows?: unknown; at?: unknown } | null;
-		return v && typeof v.rows === 'number' && typeof v.at === 'number' ? { rows: v.rows, at: v.at } : null;
-	} catch {
-		return null;
-	}
-}
+/** How many daily copies are kept. */
+export const SNAPSHOTS_KEPT = 3;
 
 /** One snapshot line: a row, with its as-run profile. */
 export type SnapshotRow = RowRecord & { profile?: unknown };
 
-/** How many rows the last snapshot held, or null for none. */
-export function lastSnapshotRows(): number | null {
-	try {
-		const v = localStorage.getItem(SNAPSHOT_ROWS_KEY);
-		const n = v == null ? NaN : Number(v);
-		return Number.isFinite(n) ? n : null;
-	} catch {
-		return null;
-	}
-}
-
-/**
- * `n` rows were deleted by name: the next snapshot may be that much smaller.
- * Kept with the count, so it holds across tabs and reloads. A store that is
- * smaller for any other reason (Start empty, a restore under way) keeps the
- * last snapshot, which may be the only way back.
- */
-export function snapshotRowsDropped(n: number): void {
-	const last = lastSnapshotRows();
-	if (last === null || n <= 0) return;
-	try {
-		localStorage.setItem(SNAPSHOT_ROWS_KEY, String(Math.max(0, last - n)));
-	} catch {
-		// Then the next snapshot waits until the store has grown back.
-	}
+/** A daily copy there is to recover: its file, when it was written, and its rows. */
+export interface SnapshotInfo {
+	name: string;
+	at: number;
+	rows: number;
 }
 
 type Root = () => Promise<FileSystemDirectoryHandle | undefined>;
@@ -82,71 +46,84 @@ async function defaultRoot(): Promise<FileSystemDirectoryHandle | undefined> {
 	}
 }
 
+/** The copies' directory; with `create`, made if missing. Undefined when there's none. */
+async function snapshotDir(root: Root, create: boolean): Promise<FileSystemDirectoryHandle | undefined> {
+	const top = await root();
+	if (!top) return undefined;
+	try {
+		return await top.getDirectoryHandle(HISTORY_SNAPSHOT_NAME, { create });
+	} catch {
+		return undefined;
+	}
+}
+
 /** Today, as the local date. */
 export function dayOf(ms: number): string {
 	const d = new Date(ms);
 	return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
 
-/** Whether today's snapshot is still to write. */
-export function snapshotDue(now: number): boolean {
+/** The copy's file for the local day of `ms`. */
+export function snapshotNameOf(ms: number): string {
+	const d = new Date(ms);
+	const pad = (n: number) => String(n).padStart(2, '0');
+	return `rows-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.jsonl.gz`;
+}
+
+const DAILY = /^rows-\d{8}\.jsonl\.gz$/;
+
+/** The daily copies' names, newest first. */
+async function listNames(dir: FileSystemDirectoryHandle): Promise<string[]> {
+	const names: string[] = [];
+	for await (const name of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) {
+		if (DAILY.test(name)) names.push(name);
+	}
+	return names.sort().reverse();
+}
+
+async function exists(dir: FileSystemDirectoryHandle, name: string): Promise<boolean> {
 	try {
-		return localStorage.getItem(SNAPSHOT_DAY_KEY) !== dayOf(now);
+		await dir.getFileHandle(name);
+		return true;
 	} catch {
 		return false;
 	}
 }
 
+/** Whether the day of `ms` has its copy. With no private file system, yes: there's nothing to write. */
+export async function snapshotWritten(ms: number, root: Root = defaultRoot): Promise<boolean> {
+	if ((await root()) === undefined) return true;
+	const dir = await snapshotDir(root, false);
+	return dir ? exists(dir, snapshotNameOf(ms)) : false;
+}
+
 const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-/**
- * Before a smaller store's snapshot replaces the last one: keep the last one
- * as the previous snapshot, unless the previous one already holds more rows
- * (then that is the copy from before, and it stays).
- */
-async function keepAside(dir: FileSystemDirectoryHandle): Promise<void> {
-	let file: File;
-	try {
-		file = await (await dir.getFileHandle(HISTORY_SNAPSHOT_NAME)).getFile();
-	} catch {
-		return;
-	}
-	const rows = lastSnapshotRows() ?? 0;
-	const prev = readPrevMeta();
-	if (prev && prev.rows > rows) return;
-	const bytes = new Uint8Array(await file.arrayBuffer());
-	const writable = await (await dir.getFileHandle(HISTORY_SNAPSHOT_PREV_NAME, { create: true })).createWritable();
-	try {
-		await writable.write(bytes as BufferSource);
-		await writable.close();
-	} catch (e) {
-		await writable.abort().catch(() => {});
-		throw e;
-	}
-	try {
-		localStorage.setItem(SNAPSHOT_PREV_KEY, JSON.stringify({ rows, at: file.lastModified }));
-	} catch {
-		// Its date reads as the copy's.
-	}
+function parse(bytes: Uint8Array): SnapshotRow[] {
+	return strFromU8(gunzipSync(bytes))
+		.split('\n')
+		.filter((l) => l.length > 0)
+		.map((l) => JSON.parse(l) as SnapshotRow)
+		.filter((r) => typeof r === 'object' && r !== null && typeof r.id === 'string');
 }
 
 /**
- * Write `rows` as the snapshot. With `keepPrevious` (the store is smaller
- * than the last snapshot), the last one is kept aside first. Whether it was
- * written; false with no private file system, or when the write failed
- * (yesterday's stays).
+ * Write `rows` as the day's copy, unless that day has one. Once it reads back
+ * whole, the copies beyond {@link SNAPSHOTS_KEPT} go, oldest first. Whether
+ * it was written; false with no private file system, when the day has a copy
+ * already, or when the write or the read-back failed (every older copy stays).
  */
 export async function writeRowsSnapshot(
 	rows: readonly SnapshotRow[],
 	now: number,
-	root: Root = defaultRoot,
-	{ keepPrevious = false }: { keepPrevious?: boolean } = {}
+	root: Root = defaultRoot
 ): Promise<boolean> {
-	const dir = await root();
+	const dir = await snapshotDir(root, true);
 	if (!dir) return false;
+	const name = snapshotNameOf(now);
+	if (await exists(dir, name)) return false;
+	let made = false;
 	try {
-		if (keepPrevious) await keepAside(dir);
-		const handle = await dir.getFileHandle(HISTORY_SNAPSHOT_NAME, { create: true });
 		const parts: Uint8Array[] = [];
 		const gz = new Gzip((chunk) => parts.push(chunk));
 		for (let i = 0; i < rows.length; i += SNAPSHOT_CHUNK) {
@@ -158,6 +135,8 @@ export async function writeRowsSnapshot(
 			await pause();
 		}
 		gz.push(new Uint8Array(0), true);
+		const handle = await dir.getFileHandle(name, { create: true });
+		made = true;
 		const writable = await handle.createWritable();
 		try {
 			for (const p of parts) await writable.write(p as BufferSource);
@@ -166,37 +145,55 @@ export async function writeRowsSnapshot(
 			await writable.abort().catch(() => {});
 			throw e;
 		}
-		try {
-			localStorage.setItem(SNAPSHOT_DAY_KEY, dayOf(now));
-			localStorage.setItem(SNAPSHOT_ROWS_KEY, String(rows.length));
-		} catch {
-			// Written anyway; tomorrow's goes again.
+		// Verified: every row back, in order.
+		const back = parse(new Uint8Array(await (await handle.getFile()).arrayBuffer()));
+		if (back.length !== rows.length || back.some((r, i) => r.id !== rows[i].id)) {
+			throw new Error('The daily copy didn’t read back whole.');
 		}
-		return true;
 	} catch {
+		// Today's, unfinished or unreadable, goes; every older copy stays.
+		if (made) await dir.removeEntry(name).catch(() => {});
 		return false;
 	}
+	try {
+		for (const old of (await listNames(dir)).slice(SNAPSHOTS_KEPT)) await dir.removeEntry(old).catch(() => {});
+	} catch {
+		// Pruned after the next day's copy.
+	}
+	return true;
 }
 
-/** What a snapshot holds, or null when there's none or it can't be read. */
+/** What a daily copy holds (the newest when `name` is left out), or null when there's none or it can't be read. */
 export async function readRowsSnapshot(
 	root: Root = defaultRoot,
-	which: SnapshotWhich = 'latest'
+	name?: string
 ): Promise<{ rows: SnapshotRow[]; at: number } | null> {
-	const dir = await root();
+	const dir = await snapshotDir(root, false);
 	if (!dir) return null;
 	try {
-		const handle = await dir.getFileHandle(fileOf(which));
-		const file = await handle.getFile();
-		const text = strFromU8(gunzipSync(new Uint8Array(await file.arrayBuffer())));
-		const rows = text
-			.split('\n')
-			.filter((l) => l.length > 0)
-			.map((l) => JSON.parse(l) as SnapshotRow)
-			.filter((r) => typeof r === 'object' && r !== null && typeof r.id === 'string');
-		const at = which === 'previous' ? (readPrevMeta()?.at ?? file.lastModified) : file.lastModified;
-		return { rows, at };
+		const which = name ?? (await listNames(dir))[0];
+		if (!which || !DAILY.test(which)) return null;
+		const file = await (await dir.getFileHandle(which)).getFile();
+		return { rows: parse(new Uint8Array(await file.arrayBuffer())), at: file.lastModified };
 	} catch {
 		return null;
 	}
+}
+
+/** The daily copies there are, newest first, each with its date and row count read from the copy. */
+export async function listRowsSnapshots(root: Root = defaultRoot): Promise<SnapshotInfo[]> {
+	const dir = await snapshotDir(root, false);
+	if (!dir) return [];
+	let names: string[];
+	try {
+		names = await listNames(dir);
+	} catch {
+		return [];
+	}
+	const out: SnapshotInfo[] = [];
+	for (const name of names) {
+		const snap = await readRowsSnapshot(root, name);
+		if (snap) out.push({ name, at: snap.at, rows: snap.rows.length });
+	}
+	return out;
 }

@@ -6,11 +6,9 @@
 /** The IndexedDB database the rows and details live in (P3w). */
 export const HISTORY_DB_NAME = 'crema-history';
 
-/** The daily rows snapshot, in the origin private file system (§6). */
-export const HISTORY_SNAPSHOT_NAME = 'crema-history-snapshot';
-
 /**
- * The snapshot kept aside when a smaller store's was written (after Start
- * empty, a recovery or a restore to fewer rows), so the copy from before stays.
+ * The daily rows snapshots: a directory in the origin private file system
+ * (§6), one dated file a day. A directory, so the P0 erase, which removes this
+ * name recursively, takes every copy.
  */
-export const HISTORY_SNAPSHOT_PREV_NAME = 'crema-history-snapshot-prev';
+export const HISTORY_SNAPSHOT_NAME = 'crema-history-snapshot';

@@ -125,13 +125,12 @@ import { addPending, dropPending, readPending } from './pending';
 import {
 	SNAPSHOT_CHUNK,
 	dayOf,
-	lastSnapshotRows,
+	listRowsSnapshots,
 	readRowsSnapshot,
-	snapshotRowsDropped,
-	snapshotDue,
+	snapshotWritten,
 	writeRowsSnapshot,
-	type SnapshotRow,
-	type SnapshotWhich
+	type SnapshotInfo,
+	type SnapshotRow
 } from './rows-snapshot';
 import { summarize } from './summary';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
@@ -458,6 +457,12 @@ export class HistoryStore {
 		return this.unsavedIds;
 	}
 
+	/** The rows of {@link unsavedShots}, for Download: readable while the store is lost, too. */
+	unsavedRows(): StoredShot[] {
+		const byId = this.byId();
+		return this.unsavedIds.map((id) => byId.get(id)).filter((s): s is StoredShot => s !== undefined);
+	}
+
 	/** Whether closing the tab now would lose something. */
 	get hasUnsaved(): boolean {
 		if (this.unsavedIds.length > 0) return true;
@@ -782,7 +787,17 @@ export class HistoryStore {
 	}
 
 	/** The rows from `crema-history`, with what arrived meanwhile; then the view's details. */
-	private async loadFromDb(mine: ReadonlySet<string> = new Set()): Promise<void> {
+	/**
+	 * After a loss (`afterLoss`): `mine` are shots this tab held that are
+	 * written over the store's rows (its own recovery); `gone` are ids memory
+	 * holds that the store's recovery source held, which the store lacking
+	 * them means were deleted since, so they're dropped, never written again.
+	 */
+	private async loadFromDb({
+		mine = new Set<string>(),
+		gone = new Set<string>(),
+		afterLoss = false
+	}: { mine?: ReadonlySet<string>; gone?: ReadonlySet<string>; afterLoss?: boolean } = {}): Promise<void> {
 		const db = this.db!;
 		let records: RowRecord[];
 		try {
@@ -809,9 +824,13 @@ export class HistoryStore {
 		// After the last await: rows made here during the load stay, and lead.
 		// They're written next, journalled or not.
 		// And rows held here when a lost store went (`mine`), over what a
-		// recovery put in.
-		const made = this.shots.filter((s) => !this.stored.has(s.id) || mine.has(s.id));
+		// recovery put in. Never an id the recovery had and has since deleted.
+		const made = this.shots.filter((s) => (!this.stored.has(s.id) && !gone.has(s.id)) || mine.has(s.id));
 		const madeIds = new Set(made.map((s) => s.id));
+		if (afterLoss) {
+			// What isn't written from here now has the store's copy, or was deleted.
+			for (const id of [...this.dirtyDetails]) if (!madeIds.has(id)) this.dirtyDetails.delete(id);
+		}
 		// Their journal rows go once they're written (`afterWrite`).
 		this.bootJournal.clear();
 		for (const s of made) {
@@ -848,6 +867,10 @@ export class HistoryStore {
 			return f;
 		});
 		this.shots = [...merged].sort(byDateThenId);
+		if (afterLoss) {
+			const pending = new Set(merged.filter((s) => this.dirtyDetails.has(s.id)).map((s) => s.id));
+			this.clearUnsaved(this.unsavedIds.filter((id) => !pending.has(id)));
+		}
 		this.mode = 'idb';
 		this.markLoadedNow('ok');
 		this.settleView();
@@ -1493,8 +1516,6 @@ export class HistoryStore {
 				}
 				const seq = await db.delete(ids);
 				this.lastSeq = Math.max(this.lastSeq, seq);
-				// Deleted by name: the next daily copy may be smaller by these.
-				snapshotRowsDropped(ids.length);
 				this.post(ids, seq);
 				after?.();
 			} catch (e) {
@@ -1515,23 +1536,21 @@ export class HistoryStore {
 
 	/** After the first save each day: every row, outside the database. */
 	private maybeSnapshot(): void {
-		if (this.snapshotting || !this.db || !snapshotDue(this.now())) return;
+		if (this.snapshotting || !this.db) return;
 		// Once a day per tab, written or not: with no private file system every
 		// save would read every row again.
-		const today = dayOf(this.now());
+		const now = this.now();
+		const today = dayOf(now);
 		if (this.snapshotTried === today) return;
 		this.snapshotTried = today;
 		this.snapshotting = true;
 		const db = this.db;
 		void (async () => {
 			try {
+				// A day's copy is written once: another tab, or this one before a
+				// recovery, may have written today's.
+				if (await snapshotWritten(now, this.opts.snapshotRoot)) return;
 				const rows = await db.allRows();
-				// Fewer rows than the last copy, less the deletes by name since
-				// (Start empty, a recovery, a restore under way): the last copy is
-				// kept aside as the previous one, which may be the only way back if
-				// that goes wrong, and today's is written beside it.
-				const last = lastSnapshotRows();
-				const keepPrevious = last !== null && rows.length < last;
 				// The as-run profile of each row too, so a recovery keeps them.
 				const lines: SnapshotRow[] = [];
 				for (let i = 0; i < rows.length; i += SNAPSHOT_CHUNK) {
@@ -1539,7 +1558,7 @@ export class HistoryStore {
 					const details = await db.detailsOf(part.map((r) => r.id));
 					for (const r of part) lines.push({ ...r, profile: details.get(r.id)?.profile ?? null });
 				}
-				await writeRowsSnapshot(lines, this.now(), this.opts.snapshotRoot, { keepPrevious });
+				await writeRowsSnapshot(lines, now, this.opts.snapshotRoot);
 			} catch {
 				// Tomorrow's goes again.
 			} finally {
@@ -1610,28 +1629,30 @@ export class HistoryStore {
 		if (this.healthState !== 'lost' && this.healthState !== 'unavailable') return false;
 		// Never creates it: a store still missing stays lost.
 		const db = this.newDb(() => true);
+		let record: MigrationRecord | undefined;
 		try {
 			await db.open();
-			const record = await db.meta<MigrationRecord>(META_MIGRATION);
-			if (!record || record.state !== 'done') {
-				db.close();
-				return false;
-			}
+			record = await db.meta<MigrationRecord>(META_MIGRATION);
 		} catch {
+			record = undefined;
+		}
+		if (!record || record.state !== 'done' || (this.healthState !== 'lost' && this.healthState !== 'unavailable')) {
 			db.close();
 			return false;
 		}
-		if (this.healthState !== 'lost' && this.healthState !== 'unavailable') {
-			db.close();
-			return false;
-		}
-		const mine = this.healthState === 'lost' ? this.forgetLostStore() : new Set<string>();
+		// Another tab recovered the store, and may have edited and deleted in it
+		// since (F6). Only shots this tab holds that the store lacks and its
+		// recovery's source never had are written: none overwrites a row the
+		// store has, and none it deleted comes back.
+		const afterLoss = this.healthState === 'lost';
+		if (afterLoss) this.forgetLostStore();
+		const gone = afterLoss ? new Set(record.sourceIds) : new Set<string>();
 		this.db?.close();
 		this.db = db;
 		this.mode = 'booting';
 		this.healthState = 'loading';
 		this.oldCopyInfo = null;
-		await this.loadFromDb(mine);
+		await this.loadFromDb({ gone, afterLoss });
 		return this.health === 'ok';
 	}
 
@@ -1670,7 +1691,7 @@ export class HistoryStore {
 			this.mode = 'booting';
 			this.healthState = 'loading';
 			this.oldCopyInfo = null;
-			await this.loadFromDb(mine);
+			await this.loadFromDb({ mine, afterLoss: true });
 			try {
 				this.channel?.postMessage({ type: 'recovered', from: this.tabId });
 			} catch {
@@ -1701,14 +1722,14 @@ export class HistoryStore {
 	}
 
 	/**
-	 * Lost: the daily rows snapshot, with each row's as-run profile (S3).
+	 * Lost: a daily copy (`name`, the newest by default), with each row's as-run profile (S3).
 	 * Their curves were in the lost store, so the rows come back without
 	 * them, and their summaries say so (no samples), so a backfill or a merge
 	 * restore can still give each its curve.
 	 */
-	async recoverSnapshot(which: SnapshotWhich = 'latest'): Promise<RecoveryResult> {
+	async recoverSnapshot(name?: string): Promise<RecoveryResult> {
 		if (this.healthState !== 'lost') return this.recoverWith(async () => false);
-		const snap = await readRowsSnapshot(this.opts.snapshotRoot, which);
+		const snap = await readRowsSnapshot(this.opts.snapshotRoot, name);
 		if (!snap) {
 			this.lastError = 'The daily copy couldn’t be read.';
 			return false;
@@ -1726,19 +1747,19 @@ export class HistoryStore {
 			});
 			const kept = (shot: StoredShot): ShotSummary => summaries.get(shot.id) ?? summarize(shot);
 			for (let i = 0; i < writes.length; i += SNAPSHOT_CHUNK) await db.putShots(writes.slice(i, i + SNAPSHOT_CHUNK), kept);
-			await db.setMeta(META_MIGRATION, this.oldCopyRecord());
+			// The copy's ids count as the source too: one deleted later isn't
+			// brought back by a tab that still holds it (F6).
+			const record = this.oldCopyRecord();
+			const ids = new Set(record.sourceIds);
+			for (const w of writes) ids.add(w.shot.id);
+			await db.setMeta(META_MIGRATION, { ...record, sourceIds: [...ids] });
 			return writes.length;
 		});
 	}
 
-	/** The rows snapshots there are to recover, newest first, with their dates. */
-	async snapshotInfo(): Promise<{ which: SnapshotWhich; at: number; rows: number }[]> {
-		const out: { which: SnapshotWhich; at: number; rows: number }[] = [];
-		for (const which of ['latest', 'previous'] as const) {
-			const snap = await readRowsSnapshot(this.opts.snapshotRoot, which);
-			if (snap) out.push({ which, at: snap.at, rows: snap.rows.length });
-		}
-		return out;
+	/** The daily copies there are to recover, newest first, with their dates and row counts. */
+	snapshotInfo(): Promise<SnapshotInfo[]> {
+		return listRowsSnapshots(this.opts.snapshotRoot);
 	}
 
 	// ── Legacy backend ─────────────────────────────────────────────────────
