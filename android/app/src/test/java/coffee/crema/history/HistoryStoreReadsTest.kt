@@ -239,4 +239,52 @@ class HistoryStoreReadsTest {
         assertEquals(b.samples, ready.shot.samples)
         assertEquals(5, ready.shot.rating, "the row's own fields win over the loaded copy's")
     }
+
+    /** #419 F3: on legacy, a reload that reads fewer rows than the view holds keeps their heavy parts for the next save. */
+    @Test
+    fun `a legacy reload that lost a row the view holds keeps its profile and brew series`() = runBlocking {
+        HistoryStore.legacyOnlyForTest = true
+        val rows = HistoryFixtures.rows(23, samplesPer = 4)
+        val machine = rows[0]
+        val brew = rows[9]
+        assertTrue(machine.profile != null && brew.brewSeries != null)
+        HistoryFixtures.plantOldBuild(app, rows)
+        val s = store()
+        val view = s.loadAll().view
+        s.openSaves()
+        // shots.json loses the two rows (written by another session, say); this store reloads it.
+        HistoryFixtures.plantOldBuild(app, rows.filterNot { it.id == machine.id || it.id == brew.id })
+        s.loadAll()
+        s.openSaves()
+        // The view still holds them, and saves.
+        assertTrue(s.save(view))
+        val back = store()
+        back.loadAll()
+        assertEquals(machine.profile, assertNotNull(back.loadShot(machine.id)).profile, "the profile isn't written bare")
+        assertEquals(brew.brewSeries, assertNotNull(back.loadShot(brew.id)).brewSeries, "nor the brew series")
+    }
+
+    /** #419 F1: a row written again after a delete, then missing from a read, is "can't read now", not a light row; erase forgets the deletes. */
+    @Test
+    fun `a revived row that goes missing throws, and erase forgets this session's deletes`() = runBlocking {
+        val shots = HistoryFixtures.rows(3, samplesPer = 5)
+        val s = store()
+        s.loadAll()
+        s.save(shots)
+        val row = s.loadRows().first { it.id == shots[0].id }
+        s.delete(listOf(row.id))
+        assertTrue(s.loadFull(row).samples.isEmpty(), "deleted: light")
+        s.save(listOf(shots[0]))
+        // Gone from the file behind the store's back, then a reload: not a delete of ours.
+        SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { it.execSQL("DELETE FROM shots WHERE id = ?", arrayOf(row.id)) }
+        s.loadAll()
+        assertFailsWith<HistoryReadException>("revived, so not deleted") { s.loadFull(row) }
+        // Erase forgets the deletes too.
+        val other = s.loadRows().first()
+        s.delete(listOf(other.id))
+        s.erase()
+        s.save(listOf(shots[2]))
+        assertFailsWith<HistoryReadException>("after erase, an old delete says nothing") { s.loadFull(other) }
+        Unit
+    }
 }

@@ -1292,6 +1292,8 @@ class HistoryStore(private val context: Context, private val json: Json) {
         for (w in writes) {
             val id = w.row.id
             wrote(id)
+            // Written again (a restore's revive, say): a missing read of it is "can't read now" again (#419 F1).
+            deleted.remove(id)
             stored[id] = w.row.copy(summary = w.summary)
             seen[id] = w.row
             if (w.shot.profile != null) withProfile += id
@@ -1585,8 +1587,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
         }
         seen.clear()
         synchronized(recent) { recent.clear() }
+        // Only added to: a row the file lost but the view still holds keeps its profile and
+        // brew series for the next save (#419 F3). A delete drops an id's entry.
         legacyHeavy.putAll(heavy)
-        legacyHeavy.keys.retainAll(heavy.keys)
         unreadNow += unreachable
         unreadNow.retainAll(unreachable)
         replaceRows(rows.associateBy { it.id })
@@ -1641,7 +1644,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 NEXT_FILES.forEach { eraseStore(File(context.filesDir, it)) }
                 Stores.forget(dbFile)
                 written.clear()
-                stored.clear(); withProfile.clear(); staged.clear(); journaledStage.clear(); legacyHeavy.clear(); seriesWritten.clear(); seen.clear(); onDisk.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear()
+                stored.clear(); withProfile.clear(); staged.clear(); journaledStage.clear(); legacyHeavy.clear(); seriesWritten.clear(); seen.clear();
+                deleted.clear(); writeGen.clear(); unreadNow.clear()
+                onDisk.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear()
                 synchronized(recent) { recent.clear() }
                 version++
                 unreadableSeries = emptySet()
