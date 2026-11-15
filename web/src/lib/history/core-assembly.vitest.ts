@@ -62,7 +62,7 @@ describe('the web records shots through the core', () => {
 		t.settings.set('baristaName', 'Sam');
 		// A real pour: 48 samples × 250 ms = 12 s, so it isn't an aborted pull.
 		await t.pour(1_000, 48);
-		const shot = t.history.all[0];
+		const shot = (await t.history.loadShot(t.history.all[0].id))!;
 		expect(shot, 'a recorded shot').toBeDefined();
 		// The core's record: its frames and the overlays it filled live.
 		expect(shot.record.samples.slice(0, 4).map((s) => s.sample.frameNumber)).toEqual([0, 2, 2, 3]);
@@ -103,7 +103,7 @@ describe('the web records shots through the core', () => {
 		expect(undo, 'the undo toast').toBeDefined();
 		undo!.action!.run();
 		expect(t.history.all).toHaveLength(before + 1);
-		expect(t.history.all[0].record.samples.map((s) => s.sample.frameNumber)).toEqual([
+		expect((await t.history.loadShot(t.history.all[0].id))!.record.samples.map((s) => s.sample.frameNumber)).toEqual([
 			0, 2, 2, 3, 3, 3, 3, 3
 		]);
 		await core.disconnectScale();
@@ -114,7 +114,7 @@ describe('the web records shots through the core', () => {
 		const t = await makeApp();
 		await t.pour(1_000, 48);
 		const shot = {
-			...t.history.all[0],
+			...(await t.history.loadShot(t.history.all[0].id))!,
 			tags: ['dial-in'],
 			yieldTarget: 36,
 			brewTempTarget: 93.5,

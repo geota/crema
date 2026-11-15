@@ -21,7 +21,10 @@ vi.mock('./series-store', () => ({
 	clearAllSeries: async () => {}
 }));
 
-import { HistoryStore } from './store.svelte';
+import { setHistoryStoreDefaultsForTest, HistoryStore } from './store.svelte';
+
+// The legacy backend: the old copy and its series database, as before #310 P3w.
+setHistoryStoreDefaultsForTest({ backend: 'legacy' });
 import { updateSyncConfig } from '#lib/visualizer/sync-config.js';
 
 const sample = { t: 1, pressure: 9 } as unknown as TimedSample;
@@ -62,12 +65,12 @@ describe('HistoryStore.seriesReady', () => {
 		const store = new HistoryStore();
 		const ready = store.seriesReady();
 		await Promise.resolve();
-		expect(store.get('s1')?.record.samples).toHaveLength(0);
+		expect((await store.loadShot('s1'))?.record.samples).toHaveLength(0);
 
 		land(new Map([['s1', [sample]]]));
 
 		expect(await ready).toBe(true);
-		expect(store.get('s1')?.record.samples).toHaveLength(1);
+		expect((await store.loadShot('s1'))?.record.samples).toHaveLength(1);
 	});
 
 	it('a read that fails once is tried again, and nothing has failed', async () => {
@@ -84,7 +87,7 @@ describe('HistoryStore.seriesReady', () => {
 
 		expect(reads).toBe(2);
 		expect(store.seriesFailed).toBe(false);
-		expect(store.get('s1')?.record.samples).toHaveLength(1);
+		expect((await store.loadShot('s1'))?.record.samples).toHaveLength(1);
 	});
 
 	it('a read that fails twice settles as failed', async () => {

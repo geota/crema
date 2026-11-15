@@ -41,6 +41,7 @@ import { coerceBean, coerceRoaster, type Bean, type Roaster } from '#lib/bean/mo
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { getHistoryStore, type StoredShot } from '#lib/history/index.js';
 import { coerceStoredShot } from '#lib/history/store.svelte.js';
+import { sampleCountOf, type AnyShot } from '#lib/history/model.js';
 import { getProfileStore } from '#lib/profiles/index.js';
 import type { CremaProfile } from '#lib/profiles/model.js';
 import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
@@ -312,6 +313,8 @@ async function storedPhotoBeans(beans: readonly Bean[]): Promise<{ have: string[
  */
 export async function buildLocalState(locks: LockManagerLike | undefined = defaultLocks()): Promise<LocalState> {
 	const history = getHistoryStore();
+	// Not loaded is not empty: a plan over no rows would add every shot again.
+	await history.whenReady();
 	await history.seriesReady();
 	const beans = getBeanStore();
 	const profiles = getProfileStore();
@@ -323,9 +326,8 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 	const photos = await storedPhotoBeans(beans.beans);
 	const profileMeta = profiles.backupMeta();
 	const recipeMeta = recipes.backupMeta();
-	const health = (
+	const health: { store: string; health: string }[] = (
 		[
-			['shots', 'crema.history.v2'],
 			['beans', 'crema.beans.v1'],
 			['profiles', 'crema.profiles.custom.v1'],
 			['recipes', 'crema.brewRecipes.v1'],
@@ -338,9 +340,12 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 			['recipeMeta', 'crema.brewRecipes.hiddenBuiltins.v1']
 		] as const
 	).map(([store, key]) => ({ store, health: storeHealth(key) }));
+	// The rows' health is the history store's: `crema-history`, or the old copy on the legacy backend.
+	health.unshift({ store: 'shots', health: history.rowsHealth() });
 	return {
 		shell: 'web',
-		historyCapacity: history.capacity,
+		// Every row is kept on `crema-history`, past the view (SPEC §7).
+		historyCapacity: history.restoreCapacity,
 		machineBusy: getMachineBusy().busy || shotIsOpen() || (await busyElsewhere(locks)),
 		health,
 		beans: beans.beans.map((b) => b.id),
@@ -348,12 +353,7 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		profiles: profiles.customProfiles.map((p) => p.id),
 		recipes: recipes.ownRecipes.map((r) => r.id),
 		customMethods: methods.everything.map((m) => m.id),
-		shots: history.rawAll.map((s) => ({
-			id: s.id,
-			hasSamples: s.record.samples.length > 0,
-			pinned: s.pinned === true,
-			deleted: s.deletedAt != null
-		})),
+		shots: localShotsOf(history.rawAll),
 		photos: photos.have,
 		beansMissingPhoto: photos.missing,
 		profileMeta: { pinned: profileMeta.pinned, hiddenBuiltins: profileMeta.hiddenBuiltins },
@@ -552,13 +552,27 @@ export function nextRows<T extends { id: string }>(
 	return [...added, ...kept];
 }
 
+/**
+ * The rows as the planner reads them. A row's count is its summary's (#310
+ * P4w); an unknown one (`null`, Android's rule for a series it couldn't read)
+ * counts as a curve, which a fill must never replace.
+ */
+export function localShotsOf(rows: readonly AnyShot[]): { id: string; hasSamples: boolean; pinned: boolean; deleted: boolean }[] {
+	return rows.map((s) => ({
+		id: s.id,
+		hasSamples: (sampleCountOf(s) ?? 1) > 0,
+		pinned: s.pinned === true,
+		deleted: s.deletedAt != null
+	}));
+}
+
 /** The history a plan leaves, and the rows whose curve to write first. */
 export function nextShots(
-	local: readonly StoredShot[],
+	local: readonly AnyShot[],
 	backup: readonly StoredShot[],
 	plan: RestorePlan['shots'],
 	replace = false
-): { next: StoredShot[]; series: StoredShot[] } {
+): { next: AnyShot[]; series: StoredShot[] } {
 	const theirs = new Map<string, StoredShot>();
 	for (const s of backup) if (!theirs.has(s.id)) theirs.set(s.id, s);
 	const remove = new Set(plan.remove);
@@ -573,25 +587,21 @@ export function nextShots(
 	const series: StoredShot[] = [];
 	const kept = local
 		.filter((s) => !remove.has(s.id))
-		.map((s) => {
+		.map((s): AnyShot => {
 			const b = theirs.get(s.id);
 			if (!b) return s;
 			if (replaced.has(s.id)) {
-				// The backup's row; with no curve of its own it keeps the one here,
-				// as the same shot's curve: memory then matches what a reload shows.
-				const row =
-					b.record.samples.length === 0 && s.record.samples.length > 0
-						? { ...b, record: { ...b.record, samples: s.record.samples } }
-						: b;
-				series.push(row);
-				return row;
+				// The backup's row. With no curve of its own it keeps the one here,
+				// as the same shot's curve: the store merges a heavy part the
+				// backup lacks from the row it holds (`keepHeavy`, and the legacy
+				// backend's merge on write), so memory matches what a reload shows.
+				series.push(b);
+				return b;
 			}
-			if (fill.has(s.id) && s.record.samples.length === 0 && b.record.samples.length > 0) {
-				// The backfill rule: the curve only, never over a curve here.
-				const filled = {
-					...s,
-					record: { duration: b.record.duration || s.record.duration, samples: [...b.record.samples] }
-				};
+			// The backfill rule: the curve only, never over a curve here. A row
+			// whose count is unknown (`null`) is never filled.
+			if (fill.has(s.id) && sampleCountOf(s) === 0 && b.record.samples.length > 0) {
+				const filled = withCurveOf(s, b);
 				series.push(filled);
 				return filled;
 			}
@@ -605,6 +615,21 @@ export function nextShots(
 		.map((s) => (zero.has(s.id) ? { ...s, bagDebit: 0 } : s));
 	series.push(...added);
 	return { next: newestFirst([...added, ...kept]), series };
+}
+
+/**
+ * `row` with `backup`'s curve, as a whole shot for the store to fill: the
+ * row's fields, the backup's samples, and no profile or brew series, which the
+ * store keeps from what it holds.
+ */
+function withCurveOf(row: AnyShot, backup: StoredShot): StoredShot {
+	const { summary: _s, ...fields } = row as AnyShot & { summary?: unknown };
+	const { brewSeries: _b, profile: _p, ...rest } = fields as StoredShot;
+	return {
+		...rest,
+		profile: null,
+		record: { duration: backup.record.duration || row.record.duration, samples: [...backup.record.samples] }
+	};
 }
 
 // ── Applying ────────────────────────────────────────────────────────────────
@@ -936,7 +961,7 @@ async function applyPlan(
 			// recorded or edited meanwhile: the restore's own rows only change
 			// the ids the plan names.
 			const r = await getHistoryStore().restoreRows(
-				(rows) => nextShots(rows, records.shots, plan.shots, replace),
+				(rows) => ({ ...nextShots(rows, records.shots, plan.shots, replace), remove: plan.shots.remove }),
 				deps.writeSeries
 			);
 			curvesFailed = r.curvesFailed;

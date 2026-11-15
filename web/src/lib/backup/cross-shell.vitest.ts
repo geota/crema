@@ -164,7 +164,7 @@ describe('cross-shell backup restore (F11a)', () => {
 		expect(bean.tags).toEqual(['comp']);
 		expect(getBeanStore().getRoaster('roaster:android-1')?.name).toBe('Onyx');
 
-		const shot = getHistoryStore().get('shot:android-1')!;
+		const shot = (await getHistoryStore().loadShot('shot:android-1'))!;
 		expect(shot.metadata.dose).toBe(18);
 		expect(shot.metadata.yieldOut).toBe(36);
 		expect(shot.metadata.notes).toBe('from Android');

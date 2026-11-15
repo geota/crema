@@ -56,13 +56,13 @@ describe('HistoryStore.insertPulled', () => {
 		putSeries.mockClear();
 	});
 
-	it('writes the series alongside the stripped row', () => {
+	it('writes the series alongside the stripped row', async () => {
 		const store = new HistoryStore();
 		const samples = [sample(0), sample(250), sample(500)];
 		store.insertPulled(makeShot('shot:restored', samples));
 		expect(putSeries).toHaveBeenCalledTimes(1);
 		expect(putSeries).toHaveBeenCalledWith('shot:restored', samples);
-		expect(store.get('shot:restored')?.record.samples).toHaveLength(3);
+		expect((await store.loadShot('shot:restored'))?.record.samples).toHaveLength(3);
 	});
 
 	it('skips the series store for a metadata-only stub', () => {

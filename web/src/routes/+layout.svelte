@@ -22,6 +22,7 @@
 	import DebugPanel from '#lib/shell/DebugPanel.svelte';
 	import ReconnectStrip from '#lib/shell/ReconnectStrip.svelte';
 	import RefusedStoresStrip from '#lib/shell/RefusedStoresStrip.svelte';
+	import HistoryStorageStrip from '#lib/shell/HistoryStorageStrip.svelte';
 	import RestoreFreezeOverlay from '#lib/shell/RestoreFreezeOverlay.svelte';
 	import { freezeOverlay } from '#lib/restore/freeze-overlay.svelte.js';
 	import {
@@ -331,6 +332,7 @@
 	<main class={['shell-content', { 'has-tabs': tabBar }]}>
 		<ReconnectStrip {app} />
 		<RefusedStoresStrip canReload={() => canReloadNow(reloadInputs())} />
+		<HistoryStorageStrip />
 		{@render children?.()}
 	</main>
 	{#if tabBar}

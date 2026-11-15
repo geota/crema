@@ -20,7 +20,10 @@ import { Effect, Layer, ManagedRuntime } from 'effect';
 // rune store is instantiated and we can observe the bind / purge calls.
 const mockHistory = {
 	seriesReady: vi.fn(async () => true),
+	readyWithin: vi.fn(async () => true),
+	loaded: true,
 	get: vi.fn(),
+	loadShot: vi.fn(async (id: string): Promise<unknown> => mockHistory.get(id)),
 	bindVisualizerId: vi.fn(),
 	purgeTombstone: vi.fn()
 };
@@ -130,6 +133,19 @@ beforeEach(() => {
 	mockHistory.purgeTombstone.mockReset();
 	// Online by default; the offline-guard test overrides.
 	vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+});
+
+describe('UploadQueue.drain — the rows not loaded (#310 P3w)', () => {
+	it('moves nothing, and keeps every entry, until the history has loaded', async () => {
+		mockHistory.readyWithin.mockResolvedValueOnce(false);
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'viz-1' }));
+		const result = await drainWith({ uploadShot });
+		expect(result.processed).toBe(0);
+		expect(uploadShot).not.toHaveBeenCalled();
+		expect(readQueue().entries).toHaveLength(1);
+		expect(readQueue().entries[0].attempts).toBe(0);
+	});
 });
 
 describe('UploadQueue.drain — shot create', () => {

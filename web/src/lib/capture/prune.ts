@@ -9,8 +9,7 @@
 
 import type { CapturedShot } from '#lib/core/crema-core.js';
 import { capturesToDrop as wasmCapturesToDrop } from '#lib/wasm/de1_wasm.js';
-import { HISTORY_KEY, type HistoryStore } from '#lib/history/store.svelte.js';
-import { storeHealth } from '../utils/storage.ts';
+import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { coreCaptureKeep, readCaptureKeep, type CaptureKeepChoice } from './limit.ts';
 import { getCaptureStore } from './store.ts';
 
@@ -20,8 +19,9 @@ import { getCaptureStore } from './store.ts';
  */
 export async function capturesOverLimit(history: HistoryStore, choice: CaptureKeepChoice): Promise<string[]> {
 	if (typeof indexedDB === 'undefined') return [];
-	await history.seriesReady();
-	if (storeHealth(HISTORY_KEY) !== 'ok') return [];
+	// Not loaded is not empty: with no rows, every capture would look unclaimed.
+	if (!(await history.readyWithin())) return [];
+	if (history.rowsHealth() !== 'ok') return [];
 	const keys = new Set(await getCaptureStore().keys());
 	const shots: CapturedShot[] = history.rawAll
 		.filter((s) => keys.has(s.id))
@@ -34,10 +34,13 @@ export async function capturesOverLimit(history: HistoryStore, choice: CaptureKe
 /** Delete the captures past the limit (the stored one by default); the ids deleted. */
 export async function pruneCaptures(
 	history: HistoryStore,
-	// The history's constructor stored the choice; this read only finds it.
-	choice: CaptureKeepChoice = readCaptureKeep(() => history.rawAll.length > 0)
+	choice?: CaptureKeepChoice
 ): Promise<string[]> {
-	const doomed = await capturesOverLimit(history, choice);
+	// The rows first: the first read of the choice stores today's limit for an
+	// install that has shots, and before the load it would look like a new one.
+	if (!(await history.readyWithin())) return [];
+	// The history stored the choice when it loaded; this read only finds it.
+	const doomed = await capturesOverLimit(history, choice ?? readCaptureKeep(() => history.rawAll.length > 0));
 	const store = getCaptureStore();
 	const gone: string[] = [];
 	for (const id of doomed) {

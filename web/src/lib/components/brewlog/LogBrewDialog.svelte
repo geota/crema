@@ -40,7 +40,7 @@
 	import { promptBagEmpty } from '#lib/bean/bag-empty-prompt.js';
 	import { getHistoryStore } from '#lib/history/store.svelte.js';
 	import { msToNextMinute } from '#lib/history/range.js';
-	import { snapshotFromBean, type StoredShot } from '#lib/history/model.js';
+	import { snapshotFromBean, type AnyShot, type StoredShot } from '#lib/history/model.js';
 	import {
 		brewDateError,
 		brewDateTooOld,
@@ -63,7 +63,7 @@
 	}: {
 		onClose: () => void;
 		/** Successful save fired with the persisted row. */
-		onSaved?: (shot: StoredShot) => void;
+		onSaved?: (shot: AnyShot) => void;
 		/** Seed values — "Log again", bean-drawer entry, guided summary. */
 		prefill?: LogBrewPrefill;
 	} = $props();

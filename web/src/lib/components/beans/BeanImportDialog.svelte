@@ -459,8 +459,11 @@
 		// by the stable BC brew timestamp + bean name; the set grows as we
 		// keep, so an export with two identical rows can't double-land
 		// either. Mirrors the Android `buildImportedShots` dedupe.
+		// Not loaded is not empty: with no rows, every shot would land again.
+		if (!history.loaded) throw new Error('Shot history is still loading. Try again in a moment.');
+		// Every live row, past the view too (#310): a hidden shot is still here.
 		const existingShotKeys = new Set(
-			history.all.map(
+			history.rawAll.filter((s) => s.deletedAt == null).map(
 				(s) => `${s.completedAt}·${(s.bean?.name ?? '').trim().toLowerCase()}`
 			)
 		);

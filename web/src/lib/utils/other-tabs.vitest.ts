@@ -18,7 +18,10 @@ import { ProfileStore } from '#lib/profiles/store.svelte.js';
 import { SettingsStore } from '#lib/settings/store.svelte.js';
 import type { StoredShot } from '#lib/history/model.js';
 import { clearAllSeries, getAllSeries, putSeries } from '#lib/history/series-store.js';
-import { HistoryStore } from '#lib/history/store.svelte.js';
+import { setHistoryStoreDefaultsForTest, HistoryStore } from '#lib/history/store.svelte.js';
+
+// The legacy backend: the old copy and its series database, as before #310 P3w.
+setHistoryStoreDefaultsForTest({ backend: 'legacy' });
 import { readStored, resetStorageStateForTest } from './storage';
 import { resetTabSafetyForTest, shotFinished, shotStarted } from '#lib/restore/tab-safety.js';
 import type { CremaProfile } from '#lib/profiles/model.js';
@@ -365,9 +368,9 @@ describe('history', () => {
 		const b = await thisTab('old');
 		await putSeries('new', curve);
 		otherTabWrites(HISTORY, [bare(row('new', 1_800_000_000_000)), bare(row('old', 1_700_000_000_000))]);
-		expect(b.get('old')?.record.samples, 'a row shown here keeps its curve at once').toHaveLength(1);
+		expect((await b.loadShot('old'))?.record.samples, 'a row shown here keeps its curve at once').toHaveLength(1);
 		await settle();
-		expect(b.get('new')?.record.samples).toHaveLength(1);
+		expect((await b.loadShot('new'))?.record.samples).toHaveLength(1);
 		b.setRating('old', 4);
 		expect((JSON.parse(localStorage.getItem(HISTORY)!) as StoredShot[]).map((s) => s.id)).toEqual([
 			'new',
@@ -381,7 +384,7 @@ describe('history', () => {
 		await settle();
 		await putSeries('new', curve);
 		await settle(1_100);
-		expect(b.get('new')?.record.samples).toHaveLength(1);
+		expect((await b.loadShot('new'))?.record.samples).toHaveLength(1);
 	});
 
 	it("a stale tab's rows cost this tab no curve", async () => {
@@ -433,7 +436,7 @@ describe('history', () => {
 		expect(b.seriesPending('new'), 'still being looked for').toBe(true);
 		idb.open = open;
 		await settle(1_100);
-		expect(b.get('new')?.record.samples).toHaveLength(1);
+		expect((await b.loadShot('new'))?.record.samples).toHaveLength(1);
 		expect(b.seriesPending('new')).toBe(false);
 	});
 
@@ -448,9 +451,9 @@ describe('history', () => {
 		b.applyRemote('new', { backfillSamples: true } as never, { samples: pulled, durationMs: 30_000 });
 		await settle();
 		expect((await getAllSeries()).get('new')?.[0].sample.groupPressure, 'the device curve').toBe(9);
-		expect(b.get('new')?.record.samples[0].sample.groupPressure, 'here too').toBe(9);
+		expect((await b.loadShot('new'))?.record.samples[0].sample.groupPressure, 'here too').toBe(9);
 		b.backfillTelemetry('new', pulled, 30_000);
-		expect(b.get('new')?.record.samples[0].sample.groupPressure).toBe(9);
+		expect((await b.loadShot('new'))?.record.samples[0].sample.groupPressure).toBe(9);
 	});
 
 	it('a backfill waits while an adopted row may still get its curve', async () => {
@@ -459,7 +462,7 @@ describe('history', () => {
 		await settle();
 		expect(b.seriesPending('new')).toBe(true);
 		b.backfillTelemetry('new', curve, 30_000);
-		expect(b.get('new')?.record.samples, 'not taken while pending').toHaveLength(0);
+		expect((await b.loadShot('new'))?.record.samples, 'not taken while pending').toHaveLength(0);
 	});
 
 	it('nothing is taken while a restore here owns the rows', async () => {

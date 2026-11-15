@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { getHistoryStore } from '#lib/history/store.svelte.js';
-import type { StoredShot } from '#lib/history/model.js';
+import type { AnyShot } from '#lib/history/model.js';
 import { coerceBean } from './model';
 import { getBeanStore } from './store.svelte';
 
@@ -17,7 +17,7 @@ function bag(id: string, bagSize: number, remaining: number): void {
 const remaining = (id: string): number | undefined => getBeanStore().getBean(id)?.remaining;
 
 /** A logged 18 g row on `beanId`, with `bagDebit` as given (omit for an old row). */
-function row(beanId: string, bagDebit?: number): StoredShot {
+function row(beanId: string, bagDebit?: number): AnyShot {
 	const shot = getHistoryStore().addManualBrew({
 		method: 'espresso',
 		completedAt: 1_700_000_000_000,

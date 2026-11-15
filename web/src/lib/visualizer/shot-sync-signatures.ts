@@ -29,7 +29,7 @@ import {
 	reconcileShots as wasmReconcileShots
 } from '#lib/wasm/de1_wasm.js';
 import type { TimedSample, WireShotBean } from '#lib/core/index.js';
-import { peaksOf, type ShotBean, type StoredShot } from '#lib/history/model.js';
+import { peaksOf, type AnyShot, type ShotBean, type StoredShot } from '#lib/history/model.js';
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -109,7 +109,7 @@ export type ReconcileAction =
  * `final_weight_g` here). Both must agree where present; the cascade
  * ensures a stub created from a pull signature-matches the original.
  */
-function shotFinalWeight(shot: StoredShot): number | null {
+function shotFinalWeight(shot: AnyShot): number | null {
 	const peaks = peaksOf(shot);
 	return peaks.finalWeight ?? peaks.peakWeight ?? shot.metadata?.yieldOut ?? null;
 }
@@ -122,8 +122,26 @@ function shotFinalWeight(shot: StoredShot): number | null {
  * Adapts the wasm `signatureForShot` (positional args) to the object
  * shape the existing TS callers use.
  */
-export function signatureForShot(shot: StoredShot): string {
+export function signatureForShot(shot: AnyShot): string {
 	const finalWeight = shotFinalWeight(shot);
+	return wasmSignatureForShot(
+		shot.completedAt,
+		shot.record.duration,
+		shot.profileName ?? undefined,
+		finalWeight ?? undefined
+	);
+}
+
+/**
+ * The same signature for a row held without its samples (#310): the final
+ * weight comes from its stored summary, then `peakWeight`, then the yield, as
+ * {@link signatureForShot} reads them off the curve.
+ */
+export function signatureForRow(
+	shot: StoredShot,
+	summary: { finalWeight?: number | null; peakWeight?: number | null }
+): string {
+	const finalWeight = summary.finalWeight ?? summary.peakWeight ?? shot.metadata?.yieldOut ?? null;
 	return wasmSignatureForShot(
 		shot.completedAt,
 		shot.record.duration,
@@ -161,7 +179,7 @@ export function signatureForRoaster(roaster: { name: string }): string {
  * "lines up 1:1" with `StoredShot`, but the shell's persistence model
  * nests these fields, so we project at this boundary instead.
  */
-function toLocalShotRef(shot: StoredShot): {
+function toLocalShotRef(shot: AnyShot): {
 	id: string;
 	completedAt: number;
 	duration: number;
@@ -202,7 +220,7 @@ function toLocalShotRef(shot: StoredShot): {
  * `metadata.yieldOut`.
  */
 export function reconcileShots(
-	local: readonly StoredShot[],
+	local: readonly AnyShot[],
 	remote: readonly WireShot[]
 ): ReconcileAction[] {
 	const slim = local.map(toLocalShotRef);

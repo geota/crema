@@ -13,7 +13,7 @@
 	 */
 	import { getSettingsStore, convertWeight } from '#lib/settings/index.js';
 	import { formatRatio } from '#lib/utils/ratio.js';
-	import { effectiveGrindSetting, yieldOf, type StoredShot } from '#lib/history/index.js';
+	import { effectiveGrindSetting, yieldOf, type AnyShot } from '#lib/history/index.js';
 	import StarRating from '#lib/components/common/StarRating.svelte';
 	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
 	import CaretRightIcon from 'phosphor-svelte/lib/CaretRightIcon';
@@ -27,11 +27,11 @@
 		onOpen
 	}: {
 		/** The active bean's most recent stored shot. */
-		shot: StoredShot;
+		shot: AnyShot;
 		/** Re-apply this shot's setup: profile + grind + dial targets. */
-		onStart: (shot: StoredShot) => void;
+		onStart: (shot: AnyShot) => void;
 		/** Open the shot in History (detail selected). */
-		onOpen: (shot: StoredShot) => void;
+		onOpen: (shot: AnyShot) => void;
 	} = $props();
 
 	const settings = getSettingsStore();

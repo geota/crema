@@ -11,7 +11,7 @@
 import { Data } from 'effect';
 import { decentShotRecordJson, machineModelName } from '#lib/wasm/de1_wasm.js';
 import type { ShotMachine, TimedSample } from '#lib/core/crema-core.js';
-import type { StoredShot } from '#lib/history/model.js';
+import type { ShotFields, StoredShot } from '#lib/history/model.js';
 
 /** The core could not read the shot (a malformed persisted row) — retrying will not help. */
 export class DecentRecordError extends Data.TaggedError('DecentRecordError')<{ readonly detail: string }> {
@@ -31,7 +31,7 @@ export function decentModelName(raw: number | null | undefined): string | null {
 }
 
 /** Seconds of telemetry — the auto-upload skips flushes shorter than 5 s. */
-export function shotDurationSeconds(shot: StoredShot): number {
+export function shotDurationSeconds(shot: Pick<ShotFields, 'record'>): number {
 	return shot.record.duration / 1000;
 }
 

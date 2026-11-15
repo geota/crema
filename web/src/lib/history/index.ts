@@ -9,6 +9,13 @@
 
 export {
 	type StoredShot,
+	type ShotRow,
+	type ShotFields,
+	type AnyShot,
+	isShotRow,
+	sampleCountOf,
+	brewSampleCountOf,
+	hasSamples,
 	type ShotBean,
 	type ShotMetadata,
 	type ShotPeaks,

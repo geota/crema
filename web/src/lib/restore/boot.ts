@@ -31,12 +31,17 @@ async function restoreLockHeld(): Promise<boolean> {
 /** Run once a boot knows it isn't frozen. */
 export async function checkRestoreMarker(): Promise<MarkerBoot> {
 	const history = getHistoryStore();
+	// The deletes go by "not listed", which only means something once the rows load.
+	if (!(await history.readyWithin())) return { kind: 'waiting' };
 	await history.seriesReady();
 	const found = await checkMarkerAtBoot({
 		restoreRunning: restoreLockHeld,
 		listedShots: () => new Set(history.rawAll.map((s) => s.id)),
 		listedBeans: () => new Set(getBeanStore().beans.map((b) => b.id)),
-		deleteSeries,
+		shotsHealth: () => history.rowsHealth(),
+		// On `crema-history` a row's details went with its explicit delete, and
+		// the old copy is never touched (SPEC §6): only the legacy backend's series go.
+		deleteSeries: (id) => (history.keepsEveryRow ? Promise.resolve() : deleteSeries(id)),
 		deleteCapture: (id) => getCaptureStore().delete(id),
 		deletePhoto: (beanId) => getBeanImageStore().delete(refForBean(beanId))
 	});
