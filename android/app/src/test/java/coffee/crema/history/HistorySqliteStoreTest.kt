@@ -748,6 +748,25 @@ class HistorySqliteStoreTest {
         assertEquals(HistoryFixtures.profile(2), back.profile, "and the profile is filled")
     }
 
+    @Test
+    fun `a profile filled into a hidden row on a full disk waits in the journal, brew series kept`() = runBlocking {
+        val base = HistoryFixtures.rows(320, samplesPer = 3).map { it.copy(pinned = false) }
+        val brew = base[9].copy(id = "brew-hidden", completedAtMs = 1)
+        assertTrue(brew.brewSeries != null && brew.profile == null)
+        HistoryFixtures.plantOldBuild(app, base + brew)
+        val s = store()
+        s.loadAll()
+        assertTrue(s.updateHidden(brew.id) { it.copy(profile = HistoryFixtures.profile(3)) })
+        HistoryStore.faults += MigrationFault.DISK_FULL
+        s.flushHidden(brew.id)
+        HistoryStore.faults.clear()
+        assertEquals(setOf(brew.id), s.journaled)
+        // The next launch merges the journal (#408 N8).
+        val back = store().load().first { it.id == brew.id }
+        assertEquals(HistoryFixtures.profile(3), back.profile, "the pulled profile isn't dropped")
+        assertEquals(brew.brewSeries, back.brewSeries, "and the brew series stays")
+    }
+
     // ── #408 review: a curve the summary names and the file doesn't hold (S4) ─
 
     @Test
