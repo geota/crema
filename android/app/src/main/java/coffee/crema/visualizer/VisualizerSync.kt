@@ -184,6 +184,10 @@ class VisualizerSync(
 ) : UploadDestination {
 
     internal companion object {
+        /** Test seam: holds [load] until completed. Null in the app. */
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var holdLoadForTest: kotlinx.coroutines.Deferred<Unit>? = null
+
         /** Backstop on the pull walk — mirrors the web's maxPages default. */
         const val MAX_PULL_PAGES = 500
 
@@ -333,6 +337,7 @@ class VisualizerSync(
      * C3 #9). The old `baristaPending` set migrates in.
      */
     suspend fun load() {
+        holdLoadForTest?.await()
         val unstored = try {
             persistMutex.withLock {
                 // Seeded, so a reconnect as someone else is noticed even though
@@ -346,10 +351,12 @@ class VisualizerSync(
                 pendingEdits.clear()
                 pendingEdits.putAll(stored)
                 for ((id, edit) in early) pendingEdits.merge(id, edit) { a, b -> a.with(b) }
+                unsentRead.complete(true)
                 persisted.baristaPending.isNotEmpty() || pendingEdits != persisted.pendingEdits
             }
         } finally {
             ownState.failed()
+            unsentRead.complete(false)
         }
         fold()
         if (unstored) storePendingEdits()
@@ -1313,6 +1320,16 @@ class VisualizerSync(
      * (V2 P3-4).
      */
     private val pendingEdits = java.util.concurrent.ConcurrentHashMap<String, PendingEdit>()
+
+    /** Completes once the stored queue, attempts and unsent edits are in memory: true when read, false when they couldn't be. */
+    private val unsentRead = kotlinx.coroutines.CompletableDeferred<Boolean>()
+
+    /**
+     * Wait for what [uploadPending] and [hasPendingEdit] read to load (REVIEW-440
+     * R2): true once it has, false when it couldn't be read. Before then a queued
+     * upload or an unsent edit would read as none.
+     */
+    suspend fun awaitUnsentRead(): Boolean = unsentRead.await()
 
     /** Whether shot [id] has an edit not yet sent to Visualizer: Free up space keeps it (#310 P6a, REVIEW-440 N1). */
     fun hasPendingEdit(id: String): Boolean = pendingEdits.containsKey(id)

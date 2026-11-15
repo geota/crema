@@ -156,6 +156,8 @@ class LibraryController(
      *  and session settings over this device's own (spec §7.2). Library
      *  actions that act on what is on screen read this. */
     private val effectiveState: () -> MainUiState = uiState,
+    /** Whether Google Drive is busy now: its own state, not the UI's mirror, which can lag (REVIEW-440 R1). */
+    private val driveBusy: () -> Boolean = { uiState().drive.busy },
     /** Synchronously update the UI snapshot (the VM's `_ui.update`). Keeps the rows. */
     private val updateUi: ((MainUiState) -> MainUiState) -> Unit,
     /** Change the history or the bean library: [UiStore.edit]. */
@@ -1734,6 +1736,8 @@ class LibraryController(
      */
     suspend fun planFreeUp(beforeMs: Long): coffee.crema.history.FreeUpPlan? {
         if (!rowsReady || !historySettled) return null
+        // A queued upload or an unsent edit not yet read would look like none (REVIEW-440 R2).
+        if (!unsentKnown()) return null
         val older = allShots().filter { it.completedAtMs < beforeMs }
         val unpinned = older.filterNot { it.pinned }
         // A shot with an upload or an edit still to reach Visualizer stays (REVIEW-440 N1, web parity).
@@ -1741,6 +1745,13 @@ class LibraryController(
         val ids = doomed.map { it.id }
         return coffee.crema.history.FreeUpPlan(beforeMs, ids, older.count { it.pinned }, historyStore.bytesOf(ids), syncKept = kept.size)
     }
+
+    /** How long Free up space waits for Visualizer's queue to load before it refuses (REVIEW-440 R2). */
+    private val UNSENT_READ_WAIT_MS = 10_000L
+
+    /** Whether Visualizer's queue and unsent edits are read, waiting a little for them at launch. */
+    private suspend fun unsentKnown(): Boolean =
+        kotlinx.coroutines.withTimeoutOrNull(UNSENT_READ_WAIT_MS) { visualizer.awaitUnsentRead() } == true
 
     /** Whether [row] still has something to send to Visualizer: an upload pending or an edit unsent. */
     private fun unsent(row: ShotRow): Boolean = visualizer.uploadPending(row) || visualizer.hasPendingEdit(row.id)
@@ -1753,7 +1764,7 @@ class LibraryController(
      */
     fun backupRunning(): String? = when {
         backupRuns.running() || uiState().backupProgress.isNotEmpty() -> "a backup is being made"
-        uiState().drive.busy -> "Google Drive is busy"
+        driveBusy() -> "Google Drive is busy"
         else -> null
     }
 
@@ -1773,6 +1784,8 @@ class LibraryController(
         notInBackup: Set<String> = emptySet(),
     ): coffee.crema.history.FreeUpResult {
         if (!rowsReady || !historySettled) return coffee.crema.history.FreeUpResult(0, refused = "your shot history isn't fully read yet")
+        // Before the backup check: nothing may suspend between it and the rows' removal.
+        if (!unsentKnown()) return coffee.crema.history.FreeUpResult(0, refused = "Visualizer's sync state isn't read yet")
         // The UI isn't the only guard: a walk still running would write these shots without their curves.
         backupRunning()?.let { return coffee.crema.history.FreeUpResult(0, refused = it) }
         if (plan.ids.isEmpty()) return coffee.crema.history.FreeUpResult(0)

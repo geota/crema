@@ -77,6 +77,8 @@ class HistoryNoCapVmTest {
         HistoryStore.faults.clear()
         HistoryStore.freeSpaceForTest = null
         SeriesFiles.beforeWrite = {}
+        coffee.crema.drive.DriveSync.uploadForTest = null
+        coffee.crema.visualizer.VisualizerSync.holdLoadForTest = null
     }
 
     private fun vm(): MainViewModel = VmHarness.build(store).also { VmHarness.idle(); VmHarness.awaitStartupLoaded(it) }
@@ -274,7 +276,7 @@ class HistoryNoCapVmTest {
         vm.setShotPinned("old0", true)
         VmHarness.idle()
         vm.freeUpSpace(plan, FreeUpBackup.NONE)
-        VmHarness.idleUntil("the delete") { dbIds().size == 8 }
+        VmHarness.idleUntil("the delete") { dbIds().size == 8 && vm.ui.value.userMessages.any { it.startsWith("Deleted") } }
         val kept = setOf("old0", "old3", "old7") + recent.map { it.id }
         assertEquals(kept, dbIds())
         assertEquals(kept, vm.ui.value.history.map { it.id }.toSet())
@@ -463,6 +465,90 @@ class HistoryNoCapVmTest {
         val told = awaitMessage(vm, "Deleted")
         assertTrue(told.startsWith("Deleted 2 shots") && "2 shots waiting to reach Visualizer were kept" in told, told)
         assertEquals(setOf("old1", "old2"), dbIds())
+    }
+
+    /**
+     * REVIEW-440 R1: back up to Drive, then delete. Drive's own busy flag is
+     * read, not the UI's mirror, so a finished upload doesn't read as busy and
+     * the delete goes ahead; while an upload is still running it refuses.
+     */
+    @Test
+    fun backUpToDriveThenDeleteGoesAheadOnceTheUploadHasLanded() {
+        val cutoff = now - 365 * day
+        plant(oldShots(4, cutoff) + light(2, start = now, prefix = "new"))
+        val uploaded = mutableListOf<Map<String, Int>>()
+        val uploading = java.util.concurrent.CountDownLatch(1)
+        val land = java.util.concurrent.CountDownLatch(1)
+        var hold = true
+        coffee.crema.drive.DriveSync.uploadForTest = { _, file ->
+            if (hold) {
+                uploading.countDown()
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { land.await(60, java.util.concurrent.TimeUnit.SECONDS) }
+            }
+            uploaded += samplesIn(file)
+        }
+        val vm = vm()
+        val plan = assertNotNull(onMain(vm, "the plan") { vm.planFreeUp(cutoff) })
+        assertEquals(4, plan.ids.size)
+
+        // A manual Back up to Drive, still uploading after its build: Free up space waits.
+        vm.drive.backupNow()
+        VmHarness.idleUntil("the upload", 120_000) { uploading.count == 0L }
+        assertEquals("Google Drive is busy", VmHarness.library(vm).backupRunning())
+        vm.freeUpSpace(plan, FreeUpBackup.NONE)
+        assertTrue("Google Drive is busy" in awaitMessage(vm, "Free up space waits"))
+        assertEquals(6, dbIds().size)
+        hold = false
+        land.countDown()
+        VmHarness.idleUntil("the upload lands", 120_000) { !vm.drive.state.value.busy && uploaded.size == 1 }
+
+        // Back up to Drive, then delete: it backs up, then deletes, at once.
+        vm.freeUpSpace(plan, FreeUpBackup.DRIVE)
+        val told = awaitMessage(vm, "Deleted")
+        assertTrue(told.startsWith("Deleted 4 shots"), told)
+        assertEquals(2, uploaded.size)
+        for (i in 0 until 4) assertEquals(30, uploaded.last()["old$i"], "old$i is in the Drive backup, whole")
+        assertEquals(setOf("new0", "new1"), dbIds())
+        assertTrue(vm.ui.value.userMessages.any { it == "Backed up to Google Drive" })
+    }
+
+    /**
+     * REVIEW-440 R2: before Visualizer's queue and unsent edits are read, a
+     * queued upload would look like none. Free up space waits for them, in the
+     * plan and at the delete.
+     */
+    @Test
+    fun freeUpSpaceWaitsForVisualizersQueueToLoad() {
+        val cutoff = now - 365 * day
+        plant(oldShots(3, cutoff))
+        runBlocking {
+            assertTrue(
+                coffee.crema.visualizer.VisualizerStore(app, Json { ignoreUnknownKeys = true }).save(
+                    coffee.crema.visualizer.VisualizerState(retryQueue = listOf(coffee.crema.visualizer.QueuedUpload("old1", 0, Long.MAX_VALUE / 2))),
+                ),
+            )
+        }
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coffee.crema.visualizer.VisualizerSync.holdLoadForTest = gate
+        val vm = VmHarness.build(store)
+        VmHarness.idleUntil("the rows") { vm.historyLoad.isCompleted && VmHarness.library(vm).rowsReady }
+        val library = VmHarness.library(vm)
+        val plan = vm.viewModelScope.async { library.planFreeUp(cutoff) }
+        val all = coffee.crema.history.FreeUpPlan(cutoff, oldShots(3, cutoff).map { it.id }, 0, 0)
+        val delete = vm.viewModelScope.async { library.freeUpSpace(all) }
+        VmHarness.idle()
+        assertFalse(plan.isCompleted, "the plan waits for the queue")
+        assertFalse(delete.isCompleted, "and so does the delete")
+        assertEquals(3, dbIds().size)
+        gate.complete(Unit)
+        VmHarness.idleUntil("the plan and the delete", 60_000) { plan.isCompleted && delete.isCompleted }
+        val planned = assertNotNull(runBlocking { plan.await() })
+        assertEquals(setOf("old0", "old2"), planned.ids.toSet())
+        assertEquals(1, planned.syncKept)
+        val done = runBlocking { delete.await() }
+        assertEquals(2, done.deleted)
+        assertEquals(1, done.syncKept)
+        assertEquals(setOf("old1"), dbIds(), "the queued upload's shot stays")
     }
 
     // ── No automatic deletion anywhere ───────────────────────────────────────

@@ -548,14 +548,16 @@ class DriveSync(
             notify("A restore is running. Back up once it's done.")
             return null
         }
-        val tokens = tokenForUser("backup") ?: return null
+        val fake = uploadForTest
+        val tokens = if (fake != null) null else tokenForUser("backup") ?: return null
         // Busy from the start: building the zip takes a while on a big
         // history (it runs off Main, so the UI stays live meanwhile).
         _state.update { it.copy(busy = true) }
         try {
             val built = backupZip(false) ?: return null // backupZip already said why
             try {
-                withToken(tokens) { uploadBackup(it, backupFileName(), built.file) }
+                if (fake != null) fake(backupFileName(), built.file)
+                else withToken(tokens!!) { uploadBackup(it, backupFileName(), built.file) }
                 persist { it.copy(lastBackupSuccessAtMs = now()) }
                 finishRun(backedUp())
                 notify("Backed up to Google Drive")
@@ -835,7 +837,11 @@ class DriveSync(
         }
     }
 
-    private companion object {
+    internal companion object {
+        /** Test seam: a VM test's stand-in for the session and the upload of [backupNowAwait]. Null in the app. */
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var uploadForTest: (suspend (name: String, file: java.io.File) -> Unit)? = null
+
         /** How long to let a real redirect land before calling the handshake
          *  abandoned. Long enough for `onNewIntent` → [handleCallback]'s
          *  coroutine to clear the pending state, short enough that the user

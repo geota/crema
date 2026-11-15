@@ -482,6 +482,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         applyRestoredCustomMethods = { methods, wipe -> guided.applyRestoredCustomMethods(methods, wipe) },
         uiState = { _ui.value },
         effectiveState = { effectiveState() },
+        driveBusy = { drive.state.value.busy },
         updateUi = { transform -> _ui.update(transform) },
         editRows = { rows, rest -> _ui.edit(rows, rest) },
         notify = { notifyUser(it) },
