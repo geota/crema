@@ -534,7 +534,9 @@ impl HistoryDb {
 
     /// `page({query, anchor, limit})` → `Page`. **For display only**
     /// (REVIEW-442 note 2): a row whose sort key moves across the cursor
-    /// shows again. Per-row work pages by `rid` or dedupes by id.
+    /// shows again. Per-row work pages by `rid` or dedupes by id. A page's
+    /// `first` and `last` are opaque cursor text, as the FFI's; an anchor
+    /// takes them back as `{after: last}` or `{before: first}`.
     pub fn page(&self, json: &str) -> Result<String, JsValue> {
         let a: PageArgs = parse(json)?;
         self.sync(|s| s.page(&a.query, &a.anchor, a.limit))
