@@ -119,6 +119,31 @@ impl ChangeKinds {
     }
 }
 
+/// What one write transaction changed (SPEC §10): the notice every write
+/// returns, and the shells broadcast. `seq` is the `write_seq` it committed,
+/// so a window orders notices against pages and sees a gap (S14). A write
+/// that changed nothing carries the current `write_seq` and empty lists.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChangeSet {
+    /// The write's `write_seq`.
+    pub seq: u64,
+    /// Rows added or changed, in the order the write took them.
+    pub upserted: Vec<String>,
+    /// Rows removed.
+    pub deleted: Vec<String>,
+    /// What lists and stats can see of the change.
+    pub kinds: ChangeKinds,
+}
+
+impl ChangeSet {
+    /// Whether the write changed anything.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.upserted.is_empty() && self.deleted.is_empty() && self.kinds == ChangeKinds::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -18,10 +18,17 @@ serde.workspace = true
 serde_json.workspace = true
 # NFD, for the search fold (SPEC §5). Pure tables, no IO.
 unicode-normalization = "0.1.24"
+# The store (SPEC §1, decision B): SQLite compiled in, so both shells run one
+# SQLite version with FTS5 and trigram. Native only until C4 adds the wasm VFS.
+rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled", "cache"], optional = true }
 
 [features]
-# C2's `rusqlite` store. Off, and empty, in C1: nothing here runs SQL yet.
-store = []
+# The `rusqlite` store (`store`): opens and writes the database. Off by
+# default, so the pure half builds without SQLite.
+store = ["dep:rusqlite"]
+# A fault hook for tests (PLAN C2): fail at a named point. Never in a shipped
+# build.
+faults = ["store"]
 # The reference rules (`reference`), for the stage-1 dev oracle (SPEC §3, N7).
 # `de1-wasm` and `de1-ffi` turn it on only in dev and test builds, so the
 # production bundles link none of this crate.
@@ -29,7 +36,9 @@ dev-oracle = []
 
 [dev-dependencies]
 # The crate's own tests use the reference rules.
-de1-history = { path = ".", features = ["dev-oracle"] }
+de1-history = { path = ".", features = ["dev-oracle", "store", "faults"] }
+# Temp dirs for the store's tests: real SQLite files, no mocks.
+tempfile = "3"
 
 [lints]
 workspace = true
