@@ -57,21 +57,12 @@ function errorOf(e: unknown): Record<string, unknown> {
 	return { code: 'js', message: String(e) };
 }
 
-/**
- * A cursor's `queryHash` is a u64, written as a JSON number: past 2^53,
- * `JSON.parse` rounds it, and the store refuses the cursor as another query's.
- * The harness carries it as a string and puts the digits back on the way in.
- * W1 needs the same, or the core writes the hash as text (W0 finding).
- */
-const hashOut = (json: string) => json.replace(/"queryHash":(\d+)/g, '"queryHash":"$1"');
-const hashIn = (json: string) => json.replace(/"queryHash":"(\d+)"/g, '"queryHash":$1');
-
 /** A wasm answer: JSON text, a `Promise` of it, or nothing. */
 async function value(v: unknown): Promise<unknown> {
 	const r = await v;
 	if (typeof r === 'string') {
 		try {
-			return JSON.parse(hashOut(r));
+			return JSON.parse(r);
 		} catch {
 			return r;
 		}
@@ -79,7 +70,7 @@ async function value(v: unknown): Promise<unknown> {
 	return r ?? null;
 }
 
-const text = (a: unknown): string => hashIn(typeof a === 'string' ? a : JSON.stringify(a));
+const text = (a: unknown): string => (typeof a === 'string' ? a : JSON.stringify(a));
 
 function db(h: unknown): HistoryDb {
 	const d = dbs.get(String(h));

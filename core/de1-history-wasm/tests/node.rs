@@ -218,6 +218,62 @@ async fn an_export_walk_takes_its_token_as_text() {
     db.close().expect("closes");
 }
 
+/// JSON text as a Worker hands it on: `JSON.parse`, then `JSON.stringify`.
+fn through_js(text: &str) -> Value {
+    let parsed = js_sys::JSON::parse(text).expect("JS parses it");
+    let back = js_sys::JSON::stringify(&parsed).expect("JS writes it");
+    serde_json::from_str(&String::from(back)).expect("JSON")
+}
+
+#[test]
+async fn keyset_pages_follow_cursors_that_went_through_js() {
+    let db = open(index_file("node-keyset.db", true))
+        .await
+        .expect("opens");
+    let rows: Vec<Value> = [("a", 36.1), ("b", 36.2), ("c", 36.3)]
+        .iter()
+        .zip(1_i64..)
+        .map(|(&(id, y), at)| {
+            json!({ "rowJson": json!({
+                "id": id, "completedAt": at * 1_000, "profileName": "Turbo",
+                "metadata": { "dose": 18.0, "yieldOut": y }, "record": {}, "tags": []
+            }).to_string() })
+        })
+        .collect();
+    wait(db.upsert(&Value::Array(rows).to_string()))
+        .await
+        .expect("writes");
+    for (query, order) in [
+        (json!({}), ["c", "b", "a"]),
+        (
+            json!({ "sort": { "key": "yield", "dir": "asc" } }),
+            ["a", "b", "c"],
+        ),
+    ] {
+        let hash = serde_json::from_value::<de1_history::HistoryQuery>(query.clone())
+            .expect("a query")
+            .hash();
+        assert!(hash > 1 << 53, "{query}: a hash JS would round");
+        let page = |anchor: Value| {
+            let a = json!({ "query": query, "anchor": anchor, "limit": 1 });
+            through_js(&db.page(&a.to_string()).expect("pages"))
+        };
+        let mut seen = Vec::new();
+        let mut p = page(json!("start"));
+        loop {
+            seen.push(p["rows"][0]["id"].as_str().expect("an id").to_owned());
+            if p["atEnd"] == json!(true) {
+                break;
+            }
+            p = page(json!({ "after": p["last"] }));
+        }
+        assert_eq!(seen, order, "{query}");
+        let above = page(json!({ "before": p["first"] }));
+        assert_eq!(above["rows"][0]["id"], json!(order[1]), "{query}");
+    }
+    db.close().expect("closes");
+}
+
 #[test]
 async fn a_copy_and_a_recovery_file_are_how_truth_files_begin() {
     let index = open(index_file("node-flip-src.db", true))

@@ -12,8 +12,13 @@ use crate::query::{HistoryQuery, SortKey, SortValue};
 const CURSOR_V: u64 = 1;
 
 /// A row's place in a query's order.
+///
+/// Its serde form is the opaque text of [`Cursor::encode`], as the FFI gives
+/// it. As a JSON object its `u64` hash would pass 2^53, which JavaScript's
+/// `JSON.parse` rounds, and its `f64` key would rest on the reader's float
+/// parsing; either way the store would refuse the cursor or skip a row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(into = "String", try_from = "String")]
 pub struct Cursor {
     /// [`HistoryQuery::hash`] of the query it came from.
     pub query_hash: u64,
@@ -44,6 +49,20 @@ impl std::fmt::Display for CursorError {
 }
 
 impl std::error::Error for CursorError {}
+
+impl From<Cursor> for String {
+    fn from(c: Cursor) -> String {
+        c.encode()
+    }
+}
+
+impl TryFrom<String> for Cursor {
+    type Error = CursorError;
+
+    fn try_from(text: String) -> Result<Cursor, CursorError> {
+        Cursor::decode(&text)
+    }
+}
 
 impl Cursor {
     /// The cursor for row `d` (whose id is `id`) in query `q`.
@@ -192,7 +211,7 @@ fn base64url_decode(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::{Dir, Sort};
+    use crate::query::{Anchor, Dir, Sort};
 
     fn q(key: SortKey) -> HistoryQuery {
         HistoryQuery {
@@ -228,6 +247,75 @@ mod tests {
             let back = Cursor::decode(&text).expect("decodes");
             assert_eq!(back, c);
             assert!(back.check(&q(key)).is_ok());
+        }
+    }
+
+    /// `v` as JavaScript's `JSON.parse` then `JSON.stringify` leave it: every
+    /// number an f64, written without a fraction when it is whole.
+    fn through_js(v: Value) -> Value {
+        match v {
+            Value::Number(n) => {
+                let f = n.as_f64().expect("a JSON number is an f64 in JS");
+                #[allow(clippy::cast_possible_truncation)] // whole and in range
+                let whole = (f.fract() == 0.0 && f.abs() < 2f64.powi(63)).then_some(f as i64);
+                whole.map_or_else(|| Value::from(f), Value::from)
+            }
+            Value::Array(a) => Value::Array(a.into_iter().map(through_js).collect()),
+            Value::Object(o) => {
+                Value::Object(o.into_iter().map(|(k, v)| (k, through_js(v))).collect())
+            }
+            v => v,
+        }
+    }
+
+    #[test]
+    fn a_cursor_survives_json_through_js() {
+        let big = (1u64 << 53) + 1;
+        assert_ne!(
+            through_js(Value::from(big)),
+            Value::from(big),
+            "an f64 rounds it"
+        );
+        for (query_hash, key) in [
+            (big, SortValue::Date),
+            (u64::MAX, SortValue::Int(4)),
+            (q(SortKey::Yield).hash(), SortValue::Real(0.1 + 0.2)),
+            // serde_json's default float parsing reads this one ulp off.
+            (big, SortValue::Real(-2.725_951_355_265_183e-33)),
+            (0, SortValue::Text("a \"b\" ☕".into())),
+        ] {
+            let c = Cursor {
+                query_hash,
+                key,
+                completed_at: 1_700_000_000_000,
+                id: "shot:a".into(),
+            };
+            let json = serde_json::to_value(Anchor::After(c.clone())).expect("serialises");
+            assert_eq!(json, serde_json::json!({ "after": c.encode() }));
+            let text = serde_json::to_string(&through_js(json)).expect("text");
+            let back: Anchor = serde_json::from_str(&text).expect("deserialises");
+            assert_eq!(back, Anchor::After(c));
+        }
+    }
+
+    #[test]
+    fn json_that_isnt_a_cursors_text_is_refused() {
+        let c = Cursor {
+            query_hash: 1,
+            key: SortValue::Date,
+            completed_at: 1,
+            id: "a".into(),
+        };
+        for json in [
+            serde_json::json!({ "queryHash": 1, "key": "date", "completedAt": 1, "id": "a" }),
+            serde_json::json!(5),
+            serde_json::json!("!"),
+            serde_json::json!(format!("{}A", c.encode())),
+        ] {
+            assert!(
+                serde_json::from_value::<Cursor>(json.clone()).is_err(),
+                "{json}"
+            );
         }
     }
 

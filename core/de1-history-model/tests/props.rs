@@ -101,7 +101,11 @@ proptest! {
         let c = Cursor { query_hash: hash, key, completed_at: at, id };
         let text = c.encode();
         prop_assert!(text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
-        prop_assert_eq!(Cursor::decode(&text), Ok(c));
+        prop_assert_eq!(Cursor::decode(&text), Ok(c.clone()));
+        // Its JSON form is that text, so no JSON reader can round it.
+        let json = serde_json::to_string(&c).expect("serialises");
+        prop_assert_eq!(json.clone(), format!("\"{text}\""));
+        prop_assert_eq!(serde_json::from_str::<Cursor>(&json).ok(), Some(c));
     }
 
     #[test]
