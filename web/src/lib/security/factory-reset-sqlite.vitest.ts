@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import { factoryResetLocalData } from './factory-reset';
+import { BACKUP_TEMP_PREFIX } from '#lib/backup/temp-names.js';
 import {
 	DB_POOL_DIR,
 	DONE_RECORD_NAME,
@@ -148,7 +149,7 @@ describe('factory reset and the SQLite history (H0)', () => {
 	it('a root that cannot be read or listed fails the reset and keeps the marker', async () => {
 		const unlistable = fakeRoot(SQLITE_ENTRIES, { listFails: true });
 		const listed = await factoryResetLocalData({ privateFiles: async () => unlistable.root });
-		expect(listed.databasesFailed).toEqual([HISTORY_SQLITE_OPFS_PREFIX]);
+		expect(listed.databasesFailed).toEqual([HISTORY_SQLITE_OPFS_PREFIX, BACKUP_TEMP_PREFIX]);
 		expect(localStorage.getItem(MARKER_KEY)).not.toBeNull();
 		expect(unlistable.entries.has(DONE_RECORD_NAME)).toBe(true);
 
@@ -158,6 +159,36 @@ describe('factory reset and the SQLite history (H0)', () => {
 			}
 		});
 		expect(unreadable.databasesFailed).toContain(HISTORY_SQLITE_OPFS_PREFIX);
+		expect(unreadable.databasesFailed).toContain(BACKUP_TEMP_PREFIX);
 		expect(localStorage.getItem(MARKER_KEY)).not.toBeNull();
+	});
+});
+
+/** #428: a backup's temporary file is user data too, so the same pass takes it. */
+describe('factory reset and temporary backup files', () => {
+	const NEW_TEMP = `${BACKUP_TEMP_PREFIX}${Date.now()}-aaaa.zip`;
+	const OLD_TEMP = `${BACKUP_TEMP_PREFIX}1-bbbb.zip`;
+
+	it('removes every one, however new, and nothing else', async () => {
+		const { root, entries } = fakeRoot([NEW_TEMP, OLD_TEMP, ...SQLITE_ENTRIES, ...OTHER_ENTRIES, 'crema-backup-tmp']);
+		const result = await factoryResetLocalData({ privateFiles: async () => root });
+		expect([...entries].sort()).toEqual([...OTHER_ENTRIES, 'crema-backup-tmp'].sort());
+		expect(result.databasesFailed).toEqual([]);
+	});
+
+	it('one that stays is reported, and does not keep the SQLite marker', async () => {
+		const { root, entries } = fakeRoot([NEW_TEMP, OLD_TEMP, ...SQLITE_ENTRIES], { held: [NEW_TEMP] });
+		const result = await factoryResetLocalData({ privateFiles: async () => root });
+		expect(result.databasesFailed).toEqual([NEW_TEMP]);
+		expect([...entries]).toEqual([NEW_TEMP]);
+		expect(localStorage.getItem(MARKER_KEY)).toBeNull();
+		expect(localStorage.getItem(PENDING_KEY)).toBeNull();
+	});
+
+	it('a root that cannot be listed hides them, and the reset still succeeds', async () => {
+		const { root, entries } = fakeRoot([OLD_TEMP, INDEX_POOL_DIR], { listable: false });
+		const result = await factoryResetLocalData({ privateFiles: async () => root });
+		expect([...entries]).toEqual([OLD_TEMP]);
+		expect(result.databasesFailed).toEqual([]);
 	});
 });

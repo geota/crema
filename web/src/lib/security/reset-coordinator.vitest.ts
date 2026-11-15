@@ -10,7 +10,8 @@ import {
 	resetCoordinatorForTest,
 	resetReportMessage,
 	stashResetReport,
-	takeResetReport
+	takeResetReport,
+	wipeAndReport
 } from './reset-coordinator';
 
 /**
@@ -115,6 +116,31 @@ describe('reset report', () => {
 		expect(resetReportMessage(report!)).toMatch(/another tab/);
 		expect(resetReportMessage({ databasesFailed: [], revokeFailures: 1 })).toMatch(/revoke/);
 		expect(resetReportMessage({ databasesFailed: [], revokeFailures: 0 })).toBeNull();
+	});
+
+	it('keeps what the wipe returns', async () => {
+		await wipeAndReport(async () => ({ databasesFailed: ['crema-captures'], revokeFailures: 1, databasesDeleted: [] }));
+		expect(takeResetReport()).toEqual({ databasesFailed: ['crema-captures'], revokeFailures: 1 });
+	});
+
+	it('a wipe that throws is told after the reload, not passed off as done (#428)', async () => {
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+		await expect(
+			wipeAndReport(async () => {
+				throw new Error('quota');
+			})
+		).resolves.toBeUndefined();
+		expect(logged).toHaveBeenCalled();
+		logged.mockRestore();
+		const report = takeResetReport();
+		expect(report).toEqual({ databasesFailed: [], revokeFailures: 0, failed: true });
+		expect(resetReportMessage(report!)).toMatch(/stopped before it finished/);
+		// Failed outranks the other notices, and only `true` counts.
+		expect(resetReportMessage({ databasesFailed: ['crema-captures'], revokeFailures: 1, failed: true })).toMatch(
+			/stopped/
+		);
+		sessionStorage.setItem(RESET_REPORT_KEY, '{"databasesFailed":[],"revokeFailures":0,"failed":"yes"}');
+		expect(takeResetReport()).toEqual({ databasesFailed: [], revokeFailures: 0 });
 	});
 });
 

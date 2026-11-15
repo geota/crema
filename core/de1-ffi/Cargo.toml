@@ -22,9 +22,10 @@ uniffi = { version = "0.32.0", features = ["cli"] }
 de1-relay = { path = "../de1-relay" }
 getrandom = "0.4"
 zeroize = "1"
-# The SQLite history's reference rules, for the dev oracle (#310 SPEC §3, N7).
-# Optional, so the APK's library links none of it.
-de1-history = { path = "../de1-history", optional = true, features = ["dev-oracle"] }
+# The SQLite history store (#310 C3): `HistoryDb` (src/history.rs), with
+# SQLite compiled in (`rusqlite` `bundled`), so the APK's library carries it.
+# The reference rules stay out of it: only `dev-oracle` turns them on.
+de1-history = { path = "../de1-history", features = ["store"] }
 
 [features]
 # The deterministic `*_for_tests` relay constructors (spec §2.11). Only the
@@ -33,10 +34,12 @@ de1-history = { path = "../de1-history", optional = true, features = ["dev-oracl
 test-seeds = ["de1-relay/test-seeds"]
 # The history dev oracle (`history_reference_*`, #310 SPEC §3, N7): dev and
 # test builds only, like test-seeds; the APK's library never links it.
-dev-oracle = ["dep:de1-history"]
+dev-oracle = ["de1-history/dev-oracle"]
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# Temp dirs for the history store's tests: real SQLite files.
+tempfile = "3"
 
 # This crate intentionally does NOT use `[lints] workspace = true`: UniFFI's
 # generated FFI scaffolding requires `unsafe`, which the workspace lint table

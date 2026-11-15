@@ -392,6 +392,7 @@ dependencies = [
  "de1-relay",
  "getrandom",
  "serde_json",
+ "tempfile",
  "uniffi",
  "zeroize",
 ]

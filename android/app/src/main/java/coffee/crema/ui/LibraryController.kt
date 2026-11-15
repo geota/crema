@@ -1892,9 +1892,9 @@ class LibraryController(
      * value, which would keep the full old file as `.bak` (final review 05
      * N-1), plus the bag photos and the last-shot diagnostic (review 05 P2-1).
      */
-    suspend fun eraseStoredData() {
+    suspend fun eraseStoredData(): List<String> {
         library.erase()
-        historyStore.erase()
+        val historyStayed = historyStore.erase()
         customProfileStore.erase()
         pinnedProfileStore.erase()
         hiddenProfileStore.erase()
@@ -1902,6 +1902,7 @@ class LibraryController(
             BeanImageStore.deleteAll(app)
             coffee.crema.diag.ShotDiag.clear(app)
         }
+        return historyStayed
     }
 
     // ── Visualizer sync hooks (pull/backfill/synced stamps) ──────────────────
