@@ -3,7 +3,12 @@
 
 mod common;
 
+#[cfg(target_arch = "wasm32")]
+use common::test;
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{Seek, SeekFrom, Write as _};
 
 use common::{create, dir, file, int, reopen, row, rows_in};
@@ -70,16 +75,21 @@ fn a_missing_file_without_create_is_cant_open_and_nothing_is_made() {
     let path = file(&d, "history.db");
     let err = Store::open(&path, OpenOptions::new(Role::Authority)).expect_err("refused");
     assert!(matches!(err, StoreError::CantOpen(_)), "{err:?}");
-    assert!(!path.exists());
-    // A missing directory too.
-    let err = Store::open(
-        d.path().join("nope/history.db"),
-        OpenOptions::new(Role::Authority).create(1),
-    )
-    .expect_err("refused");
-    assert!(matches!(err, StoreError::CantOpen(_)), "{err:?}");
+    // On disk: no file made, and a missing directory is refused too.
+    // (`memvfs`, on wasm32, has no directories.)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        assert!(!path.exists());
+        let err = Store::open(
+            d.path().join("nope/history.db"),
+            OpenOptions::new(Role::Authority).create(1),
+        )
+        .expect_err("refused");
+        assert!(matches!(err, StoreError::CantOpen(_)), "{err:?}");
+    }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn an_empty_file_without_create_is_foreign_and_stays_empty() {
     let d = dir();
@@ -90,12 +100,13 @@ fn an_empty_file_without_create_is_foreign_and_stays_empty() {
     assert_eq!(fs::metadata(&path).expect("exists").len(), 0);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn another_application_id_is_foreign_and_untouched() {
     let d = dir();
     let path = file(&d, "other.db");
     {
-        let c = rusqlite::Connection::open(&path).expect("opens");
+        let c = common::raw_conn(&path);
         c.execute_batch("PRAGMA application_id = 1234; CREATE TABLE t (x);")
             .expect("writes");
     }
@@ -117,7 +128,7 @@ fn our_id_without_meta_is_foreign() {
     let d = dir();
     let path = file(&d, "half.db");
     {
-        let c = rusqlite::Connection::open(&path).expect("opens");
+        let c = common::raw_conn(&path);
         c.execute_batch(&format!(
             "PRAGMA application_id = {APPLICATION_ID}; CREATE TABLE shot (x);"
         ))
@@ -129,7 +140,7 @@ fn our_id_without_meta_is_foreign() {
 
 /// Sets one `meta` value behind the store's back.
 fn set_meta(path: &std::path::Path, key: &str, value: &str) {
-    let c = rusqlite::Connection::open(path).expect("opens");
+    let c = common::raw_conn(path);
     c.execute("UPDATE meta SET value = ?1 WHERE key = ?2", (value, key))
         .expect("writes");
 }
@@ -149,6 +160,7 @@ fn a_newer_min_reader_is_too_new() {
     );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_newer_min_writer_reads_but_refuses_writes() {
     let d = dir();
@@ -189,6 +201,7 @@ fn a_newer_min_writer_reads_but_refuses_writes() {
     );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn another_role_is_refused_and_untouched() {
     let d = dir();
@@ -212,6 +225,7 @@ fn another_role_is_refused_and_untouched() {
     );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn an_overwritten_header_is_corrupt_and_the_file_is_left_alone() {
     let d = dir();
@@ -237,6 +251,7 @@ fn an_overwritten_header_is_corrupt_and_the_file_is_left_alone() {
     );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// A database whose pages after the first are overwritten: the header reads,
 /// `quick_check` doesn't pass.
 fn damaged_file(path: &std::path::Path) {
@@ -263,6 +278,7 @@ fn damaged_file(path: &std::path::Path) {
     f.write_all(&vec![0xa5; 8192]).expect("overwrites");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn overwritten_pages_are_corrupt_when_quick_check_runs() {
     let d = dir();
@@ -301,7 +317,7 @@ fn quick_check_runs_after_an_unclean_close_and_weekly() {
     // in this process can't open it, so check through a copy.
     let copy = file(&d, "copy.db");
     {
-        let c = rusqlite::Connection::open(&path).expect("opens");
+        let c = common::raw_conn(&path);
         c.execute_batch(&format!("VACUUM INTO '{}'", copy.display()))
             .expect("copies");
     }
@@ -402,6 +418,7 @@ fn a_full_disk_is_full_and_writes_no_partial_row() {
     assert_eq!(store.write_seq(), 2);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn corruption_found_mid_session_reopens_and_the_open_checks_decide() {
     let d = dir();
@@ -456,4 +473,25 @@ fn corruption_found_mid_session_reopens_and_the_open_checks_decide() {
         fs::read(&path).expect("reads") == before,
         "the file changed"
     );
+}
+
+#[test]
+fn the_sqlite_version_is_the_one_both_builds_pin() {
+    // The same test runs natively and on wasm32 (PLAN C4): a bump that splits
+    // the two SQLites fails one of them.
+    assert_eq!(
+        de1_history::store::sqlite_version(),
+        de1_history::store::SQLITE_VERSION
+    );
+}
+
+#[test]
+fn a_second_spelling_of_an_open_file_is_refused() {
+    let d = dir();
+    let path = file(&d, "history.db");
+    let _held = create(&path);
+    // `.` and doubled slashes name the same file (REVIEW-439 note 8).
+    let other = std::path::PathBuf::from(format!("{}/.//history.db", d.path().display()));
+    let err = Store::open(&other, OpenOptions::new(Role::Authority)).expect_err("refused");
+    assert!(matches!(err, StoreError::AlreadyOpen(_)), "{err:?}");
 }

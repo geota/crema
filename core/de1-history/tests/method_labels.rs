@@ -1,6 +1,8 @@
 //! The method preset labels moved into the core (PLAN C1): the core's table
 //! must equal both shells' current tables, web's `method-labels.ts` and
 //! Android's `BrewMethods.kt`, and cover every preset the core defines.
+// Reads the repository's files with `std::fs`: native only.
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::fs;
 use std::path::PathBuf;

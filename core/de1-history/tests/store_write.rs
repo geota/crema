@@ -5,6 +5,9 @@
 
 mod common;
 
+#[cfg(target_arch = "wasm32")]
+use common::test;
+
 use common::{create, dir, file, int, reopen, row, rows_in, stored_rows};
 use de1_history::store::{Applied, Duplicate, Heavy, RowIn, Store, StoreError, Write};
 use de1_history::{ChangeKinds, Live, LiveBean, LiveMethod, SortKey};

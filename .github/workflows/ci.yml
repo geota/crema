@@ -3,8 +3,8 @@
 #
 # This workflow runs on every PR to `main` or `integration/machine-control` and
 # on direct pushes to `main`, plus two schedules: a weekly one that runs ONLY
-# the advisory `audit` job and a nightly one that runs ONLY the relay `fuzz` job
-# and the long `model` run (every other job is guarded with
+# the advisory `audit` job and a nightly one that runs ONLY the relay `fuzz` job,
+# the long `model` runs and the history benchmarks (every other job is guarded with
 # `if: github.event_name != 'schedule'`). It does NOT
 # deploy, and neither does a push to `main`: the web deploys to Cloudflare
 # Pages only from release.yml on a `v*.*.*` tag. See DEPLOY.md.
@@ -24,7 +24,8 @@ on:
     branches: [main, integration/machine-control]
   # Weekly advisory audit (Mondays 07:00 UTC) so a new advisory surfaces even
   # in a week with no merges. Only the `audit` job runs on this trigger.
-  # Nightly (03:30 UTC): only the de1-relay `fuzz` job and the 10k `model` run.
+  # Nightly (03:30 UTC): only the de1-relay `fuzz` job, the 10k `model` runs and
+  # the `history-bench` job.
   schedule:
     - cron: '0 7 * * 1'
     - cron: '30 3 * * *'
@@ -307,6 +308,36 @@ jobs:
           path: ${{ runner.temp }}/artifacts
 
   # ─────────────────────────────────────────────────────────────────────
+  # The shot history's benchmarks (#310 PLAN B1, native): the store on seeded
+  # databases of 5,000, 20,000 and 100,000 rows, in release, nightly only.
+  # Each size prints a table against the budgets, into the log and the run's
+  # summary. Report only: the budgets are the reference device's, so the job
+  # fails on an error, not on a slow number (HISTORY_BENCH_STRICT=1 would).
+  # ─────────────────────────────────────────────────────────────────────
+  history-bench:
+    name: bench (de1-history)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && github.event.schedule == '30 3 * * *'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+          shared-key: rust-history-bench
+
+      - name: cargo test --release (history benchmarks)
+        working-directory: core
+        run: |
+          HISTORY_BENCH_OUT="$GITHUB_STEP_SUMMARY" cargo test --release --locked -p de1-history \
+            --bench history -- --ignored --nocapture --test-threads=1
+
+  # ─────────────────────────────────────────────────────────────────────
   # Web shell gates: install, build wasm bundle, svelte-check, build.
   # Depends on the Rust core indirectly (`pnpm wasm` rebuilds de1-wasm).
   # ─────────────────────────────────────────────────────────────────────
@@ -380,6 +411,115 @@ jobs:
         run: |
           pnpm wasm:test
           RELAY_WASM_TEST=1 pnpm vitest run src/lib/relay
+
+  # ─────────────────────────────────────────────────────────────────────
+  # The SQLite history's wasm (#310 PLAN C4): de1-history's store suite on
+  # wasm32 in Node, de1-history-wasm's surface in Node and its pools in
+  # headless Chrome (dedicated Worker, real OPFS), the production build and
+  # its size cap. sqlite-wasm-rs compiles SQLite's C, so the job needs a clang
+  # with a wasm32 backend: the runner image's, recorded in the step summary.
+  # The native half (the SQLite version, the no-deleting-calls check) runs in
+  # the rust job's `cargo test --workspace`.
+  # ─────────────────────────────────────────────────────────────────────
+  history-wasm:
+    name: history wasm (de1-history-wasm)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain (stable + wasm32 + clippy)
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+          shared-key: history-wasm
+
+      # The C build's compiler: the newest clang on the image that has an
+      # llvm-ar beside it and compiles for wasm32.
+      - name: Find a clang for wasm32
+        run: |
+          cc=""; ar=""
+          for v in 21 20 19 18 17; do
+            if command -v "clang-$v" >/dev/null && command -v "llvm-ar-$v" >/dev/null; then
+              cc="$(command -v "clang-$v")"; ar="$(command -v "llvm-ar-$v")"; break
+            fi
+          done
+          if [ -z "$cc" ]; then cc="$(command -v clang)"; ar="$(command -v llvm-ar)"; fi
+          : "${cc:?no clang on the image}" "${ar:?no llvm-ar on the image}"
+          probe="$(mktemp -d)"
+          echo 'int f(void) { return 1; }' > "$probe/p.c"
+          "$cc" --target=wasm32-unknown-unknown -c "$probe/p.c" -o "$probe/p.o"
+          {
+            echo "### clang for the wasm32 C build"
+            echo '```'
+            echo "CC_wasm32_unknown_unknown=$cc"
+            echo "AR_wasm32_unknown_unknown=$ar"
+            "$cc" --version
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          "$cc" --version
+          echo "CC_wasm32_unknown_unknown=$cc" >> "$GITHUB_ENV"
+          echo "AR_wasm32_unknown_unknown=$ar" >> "$GITHUB_ENV"
+
+      # wasm-bindgen-test-runner must match the lockfile's wasm-bindgen.
+      - name: wasm-bindgen version from Cargo.lock
+        id: bindgen
+        run: |
+          v="$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' core/Cargo.lock)"
+          : "${v:?no wasm-bindgen in Cargo.lock}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Install wasm-bindgen-cli and wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.bindgen.outputs.version }},wasm-pack
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+
+      - name: cargo clippy (wasm32, -D warnings)
+        working-directory: core
+        run: cargo clippy -p de1-history -p de1-history-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
+
+      # C2's integration suite on wasm32, in Node, on memvfs. Its
+      # `the_sqlite_version_is_the_one_both_builds_pin` runs here and in the
+      # rust job against one constant, so a SQLite split fails one of them.
+      - name: de1-history store suite on wasm32 (Node)
+        working-directory: core
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: cargo test -p de1-history --target wasm32-unknown-unknown --tests
+
+      # The surface in Node, then the pools in headless Chrome in a dedicated
+      # Worker (M7, S5). The image ships Chrome and a matching chromedriver.
+      - name: de1-history-wasm tests (Node + headless Chrome)
+        working-directory: core
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: |
+          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
+          cargo test -p de1-history-wasm --target wasm32-unknown-unknown
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+
+      # The production build, and its size: under 1 MB gzip (PLAN C4).
+      - name: pnpm wasm:history and its size
+        working-directory: web
+        run: |
+          pnpm run wasm:history
+          ../scripts/history-wasm-size.sh src/lib/history-db/wasm/de1_history_wasm_bg.wasm
 
   # ─────────────────────────────────────────────────────────────────────
   # Android shell gates: JVM unit tests (incl. Robolectric), Android lint and

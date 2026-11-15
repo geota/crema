@@ -49,6 +49,18 @@ use crate::schema::{APPLICATION_ID, PRAGMAS, SCHEMA_V, V1};
 use crate::sql::TextPath;
 use error::{Class, Fail, Source, classify, error_of};
 
+/// The SQLite both builds compile in (SPEC §1, "One SQLite version"):
+/// `libsqlite3-sys` 0.40.0 natively, `sqlite-wasm-rs` 0.6.3 on wasm32. The
+/// same test runs in both builds against this one constant, so a dependency
+/// bump that splits them fails CI.
+pub const SQLITE_VERSION: &str = "3.54.1";
+
+/// The SQLite this build runs, from the library itself.
+#[must_use]
+pub fn sqlite_version() -> &'static str {
+    rusqlite::version()
+}
+
 /// A week, for the weekly `quick_check`.
 const WEEK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
@@ -122,21 +134,36 @@ pub struct OpenOptions {
     pub quick_check: bool,
     /// How long a locked file is waited for before [`StoreError::Busy`].
     pub busy_timeout_ms: u32,
+    /// After a mid-session `SQLITE_CORRUPT` reopens the file and its checks
+    /// pass, run the search index's `'integrity-check'` at once (`true`, the
+    /// default), or set the index aside for a rebuild in batches (`false`).
+    /// The check is one statement over the whole index, which at 100,000
+    /// rows holds web's one connection past S15's cap, so web passes `false`
+    /// (REVIEW-439 note 6). Searches run on the scan path until the rebuilt
+    /// index is swapped in.
+    pub fts_check_on_reopen: bool,
 }
 
 impl OpenOptions {
-    /// Opens an existing file of `role`, WAL, default VFS.
+    /// Opens an existing file of `role`, WAL, default VFS. WAL is
+    /// [`JournalMode::ExclusiveWal`] on wasm32, whose VFSes have no shared
+    /// memory; the web shell sets the mode W0 keeps.
     #[must_use]
     pub fn new(role: Role) -> OpenOptions {
         OpenOptions {
             role,
             create: false,
             generation: 0,
-            journal: JournalMode::Wal,
+            journal: if cfg!(all(target_family = "wasm", target_os = "unknown")) {
+                JournalMode::ExclusiveWal
+            } else {
+                JournalMode::Wal
+            },
             vfs: None,
             now_ms: 0,
             quick_check: false,
             busy_timeout_ms: 5_000,
+            fts_check_on_reopen: true,
         }
     }
 
@@ -210,12 +237,47 @@ impl Drop for Claim {
     }
 }
 
-/// The key a file is claimed under: its canonical path on the default VFS
-/// (so two spellings of one file are one file), the VFS name and the path as
-/// given on another.
-fn file_key(path: &Path, vfs: Option<&str>) -> Result<String> {
-    if let Some(vfs) = vfs {
-        return Ok(format!("{vfs}:{}", path.display()));
+/// Whether the VFS reaches the platform's file system: natively the default
+/// VFS and SQLite's `unix` family, which all name the same files. On wasm32
+/// there is none: the default is `memvfs`.
+fn on_disk(vfs: Option<&str>) -> bool {
+    if cfg!(all(target_family = "wasm", target_os = "unknown")) {
+        return false;
+    }
+    vfs.is_none_or(|v| v == "unix" || v.starts_with("unix-"))
+}
+
+/// A path in a VFS without a file system, normalised: empty and `.`
+/// components dropped, `..` taking the one before it, from a leading `/`.
+fn lexical(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let mut parts: Vec<&str> = Vec::new();
+    for part in text.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            p => parts.push(p),
+        }
+    }
+    format!("/{}", parts.join("/"))
+}
+
+/// The key a file is claimed under (S4), so that two spellings of one file
+/// are one claim (REVIEW-439 note 8):
+/// - on the file system (the default VFS or a `unix` one, natively), `file:`
+///   and the canonical path, whichever of those VFSes names it;
+/// - in a VFS of its own (a `sahpool` pool, `memvfs`), the VFS name and the
+///   [`lexical`] path, so `crema-db:history.db` and `crema-db:/history.db`
+///   are one claim. On wasm32 no VFS named is `memvfs`, the default there.
+///
+/// A key may join two names the VFS keeps apart (`sahpool` names files
+/// exactly as given), which refuses an open it could have allowed. It never
+/// splits one file into two claims.
+pub(crate) fn file_key(path: &Path, vfs: Option<&str>) -> Result<String> {
+    if !on_disk(vfs) {
+        return Ok(format!("{}:{}", vfs.unwrap_or("memvfs"), lexical(path)));
     }
     let canonical = match path.canonicalize() {
         Ok(p) => p,
@@ -279,6 +341,10 @@ pub struct Store {
     batch_rows: u32,
     quick_checked: bool,
     walks: export::Walks,
+    /// The index is set aside after a reopen, unchecked
+    /// ([`OpenOptions::fts_check_on_reopen`] `false`): searches scan, and
+    /// the next [`Store::maintain`] starts a rebuild.
+    fts_suspect: bool,
     faults: Faults,
     poisoned: Option<StoreError>,
     closed: bool,
@@ -323,6 +389,7 @@ impl Store {
         let (conn, opened) = open_conn(&path, &opts, check)?;
         let fts = fts::load(&conn).map_err(|e| error_of(&e, Source::Open))?;
         let derive = rewrite::State::load(&conn).map_err(|e| error_of(&e, Source::Open))?;
+        let walks = export::Walks::new(opts.now_ms);
         Ok(Store {
             conn,
             path,
@@ -336,7 +403,8 @@ impl Store {
             busy: false,
             batch_rows: DEFAULT_BATCH_ROWS,
             quick_checked: opened.quick_checked,
-            walks: export::Walks::new(),
+            walks,
+            fts_suspect: false,
             faults: Faults::default(),
             poisoned: None,
             closed: false,
@@ -375,7 +443,7 @@ impl Store {
     #[must_use]
     pub fn health(&self) -> Health {
         Health {
-            reindexing: self.fts != FtsStatus::Ready || self.derive.pending,
+            reindexing: self.fts != FtsStatus::Ready || self.fts_suspect || self.derive.pending,
             fts: self.fts,
             derive_pending: self.derive.pending,
             writable: self.writable,
@@ -408,11 +476,19 @@ impl Store {
         &self.conn
     }
 
+    /// Closes and reopens the file as a mid-session `SQLITE_CORRUPT` does,
+    /// with `quick_check` (`faults` feature): the path
+    /// [`OpenOptions::fts_check_on_reopen`] decides.
+    #[cfg(feature = "faults")]
+    pub fn reopen_as_after_corrupt(&mut self) -> StoreError {
+        self.reopen(Check::Quick)
+    }
+
     /// How searches run now: through the index when it is whole, by scan
     /// while it is being rebuilt or after it was dropped (M6).
     #[must_use]
     pub fn text_path(&self) -> TextPath {
-        if self.fts == FtsStatus::Ready {
+        if self.fts == FtsStatus::Ready && !self.fts_suspect {
             TextPath::Fts
         } else {
             TextPath::Scan
@@ -551,8 +627,13 @@ impl Store {
                 // The main database is whole, so the error may have come
                 // from the search index's own tables through a trigger. Run
                 // its check here, not through `settle`, so a corrupt answer
-                // drops the index rather than reopening again.
-                if self.fts == FtsStatus::Ready {
+                // drops the index rather than reopening again. Or, where one
+                // statement over the whole index is too long (web, S15), set
+                // the index aside: searches scan, and the next `maintain`
+                // rebuilds it in batches (REVIEW-439 note 6).
+                if self.fts == FtsStatus::Ready && !self.opts.fts_check_on_reopen {
+                    self.fts_suspect = true;
+                } else if self.fts == FtsStatus::Ready {
                     let check = self.conn.execute(
                         "INSERT INTO shot_fts (shot_fts, rank) VALUES ('integrity-check', 1)",
                         [],
@@ -854,5 +935,40 @@ pub(crate) fn change_set(
         upserted,
         deleted,
         kinds,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_named_vfs_keys_two_spellings_of_one_path_as_one_claim() {
+        let key = |p: &str| file_key(Path::new(p), Some("crema-db")).expect("a key");
+        for p in [
+            "history.db",
+            "/history.db",
+            "//history.db",
+            "./history.db",
+            "/a/../history.db",
+        ] {
+            assert_eq!(key(p), "crema-db:/history.db", "{p}");
+        }
+        assert_ne!(key("/history.db"), key("/history-2.db"));
+        assert_ne!(
+            key("/history.db"),
+            file_key(Path::new("/history.db"), Some("crema-index")).expect("a key")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_unix_vfses_and_the_default_key_one_file_as_one_claim() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("de1-history-key.db");
+        let none = file_key(&path, None).expect("a key");
+        assert!(none.starts_with("file:"), "{none}");
+        assert_eq!(file_key(&path, Some("unix")).expect("a key"), none);
+        assert_eq!(file_key(&path, Some("unix-dotfile")).expect("a key"), none);
     }
 }

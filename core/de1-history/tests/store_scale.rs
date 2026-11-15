@@ -2,6 +2,8 @@
 //! the search index's rebuild at 100,000 rows runs in batches, none larger
 //! than its batch size. The times are printed; B1 owns the budgets, so they
 //! are asserted only in an optimised build, against B1's 100 ms cap.
+// Timed with `Instant`, which `std` lacks on wasm32; B1 times the browser.
+#![cfg(not(target_arch = "wasm32"))]
 
 mod common;
 

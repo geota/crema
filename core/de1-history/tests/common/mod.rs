@@ -1,5 +1,11 @@
 //! Helpers for the store's tests: real SQLite files in temp dirs, rows in
 //! the web shape, the cross-shell fixtures.
+//!
+//! The same tests run on wasm32 (PLAN C4) under `wasm-bindgen-test` in Node,
+//! where files live in SQLite's in-memory VFS (`memvfs`, the default there):
+//! a [`TestDir`] is then a fresh path prefix, and the fixtures are compiled
+//! in. Tests that plant bytes in a file with `std::fs` stay native; the
+//! browser suite in `de1-history-wasm` plants them in OPFS.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -7,14 +13,80 @@ use std::path::{Path, PathBuf};
 use de1_history::store::{OpenOptions, Role, RowIn, Store};
 use serde_json::{Value, json};
 
+/// `#[test]` on wasm32 is `wasm-bindgen-test`'s: each test file imports
+/// this under `cfg(target_arch = "wasm32")`.
+#[cfg(target_arch = "wasm32")]
+pub use wasm_bindgen_test::wasm_bindgen_test as test;
+
 /// A temp dir that lives as long as the test holds it.
-pub fn dir() -> tempfile::TempDir {
-    tempfile::tempdir().expect("a temp dir")
+#[cfg(not(target_arch = "wasm32"))]
+pub struct TestDir(tempfile::TempDir);
+
+/// A path prefix no other test uses, in `memvfs`.
+#[cfg(target_arch = "wasm32")]
+pub struct TestDir(PathBuf);
+
+impl TestDir {
+    /// The dir's path.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.0.path();
+        #[cfg(target_arch = "wasm32")]
+        return &self.0;
+    }
+}
+
+/// A new temp dir.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn dir() -> TestDir {
+    TestDir(tempfile::tempdir().expect("a temp dir"))
+}
+
+/// A new path prefix.
+#[cfg(target_arch = "wasm32")]
+pub fn dir() -> TestDir {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    TestDir(PathBuf::from(format!(
+        "/t{}",
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )))
 }
 
 /// `name` inside `dir`.
-pub fn file(dir: &tempfile::TempDir, name: &str) -> PathBuf {
+pub fn file(dir: &TestDir, name: &str) -> PathBuf {
     dir.path().join(name)
+}
+
+/// A fixture's text, compiled in so the wasm32 build has it too.
+pub fn fixture(name: &str) -> &'static str {
+    match name {
+        "rows.web.jsonl" => include_str!("../fixtures/rows.web.jsonl"),
+        "rows.android.jsonl" => include_str!("../fixtures/rows.android.jsonl"),
+        "queries.json" => include_str!("../fixtures/queries.json"),
+        "live.json" => include_str!("../fixtures/live.json"),
+        other => panic!("no fixture {other}"),
+    }
+}
+
+/// A raw connection to `path`, behind the store's back. On wasm32 it locks
+/// the file exclusively before the first read: the store's files there are
+/// WAL without shared memory, which SQLite opens no other way.
+pub fn raw_conn(path: &Path) -> rusqlite::Connection {
+    let c = rusqlite::Connection::open(path).expect("opens");
+    if cfg!(target_arch = "wasm32") {
+        c.query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .expect("locks");
+    }
+    c
+}
+
+/// The platform's default journal mode: WAL, exclusive on wasm32.
+pub fn journal() -> de1_history::store::JournalMode {
+    OpenOptions::new(Role::Authority).journal
 }
 
 /// Opens (creating) an authority file at `path`.
@@ -61,11 +133,7 @@ pub fn rows_in(rows: &[String]) -> Vec<RowIn> {
 
 /// The cross-shell fixture rows for `shell` (`web` or `android`).
 pub fn fixture_rows(shell: &str) -> Vec<String> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(format!("rows.{shell}.jsonl"));
-    std::fs::read_to_string(&path)
-        .expect("fixture")
+    fixture(&format!("rows.{shell}.jsonl"))
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(str::to_owned)

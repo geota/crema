@@ -4,6 +4,9 @@
 
 mod common;
 
+#[cfg(target_arch = "wasm32")]
+use common::test;
+
 use std::collections::BTreeMap;
 
 use common::{create, dir, file, fixture_rows, int, row, rows_in};
@@ -42,12 +45,7 @@ struct Queries {
 }
 
 fn read(name: &str) -> String {
-    std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
-            .join(name),
-    )
-    .expect("a fixture")
+    common::fixture(name).to_owned()
 }
 
 fn queries() -> Vec<(String, HistoryQuery)> {
@@ -97,7 +95,7 @@ fn queries() -> Vec<(String, HistoryQuery)> {
 }
 
 struct Loaded {
-    _dir: tempfile::TempDir,
+    _dir: common::TestDir,
     store: Store,
     refs: Vec<RefRow>,
     live: Live,
