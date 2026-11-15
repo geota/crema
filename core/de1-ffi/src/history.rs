@@ -1590,6 +1590,15 @@ impl HistoryDb {
         self.with(|s| s.set_source_seq(seq))
     }
 
+    /// Restarts `source_seq` at `seq` and clears `seen_seqs` (a full diff's
+    /// start on Android, REVIEW-450 B).
+    ///
+    /// # Errors
+    /// `Refused` on an `authority` file; a store error class.
+    pub fn reset_seqs(&self, seq: u64) -> HResult<()> {
+        self.with(|s| s.reset_seqs(seq))
+    }
+
     /// Raises `pending` (the Android hook's first half).
     ///
     /// # Errors

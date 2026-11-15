@@ -217,6 +217,12 @@ internal class HistoryTables(private val json: Json, private val hook: ShotsHook
      * the boot check compares it with the last seq the index mirrored. It is
      * read before [block] and set after, so a write that clears `meta`
      * keeps counting up.
+     *
+     * A new file's first write starts from the clock, in ms, not from 1
+     * (REVIEW-450 A): a `shots.db` that replaces another (a lost store
+     * rebuilt, a new migration) never reuses seqs the old one gave, so an
+     * index of the old file can't pass the boot check by its seq climbing
+     * back to the old one's.
      */
     fun <T> write(db: SQLiteDatabase, block: ShotsWrite.() -> T): T {
         val ticket = hook.begin()
@@ -225,7 +231,7 @@ internal class HistoryTables(private val json: Json, private val hook: ShotsHook
             db.inTransaction {
                 val before = indexSeq(this)
                 val out = w.block()
-                w.seq = before + 1uL
+                w.seq = if (before == 0uL) firstSeq() else before + 1uL
                 putMeta(this, META_INDEX_SEQ, w.seq.toString())
                 out
             }
@@ -402,6 +408,9 @@ internal class HistoryTables(private val json: Json, private val hook: ShotsHook
     fun meta(db: SQLiteDatabase, key: String): String? =
         db.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(key)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
 
+    /** A new file's first seq: now, in ms since the epoch, above any seq an earlier file reached. */
+    private fun firstSeq(): ULong = (firstSeqForTest?.invoke() ?: System.currentTimeMillis()).coerceAtLeast(1L).toULong()
+
     /** The seq of the last write to `shots` ([write]), 0 before the first. */
     fun indexSeq(db: SQLiteDatabase): ULong = meta(db, META_INDEX_SEQ)?.toULongOrNull() ?: 0uL
 
@@ -414,6 +423,10 @@ internal class HistoryTables(private val json: Json, private val hook: ShotsHook
     companion object {
         const val SUMMARY = "summary"
         const val META_MIGRATION = "migration"
+
+        /** Test seam: the clock a new file's first seq starts from (REVIEW-450 A). */
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var firstSeqForTest: (() -> Long)? = null
 
         /** The hook's count of writes to `shots` (#310 A1b), and SPEC §11 step 5's `source_seq` at the flip. */
         const val META_INDEX_SEQ = "index_seq"

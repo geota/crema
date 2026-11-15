@@ -324,6 +324,13 @@ internal class HistoryIndex(
      * The boot check (SPEC §3): null when it passes or the index won't open;
      * otherwise a full diff begun, with `pending` raised for it, so a crash
      * mid-diff leaves the next boot a miss. [force] runs one anyway.
+     *
+     * Then, still under the lock, the index's seqs restart at `shots.db`'s
+     * (REVIEW-450 B and C): `source_seq` to its `index_seq` and `seen_seqs`
+     * cleared. Every write up to that seq is in the rows the diff reads, and
+     * a seq the index saw from an older file or a later copy can't stand in
+     * for this file's. Writes during the diff then advance from there, so
+     * the diff settles exactly when each of them reached the index.
      */
     fun planDiff(shots: SQLiteDatabase, force: Boolean): Diff? {
         val db = opened(retry = true) ?: return null
@@ -331,7 +338,9 @@ internal class HistoryIndex(
             val reasons = misses(db, shots).let { if (force && it.isEmpty()) listOf("asked for") else it }
             if (reasons.isEmpty()) return null
             db.now { it.bumpPending() }
-            Diff(db, db.now { it.writeSeq() }, tables().indexSeq(shots), reasons, System.currentTimeMillis())
+            val shotsSeq = tables().indexSeq(shots)
+            db.now { it.resetSeqs(shotsSeq) }
+            Diff(db, db.now { it.writeSeq() }, shotsSeq, reasons, System.currentTimeMillis())
         } catch (e: SimulatedCrash) {
             throw e
         } catch (e: Throwable) {
@@ -367,10 +376,10 @@ internal class HistoryIndex(
 
     /**
      * The diff's last step: the rows `shots.db` doesn't hold leave the index
-     * (read under the same lock, so none can arrive meanwhile), and the index
-     * takes every seq up to the one the diff began at. It settles `pending`
-     * to 0 with this `versionCode` only when the index then has every seq up
-     * to `shots.db`'s now: a write since it began that the index missed, from
+     * (read under the same lock, so none can arrive meanwhile). It settles
+     * `pending` to 0 with this `versionCode` only when the index has every
+     * seq from the one [planDiff] reset it to up to `shots.db`'s now, with
+     * none past a gap: a write since it began that the index missed, from
      * this store or another (REVIEW-446 note 1), leaves it for the next boot.
      * Null [shots]: the store closed (erase, lost) and the diff stops.
      */
@@ -381,7 +390,6 @@ internal class HistoryIndex(
         if (diff.outcome == null && shots != null) {
             try {
                 removed = diff.db.now { it.removeAbsent(tables().ids(shots).toList(), diff.since) }.deleted.size
-                diff.db.now { it.setSourceSeq(diff.shotsSeq) }
                 val state = diff.db.now { it.indexState() }
                 val now = tables().indexSeq(shots)
                 if (state.sourceSeq != now || state.seenSeqs.isNotEmpty()) {

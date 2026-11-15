@@ -204,6 +204,8 @@ class HistoryDbBridge private constructor(
 
     suspend fun setSourceSeq(seq: ULong) = call { it.setSourceSeq(seq) }
 
+    suspend fun resetSeqs(seq: ULong) = call { it.resetSeqs(seq) }
+
     suspend fun bumpPending(): ULong = call { it.bumpPending() }
 
     suspend fun finishAndroidDiff(versionCode: Long) = call { it.finishAndroidDiff(versionCode) }
