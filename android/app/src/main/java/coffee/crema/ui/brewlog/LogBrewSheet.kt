@@ -216,7 +216,7 @@ private fun LogBrewFormBody(
                 }
             }
         }
-        draft.dateError(ui.history, System.currentTimeMillis())?.let { error ->
+        draft.dateError(ui.history, System.currentTimeMillis(), coffee.crema.history.HistoryStore.capFor(ui.historyHealth))?.let { error ->
             Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         val ratio = coffee.crema.core.brewRatio(draft.dose.toFloat(), draft.water.toFloat())

@@ -76,8 +76,8 @@ import kotlin.test.fail
  * Where Android's state differs from the matrix's terms:
  * - From #310 P3a the history's store has no cap, as the matrix's default.
  *   A case with a `historyCapacity` runs on the legacy backend, which keeps
- *   the fixed cap ([HistoryStore.MAX_SHOTS]): its C is reached with
- *   `MAX_SHOTS - C` filler rows, local rows for Merge, unpinned backup rows
+ *   the fixed cap ([HistoryStore.LEGACY_MAX_SHOTS]): its C is reached with
+ *   `LEGACY_MAX_SHOTS - C` filler rows, local rows for Merge, unpinned backup rows
  *   for Replace, whose over-capacity count moves by the same number.
  * - A store's health is named as Android names it: the matrix's "bean library" is "beans".
  * - A same-shell settings case written for web runs as android on both sides.
@@ -197,7 +197,7 @@ class RestoreMatrixTest(private val name: String) {
             local = local + ("shell" to str("android"))
             backup = backup + ("settings" to (backup["settings"]!!.jsonObject + ("_shell" to str("android"))))
         }
-        val shift = local["historyCapacity"]?.jsonPrimitive?.content?.toInt()?.let { HistoryStore.MAX_SHOTS - it } ?: 0
+        val shift = local["historyCapacity"]?.jsonPrimitive?.content?.toInt()?.let { HistoryStore.LEGACY_MAX_SHOTS - it } ?: 0
         val dropped = DROPPED[name].orEmpty()
         val expect = case["expect"]!!.jsonObject.filterKeys { it !in dropped }.mapValues { (pointer, want) ->
             when {

@@ -834,7 +834,7 @@ internal class GuidedBrewController(
         // Never persist an empty method (blank → null → not saved); the
         // presets are already normalized ids.
         val storedMethod = coffee.crema.core.normalizeBrewMethod(if (d.isCustom) d.customMethod else d.method)
-        if (storedMethod == null || d.doseMissing(bean != null) || d.dateError(uiState().history, nowMs) != null) {
+        if (storedMethod == null || d.doseMissing(bean != null) || d.dateError(uiState().history, nowMs, coffee.crema.history.HistoryStore.capFor(uiState().historyHealth)) != null) {
             _logBrew.value = flagged
             return false
         }

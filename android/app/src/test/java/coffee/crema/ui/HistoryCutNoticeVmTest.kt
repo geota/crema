@@ -46,8 +46,8 @@ class HistoryCutNoticeVmTest {
 
     /** A full history on disk, newest first; [pinOldest] pins the last row. */
     private fun full(pinOldest: Boolean = false) {
-        val rows = (0 until HistoryStore.MAX_SHOTS).joinToString(",") { i ->
-            val pin = if (pinOldest && i == HistoryStore.MAX_SHOTS - 1) ""","pinned":true""" else ""
+        val rows = (0 until HistoryStore.LEGACY_MAX_SHOTS).joinToString(",") { i ->
+            val pin = if (pinOldest && i == HistoryStore.LEGACY_MAX_SHOTS - 1) ""","pinned":true""" else ""
             """{"id":"r$i","completedAtMs":${1_700_000_000_000L - i * 60_000},"durationMs":1000,"brewMethod":"pourover"$pin}"""
         }
         shots.writeText("[$rows]")
@@ -73,24 +73,24 @@ class HistoryCutNoticeVmTest {
             vm.logBrew()
             VmHarness.idle()
             assertTrue(cut in vm.ui.value.userMessages, "${vm.ui.value.userMessages}")
-            assertEquals(HistoryStore.MAX_SHOTS, vm.ui.value.history.size)
+            assertEquals(HistoryStore.LEGACY_MAX_SHOTS, vm.ui.value.history.size)
         } finally {
             HistoryStore.legacyOnlyForTest = false
         }
     }
 
-    /** From #310 P3a the oldest row leaves the view and stays in the store: nothing was dropped, so nothing is said. */
+    /** From #310 P6a nothing caps the history: a brew logged on 300 rows keeps all 301 in view, and nothing is said. */
     @Test
-    fun aBrewLoggedOnAFullViewKeepsTheOldestRowInTheStore() {
+    fun aBrewLoggedOn300RowsKeepsEveryRowInView() {
         full()
         val vm = vm()
         vm.logBrew()
         VmHarness.idle()
         assertTrue(vm.ui.value.userMessages.none { it.startsWith("History keeps") }, "${vm.ui.value.userMessages}")
-        assertEquals(HistoryStore.MAX_SHOTS, vm.ui.value.history.size)
+        assertEquals(HistoryStore.LEGACY_MAX_SHOTS + 1, vm.ui.value.history.size)
         val all = VmHarness.library(vm).allShots()
-        assertEquals(HistoryStore.MAX_SHOTS + 1, all.size)
-        assertTrue(all.any { it.id == "r${HistoryStore.MAX_SHOTS - 1}" }, "the oldest row, hidden, not gone")
+        assertEquals(HistoryStore.LEGACY_MAX_SHOTS + 1, all.size)
+        assertTrue(vm.ui.value.history.any { it.id == "r${HistoryStore.LEGACY_MAX_SHOTS - 1}" }, "the oldest row, in view")
     }
 
     @Test
@@ -100,7 +100,7 @@ class HistoryCutNoticeVmTest {
         vm.logBrew()
         VmHarness.idle()
         assertTrue(vm.ui.value.userMessages.none { it.startsWith("History keeps") }, "${vm.ui.value.userMessages}")
-        assertEquals(HistoryStore.MAX_SHOTS + 1, vm.ui.value.history.size)
+        assertEquals(HistoryStore.LEGACY_MAX_SHOTS + 1, vm.ui.value.history.size)
     }
 
     @Test

@@ -124,17 +124,17 @@ class HistorySqliteStoreTest {
     }
 
     @Test
-    fun `a 5,000-row oversized history moves whole, and the view is capped while the store keeps all`() = runBlocking {
+    fun `a 5,000-row oversized history moves whole, and every row is in view`() = runBlocking {
         val rows = HistoryFixtures.rows(5_000, samplesPer = 12)
         HistoryFixtures.plantOldBuild(app, rows, inline = setOf(rows[0].id))
         val s = store()
         val load = s.loadAll()
         assertEquals(HistoryHealth.OK, load.health)
-        var unpinned = 0
-        val inView = expected(rows).count { it.pinned || unpinned++ < HistoryStore.MAX_SHOTS }
-        assertTrue(inView > HistoryStore.MAX_SHOTS, "the fixture has pinned rows past the cap")
-        assertEquals(inView, load.view.size, "the view keeps the newest 300 unpinned rows and every pinned row")
-        assertEquals(5_000 - load.view.size, load.hiddenCount)
+        // No cap from P6a (#310): the view holds every row, newest first.
+        assertNull(s.viewCap)
+        assertEquals(expected(rows).map { it.id }, load.view.map { it.id })
+        assertEquals(0, load.hiddenCount)
+        assertTrue(s.hiddenRows(load.view.mapTo(HashSet()) { it.id }).isEmpty())
         assertEquals(5_000, rowCount())
         assertEquals(expected(rows), store().load(), "every row, field and series, hidden ones too")
     }
@@ -781,8 +781,8 @@ class HistorySqliteStoreTest {
         HistoryFixtures.plantOldBuild(app, base + brew)
         val s = store()
         val load = s.loadAll()
-        assertFalse(load.view.any { it.id == brew.id }, "past the cap")
-        // A pull's fill (#310 P4a): the profile alone is staged, then the row's write carries it.
+        assertTrue(load.view.any { it.id == brew.id }, "no cap from P6a: in view")
+        // A stored row's change through updateHidden still lands. A pull's fill (#310 P4a): the profile alone is staged, then the row's write carries it.
         val row = assertNotNull(s.storedRow(brew.id))
         s.stage(row.withHeavy(emptyList(), HistoryFixtures.profile(2), null))
         assertTrue(s.updateHidden(brew.id) { it })
@@ -841,9 +841,9 @@ class HistorySqliteStoreTest {
         HistoryFixtures.plantOldBuild(app, base)
         val s = store()
         val load = s.loadAll()
-        val hidden = s.hiddenRows(load.view.mapTo(HashSet()) { it.id })
-        assertEquals(2, hidden.size)
-        val (gone, unreadable) = hidden
+        assertTrue(s.hiddenRows(load.view.mapTo(HashSet()) { it.id }).isEmpty(), "no cap from P6a: none hidden")
+        // The oldest two, read for a backup as any row is.
+        val (gone, unreadable) = load.view.takeLast(2)
         assertTrue(s.hasCurve(gone), "a row whose curve is on disk")
         val files = SeriesFiles(seriesDir, coreJson)
         files.gzFile(gone.id).delete()

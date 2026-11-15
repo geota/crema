@@ -177,6 +177,8 @@ class VisualizerSync(
     private val hasSeries: (ShotRow) -> Boolean = { (it.summary.sampleCount ?: 0u) > 0u },
     /** Whether a local row has its recipe stored (#310 P4a). */
     private val hasProfile: (localId: String) -> Boolean = { false },
+    /** How many unpinned rows the history may hold: none from P6a, but on the legacy backend (#310). */
+    private val historyCap: () -> Int? = { null },
     /** Revoke an access token at the server, best-effort (injected for JVM tests). */
     private val revoke: suspend (accessToken: String) -> Unit = { revokeToken(clientId, it) },
 ) : UploadDestination {
@@ -1678,7 +1680,8 @@ class VisualizerSync(
                     put("rows", kotlinx.serialization.json.JsonArray(list.rows.map(::listRow)))
                     put("known", known)
                     put("candidates", candidates)
-                    put("freeSlots", JsonPrimitive((coffee.crema.history.HistoryStore.MAX_SHOTS - coffee.crema.history.cappedCount(current)).coerceAtLeast(0)))
+                    // No cap, no slots: the core refuses nothing (#310 P6a).
+                    historyCap()?.let { cap -> put("freeSlots", JsonPrimitive((cap - coffee.crema.history.cappedCount(current)).coerceAtLeast(0))) }
                     legacyCursor?.let { put("legacyCursor", JsonPrimitive(it)) }
                 },
             ).jsonObject["rows"]!!.jsonArray

@@ -368,6 +368,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewShots = { _ui.value.history },
         hasSeries = { shot -> library.hasCurve(shot) },
         hasProfile = { id -> library.shotHasProfile(id) },
+        historyCap = { library.historyCap },
         awaitRows = { library.awaitRows() },
         shotsLoaded = { library.rowsReady },
         historyRefused = { library.historyRefused },
@@ -1067,6 +1068,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Try the history's store again: Settings' Try again after a failed move, or the unavailable banner's. */
     fun retryHistory() = viewModelScope.launch { library.retryHistory() }
+
+    /** Free up space's preview (#310 P6a): what deleting the unpinned shots before [beforeMs] would take. Null until it may run. */
+    suspend fun planFreeUp(beforeMs: Long): coffee.crema.history.FreeUpPlan? = library.planFreeUp(beforeMs)
+
+    /** Free up space, as the user confirmed it: only the shots [plan] named, pinned ones never. */
+    fun freeUpSpace(plan: coffee.crema.history.FreeUpPlan) = viewModelScope.launch {
+        // A restore writes and removes rows by its own plan: the two never run together.
+        if (restoreState() == coffee.crema.restore.RestoreState.RUNNING) {
+            notifyUser("Free up space waits for the restore to finish. Nothing was deleted")
+            return@launch
+        }
+        val n = library.freeUpSpace(plan)
+        val date = java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(plan.beforeMs))
+        notifyUser(
+            if (n == 0) "No shots were deleted: none from before $date are left to delete"
+            else "Deleted $n shot${if (n == 1) "" else "s"} from before $date${if (plan.pinnedKept > 0) ". Pinned shots were kept" else ""}",
+        )
+    }
+
+    /** The getting-full notice's Dismiss. */
+    fun dismissStorageNotice() = library.dismissStorageNotice()
 
     /** The lost banner's choice: rebuild from the snapshot, recover the old copy, or start empty. */
     fun resolveLostHistory(choice: LibraryController.LostChoice) = viewModelScope.launch { library.resolveLostHistory(choice) }
@@ -2807,6 +2829,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (foreground && historyLoad.isCompleted && _ui.value.historyHealth == coffee.crema.history.HistoryHealth.UNAVAILABLE) {
             retryHistory()
         }
+        // The space may have gone, or come back, while Crema was away (#310 P6a).
+        if (foreground && historyLoad.isCompleted) library.checkStorage()
         // The Visualizer retry queue's tick and network trigger run only in
         // the foreground (F17).
         visualizer.onForegroundChanged(foreground)

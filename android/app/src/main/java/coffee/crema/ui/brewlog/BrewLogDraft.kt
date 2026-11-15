@@ -78,9 +78,13 @@ data class BrewLogDraft(
     /** A bag is chosen but the dose is empty — the bag could not be debited. */
     fun doseMissing(beanExists: Boolean): Boolean = beanExists && dose <= 0.0
 
-    /** Why [completedAtMs] can't date this brew, or null. Now is always fine. */
-    fun dateError(history: List<ShotMeta>, nowMs: Long): String? = completedAtMs?.let { at ->
-        brewDateError(at, nowMs) ?: brewDateTooOld().takeUnless { fitsHistory(history, at) }
+    /**
+     * Why [completedAtMs] can't date this brew, or null. Now is always fine.
+     * Any past date is fine from P6a (#310): only a legacy history's [cap]
+     * refuses one older than all it keeps.
+     */
+    fun dateError(history: List<ShotMeta>, nowMs: Long, cap: Int?): String? = completedAtMs?.let { at ->
+        brewDateError(at, nowMs) ?: cap?.let { brewDateTooOld(it).takeUnless { _ -> fitsHistory(history, at, it) } }
     }
 
     /** Mark [field] user-edited — method switches stop re-seeding it. */

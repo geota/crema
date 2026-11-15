@@ -119,7 +119,7 @@ class StreamedRestoreVmTest {
         }
     }
 
-    /** #310 P3a: on shots.db nothing caps a merge. All 5,000 rows land in the store; the view shows 300. */
+    /** #310 P3a: on shots.db nothing caps a merge. All 5,000 rows land in the store, and from P6a all are in view. */
     @Test
     fun fiveThousandShotsMergeWholeIntoTheStore() {
         val vm = vm()
@@ -128,7 +128,7 @@ class StreamedRestoreVmTest {
         vm.startRestoreFile(file, "big", MainViewModel.RestoreMode.MERGE)
         VmHarness.idleUntil("the restore", 240_000) { vm.ui.value.userMessages.size > before }
         assertTrue(vm.ui.value.userMessages.last().startsWith("Restored 5000 shots"), vm.ui.value.userMessages.last())
-        assertEquals(coffee.crema.history.HistoryStore.MAX_SHOTS, VmHarness.ownState(vm).history.size)
+        assertEquals(5000, VmHarness.ownState(vm).history.size)
         assertEquals("s0", VmHarness.ownState(vm).history.first().id)
         assertEquals(5000, VmHarness.library(vm).allShots().size)
     }

@@ -305,11 +305,23 @@ class LibraryController(
 
     private fun editHistory(edit: (HistoryRows) -> HistoryRows) = editRows({ it.copy(history = edit(it.history)) }, { it })
 
-    /** The rows the view shows of [all]: pinned ones and the newest [HistoryStore.MAX_SHOTS] others. The rest stay in the store, hidden. */
+    /**
+     * The rows the view shows of [all]: every one from P6a (#310). Only the
+     * legacy backend has a cap ([HistoryStore.viewCap]): pinned rows and the
+     * newest others.
+     */
     private fun viewOf(all: List<ShotRow>): List<ShotRow> {
+        val sorted = all.sortedWith(HistoryStore.ORDER)
+        val cap = historyStore.viewCap ?: return sorted
         var unpinned = 0
-        return all.sortedWith(HistoryStore.ORDER).filter { it.pinned || unpinned++ < HistoryStore.MAX_SHOTS }
+        return sorted.filter { it.pinned || unpinned++ < cap }
     }
+
+    /** The cap the view has now: none from P6a, but on the legacy backend. */
+    private val viewCap: Int? get() = historyStore.viewCap
+
+    /** [viewCap], for a Visualizer pull's plan. */
+    val historyCap: Int? get() = viewCap
 
     private fun coreHealth(h: coffee.crema.persist.StoreHealth) = when (h) {
         coffee.crema.persist.StoreHealth.LOADING -> coffee.crema.core.LocalHealth.Loading
@@ -338,7 +350,7 @@ class LibraryController(
     /** These rows with [shot], made here, added by date and capped; [cut]
      *  counts what the cap dropped. */
     private fun HistoryRows.withMade(shot: ShotRow, cut: CapCut): HistoryRows {
-        val next = historyWith(listOf(shot), this, keepId = shot.id)
+        val next = historyWith(listOf(shot), this, keepId = shot.id, cap = viewCap)
         val kept = next.mapTo(HashSet()) { it.id }
         cut.dropped = count { it.id !in kept }
         return next
@@ -371,7 +383,24 @@ class LibraryController(
     private fun noteUnsaved() {
         val unsaved = historyUnsaved
         if (uiState().historyUnsaved != unsaved) updateUi { it.copy(historyUnsaved = unsaved) }
+        checkStorage()
     }
+
+    /**
+     * Read the free space where the history lives and set the storage notices
+     * (#310 P6a, SPEC §1): after each save, at load and on resume. A statfs,
+     * cheap enough for every save. The getting-full notice, once dismissed,
+     * comes back only after the space recovers and runs low again.
+     */
+    fun checkStorage() {
+        val level = coffee.crema.history.StorageSpace.levelOf(historyStore.freeBytes())
+        val s = uiState()
+        if (s.storageLevel == level) return
+        updateUi { it.copy(storageLevel = level, storageNoticeDismissed = it.storageNoticeDismissed && level != coffee.crema.history.StorageLevel.OK) }
+    }
+
+    /** The user dismissed the getting-full notice. */
+    fun dismissStorageNotice() = updateUi { it.copy(storageNoticeDismissed = true) }
 
     /** Save the history as it stands. */
     private fun saveHistory() {
@@ -419,7 +448,7 @@ class LibraryController(
                     // A row made this session that a save took to the store before the load: memory's copy is the newer.
                     val mine = if (merge) current.associateBy { it.id } else emptyMap()
                     val loadedRows = if (mine.isEmpty()) load.view else load.view.map { mine[it.id] ?: it }
-                    val merged = if (madeHere.isEmpty()) HistoryMerge(loadedRows, emptyList(), 0) else mergeHistory(madeHere, loadedRows)
+                    val merged = if (madeHere.isEmpty()) HistoryMerge(loadedRows, emptyList(), 0) else mergeHistory(madeHere, loadedRows, cap = viewCap)
                     dropped = merged.dropped
                     rows.copy(history = rows.history.with(merged.rows))
                 },
@@ -432,12 +461,13 @@ class LibraryController(
                 else -> false
             }
             historyStore.openSaves()
+            checkStorage()
             rowsLoaded.complete(Unit)
             // A shot made before the rows landed goes into the store now.
             if (madeHere.isNotEmpty()) persistHistory(uiState().history)
             if (load.health == HistoryHealth.LEGACY && !legacyNoticed) {
                 legacyNoticed = true
-                notify("Shot history stays in its old format for now, keeping the newest ${coffee.crema.history.HistoryStore.MAX_SHOTS}. It will try again at the next launch.")
+                notify("Shot history stays in its old format for now, keeping the newest ${coffee.crema.history.HistoryStore.LEGACY_MAX_SHOTS}. It will try again at the next launch.")
             }
         } finally {
             loaded.complete(Unit)
@@ -1251,10 +1281,10 @@ class LibraryController(
             editHistory { rows ->
                 val existing = rows.mapTo(HashSet()) { it.id } + hiddenIds
                 added = incoming.filterNot { it.id in existing }
-                merged = mergeHistory(added, rows)
+                merged = mergeHistory(added, rows, cap = viewCap)
                 rows.with(merged.rows)
             }
-            // Rows older than the view's 300 go straight into the store, hidden, from P3a.
+            // Rows past a capped view would go straight into the store, hidden (P3a); from P6a none are.
             val past = pastTheCap(added, merged)
             // What the legacy backend's cap dropped isn't written: its staged parts go too.
             val landing = (merged.kept + past).mapTo(HashSet()) { it.id }
@@ -1697,6 +1727,49 @@ class LibraryController(
             listOf(app.filesDir, historyStore.seriesDirectory, BeanImageStore.beanImageFile(app, "x").parentFile!!)
     }
 
+    // ── Free up space (#310 P6a, SPEC §8) ────────────────────────────────────
+
+    /**
+     * What Free up space would delete: every unpinned shot dated before
+     * [beforeMs], with about the space they take. Null while a cleanup that
+     * spares pinned shots may not run ([historySettled]): an unread row may be
+     * a pinned one. Reads only: nothing is deleted until [freeUpSpace].
+     */
+    suspend fun planFreeUp(beforeMs: Long): coffee.crema.history.FreeUpPlan? {
+        if (!rowsReady || !historySettled) return null
+        val older = allShots().filter { it.completedAtMs < beforeMs }
+        val doomed = older.filterNot { it.pinned }.map { it.id }
+        return coffee.crema.history.FreeUpPlan(beforeMs, doomed, older.count { it.pinned }, historyStore.bytesOf(doomed))
+    }
+
+    /**
+     * Delete what [plan] named, the user's explicit choice: only those ids,
+     * and of them only the ones still here, still unpinned and still dated
+     * before the plan's date, checked on the rows as they stand. A shot pinned
+     * since the preview stays. Bag weights don't change: no history removal
+     * credits a bag (SPEC §8). The Visualizer copies stay where they are.
+     * Returns how many went.
+     */
+    suspend fun freeUpSpace(plan: coffee.crema.history.FreeUpPlan): Int {
+        if (!rowsReady || !historySettled || plan.ids.isEmpty()) return 0
+        val named = plan.ids.toHashSet()
+        fun goes(row: ShotRow) = row.id in named && !row.pinned && row.completedAtMs < plan.beforeMs
+        var gone: Set<String> = emptySet()
+        editHistory { rows ->
+            gone = rows.filter(::goes).mapTo(HashSet()) { it.id }
+            rows.filtered { it.id !in gone }
+        }
+        // A capped view's hidden rows (the legacy backend has none; a store row out of view, say).
+        val hidden = historyStore.hiddenRows(uiState().history.mapTo(HashSet()) { it.id }).filter(::goes).map { it.id }
+        val ids = gone + hidden
+        if (ids.isEmpty()) return 0
+        historyStore.forget(ids)
+        persistHistory(uiState().history)
+        historyStore.delete(ids)
+        checkStorage()
+        return ids.size
+    }
+
     /** Remove a stored shot from the local history. Persisted. */
     fun deleteShot(id: String) {
         editHistory { rows -> rows.filtered { it.id != id } }
@@ -1778,7 +1851,7 @@ class LibraryController(
         // A pulled shot comes whole (its curve and recipe): they wait for the save.
         val incoming = stubs.filterNot { it.id in hiddenIds || it.id in inView }.distinctBy { it.id }.map(::staged)
         editHistory { rows ->
-            val merge = mergePulled(incoming, rows)
+            val merge = mergePulled(incoming, rows, cap = viewCap)
             kept = merge.kept.mapTo(HashSet()) { it.id }
             present = rows.mapTo(HashSet()) { it.id } + hiddenIds
             rows.with(merge.rows)
@@ -2056,7 +2129,7 @@ class LibraryController(
         editRows(
             { rows ->
                 landed = mergeBeanImport(wireBeans, wireRoasters, rows.beans, rows.roasters)
-                mergedShots = mergeHistory(importedShots, rows.history)
+                mergedShots = mergeHistory(importedShots, rows.history, cap = viewCap)
                 rows.copy(
                     beans = rows.beans.with(rows.beans.replacingById(landed.updatedBeans) { it.id } + landed.newBeans),
                     roasters = rows.roasters.with(rows.roasters.replacingById(landed.updatedRoasters) { it.id } + landed.newRoasters),

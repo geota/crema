@@ -238,7 +238,7 @@ class RefusedStoreVmTest {
 
     @Test
     fun aShotThatFallsOffTheCapSaysSo() {
-        val rows = (0 until HistoryStore.MAX_SHOTS).joinToString(",") { row("shot-$it") }
+        val rows = (0 until HistoryStore.LEGACY_MAX_SHOTS).joinToString(",") { row("shot-$it") }
         shots.writeText("[$rows]")
         shots.setReadable(false)
         val vm = vm()

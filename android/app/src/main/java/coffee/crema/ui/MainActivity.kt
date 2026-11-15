@@ -482,6 +482,11 @@ class MainActivity : ComponentActivity() {
                 val historyBanner = coffee.crema.ui.components.historyBannerText(
                     ui.historyHealth, ui.historyLost, ui.historyError, ui.historyUnsaved.size,
                 ) != null
+                // The storage notices (#310 P6a): under the history's own banner, never both at once.
+                val storageBanner = !historyBanner &&
+                    coffee.crema.ui.components.storageBannerText(ui.storageLevel, ui.storageNoticeDismissed) != null
+                var showFreeUp by remember { mutableStateOf(false) }
+                val storageConfirm = coffee.crema.ui.screens.rememberSettingsConfirmState(viewModel)
                 if (ui.refusedStores.isEmpty()) {
                     coffee.crema.ui.components.HistoryStoreBanner(
                         health = ui.historyHealth,
@@ -493,13 +498,31 @@ class MainActivity : ComponentActivity() {
                         onSnapshot = { viewModel.resolveLostHistory(LibraryController.LostChoice.SNAPSHOT) },
                         onOldCopy = { viewModel.resolveLostHistory(LibraryController.LostChoice.OLD_COPY) },
                         onStartEmpty = { viewModel.resolveLostHistory(LibraryController.LostChoice.START_EMPTY) },
+                        onShareUnsaved = {
+                            ui.history.firstOrNull { it.id in ui.historyUnsaved }?.let { viewModel.exportShot(it.id) }
+                        },
+                        onFreeUp = { showFreeUp = true },
                     )
+                    if (storageBanner) {
+                        val (backUp, backingUp) = coffee.crema.ui.components.rememberBackUpAction(viewModel, ui, storageConfirm.launchSaveFile)
+                        coffee.crema.ui.components.StorageBanner(
+                            level = ui.storageLevel,
+                            dismissed = ui.storageNoticeDismissed,
+                            onBackUp = backUp,
+                            onFreeUp = { showFreeUp = true },
+                            onDismiss = viewModel::dismissStorageNotice,
+                            backingUp = backingUp,
+                        )
+                    }
+                }
+                if (showFreeUp) {
+                    coffee.crema.ui.components.FreeUpSpaceDialog(viewModel, ui, storageConfirm.launchSaveFile, onDismiss = { showFreeUp = false })
                 }
                 Box(
                     Modifier
                         .weight(1f)
                         // The banner took the status-bar inset: don't pad under it twice.
-                        .then(if (ui.refusedStores.isEmpty() && !historyBanner) Modifier else Modifier.consumeWindowInsets(WindowInsets.statusBars)),
+                        .then(if (ui.refusedStores.isEmpty() && !historyBanner && !storageBanner) Modifier else Modifier.consumeWindowInsets(WindowInsets.statusBars)),
                 ) {
                 CompositionLocalProvider(
                     LocalListMemory provides listMemory,
