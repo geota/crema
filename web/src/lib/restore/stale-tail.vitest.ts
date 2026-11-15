@@ -19,10 +19,11 @@ import { BackupReadError, entryBytes, readCentralDirectory, type ZipEntry } from
 import { prepareBackupFile, type PreparedBackup } from './engine';
 
 // The real reader, with its earlier-record search one a test can turn off,
-// to get the refusal a file gives without the fallback.
+// to get the refusal a file gives without the fallback, and its entry read
+// one a test can make fail.
 vi.mock('#lib/backup/zip-reader.js', async (importOriginal) => {
 	const real = await importOriginal<typeof import('#lib/backup/zip-reader.js')>();
-	return { ...real, earlierEndRecords: vi.fn(real.earlierEndRecords) };
+	return { ...real, earlierEndRecords: vi.fn(real.earlierEndRecords), entryBytes: vi.fn(real.entryBytes) };
 });
 
 const CORE = resolve(process.cwd(), '../core/de1-domain/tests/fixtures/backup');
@@ -200,5 +201,38 @@ describe('a backup saved over a larger zip (#413)', () => {
 				expect(why).toBe(await withoutTheFallback(bytes));
 			});
 		}
+	});
+});
+
+describe('an earlier directory that fails for another reason (#425)', () => {
+	it('is not taken for a refusal: the error comes through, as on Android', async () => {
+		const real = await vi.importActual<typeof import('#lib/backup/zip-reader.js')>('#lib/backup/zip-reader.js');
+		const bytes = savedOverALargerZip(WRITERS[0][1]);
+		const refused = await withoutTheFallback(bytes);
+		/** The candidate's first entry read throws `error`: armed once the earlier records are looked for. */
+		const failingTheCandidateWith = (error: Error) => {
+			let next: Error | null = null;
+			vi.mocked(zipReader.earlierEndRecords).mockImplementationOnce(async (file) => {
+				next = error;
+				return real.earlierEndRecords(file);
+			});
+			vi.mocked(zipReader.entryBytes).mockImplementation((...args) => {
+				const thrown = next;
+				next = null;
+				if (thrown) throw thrown;
+				return real.entryBytes(...args);
+			});
+		};
+		try {
+			failingTheCandidateWith(new TypeError('not a read refusal'));
+			await expect(prepareBackupFile(blob(bytes), 'other')).rejects.toThrow('not a read refusal');
+			// A read refusal there still gives the first refusal.
+			failingTheCandidateWith(new BackupReadError('This entry is damaged.', true));
+			expect(await refusal(prepareBackupFile(blob(bytes), 'refused'))).toBe(refused);
+		} finally {
+			vi.mocked(zipReader.entryBytes).mockImplementation(real.entryBytes);
+		}
+		// And left alone, it reads.
+		await prepareBackupFile(blob(bytes), 'whole');
 	});
 });

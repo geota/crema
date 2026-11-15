@@ -157,8 +157,9 @@ private fun scanLines(read: ((BackupLinePiece) -> Unit) -> Unit, photoIds: List<
  * The bytes a backup's lines come from, the same on every read: the first
  * read keeps their CRC-32 and length, and a later one that differs is
  * refused at its end, before the run writes anything (REVIEW-395, as the
- * web's #394 does). The file is an app-private copy, but a second pick or
- * download from the same source replaces it.
+ * web's #394 does). The file is the pick's own app-private copy, in its
+ * stage, which no other pick or download writes (#413); this still catches
+ * one that changes anyway.
  */
 private class SameBytesEachRead {
     @Volatile private var seen: Pair<Long, Long>? = null

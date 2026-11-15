@@ -22,23 +22,59 @@ export interface RestoreFlowDeps {
 	/** A line for the user while it runs. */
 	say: (line: string) => void;
 	/**
-	 * Whether a newer pick is under way (at its report, or running). This
-	 * one's re-report would replace the newer one's dialog, so it ends
-	 * instead (#413).
+	 * Whether a newer pick is under way: at its report, or running. One still
+	 * being read is not, as it may yet be refused. This one's report would
+	 * replace the newer one's dialog, so it ends instead (#413, #425).
 	 */
 	superseded?: () => boolean;
+	/** This pick's plan stands (it wasn't refused): it is at its report or running from now on. */
+	reported?: () => void;
 }
 
 /** An older pick's restore found the device changed after a newer pick (#413). */
 export const PICK_AGAIN = 'That backup changed while restoring; pick it again.';
 
+/** An older pick got to its report after a newer pick got to its own, or ran (#425). */
+export const OLDER_PICK = 'A newer restore is under way; nothing was changed from the earlier pick.';
+
+/** One pick's part in {@link RestorePicks}. */
+export interface RestorePick {
+	/** {@link RestoreFlowDeps.superseded} for this pick. */
+	superseded: () => boolean;
+	/** {@link RestoreFlowDeps.reported} for this pick. */
+	reported: () => void;
+	/** Its flow has ended: refused, dismissed, failed or done. */
+	end: () => void;
+}
+
+/**
+ * The picks under way, from a file or Drive: the newest pick wins (#413,
+ * #425). A pick counts against older ones from when its plan stands until
+ * its flow ends, not while it is still being read.
+ */
+export class RestorePicks {
+	#started = 0;
+	readonly #shown = new Set<number>();
+
+	/** A new pick, newer than every one before it. */
+	start(): RestorePick {
+		const pick = ++this.#started;
+		return {
+			superseded: () => [...this.#shown].some((p) => p > pick),
+			reported: () => void this.#shown.add(pick),
+			end: () => void this.#shown.delete(pick)
+		};
+	}
+}
+
 /**
  * A clean Merge runs at once. Replace offers Back up first. A Merge whose
  * backup has shots deleted here offers to bring them back, and then shows
  * the numbers that would bring before running them. A device that changed
- * while the report was open shows the new numbers and asks again, unless a
- * newer pick is under way: the newest pick wins, and this one ends. Returns
- * the line to show after, or the outcome for the caller to finish.
+ * while the report was open shows the new numbers and asks again. The
+ * newest pick wins: this one ends, rather than ask or run, once a newer pick
+ * is under way (#413, #425). Returns the line to show after, or the outcome
+ * for the caller to finish.
  */
 export async function restoreFlow(
 	mode: WebMode,
@@ -49,6 +85,9 @@ export async function restoreFlow(
 	let ask = plan.verdict === Verdict.Confirm || deletedHere(plan) > 0;
 	for (;;) {
 		if (plan.verdict === Verdict.Refused) return { line: refusalMessage(plan), outcome: null };
+		deps.reported?.();
+		// Its dialog would preempt the newer pick's, and its run go under it (#425).
+		if (deps.superseded?.()) return { line: OLDER_PICK, outcome: null };
 		if (ask) {
 			const { title, message } = confirmText(plan);
 			if (mode === 'wipe') {

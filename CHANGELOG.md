@@ -142,7 +142,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   as the backup that was saved, and only if that backup checks out whole. If
   the device changed under an older pick's restore after a newer pick, the
   newer pick's report stays and the older one ends with "That backup changed
-  while restoring; pick it again." (#310, #396, #413)
+  while restoring; pick it again." The newest pick also wins when an older
+  pick finishes reading after a newer pick's report opened: the older one
+  ends, and its report no longer replaces the newer one. On Android, "Bring
+  them back too" no longer reopens a report that was replaced or dismissed
+  meanwhile, and a Google Drive download no longer stays in the cache when
+  its restore can't start. (#310, #396, #413, #425)
 - **Android backups are built a piece at a time** — the backup is written to a
   temporary file as it's built, rather than held in memory whole, so a large
   history backs up without running the app out of memory. Back up shows how
