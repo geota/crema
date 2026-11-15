@@ -35,6 +35,16 @@ class StorageNoticesTest {
         assertEquals(LocalDate.of(2025, 11, 15).atStartOfDay(zone).toInstant().toEpochMilli(), cut)
     }
 
+    /** REVIEW-437 B1: what the last backup didn't hold whole stays; an omitted shot it couldn't name keeps them all. */
+    @Test fun aShotTheBackupDidntHoldWholeStays() {
+        assertTrue(coffee.crema.history.backupLacks("a", setOf("a")))
+        assertTrue(!coffee.crema.history.backupLacks("b", setOf("a")))
+        assertTrue(coffee.crema.history.backupLacks("b", setOf(FreeUpPlan.UNKNOWN_SHOT)))
+        val plan = FreeUpPlan(1_700_000_000_000, listOf("a"), pinnedKept = 0, bytes = StorageSpace.MB, backupKept = 2)
+        assertTrue("2 shots from then are kept because your last backup didn't hold them whole" in freeUpBody(plan, false, plan.beforeMs))
+        assertTrue("1 shot from then is kept" in freeUpBody(plan.copy(ids = emptyList(), backupKept = 1), false, plan.beforeMs))
+    }
+
     @Test fun thePreviewSaysWhatGoesWhatStaysAndThatBagsDontChange() {
         val plan = FreeUpPlan(1_700_000_000_000, listOf("a", "b", "c"), pinnedKept = 2, bytes = 3 * StorageSpace.MB)
         val body = freeUpBody(plan, counting = false, beforeMs = plan.beforeMs)

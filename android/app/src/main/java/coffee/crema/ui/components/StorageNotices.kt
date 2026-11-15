@@ -103,10 +103,15 @@ internal fun freeUpBody(plan: FreeUpPlan?, counting: Boolean, beforeMs: Long): S
         1 -> " 1 pinned shot from then is kept."
         else -> " ${plan.pinnedKept} pinned shots from then are kept."
     }
-    if (plan.ids.isEmpty()) return "No unpinned shots from before $date.$pinned"
+    val gaps = when (plan.backupKept) {
+        0 -> ""
+        1 -> " 1 shot from then is kept because your last backup didn't hold it whole."
+        else -> " ${plan.backupKept} shots from then are kept because your last backup didn't hold them whole."
+    }
+    if (plan.ids.isEmpty()) return "No unpinned shots from before $date to delete.$pinned$gaps"
     val n = plan.ids.size
     return "Deletes $n shot${if (n == 1) "" else "s"} from before $date from this device, about ${StorageSpace.format(plan.bytes)}, " +
-        "with ${if (n == 1) "its curve" else "their curves"}.$pinned Bag weights don't change. " +
+        "with ${if (n == 1) "its curve" else "their curves"}.$pinned$gaps Bag weights don't change. " +
         "Copies on Visualizer stay there, and a backup brings ${if (n == 1) "it" else "them"} back. This can't be undone on this device, so back up first."
 }
 
@@ -125,8 +130,8 @@ fun FreeUpSpaceDialog(
     var months by rememberSaveable { mutableStateOf(12) }
     val today = remember { LocalDate.now() }
     val beforeMs = remember(months, today) { freeUpCutoff(months, today) }
-    // Counted again as the rows change, so the preview is what a confirm deletes.
-    val state by produceState<Pair<Boolean, FreeUpPlan?>>(true to null, beforeMs, ui.history, ui.historyLoaded) {
+    // Counted again as the rows or the last backup's gaps change, so the preview is what a confirm deletes.
+    val state by produceState<Pair<Boolean, FreeUpPlan?>>(true to null, beforeMs, ui.history, ui.historyLoaded, ui.backupIncomplete) {
         value = true to null
         value = false to vm.planFreeUp(beforeMs)
     }

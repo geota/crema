@@ -1079,11 +1079,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             notifyUser("Free up space waits for the restore to finish. Nothing was deleted")
             return@launch
         }
-        val n = library.freeUpSpace(plan)
+        val done = library.freeUpSpace(plan)
+        val n = done.deleted
         val date = java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(plan.beforeMs))
+        val kept = when (done.backupKept) {
+            0 -> ""
+            1 -> ". 1 shot was kept: your last backup didn't hold it whole"
+            else -> ". ${done.backupKept} shots were kept: your last backup didn't hold them whole"
+        }
         notifyUser(
-            if (n == 0) "No shots were deleted: none from before $date are left to delete"
-            else "Deleted $n shot${if (n == 1) "" else "s"} from before $date${if (plan.pinnedKept > 0) ". Pinned shots were kept" else ""}",
+            if (n == 0) "No shots were deleted: none from before $date are left to delete$kept"
+            else "Deleted $n shot${if (n == 1) "" else "s"} from before $date${if (plan.pinnedKept > 0) ". Pinned shots were kept" else ""}$kept",
         )
     }
 

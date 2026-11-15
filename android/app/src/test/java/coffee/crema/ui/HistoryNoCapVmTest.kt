@@ -299,8 +299,53 @@ class HistoryNoCapVmTest {
         }
         assertNull(onMain(vm, "the plan") { vm.planFreeUp(now) })
         val plan = coffee.crema.history.FreeUpPlan(now, light(10, start = now - 800 * day).map { it.id }, 0, 0)
-        assertEquals(0, onMain(vm, "the refusal") { VmHarness.library(vm).freeUpSpace(plan) })
+        assertEquals(0, onMain(vm, "the refusal") { VmHarness.library(vm).freeUpSpace(plan) }.deleted)
         assertEquals(10, dbIds().size)
+    }
+
+    /**
+     * REVIEW-437 B1: "Back up first" mustn't delete what the backup didn't
+     * hold. A shot the backup left out, and one it wrote without its curve,
+     * stay out of the delete, and the user is told how many. No "delete anyway".
+     */
+    @Test
+    fun freeUpSpaceKeepsWhatTheBackupLeftOutOrWroteWithoutItsCurve() {
+        val cutoff = now - 365 * day
+        val old = List(6) { i ->
+            StoredShot(id = "old$i", completedAtMs = cutoff - (i + 1) * day, durationMs = 28_000, brewMethod = "espresso", samples = HistoryFixtures.samples(30, i))
+        }
+        plant(old + light(3, start = now, prefix = "new"))
+        // old2's curve is gone from disk: a backup writes it without one.
+        SeriesFiles(File(app.filesDir, "shot-series"), coreJson).gzFile("old2").delete()
+        val vm = vm()
+        val library = VmHarness.library(vm)
+        val before = assertNotNull(onMain(vm, "the plan") { vm.planFreeUp(cutoff) })
+        assertEquals(6, before.ids.size, "with no backup yet, all six are planned")
+        assertEquals(0, before.backupKept)
+
+        // Back up first: the core can't write old4's line, so the backup leaves it out.
+        val write = library.backupShotJson
+        library.backupShotJson = { shot -> if (shot.id == "old4") "{ not a shot" else write(shot) }
+        val zip = assertNotNull(onMain(vm, "the backup") { library.buildBackupZip(BackupKind.FILE) })
+        try {
+            assertEquals(8u, zip.counts.shots, "old4 isn't in it")
+        } finally {
+            zip.release()
+        }
+        assertEquals(setOf("old4", "old2"), vm.ui.value.backupIncomplete)
+
+        // The preview a confirm would have shown before the backup: the delete still keeps both.
+        vm.freeUpSpace(before)
+        VmHarness.idleUntil("the delete") { dbIds().size == 5 && vm.ui.value.userMessages.any { it.startsWith("Deleted") } }
+        assertEquals(setOf("old2", "old4", "new0", "new1", "new2"), dbIds())
+        assertTrue(
+            vm.ui.value.userMessages.any { it.startsWith("Deleted 4 shots") && "2 shots were kept: your last backup didn't hold them whole" in it },
+            "${vm.ui.value.userMessages}",
+        )
+        // A preview made now says so too, and offers nothing to delete.
+        val after = assertNotNull(onMain(vm, "the next plan") { vm.planFreeUp(cutoff) })
+        assertTrue(after.ids.isEmpty())
+        assertEquals(2, after.backupKept)
     }
 
     // ── No automatic deletion anywhere ───────────────────────────────────────

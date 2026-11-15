@@ -1434,6 +1434,7 @@ class LibraryController(
                 photos, backupTempFile(cache),
                 stop = { if (cancel.get()) throw BackupCancelled() },
                 onProgress = { p -> updateUi { it.copy(backupProgress = it.backupProgress + (kind to p)) } },
+                shotJson = backupShotJson,
             )
         }.fold(
             onSuccess = { built ->
@@ -1447,6 +1448,12 @@ class LibraryController(
                     snap.missingCurves.forEach { appendLog("Backup left out the curve of shot $it: its telemetry is damaged or missing") }
                     notify("$n older shot${if (n == 1) " has" else "s have"} damaged telemetry and ${if (n == 1) "is" else "are"} backed up without ${if (n == 1) "its curve" else "their curves"}")
                 }
+                // What this backup doesn't hold whole: Free up space keeps these (REVIEW-437 B1).
+                val omittedShots = built.omitted.filter { it.kind == "shot" }.map { omittedRowId(it, snap) ?: coffee.crema.history.FreeUpPlan.UNKNOWN_SHOT }
+                val inBackup = snap.shots.mapTo(HashSet()) { it.id }
+                val curveless = snap.missingCurves + historyStore.unreadableSeries.filter { it in inBackup }
+                val incomplete = (omittedShots + curveless + built.degraded).toSet()
+                updateUi { it.copy(backupIncomplete = incomplete) }
                 BackupZip(built.file, built.counts, built.contentHash, release = { releaseBackupFile(built.file) })
             },
             onFailure = {
@@ -1738,8 +1745,12 @@ class LibraryController(
     suspend fun planFreeUp(beforeMs: Long): coffee.crema.history.FreeUpPlan? {
         if (!rowsReady || !historySettled) return null
         val older = allShots().filter { it.completedAtMs < beforeMs }
-        val doomed = older.filterNot { it.pinned }.map { it.id }
-        return coffee.crema.history.FreeUpPlan(beforeMs, doomed, older.count { it.pinned }, historyStore.bytesOf(doomed))
+        val unpinned = older.filterNot { it.pinned }
+        // What the last backup left out or wrote without its curve stays (REVIEW-437 B1).
+        val incomplete = uiState().backupIncomplete
+        val (kept, doomed) = unpinned.partition { coffee.crema.history.backupLacks(it.id, incomplete) }
+        val ids = doomed.map { it.id }
+        return coffee.crema.history.FreeUpPlan(beforeMs, ids, older.count { it.pinned }, historyStore.bytesOf(ids), backupKept = kept.size)
     }
 
     /**
@@ -1748,11 +1759,18 @@ class LibraryController(
      * before the plan's date, checked on the rows as they stand. A shot pinned
      * since the preview stays. Bag weights don't change: no history removal
      * credits a bag (SPEC §8). The Visualizer copies stay where they are.
-     * Returns how many went.
+     * A shot the last backup left out, or wrote without its curve or profile,
+     * stays too, read as the delete runs (REVIEW-437 B1): there is no
+     * "delete anyway". Returns how many went, and how many of the named ones
+     * the backup's gaps kept.
      */
-    suspend fun freeUpSpace(plan: coffee.crema.history.FreeUpPlan): Int {
-        if (!rowsReady || !historySettled || plan.ids.isEmpty()) return 0
-        val named = plan.ids.toHashSet()
+    suspend fun freeUpSpace(plan: coffee.crema.history.FreeUpPlan): coffee.crema.history.FreeUpResult {
+        val none = coffee.crema.history.FreeUpResult(0, 0)
+        if (!rowsReady || !historySettled || plan.ids.isEmpty()) return none
+        val incomplete = uiState().backupIncomplete
+        val backupKept = plan.ids.count { coffee.crema.history.backupLacks(it, incomplete) }
+        val named = plan.ids.filterNot { coffee.crema.history.backupLacks(it, incomplete) }.toHashSet()
+        if (named.isEmpty()) return coffee.crema.history.FreeUpResult(0, backupKept)
         fun goes(row: ShotRow) = row.id in named && !row.pinned && row.completedAtMs < plan.beforeMs
         var gone: Set<String> = emptySet()
         editHistory { rows ->
@@ -1762,13 +1780,17 @@ class LibraryController(
         // A capped view's hidden rows (the legacy backend has none; a store row out of view, say).
         val hidden = historyStore.hiddenRows(uiState().history.mapTo(HashSet()) { it.id }).filter(::goes).map { it.id }
         val ids = gone + hidden
-        if (ids.isEmpty()) return 0
+        if (ids.isEmpty()) return coffee.crema.history.FreeUpResult(0, backupKept)
         historyStore.forget(ids)
         persistHistory(uiState().history)
         historyStore.delete(ids)
         checkStorage()
-        return ids.size
+        return coffee.crema.history.FreeUpResult(ids.size, backupKept)
     }
+
+    /** Test seam: how the backup writes a shot's line ([streamBackupZip]'s default in the app). */
+    @androidx.annotation.VisibleForTesting
+    internal var backupShotJson: (StoredShot) -> String = { coffee.crema.visualizer.wireShotJson(it, forBackup = true).toString() }
 
     /** Remove a stored shot from the local history. Persisted. */
     fun deleteShot(id: String) {

@@ -183,6 +183,13 @@ data class MainUiState(
     /** The getting-full notice was dismissed; it comes back only after the space recovers and runs low again. */
     val storageNoticeDismissed: Boolean = false,
     /**
+     * Shots the last backup built this session left out, or wrote without
+     * their curve or profile (REVIEW-437 B1): Free up space keeps them, as
+     * deleting them would lose what no backup holds. [coffee.crema.history.FreeUpPlan.UNKNOWN_SHOT]
+     * when an omitted shot couldn't be named: then it keeps every shot.
+     */
+    val backupIncomplete: Set<String> = emptySet(),
+    /**
      * Built-in profiles from the core (`builtinCremaProfiles()`), loaded once at
      * startup. The Brew header picker chooses from these until the profile
      * library (M3) adds user profiles.
