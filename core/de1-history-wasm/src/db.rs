@@ -712,14 +712,17 @@ impl HistoryDb {
         self.slot(move |s| s.index_write(&w).map(WrittenJson::from))
     }
 
-    /// `remove_absent({ids, sinceSeq})` → `ChangeSet`.
+    /// `remove_absent({ids, sinceSeq})` → `ChangeSet`, in steps of at most
+    /// 500 deletes. Steps before a failed one stay committed, and their change
+    /// set doesn't cross this boundary: after a rejection the shell refreshes
+    /// its lists.
     #[wasm_bindgen(js_name = removeAbsent)]
     pub fn remove_absent(&self, json: &str) -> Promise {
         let a = match parse::<RemoveAbsentArgs>(json) {
             Ok(a) => a,
             Err(e) => return Promise::reject(&e),
         };
-        self.slot(move |s| s.remove_absent(&a.ids, a.since_seq))
+        self.slot(move |s| s.remove_absent(&a.ids, a.since_seq).map_err(Into::into))
     }
 
     /// `set_source_seq(seq)`.

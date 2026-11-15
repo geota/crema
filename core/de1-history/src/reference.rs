@@ -12,8 +12,10 @@
 //! - the tag filter applies on both shells;
 //! - the bean sort is the folded "Roaster · Name" the row shows (web sorted
 //!   by name), and the profile sort is folded;
-//! - ties are always `completed_at` descending, then `id` descending
-//!   (Android's descending sorts put ties oldest first).
+//! - ties follow the sort's direction: `completed_at`, then `id`, descending
+//!   under a descending sort and ascending under an ascending one, so one
+//!   index serves both (B1). Today web keeps ties newest first both ways, and
+//!   Android puts them oldest first under a descending sort.
 
 use std::cmp::Ordering;
 
@@ -209,9 +211,9 @@ fn passes(r: &RefRow, q: &HistoryQuery, live: &LiveRows) -> bool {
     }
 }
 
-/// The total order: the sort key in the chosen direction, then `completed_at`
-/// descending, then `id` descending. Text compares by code point, as SQLite's
-/// `BINARY` does.
+/// The total order: the sort key, then `completed_at`, then `id`, all in
+/// the chosen direction. Text compares by code point, as SQLite's `BINARY`
+/// does.
 fn order(a: &Derived, a_id: &str, b: &Derived, b_id: &str, q: &HistoryQuery) -> Ordering {
     let key = match q.sort.key {
         SortKey::Date => a.completed_at.cmp(&b.completed_at),
@@ -221,12 +223,13 @@ fn order(a: &Derived, a_id: &str, b: &Derived, b_id: &str, q: &HistoryQuery) -> 
         SortKey::Yield => a.sort_yield.total_cmp(&b.sort_yield),
         SortKey::Time => a.sort_time.cmp(&b.sort_time),
     };
-    let key = match q.sort.dir {
-        Dir::Asc => key,
-        Dir::Desc => key.reverse(),
-    };
-    key.then_with(|| b.completed_at.cmp(&a.completed_at))
-        .then_with(|| b_id.cmp(a_id))
+    let ascending = key
+        .then_with(|| a.completed_at.cmp(&b.completed_at))
+        .then_with(|| a_id.cmp(b_id));
+    match q.sort.dir {
+        Dir::Asc => ascending,
+        Dir::Desc => ascending.reverse(),
+    }
 }
 
 #[cfg(test)]
@@ -383,8 +386,10 @@ mod tests {
     }
 
     #[test]
-    fn change_descending_sorts_keep_ties_newest_first() {
-        // Android reversed a stable ascending sort, so its ties went oldest first.
+    fn change_ties_follow_the_sort_direction() {
+        // Android reversed a stable ascending sort, so its descending ties went
+        // oldest first; web kept them newest first both ways. Now they run the
+        // sort's way, so one index serves both directions (B1).
         let r = rows(&[
             json!({ "id": "old", "completedAt": 1, "metadata": { "rating": 4 } }),
             json!({ "id": "new", "completedAt": 2, "metadata": { "rating": 4 } }),
@@ -397,12 +402,12 @@ mod tests {
         );
         assert_eq!(
             filter_sort(&r, &sorted(SortKey::Rating, Dir::Asc), &live),
-            ids(&["new", "old", "top"])
+            ids(&["old", "new", "top"])
         );
     }
 
     #[test]
-    fn change_equal_times_order_by_id_descending() {
+    fn change_equal_times_order_by_id_the_sorts_way() {
         let r = rows(&[
             json!({ "id": "a", "completedAt": 5 }),
             json!({ "id": "c", "completedAt": 5 }),
@@ -412,7 +417,7 @@ mod tests {
         assert_eq!(filter_sort(&r, &q(), &live), ids(&["c", "b", "a"]));
         assert_eq!(
             filter_sort(&r, &sorted(SortKey::Date, Dir::Asc), &live),
-            ids(&["c", "b", "a"])
+            ids(&["a", "b", "c"])
         );
     }
 

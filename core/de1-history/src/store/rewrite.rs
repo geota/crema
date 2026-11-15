@@ -57,7 +57,7 @@ impl Store {
     /// moves and the rewrite is done.
     pub(crate) fn derive_step(&mut self) -> Result<Maintained> {
         let cursor = self.derive.cursor;
-        let batch = i64::from(self.batch_rows);
+        let batch = i64::from(self.derive_batch_rows);
         let ((rows, last, changed, kinds), st) =
             self.write("derive.commit", "derive.commit", |tx, st, f| {
                 f.hit("derive.batch")?;

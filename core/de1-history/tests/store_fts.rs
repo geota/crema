@@ -354,6 +354,26 @@ fn the_integrity_check_finds_a_stale_entry_and_drops_the_index() {
     assert_eq!(store.fts_integrity_check().expect("checks"), FtsCheck::Ok);
 }
 
+/// The check reads the whole index in one statement (B1: 0.9 s at 100,000
+/// rows), so it never runs while a shot does: even a stale entry waits.
+#[test]
+fn the_integrity_check_waits_while_a_shot_runs() {
+    let (_d, mut store, model, _) = loaded();
+    let victim = model.0.keys().nth(3).expect("a row").clone();
+    plant_stale(&store, &victim);
+    store.set_busy(true);
+    assert_eq!(
+        store.fts_integrity_check().expect("checks"),
+        FtsCheck::NotReady
+    );
+    assert_eq!(store.fts_status(), FtsStatus::Ready, "nothing dropped yet");
+    store.set_busy(false);
+    assert_eq!(
+        store.fts_integrity_check().expect("checks"),
+        FtsCheck::Damaged
+    );
+}
+
 #[test]
 fn writes_between_rebuild_batches_end_up_in_the_new_index() {
     let (d, mut store, mut model, needles) = loaded();

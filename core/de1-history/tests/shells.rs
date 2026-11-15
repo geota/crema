@@ -94,11 +94,13 @@ enum Expect {
     /// The same ids in the same order.
     Exact,
     /// The same ids in the same order, except that each run of equal sort
-    /// keys is reversed: Android sorts ascending, stably over the store's
-    /// newest-first order, then reverses the whole list for a descending sort,
-    /// so its ties come oldest first. The reference keeps them newest first
-    /// (`change_descending_sorts_keep_ties_newest_first`,
-    /// `change_equal_times_order_by_id_descending`).
+    /// keys is reversed. The reference's ties follow the sort's direction
+    /// (`change_ties_follow_the_sort_direction`,
+    /// `change_equal_times_order_by_id_the_sorts_way`). Web keeps ties newest
+    /// first both ways, so its ascending sorts differ. Android sorts
+    /// ascending, stably over the store's newest-first order, then reverses
+    /// the whole list for a descending sort, so its ties run against the sort
+    /// both ways.
     TiesReversed,
     /// A rule SPEC §5 or §6 changed: the answers differ, and the named test in
     /// `src/reference.rs` pins the new rule.
@@ -133,20 +135,20 @@ const ANDROID_CHANGED: &[(&str, &str)] = &[
     ("text-legacy-label", SPAN),
 ];
 
-fn expect_web(name: &str) -> Expect {
-    WEB_CHANGED
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map_or(Expect::Exact, |(_, t)| Expect::Changed(t))
-}
-
-fn expect_android(q: &HistoryQuery, name: &str) -> Expect {
-    if let Some((_, t)) = ANDROID_CHANGED.iter().find(|(n, _)| *n == name) {
+fn expect_web(q: &HistoryQuery, name: &str) -> Expect {
+    if let Some((_, t)) = WEB_CHANGED.iter().find(|(n, _)| *n == name) {
         return Expect::Changed(t);
     }
     match q.sort.dir {
-        Dir::Desc => Expect::TiesReversed,
-        Dir::Asc => Expect::Exact,
+        Dir::Desc => Expect::Exact,
+        Dir::Asc => Expect::TiesReversed,
+    }
+}
+
+fn expect_android(name: &str) -> Expect {
+    match ANDROID_CHANGED.iter().find(|(n, _)| *n == name) {
+        Some((_, t)) => Expect::Changed(t),
+        None => Expect::TiesReversed,
     }
 }
 
@@ -200,9 +202,9 @@ fn check_shell(rows_file: &str, golden_file: &str, android: bool) -> (usize, usi
         let q = to_query(fq, spec.now);
         let got = filter_sort(&rows, &q, &live);
         let expect = if android {
-            expect_android(&q, &fq.name)
+            expect_android(&fq.name)
         } else {
-            expect_web(&fq.name)
+            expect_web(&q, &fq.name)
         };
         let ok = match expect {
             Expect::Exact => {
@@ -247,9 +249,13 @@ fn check_shell(rows_file: &str, golden_file: &str, android: bool) -> (usize, usi
 #[test]
 fn the_reference_reproduces_the_web_list() {
     let (exact, ties, changed) = check_shell("rows.web.jsonl", "golden.web.json", false);
-    assert_eq!(ties, 0);
     assert_eq!(changed, WEB_CHANGED.len());
-    assert!(exact >= 30, "{exact} exact");
+    assert!(ties > 0, "the ascending sorts compare with reversed ties");
+    assert!(exact >= 25, "{exact} exact");
+    assert!(
+        exact + ties >= 30,
+        "{exact} exact, {ties} with reversed ties"
+    );
 }
 
 #[test]

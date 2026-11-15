@@ -39,7 +39,7 @@ pub use error::{Result, StoreError};
 pub use export::{ExportWalk, RidId};
 pub use faults::Faults;
 pub use fts::{FtsCheck, FtsStatus, Maintained};
-pub use index::{IndexState, IndexWrite};
+pub use index::{ABSENT_BATCH_ROWS, AbsentError, AbsentStep, IndexState, IndexWrite};
 pub use read::{CoffeeFacet, Destination, Facets, Page, RidRow, RowOut, SyncPage, SyncRow};
 pub use write::{Applied, Duplicate, Heavy, RowIn, Write, Written};
 
@@ -64,10 +64,17 @@ pub fn sqlite_version() -> &'static str {
 /// A week, for the weekly `quick_check`.
 const WEEK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
-/// The rows a maintenance batch takes by default: the derive rewrite's and the
-/// search index rebuild's. B1 measures the per-transaction cap (S15) and sets
-/// it; [`Store::set_batch_rows`] overrides it.
-pub const DEFAULT_BATCH_ROWS: u32 = 500;
+/// The rows a search index rebuild batch takes (S15). B1 measured 2 ms for a
+/// median batch of 1,000 rows natively at 100,000 rows, 15 ms at worst, under
+/// the 100 ms cap with room for a slower device. [`Store::set_batch_rows`]
+/// overrides it.
+pub const FTS_BATCH_ROWS: u32 = 1_000;
+
+/// The rows a derive rewrite batch takes (S15). Each row rewrites its columns,
+/// tags, sort-index entries and search text: B1 measured a median batch of 200
+/// rows at 31 ms natively at 100,000 rows. [`Store::set_batch_rows`]
+/// overrides it.
+pub const DERIVE_BATCH_ROWS: u32 = 200;
 
 /// What a file is for (SPEC §3): `meta.role`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,9 +345,12 @@ pub struct Store {
     merge_pending: bool,
     derive: rewrite::State,
     busy: bool,
-    batch_rows: u32,
+    fts_batch_rows: u32,
+    derive_batch_rows: u32,
     quick_checked: bool,
     walks: export::Walks,
+    /// A removal by absence under way (the full diff's last step).
+    absent: Option<index::AbsentScan>,
     /// The index is set aside after a reopen, unchecked
     /// ([`OpenOptions::fts_check_on_reopen`] `false`): searches scan, and
     /// the next [`Store::maintain`] starts a rebuild.
@@ -401,10 +411,12 @@ impl Store {
             merge_pending: false,
             derive,
             busy: false,
-            batch_rows: DEFAULT_BATCH_ROWS,
+            fts_batch_rows: FTS_BATCH_ROWS,
+            derive_batch_rows: DERIVE_BATCH_ROWS,
             quick_checked: opened.quick_checked,
             walks,
             fts_suspect: false,
+            absent: None,
             faults: Faults::default(),
             poisoned: None,
             closed: false,
@@ -457,9 +469,12 @@ impl Store {
         self.busy = busy;
     }
 
-    /// The rows each maintenance batch takes (at least 1).
+    /// The rows each maintenance batch takes (at least 1), for the search
+    /// index rebuild and the derive rewrite alike; by default
+    /// [`FTS_BATCH_ROWS`] and [`DERIVE_BATCH_ROWS`].
     pub fn set_batch_rows(&mut self, rows: u32) {
-        self.batch_rows = rows.max(1);
+        self.fts_batch_rows = rows.max(1);
+        self.derive_batch_rows = rows.max(1);
     }
 
     /// The fault hook (`faults` feature).
@@ -610,6 +625,7 @@ impl Store {
         let mut opts = self.opts.clone();
         opts.create = false;
         self.walks.clear();
+        self.absent = None;
         let reopened = open_conn(&self.path, &opts, check).and_then(|(conn, opened)| {
             let fts = fts::load(&conn).map_err(|e| error_of(&e, Source::Open))?;
             let derive = rewrite::State::load(&conn).map_err(|e| error_of(&e, Source::Open))?;
