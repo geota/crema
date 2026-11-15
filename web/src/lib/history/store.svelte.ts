@@ -303,6 +303,11 @@ function byDateThenId(a: StoredShot, b: StoredShot): number {
 	return b.completedAt - a.completedAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
 }
 
+/** Whether `shot` holds any heavy part in memory. */
+function hasHeavyParts(shot: StoredShot): boolean {
+	return shot.record.samples.length > 0 || shot.profile != null || (shot.brewSeries?.samples.length ?? 0) > 0;
+}
+
 /** Whether memory holds fewer heavy parts than `d`. */
 function storeHeldMore(shot: StoredShot, d: DetailsRecord): boolean {
 	return (
@@ -1646,6 +1651,8 @@ export class HistoryStore {
 		// recovery's source never had are written: none overwrites a row the
 		// store has, and none it deleted comes back.
 		const afterLoss = this.healthState === 'lost';
+		// The heavy parts memory holds: for rows the store has without them (F7).
+		const heavy = afterLoss ? this.shots.filter(hasHeavyParts) : [];
 		if (afterLoss) this.forgetLostStore();
 		const gone = afterLoss ? new Set(record.sourceIds) : new Set<string>();
 		this.db?.close();
@@ -1654,7 +1661,58 @@ export class HistoryStore {
 		this.healthState = 'loading';
 		this.oldCopyInfo = null;
 		await this.loadFromDb({ gone, afterLoss });
+		if (heavy.length > 0 && this.health === 'ok') await this.fillHeavyFrom(heavy);
 		return this.health === 'ok';
+	}
+
+	/**
+	 * Rows the store holds without some heavy part `held` has (a recovery from
+	 * a daily copy has no curves): that part goes in, as a backfill does, and
+	 * nothing else. The row's fields are the store's, so no edit made there is
+	 * undone, and a part the store has stays. Unsaved until it lands.
+	 */
+	private async fillHeavyFrom(held: readonly StoredShot[]): Promise<void> {
+		const db = this.db;
+		if (!db) return;
+		const ids = held.filter((s) => this.stored.has(s.id) && !this.dirtyDetails.has(s.id)).map((s) => s.id);
+		if (ids.length === 0) return;
+		let found: Map<string, DetailsRecord>;
+		try {
+			found = await db.detailsOf(ids);
+		} catch {
+			// Unknown: memory's parts go in, which can only add what's missing.
+			found = new Map();
+		}
+		const want = new Map<string, StoredShot>();
+		for (const s of held) {
+			if (!ids.includes(s.id)) continue;
+			const d = found.get(s.id);
+			const samples = (d?.samples.length ?? 0) === 0 && s.record.samples.length > 0;
+			const profile = d?.profile == null && s.profile != null;
+			const brew = (d?.brewSeries?.samples.length ?? 0) === 0 && (s.brewSeries?.samples.length ?? 0) > 0;
+			if (samples || profile || brew) want.set(s.id, s);
+		}
+		if (want.size === 0) return;
+		// After the await: the rows as they are now.
+		const filled: string[] = [];
+		this.shots = this.shots.map((row) => {
+			const s = want.get(row.id);
+			if (!s) return row;
+			const d = found.get(row.id) ?? { id: row.id, samples: [], profile: null, brewSeries: null };
+			const full = withDetails(row, {
+				id: row.id,
+				samples: d.samples.length > 0 ? d.samples : (s.record.samples as DetailsRecord['samples']),
+				profile: d.profile ?? s.profile ?? null,
+				brewSeries: (d.brewSeries?.samples.length ?? 0) > 0 ? d.brewSeries : (s.brewSeries ?? null)
+			});
+			markLoaded(row.id);
+			this.dirtyDetails.add(row.id);
+			filled.push(row.id);
+			return full;
+		});
+		this.markUnsaved(filled);
+		this.settleView();
+		this.scheduleFlush();
 	}
 
 	/**

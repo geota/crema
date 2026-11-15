@@ -84,16 +84,19 @@ function deleteHistoryDb(): Promise<void> {
 
 /**
  * A private file system in memory: the snapshots' directory holds `files`.
- * `failClose` makes the next writable's close fail, as a full disk does.
+ * As in a browser, `create` makes an empty file at once, and a writable lands
+ * only on close. `failClose` makes the next close fail, as a full disk does;
+ * `cutShort` makes the next close land half the bytes.
  */
 function memoryRoot() {
 	const files = new Map<string, { bytes: Uint8Array; at: number }>();
 	let clock = 1_000;
-	const control = { failClose: false };
+	const control = { failClose: false, cutShort: false };
 	const notFound = () => new DOMException('none', 'NotFoundError');
 	const dir = {
 		async getFileHandle(name: string, opts?: { create?: boolean }) {
 			if (!files.has(name) && !opts?.create) throw notFound();
+			if (!files.has(name)) files.set(name, { bytes: new Uint8Array(0), at: ++clock });
 			return {
 				async createWritable() {
 					const parts: Uint8Array[] = [];
@@ -112,7 +115,9 @@ function memoryRoot() {
 								total.set(p, o);
 								o += p.length;
 							}
-							files.set(name, { bytes: total, at: ++clock });
+							const bytes = control.cutShort ? total.slice(0, total.length >> 1) : total;
+							control.cutShort = false;
+							files.set(name, { bytes, at: ++clock });
 						},
 						async abort() {}
 					};
@@ -726,6 +731,62 @@ describe('a store that is lost or can’t open', () => {
 		expect(a.unsavedShots).toEqual([]);
 	});
 
+	it('a stale lost tab that finds another tab’s daily-copy recovery fills in the curves it holds, and nothing else (F7)', async () => {
+		const { files, snapshotRoot } = memoryRoot();
+		const shots = small(5).map((s) => ({ ...s, visualizerId: null }));
+		await writeOldCopy(shots);
+		const a = await boot({ snapshotRoot });
+		const made = a.recordCaptured(realShot(68, realSamples(4)) as unknown as Record<string, unknown>)!;
+		await a.flushed();
+		await until(() => files.size === 1);
+		await deleteHistoryDb();
+		a.setRating(shots[3].id, 2);
+		await a.flushed();
+		expect(a.health).toBe('lost');
+		// B recovers the daily copy (no curves) and edits a row.
+		const b = await boot({ snapshotRoot });
+		expect(await b.recoverSnapshot()).toBe(true);
+		b.setNotes(made.id, 'noted in B');
+		await b.flushed();
+		expect((await stored()).details.get(made.id)!.samples).toEqual([]);
+		// A, with a stale banner, finds it.
+		expect(await a.startEmpty()).toBe('reopened');
+		expect(a.hasUnsaved).toBe(true);
+		await a.flushed();
+		const { rows, details } = await stored();
+		expect(details.get(made.id)!.samples).toHaveLength(4);
+		expect(rows.get(made.id)!.summary.sampleCount).toBe(4);
+		expect(details.get(shots[0].id)!.samples).toHaveLength(4);
+		// B's edit stays.
+		expect(rows.get(made.id)!.metadata.notes).toBe('noted in B');
+		expect(a.get(made.id)!.record.samples).toHaveLength(4);
+		expect(a.hasUnsaved).toBe(false);
+		expect(a.unsavedShots).toEqual([]);
+	});
+
+	it('a daily-copy recovery’s ids count as its source: a shot deleted after it doesn’t come back from a stale tab (N6)', async () => {
+		const { files, snapshotRoot } = memoryRoot();
+		const shots = small(3).map((s) => ({ ...s, visualizerId: null }));
+		await writeOldCopy(shots);
+		const a = await boot({ snapshotRoot });
+		const made = a.recordCaptured({ ...realShot(69, realSamples(4)), visualizerId: null } as unknown as Record<string, unknown>)!;
+		await a.flushed();
+		await until(() => files.size === 1);
+		await deleteHistoryDb();
+		a.setRating(shots[1].id, 2);
+		await a.flushed();
+		expect(a.health).toBe('lost');
+		const b = await boot({ snapshotRoot });
+		expect(await b.recoverSnapshot()).toBe(true);
+		expect(b.get(made.id)).toBeDefined();
+		b.delete(made.id);
+		await b.flushed();
+		expect(await a.startEmpty()).toBe('reopened');
+		await a.flushed();
+		expect((await stored()).rows.has(made.id)).toBe(false);
+		expect(a.get(made.id)).toBeUndefined();
+	});
+
 	it('two lost tabs recovering at once take turns on the lock: one fills, the other loads it (N1)', async () => {
 		const shots = small(5);
 		await writeOldCopy(shots);
@@ -928,19 +989,88 @@ describe('a store that is lost or can’t open', () => {
 			await until(() => files.size === day + 1);
 		}
 		const three = [...files.keys()].sort();
-		// Day 3's write fails: nothing is pruned, and no half copy stays.
+		// Day 3's write fails: nothing is pruned, and its empty file isn't a copy.
 		clock.day = 3;
 		control.failClose = true;
 		store.setRating(shots[0].id, 4);
 		await store.flushed();
 		await new Promise((r) => setTimeout(r, 30));
-		expect([...files.keys()].sort()).toEqual(three);
-		// Day 4's lands: the oldest goes.
+		for (const name of three) expect(files.has(name)).toBe(true);
+		expect((await store.snapshotInfo()).map((c) => c.name)).toEqual([...three].reverse());
+		// Day 4's lands: the oldest goes, and so does day 3's empty file.
 		clock.day = 4;
 		store.setRating(shots[0].id, 5);
 		await store.flushed();
 		await until(() => !files.has(three[0]));
 		expect([...files.keys()].sort()).toEqual([...three.slice(1), snapshotNameOf(clock.now())]);
+	});
+
+	it('a copy that doesn’t read back whole is removed, and nothing is pruned for it (N7)', async () => {
+		const { files, control, snapshotRoot } = memoryRoot();
+		const shots = small(3);
+		await seedStore(shots);
+		const clock = dayClock();
+		const store = await boot({ snapshotRoot, now: clock.now });
+		for (const day of [0, 1, 2]) {
+			clock.day = day;
+			store.setRating(shots[0].id, day + 1);
+			await store.flushed();
+			await until(() => files.size === day + 1);
+		}
+		const three = [...files.keys()].sort();
+		clock.day = 3;
+		control.cutShort = true;
+		store.setRating(shots[0].id, 4);
+		await store.flushed();
+		await new Promise((r) => setTimeout(r, 30));
+		expect([...files.keys()].sort()).toEqual(three);
+		expect((await store.snapshotInfo()).map((c) => c.rows)).toEqual([3, 3, 3]);
+	});
+
+	it('a clock set back: the copy just written is kept, and copies go by the order written, not by name', async () => {
+		const { files, snapshotRoot } = memoryRoot();
+		const shots = small(3);
+		await seedStore(shots);
+		const clock = dayClock();
+		const store = await boot({ snapshotRoot, now: clock.now });
+		for (const day of [0, 1, 2]) {
+			clock.day = day;
+			store.setRating(shots[0].id, day + 1);
+			await store.flushed();
+			await until(() => files.size === day + 1);
+		}
+		const three = [...files.keys()].sort();
+		clock.day = -10_000;
+		store.setRating(shots[0].id, 5);
+		await store.flushed();
+		const back = snapshotNameOf(clock.now());
+		await until(() => !files.has(three[0]));
+		expect([...files.keys()].sort()).toEqual([back, ...three.slice(1)].sort());
+		const info = await store.snapshotInfo();
+		expect(info.map((c) => c.name)).toEqual([back, three[2], three[1]]);
+		await deleteHistoryDb();
+		const lost = await boot({ snapshotRoot, now: clock.now });
+		expect(await lost.recoverSnapshot()).toBe(true);
+		expect(lost.get(shots[0].id)!.metadata.rating).toBe(5);
+	});
+
+	it('an empty file from a tab closed mid-write neither blocks its day nor counts as a copy', async () => {
+		const { files, snapshotRoot } = memoryRoot();
+		const shots = small(3);
+		await seedStore(shots);
+		const clock = dayClock();
+		const store = await boot({ snapshotRoot, now: clock.now });
+		store.setRating(shots[0].id, 1);
+		await store.flushed();
+		await until(() => files.size === 1);
+		// Day 1's write was cut off by a closed tab: an empty file stands.
+		clock.day = 1;
+		files.set(snapshotNameOf(clock.now()), { bytes: new Uint8Array(0), at: 1 });
+		const next = await boot({ snapshotRoot, now: clock.now });
+		next.setRating(shots[0].id, 2);
+		await next.flushed();
+		await until(() => (files.get(snapshotNameOf(clock.now()))?.bytes.length ?? 0) > 0);
+		expect((await next.snapshotInfo()).map((c) => c.rows)).toEqual([3, 3]);
 	});
 
 	it('a marker the full storage refused is said, and written by a later save (S5)', async () => {
