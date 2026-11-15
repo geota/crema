@@ -626,7 +626,9 @@ pub struct CremaCore {
     /// A link's first espresso state found the session flowing: the frame
     /// evidence it waits for before any retry (see [`stop_control`]).
     outage_check: Option<stop_control::OutageCheck>,
-    /// The frame the last espresso sample was on.
+    /// The frame the last espresso sample was on, heard on a link that's up
+    /// (its first state seen): the frame before the drop, for the outage
+    /// check.
     last_frame: Option<u8>,
     /// Samples at or over the flow-proof threshold since the last stop write.
     flow_proof: u32,
@@ -3899,7 +3901,11 @@ impl CremaCore {
             }
             self.begin_flow_on_unknown(now, out);
         }
-        if self.monitor.is_shot_in_progress() {
+        // Only on a link that's up: samples before its first state are still
+        // the outage's, and may be another flow's, so they can't stand for
+        // the frame before the drop (#427: hot water's frame 0, heard with
+        // its states lost, matched the next shot's).
+        if self.monitor.is_shot_in_progress() && self.link.state_seen {
             self.last_frame = Some(sample.frame_number);
         }
         // A skip needs telemetry newer than its last write.

@@ -1012,6 +1012,63 @@ fn a_replaced_shot_forgets_the_old_shots_frame() {
     assert_eq!(core.auto_stop_view().map(|v| v.started), Some(started));
 }
 
+/// #427, the model's I20: an espresso on frame 2, then the link drops and the
+/// shot ends. The link comes back with its states lost, so a hot-water pour is
+/// heard only as samples, on frame 0, and the user's Stop lands on it. The
+/// link drops again and a new espresso runs. Its first sample back, on frame
+/// 0, is lower than the shot's frame before the first drop: a new shot, with
+/// no poured volume, its own auto-stop clock and none of the old Stop. The
+/// hot water's samples came before any state on their link, so they were the
+/// outage's and never stood for the frame before it.
+#[test]
+fn samples_before_a_links_first_state_never_stand_for_the_frame_before_the_drop() {
+    let mut core = CremaCore::new();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    let mut f = sample(0);
+    f[17] = 2;
+    for t in (100..20_000u64).step_by(250) {
+        f[0..2].copy_from_slice(&((t / 8) as u16).to_be_bytes());
+        core.on_notification(Source::De1ShotSample, &f, t);
+    }
+    assert!(core.pour_ml() > 10.0, "the shot poured");
+    core.de1_link_lost();
+    // Back, with its `Idle` and `HotWater` reports lost: frame-0 samples only.
+    let mut f = sample(0);
+    f[17] = 0;
+    for t in (21_700..24_400u64).step_by(250) {
+        f[0..2].copy_from_slice(&((t / 8) as u16).to_be_bytes());
+        core.on_notification(Source::De1ShotSample, &f, t);
+        if t == 21_700 {
+            core.request_machine_state(MachineState::Idle);
+        }
+    }
+    core.de1_link_lost();
+    // A new espresso, begun during the second drop.
+    core.on_notification(Source::De1State, &[4, 5], 31_000);
+    f[0..2].copy_from_slice(&((31_100u64 / 8) as u16).to_be_bytes());
+    let o = core.on_notification(Source::De1ShotSample, &f, 31_100);
+    assert!(state_writes(&o).is_empty(), "{:?}", o.commands);
+    assert!(o.commands.contains(&Command::CancelStop));
+    assert!(o.events.contains(&Event::ShotStarted), "a new shot");
+    assert_eq!(core.pour_ml(), 0.0);
+    assert_eq!(
+        core.auto_stop_view().map(|v| v.started),
+        Some(Duration::from_millis(31_100))
+    );
+    let mut later = vec![];
+    for at in (31_350..40_000u64).step_by(250) {
+        later.extend(state_writes(&core.on_tick(at)));
+        f[0..2].copy_from_slice(&((at / 8) as u16).to_be_bytes());
+        later.extend(state_writes(&core.on_notification(
+            Source::De1ShotSample,
+            &f,
+            at + 1,
+        )));
+    }
+    assert!(later.is_empty(), "the old Stop never reaches the new shot");
+}
+
 /// No sample within a second of the return: unsure. With nothing owed, weight
 /// is refused; time and volume go on.
 #[test]
