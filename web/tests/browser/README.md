@@ -15,7 +15,7 @@ W0_KILLS=20 pnpm test:browser durability --project webkit
 
 | Spec | What it checks | Browsers |
 | --- | --- | --- |
-| `durability.spec.ts` | A kill inside a write transaction, `W0_KILLS` times (200), for `truncate` and `exclusiveWal`: all of it or none, nothing acknowledged lost | Chromium (`Page.crash`), WebKit (`Worker.terminate`) |
+| `durability.spec.ts` | A kill inside a write transaction, `W0_KILLS` times (200), for `truncate` and `exclusiveWal`: all of it or none, nothing acknowledged lost. Picks the journal mode (`src/lib/history-db/journal.ts`) | Chromium (`Page.crash`), WebKit (`Worker.terminate`) |
 | `ownership.spec.ts` | A second tab can't lock or install; `pause` with a connection open is `filesInUse`; the lock and handles move; after an unplanned close the next install retries and wins | Chromium, WebKit |
 | `frozen.spec.ts` | A frozen owner (CDP `Page.setWebLifecycleState`) keeps its lock and handles; the other tab goes read-only after 5 s and journals a new shot; the thawed owner drains it | Chromium, over a bare CDP connection (`cdp.ts`) |
 | `failed-start.spec.ts` | Held handles, a missing pool directory, a corrupt or foreign `history.db`, an invalid slot header: each ends in SPEC §8's health state, every file byte-identical | Chromium, WebKit |
@@ -55,5 +55,11 @@ adb shell am start -n com.android.chrome/com.google.android.apps.chrome.Main abo
 W0_ANDROID=1 pnpm test:browser
 ```
 
-`durability.spec.ts` crashes the tab with `Page.crash` there too. Results
-from a real tablet, rather than the emulator, are on the owner's hardware checklist.
+Differences there:
+- Android Chrome ignores `Page.crash` for a background tab, so the unplanned
+  handover in `ownership.spec.ts` closes the owner tab instead.
+  `durability.spec.ts` crashes its one tab, which is in front.
+- An emulator is slow and short of memory, so its bench numbers say little;
+  B1's budgets are the reference tablet's.
+
+Results from a real tablet are on the owner's hardware checklist.

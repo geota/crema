@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import { rows } from '../../bench/rows.ts';
+import { HISTORY_JOURNAL } from '../../src/lib/history-db/journal.ts';
 import { BASE, expect, test } from './fixtures.ts';
 
 const SIZES = (process.env.W0_BENCH_ROWS ?? '5000,20000,100000').split(',').map(Number);
@@ -50,7 +51,7 @@ for (const n of SIZES) {
 		const page = await profile.newPage();
 		await page.goto(`${BASE}/bench/history-db.html`);
 		await page.waitForFunction(() => !!window.bench);
-		const journal = (process.env.W0_JOURNAL ?? 'truncate') as 'truncate' | 'exclusiveWal';
+		const journal = (process.env.W0_JOURNAL ?? HISTORY_JOURNAL) as 'truncate' | 'exclusiveWal';
 		const result = await page.evaluate(([n, j]) => window.bench.run(n, j), [n, journal] as const);
 		const md = await page.evaluate((r) => window.bench.markdown(r), result);
 		console.log(`\n${md}\n`);

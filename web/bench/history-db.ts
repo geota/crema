@@ -11,7 +11,7 @@
  * so it includes loading and compiling the wasm, the pool's install, the open,
  * `count` and the first page, and the paint of its rows.
  *
- *   /bench/history-db.html?rows=5000,20000&journal=truncate&auto=1
+ *   /bench/history-db.html?rows=5000,20000&journal=exclusiveWal&auto=1
  *
  * Each run uses a pool generation of its own, so runs never share files.
  * Nothing here deletes: old generations stay until the origin's data is
@@ -19,6 +19,7 @@
  */
 import { W0 } from '../tests/browser/harness/client.ts';
 import live from '../../core/de1-history/tests/fixtures/live.json';
+import { HISTORY_JOURNAL } from '../src/lib/history-db/journal.ts';
 
 const REPS = 7;
 const PAGE = 64;
@@ -308,7 +309,7 @@ window.bench = { run: (n, j) => bench(n, j, list, (s) => (status.textContent = s
 async function runAll() {
 	const q = new URLSearchParams(location.search);
 	const sizes = (q.get('rows') ?? '5000,20000,100000').split(',').map(Number);
-	const journal = (q.get('journal') ?? 'truncate') as 'truncate' | 'exclusiveWal';
+	const journal = (q.get('journal') ?? HISTORY_JOURNAL) as 'truncate' | 'exclusiveWal';
 	for (const n of sizes) {
 		const r = await window.bench.run(n, journal);
 		out.textContent += markdown(r) + '\n\n';
