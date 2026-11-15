@@ -25,7 +25,7 @@ import type {
 	ShotStatInput,
 	TimedSample
 } from '#lib/core/index.js';
-import type { ShotMachine as CoreShotMachine } from '#lib/core/crema-core.js';
+import type { ShotMachine as CoreShotMachine, ShotSummary } from '#lib/core/crema-core.js';
 import type {
 	BrewHistoryStats,
 	BrewSeries,
@@ -399,12 +399,61 @@ export interface StoredShot {
 }
 
 /**
+ * A history row (#310 P4w, SPEC §4): a stored shot without its heavy parts
+ * (samples, profile, brew series), with its {@link ShotSummary}. What the
+ * history's lists hold; `history.loadShot(id)` gives the whole
+ * {@link StoredShot} to whatever draws, sends or writes the curve.
+ *
+ * The heavy fields are gone from the type, not merely empty, so a row can't
+ * be read as "a shot with no telemetry" by mistake: the compiler sends every
+ * such reader to the summary or to `loadShot`.
+ */
+export type ShotRow = Omit<StoredShot, 'record' | 'profile' | 'brewSeries'> & {
+	readonly record: { readonly duration: number };
+	readonly summary: ShotSummary;
+};
+
+/** What a row and a whole shot both carry: every field but the heavy ones. */
+export type ShotFields = Omit<StoredShot, 'record' | 'profile' | 'brewSeries'> & {
+	readonly record: { readonly duration: number };
+};
+
+/** A row, or a whole shot: the helpers below read either. */
+export type AnyShot = ShotRow | StoredShot;
+
+/** Whether `shot` is a {@link ShotRow}: it carries a summary, not samples. */
+export function isShotRow(shot: AnyShot): shot is ShotRow {
+	return (shot as { summary?: unknown }).summary != null && !Array.isArray((shot.record as { samples?: unknown }).samples);
+}
+
+/**
+ * How many machine samples `shot` has: counted for a whole shot, from the
+ * summary for a row. `null` when a row's series couldn't be read: unknown,
+ * which is neither "none" nor "some".
+ */
+export function sampleCountOf(shot: AnyShot): number | null {
+	if (isShotRow(shot)) return shot.summary.sampleCount ?? null;
+	return shot.record.samples.length;
+}
+
+/** How many samples a brew's scale series has. */
+export function brewSampleCountOf(shot: AnyShot): number {
+	if (isShotRow(shot)) return shot.summary.brewSampleCount;
+	return shot.brewSeries?.samples.length ?? 0;
+}
+
+/** Whether `shot` has a machine curve: known to have samples. */
+export function hasSamples(shot: AnyShot): boolean {
+	return (sampleCountOf(shot) ?? 0) > 0;
+}
+
+/**
  * The row's method for display purposes: the stored method for brew
  * rows, `null` for machine espresso. A manually logged espresso
  * (`brewMethod: "espresso"`) also returns `"espresso"` — it renders
  * with the espresso mark but the "logged" provenance tag.
  */
-export function methodOf(shot: StoredShot): string | null {
+export function methodOf(shot: Pick<StoredShot, 'brewMethod'>): string | null {
 	const m = shot.brewMethod?.trim();
 	return m ? m.toLowerCase() : null;
 }
@@ -429,10 +478,10 @@ export function isBrewLog(shot: Pick<StoredShot, 'brewMethod'>): boolean {
  * `upload_refused_no_samples`). `sampleCount` overrides the stored series when
  * the caller still holds the full one.
  */
-export function refusedNoSamples(
-	shot: Pick<StoredShot, 'brewMethod' | 'record'>,
-	sampleCount: number = shot.record.samples.length
-): boolean {
+export function refusedNoSamples(shot: AnyShot, sampleCount: number | null = sampleCountOf(shot)): boolean {
+	// Unknown (a series that couldn't be read) is not "none": the core is
+	// asked about a count only when there is one.
+	if (sampleCount == null) return false;
 	return wasmUploadRefusedNoSamples(isBrewLog(shot), sampleCount);
 }
 
@@ -443,8 +492,12 @@ export function refusedNoSamples(
  * not measurements) and never enter a Visualizer upload queue. Mirrors
  * Rust `StoredShot::is_manual_log`.
  */
-export function isManualLog(shot: StoredShot): boolean {
-	return isBrewLog(shot) && shot.record.samples.length === 0 && !shot.brewSeries;
+export function isManualLog(shot: AnyShot): boolean {
+	if (!isBrewLog(shot)) return false;
+	// A row's counts are its summary's (#310 SPEC §4): an unknown count
+	// (`null`, a series that couldn't be read) is not manual.
+	if (isShotRow(shot)) return shot.summary.sampleCount === 0 && shot.summary.brewSampleCount === 0;
+	return shot.record.samples.length === 0 && !shot.brewSeries;
 }
 
 /**
@@ -452,23 +505,14 @@ export function isManualLog(shot: StoredShot): boolean {
  * a guided-brew weight series. Drives the row sparkline / detail chart
  * slot: rows without either show the method mark instead.
  */
-export function hasTelemetry(shot: StoredShot): boolean {
-	return shot.record.samples.length > 0 || (shot.brewSeries?.samples.length ?? 0) > 0;
+export function hasTelemetry(shot: AnyShot): boolean {
+	return hasSamples(shot) || brewSampleCountOf(shot) > 0;
 }
 
 /**
- * Derive a shot's peaks via the Rust core (`ShotRecord::peaks`).
- * Cached per-shot id + record-length so repeated reads inside one
- * render pass don't re-call wasm.
- *
- * Returns zero-shaped peaks (all `null` / `0`) when the wasm call
- * fails — defensive only; the core's parser is infallible for the
- * wire-shape inputs the shell stores.
- */
-/**
  * Insertion-ordered bounded cache: a `Map` that evicts its least-recently-used
  * key once it passes `cap`, and re-inserts a key on `get` so hot entries stay
- * at the tail. Bounds the per-session peaks / flat-sample memoisation so a long
+ * at the tail. Bounds the per-session pour-average / flat-sample memoisation so a long
  * browse of history can't grow these module-level Maps without limit (GEN5 —
  * `flatCache` could otherwise reach tens of MB and get the mobile tab killed).
  */
@@ -498,26 +542,30 @@ class BoundedCache<V> {
 	}
 }
 
-// Peaks are tiny (4 numbers) but each is derived via a wasm call, so cache a
-// generous number of shots.
-const peaksCache = new BoundedCache<ShotPeaks>(512);
-export function peaksOf(shot: StoredShot): ShotPeaks {
-	const key = `${shot.id}:${shot.record.samples.length}`;
-	const cached = peaksCache.get(key);
-	if (cached) return cached;
+/** A summary's peaks. */
+function peaksOfSummary(summary: ShotSummary): ShotPeaks {
+	return {
+		peakWeight: summary.peakWeight ?? null,
+		finalWeight: summary.finalWeight ?? null,
+		peakPressure: summary.peakPressure,
+		peakTemp: summary.peakTemp
+	};
+}
+
+/**
+ * A shot's peaks. A row's are in its summary, worked out by the core when
+ * the row was saved (#310 SPEC §4), so a list reads them with no wasm call
+ * and no cache. A whole shot's come from the core (`ShotRecord::peaks`).
+ *
+ * Zero-shaped (all `null` / `0`) when the wasm call fails — defensive only;
+ * the core's parser is infallible for the wire-shape inputs the shell stores.
+ */
+export function peaksOf(shot: AnyShot): ShotPeaks {
+	if (isShotRow(shot)) return peaksOfSummary(shot.summary);
 	try {
-		const json = wasmPeaksForShot(JSON.stringify(shot));
-		const peaks = JSON.parse(json) as ShotPeaks;
-		peaksCache.set(key, peaks);
-		return peaks;
+		return JSON.parse(wasmPeaksForShot(JSON.stringify(shot))) as ShotPeaks;
 	} catch {
-		const fallback: ShotPeaks = {
-			peakWeight: null,
-			finalWeight: null,
-			peakPressure: 0,
-			peakTemp: 0
-		};
-		return fallback;
+		return { peakWeight: null, finalWeight: null, peakPressure: 0, peakTemp: 0 };
 	}
 }
 
@@ -555,7 +603,7 @@ export function pourAveragesOf(shot: StoredShot): PourAverages | null {
  * persisting `yieldOut`. Pass a precomputed `peaks` to avoid a redundant wasm
  * call at a site that already has it.
  */
-export function yieldOf(shot: StoredShot, peaks?: ShotPeaks): number | null {
+export function yieldOf(shot: AnyShot, peaks?: ShotPeaks): number | null {
 	const settled = shot.metadata?.yieldOut;
 	if (settled != null && settled > 0) return settled;
 	const p = peaks ?? peaksOf(shot);
@@ -570,7 +618,7 @@ export function yieldOf(shot: StoredShot, peaks?: ShotPeaks): number | null {
  * {@link peaksOf}. `null` when the wasm call rejects (never in
  * practice — the projection is built typed).
  */
-export function statsOf(shots: StoredShot[]): HistoryStats | null {
+export function statsOf(shots: readonly AnyShot[]): HistoryStats | null {
 	const rows: ShotStatInput[] = shots.map((s) => {
 		const p = peaksOf(s);
 		return {
@@ -596,7 +644,7 @@ export function statsOf(shots: StoredShot[]): HistoryStats | null {
  * espresso rows in a mixed set (the strip tags those tiles "esp") or to
  * the single method the whole set belongs to.
  */
-export function brewStatsOf(shots: StoredShot[]): BrewHistoryStats | null {
+export function brewStatsOf(shots: readonly AnyShot[]): BrewHistoryStats | null {
 	const rows: BrewStatInput[] = shots.map((s) => {
 		const p = peaksOf(s);
 		return {
@@ -665,7 +713,7 @@ export function flatSamplesOf(shot: StoredShot): TelemetrySample[] {
  * (upload + PATCH) — what the app displays is exactly what syncs.
  * Mirrors Android `StoredShot.effectiveGrindSetting`.
  */
-export function effectiveGrindSetting(shot: StoredShot): string | null {
+export function effectiveGrindSetting(shot: Pick<StoredShot, 'metadata' | 'bean'>): string | null {
 	// Optional-chained: rows mid-import (and test fixtures) can lack the
 	// metadata object entirely before the loader upcast runs.
 	const own = shot.metadata?.grinderSetting?.trim();
@@ -675,7 +723,7 @@ export function effectiveGrindSetting(shot: StoredShot): string | null {
 }
 
 /** "Grind N" display form of {@link effectiveGrindSetting}, or `null`. */
-export function grindLabel(shot: StoredShot): string | null {
+export function grindLabel(shot: Pick<StoredShot, 'metadata' | 'bean'>): string | null {
 	const setting = effectiveGrindSetting(shot);
 	return setting ? `Grind ${setting}` : null;
 }
@@ -686,7 +734,7 @@ export function grindLabel(shot: StoredShot): string | null {
  * Android's `methodRatioLabel` calls. No dose means no ratio (`1:—`) for
  * every method: an 18 g espresso default would invent a number.
  */
-export function ratioLabel(record: StoredShot): string {
+export function ratioLabel(record: AnyShot): string {
 	const dose = record.metadata.dose;
 	const water = record.metadata.waterG;
 	const r = wasmRatioForMethod(
@@ -700,7 +748,7 @@ export function ratioLabel(record: StoredShot): string {
 
 
 /** A timestamped `.shot.json` filename for a v2-JSON-exported shot. */
-export function shotFilename(record: StoredShot): string {
+export function shotFilename(record: Pick<StoredShot, 'completedAt'>): string {
 	const d = new Date(record.completedAt);
 	const seconds = String(d.getSeconds()).padStart(2, '0');
 	return `${filenameStamp(d)}${seconds}.shot.json`;

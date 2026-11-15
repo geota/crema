@@ -152,7 +152,8 @@ class RefusedStoreVmTest {
 
         gate.complete(Unit)
         VmHarness.idleUntil("the reload") { retry.isCompleted }
-        VmHarness.idleUntil("the save") { made.id in shots.readText() }
+        // A save renames the file to .bak and the .tmp over it: absent for a moment.
+        VmHarness.idleUntil("the save") { made.id in runCatching { shots.readText() }.getOrDefault("") }
         assertEquals(setOf("shot-1", "shot-2", "shot-3", made.id), vm.ui.value.history.map { it.id }.toSet())
     }
 
@@ -213,7 +214,8 @@ class RefusedStoreVmTest {
         VmHarness.idleUntil("the reload") { retry.isCompleted }
         val id = assertNotNull(made)
         assertEquals(setOf("shot-1", id), vm.ui.value.history.map { it.id }.toSet())
-        VmHarness.idleUntil("the save") { id in shots.readText() }
+        // A save renames the file to .bak and the .tmp over it: absent for a moment.
+        VmHarness.idleUntil("the save") { id in runCatching { shots.readText() }.getOrDefault("") }
     }
 
     @Test
@@ -248,23 +250,29 @@ class RefusedStoreVmTest {
 
     @Test
     fun seriesReadersWaitForTheReloadedSeries() {
-        SafeFile.openAllForTest()
-        val curved = StoredShot(
-            id = "s1", completedAtMs = 1_700_000_000_000L, durationMs = 30_000, profileName = "P",
-            samples = List(5) { n -> TelemetrySample(elapsedMs = n * 222L, pressure = 7.25f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null, dispensedVolume = 0f, resistance = null, resistanceWeight = null, setHeadTemp = 93f, setGroupPressure = 9f, setGroupFlow = 0f, frameNumber = 1) },
-        )
-        runBlocking { HistoryStore(VmHarness.app(), coreJson).save(listOf(curved)) }
-        shots.setReadable(false)
-        val vm = vm()
-        shots.setReadable(true)
-        val gate = CompletableDeferred<Unit>()
-        HistoryStore.holdSeriesLoad = gate
-        val retry = vm.retryStore(vm.ui.value.refusedStores.single())
-        VmHarness.idleUntil("the rows") { retry.isCompleted }
-
-        assertEquals(null, vm.shotsJson(null), "the series reload is still held")
-        gate.complete(Unit)
-        VmHarness.idleUntil("the series") { vm.ui.value.history.single().samples.isNotEmpty() }
+        // On the legacy backend (shots.json, with the cap), which runs when the move to shots.db fails (#310 P3a).
+        HistoryStore.legacyOnlyForTest = true
+        try {
+            SafeFile.openAllForTest()
+            val curved = StoredShot(
+                id = "s1", completedAtMs = 1_700_000_000_000L, durationMs = 30_000, profileName = "P",
+                samples = List(5) { n -> TelemetrySample(elapsedMs = n * 222L, pressure = 7.25f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null, dispensedVolume = 0f, resistance = null, resistanceWeight = null, setHeadTemp = 93f, setGroupPressure = 9f, setGroupFlow = 0f, frameNumber = 1) },
+            )
+            runBlocking { HistoryStore(VmHarness.app(), coreJson).save(listOf(curved)) }
+            shots.setReadable(false)
+            val vm = vm()
+            shots.setReadable(true)
+            val gate = CompletableDeferred<Unit>()
+            HistoryStore.holdSeriesLoad = gate
+            val retry = vm.retryStore(vm.ui.value.refusedStores.single())
+            VmHarness.idleUntil("the rows") { retry.isCompleted }
+    
+            assertEquals(null, vm.shotsJson(null), "the series reload is still held")
+            gate.complete(Unit)
+            VmHarness.idleUntil("the series") { vm.ui.value.history.single().samples.isNotEmpty() }
+        } finally {
+            HistoryStore.legacyOnlyForTest = false
+        }
     }
 
     @Test
@@ -308,7 +316,8 @@ class RefusedStoreVmTest {
 
         vm.retryStore(vm.ui.value.refusedStores.single())
         VmHarness.idleUntil("the reload") { vm.ui.value.history.size == 2 }
-        VmHarness.idleUntil("the save") { made.id in shots.readText() }
+        // A save renames the file to .bak and the .tmp over it: absent for a moment.
+        VmHarness.idleUntil("the save") { made.id in runCatching { shots.readText() }.getOrDefault("") }
         assertEquals(setOf("shot-1", made.id), vm.ui.value.history.map { it.id }.toSet())
     }
 

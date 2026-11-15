@@ -108,6 +108,7 @@ class VisualizerRetryQueueTest {
         seriesReady: suspend () -> Unit = {},
         waits: MutableList<Long>? = null,
         shotsLoaded: () -> Boolean = { true },
+        historyRefused: () -> Boolean = { false },
     ) = VisualizerSync(
         store = store,
         client = client,
@@ -128,6 +129,7 @@ class VisualizerRetryQueueTest {
         retryTimers = waits != null,
         seriesReady = seriesReady,
         shotsLoaded = shotsLoaded,
+        historyRefused = historyRefused,
         retryDelay = { ms -> waits?.add(ms); awaitCancellation() },
     ).also { s ->
         runBlocking {
@@ -207,6 +209,26 @@ class VisualizerRetryQueueTest {
         assertEquals(1, runBlocking { s.drainRetryQueue() })
         assertEquals("v-9", synced["s1"])
         assertTrue(queue().isEmpty())
+    }
+
+    @Test
+    fun `a history that came up refused keeps the queue and the pending edits`() {
+        lastReply = HttpStatusCode.ServiceUnavailable to "{}"
+        val s = sync()
+        s.uploadShot(shot("s1"), silent = true)
+        settle()
+        val entry = queue().single()
+        // The next launch: the store came up lost or unavailable, so no row reads back.
+        history.clear()
+        runBlocking {
+            val held = store.load()
+            store.save(held.copy(pendingEdits = mapOf("e1" to PendingEdit(annotations = true)), prefs = held.prefs.copy(shotsDirection = "two-way")))
+        }
+        val blocked = sync(keepStore = true, historyRefused = { true })
+        clock = entry.nextAttemptAt
+        assertEquals(0, runBlocking { blocked.drainRetryQueue() })
+        assertEquals(listOf("s1"), queue().map { it.shotId })
+        assertEquals(setOf("e1"), runBlocking { store.load() }.pendingEdits.keys)
     }
 
     @Test

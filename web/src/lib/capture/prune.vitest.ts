@@ -6,7 +6,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import type { StoredShot } from '#lib/history/model.js';
 import { clearAllSeries } from '#lib/history/series-store.js';
-import { HistoryStore } from '#lib/history/store.svelte.js';
+import { setHistoryStoreDefaultsForTest, HistoryStore } from '#lib/history/store.svelte.js';
+
+// The legacy backend: the old copy and its series database, as before #310 P3w.
+setHistoryStoreDefaultsForTest({ backend: 'legacy' });
 import { getCaptureStore } from './store.ts';
 import { CAPTURE_KEEP_KEY, readCaptureKeep } from './limit.ts';
 import { capturesOverLimit, pruneCaptures } from './prune.ts';

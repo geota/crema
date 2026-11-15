@@ -1,12 +1,12 @@
 /**
  * `#lib/history/search` — the History list's text search and the
  * "same coffee" grouping behind its bean filter. Pure over a
- * {@link StoredShot}; mirrored by Android's `ShotFilter.kt` so both shells
+ * {@link AnyShot}; mirrored by Android's `ShotFilter.kt` so both shells
  * match the same shots.
  */
 
 import { methodLabel } from '#lib/brew/methods.js';
-import { methodOf, type StoredShot } from './model';
+import { methodOf, type AnyShot } from './model';
 
 /**
  * True when the shot's text fields contain `query` (case-insensitive). The
@@ -16,7 +16,7 @@ import { methodOf, type StoredShot } from './model';
  * caller, which resolves them through the live bean. An empty query
  * matches everything.
  */
-export function shotMatchesQuery(shot: StoredShot, query: string): boolean {
+export function shotMatchesQuery(shot: AnyShot, query: string): boolean {
 	const q = query.trim().toLowerCase();
 	if (q === '') return true;
 	const fields = [
@@ -65,7 +65,7 @@ export interface ShotCoffee {
  * was merged into); otherwise the shot's frozen snapshot answers.
  */
 export function shotCoffee(
-	shot: StoredShot,
+	shot: AnyShot,
 	live: (beanId: string) => { name: string; roaster: string | null } | null
 ): ShotCoffee | null {
 	const bean = shot.bean;
@@ -82,7 +82,7 @@ export function shotCoffee(
  * case-insensitively (the newest spelling wins). Feeds the shot editor's
  * barista / drinker suggestions.
  */
-export function recentNames(shots: readonly StoredShot[], field: 'barista' | 'drinker'): string[] {
+export function recentNames(shots: readonly AnyShot[], field: 'barista' | 'drinker'): string[] {
 	const seen = new Set<string>();
 	const out: string[] = [];
 	const newestFirst = [...shots].sort((a, b) => b.completedAt - a.completedAt);

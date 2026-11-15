@@ -63,7 +63,8 @@ class SeriesDeletesVmTest {
 
     private fun stored(vararg rows: StoredShot) = runBlocking { HistoryStore(app, coreJson).save(rows.toList()) }
 
-    private fun series(id: String) = File(seriesDir, HistoryStore.seriesFileName(id))
+    /** A shot's series as this build writes it: `.series.gz`, on either backend (#310 P3a). */
+    private fun series(id: String) = File(seriesDir, HistoryStore.seriesFileName(id).removeSuffix(".json") + ".series.gz")
 
     private fun log(vm: MainViewModel) {
         vm.openLogBrew(BrewLogOwner.HISTORY)
@@ -79,6 +80,15 @@ class SeriesDeletesVmTest {
      * #383): a read that misses while a file is due tries again.
      */
     private fun rowsOnDisk(): String {
+        val db = app.getDatabasePath(HistoryStore.NEXT_DB_NAME)
+        if (!HistoryStore.legacyOnlyForTest && db.exists()) {
+            val conn = android.database.sqlite.SQLiteDatabase.openDatabase(db.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY)
+            try {
+                return conn.rawQuery("SELECT row_json FROM shots", null).use { c -> buildString { while (c.moveToNext()) append(c.getString(0)) } }
+            } finally {
+                conn.close()
+            }
+        }
         repeat(100) {
             try {
                 return rowsFile.readText()
@@ -99,8 +109,18 @@ class SeriesDeletesVmTest {
         assertTrue(series("stays").exists())
     }
 
+    /** #325, on the legacy backend (shots.json), which runs when the move to shots.db fails. */
     @Test
     fun `corrupt rows keep every series through two launches of saves`() {
+        HistoryStore.legacyOnlyForTest = true
+        try {
+            corruptRowsKeepEverySeries()
+        } finally {
+            HistoryStore.legacyOnlyForTest = false
+        }
+    }
+
+    private fun corruptRowsKeepEverySeries() {
         stored(shot("a"), shot("b"))
         rowsFile.writeText("{ not json")
         SafeFile.backupOf(rowsFile).delete()

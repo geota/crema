@@ -25,7 +25,14 @@ class NextShots(val next: List<StoredShot>, val series: List<StoredShot>)
  * deleted here that the plan revives comes back as the backup's row. A row
  * this device made meanwhile with a backup row's id is kept, once.
  */
-fun nextShots(local: List<StoredShot>, backup: List<StoredShot>, plan: ShotPlan, replace: Boolean = false): NextShots {
+fun nextShots(
+    local: List<StoredShot>,
+    backup: List<StoredShot>,
+    plan: ShotPlan,
+    replace: Boolean = false,
+    /** Whether a local row has its curve: a row past the view's cap is light, its curve on disk (#310 P3a). */
+    hasCurve: (StoredShot) -> Boolean = { it.samples.isNotEmpty() },
+): NextShots {
     val theirs = LinkedHashMap<String, StoredShot>()
     for (s in backup) theirs.putIfAbsent(s.id, s)
     val remove = plan.remove.toHashSet()
@@ -44,7 +51,7 @@ fun nextShots(local: List<StoredShot>, backup: List<StoredShot>, plan: ShotPlan,
             // The backup's row; with no curve of its own it keeps the one here, the
             // same shot's curve, so memory matches what a reload shows.
             s.id in replaced -> (if (b.samples.isEmpty() && s.samples.isNotEmpty()) b.copy(samples = s.samples) else b).also { series += it }
-            s.id in fill && s.samples.isEmpty() && b.samples.isNotEmpty() ->
+            s.id in fill && !hasCurve(s) && b.samples.isNotEmpty() ->
                 // The backfill rule: the curve only, never over a curve here.
                 s.copy(samples = b.samples, durationMs = if (s.durationMs > 0) s.durationMs else b.durationMs).also { series += it }
             else -> s

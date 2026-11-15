@@ -21,10 +21,12 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
- * F10 validation: the per-shot series store never loses a shot's telemetry.
- * A failed series write keeps the samples inline (P1-1); two ids never share
- * a file, and a file under the old name is read and moved over; a corrupt file
- * is kept aside and reported, not read as "no curve" (P3).
+ * F10 validation, on `shots.db` since #310 P3a: the per-shot series store
+ * never loses a shot's telemetry. A failed series write keeps the curve in
+ * memory and the next save writes it; two ids never share a file; a file a
+ * build before P3a wrote is read and never written or deleted; a corrupt file
+ * is kept aside and reported, not read as "no curve". A save never deletes a
+ * series: only [HistoryStore.delete] does, and only the `.series.gz` it wrote.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -56,24 +58,29 @@ class ShotSeriesStoreTest {
         File(app.filesDir, "shot-series").takeIf { it.isFile }?.delete()
     }
 
-    /** The rows as written to the history file, with their inline samples. */
-    private fun rowsOnDisk() = coreJson.decodeFromString(ListSerializer(StoredShot.serializer()), historyFile.readText())
+    private fun gz(id: String) = File(seriesDir, HistoryStore.seriesFileName(id).removeSuffix(".json") + ".series.gz")
+    private fun json(id: String) = File(seriesDir, HistoryStore.seriesFileName(id))
+    private fun writeJsonSeries(f: File, n: Int) {
+        seriesDir.mkdirs()
+        f.writeText(coreJson.encodeToString(ListSerializer(TelemetrySample.serializer()), shot("x", n).samples))
+    }
 
     @Test
-    fun `a failed series write keeps the samples inline until a later save writes them`() = runBlocking {
+    fun `a failed series write keeps the curve in memory until a later save writes it`() = runBlocking {
         // A plain file where the series directory goes: every series write fails.
         seriesDir.deleteRecursively()
         seriesDir.writeText("not a directory")
-        store().save(listOf(shot("s1", 5)))
-        assertEquals(5, rowsOnDisk().single().samples.size, "kept inline")
-        assertEquals(5, store().load().single().samples.size, "loads back whole")
-
-        // The directory is back: the next save moves the series out.
-        seriesDir.delete()
         val s = store()
-        val loaded = s.load()
-        s.save(loaded)
-        assertTrue(rowsOnDisk().single().samples.isEmpty(), "the row goes without its samples once the file is written")
+        val row = shot("s1", 5)
+        s.save(listOf(row))
+        assertEquals(setOf("s1"), s.unsavedCurves, "the shot is reported as not fully saved")
+        assertEquals(1, store().loadRows().size, "the row landed without it")
+
+        // The directory is back: the next save writes the series it still holds.
+        seriesDir.delete()
+        s.save(listOf(row))
+        assertTrue(s.unsavedCurves.isEmpty())
+        assertTrue(gz("s1").exists())
         assertEquals(5, store().load().single().samples.size)
     }
 
@@ -82,161 +89,86 @@ class ShotSeriesStoreTest {
         assertNotEquals(HistoryStore.seriesFileName("shot:1"), HistoryStore.seriesFileName("shot_1"))
         assertEquals("0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.json", HistoryStore.seriesFileName("0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"))
         store().save(listOf(shot("shot:1", 3, pressure = 1f), shot("shot_1", 4, pressure = 2f)))
+        assertNotEquals(gz("shot:1").name, gz("shot_1").name)
         val back = store().load().associateBy { it.id }
         assertEquals(listOf(1f, 1f, 1f), back.getValue("shot:1").samples.map { it.pressure })
         assertEquals(listOf(2f, 2f, 2f, 2f), back.getValue("shot_1").samples.map { it.pressure })
     }
 
     @Test
-    fun `a series under the old name is read, kept until rewritten, then moved over`() = runBlocking {
-        // As the previous release left it: the row without samples, the series
-        // under the `_`-replaced name.
+    fun `a series a build before P3a wrote is read in place and never written or deleted`() = runBlocking {
+        // As the previous releases left them: the F10 name, and the one before.
         val legacy = File(seriesDir, "shot_7.json")
-        seriesDir.mkdirs()
-        legacy.writeText(coreJson.encodeToString(ListSerializer(TelemetrySample.serializer()), shot("x", 6).samples))
-        store().save(listOf(shot("shot:7", 0)))
-        assertTrue(legacy.exists(), "a save before the series load keeps the old file")
+        writeJsonSeries(legacy, 6)
+        writeJsonSeries(json("s2"), 4)
+        val before = legacy.readBytes() to json("s2").readBytes()
+        store().save(listOf(shot("shot:7", 0), shot("s2", 0)))
 
         val s = store()
         val loaded = s.load()
-        assertEquals(6, loaded.single().samples.size)
+        assertEquals(6, loaded.first { it.id == "shot:7" }.samples.size)
+        assertEquals(4, loaded.first { it.id == "s2" }.samples.size)
         s.save(loaded)
-        assertFalse(legacy.exists(), "the old file goes once the new one is written")
-        assertTrue(File(seriesDir, HistoryStore.seriesFileName("shot:7")).exists())
-        assertEquals(6, store().load().single().samples.size)
+        s.delete(listOf("shot:7", "s2"))
+        assertTrue(legacy.exists() && json("s2").exists(), "the old copy's files stay, even for a deleted shot")
+        assertTrue(before.first.contentEquals(legacy.readBytes()) && before.second.contentEquals(json("s2").readBytes()), "unchanged")
+        assertFalse(gz("shot:7").exists(), "nothing was written over them")
     }
 
     @Test
     fun `a corrupt series file is kept aside and reported, not read as no curve`() = runBlocking {
-        store().save(listOf(shot("s1", 4)))
-        val f = File(seriesDir, HistoryStore.seriesFileName("s1"))
-        f.writeText("{ not json")
+        writeJsonSeries(json("s1"), 4)
+        store().save(listOf(shot("s1", 0)))
+        json("s1").writeText("{ not json")
         val s = store()
         assertTrue(s.load().single().samples.isEmpty())
         assertEquals(setOf("s1"), s.unreadableSeries)
-        assertTrue(seriesDir.listFiles()!!.any { it.name.startsWith(f.name + ".corrupt-") }, "kept aside")
+        assertTrue(seriesDir.listFiles()!!.any { it.name.startsWith(json("s1").name + ".corrupt-") }, "kept aside")
         assertEquals(listOf("shot telemetry"), KeptAsideNotices.drain().map { it.what })
     }
 
-    private fun seriesExists(id: String) = File(seriesDir, HistoryStore.seriesFileName(id)).exists()
-
-    /** What a launch does: the rows, then those rows in state, then [markLive]. */
-    private suspend fun launch(): Pair<HistoryStore, List<StoredShot>> {
+    @Test
+    fun `a corrupt gz series is kept aside too`() = runBlocking {
+        store().save(listOf(shot("s1", 4)))
+        gz("s1").writeBytes(byteArrayOf(1, 2, 3))
         val s = store()
-        val rows = s.loadRows()
-        s.markLive(rows.map { it.id })
-        return s to rows
-    }
-
-    /** The rows file and its copies, damaged the way #325 found them. */
-    private fun corruptRows() {
-        historyFile.writeText("{ not json")
-        SafeFile.backupOf(historyFile).delete()
-    }
-
-    /** #325's own scenario: the issue's "skip pruning after a corrupt read"
-     *  holds for one launch, and the next one loads a clean file of one row. */
-    @Test
-    fun `corrupt rows keep every series through a save and one clean-looking launch later`() = runBlocking {
-        store().save(listOf(shot("a", 3), shot("b", 3), shot("c", 3)))
-        corruptRows()
-
-        val (first, rows) = launch()
-        assertTrue(rows.isEmpty(), "the corrupt file loads as nothing")
-        first.save(listOf(shot("new", 3)))
-
-        val (second, clean) = launch()
-        assertEquals(listOf("new"), clean.map { it.id }, "a clean load, with no sign of the damage")
-        second.save(clean + shot("newer", 3))
-
-        for (id in listOf("a", "b", "c", "new", "newer")) assertTrue(seriesExists(id), "$id's curve is still there")
-        assertTrue(SafeFile.keptAside(historyFile).isNotEmpty(), "the damaged rows are kept aside")
-    }
-
-    /** The cost of that: a row that comes back finds its curve by id. */
-    @Test
-    fun `a row back from a corrupt load finds its curve`() = runBlocking {
-        store().save(listOf(shot("a", 3)))
-        corruptRows()
-        val (s, _) = launch()
-        s.save(listOf(shot("a", 0)))
-        assertEquals(3, store().load().single().samples.size)
+        assertTrue(s.load().single().samples.isEmpty())
+        assertEquals(setOf("s1"), s.unreadableSeries)
+        assertTrue(seriesDir.listFiles()!!.any { it.name.startsWith(gz("s1").name + ".corrupt-") }, "kept aside, not deleted")
     }
 
     @Test
-    fun `a row that left the history loses its series only then`() = runBlocking {
-        val (s, _) = launch()
-        s.save(listOf(shot("a", 3), shot("b", 3)))
-        s.save(listOf(shot("a", 3)))
-        assertFalse(seriesExists("b"))
-        assertTrue(seriesExists("a"))
-    }
-
-    @Test
-    fun `a removed row's pre-rename file goes too`() = runBlocking {
-        val legacy = File(seriesDir, "shot_7.json")
-        seriesDir.mkdirs()
-        legacy.writeText(coreJson.encodeToString(ListSerializer(TelemetrySample.serializer()), shot("x", 6).samples))
-        store().save(listOf(shot("shot:7", 0), shot("other", 0)))
-        val (s, rows) = launch()
-        s.save(rows.filter { it.id != "shot:7" })
-        assertFalse(legacy.exists())
-    }
-
-    /** Guard: delete only after a successful rows write, and [HistoryStore.known]
-     *  moves only then. */
-    @Test
-    fun `a failed rows save deletes nothing, and the next save does`() = runBlocking {
-        val (s, _) = launch()
-        s.save(listOf(shot("a", 3), shot("b", 3)))
-        SafeFile.beforeRename = { if (it.name.startsWith("shots.json")) error("disk full") }
-        s.save(listOf(shot("a", 3)))
-        assertTrue(seriesExists("b"), "the old rows are still on disk, and so is their series")
-        SafeFile.beforeRename = {}
-        s.save(listOf(shot("a", 3)))
-        assertFalse(seriesExists("b"), "still owed once a save lands")
-    }
-
-    /** Guard: `gone` clears `written`, or the file would be skipped as written. */
-    @Test
-    fun `a stale snapshot naming a removed row writes its series again`() = runBlocking {
-        val (s, _) = launch()
-        s.save(listOf(shot("a", 3), shot("b", 3)))
-        s.save(listOf(shot("a", 3)))
-        s.save(listOf(shot("a", 3), shot("b", 3)))
-        assertTrue(seriesExists("b"))
-        assertEquals(3, store().load().first { it.id == "b" }.samples.size)
-    }
-
-    /** Guard: [HistoryStore.markLive], not [HistoryStore.loadRows], sets `known`.
-     *  A save in the window has a snapshot from before the rows reached state. */
-    @Test
-    fun `a save between the load and markLive deletes nothing`() = runBlocking {
-        store().save(listOf(shot("a", 3), shot("b", 3)))
+    fun `a save never deletes a series, whatever the list leaves out`() = runBlocking {
         val s = store()
-        val rows = s.loadRows()
+        s.save(listOf(shot("a", 3), shot("b", 3)))
+        s.save(listOf(shot("a", 3)))
         s.save(emptyList())
-        assertTrue(seriesExists("a") && seriesExists("b"))
-        // State then holds the rows; markLive puts them back in play.
-        s.markLive(rows.map { it.id })
-        s.save(listOf(shot("a", 0)))
-        assertTrue(seriesExists("a"))
-        assertFalse(seriesExists("b"))
+        assertTrue(gz("a").exists() && gz("b").exists())
+        assertEquals(setOf("a", "b"), store().load().map { it.id }.toSet(), "and no row either")
     }
 
-    /** Guard: a restore's saves delete nothing and rebase `known`. */
     @Test
-    fun `saves during a restore delete nothing and rebase known`() = runBlocking {
-        val (s, _) = launch()
-        s.save(listOf(shot("old", 3), shot("kept", 3)))
-        s.pauseDeletes()
-        s.save(listOf(shot("kept", 3), shot("restored", 3)))
-        s.resumeDeletes()
-        assertTrue(seriesExists("old"), "a removed row's series waits for restore's own delete")
+    fun `delete takes the row and its gz series, by name`() = runBlocking {
+        val s = store()
+        s.save(listOf(shot("a", 3), shot("b", 3)))
+        s.delete(listOf("b"))
+        assertFalse(gz("b").exists())
+        assertTrue(gz("a").exists())
+        assertEquals(listOf("a"), store().load().map { it.id })
+    }
 
-        s.save(listOf(shot("kept", 3), shot("restored", 3)))
-        assertTrue(seriesExists("old"), "`old` left known at the rebase: no later save deletes it")
-        s.save(listOf(shot("kept", 3)))
-        assertFalse(seriesExists("restored"), "known moved to the restored rows")
+    /** #325's scenario, at the migration: a damaged `shots.json` is kept aside
+     *  and copies as nothing, and every series stays for a row that comes back. */
+    @Test
+    fun `corrupt rows at the migration keep every series, and a row back finds its curve`() = runBlocking {
+        for (id in listOf("a", "b", "c")) writeJsonSeries(json(id), 3)
+        historyFile.writeText("{ not json")
+        val s = store()
+        assertTrue(s.loadRows().isEmpty(), "the corrupt file copies as nothing")
+        s.save(listOf(shot("new", 3)))
+        for (id in listOf("a", "b", "c")) assertTrue(json(id).exists(), "$id's curve is still there")
+        assertTrue(SafeFile.keptAside(historyFile).isNotEmpty(), "the damaged rows are kept aside")
+        s.save(listOf(shot("a", 0)))
+        assertEquals(3, store().load().first { it.id == "a" }.samples.size)
     }
 }

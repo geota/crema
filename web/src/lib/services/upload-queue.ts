@@ -33,7 +33,7 @@
 import { Context, Effect, Layer, Ref, Schedule, Scope } from 'effect';
 import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
-import { ResponseDecodeError } from '../effect/errors.ts';
+import { NetworkError, ResponseDecodeError } from '../effect/errors.ts';
 import {
 	describeVisualizerError,
 	isRateLimited,
@@ -136,7 +136,13 @@ export const UploadQueueLive = Layer.effect(
 					if (entry.op === 'create') {
 						// Spends no attempt, and a row read before this has no curve.
 						yield* Effect.promise(() => getHistoryStore().seriesReady());
-						const shot = yield* Effect.sync(() => getHistoryStore().get(entry.id));
+						// Whole: a row past the view is held without its samples (#310).
+						// A read that fails is a retry, as a dropped connection is:
+						// the entry stays queued, and nothing goes without its curve.
+						const shot = yield* Effect.tryPromise({
+							try: () => getHistoryStore().loadShot(entry.id),
+							catch: (cause) => new NetworkError({ cause, url: `history:${entry.id}` })
+						});
 						// Deleted meanwhile: the row is a tombstone now, and uploading it
 						// would only make a remote copy to delete.
 						if (!shot || shot.deletedAt != null) return;
@@ -319,6 +325,9 @@ export const UploadQueueLive = Layer.effect(
 				if (!known && config.accountUnconfirmed) return DEFERRED;
 			}
 			if (uploadsHeld()) return DEFERRED;
+			// Not loaded is not empty: a queued upload whose row hasn't loaded
+			// would be dropped as deleted. Nothing moves until the rows are in.
+			if (!(yield* Effect.promise(() => getHistoryStore().readyWithin()))) return DEFERRED;
 			// A 429's cooldown: nothing goes before it ends. And a pull in another
 			// tab runs the drain between its pages, so this one waits.
 			if (coolingDown()) return DEFERRED;

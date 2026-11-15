@@ -111,12 +111,33 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Web shot history moves to its own database** — on its first start after
+  updating, the web app copies your shot history from browser storage into a
+  database of its own, checks every shot and curve against the original, and
+  only then uses it. The original stays where it was, untouched. Saves now
+  write only the shots that changed, so a full browser storage no longer drops
+  your oldest shots: History still shows the newest 300, and older ones are
+  kept on the device for a later update to show again. Backups include them.
+  If storage is full when a shot finishes, the shot is kept aside and a banner
+  says its curve isn't saved yet, with Download. If the database ever goes
+  missing, a banner lets you choose how to get your history back, and nothing
+  happens without your choice. Settings shows where the history is kept, and
+  whether the browser has promised not to clear Crema's data. Other open tabs
+  see each saved shot at once. Web only. (#310)
 - **Android restores read a backup a piece at a time** — a backup from a file
   or Google Drive is copied to the app's cache and read in small pieces, not
   loaded whole, so a large one restores without running out of memory: up to
   2 GB, where the limit was 200 MB. Every part of the zip is checked against
   its checksum, and a damaged or cut-off file is refused before anything
-  changes. A record over 16 MB counts as a damaged line. (#310)
+  changes. A record over 16 MB counts as a damaged line. As on the web, a zip
+  is read through its central directory, so a photo whose name is damaged in
+  one place is refused rather than put on another bean, and a zip with damaged
+  first bytes is refused as a damaged zip; a backup file that changes between
+  the check and the restore is refused before any write; and picking a second
+  backup while a restore's report is open no longer deletes the first one's
+  photos. A backup an older Android build saved over a larger file can end
+  with the old file's leftover bytes; it still restores, as the backup that
+  was saved, and only if that backup checks out whole. (#310, #396)
 - **Android backups are built a piece at a time** — the backup is written to a
   temporary file as it's built, rather than held in memory whole, so a large
   history backs up without running the app out of memory. Back up shows how

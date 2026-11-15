@@ -289,8 +289,9 @@ describe('the plan, written per store', () => {
 		const plan = await planNow(prepared, 'merge', false, new FakeLocks());
 		expect(plan.shots.fill).toEqual(['s1']);
 		await runRestore(prepared, 'merge', { expected: plan }, deps(new FakeLocks()));
-		const s1 = getHistoryStore().get('s1')!;
+		const s1 = (await getHistoryStore().loadShot('s1'))!;
 		expect(s1.record.samples).toHaveLength(1);
+		expect(getHistoryStore().get('s1')?.summary.sampleCount).toBe(1);
 		expect(s1.metadata.dose).toBe(20);
 	});
 
@@ -381,7 +382,7 @@ describe('the #363 review', () => {
 		);
 		const rows = history.all.filter((s) => s.id === 'shot:remote:9');
 		expect(rows).toHaveLength(1);
-		return { row: rows[0], written };
+		return { row: (await history.loadShot(rows[0].id))!, written };
 	}
 
 	it('a stub of a backup row landing in step 7, on Merge: the stub stays and its curve is filled', async () => {

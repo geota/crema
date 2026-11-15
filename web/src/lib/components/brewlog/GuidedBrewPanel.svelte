@@ -43,6 +43,9 @@
 	import BeanOverdrawNote from './BeanOverdrawNote.svelte';
 	import BrewBeanRow from './BrewBeanRow.svelte';
 	import LogBrewDialog from './LogBrewDialog.svelte';
+	import { getHistoryStore } from '#lib/history/index.js';
+
+	const historyLoaded = () => getHistoryStore().loaded;
 	import MethodMark from './MethodMark.svelte';
 	import RecipeCredit from './RecipeCredit.svelte';
 	import RecipeNotes from './RecipeNotes.svelte';
@@ -656,7 +659,8 @@
 	/>
 {/if}
 
-{#if logOpen && logPrefill}
+<!-- Opens once the rows load: its seeds read them (#310). -->
+{#if logOpen && logPrefill && historyLoaded()}
 	<LogBrewDialog
 		prefill={logPrefill}
 		onClose={() => (logOpen = false)}

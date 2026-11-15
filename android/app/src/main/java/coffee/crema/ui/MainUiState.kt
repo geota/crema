@@ -167,6 +167,17 @@ data class MainUiState(
     val keptAsideNotice: String? = null,
     /** The stores whose saves are being refused: the banner stays up for these. */
     val refusedStores: List<coffee.crema.persist.RefusedStore> = emptyList(),
+    /** The shot history's rows have landed (#310 P3a `ui.historyLoaded`): until
+     *  then History shows a skeleton, never the empty state. */
+    val historyLoaded: Boolean = false,
+    /** How the history's store is: a banner for lost or unavailable. */
+    val historyHealth: coffee.crema.history.HistoryHealth = coffee.crema.history.HistoryHealth.LOADING,
+    /** A lost store's choices: snapshot and old copy, with their dates and counts. */
+    val historyLost: coffee.crema.history.LostChoices? = null,
+    /** Why the history's store wouldn't open, or its migration failed (Settings). */
+    val historyError: String? = null,
+    /** Shots whose row or curve couldn't be saved: a lasting banner while any remain. */
+    val historyUnsaved: Set<String> = emptySet(),
     /**
      * Built-in profiles from the core (`builtinCremaProfiles()`), loaded once at
      * startup. The Brew header picker chooses from these until the profile

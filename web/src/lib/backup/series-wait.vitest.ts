@@ -43,7 +43,8 @@ describe('buildBackupJsonl', () => {
 		vi.spyOn(getHistoryStore(), 'seriesReady').mockImplementation(
 			() => new Promise((resolve) => (land = resolve))
 		);
-		const all = vi.spyOn(getHistoryStore(), 'all', 'get');
+		// Every live row, past the view too (#310 P3w).
+		const all = vi.spyOn(getHistoryStore(), 'allLive', 'get');
 
 		const building = buildBackupJsonl('test');
 		await Promise.resolve();

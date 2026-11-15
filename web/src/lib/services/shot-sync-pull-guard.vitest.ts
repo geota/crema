@@ -208,6 +208,7 @@ describe('a row another tab just wrote (#380 review S1)', () => {
 			)
 		);
 		expect(applied.held).toBe(1);
-		expect(history.get('shot:a')?.record.samples).toEqual([]);
+		expect(history.get('shot:a')?.summary.sampleCount).toBe(0);
+		expect((await history.loadShot('shot:a'))?.record.samples).toEqual([]);
 	});
 });

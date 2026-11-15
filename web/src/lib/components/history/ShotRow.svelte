@@ -4,23 +4,22 @@
 	 * `history-page.jsx`. Time, a tiny sparkline of the stored curve, the
 	 * profile name, the ratio + yield metrics and a star rating.
 	 */
-	import type { StoredShot } from '#lib/history/index.js';
+	import type { ShotRow } from '#lib/history/index.js';
 	import {
 		grindLabel,
+		hasTelemetry,
 		isBrewLog,
 		isManualLog,
 		methodOf,
 		ratioLabel,
 		peaksOf,
-		yieldOf,
-		flatSamplesOf
+		yieldOf
 	} from '#lib/history/index.js';
 	import { shotTitle } from '#lib/brew/methods.js';
 	import StarRating from '#lib/components/common/StarRating.svelte';
 	import MethodMark from '#lib/components/brewlog/MethodMark.svelte';
 	import { getSettingsStore, convertWeight } from '#lib/settings/index.js';
-	import MiniShotChart from './MiniShotChart.svelte';
-	import MiniBrewChart from './MiniBrewChart.svelte';
+	import SparkChart from './SparkChart.svelte';
 	import Icon from '#lib/icons/Icon.svelte';
 	import { relativeAgo } from '#lib/utils/relative-time.js';
 
@@ -34,8 +33,8 @@
 		syncTitle,
 		onclick
 	}: {
-		/** The stored shot this row renders. */
-		shot: StoredShot;
+		/** The history row this renders: its summary, no samples. */
+		shot: ShotRow;
 		/** Whether this row is the selected-detail one. */
 		active?: boolean;
 		/**
@@ -83,9 +82,8 @@
 	 */
 	/** Row method — `null` for machine espresso (issue #10). */
 	const method = $derived(methodOf(shot));
-	const hasCurve = $derived(
-		shot.record.samples.length > 0 || (shot.brewSeries?.samples.length ?? 0) > 0
-	);
+	/** A curve to draw, from the row's stored spark (#310 P4w). */
+	const hasCurve = $derived(hasTelemetry(shot) && shot.summary.spark != null);
 	/** Manually logged (no telemetry of any kind) → "logged" tag. */
 	const manual = $derived(isManualLog(shot));
 
@@ -120,16 +118,13 @@
 	/** A relative "ago" label for the shot — shared compact vocabulary (issue 43). */
 	const ago = $derived(relativeAgo(shot.completedAt));
 
-	/** Peaks derived once from the shot's wire-shape record. */
+	/** The row's stored peaks, from its summary. */
 	const peaks = $derived(peaksOf(shot));
 	/** Settled yield weight, grams (recorded `yieldOut`, else peak), for the metric. */
 	const yieldOut = $derived(yieldOf(shot, peaks));
 	/** The yield weight in the chosen weight unit (D1). */
 	const settings = getSettingsStore();
 	const yieldM = $derived(convertWeight(yieldOut, settings.current.weightUnit));
-
-	/** Sparkline samples — flat shape derived from the wire record. */
-	const sparkSeries = $derived(flatSamplesOf(shot));
 
 	/** Star rating (0..5); coerce undefined/null to 0 (unrated). */
 	const rating = $derived(shot.metadata.rating ?? 0);
@@ -168,10 +163,8 @@
 		<div class="hi-row-time-d">{ago}</div>
 	</div>
 	<div class="hi-row-spark">
-		{#if shot.record.samples.length > 0}
-			<MiniShotChart series={sparkSeries} width={96} height={32} />
-		{:else if shot.brewSeries && shot.brewSeries.samples.length > 0}
-			<MiniBrewChart series={shot.brewSeries} width={96} height={32} />
+		{#if hasCurve}
+			<SparkChart spark={shot.summary.spark} width={96} height={32} />
 		{:else}
 			<MethodMark {method} size={16} />
 		{/if}
@@ -234,7 +227,7 @@
 <style>
 	.hi-row {
 		display: grid;
-		/* Slot 2 (96 px) holds the MiniShotChart — the recorded shot's
+		/* Slot 2 (96 px) holds the SparkChart — the recorded shot's
 		   pressure / flow / weight silhouette, the row's at-a-glance hook. */
 		grid-template-columns: 60px 96px 1fr auto auto auto 8px;
 		gap: 12px;

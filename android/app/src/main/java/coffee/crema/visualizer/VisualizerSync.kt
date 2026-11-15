@@ -162,6 +162,11 @@ class VisualizerSync(
     private val rowsWaitMs: Long = ROWS_WAIT_MS,
     /** Every shot as history holds it now: the backlog a different account is asked about. */
     private val allShots: () -> List<StoredShot> = { emptyList() },
+    /** The rows in view: an upload pass's backlog. A row past the view's cap is light until
+     *  P4a's `loadShot`, so it would go without its curve (#310 P3a). */
+    private val viewShots: () -> List<StoredShot> = allShots,
+    /** Whether a local row has its curve: one past the view's cap holds it on disk, not in memory (#310 P3a). */
+    private val hasSeries: (StoredShot) -> Boolean = { it.samples.isNotEmpty() },
     /** Revoke an access token at the server, best-effort (injected for JVM tests). */
     private val revoke: suspend (accessToken: String) -> Unit = { revokeToken(clientId, it) },
 ) : UploadDestination {
@@ -538,7 +543,7 @@ class VisualizerSync(
             // counted next needs them.
             scope.launch {
                 // Rows that never loaded say nothing about the backlog: the ask stands.
-                if (rowsReady() && persisted.accountChangeAsk && unsent(allShots()).isEmpty()) {
+                if (rowsReady() && persisted.accountChangeAsk && unsent(viewShots()).isEmpty()) {
                     persist { it.copy(accountChangeAsk = false) }
                 }
                 onSignedIn()
@@ -589,7 +594,7 @@ class VisualizerSync(
             persist { it.copy(accountChangeAsk = false, uploadExcludedBefore = if (upload) null else now()) }
             if (upload) {
                 rowsReady()
-                uploadAllUnsynced(allShots())
+                uploadAllUnsynced(viewShots())
             }
         }
     }
@@ -1010,6 +1015,10 @@ class VisualizerSync(
         // history leaves the queue: not before the rows are there. A later
         // trigger tries again.
         if (!rowsReady()) return 0
+        // A history that came up refused, lost or unavailable shows no rows,
+        // and none of them is gone: the queue and the PATCH list wait for a
+        // later trigger (#408 S6).
+        if (historyRefused()) return 0
         if (!retryMutex.tryLock()) return 0
         var uploaded = 0
         var limited = false
@@ -1637,7 +1646,7 @@ class VisualizerSync(
                             buildJsonObject {
                                 put("remoteId", JsonPrimitive(row.id))
                                 (seen[row.id] ?: local?.visualizerUpdatedAt)?.let { put("remoteVersion", JsonPrimitive(it)) }
-                                put("hasSeries", JsonPrimitive(local == null || local.samples.isNotEmpty()))
+                                put("hasSeries", JsonPrimitive(local == null || hasSeries(local)))
                                 put("isBrew", JsonPrimitive(local?.isBrewLog == true))
                             },
                         )

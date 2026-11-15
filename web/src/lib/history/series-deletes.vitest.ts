@@ -11,7 +11,10 @@ import { getCaptureStore } from '#lib/capture/store.js';
 import { buildBackupJsonl, restoreBackup } from '#lib/backup/index.js';
 import type { StoredShot } from './model';
 import { clearAllSeries, getAllSeries, putSeries } from './series-store';
-import { getHistoryStore, HistoryStore } from './store.svelte';
+import { setHistoryStoreDefaultsForTest, getHistoryStore, HistoryStore } from './store.svelte';
+
+// The legacy backend: the old copy and its series database, as before #310 P3w.
+setHistoryStoreDefaultsForTest({ backend: 'legacy' });
 
 const HISTORY_KEY = 'crema.history.v2';
 
@@ -117,7 +120,7 @@ describe('a corrupt history (#325)', () => {
 		const store = await boot();
 		store.insertPulled(row('a', 1_700_000_000_000, []));
 		await settle();
-		expect((await boot()).get('a')?.record.samples).toEqual(samples);
+		expect((await (await boot()).loadShot('a'))?.record.samples).toEqual(samples);
 	});
 });
 

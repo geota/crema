@@ -38,7 +38,7 @@ import { Effect, Schedule } from 'effect';
 import { getHistoryStore } from '#lib/history/store.svelte.js';
 import { reportUploadOutcome } from '#lib/history/upload-toast.js';
 import { appendSyncLog } from '#lib/visualizer/sync-config.js';
-import { isBrewLog, refusedNoSamples, toCoreShotMachine, type StoredShot } from '#lib/history/model.js';
+import { isBrewLog, refusedNoSamples, toCoreShotMachine, type AnyShot, type StoredShot } from '#lib/history/model.js';
 import type { ShotMachine, TimedSample } from '#lib/core/crema-core.js';
 import { getMachineReadout } from '#lib/state/machine-readout.svelte.js';
 import {
@@ -52,6 +52,7 @@ import {
 } from './account';
 import {
 	DecentAuthError,
+	DecentNetworkError,
 	decentKnownSerial,
 	decentNotOnAccountMessage,
 	decentShotViewUrl,
@@ -124,7 +125,7 @@ export function liveSerialUnreadable(): boolean {
 }
 
 /** Pulled from Visualizer (`storedShotFromWire` mints `shot:remote:<id>`), not recorded here. */
-export function isPulledShot(shot: StoredShot): boolean {
+export function isPulledShot(shot: Pick<StoredShot, 'id'>): boolean {
 	return shot.id.startsWith('shot:remote:');
 }
 
@@ -228,8 +229,15 @@ async function runUpload(shotId: string, opts: DecentUploadOptions): Promise<Dec
 	// bound it, or the user deleted it), and after the stored series, or a
 	// machine shot goes out as a record with no measurements.
 	const history = getHistoryStore();
+	// Not loaded is not empty: a shot not found yet must stay to try again.
+	if (!(await history.readyWithin())) {
+		// Kept for the next retry, as a shot that met no connection is.
+		setDecentShotState(shotId, 'retry');
+		return { kind: 'failed', error: new DecentNetworkError({ status: null, detail: 'Shot history is still loading.' }) };
+	}
 	await history.seriesReady();
-	const shot = history.get(shotId);
+	// Whole, as a row past the view is held without its samples (#310).
+	const shot = await history.loadShot(shotId);
 	if (!shot || shot.deletedAt) return skipped('Shot not found');
 	// Brew Log rows (issue #10) are not DE1 shots: never uploaded, and never
 	// stamped with the live machine (which the bind below would do).
@@ -414,13 +422,13 @@ export interface DecentBacklogContext {
  * refused, shots pulled from Visualizer without a stamped machine, and
  * unstamped rows while no DE1 serial is known.
  */
-export function unsentDecentShots(
-	shots: readonly StoredShot[],
+export function unsentDecentShots<T extends AnyShot>(
+	shots: readonly T[],
 	ctx: DecentBacklogContext = {
 		hasLiveMachine: liveMachineIdentity() !== null,
 		rejectedShotIds: readDecentAccount().rejectedShotIds
 	}
-): StoredShot[] {
+): T[] {
 	const rejected = new Set(ctx.rejectedShotIds);
 	return shots.filter(
 		(s) =>
@@ -539,7 +547,11 @@ async function drain(
 export function uploadUnsentDecentShots(
 	opts: { fetchFn?: FetchLike; onProgress?: (done: number, total: number) => void } = {}
 ): Promise<DecentDrainResult> {
-	return withDrainLock(() => {
+	return withDrainLock(async () => {
+		// Sends nothing until the rows load: an empty list isn't an empty backlog.
+		if (!(await getHistoryStore().readyWithin())) {
+			return { uploaded: 0, failed: 0, skipped: 0, notOnAccount: [], stopped: null, lastError: null };
+		}
 		const backlog = unsentDecentShots(getHistoryStore().all).sort((a, b) => a.completedAt - b.completedAt);
 		return drain(
 			backlog.map((s) => s.id),
@@ -561,6 +573,8 @@ export async function retryPendingDecentUploads(
 	const account = readDecentAccount();
 	if (!isDecentLinked(account) || !account.autoUpload || account.needsReauth) return null;
 	if (account.retryShotIds.length === 0 || isOffline()) return null;
+	// A row not loaded yet would read as gone, and its retry would clear.
+	if (!(await getHistoryStore().readyWithin())) return null;
 	const ids = [...account.retryShotIds];
 	const result = await withDrainLock(() => drain(ids, { fetchFn: opts.fetchFn }));
 	// Anything the gates skipped (deleted, already uploaded, …) will never go — forget it.

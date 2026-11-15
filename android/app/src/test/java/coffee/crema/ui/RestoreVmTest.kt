@@ -136,21 +136,27 @@ class RestoreVmTest {
 
     @Test
     fun aReplaceStoppedBeforeTheEndLeavesTheRemovedCurveToItsMarker() {
-        SafeFile.openAllForTest()
-        val curve = listOf(TelemetrySample(elapsedMs = 0, pressure = 9f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null, dispensedVolume = 0f, resistance = null, resistanceWeight = null, setHeadTemp = 93f, setGroupPressure = 9f, setGroupFlow = 0f, frameNumber = 1))
-        runBlocking { HistoryStore(app, coffee.crema.ui.coreJson).save(listOf(shot("old", 1_700_000_100_000).copy(samples = curve))) }
-        val series = File(app.filesDir, "shot-series").listFiles().orEmpty().map { it.name }
-        assertTrue(series.isNotEmpty(), "old's curve is on disk")
-        val vm = vm()
-        vm.restoreEngine.failAt = coffee.crema.restore.RestoreStep.SETTINGS
-        val before = vm.ui.value.userMessages.size
-        vm.startRestore(fixture.readBytes(), "fixture", MainViewModel.RestoreMode.WIPE)
-        VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
-        vm.confirmRestore()
-        VmHarness.idleUntil("the stop") { vm.ui.value.userMessages.size > before }
-        assertTrue(vm.ui.value.userMessages.last().startsWith("Restore stopped"), vm.ui.value.userMessages.last())
-        assertTrue(VmHarness.ownState(vm).history.none { it.id == "old" }, "the rows were replaced")
-        assertEquals(series, File(app.filesDir, "shot-series").listFiles().orEmpty().map { it.name }.filter { it in series }, "no save deleted the removed row's curve")
+        // On the legacy backend (shots.json, with the cap), which runs when the move to shots.db fails (#310 P3a).
+        HistoryStore.legacyOnlyForTest = true
+        try {
+            SafeFile.openAllForTest()
+            val curve = listOf(TelemetrySample(elapsedMs = 0, pressure = 9f, flow = 2f, headTemp = 93f, mixTemp = 92f, weight = null, weightFlow = null, dispensedVolume = 0f, resistance = null, resistanceWeight = null, setHeadTemp = 93f, setGroupPressure = 9f, setGroupFlow = 0f, frameNumber = 1))
+            runBlocking { HistoryStore(app, coffee.crema.ui.coreJson).save(listOf(shot("old", 1_700_000_100_000).copy(samples = curve))) }
+            val series = File(app.filesDir, "shot-series").listFiles().orEmpty().map { it.name }
+            assertTrue(series.isNotEmpty(), "old's curve is on disk")
+            val vm = vm()
+            vm.restoreEngine.failAt = coffee.crema.restore.RestoreStep.SETTINGS
+            val before = vm.ui.value.userMessages.size
+            vm.startRestore(fixture.readBytes(), "fixture", MainViewModel.RestoreMode.WIPE)
+            VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
+            vm.confirmRestore()
+            VmHarness.idleUntil("the stop") { vm.ui.value.userMessages.size > before }
+            assertTrue(vm.ui.value.userMessages.last().startsWith("Restore stopped"), vm.ui.value.userMessages.last())
+            assertTrue(VmHarness.ownState(vm).history.none { it.id == "old" }, "the rows were replaced")
+            assertEquals(series, File(app.filesDir, "shot-series").listFiles().orEmpty().map { it.name }.filter { it in series }, "no save deleted the removed row's curve")
+        } finally {
+            HistoryStore.legacyOnlyForTest = false
+        }
     }
 
     @Test

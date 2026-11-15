@@ -3,9 +3,10 @@
  * Svelte 5 port of `ShotRow` / `ShotDetail` from the design's
  * `history-page.jsx`.
  *
- * They render a `StoredShot` from the real `lib/history` store; the curve
- * chart (`StaticShotChart`) reuses the live `LiveChart`'s SVG approach over a
- * stored telemetry series.
+ * The rows render a `ShotRow` from the real `lib/history` store, drawing
+ * their chart from its stored spark (`SparkChart`); the detail loads the whole
+ * shot, and its chart (`StaticShotChart`) reuses the live `LiveChart`'s SVG
+ * approach over the stored telemetry series.
  */
 
 export { default as ShotRow } from './ShotRow.svelte';

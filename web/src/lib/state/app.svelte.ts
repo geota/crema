@@ -15,6 +15,7 @@
  * the screen.
  */
 
+import { askStoragePersist } from '#lib/history/storage-persist.svelte.js';
 import { StopLane } from '#lib/ble/stop-lane.js';
 import { refreshStopTargetsProjection, setHotWaterTarget } from './ui-state.svelte';
 import {
@@ -649,7 +650,9 @@ export class CremaApp {
 		// Best-effort: ask the browser for persistent storage (so IndexedDB
 		// captures aren't evicted under disk pressure). Fire and forget — it
 		// isn't on the critical path of app readiness.
-		if (typeof navigator !== 'undefined') void navigator.storage?.persist?.().catch(() => {});
+		// The answer is kept and shown in Settings (#310): refused, the browser
+		// may drop the whole site, so the backup's age matters more.
+		void askStoragePersist();
 		// Wire the Visualizer upload-queue lifecycle (drain once on app start +
 		// every 5 min foreground tick). The `online` / `visibilitychange` DOM
 		// listeners are wired at the shell (`+layout.svelte`), which owns the
@@ -1948,6 +1951,10 @@ export class CremaApp {
 		dropped: number;
 		error: string | null;
 	}> {
+		// Not loaded is not empty: every row in the file would look new.
+		if (!(await getHistoryStore().readyWithin())) {
+			return { record: null, imported: 0, dropped: 0, error: 'Shot history is still loading. Try again in a moment.' };
+		}
 		let content: string;
 		try {
 			content = await readImportText(file);

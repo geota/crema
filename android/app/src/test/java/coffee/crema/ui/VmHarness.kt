@@ -169,7 +169,9 @@ internal object VmHarness {
     /** Idle the main looper until the VM's async prefs load has hydrated
      *  the UI, so a later setter isn't overwritten by it. */
     fun awaitPrefsLoaded(vm: MainViewModel) {
-        idleUntil("the prefs load") { prefsLoaded(vm) }
+        // The history loads apart from the prefs since #310 P3a; tests that read
+        // both after this wait for both, as they loaded in one chain before.
+        idleUntil("the prefs load") { prefsLoaded(vm) && vm.historyLoad.isCompleted }
     }
 
     /** Whether the VM's startup prefs load has hydrated the UI ([SettingsController.loaded]). */
@@ -185,7 +187,7 @@ internal object VmHarness {
      *  overwrite a profile a test saves in that window, and before the load's
      *  own push of the desired profile. */
     fun awaitStartupLoaded(vm: MainViewModel) {
-        idleUntil("the startup load") { vm.startupLoad.isCompleted && vm.ownStateLoads.all { it.isCompleted } }
+        idleUntil("the startup load") { vm.startupLoad.isCompleted && vm.historyLoad.isCompleted && vm.ownStateLoads.all { it.isCompleted } }
     }
 
     /** The VM's own state: what it persists (the screens see [MainViewModel.ui]). */

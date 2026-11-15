@@ -91,7 +91,14 @@ import { acquireRunLock } from '#lib/visualizer/run-lock.js';
 import { readPoison, writePoison } from '#lib/visualizer/poison.js';
 import { restoreFrozen, restoringInThisTab } from '#lib/restore/tab-safety.js';
 import { coolingDown } from '#lib/visualizer/pace.js';
-import { isBrewLog, refusedNoSamples, type ShotBean, type StoredShot } from '#lib/history/model.js';
+import {
+	isBrewLog,
+	refusedNoSamples,
+	sampleCountOf,
+	type AnyShot,
+	type ShotBean,
+	type StoredShot
+} from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import type { components } from '#lib/visualizer/openapi.js';
@@ -254,7 +261,7 @@ function samplesFromVisualizerDetail(detail: ShotDetail): TimedSample[] {
 }
 
 /** A shot's barista as the PATCH sends it: trimmed, `""` when unset or cleared. */
-function baristaOf(shot: StoredShot): string {
+function baristaOf(shot: AnyShot): string {
 	return shot.metadata.barista?.trim() ?? '';
 }
 
@@ -275,7 +282,7 @@ function baristaOf(shot: StoredShot): string {
  * `null` (omit the field so a blank doesn't clobber a Visualizer-side edit).
  */
 export function resolveGrinderModel(
-	shot: StoredShot,
+	shot: Pick<StoredShot, 'grinderModel'>,
 	settingsDefault: string | undefined | null
 ): string | null {
 	const fromShot = shot.grinderModel?.trim();
@@ -291,7 +298,7 @@ export function resolveGrinderModel(
  * stable mutable link, so we read it from the LIVE bean every time. This is THE
  * ONLY place the live bean is read on the upload path.
  */
-function resolveCoffeeBagId(shot: StoredShot): string | null {
+function resolveCoffeeBagId(shot: AnyShot): string | null {
 	const liveBeanId = shot.bean?.beanId ?? null;
 	if (!liveBeanId) return null;
 	try {
@@ -396,15 +403,20 @@ export function describeUnsyncedStop(
 
 // ── The pull's merge ────────────────────────────────────────────────────
 
-/** What the core's `merge_remote_shot` reads of a local row. */
-function mergeInputOf(shot: StoredShot, edit: PendingEdit | undefined): ShotMergeInput {
+/**
+ * What the core's `merge_remote_shot` reads of a local row. A row carries no
+ * profile (#310 P4w): `hasProfile` is what a load of it found, and without
+ * one the row counts as having a recipe, so a pull never offers to replace
+ * the shot's own. A count that's unknown (`null`) counts as a curve, too.
+ */
+function mergeInputOf(shot: AnyShot, edit: PendingEdit | undefined, hasProfile?: boolean): ShotMergeInput {
 	return {
 		tags: [...(shot.tags ?? [])],
 		tagsPending: hasTagMarks(edit?.tags),
 		barista: shot.metadata.barista?.trim() || undefined,
 		baristaPending: edit?.barista === true,
-		hasSeries: shot.record.samples.length > 0,
-		hasProfile: shot.profile != null,
+		hasSeries: (sampleCountOf(shot) ?? 1) > 0,
+		hasProfile: hasProfile ?? ('profile' in shot ? shot.profile != null : true),
 		isBrew: isBrewLog(shot)
 	};
 }
@@ -897,7 +909,8 @@ export const ShotSyncLive = Layer.effect(
 			samplesById?: ReadonlyMap<string, TimedSample[]>,
 			profilesById?: ReadonlyMap<string, unknown>,
 			before?: ReadonlyMap<string, ShotMergeInput>,
-			seriesLoaded = true
+			seriesLoaded = true,
+			profileHeld?: ReadonlyMap<string, boolean>
 		): Effect.Effect<ReconcileApplied> =>
 			Effect.sync(() => {
 				let refused = 0;
@@ -928,7 +941,7 @@ export const ShotSyncLive = Layer.effect(
 				const merge = (localId: string, wire: WireShot): void => {
 					const row = history.get(localId);
 					if (!row) return;
-					const input = mergeInputOf(row, edits.get(localId));
+					const input = mergeInputOf(row, edits.get(localId), profileHeld?.get(localId));
 					// Its curve may still be loading: a backfill now would take
 					// Visualizer's copy over the row's own. It waits, and holds.
 					if ((!seriesLoaded || history.seriesPending(localId)) && !input.hasSeries && !input.isBrew) {
@@ -1048,7 +1061,7 @@ export const ShotSyncLive = Layer.effect(
 					remoteId: shot.visualizerId,
 					remoteVersion: shot.visualizerUpdatedAt ?? undefined,
 					// Not loaded yet: fetched, then held until the curve is there.
-					hasSeries: seriesLoaded && shot.record.samples.length > 0,
+					hasSeries: seriesLoaded && (sampleCountOf(shot) ?? 1) > 0,
 					isBrew: isBrewLog(shot),
 					tombstoned: shot.deletedAt != null
 				});
@@ -1081,6 +1094,17 @@ export const ShotSyncLive = Layer.effect(
 		): Effect.Effect<RunReply<RowOutcome>> =>
 			Effect.gen(function* () {
 				const bound = history.rawAll.find((s) => s.visualizerId === row.id);
+				// The row holds no profile in memory (#310 P4w): whether the store
+				// holds one decides the recipe fetch and fill. Unknown (a read that
+				// failed) counts as held, so nothing replaces the shot's own.
+				const hasProfile = bound
+					? yield* Effect.promise(() =>
+							history.loadShot(bound.id).then(
+								(whole) => whole?.profile != null,
+								() => true
+							)
+						)
+					: false;
 				const before = bound
 					? new Map([[bound.id, mergeInputOf(bound, pendingEdit(bound.id))]])
 					: undefined;
@@ -1100,7 +1124,7 @@ export const ShotSyncLive = Layer.effect(
 				}
 				const offered = typeof (detail.value as { profile_url?: unknown }).profile_url === 'string';
 				let profile: unknown = null;
-				if (offered && (bound?.profile ?? null) == null) {
+				if (offered && !hasProfile) {
 					// A recipe that won't come leaves the row name-only.
 					const got = yield* runRequest(fetchShotProfile(row.id, true), onWaiting);
 					profile = got.ok ? got.value : null;
@@ -1111,7 +1135,8 @@ export const ShotSyncLive = Layer.effect(
 					new Map([[row.id, samples]]),
 					profile != null ? new Map([[row.id, profile]]) : undefined,
 					before,
-					seriesLoaded
+					seriesLoaded,
+					bound ? new Map([[bound.id, hasProfile]]) : undefined
 				);
 				const outcome: RowOutcome =
 					refused > 0
@@ -1143,6 +1168,8 @@ export const ShotSyncLive = Layer.effect(
 			yield* requireConnected;
 			// A restore, here or in another tab: its rows aren't settled yet.
 			if (restoring()) return { ...BUSY, outcome: { kind: 'Busy', restore: true } } satisfies PullApplied;
+			// Not loaded is not empty: with no rows, every remote shot would look new.
+			if (!(yield* Effect.promise(() => history.readyWithin()))) return BUSY;
 			const release = yield* Effect.promise(acquireRunLock);
 			if (!release) return BUSY;
 			return yield* walk(history, opts).pipe(
@@ -1303,6 +1330,10 @@ export const ShotSyncLive = Layer.effect(
 		) {
 			const config = readSyncConfig();
 			if (uploadsHeld(config)) return { uploaded: 0, stopped: { reason: 'held' as const } };
+			// Nothing to send isn't the same as rows not loaded yet.
+			if (!(yield* Effect.promise(() => history.readyWithin()))) {
+				return { uploaded: 0, stopped: { reason: 'held' as const } };
+			}
 			yield* Effect.promise(() => history.seriesReady());
 			// Brew Log rows (`isBrewLog`) never sync: Visualizer is a
 			// DE1-telemetry service and brews carry none (issue #10 — the same
@@ -1328,7 +1359,7 @@ export const ShotSyncLive = Layer.effect(
 			 * Record a non-success outcome: enqueue a recoverable error for a timed
 			 * retry through `UploadQueue`, and append a `skip` line to the sync log.
 			 */
-			const skipOrQueue = (shot: StoredShot, e: VisualizerCallError | ResponseDecodeError): void => {
+			const skipOrQueue = (shot: AnyShot, e: VisualizerCallError | ResponseDecodeError): void => {
 				if (isRecoverable(e)) {
 					enqueueSyncOp({
 						entity: 'shot',
@@ -1353,8 +1384,37 @@ export const ShotSyncLive = Layer.effect(
 			let uploaded = 0;
 			let stopped: UnsyncedStop | null = null;
 
-			/** Upload one shot; returns `true` when the loop should abort. */
-			const uploadOne = (shot: StoredShot): Effect.Effect<boolean> =>
+			/**
+			 * Upload one row, loaded whole first: a row carries no samples
+			 * (#310 P4w). A shot that can't be read is skipped, never sent
+			 * without its curve. Returns `true` when the loop should abort.
+			 */
+			const uploadOne = (row: AnyShot): Effect.Effect<boolean> =>
+				Effect.promise(() =>
+					history.loadShot(row.id).then(
+						(shot) => ({ ok: true as const, shot }),
+						() => ({ ok: false as const })
+					)
+				).pipe(
+					Effect.flatMap((got) => {
+						if (got.ok && got.shot) return sendOne(got.shot);
+						if (got.ok) return Effect.succeed(false);
+						return Effect.sync(() => {
+							appendSyncLog({
+								direction: 'skip',
+								entity: 'shot',
+								id: row.id,
+								name: row.profileName ?? 'Shot',
+								at: Date.now(),
+								error: 'This shot could not be read for upload.'
+							});
+							return false;
+						});
+					})
+				);
+
+			/** Upload one whole shot; returns `true` when the loop should abort. */
+			const sendOne = (shot: StoredShot): Effect.Effect<boolean> =>
 				uploadShot(shot).pipe(
 					Effect.flatMap(({ visualizerId }) =>
 						Effect.sync(() => {
@@ -1418,7 +1478,7 @@ export const ShotSyncLive = Layer.effect(
 		 * matches what the user sees. No tags and no barista: those go only
 		 * with their own marks.
 		 */
-		const annotationsPatch = (shot: StoredShot): ShotPatch => {
+		const annotationsPatch = (shot: AnyShot): ShotPatch => {
 			const settings = getSettingsStore().current;
 			const cfg = readSyncConfig();
 			const coffeeBagId = resolveCoffeeBagId(shot);
@@ -1456,7 +1516,11 @@ export const ShotSyncLive = Layer.effect(
 		) {
 			const edit = pendingEdit(id);
 			if (!edit) return 'none' as const;
-			const shot = history.all.find((s) => s.id === id);
+			// Not loaded is not gone: the edit waits for the rows.
+			if (!history.loaded) return 'waiting' as const;
+			// A live row, shown or past the view: only its fields go, not its curve.
+			const live = history.get(id);
+			const shot = live && live.deletedAt == null ? live : undefined;
 			// Gone here: nothing is owed.
 			if (!shot) {
 				settlePendingEdit(id, undefined);
@@ -1520,7 +1584,8 @@ export const ShotSyncLive = Layer.effect(
 				}
 				return yield* Effect.fail(e);
 			}
-			const now = history.all.find((s) => s.id === id);
+			const row = history.get(id);
+			const now = row && row.deletedAt == null ? row : undefined;
 			let next: PendingEdit = { ...current, attempts: undefined, nextAttemptAt: undefined };
 			// Sent and still the row's: done. Changed since: the drain sends it again.
 			if (journal && (!now || JSON.stringify(annotationsPatch(now)) === JSON.stringify(journal))) {
@@ -1559,7 +1624,7 @@ export const ShotSyncLive = Layer.effect(
 		 */
 		const repairTags = (
 			history: HistoryStore,
-			shot: StoredShot,
+			shot: AnyShot,
 			confirmed: readonly string[],
 			marks: TagMarks
 		): void => {

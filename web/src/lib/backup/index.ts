@@ -196,7 +196,8 @@ export function backupContents(): BackupContents {
 		profiles: customProfiles.length,
 		beans: beanStore.beans.length,
 		roasters: beanStore.roasters.length,
-		shots: history.all.length
+		// Every live row, past the view too (#310). None counted until they load.
+		shots: history.loaded ? history.allLive.length : 0
 	};
 }
 
@@ -301,6 +302,8 @@ interface BackupParts {
  */
 async function backupParts(): Promise<BackupParts | null> {
 	const history = getHistoryStore();
+	// Not loaded is not empty: false until the rows and their curves are in,
+	// and a backup now would hold no shots.
 	if (!(await history.seriesReady())) {
 		throw new Error('Shot data is still loading — try again in a moment.');
 	}
@@ -309,7 +312,8 @@ async function backupParts(): Promise<BackupParts | null> {
 	const customProfiles = storedCustomProfiles();
 	const beans = beanStore.beans;
 	const roasters = beanStore.roasters;
-	const shots = history.all;
+	// Every live row, the ones past the view too, each whole (#310 P3w).
+	const shots = await history.loadMany(history.allLive.map((s) => s.id));
 	const meta = getProfileStore().backupMeta();
 	// User brew recipes (copies + own) — built-ins ship with the app and are
 	// never written (the core drops any that slip through).

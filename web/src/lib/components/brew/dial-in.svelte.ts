@@ -10,17 +10,17 @@
  * stale request.
  */
 
-import type { StoredShot } from '#lib/history/index.js';
+import type { AnyShot } from '#lib/history/index.js';
 
-let pending = $state<StoredShot | null>(null);
+let pending = $state<AnyShot | null>(null);
 
 /** Record the shot the brew screen should dial itself from. */
-export function requestDialIn(shot: StoredShot): void {
+export function requestDialIn(shot: AnyShot): void {
 	pending = shot;
 }
 
 /** Consume (and clear) the pending dial-in request, if any. */
-export function takePendingDialIn(): StoredShot | null {
+export function takePendingDialIn(): AnyShot | null {
 	const shot = pending;
 	pending = null;
 	return shot;
