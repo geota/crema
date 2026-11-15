@@ -1251,3 +1251,78 @@ fn a_scale_connected_mid_shot_with_a_hand_on_it_is_the_known_limit() {
     assert_eq!(world.coverage.unseen_loads, 1);
     assert!(world.violations.is_empty(), "{:?}", world.violations);
 }
+
+/// No preinfusion and no `Ending`: the reviews' probe machine.
+fn bare_world() -> World {
+    World::new(
+        De1Params {
+            preinfusion: false,
+            ending: Ending::None,
+            ..De1Params::default()
+        },
+        0.0,
+        5_000,
+        false,
+        false,
+    )
+}
+
+/// REVIEW-433 R1, the converse of #427: shot A's samples, heard before the
+/// reconnected link's first state, carry it from frame 0 to frame 1. The user
+/// stops it, its end is lost, the link drops again and shot B begins on
+/// frame 0. A sample before the first state still raises the frame, so B is
+/// a new session, with no poured volume and its own auto-stop (I20).
+#[test]
+fn samples_before_the_first_state_still_raise_the_frame() {
+    let mut world = bare_world();
+    for op in [
+        Op::SetProfileTarget(None),
+        Op::GroupHead(MachineState::Espresso),
+        Op::Advance { ms: 10_000 },
+        Op::LinkDown { ms: 1_000 },
+        Op::LoseStates(2),
+        Op::Advance { ms: 1_500 },
+        Op::Advance { ms: 20_000 },
+        Op::UserStop,
+        Op::Advance { ms: 2_000 },
+        Op::LinkDown { ms: 5_000 },
+        Op::GroupHead(MachineState::Espresso),
+        Op::Advance { ms: 6_000 },
+        Op::Advance { ms: 10_000 },
+    ] {
+        world.apply(&op);
+    }
+    assert_eq!(world.coverage.replaced, 1, "B is a new session");
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// REVIEW-433 R4 (B1): shot A's samples, then shot B's, all heard on a link
+/// whose states are lost. The user stops B, the write is lost, and the link
+/// drops and comes back with B still pouring on frame 0, lower than A's. The
+/// core can't tell B from a shot begun during the outage, so the owed Stop
+/// carries into the new session and goes out (I1).
+#[test]
+fn a_stop_owed_on_samples_with_no_state_survives_a_lower_frame() {
+    let mut world = bare_world();
+    for op in [
+        Op::SetProfileTarget(None),
+        Op::GroupHead(MachineState::Espresso),
+        Op::Advance { ms: 25_000 },
+        Op::LinkDown { ms: 1_000 },
+        Op::LoseStates(5),
+        Op::Advance { ms: 1_500 },
+        Op::Advance { ms: 40_000 },
+        Op::GroupHead(MachineState::Espresso),
+        Op::Advance { ms: 3_000 },
+        Op::LoseWrites(1),
+        Op::UserStop,
+        Op::Advance { ms: 500 },
+        Op::LinkDown { ms: 1_000 },
+        Op::Advance { ms: 2_000 },
+    ] {
+        world.apply(&op);
+    }
+    assert_ne!(world.de1.state, MachineState::Espresso, "B was stopped");
+    world.apply(&Op::Advance { ms: 5_000 });
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}

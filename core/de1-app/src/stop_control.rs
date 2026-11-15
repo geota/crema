@@ -475,8 +475,23 @@ impl CremaCore {
             return false;
         }
         if check.frame_before.is_some_and(|before| frame < before) {
-            self.session = Some(Session::open(ActiveMode::Espresso, Observed::Unseen));
-            out.commands.push(Command::CancelStop);
+            // A stop owed while samples came on a link with no state may be
+            // this flow's: the new session keeps it and sends it, since a
+            // wrong "new" would drop a stop (§3.3). It costs one Idle on a
+            // shot begun during the outage.
+            let owed = self
+                .session
+                .map(|s| s.stop)
+                .filter(|s| self.samples_without_state && matches!(s, StopState::Owed { .. }));
+            let mut session = Session::open(ActiveMode::Espresso, Observed::Unseen);
+            if let Some(stop) = owed {
+                session.stop = stop;
+                self.session = Some(session);
+                self.resume_owed_stop(now, out);
+            } else {
+                self.session = Some(session);
+                out.commands.push(Command::CancelStop);
+            }
             return true;
         }
         if check.outage.is_some_and(|o| o <= ESPRESSO_OUTAGE_LIMIT) {

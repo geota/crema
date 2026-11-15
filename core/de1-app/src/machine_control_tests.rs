@@ -1015,13 +1015,14 @@ fn a_replaced_shot_forgets_the_old_shots_frame() {
 /// #427, the model's I20: an espresso on frame 2, then the link drops and the
 /// shot ends. The link comes back with its states lost, so a hot-water pour is
 /// heard only as samples, on frame 0, and the user's Stop lands on it. The
-/// link drops again and a new espresso runs. Its first sample back, on frame
-/// 0, is lower than the shot's frame before the first drop: a new shot, with
-/// no poured volume, its own auto-stop clock and none of the old Stop. The
-/// hot water's samples came before any state on their link, so they were the
-/// outage's and never stood for the frame before it.
+/// link drops again and a new espresso runs. The hot water's samples came
+/// before any state on their link, so they never lowered the frame: the new
+/// shot's first sample back, on frame 0, is lower than frame 2, and it's a new
+/// shot, with no poured volume and its own auto-stop clock. The Stop was owed
+/// on samples whose flow can't be told, so it carries over and goes out
+/// (REVIEW-433 B1: the same inputs can be a shot B the user stopped).
 #[test]
-fn samples_before_a_links_first_state_never_stand_for_the_frame_before_the_drop() {
+fn samples_before_a_links_first_state_never_lower_the_frame_before_the_drop() {
     let mut core = CremaCore::new();
     core.on_notification(Source::De1State, &[2, 0], 10);
     core.on_notification(Source::De1State, &[4, 5], 20);
@@ -1048,8 +1049,12 @@ fn samples_before_a_links_first_state_never_stand_for_the_frame_before_the_drop(
     core.on_notification(Source::De1State, &[4, 5], 31_000);
     f[0..2].copy_from_slice(&((31_100u64 / 8) as u16).to_be_bytes());
     let o = core.on_notification(Source::De1ShotSample, &f, 31_100);
-    assert!(state_writes(&o).is_empty(), "{:?}", o.commands);
-    assert!(o.commands.contains(&Command::CancelStop));
+    assert_eq!(state_writes(&o), vec![2], "the owed Stop goes out");
+    assert!(
+        !o.commands.contains(&Command::CancelStop),
+        "{:?}",
+        o.commands
+    );
     assert!(o.events.contains(&Event::ShotStarted), "a new shot");
     assert_eq!(core.pour_ml(), 0.0);
     assert_eq!(
@@ -1066,7 +1071,7 @@ fn samples_before_a_links_first_state_never_stand_for_the_frame_before_the_drop(
             at + 1,
         )));
     }
-    assert!(later.is_empty(), "the old Stop never reaches the new shot");
+    assert!(!later.is_empty(), "retried while the machine flows");
 }
 
 /// No sample within a second of the return: unsure. With nothing owed, weight

@@ -626,10 +626,12 @@ pub struct CremaCore {
     /// A link's first espresso state found the session flowing: the frame
     /// evidence it waits for before any retry (see [`stop_control`]).
     outage_check: Option<stop_control::OutageCheck>,
-    /// The frame the last espresso sample was on, heard on a link that's up
-    /// (its first state seen): the frame before the drop, for the outage
-    /// check.
+    /// The frame the last espresso sample was on, for the outage check. Before
+    /// a link's first state, a sample only raises it.
     last_frame: Option<u8>,
+    /// This shot's last samples came on a link with no state yet, so the
+    /// flow they and any stop owed on them belong to is unknown.
+    samples_without_state: bool,
     /// Samples at or over the flow-proof threshold since the last stop write.
     flow_proof: u32,
     /// The flush timeout the core last wrote, the bound on a flush outage.
@@ -1128,6 +1130,7 @@ impl CremaCore {
             stop_on_weight: true,
             outage_check: None,
             last_frame: None,
+            samples_without_state: false,
             flow_proof: 0,
             flush_timeout: None,
             reported_stop_targets: None,
@@ -3901,12 +3904,20 @@ impl CremaCore {
             }
             self.begin_flow_on_unknown(now, out);
         }
-        // Only on a link that's up: samples before its first state are still
-        // the outage's, and may be another flow's, so they can't stand for
-        // the frame before the drop (#427: hot water's frame 0, heard with
-        // its states lost, matched the next shot's).
+        // On a link that's up, the frame follows the shot. Before the link's
+        // first state, samples are still the outage's and may be another
+        // flow's: they only raise it, since the same shot's frame never goes
+        // back (#427: hot water's frame 0, heard with its states lost, matched
+        // the next shot's). They mark the session too, so a stop owed on them
+        // survives the return (`settle_outage_on_sample`).
         if self.monitor.is_shot_in_progress() && self.link.state_seen {
             self.last_frame = Some(sample.frame_number);
+            self.samples_without_state = false;
+        } else if self.monitor.is_shot_in_progress() {
+            self.samples_without_state = true;
+            if self.last_frame.is_none_or(|f| sample.frame_number > f) {
+                self.last_frame = Some(sample.frame_number);
+            }
         }
         // A skip needs telemetry newer than its last write.
         self.step_weight.on_evidence(now);
@@ -5899,6 +5910,7 @@ impl CremaCore {
                 // Reset the arming reporter so the NEXT shot re-announces its
                 // targets.
                 self.last_frame = None;
+                self.samples_without_state = false;
                 self.reported_stop_targets = None;
                 // End-of-shot latch reset (review #26): the untared-cup
                 // guard's virtual zero is a PER-SHOT correction — left
