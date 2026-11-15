@@ -1561,3 +1561,29 @@ fn a_stop_owed_on_samples_with_no_state_survives_a_lower_frame() {
     world.apply(&Op::Advance { ms: 5_000 });
     assert!(world.violations.is_empty(), "{:?}", world.violations);
 }
+
+/// REVIEW-433 R2, #427 on a live link: espresso A's end and a hot-water
+/// pour's states are lost with no drop between, so the hot water is heard as
+/// A's samples, on frame 0, on a link that's up. The user's Stop lands on it.
+/// Then a drop, and a new espresso: it starts with no poured volume and its
+/// own auto-stop (I20).
+#[test]
+fn a_flow_heard_on_a_lower_frame_on_a_live_link_is_a_new_session() {
+    let mut world = bare_world();
+    for op in [
+        Op::SetProfileTarget(None),
+        Op::GroupHead(MachineState::Espresso),
+        Op::Advance { ms: 40_000 },
+        Op::LoseStates(3),
+        Op::Advance { ms: 25_000 },
+        Op::GroupHead(MachineState::HotWater),
+        Op::UserStop,
+        Op::Advance { ms: 2_700 },
+        Op::LinkDown { ms: 6_500 },
+        Op::GroupHead(MachineState::Espresso),
+        Op::Advance { ms: 10_000 },
+    ] {
+        world.apply(&op);
+    }
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
