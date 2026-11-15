@@ -44,12 +44,16 @@ data class BackupReadLimits(
     }
 }
 
-/** A backup that won't read: damaged, or past a limit. Nothing was written; [message] is the user's. */
-class BackupReadException(message: String) : IOException(message)
+/**
+ * A backup that won't read: damaged, or past a limit. Nothing was written;
+ * [message] is the user's. [damaged] is the first kind, which an earlier
+ * directory may still read (REVIEW-410 should-fix 3).
+ */
+class BackupReadException(message: String, internal val damaged: Boolean = false) : IOException(message)
 
 private fun mb(bytes: Long) = "${(bytes + BackupReadLimits.MIB - 1) / BackupReadLimits.MIB} MB"
 
-private fun damaged(why: String) = BackupReadException("This backup is damaged ($why). Nothing was changed.")
+private fun damaged(why: String) = BackupReadException("This backup is damaged ($why). Nothing was changed.", damaged = true)
 
 /** A line, `0x0A` not included, or one too long to hold, which was skipped. */
 sealed interface BackupLinePiece {
@@ -148,6 +152,7 @@ private fun u32(b: ByteArray, at: Int): Long = u16(b, at).toLong() or (u16(b, at
 private const val EOCD_SIG = 0x06054b50L
 private const val CENTRAL_SIG = 0x02014b50L
 private const val LOCAL_SIG = 0x04034b50L
+private const val DESCRIPTOR_SIG = 0x08074b50L
 private const val EOCD_BYTES = 22
 private const val U32_MAX = 0xffffffffL
 
@@ -164,12 +169,19 @@ internal class ZipDirEntry(
     val nameBytes: ByteArray,
     /** 0 stored, 8 deflate. */
     val method: Int,
+    /** The general-purpose flags. */
+    val flags: Int,
+    /** The DOS time and date, as one number. */
+    val dosTime: Long,
     val crc: Long,
     val compressedSize: Long,
     val size: Long,
     /** Where its local header starts. */
     val localOffset: Long,
 )
+
+/** A zip's entries, and where its directory and end record are. */
+internal class ZipDirectory(val entries: List<ZipDirEntry>, val cdOffset: Long, val endAt: Long)
 
 /**
  * The end-of-central-directory record, as `(offset, its 22 bytes)`: the last
@@ -201,59 +213,181 @@ private fun decodeName(bytes: ByteArray): String = try {
 }
 
 /**
- * [file]'s entries, from its central directory, within [limits]. Throws
- * [BackupReadException] for a zip that's cut, split, encrypted, zip64, past
- * the entry limit, or whose directory doesn't read.
+ * [file]'s entries, from the central directory its end record gives, within
+ * [limits]. Throws [BackupReadException] for a zip that's cut, split,
+ * encrypted, zip64, past the entry limit, or whose directory doesn't read.
  */
-internal fun readCentralDirectory(file: File, limits: BackupReadLimits): List<ZipDirEntry> =
+internal fun readCentralDirectory(file: File, limits: BackupReadLimits): ZipDirectory =
     RandomAccessFile(file, "r").use { raf ->
         val (eocdAt, end) = findEndRecord(raf) ?: throw damaged("it's cut short")
-        val countHere = u16(end, 8)
-        val count = u16(end, 10)
-        val cdSize = u32(end, 12)
-        val cdOffset = u32(end, 16)
-        if (count == 0xffff || countHere == 0xffff || cdSize == U32_MAX || cdOffset == U32_MAX) {
+        parseDirectory(raf, eocdAt, end, limits, exact = false)
+    }
+
+/**
+ * The directory the end record [end], at [eocdAt], gives. [exact] (an earlier
+ * directory, REVIEW-410 should-fix 3) also asks that the directory end where
+ * the end record starts and that its entries fill it.
+ */
+private fun parseDirectory(raf: RandomAccessFile, eocdAt: Long, end: ByteArray, limits: BackupReadLimits, exact: Boolean): ZipDirectory {
+    val countHere = u16(end, 8)
+    val count = u16(end, 10)
+    val cdSize = u32(end, 12)
+    val cdOffset = u32(end, 16)
+    if (count == 0xffff || countHere == 0xffff || cdSize == U32_MAX || cdOffset == U32_MAX) {
+        throw BackupReadException("This backup is too large to restore (zip64).")
+    }
+    if (u16(end, 4) != 0 || u16(end, 6) != 0 || count != countHere) throw damaged("a split archive")
+    if (count > limits.maxEntries) throw BackupReadException("This backup holds more than ${limits.maxEntries} files.")
+    if (count == 0) throw damaged("no files in the zip")
+    if (cdOffset + cdSize > eocdAt) throw damaged("the central directory is out of place")
+    if (exact && cdOffset + cdSize != eocdAt) throw damaged("the central directory is out of place")
+    if (cdSize > MAX_DIRECTORY_BYTES) throw BackupReadException("This backup's list of files is too large to restore.")
+    val cd = ByteArray(cdSize.toInt())
+    raf.seek(cdOffset)
+    raf.readFully(cd)
+    val entries = ArrayList<ZipDirEntry>(count)
+    var p = 0
+    repeat(count) {
+        if (p + 46 > cd.size || u32(cd, p) != CENTRAL_SIG) throw damaged("a central directory entry")
+        val flags = u16(cd, p + 8)
+        val nameLen = u16(cd, p + 28)
+        val extraLen = u16(cd, p + 30)
+        val commentLen = u16(cd, p + 32)
+        if (p + 46 + nameLen + extraLen > cd.size) throw damaged("a central directory entry")
+        val nameBytes = cd.copyOfRange(p + 46, p + 46 + nameLen)
+        val entry = ZipDirEntry(
+            name = decodeName(nameBytes),
+            nameBytes = nameBytes,
+            method = u16(cd, p + 10),
+            flags = flags,
+            dosTime = u32(cd, p + 12),
+            crc = u32(cd, p + 16),
+            compressedSize = u32(cd, p + 20),
+            size = u32(cd, p + 24),
+            localOffset = u32(cd, p + 42),
+        )
+        if (flags and 1 != 0) throw BackupReadException("This backup is encrypted, which Crema can't read.")
+        // A zip64 extra here alone is fine, as on the web: the sizes above are what's read.
+        if (entry.compressedSize == U32_MAX || entry.size == U32_MAX || entry.localOffset == U32_MAX) {
             throw BackupReadException("This backup is too large to restore (zip64).")
         }
-        if (u16(end, 4) != 0 || u16(end, 6) != 0 || count != countHere) throw damaged("a split archive")
-        if (count > limits.maxEntries) throw BackupReadException("This backup holds more than ${limits.maxEntries} files.")
-        if (count == 0) throw damaged("no files in the zip")
-        if (cdOffset + cdSize > eocdAt) throw damaged("the central directory is out of place")
-        if (cdSize > MAX_DIRECTORY_BYTES) throw BackupReadException("This backup's list of files is too large to restore.")
-        val cd = ByteArray(cdSize.toInt())
-        raf.seek(cdOffset)
-        raf.readFully(cd)
-        val entries = ArrayList<ZipDirEntry>(count)
-        var p = 0
-        repeat(count) {
-            if (p + 46 > cd.size || u32(cd, p) != CENTRAL_SIG) throw damaged("a central directory entry")
-            val flags = u16(cd, p + 8)
-            val nameLen = u16(cd, p + 28)
-            val extraLen = u16(cd, p + 30)
-            val commentLen = u16(cd, p + 32)
-            if (p + 46 + nameLen + extraLen > cd.size) throw damaged("a central directory entry")
-            val nameBytes = cd.copyOfRange(p + 46, p + 46 + nameLen)
-            val entry = ZipDirEntry(
-                name = decodeName(nameBytes),
-                nameBytes = nameBytes,
-                method = u16(cd, p + 10),
-                crc = u32(cd, p + 16),
-                compressedSize = u32(cd, p + 20),
-                size = u32(cd, p + 24),
-                localOffset = u32(cd, p + 42),
-            )
-            if (flags and 1 != 0) throw BackupReadException("This backup is encrypted, which Crema can't read.")
-            if (entry.compressedSize == U32_MAX || entry.size == U32_MAX || entry.localOffset == U32_MAX ||
-                hasZip64(cd.copyOfRange(p + 46 + nameLen, p + 46 + nameLen + extraLen))
-            ) {
-                throw BackupReadException("This backup is too large to restore (zip64).")
-            }
-            if (entry.localOffset + 30 + nameLen + entry.compressedSize > cdOffset) throw damaged("\"${entry.name}\" is out of place")
-            entries += entry
-            p += 46 + nameLen + extraLen + commentLen
-        }
-        entries
+        if (entry.localOffset + 30 + nameLen + entry.compressedSize > cdOffset) throw damaged("\"${entry.name}\" is out of place")
+        entries += entry
+        p += 46 + nameLen + extraLen + commentLen
     }
+    if (exact && p != cd.size) throw damaged("a central directory entry")
+    return ZipDirectory(entries, cdOffset, eocdAt)
+}
+
+/**
+ * Most earlier end records [earlierEndRecords] gives: each costs a read of its
+ * directory, and a real backup with an old zip's tail has one.
+ */
+private const val MAX_EARLIER_END_RECORDS = 64
+
+/**
+ * Where [file] may hold an earlier zip's end record, last first: each
+ * signature before the end record that ends the file (or before the end, when
+ * none does) whose record is whole, unsplit, and has its directory just before
+ * it. Before #391 a backup saved over a larger file, by a provider that
+ * didn't truncate on "w", ends with the old zip's tail (REVIEW-410 should-fix
+ * 3): the new backup's end record is one of these.
+ */
+internal fun earlierEndRecords(file: File): List<Long> = RandomAccessFile(file, "r").use { raf ->
+    val size = raf.length()
+    val found = ArrayList<Long>()
+    var top = findEndRecord(raf)?.first ?: size
+    val window = 64 * 1024
+    val buf = ByteArray(window + 3)
+    val end = ByteArray(EOCD_BYTES)
+    while (top > 0 && found.size < MAX_EARLIER_END_RECORDS) {
+        val from = maxOf(0L, top - window)
+        val len = (minOf(size, top + 3) - from).toInt()
+        raf.seek(from)
+        raf.readFully(buf, 0, len)
+        for (i in (top - from - 1).toInt() downTo 0) {
+            if (i + 4 > len || u32(buf, i) != EOCD_SIG) continue
+            val at = from + i
+            if (at + EOCD_BYTES > size) continue
+            raf.seek(at)
+            raf.readFully(end)
+            val ok = u16(end, 4) == 0 && u16(end, 6) == 0 && u16(end, 8) == u16(end, 10) && u16(end, 10) > 0 &&
+                u32(end, 16) + u32(end, 12) == at && at + EOCD_BYTES + u16(end, 20) <= size
+            if (ok) {
+                found += at
+                if (found.size == MAX_EARLIER_END_RECORDS) break
+            }
+        }
+        top = from
+    }
+    found
+}
+
+/**
+ * The directory whose end record is at [endAt], only if it agrees exactly
+ * with the local headers: its entries, in order, are the zip's records from
+ * offset 0 to the directory with nothing between them, each local header
+ * names its entry as the directory does, with the same flags, method, time,
+ * and CRC and sizes (in its header, or its data descriptor), and it holds
+ * `backup.jsonl`. Otherwise null. The walk then checks each entry's bytes.
+ */
+internal fun exactDirectoryAt(file: File, endAt: Long, limits: BackupReadLimits): ZipDirectory? =
+    RandomAccessFile(file, "r").use { raf ->
+        if (endAt < 0 || endAt + EOCD_BYTES > raf.length()) return@use null
+        val end = ByteArray(EOCD_BYTES)
+        raf.seek(endAt)
+        raf.readFully(end)
+        if (u32(end, 0) != EOCD_SIG) return@use null
+        val d = try {
+            parseDirectory(raf, endAt, end, limits, exact = true)
+        } catch (e: BackupReadException) {
+            return@use null
+        }
+        if (d.entries.none { it.name == BACKUP_MEMBER }) return@use null
+        if (agreesExactly(raf, d)) d else null
+    }
+
+private fun agreesExactly(raf: RandomAccessFile, d: ZipDirectory): Boolean {
+    val head = ByteArray(30)
+    val desc = ByteArray(16)
+    var at = 0L
+    for (e in d.entries) {
+        if (e.localOffset != at || at + 30 > d.cdOffset) return false
+        raf.seek(at)
+        raf.readFully(head)
+        if (u32(head, 0) != LOCAL_SIG) return false
+        val flags = u16(head, 6)
+        if (flags != e.flags || u16(head, 8) != e.method || u32(head, 10) != e.dosTime) return false
+        val nameLen = u16(head, 26)
+        val extraLen = u16(head, 28)
+        val dataEnd = at + 30 + nameLen + extraLen + e.compressedSize
+        if (dataEnd > d.cdOffset) return false
+        val name = ByteArray(nameLen).also { raf.readFully(it) }
+        if (!name.contentEquals(e.nameBytes)) return false
+        val crc = u32(head, 14)
+        val compressed = u32(head, 18)
+        val size = u32(head, 22)
+        val described = flags and 8 != 0
+        if (described) {
+            // The header may give them as 0, for its data descriptor to give.
+            if ((crc != 0L && crc != e.crc) || (compressed != 0L && compressed != e.compressedSize) || (size != 0L && size != e.size)) return false
+            val n = minOf(16L, d.cdOffset - dataEnd).toInt()
+            if (n < 12) return false
+            raf.seek(dataEnd)
+            raf.readFully(desc, 0, n)
+            fun gives(o: Int) = u32(desc, o) == e.crc && u32(desc, o + 4) == e.compressedSize && u32(desc, o + 8) == e.size
+            at = dataEnd + when {
+                n == 16 && u32(desc, 0) == DESCRIPTOR_SIG && gives(4) -> 16
+                gives(0) -> 12
+                else -> return false
+            }
+        } else {
+            if (crc != e.crc || compressed != e.compressedSize || size != e.size) return false
+            at = dataEnd
+        }
+    }
+    return at == d.cdOffset
+}
 
 /**
  * An entry's bytes, inflated from exactly the compressed bytes the directory
@@ -269,6 +403,8 @@ private class EntryStream(private val raf: RandomAccessFile, private val e: ZipD
     private val crc = CRC32()
     private var size = 0L
     private var done = false
+    /** Whether the one dummy byte raw inflate may want past the data was given, as `ZipFile` gives it. */
+    private var padded = false
 
     init {
         if (e.method != 0 && e.method != 8) throw damaged("\"${e.name}\" is compressed a way Crema can't read")
@@ -326,7 +462,12 @@ private class EntryStream(private val raf: RandomAccessFile, private val e: ZipD
             if (inflater.finished()) return -1
             if (!inflater.needsInput()) throw damaged("\"${e.name}\" won't unpack")
             val left = end - at
-            if (left <= 0) throw damaged("\"${e.name}\" is cut short")
+            if (left <= 0) {
+                if (padded) throw damaged("\"${e.name}\" is cut short")
+                padded = true
+                inflater.setInput(ByteArray(1), 0, 1)
+                continue
+            }
             val k = minOf(input.size.toLong(), left).toInt()
             raf.seek(at)
             raf.readFully(input, 0, k)
@@ -349,7 +490,8 @@ private class EntryStream(private val raf: RandomAccessFile, private val e: ZipD
 
 /**
  * Walk the zip [file], within [limits], through its central directory, as
- * the web's reader does: each entry the restore reads goes to [onEntry] as a
+ * the web's reader does, or through [directory], an earlier one from
+ * [exactDirectoryAt]: each entry the restore reads goes to [onEntry] as a
  * stream it must read to the end (so its CRC is checked); the rest are read
  * through and dropped, checked and counted all the same. Throws
  * [BackupReadException] for a damaged zip or one past a limit.
@@ -357,9 +499,10 @@ private class EntryStream(private val raf: RandomAccessFile, private val e: ZipD
 internal fun walkBackupZip(
     file: File,
     limits: BackupReadLimits,
+    directory: ZipDirectory? = null,
     onEntry: (name: String, kind: EntryKind, data: InputStream) -> Unit,
 ) {
-    val entries = readCentralDirectory(file, limits)
+    val entries = (directory ?: readCentralDirectory(file, limits)).entries
     var inflated = 0L
     val names = HashSet<String>()
     try {

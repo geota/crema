@@ -257,7 +257,61 @@ class StreamedRestoreVmTest {
         val message = vm.ui.value.userMessages.last()
         assertTrue(coffee.crema.beans.BeanImageStore.exists(app, "bean:android-1"), message)
         // Done with, the stages go.
-        assertEquals(emptyList(), File(app.cacheDir, "restore-photos").listFiles()?.toList().orEmpty(), message)
+        val stages = File(app.noBackupFilesDir, "restore-photos")
+        VmHarness.idleUntil("the stages go") { stages.listFiles().isNullOrEmpty() }
+    }
+
+    @Test
+    fun aSecondReportOpenedWhileTheFirstRestoreRunsOutlivesIt() {
+        // REVIEW-410 should-fix 2: the run holds its own stage, and finishing
+        // clears only its own report.
+        val vm = vm()
+        val fixtureZip = File("../../core/de1-domain/tests/fixtures/backup/android-zipoutputstream.crema.zip")
+        val stages = File(app.noBackupFilesDir, "restore-photos")
+        val first = File(app.cacheDir, "first.crema.zip").apply { writeBytes(fixtureZip.readBytes()) }
+        val second = File(app.cacheDir, "second.crema.zip").apply { writeBytes(fixtureZip.readBytes()) }
+        val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val go = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var gated = true
+        vm.afterRestoreSeries = {
+            if (gated) {
+                gated = false
+                reached.complete(Unit)
+                go.await()
+            }
+        }
+        vm.startRestoreFile(first, "first", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the first report") { vm.ui.value.restoreReport != null }
+        val firstStage = stages.listFiles()!!.single()
+        vm.confirmRestore()
+        VmHarness.idleUntil("the first run, mid-way", 60_000) { reached.isCompleted }
+
+        vm.startRestoreFile(second, "second", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the second report") { vm.ui.value.restoreReport != null }
+        // The second report replaced the first's hold; the run still holds its stage.
+        // (Deletes run on IO: give a wrong release time to land.)
+        val deleted = (1..20).any { Thread.sleep(100); !firstStage.exists() }
+        assertTrue(!deleted, "the running restore's stage was deleted")
+
+        val before = vm.ui.value.userMessages.size
+        go.complete(Unit)
+        VmHarness.idleUntil("the first restore", 60_000) { vm.ui.value.userMessages.size > before }
+        // The first restore's photo landed from its own stage; gone again, for the second's to show.
+        assertTrue(coffee.crema.beans.BeanImageStore.exists(app, "bean:android-1"), vm.ui.value.userMessages.last())
+        coffee.crema.beans.BeanImageStore.delete(app, "bean:android-1")
+        assertNotNull(vm.ui.value.restoreReport, "the second report is still open")
+        val again = vm.ui.value.userMessages.size
+        // Planned before the first landed, so it first comes back with new numbers.
+        repeat(2) {
+            if (vm.ui.value.userMessages.size > again) return@repeat
+            vm.confirmRestore()
+            VmHarness.idleUntil("the second restore", 60_000) {
+                vm.ui.value.userMessages.size > again || vm.ui.value.restoreReport != null
+            }
+        }
+        assertTrue(vm.ui.value.userMessages.size > again, "the second restore ran")
+        assertTrue(coffee.crema.beans.BeanImageStore.exists(app, "bean:android-1"), vm.ui.value.userMessages.last())
+        VmHarness.idleUntil("the stages go") { stages.listFiles().isNullOrEmpty() }
     }
 
     private fun shot(id: String, at: Long) = StoredShot(id = id, completedAtMs = at, durationMs = 30_000)

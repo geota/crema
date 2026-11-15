@@ -1497,7 +1497,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Each prepare stages its photos in a directory of its own, so a second
      * pick while a report is open or a restore runs can't clear the first's
      * (REVIEW-395 nit 4). A stage is deleted when nothing holds it: its
-     * prepare, the open report, or its run. Main thread only.
+     * prepare, the open report, or its run. The counts are Main thread only;
+     * the deletes run on IO.
      */
     private val stageHolds = HashMap<java.io.File, Int>()
 
@@ -1511,16 +1512,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             stageHolds[stage] = n
         } else {
             stageHolds.remove(stage)
-            stage.deleteRecursively()
+            viewModelScope.launch(Dispatchers.IO) { stage.deleteRecursively() }
         }
     }
 
     /** A new stage, held once; any other stage nothing holds (one a kill left) goes. */
-    private fun newRestoreStage(): java.io.File {
+    private suspend fun newRestoreStage(): java.io.File {
         val root = restoreStageRoot()
-        root.listFiles()?.forEach { if (it !in stageHolds) it.deleteRecursively() }
-        root.mkdirs()
-        return java.nio.file.Files.createTempDirectory(root.toPath(), "stage-").toFile().also(::holdStage)
+        // Listed here, on Main, against the holds: a stage made later has a new name.
+        val orphans = root.listFiles()?.filter { it !in stageHolds }.orEmpty()
+        val stage = withContext(Dispatchers.IO) {
+            orphans.forEach { it.deleteRecursively() }
+            // Before #410 the stage was in the cache, which the system may clear while a report waits.
+            java.io.File(getApplication<Application>().cacheDir, "restore-photos").deleteRecursively()
+            root.mkdirs()
+            java.nio.file.Files.createTempDirectory(root.toPath(), "stage-").toFile()
+        }
+        holdStage(stage)
+        return stage
     }
 
     private fun kindOf(mode: RestoreMode) =
@@ -1548,7 +1557,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Where an incoming backup waits for its restore: one file per source, replaced by the next. */
     private fun restoreIncoming(name: String) = java.io.File(getApplication<Application>().cacheDir, name)
 
-    private fun restoreStageRoot() = java.io.File(getApplication<Application>().cacheDir, "restore-photos")
+    /** Not the cache: the system may clear that while a report waits, and the run would stop at its photos. */
+    private fun restoreStageRoot() = java.io.File(getApplication<Application>().noBackupFilesDir, "restore-photos")
 
     /** [startRestoreFile] for bytes already in memory. */
     fun startRestore(bytes: ByteArray, name: String, mode: RestoreMode, from: coffee.crema.drive.DriveBackupRow? = null) =
@@ -1703,7 +1713,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Apply a backup from raw bytes, confirming whatever its plan allows: tests only. */
     internal suspend fun restoreBackupBytes(bytes: ByteArray, mode: RestoreMode) {
         val kind = kindOf(mode)
-        val stage = newRestoreStage()
+        // Made here, not on IO: tests rely on the run starting before this suspends.
+        val stage = java.nio.file.Files.createTempDirectory(restoreStageRoot().apply { mkdirs() }.toPath(), "stage-").toFile()
+        holdStage(stage)
         try {
             val prepared = coffee.crema.restore.prepareBackup(bytes, "a backup", stage)
             val plan = restoreEngine.plan(prepared, kind)

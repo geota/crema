@@ -200,6 +200,100 @@ class BackupReaderTest {
         }
         zipFile.writeBytes(other.toByteArray())
         assertTrue("changed since it was checked" in refusal { linesOf(zipped) })
+        // A zip with no backup.jsonl at all now: no member to check, so empty
+        // records unless the walk itself refuses (REVIEW-410 should-fix 1).
+        for (members in listOf(listOf("images/bean:android-1" to photo()), listOf("crema.jsonl" to jsonl))) {
+            val without = java.io.ByteArrayOutputStream()
+            ZipOutputStream(without).use { z -> for ((n, b) in members) { z.putNextEntry(ZipEntry(n)); z.write(b); z.closeEntry() } }
+            zipFile.writeBytes(without.toByteArray())
+            assertTrue("changed since it was checked" in refusal { linesOf(zipped) }, members.first().first)
+        }
+    }
+
+    /**
+     * A pre-#391 Android backup (`ZipOutputStream`) saved over a larger, older
+     * one by a provider that doesn't truncate on "w": the new zip, then the old
+     * zip's tail, whose end record ends the file (REVIEW-410 should-fix 3).
+     */
+    private fun savedOverALargerZip(newer: ByteArray): ByteArray {
+        val old = java.io.ByteArrayOutputStream()
+        ZipOutputStream(old).use { z ->
+            z.putNextEntry(ZipEntry("backup.jsonl")); z.write(String(jsonl).replace("android-1", "android-old").toByteArray()); z.write(jsonl); z.closeEntry()
+            z.putNextEntry(ZipEntry("images/bean:android-old")); repeat(40) { z.write(photo()) }; z.closeEntry()
+        }
+        val bytes = old.toByteArray()
+        assertTrue(bytes.size > newer.size + 1000)
+        newer.copyInto(bytes)
+        return bytes
+    }
+
+    private val newerZips = listOf(
+        "android-zipoutputstream" to File(fixtures, "android-zipoutputstream.crema.zip"),
+        "android-streamed-photo" to File("../../web/src/lib/backup/fixtures/android-streamed-photo.crema.zip"),
+    ) + writers.drop(1)
+
+    @Test
+    fun aBackupSavedOverALargerZipReadsAsTheNewBackupExactly() {
+        for ((name, zip) in newerZips) {
+            val newer = zip.readBytes()
+            val bytes = savedOverALargerZip(newer)
+            // The end record's directory is the old zip's, and doesn't read.
+            assertFailsWith<BackupReadException>(name) { walkBackupZip(copy(bytes, "over.zip"), BackupReadLimits()) { _, _, _ -> } }
+            val want = prepareBackupFile(copy(newer, "new.zip"), name, File(dir, "want-$name"))
+            val over = copy(bytes, "over.zip")
+            val got = prepareBackupFile(over, name, File(dir, "got-$name"))
+            assertEquals(want.manifestJson, got.manifestJson, name)
+            assertEquals(linesOf(want).map { String(it) }, linesOf(got).map { String(it) }, name)
+            assertEquals(want.photos.keys, got.photos.keys, name)
+            for ((id, f) in want.photos) assertContentEquals(f.readBytes(), got.photos.getValue(id).readBytes(), "$name: $id")
+            assertEquals(got.photos.values.toSet(), File(dir, "got-$name").listFiles()!!.toSet(), "$name: only the new photos staged")
+            // The run's read finds the same directory again, through RestoreRecords too.
+            RestoreRecords.read(got, Json { ignoreUnknownKeys = true }, 0L)
+            // And a file that changed since is refused, as for any zip.
+            val other = java.io.ByteArrayOutputStream()
+            ZipOutputStream(other).use { z ->
+                z.putNextEntry(ZipEntry("backup.jsonl")); z.write(String(jsonl).replace("android-1", "android-2").toByteArray()); z.closeEntry()
+            }
+            over.writeBytes(savedOverALargerZip(other.toByteArray()))
+            assertTrue("changed since it was checked" in refusal { linesOf(got) }, name)
+        }
+    }
+
+    @Test
+    fun aBackupSavedOverALargerZipWhoseNewPartDoesNotAgreeIsRefused() {
+        val newer = File(fixtures, "android-zipoutputstream.crema.zip").readBytes()
+        val cases = mapOf(
+            // Its photo's bytes: the directory agrees, the walk fails the checksum.
+            "a photo byte" to { b: ByteArray -> b[photoDataStart(b) + 300] = (b[photoDataStart(b) + 300].toInt() xor 1).toByte() },
+            // A name in its directory: no longer the local header's.
+            "a directory name" to { b: ByteArray -> b[photoNameAt(b, 1) + "images/b".length] = 'd'.code.toByte() },
+            // Its directory's CRC for the photo: the header and descriptor disagree.
+            "a directory CRC" to { b: ByteArray -> b[photoNameAt(b, 1) - 46 + 16] = (b[photoNameAt(b, 1) - 46 + 16].toInt() xor 1).toByte() },
+            // Its end record no longer just after its directory.
+            "the end record's offset" to { b: ByteArray -> b[newer.size - 22 + 16] = (b[newer.size - 22 + 16].toInt() xor 1).toByte() },
+        )
+        // Bytes between its last entry and its directory: a zip that reads on its
+        // own, but not one whose records run exactly to its directory.
+        val cdOffset = u32le(newer, newer.size - 22 + 16).toInt()
+        val gapped = newer.copyOfRange(0, cdOffset) + ByteArray(16) + newer.copyOfRange(cdOffset, newer.size)
+        putU32le(gapped, gapped.size - 22 + 16, cdOffset + 16L)
+        prepareBackupFile(copy(gapped, "gapped.zip"), "gapped", File(dir, "gapped"))
+        val inputs = cases.mapValues { (_, damage) -> savedOverALargerZip(newer).also(damage) } +
+            ("a gap before its directory" to savedOverALargerZip(gapped))
+        for ((what, bytes) in inputs) {
+            val stage = File(dir, "s-$what")
+            val why = refusal { prepareBackupFile(copy(bytes), what, stage) }
+            // The end record's own refusal, as without the fallback, and nothing staged.
+            assertEquals(refusal { walkBackupZip(copy(bytes), BackupReadLimits()) { _, _, _ -> } }, why, what)
+            assertTrue(stage.listFiles().isNullOrEmpty(), "$what: nothing staged")
+        }
+    }
+
+    private fun u32le(b: ByteArray, at: Int): Long =
+        (0 until 4).fold(0L) { v, i -> v or ((b[at + i].toLong() and 0xff) shl (8 * i)) }
+
+    private fun putU32le(b: ByteArray, at: Int, v: Long) {
+        for (i in 0 until 4) b[at + i] = (v ushr (8 * i)).toByte()
     }
 
     /** Where the photo entry's name sits in its local header, and in the central directory. */

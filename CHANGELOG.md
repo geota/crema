@@ -116,7 +116,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   first bytes is refused as a damaged zip; a backup file that changes between
   the check and the restore is refused before any write; and picking a second
   backup while a restore's report is open no longer deletes the first one's
-  photos. (#310, #396)
+  photos. A backup an older Android build saved over a larger file can end
+  with the old file's leftover bytes; it still restores, as the backup that
+  was saved, and only if that backup checks out whole. (#310, #396)
 - **Android backups are built a piece at a time** — the backup is written to a
   temporary file as it's built, rather than held in memory whole, so a large
   history backs up without running the app out of memory. Back up shows how

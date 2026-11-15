@@ -178,7 +178,7 @@ private class SameBytesEachRead {
         val now = crc.value to length
         val was = seen
         if (was == null) seen = now
-        else if (was != now) throw BackupReadException("This backup changed since it was checked. Nothing was changed.")
+        else if (was != now) throw changedSinceChecked()
     }
 }
 
@@ -188,8 +188,10 @@ private class SameBytesEachRead {
  * use is read here once, checked (each zip entry's CRC and size, its names,
  * the limits) and scanned, before a plan is made; photos are staged in
  * [stageDir]; the run reads the lines again, and they must be the bytes
- * scanned here. Throws [BackupReadException] for a damaged backup or one past
- * a limit.
+ * scanned here. A zip whose end record's directory won't read is read
+ * through an earlier directory only if one agrees exactly and reads whole
+ * ([exactDirectoryAt]). Throws [BackupReadException] for a damaged backup or
+ * one past a limit.
  */
 fun prepareBackupFile(file: File, name: String, stageDir: File, limits: BackupReadLimits = BackupReadLimits()): PreparedBackup {
     checkFileSize(file, limits)
@@ -202,6 +204,56 @@ fun prepareBackupFile(file: File, name: String, stageDir: File, limits: BackupRe
         }
         return PreparedBackup(name, emptyMap(), scanLines(read, emptyList()), read)
     }
+    val scan = try {
+        scanZip(file, stageDir, limits, null)
+    } catch (e: BackupReadException) {
+        // A backup saved over a larger file before #391 can end with the old
+        // zip's tail, whose directory doesn't fit (REVIEW-410 should-fix 3). An
+        // earlier directory is read only if it agrees exactly and reads whole;
+        // otherwise the refusal stands. A failed try's photos and scans go.
+        if (!e.damaged) throw e
+        earlierEndRecords(file).firstNotNullOfOrNull { at ->
+            val directory = exactDirectoryAt(file, at, limits) ?: return@firstNotNullOfOrNull null
+            try {
+                scanZip(file, stageDir, limits, directory)
+            } catch (_: BackupReadException) {
+                null
+            }
+        } ?: run {
+            stageDir.deleteRecursively()
+            throw e
+        }
+    }
+    val check = scan.same.getValue(scan.member)
+    val read: ((BackupLinePiece) -> Unit) -> Unit = { onPiece ->
+        // The directory the scan read: an earlier one is found again at the same place.
+        val directory = scan.directory?.let { exactDirectoryAt(file, it.endAt, limits) ?: throw changedSinceChecked() }
+        var found = false
+        walkBackupZip(file, limits, directory) { entry, kind, data ->
+            if (kind == EntryKind.BACKUP && entry == scan.member) {
+                found = true
+                check.read(data) { forEachBackupLine(it, limits.maxLineBytes, onPiece) }
+            }
+        }
+        if (!found) throw changedSinceChecked()
+    }
+    return PreparedBackup(name, scan.photos, scan.manifest, read)
+}
+
+private fun changedSinceChecked() = BackupReadException("This backup changed since it was checked. Nothing was changed.")
+
+/** What [scanZip] found: the photos staged, the manifest, and how to check the member again. */
+private class ZipScan(
+    val photos: Map<String, File>,
+    val manifest: String,
+    val member: String,
+    val same: Map<String, SameBytesEachRead>,
+    /** The earlier directory read, or null for the one the end record gives. */
+    val directory: ZipDirectory?,
+)
+
+/** The first read of a zip, through [directory] or its own: every entry checked, photos staged in [stageDir], lines scanned. */
+private fun scanZip(file: File, stageDir: File, limits: BackupReadLimits, directory: ZipDirectory?): ZipScan {
     stageDir.deleteRecursively()
     stageDir.mkdirs()
     val photos = LinkedHashMap<String, File>()
@@ -211,7 +263,7 @@ fun prepareBackupFile(file: File, name: String, stageDir: File, limits: BackupRe
     val scans = HashMap<String, BackupScanner>()
     val same = HashMap<String, SameBytesEachRead>()
     val manifest = try {
-        walkBackupZip(file, limits) { entry, kind, data ->
+        walkBackupZip(file, limits, directory) { entry, kind, data ->
             when (kind) {
                 EntryKind.PHOTO -> {
                     val beanId = entry.substringAfter("images/")
@@ -233,18 +285,7 @@ fun prepareBackupFile(file: File, name: String, stageDir: File, limits: BackupRe
         scans.values.forEach { it.destroy() }
     }
     val member = if (BACKUP_MEMBER in scans) BACKUP_MEMBER else LEGACY_MEMBER
-    val check = same.getValue(member)
-    val read: ((BackupLinePiece) -> Unit) -> Unit = { onPiece ->
-        var found = false
-        walkBackupZip(file, limits) { entry, kind, data ->
-            if (kind == EntryKind.BACKUP && entry == member) {
-                found = true
-                check.read(data) { forEachBackupLine(it, limits.maxLineBytes, onPiece) }
-            }
-        }
-        if (!found) throw BackupReadException("This backup changed since it was checked. Nothing was changed.")
-    }
-    return PreparedBackup(name, photos, manifest, read)
+    return ZipScan(photos, manifest, member, same, directory)
 }
 
 // ── The marker ───────────────────────────────────────────────────────────────
