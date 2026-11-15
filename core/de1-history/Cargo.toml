@@ -19,13 +19,25 @@ serde_json.workspace = true
 # NFD, for the search fold (SPEC §5). Pure tables, no IO.
 unicode-normalization = "0.1.24"
 # The store (SPEC §1, decision B): SQLite compiled in, so both shells run one
-# SQLite version with FTS5 and trigram. Native only until C4 adds the wasm VFS.
+# SQLite version with FTS5 and trigram. Natively `bundled` builds it through
+# `libsqlite3-sys`; on wasm32 (C4) it is `sqlite-wasm-rs`, below.
 rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled", "cache", "backup"], optional = true }
+
+# On wasm32 the store runs over `sqlite-wasm-rs`, which compiles the same
+# SQLite 3.54.1 with `cc` (PLAN C4, N10: exact pins, each bump's diff read).
+# Its `wasm-bindgen` feature supplies the host hooks SQLite needs (clock,
+# randomness, sleep). The VFSes it runs on are the shell's: `memvfs` in Node
+# tests, the `sahpool` pools in `de1-history-wasm`.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+rusqlite = { version = "=0.42.0", default-features = false, features = ["ffi-sqlite-wasm-rs", "cache", "backup"], optional = true }
+sqlite-wasm-rs = { version = "=0.6.3", default-features = false, features = ["wasm-bindgen"], optional = true }
+# `de1-domain`'s `uuid` needs a randomness source on wasm32, as in `de1-wasm`.
+uuid = { version = "1", features = ["js"] }
 
 [features]
 # The `rusqlite` store (`store`): opens and writes the database. Off by
 # default, so the pure half builds without SQLite.
-store = ["dep:rusqlite"]
+store = ["dep:rusqlite", "dep:sqlite-wasm-rs"]
 # A fault hook for tests (PLAN C2): fail at a named point. Never in a shipped
 # build.
 faults = ["store"]
@@ -37,8 +49,15 @@ dev-oracle = []
 [dev-dependencies]
 # The crate's own tests use the reference rules.
 de1-history = { path = ".", features = ["dev-oracle", "store", "faults"] }
+
 # Temp dirs for the store's tests: real SQLite files, no mocks.
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 tempfile = "3"
+
+# The same tests on wasm32 (PLAN C4): `wasm-bindgen-test` runs them in Node,
+# on SQLite's in-memory VFS (`memvfs`).
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
 
 [lints]
 workspace = true

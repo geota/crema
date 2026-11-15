@@ -8,7 +8,9 @@
 #[cfg(feature = "faults")]
 use std::cell::RefCell;
 
-use super::error::{Result, StoreError};
+use super::error::Result;
+#[cfg(feature = "faults")]
+use super::error::StoreError;
 
 /// Every named point. A point ending in `.commit` fails just before the
 /// transaction commits (so nothing lands); one ending in `.committed` fails

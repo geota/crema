@@ -48,15 +48,30 @@ fn token_base(nanos: u128) -> u64 {
     low.max(1) << 16
 }
 
+/// Opens so far in this process, so two opens in one millisecond still get
+/// distinct bases on wasm32.
+static OPENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The clock in ns, for the token base. Natively the system clock. wasm32
+/// has none in `std` (`SystemTime::now` panics there), so it is the open's
+/// `now_ms`, which the shell sets from `Date.now()`, plus a count of opens.
+fn clock_nanos(now_ms: i64) -> u128 {
+    let opens = u128::from(OPENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    if cfg!(all(target_family = "wasm", target_os = "unknown")) {
+        let ms = u128::try_from(now_ms).unwrap_or(0);
+        return ms * 1_000_000 + (opens % 1_000) * 1_000;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1 + opens, |d| d.as_nanos())
+}
+
 impl Walks {
-    /// Walks for a new connection.
-    pub(crate) fn new() -> Walks {
+    /// Walks for a new connection, opened at `now_ms`.
+    pub(crate) fn new(now_ms: i64) -> Walks {
         // Not a secret, only distinct per open: tokens from an earlier
         // connection must not name a walk on this one.
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(1, |d| d.as_nanos());
-        let base = token_base(nanos);
+        let base = token_base(clock_nanos(now_ms));
         Walks {
             base,
             issued: 0,

@@ -8,6 +8,7 @@
   "scripts": {
     "wasm": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/src/lib/wasm --out-name de1_wasm",
     "wasm:test": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/.wasm-test --out-name de1_wasm -- --features test-seeds",
+    "wasm:history": "wasm-pack build ../core/de1-history-wasm --target web --profile history-wasm --out-dir ../../web/src/lib/history-db/wasm --out-name de1_history_wasm",
     "dev": "vite dev",
     "build": "pnpm wasm && vite build",
     "preview": "vite preview",

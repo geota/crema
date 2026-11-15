@@ -16,7 +16,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::backup::Backup;
+use rusqlite::backup::{Backup, StepResult};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
 
 use super::error::{Result, Source, StoreError, error_of};
@@ -221,9 +221,27 @@ impl Store {
         }
         let backup =
             Backup::new(&self.conn, &mut dst).map_err(|e| error_of(&e, Source::Session))?;
-        backup
-            .run_to_completion(256, Duration::ZERO, None)
-            .map_err(|e| error_of(&e, Source::Session))?;
+        // Stepped here, not with `run_to_completion`, which sleeps between
+        // steps: `std` can't sleep on wasm32 and panics.
+        loop {
+            match backup
+                .step(256)
+                .map_err(|e| error_of(&e, Source::Session))?
+            {
+                StepResult::Done => break,
+                StepResult::More => {}
+                // Another connection holds a lock. Natively it may let go;
+                // on wasm32 nothing else runs while this waits.
+                StepResult::Busy | StepResult::Locked => {
+                    if cfg!(all(target_family = "wasm", target_os = "unknown")) {
+                        return Err(StoreError::Busy);
+                    }
+                    std::thread::sleep(Duration::ZERO);
+                }
+                // `StepResult` is non-exhaustive.
+                _ => return Err(StoreError::Busy),
+            }
+        }
         drop(backup);
         Ok(())
     }
