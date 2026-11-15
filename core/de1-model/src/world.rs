@@ -967,8 +967,31 @@ impl World {
                     } else if outage > 60_000 {
                         self.outage_unsure();
                     }
+                } else if self.state_heard_on_link
+                    && self.open_mode == Some(ActiveMode::Espresso)
+                    && self.last_sample_frame.is_some_and(|b| self.de1.frame < b)
+                {
+                    // A lower frame on a link that's up: the shot heard is
+                    // over, its end and the next flow's start lost. A new
+                    // session, Unseen; a stop owed carries over (§3.3), and
+                    // with none, a leg may fire again.
+                    self.replacing = true;
+                    self.unseen = !self.read_only;
+                    if self.owed_last.is_none() {
+                        self.stops_in_episode = 0;
+                        self.stopped_this_flow = false;
+                        self.alerts = 0;
+                    }
                 }
-                if self.de1.state == MachineState::Espresso
+                // The frame of the shot the core hears, as the core keeps it:
+                // any sample while an espresso is open and heard flowing, since
+                // a flow whose states were lost reads as its samples, and the
+                // DE1 reports the last shot's frame until flow begins. Before a
+                // link's first state, a sample only raises it.
+                if self.open_mode == Some(ActiveMode::Espresso)
+                    && self
+                        .heard_sub
+                        .is_some_and(|s| !de1_domain::session::is_pre_flow(s))
                     && (self.state_heard_on_link
                         || self.last_sample_frame.is_none_or(|f| self.de1.frame > f))
                 {

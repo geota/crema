@@ -456,6 +456,38 @@ impl CremaCore {
         Duration::from_secs_f32(secs.max(0.0))
     }
 
+    /// A sample's frame against the shot's: an outage check pending is settled
+    /// by it, and otherwise a lower frame on a link that's up is a boundary
+    /// the states missed. Returns whether a new session opened.
+    pub(crate) fn settle_frame(&mut self, frame: u8, now: Duration, out: &mut CoreOutput) -> bool {
+        if self.outage_check.is_some() {
+            self.settle_outage_on_sample(frame, now, out)
+        } else {
+            self.split_on_lower_frame(frame)
+        }
+    }
+
+    /// A lower frame on a link that's up: flow can't go backwards, so the shot
+    /// the core knew is over, its end and the next flow's start lost (another
+    /// shot, or another mode heard as this one's samples). What runs now is a
+    /// new session, Unseen, so it starts with no pour, its own auto-stop and
+    /// no tare. A stop owed carries over and goes out on the retry clock: the
+    /// core can't tell whose it is, and a wrong "new" would drop it (§3.3).
+    fn split_on_lower_frame(&mut self, frame: u8) -> bool {
+        if !self.link.state_seen || self.last_frame.is_none_or(|before| frame >= before) {
+            return false;
+        }
+        let Some(old) = self.session.filter(|s| s.mode == ActiveMode::Espresso) else {
+            return false;
+        };
+        let mut session = Session::open(ActiveMode::Espresso, Observed::Unseen);
+        if matches!(old.stop, StopState::Owed { .. }) {
+            session.stop = old.stop;
+        }
+        self.session = Some(session);
+        true
+    }
+
     /// A sample settles an espresso outage check: a lower frame is a new shot
     /// (begun unseen during the outage); otherwise the same shot if the outage
     /// was short enough, else unsure. Returns whether a new shot began.

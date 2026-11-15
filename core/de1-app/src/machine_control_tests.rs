@@ -1074,6 +1074,148 @@ fn samples_before_a_links_first_state_never_lower_the_frame_before_the_drop() {
     assert!(!later.is_empty(), "retried while the machine flows");
 }
 
+/// A seen shot on frame 2 with a scale and a 36 g target, on a link that stays
+/// up: the samples to `until`, and the time after the last.
+fn shot_heard_to_frame_2(core: &mut CremaCore, until: u64) -> u64 {
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 1], 20);
+    core.on_notification(Source::De1State, &[4, 5], 1_000);
+    let mut f = sample(0);
+    f[17] = 2;
+    let mut t = 1_100;
+    while t < until {
+        f[0..2].copy_from_slice(&((t / 8) as u16).to_be_bytes());
+        core.on_notification(Source::De1ShotSample, &f, t);
+        t += 250;
+    }
+    t
+}
+
+fn frame_0(t: u64) -> [u8; 19] {
+    let mut f = sample((t / 8) as u16);
+    f[17] = 0;
+    f
+}
+
+/// REVIEW-433 gap (2): a shot's `Idle` and the next shot's pre-flow reports
+/// are lost on a link that stays up, so the next shot is heard as the first's
+/// samples. Its first sample, on a lower frame, opens its own session: flow
+/// can't go backwards. It starts Unseen, with no pour, its own auto-stop
+/// clock, no tare and no weight stop from the old shot's zero.
+#[test]
+fn a_lower_frame_on_a_live_link_is_a_new_session() {
+    let mut core = core_with_cup();
+    let t = shot_heard_to_frame_2(&mut core, 20_000);
+    assert!(core.pour_ml() > 10.0, "the first shot poured");
+    let at = t + 5_000;
+    let o = core.on_notification(Source::De1ShotSample, &frame_0(at), at);
+    assert!(o.events.contains(&Event::ShotStarted), "a new shot");
+    assert!(
+        o.events
+            .iter()
+            .any(|e| matches!(e, Event::ShotCompleted { .. }))
+    );
+    assert_eq!(core.pour_ml(), 0.0);
+    assert_eq!(
+        core.auto_stop_view().map(|v| v.started),
+        Some(Duration::from_millis(at))
+    );
+    assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
+    assert_eq!(tares(&o), 0);
+    assert!(state_writes(&o).is_empty(), "{:?}", o.commands);
+}
+
+/// The same frame, or a higher one, is the same shot.
+#[test]
+fn the_same_or_a_higher_frame_on_a_live_link_is_the_same_shot() {
+    let mut core = core_with_cup();
+    let t = shot_heard_to_frame_2(&mut core, 20_000);
+    let started = core.auto_stop_view().map(|v| v.started);
+    let mut f = sample((t / 8) as u16);
+    f[17] = 2;
+    let o = core.on_notification(Source::De1ShotSample, &f, t);
+    f[17] = 3;
+    f[0..2].copy_from_slice(&(((t + 250) / 8) as u16).to_be_bytes());
+    let o2 = core.on_notification(Source::De1ShotSample, &f, t + 250);
+    assert!(!o.events.contains(&Event::ShotStarted));
+    assert!(!o2.events.contains(&Event::ShotStarted));
+    assert_eq!(core.auto_stop_view().map(|v| v.started), started);
+    assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
+}
+
+/// The DE1 reports the last shot's frame until flow begins on frame 0 (the
+/// capture: frame 3 in FinalHeating, 0 at Preinfusion). A heating sample on
+/// an old frame is not the shot's, so the first flow on frame 0 is the same
+/// shot: seen, with its weight stop.
+#[test]
+fn the_last_shots_frame_in_heating_is_not_this_shots() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 2], 20);
+    let mut f = sample(100);
+    f[17] = 3;
+    core.on_notification(Source::De1ShotSample, &f, 500);
+    core.on_notification(Source::De1State, &[4, 4], 1_000);
+    f[17] = 0;
+    f[0..2].copy_from_slice(&200u16.to_be_bytes());
+    let o = core.on_notification(Source::De1ShotSample, &f, 1_100);
+    assert!(!o.events.contains(&Event::ShotStarted), "the same shot");
+    assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
+}
+
+/// The same across a drop in heating: the return in flow, on frame 1, is
+/// compared with no frame, not the last shot's 3, so it's the same shot.
+#[test]
+fn a_drop_in_heating_compares_no_frame_from_the_last_shot() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 2], 20);
+    let mut f = sample(100);
+    f[17] = 3;
+    core.on_notification(Source::De1ShotSample, &f, 500);
+    core.de1_link_lost();
+    core.on_notification(Source::De1State, &[4, 5], 8_000);
+    f[17] = 1;
+    f[0..2].copy_from_slice(&1_000u16.to_be_bytes());
+    let o = core.on_notification(Source::De1ShotSample, &f, 8_100);
+    assert!(
+        !o.commands.contains(&Command::CancelStop),
+        "{:?}",
+        o.commands
+    );
+    assert!(!o.events.contains(&Event::ShotStarted), "the same shot");
+}
+
+/// The split never drops a stop (§3.3): the user's Stop owed on the old shot,
+/// unanswered, may be meant for whatever runs now. It carries into the new
+/// session, nothing cancels it, and it goes out on the retry clock.
+#[test]
+fn a_stop_owed_across_a_live_lower_frame_carries_over() {
+    let mut core = CremaCore::new();
+    let t = shot_heard_to_frame_2(&mut core, 20_000);
+    let o = core.request_machine_state(MachineState::Idle);
+    assert_eq!(state_writes(&o), vec![2], "the user's Stop");
+    let at = t + 300;
+    let o = core.on_notification(Source::De1ShotSample, &frame_0(at), at);
+    assert!(o.events.contains(&Event::ShotStarted), "a new session");
+    assert!(
+        !o.commands.contains(&Command::CancelStop),
+        "{:?}",
+        o.commands
+    );
+    assert_eq!(core.pour_ml(), 0.0);
+    let mut later = vec![];
+    for at in (at + 250..at + 3_000).step_by(250) {
+        later.extend(state_writes(&core.on_tick(at)));
+        later.extend(state_writes(&core.on_notification(
+            Source::De1ShotSample,
+            &frame_0(at),
+            at + 1,
+        )));
+    }
+    assert!(!later.is_empty(), "the owed Stop is retried");
+}
+
 /// No sample within a second of the return: unsure. With nothing owed, weight
 /// is refused; time and volume go on.
 #[test]
@@ -1474,5 +1616,61 @@ fn a_sample_at_the_wait_is_too_late_to_settle_a_return() {
     core.de1_link_lost();
     core.on_notification(Source::De1State, &[4, 5], 3_000);
     core.on_notification(Source::De1ShotSample, &sample(400), 3_999);
+    assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
+}
+
+/// A heating sample as both captures show them: water through the group at
+/// 0 bar, still on the last shot's frame.
+fn heating_sample(core: &mut CremaCore, t: u64, frame: u8) {
+    core.on_notification(Source::ScaleWeight, &bookoo(20.0), t.saturating_sub(5));
+    let mut f = sample((t / 8) as u16);
+    f[17] = frame;
+    f[2] = 0;
+    f[3] = 0;
+    core.on_notification(Source::De1ShotSample, &f, t);
+}
+
+/// The shot's first flow sample, on frame 0, with a fresh reading before it.
+fn first_flow_sample(core: &mut CremaCore, t: u64) -> CoreOutput {
+    core.on_notification(Source::ScaleWeight, &bookoo(20.0), t.saturating_sub(5));
+    let mut f = sample((t / 8) as u16);
+    f[17] = 0;
+    core.on_notification(Source::De1ShotSample, &f, t)
+}
+
+/// REVIEW-438 P1: a firmware names a pre-flow moment with a byte this app
+/// doesn't know (§3.3 plans for one that "turns out to be more heating").
+/// Unknown isn't pre-flow, but its 0-bar samples on the last shot's frame
+/// aren't in flow, so they never enter the frame memory: the real flow on
+/// frame 0 is the same shot, with its weight stop.
+#[test]
+fn heating_on_an_unknown_substate_never_splits_the_shot_at_its_first_flow() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 1], 20);
+    core.on_notification(Source::De1State, &[4, 21], 500);
+    for t in (600..3_000u64).step_by(250) {
+        heating_sample(&mut core, t, 3);
+    }
+    core.on_notification(Source::De1State, &[4, 5], 3_000);
+    let o = first_flow_sample(&mut core, 3_050);
+    assert!(!o.events.contains(&Event::ShotStarted), "the same shot");
+    assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
+}
+
+/// REVIEW-438 P2: one heating sample on the last shot's frame delivered just
+/// after the flow state (the captures show the reverse order, 30 and 48 ms
+/// apart). At 0 bar it isn't in flow, so the shot doesn't split.
+#[test]
+fn a_heating_sample_after_the_flow_state_never_splits_the_shot() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 1], 20);
+    core.on_notification(Source::De1State, &[4, 2], 500);
+    heating_sample(&mut core, 900, 4);
+    core.on_notification(Source::De1State, &[4, 5], 1_000);
+    heating_sample(&mut core, 1_010, 4);
+    let o = first_flow_sample(&mut core, 1_200);
+    assert!(!o.events.contains(&Event::ShotStarted), "the same shot");
     assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
 }
