@@ -49,11 +49,14 @@ class SaveFloorTest {
         SafeFile.resetForTest()
         SaveFloor.resetForTest()
         SaveFloor.throwOnRefusal = false
+        // These cover the history's legacy backend (shots.json), which runs when the move to shots.db fails (#310 P3a).
+        coffee.crema.history.HistoryStore.legacyOnlyForTest = true
     }
 
     @After fun cleanup() {
         SafeFile.resetForTest()
         SaveFloor.resetForTest()
+        coffee.crema.history.HistoryStore.legacyOnlyForTest = false
     }
 
     /** Every gated store on disk, with one save each. */

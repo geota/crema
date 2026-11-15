@@ -42,9 +42,16 @@ class SaveCancellationTest {
         }
     }
 
-    @Before fun open() = SafeFile.openAllForTest()
+    @Before fun open() {
+        SafeFile.openAllForTest()
+        // These cover the history's legacy backend (shots.json), which runs when the move to shots.db fails (#310 P3a).
+        coffee.crema.history.HistoryStore.legacyOnlyForTest = true
+    }
 
-    @After fun reset() = SafeFile.resetForTest()
+    @After fun reset() {
+        SafeFile.resetForTest()
+        coffee.crema.history.HistoryStore.legacyOnlyForTest = false
+    }
 
     /** Hold [first] in the middle of its write, queue [second] behind it, cancel
      *  the scope both belong to, then let the write finish. */

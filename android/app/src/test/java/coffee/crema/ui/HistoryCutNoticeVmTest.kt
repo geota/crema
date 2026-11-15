@@ -63,14 +63,34 @@ class HistoryCutNoticeVmTest {
         ),
     )
 
+    /** The legacy backend (shots.json, the move to shots.db failed) still drops the oldest row, and says so. */
     @Test
     fun aBrewLoggedOnAFullHistoryNamesTheRowItDropped() {
+        HistoryStore.legacyOnlyForTest = true
+        try {
+            full()
+            val vm = vm()
+            vm.logBrew()
+            VmHarness.idle()
+            assertTrue(cut in vm.ui.value.userMessages, "${vm.ui.value.userMessages}")
+            assertEquals(HistoryStore.MAX_SHOTS, vm.ui.value.history.size)
+        } finally {
+            HistoryStore.legacyOnlyForTest = false
+        }
+    }
+
+    /** From #310 P3a the oldest row leaves the view and stays in the store: nothing was dropped, so nothing is said. */
+    @Test
+    fun aBrewLoggedOnAFullViewKeepsTheOldestRowInTheStore() {
         full()
         val vm = vm()
         vm.logBrew()
         VmHarness.idle()
-        assertTrue(cut in vm.ui.value.userMessages, "${vm.ui.value.userMessages}")
+        assertTrue(vm.ui.value.userMessages.none { it.startsWith("History keeps") }, "${vm.ui.value.userMessages}")
         assertEquals(HistoryStore.MAX_SHOTS, vm.ui.value.history.size)
+        val all = VmHarness.library(vm).allShots()
+        assertEquals(HistoryStore.MAX_SHOTS + 1, all.size)
+        assertTrue(all.any { it.id == "r${HistoryStore.MAX_SHOTS - 1}" }, "the oldest row, hidden, not gone")
     }
 
     @Test

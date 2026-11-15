@@ -170,7 +170,9 @@ class ManualBrewDateVmTest {
         vm.openLogBrew(BrewLogOwner.HISTORY)
         vm.updateLogBrew { it.copy(method = "pourover", dose = 15.0, completedAtMs = now - 320 * hour - hour / 2) }
         assertFalse(vm.saveLogBrew(now), "older than rank 300, newer than the last row")
-        assertEquals(350, history(vm).size)
+        // The view shows the newest 300; the store keeps all 350 (#310 P3a).
+        assertEquals(HistoryStore.MAX_SHOTS, history(vm).size)
+        assertEquals(350, VmHarness.library(vm).allShots().size)
     }
 
     @Test
@@ -191,15 +193,32 @@ class ManualBrewDateVmTest {
         val vm = vm()
         val told = restore(vm, bundle(rows.first()))
         assertTrue(told.startsWith("Restored nothing new"), told)
-        assertEquals(350, history(vm).size)
+        assertEquals(350, VmHarness.library(vm).allShots().size)
     }
 
+    /** From #310 P3a the store keeps every row: an old shot restores, past the view's cap. */
     @Test
-    fun `a restore counts the shots it kept and says what the cap dropped`() {
+    fun `a restore over a full view keeps the old shot in the store`() {
         stored(List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now - i * hour) })
         val vm = vm()
         val told = restore(vm, bundle(machine("old", now - 1_000 * hour)))
-        assertTrue("History is full at 300 shots, so no shots were added" in told, told)
+        assertTrue(told.startsWith("Restored 1 shot"), told)
         assertEquals(HistoryStore.MAX_SHOTS, history(vm).size)
+        assertTrue(VmHarness.library(vm).allShots().any { it.id == "old" })
+    }
+
+    /** The legacy backend, when the move to shots.db failed, still has its cap. */
+    @Test
+    fun `a restore on the legacy backend counts the shots it kept and says what the cap dropped`() {
+        HistoryStore.legacyOnlyForTest = true
+        try {
+            stored(List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now - i * hour) })
+            val vm = vm()
+            val told = restore(vm, bundle(machine("old", now - 1_000 * hour)))
+            assertTrue("History is full at 300 shots, so no shots were added" in told, told)
+            assertEquals(HistoryStore.MAX_SHOTS, history(vm).size)
+        } finally {
+            HistoryStore.legacyOnlyForTest = false
+        }
     }
 }

@@ -68,6 +68,12 @@ object Stores {
         }
     }
 
+    /** [target]'s health, for a store that isn't one file read through [loadStore] (`shots.db`). */
+    internal fun recordHealth(target: File, what: String, value: StoreHealth) {
+        whats[target.path] = what
+        health[target.path] = value
+    }
+
     /** A new session: nothing has loaded for it yet. A refusal stays until a
      *  load settles it, as [SafeFile] still holds it. */
     internal fun forgetHealth() = health.clear()

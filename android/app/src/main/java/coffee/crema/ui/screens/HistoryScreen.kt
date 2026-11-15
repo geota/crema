@@ -381,7 +381,10 @@ fun HistoryScreen(
                     }
                 }
             }
-            if (ui.history.isEmpty()) {
+            if (!ui.historyLoaded) {
+                // Not loaded is not empty (#310 P3a): no empty state until the rows land.
+                coffee.crema.ui.components.HistoryLoadingSkeleton(Modifier.fillMaxSize())
+            } else if (ui.history.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CremaEmptyState(
                         message = "No shots yet — pull one on Brew.",
