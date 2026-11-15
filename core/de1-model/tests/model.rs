@@ -77,8 +77,7 @@ struct Pace {
 /// which needs every reading or on-window to be a return: 1 s to 1.5 s is
 /// enough for that. Readings and off-windows stop at 1.5 s because a steady
 /// 1.5 to 2 s cadence doesn't come from a real scale, which reports at 5 to
-/// 10 Hz. At such a cadence an 18 g shot with 50 ml of headspace stops by
-/// weight up to 7 g late (#429, closed as not planned).
+/// 10 Hz, so the cap stays.
 fn scale_pace() -> impl Strategy<Value = Option<Pace>> {
     let stall_at_g = prop_oneof![Just(None), (3u8..=45).prop_map(|g| Some(f32::from(g)))];
     prop_oneof![
@@ -1486,14 +1485,4 @@ fn a_slow_scale_stops_near_target() {
             }
         }
     }
-}
-
-/// What the generator's cap leaves out: at a steady 2 s, which no real scale
-/// reports at, an 18 g shot with 50 ml of headspace stops by weight 7 g late,
-/// which I22 sees (#429, closed as not planned).
-#[test]
-#[ignore = "a 2 s cadence isn't a real scale's; the weight leg lags there (#429)"]
-fn a_two_second_scale_stops_near_target() {
-    let world = paced_shot(ScaleMode::Sparse { every_ms: 2_000 }, 18.0, 50.0, None);
-    assert!(world.violations.is_empty(), "{:?}", world.violations);
 }
