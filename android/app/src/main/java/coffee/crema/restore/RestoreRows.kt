@@ -2,7 +2,9 @@ package coffee.crema.restore
 
 import coffee.crema.core.ShotPlan
 import coffee.crema.core.StorePlan
+import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
+import coffee.crema.history.withHeavy
 
 /** `local − remove + overwrite + add`, from the backup's rows. First of a repeated id wins. */
 fun <T> nextRows(local: List<T>, backup: List<T>, plan: StorePlan, id: (T) -> String): List<T> {
@@ -16,22 +18,25 @@ fun <T> nextRows(local: List<T>, backup: List<T>, plan: StorePlan, id: (T) -> St
     return added + kept
 }
 
-/** The history a plan leaves, and the rows whose curve to write. */
-class NextShots(val next: List<StoredShot>, val series: List<StoredShot>)
+/** The history a plan leaves, and the shots whose heavy parts to write: [series] whole, [next] as rows (#310 P4a). */
+class NextShots(val next: List<ShotRow>, val series: List<StoredShot>)
 
 /**
  * The history a plan leaves over [local]. Merge keeps local rows and fills a
  * lost curve; a shot on a bean already here pays nothing from this bag; a shot
  * deleted here that the plan revives comes back as the backup's row. A row
- * this device made meanwhile with a backup row's id is kept, once.
+ * this device made meanwhile with a backup row's id is kept, once. [rowOf]
+ * makes the row of a shot the plan writes whole: the backup's, or a local row
+ * with the backup's curve.
  */
 fun nextShots(
-    local: List<StoredShot>,
+    local: List<ShotRow>,
     backup: List<StoredShot>,
     plan: ShotPlan,
     replace: Boolean = false,
-    /** Whether a local row has its curve: a row past the view's cap is light, its curve on disk (#310 P3a). */
-    hasCurve: (StoredShot) -> Boolean = { it.samples.isNotEmpty() },
+    /** Whether a local row has its curve: a row holds none in memory, so the store says (#310 P4a). */
+    hasCurve: (ShotRow) -> Boolean,
+    rowOf: (StoredShot) -> ShotRow,
 ): NextShots {
     val theirs = LinkedHashMap<String, StoredShot>()
     for (s in backup) theirs.putIfAbsent(s.id, s)
@@ -48,12 +53,16 @@ fun nextShots(
     val kept = local.filterNot { it.id in remove }.map { s ->
         val b = theirs[s.id] ?: return@map s
         when {
-            // The backup's row; with no curve of its own it keeps the one here, the
-            // same shot's curve, so memory matches what a reload shows.
-            s.id in replaced -> (if (b.samples.isEmpty() && s.samples.isNotEmpty()) b.copy(samples = s.samples) else b).also { series += it }
+            // The backup's row. With no curve of its own it keeps the one here, the
+            // same shot's curve: a shot written without samples keeps the stored
+            // curve, so memory matches what a reload shows.
+            s.id in replaced -> rowOf(b.also { series += it })
             s.id in fill && !hasCurve(s) && b.samples.isNotEmpty() ->
                 // The backfill rule: the curve only, never over a curve here.
-                s.copy(samples = b.samples, durationMs = if (s.durationMs > 0) s.durationMs else b.durationMs).also { series += it }
+                s.withHeavy(b.samples, null, null)
+                    .copy(durationMs = if (s.durationMs > 0) s.durationMs else b.durationMs)
+                    .also { series += it }
+                    .let(rowOf)
             else -> s
         }
     }
@@ -61,5 +70,5 @@ fun nextShots(
     val added = (plan.add + plan.revive.filterNot { it in here }).filterNot { it in here }.distinct().mapNotNull { theirs[it] }
         .map { if (it.id in zero) it.copy(bagDebitG = 0f) else it }
     series += added
-    return NextShots((added + kept).sortedByDescending { it.completedAtMs }, series)
+    return NextShots((added.map(rowOf) + kept).sortedByDescending { it.completedAtMs }, series)
 }

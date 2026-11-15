@@ -7,7 +7,7 @@ import coffee.crema.core.BrewLogSeedInput
 import coffee.crema.core.BrewSeedInput
 import coffee.crema.core.BrewSeries
 import coffee.crema.core.brewLogSeedsJson
-import coffee.crema.history.StoredShot
+import coffee.crema.history.ShotMeta
 import coffee.crema.history.brewDateError
 import coffee.crema.history.brewDateTooOld
 import coffee.crema.history.fitsHistory
@@ -79,7 +79,7 @@ data class BrewLogDraft(
     fun doseMissing(beanExists: Boolean): Boolean = beanExists && dose <= 0.0
 
     /** Why [completedAtMs] can't date this brew, or null. Now is always fine. */
-    fun dateError(history: List<StoredShot>, nowMs: Long): String? = completedAtMs?.let { at ->
+    fun dateError(history: List<ShotMeta>, nowMs: Long): String? = completedAtMs?.let { at ->
         brewDateError(at, nowMs) ?: brewDateTooOld().takeUnless { fitsHistory(history, at) }
     }
 
@@ -108,7 +108,7 @@ object BrewLogSeeds {
     private val json = Json { ignoreUnknownKeys = true }
 
     /** A stored row → the core's seeding projection. */
-    fun seedRow(s: StoredShot): BrewSeedInput = BrewSeedInput(
+    fun seedRow(s: ShotMeta): BrewSeedInput = BrewSeedInput(
         brewMethod = s.brewMethod,
         beanId = s.bean?.beanId,
         doseG = s.doseG,
@@ -123,7 +123,7 @@ object BrewLogSeeds {
 
     /** Ask the core for the seeds of [method] (`null` = the opening method). */
     fun seeds(
-        history: List<StoredShot>,
+        history: List<ShotMeta>,
         method: String?,
         lastUsedMethod: String?,
         beanId: String?,
@@ -165,9 +165,9 @@ object BrewLogSeeds {
      */
     fun open(
         owner: String,
-        history: List<StoredShot>,
+        history: List<ShotMeta>,
         activeBeanId: String?,
-        prefill: StoredShot? = null,
+        prefill: ShotMeta? = null,
         prefillBeanId: String? = null,
         lastUsedMethod: String? = null,
         grinderOf: (String) -> String? = { null },
@@ -228,7 +228,7 @@ object BrewLogSeeds {
      */
     fun reseed(
         draft: BrewLogDraft,
-        history: List<StoredShot>,
+        history: List<ShotMeta>,
         newMethod: String,
         grinderOf: (String) -> String? = { null },
         seedsJson: (String) -> String = ::brewLogSeedsJson,

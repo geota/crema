@@ -240,7 +240,7 @@ class SafeFileTest {
             "Couldn't read your shot history; the damaged file was kept aside.",
             KeptAsideNotices.message(notices),
         )
-        store.save(emptyList())
+        store.save(emptyList<coffee.crema.history.StoredShot>())
         assertEquals("""[{"id":"a","ts""", assertNotNull(notices.single().keptAt).readText())
     }
 

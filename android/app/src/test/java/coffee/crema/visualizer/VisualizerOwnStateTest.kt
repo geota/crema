@@ -2,6 +2,8 @@ package coffee.crema.visualizer
 
 import android.app.Application
 import android.content.ContextWrapper
+import coffee.crema.history.row
+import coffee.crema.history.rows
 import coffee.crema.history.StoredShot
 import coffee.crema.security.SecretBox
 import coffee.crema.security.SecretCipher
@@ -104,7 +106,7 @@ class VisualizerOwnStateTest {
         history: Map<String, StoredShot> = emptyMap(),
         shotsLoaded: () -> Boolean = { true },
         historyRefused: () -> Boolean = { false },
-        seriesReady: suspend () -> Unit = {},
+        awaitRows: suspend () -> Unit = {},
         onSignedIn: () -> Unit = {},
     ) = VisualizerSync(
         store = store,
@@ -115,7 +117,8 @@ class VisualizerOwnStateTest {
         appVersion = "t",
         notify = { notices += it },
         onShotSynced = { _, _ -> },
-        currentShot = { history[it] },
+        currentShot = { history[it]?.row() },
+        loadShot = { history[it] },
         exchangeCode = { code, verifier ->
             exchanged += "$code/$verifier"
             issued
@@ -124,7 +127,7 @@ class VisualizerOwnStateTest {
         now = { 1_800_000_000_000L },
         shotsLoaded = shotsLoaded,
         historyRefused = historyRefused,
-        seriesReady = seriesReady,
+        awaitRows = awaitRows,
         onSignedIn = onSignedIn,
     )
 
@@ -304,10 +307,11 @@ class VisualizerOwnStateTest {
             appVersion = "t",
             notify = { notices += it },
             onShotSynced = { _, _ -> },
-            currentShot = { rows[it] },
+            currentShot = { rows[it]?.row() },
+            loadShot = { rows[it] },
             retryTimers = false,
             now = { 1_800_000_000_000L },
-            seriesReady = { series.await() },
+            awaitRows = { series.await() },
         )
         runBlocking { s.load() }
 
@@ -326,7 +330,7 @@ class VisualizerOwnStateTest {
         val shot = queuedShot
         seed(saved.copy(retryQueue = listOf(QueuedUpload("q1", 1, 0L))))
         val test = TestScope()
-        val s = sync(scope = test, history = mapOf("q1" to shot), seriesReady = { awaitCancellation() })
+        val s = sync(scope = test, history = mapOf("q1" to shot), awaitRows = { awaitCancellation() })
         runBlocking { s.load() }
 
         repeat(2) {
@@ -347,7 +351,7 @@ class VisualizerOwnStateTest {
         seed(saved.copy(tokens = null, pendingVerifier = "verifier", pendingState = "csrf"))
         val series = CompletableDeferred<Unit>()
         val offers = java.util.concurrent.atomic.AtomicInteger()
-        val s = sync(seriesReady = { series.await() }, onSignedIn = { offers.incrementAndGet() })
+        val s = sync(awaitRows = { series.await() }, onSignedIn = { offers.incrementAndGet() })
         runBlocking { s.load() }
 
         s.handleCallback("code", "csrf", null)

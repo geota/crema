@@ -63,7 +63,7 @@ class SaveFloorTest {
     private val stores: List<Triple<String, String, suspend () -> Unit>> by lazy {
         listOf(
             Triple("beanLibrary.json", "bean library") { LibraryStore(context, json).save(BeanLibrary()) },
-            Triple("shots.json", "shot history") { HistoryStore(context, json).save(emptyList()) },
+            Triple("shots.json", "shot history") { HistoryStore(context, json).save(emptyList<coffee.crema.history.StoredShot>()) },
             Triple("prefs.json", "settings") { SettingsStore(context, json).save(AppPrefs()) },
             Triple("customProfiles.json", "custom profiles") { CustomProfileStore(context, json).save(emptyList()) },
             Triple("pinnedProfiles.json", "pinned profiles list") { PinnedProfileStore(context, json).save(setOf("a")) },

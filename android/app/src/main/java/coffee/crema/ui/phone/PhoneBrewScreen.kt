@@ -220,6 +220,7 @@ fun PhoneBrewScreen(
                     onStartFromShot = { id -> vm.startFromShot(id) },
                     onTareScale = vm::tareScale,
                     onConnectThrough = vm::switchToSecondary,
+                    loadShot = vm::loadShot,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -829,6 +830,8 @@ private fun RestingBody(
     onTareScale: () -> Unit = {},
     /** "Connect through <hub>" while another hub holds the machine. */
     onConnectThrough: (host: String, port: Int) -> Unit = { _, _ -> },
+    /** A stored shot whole (#310 P4a): the last-shot card's curve. */
+    loadShot: suspend (String) -> coffee.crema.history.StoredShot? = { null },
 ) {
     val tel = CremaTheme.telemetry
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -944,6 +947,10 @@ private fun RestingBody(
         val last = ui.lastShot
         if (last != null) {
             val stored = ui.history.firstOrNull { it.id == last.id }
+            // The curve loads with the shot (#310 P4a): the row holds none.
+            val storedCurve by androidx.compose.runtime.produceState<List<coffee.crema.ui.TelemetrySample>>(emptyList(), stored?.id, stored?.summary) {
+                value = stored?.id?.let { loadShot(it) }?.samples.orEmpty()
+            }
             Surface(
                 onClick = { onOpenLastShot(last.id) },
                 shape = RoundedCornerShape(16.dp),
@@ -988,7 +995,7 @@ private fun RestingBody(
                             .clip(MaterialTheme.shapes.medium)
                             .background(MaterialTheme.colorScheme.surfaceContainerLowest),
                     ) {
-                        val samples = stored?.samples.orEmpty()
+                        val samples = storedCurve
                         if (samples.isNotEmpty()) {
                             EnlargeableChart(Modifier.fillMaxSize()) { m ->
                                 CanvasShotChart(
@@ -1166,7 +1173,7 @@ private fun ReadyParam(
  */
 @Composable
 private fun PhoneDialInCard(
-    shot: coffee.crema.history.StoredShot,
+    shot: coffee.crema.history.ShotMeta,
     weightUnit: String,
     /** Re-apply this shot's setup (profile + bag + grind + targets). */
     onStart: () -> Unit,

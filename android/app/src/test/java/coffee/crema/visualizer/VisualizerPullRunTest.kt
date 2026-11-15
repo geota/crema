@@ -1,6 +1,8 @@
 package coffee.crema.visualizer
 
 import android.content.ContextWrapper
+import coffee.crema.history.row
+import coffee.crema.history.rows
 import coffee.crema.core.PoisonEntry
 import coffee.crema.history.StoredShot
 import coffee.crema.security.SecretBox
@@ -160,8 +162,9 @@ class VisualizerPullRunTest {
                     )
                 }
             },
-            currentShot = { history[it] },
-            allShots = { history.values.toList() },
+            currentShot = { history[it]?.row() },
+            loadShot = { history[it] },
+            allShots = { history.values.toList().rows() },
             now = { clock },
             revoke = {},
             retryTimers = false,
@@ -182,7 +185,7 @@ class VisualizerPullRunTest {
     private fun stored() = runBlocking { store.load() }
 
     private fun run(v: VisualizerSync, fromStart: Boolean = false): VisualizerSync.RunResult =
-        runBlocking { v.pullRun(history.values.toList(), fromStart) }
+        runBlocking { v.pullRun((history.values.toList()).rows(), fromStart) }
 
     private fun details() = requests.filter { Regex("^GET /api/shots/[^/?]+$").matches(it) }
 

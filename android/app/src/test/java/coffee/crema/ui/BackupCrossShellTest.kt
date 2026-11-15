@@ -1,5 +1,7 @@
 package coffee.crema.ui
 
+import coffee.crema.history.wholeFrom
+import coffee.crema.history.rows
 import coffee.crema.core.Bean
 import coffee.crema.core.BrewRecipe
 import coffee.crema.core.CustomBrewMethod
@@ -93,13 +95,14 @@ class BackupCrossShellTest {
         val state = MainUiState(
             beans = rowViewOf(listOf(bean)),
             roasters = rowViewOf(listOf(roaster)),
-            history = rowViewOf(listOf(shot)),
+            history = rowViewOf(listOf(shot).rows()),
             customMethods = listOf(method),
             lastRecipeByMethod = mapOf("pourover" to recipe.id),
             maintenance = defaultMaintenanceState(1_790_000_000_000),
         )
         return BackupSnapshot(
             customs = listOf(json.encodeToString(JsonObject.serializer(), profile)),
+            full = wholeFrom(listOf(shot)),
             state = state,
             pinned = setOf("builtin:londinium"),
             hidden = emptySet(),

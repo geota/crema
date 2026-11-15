@@ -2,9 +2,12 @@ package coffee.crema.restore
 
 import coffee.crema.core.ShotPlan
 import coffee.crema.history.StoredShot
+import coffee.crema.history.row
+import coffee.crema.history.rows
 import coffee.crema.ui.TelemetrySample
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /** The history a plan leaves, as step 7 recomputes it over the rows as they stand. */
 class RestoreRowsTest {
@@ -23,30 +26,40 @@ class RestoreRowsTest {
     private val backup = listOf(shot("shot:remote:9", "backup", curve, debit = 18f))
     private val stub = shot("shot:remote:9", "stub", debit = 3f)
 
+    /** The plan as LibraryController runs it: rows in, whole shots to write out (#310 P4a). */
+    private fun next(local: List<StoredShot>, backup: List<StoredShot>, plan: ShotPlan, replace: Boolean) =
+        nextShots(local.rows(), backup, plan, replace, hasCurve = { r -> local.first { it.id == r.id }.samples.isNotEmpty() }, rowOf = { it.row() })
+
     @Test
     fun aStubLandingInStepSevenOnMergeStaysAndGetsItsCurve() {
-        val r = nextShots(listOf(stub), backup, plan(add = listOf("shot:remote:9")), replace = false)
+        val r = next(listOf(stub), backup, plan(add = listOf("shot:remote:9")), replace = false)
         val row = r.next.single()
         assertEquals("stub", row.notes)
         assertEquals(3f, row.bagDebitG)
-        assertEquals(curve, row.samples)
-        assertEquals(listOf("shot:remote:9"), r.series.map { it.id })
+        assertEquals(curve.size.toUInt(), row.summary.sampleCount, "the row's summary names the filled curve")
+        // The curve goes with the row's own fields, to be written whole.
+        val written = r.series.single()
+        assertEquals("shot:remote:9", written.id)
+        assertEquals(curve, written.samples)
+        assertEquals("stub", written.notes)
     }
 
     @Test
     fun aStubLandingInStepSevenOnReplaceIsOverwritten() {
-        val r = nextShots(listOf(stub), backup, plan(add = listOf("shot:remote:9")), replace = true)
+        val r = next(listOf(stub), backup, plan(add = listOf("shot:remote:9")), replace = true)
         val row = r.next.single()
         assertEquals("backup", row.notes)
         assertEquals(18f, row.bagDebitG)
-        assertEquals(curve, row.samples)
+        assertEquals(curve, r.series.single().samples)
     }
 
     @Test
     fun anOverwriteWithNoCurveKeepsTheDevicesCurve() {
         val mine = shot("s1", "mine", curve)
-        val row = nextShots(listOf(mine), listOf(shot("s1", "backup")), plan(overwrite = listOf("s1")), replace = true).next.single()
-        assertEquals("backup", row.notes)
-        assertEquals(curve, row.samples, "the same shot's curve stays, as a reload would show it")
+        val r = next(listOf(mine), listOf(shot("s1", "backup")), plan(overwrite = listOf("s1")), replace = true)
+        assertEquals("backup", r.next.single().notes)
+        // Written with no samples: the store keeps the curve it holds (HistorySqliteStoreTest),
+        // so memory matches what a reload shows.
+        assertTrue(r.series.single().samples.isEmpty())
     }
 }

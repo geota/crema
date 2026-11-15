@@ -4,6 +4,7 @@ import coffee.crema.core.BackupCounts
 import coffee.crema.core.backupPrelude
 import coffee.crema.core.backupShotLine
 import coffee.crema.core.backupTail
+import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
 import coffee.crema.visualizer.wireShotJson
 import kotlinx.serialization.Serializable
@@ -201,7 +202,7 @@ private fun walk(
     shotJson: (StoredShot) -> String,
 ): StreamedBackup {
     val shots = snap.shots.toList()
-    val lineOf = { shot: StoredShot ->
+    val lineOf = { shot: ShotRow ->
         // A read that failed is outside the runCatching: it stops the backup rather than leave the row out.
         val whole = readWhole(snap, shot)
         runCatching { json.decodeFromString(ShotLine.serializer(), backupShotLine(shotJson(whole))) }.getOrNull()
@@ -308,7 +309,7 @@ private fun walk(
  * tried twice more; then the backup stops and says so, as it never reports
  * success for a backup that isn't complete (SPEC §7, #408 S5).
  */
-internal fun readWhole(snap: BackupSnapshot, shot: StoredShot): StoredShot {
+internal fun readWhole(snap: BackupSnapshot, shot: ShotRow): StoredShot {
     var last: coffee.crema.history.HistoryReadException? = null
     repeat(BACKUP_READ_TRIES) {
         try {

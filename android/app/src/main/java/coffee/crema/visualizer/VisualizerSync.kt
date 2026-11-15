@@ -18,7 +18,10 @@ import coffee.crema.core.signatureForShot
 import coffee.crema.core.uploadRefusedNoSamples
 import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
+import coffee.crema.history.ShotMeta
+import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
+import coffee.crema.history.rowFinalWeight
 import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.historyFullNotice
 import coffee.crema.history.isBrewLog
@@ -104,8 +107,14 @@ class VisualizerSync(
     private val paceDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     /** Sign-in just completed — the moment to offer a catch-up of existing shots. */
     private val onSignedIn: () -> Unit = {},
-    /** The shot as history holds it now (null = deleted) — re-read before a backlog POST. */
-    private val currentShot: (localId: String) -> StoredShot? = { null },
+    /** The row as history holds it now (null = deleted) — re-read before a backlog POST. */
+    private val currentShot: (localId: String) -> ShotRow? = { null },
+    /**
+     * The shot whole, its curve and recipe, read just before it is sent
+     * (#310 P4a): a row holds neither. Null = no longer in history. Throws
+     * when it can't be read just now, which says nothing about the shot.
+     */
+    private val loadShot: suspend (localId: String) -> StoredShot? = { null },
     /** The core's quota / backoff policy (injected so JVM tests needn't load the native core). */
     private val uploadPolicy: UploadPolicy = UploadPolicy.core(),
     /**
@@ -142,14 +151,14 @@ class VisualizerSync(
     /** Run the retry queue's timers (the scheduled retry and the foreground
      *  tick); JVM tests turn them off and drain by hand. */
     private val retryTimers: Boolean = true,
-    /** Waits for the stored shots' telemetry to load (F10 validation P1-2):
-     *  an upload or a pull before it would see shots without their series. */
-    private val seriesReady: suspend () -> Unit = {},
+    /** Waits for the rows to load (F10 validation P1-2): a pull or a backlog
+     *  read before it would see no shots. */
+    private val awaitRows: suspend () -> Unit = {},
     /** How the retry timers wait (injected so a JVM test can see each wait). */
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     /** Core `upload_refused_no_samples`: a machine shot with no telemetry doesn't go. */
     private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?) -> Boolean = ::uploadRefusedNoSamples,
-    /** Whether the stored shots are in the history; a list taken before then is empty. */
+    /** Whether the rows are in the history; a list taken before then is empty. */
     private val shotsLoaded: () -> Boolean = { true },
     /** The shot log couldn't be read: shots wait for the user, not for a load. */
     private val historyRefused: () -> Boolean = { false },
@@ -161,12 +170,13 @@ class VisualizerSync(
     /** How long a run waits for the rows before it skips (tests shrink it). */
     private val rowsWaitMs: Long = ROWS_WAIT_MS,
     /** Every shot as history holds it now: the backlog a different account is asked about. */
-    private val allShots: () -> List<StoredShot> = { emptyList() },
-    /** The rows in view: an upload pass's backlog. A row past the view's cap is light until
-     *  P4a's `loadShot`, so it would go without its curve (#310 P3a). */
-    private val viewShots: () -> List<StoredShot> = allShots,
-    /** Whether a local row has its curve: one past the view's cap holds it on disk, not in memory (#310 P3a). */
-    private val hasSeries: (StoredShot) -> Boolean = { it.samples.isNotEmpty() },
+    private val allShots: () -> List<ShotRow> = { emptyList() },
+    /** The rows in view: an upload pass's backlog. */
+    private val viewShots: () -> List<ShotRow> = allShots,
+    /** Whether a local row has its curve: no row holds one in memory, so the store says (#310 P4a). */
+    private val hasSeries: (ShotRow) -> Boolean = { (it.summary.sampleCount ?: 0u) > 0u },
+    /** Whether a local row has its recipe stored (#310 P4a). */
+    private val hasProfile: (localId: String) -> Boolean = { false },
     /** Revoke an access token at the server, best-effort (injected for JVM tests). */
     private val revoke: suspend (accessToken: String) -> Unit = { revokeToken(clientId, it) },
 ) : UploadDestination {
@@ -281,24 +291,24 @@ class VisualizerSync(
     /** Nothing goes up until the account is known and any change of it is answered. */
     private val uploadsHeld: Boolean get() = persisted.accountUnconfirmed || persisted.accountChangeAsk
     override val autoUpload: Boolean get() = persisted.prefs.autoUpload
-    override fun isUploaded(shot: StoredShot): Boolean = shot.visualizerId != null
-    override fun viewUrl(shot: StoredShot): String? = shot.visualizerId?.let { "https://visualizer.coffee/shots/$it" }
+    override fun isUploaded(shot: ShotRow): Boolean = shot.visualizerId != null
+    override fun viewUrl(shot: ShotRow): String? = shot.visualizerId?.let { "https://visualizer.coffee/shots/$it" }
     /** Brew Log rows (issue #10) are local-only — never in the Visualizer backlog. */
-    override fun inBacklog(shot: StoredShot): Boolean =
+    override fun inBacklog(shot: ShotRow): Boolean =
         shot.visualizerId == null && !shot.isBrewLog && !noTelemetry(shot) && !excluded(shot)
 
     /** The user kept this shot off the account signed in now. */
-    private fun excluded(shot: StoredShot): Boolean =
+    private fun excluded(shot: ShotRow): Boolean =
         persisted.uploadExcludedBefore?.let { shot.completedAtMs < it } ?: false
 
-    /** A machine shot no upload can take: no telemetry, now the series have settled. */
-    fun noTelemetry(shot: StoredShot): Boolean =
-        shot.visualizerId == null && shot.samples.isEmpty() && shotsSettled && uploadRefused(shot.isBrewLog, 0u)
+    /** A machine shot no upload can take: no telemetry, by its summary, now the rows have settled. An unknown count isn't "none". */
+    fun noTelemetry(shot: ShotRow): Boolean =
+        shot.visualizerId == null && shot.summary.sampleCount == 0u && shotsSettled && uploadRefused(shot.isBrewLog, 0u)
 
-    /** The series load has ended; until then a row's curve may be on its way. */
+    /** The rows have loaded; until then a row may be on its way. */
     val shotsSettled: Boolean get() = shotsLoaded() && !historyRefused()
-    override fun canUpload(shot: StoredShot): Boolean = !shot.isBrewLog
-    override fun pushShot(shot: StoredShot, replace: Boolean): Boolean = uploadShot(shot, silent = false)
+    override fun canUpload(shot: ShotRow): Boolean = !shot.isBrewLog
+    override fun pushShot(shot: ShotRow, replace: Boolean): Boolean = uploadShot(shot, silent = false)
     override suspend fun setAutoUploadNow(enabled: Boolean) {
         persist { it.copy(prefs = it.prefs.copy(autoUpload = enabled)) }
     }
@@ -845,7 +855,7 @@ class VisualizerSync(
      * Upload one shot in the background; stamps `visualizerId` on success.
      * Returns false without POSTing when signed out or the shot is already in flight.
      */
-    fun uploadShot(shot: StoredShot, silent: Boolean = false): Boolean {
+    fun uploadShot(shot: ShotRow, silent: Boolean = false): Boolean {
         // Brew Log rows (issue #10) never reach Visualizer — auto or manual.
         if (shot.isBrewLog) return false
         if (persisted.tokens == null) {
@@ -894,7 +904,7 @@ class VisualizerSync(
      * twice; stops when the session is gone. A second call while a pass runs
      * returns at once.
      */
-    override suspend fun uploadUnsentNow(shots: List<StoredShot>): DrainResult {
+    override suspend fun uploadUnsentNow(shots: List<ShotRow>): DrainResult {
         if (!drainMutex.tryLock()) return DrainResult(stopped = "A Visualizer upload pass is already running")
         try {
             if (!enabled) return DrainResult()
@@ -1115,7 +1125,7 @@ class VisualizerSync(
     }
 
     /** One backlog upload with the History spinner on; stamps the id. Throws on failure. */
-    private suspend fun pushTracked(shot: StoredShot): Boolean {
+    private suspend fun pushTracked(shot: ShotRow): Boolean {
         _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
         try {
             bindUploaded(shot.id, uploadShotNow(shot))
@@ -1126,12 +1136,13 @@ class VisualizerSync(
     }
 
     /** The suspend upload itself — payload → POST → lastSyncAt + log line. */
-    private suspend fun uploadShotNow(snapshot: StoredShot): String {
+    private suspend fun uploadShotNow(snapshot: ShotRow): String {
         // Backstop: every caller filters brews out first (issue #10).
         require(!snapshot.isBrewLog) { "Brew Log rows are never uploaded to Visualizer" }
-        // A copy taken before the series loaded has none: wait, then re-read.
-        seriesReady()
-        val shot = if (snapshot.samples.isEmpty()) currentShot(snapshot.id) ?: snapshot else snapshot
+        // The shot whole, just before it goes (#310 P4a): no row holds a curve.
+        // A read that fails throws, and the upload retries later; a shot no
+        // longer here was deleted while this held its claim.
+        val shot = loadShot(snapshot.id) ?: throw VisualizerError.RowDeleted()
         if (uploadRefused(shot.isBrewLog, shot.samples.size.toUInt())) throw VisualizerError.NoSeries()
         val payload = buildShotPayload(shot)
         // Deleted while this held its claim: a POST would only make a copy to delete.
@@ -1172,7 +1183,7 @@ class VisualizerSync(
         shotId in st.uploadAttempted || st.retryQueue.any { it.shotId == shotId } || claimed(shotId)
 
     /** Whether a delete of [shot] should offer Visualizer: an upload may land its copy. */
-    fun uploadPending(shot: StoredShot): Boolean = uploadPending(persisted, shot.id)
+    fun uploadPending(shot: ShotRow): Boolean = uploadPending(persisted, shot.id)
 
     /**
      * Send a History edit to the shot's Visualizer copy (web
@@ -1183,7 +1194,7 @@ class VisualizerSync(
      * nothing left means no request. No-op for never-uploaded shots; soft — a
      * failure notifies, the mark stays and the drain tries again.
      */
-    fun patchEditedShot(shot: StoredShot) {
+    fun patchEditedShot(shot: ShotRow) {
         if (shot.visualizerId == null) return
         scope.launch { pushPendingEdit(shot.id, fallback = shot, fromEdit = true) }
     }
@@ -1195,7 +1206,7 @@ class VisualizerSync(
      * is gone or refused) clears and reports; any other keeps the mark, backed
      * off on the core's schedule. Returns the failure, if any.
      */
-    internal suspend fun pushPendingEdit(localId: String, fallback: StoredShot? = null, fromEdit: Boolean = false): Throwable? {
+    internal suspend fun pushPendingEdit(localId: String, fallback: ShotRow? = null, fromEdit: Boolean = false): Throwable? {
         val edit = pendingEdits[localId] ?: return null
         val shot = currentShot(localId) ?: fallback ?: return null
         val vid = shot.visualizerId ?: return null
@@ -1262,7 +1273,7 @@ class VisualizerSync(
     }
 
     /** The PATCH inputs for [edit] on [shot]: only the marked fields. */
-    private fun editInputs(shot: StoredShot, edit: PendingEdit) = shotPatchInputs(
+    private fun editInputs(shot: ShotRow, edit: PendingEdit) = shotPatchInputs(
         shot,
         includeNotes = persisted.prefs.includeNotes,
         defaultPrivacy = persisted.prefs.privacy,
@@ -1377,7 +1388,7 @@ class VisualizerSync(
      *  and the shots direction pushes. Verbose: the upload snackbar confirms
      *  the push (and surfaces a failure — a silent miss left users believing
      *  the shot was synced), per the issue #44 follow-up ask. */
-    override fun maybeAutoUpload(shot: StoredShot, fullSamples: List<TelemetrySample>?): Boolean {
+    override fun maybeAutoUpload(shot: ShotRow): Boolean {
         if (persisted.prefs.autoUpload && enabled) {
             return uploadShot(shot)
         }
@@ -1486,7 +1497,7 @@ class VisualizerSync(
      * recipe only when offered and the row has none, the row re-read just
      * before the request so an edit made meanwhile wins. The core outcome.
      */
-    private suspend fun pullRow(summary: VisualizerClient.ShotSummary, startShots: List<StoredShot>): RunReply<JsonObject> {
+    private suspend fun pullRow(summary: VisualizerClient.ShotSummary, startShots: List<ShotRow>): RunReply<JsonObject> {
         // The rows as they stand now, not as the page began: a row bound by an
         // earlier row of this page can't bind a second remote copy.
         val shots = allShots().ifEmpty { startShots }
@@ -1515,7 +1526,7 @@ class VisualizerSync(
         val detailStr = json.encodeToString(JsonElement.serializer(), detail)
         val samples = runCatching { coffee.crema.core.samplesFromVisualizerDetail(detailStr) }.getOrNull()
         val offered = ((detail as? JsonObject)?.get("profile_url") as? JsonPrimitive)?.isString == true
-        val profile = if (offered && bound?.profile == null) {
+        val profile = if (offered && bound != null && !hasProfile(bound.id)) {
             // A recipe that won't come leaves the row name-only.
             (runRequest { withFreshToken { client.request("GET", "/shots/${summary.id}/profile?format=json", it) } } as? RunReply.Ok)
                 ?.value?.let { v2 -> runCatching { json.parseToJsonElement(coffee.crema.core.parseV2Profile(v2.toString())).jsonObject }.getOrNull() }
@@ -1552,7 +1563,7 @@ class VisualizerSync(
      * counted days and is retried alone once a day. The first run after this
      * changed (`pullCursorEpoch` unset) walks the whole account once.
      */
-    internal suspend fun pullRun(shots: List<StoredShot>, fromStart: Boolean = false): RunResult {
+    internal suspend fun pullRun(shots: List<ShotRow>, fromStart: Boolean = false): RunResult {
         // One run at a time: a second Sync while one walks does nothing.
         if (!runMutex.tryLock()) return RunResult(buildJsonObject { put("kind", JsonPrimitive("Busy")) }, 0, 0)
         try {
@@ -1572,7 +1583,7 @@ class VisualizerSync(
     /** Held by the pull run that is walking. */
     private val runMutex = Mutex()
 
-    private suspend fun walkRun(shots: List<StoredShot>, fromStart: Boolean): RunResult {
+    private suspend fun walkRun(shots: List<ShotRow>, fromStart: Boolean): RunResult {
         val st0 = persisted
         val repairing = st0.pullCursorEpoch == null
         val legacyCursor = if (repairing) st0.shotPullCursor?.div(1000) else null
@@ -1786,7 +1797,7 @@ class VisualizerSync(
      * refuses is counted and the rest of the plan still applies.
      */
     internal suspend fun reconcileAndApply(
-        localShots: List<StoredShot>,
+        localShots: List<ShotRow>,
         wires: List<JsonObject>,
         samplesById: Map<String, String>,
         profilesById: Map<String, JsonObject>,
@@ -1812,7 +1823,8 @@ class VisualizerSync(
                                 put("completedAt", JsonPrimitive(shot.completedAtMs))
                                 put("duration", JsonPrimitive(shot.durationMs))
                                 put("profileName", shot.profileName?.let { JsonPrimitive(it) } ?: JsonNull)
-                                put("finalWeight", shotFinalWeight(shot)?.let { JsonPrimitive(it) } ?: JsonNull)
+                                // From the summary (SPEC §4): the same weight the signature read with the series.
+                                put("finalWeight", rowFinalWeight(shot)?.let { JsonPrimitive(it) } ?: JsonNull)
                                 put("visualizerId", shot.visualizerId?.let { JsonPrimitive(it) } ?: JsonNull)
                                 put("deletedAt", JsonNull)
                             },
@@ -1922,7 +1934,7 @@ class VisualizerSync(
      * later. A shot bound or with an upload under way leaves a tombstone. One never
      * offered to Visualizer just goes.
      */
-    fun tombstoneDeleted(shot: StoredShot, deleteRemote: Boolean) {
+    fun tombstoneDeleted(shot: ShotRow, deleteRemote: Boolean) {
         val visualizerId = shot.visualizerId
         if (visualizerId != null) return tombstoneShot(shot.id, visualizerId, deleteRemote)
         deletedHere += shot.id
@@ -2049,13 +2061,13 @@ class VisualizerSync(
      * What the merge reads of a local row (core `ShotMergeInput`), with its
      * pending barista edit. Android marks no tags.
      */
-    private fun mergeInputOf(shot: StoredShot, baristaPending: Boolean) = ShotMergeInput(
+    private fun mergeInputOf(shot: ShotRow, baristaPending: Boolean) = ShotMergeInput(
         tags = shot.tags,
         tagsPending = false,
         barista = shot.barista?.trim()?.ifEmpty { null },
         baristaPending = baristaPending,
-        hasSeries = shot.samples.isNotEmpty(),
-        hasProfile = shot.profile != null,
+        hasSeries = hasSeries(shot),
+        hasProfile = hasProfile(shot.id),
         isBrew = shot.isBrewLog,
     )
 
@@ -2077,7 +2089,7 @@ class VisualizerSync(
         remote ?: return false
         val local = currentShot(localId) ?: return false
         val input = mergeInputOf(local, pendingEdits[localId]?.barista == true)
-        if (before != null && editedDuringFetch(before, input)) return local.samples.isEmpty() && !local.isBrewLog
+        if (before != null && editedDuringFetch(before, input)) return !hasSeries(local) && !local.isBrewLog
         val payload = buildJsonObject {
             put("local", json.encodeToJsonElement(ShotMergeInput.serializer(), input))
             put("remote", remote)
@@ -2176,7 +2188,7 @@ class VisualizerSync(
      * advances ONLY on a successful pull — never on a push. Soft per-step: a
      * failure logs + notifies, the other steps still run.
      */
-    fun syncNow(shots: List<StoredShot>, includeBeans: Boolean = true, fromStart: Boolean = false) {
+    fun syncNow(shots: List<ShotRow>, includeBeans: Boolean = true, fromStart: Boolean = false) {
         if (persisted.tokens == null) {
             notify("Sign in to Visualizer first (Settings → Sharing)")
             return
@@ -2198,9 +2210,9 @@ class VisualizerSync(
         }
         _state.update { it.copy(syncing = true) }
         scope.launch {
-            // The pull backfills curve-less shots: not before the stored
-            // series have loaded.
-            seriesReady()
+            // The pull backfills curve-less shots: not before the rows have
+            // loaded, as until then every shot looks curve-less.
+            awaitRows()
             val parts = mutableListOf<String>()
             var failed = false
             // Remote deletes the user asked for that haven't landed yet.
@@ -2273,7 +2285,7 @@ class VisualizerSync(
      * is told once, not once per trigger.
      */
     private suspend fun rowsReady(): Boolean {
-        if (withTimeoutOrNull(rowsWaitMs) { seriesReady() } != null) return true
+        if (withTimeoutOrNull(rowsWaitMs) { awaitRows() } != null) return true
         if (rowsLateTold.compareAndSet(false, true)) {
             notify("Shot data hasn’t loaded, so Visualizer uploads are waiting. They’ll retry on their own.")
         }
@@ -2281,7 +2293,7 @@ class VisualizerSync(
     }
 
     /** One line for the pass: these would otherwise fill the log on every sync. */
-    private suspend fun logNoTelemetry(shots: List<StoredShot>) {
+    private suspend fun logNoTelemetry(shots: List<ShotRow>) {
         val n = shots.count(::noTelemetry)
         if (n > 0) logSync("skip", "", "Upload", "$n shot${if (n == 1) " has" else "s have"} no telemetry to upload")
     }
@@ -2310,7 +2322,7 @@ class VisualizerSync(
      * shots"): clear the incremental cursor, then run a normal sync pass. The
      * reconcile planner de-duplicates against existing locals.
      */
-    fun resyncAllShots(shots: List<StoredShot>) {
+    fun resyncAllShots(shots: List<ShotRow>) {
         if (!shotsReady()) return
         // Shots only — the web's "Re-sync shots" never touches beans. From the
         // start, forgetting the rows marked as failing.
@@ -2318,7 +2330,7 @@ class VisualizerSync(
     }
 
     /** Upload every shot without a `visualizerId`, sequentially, with a summary. */
-    fun uploadAllUnsynced(shots: List<StoredShot>) {
+    fun uploadAllUnsynced(shots: List<ShotRow>) {
         if (persisted.tokens == null) {
             notify("Sign in to Visualizer first (Settings → Sharing)")
             return
@@ -2374,7 +2386,7 @@ internal fun VisualizerState.withTombstoneBound(shotId: String, visualizerId: St
  * else the Settings default. Blank counts as absent. Mirrors the web
  * `resolveGrinderModel`.
  */
-internal fun resolveGrinderModel(shot: StoredShot, settingsDefault: String?): String? =
+internal fun resolveGrinderModel(shot: ShotMeta, settingsDefault: String?): String? =
     shot.grinderModel?.trim()?.takeIf { it.isNotEmpty() }
         ?: settingsDefault?.trim()?.takeIf { it.isNotEmpty() }
 
@@ -2385,7 +2397,7 @@ internal fun resolveGrinderModel(shot: StoredShot, settingsDefault: String?): St
  * tests.
  */
 internal fun shotPatchInputs(
-    shot: StoredShot,
+    shot: ShotMeta,
     includeNotes: Boolean,
     defaultPrivacy: String?,
     settingsGrinderModel: String?,
@@ -2442,5 +2454,5 @@ data class PulledParts(
 )
 
 /** A shot's barista as the PATCH sends it: trimmed, "" when unset or cleared. */
-internal fun baristaOf(shot: StoredShot): String = shot.barista?.trim().orEmpty()
+internal fun baristaOf(shot: ShotMeta): String = shot.barista?.trim().orEmpty()
 

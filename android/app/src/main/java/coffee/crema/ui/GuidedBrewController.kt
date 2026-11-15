@@ -790,7 +790,7 @@ internal class GuidedBrewController(
 
     // ── Brew Log (issue #10) ─────────────────────────────────────────
     /** Open the form on [owner]'s tab — seeded from [prefill] ("Log again") or [beanId]'s bag. */
-    fun openLogBrew(owner: String, prefill: StoredShot? = null, beanId: String? = null) {
+    fun openLogBrew(owner: String, prefill: coffee.crema.history.ShotMeta? = null, beanId: String? = null) {
         val s = effectiveState()
         _logBrew.value = coffee.crema.ui.brewlog.BrewLogSeeds.open(
             owner = owner,

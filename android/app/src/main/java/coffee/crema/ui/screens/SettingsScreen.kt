@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import kotlinx.coroutines.launch
 import coffee.crema.visualizer.pullWaitingLine
 import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.CoreBounds
@@ -967,7 +968,9 @@ fun SettingsScreen(
                                 "One-shot download of your entire shot history as JSON. Useful for spreadsheets and other tools.",
                                 last = true,
                             ) {
-                                CremaButton(onClick = { confirm.launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+                                // Each shot is read whole first (#310 P4a), off the main thread.
+                                val exportScope = androidx.compose.runtime.rememberCoroutineScope()
+                                CremaButton(onClick = { exportScope.launch { confirm.launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) } }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
                             }
                         }
                         // Other integrations — the web's stub trio, disabled until real.

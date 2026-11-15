@@ -10,7 +10,7 @@ import kotlinx.serialization.json.JsonObject
 /*
  * A row's summary (SPEC §4): what a History row shows without its series,
  * from the core's `shot_summary`, written at save, on migration and on
- * restore. P3a stores it; P4a reads it.
+ * restore. P3a stores it; from P4a the rows on screen read it.
  */
 
 /** The core's summary of [shot] (its samples and brew series). The input keeps
@@ -65,8 +65,14 @@ internal fun signatureOfShot(shot: StoredShot): String =
 
 /** The same signature from a row and its summary alone (SPEC §4): the final
  *  weight, then the peak, then the yield. */
-internal fun signatureOfRow(row: StoredShot, summary: ShotSummary?): String =
+internal fun signatureOfRow(row: ShotMeta, summary: ShotSummary?): String =
     signatureForShot(row.completedAtMs, row.durationMs, row.profileName, summary?.finalWeight ?: summary?.peakWeight ?: row.yieldG)
 
 /** Whether [summary] says the shot has a machine curve on disk. Unknown counts as none here, as it does today. */
 internal fun ShotSummary?.hasCurve(): Boolean = (this?.sampleCount ?: 0u) > 0u
+
+/** [row]'s de-dup signature from its summary alone (SPEC §4): the one a pull matches against. */
+fun rowSignature(row: ShotRow): String = signatureOfRow(row, row.summary)
+
+/** [row]'s final weight for the de-dup signature, from its summary: the last reading, then the peak, then the yield. */
+fun rowFinalWeight(row: ShotRow): Float? = row.summary.finalWeight ?: row.summary.peakWeight ?: row.yieldG

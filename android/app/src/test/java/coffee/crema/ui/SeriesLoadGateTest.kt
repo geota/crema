@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
+import coffee.crema.history.seriesReadsForTest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,9 +24,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * F10 validation P1-2: the startup shows the shot rows at once and loads their
- * telemetry in the background; a backup or an export started in that window
- * waits for it instead of saving the shots without their curves.
+ * F10 validation P1-2, from #310 P4a: the startup shows the shot rows and
+ * reads no series; a backup or an export started before the rows land waits
+ * for them, then reads each shot whole, so no shot goes without its curve.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -35,7 +36,7 @@ class SeriesLoadGateTest {
     private val store = ViewModelStore()
 
     @After fun tearDown() {
-        HistoryStore.holdSeriesLoad = null
+        HistoryStore.holdOpen = null
         store.clear()
         VmHarness.idle()
     }
@@ -58,28 +59,46 @@ class SeriesLoadGateTest {
     }
 
     @Test
-    fun `a backup or an export during the series load waits for the full series`() {
+    fun `a backup or an export before the rows land waits for them, then goes with every curve`() {
         runBlocking { HistoryStore(VmHarness.app(), coreJson).save(listOf(shot)) }
         val gate = CompletableDeferred<Unit>()
-        HistoryStore.holdSeriesLoad = gate
+        HistoryStore.holdOpen = gate
         val vm = VmHarness.build(store)
-        VmHarness.awaitStartupLoaded(vm)
-        assertTrue(vm.ui.value.history.single().samples.isEmpty(), "the series load is still held")
+        VmHarness.idleUntil("the prefs") { VmHarness.prefsLoaded(vm) && vm.startupLoad.isCompleted }
+        assertFalse(vm.ui.value.historyLoaded, "the rows' load is still held")
 
-        // The save buttons are refused, not handed a file without curves.
-        assertNull(vm.shotsJson(null))
+        // The save buttons are refused, not handed a file without the shots.
+        assertNull(VmHarness.shotsJson(vm))
         assertTrue(vm.ui.value.userMessages.last().startsWith("Shot data is still loading"))
 
         val backup = CoroutineScope(Dispatchers.Default).async { vm.buildBackupZipBytes() }
         Thread.sleep(200)
         VmHarness.idle()
-        assertFalse(backup.isCompleted, "the backup waits for the series")
+        assertFalse(backup.isCompleted, "the backup waits for the rows")
 
         gate.complete(Unit)
         VmHarness.idleUntil("the backup") { backup.isCompleted }
         val line = backupJsonl(assertNotNull(runBlocking { backup.await() })).lines().single { "\"s1\"" in it }
         assertEquals(5, Regex("7\\.25").findAll(line).count(), "every sample is in the backup: $line")
-        assertEquals(5, vm.ui.value.history.single().samples.size)
-        assertEquals(5, Regex("7\\.25").findAll(assertNotNull(vm.shotsJson(null))).count())
+        assertEquals(5u, vm.ui.value.history.single().summary.sampleCount)
+        assertEquals(5, Regex("7\\.25").findAll(assertNotNull(VmHarness.shotsJson(vm))).count())
+    }
+
+    /** P4a's done-when: startup reads no series, and the rows hold none (the type has no field for one). */
+    @Test
+    fun `the startup reads no series and draws each row from its summary`() {
+        val shots = List(40) { i -> shot.copy(id = "s$i", completedAtMs = shot.completedAtMs + i) }
+        runBlocking { HistoryStore(VmHarness.app(), coreJson).save(shots) }
+        val before = seriesReadsForTest.get()
+        val vm = VmHarness.build(store)
+        VmHarness.awaitStartupLoaded(vm)
+        VmHarness.idleUntil("the rows") { vm.ui.value.historyLoaded }
+        VmHarness.idle()
+        assertEquals(before, seriesReadsForTest.get(), "no series file was read")
+        assertEquals(40, vm.ui.value.history.size)
+        assertTrue(vm.ui.value.history.all { it.summary.sampleCount == 5u && it.summary.spark != null }, "each row's chart and count come from its summary")
+        // A shot opened reads its own series, and only it.
+        assertEquals(5, VmHarness.whole(vm, "s7").samples.size)
+        assertEquals(before + 1, seriesReadsForTest.get())
     }
 }

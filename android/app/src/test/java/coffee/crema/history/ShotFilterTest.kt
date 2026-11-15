@@ -10,7 +10,9 @@ import kotlin.test.assertTrue
 
 /**
  * History search + "same coffee" bean filter + person suggestions (dye2 audit
- * #1, #8, #9). Pure JVM; mirrors the web `search.vitest.ts`.
+ * #1, #8, #9). Pure JVM; mirrors the web `search.vitest.ts`. From #310 P4a the
+ * screens filter [ShotRow]s, so every filter here runs over rows, and must give
+ * what it gives over whole shots.
  */
 class ShotFilterTest {
     private fun shot(
@@ -27,13 +29,17 @@ class ShotFilterTest {
     private fun bean(id: String, name: String, roaster: String?, grinder: String? = null) =
         ShotBean(beanId = id, name = name, roasterName = roaster, grinder = grinder)
 
-    private fun filter(history: List<StoredShot>, query: String = "", beanFilter: String? = null) =
-        filterAndSortShots(history, query, "all", null, "date", true, 0L, beanFilter).map { it.id }
+    /** The ids the screens list: over rows, checked against whole shots. */
+    private fun filter(history: List<StoredShot>, query: String = "", beanFilter: String? = null): List<String> {
+        val rows = filterAndSortShots(history.rows(), query, "all", null, "date", true, 0L, beanFilter).map { it.id }
+        assertEquals(filterAndSortShots(history, query, "all", null, "date", true, 0L, beanFilter).map { it.id }, rows, "rows filter as shots do")
+        return rows
+    }
 
     @Test
     fun `the Pinned chip keeps only pinned shots`() {
         val shots = listOf(shot("a"), shot("b").copy(pinned = true), shot("c"))
-        val pinned = filterAndSortShots(shots, "", "all", null, "date", true, 0L, pinnedOnly = true)
+        val pinned = filterAndSortShots(shots.rows(), "", "all", null, "date", true, 0L, pinnedOnly = true)
         assertEquals(listOf("b"), pinned.map { it.id })
         assertEquals(3, filterAndSortShots(shots, "", "all", null, "date", true, 0L).size)
     }
@@ -84,7 +90,7 @@ class ShotFilterTest {
             shot("3", bean("bag-3", "Kenya AA", "Onyx")),
         )
         val none: (String) -> Pair<String, String?>? = { null }
-        val options = beanFilterOptions(history, none, current = null)
+        val options = beanFilterOptions(history.rows(), none, current = null)
         assertEquals(listOf("Kenya AA · Sey", "Kenya AA · Onyx"), options.map { it.label })
         val scoped = beanFilterOptions(history, none, current = "bag-2")
         assertEquals(BeanFilterOption("bag-2", "This bag · Kenya AA"), scoped.first())
@@ -99,9 +105,27 @@ class ShotFilterTest {
             shot("3", at = 2, barista = "Ben"),
             shot("4", at = 4, drinker = "Cy"),
         )
-        assertEquals(listOf("ana", "Ben"), recentNames(history, "barista"))
+        assertEquals(listOf("ana", "Ben"), recentNames(history.rows(), "barista"))
         assertEquals(listOf("Cy"), recentNames(history, "drinker"))
         assertEquals(listOf("Ben"), personSuggestions(listOf("Ana", "Ben"), "b"))
         assertEquals(emptyList(), personSuggestions(listOf("Ana"), "ana"))
+    }
+
+    @Test
+    fun `search and sorts over the design size's rows give the same list as over shots`() {
+        // 5,000 rows (SPEC decision 1), the History screens' input off the main thread.
+        val history = List(5_000) { i ->
+            shot("s$i", bean("bag-${i % 7}", "Coffee ${i % 7}", "Roaster ${i % 3}"), at = 1_700_000_000_000 + i, barista = if (i % 5 == 0) "Ana" else null)
+                .copy(rating = i % 6, yieldG = (i % 40).toFloat(), durationMs = 20_000L + i % 13 * 1_000)
+        }
+        val rows = history.rows()
+        for (sort in listOf("date", "rating", "profile", "bean", "yield", "time")) {
+            for (q in listOf("", "ana", "coffee 3", "roaster 2")) {
+                val viaRows = filterAndSortShots(rows, q, "all", null, sort, true, 0L).map { it.id }
+                assertEquals(filterAndSortShots(history, q, "all", null, sort, true, 0L).map { it.id }, viaRows, "$sort / $q")
+            }
+        }
+        assertEquals(1_000, filter(history, "ana").size)
+        assertEquals(150L, coffee.crema.ui.SEARCH_DEBOUNCE_MS, "both shells wait 150 ms (SPEC §5)")
     }
 }

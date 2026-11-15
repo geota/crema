@@ -1,6 +1,8 @@
 package coffee.crema.visualizer
 
 import android.content.ContextWrapper
+import coffee.crema.history.row
+import coffee.crema.history.rows
 import coffee.crema.history.StoredShot
 import coffee.crema.security.SecretBox
 import coffee.crema.security.SecretCipher
@@ -79,7 +81,7 @@ class ShotTombstoneTest {
             refused.intersect(it.map(StoredShot::id).toSet())
         },
         onApplyRemote = { id, patch, _ -> patch.barista?.let { filled += id to it } },
-        currentShot = { id -> StoredShot(id = id, completedAtMs = 1, durationMs = 30_000, visualizerId = "v-bound") },
+        currentShot = { id -> StoredShot(id = id, completedAtMs = 1, durationMs = 30_000, visualizerId = "v-bound").row() },
     ).also { s ->
         runBlocking {
             store.save(VisualizerState(tokens = TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000)))
@@ -124,7 +126,7 @@ class ShotTombstoneTest {
         val id = storedShotFromWire(wire, null, json)!!.id
         refused += id
 
-        val applied = runBlocking { s.reconcileAndApply(listOf(bound), listOf(wire, update), emptyMap(), emptyMap()) }
+        val applied = runBlocking { s.reconcileAndApply(listOf(bound).rows(), listOf(wire, update), emptyMap(), emptyMap()) }
 
         assertEquals(PullApplied(pulled = 0, refused = 1), applied)
         assertEquals("a later row in the plan still applies", listOf("local" to "Ada"), filled)

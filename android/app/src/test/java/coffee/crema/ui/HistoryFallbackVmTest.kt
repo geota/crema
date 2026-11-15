@@ -68,14 +68,13 @@ class HistoryFallbackVmTest {
     /** Every row and curve [vm] holds is [expected]'s, each once. */
     private fun assertHolds(vm: MainViewModel, expected: List<StoredShot>, what: String) {
         val library = VmHarness.library(vm)
-        VmHarness.idleUntil("$what: the curves") {
-            vm.ui.value.history.all { row -> expected.firstOrNull { it.id == row.id }?.samples.orEmpty() == row.samples }
-        }
+        VmHarness.idleUntil("$what: the rows") { library.rowsReady }
         val ids = library.allShots().map { it.id }
         assertEquals(ids.distinct().size, ids.size, "$what: no row twice")
         assertEquals(expected.map { it.id }.toSet(), ids.toSet(), what)
+        // Each curve, read whole as a screen would (#310 P4a: a row holds none).
         for (row in vm.ui.value.history) {
-            assertEquals(expected.first { it.id == row.id }.samples, row.samples, "$what: ${row.id}'s curve")
+            assertEquals(expected.first { it.id == row.id }.samples, VmHarness.whole(vm, row.id).samples, "$what: ${row.id}'s curve")
         }
     }
 

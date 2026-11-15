@@ -1,6 +1,9 @@
 package coffee.crema.ui
 
+import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
+import coffee.crema.history.row
+import coffee.crema.history.rows
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -41,19 +44,19 @@ class UploadTargetsTest {
     private class FakeDest(
         override val id: UploadTargetId,
         override val enabled: Boolean = true,
-        private val boundId: (StoredShot) -> String?,
+        private val boundId: (ShotRow) -> String?,
         private val minMs: Long = 0,
         private val publicLink: Boolean = true,
     ) : UploadDestination {
         override val autoUpload = true
         override var onUploadOutcome: ((String, UploadOutcome) -> Unit)? = null
-        override fun isUploaded(shot: StoredShot) = boundId(shot) != null
-        override fun viewUrl(shot: StoredShot) = boundId(shot)?.let { "https://x/${id.name}/$it" }
-        override fun shareUrl(shot: StoredShot) = if (publicLink && boundId(shot)?.startsWith("uploaded:") == false) viewUrl(shot) else null
-        override fun inBacklog(shot: StoredShot) = boundId(shot) == null && shot.durationMs >= minMs
-        override fun maybeAutoUpload(shot: StoredShot, fullSamples: List<TelemetrySample>?) = false
-        override fun pushShot(shot: StoredShot, replace: Boolean) = false
-        override suspend fun uploadUnsentNow(shots: List<StoredShot>) = DrainResult()
+        override fun isUploaded(shot: ShotRow) = boundId(shot) != null
+        override fun viewUrl(shot: ShotRow) = boundId(shot)?.let { "https://x/${id.name}/$it" }
+        override fun shareUrl(shot: ShotRow) = if (publicLink && boundId(shot)?.startsWith("uploaded:") == false) viewUrl(shot) else null
+        override fun inBacklog(shot: ShotRow) = boundId(shot) == null && shot.durationMs >= minMs
+        override fun maybeAutoUpload(shot: ShotRow) = false
+        override fun pushShot(shot: ShotRow, replace: Boolean) = false
+        override suspend fun uploadUnsentNow(shots: List<ShotRow>) = DrainResult()
         override suspend fun setAutoUploadNow(enabled: Boolean) {}
     }
 
@@ -64,7 +67,7 @@ class UploadTargetsTest {
     fun `view rows only for destinations that hold the shot, built from the stored ids`() {
         assertEquals(listOf(UploadTargetId.Visualizer), viewableTargets(listOf(viz(uploaded = true, url = "v"), dec(uploaded = true), dec())).map { it.id })
         val shot = StoredShot(id = "s", completedAtMs = 0, durationMs = 30_000, visualizerId = "v1", decentId = "77", machineSerial = "6262")
-        val targets = uploadTargetsFor(shot, listOf(vizDest, decDest(enabled = false)))
+        val targets = uploadTargetsFor(shot.row(), listOf(vizDest, decDest(enabled = false)))
         assertEquals("https://x/Visualizer/v1", targets[0].viewUrl)
         assertEquals("https://x/Decent/77", targets[1].viewUrl)
         assertEquals("Re-upload to Visualizer", uploadMenuEntry(targets).title)
@@ -73,7 +76,7 @@ class UploadTargetsTest {
     @Test
     fun `a placeholder Decent id can be viewed but not shared`() {
         val shot = StoredShot(id = "s", completedAtMs = 0, durationMs = 30_000, decentId = "uploaded:1")
-        val targets = uploadTargetsFor(shot, listOf(vizDest, decDest()))
+        val targets = uploadTargetsFor(shot.row(), listOf(vizDest, decDest()))
         assertEquals(listOf(UploadTargetId.Decent), viewableTargets(targets).map { it.id })
         assertTrue(shareableTargets(targets).isEmpty())
     }
@@ -81,18 +84,18 @@ class UploadTargetsTest {
     @Test
     fun `a short shot is uploadable by hand but never missing from Decent`() {
         val flush = StoredShot(id = "f", completedAtMs = 0, durationMs = 3_000, visualizerId = "v1")
-        val targets = uploadTargetsFor(flush, listOf(vizDest, decDest()))
+        val targets = uploadTargetsFor(flush.row(), listOf(vizDest, decDest()))
         assertTrue(targets[1].enabled)
         assertFalse(targets[1].counted)
         assertEquals(UploadPip.Uploaded, uploadPipFor(targets))
         assertEquals("Upload to Decent", uploadMenuEntry(targets).title)
         // The backlog count agrees with the pip.
-        assertEquals(0, missingUploadTotal(listOf(flush), listOf(vizDest, decDest())))
+        assertEquals(0, missingUploadTotal(listOf(flush).rows(), listOf(vizDest, decDest())))
         val real = StoredShot(id = "r", completedAtMs = 0, durationMs = 30_000)
-        assertEquals(1, missingUploadTotal(listOf(flush, real), listOf(vizDest, decDest())))
+        assertEquals(1, missingUploadTotal(listOf(flush, real).rows(), listOf(vizDest, decDest())))
         assertEquals(
             mapOf(UploadTargetId.Visualizer to 1, UploadTargetId.Decent to 1),
-            missingUploadCounts(listOf(flush, real), listOf(vizDest, decDest())),
+            missingUploadCounts(listOf(flush, real).rows(), listOf(vizDest, decDest())),
         )
     }
 
@@ -103,15 +106,15 @@ class UploadTargetsTest {
         val v60 = StoredShot(id = "b", completedAtMs = 0, durationMs = 185_000, brewMethod = "pourover")
         val real = StoredShot(id = "r", completedAtMs = 0, durationMs = 30_000)
         val dests = listOf(vizDest, decDest())
-        assertTrue(uploadTargetsFor(v60, dests).isEmpty())
-        assertFalse(uploadMenuEntry(uploadTargetsFor(v60, dests)).enabled)
-        assertEquals(1, missingUploadTotal(listOf(v60, real), dests))
+        assertTrue(uploadTargetsFor(v60.row(), dests).isEmpty())
+        assertFalse(uploadMenuEntry(uploadTargetsFor(v60.row(), dests)).enabled)
+        assertEquals(1, missingUploadTotal(listOf(v60, real).rows(), dests))
         assertEquals(
             mapOf(UploadTargetId.Visualizer to 1, UploadTargetId.Decent to 1),
-            missingUploadCounts(listOf(v60, real), dests),
+            missingUploadCounts(listOf(v60, real).rows(), dests),
         )
-        assertEquals(listOf(real), vizDest.unsent(listOf(v60, real)))
-        assertEquals(2, uploadTargetsFor(real, dests).size)
+        assertEquals(listOf(real.row()), vizDest.unsent(listOf(v60, real).rows()))
+        assertEquals(2, uploadTargetsFor(real.row(), dests).size)
     }
 
     @Test
@@ -124,8 +127,8 @@ class UploadTargetsTest {
             ),
         )
         val dests = listOf(vizDest, decDest())
-        assertTrue(uploadTargetsFor(guided, dests).isEmpty())
-        assertEquals(0, missingUploadTotal(listOf(guided), dests))
-        assertTrue(vizDest.unsent(listOf(guided)).isEmpty())
+        assertTrue(uploadTargetsFor(guided.row(), dests).isEmpty())
+        assertEquals(0, missingUploadTotal(listOf(guided).rows(), dests))
+        assertTrue(vizDest.unsent(listOf(guided).rows()).isEmpty())
     }
 }

@@ -29,6 +29,7 @@ import androidx.core.content.FileProvider
 import coffee.crema.beans.LibraryStore
 import coffee.crema.brew.RecipeFileStore
 import coffee.crema.history.HistoryStore
+import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
 import coffee.crema.profiles.CustomProfileStore
 import coffee.crema.profiles.HiddenProfileStore
@@ -331,9 +332,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         liveMachine = { sharing.liveMachine() },
         knownSerial = UniffiDecentCore::knownSerial,
         liveSerialUnreadable = { sharing.liveSerialUnreadable() },
-        // A row past the view's cap is still here (#310 P3a): light, so its upload waits for P4a's loadShot.
+        // A row past the view's cap is still here (#310 P3a); every upload reads its shot whole (P4a).
         currentShot = { id -> library.findShot(id) },
-        seriesReady = { library.awaitSeries() },
+        loadShot = { id -> library.loadShot(id) },
         onLinked = { sharing.offerCatchUp(UploadTargetId.Decent) },
     )
 
@@ -362,11 +363,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onApplyRemote = { localId, patch, pulled -> library.applyRemoteShot(localId, patch, pulled) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> library.findShot(id) },
+        loadShot = { id -> library.loadShot(id) },
         allShots = { library.allShots() },
         viewShots = { _ui.value.history },
         hasSeries = { shot -> library.hasCurve(shot) },
-        seriesReady = { library.awaitSeries() },
-        shotsLoaded = { library.seriesReady },
+        hasProfile = { id -> library.shotHasProfile(id) },
+        awaitRows = { library.awaitRows() },
+        shotsLoaded = { library.rowsReady },
         historyRefused = { library.historyRefused },
         restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
         beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
@@ -404,7 +407,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun uploadMissing() = sharing.uploadMissing()
 
     /** Push one shot to the chosen destinations (the menu picked them) — one notice for all. */
-    fun uploadShotTo(shot: StoredShot, targets: List<UploadTarget>) = sharing.uploadShotTo(shot, targets)
+    fun uploadShotTo(shot: ShotRow, targets: List<UploadTarget>) = sharing.uploadShotTo(shot, targets)
 
     /**
      * Google Drive backup controller — a self-contained sibling of [visualizer].
@@ -473,7 +476,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bridge = bridge,
         visualizer = visualizer,
         liveMachine = { sharing.liveMachine() },
-        autoUploadShot = { shot, fullSamples -> sharing.autoUpload(shot, fullSamples) },
+        autoUploadShot = { shot -> sharing.autoUpload(shot) },
         applyRestoredRecipes = { recipes, meta, wipe -> guided.applyRestoredRecipes(recipes, meta, wipe) },
         applyRestoredCustomMethods = { methods, wipe -> guided.applyRestoredCustomMethods(methods, wipe) },
         uiState = { _ui.value },
@@ -1426,10 +1429,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Library in Beanconqueror's format (via the core), or null when empty. */
     fun beansBeanconquerorJson(): String? = library.beansBeanconquerorJson()
 
-    /** Shots as Crema JSON — all (ids null) or only the given ids. */
-    fun shotsJson(ids: List<String>?): String? = library.shotsJson(ids)
+    /** Shots as Crema JSON — all (ids null) or only the given ids — each read whole first (#310 P4a). */
+    suspend fun shotsJson(ids: List<String>?): String? = library.shotsJson(ids)
 
-    /** The core's shot-quality analysis over a stored shot (review #39). */
+    /**
+     * The shot [id] whole, its curve, recipe and brew series (#310 P4a
+     * `loadShot`): what a detail, a compare or the last-shot card draws. Null
+     * when it isn't in history or can't be read just now.
+     */
+    suspend fun loadShot(id: String): StoredShot? = library.loadShotOrNull(id)
+
+    /** The core's shot-quality analysis over a shot loaded whole (review #39). */
     fun analyzeShotQuality(shot: StoredShot): ShotQualityReport? = library.analyzeShotQuality(shot)
     fun pourAverages(shot: StoredShot): coffee.crema.core.PourAverages? = library.pourAverages(shot)
 
@@ -1789,7 +1799,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Whether a shot's delete can also remove its Visualizer copy: it was uploaded,
      *  or its upload is under way, and a session is open (shot deletes aren't
      *  Premium-gated, unlike bags). */
-    fun canDeleteShotOnVisualizer(shot: StoredShot): Boolean =
+    fun canDeleteShotOnVisualizer(shot: ShotRow): Boolean =
         (shot.visualizerId != null || visualizer.uploadPending(shot)) && _ui.value.visualizer.signedIn
 
     /** Import a Beanconqueror export (JSON or chunked .zip) into the library. */
@@ -1913,7 +1923,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun addManualBrew(input: LibraryController.ManualBrewInput) = library.addManualBrew(input)
 
     /** Open the form on [owner]'s tab — seeded from [prefill] ("Log again") or [beanId]'s bag. */
-    fun openLogBrew(owner: String, prefill: StoredShot? = null, beanId: String? = null) = guided.openLogBrew(owner, prefill, beanId)
+    fun openLogBrew(owner: String, prefill: coffee.crema.history.ShotMeta? = null, beanId: String? = null) = guided.openLogBrew(owner, prefill, beanId)
     fun updateLogBrew(transform: (coffee.crema.ui.brewlog.BrewLogDraft) -> coffee.crema.ui.brewlog.BrewLogDraft) =
         guided.updateLogBrew(transform)
     fun reseedLogBrew(method: String) = guided.reseedLogBrew(method)

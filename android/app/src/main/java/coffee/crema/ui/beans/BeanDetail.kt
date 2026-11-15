@@ -31,7 +31,7 @@ import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand5
 import coffee.crema.core.Bean
-import coffee.crema.history.StoredShot
+import coffee.crema.history.ShotMeta
 import coffee.crema.history.grindLabel
 import coffee.crema.history.shotTitle
 import coffee.crema.ui.components.BeanPhotoBox
@@ -296,7 +296,7 @@ internal fun shotRowDateFormat(
 }
 
 /** Project a stored shot down to what the detail's shot list shows. */
-fun shotRowSummary(shot: StoredShot): ShotRowSummary = ShotRowSummary(
+fun shotRowSummary(shot: ShotMeta): ShotRowSummary = ShotRowSummary(
     id = shot.id,
     date = shotRowDateFormat().format(Date(shot.completedAtMs)),
     title = shotTitle(shot),

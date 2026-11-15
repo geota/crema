@@ -1,6 +1,6 @@
 package coffee.crema.ui
 
-import coffee.crema.history.StoredShot
+import coffee.crema.history.ShotRow
 import coffee.crema.history.isBrewLog
 
 /*
@@ -25,34 +25,35 @@ interface UploadDestination {
     /** Where every per-shot outcome is reported (the cross-destination notice). */
     var onUploadOutcome: ((shotId: String, outcome: UploadOutcome) -> Unit)?
 
-    fun isUploaded(shot: StoredShot): Boolean
+    fun isUploaded(shot: ShotRow): Boolean
 
     /** Where to open the uploaded copy. */
-    fun viewUrl(shot: StoredShot): String?
+    fun viewUrl(shot: ShotRow): String?
 
     /** A public link to the uploaded copy, or null when there is none. */
-    fun shareUrl(shot: StoredShot): String? = viewUrl(shot)
+    fun shareUrl(shot: ShotRow): String? = viewUrl(shot)
 
     /** Can a manual push send this shot here at all? */
-    fun canUpload(shot: StoredShot): Boolean = true
+    fun canUpload(shot: ShotRow): Boolean = true
 
     /** Does this shot belong to the backlog (not here yet, and eligible to be)? */
-    fun inBacklog(shot: StoredShot): Boolean
+    fun inBacklog(shot: ShotRow): Boolean
 
     /** The backlog. Brew Log rows (issue #10) are local-only and never in it. */
-    fun unsent(shots: List<StoredShot>): List<StoredShot> = shots.filter { !it.isBrewLog && inBacklog(it) }
+    fun unsent(shots: List<ShotRow>): List<ShotRow> = shots.filter { !it.isBrewLog && inBacklog(it) }
 
-    /** The capture-time push. Returns true when an upload actually started (it will report an outcome). */
-    fun maybeAutoUpload(shot: StoredShot, fullSamples: List<TelemetrySample>? = null): Boolean
+    /** The capture-time push. Returns true when an upload actually started (it will report an outcome).
+     *  The destination reads the shot whole just before it goes (#310 P4a). */
+    fun maybeAutoUpload(shot: ShotRow): Boolean
 
     /**
      * A one-off manual push (the History menu). Returns true when an upload
      * started; false when it could not (not signed in, already in flight).
      */
-    fun pushShot(shot: StoredShot, replace: Boolean): Boolean
+    fun pushShot(shot: ShotRow, replace: Boolean): Boolean
 
     /** Drain the backlog, awaiting the whole pass. */
-    suspend fun uploadUnsentNow(shots: List<StoredShot>): DrainResult
+    suspend fun uploadUnsentNow(shots: List<ShotRow>): DrainResult
 
     /** Persist the auto-upload toggle; returns once it is stored. */
     suspend fun setAutoUploadNow(enabled: Boolean)

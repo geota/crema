@@ -35,17 +35,17 @@ fun brewDateTooOld(cap: Int = HistoryStore.MAX_SHOTS): String =
  * has to reach the unpinned row at the cut. Pinned rows don't count (#311). A
  * stored list can be over the cap, so that isn't the last.
  */
-fun fitsHistory(history: List<StoredShot>, atMs: Long, cap: Int = HistoryStore.MAX_SHOTS): Boolean =
+fun fitsHistory(history: List<ShotMeta>, atMs: Long, cap: Int = HistoryStore.MAX_SHOTS): Boolean =
     history.filterNot { it.pinned }.getOrNull(cap - 1)?.let { atMs >= it.completedAtMs } ?: true
 
 /** How many rows count against the cap: the unpinned ones (#311). */
-fun cappedCount(history: List<StoredShot>): Int = history.count { !it.pinned }
+fun cappedCount(history: List<ShotMeta>): Int = history.count { !it.pinned }
 
 /** What the cap made of an insert: the new list, the added rows still in it, and rows of any kind dropped. */
-data class HistoryMerge(val rows: List<StoredShot>, val kept: List<StoredShot>, val dropped: Int)
+data class HistoryMerge<T : ShotMeta>(val rows: List<T>, val kept: List<T>, val dropped: Int)
 
 /** Newest first; rows with the same date keep their order, so a new row leads. */
-fun List<StoredShot>.newestFirst(): List<StoredShot> = sortedByDescending { it.completedAtMs }
+fun <T : ShotMeta> List<T>.newestFirst(): List<T> = sortedByDescending { it.completedAtMs }
 
 /**
  * [history] with [added] in place by date. The list stays newest first, so the
@@ -56,7 +56,7 @@ fun List<StoredShot>.newestFirst(): List<StoredShot> = sortedByDescending { it.c
  * row doesn't count and always stays, as nothing cleans up a pinned shot (#311).
  * With nothing to add this changes nothing, so a list over the cap stays as it is.
  */
-fun mergeHistory(added: List<StoredShot>, history: List<StoredShot>, keepId: String? = null): HistoryMerge {
+fun <T : ShotMeta> mergeHistory(added: List<T>, history: List<T>, keepId: String? = null): HistoryMerge<T> {
     if (added.isEmpty()) return HistoryMerge(history, emptyList(), 0)
     val room = if (keepId == null) HistoryStore.MAX_SHOTS else HistoryStore.MAX_SHOTS - 1
     var others = 0
@@ -71,7 +71,7 @@ fun mergeHistory(added: List<StoredShot>, history: List<StoredShot>, keepId: Str
  * So the cap refuses what doesn't fit, in the order given, and [HistoryMerge.dropped]
  * stays 0. Pinned rows don't take room. Rows already here are left out.
  */
-fun mergePulled(added: List<StoredShot>, history: List<StoredShot>, cap: Int = HistoryStore.MAX_SHOTS): HistoryMerge {
+fun <T : ShotMeta> mergePulled(added: List<T>, history: List<T>, cap: Int = HistoryStore.MAX_SHOTS): HistoryMerge<T> {
     val present = history.mapTo(HashSet()) { it.id }
     val kept = added.filter { it.id !in present }.take((cap - cappedCount(history)).coerceAtLeast(0))
     if (kept.isEmpty()) return HistoryMerge(history, emptyList(), 0)
@@ -79,7 +79,7 @@ fun mergePulled(added: List<StoredShot>, history: List<StoredShot>, cap: Int = H
 }
 
 /** The rows [mergeHistory] leaves, inside an edit. */
-fun historyWith(added: List<StoredShot>, history: HistoryRows, keepId: String? = null): HistoryRows =
+fun historyWith(added: List<ShotRow>, history: HistoryRows, keepId: String? = null): HistoryRows =
     history.with(mergeHistory(added, history, keepId).rows)
 
 /**

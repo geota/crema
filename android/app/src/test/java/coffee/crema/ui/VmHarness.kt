@@ -1,5 +1,6 @@
 package coffee.crema.ui
 
+import kotlinx.coroutines.launch
 import android.app.Application
 import android.os.Looper
 import androidx.lifecycle.ViewModelProvider
@@ -84,6 +85,36 @@ internal object VmHarness {
             check(System.nanoTime() < deadline) { "Timed out after ${timeoutMs}ms waiting for $what" }
             Thread.sleep(5)
         }
+    }
+
+    /**
+     * The shot [id] whole, as a screen loads it (#310 P4a: a row holds no curve).
+     * Runs the main looper while it waits, as the load may need it.
+     */
+    fun whole(vm: MainViewModel, id: String): coffee.crema.history.StoredShot {
+        var out: Result<coffee.crema.history.StoredShot?>? = null
+        val job = kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) { out = runCatching { vm.loadShot(id) } }
+        idleUntil("shot $id to load") { out != null }
+        job.cancel()
+        return out!!.getOrThrow() ?: error("no shot $id in history")
+    }
+
+    /** [whole], or null when history has no such shot. */
+    fun wholeOrNull(vm: MainViewModel, id: String): coffee.crema.history.StoredShot? {
+        var out: Result<coffee.crema.history.StoredShot?>? = null
+        val job = kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) { out = runCatching { vm.loadShot(id) } }
+        idleUntil("shot $id to load") { out != null }
+        job.cancel()
+        return out!!.getOrThrow()
+    }
+
+    /** [MainViewModel.shotsJson], with the main looper running while it reads. */
+    fun shotsJson(vm: MainViewModel, ids: List<String>? = null): String? {
+        var out: Result<String?>? = null
+        val job = kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) { out = runCatching { vm.shotsJson(ids) } }
+        idleUntil("the export") { out != null }
+        job.cancel()
+        return out!!.getOrThrow()
     }
 
     /** The VM's [ProxyController], found by type rather than by field name. */

@@ -50,7 +50,10 @@ import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.newShotId
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.HistoryHealth
+import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
+import coffee.crema.history.joined
+import coffee.crema.history.withHeavy
 import coffee.crema.history.coreShotJson
 import coffee.crema.history.isBrewLog
 import coffee.crema.history.brewDateError
@@ -140,7 +143,7 @@ class LibraryController(
     /** The connected DE1's identity, stamped onto each recorded shot (#84). */
     private val liveMachine: () -> ShotMachine?,
     /** Push a just-recorded shot to every armed destination, one notice for the batch ([SharingController.autoUpload]). */
-    private val autoUploadShot: (shot: StoredShot, fullSamples: List<TelemetrySample>?) -> Unit,
+    private val autoUploadShot: (shot: ShotRow) -> Unit,
     /** Merge restored brew recipes + their organisation into the VM-owned
      *  recipe store (WIPE replaces); returns how many recipes were added. */
     private val applyRestoredRecipes: (recipes: List<coffee.crema.core.BrewRecipe>, meta: JsonObject?, wipe: Boolean) -> Int = { _, _, _ -> 0 },
@@ -303,7 +306,7 @@ class LibraryController(
     private fun editHistory(edit: (HistoryRows) -> HistoryRows) = editRows({ it.copy(history = edit(it.history)) }, { it })
 
     /** The rows the view shows of [all]: pinned ones and the newest [HistoryStore.MAX_SHOTS] others. The rest stay in the store, hidden. */
-    private fun viewOf(all: List<StoredShot>): List<StoredShot> {
+    private fun viewOf(all: List<ShotRow>): List<ShotRow> {
         var unpinned = 0
         return all.sortedWith(HistoryStore.ORDER).filter { it.pinned || unpinned++ < HistoryStore.MAX_SHOTS }
     }
@@ -334,7 +337,7 @@ class LibraryController(
 
     /** These rows with [shot], made here, added by date and capped; [cut]
      *  counts what the cap dropped. */
-    private fun HistoryRows.withMade(shot: StoredShot, cut: CapCut): HistoryRows {
+    private fun HistoryRows.withMade(shot: ShotRow, cut: CapCut): HistoryRows {
         val next = historyWith(listOf(shot), this, keepId = shot.id)
         val kept = next.mapTo(HashSet()) { it.id }
         cut.dropped = count { it.id !in kept }
@@ -342,7 +345,7 @@ class LibraryController(
     }
 
     /** The rows of [added] the view's cap left out of [merged]: on `shots.db` they're kept, hidden; the legacy backend drops them. */
-    private fun pastTheCap(added: List<StoredShot>, merged: HistoryMerge): List<StoredShot> {
+    private fun pastTheCap(added: List<ShotRow>, merged: HistoryMerge<ShotRow>): List<ShotRow> {
         if (!historyStore.usesSql || added.isEmpty()) return emptyList()
         val inView = merged.rows.mapTo(HashSet()) { it.id }
         return added.filter { it.id !in inView }.distinctBy { it.id }
@@ -352,14 +355,14 @@ class LibraryController(
     private fun droppedNotice(dropped: Int): String = if (historyStore.usesSql) "" else historyDroppedNotice(dropped)
 
     /** Save [rows] (upserts only, from P3a), then show what couldn't be saved. */
-    private suspend fun persistHistory(rows: List<StoredShot>): Boolean {
+    private suspend fun persistHistory(rows: List<ShotRow>): Boolean {
         val ok = historyStore.save(rows)
         noteUnsaved()
         return ok
     }
 
     /** [persistHistory] for a restore, past the view's cap. */
-    private suspend fun persistHistoryAll(rows: List<StoredShot>): Boolean {
+    private suspend fun persistHistoryAll(rows: List<ShotRow>): Boolean {
         val ok = historyStore.saveAll(rows)
         noteUnsaved()
         return ok
@@ -389,69 +392,55 @@ class LibraryController(
     }
 
     /**
-     * Load the shot log, off the startup chain (#310 P3a): the rows now, the
-     * telemetry series of the rows in view in the background (F10), so the
-     * startup sequence (prefs, auto-connect) never waits on it. The first
-     * launch moves the rows into `shots.db` here. The rows **merge** with what
-     * memory holds by then, so a shot captured before they landed survives.
-     * Until a series lands its shot shows no curve.
+     * Load the shot log, off the startup chain (#310 P3a): the rows only, no
+     * series (P4a), so the startup sequence (prefs, auto-connect) never waits
+     * on it. The first launch moves the rows into `shots.db` here. The rows
+     * **merge** with what memory holds by then, so a shot captured before they
+     * landed survives. A shot's series loads when something needs it
+     * ([loadShot]).
      */
     suspend fun loadHistory() {
-        val loaded = seriesLoaded
+        val loaded = landed
         historySettled = false
         val load = historyStore.loadAll()
         land(load, loaded, merge = true)
     }
 
-    /** [load] into the UI state, merged with the rows made meanwhile, and the series after.
+    /** [load] into the UI state, merged with the rows made meanwhile.
      *  Returns how many rows the view's cap let go (dropped on the legacy backend). */
     private suspend fun land(load: coffee.crema.history.HistoryLoad, loaded: CompletableDeferred<Unit>, merge: Boolean): Int {
-        var madeHere: List<StoredShot> = emptyList()
+        var madeHere: List<ShotRow> = emptyList()
         var dropped = 0
-        editRows(
-            { rows ->
-                val current = rows.history
-                madeHere = if (merge) madeWhileRefused(current, load.view + historyStore.storedRows()) else emptyList()
-                // A row made this session that a save took to the store before the load: memory's copy is the newer.
-                val mine = if (merge) current.associateBy { it.id } else emptyMap()
-                val loaded = if (mine.isEmpty()) load.view else load.view.map { mine[it.id] ?: it }
-                val merged = if (madeHere.isEmpty()) HistoryMerge(loaded, emptyList(), 0) else mergeHistory(madeHere, loaded)
-                dropped = merged.dropped
-                rows.copy(history = current.with(merged.rows))
-            },
-            { it.copy(historyLoaded = true, historyHealth = load.health, historyLost = historyStore.lostChoices, historyError = historyStore.lastError) },
-        )
-        historySettled = when (load.health) {
-            // A damaged shots.json moved as nothing: its rows, pinned ones too, weren't read.
-            HistoryHealth.OK -> !historyStore.sourceDamaged
-            HistoryHealth.LEGACY -> historyStore.storeHealth.let { it == coffee.crema.persist.StoreHealth.OK || it == coffee.crema.persist.StoreHealth.ABSENT }
-            else -> false
-        }
-        historyStore.openSaves()
-        rowsLoaded.complete(Unit)
-        // A shot made before the rows landed goes into the store now.
-        if (madeHere.isNotEmpty()) persistHistory(uiState().history)
-        if (load.health == HistoryHealth.LEGACY && !legacyNoticed) {
-            legacyNoticed = true
-            notify("Shot history stays in its old format for now, keeping the newest ${coffee.crema.history.HistoryStore.MAX_SHOTS}. It will try again at the next launch.")
-        }
-        val missing = uiState().history.filter { it.samples.isEmpty() }.map { it.id }
-        if (missing.isEmpty()) {
-            loaded.complete(Unit)
-            return dropped
-        }
-        scope.launch {
-            try {
-                val series = historyStore.loadSeries(missing)
-                if (series.isEmpty()) return@launch
-                editHistory { rows ->
-                    rows.mapped { shot ->
-                        if (shot.samples.isEmpty()) series[shot.id]?.let { shot.copy(samples = it) } ?: shot else shot
-                    }
-                }
-            } finally {
-                loaded.complete(Unit)
+        try {
+            editRows(
+                { rows ->
+                    val current = rows.history
+                    madeHere = if (merge) madeWhileRefused(current, load.view + historyStore.storedRows()) else emptyList()
+                    // A row made this session that a save took to the store before the load: memory's copy is the newer.
+                    val mine = if (merge) current.associateBy { it.id } else emptyMap()
+                    val loadedRows = if (mine.isEmpty()) load.view else load.view.map { mine[it.id] ?: it }
+                    val merged = if (madeHere.isEmpty()) HistoryMerge(loadedRows, emptyList(), 0) else mergeHistory(madeHere, loadedRows)
+                    dropped = merged.dropped
+                    rows.copy(history = rows.history.with(merged.rows))
+                },
+                { it.copy(historyLoaded = true, historyHealth = load.health, historyLost = historyStore.lostChoices, historyError = historyStore.lastError) },
+            )
+            historySettled = when (load.health) {
+                // A damaged shots.json moved as nothing: its rows, pinned ones too, weren't read.
+                HistoryHealth.OK -> !historyStore.sourceDamaged
+                HistoryHealth.LEGACY -> historyStore.storeHealth.let { it == coffee.crema.persist.StoreHealth.OK || it == coffee.crema.persist.StoreHealth.ABSENT }
+                else -> false
             }
+            historyStore.openSaves()
+            rowsLoaded.complete(Unit)
+            // A shot made before the rows landed goes into the store now.
+            if (madeHere.isNotEmpty()) persistHistory(uiState().history)
+            if (load.health == HistoryHealth.LEGACY && !legacyNoticed) {
+                legacyNoticed = true
+                notify("Shot history stays in its old format for now, keeping the newest ${coffee.crema.history.HistoryStore.MAX_SHOTS}. It will try again at the next launch.")
+            }
+        } finally {
+            loaded.complete(Unit)
         }
         return dropped
     }
@@ -463,9 +452,9 @@ class LibraryController(
      *  file). Shots made while it couldn't be stay, and go into it now. Everything
      *  that reads a series waits for this load too. */
     suspend fun reloadHistory() {
-        seriesLoaded = CompletableDeferred()
+        landed = CompletableDeferred()
         val load = historyStore.loadAll()
-        val dropped = land(load, seriesLoaded, merge = true)
+        val dropped = land(load, landed, merge = true)
         if (dropped > 0) notify("Shot history reloaded${droppedNotice(dropped)}")
     }
 
@@ -482,8 +471,8 @@ class LibraryController(
             updateUi { it.copy(historyError = historyStore.lastError) }
             return
         }
-        seriesLoaded = CompletableDeferred()
-        land(load, seriesLoaded, merge = true)
+        landed = CompletableDeferred()
+        land(load, landed, merge = true)
     }
 
     /** What the user chose for a lost store: each is explicit (SPEC §6). */
@@ -497,8 +486,8 @@ class LibraryController(
             LostChoice.OLD_COPY -> historyStore.recoverOldCopy()
             LostChoice.START_EMPTY -> historyStore.startEmpty()
         }
-        seriesLoaded = CompletableDeferred()
-        land(load, seriesLoaded, merge = true)
+        landed = CompletableDeferred()
+        land(load, landed, merge = true)
         if (load.health == HistoryHealth.OK) notify("Shot history is back: ${uiState().history.size + load.hiddenCount} shots")
     }
 
@@ -520,42 +509,64 @@ class LibraryController(
      *  gate for code that reads the history as a whole. */
     private val rowsLoaded = CompletableDeferred<Unit>()
 
-    /** Wait for the rows ([rowsLoaded]). */
-    suspend fun awaitRows() = rowsLoaded.await()
+    /** Completes once the latest load (the first, or a reload, a retry, a lost
+     *  store's rebuild) has landed in the UI state. */
+    @Volatile private var landed = CompletableDeferred<Unit>()
 
-    /** Completes once [loadHistory]'s background series load has landed in
-     *  the history (F10 validation P1-2). Implies [rowsLoaded]. */
-    @Volatile private var seriesLoaded = CompletableDeferred<Unit>()
-
-    /** Wait for the stored shots' telemetry: everything that reads a shot's
-     *  series from the history (backup, export, uploads, a Visualizer pull's
-     *  backfill) awaits this first, or a shot would go out without its curve. */
-    suspend fun awaitSeries() {
+    /** Wait for the rows ([rowsLoaded]) and for any load in progress to land:
+     *  everything that reads the history as a whole (backup, export, uploads,
+     *  a Visualizer pull, a restore) awaits this first. No series is loaded:
+     *  what needs one calls [loadShot] (#310 P4a). */
+    suspend fun awaitRows() {
         rowsLoaded.await()
-        seriesLoaded.await()
+        landed.await()
     }
 
-    /** Whether the stored shots' telemetry has loaded ([awaitSeries]). */
-    val seriesReady: Boolean get() = rowsLoaded.isCompleted && seriesLoaded.isCompleted
+    /** Whether the rows have landed ([awaitRows]). */
+    val rowsReady: Boolean get() = rowsLoaded.isCompleted && landed.isCompleted
 
     // ── Rows past the view's cap (#310 P3a) ──────────────────────────────────
 
-    /** Every row: the view, then the rows past its cap (light), newest first. For
+    /** Every row: the view, then the rows past its cap, newest first. For
      *  what must see them all: a pull's reconcile, the id checks in imports, backups. */
-    fun allShots(): List<StoredShot> {
+    fun allShots(): List<ShotRow> {
         val view = uiState().history
         val hidden = historyStore.hiddenRows(view.mapTo(HashSet()) { it.id })
         return if (hidden.isEmpty()) view else view + hidden
     }
 
-    /** The row [id], in view or past the cap (light then). */
-    fun findShot(id: String): StoredShot? = uiState().history.firstOrNull { it.id == id } ?: historyStore.storedRow(id)
+    /** The row [id], in view or past the cap. */
+    fun findShot(id: String): ShotRow? = uiState().history.firstOrNull { it.id == id } ?: historyStore.storedRow(id)
 
-    /** Whether [shot] has a curve, in memory or (past the cap) on disk. */
-    fun hasCurve(shot: StoredShot): Boolean = historyStore.hasCurve(shot)
+    /** Whether [shot] has a curve: staged, or (its summary says so) on disk. */
+    fun hasCurve(shot: ShotRow): Boolean = historyStore.hasCurve(shot)
+
+    /** Whether shot [id] has its profile, staged or stored. */
+    fun shotHasProfile(id: String): Boolean = historyStore.hasProfile(id)
+
+    /**
+     * The shot [id] whole, its series, profile and brew series under its row as
+     * it stands now (SPEC §4 `loadShot`). Waits for the rows. Null when no row
+     * has it. Throws [coffee.crema.history.HistoryReadException] when it can't
+     * be read just now: that says nothing about the shot, so a caller never
+     * reads it as having no curve.
+     */
+    suspend fun loadShot(id: String): StoredShot? {
+        awaitRows()
+        val full = historyStore.loadShot(id) ?: return null
+        val row = findShot(id) ?: return null
+        return row.joined(full)
+    }
+
+    /** [loadShot], or null (and a line in the log) when it can't be read: for what can only show it. */
+    suspend fun loadShotOrNull(id: String): StoredShot? =
+        runCatching { loadShot(id) }.onFailure { appendLog("Couldn't read shot $id: ${it.message}") }.getOrNull()
+
+    /** The row for [shot], made or brought here whole: its heavy parts wait for the next save ([HistoryStore.stage]). */
+    private fun staged(shot: StoredShot): ShotRow = historyStore.stage(shot)
 
     /** The row [id] changed by [transform], in view or, past the cap, in the store. Persisted. */
-    private fun editShot(id: String, transform: (StoredShot) -> StoredShot) {
+    private fun editShot(id: String, transform: (ShotRow) -> ShotRow) {
         var inView = false
         editHistory { rows ->
             inView = false
@@ -973,8 +984,9 @@ class LibraryController(
      *  read; it used to be Android's flat model, which nothing could import. */
     fun exportShot(id: String) {
         scope.launch {
-            awaitSeries()
-            val shot = uiState().history.firstOrNull { it.id == id } ?: return@launch
+            // The shot whole, just before it goes (#310 P4a): a row holds no curve.
+            val shot = runCatching { loadShot(id) }
+                .getOrElse { notify("Couldn't read that shot just now. Try again."); return@launch } ?: return@launch
             val text = runCatching { exportV2JsonShot(wireShotJson(shot, settingsGrinder()).toString()) }
                 .getOrElse { appendLog("Export shot failed: ${it.message}"); return@launch }
             shareText(text, "Share shot")
@@ -985,7 +997,6 @@ class LibraryController(
      *  Sharing. The core's format (F10): both shells import it back. */
     fun exportAllShots() {
         scope.launch {
-            awaitSeries()
             val text = shotsJson(null) ?: return@launch
             shareText(text, "Export shots")
         }
@@ -1032,16 +1043,42 @@ class LibraryController(
 
     /** Shots as the core's Crema `crema/v1` JSONL ([shotHistoryJsonl]) — all
      *  (ids null) or only the given ids. Both shells import it (F10). */
-    fun shotsJson(ids: List<String>?): String? {
-        // The save buttons call this on the spot: until the telemetry has
-        // loaded, say so rather than write shots without their curves.
-        if (!seriesReady) { notify("Shot data is still loading — try again in a moment"); return null }
+    suspend fun shotsJson(ids: List<String>?): String? {
+        // Until the rows have loaded, say so rather than export none.
+        if (!rowsReady) { notify("Shot data is still loading — try again in a moment"); return null }
         val history = uiState().history
-        val shots = if (ids == null) history else { val w = ids.toHashSet(); history.filter { it.id in w } }
-        if (shots.isEmpty()) { notify("Export — no shots"); return null }
-        return runCatching {
-            shotHistoryJsonl(shots, settingsGrinder(), System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME)
-        }.getOrElse { appendLog("Export shots failed: ${it.message}"); null }
+        val rows = if (ids == null) history else { val w = ids.toHashSet(); history.filter { it.id in w } }
+        if (rows.isEmpty()) { notify("Export — no shots"); return null }
+        // Each shot whole, read one at a time (#310 P4a). A read that fails
+        // stops the export: a file without that shot's curve would look whole.
+        // A read that fails just now is tried twice more, as a backup's is.
+        val missing = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val shots = try {
+            withContext(Dispatchers.IO) {
+                rows.map { row ->
+                    var last: coffee.crema.history.HistoryReadException? = null
+                    repeat(3) {
+                        try {
+                            return@map historyStore.loadFull(row, missing)
+                        } catch (e: coffee.crema.history.HistoryReadException) {
+                            last = e
+                        }
+                    }
+                    throw last!!
+                }
+            }
+        } catch (e: coffee.crema.history.HistoryReadException) {
+            notify("Couldn't read every shot just now, so nothing was exported. Try again.")
+            appendLog("Export shots: ${e.message}")
+            return null
+        }
+        // A damaged or missing curve goes without it, and says so, as a backup does (#419 N2).
+        if (missing.isNotEmpty()) notify("${missing.size} shot(s) have damaged telemetry and are exported without their curves")
+        return withContext(Dispatchers.Default) {
+            runCatching {
+                shotHistoryJsonl(shots, settingsGrinder(), System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME)
+            }.getOrElse { appendLog("Export shots failed: ${it.message}"); null }
+        }
     }
 
     /**
@@ -1205,17 +1242,23 @@ class LibraryController(
                     return@launch
                 }
             }
-            var merged = HistoryMerge(emptyList(), emptyList(), 0)
-            var added: List<StoredShot> = emptyList()
+            var merged = HistoryMerge<ShotRow>(emptyList(), emptyList(), 0)
+            var added: List<ShotRow> = emptyList()
             val hiddenIds = historyStore.storedIds()
+            val present = uiState().history.mapTo(HashSet()) { it.id } + hiddenIds
+            // Each new shot's curve, profile and brew series wait for the save.
+            val incoming = shots.filterNot { it.id in present }.distinctBy { it.id }.map(::staged)
             editHistory { rows ->
                 val existing = rows.mapTo(HashSet()) { it.id } + hiddenIds
-                added = shots.filterNot { it.id in existing }
+                added = incoming.filterNot { it.id in existing }
                 merged = mergeHistory(added, rows)
                 rows.with(merged.rows)
             }
             // Rows older than the view's 300 go straight into the store, hidden, from P3a.
             val past = pastTheCap(added, merged)
+            // What the legacy backend's cap dropped isn't written: its staged parts go too.
+            val landing = (merged.kept + past).mapTo(HashSet()) { it.id }
+            historyStore.unstage(incoming.map { it.id }.filterNot { it in landing })
             visualizer.forgetTombstones((merged.kept + past).map { it.id })
             notify("Imported ${merged.kept.size + past.size} shot(s)${droppedNotice(merged.dropped)}")
             persistHistory(uiState().history)
@@ -1286,9 +1329,10 @@ class LibraryController(
         // still load isn't lost (#391 review).
         val cancel = backupRuns.start(kind)
         try {
-            // Never back up shots whose telemetry hasn't loaded yet (F10
-            // validation P1-2: the startup auto-backup ran during the load).
-            awaitSeries()
+            // Never back up before the rows are in (F10 validation P1-2: the
+            // startup auto-backup ran during the load). Each shot's curve is
+            // read as the walk reaches it (#310 P4a).
+            awaitRows()
             if (cancel.get()) {
                 notify("Backup cancelled: nothing was saved.")
                 return null
@@ -1318,7 +1362,7 @@ class LibraryController(
         }
         val unreadable = historyStore.unreadableSeries
         if (unreadable.isEmpty()) return
-        val n = uiState().history.count { it.id in unreadable && it.samples.isEmpty() }
+        val n = allShots().count { it.id in unreadable }
         if (n > 0) notify("$n shot(s) have damaged telemetry and are backed up without their curves")
     }
 
@@ -1428,7 +1472,7 @@ class LibraryController(
     /** The stores a restore writes, through the library's state. */
     fun restoreSink(deps: RestoreDeps): coffee.crema.restore.RestoreSink = object : coffee.crema.restore.RestoreSink {
         override suspend fun localState(): coffee.crema.core.LocalState {
-            awaitSeries()
+            awaitRows()
             val s = uiState()
             fun health(store: String, file: String) = coffee.crema.core.LocalStoreHealth(
                 store,
@@ -1539,18 +1583,21 @@ class LibraryController(
             val replace = plan.mode == coffee.crema.core.RestoreMode.Replace
             if (historyStore.usesSql) return applyShotsToStore(plan, records, replace)
             // Series first, with no change to memory.
-            val first = coffee.crema.restore.nextShots(uiState().history, records.parsed.shots, plan.shots, replace)
+            val first = coffee.crema.restore.nextShots(uiState().history, records.parsed.shots, plan.shots, replace, ::hasCurve, historyStore::rowFor)
             var failed = historyStore.writeSeriesOf(first.series)
             afterRestoreSeries?.invoke()
             // Then, over the rows as they are now, memory and the rows write together.
             var second = first
             editRows(
                 { rows ->
-                    second = coffee.crema.restore.nextShots(rows.history, records.parsed.shots, plan.shots, replace)
+                    second = coffee.crema.restore.nextShots(rows.history, records.parsed.shots, plan.shots, replace, ::hasCurve, historyStore::rowFor)
                     rows.copy(history = rows.history.with(second.next))
                 },
                 { it },
             )
+            // Their heavy parts wait for the save (#310 P4a), staged only now: staged
+            // before, they'd read as curves here and the recompute wouldn't fill them.
+            second.series.forEach(historyStore::stage)
             if (!persistHistory(second.next)) return null
             // A curve the recompute found anew went inline with the rows; its file now, before done.
             val written = first.series.mapTo(HashSet()) { it.id }
@@ -1568,18 +1615,21 @@ class LibraryController(
          * loses nothing. The view takes the newest rows.
          */
         private suspend fun applyShotsToStore(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords, replace: Boolean): Int? {
-            val first = coffee.crema.restore.nextShots(allShots(), records.parsed.shots, plan.shots, replace, ::hasCurve)
+            val first = coffee.crema.restore.nextShots(allShots(), records.parsed.shots, plan.shots, replace, ::hasCurve, historyStore::rowFor)
             var failed = historyStore.writeSeriesOf(first.series)
             afterRestoreSeries?.invoke()
             var second = first
             editRows(
                 { rows ->
                     val hidden = historyStore.hiddenRows(rows.history.mapTo(HashSet()) { it.id })
-                    second = coffee.crema.restore.nextShots(rows.history + hidden, records.parsed.shots, plan.shots, replace, ::hasCurve)
+                    second = coffee.crema.restore.nextShots(rows.history + hidden, records.parsed.shots, plan.shots, replace, ::hasCurve, historyStore::rowFor)
                     rows.copy(history = rows.history.with(viewOf(second.next)))
                 },
                 { it },
             )
+            // Their heavy parts wait for the save (#310 P4a), staged only now: staged
+            // before, they'd read as curves here and the recompute wouldn't fill them.
+            second.series.forEach(historyStore::stage)
             // Merge: every row, in batches, none deleted.
             for (batch in second.next.chunked(RESTORE_BATCH)) {
                 if (!persistHistoryAll(batch)) return null
@@ -1724,12 +1774,17 @@ class LibraryController(
         var present = emptySet<String>()
         // A row past the view's cap is still here: a pull of it adds no copy.
         val hiddenIds = historyStore.storedIds()
+        val inView = uiState().history.mapTo(HashSet()) { it.id }
+        // A pulled shot comes whole (its curve and recipe): they wait for the save.
+        val incoming = stubs.filterNot { it.id in hiddenIds || it.id in inView }.distinctBy { it.id }.map(::staged)
         editHistory { rows ->
-            val merge = mergePulled(stubs.filterNot { it.id in hiddenIds }, rows)
+            val merge = mergePulled(incoming, rows)
             kept = merge.kept.mapTo(HashSet()) { it.id }
             present = rows.mapTo(HashSet()) { it.id } + hiddenIds
             rows.with(merge.rows)
         }
+        // A pull the full view refused isn't written: its staged parts go too.
+        historyStore.unstage(incoming.map { it.id }.filterNot { it in kept })
         val snapshot = uiState().history
         scope.launch { persistHistory(snapshot) }
         return stubs.mapTo(HashSet()) { it.id } - kept - present
@@ -1744,25 +1799,38 @@ class LibraryController(
     fun applyRemoteShot(localId: String, patch: ShotPatch, pulled: PulledParts) {
         var changed = false
         var inView = false
-        val apply = { it: StoredShot ->
-                var next = it
-                patch.tags?.let { tags -> next = next.copy(tags = tags) }
-                patch.barista?.takeIf { next.barista.isNullOrBlank() }?.let { b -> next = next.copy(barista = b) }
-                // Before the stored series load, every shot looks curve-less: a
-                // pulled series would replace the shot's own (the pull awaits
-                // [awaitSeries]).
-                if (patch.backfillSamples == true && seriesReady && !hasCurve(next) && pulled.samples.isNotEmpty()) {
-                    next = next.copy(
+        // Before the rows load, every shot looks curve-less: a pulled series
+        // would replace the shot's own (the pull awaits [awaitRows]). The store
+        // says whether the shot has its curve and its profile (#310 P4a).
+        val backfill = patch.backfillSamples == true && rowsReady && !historyStore.hasCurve(localId) && pulled.samples.isNotEmpty()
+        val fillProfile = patch.fillProfile == true && pulled.profile != null && !historyStore.hasProfile(localId)
+        // The curve and recipe wait for the save; the row takes the summary they give.
+        val filled = if (backfill || fillProfile) {
+            findShot(localId)?.let { row ->
+                historyStore.stage(
+                    row.withHeavy(
                         // The whole pulled series (F10).
-                        samples = pulled.samples,
-                        durationMs = if (next.durationMs > 0) next.durationMs else pulled.durationMs,
-                    )
-                }
-                if (patch.fillProfile == true && next.profile == null && pulled.profile != null) {
-                    next = next.copy(profile = pulled.profile)
-                }
-                patch.remoteVersion?.let { v -> next = next.copy(visualizerUpdatedAt = v) }
-                next
+                        samples = if (backfill) pulled.samples else emptyList(),
+                        profile = if (fillProfile) pulled.profile else null,
+                        brewSeries = null,
+                    ),
+                )
+            }
+        } else {
+            null
+        }
+        val apply = { it: ShotRow ->
+            var next = it
+            patch.tags?.let { tags -> next = next.copy(tags = tags) }
+            patch.barista?.takeIf { next.barista.isNullOrBlank() }?.let { b -> next = next.copy(barista = b) }
+            if (filled != null && backfill) {
+                next = next.copy(
+                    summary = filled.summary,
+                    durationMs = if (next.durationMs > 0) next.durationMs else pulled.durationMs,
+                )
+            }
+            patch.remoteVersion?.let { v -> next = next.copy(visualizerUpdatedAt = v) }
+            next
         }
         editHistory { rows ->
             changed = false
@@ -1774,11 +1842,11 @@ class LibraryController(
             }
         }
         if (!inView) {
-            // Past the view's cap: the stored row, light, takes the same change.
+            // Past the view's cap: the stored row takes the same change.
             if (historyStore.updateHidden(localId, apply)) scope.launch { historyStore.flushHidden(localId) }
             return
         }
-        if (!changed) return
+        if (!changed && filled == null) return
         val snapshot = uiState().history
         scope.launch { persistHistory(snapshot) }
     }
@@ -1970,7 +2038,8 @@ class LibraryController(
         // Re-import dedupe: a BC brew's unix-second timestamp is stable
         // across exports, so (completedAt, bean name) identifies a row —
         // BC ids aren't carried on the shot, and our own ids are minted.
-        val importedShots = buildImportedShots(plan, beanIdRemap)
+        // Imported rows carry no telemetry; staged all the same, so the save writes them whole.
+        val importedShots = buildImportedShots(plan, beanIdRemap).map(::staged)
 
         if (newBeans.isEmpty() && newRoasters.isEmpty() && merge.updatedBeans.isEmpty() &&
             merge.updatedRoasters.isEmpty() && importedShots.isEmpty()
@@ -1980,7 +2049,7 @@ class LibraryController(
         }
         // Apply onto the CURRENT state (not the snapshot `s`) so a concurrent
         // high-rate telemetry / scale update isn't clobbered (issue 11).
-        var mergedShots = HistoryMerge(emptyList(), emptyList(), 0)
+        var mergedShots = HistoryMerge<ShotRow>(emptyList(), emptyList(), 0)
         // The merge again, on the rows as they stand: the one above read them a
         // moment ago, to say whether there was anything to import.
         var landed = merge
@@ -1998,6 +2067,8 @@ class LibraryController(
         )
         persistLibrary()
         val pastShots = pastTheCap(importedShots, mergedShots)
+        val landing = (mergedShots.kept + pastShots).mapTo(HashSet()) { it.id }
+        historyStore.unstage(importedShots.map { it.id }.filterNot { it in landing })
         if (importedShots.isNotEmpty()) {
             val snapshot = uiState().history
             scope.launch {
@@ -2569,12 +2640,14 @@ class LibraryController(
             appendLog("Shot discarded as aborted (<10 s, <5 g)")
         } else {
             val cut = CapCut()
-            editHistory { rows -> rows.withMade(shot, cut) }
+            // The row goes on screen; its curve, profile and brew series wait for the save (#310 P4a).
+            val row = staged(shot)
+            editHistory { rows -> rows.withMade(row, cut) }
             saveHistory()
             cut.say()
             // Auto-upload to every armed destination (Visualizer, Decent), one
-            // notice for the batch, with the core's full series.
-            autoUploadShot(shot, shot.samples)
+            // notice for the batch; each reads the shot whole, from the stage.
+            autoUploadShot(row)
         }
         // Persist the learned SAW drip model — a weight-stopped shot just
         // added a training sample in the core.
@@ -2711,7 +2784,8 @@ class LibraryController(
             // stamp belongs to the live-shot path only.
         )
         val cut = CapCut()
-        editHistory { rows -> rows.withMade(shot, cut) }
+        val row = staged(shot)
+        editHistory { rows -> rows.withMade(row, cut) }
         saveHistory()
         notify("Brew logged")
         cut.say()
@@ -2986,8 +3060,9 @@ class LibraryController(
         val shot = discardedShot ?: return
         discardedShot = null
         val cut = CapCut()
+        val row = staged(shot)
         editRows(
-            { rows -> rows.copy(history = rows.history.withMade(shot, cut)) },
+            { rows -> rows.copy(history = rows.history.withMade(row, cut)) },
             { it.copy(
                 discardToastMessage = null,
                 lastShot = LastShot(
@@ -3001,7 +3076,7 @@ class LibraryController(
             ) },
         )
         saveHistory()
-        autoUploadShot(shot, null)
+        autoUploadShot(row)
     }
 
     /** The discard snackbar timed out / was dismissed — drop the held shot. */
@@ -3022,7 +3097,7 @@ private const val RESTORE_BATCH = 250
  * that aren't in [stored], the log once it could. A row can be in both under
  * another id, if it came from Visualizer, so that id counts too.
  */
-internal fun madeWhileRefused(session: List<StoredShot>, stored: List<StoredShot>): List<StoredShot> {
+internal fun <T : coffee.crema.history.ShotMeta> madeWhileRefused(session: List<T>, stored: List<coffee.crema.history.ShotMeta>): List<T> {
     val ids = stored.mapTo(HashSet()) { it.id }
     val remote = stored.mapNotNullTo(HashSet()) { it.visualizerId }
     return session.filter { it.id !in ids && it.visualizerId !in remote }

@@ -44,6 +44,7 @@ internal class SeriesFiles(val dir: File, private val json: Json) {
 
     /** [id]'s series, in read order: `.series.gz`, then `.json`, then the pre-rename name. */
     fun read(id: String): SeriesRead {
+        seriesReadsForTest.incrementAndGet()
         when (val gz = readGz(gzFile(id))) {
             SeriesRead.Absent -> Unit
             else -> return gz
@@ -112,3 +113,7 @@ internal class SeriesFiles(val dir: File, private val json: Json) {
         @Volatile internal var beforeWrite: (String) -> Unit = {}
     }
 }
+
+/** Test seam: every series read, counted, so a test can say a load read none (#310 P4a). */
+@androidx.annotation.VisibleForTesting
+internal val seriesReadsForTest = java.util.concurrent.atomic.AtomicInteger()

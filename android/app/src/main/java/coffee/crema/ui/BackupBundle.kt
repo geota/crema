@@ -6,6 +6,7 @@ import coffee.crema.core.MaintenanceState
 import coffee.crema.core.Roaster
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.core.exportBackupBundle
+import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.settings.AppPrefs
@@ -52,16 +53,16 @@ internal class BackupSnapshot(
     val prefs: AppPrefs,
     val visualizerPrefs: VisualizerSyncPrefs,
     val userRecipes: List<coffee.crema.core.BrewRecipe>,
-    /** Rows past the view's cap (#310 P3a), light: a backup holds them too. */
-    val hiddenShots: List<StoredShot> = emptyList(),
-    /** A light row with its profile, brew series and curve, read from the store.
+    /** Rows past the view's cap (#310 P3a): a backup holds them too. */
+    val hiddenShots: List<ShotRow> = emptyList(),
+    /** A row with its profile, brew series and curve, read from the store (#310 P4a: no row holds them).
      *  Throws [coffee.crema.history.HistoryReadException] when a read failed just now. */
-    val full: (StoredShot) -> StoredShot = { it },
+    val full: (ShotRow) -> StoredShot,
     /** Rows [full] found without the curve their summary names (damaged or gone): the report counts them. */
     val missingCurves: Set<String> = emptySet(),
 ) {
     /** Every shot the backup holds, in its order: the view's, then those past its cap. */
-    val shots: List<StoredShot> get() = if (hiddenShots.isEmpty()) state.history else state.history + hiddenShots
+    val shots: List<ShotRow> get() = if (hiddenShots.isEmpty()) state.history else state.history + hiddenShots
 }
 
 /** The notice for a backup that wrote nothing. */

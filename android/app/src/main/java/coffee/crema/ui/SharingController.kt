@@ -4,7 +4,7 @@ import coffee.crema.core.MmrRegister
 import coffee.crema.core.ShotMachine
 import coffee.crema.decent.DecentSync
 import coffee.crema.decent.decentModelName
-import coffee.crema.history.StoredShot
+import coffee.crema.history.ShotRow
 import coffee.crema.history.isBrewLog
 import coffee.crema.visualizer.SyncLogEntry
 import coffee.crema.visualizer.VisualizerSync
@@ -91,7 +91,7 @@ class SharingController(
     // ── Derived state ───────────────────────────────────────────────────────
 
     private data class Inputs(
-        val history: List<StoredShot>,
+        val history: List<ShotRow>,
         val visualizer: VisualizerSync.UiState,
         val decent: DecentSync.UiState,
         val serial: String?,
@@ -179,16 +179,16 @@ class SharingController(
     // ── Pushes ──────────────────────────────────────────────────────────────
 
     /** Capture-time push to every armed destination; ONE notice for those that actually fired. */
-    fun autoUpload(shot: StoredShot, fullSamples: List<TelemetrySample>?) {
+    fun autoUpload(shot: ShotRow) {
         // Brew Log rows (issue #10) are local-only: no destination, no notice.
         if (shot.isBrewLog) return
         outcomes.open(shot.id)
-        val fired = destinations.filter { it.maybeAutoUpload(shot, fullSamples) }.map { it.id }
+        val fired = destinations.filter { it.maybeAutoUpload(shot) }.map { it.id }
         outcomes.seal(shot.id, fired)
     }
 
     /** Push one shot to the destinations the menu picked (a re-upload where it already is) — one notice. */
-    fun uploadShotTo(shot: StoredShot, targets: List<UploadTarget>) {
+    fun uploadShotTo(shot: ShotRow, targets: List<UploadTarget>) {
         if (shot.isBrewLog) return
         outcomes.open(shot.id)
         val fired = targets.filter { t -> destination(t.id).pushShot(shot, replace = t.uploaded) }.map { it.id }
