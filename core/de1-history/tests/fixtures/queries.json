@@ -1,0 +1,642 @@
+{
+	"now": 1790000000000,
+	"queries": [
+		{
+			"name": "sort-date-desc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "sort-date-asc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "asc"
+			}
+		},
+		{
+			"name": "sort-rating-desc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "rating",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "sort-rating-asc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "rating",
+				"dir": "asc"
+			}
+		},
+		{
+			"name": "sort-profile-desc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "profile",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "sort-profile-asc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "profile",
+				"dir": "asc"
+			}
+		},
+		{
+			"name": "sort-bean-desc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "bean",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "sort-bean-asc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "bean",
+				"dir": "asc"
+			}
+		},
+		{
+			"name": "sort-yield-desc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "yield",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "sort-yield-asc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "yield",
+				"dir": "asc"
+			}
+		},
+		{
+			"name": "sort-time-desc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "time",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "sort-time-asc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "time",
+				"dir": "asc"
+			}
+		},
+		{
+			"name": "range-7d",
+			"range": "7d",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "range-30d-rating-desc",
+			"range": "30d",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "rating",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "profile-turbo",
+			"range": "all",
+			"text": "",
+			"profile": "Turbo Bloom",
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "pinned",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": true,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "method-espresso",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": "espresso",
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "method-pourover-time-asc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": "pourover",
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "time",
+				"dir": "asc"
+			}
+		},
+		{
+			"name": "bag-b",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": "bean:b",
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "coffee-guji",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": "coffee:onyx|etiopía guji",
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "coffee-guji-rating-asc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": "coffee:onyx|etiopía guji",
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "rating",
+				"dir": "asc"
+			}
+		},
+		{
+			"name": "coffee-renamed",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": "coffee:sey|kenya kiambu",
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "coffee-renamed-old-name",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": "coffee:sey|kenya aa",
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "coffee-gone",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": "coffee:prodigal|ruby",
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "coffee-no-bag-id",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": "coffee:|market blend",
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "tag-dial-in",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [
+				"dial-in"
+			],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "tag-bag-fruity",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [
+				"fruity"
+			],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "tags-dial-in-sour",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [
+				"dial-in",
+				"sour"
+			],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-sour",
+			"range": "all",
+			"text": "sour",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-sey-upper",
+			"range": "all",
+			"text": " SEY ",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-cafe-accented",
+			"range": "all",
+			"text": "café",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-cafe-plain",
+			"range": "all",
+			"text": "cafe",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-zoe-plain",
+			"range": "all",
+			"text": "zoe",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-two-chars",
+			"range": "all",
+			"text": "go",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-dial",
+			"range": "all",
+			"text": "dial",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-bag-tag-floral",
+			"range": "all",
+			"text": "floral",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-legacy-label",
+			"range": "all",
+			"text": "sey · kenya",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-niche",
+			"range": "all",
+			"text": "niche",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-recipe",
+			"range": "all",
+			"text": "hoffmann",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-method-label",
+			"range": "all",
+			"text": "v60",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-free-method",
+			"range": "all",
+			"text": "karlsbad",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-cjk",
+			"range": "all",
+			"text": "苦いが",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "date",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "text-roaster-profile-sort",
+			"range": "all",
+			"text": "onyx",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "profile",
+				"dir": "asc"
+			}
+		},
+		{
+			"name": "combo-30d-espresso-yield-desc",
+			"range": "30d",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": "espresso",
+			"tags": [],
+			"pinnedOnly": false,
+			"sort": {
+				"key": "yield",
+				"dir": "desc"
+			}
+		},
+		{
+			"name": "combo-pinned-bean-asc",
+			"range": "all",
+			"text": "",
+			"profile": null,
+			"bean": null,
+			"method": null,
+			"tags": [],
+			"pinnedOnly": true,
+			"sort": {
+				"key": "bean",
+				"dir": "asc"
+			}
+		}
+	]
+}
