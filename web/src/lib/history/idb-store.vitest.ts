@@ -9,10 +9,14 @@ import { initTestWasm } from '#lib/testing/test-init.js';
 import { realSamples, realShot } from '#lib/testing/real-shots.js';
 import { reconcileShots, signatureForShot, type WireShot } from '#lib/visualizer/shot-sync-signatures.js';
 import { HistoryDb, META_MIGRATION, type MigrationRecord } from './history-db';
-import { clearLight } from './light-rows';
+import { clearLight, sampleCountOf } from './light-rows';
 import { peaksOf, type StoredShot } from './model';
 import { PENDING_KEY, readPending } from './pending';
-import { writeDoneMarker } from './store-marker';
+import { STORE_MARKER_KEY, readStoreMarker, writeDoneMarker } from './store-marker';
+import { SNAPSHOT_ROWS_KEY } from './rows-snapshot';
+import type { LockManagerLike } from '#lib/restore/tab-safety.js';
+import { getCaptureStore } from '#lib/capture/store.js';
+import { pruneCaptures } from '#lib/capture/prune.js';
 import { HistoryStore, type ChannelLike } from './store.svelte';
 import { summarize } from './summary';
 import { boot, freshStorage, historyDbExists, rawDb, settled, stored, whole, writeOldCopy, LEGACY_KEY } from './idb-test-kit';
@@ -49,6 +53,81 @@ async function seedStore(shots: readonly StoredShot[]): Promise<void> {
 	writeDoneMarker(1, shots.length);
 	// The old copy: absent, as after a fresh install's move.
 	localStorage.removeItem(LEGACY_KEY);
+}
+
+/** Channels that deliver to each other, as `BroadcastChannel` does. */
+function bus() {
+	const chans = new Set<ChannelLike>();
+	return () => {
+		const c: ChannelLike = {
+			onmessage: null,
+			postMessage(m) {
+				for (const o of chans) if (o !== c) queueMicrotask(() => o.onmessage?.({ data: structuredClone(m) }));
+			},
+			close() {
+				chans.delete(c);
+			}
+		};
+		chans.add(c);
+		return c;
+	};
+}
+
+/** Delete `crema-history` under any open store, as the browser might. */
+function deleteHistoryDb(): Promise<void> {
+	return new Promise<void>((resolve) => {
+		const req = idb.deleteDatabase('crema-history');
+		req.onsuccess = () => resolve();
+		req.onblocked = () => resolve();
+	});
+}
+
+/** A private file system of one directory, in memory. */
+function memoryRoot() {
+	const files = new Map<string, { bytes: Uint8Array; at: number }>();
+	const notFound = () => new DOMException('none', 'NotFoundError');
+	const root = {
+		async getFileHandle(name: string, opts?: { create?: boolean }) {
+			if (!files.has(name) && !opts?.create) throw notFound();
+			return {
+				async createWritable() {
+					const parts: Uint8Array[] = [];
+					return {
+						async write(p: BufferSource) {
+							parts.push(new Uint8Array(p as ArrayBuffer));
+						},
+						async close() {
+							const total = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+							let o = 0;
+							for (const p of parts) {
+								total.set(p, o);
+								o += p.length;
+							}
+							files.set(name, { bytes: total, at: 1_234 });
+						},
+						async abort() {}
+					};
+				},
+				async getFile() {
+					const f = files.get(name);
+					if (!f) throw notFound();
+					return { lastModified: f.at, arrayBuffer: async () => f.bytes.slice().buffer };
+				}
+			};
+		}
+	};
+	return { files, snapshotRoot: async () => root as unknown as FileSystemDirectoryHandle };
+}
+
+/** The first `crema-history` write fails for quota; the row-only retry, and later ones, land. */
+function firstWriteFull() {
+	let failed = false;
+	return (op: string) => {
+		if (!failed && op === 'write') {
+			failed = true;
+			throw new DOMException('full', 'QuotaExceededError');
+		}
+	};
 }
 
 const small = (n: number, from = 0) => Array.from({ length: n }, (_, i) => realShot(from + i, realSamples(4, (from + i) % 60)));
@@ -133,6 +212,22 @@ describe('the view cap hides, and never drops', () => {
 		expect(signatureForShot(hidden)).toBe(signatureForShot(full));
 		clearLight();
 		expect(signatureForShot(hidden)).not.toBe(signatureForShot(full));
+	});
+
+	it('a capture prune counts hidden rows: a pinned hidden row keeps its capture', async () => {
+		const shots = small(320);
+		await seedStore(shots);
+		const store = await boot();
+		const hidden = store.rawAll[315];
+		expect(store.all.some((s) => s.id === hidden.id)).toBe(false);
+		store.setPinned(hidden.id, true);
+		await store.flushed();
+		const captures = getCaptureStore();
+		for (const id of [store.all[0].id, store.all[1].id, hidden.id]) await captures.put(id, []);
+		expect(await pruneCaptures(store, '10')).toEqual([]);
+		expect((await pruneCaptures(store, 'off')).sort()).toEqual([store.all[0].id, store.all[1].id].sort());
+		expect(await captures.keys()).toEqual([hidden.id]);
+		await captures.delete(hidden.id);
 	});
 
 	it('a new shot past the view is refused as before; older rows it pushes out stay stored', async () => {
@@ -274,27 +369,96 @@ describe('the pending journal', () => {
 		expect(s.details.get(made.id)!.samples).toHaveLength(4);
 		expect(store.unsavedShots).toEqual([]);
 	});
+
+	it('an unsaved curve goes with a later save of any other row (M1)', async () => {
+		await seedStore(small(5));
+		const store = await boot({ dbFault: firstWriteFull() });
+		const made = store.recordCaptured(realShot(79, realSamples(4)) as unknown as Record<string, unknown>)!;
+		await store.flushed();
+		expect((await stored()).details.has(made.id)).toBe(false);
+		expect(store.unsavedShots).toEqual([made.id]);
+		// Space freed; the user rates a different shot.
+		const other = store.all.find((s) => s.id !== made.id)!;
+		store.setRating(other.id, 4);
+		await store.flushed();
+		const s = await stored();
+		expect(s.rows.get(other.id)!.metadata.rating).toBe(4);
+		expect(s.details.get(made.id)!.samples).toHaveLength(4);
+		expect(s.rows.get(made.id)!.summary.sampleCount).toBe(4);
+		expect(store.unsavedShots).toEqual([]);
+		expect(store.hasUnsaved).toBe(false);
+	});
+
+	it('a row stored without its curve claims none, so after a reload a backfill fills it (M2)', async () => {
+		await seedStore(small(5));
+		const store = await boot({ dbFault: firstWriteFull() });
+		const made = store.recordCaptured(realShot(80, realSamples(4)) as unknown as Record<string, unknown>)!;
+		await store.flushed();
+		const row = (await stored()).rows.get(made.id)!;
+		expect(row.summary.sampleCount ?? 0).toBe(0);
+		expect(row.summary.brewSampleCount).toBe(0);
+		// The tab is discarded before space comes back: the curve is gone.
+		const next = await boot();
+		const back = next.get(made.id)!;
+		expect(sampleCountOf(back)).toBe(0);
+		expect((await next.loadShot(made.id))!.record.samples).toEqual([]);
+		// The curve Visualizer holds comes back by the backfill.
+		const curve = realSamples(4, 7);
+		next.backfillTelemetry(made.id, curve, 30_000);
+		await next.flushed();
+		const s = await stored();
+		expect(s.details.get(made.id)!.samples).toHaveLength(4);
+		expect(s.rows.get(made.id)!.summary.sampleCount).toBe(4);
+	});
+
+	it('a shot made while the boot waits for the lock is journalled, and closing the tab warns (S1)', async () => {
+		await seedStore(small(3));
+		let grant = () => {};
+		const gate = new Promise<void>((r) => (grant = r));
+		const locks: LockManagerLike = {
+			async request(_name, _opts, run) {
+				await gate;
+				return run(null);
+			}
+		};
+		const store = new HistoryStore({ locks });
+		await new Promise((r) => setTimeout(r, 10));
+		expect(store.health).toBe('loading');
+		const made = store.recordCaptured(realShot(81, realSamples(4)) as unknown as Record<string, unknown>)!;
+		expect(made).toBeTruthy();
+		expect(store.hasUnsaved).toBe(true);
+		expect(readPending().map((r) => r.id)).toEqual([made.id]);
+		grant();
+		await settled(store);
+		await store.flushed();
+		expect((await stored()).details.get(made.id)!.samples).toHaveLength(4);
+		expect(readPending()).toEqual([]);
+		expect(store.hasUnsaved).toBe(false);
+	});
+
+	it('a shot journalled during a boot that ends lost is listed as unsaved', async () => {
+		await seedStore(small(3));
+		await deleteHistoryDb();
+		let grant = () => {};
+		const gate = new Promise<void>((r) => (grant = r));
+		const locks: LockManagerLike = {
+			async request(_name, _opts, run) {
+				await gate;
+				return run(null);
+			}
+		};
+		const store = new HistoryStore({ locks });
+		const made = store.recordCaptured(realShot(82, realSamples(4)) as unknown as Record<string, unknown>)!;
+		grant();
+		await settled(store);
+		expect(store.health).toBe('lost');
+		expect(store.unsavedShots).toEqual([made.id]);
+		expect(store.hasUnsaved).toBe(true);
+		expect(readPending().map((r) => r.id)).toEqual([made.id]);
+	});
 });
 
 describe('other tabs', () => {
-	/** Channels that deliver to each other, as `BroadcastChannel` does. */
-	function bus() {
-		const chans = new Set<ChannelLike>();
-		return () => {
-			const c: ChannelLike = {
-				onmessage: null,
-				postMessage(m) {
-					for (const o of chans) if (o !== c) queueMicrotask(() => o.onmessage?.({ data: structuredClone(m) }));
-				},
-				close() {
-					chans.delete(c);
-				}
-			};
-			chans.add(c);
-			return c;
-		};
-	}
-
 	it('a row another tab writes, edits or deletes shows here, by its id', async () => {
 		await seedStore(small(10).map((s) => ({ ...s, visualizerId: null })));
 		const channel = bus();
@@ -331,6 +495,32 @@ describe('other tabs', () => {
 		release();
 		await settled(b);
 		await until(() => b.get(made.id) !== undefined);
+	});
+
+	it('a tab on the old copy stops writing it once another tab moves the history (S4)', async () => {
+		const shots = small(5);
+		await writeOldCopy(shots);
+		// A failed move waits for its next try: this tab runs on the old copy.
+		localStorage.setItem(
+			STORE_MARKER_KEY,
+			JSON.stringify({ state: 'failed', failures: 3, lastError: 'full', lastTryAt: Date.now(), nextTryAt: Date.now() + 86_400_000 })
+		);
+		const a = await boot();
+		expect(a.health).toBe('legacy');
+		const blob = localStorage.getItem(LEGACY_KEY);
+		// Another tab moves it.
+		writeDoneMarker(Date.now(), shots.length);
+		window.dispatchEvent(new StorageEvent('storage', { key: STORE_MARKER_KEY }));
+		expect(a.movedElsewhere).toBe(true);
+		expect(a.rowsHealth()).toBe('unavailable');
+		a.setRating(shots[1].id, 2);
+		const made = a.recordCaptured(realShot(53, realSamples(4)) as unknown as Record<string, unknown>)!;
+		await a.flushed();
+		expect(localStorage.getItem(LEGACY_KEY)).toBe(blob);
+		// Only the new shot waits in the journal, for the moved store to merge.
+		expect(readPending().map((r) => r.id)).toEqual([made.id]);
+		expect(a.unsavedShots).toEqual([made.id]);
+		expect((await a.restoreRows((rows) => ({ next: [...rows], series: [], remove: [] }))).stored).toBe(false);
 	});
 
 	it('a tab that missed the news reloads when it comes back into view', async () => {
@@ -438,6 +628,143 @@ describe('a store that is lost or can’t open', () => {
 		expect(await lost.recoverSnapshot()).toBe(true);
 		expect(lost.rawAll.map((s) => s.id).sort()).toEqual(shots.map((s) => s.id).sort());
 		expect(lost.get(shots[0].id)!.metadata.rating).toBe(3);
+	});
+
+	it('a stale lost banner in a second tab can’t clear the store the first tab recovered (M3)', async () => {
+		const shots = small(5);
+		await writeOldCopy(shots);
+		await boot();
+		await deleteHistoryDb();
+		const a = await boot();
+		const b = await boot();
+		expect(a.health).toBe('lost');
+		expect(b.health).toBe('lost');
+		expect(await a.recoverOldCopy()).toBe(true);
+		const made = a.recordCaptured(realShot(62, realSamples(4)) as unknown as Record<string, unknown>)!;
+		await a.flushed();
+		// B never heard; its banner still offers to start empty.
+		expect(b.health).toBe('lost');
+		const result = await b.startEmpty();
+		const { rows, details } = await stored();
+		expect(rows.size).toBe(6);
+		expect(details.get(made.id)!.samples).toHaveLength(4);
+		expect(result).toBe('reopened');
+		expect(b.health).toBe('ok');
+		expect(b.get(made.id)).toBeDefined();
+		await a.reloadRows();
+		expect(a.get(made.id)).toBeDefined();
+	});
+
+	it('another tab’s recovery takes this tab out of lost', async () => {
+		const shots = small(5);
+		await writeOldCopy(shots);
+		await boot();
+		await deleteHistoryDb();
+		const channel = bus();
+		const a = await boot({ channel });
+		const b = await boot({ channel });
+		expect(b.health).toBe('lost');
+		expect(await a.recoverOldCopy()).toBe(true);
+		await until(() => b.health === 'ok');
+		expect(b.rawAll.map((s) => s.id).sort()).toEqual(shots.map((s) => s.id).sort());
+	});
+
+	it.each([
+		['empty, as a recovery killed before its record leaves it', 0],
+		['with rows', 2]
+	])('marker done and a store with no migration record, %s: lost (S2)', async (_what, n) => {
+		const db = new HistoryDb({ expectExisting: () => false });
+		await db.open();
+		if (n > 0) await db.putShots(small(n).map((shot) => ({ shot, details: true })), summarize);
+		db.close();
+		writeDoneMarker(1, n);
+		const store = await boot();
+		expect(store.health).toBe('lost');
+		expect(store.loaded).toBe(false);
+	});
+
+	it('a store deleted under a running tab is lost, and is not made again (S6)', async () => {
+		await seedStore(small(5));
+		const store = await boot();
+		expect(store.health).toBe('ok');
+		await deleteHistoryDb();
+		store.setRating(store.all[1].id, 2);
+		await store.flushed();
+		expect(store.health).toBe('lost');
+		expect(await historyDbExists(idb)).toBe(false);
+	});
+
+	it('the daily copy keeps profiles; its rows claim no curves, so a backfill fills them (S3)', async () => {
+		const { files, snapshotRoot } = memoryRoot();
+		const shots = small(4);
+		await seedStore(shots);
+		const store = await boot({ snapshotRoot });
+		store.setRating(shots[0].id, 3);
+		await store.flushed();
+		await until(() => files.size === 1);
+		await deleteHistoryDb();
+		const lost = await boot({ snapshotRoot });
+		expect(await lost.recoverSnapshot()).toBe(true);
+		const { rows, details } = await stored();
+		for (const s of shots) {
+			expect(details.get(s.id)!.profile).toEqual(whole(s).profile);
+			expect(rows.get(s.id)!.summary.sampleCount ?? 0).toBe(0);
+		}
+		lost.backfillTelemetry(shots[1].id, realSamples(4, 3), 30_000);
+		await lost.flushed();
+		expect((await stored()).details.get(shots[1].id)!.samples).toHaveLength(4);
+	});
+
+	it('the daily copy isn’t replaced by a smaller store after Start empty; a delete by name may shrink it', async () => {
+		const { files, snapshotRoot } = memoryRoot();
+		const shots = small(6);
+		await seedStore(shots);
+		let day = 0;
+		const now = () => Date.now() + day * 86_400_000;
+		const store = await boot({ snapshotRoot, now });
+		store.setRating(shots[0].id, 3);
+		await store.flushed();
+		await until(() => files.size === 1);
+		expect(localStorage.getItem(SNAPSHOT_ROWS_KEY)).toBe('6');
+		// A delete by name, then the next day's save: the copy has 5.
+		store.delete(shots[5].id);
+		await store.flushed();
+		day = 1;
+		store.setRating(shots[0].id, 4);
+		await store.flushed();
+		await until(() => localStorage.getItem(SNAPSHOT_ROWS_KEY) === '5');
+		// Lost, and started empty: the next day's save keeps the copy of 5.
+		await deleteHistoryDb();
+		const lost = await boot({ snapshotRoot, now });
+		expect(await lost.startEmpty()).toBe(true);
+		day = 2;
+		lost.recordCaptured(realShot(63, realSamples(4)) as unknown as Record<string, unknown>);
+		await lost.flushed();
+		await new Promise((r) => setTimeout(r, 30));
+		expect(localStorage.getItem(SNAPSHOT_ROWS_KEY)).toBe('5');
+		expect(await lost.snapshotInfo()).toMatchObject({ rows: 5 });
+	});
+
+	it('a marker the full storage refused is said, and written by a later save (S5)', async () => {
+		await writeOldCopy(small(3));
+		const setItem = localStorage.setItem.bind(localStorage);
+		let refuse = true;
+		const spy = vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
+			if (refuse && key === STORE_MARKER_KEY) throw new DOMException('full', 'QuotaExceededError');
+			return setItem(key, value);
+		});
+		try {
+			const store = await boot();
+			expect(store.health).toBe('ok');
+			expect(readStoreMarker().kind).toBe('none');
+			expect(store.storageError).toMatch(/marker/);
+			refuse = false;
+			store.setRating(store.all[0].id, 1);
+			await store.flushed();
+			expect(readStoreMarker()).toMatchObject({ kind: 'marker', marker: { state: 'done', rows: 3 } });
+		} finally {
+			spy.mockRestore();
+		}
 	});
 
 	it('a store that won’t open is unavailable: new shots wait, and Try again brings it back', async () => {

@@ -113,9 +113,25 @@ import {
 	type MigrationDeps
 } from './migrate';
 import { clearLight, lightSummary, markLight, markLoaded, sampleCountOf } from './light-rows';
-import { markerSaysDone, migrationDue, readStoreMarker, writeDoneMarker, writeFailedMarker } from './store-marker';
+import {
+	STORE_MARKER_KEY,
+	markerSaysDone,
+	migrationDue,
+	readStoreMarker,
+	writeDoneMarker,
+	writeFailedMarker
+} from './store-marker';
 import { addPending, dropPending, readPending } from './pending';
-import { dayOf, readRowsSnapshot, snapshotDue, writeRowsSnapshot } from './rows-snapshot';
+import {
+	SNAPSHOT_CHUNK,
+	dayOf,
+	lastSnapshotRows,
+	readRowsSnapshot,
+	snapshotRowsDropped,
+	snapshotDue,
+	writeRowsSnapshot,
+	type SnapshotRow
+} from './rows-snapshot';
 import { summarize } from './summary';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
 
@@ -193,6 +209,13 @@ export function uploadPending(id: string): boolean {
  * - `lost`: the store was made, and is gone.
  */
 export type HistoryHealth = 'loading' | 'ok' | 'legacy' | 'unavailable' | 'lost';
+
+/**
+ * How a recovery from `lost` ended: true when it filled the store, `reopened`
+ * when another tab had already recovered it and this tab loaded that, false
+ * when it didn't work (`storageError` says why).
+ */
+export type RecoveryResult = boolean | 'reopened';
 
 /** The rows aren't loaded, so a caller that would act on them skips. */
 export class HistoryNotReady extends Error {
@@ -300,6 +323,16 @@ export class HistoryStore {
 	private unsavedIds = $state.raw<string[]>([]);
 	/** The old copy's date and size, for the lost banner. */
 	private oldCopyInfo = $state<{ at: number; rows: number } | null>(null);
+	/** Another tab moved the rows while this one ran on the legacy backend: reload. */
+	private movedAway = $state(false);
+	/** The `done` marker couldn't be written (storage full): retried after each save. */
+	private markerOwed: { at: number; rows: number } | null = null;
+	/** Late rows' migration record, waiting until those rows are stored. */
+	private lateOwed: { record: MigrationRecord; ids: string[] } | null = null;
+	/** A reopen after another tab's recovery, while it runs. */
+	private reopenRun: Promise<boolean> | null = null;
+	/** Shots made before the boot decided, whose rows wait in the journal. */
+	private bootJournal = new Set<string>();
 
 	/** Which backend the rows go to. `booting` until the boot decides. */
 	private mode: 'booting' | 'idb' | 'legacy' | 'blocked' = 'booting';
@@ -420,7 +453,21 @@ export class HistoryStore {
 
 	/** Whether closing the tab now would lose something. */
 	get hasUnsaved(): boolean {
-		return this.unsavedIds.length > 0 || (this.mode === 'idb' && this.dirtyRowIds().length > 0);
+		if (this.unsavedIds.length > 0) return true;
+		if (this.mode === 'idb') return this.dirtyRowIds().length > 0 || this.dirtyDetails.size > 0;
+		// Made before the rows loaded: only the row is in the journal, the curve
+		// is in memory (S1). Blocked, every new shot is in `unsavedIds`.
+		return this.mode === 'booting' && this.bootJournal.size > 0;
+	}
+
+	/** Another tab moved the history while this tab ran on the old copy: it must reload. */
+	get movedElsewhere(): boolean {
+		return this.movedAway;
+	}
+
+	/** The marker can't be read: "lost" may mean a device that never moved. */
+	get markerUnreadable(): boolean {
+		return readStoreMarker().kind === 'unreadable';
 	}
 
 	/** On `crema-history`: rows past the view are kept. On the legacy backend they go. */
@@ -433,6 +480,8 @@ export class HistoryStore {
 	 * prune check before trusting "not listed" to mean "not here".
 	 */
 	rowsHealth(): StoreHealth {
+		// The old copy this tab holds is no longer the history.
+		if (this.movedAway) return 'unavailable';
 		switch (this.healthState) {
 			case 'ok':
 				return 'ok';
@@ -491,13 +540,39 @@ export class HistoryStore {
 		readCaptureKeep(() => existing);
 	}
 
+	/** The store went missing under this tab (S6): the lost banner, never a silent re-create. */
+	private async lostNow(e: unknown): Promise<void> {
+		if (this.healthState === 'lost') return;
+		await this.readOldCopyInfo();
+		this.block('lost', errorText(e));
+	}
+
+	/** Write the `done` marker, or keep owing it and say so (S5). */
+	private writeMarker(at: number, rows: number): void {
+		if (writeDoneMarker(at, rows)) {
+			this.markerOwed = null;
+			return;
+		}
+		const first = this.markerOwed === null;
+		this.markerOwed = { at, rows };
+		this.lastError = 'The history’s marker couldn’t be saved: browser storage is full.';
+		if (first) {
+			toast.error('Browser storage is full, so Crema couldn’t note where your shot history is kept. Free up space or export a backup.');
+		}
+	}
+
 	private block(health: 'unavailable' | 'lost', error: string): void {
 		this.mode = 'blocked';
 		this.healthState = health;
+		// What memory holds can no longer be trusted as the store's.
+		this.loadedFlag = false;
 		this.lastError = error;
 		this.slowFlag = false;
 		// New shots made meanwhile go to the journal, so a reload keeps them.
 		this.journalNew();
+		// Those journalled while the boot ran have only their row there too.
+		this.markUnsaved([...this.bootJournal]);
+		this.bootJournal.clear();
 	}
 
 	/** No IndexedDB, or a test: the legacy backend, loaded at once as before. */
@@ -506,6 +581,7 @@ export class HistoryStore {
 		this.shots = loadShots();
 		this.markLive(this.shots.map((s) => s.id));
 		followOtherTabs(HISTORY_KEY, Array.isArray, (v) => this.takeOtherTabsRows(v as unknown[]));
+		this.followMarker();
 		this.markLoadedNow('legacy');
 		// Two-phase, as before: rows at once, each one's series from IndexedDB
 		// after. Rows of the all-in-localStorage format arrive with samples, and
@@ -521,9 +597,26 @@ export class HistoryStore {
 		}
 	}
 
+	/**
+	 * On the legacy backend, while a move may still happen: once another tab
+	 * marks the move done, this tab stops writing the old copy, which is now
+	 * the copy as it was at the move (S4). New shots go to the journal.
+	 */
+	private followMarker(): void {
+		if (this.opts.backend === 'legacy' || typeof window === 'undefined') return;
+		window.addEventListener('storage', (e) => {
+			if (e.key !== STORE_MARKER_KEY || this.mode !== 'legacy' || !markerSaysDone()) return;
+			// What memory holds is in the old copy, which the move took: only
+			// shots it doesn't hold go to the journal, for the moved store to merge.
+			this.mode = 'blocked';
+			this.movedAway = true;
+		});
+	}
+
 	/** After a failed move: the old copy, with what this tab made meanwhile. */
 	private enterLegacy(error: string | null): void {
 		const made = this.shots;
+		this.bootJournal.clear();
 		const madeDetails = new Set(this.dirtyDetails);
 		this.mode = 'legacy';
 		this.dirtyDetails.clear();
@@ -532,13 +625,15 @@ export class HistoryStore {
 		this.shots = newestFirst([...made.filter((s) => !ids.has(s.id)), ...loadedRows]);
 		this.markLive(loadedRows.map((s) => s.id));
 		followOtherTabs(HISTORY_KEY, Array.isArray, (v) => this.takeOtherTabsRows(v as unknown[]));
+		this.followMarker();
 		this.markLoadedNow('legacy');
 		if (error) {
 			this.lastError = error;
 			toast.info('Shot history couldn’t move to its new storage, so it stays where it was for now. It will try again later.', 8000);
 		}
 		if (made.length > 0) {
-			this.persistLegacy();
+			// In the old copy now: their journal rows can go.
+			if (this.persistLegacy()) dropPending(made.map((s) => s.id));
 			for (const s of made) {
 				if (madeDetails.has(s.id) && s.record.samples.length > 0) {
 					void putSeries(s.id, s.record.samples).catch(seriesSaveFailed);
@@ -642,7 +737,7 @@ export class HistoryStore {
 			const record = await db.meta<MigrationRecord>(META_MIGRATION);
 			if (record?.state === 'done') {
 				// The marker didn't make it: rebuild it, and never clear.
-				writeDoneMarker(record.doneAt ?? this.now(), record.sourceIds.length);
+				this.writeMarker(record.doneAt ?? this.now(), record.sourceIds.length);
 				return { kind: 'ok' };
 			}
 		} catch (e) {
@@ -653,7 +748,7 @@ export class HistoryStore {
 		const result = await copyLegacy(this.migrationDeps(db), coerceStoredShot);
 		if (result.kind === 'done') {
 			await this.opts.migrationFault?.('marker');
-			writeDoneMarker(this.now(), result.rows);
+			this.writeMarker(this.now(), result.rows);
 			return { kind: 'ok' };
 		}
 		writeFailedMarker(result.error, this.now());
@@ -670,7 +765,8 @@ export class HistoryStore {
 			await this.opts.migrationFault?.('loaded-rows');
 		} catch (e) {
 			if (e instanceof TestKill) throw e;
-			this.block('unavailable', errorText(e));
+			if (e instanceof HistoryDbLost) await this.lostNow(e);
+			else this.block('unavailable', errorText(e));
 			return;
 		}
 		const loadedRows: StoredShot[] = [];
@@ -688,6 +784,8 @@ export class HistoryStore {
 		// They're written next, journalled or not.
 		const made = this.shots.filter((s) => !this.stored.has(s.id));
 		const madeIds = new Set(made.map((s) => s.id));
+		// Their journal rows go once they're written (`afterWrite`).
+		this.bootJournal.clear();
 		for (const s of made) {
 			this.written.delete(s.id);
 			this.dirtyDetails.add(s.id);
@@ -726,14 +824,9 @@ export class HistoryStore {
 		this.scheduleFlush();
 		if (late?.changed) {
 			// Only once the late rows are in: a record naming a row the store
-			// doesn't hold would keep it out for good.
-			const record = late.record;
-			const wanted = [...lateAdd, ...fills.values()].map((s) => s.id);
-			this.writeChain = this.writeChain.then(async () => {
-				if (wanted.every((id) => this.stored.has(id) && !this.dirtyDetails.has(id))) {
-					await db.setMeta(META_MIGRATION, record).catch(() => {});
-				}
-			});
+			// doesn't hold would keep it out for good. Owed until then.
+			this.lateOwed = { record: late.record, ids: [...lateAdd, ...fills.values()].map((s) => s.id) };
+			this.writeChain = this.writeChain.then(() => this.settleLateRecord());
 		}
 		// Ids another tab wrote during the load.
 		if (this.heard.size > 0) this.applyHeard();
@@ -816,7 +909,11 @@ export class HistoryStore {
 			let found: Map<string, DetailsRecord>;
 			try {
 				found = await db.detailsOf(ids).catch(() => db.detailsOf(ids));
-			} catch {
+			} catch (e) {
+				if (e instanceof HistoryDbLost) {
+					await this.lostNow(e);
+					return;
+				}
 				// The rows stay light, so nothing reads them as curveless.
 				this.seriesUnreadable = true;
 				return;
@@ -958,7 +1055,17 @@ export class HistoryStore {
 		this.channel = make ? make() : null;
 		if (this.channel) {
 			this.channel.onmessage = (event) => {
-				const m = event.data as Partial<ChannelMessage> | null;
+				const raw = event.data as { type?: unknown; from?: unknown } | null;
+				// Another tab recovered a lost store, or wrote to one this tab can't
+				// open: try it again, rather than offer choices that would clear it.
+				if (raw && raw.from !== this.tabId && (this.healthState === 'lost' || this.healthState === 'unavailable')) {
+					const was = this.healthState;
+					void this.reopenIfRecovered().then((back) => {
+						if (back && was === 'lost') toast.info('Shot history is back: another tab restored it.', 6000);
+					});
+					return;
+				}
+				const m = raw as Partial<ChannelMessage> | null;
 				if (!m || m.type !== 'rows' || m.from === this.tabId || !Array.isArray(m.ids)) return;
 				for (const id of m.ids) if (typeof id === 'string') this.heard.add(id);
 				if (typeof m.seq === 'number') this.lastSeq = Math.max(this.lastSeq, m.seq);
@@ -1124,6 +1231,11 @@ export class HistoryStore {
 			this.journalNew();
 			return false;
 		}
+		// Not loaded yet: a new shot's row waits in the journal, so closing the
+		// tab now doesn't lose it (S1). The boot writes it, and drops the entry.
+		if (this.mode === 'booting') {
+			for (const id of this.journalNew(false)) this.bootJournal.add(id);
+		}
 		this.settleView();
 		this.scheduleFlush();
 		return true;
@@ -1153,7 +1265,9 @@ export class HistoryStore {
 			return;
 		}
 		if (this.mode !== 'idb' || !this.db) return;
-		const ids = this.dirtyRowIds();
+		// Rows that changed, and rows whose curve still isn't stored, whatever
+		// changed: an unsaved curve goes with every later save (M1).
+		const ids = [...new Set([...this.dirtyRowIds(), ...this.dirtyDetails, ...this.unsavedIds])];
 		if (ids.length === 0) return;
 		const byId = this.byId();
 		const writes: ShotWrite[] = [];
@@ -1169,6 +1283,10 @@ export class HistoryStore {
 			this.afterWrite(writes, result.seq, result.written);
 		} catch (e) {
 			for (const w of writes) if (w.details) this.dirtyDetails.add(w.shot.id);
+			if (e instanceof HistoryDbLost) {
+				await this.lostNow(e);
+				return;
+			}
 			await this.writeFailed(writes, e);
 		}
 	}
@@ -1211,8 +1329,27 @@ export class HistoryStore {
 			seq
 		);
 		this.settleView();
+		if (this.markerOwed) this.writeMarker(this.markerOwed.at, this.markerOwed.rows);
+		this.settleLateRecord();
 		this.maybeSnapshot();
 		if (this.dirtyRowIds().length > 0) this.scheduleFlush();
+	}
+
+	/** The late rows' record, once every late row is stored with its details. */
+	private settleLateRecord(): void {
+		const owed = this.lateOwed;
+		const db = this.db;
+		if (!owed || !db) return;
+		if (!owed.ids.every((id) => this.stored.has(id) && !this.dirtyDetails.has(id) && !this.unsavedIds.includes(id))) return;
+		this.lateOwed = null;
+		this.writeChain = this.writeChain.then(async () => {
+			try {
+				await db.setMeta(META_MIGRATION, owed.record);
+			} catch {
+				// Owed again: a record naming rows the store doesn't hold would keep them out.
+				this.lateOwed ??= owed;
+			}
+		});
 	}
 
 	/**
@@ -1223,10 +1360,12 @@ export class HistoryStore {
 	private async writeFailed(writes: readonly ShotWrite[], error: unknown): Promise<void> {
 		this.lastError = errorText(error);
 		const withHeavy = writes.filter((w) => w.details);
+		// A row stored without its details says so: its summary is the light
+		// shot's, no samples, so a backfill or a restore can still fill it (M2).
 		const rowsOnly: ShotWrite[] = writes.map((w) => ({
 			shot: w.shot,
 			details: false,
-			summary: w.summary ?? summarize(w.shot)
+			summary: w.summary ?? summarize(lightOf(w.shot))
 		}));
 		let rowsStored = false;
 		try {
@@ -1243,7 +1382,11 @@ export class HistoryStore {
 				rowsOnly.map((w) => w.shot.id),
 				r.seq
 			);
-		} catch {
+		} catch (e) {
+			if (e instanceof HistoryDbLost) {
+				await this.lostNow(e);
+				return;
+			}
 			for (const w of writes) if (!this.stored.has(w.shot.id)) addPending(w.shot);
 		}
 		const lost = withHeavy
@@ -1267,16 +1410,16 @@ export class HistoryStore {
 	}
 
 	/** The store can't be written: new shots go to the journal, so a reload keeps them. */
-	private journalNew(): void {
-		const fresh = this.shots.filter((s) => !this.stored.has(s.id) && this.written.get(s.id) !== s);
-		const kept: string[] = [];
+	private journalNew(unsaved = true): string[] {
+		const fresh = this.shots.filter(
+			(s) => !this.stored.has(s.id) && this.written.get(s.id) !== s && !(this.movedAway && this.known.has(s.id))
+		);
 		for (const s of fresh) {
-			if (addPending(s)) {
-				this.written.set(s.id, s);
-				kept.push(s.id);
-			}
+			if (addPending(s)) this.written.set(s.id, s);
 		}
-		this.markUnsaved(fresh.map((s) => s.id));
+		const ids = fresh.map((s) => s.id);
+		if (unsaved) this.markUnsaved(ids);
+		return ids;
 	}
 
 	/**
@@ -1307,15 +1450,22 @@ export class HistoryStore {
 			try {
 				if (!db || this.mode !== 'idb') {
 					// Nothing reached the store; a journalled row went with dropPending.
-					result = this.mode === 'blocked';
+					// After a move elsewhere the store still holds it.
+					result = this.mode === 'blocked' && !this.movedAway;
 					return;
 				}
 				const seq = await db.delete(ids);
 				this.lastSeq = Math.max(this.lastSeq, seq);
+				// Deleted by name: the next daily copy may be smaller by these.
+				snapshotRowsDropped(ids.length);
 				this.post(ids, seq);
 				after?.();
 			} catch (e) {
 				result = false;
+				if (e instanceof HistoryDbLost) {
+					await this.lostNow(e);
+					return;
+				}
 				this.lastError = errorText(e);
 				toast.error('A shot couldn’t be removed from storage, so it may come back after a reload.');
 			} finally {
@@ -1339,7 +1489,19 @@ export class HistoryStore {
 		void (async () => {
 			try {
 				const rows = await db.allRows();
-				await writeRowsSnapshot(rows, this.now(), this.opts.snapshotRoot);
+				// Fewer rows than the last copy, less the deletes by name since
+				// (Start empty, a restore under way): keep the last copy, which may
+				// be the only way back if that goes wrong.
+				const last = lastSnapshotRows();
+				if (last !== null && rows.length < last) return;
+				// The as-run profile of each row too, so a recovery keeps them.
+				const lines: SnapshotRow[] = [];
+				for (let i = 0; i < rows.length; i += SNAPSHOT_CHUNK) {
+					const part = rows.slice(i, i + SNAPSHOT_CHUNK);
+					const details = await db.detailsOf(part.map((r) => r.id));
+					for (const r of part) lines.push({ ...r, profile: details.get(r.id)?.profile ?? null });
+				}
+				await writeRowsSnapshot(lines, this.now(), this.opts.snapshotRoot);
 			} catch {
 				// Tomorrow's goes again.
 			} finally {
@@ -1372,9 +1534,12 @@ export class HistoryStore {
 		return this.health === 'ok';
 	}
 
-	/** A store made new, for a lost one: the user chose how to fill it. */
-	private async freshStore(): Promise<HistoryDb> {
-		const db = this.newDb(() => false);
+	/**
+	 * A store made new, for a lost one: the user chose how to fill it. Made
+	 * while `making()`; after that, a reopen that finds it gone is lost again.
+	 */
+	private async freshStore(making: () => boolean): Promise<HistoryDb> {
+		const db = this.newDb(() => !making() && markerSaysDone());
 		await db.open();
 		await db.clearAll();
 		return db;
@@ -1393,50 +1558,131 @@ export class HistoryStore {
 		return { state: 'done', sourceHash: hashText(raw ?? ''), sourceIds: ids, doneAt: this.now() };
 	}
 
-	private async recovered(db: HistoryDb, rows: number): Promise<void> {
-		writeDoneMarker(this.now(), rows);
+	/**
+	 * The store holds a `done` record again (another tab recovered it): open
+	 * it and load, instead of offering choices that would clear it. One at a
+	 * time: a message and a click can both ask.
+	 */
+	private reopenIfRecovered(): Promise<boolean> {
+		this.reopenRun ??= this.reopenNow().finally(() => (this.reopenRun = null));
+		return this.reopenRun;
+	}
+
+	private async reopenNow(): Promise<boolean> {
+		if (this.healthState !== 'lost' && this.healthState !== 'unavailable') return false;
+		// Never creates it: a store still missing stays lost.
+		const db = this.newDb(() => true);
+		try {
+			await db.open();
+			const record = await db.meta<MigrationRecord>(META_MIGRATION);
+			if (!record || record.state !== 'done') {
+				db.close();
+				return false;
+			}
+		} catch {
+			db.close();
+			return false;
+		}
+		if (this.healthState !== 'lost' && this.healthState !== 'unavailable') {
+			db.close();
+			return false;
+		}
+		this.db?.close();
 		this.db = db;
 		this.mode = 'booting';
 		this.healthState = 'loading';
 		this.oldCopyInfo = null;
 		await this.loadFromDb();
+		return this.health === 'ok';
+	}
+
+	/**
+	 * A recovery the user chose, for a store that is lost. Under the migration
+	 * lock, and only if the store is still lost: a tab whose banner is stale
+	 * must not clear a store another tab already filled (M3); it loads that
+	 * store instead, and says `reopened`. After a recovery the other tabs hear
+	 * of it and load.
+	 */
+	private async recoverWith(fill: (db: HistoryDb) => Promise<number | false>): Promise<RecoveryResult> {
+		if (this.healthState !== 'lost') return this.healthState === 'ok' ? 'reopened' : false;
+		return this.underLock(MIGRATION_LOCK, async (): Promise<RecoveryResult> => {
+			if (await this.reopenIfRecovered()) return 'reopened';
+			if (this.healthState !== 'lost') return this.healthState === 'ok' ? 'reopened' : false;
+			let making = true;
+			const db = await this.freshStore(() => making);
+			let rows: number | false;
+			try {
+				rows = await fill(db);
+			} catch (e) {
+				db.close();
+				throw e;
+			} finally {
+				making = false;
+			}
+			// A store left with no record reads as lost at the next boot.
+			if (rows === false) {
+				db.close();
+				return false;
+			}
+			this.writeMarker(this.now(), rows);
+			this.db?.close();
+			this.db = db;
+			this.mode = 'booting';
+			this.healthState = 'loading';
+			this.oldCopyInfo = null;
+			await this.loadFromDb();
+			try {
+				this.channel?.postMessage({ type: 'recovered', from: this.tabId });
+			} catch {
+				// The other tabs find it when they come back into view.
+			}
+			return this.health === 'ok';
+		});
 	}
 
 	/** Lost: start again with no shots. */
-	async startEmpty(): Promise<void> {
-		if (this.healthState !== 'lost') return;
-		const db = await this.freshStore();
-		await db.setMeta(META_MIGRATION, this.oldCopyRecord());
-		await this.recovered(db, 0);
+	startEmpty(): Promise<RecoveryResult> {
+		return this.recoverWith(async (db) => {
+			await db.setMeta(META_MIGRATION, this.oldCopyRecord());
+			return 0;
+		});
 	}
 
 	/** Lost: the old copy, as it was when it moved. */
-	async recoverOldCopy(): Promise<boolean> {
-		if (this.healthState !== 'lost') return false;
-		const db = await this.freshStore();
-		const result = await copyLegacy(this.migrationDeps(db), coerceStoredShot);
-		if (result.kind !== 'done') {
-			this.lastError = result.error;
-			return false;
-		}
-		await this.recovered(db, result.rows);
-		return true;
+	recoverOldCopy(): Promise<RecoveryResult> {
+		return this.recoverWith(async (db) => {
+			const result = await copyLegacy(this.migrationDeps(db), coerceStoredShot);
+			if (result.kind !== 'done') {
+				this.lastError = result.error;
+				return false;
+			}
+			return result.rows;
+		});
 	}
 
-	/** Lost: the daily rows snapshot. Their curves were in the lost store. */
-	async recoverSnapshot(): Promise<boolean> {
-		if (this.healthState !== 'lost') return false;
+	/**
+	 * Lost: the daily rows snapshot, with each row's as-run profile (S3).
+	 * Their curves were in the lost store, so the rows come back without
+	 * them, and their summaries say so (no samples), so a backfill or a merge
+	 * restore can still give each its curve.
+	 */
+	async recoverSnapshot(): Promise<RecoveryResult> {
+		if (this.healthState !== 'lost') return this.recoverWith(async () => false);
 		const snap = await readRowsSnapshot(this.opts.snapshotRoot);
-		if (!snap) return false;
-		const db = await this.freshStore();
-		const writes: ShotWrite[] = snap.rows.map((r) => {
-			const { shot, summary } = shotOfRow(r);
-			return { shot, details: false, summary };
+		if (!snap) {
+			this.lastError = 'The daily copy couldn’t be read.';
+			return false;
+		}
+		return this.recoverWith(async (db) => {
+			const writes: ShotWrite[] = snap.rows.map((r) => {
+				const { profile, ...row } = r;
+				const { shot } = shotOfRow(row);
+				return { shot: { ...shot, profile: profile ?? null }, details: true };
+			});
+			for (let i = 0; i < writes.length; i += SNAPSHOT_CHUNK) await db.putShots(writes.slice(i, i + SNAPSHOT_CHUNK), summarize);
+			await db.setMeta(META_MIGRATION, this.oldCopyRecord());
+			return writes.length;
 		});
-		for (let i = 0; i < writes.length; i += 500) await db.putShots(writes.slice(i, i + 500), summarize);
-		await db.setMeta(META_MIGRATION, this.oldCopyRecord());
-		await this.recovered(db, writes.length);
-		return true;
 	}
 
 	/** Whether a rows snapshot exists to recover, and its date. */
@@ -1749,6 +1995,8 @@ export class HistoryStore {
 	): Promise<{ stored: boolean; curvesFailed: number }> {
 		await this.whenReady();
 		if (this.mode === 'idb') return this.restoreRowsToStore(plan);
+		// Moved away in another tab: the old copy is not to be written.
+		if (this.mode !== 'legacy') return { stored: false, curvesFailed: 0 };
 		const first = plan(this.shots).series.filter((s) => s.record.samples.length > 0);
 		let curvesFailed = 0;
 		try {

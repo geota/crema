@@ -355,7 +355,11 @@ export class HistoryDb {
 		let failure: unknown = null;
 		for (const w of shots) {
 			if (!w.details) {
-				if (!w.summary) throw new Error(`No summary for a row-only write of ${w.shot.id}`);
+				if (!w.summary) {
+					// Nothing of the batch may land: abort what's queued before saying why.
+					tx.abort();
+					throw new Error(`No summary for a row-only write of ${w.shot.id}`);
+				}
 				rows.put(rowOf(w.shot, w.summary));
 				continue;
 			}

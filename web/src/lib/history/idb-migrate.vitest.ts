@@ -220,7 +220,7 @@ describe('an interrupted run', () => {
 		expect(await oldCopyBytes()).toEqual(before);
 	}, 30_000);
 
-	it.each([1, 2, 3])('killed inside write transaction %i: nothing half-written, and the next boot ends the same', async (n) => {
+	it.each([1, 2, 3])('killed between write transactions, before write %i: the next boot ends the same', async (n) => {
 		const want = await cleanRun(source);
 		idb = freshStorage();
 		await writeOldCopy(source);

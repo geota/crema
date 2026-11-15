@@ -2,8 +2,10 @@
  * `#lib/history/rows-snapshot.js` — a daily copy of every row, outside the
  * database (#310 P3w, SPEC §6).
  *
- * After the first save each day, every row (its fields and summary, no
- * series) is written, gzipped, to one file in the origin private file system.
+ * After the first save each day, every row (its fields, summary and as-run
+ * profile, no series) is written, gzipped, to one file in the origin private
+ * file system. A store with fewer rows than the last snapshot, less the
+ * deletes by name since, keeps the last one.
  * If the database is lost, this is one of the lost banner's ways back. Written
  * in chunks of {@link SNAPSHOT_CHUNK} rows with a yield between them, and to
  * a writable that only replaces the file when it closes, so a tab closed
@@ -17,6 +19,38 @@ import type { RowRecord } from './history-db';
 export const SNAPSHOT_CHUNK = 500;
 /** The local day the last snapshot was written. */
 export const SNAPSHOT_DAY_KEY = 'crema.history.snapshotDay';
+/** How many rows the last snapshot held. */
+export const SNAPSHOT_ROWS_KEY = 'crema.history.snapshotRows';
+
+/** One snapshot line: a row, with its as-run profile. */
+export type SnapshotRow = RowRecord & { profile?: unknown };
+
+/** How many rows the last snapshot held, or null for none. */
+export function lastSnapshotRows(): number | null {
+	try {
+		const v = localStorage.getItem(SNAPSHOT_ROWS_KEY);
+		const n = v == null ? NaN : Number(v);
+		return Number.isFinite(n) ? n : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * `n` rows were deleted by name: the next snapshot may be that much smaller.
+ * Kept with the count, so it holds across tabs and reloads. A store that is
+ * smaller for any other reason (Start empty, a restore under way) keeps the
+ * last snapshot, which may be the only way back.
+ */
+export function snapshotRowsDropped(n: number): void {
+	const last = lastSnapshotRows();
+	if (last === null || n <= 0) return;
+	try {
+		localStorage.setItem(SNAPSHOT_ROWS_KEY, String(Math.max(0, last - n)));
+	} catch {
+		// Then the next snapshot waits until the store has grown back.
+	}
+}
 
 type Root = () => Promise<FileSystemDirectoryHandle | undefined>;
 
@@ -51,7 +85,7 @@ const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
  * file system, or when the write failed (yesterday's stays).
  */
 export async function writeRowsSnapshot(
-	rows: readonly RowRecord[],
+	rows: readonly SnapshotRow[],
 	now: number,
 	root: Root = defaultRoot
 ): Promise<boolean> {
@@ -80,6 +114,7 @@ export async function writeRowsSnapshot(
 		}
 		try {
 			localStorage.setItem(SNAPSHOT_DAY_KEY, dayOf(now));
+			localStorage.setItem(SNAPSHOT_ROWS_KEY, String(rows.length));
 		} catch {
 			// Written anyway; tomorrow's goes again.
 		}
@@ -92,7 +127,7 @@ export async function writeRowsSnapshot(
 /** What the snapshot holds, or null when there's none or it can't be read. */
 export async function readRowsSnapshot(
 	root: Root = defaultRoot
-): Promise<{ rows: RowRecord[]; at: number } | null> {
+): Promise<{ rows: SnapshotRow[]; at: number } | null> {
 	const dir = await root();
 	if (!dir) return null;
 	try {
@@ -102,7 +137,7 @@ export async function readRowsSnapshot(
 		const rows = text
 			.split('\n')
 			.filter((l) => l.length > 0)
-			.map((l) => JSON.parse(l) as RowRecord)
+			.map((l) => JSON.parse(l) as SnapshotRow)
 			.filter((r) => typeof r === 'object' && r !== null && typeof r.id === 'string');
 		return { rows, at: file.lastModified };
 	} catch {

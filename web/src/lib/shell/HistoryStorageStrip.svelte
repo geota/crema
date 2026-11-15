@@ -11,6 +11,8 @@
 	 *   the pending journal; Try again opens it again.
 	 * - **unsaved**: a shot's curve couldn't be written (storage full). It's
 	 *   in memory and goes with each later save; Download keeps a copy now.
+	 * - **moved**: this tab ran on the old copy and another tab moved the
+	 *   history; it no longer writes, and must reload.
 	 *
 	 * While anything is unsaved, closing the tab asks first.
 	 */
@@ -49,8 +51,9 @@
 		if (busy) return;
 		busy = true;
 		try {
-			await what();
-			if (history.health === 'ok') toast.success(done);
+			const result = await what();
+			if (result === 'reopened') toast.info('Another tab had already brought your shot history back. Nothing was changed.');
+			else if (history.health === 'ok') toast.success(done);
 			else toast.error(history.storageError ?? 'That didn’t work. Try another way.');
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : String(e));
@@ -92,12 +95,16 @@
 	<div class="hs-strip" role="alert">
 		<Icon cls="ph ph-warning-circle" aria-hidden="true" />
 		<span class="hs-label">
-			Your shot history’s storage is missing from this browser. Nothing has been changed. Choose how to get it back.
+			{#if history.markerUnreadable}
+				Crema can’t tell where your shot history is kept in this browser. Nothing has been changed. Choose how to go on.
+			{:else}
+				Your shot history’s storage is missing from this browser. Nothing has been changed. Choose how to get it back.
+			{/if}
 		</span>
 		<div class="hs-actions">
 			{#if snapshot}
 				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot(), 'History restored from the daily copy.')}>
-					Daily copy ({dateOf(snapshot.at)}, {snapshot.rows} shots)
+					Daily copy ({dateOf(snapshot.at)}, {snapshot.rows} shots, without their curves)
 				</button>
 			{/if}
 			<button type="button" class="hs-btn" disabled={busy} onclick={() => void restoreBackup()}>Restore a backup</button>
@@ -118,6 +125,14 @@
 		<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.retryOpen(), 'Shot history is back.')}>
 			Try again
 		</button>
+	</div>
+{:else if history.movedElsewhere}
+	<div class="hs-strip" role="alert">
+		<Icon cls="ph ph-warning-circle" aria-hidden="true" />
+		<span class="hs-label">
+			Your shot history moved to its new storage in another tab. Reload this tab to keep saving here.
+		</span>
+		<button type="button" class="hs-btn" onclick={() => location.reload()}>Reload</button>
 	</div>
 {:else if history.unsavedShots.length > 0}
 	<div class="hs-strip" role="alert">
