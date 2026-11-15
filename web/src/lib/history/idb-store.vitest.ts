@@ -13,7 +13,7 @@ import { clearLight, sampleCountOf } from './light-rows';
 import { peaksOf, type StoredShot } from './model';
 import { PENDING_KEY, readPending } from './pending';
 import { STORE_MARKER_KEY, readStoreMarker, writeDoneMarker } from './store-marker';
-import { readRowsSnapshot, snapshotNameOf } from './rows-snapshot';
+import { SNAPSHOT_LOCK, listRowsSnapshots, readRowsSnapshot, snapshotNameOf, writeRowsSnapshot } from './rows-snapshot';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
 import { getCaptureStore } from '#lib/capture/store.js';
 import { pruneCaptures } from '#lib/capture/prune.js';
@@ -1052,6 +1052,74 @@ describe('a store that is lost or can’t open', () => {
 		const lost = await boot({ snapshotRoot, now: clock.now });
 		expect(await lost.recoverSnapshot()).toBe(true);
 		expect(lost.get(shots[0].id)!.metadata.rating).toBe(5);
+	});
+
+	it('two tabs writing the same day’s copy take turns on the lock: one writes it, and every copy stays whole', async () => {
+		const { files, snapshotRoot } = memoryRoot();
+		const at = (d: string) => new Date(`${d}T12:00:00`).getTime();
+		const rows = small(3).map((s) => ({ id: s.id }) as never);
+		for (const d of ['2026-11-11', '2026-11-12', '2026-11-13']) await writeRowsSnapshot(rows, at(d), snapshotRoot, null);
+		let held = 0;
+		let most = 0;
+		let asked = 0;
+		const tails = new Map<string, Promise<unknown>>();
+		const locks: LockManagerLike = {
+			request(name, _opts, run) {
+				if (name === SNAPSHOT_LOCK) asked++;
+				const next = (tails.get(name) ?? Promise.resolve()).then(async () => {
+					most = Math.max(most, ++held);
+					try {
+						return await run(null);
+					} finally {
+						held--;
+					}
+				});
+				tails.set(
+					name,
+					next.catch(() => {})
+				);
+				return next;
+			}
+		};
+		const r = await Promise.all([
+			writeRowsSnapshot(rows, at('2026-11-14'), snapshotRoot, locks),
+			writeRowsSnapshot([...rows, { id: 'more' } as never], at('2026-11-14'), snapshotRoot, locks)
+		]);
+		expect(asked).toBe(2);
+		expect(most).toBe(1);
+		expect(r).toEqual([true, false]);
+		const list = await listRowsSnapshots(snapshotRoot);
+		expect(list.map((c) => [c.name, c.rows])).toEqual([
+			[snapshotNameOf(at('2026-11-14')), 3],
+			[snapshotNameOf(at('2026-11-13')), 3],
+			[snapshotNameOf(at('2026-11-12')), 3]
+		]);
+		expect(files.size).toBe(3);
+	});
+
+	it('Recover from all copies takes the copy written last on a clash, never the one with the latest date', async () => {
+		const { files, snapshotRoot } = memoryRoot();
+		const shots = small(3);
+		await seedStore(shots);
+		const clock = dayClock();
+		const store = await boot({ snapshotRoot, now: clock.now });
+		store.setRating(shots[0].id, 1);
+		await store.flushed();
+		await until(() => files.size === 1);
+		// The clock set forward: a copy dated far ahead.
+		clock.day = 1_000;
+		store.setRating(shots[0].id, 2);
+		await store.flushed();
+		await until(() => files.size === 2);
+		// Back to the right day: the copy written last.
+		clock.day = 1;
+		store.setRating(shots[0].id, 3);
+		await store.flushed();
+		await until(() => files.size === 3);
+		await deleteHistoryDb();
+		const lost = await boot({ snapshotRoot, now: clock.now });
+		expect(await lost.recoverSnapshot('all')).toBe(true);
+		expect(lost.get(shots[0].id)!.metadata.rating).toBe(3);
 	});
 
 	it('an empty file from a tab closed mid-write neither blocks its day nor counts as a copy', async () => {

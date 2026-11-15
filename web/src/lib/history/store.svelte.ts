@@ -1564,7 +1564,7 @@ export class HistoryStore {
 					const details = await db.detailsOf(part.map((r) => r.id));
 					for (const r of part) lines.push({ ...r, profile: details.get(r.id)?.profile ?? null });
 				}
-				await writeRowsSnapshot(lines, now, this.opts.snapshotRoot);
+				await writeRowsSnapshot(lines, now, this.opts.snapshotRoot, this.opts.locks === undefined ? undefined : this.opts.locks);
 			} catch {
 				// Tomorrow's goes again.
 			} finally {

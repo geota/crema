@@ -23,10 +23,19 @@
 import { Gzip, gunzipSync, strFromU8, strToU8 } from 'fflate';
 import { HISTORY_SNAPSHOT_NAME } from './store-names';
 import type { RowRecord } from './history-db';
+import type { LockManagerLike } from '#lib/restore/tab-safety.js';
 
 export const SNAPSHOT_CHUNK = 500;
 /** How many daily copies are kept. */
 export const SNAPSHOTS_KEPT = 3;
+/** The Web Lock a tab holds while it checks, writes, verifies and prunes the copies. */
+export const SNAPSHOT_LOCK = 'crema-history-snapshot';
+
+function defaultLocks(): LockManagerLike | null {
+	return typeof navigator !== 'undefined' && 'locks' in navigator && navigator.locks
+		? (navigator.locks as unknown as LockManagerLike)
+		: null;
+}
 
 /** One snapshot line: a row, with its as-run profile. */
 export type SnapshotRow = RowRecord & { profile?: unknown };
@@ -144,17 +153,33 @@ const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 /**
  * Write `rows` as the day's copy, unless that day has a whole one. It must
- * read back whole (this tab's, or another tab's of the same day); then the
- * whole copies beyond {@link SNAPSHOTS_KEPT}, oldest written first, go, never
- * the one just written, and so do files that aren't whole copies. Whether it
- * was written; false with no private file system, when the day has a copy
- * already, or when the write or the read-back failed (every older copy stays).
+ * read back whole; then the whole copies beyond {@link SNAPSHOTS_KEPT},
+ * oldest written first, go, never the one just written, and so do files that
+ * aren't whole copies. All of it under {@link SNAPSHOT_LOCK}, so two tabs
+ * never write, check or prune at once. Whether it was written; false with no
+ * private file system, when the day has a copy already, or when the write or
+ * the read-back failed (every older copy stays).
  */
 export async function writeRowsSnapshot(
 	rows: readonly SnapshotRow[],
 	now: number,
-	root: Root = defaultRoot
+	root: Root = defaultRoot,
+	locks: LockManagerLike | null = defaultLocks()
 ): Promise<boolean> {
+	if (!locks) return writeNow(rows, now, root);
+	let ran = false;
+	try {
+		return (await locks.request(SNAPSHOT_LOCK, { mode: 'exclusive' }, () => {
+			ran = true;
+			return writeNow(rows, now, root);
+		})) as boolean;
+	} catch {
+		// No lock to be had (an old browser's stub): write anyway, as a tab alone.
+		return ran ? false : writeNow(rows, now, root);
+	}
+}
+
+async function writeNow(rows: readonly SnapshotRow[], now: number, root: Root): Promise<boolean> {
 	const dir = await snapshotDir(root, true);
 	if (!dir) return false;
 	const name = snapshotNameOf(now);
