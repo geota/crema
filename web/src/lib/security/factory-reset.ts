@@ -33,6 +33,7 @@ import { DB_NAME as SERIES_DB } from '#lib/history/series-store.js';
 import { DB_NAME as BEAN_IMAGES_DB } from '#lib/bean/image-storage.js';
 import { DB_NAME as KEYS_DB } from '#lib/security/secret-box.js';
 import { HISTORY_CURVES_NAME, HISTORY_DB_NAME, HISTORY_SNAPSHOT_NAME } from '#lib/history/store-names.js';
+import { stopArchiveWrites } from '#lib/history/archive-writes.js';
 import { withTimeout } from '#lib/utils/timeout.js';
 import { FROZEN_SHOTS_KEY } from '#lib/restore/tab-safety.js';
 
@@ -184,6 +185,9 @@ export async function factoryResetLocalData(deps: FactoryResetDeps = {}): Promis
 	// Another tab holding the file is the usual reason it stays, as for a
 	// database, so it's reported with them.
 	if (!(await removeSnapshot(deps.privateFiles ?? privateFilesRoot))) databasesFailed.push(HISTORY_SNAPSHOT_NAME);
+	// No archive write may land after the directory goes: stop them, and wait
+	// for the ones in flight, first.
+	await stopArchiveWrites();
 	if (!(await removeSnapshot(deps.privateFiles ?? privateFilesRoot, HISTORY_CURVES_NAME))) databasesFailed.push(HISTORY_CURVES_NAME);
 
 	const storageKeysRemoved = clearPrefixed(local) + clearPrefixed(session);

@@ -475,9 +475,11 @@ export class HistoryStore {
 	/** Deleted shots whose file a remove couldn't take: tried again. */
 	private archiveRemoveOwed = new Set<string>();
 	/** The archive as last counted, for Settings and the lost banner. */
-	private archiveCount = $state<{ files: number; bytes: number } | null>(null);
+	private archiveCount = $state<{ files: number; bytes: number } | null | undefined>(undefined);
 	/** An archive write failed and waits for another try (storage full, most likely). */
 	private archiveStuck = $state(false);
+	/** This load's catch-up has run: every curve the store held then has been tried. */
+	private archiveCaughtUpFlag = $state(false);
 	private hiddenNoticeShown = false;
 	private viewMemo: { rows: StoredShot[]; view: StoredShot[]; live: StoredShot[] } | null = null;
 	private byIdMemo: { rows: StoredShot[]; map: Map<string, StoredShot> } | null = null;
@@ -1899,6 +1901,41 @@ export class HistoryStore {
 		});
 	}
 
+	/**
+	 * Files whose shot neither the store nor a kept daily copy holds: a
+	 * delete's remove that raced another tab's write, or failed. Only with
+	 * the store loaded `ok`, the files listed before the store's ids are read
+	 * (a file is written only after its curve lands, so a new one is in the
+	 * store already). A shot a daily copy still holds keeps its file, as a
+	 * recovery from that copy needs it (after Start empty, say); such a file
+	 * goes once the copy is pruned.
+	 */
+	private async sweepArchive(archive: CurveArchive): Promise<void> {
+		const db = this.db;
+		if (this.healthState !== 'ok' || !db) return;
+		const files = await archive.allIds();
+		if (files.size === 0) return;
+		let rows: Set<string>;
+		try {
+			rows = new Set(await db.rowIds());
+		} catch {
+			return;
+		}
+		const copies = await readAllRowsSnapshots(this.opts.snapshotRoot).catch(() => undefined);
+		if (copies === undefined) return;
+		const inCopies = new Set(copies?.rows.map((r) => r.id) ?? []);
+		if (this.healthState !== 'ok') return;
+		for (const id of files) {
+			if (!rows.has(id) && !inCopies.has(id) && !this.archiveOwed.has(id) && !this.byId().has(id)) this.archiveRemoveOwed.add(id);
+		}
+		await this.removeArchived();
+	}
+
+	/** This load's archive catch-up has run. */
+	get archiveCaughtUp(): boolean {
+		return this.archiveCaughtUpFlag;
+	}
+
 	/** Count the archive's files and bytes now, for the storage view. */
 	countArchiveNow(): Promise<void> {
 		return this.countArchive();
@@ -1906,7 +1943,10 @@ export class HistoryStore {
 
 	/** Count the archive's files and bytes again. */
 	private async countArchive(): Promise<void> {
-		if (!this.archive) return;
+		if (!this.archive) {
+			this.archiveCount = null;
+			return;
+		}
 		try {
 			this.archiveCount = (await this.archive.available()) ? await this.archive.usage() : null;
 		} catch {
@@ -1917,11 +1957,11 @@ export class HistoryStore {
 	/**
 	 * The curve archive as Settings and the banner show it: its files and
 	 * bytes against the rows with a curve, and whether a write waits.
-	 * Null where there's no private file system, or before it's counted.
+	 * Null where there's no private file system; undefined before it's counted.
 	 */
-	get archiveStatus(): { files: number; bytes: number; curves: number; waiting: boolean } | null {
+	get archiveStatus(): { files: number; bytes: number; curves: number; waiting: boolean } | null | undefined {
 		const count = this.archiveCount;
-		if (!count) return null;
+		if (!count) return count;
 		let curves = 0;
 		for (const s of this.summaries.values()) if ((s.sampleCount ?? 0) > 0 || s.brewSampleCount > 0) curves += 1;
 		return { ...count, curves, waiting: this.archiveStuck };
@@ -1997,6 +2037,7 @@ export class HistoryStore {
 		this.runArchive();
 		await this.fillFromArchive(have);
 		await this.archiveSettled();
+		if (checkAll) await this.sweepArchive(archive);
 		if (checkAll && this.archiveOwed.size === 0) {
 			try {
 				localStorage.setItem(ARCHIVE_CHECKED_KEY, today);
@@ -2004,6 +2045,7 @@ export class HistoryStore {
 				// Checked again at the next load.
 			}
 		}
+		this.archiveCaughtUpFlag = true;
 		await this.countArchive();
 	}
 

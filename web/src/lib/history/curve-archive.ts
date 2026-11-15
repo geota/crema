@@ -30,6 +30,7 @@ import type { TimedSample } from '#lib/core/index.js';
 import type { BrewSeries } from '#lib/core/crema-core.js';
 import { HISTORY_CURVES_NAME } from './store-names';
 import { hashText } from './migrate';
+import { archiveWritesStopped, trackArchiveWrite } from './archive-writes';
 
 /** The format a file holds. */
 const ARCHIVE_VERSION = 1;
@@ -204,6 +205,11 @@ export class CurveArchive {
 		return out;
 	}
 
+	/** The ids of every file there, empty ones too. */
+	async allIds(): Promise<Set<string>> {
+		return new Set((await this.files()).keys());
+	}
+
 	/** How many files, and their bytes. */
 	async usage(): Promise<ArchiveUsage> {
 		let files = 0;
@@ -229,7 +235,13 @@ export class CurveArchive {
 	 * when it matched, `none` for no curve or no private file system. Throws
 	 * when the write fails, which leaves the file as it was.
 	 */
-	async write(id: string, curve: ArchivedCurve): Promise<'written' | 'kept' | 'none'> {
+	write(id: string, curve: ArchivedCurve): Promise<'written' | 'kept' | 'none'> {
+		return trackArchiveWrite(() => this.writeNow(id, curve));
+	}
+
+	private async writeNow(id: string, curve: ArchivedCurve): Promise<'written' | 'kept' | 'none'> {
+		// A factory reset is removing the directory: nothing brings it back.
+		if (archiveWritesStopped()) return 'none';
 		if (!holdsCurve(curve.samples, curve.brewSeries)) return 'none';
 		const top = await this.root();
 		if (!top) return 'none';
@@ -252,6 +264,7 @@ export class CurveArchive {
 			brewSeries
 		};
 		const bytes = await gzip(JSON.stringify(body));
+		if (archiveWritesStopped()) return 'none';
 		const handle = await dir.getFileHandle(archiveNameOf(id), { create: true });
 		const w = await handle.createWritable();
 		try {

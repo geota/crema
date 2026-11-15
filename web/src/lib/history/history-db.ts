@@ -300,6 +300,13 @@ export class HistoryDb {
 		return out;
 	}
 
+	/** Every stored id in `rows`. */
+	async rowIds(): Promise<string[]> {
+		const db = await this.open();
+		this.fault('read-rows');
+		return (await reqp(db.transaction(ROWS, 'readonly').objectStore(ROWS).getAllKeys())) as string[];
+	}
+
 	/** Every stored id in `details`. */
 	async detailIds(): Promise<string[]> {
 		const db = await this.open();

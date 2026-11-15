@@ -21,7 +21,7 @@ import { summarize } from './summary';
 import { archiveNameOf, CurveArchive } from './curve-archive';
 import { dayOf } from './rows-snapshot';
 import { boot, freshStorage, stored, writeOldCopy, LEGACY_KEY } from './idb-test-kit';
-import type { HistoryStoreOptions } from './store.svelte';
+import { memoryFs } from './archive-test-kit';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 let idb: IDBFactory;
@@ -34,73 +34,6 @@ afterAll(() => {
 beforeEach(() => {
 	idb = freshStorage();
 });
-
-/**
- * A private file system in memory, any directory: `create` makes an empty
- * file at once and a writable lands on close, as in a browser. `quota` makes
- * every close in the curve archive fail, as a full disk does.
- */
-function memoryFs() {
-	const dirs = new Map<string, Map<string, Uint8Array>>();
-	const control = { quota: false, failRemove: false };
-	const notFound = () => new DOMException('none', 'NotFoundError');
-	const dirOf = (dname: string, files: Map<string, Uint8Array>) => ({
-		async getFileHandle(name: string, opts?: { create?: boolean }) {
-			if (!files.has(name) && !opts?.create) throw notFound();
-			if (!files.has(name)) files.set(name, new Uint8Array(0));
-			return {
-				async createWritable() {
-					const parts: Uint8Array[] = [];
-					return {
-						async write(p: BufferSource) {
-							parts.push(new Uint8Array(p as ArrayBuffer));
-						},
-						async close() {
-							if (control.quota && dname === 'crema-history-curves') throw new DOMException('full', 'QuotaExceededError');
-							const total = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-							let o = 0;
-							for (const p of parts) {
-								total.set(p, o);
-								o += p.length;
-							}
-							files.set(name, total);
-						},
-						async abort() {}
-					};
-				},
-				async getFile() {
-					const f = files.get(name);
-					if (!f) throw notFound();
-					return { size: f.length, lastModified: 1, arrayBuffer: async () => f.slice().buffer };
-				}
-			};
-		},
-		async removeEntry(name: string) {
-			if (control.failRemove) throw new DOMException('held', 'NoModificationAllowedError');
-			if (!files.delete(name)) throw notFound();
-		},
-		async *keys() {
-			yield* [...files.keys()];
-		}
-	});
-	const root = {
-		async removeEntry(name: string) {
-			if (!dirs.delete(name)) throw notFound();
-		},
-		async getDirectoryHandle(name: string, opts?: { create?: boolean }) {
-			if (!dirs.has(name)) {
-				if (!opts?.create) throw notFound();
-				dirs.set(name, new Map());
-			}
-			return dirOf(name, dirs.get(name)!);
-		}
-	};
-	const fsRoot = async () => root as unknown as FileSystemDirectoryHandle;
-	const curves = () => dirs.get('crema-history-curves') ?? new Map<string, Uint8Array>();
-	const copies = () => [...(dirs.get('crema-history-snapshot')?.values() ?? [])].filter((b) => b.length > 0).length;
-	const opts: HistoryStoreOptions = { snapshotRoot: fsRoot, archiveRoot: fsRoot, archiveDelayMs: 60_000 };
-	return { control, curves, copies, opts, fsRoot };
-}
 
 const small = (n: number, from = 0) => Array.from({ length: n }, (_, i) => realShot(from + i, realSamples(4, (from + i) % 60)));
 
@@ -441,7 +374,9 @@ describe('the archive’s nits (#420 fix check)', () => {
 		const fs = memoryFs();
 		await seedStore(small(3));
 		const a = await boot(fs.opts);
+		expect(a.archiveCaughtUp, 'the banner says the archive is still filling').toBe(false);
 		await a.archiveCatchUpNow();
+		expect(a.archiveCaughtUp).toBe(true);
 		const status = a.archiveStatus!;
 		expect(status).toMatchObject({ files: 3, curves: 3, waiting: false });
 		expect(status.bytes).toBe([...fs.curves().values()].reduce((n, b) => n + b.length, 0));
@@ -451,5 +386,44 @@ describe('the archive’s nits (#420 fix check)', () => {
 		await a.archiveSettled();
 		await a.countArchiveNow();
 		expect(a.archiveStatus).toMatchObject({ files: 3, curves: 4, waiting: true });
+	});
+});
+
+describe('the orphan sweep (#420)', () => {
+	it('with the store ok, files of shots neither the store nor a daily copy holds go; the others stay', async () => {
+		const fs = memoryFs();
+		const shots = small(3).map((s) => ({ ...s, visualizerId: null }));
+		await seedStore(shots);
+		const a = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		a.setRating(shots[0].id, 1);
+		await a.flushed();
+		await until(() => fs.copies() === 1);
+		const archive = new CurveArchive(fs.fsRoot);
+		// A delete in another tab raced this one's write: its file came back.
+		await archive.write('shot:orphan', { samples: realSamples(4), brewSeries: null });
+		// A shot only a daily copy still holds (after Start empty, say).
+		const copyOnly = shots[2].id;
+		const db = new HistoryDb({ expectExisting: () => true });
+		await db.delete([copyOnly]);
+		db.close();
+		const b = await boot({ ...fs.opts, now: () => Date.now() + 86_400_000 });
+		await b.archiveCatchUpNow();
+		expect(fs.curves().has(archiveNameOf('shot:orphan'))).toBe(false);
+		expect(fs.curves().has(archiveNameOf(copyOnly)), 'a daily copy still needs it').toBe(true);
+		expect(fs.curves().has(archiveNameOf(shots[0].id))).toBe(true);
+	});
+
+	it('never while the store isn’t ok', async () => {
+		const fs = memoryFs();
+		const shots = small(2);
+		await seedStore(shots);
+		const a = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		await new CurveArchive(fs.fsRoot).write('shot:orphan', { samples: realSamples(4), brewSeries: null });
+		await lose(a, shots[0].id);
+		await a.archiveCatchUpNow();
+		expect(fs.curves().has(archiveNameOf('shot:orphan'))).toBe(true);
+		expect(fs.curves().size).toBe(3);
 	});
 });

@@ -60,13 +60,23 @@
 	$effect(() => {
 		if (history.loaded) void history.countArchiveNow();
 	});
+	const archiveTitle = $derived(
+		archive && (archive.waiting || (history.archiveCaughtUp && archive.files < archive.curves))
+			? 'Curve archive incomplete'
+			: 'Curve archive'
+	);
 	const archiveSub = $derived.by(() => {
 		const a = archive;
-		if (!a) return 'A second copy of each shot’s curve, so a lost history gets its curves back. This browser has no room set aside for it.';
-		const held = `${a.files} of ${a.curves} shots’ curves.`;
-		return a.waiting
-			? `${held} Some are waiting: the last write failed, most likely because storage is full. Crema tries again with each save.`
-			: `${held} A second copy of each curve, so a lost history gets its curves back.`;
+		if (a === undefined) return 'Counting…';
+		if (!a) return 'This browser keeps no curve archive, so a lost history would get back only its rows.';
+		const missing = Math.max(0, a.curves - a.files);
+		const held = `${a.files} of ${a.curves} shots’ curves are archived.`;
+		if (a.waiting) {
+			return `${held} ${missing} wait: the last write failed, most likely because storage is full. Crema tries again with each save.`;
+		}
+		if (!history.archiveCaughtUp && missing > 0) return `${held} The rest are being archived now.`;
+		if (missing > 0) return `${held} ${missing} aren’t yet; Crema tries again at the next start.`;
+		return `${held} A second copy of each curve, so a lost history gets its curves back.`;
 	});
 
 	function tryMoveAgain(): void {
@@ -154,11 +164,14 @@
 			<span class="st-storage-value">{used ?? '—'}</span>
 		{/snippet}
 	</StRow>
-	<StRow title="Curve archive" sub={archiveSub}>
-		{#snippet control()}
-			<span class="st-storage-value" data-testid="curve-archive-size">{archive ? formatBytes(archive.bytes) : '—'}</span>
-		{/snippet}
-	</StRow>
+	{#if history.health !== 'legacy'}
+		<!-- The older storage keeps its curves in its own database. -->
+		<StRow title={archiveTitle} sub={archiveSub}>
+			{#snippet control()}
+				<span class="st-storage-value" data-testid="curve-archive-size">{archive ? formatBytes(archive.bytes) : '—'}</span>
+			{/snippet}
+		</StRow>
+	{/if}
 	<StRow title="Pinned shots" sub="Pin a shot from its detail in History.">
 		{#snippet control()}
 			<span class="st-storage-value">{pinned}</span>

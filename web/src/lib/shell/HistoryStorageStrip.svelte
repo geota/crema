@@ -85,10 +85,17 @@
 	}
 
 	/** What the curve archive holds, as far as this browser allows one (#420 FC-N3). */
+	$effect(() => {
+		if (history.health === 'lost') void history.countArchiveNow();
+	});
 	const archiveLine = $derived.by(() => {
 		const a = history.archiveStatus;
-		if (!a) return 'A download holds the curves only of shots this tab opened or recorded last.';
-		return `Curves are also kept in the curve archive, where this browser allows: ${a.files} of ${a.curves} shots’ curves are there, and whichever you choose takes them back.`;
+		if (a === undefined) return 'Counting the curves the curve archive holds…';
+		if (!a) {
+			return 'This browser keeps no curve archive: a recovery brings back rows without curves, apart from the shots this tab opened or recorded last.';
+		}
+		const still = history.archiveCaughtUp ? '' : ' The archive was still being filled when the history went, so some may be missing.';
+		return `Curves come back for shots already archived (${a.files} curves), whichever you choose.${still}`;
 	});
 
 	function downloadUnsaved(): void {
