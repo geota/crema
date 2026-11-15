@@ -73,10 +73,12 @@ struct Pace {
 /// it keep their cases; the other 4 are pinned as explicit cases in
 /// `committed_cases_the_pace_moved`.
 ///
-/// Readings and off-windows stop at 1.5 s, short of the 2 s REVIEW-414 asks
-/// for: from about 1.6 s, an 18 g shot with 50 ml of headspace stops by
-/// weight up to 7 g late on an honest scale (#429), so I22 would fail on
-/// main. Raise the cap to 2 s once #429 is fixed.
+/// The slow paces are there to reproduce #414's first-head bug class (M1),
+/// which needs every reading or on-window to be a return: 1 s to 1.5 s is
+/// enough for that. Readings and off-windows stop at 1.5 s because a steady
+/// 1.5 to 2 s cadence doesn't come from a real scale, which reports at 5 to
+/// 10 Hz. At such a cadence an 18 g shot with 50 ml of headspace stops by
+/// weight up to 7 g late (#429, closed as not planned).
 fn scale_pace() -> impl Strategy<Value = Option<Pace>> {
     let stall_at_g = prop_oneof![Just(None), (3u8..=45).prop_map(|g| Some(f32::from(g)))];
     prop_oneof![
@@ -1486,10 +1488,11 @@ fn a_slow_scale_stops_near_target() {
     }
 }
 
-/// #429, the known slow-scale lag the generator's cap leaves out: at 2 s with
-/// 50 ml of headspace an 18 g shot stops by weight 7 g late, which I22 sees.
+/// What the generator's cap leaves out: at a steady 2 s, which no real scale
+/// reports at, an 18 g shot with 50 ml of headspace stops by weight 7 g late,
+/// which I22 sees (#429, closed as not planned).
 #[test]
-#[ignore = "#429: the weight leg lags on a scale slower than about 1.5 s"]
+#[ignore = "a 2 s cadence isn't a real scale's; the weight leg lags there (#429)"]
 fn a_two_second_scale_stops_near_target() {
     let world = paced_shot(ScaleMode::Sparse { every_ms: 2_000 }, 18.0, 50.0, None);
     assert!(world.violations.is_empty(), "{:?}", world.violations);
