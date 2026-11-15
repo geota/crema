@@ -14,6 +14,7 @@ import coffee.crema.restore.RestoreKind
 import coffee.crema.restore.RestoreRecords
 import coffee.crema.restore.prepareBackupFile
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -312,6 +313,30 @@ class StreamedRestoreVmTest {
         assertTrue(vm.ui.value.userMessages.size > again, "the second restore ran")
         assertTrue(coffee.crema.beans.BeanImageStore.exists(app, "bean:android-1"), vm.ui.value.userMessages.last())
         VmHarness.idleUntil("the stages go") { stages.listFiles().isNullOrEmpty() }
+    }
+
+    @Test
+    fun twoPreparesInFlightKeepTheirOwnStages() {
+        // REVIEW-410 fix check: a stage made on IO and held only back on Main
+        // sat on disk unheld, and a second prepare's orphan sweep deleted it.
+        val vm = vm()
+        val stages = File(app.noBackupFilesDir, "restore-photos")
+        val before = stages.listFiles()?.toSet().orEmpty()
+        var first: File? = null
+        var second: File? = null
+        // On Main.immediate each runs on this thread until it first suspends;
+        // the looper isn't idled in between, so a first that waits for Main still waits.
+        vm.viewModelScope.launch { first = vm.newRestoreStage() }
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (stages.listFiles()?.toSet().orEmpty().minus(before).isEmpty()) {
+            check(System.nanoTime() < deadline) { "the first stage was never made" }
+            Thread.sleep(5)
+        }
+        vm.viewModelScope.launch { second = vm.newRestoreStage() }
+        VmHarness.idleUntil("both stages") { first != null && second != null }
+        assertTrue(first != second, "two stages")
+        assertTrue(first!!.isDirectory, "the first prepare's stage was deleted by the second's sweep")
+        assertTrue(second!!.isDirectory, "the second prepare's stage")
     }
 
     private fun shot(id: String, at: Long) = StoredShot(id = id, completedAtMs = at, durationMs = 30_000)

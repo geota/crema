@@ -1516,19 +1516,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** A new stage, held once; any other stage nothing holds (one a kill left) goes. */
-    private suspend fun newRestoreStage(): java.io.File {
-        val root = restoreStageRoot()
-        // Listed here, on Main, against the holds: a stage made later has a new name.
+    /**
+     * A new stage, held once; any other stage nothing holds (one a kill left)
+     * goes. Listed, made and held in one Main-thread step, so another prepare
+     * never sees it unheld and takes it for an orphan; only the deletes run on
+     * IO. Internal for tests.
+     */
+    internal fun newRestoreStage(): java.io.File {
+        val root = restoreStageRoot().apply { mkdirs() }
         val orphans = root.listFiles()?.filter { it !in stageHolds }.orEmpty()
-        val stage = withContext(Dispatchers.IO) {
+        val stage = java.nio.file.Files.createTempDirectory(root.toPath(), "stage-").toFile()
+        holdStage(stage)
+        viewModelScope.launch(Dispatchers.IO) {
             orphans.forEach { it.deleteRecursively() }
             // Before #410 the stage was in the cache, which the system may clear while a report waits.
             java.io.File(getApplication<Application>().cacheDir, "restore-photos").deleteRecursively()
-            root.mkdirs()
-            java.nio.file.Files.createTempDirectory(root.toPath(), "stage-").toFile()
         }
-        holdStage(stage)
         return stage
     }
 
@@ -1713,9 +1716,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Apply a backup from raw bytes, confirming whatever its plan allows: tests only. */
     internal suspend fun restoreBackupBytes(bytes: ByteArray, mode: RestoreMode) {
         val kind = kindOf(mode)
-        // Made here, not on IO: tests rely on the run starting before this suspends.
-        val stage = java.nio.file.Files.createTempDirectory(restoreStageRoot().apply { mkdirs() }.toPath(), "stage-").toFile()
-        holdStage(stage)
+        val stage = newRestoreStage()
         try {
             val prepared = coffee.crema.restore.prepareBackup(bytes, "a backup", stage)
             val plan = restoreEngine.plan(prepared, kind)
