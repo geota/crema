@@ -1114,6 +1114,7 @@ fun SettingsScreen(
                                             }
                                         }
                                     }
+                                    HistoryIndexDebugPanel(vm)
                                     CremaButton(onClick = { onNav("debug") }, variant = CremaButtonVariant.Text, icon = "bug", label = "Open full console")
                                 }
                             }

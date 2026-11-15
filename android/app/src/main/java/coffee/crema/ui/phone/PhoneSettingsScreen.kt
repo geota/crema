@@ -75,6 +75,7 @@ import coffee.crema.ui.screens.heaterVoltageValue
 import coffee.crema.ui.screens.machineModelLabel
 import coffee.crema.ui.screens.serialLabel
 import coffee.crema.ui.theme.CremaTheme
+import coffee.crema.ui.screens.HistoryIndexDebugPanel
 import coffee.crema.ui.theme.JetBrainsMono
 
 /*
@@ -1204,6 +1205,7 @@ private fun AdvancedSection(
                         }
                     }
                 }
+                HistoryIndexDebugPanel(vm)
                 CremaButton(onClick = { onNav("debug") }, variant = CremaButtonVariant.Text, icon = "bug", label = "Open full console")
             }
         }
