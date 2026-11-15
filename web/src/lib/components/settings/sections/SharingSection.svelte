@@ -155,7 +155,7 @@
 	let catchUpBusy = $state<{ done: number; total: number } | null>(null);
 
 	function vizBacklogCount(): number {
-		return history.visualizerBacklog.length;
+		return history.loaded ? history.visualizerBacklog.length : 0;
 	}
 	/** Offer the Visualizer catch-up if shots would now auto-upload there. */
 	function offerVisualizerCatchUp(): void {
@@ -168,6 +168,7 @@
 	function offerDecentCatchUp(): void {
 		const acct = readDecentAccount();
 		if (!isDecentLinked(acct) || !acct.autoUpload || acct.needsReauth) return;
+		if (!history.loaded) return;
 		const count = unsentDecentShots(history.all).length;
 		if (count > 0) catchUp = { destination: 'Decent', count };
 	}
@@ -335,6 +336,8 @@
 	/** Export the local shot history as the core's Crema `crema/v1` JSONL —
 	 *  the file Android's shot import reads too (F10). */
 	function exportHistory(): void {
+		// Not loaded is not empty: an export now would hold no shots.
+		if (!history.loaded) return;
 		const blob = new Blob([shotHistoryJsonl(history.all, Date.now(), __APP_VERSION__)], {
 			type: 'application/x-ndjson'
 		});
@@ -755,7 +758,7 @@
 					label="Back up"
 					icon="download-simple"
 					variant="primary"
-					disabled={backupRun != null}
+					disabled={backupRun != null || !history.loaded}
 					onClick={backUp}
 				/>
 			{/if}
@@ -876,7 +879,7 @@
 		sub="One-shot download of your entire shot history as JSON. Useful for spreadsheets and other tools."
 	>
 		{#snippet control()}
-			<StButton label="Export" icon="download-simple" onClick={exportHistory} />
+			<StButton label="Export" icon="download-simple" disabled={!history.loaded} onClick={exportHistory} />
 		{/snippet}
 	</StRow>
 </StGroup>

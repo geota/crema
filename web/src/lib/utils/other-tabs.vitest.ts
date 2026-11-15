@@ -18,7 +18,10 @@ import { ProfileStore } from '#lib/profiles/store.svelte.js';
 import { SettingsStore } from '#lib/settings/store.svelte.js';
 import type { StoredShot } from '#lib/history/model.js';
 import { clearAllSeries, getAllSeries, putSeries } from '#lib/history/series-store.js';
-import { HistoryStore } from '#lib/history/store.svelte.js';
+import { setHistoryStoreDefaultsForTest, HistoryStore } from '#lib/history/store.svelte.js';
+
+// The legacy backend: the old copy and its series database, as before #310 P3w.
+setHistoryStoreDefaultsForTest({ backend: 'legacy' });
 import { readStored, resetStorageStateForTest } from './storage';
 import { resetTabSafetyForTest, shotFinished, shotStarted } from '#lib/restore/tab-safety.js';
 import type { CremaProfile } from '#lib/profiles/model.js';

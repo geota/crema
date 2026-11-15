@@ -260,6 +260,8 @@ describe('ShotSync.patchEditedShot — pending-only PATCHes', () => {
 	const historyOf = (s: StoredShot) =>
 		({
 			all: [s],
+			loaded: true,
+			get: (id: string) => (id === s.id ? s : undefined),
 			setTags: (_id: string, tags: string[]) => {
 				(s as { tags?: string[] }).tags = tags;
 			}
@@ -552,6 +554,7 @@ describe('ShotSync pull merges through the core', () => {
 			get rawAll() {
 				return shots;
 			},
+			loaded: true,
 			get: (id: string) => shots.find((x) => x.id === id),
 			bindVisualizerId: vi.fn(),
 			insertPulled: vi.fn(),
@@ -656,6 +659,7 @@ describe('ShotSync: an offline barista clear survives the next pull (V3 #6, V2 P
 		const history = {
 			all: [shot],
 			rawAll: [shot],
+			loaded: true,
 			get: (id: string) => (id === shot.id ? shot : undefined),
 			bindVisualizerId: vi.fn(),
 			insertPulled: vi.fn(),

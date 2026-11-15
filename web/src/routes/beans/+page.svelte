@@ -104,7 +104,11 @@
 	function doExportBeanconqueror(): void {
 		void (async () => {
 			try {
-				await exportBeanconqueror(library.beans, library.roasters, history.rawAll);
+				// Not loaded is not empty: the export would carry no brews.
+				await history.whenReady();
+				// Whole: rows past the view are held without their samples (#310).
+				const shots = await history.loadMany(history.rawAll.map((s) => s.id));
+				await exportBeanconqueror(library.beans, library.roasters, shots);
 			} catch (err) {
 				console.error('Beanconqueror export failed', err);
 				toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1599,7 +1603,8 @@
 	/>
 {/if}
 
-{#if logBrewOpen}
+<!-- Opens once the rows load: its seeds read them (#310). -->
+{#if logBrewOpen && history.loaded}
 	<LogBrewDialog
 		prefill={{ beanId: logBrewBeanId }}
 		onClose={() => logBrewOpen = false}

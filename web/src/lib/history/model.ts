@@ -43,6 +43,7 @@ import {
 import type { TelemetrySample } from '#lib/state/index.js';
 import { filenameStamp } from '#lib/utils/download.js';
 import { fromWire } from './telemetry-wire';
+import { lightHasHeavyParts, sampleCountOf, storedSummary } from './light-rows';
 
 /**
  * A snapshot of the current bean at the moment a shot was pulled. Stored on
@@ -431,7 +432,7 @@ export function isBrewLog(shot: Pick<StoredShot, 'brewMethod'>): boolean {
  */
 export function refusedNoSamples(
 	shot: Pick<StoredShot, 'brewMethod' | 'record'>,
-	sampleCount: number = shot.record.samples.length
+	sampleCount: number = sampleCountOf(shot as Pick<StoredShot, 'record'> & { id: string })
 ): boolean {
 	return wasmUploadRefusedNoSamples(isBrewLog(shot), sampleCount);
 }
@@ -444,7 +445,8 @@ export function refusedNoSamples(
  * Rust `StoredShot::is_manual_log`.
  */
 export function isManualLog(shot: StoredShot): boolean {
-	return isBrewLog(shot) && shot.record.samples.length === 0 && !shot.brewSeries;
+	// A light row (#310 P3w) holds its series in the store, not in memory.
+	return isBrewLog(shot) && shot.record.samples.length === 0 && !shot.brewSeries && !lightHasHeavyParts(shot.id);
 }
 
 /**
@@ -501,8 +503,31 @@ class BoundedCache<V> {
 // Peaks are tiny (4 numbers) but each is derived via a wasm call, so cache a
 // generous number of shots.
 const peaksCache = new BoundedCache<ShotPeaks>(512);
+/**
+ * A cache key for a shot's series: its id, its length, and its last sample, so
+ * two series of the same length under one id (a backup's and the device's) are
+ * never taken for each other. The peaks feed the de-dup signature, which a
+ * migration checks row by row (#310).
+ */
+function seriesKey(shot: StoredShot): string {
+	const last = shot.record.samples[shot.record.samples.length - 1] as
+		| { elapsed?: number; scaleWeight?: number | null; sample?: { groupPressure?: number } }
+		| undefined;
+	return `${shot.id}:${shot.record.samples.length}:${last?.elapsed ?? ''}:${last?.scaleWeight ?? ''}:${last?.sample?.groupPressure ?? ''}`;
+}
 export function peaksOf(shot: StoredShot): ShotPeaks {
-	const key = `${shot.id}:${shot.record.samples.length}`;
+	// A light row's peaks are in its summary, from the curve the store holds;
+	// a row recovered without its curve keeps the ones it had.
+	const summary = shot.record.samples.length === 0 ? storedSummary(shot.id) : undefined;
+	if (summary) {
+		return {
+			peakWeight: summary.peakWeight ?? null,
+			finalWeight: summary.finalWeight ?? null,
+			peakPressure: summary.peakPressure,
+			peakTemp: summary.peakTemp
+		};
+	}
+	const key = seriesKey(shot);
 	const cached = peaksCache.get(key);
 	if (cached) return cached;
 	try {

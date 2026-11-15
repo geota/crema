@@ -10,6 +10,9 @@
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StSelect from '../StSelect.svelte';
+	import StButton from '../StButton.svelte';
+	import { storagePersisted } from '#lib/history/storage-persist.svelte.js';
+	import { retryMigrationSoon } from '#lib/history/store-marker.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { getHistoryStore } from '#lib/history/index.js';
 	import { lastBackupAt } from '#lib/backup/index.js';
@@ -18,15 +21,44 @@
 		captureKeepLabel,
 		readCaptureKeep,
 		writeCaptureKeep,
+		peekCaptureKeep,
 		type CaptureKeepChoice
 	} from '#lib/capture/limit.js';
 	import { capturesOverLimit, pruneCaptures } from '#lib/capture/prune.js';
 
 	const history = getHistoryStore();
-	let keep = $state<CaptureKeepChoice>(readCaptureKeep(() => history.rawAll.length > 0));
+	// The history stores the choice once its rows load; before that this only
+	// reads it, as a first read decides by whether the history has rows.
+	let keep = $state<CaptureKeepChoice>(history.loaded ? readCaptureKeep(() => history.rawAll.length > 0) : peekCaptureKeep());
+	$effect(() => {
+		if (history.loaded) keep = readCaptureKeep(() => history.rawAll.length > 0);
+	});
 	let note = $state<string | null>(null);
 	let used = $state<string | null>(null);
-	const pinned = $derived(history.all.filter((s) => s.pinned === true).length);
+	// Every live row, past the view too (#310).
+	const pinned = $derived(history.loaded ? history.allLive.filter((s) => s.pinned === true).length : 0);
+	const persisted = $derived(storagePersisted());
+	const historySub = $derived.by(() => {
+		switch (history.health) {
+			case 'ok':
+				return 'Kept in this browser’s database, every shot.';
+			case 'loading':
+				return 'Loading…';
+			case 'legacy':
+				return history.storageError
+					? `In the older storage, which keeps the newest 300 shots. Moving it didn’t work: ${history.storageError}`
+					: 'In the older storage, which keeps the newest 300 shots.';
+			case 'unavailable':
+				return 'The history’s storage can’t be opened right now. New shots are kept aside until it can.';
+			case 'lost':
+				return 'The history’s storage is missing. See the banner at the top to choose what to do.';
+		}
+	});
+
+	function tryMoveAgain(): void {
+		retryMigrationSoon();
+		note = 'Shot history will try to move again the next time Crema opens.';
+	}
 	const last = lastBackupAt();
 
 	$effect(() => {
@@ -80,6 +112,27 @@
 	>
 		{#snippet control()}
 			<StSelect value={keep} {options} onChange={(v) => void choose(v)} />
+		{/snippet}
+	</StRow>
+	<StRow title="Shot history" sub={historySub}>
+		{#snippet control()}
+			{#if history.health === 'legacy'}
+				<StButton label="Try again" onClick={tryMoveAgain} />
+			{:else if history.health === 'unavailable'}
+				<StButton label="Try again" onClick={() => void history.retryOpen()} />
+			{/if}
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Browser storage"
+		sub={persisted === true
+			? 'Protected: the browser won’t clear Crema’s data on its own.'
+			: persisted === false
+				? 'Not protected: the browser may clear Crema’s data when the disk is low. Keep a recent backup.'
+				: 'The browser didn’t say whether it keeps Crema’s data. Keep a recent backup.'}
+	>
+		{#snippet control()}
+			<span class="st-storage-value">{persisted === true ? 'Protected' : persisted === false ? 'Not protected' : '—'}</span>
 		{/snippet}
 	</StRow>
 	<StRow title="Storage used" sub="Everything Crema stores in this browser.">

@@ -261,6 +261,9 @@ export async function commitFrozenShots(
 	runtime: AppRuntime | null,
 	locks: LockManagerLike | undefined = typeof navigator === 'undefined' ? undefined : navigator.locks
 ): Promise<void> {
+	// Not loaded is not empty: an id the history holds would look new, and its
+	// shot would be recorded, and its bag debited, twice. The stash waits.
+	if (!(await getHistoryStore().readyWithin())) return;
 	// Tabs reloading together each see the same stash: one at a time, so a
 	// kept shot is recorded and uploaded once. Without Web Locks, as before.
 	if (!locks) {
@@ -581,8 +584,16 @@ export function pushShotToVisualizer(
 				return;
 			}
 		}
-		yield* Effect.promise(() => getHistoryStore().seriesReady());
-		const shot = getHistoryStore().get(shotId);
+		// Not loaded is not gone: the queue sends it once the rows are in.
+		if (!(yield* Effect.promise(() => getHistoryStore().seriesReady()))) {
+			if (!getHistoryStore().loaded) {
+				yield* (yield* UploadQueue).enqueue({ entity: 'shot', id: shotId, op: 'create', error: 'Shot history is still loading.' });
+				reportUploadOutcome(shotId, 'Visualizer', { kind: 'queued' });
+				return;
+			}
+		}
+		// Whole: a row past the view is held without its samples (#310).
+		const shot = yield* Effect.promise(() => getHistoryStore().loadShot(shotId));
 		if (!shot) {
 			reportUploadOutcome(shotId, 'Visualizer', { kind: 'skipped', message: 'Shot not found' });
 			return;

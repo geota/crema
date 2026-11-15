@@ -87,6 +87,7 @@ import { TokenVault } from './token-vault.ts';
 import type { StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
+import { markShotEdit, pendingEdits } from '../visualizer/pending-edits.ts';
 
 /** A fake HttpClient driven by `handler`; every reply here is a 2xx. */
 function mkHttp(handler: (req: HttpRequest) => unknown) {
@@ -142,6 +143,8 @@ function mkHistory(initial: StoredShot[]) {
 			if (s) (s as { visualizerId?: string | null }).visualizerId = visualizerId;
 		},
 		seriesReady: async () => true,
+		readyWithin: async () => true,
+		loaded: true,
 		freeSlots: 100,
 		insertPulled: (s: StoredShot) => map.set(s.id, { ...s }),
 		setTags: () => {},
@@ -186,6 +189,50 @@ beforeEach(() => {
 	h.reconcile = [];
 	h.enqueueEntry.mockClear();
 	h.appendSyncLog.mockClear();
+});
+
+describe('ShotSync before the rows load (#310 P3w)', () => {
+	const notLoaded = (history: HistoryStore) => {
+		Object.assign(history as unknown as Record<string, unknown>, { readyWithin: async () => false, loaded: false });
+		return history;
+	};
+	it('upload all sends nothing: an empty list is not an empty backlog', async () => {
+		const history = notLoaded(mkHistory([shot()]));
+		const { layer, calls } = mkHttp(handler);
+		const program = ShotSync.pipe(Effect.flatMap((s) => s.uploadUnsyncedShots(history)));
+		const exit = await Effect.runPromiseExit(Effect.provide(program, Layer.provide(ShotSyncLive, Layer.merge(layer, vault))));
+		expect(exit).toMatchObject({ _tag: 'Success', value: { uploaded: 0, stopped: { reason: 'held' } } });
+		expect(calls).toEqual([]);
+	});
+	it('a pull reconciles nothing, so no remote shot is taken for a new one', async () => {
+		const history = notLoaded(mkHistory([shot()]));
+		const insert = vi.fn();
+		(history as unknown as { insertPulled: typeof insert }).insertPulled = insert;
+		const { layer, calls } = mkHttp(handler);
+		const out = await Effect.runPromise(
+			Effect.provide(
+				ShotSync.pipe(Effect.flatMap((s) => s.pullAndReconcileShots(history))),
+				Layer.provide(ShotSyncLive, Layer.merge(layer, vault))
+			)
+		);
+		expect(out).toMatchObject({ pulled: 0 });
+		expect(calls).toEqual([]);
+		expect(insert).not.toHaveBeenCalled();
+	});
+	it('an edit waits, and stays owed', async () => {
+		const history = notLoaded(mkHistory([shot({ visualizerId: 'viz-1' })]));
+		markShotEdit('s1', 'annotations');
+		const { layer, calls } = mkHttp(handler);
+		const out = await Effect.runPromise(
+			Effect.provide(
+				ShotSync.pipe(Effect.flatMap((s) => s.pushPendingEdit(history, 's1'))),
+				Layer.provide(ShotSyncLive, Layer.merge(layer, vault))
+			)
+		);
+		expect(out).toBe('waiting');
+		expect(calls).toEqual([]);
+		expect(pendingEdits().has('s1')).toBe(true);
+	});
 });
 
 describe('ShotSync.uploadUnsyncedShots — a 2xx with no id', () => {

@@ -21,7 +21,10 @@ vi.mock('./series-store', () => ({
 	clearAllSeries: async () => {}
 }));
 
-import { HistoryStore } from './store.svelte';
+import { setHistoryStoreDefaultsForTest, HistoryStore } from './store.svelte';
+
+// The legacy backend: the old copy and its series database, as before #310 P3w.
+setHistoryStoreDefaultsForTest({ backend: 'legacy' });
 import { updateSyncConfig } from '#lib/visualizer/sync-config.js';
 
 const sample = { t: 1, pressure: 9 } as unknown as TimedSample;

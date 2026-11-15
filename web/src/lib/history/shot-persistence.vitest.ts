@@ -26,7 +26,15 @@ const h = vi.hoisted(() => {
 		setTokensReadable: (v: boolean) => {
 			tokensReadable = v;
 		},
-		mockHistory: { seriesReady: vi.fn(async () => true), get: vi.fn(), bindVisualizerId: vi.fn() },
+		mockHistory: {
+			seriesReady: vi.fn(async () => true),
+			readyWithin: vi.fn(async () => true),
+			loaded: true,
+			get: vi.fn(),
+			// Whole, as the store gives it: here the row as `get` has it.
+			loadShot: vi.fn(async (id: string): Promise<unknown> => h.mockHistory.get(id)),
+			bindVisualizerId: vi.fn()
+		},
 		appendSyncLog: vi.fn(),
 		getDirection: () => direction,
 		setDirection: (d: 'push' | 'off') => {
