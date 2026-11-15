@@ -61,7 +61,7 @@
 		if (history.loaded) void history.countArchiveNow();
 	});
 	const archiveTitle = $derived(
-		archive && (archive.waiting || (history.archiveCaughtUp && archive.files < archive.curves))
+		archive && (archive.waiting || archive.notRestored > 0 || (history.archiveCaughtUp && archive.files < archive.curves))
 			? 'Curve archive incomplete'
 			: 'Curve archive'
 	);
@@ -70,7 +70,11 @@
 		if (a === undefined) return 'Counting…';
 		if (!a) return 'This browser keeps no curve archive, so a lost history would get back only its rows.';
 		const missing = Math.max(0, a.curves - a.files);
-		const held = `${a.files} of ${a.curves} shots’ curves are archived.`;
+		const damaged =
+			a.notRestored > 0
+				? ` ${a.notRestored === 1 ? 'One curve' : `${a.notRestored} curves`} couldn’t be restored from it: ${a.notRestored === 1 ? 'its file was' : 'their files were'} damaged.`
+				: '';
+		const held = `${a.files} of ${a.curves} shots’ curves are archived.${damaged}`;
 		if (a.waiting) {
 			return `${held} ${missing} wait: the last write failed, most likely because storage is full. Crema tries again with each save.`;
 		}

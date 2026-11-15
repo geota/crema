@@ -478,6 +478,10 @@ export class HistoryStore {
 	private archiveCount = $state<{ files: number; bytes: number } | null | undefined>(undefined);
 	/** An archive write failed and waits for another try (storage full, most likely). */
 	private archiveStuck = $state(false);
+	/** Moves when a file is found corrupt, so the counts that read them re-read. */
+	private corruptTick = $state(0);
+	/** What the last recovery did with the archive: curves restored, and not (#420 FC-N5). */
+	private lastRecoveryState = $state<{ restored: number; notRestored: number } | null>(null);
 	/** This load's catch-up has run: every curve the store held then has been tried. */
 	private archiveCaughtUpFlag = $state(false);
 	private hiddenNoticeShown = false;
@@ -1959,12 +1963,15 @@ export class HistoryStore {
 	 * bytes against the rows with a curve, and whether a write waits.
 	 * Null where there's no private file system; undefined before it's counted.
 	 */
-	get archiveStatus(): { files: number; bytes: number; curves: number; waiting: boolean } | null | undefined {
+	get archiveStatus():
+		| { files: number; bytes: number; curves: number; waiting: boolean; notRestored: number }
+		| null
+		| undefined {
 		const count = this.archiveCount;
 		if (!count) return count;
 		let curves = 0;
 		for (const s of this.summaries.values()) if ((s.sampleCount ?? 0) > 0 || s.brewSampleCount > 0) curves += 1;
-		return { ...count, curves, waiting: this.archiveStuck };
+		return { ...count, curves, waiting: this.archiveStuck, notRestored: this.curvesNotRestored() };
 	}
 
 	/** Every archive write asked for so far has been tried. */
@@ -2059,6 +2066,7 @@ export class HistoryStore {
 	private async fillFromArchive(names?: ReadonlySet<string>): Promise<number> {
 		const archive = this.archive;
 		if (!archive || this.mode !== 'idb') return 0;
+		const skippedBefore = this.archiveCorrupt.size;
 		const have = names ?? (await archive.ids());
 		const want = this.shots
 			.filter((s) => {
@@ -2088,6 +2096,7 @@ export class HistoryStore {
 					const got = await archive.read(id);
 					if (got.kind === 'corrupt') {
 						this.archiveCorrupt.set(id, got.why);
+						this.corruptTick++;
 						console.warn(`[history] the archived curve of ${id} is unreadable (${got.why}); skipped`);
 						continue;
 					}
@@ -2121,7 +2130,32 @@ export class HistoryStore {
 			this.writeChain = run;
 			await run;
 		}
+		this.lastFill = { restored: filled, notRestored: this.archiveCorrupt.size - skippedBefore };
 		return filled;
+	}
+
+	/** The last fill from the archive, for the recovery that ran it. */
+	private lastFill: { restored: number; notRestored: number } = { restored: 0, notRestored: 0 };
+
+	/**
+	 * What the last recovery in this tab did with the archive: curves it
+	 * restored, and curves it couldn't because their files were corrupt
+	 * (skipped, never used). Null before any recovery.
+	 */
+	get lastRecovery(): { restored: number; notRestored: number } | null {
+		return this.lastRecoveryState;
+	}
+
+	/** Shots whose archived curve was found corrupt and that still have no curve. */
+	private curvesNotRestored(): number {
+		void this.corruptTick;
+		void this.summaryTick;
+		let n = 0;
+		for (const id of this.archiveCorrupt.keys()) {
+			const s = lightSummary(id) ?? this.summaries.get(id);
+			if (s && (s.sampleCount ?? 0) === 0 && s.brewSampleCount === 0) n += 1;
+		}
+		return n;
 	}
 
 	/** Archive files found unreadable, by id: skipped, never used. */
@@ -2222,7 +2256,9 @@ export class HistoryStore {
 		// curves from the archive, once written (#420 S1).
 		if (afterLoss && this.health === 'ok' && (await this.archive?.available())) {
 			await this.flushed();
+			this.lastFill = { restored: 0, notRestored: 0 };
 			await this.fillFromArchive();
+			this.lastRecoveryState = { ...this.lastFill };
 		}
 		return this.health === 'ok';
 	}
@@ -2316,7 +2352,9 @@ export class HistoryStore {
 			// The rows are in; each one the recovered store holds no curve for
 			// takes the archive's (#420 S1).
 			await this.flushed();
+			this.lastFill = { restored: 0, notRestored: 0 };
 			await this.fillFromArchive();
+			this.lastRecoveryState = { ...this.lastFill };
 			try {
 				this.channel?.postMessage({ type: 'recovered', from: this.tabId });
 			} catch {

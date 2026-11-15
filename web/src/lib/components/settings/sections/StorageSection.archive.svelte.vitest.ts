@@ -77,5 +77,16 @@ it('Settings says the archive is incomplete, with a count; the banner promises o
 	expect(target.textContent).toContain('Curves come back for shots already archived (3 curves)');
 	expect(target.textContent).not.toContain('Every shot');
 	unmount(strip);
+
+	// A recovery that meets a damaged archive file says how many it couldn't restore (FC-N5).
+	fs.control.quota = false;
+	fs.curves().set(`${encodeURIComponent(shots[1].id)}.json.gz`, new Uint8Array([1, 2, 3]));
+	expect(await history.startEmpty()).toBe(true);
+	expect(history.lastRecovery?.notRestored).toBe(1);
+	const again = mount(StorageSection, { target });
+	await settle();
+	expect(target.textContent).toContain('Curve archive incomplete');
+	expect(target.textContent).toContain('One curve couldn’t be restored from it: its file was damaged.');
+	unmount(again);
 	target.remove();
 });

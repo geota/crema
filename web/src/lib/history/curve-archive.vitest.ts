@@ -216,6 +216,14 @@ describe('failures', () => {
 		expect(details.get(bad.id)?.samples ?? []).toEqual([]);
 		expect(details.get(junk.id)?.samples ?? []).toEqual([]);
 		expect([...a.archiveSkipped.keys()].sort()).toEqual([bad.id, junk.id].sort());
+		// Said, with a count: the recovery's result, and Settings (#420 FC-N5).
+		expect(a.lastRecovery).toEqual({ restored: 1, notRestored: 2 });
+		await a.countArchiveNow();
+		expect(a.archiveStatus!.notRestored).toBe(2);
+		// A curve that comes back another way no longer counts.
+		a.backfillTelemetry(bad.id, realSamples(4, 3), 30_000);
+		await a.flushed();
+		expect(a.archiveStatus!.notRestored).toBe(1);
 	});
 });
 

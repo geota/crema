@@ -53,7 +53,17 @@
 		try {
 			const result = await what();
 			if (result === 'reopened') toast.info('Another tab had already brought your shot history back. Nothing was changed.');
-			else if (history.health === 'ok') toast.success(done);
+			else if (history.health === 'ok') {
+				toast.success(done);
+				// Curves the archive held damaged: said, never used (#420 FC-N5).
+				const lost = history.lastRecovery?.notRestored ?? 0;
+				if (lost > 0) {
+					toast.error(
+						`${lost === 1 ? 'One shot’s curve' : `${lost} shots’ curves`} couldn’t be restored: ${lost === 1 ? 'its archive file was' : 'their archive files were'} damaged. Those shots keep their rows without a curve.`,
+						10000
+					);
+				}
+			}
 			else toast.error(history.storageError ?? 'That didn’t work. Try another way.');
 			return result;
 		} catch (e) {
