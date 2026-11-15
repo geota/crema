@@ -57,7 +57,11 @@ describe('factoryResetLocalData', () => {
 
 	it("takes a newer build's history database and snapshot, after a rollback (#310 P0)", async () => {
 		await createDb('crema-history');
-		const files = new Map<string, string>([['crema-history-snapshot', 'rows'], ['other', 'kept']]);
+		const files = new Map<string, string>([
+			['crema-history-snapshot', 'rows'],
+			['crema-history-curves', 'curves'],
+			['other', 'kept']
+		]);
 		const root = {
 			removeEntry: async (name: string, opts?: { recursive?: boolean }) => {
 				expect(opts?.recursive, 'the snapshot is written in chunks').toBe(true);
@@ -81,7 +85,7 @@ describe('factoryResetLocalData', () => {
 			}
 		} as unknown as FileSystemDirectoryHandle;
 		const result = await factoryResetLocalData({ privateFiles: async () => root });
-		expect(result.databasesFailed).toEqual(['crema-history-snapshot']);
+		expect(result.databasesFailed).toEqual(['crema-history-snapshot', 'crema-history-curves']);
 	});
 
 	it('leaves no Crema IndexedDB database and no crema.* storage key behind', async () => {

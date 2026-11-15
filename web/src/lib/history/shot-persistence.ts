@@ -593,7 +593,22 @@ export function pushShotToVisualizer(
 			}
 		}
 		// Whole: a row past the view is held without its samples (#310).
-		const shot = yield* Effect.promise(() => getHistoryStore().loadShot(shotId));
+		// A read that fails queues the upload for a retry, rather than end
+		// this fiber: nothing goes without its curve.
+		const read = yield* Effect.promise(() =>
+			getHistoryStore()
+				.loadShot(shotId)
+				.then(
+					(s) => ({ ok: true as const, s }),
+					() => ({ ok: false as const })
+				)
+		);
+		if (!read.ok) {
+			yield* (yield* UploadQueue).enqueue({ entity: 'shot', id: shotId, op: 'create', error: 'The shot couldn’t be read.' });
+			reportUploadOutcome(shotId, 'Visualizer', { kind: 'queued' });
+			return;
+		}
+		const shot = read.s;
 		if (!shot) {
 			reportUploadOutcome(shotId, 'Visualizer', { kind: 'skipped', message: 'Shot not found' });
 			return;

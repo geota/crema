@@ -15,20 +15,19 @@
 	import StarRating from '#lib/components/common/StarRating.svelte';
 	import { shotTitle } from '#lib/brew/methods.js';
 	import {
-		flatSamplesOf,
 		grindLabel,
+		hasTelemetry,
 		isBrewLog,
 		isManualLog,
 		methodOf,
 		peaksOf,
 		ratioLabel,
 		yieldOf,
-		type StoredShot
+		type ShotRow
 	} from '#lib/history/index.js';
 	import { convertWeight, getSettingsStore } from '#lib/settings/index.js';
 	import { relativeAgo } from '#lib/utils/relative-time.js';
-	import MiniBrewChart from './MiniBrewChart.svelte';
-	import MiniShotChart from './MiniShotChart.svelte';
+	import SparkChart from './SparkChart.svelte';
 
 	let {
 		shot,
@@ -39,7 +38,8 @@
 		syncTitle,
 		onclick
 	}: {
-		shot: StoredShot;
+		/** The history row: its summary, no samples. */
+		shot: ShotRow;
 		/** Compare mode: a leading check, and a tap picks the row. */
 		selecting?: boolean;
 		picked?: boolean;
@@ -52,9 +52,8 @@
 
 	const settings = getSettingsStore();
 	const method = $derived(methodOf(shot));
-	const hasCurve = $derived(
-		shot.record.samples.length > 0 || (shot.brewSeries?.samples.length ?? 0) > 0
-	);
+	/** A curve to draw, from the row's stored spark (#310 P4w). */
+	const hasCurve = $derived(hasTelemetry(shot) && shot.summary.spark != null);
 	const beanLine = $derived.by(() => {
 		const bean = [shot.bean?.roasterName?.trim(), shot.bean?.name?.trim()].filter(Boolean);
 		return [...bean, grindLabel(shot)].filter(Boolean).join(' · ') || '—';
@@ -76,7 +75,6 @@
 		if (total < 90) return `${total}s`;
 		return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 	});
-	const spark = $derived(flatSamplesOf(shot));
 	const pipIcon = $derived(
 		{
 			uploaded: CloudCheckIcon,
@@ -102,10 +100,8 @@
 		</span>
 	{/if}
 	<span class={['psr-spark', { 'is-mark': !hasCurve }]}>
-		{#if shot.record.samples.length > 0}
-			<MiniShotChart series={spark} width={58} height={36} />
-		{:else if shot.brewSeries && shot.brewSeries.samples.length > 0}
-			<MiniBrewChart series={shot.brewSeries} width={58} height={36} />
+		{#if hasCurve}
+			<SparkChart spark={shot.summary.spark} width={58} height={36} />
 		{:else}
 			<MethodMark {method} size={16} />
 		{/if}

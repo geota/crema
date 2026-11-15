@@ -12,3 +12,10 @@ export const HISTORY_DB_NAME = 'crema-history';
  * name recursively, takes every copy.
  */
 export const HISTORY_SNAPSHOT_NAME = 'crema-history-snapshot';
+
+/**
+ * The curve archive (owner, #420 S1): one gzipped file per shot's curve, in
+ * the origin private file system, so a lost store gives curves back too. A
+ * directory, so a factory reset removes it whole.
+ */
+export const HISTORY_CURVES_NAME = 'crema-history-curves';

@@ -82,7 +82,7 @@ describe('HistoryStore reload', () => {
 		expect(shot?.bean?.grinder).toBe('Niche Zero');
 	});
 
-	it('AC-F1.3 a fully populated shot round-trips through persist and reload unchanged', () => {
+	it('AC-F1.3 a fully populated shot round-trips through persist and reload unchanged', async () => {
 		// `Required<…>` makes this fixture fail to compile when a field is added
 		// to the stored shape, so a new field can't skip this test (or the loader).
 		const metadata: Required<ShotMetadata> = {
@@ -151,7 +151,8 @@ describe('HistoryStore reload', () => {
 			bagDebit: 10.5
 		};
 		new HistoryStore().insertPulled(full);
-		expect(reload().get('shot:full')).toStrictEqual(full);
+		// Whole through `loadShot`: a row hands out its summary, not its heavy parts.
+		expect(await reload().loadShot('shot:full')).toStrictEqual(full);
 	});
 
 	it('normalises legacy and malformed values on reload', () => {

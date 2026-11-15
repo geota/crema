@@ -53,7 +53,17 @@
 		try {
 			const result = await what();
 			if (result === 'reopened') toast.info('Another tab had already brought your shot history back. Nothing was changed.');
-			else if (history.health === 'ok') toast.success(done);
+			else if (history.health === 'ok') {
+				toast.success(done);
+				// Curves the archive held damaged: said, never used (#420 FC-N5).
+				const lost = history.lastRecovery?.notRestored ?? 0;
+				if (lost > 0) {
+					toast.error(
+						`${lost === 1 ? 'One shot’s curve' : `${lost} shots’ curves`} couldn’t be restored: ${lost === 1 ? 'its archive file was' : 'their archive files were'} damaged. Those shots keep their rows without a curve.`,
+						10000
+					);
+				}
+			}
 			else toast.error(history.storageError ?? 'That didn’t work. Try another way.');
 			return result;
 		} catch (e) {
@@ -84,6 +94,20 @@
 		if (result !== 'reopened' && history.health === 'ok') void goto('/settings#sharing');
 	}
 
+	/** What the curve archive holds, as far as this browser allows one (#420 FC-N3). */
+	$effect(() => {
+		if (history.health === 'lost') void history.countArchiveNow();
+	});
+	const archiveLine = $derived.by(() => {
+		const a = history.archiveStatus;
+		if (a === undefined) return 'Counting the curves the curve archive holds…';
+		if (!a) {
+			return 'This browser keeps no curve archive: a recovery brings back rows without curves, apart from the shots this tab opened or recorded last.';
+		}
+		const still = history.archiveCaughtUp ? '' : ' The archive was still being filled when the history went, so some may be missing.';
+		return `Curves come back for shots already archived (${a.files} curves), whichever you choose.${still}`;
+	});
+
 	function downloadUnsaved(): void {
 		for (const shot of history.unsavedRows()) {
 			const blob = new Blob([exportStoredShotAsV2Json(shot, { fullSeries: true })], { type: 'application/json' });
@@ -102,18 +126,18 @@
 				Your shot history’s storage is missing from this browser. Nothing has been changed. Choose how to get it back.
 			{/if}
 			{#if history.unsavedShots.length > 0}
-				{history.unsavedShots.length === 1 ? 'One shot is' : `${history.unsavedShots.length} shots are`} only in this tab: keep it open until you choose, and they go into what you choose.
+				{history.unsavedShots.length === 1 ? 'One shot is' : `${history.unsavedShots.length} shots are`} only in this tab: keep it open until you choose, and they go into what you choose. {archiveLine}
 			{/if}
 		</span>
 		<div class="hs-actions">
 			{#each snapshots as snap (snap.name)}
 				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot(snap.name), 'History restored from the daily copy.')}>
-					Daily copy ({dateOf(snap.at)}, {snap.rows} shots, without their curves)
+					Daily copy ({dateOf(snap.at)}, {snap.rows} shots; curves from the archive where it has them)
 				</button>
 			{/each}
 			{#if snapshots.length > 1}
 				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot('all'), 'History restored from every daily copy.')}>
-					Recover from all copies (merged, newest first, without curves)
+					Recover from all copies (merged, newest first; curves from the archive where it has them)
 				</button>
 			{/if}
 			<button type="button" class="hs-btn" disabled={busy} onclick={() => void restoreBackup()}>Restore a backup</button>

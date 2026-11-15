@@ -9,7 +9,7 @@ import { initTestWasm } from '#lib/testing/test-init.js';
 import { realSamples, realShot } from '#lib/testing/real-shots.js';
 import { reconcileShots, signatureForShot, type WireShot } from '#lib/visualizer/shot-sync-signatures.js';
 import { HistoryDb, META_MIGRATION, type MigrationRecord } from './history-db';
-import { clearLight, sampleCountOf } from './light-rows';
+import { sampleCountOf } from './model';
 import { peaksOf, type StoredShot } from './model';
 import { PENDING_KEY, readPending } from './pending';
 import { STORE_MARKER_KEY, readStoreMarker, writeDoneMarker } from './store-marker';
@@ -203,13 +203,16 @@ describe('the view cap hides, and never drops', () => {
 		expect(rows.get(b.all[20].id)!.metadata.rating).toBe(2);
 	});
 
-	it('rows past the view are light in memory, and whole on demand', async () => {
+	it('rows past the view are rows, like those in view, and whole on demand', async () => {
 		const shots = small(320);
 		await seedStore(shots);
 		const store = await boot();
 		const hidden = store.rawAll[315];
 		expect(store.all.some((s) => s.id === hidden.id)).toBe(false);
-		expect(hidden.record.samples).toEqual([]);
+		// No heavy part is on a row at all, in view or past it (P4w).
+		expect('samples' in hidden.record).toBe(false);
+		expect('samples' in store.all[0].record).toBe(false);
+		expect(hidden.summary.sampleCount).toBe(shots.find((s) => s.id === hidden.id)!.record.samples.length);
 		const full = (await store.loadShot(hidden.id))!;
 		expect(full.record.samples).toEqual(shots.find((s) => s.id === hidden.id)!.record.samples);
 		// Its peaks are the curve's, from its summary, not a curveless row's.
@@ -239,8 +242,9 @@ describe('the view cap hides, and never drops', () => {
 		]);
 		// Its de-dup signature is the whole shot's; read as curveless, it wouldn't be.
 		expect(signatureForShot(hidden)).toBe(signatureForShot(full));
-		clearLight();
-		expect(signatureForShot(hidden)).not.toBe(signatureForShot(full));
+		expect(signatureForShot({ ...full, record: { duration: full.record.duration, samples: [] } })).not.toBe(
+			signatureForShot(full)
+		);
 	});
 
 	it('a capture prune counts hidden rows: a pinned hidden row keeps its capture', async () => {
@@ -330,7 +334,7 @@ describe('saves upsert, and only a delete by name removes', () => {
 		const here = small(2);
 		await seedStore(here);
 		const backup = small(60, 1_000);
-		const plan = (rows: readonly StoredShot[]) => ({
+		const plan = (rows: readonly { id: string }[]) => ({
 			next: backup,
 			series: backup,
 			remove: rows.filter((s) => !backup.some((b) => b.id === s.id)).map((s) => s.id)
@@ -496,11 +500,12 @@ describe('other tabs', () => {
 		const made = a.recordCaptured(realShot(50, realSamples(4)) as unknown as Record<string, unknown>)!;
 		await a.flushed();
 		await until(() => b.get(made.id) !== undefined);
-		await until(() => (b.get(made.id)?.record.samples.length ?? 0) === 4);
+		await until(() => b.get(made.id)?.summary.sampleCount === 4);
+		expect((await b.loadShot(made.id))!.record.samples).toHaveLength(4);
 		a.setRating(b.all[3].id, 1);
 		await a.flushed();
 		await until(() => b.all[3].metadata.rating === 1);
-		expect(b.all[3].record.samples.length).toBeGreaterThan(0);
+		expect(b.all[3].summary.sampleCount).toBeGreaterThan(0);
 		a.delete(made.id);
 		await a.flushed();
 		await until(() => b.get(made.id) === undefined);
@@ -738,6 +743,8 @@ describe('a store that is lost or can’t open', () => {
 		const a = await boot({ snapshotRoot });
 		const made = a.recordCaptured(realShot(68, realSamples(4)) as unknown as Record<string, unknown>)!;
 		await a.flushed();
+		// A opened an old shot: memory keeps what it loaded last (P4w).
+		await a.loadShot(shots[0].id);
 		await until(() => files.size === 1);
 		await deleteHistoryDb();
 		a.setRating(shots[3].id, 2);
@@ -759,7 +766,7 @@ describe('a store that is lost or can’t open', () => {
 		expect(details.get(shots[0].id)!.samples).toHaveLength(4);
 		// B's edit stays.
 		expect(rows.get(made.id)!.metadata.notes).toBe('noted in B');
-		expect(a.get(made.id)!.record.samples).toHaveLength(4);
+		expect((await a.loadShot(made.id))!.record.samples).toHaveLength(4);
 		expect(a.hasUnsaved).toBe(false);
 		expect(a.unsavedShots).toEqual([]);
 	});

@@ -118,7 +118,7 @@
 	import LastShotCard from './LastShotCard.svelte';
 	import DialInCard from './DialInCard.svelte';
 	import { takePendingDialIn } from './dial-in.svelte';
-	import { getHistoryStore, effectiveGrindSetting, type StoredShot } from '#lib/history/index.js';
+	import { getHistoryStore, effectiveGrindSetting, type AnyShot } from '#lib/history/index.js';
 	import PowerButton from '#lib/components/PowerButton.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -786,7 +786,7 @@
 	 * shots are matched by the frozen bean snapshot's id, same as the
 	 * bean drawer's per-bag shot list.
 	 */
-	const lastBeanShot = $derived.by<StoredShot | null>(() => {
+	const lastBeanShot = $derived.by<AnyShot | null>(() => {
 		const beanId = beanLibrary.activeBeanId;
 		if (!beanId) return null;
 		// Machine shots only (issue #10): a logged pourover on the same bag
@@ -801,7 +801,7 @@
 	 * check; a mismatch leaves the card without a rating rather than rating the
 	 * wrong shot.
 	 */
-	const lastStoredShot = $derived.by<StoredShot | null>(() => {
+	const lastStoredShot = $derived.by<AnyShot | null>(() => {
 		const newest = historyStore.all[0];
 		return newest && lastShot && newest.record.duration === lastShot.duration ? newest : null;
 	});
@@ -818,7 +818,7 @@
 	 * Quick Sheet), one `tick` to let those re-seeds flush, then the
 	 * shot's own dial values on top so they win.
 	 */
-	async function applyDialIn(shot: StoredShot): Promise<void> {
+	async function applyDialIn(shot: AnyShot): Promise<void> {
 		// 1. The bag: re-activate the shot's bean while it exists un-archived.
 		const beanId = shot.bean?.beanId ?? null;
 		const liveBean = beanId ? beanLibrary.getBean(beanId) : null;

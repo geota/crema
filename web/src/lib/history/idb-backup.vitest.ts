@@ -24,7 +24,7 @@ beforeEach(() => {
 	freshStorage();
 });
 
-it('a backup includes the rows past the view, whole', async () => {
+it('a backup from a cold start includes every row, past the view too, whole', async () => {
 	const shots = Array.from({ length: 310 }, (_, i) => realShot(i, realSamples(5, i % 60)));
 	const db = new HistoryDb({ expectExisting: () => false });
 	await db.putShots(
@@ -38,6 +38,9 @@ it('a backup includes the rows past the view, whole', async () => {
 	const history = getHistoryStore();
 	await history.whenReady();
 	expect(history.all).toHaveLength(300);
+	// From a cold start no row holds a curve, in view or past it (P4w): the
+	// backup loads each one whole.
+	for (const row of history.rawAll) expect('samples' in row.record).toBe(false);
 	expect(backupContents().shots).toBe(310);
 
 	const built = (await buildBackupJsonl('test'))!;

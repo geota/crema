@@ -120,7 +120,7 @@ describe('a corrupt history (#325)', () => {
 		const store = await boot();
 		store.insertPulled(row('a', 1_700_000_000_000, []));
 		await settle();
-		expect((await boot()).get('a')?.record.samples).toEqual(samples);
+		expect((await (await boot()).loadShot('a'))?.record.samples).toEqual(samples);
 	});
 });
 

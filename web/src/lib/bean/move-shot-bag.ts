@@ -8,11 +8,11 @@
  */
 
 import { getHistoryStore } from '#lib/history/store.svelte.js';
-import type { StoredShot } from '#lib/history/model.js';
+import type { AnyShot } from '#lib/history/model.js';
 import { promptBagEmpty } from './bag-empty-prompt';
 import { getBeanStore } from './store.svelte';
 
-export function moveShotBag(shot: StoredShot, newBeanId: string | null): void {
+export function moveShotBag(shot: AnyShot, newBeanId: string | null): void {
 	const oldBeanId = shot.bean?.beanId ?? null;
 	if (oldBeanId === newBeanId) return;
 	const library = getBeanStore();

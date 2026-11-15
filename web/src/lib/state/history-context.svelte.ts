@@ -3,7 +3,7 @@
  * readers (`ShotDetail`, `ShotRow`, `CompareOverlay`, `StaticShotChart`,
  * `BeanPicker`).
  *
- * Each consumer needs a `StoredShot` joined against the live bean
+ * Each consumer needs a `AnyShot` joined against the live bean
  * library (for current tags / display-name fallback) and the profile
  * library (to resolve `profileName` back to a `CremaProfile` for the
  * embedded profile slot). The join was inlined at every reader; this
@@ -16,7 +16,7 @@
 
 import { getBeanStore, type Bean, type BeanLibraryStore } from '#lib/bean/index.js';
 import { getProfileStore, type CremaProfile, type ProfileStore } from '#lib/profiles/index.js';
-import type { StoredShot } from '#lib/history/index.js';
+import type { AnyShot } from '#lib/history/index.js';
 
 /**
  * One shot's joined view. Live fields (`liveBean`, `resolvedProfile`)
@@ -24,7 +24,7 @@ import type { StoredShot } from '#lib/history/index.js';
  * store subscriptions through these getters.
  */
 export interface ShotView {
-	readonly shot: StoredShot;
+	readonly shot: AnyShot;
 	/**
 	 * The library row matching `shot.bean.beanId`, or `null` when the
 	 * bean has been deleted (or the shot was pulled with no bean
@@ -50,7 +50,7 @@ export interface ShotView {
 }
 
 /**
- * Per-app singleton; constructed at boot. Hand it a `StoredShot` to
+ * Per-app singleton; constructed at boot. Hand it a `AnyShot` to
  * get back a {@link ShotView} that joins the live bean + profile
  * libraries against the shot's frozen snapshot.
  */
@@ -61,7 +61,7 @@ export class HistoryContext {
 	) {}
 
 	/** Build the joined view for `shot`. Cheap — no caching; getters re-fetch each read. */
-	viewFor(shot: StoredShot): ShotView {
+	viewFor(shot: AnyShot): ShotView {
 		const beans = this.beans;
 		const profiles = this.profiles;
 		return {

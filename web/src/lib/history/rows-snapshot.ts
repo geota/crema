@@ -20,12 +20,18 @@
  * to a writable that only lands when it closes, so a tab closed part-way
  * leaves no half copy. Skipped where there is no private file system.
  */
-import { Gzip, gunzipSync, strFromU8, strToU8 } from 'fflate';
+import { Gunzip, Gzip, strToU8 } from 'fflate';
 import { HISTORY_SNAPSHOT_NAME } from './store-names';
 import type { RowRecord } from './history-db';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
 
-export const SNAPSHOT_CHUNK = 500;
+/**
+ * Rows a step writes or parses before it yields (#420 FC3-N2: 500 made
+ * tasks of 369 ms at a 6× CPU slowdown).
+ */
+export const SNAPSHOT_CHUNK = 100;
+/** Bytes a step inflates before it yields. */
+const INFLATE_STEP = 64 * 1024;
 /** How many daily copies are kept. */
 export const SNAPSHOTS_KEPT = 3;
 /** The Web Lock a tab holds while it checks, writes, verifies and prunes the copies. */
@@ -97,7 +103,48 @@ interface Copy {
 	rows: SnapshotRow[];
 }
 
-/** One copy: whole, `bad` (empty, cut short or not a copy), or `unreadable` now. */
+/** How much work ran between two yields, at most, for a test to bound. */
+const steps = { rows: 0, bytes: 0, maxRows: 0, maxBytes: 0 };
+
+/** Test seam: the most rows and bytes a step handled before yielding, since the last reset. */
+export function snapshotStepsForTest(): { maxRows: number; maxBytes: number } {
+	return { maxRows: steps.maxRows, maxBytes: steps.maxBytes };
+}
+export function resetSnapshotStepsForTest(): void {
+	Object.assign(steps, { rows: 0, bytes: 0, maxRows: 0, maxBytes: 0 });
+}
+
+/** Yield to the page, and start counting the next step's work. */
+async function step(): Promise<void> {
+	steps.maxRows = Math.max(steps.maxRows, steps.rows);
+	steps.maxBytes = Math.max(steps.maxBytes, steps.bytes);
+	steps.rows = 0;
+	steps.bytes = 0;
+	await pause();
+}
+
+/** Inflate `bytes` a slice at a time, yielding between, into its text. */
+async function inflate(bytes: Uint8Array): Promise<string> {
+	const out: Uint8Array[] = [];
+	let ended = false;
+	const gz = new Gunzip((chunk, final) => {
+		out.push(chunk);
+		if (final) ended = true;
+	});
+	for (let i = 0; i < bytes.length; i += INFLATE_STEP) {
+		const slice = bytes.subarray(i, i + INFLATE_STEP);
+		steps.bytes += slice.length;
+		gz.push(slice, i + INFLATE_STEP >= bytes.length);
+		await step();
+	}
+	if (!ended) throw new Error('cut short');
+	const dec = new TextDecoder();
+	let text = '';
+	for (const c of out) text += dec.decode(c, { stream: true });
+	return text + dec.decode();
+}
+
+/** One copy: whole, `bad` (empty, cut short or not a copy), or `unreadable` now. Read in yielding steps. */
 async function readCopy(dir: FileSystemDirectoryHandle, name: string): Promise<Copy | 'bad' | 'unreadable'> {
 	let bytes: Uint8Array;
 	try {
@@ -106,13 +153,19 @@ async function readCopy(dir: FileSystemDirectoryHandle, name: string): Promise<C
 		return 'unreadable';
 	}
 	try {
-		const lines = strFromU8(gunzipSync(bytes))
-			.split('\n')
-			.filter((l) => l.length > 0);
+		if (bytes.length === 0) return 'bad';
+		const lines = (await inflate(bytes)).split('\n').filter((l) => l.length > 0);
 		const head = (JSON.parse(lines[0] ?? 'null') as SnapshotHeader | null)?.snapshot;
 		if (!head || typeof head.seq !== 'number' || typeof head.at !== 'number' || typeof head.rows !== 'number') return 'bad';
-		const rows = lines.slice(1).map((l) => JSON.parse(l) as SnapshotRow);
-		if (rows.length !== head.rows || rows.some((r) => typeof r !== 'object' || r === null || typeof r.id !== 'string')) return 'bad';
+		const rows: SnapshotRow[] = [];
+		for (let i = 1; i < lines.length; i++) {
+			const r = JSON.parse(lines[i]) as SnapshotRow;
+			if (typeof r !== 'object' || r === null || typeof r.id !== 'string') return 'bad';
+			rows.push(r);
+			steps.rows += 1;
+			if (steps.rows >= SNAPSHOT_CHUNK) await step();
+		}
+		if (rows.length !== head.rows) return 'bad';
 		return { name, seq: head.seq, at: head.at, rows };
 	} catch {
 		return 'bad';
@@ -197,12 +250,10 @@ async function writeNow(rows: readonly SnapshotRow[], now: number, root: Root): 
 		const header: SnapshotHeader = { snapshot: { v: 1, seq, at: now, rows: rows.length } };
 		gz.push(strToU8(JSON.stringify(header)));
 		for (let i = 0; i < rows.length; i += SNAPSHOT_CHUNK) {
-			const text = rows
-				.slice(i, i + SNAPSHOT_CHUNK)
-				.map((r) => JSON.stringify(r))
-				.join('\n');
-			gz.push(strToU8(`\n${text}`));
-			await pause();
+			const part = rows.slice(i, i + SNAPSHOT_CHUNK);
+			steps.rows += part.length;
+			gz.push(strToU8(`\n${part.map((r) => JSON.stringify(r)).join('\n')}`));
+			await step();
 		}
 		gz.push(new Uint8Array(0), true);
 		const writable = await (await dir.getFileHandle(name, { create: true })).createWritable();

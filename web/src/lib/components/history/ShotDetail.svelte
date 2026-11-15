@@ -23,8 +23,13 @@
 	 * and persisted to the `lib/history` store. Save-as-profile is a stub
 	 * (`// TODO`).
 	 */
-	import type { ManualBrewPatch, StoredShot } from '#lib/history/index.js';
+	import type { AnyShot, ManualBrewPatch, StoredShot } from '#lib/history/index.js';
 	import {
+		brewSampleCountOf,
+		getHistoryStore,
+		hasSamples,
+		isShotRow,
+		sampleCountOf,
 		ratioLabel,
 		shotFilename,
 		exportStoredShotAsV2Json,
@@ -42,6 +47,7 @@
 		toLocalInput,
 		methodOf,
 	} from '#lib/history/index.js';
+	import { LatestShotLoader } from '#lib/history/shot-loader.js';
 	import { methodLabel } from '#lib/brew/methods.js';
 	import MethodMark from '#lib/components/brewlog/MethodMark.svelte';
 	import BrewSessionChart from './BrewSessionChart.svelte';
@@ -107,10 +113,17 @@
 		onLogAgain = null,
 		onManualBrewEdit = null,
 		onPinnedChange = null,
-		phoneMenuOpen = $bindable(false)
+		phoneMenuOpen = $bindable(false),
+		loadShot = (id: string) => getHistoryStore().loadShot(id)
 	}: {
-		/** The selected stored shot. See {@link shot} for why it isn't read directly. */
-		shot: StoredShot | null;
+		/**
+		 * The selected history row (a whole shot also works). See {@link shot}
+		 * for why it isn't read directly. A row carries no samples (#310
+		 * P4w): the detail loads the whole shot to draw it.
+		 */
+		shot: AnyShot | null;
+		/** Load the whole shot; the history's `loadShot` by default. */
+		loadShot?: (id: string) => Promise<StoredShot | undefined>;
 		/** Persist edited tasting notes. */
 		onNotesChange: (id: string, notes: string) => void;
 		/** Persist the edited forward-looking "next time" plan. */
@@ -207,12 +220,51 @@
 	 * rotation. So every edit below reports this id, and {@link shot} stays on
 	 * this shot's last known record rather than following the prop to another.
 	 */
-	const shotId = untrack(() => (shotProp as StoredShot).id);
-	let lastShot = untrack(() => shotProp as StoredShot);
+	const shotId = untrack(() => (shotProp as AnyShot).id);
+	let lastShot = untrack(() => shotProp as AnyShot);
 	const shot = $derived.by(() => {
 		if (shotProp?.id === shotId) lastShot = shotProp;
 		return lastShot;
 	});
+
+	// ── The whole shot (#310 P4w) ────────────────────────────────────────
+	/**
+	 * The row has no samples, profile or brew series: the detail loads them,
+	 * and again when the row's summary changes (a backfill gave it a curve).
+	 * Only the latest load's answer lands, so a slow read never puts another
+	 * shot's curve here. Until it lands the chart shows that it's loading;
+	 * nothing reads the row as a shot with no telemetry.
+	 */
+	const loader = new LatestShotLoader((id) => loadShot(id));
+	let loadedWhole = $state.raw<StoredShot | null>(null);
+	let loadFailed = $state(false);
+	$effect(() => {
+		const row = shot;
+		if (!isShotRow(row)) return;
+		void row.summary;
+		loadFailed = false;
+		void loader.request(row.id).then((r) => {
+			if (r.kind === 'stale') return;
+			if (r.kind === 'failed') loadFailed = true;
+			else loadedWhole = r.shot ?? null;
+		});
+		return () => loader.cancel();
+	});
+	/** The shot whole: the row's fields as they are now, with the loaded heavy parts. */
+	const full = $derived.by<StoredShot | null>(() => {
+		if (!isShotRow(shot)) return shot;
+		const w = loadedWhole;
+		if (!w || w.id !== shot.id) return null;
+		const { summary: _s, ...fields } = shot;
+		return {
+			...fields,
+			profile: w.profile ?? null,
+			record: { duration: shot.record.duration, samples: w.record.samples },
+			...(w.brewSeries ? { brewSeries: w.brewSeries } : {})
+		};
+	});
+	/** The curve is on its way, or couldn't be read. */
+	const curveWaiting = $derived(full === null);
 
 	const pinned = $derived(shot.pinned === true);
 	const pinItem = $derived<OverflowItem[]>(
@@ -316,8 +368,8 @@
 
 	/** Derived peaks — `peakWeight` / `finalWeight` / `peakPressure` / `peakTemp`. */
 	const peaks = $derived(peaksOf(shot));
-	/** Flat chart-friendly samples — derived from `shot.record.samples`. */
-	const flatSeries = $derived(flatSamplesOf(shot));
+	/** Flat chart-friendly samples, from the whole shot once loaded. */
+	const flatSeries = $derived(full ? flatSamplesOf(full) : []);
 	/** The phone legend's labels, Android's `PhoneShotDetail` copy. */
 	const PHONE_LEGEND: Readonly<Record<ChartChannel, string>> = {
 		pressure: 'Press',
@@ -344,9 +396,12 @@
 	let quality = $state.raw<ShotQualityReport | null>(null);
 	$effect(() => {
 		const id = shot.id;
+		const whole = full;
 		quality = null;
+		// Over the whole shot only: a row has no samples to analyse.
+		if (!whole) return;
 		void loadCore()
-			.then((core) => core.analyzeStoredShotQuality(shot))
+			.then((core) => core.analyzeStoredShotQuality(whole))
 			.then((report) => {
 				// Guard against a stale resolve landing after the shot changed.
 				if (shot.id === id) quality = report;
@@ -413,7 +468,8 @@
 	 * chosen units — or null with no pour in the samples, so nothing shows.
 	 */
 	const pourAverageLine = $derived.by(() => {
-		const a = pourAveragesOf(shot);
+		if (!full) return null;
+		const a = pourAveragesOf(full);
 		if (a === null) return null;
 		const p = convertPressure(a.pressure, settings.current.pressureUnit);
 		const parts = [`${p.value} ${p.unit}`, `${a.flow.toFixed(1)} ml/s`];
@@ -577,9 +633,12 @@
 	 * telemetry, user-readable. The default action on the Download
 	 * split-button.
 	 */
-	function downloadCommunity(): void {
+	async function downloadCommunity(): Promise<void> {
 		try {
-			const json = exportStoredShotAsV2Json(shot);
+			// The whole shot, so the file never goes out without its curve.
+			const whole = full ?? (await loadShot(shotId));
+			if (!whole) throw new Error('This shot could not be read.');
+			const json = exportStoredShotAsV2Json(whole);
 			const blob = new Blob([json], { type: 'application/json' });
 			downloadBlob(shotFilename(shot), blob);
 		} catch (err) {
@@ -1133,7 +1192,11 @@
 				<CaretDownIcon aria-hidden="true" />
 			</button>
 
-			{#if shot.record.samples.length > 0}
+			{#if hasSamples(shot) && curveWaiting}
+				<div class="pshot-chart pshot-chart-empty" aria-busy={!loadFailed} data-testid="curve-loading">
+					{loadFailed ? 'This shot’s curve couldn’t be read.' : 'Loading the curve…'}
+				</div>
+			{:else if full && full.record.samples.length > 0}
 				<div class="pshot-chart">
 					<div class="pshot-legend">
 						{#each chartChannels as channel (channel)}
@@ -1154,13 +1217,17 @@
 						{/if}
 					</div>
 				</div>
-			{:else if shot.brewSeries && shot.brewSeries.samples.length > 0}
+			{:else if brewSampleCountOf(shot) > 0 && curveWaiting}
+				<div class="pshot-chart pshot-chart-empty" aria-busy={!loadFailed} data-testid="curve-loading">
+					{loadFailed ? 'This brew’s curve couldn’t be read.' : 'Loading the curve…'}
+				</div>
+			{:else if full?.brewSeries && full.brewSeries.samples.length > 0}
 				<div class="pshot-chart">
 					<div class="pshot-legend">
 						{@render chartLegendDot('Weight', 'var(--tel-weight)')}
 						{@render chartLegendDot('Pour rate', 'var(--tel-flow)')}
 					</div>
-					<BrewSessionChart series={shot.brewSeries} height={190} legend={false} />
+					<BrewSessionChart series={full.brewSeries} height={190} legend={false} />
 				</div>
 			{:else if !isBrew}
 				<div class="pshot-chart pshot-chart-empty">No telemetry recorded for this shot.</div>
@@ -1189,7 +1256,7 @@
 				</div>
 				<!-- Figures the wide strip shows and Android's four tiles don't. -->
 				<p class="pshot-more">
-					Peak weight {peakWeightM.value} {peakWeightM.unit} · Ratio {ratioLabel(shot)} · {flatSeries.length} samples
+					Peak weight {peakWeightM.value} {peakWeightM.unit} · Ratio {ratioLabel(shot)} · {sampleCountOf(shot) ?? '—'} samples
 				</p>
 				{#if pourAverageLine}
 					<p class="pshot-more" data-testid="pour-averages">Pour average {pourAverageLine}</p>
@@ -1461,19 +1528,24 @@
 	</div>
 
 	<!-- Chart -->
-	{#if shot.record.samples.length === 0}
+	{#if (hasSamples(shot) || brewSampleCountOf(shot) > 0) && curveWaiting}
+		<!-- The row has no samples (#310 P4w): the curve is loading. -->
+		<div class="hi-chart hi-chart-loading" aria-busy={!loadFailed} data-testid="curve-loading">
+			{loadFailed ? 'This shot’s curve couldn’t be read.' : 'Loading the curve…'}
+		</div>
+	{:else if !full || full.record.samples.length === 0}
 		<!-- Brew rows: no DE1 telemetry. A guided session draws its
 		     weight curve with stage bands; a manual log shows no chart
 		     region at all — the pane simply tightens up (issue #10). -->
-		{#if shot.brewSeries && shot.brewSeries.samples.length > 0}
+		{#if full?.brewSeries && full.brewSeries.samples.length > 0}
 			<div class="hi-chart hi-chart-brew">
-				<BrewSessionChart series={shot.brewSeries} height={300} legend={false} />
+				<BrewSessionChart series={full.brewSeries} height={300} legend={false} />
 				<div class="hi-chart-legend">
 					<span class="hi-leg-group">
 						<ScalesIcon class="hi-leg-icon" aria-hidden="true" />
 						<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight)"></i>Weight</span>
 						<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-flow)"></i>Pour rate</span>
-						{#if shot.brewSeries.stageMarks.some((m) => m.targetWaterG != null)}
+						{#if full.brewSeries.stageMarks.some((m) => m.targetWaterG != null)}
 							<!-- The recipe's snapshotted targets: dashed "planned"
 							     under the solid "poured" weight curve. -->
 							<span class="hi-leg-item"><i class="hi-leg-dash" aria-hidden="true"></i>Planned</span>
@@ -1579,7 +1651,7 @@
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Samples</div>
-			<div class="hi-metric-v">{flatSeries.length}</div>
+			<div class="hi-metric-v">{sampleCountOf(shot) ?? '—'}</div>
 		</div>
 	</div>
 	{#if pourAverageLine}

@@ -17,10 +17,25 @@
  * before, with its 300-row cap.
  *
  * **The view.** Every row stays in memory, but {@link all} is the newest 300
- * live ones, as before. A row past them is hidden, not gone: it's light (no
- * samples, profile or brew series in memory, see `light-rows.ts`), and
- * {@link rawAll}, {@link get} and backups still see it, so a pull doesn't add
- * a second copy of it and a backup doesn't leave it out.
+ * live ones, as before. A row past them is hidden, not gone: {@link rawAll},
+ * {@link get} and backups still see it, so a pull doesn't add a second copy
+ * of it and a backup doesn't leave it out.
+ *
+ * **Rows, not shots (P4w, SPEC §4).** What the store hands out is a
+ * {@link ShotRow}: the fields and a summary (counts, peaks, the row's spark),
+ * with no samples, profile or brew series on the type at all, so nothing can
+ * read a row as a shot without telemetry. {@link loadShot} gives a whole shot
+ * to whatever draws, sends or writes it, and keeps the last 16. In memory a
+ * row holds its heavy parts only until they are written (`light-rows.ts`);
+ * nothing loads them for the list. A row handed back (a restore's plan, rows
+ * from another tab) is merged onto the held one, so a heavy part it lacks is
+ * never lost; on the legacy backend, which holds every shot whole, that is
+ * its merge on write.
+ *
+ * **The curve archive (#420 S1).** Each curve is also written once to its own
+ * file in the private file system (`curve-archive.ts`) when it first lands
+ * in the store, so a lost store gives curves back: every recovery fills the
+ * rows the recovered store lacks a curve for from it.
  *
  * **Not loaded is not empty.** The rows load asynchronously: `loaded` starts
  * false, and History shows a skeleton until it's true. Code that would act on
@@ -77,13 +92,17 @@ import {
 import {
 	isBrewLog,
 	isManualLog,
+	isShotRow,
 	refusedNoSamples,
+	sampleCountOf,
 	shotId,
 	snapshotFromBean,
 	toCoreShotMachine,
+	type AnyShot,
 	type ShotBean,
 	type ShotMachine,
 	type ShotMetadata,
+	type ShotRow,
 	type StoredShot
 } from './model';
 import type { Bean, Roaster } from '#lib/bean/index.js';
@@ -93,6 +112,8 @@ import {
 	HistoryDb,
 	HistoryDbLost,
 	META_MIGRATION,
+	detailsOf,
+	keepHeavy,
 	lightOf,
 	shotOfRow,
 	withDetails,
@@ -112,7 +133,7 @@ import {
 	type LegacySource,
 	type MigrationDeps
 } from './migrate';
-import { clearLight, lightSummary, markCurveless, markLight, markLoaded, sampleCountOf } from './light-rows';
+import { clearLight, heldSampleCount, lightSummary, markLight, markLoaded } from './light-rows';
 import {
 	STORE_MARKER_KEY,
 	markerSaysDone,
@@ -134,6 +155,7 @@ import {
 	type SnapshotRow
 } from './rows-snapshot';
 import { summarize } from './summary';
+import { CurveArchive, defaultArchiveRoot, holdsCurve, type ArchiveRoot } from './curve-archive';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
 
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
@@ -259,6 +281,10 @@ export interface HistoryStoreOptions {
 	locks?: LockManagerLike | null;
 	channel?: (() => ChannelLike | null) | null;
 	snapshotRoot?: () => Promise<FileSystemDirectoryHandle | undefined>;
+	/** Where the curve archive lives (the private file system by default); null keeps none. */
+	archiveRoot?: ArchiveRoot | null;
+	/** How long after a load the archive's catch-up starts. */
+	archiveDelayMs?: number;
 	now?: () => number;
 	readyTimeoutMs?: number;
 	/** Listen for the tab coming back into view. On by default. */
@@ -317,6 +343,113 @@ function storeHeldMore(shot: StoredShot, d: DetailsRecord): boolean {
 	);
 }
 
+/** The archive's tombstones: ids a delete recorded whose file is still to go. */
+const ARCHIVE_TOMBSTONE_PREFIX = 'crema.history.archiveTombstone:';
+
+/**
+ * The archive's tombstones, one `localStorage` key each, so two tabs never
+ * write one list over the other's (#420 FC3-N3).
+ */
+function readArchiveTombstones(): string[] {
+	const out: string[] = [];
+	try {
+		for (let i = 0; i < localStorage.length; i++) {
+			const k = localStorage.key(i);
+			if (k?.startsWith(ARCHIVE_TOMBSTONE_PREFIX)) out.push(k.slice(ARCHIVE_TOMBSTONE_PREFIX.length));
+		}
+	} catch {
+		// None readable: kept in memory for this load only.
+	}
+	return out;
+}
+
+function setArchiveTombstone(id: string, on: boolean): void {
+	try {
+		if (on) localStorage.setItem(ARCHIVE_TOMBSTONE_PREFIX + id, '1');
+		else localStorage.removeItem(ARCHIVE_TOMBSTONE_PREFIX + id);
+	} catch {
+		// Kept in memory for this load; a file left behind costs space, never a curve.
+	}
+}
+
+/** Where the day's whole check of the archive got to, so the next load goes on from there (#420 FC3-S1). */
+const ARCHIVE_CHECK_KEY = 'crema.history.archiveCheck';
+interface ArchiveCheck {
+	/** The day the pass began. */
+	on: string;
+	/** The last id checked, in id order; '' before the first. */
+	after: string;
+}
+
+function readArchiveCheck(): ArchiveCheck | null {
+	try {
+		const v = JSON.parse(localStorage.getItem(ARCHIVE_CHECK_KEY) ?? 'null') as ArchiveCheck | null;
+		return v && typeof v.on === 'string' && typeof v.after === 'string' ? v : null;
+	} catch {
+		return null;
+	}
+}
+
+function writeArchiveCheck(v: ArchiveCheck | null): void {
+	try {
+		if (v) localStorage.setItem(ARCHIVE_CHECK_KEY, JSON.stringify(v));
+		else localStorage.removeItem(ARCHIVE_CHECK_KEY);
+	} catch {
+		// Begun again at the next load.
+	}
+}
+
+/** The day the archive was last checked whole against the store. */
+const ARCHIVE_CHECKED_KEY = 'crema.history.archiveCheckedOn';
+
+/** Most whole shots {@link HistoryStore.loadShot} keeps, the last loaded (SPEC §4). */
+export const LOADED_SHOTS_KEPT = 16;
+
+/** Summaries worked out from memory, by the record and brew series they describe. */
+const memorySummaries = new WeakMap<object, { brew: unknown; summary: ShotSummary }>();
+
+/** `shot`'s summary from what memory holds of it: one core call per curve, kept. */
+function summaryFromMemory(shot: StoredShot): ShotSummary {
+	const got = memorySummaries.get(shot.record);
+	if (got && got.brew === (shot.brewSeries ?? null)) return got.summary;
+	const summary = summarize(shot);
+	memorySummaries.set(shot.record, { brew: shot.brewSeries ?? null, summary });
+	return summary;
+}
+
+/**
+ * `shot` as a {@link ShotRow}: its fields and `summary`, without the heavy
+ * parts, which aren't on the type at all.
+ */
+function asRow(shot: StoredShot, summary: ShotSummary): ShotRow {
+	const { brewSeries: _b, profile: _p, record, ...rest } = shot;
+	return { ...rest, record: { duration: record.duration }, summary };
+}
+
+/**
+ * A row or whole shot handed back to the store, merged onto the one it holds
+ * (SPEC §6, "merges on write"): its fields win; a heavy part it lacks is the
+ * held one's, so an edit made through a {@link ShotRow} never drops a
+ * profile, a brew series or samples. A heavy part it carries wins, as a
+ * details write's does (`keepHeavy`).
+ */
+function mergeOnto(incoming: AnyShot, held: StoredShot | undefined): StoredShot {
+	const { summary: _s, ...fields } = incoming as AnyShot & { summary?: unknown };
+	const whole = !isShotRow(incoming) ? (incoming as StoredShot) : null;
+	const samples =
+		whole && whole.record.samples.length > 0 ? whole.record.samples : (held?.record.samples ?? []);
+	const profile = whole?.profile ?? held?.profile ?? null;
+	const brewSeries =
+		whole?.brewSeries && whole.brewSeries.samples.length > 0 ? whole.brewSeries : (held?.brewSeries ?? whole?.brewSeries ?? null);
+	const { brewSeries: _b, ...rest } = fields as StoredShot;
+	return {
+		...rest,
+		profile,
+		record: { duration: incoming.record.duration, samples },
+		...(brewSeries ? { brewSeries } : {})
+	};
+}
+
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
 export class HistoryStore {
 	/** Every row, newest first: those in view with their heavy parts, the rest light. */
@@ -372,16 +505,62 @@ export class HistoryStore {
 	/** Ids another tab wrote, waiting for the load or a restore to end. */
 	private heard = new Set<string>();
 	private readonly tabId = Math.random().toString(36).slice(2);
-	/** Detail loads under way, for {@link seriesReady}. */
-	private hydrations = new Set<Promise<void>>();
+	/** Ids whose next details write only fills: a heavy part the store holds wins (a pulled curve or recipe). */
+	private fills = new Set<string>();
+	/**
+	 * Ids whose heavy parts are being written now: memory's copy is the one
+	 * going out, so nothing may swap it for the store's until it lands (#420 N1).
+	 */
+	private writingDetails = new Set<string>();
 	/** Ids removed from memory whose delete hasn't landed: another tab's news mustn't bring them back. */
 	private removing = new Set<string>();
 	private snapshotting = false;
 	/** The day this tab last tried the snapshot. */
 	private snapshotTried: string | null = null;
+
+	// ── The curve archive (#420 S1) ──
+	private readonly archive: CurveArchive | null;
+	/** Curves landed in the store and not archived yet: their details when in hand, else read. */
+	private archiveOwed = new Map<string, DetailsRecord | null>();
+	private archiveRun: Promise<void> | null = null;
+	/** Ids deleted this session: an archive write racing the delete removes its file again. */
+	private archiveDeleted = new Set<string>();
+	private archiveCatchUp: ReturnType<typeof setTimeout> | null = null;
+	/** Archive files that didn't read back whole, by id: skipped, never used. */
+	private archiveCorrupt = new Map<string, string>();
+	/**
+	 * The archive's tombstones: shots a delete recorded, whose file is still
+	 * to go. Kept in `localStorage`, so a remove that failed, or raced a
+	 * write, is tried again in a later load. Only a recorded delete removes a
+	 * file: nothing infers one from a shot being absent (#420 FC2-S1).
+	 */
+	private archiveRemoveOwed = new Set<string>(readArchiveTombstones());
+	/** The archive as last counted, for Settings and the lost banner. */
+	private archiveCount = $state<{ files: number; bytes: number } | null | undefined>(undefined);
+	/** An archive write failed and waits for another try (storage full, most likely). */
+	private archiveStuck = $state(false);
+	/** Moves when a file is found corrupt, so the counts that read them re-read. */
+	private corruptTick = $state(0);
+	/** What the last recovery did with the archive: curves restored, and not (#420 FC-N5). */
+	private lastRecoveryState = $state<{ restored: number; notRestored: number } | null>(null);
+	/** This load's catch-up has run: every curve the store held then has been tried. */
+	private archiveCaughtUpFlag = $state(false);
 	private hiddenNoticeShown = false;
 	private viewMemo: { rows: StoredShot[]; view: StoredShot[]; live: StoredShot[] } | null = null;
 	private byIdMemo: { rows: StoredShot[]; map: Map<string, StoredShot> } | null = null;
+	/** Moves when a row's summary changes without its object changing, so readers re-read. */
+	private summaryTick = $state(0);
+	/** Each held row's {@link ShotRow}, while its summary stays the same. */
+	private rowCache = new WeakMap<StoredShot, ShotRow>();
+	private rowsMemo: {
+		rows: StoredShot[];
+		tick: number;
+		raw: ShotRow[];
+		all: ShotRow[];
+		byId: Map<string, ShotRow>;
+	} | null = null;
+	/** The last {@link LOADED_SHOTS_KEPT} light rows' heavy parts, as stored, with the summary they match. */
+	private loadedShots = new Map<string, { summary: ShotSummary; details: DetailsRecord }>();
 
 	// ── legacy ──
 	/** The running series load; null once it has ended, or with no IndexedDB. */
@@ -403,6 +582,10 @@ export class HistoryStore {
 
 	constructor(options: HistoryStoreOptions = {}) {
 		this.opts = { ...testDefaults, ...options };
+		this.archive =
+			this.opts.backend === 'legacy' || this.opts.archiveRoot === null
+				? null
+				: new CurveArchive(this.opts.archiveRoot ?? defaultArchiveRoot);
 		this.ready = new Promise<void>((resolve) => {
 			this.resolveReady = resolve;
 		});
@@ -563,11 +746,35 @@ export class HistoryStore {
 		if (this.healthState === 'lost') return;
 		await this.readOldCopyInfo();
 		if ((this.healthState as HistoryHealth) === 'lost') return;
+		// The heavy parts this tab loaded or wrote last are, with the store
+		// gone, their only copy here: memory holds them again, so a recovery
+		// writes them (P4w keeps no others in memory; a daily copy has none).
+		this.rescueLoaded();
 		// What this tab holds is in no store now: closing the tab would lose it.
 		const held = this.shots.map((s) => s.id);
 		this.block('lost', errorText(e));
 		for (const id of held) this.orphaned.add(id);
 		this.markUnsaved(held);
+	}
+
+	/** Light rows whose heavy parts {@link loadedShots} still has: whole in memory again. */
+	private rescueLoaded(): void {
+		if (this.loadedShots.size === 0) return;
+		let changed = false;
+		const next = this.shots.map((s) => {
+			const kept = this.loadedShots.get(s.id);
+			if (!kept || !lightSummary(s.id)) return s;
+			// Memory's own parts win: a pulled curve or recipe not written yet
+			// stays (#420 S2). A kept copy older than the row's summary (another
+			// tab replaced the curve since) is still this shot's curve, and with
+			// the store gone it is the only one here.
+			const whole = withDetails(s, keepHeavy(detailsOf(s), kept.details));
+			this.unlight(s.id);
+			this.rebase(s, whole);
+			changed = true;
+			return whole;
+		});
+		if (changed) this.shots = next;
 	}
 
 	/**
@@ -578,6 +785,7 @@ export class HistoryStore {
 	private forgetLostStore(): Set<string> {
 		const mine = new Set(this.orphaned);
 		this.orphaned.clear();
+		this.loadedShots.clear();
 		this.stored.clear();
 		this.summaries.clear();
 		this.written.clear();
@@ -819,9 +1027,9 @@ export class HistoryStore {
 		const loadedRows: StoredShot[] = [];
 		for (const rec of records) {
 			const { shot, summary } = shotOfRow(rec);
-			this.summaries.set(shot.id, summary);
+			this.setSummary(shot.id, summary);
 			this.stored.add(shot.id);
-			markLight(shot.id, summary);
+			this.light(shot.id, summary);
 			loadedRows.push(shot);
 		}
 		this.lastSeq = await db.writeSeq().catch(() => 0);
@@ -841,9 +1049,23 @@ export class HistoryStore {
 		this.bootJournal.clear();
 		for (const s of made) {
 			this.written.delete(s.id);
-			this.dirtyDetails.add(s.id);
-			// Whole here: memory's heavy parts are the ones written.
-			if (mine.has(s.id) && lightSummary(s.id) && (s.record.samples.length > 0 || s.profile != null)) markLoaded(s.id);
+			const old = lightSummary(s.id);
+			if (hasHeavyParts(s) || !old) {
+				// Whole here: memory's heavy parts are the ones written.
+				this.dirtyDetails.add(s.id);
+				if (old && hasHeavyParts(s)) this.unlight(s.id);
+				continue;
+			}
+			// Light: a row this tab held when its store went, with no heavy part
+			// in memory. A details write would work its summary out from no curve
+			// and wipe its yield, peaks and chart (#420 M1), so it goes as a row
+			// only: with the recovered store's summary when that store holds it,
+			// else with the one memory holds, its counts 0 (no curve is stored),
+			// so a backfill or a merge restore can still fill it.
+			if (this.stored.has(s.id)) continue;
+			const curveless = { ...old, sampleCount: 0, brewSampleCount: 0 };
+			this.setSummary(s.id, curveless);
+			this.light(s.id, curveless);
 		}
 		const rows = loadedRows.filter((s) => !madeIds.has(s.id));
 		for (const s of rows) this.written.set(s.id, s);
@@ -869,7 +1091,7 @@ export class HistoryStore {
 			const f = fills.get(s.id);
 			if (!f) return s;
 			this.dirtyDetails.add(s.id);
-			markLoaded(s.id);
+			this.unlight(s.id);
 			return f;
 		});
 		this.shots = [...merged].sort(byDateThenId);
@@ -879,6 +1101,7 @@ export class HistoryStore {
 		}
 		this.mode = 'idb';
 		this.markLoadedNow('ok');
+		this.scheduleArchiveCatchUp();
 		this.settleView();
 		this.scheduleFlush();
 		if (late?.changed) {
@@ -930,97 +1153,127 @@ export class HistoryStore {
 		return map;
 	}
 
+	// ── Rows as handed out (P4w) ───────────────────────────────────────────
+
+	/** `id` is light now, described by `summary`. */
+	private light(id: string, summary: ShotSummary): void {
+		if (lightSummary(id) === summary) return;
+		markLight(id, summary);
+		this.summaryTick++;
+	}
+
+	/** `id`'s heavy parts are in memory again, or it has gone. */
+	private unlight(id: string): void {
+		if (!lightSummary(id)) return;
+		markLoaded(id);
+		this.summaryTick++;
+	}
+
+	/** `id`'s summary as stored. */
+	private setSummary(id: string, summary: ShotSummary): void {
+		if (this.summaries.get(id) === summary) return;
+		this.summaries.set(id, summary);
+		this.summaryTick++;
+	}
+
+	/**
+	 * What describes the held row `s`: a light row's stored summary; for a row
+	 * whose heavy parts are in memory (new, not written yet, or the legacy
+	 * backend's), one worked out from them; for a stored row memory holds
+	 * nothing heavy for, its stored summary.
+	 */
+	private summaryOf(s: StoredShot): ShotSummary {
+		const light = lightSummary(s.id);
+		if (light) return light;
+		if (this.mode !== 'legacy' && !hasHeavyParts(s)) {
+			const stored = this.summaries.get(s.id);
+			if (stored) return stored;
+		}
+		return summaryFromMemory(s);
+	}
+
+	/** The held row `s` as a {@link ShotRow}. */
+	private rowOf(s: StoredShot): ShotRow {
+		const summary = this.summaryOf(s);
+		const cached = this.rowCache.get(s);
+		if (cached && cached.summary === summary) return cached;
+		const row = asRow(s, summary);
+		this.rowCache.set(s, row);
+		return row;
+	}
+
+	/** Every row, and the view, as {@link ShotRow}s: rebuilt when a row or a summary changes. */
+	private rows(): NonNullable<HistoryStore['rowsMemo']> {
+		const rows = this.shots;
+		const tick = this.summaryTick;
+		if (this.rowsMemo?.rows === rows && this.rowsMemo.tick === tick) return this.rowsMemo;
+		const raw = rows.map((s) => this.rowOf(s));
+		const byId = new Map<string, ShotRow>();
+		for (const r of raw) if (!byId.has(r.id)) byId.set(r.id, r);
+		const all = this.viewOf().live.map((s) => this.rowOf(s));
+		this.rowsMemo = { rows, tick, raw, all, byId };
+		return this.rowsMemo;
+	}
+
+	/** A row or whole shot handed back, as the store holds it ({@link mergeOnto}); `row` unchanged when it is one of ours. */
+	private intoHeld(incoming: AnyShot): StoredShot {
+		const held = this.byId().get(incoming.id);
+		if (held && isShotRow(incoming) && this.rowCache.get(held) === incoming) return held;
+		return mergeOnto(incoming, held);
+	}
+
+	/** Keep the stored heavy parts of `id` for the next {@link loadShot}. */
+	private keepLoaded(id: string, summary: ShotSummary, details: DetailsRecord): void {
+		this.loadedShots.delete(id);
+		this.loadedShots.set(id, { summary, details });
+		while (this.loadedShots.size > LOADED_SHOTS_KEPT) {
+			const oldest = this.loadedShots.keys().next().value;
+			if (oldest === undefined) break;
+			this.loadedShots.delete(oldest);
+		}
+	}
+
 	/** Move the written base to `next` when it pointed at `prev`: no write needed. */
 	private rebase(prev: StoredShot, next: StoredShot): void {
 		if (this.written.get(prev.id) === prev) this.written.set(prev.id, next);
 	}
 
 	/**
-	 * On `crema-history`: rows that left the view go light, and rows that came
-	 * into it load their heavy parts. A row whose heavy parts aren't stored
-	 * yet keeps them.
+	 * On `crema-history`: every row whose heavy parts are written goes light
+	 * (SPEC §4, P4w). Nothing loads them back for the list: the rows draw from
+	 * their summaries, and whatever needs a curve asks {@link loadShot}. A row
+	 * whose heavy parts aren't stored yet keeps them.
 	 */
 	private settleView(): void {
 		if (this.mode !== 'idb') return;
-		const inView = new Set(this.viewOf().view.map((s) => s.id));
 		const unsaved = new Set(this.unsavedIds);
 		let changed = false;
 		const next = this.shots.map((s) => {
-			if (inView.has(s.id) || lightSummary(s.id) || this.dirtyDetails.has(s.id) || unsaved.has(s.id)) return s;
+			if (lightSummary(s.id) || this.dirtyDetails.has(s.id) || this.writingDetails.has(s.id) || unsaved.has(s.id)) return s;
 			const summary = this.summaries.get(s.id);
 			if (!summary || !this.stored.has(s.id)) return s;
 			const light = lightOf(s);
-			markLight(s.id, summary);
+			this.light(s.id, summary);
 			this.rebase(s, light);
 			changed = true;
 			return light;
 		});
 		if (changed) this.shots = next;
-		const want = [...inView].filter((id) => lightSummary(id) !== undefined);
-		if (want.length > 0) this.hydrate(want);
-	}
-
-	/** Load the heavy parts of the light rows `ids`, for the view. */
-	private hydrate(ids: readonly string[]): void {
-		const db = this.db;
-		if (!db) return;
-		const run = (async () => {
-			let found: Map<string, DetailsRecord>;
-			try {
-				found = await db.detailsOf(ids).catch(() => db.detailsOf(ids));
-			} catch (e) {
-				if (e instanceof HistoryDbLost) {
-					await this.lostNow(e);
-					return;
-				}
-				// The rows stay light, so nothing reads them as curveless.
-				this.seriesUnreadable = true;
-				return;
-			}
-			// After the await: the rows as they are now.
-			const want = new Set(ids);
-			let changed = false;
-			const next = this.shots.map((s) => {
-				if (!want.has(s.id)) return s;
-				const summary = lightSummary(s.id);
-				if (!summary) return s;
-				const d = found.get(s.id);
-				// A summary with no samples may still carry the yield and peaks the
-				// row had (a daily-copy recovery): they stay readable.
-				const noCurve = (summary.sampleCount ?? 0) === 0;
-				if (!d) {
-					// No heavy parts stored: nothing to load, unless the summary says
-					// there are some, which keeps the row light.
-					if (noCurve && summary.brewSampleCount === 0) {
-						markLoaded(s.id);
-						markCurveless(s.id, summary);
-					}
-					return s;
-				}
-				const full = withDetails(s, d);
-				markLoaded(s.id);
-				if (noCurve && full.record.samples.length === 0) markCurveless(s.id, summary);
-				this.rebase(s, full);
-				changed = true;
-				return full;
-			});
-			if (changed) this.shots = next;
-		})();
-		this.hydrations.add(run);
-		void run.finally(() => this.hydrations.delete(run));
 	}
 
 	// ── Readers ────────────────────────────────────────────────────────────
 
 	/**
-	 * Wait for the rows and the curves of the rows in view. Everything that
-	 * sends or saves a whole shot awaits this first. True when the load has
-	 * ended, either way ({@link seriesFailed} says which); false when the rows
-	 * didn't load, or the curves outlasted the wait.
+	 * Wait for the rows, and on the legacy backend for the curves it reads
+	 * after them from the old copy's series database. On `crema-history` this
+	 * is {@link whenReady}: no curve is loaded for the list (P4w), and
+	 * whatever sends or writes a whole shot asks {@link loadShot}. True once
+	 * loaded ({@link seriesFailed} says whether the legacy curves could be
+	 * read); false when the rows didn't load, or the curves outlasted the wait.
 	 */
 	async seriesReady(timeoutMs: number = SERIES_WAIT_MS): Promise<boolean> {
 		if (!(await this.readyWithin(Math.min(timeoutMs, this.opts.readyTimeoutMs ?? READY_TIMEOUT_MS)))) return false;
-		const loading = this.mode === 'idb' ? Promise.all([...this.hydrations]).then(() => {}) : this.seriesLoading;
+		const loading = this.mode === 'legacy' ? this.seriesLoading : null;
 		if (!loading) return true;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const stuck = new Promise<boolean>((resolve) => {
@@ -1032,86 +1285,127 @@ export class HistoryStore {
 	}
 
 	/**
-	 * The stored series were there to read and couldn't be, so rows that have
-	 * curves look like rows that don't. History works on from memory, but
-	 * anything written from it now is missing those curves.
+	 * The legacy backend's stored series were there to read and couldn't be,
+	 * so rows that have curves look like rows that don't. History works on
+	 * from memory, but anything written from it now is missing those curves.
 	 */
 	get seriesFailed(): boolean {
 		return this.seriesUnreadable;
 	}
 
 	/** Machine shots no upload can take: no telemetry, now the series have settled. */
-	get withoutTelemetry(): StoredShot[] {
+	get withoutTelemetry(): ShotRow[] {
 		if (!this.loadedFlag) return [];
 		if (this.mode === 'legacy' && !this.seriesSettled) return [];
-		return this.viewOf().live.filter(
-			(s) => !s.visualizerId && sampleCountOf(s) === 0 && refusedNoSamples(s)
-		);
+		return this.rows().all.filter((s) => !s.visualizerId && sampleCountOf(s) === 0 && refusedNoSamples(s));
 	}
 
 	/** The shots waiting to go to Visualizer. */
-	get visualizerBacklog(): StoredShot[] {
+	get visualizerBacklog(): ShotRow[] {
 		if (!this.loadedFlag) return [];
 		const none = new Set(this.withoutTelemetry.map((s) => s.id));
 		const config = readSyncConfig();
-		return this.viewOf().live.filter(
+		return this.rows().all.filter(
 			(s) => !s.visualizerId && !isBrewLog(s) && !none.has(s.id) && !excludedFromUpload(s, config)
 		);
 	}
 
 	/**
-	 * The user-visible history, newest first: the newest 300 live rows.
+	 * The user-visible history, newest first: the newest 300 live rows, as
+	 * {@link ShotRow}s, which carry their summary and no heavy parts.
 	 * Tombstones (`deletedAt` set) are filtered out — they only exist for the
 	 * sync layer to push a remote DELETE. Reactive.
 	 */
-	get all(): StoredShot[] {
+	get all(): ShotRow[] {
 		this.assertLoaded('all');
-		return this.viewOf().live;
+		return this.rows().all;
 	}
 
 	/**
-	 * Every stored shot: tombstones, and rows past the view, which are light.
-	 * The sync layer, imports and restore read this; the UI uses {@link all}.
+	 * Every stored row: tombstones, and rows past the view. The sync layer,
+	 * imports and restore read this; the UI uses {@link all}.
 	 */
-	get rawAll(): StoredShot[] {
+	get rawAll(): ShotRow[] {
 		this.assertLoaded('rawAll');
-		return this.shots;
+		return this.rows().raw;
 	}
 
-	/** Every live row, hidden ones too: what a backup holds. Light rows need {@link loadMany}. */
-	get allLive(): StoredShot[] {
+	/** Every live row, hidden ones too: what a backup holds. Whole shots come from {@link loadMany}. */
+	get allLive(): ShotRow[] {
 		this.assertLoaded('allLive');
-		return this.shots.filter((s) => s.deletedAt == null);
+		return this.rows().raw.filter((s) => s.deletedAt == null);
 	}
 
-	/** Look up one shot by id, hidden or not, or `undefined` if it is not in the history. */
-	get(id: string): StoredShot | undefined {
+	/** Look up one row by id, hidden or not, or `undefined` if it is not in the history. */
+	get(id: string): ShotRow | undefined {
 		this.assertLoaded('get');
-		return this.byId().get(id);
+		return this.rows().byId.get(id);
 	}
 
 	/**
 	 * `id` whole, with its samples, profile and brew series, for code that
-	 * sends or writes it; a row in view is already whole. Undefined when the
-	 * history has no such row.
+	 * draws, sends or writes it. Undefined when the history has no such row.
+	 * The last {@link LOADED_SHOTS_KEPT} are kept, so going back to a shot
+	 * reads nothing.
 	 */
 	async loadShot(id: string): Promise<StoredShot | undefined> {
-		await this.whenReady();
 		return (await this.loadMany([id]))[0];
 	}
 
-	/** {@link loadShot} for many, in order; ids not in the history are left out. */
-	async loadMany(ids: readonly string[]): Promise<StoredShot[]> {
+	/**
+	 * {@link loadShot} for many, in order; ids not in the history are left
+	 * out. A read that fails is tried once more, then throws: the caller
+	 * stops, and never goes on with an empty curve.
+	 */
+	async loadMany(ids: readonly string[], again = true): Promise<StoredShot[]> {
 		await this.whenReady();
-		const rows = ids.map((id) => this.byId().get(id)).filter((s): s is StoredShot => s !== undefined);
-		const light = rows.filter((s) => lightSummary(s.id) !== undefined).map((s) => s.id);
-		if (light.length === 0 || !this.db || this.mode !== 'idb') return rows;
-		const found = await this.db.detailsOf(light);
+		const held = this.byId();
+		// This call's heavy parts, by id: taken from what's kept now, so a long
+		// batch pushing entries out of {@link loadedShots} can't lose any.
+		const got = new Map<string, { summary: ShotSummary; details: DetailsRecord | undefined }>();
+		const want = new Map<string, ShotSummary>();
+		for (const id of ids) {
+			const summary = held.has(id) ? lightSummary(id) : undefined;
+			if (!summary || got.has(id)) continue;
+			const kept = this.loadedShots.get(id);
+			if (kept && kept.summary === summary) got.set(id, { summary, details: kept.details });
+			else want.set(id, summary);
+		}
+		const db = this.db;
+		if (want.size > 0 && db && this.mode === 'idb') {
+			const read = [...want.keys()];
+			let found: Map<string, DetailsRecord>;
+			try {
+				found = await db.detailsOf(read).catch(() => db.detailsOf(read));
+			} catch (e) {
+				if (e instanceof HistoryDbLost) await this.lostNow(e);
+				throw e;
+			}
+			for (const [id, summary] of want) got.set(id, { summary, details: found.get(id) });
+		}
 		// After the await: the rows as they are now, with what the store holds.
-		return ids
-			.map((id) => this.byId().get(id))
-			.filter((s): s is StoredShot => s !== undefined)
-			.map((s) => (lightSummary(s.id) ? withDetails(s, found.get(s.id)) : s));
+		const now = this.byId();
+		const out: StoredShot[] = [];
+		let stale = false;
+		for (const id of ids) {
+			const s = now.get(id);
+			if (!s) continue;
+			const summary = lightSummary(id);
+			if (!summary) {
+				out.push(s);
+				continue;
+			}
+			const g = got.get(id);
+			// The row changed while it was read (a backfill landed): read again,
+			// once, rather than hand out the curve it had (#420 N2).
+			if (g && g.summary !== summary) stale = true;
+			// Kept only while the row is still what was read for.
+			if (g?.details && g.summary === summary) this.keepLoaded(id, summary, g.details);
+			// A part memory holds that isn't written yet (a pull's) wins.
+			out.push(withDetails(s, hasHeavyParts(s) ? keepHeavy(detailsOf(s), g?.details) : g?.details));
+		}
+		if (stale && again) return this.loadMany(ids, false);
+		return out;
 	}
 
 	// ── Other tabs ─────────────────────────────────────────────────────────
@@ -1210,14 +1504,18 @@ export class HistoryStore {
 			}
 			seen.add(s.id);
 			const rec = found.get(s.id);
-			if (dirty.has(s.id) || this.dirtyDetails.has(s.id)) {
+			// A row whose heavy parts wait to be written, or are being written,
+			// keeps memory's copy: the store's would drop them (#420 N1).
+			if (dirty.has(s.id) || this.dirtyDetails.has(s.id) || this.writingDetails.has(s.id)) {
 				next.push(s);
 				continue;
 			}
 			if (!rec) {
 				if (this.stored.has(s.id)) {
-					// Deleted in another tab.
+					// Deleted in another tab, which removes its archived curve: one
+					// this tab is writing goes again once written (#420 FC-N1).
 					this.forget(s.id);
+					this.archiveDeleted.add(s.id);
 					changed = true;
 					continue;
 				}
@@ -1226,7 +1524,7 @@ export class HistoryStore {
 			}
 			const { shot, summary } = shotOfRow(rec);
 			const before = this.summaries.get(s.id);
-			this.summaries.set(s.id, summary);
+			this.setSummary(s.id, summary);
 			const sameHeavy =
 				before != null &&
 				(before.sampleCount ?? 0) === (summary.sampleCount ?? 0) &&
@@ -1238,7 +1536,7 @@ export class HistoryStore {
 				else delete row.brewSeries;
 			} else {
 				row = shot;
-				markLight(s.id, summary);
+				this.light(s.id, summary);
 			}
 			this.written.set(s.id, row);
 			next.push(row);
@@ -1247,9 +1545,9 @@ export class HistoryStore {
 		for (const [id, rec] of found) {
 			if (seen.has(id) || this.removing.has(id) || (scope && !scope.has(id))) continue;
 			const { shot, summary } = shotOfRow(rec);
-			this.summaries.set(id, summary);
+			this.setSummary(id, summary);
 			this.stored.add(id);
-			markLight(id, summary);
+			this.light(id, summary);
 			this.written.set(id, shot);
 			next.push(shot);
 			changed = true;
@@ -1260,11 +1558,13 @@ export class HistoryStore {
 	}
 
 	private forget(id: string): void {
+		this.loadedShots.delete(id);
+		this.fills.delete(id);
 		this.written.delete(id);
 		this.stored.delete(id);
 		this.summaries.delete(id);
 		this.dirtyDetails.delete(id);
-		markLoaded(id);
+		this.unlight(id);
 	}
 
 	private post(ids: readonly string[], seq: number): void {
@@ -1341,14 +1641,26 @@ export class HistoryStore {
 			const shot = byId.get(id);
 			if (!shot) continue;
 			const details = this.dirtyDetails.has(id) || !this.summaries.has(id);
-			writes.push({ shot, details, summary: this.summaries.get(id) });
+			writes.push({ shot, details, summary: this.summaries.get(id), ...(details && this.fills.has(id) ? { fill: true } : {}) });
 		}
-		for (const w of writes) if (w.details) this.dirtyDetails.delete(w.shot.id);
+		for (const w of writes) {
+			if (!w.details) continue;
+			this.dirtyDetails.delete(w.shot.id);
+			this.fills.delete(w.shot.id);
+			this.writingDetails.add(w.shot.id);
+		}
+		const writing = writes.filter((w) => w.details).map((w) => w.shot.id);
 		try {
 			const result = await this.db.putShots(writes, summarize);
+			for (const id of writing) this.writingDetails.delete(id);
 			this.afterWrite(writes, result.seq, result.written);
 		} catch (e) {
-			for (const w of writes) if (w.details) this.dirtyDetails.add(w.shot.id);
+			for (const id of writing) this.writingDetails.delete(id);
+			for (const w of writes) {
+				if (!w.details) continue;
+				this.dirtyDetails.add(w.shot.id);
+				if (w.fill) this.fills.add(w.shot.id);
+			}
 			if (e instanceof HistoryDbLost) {
 				await this.lostNow(e);
 				return;
@@ -1365,23 +1677,37 @@ export class HistoryStore {
 		this.lastSeq = Math.max(this.lastSeq, seq);
 		const now = this.byId();
 		const bring = new Map<string, DetailsRecord>();
+		const lighten = new Set<string>();
 		const savedCurves: string[] = [];
 		for (const w of writes) {
 			const id = w.shot.id;
 			this.stored.add(id);
 			const got = written.get(id);
 			if (got) {
-				this.summaries.set(id, got.summary);
+				this.setSummary(id, got.summary);
 				savedCurves.push(id);
-				if (lightSummary(id)) markLight(id, got.summary);
-				else if (storeHeldMore(w.shot, got.details)) bring.set(id, got.details);
+				// What the store now holds, for the detail that opens next.
+				this.keepLoaded(id, got.summary, got.details);
+				// A curve landed: it goes into the archive too, once.
+				this.oweArchive(id, got.details);
+				if (lightSummary(id)) {
+					// A light row given a part (a backfill): light again, as stored.
+					this.light(id, got.summary);
+					lighten.add(id);
+				} else if (storeHeldMore(w.shot, got.details)) bring.set(id, got.details);
 			}
 			if (now.get(id) === w.shot) this.written.set(id, w.shot);
 		}
 		if (savedCurves.length > 0) this.clearUnsaved(savedCurves);
-		if (bring.size > 0) {
-			// The store kept heavy parts memory didn't hold: memory shows them too.
+		if (bring.size > 0 || lighten.size > 0) {
+			// The store kept heavy parts memory didn't hold: memory shows them
+			// too, until the row goes light below.
 			this.shots = this.shots.map((s) => {
+				if (lighten.has(s.id) && !this.dirtyDetails.has(s.id) && hasHeavyParts(s)) {
+					const light = lightOf(s);
+					this.rebase(s, light);
+					return light;
+				}
 				const d = bring.get(s.id);
 				if (!d) return s;
 				const full = withDetails(s, d);
@@ -1396,6 +1722,8 @@ export class HistoryStore {
 		);
 		this.settleView();
 		if (this.markerOwed) this.writeMarker(this.markerOwed.at, this.markerOwed.rows);
+		// Curves an archive write couldn't take before go again with each save.
+		if (this.archiveOwed.size > 0) this.runArchive();
 		this.settleLateRecord();
 		this.maybeSnapshot();
 		if (this.dirtyRowIds().length > 0) this.scheduleFlush();
@@ -1440,7 +1768,7 @@ export class HistoryStore {
 			const now = this.byId();
 			for (const w of rowsOnly) {
 				this.stored.add(w.shot.id);
-				if (!this.summaries.has(w.shot.id) && w.summary) this.summaries.set(w.shot.id, w.summary);
+				if (!this.summaries.has(w.shot.id) && w.summary) this.setSummary(w.shot.id, w.summary);
 				if (now.get(w.shot.id) === w.shot) this.written.set(w.shot.id, w.shot);
 			}
 			this.lastSeq = Math.max(this.lastSeq, r.seq);
@@ -1456,7 +1784,7 @@ export class HistoryStore {
 			for (const w of writes) if (!this.stored.has(w.shot.id)) addPending(w.shot);
 		}
 		const lost = withHeavy
-			.filter((w) => sampleCountOf(w.shot) > 0 || (w.shot.brewSeries?.samples.length ?? 0) > 0 || w.shot.profile != null)
+			.filter((w) => (heldSampleCount(w.shot) ?? 0) > 0 || (w.shot.brewSeries?.samples.length ?? 0) > 0 || w.shot.profile != null)
 			.map((w) => w.shot.id);
 		const notStored = rowsStored ? [] : writes.filter((w) => !this.stored.has(w.shot.id)).map((w) => w.shot.id);
 		this.markUnsaved([...lost, ...notStored]);
@@ -1518,11 +1846,21 @@ export class HistoryStore {
 					// Nothing reached the store; a journalled row went with dropPending.
 					// After a move elsewhere the store still holds it.
 					result = this.mode === 'blocked' && !this.movedAway;
+					// The store is gone, so this delete is the only record of it: its
+					// tombstone keeps the archived curve from coming back with a
+					// recovery (#420 FC3-N1). Not when the store only won't open:
+					// it still holds the row.
+					if (this.healthState === 'lost' && this.archive) {
+						for (const id of ids) this.archiveDeleted.add(id);
+						this.tombstone(ids);
+					}
 					return;
 				}
 				const seq = await db.delete(ids);
 				this.lastSeq = Math.max(this.lastSeq, seq);
 				this.post(ids, seq);
+				// Only once the store's delete has landed: their archived curves go too.
+				this.forgetArchived(ids);
 				after?.();
 			} catch (e) {
 				result = false;
@@ -1542,7 +1880,12 @@ export class HistoryStore {
 
 	/** After the first save each day: every row, outside the database. */
 	private maybeSnapshot(): void {
-		if (this.snapshotting || !this.db) return;
+		if (!this.db) return;
+		// One already running (yesterday's, say): this save's turn comes when it ends.
+		if (this.snapshotting) {
+			this.snapshotAgain = true;
+			return;
+		}
 		// Once a day per tab, written or not: with no private file system every
 		// save would read every row again.
 		const now = this.now();
@@ -1569,8 +1912,386 @@ export class HistoryStore {
 				// Tomorrow's goes again.
 			} finally {
 				this.snapshotting = false;
+				if (this.snapshotAgain) {
+					this.snapshotAgain = false;
+					this.maybeSnapshot();
+				}
 			}
 		})();
+	}
+
+	/** A save asked for the day's copy while one was being written. */
+	private snapshotAgain = false;
+
+	// ── The curve archive (#420 S1) ───────────────────────────────────────
+
+	/** `id`'s curve landed in the store: archive it, once, off the save's path. */
+	private oweArchive(id: string, details: DetailsRecord | null): void {
+		if (!this.archive || this.mode !== 'idb') return;
+		if (details && !holdsCurve(details.samples, details.brewSeries)) return;
+		this.archiveOwed.set(id, details);
+		this.runArchive();
+	}
+
+	/** Write what the archive is owed, a few at a time, yielding between. A failure waits for the next try. */
+	private runArchive(): void {
+		const archive = this.archive;
+		if (!archive || this.archiveRun) return;
+		this.archiveRun = (async () => {
+			let failed = false;
+			while (this.archiveOwed.size > 0 && !failed && this.mode === 'idb') {
+				await new Promise((r) => setTimeout(r, 0));
+				const batch = [...this.archiveOwed].slice(0, 8);
+				const unread = batch.filter(([, d]) => d === null).map(([id]) => id);
+				let read = new Map<string, DetailsRecord>();
+				if (unread.length > 0 && this.db) {
+					try {
+						read = await this.db.detailsOf(unread);
+					} catch {
+						failed = true;
+						break;
+					}
+				}
+				for (const [id, held] of batch) {
+					if (this.archiveDeleted.has(id) || !this.stored.has(id)) {
+						this.archiveOwed.delete(id);
+						continue;
+					}
+					const d = held ?? read.get(id);
+					// A factory reset took the store's marker: write nothing that
+					// would bring the archive's directory back (#420 FC-N4).
+					if (!markerSaysDone() && !this.markerOwed) {
+						this.archiveOwed.clear();
+						break;
+					}
+					try {
+						if (d) await archive.write(id, { samples: d.samples, brewSeries: d.brewSeries });
+						this.archiveOwed.delete(id);
+						this.archiveStuck = false;
+					} catch (e) {
+						this.archiveStuck = true;
+						// Quota, most likely: tried again with the next save. The
+						// store is untouched, and the save didn't wait.
+						this.lastError = `A curve couldn’t be kept in the archive: ${errorText(e)}`;
+						failed = true;
+						break;
+					}
+					// Deleted while it was written: the file goes again.
+					// Deleted while it was written (here, or in a tab this one heard):
+					// the delete is recorded, so its file goes, now or later.
+					if (this.archiveDeleted.has(id)) this.tombstone([id]);
+				}
+			}
+		})().finally(() => {
+			this.archiveRun = null;
+			void this.countArchive();
+		});
+	}
+
+	/** This load's archive catch-up has run. */
+	get archiveCaughtUp(): boolean {
+		return this.archiveCaughtUpFlag;
+	}
+
+	/** Count the archive's files and bytes now, for the storage view. */
+	countArchiveNow(): Promise<void> {
+		return this.countArchive();
+	}
+
+	/** Count the archive's files and bytes again. */
+	private async countArchive(): Promise<void> {
+		if (!this.archive) {
+			this.archiveCount = null;
+			return;
+		}
+		try {
+			if (!(await this.archive.available())) {
+				this.archiveCount = null;
+				return;
+			}
+			// Archived means a file for a shot the store holds with a curve: a
+			// file kept for a daily-copy row, or a tombstone's, doesn't count
+			// (#420 FC2-N2). The bytes are every file's, as they take space.
+			const sizes = await this.archive.sizes();
+			let files = 0;
+			let bytes = 0;
+			for (const [id, size] of sizes) {
+				bytes += size;
+				const s = lightSummary(id) ?? this.summaries.get(id);
+				if (size > 0 && s && ((s.sampleCount ?? 0) > 0 || s.brewSampleCount > 0) && !this.archiveCorrupt.has(id)) files += 1;
+			}
+			this.archiveCount = { files, bytes };
+		} catch {
+			// Counted again after the next write.
+		}
+	}
+
+	/**
+	 * The curve archive as Settings and the banner show it: its files and
+	 * bytes against the rows with a curve, and whether a write waits.
+	 * Null where there's no private file system; undefined before it's counted.
+	 */
+	get archiveStatus():
+		| { files: number; bytes: number; curves: number; waiting: boolean; notRestored: number }
+		| null
+		| undefined {
+		const count = this.archiveCount;
+		if (!count) return count;
+		let curves = 0;
+		for (const s of this.summaries.values()) if ((s.sampleCount ?? 0) > 0 || s.brewSampleCount > 0) curves += 1;
+		return { ...count, curves, waiting: this.archiveStuck, notRestored: this.curvesNotRestored() };
+	}
+
+	/** Every archive write asked for so far has been tried. */
+	async archiveSettled(): Promise<void> {
+		while (this.archiveRun) await this.archiveRun;
+	}
+
+	/** Shots this tab deleted from the store: tombstones recorded, and their archived curves go. */
+	private forgetArchived(ids: readonly string[]): void {
+		if (!this.archive) return;
+		for (const id of ids) {
+			this.archiveDeleted.add(id);
+			this.archiveOwed.delete(id);
+		}
+		this.tombstone(ids);
+	}
+
+	/** Record tombstones for `ids`, durably, then remove their files. */
+	private tombstone(ids: readonly string[]): void {
+		for (const id of ids) {
+			this.archiveRemoveOwed.add(id);
+			setArchiveTombstone(id, true);
+		}
+		void this.removeArchived();
+	}
+
+	/**
+	 * Remove the files the tombstones name. A tombstone goes once its file
+	 * is gone; one whose remove fails stays, for the next delete or catch-up
+	 * (#420 FC-N1).
+	 */
+	private async removeArchived(): Promise<void> {
+		const archive = this.archive;
+		// Another tab's too: one whose remove failed there goes here.
+		for (const id of readArchiveTombstones()) this.archiveRemoveOwed.add(id);
+		const ids = [...this.archiveRemoveOwed];
+		if (!archive || ids.length === 0) return;
+		for (const id of ids) {
+			try {
+				await archive.remove([id]);
+				this.archiveRemoveOwed.delete(id);
+				setArchiveTombstone(id, false);
+			} catch (e) {
+				console.warn('[history] an archived curve of a deleted shot couldn’t be removed; tried again later', e);
+			}
+		}
+		void this.countArchive();
+	}
+
+	/**
+	 * After a load, in the background: archive the curves the store holds
+	 * that the archive lacks (shots from before the archive, a migration, late
+	 * rows), and give a row the store holds no curve for the archive's.
+	 */
+	private scheduleArchiveCatchUp(): void {
+		if (!this.archive || this.archiveCatchUp) return;
+		this.archiveCatchUp = setTimeout(() => {
+			void this.archiveCatchUpNow().catch(() => {});
+		}, this.opts.archiveDelayMs ?? 10_000);
+	}
+
+	/** {@link scheduleArchiveCatchUp}'s work, now. */
+	async archiveCatchUpNow(): Promise<void> {
+		if (this.archiveCatchUp) clearTimeout(this.archiveCatchUp);
+		this.archiveCatchUp = null;
+		const archive = this.archive;
+		if (!archive || this.mode !== 'idb' || !(await archive.available())) return;
+		await this.removeArchived();
+		const have = await archive.ids();
+		// Once a day every file is checked against the store's curve, so one
+		// that is corrupt, or older than the store's, is rewritten (#420
+		// FC-S1, FC-S2); a write that matches rewrites nothing. Otherwise
+		// only a shot with no file, or an empty one, is owed.
+		for (const [id, summary] of this.summaries) {
+			if (have.has(id) || this.archiveOwed.has(id)) continue;
+			if ((summary.sampleCount ?? 0) > 0 || summary.brewSampleCount > 0) this.archiveOwed.set(id, null);
+		}
+		this.runArchive();
+		await this.fillFromArchive(have);
+		await this.archiveSettled();
+		this.archiveCaughtUpFlag = true;
+		await this.checkArchivePass(archive);
+		await this.countArchive();
+	}
+
+	/**
+	 * The daily whole check: every file against the store's curve, in id
+	 * order, a few at a time with a yield between, so one that is corrupt or
+	 * older than the store's is rewritten (#420 FC-S1, FC-S2); a file that
+	 * matches costs only a read. Where it got to is kept, so a load that ends
+	 * mid-pass leaves the next to go on from there, and a pass is finished,
+	 * across loads, before another begins (#420 FC3-S1).
+	 */
+	private async checkArchivePass(archive: CurveArchive): Promise<void> {
+		const today = dayOf(this.now());
+		let pass = readArchiveCheck();
+		if (!pass) {
+			let checkedOn: string | null = null;
+			try {
+				checkedOn = localStorage.getItem(ARCHIVE_CHECKED_KEY);
+			} catch {
+				return;
+			}
+			if (checkedOn === today) return;
+			pass = { on: today, after: '' };
+			writeArchiveCheck(pass);
+		}
+		const ids = [...this.summaries]
+			.filter(([, s]) => (s.sampleCount ?? 0) > 0 || s.brewSampleCount > 0)
+			.map(([id]) => id)
+			.filter((id) => id > pass.after)
+			.sort();
+		for (let i = 0; i < ids.length; i += 8) {
+			const db = this.db;
+			if (!db || this.mode !== 'idb') return;
+			await new Promise((r) => setTimeout(r, 0));
+			const part = ids.slice(i, i + 8);
+			let found: Map<string, DetailsRecord>;
+			try {
+				found = await db.detailsOf(part);
+			} catch {
+				// Gone on with at the next load, from here.
+				return;
+			}
+			for (const id of part) {
+				const d = found.get(id);
+				if (d && this.stored.has(id) && !this.archiveDeleted.has(id) && markerSaysDone()) {
+					try {
+						await archive.write(id, { samples: d.samples, brewSeries: d.brewSeries });
+					} catch (e) {
+						this.archiveStuck = true;
+						this.lastError = `A curve couldn’t be kept in the archive: ${errorText(e)}`;
+						return;
+					}
+				}
+				pass.after = id;
+			}
+			writeArchiveCheck(pass);
+		}
+		try {
+			localStorage.setItem(ARCHIVE_CHECKED_KEY, pass.on);
+		} catch {
+			// Checked again at the next load.
+		}
+		writeArchiveCheck(null);
+	}
+
+	/**
+	 * Rows the store holds no curve for, whose curve the archive keeps (after
+	 * a store loss and a recovery): the archive's goes in, as a fill, so a
+	 * curve the store has stays, and the summary is worked out from it. A file
+	 * that doesn't read back whole is skipped and logged. On the write chain,
+	 * so no save runs between. The number of rows filled.
+	 */
+	private async fillFromArchive(names?: ReadonlySet<string>): Promise<number> {
+		const archive = this.archive;
+		if (!archive || this.mode !== 'idb') return 0;
+		const skippedBefore = this.archiveCorrupt.size;
+		const have = names ?? (await archive.ids());
+		const want = this.shots
+			.filter((s) => {
+				const summary = lightSummary(s.id) ?? this.summaries.get(s.id);
+				return (
+					have.has(s.id) &&
+					this.stored.has(s.id) &&
+					!this.archiveDeleted.has(s.id) &&
+					!this.archiveCorrupt.has(s.id) &&
+					!hasHeavyParts(s) &&
+					summary != null &&
+					summary.sampleCount === 0 &&
+					summary.brewSampleCount === 0
+				);
+			})
+			.map((s) => s.id);
+		let filled = 0;
+		for (let i = 0; i < want.length; i += 25) {
+			const part = want.slice(i, i + 25);
+			const run = this.writeChain.then(async () => {
+				const db = this.db;
+				if (!db || this.mode !== 'idb') return;
+				const writes: ShotWrite[] = [];
+				for (const id of part) {
+					const row = this.byId().get(id);
+					if (!row) continue;
+					const got = await archive.read(id);
+					if (got.kind === 'corrupt') {
+						this.archiveCorrupt.set(id, got.why);
+						this.corruptTick++;
+						console.warn(`[history] the archived curve of ${id} is unreadable (${got.why}); skipped`);
+						continue;
+					}
+					if (got.kind !== 'curve') continue;
+					writes.push({
+						shot: withDetails(row, { id, samples: got.curve.samples, profile: null, brewSeries: got.curve.brewSeries }),
+						details: true,
+						fill: true
+					});
+				}
+				if (writes.length === 0) return;
+				try {
+					const r = await db.putShots(writes, summarize);
+					this.lastSeq = Math.max(this.lastSeq, r.seq);
+					for (const [id, w] of r.written) {
+						this.setSummary(id, w.summary);
+						if (lightSummary(id)) this.light(id, w.summary);
+						this.keepLoaded(id, w.summary, w.details);
+						filled += 1;
+					}
+					this.clearUnsaved([...r.written.keys()]);
+					this.post(
+						writes.map((w) => w.shot.id),
+						r.seq
+					);
+				} catch (e) {
+					// Tried again at the next load: the files stay.
+					this.lastError = errorText(e);
+				}
+			});
+			this.writeChain = run;
+			await run;
+		}
+		this.lastFill = { restored: filled, notRestored: this.archiveCorrupt.size - skippedBefore };
+		return filled;
+	}
+
+	/** The last fill from the archive, for the recovery that ran it. */
+	private lastFill: { restored: number; notRestored: number } = { restored: 0, notRestored: 0 };
+
+	/**
+	 * What the last recovery in this tab did with the archive: curves it
+	 * restored, and curves it couldn't because their files were corrupt
+	 * (skipped, never used). Null before any recovery.
+	 */
+	get lastRecovery(): { restored: number; notRestored: number } | null {
+		return this.lastRecoveryState;
+	}
+
+	/** Shots whose archived curve was found corrupt and that still have no curve. */
+	private curvesNotRestored(): number {
+		void this.corruptTick;
+		void this.summaryTick;
+		let n = 0;
+		for (const id of this.archiveCorrupt.keys()) {
+			const s = lightSummary(id) ?? this.summaries.get(id);
+			if (s && (s.sampleCount ?? 0) === 0 && s.brewSampleCount === 0) n += 1;
+		}
+		return n;
+	}
+
+	/** Archive files found unreadable, by id: skipped, never used. */
+	get archiveSkipped(): ReadonlyMap<string, string> {
+		return this.archiveCorrupt;
 	}
 
 	// ── Lost and unavailable ──────────────────────────────────────────────
@@ -1662,6 +2383,14 @@ export class HistoryStore {
 		this.oldCopyInfo = null;
 		await this.loadFromDb({ gone, afterLoss });
 		if (heavy.length > 0 && this.health === 'ok') await this.fillHeavyFrom(heavy);
+		// This tab's rows the other tab's recovery couldn't know take their
+		// curves from the archive, once written (#420 S1).
+		if (afterLoss && this.health === 'ok' && (await this.archive?.available())) {
+			await this.flushed();
+			this.lastFill = { restored: 0, notRestored: 0 };
+			await this.fillFromArchive();
+			this.lastRecoveryState = { ...this.lastFill };
+		}
 		return this.health === 'ok';
 	}
 
@@ -1705,7 +2434,7 @@ export class HistoryStore {
 				profile: d.profile ?? s.profile ?? null,
 				brewSeries: (d.brewSeries?.samples.length ?? 0) > 0 ? d.brewSeries : (s.brewSeries ?? null)
 			});
-			markLoaded(row.id);
+			this.unlight(row.id);
 			this.dirtyDetails.add(row.id);
 			filled.push(row.id);
 			return full;
@@ -1751,6 +2480,12 @@ export class HistoryStore {
 			this.healthState = 'loading';
 			this.oldCopyInfo = null;
 			await this.loadFromDb({ mine, afterLoss: true });
+			// The rows are in; each one the recovered store holds no curve for
+			// takes the archive's (#420 S1).
+			await this.flushed();
+			this.lastFill = { restored: 0, notRestored: 0 };
+			await this.fillFromArchive();
+			this.lastRecoveryState = { ...this.lastFill };
 			try {
 				this.channel?.postMessage({ type: 'recovered', from: this.tabId });
 			} catch {
@@ -1857,9 +2592,11 @@ export class HistoryStore {
 	 * tab's rows must not cost this one a good curve, and the tab that removed a
 	 * row deletes its series.
 	 */
-	adoptRows(rows: StoredShot[]): void {
-		this.shots = rows;
-		this.markLive(rows.map((s) => s.id));
+	adoptRows(rows: readonly AnyShot[]): void {
+		// Merged onto what this tab holds: a row handed in carries no heavy parts.
+		const next = rows.map((s) => this.intoHeld(s));
+		this.shots = next;
+		this.markLive(next.map((s) => s.id));
 	}
 
 	/**
@@ -1939,7 +2676,9 @@ export class HistoryStore {
 	 */
 	private backfillSeries(id: string, samples: TimedSample[]): void {
 		if (this.mode !== 'legacy') {
+			// Only fills: a curve the store holds stays.
 			this.dirtyDetails.add(id);
+			this.fills.add(id);
 			return;
 		}
 		void addSeries(id, samples)
@@ -2122,7 +2861,7 @@ export class HistoryStore {
 	 * the union, which a re-run finishes.
 	 */
 	async restoreRows(
-		plan: (rows: readonly StoredShot[]) => { next: StoredShot[]; series: StoredShot[]; remove?: readonly string[] },
+		plan: RestoreRowsPlan,
 		writeSeries: (rows: readonly StoredShot[]) => Promise<void> = (rows) =>
 			putManySeries(rows.map((s) => ({ id: s.id, samples: s.record.samples })))
 	): Promise<{ stored: boolean; curvesFailed: number }> {
@@ -2130,7 +2869,7 @@ export class HistoryStore {
 		if (this.mode === 'idb') return this.restoreRowsToStore(plan);
 		// Moved away in another tab: the old copy is not to be written.
 		if (this.mode !== 'legacy') return { stored: false, curvesFailed: 0 };
-		const first = plan(this.shots).series.filter((s) => s.record.samples.length > 0);
+		const first = this.planOver(plan).series.filter((s) => s.record.samples.length > 0);
 		let curvesFailed = 0;
 		try {
 			await writeSeries(first);
@@ -2139,7 +2878,7 @@ export class HistoryStore {
 		}
 		// After the last await: rows recorded, rated or bound while the series
 		// were written are in `this.shots`, and the plan runs over them.
-		const { next, series } = plan(this.shots);
+		const { next, series } = this.planOver(plan);
 		const written = new Set(first.map((s) => s.id));
 		// A row the recompute found anew keeps its curve in memory, and it's
 		// written straight after the rows, before the restore says it's done.
@@ -2157,13 +2896,26 @@ export class HistoryStore {
 		return { stored: true, curvesFailed };
 	}
 
-	private async restoreRowsToStore(
-		plan: (rows: readonly StoredShot[]) => { next: StoredShot[]; series: StoredShot[]; remove?: readonly string[] }
-	): Promise<{ stored: boolean; curvesFailed: number }> {
+	/**
+	 * Run a restore's plan over the rows as {@link ShotRow}s, and take its
+	 * result back as the store holds rows: each one merged onto the row held
+	 * for its id ({@link mergeOnto}), so a row the plan passes through, or
+	 * edits, keeps its heavy parts.
+	 */
+	private planOver(plan: RestoreRowsPlan): { next: StoredShot[]; series: StoredShot[]; remove?: readonly string[] } {
+		const out = plan(this.rows().raw);
+		return {
+			next: out.next.map((s) => this.intoHeld(s)),
+			series: out.series.map((s) => this.intoHeld(s)),
+			...(out.remove ? { remove: out.remove } : {})
+		};
+	}
+
+	private async restoreRowsToStore(plan: RestoreRowsPlan): Promise<{ stored: boolean; curvesFailed: number }> {
 		const db = this.db!;
 		await this.flushed();
 		// 1. The rows with curves, in batches straight to the store.
-		const first = plan(this.shots).series;
+		const first = this.planOver(plan).series;
 		const done = new Map<string, DetailsRecord>();
 		for (let i = 0; i < first.length; i += 25) {
 			const part = first.slice(i, i + 25);
@@ -2174,9 +2926,10 @@ export class HistoryStore {
 				);
 				this.lastSeq = Math.max(this.lastSeq, r.seq);
 				for (const [id, got] of r.written) {
-					this.summaries.set(id, got.summary);
+					this.setSummary(id, got.summary);
 					this.stored.add(id);
 					done.set(id, got.details);
+					this.oweArchive(id, got.details);
 				}
 				this.post(
 					part.map((s) => s.id),
@@ -2189,7 +2942,7 @@ export class HistoryStore {
 		}
 		// 2. After the last await: the plan again, over the rows as they are
 		// now. Memory takes it in this task; the rows go out next, as a diff.
-		const { next, series, remove } = plan(this.shots);
+		const { next, series, remove } = this.planOver(plan);
 		const named = new Set(remove ?? []);
 		const nextIds = new Set(next.map((s) => s.id));
 		// Only a row the plan names goes; anything else missing stays.
@@ -2200,7 +2953,7 @@ export class HistoryStore {
 			const d = done.get(s.id);
 			if (!d) return s;
 			// What step 1 stored, which keeps a curve the device had.
-			markLoaded(s.id);
+			this.unlight(s.id);
 			return withDetails(s, d);
 		});
 		this.shots = [...rows, ...kept].sort(byDateThenId);
@@ -2539,13 +3292,15 @@ export class HistoryStore {
 		}
 		const samples = pulled.samples ?? [];
 		const backfill =
-			patch.backfillSamples === true && samples.length > 0 && sampleCountOf(next) === 0;
+			patch.backfillSamples === true && samples.length > 0 && heldSampleCount(next) === 0;
 		if (backfill) {
 			next = {
 				...next,
 				record: { duration: pulled.durationMs || next.record.duration, samples: [...samples] }
 			};
 		}
+		// A light row's profile is in the store, not memory: the write only
+		// fills, so a recipe the store holds stays (P4w).
 		const fillProfile = patch.fillProfile && pulled.profile != null && next.profile == null;
 		if (fillProfile) {
 			next = { ...next, profile: pulled.profile };
@@ -2554,7 +3309,10 @@ export class HistoryStore {
 		if (next === target) return;
 		this.shots = [...this.shots.slice(0, idx), next, ...this.shots.slice(idx + 1)];
 		if (backfill) this.backfillSeries(id, [...samples]);
-		else if (fillProfile && this.mode !== 'legacy') this.dirtyDetails.add(id);
+		if (fillProfile && this.mode !== 'legacy') {
+			this.dirtyDetails.add(id);
+			this.fills.add(id);
+		}
 		this.persist();
 	}
 
@@ -2574,7 +3332,8 @@ export class HistoryStore {
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
 		const target = this.shots[idx];
-		if (sampleCountOf(target) > 0 || this.seriesPending(id)) return;
+		// Only a row known to have none: an unknown count (`null`) isn't none.
+		if (heldSampleCount(target) !== 0 || this.seriesPending(id)) return;
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{
@@ -2713,7 +3472,7 @@ export class HistoryStore {
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
 		const shot = this.shots[idx];
-		if (!isManualLog(shot)) return;
+		if (!isManualLog(this.rowOf(shot))) return;
 		if (patch.completedAt !== undefined && brewDateError(patch.completedAt, Date.now())) return;
 		// A blank method patch means "no method given" — it never blanks the
 		// row's method (which would turn a manual log into a machine shot).
@@ -2754,6 +3513,17 @@ export class HistoryStore {
 		});
 	}
 }
+
+/**
+ * A restore's plan for the history, over the rows as they are: the history it
+ * leaves (rows passed through, or whole shots from the backup), the whole
+ * shots whose heavy parts to write, and the ids it removes.
+ */
+export type RestoreRowsPlan = (rows: readonly ShotRow[]) => {
+	next: readonly AnyShot[];
+	series: readonly AnyShot[];
+	remove?: readonly string[];
+};
 
 /** What a pull fetched besides the detail, for {@link HistoryStore.applyRemote}. */
 export interface PulledParts {
