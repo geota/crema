@@ -64,12 +64,9 @@
 		getHistoryStore,
 		exportStoredShotAsV2Json,
 		shotFilename,
-		brewStatsOf,
 		isBrewLog,
 		isManualLog,
 		methodOf,
-		shotMatchesQuery,
-		shotCoffee,
 		recentNames,
 		COFFEE_FILTER_PREFIX,
 		liveShot,
@@ -79,10 +76,14 @@
 		filterScopeKey,
 		type SelectionPin
 	} from '#lib/history/index.js';
-	import type { AnyShot, ManualBrewPatch, StoredShot } from '#lib/history/index.js';
+	import type { AnyShot, ManualBrewPatch, ShotRow as Row, StoredShot } from '#lib/history/index.js';
 	import { ShotRow, ShotDetail, CompareOverlay } from '#lib/components/history/index.js';
 	import PhoneShotRow from '#lib/components/history/PhoneShotRow.svelte';
-	import { groupShots } from '#lib/history/phone-list.js';
+	import VirtualShotList from '#lib/components/history/VirtualShotList.svelte';
+	import { arrayItems } from '#lib/components/history/virtual-window.js';
+	import { HistoryListModel } from '#lib/history/list-model.svelte.js';
+	import type { SortDir, SortField } from '#lib/history/list-filter.js';
+	import { listItems, rowHeight, ROW_GAP, type ListItem } from '#lib/history/list-items.js';
 	import {
 		HISTORY_RANGES,
 		minuteBucket,
@@ -103,7 +104,7 @@
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
 	import { getBeanStore, type Bean, type Roaster } from '#lib/bean/index.js';
 	import { moveShotBag } from '#lib/bean/move-shot-bag.js';
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { uploadPending } from '#lib/history/store.svelte.js';
 	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
@@ -306,9 +307,6 @@
 		}
 	}
 
-	/** Every recorded shot, newest first. Reactive. */
-	const shots = $derived(store.all);
-
 	// ── Visualizer upload state ──────────────────────────────────────────
 	let syncConfig = $state(readSyncConfig());
 	let uploadingAll = $state(false);
@@ -350,8 +348,22 @@
 			// last visit until the user changes a filter (see selectedShot).
 			selectedId = shotParam;
 			pin = { id: shotParam, scope: filterScope };
+			void revealWhenListed(shotParam);
 		}
 	});
+	/**
+	 * Bring a row picked from elsewhere (a deep link, a just-saved brew) into
+	 * the wide list's view, once the rows are in and the list's remembered
+	 * place is back: the list draws only the rows near its viewport, and this
+	 * one can be far down. A phone opens its detail screen instead, and focus
+	 * return scrolls it in on Back.
+	 */
+	async function revealWhenListed(id: string): Promise<void> {
+		await store.ready.catch(() => {});
+		await tick();
+		await listMemory.settled();
+		if (!phoneLayout.current) shotList?.reveal(id);
+	}
 	/**
 	 * Pip for the per-row indicator, across every enabled destination: on
 	 * all of them → uploaded; on some → partial; queued → pending; none
@@ -464,43 +476,6 @@
 			else if (t.id === 'decent') void uploadAndReportDecent(id, { manual: true, replace: !!store.get(id)?.decentId });
 		}
 	}
-	/**
-	 * Shots a Decent catch-up would actually send — `unsentDecentShots`
-	 * applies the same eligibility as the push (≥ 5 s, not refused before,
-	 * not pulled from Visualizer, a serial known: stamped on the shot, else
-	 * a connected DE1), so the count never promises an upload that would be
-	 * skipped.
-	 */
-	const decentUnsentIds = $derived(
-		decentLinked
-			? new Set(
-					unsentDecentShots(shots, {
-						hasLiveMachine: liveMachineIdentity() !== null,
-						rejectedShotIds: decentAccount.rejectedShotIds
-					}).map((s) => s.id)
-				)
-			: new Set<string>()
-	);
-	const visualizerBacklogIds = $derived(new Set(store.visualizerBacklog.map((s) => s.id)));
-	/** The catch-up backlog: shots missing from at least one ENABLED destination, per destination. */
-	const missingByDestination = $derived.by(() => {
-		const out: { name: string; count: number }[] = [];
-		if (canPushShots) {
-			const n = visualizerBacklogIds.size;
-			if (n > 0) out.push({ name: 'Visualizer', count: n });
-		}
-		if (decentUnsentIds.size > 0) out.push({ name: 'Decent', count: decentUnsentIds.size });
-		return out;
-	});
-	const missingTotal = $derived(
-		shots.filter(
-			(s) => (canPushShots && visualizerBacklogIds.has(s.id)) || decentUnsentIds.has(s.id)
-		).length
-	);
-	const missingTitle = $derived(
-		missingByDestination.map((d) => `${d.count} not on ${d.name}`).join(' · ')
-	);
-
 	// ── Brew Log dialog state (issue #10) ────────────────────────────────
 	let logBrewOpen = $state(false);
 	let logBrewPrefill = $state<LogBrewPrefill | undefined>(undefined);
@@ -690,8 +665,6 @@
 	}
 
 	// ── Sort state ───────────────────────────────────────────────────────
-	type SortField = 'completedAt' | 'rating' | 'profileName' | 'beanName';
-	type SortDir = 'asc' | 'desc';
 	let sortField = $state<SortField>('completedAt');
 	let sortDir = $state<SortDir>('desc');
 	/**
@@ -817,14 +790,17 @@
 	let listEl = $state<HTMLElement>();
 	/** The page itself: the scroller at phone width, where the list has none. */
 	let pageEl = $state<HTMLElement>();
-	useScrollMemory({
+	/** The windowed list: scroll memory and focus return reach rows it hasn't rendered through it. */
+	let shotList = $state<ReturnType<typeof VirtualShotList<ListItem>>>();
+	const listMemory = useScrollMemory({
 		// A phone detail is a view of its own, so it opens at its top and the
 		// list comes back to its place.
 		key: () =>
 			phoneDetail
 				? `history/detail|${phoneShot}`
 				: `history/list|${filterProfile}|${filterBean}|${filterMethod}|${selectedTags.join(',')}|${range}|${pinnedOnly ? 'pinned' : ''}|${sortField}-${sortDir}`,
-		container: () => (phoneLayout.current ? pageEl : listEl)
+		container: () => (phoneLayout.current ? pageEl : listEl),
+		scrollToKey: (key) => (phoneDetail ? null : (shotList?.scrollTopForKey(key) ?? null))
 	});
 	useScrollMemory({ key: () => 'history/page', pixelOnly: true });
 
@@ -844,33 +820,85 @@
 		return () => clearTimeout(timer);
 	});
 
+	// The page's derivations are keyed on versions, not on the rows (#310 P5w,
+	// SPEC decision 5): a star tap reruns no filter and rebuilds no facet. The
+	// rows they hold are as of the last change to the set, the order or a
+	// facet field; whatever shows a row reads the current one by id.
+	const model = new HistoryListModel({
+		// Not loaded is not empty (#310): nothing here reads the rows until they're in.
+		rows: () => (store.loaded ? store.all : []),
+		get: (id) => (store.loaded ? store.get(id) : undefined),
+		query: () => q,
+		filters: () => ({
+			cutoff: rangeCutoff(range, nowBucket),
+			profile: filterProfile,
+			pinnedOnly,
+			bean: filterBean,
+			method: filterMethod,
+			tags: selectedTags,
+			sortField,
+			sortDir
+		}),
+		tagsOf: (s) => effectiveShotTags(s),
+		liveCoffee: (beanId) => liveCoffee(beanId)
+	});
+	/** Every recorded shot, newest first, as of the last list change. */
+	const shots = $derived(model.shots);
+	/** The current copy of a row the derivations hold: a rating or note may have moved since. */
+	function current(row: Row): Row {
+		return store.get(row.id) ?? row;
+	}
+
+	/**
+	 * Shots a Decent catch-up would actually send — `unsentDecentShots`
+	 * applies the same eligibility as the push (≥ 5 s, not refused before,
+	 * not pulled from Visualizer, a serial known: stamped on the shot, else
+	 * a connected DE1), so the count never promises an upload that would be
+	 * skipped.
+	 */
+	const decentUnsentIds = $derived(
+		decentLinked
+			? new Set(
+					unsentDecentShots(shots, {
+						hasLiveMachine: liveMachineIdentity() !== null,
+						rejectedShotIds: decentAccount.rejectedShotIds
+					}).map((s) => s.id)
+				)
+			: new Set<string>()
+	);
+	const visualizerBacklogIds = $derived.by(() => {
+		// The legacy backend's series load moves the backlog without moving a
+		// row; it is capped at 300, so it reads the store directly.
+		if (store.health === 'legacy') return new Set(store.visualizerBacklog.map((s) => s.id));
+		void model.versions.list;
+		return untrack(() => new Set(store.visualizerBacklog.map((s) => s.id)));
+	});
+	/** The catch-up backlog: shots missing from at least one ENABLED destination, per destination. */
+	const missingByDestination = $derived.by(() => {
+		const out: { name: string; count: number }[] = [];
+		if (canPushShots) {
+			const n = visualizerBacklogIds.size;
+			if (n > 0) out.push({ name: 'Visualizer', count: n });
+		}
+		if (decentUnsentIds.size > 0) out.push({ name: 'Decent', count: decentUnsentIds.size });
+		return out;
+	});
+	const missingTotal = $derived(
+		shots.filter(
+			(s) => (canPushShots && visualizerBacklogIds.has(s.id)) || decentUnsentIds.has(s.id)
+		).length
+	);
+	const missingTitle = $derived(
+		missingByDestination.map((d) => `${d.count} not on ${d.name}`).join(' · ')
+	);
+
 	/** Names already used for the shot editor's barista / drinker suggestions. */
 	const baristaSuggestions = $derived(recentNames(shots, 'barista'));
 	const drinkerSuggestions = $derived(recentNames(shots, 'drinker'));
 
-	/** Distinct profile names across the history, for the filter chips. */
-	const profilesInUse = $derived([
-		...new Set(shots.map((s) => s.profileName).filter((n): n is string => !!n))
-	]);
-
-	/**
-	 * Distinct brew methods across the history, counted, for the Method
-	 * facet group. Machine shots fold into `espresso`. Rendered only
-	 * when 2+ methods exist.
-	 */
-	const methodsInUse = $derived.by(() => {
-		const m = new Map<string, number>();
-		// A custom method's row snapshot — the facet's label of last resort.
-		const snapshots = new Map<string, string>();
-		for (const s of shots) {
-			const key = methodOf(s) ?? 'espresso';
-			m.set(key, (m.get(key) ?? 0) + 1);
-			if (s.brewMethodLabel && !snapshots.has(key)) snapshots.set(key, s.brewMethodLabel);
-		}
-		return [...m.entries()]
-			.map(([id, count]) => ({ id, count, label: methodLabel(id, snapshots.get(id)) }))
-			.sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
-	});
+	const profilesInUse = $derived(model.profilesInUse);
+	/** Distinct brew methods, counted, for the Method facet group: rendered only when 2+ exist. */
+	const methodsInUse = $derived(model.methodsInUse);
 
 	/**
 	 * A library bag's live name and roaster for {@link shotCoffee}. A roaster
@@ -885,49 +913,8 @@
 		return { name: bean.name, roaster: roaster?.name ?? null };
 	}
 
-	/** Each shot's coffee key, computed once per history change. */
-	const coffeeKeyById = $derived.by(() => {
-		const m = new Map<string, string>();
-		for (const s of shots) {
-			const c = shotCoffee(s, liveCoffee);
-			if (c) m.set(s.id, c.key);
-		}
-		return m;
-	});
-
-	/**
-	 * Distinct coffees across the history, counted, for the bean filter
-	 * pills. A coffee is roaster + name ({@link shotCoffee}), so every bag of
-	 * it is one pill: picking it lists all their shots. Labels come from the
-	 * live library where the bag still exists, else the frozen snapshot, so
-	 * archived and since-deleted bags keep their shots reachable. A name two
-	 * roasters share gets the roaster appended.
-	 */
-	const beansInUse = $derived.by(() => {
-		const m = new Map<string, { name: string; roaster: string | null; count: number; bags: Set<string> }>();
-		for (const s of shots) {
-			const c = shotCoffee(s, liveCoffee);
-			if (!c) continue;
-			const entry = m.get(c.key) ?? { name: c.name, roaster: c.roaster, count: 0, bags: new Set<string>() };
-			entry.count += 1;
-			if (s.bean?.beanId) entry.bags.add(s.bean.beanId);
-			m.set(c.key, entry);
-		}
-		const nameCounts = new Map<string, number>();
-		for (const v of m.values()) {
-			const n = v.name.toLowerCase();
-			nameCounts.set(n, (nameCounts.get(n) ?? 0) + 1);
-		}
-		return [...m.entries()]
-			.map(([key, v]) => ({
-				id: `${COFFEE_FILTER_PREFIX}${key}`,
-				label:
-					(nameCounts.get(v.name.toLowerCase()) ?? 0) > 1 && v.roaster ? `${v.name} · ${v.roaster}` : v.name,
-				title: [v.roaster, v.bags.size > 1 ? `${v.bags.size} bags` : null].filter(Boolean).join(' · ') || undefined,
-				count: v.count
-			}))
-			.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-	});
+	/** Distinct coffees, counted, for the bean filter pills (see `HistoryListModel.beansInUse`). */
+	const beansInUse = $derived(model.beansInUse);
 
 	/**
 	 * The single bag the filter is scoped to — set by the bean drawer's
@@ -942,33 +929,8 @@
 		return { id: filterBean, label, count: shots.filter((s) => s.bean?.beanId === filterBean).length };
 	});
 
-	/** Whether `s` passes the bean filter: one bag, one coffee, or off. */
-	function matchesBeanFilter(s: AnyShot): boolean {
-		if (filterBean === 'all') return true;
-		if (filterBean.startsWith(COFFEE_FILTER_PREFIX)) {
-			return coffeeKeyById.get(s.id) === filterBean.slice(COFFEE_FILTER_PREFIX.length);
-		}
-		return s.bean?.beanId === filterBean;
-	}
-
-	/**
-	 * Distinct tags across the history, counted, sorted by frequency
-	 * then alphabetically. Drives the tag-pill facets in the filter
-	 * rail. Mirrors `/beans` `tagFacets` so the visual rhythm matches.
-	 *
-	 * Reads through `effectiveShotTags` so shots that pre-date the
-	 * bean→shot tag copy (and the rare retroactive bean retag) still
-	 * surface their bean's tags in the facet list.
-	 */
-	const tagFacets = $derived.by(() => {
-		const m = new Map<string, number>();
-		for (const s of shots) {
-			for (const t of effectiveShotTags(s)) m.set(t, (m.get(t) ?? 0) + 1);
-		}
-		return [...m.entries()]
-			.map(([tag, count]) => ({ tag, count }))
-			.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
-	});
+	/** Distinct tags, counted, for the tag pills; read through `effectiveShotTags`. */
+	const tagFacets = $derived(model.tagFacets);
 
 	/**
 	 * Pill list for the filter rail — wired through the shared
@@ -998,7 +960,7 @@
 			}
 		];
 		// Pinned shots, once there are any (or while the filter is on).
-		const pinnedCount = shots.filter((s) => s.pinned === true).length;
+		const pinnedCount = model.pinnedCount;
 		if (pinnedCount > 0 || pinnedOnly) {
 			items.push({
 				id: 'pin:',
@@ -1012,7 +974,7 @@
 			items.push({
 				id: `p:${name}`,
 				label: name,
-				count: shots.filter((s) => s.profileName === name).length,
+				count: model.profileCounts.get(name) ?? 0,
 				selected: filterProfile === name
 			});
 		}
@@ -1088,64 +1050,7 @@
 	}
 
 	/** The filtered shot list the list pane renders. */
-	const filtered = $derived.by(() => {
-		const query = q.trim().toLowerCase();
-		const cutoff = rangeCutoff(range, nowBucket);
-		const base = shots.filter((s) => {
-			if (cutoff != null && s.completedAt < cutoff) return false;
-			if (filterProfile !== 'all' && s.profileName !== filterProfile) return false;
-			if (pinnedOnly && s.pinned !== true) return false;
-			if (!matchesBeanFilter(s)) return false;
-			if (filterMethod !== 'all' && (methodOf(s) ?? 'espresso') !== filterMethod)
-				return false;
-			// AND semantics — a shot must carry every selected tag.
-			// Pulls through `effectiveShotTags` so legacy / retroactive
-			// bean tags filter just like persisted shot tags.
-			if (selectedTags.length > 0) {
-				const shotTags = effectiveShotTags(s);
-				for (const t of selectedTags) {
-					if (!shotTags.includes(t)) return false;
-				}
-			}
-			if (query === '') return true;
-			return (
-				shotMatchesQuery(s, query) ||
-				effectiveShotTags(s).some((t) => t.toLowerCase().includes(query))
-			);
-		});
-		// Sort AFTER filtering. The default `recent / desc` reproduces the
-		// store's native newest-first order; flipping to `asc` reverses;
-		// other fields stable-sort within the filtered subset.
-		const dir = sortDir === 'asc' ? 1 : -1;
-		const cmpStr = (a: string | null, b: string | null): number => {
-			const ax = (a ?? '').toLowerCase();
-			const bx = (b ?? '').toLowerCase();
-			return ax < bx ? -1 : ax > bx ? 1 : 0;
-		};
-		const cmpNum = (a: number, b: number): number => a - b;
-		const arr = [...base];
-		arr.sort((a, b) => {
-			let k = 0;
-			switch (sortField) {
-				case 'completedAt':
-					k = cmpNum(a.completedAt, b.completedAt);
-					break;
-				case 'rating':
-					k = cmpNum(a.metadata.rating ?? 0, b.metadata.rating ?? 0);
-					break;
-				case 'profileName':
-					k = cmpStr(a.profileName, b.profileName);
-					break;
-				case 'beanName':
-					k = cmpStr(a.bean?.name ?? null, b.bean?.name ?? null);
-					break;
-			}
-			// Tie-break on completedAt desc so equal-keyed rows stay
-			// chronologically ordered (newest-first) within their bucket.
-			return k * dir || b.completedAt - a.completedAt;
-		});
-		return arr;
-	});
+	const filtered = $derived(model.filtered);
 
 	/** The filter inputs as one key: an explicit selection holds while it is unchanged. */
 	const filterScope = $derived(
@@ -1169,23 +1074,25 @@
 	 * still shows it, an explicit pick until a filter changes, else the first
 	 * filtered shot ({@link selectedShot}).
 	 */
-	const selected = $derived(
+	const selectedRow = $derived(
 		selectedShot(filtered, phoneShot ?? selectedId, {
 			pin: phoneShot ? { id: phoneShot, scope: filterScope } : pin,
 			scope: filterScope,
 			lookup: (id) => liveShot(store.get(id))
 		})
 	);
+	/** {@link selectedRow} as it is now: the detail shows an edit at once. */
+	const selected = $derived(selectedRow ? current(selectedRow) : undefined);
 	/** Showing the detail screen: false when the entry's shot no longer exists. */
 	const phoneDetail = $derived(phoneShot !== null && selected?.id === phoneShot);
-	// Leaving the detail screen hands focus back to the row it opened from.
+	// Leaving the detail screen hands focus back to the row it opened from,
+	// once the list is back in its place: scrolled in first if it isn't
+	// rendered (a `?shot=` deep link to a row far down).
 	$effect(() => {
 		if (!phoneDetail) return;
 		const id = phoneShot as string;
 		return () => {
-			listEl
-				?.querySelector<HTMLElement>(`[data-scroll-key="${CSS.escape(id)}"]`)
-				?.focus({ preventScroll: true });
+			void listMemory.settled().then(() => shotList?.focusKey(id));
 		};
 	});
 
@@ -1195,7 +1102,8 @@
 	// the three averages (ratio / time / rating). The aggregation rules live in
 	// the core (`de1_domain::history_stats`, review #41) so both shells produce
 	// identical numbers; only unit conversion + formatting stay here.
-	const stats = $derived(brewStatsOf(filtered));
+	// After paint, debounced by 300 ms, over the current ratings.
+	const stats = $derived(model.stats);
 	/** Total dry coffee consumed across the filtered brews, unit-converted
 	 * — the inventory number the Brew Log exists for (issue #10; replaces
 	 * the beverage-weight tile). */
@@ -1436,8 +1344,19 @@
 		...(scopedBag ? [{ id: scopedBag.id, label: `This bag · ${scopedBag.label}` }] : []),
 		...beansInUse.map((b) => ({ id: b.id, label: b.label, title: b.title }))
 	]);
-	/** Day headings, under the date sort only. */
-	const shotGroups = $derived(groupShots(filtered, sortField === 'completedAt', new Date(nowBucket)));
+	/**
+	 * What the list draws: the rows, with day headings at phone width under the
+	 * date sort. Rebuilt for a text change too, since a note gives a row its
+	 * third line.
+	 */
+	const listed = $derived.by(() => {
+		void model.versions.text;
+		const rows = filtered;
+		const headings = phoneLayout.current && sortField === 'completedAt';
+		const now = new Date(nowBucket);
+		return untrack(() => listItems(rows, { headings, now, current }));
+	});
+	const listedItems = $derived(arrayItems(listed));
 </script>
 
 <svelte:head>
@@ -1802,37 +1721,48 @@
 		<!-- Split pane: list + detail -->
 		<div class="hi-split">
 			<div class="hi-list" bind:this={listEl}>
-				{#if phoneLayout.current}
-					{#each shotGroups as group (group.label ?? 'all')}
-						{#if group.label}<h2 class="hi-pday">{group.label}</h2>{/if}
-						{#each group.shots as s (s.id)}
+				<VirtualShotList
+					bind:this={shotList}
+					items={listedItems}
+					keyOf={(it) => it.key}
+					heightOf={(it) => rowHeight(it, phoneLayout.current)}
+					scroller={() => (phoneLayout.current ? pageEl : listEl)}
+					label={rowNoun === 'brew' ? 'Brews' : 'Shots'}
+					setSize={filtered.length}
+					positionOf={(it) => (it.kind === 'row' ? it.pos : null)}
+					gap={ROW_GAP}
+				>
+					{#snippet item(it)}
+						{#if it.kind === 'head'}
+							<h2 class="hi-pday">{it.label}</h2>
+						{:else}
+							{@const s = current(it.row)}
 							{@const pip = pipFor(s)}
-							<PhoneShotRow
-								shot={s}
-								selecting={selectMode}
-								picked={selectedIdSet.has(s.id)}
-								dimmed={selectedIds.length >= COMPARE_MAX && !selectedIdSet.has(s.id)}
-								syncPip={pip.pip}
-								syncTitle={pip.title}
-								onclick={() => (selectMode ? toggleCompareSelection(s.id) : showShot(s.id))}
-							/>
-						{/each}
-					{/each}
-				{:else}
-					{#each filtered as s (s.id)}
-						{@const pip = pipFor(s)}
-						<ShotRow
-							shot={s}
-							active={selected?.id === s.id}
-							selectable={selectMode}
-							selected={selectedIdSet.has(s.id)}
-							selectionDisabled={selectedIds.length >= COMPARE_MAX}
-							syncPip={pip.pip}
-							syncTitle={pip.title}
-							onclick={() => (selectMode ? toggleCompareSelection(s.id) : showShot(s.id))}
-						/>
-					{/each}
-				{/if}
+							{#if phoneLayout.current}
+								<PhoneShotRow
+									shot={s}
+									selecting={selectMode}
+									picked={selectedIdSet.has(s.id)}
+									dimmed={selectedIds.length >= COMPARE_MAX && !selectedIdSet.has(s.id)}
+									syncPip={pip.pip}
+									syncTitle={pip.title}
+									onclick={() => (selectMode ? toggleCompareSelection(s.id) : showShot(s.id))}
+								/>
+							{:else}
+								<ShotRow
+									shot={s}
+									active={selected?.id === s.id}
+									selectable={selectMode}
+									selected={selectedIdSet.has(s.id)}
+									selectionDisabled={selectedIds.length >= COMPARE_MAX}
+									syncPip={pip.pip}
+									syncTitle={pip.title}
+									onclick={() => (selectMode ? toggleCompareSelection(s.id) : showShot(s.id))}
+								/>
+							{/if}
+						{/if}
+					{/snippet}
+				</VirtualShotList>
 				{#if filtered.length === 0}
 					<div class="hi-empty">No shots match.</div>
 				{/if}
@@ -1963,6 +1893,7 @@
 		onSaved={(record) => {
 			selectedId = record.id;
 			pin = { id: record.id, scope: filterScope };
+			void revealWhenListed(record.id);
 		}}
 	/>
 {/if}
