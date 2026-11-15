@@ -32,6 +32,11 @@
  * never lost; on the legacy backend, which holds every shot whole, that is
  * its merge on write.
  *
+ * **The curve archive (#420 S1).** Each curve is also written once to its own
+ * file in the private file system (`curve-archive.ts`) when it first lands
+ * in the store, so a lost store gives curves back: every recovery fills the
+ * rows the recovered store lacks a curve for from it.
+ *
  * **Not loaded is not empty.** The rows load asynchronously: `loaded` starts
  * false, and History shows a skeleton until it's true. Code that would act on
  * the rows awaits {@link whenReady}, which rejects after 30 s, or at once when
@@ -150,6 +155,7 @@ import {
 	type SnapshotRow
 } from './rows-snapshot';
 import { summarize } from './summary';
+import { CurveArchive, defaultArchiveRoot, holdsCurve, type ArchiveRoot } from './curve-archive';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
 
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
@@ -275,6 +281,10 @@ export interface HistoryStoreOptions {
 	locks?: LockManagerLike | null;
 	channel?: (() => ChannelLike | null) | null;
 	snapshotRoot?: () => Promise<FileSystemDirectoryHandle | undefined>;
+	/** Where the curve archive lives (the private file system by default); null keeps none. */
+	archiveRoot?: ArchiveRoot | null;
+	/** How long after a load the archive's catch-up starts. */
+	archiveDelayMs?: number;
 	now?: () => number;
 	readyTimeoutMs?: number;
 	/** Listen for the tab coming back into view. On by default. */
@@ -448,6 +458,17 @@ export class HistoryStore {
 	private snapshotting = false;
 	/** The day this tab last tried the snapshot. */
 	private snapshotTried: string | null = null;
+
+	// ── The curve archive (#420 S1) ──
+	private readonly archive: CurveArchive | null;
+	/** Curves landed in the store and not archived yet: their details when in hand, else read. */
+	private archiveOwed = new Map<string, DetailsRecord | null>();
+	private archiveRun: Promise<void> | null = null;
+	/** Ids deleted this session: an archive write racing the delete removes its file again. */
+	private archiveDeleted = new Set<string>();
+	private archiveCatchUp: ReturnType<typeof setTimeout> | null = null;
+	/** Archive files that didn't read back whole, by id: skipped, never used. */
+	private archiveCorrupt = new Map<string, string>();
 	private hiddenNoticeShown = false;
 	private viewMemo: { rows: StoredShot[]; view: StoredShot[]; live: StoredShot[] } | null = null;
 	private byIdMemo: { rows: StoredShot[]; map: Map<string, StoredShot> } | null = null;
@@ -485,6 +506,10 @@ export class HistoryStore {
 
 	constructor(options: HistoryStoreOptions = {}) {
 		this.opts = { ...testDefaults, ...options };
+		this.archive =
+			this.opts.backend === 'legacy' || this.opts.archiveRoot === null
+				? null
+				: new CurveArchive(this.opts.archiveRoot ?? defaultArchiveRoot);
 		this.ready = new Promise<void>((resolve) => {
 			this.resolveReady = resolve;
 		});
@@ -1000,6 +1025,7 @@ export class HistoryStore {
 		}
 		this.mode = 'idb';
 		this.markLoadedNow('ok');
+		this.scheduleArchiveCatchUp();
 		this.settleView();
 		this.scheduleFlush();
 		if (late?.changed) {
@@ -1584,6 +1610,8 @@ export class HistoryStore {
 				savedCurves.push(id);
 				// What the store now holds, for the detail that opens next.
 				this.keepLoaded(id, got.summary, got.details);
+				// A curve landed: it goes into the archive too, once.
+				this.oweArchive(id, got.details);
 				if (lightSummary(id)) {
 					// A light row given a part (a backfill): light again, as stored.
 					this.light(id, got.summary);
@@ -1616,6 +1644,8 @@ export class HistoryStore {
 		);
 		this.settleView();
 		if (this.markerOwed) this.writeMarker(this.markerOwed.at, this.markerOwed.rows);
+		// Curves an archive write couldn't take before go again with each save.
+		if (this.archiveOwed.size > 0) this.runArchive();
 		this.settleLateRecord();
 		this.maybeSnapshot();
 		if (this.dirtyRowIds().length > 0) this.scheduleFlush();
@@ -1743,6 +1773,8 @@ export class HistoryStore {
 				const seq = await db.delete(ids);
 				this.lastSeq = Math.max(this.lastSeq, seq);
 				this.post(ids, seq);
+				// Only once the store's delete has landed: their archived curves go too.
+				this.forgetArchived(ids);
 				after?.();
 			} catch (e) {
 				result = false;
@@ -1791,6 +1823,185 @@ export class HistoryStore {
 				this.snapshotting = false;
 			}
 		})();
+	}
+
+	// ── The curve archive (#420 S1) ───────────────────────────────────────
+
+	/** `id`'s curve landed in the store: archive it, once, off the save's path. */
+	private oweArchive(id: string, details: DetailsRecord | null): void {
+		if (!this.archive || this.mode !== 'idb') return;
+		if (details && !holdsCurve(details.samples, details.brewSeries)) return;
+		this.archiveOwed.set(id, details);
+		this.runArchive();
+	}
+
+	/** Write what the archive is owed, a few at a time, yielding between. A failure waits for the next try. */
+	private runArchive(): void {
+		const archive = this.archive;
+		if (!archive || this.archiveRun) return;
+		this.archiveRun = (async () => {
+			let failed = false;
+			while (this.archiveOwed.size > 0 && !failed && this.mode === 'idb') {
+				await new Promise((r) => setTimeout(r, 0));
+				const batch = [...this.archiveOwed].slice(0, 8);
+				const unread = batch.filter(([, d]) => d === null).map(([id]) => id);
+				let read = new Map<string, DetailsRecord>();
+				if (unread.length > 0 && this.db) {
+					try {
+						read = await this.db.detailsOf(unread);
+					} catch {
+						failed = true;
+						break;
+					}
+				}
+				for (const [id, held] of batch) {
+					if (this.archiveDeleted.has(id) || !this.stored.has(id)) {
+						this.archiveOwed.delete(id);
+						continue;
+					}
+					const d = held ?? read.get(id);
+					try {
+						if (d) await archive.write(id, { samples: d.samples, brewSeries: d.brewSeries });
+						this.archiveOwed.delete(id);
+					} catch (e) {
+						// Quota, most likely: tried again with the next save. The
+						// store is untouched, and the save didn't wait.
+						this.lastError = `A curve couldn’t be kept in the archive: ${errorText(e)}`;
+						failed = true;
+						break;
+					}
+					// Deleted while it was written: the file goes again.
+					if (this.archiveDeleted.has(id)) await archive.remove([id]).catch(() => {});
+				}
+			}
+		})().finally(() => {
+			this.archiveRun = null;
+		});
+	}
+
+	/** Every archive write asked for so far has been tried. */
+	async archiveSettled(): Promise<void> {
+		while (this.archiveRun) await this.archiveRun;
+	}
+
+	/** Shots deleted from the store: their archived curves go. */
+	private forgetArchived(ids: readonly string[]): void {
+		if (!this.archive) return;
+		for (const id of ids) {
+			this.archiveDeleted.add(id);
+			this.archiveOwed.delete(id);
+		}
+		void this.archive.remove(ids).catch((e) => {
+			console.warn('[history] an archived curve of a deleted shot couldn’t be removed', e);
+		});
+	}
+
+	/**
+	 * After a load, in the background: archive the curves the store holds
+	 * that the archive lacks (shots from before the archive, a migration, late
+	 * rows), and give a row the store holds no curve for the archive's.
+	 */
+	private scheduleArchiveCatchUp(): void {
+		if (!this.archive || this.archiveCatchUp) return;
+		this.archiveCatchUp = setTimeout(() => {
+			void this.archiveCatchUpNow().catch(() => {});
+		}, this.opts.archiveDelayMs ?? 10_000);
+	}
+
+	/** {@link scheduleArchiveCatchUp}'s work, now. */
+	async archiveCatchUpNow(): Promise<void> {
+		if (this.archiveCatchUp) clearTimeout(this.archiveCatchUp);
+		this.archiveCatchUp = null;
+		const archive = this.archive;
+		if (!archive || this.mode !== 'idb' || !(await archive.available())) return;
+		const have = await archive.ids();
+		for (const [id, summary] of this.summaries) {
+			if (have.has(id) || this.archiveOwed.has(id)) continue;
+			if ((summary.sampleCount ?? 0) > 0 || summary.brewSampleCount > 0) this.archiveOwed.set(id, null);
+		}
+		this.runArchive();
+		await this.fillFromArchive(have);
+		await this.archiveSettled();
+	}
+
+	/**
+	 * Rows the store holds no curve for, whose curve the archive keeps (after
+	 * a store loss and a recovery): the archive's goes in, as a fill, so a
+	 * curve the store has stays, and the summary is worked out from it. A file
+	 * that doesn't read back whole is skipped and logged. On the write chain,
+	 * so no save runs between. The number of rows filled.
+	 */
+	private async fillFromArchive(names?: ReadonlySet<string>): Promise<number> {
+		const archive = this.archive;
+		if (!archive || this.mode !== 'idb') return 0;
+		const have = names ?? (await archive.ids());
+		const want = this.shots
+			.filter((s) => {
+				const summary = lightSummary(s.id) ?? this.summaries.get(s.id);
+				return (
+					have.has(s.id) &&
+					this.stored.has(s.id) &&
+					!this.archiveDeleted.has(s.id) &&
+					!this.archiveCorrupt.has(s.id) &&
+					!hasHeavyParts(s) &&
+					summary != null &&
+					summary.sampleCount === 0 &&
+					summary.brewSampleCount === 0
+				);
+			})
+			.map((s) => s.id);
+		let filled = 0;
+		for (let i = 0; i < want.length; i += 25) {
+			const part = want.slice(i, i + 25);
+			const run = this.writeChain.then(async () => {
+				const db = this.db;
+				if (!db || this.mode !== 'idb') return;
+				const writes: ShotWrite[] = [];
+				for (const id of part) {
+					const row = this.byId().get(id);
+					if (!row) continue;
+					const got = await archive.read(id);
+					if (got.kind === 'corrupt') {
+						this.archiveCorrupt.set(id, got.why);
+						console.warn(`[history] the archived curve of ${id} is unreadable (${got.why}); skipped`);
+						continue;
+					}
+					if (got.kind !== 'curve') continue;
+					writes.push({
+						shot: withDetails(row, { id, samples: got.curve.samples, profile: null, brewSeries: got.curve.brewSeries }),
+						details: true,
+						fill: true
+					});
+				}
+				if (writes.length === 0) return;
+				try {
+					const r = await db.putShots(writes, summarize);
+					this.lastSeq = Math.max(this.lastSeq, r.seq);
+					for (const [id, w] of r.written) {
+						this.setSummary(id, w.summary);
+						if (lightSummary(id)) this.light(id, w.summary);
+						this.keepLoaded(id, w.summary, w.details);
+						filled += 1;
+					}
+					this.clearUnsaved([...r.written.keys()]);
+					this.post(
+						writes.map((w) => w.shot.id),
+						r.seq
+					);
+				} catch (e) {
+					// Tried again at the next load: the files stay.
+					this.lastError = errorText(e);
+				}
+			});
+			this.writeChain = run;
+			await run;
+		}
+		return filled;
+	}
+
+	/** Archive files found unreadable, by id: skipped, never used. */
+	get archiveSkipped(): ReadonlyMap<string, string> {
+		return this.archiveCorrupt;
 	}
 
 	// ── Lost and unavailable ──────────────────────────────────────────────
@@ -1882,6 +2093,12 @@ export class HistoryStore {
 		this.oldCopyInfo = null;
 		await this.loadFromDb({ gone, afterLoss });
 		if (heavy.length > 0 && this.health === 'ok') await this.fillHeavyFrom(heavy);
+		// This tab's rows the other tab's recovery couldn't know take their
+		// curves from the archive, once written (#420 S1).
+		if (afterLoss && this.health === 'ok' && (await this.archive?.available())) {
+			await this.flushed();
+			await this.fillFromArchive();
+		}
 		return this.health === 'ok';
 	}
 
@@ -1971,6 +2188,10 @@ export class HistoryStore {
 			this.healthState = 'loading';
 			this.oldCopyInfo = null;
 			await this.loadFromDb({ mine, afterLoss: true });
+			// The rows are in; each one the recovered store holds no curve for
+			// takes the archive's (#420 S1).
+			await this.flushed();
+			await this.fillFromArchive();
 			try {
 				this.channel?.postMessage({ type: 'recovered', from: this.tabId });
 			} catch {
@@ -2414,6 +2635,7 @@ export class HistoryStore {
 					this.setSummary(id, got.summary);
 					this.stored.add(id);
 					done.set(id, got.details);
+					this.oweArchive(id, got.details);
 				}
 				this.post(
 					part.map((s) => s.id),

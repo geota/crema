@@ -102,18 +102,18 @@
 				Your shot history’s storage is missing from this browser. Nothing has been changed. Choose how to get it back.
 			{/if}
 			{#if history.unsavedShots.length > 0}
-				{history.unsavedShots.length === 1 ? 'One shot is' : `${history.unsavedShots.length} shots are`} only in this tab: keep it open until you choose, and they go into what you choose. A download holds the curves only of shots this tab opened or recorded last.
+				{history.unsavedShots.length === 1 ? 'One shot is' : `${history.unsavedShots.length} shots are`} only in this tab: keep it open until you choose, and they go into what you choose. Every shot’s curve is also kept in the curve archive, and whichever you choose takes it back.
 			{/if}
 		</span>
 		<div class="hs-actions">
 			{#each snapshots as snap (snap.name)}
 				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot(snap.name), 'History restored from the daily copy.')}>
-					Daily copy ({dateOf(snap.at)}, {snap.rows} shots, without their curves)
+					Daily copy ({dateOf(snap.at)}, {snap.rows} shots; curves from the curve archive)
 				</button>
 			{/each}
 			{#if snapshots.length > 1}
 				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot('all'), 'History restored from every daily copy.')}>
-					Recover from all copies (merged, newest first, without curves)
+					Recover from all copies (merged, newest first; curves from the curve archive)
 				</button>
 			{/if}
 			<button type="button" class="hs-btn" disabled={busy} onclick={() => void restoreBackup()}>Restore a backup</button>
