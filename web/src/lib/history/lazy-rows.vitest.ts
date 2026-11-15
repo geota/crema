@@ -449,3 +449,27 @@ describe('a store lost under the tab', () => {
 		expect(details.get(opened)!.samples).toHaveLength(4);
 	});
 });
+
+describe('Replace keeps the device’s profile when the backup row has none (Android’s rule)', () => {
+	for (const backend of ['idb', 'legacy'] as const) {
+		it(`on ${backend === 'idb' ? 'crema-history' : 'the legacy backend'}`, async () => {
+			const own = { ...realShot(1, realSamples(5)), visualizerId: null };
+			if (backend === 'idb') await seedStore([own]);
+			else await writeOldCopy([own]);
+			const store = backend === 'idb' ? await boot() : new HistoryStore({ backend: 'legacy' });
+			await store.seriesReady();
+			// The backup's copy of the same shot: other notes, no profile, no curve.
+			const theirs = { ...own, profile: null, metadata: { ...own.metadata, notes: 'from the backup' }, record: { duration: own.record.duration, samples: [] } } as StoredShot;
+			const r = await store.restoreRows(() => ({ next: [theirs], series: [theirs] }));
+			expect(r.stored).toBe(true);
+			const reloaded = backend === 'idb' ? await boot() : new HistoryStore({ backend: 'legacy' });
+			await reloaded.seriesReady();
+			for (const s of [store, reloaded]) {
+				const whole = (await s.loadShot(own.id))!;
+				expect(whole.metadata.notes).toBe('from the backup');
+				expect(whole.profile).toEqual(own.profile);
+				expect(whole.record.samples).toEqual(own.record.samples);
+			}
+		});
+	}
+});
