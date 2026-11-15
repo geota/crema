@@ -343,6 +343,9 @@ function storeHeldMore(shot: StoredShot, d: DetailsRecord): boolean {
 	);
 }
 
+/** The day the archive was last checked whole against the store. */
+const ARCHIVE_CHECKED_KEY = 'crema.history.archiveCheckedOn';
+
 /** Most whole shots {@link HistoryStore.loadShot} keeps, the last loaded (SPEC §4). */
 export const LOADED_SHOTS_KEPT = 16;
 
@@ -469,6 +472,12 @@ export class HistoryStore {
 	private archiveCatchUp: ReturnType<typeof setTimeout> | null = null;
 	/** Archive files that didn't read back whole, by id: skipped, never used. */
 	private archiveCorrupt = new Map<string, string>();
+	/** Deleted shots whose file a remove couldn't take: tried again. */
+	private archiveRemoveOwed = new Set<string>();
+	/** The archive as last counted, for Settings and the lost banner. */
+	private archiveCount = $state<{ files: number; bytes: number } | null>(null);
+	/** An archive write failed and waits for another try (storage full, most likely). */
+	private archiveStuck = $state(false);
 	private hiddenNoticeShown = false;
 	private viewMemo: { rows: StoredShot[]; view: StoredShot[]; live: StoredShot[] } | null = null;
 	private byIdMemo: { rows: StoredShot[]; map: Map<string, StoredShot> } | null = null;
@@ -1436,8 +1445,10 @@ export class HistoryStore {
 			}
 			if (!rec) {
 				if (this.stored.has(s.id)) {
-					// Deleted in another tab.
+					// Deleted in another tab, which removes its archived curve: one
+					// this tab is writing goes again once written (#420 FC-N1).
 					this.forget(s.id);
+					this.archiveDeleted.add(s.id);
 					changed = true;
 					continue;
 				}
@@ -1860,10 +1871,18 @@ export class HistoryStore {
 						continue;
 					}
 					const d = held ?? read.get(id);
+					// A factory reset took the store's marker: write nothing that
+					// would bring the archive's directory back (#420 FC-N4).
+					if (!markerSaysDone() && !this.markerOwed) {
+						this.archiveOwed.clear();
+						break;
+					}
 					try {
 						if (d) await archive.write(id, { samples: d.samples, brewSeries: d.brewSeries });
 						this.archiveOwed.delete(id);
+						this.archiveStuck = false;
 					} catch (e) {
+						this.archiveStuck = true;
 						// Quota, most likely: tried again with the next save. The
 						// store is untouched, and the save didn't wait.
 						this.lastError = `A curve couldn’t be kept in the archive: ${errorText(e)}`;
@@ -1876,7 +1895,36 @@ export class HistoryStore {
 			}
 		})().finally(() => {
 			this.archiveRun = null;
+			void this.countArchive();
 		});
+	}
+
+	/** Count the archive's files and bytes now, for the storage view. */
+	countArchiveNow(): Promise<void> {
+		return this.countArchive();
+	}
+
+	/** Count the archive's files and bytes again. */
+	private async countArchive(): Promise<void> {
+		if (!this.archive) return;
+		try {
+			this.archiveCount = (await this.archive.available()) ? await this.archive.usage() : null;
+		} catch {
+			// Counted again after the next write.
+		}
+	}
+
+	/**
+	 * The curve archive as Settings and the banner show it: its files and
+	 * bytes against the rows with a curve, and whether a write waits.
+	 * Null where there's no private file system, or before it's counted.
+	 */
+	get archiveStatus(): { files: number; bytes: number; curves: number; waiting: boolean } | null {
+		const count = this.archiveCount;
+		if (!count) return null;
+		let curves = 0;
+		for (const s of this.summaries.values()) if ((s.sampleCount ?? 0) > 0 || s.brewSampleCount > 0) curves += 1;
+		return { ...count, curves, waiting: this.archiveStuck };
 	}
 
 	/** Every archive write asked for so far has been tried. */
@@ -1890,10 +1938,25 @@ export class HistoryStore {
 		for (const id of ids) {
 			this.archiveDeleted.add(id);
 			this.archiveOwed.delete(id);
+			this.archiveRemoveOwed.add(id);
 		}
-		void this.archive.remove(ids).catch((e) => {
-			console.warn('[history] an archived curve of a deleted shot couldn’t be removed', e);
-		});
+		void this.removeArchived();
+	}
+
+	/** Remove the files of deleted shots; one that won't go is tried again at the next delete or catch-up (#420 FC-N1). */
+	private async removeArchived(): Promise<void> {
+		const archive = this.archive;
+		const ids = [...this.archiveRemoveOwed];
+		if (!archive || ids.length === 0) return;
+		for (const id of ids) {
+			try {
+				await archive.remove([id]);
+				this.archiveRemoveOwed.delete(id);
+			} catch (e) {
+				console.warn('[history] an archived curve of a deleted shot couldn’t be removed; tried again later', e);
+			}
+		}
+		void this.countArchive();
 	}
 
 	/**
@@ -1914,14 +1977,34 @@ export class HistoryStore {
 		this.archiveCatchUp = null;
 		const archive = this.archive;
 		if (!archive || this.mode !== 'idb' || !(await archive.available())) return;
+		await this.removeArchived();
 		const have = await archive.ids();
+		// Once a day every file is checked against the store's curve, so one
+		// that is corrupt, or older than the store's, is rewritten (#420
+		// FC-S1, FC-S2); a write that matches rewrites nothing. Otherwise
+		// only a shot with no file, or an empty one, is owed.
+		const today = dayOf(this.now());
+		let checkAll = false;
+		try {
+			checkAll = localStorage.getItem(ARCHIVE_CHECKED_KEY) !== today;
+		} catch {
+			checkAll = false;
+		}
 		for (const [id, summary] of this.summaries) {
-			if (have.has(id) || this.archiveOwed.has(id)) continue;
+			if ((!checkAll && have.has(id)) || this.archiveOwed.has(id)) continue;
 			if ((summary.sampleCount ?? 0) > 0 || summary.brewSampleCount > 0) this.archiveOwed.set(id, null);
 		}
 		this.runArchive();
 		await this.fillFromArchive(have);
 		await this.archiveSettled();
+		if (checkAll && this.archiveOwed.size === 0) {
+			try {
+				localStorage.setItem(ARCHIVE_CHECKED_KEY, today);
+			} catch {
+				// Checked again at the next load.
+			}
+		}
+		await this.countArchive();
 	}
 
 	/**

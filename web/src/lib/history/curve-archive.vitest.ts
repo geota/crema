@@ -19,6 +19,7 @@ import type { StoredShot } from './model';
 import { writeDoneMarker } from './store-marker';
 import { summarize } from './summary';
 import { archiveNameOf, CurveArchive } from './curve-archive';
+import { dayOf } from './rows-snapshot';
 import { boot, freshStorage, stored, writeOldCopy, LEGACY_KEY } from './idb-test-kit';
 import type { HistoryStoreOptions } from './store.svelte';
 
@@ -41,7 +42,7 @@ beforeEach(() => {
  */
 function memoryFs() {
 	const dirs = new Map<string, Map<string, Uint8Array>>();
-	const control = { quota: false };
+	const control = { quota: false, failRemove: false };
 	const notFound = () => new DOMException('none', 'NotFoundError');
 	const dirOf = (dname: string, files: Map<string, Uint8Array>) => ({
 		async getFileHandle(name: string, opts?: { create?: boolean }) {
@@ -75,6 +76,7 @@ function memoryFs() {
 			};
 		},
 		async removeEntry(name: string) {
+			if (control.failRemove) throw new DOMException('held', 'NoModificationAllowedError');
 			if (!files.delete(name)) throw notFound();
 		},
 		async *keys() {
@@ -82,6 +84,9 @@ function memoryFs() {
 		}
 	});
 	const root = {
+		async removeEntry(name: string) {
+			if (!dirs.delete(name)) throw notFound();
+		},
 		async getDirectoryHandle(name: string, opts?: { create?: boolean }) {
 			if (!dirs.has(name)) {
 				if (!opts?.create) throw notFound();
@@ -311,5 +316,140 @@ describe('the archive catches up on shots from before it', () => {
 		const size = fs.curves().get(archiveNameOf('shot:size'))!.length;
 		console.log(`[curve-archive] a 180-sample shot's file: ${size} bytes`);
 		expect(size).toBeLessThan(10_000);
+	});
+});
+
+describe('the archive always matches the store’s curve (#420 fix check)', () => {
+	it('FC-S1, probe D: an empty file a closed tab left is written by the catch-up, and the curve comes back', async () => {
+		const fs = memoryFs();
+		const shots = small(3);
+		await seedStore(shots);
+		const root = await fs.fsRoot();
+		await (await root.getDirectoryHandle('crema-history-curves', { create: true })).getFileHandle(archiveNameOf(shots[0].id), { create: true });
+		// Today's whole check already ran: only a shot with no file, or an empty one, is owed.
+		localStorage.setItem('crema.history.archiveCheckedOn', dayOf(Date.now()));
+		const a = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		expect(fs.curves().get(archiveNameOf(shots[0].id))!.length).toBeGreaterThan(0);
+		a.setRating(shots[1].id, 3);
+		await a.flushed();
+		await until(() => fs.copies() === 1);
+		await lose(a, shots[2].id);
+		const b = await boot(fs.opts);
+		expect(await b.recoverSnapshot()).toBe(true);
+		const { details } = await stored();
+		expect(shots.map((s) => details.get(s.id)?.samples.length ?? 0)).toEqual([4, 4, 4]);
+	});
+
+	it('FC-S1, probe E: a corrupt file is rewritten from the store’s curve by the next day’s check', async () => {
+		const fs = memoryFs();
+		const shots = small(2);
+		await seedStore(shots);
+		const day = 86_400_000;
+		const a = await boot({ ...fs.opts, now: () => 1_800_000_000_000 });
+		await a.archiveCatchUpNow();
+		fs.curves().set(archiveNameOf(shots[0].id), new Uint8Array([1, 2, 3]));
+		const b = await boot({ ...fs.opts, now: () => 1_800_000_000_000 + day });
+		await b.archiveCatchUpNow();
+		const got = await new CurveArchive(fs.fsRoot).read(shots[0].id);
+		expect(got.kind === 'curve' && got.curve.samples).toEqual(shots[0].record.samples);
+	});
+
+	it('FC-S1: a save of a shot whose file is corrupt rewrites it', async () => {
+		const fs = memoryFs();
+		await seedStore(small(1));
+		const a = await boot(fs.opts);
+		const made = a.recordCaptured({ ...realShot(60, realSamples(5)), visualizerId: null } as unknown as Record<string, unknown>)!;
+		fs.curves().set(archiveNameOf(made.id), new Uint8Array([9, 9, 9]));
+		await a.flushed();
+		await a.archiveSettled();
+		expect((await new CurveArchive(fs.fsRoot).read(made.id)).kind).toBe('curve');
+	});
+
+	it('FC-S2, probe F: a Replace restore rewrites the file, and a loss brings back the new curve', async () => {
+		const fs = memoryFs();
+		const shots = small(3).map((s) => ({ ...s, visualizerId: null }));
+		await seedStore(shots);
+		const a = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		const x = shots[1];
+		const replaced = { ...x, record: { ...x.record, samples: realSamples(9, 40) } } as StoredShot;
+		const r = await a.restoreRows((rows) => ({ next: rows.map((row) => (row.id === x.id ? replaced : row)), series: [replaced] }));
+		expect(r.stored).toBe(true);
+		await a.flushed();
+		await a.archiveSettled();
+		const archived = await new CurveArchive(fs.fsRoot).read(x.id);
+		expect(archived.kind === 'curve' && archived.curve.samples.length).toBe(9);
+		a.setRating(shots[0].id, 3);
+		await a.flushed();
+		await until(() => fs.copies() === 1);
+		await lose(a, shots[2].id);
+		const b = await boot(fs.opts);
+		expect(await b.recoverSnapshot()).toBe(true);
+		expect((await stored()).details.get(x.id)!.samples).toEqual(replaced.record.samples);
+	});
+
+	it('a file that already matches is not rewritten', async () => {
+		const fs = memoryFs();
+		await seedStore(small(2));
+		const a = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		const before = new Map(fs.curves());
+		const b = await boot({ ...fs.opts, now: () => Date.now() + 86_400_000 });
+		await b.archiveCatchUpNow();
+		for (const [name, bytes] of fs.curves()) expect(bytes, name).toBe(before.get(name));
+	});
+});
+
+describe('the archive’s nits (#420 fix check)', () => {
+	it('FC-N1: a deleted shot’s file that wouldn’t go is removed at the next catch-up', async () => {
+		const fs = memoryFs();
+		const shots = small(2).map((s) => ({ ...s, visualizerId: null }));
+		await seedStore(shots);
+		const a = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		fs.control.failRemove = true;
+		a.delete(shots[0].id);
+		await a.flushed();
+		await new Promise((r) => setTimeout(r, 20));
+		expect(fs.curves().has(archiveNameOf(shots[0].id))).toBe(true);
+		fs.control.failRemove = false;
+		await a.archiveCatchUpNow();
+		expect(fs.curves().has(archiveNameOf(shots[0].id))).toBe(false);
+		expect(fs.curves().has(archiveNameOf(shots[1].id))).toBe(true);
+	});
+
+	it('FC-N4: after a factory reset took the marker, a pending write brings no archive back', async () => {
+		const fs = memoryFs();
+		await seedStore(small(1));
+		const a = await boot(fs.opts);
+		fs.control.quota = true;
+		const made = a.recordCaptured({ ...realShot(61, realSamples(5)), visualizerId: null } as unknown as Record<string, unknown>)!;
+		await a.flushed();
+		await a.archiveSettled();
+		// The reset: the directory and every `crema.` key go.
+		fs.control.quota = false;
+		await (await fs.fsRoot()).removeEntry('crema-history-curves', { recursive: true });
+		localStorage.clear();
+		a.setRating(made.id, 2);
+		await a.flushed();
+		await a.archiveSettled();
+		expect(fs.curves().has(archiveNameOf(made.id))).toBe(false);
+	});
+
+	it('the storage view counts the archive: its files and bytes against the shots with a curve, and a write that waits', async () => {
+		const fs = memoryFs();
+		await seedStore(small(3));
+		const a = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		const status = a.archiveStatus!;
+		expect(status).toMatchObject({ files: 3, curves: 3, waiting: false });
+		expect(status.bytes).toBe([...fs.curves().values()].reduce((n, b) => n + b.length, 0));
+		fs.control.quota = true;
+		a.recordCaptured({ ...realShot(62, realSamples(5)), visualizerId: null } as unknown as Record<string, unknown>);
+		await a.flushed();
+		await a.archiveSettled();
+		await a.countArchiveNow();
+		expect(a.archiveStatus).toMatchObject({ files: 3, curves: 4, waiting: true });
 	});
 });

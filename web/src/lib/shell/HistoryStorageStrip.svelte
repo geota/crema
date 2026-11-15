@@ -84,6 +84,13 @@
 		if (result !== 'reopened' && history.health === 'ok') void goto('/settings#sharing');
 	}
 
+	/** What the curve archive holds, as far as this browser allows one (#420 FC-N3). */
+	const archiveLine = $derived.by(() => {
+		const a = history.archiveStatus;
+		if (!a) return 'A download holds the curves only of shots this tab opened or recorded last.';
+		return `Curves are also kept in the curve archive, where this browser allows: ${a.files} of ${a.curves} shots’ curves are there, and whichever you choose takes them back.`;
+	});
+
 	function downloadUnsaved(): void {
 		for (const shot of history.unsavedRows()) {
 			const blob = new Blob([exportStoredShotAsV2Json(shot, { fullSeries: true })], { type: 'application/json' });
@@ -102,18 +109,18 @@
 				Your shot history’s storage is missing from this browser. Nothing has been changed. Choose how to get it back.
 			{/if}
 			{#if history.unsavedShots.length > 0}
-				{history.unsavedShots.length === 1 ? 'One shot is' : `${history.unsavedShots.length} shots are`} only in this tab: keep it open until you choose, and they go into what you choose. Every shot’s curve is also kept in the curve archive, and whichever you choose takes it back.
+				{history.unsavedShots.length === 1 ? 'One shot is' : `${history.unsavedShots.length} shots are`} only in this tab: keep it open until you choose, and they go into what you choose. {archiveLine}
 			{/if}
 		</span>
 		<div class="hs-actions">
 			{#each snapshots as snap (snap.name)}
 				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot(snap.name), 'History restored from the daily copy.')}>
-					Daily copy ({dateOf(snap.at)}, {snap.rows} shots; curves from the curve archive)
+					Daily copy ({dateOf(snap.at)}, {snap.rows} shots; curves from the archive where it has them)
 				</button>
 			{/each}
 			{#if snapshots.length > 1}
 				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot('all'), 'History restored from every daily copy.')}>
-					Recover from all copies (merged, newest first; curves from the curve archive)
+					Recover from all copies (merged, newest first; curves from the archive where it has them)
 				</button>
 			{/if}
 			<button type="button" class="hs-btn" disabled={busy} onclick={() => void restoreBackup()}>Restore a backup</button>

@@ -6,9 +6,12 @@
  * under the app gives back curves too, each shot's curve (its machine
  * samples, and a brew's scale series) is written once to its own gzipped
  * file, `<id>.json.gz` in the `crema-history-curves` directory of the origin
- * private file system, when it first lands in the store. A curve never
- * changes after that, so a file is never rewritten; one that is there and
- * not empty is left alone.
+ * private file system, when it lands in the store. The file always matches
+ * the store's curve: a write that changes a stored curve (a Replace
+ * restore, a re-pull) rewrites it, and a file that is empty, cut short or
+ * corrupt is rewritten from the store's curve. One that already matches is
+ * left alone, so a curve is written once while it stays the same. A rewrite
+ * lands whole or not at all: a writable commits only on close.
  *
  * - A file is removed only when its shot is deleted, after the store's
  *   delete has landed.
@@ -45,6 +48,8 @@ interface ArchiveFile {
 	brewSampleCount: number;
 	/** A hash of what's stored: `cols` (or `samples`) and `brewSeries`. */
 	sum: string;
+	/** A hash of the curve itself, so a write can tell whether the store's has changed. */
+	curve?: string;
 	/** The samples by column, which gzips to about half: one array per field. */
 	cols?: Columns;
 	/** The samples as they are, when they don't pack into columns exactly. */
@@ -130,6 +135,14 @@ export function holdsCurve(samples: readonly unknown[], brewSeries: BrewSeries |
 }
 
 const sumOf = (payload: unknown, brewSeries: BrewSeries | null): string => hashText(JSON.stringify([payload, brewSeries]));
+/** A hash of a curve as the store holds it. */
+export const curveKeyOf = (curve: ArchivedCurve): string => hashText(JSON.stringify([curve.samples, curve.brewSeries ?? null]));
+
+/** The archive's files and their bytes, for the storage view. */
+export interface ArchiveUsage {
+	files: number;
+	bytes: number;
+}
 
 async function gzip(text: string): Promise<Uint8Array> {
 	if (typeof CompressionStream === 'function' && typeof Response === 'function') {
@@ -163,38 +176,67 @@ export class CurveArchive {
 		return (await this.root()) !== undefined;
 	}
 
-	/** The ids of every file there, whole or not. */
-	async ids(): Promise<Set<string>> {
-		const out = new Set<string>();
+	/** Each file's id and size. */
+	private async files(): Promise<Map<string, number>> {
+		const out = new Map<string, number>();
 		const dir = await this.dir(false);
 		if (!dir) return out;
 		for await (const name of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) {
 			const id = idOfArchiveName(name);
-			if (id !== null) out.add(id);
+			if (id === null) continue;
+			try {
+				out.set(id, (await (await dir.getFileHandle(name)).getFile()).size);
+			} catch {
+				out.set(id, 0);
+			}
 		}
 		return out;
 	}
 
-	/** Whether `id`'s file is there and not empty (an empty one is a write a closed tab cut off). */
-	private async held(dir: FileSystemDirectoryHandle, id: string): Promise<boolean> {
-		try {
-			const file = await (await dir.getFileHandle(archiveNameOf(id))).getFile();
-			return (file as { size?: number }).size !== 0;
-		} catch {
-			return false;
+	/**
+	 * The ids with a file that isn't empty. An empty one is a write a closed
+	 * tab cut off, and counts as none (#420 FC-S1); a corrupt one is found
+	 * when it's read or written.
+	 */
+	async ids(): Promise<Set<string>> {
+		const out = new Set<string>();
+		for (const [id, size] of await this.files()) if (size > 0) out.add(id);
+		return out;
+	}
+
+	/** How many files, and their bytes. */
+	async usage(): Promise<ArchiveUsage> {
+		let files = 0;
+		let bytes = 0;
+		for (const size of (await this.files()).values()) {
+			if (size === 0) continue;
+			files += 1;
+			bytes += size;
 		}
+		return { files, bytes };
+	}
+
+	/** Whether `id`'s file reads back whole and holds the curve whose key is `key`. */
+	private async matches(id: string, key: string): Promise<boolean> {
+		const got = await this.readFile(id);
+		return got.kind === 'curve' && got.key === key;
 	}
 
 	/**
-	 * Keep `id`'s curve, once: a file already there is left as it is.
-	 * `written` when this call wrote it, `kept` when it was there, `none` for
-	 * no curve or no private file system. Throws when the write fails.
+	 * Keep `id`'s curve: a file that already reads back whole with this same
+	 * curve is left as it is; one that is missing, empty, corrupt or holds
+	 * another curve is (re)written. `written` when this call wrote it, `kept`
+	 * when it matched, `none` for no curve or no private file system. Throws
+	 * when the write fails, which leaves the file as it was.
 	 */
 	async write(id: string, curve: ArchivedCurve): Promise<'written' | 'kept' | 'none'> {
 		if (!holdsCurve(curve.samples, curve.brewSeries)) return 'none';
+		const top = await this.root();
+		if (!top) return 'none';
+		const key = curveKeyOf(curve);
+		if (await this.matches(id, key)) return 'kept';
 		const dir = await this.dir(true);
 		if (!dir) return 'none';
-		if (await this.held(dir, id)) return 'kept';
 		const brewSeries = curve.brewSeries ?? null;
 		// Columns only when they give the samples back exactly, key order too.
 		let cols = pack(curve.samples);
@@ -205,6 +247,7 @@ export class CurveArchive {
 			sampleCount: curve.samples.length,
 			brewSampleCount: brewSeries?.samples.length ?? 0,
 			sum: sumOf(cols ?? curve.samples, brewSeries),
+			curve: key,
 			...(cols ? { cols } : { samples: curve.samples }),
 			brewSeries
 		};
@@ -223,6 +266,11 @@ export class CurveArchive {
 
 	/** `id`'s curve, if its file reads back whole. */
 	async read(id: string): Promise<ArchiveRead> {
+		const got = await this.readFile(id);
+		return got.kind === 'curve' ? { kind: 'curve', curve: got.curve } : got;
+	}
+
+	private async readFile(id: string): Promise<{ kind: 'curve'; curve: ArchivedCurve; key: string | undefined } | { kind: 'missing' } | { kind: 'corrupt'; why: string }> {
 		const dir = await this.dir(false);
 		if (!dir) return { kind: 'missing' };
 		let bytes: Uint8Array;
@@ -242,7 +290,7 @@ export class CurveArchive {
 				return { kind: 'corrupt', why: 'brew series unreadable' };
 			}
 			if ((brew?.samples.length ?? 0) !== f.brewSampleCount) return { kind: 'corrupt', why: 'brew series cut short' };
-			return { kind: 'curve', curve: { samples, brewSeries: brew } };
+			return { kind: 'curve', curve: { samples, brewSeries: brew }, key: f.curve };
 		} catch (e) {
 			return { kind: 'corrupt', why: e instanceof Error ? e.message : String(e) };
 		}

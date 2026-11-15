@@ -55,6 +55,20 @@
 		}
 	});
 
+	/** The curve archive, on its own line (#420): its files and size against the shots with a curve. */
+	const archive = $derived(history.archiveStatus);
+	$effect(() => {
+		if (history.loaded) void history.countArchiveNow();
+	});
+	const archiveSub = $derived.by(() => {
+		const a = archive;
+		if (!a) return 'A second copy of each shot’s curve, so a lost history gets its curves back. This browser has no room set aside for it.';
+		const held = `${a.files} of ${a.curves} shots’ curves.`;
+		return a.waiting
+			? `${held} Some are waiting: the last write failed, most likely because storage is full. Crema tries again with each save.`
+			: `${held} A second copy of each curve, so a lost history gets its curves back.`;
+	});
+
 	function tryMoveAgain(): void {
 		retryMigrationSoon();
 		note = 'Shot history will try to move again the next time Crema opens.';
@@ -138,6 +152,11 @@
 	<StRow title="Storage used" sub="Everything Crema stores in this browser.">
 		{#snippet control()}
 			<span class="st-storage-value">{used ?? '—'}</span>
+		{/snippet}
+	</StRow>
+	<StRow title="Curve archive" sub={archiveSub}>
+		{#snippet control()}
+			<span class="st-storage-value" data-testid="curve-archive-size">{archive ? formatBytes(archive.bytes) : '—'}</span>
 		{/snippet}
 	</StRow>
 	<StRow title="Pinned shots" sub="Pin a shot from its detail in History.">
