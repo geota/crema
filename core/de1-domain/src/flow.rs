@@ -106,6 +106,14 @@ impl FlowEstimator {
         }
     }
 
+    /// The newest reading in the window, and when it arrived.
+    #[must_use]
+    pub fn newest(&self) -> Option<(Duration, f32)> {
+        self.samples
+            .back()
+            .map(|&(t, w)| (Duration::from_millis(t), w))
+    }
+
     /// The sample `back` positions before the newest (`back == 0` is newest).
     ///
     /// Callers must ensure `back` is within the current sample count.

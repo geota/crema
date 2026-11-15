@@ -21,6 +21,7 @@ use crate::flow::{FlowAlgorithm, FlowEstimator};
 use crate::saw_learning::{SawLearningModel, SawSnapshot};
 use crate::scale_trust::WeightAuthority;
 use crate::session::{Blocked, LastTrusted};
+use crate::weight_gate::{DISTURB_RATE_G_S, DISTURB_STEP_G};
 
 /// The targets that end a shot automatically. A `None` field disables that mode.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -485,11 +486,21 @@ impl AutoStop {
         self.started = now;
     }
 
-    /// Forget the flow history: the first reading after a scale gap, where a
-    /// slope across the gap means nothing if the scale lied, re-zeroed or was
-    /// disturbed meanwhile (#412).
-    pub fn restart_flow(&mut self) {
-        self.flow.reset();
+    /// The first reading after a scale gap, before [`on_weight`](Self::on_weight)
+    /// reads it. A step across the gap that the step band would call a
+    /// disturbance between live readings (`3 g + 12 g/s × dt`) is no pour:
+    /// the scale lied, re-zeroed or was disturbed meanwhile, so the flow
+    /// history is forgotten and the slope across the gap never feeds the
+    /// lead (#412). A step a pour could make keeps the history, so a scale
+    /// that reports every second or slower keeps its lead.
+    pub fn on_return(&mut self, grams: f32, now: Duration) {
+        let Some((at, before)) = self.flow.newest() else {
+            return;
+        };
+        let dt_s = now.saturating_sub(at).as_secs_f32();
+        if (grams - before).abs() > DISTURB_STEP_G + DISTURB_RATE_G_S * dt_s {
+            self.flow.reset();
+        }
     }
 
     /// When the session's clock started: first flow for espresso, the
