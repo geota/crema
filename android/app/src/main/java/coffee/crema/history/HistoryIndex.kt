@@ -9,6 +9,7 @@ import coffee.crema.core.HistoryRole
 import coffee.crema.core.HistoryRowIn
 import java.io.File
 import java.util.Collections
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /*
@@ -21,17 +22,30 @@ import java.util.concurrent.atomic.AtomicLong
  *   up in its own transaction, the `shots.db` transaction, then the rows it
  *   touched, read back as committed, into the index with `pending` down in
  *   one index transaction. A crash or a failed index write leaves `pending`
- *   above 0, or, when even raising it failed, the [STALE_NAME] mark.
+ *   above 0.
+ * - **The seq (#310 A1b).** Each `shots` transaction also raises `index_seq`
+ *   in `shots.db`'s `meta`, and the index write that mirrors it applies that
+ *   seq to the index's `source_seq` (with `seen_seqs` for any past a gap,
+ *   as on web). So a write the index missed for any reason (`pending` that
+ *   couldn't be raised, another store in the process, a pair of files copied
+ *   at different moments) leaves the two seqs apart, recorded by `shots.db`
+ *   itself in the write's own transaction.
  * - **Never in the way.** No index failure reaches the P3a write: the
  *   `shots.db` transaction commits whatever happens here, and the next boot's
  *   full diff repairs the index.
- * - **The boot check** passes only when `pending` is 0, no stale mark is
- *   there, the last full diff ran on this `versionCode`, and the counts
- *   match. Otherwise the **full diff** runs: every row in batches of
- *   [BATCH], each batch under the lock, then the ids the index holds and
- *   `shots.db` doesn't are removed (the one delete by absence, allowed
- *   because the index is derived).
- * - **Erase** closes the file under the core's lock first ([closeAll], S11).
+ * - **The boot check** passes only when `pending` is 0, the index's
+ *   `source_seq` is `shots.db`'s `index_seq` with no seq seen past a gap,
+ *   the last full diff ran on this `versionCode`, and the counts match.
+ *   Otherwise the **full diff** runs: every row in batches of [BATCH], each
+ *   batch under the lock, then the ids the index holds and `shots.db`
+ *   doesn't are removed (the one delete by absence, allowed because the
+ *   index is derived). It settles only when the index has every seq up to
+ *   `shots.db`'s at its end.
+ * - **A write that clears the table** (the migration, a lost store rebuilt)
+ *   leaves `pending` raised, and the next [HistoryStore.syncIndex] rebuilds,
+ *   after the store's marker is written and outside the write.
+ * - **Erase** closes the file under the core's lock first ([erasing], S11),
+ *   and nothing opens or makes it again until the erase returns.
  *
  * Rust opens only this file and Kotlin never opens it (decision 11, N3); it
  * lives in `filesDir/history-sqlite/`, outside `databases/`.
@@ -92,9 +106,13 @@ data class IndexHealth(
     val versionCode: Long,
     val indexRows: Int?,
     val shotsRows: Int?,
-    val staleMarked: Boolean,
+    /** The last `shots.db` seq the index mirrored, and those it saw past a gap. */
+    val sourceSeq: ULong?,
+    val seenSeqs: List<ULong>,
+    /** `shots.db`'s `index_seq`: its last write. */
+    val shotsSeq: ULong?,
     val hookFailures: Long,
-    /** Why the boot check would miss now: empty when it passes. */
+    /** Why the boot check misses now: empty when it passes. */
     val misses: List<String>,
     val lastDiff: IndexDiffReport?,
 )
@@ -113,7 +131,6 @@ internal class HistoryIndex(
     val versionCode: Long = BuildConfig.VERSION_CODE.toLong(),
 ) : ShotsHook {
     val file: File get() = File(dir, FILE_NAME)
-    private val staleMark: File get() = File(dir, STALE_NAME)
 
     /** The open index, or null. Closed under us (another store in this process took it over) stays closed. */
     @Volatile private var bridge: HistoryDbBridge? = null
@@ -134,8 +151,9 @@ internal class HistoryIndex(
 
     // ── Open and close ───────────────────────────────────────────────────────
 
-    /** The open index, opening it the first time (or again when [retry]). */
+    /** The open index, opening it the first time (or again when [retry]). Never while an erase runs. */
     private fun opened(retry: Boolean = false): HistoryDbBridge? {
+        if (ERASING.get() > 0) return null
         bridge?.let { return if (it.isClosed) null else it }
         if (openTried && !retry) return null
         openTried = true
@@ -144,17 +162,20 @@ internal class HistoryIndex(
         } catch (e: SimulatedCrash) {
             throw e
         } catch (e: Throwable) {
-            failure("open", e, count = false)
+            failure("open", e)
             null
         }
     }
 
     private fun openFresh(): HistoryDbBridge {
-        dir.mkdirs()
-        val key = file.absolutePath
         synchronized(HELD) {
+            // Checked again under HELD's lock, which [erasing] takes too: an erase that began
+            // meanwhile has closed the file, and nothing makes the directory again under it.
+            check(ERASING.get() == 0) { "an erase is running" }
+            dir.mkdirs()
+            val key = file.absolutePath
             // One process, one connection per file (S4): an earlier store here (a recreated view
-            // model) gives it up. Its next write fails, which marks the index stale.
+            // model) gives it up. Its later writes leave seqs the index never saw.
             HELD.remove(key)?.let { old -> runCatching { old.now { it.closeAll() } } }
             val options = HistoryDbBridge.options(HistoryRole.INDEX, create = true)
             val b = try {
@@ -171,7 +192,7 @@ internal class HistoryIndex(
         }
     }
 
-    /** Erase (S11): close the file under the core's lock before anything removes it. The next write opens a new one. */
+    /** Close the file under the core's lock. The next write opens it again. */
     fun closeAll() {
         val mine = bridge
         bridge = null
@@ -180,14 +201,25 @@ internal class HistoryIndex(
         for (b in listOfNotNull(mine, held).distinct()) runCatching { b.now { it.closeAll() } }
     }
 
+    /**
+     * Erase (S11, REVIEW-446 note 4): close the file under the core's lock
+     * before [block] removes anything, and let no store in this process open
+     * or make it again until [block] returns.
+     */
+    fun <T> erasing(block: () -> T): T {
+        synchronized(HELD) { ERASING.incrementAndGet() }
+        try {
+            closeAll()
+            return block()
+        } finally {
+            ERASING.decrementAndGet()
+        }
+    }
+
     // ── The hook (M4) ────────────────────────────────────────────────────────
 
     override fun begin(): Any? {
-        val db = opened()
-        if (db == null) {
-            markStale()
-            return null
-        }
+        val db = opened() ?: return null
         val raised = try {
             fail(IndexFault.FAIL_RAISE)
             db.now { it.bumpPending() }
@@ -203,11 +235,14 @@ internal class HistoryIndex(
     }
 
     override fun committed(ticket: Any?, db: SQLiteDatabase, write: ShotsWrite) {
+        // No ticket: the index isn't open. The write's seq is the record of the miss.
         val t = ticket as? Ticket ?: return
         crash(IndexFault.CRASH_AFTER_SHOTS)
+        // A write that cleared the table: `pending` stays up, and the next syncIndex rebuilds (REVIEW-446 note 5).
+        if (write.cleared) return
         try {
             fail(IndexFault.FAIL_WRITE)
-            if (write.cleared) replaceAll(t.db, db) else mirror(t.db, db, write.touched, lower = t.raised)
+            mirror(t.db, db, write.touched, write.seq, lower = t.raised)
         } catch (e: SimulatedCrash) {
             throw e
         } catch (e: Throwable) {
@@ -218,55 +253,36 @@ internal class HistoryIndex(
     }
 
     override fun failed(ticket: Any?, error: Throwable) {
-        // The `shots.db` transaction threw: `pending` stays up, and the next boot's diff settles it.
+        // The `shots.db` transaction threw and took its seq with it: `pending` stays up, and the next boot's diff settles it.
         if (ticket != null) HOOK_FAILURES.incrementAndGet()
     }
 
     override fun replaced() {
-        // `shots.db` went aside or was deleted: whatever the index holds may be wrong now.
-        val db = opened()
-        val raised = db != null && runCatching { db.now { it.bumpPending() } }.isSuccess
-        if (!raised) markStale()
+        // `shots.db` went aside or was deleted: whatever the index holds may be wrong now, and the new file's seq starts again.
+        val db = opened() ?: return
+        runCatching { db.now { it.bumpPending() } }
     }
 
-    /** [ids]' rows as `shots.db` committed them into the index; an id it lacks leaves the index too. */
-    private fun mirror(db: HistoryDbBridge, shots: SQLiteDatabase, ids: Set<String>, lower: Boolean) {
+    /**
+     * [ids]' rows as `shots.db` committed them into the index; an id it lacks
+     * leaves the index too. The last batch applies the write's [seq] and lowers
+     * `pending`, so a crash between batches leaves both for the next boot.
+     */
+    private fun mirror(db: HistoryDbBridge, shots: SQLiteDatabase, ids: Set<String>, seq: ULong, lower: Boolean) {
         val list = ids.toList()
         val rows = tables().rawRows(shots, list)
         val batches = list.chunked(BATCH).ifEmpty { listOf(emptyList()) }
         batches.forEachIndexed { i, batch ->
             if (i > 0) crash(IndexFault.CRASH_BETWEEN_BATCHES)
+            val last = i == batches.lastIndex
             val write = HistoryIndexWrite(
                 upsert = batch.mapNotNull { id -> rows[id]?.let { HistoryRowIn(it) } },
                 delete = batch.filter { it !in rows },
-                seenSeqs = emptyList(),
-                lowerPending = lower && i == batches.lastIndex,
+                seenSeqs = if (last) listOf(seq) else emptyList(),
+                lowerPending = lower && last,
             )
             db.now { it.indexWrite(write) }
         }
-    }
-
-    /**
-     * A write that cleared `shots` (the migration, a lost store rebuilt): the
-     * whole table, under the lock, so this is a full diff with nothing
-     * writing beside it, and it settles `pending` as one.
-     */
-    private fun replaceAll(db: HistoryDbBridge, shots: SQLiteDatabase) {
-        val since = db.now { it.writeSeq() }
-        var after: String? = null
-        var first = true
-        while (true) {
-            val rows = tables().rawPage(shots, after, BATCH)
-            if (rows.isEmpty()) break
-            if (!first) crash(IndexFault.CRASH_BETWEEN_BATCHES)
-            first = false
-            db.now { it.diffBatch(rows.map { HistoryRowIn(it.second) }) }
-            after = rows.last().first
-            if (rows.size < BATCH) break
-        }
-        db.now { it.removeAbsent(tables().ids(shots).toList(), since) }
-        db.now { it.finishAndroidDiff(versionCode) }
-        staleMark.delete()
     }
 
     // ── The boot check and the full diff ─────────────────────────────────────
@@ -274,8 +290,10 @@ internal class HistoryIndex(
     /** A full diff under way: each step runs under the lock. */
     internal class Diff(
         val db: HistoryDbBridge,
+        /** The index's own `write_seq` when it began: rows it writes after are never removed by absence. */
         val since: ULong,
-        val failuresAtStart: Long,
+        /** `shots.db`'s `index_seq` when it began: every write up to it is in the rows the diff reads. */
+        val shotsSeq: ULong,
         val reasons: List<String>,
         val startedAtMs: Long,
     ) {
@@ -290,8 +308,12 @@ internal class HistoryIndex(
         val out = ArrayList<String>()
         val state = db.now { it.indexState() }
         if (state.pending > 0uL) out += "pending is ${state.pending}"
+        val shotsSeq = tables().indexSeq(shots)
+        if (state.sourceSeq != shotsSeq || state.seenSeqs.isNotEmpty()) {
+            val gap = if (state.seenSeqs.isEmpty()) "" else ", and ${state.seenSeqs.size} past a gap"
+            out += "the index has shots.db's writes to ${state.sourceSeq}$gap; shots.db is at $shotsSeq"
+        }
         if (state.diffVersionCode != versionCode) out += "last full diff on versionCode ${state.diffVersionCode ?: "none"}, this is $versionCode"
-        if (staleMark.exists()) out += "a write didn't reach the index"
         val indexRows = db.now { it.count(HistoryDbBridge.ALL) }.toInt()
         val shotsRows = tables().count(shots)
         if (indexRows != shotsRows) out += "index holds $indexRows rows, shots.db $shotsRows"
@@ -308,13 +330,12 @@ internal class HistoryIndex(
         return try {
             val reasons = misses(db, shots).let { if (force && it.isEmpty()) listOf("asked for") else it }
             if (reasons.isEmpty()) return null
-            val failures = HOOK_FAILURES.get()
             db.now { it.bumpPending() }
-            Diff(db, db.now { it.writeSeq() }, failures, reasons, System.currentTimeMillis())
+            Diff(db, db.now { it.writeSeq() }, tables().indexSeq(shots), reasons, System.currentTimeMillis())
         } catch (e: SimulatedCrash) {
             throw e
         } catch (e: Throwable) {
-            failure("boot check", e, count = false)
+            failure("boot check", e)
             null
         }
     }
@@ -339,17 +360,19 @@ internal class HistoryIndex(
             throw e
         } catch (e: Throwable) {
             diff.outcome = "failed: ${e.message ?: e.javaClass.simpleName}"
-            failure("full diff", e, count = false)
+            failure("full diff", e)
             false
         }
     }
 
     /**
      * The diff's last step: the rows `shots.db` doesn't hold leave the index
-     * (read under the same lock, so none can arrive meanwhile), then `pending`
-     * goes to 0 with this `versionCode`, unless a write failed to mirror since
-     * the diff began, which leaves it for the next boot. Null [shots]: the
-     * store closed (erase, lost) and the diff stops.
+     * (read under the same lock, so none can arrive meanwhile), and the index
+     * takes every seq up to the one the diff began at. It settles `pending`
+     * to 0 with this `versionCode` only when the index then has every seq up
+     * to `shots.db`'s now: a write since it began that the index missed, from
+     * this store or another (REVIEW-446 note 1), leaves it for the next boot.
+     * Null [shots]: the store closed (erase, lost) and the diff stops.
      */
     fun finishDiff(diff: Diff, shots: SQLiteDatabase?): IndexDiffReport {
         var removed = 0
@@ -358,18 +381,20 @@ internal class HistoryIndex(
         if (diff.outcome == null && shots != null) {
             try {
                 removed = diff.db.now { it.removeAbsent(tables().ids(shots).toList(), diff.since) }.deleted.size
-                if (HOOK_FAILURES.get() != diff.failuresAtStart) {
-                    diff.outcome = "a write didn't reach the index while it ran: the next boot runs it again"
+                diff.db.now { it.setSourceSeq(diff.shotsSeq) }
+                val state = diff.db.now { it.indexState() }
+                val now = tables().indexSeq(shots)
+                if (state.sourceSeq != now || state.seenSeqs.isNotEmpty()) {
+                    diff.outcome = "a write since it began didn't reach the index (it has writes to ${state.sourceSeq} of $now): the next boot runs it again"
                 } else {
                     diff.db.now { it.finishAndroidDiff(versionCode) }
-                    staleMark.delete()
                     diff.outcome = IndexDiffReport.OK
                 }
             } catch (e: SimulatedCrash) {
                 throw e
             } catch (e: Throwable) {
                 diff.outcome = "failed: ${e.message ?: e.javaClass.simpleName}"
-                failure("full diff", e, count = false)
+                failure("full diff", e)
             }
         }
         val report = IndexDiffReport(
@@ -393,6 +418,7 @@ internal class HistoryIndex(
         val state = db?.let { b -> runCatching { b.now { it.indexState() } }.getOrNull() }
         val indexRows = db?.let { b -> runCatching { b.now { it.count(HistoryDbBridge.ALL) }.toInt() }.getOrNull() }
         val shotsRows = shots?.let { s -> runCatching { tables().count(s) }.getOrNull() }
+        val shotsSeq = shots?.let { s -> runCatching { tables().indexSeq(s) }.getOrNull() }
         val misses = if (db != null && shots != null) runCatching { misses(db, shots) }.getOrElse { listOf("check failed: ${it.message}") } else emptyList()
         return IndexHealth(
             open = db != null,
@@ -404,7 +430,9 @@ internal class HistoryIndex(
             versionCode = versionCode,
             indexRows = indexRows,
             shotsRows = shotsRows,
-            staleMarked = staleMark.exists(),
+            sourceSeq = state?.sourceSeq,
+            seenSeqs = state?.seenSeqs.orEmpty(),
+            shotsSeq = shotsSeq,
             hookFailures = HOOK_FAILURES.get(),
             misses = misses,
             lastDiff = lastDiff,
@@ -440,20 +468,11 @@ internal class HistoryIndex(
 
     // ── Failures ─────────────────────────────────────────────────────────────
 
-    /** A hook or diff step failed: counted, and the index marked stale for the next boot. */
-    private fun failure(what: String, e: Throwable, count: Boolean = true) {
-        if (count) HOOK_FAILURES.incrementAndGet()
+    /** A hook or diff step failed: counted for the debug screen. The seqs and `pending` carry the miss. */
+    private fun failure(what: String, e: Throwable) {
+        HOOK_FAILURES.incrementAndGet()
         lastError = "$what: ${e.message ?: e.javaClass.simpleName}"
-        if (count) markStale()
         if (logged++ < 5) persist("index $what failed: $e")
-    }
-
-    /** The durable miss for a write the index couldn't follow, even with `pending` out of reach. */
-    private fun markStale() {
-        runCatching {
-            dir.mkdirs()
-            staleMark.createNewFile()
-        }
     }
 
     private fun crash(f: IndexFault) {
@@ -471,9 +490,6 @@ internal class HistoryIndex(
     companion object {
         const val FILE_NAME = "history-index.db"
 
-        /** The mark a write the index couldn't follow leaves, when `pending` couldn't be raised. */
-        const val STALE_NAME = "history-index.stale"
-
         /** Rows per index transaction and per diff batch (SPEC §11 stage 1 step 3). */
         const val BATCH = 500
 
@@ -482,7 +498,10 @@ internal class HistoryIndex(
         /** Every [HistoryIndex]'s open file in this process, by path (S4). */
         private val HELD = HashMap<String, HistoryDbBridge>()
 
-        /** Hook writes that didn't reach the index, this process: a diff that saw one doesn't settle `pending`. */
+        /** Erases running in this process: while one runs, nothing opens or makes the index (REVIEW-446 note 4). */
+        private val ERASING = AtomicInteger()
+
+        /** Index calls that failed, this process: the debug screen's count. */
         private val HOOK_FAILURES = AtomicLong()
 
         /**

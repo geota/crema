@@ -154,7 +154,7 @@ internal interface ShotsHook {
     /** Before the write: raise `pending`. */
     fun begin(): Any?
 
-    /** The write committed: mirror it, then lower `pending`. */
+    /** The write committed as [ShotsWrite.seq]: mirror it, then lower `pending`. */
     fun committed(ticket: Any?, db: SQLiteDatabase, write: ShotsWrite)
 
     /** The write threw: what it left is unknown, so `pending` stays raised. */
@@ -186,6 +186,14 @@ internal class ShotsWrite(val db: SQLiteDatabase) {
     var cleared = false
         private set
 
+    /**
+     * The `index_seq` this write's transaction set in `meta` (#310 A1b): one
+     * up from the one before, so every committed write has its own, and the
+     * index records the last one it mirrored. Set once the block has run.
+     */
+    var seq: ULong = 0uL
+        internal set
+
     fun touch(id: String) {
         ids += id
     }
@@ -203,12 +211,24 @@ internal class HistoryTables(private val json: Json, private val hook: ShotsHook
      * it (#310 A1, M4): `pending` up, the transaction, then the index and
      * `pending` down. Every writer of `shots` takes a [ShotsWrite], so there
      * is no other way in.
+     *
+     * The transaction also raises `index_seq` in `meta` (#310 A1b), so
+     * `shots.db` itself records every write, whatever happens to the index:
+     * the boot check compares it with the last seq the index mirrored. It is
+     * read before [block] and set after, so a write that clears `meta`
+     * keeps counting up.
      */
     fun <T> write(db: SQLiteDatabase, block: ShotsWrite.() -> T): T {
         val ticket = hook.begin()
         val w = ShotsWrite(db)
         val out = try {
-            db.inTransaction { w.block() }
+            db.inTransaction {
+                val before = indexSeq(this)
+                val out = w.block()
+                w.seq = before + 1uL
+                putMeta(this, META_INDEX_SEQ, w.seq.toString())
+                out
+            }
         } catch (e: Throwable) {
             if (e !is SimulatedCrash) hook.failed(ticket, e)
             throw e
@@ -382,6 +402,9 @@ internal class HistoryTables(private val json: Json, private val hook: ShotsHook
     fun meta(db: SQLiteDatabase, key: String): String? =
         db.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(key)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
 
+    /** The seq of the last write to `shots` ([write]), 0 before the first. */
+    fun indexSeq(db: SQLiteDatabase): ULong = meta(db, META_INDEX_SEQ)?.toULongOrNull() ?: 0uL
+
     fun putMeta(db: SQLiteDatabase, key: String, value: String) {
         db.insertWithOnConflict("meta", null, ContentValues().apply { put("key", key); put("value", value) }, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -391,6 +414,9 @@ internal class HistoryTables(private val json: Json, private val hook: ShotsHook
     companion object {
         const val SUMMARY = "summary"
         const val META_MIGRATION = "migration"
+
+        /** The hook's count of writes to `shots` (#310 A1b), and SPEC §11 step 5's `source_seq` at the flip. */
+        const val META_INDEX_SEQ = "index_seq"
     }
 }
 

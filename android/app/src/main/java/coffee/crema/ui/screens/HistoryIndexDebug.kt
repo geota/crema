@@ -30,7 +30,7 @@ import kotlinx.coroutines.launch
 /**
  * The stage-1 history index's health (#310 A1), in the debug panel: whether
  * it's open, `pending`, the `versionCode` of its last full diff, its rows
- * against `shots.db`'s, the stale mark, hook failures and the last diff.
+ * and its seq against `shots.db`'s, hook failures and the last diff.
  * "Compare" checks every row's `row_json`; "Rebuild" runs a full diff. Only
  * behind the debug flag (Settings → Diagnostics); nothing else reads the index.
  */
@@ -95,7 +95,7 @@ internal fun historyIndexLines(h: IndexHealth?): List<String> {
     h.error?.let { out += "last error: $it" }
     out += "rows: index ${h.indexRows ?: "?"}, shots.db ${h.shotsRows ?: "?"}"
     out += "pending ${h.pending ?: "?"}; last full diff on versionCode ${h.diffVersionCode ?: "none"} (this is ${h.versionCode})"
-    if (h.staleMarked) out += "stale mark: a write didn't reach the index"
+    out += "seq: index ${h.sourceSeq ?: "?"}${if (h.seenSeqs.isEmpty()) "" else " (+${h.seenSeqs.size} past a gap)"}, shots.db ${h.shotsSeq ?: "?"}"
     if (h.hookFailures > 0) out += "hook failures this process: ${h.hookFailures}"
     out += if (h.misses.isEmpty()) "boot check: passes" else "boot check misses: ${h.misses.joinToString("; ")}"
     h.lastDiff?.let { d ->
