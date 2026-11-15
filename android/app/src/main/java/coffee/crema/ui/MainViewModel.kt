@@ -1486,8 +1486,58 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val from: coffee.crema.drive.DriveBackupRow? = null,
         /** The shots [records] holds: those the plan read for could write. */
         var recordShots: Set<String> = coffee.crema.restore.RestoreRecords.shotsTheRunWrites(plan),
+        /** Where [prepared]'s photos are staged: its own, held while the report is open. */
+        val stage: java.io.File? = null,
     )
     private var pendingRestore: PendingRestore? = null
+        set(value) {
+            if (value === field) return
+            value?.stage?.let(::holdStage)
+            field?.stage?.let(::releaseStage)
+            field = value
+        }
+
+    /**
+     * Each prepare stages its photos in a directory of its own, so a second
+     * pick while a report is open or a restore runs can't clear the first's
+     * (REVIEW-395 nit 4). A stage is deleted when nothing holds it: its
+     * prepare, the open report, or its run. The counts are Main thread only;
+     * the deletes run on IO.
+     */
+    private val stageHolds = HashMap<java.io.File, Int>()
+
+    private fun holdStage(stage: java.io.File) {
+        stageHolds[stage] = (stageHolds[stage] ?: 0) + 1
+    }
+
+    private fun releaseStage(stage: java.io.File) {
+        val n = (stageHolds[stage] ?: return) - 1
+        if (n > 0) {
+            stageHolds[stage] = n
+        } else {
+            stageHolds.remove(stage)
+            viewModelScope.launch(Dispatchers.IO) { stage.deleteRecursively() }
+        }
+    }
+
+    /**
+     * A new stage, held once; any other stage nothing holds (one a kill left)
+     * goes. Listed, made and held in one Main-thread step, so another prepare
+     * never sees it unheld and takes it for an orphan; only the deletes run on
+     * IO. Internal for tests.
+     */
+    internal fun newRestoreStage(): java.io.File {
+        val root = restoreStageRoot().apply { mkdirs() }
+        val orphans = root.listFiles()?.filter { it !in stageHolds }.orEmpty()
+        val stage = java.nio.file.Files.createTempDirectory(root.toPath(), "stage-").toFile()
+        holdStage(stage)
+        viewModelScope.launch(Dispatchers.IO) {
+            orphans.forEach { it.deleteRecursively() }
+            // Before #410 the stage was in the cache, which the system may clear while a report waits.
+            java.io.File(getApplication<Application>().cacheDir, "restore-photos").deleteRecursively()
+        }
+        return stage
+    }
 
     private fun kindOf(mode: RestoreMode) =
         if (mode == RestoreMode.WIPE) coffee.crema.restore.RestoreKind.REPLACE else coffee.crema.restore.RestoreKind.MERGE
@@ -1514,11 +1564,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Where an incoming backup waits for its restore: one file per source, replaced by the next. */
     private fun restoreIncoming(name: String) = java.io.File(getApplication<Application>().cacheDir, name)
 
-    private fun restoreStage() = java.io.File(getApplication<Application>().cacheDir, "restore-photos")
+    /** Not the cache: the system may clear that while a report waits, and the run would stop at its photos. */
+    private fun restoreStageRoot() = java.io.File(getApplication<Application>().noBackupFilesDir, "restore-photos")
 
     /** [startRestoreFile] for bytes already in memory. */
     fun startRestore(bytes: ByteArray, name: String, mode: RestoreMode, from: coffee.crema.drive.DriveBackupRow? = null) =
-        startRestoreFrom(name, mode, from) { coffee.crema.restore.prepareBackup(bytes, name, restoreStage()) }
+        startRestoreFrom(name, mode, from) { stage -> coffee.crema.restore.prepareBackup(bytes, name, stage) }
 
     /**
      * Plan a restore of the backup in [file], read a piece at a time: a refusal
@@ -1526,30 +1577,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * which Replace gates behind Type ERASE.
      */
     fun startRestoreFile(file: java.io.File, name: String, mode: RestoreMode, from: coffee.crema.drive.DriveBackupRow? = null) =
-        startRestoreFrom(name, mode, from) { coffee.crema.restore.prepareBackupFile(file, name, restoreStage()) }
+        startRestoreFrom(name, mode, from) { stage -> coffee.crema.restore.prepareBackupFile(file, name, stage) }
 
     private fun startRestoreFrom(
         name: String,
         mode: RestoreMode,
         from: coffee.crema.drive.DriveBackupRow?,
-        prepare: () -> coffee.crema.restore.PreparedBackup,
+        prepare: (stage: java.io.File) -> coffee.crema.restore.PreparedBackup,
     ) {
         viewModelScope.launch {
-            val kind = kindOf(mode)
-            val prepared = runCatching { withContext(Dispatchers.IO) { prepare() } }
-                .getOrElse { notifyUser("Restore failed: ${it.message}"); return@launch }
-            // The plan first: its verdict says whether this is a backup at all.
-            val plan = restoreEngine.plan(prepared, kind)
-            if (plan.verdict == coffee.crema.core.Verdict.Refused) {
-                notifyUser(coffee.crema.restore.refusalMessage(plan))
-                return@launch
-            }
-            val records = runCatching { readRecords(prepared, plan) }
-                .getOrElse { notifyUser(it.message ?: "Restore failed."); return@launch }
-            val pending = PendingRestore(prepared, records, kind, plan, from = from)
-            when {
-                plan.verdict == coffee.crema.core.Verdict.Ok && plan.shots.deletedHere.isEmpty() -> runPending(pending)
-                else -> showReport(pending)
+            val stage = runCatching { newRestoreStage() }
+                .getOrElse { notifyUser("Restore failed — couldn't make room for its photos."); return@launch }
+            try {
+                val kind = kindOf(mode)
+                val prepared = runCatching { withContext(Dispatchers.IO) { prepare(stage) } }
+                    .getOrElse { notifyUser("Restore failed: ${it.message}"); return@launch }
+                // The plan first: its verdict says whether this is a backup at all.
+                val plan = restoreEngine.plan(prepared, kind)
+                if (plan.verdict == coffee.crema.core.Verdict.Refused) {
+                    notifyUser(coffee.crema.restore.refusalMessage(plan))
+                    return@launch
+                }
+                val records = runCatching { readRecords(prepared, plan) }
+                    .getOrElse { notifyUser(it.message ?: "Restore failed."); return@launch }
+                val pending = PendingRestore(prepared, records, kind, plan, from = from, stage = stage)
+                when {
+                    plan.verdict == coffee.crema.core.Verdict.Ok && plan.shots.deletedHere.isEmpty() -> runPending(pending)
+                    else -> showReport(pending)
+                }
+            } finally {
+                releaseStage(stage)
             }
         }
     }
@@ -1614,11 +1671,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     private suspend fun runPending(pending: PendingRestore) {
+        // Its staged photos stay while it runs, whatever another prepare does.
+        pending.stage?.let(::holdStage)
+        try {
+            runPendingHeld(pending)
+        } finally {
+            pending.stage?.let(::releaseStage)
+        }
+    }
+
+    private suspend fun runPendingHeld(pending: PendingRestore) {
         // A plan that changed since the records were read may name other shots.
         val want = coffee.crema.restore.RestoreRecords.shotsTheRunWrites(pending.plan)
         if (want != pending.recordShots) {
             pending.records = runCatching { readRecords(pending.prepared, pending.plan) }
-                .getOrElse { pendingRestore = null; notifyUser(it.message ?: "Restore failed."); return }
+                .getOrElse { dropPending(pending); notifyUser(it.message ?: "Restore failed."); return }
             pending.recordShots = want
         }
         val outcome = restoreEngine.run(pending.prepared, pending.kind, pending.records, pending.revive, expected = pending.plan)
@@ -1627,7 +1694,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             showReport(pending, lead = coffee.crema.restore.outcomeMessage(outcome))
             return
         }
-        pendingRestore = null
+        dropPending(pending)
         // Only a finished restore can end the pre-damage pin's hold, and only one
         // that dealt with the damage (REVIEW-366, REVIEW-370).
         if (outcome is coffee.crema.restore.RestoreOutcome.Done) {
@@ -1635,6 +1702,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val held = coffee.crema.ui.heldSharingNotice(library.restoreHeldSharing)
         notifyUser(coffee.crema.restore.outcomeMessage(outcome) + (held?.let { " $it" } ?: ""))
+    }
+
+    /** [pending] is done with: unless another report has replaced it, nothing is pending now. */
+    private fun dropPending(pending: PendingRestore) {
+        if (pendingRestore === pending) pendingRestore = null
     }
 
     /** A restore's settings, awaited: the live UI, the core, the machine's registers, then the file. */
@@ -1648,17 +1720,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Apply a backup from raw bytes, confirming whatever its plan allows: tests only. */
     internal suspend fun restoreBackupBytes(bytes: ByteArray, mode: RestoreMode) {
         val kind = kindOf(mode)
-        val prepared = coffee.crema.restore.prepareBackup(bytes, "a backup", java.io.File(getApplication<Application>().cacheDir, "restore-photos"))
-        val plan = restoreEngine.plan(prepared, kind)
-        if (plan.verdict == coffee.crema.core.Verdict.Refused) {
-            notifyUser(coffee.crema.restore.refusalMessage(plan))
-            return
+        val stage = newRestoreStage()
+        try {
+            val prepared = coffee.crema.restore.prepareBackup(bytes, "a backup", stage)
+            val plan = restoreEngine.plan(prepared, kind)
+            if (plan.verdict == coffee.crema.core.Verdict.Refused) {
+                notifyUser(coffee.crema.restore.refusalMessage(plan))
+                return
+            }
+            // In memory and test-only: read here, so the run starts before this suspends.
+            val records = coffee.crema.restore.RestoreRecords.read(
+                prepared, json, System.currentTimeMillis(), coffee.crema.restore.RestoreRecords.shotsTheRunWrites(plan),
+            )
+            runPending(PendingRestore(prepared, records, kind, plan, stage = stage))
+        } finally {
+            releaseStage(stage)
         }
-        // In memory and test-only: read here, so the run starts before this suspends.
-        val records = coffee.crema.restore.RestoreRecords.read(
-            prepared, json, System.currentTimeMillis(), coffee.crema.restore.RestoreRecords.shotsTheRunWrites(plan),
-        )
-        runPending(PendingRestore(prepared, records, kind, plan))
     }
 
     /** [restoreBackupBytes] for a bundle's raw text: tests only, as it confirms its own plan. */
