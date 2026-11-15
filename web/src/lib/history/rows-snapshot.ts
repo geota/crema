@@ -22,7 +22,8 @@
  */
 import { Gunzip, Gzip, strToU8 } from 'fflate';
 import { HISTORY_SNAPSHOT_NAME } from './store-names';
-import type { RowRecord } from './history-db';
+import type { HistoryDb, RowRecord } from './history-db';
+import { readProfiles, type ProfilesOf } from './snapshot-profiles';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
 
 /**
@@ -30,8 +31,14 @@ import type { LockManagerLike } from '#lib/restore/tab-safety.js';
  * tasks of 369 ms at a 6× CPU slowdown).
  */
 export const SNAPSHOT_CHUNK = 100;
-/** Bytes a step inflates before it yields. */
+/**
+ * Bytes a step inflates before it yields, counted as they come out, not as
+ * they go in: a day's copy inflates about 100 times (#421: 64 KB in made
+ * 7 MB out, and tasks of 139 ms at 6×). A step ends at the first slice past it.
+ */
 const INFLATE_STEP = 64 * 1024;
+/** Compressed bytes pushed at once, so a step goes only a slice past {@link INFLATE_STEP}. */
+const INFLATE_SLICE = 512;
 /** How many daily copies are kept. */
 export const SNAPSHOTS_KEPT = 3;
 /** The Web Lock a tab holds while it checks, writes, verifies and prunes the copies. */
@@ -123,25 +130,32 @@ async function step(): Promise<void> {
 	await pause();
 }
 
-/** Inflate `bytes` a slice at a time, yielding between, into its text. */
-async function inflate(bytes: Uint8Array): Promise<string> {
-	const out: Uint8Array[] = [];
+/**
+ * Inflate `bytes` a slice at a time, yielding once a step has inflated
+ * {@link INFLATE_STEP}, into its non-empty lines. The text is decoded and
+ * split as it comes out, so no step decodes or splits the whole copy.
+ */
+async function inflateLines(bytes: Uint8Array): Promise<string[]> {
+	const lines: string[] = [];
+	const dec = new TextDecoder();
+	let carry = '';
 	let ended = false;
 	const gz = new Gunzip((chunk, final) => {
-		out.push(chunk);
+		steps.bytes += chunk.length;
+		const parts = (carry + dec.decode(chunk, { stream: true })).split('\n');
+		carry = parts.pop() ?? '';
+		for (const l of parts) if (l.length > 0) lines.push(l);
 		if (final) ended = true;
 	});
-	for (let i = 0; i < bytes.length; i += INFLATE_STEP) {
-		const slice = bytes.subarray(i, i + INFLATE_STEP);
-		steps.bytes += slice.length;
-		gz.push(slice, i + INFLATE_STEP >= bytes.length);
-		await step();
+	for (let i = 0; i < bytes.length; i += INFLATE_SLICE) {
+		gz.push(bytes.subarray(i, i + INFLATE_SLICE), i + INFLATE_SLICE >= bytes.length);
+		if (steps.bytes >= INFLATE_STEP) await step();
 	}
+	await step();
 	if (!ended) throw new Error('cut short');
-	const dec = new TextDecoder();
-	let text = '';
-	for (const c of out) text += dec.decode(c, { stream: true });
-	return text + dec.decode();
+	carry += dec.decode();
+	if (carry.length > 0) lines.push(carry);
+	return lines;
 }
 
 /** One copy: whole, `bad` (empty, cut short or not a copy), or `unreadable` now. Read in yielding steps. */
@@ -154,7 +168,7 @@ async function readCopy(dir: FileSystemDirectoryHandle, name: string): Promise<C
 	}
 	try {
 		if (bytes.length === 0) return 'bad';
-		const lines = (await inflate(bytes)).split('\n').filter((l) => l.length > 0);
+		const lines = await inflateLines(bytes);
 		const head = (JSON.parse(lines[0] ?? 'null') as SnapshotHeader | null)?.snapshot;
 		if (!head || typeof head.seq !== 'number' || typeof head.at !== 'number' || typeof head.rows !== 'number') return 'bad';
 		const rows: SnapshotRow[] = [];
@@ -203,6 +217,35 @@ export async function snapshotWritten(ms: number, root: Root = defaultRoot): Pro
 }
 
 const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/** What the daily copy reads from the store. */
+export type SnapshotSource = Pick<HistoryDb, 'rowIds' | 'rowsOf' | 'detailsOf'>;
+
+/**
+ * Every stored row with its as-run profile, in id order, as the day's copy
+ * holds them. Read {@link SNAPSHOT_CHUNK} rows at a time with a yield between
+ * (#421: all 5,000 at once made one long task). The ids are taken first: a
+ * row stored throughout is in the copy; one added after goes in the next
+ * day's, and one deleted before its turn is left out, as if the copy had
+ * been read a moment later. `profilesOf` reads the profiles: from the rows'
+ * details here by default, from a worker in the app ({@link ProfilesOf}).
+ */
+export async function snapshotLines(
+	db: SnapshotSource,
+	profilesOf: ProfilesOf = (ids) => readProfiles(db, ids)
+): Promise<SnapshotRow[]> {
+	const ids = await db.rowIds();
+	const lines: SnapshotRow[] = [];
+	for (let i = 0; i < ids.length; i += SNAPSHOT_CHUNK) {
+		const part = ids.slice(i, i + SNAPSHOT_CHUNK);
+		const rows = await db.rowsOf(part);
+		const here = part.filter((id) => rows.has(id));
+		const profiles = await profilesOf(here);
+		for (const id of here) lines.push({ ...rows.get(id)!, profile: profiles.get(id) ?? null });
+		await pause();
+	}
+	return lines;
+}
 
 /**
  * Write `rows` as the day's copy, unless that day has a whole one. It must
