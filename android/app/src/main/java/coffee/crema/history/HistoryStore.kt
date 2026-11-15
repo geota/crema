@@ -1632,7 +1632,8 @@ class HistoryStore(private val context: Context, private val json: Json) {
     // ── Erase ────────────────────────────────────────────────────────────────
 
     /** Delete everything the history keeps (Erase all data): `shots.json` and its copies, the series,
-     *  `shots.db` with its `-wal` and `-shm` and any kept-aside copy, the marker, the snapshot and the journal. */
+     *  `shots.db` with its `-wal` and `-shm` and any kept-aside copy, the marker, the snapshot and the journal,
+     *  and what a newer build's SQLite history keeps ([eraseSqliteHistory]). */
     suspend fun erase() {
         lock.withLock {
             withContext(Dispatchers.IO) {
@@ -1642,6 +1643,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 runCatching { context.deleteDatabase(NEXT_DB_NAME) }
                 dbFile.parentFile?.listFiles { f -> f.name.startsWith(NEXT_DB_NAME + QuarantineHandler.CORRUPT) }?.forEach { it.delete() }
                 NEXT_FILES.forEach { eraseStore(File(context.filesDir, it)) }
+                eraseSqliteHistory()
                 Stores.forget(dbFile)
                 written.clear()
                 stored.clear(); withProfile.clear(); staged.clear(); journaledStage.clear(); legacyHeavy.clear(); seriesWritten.clear(); seen.clear();
@@ -1659,6 +1661,29 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 health = HistoryHealth.LOADING
             }
         }
+    }
+
+    /**
+     * Remove the files a newer build's SQLite history keeps (its SPEC §11, N3), if present:
+     * `history-sqlite/` (the index, `history.db`, any `history-<n>.db`, the snapshots, their
+     * `-wal`, `-shm` and `-journal`, `pending.jsonl`, `done.json`) and its marker,
+     * `history-sqlite.json`. This build writes none of them; it removes them so an erase here,
+     * after a rollback, still takes everything. The done-record goes after the rest of the
+     * directory, and the marker only once the directory is gone, so a file that stays is never
+     * left without its marker (S10). True when none of them remains.
+     */
+    private fun eraseSqliteHistory(): Boolean {
+        val dir = File(context.filesDir, SQLITE_DIR)
+        val done = File(dir, SQLITE_DONE_NAME)
+        val rest = dir.listFiles()?.filterNot { it.name == done.name || it.name.startsWith(done.name + ".") }.orEmpty()
+        var gone = rest.map { it.deleteRecursively() }.all { it }
+        if (gone) gone = SafeFile.erase(done)
+        if (gone) gone = !dir.exists() || dir.deleteRecursively()
+        if (!gone) {
+            persistLine("couldn't erase every file in $SQLITE_DIR; kept $SQLITE_MARKER_NAME")
+            return false
+        }
+        return eraseStore(File(context.filesDir, SQLITE_MARKER_NAME))
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -1793,6 +1818,15 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
         /** The store marker, rows snapshot and pending journal (SPEC §1 and §6), for [erase] too. */
         val NEXT_FILES = listOf(MARKER_NAME, SNAPSHOT_NAME, PENDING_NAME)
+
+        /**
+         * The SQLite history's directory, done-record and marker (SQLite history SPEC §11, N3). A newer build
+         * writes them; this one only removes them, in [erase]. Never under `databases/`, so
+         * nothing that lists `context.databaseList()` can open them through the framework.
+         */
+        const val SQLITE_DIR = "history-sqlite"
+        const val SQLITE_DONE_NAME = "done.json"
+        const val SQLITE_MARKER_NAME = "history-sqlite.json"
         private const val WHAT = "shot history"
         private const val SERIES_DIR = "shot-series"
         private const val TABLE_META_KEY = HistoryTables.META_MIGRATION
