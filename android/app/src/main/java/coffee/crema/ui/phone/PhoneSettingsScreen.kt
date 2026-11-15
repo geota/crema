@@ -1084,7 +1084,7 @@ private fun SharingSection(
         }
     }
     SettingsGroup("Storage and backups") {
-        coffee.crema.ui.components.StorageBackupsRows(vm, ui, ui.drive, launchSaveFile)
+        coffee.crema.ui.components.StorageBackupsRows(vm, ui, ui.drive)
     }
     SettingsGroup("Local export") {
         CremaSettingsRow("History export", "Your entire shot history as JSON — for spreadsheets and other tools.", last = true) {

@@ -1167,18 +1167,7 @@ class LibraryController(
     /** Copy a built backup [file] to the picked [uri], then remove the temporary file. */
     fun writeFileToUri(uri: Uri, file: File) {
         scope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                try {
-                    copyBackupToDocument(
-                        file,
-                        open = { mode -> app.contentResolver.openOutputStream(uri, mode) },
-                        delete = { android.provider.DocumentsContract.deleteDocument(app.contentResolver, uri) },
-                    )
-                } finally {
-                    releaseBackupFile(file)
-                }
-            }
-            notify(if (ok) "Backed up to file" else "Backup failed — couldn't write")
+            notify(if (saveBackupFile(uri, file)) "Backed up to file" else "Backup failed — couldn't write")
         }
     }
 
@@ -1423,6 +1412,7 @@ class LibraryController(
     }
 
     private fun streamBackupNow(snap: BackupSnapshot, kind: BackupKind, cancel: java.util.concurrent.atomic.AtomicBoolean): BackupZip? {
+        backupWalkStarts()
         val cache = app.cacheDir
         sweepBackupTemp(cache)
         val photos = snap.state.beans
@@ -1448,13 +1438,13 @@ class LibraryController(
                     snap.missingCurves.forEach { appendLog("Backup left out the curve of shot $it: its telemetry is damaged or missing") }
                     notify("$n older shot${if (n == 1) " has" else "s have"} damaged telemetry and ${if (n == 1) "is" else "are"} backed up without ${if (n == 1) "its curve" else "their curves"}")
                 }
-                // What this backup doesn't hold whole: Free up space keeps these (REVIEW-437 B1).
-                val omittedShots = built.omitted.filter { it.kind == "shot" }.map { omittedRowId(it, snap) ?: coffee.crema.history.FreeUpPlan.UNKNOWN_SHOT }
+                // What this backup doesn't hold whole: Free up space keeps these (REVIEW-440 B1).
+                // An omitted shot it can't name makes the whole set unknown.
+                val omittedShots = built.omitted.filter { it.kind == "shot" }.map { omittedRowId(it, snap) }
                 val inBackup = snap.shots.mapTo(HashSet()) { it.id }
                 val curveless = snap.missingCurves + historyStore.unreadableSeries.filter { it in inBackup }
-                val incomplete = (omittedShots + curveless + built.degraded).toSet()
-                updateUi { it.copy(backupIncomplete = incomplete) }
-                BackupZip(built.file, built.counts, built.contentHash, release = { releaseBackupFile(built.file) })
+                val whole = if (omittedShots.any { it == null }) null else inBackup - (omittedShots.filterNotNull() + curveless + built.degraded).toSet()
+                BackupZip(built.file, built.counts, built.contentHash, release = { releaseBackupFile(built.file) }, whole = whole)
             },
             onFailure = {
                 when (it) {
@@ -1746,11 +1736,25 @@ class LibraryController(
         if (!rowsReady || !historySettled) return null
         val older = allShots().filter { it.completedAtMs < beforeMs }
         val unpinned = older.filterNot { it.pinned }
-        // What the last backup left out or wrote without its curve stays (REVIEW-437 B1).
-        val incomplete = uiState().backupIncomplete
-        val (kept, doomed) = unpinned.partition { coffee.crema.history.backupLacks(it.id, incomplete) }
+        // A shot with an upload or an edit still to reach Visualizer stays (REVIEW-440 N1, web parity).
+        val (kept, doomed) = unpinned.partition(::unsent)
         val ids = doomed.map { it.id }
-        return coffee.crema.history.FreeUpPlan(beforeMs, ids, older.count { it.pinned }, historyStore.bytesOf(ids), backupKept = kept.size)
+        return coffee.crema.history.FreeUpPlan(beforeMs, ids, older.count { it.pinned }, historyStore.bytesOf(ids), syncKept = kept.size)
+    }
+
+    /** Whether [row] still has something to send to Visualizer: an upload pending or an edit unsent. */
+    private fun unsent(row: ShotRow): Boolean = visualizer.uploadPending(row) || visualizer.hasPendingEdit(row.id)
+
+    /**
+     * Why a backup is running now, or null: a build of any kind (a file, Drive,
+     * the daily one) or Drive busy. Free up space waits for it, as the walk reads
+     * each shot whole as it reaches it, and a shot deleted before that would go
+     * in without its curve (REVIEW-440 B1).
+     */
+    fun backupRunning(): String? = when {
+        backupRuns.running() || uiState().backupProgress.isNotEmpty() -> "a backup is being made"
+        uiState().drive.busy -> "Google Drive is busy"
+        else -> null
     }
 
     /**
@@ -1764,14 +1768,18 @@ class LibraryController(
      * "delete anyway". Returns how many went, and how many of the named ones
      * the backup's gaps kept.
      */
-    suspend fun freeUpSpace(plan: coffee.crema.history.FreeUpPlan): coffee.crema.history.FreeUpResult {
-        val none = coffee.crema.history.FreeUpResult(0, 0)
-        if (!rowsReady || !historySettled || plan.ids.isEmpty()) return none
-        val incomplete = uiState().backupIncomplete
-        val backupKept = plan.ids.count { coffee.crema.history.backupLacks(it, incomplete) }
-        val named = plan.ids.filterNot { coffee.crema.history.backupLacks(it, incomplete) }.toHashSet()
-        if (named.isEmpty()) return coffee.crema.history.FreeUpResult(0, backupKept)
-        fun goes(row: ShotRow) = row.id in named && !row.pinned && row.completedAtMs < plan.beforeMs
+    suspend fun freeUpSpace(
+        plan: coffee.crema.history.FreeUpPlan,
+        notInBackup: Set<String> = emptySet(),
+    ): coffee.crema.history.FreeUpResult {
+        if (!rowsReady || !historySettled) return coffee.crema.history.FreeUpResult(0, refused = "your shot history isn't fully read yet")
+        // The UI isn't the only guard: a walk still running would write these shots without their curves.
+        backupRunning()?.let { return coffee.crema.history.FreeUpResult(0, refused = it) }
+        if (plan.ids.isEmpty()) return coffee.crema.history.FreeUpResult(0)
+        val backupKept = plan.ids.count { it in notInBackup }
+        val named = plan.ids.filterNot { it in notInBackup }.toHashSet()
+        // Pinned and unsent are read on the rows as they stand: a shot pinned, queued or edited since the preview stays.
+        fun goes(row: ShotRow) = row.id in named && !row.pinned && row.completedAtMs < plan.beforeMs && !unsent(row)
         var gone: Set<String> = emptySet()
         editHistory { rows ->
             gone = rows.filter(::goes).mapTo(HashSet()) { it.id }
@@ -1780,13 +1788,40 @@ class LibraryController(
         // A capped view's hidden rows (the legacy backend has none; a store row out of view, say).
         val hidden = historyStore.hiddenRows(uiState().history.mapTo(HashSet()) { it.id }).filter(::goes).map { it.id }
         val ids = gone + hidden
-        if (ids.isEmpty()) return coffee.crema.history.FreeUpResult(0, backupKept)
+        val syncKept = plan.ids.count { id -> id in named && id !in ids && findShot(id)?.let(::unsent) == true }
+        if (ids.isEmpty()) return coffee.crema.history.FreeUpResult(0, backupKept, syncKept)
         historyStore.forget(ids)
         persistHistory(uiState().history)
         historyStore.delete(ids)
+        // The space is there now: a curve held in memory after a failed write goes to disk (REVIEW-440 N2).
+        if (historyUnsaved.isNotEmpty()) persistHistory(uiState().history)
         checkStorage()
-        return coffee.crema.history.FreeUpResult(ids.size, backupKept)
+        return coffee.crema.history.FreeUpResult(ids.size, backupKept, syncKept)
     }
+
+    /**
+     * A file backup for Free up space, built in the caller's scope (the VM's,
+     * so closing the dialog doesn't cancel it): the file and the shots it
+     * doesn't hold whole, or null when it didn't finish (REVIEW-440 B1).
+     */
+    suspend fun buildFreeUpBackup(): BackupZip? = buildBackupZip(BackupKind.FILE)
+
+    /** Write the built backup [file] to [uri] (the save picker's), then release it. True when it's written. */
+    suspend fun saveBackupFile(uri: Uri, file: File): Boolean = withContext(Dispatchers.IO) {
+        try {
+            copyBackupToDocument(
+                file,
+                open = { mode -> app.contentResolver.openOutputStream(uri, mode) },
+                delete = { android.provider.DocumentsContract.deleteDocument(app.contentResolver, uri) },
+            )
+        } finally {
+            releaseBackupFile(file)
+        }
+    }
+
+    /** Test seam: runs as a backup's walk starts, after its snapshot (REVIEW-440's probe holds it there). */
+    @androidx.annotation.VisibleForTesting
+    internal var backupWalkStarts: () -> Unit = {}
 
     /** Test seam: how the backup writes a shot's line ([streamBackupZip]'s default in the app). */
     @androidx.annotation.VisibleForTesting

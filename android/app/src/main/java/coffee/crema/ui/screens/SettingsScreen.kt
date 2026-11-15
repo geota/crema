@@ -960,7 +960,7 @@ fun SettingsScreen(
                             }
                         }
                         SetGroup("Storage and backups") {
-                            coffee.crema.ui.components.StorageBackupsRows(vm, ui, ui.drive, confirm.launchSaveFile)
+                            coffee.crema.ui.components.StorageBackupsRows(vm, ui, ui.drive)
                         }
                         SetGroup("Local export") {
                             CremaSettingsRow(

@@ -1314,6 +1314,9 @@ class VisualizerSync(
      */
     private val pendingEdits = java.util.concurrent.ConcurrentHashMap<String, PendingEdit>()
 
+    /** Whether shot [id] has an edit not yet sent to Visualizer: Free up space keeps it (#310 P6a, REVIEW-440 N1). */
+    fun hasPendingEdit(id: String): Boolean = pendingEdits.containsKey(id)
+
     /** Every Visualizer request's pacer; its bucket is stored in [VisualizerState.paceBucket]. */
     private val pacer = Pacer(
         json = json,

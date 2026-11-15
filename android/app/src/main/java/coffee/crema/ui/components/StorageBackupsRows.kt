@@ -28,12 +28,7 @@ import java.io.File
  * captures can't be rebuilt and Drive copies go for real.
  */
 @Composable
-fun StorageBackupsRows(
-    vm: MainViewModel,
-    ui: MainUiState,
-    ds: DriveSync.UiState,
-    launchSaveFile: (name: String, file: File?) -> Unit,
-) {
+fun StorageBackupsRows(vm: MainViewModel, ui: MainUiState, ds: DriveSync.UiState) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pending by remember { mutableStateOf<PendingLimit?>(null) }
@@ -132,7 +127,7 @@ fun StorageBackupsRows(
     ) {
         androidx.compose.material3.TextButton(onClick = { freeUp = true }, enabled = ui.historyLoaded) { androidx.compose.material3.Text("Free up space…") }
     }
-    if (freeUp) FreeUpSpaceDialog(vm, ui, launchSaveFile, onDismiss = { freeUp = false })
+    if (freeUp) FreeUpSpaceDialog(vm, ui, onDismiss = { freeUp = false })
     CremaSettingsRow("Last backup", "The last backup that reached Google Drive.", last = true) {
         ValueText(ds.lastBackupAtMs?.let { relativeAgo(it) } ?: "Never")
     }

@@ -516,7 +516,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 if (showFreeUp) {
-                    coffee.crema.ui.components.FreeUpSpaceDialog(viewModel, ui, storageConfirm.launchSaveFile, onDismiss = { showFreeUp = false })
+                    coffee.crema.ui.components.FreeUpSpaceDialog(viewModel, ui, onDismiss = { showFreeUp = false })
+                }
+                // Free up space's backup waits for a place to save it (REVIEW-440 B1): the picker
+                // opens once per request, a rotation included, and its answer goes back to the flow.
+                val freeUpSaveLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                    ActivityResultContracts.CreateDocument("application/zip"),
+                ) { uri -> viewModel.freeUpSaved(uri) }
+                var freeUpSaveAsked by rememberSaveable { mutableStateOf<String?>(null) }
+                LaunchedEffect(ui.freeUpSave) {
+                    val name = ui.freeUpSave
+                    if (name == null) freeUpSaveAsked = null
+                    else if (freeUpSaveAsked != name) {
+                        freeUpSaveAsked = name
+                        freeUpSaveLauncher.launch(name)
+                    }
                 }
                 Box(
                     Modifier

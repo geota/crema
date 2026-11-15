@@ -49,17 +49,16 @@ data class FreeUpPlan(
     val ids: List<String>,
     val pinnedKept: Int,
     val bytes: Long,
-    /** Shots from then kept because the last backup left them out or wrote them without their curve (REVIEW-437 B1). */
-    val backupKept: Int = 0,
-) {
-    companion object {
-        /** In [coffee.crema.ui.MainUiState.backupIncomplete]: a backup left out a shot it couldn't name. */
-        const val UNKNOWN_SHOT = "*"
-    }
-}
+    /** Shots from then kept because an upload or an edit hasn't reached Visualizer yet (REVIEW-440 N1). */
+    val syncKept: Int = 0,
+)
 
-/** What Free up space did: shots deleted, and planned ones it kept because the last backup didn't hold them whole. */
-data class FreeUpResult(val deleted: Int, val backupKept: Int)
+/** Where Free up space backs up before it deletes (#310 P6a, REVIEW-440 B1). */
+enum class FreeUpBackup { FILE, DRIVE, NONE }
 
-/** Whether [id] isn't whole in the last backup ([incomplete], [coffee.crema.ui.MainUiState.backupIncomplete]). */
-fun backupLacks(id: String, incomplete: Set<String>): Boolean = id in incomplete || FreeUpPlan.UNKNOWN_SHOT in incomplete
+/**
+ * What Free up space did: shots deleted; named ones kept because its backup
+ * didn't hold them whole, or because they still have something to send to
+ * Visualizer; and why it deleted nothing, when it refused.
+ */
+data class FreeUpResult(val deleted: Int, val backupKept: Int = 0, val syncKept: Int = 0, val refused: String? = null)

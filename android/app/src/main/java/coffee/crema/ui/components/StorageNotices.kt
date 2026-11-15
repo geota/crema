@@ -24,6 +24,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import coffee.crema.history.FreeUpBackup
 import coffee.crema.history.FreeUpPlan
 import coffee.crema.history.StorageLevel
 import coffee.crema.history.StorageSpace
@@ -92,7 +93,7 @@ internal fun freeUpCutoff(months: Int, today: LocalDate, zone: ZoneId = ZoneId.s
     today.minusMonths(months.toLong()).atStartOfDay(zone).toInstant().toEpochMilli()
 
 /** The preview's words for [plan] (null: still counting, or the history isn't fully read). */
-internal fun freeUpBody(plan: FreeUpPlan?, counting: Boolean, beforeMs: Long): String {
+internal fun freeUpBody(plan: FreeUpPlan?, counting: Boolean, beforeMs: Long, backup: FreeUpBackup = FreeUpBackup.FILE): String {
     val date = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(beforeMs))
     if (plan == null) {
         return if (counting) "Counting the shots from before $date…"
@@ -103,48 +104,63 @@ internal fun freeUpBody(plan: FreeUpPlan?, counting: Boolean, beforeMs: Long): S
         1 -> " 1 pinned shot from then is kept."
         else -> " ${plan.pinnedKept} pinned shots from then are kept."
     }
-    val gaps = when (plan.backupKept) {
+    val unsent = when (plan.syncKept) {
         0 -> ""
-        1 -> " 1 shot from then is kept because your last backup didn't hold it whole."
-        else -> " ${plan.backupKept} shots from then are kept because your last backup didn't hold them whole."
+        1 -> " 1 shot still waiting to reach Visualizer is kept."
+        else -> " ${plan.syncKept} shots still waiting to reach Visualizer are kept."
     }
-    if (plan.ids.isEmpty()) return "No unpinned shots from before $date to delete.$pinned$gaps"
+    if (plan.ids.isEmpty()) return "No unpinned shots from before $date to delete.$pinned$unsent"
     val n = plan.ids.size
+    val first = when (backup) {
+        FreeUpBackup.NONE -> "Without a backup, they can come back only from Visualizer or an older backup. This can't be undone."
+        else -> "It backs up first, then deletes only the shots the backup holds whole, with their curves; any it doesn't stay. " +
+            "If the backup doesn't finish or isn't saved, nothing is deleted."
+    }
     return "Deletes $n shot${if (n == 1) "" else "s"} from before $date from this device, about ${StorageSpace.format(plan.bytes)}, " +
-        "with ${if (n == 1) "its curve" else "their curves"}.$pinned$gaps Bag weights don't change. " +
-        "Copies on Visualizer stay there, and a backup brings ${if (n == 1) "it" else "them"} back. This can't be undone on this device, so back up first."
+        "with ${if (n == 1) "its curve" else "their curves"}.$pinned$unsent Bag weights don't change, and copies on Visualizer stay there. $first"
 }
 
 /**
  * Free up space (#310 P6a): pick how far back, see exactly how many shots go
- * and about how much space, back up first, then confirm. Pinned shots are
- * never deleted. Settings → Storage and backups and the storage banners open it.
+ * and about how much space, pick where to back up, then confirm. The confirm
+ * runs "back up, then delete" as one flow in the view model (REVIEW-440 B1):
+ * closing the dialog cancels nothing, and only what the backup holds whole is
+ * deleted. Pinned shots are never deleted. Settings → Storage and backups and
+ * the storage banners open it.
  */
 @Composable
 fun FreeUpSpaceDialog(
     vm: MainViewModel,
     ui: MainUiState,
-    launchSaveFile: (name: String, file: java.io.File?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var months by rememberSaveable { mutableStateOf(12) }
+    var backup by rememberSaveable { mutableStateOf(if (ui.drive.connected) FreeUpBackup.DRIVE else FreeUpBackup.FILE) }
     val today = remember { LocalDate.now() }
     val beforeMs = remember(months, today) { freeUpCutoff(months, today) }
-    // Counted again as the rows or the last backup's gaps change, so the preview is what a confirm deletes.
-    val state by produceState<Pair<Boolean, FreeUpPlan?>>(true to null, beforeMs, ui.history, ui.historyLoaded, ui.backupIncomplete) {
+    // Counted again as the rows change, so the preview is what a confirm deletes.
+    val state by produceState<Pair<Boolean, FreeUpPlan?>>(true to null, beforeMs, ui.history, ui.historyLoaded) {
         value = true to null
         value = false to vm.planFreeUp(beforeMs)
     }
     val (counting, plan) = state
+    // A backup running now would write the shots this deletes without their curves: wait for it.
+    val busy = ui.backupProgress.isNotEmpty() || ui.drive.busy || ui.freeUpRunning
+    val n = plan?.ids?.size ?: 0
     CremaConfirmDialog(
         title = "Free up space",
-        body = freeUpBody(plan, counting, beforeMs),
-        confirmLabel = plan?.ids?.size?.takeIf { it > 0 }?.let { "Delete $it shot${if (it == 1) "" else "s"}" } ?: "Delete",
+        body = freeUpBody(plan, counting, beforeMs, backup) +
+            if (busy) " A backup is running: Free up space waits for it." else "",
+        confirmLabel = when {
+            n == 0 -> "Delete"
+            backup == FreeUpBackup.NONE -> "Delete $n shot${if (n == 1) "" else "s"}"
+            else -> "Back up, then delete $n"
+        },
         danger = true,
         icon = "trash",
-        armed = !counting && plan != null && plan.ids.isNotEmpty(),
+        armed = !counting && !busy && plan != null && n > 0,
         onConfirm = {
-            plan?.let(vm::freeUpSpace)
+            plan?.let { vm.freeUpSpace(it, backup) }
             onDismiss()
         },
         onDismiss = onDismiss,
@@ -158,18 +174,16 @@ fun FreeUpSpaceDialog(
                     fillWidth = true,
                 )
                 Text("Back up first", style = MaterialTheme.typography.labelMedium)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    coffee.crema.ui.screens.BackUpEverythingButton(vm, launchSaveFile)
-                    if (ui.drive.connected) {
-                        CremaButton(
-                            onClick = { vm.drive.backupNow() },
-                            variant = CremaButtonVariant.Outlined,
-                            icon = "cloud-arrow-up",
-                            enabled = !ui.drive.busy,
-                            label = "Back up to Drive",
-                        )
-                    }
-                }
+                CremaSegmentedButton(
+                    options = buildList {
+                        add(SegOption(FreeUpBackup.FILE.name, "To a file"))
+                        if (ui.drive.connected) add(SegOption(FreeUpBackup.DRIVE.name, "To Google Drive"))
+                        add(SegOption(FreeUpBackup.NONE.name, "Don't back up"))
+                    },
+                    value = backup.name,
+                    onChange = { backup = FreeUpBackup.valueOf(it) },
+                    fillWidth = true,
+                )
             }
         },
     )

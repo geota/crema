@@ -9,6 +9,7 @@ import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.newBean
 import coffee.crema.core.ShotBean
 import coffee.crema.history.HistoryFixtures
+import coffee.crema.history.FreeUpBackup
 import coffee.crema.history.HistoryHealth
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.MigrationFault
@@ -272,7 +273,7 @@ class HistoryNoCapVmTest {
         // A shot pinned after the preview is spared too.
         vm.setShotPinned("old0", true)
         VmHarness.idle()
-        vm.freeUpSpace(plan)
+        vm.freeUpSpace(plan, FreeUpBackup.NONE)
         VmHarness.idleUntil("the delete") { dbIds().size == 8 }
         val kept = setOf("old0", "old3", "old7") + recent.map { it.id }
         assertEquals(kept, dbIds())
@@ -303,49 +304,165 @@ class HistoryNoCapVmTest {
         assertEquals(10, dbIds().size)
     }
 
+    // ── Back up, then delete (REVIEW-440 B1) ─────────────────────────────────
+
+    private fun oldShots(n: Int, cutoff: Long) = List(n) { i ->
+        StoredShot(id = "old$i", completedAtMs = cutoff - (i + 1) * day, durationMs = 28_000, doseG = 18f, brewMethod = "espresso", samples = HistoryFixtures.samples(30, i))
+    }
+
+    /** The shots in a built backup file, with how many samples each carries. */
+    private fun samplesIn(file: File): Map<String, Int> {
+        val out = HashMap<String, Int>()
+        java.util.zip.ZipInputStream(file.inputStream()).use { zin ->
+            while (true) {
+                val e = zin.nextEntry ?: break
+                if (e.name != "backup.jsonl") continue
+                zin.readBytes().decodeToString().lines().filter { it.isNotBlank() }.forEach { line ->
+                    val o = coreJson.parseToJsonElement(line).jsonObject
+                    if (o["kind"]?.jsonPrimitive?.content == "shot") {
+                        out[o["id"]!!.jsonPrimitive.content] = ((o["record"] as? JsonObject)?.get("samples") as? JsonArray)?.size ?: 0
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    private fun awaitMessage(vm: MainViewModel, prefix: String): String {
+        VmHarness.idleUntil(prefix, 120_000) { vm.ui.value.userMessages.any { it.startsWith(prefix) } }
+        return vm.ui.value.userMessages.last { it.startsWith(prefix) }
+    }
+
     /**
-     * REVIEW-437 B1: "Back up first" mustn't delete what the backup didn't
-     * hold. A shot the backup left out, and one it wrote without its curve,
-     * stay out of the delete, and the user is told how many. No "delete anyway".
+     * REVIEW-440's probe, on the path the app runs: a backup (Drive's, the
+     * banner's) has taken its snapshot and is walking when the user confirms.
+     * Free up space refuses, deletes nothing, and the backup holds every curve.
      */
     @Test
-    fun freeUpSpaceKeepsWhatTheBackupLeftOutOrWroteWithoutItsCurve() {
+    fun aBackupRunningDuringFreeUpSpaceKeepsTheShotsAndTheirCurves() {
         val cutoff = now - 365 * day
-        val old = List(6) { i ->
-            StoredShot(id = "old$i", completedAtMs = cutoff - (i + 1) * day, durationMs = 28_000, brewMethod = "espresso", samples = HistoryFixtures.samples(30, i))
-        }
-        plant(old + light(3, start = now, prefix = "new"))
-        // old2's curve is gone from disk: a backup writes it without one.
-        SeriesFiles(File(app.filesDir, "shot-series"), coreJson).gzFile("old2").delete()
+        val old = oldShots(10, cutoff)
+        val recent = List(3) { i -> StoredShot(id = "new$i", completedAtMs = now - i * 60_000L, durationMs = 28_000, brewMethod = "espresso", samples = HistoryFixtures.samples(30, 100 + i)) }
+        plant(old + recent)
         val vm = vm()
         val library = VmHarness.library(vm)
-        val before = assertNotNull(onMain(vm, "the plan") { vm.planFreeUp(cutoff) })
-        assertEquals(6, before.ids.size, "with no backup yet, all six are planned")
-        assertEquals(0, before.backupKept)
-
-        // Back up first: the core can't write old4's line, so the backup leaves it out.
-        val write = library.backupShotJson
-        library.backupShotJson = { shot -> if (shot.id == "old4") "{ not a shot" else write(shot) }
-        val zip = assertNotNull(onMain(vm, "the backup") { library.buildBackupZip(BackupKind.FILE) })
+        val plan = assertNotNull(onMain(vm, "the plan") { vm.planFreeUp(cutoff) })
+        assertEquals(10, plan.ids.size)
+        // The backup takes its snapshot, then waits at the start of its walk.
+        val walking = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        library.backupWalkStarts = { walking.countDown(); release.await(60, java.util.concurrent.TimeUnit.SECONDS) }
+        val backup = vm.viewModelScope.async { library.buildBackupZip(BackupKind.DRIVE) }
+        VmHarness.idleUntil("the walk") { walking.count == 0L }
+        // The user confirms meanwhile.
+        vm.freeUpSpace(plan, FreeUpBackup.NONE)
+        val told = awaitMessage(vm, "Free up space waits")
+        assertTrue("a backup is being made" in told && "no shots were deleted" in told, told)
+        assertEquals(13, vm.ui.value.history.size)
+        // And the store refuses too, should anything call it straight.
+        assertEquals("a backup is being made", onMain(vm, "the store's refusal") { library.freeUpSpace(plan) }.refused)
+        release.countDown()
+        library.backupWalkStarts = {}
+        VmHarness.idleUntil("the backup", 120_000) { backup.isCompleted }
+        val zip = assertNotNull(runBlocking { backup.await() })
         try {
-            assertEquals(8u, zip.counts.shots, "old4 isn't in it")
+            val samples = samplesIn(zip.file)
+            for (s in old + recent) assertEquals(30, samples[s.id], "${s.id}: the backup holds its curve")
         } finally {
             zip.release()
         }
-        assertEquals(setOf("old4", "old2"), vm.ui.value.backupIncomplete)
+        assertEquals(13, dbIds().size, "nothing was deleted")
+    }
 
-        // The preview a confirm would have shown before the backup: the delete still keeps both.
-        vm.freeUpSpace(before)
-        VmHarness.idleUntil("the delete") { dbIds().size == 5 && vm.ui.value.userMessages.any { it.startsWith("Deleted") } }
+    /**
+     * Back up to a file, then delete, as one flow in the VM: no dialog holds it,
+     * so closing one cancels nothing. Of the shots planned, only those the backup
+     * holds whole go: one it left out and one it wrote without its curve stay.
+     */
+    @Test
+    fun backUpToAFileThenDeleteKeepsWhatTheBackupDidntHoldWhole() {
+        val cutoff = now - 365 * day
+        plant(oldShots(6, cutoff) + light(3, start = now, prefix = "new"))
+        // old2's curve is gone from disk: the backup writes it without one.
+        SeriesFiles(File(app.filesDir, "shot-series"), coreJson).gzFile("old2").delete()
+        val vm = vm()
+        val library = VmHarness.library(vm)
+        val plan = assertNotNull(onMain(vm, "the plan") { vm.planFreeUp(cutoff) })
+        assertEquals(6, plan.ids.size)
+        // The core can't write old4's line: the backup leaves it out.
+        val write = library.backupShotJson
+        library.backupShotJson = { shot -> if (shot.id == "old4") "{ not a shot" else write(shot) }
+        vm.freeUpSpace(plan, FreeUpBackup.FILE)
+        VmHarness.idleUntil("the save picker", 120_000) { vm.ui.value.freeUpSave != null }
+        assertEquals(9, dbIds().size, "nothing goes before the backup is saved")
+        val target = File(app.cacheDir, "free-up-backup.crema.zip").apply { delete(); createNewFile() }
+        vm.freeUpSaved(android.net.Uri.fromFile(target))
+        val told = awaitMessage(vm, "Deleted")
+        assertTrue(told.startsWith("Deleted 4 shots"), told)
+        assertTrue("2 shots were kept: the backup didn't hold them whole" in told, told)
         assertEquals(setOf("old2", "old4", "new0", "new1", "new2"), dbIds())
-        assertTrue(
-            vm.ui.value.userMessages.any { it.startsWith("Deleted 4 shots") && "2 shots were kept: your last backup didn't hold them whole" in it },
-            "${vm.ui.value.userMessages}",
-        )
-        // A preview made now says so too, and offers nothing to delete.
-        val after = assertNotNull(onMain(vm, "the next plan") { vm.planFreeUp(cutoff) })
-        assertTrue(after.ids.isEmpty())
-        assertEquals(2, after.backupKept)
+        val saved = samplesIn(target)
+        for (id in listOf("old0", "old1", "old3", "old5")) assertEquals(30, saved[id], "$id is in the saved backup, whole")
+        assertFalse(vm.ui.value.freeUpRunning)
+    }
+
+    /** A file backup that's cancelled, or never saved, deletes nothing, and says so (REVIEW-440 B1 (b)). */
+    @Test
+    fun aFileBackupCancelledOrNotSavedDeletesNothing() {
+        val cutoff = now - 365 * day
+        plant(oldShots(4, cutoff) + light(2, start = now, prefix = "new"))
+        val vm = vm()
+        val library = VmHarness.library(vm)
+        val plan = assertNotNull(onMain(vm, "the plan") { vm.planFreeUp(cutoff) })
+
+        // The user cancels the build.
+        val walking = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        library.backupWalkStarts = { walking.countDown(); release.await(60, java.util.concurrent.TimeUnit.SECONDS) }
+        vm.freeUpSpace(plan, FreeUpBackup.FILE)
+        VmHarness.idleUntil("the walk") { walking.count == 0L }
+        vm.cancelBackup(BackupKind.FILE)
+        release.countDown()
+        library.backupWalkStarts = {}
+        val cancelled = awaitMessage(vm, "The backup didn't finish")
+        assertTrue("no shots were deleted" in cancelled, cancelled)
+        VmHarness.idleUntil("the flow ends") { !vm.ui.value.freeUpRunning }
+        assertEquals(6, dbIds().size)
+
+        // The user dismisses the save picker.
+        vm.freeUpSpace(plan, FreeUpBackup.FILE)
+        VmHarness.idleUntil("the save picker", 120_000) { vm.ui.value.freeUpSave != null }
+        vm.freeUpSaved(null)
+        val unsaved = awaitMessage(vm, "The backup wasn't saved")
+        assertTrue("no shots were deleted" in unsaved, unsaved)
+        VmHarness.idleUntil("the flow ends") { !vm.ui.value.freeUpRunning }
+        assertEquals(6, dbIds().size)
+    }
+
+    /** REVIEW-440 N1, as on web: a shot waiting to upload, or with an edit not yet sent, stays. */
+    @Test
+    fun freeUpSpaceKeepsShotsWithSomethingStillToSendToVisualizer() {
+        val cutoff = now - 365 * day
+        plant(oldShots(4, cutoff))
+        runBlocking {
+            assertTrue(
+                coffee.crema.visualizer.VisualizerStore(app, Json { ignoreUnknownKeys = true }).save(
+                    coffee.crema.visualizer.VisualizerState(
+                        retryQueue = listOf(coffee.crema.visualizer.QueuedUpload("old1", 0, Long.MAX_VALUE / 2)),
+                        pendingEdits = mapOf("old2" to coffee.crema.visualizer.PendingEdit(annotations = true, nextAttemptAt = Long.MAX_VALUE / 2)),
+                    ),
+                ),
+            )
+        }
+        val vm = vm()
+        val plan = assertNotNull(onMain(vm, "the plan") { vm.planFreeUp(cutoff) })
+        assertEquals(setOf("old0", "old3"), plan.ids.toSet())
+        assertEquals(2, plan.syncKept)
+        // A plan that still names them, as one made before the queue would: the delete reads it again.
+        vm.freeUpSpace(plan.copy(ids = oldShots(4, cutoff).map { it.id }), FreeUpBackup.NONE)
+        val told = awaitMessage(vm, "Deleted")
+        assertTrue(told.startsWith("Deleted 2 shots") && "2 shots waiting to reach Visualizer were kept" in told, told)
+        assertEquals(setOf("old1", "old2"), dbIds())
     }
 
     // ── No automatic deletion anywhere ───────────────────────────────────────

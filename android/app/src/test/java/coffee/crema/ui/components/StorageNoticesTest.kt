@@ -35,14 +35,14 @@ class StorageNoticesTest {
         assertEquals(LocalDate.of(2025, 11, 15).atStartOfDay(zone).toInstant().toEpochMilli(), cut)
     }
 
-    /** REVIEW-437 B1: what the last backup didn't hold whole stays; an omitted shot it couldn't name keeps them all. */
-    @Test fun aShotTheBackupDidntHoldWholeStays() {
-        assertTrue(coffee.crema.history.backupLacks("a", setOf("a")))
-        assertTrue(!coffee.crema.history.backupLacks("b", setOf("a")))
-        assertTrue(coffee.crema.history.backupLacks("b", setOf(FreeUpPlan.UNKNOWN_SHOT)))
-        val plan = FreeUpPlan(1_700_000_000_000, listOf("a"), pinnedKept = 0, bytes = StorageSpace.MB, backupKept = 2)
-        assertTrue("2 shots from then are kept because your last backup didn't hold them whole" in freeUpBody(plan, false, plan.beforeMs))
-        assertTrue("1 shot from then is kept" in freeUpBody(plan.copy(ids = emptyList(), backupKept = 1), false, plan.beforeMs))
+    /** REVIEW-440: the preview says the backup comes first and only what it holds whole goes; unsent shots stay. */
+    @Test fun thePreviewSaysBackUpThenDeleteAndWhatStays() {
+        val plan = FreeUpPlan(1_700_000_000_000, listOf("a"), pinnedKept = 0, bytes = StorageSpace.MB, syncKept = 2)
+        val body = freeUpBody(plan, false, plan.beforeMs, coffee.crema.history.FreeUpBackup.FILE)
+        assertTrue("It backs up first, then deletes only the shots the backup holds whole" in body, body)
+        assertTrue("nothing is deleted" in body, body)
+        assertTrue("2 shots still waiting to reach Visualizer are kept" in body, body)
+        assertTrue("can't be undone" in freeUpBody(plan, false, plan.beforeMs, coffee.crema.history.FreeUpBackup.NONE))
     }
 
     @Test fun thePreviewSaysWhatGoesWhatStaysAndThatBagsDontChange() {
@@ -52,7 +52,7 @@ class StorageNoticesTest {
         assertTrue("3.0 MB" in body, body)
         assertTrue("2 pinned shots from then are kept" in body, body)
         assertTrue("Bag weights don't change" in body, body)
-        assertTrue("back up first" in body, body)
+        assertTrue("backs up first" in body, body)
         assertTrue(freeUpBody(plan.copy(ids = emptyList()), false, plan.beforeMs).startsWith("No unpinned shots"))
         assertTrue("fully read" in freeUpBody(null, counting = false, beforeMs = plan.beforeMs))
         assertTrue(freeUpBody(null, counting = true, beforeMs = plan.beforeMs).startsWith("Counting"))

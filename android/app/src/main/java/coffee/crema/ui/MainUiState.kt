@@ -183,12 +183,13 @@ data class MainUiState(
     /** The getting-full notice was dismissed; it comes back only after the space recovers and runs low again. */
     val storageNoticeDismissed: Boolean = false,
     /**
-     * Shots the last backup built this session left out, or wrote without
-     * their curve or profile (REVIEW-437 B1): Free up space keeps them, as
-     * deleting them would lose what no backup holds. [coffee.crema.history.FreeUpPlan.UNKNOWN_SHOT]
-     * when an omitted shot couldn't be named: then it keeps every shot.
+     * Free up space's backup is built and waits for the user to pick where to
+     * save it (#310 P6a, REVIEW-440 B1): the suggested file name. The save
+     * picker opens for it; nothing is deleted until the file is written.
      */
-    val backupIncomplete: Set<String> = emptySet(),
+    val freeUpSave: String? = null,
+    /** Free up space is backing up or deleting: the dialog's Delete stays disarmed. */
+    val freeUpRunning: Boolean = false,
     /**
      * Built-in profiles from the core (`builtinCremaProfiles()`), loaded once at
      * startup. The Brew header picker chooses from these until the profile
