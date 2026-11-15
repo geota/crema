@@ -22,7 +22,7 @@ import {
 	type RestoreMessage
 } from './tab-safety';
 import { decodeRows, planNow, prepareBackup, runRestore, type RestoreDeps } from './engine';
-import { PICK_AGAIN, restoreFlow } from './flow';
+import { OLDER_PICK, PICK_AGAIN, RestorePicks, restoreFlow, type RestorePick } from './flow';
 import { readStore } from '#lib/utils/storage.js';
 import { coerceBean } from '#lib/bean/model.js';
 import { DELETE_AFTER_MS, MARKER_KEY, beginMarker, checkMarkerAtBoot, readMarker } from './marker';
@@ -560,6 +560,117 @@ describe('the #363 review', () => {
 		expect(older.runs).toEqual([0]);
 		expect(older.line).toBe(PICK_AGAIN);
 		expect(older.outcome).toBeNull();
+	});
+
+	/**
+	 * A flow for `pick`, its dialogs and runs counted: `answer` gives each
+	 * dialog's answer, and every run finds the device changed.
+	 */
+	async function flowFor(
+		pick: RestorePick,
+		mode: 'wipe' | 'merge',
+		prepared: Awaited<ReturnType<typeof backupOf>>,
+		o: {
+			answer?: (asked: number) => 'primary' | 'secondary' | null;
+			run?: () => void;
+			backUp?: () => void;
+		} = {}
+	) {
+		const asked: string[] = [];
+		let runs = 0;
+		const result = await restoreFlow(mode, {
+			plan: (revive) => planNow(prepared, mode, revive, new FakeLocks()),
+			run: async (_revive, expected) => {
+				runs++;
+				o.run?.();
+				return { kind: 'changed', plan: expected };
+			},
+			choose: async (c) => {
+				asked.push(c.title);
+				return o.answer?.(asked.length) ?? null;
+			},
+			confirm: async (c) => {
+				asked.push(c.title);
+				return true;
+			},
+			backUp: async () => {
+				o.backUp?.();
+				return '';
+			},
+			say: () => {},
+			superseded: pick.superseded,
+			reported: pick.reported
+		});
+		pick.end();
+		return { ...result, asked, runs };
+	}
+
+	it('an older pick never opens its first report, or runs, over a newer pick’s (#425)', async () => {
+		const prepared = await backupOf(['b1'], ['s1']);
+		// A newer pick's report is open as the older pick's plan comes back.
+		for (const mode of ['wipe', 'merge'] as const) {
+			const picks = new RestorePicks();
+			const older = picks.start();
+			picks.start().reported();
+			const got = await flowFor(older, mode, prepared, { answer: () => 'secondary' });
+			expect(got.asked, mode).toEqual([]);
+			expect(got.runs, mode).toBe(0);
+			expect(got.line, mode).toBe(OLDER_PICK);
+			expect(got.outcome, mode).toBeNull();
+		}
+		// A newer pick still being read hasn't taken over: the older one's report opens.
+		{
+			const picks = new RestorePicks();
+			const older = picks.start();
+			picks.start();
+			const got = await flowFor(older, 'wipe', prepared);
+			expect(got.asked).toHaveLength(1);
+			expect(got.line).toBe('Nothing was changed.');
+		}
+		// Back up first, and a newer pick's report opens meanwhile: no second dialog over it.
+		{
+			const picks = new RestorePicks();
+			const older = picks.start();
+			const got = await flowFor(older, 'wipe', prepared, {
+				answer: () => 'primary',
+				backUp: () => picks.start().reported()
+			});
+			expect(got.asked).toHaveLength(1);
+			expect(got.runs).toBe(0);
+			expect(got.line).toBe(OLDER_PICK);
+		}
+	});
+
+	it('a newer pick still being read, then refused, never ends an older changed run (#425)', async () => {
+		const prepared = await backupOf(['b1'], ['s1']);
+		const picks = new RestorePicks();
+		const older = picks.start();
+		let newer: RestorePick | null = null;
+		const got = await flowFor(older, 'wipe', prepared, {
+			// Replace, then the re-report: by then the newer pick was refused.
+			answer: (n) => {
+				if (n === 2) {
+					expect(older.superseded()).toBe(false);
+					newer!.end();
+				}
+				return n === 1 ? 'secondary' : null;
+			},
+			// A newer pick starts, and is still being read as this run comes back changed.
+			run: () => (newer = picks.start())
+		});
+		expect(got.asked).toHaveLength(2);
+		expect(got.runs).toBe(1);
+		expect(got.line).toBe('Nothing was changed.');
+
+		// It counts once its plan stands, and stops when its flow ends.
+		const later = picks.start();
+		const newest = picks.start();
+		expect(later.superseded()).toBe(false);
+		newest.reported();
+		expect(later.superseded()).toBe(true);
+		expect(newest.superseded()).toBe(false);
+		newest.end();
+		expect(later.superseded()).toBe(false);
 	});
 });
 

@@ -72,7 +72,7 @@
 	import type { BackupProgress } from '#lib/backup/stream.js';
 	import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { planNow, prepareBackupFile, runRestore } from '#lib/restore/engine.js';
-	import { restoreFlow as runRestoreFlow } from '#lib/restore/flow.js';
+	import { RestorePicks, restoreFlow as runRestoreFlow, type RestorePick } from '#lib/restore/flow.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
 	import StorageSection from './StorageSection.svelte';
 	import { credentialsStoredUnencrypted } from '#lib/security/credential-status.js';
@@ -421,10 +421,8 @@
 		return ok;
 	}
 
-	/** Restores picked so far, from a file or Drive (#413). */
-	let picks = 0;
-	/** The picks whose flow hasn't ended: being read, at their report, or running. */
-	const livePicks = new Set<number>();
+	/** Restores picked from a file or Drive: the newest pick wins (#413, #425). */
+	const restorePicks = new RestorePicks();
 
 	/** Plan, report, run (`#lib/restore/flow`), then the held sharing changes. */
 	async function restoreFlow(
@@ -433,17 +431,16 @@
 		name: string,
 		say: (line: string) => void
 	): Promise<string> {
-		const pick = ++picks;
-		livePicks.add(pick);
+		const pick = restorePicks.start();
 		try {
 			return await restorePick(pick, file, mode, name, say);
 		} finally {
-			livePicks.delete(pick);
+			pick.end();
 		}
 	}
 
 	async function restorePick(
-		pick: number,
+		pick: RestorePick,
 		file: Blob,
 		mode: RestoreMode,
 		name: string,
@@ -460,8 +457,9 @@
 			confirm: (o) => confirmDialog(o),
 			backUp: () => runBackup(),
 			say,
-			// The newest pick wins (#413): a newer one still under way, not one refused or done.
-			superseded: () => [...livePicks].some((p) => p > pick)
+			// The newest pick wins (#413, #425): a newer one at its report or running.
+			superseded: pick.superseded,
+			reported: pick.reported
 		});
 		const held = outcome ? singletons.held() : null;
 		if (held && !(await confirmHeldRestoreChanges(held))) {
