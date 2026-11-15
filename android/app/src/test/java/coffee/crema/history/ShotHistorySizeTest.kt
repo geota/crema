@@ -134,10 +134,10 @@ class ShotHistorySizeTest {
         println("P4A-MEASURE design-size rows load=${ms}ms")
         val l = assertNotNull(load)
         assertEquals(reads, seriesReadsForTest.get(), "the load read no series")
-        assertEquals(HistoryStore.MAX_SHOTS, l.view.size, "the view keeps its cap until P6")
-        assertEquals(5_000 - HistoryStore.MAX_SHOTS, l.hiddenCount, "and every other row stays in the store")
+        assertEquals(5_000, l.view.size, "no cap from P6a: every row is in view")
+        assertEquals(0, l.hiddenCount)
         assertTrue(l.view.all { it.summary.sampleCount == 40u && it.summary.spark != null }, "each row draws from its summary")
-        // A shot far past the cap reads whole, with its own curve.
+        // A shot far down the list reads whole, with its own curve.
         val far = shots[4_321]
         assertEquals(far.samples, assertNotNull(fresh.loadShot(far.id)).samples)
         assertEquals(reads + 1, seriesReadsForTest.get(), "one shot, one read")

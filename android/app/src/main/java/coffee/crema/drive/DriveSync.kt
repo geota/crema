@@ -76,7 +76,16 @@ class BackupZip(
     val contentHash: String? = null,
     /** Done with [file]: removes it. */
     val release: () -> Unit = { file.delete() },
+    /**
+     * The shots it holds whole: written, with their curve and profile. Null
+     * when it left out a shot it couldn't name. Free up space deletes only
+     * these (#310 P6a, REVIEW-440 B1).
+     */
+    val whole: Set<String>? = null,
 )
+
+/** A backup that reached Drive, and the shots it holds whole ([BackupZip.whole]). */
+class DriveBackupDone(val whole: Set<String>?)
 
 /** What a new install keeps of its automatic copies. */
 internal const val NEW_INSTALL_DRIVE_COPIES = 3
@@ -525,25 +534,34 @@ class DriveSync(
 
     /** Upload a fresh `crema-backup/v1` file to Drive (timestamped — keeps a history). */
     fun backupNow() {
-        scope.launch {
-            if (!ownState.await()) return@launch
-            if (restoreRunning()) {
-                notify("A restore is running. Back up once it's done.")
-                return@launch
-            }
-            val tokens = tokenForUser("backup") ?: return@launch
-            // Busy from the start: building the zip takes a while on a big
-            // history (it runs off Main, so the UI stays live meanwhile).
-            _state.update { it.copy(busy = true) }
-            val built = backupZip(false) ?: run {
-                _state.update { it.copy(busy = false) } // backupZip already notified "nothing to back up"
-                return@launch
-            }
+        scope.launch { backupNowAwait() }
+    }
+
+    /**
+     * [backupNow], awaited: what reached Drive, or null when nothing did (a
+     * restore running, no session, an empty or failed build, a failed upload).
+     * Free up space backs up this way, then deletes (#310 P6a, REVIEW-440 B1).
+     */
+    suspend fun backupNowAwait(): DriveBackupDone? {
+        if (!ownState.await()) return null
+        if (restoreRunning()) {
+            notify("A restore is running. Back up once it's done.")
+            return null
+        }
+        val fake = uploadForTest
+        val tokens = if (fake != null) null else tokenForUser("backup") ?: return null
+        // Busy from the start: building the zip takes a while on a big
+        // history (it runs off Main, so the UI stays live meanwhile).
+        _state.update { it.copy(busy = true) }
+        try {
+            val built = backupZip(false) ?: return null // backupZip already said why
             try {
-                withToken(tokens) { uploadBackup(it, backupFileName(), built.file) }
+                if (fake != null) fake(backupFileName(), built.file)
+                else withToken(tokens!!) { uploadBackup(it, backupFileName(), built.file) }
                 persist { it.copy(lastBackupSuccessAtMs = now()) }
                 finishRun(backedUp())
                 notify("Backed up to Google Drive")
+                return DriveBackupDone(built.whole)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
@@ -553,9 +571,11 @@ class DriveSync(
                 if (failure != SyncFailure.SessionEnded) {
                     notify("Google Drive backup failed: ${driveFailureLine(failure, e.message)}")
                 }
+                return null
             } finally {
                 built.release()
             }
+        } finally {
             _state.update { it.copy(busy = false) }
         }
     }
@@ -817,7 +837,11 @@ class DriveSync(
         }
     }
 
-    private companion object {
+    internal companion object {
+        /** Test seam: a VM test's stand-in for the session and the upload of [backupNowAwait]. Null in the app. */
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var uploadForTest: (suspend (name: String, file: java.io.File) -> Unit)? = null
+
         /** How long to let a real redirect land before calling the handshake
          *  abandoned. Long enough for `onNewIntent` → [handleCallback]'s
          *  coroutine to clear the pending state, short enough that the user

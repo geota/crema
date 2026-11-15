@@ -28,11 +28,11 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * #310 P3a on the real ViewModel: the view is capped at 300 rows, the store
- * keeps every row, and nothing reads "not in view" as "gone". A capped build
- * over 5,000 rows saves and deletes none; a pull of a hidden shot adds no
- * copy; a backup holds hidden rows; a shot made before the rows land
- * survives; a wipe restore merges, then removes by name.
+ * #310 P3a on the real ViewModel, and from P6a with no cap: the store keeps
+ * every row, the view now shows them all, and nothing reads "not in view" as
+ * "gone". 5,000 rows save and delete none; a pull of a stored shot adds no
+ * copy; a backup holds every row; a shot made before the rows land survives;
+ * a wipe restore merges, then removes by name.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -92,12 +92,12 @@ class HistoryViewCapVmTest {
     private fun rows(n: Int, samplesPer: Int = 0) = HistoryFixtures.rows(n, samplesPer).map { it.copy(pinned = false) }
 
     @Test
-    fun aCappedBuildLoads5000RowsSavesAndAllRowsRemain() {
+    fun fiveThousandRowsLoadInViewSaveAndAllRowsRemain() {
         val planted = rows(5_000)
         plant(planted)
         val vm = vm()
         val library = VmHarness.library(vm)
-        assertEquals(HistoryStore.MAX_SHOTS, vm.ui.value.history.size, "the view is capped")
+        assertEquals(5_000, vm.ui.value.history.size, "no cap from P6a: every row is in view")
         assertEquals(5_000, library.allShots().size, "the store keeps every row")
         assertEquals(HistoryHealth.OK, vm.ui.value.historyHealth)
         // A star tap and a new shot: the save is a diff, never a list that replaces the store.
@@ -112,16 +112,16 @@ class HistoryViewCapVmTest {
         VmHarness.idleUntil("the saves") { dbIds().size == 5_001 && dbField(top, "rating") == "4" }
         val next = relaunch()
         assertEquals(5_001, VmHarness.library(next).allShots().size, "all rows remain after a reload")
-        assertEquals(HistoryStore.MAX_SHOTS, next.ui.value.history.size)
+        assertEquals(5_001, next.ui.value.history.size)
     }
 
     @Test
-    fun aPullOfAHiddenShotAddsNoCopy() {
+    fun aPullOfAStoredShotAddsNoCopy() {
         plant(rows(320))
         val vm = vm()
         val library = VmHarness.library(vm)
         val hidden = library.allShots().last()
-        assertFalse(vm.ui.value.history.any { it.id == hidden.id }, "it's past the cap")
+        assertTrue(vm.ui.value.history.any { it.id == hidden.id }, "row 320, in view from P6a")
         val refused = library.insertPulledShots(listOf(hidden.withHeavy(emptyList(), null, null).copy(notes = "pulled again")))
         VmHarness.idle()
         assertTrue(refused.isEmpty(), "it's here, so not refused either")
@@ -131,7 +131,7 @@ class HistoryViewCapVmTest {
     }
 
     @Test
-    fun markingAHiddenShotSyncedStoresItsVisualizerId() {
+    fun markingAnOldShotSyncedStoresItsVisualizerId() {
         plant(rows(305).map { it.copy(visualizerId = null) })
         val vm = vm()
         val library = VmHarness.library(vm)
@@ -140,20 +140,20 @@ class HistoryViewCapVmTest {
         // At once, as bindUploaded reads it right after: not "gone", so no tombstone.
         assertEquals("vis-new", library.findShot(hidden.id)?.visualizerId, "not gone: bindUploaded finds it bound")
         VmHarness.idleUntil("the stamp") { dbField(hidden.id, "visualizerId") == "vis-new" }
-        // Its profile, past the cap and loaded light, stays in the store.
+        // Its profile, loaded light, stays in the store.
         val back = runBlocking { HistoryStore(app, coreJson).load() }.first { it.id == hidden.id }
         assertEquals(rows(305).first { it.id == hidden.id }.profile, back.profile)
     }
 
-    /** The backfill guard (SPEC §4) past the cap: a light row's curve is on disk, not "missing". */
+    /** The backfill guard (SPEC §4) on an old row: a light row's curve is on disk, not "missing". */
     @Test
-    fun aPullOntoAHiddenShotKeepsItsCurveAndProfile() {
+    fun aPullOntoAnOldShotKeepsItsCurveAndProfile() {
         val planted = rows(305, samplesPer = 8)
         plant(planted)
         val vm = vm()
         val library = VmHarness.library(vm)
         VmHarness.idleUntil("the series") { library.rowsReady }
-        val hidden = library.allShots().drop(vm.ui.value.history.size).first { id -> planted.first { it.id == id.id }.samples.isNotEmpty() && planted.first { it.id == id.id }.profile != null }
+        val hidden = library.allShots().drop(HistoryStore.LEGACY_MAX_SHOTS).first { id -> planted.first { it.id == id.id }.samples.isNotEmpty() && planted.first { it.id == id.id }.profile != null }
         val original = planted.first { it.id == hidden.id }
         library.applyRemoteShot(
             hidden.id,
@@ -168,7 +168,7 @@ class HistoryViewCapVmTest {
     }
 
     @Test
-    fun aBackupHoldsTheHiddenRowsWithTheirCurves() {
+    fun aBackupHoldsEveryRowWithItsCurve() {
         val planted = rows(320, samplesPer = 20)
         plant(planted)
         val vm = vm()
@@ -178,7 +178,7 @@ class HistoryViewCapVmTest {
         try {
             assertEquals(320u, zip.counts.shots, "every row, past the cap too")
             assertEquals(planted.count { it.samples.isNotEmpty() }.toUInt(), zip.counts.curves, "with its curve")
-            assertTrue(planted.drop(HistoryStore.MAX_SHOTS).any { it.samples.isNotEmpty() }, "hidden rows have curves")
+            assertTrue(planted.drop(HistoryStore.LEGACY_MAX_SHOTS).any { it.samples.isNotEmpty() }, "rows past 300 have curves")
         } finally {
             zip.release()
         }
@@ -243,7 +243,7 @@ class HistoryViewCapVmTest {
         val bytes = zip.file.readBytes()
         zip.release()
 
-        // This device: 310 rows (10 past the cap), 5 shared with the backup.
+        // This device: 310 rows (10 past the old cap), 5 shared with the backup.
         store.clear(); VmHarness.idle(); store = ViewModelStore()
         runBlocking { HistoryStore(app, coreJson).erase() }
         val mine = HistoryFixtures.rows(305, 0, start = 1_500_000_000_000L).map { it.copy(id = "mine-${it.id}", pinned = false) } + theirs.take(5)
@@ -268,6 +268,6 @@ class HistoryViewCapVmTest {
         next.confirmRestore()
         VmHarness.idleUntil("the remove") { dbIds() == theirs.map { it.id }.toSet() }
         val back = VmHarness.library(next).allShots()
-        assertEquals(theirs.map { it.id }.toSet(), back.map { it.id }.toSet(), "exactly the backup's rows, past the cap too")
+        assertEquals(theirs.map { it.id }.toSet(), back.map { it.id }.toSet(), "exactly the backup's rows")
     }
 }

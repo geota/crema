@@ -62,6 +62,10 @@ fun HistoryStoreBanner(
     onOldCopy: () -> Unit,
     onStartEmpty: () -> Unit,
     modifier: Modifier = Modifier,
+    /** A shot that couldn't be saved whole: share the newest such shot, as a file (#310 P6a). */
+    onShareUnsaved: (() -> Unit)? = null,
+    /** A shot that couldn't be saved whole: open Free up space (#310 P6a). */
+    onFreeUp: (() -> Unit)? = null,
 ) {
     val text = historyBannerText(health, lost, error, unsaved) ?: return
     Surface(
@@ -80,7 +84,10 @@ fun HistoryStoreBanner(
                         TextButton(onClick = onStartEmpty, enabled = !busy) { Text("Start empty") }
                     }
                     HistoryHealth.UNAVAILABLE -> TextButton(onClick = onTryAgain, enabled = !busy) { Text("Try again") }
-                    else -> Unit
+                    else -> if (unsaved > 0) {
+                        onShareUnsaved?.let { TextButton(onClick = it) { Text(if (unsaved == 1) "Share this shot" else "Share the newest") } }
+                        onFreeUp?.let { TextButton(onClick = it) { Text("Free up space") } }
+                    }
                 }
             }
         }
@@ -101,7 +108,7 @@ internal fun historyBannerText(health: HistoryHealth, lost: LostChoices?, error:
         HistoryHealth.UNAVAILABLE ->
             "Couldn't open your shot history${error?.let { " ($it)" }.orEmpty()}. Nothing is lost: new shots are kept aside and added once it opens."
         else -> if (unsaved > 0) {
-            "$unsaved shot${if (unsaved == 1) "" else "s"} couldn't be fully saved, likely for lack of space. Free up space on this device: Crema keeps trying."
+            "$unsaved shot${if (unsaved == 1) "" else "s"} couldn't be fully saved, likely for lack of space. Crema holds what didn’t save and tries again with each save. Share ${if (unsaved == 1) "it" else "the newest"} to keep a copy, or free up space."
         } else {
             null
         }

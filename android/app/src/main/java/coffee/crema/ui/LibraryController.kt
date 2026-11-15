@@ -156,6 +156,8 @@ class LibraryController(
      *  and session settings over this device's own (spec §7.2). Library
      *  actions that act on what is on screen read this. */
     private val effectiveState: () -> MainUiState = uiState,
+    /** Whether Google Drive is busy now: its own state, not the UI's mirror, which can lag (REVIEW-440 R1). */
+    private val driveBusy: () -> Boolean = { uiState().drive.busy },
     /** Synchronously update the UI snapshot (the VM's `_ui.update`). Keeps the rows. */
     private val updateUi: ((MainUiState) -> MainUiState) -> Unit,
     /** Change the history or the bean library: [UiStore.edit]. */
@@ -305,11 +307,23 @@ class LibraryController(
 
     private fun editHistory(edit: (HistoryRows) -> HistoryRows) = editRows({ it.copy(history = edit(it.history)) }, { it })
 
-    /** The rows the view shows of [all]: pinned ones and the newest [HistoryStore.MAX_SHOTS] others. The rest stay in the store, hidden. */
+    /**
+     * The rows the view shows of [all]: every one from P6a (#310). Only the
+     * legacy backend has a cap ([HistoryStore.viewCap]): pinned rows and the
+     * newest others.
+     */
     private fun viewOf(all: List<ShotRow>): List<ShotRow> {
+        val sorted = all.sortedWith(HistoryStore.ORDER)
+        val cap = historyStore.viewCap ?: return sorted
         var unpinned = 0
-        return all.sortedWith(HistoryStore.ORDER).filter { it.pinned || unpinned++ < HistoryStore.MAX_SHOTS }
+        return sorted.filter { it.pinned || unpinned++ < cap }
     }
+
+    /** The cap the view has now: none from P6a, but on the legacy backend. */
+    private val viewCap: Int? get() = historyStore.viewCap
+
+    /** [viewCap], for a Visualizer pull's plan. */
+    val historyCap: Int? get() = viewCap
 
     private fun coreHealth(h: coffee.crema.persist.StoreHealth) = when (h) {
         coffee.crema.persist.StoreHealth.LOADING -> coffee.crema.core.LocalHealth.Loading
@@ -338,7 +352,7 @@ class LibraryController(
     /** These rows with [shot], made here, added by date and capped; [cut]
      *  counts what the cap dropped. */
     private fun HistoryRows.withMade(shot: ShotRow, cut: CapCut): HistoryRows {
-        val next = historyWith(listOf(shot), this, keepId = shot.id)
+        val next = historyWith(listOf(shot), this, keepId = shot.id, cap = viewCap)
         val kept = next.mapTo(HashSet()) { it.id }
         cut.dropped = count { it.id !in kept }
         return next
@@ -371,7 +385,24 @@ class LibraryController(
     private fun noteUnsaved() {
         val unsaved = historyUnsaved
         if (uiState().historyUnsaved != unsaved) updateUi { it.copy(historyUnsaved = unsaved) }
+        checkStorage()
     }
+
+    /**
+     * Read the free space where the history lives and set the storage notices
+     * (#310 P6a, SPEC §1): after each save, at load and on resume. A statfs,
+     * cheap enough for every save. The getting-full notice, once dismissed,
+     * comes back only after the space recovers and runs low again.
+     */
+    fun checkStorage() {
+        val level = coffee.crema.history.StorageSpace.levelOf(historyStore.freeBytes())
+        val s = uiState()
+        if (s.storageLevel == level) return
+        updateUi { it.copy(storageLevel = level, storageNoticeDismissed = it.storageNoticeDismissed && level != coffee.crema.history.StorageLevel.OK) }
+    }
+
+    /** The user dismissed the getting-full notice. */
+    fun dismissStorageNotice() = updateUi { it.copy(storageNoticeDismissed = true) }
 
     /** Save the history as it stands. */
     private fun saveHistory() {
@@ -419,7 +450,7 @@ class LibraryController(
                     // A row made this session that a save took to the store before the load: memory's copy is the newer.
                     val mine = if (merge) current.associateBy { it.id } else emptyMap()
                     val loadedRows = if (mine.isEmpty()) load.view else load.view.map { mine[it.id] ?: it }
-                    val merged = if (madeHere.isEmpty()) HistoryMerge(loadedRows, emptyList(), 0) else mergeHistory(madeHere, loadedRows)
+                    val merged = if (madeHere.isEmpty()) HistoryMerge(loadedRows, emptyList(), 0) else mergeHistory(madeHere, loadedRows, cap = viewCap)
                     dropped = merged.dropped
                     rows.copy(history = rows.history.with(merged.rows))
                 },
@@ -432,12 +463,13 @@ class LibraryController(
                 else -> false
             }
             historyStore.openSaves()
+            checkStorage()
             rowsLoaded.complete(Unit)
             // A shot made before the rows landed goes into the store now.
             if (madeHere.isNotEmpty()) persistHistory(uiState().history)
             if (load.health == HistoryHealth.LEGACY && !legacyNoticed) {
                 legacyNoticed = true
-                notify("Shot history stays in its old format for now, keeping the newest ${coffee.crema.history.HistoryStore.MAX_SHOTS}. It will try again at the next launch.")
+                notify("Shot history stays in its old format for now, keeping the newest ${coffee.crema.history.HistoryStore.LEGACY_MAX_SHOTS}. It will try again at the next launch.")
             }
         } finally {
             loaded.complete(Unit)
@@ -1137,18 +1169,7 @@ class LibraryController(
     /** Copy a built backup [file] to the picked [uri], then remove the temporary file. */
     fun writeFileToUri(uri: Uri, file: File) {
         scope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                try {
-                    copyBackupToDocument(
-                        file,
-                        open = { mode -> app.contentResolver.openOutputStream(uri, mode) },
-                        delete = { android.provider.DocumentsContract.deleteDocument(app.contentResolver, uri) },
-                    )
-                } finally {
-                    releaseBackupFile(file)
-                }
-            }
-            notify(if (ok) "Backed up to file" else "Backup failed — couldn't write")
+            notify(if (saveBackupFile(uri, file)) "Backed up to file" else "Backup failed — couldn't write")
         }
     }
 
@@ -1251,10 +1272,10 @@ class LibraryController(
             editHistory { rows ->
                 val existing = rows.mapTo(HashSet()) { it.id } + hiddenIds
                 added = incoming.filterNot { it.id in existing }
-                merged = mergeHistory(added, rows)
+                merged = mergeHistory(added, rows, cap = viewCap)
                 rows.with(merged.rows)
             }
-            // Rows older than the view's 300 go straight into the store, hidden, from P3a.
+            // Rows past a capped view would go straight into the store, hidden (P3a); from P6a none are.
             val past = pastTheCap(added, merged)
             // What the legacy backend's cap dropped isn't written: its staged parts go too.
             val landing = (merged.kept + past).mapTo(HashSet()) { it.id }
@@ -1393,6 +1414,7 @@ class LibraryController(
     }
 
     private fun streamBackupNow(snap: BackupSnapshot, kind: BackupKind, cancel: java.util.concurrent.atomic.AtomicBoolean): BackupZip? {
+        backupWalkStarts()
         val cache = app.cacheDir
         sweepBackupTemp(cache)
         val photos = snap.state.beans
@@ -1404,6 +1426,7 @@ class LibraryController(
                 photos, backupTempFile(cache),
                 stop = { if (cancel.get()) throw BackupCancelled() },
                 onProgress = { p -> updateUi { it.copy(backupProgress = it.backupProgress + (kind to p)) } },
+                shotJson = backupShotJson,
             )
         }.fold(
             onSuccess = { built ->
@@ -1417,7 +1440,13 @@ class LibraryController(
                     snap.missingCurves.forEach { appendLog("Backup left out the curve of shot $it: its telemetry is damaged or missing") }
                     notify("$n older shot${if (n == 1) " has" else "s have"} damaged telemetry and ${if (n == 1) "is" else "are"} backed up without ${if (n == 1) "its curve" else "their curves"}")
                 }
-                BackupZip(built.file, built.counts, built.contentHash, release = { releaseBackupFile(built.file) })
+                // What this backup doesn't hold whole: Free up space keeps these (REVIEW-440 B1).
+                // An omitted shot it can't name makes the whole set unknown.
+                val omittedShots = built.omitted.filter { it.kind == "shot" }.map { omittedRowId(it, snap) }
+                val inBackup = snap.shots.mapTo(HashSet()) { it.id }
+                val curveless = snap.missingCurves + historyStore.unreadableSeries.filter { it in inBackup }
+                val whole = if (omittedShots.any { it == null }) null else inBackup - (omittedShots.filterNotNull() + curveless + built.degraded).toSet()
+                BackupZip(built.file, built.counts, built.contentHash, release = { releaseBackupFile(built.file) }, whole = whole)
             },
             onFailure = {
                 when (it) {
@@ -1697,6 +1726,120 @@ class LibraryController(
             listOf(app.filesDir, historyStore.seriesDirectory, BeanImageStore.beanImageFile(app, "x").parentFile!!)
     }
 
+    // ── Free up space (#310 P6a, SPEC §8) ────────────────────────────────────
+
+    /**
+     * What Free up space would delete: every unpinned shot dated before
+     * [beforeMs], with about the space they take. Null while a cleanup that
+     * spares pinned shots may not run ([historySettled]): an unread row may be
+     * a pinned one. Reads only: nothing is deleted until [freeUpSpace].
+     */
+    suspend fun planFreeUp(beforeMs: Long): coffee.crema.history.FreeUpPlan? {
+        if (!rowsReady || !historySettled) return null
+        // A queued upload or an unsent edit not yet read would look like none (REVIEW-440 R2).
+        if (!unsentKnown()) return null
+        val older = allShots().filter { it.completedAtMs < beforeMs }
+        val unpinned = older.filterNot { it.pinned }
+        // A shot with an upload or an edit still to reach Visualizer stays (REVIEW-440 N1, web parity).
+        val (kept, doomed) = unpinned.partition(::unsent)
+        val ids = doomed.map { it.id }
+        return coffee.crema.history.FreeUpPlan(beforeMs, ids, older.count { it.pinned }, historyStore.bytesOf(ids), syncKept = kept.size)
+    }
+
+    /** How long Free up space waits for Visualizer's queue to load before it refuses (REVIEW-440 R2). */
+    private val UNSENT_READ_WAIT_MS = 10_000L
+
+    /** Whether Visualizer's queue and unsent edits are read, waiting a little for them at launch. */
+    private suspend fun unsentKnown(): Boolean =
+        kotlinx.coroutines.withTimeoutOrNull(UNSENT_READ_WAIT_MS) { visualizer.awaitUnsentRead() } == true
+
+    /** Whether [row] still has something to send to Visualizer: an upload pending or an edit unsent. */
+    private fun unsent(row: ShotRow): Boolean = visualizer.uploadPending(row) || visualizer.hasPendingEdit(row.id)
+
+    /**
+     * Why a backup is running now, or null: a build of any kind (a file, Drive,
+     * the daily one) or Drive busy. Free up space waits for it, as the walk reads
+     * each shot whole as it reaches it, and a shot deleted before that would go
+     * in without its curve (REVIEW-440 B1).
+     */
+    fun backupRunning(): String? = when {
+        backupRuns.running() || uiState().backupProgress.isNotEmpty() -> "a backup is being made"
+        driveBusy() -> "Google Drive is busy"
+        else -> null
+    }
+
+    /**
+     * Delete what [plan] named, the user's explicit choice: only those ids,
+     * and of them only the ones still here, still unpinned and still dated
+     * before the plan's date, checked on the rows as they stand. A shot pinned
+     * since the preview stays. Bag weights don't change: no history removal
+     * credits a bag (SPEC §8). The Visualizer copies stay where they are.
+     * A shot the last backup left out, or wrote without its curve or profile,
+     * stays too, read as the delete runs (REVIEW-437 B1): there is no
+     * "delete anyway". Returns how many went, and how many of the named ones
+     * the backup's gaps kept.
+     */
+    suspend fun freeUpSpace(
+        plan: coffee.crema.history.FreeUpPlan,
+        notInBackup: Set<String> = emptySet(),
+    ): coffee.crema.history.FreeUpResult {
+        if (!rowsReady || !historySettled) return coffee.crema.history.FreeUpResult(0, refused = "your shot history isn't fully read yet")
+        // Before the backup check: nothing may suspend between it and the rows' removal.
+        if (!unsentKnown()) return coffee.crema.history.FreeUpResult(0, refused = "Visualizer's sync state isn't read yet")
+        // The UI isn't the only guard: a walk still running would write these shots without their curves.
+        backupRunning()?.let { return coffee.crema.history.FreeUpResult(0, refused = it) }
+        if (plan.ids.isEmpty()) return coffee.crema.history.FreeUpResult(0)
+        val backupKept = plan.ids.count { it in notInBackup }
+        val named = plan.ids.filterNot { it in notInBackup }.toHashSet()
+        // Pinned and unsent are read on the rows as they stand: a shot pinned, queued or edited since the preview stays.
+        fun goes(row: ShotRow) = row.id in named && !row.pinned && row.completedAtMs < plan.beforeMs && !unsent(row)
+        var gone: Set<String> = emptySet()
+        editHistory { rows ->
+            gone = rows.filter(::goes).mapTo(HashSet()) { it.id }
+            rows.filtered { it.id !in gone }
+        }
+        // A capped view's hidden rows (the legacy backend has none; a store row out of view, say).
+        val hidden = historyStore.hiddenRows(uiState().history.mapTo(HashSet()) { it.id }).filter(::goes).map { it.id }
+        val ids = gone + hidden
+        val syncKept = plan.ids.count { id -> id in named && id !in ids && findShot(id)?.let(::unsent) == true }
+        if (ids.isEmpty()) return coffee.crema.history.FreeUpResult(0, backupKept, syncKept)
+        historyStore.forget(ids)
+        persistHistory(uiState().history)
+        historyStore.delete(ids)
+        // The space is there now: a curve held in memory after a failed write goes to disk (REVIEW-440 N2).
+        if (historyUnsaved.isNotEmpty()) persistHistory(uiState().history)
+        checkStorage()
+        return coffee.crema.history.FreeUpResult(ids.size, backupKept, syncKept)
+    }
+
+    /**
+     * A file backup for Free up space, built in the caller's scope (the VM's,
+     * so closing the dialog doesn't cancel it): the file and the shots it
+     * doesn't hold whole, or null when it didn't finish (REVIEW-440 B1).
+     */
+    suspend fun buildFreeUpBackup(): BackupZip? = buildBackupZip(BackupKind.FILE)
+
+    /** Write the built backup [file] to [uri] (the save picker's), then release it. True when it's written. */
+    suspend fun saveBackupFile(uri: Uri, file: File): Boolean = withContext(Dispatchers.IO) {
+        try {
+            copyBackupToDocument(
+                file,
+                open = { mode -> app.contentResolver.openOutputStream(uri, mode) },
+                delete = { android.provider.DocumentsContract.deleteDocument(app.contentResolver, uri) },
+            )
+        } finally {
+            releaseBackupFile(file)
+        }
+    }
+
+    /** Test seam: runs as a backup's walk starts, after its snapshot (REVIEW-440's probe holds it there). */
+    @androidx.annotation.VisibleForTesting
+    internal var backupWalkStarts: () -> Unit = {}
+
+    /** Test seam: how the backup writes a shot's line ([streamBackupZip]'s default in the app). */
+    @androidx.annotation.VisibleForTesting
+    internal var backupShotJson: (StoredShot) -> String = { coffee.crema.visualizer.wireShotJson(it, forBackup = true).toString() }
+
     /** Remove a stored shot from the local history. Persisted. */
     fun deleteShot(id: String) {
         editHistory { rows -> rows.filtered { it.id != id } }
@@ -1778,7 +1921,7 @@ class LibraryController(
         // A pulled shot comes whole (its curve and recipe): they wait for the save.
         val incoming = stubs.filterNot { it.id in hiddenIds || it.id in inView }.distinctBy { it.id }.map(::staged)
         editHistory { rows ->
-            val merge = mergePulled(incoming, rows)
+            val merge = mergePulled(incoming, rows, cap = viewCap)
             kept = merge.kept.mapTo(HashSet()) { it.id }
             present = rows.mapTo(HashSet()) { it.id } + hiddenIds
             rows.with(merge.rows)
@@ -2056,7 +2199,7 @@ class LibraryController(
         editRows(
             { rows ->
                 landed = mergeBeanImport(wireBeans, wireRoasters, rows.beans, rows.roasters)
-                mergedShots = mergeHistory(importedShots, rows.history)
+                mergedShots = mergeHistory(importedShots, rows.history, cap = viewCap)
                 rows.copy(
                     beans = rows.beans.with(rows.beans.replacingById(landed.updatedBeans) { it.id } + landed.newBeans),
                     roasters = rows.roasters.with(rows.roasters.replacingById(landed.updatedRoasters) { it.id } + landed.newRoasters),

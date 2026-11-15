@@ -368,6 +368,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewShots = { _ui.value.history },
         hasSeries = { shot -> library.hasCurve(shot) },
         hasProfile = { id -> library.shotHasProfile(id) },
+        historyCap = { library.historyCap },
         awaitRows = { library.awaitRows() },
         shotsLoaded = { library.rowsReady },
         historyRefused = { library.historyRefused },
@@ -481,6 +482,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         applyRestoredCustomMethods = { methods, wipe -> guided.applyRestoredCustomMethods(methods, wipe) },
         uiState = { _ui.value },
         effectiveState = { effectiveState() },
+        driveBusy = { drive.state.value.busy },
         updateUi = { transform -> _ui.update(transform) },
         editRows = { rows, rest -> _ui.edit(rows, rest) },
         notify = { notifyUser(it) },
@@ -1067,6 +1069,98 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Try the history's store again: Settings' Try again after a failed move, or the unavailable banner's. */
     fun retryHistory() = viewModelScope.launch { library.retryHistory() }
+
+    /** Free up space's preview (#310 P6a): what deleting the unpinned shots before [beforeMs] would take. Null until it may run. */
+    suspend fun planFreeUp(beforeMs: Long): coffee.crema.history.FreeUpPlan? = library.planFreeUp(beforeMs)
+
+    /** Free up space's file backup waits for the save picker's answer here. */
+    @Volatile private var freeUpSaveReply: kotlinx.coroutines.CompletableDeferred<Uri?>? = null
+
+    /**
+     * Free up space, as the user confirmed it (#310 P6a): back up [backup]-wise,
+     * then delete, as one flow in the VM's scope, so closing the dialog cancels
+     * nothing (REVIEW-440 B1). Nothing is deleted while any backup runs, when
+     * the backup doesn't finish or isn't saved, or when it can't say which
+     * shots it holds whole; of the shots [plan] named, only those it holds
+     * whole go. Pinned shots and shots with something still to send to
+     * Visualizer never go. There is no "delete anyway".
+     */
+    fun freeUpSpace(plan: coffee.crema.history.FreeUpPlan, backup: coffee.crema.history.FreeUpBackup) {
+        if (_ui.value.freeUpRunning) return
+        _ui.update { it.copy(freeUpRunning = true) }
+        viewModelScope.launch {
+            try {
+                runFreeUp(plan, backup)
+            } finally {
+                freeUpSaveReply = null
+                _ui.update { it.copy(freeUpRunning = false, freeUpSave = null) }
+            }
+        }
+    }
+
+    /** The save picker's answer for Free up space's backup: where to write it, or null when dismissed. */
+    fun freeUpSaved(uri: Uri?) {
+        freeUpSaveReply?.complete(uri)
+    }
+
+    private suspend fun runFreeUp(plan: coffee.crema.history.FreeUpPlan, backup: coffee.crema.history.FreeUpBackup) {
+        fun nothing(why: String) = notifyUser("$why, so no shots were deleted")
+        // A restore writes and removes rows by its own plan: the two never run together.
+        if (restoreState() == coffee.crema.restore.RestoreState.RUNNING) return nothing("A restore is running")
+        library.backupRunning()?.let { return nothing("Free up space waits while $it") }
+        val whole: Set<String>? = when (backup) {
+            coffee.crema.history.FreeUpBackup.NONE -> null
+            coffee.crema.history.FreeUpBackup.FILE -> {
+                val zip = library.buildFreeUpBackup() ?: return nothing("The backup didn't finish")
+                val reply = kotlinx.coroutines.CompletableDeferred<Uri?>().also { freeUpSaveReply = it }
+                _ui.update { it.copy(freeUpSave = library.backupFileName()) }
+                val uri = try {
+                    reply.await()
+                } finally {
+                    _ui.update { it.copy(freeUpSave = null) }
+                }
+                if (uri == null) {
+                    coffee.crema.ui.releaseBackupFile(zip.file)
+                    return nothing("The backup wasn't saved")
+                }
+                if (!library.saveBackupFile(uri, zip.file)) return nothing("The backup couldn't be written")
+                notifyUser("Backed up to file")
+                zip.whole ?: return nothing("The backup couldn't say which shots it holds whole")
+            }
+            coffee.crema.history.FreeUpBackup.DRIVE -> {
+                val done = drive.backupNowAwait() ?: return nothing("The Drive backup didn't finish")
+                done.whole ?: return nothing("The backup couldn't say which shots it holds whole")
+            }
+        }
+        val notInBackup = whole?.let { w -> plan.ids.filterNotTo(HashSet()) { it in w } }.orEmpty()
+        val done = library.freeUpSpace(plan, notInBackup)
+        done.refused?.let { return nothing("Free up space waits while $it") }
+        notifyUser(freeUpDoneNotice(plan, done))
+    }
+
+    /** Free up space's report: what went, and what stayed and why. */
+    internal fun freeUpDoneNotice(plan: coffee.crema.history.FreeUpPlan, done: coffee.crema.history.FreeUpResult): String {
+        val date = java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(plan.beforeMs))
+        val n = done.deleted
+        val parts = buildList {
+            add(if (n == 0) "No shots were deleted" else "Deleted $n shot${if (n == 1) "" else "s"} from before $date")
+            if (plan.pinnedKept > 0) add("pinned shots were kept")
+            when (done.backupKept) {
+                0 -> Unit
+                1 -> add("1 shot was kept: the backup didn't hold it whole")
+                else -> add("${done.backupKept} shots were kept: the backup didn't hold them whole")
+            }
+            when (done.syncKept) {
+                0 -> Unit
+                1 -> add("1 shot waiting to reach Visualizer was kept")
+                else -> add("${done.syncKept} shots waiting to reach Visualizer were kept")
+            }
+        }
+        return parts.joinToString(". ")
+    }
+
+    /** The getting-full notice's Dismiss. */
+    fun dismissStorageNotice() = library.dismissStorageNotice()
 
     /** The lost banner's choice: rebuild from the snapshot, recover the old copy, or start empty. */
     fun resolveLostHistory(choice: LibraryController.LostChoice) = viewModelScope.launch { library.resolveLostHistory(choice) }
@@ -2807,6 +2901,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (foreground && historyLoad.isCompleted && _ui.value.historyHealth == coffee.crema.history.HistoryHealth.UNAVAILABLE) {
             retryHistory()
         }
+        // The space may have gone, or come back, while Crema was away (#310 P6a).
+        if (foreground && historyLoad.isCompleted) library.checkStorage()
         // The Visualizer retry queue's tick and network trigger run only in
         // the foreground (F17).
         visualizer.onForegroundChanged(foreground)

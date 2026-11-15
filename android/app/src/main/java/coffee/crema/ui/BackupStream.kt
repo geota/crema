@@ -102,6 +102,9 @@ internal class BackupRuns {
         cancels[kind]?.set(true)
     }
 
+    /** Whether any build is running now. */
+    fun running(): Boolean = cancels.isNotEmpty()
+
     /** The build that started with [token] is over. */
     fun end(kind: BackupKind, token: java.util.concurrent.atomic.AtomicBoolean) {
         cancels.remove(kind, token)
