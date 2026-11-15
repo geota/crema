@@ -73,6 +73,19 @@ pub enum StoreError {
     /// A failed reopen left the store unusable; every call returns the error
     /// that reopen gave.
     Poisoned(Box<StoreError>),
+    /// The file wouldn't take the journal mode asked for: WAL on a VFS
+    /// without shared memory, say. Nothing was written.
+    JournalMode {
+        /// The mode asked for.
+        asked: String,
+        /// The mode SQLite answered with.
+        got: String,
+    },
+    /// The row isn't in the query: an `Around` anchor on a row the filter
+    /// leaves out. The caller clears the filter or falls back.
+    NotListed(String),
+    /// The export walk token isn't one this connection began, or it ended.
+    UnknownWalk(u64),
     /// Any other SQLite failure, with its message.
     Sqlite(String),
 }
@@ -104,6 +117,11 @@ impl std::fmt::Display for StoreError {
             StoreError::Refused(m) => write!(f, "refused: {m}"),
             StoreError::Fault(p) => write!(f, "injected fault at {p}"),
             StoreError::Poisoned(e) => write!(f, "store unusable after a failed reopen: {e}"),
+            StoreError::JournalMode { asked, got } => {
+                write!(f, "journal_mode {asked} gave {got}")
+            }
+            StoreError::NotListed(id) => write!(f, "{id} isn't in the query"),
+            StoreError::UnknownWalk(t) => write!(f, "no export walk {t} on this connection"),
             StoreError::Sqlite(m) => write!(f, "sqlite: {m}"),
         }
     }
@@ -158,9 +176,16 @@ pub(crate) fn on_fts(e: rusqlite::Error) -> Fail {
 pub(crate) enum Class {
     /// A final error.
     Error(StoreError),
-    /// `SQLITE_CORRUPT` mid-session, outside the search index: reopen, and
-    /// let the open-time checks decide.
-    Reopen(String),
+    /// `SQLITE_CORRUPT` mid-session, outside the search index, or a plain
+    /// (not VTAB) one from a statement that also reads `shot`: reopen, and
+    /// let the open-time checks decide. `full` when the code says an index
+    /// disagrees with its table, which only `integrity_check` sees.
+    Reopen {
+        /// The error's text.
+        msg: String,
+        /// Run `integrity_check`, not `quick_check`.
+        full: bool,
+    },
 }
 
 /// `SQLITE_CORRUPT_VTAB`: a virtual table's content is inconsistent. The
@@ -184,7 +209,15 @@ pub(crate) fn classify(e: &rusqlite::Error, source: Source) -> Class {
         ffi::SQLITE_CANTOPEN => return Class::Error(StoreError::CantOpen(msg)),
         _ => {}
     }
+    let full = err.extended_code == ffi::SQLITE_CORRUPT_INDEX;
     match source {
+        // A plain corrupt error on a statement that reads the index may come
+        // from `shot` itself (the rebuild's `SELECT … FROM shot`): the
+        // open-time checks decide, and FTS damage is found after them
+        // (REVIEW-439 note 3).
+        Source::Fts if primary == ffi::SQLITE_CORRUPT || primary == ffi::SQLITE_NOTADB => {
+            Class::Reopen { msg, full }
+        }
         // Any other failure of a statement on the search index is damage to
         // it: derived data (M6).
         Source::Fts => Class::Error(StoreError::FtsDamaged(msg)),
@@ -196,7 +229,7 @@ pub(crate) fn classify(e: &rusqlite::Error, source: Source) -> Class {
             _ => Class::Error(StoreError::Sqlite(msg)),
         },
         Source::Session => match primary {
-            ffi::SQLITE_CORRUPT | ffi::SQLITE_NOTADB => Class::Reopen(msg),
+            ffi::SQLITE_CORRUPT | ffi::SQLITE_NOTADB => Class::Reopen { msg, full },
             _ => Class::Error(StoreError::Sqlite(msg)),
         },
     }
@@ -207,7 +240,7 @@ pub(crate) fn classify(e: &rusqlite::Error, source: Source) -> Class {
 pub(crate) fn error_of(e: &rusqlite::Error, source: Source) -> StoreError {
     match classify(e, source) {
         Class::Error(e) => e,
-        Class::Reopen(m) => StoreError::Corrupt(m),
+        Class::Reopen { msg, .. } => StoreError::Corrupt(msg),
     }
 }
 
@@ -241,12 +274,22 @@ mod tests {
         ));
         assert!(matches!(
             classify(&failure(ffi::SQLITE_CORRUPT), Source::Session),
-            Class::Reopen(_)
+            Class::Reopen { full: false, .. }
         ));
+        // From a statement on the index, a plain corrupt error may be
+        // `shot`'s own: the open-time checks decide (REVIEW-439 note 3).
         assert!(matches!(
             classify(&failure(ffi::SQLITE_CORRUPT), Source::Fts),
-            Class::Error(StoreError::FtsDamaged(_))
+            Class::Reopen { full: false, .. }
         ));
+        // An index that disagrees with its table: only integrity_check sees
+        // it (REVIEW-439 note 5).
+        for source in [Source::Session, Source::Fts] {
+            assert!(matches!(
+                classify(&failure(ffi::SQLITE_CORRUPT_INDEX), source),
+                Class::Reopen { full: true, .. }
+            ));
+        }
     }
 
     #[test]

@@ -105,9 +105,20 @@ pub enum Applied {
     },
     /// A seq before it hasn't arrived: it waits until the gap fills or the
     /// client resends its outbox. Nothing was written.
+    ///
+    /// `last: 0` for a tab whose earlier writes were applied means the store
+    /// forgot it ([`Store::prune_tabs`], after its lock was seen gone): the
+    /// tab takes a new tab id and starts again at seq 1 (REVIEW-439 note 7).
     Gap {
         /// The tab's last applied seq; the next one applied is `last + 1`.
         last: u64,
+    },
+    /// The write is refused for good (a row that isn't a JSON object with an
+    /// id): nothing of it was written, and its seq is consumed, so the tab's
+    /// next seq applies. The client drops it from its outbox.
+    Refused {
+        /// Why.
+        reason: String,
     },
 }
 
@@ -415,11 +426,15 @@ pub(crate) fn upsert_in(
 }
 
 /// The delete body: each named row's children, then the row (M10).
+/// While an export walk is open, a row of its set isn't removed but held
+/// (`hold_delete = 1`): hidden everywhere, and removed once no walk needs it
+/// (S6).
 pub(crate) fn delete_in(
     tx: &Transaction<'_>,
     st: &mut TxState,
     faults: &Faults,
     ids: &[String],
+    walking: bool,
 ) -> std::result::Result<Outcome, Fail> {
     let mut out = Outcome::default();
     for id in ids {
@@ -433,6 +448,27 @@ pub(crate) fn delete_in(
             continue;
         };
         faults.hit("delete.row")?;
+        let in_walk = walking
+            && tx
+                .prepare_cached("SELECT 1 FROM temp.walk_set WHERE rid = ?1 LIMIT 1")?
+                .query_row([rid], |_| Ok(()))
+                .optional()?
+                .is_some();
+        if in_walk {
+            if held {
+                continue;
+            }
+            let seq = i64::try_from(st.next())
+                .map_err(|_| StoreError::Refused("write_seq overflow".into()))?;
+            tx.prepare_cached("UPDATE shot SET hold_delete = 1, changed_seq = ?1 WHERE rid = ?2")?
+                .execute((seq, rid))?;
+            let old = visible(derive_row(&row_json).ok(), false);
+            out.kinds = out
+                .kinds
+                .union(ChangeKinds::between(old.as_ref(), None, true));
+            out.deleted.push(id.clone());
+            continue;
+        }
         st.next();
         tx.prepare_cached("DELETE FROM shot_tag WHERE rid = ?1")?
             .execute([rid])?;
@@ -514,10 +550,11 @@ fn write_in(
     st: &mut TxState,
     faults: &Faults,
     write: &Write,
+    walking: bool,
 ) -> std::result::Result<Outcome, Fail> {
     match write {
         Write::Upsert(rows) => upsert_in(tx, st, faults, rows),
-        Write::Delete(ids) => delete_in(tx, st, faults, ids),
+        Write::Delete(ids) => delete_in(tx, st, faults, ids, walking),
         Write::SetLive(live) => Ok(Outcome {
             kinds: set_live_in(tx, st, live)?,
             ..Outcome::default()
@@ -535,7 +572,7 @@ pub(crate) struct Outcome {
 }
 
 impl Outcome {
-    fn written(self, st: &TxState) -> Written {
+    pub(crate) fn written(self, st: &TxState) -> Written {
         Written {
             change: change_set(st, self.upserted, self.deleted, self.kinds),
             duplicates: self.duplicates,
@@ -562,13 +599,16 @@ impl Store {
 
     /// Removes the named rows, in one transaction: for each, its `shot_tag`
     /// and `shot_heavy` rows, then the row. Unknown ids are skipped. This is
-    /// the only call that removes a row (rule 1).
+    /// the only call that removes a row (rule 1). While an export walk is
+    /// open, a row of its set is held instead: hidden, and listed as deleted
+    /// in the change set, until [`Store::release_holds`] gives it back.
     ///
     /// # Errors
     /// A SQLite error class, with the transaction rolled back.
     pub fn delete(&mut self, ids: &[String]) -> Result<ChangeSet> {
+        let walking = self.walks.any();
         let (out, st) = self.write("delete.commit", "delete.committed", |tx, st, f| {
-            delete_in(tx, st, f, ids)
+            delete_in(tx, st, f, ids, walking)
         })?;
         Ok(out.written(&st).change)
     }
@@ -598,6 +638,7 @@ impl Store {
     pub fn apply(&mut self, tab: &str, seq: u64, at_ms: i64, write: &Write) -> Result<Applied> {
         let seq_i =
             i64::try_from(seq).map_err(|_| StoreError::Refused("seq out of range".into()))?;
+        let walking = self.walks.any();
         let (applied, st) = self.write("apply.commit", "apply.committed", |tx, st, f| {
             let last: i64 = tx
                 .prepare_cached("SELECT seq FROM rpc_applied WHERE tab = ?1")?
@@ -611,13 +652,31 @@ impl Store {
             if seq > last_u + 1 {
                 return Ok(Err(Applied::Gap { last: last_u }));
             }
-            let out = write_in(tx, st, f, write)?;
+            // The body in a savepoint: a write refused for good (a row
+            // that isn't a JSON object with an id) is rolled back alone and
+            // its seq consumed, so the tab's later writes don't wait on it
+            // forever (REVIEW-439 note 7).
+            tx.execute_batch("SAVEPOINT apply_body")?;
+            let (seq_before, dirty_before) = (st.seq, st.dirty);
+            let result = match write_in(tx, st, f, write, walking) {
+                Ok(out) => {
+                    tx.execute_batch("RELEASE apply_body")?;
+                    Ok(out)
+                }
+                Err(Fail::Store(StoreError::Refused(reason))) => {
+                    tx.execute_batch("ROLLBACK TO apply_body; RELEASE apply_body")?;
+                    st.seq = seq_before;
+                    st.dirty = dirty_before;
+                    Err(Applied::Refused { reason })
+                }
+                Err(other) => return Err(other),
+            };
             tx.prepare_cached(
                 "INSERT INTO rpc_applied (tab, seq, at_ms) VALUES (?1, ?2, ?3) \
                  ON CONFLICT(tab) DO UPDATE SET seq = excluded.seq, at_ms = excluded.at_ms",
             )?
             .execute((tab, seq_i, at_ms))?;
-            Ok(Ok(out))
+            Ok(result)
         })?;
         Ok(match applied {
             Ok(out) => Applied::Done(out.written(&st)),

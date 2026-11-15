@@ -17,9 +17,12 @@
 //! store already has open is refused with [`StoreError::AlreadyOpen`];
 //! connections to two different files are fine.
 
+mod backup;
 mod error;
+mod export;
 pub mod faults;
 mod fts;
+mod index;
 mod read;
 mod rewrite;
 mod write;
@@ -31,9 +34,13 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
 
+pub use backup::Recovery;
 pub use error::{Result, StoreError};
+pub use export::{ExportWalk, RidId};
 pub use faults::Faults;
 pub use fts::{FtsCheck, FtsStatus, Maintained};
+pub use index::{IndexState, IndexWrite};
+pub use read::{CoffeeFacet, Destination, Facets, Page, RidRow, RowOut, SyncPage, SyncRow};
 pub use write::{Applied, Duplicate, Heavy, RowIn, Write, Written};
 
 use crate::change::ChangeSet;
@@ -271,6 +278,7 @@ pub struct Store {
     busy: bool,
     batch_rows: u32,
     quick_checked: bool,
+    walks: export::Walks,
     faults: Faults,
     poisoned: Option<StoreError>,
     closed: bool,
@@ -307,7 +315,12 @@ impl Store {
     pub fn open(path: impl AsRef<Path>, opts: OpenOptions) -> Result<Store> {
         let path = path.as_ref().to_path_buf();
         let claim = Claim::take(file_key(&path, opts.vfs.as_deref())?)?;
-        let (conn, opened) = open_conn(&path, &opts, opts.quick_check)?;
+        let check = if opts.quick_check {
+            Check::Quick
+        } else {
+            Check::Scheduled
+        };
+        let (conn, opened) = open_conn(&path, &opts, check)?;
         let fts = fts::load(&conn).map_err(|e| error_of(&e, Source::Open))?;
         let derive = rewrite::State::load(&conn).map_err(|e| error_of(&e, Source::Open))?;
         Ok(Store {
@@ -323,6 +336,7 @@ impl Store {
             busy: false,
             batch_rows: DEFAULT_BATCH_ROWS,
             quick_checked: opened.quick_checked,
+            walks: export::Walks::new(),
             faults: Faults::default(),
             poisoned: None,
             closed: false,
@@ -498,14 +512,16 @@ impl Store {
                 Err(e) => Settled::Error(e),
             },
             Class::Error(e) => Settled::Error(e),
-            Class::Reopen(_) => Settled::Error(self.reopen()),
+            Class::Reopen { full, .. } => {
+                Settled::Error(self.reopen(if full { Check::Full } else { Check::Quick }))
+            }
         }
     }
 
     /// Closes and reopens the file after a mid-session `SQLITE_CORRUPT`, with
     /// `quick_check` (M6). Returns the error the caller gets: `Reopened` when
     /// the checks passed, else theirs, and the store is then unusable.
-    fn reopen(&mut self) -> StoreError {
+    fn reopen(&mut self, check: Check) -> StoreError {
         let placeholder = match Connection::open_in_memory() {
             Ok(c) => c,
             Err(e) => {
@@ -517,7 +533,8 @@ impl Store {
         drop(std::mem::replace(&mut self.conn, placeholder));
         let mut opts = self.opts.clone();
         opts.create = false;
-        let reopened = open_conn(&self.path, &opts, true).and_then(|(conn, opened)| {
+        self.walks.clear();
+        let reopened = open_conn(&self.path, &opts, check).and_then(|(conn, opened)| {
             let fts = fts::load(&conn).map_err(|e| error_of(&e, Source::Open))?;
             let derive = rewrite::State::load(&conn).map_err(|e| error_of(&e, Source::Open))?;
             Ok((conn, opened, fts, derive))
@@ -532,9 +549,26 @@ impl Store {
                 self.fts = fts;
                 self.derive = derive;
                 // The main database is whole, so the error may have come
-                // from the search index's own tables through a trigger.
-                if let Err(e) = self.fts_integrity_check() {
-                    return e;
+                // from the search index's own tables through a trigger. Run
+                // its check here, not through `settle`, so a corrupt answer
+                // drops the index rather than reopening again.
+                if self.fts == FtsStatus::Ready {
+                    let check = self.conn.execute(
+                        "INSERT INTO shot_fts (shot_fts, rank) VALUES ('integrity-check', 1)",
+                        [],
+                    );
+                    if let Err(e) = check {
+                        let damaged = e.sqlite_error().is_some_and(|x| {
+                            let p = x.extended_code & 0xff;
+                            p == rusqlite::ffi::SQLITE_CORRUPT || p == rusqlite::ffi::SQLITE_NOTADB
+                        });
+                        if !damaged {
+                            return error_of(&e, Source::Session);
+                        }
+                        if let Err(e) = self.on_fts_damage() {
+                            return e;
+                        }
+                    }
                 }
                 StoreError::Reopened
             }
@@ -567,7 +601,19 @@ impl Drop for Store {
 }
 
 /// Opens one connection and runs the open-time checks.
-fn open_conn(path: &Path, opts: &OpenOptions, force_check: bool) -> Result<(Connection, Opened)> {
+/// Which check an open runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Check {
+    /// `quick_check` when the schedule says: after an unclean close, weekly.
+    Scheduled,
+    /// `quick_check` now.
+    Quick,
+    /// `integrity_check` now: after an index disagreed with its table
+    /// (`SQLITE_CORRUPT_INDEX`), which `quick_check` doesn't look at.
+    Full,
+}
+
+fn open_conn(path: &Path, opts: &OpenOptions, check: Check) -> Result<(Connection, Opened)> {
     let open_err = |e: rusqlite::Error| error_of(&e, Source::Open);
     let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     if opts.create {
@@ -581,6 +627,14 @@ fn open_conn(path: &Path, opts: &OpenOptions, force_check: bool) -> Result<(Conn
     conn.busy_timeout(Duration::from_millis(u64::from(opts.busy_timeout_ms)))
         .map_err(open_err)?;
     conn.execute_batch(PRAGMAS).map_err(open_err)?;
+    // WAL without shared memory needs exclusive locking before the file is
+    // first read (REVIEW-439 note 1). A connection setting: it writes nothing.
+    if opts.journal == JournalMode::ExclusiveWal {
+        conn.query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .map_err(open_err)?;
+    }
     if conn.is_readonly("main").map_err(open_err)? {
         return Err(StoreError::ReadOnly);
     }
@@ -600,7 +654,7 @@ fn open_conn(path: &Path, opts: &OpenOptions, force_check: bool) -> Result<(Conn
         return Err(StoreError::Foreign(format!("application_id {app:#x}")));
     }
     if fresh {
-        set_modes(&conn, opts).map_err(open_err)?;
+        set_modes(&conn, opts)?;
         create_schema(&conn, opts).map_err(open_err)?;
     }
     let created = fresh;
@@ -642,10 +696,18 @@ fn open_conn(path: &Path, opts: &OpenOptions, force_check: bool) -> Result<(Conn
         .get("quick_check_ms")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0);
-    let due = force_check || unclean || opts.now_ms.saturating_sub(last_check) >= WEEK_MS;
+    let due =
+        check != Check::Scheduled || unclean || opts.now_ms.saturating_sub(last_check) >= WEEK_MS;
     let quick_checked = due && !created;
     if quick_checked {
-        quick_check(&conn)?;
+        quick_check(
+            &conn,
+            if check == Check::Full {
+                "integrity_check"
+            } else {
+                "quick_check"
+            },
+        )?;
     }
     if !writable {
         return Ok((
@@ -662,7 +724,7 @@ fn open_conn(path: &Path, opts: &OpenOptions, force_check: bool) -> Result<(Conn
     // build, anything that may write to it: the journal mode and the open
     // mark. A refused file is left exactly as it was.
     if !fresh {
-        set_modes(&conn, opts).map_err(open_err)?;
+        set_modes(&conn, opts)?;
     }
     {
         let tx =
@@ -692,24 +754,27 @@ fn open_conn(path: &Path, opts: &OpenOptions, force_check: bool) -> Result<(Conn
 
 /// The journal mode and `synchronous`: the first settings that may write to
 /// the file, so they wait until it is known to be ours.
-fn set_modes(conn: &Connection, opts: &OpenOptions) -> rusqlite::Result<()> {
-    match opts.journal {
-        JournalMode::Wal => set_journal(conn, "WAL")?,
-        JournalMode::Truncate => set_journal(conn, "TRUNCATE")?,
-        JournalMode::ExclusiveWal => {
-            conn.execute_batch("PRAGMA locking_mode = EXCLUSIVE")?;
-            set_journal(conn, "WAL")?;
-        }
+fn set_modes(conn: &Connection, opts: &OpenOptions) -> Result<()> {
+    let open_err = |e: rusqlite::Error| error_of(&e, Source::Open);
+    // `locking_mode = EXCLUSIVE` for `ExclusiveWal` was set before the first
+    // read.
+    let asked = match opts.journal {
+        JournalMode::Wal | JournalMode::ExclusiveWal => "wal",
+        JournalMode::Truncate => "truncate",
+    };
+    let got: String = conn
+        .query_row(&format!("PRAGMA journal_mode = {asked}"), [], |r| r.get(0))
+        .map_err(open_err)?;
+    // The pragma answers with the mode it took; a VFS without shared memory
+    // silently keeps `delete` for a plain WAL (REVIEW-439 note 2).
+    if !got.eq_ignore_ascii_case(asked) {
+        return Err(StoreError::JournalMode {
+            asked: asked.to_owned(),
+            got,
+        });
     }
     conn.execute_batch("PRAGMA synchronous = FULL")
-}
-
-/// Sets the journal mode; the pragma answers with the mode it took.
-fn set_journal(conn: &Connection, mode: &str) -> rusqlite::Result<()> {
-    conn.query_row(&format!("PRAGMA journal_mode = {mode}"), [], |r| {
-        r.get::<_, String>(0)
-    })
-    .map(|_| ())
+        .map_err(open_err)
 }
 
 /// Writes schema 1 and its `meta` into an empty file, in one transaction.
@@ -756,10 +821,11 @@ fn read_meta(conn: &Connection) -> Result<HashMap<String, String>> {
     Ok(rows)
 }
 
-/// `PRAGMA quick_check`: anything but one `ok` is [`StoreError::Corrupt`].
-fn quick_check(conn: &Connection) -> Result<()> {
+/// `PRAGMA quick_check` or `integrity_check`: anything but one `ok` is
+/// [`StoreError::Corrupt`].
+fn quick_check(conn: &Connection, pragma: &str) -> Result<()> {
     let mut stmt = conn
-        .prepare("PRAGMA quick_check")
+        .prepare(&format!("PRAGMA {pragma}"))
         .map_err(|e| error_of(&e, Source::Open))?;
     let rows: Vec<String> = stmt
         .query_map([], |r| r.get(0))
@@ -770,7 +836,7 @@ fn quick_check(conn: &Connection) -> Result<()> {
     } else {
         let first: Vec<&str> = rows.iter().take(3).map(String::as_str).collect();
         Err(StoreError::Corrupt(format!(
-            "quick_check: {}",
+            "{pragma}: {}",
             first.join("; ")
         )))
     }
