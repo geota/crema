@@ -353,14 +353,7 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		profiles: profiles.customProfiles.map((p) => p.id),
 		recipes: recipes.ownRecipes.map((r) => r.id),
 		customMethods: methods.everything.map((m) => m.id),
-		shots: history.rawAll.map((s) => ({
-			id: s.id,
-			// A row's count is its summary's (#310 P4w); an unknown one
-			// (`null`) counts as a curve, which a fill must never replace.
-			hasSamples: (sampleCountOf(s) ?? 1) > 0,
-			pinned: s.pinned === true,
-			deleted: s.deletedAt != null
-		})),
+		shots: localShotsOf(history.rawAll),
 		photos: photos.have,
 		beansMissingPhoto: photos.missing,
 		profileMeta: { pinned: profileMeta.pinned, hiddenBuiltins: profileMeta.hiddenBuiltins },
@@ -557,6 +550,20 @@ export function nextRows<T extends { id: string }>(
 		.map((r) => (overwrite.has(r.id) ? (theirs.get(r.id) ?? r) : r));
 	const added = plan.add.map((id) => theirs.get(id)).filter((r): r is T => r !== undefined);
 	return [...added, ...kept];
+}
+
+/**
+ * The rows as the planner reads them. A row's count is its summary's (#310
+ * P4w); an unknown one (`null`, Android's rule for a series it couldn't read)
+ * counts as a curve, which a fill must never replace.
+ */
+export function localShotsOf(rows: readonly AnyShot[]): { id: string; hasSamples: boolean; pinned: boolean; deleted: boolean }[] {
+	return rows.map((s) => ({
+		id: s.id,
+		hasSamples: (sampleCountOf(s) ?? 1) > 0,
+		pinned: s.pinned === true,
+		deleted: s.deletedAt != null
+	}));
 }
 
 /** The history a plan leaves, and the rows whose curve to write first. */

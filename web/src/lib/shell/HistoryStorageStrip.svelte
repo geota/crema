@@ -102,7 +102,7 @@
 				Your shot history’s storage is missing from this browser. Nothing has been changed. Choose how to get it back.
 			{/if}
 			{#if history.unsavedShots.length > 0}
-				{history.unsavedShots.length === 1 ? 'One shot is' : `${history.unsavedShots.length} shots are`} only in this tab: keep it open until you choose, and they go into what you choose.
+				{history.unsavedShots.length === 1 ? 'One shot is' : `${history.unsavedShots.length} shots are`} only in this tab: keep it open until you choose, and they go into what you choose. A download holds the curves only of shots this tab opened or recorded last.
 			{/if}
 		</span>
 		<div class="hs-actions">

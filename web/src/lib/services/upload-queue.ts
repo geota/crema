@@ -33,7 +33,7 @@
 import { Context, Effect, Layer, Ref, Schedule, Scope } from 'effect';
 import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
-import { ResponseDecodeError } from '../effect/errors.ts';
+import { NetworkError, ResponseDecodeError } from '../effect/errors.ts';
 import {
 	describeVisualizerError,
 	isRateLimited,
@@ -137,7 +137,12 @@ export const UploadQueueLive = Layer.effect(
 						// Spends no attempt, and a row read before this has no curve.
 						yield* Effect.promise(() => getHistoryStore().seriesReady());
 						// Whole: a row past the view is held without its samples (#310).
-						const shot = yield* Effect.promise(() => getHistoryStore().loadShot(entry.id));
+						// A read that fails is a retry, as a dropped connection is:
+						// the entry stays queued, and nothing goes without its curve.
+						const shot = yield* Effect.tryPromise({
+							try: () => getHistoryStore().loadShot(entry.id),
+							catch: (cause) => new NetworkError({ cause, url: `history:${entry.id}` })
+						});
 						// Deleted meanwhile: the row is a tombstone now, and uploading it
 						// would only make a remote copy to delete.
 						if (!shot || shot.deletedAt != null) return;

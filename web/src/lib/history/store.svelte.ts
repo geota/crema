@@ -108,6 +108,7 @@ import {
 	HistoryDbLost,
 	META_MIGRATION,
 	detailsOf,
+	keepHeavy,
 	lightOf,
 	shotOfRow,
 	withDetails,
@@ -437,6 +438,11 @@ export class HistoryStore {
 	private readonly tabId = Math.random().toString(36).slice(2);
 	/** Ids whose next details write only fills: a heavy part the store holds wins (a pulled curve or recipe). */
 	private fills = new Set<string>();
+	/**
+	 * Ids whose heavy parts are being written now: memory's copy is the one
+	 * going out, so nothing may swap it for the store's until it lands (#420 N1).
+	 */
+	private writingDetails = new Set<string>();
 	/** Ids removed from memory whose delete hasn't landed: another tab's news mustn't bring them back. */
 	private removing = new Set<string>();
 	private snapshotting = false;
@@ -657,7 +663,11 @@ export class HistoryStore {
 		const next = this.shots.map((s) => {
 			const kept = this.loadedShots.get(s.id);
 			if (!kept || !lightSummary(s.id)) return s;
-			const whole = withDetails(s, kept.details);
+			// Memory's own parts win: a pulled curve or recipe not written yet
+			// stays (#420 S2). A kept copy older than the row's summary (another
+			// tab replaced the curve since) is still this shot's curve, and with
+			// the store gone it is the only one here.
+			const whole = withDetails(s, keepHeavy(detailsOf(s), kept.details));
 			this.unlight(s.id);
 			this.rebase(s, whole);
 			changed = true;
@@ -938,9 +948,23 @@ export class HistoryStore {
 		this.bootJournal.clear();
 		for (const s of made) {
 			this.written.delete(s.id);
-			this.dirtyDetails.add(s.id);
-			// Whole here: memory's heavy parts are the ones written.
-			if (mine.has(s.id) && lightSummary(s.id) && (s.record.samples.length > 0 || s.profile != null)) this.unlight(s.id);
+			const old = lightSummary(s.id);
+			if (hasHeavyParts(s) || !old) {
+				// Whole here: memory's heavy parts are the ones written.
+				this.dirtyDetails.add(s.id);
+				if (old && hasHeavyParts(s)) this.unlight(s.id);
+				continue;
+			}
+			// Light: a row this tab held when its store went, with no heavy part
+			// in memory. A details write would work its summary out from no curve
+			// and wipe its yield, peaks and chart (#420 M1), so it goes as a row
+			// only: with the recovered store's summary when that store holds it,
+			// else with the one memory holds, its counts 0 (no curve is stored),
+			// so a backfill or a merge restore can still fill it.
+			if (this.stored.has(s.id)) continue;
+			const curveless = { ...old, sampleCount: 0, brewSampleCount: 0 };
+			this.setSummary(s.id, curveless);
+			this.light(s.id, curveless);
 		}
 		const rows = loadedRows.filter((s) => !madeIds.has(s.id));
 		for (const s of rows) this.written.set(s.id, s);
@@ -1123,7 +1147,7 @@ export class HistoryStore {
 		const unsaved = new Set(this.unsavedIds);
 		let changed = false;
 		const next = this.shots.map((s) => {
-			if (lightSummary(s.id) || this.dirtyDetails.has(s.id) || unsaved.has(s.id)) return s;
+			if (lightSummary(s.id) || this.dirtyDetails.has(s.id) || this.writingDetails.has(s.id) || unsaved.has(s.id)) return s;
 			const summary = this.summaries.get(s.id);
 			if (!summary || !this.stored.has(s.id)) return s;
 			const light = lightOf(s);
@@ -1231,7 +1255,7 @@ export class HistoryStore {
 	 * out. A read that fails is tried once more, then throws: the caller
 	 * stops, and never goes on with an empty curve.
 	 */
-	async loadMany(ids: readonly string[]): Promise<StoredShot[]> {
+	async loadMany(ids: readonly string[], again = true): Promise<StoredShot[]> {
 		await this.whenReady();
 		const held = this.byId();
 		// This call's heavy parts, by id: taken from what's kept now, so a long
@@ -1260,6 +1284,7 @@ export class HistoryStore {
 		// After the await: the rows as they are now, with what the store holds.
 		const now = this.byId();
 		const out: StoredShot[] = [];
+		let stale = false;
 		for (const id of ids) {
 			const s = now.get(id);
 			if (!s) continue;
@@ -1269,10 +1294,15 @@ export class HistoryStore {
 				continue;
 			}
 			const g = got.get(id);
+			// The row changed while it was read (a backfill landed): read again,
+			// once, rather than hand out the curve it had (#420 N2).
+			if (g && g.summary !== summary) stale = true;
 			// Kept only while the row is still what was read for.
 			if (g?.details && g.summary === summary) this.keepLoaded(id, summary, g.details);
-			out.push(withDetails(s, g?.details));
+			// A part memory holds that isn't written yet (a pull's) wins.
+			out.push(withDetails(s, hasHeavyParts(s) ? keepHeavy(detailsOf(s), g?.details) : g?.details));
 		}
+		if (stale && again) return this.loadMany(ids, false);
 		return out;
 	}
 
@@ -1372,7 +1402,9 @@ export class HistoryStore {
 			}
 			seen.add(s.id);
 			const rec = found.get(s.id);
-			if (dirty.has(s.id) || this.dirtyDetails.has(s.id)) {
+			// A row whose heavy parts wait to be written, or are being written,
+			// keeps memory's copy: the store's would drop them (#420 N1).
+			if (dirty.has(s.id) || this.dirtyDetails.has(s.id) || this.writingDetails.has(s.id)) {
 				next.push(s);
 				continue;
 			}
@@ -1511,11 +1543,15 @@ export class HistoryStore {
 			if (!w.details) continue;
 			this.dirtyDetails.delete(w.shot.id);
 			this.fills.delete(w.shot.id);
+			this.writingDetails.add(w.shot.id);
 		}
+		const writing = writes.filter((w) => w.details).map((w) => w.shot.id);
 		try {
 			const result = await this.db.putShots(writes, summarize);
+			for (const id of writing) this.writingDetails.delete(id);
 			this.afterWrite(writes, result.seq, result.written);
 		} catch (e) {
+			for (const id of writing) this.writingDetails.delete(id);
 			for (const w of writes) {
 				if (!w.details) continue;
 				this.dirtyDetails.add(w.shot.id);
