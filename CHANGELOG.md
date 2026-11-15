@@ -196,8 +196,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   them, and the bean under the profile, when there's no room beside. With the
   text made larger (Android's text scaling), History's rows
   grow to fit instead of cutting off names and notes, and in the side list the
-  figures and stars move under the name. A long name now ends in "…" on a
-  phone instead of pushing the row past the screen. (#423)
+  figures and stars move under the name. The stat tiles, a shot's figure
+  tiles and its buttons on a phone wrap onto more rows instead of drawing over
+  each other. A long name now ends in "…" on a phone instead of pushing the
+  row past the screen. (#423)
 - **A spoon set down during preheat no longer stops the shot early** — a spoon
   or a hand that landed on the cup after the tare, just before the pump
   started, was weighed as coffee, and the shot stopped 5 to 7 g short. Crema

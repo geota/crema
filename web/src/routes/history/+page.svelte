@@ -2000,12 +2000,19 @@
 	/* The .st-btn family is shared globally — see settings-page.css. */
 
 	/* Stats strip */
+	/* Six to a row (three at 1100 px and under), wrapping by content (#423):
+	   a tile is never narrower than its figure, so large text puts fewer on a
+	   row instead of spilling a figure past its tile. */
 	.hi-stats {
-		display: grid;
-		grid-template-columns: repeat(6, minmax(0, 1fr));
+		--hi-stats-per-row: 6;
+		display: flex;
+		flex-wrap: wrap;
 		gap: 12px;
 	}
 	.hi-stat {
+		flex: 1 0 calc((100% - (var(--hi-stats-per-row) - 1) * 12px) / var(--hi-stats-per-row));
+		/* Its automatic minimum is its content, capped at the row. */
+		max-width: 100%;
 		background: var(--bg-surface);
 		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-md);
@@ -2325,7 +2332,7 @@
 
 	@media (max-width: 1100px) {
 		.hi-stats {
-			grid-template-columns: repeat(3, minmax(0, 1fr));
+			--hi-stats-per-row: 3;
 		}
 		/* Stacked, the page grows and the window scrolls. Brew's route CSS pins
 		   `.qcontain` to the viewport once Brew has been visited, and held to
@@ -2395,18 +2402,23 @@
 			margin: 0 var(--page-pad-x);
 		}
 
+		/* Three to a row, wrapping by content (#423): a tile is never narrower
+		   than its figure, so large text puts fewer on a row instead of
+		   drawing one figure over the next. */
 		.hi-pstats {
-			display: grid;
-			grid-template-columns: repeat(3, minmax(0, 1fr));
+			display: flex;
+			flex-wrap: wrap;
 			gap: 10px;
 			padding: 4px var(--page-pad-x);
 		}
 		.hi-pstat {
+			flex: 1 0 calc((100% - 20px) / 3);
 			display: flex;
 			flex-direction: column;
 			align-items: center;
 			gap: 3px;
-			min-width: 0;
+			/* Its automatic minimum is its content, capped at the row. */
+			max-width: 100%;
 			padding: 11px 6px;
 			border-radius: 12px;
 			background: var(--bg-surface);

@@ -2396,17 +2396,22 @@
 			pointer-events: none;
 			transform: translateX(-50%);
 		}
+		/* Four to a row, wrapping by content (#423): a tile is never narrower
+		   than its figure, so large text puts fewer on a row instead of
+		   drawing one figure over the next. */
 		.pshot-tiles {
-			display: grid;
-			grid-template-columns: repeat(4, minmax(0, 1fr));
+			display: flex;
+			flex-wrap: wrap;
 			gap: 8px;
 		}
 		.pshot-tile {
+			flex: 1 0 calc((100% - 24px) / 4);
 			display: flex;
 			flex-direction: column;
 			align-items: center;
 			gap: 2px;
-			min-width: 0;
+			/* Its automatic minimum is its content, capped at the row. */
+			max-width: 100%;
 			padding: 11px 2px;
 			border-radius: 12px;
 			background: var(--bg-surface);
@@ -2579,23 +2584,27 @@
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 			gap: 8px;
 		}
+		/* Side by side while both labels fit; one above the other when large
+		   text makes them too wide (#423). */
 		.pshot-foot {
 			position: sticky;
 			bottom: 0;
 			z-index: 2;
 			display: flex;
+			flex-wrap: wrap;
 			gap: 10px;
 			padding: 10px var(--page-pad-x);
 			background: var(--bg-page);
 		}
 		.pshot-btn {
-			flex: 1 1 0;
+			flex: 1 0 0;
 			display: inline-flex;
 			align-items: center;
 			justify-content: center;
 			gap: 8px;
-			min-width: 0;
-			height: 48px;
+			/* Its automatic minimum is its content, capped at the row. */
+			max-width: 100%;
+			min-height: 48px;
 			padding: 0 10px;
 			border: 0;
 			border-radius: 999px;
