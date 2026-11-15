@@ -1,7 +1,6 @@
 /**
- * #310 P3w: a backup holds every row `crema-history` keeps, the ones past the
- * view included, each with its curve. Leaving them out would quietly drop the
- * shots History hides until the cap lifts.
+ * #310 P3w: a backup holds every row `crema-history` keeps, each with its
+ * curve, from a cold start where no row holds one in memory.
  */
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
@@ -24,7 +23,7 @@ beforeEach(() => {
 	freshStorage();
 });
 
-it('a backup from a cold start includes every row, past the view too, whole', async () => {
+it('a backup from a cold start includes every row, whole', async () => {
 	const shots = Array.from({ length: 310 }, (_, i) => realShot(i, realSamples(5, i % 60)));
 	const db = new HistoryDb({ expectExisting: () => false });
 	await db.putShots(
@@ -37,8 +36,8 @@ it('a backup from a cold start includes every row, past the view too, whole', as
 
 	const history = getHistoryStore();
 	await history.whenReady();
-	expect(history.all).toHaveLength(300);
-	// From a cold start no row holds a curve, in view or past it (P4w): the
+	expect(history.all).toHaveLength(310);
+	// From a cold start no row holds a curve (P4w): the
 	// backup loads each one whole.
 	for (const row of history.rawAll) expect('samples' in row.record).toBe(false);
 	expect(backupContents().shots).toBe(310);

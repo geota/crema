@@ -16,10 +16,11 @@
  * browser with no IndexedDB, runs on the **legacy backend**: the old copy, as
  * before, with its 300-row cap.
  *
- * **The view.** Every row stays in memory, but {@link all} is the newest 300
- * live ones, as before. A row past them is hidden, not gone: {@link rawAll},
- * {@link get} and backups still see it, so a pull doesn't add a second copy
- * of it and a backup doesn't leave it out.
+ * **No cap (#310 P6w, SPEC §8).** On `crema-history` every row is kept and
+ * shown: nothing is evicted, refused for its date, or hidden, and only an
+ * explicit delete removes a row. The real limit is disk, which the storage
+ * notices watch (`storage-watch.ts`). The legacy backend keeps its 300-row
+ * cap, as `localStorage` can't hold more.
  *
  * **Rows, not shots (P4w, SPEC §4).** What the store hands out is a
  * {@link ShotRow}: the fields and a summary (counts, peaks, the row's spark),
@@ -50,11 +51,14 @@
 import { enqueueEntry, readQueue } from '#lib/services/queue-store.js';
 import {
 	keepRemoteOut,
+	keepRemoteOutMany,
 	markUnboundTombstone,
 	settleUploadMarks,
 	uploadAttempted
 } from '#lib/visualizer/upload-marks.js';
 import { excludedFromUpload, readSyncConfig } from '#lib/visualizer/sync-config.js';
+import { pendingEdits } from '#lib/visualizer/pending-edits.js';
+import { readDecentAccount } from '#lib/decent/account.js';
 import type { RustStoredShot, TimedSample } from '#lib/core/index.js';
 import type { BrewSeries, ShotPatch as RemoteShotPatch, ShotSummary } from '#lib/core/crema-core.js';
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
@@ -176,9 +180,8 @@ export const HISTORY_KEY = 'crema.history.v2';
 const HISTORY_WHAT = 'shot history';
 
 /**
- * The rows History shows: the newest this many live ones. On the legacy
- * backend it's also what's kept, as before; on `crema-history` every row is
- * kept and the rest are hidden (SPEC §2).
+ * The legacy backend's cap: the newest this many live rows are kept, as
+ * before. `crema-history` has none (#310 P6w).
  */
 const MAX_RECORDS = 300;
 
@@ -557,7 +560,6 @@ export class HistoryStore {
 	private lastRecoveryState = $state<{ restored: number; notRestored: number } | null>(null);
 	/** This load's catch-up has run: every curve the store held then has been tried. */
 	private archiveCaughtUpFlag = $state(false);
-	private hiddenNoticeShown = false;
 	private viewMemo: { rows: StoredShot[]; view: StoredShot[]; live: StoredShot[] } | null = null;
 	private byIdMemo: { rows: StoredShot[]; map: Map<string, StoredShot> } | null = null;
 	/** Moves when a row's summary changes without its object changing, so readers re-read. */
@@ -683,7 +685,7 @@ export class HistoryStore {
 		return readStoreMarker().kind === 'unreadable';
 	}
 
-	/** On `crema-history`: rows past the view are kept. On the legacy backend they go. */
+	/** On `crema-history` every row is kept. On the legacy backend the oldest past its cap go. */
 	get keepsEveryRow(): boolean {
 		return this.mode === 'idb';
 	}
@@ -1147,10 +1149,16 @@ export class HistoryStore {
 
 	// ── The view ───────────────────────────────────────────────────────────
 
+	/** The cap rows are held to: the legacy backend's, or none (#310 P6w). */
+	private get cap(): number | null {
+		return this.mode === 'legacy' ? MAX_RECORDS : null;
+	}
+
 	private viewOf(): { view: StoredShot[]; live: StoredShot[] } {
 		const rows = this.shots;
 		if (this.viewMemo?.rows === rows) return this.viewMemo;
-		const view = this.mode === 'legacy' ? rows : cappedHistory(rows, MAX_RECORDS);
+		// The legacy backend's rows are capped as they're added; every row shows.
+		const view = rows;
 		const memo = { rows, view, live: view.filter((s) => s.deletedAt == null) };
 		this.viewMemo = memo;
 		return memo;
@@ -1323,7 +1331,7 @@ export class HistoryStore {
 	}
 
 	/**
-	 * The user-visible history, newest first: the newest 300 live rows, as
+	 * The user-visible history, newest first: every live row, as
 	 * {@link ShotRow}s, which carry their summary and no heavy parts.
 	 * Tombstones (`deletedAt` set) are filtered out — they only exist for the
 	 * sync layer to push a remote DELETE. Reactive.
@@ -1334,7 +1342,7 @@ export class HistoryStore {
 	}
 
 	/**
-	 * Every stored row: tombstones, and rows past the view. The sync layer,
+	 * Every stored row, tombstones too. The sync layer,
 	 * imports and restore read this; the UI uses {@link all}.
 	 */
 	get rawAll(): ShotRow[] {
@@ -1342,13 +1350,13 @@ export class HistoryStore {
 		return this.rows().raw;
 	}
 
-	/** Every live row, hidden ones too: what a backup holds. Whole shots come from {@link loadMany}. */
+	/** Every live row: what a backup holds. Whole shots come from {@link loadMany}. */
 	get allLive(): ShotRow[] {
 		this.assertLoaded('allLive');
 		return this.rows().raw.filter((s) => s.deletedAt == null);
 	}
 
-	/** Look up one row by id, hidden or not, or `undefined` if it is not in the history. */
+	/** Look up one row by id, tombstone or not, or `undefined` if it is not in the history. */
 	get(id: string): ShotRow | undefined {
 		this.assertLoaded('get');
 		return this.rows().byId.get(id);
@@ -2784,15 +2792,16 @@ export class HistoryStore {
 
 	// ── Adding rows ────────────────────────────────────────────────────────
 
-	/** The view as it would be with `rows`. */
+	/** The rows the legacy backend would keep of `rows`. */
 	private wouldShow(rows: readonly StoredShot[], keepId?: string): Set<string> {
 		return new Set(cappedHistory(rows, MAX_RECORDS, keepId).map((s) => s.id));
 	}
 
 	/**
-	 * Add a row by its date. The list stays newest first, so the cap drops the
-	 * oldest rows and the core's "last brew" is the newest one, however the row
-	 * was dated. A row older than a full history is the one that goes.
+	 * Add a row by its date. The list stays newest first, so the core's "last
+	 * brew" is the newest one, however the row was dated. On the legacy
+	 * backend the cap drops the oldest rows, and a row older than a full
+	 * history is the one that goes.
 	 */
 	private insert(shot: StoredShot): void {
 		this.capWith(shot, newestFirst([shot, ...this.shots]));
@@ -2800,47 +2809,34 @@ export class HistoryStore {
 
 	/**
 	 * Add a row just made on this device. It stays whatever its date, so a clock
-	 * behind the history can't lose it: the oldest other row goes instead.
+	 * behind the history can't lose it: on the legacy backend the oldest other
+	 * row goes instead.
 	 */
 	private insertMade(shot: StoredShot): void {
 		this.capWith(shot, newestFirst([shot, ...this.shots]), shot.id);
 	}
 
 	/**
-	 * Take `rows`, the history with `shot` added, and say what the cap did
-	 * (#310 P0): a row never leaves without a word. Pinned rows are never among
-	 * them (#311). On the legacy backend the cap drops rows; on `crema-history`
-	 * the older ones are kept, hidden, and only a new row older than the view
-	 * is refused, as before (SPEC §8: the refusal stays until the cap lifts).
+	 * Take `rows`, the history with `shot` added. On `crema-history` that's
+	 * all: every row is kept (#310 P6w). On the legacy backend the cap drops
+	 * rows, never pinned ones (#311), and says so (#310 P0): a row never leaves
+	 * without a word.
 	 */
 	private capWith(shot: StoredShot, rows: StoredShot[], keepId?: string): void {
+		if (this.cap === null) {
+			this.shots = rows;
+			this.dirtyDetails.add(shot.id);
+			return;
+		}
 		const shown = this.wouldShow(rows, keepId);
-		if (this.mode === 'legacy') {
-			const next = rows.filter((s) => shown.has(s.id));
-			const droppedOlder = this.shots.filter((s) => !shown.has(s.id)).length;
-			this.shots = next;
-			const notice = historyCutNotice(droppedOlder, shown.has(shot.id), MAX_RECORDS);
-			if (notice) toast.info(notice, 7000);
-			return;
-		}
-		if (!shown.has(shot.id)) {
-			const notice = historyCutNotice(0, false, MAX_RECORDS);
-			if (notice) toast.info(notice, 7000);
-			return;
-		}
-		const hiddenNow = this.viewOf().view.filter((s) => !shown.has(s.id)).length;
-		this.shots = rows;
-		this.dirtyDetails.add(shot.id);
-		if (hiddenNow > 0 && !this.hiddenNoticeShown) {
-			this.hiddenNoticeShown = true;
-			toast.info(
-				`History shows the newest ${MAX_RECORDS} shots. Older ones are kept on this device and will show again in a later update.`,
-				7000
-			);
-		}
+		const next = rows.filter((s) => shown.has(s.id));
+		const droppedOlder = this.shots.filter((s) => !shown.has(s.id)).length;
+		this.shots = next;
+		const notice = historyCutNotice(droppedOlder, shown.has(shot.id), MAX_RECORDS);
+		if (notice) toast.info(notice, 7000);
 	}
 
-	/** The most rows the history shows. */
+	/** The legacy backend's cap, for the notices only it can need: `crema-history` refuses and drops nothing. */
 	get capacity(): number {
 		return MAX_RECORDS;
 	}
@@ -2850,14 +2846,16 @@ export class HistoryStore {
 		return this.mode === 'idb' ? null : MAX_RECORDS;
 	}
 
-	/** How many live rows fit in view before the cap. */
-	get freeSlots(): number {
-		return Math.max(0, MAX_RECORDS - cappedCount(this.viewOf().view));
+	/** How many more live rows fit before the cap; undefined with none (#310 P6w). */
+	get freeSlots(): number | undefined {
+		const cap = this.cap;
+		return cap === null ? undefined : Math.max(0, cap - cappedCount(this.viewOf().view));
 	}
 
-	/** Whether a new brew dated `at` would stay in the history once added. */
+	/** Whether a new brew dated `at` would stay in the history once added: always, with no cap. */
 	fitsHistory(at: number): boolean {
-		return fitsHistory(this.viewOf().live, at, MAX_RECORDS);
+		const cap = this.cap;
+		return cap === null || fitsHistory(this.viewOf().live, at, cap);
 	}
 
 	/**
@@ -2869,7 +2867,7 @@ export class HistoryStore {
 	 *
 	 * On the legacy backend nothing is deleted here or evicted: the restore's
 	 * marker owns its deletes. On `crema-history` the rows go straight to the
-	 * store, past the view's cap, and incoming rows overwrite local ones with
+	 * store, and incoming rows overwrite local ones with
 	 * the same id; the last step is one explicit delete of the rows the plan
 	 * names in `remove` (SPEC §7: merge, then remove). A kill part-way leaves
 	 * the union, which a re-run finishes.
@@ -3189,6 +3187,45 @@ export class HistoryStore {
 	}
 
 	/**
+	 * Free up space (#310 P6w, SPEC §8): remove `ids` from this device, at the
+	 * user's word, never on its own. Pinned shots are exempt, and so are
+	 * tombstones, shots whose upload is still queued (which a delete must keep
+	 * as tombstones), shots with a Visualizer edit not yet sent, and shots
+	 * Decent is to retry; ids not here are skipped. Nothing reaches
+	 * Visualizer: a bound shot's remote copy stays, and its id is kept out of
+	 * later pulls, so it doesn't come straight back. Bag weights are
+	 * untouched: no removal credits a bean. Says how many were removed, and
+	 * how many skipped.
+	 */
+	async freeUpSpace(ids: readonly string[]): Promise<{ removed: number; skipped: number }> {
+		await this.whenReady();
+		const wanted = [...new Set(ids)];
+		if (this.mode !== 'idb' && this.mode !== 'legacy') return { removed: 0, skipped: wanted.length };
+		const byId = this.byId();
+		// An edit not yet sent to Visualizer, or a Decent upload to retry, would be lost everywhere (#437 N2).
+		const edits = pendingEdits();
+		const decentRetry = new Set(readDecentAccount().retryShotIds);
+		const go = wanted.filter((id) => {
+			const s = byId.get(id);
+			return (
+				s !== undefined &&
+				s.deletedAt == null &&
+				s.pinned !== true &&
+				!uploadPending(id) &&
+				!edits.has(id) &&
+				!decentRetry.has(id)
+			);
+		});
+		const remote = go.map((id) => byId.get(id)!.visualizerId).filter((v): v is string => !!v);
+		// Once the store's delete has landed: a failed one leaves the rows, and pulls of them, as they were.
+		const ok = await this.removeRows(go, () => {
+			keepRemoteOutMany(remote);
+			for (const id of go) dropCapture(id);
+		});
+		return { removed: ok ? go.length : 0, skipped: wanted.length - go.length };
+	}
+
+	/**
 	 * Hard-remove a shot from storage. Called by the sync layer once
 	 * the remote DELETE has succeeded for a tombstoned row, so the
 	 * tombstone doesn't stay forever.
@@ -3259,8 +3296,7 @@ export class HistoryStore {
 	 * cap left: an earlier row of the batch can be cut by a later one, so only
 	 * the end result counts. Rows already here, or repeated, are skipped. With
 	 * nothing new this changes nothing, so a list over the cap stays as it is.
-	 * On `crema-history` only new rows older than the view are refused; older
-	 * rows here are kept, hidden.
+	 * On `crema-history` every new row is kept, and nothing is dropped.
 	 */
 	insertMany(shots: readonly StoredShot[]): HistoryInsert<StoredShot> {
 		const ids = new Set(this.shots.map((s) => s.id));
@@ -3269,12 +3305,11 @@ export class HistoryStore {
 		const freshIds = new Set(fresh.map((s) => s.id));
 		const combined = newestFirst([...fresh, ...this.shots]);
 		if (this.mode !== 'legacy') {
-			const shown = this.wouldShow(combined);
-			const refused = new Set(fresh.filter((s) => !shown.has(s.id)).map((s) => s.id));
-			this.shots = combined.filter((s) => !refused.has(s.id));
-			for (const s of fresh) if (!refused.has(s.id)) this.dirtyDetails.add(s.id);
+			// Every row is kept (#310 P6w): none refused, none dropped.
+			this.shots = combined;
+			for (const s of fresh) this.dirtyDetails.add(s.id);
 			this.persist();
-			return { kept: this.shots.filter((s) => freshIds.has(s.id)), dropped: refused.size };
+			return { kept: this.shots.filter((s) => freshIds.has(s.id)), dropped: 0 };
 		}
 		const before = this.shots.length + fresh.length;
 		this.shots = cappedHistory(combined, MAX_RECORDS);

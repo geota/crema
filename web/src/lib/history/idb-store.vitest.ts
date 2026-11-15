@@ -168,21 +168,21 @@ const until = async (ok: () => boolean, ms = 2_000) => {
 	}
 };
 
-describe('the view cap hides, and never drops', () => {
-	it('a capped build loads 5,000 rows, saves, and all rows remain', async () => {
+describe('no cap: every row is kept and shown (#310 P6w)', () => {
+	it('5,000 rows load and show, a save keeps them all', async () => {
 		const shots = small(5_000);
 		await seedStore(shots);
 		const store = await boot();
-		expect(store.all).toHaveLength(300);
+		expect(store.all).toHaveLength(5_000);
 		expect(store.rawAll).toHaveLength(5_000);
 		store.setRating(store.all[10].id, 1);
-		store.setNotes(shots[4_000].id, 'a hidden row, edited');
+		store.setNotes(shots[4_000].id, 'an old row, edited');
 		const made = store.recordCaptured(realShot(9_999, realSamples(4)) as unknown as Record<string, unknown>)!;
 		await store.flushed();
 		const { rows, details } = await stored();
 		expect(rows.size).toBe(5_001);
 		expect(details.size).toBe(5_001);
-		expect(rows.get(shots[4_000].id)!.metadata.notes).toBe('a hidden row, edited');
+		expect(rows.get(shots[4_000].id)!.metadata.notes).toBe('an old row, edited');
 		const again = await boot();
 		expect(again.rawAll).toHaveLength(5_001);
 		expect(again.get(made.id)).toBeDefined();
@@ -203,12 +203,12 @@ describe('the view cap hides, and never drops', () => {
 		expect(rows.get(b.all[20].id)!.metadata.rating).toBe(2);
 	});
 
-	it('rows past the view are rows, like those in view, and whole on demand', async () => {
+	it('rows past the old 300 are rows, like the newest, shown, and whole on demand', async () => {
 		const shots = small(320);
 		await seedStore(shots);
 		const store = await boot();
 		const hidden = store.rawAll[315];
-		expect(store.all.some((s) => s.id === hidden.id)).toBe(false);
+		expect(store.all.some((s) => s.id === hidden.id)).toBe(true);
 		// No heavy part is on a row at all, in view or past it (P4w).
 		expect('samples' in hidden.record).toBe(false);
 		expect('samples' in store.all[0].record).toBe(false);
@@ -247,12 +247,11 @@ describe('the view cap hides, and never drops', () => {
 		);
 	});
 
-	it('a capture prune counts hidden rows: a pinned hidden row keeps its capture', async () => {
+	it('a capture prune counts every row: a pinned old row keeps its capture', async () => {
 		const shots = small(320);
 		await seedStore(shots);
 		const store = await boot();
 		const hidden = store.rawAll[315];
-		expect(store.all.some((s) => s.id === hidden.id)).toBe(false);
 		store.setPinned(hidden.id, true);
 		await store.flushed();
 		const captures = getCaptureStore();
@@ -263,7 +262,7 @@ describe('the view cap hides, and never drops', () => {
 		await captures.delete(hidden.id);
 	});
 
-	it('a new shot past the view is refused as before; older rows it pushes out stay stored', async () => {
+	it('a new shot past the old 300 pushes nothing out, and an old one is kept, not refused', async () => {
 		await seedStore(small(300));
 		const store = await boot();
 		const oldest = store.all[299].id;
@@ -282,10 +281,15 @@ describe('the view cap hides, and never drops', () => {
 			nextPlan: null
 		});
 		await store.flushed();
-		expect(store.all.map((s) => s.id)).not.toContain(oldest);
-		expect(store.get(oldest)).toBeDefined();
-		expect((await stored()).rows.has(oldest)).toBe(true);
-		expect(store.insertMany([{ ...realShot(7_000, realSamples(3)), completedAt: 1 }])).toMatchObject({ kept: [], dropped: 1 });
+		expect(store.all).toHaveLength(301);
+		expect(store.all.map((s) => s.id)).toContain(oldest);
+		expect(store.fitsHistory(1)).toBe(true);
+		expect(store.freeSlots).toBeUndefined();
+		const old = { ...realShot(7_000, realSamples(3)), completedAt: 1 };
+		expect(store.insertMany([old])).toMatchObject({ kept: [expect.objectContaining({ id: old.id })], dropped: 0 });
+		await store.flushed();
+		expect(store.all.at(-1)!.id).toBe(old.id);
+		expect((await stored()).rows.size).toBe(302);
 	});
 });
 
