@@ -8,3 +8,9 @@ export const HISTORY_DB_NAME = 'crema-history';
 
 /** The daily rows snapshot, in the origin private file system (§6). */
 export const HISTORY_SNAPSHOT_NAME = 'crema-history-snapshot';
+
+/**
+ * The snapshot kept aside when a smaller store's was written (after Start
+ * empty, a recovery or a restore to fewer rows), so the copy from before stays.
+ */
+export const HISTORY_SNAPSHOT_PREV_NAME = 'crema-history-snapshot-prev';

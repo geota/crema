@@ -13,7 +13,7 @@ import { clearLight, sampleCountOf } from './light-rows';
 import { peaksOf, type StoredShot } from './model';
 import { PENDING_KEY, readPending } from './pending';
 import { STORE_MARKER_KEY, readStoreMarker, writeDoneMarker } from './store-marker';
-import { SNAPSHOT_ROWS_KEY } from './rows-snapshot';
+import { SNAPSHOT_DAY_KEY, SNAPSHOT_ROWS_KEY, dayOf } from './rows-snapshot';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
 import { getCaptureStore } from '#lib/capture/store.js';
 import { pruneCaptures } from '#lib/capture/prune.js';
@@ -624,7 +624,7 @@ describe('a store that is lost or can’t open', () => {
 		});
 		const lost = await boot({ snapshotRoot });
 		expect(lost.health).toBe('lost');
-		expect(await lost.snapshotInfo()).toEqual({ at: 1_234, rows: 12 });
+		expect(await lost.snapshotInfo()).toEqual([{ which: 'latest', at: 1_234, rows: 12 }]);
 		expect(await lost.recoverSnapshot()).toBe(true);
 		expect(lost.rawAll.map((s) => s.id).sort()).toEqual(shots.map((s) => s.id).sort());
 		expect(lost.get(shots[0].id)!.metadata.rating).toBe(3);
@@ -653,6 +653,95 @@ describe('a store that is lost or can’t open', () => {
 		expect(b.get(made.id)).toBeDefined();
 		await a.reloadRows();
 		expect(a.get(made.id)).toBeDefined();
+	});
+
+	it('a store lost under a running tab: its shots count as unsaved, and its own recovery keeps them (F1)', async () => {
+		const shots = small(5);
+		await writeOldCopy(shots);
+		const a = await boot();
+		const made = a.recordCaptured(realShot(64, realSamples(4)) as unknown as Record<string, unknown>)!;
+		a.setNotes(shots[1].id, 'edited after the move');
+		await a.flushed();
+		await deleteHistoryDb();
+		a.setRating(shots[2].id, 5);
+		await a.flushed();
+		expect(a.health).toBe('lost');
+		// Memory is their only copy now.
+		expect(a.hasUnsaved).toBe(true);
+		expect(a.unsavedShots).toContain(made.id);
+		expect(await a.recoverOldCopy()).toBe(true);
+		await a.flushed();
+		const { rows, details } = await stored();
+		expect(rows.size).toBe(6);
+		expect(details.get(made.id)!.samples).toHaveLength(4);
+		expect(rows.get(shots[1].id)!.metadata.notes).toBe('edited after the move');
+		expect(rows.get(shots[2].id)!.metadata.rating).toBe(5);
+		expect(a.get(made.id)).toBeDefined();
+		expect(a.unsavedShots).toEqual([]);
+		expect(a.hasUnsaved).toBe(false);
+	});
+
+	it('a store lost under a running tab: another tab’s recovery keeps that tab’s shots too (F1)', async () => {
+		const shots = small(5);
+		await writeOldCopy(shots);
+		const channel = bus();
+		const a = await boot({ channel });
+		const made = a.recordCaptured(realShot(65, realSamples(4)) as unknown as Record<string, unknown>)!;
+		await a.flushed();
+		await deleteHistoryDb();
+		a.setRating(shots[2].id, 5);
+		await a.flushed();
+		expect(a.health).toBe('lost');
+		const b = await boot({ channel });
+		expect(b.health).toBe('lost');
+		expect(await b.recoverOldCopy()).toBe(true);
+		await until(() => a.health === 'ok');
+		await a.flushed();
+		const { rows, details } = await stored();
+		expect(rows.size).toBe(6);
+		expect(details.get(made.id)!.samples).toHaveLength(4);
+		expect(a.get(made.id)).toBeDefined();
+		await until(() => b.get(made.id) !== undefined);
+	});
+
+	it('two lost tabs recovering at once take turns on the lock: one fills, the other loads it (N1)', async () => {
+		const shots = small(5);
+		await writeOldCopy(shots);
+		await boot();
+		await deleteHistoryDb();
+		// Exclusive per name, as Web Locks are.
+		const tails = new Map<string, Promise<unknown>>();
+		const locks: LockManagerLike = {
+			request(name, _opts, run) {
+				const next = (tails.get(name) ?? Promise.resolve()).then(() => run(null));
+				tails.set(
+					name,
+					next.catch(() => {})
+				);
+				return next;
+			}
+		};
+		const a = await boot({ locks });
+		const b = await boot({ locks });
+		const made = b.recordCaptured(realShot(66, realSamples(4)) as unknown as Record<string, unknown>)!;
+		expect(await Promise.all([a.recoverOldCopy(), b.startEmpty()])).toEqual([true, 'reopened']);
+		await b.flushed();
+		const { rows } = await stored();
+		expect(rows.size).toBe(6);
+		expect(rows.has(made.id)).toBe(true);
+	});
+
+	it('a lost tab that hears another tab while the store is still missing doesn’t make it (N2)', async () => {
+		await writeOldCopy(small(3));
+		await boot();
+		await deleteHistoryDb();
+		const channel = bus();
+		const lost = await boot({ channel });
+		expect(lost.health).toBe('lost');
+		channel().postMessage({ type: 'rows', from: 'another-tab', ids: ['x'], seq: 1 });
+		await new Promise((r) => setTimeout(r, 30));
+		expect(lost.health).toBe('lost');
+		expect(await historyDbExists(idb)).toBe(false);
 	});
 
 	it('another tab’s recovery takes this tab out of lost', async () => {
@@ -694,7 +783,7 @@ describe('a store that is lost or can’t open', () => {
 		expect(await historyDbExists(idb)).toBe(false);
 	});
 
-	it('the daily copy keeps profiles; its rows claim no curves, so a backfill fills them (S3)', async () => {
+	it('the daily copy keeps profiles, yields, peaks and charts; its rows claim no curves, so a backfill fills them (S3, F2)', async () => {
 		const { files, snapshotRoot } = memoryRoot();
 		const shots = small(4);
 		await seedStore(shots);
@@ -702,20 +791,29 @@ describe('a store that is lost or can’t open', () => {
 		store.setRating(shots[0].id, 3);
 		await store.flushed();
 		await until(() => files.size === 1);
+		const before = (await stored()).rows;
 		await deleteHistoryDb();
 		const lost = await boot({ snapshotRoot });
 		expect(await lost.recoverSnapshot()).toBe(true);
 		const { rows, details } = await stored();
 		for (const s of shots) {
 			expect(details.get(s.id)!.profile).toEqual(whole(s).profile);
-			expect(rows.get(s.id)!.summary.sampleCount ?? 0).toBe(0);
+			const was = before.get(s.id)!.summary;
+			const now = rows.get(s.id)!.summary;
+			expect(now.sampleCount ?? 0).toBe(0);
+			expect(now.brewSampleCount).toBe(0);
+			expect(was.finalWeight).toBeGreaterThan(0);
+			expect(now.finalWeight).toBe(was.finalWeight);
+			expect(now.peakPressure).toBe(was.peakPressure);
+			expect(now.spark).toEqual(was.spark);
+			expect(peaksOf(lost.get(s.id)!).finalWeight).toBe(was.finalWeight);
 		}
 		lost.backfillTelemetry(shots[1].id, realSamples(4, 3), 30_000);
 		await lost.flushed();
 		expect((await stored()).details.get(shots[1].id)!.samples).toHaveLength(4);
 	});
 
-	it('the daily copy isn’t replaced by a smaller store after Start empty; a delete by name may shrink it', async () => {
+	it('after Start empty the daily copy from before is kept beside the new one; a delete by name may shrink it (F3)', async () => {
 		const { files, snapshotRoot } = memoryRoot();
 		const shots = small(6);
 		await seedStore(shots);
@@ -733,16 +831,31 @@ describe('a store that is lost or can’t open', () => {
 		store.setRating(shots[0].id, 4);
 		await store.flushed();
 		await until(() => localStorage.getItem(SNAPSHOT_ROWS_KEY) === '5');
-		// Lost, and started empty: the next day's save keeps the copy of 5.
+		// Lost, and started empty: the next day's save writes a copy of 1, and
+		// the copy of 5 is kept as the earlier one.
 		await deleteHistoryDb();
 		const lost = await boot({ snapshotRoot, now });
 		expect(await lost.startEmpty()).toBe(true);
 		day = 2;
-		lost.recordCaptured(realShot(63, realSamples(4)) as unknown as Record<string, unknown>);
+		const made = lost.recordCaptured(realShot(63, realSamples(4)) as unknown as Record<string, unknown>)!;
 		await lost.flushed();
-		await new Promise((r) => setTimeout(r, 30));
-		expect(localStorage.getItem(SNAPSHOT_ROWS_KEY)).toBe('5');
-		expect(await lost.snapshotInfo()).toMatchObject({ rows: 5 });
+		await until(() => localStorage.getItem(SNAPSHOT_ROWS_KEY) === '1');
+		expect(await lost.snapshotInfo()).toEqual([
+			{ which: 'latest', at: 1_234, rows: 1 },
+			{ which: 'previous', at: 1_234, rows: 5 }
+		]);
+		// The next day's save, still smaller than the earlier copy: that stays.
+		day = 3;
+		lost.setRating(made.id, 2);
+		await lost.flushed();
+		await until(() => localStorage.getItem(SNAPSHOT_DAY_KEY) === dayOf(now()));
+		expect((await lost.snapshotInfo()).map((s) => s.rows)).toEqual([1, 5]);
+		// Lost again: either copy can be chosen; the earlier one brings back the 5.
+		await deleteHistoryDb();
+		const again = await boot({ snapshotRoot, now });
+		expect(again.health).toBe('lost');
+		expect(await again.recoverSnapshot('previous')).toBe(true);
+		expect(again.rawAll.map((s) => s.id).sort()).toEqual(shots.slice(0, 5).map((s) => s.id).sort());
 	});
 
 	it('a marker the full storage refused is said, and written by a later save (S5)', async () => {

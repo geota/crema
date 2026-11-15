@@ -112,7 +112,7 @@ import {
 	type LegacySource,
 	type MigrationDeps
 } from './migrate';
-import { clearLight, lightSummary, markLight, markLoaded, sampleCountOf } from './light-rows';
+import { clearLight, lightSummary, markCurveless, markLight, markLoaded, sampleCountOf } from './light-rows';
 import {
 	STORE_MARKER_KEY,
 	markerSaysDone,
@@ -130,7 +130,8 @@ import {
 	snapshotRowsDropped,
 	snapshotDue,
 	writeRowsSnapshot,
-	type SnapshotRow
+	type SnapshotRow,
+	type SnapshotWhich
 } from './rows-snapshot';
 import { summarize } from './summary';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
@@ -333,6 +334,12 @@ export class HistoryStore {
 	private reopenRun: Promise<boolean> | null = null;
 	/** Shots made before the boot decided, whose rows wait in the journal. */
 	private bootJournal = new Set<string>();
+	/**
+	 * Shots this tab held when its store went missing under it: memory is now
+	 * their only copy, newer than the old copy or a snapshot. A recovery writes
+	 * them into the store it fills (F1).
+	 */
+	private orphaned = new Set<string>();
 
 	/** Which backend the rows go to. `booting` until the boot decides. */
 	private mode: 'booting' | 'idb' | 'legacy' | 'blocked' = 'booting';
@@ -544,7 +551,26 @@ export class HistoryStore {
 	private async lostNow(e: unknown): Promise<void> {
 		if (this.healthState === 'lost') return;
 		await this.readOldCopyInfo();
+		if ((this.healthState as HistoryHealth) === 'lost') return;
+		// What this tab holds is in no store now: closing the tab would lose it.
+		const held = this.shots.map((s) => s.id);
 		this.block('lost', errorText(e));
+		for (const id of held) this.orphaned.add(id);
+		this.markUnsaved(held);
+	}
+
+	/**
+	 * Before loading a store that replaced a lost one: what this tab knew of
+	 * the lost store no longer holds, and the shots it held there are written
+	 * over the recovered rows. Their ids, for {@link loadFromDb}.
+	 */
+	private forgetLostStore(): Set<string> {
+		const mine = new Set(this.orphaned);
+		this.orphaned.clear();
+		this.stored.clear();
+		this.summaries.clear();
+		this.written.clear();
+		return mine;
 	}
 
 	/** Write the `done` marker, or keep owing it and say so (S5). */
@@ -756,7 +782,7 @@ export class HistoryStore {
 	}
 
 	/** The rows from `crema-history`, with what arrived meanwhile; then the view's details. */
-	private async loadFromDb(): Promise<void> {
+	private async loadFromDb(mine: ReadonlySet<string> = new Set()): Promise<void> {
 		const db = this.db!;
 		let records: RowRecord[];
 		try {
@@ -782,13 +808,17 @@ export class HistoryStore {
 		const late = await this.lateRows(loadedRows).catch(() => null);
 		// After the last await: rows made here during the load stay, and lead.
 		// They're written next, journalled or not.
-		const made = this.shots.filter((s) => !this.stored.has(s.id));
+		// And rows held here when a lost store went (`mine`), over what a
+		// recovery put in.
+		const made = this.shots.filter((s) => !this.stored.has(s.id) || mine.has(s.id));
 		const madeIds = new Set(made.map((s) => s.id));
 		// Their journal rows go once they're written (`afterWrite`).
 		this.bootJournal.clear();
 		for (const s of made) {
 			this.written.delete(s.id);
 			this.dirtyDetails.add(s.id);
+			// Whole here: memory's heavy parts are the ones written.
+			if (mine.has(s.id) && lightSummary(s.id) && (s.record.samples.length > 0 || s.profile != null)) markLoaded(s.id);
 		}
 		const rows = loadedRows.filter((s) => !madeIds.has(s.id));
 		for (const s of rows) this.written.set(s.id, s);
@@ -926,14 +956,21 @@ export class HistoryStore {
 				const summary = lightSummary(s.id);
 				if (!summary) return s;
 				const d = found.get(s.id);
+				// A summary with no samples may still carry the yield and peaks the
+				// row had (a daily-copy recovery): they stay readable.
+				const noCurve = (summary.sampleCount ?? 0) === 0;
 				if (!d) {
 					// No heavy parts stored: nothing to load, unless the summary says
 					// there are some, which keeps the row light.
-					if ((summary.sampleCount ?? 0) === 0 && summary.brewSampleCount === 0) markLoaded(s.id);
+					if (noCurve && summary.brewSampleCount === 0) {
+						markLoaded(s.id);
+						markCurveless(s.id, summary);
+					}
 					return s;
 				}
 				const full = withDetails(s, d);
 				markLoaded(s.id);
+				if (noCurve && full.record.samples.length === 0) markCurveless(s.id, summary);
 				this.rebase(s, full);
 				changed = true;
 				return full;
@@ -1490,10 +1527,11 @@ export class HistoryStore {
 			try {
 				const rows = await db.allRows();
 				// Fewer rows than the last copy, less the deletes by name since
-				// (Start empty, a restore under way): keep the last copy, which may
-				// be the only way back if that goes wrong.
+				// (Start empty, a recovery, a restore under way): the last copy is
+				// kept aside as the previous one, which may be the only way back if
+				// that goes wrong, and today's is written beside it.
 				const last = lastSnapshotRows();
-				if (last !== null && rows.length < last) return;
+				const keepPrevious = last !== null && rows.length < last;
 				// The as-run profile of each row too, so a recovery keeps them.
 				const lines: SnapshotRow[] = [];
 				for (let i = 0; i < rows.length; i += SNAPSHOT_CHUNK) {
@@ -1501,7 +1539,7 @@ export class HistoryStore {
 					const details = await db.detailsOf(part.map((r) => r.id));
 					for (const r of part) lines.push({ ...r, profile: details.get(r.id)?.profile ?? null });
 				}
-				await writeRowsSnapshot(lines, this.now(), this.opts.snapshotRoot);
+				await writeRowsSnapshot(lines, this.now(), this.opts.snapshotRoot, { keepPrevious });
 			} catch {
 				// Tomorrow's goes again.
 			} finally {
@@ -1587,12 +1625,13 @@ export class HistoryStore {
 			db.close();
 			return false;
 		}
+		const mine = this.healthState === 'lost' ? this.forgetLostStore() : new Set<string>();
 		this.db?.close();
 		this.db = db;
 		this.mode = 'booting';
 		this.healthState = 'loading';
 		this.oldCopyInfo = null;
-		await this.loadFromDb();
+		await this.loadFromDb(mine);
 		return this.health === 'ok';
 	}
 
@@ -1625,12 +1664,13 @@ export class HistoryStore {
 				return false;
 			}
 			this.writeMarker(this.now(), rows);
+			const mine = this.forgetLostStore();
 			this.db?.close();
 			this.db = db;
 			this.mode = 'booting';
 			this.healthState = 'loading';
 			this.oldCopyInfo = null;
-			await this.loadFromDb();
+			await this.loadFromDb(mine);
 			try {
 				this.channel?.postMessage({ type: 'recovered', from: this.tabId });
 			} catch {
@@ -1666,29 +1706,39 @@ export class HistoryStore {
 	 * them, and their summaries say so (no samples), so a backfill or a merge
 	 * restore can still give each its curve.
 	 */
-	async recoverSnapshot(): Promise<RecoveryResult> {
+	async recoverSnapshot(which: SnapshotWhich = 'latest'): Promise<RecoveryResult> {
 		if (this.healthState !== 'lost') return this.recoverWith(async () => false);
-		const snap = await readRowsSnapshot(this.opts.snapshotRoot);
+		const snap = await readRowsSnapshot(this.opts.snapshotRoot, which);
 		if (!snap) {
 			this.lastError = 'The daily copy couldn’t be read.';
 			return false;
 		}
 		return this.recoverWith(async (db) => {
+			// Each row's yield, peaks and chart as the snapshot has them (F2),
+			// with no samples, which the store doesn't hold. A later details
+			// write works the summary out again from the real curve.
+			const summaries = new Map<string, ShotSummary>();
 			const writes: ShotWrite[] = snap.rows.map((r) => {
 				const { profile, ...row } = r;
-				const { shot } = shotOfRow(row);
+				const { shot, summary } = shotOfRow(row);
+				if (summary && typeof summary === 'object') summaries.set(shot.id, { ...summary, sampleCount: 0, brewSampleCount: 0 });
 				return { shot: { ...shot, profile: profile ?? null }, details: true };
 			});
-			for (let i = 0; i < writes.length; i += SNAPSHOT_CHUNK) await db.putShots(writes.slice(i, i + SNAPSHOT_CHUNK), summarize);
+			const kept = (shot: StoredShot): ShotSummary => summaries.get(shot.id) ?? summarize(shot);
+			for (let i = 0; i < writes.length; i += SNAPSHOT_CHUNK) await db.putShots(writes.slice(i, i + SNAPSHOT_CHUNK), kept);
 			await db.setMeta(META_MIGRATION, this.oldCopyRecord());
 			return writes.length;
 		});
 	}
 
-	/** Whether a rows snapshot exists to recover, and its date. */
-	async snapshotInfo(): Promise<{ at: number; rows: number } | null> {
-		const snap = await readRowsSnapshot(this.opts.snapshotRoot);
-		return snap ? { at: snap.at, rows: snap.rows.length } : null;
+	/** The rows snapshots there are to recover, newest first, with their dates. */
+	async snapshotInfo(): Promise<{ which: SnapshotWhich; at: number; rows: number }[]> {
+		const out: { which: SnapshotWhich; at: number; rows: number }[] = [];
+		for (const which of ['latest', 'previous'] as const) {
+			const snap = await readRowsSnapshot(this.opts.snapshotRoot, which);
+			if (snap) out.push({ which, at: snap.at, rows: snap.rows.length });
+		}
+		return out;
 	}
 
 	// ── Legacy backend ─────────────────────────────────────────────────────

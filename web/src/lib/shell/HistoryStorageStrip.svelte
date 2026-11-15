@@ -28,11 +28,11 @@
 
 	const history = getHistoryStore();
 	let busy = $state(false);
-	let snapshot = $state<{ at: number; rows: number } | null>(null);
+	let snapshots = $state<{ which: 'latest' | 'previous'; at: number; rows: number }[]>([]);
 
 	$effect(() => {
 		if (history.health !== 'lost') return;
-		void history.snapshotInfo().then((s) => (snapshot = s));
+		void history.snapshotInfo().then((s) => (snapshots = s));
 	});
 
 	onMount(() => {
@@ -47,16 +47,18 @@
 
 	const dateOf = (ms: number) => (ms > 0 ? new Date(ms).toLocaleDateString() : 'an earlier day');
 
-	async function run(what: () => Promise<unknown>, done: string): Promise<void> {
-		if (busy) return;
+	async function run(what: () => Promise<unknown>, done: string): Promise<unknown> {
+		if (busy) return false;
 		busy = true;
 		try {
 			const result = await what();
 			if (result === 'reopened') toast.info('Another tab had already brought your shot history back. Nothing was changed.');
 			else if (history.health === 'ok') toast.success(done);
 			else toast.error(history.storageError ?? 'That didn’t work. Try another way.');
+			return result;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : String(e));
+			return false;
 		} finally {
 			busy = false;
 		}
@@ -77,8 +79,9 @@
 			confirmLabel: 'Continue'
 		});
 		if (!ok) return;
-		await run(() => history.startEmpty(), 'Choose a backup to restore.');
-		if (history.health === 'ok') void goto('/settings#sharing');
+		const result = await run(() => history.startEmpty(), 'Choose a backup to restore.');
+		// Another tab's recovery is the history now: nothing to restore into.
+		if (result !== 'reopened' && history.health === 'ok') void goto('/settings#sharing');
 	}
 
 	function downloadUnsaved(): void {
@@ -100,13 +103,16 @@
 			{:else}
 				Your shot history’s storage is missing from this browser. Nothing has been changed. Choose how to get it back.
 			{/if}
+			{#if history.unsavedShots.length > 0}
+				{history.unsavedShots.length === 1 ? 'One shot is' : `${history.unsavedShots.length} shots are`} only in this tab: keep it open until you choose, and they go into what you choose.
+			{/if}
 		</span>
 		<div class="hs-actions">
-			{#if snapshot}
-				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot(), 'History restored from the daily copy.')}>
-					Daily copy ({dateOf(snapshot.at)}, {snapshot.rows} shots, without their curves)
+			{#each snapshots as snap (snap.which)}
+				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot(snap.which), 'History restored from the daily copy.')}>
+					{snap.which === 'previous' ? 'Earlier daily copy' : 'Daily copy'} ({dateOf(snap.at)}, {snap.rows} shots, without their curves)
 				</button>
-			{/if}
+			{/each}
 			<button type="button" class="hs-btn" disabled={busy} onclick={() => void restoreBackup()}>Restore a backup</button>
 			{#if history.oldCopy && history.oldCopy.rows > 0}
 				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverOldCopy(), 'History recovered from the old copy.')}>
@@ -114,6 +120,11 @@
 				</button>
 			{/if}
 			<button type="button" class="hs-btn" disabled={busy} onclick={() => void startEmpty()}>Start empty</button>
+			{#if history.unsavedShots.length > 0}
+				<button type="button" class="hs-btn" onclick={downloadUnsaved}>
+					{history.unsavedShots.length === 1 ? 'Download this shot' : 'Download these shots'}
+				</button>
+			{/if}
 		</div>
 	</div>
 {:else if history.health === 'unavailable'}

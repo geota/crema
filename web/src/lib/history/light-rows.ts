@@ -14,6 +14,8 @@
 import type { ShotSummary } from '#lib/core/crema-core.js';
 
 const light = new Map<string, ShotSummary>();
+/** Rows whole in memory with no samples, whose stored summary still has their yield and peaks. */
+const curveless = new Map<string, ShotSummary>();
 
 /** `id`'s row is in memory without its heavy parts; `summary` describes them. */
 export function markLight(id: string, summary: ShotSummary): void {
@@ -33,6 +35,21 @@ export function lightSummary(id: string): ShotSummary | undefined {
 /** Forget every light row: a new store, or a test. */
 export function clearLight(): void {
 	light.clear();
+	curveless.clear();
+}
+
+/**
+ * `id` is whole in memory but has no samples, and its summary still holds
+ * the yield, peaks and chart it had: a row recovered from the daily copy,
+ * whose curve was in the lost store. Read only while it has no samples.
+ */
+export function markCurveless(id: string, summary: ShotSummary): void {
+	curveless.set(id, summary);
+}
+
+/** The summary that describes `id`'s yield and peaks while memory has no samples for it. */
+export function storedSummary(id: string): ShotSummary | undefined {
+	return light.get(id) ?? curveless.get(id);
 }
 
 /** How many machine samples `shot` has, in memory or, for a light row, in the store. */

@@ -32,7 +32,7 @@ import { DB_NAME as CAPTURES_DB } from '#lib/capture/store.js';
 import { DB_NAME as SERIES_DB } from '#lib/history/series-store.js';
 import { DB_NAME as BEAN_IMAGES_DB } from '#lib/bean/image-storage.js';
 import { DB_NAME as KEYS_DB } from '#lib/security/secret-box.js';
-import { HISTORY_DB_NAME, HISTORY_SNAPSHOT_NAME } from '#lib/history/store-names.js';
+import { HISTORY_DB_NAME, HISTORY_SNAPSHOT_NAME, HISTORY_SNAPSHOT_PREV_NAME } from '#lib/history/store-names.js';
 import { withTimeout } from '#lib/utils/timeout.js';
 import { FROZEN_SHOTS_KEY } from '#lib/restore/tab-safety.js';
 
@@ -90,13 +90,14 @@ async function privateFilesRoot(): Promise<FileSystemDirectoryHandle | undefined
 	return navigator.storage.getDirectory();
 }
 
-/** Remove the history's rows snapshot: false only when it's there and stays. */
+/** Remove one of the history's rows snapshots: false only when it's there and stays. */
 async function removeSnapshot(
-	root: () => Promise<FileSystemDirectoryHandle | undefined>
+	root: () => Promise<FileSystemDirectoryHandle | undefined>,
+	name: string
 ): Promise<boolean> {
 	try {
 		const dir = await root();
-		await dir?.removeEntry(HISTORY_SNAPSHOT_NAME, { recursive: true });
+		await dir?.removeEntry(name, { recursive: true });
 		return true;
 	} catch (e) {
 		// None to remove, or no private file system at all.
@@ -182,7 +183,9 @@ export async function factoryResetLocalData(deps: FactoryResetDeps = {}): Promis
 
 	// Another tab holding the file is the usual reason it stays, as for a
 	// database, so it's reported with them.
-	if (!(await removeSnapshot(deps.privateFiles ?? privateFilesRoot))) databasesFailed.push(HISTORY_SNAPSHOT_NAME);
+	for (const name of [HISTORY_SNAPSHOT_NAME, HISTORY_SNAPSHOT_PREV_NAME]) {
+		if (!(await removeSnapshot(deps.privateFiles ?? privateFilesRoot, name))) databasesFailed.push(name);
+	}
 
 	const storageKeysRemoved = clearPrefixed(local) + clearPrefixed(session);
 	// Shots a frozen tab kept: not a `crema.` key, so a freeze can't drop them.

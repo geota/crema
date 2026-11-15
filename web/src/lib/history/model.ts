@@ -43,7 +43,7 @@ import {
 import type { TelemetrySample } from '#lib/state/index.js';
 import { filenameStamp } from '#lib/utils/download.js';
 import { fromWire } from './telemetry-wire';
-import { lightHasHeavyParts, lightSummary, sampleCountOf } from './light-rows';
+import { lightHasHeavyParts, sampleCountOf, storedSummary } from './light-rows';
 
 /**
  * A snapshot of the current bean at the moment a shot was pulled. Stored on
@@ -516,8 +516,9 @@ function seriesKey(shot: StoredShot): string {
 	return `${shot.id}:${shot.record.samples.length}:${last?.elapsed ?? ''}:${last?.scaleWeight ?? ''}:${last?.sample?.groupPressure ?? ''}`;
 }
 export function peaksOf(shot: StoredShot): ShotPeaks {
-	// A light row's peaks are in its summary, from the curve the store holds.
-	const summary = shot.record.samples.length === 0 ? lightSummary(shot.id) : undefined;
+	// A light row's peaks are in its summary, from the curve the store holds;
+	// a row recovered without its curve keeps the ones it had.
+	const summary = shot.record.samples.length === 0 ? storedSummary(shot.id) : undefined;
 	if (summary) {
 		return {
 			peakWeight: summary.peakWeight ?? null,
