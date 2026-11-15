@@ -200,17 +200,12 @@ fn case() -> impl Strategy<Value = Case> {
                 (unknown_pour, heating_ms),
                 pace,
             )| {
-                // A step or a bump on a slow scale is §3.5's known limit: the
+                // A step on a slow scale is §3.5's known limit: the
                 // disturbance check assumes 5 to 10 Hz, so a paced case
-                // draws neither.
+                // draws none. A bump is judged at any pace (REVIEW-451 S1).
                 let ops = if pace.is_some() {
                     ops.into_iter()
-                        .filter(|op| {
-                            !matches!(
-                                op,
-                                Op::Scale(ScaleMode::StepUp { .. } | ScaleMode::Bump { .. })
-                            )
-                        })
+                        .filter(|op| !matches!(op, Op::Scale(ScaleMode::StepUp { .. })))
                         .collect()
                 } else {
                     ops
@@ -1504,6 +1499,60 @@ fn a_slow_scale_stops_near_target() {
             }
         }
     }
+}
+
+/// REVIEW-451 S1: a 10 Hz scale silent for 2 to 3 s over the shot-start tare
+/// comes back with coffee on it, so the tare's wait never sees a reading near
+/// 0 and holds readings back until it times out. A hand on the cup 0.2 to 1 s
+/// after the return used to land inside that wait: the reading that ended it
+/// was judged as the scale's return, with no disturbance band, and the hand
+/// read as coffee. An 18 g shot stopped at a true 11 g. The hand is a
+/// disturbance at any rate, and the shot stops within 6 g of its target.
+#[test]
+fn a_bump_just_after_a_dropout_over_the_tare_is_a_disturbance() {
+    let params = De1Params {
+        preinfusion: false,
+        ending: Ending::None,
+        ..De1Params::default()
+    };
+    let mut runs = 0;
+    for silence_ms in [2_000u64, 3_000] {
+        for gap_ms in [200u64, 500, 1_000] {
+            for grams in [6.0f32, 10.0] {
+                for start_at in (100_000u64..=106_000).step_by(600) {
+                    runs += 1;
+                    let ops = [
+                        Op::Advance { ms: start_at },
+                        Op::AppStart { yield_g: 18.0 },
+                        Op::Advance {
+                            ms: 4_700 - gap_ms - silence_ms,
+                        },
+                        Op::Scale(ScaleMode::Stall),
+                        Op::Advance { ms: silence_ms },
+                        Op::Scale(ScaleMode::Healthy),
+                        Op::Advance { ms: gap_ms },
+                        Op::Scale(ScaleMode::Bump { grams, ms: 1_300 }),
+                        Op::Advance { ms: 90_000 },
+                    ];
+                    let mut world = World::new(params, 0.0, 5_000, false, false);
+                    for op in &ops {
+                        world.apply(op);
+                    }
+                    let broken: Vec<_> = world
+                        .violations
+                        .iter()
+                        .filter(|v| v.invariant.status() == Status::Enforced)
+                        .collect();
+                    assert!(
+                        broken.is_empty(),
+                        "silent {silence_ms} ms, bump {grams} g {gap_ms} ms after, \
+                         start at {start_at}: {broken:?}"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(runs, 132);
 }
 
 /// No preinfusion and no `Ending`: the reviews' probe machine.
