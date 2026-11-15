@@ -1583,10 +1583,15 @@ class HistoryStore(
 
     // ── The stage-1 index (#310 A1, SQLite SPEC §11 stage 1) ─────────────────
 
-    /** [block] under the store's lock on IO, with `shots.db` when the rows are in it this session. */
+    /**
+     * [block] under the store's lock, with `shots.db` when the rows are in it
+     * this session. The lock is taken and released on IO, never on the
+     * caller's dispatcher: a background sync started on Main must not need
+     * Main to let a save through.
+     */
     private suspend fun <T> withShots(block: (SQLiteDatabase?) -> T): T =
-        lock.withLock {
-            withContext(Dispatchers.IO) { block(if (mode == Mode.SQL) runCatching { db().readableDatabase }.getOrNull() else null) }
+        withContext(Dispatchers.IO) {
+            lock.withLock { block(if (mode == Mode.SQL) runCatching { db().readableDatabase }.getOrNull() else null) }
         }
 
     /**
@@ -1603,7 +1608,7 @@ class HistoryStore(
 
     /** Test seam: close the index as a process death would, so another store (or the test) can open the file. */
     @androidx.annotation.VisibleForTesting
-    internal suspend fun closeIndexForTest() = lock.withLock { index.closeAll() }
+    internal suspend fun closeIndexForTest() = withContext(Dispatchers.IO) { lock.withLock { index.closeAll() } }
 
     /** The index's health, for the debug screen. */
     suspend fun indexHealth(): IndexHealth = withShots { index.health(it) }
@@ -1711,39 +1716,42 @@ class HistoryStore(
      *  stayed, empty when everything went, so Erase all data can say so (#428). */
     suspend fun erase(): List<String> =
         lock.withLock {
-            withContext(Dispatchers.IO) {
-                val stayed = mutableListOf<String>()
-                fun gone(name: String, ok: Boolean) { if (!ok) stayed += name }
-                // The index first, under the core's lock (S11): nothing writes a file this is about to remove.
-                index.closeAll()
-                closeDb()
-                gone(FILE_NAME, eraseStore(file))
-                seriesDir.listFiles()?.forEach { gone("$SERIES_DIR/${it.name}", eraseStore(it)) }
-                // False also when there's none: what's left on disk tells.
-                runCatching { context.deleteDatabase(NEXT_DB_NAME) }
-                gone(NEXT_DB_NAME, !dbFile.exists())
-                dbFile.parentFile?.listFiles { f -> f.name.startsWith(NEXT_DB_NAME + QuarantineHandler.CORRUPT) }
-                    ?.forEach { gone(it.name, it.delete()) }
-                NEXT_FILES.forEach { gone(it, eraseStore(File(context.filesDir, it))) }
-                gone(SQLITE_DIR, eraseSqliteHistory())
-                Stores.forget(dbFile)
-                written.clear()
-                stored.clear(); withProfile.clear(); staged.clear(); journaledStage.clear(); legacyHeavy.clear(); seriesWritten.clear(); seen.clear();
-                deleted.clear(); writeGen.clear(); unreadNow.clear()
-                onDisk.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear()
-                synchronized(recent) { recent.clear() }
-                version++
-                unreadableSeries = emptySet()
-                unsavedCurves = emptySet()
-                journaled = emptySet()
-                lostChoices = null
-                snapshotDay = null
-                // The next save starts a new, empty store.
-                mode = Mode.UNOPENED
-                health = HistoryHealth.LOADING
-                stayed
-            }
+            // The index first, under the core's lock (S11), and no store here opens it again until
+            // this returns (REVIEW-446 note 4): nothing writes or makes a file this is about to remove.
+            withContext(Dispatchers.IO) { index.erasing { eraseLocked() } }
         }
+
+    private fun eraseLocked(): List<String> {
+        val stayed = mutableListOf<String>()
+        fun gone(name: String, ok: Boolean) { if (!ok) stayed += name }
+        closeDb()
+        gone(FILE_NAME, eraseStore(file))
+        seriesDir.listFiles()?.forEach { gone("$SERIES_DIR/${it.name}", eraseStore(it)) }
+        // False also when there's none: what's left on disk tells.
+        runCatching { context.deleteDatabase(NEXT_DB_NAME) }
+        gone(NEXT_DB_NAME, !dbFile.exists())
+        dbFile.parentFile?.listFiles { f -> f.name.startsWith(NEXT_DB_NAME + QuarantineHandler.CORRUPT) }
+            ?.forEach { gone(it.name, it.delete()) }
+        NEXT_FILES.forEach { gone(it, eraseStore(File(context.filesDir, it))) }
+        gone(SQLITE_DIR, eraseSqliteHistory())
+        duringEraseForTest?.invoke()
+        Stores.forget(dbFile)
+        written.clear()
+        stored.clear(); withProfile.clear(); staged.clear(); journaledStage.clear(); legacyHeavy.clear(); seriesWritten.clear(); seen.clear();
+        deleted.clear(); writeGen.clear(); unreadNow.clear()
+        onDisk.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear()
+        synchronized(recent) { recent.clear() }
+        version++
+        unreadableSeries = emptySet()
+        unsavedCurves = emptySet()
+        journaled = emptySet()
+        lostChoices = null
+        snapshotDay = null
+        // The next save starts a new, empty store.
+        mode = Mode.UNOPENED
+        health = HistoryHealth.LOADING
+        return stayed
+    }
 
     /**
      * Remove the files the SQLite history keeps (its SPEC §11, N3), if present:
@@ -1817,7 +1825,7 @@ class HistoryStore(
         } else if (!QuarantineHandler().quarantine(dbFile)) {
             throw MigrationFailed("Couldn't set the old shots.db aside")
         }
-        // Gone from under the index, outside a write: it's stale until a write that clears the table, or a full diff.
+        // Gone from under the index, outside a write: `pending` up until a full diff.
         index.replaced()
     }
 
@@ -1879,6 +1887,10 @@ class HistoryStore(
         /** Tests set this to hold [loadAll] (the open and the move) until they complete it. Null in the app. */
         @androidx.annotation.VisibleForTesting
         @Volatile internal var holdOpen: kotlinx.coroutines.Deferred<Unit>? = null
+
+        /** Test seam: runs inside [erase], after the SQLite history's files are gone (#310 A1b). */
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var duringEraseForTest: (() -> Unit)? = null
 
         /** Test seam: runs between two batches of the index's full diff, outside the lock (#310 A1). */
         @androidx.annotation.VisibleForTesting

@@ -44,7 +44,6 @@ class HistoryIndexTest {
     private val filesDir get() = app.filesDir
     private val sqliteDir get() = File(filesDir, HistoryStore.SQLITE_DIR)
     private val indexFile get() = File(sqliteDir, HistoryIndex.FILE_NAME)
-    private val staleMark get() = File(sqliteDir, HistoryIndex.STALE_NAME)
     private val dbFile get() = app.getDatabasePath(HistoryStore.NEXT_DB_NAME)
     private val stores = mutableListOf<HistoryStore>()
 
@@ -63,6 +62,8 @@ class HistoryIndexTest {
         HistoryStore.faults.clear()
         HistoryIndex.FAULTS.clear()
         HistoryStore.afterDiffBatchForTest = null
+        HistoryStore.duringEraseForTest = null
+        sqliteDir.setWritable(true)
         SeriesFiles.beforeWrite = {}
         runBlocking { stores.forEach { it.closeIndexForTest() } }
         SafeFile.resetForTest()
@@ -74,9 +75,13 @@ class HistoryIndexTest {
         assertTrue(c.exact, "$what: $c (missing ${c.missing.take(3)}, extra ${c.extra.take(3)}, differ ${c.differ.take(3)})")
         val h = s.indexHealth()
         assertEquals(0uL, h.pending, "$what: pending")
-        assertFalse(h.staleMarked, "$what: no stale mark")
+        assertEquals(h.shotsSeq, h.sourceSeq, "$what: the index has shots.db's every write")
+        assertEquals(emptyList(), h.seenSeqs, "$what: no seq past a gap")
         assertEquals(emptyList(), h.misses, "$what: the boot check passes")
     }
+
+    /** A launch as the app runs it: the rows, then the index's boot check and any diff. */
+    private suspend fun HistoryStore.boot(): HistoryLoad = loadAll().also { syncIndex() }
 
     private fun rowCount(): Int = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
         db.rawQuery("SELECT COUNT(*) FROM shots", null).use { c -> c.moveToFirst(); c.getInt(0) }
@@ -102,7 +107,7 @@ class HistoryIndexTest {
 
     @Test fun `the index lives in filesDir history-sqlite, an index file, outside databases`() = runBlocking {
         val s = store()
-        s.loadAll()
+        s.boot()
         s.save(fresh("a", 3))
         assertTrue(indexFile.isFile, "filesDir/history-sqlite/history-index.db")
         assertFalse(app.databaseList().any { it.startsWith("history") }, "nothing of it under databases/")
@@ -123,14 +128,20 @@ class HistoryIndexTest {
         val s = store()
         assertEquals(HistoryHealth.OK, s.loadAll().health)
         assertEquals(40, rowCount())
+        // A write that clears the table leaves the rebuild to the boot's syncIndex, after the marker (REVIEW-446 note 5).
+        assertTrue(assertNotNull(s.indexHealth().pending) > 0uL, "pending stays up for the rebuild")
+        assertTrue(File(filesDir, HistoryStore.MARKER_NAME).readText().contains("\"done\""), "the marker is written first")
+        val report = assertNotNull(s.syncIndex())
+        assertTrue(report.finished, report.outcome)
+        assertEquals(40, report.upserted)
         assertExact(s, "migration")
-        assertEquals(7L, s.indexHealth().diffVersionCode, "a write that clears the table settles the index as a full diff")
+        assertEquals(7L, s.indexHealth().diffVersionCode)
         assertNull(s.syncIndex(), "and the boot check passes")
     }
 
     @Test fun `saves, edits, and a partial save leave the index equal, and a partial save deletes nothing`() = runBlocking {
         val s = store()
-        s.loadAll()
+        s.boot()
         val rows = fresh("s", 12)
         assertTrue(s.save(rows))
         assertExact(s, "first save")
@@ -149,7 +160,7 @@ class HistoryIndexTest {
 
     @Test fun `a delete leaves the index equal`() = runBlocking {
         val s = store()
-        s.loadAll()
+        s.boot()
         s.save(fresh("d", 8))
         s.delete(listOf("d-1", "d-6", "not-there"))
         assertEquals(6, rowCount())
@@ -158,7 +169,7 @@ class HistoryIndexTest {
 
     @Test fun `a change through updateHidden and flushHidden leaves the index equal`() = runBlocking {
         val s = store()
-        s.loadAll()
+        s.boot()
         s.save(fresh("h", 4))
         assertTrue(s.updateHidden("h-2") { it.copy(notes = "flushed") })
         s.flushHidden("h-2")
@@ -168,7 +179,7 @@ class HistoryIndexTest {
 
     @Test fun `the pending journal's merge leaves the index equal`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("j", 3))
         setDbVersion(HistoryDb.VERSION + 1)
         val s = store()
@@ -186,7 +197,7 @@ class HistoryIndexTest {
     @Test fun `the late-row import leaves the index equal`() = runBlocking {
         val rows = HistoryFixtures.rows(5, samplesPer = 5)
         HistoryFixtures.plantOldBuild(app, rows)
-        store().loadAll()
+        store().boot()
         // An old build adds a row to shots.json after the move.
         val late = StoredShot(id = "late", completedAtMs = rows.first().completedAtMs + 10, durationMs = 9, samples = HistoryFixtures.samples(6, 2))
         HistoryFixtures.plantOldBuild(app, rows + late, inline = setOf(late.id))
@@ -197,7 +208,7 @@ class HistoryIndexTest {
 
     @Test fun `the summary repair leaves the index equal`() = runBlocking {
         val shot = HistoryFixtures.rows(1, samplesPer = 20).first()
-        store().save(listOf(shot))
+        store().also { it.boot() }.save(listOf(shot))
         // A 0 stored next to a series file, written behind the hook's back (an older build).
         SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
             val text = db.rawQuery("SELECT row_json FROM shots WHERE id = ?", arrayOf(shot.id)).use { c -> c.moveToFirst(); c.getString(0) }
@@ -219,7 +230,7 @@ class HistoryIndexTest {
 
     @Test fun `a restore's saveAll, in several index batches, leaves the index equal`() = runBlocking {
         val s = store()
-        s.loadAll()
+        s.boot()
         s.save(fresh("old", 5))
         val restored = fresh("r", HistoryIndex.BATCH * 2 + 37, start = 1_700_000_000_000L, samplesPer = 2)
         assertEquals(0, s.writeSeriesOf(restored))
@@ -230,7 +241,7 @@ class HistoryIndexTest {
 
     @Test fun `a lost store rebuilt from its snapshot or empty leaves the index equal`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("l", 6))
         File(dbFile.path + "-wal").delete()
         File(dbFile.path + "-shm").delete()
@@ -239,6 +250,7 @@ class HistoryIndexTest {
         val s = store()
         assertEquals(HistoryHealth.LOST, s.loadAll().health)
         assertEquals(HistoryHealth.OK, s.restoreSnapshot().health)
+        assertTrue(assertNotNull(s.syncIndex()).finished)
         assertExact(s, "restoreSnapshot")
         assertEquals(HistoryHealth.OK, store().loadAll().health)
     }
@@ -246,7 +258,7 @@ class HistoryIndexTest {
     @Test fun `a random run of writes leaves the index equal`() = runBlocking {
         val rnd = Random(310)
         val s = store()
-        s.loadAll()
+        s.boot()
         var next = 0
         repeat(60) {
             val view = s.loadRows()
@@ -267,7 +279,7 @@ class HistoryIndexTest {
 
     @Test fun `a deleted index is rebuilt by the next boot's diff`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("g", 30))
         s0.closeIndexForTest()
         listOf("", "-wal", "-shm").forEach { File(indexFile.path + it).delete() }
@@ -281,7 +293,7 @@ class HistoryIndexTest {
 
     @Test fun `a damaged index is rebuilt, never repaired`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("c", 9))
         s0.closeIndexForTest()
         listOf("-wal", "-shm").forEach { File(indexFile.path + it).delete() }
@@ -294,7 +306,7 @@ class HistoryIndexTest {
 
     @Test fun `a changed versionCode runs the full diff and catches a planted edit`() = runBlocking {
         val s1 = store(versionCode = 41)
-        s1.loadAll()
+        s1.boot()
         s1.save(fresh("v", 10))
         assertNull(s1.syncIndex(), "the hook kept it exact")
         s1.closeIndexForTest()
@@ -318,7 +330,7 @@ class HistoryIndexTest {
 
     @Test fun `the diff removes rows shots-db doesn't hold`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("k", 6))
         s0.closeIndexForTest()
         SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { it.execSQL("DELETE FROM shots WHERE id = 'k-2'") }
@@ -333,7 +345,7 @@ class HistoryIndexTest {
 
     @Test fun `a crash between the P3a write and the index write leaves pending up, and the next boot repairs it`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("p", 3))
         HistoryIndex.FAULTS += IndexFault.CRASH_AFTER_SHOTS
         runCatching { s0.save(listOf(StoredShot(id = "crash", completedAtMs = 1_900_000_000_000L, durationMs = 1))) }
@@ -352,7 +364,7 @@ class HistoryIndexTest {
 
     @Test fun `concurrent saves from two coroutines leave the index equal`() = runBlocking {
         val s = store()
-        s.loadAll()
+        s.boot()
         val a = fresh("ca", 40, start = 1_800_000_000_000L)
         val b = fresh("cb", 40, start = 1_810_000_000_000L)
         listOf(a, b).map { rows ->
@@ -367,7 +379,7 @@ class HistoryIndexTest {
         for (point in points) runBlocking {
             store().erase()
             val s0 = store()
-            s0.loadAll()
+            s0.boot()
             s0.save(fresh("base", 5))
             HistoryIndex.FAULTS += point
             // One save big enough for two index batches, one small, racing.
@@ -392,7 +404,7 @@ class HistoryIndexTest {
 
     @Test fun `a crash during the full diff leaves pending up, and the next one finishes`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("q", HistoryIndex.BATCH + 10, samplesPer = 1))
         s0.closeIndexForTest()
         listOf("", "-wal", "-shm").forEach { File(indexFile.path + it).delete() }
@@ -409,7 +421,7 @@ class HistoryIndexTest {
 
     @Test fun `an index write that fails never fails the P3a write, and the next boot repairs it`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("f", 3))
         HistoryIndex.FAULTS += IndexFault.FAIL_WRITE
         assertTrue(s0.save(listOf(StoredShot(id = "unmirrored", completedAtMs = 1_900_000_000_000L, durationMs = 1))), "the save landed")
@@ -418,7 +430,7 @@ class HistoryIndexTest {
         assertEquals(setOf("f-1", "f-2", "unmirrored"), store().loadRows().map { it.id }.toSet(), "shots.db has every write")
         val h = s0.indexHealth()
         assertTrue(assertNotNull(h.pending) > 0uL)
-        assertTrue(h.staleMarked)
+        assertTrue(h.misses.isNotEmpty(), "the boot check misses")
         assertTrue(h.hookFailures > 0)
         val s = store()
         s.loadAll()
@@ -426,26 +438,132 @@ class HistoryIndexTest {
         assertExact(s, "repaired")
     }
 
-    @Test fun `raising pending that fails marks the index stale, and the save still lands`() = runBlocking {
+    @Test fun `raising pending that fails lowers nothing, the save lands, and the index still takes it`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("r", 2))
         HistoryIndex.FAULTS += IndexFault.FAIL_RAISE
         assertTrue(s0.save(listOf(StoredShot(id = "no-raise", completedAtMs = 1_900_000_000_000L, durationMs = 1))))
         HistoryIndex.FAULTS.clear()
-        assertTrue(staleMark.exists(), "the durable miss when pending couldn't be raised")
         assertEquals(0uL, s0.indexHealth().pending, "pending wasn't lowered for a raise that didn't happen")
+        assertExact(s0, "the write's seq reached the index with its rows")
+    }
+
+    /** REVIEW-446 P2: the raise and the index write both fail, and nothing in history-sqlite/ can be written. */
+    @Test fun `P2 a failed raise and a failed index write leave a seq gap that shots-db itself records`() = runBlocking {
+        val s0 = store()
+        s0.boot()
+        s0.save(fresh("q", 3))
+        assertExact(s0, "before")
+        sqliteDir.setWritable(false)
+        try {
+            HistoryIndex.FAULTS += IndexFault.FAIL_RAISE
+            HistoryIndex.FAULTS += IndexFault.FAIL_WRITE
+            val row = s0.loadRows().first { it.id == "q-0" }
+            assertTrue(s0.save(listOf(row.copy(notes = "edit nobody mirrored"))), "the save landed in shots.db")
+            HistoryIndex.FAULTS.clear()
+        } finally {
+            sqliteDir.setWritable(true)
+        }
+        s0.closeIndexForTest()
+        val next = store()
+        next.loadAll()
+        val h = next.indexHealth()
+        assertEquals(0uL, h.pending, "pending was never raised")
+        assertEquals(listOf("q-0"), next.compareIndex()?.differ)
+        assertTrue(h.misses.any { "shots.db is at" in it }, "the seqs say so: ${h.misses}")
+        assertTrue(assertNotNull(next.syncIndex()).finished)
+        assertExact(next, "repaired")
+    }
+
+    /** REVIEW-446 P1: the first store's late write while the second store's diff runs. */
+    @Test fun `P1 a late write from another store during a diff keeps the diff from settling`() = runBlocking {
+        val first = store()
+        first.boot()
+        first.save(fresh("p", HistoryIndex.BATCH * 2 + 5, samplesPer = 1))
+        val second = store(versionCode = 8)
+        second.loadAll()
+        var once = true
+        HistoryStore.afterDiffBatchForTest = {
+            if (once) {
+                once = false
+                // A recreated view model's leftover edits a row the diff already passed.
+                val row = first.loadRows().first { it.id == "p-0" }
+                assertTrue(first.save(listOf(row.copy(notes = "late edit from the first store"))))
+            }
+        }
+        val report = assertNotNull(second.syncIndex())
+        HistoryStore.afterDiffBatchForTest = null
+        assertFalse(report.finished, "it must not settle: ${report.outcome}")
+        second.closeIndexForTest()
+        val next = store(versionCode = 8)
+        next.loadAll()
+        assertTrue(next.indexHealth().misses.isNotEmpty(), "the next boot misses")
+        assertTrue(assertNotNull(next.syncIndex()).finished)
+        assertExact(next, "repaired")
+    }
+
+    /** REVIEW-446 note 3: device transfer copies both files, maybe at different moments. */
+    @Test fun `an index copied before shots-db's later writes is caught at the next boot`() = runBlocking {
+        val s0 = store()
+        s0.boot()
+        s0.save(fresh("t", 6))
+        s0.closeIndexForTest()
+        val aside = File(app.cacheDir, "index-copy").apply { deleteRecursively(); mkdirs() }
+        for (suffix in listOf("", "-wal", "-shm")) File(indexFile.path + suffix).takeIf { it.exists() }?.copyTo(File(aside, indexFile.name + suffix))
+        val s1 = store()
+        s1.boot()
+        // An edit and a new row, same count change undone by a delete: only the seqs can tell.
+        s1.save(listOf(s1.loadRows().first { it.id == "t-2" }.copy(notes = "after the copy")))
+        s1.save(listOf(StoredShot(id = "t-new", completedAtMs = 1_900_000_000_000L, durationMs = 1)))
+        s1.delete(listOf("t-5"))
+        s1.closeIndexForTest()
+        // The new device: shots.db as now, the index as it was.
+        for (suffix in listOf("", "-wal", "-shm")) File(indexFile.path + suffix).delete()
+        aside.listFiles()!!.forEach { it.copyTo(File(sqliteDir, it.name)) }
         val s = store()
         s.loadAll()
-        val report = assertNotNull(s.syncIndex())
-        assertTrue(report.reasons.any { "didn't reach" in it }, report.reasons.toString())
-        assertExact(s, "repaired")
-        assertFalse(staleMark.exists())
+        val h = s.indexHealth()
+        assertEquals(0uL, h.pending)
+        assertEquals(6, h.indexRows, "the counts match")
+        assertTrue(h.misses.isNotEmpty(), "but the seqs don't: ${h.misses}")
+        assertTrue(assertNotNull(s.syncIndex()).finished)
+        assertExact(s, "after the diff")
+    }
+
+    /** REVIEW-446 note 4: another store's write while this one erases makes nothing in history-sqlite/. */
+    @Test fun `a write from another store during an erase doesn't make the index again`() = runBlocking {
+        val other = store()
+        other.boot()
+        other.save(fresh("o", 2))
+        val eraser = store()
+        eraser.loadAll()
+        HistoryStore.duringEraseForTest = {
+            HistoryStore.duringEraseForTest = null
+            runBlocking(Dispatchers.IO) {
+                other.closeIndexForTest()
+                other.save(listOf(StoredShot(id = "during-erase", completedAtMs = 1_900_000_000_000L, durationMs = 1)))
+            }
+            assertFalse(sqliteDir.exists(), "nothing made history-sqlite/ again mid-erase")
+        }
+        assertEquals(emptyList(), eraser.erase(), "nothing stayed")
+        assertFalse(sqliteDir.exists())
+    }
+
+    @Test fun `every write to shots raises its seq in shots-db`() = runBlocking {
+        val s = store()
+        s.boot()
+        val start = assertNotNull(s.indexHealth().shotsSeq)
+        s.save(fresh("n", 2))
+        s.delete(listOf("n-0"))
+        s.save(emptyList<StoredShot>())
+        assertEquals(start + 2uL, s.indexHealth().shotsSeq, "a save and a delete; an empty save writes nothing")
+        assertExact(s, "seqs")
     }
 
     @Test fun `a write that fails to mirror during a diff keeps the diff from settling pending`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("w", HistoryIndex.BATCH + 30, samplesPer = 1))
         s0.closeIndexForTest()
         listOf("", "-wal", "-shm").forEach { File(indexFile.path + it).delete() }
@@ -472,7 +590,7 @@ class HistoryIndexTest {
 
     @Test fun `writes between diff batches land in the index`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("b", HistoryIndex.BATCH * 2 + 5, samplesPer = 1))
         s0.closeIndexForTest()
         listOf("", "-wal", "-shm").forEach { File(indexFile.path + it).delete() }
@@ -495,7 +613,7 @@ class HistoryIndexTest {
 
     @Test fun `erase, then a write, then reopen, and nothing erased is there`() = runBlocking {
         val s = store()
-        s.loadAll()
+        s.boot()
         val before = fresh("e", 12)
         s.save(before)
         assertTrue(indexFile.exists())
@@ -504,7 +622,7 @@ class HistoryIndexTest {
         s.save(listOf(StoredShot(id = "after", completedAtMs = 1_900_000_000_000L, durationMs = 1)))
         s.closeIndexForTest()
         val r = store()
-        r.loadAll()
+        r.boot()
         assertEquals(listOf("after"), r.loadRows().map { it.id })
         assertExact(r, "after erase")
         r.closeIndexForTest()
@@ -518,7 +636,7 @@ class HistoryIndexTest {
 
     @Test fun `an erase during a full diff stops it, and it writes nothing into the new index`() = runBlocking {
         val s0 = store()
-        s0.loadAll()
+        s0.boot()
         s0.save(fresh("z", HistoryIndex.BATCH * 2 + 5, samplesPer = 1))
         s0.closeIndexForTest()
         listOf("", "-wal", "-shm").forEach { File(indexFile.path + it).delete() }
@@ -537,6 +655,7 @@ class HistoryIndexTest {
         assertFalse(indexFile.exists(), "the diff didn't reopen the erased index")
         s.save(listOf(StoredShot(id = "new", completedAtMs = 1_900_000_000_000L, durationMs = 1)))
         assertEquals(1, s.indexHealth().indexRows)
+        assertNotNull(s.syncIndex(), "the new store's clear leaves the rebuild to the boot check")
         assertExact(s, "after the erase")
     }
 
@@ -544,18 +663,18 @@ class HistoryIndexTest {
 
     @Test fun `a second store in the process takes the index over, and the first one's writes still land`() = runBlocking {
         val first = store()
-        first.loadAll()
+        first.boot()
         first.save(fresh("one", 3))
         val second = store()
-        second.loadAll()
+        second.boot()
         second.save(fresh("two", 3, start = 1_810_000_000_000L))
         assertExact(second, "the second store")
-        // A recreated view model's leftover write: shots.db takes it, the index is marked for the next boot.
+        // A recreated view model's leftover write: shots.db takes it, and its seq says the index missed it.
         assertTrue(first.save(listOf(StoredShot(id = "late-write", completedAtMs = 1_900_000_000_000L, durationMs = 1))))
         assertEquals(7, rowCount())
-        assertTrue(staleMark.exists())
         val r = store()
         r.loadAll()
+        assertTrue(r.indexHealth().misses.isNotEmpty())
         assertNotNull(r.syncIndex())
         assertExact(r, "next boot")
     }
