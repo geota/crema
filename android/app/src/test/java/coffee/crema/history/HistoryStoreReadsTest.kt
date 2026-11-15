@@ -46,8 +46,12 @@ class HistoryStoreReadsTest {
 
     @Before fun clean() {
         SafeFile.openAllForTest()
+        // Every process-wide seam, as another class may have left it.
         HistoryStore.faults.clear()
         HistoryStore.legacyOnlyForTest = false
+        HistoryStore.freeSpaceForTest = null
+        HistoryStore.holdOpen = null
+        HistoryStore.beforeCacheForTest = null
         runBlocking { store().erase() }
         seriesDir.deleteRecursively()
         File(app.filesDir, HistoryStore.FILE_NAME).delete()
@@ -269,7 +273,7 @@ class HistoryStoreReadsTest {
     fun `a revived row that goes missing throws, and erase forgets this session's deletes`() = runBlocking {
         val shots = HistoryFixtures.rows(3, samplesPer = 5)
         val s = store()
-        s.loadAll()
+        assertEquals(HistoryHealth.OK, s.loadAll().health)
         s.save(shots)
         val row = s.loadRows().first { it.id == shots[0].id }
         s.delete(listOf(row.id))
@@ -283,6 +287,7 @@ class HistoryStoreReadsTest {
         val other = s.loadRows().first()
         s.delete(listOf(other.id))
         s.erase()
+        assertEquals(HistoryHealth.OK, s.loadAll().health)
         s.save(listOf(shots[2]))
         assertFailsWith<HistoryReadException>("after erase, an old delete says nothing") { s.loadFull(other) }
         Unit
