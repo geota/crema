@@ -90,7 +90,12 @@ internal data class MigrationRecord(
 
 /** A line of `history-pending.jsonl`: a row to put, or an id to delete, applied in order. */
 @Serializable
-internal data class JournalEntry(val put: StoredShot? = null, val delete: String? = null) {
+internal data class JournalEntry(
+    val put: StoredShot? = null,
+    val delete: String? = null,
+    /** A profile for [put]'s row only if the store has none ([flushHidden]'s fill): its brew series stays. */
+    val fillProfile: JsonObject? = null,
+) {
     val id: String? get() = put?.id ?: delete
 }
 
@@ -741,6 +746,8 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 // A light row's journal line has no profile: the stored one stays.
                 if (row.profile == null && row.brewSeries == null && tables.full(this, row.id) != null) tables.putLight(this, row, summary)
                 else tables.putFull(this, row.copy(samples = emptyList()), summary)
+                // A fill that waited out a full disk: only into a row that still has no profile (#408 N8).
+                e.fillProfile?.let { p -> if (tables.full(this, row.id)?.shot?.profile == null) tables.putProfile(this, row.id, p) }
             }
         }
         // Ours, not the old copy: it has landed in the store. A file that won't
@@ -849,7 +856,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 val summary = summaryFor(row).let { if (curveless) it.copy(sampleCount = null) else it }
                 if (curveless) unsavedCurves = unsavedCurves + id
                 val profiles = fill?.let { mapOf(id to it) }.orEmpty()
-                if (runCatching { writeRows(listOf(row to summary), profiles) }.isFailure) journalRow(row)
+                if (runCatching { writeRows(listOf(row to summary), profiles) }.isFailure) journalRow(row, fill)
             }
         }
     }
@@ -1122,8 +1129,8 @@ class HistoryStore(private val context: Context, private val json: Json) {
     }
 
     /** Append [row] (without its series) to `history-pending.jsonl` as a `put`. True when it's on disk. */
-    private fun journalRow(row: StoredShot): Boolean =
-        appendJournal(JournalEntry(put = row.copy(samples = emptyList()))).also { if (it) journaled = journaled + row.id }
+    private fun journalRow(row: StoredShot, fillProfile: JsonObject? = null): Boolean =
+        appendJournal(JournalEntry(put = row.copy(samples = emptyList()), fillProfile = fillProfile)).also { if (it) journaled = journaled + row.id }
 
     /** Append a `delete` line for each of [ids]: a delete made while the store was out of reach (S1). */
     private fun journalDeletes(ids: Collection<String>) {

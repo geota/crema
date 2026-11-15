@@ -152,7 +152,8 @@ class RefusedStoreVmTest {
 
         gate.complete(Unit)
         VmHarness.idleUntil("the reload") { retry.isCompleted }
-        VmHarness.idleUntil("the save") { made.id in shots.readText() }
+        // A save renames the file to .bak and the .tmp over it: absent for a moment.
+        VmHarness.idleUntil("the save") { made.id in runCatching { shots.readText() }.getOrDefault("") }
         assertEquals(setOf("shot-1", "shot-2", "shot-3", made.id), vm.ui.value.history.map { it.id }.toSet())
     }
 
@@ -213,7 +214,8 @@ class RefusedStoreVmTest {
         VmHarness.idleUntil("the reload") { retry.isCompleted }
         val id = assertNotNull(made)
         assertEquals(setOf("shot-1", id), vm.ui.value.history.map { it.id }.toSet())
-        VmHarness.idleUntil("the save") { id in shots.readText() }
+        // A save renames the file to .bak and the .tmp over it: absent for a moment.
+        VmHarness.idleUntil("the save") { id in runCatching { shots.readText() }.getOrDefault("") }
     }
 
     @Test
@@ -314,7 +316,8 @@ class RefusedStoreVmTest {
 
         vm.retryStore(vm.ui.value.refusedStores.single())
         VmHarness.idleUntil("the reload") { vm.ui.value.history.size == 2 }
-        VmHarness.idleUntil("the save") { made.id in shots.readText() }
+        // A save renames the file to .bak and the .tmp over it: absent for a moment.
+        VmHarness.idleUntil("the save") { made.id in runCatching { shots.readText() }.getOrDefault("") }
         assertEquals(setOf("shot-1", made.id), vm.ui.value.history.map { it.id }.toSet())
     }
 
