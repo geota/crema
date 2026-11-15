@@ -617,6 +617,14 @@ pub struct CremaCore {
     /// `on_tare_seen`, which zeroes its weight shift-registers when a sub-0.04 g
     /// reading arrives within 1 s of the tare request (`device_scale.tcl`).
     tare_gate: Option<Duration>,
+    /// The last reading the tare's wait held back, raw, and when. A wait that
+    /// times out with a load on judges its reading against it, less the
+    /// load, so the load is a step for the disturbance check (REVIEW-451 S1).
+    tare_held: Option<(f32, Duration)>,
+    /// The load the held readings show landing during the tare's wait, g:
+    /// rises past the band less falls past it, never under 0, and the time
+    /// between the readings of the last rise.
+    tare_load: Option<(f32, Duration)>,
     /// Whether stop-at-weight (SAW) is enabled. Latched flag, default
     /// `true`; the shell pushes the user pref via
     /// [`set_stop_on_weight`](Self::set_stop_on_weight). Even when `true`,
@@ -1127,6 +1135,8 @@ impl CremaCore {
             weight_gate: WeightSpikeGate::new(),
             auto_tare: true,
             tare_gate: None,
+            tare_held: None,
+            tare_load: None,
             stop_on_weight: true,
             outage_check: None,
             last_frame: None,
@@ -4141,9 +4151,18 @@ impl CremaCore {
             // giving up and resuming so a failed tare never zeroes forever.
             const TARE_SETTLE_TIMEOUT: Duration = Duration::from_millis(1500);
             let landed = reading.weight_g.abs() <= TARE_SETTLE_G;
+            // The disturbance band from the last reading held, while a session
+            // weighs: what a step to this reading may be before it's a load.
+            let edge = self.tare_held.and_then(|(_, at)| {
+                self.weighing_mode().is_some().then(|| {
+                    de1_domain::weight_gate::DISTURB_STEP_G
+                        + de1_domain::weight_gate::DISTURB_RATE_G_S
+                            * now.saturating_sub(at).as_secs_f32()
+                })
+            });
             if landed || now.saturating_sub(tare_sent) >= TARE_SETTLE_TIMEOUT {
                 // Tare landed (or we gave up): start the post-tare series clean
-                // and let this (~zero) reading flow through normally below.
+                // and let this reading flow through normally below.
                 // Only an OBSERVED landing qualifies the pre-shot zero capture.
                 self.tare_gate = None;
                 self.tare_observed = landed;
@@ -4168,9 +4187,54 @@ impl CremaCore {
                 // The baseline legitimately stepped to ~0 — don't let the
                 // spike gate read the drop as a corrupt jump.
                 self.weight_gate.reset();
+                // A wait that gave up with a load still on, one that rose onto
+                // the held readings or arrives on this one, judges this
+                // reading against the last held one less that load, so the
+                // load is a step for the disturbance check, as at any rate
+                // (REVIEW-451 S1). A tare that landed zeroed any load with the
+                // cup, and a fall at the end is a landing: those reset.
+                // The comparison is as old as the rise was, so the band is the
+                // rise's, however long the wait held readings since.
+                let held = self.tare_held.take();
+                let seed = match (held, self.tare_load.take(), edge) {
+                    (Some((g, _)), Some((load, rise_dt)), _) => {
+                        Some((g - load, now.saturating_sub(rise_dt)))
+                    }
+                    (Some((g, at)), None, Some(edge)) if reading.weight_g - g > edge => {
+                        Some((g, at))
+                    }
+                    _ => None,
+                };
+                if let Some((g, at)) = seed.filter(|_| !landed) {
+                    let net = g - self.pre_shot_zero_offset_g - self.saw_zero_offset_g;
+                    let _ = self.weight_gate.check_at_rate(net, at, true, None);
+                }
             } else {
                 // Still pre-tare — report zero so neither the live chart nor the
-                // recorded shot shows the pan/cup weight.
+                // recorded shot shows the pan/cup weight. A scale back from a
+                // gap is back now, not when the wait ends: the reading that
+                // ends it is judged as a live one, with the band on.
+                self.scale_returning = false;
+                // A rise past the band, from a held reading not under 0, is a
+                // load on the cup: the tare landing brings the reading to
+                // about 0, so it only raises one under 0. A fall past it takes
+                // a load off. Nothing is decided until the wait ends, since a
+                // tare still in flight zeroes a load on the cup too (REVIEW-454
+                // B1).
+                if let (Some((g, at)), Some(edge)) = (self.tare_held, edge) {
+                    let step = reading.weight_g - g;
+                    let load = self.tare_load.map_or(0.0, |(load, _)| load);
+                    if g >= -TARE_SETTLE_G && step > edge {
+                        self.tare_load = Some((load + step, now.saturating_sub(at)));
+                    } else if step < -edge {
+                        let left = load + step;
+                        self.tare_load = self
+                            .tare_load
+                            .filter(|_| left > 0.0)
+                            .map(|(_, dt)| (left, dt));
+                    }
+                }
+                self.tare_held = Some((reading.weight_g, now));
                 self.push_suppressed_reading(&reading, out);
                 return;
             }
@@ -4374,6 +4438,8 @@ impl CremaCore {
         self.tare_observed = false;
         self.push_tare_command(out);
         self.tare_gate = Some(now);
+        self.tare_held = None;
+        self.tare_load = None;
     }
 
     /// The untared-cup guard (Decenza `weightprocessor.cpp:242-253`, evolved
@@ -6059,6 +6125,8 @@ impl CremaCore {
                     if self.auto_tare && self.hot_water_stop_target_g().is_some() {
                         self.push_tare_command(out);
                         self.tare_gate = Some(now);
+                        self.tare_held = None;
+                        self.tare_load = None;
                     }
                 }
                 out.events.push(Event::WaterSessionStarted { kind });
@@ -7089,6 +7157,99 @@ mod tests {
             tare_writes(&core.on_notification(Source::De1State, &[4, 4], t)),
             0
         );
+    }
+
+    /// A load that lands inside the tare's wait and is still on when the wait
+    /// gives up is a step for the disturbance check, not part of the cup's
+    /// zero: the reading that ends the wait is judged against the last held
+    /// one, less the load (REVIEW-451 S1). A tare landing brings the reading
+    /// to about 0, so a rise is a load, and a fall takes it off.
+    #[test]
+    fn a_load_still_on_when_the_tare_wait_gives_up_is_a_disturbance() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::De1State, &[2, 0], 0);
+        core.on_notification(Source::De1State, &[4, 5], 1_000); // gate opens at t=1000
+        // Coffee is already on the scale, so no reading is near 0; then a hand.
+        for (g, t) in [(1.6, 1_100), (1.8, 1_200), (8.0, 1_300), (8.2, 1_400)] {
+            let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+            assert_eq!(scale_reading_weight(&out), Some(0.0), "{g} g held");
+        }
+        assert!(core.tare_gate.is_some(), "a rise doesn't end the wait");
+        // The hand stays while the coffee rises, to the wait's timeout.
+        let mut g = 8.2;
+        for t in (1_500..2_500).step_by(100) {
+            g += 0.2;
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+        }
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(g + 0.2), 2_500);
+        assert!(core.tare_gate.is_none(), "it gave up");
+        assert_ne!(scale_reading_weight(&out), Some(0.0));
+        // From the last held reading less the hand's 6.2 g.
+        let from = core.untared_settle.and_then(|s| s.disturbed_from);
+        assert!(
+            from.is_some_and(|f| (f - (g - 6.2)).abs() < 0.01),
+            "{from:?}"
+        );
+    }
+
+    /// The same hand lifted before the wait gave up: the fall takes it off,
+    /// and the reading that ends the wait is coffee.
+    #[test]
+    fn a_load_lifted_inside_the_tare_wait_is_no_disturbance() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::De1State, &[2, 0], 0);
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        for (g, t) in [(1.6, 1_100), (1.8, 1_200), (8.0, 1_300), (2.2, 1_400)] {
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+        }
+        let mut g = 2.2;
+        for t in (1_500..2_500).step_by(100) {
+            g += 0.2;
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+        }
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(g + 0.2), 2_500);
+        assert!(core.tare_gate.is_none());
+        assert_ne!(scale_reading_weight(&out), Some(0.0));
+        assert!(core.untared_settle.is_none(), "no disturbance");
+    }
+
+    /// REVIEW-454 B1: the first-flow tare is still in flight on an untared
+    /// 200 g cup when a hand touches it. The held readings are the cup before
+    /// the tare, so the touch proves nothing about the tare: the wait still
+    /// sees the landing, which zeroes the cup and the hand.
+    #[test]
+    fn a_touch_before_the_tare_lands_keeps_the_wait() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::De1State, &[2, 0], 0);
+        core.on_notification(Source::De1State, &[4, 5], 1_000); // tare at first flow
+        for (g, t) in [(200.0, 1_100), (206.0, 1_200), (200.2, 1_300)] {
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+        }
+        assert!(core.tare_gate.is_some(), "still waiting");
+        // The tare lands.
+        core.on_notification(Source::ScaleWeight, &bookoo_grams(0.1), 1_400);
+        assert!(core.tare_gate.is_none());
+        assert!(core.tare_observed, "the landing is seen as the tare's");
+        assert!(core.untared_settle.is_none(), "no untared-cup settle");
+    }
+
+    /// A tare landing on a reading under 0 raises it to about 0. That ends
+    /// the wait as a landing, not a rise: nothing is disturbed.
+    #[test]
+    fn a_tare_landing_from_under_zero_is_no_rise() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::De1State, &[2, 0], 0);
+        core.on_notification(Source::De1State, &[4, 5], 1_000); // gate opens at t=1000
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(-5.4), 1_100);
+        assert_eq!(scale_reading_weight(&out), Some(0.0));
+        core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), 1_200);
+        assert!(core.tare_gate.is_none(), "landed");
+        assert!(core.tare_observed);
+        assert!(core.untared_settle.is_none(), "no disturbance");
     }
 
     #[test]

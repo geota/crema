@@ -171,6 +171,11 @@ struct Case {
     pre_flush: bool,
     /// The scale's pace from the start, if not 10 Hz.
     pace: Option<Pace>,
+    /// An untared cup on the scale from the start, grams.
+    untared_cup_g: Option<f32>,
+    /// The scale's tare latency, ms: a real one lands in 50 to 500 ms, and a
+    /// slow scale's up to a second (REVIEW-454 B1).
+    tare_latency_ms: u64,
     ops: Vec<Op>,
 }
 
@@ -188,6 +193,14 @@ fn case() -> impl Strategy<Value = Case> {
             prop_oneof![3 => Just(1_000u64), 1 => Just(6_000u64)],
         ),
         scale_pace(),
+        // Drawn after the pace, for the same reason.
+        (
+            prop_oneof![
+                4 => Just(None),
+                1 => prop_oneof![Just(10.0f32), Just(30.0), Just(200.0)].prop_map(Some),
+            ],
+            prop_oneof![3 => Just(200u64), 1 => (1u64..=10).prop_map(|t| t * 100)],
+        ),
     )
         .prop_map(
             |(
@@ -199,18 +212,14 @@ fn case() -> impl Strategy<Value = Case> {
                 ops,
                 (unknown_pour, heating_ms),
                 pace,
+                (untared_cup_g, tare_latency_ms),
             )| {
-                // A step or a bump on a slow scale is §3.5's known limit: the
+                // A step on a slow scale is §3.5's known limit: the
                 // disturbance check assumes 5 to 10 Hz, so a paced case
-                // draws neither.
+                // draws none. A bump is judged at any pace (REVIEW-451 S1).
                 let ops = if pace.is_some() {
                     ops.into_iter()
-                        .filter(|op| {
-                            !matches!(
-                                op,
-                                Op::Scale(ScaleMode::StepUp { .. } | ScaleMode::Bump { .. })
-                            )
-                        })
+                        .filter(|op| !matches!(op, Op::Scale(ScaleMode::StepUp { .. })))
                         .collect()
                 } else {
                     ops
@@ -226,6 +235,8 @@ fn case() -> impl Strategy<Value = Case> {
                     read_only,
                     pre_flush,
                     pace,
+                    untared_cup_g,
+                    tare_latency_ms,
                     ops,
                 }
             },
@@ -240,6 +251,10 @@ fn run(case: &Case) -> World {
         case.read_only,
         case.pre_flush,
     );
+    world.set_tare_latency(case.tare_latency_ms);
+    if let Some(grams) = case.untared_cup_g {
+        world.set_untared_cup(grams);
+    }
     if let Some(pace) = case.pace {
         world.apply(&Op::Scale(pace.mode));
         if let Some(grams) = pace.stall_at_g {
@@ -284,7 +299,7 @@ fn sample_cases(count: u32) -> Vec<Case> {
 #[test]
 fn the_generator_reaches_what_the_invariants_watch() {
     let mut total = de1_model::Coverage::default();
-    for case in sample_cases(300) {
+    for case in sample_cases(600) {
         let c = run(&case).coverage;
         total.shots += c.shots;
         total.water += c.water;
@@ -1344,6 +1359,8 @@ fn committed_cases_the_pace_moved() {
         read_only: false,
         pre_flush: false,
         pace: None,
+        untared_cup_g: None,
+        tare_latency_ms: 200,
         ops: Vec::new(),
     };
     let cases = [
@@ -1504,6 +1521,111 @@ fn a_slow_scale_stops_near_target() {
             }
         }
     }
+}
+
+/// REVIEW-451 S1: a 10 Hz scale silent for 2 to 3 s over the shot-start tare
+/// comes back with coffee on it, so the tare's wait never sees a reading near
+/// 0 and holds readings back until it times out. A hand on the cup 0.2 to 1 s
+/// after the return used to land inside that wait: the reading that ended it
+/// was judged as the scale's return, with no disturbance band, and the hand
+/// read as coffee. An 18 g shot stopped at a true 11 g. The hand is a
+/// disturbance at any rate, and the shot stops within 6 g of its target.
+#[test]
+fn a_bump_just_after_a_dropout_over_the_tare_is_a_disturbance() {
+    let params = De1Params {
+        preinfusion: false,
+        ending: Ending::None,
+        ..De1Params::default()
+    };
+    let mut runs = 0;
+    for silence_ms in [2_000u64, 3_000] {
+        for gap_ms in [200u64, 500, 1_000] {
+            for grams in [6.0f32, 10.0] {
+                for start_at in (100_000u64..=106_000).step_by(600) {
+                    runs += 1;
+                    let ops = [
+                        Op::Advance { ms: start_at },
+                        Op::AppStart { yield_g: 18.0 },
+                        Op::Advance {
+                            ms: 4_700 - gap_ms - silence_ms,
+                        },
+                        Op::Scale(ScaleMode::Stall),
+                        Op::Advance { ms: silence_ms },
+                        Op::Scale(ScaleMode::Healthy),
+                        Op::Advance { ms: gap_ms },
+                        Op::Scale(ScaleMode::Bump { grams, ms: 1_300 }),
+                        Op::Advance { ms: 90_000 },
+                    ];
+                    let mut world = World::new(params, 0.0, 5_000, false, false);
+                    for op in &ops {
+                        world.apply(op);
+                    }
+                    let broken: Vec<_> = world
+                        .violations
+                        .iter()
+                        .filter(|v| v.invariant.status() == Status::Enforced)
+                        .collect();
+                    assert!(
+                        broken.is_empty(),
+                        "silent {silence_ms} ms, bump {grams} g {gap_ms} ms after, \
+                         start at {start_at}: {broken:?}"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(runs, 132);
+}
+
+/// REVIEW-454 B1: the scale wakes too late to settle in preheat, so the
+/// shot-start tare goes out at first flow, on an untared cup, and a hand
+/// steadies the cup while that tare is still in flight. The readings held
+/// before the landing are the cup before the tare, so the touch proves
+/// nothing about it. The wait sees the landing, which zeroes the cup and the
+/// hand, and the shot stops by weight at its target, as on main. A first
+/// fix for S1 ended the wait at the touch, and the landing then read as a
+/// load leaving: no stop at 119 g, or the backstop at 113 g, of 36.
+#[test]
+fn a_touch_before_the_first_flow_tare_lands_keeps_the_weight_stop() {
+    let params = De1Params {
+        preinfusion: false,
+        ending: Ending::None,
+        ..De1Params::default()
+    };
+    let mut runs = 0;
+    for cup_g in [10.0f32, 30.0, 200.0] {
+        for latency_ms in [300u64, 500, 1_000] {
+            for grams in [5.0f32, 20.0] {
+                for touch_at in (0..latency_ms).step_by(100) {
+                    runs += 1;
+                    // The shot starts at 101 s; flow, and the tare, at 102.7 s.
+                    let ops = [
+                        Op::Advance { ms: 100_000 },
+                        Op::Scale(ScaleMode::Stall),
+                        Op::AppStart { yield_g: 36.0 },
+                        Op::Advance { ms: 1_400 },
+                        Op::Scale(ScaleMode::Healthy),
+                        Op::Advance { ms: 300 + touch_at },
+                        Op::Scale(ScaleMode::Bump { grams, ms: 60_000 }),
+                        Op::Advance { ms: 90_000 },
+                    ];
+                    let mut world = World::new(params, 0.0, 5_000, false, false);
+                    world.set_tare_latency(latency_ms);
+                    world.set_untared_cup(cup_g);
+                    for op in &ops {
+                        world.apply(op);
+                    }
+                    let what = format!(
+                        "{cup_g} g cup, {latency_ms} ms tare, {grams} g touch {touch_at} ms after it"
+                    );
+                    assert_eq!(world.coverage.weight_stops, 1, "{what}: a weight stop");
+                    let cup = world.true_cup_g();
+                    assert!(cup < 42.0, "{what}: stopped at a true {cup} g of 36");
+                }
+            }
+        }
+    }
+    assert_eq!(runs, 108);
 }
 
 /// No preinfusion and no `Ending`: the reviews' probe machine.
