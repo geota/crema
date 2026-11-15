@@ -46,7 +46,9 @@ pub enum FtsCheck {
     Ok,
     /// It didn't: it was dropped, and a rebuild is due.
     Damaged,
-    /// There is no whole index to check (building or missing).
+    /// Not checked now: there is no whole index to check (building or
+    /// missing), or a shot is running ([`Store::set_busy`]). Try again when
+    /// idle.
     NotReady,
 }
 
@@ -169,7 +171,7 @@ impl Store {
     /// transaction, so a step whose answer was lost after its commit is never
     /// added twice.
     fn fts_build_step(&mut self) -> Result<Maintained> {
-        let batch = i64::from(self.batch_rows);
+        let batch = i64::from(self.fts_batch_rows);
         let step = self.write("fts.build.commit", "fts.build.commit", |tx, _, f| {
             let cursor: i64 = tx.query_row(
                 "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'fts_build_rid'",
@@ -267,13 +269,16 @@ impl Store {
     /// The index's integrity check against its table (`rank = 1`). A failure
     /// drops the index for a rebuild (M6) and gives [`FtsCheck::Damaged`].
     /// Weekly when idle and alone, and at the flip's verify; the shell
-    /// decides when.
+    /// decides when. It is one statement that reads the whole index (B1:
+    /// 0.9 s at 100,000 rows natively), so it never runs while a shot does:
+    /// then it is [`FtsCheck::NotReady`], for the shell to try again when
+    /// idle.
     ///
     /// # Errors
     /// A SQLite error class other than the index's own damage.
     pub fn fts_integrity_check(&mut self) -> Result<FtsCheck> {
         self.usable()?;
-        if self.fts != FtsStatus::Ready {
+        if self.busy || self.fts != FtsStatus::Ready {
             return Ok(FtsCheck::NotReady);
         }
         let run = self

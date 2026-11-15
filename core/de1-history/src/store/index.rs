@@ -13,6 +13,8 @@
 //!
 //! Every call here is refused unless the file's role is `index`.
 
+use std::collections::HashSet;
+
 use rusqlite::{OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +35,34 @@ pub struct IndexWrite {
     pub seen_seqs: Vec<u64>,
     /// Lower `pending` by one (the Android hook's second half).
     pub lower_pending: bool,
+}
+
+/// The rows a removal-by-absence step deletes at most (S15, B1: 500 deletes
+/// took about 21 ms natively at 100,000 rows).
+pub const ABSENT_BATCH_ROWS: usize = 500;
+
+/// The rows a removal-by-absence step reads at most, by `rid`, to find the
+/// absent ones: a range read, a few ms at 100,000 rows.
+const ABSENT_SCAN_ROWS: i64 = 5_000;
+
+/// A removal by absence under way ([`Store::remove_absent_begin`]): the ids
+/// the P3 store holds, the index's `write_seq` when the diff began, and the
+/// last `rid` examined. In memory only: a reopen forgets it, and the next
+/// step is refused, so the diff runs again.
+#[derive(Debug, Clone)]
+pub(crate) struct AbsentScan {
+    present: HashSet<String>,
+    since: i64,
+    after_rid: i64,
+}
+
+/// One step of a removal by absence ([`Store::remove_absent_next`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AbsentStep {
+    /// What the step deleted.
+    pub change: ChangeSet,
+    /// Every row has been examined: the removal is finished.
+    pub done: bool,
 }
 
 /// The index's bookkeeping, for the boot check (SPEC §3).
@@ -161,24 +191,111 @@ impl Store {
     /// `write_seq` when the diff began. The only delete by absence, and
     /// only on an index.
     ///
+    /// It runs [`Store::remove_absent_begin`] and every
+    /// [`Store::remove_absent_next`] step, one transaction each, and returns
+    /// their change sets as one, at the last step's `seq`. A caller with others
+    /// to serve calls the steps itself and yields between them (S15).
+    ///
     /// # Errors
     /// [`StoreError::Refused`] on an `authority` file; a SQLite error class.
+    /// A failed step leaves the steps before it committed: the index is
+    /// derived, and the next full diff finishes the job.
     pub fn remove_absent(&mut self, ids: &[String], since_seq: u64) -> Result<ChangeSet> {
+        self.remove_absent_begin(ids, since_seq)?;
+        let mut all = ChangeSet::default();
+        loop {
+            let step = self.remove_absent_next()?;
+            all.seq = step.change.seq;
+            all.deleted.extend(step.change.deleted);
+            all.upserted.extend(step.change.upserted);
+            all.kinds = all.kinds.union(step.change.kinds);
+            if step.done {
+                return Ok(all);
+            }
+        }
+    }
+
+    /// Begins a removal by absence: `ids` is every id the P3 store holds,
+    /// read in one transaction, and `since_seq` the index's `write_seq` when
+    /// the diff began. Nothing is written. A removal already under way is
+    /// replaced.
+    ///
+    /// # Errors
+    /// [`StoreError::Refused`] on an `authority` file.
+    pub fn remove_absent_begin(&mut self, ids: &[String], since_seq: u64) -> Result<()> {
+        self.usable()?;
         self.index_only("remove_absent")?;
-        let since = i64::try_from(since_seq).unwrap_or(i64::MAX);
-        let held = serde_json::to_string(ids).map_err(|e| StoreError::Refused(e.to_string()))?;
+        self.absent = Some(AbsentScan {
+            present: ids.iter().cloned().collect(),
+            since: i64::try_from(since_seq).unwrap_or(i64::MAX),
+            after_rid: 0,
+        });
+        Ok(())
+    }
+
+    /// One step of the removal, in one transaction: reads up to 5,000 rows by
+    /// `rid` past the last step, and deletes those whose id isn't held and
+    /// that the index hasn't written since the diff began, at most
+    /// [`ABSENT_BATCH_ROWS`] of them. Both tests run in the step's own write
+    /// transaction, so a row written after the diff began is never deleted.
+    /// `done` when every row has been examined; the removal then ends.
+    ///
+    /// # Errors
+    /// [`StoreError::Refused`] on an `authority` file, or with no removal
+    /// under way (none begun, finished, or forgotten by a reopen): the caller
+    /// runs the diff again. A SQLite error class otherwise, with the step
+    /// rolled back and the removal where it was.
+    pub fn remove_absent_next(&mut self) -> Result<AbsentStep> {
+        self.index_only("remove_absent")?;
+        let Some(scan) = self.absent.take() else {
+            return Err(StoreError::Refused(
+                "no removal by absence under way".into(),
+            ));
+        };
         let walking = self.walks.any();
-        let (out, st) = self.write("delete.commit", "delete.committed", |tx, st, f| {
-            let absent: Vec<String> = tx
-                .prepare(
-                    "SELECT id FROM shot WHERE changed_seq <= ?1 \
-                     AND id NOT IN (SELECT value FROM json_each(?2)) ORDER BY rid",
+        let run = self.write("delete.commit", "delete.committed", |tx, st, f| {
+            let rows: Vec<(i64, String, i64)> = tx
+                .prepare_cached(
+                    "SELECT rid, id, changed_seq FROM shot WHERE rid > ?1 ORDER BY rid LIMIT ?2",
                 )?
-                .query_map((since, &held), |r| r.get(0))?
+                .query_map((scan.after_rid, ABSENT_SCAN_ROWS), |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
                 .collect::<rusqlite::Result<_>>()?;
-            delete_in(tx, st, f, &absent, walking)
-        })?;
-        Ok(out.written(&st).change)
+            let mut done = i64::try_from(rows.len()).unwrap_or(i64::MAX) < ABSENT_SCAN_ROWS;
+            let mut last = scan.after_rid;
+            let mut absent = Vec::new();
+            for (rid, id, changed_seq) in rows {
+                if absent.len() == ABSENT_BATCH_ROWS {
+                    done = false;
+                    break;
+                }
+                last = rid;
+                if changed_seq <= scan.since && !scan.present.contains(&id) {
+                    absent.push(id);
+                }
+            }
+            let out = delete_in(tx, st, f, &absent, walking)?;
+            Ok::<_, Fail>((out, last, done))
+        });
+        match run {
+            Ok(((out, last, done), st)) => {
+                if !done {
+                    self.absent = Some(AbsentScan {
+                        after_rid: last,
+                        ..scan
+                    });
+                }
+                Ok(AbsentStep {
+                    change: out.written(&st).change,
+                    done,
+                })
+            }
+            Err(e) => {
+                self.absent = Some(scan);
+                Err(e)
+            }
+        }
     }
 
     /// After a full diff: every P3 seq up to `seq`, the `writeSeq` read

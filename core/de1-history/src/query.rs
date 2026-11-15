@@ -61,8 +61,9 @@ pub enum Dir {
     Desc,
 }
 
-/// The list's order: `key` in `dir`, then `completed_at` descending, then `id`
-/// descending. Ties are always newest first (SPEC §6).
+/// The list's order: `key`, then `completed_at`, then `id`, all in `dir`.
+/// Ties follow the sort: newest first under a descending sort, oldest first
+/// under an ascending one (SPEC §6), so one index serves both directions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Sort {
