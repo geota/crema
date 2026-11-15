@@ -475,6 +475,23 @@ impl World {
             .map_or(self.cup.grams, |s| s.true_net(self.cup.grams))
     }
 
+    /// The scale starts with an untared cup of `grams` on it, which it reads
+    /// until a tare zeroes it.
+    pub fn set_untared_cup(&mut self, grams: f32) {
+        if let Some(scale) = self.scale.as_mut() {
+            scale.set_untared_cup(grams);
+        }
+    }
+
+    /// The scale's write-to-effect tare latency, ms, for this scale and any
+    /// connected later.
+    pub fn set_tare_latency(&mut self, ms: u64) {
+        self.tare_latency_ms = ms;
+        if let Some(scale) = self.scale.as_mut() {
+            scale.tare_latency_ms = ms;
+        }
+    }
+
     /// The world's clock, ms.
     #[must_use]
     pub fn now_ms(&self) -> u64 {

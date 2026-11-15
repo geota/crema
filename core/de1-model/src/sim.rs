@@ -545,6 +545,12 @@ impl SimScale {
         self.bump_ends_at = None;
     }
 
+    /// An untared cup of `grams` on the platter from the start: the scale
+    /// reads it until a tare or a re-zero zeroes it.
+    pub fn set_untared_cup(&mut self, grams: f32) {
+        self.zero_g = -grams;
+    }
+
     /// A tare command landed at `now`.
     pub fn tare(&mut self, now: u64) {
         self.tare_at = Some(now + self.tare_latency_ms);
