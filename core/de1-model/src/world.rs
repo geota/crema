@@ -6,7 +6,7 @@ use de1_domain::{
     BrewDefaults, BrewOverrides, ConnectSweepSettings, CremaProfile, FlowAlgorithm, FlowEstimator,
     StopReason,
 };
-use de1_protocol::{MachineState, ShotSettings, SubState};
+use de1_protocol::{MachineState, ShotSample, ShotSettings, SubState};
 use std::time::Duration;
 
 use crate::invariants::{Invariant, Violation};
@@ -957,8 +957,10 @@ impl World {
                         self.outage_unsure();
                     } else if before.is_some_and(|b| self.de1.frame < b) {
                         // A new shot, begun during the outage: it owes nothing.
-                        // A mirror follows the hub, which saw it begin.
+                        // A mirror follows the hub, which saw it begin. The old
+                        // shot's frame memory ends with it.
                         self.replacing = true;
+                        self.last_sample_frame = None;
                         self.unseen = !self.read_only;
                         self.owed_last = None;
                         self.stops_in_episode = 0;
@@ -974,8 +976,10 @@ impl World {
                     // A lower frame on a link that's up: the shot heard is
                     // over, its end and the next flow's start lost. A new
                     // session, Unseen; a stop owed carries over (§3.3), and
-                    // with none, a leg may fire again.
+                    // with none, a leg may fire again. The old shot's frame
+                    // memory ends with it.
                     self.replacing = true;
+                    self.last_sample_frame = None;
                     self.unseen = !self.read_only;
                     if self.owed_last.is_none() {
                         self.stops_in_episode = 0;
@@ -984,11 +988,14 @@ impl World {
                     }
                 }
                 // The frame of the shot the core hears, as the core keeps it:
-                // any sample while an espresso is open and heard flowing, since
-                // a flow whose states were lost reads as its samples, and the
-                // DE1 reports the last shot's frame until flow begins. Before a
+                // any sample in flow by its own pressure and flow while an
+                // espresso is open and heard flowing, since a flow whose
+                // states were lost reads as its samples, and the DE1 reports
+                // the last shot's frame until flow begins. A 0-bar tail on
+                // the old frame after the flow ended doesn't count. Before a
                 // link's first state, a sample only raises it.
                 if self.open_mode == Some(ActiveMode::Espresso)
+                    && sample_in_flow(&sample)
                     && self
                         .heard_sub
                         .is_some_and(|s| !de1_domain::session::is_pre_flow(s))
@@ -1660,4 +1667,15 @@ impl World {
             _ => {}
         }
     }
+}
+
+/// A sample that proves flow by its own pressure and flow, as the core judges
+/// one: FinalHeating runs water through the group at 0 bar, and a flow's tail
+/// after its end does too (REVIEW-404 M3, REVIEW-438).
+fn sample_in_flow(sample: &[u8]) -> bool {
+    /// The core's pressure for a sample in flow, bar.
+    const SAMPLE_FLOW_BAR: f32 = 1.0;
+    ShotSample::parse(sample).is_ok_and(|s| {
+        s.group_flow >= de1_domain::stop::FLOW_PROOF_ML_S && s.group_pressure >= SAMPLE_FLOW_BAR
+    })
 }

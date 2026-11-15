@@ -982,6 +982,27 @@ fn a_lower_frame_on_return_is_a_new_shot_begun_unseen() {
     assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
 }
 
+/// The same after an outage's split: the shot begun during the outage has
+/// flowed, so its own Heating after it is the next shot, seen from its start.
+#[test]
+fn heating_after_an_outage_split_is_a_new_shot() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 5], 20);
+    let mut f = sample(100);
+    f[17] = 4;
+    core.on_notification(Source::De1ShotSample, &f, 500);
+    core.de1_link_lost();
+    core.on_notification(Source::De1State, &[4, 5], 10_000);
+    let mut f = sample(200);
+    f[17] = 1;
+    let o = core.on_notification(Source::De1ShotSample, &f, 10_100);
+    assert!(o.events.contains(&Event::ShotStarted), "split");
+    let o = core.on_notification(Source::De1State, &[4, 1], 12_000);
+    assert!(o.events.contains(&Event::ShotStarted), "a new shot");
+    assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
+}
+
 /// Outage evidence compares frames within one shot. A shot heard on frame 4,
 /// then a new one heard from Heating (flow can't go backwards, so a new
 /// session), then an outage before any sample of the new shot: the first
@@ -1123,6 +1144,29 @@ fn a_lower_frame_on_a_live_link_is_a_new_session() {
     assert_eq!(core.weight_stop_blocked_by(), Some("began-unseen"));
     assert_eq!(tares(&o), 0);
     assert!(state_writes(&o).is_empty(), "{:?}", o.commands);
+}
+
+/// The session a live split opens has flowed: the lower frame was a flow the
+/// states missed. So a pre-flow espresso state heard after it is a new shot
+/// from its start, as after any flow, and inherits none of the split
+/// session's pour or auto-stop clock (the model's seed 6: hot water heard as
+/// espresso samples, then the next espresso's Heating).
+#[test]
+fn heating_after_a_live_split_is_a_new_shot() {
+    let mut core = core_with_cup();
+    let t = shot_heard_to_frame_2(&mut core, 20_000);
+    let mut at = t + 5_000;
+    core.on_notification(Source::De1ShotSample, &frame_0(at), at);
+    for _ in 0..20 {
+        at += 250;
+        core.on_notification(Source::De1ShotSample, &frame_0(at), at);
+    }
+    assert!(core.pour_ml() > 1.0, "the split session poured");
+    let at = at + 1_000;
+    let o = core.on_notification(Source::De1State, &[4, 1], at);
+    assert!(o.events.contains(&Event::ShotStarted), "a new shot");
+    assert_eq!(core.pour_ml(), 0.0);
+    assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
 }
 
 /// The same frame, or a higher one, is the same shot.

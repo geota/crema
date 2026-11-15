@@ -82,6 +82,17 @@ pub struct AutoStopView {
     pub targets: StopTargets,
 }
 
+/// The session a lower frame opens: Unseen, and already flowed. The frame
+/// memory takes only samples in flow, and the DE1 holds a shot's frame until
+/// the next flow begins on frame 0, so a lower frame is a flow the states
+/// missed. A pre-flow espresso state after it is then a new shot, as after
+/// any flow (`Session::on_state`), not more of this one.
+fn split_session() -> Session {
+    let mut session = Session::open(ActiveMode::Espresso, Observed::Unseen);
+    session.flowed = true;
+    session
+}
+
 /// A link's first espresso state found a session flowing: is it the same
 /// shot? Decided on the first sample, within [`OUTAGE_SAMPLE_WAIT`].
 #[derive(Debug, Clone, Copy)]
@@ -480,7 +491,7 @@ impl CremaCore {
         let Some(old) = self.session.filter(|s| s.mode == ActiveMode::Espresso) else {
             return false;
         };
-        let mut session = Session::open(ActiveMode::Espresso, Observed::Unseen);
+        let mut session = split_session();
         if matches!(old.stop, StopState::Owed { .. }) {
             session.stop = old.stop;
         }
@@ -515,7 +526,7 @@ impl CremaCore {
                 .session
                 .map(|s| s.stop)
                 .filter(|s| self.samples_without_state && matches!(s, StopState::Owed { .. }));
-            let mut session = Session::open(ActiveMode::Espresso, Observed::Unseen);
+            let mut session = split_session();
             if let Some(stop) = owed {
                 session.stop = stop;
                 self.session = Some(session);

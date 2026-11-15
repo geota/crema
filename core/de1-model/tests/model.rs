@@ -200,6 +200,21 @@ fn case() -> impl Strategy<Value = Case> {
                 (unknown_pour, heating_ms),
                 pace,
             )| {
+                // A step or a bump on a slow scale is §3.5's known limit: the
+                // disturbance check assumes 5 to 10 Hz, so a paced case
+                // draws neither.
+                let ops = if pace.is_some() {
+                    ops.into_iter()
+                        .filter(|op| {
+                            !matches!(
+                                op,
+                                Op::Scale(ScaleMode::StepUp { .. } | ScaleMode::Bump { .. })
+                            )
+                        })
+                        .collect()
+                } else {
+                    ops
+                };
                 Case {
                     params: De1Params {
                         unknown_pour,
