@@ -149,11 +149,12 @@ import {
 	listRowsSnapshots,
 	readAllRowsSnapshots,
 	readRowsSnapshot,
+	snapshotLines,
 	snapshotWritten,
 	writeRowsSnapshot,
-	type SnapshotInfo,
-	type SnapshotRow
+	type SnapshotInfo
 } from './rows-snapshot';
+import { readProfiles, workerProfileReader, type WorkerLike } from './snapshot-profiles';
 import { summarize } from './summary';
 import { CurveArchive, defaultArchiveRoot, holdsCurve, type ArchiveRoot } from './curve-archive';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
@@ -281,6 +282,8 @@ export interface HistoryStoreOptions {
 	locks?: LockManagerLike | null;
 	channel?: (() => ChannelLike | null) | null;
 	snapshotRoot?: () => Promise<FileSystemDirectoryHandle | undefined>;
+	/** Starts the worker the daily copy reads profiles in; null reads them here. A worker by default, with the browser's own database. */
+	snapshotWorker?: (() => WorkerLike | null) | null;
 	/** Where the curve archive lives (the private file system by default); null keeps none. */
 	archiveRoot?: ArchiveRoot | null;
 	/** How long after a load the archive's catch-up starts. */
@@ -311,6 +314,15 @@ function defaultChannel(): ChannelLike | null {
 	} catch {
 		return null;
 	}
+}
+
+/** The worker that reads the daily copy's profiles off the main thread (#421). */
+function defaultSnapshotWorker(): WorkerLike | null {
+	if (typeof Worker === 'undefined') return null;
+	return new Worker(new URL('./snapshot-profiles.worker.ts', import.meta.url), {
+		type: 'module',
+		name: 'crema-snapshot-profiles'
+	}) as unknown as WorkerLike;
 }
 
 function defaultLocks(): LockManagerLike | null {
@@ -1899,13 +1911,15 @@ export class HistoryStore {
 				// A day's copy is written once: another tab, or this one before a
 				// recovery, may have written today's.
 				if (await snapshotWritten(now, this.opts.snapshotRoot)) return;
-				const rows = await db.allRows();
-				// The as-run profile of each row too, so a recovery keeps them.
-				const lines: SnapshotRow[] = [];
-				for (let i = 0; i < rows.length; i += SNAPSHOT_CHUNK) {
-					const part = rows.slice(i, i + SNAPSHOT_CHUNK);
-					const details = await db.detailsOf(part.map((r) => r.id));
-					for (const r of part) lines.push({ ...r, profile: details.get(r.id)?.profile ?? null });
+				// The profiles off the main thread: in the store, each comes with its curve.
+				const make =
+					this.opts.snapshotWorker !== undefined ? this.opts.snapshotWorker : this.opts.idb === undefined ? defaultSnapshotWorker : null;
+				const reader = make ? workerProfileReader(make, (ids) => readProfiles(db, ids)) : null;
+				let lines;
+				try {
+					lines = await snapshotLines(db, reader?.profilesOf);
+				} finally {
+					reader?.close();
 				}
 				await writeRowsSnapshot(lines, now, this.opts.snapshotRoot, this.opts.locks === undefined ? undefined : this.opts.locks);
 			} catch {

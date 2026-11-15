@@ -1,7 +1,8 @@
 /**
  * #420 FC3-N2: the daily copy writes, checks and reads back in small
  * yielding steps, so a big history makes no long task: at most
- * SNAPSHOT_CHUNK rows, or 64 KB inflated, between yields.
+ * SNAPSHOT_CHUNK rows, or about 64 KB inflated, between yields. #421: the
+ * 64 KB is counted as it comes out of the gzip, not as it goes in.
  */
 import { expect, it } from 'vitest';
 import { realShot } from '#lib/testing/real-shots.js';
@@ -17,6 +18,9 @@ import {
 } from './rows-snapshot';
 import { memoryFs } from './archive-test-kit';
 import { initTestWasm } from '#lib/testing/test-init.js';
+
+/** 64 KB, and the one 512-byte slice that takes a step past it. */
+const STEP_BYTES = 128 * 1024;
 
 it('2,000 rows are written, verified, pruned and read back in steps of at most 100 rows and 64 KB', async () => {
 	await initTestWasm();
@@ -36,7 +40,26 @@ it('2,000 rows are written, verified, pruned and read back in steps of at most 1
 	const { maxRows, maxBytes } = snapshotStepsForTest();
 	expect(SNAPSHOT_CHUNK).toBeLessThanOrEqual(100);
 	expect(maxRows).toBeLessThanOrEqual(SNAPSHOT_CHUNK);
-	expect(maxBytes).toBeLessThanOrEqual(64 * 1024);
+	expect(maxBytes).toBeLessThanOrEqual(STEP_BYTES);
 	expect(maxRows).toBeGreaterThan(0);
 	expect(fs.copyBytes(), 'past one inflate step').toBeGreaterThan(2 * 64 * 1024);
+});
+
+it('a copy that inflates 100 times over is read back in steps of about 64 KB out, not in (#421)', async () => {
+	await initTestWasm();
+	const fs = memoryFs();
+	const one = realShot(1, []);
+	const summary = summarize(one);
+	// One profile and one note for every row, as a real history mostly has.
+	const rows: SnapshotRow[] = Array.from({ length: 2_000 }, (_, i) => ({ ...rowOf({ ...one, id: `shot:${i}` }, summary), profile: one.profile }));
+	expect(await writeRowsSnapshot(rows, Date.now(), fs.fsRoot, null)).toBe(true);
+	const text = rows.reduce((n, r) => n + JSON.stringify(r).length + 1, 0);
+	expect(text / fs.copyBytes(), 'inflates many times over').toBeGreaterThan(50);
+	expect(fs.copyBytes(), 'past one slice').toBeGreaterThan(4 * 512);
+	resetSnapshotStepsForTest();
+	const back = await readRowsSnapshot(fs.fsRoot);
+	expect(back?.rows).toStrictEqual(JSON.parse(JSON.stringify(rows)));
+	const { maxBytes } = snapshotStepsForTest();
+	expect(maxBytes).toBeGreaterThan(0);
+	expect(maxBytes).toBeLessThanOrEqual(STEP_BYTES);
 });
