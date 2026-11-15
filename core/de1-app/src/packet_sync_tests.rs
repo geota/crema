@@ -693,9 +693,20 @@ fn ghc_hot_water_ratio_stops_at_target_weight() {
     assert!(tared(&out), "auto-tare on the group-head start");
     assert_eq!(core.hot_water_stop_target_g(), Some(150.0));
     assert!(!stopped_by_weight(&weight(&mut core, 100, 2_000)));
-    // 149 g at a brisk rate: the sensor-lag lead crosses 150.
-    let out = weight(&mut core, 149, 4_000);
-    assert!(stopped_by_weight(&out));
+    // Then 10 Hz at a brisk 24.5 g/s, up to 149 g: the sensor-lag lead
+    // crosses 150, about 0.5 s × 24.5 g/s early. Live readings: 49 g in one
+    // return 2 s on is over the step band, so the weight leg's flow estimate
+    // would start again from it (#412).
+    let stop = (2_100..=4_000).step_by(100).find_map(|t| {
+        let centigrams = 10_000 + (t - 2_000) * 49 / 20;
+        stopped_by_weight(&core.on_notification(
+            Source::ScaleWeight,
+            &bookoo(centigrams),
+            u64::from(t),
+        ))
+        .then_some(centigrams)
+    });
+    assert!(stop.is_some_and(|cg| cg < 14_100), "stopped at {stop:?} cg");
 }
 
 /// AC-HW29: time mode arms no weight stop, whoever starts it.

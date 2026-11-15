@@ -208,6 +208,202 @@ fn a_returning_scale_within_reach_is_adopted() {
     near_target(stop, StopReason::Weight);
 }
 
+/// #412: a scale that read 0 g while the cup filled, before the gate, then
+/// went quiet for 1.6 s, comes back on the truth near a 60 g target. `Tared`
+/// adopts it, and the flow estimate starts again from it: a slope across the
+/// gap from the 0 g readings would make the drip lead stop the shot early.
+#[test]
+fn a_returning_scale_restarts_the_flow_estimate() {
+    let mut core = espresso(60.0);
+    let mut pour = Pour::from(100, 0.0);
+    let mut gap = 0..0;
+    let stop = run(&mut core, &mut pour, 90_000, |t, cup| {
+        if gap.is_empty() && cup >= 48.0 {
+            gap = t..t + 1_600;
+        }
+        let reading = if gap.contains(&t) {
+            None
+        } else if gap.is_empty() {
+            Some(0.0)
+        } else {
+            Some(cup)
+        };
+        Step {
+            sample: true,
+            reading,
+        }
+    });
+    let (reason, cup) = stop.expect("a stop");
+    assert_eq!(reason, StopReason::Weight, "stopped at a true {cup} g");
+    assert!(
+        (57.0..63.0).contains(&cup),
+        "stopped at a true {cup} g of 60"
+    );
+}
+
+/// Readings of the true cup on `on(t)` while `cup < lose_at` g, then none.
+fn scheduled(on: impl Fn(u64) -> bool, lose_at: f32) -> impl FnMut(u64, f32) -> Step {
+    let mut lost = false;
+    move |t, cup| {
+        lost |= cup >= lose_at;
+        Step {
+            sample: true,
+            reading: (!lost && on(t)).then_some(cup),
+        }
+    }
+}
+
+/// REVIEW-414 M1: a scale that reports every second, each reading a return,
+/// still opens the gate, so when it's lost after the gate the estimate stops
+/// the shot near target, not the 114 ml backstop.
+#[test]
+fn a_1_hz_scale_lost_after_the_gate_stops_on_estimate() {
+    let mut core = espresso(36.0);
+    let mut pour = Pour::from(100, 10.0);
+    let stop = run(
+        &mut core,
+        &mut pour,
+        90_000,
+        scheduled(|t| t % 1_000 == 0, 25.0),
+    );
+    near_target(stop, StopReason::EstimatedWeight);
+}
+
+/// REVIEW-414 M1: the same for a scale flapping on 1 s and off 1 s, the
+/// model's `Flap { period_ms: 2000 }`.
+#[test]
+fn a_flapping_scale_lost_after_the_gate_stops_on_estimate() {
+    let mut core = espresso(36.0);
+    let mut pour = Pour::from(100, 10.0);
+    let stop = run(
+        &mut core,
+        &mut pour,
+        90_000,
+        scheduled(|t| t % 2_000 >= 1_000, 25.0),
+    );
+    near_target(stop, StopReason::EstimatedWeight);
+}
+
+/// REVIEW-414 S1: an honest scale that reports every second steps 2.5 g a
+/// reading, a pour's step, so the weight leg keeps its flow history and its
+/// lead: it stops by weight under 37 g, not 2.5 g over.
+#[test]
+fn a_1_hz_scale_keeps_its_lead() {
+    let mut core = espresso(36.0);
+    let mut pour = Pour::from(100, 10.0);
+    let stop = run(
+        &mut core,
+        &mut pour,
+        90_000,
+        scheduled(|t| t % 1_000 == 800, f32::INFINITY),
+    );
+    let (reason, cup) = stop.expect("a stop");
+    assert_eq!(reason, StopReason::Weight, "stopped at a true {cup} g");
+    assert!((33.0..37.0).contains(&cup), "stopped at a true {cup} g");
+}
+
+/// #412, under the band: a scale that read 0 g while the cup filled, then went
+/// quiet for 2 s, comes back on about a true 27.8 g, just under the step
+/// band's 28.2 g for that gap. The flow before the gap (0) never predicted
+/// that step, so the weight leg's estimate starts again from it and stops
+/// near 36 g. On the band alone it stopped at a true 30.1 g.
+#[test]
+fn a_lie_under_the_band_restarts_the_flow_estimate() {
+    let mut core = espresso(36.0);
+    let mut pour = Pour::from(100, 0.0);
+    let mut gap = 0..0;
+    let stop = run(&mut core, &mut pour, 90_000, |t, cup| {
+        if gap.is_empty() && cup >= 22.7 {
+            gap = t..t + 2_000;
+        }
+        let reading = if gap.contains(&t) {
+            None
+        } else if gap.is_empty() {
+            Some(0.0)
+        } else {
+            Some(cup)
+        };
+        Step {
+            sample: true,
+            reading,
+        }
+    });
+    near_target(stop, StopReason::Weight);
+}
+
+/// Like [`run`], at `flow` ml/s, with a reading of the true cup whenever
+/// `on(t)`.
+fn run_at_flow(
+    core: &mut CremaCore,
+    flow: f32,
+    headspace_ml: f32,
+    on: impl Fn(u64) -> bool,
+) -> Option<(StopReason, f32)> {
+    let mut poured_ml = 0.0;
+    let mut t = 100;
+    while t < 90_000 {
+        t += 100;
+        poured_ml += flow * 0.1;
+        let cup = (poured_ml - headspace_ml).max(0.0);
+        let mut s = sample((t / 8) as u16);
+        s[4..6].copy_from_slice(&((flow * 4096.0) as u16).to_be_bytes());
+        let mut reasons = stop_reasons(&core.on_notification(Source::De1ShotSample, &s, t));
+        if on(t) {
+            let o = core.on_notification(Source::ScaleWeight, &bookoo(cup), t + 1);
+            reasons.extend(stop_reasons(&o));
+        }
+        reasons.extend(stop_reasons(&core.on_tick(t + 2)));
+        if let Some(reason) = reasons.first() {
+            return Some((*reason, cup));
+        }
+    }
+    None
+}
+
+/// REVIEW-414 S1: a scale flapping 200 ms on and 1.1 s off makes two
+/// readings an on-window, and each first one ends a long gap. Its steps
+/// follow the flow before them, so the weight leg keeps its history and its
+/// lead: a 6 ml/s hot-water pour to 120 g stops by 121 g, where restarting
+/// on every long gap stopped it at 123.6 g.
+#[test]
+fn a_scale_flapping_two_readings_at_a_time_keeps_its_lead() {
+    let mut core = hot_water_core();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::ScaleWeight, &bookoo(0.0), 20);
+    core.on_notification(Source::De1State, &[6, 5], 100);
+    let (reason, cup) = run_at_flow(&mut core, 6.0, 0.0, |t| t % 1_300 < 200).expect("a stop");
+    assert!(
+        (115.0..121.0).contains(&cup),
+        "{reason:?} at a true {cup} g"
+    );
+}
+
+/// REVIEW-414 N3: one honest gap on a 10 Hz scale, starting 8 g short of the
+/// target, stops the shot near it: by weight, or on the estimate when the
+/// gap outlasts the stale window near target.
+#[test]
+fn an_honest_gap_near_target_stops_by_weight() {
+    for gap_ms in [1_100, 1_600, 3_000] {
+        let mut core = espresso(36.0);
+        let mut pour = Pour::from(100, 10.0);
+        let mut gap = 0..0;
+        let stop = run(&mut core, &mut pour, 90_000, |t, cup| {
+            if gap.is_empty() && cup >= 28.0 {
+                gap = t..t + gap_ms;
+            }
+            Step {
+                sample: true,
+                reading: (!gap.contains(&t)).then_some(cup),
+            }
+        });
+        let (reason, cup) = stop.expect("a stop");
+        assert!(
+            (33.0..39.0).contains(&cup),
+            "a {gap_ms} ms gap: {reason:?} at a true {cup} g"
+        );
+    }
+}
+
 /// P11, and mutation check 11: a returning scale reading far over what the
 /// cup could hold (+250 g on return) is refused, and the estimate finishes.
 #[test]

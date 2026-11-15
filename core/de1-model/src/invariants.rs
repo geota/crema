@@ -50,6 +50,11 @@ pub enum Invariant {
     /// A flowing espresso or hot-water session always has an `AutoStop`,
     /// including after `Unknown`. Steam and flush have no app legs.
     I21,
+    /// No `Weight` or `EstimatedWeight` espresso stop while the true cup
+    /// weight is over target plus 6 g, on an honest session: the scale
+    /// healthy or flapping, connected, the DE1 heard throughout, and the
+    /// target unchanged, since the session opened (REVIEW-414 S3).
+    I22,
 }
 
 /// Whether a test failure on this invariant means a regression.
@@ -64,7 +69,7 @@ pub enum Status {
 
 impl Invariant {
     /// Every invariant, for reports.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::I1,
         Self::I2,
         Self::I3,
@@ -79,6 +84,7 @@ impl Invariant {
         Self::I17,
         Self::I20,
         Self::I21,
+        Self::I22,
     ];
 
     /// Where this invariant stands. I8, I12, I14 to I16, I18 and I19 need
@@ -99,7 +105,8 @@ impl Invariant {
             | Self::I13
             | Self::I17
             | Self::I20
-            | Self::I21 => Status::Enforced,
+            | Self::I21
+            | Self::I22 => Status::Enforced,
         }
     }
 }

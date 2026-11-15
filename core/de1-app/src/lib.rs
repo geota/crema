@@ -4184,6 +4184,15 @@ impl CremaCore {
         }
         if std::mem::take(&mut self.scale_returning) {
             self.check_returning_scale(net_weight);
+            // A step across the gap no pour could make isn't a flow: the
+            // weight leg's estimate starts again from this reading, or a
+            // scale that read 0 meanwhile makes the drip lead stop the shot
+            // early (#412). The core's own estimate carries on: it feeds the
+            // trust gate, which a restart on every reading of a slow scale
+            // would keep shut.
+            if let Some(flow_stop) = self.auto_stop.as_mut() {
+                flow_stop.stop.on_return(net_weight, now);
+            }
         }
         match verdict {
             WeightVerdict::Reject => return,
@@ -10077,12 +10086,27 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::StopTriggered { .. }))
         );
-        // 149 g at a brisk pour rate: the lag projection crosses 150 → stop.
-        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(14_900), 4_000);
-        assert!(out.events.contains(&Event::StopTriggered {
-            reason: StopReason::Weight,
-        }));
-        assert!(out.commands.iter().any(|c| matches!(c, Command::Stop)));
+        // Then 10 Hz at a brisk 24.5 g/s, up to 149 g: the lag projection
+        // crosses 150 → stop, about 0.5 s × 24.5 g/s early. Live readings:
+        // 49 g in one return 2 s on is over the step band, so the weight
+        // leg's flow estimate would start again from it (#412).
+        let mut stop = None;
+        for t in (2_100..=4_000).step_by(100) {
+            let centigrams = 10_000 + (t - 2_000) * 49 / 20;
+            let out = core.on_notification(
+                Source::ScaleWeight,
+                &bookoo_packet(centigrams),
+                u64::from(t),
+            );
+            if out.events.contains(&Event::StopTriggered {
+                reason: StopReason::Weight,
+            }) {
+                assert!(out.commands.iter().any(|c| matches!(c, Command::Stop)));
+                stop = Some(centigrams);
+                break;
+            }
+        }
+        assert!(stop.is_some_and(|cg| cg < 14_100), "stopped at {stop:?} cg");
         // Fired once — later readings must not re-stop.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(15_200), 4_500);
         assert!(
@@ -10090,6 +10114,35 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::StopTriggered { .. }))
         );
+    }
+
+    /// REVIEW-414 S2: a scale that reports every second, so each reading is a
+    /// return, at 6 g/s. A 6 g step is a pour's, so the weight leg keeps its
+    /// flow history, and the lead stops the pour on the 148 g reading rather
+    /// than the 154 g one after it.
+    #[test]
+    fn hot_water_by_weight_keeps_its_lead_on_a_1_hz_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 0);
+        set_packet(&mut core, hotwater_settings(150.0));
+        let _ = core.on_notification(Source::De1State, &[6, 5], 0);
+        let mut stop = None;
+        for k in 0..10 {
+            let centigrams = 10_000 + k * 600;
+            let out = core.on_notification(
+                Source::ScaleWeight,
+                &bookoo_packet(centigrams),
+                2_000 + u64::from(k) * 1_000,
+            );
+            if out.events.contains(&Event::StopTriggered {
+                reason: StopReason::Weight,
+            }) {
+                stop = Some(centigrams);
+                break;
+            }
+        }
+        assert_eq!(stop, Some(14_800));
     }
 
     #[test]
