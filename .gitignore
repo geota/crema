@@ -56,3 +56,7 @@ docs/
 
 # Local DE1/BLE traffic captures — large JSONL replays, dev artefact only.
 captures/
+
+# Local dev tool output: lychee cache (`just links`), cargo-mutants reports (`just mutants`).
+.lycheecache
+mutants.out*/

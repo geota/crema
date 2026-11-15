@@ -1,0 +1,8 @@
+# Markdown lint and format (rumdl): `just docs` checks, `just docs-fix` applies the safe fixes.
+[global]
+# Line length is not enforced: prose is wrapped by hand, or not at all.
+disable = ["MD013"]
+
+[per-file-ignores]
+# The README opens with a centred HTML header (icon, title, screenshots) before its first heading.
+"README.md" = ["MD033", "MD041"]

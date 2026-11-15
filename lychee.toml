@@ -1,0 +1,8 @@
+# Link checks (lychee, `just links`): web URLs and #anchors; rumdl already checks links to local files.
+include_fragments = "full"
+no_progress = true
+cache = true
+max_cache_age = "1d"
+# Only docs and store-listing text: Android XML has no links lychee can read, and
+# web/src/app.html links through SvelteKit's %sveltekit.assets% placeholder.
+extensions = ["md", "txt"]
