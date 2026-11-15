@@ -1801,8 +1801,13 @@
 		gap: 18px;
 		align-self: start;
 	}
+	/* Blocks and actions wrap, by their content (#423): beside the actions in
+	   a narrow detail (the 1280 px split, or large text) the blocks shrank to
+	   a few px and their text drew over each other. Now the actions drop under
+	   the blocks, and the bean block under the profile, when there's no room. */
 	.hi-detail-head {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: flex-end;
 		justify-content: space-between;
 		gap: 16px;
@@ -1813,17 +1818,20 @@
 	   the anatomy (web-kit.css) — only the layout shell lives here. */
 	.hi-head-blocks {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: flex-start;
-		gap: 28px;
+		gap: 12px 28px;
 		min-width: 0;
 		flex: 1 1 auto;
 	}
+	/* Never squeezed beside the blocks (the head wraps first); on a line of
+	   their own they shrink to it, and the buttons wrap. */
 	.hi-detail-actions {
 		display: flex;
 		gap: 8px;
-		flex-shrink: 0;
+		flex: 0 1 auto;
+		min-width: 0;
 		flex-wrap: wrap;
-		justify-content: flex-end;
 	}
 
 	/* .st-btn / .st-btn-secondary come from the global settings kit
@@ -2388,17 +2396,22 @@
 			pointer-events: none;
 			transform: translateX(-50%);
 		}
+		/* Four to a row, wrapping by content (#423): a tile is never narrower
+		   than its figure, so large text puts fewer on a row instead of
+		   drawing one figure over the next. */
 		.pshot-tiles {
-			display: grid;
-			grid-template-columns: repeat(4, minmax(0, 1fr));
+			display: flex;
+			flex-wrap: wrap;
 			gap: 8px;
 		}
 		.pshot-tile {
+			flex: 1 0 calc((100% - 24px) / 4);
 			display: flex;
 			flex-direction: column;
 			align-items: center;
 			gap: 2px;
-			min-width: 0;
+			/* Its automatic minimum is its content, capped at the row. */
+			max-width: 100%;
 			padding: 11px 2px;
 			border-radius: 12px;
 			background: var(--bg-surface);
@@ -2571,23 +2584,27 @@
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 			gap: 8px;
 		}
+		/* Side by side while both labels fit; one above the other when large
+		   text makes them too wide (#423). */
 		.pshot-foot {
 			position: sticky;
 			bottom: 0;
 			z-index: 2;
 			display: flex;
+			flex-wrap: wrap;
 			gap: 10px;
 			padding: 10px var(--page-pad-x);
 			background: var(--bg-page);
 		}
 		.pshot-btn {
-			flex: 1 1 0;
+			flex: 1 0 0;
 			display: inline-flex;
 			align-items: center;
 			justify-content: center;
 			gap: 8px;
-			min-width: 0;
-			height: 48px;
+			/* Its automatic minimum is its content, capped at the row. */
+			max-width: 100%;
+			min-height: 48px;
 			padding: 0 10px;
 			border: 0;
 			border-radius: 999px;

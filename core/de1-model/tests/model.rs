@@ -56,6 +56,48 @@ fn scale_mode() -> impl Strategy<Value = ScaleMode> {
     ]
 }
 
+/// A case's scale pace: an honest slow or pulsing scale from the start, and
+/// perhaps a point in the pour where it stalls for good.
+#[derive(Debug, Clone, Copy)]
+struct Pace {
+    mode: ScaleMode,
+    stall_at_g: Option<f32>,
+}
+
+/// The scale's own pace for a whole case, set before its first op: 10 Hz, or
+/// an honest slow or pulsing scale (REVIEW-414 M1). Every reading of a scale
+/// at 1 s or slower is a return, as the core sees it, and so is every
+/// on-window of a pulse under about 1.1 s. A paced scale may stall for good
+/// partway into the pour, before the gate or after it, which is M1's lost
+/// scale. 10 Hz draws nothing more, so 16 of the 20 seeds committed before
+/// it keep their cases; the other 4 are pinned as explicit cases in
+/// `committed_cases_the_pace_moved`.
+///
+/// The slow paces are there to reproduce #414's first-head bug class (M1),
+/// which needs every reading or on-window to be a return: 1 s to 1.5 s is
+/// enough for that. Readings and off-windows stop at 1.5 s because a steady
+/// 1.5 to 2 s cadence doesn't come from a real scale, which reports at 5 to
+/// 10 Hz, so the cap stays.
+fn scale_pace() -> impl Strategy<Value = Option<Pace>> {
+    let stall_at_g = prop_oneof![Just(None), (3u8..=45).prop_map(|g| Some(f32::from(g)))];
+    prop_oneof![
+        4 => Just(None),
+        1 => ((10u64..=15), stall_at_g.clone()).prop_map(|(t, stall_at_g)| Some(Pace {
+            mode: ScaleMode::Sparse { every_ms: t * 100 },
+            stall_at_g,
+        })),
+        1 => ((1u64..=10, 10u64..=15), stall_at_g).prop_map(|((on, off), stall_at_g)| {
+            Some(Pace {
+                mode: ScaleMode::Pulse {
+                    on_ms: on * 100,
+                    off_ms: off * 100,
+                },
+                stall_at_g,
+            })
+        }),
+    ]
+}
+
 fn flow_mode() -> impl Strategy<Value = MachineState> {
     prop_oneof![
         4 => Just(MachineState::Espresso),
@@ -123,6 +165,8 @@ struct Case {
     lane_timeout_ms: u64,
     read_only: bool,
     pre_flush: bool,
+    /// The scale's pace from the start, if not 10 Hz.
+    pace: Option<Pace>,
     ops: Vec<Op>,
 }
 
@@ -139,6 +183,7 @@ fn case() -> impl Strategy<Value = Case> {
             prop_oneof![4 => Just(false), 1 => Just(true)],
             prop_oneof![3 => Just(1_000u64), 1 => Just(6_000u64)],
         ),
+        scale_pace(),
     )
         .prop_map(
             |(
@@ -149,6 +194,7 @@ fn case() -> impl Strategy<Value = Case> {
                 pre_flush,
                 ops,
                 (unknown_pour, heating_ms),
+                pace,
             )| {
                 Case {
                     params: De1Params {
@@ -160,6 +206,7 @@ fn case() -> impl Strategy<Value = Case> {
                     lane_timeout_ms,
                     read_only,
                     pre_flush,
+                    pace,
                     ops,
                 }
             },
@@ -174,6 +221,12 @@ fn run(case: &Case) -> World {
         case.read_only,
         case.pre_flush,
     );
+    if let Some(pace) = case.pace {
+        world.apply(&Op::Scale(pace.mode));
+        if let Some(grams) = pace.stall_at_g {
+            world.apply(&Op::StallAt { grams });
+        }
+    }
     for op in &case.ops {
         world.apply(op);
     }
@@ -222,6 +275,7 @@ fn the_generator_reaches_what_the_invariants_watch() {
         total.estimated_stops += c.estimated_stops;
         total.unseen_loads += c.unseen_loads;
         total.volume_stops += c.volume_stops;
+        total.lost_judged += c.lost_judged;
         total.retries += c.retries;
         total.not_honoured += c.not_honoured;
         total.read_states += c.read_states;
@@ -246,6 +300,7 @@ fn the_generator_reaches_what_the_invariants_watch() {
         ("weight stops", total.weight_stops),
         ("estimated stops", total.estimated_stops),
         ("volume stops", total.volume_stops),
+        ("lost scales judged", total.lost_judged),
         ("retries", total.retries),
         ("not honoured", total.not_honoured),
         ("read states", total.read_states),
@@ -1250,6 +1305,186 @@ fn a_scale_connected_mid_shot_with_a_hand_on_it_is_the_known_limit() {
     world.apply(&Op::Advance { ms: 90_000 });
     assert_eq!(world.coverage.unseen_loads, 1);
     assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// The 4 committed seeds whose cases the scale pace moved, as the shrunk cases
+/// their lines record: each still runs the shape it was added for.
+#[test]
+fn committed_cases_the_pace_moved() {
+    let base = Case {
+        params: De1Params {
+            preinfusion: false,
+            ending: Ending::None,
+            idle_ignored: 0,
+            two_tap_steam: false,
+            unknown_pour: false,
+            heating_ms: 1_000,
+        },
+        headspace_ml: 0.0,
+        lane_timeout_ms: 5_000,
+        read_only: false,
+        pre_flush: false,
+        pace: None,
+        ops: Vec::new(),
+    };
+    let cases = [
+        // 4a044bc1, #373: a new shot is never stopped by the last one's owed
+        // stop.
+        Case {
+            ops: vec![
+                Op::GroupHead(MachineState::Espresso),
+                Op::LinkDown { ms: 5_100 },
+                Op::Advance { ms: 9_900 },
+                Op::LoseStates(1),
+                Op::Advance { ms: 24_800 },
+                Op::Advance { ms: 26_800 },
+                Op::GroupHead(MachineState::Espresso),
+            ],
+            ..base.clone()
+        },
+        // 2d86449a, #388: a 7 g hand on a scale back from a stall, before
+        // water reaches the cup.
+        Case {
+            headspace_ml: 50.0,
+            ops: vec![
+                Op::Advance { ms: 100 },
+                Op::Advance { ms: 100 },
+                Op::AppStart { yield_g: 18.0 },
+                Op::Advance { ms: 500 },
+                Op::Scale(ScaleMode::Stall),
+                Op::Advance { ms: 5_900 },
+                Op::Scale(ScaleMode::Bump {
+                    grams: 7.0,
+                    ms: 300,
+                }),
+                Op::Advance { ms: 100 },
+            ],
+            ..base.clone()
+        },
+        // 09fe8463, #388: a re-zero in a second shot after a dialled 60 g.
+        Case {
+            ops: vec![
+                Op::UserStop,
+                Op::GroupHead(MachineState::Espresso),
+                Op::Advance { ms: 3_000 },
+                Op::Dial(Some(60.0)),
+                Op::Advance { ms: 10_500 },
+                Op::Advance { ms: 3_100 },
+                Op::GroupHead(MachineState::Espresso),
+                Op::Advance { ms: 5_000 },
+                Op::Scale(ScaleMode::Rezero),
+                Op::Advance { ms: 100 },
+            ],
+            ..base.clone()
+        },
+        // 76e298a3, #388: a re-zero as a flush follows lost states.
+        Case {
+            pre_flush: true,
+            ops: vec![
+                Op::AppStart { yield_g: 18.0 },
+                Op::Advance { ms: 21_000 },
+                Op::LoseStates(2),
+                Op::AppRequest(MachineState::HotWaterRinse),
+                Op::Scale(ScaleMode::Rezero),
+            ],
+            ..base
+        },
+    ];
+    for case in &cases {
+        let world = run(case);
+        let broken: Vec<String> = world
+            .violations
+            .iter()
+            .filter(|v| v.invariant.status() == Status::Enforced)
+            .map(ToString::to_string)
+            .collect();
+        assert!(broken.is_empty(), "{:?}: {broken:#?}", case.ops);
+    }
+}
+
+/// An espresso of `target_g` on a scale at `pace`, lost for good at a true
+/// `lost_at_g` if given, run to its end.
+fn paced_shot(pace: ScaleMode, target_g: f32, headspace_ml: f32, lost_at_g: Option<f32>) -> World {
+    let mut world = World::new(De1Params::default(), headspace_ml, 5_000, false, false);
+    world.apply(&Op::Scale(pace));
+    world.apply(&Op::SetProfileTarget(Some(target_g)));
+    if let Some(grams) = lost_at_g {
+        world.apply(&Op::StallAt { grams });
+    }
+    world.apply(&Op::GroupHead(MachineState::Espresso));
+    world.apply(&Op::Advance { ms: 120_000 });
+    world
+}
+
+/// REVIEW-414 M1: on a slow or pulsing scale, every reading is a return. A
+/// core that restarted its own flow estimate on each one never opened the
+/// gate, so a scale lost later left the session `Blind`, and a 36 g shot ran
+/// to the 114 ml backstop (on 034f33d5). I22 judges that session: an honest
+/// scale lost for good after the gate must be stopped near target by the
+/// estimate, and with no stop at all a 60 g shot runs on to its frames' end,
+/// which I22 judges too.
+#[test]
+fn a_slow_scale_lost_after_the_gate_stops_on_the_estimate() {
+    let paces = [
+        ScaleMode::Healthy,
+        ScaleMode::Sparse { every_ms: 1_000 },
+        ScaleMode::Sparse { every_ms: 1_100 },
+        ScaleMode::Sparse { every_ms: 1_500 },
+        ScaleMode::Flap { period_ms: 2_000 },
+        ScaleMode::Pulse {
+            on_ms: 500,
+            off_ms: 1_100,
+        },
+        ScaleMode::Pulse {
+            on_ms: 1_000,
+            off_ms: 1_100,
+        },
+        ScaleMode::Pulse {
+            on_ms: 200,
+            off_ms: 1_100,
+        },
+    ];
+    for pace in paces {
+        for (target, lost_at) in [(36.0, 25.0), (60.0, 40.0)] {
+            for headspace in [0.0, 50.0] {
+                let world = paced_shot(pace, target, headspace, Some(lost_at));
+                let what = format!("{pace:?}, {target} g, {headspace} ml, lost at {lost_at} g");
+                assert_eq!(world.coverage.lost_judged, 1, "{what}: judged");
+                assert_eq!(world.coverage.estimated_stops, 1, "{what}: on estimate");
+                assert!(
+                    world.violations.is_empty(),
+                    "{what}: {:?}",
+                    world.violations
+                );
+            }
+        }
+    }
+}
+
+/// The same paces, honest to the end: each stops within I22's 6 g.
+#[test]
+fn a_slow_scale_stops_near_target() {
+    for pace in [
+        ScaleMode::Sparse { every_ms: 1_000 },
+        ScaleMode::Sparse { every_ms: 1_500 },
+        ScaleMode::Pulse {
+            on_ms: 500,
+            off_ms: 1_100,
+        },
+    ] {
+        for target in [18.0, 36.0, 60.0] {
+            for headspace in [0.0, 50.0] {
+                let world = paced_shot(pace, target, headspace, None);
+                let what = format!("{pace:?}, {target} g, {headspace} ml");
+                assert_eq!(world.coverage.weight_stops, 1, "{what}: a weight stop");
+                assert!(
+                    world.violations.is_empty(),
+                    "{what}: {:?}",
+                    world.violations
+                );
+            }
+        }
+    }
 }
 
 /// No preinfusion and no `Ending`: the reviews' probe machine.

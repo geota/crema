@@ -249,8 +249,10 @@ export async function prepareBackupFile(
 			if (!directory) continue;
 			try {
 				return await prepareZip(file, name, limits, directory.entries, true);
-			} catch {
-				// Not this one: the next, or the first refusal.
+			} catch (err) {
+				// A read refusal: not this one, so the next, or the first refusal.
+				// Anything else isn't the candidate's to explain (as Android, #425).
+				if (!(err instanceof BackupReadError)) throw err;
 			}
 		}
 		throw e;

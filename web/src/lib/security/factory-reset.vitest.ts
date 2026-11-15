@@ -85,7 +85,12 @@ describe('factoryResetLocalData', () => {
 			}
 		} as unknown as FileSystemDirectoryHandle;
 		const result = await factoryResetLocalData({ privateFiles: async () => root });
-		expect(result.databasesFailed).toEqual(['crema-history-snapshot', 'crema-history-curves']);
+		expect(result.databasesFailed).toEqual([
+			'crema-history-snapshot',
+			'crema-history-curves',
+			'.crema-history-index',
+			'.crema-history-db'
+		]);
 	});
 
 	it('leaves no Crema IndexedDB database and no crema.* storage key behind', async () => {

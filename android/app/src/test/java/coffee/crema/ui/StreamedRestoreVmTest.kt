@@ -479,5 +479,198 @@ class StreamedRestoreVmTest {
         VmHarness.idleUntil("the stage goes") { stages.listFiles().isNullOrEmpty() }
     }
 
+    /** A gate a test seam waits on once: [reached] when it's hit, then it waits for [go]. */
+    private class Gate {
+        val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val go = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val seam: suspend () -> Unit = {
+            if (!reached.isCompleted) {
+                reached.complete(Unit)
+                go.await()
+            }
+        }
+    }
+
+    private val fixtureZip get() = File("../../core/de1-domain/tests/fixtures/backup/android-zipoutputstream.crema.zip")
+    private val stages get() = File(app.noBackupFilesDir, "restore-photos")
+
+    @Test
+    fun anOlderPicksFirstReportNeverReplacesANewerOne() {
+        // #425: the newest pick wins on the first report too. The first pick
+        // finishes reading after the second's report is open: that report
+        // stays, the first goes with its stage, and a short notice says why.
+        val vm = vm()
+        val first = File(app.cacheDir, "first.crema.zip").apply { writeBytes(fixtureZip.readBytes()) }
+        val second = backupWithShots(3, 1_790_000_000_000)
+        val gate = Gate()
+        vm.beforeRestorePlan = gate.seam
+        vm.startRestoreFile(first, "first", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the first pick, read") { gate.reached.isCompleted }
+        val firstStage = stages.listFiles()!!.single()
+
+        vm.startRestoreFile(second, "second", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the second report") { vm.ui.value.restoreReport != null }
+        val secondReport = vm.ui.value.restoreReport
+        val secondStage = stages.listFiles()!!.single { it != firstStage }
+
+        val before = vm.ui.value.userMessages.size
+        gate.go.complete(Unit)
+        VmHarness.idleUntil("the first pick's end", 60_000) {
+            vm.ui.value.userMessages.size > before || vm.ui.value.restoreReport != secondReport
+        }
+        assertEquals(secondReport, vm.ui.value.restoreReport, "the second pick's report is still the one open")
+        assertEquals(MainViewModel.OLDER_PICK, vm.ui.value.userMessages.last())
+        VmHarness.idleUntil("the first pick's stage goes") { !firstStage.exists() }
+        assertTrue(secondStage.isDirectory, "the second pick's stage stays")
+
+        // And the report open is the second pick's: its three shots restore.
+        val again = vm.ui.value.userMessages.size
+        vm.confirmRestore()
+        VmHarness.idleUntil("the second restore", 60_000) { vm.ui.value.userMessages.size > again }
+        assertTrue(vm.ui.value.userMessages.last().startsWith("Restored"), vm.ui.value.userMessages.last())
+        assertEquals(setOf("s0", "s1", "s2"), VmHarness.ownState(vm).history.map { it.id }.toSet())
+        VmHarness.idleUntil("the stages go") { stages.listFiles().isNullOrEmpty() }
+    }
+
+    @Test
+    fun aBringBackReplanNeverReopensAReportANewerPickReplaced() {
+        // #425: "Bring them back too" re-plans across a suspension. A newer
+        // pick's report that lands meanwhile stays open, and the older pick's
+        // stage, released when it was replaced, is not held again.
+        val vm = vm()
+        val first = File(app.cacheDir, "first.crema.zip").apply { writeBytes(fixtureZip.readBytes()) }
+        val second = backupWithShots(3, 1_790_000_000_000)
+        vm.startRestoreFile(first, "first", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the first report") { vm.ui.value.restoreReport != null }
+        val firstReport = vm.ui.value.restoreReport
+        val firstStage = stages.listFiles()!!.single()
+
+        val gate = Gate()
+        vm.beforeRestorePlan = gate.seam
+        val replan = assertNotNull(vm.bringBack())
+        VmHarness.idleUntil("the bring-back re-plan") { gate.reached.isCompleted }
+
+        vm.startRestoreFile(second, "second", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the second report") { vm.ui.value.restoreReport != firstReport }
+        val secondReport = vm.ui.value.restoreReport
+        VmHarness.idleUntil("the first pick's stage goes") { !firstStage.exists() }
+
+        gate.go.complete(Unit)
+        VmHarness.idleUntil("the re-plan's end", 60_000) { replan.isCompleted }
+        assertEquals(secondReport, vm.ui.value.restoreReport, "the second pick's report is still the one open")
+
+        val again = vm.ui.value.userMessages.size
+        vm.confirmRestore()
+        VmHarness.idleUntil("the second restore", 60_000) { vm.ui.value.userMessages.size > again }
+        assertTrue(vm.ui.value.userMessages.last().startsWith("Restored"), vm.ui.value.userMessages.last())
+        assertEquals(setOf("s0", "s1", "s2"), VmHarness.ownState(vm).history.map { it.id }.toSet())
+        VmHarness.idleUntil("the stages go") { stages.listFiles().isNullOrEmpty() }
+    }
+
+    @Test
+    fun aBringBackReplanNeverReopensADismissedReport() {
+        // #425: the report dismissed while bring-back re-plans stays closed,
+        // and its stage, released then, is not held again.
+        val vm = vm()
+        val first = File(app.cacheDir, "first.crema.zip").apply { writeBytes(fixtureZip.readBytes()) }
+        vm.startRestoreFile(first, "first", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
+        val gate = Gate()
+        vm.beforeRestorePlan = gate.seam
+        val replan = assertNotNull(vm.bringBack())
+        VmHarness.idleUntil("the bring-back re-plan") { gate.reached.isCompleted }
+        vm.dismissRestore()
+        VmHarness.idleUntil("the stage goes") { stages.listFiles().isNullOrEmpty() }
+
+        gate.go.complete(Unit)
+        VmHarness.idleUntil("the re-plan's end", 60_000) { replan.isCompleted }
+        assertEquals(null, vm.ui.value.restoreReport, "the dismissed report stays closed")
+        val before = vm.ui.value.userMessages.size
+        vm.confirmRestore()
+        VmHarness.idle()
+        assertEquals(before, vm.ui.value.userMessages.size, "nothing is pending to run")
+    }
+
+    @Test
+    fun aNewerPickStillBeingReadAndThenRefusedLeavesAnOlderReReport() {
+        // #425: the first pick's run finds the device changed while a second
+        // pick is still being read. That one may yet be refused, so it hasn't
+        // taken over: the first's new numbers are asked about again, and stay
+        // open when the second is refused.
+        val vm = vm()
+        val first = File(app.cacheDir, "first.crema.zip").apply { writeBytes(fixtureZip.readBytes()) }
+        // Replace with nothing in it: read whole, then refused by its plan.
+        val second = File(app.cacheDir, "empty.crema.jsonl").apply {
+            writeText(
+                """{"kind":"crema-backup/v1","createdAt":1790000000000,"appVersion":"test","deviceLabel":"test",""" +
+                    """"profileCount":0,"beanCount":0,"roasterCount":0,"shotCount":0,"recipeCount":0,"customMethodCount":0}""" + "\n",
+            )
+        }
+        val run = Gate()
+        vm.beforeRestoreRun = run.seam
+        vm.startRestoreFile(first, "first", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the first report") { vm.ui.value.restoreReport != null }
+        vm.confirmRestore()
+        VmHarness.idleUntil("the first run, before its re-plan") { run.reached.isCompleted }
+
+        // The device changes under the first run's plan; a second pick is read meanwhile.
+        vm.addRoaster("Changed meanwhile", null, null, null, "")
+        VmHarness.idle()
+        val read = Gate()
+        vm.beforeRestorePlan = read.seam
+        vm.startRestoreFile(second, "second", MainViewModel.RestoreMode.WIPE)
+        VmHarness.idleUntil("the second pick, read") { read.reached.isCompleted }
+
+        val before = vm.ui.value.userMessages.size
+        run.go.complete(Unit)
+        VmHarness.idleUntil("the first run's end", 60_000) { vm.ui.value.restoreReport != null || vm.ui.value.userMessages.size > before }
+        assertNotNull(vm.ui.value.restoreReport, "the first pick's new numbers: ${vm.ui.value.userMessages.drop(before)}")
+        assertTrue(MainViewModel.PICK_AGAIN !in vm.ui.value.userMessages.drop(before))
+
+        val refused = vm.ui.value.userMessages.size
+        read.go.complete(Unit)
+        VmHarness.idleUntil("the second pick's refusal", 60_000) { vm.ui.value.userMessages.size > refused }
+        assertTrue(vm.ui.value.userMessages.last().contains("Nothing was changed"), vm.ui.value.userMessages.last())
+        assertNotNull(vm.ui.value.restoreReport, "the first pick's report is still open")
+
+        val again = vm.ui.value.userMessages.size
+        vm.confirmRestore()
+        VmHarness.idleUntil("the first restore", 60_000) { vm.ui.value.userMessages.size > again }
+        assertTrue(vm.ui.value.userMessages.last().startsWith("Restored"), vm.ui.value.userMessages.last())
+        VmHarness.idleUntil("the stages go") { stages.listFiles().isNullOrEmpty() }
+    }
+
+    @Test
+    fun aDriveDownloadGoesWhenItsPickHasNoStage() {
+        // #425: the download is the pick's to delete. With no room for a stage,
+        // the pick ends before the move, and the download goes then.
+        val vm = vm()
+        stages.deleteRecursively()
+        stages.writeText("in the way")
+        try {
+            val download = File.createTempFile("restore-drive-", ".crema", app.cacheDir).apply { writeBytes(fixtureZip.readBytes()) }
+            val before = vm.ui.value.userMessages.size
+            vm.startRestoreFile(download, "drive", MainViewModel.RestoreMode.WIPE, adopt = true)
+            VmHarness.idleUntil("the failure") { vm.ui.value.userMessages.size > before }
+            assertTrue(vm.ui.value.userMessages.last().contains("couldn't make room"), vm.ui.value.userMessages.last())
+            assertTrue(!download.exists(), "the download went")
+        } finally {
+            stages.delete()
+        }
+    }
+
+    @Test
+    fun aDriveDownloadGoesWhenItsCopyIntoTheStageFails() {
+        // #425: a download that can't be moved is copied; if the copy fails too, the download still goes.
+        val download = File.createTempFile("restore-drive-", ".crema", app.cacheDir).apply { writeBytes(fixtureZip.readBytes()) }
+        val notADirectory = File(app.cacheDir, "not-a-stage").apply { writeText("a file") }
+        try {
+            assertFailsWith<java.io.IOException> { MainViewModel.adoptDownload(download, File(notADirectory, "incoming.crema")) }
+            assertTrue(!download.exists(), "the download went")
+        } finally {
+            notADirectory.delete()
+        }
+    }
+
     private fun shot(id: String, at: Long) = StoredShot(id = id, completedAtMs = at, durationMs = 30_000)
 }

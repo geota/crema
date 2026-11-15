@@ -17,7 +17,16 @@
  *     delete; another open Crema tab can, which the result reports. Then
  *     the history's rows snapshot in the origin private file system, which a
  *     newer build writes (#310).
- *  3. **Web storage.** Every `crema.*` key in localStorage and sessionStorage
+ *  3. **The SQLite history's files.** Every origin-private entry whose name
+ *     starts with `.crema-history-` (both pools, any repair generations, the
+ *     done-record last), which a newer build writes (SQLite history H0). This
+ *     build writes none of them; it removes them so a reset after a rollback
+ *     still takes everything. If one stays — another tab's Worker can hold a
+ *     pool — the reset reports it with the databases, and keeps the
+ *     done-record and the `crema.history.sqlite*` keys (the marker and the
+ *     pending journal), so the next boot can't build a new marker over an
+ *     erased history (S10).
+ *  4. **Web storage.** Every `crema.*` key in localStorage and sessionStorage
  *     (preferences, library, history summaries, the wrapped Visualizer and
  *     Decent tokens, the Drive session token, the OAuth handshake).
  *
@@ -36,6 +45,14 @@ import { HISTORY_CURVES_NAME, HISTORY_DB_NAME, HISTORY_SNAPSHOT_NAME } from '#li
 import { stopArchiveWrites } from '#lib/history/archive-writes.js';
 import { withTimeout } from '#lib/utils/timeout.js';
 import { FROZEN_SHOTS_KEY } from '#lib/restore/tab-safety.js';
+import {
+	DB_POOL_DIR,
+	DONE_RECORD_NAME,
+	HISTORY_SQLITE_OPFS_PREFIX,
+	INDEX_POOL_DIR,
+	MARKER_KEY,
+	PENDING_KEY_PREFIX
+} from '#lib/history-db/names.js';
 
 
 /**
@@ -75,7 +92,7 @@ export interface FactoryResetDeps {
 export interface FactoryResetResult {
 	/** Databases that were deleted (or did not exist). */
 	databasesDeleted: string[];
-	/** Databases the browser did not delete in time — usually another open Crema tab — and the history snapshot, if it stayed. */
+	/** Databases the browser did not delete in time — usually another open Crema tab — and the history's private files that stayed. */
 	databasesFailed: string[];
 	/** `crema.*` keys removed from localStorage + sessionStorage. */
 	storageKeysRemoved: number;
@@ -104,6 +121,52 @@ async function removeSnapshot(
 		// None to remove, or no private file system at all.
 		return e instanceof DOMException && (e.name === 'NotFoundError' || e.name === 'SecurityError');
 	}
+}
+
+/** A missing entry, or no private file system at all: nothing to remove. */
+function isNothingThere(e: unknown): boolean {
+	return e instanceof DOMException && (e.name === 'NotFoundError' || e.name === 'SecurityError');
+}
+
+/**
+ * Remove every private-file entry the SQLite history keeps (module comment,
+ * step 3): the pools and anything else named `.crema-history-…`, then the
+ * done-record, only once all of them are gone. Returns the names that stayed;
+ * the prefix itself when the root can't be read or listed.
+ */
+async function removeSqliteHistory(root: () => Promise<FileSystemDirectoryHandle | undefined>): Promise<string[]> {
+	let found: FileSystemDirectoryHandle | undefined;
+	try {
+		found = await root();
+	} catch (e) {
+		return isNothingThere(e) ? [] : [HISTORY_SQLITE_OPFS_PREFIX];
+	}
+	if (!found) return [];
+	const dir = found;
+	// The known names even where the root can't be listed; every other one it lists.
+	const names = new Set<string>([INDEX_POOL_DIR, DB_POOL_DIR]);
+	const listable = dir as unknown as { keys?: () => AsyncIterable<string> };
+	if (typeof listable.keys === 'function') {
+		try {
+			for await (const name of listable.keys()) {
+				if (name.startsWith(HISTORY_SQLITE_OPFS_PREFIX)) names.add(name);
+			}
+		} catch {
+			return [HISTORY_SQLITE_OPFS_PREFIX];
+		}
+	}
+	names.delete(DONE_RECORD_NAME);
+	const stayed: string[] = [];
+	const remove = async (name: string): Promise<void> => {
+		try {
+			await dir.removeEntry(name, { recursive: true });
+		} catch (e) {
+			if (!(e instanceof DOMException && e.name === 'NotFoundError')) stayed.push(name);
+		}
+	};
+	for (const name of names) await remove(name);
+	if (stayed.length === 0) await remove(DONE_RECORD_NAME);
+	return stayed;
 }
 
 function deleteDatabase(idb: IDBFactory, name: string, timeoutMs: number): Promise<boolean> {
@@ -145,12 +208,17 @@ async function cremaDatabaseNames(idb: IDBFactory): Promise<string[]> {
 	return [...names];
 }
 
-function clearPrefixed(storage: Storage | undefined): number {
+/** The SQLite history's marker and pending journal, kept when one of its files stays (S10). */
+function isSqliteHistoryKey(key: string): boolean {
+	return key === MARKER_KEY || key.startsWith(PENDING_KEY_PREFIX);
+}
+
+function clearPrefixed(storage: Storage | undefined, keep: (key: string) => boolean = () => false): number {
 	if (!storage) return 0;
 	const keys: string[] = [];
 	for (let i = 0; i < storage.length; i++) {
 		const k = storage.key(i);
-		if (k && k.startsWith(STORAGE_PREFIX)) keys.push(k);
+		if (k && k.startsWith(STORAGE_PREFIX) && !keep(k)) keys.push(k);
 	}
 	for (const k of keys) storage.removeItem(k);
 	return keys.length;
@@ -190,7 +258,12 @@ export async function factoryResetLocalData(deps: FactoryResetDeps = {}): Promis
 	await stopArchiveWrites();
 	if (!(await removeSnapshot(deps.privateFiles ?? privateFilesRoot, HISTORY_CURVES_NAME))) databasesFailed.push(HISTORY_CURVES_NAME);
 
-	const storageKeysRemoved = clearPrefixed(local) + clearPrefixed(session);
+	// Before any `crema.*` key goes: the marker must outlive every file it names (S10).
+	const sqliteStayed = await removeSqliteHistory(deps.privateFiles ?? privateFilesRoot);
+	databasesFailed.push(...sqliteStayed);
+	const keep = sqliteStayed.length > 0 ? isSqliteHistoryKey : undefined;
+
+	const storageKeysRemoved = clearPrefixed(local, keep) + clearPrefixed(session, keep);
 	// Shots a frozen tab kept: not a `crema.` key, so a freeze can't drop them.
 	try {
 		local?.removeItem(FROZEN_SHOTS_KEY);

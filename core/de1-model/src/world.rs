@@ -2,7 +2,10 @@
 
 use de1_app::{Command, CoreOutput, CremaCore, Event, Source, WriteTarget};
 use de1_domain::session::ActiveMode;
-use de1_domain::{BrewDefaults, BrewOverrides, ConnectSweepSettings, CremaProfile, StopReason};
+use de1_domain::{
+    BrewDefaults, BrewOverrides, ConnectSweepSettings, CremaProfile, FlowAlgorithm, FlowEstimator,
+    StopReason,
+};
 use de1_protocol::{MachineState, ShotSettings, SubState};
 use std::time::Duration;
 
@@ -57,6 +60,13 @@ pub enum Op {
     SetStepWeight(Option<f32>),
     /// The scale starts misbehaving this way.
     Scale(ScaleMode),
+    /// The scale stalls for good once a pouring espresso's true cup next
+    /// reaches `grams`: a scale lost at a point in the pour rather than at an
+    /// op's time, once.
+    StallAt {
+        /// The true cup, grams.
+        grams: f32,
+    },
     /// The scale goes away.
     ScaleDisconnect,
     /// A scale connects.
@@ -110,6 +120,9 @@ pub struct Coverage {
     pub unseen_loads: u32,
     /// `StopTriggered` on volume.
     pub volume_stops: u32,
+    /// Honest espresso sessions whose scale went `Stall` or `Silent` after
+    /// the gate, which I22 still judges.
+    pub lost_judged: u32,
     /// `StopRetried`.
     pub retries: u32,
     /// `StopNotHonoured`.
@@ -255,16 +268,46 @@ pub struct World {
     /// scale reporting, and whether that held 1 s.
     gate_since: Option<u64>,
     gate_seen: bool,
+    /// I22's gate, by the design's rule (§3.4): net 5 g and the scale's flow
+    /// 0.5 g/s on every reading, held 1 s, with the flow estimated from every
+    /// reading since the session's tare and never restarted on a return. It
+    /// says when an honest scale's session must have left `Tared`, so a scale
+    /// lost after it is the estimate's to finish (REVIEW-414 M1). `gate_seen`
+    /// is I13's coarser view, which ignores the flow.
+    trust_flow: FlowEstimator,
+    trust_since: Option<u64>,
+    trusted: bool,
     /// The true cup at the last reading, grams.
     last_cup_g: f32,
     /// This espresso opened from a zeroed cup: a tare, or `|net| ≤ 2 g`.
     /// Auto-tare off on a loaded scale has no weight-stop guarantee (§3.5).
     opened_near_zero: bool,
     /// I22's honest session: since this espresso opened, the scale stayed
-    /// connected and healthy or flapping, the DE1's link stayed up with its
-    /// states and samples heard, and the weight target stayed put. A late
-    /// stop then has no excuse past a flap's gap, which I22's 6 g covers.
+    /// connected and honest (healthy, flapping or slow), the DE1's link stayed
+    /// up with its states and samples heard, and the weight target stayed
+    /// put. A late stop then has no excuse past a flap's gap, which I22's 6 g
+    /// covers. A scale that goes `Stall` or `Silent` for good after the
+    /// oracle's gate keeps the session honest ([`Self::scale_lost`]).
     honest: bool,
+    /// The honest scale stopped sending after the gate, for good: the
+    /// estimate must finish the shot, and any later scale mode ends the
+    /// session's honesty (REVIEW-414 S5).
+    scale_lost: bool,
+    /// No volume limit was set while this espresso was open, so a `Volume`
+    /// stop is the backstop's.
+    limit_free: bool,
+    /// I22 already fired for a cup past target with no stop asked for.
+    overshot: bool,
+    /// The core has the scale: the shells connected it to this core. A core
+    /// attached during an outage has none until the next connect.
+    core_has_scale: bool,
+    /// The last reading the core got, grams.
+    last_reading_g: Option<f32>,
+    /// [`Op::StallAt`]'s cup, until it fires.
+    stall_at_g: Option<f32>,
+    /// The cup when this espresso opened, grams: what it has gained since is
+    /// the pour, whether or not the session's tare has landed yet.
+    open_cup_g: f32,
     /// The load on the scale at the last reading, grams.
     last_load: f32,
     /// What the run reached.
@@ -345,9 +388,19 @@ impl World {
             scale_fresh: false,
             gate_since: None,
             gate_seen: false,
+            trust_flow: FlowEstimator::new(FlowAlgorithm::default()),
+            trust_since: None,
+            trusted: false,
             last_cup_g: 0.0,
             opened_near_zero: true,
             honest: false,
+            scale_lost: false,
+            limit_free: true,
+            overshot: false,
+            core_has_scale: false,
+            last_reading_g: None,
+            stall_at_g: None,
+            open_cup_g: 0.0,
             last_load: 0.0,
             coverage: Coverage::default(),
             violations: Vec::new(),
@@ -376,6 +429,7 @@ impl World {
         self.ingest(out, Who::Core);
         if self.scale.is_some() {
             self.core.connect_scale("BOOKOO_SC", &[]);
+            self.core_has_scale = true;
         }
     }
 
@@ -480,6 +534,7 @@ impl World {
                 self.apply_targets();
             }
             Op::SetVolumeLimit(ml) => {
+                self.limit_free &= ml.is_none();
                 self.volume_limit_ml = ml;
                 self.apply_targets();
             }
@@ -493,22 +548,20 @@ impl World {
                 self.core.set_auto_tare(on);
             }
             Op::SetStepWeight(g) => self.set_step_weight(g),
-            Op::Scale(mode) => {
-                if let Some(scale) = &mut self.scale {
-                    scale.set_mode(mode);
-                    self.honest &= scale.honest();
-                }
-            }
+            Op::Scale(mode) => self.set_scale_mode(mode),
+            Op::StallAt { grams } => self.stall_at_g = Some(grams),
             Op::ScaleDisconnect => {
                 self.honest = false;
                 self.scale = None;
                 self.core.disconnect_scale();
+                self.core_has_scale = false;
             }
             Op::ScaleConnect => {
                 if self.scale.is_none() {
                     self.honest = false;
                     self.scale = Some(SimScale::new(self.tare_latency_ms));
                     self.core.connect_scale("BOOKOO_SC", &[]);
+                    self.core_has_scale = true;
                     self.scale_fresh = true;
                     self.last_load = 0.0;
                 }
@@ -549,6 +602,7 @@ impl World {
             Op::Attach => {
                 self.honest = false;
                 self.core = CremaCore::new();
+                self.core_has_scale = false;
                 self.core.set_read_only(self.read_only);
                 self.core.set_start_settings(self.pre_flush, false, false);
                 self.apply_targets();
@@ -568,6 +622,27 @@ impl World {
                     self.attach();
                 }
             }
+        }
+    }
+
+    /// The scale starts misbehaving. For I22, an honest scale that stops
+    /// sending after the gate leaves the session honest, since the estimate
+    /// owns the stop from there; one that stops before it leaves the session
+    /// `Blind`, and the backstop is the design's. Once lost, any other mode
+    /// (a return included) ends the session's honesty.
+    fn set_scale_mode(&mut self, mode: ScaleMode) {
+        let pouring = self.open_mode == Some(ActiveMode::Espresso) && self.flowed;
+        let Some(scale) = &mut self.scale else {
+            return;
+        };
+        scale.set_mode(mode);
+        if self.scale_lost {
+            self.honest &= scale.lost();
+        } else if scale.lost() && pouring && self.trusted && self.honest {
+            self.scale_lost = true;
+            self.coverage.lost_judged += 1;
+        } else {
+            self.honest &= scale.honest();
         }
     }
 
@@ -761,6 +836,7 @@ impl World {
         self.unseen_load = false;
         self.gate_since = None;
         self.gate_seen = false;
+        self.restart_trust();
         self.last_cup_g = self.true_cup_g();
         self.last_load = self.scale.as_ref().map_or(0.0, |s| s.load_now(self.now));
         let (now, cup) = (self.now, self.cup.grams);
@@ -773,10 +849,46 @@ impl World {
         // correction's 2 g). With auto-tare off on a loaded scale, the zero is
         // the user's and the design makes no weight-stop promise.
         self.opened_near_zero = self.auto_tare || reads.is_none_or(|g| g.abs() <= 2.0);
+        // With auto-tare off the core opens on the last reading it heard,
+        // which a load lifted since (the scale silent meanwhile) leaves
+        // loaded: `Refused { ScaleNotTared }`, and the backstop is the
+        // design's.
+        let heard_zero = self.auto_tare || self.last_reading_g.is_none_or(|g| g.abs() <= 2.0);
         self.honest = self.scale.as_ref().is_some_and(SimScale::honest)
+            && heard_zero
+            && self.core_has_scale
             && !self.link.down(self.now)
             && self.link.lose_states == 0
             && self.now >= self.link.samples_muted_until;
+        self.scale_lost = false;
+        self.limit_free = self.volume_limit_ml.is_none();
+        self.overshot = false;
+        self.open_cup_g = self.cup.grams;
+    }
+
+    /// I22's gate starts over, as the core's flow estimate does when a
+    /// session opens or its tare lands.
+    fn restart_trust(&mut self) {
+        self.trust_flow.reset();
+        self.trust_since = None;
+        self.trusted = false;
+    }
+
+    /// I22's gate on a reading of an open espresso.
+    fn watch_trust(&mut self, grams: f32) {
+        if self.open_mode != Some(ActiveMode::Espresso) || self.trusted {
+            return;
+        }
+        let flow = self
+            .trust_flow
+            .update(grams, Duration::from_millis(self.now))
+            .flow;
+        if grams >= 5.0 && flow >= 0.5 {
+            let since = *self.trust_since.get_or_insert(self.now);
+            self.trusted = self.now.saturating_sub(since) >= 1_000;
+        } else {
+            self.trust_since = None;
+        }
     }
 
     /// I6 both ways: the core's reading of the session matches the oracle's.
@@ -869,12 +981,22 @@ impl World {
                 self.check_replaced();
             }
         }
+        // A re-zero mid-pour is a disturbance; between pours it's the zero.
+        let pouring = self.open_mode == Some(ActiveMode::Espresso) && self.flowed;
+        if pouring
+            && self.scale.is_some()
+            && self.stall_at_g.is_some_and(|g| self.true_cup_g() >= g)
+        {
+            self.stall_at_g = None;
+            self.set_scale_mode(ScaleMode::Stall);
+        }
         let reading = self
             .scale
             .as_mut()
             .and_then(|s| s.reading(self.now, self.cup.grams));
-        // A re-zero mid-pour is a disturbance; between pours it's the zero.
-        let pouring = self.open_mode == Some(ActiveMode::Espresso) && self.flowed;
+        if self.scale.as_mut().is_some_and(SimScale::take_tare_landed) {
+            self.restart_trust();
+        }
         let cup = self.cup.grams;
         let rezero = self.scale.as_mut().and_then(SimScale::take_rezero);
         if let Some(scale) = self.scale.as_mut()
@@ -900,10 +1022,12 @@ impl World {
         }
         if let Some(grams) = reading {
             self.watch_unseen_load();
+            self.watch_trust(grams);
             self.stale_open = false;
             self.dead_open = false;
             self.weights_heard += 1;
             self.last_weight_ms = Some(self.now);
+            self.last_reading_g = Some(grams);
             let frame = SimScale::frame(grams);
             let out = self
                 .core
@@ -926,9 +1050,64 @@ impl World {
             self.outage_unsure();
         }
         self.check_session();
+        self.check_overshoot();
         self.check_legs();
         self.check_auto_stop();
         self.check_retries(down);
+    }
+
+    /// Whether I13 and I22 judge a stop on the open espresso now: the core
+    /// isn't a mirror, the cup opened zeroed, no load moved unseen, and the
+    /// machine is in the espresso the oracle tracks.
+    fn judged(&self) -> bool {
+        !self.read_only
+            && !self.unseen_load
+            && self.opened_near_zero
+            && self.open_mode == Some(ActiveMode::Espresso)
+            // Not a stop that lands on another mode the core didn't hear the
+            // machine enter.
+            && self.de1.state == MachineState::Espresso
+    }
+
+    /// Whether I22 judges the open espresso now: an honest session, seen from
+    /// its start (an unseen one has no weight stop, and the backstop is the
+    /// design's), and judged as I13 is.
+    fn judged_honest(&self) -> bool {
+        self.honest && !self.unseen && self.judged()
+    }
+
+    /// I22 with no stop at all: on an honest session the pour passes target
+    /// plus 6 g while the machine still pours, and nothing has asked it to
+    /// stop. A shot whose leg never fires ends on its frames, with no
+    /// `StopTriggered` for the stop's own check to judge. It counts what the
+    /// cup gained since the session opened, not the true net, which a tare
+    /// that hasn't landed yet leaves at the cup before.
+    fn check_overshoot(&mut self) {
+        let pouring = matches!(self.de1.sub, SubState::Preinfusion | SubState::Pouring);
+        if self.overshot
+            || !self.judged_honest()
+            || !pouring
+            || self.stopped_this_flow
+            || self.owed_last.is_some()
+        {
+            return;
+        }
+        let Some(target) = self.weight_target() else {
+            return;
+        };
+        let grams = self.cup.grams - self.open_cup_g;
+        if grams > target + WEIGHT_TOLERANCE_G {
+            self.overshot = true;
+            let lost = if self.scale_lost {
+                ", lost after the gate"
+            } else {
+                ""
+            };
+            self.violate(
+                Invariant::I22,
+                format!("no stop with {grams} g poured of {target} g, honest scale{lost}"),
+            );
+        }
     }
 
     /// I20, once the core has the input that opened a new session in the
@@ -1327,6 +1506,16 @@ impl World {
                 if !self.read_only && self.owed_last.is_none() {
                     self.owed_last = Some(self.now);
                 }
+                // Espresso's target; what's in the cup since the last tare a
+                // person meant.
+                let grams = self.true_cup_g();
+                let judged = self.judged();
+                let judged_honest = self.judged_honest();
+                let lost = if self.scale_lost {
+                    ", lost after the gate"
+                } else {
+                    ""
+                };
                 match reason {
                     StopReason::Weight | StopReason::EstimatedWeight => {
                         self.coverage.weight_stops += 1;
@@ -1336,19 +1525,6 @@ impl World {
                         if self.unseen {
                             self.violate(Invariant::I6, format!("{reason:?} stop while unseen"));
                         }
-                        // Espresso's target; what's in the cup since the
-                        // last tare a person meant.
-                        let grams = self
-                            .scale
-                            .as_ref()
-                            .map_or(self.cup.grams, |s| s.true_net(self.cup.grams));
-                        let judged = !self.read_only
-                            && !self.unseen_load
-                            && self.opened_near_zero
-                            && self.open_mode == Some(ActiveMode::Espresso)
-                            // Not a stop that lands on another mode the core
-                            // didn't hear the machine enter.
-                            && self.de1.state == MachineState::Espresso;
                         if judged
                             && let Some(target) = self.weight_target()
                             && grams < target - WEIGHT_TOLERANCE_G
@@ -1358,20 +1534,37 @@ impl World {
                                 format!("{reason:?} stop at a true {grams} g of {target} g"),
                             );
                         }
-                        if judged
-                            && self.honest
+                        if judged_honest
                             && let Some(target) = self.weight_target()
                             && grams > target + WEIGHT_TOLERANCE_G
                         {
                             self.violate(
                                 Invariant::I22,
                                 format!(
-                                    "{reason:?} stop at a true {grams} g of {target} g, honest scale"
+                                    "{reason:?} stop at a true {grams} g of {target} g, honest scale{lost}"
                                 ),
                             );
                         }
                     }
-                    StopReason::Volume => self.coverage.volume_stops += 1,
+                    StopReason::Volume => {
+                        self.coverage.volume_stops += 1;
+                        // With no limit set, a volume stop is the backstop,
+                        // which an honest session never needs: the weight leg
+                        // or, with the scale lost after the gate, the
+                        // estimate owns the stop.
+                        if judged_honest
+                            && self.limit_free
+                            && let Some(target) = self.weight_target()
+                            && grams > target + WEIGHT_TOLERANCE_G
+                        {
+                            self.violate(
+                                Invariant::I22,
+                                format!(
+                                    "Volume stop at a true {grams} g of {target} g, no limit set, honest scale{lost}"
+                                ),
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }
