@@ -11,7 +11,7 @@ import type { HistoryStoreOptions } from './store.svelte';
  */
 export function memoryFs() {
 	const dirs = new Map<string, Map<string, Uint8Array>>();
-	const control = { quota: false, failRemove: false };
+	const control = { quota: false, failRemove: false, hold: null as Promise<void> | null, events: [] as string[] };
 	const notFound = () => new DOMException('none', 'NotFoundError');
 	const dirOf = (dname: string, files: Map<string, Uint8Array>) => ({
 		async getFileHandle(name: string, opts?: { create?: boolean }) {
@@ -25,7 +25,9 @@ export function memoryFs() {
 							parts.push(new Uint8Array(p as ArrayBuffer));
 						},
 						async close() {
+							if (control.hold && dname === 'crema-history-curves') await control.hold;
 							if (control.quota && dname === 'crema-history-curves') throw new DOMException('full', 'QuotaExceededError');
+							if (dname === 'crema-history-curves') control.events.push(`close ${name}`);
 							const total = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
 							let o = 0;
 							for (const p of parts) {
@@ -54,6 +56,7 @@ export function memoryFs() {
 	});
 	const root = {
 		async removeEntry(name: string) {
+			control.events.push(`remove ${name}`);
 			if (!dirs.delete(name)) throw notFound();
 		},
 		async getDirectoryHandle(name: string, opts?: { create?: boolean }) {

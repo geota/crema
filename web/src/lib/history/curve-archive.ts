@@ -205,9 +205,9 @@ export class CurveArchive {
 		return out;
 	}
 
-	/** The ids of every file there, empty ones too. */
-	async allIds(): Promise<Set<string>> {
-		return new Set((await this.files()).keys());
+	/** Each file's size, by id, empty ones too. */
+	sizes(): Promise<Map<string, number>> {
+		return this.files();
 	}
 
 	/** How many files, and their bytes. */

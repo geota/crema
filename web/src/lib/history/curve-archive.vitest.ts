@@ -22,6 +22,7 @@ import { archiveNameOf, CurveArchive } from './curve-archive';
 import { dayOf } from './rows-snapshot';
 import { boot, freshStorage, stored, writeOldCopy, LEGACY_KEY } from './idb-test-kit';
 import { memoryFs } from './archive-test-kit';
+import type { ChannelLike } from './store.svelte';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 let idb: IDBFactory;
@@ -397,41 +398,110 @@ describe('the archive’s nits (#420 fix check)', () => {
 	});
 });
 
-describe('the orphan sweep (#420)', () => {
-	it('with the store ok, files of shots neither the store nor a daily copy holds go; the others stay', async () => {
+/** Channels that deliver to each other, as `BroadcastChannel` does. */
+function bus() {
+	const chans = new Set<ChannelLike>();
+	return () => {
+		const c: ChannelLike = {
+			onmessage: null,
+			postMessage(m) {
+				for (const o of chans) if (o !== c) queueMicrotask(() => o.onmessage?.({ data: structuredClone(m) }));
+			},
+			close() {
+				chans.delete(c);
+			}
+		};
+		chans.add(c);
+		return c;
+	};
+}
+
+describe('only a recorded delete removes a file (#420 FC2-S1)', () => {
+	it('probe G: a new tab’s recovery and check leave a stale tab’s only-copy curve, and the stale tab brings it back', async () => {
 		const fs = memoryFs();
-		const shots = small(3).map((s) => ({ ...s, visualizerId: null }));
+		const shots = small(20).map((s) => ({ ...s, visualizerId: null }));
 		await seedStore(shots);
 		const a = await boot(fs.opts);
 		await a.archiveCatchUpNow();
-		a.setRating(shots[0].id, 1);
+		a.setRating(shots[0].id, 3);
 		await a.flushed();
 		await until(() => fs.copies() === 1);
-		const archive = new CurveArchive(fs.fsRoot);
-		// A delete in another tab raced this one's write: its file came back.
-		await archive.write('shot:orphan', { samples: realSamples(4), brewSeries: null });
-		// A shot only a daily copy still holds (after Start empty, say).
-		const copyOnly = shots[2].id;
-		const db = new HistoryDb({ expectExisting: () => true });
-		await db.delete([copyOnly]);
-		db.close();
+		// A shot made after today's copy: in the store and the archive, in no copy.
+		const m = a.recordCaptured({ ...realShot(77, realSamples(7)), visualizerId: null } as unknown as Record<string, unknown>)!;
+		await a.flushed();
+		await a.archiveSettled();
+		expect(fs.curves().has(archiveNameOf(m.id))).toBe(true);
+		// Pushed out of the 16 kept, so A's memory holds it light.
+		for (const s of shots.slice(0, 17)) await a.loadShot(s.id);
+		await lose(a, shots[1].id);
+		// The next morning a new tab recovers today's copy, and runs the day's check.
 		const b = await boot({ ...fs.opts, now: () => Date.now() + 86_400_000 });
+		expect(await b.recoverSnapshot()).toBe(true);
 		await b.archiveCatchUpNow();
-		expect(fs.curves().has(archiveNameOf('shot:orphan'))).toBe(false);
-		expect(fs.curves().has(archiveNameOf(copyOnly)), 'a daily copy still needs it').toBe(true);
-		expect(fs.curves().has(archiveNameOf(shots[0].id))).toBe(true);
+		expect(fs.curves().has(archiveNameOf(m.id)), 'no delete recorded it').toBe(true);
+		// A, left open overnight, comes back and finds B's recovery.
+		expect(await a.startEmpty()).toBe('reopened');
+		await a.flushed();
+		const { rows, details } = await stored();
+		expect(rows.has(m.id)).toBe(true);
+		expect(details.get(m.id)?.samples).toHaveLength(7);
 	});
 
-	it('never while the store isn’t ok', async () => {
+	it('a file no delete recorded is never removed, though no row or copy holds it', async () => {
 		const fs = memoryFs();
-		const shots = small(2);
+		await seedStore(small(2));
+		const a = await boot(fs.opts);
+		await new CurveArchive(fs.fsRoot).write('shot:no-row', { samples: realSamples(4), brewSeries: null });
+		await a.archiveCatchUpNow();
+		const b = await boot({ ...fs.opts, now: () => Date.now() + 86_400_000 });
+		await b.archiveCatchUpNow();
+		expect(fs.curves().has(archiveNameOf('shot:no-row'))).toBe(true);
+		// And Settings doesn't count it as archived.
+		expect(b.archiveStatus).toMatchObject({ files: 2, curves: 2 });
+	});
+
+	it('a tombstone outlasts the load: a remove that failed goes at a later load’s catch-up, and the tombstone with it', async () => {
+		const fs = memoryFs();
+		const shots = small(2).map((s) => ({ ...s, visualizerId: null }));
 		await seedStore(shots);
 		const a = await boot(fs.opts);
 		await a.archiveCatchUpNow();
-		await new CurveArchive(fs.fsRoot).write('shot:orphan', { samples: realSamples(4), brewSeries: null });
-		await lose(a, shots[0].id);
-		await a.archiveCatchUpNow();
-		expect(fs.curves().has(archiveNameOf('shot:orphan'))).toBe(true);
-		expect(fs.curves().size).toBe(3);
+		fs.control.failRemove = true;
+		a.delete(shots[0].id);
+		await a.flushed();
+		await new Promise((r) => setTimeout(r, 20));
+		expect(fs.curves().has(archiveNameOf(shots[0].id))).toBe(true);
+		expect(JSON.parse(localStorage.getItem('crema.history.archiveTombstones')!)).toEqual([shots[0].id]);
+		fs.control.failRemove = false;
+		const b = await boot(fs.opts);
+		await b.archiveCatchUpNow();
+		expect(fs.curves().has(archiveNameOf(shots[0].id))).toBe(false);
+		expect(localStorage.getItem('crema.history.archiveTombstones')).toBeNull();
+		expect(fs.curves().has(archiveNameOf(shots[1].id))).toBe(true);
+	});
+
+	it('a delete in another tab, landing while this tab writes that shot’s file, still removes it (FC2-N1)', async () => {
+		const fs = memoryFs();
+		const shots = small(2).map((s) => ({ ...s, visualizerId: null }));
+		await seedStore(shots);
+		const channel = bus();
+		const a = await boot({ ...fs.opts, channel });
+		const b = await boot({ ...fs.opts, channel });
+		// B starts writing X's file, and its close is held.
+		let release = () => {};
+		fs.control.hold = new Promise<void>((r) => (release = r));
+		const x = shots[0].id;
+		const writing = b.archiveCatchUpNow();
+		await until(() => fs.curves().has(archiveNameOf(x)));
+		// A deletes X: its remove finds an empty file, and B hears of it.
+		a.delete(x);
+		await a.flushed();
+		await until(() => b.get(x) === undefined);
+		fs.control.hold = null;
+		release();
+		await writing;
+		await b.archiveSettled();
+		await until(() => !fs.curves().has(archiveNameOf(x)));
+		expect(fs.curves().has(archiveNameOf(shots[1].id))).toBe(true);
 	});
 });

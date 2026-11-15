@@ -343,6 +343,27 @@ function storeHeldMore(shot: StoredShot, d: DetailsRecord): boolean {
 	);
 }
 
+/** The archive's tombstones: ids a delete recorded whose file is still to go. */
+const ARCHIVE_TOMBSTONES_KEY = 'crema.history.archiveTombstones';
+
+function readArchiveTombstones(): string[] {
+	try {
+		const v = JSON.parse(localStorage.getItem(ARCHIVE_TOMBSTONES_KEY) ?? '[]') as unknown;
+		return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+	} catch {
+		return [];
+	}
+}
+
+function writeArchiveTombstones(ids: ReadonlySet<string>): void {
+	try {
+		if (ids.size === 0) localStorage.removeItem(ARCHIVE_TOMBSTONES_KEY);
+		else localStorage.setItem(ARCHIVE_TOMBSTONES_KEY, JSON.stringify([...ids]));
+	} catch {
+		// Kept in memory for this load; a file left behind costs space, never a curve.
+	}
+}
+
 /** The day the archive was last checked whole against the store. */
 const ARCHIVE_CHECKED_KEY = 'crema.history.archiveCheckedOn';
 
@@ -472,8 +493,13 @@ export class HistoryStore {
 	private archiveCatchUp: ReturnType<typeof setTimeout> | null = null;
 	/** Archive files that didn't read back whole, by id: skipped, never used. */
 	private archiveCorrupt = new Map<string, string>();
-	/** Deleted shots whose file a remove couldn't take: tried again. */
-	private archiveRemoveOwed = new Set<string>();
+	/**
+	 * The archive's tombstones: shots a delete recorded, whose file is still
+	 * to go. Kept in `localStorage`, so a remove that failed, or raced a
+	 * write, is tried again in a later load. Only a recorded delete removes a
+	 * file: nothing infers one from a shot being absent (#420 FC2-S1).
+	 */
+	private archiveRemoveOwed = new Set<string>(readArchiveTombstones());
 	/** The archive as last counted, for Settings and the lost banner. */
 	private archiveCount = $state<{ files: number; bytes: number } | null | undefined>(undefined);
 	/** An archive write failed and waits for another try (storage full, most likely). */
@@ -1896,43 +1922,15 @@ export class HistoryStore {
 						break;
 					}
 					// Deleted while it was written: the file goes again.
-					if (this.archiveDeleted.has(id)) await archive.remove([id]).catch(() => {});
+					// Deleted while it was written (here, or in a tab this one heard):
+					// the delete is recorded, so its file goes, now or later.
+					if (this.archiveDeleted.has(id)) this.tombstone([id]);
 				}
 			}
 		})().finally(() => {
 			this.archiveRun = null;
 			void this.countArchive();
 		});
-	}
-
-	/**
-	 * Files whose shot neither the store nor a kept daily copy holds: a
-	 * delete's remove that raced another tab's write, or failed. Only with
-	 * the store loaded `ok`, the files listed before the store's ids are read
-	 * (a file is written only after its curve lands, so a new one is in the
-	 * store already). A shot a daily copy still holds keeps its file, as a
-	 * recovery from that copy needs it (after Start empty, say); such a file
-	 * goes once the copy is pruned.
-	 */
-	private async sweepArchive(archive: CurveArchive): Promise<void> {
-		const db = this.db;
-		if (this.healthState !== 'ok' || !db) return;
-		const files = await archive.allIds();
-		if (files.size === 0) return;
-		let rows: Set<string>;
-		try {
-			rows = new Set(await db.rowIds());
-		} catch {
-			return;
-		}
-		const copies = await readAllRowsSnapshots(this.opts.snapshotRoot).catch(() => undefined);
-		if (copies === undefined) return;
-		const inCopies = new Set(copies?.rows.map((r) => r.id) ?? []);
-		if (this.healthState !== 'ok') return;
-		for (const id of files) {
-			if (!rows.has(id) && !inCopies.has(id) && !this.archiveOwed.has(id) && !this.byId().has(id)) this.archiveRemoveOwed.add(id);
-		}
-		await this.removeArchived();
 	}
 
 	/** This load's archive catch-up has run. */
@@ -1952,7 +1950,22 @@ export class HistoryStore {
 			return;
 		}
 		try {
-			this.archiveCount = (await this.archive.available()) ? await this.archive.usage() : null;
+			if (!(await this.archive.available())) {
+				this.archiveCount = null;
+				return;
+			}
+			// Archived means a file for a shot the store holds with a curve: a
+			// file kept for a daily-copy row, or a tombstone's, doesn't count
+			// (#420 FC2-N2). The bytes are every file's, as they take space.
+			const sizes = await this.archive.sizes();
+			let files = 0;
+			let bytes = 0;
+			for (const [id, size] of sizes) {
+				bytes += size;
+				const s = lightSummary(id) ?? this.summaries.get(id);
+				if (size > 0 && s && ((s.sampleCount ?? 0) > 0 || s.brewSampleCount > 0) && !this.archiveCorrupt.has(id)) files += 1;
+			}
+			this.archiveCount = { files, bytes };
 		} catch {
 			// Counted again after the next write.
 		}
@@ -1979,18 +1992,28 @@ export class HistoryStore {
 		while (this.archiveRun) await this.archiveRun;
 	}
 
-	/** Shots deleted from the store: their archived curves go. */
+	/** Shots this tab deleted from the store: tombstones recorded, and their archived curves go. */
 	private forgetArchived(ids: readonly string[]): void {
 		if (!this.archive) return;
 		for (const id of ids) {
 			this.archiveDeleted.add(id);
 			this.archiveOwed.delete(id);
-			this.archiveRemoveOwed.add(id);
 		}
+		this.tombstone(ids);
+	}
+
+	/** Record tombstones for `ids`, durably, then remove their files. */
+	private tombstone(ids: readonly string[]): void {
+		for (const id of ids) this.archiveRemoveOwed.add(id);
+		writeArchiveTombstones(this.archiveRemoveOwed);
 		void this.removeArchived();
 	}
 
-	/** Remove the files of deleted shots; one that won't go is tried again at the next delete or catch-up (#420 FC-N1). */
+	/**
+	 * Remove the files the tombstones name. A tombstone goes once its file
+	 * is gone; one whose remove fails stays, for the next delete or catch-up
+	 * (#420 FC-N1).
+	 */
 	private async removeArchived(): Promise<void> {
 		const archive = this.archive;
 		const ids = [...this.archiveRemoveOwed];
@@ -2003,6 +2026,7 @@ export class HistoryStore {
 				console.warn('[history] an archived curve of a deleted shot couldn’t be removed; tried again later', e);
 			}
 		}
+		writeArchiveTombstones(this.archiveRemoveOwed);
 		void this.countArchive();
 	}
 
@@ -2044,7 +2068,6 @@ export class HistoryStore {
 		this.runArchive();
 		await this.fillFromArchive(have);
 		await this.archiveSettled();
-		if (checkAll) await this.sweepArchive(archive);
 		if (checkAll && this.archiveOwed.size === 0) {
 			try {
 				localStorage.setItem(ARCHIVE_CHECKED_KEY, today);
