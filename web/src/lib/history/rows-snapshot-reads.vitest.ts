@@ -215,7 +215,7 @@ it('the worker’s failures read the rest here, and the copy is whole', async ()
 	for (const opts of [{ failOn: 2 }, { crashOn: 3 }, { silentOn: 1 }]) {
 		const w = fakeWorker(opts);
 		const here = vi.fn((ids: readonly string[]) => readProfiles(db, ids));
-		const reader = workerProfileReader(w.make, here, 50);
+		const reader = workerProfileReader(w.make, here, 2_000);
 		expect(await snapshotLines(db, reader.profilesOf), JSON.stringify(opts)).toStrictEqual(before);
 		reader.close();
 		const at = (opts as { failOn?: number }).failOn ?? (opts as { crashOn?: number }).crashOn ?? (opts as { silentOn?: number }).silentOn!;

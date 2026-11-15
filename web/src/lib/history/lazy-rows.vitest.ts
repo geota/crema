@@ -382,15 +382,15 @@ describe('whole shots from a cold start', () => {
 		const shots = small(320);
 		await seedStore(shots);
 		const store = await boot();
-		// Five picks, one past the view.
-		const picked = [store.all[3].id, store.rawAll[315].id, store.all[0].id, store.all[200].id, store.all[299].id];
+		// Five picks, one past the old 300.
+		const picked = [store.all[3].id, store.all[315].id, store.all[0].id, store.all[200].id, store.all[299].id];
 		const got = await store.loadMany(picked);
 		expect(got.map((s) => s.id)).toEqual(picked);
 		for (const s of got) expect(s.record.samples, s.id).toEqual(shots.find((x) => x.id === s.id)!.record.samples);
 		for (const s of got) expect(s.profile, s.id).toEqual(shots.find((x) => x.id === s.id)!.profile);
 		// Every row, as the history export walks them.
 		const all = await store.loadMany(store.all.map((s) => s.id));
-		expect(all).toHaveLength(300);
+		expect(all).toHaveLength(320);
 		for (const s of all) expect(s.record.samples, s.id).toEqual(shots.find((x) => x.id === s.id)!.record.samples);
 	}, 60_000);
 

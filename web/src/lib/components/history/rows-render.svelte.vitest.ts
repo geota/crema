@@ -66,7 +66,7 @@ it('mounting every row, page by page, reads no details and parses no shot', asyn
 	});
 	wasmCalls.clear();
 	const rows = store.all;
-	expect(rows).toHaveLength(300);
+	expect(rows).toHaveLength(320);
 	// Page after page, as a scroll down and back up would draw them.
 	const pages = [0, 50, 100, 150, 200, 250, 200, 100, 0];
 	let sparks = 0;

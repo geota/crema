@@ -13,6 +13,10 @@
 	 *   in memory and goes with each later save; Download keeps a copy now.
 	 * - **moved**: this tab ran on the old copy and another tab moved the
 	 *   history; it no longer writes, and must reload.
+	 * - **nearly full** (95% of the browser's quota): stays while it lasts,
+	 *   with Back up and Free up space (#310 P6w).
+	 * - **getting full** (80%): one notice with the same, until dismissed;
+	 *   it comes back only after use drops below 80% and climbs again.
 	 *
 	 * While anything is unsaved, closing the tab asks first.
 	 */
@@ -25,8 +29,21 @@
 	import { downloadBlob } from '#lib/utils/download.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { getStorageWatch } from '#lib/history/storage-watch.svelte.js';
 
 	const history = getHistoryStore();
+	const watch = getStorageWatch();
+	onMount(() => watch.start());
+	// After each save: rows changed, so storage may have too (at most every 30 s).
+	$effect(() => {
+		if (!history.loaded) return;
+		void history.rawAll;
+		watch.checkSoon();
+	});
+	const usedPct = $derived(
+		watch.usage != null && watch.quota ? Math.min(100, Math.round((watch.usage / watch.quota) * 100)) : null
+	);
+	const toStorage = () => void goto('/settings#sharing');
 	let busy = $state(false);
 	let snapshots = $state<{ name: string; at: number; rows: number }[]>([]);
 
@@ -185,7 +202,32 @@
 			<button type="button" class="hs-btn" onclick={downloadUnsaved}>
 				{history.unsavedShots.length === 1 ? 'Download this shot' : 'Download these shots'}
 			</button>
-			<button type="button" class="hs-btn" onclick={() => void goto('/settings#sharing')}>Free up space</button>
+			<button type="button" class="hs-btn" onclick={toStorage}>Free up space</button>
+		</div>
+	</div>
+{:else if watch.level === 'nearly-full'}
+	<div class="hs-strip" role="alert" data-testid="storage-nearly-full">
+		<Icon cls="ph ph-warning-circle" aria-hidden="true" />
+		<span class="hs-label">
+			Storage is nearly full{usedPct != null ? ` (${usedPct}% of what this browser allows Crema)` : ''}. New shots
+			may not save. Back up, then free up space. Nothing is deleted on its own.
+		</span>
+		<div class="hs-actions">
+			<button type="button" class="hs-btn" onclick={toStorage}>Back up</button>
+			<button type="button" class="hs-btn" onclick={toStorage}>Free up space</button>
+		</div>
+	</div>
+{:else if watch.gettingFullNotice}
+	<div class="hs-strip" role="status" data-testid="storage-getting-full">
+		<Icon cls="ph ph-info" aria-hidden="true" />
+		<span class="hs-label">
+			Storage is getting full{usedPct != null ? ` (${usedPct}% of what this browser allows Crema)` : ''}. Back up, and
+			free up space if you need room. Nothing is deleted on its own.
+		</span>
+		<div class="hs-actions">
+			<button type="button" class="hs-btn" onclick={toStorage}>Back up</button>
+			<button type="button" class="hs-btn" onclick={toStorage}>Free up space</button>
+			<button type="button" class="hs-btn" onclick={() => watch.dismissGettingFull()}>Dismiss</button>
 		</div>
 	</div>
 {/if}

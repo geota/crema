@@ -84,12 +84,12 @@ describe('migration', () => {
 		expect(await oldCopyBytes()).toEqual(before);
 	}, 60_000);
 
-	it('moves a 5,000-row history: every row kept, 300 shown, every field and sample compared', async () => {
+	it('moves a 5,000-row history: every row kept and shown, every field and sample compared', async () => {
 		const source = shots(5_000, 6);
 		await writeOldCopy(source);
 		const store = await boot();
 		expect(store.health).toBe('ok');
-		expect(store.all).toHaveLength(300);
+		expect(store.all).toHaveLength(5_000);
 		expect(store.rawAll).toHaveLength(5_000);
 		await expectEveryField(source);
 	}, 240_000);
