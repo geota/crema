@@ -1,6 +1,8 @@
 # Property tests for the shot history's core rules (#310 C1, PLAN C1 Tests):
 # cursors round-trip, the fold is idempotent, `derive_row` is total and fits the
 # schema, and the per-family stats combination equals `brew_history_stats`.
+# C2's: `derive_row` of any row inserts into a real database (S8), and random
+# writes keep the search index and every derived column in step.
 # Excluded from the core workspace, with its own lockfile, as `de1-model` is,
 # because proptest fails `cargo deny check bans` there. Dev-only, never shipped.
 #
@@ -16,11 +18,12 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 de1-domain = { path = "../de1-domain" }
-de1-history = { path = "../de1-history", features = ["dev-oracle"] }
+de1-history = { path = "../de1-history", features = ["dev-oracle", "store", "faults"] }
 
 [dev-dependencies]
 proptest = "1"
 serde_json = "1"
+tempfile = "3"
 
 # Its own workspace root, so the core workspace's settings don't apply.
 [workspace]

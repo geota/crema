@@ -178,6 +178,18 @@ data class MainUiState(
     val historyError: String? = null,
     /** Shots whose row or curve couldn't be saved: a lasting banner while any remain. */
     val historyUnsaved: Set<String> = emptySet(),
+    /** How full the device is (#310 P6a): a notice when getting full, a lasting banner when nearly full. */
+    val storageLevel: coffee.crema.history.StorageLevel = coffee.crema.history.StorageLevel.OK,
+    /** The getting-full notice was dismissed; it comes back only after the space recovers and runs low again. */
+    val storageNoticeDismissed: Boolean = false,
+    /**
+     * Free up space's backup is built and waits for the user to pick where to
+     * save it (#310 P6a, REVIEW-440 B1): the suggested file name. The save
+     * picker opens for it; nothing is deleted until the file is written.
+     */
+    val freeUpSave: String? = null,
+    /** Free up space is backing up or deleting: the dialog's Delete stays disarmed. */
+    val freeUpRunning: Boolean = false,
     /**
      * Built-in profiles from the core (`builtinCremaProfiles()`), loaded once at
      * startup. The Brew header picker chooses from these until the profile

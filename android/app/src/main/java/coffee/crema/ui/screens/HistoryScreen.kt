@@ -290,7 +290,8 @@ fun HistoryScreen(
                 // Rows are "shots" only while the log is purely espresso —
                 // once a pourover exists the page is honestly a brew log
                 // (issue #10; web parity).
-                val nonEsp = ui.history.any { it.methodOf != null && it.methodOf != "espresso" }
+                // Once per change of the rows, not per recomposition: at 20,000 rows each pass costs (#310 P6a).
+                val nonEsp = remember(ui.history) { ui.history.any { it.methodOf != null && it.methodOf != "espresso" } }
                 val rowNoun = if (nonEsp) "brew" else "shot"
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (!shortWindow) Eyebrow("Library")
@@ -423,8 +424,9 @@ fun HistoryScreen(
                     Row(m.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         // Per-profile pills (web .hi-filter p: pills) — only profiles
                         // that actually have shots, ordered by shot count.
-                        val byProfile = ui.history.mapNotNull { it.profileName }
-                            .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+                        val byProfile = remember(ui.history) {
+                            ui.history.mapNotNull { it.profileName }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+                        }
                         CremaFilterChip(
                             label = "All",
                             selected = profileFilter == null,
@@ -432,7 +434,7 @@ fun HistoryScreen(
                             onClick = { profileFilter = null },
                         )
                         // Pinned shots, once there are any (or while the filter is on).
-                        val pinnedCount = ui.history.count { it.pinned }
+                        val pinnedCount = remember(ui.history) { ui.history.count { it.pinned } }
                         if (pinnedCount > 0 || pinnedOnly) {
                             CremaFilterChip(
                                 label = "Pinned",
@@ -458,7 +460,7 @@ fun HistoryScreen(
                     // detail's "See all N shots" deep link adds a leading
                     // "This bag" entry, and picking its coffee widens to all bags.
                     run {
-                        val beanOptions = beanFilterOptions(ui.history, liveCoffee, beanFilter)
+                        val beanOptions = remember(ui.history, liveCoffee, beanFilter) { beanFilterOptions(ui.history, liveCoffee, beanFilter) }
                         if (beanOptions.isNotEmpty()) {
                             CremaFilterDropdown(
                                 icon = "coffee-bean",
@@ -475,9 +477,9 @@ fun HistoryScreen(
                     // once a second method exists, so espresso-only users
                     // never meet it.
                     run {
-                        val byMethod = ui.history
-                            .groupingBy { it.methodOf ?: "espresso" }.eachCount()
-                            .entries.sortedByDescending { it.value }
+                        val byMethod = remember(ui.history) {
+                            ui.history.groupingBy { it.methodOf ?: "espresso" }.eachCount().entries.sortedByDescending { it.value }
+                        }
                         if (byMethod.size > 1) {
                             CremaFilterDropdown(
                                 icon = methodIcon(methodFilter),

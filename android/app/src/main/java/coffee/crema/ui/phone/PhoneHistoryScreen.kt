@@ -311,15 +311,17 @@ fun PhoneHistoryScreen(
             if (!sel.selecting) {
                 // Filter chips: per-profile pills, then the date dropdown + sort;
                 // a compare entry pins to the right (web parity, same arrows icon).
-                val byProfile = ui.history.mapNotNull { it.profileName }
-                    .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+                // Once per change of the rows, not per recomposition: at 20,000 rows each pass costs (#310 P6a).
+                val byProfile = remember(ui.history) {
+                    ui.history.mapNotNull { it.profileName }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+                }
+                val pinnedCount = remember(ui.history) { ui.history.count { it.pinned } }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     CremaFilterChipRow(
                         modifier = Modifier.weight(1f),
                         chips = buildList {
                             add(FilterChipSpec("all", "All", ui.history.size))
                             // Pinned shots, once there are any (or while the filter is on).
-                            val pinnedCount = ui.history.count { it.pinned }
                             if (pinnedCount > 0 || pinnedOnly) add(FilterChipSpec("pinned", "Pinned", pinnedCount))
                             byProfile.take(6).forEach { (name, count) -> add(FilterChipSpec("p:$name", name, count)) }
                         },
@@ -337,9 +339,9 @@ fun PhoneHistoryScreen(
                         trailing = {
                             // Method — the Brew Log filter (issue #10); only
                             // rendered once a second method exists.
-                            val byMethod = ui.history
-                                .groupingBy { it.methodOf ?: "espresso" }.eachCount()
-                                .entries.sortedByDescending { it.value }
+                            val byMethod = remember(ui.history) {
+                                ui.history.groupingBy { it.methodOf ?: "espresso" }.eachCount().entries.sortedByDescending { it.value }
+                            }
                             if (byMethod.size > 1) {
                                 CremaFilterDropdown(
                                     icon = methodIcon(methodFilter),
@@ -353,7 +355,7 @@ fun PhoneHistoryScreen(
                             }
                             // Bean — scope the log to one coffee, every bag of it
                             // (tablet parity); a deep-linked single bag leads.
-                            val beanOptions = beanFilterOptions(ui.history, liveCoffee, beanFilter)
+                            val beanOptions = remember(ui.history, liveCoffee, beanFilter) { beanFilterOptions(ui.history, liveCoffee, beanFilter) }
                             if (beanOptions.isNotEmpty()) {
                                 CremaFilterDropdown(
                                     icon = "coffee-bean",

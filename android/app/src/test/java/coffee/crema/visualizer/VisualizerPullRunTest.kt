@@ -138,6 +138,9 @@ class VisualizerPullRunTest {
     /** Runs after each pulled row lands. */
     private var afterApply: () -> Unit = {}
 
+    /** The history's cap: none from #310 P6a, 300 on the legacy backend. */
+    private var cap: Int? = null
+
     private fun sync(state: VisualizerState): VisualizerSync {
         runBlocking { store.save(state.copy(tokens = tokens, syncAccountId = "u1", prefs = DEFAULT_VISUALIZER_SYNC_PREFS.copy(shotsDirection = "pull"))) }
         return VisualizerSync(
@@ -170,6 +173,7 @@ class VisualizerPullRunTest {
             retryTimers = false,
             paceDelay = { waits += it },
             restoreRunning = { restoring },
+            historyCap = { cap },
         ).also { runBlocking { it.load() } }
     }
 
@@ -323,10 +327,12 @@ class VisualizerPullRunTest {
         assertEquals(emptyList<PoisonEntry>(), stored().rowFailures)
     }
 
+    /** The legacy backend's cap. */
     @Test
     fun `a full history spends no detail on new rows, and holds the cursor`() {
+        cap = coffee.crema.history.HistoryStore.LEGACY_MAX_SHOTS
         addRows(2)
-        repeat(coffee.crema.history.HistoryStore.MAX_SHOTS) { i ->
+        repeat(coffee.crema.history.HistoryStore.LEGACY_MAX_SHOTS) { i ->
             history["full-$i"] = StoredShot(id = "full-$i", completedAtMs = i.toLong(), durationMs = 1)
         }
         val v = sync(VisualizerState(pullCursorEpoch = 1))
@@ -335,6 +341,20 @@ class VisualizerPullRunTest {
         assertEquals(2, r.refused)
         assertEquals(emptyList<String>(), details())
         assertNull(stored().shotPullCursor)
+    }
+
+    /** From #310 P6a there's no cap: 300 rows here, and a pull still fetches and adds the new ones. */
+    @Test
+    fun `with no cap a pull onto 300 rows adds the new ones`() {
+        addRows(2)
+        repeat(coffee.crema.history.HistoryStore.LEGACY_MAX_SHOTS) { i ->
+            history["full-$i"] = StoredShot(id = "full-$i", completedAtMs = i.toLong(), durationMs = 1)
+        }
+        val v = sync(VisualizerState(pullCursorEpoch = 1))
+        val r = run(v)
+        assertEquals(0, r.refused)
+        assertEquals(2, r.pulled)
+        assertEquals(coffee.crema.history.HistoryStore.LEGACY_MAX_SHOTS + 2, history.size)
     }
 
     @Test

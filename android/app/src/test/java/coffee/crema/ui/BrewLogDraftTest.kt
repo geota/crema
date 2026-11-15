@@ -192,25 +192,36 @@ class BrewLogDraftTest {
 
     @Test fun anUntouchedDateMeansNowAndIsAlwaysFine() {
         assertNull(blank.completedAtMs)
-        assertNull(blank.dateError(emptyList(), nowMs = 1_000_000))
+        assertNull(blank.dateError(emptyList(), nowMs = 1_000_000, cap = null))
     }
 
     @Test fun aFutureDateIsRefusedAndNowIsNot() {
         val now = 1_700_000_000_000
-        assertEquals(BREW_DATE_FUTURE, blank.copy(completedAtMs = now + 60_000).dateError(emptyList(), now))
-        assertNull(blank.copy(completedAtMs = now).dateError(emptyList(), now))
-        assertNull(blank.copy(completedAtMs = now - 86_400_000).dateError(emptyList(), now))
+        assertEquals(BREW_DATE_FUTURE, blank.copy(completedAtMs = now + 60_000).dateError(emptyList(), now, cap = null))
+        assertNull(blank.copy(completedAtMs = now).dateError(emptyList(), now, cap = null))
+        assertNull(blank.copy(completedAtMs = now - 86_400_000).dateError(emptyList(), now, cap = null))
     }
 
-    @Test fun aDateOlderThanAFullHistoryIsRefusedBeforeItCanBeDropped() {
+    /** The legacy backend (shots.json, its move to shots.db failed) keeps its cap. */
+    @Test fun aDateOlderThanAFullLegacyHistoryIsRefusedBeforeItCanBeDropped() {
         val now = 1_700_000_000_000
-        val full = List(HistoryStore.MAX_SHOTS) { i ->
+        val full = List(HistoryStore.LEGACY_MAX_SHOTS) { i ->
             brew("r$i", "pourover", null, 15f, 250f).copy(completedAtMs = now - i * 60_000L)
         }
         val oldest = full.last().completedAtMs
-        assertEquals(brewDateTooOld(), blank.copy(completedAtMs = oldest - 1).dateError(full, now))
-        assertNull(blank.copy(completedAtMs = oldest).dateError(full, now))
-        assertNull(blank.copy(completedAtMs = oldest - 1).dateError(full.drop(1), now))
+        assertEquals(brewDateTooOld(), blank.copy(completedAtMs = oldest - 1).dateError(full, now, HistoryStore.LEGACY_MAX_SHOTS))
+        assertNull(blank.copy(completedAtMs = oldest).dateError(full, now, HistoryStore.LEGACY_MAX_SHOTS))
+        assertNull(blank.copy(completedAtMs = oldest - 1).dateError(full.drop(1), now, HistoryStore.LEGACY_MAX_SHOTS))
+    }
+
+    /** #310 P6a: with no cap, any past date is fine, however full the history. */
+    @Test fun anyPastDateIsFineWithNoCap() {
+        val now = 1_700_000_000_000
+        val full = List(HistoryStore.LEGACY_MAX_SHOTS) { i ->
+            brew("r$i", "pourover", null, 15f, 250f).copy(completedAtMs = now - i * 60_000L)
+        }
+        assertNull(blank.copy(completedAtMs = full.last().completedAtMs - 365L * 86_400_000).dateError(full, now, cap = null))
+        assertEquals(BREW_DATE_FUTURE, blank.copy(completedAtMs = now + 60_000).dateError(full, now, cap = null))
     }
 
     @Test fun theCoreSeedsFromTheNewestRowNotTheLastLogged() {
@@ -218,7 +229,7 @@ class BrewLogDraftTest {
         val newer = brew("newer", "pourover", null, 15f, 250f).copy(completedAtMs = 2_000)
         val backdated = brew("backdated", "pourover", null, 30f, 500f).copy(completedAtMs = 1_000)
         BrewLogSeeds.seeds(
-            historyWith(listOf(backdated).rows(), rowsForTest(listOf(newer).rows())), "pourover", null, null, null, null,
+            historyWith(listOf(backdated).rows(), rowsForTest(listOf(newer).rows()), cap = null), "pourover", null, null, null, null,
             seedsJson = core::call, customMethods = emptyList(),
         )
         assertEquals(listOf(15f, 30f), core.inputs.single().rows.map { it.doseG })

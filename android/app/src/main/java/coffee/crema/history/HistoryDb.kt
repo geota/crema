@@ -251,6 +251,19 @@ internal class HistoryTables(private val json: Json) {
         db.update("shots", ContentValues().apply { put("profile_json", profile.toString()) }, "id = ?", arrayOf(id))
     }
 
+    /** The bytes [ids]' rows take in `shots`: row, profile and brew series (Free up space's preview, #310 P6a). */
+    fun bytesOf(db: SQLiteDatabase, ids: Collection<String>): Long {
+        var total = 0L
+        for (chunk in ids.chunked(500)) {
+            db.rawQuery(
+                "SELECT SUM(LENGTH(row_json) + IFNULL(LENGTH(profile_json), 0) + IFNULL(LENGTH(brew_series_json), 0)) " +
+                    "FROM shots WHERE id IN (${chunk.joinToString(",") { "?" }})",
+                chunk.toTypedArray(),
+            ).use { c -> if (c.moveToFirst()) total += c.getLong(0) }
+        }
+        return total
+    }
+
     fun delete(db: SQLiteDatabase, ids: Collection<String>) {
         for (chunk in ids.chunked(500)) {
             db.delete("shots", "id IN (${chunk.joinToString(",") { "?" }})", chunk.toTypedArray())

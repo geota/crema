@@ -177,11 +177,17 @@ class VisualizerSync(
     private val hasSeries: (ShotRow) -> Boolean = { (it.summary.sampleCount ?: 0u) > 0u },
     /** Whether a local row has its recipe stored (#310 P4a). */
     private val hasProfile: (localId: String) -> Boolean = { false },
+    /** How many unpinned rows the history may hold: none from P6a, but on the legacy backend (#310). */
+    private val historyCap: () -> Int? = { null },
     /** Revoke an access token at the server, best-effort (injected for JVM tests). */
     private val revoke: suspend (accessToken: String) -> Unit = { revokeToken(clientId, it) },
 ) : UploadDestination {
 
     internal companion object {
+        /** Test seam: holds [load] until completed. Null in the app. */
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var holdLoadForTest: kotlinx.coroutines.Deferred<Unit>? = null
+
         /** Backstop on the pull walk — mirrors the web's maxPages default. */
         const val MAX_PULL_PAGES = 500
 
@@ -331,6 +337,7 @@ class VisualizerSync(
      * C3 #9). The old `baristaPending` set migrates in.
      */
     suspend fun load() {
+        holdLoadForTest?.await()
         val unstored = try {
             persistMutex.withLock {
                 // Seeded, so a reconnect as someone else is noticed even though
@@ -344,10 +351,12 @@ class VisualizerSync(
                 pendingEdits.clear()
                 pendingEdits.putAll(stored)
                 for ((id, edit) in early) pendingEdits.merge(id, edit) { a, b -> a.with(b) }
+                unsentRead.complete(true)
                 persisted.baristaPending.isNotEmpty() || pendingEdits != persisted.pendingEdits
             }
         } finally {
             ownState.failed()
+            unsentRead.complete(false)
         }
         fold()
         if (unstored) storePendingEdits()
@@ -1312,6 +1321,19 @@ class VisualizerSync(
      */
     private val pendingEdits = java.util.concurrent.ConcurrentHashMap<String, PendingEdit>()
 
+    /** Completes once the stored queue, attempts and unsent edits are in memory: true when read, false when they couldn't be. */
+    private val unsentRead = kotlinx.coroutines.CompletableDeferred<Boolean>()
+
+    /**
+     * Wait for what [uploadPending] and [hasPendingEdit] read to load (REVIEW-440
+     * R2): true once it has, false when it couldn't be read. Before then a queued
+     * upload or an unsent edit would read as none.
+     */
+    suspend fun awaitUnsentRead(): Boolean = unsentRead.await()
+
+    /** Whether shot [id] has an edit not yet sent to Visualizer: Free up space keeps it (#310 P6a, REVIEW-440 N1). */
+    fun hasPendingEdit(id: String): Boolean = pendingEdits.containsKey(id)
+
     /** Every Visualizer request's pacer; its bucket is stored in [VisualizerState.paceBucket]. */
     private val pacer = Pacer(
         json = json,
@@ -1678,7 +1700,8 @@ class VisualizerSync(
                     put("rows", kotlinx.serialization.json.JsonArray(list.rows.map(::listRow)))
                     put("known", known)
                     put("candidates", candidates)
-                    put("freeSlots", JsonPrimitive((coffee.crema.history.HistoryStore.MAX_SHOTS - coffee.crema.history.cappedCount(current)).coerceAtLeast(0)))
+                    // No cap, no slots: the core refuses nothing (#310 P6a).
+                    historyCap()?.let { cap -> put("freeSlots", JsonPrimitive((cap - coffee.crema.history.cappedCount(current)).coerceAtLeast(0))) }
                     legacyCursor?.let { put("legacyCursor", JsonPrimitive(it)) }
                 },
             ).jsonObject["rows"]!!.jsonArray

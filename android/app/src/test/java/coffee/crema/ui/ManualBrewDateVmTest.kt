@@ -128,19 +128,37 @@ class ManualBrewDateVmTest {
         assertNull(history(vm).single().brewMethod)
     }
 
+    /** The legacy backend's cap refuses a pull rather than evict a row. */
     @Test
     fun `pull_never_evicts_at_cap`() {
-        val brews = List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now - i * hour) }
-        val oldest = brews.last().copy(id = "brew-log", brewMethod = "pourover")
-        val rows = brews.dropLast(1) + oldest
+        HistoryStore.legacyOnlyForTest = true
+        try {
+            val brews = List(HistoryStore.LEGACY_MAX_SHOTS) { i -> machine("r$i", now - i * hour) }
+            val oldest = brews.last().copy(id = "brew-log", brewMethod = "pourover")
+            val rows = brews.dropLast(1) + oldest
+            stored(rows)
+            val vm = vm()
+
+            val refused = VmHarness.library(vm).insertPulledShots(listOf(machine("new", now + hour)))
+            VmHarness.idle()
+
+            assertEquals(setOf("new"), refused)
+            assertEquals(rows.map { it.id }, history(vm).map { it.id })
+        } finally {
+            HistoryStore.legacyOnlyForTest = false
+        }
+    }
+
+    /** From #310 P6a nothing caps a pull: on 300 rows it adds the new one and keeps every row. */
+    @Test
+    fun `a pull onto 300 rows adds the new one and keeps them all`() {
+        val rows = List(HistoryStore.LEGACY_MAX_SHOTS) { i -> machine("r$i", now - i * hour) }
         stored(rows)
         val vm = vm()
-
         val refused = VmHarness.library(vm).insertPulledShots(listOf(machine("new", now + hour)))
         VmHarness.idle()
-
-        assertEquals(setOf("new"), refused)
-        assertEquals(rows.map { it.id }, history(vm).map { it.id })
+        assertTrue(refused.isEmpty())
+        assertEquals(listOf("new") + rows.map { it.id }, history(vm).map { it.id })
     }
 
     /** A store file already holding [rows], as a VM built next would load it. */
@@ -163,27 +181,61 @@ class ManualBrewDateVmTest {
         return VmHarness.ownState(vm).userMessages.last()
     }
 
+    /** From #310 P6a #309's refusal goes: a date past rank 300 of a long list saves, in its place. */
     @Test
-    fun `a date past the cut of a long stored list is refused, not lost`() {
+    fun `a date past rank 300 of a long stored list saves in its place`() {
         stored(List(350) { i -> machine("r$i", now - i * hour) })
         val vm = vm()
+        assertEquals(350, history(vm).size, "every row in view")
         vm.openLogBrew(BrewLogOwner.HISTORY)
-        vm.updateLogBrew { it.copy(method = "pourover", dose = 15.0, completedAtMs = now - 320 * hour - hour / 2) }
-        assertFalse(vm.saveLogBrew(now), "older than rank 300, newer than the last row")
-        // The view shows the newest 300; the store keeps all 350 (#310 P3a).
-        assertEquals(HistoryStore.MAX_SHOTS, history(vm).size)
-        assertEquals(350, VmHarness.library(vm).allShots().size)
+        val at = now - 320 * hour - hour / 2
+        vm.updateLogBrew { it.copy(method = "pourover", dose = 15.0, completedAtMs = at) }
+        assertTrue(vm.saveLogBrew(now), "older than rank 300: fine now")
+        VmHarness.idle()
+        assertEquals(351, history(vm).size)
+        assertEquals(321, history(vm).indexOfFirst { it.completedAtMs == at }, "between r320 and r321")
+    }
+
+    /** The legacy backend keeps #309's refusal: a date older than all it keeps would be dropped. */
+    @Test
+    fun `on the legacy backend a date older than a full history is refused, not lost`() {
+        HistoryStore.legacyOnlyForTest = true
+        try {
+            stored(List(HistoryStore.LEGACY_MAX_SHOTS) { i -> machine("r$i", now - i * hour) })
+            val vm = vm()
+            vm.openLogBrew(BrewLogOwner.HISTORY)
+            vm.updateLogBrew { it.copy(method = "pourover", dose = 15.0, completedAtMs = now - 400 * hour) }
+            assertFalse(vm.saveLogBrew(now))
+            assertEquals(HistoryStore.LEGACY_MAX_SHOTS, history(vm).size)
+        } finally {
+            HistoryStore.legacyOnlyForTest = false
+        }
     }
 
     @Test
     fun `a brew made now stays when the clock is behind a full history`() {
-        stored(List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now + (1_000 - i) * hour) })
+        HistoryStore.legacyOnlyForTest = true
+        try {
+            stored(List(HistoryStore.LEGACY_MAX_SHOTS) { i -> machine("r$i", now + (1_000 - i) * hour) })
+            val vm = vm()
+            val made = log(vm, at = null)
+            assertEquals(now, made.completedAtMs)
+            assertEquals(HistoryStore.LEGACY_MAX_SHOTS, history(vm).size)
+            assertEquals(made.id, history(vm).last().id)
+            assertNull(history(vm).firstOrNull { it.id == "r${HistoryStore.LEGACY_MAX_SHOTS - 1}" }, "the legacy cap: the oldest other row goes")
+        } finally {
+            HistoryStore.legacyOnlyForTest = false
+        }
+    }
+
+    /** From #310 P6a: with the clock behind the history, a brew made now goes last, and every row stays. */
+    @Test
+    fun `a brew made now with the clock behind keeps every row`() {
+        stored(List(HistoryStore.LEGACY_MAX_SHOTS) { i -> machine("r$i", now + (1_000 - i) * hour) })
         val vm = vm()
         val made = log(vm, at = null)
-        assertEquals(now, made.completedAtMs)
-        assertEquals(HistoryStore.MAX_SHOTS, history(vm).size)
+        assertEquals(HistoryStore.LEGACY_MAX_SHOTS + 1, history(vm).size)
         assertEquals(made.id, history(vm).last().id)
-        assertNull(history(vm).firstOrNull { it.id == "r${HistoryStore.MAX_SHOTS - 1}" }, "the oldest other row goes")
     }
 
     @Test
@@ -196,15 +248,15 @@ class ManualBrewDateVmTest {
         assertEquals(350, VmHarness.library(vm).allShots().size)
     }
 
-    /** From #310 P3a the store keeps every row: an old shot restores, past the view's cap. */
+    /** From #310 P6a nothing caps a restore: an old shot restores onto 300 rows, in view. */
     @Test
-    fun `a restore over a full view keeps the old shot in the store`() {
-        stored(List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now - i * hour) })
+    fun `a restore onto 300 rows adds the old shot in view`() {
+        stored(List(HistoryStore.LEGACY_MAX_SHOTS) { i -> machine("r$i", now - i * hour) })
         val vm = vm()
         val told = restore(vm, bundle(machine("old", now - 1_000 * hour)))
         assertTrue(told.startsWith("Restored 1 shot"), told)
-        assertEquals(HistoryStore.MAX_SHOTS, history(vm).size)
-        assertTrue(VmHarness.library(vm).allShots().any { it.id == "old" })
+        assertEquals(HistoryStore.LEGACY_MAX_SHOTS + 1, history(vm).size)
+        assertEquals("old", history(vm).last().id)
     }
 
     /** The legacy backend, when the move to shots.db failed, still has its cap. */
@@ -212,11 +264,11 @@ class ManualBrewDateVmTest {
     fun `a restore on the legacy backend counts the shots it kept and says what the cap dropped`() {
         HistoryStore.legacyOnlyForTest = true
         try {
-            stored(List(HistoryStore.MAX_SHOTS) { i -> machine("r$i", now - i * hour) })
+            stored(List(HistoryStore.LEGACY_MAX_SHOTS) { i -> machine("r$i", now - i * hour) })
             val vm = vm()
             val told = restore(vm, bundle(machine("old", now - 1_000 * hour)))
             assertTrue("History is full at 300 shots, so no shots were added" in told, told)
-            assertEquals(HistoryStore.MAX_SHOTS, history(vm).size)
+            assertEquals(HistoryStore.LEGACY_MAX_SHOTS, history(vm).size)
         } finally {
             HistoryStore.legacyOnlyForTest = false
         }

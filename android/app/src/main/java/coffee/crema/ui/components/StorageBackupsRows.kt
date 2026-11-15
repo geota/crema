@@ -32,13 +32,14 @@ fun StorageBackupsRows(vm: MainViewModel, ui: MainUiState, ds: DriveSync.UiState
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pending by remember { mutableStateOf<PendingLimit?>(null) }
+    var freeUp by remember { mutableStateOf(false) }
 
     // The history's move to shots.db didn't finish (#310 P3a): it runs as before, capped, and retries.
     if (ui.historyHealth == coffee.crema.history.HistoryHealth.LEGACY) {
         CremaSettingsRow(
             "Shot history storage",
             listOfNotNull(
-                "Still in its old format, which keeps the newest ${coffee.crema.history.HistoryStore.MAX_SHOTS} shots. Crema tries again at the next launches, then once a day.",
+                "Still in its old format, which keeps the newest ${coffee.crema.history.HistoryStore.LEGACY_MAX_SHOTS} shots. Crema tries again at the next launches, then once a day.",
                 ui.historyError?.let { "Last error: $it" },
             ).joinToString(" "),
         ) {
@@ -119,6 +120,14 @@ fun StorageBackupsRows(vm: MainViewModel, ui: MainUiState, ds: DriveSync.UiState
     CremaSettingsRow("Pinned shots", "Pin a shot from its detail in History.") {
         ValueText(ui.history.count { it.pinned }.toString())
     }
+    // History keeps every shot (#310 P6a); this is the one way to make room, and only when asked.
+    CremaSettingsRow(
+        "Free up space",
+        "Delete the shots older than a date you pick, after a backup. Pinned shots always stay. Crema never deletes shots on its own.",
+    ) {
+        androidx.compose.material3.TextButton(onClick = { freeUp = true }, enabled = ui.historyLoaded) { androidx.compose.material3.Text("Free up space…") }
+    }
+    if (freeUp) FreeUpSpaceDialog(vm, ui, onDismiss = { freeUp = false })
     CremaSettingsRow("Last backup", "The last backup that reached Google Drive.", last = true) {
         ValueText(ds.lastBackupAtMs?.let { relativeAgo(it) } ?: "Never")
     }
@@ -167,8 +176,4 @@ private fun sessionsLabel(keep: Int): String = when (keep) {
 
 private fun dirSize(dir: File): Long = dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
 
-private fun formatBytes(n: Long): String = when {
-    n < 1024L * 1024 -> "${maxOf(1, n / 1024)} KB"
-    n < 1024L * 1024 * 1024 -> "%.1f MB".format(n / (1024.0 * 1024))
-    else -> "%.2f GB".format(n / (1024.0 * 1024 * 1024))
-}
+private fun formatBytes(n: Long): String = coffee.crema.history.StorageSpace.format(n)

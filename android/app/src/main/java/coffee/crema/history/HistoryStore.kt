@@ -45,9 +45,11 @@ import java.util.zip.GZIPOutputStream
  * 3. The old copy stays. After migration nothing writes to or deletes
  *    `shots.json` or the `.json` series files.
  *
- * The view the app shows is capped at [MAX_SHOTS] unpinned rows, as before;
- * the store keeps every row. A row past the cap is hidden ([hiddenRows]), and
- * comes back when the cap lifts.
+ * From P6a nothing caps the rows (#310): the view the app shows holds every
+ * row the store holds. Only the legacy backend keeps its cap of
+ * [LEGACY_MAX_SHOTS], as it has nowhere else to put a row ([viewCap]).
+ * [hiddenRows] stays, empty once the view holds them all, for a row that
+ * reaches the store some other way.
  *
  * From P4a every row is a [ShotRow]: no series, profile or brew series, with
  * the summary the store wrote. A load reads rows only. A shot's heavy parts
@@ -105,7 +107,7 @@ internal data class JournalEntry(
     val id: String? get() = put?.id ?: delete
 }
 
-/** What a load gave: the rows in view, newest first, and how many are hidden past the cap. */
+/** What a load gave: the rows in view, newest first, and how many are hidden past the cap (none from P6a). */
 data class HistoryLoad(val view: List<ShotRow>, val hiddenCount: Int, val health: HistoryHealth)
 
 /** What a lost store can be rebuilt from, for the banner. */
@@ -249,7 +251,13 @@ class HistoryStore(private val context: Context, private val json: Json) {
     val usesSql: Boolean get() = mode == Mode.SQL
 
     /** The cap the store keeps, for a restore's plan: none from P3a, or legacy's. */
-    val capacity: Int? get() = if (mode == Mode.LEGACY) MAX_SHOTS else null
+    val capacity: Int? get() = if (mode == Mode.LEGACY) LEGACY_MAX_SHOTS else null
+
+    /**
+     * How many unpinned rows the view may hold (#310 P6a): none on `shots.db`,
+     * or anywhere but the legacy backend, whose list is the file.
+     */
+    val viewCap: Int? get() = capacity
 
     /** The rows' load, as the restore and the backups read it. */
     val storeHealth: StoreHealth
@@ -841,6 +849,24 @@ class HistoryStore(private val context: Context, private val json: Json) {
         val rows = stored.values.filter { it.id !in viewIds && it.id !in deleting }.sortedWith(ORDER)
         hiddenCache = Triple(version, viewIds, rows)
         return rows
+    }
+
+    // ── Disk space (#310 P6a) ────────────────────────────────────────────────
+
+    /** The bytes free where the history lives (`filesDir`), for the storage notices. Unknown reads as plenty. */
+    fun freeBytes(): Long = runCatching { freeSpace() }.getOrDefault(Long.MAX_VALUE)
+
+    /**
+     * About how many bytes deleting [ids] gives back: each row's columns and
+     * its `.series.gz`, the files [delete] removes. On the legacy backend, its
+     * series files. The old copy's `.json` series stay (rule 3), so they don't count.
+     */
+    suspend fun bytesOf(ids: Collection<String>): Long = withContext(Dispatchers.IO) {
+        when (mode) {
+            Mode.SQL -> runCatching { tables.bytesOf(db().readableDatabase, ids) }.getOrDefault(0L) + ids.sumOf { series.gzFile(it).length() }
+            Mode.LEGACY -> ids.sumOf { series.gzFile(it).length() + series.jsonFile(it).length() + series.legacyFile(it).length() }
+            else -> 0L
+        }
     }
 
     /** Every row id the store holds (SQL), in view or not. */
@@ -1543,7 +1569,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
      * `shots.json`'s rows. Its profile and brew series stay in memory (the
      * file carries them inline, and a save rewrites it whole); each row's
      * summary is worked out here from its series, as this backend has no
-     * stored one. That reads the series (at most [MAX_SHOTS]) at load, as
+     * stored one. That reads the series (at most [LEGACY_MAX_SHOTS]) at load, as
      * before P3a. A row whose series is inline is [stage]d, so the next save
      * moves it to its file.
      */
@@ -1753,12 +1779,14 @@ class HistoryStore(private val context: Context, private val json: Json) {
         runCatching { coffee.crema.diag.DiagLog.add("history: $line") }
     }
 
+    /** [all] as the view and the rows past its cap. From P6a `shots.db` has no cap, so every row is in view. */
     private fun <T : ShotMeta> splitView(all: List<T>): Pair<List<T>, List<T>> {
+        val cap = viewCap ?: return all to emptyList()
         var unpinned = 0
         val view = ArrayList<T>()
         val hidden = ArrayList<T>()
         for (row in all) {
-            if (row.pinned || unpinned++ < MAX_SHOTS) view += row else hidden += row
+            if (row.pinned || unpinned++ < cap) view += row else hidden += row
         }
         return view to hidden
     }
@@ -1805,8 +1833,14 @@ class HistoryStore(private val context: Context, private val json: Json) {
         @androidx.annotation.VisibleForTesting
         @Volatile internal var freeSpaceForTest: (() -> Long)? = null
 
-        /** The rows in view keep the newest N unpinned shots (matches the web cap). The store keeps all. */
-        const val MAX_SHOTS = 300
+        /**
+         * The legacy backend's cap: `shots.json` keeps the newest N unpinned
+         * shots, as before P3a. Nothing else caps the history from P6a (#310).
+         */
+        const val LEGACY_MAX_SHOTS = 300
+
+        /** The view's cap for a store in [health] ([viewCap]), for what reads the UI state. */
+        fun capFor(health: HistoryHealth): Int? = if (health == HistoryHealth.LEGACY) LEGACY_MAX_SHOTS else null
         const val FILE_NAME = "shots.json"
 
         /** The SQLite store the rows move to (SPEC §3, P3a). */
