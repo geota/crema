@@ -428,6 +428,21 @@ pub enum ScaleMode {
         /// Period, ms.
         period_ms: u64,
     },
+    /// Reports the cup once every `every_ms`, as a slow scale does: every
+    /// reading of one at 1 s or slower is a return, as the core sees it.
+    Sparse {
+        /// The time between readings, ms.
+        every_ms: u64,
+    },
+    /// A flap with short on-windows: off for `off_ms`, then on for `on_ms`.
+    /// Under about 1.1 s on, the trust gate's hold plus a reading, every
+    /// window is a return with little before it (REVIEW-414 M1).
+    Pulse {
+        /// How long it reports, ms.
+        on_ms: u64,
+        /// How long it's silent, ms.
+        off_ms: u64,
+    },
     /// Zeroes itself once.
     Rezero,
     /// A hand on the cup: `grams` on top for `ms`, then back to healthy.
@@ -469,6 +484,8 @@ pub struct SimScale {
     /// moved from the one the old zero was set with, grams.
     rezeroed: Option<f32>,
     tare_at: Option<u64>,
+    /// A tare landed since the world last asked.
+    tare_landed: bool,
     /// Write-to-effect tare latency, ms.
     pub tare_latency_ms: u64,
 }
@@ -485,15 +502,28 @@ impl SimScale {
             zeroed_load_g: 0.0,
             rezeroed: None,
             tare_at: None,
+            tare_landed: false,
             tare_latency_ms,
         }
     }
 
-    /// Whether it reports the truth whenever it reports: healthy, or
-    /// flapping.
+    /// Whether it reports the truth whenever it reports: healthy, flapping
+    /// or slow.
     #[must_use]
     pub fn honest(&self) -> bool {
-        matches!(self.mode, ScaleMode::Healthy | ScaleMode::Flap { .. })
+        matches!(
+            self.mode,
+            ScaleMode::Healthy
+                | ScaleMode::Flap { .. }
+                | ScaleMode::Sparse { .. }
+                | ScaleMode::Pulse { .. }
+        )
+    }
+
+    /// Whether it has stopped sending: stalled or silent.
+    #[must_use]
+    pub fn lost(&self) -> bool {
+        matches!(self.mode, ScaleMode::Stall | ScaleMode::Silent)
     }
 
     /// Start misbehaving this way.
@@ -529,6 +559,7 @@ impl SimScale {
         let gross = cup_g + self.load(now);
         if self.tare_at.is_some_and(|at| now >= at) {
             self.tare_at = None;
+            self.tare_landed = true;
             self.zero_g = gross;
             self.tared_cup_g = cup_g;
             self.zeroed_load_g = gross - cup_g;
@@ -538,6 +569,8 @@ impl SimScale {
             ScaleMode::Healthy | ScaleMode::Bump { .. } | ScaleMode::StepUp { .. } => Some(net),
             ScaleMode::Stall | ScaleMode::Silent => None,
             ScaleMode::Flap { period_ms } => (now % period_ms >= period_ms / 2).then_some(net),
+            ScaleMode::Sparse { every_ms } => now.is_multiple_of(every_ms).then_some(net),
+            ScaleMode::Pulse { on_ms, off_ms } => (now % (on_ms + off_ms) >= off_ms).then_some(net),
             ScaleMode::Rezero => {
                 self.zero_g = gross;
                 self.rezeroed(gross - cup_g);
@@ -577,6 +610,11 @@ impl SimScale {
     /// virtual zero the core latched for it wrong once the scale re-zeroes.
     pub fn take_rezero(&mut self) -> Option<f32> {
         self.rezeroed.take()
+    }
+
+    /// Whether a tare landed since the last call.
+    pub fn take_tare_landed(&mut self) -> bool {
+        std::mem::take(&mut self.tare_landed)
     }
 
     /// A re-zero with no flow running is the user's zero, as a tare is.
@@ -996,6 +1034,33 @@ mod tests {
         scale.set_mode(ScaleMode::Flap { period_ms: 2_000 });
         assert_eq!(scale.reading(500, 5.0), None);
         assert_eq!(scale.reading(1_500, 5.0), Some(5.0));
+    }
+
+    #[test]
+    fn a_sparse_scale_reports_on_its_interval() {
+        let mut scale = SimScale::new(0);
+        scale.set_mode(ScaleMode::Sparse { every_ms: 1_100 });
+        let sent: Vec<u64> = (1..=40)
+            .map(|i| i * 100)
+            .filter(|&t| scale.reading(t, 5.0).is_some())
+            .collect();
+        assert_eq!(sent, [1_100, 2_200, 3_300]);
+        assert!(scale.honest());
+    }
+
+    #[test]
+    fn a_pulsing_scale_reports_only_in_its_on_window() {
+        let mut scale = SimScale::new(0);
+        scale.set_mode(ScaleMode::Pulse {
+            on_ms: 300,
+            off_ms: 1_100,
+        });
+        let sent: Vec<u64> = (1..=30)
+            .map(|i| i * 100)
+            .filter(|&t| scale.reading(t, 5.0).is_some())
+            .collect();
+        assert_eq!(sent, [1_100, 1_200, 1_300, 2_500, 2_600, 2_700]);
+        assert!(scale.honest());
     }
 
     fn request(byte: u8) -> Write {

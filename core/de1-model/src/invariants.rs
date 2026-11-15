@@ -52,8 +52,14 @@ pub enum Invariant {
     I21,
     /// No `Weight` or `EstimatedWeight` espresso stop while the true cup
     /// weight is over target plus 6 g, on an honest session: the scale
-    /// healthy or flapping, connected, the DE1 heard throughout, and the
-    /// target unchanged, since the session opened (REVIEW-414 S3).
+    /// healthy, flapping or slow, connected to the core, the DE1 heard
+    /// throughout, the session seen from its start, and the target unchanged,
+    /// since the session opened (REVIEW-414 S3). A scale that goes `Stall` or
+    /// `Silent` for good after the gate keeps the session honest (S5): the
+    /// estimate must then stop it. On an honest session a `Volume` stop over
+    /// target plus 6 g with no volume limit set fails too (the backstop fired
+    /// where the estimate should have), and so does a pour past target plus
+    /// 6 g with no stop asked for.
     I22,
 }
 
