@@ -42,3 +42,10 @@ tempfile = "3"
 
 [lints]
 workspace = true
+
+# PLAN B1's native benchmarks: `#[ignore]` timing tests, no criterion. Built
+# by `cargo test` so they can't rot (the generator's own check runs there);
+# the timings run only with `--ignored`, in release (see the file's header).
+[[bench]]
+name = "history"
+test = true
