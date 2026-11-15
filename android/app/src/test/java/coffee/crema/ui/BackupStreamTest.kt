@@ -1,5 +1,7 @@
 package coffee.crema.ui
 
+import coffee.crema.history.wholeFrom
+import coffee.crema.history.rows
 import android.app.Application
 import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.defaultMaintenanceState
@@ -48,9 +50,10 @@ class BackupStreamTest {
 
     private fun snapshot(shots: List<StoredShot>, beans: List<coffee.crema.core.Bean> = emptyList()) = BackupSnapshot(
         customs = listOf("""{"id":"c1","title":"Mine"}"""),
+        full = wholeFrom(shots),
         state = MainUiState(
             maintenance = defaultMaintenanceState(now),
-            history = rowViewOf(shots),
+            history = rowViewOf(shots.rows()),
             beans = rowViewOf(beans),
         ),
         pinned = setOf("builtin:a"),
@@ -106,7 +109,11 @@ class BackupStreamTest {
 
     /** [snap] with [hidden] past the view's cap, read whole by [full]. */
     private fun withHidden(snap: BackupSnapshot, hidden: List<StoredShot>, full: (StoredShot) -> StoredShot) =
-        BackupSnapshot(snap.customs, snap.state, snap.pinned, snap.hidden, snap.prefs, snap.visualizerPrefs, snap.userRecipes, hiddenShots = hidden, full = full)
+        BackupSnapshot(
+            snap.customs, snap.state, snap.pinned, snap.hidden, snap.prefs, snap.visualizerPrefs, snap.userRecipes,
+            hiddenShots = hidden.rows(),
+            full = { r -> full(hidden.firstOrNull { it.id == r.id } ?: snap.full(r)) },
+        )
 
     @Test
     fun `a hidden row whose read fails just now is tried twice more`() {
@@ -183,7 +190,7 @@ class BackupStreamTest {
         }
         // A prelude line past the limit too, with shots well inside it.
         val small = snapshot(List(3) { shot(it, emptyList()) }).let {
-            BackupSnapshot(listOf("""{"id":"c1","title":"${"x".repeat(4096)}"}"""), it.state, it.pinned, it.hidden, it.prefs, it.visualizerPrefs, it.userRecipes)
+            BackupSnapshot(listOf("""{"id":"c1","title":"${"x".repeat(4096)}"}"""), it.state, it.pinned, it.hidden, it.prefs, it.visualizerPrefs, it.userRecipes, full = it.full)
         }
         assertFailsWith<BackupTooLarge> { stream(small, limits = BackupWalkLimits(maxLineBytes = 2048)) }
     }

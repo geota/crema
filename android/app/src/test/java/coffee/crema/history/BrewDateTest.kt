@@ -40,8 +40,8 @@ class BrewDateTest {
 
     @Test fun aBackdatedRowGoesToItsPlaceAndANewOneLeadsItsTie() {
         val history = listOf(shot("new", 30), shot("old", 10))
-        assertEquals(listOf("new", "mid", "old"), historyWith(listOf(shot("mid", 20)), rowsForTest(history)).map { it.id })
-        assertEquals(listOf("tie", "new", "old"), historyWith(listOf(shot("tie", 30)), rowsForTest(history)).map { it.id })
+        assertEquals(listOf("new", "mid", "old"), historyWith(listOf(shot("mid", 20)).rows(), rowsForTest(history.rows())).map { it.id })
+        assertEquals(listOf("tie", "new", "old"), historyWith(listOf(shot("tie", 30)).rows(), rowsForTest(history.rows())).map { it.id })
     }
 
     @Test fun pull_never_evicts_at_cap() {
@@ -83,7 +83,7 @@ class BrewDateTest {
 
     @Test fun theCapDropsTheOldestNotTheNewest() {
         val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i) }
-        val next = historyWith(listOf(shot("mid", 999_950)), rowsForTest(full))
+        val next = historyWith(listOf(shot("mid", 999_950)).rows(), rowsForTest(full.rows()))
         assertEquals(HistoryStore.MAX_SHOTS, next.size)
         assertEquals("r0", next.first().id)
         assertTrue(next.any { it.id == "mid" })
@@ -123,7 +123,7 @@ class BrewDateTest {
     @Test fun aRowJustMadeStaysWhenTheClockIsBehindAFullHistory() {
         val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i) }
         val made = shot("made", 10)
-        val next = historyWith(listOf(made), rowsForTest(full), keepId = made.id)
+        val next = historyWith(listOf(made).rows(), rowsForTest(full.rows()), keepId = made.id)
         assertEquals(HistoryStore.MAX_SHOTS, next.size)
         assertEquals("made", next.last().id)
         assertFalse(next.any { it.id == full.last().id }, "the oldest other row goes")
@@ -133,10 +133,10 @@ class BrewDateTest {
     @Test fun aPinnedRowStaysWhenABrewIsLoggedOnAFullHistory() {
         val full = List(HistoryStore.MAX_SHOTS) { i -> shot("r$i", 1_000_000L - i) }
             .mapIndexed { i, s -> if (i == HistoryStore.MAX_SHOTS - 1) s.copy(pinned = true) else s }
-        val first = historyWith(listOf(shot("made", 2_000_000)), rowsForTest(full), keepId = "made")
+        val first = historyWith(listOf(shot("made", 2_000_000)).rows(), rowsForTest(full.rows()), keepId = "made")
         assertTrue(first.any { it.id == "r299" }, "the pinned row stays")
         assertEquals(HistoryStore.MAX_SHOTS + 1, first.size, "the pinned row doesn't count")
-        val second = historyWith(listOf(shot("next", 2_000_001)), rowsForTest(first), keepId = "next")
+        val second = historyWith(listOf(shot("next", 2_000_001)).rows(), rowsForTest(first.toList()), keepId = "next")
         assertTrue(second.any { it.id == "r299" }, "the pinned row stays")
         assertFalse(second.any { it.id == "r298" }, "the oldest unpinned row goes instead")
     }

@@ -1,5 +1,6 @@
 package coffee.crema.ui
 
+import coffee.crema.history.withHeavy
 import android.app.Application
 import android.database.sqlite.SQLiteDatabase
 import androidx.lifecycle.ViewModelStore
@@ -121,7 +122,7 @@ class HistoryViewCapVmTest {
         val library = VmHarness.library(vm)
         val hidden = library.allShots().last()
         assertFalse(vm.ui.value.history.any { it.id == hidden.id }, "it's past the cap")
-        val refused = library.insertPulledShots(listOf(hidden.copy(notes = "pulled again")))
+        val refused = library.insertPulledShots(listOf(hidden.withHeavy(emptyList(), null, null).copy(notes = "pulled again")))
         VmHarness.idle()
         assertTrue(refused.isEmpty(), "it's here, so not refused either")
         assertEquals(320, library.allShots().size)
@@ -151,7 +152,7 @@ class HistoryViewCapVmTest {
         plant(planted)
         val vm = vm()
         val library = VmHarness.library(vm)
-        VmHarness.idleUntil("the series") { library.seriesReady }
+        VmHarness.idleUntil("the series") { library.rowsReady }
         val hidden = library.allShots().drop(vm.ui.value.history.size).first { id -> planted.first { it.id == id.id }.samples.isNotEmpty() && planted.first { it.id == id.id }.profile != null }
         val original = planted.first { it.id == hidden.id }
         library.applyRemoteShot(
@@ -172,7 +173,7 @@ class HistoryViewCapVmTest {
         plant(planted)
         val vm = vm()
         val library = VmHarness.library(vm)
-        VmHarness.idleUntil("the series") { library.seriesReady }
+        VmHarness.idleUntil("the series") { library.rowsReady }
         val zip = assertNotNull(runBlocking { library.buildBackupZip(BackupKind.FILE) })
         try {
             assertEquals(320u, zip.counts.shots, "every row, past the cap too")
@@ -237,7 +238,7 @@ class HistoryViewCapVmTest {
         plant(theirs)
         val source = vm()
         val sourceLib = VmHarness.library(source)
-        VmHarness.idleUntil("the series") { sourceLib.seriesReady }
+        VmHarness.idleUntil("the series") { sourceLib.rowsReady }
         val zip = assertNotNull(runBlocking { sourceLib.buildBackupZip(BackupKind.FILE) })
         val bytes = zip.file.readBytes()
         zip.release()

@@ -1,6 +1,8 @@
 package coffee.crema.visualizer
 
 import android.content.ContextWrapper
+import coffee.crema.history.row
+import coffee.crema.history.rows
 import coffee.crema.history.StoredShot
 import coffee.crema.security.SecretBox
 import coffee.crema.security.SecretCipher
@@ -108,9 +110,10 @@ class VisualizerSessionTest {
         appVersion = "t",
         notify = { notices += it },
         onShotSynced = { local, remote -> history[local] = history.getValue(local).copy(visualizerId = remote) },
-        currentShot = { history[it] },
-        allShots = { history.values.toList() },
-        seriesReady = rowsLoad,
+        currentShot = { history[it]?.row() },
+        loadShot = { history[it] },
+        allShots = { history.values.toList().rows() },
+        awaitRows = rowsLoad,
         rowsWaitMs = 50,
         now = { clock },
         exchangeCode = { _, _ -> issued },
@@ -155,8 +158,8 @@ class VisualizerSessionTest {
             TokenSet("fresh", "$spent-2", expiresAt = Long.MAX_VALUE)
         }
         val s = sync(VisualizerState(tokens = expired))
-        s.uploadShot(shot("a"), silent = true)
-        s.uploadShot(shot("b"), silent = true)
+        s.uploadShot(shot("a").row(), silent = true)
+        s.uploadShot(shot("b").row(), silent = true)
         Thread.sleep(100)
         gate.complete(Unit)
         settle()
@@ -182,7 +185,7 @@ class VisualizerSessionTest {
             TokenSet("fresh", "rt-2", expiresAt = Long.MAX_VALUE)
         }
         val s = sync(VisualizerState(tokens = expired))
-        s.uploadShot(shot("a"), silent = true)
+        s.uploadShot(shot("a").row(), silent = true)
         Thread.sleep(100)
         s.signOut(quiet = true)
         Thread.sleep(100)
@@ -200,7 +203,7 @@ class VisualizerSessionTest {
             TokenSet("x-fresh", "x-2", expiresAt = Long.MAX_VALUE)
         }
         val s = sync(VisualizerState(tokens = expired, pendingVerifier = "v", pendingState = "st"))
-        s.uploadShot(shot("a"), silent = true)
+        s.uploadShot(shot("a").row(), silent = true)
         Thread.sleep(100)
         s.handleCallback("code", "st", null)
         Thread.sleep(100)
@@ -217,7 +220,7 @@ class VisualizerSessionTest {
             throw TokenEndpointError(400, """{"error":"invalid_grant"}""", "invalid_grant")
         }
         val s = sync(VisualizerState(tokens = expired, pendingVerifier = "v", pendingState = "st"))
-        s.uploadShot(shot("a"), silent = true)
+        s.uploadShot(shot("a").row(), silent = true)
         Thread.sleep(100)
         s.handleCallback("code", "st", null)
         Thread.sleep(100)
@@ -232,7 +235,7 @@ class VisualizerSessionTest {
     fun `a refresh that leaves out the refresh token keeps the one in use`() {
         refresh = { TokenSet("fresh", null, expiresAt = Long.MAX_VALUE) }
         val s = sync(VisualizerState(tokens = expired))
-        s.uploadShot(shot("a"), silent = true)
+        s.uploadShot(shot("a").row(), silent = true)
         settle()
         assertEquals("rt", stored().tokens?.refreshToken)
     }
@@ -242,8 +245,8 @@ class VisualizerSessionTest {
         refresh = { throw TokenEndpointError(400, """{"error":"invalid_grant"}""", "invalid_grant") }
         val account = VisualizerAccount(id = "u1", name = "Ada", public = true, avatarUrl = "")
         val s = sync(VisualizerState(tokens = expired, account = account, shotPullCursor = 7L))
-        s.uploadShot(shot("a"), silent = true)
-        s.uploadShot(shot("b"), silent = true)
+        s.uploadShot(shot("a").row(), silent = true)
+        s.uploadShot(shot("b").row(), silent = true)
         settle()
         assertEquals("one notice: $notices", listOf(VISUALIZER_RECONNECT_LINE), notices)
         val after = stored()
@@ -303,10 +306,10 @@ class VisualizerSessionTest {
         assertFalse(v.enabled)
         assertTrue(notices.any { "different Visualizer account" in it })
 
-        assertFalse(v.uploadShot(shot("direct"), silent = true))
-        assertFalse(v.maybeAutoUpload(shot("auto"), null))
+        assertFalse(v.uploadShot(shot("direct").row(), silent = true))
+        assertFalse(v.maybeAutoUpload(shot("auto").row()))
         runBlocking { v.drainRetryQueue() }
-        v.uploadAllUnsynced(history.values.toList())
+        v.uploadAllUnsynced(history.values.toList().rows())
         settle()
         assertTrue("nothing went up: $uploads", uploads.isEmpty())
         assertTrue("a parked delete stays: $deletes", deletes.isEmpty())
@@ -382,12 +385,12 @@ class VisualizerSessionTest {
         settle()
 
         assertTrue(v.enabled)
-        assertFalse("the shots of then stay off", v.inBacklog(old))
-        assertTrue(v.unsent(history.values.toList()).isEmpty())
+        assertFalse("the shots of then stay off", v.inBacklog(old.row()))
+        assertTrue(v.unsent(history.values.toList().rows()).isEmpty())
 
         val new = shot("new-shot", completedAt = clock + 1)
-        assertTrue(v.inBacklog(new))
-        assertTrue(v.maybeAutoUpload(new, null))
+        assertTrue(v.inBacklog(new.row()))
+        assertTrue(v.maybeAutoUpload(new.row()))
         settle()
         assertEquals(1, uploads.size)
     }
@@ -410,10 +413,10 @@ class VisualizerSessionTest {
         assertTrue(v.state.value.signedIn)
         assertTrue(v.state.value.accountUnconfirmed)
         assertFalse(v.enabled)
-        assertFalse(v.uploadShot(shot("a"), silent = true))
-        assertFalse(v.maybeAutoUpload(shot("b"), null))
-        v.syncNow(history.values.toList())
-        v.uploadAllUnsynced(history.values.toList())
+        assertFalse(v.uploadShot(shot("a").row(), silent = true))
+        assertFalse(v.maybeAutoUpload(shot("b").row()))
+        v.syncNow(history.values.toList().rows())
+        v.uploadAllUnsynced(history.values.toList().rows())
         settle()
         assertTrue(uploads.isEmpty())
         assertTrue("it survives a relaunch", reopen().state.value.accountUnconfirmed)

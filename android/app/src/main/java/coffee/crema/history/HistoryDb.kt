@@ -222,14 +222,29 @@ internal class HistoryTables(private val json: Json) {
         db.insertWithOnConflict("shots", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
-    /** Write [shot]'s row and leave its heavy columns as they are: a light row was loaded without them. */
-    fun putLight(db: SQLiteDatabase, shot: StoredShot, summary: ShotSummary) {
+    /**
+     * Write [shot]'s row, and each heavy column only when [shot] carries it: a
+     * row from the view is light (#310 P4a), so a profile or brew series it
+     * doesn't carry stays as stored. A row the table doesn't hold yet goes in
+     * whole.
+     */
+    fun upsert(db: SQLiteDatabase, shot: StoredShot, summary: ShotSummary) {
         val values = ContentValues().apply {
             put("completed_at", shot.completedAtMs)
             put("row_json", rowJson(shot, summary))
+            profileJson(shot)?.let { put("profile_json", it) }
+            brewSeriesJson(shot)?.let { put("brew_series_json", it) }
         }
         if (db.update("shots", values, "id = ?", arrayOf(shot.id)) == 0) putFull(db, shot, summary)
     }
+
+    /** The ids of the rows whose profile column is set. */
+    fun idsWithProfile(db: SQLiteDatabase): Set<String> =
+        db.rawQuery("SELECT id FROM shots WHERE profile_json IS NOT NULL", null).use { c ->
+            val out = HashSet<String>(c.count)
+            while (c.moveToNext()) out += c.getString(0)
+            out
+        }
 
     /** Set [id]'s profile column alone: the row and its brew series stay as stored. */
     fun putProfile(db: SQLiteDatabase, id: String, profile: JsonObject) {

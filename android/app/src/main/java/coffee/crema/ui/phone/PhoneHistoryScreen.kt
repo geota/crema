@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import coffee.crema.ui.fmt
@@ -29,7 +30,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coffee.crema.history.ShotMeta
 import coffee.crema.history.StoredShot
+import coffee.crema.history.ShotRow as HistoryRow
+import coffee.crema.history.hasBrewSeries
 import coffee.crema.core.daysOffRoast as coreDaysOffRoast
 import coffee.crema.ui.freshnessColor
 import coffee.crema.brew.methodIcon
@@ -127,7 +131,7 @@ fun PhoneHistoryScreen(
     var methodFilter by rememberListOptString("history/method")
     // The form itself is the pushed `log-brew` route over a VM-held draft
     // (it survives rotation and the phone↔tablet swap).
-    val openLogBrew: (StoredShot?) -> Unit = { prefill ->
+    val openLogBrew: (ShotMeta?) -> Unit = { prefill ->
         vm.openLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.HISTORY, prefill = prefill)
         onNav(coffee.crema.ui.brewlog.LOG_BREW_ROUTE)
     }
@@ -168,6 +172,8 @@ fun PhoneHistoryScreen(
     val launchSave: (String, String?) -> Unit = { name, content ->
         if (content != null) { pendingExport = content; saveLauncher.launch(name) }
     }
+    // An export reads each shot whole first (#310 P4a), off the main thread.
+    val exportScope = rememberCoroutineScope()
 
     // Minute-bucketed (see HistoryScreen), and ticks by itself.
     val nowBucket = coffee.crema.ui.rememberMinuteBucket()
@@ -184,9 +190,13 @@ fun PhoneHistoryScreen(
     val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
     // Memoized with the minute-bucketed `now`: re-filtering the whole log on
     // every UI-state emission is the expensive part.
-    val filtered = remember(ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee, pinnedOnly) {
+    // Off the main thread (#310 P4a, SPEC §5), the last result kept on screen
+    // meanwhile; a search waits for typing to pause.
+    val filtered = coffee.crema.ui.rememberFilteredShots(
+        ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee, pinnedOnly,
+    ) { q ->
         filterAndSortShots(
-            ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,
+            ui.history, q, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,
             coffeeOf = { shotCoffee(it, liveCoffee)?.key },
             pinnedOnly = pinnedOnly,
         )
@@ -209,7 +219,7 @@ fun PhoneHistoryScreen(
             onDeleted = { detailId = null },
             onLoadOnBrew = { vm.loadProfileOnBrew(detail.profileName); onNav("brew") },
             onStartFromShot = { vm.startFromShot(detail.id); onNav("brew") },
-            onExport = { launchSave("crema-shot.crema.jsonl", vm.shotsJson(listOf(detail.id))) },
+            onExport = { exportScope.launch { launchSave("crema-shot.crema.jsonl", vm.shotsJson(listOf(detail.id))) } },
             onLogAgain = { openLogBrew(detail) },
         )
         return
@@ -217,9 +227,15 @@ fun PhoneHistoryScreen(
 
     // Compare PUSHES full-screen (same idiom as detail); ComparePhoneScreen owns its
     // own back bar + channel selector + chart + legend cards.
-    val compareShots = sel.picked.mapNotNull { id -> ui.history.firstOrNull { it.id == id } }
-    if (compareOpen && compareShots.size >= 2) {
+    val compareRows = sel.picked.mapNotNull { id -> ui.history.firstOrNull { it.id == id } }
+    if (compareOpen && compareRows.size >= 2) {
         BackHandler { compareOpen = false }
+        // Every selected shot loads whole first (SPEC §4: load all selected, then draw).
+        val compareShots = coffee.crema.ui.rememberLoadedShots(compareRows, vm::loadShot)
+        if (compareShots == null) {
+            coffee.crema.ui.components.HistoryLoadingSkeleton(Modifier.fillMaxSize())
+            return
+        }
         Scaffold(containerColor = MaterialTheme.colorScheme.background) { inner ->
             Box(Modifier.padding(inner)) {
                 ComparePhoneScreen(
@@ -428,10 +444,12 @@ fun PhoneHistoryScreen(
                     }
                 }
             }
+            // A key-to-index map (SPEC §5), not a scan of the keys per lookup.
+            val rowIndex = remember(rowKeys) { HashMap<String, Int>(rowKeys.size * 2).apply { rowKeys.forEachIndexed { i, k -> put(k, i) } } }
             val listState = rememberListMemoryState(
                 historyListKey(range, profileFilter, beanFilter, methodFilter, sort, sortDesc),
                 filtered.size,
-            ) { k -> rowKeys.indexOf(k).takeIf { it >= 0 } }
+            ) { k -> rowIndex[k] }
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -485,10 +503,10 @@ fun PhoneHistoryScreen(
             title = "Export as",
             items = listOf(
                 SheetItem("file-text", "All shots", sub = "Every shot as one Crema file. Re-importable in Crema on web and Android.") {
-                    launchSave("crema-history.crema.jsonl", vm.shotsJson(null))
+                    exportScope.launch { launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) }
                 },
                 SheetItem("file-code", "Current filter", sub = "Only the ${filtered.size} shot(s) matching your search and filters.") {
-                    launchSave("crema-history-filtered.crema.jsonl", vm.shotsJson(filtered.map { it.id }))
+                    exportScope.launch { launchSave("crema-history-filtered.crema.jsonl", vm.shotsJson(filtered.map { it.id })) }
                 },
             ),
             onDismiss = { exportSheet = false },
@@ -505,13 +523,14 @@ private fun dayLabel(ms: Long, startOfDay: Long, dayMs: Long): String = when {
 
 // ── Stats strip (proto .ph-stats — 3-up) ─────────────────────────────────────
 @Composable
-private fun PhoneStatsStrip(history: List<StoredShot>, weightUnit: String) {
+private fun PhoneStatsStrip(history: List<HistoryRow>, weightUnit: String) {
     // Scoped to the filtered set (issue 48), method-aware (issue #10): a mixed
     // set scopes the weight / ratio / time averages to espresso rows — the
     // "esp" tag says so. The Brew Log adds the count and "Beans used" (Σ dose,
     // the inventory number), so six tiles wrap by the width the strip gets:
     // 3×2 under 600dp (every phone), one row from 600dp (7" portrait).
-    val s = brewHistoryStats(history)
+    // Off the main thread (SPEC §5), the last result on screen meanwhile.
+    val s = coffee.crema.ui.rememberOffMain(history, initial = { brewHistoryStats(history) }) { brewHistoryStats(history) }
     fun scoped(label: String) = if (s.mixedMethods) "$label · esp" else label
     val nonEsp = history.any { it.methodOf != null && it.methodOf != "espresso" }
     val beansUsed = convertWeight(s.beansUsedG?.toFloat(), weightUnit)
@@ -561,7 +580,7 @@ private fun PhoneStatTile(label: String, value: String, modifier: Modifier = Mod
 // ── Shot row (proto .ph-row) ─────────────────────────────────────────────────
 @Composable
 private fun PhoneShotRow(
-    shot: StoredShot,
+    shot: HistoryRow,
     syncing: Boolean,
     /** Cloud status across every enabled destination. */
     pip: UploadPip = UploadPip.Local,
@@ -585,26 +604,25 @@ private fun PhoneShotRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (selecting) RowCheck(picked)
-        // The sparkline slot: DE1 telemetry when recorded; a guided brew's
-        // weight curve; else the method mark tile (issue #10).
-        val rowSeries = shot.brewSeries
+        // The sparkline slot: the row's stored spark (#310 P4a), drawn from the
+        // DE1 telemetry or a guided brew's weight curve; else the method mark
+        // tile (issue #10).
+        val spark = remember(shot.summary.spark) { coffee.crema.history.decodeSpark(shot.summary.spark) }
         val sparkModifier = Modifier
             .width(58.dp)
             .height(36.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
-        when {
-            shot.samples.isNotEmpty() -> CremaSparkChart(
-                samples = shot.samples,
+        if (spark != null) {
+            coffee.crema.ui.components.ShotSparkChart(
+                spark = spark,
                 insetDp = 3f,
-                tempStroke = 1.0f,
                 weightStroke = 1.2f,
                 flowStroke = 1.2f,
                 modifier = sparkModifier,
             )
-            rowSeries != null && rowSeries.samples.isNotEmpty() ->
-                BrewSparkChart(series = rowSeries, modifier = sparkModifier)
-            else -> RowMethodMark(shot.methodOf)
+        } else {
+            RowMethodMark(shot.methodOf)
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -688,7 +706,7 @@ private fun RowMono(text: String) {
 @Composable
 private fun PhoneShotDetail(
     vm: MainViewModel,
-    shot: StoredShot,
+    shot: HistoryRow,
     /** Cloud destinations + their state for this shot — one Upload row via [uploadMenuEntry]. */
     uploadTargets: List<UploadTarget>,
     syncing: Boolean,
@@ -717,6 +735,11 @@ private fun PhoneShotDetail(
     var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
     var nextPlan by remember(shot.id) { mutableStateOf(shot.nextPlan ?: "") }
     val context = androidx.compose.ui.platform.LocalContext.current
+    // The shot whole (#310 P4a): its curve, recipe and brew series load with the detail.
+    val load = coffee.crema.ui.rememberLoadedShot(shot, vm::loadShot)
+    val full = (load as? coffee.crema.ui.ShotLoad.Ready)?.shot
+    val loading = load is coffee.crema.ui.ShotLoad.Loading
+    val samples = full?.samples.orEmpty()
 
     Scaffold(
         topBar = {
@@ -818,7 +841,7 @@ private fun PhoneShotDetail(
             // Chart card + legend. Brew rows (issue #10): a guided session
             // draws its weight curve with stage bands; a manual log shows no
             // chart card at all — the screen tightens up.
-            val brewSeries = shot.brewSeries
+            val brewSeries = full?.brewSeries
             if (isBrew) {
                 if (brewSeries != null && brewSeries.samples.isNotEmpty()) {
                     Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -836,15 +859,21 @@ private fun PhoneShotDetail(
                             BrewSessionCanvas(brewSeries, Modifier.fillMaxWidth().height(190.dp), showLegend = false)
                         }
                     }
+                } else if (shot.hasBrewSeries) {
+                    Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
+                        coffee.crema.ui.components.ChartLoading(loading, Modifier.fillMaxWidth().height(190.dp))
+                    }
                 }
             } else {
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
                 Column(Modifier.padding(start = 6.dp, end = 10.dp, top = 10.dp, bottom = 6.dp)) {
-                    ShotChartLegend(shot.samples, Modifier.padding(start = 10.dp, bottom = 4.dp))
-                    if (shot.samples.isEmpty()) {
+                    ShotChartLegend(samples, Modifier.padding(start = 10.dp, bottom = 4.dp))
+                    if (loading) {
+                        coffee.crema.ui.components.ChartLoading(true, Modifier.fillMaxWidth().height(140.dp))
+                    } else if (samples.isEmpty()) {
                         Box(Modifier.fillMaxWidth().height(140.dp), contentAlignment = Alignment.Center) {
                             Text(
-                                "No telemetry recorded for this shot.",
+                                if (shot.summary.sampleCount == null || full == null) "This shot's telemetry couldn't be read." else "No telemetry recorded for this shot.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -852,7 +881,7 @@ private fun PhoneShotDetail(
                     } else {
                         val units = ChartUnits(weightUnit, tempUnit, pressureUnit)
                         EnlargeableChart(Modifier.fillMaxWidth().height(210.dp), scrubbable = true) { m ->
-                            InspectableShotChart(shot.samples, units, m)
+                            InspectableShotChart(samples, units, m)
                         }
                     }
                 }
@@ -886,9 +915,8 @@ private fun PhoneShotDetail(
                 DetailMetric(shot.yieldG?.let { "${dYield.value}${dYield.unit}" } ?: "—", "Yield", tel.weight, Modifier.weight(1f))
             }
             // The pour's averages (#299), beside the peaks; nothing without a pour.
-            val pourAverage = remember(shot.id, shot.samples.size, pressureUnit, tempUnit) {
-                pourAverageLine(vm.pourAverages(shot), pressureUnit, tempUnit)
-            }
+            val pourAverages = coffee.crema.ui.rememberOffMain(full) { full?.let(vm::pourAverages) }
+            val pourAverage = pourAverageLine(pourAverages, pressureUnit, tempUnit)
             pourAverage?.let {
                 Text(
                     "Pour average $it",
@@ -970,7 +998,7 @@ private fun PhoneShotDetail(
             // Shot quality — the core's analysis (Decenza port) over the stored
             // telemetry, below the chart + metrics it describes. Computed once per
             // shot; null (thin/legacy shot) renders nothing.
-            val quality = remember(shot.id) { vm.analyzeShotQuality(shot) }
+            val quality = coffee.crema.ui.rememberOffMain(full) { full?.let(vm::analyzeShotQuality) }
             if (quality != null) ShotQualityCard(quality)
 
             // Rating + privacy + notes.
@@ -1202,14 +1230,14 @@ private fun PrivacyPill(label: String, on: Boolean, onClick: () -> Unit) {
     }
 }
 
-private fun shotRatioLabel(shot: StoredShot): String? =
+private fun shotRatioLabel(shot: ShotMeta): String? =
     // Method-aware (issue #10): espresso speaks yield-out, filter methods
     // water-in — the core's ratio_for_method, shared with the tablet and
     // the web's ratioLabel.
     shot.methodRatioLabel()
 
 /** The ⋮ sheet's pin row (#311): pinned shots keep their capture and skip cleanup. */
-private fun pinSheetItem(shot: StoredShot, onChange: (Boolean) -> Unit) =
+private fun pinSheetItem(shot: ShotMeta, onChange: (Boolean) -> Unit) =
     if (shot.pinned) {
         SheetItem("push-pin-fill", "Unpin", sub = "Its capture then counts toward the limit again") { onChange(false) }
     } else {

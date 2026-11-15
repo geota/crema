@@ -2,7 +2,7 @@ package coffee.crema.ui
 
 import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
-import coffee.crema.history.StoredShot
+import coffee.crema.history.ShotRow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,8 +29,8 @@ sealed interface RowView<T> : List<T>
 /** The current rows, inside an edit. */
 sealed interface Rows<T> : List<T>
 
-typealias HistoryView = RowView<StoredShot>
-typealias HistoryRows = Rows<StoredShot>
+typealias HistoryView = RowView<ShotRow>
+typealias HistoryRows = Rows<ShotRow>
 typealias BeanView = RowView<Bean>
 typealias BeanRows = Rows<Bean>
 typealias RoasterView = RowView<Roaster>

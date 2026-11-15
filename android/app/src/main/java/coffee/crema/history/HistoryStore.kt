@@ -46,8 +46,14 @@ import java.util.zip.GZIPOutputStream
  *    `shots.json` or the `.json` series files.
  *
  * The view the app shows is capped at [MAX_SHOTS] unpinned rows, as before;
- * the store keeps every row. A row past the cap is hidden ([hiddenRows]), light
- * (no profile, brew series or samples), and comes back when the cap lifts.
+ * the store keeps every row. A row past the cap is hidden ([hiddenRows]), and
+ * comes back when the cap lifts.
+ *
+ * From P4a every row is a [ShotRow]: no series, profile or brew series, with
+ * the summary the store wrote. A load reads rows only. A shot's heavy parts
+ * come through [loadShot] when something needs them (the last few kept in
+ * memory), and go in through [stage]: the next [save] writes them with the
+ * row. A part a save doesn't carry stays as stored.
  *
  * If the migration can't finish, the app runs on the legacy backend: today's
  * `shots.json`, with its cap, retried at the next two launches and then at most
@@ -100,7 +106,7 @@ internal data class JournalEntry(
 }
 
 /** What a load gave: the rows in view, newest first, and how many are hidden past the cap. */
-data class HistoryLoad(val view: List<StoredShot>, val hiddenCount: Int, val health: HistoryHealth)
+data class HistoryLoad(val view: List<ShotRow>, val hiddenCount: Int, val health: HistoryHealth)
 
 /** What a lost store can be rebuilt from, for the banner. */
 data class LostChoices(
@@ -161,35 +167,50 @@ class HistoryStore(private val context: Context, private val json: Json) {
     @Volatile var lostChoices: LostChoices? = null
         private set
 
-    // ── The SQL backend's memory of what it wrote ─────────────────────────────
+    // ── The store's memory of what it wrote ──────────────────────────────────
 
-    /** Each row as `shots.db` holds it (series stripped), by id: the save's diff, and the hidden rows. */
-    private val stored = ConcurrentHashMap<String, StoredShot>()
+    /**
+     * Each row as the store holds it, light, with the store's own summary, by
+     * id: the save's diff, the hidden rows, and (legacy) the rows of
+     * `shots.json`. Nothing here holds a series, a profile or a brew series.
+     */
+    private val stored = ConcurrentHashMap<String, ShotRow>()
 
-    /** Each row's stored summary. */
-    private val summaries = ConcurrentHashMap<String, ShotSummary>()
+    /** Rows whose `profile_json` is set: a pull fills a profile only into a row that has none. */
+    private val withProfile: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    /** Rows loaded without their profile and brew series: a save of one keeps the stored ones. */
-    private val light: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /**
+     * Shots made or brought here whole ([stage]) whose heavy parts the next
+     * save writes: a capture, a logged brew, a pull, an import, a restore, a
+     * backfill. A part a staged shot lacks stays as the store holds it.
+     */
+    private val staged = ConcurrentHashMap<String, StoredShot>()
+
+    /** The staged shot each journaled line came from (the store out of reach), so a save doesn't journal it again. */
+    private val journaledStage = ConcurrentHashMap<String, StoredShot>()
+
+    /** The heavy parts of the last [RECENT_SHOTS] shots read whole ([loadShot]), least recent first. */
+    private val recent = object : LinkedHashMap<String, Heavy>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Heavy>?): Boolean = size > RECENT_SHOTS
+    }
+
+    private class Heavy(val samples: List<TelemetrySample>, val profile: JsonObject?, val brewSeries: coffee.crema.core.BrewSeries?)
 
     /** The last object seen for each row in a save: the same object is unchanged. */
-    private val seen = ConcurrentHashMap<String, StoredShot>()
+    private val seen = ConcurrentHashMap<String, ShotRow>()
 
     /** Ids whose series is on disk, in any of its files. */
     private val onDisk: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    /** Rows whose stored summary says a curve their series read couldn't find: unknown now, written at the next save (S4). */
+    /** Rows whose stored summary is wrong now (a curve its read didn't find, S4; a count that read back otherwise): the next save writes it. */
     private val dirtySummary: MutableSet<String> = ConcurrentHashMap.newKeySet()
-
-    /** Rows whose series read back with another count than their stored summary: the next save corrects it. */
-    private val staleSummary: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /** Rows a delete has taken out of the store, or is about to. */
     private val deleting: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /** Bumped on every change to [stored], for [hiddenRows]'s cache. */
     @Volatile private var version = 0L
-    @Volatile private var hiddenCache: Triple<Long, Set<String>, List<StoredShot>>? = null
+    @Volatile private var hiddenCache: Triple<Long, Set<String>, List<ShotRow>>? = null
 
     /** The day of the last rows snapshot. */
     @Volatile private var snapshotDay: LocalDate? = null
@@ -210,14 +231,17 @@ class HistoryStore(private val context: Context, private val json: Json) {
     @Volatile var unreadableRows: List<String> = emptyList()
         private set
 
-    /** Shots whose series file was unreadable at load (kept aside and reported). */
+    /** Shots whose series file was unreadable when read (kept aside and reported). */
     @Volatile var unreadableSeries: Set<String> = emptySet()
         private set
 
     // ── The legacy backend (shots.json), as before P3a ───────────────────────
 
-    /** Series files that already hold the in-memory series (legacy). */
+    /** Series files that already hold the series (legacy). */
     private val written = mutableSetOf<String>()
+
+    /** The legacy backend's profile and brew series per row: `shots.json` carries them inline. */
+    private val legacyHeavy = ConcurrentHashMap<String, Pair<JsonObject?, coffee.crema.core.BrewSeries?>>()
 
     // ── Open, migrate, load ──────────────────────────────────────────────────
 
@@ -237,16 +261,15 @@ class HistoryStore(private val context: Context, private val json: Json) {
             HistoryHealth.LOST -> StoreHealth.DAMAGED
         }
 
-    /** Every row (view and hidden) with its series: for tests and small tools. */
+    /** Every row (view and hidden), each loaded whole: for tests and small tools. A row that won't read comes light. */
     suspend fun load(): List<StoredShot> {
         val loaded = loadAll()
-        val all = loaded.view + hiddenRows(loaded.view.mapTo(HashSet()) { it.id }).map { loadFull(it) }
-        val seriesById = loadSeries(all.filter { it.samples.isEmpty() }.map { it.id })
-        return all.map { row -> seriesById[row.id]?.let { row.copy(samples = it) } ?: row }.sortedWith(ORDER)
+        val rows = loaded.view + hiddenRows(loaded.view.mapTo(HashSet()) { it.id })
+        return rows.map { row -> runCatching { loadShot(row.id) }.getOrNull()?.let(row::joined) ?: row.light() }.sortedWith(ORDER)
     }
 
     /** The rows (view only, the legacy backend's whole list), without their series. Opens the store first. */
-    suspend fun loadRows(): List<StoredShot> = loadAll().view
+    suspend fun loadRows(): List<ShotRow> = loadAll().view
 
     /**
      * Open the store, migrating on the first launch, and give the rows in view.
@@ -742,10 +765,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 }
                 val row = e.put ?: continue
                 val samples = (series.read(row.id) as? SeriesRead.Found)?.samples ?: emptyList()
-                val summary = summaryOf(row.copy(samples = samples), json)
-                // A light row's journal line has no profile: the stored one stays.
-                if (row.profile == null && row.brewSeries == null && tables.full(this, row.id) != null) tables.putLight(this, row, summary)
-                else tables.putFull(this, row.copy(samples = emptyList()), summary)
+                // A light row's journal line has no profile or brew series: the stored ones stay, and count.
+                val held = tables.full(this, row.id)?.shot
+                val summary = summaryOf(row.copy(samples = samples, brewSeries = row.brewSeries ?: held?.brewSeries), json)
+                tables.upsert(this, row.copy(samples = emptyList()), summary)
                 // A fill that waited out a full disk: only into a row that still has no profile (#408 N8).
                 e.fillProfile?.let { p -> if (tables.full(this, row.id)?.shot?.profile == null) tables.putProfile(this, row.id, p) }
             }
@@ -756,34 +779,33 @@ class HistoryStore(private val context: Context, private val json: Json) {
         journaled = emptySet()
     }
 
-    /** The rows in view now and every row's memory, from `shots.db`. */
+    /** The rows in view now and every row's memory, from `shots.db`. No series, profile or brew series is read. */
     private fun sqlLoad(): HistoryLoad {
         val db = db().readableDatabase
         val bad = mutableListOf<String>()
         val all = tables.lightRows(db, bad)
         unreadableRows = bad
         if (bad.isNotEmpty()) persistLine("${bad.size} rows couldn't be read and stay in the store as they are")
-        val (view, hidden) = splitView(all.map { it.shot })
-        val heavy = tables.heavy(db, view.map { it.id })
-        val full = view.map { row -> heavy[row.id]?.let { (p, b) -> row.copy(profile = p, brewSeries = b) } ?: row }
-        stored.clear(); summaries.clear(); light.clear(); seen.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear()
-        for (r in all) r.summary?.let { summaries[r.shot.id] = it }
-        for (r in full) stored[r.id] = r
-        for (r in hidden) {
-            stored[r.id] = r
-            light += r.id
-        }
+        val profiled = tables.idsWithProfile(db)
+        // A row with no summary that reads: unknown, so it's neither manual nor "no telemetry".
+        val rows = all.map { r -> r.shot.toRow(r.summary ?: unknownSeriesSummary(r.shot)) }
+        stored.clear(); withProfile.clear(); seen.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear()
+        synchronized(recent) { recent.clear() }
+        // [staged] stays: a shot made before the rows landed still has its heavy parts to write.
+        for (r in rows) stored[r.id] = r
+        withProfile += profiled
         // A curve on disk is known from the summary; the file isn't read until it's wanted.
-        for (r in all) if (r.summary.hasCurve()) onDisk += r.shot.id
+        for (r in rows) if (r.summarisedCurve) onDisk += r.id
         version++
         snapshotDay = snapshotFile.takeIf { it.exists() }?.lastModified()?.let { localDateOf(it, ZoneId.systemDefault()) }
-        return HistoryLoad(full, hidden.size, health)
+        val (view, hidden) = splitView(rows)
+        return HistoryLoad(view, hidden.size, health)
     }
 
     // ── Rows past the cap ────────────────────────────────────────────────────
 
-    /** The rows the store holds that aren't in [viewIds]: past the cap, light, newest first. */
-    fun hiddenRows(viewIds: Set<String>): List<StoredShot> {
+    /** The rows the store holds that aren't in [viewIds]: past the cap, newest first. */
+    fun hiddenRows(viewIds: Set<String>): List<ShotRow> {
         if (mode != Mode.SQL) return emptyList()
         val cached = hiddenCache
         if (cached != null && cached.first == version && cached.second == viewIds) return cached.third
@@ -795,42 +817,60 @@ class HistoryStore(private val context: Context, private val json: Json) {
     /** Every row id the store holds (SQL), in view or not. */
     fun storedIds(): Set<String> = if (mode == Mode.SQL) stored.keys - deleting else emptySet()
 
-    /** Every row the store holds (SQL), light past the cap. */
-    fun storedRows(): List<StoredShot> = if (mode == Mode.SQL) stored.values.filter { it.id !in deleting } else emptyList()
+    /** Every row the store holds (SQL). */
+    fun storedRows(): List<ShotRow> = if (mode == Mode.SQL) stored.values.filter { it.id !in deleting } else emptyList()
 
-    /** The stored row [id], hidden or not, light when hidden. */
-    fun storedRow(id: String): StoredShot? = if (mode == Mode.SQL && id !in deleting) stored[id] else null
+    /** The stored row [id], hidden or not. */
+    fun storedRow(id: String): ShotRow? = if (mode == Mode.SQL && id !in deleting) stored[id] else null
 
-    /** Whether [shot] has a machine curve, in memory or on disk. */
-    fun hasCurve(shot: StoredShot): Boolean =
-        shot.samples.isNotEmpty() || (mode == Mode.SQL && summaries[shot.id].hasCurve() && series.exists(shot.id))
+    /**
+     * Whether shot [id] has a machine curve: one staged to be written, or one
+     * its summary names whose file is there. A summary that says so with no
+     * file, or an unknown one, is no curve, so a restore's fill or a pull's
+     * backfill may put one back (S4).
+     */
+    fun hasCurve(id: String): Boolean {
+        if (staged[id]?.samples?.isNotEmpty() == true) return true
+        if (mode != Mode.SQL && mode != Mode.LEGACY) return false
+        return stored[id]?.summarisedCurve == true && series.exists(id)
+    }
+
+    /** [hasCurve] of [row]. */
+    fun hasCurve(row: ShotRow): Boolean = hasCurve(row.id)
+
+    /** Whether shot [id] has its profile (the recipe the DE1 ran), staged or stored. */
+    fun hasProfile(id: String): Boolean = staged[id]?.profile != null || when (mode) {
+        Mode.SQL -> id in withProfile
+        Mode.LEGACY -> legacyHeavy[id]?.first != null
+        else -> false
+    }
 
     /** [id]'s stored summary says a curve its series read didn't find: unknown now, so a restore's fill
      *  or a pull's backfill may put one back, and the next save writes it so (S4). */
     private fun curveNotFound(id: String) {
-        val prev = summaries[id] ?: return
-        if (!prev.hasCurve()) return
-        summaries[id] = prev.copy(sampleCount = null)
+        val prev = stored[id] ?: return
+        if (!prev.summarisedCurve) return
+        stored[id] = prev.copy(summary = prev.summary.copy(sampleCount = null))
         dirtySummary += id
+        version++
     }
 
     /** Changes to rows past the cap that are in memory and not yet written ([flushHidden]). */
-    private val pendingHidden = ConcurrentHashMap<String, StoredShot>()
+    private val pendingHidden = ConcurrentHashMap<String, ShotRow>()
 
     /**
      * Change a stored row past the cap, where no edit of the view can reach it:
      * in memory at once, so a reader right after sees it (a bound upload's
-     * "is it gone"), and on disk by [flushHidden]. A light row carries no
-     * profile, so a change that sets one only fills a profile the store lacks.
-     * True when the row is here.
+     * "is it gone"), and on disk by [flushHidden]. Heavy parts go through
+     * [stage] first. True when the row is here.
      */
-    fun updateHidden(id: String, transform: (StoredShot) -> StoredShot): Boolean {
+    fun updateHidden(id: String, transform: (ShotRow) -> ShotRow): Boolean {
         if (mode != Mode.SQL || id in deleting) return false
         val prev = pendingHidden[id] ?: stored[id] ?: return false
         val next = transform(prev)
-        if (next == prev) return true
+        if (next == prev && !staged.containsKey(id)) return true
         pendingHidden[id] = next
-        stored[id] = next.stripped()
+        stored[id] = next.copy(summary = stored[id]?.summary ?: next.summary)
         version++
         return true
     }
@@ -839,81 +879,151 @@ class HistoryStore(private val context: Context, private val json: Json) {
     suspend fun flushHidden(id: String) = withContext(NonCancellable) {
         lock.withLock {
             withContext(Dispatchers.IO) {
-                var row = pendingHidden.remove(id) ?: return@withContext
+                val row = pendingHidden.remove(id) ?: return@withContext
                 if (mode != Mode.SQL || id in deleting) return@withContext
-                var fill: JsonObject? = null
-                if (id in light && row.brewSeries == null && row.profile != null) {
-                    // Fill only: a stored profile stays. A fill writes the profile column alone,
-                    // so the stored brew series stays too (S3).
-                    val held = runCatching { tables.full(db().readableDatabase, id) }.getOrNull()?.shot
-                    if (held != null && held.profile == null) fill = row.profile
-                    row = row.copy(profile = null)
-                }
-                var curveless = false
-                if (row.samples.isNotEmpty() && id !in onDisk) {
-                    if (series.write(id, row.samples)) onDisk += id else curveless = true
-                }
-                val summary = summaryFor(row).let { if (curveless) it.copy(sampleCount = null) else it }
-                if (curveless) unsavedCurves = unsavedCurves + id
-                val profiles = fill?.let { mapOf(id to it) }.orEmpty()
-                if (runCatching { writeRows(listOf(row to summary), profiles) }.isFailure) journalRow(row, fill)
+                writeLocked(listOf(row))
             }
         }
     }
 
-    /** A hidden row with its profile, brew series and series, for a backup. Itself when it isn't light. */
-    fun loadFull(row: StoredShot, missingCurves: MutableSet<String>? = null): StoredShot {
-        if (mode != Mode.SQL) return row
-        var out = row
-        if (row.id in light && row.profile == null && row.brewSeries == null) {
-            val full = try {
-                tables.full(db().readableDatabase, row.id)
-            } catch (e: Exception) {
-                throw HistoryReadException("Couldn't read shot ${row.id}: ${e.message}")
-            }
-            if (full != null) out = out.copy(profile = full.shot.profile, brewSeries = full.shot.brewSeries)
-        }
-        if (out.samples.isEmpty() && summaries[row.id].hasCurve()) {
-            when (val read = series.read(row.id)) {
-                is SeriesRead.Found -> out = out.copy(samples = read.samples)
-                is SeriesRead.Unavailable -> throw HistoryReadException("Couldn't read the curve of shot ${row.id}: ${read.error}")
-                SeriesRead.Corrupt, SeriesRead.Absent -> {
-                    curveNotFound(row.id)
-                    missingCurves?.add(row.id)
-                }
-            }
-        }
-        return out
+    // ── A shot whole ─────────────────────────────────────────────────────────
+
+    /**
+     * Hold [shot]'s heavy parts for the next [save], and give its row: a shot
+     * made or brought here whole (a capture, a logged brew, a pull, an import,
+     * a restore, a backfill). The row goes into the view; the save writes the
+     * series, profile and brew series with it. A part [shot] lacks stays as the
+     * store holds it: no samples keep a stored curve, a null profile or brew
+     * series keeps the stored one. Until the save lands, [loadShot] answers
+     * from here.
+     */
+    fun stage(shot: StoredShot): ShotRow {
+        // A curve read from disk a moment ago ([loadShot]) is on disk already: it needn't be written again.
+        val read = synchronized(recent) { recent[shot.id] }
+        val given = if (read != null && read.samples === shot.samples && shot.samples.isNotEmpty()) shot.copy(samples = emptyList()) else shot
+        val merged = staged.merge(shot.id, given) { old, new ->
+            new.copy(
+                samples = new.samples.ifEmpty { old.samples },
+                profile = new.profile ?: old.profile,
+                brewSeries = new.brewSeries ?: old.brewSeries,
+            )
+        }!!
+        return shot.toRow(summaryFor(merged))
     }
 
-    // ── Series ───────────────────────────────────────────────────────────────
+    /** [shot]'s row with the summary a save would store, staging nothing (a restore's plan works these out twice). */
+    fun rowFor(shot: StoredShot): ShotRow = shot.toRow(summaryFor(shot))
 
-    /** The series of each of [ids] that has a file, by id. On IO; at startup it runs after the rows are shown. */
-    suspend fun loadSeries(ids: Collection<String>): Map<String, List<TelemetrySample>> =
-        withContext(Dispatchers.IO) {
-            holdSeriesLoad?.await()
-            lock.withLock {
-                val out = HashMap<String, List<TelemetrySample>>()
-                for (id in ids) {
-                    when (val read = series.read(id)) {
-                        is SeriesRead.Found -> {
-                            out[id] = read.samples
-                            onDisk += id
-                            written += read.file.name
-                            val count = summaries[id]?.sampleCount
-                            if (mode == Mode.SQL && count != read.samples.size.toUInt()) staleSummary += id
-                        }
-                        SeriesRead.Corrupt -> {
-                            unreadableSeries = unreadableSeries + id
-                            if (mode == Mode.SQL) curveNotFound(id)
-                        }
-                        is SeriesRead.Unavailable -> unreadableSeries = unreadableSeries + id
-                        SeriesRead.Absent -> if (mode == Mode.SQL) curveNotFound(id)
+    /** Drop what [stage] held for [ids]: shots that won't be saved after all (a full view refused them). */
+    fun unstage(ids: Collection<String>) {
+        for (id in ids) staged.remove(id)
+    }
+
+    /**
+     * The shot [id] whole: its series, profile and brew series (SPEC §4), under
+     * the row's fields as the store last wrote them (callers join it to the row
+     * on screen). Null when the store holds no such row. A read that failed
+     * just now throws [HistoryReadException], and so does a store out of
+     * reach: neither says anything about the shot, so no caller may read it as
+     * having no curve. A series the summary names that is damaged or gone gives
+     * the shot without it, its summary unknown from then on (S4). The last
+     * [RECENT_SHOTS] stay in memory.
+     */
+    suspend fun loadShot(id: String): StoredShot? = withContext(Dispatchers.IO) { readShot(id) }
+
+    /** [loadShot] on the caller's thread (the backup walk's). [missingCurves] collects rows whose curve was damaged or gone. */
+    fun readShot(id: String, missingCurves: MutableSet<String>? = null): StoredShot? {
+        val staging = staged[id]
+        // Not loaded is not empty: before the store opens, or while it's out of reach, nothing here says a shot isn't there.
+        if (mode == Mode.UNOPENED || mode == Mode.BLOCKED) {
+            return staging?.takeIf { id !in deleting } ?: throw HistoryReadException("The shot history can't be read just now")
+        }
+        val row = stored[id]
+        if (row == null || id in deleting) {
+            // Made here and not yet written: only memory has it.
+            return staging?.takeIf { id !in deleting }
+        }
+        val heavy = when (mode) {
+            Mode.SQL -> sqlHeavy(row, missingCurves) ?: return staging
+            Mode.LEGACY -> legacyHeavy(row, missingCurves)
+            Mode.BLOCKED, Mode.UNOPENED -> throw HistoryReadException("The shot history can't be read just now")
+        }
+        val disk = row.withHeavy(heavy.samples, heavy.profile, heavy.brewSeries)
+        // A staged part is newer than the store's.
+        return if (staging == null) disk else disk.copy(
+            samples = staging.samples.ifEmpty { disk.samples },
+            profile = staging.profile ?: disk.profile,
+            brewSeries = staging.brewSeries ?: disk.brewSeries,
+        )
+    }
+
+    /** [row]'s heavy parts from `shots.db` and its series, or null when the row has gone from the store. */
+    private fun sqlHeavy(row: ShotRow, missingCurves: MutableSet<String>?): Heavy? {
+        synchronized(recent) { recent[row.id] }?.let { return it }
+        val full = try {
+            tables.full(db().readableDatabase, row.id)
+        } catch (e: Exception) {
+            throw HistoryReadException("Couldn't read shot ${row.id}: ${e.message}")
+        } ?: return null
+        val heavy = Heavy(readSamples(row, missingCurves), full.shot.profile, full.shot.brewSeries)
+        synchronized(recent) { recent[row.id] = heavy }
+        return heavy
+    }
+
+    /** [row]'s heavy parts on the legacy backend: inline in `shots.json`, the series in its file. */
+    private fun legacyHeavy(row: ShotRow, missingCurves: MutableSet<String>?): Heavy {
+        val (profile, brew) = legacyHeavy[row.id] ?: (null to null)
+        return Heavy(readSamples(row, missingCurves), profile, brew)
+    }
+
+    /**
+     * [row]'s series, read when its summary names one or doesn't say. An I/O
+     * error throws. A damaged or missing file reads as none, the summary turns
+     * unknown, and [missingCurves] names the row. A count that reads back other
+     * than the summary's corrects the summary at the next save.
+     */
+    private fun readSamples(row: ShotRow, missingCurves: MutableSet<String>?): List<TelemetrySample> {
+        if (row.summary.sampleCount == 0u) return emptyList()
+        return when (val read = series.read(row.id)) {
+            is SeriesRead.Found -> {
+                onDisk += row.id
+                written += read.file.name
+                if (row.summary.sampleCount != read.samples.size.toUInt()) {
+                    val prev = stored[row.id]
+                    if (prev != null) {
+                        val heavyBrew = legacyHeavy[row.id]?.second
+                        stored[row.id] = prev.copy(summary = summaryOf(prev.withHeavy(read.samples, null, heavyBrew), json).let { s ->
+                            if (heavyBrew == null) s.copy(brewSampleCount = prev.summary.brewSampleCount) else s
+                        })
+                        dirtySummary += row.id
+                        version++
                     }
                 }
-                out
+                read.samples
+            }
+            is SeriesRead.Unavailable -> {
+                unreadableSeries = unreadableSeries + row.id
+                throw HistoryReadException("Couldn't read the curve of shot ${row.id}: ${read.error}")
+            }
+            SeriesRead.Corrupt -> {
+                unreadableSeries = unreadableSeries + row.id
+                if (row.summarisedCurve) missingCurves?.add(row.id)
+                curveNotFound(row.id)
+                emptyList()
+            }
+            SeriesRead.Absent -> {
+                if (row.summarisedCurve) missingCurves?.add(row.id)
+                curveNotFound(row.id)
+                emptyList()
             }
         }
+    }
+
+    /** A hidden or view [row] whole, for a backup: [readShot], with the row's own fields. */
+    fun loadFull(row: ShotRow, missingCurves: MutableSet<String>? = null): StoredShot =
+        readShot(row.id, missingCurves)?.let(row::joined) ?: row.light()
+
+    // ── Series ───────────────────────────────────────────────────────────────
 
     /** A restore's step 7, first half: these shots' series files, before any row names them. Returns how many failed. */
     suspend fun writeSeriesOf(shots: List<StoredShot>): Int = withContext(NonCancellable) {
@@ -925,6 +1035,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
                     if (series.write(shot.id, shot.samples)) {
                         onDisk += shot.id
                         written += series.gzFile(shot.id).name
+                        seriesWritten[shot.id] = shot.samples
                     } else {
                         failed++
                     }
@@ -933,6 +1044,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
             }
         }
     }
+
+    /** The series [writeSeriesOf] just wrote, by id: a save of the same staged list needn't write it again. */
+    private val seriesWritten = ConcurrentHashMap<String, List<TelemetrySample>>()
 
     /** The series directory, for a restore's directory sync. */
     val seriesDirectory: File get() = seriesDir
@@ -951,12 +1065,13 @@ class HistoryStore(private val context: Context, private val json: Json) {
         }
 
     /**
-     * Save [shots], the history as the app shows it. On SQL only the rows that
-     * changed since the last save are written, and nothing is deleted: a row
-     * missing from [shots] stays in the store. On the legacy backend the list
-     * is the file, as before P3a. True when it landed.
+     * Save [rows], the history as the app shows it. On SQL only the rows that
+     * changed since the last save are written, with the heavy parts [stage]
+     * holds for them, and nothing is deleted: a row missing from [rows] stays
+     * in the store. On the legacy backend the list is the file, as before P3a.
+     * True when it landed.
      */
-    suspend fun save(shots: List<StoredShot>): Boolean {
+    suspend fun save(rows: List<ShotRow>): Boolean {
         // The legacy backend's floor is checked at the call: a save that waits
         // out a load would otherwise land a snapshot from before it.
         val openAtCall = SafeFile.savesOpen(file) && !SafeFile.savesHeld(file)
@@ -966,9 +1081,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 withContext(Dispatchers.IO) {
                     ensureOpenLocked()
                     when (mode) {
-                        Mode.SQL -> upsertLocked(shots)
-                        Mode.LEGACY -> if (openAtCall) legacySaveLocked(shots) else SaveFloor.admit(file, WHAT).let { false }
-                        Mode.BLOCKED -> journalLocked(shots)
+                        Mode.SQL -> upsertLocked(rows)
+                        Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows) else SaveFloor.admit(file, WHAT).let { false }
+                        Mode.BLOCKED -> journalLocked(rows)
                         Mode.UNOPENED -> false
                     }
                 }
@@ -976,8 +1091,12 @@ class HistoryStore(private val context: Context, private val json: Json) {
         }
     }
 
+    /** [save] of whole shots: each is [stage]d, then saved as its row. On the legacy backend the list is the file. */
+    @JvmName("saveShots")
+    suspend fun save(shots: List<StoredShot>): Boolean = save(shots.map { stage(it) })
+
     /** [save] for a restore: every row given, past the cap too, and still no deletes. */
-    suspend fun saveAll(shots: List<StoredShot>): Boolean = save(shots)
+    suspend fun saveAll(rows: List<ShotRow>): Boolean = save(rows)
 
     /**
      * Remove [ids] from the store, with their `.series.gz`; never a `.json`
@@ -997,12 +1116,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
                             db().writableDatabase.inTransaction { tables.delete(this, ids) }
                             for (id in ids) {
                                 series.deleteGz(id)
-                                stored.remove(id)
-                                summaries.remove(id)
-                                light.remove(id)
-                                seen.remove(id)
-                                onDisk.remove(id)
-                                pendingHidden.remove(id)
+                                forgetMemory(id)
                             }
                             version++
                             // A journal line for one of these would bring it back at the next launch (M3).
@@ -1011,10 +1125,16 @@ class HistoryStore(private val context: Context, private val json: Json) {
                         Mode.LEGACY -> for (id in ids) {
                             series.deleteAll(id)
                             written.removeAll(listOf(series.gzFile(id).name, series.jsonFile(id).name, series.legacyFile(id).name))
+                            forgetMemory(id)
+                            legacyHeavy.remove(id)
                         }
                         // The store is out of reach: the delete waits in the journal with the rows made meanwhile (S1).
                         Mode.BLOCKED -> {
-                            for (id in ids) pendingHidden.remove(id)
+                            for (id in ids) {
+                                pendingHidden.remove(id)
+                                staged.remove(id)
+                                journaledStage.remove(id)
+                            }
                             journalDeletes(ids)
                         }
                         Mode.UNOPENED -> Unit
@@ -1024,6 +1144,19 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 }
             }
         }
+    }
+
+    private fun forgetMemory(id: String) {
+        stored.remove(id)
+        withProfile.remove(id)
+        staged.remove(id)
+        journaledStage.remove(id)
+        seen.remove(id)
+        onDisk.remove(id)
+        pendingHidden.remove(id)
+        dirtySummary.remove(id)
+        seriesWritten.remove(id)
+        synchronized(recent) { recent.remove(id) }
     }
 
     /** Take [ids] out of the hidden rows now, before their delete lands. */
@@ -1039,23 +1172,35 @@ class HistoryStore(private val context: Context, private val json: Json) {
     fun pauseDeletes() = Unit
     fun resumeDeletes() = Unit
 
-    private fun upsertLocked(shots: List<StoredShot>): Boolean {
-        val changed = shots.filter { row -> row.id !in deleting && !unchanged(row) }
+    private fun upsertLocked(rows: List<ShotRow>): Boolean {
+        val changed = rows.filter { row -> row.id !in deleting && (staged.containsKey(row.id) || !unchanged(row)) }
         if (changed.isEmpty()) return true
+        return writeLocked(changed)
+    }
+
+    /** What a save writes for one row: the row, the shot as written (its staged heavy parts, if any), and its summary. */
+    private class Write(val row: ShotRow, val shot: StoredShot, val staging: StoredShot?, val summary: ShotSummary)
+
+    /** Write [changed] to `shots.db`, series first; a batch that fails goes a row at a time, then to the journal. */
+    private fun writeLocked(changed: List<ShotRow>): Boolean {
+        val shots = changed.map { row -> staged[row.id].let { st -> Triple(row, st?.let(row::joined) ?: row.light(), st) } }
         // Series first, so a row never names a file that isn't there.
         val curveless = HashSet<String>()
-        for (row in changed) {
-            if (row.samples.isEmpty() || row.id in onDisk) continue
-            if (series.write(row.id, row.samples)) onDisk += row.id else curveless += row.id
+        for ((_, shot, _) in shots) {
+            if (shot.samples.isEmpty()) continue
+            // A restore wrote this very series a moment ago ([writeSeriesOf]).
+            if (seriesWritten.remove(shot.id) === shot.samples) continue
+            if (series.write(shot.id, shot.samples)) onDisk += shot.id else curveless += shot.id
         }
         unsavedCurves = (unsavedCurves - changed.map { it.id }.toSet()) + curveless
-        // A curve only in memory isn't on disk: unknown, until a later save writes it.
-        val prepared = changed.map { row ->
-            row to summaryFor(row).let { if (row.id in curveless) it.copy(sampleCount = null) else it }
+        val writes = shots.map { (row, shot, st) ->
+            // A curve only in memory isn't on disk: unknown, until a later save writes it.
+            val summary = if (st != null) summaryFor(shot) else stored[row.id]?.summary ?: row.summary
+            Write(row, shot, st, if (row.id in curveless) summary.copy(sampleCount = null) else adoptSeries(shot, summary))
         }
-        val ok = runCatching { writeRows(prepared) }.isSuccess || prepared.map { one ->
+        val ok = runCatching { writeRows(writes, curveless = curveless) }.isSuccess || writes.map { one ->
             // The batch failed (a full disk, say): each row alone, as it may fit, then the journal.
-            runCatching { writeRows(listOf(one)) }.isSuccess || journalRow(one.first).let { false }
+            runCatching { writeRows(listOf(one), curveless = curveless) }.isSuccess || journalRow(one.shot).let { false }
         }.all { it }
         helper?.handler?.quarantined?.let {
             // SQLite found the file damaged mid-session and its handler kept it aside.
@@ -1066,64 +1211,97 @@ class HistoryStore(private val context: Context, private val json: Json) {
         return ok && curveless.isEmpty()
     }
 
-    private fun writeRows(rows: List<Pair<StoredShot, ShotSummary>>, profiles: Map<String, JsonObject> = emptyMap()) {
+    private fun writeRows(writes: List<Write>, profiles: Map<String, JsonObject> = emptyMap(), curveless: Set<String> = emptySet()) {
         if (fault(MigrationFault.DISK_FULL) != null) throw android.database.sqlite.SQLiteFullException("disk full (test)")
         db().writableDatabase.inTransaction {
-            for ((row, summary) in rows) {
-                if (keepsHeavy(row)) tables.putLight(this, row, summary) else tables.putFull(this, row, summary)
-            }
+            // A part a row doesn't carry stays as stored: a light row never clears a profile or a brew series.
+            for (w in writes) tables.upsert(this, w.shot, w.summary)
             for ((id, profile) in profiles) tables.putProfile(this, id, profile)
         }
-        for ((row, summary) in rows) {
-            stored[row.id] = row.stripped()
-            summaries[row.id] = summary
-            seen[row.id] = row
-            if (!keepsHeavy(row)) light.remove(row.id)
-            if (row.samples.isNotEmpty()) staleSummary.remove(row.id)
-            dirtySummary.remove(row.id)
-            journaled = journaled - row.id
+        for (w in writes) {
+            val id = w.row.id
+            stored[id] = w.row.copy(summary = w.summary)
+            seen[id] = w.row
+            if (w.shot.profile != null) withProfile += id
+            if (w.staging != null) {
+                // Its heavy parts are in the store now; a curve that didn't write stays staged for the next save.
+                synchronized(recent) { recent.remove(id) }
+                if (id !in curveless) staged.remove(id, w.staging)
+                journaledStage.remove(id)
+            }
+            dirtySummary.remove(id)
+            journaled = journaled - id
         }
+        withProfile += profiles.keys
         version++
         // These rows landed: an older journal line for one would undo them at the next launch (M3).
-        retireJournal(rows.mapTo(HashSet()) { it.first.id })
+        retireJournal(writes.mapTo(HashSet()) { it.row.id })
     }
 
-    /** A light row (loaded without them) that still has none: its stored profile and brew series stay. */
-    private fun keepsHeavy(row: StoredShot) = row.id in light && row.profile == null && row.brewSeries == null
+    /**
+     * A row new to the store, written without a curve, whose series file is
+     * already there: a build before P3a wrote it, or the row came back after its
+     * rows file was lost (#325). The file is read once, here, so the summary
+     * names the curve rather than "no telemetry". A file that can't be read
+     * makes the summary unknown.
+     */
+    private fun adoptSeries(shot: StoredShot, summary: ShotSummary): ShotSummary {
+        if (stored.containsKey(shot.id) || shot.samples.isNotEmpty() || summary.sampleCount != 0u || !series.exists(shot.id)) return summary
+        return when (val read = series.read(shot.id)) {
+            is SeriesRead.Found -> {
+                onDisk += shot.id
+                summaryOf(shot.copy(samples = read.samples), json)
+            }
+            SeriesRead.Absent -> summary
+            SeriesRead.Corrupt -> {
+                unreadableSeries = unreadableSeries + shot.id
+                summary.copy(sampleCount = null)
+            }
+            is SeriesRead.Unavailable -> summary.copy(sampleCount = null)
+        }
+    }
 
-    /** Whether [row] is as the store has it, its series included. */
-    private fun unchanged(row: StoredShot): Boolean {
-        if (row.samples.isNotEmpty() && (row.id !in onDisk || row.id in staleSummary)) return false
+    /** Whether [row] is as the store has it (its summary aside: the store's is the one written). */
+    private fun unchanged(row: ShotRow): Boolean {
         if (row.id in dirtySummary) return false
         if (seen[row.id] === row) return true
         val prev = stored[row.id] ?: return false
-        val same = prev == row.stripped()
+        val same = prev == row.copy(summary = prev.summary)
         if (same) seen[row.id] = row
         return same
     }
 
     /**
-     * The summary to store with [row]. Worked out from the row when it holds
-     * its series; a row whose series isn't in memory (loaded light, or before
-     * its series loaded) keeps the one stored, so a save never turns a curve
-     * into "no telemetry".
+     * The summary to store with [shot], a staged shot as it will be written.
+     * Worked out from its series when it carries one; one that doesn't keeps
+     * the summary stored, so a save never turns a curve into "no telemetry".
      */
-    private fun summaryFor(row: StoredShot): ShotSummary {
-        val prev = summaries[row.id]
-        if (row.samples.isNotEmpty()) return summaryOf(row, json)
-        if (prev != null && (keepsHeavy(row) || prev.sampleCount != 0u)) return prev
-        return summaryOf(row, json)
+    private fun summaryFor(shot: StoredShot): ShotSummary {
+        val prev = stored[shot.id]?.summary
+        if (shot.samples.isNotEmpty()) {
+            val s = summaryOf(shot, json)
+            // A row loaded light carries no brew series: the stored count stays.
+            return if (shot.brewSeries == null && prev != null) s.copy(brewSampleCount = prev.brewSampleCount) else s
+        }
+        if (prev == null) return summaryOf(shot, json)
+        // A brew series arriving on a row that had neither (a guided brew's first save).
+        if (shot.brewSeries != null && prev.sampleCount == 0u && prev.brewSampleCount == 0u) return summaryOf(shot, json)
+        return prev
     }
 
-    private fun StoredShot.stripped(): StoredShot = if (samples.isEmpty()) this else copy(samples = emptyList())
-
     /** The store is out of reach: new rows go to the pending journal, their series to `.series.gz`. */
-    private fun journalLocked(shots: List<StoredShot>): Boolean {
-        val fresh = shots.filter { row -> seen[row.id] !== row }
+    private fun journalLocked(rows: List<ShotRow>): Boolean {
+        val fresh = rows.filter { row ->
+            val st = staged[row.id]
+            seen[row.id] !== row || (st != null && journaledStage[row.id] !== st)
+        }
         for (row in fresh) {
-            if (row.samples.isNotEmpty() && row.id !in onDisk && series.write(row.id, row.samples)) onDisk += row.id
-            journalRow(row)
+            val st = staged[row.id]
+            val shot = st?.let(row::joined) ?: row.light()
+            if (shot.samples.isNotEmpty() && series.write(row.id, shot.samples)) onDisk += row.id
+            journalRow(shot)
             seen[row.id] = row
+            if (st != null) journaledStage[row.id] = st
         }
         return false
     }
@@ -1287,29 +1465,77 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
     // ── Legacy backend: shots.json, as before P3a ─────────────────────────────
 
-    private fun legacyLoad(): List<StoredShot> {
+    /**
+     * `shots.json`'s rows. Its profile and brew series stay in memory (the
+     * file carries them inline, and a save rewrites it whole); each row's
+     * summary is worked out here from its series, as this backend has no
+     * stored one. That reads the series (at most [MAX_SHOTS]) at load, as
+     * before P3a. A row whose series is inline is [stage]d, so the next save
+     * moves it to its file.
+     */
+    private fun legacyLoad(): List<ShotRow> {
         val outcome = loadStore(file, WHAT, open = false) {
             json.decodeFromString(ListSerializer(StoredShot.serializer()), it)
         }
-        return when (outcome) {
+        val shots = when (outcome) {
             is SafeLoad.Loaded -> outcome.value.newestFirst()
             SafeLoad.Absent, is SafeLoad.Corrupt, is SafeLoad.Unavailable -> emptyList()
         }
+        stored.clear(); legacyHeavy.clear(); seen.clear()
+        synchronized(recent) { recent.clear() }
+        return shots.map { shot ->
+            legacyHeavy[shot.id] = shot.profile to shot.brewSeries
+            val samples = shot.samples.ifEmpty {
+                when (val read = series.read(shot.id)) {
+                    is SeriesRead.Found -> {
+                        written += read.file.name
+                        onDisk += shot.id
+                        read.samples
+                    }
+                    SeriesRead.Absent -> emptyList()
+                    SeriesRead.Corrupt, is SeriesRead.Unavailable -> {
+                        unreadableSeries = unreadableSeries + shot.id
+                        null
+                    }
+                }
+            }
+            if (shot.samples.isNotEmpty()) staged[shot.id] = shot
+            val summary = if (samples == null) unknownSeriesSummary(shot) else summaryOf(shot.copy(samples = samples), json)
+            shot.toRow(summary).also { stored[it.id] = it }
+        }
     }
 
-    private suspend fun legacySaveLocked(shots: List<StoredShot>): Boolean {
+    private suspend fun legacySaveLocked(rows: List<ShotRow>): Boolean {
+        val shots = rows.map { row ->
+            val st = staged[row.id]
+            val (profile, brew) = legacyHeavy[row.id] ?: (null to null)
+            row.withHeavy(st?.samples.orEmpty(), st?.profile ?: profile, st?.brewSeries ?: brew)
+        }
+        val curves = HashSet<String>()
         for (shot in shots) {
-            val name = series.gzFile(shot.id).name
-            if (shot.samples.isEmpty() || name in written) continue
-            if (series.write(shot.id, shot.samples)) written += name
+            if (shot.samples.isEmpty()) continue
+            if (series.write(shot.id, shot.samples)) {
+                written += series.gzFile(shot.id).name
+                onDisk += shot.id
+                curves += shot.id
+            }
         }
         // Only a shot whose series file is written goes without its samples.
-        return saveStore(file, WHAT) {
+        val ok = saveStore(file, WHAT) {
             json.encodeToString(
                 ListSerializer(StoredShot.serializer()),
-                shots.map { if (it.samples.isNotEmpty() && series.gzFile(it.id).name in written) it.copy(samples = emptyList()) else it },
+                shots.map { if (it.id in curves) it.copy(samples = emptyList()) else it },
             )
         }
+        if (ok) {
+            for ((row, shot) in rows.zip(shots)) {
+                legacyHeavy[row.id] = shot.profile to shot.brewSeries
+                val st = staged[row.id]
+                stored[row.id] = row.copy(summary = if (st != null) summaryFor(shot) else stored[row.id]?.summary ?: row.summary)
+                if (st != null && (shot.samples.isEmpty() || row.id in curves)) staged.remove(row.id, st)
+            }
+        }
+        return ok
     }
 
     // ── Erase ────────────────────────────────────────────────────────────────
@@ -1327,7 +1553,8 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 NEXT_FILES.forEach { eraseStore(File(context.filesDir, it)) }
                 Stores.forget(dbFile)
                 written.clear()
-                stored.clear(); summaries.clear(); light.clear(); seen.clear(); onDisk.clear(); deleting.clear(); staleSummary.clear(); pendingHidden.clear(); dirtySummary.clear()
+                stored.clear(); withProfile.clear(); staged.clear(); journaledStage.clear(); legacyHeavy.clear(); seriesWritten.clear(); seen.clear(); onDisk.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear()
+                synchronized(recent) { recent.clear() }
                 version++
                 unreadableSeries = emptySet()
                 unsavedCurves = emptySet()
@@ -1408,10 +1635,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
         runCatching { coffee.crema.diag.DiagLog.add("history: $line") }
     }
 
-    private fun splitView(all: List<StoredShot>): Pair<List<StoredShot>, List<StoredShot>> {
+    private fun <T : ShotMeta> splitView(all: List<T>): Pair<List<T>, List<T>> {
         var unpinned = 0
-        val view = ArrayList<StoredShot>()
-        val hidden = ArrayList<StoredShot>()
+        val view = ArrayList<T>()
+        val hidden = ArrayList<T>()
         for (row in all) {
             if (row.pinned || unpinned++ < MAX_SHOTS) view += row else hidden += row
         }
@@ -1435,11 +1662,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
         private const val HEX = "0123456789ABCDEF"
 
         /** Newest first, ties by id descending: the one order a reload keeps (SPEC §5). */
-        val ORDER: Comparator<StoredShot> = compareByDescending<StoredShot> { it.completedAtMs }.thenByDescending { it.id }
+        val ORDER: Comparator<ShotMeta> = compareByDescending<ShotMeta> { it.completedAtMs }.thenByDescending { it.id }
 
-        /** Tests set this to hold [loadSeries] until they complete it. Null in the app. */
-        @androidx.annotation.VisibleForTesting
-        @Volatile internal var holdSeriesLoad: kotlinx.coroutines.Deferred<Unit>? = null
+        /** Shots [loadShot] keeps whole in memory (SPEC §4: Android keeps the last 8). */
+        const val RECENT_SHOTS = 8
 
         /** Tests set this to hold [loadAll] (the open and the move) until they complete it. Null in the app. */
         @androidx.annotation.VisibleForTesting

@@ -33,40 +33,40 @@ import kotlinx.serialization.json.putJsonObject
 /** One completed shot — a row in the History list. */
 @Serializable
 data class StoredShot(
-    val id: String,
+    override val id: String,
     /** Unix epoch ms when the shot completed (drives "N min ago"). */
-    val completedAtMs: Long,
+    override val completedAtMs: Long,
     /** Total shot duration, ms. */
-    val durationMs: Long,
+    override val durationMs: Long,
     /** Final scale weight (yield), g, or null when no scale was paired. */
-    val yieldG: Float? = null,
+    override val yieldG: Float? = null,
     /** Dose at capture (from the active profile), g — for the ratio. */
-    val doseG: Float? = null,
+    override val doseG: Float? = null,
     /**
      * Grams this row actually took from its bag, g: less than the dose when
      * the bag ran out, 0 when it was empty, untracked or never debited. What
      * moving the shot off the bag credits back. Null on a row from before the
      * field and on a row with no bag. Mirrors core `StoredShot.bag_debit`.
      */
-    val bagDebitG: Float? = null,
+    override val bagDebitG: Float? = null,
     /**
      * Grinder click dialed in Quick Controls at capture (issue 15), or null when
      * the user never set one. The grind actually used for this shot — distinct
      * from the bean's catalog [ShotBean.grinderSetting] (the bag's reference
      * setting). Additive — older records deserialise cleanly.
      */
-    val grindSetting: Float? = null,
+    override val grindSetting: Float? = null,
     /**
      * The stop-at-weight target the user dialled for THIS shot, g, or null.
      * The shot-quality yield arms key off it (falling back to the profile's
      * target) — web has persisted it all along; the gap made Android's
      * quality analysis use the wrong target (review #39). Additive.
      */
-    val yieldTargetG: Float? = null,
+    override val yieldTargetG: Float? = null,
     /** Peak group pressure across the shot, bar, or null. */
-    val peakPressure: Float? = null,
+    override val peakPressure: Float? = null,
     /** Peak group-head temperature across the shot, °C, or null. */
-    val peakTemp: Float? = null,
+    override val peakTemp: Float? = null,
     /**
      * Peak scale weight across the shot, g, or null when no scale was
      * paired. The stats' yield fallback when [yieldG] (the settled final
@@ -74,9 +74,9 @@ data class StoredShot(
      * (review #41; the web has always applied this fallback). Stamped
      * from the ShotCompleted event's `peak_weight`; null on older rows.
      */
-    val peakWeightG: Float? = null,
+    override val peakWeightG: Float? = null,
     /** Active profile name at capture, or null. */
-    val profileName: String? = null,
+    override val profileName: String? = null,
     /**
      * The active profile's *recipe* (the core wire `Profile` shape) snapshotted at
      * capture, or null. Embedded into the Visualizer upload (#12) so a profile
@@ -90,11 +90,11 @@ data class StoredShot(
      * Visualizer wire and the shell's "Roaster · Name" display (derived via
      * [beanLabel]); null for a beanless shot.
      */
-    val bean: ShotBean? = null,
+    override val bean: ShotBean? = null,
     /** User star rating 0..5; null = unrated. Edited from the History detail. */
-    val rating: Int? = null,
+    override val rating: Int? = null,
     /** User tasting notes for this shot; null = none. Edited from the detail. */
-    val notes: String? = null,
+    override val notes: String? = null,
     /**
      * Forward-looking dial-in plan — what to change on the *next* shot
      * ("go finer, +2 drops"). Kept apart from [notes] (how this shot tasted)
@@ -102,26 +102,26 @@ data class StoredShot(
      * Local workflow state: never uploaded to Visualizer. Additive — older
      * records deserialise cleanly. Mirrors core `ShotMetadata.next_plan`.
      */
-    val nextPlan: String? = null,
+    override val nextPlan: String? = null,
     /**
      * Who made the shot (dye2 audit #1) — the Settings default barista at
      * capture, editable from the History detail. Exported as de1app's
      * `my_name` (Visualizer's `barista`) and decaid's `baristaName`.
      * Mirrors core `ShotMetadata.barista`. Additive.
      */
-    val barista: String? = null,
+    override val barista: String? = null,
     /**
      * Who drank it — de1app's `drinker_name`, decaid's `drinkerName`
      * (Visualizer has no field). Mirrors core `ShotMetadata.drinker`.
      */
-    val drinker: String? = null,
+    override val drinker: String? = null,
     /**
      * The grinder this shot was pulled on — frozen at capture by the core
      * (F10: the bean's grinder, else the Settings grinder), or carried by an
      * imported / restored shot. Null only for shots captured before F10,
      * which fall back to the Settings grinder at upload time.
      */
-    val grinderModel: String? = null,
+    override val grinderModel: String? = null,
     /**
      * The shot's telemetry — the core's full record since F10 (no 200-point
      * cut, so a re-upload reproduces Visualizer's telemetry hash). Older
@@ -130,87 +130,87 @@ data class StoredShot(
      */
     val samples: List<TelemetrySample> = emptyList(),
     /** Shot-level tags — the bean's tags copied at capture (F10). */
-    val tags: List<String> = emptyList(),
+    override val tags: List<String> = emptyList(),
     /** The pre-infusion the shot ran, seconds (F10: the as-run value). */
-    val preinfuseTargetS: Float? = null,
+    override val preinfuseTargetS: Float? = null,
     /** Whether stop-on-weight was armed (F10, from the core). */
-    val stopOnWeight: Boolean? = null,
+    override val stopOnWeight: Boolean? = null,
     /** Whether auto-tare was armed (F10, from the core). */
-    val autoTare: Boolean? = null,
+    override val autoTare: Boolean? = null,
     /** Why the core stopped the shot — the core `StopReason` name (`"Weight"`,
      *  `"Volume"`, `"MaxTime"`, …) — or null when it ended on its own. */
-    val stopReason: String? = null,
+    override val stopReason: String? = null,
     /** The `Weight` stop was the core's estimate, the scale lost mid-shot
      *  (core `StoredShot.stop_estimated`; older builds read it as `Weight`). */
-    val stopEstimated: Boolean = false,
+    override val stopEstimated: Boolean = false,
     /**
      * Per-shot Visualizer privacy override — `"public" | "unlisted" |
      * "private"`, or null to inherit the Sharing default at upload/patch
      * time (mirrors the web StoredShot field).
      */
-    val privacy: String? = null,
+    override val privacy: String? = null,
     /**
      * Visualizer `shot.id` once uploaded; null until pushed (mirrors the web
      * StoredShot field — drives the History sync pip + "Upload all unsynced").
      */
-    val visualizerId: String? = null,
+    override val visualizerId: String? = null,
     /**
      * Decent account shot id once uploaded to decentespresso.com's shot history
      * (geota/crema#84); null until pushed.
      */
-    val decentId: String? = null,
+    override val decentId: String? = null,
     /** The Visualizer row's `updated_at` (unix s) when a pull last merged it
      *  (core `StoredShot::visualizer_updated_at`): a pull skips a row at this
      *  version. Kept by backups, never uploaded. */
-    val visualizerUpdatedAt: Long? = null,
+    override val visualizerUpdatedAt: Long? = null,
     /** The user pinned this shot (#311): the BLE session holding it keeps its
      *  capture past the limit, and it is exempt from any cleanup. Core
      *  `StoredShot::pinned`; kept by backups, moves between the apps. */
-    val pinned: Boolean = false,
+    override val pinned: Boolean = false,
     /**
      * The DE1 this shot was pulled on, stamped at record time (#84). The Decent
      * upload needs the serial (the server checks it belongs to the account);
      * shots recorded before these fields fall back to the connected machine.
      */
-    val machineSerial: String? = null,
-    val machineFirmware: String? = null,
-    val machineModel: String? = null,
+    override val machineSerial: String? = null,
+    override val machineFirmware: String? = null,
+    override val machineModel: String? = null,
     /**
      * Brew Log method (issue #10) — a normalized string (`"pourover"`,
      * `"aeropress"`, `"espresso"` for a manually logged machine-free
      * shot, …). Null = machine espresso, so every pre-Brew-Log record
      * is already a valid brew row. Mirrors core `StoredShot.brew_method`.
      */
-    val brewMethod: String? = null,
+    override val brewMethod: String? = null,
     /**
      * The method's display label, snapshotted when the brew was saved with a
      * user-defined method (`custom:<uuid>`), so the row keeps its name after
      * the method is deleted or lost. Mirrors core `StoredShot.brew_method_label`.
      */
-    val brewMethodLabel: String? = null,
+    override val brewMethodLabel: String? = null,
     /** The guided-session recipe name, snapshot at completion. */
-    val recipeName: String? = null,
+    override val recipeName: String? = null,
     /**
      * Water in, g — the pour total for filter / immersion brews.
      * Distinct from [yieldG] (beverage in the cup): a 15 g / 250 g V60
      * speaks its ratio in water-in (1:16.7). Mirrors core
      * `ShotMetadata.water_g`.
      */
-    val waterG: Float? = null,
+    override val waterG: Float? = null,
     /**
      * Brew water temperature, °C: the logged value for brews, and for machine
      * shots the brew temperature the shot ran at (the core-clamped Quick
      * Controls dial, else the profile's own). Mirrors core
      * `StoredShot.brew_temp_target`.
      */
-    val brewTempC: Float? = null,
+    override val brewTempC: Float? = null,
     /**
      * Weight-only guided-session telemetry (core `BrewSeries`,
      * typeshared). Null for machine shots (their telemetry is
      * [samples]) and manual logs (none at all).
      */
     val brewSeries: BrewSeries? = null,
-)
+) : ShotMeta
 
 /** Id prefix of a shot materialised from a Visualizer pull (see `storedShotFromWire`). */
 const val PULLED_SHOT_ID_PREFIX = "shot:remote:"
@@ -220,7 +220,7 @@ const val PULLED_SHOT_ID_PREFIX = "shot:remote:"
  * have been pulled on another DE1, so the connected machine's serial is never
  * stamped onto it, and it stays out of the Decent backlog.
  */
-val StoredShot.pulledFromVisualizer: Boolean get() = id.startsWith(PULLED_SHOT_ID_PREFIX)
+val ShotMeta.pulledFromVisualizer: Boolean get() = id.startsWith(PULLED_SHOT_ID_PREFIX)
 
 /**
  * A Brew Log entry of any kind — `brewMethod` set, manual or guided (issue
@@ -229,14 +229,14 @@ val StoredShot.pulledFromVisualizer: Boolean get() = id.startsWith(PULLED_SHOT_I
  * or cloud pip, and they carry no DE1 machine stamp. Mirrors core
  * `StoredShot::is_brew_log` and the web `isBrewLog`.
  */
-val StoredShot.isBrewLog: Boolean
+val ShotMeta.isBrewLog: Boolean
     get() = brewMethod != null
 
 /** Why an upload path skipped a [isBrewLog] row — shared by every destination. */
 const val BREW_LOG_UPLOAD_SKIP = "Brew Log entries stay on this device"
 
 /** The row's method for display: the stored method, null = machine espresso. */
-val StoredShot.methodOf: String?
+val ShotMeta.methodOf: String?
     get() = brewMethod?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
 
 /** The title of a machine espresso with no profile name (web: "Untitled shot"). */
@@ -250,7 +250,7 @@ const val UNTITLED_SHOT = "Untitled shot"
  * no profile name is [UNTITLED_SHOT]. Blank names count as absent. Mirrors the
  * web's `shotTitle`, wording included.
  */
-fun shotTitle(shot: StoredShot): String =
+fun shotTitle(shot: ShotMeta): String =
     shot.profileName?.trim()?.takeIf { it.isNotEmpty() }
         ?: shot.recipeName?.trim()?.takeIf { it.isNotEmpty() }
         ?: shot.methodOf?.let(::methodLabel)
@@ -272,14 +272,14 @@ val StoredShot.isManualLog: Boolean
  * rows/detail ([grindLabel]) and the Visualizer wire (upload + PATCH) — what
  * the app displays is exactly what syncs.
  */
-val StoredShot.effectiveGrindSetting: String?
+val ShotMeta.effectiveGrindSetting: String?
     get() = grindSetting?.let { g ->
         if (g % 1f == 0f) String.format(java.util.Locale.US, "%.0f", g)
         else String.format(java.util.Locale.US, "%.1f", g)
     } ?: bean?.grinderSetting?.takeIf { it.isNotBlank() }
 
 /** "Grind N" display form of [effectiveGrindSetting]. */
-val StoredShot.grindLabel: String?
+val ShotMeta.grindLabel: String?
     get() = effectiveGrindSetting?.let { "Grind $it" }
 
 /**
@@ -288,7 +288,7 @@ val StoredShot.grindLabel: String?
  * fallback). One core rule (`de1_domain::ratio_for_method`) for every
  * shell. Null when undefined.
  */
-fun StoredShot.methodRatioLabel(): String? {
+fun ShotMeta.methodRatioLabel(): String? {
     val r = coffee.crema.core.ratioForMethod(methodOf, doseG, waterG, yieldG) ?: return null
     return "1:" + String.format(java.util.Locale.US, "%.1f", r)
 }
@@ -306,7 +306,7 @@ fun formatShotDuration(ms: Long): String {
  * the History UX line and the wire's `metadata.beans`. Mirrors the web
  * `beanLabel`: roaster + name when both, else whichever is present, else null.
  */
-val StoredShot.beanLabel: String?
+val ShotMeta.beanLabel: String?
     get() {
         val b = bean ?: return null
         val roaster = b.roasterName?.trim().orEmpty()
@@ -390,7 +390,7 @@ private val statsJson = Json { ignoreUnknownKeys = true }
  * row crosses the FFI. On a bridge failure (never in practice) the strip
  * degrades to count-only ("—" everywhere else).
  */
-fun historyStats(shots: List<StoredShot>): HistoryStats {
+fun historyStats(shots: List<ShotMeta>): HistoryStats {
     val rows = shots.map {
         ShotStatInput(
             durationMs = it.durationMs,
@@ -416,7 +416,7 @@ fun historyStats(shots: List<StoredShot>): HistoryStats {
  * scope to espresso rows in a mixed set (the strip tags those tiles
  * "esp") or to the single method the whole set belongs to.
  */
-fun brewHistoryStats(shots: List<StoredShot>): BrewHistoryStats {
+fun brewHistoryStats(shots: List<ShotMeta>): BrewHistoryStats {
     val rows = shots.map {
         BrewStatInput(
             durationMs = it.durationMs,

@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import kotlinx.coroutines.launch
 import coffee.crema.visualizer.pullWaitingLine
 import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.CoreBounds
@@ -1087,7 +1088,9 @@ private fun SharingSection(
     }
     SettingsGroup("Local export") {
         CremaSettingsRow("History export", "Your entire shot history as JSON — for spreadsheets and other tools.", last = true) {
-            CremaButton(onClick = { launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+            // Each shot is read whole first (#310 P4a), off the main thread.
+            val exportScope = androidx.compose.runtime.rememberCoroutineScope()
+            CremaButton(onClick = { exportScope.launch { launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) } }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
         }
     }
 }

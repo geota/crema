@@ -1,6 +1,8 @@
 package coffee.crema.visualizer
 
 import android.content.ContextWrapper
+import coffee.crema.history.row
+import coffee.crema.history.rows
 import coffee.crema.history.StoredShot
 import coffee.crema.security.SecretBox
 import coffee.crema.security.SecretCipher
@@ -133,11 +135,13 @@ class UnboundTombstoneTest {
             pulled += rows
             emptySet()
         },
-        currentShot = { history[it] },
+        currentShot = { history[it]?.row() },
+        // As LibraryController.loadShot: it waits for the rows first.
+        loadShot = { series(); history[it] },
         now = { clock },
         revoke = {},
         retryTimers = false,
-        seriesReady = { series() },
+        awaitRows = { series() },
     ).also { runBlocking { it.load() } }
 
     @After
@@ -153,7 +157,7 @@ class UnboundTombstoneTest {
     /** The user deletes [s], as `MainViewModel.deleteShot` does. */
     private fun delete(v: VisualizerSync, s: StoredShot, remote: Boolean = false) {
         history.remove(s.id)
-        v.tombstoneDeleted(s, deleteRemote = remote)
+        v.tombstoneDeleted(s.row(), deleteRemote = remote)
     }
 
     private fun pull(v: VisualizerSync) {
@@ -166,7 +170,7 @@ class UnboundTombstoneTest {
     /** An upload under way, its POST held at the server. */
     private fun uploading(v: VisualizerSync, s: StoredShot) {
         uploadGate = CompletableDeferred()
-        assertTrue(v.uploadShot(s, silent = true))
+        assertTrue(v.uploadShot(s.row(), silent = true))
         repeat(200) {
             if (posts.isNotEmpty()) return
             Thread.sleep(10)
@@ -252,8 +256,8 @@ class UnboundTombstoneTest {
             currentShot = { null }, revoke = {}, retryTimers = false,
         )
         runBlocking { fresh.load() }
-        assertTrue(fresh.uploadPending(s))
-        fresh.tombstoneDeleted(s, deleteRemote = false)
+        assertTrue(fresh.uploadPending(s.row()))
+        fresh.tombstoneDeleted(s.row(), deleteRemote = false)
         Thread.sleep(200)
         assertEquals(listOf("s1"), stored().unboundTombstones.map { it.id })
     }
@@ -262,7 +266,7 @@ class UnboundTombstoneTest {
     fun `a row never offered to Visualizer goes with no tombstone`() {
         val s = shot()
         val v = sync()
-        assertFalse(v.uploadPending(s))
+        assertFalse(v.uploadPending(s.row()))
         delete(v, s)
         settle()
         assertTrue(stored().unboundTombstones.isEmpty())
@@ -294,12 +298,12 @@ class UnboundTombstoneTest {
         val s = shot()
         val v = sync()
         uploadReply = HttpStatusCode.UnprocessableEntity to """{"error":"Could not save the provided file."}"""
-        v.uploadShot(s, silent = true)
+        v.uploadShot(s.row(), silent = true)
         settle()
         assertTrue(stored().uploadAttempted.isEmpty())
 
         uploadReply = HttpStatusCode.ServiceUnavailable to "{}"
-        v.uploadShot(s, silent = true)
+        v.uploadShot(s.row(), silent = true)
         settle()
         assertEquals(setOf("s1"), stored().uploadAttempted.keys)
     }
@@ -399,7 +403,7 @@ class UnboundTombstoneTest {
         val s = shot()
         series = { gate.await() }
         val v = sync()
-        assertTrue(v.uploadShot(s, silent = true))
+        assertTrue(v.uploadShot(s.row(), silent = true))
         Thread.sleep(50)
         delete(v, s)
         Thread.sleep(50)

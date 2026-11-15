@@ -52,7 +52,7 @@ class RefusedStoreVmTest {
     @After fun tearDown() {
         library.setReadable(true)
         shots.setReadable(true)
-        HistoryStore.holdSeriesLoad = null
+        HistoryStore.holdOpen = null
         MainViewModel.holdStoreReload = null
         stores.forEach { it.clear() }
         VmHarness.idle()
@@ -262,14 +262,16 @@ class RefusedStoreVmTest {
             shots.setReadable(false)
             val vm = vm()
             shots.setReadable(true)
+            // The reload is held (#310 P4a: the rows; no series loads with them).
             val gate = CompletableDeferred<Unit>()
-            HistoryStore.holdSeriesLoad = gate
+            HistoryStore.holdOpen = gate
             val retry = vm.retryStore(vm.ui.value.refusedStores.single())
-            VmHarness.idleUntil("the rows") { retry.isCompleted }
-    
-            assertEquals(null, vm.shotsJson(null), "the series reload is still held")
+
+            assertEquals(null, VmHarness.shotsJson(vm), "the reload is still held")
             gate.complete(Unit)
-            VmHarness.idleUntil("the series") { vm.ui.value.history.single().samples.isNotEmpty() }
+            VmHarness.idleUntil("the rows") { retry.isCompleted && VmHarness.library(vm).rowsReady }
+            assertEquals(5, VmHarness.whole(vm, "s1").samples.size, "the reloaded shot reads whole")
+            assertEquals(5, Regex("7\\.25").findAll(assertNotNull(VmHarness.shotsJson(vm))).count())
         } finally {
             HistoryStore.legacyOnlyForTest = false
         }

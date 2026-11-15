@@ -15,6 +15,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.system.measureNanoTime
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -25,7 +26,12 @@ import kotlin.test.assertTrue
  * The measurement prints save / load time and sizes at 300 and 1000 shots,
  * for a typical 40 s shot (180 samples) and a long 60 s one (270) at the
  * DE1's ~4.5 Hz (1150 ShotSample notifications over 259 s in the session
- * fixture): first the old single file, then the split store.
+ * fixture): first the old single file, then the split store; and the split
+ * store at the design size, 5,000 rows (#310 SPEC decision 1).
+ *
+ * From #310 P4a the store's load reads rows only: no series, and no row holds
+ * one. The design-size test checks that, and that each shot reads whole on
+ * demand.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -82,15 +88,17 @@ class ShotHistorySizeTest {
         store.erase()
         val first = measureNanoTime { store.save(list) }
         // A rating edit: the rows change, no series does.
-        val edited = list.mapIndexed { i, s -> if (i == 0) s.copy(rating = 4) else s }
+        // The app saves rows (#310 P4a): the store writes only the one that changed.
+        val edited = list.rows().mapIndexed { i, s -> if (i == 0) s.copy(rating = 4) else s }
         val edit = measureNanoTime { store.save(edited) }
-        // A new shot: one series file more.
-        val added = listOf(shot(list.size, list.first().samples.size)) + edited
-        val add = measureNanoTime { store.save(added) }
+        // A new shot: one series file more, staged whole, then saved with the rows.
+        val newShot = shot(list.size, list.first().samples.size)
+        val edit2 = edited
+        val add = measureNanoTime { store.save(listOf(store.stage(newShot)) + edit2) }
         val fresh = HistoryStore(app, coreJson)
-        var back: List<StoredShot> = emptyList()
-        val load = measureNanoTime { back = fresh.load() }
-        assertEquals(added.size, back.size)
+        var loaded = 0
+        val load = measureNanoTime { val l = fresh.loadAll(); loaded = l.view.size + l.hiddenCount }
+        assertEquals(list.size + 1, loaded)
         val rows = app.getDatabasePath(HistoryStore.NEXT_DB_NAME).let { db -> db.length() + File(db.path + "-wal").length() }
         val series = File(app.filesDir, "shot-series").listFiles().orEmpty().sumOf { it.length() }
         store.erase()
@@ -108,6 +116,41 @@ class ShotHistorySizeTest {
                 println("F10-MEASURE shots=$shots samples=$samples ${singleFile(list)} | ${split(list)}")
             }
         }
+        // The design size: the split store only (the old single file would be ~70 MB).
+        println("P4A-MEASURE shots=5000 samples=180 ${split(List(5_000) { shot(it, 180) })}")
+    }
+
+    @Test
+    fun `at the design size the load reads no series, and each shot reads whole on demand`() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val store = HistoryStore(app, coreJson)
+        store.erase()
+        val shots = List(5_000) { shot(it, 40) }
+        assertTrue(store.save(shots))
+        val reads = seriesReadsForTest.get()
+        val fresh = HistoryStore(app, coreJson)
+        var load: HistoryLoad? = null
+        val ms = ms(measureNanoTime { load = fresh.loadAll() })
+        println("P4A-MEASURE design-size rows load=${ms}ms")
+        val l = assertNotNull(load)
+        assertEquals(reads, seriesReadsForTest.get(), "the load read no series")
+        assertEquals(HistoryStore.MAX_SHOTS, l.view.size, "the view keeps its cap until P6")
+        assertEquals(5_000 - HistoryStore.MAX_SHOTS, l.hiddenCount, "and every other row stays in the store")
+        assertTrue(l.view.all { it.summary.sampleCount == 40u && it.summary.spark != null }, "each row draws from its summary")
+        // A shot far past the cap reads whole, with its own curve.
+        val far = shots[4_321]
+        assertEquals(far.samples, assertNotNull(fresh.loadShot(far.id)).samples)
+        assertEquals(reads + 1, seriesReadsForTest.get(), "one shot, one read")
+        // A star tap on one row writes that row only; every row and curve stays.
+        val tapped = l.view.mapIndexed { i, r -> if (i == 7) r.copy(rating = 5) else r }
+        val tap = ms(measureNanoTime { assertTrue(fresh.save(tapped)) })
+        println("P4A-MEASURE design-size star-tap save=${tap}ms")
+        val again = HistoryStore(app, coreJson)
+        val l2 = again.loadAll()
+        assertEquals(5_000, l2.view.size + l2.hiddenCount)
+        assertEquals(5, l2.view[7].rating)
+        assertEquals(shots[0].samples, assertNotNull(again.loadShot(shots[0].id)).samples)
+        store.erase()
     }
 
     @Test
@@ -125,8 +168,9 @@ class ShotHistorySizeTest {
         // Startup reads the rows first (no series), then the series apart.
         val reader = HistoryStore(app, coreJson)
         val rows = reader.loadRows()
-        assertTrue(rows.all { it.samples.isEmpty() }, "rows come without their series")
-        assertEquals(List(3) { 260 }, reader.loadSeries(rows.map { it.id }).values.map { it.size })
+        // A row holds no series (#310 P4a: the type has no field); its summary counts it.
+        assertTrue(rows.all { it.summary.sampleCount == 260u }, "rows come with their summaries")
+        assertEquals(List(3) { 260 }, rows.map { assertNotNull(reader.loadShot(it.id)).samples.size })
         // Deleting a shot, by name, drops its series file.
         store.delete(listOf(shots[0].id))
         assertEquals(2, File(app.filesDir, "shot-series").listFiles().orEmpty().size)

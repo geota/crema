@@ -193,7 +193,7 @@ class HistorySqliteStoreTest {
         assertEquals(3, rowCount())
         assertNull(assertNotNull(storedSummary(rows[1].id).also { assertNotNull(it) }).sampleCount, "unknown, not 0")
         assertEquals(rows[0].samples.size.toUInt(), storedSummary(rows[0].id)?.sampleCount)
-        assertFalse(s.hasCurve(rows[1].copy(samples = emptyList())), "and not manual: brewMethod is null")
+        assertFalse(s.hasCurve(rows[1].id), "and not manual: brewMethod is null")
     }
 
     @Test
@@ -301,7 +301,7 @@ class HistorySqliteStoreTest {
         // Legacy saves go to shots.json, as before P3a.
         s.openSaves()
         val added = StoredShot(id = "new", completedAtMs = rows.first().completedAtMs + 1, durationMs = 1)
-        assertTrue(s.save(listOf(added) + load.view))
+        assertTrue(s.save(listOf(s.stage(added)) + load.view))
         assertTrue(shotsJson.readText().contains("\"new\""))
     }
 
@@ -512,7 +512,7 @@ class HistorySqliteStoreTest {
         HistoryFixtures.plantOldBuild(app, rows)
         val s = store()
         s.loadAll()
-        s.save(emptyList())
+        s.save(emptyList<coffee.crema.history.StoredShot>())
         s.save(listOf(rows[2].copy(samples = emptyList(), rating = 1)))
         assertEquals(5, rowCount())
         val back = store().load().associateBy { it.id }
@@ -743,7 +743,7 @@ class HistorySqliteStoreTest {
         val shot = StoredShot(id = "made-then-deleted", completedAtMs = 2_000_000_000_000L, durationMs = 1, samples = HistoryFixtures.samples(4, 2))
         s.save(listOf(shot))
         // The user deletes it: the view's save, then the named delete.
-        s.save(emptyList())
+        s.save(emptyList<coffee.crema.history.StoredShot>())
         s.delete(listOf(shot.id))
         setDbVersion(HistoryDb.VERSION)
         assertEquals(HistoryHealth.OK, s.retry().health)
@@ -782,7 +782,10 @@ class HistorySqliteStoreTest {
         val s = store()
         val load = s.loadAll()
         assertFalse(load.view.any { it.id == brew.id }, "past the cap")
-        assertTrue(s.updateHidden(brew.id) { it.copy(profile = HistoryFixtures.profile(2)) })
+        // A pull's fill (#310 P4a): the profile alone is staged, then the row's write carries it.
+        val row = assertNotNull(s.storedRow(brew.id))
+        s.stage(row.withHeavy(emptyList(), HistoryFixtures.profile(2), null))
+        assertTrue(s.updateHidden(brew.id) { it })
         s.flushHidden(brew.id)
         val back = store().load().first { it.id == brew.id }
         assertEquals(brew.brewSeries, back.brewSeries, "the brew series stays")
@@ -797,7 +800,8 @@ class HistorySqliteStoreTest {
         HistoryFixtures.plantOldBuild(app, base + brew)
         val s = store()
         s.loadAll()
-        assertTrue(s.updateHidden(brew.id) { it.copy(profile = HistoryFixtures.profile(3)) })
+        s.stage(assertNotNull(s.storedRow(brew.id)).withHeavy(emptyList(), HistoryFixtures.profile(3), null))
+        assertTrue(s.updateHidden(brew.id) { it })
         HistoryStore.faults += MigrationFault.DISK_FULL
         s.flushHidden(brew.id)
         HistoryStore.faults.clear()
@@ -822,8 +826,8 @@ class HistorySqliteStoreTest {
         files.gzFile(gone.id).delete()
         val s = store()
         val view = s.loadAll().view
-        val series = s.loadSeries(view.map { it.id })
-        assertFalse(series.containsKey(corrupt.id) || series.containsKey(gone.id))
+        // Each read whole, as a detail would (#310 P4a): no curve for either.
+        for (id in listOf(corrupt.id, gone.id)) assertTrue(assertNotNull(s.loadShot(id)).samples.isEmpty(), id)
         for (row in view) assertFalse(s.hasCurve(row), "${row.id}: no curve to read")
         // The next save writes the summary as unknown.
         s.save(view)
@@ -840,7 +844,7 @@ class HistorySqliteStoreTest {
         val hidden = s.hiddenRows(load.view.mapTo(HashSet()) { it.id })
         assertEquals(2, hidden.size)
         val (gone, unreadable) = hidden
-        assertTrue(gone.samples.isEmpty() && s.hasCurve(gone), "a light row whose curve is on disk")
+        assertTrue(s.hasCurve(gone), "a row whose curve is on disk")
         val files = SeriesFiles(seriesDir, coreJson)
         files.gzFile(gone.id).delete()
         File(seriesDir, HistoryStore.seriesFileName(gone.id)).delete()

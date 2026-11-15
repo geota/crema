@@ -1,5 +1,7 @@
 package coffee.crema.ui
 
+import coffee.crema.history.wholeFrom
+import coffee.crema.history.rows
 import android.app.Application
 import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.defaultMaintenanceState
@@ -39,8 +41,17 @@ class BackupRowGapsTest {
     private fun shot(id: String, pressure: Float = 9f) =
         StoredShot(id = id, completedAtMs = now, durationMs = 1_000, samples = listOf(sample(pressure)))
 
+    /** The shots the state's rows stand for, read whole by the snapshot. */
+    private var whole: List<StoredShot> = emptyList()
+
+    private fun shots(vararg list: StoredShot): coffee.crema.ui.HistoryView {
+        whole = list.toList()
+        return rowViewOf(whole.rows())
+    }
+
     private fun snapshot(state: MainUiState, customs: List<String> = emptyList()) = BackupSnapshot(
         customs = customs,
+        full = wholeFrom(whole),
         state = state,
         pinned = emptySet(),
         hidden = emptySet(),
@@ -58,7 +69,7 @@ class BackupRowGapsTest {
 
     @Test
     fun `a NaN in one shot costs that shot, not the backup`() {
-        val built = build(state().copy(history = rowViewOf(listOf(shot("good"), shot("nan", Float.NaN), shot("also")))))
+        val built = build(state().copy(history = shots(shot("good"), shot("nan", Float.NaN), shot("also"))))
         assertEquals(listOf(OmittedBackupRow("shot", 1, null)), built.omitted)
         assertEquals(2, header(built.jsonl).getValue("shotCount").jsonPrimitive.int)
         assertEquals(1, header(built.jsonl).getValue("omittedCount").jsonPrimitive.int)
@@ -77,12 +88,12 @@ class BackupRowGapsTest {
      *  copies: `shotCount: 0`, `omittedCount: 300`. */
     @Test
     fun `a section whose rows are all unreadable fails the backup`() {
-        assertFailsWith<Exception> { build(state().copy(history = rowViewOf(List(3) { shot("nan$it", Float.NaN) }))) }
+        assertFailsWith<Exception> { build(state().copy(history = shots(*Array(3) { shot("nan$it", Float.NaN) }))) }
     }
 
     @Test
     fun `an omitted row is named from its place in the snapshot`() {
-        val snap = snapshot(state().copy(history = rowViewOf(listOf(shot("good"), shot("nan", Float.NaN)))))
+        val snap = snapshot(state().copy(history = shots(shot("good"), shot("nan", Float.NaN))))
         val built = backupBundleJsonl(snap, json, now, "test", "Android test")
         assertEquals(listOf("nan"), built.omitted.map { omittedRowId(it, snap) })
     }
@@ -97,7 +108,7 @@ class BackupRowGapsTest {
 
     @Test
     fun `a clean backup has no omitted count`() {
-        val built = build(state().copy(history = rowViewOf(listOf(shot("good")))))
+        val built = build(state().copy(history = shots(shot("good"))))
         assertTrue(built.omitted.isEmpty())
         assertFalse("omittedCount" in built.jsonl)
         assertNull(backupGapsNotice(built))

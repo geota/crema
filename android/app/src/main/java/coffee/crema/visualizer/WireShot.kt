@@ -198,7 +198,7 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
 }
 
 /** The shot's stamped DE1 identity as the core `ShotMachine`, or null when none was stamped. */
-fun shotMachineOf(shot: StoredShot): coffee.crema.core.ShotMachine? =
+fun shotMachineOf(shot: coffee.crema.history.ShotMeta): coffee.crema.core.ShotMachine? =
     shot.machineSerial?.takeIf { it.isNotBlank() }?.let {
         coffee.crema.core.ShotMachine(serialNumber = it, firmwareVersion = shot.machineFirmware, model = shot.machineModel)
     }

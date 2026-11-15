@@ -16,6 +16,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -142,7 +145,7 @@ class ShotSeriesStoreTest {
         val s = store()
         s.save(listOf(shot("a", 3), shot("b", 3)))
         s.save(listOf(shot("a", 3)))
-        s.save(emptyList())
+        s.save(emptyList<coffee.crema.history.StoredShot>())
         assertTrue(gz("a").exists() && gz("b").exists())
         assertEquals(setOf("a", "b"), store().load().map { it.id }.toSet(), "and no row either")
     }
@@ -170,5 +173,53 @@ class ShotSeriesStoreTest {
         assertTrue(SafeFile.keptAside(historyFile).isNotEmpty(), "the damaged rows are kept aside")
         s.save(listOf(shot("a", 0)))
         assertEquals(3, store().load().first { it.id == "a" }.samples.size)
+    }
+
+    // ── #310 P4a: rows hold no series; a shot reads whole on demand ──────────
+
+    @Test
+    fun `a row's curve is read when its shot is, and the last few stay in memory`() = runBlocking {
+        val shots = List(12) { i -> shot("s$i", 5, pressure = i.toFloat()) }
+        store().save(shots)
+        val s = store()
+        val rows = s.loadRows()
+        assertTrue(rows.all { it.summary.sampleCount == 5u }, "each row counts its curve without holding it")
+        val reads = seriesReadsForTest.get()
+        assertEquals(List(5) { 3f }, assertNotNull(s.loadShot("s3")).samples.map { it.pressure })
+        assertEquals(reads + 1, seriesReadsForTest.get())
+        s.loadShot("s3")
+        assertEquals(reads + 1, seriesReadsForTest.get(), "the second read is from memory")
+        for (i in 0 until HistoryStore.RECENT_SHOTS) s.loadShot("s${i + 4}")
+        s.loadShot("s3")
+        assertEquals(reads + 2 + HistoryStore.RECENT_SHOTS, seriesReadsForTest.get(), "only the last ${HistoryStore.RECENT_SHOTS} are kept")
+        assertNull(s.loadShot("nope"), "no row, no shot")
+    }
+
+    @Test
+    fun `a shot written whole without samples keeps the curve the store holds`() = runBlocking {
+        val mine = shot("s1", 5)
+        store().save(listOf(mine))
+        // A restore's overwrite from a backup row with no curve (SPEC §4, the 2026-11-08 decision).
+        val s = store()
+        s.loadAll()
+        assertTrue(s.save(listOf(mine.copy(samples = emptyList(), notes = "theirs"))))
+        val back = assertNotNull(store().load().single())
+        assertEquals("theirs", back.notes)
+        assertEquals(mine.samples, back.samples, "the device's curve stays")
+        assertTrue(gz("s1").exists())
+    }
+
+    @Test
+    fun `a shot that can't be read just now throws, and is never read as having no curve`() = runBlocking {
+        store().save(listOf(shot("s1", 5)))
+        val s = store()
+        s.loadAll()
+        // A directory where the gz goes: the file is there, and can't be read now.
+        gz("s1").delete()
+        gz("s1").mkdirs()
+        assertFailsWith<HistoryReadException> { s.loadShot("s1") }
+        assertTrue(s.hasCurve("s1"), "still a curve: a read error says nothing about it")
+        gz("s1").delete()
+        Unit
     }
 }

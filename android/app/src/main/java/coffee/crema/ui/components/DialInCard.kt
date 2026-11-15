@@ -27,7 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coffee.crema.history.StoredShot
+import coffee.crema.history.ShotMeta
 import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.fmt
@@ -57,7 +57,7 @@ import coffee.crema.ui.theme.JetBrainsMono
 @Composable
 fun DialInCard(
     /** The active bag's most recent stored shot. */
-    shot: StoredShot,
+    shot: ShotMeta,
     weightUnit: String,
     /** Re-apply this shot's setup (profile + bag + grind + targets). */
     onStart: () -> Unit,

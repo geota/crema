@@ -20,8 +20,8 @@ import java.util.Calendar
  * [coffeeOf]), or null = no bean filter. [now] is the current epoch-ms (passed
  * in for testability); "today" counts shots since local midnight.
  */
-fun filterAndSortShots(
-    history: List<StoredShot>,
+fun <T : ShotMeta> filterAndSortShots(
+    history: List<T>,
     query: String,
     range: String,
     profileFilter: String?,
@@ -36,10 +36,10 @@ fun filterAndSortShots(
      */
     methodFilter: String? = null,
     /** A shot's coffee key ([shotCoffee] with the live library); snapshot-only by default. */
-    coffeeOf: (StoredShot) -> String? = { shotCoffee(it) { null }?.key },
+    coffeeOf: (ShotMeta) -> String? = { shotCoffee(it) { null }?.key },
     /** Only pinned shots (#311). */
     pinnedOnly: Boolean = false,
-): List<StoredShot> {
+): List<T> {
     val dayMs = 24L * 60L * 60L * 1000L
     val startOfDay = Calendar.getInstance().apply {
         timeInMillis = now
@@ -93,7 +93,7 @@ fun msToNextMinute(nowMs: Long): Long = 60_000L - Math.floorMod(nowMs, 60_000L)
  * name / grinder, the shot's own grinder model, barista and drinker. A blank
  * query matches everything. Mirrors the web `shotMatchesQuery`.
  */
-fun shotMatchesQuery(s: StoredShot, query: String): Boolean {
+fun shotMatchesQuery(s: ShotMeta, query: String): Boolean {
     val q = query.trim()
     if (q.isEmpty()) return true
     return listOf(
@@ -134,7 +134,7 @@ data class ShotCoffee(val key: String, val name: String, val roaster: String?)
  * a merged duplicate roaster resolves to its canonical row); otherwise the
  * frozen snapshot answers. Mirrors the web `shotCoffee`.
  */
-fun shotCoffee(s: StoredShot, live: (beanId: String) -> Pair<String, String?>?): ShotCoffee? {
+fun shotCoffee(s: ShotMeta, live: (beanId: String) -> Pair<String, String?>?): ShotCoffee? {
     val bean = s.bean ?: return null
     val fromLive = bean.beanId?.let(live)
     val name = (fromLive?.first ?: bean.name).trim()
@@ -153,7 +153,7 @@ data class BeanFilterOption(val key: String, val label: String)
  * roaster appended. Picking a coffee lists every bag of it.
  */
 fun beanFilterOptions(
-    history: List<StoredShot>,
+    history: List<ShotMeta>,
     live: (beanId: String) -> Pair<String, String?>?,
     current: String?,
 ): List<BeanFilterOption> {
@@ -179,7 +179,7 @@ fun beanFilterOptions(
  * first, de-duplicated case-insensitively (newest spelling wins). Feeds the
  * shot editor's suggestions. Mirrors the web `recentNames`.
  */
-fun recentNames(history: List<StoredShot>, field: String): List<String> {
+fun recentNames(history: List<ShotMeta>, field: String): List<String> {
     val seen = HashSet<String>()
     return history.sortedByDescending { it.completedAtMs }.mapNotNull { s ->
         val name = (if (field == "barista") s.barista else s.drinker)?.trim()?.takeIf { it.isNotEmpty() }

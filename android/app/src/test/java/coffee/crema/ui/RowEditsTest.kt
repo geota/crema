@@ -3,6 +3,7 @@ package coffee.crema.ui
 import coffee.crema.beans.newBean
 import coffee.crema.beans.newRoaster
 import coffee.crema.history.StoredShot
+import coffee.crema.history.row
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -15,7 +16,7 @@ import org.junit.Test
  */
 class RowEditsTest {
     private fun shot(id: String, rating: Int? = null) =
-        StoredShot(id = id, completedAtMs = 1, durationMs = 30_000, rating = rating)
+        StoredShot(id = id, completedAtMs = 1, durationMs = 30_000, rating = rating).row()
 
     private val bean = newBean("Bag", null, roastLevel = null, roastedOn = null, nowMs = 1)
     private val roaster = newRoaster("Onyx", 1)

@@ -2,6 +2,8 @@ package coffee.crema.decent
 
 import coffee.crema.core.ShotMachine
 import coffee.crema.core.uploadRefusedNoSamples
+import coffee.crema.history.ShotMeta
+import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
 import coffee.crema.history.BREW_LOG_UPLOAD_SKIP
 import coffee.crema.history.isBrewLog
@@ -81,10 +83,14 @@ class DecentSync(
     private val knownSerial: (String?) -> String?,
     /** The connected DE1 answered its serial read with `0` (unknown) — for the skip reason. */
     private val liveSerialUnreadable: () -> Boolean = { false },
-    /** The shot as history holds it NOW (null = deleted) — re-read before every POST. */
-    private val currentShot: (localId: String) -> StoredShot?,
-    /** Waits for the stored shots' telemetry to load (F10 validation P1-2). */
-    private val seriesReady: suspend () -> Unit = {},
+    /** The row as history holds it NOW (null = deleted). */
+    private val currentShot: (localId: String) -> ShotRow?,
+    /**
+     * The shot whole, read just before every POST (#310 P4a): a row holds no
+     * curve. Waits for the rows; null = no longer in history; throws when it
+     * can't be read just now, which says nothing about the shot.
+     */
+    private val loadShot: suspend (localId: String) -> StoredShot?,
     /** The account was just linked — the moment to offer a catch-up of existing shots. */
     private val onLinked: () -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
@@ -203,7 +209,7 @@ class DecentSync(
         return ok
     }
 
-    private fun DecentState.logged(direction: String, shot: StoredShot, error: String? = null): DecentState {
+    private fun DecentState.logged(direction: String, shot: ShotMeta, error: String? = null): DecentState {
         val entry = SyncLogEntry(
             destination = UploadTargetId.Decent,
             direction = direction,
@@ -292,37 +298,37 @@ class DecentSync(
     override val enabled: Boolean get() = persisted.linked && !persisted.needsReauth
     override val autoUpload: Boolean get() = persisted.autoUpload
 
-    override fun isUploaded(shot: StoredShot): Boolean = shot.decentId != null
+    override fun isUploaded(shot: ShotRow): Boolean = shot.decentId != null
 
     /** The public page when there is one, else the account's shot history. */
-    override fun viewUrl(shot: StoredShot): String? =
+    override fun viewUrl(shot: ShotRow): String? =
         shot.decentId?.let { shareUrl(shot) ?: DECENT_HISTORY_URL }
 
-    override fun shareUrl(shot: StoredShot): String? = shotViewUrl(shot.machineSerial, shot.decentId)
+    override fun shareUrl(shot: ShotRow): String? = shotViewUrl(shot.machineSerial, shot.decentId)
 
     /**
      * A shot pulled from Visualizer can go only with its own stamped serial;
      * a Brew Log row (issue #10) never goes — it is not a DE1 shot.
      */
-    override fun canUpload(shot: StoredShot): Boolean =
+    override fun canUpload(shot: ShotRow): Boolean =
         !shot.isBrewLog && (!shot.pulledFromVisualizer || shotMachineOf(shot) != null)
 
-    override fun inBacklog(shot: StoredShot): Boolean =
+    override fun inBacklog(shot: ShotRow): Boolean =
         shot.decentId == null &&
             shot.durationMs >= MIN_SHOT_SECONDS * 1000L &&
             canUpload(shot) &&
             shot.id !in persisted.rejectedShotIds
 
-    override fun maybeAutoUpload(shot: StoredShot, fullSamples: List<TelemetrySample>?): Boolean {
+    override fun maybeAutoUpload(shot: ShotRow): Boolean {
         val p = persisted
         if (!p.linked || !p.autoUpload || p.needsReauth) return false
         if (shot.isBrewLog) return false
         if (shot.durationMs < MIN_SHOT_SECONDS * 1000L) return false
         if (machineFor(shot) == null) return false
-        return uploadShot(shot, manual = false, fullSamples = fullSamples)
+        return uploadShot(shot, manual = false)
     }
 
-    override fun pushShot(shot: StoredShot, replace: Boolean): Boolean =
+    override fun pushShot(shot: ShotRow, replace: Boolean): Boolean =
         uploadShot(shot, manual = true, replace = replace)
 
     // ── Upload ──────────────────────────────────────────────────────────────
@@ -352,7 +358,7 @@ class DecentSync(
      * or `0`) is no serial: a shot stamped `0` borrows the live DE1, and a
      * live `0` is never used.
      */
-    private fun resolveMachine(shot: StoredShot): Pair<ShotMachine, Boolean>? {
+    private fun resolveMachine(shot: ShotMeta): Pair<ShotMachine, Boolean>? {
         shotMachineOf(shot)?.let { m -> knownSerial(m.serialNumber)?.let { return m.copy(serialNumber = it) to false } }
         if (shot.pulledFromVisualizer) return null
         val live = liveMachine() ?: return null
@@ -360,7 +366,7 @@ class DecentSync(
         return live.copy(serialNumber = serial) to true
     }
 
-    private fun machineFor(shot: StoredShot): ShotMachine? = resolveMachine(shot)?.first
+    private fun machineFor(shot: ShotMeta): ShotMachine? = resolveMachine(shot)?.first
 
     /**
      * Upload one shot in the background; `manual` skips the auto-upload +
@@ -369,10 +375,9 @@ class DecentSync(
      * Returns false without doing anything when the shot is already in flight.
      */
     fun uploadShot(
-        shot: StoredShot,
+        shot: ShotRow,
         manual: Boolean = true,
         replace: Boolean = false,
-        fullSamples: List<TelemetrySample>? = null,
     ): Boolean {
         if (!persisted.linked) {
             if (manual) notify("Link your Decent account first (Settings → Sharing)")
@@ -381,7 +386,7 @@ class DecentSync(
         if (!claim(shot.id)) return false
         scope.launch {
             val outcome = try {
-                uploadClaimed(shot, manual, replace, fullSamples, clearRejection = manual)
+                uploadClaimed(shot, manual, replace, clearRejection = manual)
             } finally {
                 release(shot.id)
             }
@@ -443,7 +448,7 @@ class DecentSync(
                 // rather than cancelling this one mid-POST.
                 synchronized(editReplaceJobs) { if (editReplaceJobs[shotId] === job) editReplaceJobs.remove(shotId) }
                 while (synchronized(inFlight) { shotId in inFlight }) delay(250)
-                val o = uploadNow(currentShot(shotId) ?: return@launch, manual = false, replace = true, fullSamples = null)
+                val o = uploadNow(currentShot(shotId) ?: return@launch, manual = false, replace = true)
                 // Decenza saw the server answer EVERY replace "duplicate" (2026-10-04):
                 // say so once per session, not per edit; Recent activity has each one.
                 if (o is Outcome.Failed && o.error is DecentError.NotReplaced && !notReplacedNotified) {
@@ -458,26 +463,24 @@ class DecentSync(
 
     /** Upload one shot and await the outcome (the backlog drain; tests). */
     internal suspend fun uploadNow(
-        shot: StoredShot,
+        shot: ShotRow,
         manual: Boolean,
         replace: Boolean,
-        fullSamples: List<TelemetrySample>?,
         clearRejection: Boolean = false,
         backlog: Boolean = false,
     ): Outcome {
         if (!claim(shot.id)) return Outcome.Skipped("Already uploading", alreadyRunning = true)
         try {
-            return uploadClaimed(shot, manual, replace, fullSamples, clearRejection, backlog)
+            return uploadClaimed(shot, manual, replace, clearRejection, backlog)
         } finally {
             release(shot.id)
         }
     }
 
     private suspend fun uploadClaimed(
-        snapshot: StoredShot,
+        snapshot: ShotRow,
         manual: Boolean,
         replace: Boolean,
-        fullSamples: List<TelemetrySample>?,
         clearRejection: Boolean,
         /** Part of a backlog drain: like the auto path, skip a serial Decent said is not on the account. */
         backlog: Boolean = false,
@@ -489,14 +492,20 @@ class DecentSync(
         if (!manual && !p.autoUpload) return Outcome.Skipped("Auto-upload is off")
         if (p.needsReauth) return Outcome.Skipped("Decent login needs re-linking")
         // The caller's copy may be stale (a second tap, a drain racing a live
-        // push, or taken before the series loaded).
-        seriesReady()
-        val shot = currentShot(snapshot.id) ?: return Outcome.Skipped("Shot no longer in history")
+        // push): the shot whole, as it stands now (#310 P4a). A read that
+        // failed says nothing about the shot: it stays in the backlog.
+        val shot = try {
+            loadShot(snapshot.id)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: java.io.IOException) {
+            return Outcome.Skipped("This shot couldn't be read just now; it will go next time")
+        } ?: return Outcome.Skipped("Shot no longer in history")
         // Brew Log rows (issue #10): never uploaded, and never stamped with
         // the live DE1 (which the bind after a successful POST would do).
         if (shot.isBrewLog) return Outcome.Skipped(BREW_LOG_UPLOAD_SKIP)
         // A record with no measurements isn't a shot; the row stays in the backlog.
-        if (uploadRefused(false, (fullSamples ?: shot.samples).size.toUInt())) return Outcome.Skipped(NO_SERIES_REASON)
+        if (uploadRefused(false, shot.samples.size.toUInt())) return Outcome.Skipped(NO_SERIES_REASON)
         if (shot.decentId != null && !replace) return Outcome.Skipped("Already on Decent")
         if (!manual && shot.durationMs < MIN_SHOT_SECONDS * 1000L) return Outcome.Skipped("Shorter than $MIN_SHOT_SECONDS s")
         val (machine, fromLive) = resolveMachine(shot) ?: return Outcome.Skipped(
@@ -513,7 +522,7 @@ class DecentSync(
         if (clearRejection && shot.id in p.rejectedShotIds) persist { it.copy(rejectedShotIds = it.rejectedShotIds - shot.id) }
 
         val record = try {
-            buildRecord(shot, machine, fullSamples)
+            buildRecord(shot, machine, null)
         } catch (c: CancellationException) {
             throw c
         } catch (e: Exception) {
@@ -556,7 +565,7 @@ class DecentSync(
         }
     }
 
-    private suspend fun failed(e: DecentError, shot: StoredShot): Outcome {
+    private suspend fun failed(e: DecentError, shot: ShotMeta): Outcome {
         persist {
             it.copy(lastUpload = DecentLastUpload(now(), ok = false, message = e.message ?: "failed")).logged("skip", shot, e.message)
         }
@@ -572,7 +581,7 @@ class DecentSync(
      * failures) and the result's note says why, once. A second call while a
      * pass runs returns at once.
      */
-    override suspend fun uploadUnsentNow(shots: List<StoredShot>): DrainResult {
+    override suspend fun uploadUnsentNow(shots: List<ShotRow>): DrainResult {
         if (!drainMutex.tryLock()) return DrainResult(stopped = "A Decent upload pass is already running")
         try {
             if (!enabled) return DrainResult()
@@ -586,7 +595,7 @@ class DecentSync(
             var stopped: String? = null
             val heldBack = LinkedHashMap<String, Int>()
             for ((i, shot) in backlog.withIndex()) {
-                when (val o = uploadNow(shot, manual = true, replace = false, fullSamples = null, backlog = true)) {
+                when (val o = uploadNow(shot, manual = true, replace = false, backlog = true)) {
                     is Outcome.Uploaded -> { uploaded++; streak = 0 }
                     is Outcome.Skipped ->
                         if (o.notOnAccount != null) heldBack.merge(o.notOnAccount, 1, Int::plus) else skipped++

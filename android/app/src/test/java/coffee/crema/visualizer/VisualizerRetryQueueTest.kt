@@ -1,6 +1,8 @@
 package coffee.crema.visualizer
 
 import android.content.ContextWrapper
+import coffee.crema.history.row
+import coffee.crema.history.rows
 import coffee.crema.history.StoredShot
 import coffee.crema.security.SecretBox
 import coffee.crema.security.SecretCipher
@@ -89,6 +91,8 @@ class VisualizerRetryQueueTest {
     private val synced = mutableMapOf<String, String>()
     private val history = mutableMapOf<String, StoredShot>()
     private var clock = 1_800_000_000_000L
+    /** The store's read fails, as an I/O error would (#310 P4a). */
+    @Volatile private var readFails = false
     private var refresh: suspend (String) -> TokenSet = { error("no refresh expected") }
 
     private val sample = TelemetrySample(
@@ -105,7 +109,7 @@ class VisualizerRetryQueueTest {
         expiredTokens: Boolean = false,
         watcher: NetworkWatcher? = null,
         keepStore: Boolean = false,
-        seriesReady: suspend () -> Unit = {},
+        awaitRows: suspend () -> Unit = {},
         waits: MutableList<Long>? = null,
         shotsLoaded: () -> Boolean = { true },
         historyRefused: () -> Boolean = { false },
@@ -121,13 +125,14 @@ class VisualizerRetryQueueTest {
             synced[local] = remote
             history[local] = history.getValue(local).copy(visualizerId = remote)
         },
-        currentShot = { history[it] },
+        currentShot = { history[it]?.row() },
+        loadShot = { if (readFails) throw coffee.crema.history.HistoryReadException("test") else history[it] },
         now = { clock },
         refreshTokens = { refresh(it) },
         networkWatcher = watcher,
         // [waits] turns the timers on, each wait recorded and never ending.
         retryTimers = waits != null,
-        seriesReady = seriesReady,
+        awaitRows = awaitRows,
         shotsLoaded = shotsLoaded,
         historyRefused = historyRefused,
         retryDelay = { ms -> waits?.add(ms); awaitCancellation() },
@@ -155,6 +160,36 @@ class VisualizerRetryQueueTest {
         dir.deleteRecursively()
     }
 
+    // ── #310 P4a: every upload reads its shot whole, just before it goes ────
+
+    @Test
+    fun `an upload reads the shot whole, so a row that holds no curve still sends the stored one`() {
+        val s = sync()
+        val stored = shot("s1")
+        // The row a screen or a backlog hands in: no samples in memory.
+        assertTrue(s.uploadShot(stored.copy(samples = emptyList()).row(), silent = true))
+        settle()
+        assertEquals(1, uploads.size)
+        assertEquals(mapOf("s1" to "v-1"), synced)
+        assertFalse("no 'no telemetry' refusal: $notices", notices.any { "telemetry" in it })
+    }
+
+    @Test
+    fun `an upload whose shot can't be read just now is queued for a retry, never dropped`() {
+        val s = sync()
+        shot("s1")
+        readFails = true
+        assertTrue(s.uploadShot(history.getValue("s1").row(), silent = true))
+        settle()
+        assertTrue("nothing went: $uploads", uploads.isEmpty())
+        assertTrue("queued: ${queue()}", queue().any { it.shotId == "s1" })
+        assertTrue("still owed", s.inBacklog(history.getValue("s1").row()))
+        readFails = false
+        clock += 24L * 60 * 60 * 1000
+        runBlocking { s.drainRetryQueue() }
+        assertEquals(mapOf("s1" to "v-1"), synced)
+    }
+
     // ── F17.3: the session survives a transient refresh failure ─────────────
 
     @Test
@@ -168,7 +203,7 @@ class VisualizerRetryQueueTest {
             notices.clear()
             refresh = { throw failure }
             val s = sync(expiredTokens = true)
-            s.uploadShot(shot("s$i"), silent = true)
+            s.uploadShot(shot("s$i").row(), silent = true)
             settle()
             assertNotNull("session kept after $failure", runBlocking { store.load().tokens })
             assertFalse("no expired notice: $notices", notices.any { "expired" in it })
@@ -180,7 +215,7 @@ class VisualizerRetryQueueTest {
     fun `invalid_grant signs out and queues nothing`() {
         refresh = { throw TokenEndpointError(400, """{"error":"invalid_grant"}""", "invalid_grant") }
         val s = sync(expiredTokens = true)
-        s.uploadShot(shot("s1"), silent = true)
+        s.uploadShot(shot("s1").row(), silent = true)
         settle()
         assertNull(runBlocking { store.load().tokens })
         assertTrue(notices.any { "ended this sign-in" in it })
@@ -196,7 +231,7 @@ class VisualizerRetryQueueTest {
         uploadReplies += HttpStatusCode.ServiceUnavailable to "{}"
         uploadReplies += HttpStatusCode.ServiceUnavailable to "{}"
         val s = sync()
-        s.uploadShot(shot("s1"), silent = true)
+        s.uploadShot(shot("s1").row(), silent = true)
         settle()
         val entry = queue().single()
         assertEquals(1, entry.attempts)
@@ -215,7 +250,7 @@ class VisualizerRetryQueueTest {
     fun `a history that came up refused keeps the queue and the pending edits`() {
         lastReply = HttpStatusCode.ServiceUnavailable to "{}"
         val s = sync()
-        s.uploadShot(shot("s1"), silent = true)
+        s.uploadShot(shot("s1").row(), silent = true)
         settle()
         val entry = queue().single()
         // The next launch: the store came up lost or unavailable, so no row reads back.
@@ -235,7 +270,7 @@ class VisualizerRetryQueueTest {
     fun `an upload is dropped after its third attempt`() {
         lastReply = HttpStatusCode.ServiceUnavailable to "{}"
         val s = sync()
-        s.uploadShot(shot("s1"), silent = true)
+        s.uploadShot(shot("s1").row(), silent = true)
         settle()
         clock += 10_000
         runBlocking { s.drainRetryQueue() }
@@ -250,9 +285,9 @@ class VisualizerRetryQueueTest {
     fun `the quota or a 429 stops the drain`() {
         lastReply = HttpStatusCode.ServiceUnavailable to "{}"
         val s = sync()
-        s.uploadShot(shot("a"), silent = true)
+        s.uploadShot(shot("a").row(), silent = true)
         settle()
-        s.uploadShot(shot("b"), silent = true)
+        s.uploadShot(shot("b").row(), silent = true)
         settle()
         assertEquals(2, queue().size)
         clock += 10_000
@@ -264,7 +299,7 @@ class VisualizerRetryQueueTest {
         assertTrue(notices.any { "free plan" in it })
 
         lastReply = HttpStatusCode.TooManyRequests to "{}"
-        s.uploadShot(shot("c"), silent = true)
+        s.uploadShot(shot("c").row(), silent = true)
         settle()
         clock += 10 * 60_000
         val before429 = uploads.size
@@ -276,8 +311,8 @@ class VisualizerRetryQueueTest {
     fun `a deleted or synced shot leaves the queue, and the queue survives a reload`() {
         lastReply = HttpStatusCode.ServiceUnavailable to "{}"
         val s = sync()
-        s.uploadShot(shot("gone"), silent = true)
-        s.uploadShot(shot("done"), silent = true)
+        s.uploadShot(shot("gone").row(), silent = true)
+        s.uploadShot(shot("done").row(), silent = true)
         settle()
         assertEquals(setOf("gone", "done"), queue().map { it.shotId }.toSet())
         // A new controller over the same store sees the queue.
@@ -307,7 +342,7 @@ class VisualizerRetryQueueTest {
             }
         }
         val s = sync(watcher = watcher)
-        s.uploadShot(shot("s1"), silent = true)
+        s.uploadShot(shot("s1").row(), silent = true)
         settle()
         s.onForegroundChanged(true)
         onAvailable = onAvailableHolder[0]
@@ -319,7 +354,7 @@ class VisualizerRetryQueueTest {
         assertEquals("v-net", synced["s1"])
         // A flapping network can't drain in a loop.
         lastReply = HttpStatusCode.ServiceUnavailable to "{}"
-        s.uploadShot(shot("s2"), silent = true)
+        s.uploadShot(shot("s2").row(), silent = true)
         settle()
         clock += 10_000
         val before = uploads.size
@@ -331,7 +366,7 @@ class VisualizerRetryQueueTest {
 
         // A live upload's success drains what is waiting (the sync tail).
         lastReply = HttpStatusCode.OK to """{"id":"v-tail"}"""
-        s.uploadShot(shot("s3"), silent = true)
+        s.uploadShot(shot("s3").row(), silent = true)
         settle()
         assertEquals("v-tail", synced["s2"])
     }
@@ -426,7 +461,7 @@ class VisualizerRetryQueueTest {
         }
         val s = sync(keepStore = true, waits = waits)
         val gate = CompletableDeferred<Unit>().also { uploadGate = it }
-        s.uploadShot(shot("s1"), silent = true)
+        s.uploadShot(shot("s1").row(), silent = true)
         val deadline = System.currentTimeMillis() + 10_000
         while (uploads.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(10)
         assertEquals("the live upload is in flight", 1, uploads.size)
@@ -474,7 +509,7 @@ class VisualizerRetryQueueTest {
         }
         shot("s1", samples = emptyList()) // the row, before its series has loaded
         val loaded = CompletableDeferred<Unit>()
-        val s = sync(keepStore = true, seriesReady = { loaded.await() })
+        val s = sync(keepStore = true, awaitRows = { loaded.await() })
         val drain = CoroutineScope(Dispatchers.Default).async { s.drainRetryQueue() }
         Thread.sleep(200)
         assertTrue("nothing uploaded before the series load: $uploads", uploads.isEmpty())
@@ -527,7 +562,7 @@ class VisualizerRetryQueueTest {
         val s = sync()
         runBlocking { s.load() }
 
-        assertTrue(s.uploadShot(shot("s1", samples = emptyList())))
+        assertTrue(s.uploadShot(shot("s1", samples = emptyList()).row()))
         repeat(200) {
             if (notices.isNotEmpty()) return@repeat
             Thread.sleep(10)
@@ -545,14 +580,14 @@ class VisualizerRetryQueueTest {
         val bare = listOf(shot("a", samples = emptyList()), shot("b", samples = emptyList()))
         val good = shot("c")
 
-        assertTrue("its curve may be on its way", s.inBacklog(bare[0]))
+        assertTrue("its curve may be on its way", s.inBacklog(bare[0].row()))
         settled = true
-        assertFalse(s.inBacklog(bare[0]))
-        assertTrue(s.noTelemetry(bare[0]))
-        assertTrue(s.inBacklog(good))
-        assertFalse(s.noTelemetry(good))
+        assertFalse(s.inBacklog(bare[0].row()))
+        assertTrue(s.noTelemetry(bare[0].row()))
+        assertTrue(s.inBacklog(good.row()))
+        assertFalse(s.noTelemetry(good.row()))
 
-        val r = runBlocking { s.uploadUnsentNow(bare + good) }
+        val r = runBlocking { s.uploadUnsentNow((bare + good).rows()) }
 
         assertEquals(1, r.uploaded)
         assertEquals(1, uploads.size)

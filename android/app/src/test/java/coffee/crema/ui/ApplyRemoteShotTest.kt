@@ -53,7 +53,9 @@ class ApplyRemoteShotTest {
         val after = vm.ui.value.history.single { it.id == "s1" }
         assertEquals(listOf("washed", "gesha"), after.tags)
         assertEquals("Ana", after.barista)
-        assertEquals(1, after.samples.size)
+        // The row names the backfilled curve, and the shot read whole has it (#310 P4a).
+        assertEquals(1u, after.summary.sampleCount)
+        assertEquals(1, VmHarness.whole(vm, "s1").samples.size)
         assertEquals(30_000, after.durationMs)
         assertEquals(1_700_000_123, after.visualizerUpdatedAt)
         assertEquals(4, after.rating)

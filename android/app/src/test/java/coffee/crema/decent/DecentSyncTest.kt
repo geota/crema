@@ -4,6 +4,8 @@ import coffee.crema.core.DecentMachine
 import coffee.crema.core.ShotMachine
 import android.content.ContextWrapper
 import coffee.crema.history.StoredShot
+import coffee.crema.history.row
+import coffee.crema.history.rows
 import coffee.crema.security.DeviceSecretBox
 import coffee.crema.security.FakeKeystore
 import java.io.File
@@ -85,6 +87,8 @@ class DecentSyncTest {
         val notices = mutableListOf<String>()
         var live: ShotMachine? = null
         var liveUnreadable = false
+        /** The store's read fails, as an I/O error would. */
+        var readFails = false
         val sync = DecentSync(
             store = backing ?: store,
             client = api,
@@ -99,7 +103,8 @@ class DecentSyncTest {
             liveMachine = { live },
             knownSerial = { FakeDecentCore().knownSerial(it) },
             liveSerialUnreadable = { liveUnreadable },
-            currentShot = { history[it] },
+            currentShot = { history[it]?.row() },
+            loadShot = { if (readFails) throw coffee.crema.history.HistoryReadException("test") else history[it] },
             now = { 42L },
         ).also { it.onUploadOutcome = { id, o -> outcomes += id to o } }
     }
@@ -114,7 +119,7 @@ class DecentSyncTest {
         val h = harness(listOf(shot("s1")))
         h.api.answers += { throw DecentError.Network(503, "down") }
         val start = currentTime
-        val o = h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null)
+        val o = h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false)
         assertTrue(o is DecentSync.Outcome.Failed)
         assertEquals(1, h.api.posts.size)
         assertEquals(0L, currentTime - start)
@@ -154,7 +159,7 @@ class DecentSyncTest {
         val gate = CompletableDeferred<Unit>()
         val h = harness(listOf(shot("s1").copy(decentId = "d-1")))
         h.api.answers += { gate.await(); DecentUploadResult("d-1") }
-        launch { h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = true, fullSamples = null) }
+        launch { h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = true) }
         runCurrent()
         assertTrue(h.sync.scheduleReplaceAfterEdit("s1"))
         advanceTimeBy(DecentSync.EDIT_REPLACE_DEBOUNCE_MS + 1_000)
@@ -167,7 +172,7 @@ class DecentSyncTest {
     @Test
     fun `the caller's replace flag goes through unchanged`() = runTest {
         val h = harness(listOf(shot("s1")))
-        h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = true, fullSamples = null)
+        h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = true)
         assertEquals(listOf(true), h.api.posts.map { it.second })
     }
 
@@ -180,23 +185,23 @@ class DecentSyncTest {
     fun `a 403 is one POST, names the serial, and leaves the shot in the backlog`() = runTest {
         val h = harness(listOf(shot("s1")))
         h.api.answers += { throw DecentError.NotOnAccount() }
-        val o = h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null)
+        val o = h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false)
         assertTrue(o is DecentSync.Outcome.Failed && o.error is DecentError.NotOnAccount)
         assertEquals(notOnAccount6262, (o as DecentSync.Outcome.Failed).error.message)
         assertEquals(1, h.api.posts.size)
         assertFalse("s1" in h.store.state.rejectedShotIds)
         assertFalse(h.store.state.needsReauth)
         assertEquals(notOnAccount6262, h.store.state.lastUpload!!.message)
-        assertTrue(h.sync.inBacklog(h.history.getValue("s1")))
+        assertTrue(h.sync.inBacklog(h.history.getValue("s1").row()))
     }
 
     @Test
     fun `the 403 reason is shown once - later automatic uploads for that serial skip without a POST`() = runTest {
         val h = harness(listOf(shot("s1", at = 1), shot("s2", at = 2)))
         h.api.answers += { throw DecentError.NotOnAccount() }
-        assertTrue(h.sync.maybeAutoUpload(h.history.getValue("s1"), null))
+        assertTrue(h.sync.maybeAutoUpload(h.history.getValue("s1").row()))
         advanceUntilIdle()
-        assertTrue(h.sync.maybeAutoUpload(h.history.getValue("s2"), null))
+        assertTrue(h.sync.maybeAutoUpload(h.history.getValue("s2").row()))
         advanceUntilIdle()
         assertEquals(1, h.api.posts.size)
         assertEquals(
@@ -204,7 +209,7 @@ class DecentSyncTest {
             h.outcomes.map { it.second.kind to it.second.message },
         )
         // An explicit tap tries again — the owner may have just added the machine.
-        h.sync.uploadNow(h.history.getValue("s2"), manual = true, replace = false, fullSamples = null)
+        h.sync.uploadNow(h.history.getValue("s2").row(), manual = true, replace = false)
         assertEquals(2, h.api.posts.size)
     }
 
@@ -213,7 +218,7 @@ class DecentSyncTest {
         val shots = listOf(shot("a", at = 1), shot("b", at = 2), shot("c", at = 3).copy(machineSerial = "7000"), shot("d", at = 4))
         val h = harness(shots)
         h.api.answers += { throw DecentError.NotOnAccount() }
-        val r = h.sync.uploadUnsentNow(shots)
+        val r = h.sync.uploadUnsentNow(shots.rows())
         // a: 403; b, d: held back without a POST; c (7000) uploads.
         assertEquals(listOf("a", "c"), h.api.posts.map { it.first.substringAfter("\"shot\":\"").substringBefore('"') })
         assertEquals(1, r.uploaded)
@@ -226,11 +231,11 @@ class DecentSyncTest {
     fun `signing in again forgets the 403 serials`() = runTest {
         val h = harness(listOf(shot("s1", at = 1), shot("s2", at = 2)))
         h.api.answers += { throw DecentError.NotOnAccount() }
-        h.sync.maybeAutoUpload(h.history.getValue("s1"), null)
+        h.sync.maybeAutoUpload(h.history.getValue("s1").row())
         advanceUntilIdle()
         h.sync.signIn("a@b.c", "pw")
         advanceUntilIdle()
-        h.sync.maybeAutoUpload(h.history.getValue("s2"), null)
+        h.sync.maybeAutoUpload(h.history.getValue("s2").row())
         advanceUntilIdle()
         assertEquals(2, h.api.posts.size)
     }
@@ -243,11 +248,11 @@ class DecentSyncTest {
         val h = harness(listOf(old))
         h.live = ShotMachine("0")
         h.liveUnreadable = true
-        val o = h.sync.uploadNow(old, manual = true, replace = false, fullSamples = null)
+        val o = h.sync.uploadNow(old.row(), manual = true, replace = false)
         assertEquals(DecentSync.Outcome.Skipped(DecentSync.SERIAL_UNREAD_REASON), o)
         assertEquals("Crema couldn’t read this DE1’s serial number yet", DecentSync.SERIAL_UNREAD_REASON)
         assertEquals(0, h.api.posts.size)
-        assertFalse(h.sync.maybeAutoUpload(old, null))
+        assertFalse(h.sync.maybeAutoUpload(old.row()))
     }
 
     @Test
@@ -256,10 +261,10 @@ class DecentSyncTest {
         val h = harness(listOf(zero))
         assertEquals(
             DecentSync.Outcome.Skipped(DecentSync.SERIAL_UNREAD_REASON),
-            h.sync.uploadNow(zero, manual = true, replace = false, fullSamples = null),
+            h.sync.uploadNow(zero.row(), manual = true, replace = false),
         )
         h.live = ShotMachine("6262", "1352", "DE1PRO")
-        h.sync.uploadNow(zero, manual = true, replace = false, fullSamples = null)
+        h.sync.uploadNow(zero.row(), manual = true, replace = false)
         assertEquals("""{"shot":"z","sn":"6262"}""", h.api.posts.single().first)
         assertEquals(Triple("z", "id-1", ShotMachine("6262", "1352", "DE1PRO")), h.stamped.single())
     }
@@ -286,7 +291,7 @@ class DecentSyncTest {
     fun `auth flags the account for re-linking`() = runTest {
         val h = harness(listOf(shot("s1")))
         h.api.answers += { throw DecentError.Auth() }
-        val o = h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null)
+        val o = h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false)
         assertTrue((o as DecentSync.Outcome.Failed).error is DecentError.Auth)
         assertTrue(h.store.state.needsReauth)
         assertTrue(h.sync.state.value.needsReauth)
@@ -300,7 +305,7 @@ class DecentSyncTest {
         val entered = CompletableDeferred<Unit>()
         h.api.answers += { entered.complete(Unit); awaitCancellation() }
         val savesBefore = h.store.saves
-        val job = launch { h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null) }
+        val job = launch { h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false) }
         entered.await()
         job.cancel()
         advanceUntilIdle()
@@ -315,17 +320,17 @@ class DecentSyncTest {
         val h = harness(listOf(shot("s1")))
         val gate = CompletableDeferred<Unit>()
         h.api.answers += { gate.await(); DecentUploadResult("77") }
-        assertTrue(h.sync.uploadShot(h.history.getValue("s1"), manual = true))
+        assertTrue(h.sync.uploadShot(h.history.getValue("s1").row(), manual = true))
         runCurrent()
-        assertFalse(h.sync.uploadShot(h.history.getValue("s1"), manual = true))
-        val second = h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null)
+        assertFalse(h.sync.uploadShot(h.history.getValue("s1").row(), manual = true))
+        val second = h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false)
         assertTrue((second as DecentSync.Outcome.Skipped).alreadyRunning)
         gate.complete(Unit)
         advanceUntilIdle()
         assertEquals(1, h.api.posts.size)
         assertEquals(listOf("s1" to UploadOutcome(UploadOutcomeKind.Uploaded)), h.outcomes)
         // A later request sees the re-read shot: already on Decent.
-        val third = h.sync.uploadNow(h.history.getValue("s1").copy(decentId = null), manual = true, replace = false, fullSamples = null)
+        val third = h.sync.uploadNow(h.history.getValue("s1").copy(decentId = null).row(), manual = true, replace = false)
         assertEquals("Already on Decent", (third as DecentSync.Outcome.Skipped).reason)
         assertEquals(1, h.api.posts.size)
     }
@@ -335,7 +340,7 @@ class DecentSyncTest {
         val old = StoredShot(id = "old", completedAtMs = 1, durationMs = 30_000, samples = listOf(sample))
         val h = harness(listOf(old))
         h.live = ShotMachine("6262", "1352", "DE1PRO")
-        h.sync.uploadNow(old, manual = true, replace = false, fullSamples = null)
+        h.sync.uploadNow(old.row(), manual = true, replace = false)
         assertEquals(Triple("old", "id-1", ShotMachine("6262", "1352", "DE1PRO")), h.stamped.single())
     }
 
@@ -344,9 +349,9 @@ class DecentSyncTest {
         val pulled = StoredShot(id = "shot:remote:9", completedAtMs = 1, durationMs = 30_000)
         val h = harness(listOf(pulled))
         h.live = ShotMachine("6262")
-        assertFalse(h.sync.inBacklog(pulled))
-        assertFalse(h.sync.canUpload(pulled))
-        val o = h.sync.uploadNow(pulled, manual = true, replace = false, fullSamples = null)
+        assertFalse(h.sync.inBacklog(pulled.row()))
+        assertFalse(h.sync.canUpload(pulled.row()))
+        val o = h.sync.uploadNow(pulled.row(), manual = true, replace = false)
         assertTrue(o is DecentSync.Outcome.Skipped)
         assertTrue(h.api.posts.isEmpty())
     }
@@ -361,14 +366,14 @@ class DecentSyncTest {
         val h = harness(listOf(v60, stamped, real))
         h.live = ShotMachine("6262")
         for (brew in listOf(v60, stamped)) {
-            assertFalse(h.sync.inBacklog(brew))
-            assertFalse(h.sync.canUpload(brew))
-            assertFalse(h.sync.maybeAutoUpload(brew, null))
-            val o = h.sync.uploadNow(brew, manual = true, replace = false, fullSamples = null)
+            assertFalse(h.sync.inBacklog(brew.row()))
+            assertFalse(h.sync.canUpload(brew.row()))
+            assertFalse(h.sync.maybeAutoUpload(brew.row()))
+            val o = h.sync.uploadNow(brew.row(), manual = true, replace = false)
             assertEquals(DecentSync.Outcome.Skipped(coffee.crema.history.BREW_LOG_UPLOAD_SKIP), o)
         }
-        assertEquals(listOf(real), h.sync.unsent(listOf(v60, stamped, real)))
-        val r = h.sync.uploadUnsentNow(listOf(v60, stamped, real))
+        assertEquals(listOf(real.row()), h.sync.unsent(listOf(v60, stamped, real).rows()))
+        val r = h.sync.uploadUnsentNow(listOf(v60, stamped, real).rows())
         assertEquals(1, r.uploaded)
         assertEquals(listOf("real"), h.stamped.map { it.first })
         assertEquals(1, h.api.posts.size)
@@ -392,15 +397,15 @@ class DecentSyncTest {
         val real = shot("real")
         val h = harness(listOf(guided, real))
         h.live = ShotMachine("6262")
-        assertFalse(h.sync.inBacklog(guided))
-        assertFalse(h.sync.canUpload(guided))
-        assertFalse(h.sync.maybeAutoUpload(guided, null))
+        assertFalse(h.sync.inBacklog(guided.row()))
+        assertFalse(h.sync.canUpload(guided.row()))
+        assertFalse(h.sync.maybeAutoUpload(guided.row()))
         assertEquals(
             DecentSync.Outcome.Skipped(coffee.crema.history.BREW_LOG_UPLOAD_SKIP),
-            h.sync.uploadNow(guided, manual = true, replace = false, fullSamples = null),
+            h.sync.uploadNow(guided.row(), manual = true, replace = false),
         )
-        assertEquals(listOf(real), h.sync.unsent(listOf(guided, real)))
-        assertEquals(1, h.sync.uploadUnsentNow(listOf(guided, real)).uploaded)
+        assertEquals(listOf(real.row()), h.sync.unsent(listOf(guided, real).rows()))
+        assertEquals(1, h.sync.uploadUnsentNow(listOf(guided, real).rows()).uploaded)
         assertEquals(listOf("real"), h.stamped.map { it.first })
     }
 
@@ -408,9 +413,9 @@ class DecentSyncTest {
     fun `short shots are out of the backlog but a manual push still goes`() = runTest {
         val flush = shot("flush", durationMs = 3_000)
         val h = harness(listOf(flush))
-        assertFalse(h.sync.inBacklog(flush))
-        assertFalse(h.sync.maybeAutoUpload(flush, null))
-        val o = h.sync.uploadNow(flush, manual = true, replace = false, fullSamples = null)
+        assertFalse(h.sync.inBacklog(flush.row()))
+        assertFalse(h.sync.maybeAutoUpload(flush.row()))
+        val o = h.sync.uploadNow(flush.row(), manual = true, replace = false)
         assertTrue(o is DecentSync.Outcome.Uploaded)
     }
 
@@ -419,7 +424,7 @@ class DecentSyncTest {
         val shots = listOf(shot("a", at = 1), shot("b", at = 2), shot("c", at = 3))
         val h = harness(shots)
         repeat(3) { h.api.answers += { throw DecentError.Network(null, "no route") } }
-        val r = h.sync.uploadUnsentNow(shots)
+        val r = h.sync.uploadUnsentNow(shots.rows())
         assertEquals("Offline", r.stopped)
         assertEquals(1, r.failed)
         // One (final) answer for "a", nothing for "b" / "c".
@@ -432,14 +437,14 @@ class DecentSyncTest {
         val shots = (1..5).map { shot("s$it", at = it.toLong()) }
         val h = harness(shots)
         repeat(5) { h.api.answers += { throw DecentError.Rejected(422, "bad") } }
-        val r = h.sync.uploadUnsentNow(shots)
+        val r = h.sync.uploadUnsentNow(shots.rows())
         assertEquals(3, r.failed)
         assertTrue(r.stopped!!.contains("in a row"))
         assertEquals(setOf("s1", "s2", "s3"), h.store.state.rejectedShotIds)
-        assertEquals(listOf("s4", "s5"), h.sync.unsent(shots).map { it.id })
+        assertEquals(listOf("s4", "s5"), h.sync.unsent(shots.rows()).map { it.id })
         // A manual re-upload clears the rejection.
         h.api.answers.clear()
-        h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null, clearRejection = true)
+        h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false, clearRejection = true)
         assertFalse("s1" in h.store.state.rejectedShotIds)
     }
 
@@ -454,7 +459,7 @@ class DecentSyncTest {
         // s5's final answer is a 5xx (the HTTP layer already retried it).
         h.api.answers += { throw DecentError.Network(500, "boom") }
         h.api.answers += { throw DecentError.Rejected(422, "bad") }
-        val r = h.sync.uploadUnsentNow(shots)
+        val r = h.sync.uploadUnsentNow(shots.rows())
         assertEquals(1, r.uploaded)
         assertEquals(5, r.failed)
         assertTrue(r.stopped!!.contains("in a row"))
@@ -468,9 +473,9 @@ class DecentSyncTest {
         val h = harness(shots)
         val gate = CompletableDeferred<Unit>()
         h.api.answers += { gate.await(); DecentUploadResult("1") }
-        val first = launch { h.sync.uploadUnsentNow(shots) }
+        val first = launch { h.sync.uploadUnsentNow(shots.rows()) }
         runCurrent()
-        val second = h.sync.uploadUnsentNow(shots)
+        val second = h.sync.uploadUnsentNow(shots.rows())
         assertTrue(second.stopped != null && second.attempted == 0)
         gate.complete(Unit)
         first.join()
@@ -514,7 +519,7 @@ class DecentSyncTest {
             assertFalse(ui.busy)
             assertEquals("a@b.c", ui.email)
             assertFalse(h.sync.enabled)
-            assertTrue(h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null) is DecentSync.Outcome.Skipped)
+            assertTrue(h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false) is DecentSync.Outcome.Skipped)
             assertEquals(0, h.api.posts.size)
             // Signing in again works and is stored under a new key.
             h.sync.signIn("a@b.c", "pw")
@@ -592,19 +597,19 @@ class DecentSyncTest {
     fun `a 2xx without an id uploads with a placeholder and no share link`() = runTest {
         val h = harness(listOf(shot("s1")))
         h.api.answers += { DecentUploadResult(null) }
-        val o = h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null) as DecentSync.Outcome.Uploaded
+        val o = h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false) as DecentSync.Outcome.Uploaded
         assertNull(o.url)
         val stored = h.history.getValue("s1")
         assertTrue(stored.decentId!!.startsWith("uploaded:"))
-        assertNull(h.sync.shareUrl(stored))
-        assertEquals(DECENT_HISTORY_URL, h.sync.viewUrl(stored))
+        assertNull(h.sync.shareUrl(stored.row()))
+        assertEquals(DECENT_HISTORY_URL, h.sync.viewUrl(stored.row()))
     }
 
     // Final review 04 P3-3: Erase all data leaves no activity log, settings or retry list.
     @Test
     fun `eraseAll resets the whole stored state, log included`() = runTest {
         val h = harness(listOf(shot("s1")))
-        h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null)
+        h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false)
         assertTrue(h.store.state.log.isNotEmpty())
         assertTrue(h.sync.state.value.log.isNotEmpty())
 
@@ -621,7 +626,7 @@ class DecentSyncTest {
         val bare = shot("s1").copy(samples = emptyList())
         val h = harness(listOf(bare))
 
-        val o = h.sync.uploadNow(bare, manual = true, replace = false, fullSamples = null)
+        val o = h.sync.uploadNow(bare.row(), manual = true, replace = false)
 
         assertEquals(DecentSync.Outcome.Skipped(DecentSync.NO_SERIES_REASON), o)
         assertTrue(h.api.posts.isEmpty())
@@ -629,13 +634,33 @@ class DecentSyncTest {
     }
 
     @Test
-    fun `a shot goes on the full samples the caller holds`() = runTest {
-        val bare = shot("s1").copy(samples = emptyList())
-        val h = harness(listOf(bare))
+    fun `a row goes with the curve read just before the POST, not the one the row knows`() = runTest {
+        // #310 P4a: a row holds no curve. A caller's row taken as "no samples" still
+        // goes whole, because the upload reads the shot from history first.
+        val full = shot("s1")
+        val h = harness(listOf(full))
 
-        val o = h.sync.uploadNow(bare, manual = true, replace = false, fullSamples = listOf(sample))
+        val o = h.sync.uploadNow(full.copy(samples = emptyList()).row(), manual = true, replace = false)
 
         assertTrue(o is DecentSync.Outcome.Uploaded)
+        assertEquals(1, h.api.posts.size)
+    }
+
+    @Test
+    fun `a shot that can't be read just now is skipped, stays in the backlog, and isn't rejected`() = runTest {
+        // Not loaded is not empty: a read error says nothing about the shot.
+        val h = harness(listOf(shot("s1")))
+        h.readFails = true
+
+        val o = h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false)
+
+        assertTrue("skipped: $o", o is DecentSync.Outcome.Skipped)
+        assertTrue(h.api.posts.isEmpty())
+        assertTrue(h.stamped.isEmpty())
+        assertTrue("still owed", h.sync.inBacklog(h.history.getValue("s1").row()))
+        assertTrue("s1" !in h.store.state.rejectedShotIds)
+        h.readFails = false
+        assertTrue(h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false) is DecentSync.Outcome.Uploaded)
     }
 
     @Test
@@ -675,6 +700,7 @@ class DecentSyncTest {
             liveMachine = { null },
             knownSerial = { it },
             currentShot = { null },
+            loadShot = { null },
         )
         assertTrue(runCatching { sync.load() }.isFailure)
 
