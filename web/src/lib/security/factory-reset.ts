@@ -25,7 +25,9 @@
  *     pool — the reset reports it with the databases, and keeps the
  *     done-record and the `crema.history.sqlite*` keys (the marker and the
  *     pending journal), so the next boot can't build a new marker over an
- *     erased history (S10).
+ *     erased history (S10). Then every temporary backup file
+ *     (`crema-backup-tmp-…`, `#lib/backup/stream`), whatever its age: one
+ *     another tab is still writing stays, and is reported the same way.
  *  4. **Web storage.** Every `crema.*` key in localStorage and sessionStorage
  *     (preferences, library, history summaries, the wrapped Visualizer and
  *     Decent tokens, the Drive session token, the OAuth handshake).
@@ -44,6 +46,7 @@ import { DB_NAME as KEYS_DB } from '#lib/security/secret-box.js';
 import { HISTORY_CURVES_NAME, HISTORY_DB_NAME, HISTORY_SNAPSHOT_NAME } from '#lib/history/store-names.js';
 import { stopArchiveWrites } from '#lib/history/archive-writes.js';
 import { withTimeout } from '#lib/utils/timeout.js';
+import { BACKUP_TEMP_PREFIX } from '#lib/backup/temp-names.js';
 import { FROZEN_SHOTS_KEY } from '#lib/restore/tab-safety.js';
 import {
 	DB_POOL_DIR,
@@ -128,44 +131,81 @@ function isNothingThere(e: unknown): boolean {
 	return e instanceof DOMException && (e.name === 'NotFoundError' || e.name === 'SecurityError');
 }
 
+/** The private file system's root and its top-level names, read once for the passes in step 3. */
+interface PrivateRoot {
+	dir: FileSystemDirectoryHandle | undefined;
+	/** Every top-level name; undefined where the root can't be listed. */
+	names: string[] | undefined;
+	/** The root couldn't be read, or listing it failed: what's there is unknown. */
+	unreadable: boolean;
+}
+
+async function readPrivateRoot(root: () => Promise<FileSystemDirectoryHandle | undefined>): Promise<PrivateRoot> {
+	let dir: FileSystemDirectoryHandle | undefined;
+	try {
+		dir = await root();
+	} catch (e) {
+		return { dir: undefined, names: undefined, unreadable: !isNothingThere(e) };
+	}
+	if (!dir) return { dir: undefined, names: [], unreadable: false };
+	const listable = dir as unknown as { keys?: () => AsyncIterable<string> };
+	// Theoretical: every browser with an origin private file system lists its
+	// root. Without `keys()`, only the names known in advance can go.
+	if (typeof listable.keys !== 'function') return { dir, names: undefined, unreadable: false };
+	try {
+		const names: string[] = [];
+		for await (const name of listable.keys()) names.push(name);
+		return { dir, names, unreadable: false };
+	} catch {
+		return { dir, names: undefined, unreadable: true };
+	}
+}
+
+/** Remove one top-level entry; false when it's there and stays. */
+async function removeEntry(dir: FileSystemDirectoryHandle, name: string): Promise<boolean> {
+	try {
+		await dir.removeEntry(name, { recursive: true });
+		return true;
+	} catch (e) {
+		return e instanceof DOMException && e.name === 'NotFoundError';
+	}
+}
+
 /**
  * Remove every private-file entry the SQLite history keeps (module comment,
  * step 3): the pools and anything else named `.crema-history-…`, then the
  * done-record, only once all of them are gone. Returns the names that stayed;
  * the prefix itself when the root can't be read or listed.
  */
-async function removeSqliteHistory(root: () => Promise<FileSystemDirectoryHandle | undefined>): Promise<string[]> {
-	let found: FileSystemDirectoryHandle | undefined;
-	try {
-		found = await root();
-	} catch (e) {
-		return isNothingThere(e) ? [] : [HISTORY_SQLITE_OPFS_PREFIX];
-	}
-	if (!found) return [];
-	const dir = found;
+async function removeSqliteHistory(root: PrivateRoot): Promise<string[]> {
+	if (root.unreadable) return [HISTORY_SQLITE_OPFS_PREFIX];
+	const dir = root.dir;
+	if (!dir) return [];
 	// The known names even where the root can't be listed; every other one it lists.
 	const names = new Set<string>([INDEX_POOL_DIR, DB_POOL_DIR]);
-	const listable = dir as unknown as { keys?: () => AsyncIterable<string> };
-	if (typeof listable.keys === 'function') {
-		try {
-			for await (const name of listable.keys()) {
-				if (name.startsWith(HISTORY_SQLITE_OPFS_PREFIX)) names.add(name);
-			}
-		} catch {
-			return [HISTORY_SQLITE_OPFS_PREFIX];
-		}
-	}
+	for (const name of root.names ?? []) if (name.startsWith(HISTORY_SQLITE_OPFS_PREFIX)) names.add(name);
 	names.delete(DONE_RECORD_NAME);
 	const stayed: string[] = [];
-	const remove = async (name: string): Promise<void> => {
-		try {
-			await dir.removeEntry(name, { recursive: true });
-		} catch (e) {
-			if (!(e instanceof DOMException && e.name === 'NotFoundError')) stayed.push(name);
-		}
-	};
-	for (const name of names) await remove(name);
-	if (stayed.length === 0) await remove(DONE_RECORD_NAME);
+	for (const name of names) if (!(await removeEntry(dir, name))) stayed.push(name);
+	if (stayed.length === 0 && !(await removeEntry(dir, DONE_RECORD_NAME))) stayed.push(DONE_RECORD_NAME);
+	return stayed;
+}
+
+/**
+ * Remove every temporary backup file (module comment, step 3), unlike the
+ * boot sweep whatever its age or lock: the page reloads straight after, so no
+ * reader in this tab outlives it. Returns the names that stayed; the prefix
+ * itself when the root can't be read or listed.
+ */
+async function removeBackupTemp(root: PrivateRoot): Promise<string[]> {
+	if (root.unreadable) return [BACKUP_TEMP_PREFIX];
+	const dir = root.dir;
+	// Their names are random: a root that can't be listed hides them (theoretical, above).
+	if (!dir || !root.names) return [];
+	const stayed: string[] = [];
+	for (const name of root.names) {
+		if (name.startsWith(BACKUP_TEMP_PREFIX) && !(await removeEntry(dir, name))) stayed.push(name);
+	}
 	return stayed;
 }
 
@@ -259,8 +299,9 @@ export async function factoryResetLocalData(deps: FactoryResetDeps = {}): Promis
 	if (!(await removeSnapshot(deps.privateFiles ?? privateFilesRoot, HISTORY_CURVES_NAME))) databasesFailed.push(HISTORY_CURVES_NAME);
 
 	// Before any `crema.*` key goes: the marker must outlive every file it names (S10).
-	const sqliteStayed = await removeSqliteHistory(deps.privateFiles ?? privateFilesRoot);
-	databasesFailed.push(...sqliteStayed);
+	const privateRoot = await readPrivateRoot(deps.privateFiles ?? privateFilesRoot);
+	const sqliteStayed = await removeSqliteHistory(privateRoot);
+	databasesFailed.push(...sqliteStayed, ...(await removeBackupTemp(privateRoot)));
 	const keep = sqliteStayed.length > 0 ? isSqliteHistoryKey : undefined;
 
 	const storageKeysRemoved = clearPrefixed(local, keep) + clearPrefixed(session, keep);

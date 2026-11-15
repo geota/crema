@@ -52,7 +52,7 @@
 	import {
 		announceReset,
 		freezeCremaWrites,
-		stashResetReport
+		wipeAndReport
 	} from '#lib/security/reset-coordinator.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
@@ -290,22 +290,21 @@
 		// revokes, which still need the stored tokens (06 #12).
 		announceReset({ type: 'started' });
 		try {
-			const result = await factoryResetLocalData({
-				revoke: [
-					async () => {
-						const tokens = services ? await services.tokens.getTokens() : null;
-						if (tokens?.accessToken) await revokeVisualizerToken(tokens.accessToken);
-					},
-					() => drive.signOut()
-				],
-				beforeWipe: () => freezeCremaWrites()
-			});
 			// Told after the reload: no dialog may hold the wiped page open
-			// while the live app could write its state back.
-			stashResetReport({
-				databasesFailed: result.databasesFailed,
-				revokeFailures: result.revokeFailures
-			});
+			// while the live app could write its state back. A wipe that throws
+			// is told too (#428); the page reloads all the same.
+			await wipeAndReport(() =>
+				factoryResetLocalData({
+					revoke: [
+						async () => {
+							const tokens = services ? await services.tokens.getTokens() : null;
+							if (tokens?.accessToken) await revokeVisualizerToken(tokens.accessToken);
+						},
+						() => drive.signOut()
+					],
+					beforeWipe: () => freezeCremaWrites()
+				})
+			);
 		} finally {
 			freezeCremaWrites();
 			announceReset({ type: 'done' });

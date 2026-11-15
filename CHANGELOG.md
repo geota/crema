@@ -196,6 +196,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Factory reset takes leftover backup files, and says when it fails.** A
+  backup's temporary file in the browser's private storage stayed after a
+  reset until the next backup or reload swept it; the reset now removes it too.
+  A reset that stopped part-way reloaded as if it had worked; the reloaded page
+  now says so, so you can run it again. Web. (#428)
 - **Web History fits large text** — the shot detail's header no longer prints
   its profile and bean over each other at 1280 px wide: the actions move under
   them, and the bean under the profile, when there's no room beside. With the

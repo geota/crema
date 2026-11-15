@@ -46,6 +46,8 @@ export interface ResetReport {
 	databasesFailed: string[];
 	/** Revocations that threw or timed out. */
 	revokeFailures: number;
+	/** The reset threw part-way: what it erased is unknown (#428). */
+	failed?: boolean;
 }
 
 export interface FreezeTargets {
@@ -178,6 +180,23 @@ export function stashResetReport(report: ResetReport, storage: Storage | undefin
 	}
 }
 
+/**
+ * Run the wipe and keep its outcome for the reloaded page. A wipe that throws
+ * is kept as failed, so the reload doesn't pass it off as done (#428).
+ */
+export async function wipeAndReport(
+	wipe: () => Promise<Pick<ResetReport, 'databasesFailed' | 'revokeFailures'>>,
+	storage: Storage | undefined = sessionStorage
+): Promise<void> {
+	try {
+		const { databasesFailed, revokeFailures } = await wipe();
+		stashResetReport({ databasesFailed, revokeFailures }, storage);
+	} catch (e) {
+		console.error('Factory reset failed', e);
+		stashResetReport({ databasesFailed: [], revokeFailures: 0, failed: true }, storage);
+	}
+}
+
 /** Read and remove the report a reset left before reloading, if any. */
 export function takeResetReport(storage: Storage | undefined = sessionStorage): ResetReport | null {
 	try {
@@ -187,7 +206,8 @@ export function takeResetReport(storage: Storage | undefined = sessionStorage): 
 		const parsed = JSON.parse(raw) as Partial<ResetReport>;
 		return {
 			databasesFailed: Array.isArray(parsed.databasesFailed) ? parsed.databasesFailed.map(String) : [],
-			revokeFailures: typeof parsed.revokeFailures === 'number' ? parsed.revokeFailures : 0
+			revokeFailures: typeof parsed.revokeFailures === 'number' ? parsed.revokeFailures : 0,
+			...(parsed.failed === true ? { failed: true } : {})
 		};
 	} catch {
 		return null;
@@ -196,6 +216,12 @@ export function takeResetReport(storage: Storage | undefined = sessionStorage): 
 
 /** The notice for a report, or null when everything went through. */
 export function resetReportMessage(report: ResetReport): string | null {
+	if (report.failed) {
+		return (
+			'Factory reset stopped before it finished, so some Crema data may still be ' +
+			'on this device. Run Factory reset again.'
+		);
+	}
 	if (report.databasesFailed.length > 0) {
 		return (
 			'Crema was open in another tab or window, so part of the stored data ' +
