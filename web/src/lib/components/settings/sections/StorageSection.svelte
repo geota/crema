@@ -16,10 +16,10 @@
 	import { storagePersisted } from '#lib/history/storage-persist.svelte.js';
 	import { retryMigrationSoon } from '#lib/history/store-marker.js';
 	import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
-	import { freeUpPlan } from '#lib/history/free-up.js';
+	import { freeUpPlan, rowBytes } from '#lib/history/free-up.js';
 	import { HISTORY_DESIGN_SIZE } from '#lib/history/storage-watch.svelte.js';
 	import { getHistoryStore } from '#lib/history/index.js';
-	import { exportBackup, lastBackupAt } from '#lib/backup/index.js';
+	import { describeBackup, describeBackupGaps, exportBackup, lastBackupAt, noteBackupMade } from '#lib/backup/index.js';
 	import {
 		CAPTURE_KEEP_CHOICES,
 		captureKeepLabel,
@@ -98,6 +98,10 @@
 	};
 	let freeBefore = $state(isoDay(Date.now() - 365 * 24 * 3_600_000));
 	let freeNote = $state<string | null>(null);
+	const rowBytesOf = (id: string) => {
+		const row = history.get(id);
+		return row ? rowBytes(row) : 0;
+	};
 	let freeing = $state(false);
 
 	/**
@@ -131,6 +135,9 @@
 				secondaryLabel: 'Continue without'
 			});
 			if (backUpFirst === null) return;
+			let ids = plan.ids;
+			let backedUp = '';
+			let notInBackup = '';
 			if (backUpFirst === 'primary') {
 				freeNote = 'Building backup…';
 				const made = await exportBackup().catch(() => null);
@@ -138,22 +145,50 @@
 					freeNote = 'The backup didn’t finish, so nothing was deleted.';
 					return;
 				}
-				freeNote = null;
+				noteBackupMade();
+				backedUp = `Backed up — ${describeBackup(made)}.${describeBackupGaps(made)}`;
+				freeNote = backedUp;
+				// Only what the backup holds whole may go (#437 B1): a shot it left
+				// out, or wrote without its curve, stays.
+				const omittedShots = (made.omitted ?? []).filter((o) => o.kind === 'shot');
+				const noCurveIds = made.noCurveIds ?? [];
+				if (
+					(made.missing ?? []).includes('shot history') ||
+					omittedShots.some((o) => !o.id) ||
+					(made.noCurves ?? 0) > noCurveIds.length
+				) {
+					freeNote = `${backedUp} It couldn’t say which shots it holds whole, so nothing was deleted.`;
+					return;
+				}
+				const gaps = new Set([...omittedShots.map((o) => o.id!), ...noCurveIds]);
+				ids = plan.ids.filter((id) => !gaps.has(id));
+				const held = plan.ids.length - ids.length;
+				if (held > 0) {
+					notInBackup = ` ${held === 1 ? 'One of these shots' : `${held} of these shots`} couldn’t be backed up and ${held === 1 ? 'was' : 'were'} kept.`;
+				}
+				if (ids.length === 0) {
+					freeNote = `${backedUp}${notInBackup} Nothing was deleted.`;
+					return;
+				}
 			}
-			const n = plan.ids.length;
-			const kept = plan.pinnedKept > 0 ? ` ${plan.pinnedKept} pinned shot${plan.pinnedKept === 1 ? '' : 's'} older than that stay.` : '';
+			const n = ids.length;
+			const kept =
+				(plan.pinnedKept > 0 ? ` ${plan.pinnedKept} pinned shot${plan.pinnedKept === 1 ? '' : 's'} older than that stay.` : '') +
+				notInBackup;
 			const ok = await confirmDialog({
 				title: 'Free up space',
 				message:
-					`Delete ${n.toLocaleString()} shot${n === 1 ? '' : 's'} older than ${day} from this device, about ${formatBytes(plan.bytes)}?${kept} ` +
+					`Delete ${n.toLocaleString()} shot${n === 1 ? '' : 's'} older than ${day} from this device, about ${formatBytes(n === plan.ids.length ? plan.bytes : ids.reduce((b, id) => b + rowBytesOf(id), 0))}?${kept} ` +
 					'Copies on Visualizer stay there and won’t come back with a sync. Bag weights don’t change. This can’t be undone.',
 				confirmLabel: `Delete ${n.toLocaleString()} shot${n === 1 ? '' : 's'}`,
 				danger: true
 			});
 			if (!ok) return;
-			const { removed, skipped } = await history.freeUpSpace(plan.ids);
+			const { removed, skipped } = await history.freeUpSpace(ids);
 			freeNote =
+				(backedUp ? `${backedUp} ` : '') +
 				`Deleted ${removed.toLocaleString()} shot${removed === 1 ? '' : 's'}.` +
+				notInBackup +
 				(skipped > 0 ? ` ${skipped} waiting to upload or changed meanwhile were kept.` : '');
 		} catch (e) {
 			freeNote = e instanceof Error ? e.message : String(e);

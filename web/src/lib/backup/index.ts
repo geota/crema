@@ -87,6 +87,8 @@ export interface BackupContents {
 	degraded?: readonly string[];
 	/** Machine shots a built backup carries with no curve. */
 	noCurves?: number;
+	/** Those shots, by id: Free up space keeps them (#310 P6w). */
+	noCurveIds?: readonly string[];
 	/** Stores that couldn't be read this session, so aren't in it, by name. */
 	missing?: readonly string[];
 	/** Built in memory, as this browser has no private file system, and large. */
@@ -267,9 +269,10 @@ export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<
 		rows - built.omitted.filter((o) => o.kind === kind).length;
 	const left = new Set(built.omitted.filter((o) => o.kind === 'shot').map((o) => o.id));
 	// A row here can be unreadable: that's what `omitted` is for.
-	const noCurves = shots.filter(
-		(s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0)
-	).length;
+	const noCurveIds = shots
+		.filter((s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0))
+		.map((s) => s.id);
+	const noCurves = noCurveIds.length;
 	return {
 		jsonl: built.jsonl,
 		contents: {
@@ -280,6 +283,7 @@ export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<
 			omitted: built.omitted,
 			degraded: built.degraded,
 			noCurves,
+			noCurveIds,
 			missing: unreadableStores()
 		}
 	};
@@ -426,9 +430,10 @@ export async function buildBackupFile(
 	];
 	const written = (kind: string, rows: number) => rows - omitted.filter((o) => o.kind === kind).length;
 	const left = new Set(built.shotsOmitted.map((o) => o.id));
-	const noCurves = shots.filter(
-		(s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0)
-	).length;
+	const noCurveIds = shots
+		.filter((s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0))
+		.map((s) => s.id);
+	const noCurves = noCurveIds.length;
 	return {
 		file: built.file,
 		release: built.release,
@@ -440,6 +445,7 @@ export async function buildBackupFile(
 			omitted,
 			degraded: built.degraded,
 			noCurves,
+			noCurveIds,
 			missing: unreadableStores(),
 			largeInMemory: built.largeInMemory
 		}

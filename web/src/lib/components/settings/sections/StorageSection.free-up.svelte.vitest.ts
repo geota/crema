@@ -15,7 +15,7 @@ import { summarize } from '#lib/history/summary.js';
 import { boot, freshStorage, stored } from '#lib/history/idb-test-kit.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
-import { exportBackup } from '#lib/backup/index.js';
+import { exportBackup, lastBackupAt } from '#lib/backup/index.js';
 
 vi.mock('#lib/components/shared/confirm-dialog.svelte.js', () => ({
 	confirmDialog: vi.fn(async () => true),
@@ -129,5 +129,58 @@ it('a backup that doesn’t finish, a dismissed question or a No deletes nothing
 		done();
 		vi.mocked(confirmDialog).mockResolvedValue(true);
 		vi.mocked(exportBackup).mockResolvedValue({ shots: 20 } as never);
+	}
+});
+
+/** A backup that finished, written with `gaps`. */
+const backupWith = (gaps: Record<string, unknown>) =>
+	({ profiles: 0, beans: 0, roasters: 0, shots: 19, omitted: [], degraded: [], noCurves: 0, noCurveIds: [], missing: [], largeInMemory: false, ...gaps }) as never;
+
+it('#437 B1: a shot the "Back up first" backup left out is kept, and said so', async () => {
+	const { shots } = await seed();
+	vi.mocked(choiceDialog).mockResolvedValue('primary');
+	// The backup finished, but the core couldn't write shot 12, so it isn't in the file.
+	vi.mocked(exportBackup).mockResolvedValue(backupWith({ omitted: [{ kind: 'shot', index: 12, id: shots[12].id }] }));
+	const { target, done } = await freeUpBefore(midnightOf(shots[9].completedAt));
+	expect(exportBackup).toHaveBeenCalledTimes(1);
+	const message = vi.mocked(confirmDialog).mock.calls[0][0].message;
+	expect(message).toMatch(/^Delete 7 shots older than/);
+	expect(message).toContain('One of these shots couldn’t be backed up and was kept.');
+	const { rows } = await stored();
+	expect(rows.has(shots[12].id), 'shot 12 is in no backup').toBe(true);
+	for (const s of [10, 11, 13, 14, 15, 16, 17]) expect(rows.has(shots[s].id), String(s)).toBe(false);
+	expect(rows.size).toBe(13);
+	// The backup's own summary, and Last backup moves.
+	expect(target.textContent).toContain('Backed up — ');
+	expect(target.textContent).toContain('1 shot couldn’t be read and was left out.');
+	expect(target.textContent).toContain('One of these shots couldn’t be backed up and was kept.');
+	expect(lastBackupAt()).not.toBeNull();
+	done();
+});
+
+it('#437 B1: shots the backup wrote without their curve are kept too', async () => {
+	const { shots } = await seed();
+	vi.mocked(choiceDialog).mockResolvedValue('primary');
+	vi.mocked(exportBackup).mockResolvedValue(backupWith({ noCurves: 2, noCurveIds: [shots[11].id, shots[16].id] }));
+	const { target, done } = await freeUpBefore(midnightOf(shots[9].completedAt));
+	expect(vi.mocked(confirmDialog).mock.calls[0][0].message).toContain('2 of these shots couldn’t be backed up and were kept.');
+	const { rows } = await stored();
+	expect(rows.has(shots[11].id) && rows.has(shots[16].id)).toBe(true);
+	expect(rows.size).toBe(14);
+	expect(target.textContent).toContain('2 shots were backed up without their curve.');
+	done();
+});
+
+it('#437 B1: a backup that can’t say which shots it holds whole deletes nothing', async () => {
+	for (const gaps of [{ omitted: [{ kind: 'shot', index: 3, id: null }] }, { noCurves: 1, noCurveIds: undefined }, { missing: ['shot history'] }]) {
+		const { history } = await seed();
+		vi.mocked(choiceDialog).mockResolvedValue('primary');
+		vi.mocked(exportBackup).mockResolvedValue(backupWith(gaps));
+		const { target, done } = await freeUpBefore(midnightOf(NOW - 9 * DAY));
+		expect(confirmDialog, JSON.stringify(gaps)).not.toHaveBeenCalled();
+		expect((await stored()).rows.size).toBe(20);
+		expect(history.all).toHaveLength(20);
+		expect(target.textContent).toContain('nothing was deleted');
+		done();
 	}
 });
