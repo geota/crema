@@ -1,0 +1,50 @@
+{
+	"beans": [
+		{
+			"beanId": "bean:a",
+			"name": "Gesha Village",
+			"roaster": "Sey",
+			"tags": [
+				"fruity",
+				"comp"
+			]
+		},
+		{
+			"beanId": "bean:b",
+			"name": "Etiopía Guji",
+			"roaster": "Onyx",
+			"tags": [
+				"floral"
+			]
+		},
+		{
+			"beanId": "bean:c",
+			"name": "Etiopía Guji",
+			"roaster": "Onyx",
+			"tags": []
+		},
+		{
+			"beanId": "bean:d",
+			"name": "Colômbia El Paraíso",
+			"roaster": "Tim Wendelboe",
+			"tags": [
+				"chocolate"
+			]
+		},
+		{
+			"beanId": "bean:e",
+			"name": "Red Brick",
+			"roaster": "Square Mile",
+			"tags": [
+				"milk"
+			]
+		},
+		{
+			"beanId": "bean:f",
+			"name": "Kenya Kiambu",
+			"roaster": "Sey",
+			"tags": []
+		}
+	],
+	"methods": []
+}
