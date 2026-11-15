@@ -9,8 +9,9 @@
 //! [`reference`], behind the `dev-oracle` feature, is the same rules over
 //! rows in memory: the spec the SQL is tested against.
 //!
-//! Nothing here opens a database or touches a file: the `store` feature is
-//! reserved for C2's `rusqlite` code. Shells never write SQL (SPEC rule 5).
+//! [`store`], behind the `store` feature, is the other half: the database
+//! itself, over `rusqlite` with SQLite compiled in. The pure half opens no
+//! database and touches no file. Shells never write SQL (SPEC rule 5).
 
 pub mod change;
 pub mod cursor;
@@ -22,8 +23,10 @@ pub mod reference;
 pub mod schema;
 pub mod sql;
 pub mod stats;
+#[cfg(feature = "store")]
+pub mod store;
 
-pub use change::ChangeKinds;
+pub use change::{ChangeKinds, ChangeSet};
 pub use cursor::{Cursor, CursorError};
 pub use derive::{DERIVE_V, Derived, derive_row, derive_value};
 pub use fold::{MIN_SEARCH_CHARS, fold, search_needle};

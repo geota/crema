@@ -1,4 +1,4 @@
-//! The schema (SPEC §4), as text. C2's store runs it; nothing in C1 does.
+//! The schema (SPEC §4), as text, which the store (`store` feature) runs.
 //!
 //! `shot` holds `row_json`, the only source of truth in the table, and the
 //! columns [`crate::derive`] fills from it. `hold_delete`, `created_seq` and
@@ -90,15 +90,23 @@ CREATE TABLE rpc_applied (tab TEXT PRIMARY KEY, seq INTEGER NOT NULL, at_ms INTE
     };
 }
 
-/// The search index and the triggers that keep it in step (SPEC §5). Its own
-/// text, since FTS damage drops and rebuilds exactly this (M6).
-macro_rules! fts_v1 {
+/// The search index (SPEC §5). Its own text, since FTS damage drops and
+/// rebuilds exactly this (M6).
+macro_rules! fts_table_v1 {
     () => {
         "CREATE VIRTUAL TABLE shot_fts USING fts5(
   search_text, content='shot', content_rowid='rid',
   tokenize = 'trigram case_sensitive 1', detail = none
 );
-CREATE TRIGGER shot_fts_ai AFTER INSERT ON shot BEGIN
+"
+    };
+}
+
+/// The triggers that keep the search index in step: the external-content
+/// pattern, where an update issues `'delete'` with the old text.
+macro_rules! fts_triggers_v1 {
+    () => {
+        "CREATE TRIGGER shot_fts_ai AFTER INSERT ON shot BEGIN
   INSERT INTO shot_fts(rowid, search_text) VALUES (new.rid, new.search_text);
 END;
 CREATE TRIGGER shot_fts_ad AFTER DELETE ON shot BEGIN
@@ -116,10 +124,45 @@ END;
 pub const TABLES_V1: &str = tables_v1!();
 
 /// The search index of schema 1 and its triggers.
-pub const FTS_V1: &str = fts_v1!();
+pub const FTS_V1: &str = concat!(fts_table_v1!(), fts_triggers_v1!());
+
+/// The search index's triggers alone: what the rebuild's swap puts on the new
+/// table once it is renamed `shot_fts`.
+pub const FTS_TRIGGERS_V1: &str = fts_triggers_v1!();
 
 /// Schema 1, whole: [`TABLES_V1`] then [`FTS_V1`].
-pub const V1: &str = concat!(tables_v1!(), fts_v1!());
+pub const V1: &str = concat!(tables_v1!(), fts_table_v1!(), fts_triggers_v1!());
+
+/// The batched rebuild's new table (SPEC §5, S15), built in short
+/// transactions by `rid` while `shot_fts`, if it still exists, keeps serving.
+/// Its triggers keep it in step only for rows at or below the build's cursor,
+/// `meta.fts_build_rid`; the build's batches add the rows above it.
+pub const FTS_NEXT_V1: &str = "CREATE VIRTUAL TABLE shot_fts_next USING fts5(
+  search_text, content='shot', content_rowid='rid',
+  tokenize = 'trigram case_sensitive 1', detail = none
+);
+CREATE TRIGGER shot_fts_next_ai AFTER INSERT ON shot
+WHEN new.rid <= (SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'fts_build_rid') BEGIN
+  INSERT INTO shot_fts_next(rowid, search_text) VALUES (new.rid, new.search_text);
+END;
+CREATE TRIGGER shot_fts_next_ad AFTER DELETE ON shot
+WHEN old.rid <= (SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'fts_build_rid') BEGIN
+  INSERT INTO shot_fts_next(shot_fts_next, rowid, search_text) VALUES ('delete', old.rid, old.search_text);
+END;
+CREATE TRIGGER shot_fts_next_au AFTER UPDATE OF search_text ON shot
+WHEN old.rid <= (SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'fts_build_rid') BEGIN
+  INSERT INTO shot_fts_next(shot_fts_next, rowid, search_text) VALUES ('delete', old.rid, old.search_text);
+  INSERT INTO shot_fts_next(rowid, search_text) VALUES (new.rid, new.search_text);
+END;
+";
+
+/// Drops a rebuild's new table and its triggers: a build that is restarted,
+/// or the first half of the swap. Derived data only (rule 4).
+pub const DROP_FTS_NEXT: &str = "DROP TRIGGER IF EXISTS shot_fts_next_ai;
+DROP TRIGGER IF EXISTS shot_fts_next_ad;
+DROP TRIGGER IF EXISTS shot_fts_next_au;
+DROP TABLE IF EXISTS shot_fts_next;
+";
 
 /// Drops the search index and its triggers, in one transaction, on FTS damage
 /// (M6). Derived data only (rule 4).
@@ -193,6 +236,11 @@ mod tests {
     #[test]
     fn the_whole_schema_is_tables_then_fts() {
         assert_eq!(V1, format!("{TABLES_V1}{FTS_V1}"));
+        assert!(FTS_V1.ends_with(FTS_TRIGGERS_V1));
+        // The rebuild's table is the same index under another name.
+        let next_table = &FTS_NEXT_V1[..FTS_NEXT_V1.find(";").expect("a statement")];
+        let table = &FTS_V1[..FTS_V1.find(";").expect("a statement")];
+        assert_eq!(next_table.replace("shot_fts_next", "shot_fts"), table);
         assert_eq!(APPLICATION_ID.to_be_bytes(), *b"CRMH");
     }
 }
