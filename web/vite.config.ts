@@ -40,6 +40,13 @@ export default defineConfig(({ command }) => ({
 	define: {
 		__APP_VERSION__: JSON.stringify(pkgVersion)
 	},
+	// Workers build as ES modules: every Worker is created with
+	// `{ type: 'module' }`, and the history Worker (#310 W1) imports the
+	// wasm-bindgen ES module that `pnpm wasm:history` writes to
+	// `src/lib/history-db/wasm/`, which the default `iife` format can't split.
+	worker: {
+		format: 'es'
+	},
 	server:
 		command === 'serve'
 			? {
