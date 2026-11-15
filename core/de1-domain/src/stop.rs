@@ -485,6 +485,13 @@ impl AutoStop {
         self.started = now;
     }
 
+    /// Forget the flow history: the first reading after a scale gap, where a
+    /// slope across the gap means nothing if the scale lied, re-zeroed or was
+    /// disturbed meanwhile (#412).
+    pub fn restart_flow(&mut self) {
+        self.flow.reset();
+    }
+
     /// When the session's clock started: first flow for espresso, the
     /// session's open for hot water.
     #[must_use]

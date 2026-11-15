@@ -208,6 +208,39 @@ fn a_returning_scale_within_reach_is_adopted() {
     near_target(stop, StopReason::Weight);
 }
 
+/// #412: a scale that read 0 g while the cup filled, before the gate, then
+/// went quiet for 1.6 s, comes back on the truth near a 60 g target. `Tared`
+/// adopts it, and the flow estimate starts again from it: a slope across the
+/// gap from the 0 g readings would make the drip lead stop the shot early.
+#[test]
+fn a_returning_scale_restarts_the_flow_estimate() {
+    let mut core = espresso(60.0);
+    let mut pour = Pour::from(100, 0.0);
+    let mut gap = 0..0;
+    let stop = run(&mut core, &mut pour, 90_000, |t, cup| {
+        if gap.is_empty() && cup >= 48.0 {
+            gap = t..t + 1_600;
+        }
+        let reading = if gap.contains(&t) {
+            None
+        } else if gap.is_empty() {
+            Some(0.0)
+        } else {
+            Some(cup)
+        };
+        Step {
+            sample: true,
+            reading,
+        }
+    });
+    let (reason, cup) = stop.expect("a stop");
+    assert_eq!(reason, StopReason::Weight, "stopped at a true {cup} g");
+    assert!(
+        (57.0..63.0).contains(&cup),
+        "stopped at a true {cup} g of 60"
+    );
+}
+
 /// P11, and mutation check 11: a returning scale reading far over what the
 /// cup could hold (+250 g on return) is refused, and the estimate finishes.
 #[test]

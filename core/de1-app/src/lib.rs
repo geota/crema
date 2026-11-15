@@ -4184,6 +4184,13 @@ impl CremaCore {
         }
         if std::mem::take(&mut self.scale_returning) {
             self.check_returning_scale(net_weight);
+            // A slope across the gap isn't a flow: both estimators start
+            // again from this reading, or a jump after a scale that read 0
+            // meanwhile makes the drip lead stop the shot early (#412).
+            self.flow.reset();
+            if let Some(flow_stop) = self.auto_stop.as_mut() {
+                flow_stop.stop.restart_flow();
+            }
         }
         match verdict {
             WeightVerdict::Reject => return,
@@ -10077,12 +10084,26 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::StopTriggered { .. }))
         );
-        // 149 g at a brisk pour rate: the lag projection crosses 150 → stop.
-        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(14_900), 4_000);
-        assert!(out.events.contains(&Event::StopTriggered {
-            reason: StopReason::Weight,
-        }));
-        assert!(out.commands.iter().any(|c| matches!(c, Command::Stop)));
+        // Then 10 Hz at a brisk 24.5 g/s, up to 149 g: the lag projection
+        // crosses 150 → stop. Live readings, since one 2 s on is a return,
+        // which restarts the flow estimate (#412).
+        let mut stop = None;
+        for t in (2_100..=4_000).step_by(100) {
+            let centigrams = 10_000 + (t - 2_000) * 49 / 20;
+            let out = core.on_notification(
+                Source::ScaleWeight,
+                &bookoo_packet(centigrams),
+                u64::from(t),
+            );
+            if out.events.contains(&Event::StopTriggered {
+                reason: StopReason::Weight,
+            }) {
+                assert!(out.commands.iter().any(|c| matches!(c, Command::Stop)));
+                stop = Some(centigrams);
+                break;
+            }
+        }
+        assert!(stop.is_some_and(|cg| cg < 15_000), "stopped at {stop:?} cg");
         // Fired once — later readings must not re-stop.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(15_200), 4_500);
         assert!(
