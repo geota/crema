@@ -968,7 +968,10 @@ impl World {
                         self.outage_unsure();
                     }
                 }
-                if self.de1.state == MachineState::Espresso {
+                if self.de1.state == MachineState::Espresso
+                    && (self.state_heard_on_link
+                        || self.last_sample_frame.is_none_or(|f| self.de1.frame > f))
+                {
                     self.last_sample_frame = Some(self.de1.frame);
                 }
                 let out = self
