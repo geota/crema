@@ -83,7 +83,16 @@
 	import { arrayItems } from '#lib/components/history/virtual-window.js';
 	import { HistoryListModel } from '#lib/history/list-model.svelte.js';
 	import type { SortDir, SortField } from '#lib/history/list-filter.js';
-	import { listItems, rowHeight, ROW_GAP, type ListItem } from '#lib/history/list-items.js';
+	import {
+		fallbackRowHeights,
+		listItems,
+		rowHeight,
+		rowSamples,
+		ROW_GAP,
+		setRowHeight,
+		STACK_BELOW,
+		type ListItem
+	} from '#lib/history/list-items.js';
 	import {
 		HISTORY_RANGES,
 		minuteBucket,
@@ -1357,6 +1366,14 @@
 		return untrack(() => listItems(rows, { headings, now, current }));
 	});
 	const listedItems = $derived(arrayItems(listed));
+	/**
+	 * Each item kind's height, measured from hidden samples so the rows grow
+	 * with the text size (#423); the default-size heights until then.
+	 */
+	const rowHeights = $state(fallbackRowHeights());
+	const rowSampleItems = $derived(rowSamples(phoneLayout.current));
+	/** The wide rows on two lines: large text for the list's width (#423). */
+	let rowsStacked = $state(false);
 </script>
 
 <svelte:head>
@@ -1725,7 +1742,10 @@
 					bind:this={shotList}
 					items={listedItems}
 					keyOf={(it) => it.key}
-					heightOf={(it) => rowHeight(it, phoneLayout.current)}
+					heightOf={(it) => rowHeight(it, phoneLayout.current, rowHeights)}
+					samples={rowSampleItems}
+					onmeasure={(it, h) => setRowHeight(rowHeights, phoneLayout.current, it, h)}
+					ontextwidth={(w) => (rowsStacked = w < STACK_BELOW)}
 					scroller={() => (phoneLayout.current ? pageEl : listEl)}
 					label={rowNoun === 'brew' ? 'Brews' : 'Shots'}
 					setSize={filtered.length}
@@ -1755,6 +1775,7 @@
 									selectable={selectMode}
 									selected={selectedIdSet.has(s.id)}
 									selectionDisabled={selectedIds.length >= COMPARE_MAX}
+									stacked={rowsStacked}
 									syncPip={pip.pip}
 									syncTitle={pip.title}
 									onclick={() => (selectMode ? toggleCompareSelection(s.id) : showShot(s.id))}
@@ -1979,12 +2000,19 @@
 	/* The .st-btn family is shared globally — see settings-page.css. */
 
 	/* Stats strip */
+	/* Six to a row (three at 1100 px and under), wrapping by content (#423):
+	   a tile is never narrower than its figure, so large text puts fewer on a
+	   row instead of spilling a figure past its tile. */
 	.hi-stats {
-		display: grid;
-		grid-template-columns: repeat(6, minmax(0, 1fr));
+		--hi-stats-per-row: 6;
+		display: flex;
+		flex-wrap: wrap;
 		gap: 12px;
 	}
 	.hi-stat {
+		flex: 1 0 calc((100% - (var(--hi-stats-per-row) - 1) * 12px) / var(--hi-stats-per-row));
+		/* Its automatic minimum is its content, capped at the row. */
+		max-width: 100%;
 		background: var(--bg-surface);
 		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-md);
@@ -2086,7 +2114,10 @@
 	/* Split */
 	.hi-split {
 		display: grid;
-		grid-template-columns: minmax(360px, 480px) 1fr;
+		/* minmax(0, …): the detail's chart is drawn at a px width, and a plain
+		   1fr would let it hold the column open after the window narrows,
+		   squeezing the list and the detail header (#423). */
+		grid-template-columns: minmax(360px, 480px) minmax(0, 1fr);
 		gap: 18px;
 		flex: 1 1 auto;
 		min-height: 0;
@@ -2301,7 +2332,7 @@
 
 	@media (max-width: 1100px) {
 		.hi-stats {
-			grid-template-columns: repeat(3, minmax(0, 1fr));
+			--hi-stats-per-row: 3;
 		}
 		/* Stacked, the page grows and the window scrolls. Brew's route CSS pins
 		   `.qcontain` to the viewport once Brew has been visited, and held to
@@ -2371,18 +2402,23 @@
 			margin: 0 var(--page-pad-x);
 		}
 
+		/* Three to a row, wrapping by content (#423): a tile is never narrower
+		   than its figure, so large text puts fewer on a row instead of
+		   drawing one figure over the next. */
 		.hi-pstats {
-			display: grid;
-			grid-template-columns: repeat(3, minmax(0, 1fr));
+			display: flex;
+			flex-wrap: wrap;
 			gap: 10px;
 			padding: 4px var(--page-pad-x);
 		}
 		.hi-pstat {
+			flex: 1 0 calc((100% - 20px) / 3);
 			display: flex;
 			flex-direction: column;
 			align-items: center;
 			gap: 3px;
-			min-width: 0;
+			/* Its automatic minimum is its content, capped at the row. */
+			max-width: 100%;
 			padding: 11px 6px;
 			border-radius: 12px;
 			background: var(--bg-surface);
