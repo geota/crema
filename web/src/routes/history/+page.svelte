@@ -83,7 +83,16 @@
 	import { arrayItems } from '#lib/components/history/virtual-window.js';
 	import { HistoryListModel } from '#lib/history/list-model.svelte.js';
 	import type { SortDir, SortField } from '#lib/history/list-filter.js';
-	import { listItems, rowHeight, ROW_GAP, type ListItem } from '#lib/history/list-items.js';
+	import {
+		fallbackRowHeights,
+		listItems,
+		rowHeight,
+		rowSamples,
+		ROW_GAP,
+		setRowHeight,
+		STACK_BELOW,
+		type ListItem
+	} from '#lib/history/list-items.js';
 	import {
 		HISTORY_RANGES,
 		minuteBucket,
@@ -1357,6 +1366,14 @@
 		return untrack(() => listItems(rows, { headings, now, current }));
 	});
 	const listedItems = $derived(arrayItems(listed));
+	/**
+	 * Each item kind's height, measured from hidden samples so the rows grow
+	 * with the text size (#423); the default-size heights until then.
+	 */
+	const rowHeights = $state(fallbackRowHeights());
+	const rowSampleItems = $derived(rowSamples(phoneLayout.current));
+	/** The wide rows on two lines: large text for the list's width (#423). */
+	let rowsStacked = $state(false);
 </script>
 
 <svelte:head>
@@ -1725,7 +1742,10 @@
 					bind:this={shotList}
 					items={listedItems}
 					keyOf={(it) => it.key}
-					heightOf={(it) => rowHeight(it, phoneLayout.current)}
+					heightOf={(it) => rowHeight(it, phoneLayout.current, rowHeights)}
+					samples={rowSampleItems}
+					onmeasure={(it, h) => setRowHeight(rowHeights, phoneLayout.current, it, h)}
+					ontextwidth={(w) => (rowsStacked = w < STACK_BELOW)}
 					scroller={() => (phoneLayout.current ? pageEl : listEl)}
 					label={rowNoun === 'brew' ? 'Brews' : 'Shots'}
 					setSize={filtered.length}
@@ -1755,6 +1775,7 @@
 									selectable={selectMode}
 									selected={selectedIdSet.has(s.id)}
 									selectionDisabled={selectedIds.length >= COMPARE_MAX}
+									stacked={rowsStacked}
 									syncPip={pip.pip}
 									syncTitle={pip.title}
 									onclick={() => (selectMode ? toggleCompareSelection(s.id) : showShot(s.id))}
@@ -2086,7 +2107,10 @@
 	/* Split */
 	.hi-split {
 		display: grid;
-		grid-template-columns: minmax(360px, 480px) 1fr;
+		/* minmax(0, …): the detail's chart is drawn at a px width, and a plain
+		   1fr would let it hold the column open after the window narrows,
+		   squeezing the list and the detail header (#423). */
+		grid-template-columns: minmax(360px, 480px) minmax(0, 1fr);
 		gap: 18px;
 		flex: 1 1 auto;
 		min-height: 0;

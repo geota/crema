@@ -5,8 +5,11 @@
 	 * the DOM row count stays bounded at any history size.
 	 *
 	 * Every item's height comes from its kind (`heightOf`), not from
-	 * measuring, so where an item sits is arithmetic: scroll memory, deep links
-	 * and focus return can reach an item that isn't rendered. One component
+	 * measuring each item, so where an item sits is arithmetic: scroll memory,
+	 * deep links and focus return can reach an item that isn't rendered. The
+	 * caller learns each kind's height from `samples`, one item of each kind
+	 * drawn hidden and measured, again whenever its size changes (#423: text
+	 * scaling grows the rows). One component
 	 * takes either scroller: an element of its own (the wide list) or one it
 	 * sits in further down (the phone page).
 	 *
@@ -14,7 +17,16 @@
 	 * that pages its rows can stand in for an array.
 	 */
 	import { tick, type Snippet } from 'svelte';
-	import { offsetsOf, revealDelta, windowOf, type VirtualItems } from './virtual-window';
+	import {
+		observeHeight,
+		observeSize,
+		offsetsOf,
+		revealDelta,
+		TEXT_PROBE_PX,
+		textWidth,
+		windowOf,
+		type VirtualItems
+	} from './virtual-window';
 
 	let {
 		items,
@@ -26,7 +38,10 @@
 		positionOf,
 		item,
 		gap = 0,
-		overscan = 480
+		overscan = 480,
+		samples = [],
+		onmeasure,
+		ontextwidth
 	}: {
 		items: VirtualItems<T>;
 		/** A key unique in the list; it is also the item's `data-vl-key`. */
@@ -46,6 +61,19 @@
 		gap?: number;
 		/** How far beyond the viewport to render, each way, in px. */
 		overscan?: number;
+		/**
+		 * Items drawn hidden and out of the layout, at the list's width, by
+		 * `item` (with index -1), to be measured: one of each kind.
+		 */
+		samples?: readonly T[];
+		/** A sample's height, gap included, in whole px: on mount and when it changes. */
+		onmeasure?: (sample: T, height: number) => void;
+		/**
+		 * The list's width as if its text were at the default size (its width
+		 * over the text scale): on mount and when either changes. Rows can pick
+		 * a layout by it, which no `em` query can do under text scaling.
+		 */
+		ontextwidth?: (width: number) => void;
 	} = $props();
 
 	let el = $state<HTMLElement>();
@@ -219,6 +247,28 @@
 			{@render item(it, i)}
 		</div>
 	{/each}
+	{#if samples.length > 0 || ontextwidth}
+		<div class="vl-samples" aria-hidden="true" inert>
+			{#if ontextwidth}
+				<div
+					class="vl-probe"
+					style:font-size="{TEXT_PROBE_PX}px"
+					{@attach (node) =>
+						observeSize(node, (w, h) => {
+							const tw = textWidth(w, h);
+							if (tw !== null) ontextwidth?.(tw);
+						})}
+				>
+					M
+				</div>
+			{/if}
+			{#each samples as sample (keyOf(sample))}
+				<div class="vl-sample" {@attach (node) => observeHeight(node, gap, (h) => onmeasure?.(sample, h))}>
+					{@render item(sample, -1)}
+				</div>
+			{/each}
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -232,6 +282,30 @@
 		left: 0;
 		right: 0;
 		display: grid;
+		/* The list's width, not the row's content: a long name ellipsizes
+		   rather than widening the row past the screen. */
+		grid-template-columns: minmax(0, 1fr);
 		box-sizing: border-box;
+	}
+	/* Laid out at the list's width, but adds nothing to its height or scroll. */
+	.vl-samples {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		height: 0;
+		overflow: hidden;
+		visibility: hidden;
+		pointer-events: none;
+	}
+	/* As an item lays out its row, minus the fixed height and the gap. */
+	.vl-sample {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+	}
+	/* One line of text whose height is its font size times the text scale. */
+	.vl-probe {
+		line-height: 1;
+		white-space: nowrap;
 	}
 </style>

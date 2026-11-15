@@ -31,6 +31,7 @@
 		selectionDisabled = false,
 		syncPip = 'local',
 		syncTitle,
+		stacked = false,
 		onclick
 	}: {
 		/** The history row this renders: its summary, no samples. */
@@ -62,6 +63,12 @@
 		 * already-picked row to unselect it.
 		 */
 		selectionDisabled?: boolean;
+		/**
+		 * Two lines: the figures and stars under the name. For text too large
+		 * for the list's width to fit on one (#423); the list decides, so every
+		 * row has the same height.
+		 */
+		stacked?: boolean;
 		/** Click handler — selects the shot in normal mode, or toggles its compare-selection in select mode. */
 		onclick: () => void;
 	} = $props();
@@ -148,6 +155,7 @@
 	class:is-selected={selectable && selected}
 	class:is-selectmode={selectable}
 	class:is-mark={!hasCurve}
+	class:is-stacked={stacked}
 	aria-current={active && !selectable ? 'true' : undefined}
 	aria-pressed={selectable ? selected : undefined}
 	disabled={selectable && selectionDisabled && !selected}
@@ -182,11 +190,11 @@
 			<div class="hi-row-note">{noteSnippet}</div>
 		{/if}
 	</div>
-	<div class="hi-row-metric">
+	<div class="hi-row-metric hi-row-ratio">
 		<div class="hi-row-metric-val">{ratioLabel(shot)}</div>
 		<div class="hi-row-metric-l">ratio</div>
 	</div>
-	<div class="hi-row-metric">
+	<div class="hi-row-metric hi-row-out">
 		{#if method && method !== 'espresso' && (shot.metadata.waterG ?? 0) > 0}
 			<div class="hi-row-metric-val">
 				{Math.round(shot.metadata.waterG ?? 0)}<em>g</em>
@@ -252,6 +260,47 @@
 	}
 	.hi-row.is-mark.is-selectmode {
 		grid-template-columns: 22px 60px 20px 1fr auto auto auto 8px;
+	}
+	/* Stacked (#423: large text for the list's width): the figures and stars
+	   go on a second line under the name, which beside them would be squeezed
+	   to nothing. */
+	.hi-row.is-stacked {
+		grid-template-columns: auto minmax(0, 1fr) auto auto 8px;
+		grid-template-areas:
+			'time main main main pip'
+			'spark stars ratio yield pip';
+		row-gap: 6px;
+	}
+	.hi-row.is-stacked.is-selectmode {
+		grid-template-columns: 22px auto minmax(0, 1fr) auto auto 8px;
+		grid-template-areas:
+			'check time main main main pip'
+			'check spark stars ratio yield pip';
+	}
+	.is-stacked .hi-row-check {
+		grid-area: check;
+	}
+	.is-stacked .hi-row-time {
+		grid-area: time;
+	}
+	.is-stacked .hi-row-spark {
+		grid-area: spark;
+		justify-content: flex-start;
+	}
+	.is-stacked .hi-row-main {
+		grid-area: main;
+	}
+	.is-stacked .hi-row-ratio {
+		grid-area: ratio;
+	}
+	.is-stacked .hi-row-out {
+		grid-area: yield;
+	}
+	.is-stacked .hi-row-stars {
+		grid-area: stars;
+	}
+	.is-stacked .hi-row-pip {
+		grid-area: pip;
 	}
 	.hi-row.is-mark .hi-row-spark {
 		color: var(--fg-accent);
