@@ -39,17 +39,24 @@ pub(crate) struct Walks {
     active: BTreeMap<u64, i64>,
 }
 
+/// A per-open token base from the clock: 46 bits of it, shifted 16, so the
+/// base and every token issued after it (`base + n`, `n` below 2^16 many
+/// times over) stay below `i64::MAX`, which is how SQLite stores them
+/// (REVIEW-442 N1).
+fn token_base(nanos: u128) -> u64 {
+    let low = u64::try_from(nanos & ((1u128 << 46) - 1)).unwrap_or(1);
+    low.max(1) << 16
+}
+
 impl Walks {
     /// Walks for a new connection.
     pub(crate) fn new() -> Walks {
         // Not a secret, only distinct per open: tokens from an earlier
         // connection must not name a walk on this one.
-        let base = std::time::SystemTime::now()
+        let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(1, |d| {
-                u64::try_from(d.as_nanos() & 0xffff_ffff_ffff).unwrap_or(1)
-            })
-            << 16;
+            .map_or(1, |d| d.as_nanos());
+        let base = token_base(nanos);
         Walks {
             base,
             issued: 0,
@@ -255,5 +262,29 @@ impl Store {
                 .collect()
             })
             .map_err(|e| error_of(&e, Source::Session))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_token_fits_sqlites_integer_whatever_the_clock_says() {
+        for nanos in [
+            0u128,
+            1,
+            u128::MAX,
+            (1u128 << 46) - 1,
+            1u128 << 47,
+            0xffff_ffff_ffff,
+            // 2026-11-16 02:33 PST, when bit 47 of the old base turned on.
+            1_794_825_180_000_000_000,
+        ] {
+            let base = token_base(nanos);
+            assert!(base > 0);
+            // A million walks on one connection still fit.
+            assert!(i64::try_from(base + 1_000_000).is_ok(), "{nanos}");
+        }
     }
 }

@@ -581,3 +581,64 @@ fn source_seq_and_pending_keep_the_boot_check() {
     let s = index.index_state().expect("reads");
     assert_eq!((s.pending, s.diff_version_code), (0, Some(42)));
 }
+
+/// REVIEW-442 B1: a restore during an open walk upserts a row the user had
+/// deleted (held). The upsert ends the hold, so the release doesn't delete
+/// the restored shot, whether the backup's row is the same or edited.
+#[test]
+fn a_held_row_written_again_is_no_longer_held() {
+    for edited in [false, true] {
+        let d = dir();
+        let mut store = create(&file(&d, "history.db"));
+        let x = row("x", 1, json!({}));
+        store
+            .upsert(&rows_in(&[x.clone(), row("y", 2, json!({}))]))
+            .expect("writes");
+        let walk = store.export_begin().expect("begins");
+        store.delete(&["x".into()]).expect("holds");
+        assert!(store.get(&["x".into()]).expect("reads").is_empty());
+        let back = if edited {
+            row("x", 1, json!({ "metadata": { "notes": "from backup" } }))
+        } else {
+            x.clone()
+        };
+        let begin = store.restore_begin().expect("begins");
+        let w = store
+            .restore_batch(&rows_in(&[back.clone(), row("y", 2, json!({}))]))
+            .expect("writes");
+        assert!(
+            w.change.upserted.contains(&"x".to_owned()),
+            "edited={edited}"
+        );
+        assert!(w.change.kinds.set, "x is back in every list");
+        let backup_ids = set(&["x", "y"]);
+        let wipe: Vec<String> = store
+            .ids_created_before(begin, 0, 100)
+            .expect("reads")
+            .into_iter()
+            .map(|r| r.id)
+            .filter(|id| !backup_ids.contains(id))
+            .collect();
+        store.delete(&wipe).expect("deletes");
+        // Visible at once, and still in the walk, which writes it.
+        assert_eq!(
+            store.get(&["x".into()]).expect("reads").len(),
+            1,
+            "edited={edited}"
+        );
+        assert_eq!(store.count(&Default::default()).expect("counts"), 2);
+        let lines = walk_all(&mut store, walk.token, 10, |_, _| {});
+        assert_eq!(lines.len(), walk.count as usize);
+        store.export_end(walk.token).expect("ends");
+        let released = store.release_holds().expect("reads");
+        assert!(released.is_empty(), "edited={edited}: {released:?}");
+        store.delete(&released).expect("deletes");
+        assert_eq!(ids_of(&store), set(&["x", "y"]), "edited={edited}");
+        let stored = stored_rows(&store)
+            .into_iter()
+            .find(|(id, _)| id == "x")
+            .expect("x")
+            .1;
+        assert_eq!(stored, back);
+    }
+}

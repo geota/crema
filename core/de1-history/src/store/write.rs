@@ -9,7 +9,9 @@
 //!   `COALESCE`, so a NULL never replaces a stored value (M10).
 //! - `delete(ids)` removes `shot_tag`, `shot_heavy` and `shot` rows
 //!   explicitly, children first: the schema has no cascades (M10).
-//! - Upserts never touch `created_seq` after the first insert, nor
+//! - Upserts never touch `created_seq` after the first insert. An upsert of
+//!   a row held by a delete during an export walk ends the hold, since the
+//!   row exists again (REVIEW-442 B1); the derive rewrite never touches
 //!   `hold_delete` (S6).
 
 use std::sync::LazyLock;
@@ -358,9 +360,13 @@ pub(crate) fn upsert_in(
                 continue;
             }
         }
-        let unchanged = existing
-            .as_ref()
-            .is_some_and(|e| e.row_json == row.row_json && e.derive_v == i64::from(DERIVE_V));
+        // A held row that is written again exists again: its hold ends here,
+        // or the release would delete it with its details (REVIEW-442 B1).
+        // So a held row is never "unchanged". The derive rewrite keeps its
+        // own rule and never touches `hold_delete` (S6).
+        let unchanged = existing.as_ref().is_some_and(|e| {
+            !e.held && e.row_json == row.row_json && e.derive_v == i64::from(DERIVE_V)
+        });
         let rid = if let (true, Some(e)) = (unchanged, &existing) {
             e.rid
         } else {
@@ -376,16 +382,20 @@ pub(crate) fn upsert_in(
             let rid: i64 = tx
                 .prepare_cached(&UPSERT)?
                 .query_row(params_from_iter(params), |r| r.get(0))?;
+            let was_held = existing.as_ref().is_some_and(|e| e.held);
+            if was_held {
+                tx.prepare_cached("UPDATE shot SET hold_delete = 0 WHERE rid = ?1")?
+                    .execute([rid])?;
+            }
             faults.hit("upsert.tags")?;
             write_tags(tx, rid, &derived.tags)?;
-            let held = existing.as_ref().is_some_and(|e| e.held);
             let old = existing.as_ref().and_then(|e| derive_row(&e.row_json).ok());
             let stale = existing
                 .as_ref()
                 .is_some_and(|e| e.derive_v != i64::from(DERIVE_V));
             let k = ChangeKinds::between(
-                visible(old, held).as_ref(),
-                visible(Some(derived.clone()), held).as_ref(),
+                visible(old, was_held).as_ref(),
+                visible(Some(derived.clone()), false).as_ref(),
                 true,
             );
             out.kinds = out.kinds.union(if stale { ChangeKinds::ALL } else { k });
