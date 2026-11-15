@@ -3910,12 +3910,15 @@ impl CremaCore {
         // flow's: they only raise it, since the same shot's frame never goes
         // back (#427: hot water's frame 0, heard with its states lost, matched
         // the next shot's). They mark the session too, so a stop owed on them
-        // survives the return (`settle_outage_on_sample`). Only a sample heard
-        // in flow counts: the DE1 reports the last shot's frame until flow
-        // begins on frame 0 (the capture: frame 3 in FinalHeating).
-        let in_flow = self
-            .last_state
-            .is_some_and(|s| !de1_domain::session::is_pre_flow(s.substate));
+        // survives the return (`settle_outage_on_sample`). Only a sample in
+        // flow counts, by its own pressure and flow as well as the substate:
+        // the DE1 reports the last shot's frame until flow begins on frame 0
+        // (the captures: frame 3 or 4 in FinalHeating, at 0 bar), and an
+        // unnamed substate or a late sample mustn't carry it in (REVIEW-438).
+        let in_flow = flowing
+            && self
+                .last_state
+                .is_some_and(|s| !de1_domain::session::is_pre_flow(s.substate));
         if self.monitor.is_shot_in_progress() && self.link.state_seen {
             if in_flow {
                 self.last_frame = Some(sample.frame_number);

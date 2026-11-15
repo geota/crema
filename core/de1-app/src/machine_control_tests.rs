@@ -1618,3 +1618,59 @@ fn a_sample_at_the_wait_is_too_late_to_settle_a_return() {
     core.on_notification(Source::De1ShotSample, &sample(400), 3_999);
     assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
 }
+
+/// A heating sample as both captures show them: water through the group at
+/// 0 bar, still on the last shot's frame.
+fn heating_sample(core: &mut CremaCore, t: u64, frame: u8) {
+    core.on_notification(Source::ScaleWeight, &bookoo(20.0), t.saturating_sub(5));
+    let mut f = sample((t / 8) as u16);
+    f[17] = frame;
+    f[2] = 0;
+    f[3] = 0;
+    core.on_notification(Source::De1ShotSample, &f, t);
+}
+
+/// The shot's first flow sample, on frame 0, with a fresh reading before it.
+fn first_flow_sample(core: &mut CremaCore, t: u64) -> CoreOutput {
+    core.on_notification(Source::ScaleWeight, &bookoo(20.0), t.saturating_sub(5));
+    let mut f = sample((t / 8) as u16);
+    f[17] = 0;
+    core.on_notification(Source::De1ShotSample, &f, t)
+}
+
+/// REVIEW-438 P1: a firmware names a pre-flow moment with a byte this app
+/// doesn't know (§3.3 plans for one that "turns out to be more heating").
+/// Unknown isn't pre-flow, but its 0-bar samples on the last shot's frame
+/// aren't in flow, so they never enter the frame memory: the real flow on
+/// frame 0 is the same shot, with its weight stop.
+#[test]
+fn heating_on_an_unknown_substate_never_splits_the_shot_at_its_first_flow() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 1], 20);
+    core.on_notification(Source::De1State, &[4, 21], 500);
+    for t in (600..3_000u64).step_by(250) {
+        heating_sample(&mut core, t, 3);
+    }
+    core.on_notification(Source::De1State, &[4, 5], 3_000);
+    let o = first_flow_sample(&mut core, 3_050);
+    assert!(!o.events.contains(&Event::ShotStarted), "the same shot");
+    assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
+}
+
+/// REVIEW-438 P2: one heating sample on the last shot's frame delivered just
+/// after the flow state (the captures show the reverse order, 30 and 48 ms
+/// apart). At 0 bar it isn't in flow, so the shot doesn't split.
+#[test]
+fn a_heating_sample_after_the_flow_state_never_splits_the_shot() {
+    let mut core = core_with_cup();
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    core.on_notification(Source::De1State, &[4, 1], 20);
+    core.on_notification(Source::De1State, &[4, 2], 500);
+    heating_sample(&mut core, 900, 4);
+    core.on_notification(Source::De1State, &[4, 5], 1_000);
+    heating_sample(&mut core, 1_010, 4);
+    let o = first_flow_sample(&mut core, 1_200);
+    assert!(!o.events.contains(&Event::ShotStarted), "the same shot");
+    assert_ne!(core.weight_stop_blocked_by(), Some("began-unseen"));
+}
