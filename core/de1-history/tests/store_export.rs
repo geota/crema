@@ -499,6 +499,7 @@ fn a_truth_file_refuses_every_index_upkeep_call() {
             .map_err(Into::into),
     );
     refused(truth.set_source_seq(1));
+    refused(truth.reset_seqs(1));
     refused(truth.bump_pending().map(|_| ()));
     refused(truth.finish_android_diff(1));
     refused(truth.index_state().map(|_| ()));
@@ -565,6 +566,25 @@ fn source_seq_and_pending_keep_the_boot_check() {
     index.set_source_seq(7).expect("sets");
     let s = index.index_state().expect("reads");
     assert_eq!((s.source_seq, s.seen_seqs), (7, vec![]));
+    // Android's diff start (REVIEW-450 B): a seq seen past a gap is dropped,
+    // even one above the new source_seq, and source_seq may go down.
+    index
+        .index_write(&IndexWrite {
+            seen_seqs: vec![9],
+            ..IndexWrite::default()
+        })
+        .expect("writes");
+    index.reset_seqs(5).expect("resets");
+    let s = index.index_state().expect("reads");
+    assert_eq!((s.source_seq, s.seen_seqs), (5, vec![]));
+    index
+        .index_write(&IndexWrite {
+            seen_seqs: vec![6],
+            ..IndexWrite::default()
+        })
+        .expect("writes");
+    assert_eq!(index.index_state().expect("reads").source_seq, 6);
+    index.set_source_seq(7).expect("sets");
     // Android: pending up before the P3a write, down with the index write.
     assert_eq!(index.bump_pending().expect("bumps"), 1);
     assert_eq!(index.bump_pending().expect("bumps"), 2);

@@ -63,6 +63,7 @@ class HistoryIndexTest {
         HistoryIndex.FAULTS.clear()
         HistoryStore.afterDiffBatchForTest = null
         HistoryStore.duringEraseForTest = null
+        HistoryTables.firstSeqForTest = null
         sqliteDir.setWritable(true)
         SeriesFiles.beforeWrite = {}
         runBlocking { stores.forEach { it.closeIndexForTest() } }
@@ -548,6 +549,133 @@ class HistoryIndexTest {
         }
         assertEquals(emptyList(), eraser.erase(), "nothing stayed")
         assertFalse(sqliteDir.exists())
+    }
+
+    private suspend fun edit(s: HistoryStore, id: String, notes: String) {
+        assertTrue(s.save(listOf(s.loadRows().first { it.id == id }.copy(notes = notes))))
+    }
+
+    private fun loseShotsDb() {
+        File(dbFile.path + "-wal").delete()
+        File(dbFile.path + "-shm").delete()
+        dbFile.writeBytes(ByteArray(8192) { (it * 31).toByte() })
+    }
+
+    /**
+     * REVIEW-450 A: `shots.db` is lost and rebuilt while the index can't be
+     * reached (another store took it over), so nothing raises `pending`. The
+     * new file's seq must not climb back to the old file's and pass the check.
+     */
+    @Test fun `A a replaced shots-db never reuses the old file's seqs`() = runBlocking {
+        // The old file counted from 1, as before this rule: its seqs are the ones a restart at 1 would meet.
+        HistoryTables.firstSeqForTest = { 1L }
+        val s0 = store()
+        s0.boot()
+        s0.save(fresh("a", 4))
+        repeat(4) { edit(s0, "a-0", "edit $it") }
+        val target = assertNotNull(s0.indexHealth().sourceSeq)
+        s0.closeIndexForTest()
+        loseShotsDb()
+        val s1 = store()
+        assertEquals(HistoryHealth.LOST, s1.loadAll().health)
+        s1.indexHealth() // s1 opens the index...
+        val other = store()
+        other.indexHealth() // ...and another store takes it over: s1 can't raise pending.
+        HistoryTables.firstSeqForTest = null
+        assertEquals(HistoryHealth.OK, s1.startEmpty().health)
+        s1.save(fresh("b", 4, start = 1_850_000_000_000L))
+        val newSeq = assertNotNull(s1.indexHealth().shotsSeq)
+        assertTrue(newSeq > target + 1_000_000uL, "the new file starts from the clock ($newSeq), far past the old one's $target")
+        // Climb to the old seq, as a restart at 1 would within a session: from the clock, there's nothing to climb.
+        while (assertNotNull(s1.indexHealth().shotsSeq) < target) edit(s1, "b-0", "climb ${System.nanoTime()}")
+        other.closeIndexForTest()
+        val s2 = store()
+        s2.loadAll()
+        val h = s2.indexHealth()
+        assertEquals(0uL, h.pending, "nothing raised pending")
+        assertEquals(4, h.indexRows, "the counts match")
+        assertFalse(assertNotNull(s2.compareIndex()).exact, "the index still holds the old file's rows")
+        assertTrue(h.misses.any { "shots.db is at" in it }, "the seqs miss: ${h.misses}")
+        assertTrue(assertNotNull(s2.syncIndex()).finished)
+        assertExact(s2, "repaired")
+    }
+
+    @Test fun `a new file's first seq is the clock, and the ones after count up from it`() = runBlocking {
+        HistoryTables.firstSeqForTest = { 5_000L }
+        try {
+            val s = store()
+            s.boot()
+            assertEquals(5_000uL, s.indexHealth().shotsSeq, "the empty migration is the first write")
+            s.save(fresh("c", 2))
+            assertEquals(5_001uL, s.indexHealth().shotsSeq)
+            assertExact(s, "clock seqs")
+        } finally {
+            HistoryTables.firstSeqForTest = null
+        }
+    }
+
+    /**
+     * REVIEW-450 B: a seq the index saw past a gap that this `shots.db` never
+     * made (an index copied later than its `shots.db`, an older file) must not
+     * stand in for a write during the diff whose mirror failed.
+     */
+    @Test fun `B a seen seq this shots-db never made doesn't cover a failed mirror during the diff`() = runBlocking {
+        val s0 = store()
+        s0.boot()
+        s0.save(fresh("h", HistoryIndex.BATCH + 5, samplesPer = 1))
+        val seq = assertNotNull(s0.indexHealth().shotsSeq)
+        s0.closeIndexForTest()
+        // The index one write behind, and holding the seq after shots.db's, past the gap.
+        HistoryDbBridge.open(indexFile, HistoryDbBridge.options(HistoryRole.INDEX)).let { db ->
+            try {
+                db.setSourceSeq(seq - 1uL)
+                db.indexWrite(coffee.crema.core.HistoryIndexWrite(seenSeqs = listOf(seq + 1uL)))
+                assertEquals(listOf(seq + 1uL), db.indexState().seenSeqs)
+            } finally {
+                db.closeAll()
+            }
+        }
+        val s = store()
+        s.loadAll()
+        var once = true
+        HistoryStore.afterDiffBatchForTest = {
+            if (once) {
+                once = false
+                // A capture during the diff, seq + 1, whose mirror fails.
+                HistoryIndex.FAULTS += IndexFault.FAIL_WRITE
+                edit(s, "h-0", "a capture whose mirror failed")
+                HistoryIndex.FAULTS.clear()
+            }
+        }
+        val report = assertNotNull(s.syncIndex())
+        HistoryStore.afterDiffBatchForTest = null
+        assertFalse(report.finished, "it must not settle: ${report.outcome}")
+        assertEquals(listOf("h-0"), s.compareIndex()?.differ)
+        assertTrue(s.indexHealth().misses.isNotEmpty(), "the next boot misses")
+        assertTrue(assertNotNull(s.syncIndex()).finished)
+        assertExact(s, "repaired")
+    }
+
+    /** REVIEW-450 C: a new versionCode's diff starts with the seqs equal; a mirrored save during it still lets it settle. */
+    @Test fun `C a save during a versionCode diff, all mirrored, settles`() = runBlocking {
+        val s0 = store(versionCode = 7)
+        s0.boot()
+        s0.save(fresh("v", HistoryIndex.BATCH * 2 + 5, samplesPer = 1))
+        s0.closeIndexForTest()
+        val s = store(versionCode = 8)
+        s.loadAll()
+        assertEquals(1, s.indexHealth().misses.size, "only the versionCode misses")
+        var once = true
+        HistoryStore.afterDiffBatchForTest = {
+            if (once) {
+                once = false
+                edit(s, "v-0", "a capture during the diff")
+            }
+        }
+        val report = assertNotNull(s.syncIndex())
+        HistoryStore.afterDiffBatchForTest = null
+        assertEquals(IndexDiffReport.OK, report.outcome)
+        assertExact(s, "settled")
     }
 
     @Test fun `every write to shots raises its seq in shots-db`() = runBlocking {

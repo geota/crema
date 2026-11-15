@@ -135,9 +135,12 @@ fn advance(state: &mut IndexState, seqs: &[u64]) {
         }
     }
     state.seen_seqs.sort_unstable();
-    while state.seen_seqs.first() == Some(&(state.source_seq + 1)) {
+    while let Some(next) = state.source_seq.checked_add(1) {
+        if state.seen_seqs.first() != Some(&next) {
+            break;
+        }
         state.seen_seqs.remove(0);
-        state.source_seq += 1;
+        state.source_seq = next;
     }
 }
 
@@ -382,6 +385,29 @@ impl Store {
         .map(|_| ())
     }
 
+    /// Restarts the seqs at `seq` with none seen past a gap: the start of a
+    /// full diff on Android, under the shell's lock, where `seq` is the
+    /// `index_seq` `shots.db` has then (REVIEW-450 B). A seen seq from an
+    /// older file, or from an index copied later than its `shots.db`, must
+    /// not stand in for one this file makes during the diff.
+    ///
+    /// # Errors
+    /// [`StoreError::Refused`] on an `authority` file; a SQLite error class.
+    pub fn reset_seqs(&mut self, seq: u64) -> Result<()> {
+        self.index_only("reset_seqs")?;
+        self.write("upsert.commit", "upsert.committed", |tx, _, _| {
+            save_seqs(
+                tx,
+                &IndexState {
+                    source_seq: seq,
+                    ..IndexState::default()
+                },
+            )?;
+            Ok(())
+        })
+        .map(|_| ())
+    }
+
     /// The Android hook's first half: `pending` up by one, in its own
     /// transaction, before P3a writes `shots.db`. Returns the new count.
     ///
@@ -426,6 +452,19 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advance_stops_at_the_top_without_overflow() {
+        let mut s = IndexState {
+            source_seq: u64::MAX - 1,
+            seen_seqs: vec![u64::MAX],
+            ..IndexState::default()
+        };
+        advance(&mut s, &[]);
+        assert_eq!((s.source_seq, s.seen_seqs.clone()), (u64::MAX, vec![]));
+        advance(&mut s, &[3]);
+        assert_eq!(s.source_seq, u64::MAX);
+    }
 
     #[test]
     fn source_seq_moves_only_across_seen_seqs() {
