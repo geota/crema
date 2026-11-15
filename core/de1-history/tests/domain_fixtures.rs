@@ -1,5 +1,7 @@
 //! `derive_row` on every shot in `core/de1-domain/tests/fixtures`: the shells'
 //! cross-shell exports and backups, written by each shell's real code.
+// Reads the repository's files with `std::fs`: native only.
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::fs;
 use std::path::PathBuf;

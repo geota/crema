@@ -7,6 +7,8 @@
 //! `HistoryListModel`, and `golden.android.json` by
 //! `HistoryReferenceGoldenTest.kt` through `filterAndSortShots`. Both run in the
 //! shells' suites, so a change to either shell's rules fails there first.
+// Reads the repository's files with `std::fs`: native only.
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::BTreeMap;
 use std::fs;
