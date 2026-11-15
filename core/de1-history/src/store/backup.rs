@@ -5,8 +5,8 @@
 //!   online backup API, between two connections to two files (S4). It never
 //!   overwrites a finished truth file from anything but another one: a copy
 //!   from an index onto a `history.db` whose `meta.migration` says `done` is
-//!   refused, as is a truth file onto a newer one (a higher `write_seq` or
-//!   `generation`), and any destination that isn't ours or doesn't open.
+//!   refused, as is a truth file onto a newer one (a higher `generation`, or
+//!   the same one and a higher `write_seq`), and any destination that isn't ours or doesn't open.
 //! - [`Store::create_recovery`] makes a new `history-<n>.db` after `lost`,
 //!   with its `migration_source` and late-row baseline from the caller, so
 //!   the next boot's late-row step imports only what an older build writes
@@ -206,11 +206,12 @@ impl Store {
                 }
                 // Truth onto truth is the snapshot, which only moves forward:
                 // an older snapshot or generation never replaces a newer
-                // truth (REVIEW-442 note 4).
+                // truth (REVIEW-442 note 4). Generation first: a recovery
+                // file starts its seq again, and is still the newer truth.
                 let (src_seq, src_gen) =
                     seq_and_generation(&self.conn).map_err(|e| error_of(&e, Source::Session))?;
                 let (dst_seq, dst_gen) = seq_and_generation(&dst).map_err(open_err)?;
-                if dst_seq > src_seq || dst_gen > src_gen {
+                if (dst_gen, dst_seq) > (src_gen, src_seq) {
                     return Err(StoreError::Refused(format!(
                         "the destination is newer (write_seq {dst_seq}, generation {dst_gen}) \
                          than this file (write_seq {src_seq}, generation {src_gen})"

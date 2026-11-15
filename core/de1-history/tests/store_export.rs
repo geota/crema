@@ -741,3 +741,54 @@ fn a_restore_row_is_never_a_pulled_duplicate() {
     store.delete(&wipe).expect("deletes");
     assert_eq!(ids_of(&store), set(&["backup"]));
 }
+
+/// REVIEW-442 note 4, re-check: generation comes first. A recovery file of a
+/// newer generation, with fewer writes, may copy over an older generation's
+/// file; the reverse is refused.
+#[test]
+fn a_newer_generation_with_fewer_writes_may_copy_over_an_older_one() {
+    let d = dir();
+    let old_path = file(&d, "history-1.db");
+    {
+        let mut old = create(&old_path);
+        for i in 0..5 {
+            old.upsert(&rows_in(&[row(&format!("o{i}"), i, json!({}))]))
+                .expect("writes");
+        }
+        old.close().expect("closes");
+    }
+    finish(&old_path);
+    let new_path = file(&d, "history-2.db");
+    {
+        let init = Recovery {
+            migration_source: vec![],
+            late_baseline: "{}".into(),
+        };
+        let mut new = Store::create_recovery(
+            &new_path,
+            OpenOptions::new(Role::Authority).create(2),
+            &init,
+        )
+        .expect("creates");
+        new.upsert(&rows_in(&[row("n", 1, json!({}))]))
+            .expect("writes");
+        assert!(new.write_seq() < 5);
+        new.close().expect("closes");
+    }
+    // The older generation, with more writes, onto the newer: refused.
+    {
+        let old = Store::open(&old_path, OpenOptions::new(Role::Authority)).expect("opens");
+        let err = old
+            .copy_to(&new_path, None, JournalMode::Wal)
+            .expect_err("refused");
+        assert!(matches!(err, StoreError::Refused(_)), "{err:?}");
+    }
+    // The newer generation onto the older: allowed, though its seq is lower.
+    let new = Store::open(&new_path, OpenOptions::new(Role::Authority)).expect("opens");
+    new.copy_to(&old_path, None, JournalMode::Wal)
+        .expect("copies");
+    drop(new);
+    let copy = Store::open(&old_path, OpenOptions::new(Role::Authority)).expect("opens");
+    assert_eq!(copy.info().generation, 2);
+    assert_eq!(ids_of(&copy), set(&["n"]));
+}
