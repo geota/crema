@@ -27,12 +27,12 @@ export type RawBrowser = {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function waitFor<T>(f: () => T | undefined | Promise<T | undefined>, ms: number): Promise<T> {
+async function waitFor<T>(f: () => T | undefined | Promise<T | undefined>, ms: number, what: string): Promise<T> {
 	const end = Date.now() + ms;
 	for (;;) {
 		const v = await f();
 		if (v !== undefined) return v;
-		if (Date.now() > end) throw new Error('timed out');
+		if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
 		await sleep(100);
 	}
 }
@@ -108,7 +108,7 @@ export function rawBrowser(endpoint: string, onClose: () => Promise<void> = asyn
 			await waitFor(async () => {
 				const ready = await tab.eval<string>('document.body?.dataset.ready ?? ""').catch(() => '');
 				return ready === '1' ? true : undefined;
-			}, 15_000);
+			}, 15_000, `${url} to load`);
 			return tab;
 		},
 		async close() {
@@ -134,12 +134,14 @@ export async function launchRaw(): Promise<RawBrowser> {
 			'--use-mock-keychain',
 			'--password-store=basic',
 			'--disable-features=HttpsUpgrades',
+			// CI's Linux runners don't allow Chrome's sandbox; Playwright turns it off too.
+			...(process.platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
 			'about:blank'
 		],
 		{ stdio: 'ignore' }
 	);
 	const portFile = path.join(dir, 'DevToolsActivePort');
-	const port = await waitFor(() => (fs.existsSync(portFile) ? fs.readFileSync(portFile, 'utf8').split('\n')[0] || undefined : undefined), 15_000);
+	const port = await waitFor(() => (fs.existsSync(portFile) ? fs.readFileSync(portFile, 'utf8').split('\n')[0] || undefined : undefined), 15_000, 'Chrome\'s DevTools port');
 	return rawBrowser(`http://127.0.0.1:${port}`, async () => {
 		proc.kill();
 		await new Promise((r) => proc.once('exit', r));
