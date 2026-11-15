@@ -159,6 +159,19 @@ export function keepRemoteOutMany(visualizerIds: readonly string[]): void {
 	writeJson(MARKS_KEY, { ...marks, keptOut: [...keptOut] });
 }
 
+/**
+ * A restore brought these remote ids' rows back (#437 N5): pulls take them
+ * again, so the restored rows get remote updates and curve heals.
+ */
+export function releaseRemoteOut(visualizerIds: readonly string[]): void {
+	if (visualizerIds.length === 0) return;
+	const marks = read();
+	const back = new Set(visualizerIds);
+	const keptOut = marks.keptOut.filter((id) => !back.has(id));
+	if (keptOut.length === marks.keptOut.length) return;
+	writeJson(MARKS_KEY, { ...marks, keptOut });
+}
+
 /** The remote ids a pull leaves out. */
 export function remoteKeptOut(): ReadonlySet<string> {
 	return new Set(read().keptOut);

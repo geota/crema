@@ -10,7 +10,10 @@ import { resolve } from 'node:path';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { realSamples, realShot } from '#lib/testing/real-shots.js';
 import { getBeanStore, blankBean } from '#lib/bean/index.js';
-import { remoteKeptOut } from '#lib/visualizer/upload-marks.js';
+import { markUploadAttempted, remoteKeptOut } from '#lib/visualizer/upload-marks.js';
+import { markShotEdit } from '#lib/visualizer/pending-edits.js';
+import { setDecentShotState } from '#lib/decent/account.js';
+import { enqueueEntry } from '#lib/services/queue-store.js';
 import { buildBackupJsonl, restoreBackup } from '#lib/backup/index.js';
 import { HistoryDb, META_MIGRATION, type MigrationRecord } from './history-db';
 import type { StoredShot } from './model';
@@ -198,6 +201,24 @@ describe('Free up space', () => {
 	});
 });
 
+describe('Free up space keeps what would be lost everywhere (#437 N2, N3)', () => {
+	it('a queued upload, an upload that may have landed, an unsent Visualizer edit and a Decent retry all stay', async () => {
+		const shots = small(10).map((s, i) => ({ ...s, visualizerId: i === 3 ? 'viz-3' : null }));
+		await seedStore(shots);
+		const store = await boot();
+		enqueueEntry({ entity: 'shot', id: shots[1].id, op: 'create' });
+		markUploadAttempted(shots[2].id);
+		markShotEdit(shots[3].id, 'annotations');
+		setDecentShotState(shots[4].id, 'retry');
+		const result = await store.freeUpSpace(shots.map((s) => s.id));
+		expect(result).toEqual({ removed: 6, skipped: 4 });
+		const { rows } = await stored();
+		expect([...rows.keys()].sort()).toEqual([1, 2, 3, 4].map((i) => shots[i].id).sort());
+		// The kept bound shot isn't kept out of pulls: it is still here.
+		expect(remoteKeptOut().has('viz-3')).toBe(false);
+	});
+});
+
 describe('a 5,000-shot backup from Android', () => {
 	it('restores into the real store with every row and sample count, and backs up again whole', async () => {
 		const FIXTURES = resolve(process.cwd(), '../core/de1-domain/tests/fixtures/backup');
@@ -237,4 +258,25 @@ describe('a 5,000-shot backup from Android', () => {
 		expect(out).toHaveLength(5_000);
 		for (const s of out) expect(s.record.samples, s.id).toHaveLength(counts.get(s.id)!);
 	}, 300_000);
+});
+
+describe('a restore after Free up space (#437 N5)', () => {
+	it('brings a removed bound shot back, and pulls take it again', async () => {
+		// The app's own store, as the restore engine writes to it: after the test above, so it adds to those rows.
+		const shots = small(6, 50_000).map((s, i) => ({ ...s, visualizerId: `viz-${i}` }));
+		const history = getHistoryStore();
+		await history.whenReady();
+		expect(history.insertMany(shots).kept).toHaveLength(6);
+		await history.flushed();
+		const backup = (await buildBackupJsonl('test'))!.jsonl;
+		expect((await history.freeUpSpace([shots[4].id, shots[5].id])).removed).toBe(2);
+		expect(remoteKeptOut().has('viz-4') && remoteKeptOut().has('viz-5')).toBe(true);
+		const summary = await restoreBackup(backup, 'merge');
+		expect(summary.outcome.kind).toBe('done');
+		await history.flushed();
+		expect(history.get(shots[4].id)).toBeDefined();
+		expect(history.get(shots[5].id)).toBeDefined();
+		expect(remoteKeptOut().has('viz-4')).toBe(false);
+		expect(remoteKeptOut().has('viz-5')).toBe(false);
+	});
 });

@@ -57,6 +57,8 @@ import {
 	uploadAttempted
 } from '#lib/visualizer/upload-marks.js';
 import { excludedFromUpload, readSyncConfig } from '#lib/visualizer/sync-config.js';
+import { pendingEdits } from '#lib/visualizer/pending-edits.js';
+import { readDecentAccount } from '#lib/decent/account.js';
 import type { RustStoredShot, TimedSample } from '#lib/core/index.js';
 import type { BrewSeries, ShotPatch as RemoteShotPatch, ShotSummary } from '#lib/core/crema-core.js';
 import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
@@ -3187,8 +3189,9 @@ export class HistoryStore {
 	/**
 	 * Free up space (#310 P6w, SPEC §8): remove `ids` from this device, at the
 	 * user's word, never on its own. Pinned shots are exempt, and so are
-	 * tombstones and shots whose upload is still queued, which a delete must
-	 * keep as tombstones; ids not here are skipped. Nothing reaches
+	 * tombstones, shots whose upload is still queued (which a delete must keep
+	 * as tombstones), shots with a Visualizer edit not yet sent, and shots
+	 * Decent is to retry; ids not here are skipped. Nothing reaches
 	 * Visualizer: a bound shot's remote copy stays, and its id is kept out of
 	 * later pulls, so it doesn't come straight back. Bag weights are
 	 * untouched: no removal credits a bean. Says how many were removed, and
@@ -3199,9 +3202,19 @@ export class HistoryStore {
 		const wanted = [...new Set(ids)];
 		if (this.mode !== 'idb' && this.mode !== 'legacy') return { removed: 0, skipped: wanted.length };
 		const byId = this.byId();
+		// An edit not yet sent to Visualizer, or a Decent upload to retry, would be lost everywhere (#437 N2).
+		const edits = pendingEdits();
+		const decentRetry = new Set(readDecentAccount().retryShotIds);
 		const go = wanted.filter((id) => {
 			const s = byId.get(id);
-			return s !== undefined && s.deletedAt == null && s.pinned !== true && !uploadPending(id);
+			return (
+				s !== undefined &&
+				s.deletedAt == null &&
+				s.pinned !== true &&
+				!uploadPending(id) &&
+				!edits.has(id) &&
+				!decentRetry.has(id)
+			);
 		});
 		const remote = go.map((id) => byId.get(id)!.visualizerId).filter((v): v is string => !!v);
 		// Once the store's delete has landed: a failed one leaves the rows, and pulls of them, as they were.

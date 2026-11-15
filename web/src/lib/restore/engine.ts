@@ -51,7 +51,7 @@ import { getSettingsStore, settingsToCommon } from '#lib/settings/index.js';
 import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { visualizerSyncPrefs } from '#lib/visualizer/sync-config.js';
 import { dequeueEntry } from '#lib/services/queue-store.js';
-import { cancelUnboundTombstone } from '#lib/visualizer/upload-marks.js';
+import { cancelUnboundTombstone, releaseRemoteOut } from '#lib/visualizer/upload-marks.js';
 import { newestFirst } from '#lib/history/brew-date.js';
 import { storeHealth } from '#lib/utils/storage.js';
 import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
@@ -1014,6 +1014,13 @@ async function applyPlan(
 				deps.writeSeries
 			);
 			curvesFailed = r.curvesFailed;
+			if (r.stored) {
+				// A shot Free up space removed is back: pulls may take it again (#437 N5).
+				const written = shotsTheRunWrites(plan);
+				releaseRemoteOut(
+					records.shots.filter((s) => written.has(s.id) && !!s.visualizerId).map((s) => s.visualizerId as string)
+				);
+			}
 			return r.stored;
 		}))
 	) {
