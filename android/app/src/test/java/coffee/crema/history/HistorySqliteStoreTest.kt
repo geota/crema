@@ -252,7 +252,7 @@ class HistorySqliteStoreTest {
         assertFalse(marker.exists())
         // A row the user added on the store before a re-copy could clear it: it stays.
         val db = HistoryDb(app, HistoryStore.NEXT_DB_NAME).writableDatabase
-        HistoryTables(coreJson).putFull(db, StoredShot(id = "added", completedAtMs = 2_000_000_000_000L, durationMs = 1), summaryHere(StoredShot(id = "added", completedAtMs = 1, durationMs = 1)))
+        HistoryTables(coreJson).write(db) { HistoryTables(coreJson).putFull(this, StoredShot(id = "added", completedAtMs = 2_000_000_000_000L, durationMs = 1), summaryHere(StoredShot(id = "added", completedAtMs = 1, durationMs = 1))) }
         db.close()
         val all = store().load()
         assertTrue(all.any { it.id == "added" }, "never cleared")

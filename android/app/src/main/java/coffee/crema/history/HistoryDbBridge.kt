@@ -60,7 +60,9 @@ import coffee.crema.core.HistoryDb as CoreHistoryDb
  *   file erase is about to remove.
  *
  * Errors are [coffee.crema.core.HistoryDbException]s, one subclass per
- * class (SPEC §12). Nothing in the app calls this yet (A1 does).
+ * class (SPEC §12). From A1 the app's one caller is [HistoryIndex], which
+ * runs inside `HistoryStore.lock` on IO and so calls through [now] and
+ * [openNow] rather than switching dispatchers under the lock.
  */
 class HistoryDbBridge private constructor(
     private val db: CoreHistoryDb,
@@ -78,6 +80,10 @@ class HistoryDbBridge private constructor(
         suspend fun open(file: File, options: HistoryOpenOptions, io: CoroutineDispatcher = Dispatchers.IO): HistoryDbBridge =
             withContext(io) { HistoryDbBridge(CoreHistoryDb.open(file.path, options), io) }
 
+        /** [open] on the calling thread, for a caller already on IO inside its own lock (A1's hook). */
+        internal fun openNow(file: File, options: HistoryOpenOptions, io: CoroutineDispatcher = Dispatchers.IO): HistoryDbBridge =
+            HistoryDbBridge(CoreHistoryDb.open(file.path, options), io)
+
         /** Creates the recovery file [file] after `lost` (S9) and opens it. */
         suspend fun createRecovery(
             file: File,
@@ -88,6 +94,13 @@ class HistoryDbBridge private constructor(
     }
 
     private suspend inline fun <T> call(crossinline f: (CoreHistoryDb) -> T): T = withContext(io) { f(db) }
+
+    /**
+     * [f] on the calling thread: for a caller already on IO that holds a lock
+     * the call must stay inside, as A1's hook does under `HistoryStore.lock`
+     * (M4). The core's own mutex still orders it with every other call.
+     */
+    internal fun <T> now(f: (CoreHistoryDb) -> T): T = f(db)
 
     val path: String get() = db.path()
 

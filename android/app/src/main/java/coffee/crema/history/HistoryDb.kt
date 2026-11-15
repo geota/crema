@@ -144,8 +144,78 @@ internal class HistoryDb(
 /** A row as `shots.db` holds it: the shot without its series, and its summary. */
 internal data class DbRow(val shot: StoredShot, val summary: ShotSummary?)
 
+/**
+ * The M4 hook (#310 A1, SQLite SPEC §3): what [HistoryTables.write] calls
+ * around every write to `shots`, under `HistoryStore.lock`. [HistoryIndex]
+ * is the one in the app. None of these may make the write fail: each
+ * catches its own errors, and only a [SimulatedCrash] (tests) gets through.
+ */
+internal interface ShotsHook {
+    /** Before the write: raise `pending`. */
+    fun begin(): Any?
+
+    /** The write committed: mirror it, then lower `pending`. */
+    fun committed(ticket: Any?, db: SQLiteDatabase, write: ShotsWrite)
+
+    /** The write threw: what it left is unknown, so `pending` stays raised. */
+    fun failed(ticket: Any?, error: Throwable)
+
+    /** `shots.db` was set aside or deleted outside a write (a new store's clear). */
+    fun replaced()
+
+    object None : ShotsHook {
+        override fun begin(): Any? = null
+        override fun committed(ticket: Any?, db: SQLiteDatabase, write: ShotsWrite) = Unit
+        override fun failed(ticket: Any?, error: Throwable) = Unit
+        override fun replaced() = Unit
+    }
+}
+
+/**
+ * One transaction on `shots`, from [HistoryTables.write]: the only way to
+ * write the table, so the hook sees every write (M4). It records the ids the
+ * write touched, or that it cleared the table.
+ */
+internal class ShotsWrite(val db: SQLiteDatabase) {
+    private val ids = LinkedHashSet<String>()
+
+    /** The ids this write put, changed or deleted. */
+    val touched: Set<String> get() = ids
+
+    /** This write cleared the table: every row may have changed. */
+    var cleared = false
+        private set
+
+    fun touch(id: String) {
+        ids += id
+    }
+
+    fun clearAll() {
+        cleared = true
+    }
+}
+
 /** The row codec and the statements over a [SQLiteDatabase]. */
-internal class HistoryTables(private val json: Json) {
+internal class HistoryTables(private val json: Json, private val hook: ShotsHook = ShotsHook.None) {
+
+    /**
+     * Write `shots` in one transaction through [block], with the hook around
+     * it (#310 A1, M4): `pending` up, the transaction, then the index and
+     * `pending` down. Every writer of `shots` takes a [ShotsWrite], so there
+     * is no other way in.
+     */
+    fun <T> write(db: SQLiteDatabase, block: ShotsWrite.() -> T): T {
+        val ticket = hook.begin()
+        val w = ShotsWrite(db)
+        val out = try {
+            db.inTransaction { w.block() }
+        } catch (e: Throwable) {
+            if (e !is SimulatedCrash) hook.failed(ticket, e)
+            throw e
+        }
+        hook.committed(ticket, db, w)
+        return out
+    }
 
     /** `row_json`: the shot without `samples`, `profile` and `brewSeries`, plus its summary. */
     fun rowJson(shot: StoredShot, summary: ShotSummary): String {
@@ -193,6 +263,9 @@ internal class HistoryTables(private val json: Json) {
         return out
     }
 
+    /** All of a row, or null when it isn't there: inside a [write]. */
+    fun full(w: ShotsWrite, id: String): DbRow? = full(w.db, id)
+
     /** All of a row, or null when it isn't there. */
     fun full(db: SQLiteDatabase, id: String): DbRow? =
         db.rawQuery("SELECT row_json, profile_json, brew_series_json FROM shots WHERE id = ?", arrayOf(id)).use { c ->
@@ -211,7 +284,8 @@ internal class HistoryTables(private val json: Json) {
     fun count(db: SQLiteDatabase): Int = db.rawQuery("SELECT COUNT(*) FROM shots", null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
     /** Write all of [shot]: its row and both heavy columns. */
-    fun putFull(db: SQLiteDatabase, shot: StoredShot, summary: ShotSummary) {
+    fun putFull(w: ShotsWrite, shot: StoredShot, summary: ShotSummary) {
+        w.touch(shot.id)
         val values = ContentValues().apply {
             put("id", shot.id)
             put("completed_at", shot.completedAtMs)
@@ -219,7 +293,7 @@ internal class HistoryTables(private val json: Json) {
             put("profile_json", profileJson(shot))
             put("brew_series_json", brewSeriesJson(shot))
         }
-        db.insertWithOnConflict("shots", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        w.db.insertWithOnConflict("shots", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
     /**
@@ -228,14 +302,15 @@ internal class HistoryTables(private val json: Json) {
      * doesn't carry stays as stored. A row the table doesn't hold yet goes in
      * whole.
      */
-    fun upsert(db: SQLiteDatabase, shot: StoredShot, summary: ShotSummary) {
+    fun upsert(w: ShotsWrite, shot: StoredShot, summary: ShotSummary) {
+        w.touch(shot.id)
         val values = ContentValues().apply {
             put("completed_at", shot.completedAtMs)
             put("row_json", rowJson(shot, summary))
             profileJson(shot)?.let { put("profile_json", it) }
             brewSeriesJson(shot)?.let { put("brew_series_json", it) }
         }
-        if (db.update("shots", values, "id = ?", arrayOf(shot.id)) == 0) putFull(db, shot, summary)
+        if (w.db.update("shots", values, "id = ?", arrayOf(shot.id)) == 0) putFull(w, shot, summary)
     }
 
     /** The ids of the rows whose profile column is set. */
@@ -247,8 +322,9 @@ internal class HistoryTables(private val json: Json) {
         }
 
     /** Set [id]'s profile column alone: the row and its brew series stay as stored. */
-    fun putProfile(db: SQLiteDatabase, id: String, profile: JsonObject) {
-        db.update("shots", ContentValues().apply { put("profile_json", profile.toString()) }, "id = ?", arrayOf(id))
+    fun putProfile(w: ShotsWrite, id: String, profile: JsonObject) {
+        w.touch(id)
+        w.db.update("shots", ContentValues().apply { put("profile_json", profile.toString()) }, "id = ?", arrayOf(id))
     }
 
     /** The bytes [ids]' rows take in `shots`: row, profile and brew series (Free up space's preview, #310 P6a). */
@@ -264,15 +340,43 @@ internal class HistoryTables(private val json: Json) {
         return total
     }
 
-    fun delete(db: SQLiteDatabase, ids: Collection<String>) {
+    fun delete(w: ShotsWrite, ids: Collection<String>) {
+        for (id in ids) w.touch(id)
         for (chunk in ids.chunked(500)) {
-            db.delete("shots", "id IN (${chunk.joinToString(",") { "?" }})", chunk.toTypedArray())
+            w.db.delete("shots", "id IN (${chunk.joinToString(",") { "?" }})", chunk.toTypedArray())
         }
     }
 
-    fun clear(db: SQLiteDatabase) {
-        db.delete("shots", null, null)
-        db.delete("meta", null, null)
+    fun clear(w: ShotsWrite) {
+        w.clearAll()
+        w.db.delete("shots", null, null)
+        w.db.delete("meta", null, null)
+    }
+
+    /** [ids]' `row_json` as stored, by id: what the index mirrors (A1). An id the table lacks is absent. */
+    fun rawRows(db: SQLiteDatabase, ids: Collection<String>): Map<String, String> {
+        val out = HashMap<String, String>()
+        for (chunk in ids.chunked(500)) {
+            val marks = chunk.joinToString(",") { "?" }
+            db.rawQuery("SELECT id, row_json FROM shots WHERE id IN ($marks)", chunk.toTypedArray()).use { c ->
+                while (c.moveToNext()) out[c.getString(0)] = c.getString(1)
+            }
+        }
+        return out
+    }
+
+    /** Up to [limit] rows' ids and `row_json` as stored, by id, after [afterId]: the full diff's batches (A1). */
+    fun rawPage(db: SQLiteDatabase, afterId: String?, limit: Int): List<Pair<String, String>> {
+        val c = if (afterId == null) {
+            db.rawQuery("SELECT id, row_json FROM shots ORDER BY id LIMIT $limit", null)
+        } else {
+            db.rawQuery("SELECT id, row_json FROM shots WHERE id > ? ORDER BY id LIMIT $limit", arrayOf(afterId))
+        }
+        return c.use {
+            val out = ArrayList<Pair<String, String>>(it.count)
+            while (it.moveToNext()) out += it.getString(0) to it.getString(1)
+            out
+        }
     }
 
     fun meta(db: SQLiteDatabase, key: String): String? =
