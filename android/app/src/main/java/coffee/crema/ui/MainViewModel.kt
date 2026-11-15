@@ -1382,7 +1382,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         // The stage-1 index (#310 A1) once the rows are in: its boot check, and
         // a full diff on a miss, a batch at a time. Nothing reads it yet.
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             historyLoad.join()
             library.syncHistoryIndex()
         }

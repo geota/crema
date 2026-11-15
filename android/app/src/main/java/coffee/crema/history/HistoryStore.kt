@@ -1583,10 +1583,15 @@ class HistoryStore(
 
     // ── The stage-1 index (#310 A1, SQLite SPEC §11 stage 1) ─────────────────
 
-    /** [block] under the store's lock on IO, with `shots.db` when the rows are in it this session. */
+    /**
+     * [block] under the store's lock, with `shots.db` when the rows are in it
+     * this session. The lock is taken and released on IO, never on the
+     * caller's dispatcher: a background sync started on Main must not need
+     * Main to let a save through.
+     */
     private suspend fun <T> withShots(block: (SQLiteDatabase?) -> T): T =
-        lock.withLock {
-            withContext(Dispatchers.IO) { block(if (mode == Mode.SQL) runCatching { db().readableDatabase }.getOrNull() else null) }
+        withContext(Dispatchers.IO) {
+            lock.withLock { block(if (mode == Mode.SQL) runCatching { db().readableDatabase }.getOrNull() else null) }
         }
 
     /**
@@ -1603,7 +1608,7 @@ class HistoryStore(
 
     /** Test seam: close the index as a process death would, so another store (or the test) can open the file. */
     @androidx.annotation.VisibleForTesting
-    internal suspend fun closeIndexForTest() = lock.withLock { index.closeAll() }
+    internal suspend fun closeIndexForTest() = withContext(Dispatchers.IO) { lock.withLock { index.closeAll() } }
 
     /** The index's health, for the debug screen. */
     suspend fun indexHealth(): IndexHealth = withShots { index.health(it) }
