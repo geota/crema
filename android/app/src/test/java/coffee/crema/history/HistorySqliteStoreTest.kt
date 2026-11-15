@@ -58,6 +58,8 @@ class HistorySqliteStoreTest {
         HistoryStore.faults.clear()
         HistoryStore.freeSpaceForTest = null
         SeriesFiles.beforeWrite = {}
+        QuarantineHandler.renameFile = { from, to -> from.renameTo(to) }
+        QuarantineHandler.deleteFile = { it.delete() }
         SafeFile.resetForTest()
     }
 
@@ -389,6 +391,45 @@ class HistorySqliteStoreTest {
         assertEquals(HistoryHealth.OK, back.health)
         val all = store().load().map { it.id }.toSet()
         assertEquals(rows.map { it.id }.toSet() + "during", all)
+    }
+
+    // ── #408 N9: a -wal that won't move never stays beside a fresh shots.db ──
+
+    private val oldWal = ByteArray(4096) { (it * 7 + 3).toByte() }
+
+    /** A migrated store damaged at rest, its -wal (the old db's frames) still beside it. */
+    private suspend fun damagedWithWal() {
+        migratedWithPostShot()
+        File(dbFile.path + "-shm").delete()
+        File(dbFile.path + "-wal").writeBytes(oldWal)
+        dbFile.writeBytes(ByteArray(8192) { (it * 31).toByte() })
+    }
+
+    @Test
+    fun `a -wal that won't rename is copied and removed before the main file moves`() {
+        val dir = File(filesDir, "q").apply { mkdirs() }
+        val main = File(dir, "x.db").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val wal = File(main.path + "-wal").apply { writeBytes(oldWal) }
+        QuarantineHandler.renameFile = { from, to -> if (from == wal) false else from.renameTo(to) }
+        val h = QuarantineHandler { 42L }
+        assertTrue(h.quarantine(main))
+        assertFalse(wal.exists(), "nothing of the old db stays beside a fresh one")
+        assertTrue(File(main.path + ".corrupt-42-wal").readBytes().contentEquals(oldWal), "its frames kept aside")
+        assertEquals(File(main.path + ".corrupt-42"), h.quarantined)
+    }
+
+    @Test
+    fun `a -wal that can't be moved or removed fails the quarantine, and no fresh db opens beside it`() = runBlocking {
+        damagedWithWal()
+        val damaged = dbFile.readBytes()
+        val wal = File(dbFile.path + "-wal")
+        QuarantineHandler.renameFile = { from, to -> if (from == wal) false else from.renameTo(to) }
+        QuarantineHandler.deleteFile = { f -> if (f == wal) false else f.delete() }
+        val health = store().loadAll().health
+        assertTrue(health == HistoryHealth.UNAVAILABLE || health == HistoryHealth.LOST, "never OK: $health")
+        assertTrue(dbFile.readBytes().contentEquals(damaged), "the damaged file stays where it is: no fresh db took its place")
+        assertTrue(wal.readBytes().contentEquals(oldWal), "and its -wal with it")
+        assertFalse(dbFile.parentFile!!.listFiles()!!.any { it.name.startsWith(HistoryStore.NEXT_DB_NAME + ".corrupt-") }, "nothing half moved")
     }
 
     @Test

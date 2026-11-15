@@ -43,29 +43,58 @@ internal class QuarantineHandler(private val now: () -> Long = System::currentTi
 
     /**
      * Move [main] and its siblings aside; true when the main file moved (or
-     * wasn't there). A sibling that won't move is copied, so the kept-aside set
-     * holds the `-wal`'s latest commits even when the original is deleted later
-     * (#408 N5).
+     * wasn't there). The siblings go first, and the main file only once none
+     * of them is left beside it: a fresh `shots.db` opened next to the old
+     * `-wal` could replay its frames (#408 N9). A sibling that won't rename is
+     * copied, the copy checked, and the original deleted. If that fails, the
+     * siblings moved so far go back and nothing else moves, so the store reads
+     * as unavailable rather than opening a fresh file.
      */
     fun quarantine(main: File): Boolean {
         val stamp = now()
-        var moved = true
-        for (suffix in SIBLINGS) {
+        val moved = ArrayList<Pair<File, File>>()
+        for (suffix in SIBLINGS.filter { it.isNotEmpty() }) {
             val f = File(main.path + suffix)
             if (!f.exists()) continue
             val to = File("${main.path}$CORRUPT$stamp$suffix")
-            if (!f.renameTo(to)) {
-                if (suffix.isEmpty()) moved = false else runCatching { f.copyTo(to, overwrite = true) }
-            } else if (suffix.isEmpty()) {
-                quarantined = to
+            if (!moveAside(f, to)) {
+                for ((from, at) in moved.asReversed()) runCatching { renameFile(at, from) }
+                return false
             }
+            moved += f to to
         }
-        return moved
+        if (!main.exists()) return true
+        val to = File("${main.path}$CORRUPT$stamp")
+        if (!renameFile(main, to)) {
+            for ((from, at) in moved.asReversed()) runCatching { renameFile(at, from) }
+            return false
+        }
+        quarantined = to
+        return true
+    }
+
+    /** [f] to [to] by a rename, or else a checked copy and the original deleted. False when [f] stays. */
+    private fun moveAside(f: File, to: File): Boolean {
+        if (renameFile(f, to)) return true
+        val copied = runCatching {
+            f.copyTo(to, overwrite = true)
+            to.readBytes().contentEquals(f.readBytes())
+        }.getOrDefault(false)
+        if (copied && deleteFile(f)) return true
+        runCatching { to.delete() }
+        return false
     }
 
     companion object {
         const val CORRUPT = ".corrupt-"
         val SIBLINGS = listOf("", "-wal", "-shm", "-journal")
+
+        /** Test seams: a rename or a delete that fails. */
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var renameFile: (File, File) -> Boolean = { from, to -> from.renameTo(to) }
+
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var deleteFile: (File) -> Boolean = { it.delete() }
     }
 }
 
