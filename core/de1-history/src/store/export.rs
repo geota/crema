@@ -225,12 +225,21 @@ impl Store {
     }
 
     /// One restore batch: an upsert by id, the incoming rows winning (P3
-    /// spec P3). The same call as [`Store::upsert`], named for the flow.
+    /// spec P3). [`Store::upsert`] with every row's `pulled` forced off.
     ///
     /// # Errors
     /// As [`Store::upsert`].
     pub fn restore_batch(&mut self, rows: &[RowIn]) -> Result<Written> {
-        self.upsert(rows)
+        // A backup row is never a pulled duplicate: skipping it would leave
+        // the wipe to remove the local row too (REVIEW-442 note 5).
+        let rows: Vec<RowIn> = rows
+            .iter()
+            .map(|r| RowIn {
+                pulled: false,
+                ..r.clone()
+            })
+            .collect();
+        self.upsert(&rows)
     }
 
     /// Up to `limit` rows, by `rid` after `after_rid`, that the store held

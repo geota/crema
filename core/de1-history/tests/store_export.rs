@@ -9,7 +9,7 @@ use std::fs;
 
 use common::{create, dir, file, fts_whole, int, reopen, row, rows_in, stored_rows};
 use de1_history::store::{
-    IndexState, IndexWrite, JournalMode, OpenOptions, Recovery, Role, Store, StoreError,
+    IndexState, IndexWrite, JournalMode, OpenOptions, Recovery, Role, RowIn, Store, StoreError,
 };
 use serde_json::json;
 
@@ -641,4 +641,103 @@ fn a_held_row_written_again_is_no_longer_held() {
             .1;
         assert_eq!(stored, back);
     }
+}
+
+/// REVIEW-442 note 4: the snapshot moves forward only. An older truth (a
+/// lower `write_seq` or `generation`) never replaces a newer one.
+#[test]
+fn an_older_truth_never_overwrites_a_newer_one() {
+    let d = dir();
+    let live = file(&d, "history.db");
+    let snap = file(&d, "history-snapshot.db");
+    {
+        let mut truth = create(&live);
+        truth
+            .upsert(&rows_in(&[row("a", 1, json!({}))]))
+            .expect("writes");
+        truth.close().expect("closes");
+    }
+    finish(&live);
+    let mut truth = Store::open(&live, OpenOptions::new(Role::Authority)).expect("opens");
+    truth
+        .copy_to(&snap, None, JournalMode::Wal)
+        .expect("snapshots");
+    truth
+        .upsert(&rows_in(&[row("b", 2, json!({}))]))
+        .expect("writes");
+    truth
+        .copy_to(&snap, None, JournalMode::Wal)
+        .expect("a newer snapshot");
+    truth
+        .upsert(&rows_in(&[row("c", 3, json!({}))]))
+        .expect("writes");
+    drop(truth);
+    // The snapshot (write_seq 2) onto the live file (write_seq 3): refused.
+    let before = fs::read(&live).expect("reads");
+    let old = Store::open(&snap, OpenOptions::new(Role::Authority)).expect("opens");
+    let err = old
+        .copy_to(&live, None, JournalMode::Wal)
+        .expect_err("refused");
+    assert!(matches!(err, StoreError::Refused(_)), "{err:?}");
+    assert!(
+        fs::read(&live).expect("reads") == before,
+        "the truth changed"
+    );
+    drop(old);
+    // An older generation, even with more writes: refused too.
+    let gen2 = file(&d, "history-2.db");
+    fs::copy(&live, &gen2).expect("copies");
+    {
+        let c = rusqlite::Connection::open(&gen2).expect("opens");
+        c.execute_batch("UPDATE meta SET value = '2' WHERE key = 'generation'")
+            .expect("marks");
+    }
+    {
+        let mut older = Store::open(&live, OpenOptions::new(Role::Authority)).expect("opens");
+        for i in 0..5 {
+            older
+                .upsert(&rows_in(&[row(&format!("more{i}"), 9, json!({}))]))
+                .expect("writes");
+        }
+        let err = older
+            .copy_to(&gen2, None, JournalMode::Wal)
+            .expect_err("refused");
+        assert!(matches!(err, StoreError::Refused(_)), "{err:?}");
+    }
+    let gen2_store = Store::open(&gen2, OpenOptions::new(Role::Authority)).expect("opens");
+    assert_eq!(gen2_store.info().generation, 2);
+}
+
+/// REVIEW-442 note 5: a restore row flagged as pulled is restored anyway,
+/// not skipped as a duplicate of the local row the wipe then removes.
+#[test]
+fn a_restore_row_is_never_a_pulled_duplicate() {
+    let d = dir();
+    let mut store = create(&file(&d, "history.db"));
+    store
+        .upsert(&rows_in(&[row(
+            "local",
+            1,
+            json!({ "visualizerId": "v1" }),
+        )]))
+        .expect("writes");
+    let begin = store.restore_begin().expect("begins");
+    let w = store
+        .restore_batch(&[RowIn {
+            row_json: row("backup", 1, json!({ "visualizerId": "v1" })),
+            heavy: None,
+            pulled: true,
+        }])
+        .expect("writes");
+    assert!(w.duplicates.is_empty());
+    assert_eq!(w.change.upserted, ["backup"]);
+    let wipe: Vec<String> = store
+        .ids_created_before(begin, 0, 100)
+        .expect("reads")
+        .into_iter()
+        .map(|r| r.id)
+        .filter(|id| id != "backup")
+        .collect();
+    store.delete(&wipe).expect("deletes");
+    assert_eq!(ids_of(&store), set(&["backup"]));
 }

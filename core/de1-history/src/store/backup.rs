@@ -5,7 +5,8 @@
 //!   online backup API, between two connections to two files (S4). It never
 //!   overwrites a finished truth file from anything but another one: a copy
 //!   from an index onto a `history.db` whose `meta.migration` says `done` is
-//!   refused, as is any destination that isn't ours or doesn't open.
+//!   refused, as is a truth file onto a newer one (a higher `write_seq` or
+//!   `generation`), and any destination that isn't ours or doesn't open.
 //! - [`Store::create_recovery`] makes a new `history-<n>.db` after `lost`,
 //!   with its `migration_source` and late-row baseline from the caller, so
 //!   the next boot's late-row step imports only what an older build writes
@@ -101,6 +102,16 @@ fn holds_something(path: &Path, vfs: Option<&str>) -> Result<bool> {
     Ok(check().unwrap_or(true))
 }
 
+/// `meta.write_seq` and `meta.generation`, 0 when missing.
+fn seq_and_generation(conn: &Connection) -> rusqlite::Result<(u64, u64)> {
+    let num = |k: &str| -> rusqlite::Result<u64> {
+        Ok(meta_text(conn, k)?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0))
+    };
+    Ok((num("write_seq")?, num("generation")?))
+}
+
 fn has_table(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
     conn.query_row(
         "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1",
@@ -187,10 +198,24 @@ impl Store {
             }
             let src_truth =
                 finished_truth(&self.conn).map_err(|e| error_of(&e, Source::Session))?;
-            if finished_truth(&dst).map_err(open_err)? && !src_truth {
-                return Err(StoreError::Refused(
-                    "the destination is a finished history file".into(),
-                ));
+            if finished_truth(&dst).map_err(open_err)? {
+                if !src_truth {
+                    return Err(StoreError::Refused(
+                        "the destination is a finished history file".into(),
+                    ));
+                }
+                // Truth onto truth is the snapshot, which only moves forward:
+                // an older snapshot or generation never replaces a newer
+                // truth (REVIEW-442 note 4).
+                let (src_seq, src_gen) =
+                    seq_and_generation(&self.conn).map_err(|e| error_of(&e, Source::Session))?;
+                let (dst_seq, dst_gen) = seq_and_generation(&dst).map_err(open_err)?;
+                if dst_seq > src_seq || dst_gen > src_gen {
+                    return Err(StoreError::Refused(format!(
+                        "the destination is newer (write_seq {dst_seq}, generation {dst_gen}) \
+                         than this file (write_seq {src_seq}, generation {src_gen})"
+                    )));
+                }
             }
         }
         let backup =
