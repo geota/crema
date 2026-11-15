@@ -489,6 +489,13 @@ impl SimScale {
         }
     }
 
+    /// Whether it reports the truth whenever it reports: healthy, or
+    /// flapping.
+    #[must_use]
+    pub fn honest(&self) -> bool {
+        matches!(self.mode, ScaleMode::Healthy | ScaleMode::Flap { .. })
+    }
+
     /// Start misbehaving this way.
     pub fn set_mode(&mut self, mode: ScaleMode) {
         self.mode = mode;

@@ -413,7 +413,19 @@ pub struct AutoStop {
     /// The weight leg's lead at its last live reading, grams: what the
     /// estimate stops short of the target by.
     lead_g: f32,
+    /// The flow estimate at the last reading, g/s: the trend a return's
+    /// step is checked against.
+    last_flow: f32,
 }
+
+/// A return restarts the weight leg's flow window only past this gap
+/// ([`AutoStop::on_return`]): the stale window.
+const RESTART_GAP_MIN: Duration = Duration::from_secs(1);
+/// ... and past this many of the scale's own median report intervals.
+const RESTART_GAP_INTERVALS: u32 = 3;
+/// How far a long gap's step may stray from the flow before it, grams,
+/// before the slope across it stops counting as flow.
+const RESTART_OFF_TREND_G: f32 = 3.0;
 
 /// The instant the weight leg fired, captured for post-shot drip learning
 /// (the training sample's inputs — `drip = final − weight_g`,
@@ -444,6 +456,7 @@ impl AutoStop {
             stop_capture: None,
             estimate: None,
             lead_g: 0.0,
+            last_flow: 0.0,
         }
     }
 
@@ -487,18 +500,32 @@ impl AutoStop {
     }
 
     /// The first reading after a scale gap, before [`on_weight`](Self::on_weight)
-    /// reads it. A step across the gap that the step band would call a
-    /// disturbance between live readings (`3 g + 12 g/s × dt`) is no pour:
-    /// the scale lied, re-zeroed or was disturbed meanwhile, so the flow
-    /// history is forgotten and the slope across the gap never feeds the
-    /// lead (#412). A step a pour could make keeps the history, so a scale
-    /// that reports every second or slower keeps its lead.
+    /// reads it. The flow history is forgotten, so the slope across the gap
+    /// never feeds the lead, when the step across the gap says the scale
+    /// lied, re-zeroed or was disturbed meanwhile (#412):
+    /// - a step the step band would call a disturbance between live
+    ///   readings (`3 g + 12 g/s × dt`), which no pour makes at any pace;
+    /// - or, on a gap long for this scale (over 1 s and over 3 × its median
+    ///   report interval), a step more than 3 g off the flow before the gap:
+    ///   a scale that read 0 g while the cup filled comes back on a step
+    ///   the flow before it never predicted.
+    ///
+    /// A scale that reports every second or slower has no long gaps at its
+    /// own pace, and an honest gap's step follows the flow before it, so
+    /// both keep their history and their lead.
     pub fn on_return(&mut self, grams: f32, now: Duration) {
         let Some((at, before)) = self.flow.newest() else {
             return;
         };
-        let dt_s = now.saturating_sub(at).as_secs_f32();
-        if (grams - before).abs() > DISTURB_STEP_G + DISTURB_RATE_G_S * dt_s {
+        let gap = now.saturating_sub(at);
+        let step = grams - before;
+        let jump = step.abs() > DISTURB_STEP_G + DISTURB_RATE_G_S * gap.as_secs_f32();
+        let long = self
+            .flow
+            .median_interval()
+            .is_some_and(|interval| gap > RESTART_GAP_MIN.max(interval * RESTART_GAP_INTERVALS));
+        let off_trend = (step - self.last_flow * gap.as_secs_f32()).abs() > RESTART_OFF_TREND_G;
+        if jump || (long && off_trend) {
             self.flow.reset();
         }
     }
@@ -560,6 +587,7 @@ impl AutoStop {
             return None;
         }
         let estimate = self.flow.update(grams, now);
+        self.last_flow = estimate.flow;
 
         if let Some(reason) = self.check_max_time(now) {
             return Some(reason);

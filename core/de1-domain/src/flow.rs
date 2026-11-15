@@ -114,6 +114,23 @@ impl FlowEstimator {
             .map(|&(t, w)| (Duration::from_millis(t), w))
     }
 
+    /// The median time between consecutive readings in the window: the
+    /// scale's own report interval. `None` under two readings.
+    #[must_use]
+    pub fn median_interval(&self) -> Option<Duration> {
+        let mut gaps: Vec<u64> = self
+            .samples
+            .iter()
+            .zip(self.samples.iter().skip(1))
+            .map(|(a, b)| b.0.saturating_sub(a.0))
+            .collect();
+        if gaps.is_empty() {
+            return None;
+        }
+        gaps.sort_unstable();
+        Some(Duration::from_millis(gaps[gaps.len() / 2]))
+    }
+
     /// The sample `back` positions before the newest (`back == 0` is newest).
     ///
     /// Callers must ensure `back` is within the current sample count.
@@ -206,6 +223,19 @@ mod tests {
     /// Helper: a `Duration` of `ms` milliseconds.
     fn ms(ms: u64) -> Duration {
         Duration::from_millis(ms)
+    }
+
+    /// The median report interval ignores one long gap: 100 ms readings with
+    /// a 2 s gap read as 100 ms.
+    #[test]
+    fn median_interval_is_the_scales_own_pace() {
+        let mut estimator = FlowEstimator::new(FlowAlgorithm::TheilSen);
+        assert_eq!(estimator.median_interval(), None);
+        for t in [0, 100, 200, 300, 2_300, 2_400] {
+            estimator.update(0.0, ms(t));
+        }
+        assert_eq!(estimator.median_interval(), Some(ms(100)));
+        assert_eq!(estimator.newest(), Some((ms(2_400), 0.0)));
     }
 
     /// Feed `count` samples of a clean ramp — `k` grams at `t = k·100 ms`, a

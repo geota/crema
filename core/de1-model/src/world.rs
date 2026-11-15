@@ -15,7 +15,7 @@ const STEP_MS: u64 = 100;
 const SAMPLE_MS: u64 = 200;
 /// The shells' tick.
 const TICK_MS: u64 = 1_000;
-/// I13's tolerance to start with (`DESIGN.md` §7).
+/// I13's tolerance to start with (`DESIGN.md` §7), and I22's.
 const WEIGHT_TOLERANCE_G: f32 = 6.0;
 /// The reply to the machine-model read, from the capture: a DE1 model 2.
 const MODEL_READ: [u8; 20] = [
@@ -260,6 +260,11 @@ pub struct World {
     /// This espresso opened from a zeroed cup: a tare, or `|net| ≤ 2 g`.
     /// Auto-tare off on a loaded scale has no weight-stop guarantee (§3.5).
     opened_near_zero: bool,
+    /// I22's honest session: since this espresso opened, the scale stayed
+    /// connected and healthy or flapping, the DE1's link stayed up with its
+    /// states and samples heard, and the weight target stayed put. A late
+    /// stop then has no excuse past a flap's gap, which I22's 6 g covers.
+    honest: bool,
     /// The load on the scale at the last reading, grams.
     last_load: f32,
     /// What the run reached.
@@ -342,6 +347,7 @@ impl World {
             gate_seen: false,
             last_cup_g: 0.0,
             opened_near_zero: true,
+            honest: false,
             last_load: 0.0,
             coverage: Coverage::default(),
             violations: Vec::new(),
@@ -464,10 +470,12 @@ impl World {
                 self.ingest(out, Who::User);
             }
             Op::SetProfileTarget(g) => {
+                self.honest &= g == self.profile_target_g;
                 self.profile_target_g = g;
                 self.apply_targets();
             }
             Op::Dial(g) => {
+                self.honest &= g == self.dial_g;
                 self.dial_g = g;
                 self.apply_targets();
             }
@@ -488,14 +496,17 @@ impl World {
             Op::Scale(mode) => {
                 if let Some(scale) = &mut self.scale {
                     scale.set_mode(mode);
+                    self.honest &= scale.honest();
                 }
             }
             Op::ScaleDisconnect => {
+                self.honest = false;
                 self.scale = None;
                 self.core.disconnect_scale();
             }
             Op::ScaleConnect => {
                 if self.scale.is_none() {
+                    self.honest = false;
                     self.scale = Some(SimScale::new(self.tare_latency_ms));
                     self.core.connect_scale("BOOKOO_SC", &[]);
                     self.scale_fresh = true;
@@ -504,12 +515,19 @@ impl World {
             }
             Op::LoseWrites(n) => self.link.lose_writes += n,
             Op::DuplicateWrites(n) => self.link.duplicate_writes += n,
-            Op::LoseStates(n) => self.link.lose_states += n,
-            Op::MuteSamples { ms } => self.link.samples_muted_until = self.now + ms,
+            Op::LoseStates(n) => {
+                self.honest = false;
+                self.link.lose_states += n;
+            }
+            Op::MuteSamples { ms } => {
+                self.honest = false;
+                self.link.samples_muted_until = self.now + ms;
+            }
             Op::HangWrite => self.lane.hang_next = true,
             Op::ReorderWrites => self.lane.reorder_next = true,
             Op::DelayWrite { ms } => self.lane.delay_next_ms = ms,
             Op::LinkDown { ms } => {
+                self.honest = false;
                 if !self.link.down(self.now) {
                     self.coverage.drops += 1;
                     self.link.down_until = Some(self.now + ms);
@@ -529,6 +547,7 @@ impl World {
                 }
             }
             Op::Attach => {
+                self.honest = false;
                 self.core = CremaCore::new();
                 self.core.set_read_only(self.read_only);
                 self.core.set_start_settings(self.pre_flush, false, false);
@@ -556,6 +575,7 @@ impl World {
         // The user sets the profile's yield, which a shell makes the desired
         // profile at once, and taps Start on it with the dial as it is: a
         // second start of the same one needs no upload.
+        self.honest &= self.profile_target_g == Some(yield_g);
         self.profile_target_g = Some(yield_g);
         self.apply_targets();
         let (profile, qc) = self.desired();
@@ -753,6 +773,10 @@ impl World {
         // correction's 2 g). With auto-tare off on a loaded scale, the zero is
         // the user's and the design makes no weight-stop promise.
         self.opened_near_zero = self.auto_tare || reads.is_none_or(|g| g.abs() <= 2.0);
+        self.honest = self.scale.as_ref().is_some_and(SimScale::honest)
+            && !self.link.down(self.now)
+            && self.link.lose_states == 0
+            && self.now >= self.link.samples_muted_until;
     }
 
     /// I6 both ways: the core's reading of the session matches the oracle's.
@@ -1315,19 +1339,32 @@ impl World {
                             .scale
                             .as_ref()
                             .map_or(self.cup.grams, |s| s.true_net(self.cup.grams));
-                        if !self.read_only
+                        let judged = !self.read_only
                             && !self.unseen_load
                             && self.opened_near_zero
                             && self.open_mode == Some(ActiveMode::Espresso)
                             // Not a stop that lands on another mode the core
                             // didn't hear the machine enter.
-                            && self.de1.state == MachineState::Espresso
+                            && self.de1.state == MachineState::Espresso;
+                        if judged
                             && let Some(target) = self.weight_target()
                             && grams < target - WEIGHT_TOLERANCE_G
                         {
                             self.violate(
                                 Invariant::I13,
                                 format!("{reason:?} stop at a true {grams} g of {target} g"),
+                            );
+                        }
+                        if judged
+                            && self.honest
+                            && let Some(target) = self.weight_target()
+                            && grams > target + WEIGHT_TOLERANCE_G
+                        {
+                            self.violate(
+                                Invariant::I22,
+                                format!(
+                                    "{reason:?} stop at a true {grams} g of {target} g, honest scale"
+                                ),
                             );
                         }
                     }
