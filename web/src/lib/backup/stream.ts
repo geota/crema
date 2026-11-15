@@ -20,6 +20,7 @@
 import { Zip, ZipDeflate } from 'fflate';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
 import { backupPrelude, backupShotLine, backupTail } from '#lib/wasm/de1_wasm.js';
+import { BACKUP_TEMP_PREFIX, backupTempLock } from './temp-names';
 
 const MiB = 1024 * 1024;
 
@@ -72,11 +73,8 @@ export class EntryBudget {
 /** Past this, a backup built in memory may not fit: say so. */
 export const IN_MEMORY_WARN_BYTES = 512 * MiB;
 
-/** Temporary backup files in the origin private file system start with this. */
-export const BACKUP_TEMP_PREFIX = 'crema-backup-tmp-';
-
-/** The Web Lock a temporary backup file holds until its reader is done. */
-export const backupTempLock = (name: string): string => `crema-backup-tmp:${name}`;
+// A factory reset removes them too, whatever their age (#428).
+export { BACKUP_TEMP_PREFIX, backupTempLock };
 
 function navigatorLocks(): LockManagerLike | undefined {
 	return typeof navigator === 'undefined'
