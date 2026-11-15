@@ -56,22 +56,60 @@ fn files(dir: &Path, exts: &[&str]) -> Vec<PathBuf> {
     out
 }
 
-/// What reaches `sahpool`: only `pools.rs` may say any of these.
+/// What reaches `sahpool`: only `pools.rs` may say any of these. The
+/// traits are what carry `clear` and `remove` (REVIEW-444 note 1).
 const SAHPOOL_NAMES: &[&str] = &[
     "sqlite_wasm_vfs",
+    "rsqlite_vfs",
     "sahpool::",
     "OpfsSAHPoolUtil",
     "OpfsSAHPoolCfg",
+    "VfsFilesManager",
+    "DbTransfer",
 ];
 
-/// The deleting calls `pools.rs` may not make outside its tests.
-const DELETING: &[&str] = &[
-    ".clear(",
-    ".remove(",
-    "reduce_capacity",
-    "clear_on_init(true)",
-    "clear_on_init: true",
+/// The deleting methods, as calls: the word, then `(` or a turbofish, or
+/// reached by path (`::clear`). Never in `pools.rs` outside its tests;
+/// `reduce_capacity`, an inherent method a leaked util would offer without
+/// naming anything, nowhere else either.
+const DELETING_CALLS: &[&str] = &["clear", "remove", "reduce_capacity"];
+
+/// The clearing install option, with spaces taken out.
+const CLEAR_ON_INIT: &[&str] = &["clear_on_init(true)", "clear_on_init:true"];
+
+/// What a visible item of `pools.rs` may not name: the util, or the traits
+/// that delete through it.
+const LEAKS: &[&str] = &[
+    "OpfsSAHPoolUtil",
+    "VfsFilesManager",
+    "DbTransfer",
+    "sahpool::",
 ];
+
+fn ident(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Each call of the method `word` in `line`: `word` as a whole word,
+/// followed (after spaces) by `(` or `::<`, or preceded by `::`.
+fn calls(line: &str, word: &str) -> usize {
+    let mut n = 0;
+    let mut from = 0;
+    while let Some(i) = line[from..].find(word) {
+        let at = from + i;
+        let end = at + word.len();
+        from = end;
+        let before = line[..at].chars().next_back();
+        if before.is_some_and(ident) || line[end..].chars().next().is_some_and(ident) {
+            continue;
+        }
+        let rest = line[end..].trim_start();
+        if rest.starts_with('(') || rest.starts_with("::<") || line[..at].ends_with("::") {
+            n += 1;
+        }
+    }
+    n
+}
 
 /// The official `opfs-sahpool`'s deleting calls and options, in web code.
 const WEB_DELETING: &[&str] = &[
@@ -103,25 +141,67 @@ fn code_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
     })
 }
 
+/// The visible items of `text` (`pub`, `pub(crate)`, …), each as its line
+/// number and its signature up to `{` or `;`.
+fn visible_items(text: &str) -> Vec<(usize, String)> {
+    let lines: Vec<(usize, &str)> = code_lines(text).collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let (n, line) = lines[i];
+        if line.trim_start().starts_with("pub") {
+            let mut sig = String::new();
+            while i < lines.len() {
+                let l = lines[i].1;
+                sig.push_str(l);
+                sig.push(' ');
+                if l.contains('{') || l.contains(';') {
+                    break;
+                }
+                i += 1;
+            }
+            out.push((n, sig));
+        }
+        i += 1;
+    }
+    out
+}
+
 /// What `path` (relative to the repository) may not say, given its text.
 fn violations(rel: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let is_pools = rel == "core/de1-history-wasm/src/pools.rs";
     let is_self = rel == "core/de1-history-wasm/tests/sources.rs";
     if rel.ends_with(".rs") {
-        if is_pools {
-            for (n, line) in code_lines(without_tests(text)) {
-                for bad in DELETING {
-                    if line.contains(bad) {
-                        out.push(format!("{rel}:{n}: `{bad}` (a deleting call)"));
-                    }
+        if is_self {
+            return out;
+        }
+        let code = if is_pools { without_tests(text) } else { text };
+        for (n, line) in code_lines(code) {
+            let tight: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+            for bad in CLEAR_ON_INIT {
+                if tight.contains(bad) {
+                    out.push(format!("{rel}:{n}: `{bad}` (clears at install)"));
                 }
             }
-        } else if !is_self {
-            for (n, line) in code_lines(text) {
+            for word in DELETING_CALLS {
+                if (is_pools || *word == "reduce_capacity") && calls(line, word) > 0 {
+                    out.push(format!("{rel}:{n}: `{word}(` (a deleting call)"));
+                }
+            }
+            if !is_pools {
                 for name in SAHPOOL_NAMES {
                     if line.contains(name) {
                         out.push(format!("{rel}:{n}: `{name}` outside pools.rs"));
+                    }
+                }
+            }
+        }
+        if is_pools {
+            for (n, sig) in visible_items(code) {
+                for name in LEAKS {
+                    if sig.contains(name) {
+                        out.push(format!("{rel}:{n}: a visible item exposes `{name}`"));
                     }
                 }
             }
@@ -169,6 +249,12 @@ fn the_check_catches_what_it_is_for() {
         "    util.reduce_capacity(2).await?;",
         "    .clear_on_init(true)",
         "    clear_on_init: true,",
+        "    .clear_on_init( true )",
+        // REVIEW-444 P4: by path, and with a space before the parenthesis.
+        "    let _ = sqlite_wasm_rs::vfs::VfsFilesManager::clear(&util);",
+        "    let _ = <OpfsSAHPoolUtil as VfsFilesManager>::remove(&util, \"/h.db\");",
+        "    let _ = util.clear ();",
+        "    let _ = util.clear::<()>();",
     ] {
         let text = format!("fn f() {{\n{bad}\n}}\n");
         assert_eq!(violations(pools, &text).len(), 1, "{bad}");
@@ -180,6 +266,27 @@ fn the_check_catches_what_it_is_for() {
             "{bad}"
         );
     }
+    // Not deleting calls: other words, and fields.
+    for fine in [
+        "    .clear_on_init(spec.clear_on_init)",
+        "    p.borrow_mut().retain(|k, _| *k != which);",
+        "    let cleared = remove_me + clearance(1);",
+    ] {
+        assert!(
+            violations(pools, &format!("fn f() {{\n{fine}\n}}\n")).is_empty(),
+            "{fine}"
+        );
+    }
+    // A visible item that hands out the util, or a trait that deletes.
+    for leak in [
+        "pub fn leak(which: Which) -> impl sqlite_wasm_rs::vfs::VfsFilesManager {\n    todo!()\n}\n",
+        "pub(crate) fn util(\n    which: Which,\n) -> OpfsSAHPoolUtil {\n    todo!()\n}\n",
+        "pub struct Leaky {\n    pub util: OpfsSAHPoolUtil,\n}\n",
+        "pub use sqlite_wasm_rs::vfs::DbTransfer;\n",
+    ] {
+        assert!(!violations(pools, leak).is_empty(), "{leak}");
+    }
+    assert!(violations(pools, "struct Pool {\n    util: OpfsSAHPoolUtil,\n}\n").is_empty());
     for other in [
         "core/de1-history-wasm/src/db.rs",
         "core/de1-history/src/store/mod.rs",
@@ -187,6 +294,9 @@ fn the_check_catches_what_it_is_for() {
         for bad in [
             "use sqlite_wasm_vfs::sahpool::OpfsSAHPoolUtil;",
             "sahpool::install::<C>(&cfg, false)",
+            "use sqlite_wasm_rs::vfs::VfsFilesManager as _;",
+            "use rsqlite_vfs::transfer::DbTransfer;",
+            "let _ = pools::leak(which).reduce_capacity(2);",
         ] {
             assert!(!violations(other, bad).is_empty(), "{other}: {bad}");
         }

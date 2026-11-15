@@ -15,7 +15,7 @@
 //! frees every slot at install, and its util's `clear`, `remove` and
 //! `reduce_capacity` drop files and slots. This module installs with
 //! `clear_on_init(false)` stated, never calls the other three, and keeps the
-//! util private, so no other code can. A CI test (`tests/no_deleting_calls.rs`)
+//! util private, so no other code can. A CI test (`tests/sources.rs`)
 //! fails on any of those names in this file outside its own tests, and on any
 //! use of the `sahpool` util anywhere else.
 //!
@@ -118,7 +118,7 @@ pub struct Pool {
 #[serde(rename_all = "camelCase")]
 pub struct PoolError {
     /// A stable name: `notSupported`, `invalidHeader`, `filesInUse`,
-    /// `noCapacity`, `paused`, `busy`, `configurationMismatch`,
+    /// `noCapacity`, `paused`, `busy`, `needsRecovery`, `configurationMismatch`,
     /// `directoryInUse`, `opfs`, `notInstalled`, `other`.
     pub code: &'static str,
     /// The text.
@@ -139,6 +139,9 @@ impl PoolError {
             OpfsSAHError::ConfigurationMismatch => "configurationMismatch",
             OpfsSAHError::DirectoryInUse(_) => "directoryInUse",
             OpfsSAHError::Opfs { .. } => "opfs",
+            // Its text advises a clear, which discards everything: the shell
+            // pauses and resumes instead (REVIEW-444 note 9).
+            OpfsSAHError::NeedsRecovery => "needsRecovery",
             _ => "other",
         };
         PoolError {

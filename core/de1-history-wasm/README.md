@@ -10,7 +10,9 @@ FFI's (C3). Nothing in the app loads it yet; W1 adds the Worker.
   pool and retries once, and never deletes. `tests/sources.rs` fails CI on any
   deleting call there and on any use of `sahpool` elsewhere.
 - `src/db.rs`: `HistoryDb`, one store on one file.
-- `src/repair.rs`: Repair storage for a pool that won't install (S5).
+- `src/repair.rs`: Repair storage for a pool that won't install (S5). It holds the
+  source's `.lock`, copies named slots (never a sidecar without its file), reports
+  `incomplete` on an invalid or duplicated slot, and writes `.repair-done` last.
 
 ## Building it
 

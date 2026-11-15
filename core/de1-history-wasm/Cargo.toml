@@ -64,6 +64,14 @@ uuid = { version = "1", features = ["js"] }
 
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+# The crate's own tests keep truth files in memory.
+de1-history-wasm = { path = ".", features = ["memory-truth"] }
+
+[features]
+# `place: "memory"` may hold an `authority` file. Tests only: in a shipped
+# build the truth never lives in RAM (REVIEW-444 note 6). `pnpm wasm:history`
+# never turns it on.
+memory-truth = []
 
 # Like de1-wasm, not `[lints] workspace = true`: wasm-bindgen's glue needs
 # `unsafe`, and so does `sahpool`'s uninstall. The rest mirrors the workspace.

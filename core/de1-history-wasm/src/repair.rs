@@ -4,17 +4,28 @@
 //! A slot with an invalid header fails every install of its pool, which
 //! would be a lasting `unavailable`. [`repair`] reads the pool directory's
 //! slot files through OPFS directly, not through `sahpool`, and copies every
-//! slot whose header names a file (the database, its journal or WAL) into a
-//! new pool generation, `<dir>-<g>/`, byte for byte, header included, so the
-//! new pool installs with the same names. It **deletes nothing and writes
-//! nothing in the source**: files are read with `getFile()`, which takes no
-//! write lock, and the old directory stays as it is for a later attempt;
-//! only Erase removes it.
+//! slot whose header names a file into a new pool generation, `<dir>-<g>/`,
+//! byte for byte, header included, so the new pool installs with the same
+//! names. It **deletes nothing and writes nothing in the source**: files are
+//! read with `getFile()`, and the old directory stays as it is for a later
+//! attempt; only Erase removes it. The one thing it may create there is the
+//! pool's empty `.lock`, as `sahpool`'s own install does.
 //!
-//! Skipped and reported, never copied: slots whose header is invalid, slots
-//! with no name (free, or a temporary file), and every slot of a name that
-//! two slots claim (which would fail the new pool's install the same way).
-//! A target directory that already holds anything is refused.
+//! - **One owner** (REVIEW-444 note 4): repair holds the source's `.lock`
+//!   through a sync access handle for the whole run, the lease `sahpool`
+//!   takes at install. A pool installed in any Worker, this one included,
+//!   refuses it (`sourceInUse`), so repair never copies a pool in motion.
+//! - **Skipped and reported:** slots whose header is invalid, slots with no
+//!   name, and every slot of a name two slots claim. Either of the first and
+//!   last makes the report `incomplete` (REVIEW-444 note 2): the shell records
+//!   the new generation only when `copied` holds the marker's file.
+//! - **No sidecar without its file:** a `-journal` or `-wal` is copied only
+//!   with its main file, so an orphaned hot journal never meets a later file
+//!   of that name. Sidecars are copied first.
+//! - **Done last** (REVIEW-444 note 3): `<to>/.repair-done`, holding the
+//!   report, is written after every slot. A target without it is unfinished,
+//!   and the shell never installs it. A target that already holds anything
+//!   is refused.
 
 use js_sys::{Array, Reflect, Uint8Array};
 use serde::Serialize;
@@ -118,6 +129,52 @@ pub fn read_header(size: u64, head: &[u8]) -> Slot {
     }
     Slot::Named(name.to_owned())
 }
+
+/// What a named slot holds, from its header's open flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A database.
+    Main,
+    /// A database's rollback journal (`-journal`).
+    Journal,
+    /// A database's WAL (`-wal`).
+    Wal,
+    /// A super-journal, for a transaction over several databases.
+    SuperJournal,
+}
+
+/// The kind a named slot's header gives; `None` when it names none.
+#[must_use]
+pub fn kind_of(head: &[u8]) -> Option<Kind> {
+    if head.len() < HEADER_BYTES {
+        return None;
+    }
+    let flags = u32::from_be_bytes([
+        head[NAME_BYTES],
+        head[NAME_BYTES + 1],
+        head[NAME_BYTES + 2],
+        head[NAME_BYTES + 3],
+    ]);
+    match flags & PERSISTENT {
+        f if f == SQLITE_OPEN_MAIN_DB as u32 => Some(Kind::Main),
+        f if f == SQLITE_OPEN_MAIN_JOURNAL as u32 => Some(Kind::Journal),
+        f if f == SQLITE_OPEN_WAL as u32 => Some(Kind::Wal),
+        f if f == SQLITE_OPEN_SUPER_JOURNAL as u32 => Some(Kind::SuperJournal),
+        _ => None,
+    }
+}
+
+/// The main file a sidecar belongs to.
+fn main_of(name: &str, kind: Kind) -> Option<&str> {
+    match kind {
+        Kind::Journal => name.strip_suffix("-journal"),
+        Kind::Wal => name.strip_suffix("-wal"),
+        Kind::Main | Kind::SuperJournal => None,
+    }
+}
+
+/// The file repair writes last into its target (REVIEW-444 note 3).
+pub const REPAIR_DONE: &str = ".repair-done";
 
 /// What went wrong in OPFS.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -389,18 +446,56 @@ pub struct RepairReport {
     pub slots: Vec<SlotReport>,
     /// The names copied, sorted.
     pub copied: Vec<String>,
+    /// A slot was invalid or a name was claimed twice: the source may hold
+    /// a file the target doesn't, maybe the database itself. The shell
+    /// records the generation only when `copied` holds the marker's file.
+    pub incomplete: bool,
+    /// What made it incomplete, one line each.
+    pub problems: Vec<String>,
+}
+
+/// A sync access handle held for a scope, closed on drop.
+struct Lease(FileSystemSyncAccessHandle);
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
+/// Takes `dir`'s `.lock`, the lease `sahpool` holds while a pool is
+/// installed: refused while any Worker has the pool.
+async fn lease(dir: &FileSystemDirectoryHandle, path: &str) -> Result<Lease> {
+    let opts = FileSystemGetFileOptions::new();
+    opts.set_create(true);
+    let handle: FileSystemFileHandle = wait(
+        "open the pool lock",
+        dir.get_file_handle_with_options(".lock", &opts),
+    )
+    .await?
+    .into();
+    match JsFuture::from(handle.create_sync_access_handle()).await {
+        Ok(h) => Ok(Lease(h.into())),
+        Err(e) => {
+            let err = OpfsError::js("take the pool lock", &e);
+            Err(OpfsError::new(
+                "sourceInUse",
+                format!("{path} is open in a Worker: {}", err.message),
+            ))
+        }
+    }
 }
 
 /// Copies every named slot of `which`'s pool at generation `from` into a
-/// new directory for generation `to` (module docs). The source is read only.
-/// The pool must not be installed at `from` in this Worker (it would hold
-/// the handles); the shell runs repair after a failed install.
+/// new directory for generation `to` (module docs). The source is only
+/// read, under its own lease.
 ///
 /// # Errors
-/// `sameDirectory`; `notFound` for a missing source; `targetExists` when the
-/// target holds anything; an OPFS error. A failure part way leaves the
-/// source as it was and the target partly written: the shell retries with a
-/// higher generation.
+/// `sameDirectory`; `notFound` for a missing source; `sourceInUse` while a
+/// Worker has the pool installed; `targetExists` when the target holds
+/// anything; an OPFS error. A failure part way leaves the source as it was
+/// and the target without [`REPAIR_DONE`]: the shell retries with a higher
+/// generation.
 pub async fn repair(which: Which, from: u32, to: u32) -> Result<RepairReport> {
     let spec = which.spec();
     let (from_dir, to_dir) = (spec.dir_for(from), spec.dir_for(to));
@@ -408,16 +503,20 @@ pub async fn repair(which: Which, from: u32, to: u32) -> Result<RepairReport> {
         return Err(OpfsError::new("sameDirectory", from_dir));
     }
     debug_assert!(to_dir.starts_with(OPFS_PREFIX));
-    let src = dir_at(&format!("{from_dir}/{SLOTS_DIR}"), false)
+    let pool_dir = dir_at(&from_dir, false)
+        .await?
+        .ok_or_else(|| OpfsError::new("notFound", from_dir.clone()))?;
+    let src = subdir(&pool_dir, SLOTS_DIR, false)
         .await?
         .ok_or_else(|| OpfsError::new("notFound", format!("{from_dir}/{SLOTS_DIR}")))?;
+    let _lease = lease(&pool_dir, &from_dir).await?;
     if let Some(existing) = dir_at(&to_dir, false).await?
         && !entries(&existing).await?.is_empty()
     {
         return Err(OpfsError::new("targetExists", to_dir));
     }
-    // Read every header first, so names two slots claim are known before
-    // anything is written.
+    // Read every header first: names two slots claim, and which main files
+    // will be copied, are known before anything is written.
     let mut slots = Vec::new();
     for (opaque, handle, is_file) in entries(&src).await? {
         if !is_file {
@@ -426,37 +525,68 @@ pub async fn repair(which: Which, from: u32, to: u32) -> Result<RepairReport> {
         let file = file_of(&handle.unchecked_into()).await?;
         let len = size_of(&file);
         let head = bytes(&file, 0, len.min(DATA_OFFSET)).await?;
-        slots.push((opaque, file, len, read_header(len, &head)));
+        let slot = read_header(len, &head);
+        let kind = kind_of(&head);
+        slots.push((opaque, file, len, slot, kind));
     }
-    let mut seen = std::collections::BTreeMap::<String, u32>::new();
-    for (_, _, _, slot) in &slots {
+    let mut claims = std::collections::BTreeMap::<String, u32>::new();
+    for (_, _, _, slot, _) in &slots {
         if let Slot::Named(n) = slot {
-            *seen.entry(n.clone()).or_default() += 1;
+            *claims.entry(n.clone()).or_default() += 1;
         }
     }
-    let target = dir_at(&format!("{to_dir}/{SLOTS_DIR}"), true)
-        .await?
-        .ok_or_else(|| OpfsError::new("notFound", to_dir.clone()))?;
+    let once = |n: &str| claims.get(n).copied() == Some(1);
+    let mains: std::collections::BTreeSet<String> = slots
+        .iter()
+        .filter_map(|(_, _, _, slot, kind)| match (slot, kind) {
+            (Slot::Named(n), Some(Kind::Main)) if once(n) => Some(n.clone()),
+            _ => None,
+        })
+        .collect();
     let mut report = RepairReport {
         from: from_dir,
-        to: to_dir,
+        to: to_dir.clone(),
         slots: Vec::new(),
         copied: Vec::new(),
+        incomplete: false,
+        problems: Vec::new(),
     };
-    for (opaque, file, len, slot) in slots {
+    let mut plan = Vec::new();
+    for (opaque, file, len, slot, kind) in slots {
         let (name, skipped) = match slot {
-            Slot::Invalid(reason) => (None, Some(format!("invalid: {reason}"))),
+            Slot::Invalid(reason) => {
+                report
+                    .problems
+                    .push(format!("slot {opaque} has an invalid header: {reason}"));
+                (None, Some(format!("invalid: {reason}")))
+            }
             Slot::Unnamed => (None, Some("unnamed".to_owned())),
-            Slot::Named(n) if seen.get(&n).copied().unwrap_or(0) > 1 => {
+            Slot::Named(n) if !once(&n) => {
+                report
+                    .problems
+                    .push(format!("{n} is claimed by more than one slot"));
                 (Some(n), Some("duplicate".to_owned()))
             }
-            Slot::Named(n) => (Some(n), None),
+            Slot::Named(n) => {
+                let keep = match kind {
+                    Some(Kind::Main) => true,
+                    Some(k @ (Kind::Journal | Kind::Wal)) => {
+                        main_of(&n, k).is_some_and(|m| mains.contains(m))
+                    }
+                    Some(Kind::SuperJournal) => !mains.is_empty(),
+                    None => false,
+                };
+                if keep {
+                    (Some(n), None)
+                } else {
+                    (Some(n), Some("orphan".to_owned()))
+                }
+            }
         };
         if skipped.is_none() {
-            copy(&file, len, &target, &opaque).await?;
-            if let Some(n) = &name {
-                report.copied.push(n.clone());
-            }
+            // Sidecars first, then main files.
+            let order = u8::from(kind == Some(Kind::Main));
+            plan.push((order, opaque.clone(), file, len, name.clone()));
         }
         report.slots.push(SlotReport {
             opaque,
@@ -465,7 +595,20 @@ pub async fn repair(which: Which, from: u32, to: u32) -> Result<RepairReport> {
             skipped,
         });
     }
+    report.incomplete = !report.problems.is_empty();
+    plan.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    let target = dir_at(&format!("{to_dir}/{SLOTS_DIR}"), true)
+        .await?
+        .ok_or_else(|| OpfsError::new("notFound", to_dir.clone()))?;
+    for (_, opaque, file, len, name) in plan {
+        copy(&file, len, &target, &opaque).await?;
+        if let Some(n) = name {
+            report.copied.push(n);
+        }
+    }
     report.copied.sort();
+    let done = serde_json::to_vec(&report).map_err(|e| OpfsError::new("opfs", e.to_string()))?;
+    write_new(&to_dir, REPAIR_DONE, &done).await?;
     Ok(report)
 }
 
@@ -543,5 +686,22 @@ mod tests {
             read_header(8192, &header("/history.db-journal", journal)),
             Slot::Named("/history.db-journal".into())
         );
+    }
+
+    #[test]
+    fn sidecars_belong_to_their_main_file() {
+        let kinds = [
+            (SQLITE_OPEN_MAIN_DB, Some(Kind::Main)),
+            (SQLITE_OPEN_MAIN_JOURNAL, Some(Kind::Journal)),
+            (SQLITE_OPEN_WAL, Some(Kind::Wal)),
+            (SQLITE_OPEN_SUPER_JOURNAL, Some(Kind::SuperJournal)),
+        ];
+        for (flag, kind) in kinds {
+            assert_eq!(kind_of(&header("/x", flag as u32 | 0x6)), kind);
+        }
+        assert_eq!(main_of("/h.db-journal", Kind::Journal), Some("/h.db"));
+        assert_eq!(main_of("/h.db-wal", Kind::Wal), Some("/h.db"));
+        assert_eq!(main_of("/h.db-wal", Kind::Journal), None);
+        assert_eq!(main_of("/h.db", Kind::Main), None);
     }
 }

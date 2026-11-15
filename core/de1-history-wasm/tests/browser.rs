@@ -294,11 +294,26 @@ async fn repair_copies_the_database_out_of_a_pool_with_an_invalid_slot() {
             .is_some_and(|s| s.starts_with("invalid")),
         "{planted:?}"
     );
+    // An invalid slot might have been anything, the database too: the
+    // report says so, and the shell checks `copied` (REVIEW-444 note 2).
+    assert!(report.incomplete, "{report:?}");
+    assert!(
+        report.problems.iter().any(|p| p.contains("PLANTEDBADSLOT")),
+        "{report:?}"
+    );
     // The source is unchanged: nothing deleted, nothing written.
     assert!(
         snap(".crema-history-db-13").await == source,
         "repair changed its source"
     );
+    // The done file is there, holding the report (REVIEW-444 note 3).
+    let target = snap(".crema-history-db-14").await;
+    let done = target
+        .iter()
+        .find(|(p, _)| p == repair::REPAIR_DONE)
+        .expect("a done file");
+    let done: Value = serde_json::from_slice(&done.1).expect("JSON");
+    assert_eq!(done["copied"], json!(report.copied));
     // The new generation installs and holds the database whole.
     install(Which::Db, 14).await;
     let repaired = open(
@@ -391,4 +406,94 @@ async fn overwritten_bytes_are_corrupt_on_this_vfs_and_left_alone() {
         snap(".crema-history-db-17").await == before,
         "a refused open changed the file"
     );
+}
+
+#[test]
+async fn repair_never_copies_a_name_two_slots_claim_nor_its_orphaned_journal() {
+    // REVIEW-444 P3: two slots claim `/history-2.db`. Neither is copied,
+    // nor is its journal, and the report is incomplete.
+    fresh();
+    install(Which::Db, 20).await;
+    let truth = new_truth("history-2.db", 3).await;
+    truth.close().expect("closes");
+    pools::uninstall(Which::Db).expect("uninstalls");
+    let slots = snap(".crema-history-db-20").await;
+    let mut journal = false;
+    for (path, bytes) in &slots {
+        let Some(opaque) = path.strip_prefix(&format!("{SLOTS_DIR}/")) else {
+            continue;
+        };
+        let dir = format!(".crema-history-db-21/{SLOTS_DIR}");
+        repair::write_new(&dir, opaque, bytes)
+            .await
+            .expect("writes");
+        match repair::read_header(bytes.len() as u64, &bytes[..bytes.len().min(4096)]) {
+            repair::Slot::Named(n) if n == "/history-2.db" => {
+                repair::write_new(&dir, "DUPLICATEDSLOT", bytes)
+                    .await
+                    .expect("writes");
+            }
+            repair::Slot::Named(n) if n == "/history-2.db-journal" => journal = true,
+            _ => {}
+        }
+    }
+    assert!(journal, "truncate mode keeps the journal file");
+    let err = pools::install(Which::Db, 21).await.expect_err("refused");
+    assert_eq!(err.code, "invalidHeader", "{err:?}");
+    let source = snap(".crema-history-db-21").await;
+    let report = repair::repair(Which::Db, 21, 22).await.expect("repairs");
+    assert!(report.incomplete, "{report:?}");
+    assert!(
+        report.problems.iter().any(|p| p.contains("/history-2.db")),
+        "{report:?}"
+    );
+    assert!(
+        !report.copied.iter().any(|n| n.starts_with("/history-2.db")),
+        "{report:?}"
+    );
+    let orphan = report
+        .slots
+        .iter()
+        .find(|s| s.name.as_deref() == Some("/history-2.db-journal"))
+        .expect("reported");
+    assert_eq!(orphan.skipped.as_deref(), Some("orphan"));
+    assert!(
+        snap(".crema-history-db-21").await == source,
+        "repair changed its source"
+    );
+}
+
+#[test]
+async fn repair_refuses_a_pool_a_worker_holds() {
+    // REVIEW-444 note 4: repair takes the source's `.lock`, which an
+    // installed pool holds, so it never copies a pool in motion.
+    fresh();
+    install(Which::Db, 23).await;
+    new_truth("history-2.db", 2).await.close().expect("closes");
+    let before = snap(".crema-history-db-23").await;
+    let err = repair::repair(Which::Db, 23, 24)
+        .await
+        .expect_err("refused");
+    assert_eq!(err.code, "sourceInUse", "{err:?}");
+    assert!(
+        repair::snapshot(".crema-history-db-24")
+            .await
+            .expect("reads")
+            .is_none(),
+        "no target made"
+    );
+    pools::uninstall(Which::Db).expect("uninstalls");
+    assert!(
+        snap(".crema-history-db-23").await == before,
+        "the source changed"
+    );
+    // Released, the same repair runs, and the pool still installs after.
+    let report = repair::repair(Which::Db, 23, 24).await.expect("repairs");
+    assert!(!report.incomplete, "{report:?}");
+    assert!(
+        report.copied.contains(&"/history-2.db".to_owned()),
+        "{report:?}"
+    );
+    install(Which::Db, 23).await;
+    pools::uninstall(Which::Db).expect("uninstalls");
 }

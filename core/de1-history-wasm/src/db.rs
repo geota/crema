@@ -7,13 +7,19 @@
 //!   adds and retries once (S5).
 //! - Every failure throws the JSON text of an [`ErrorJson`]: its `code` is
 //!   the error class the shell maps to a health state (SPEC §12).
-//! - The Worker makes one call at a time (W1's queue); a second call while a
-//!   `Promise` waits for a slot is refused as `busy` rather than interleaved.
+//! - The Worker makes one call at a time (W1's queue). Nothing here stops a
+//!   second call while a `Promise` waits for a slot: no transaction is open
+//!   across that wait, but the pool is busy, so the second call may fail
+//!   (REVIEW-444 note 5).
 //!
 //! What it holds to:
 //! - **Files live in their role's pool** (M7): an `index` file in
 //!   `crema-index`, an `authority` file in `crema-db`, and a copy lands only in
-//!   `crema-db`. `memory` is for Node tests.
+//!   `crema-db`. `memory` is for Node tests, and holds an `authority` file
+//!   only with the `memory-truth` test feature.
+//! - **`cantOpen` doesn't tell absent from unopenable** (REVIEW-444 note 7):
+//!   SPEC §8 makes an absent `history.db` `lost` and an unopenable one
+//!   `unavailable`, so the shell decides from `poolInfo().files`.
 //! - **`authority` files open with `create: false`** (REVIEW-439 note 10):
 //!   after the flip a missing `history.db` is `lost`, never recreated. They
 //!   come into being only by [`HistoryDb::copy_to`] (the flip, the snapshot)
@@ -123,18 +129,27 @@ fn vfs_of(place: PlaceJson) -> Result<String, JsValue> {
 /// The role a place may hold (M7): the index never shares a pool with the
 /// truth.
 fn check_place(place: PlaceJson, role: Role) -> Result<(), JsValue> {
+    place_fits(place, role, cfg!(feature = "memory-truth"))
+        .map_err(|m| throw(ErrorJson::new("refused", m)))
+}
+
+/// Whether a file of `role` may live in `place`. `memory` holds an
+/// `authority` file only when `memory_truth` (the `memory-truth` feature,
+/// tests only): in a shipped build the truth never lives in RAM, gone with
+/// the Worker (REVIEW-444 note 6).
+pub(crate) fn place_fits(place: PlaceJson, role: Role, memory_truth: bool) -> Result<(), String> {
     let fits = match place {
-        PlaceJson::Memory => true,
+        PlaceJson::Memory => role == Role::Index || memory_truth,
         PlaceJson::Index => role == Role::Index,
         PlaceJson::Db => role == Role::Authority,
     };
     if fits {
         Ok(())
     } else {
-        Err(throw(ErrorJson::new(
-            "refused",
-            format!("a {} file doesn't belong in {place:?}", role.as_str()),
-        )))
+        Err(format!(
+            "a {} file doesn't belong in {place:?}",
+            role.as_str()
+        ))
     }
 }
 
@@ -770,5 +785,21 @@ impl HistoryDb {
     #[wasm_bindgen(js_name = migrationSourceLen)]
     pub fn migration_source_len(&self) -> Result<String, JsValue> {
         self.sync(|s| s.migration_source_len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::wasm_bindgen_test as test;
+
+    #[test]
+    fn the_truth_lives_in_memory_only_in_tests() {
+        assert!(place_fits(PlaceJson::Memory, Role::Authority, false).is_err());
+        assert!(place_fits(PlaceJson::Memory, Role::Authority, true).is_ok());
+        assert!(place_fits(PlaceJson::Memory, Role::Index, false).is_ok());
+        assert!(place_fits(PlaceJson::Db, Role::Authority, false).is_ok());
+        assert!(place_fits(PlaceJson::Db, Role::Index, true).is_err());
+        assert!(place_fits(PlaceJson::Index, Role::Authority, true).is_err());
     }
 }

@@ -418,6 +418,7 @@ name = "de1-history-wasm"
 version = "0.1.0"
 dependencies = [
  "de1-history",
+ "de1-history-wasm",
  "js-sys",
  "rusqlite",
  "serde",
