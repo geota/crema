@@ -2,7 +2,9 @@
 # cursors round-trip, the fold is idempotent, `derive_row` is total and fits the
 # schema, and the per-family stats combination equals `brew_history_stats`.
 # C2's: `derive_row` of any row inserts into a real database (S8), and random
-# writes keep the search index and every derived column in step.
+# writes keep the search index and every derived column in step; every query
+# answers as the reference, page by page either way, and writes between pages
+# repeat or lose only rows they edited or deleted.
 # Excluded from the core workspace, with its own lockfile, as `de1-model` is,
 # because proptest fails `cargo deny check bans` there. Dev-only, never shipped.
 #

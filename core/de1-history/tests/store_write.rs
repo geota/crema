@@ -529,13 +529,35 @@ fn a_write_and_its_applied_seq_land_together() {
         store.apply("A", 1, 1, &rated("s", 2)).expect("answers"),
         Applied::AlreadyApplied { last: 1 }
     );
-    // A refused write moves no seq.
-    let bad = Write::Upsert(rows_in(&["{}".to_owned()]));
+    // A write refused for good consumes its seq and writes nothing of
+    // itself, so the tab's next write isn't stuck behind it (REVIEW-439
+    // note 7).
+    let bad = Write::Upsert(rows_in(&[
+        row("good-before-bad", 1, json!({})),
+        "{}".to_owned(),
+    ]));
     assert!(matches!(
-        store.apply("A", 2, 1, &bad),
-        Err(StoreError::Refused(_))
+        store.apply("A", 2, 1, &bad).expect("answers"),
+        Applied::Refused { .. }
     ));
-    assert_eq!(store.applied_seq("A").expect("reads"), 1);
+    assert_eq!(store.applied_seq("A").expect("reads"), 2);
+    assert_eq!(
+        int(
+            &store,
+            "SELECT count(*) FROM shot WHERE id = 'good-before-bad'"
+        ),
+        0
+    );
+    let seq = store.write_seq();
+    assert!(matches!(
+        store.apply("A", 3, 1, &rated("s", 4)).expect("applies"),
+        Applied::Done(ref w) if w.change.seq == seq + 1
+    ));
+    // Its resend is already applied, not refused again.
+    assert_eq!(
+        store.apply("A", 2, 1, &bad).expect("answers"),
+        Applied::AlreadyApplied { last: 3 }
+    );
 }
 
 #[test]
@@ -554,6 +576,22 @@ fn prune_forgets_only_gone_tabs_past_the_cutoff() {
     assert_eq!(store.applied_seq("old").expect("reads"), 0);
     assert_eq!(store.applied_seq("new").expect("reads"), 1);
     assert_eq!(store.applied_seq("alive").expect("reads"), 1);
+    // A pruned tab that comes back (frozen, then resumed) with its next seq
+    // waits for good: `Gap { last: 0 }` tells it the store forgot it, and it
+    // takes a new tab id, starting at 1 (REVIEW-439 note 7).
+    assert_eq!(
+        store
+            .apply("old", 2, 1_000, &rated("s", 5))
+            .expect("answers"),
+        Applied::Gap { last: 0 }
+    );
+    assert!(matches!(
+        store
+            .apply("old-2", 1, 1_000, &rated("s", 5))
+            .expect("applies"),
+        Applied::Done(_)
+    ));
+    assert_eq!(rating_of(&store, "s"), 5);
 }
 
 /// Three tabs' outboxes, delivered late, twice and interleaved, with the
@@ -620,6 +658,7 @@ fn three_tabs_resending_across_reopens_apply_each_write_once() {
             Applied::Done(_) => applied.push((tab, seq)),
             Applied::AlreadyApplied { last } => assert!(seq <= last),
             Applied::Gap { last } => assert!(seq > last + 1),
+            Applied::Refused { reason } => panic!("{reason}"),
         }
     }
     // Every write applied exactly once, each tab's in order.

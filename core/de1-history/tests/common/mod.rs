@@ -102,3 +102,23 @@ pub fn fts_whole(store: &Store) -> bool {
         )
         .is_ok()
 }
+
+fn close(a: Option<f32>, b: Option<f32>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a == b || (a - b).abs() <= 1e-6 * a.abs().max(b.abs()),
+        _ => false,
+    }
+}
+
+/// Stats equal within 1e-6 relative (SPEC §7: SQLite sums in its own order).
+pub fn stats_close(a: &de1_domain::BrewHistoryStats, b: &de1_domain::BrewHistoryStats) -> bool {
+    a.count == b.count
+        && a.mixed_methods == b.mixed_methods
+        && a.scope_method == b.scope_method
+        && close(a.beans_used_g, b.beans_used_g)
+        && close(a.avg_weight_g, b.avg_weight_g)
+        && close(a.avg_ratio, b.avg_ratio)
+        && close(a.avg_time_s, b.avg_time_s)
+        && close(a.avg_rating, b.avg_rating)
+}

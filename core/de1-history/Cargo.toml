@@ -20,7 +20,7 @@ serde_json.workspace = true
 unicode-normalization = "0.1.24"
 # The store (SPEC §1, decision B): SQLite compiled in, so both shells run one
 # SQLite version with FTS5 and trigram. Native only until C4 adds the wasm VFS.
-rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled", "cache"], optional = true }
+rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled", "cache", "backup"], optional = true }
 
 [features]
 # The `rusqlite` store (`store`): opens and writes the database. Off by

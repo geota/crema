@@ -161,8 +161,7 @@ impl Store {
             tx.execute_batch(FTS_NEXT_V1)?;
             Ok(())
         });
-        self.fts = load(&self.conn).map_err(|e| error_of(&e, Source::Session))?;
-        started.map(|_| ())
+        self.after_build(started).map(|_| ())
     }
 
     /// One rebuild step: the next batch of rows into the new table; the last
@@ -216,12 +215,28 @@ impl Store {
             Ok(Maintained::FtsSwapped)
         });
         // Whatever happened, the schema and `meta` say where the build is.
-        self.fts = load(&self.conn).map_err(|e| error_of(&e, Source::Session))?;
-        let (step, _) = step?;
+        // The step's own error comes first, and a poisoned store has nothing
+        // to load (REVIEW-439 note 4).
+        let (step, _) = self.after_build(step)?;
         if step == Maintained::FtsSwapped {
             self.merge_pending = true;
         }
         Ok(step)
+    }
+
+    /// Reloads the build's state from the file after a build step, and gives
+    /// the step's result: its error first, and no reload on a poisoned store.
+    fn after_build<T>(&mut self, step: Result<T>) -> Result<T> {
+        if self.poisoned.is_some() {
+            return step;
+        }
+        match load(&self.conn) {
+            Ok(fts) => {
+                self.fts = fts;
+                step
+            }
+            Err(e) => step.and(Err(error_of(&e, Source::Session))),
+        }
     }
 
     /// One incremental merge step, its own transaction. `more` while the step
