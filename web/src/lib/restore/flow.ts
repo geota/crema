@@ -21,13 +21,23 @@ export interface RestoreFlowDeps {
 	backUp: () => Promise<string>;
 	/** A line for the user while it runs. */
 	say: (line: string) => void;
+	/**
+	 * Whether a newer pick is under way (at its report, or running). This
+	 * one's re-report would replace the newer one's dialog, so it ends
+	 * instead (#413).
+	 */
+	superseded?: () => boolean;
 }
+
+/** An older pick's restore found the device changed after a newer pick (#413). */
+export const PICK_AGAIN = 'That backup changed while restoring; pick it again.';
 
 /**
  * A clean Merge runs at once. Replace offers Back up first. A Merge whose
  * backup has shots deleted here offers to bring them back, and then shows
  * the numbers that would bring before running them. A device that changed
- * while the report was open shows the new numbers and asks again. Returns
+ * while the report was open shows the new numbers and asks again, unless a
+ * newer pick is under way: the newest pick wins, and this one ends. Returns
  * the line to show after, or the outcome for the caller to finish.
  */
 export async function restoreFlow(
@@ -70,6 +80,7 @@ export async function restoreFlow(
 		deps.say('Restoring… Other Crema tabs will reload when this finishes.');
 		const outcome = await deps.run(revive, plan);
 		if (outcome.kind === 'changed') {
+			if (deps.superseded?.()) return { line: PICK_AGAIN, outcome: null };
 			plan = outcome.plan;
 			ask = true;
 			deps.say(outcomeMessage(outcome));

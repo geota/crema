@@ -407,8 +407,29 @@
 		return ok;
 	}
 
+	/** Restores picked so far, from a file or Drive (#413). */
+	let picks = 0;
+	/** The picks whose flow hasn't ended: being read, at their report, or running. */
+	const livePicks = new Set<number>();
+
 	/** Plan, report, run (`#lib/restore/flow`), then the held sharing changes. */
 	async function restoreFlow(
+		file: Blob,
+		mode: RestoreMode,
+		name: string,
+		say: (line: string) => void
+	): Promise<string> {
+		const pick = ++picks;
+		livePicks.add(pick);
+		try {
+			return await restorePick(pick, file, mode, name, say);
+		} finally {
+			livePicks.delete(pick);
+		}
+	}
+
+	async function restorePick(
+		pick: number,
 		file: Blob,
 		mode: RestoreMode,
 		name: string,
@@ -424,7 +445,9 @@
 			choose: (o) => choiceDialog(o),
 			confirm: (o) => confirmDialog(o),
 			backUp: () => runBackup(),
-			say
+			say,
+			// The newest pick wins (#413): a newer one still under way, not one refused or done.
+			superseded: () => [...livePicks].some((p) => p > pick)
 		});
 		const held = outcome ? singletons.held() : null;
 		if (held && !(await confirmHeldRestoreChanges(held))) {

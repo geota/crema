@@ -22,7 +22,7 @@ import {
 	type RestoreMessage
 } from './tab-safety';
 import { decodeRows, planNow, prepareBackup, runRestore, type RestoreDeps } from './engine';
-import { restoreFlow } from './flow';
+import { PICK_AGAIN, restoreFlow } from './flow';
 import { readStore } from '#lib/utils/storage.js';
 import { coerceBean } from '#lib/bean/model.js';
 import { DELETE_AFTER_MS, MARKER_KEY, beginMarker, checkMarkerAtBoot, readMarker } from './marker';
@@ -521,6 +521,44 @@ describe('the #363 review', () => {
 		expect(seen[1]).toMatch(/^confirm:Adds 1 shot/);
 		expect(runs).toEqual([true]);
 		expect(outcome?.kind).toBe('done');
+	});
+
+	it('a changed re-report for an older pick never replaces a newer pick’s report (#413)', async () => {
+		const prepared = await backupOf(['b1'], ['s1']);
+		/** Pick 1's flow, whose run finds the device changed; with `newer`, pick 2 starts meanwhile. */
+		const pickOne = async (newer: boolean) => {
+			let picks = 1;
+			const asked: string[] = [];
+			const runs: number[] = [];
+			const result = await restoreFlow('wipe', {
+				plan: (revive) => planNow(prepared, 'wipe', revive, new FakeLocks()),
+				run: async (_revive, expected) => {
+					runs.push(runs.length);
+					if (newer) picks = 2; // a newer pick, its report open
+					return { kind: 'changed', plan: expected };
+				},
+				choose: async (o) => {
+					asked.push(o.title);
+					// Replace, then dismiss the re-report.
+					return asked.length === 1 ? 'secondary' : null;
+				},
+				confirm: async () => true,
+				backUp: async () => '',
+				say: () => {},
+				superseded: () => picks !== 1
+			});
+			return { ...result, asked, runs };
+		};
+		// No newer pick: the new numbers are asked about again, as before.
+		const alone = await pickOne(false);
+		expect(alone.asked).toHaveLength(2);
+		expect(alone.line).toBe('Nothing was changed.');
+		// A newer pick: no second dialog to replace its report, and a short notice.
+		const older = await pickOne(true);
+		expect(older.asked).toHaveLength(1);
+		expect(older.runs).toEqual([0]);
+		expect(older.line).toBe(PICK_AGAIN);
+		expect(older.outcome).toBeNull();
 	});
 });
 

@@ -165,7 +165,7 @@ class DriveSync(
     private val listBackups: suspend (token: String) -> List<DriveFile> = { token -> driveListBackups(token, json) },
     private val trashFile: suspend (token: String, fileId: String) -> Unit =
         { token, id -> driveTrashFile(token, id, json) },
-    /** Where a backup downloads to before its restore reads it; the next download replaces it. */
+    /** Where a backup downloads to before its restore reads it: a new file per download, which [applyRestore] then owns. */
     private val restoreDownloadFile: () -> java.io.File = { java.io.File.createTempFile("crema-drive-restore", ".crema") },
     private val downloadBackup: suspend (token: String, fileId: String, dest: java.io.File) -> java.io.File =
         { token, id, dest -> driveDownloadBackupTo(token, id, dest, json) },
@@ -794,7 +794,18 @@ class DriveSync(
             val tokens = tokenForUser("restore") ?: return@launch
             val picked = _state.value.backups?.firstOrNull { it.id == fileId }
             _state.update { it.copy(busy = true, backups = null) }
-            runCatchingCancellable { withToken(tokens) { downloadBackup(it, fileId, restoreDownloadFile()) } }
+            runCatchingCancellable {
+                withToken(tokens) { token ->
+                    val dest = restoreDownloadFile()
+                    try {
+                        downloadBackup(token, fileId, dest)
+                    } catch (e: Throwable) {
+                        // A download that failed is no one's: it goes now.
+                        dest.delete()
+                        throw e
+                    }
+                }
+            }
                 .onSuccess { file -> applyRestore(file, wipe, picked) }
                 .onFailure { e ->
                     val failure = (e as? NoDriveToken)?.failure

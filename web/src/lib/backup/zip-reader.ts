@@ -39,9 +39,19 @@ export interface BackupReadLimits {
 /** #386's export limits: a restore reads exactly what an export may write. */
 export const BACKUP_READ_LIMITS: BackupReadLimits = BACKUP_LIMITS;
 
-/** A backup that won't read: damaged, or past a limit. Nothing was written. */
+/**
+ * A backup that won't read: damaged, or past a limit. Nothing was written.
+ * `damaged` is the first kind, which an earlier directory may still read
+ * (#413, as on Android since #410).
+ */
 export class BackupReadError extends Error {
 	override name = 'BackupReadError';
+	readonly damaged: boolean;
+
+	constructor(message: string, damaged = false) {
+		super(message);
+		this.damaged = damaged;
+	}
 }
 
 function mb(bytes: number): string {
@@ -84,6 +94,7 @@ export interface ZipEntry {
 const EOCD = 0x06054b50;
 const CENTRAL = 0x02014b50;
 const LOCAL = 0x04034b50;
+const DESCRIPTOR = 0x08074b50;
 const EOCD_BYTES = 22;
 const MAX_COMMENT = 0xffff;
 
@@ -92,7 +103,7 @@ async function bytesAt(file: Blob, start: number, end: number): Promise<Uint8Arr
 }
 
 function damaged(why: string): BackupReadError {
-	return new BackupReadError(`This backup is damaged (${why}). Nothing was changed.`);
+	return new BackupReadError(`This backup is damaged (${why}). Nothing was changed.`, true);
 }
 
 /** Whether `bytes` start like a zip (a local header). */
@@ -136,23 +147,65 @@ export async function readCentralDirectory(
 	const end = await findEndRecord(file);
 	if (!end) throw damaged(file.size < EOCD_BYTES ? 'too short for a zip' : 'no end of central directory');
 	const { view, at, tailStart } = end;
-	const disk = view.getUint16(at + 4, true);
-	const cdDisk = view.getUint16(at + 6, true);
-	const count = view.getUint16(at + 10, true);
-	const cdSize = view.getUint32(at + 12, true);
-	const cdOffset = view.getUint32(at + 16, true);
+	const record = new DataView(view.buffer, view.byteOffset + at, EOCD_BYTES);
+	return (await parseDirectory(file, tailStart + at, record, limits, false)).entries;
+}
+
+/** One entry as the directory gives it, with what the exact check compares. */
+interface DirEntry extends ZipEntry {
+	/** `name` as stored, to compare with the local header's. */
+	nameBytes: Uint8Array;
+	/** The general-purpose flags. */
+	flags: number;
+	/** The DOS time and date, as one number. */
+	dosTime: number;
+}
+
+/** A zip's entries, and where its directory and end record are. */
+export interface ZipDirectory {
+	entries: ZipEntry[];
+	cdOffset: number;
+	endAt: number;
+}
+
+/**
+ * Largest central directory read. A Crema backup's is about 100 bytes an
+ * entry; this bounds what a zip that lies about it can make the reader hold.
+ * Android's `MAX_DIRECTORY_BYTES`.
+ */
+const MAX_DIRECTORY_BYTES = 16 * MiB;
+
+/**
+ * The directory the end record `record`, at `eocdOffset`, gives. `exact` (an
+ * earlier directory, #413) also asks that the directory end where the end
+ * record starts and that its entries fill it.
+ */
+async function parseDirectory(
+	file: Blob,
+	eocdOffset: number,
+	record: DataView,
+	limits: BackupReadLimits,
+	exact: boolean
+): Promise<{ entries: DirEntry[]; cdOffset: number; endAt: number }> {
+	const disk = record.getUint16(4, true);
+	const cdDisk = record.getUint16(6, true);
+	const count = record.getUint16(10, true);
+	const cdSize = record.getUint32(12, true);
+	const cdOffset = record.getUint32(16, true);
 	if (count === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
 		throw new BackupReadError('This backup is too large to restore (zip64).');
 	}
-	if (disk !== 0 || cdDisk !== 0 || count !== view.getUint16(at + 8, true)) throw damaged('a split archive');
+	if (disk !== 0 || cdDisk !== 0 || count !== record.getUint16(8, true)) throw damaged('a split archive');
 	if (count > limits.maxEntries) {
 		throw new BackupReadError(`This backup holds more than ${limits.maxEntries} files.`);
 	}
-	const eocdOffset = tailStart + at;
+	if (exact && count === 0) throw damaged('no files in the zip');
 	if (cdOffset + cdSize > eocdOffset) throw damaged('the central directory is out of place');
+	if (exact && cdOffset + cdSize !== eocdOffset) throw damaged('the central directory is out of place');
+	if (cdSize > MAX_DIRECTORY_BYTES) throw new BackupReadError('This backup’s list of files is too large to restore.');
 	const cd = await bytesAt(file, cdOffset, cdOffset + cdSize);
 	const cv = new DataView(cd.buffer, cd.byteOffset, cd.byteLength);
-	const entries: ZipEntry[] = [];
+	const entries: DirEntry[] = [];
 	const decoder = new TextDecoder('utf-8', { fatal: true });
 	let p = 0;
 	for (let n = 0; n < count; n++) {
@@ -161,17 +214,22 @@ export async function readCentralDirectory(
 		const nameLen = cv.getUint16(p + 28, true);
 		const extraLen = cv.getUint16(p + 30, true);
 		const commentLen = cv.getUint16(p + 32, true);
-		const entry: ZipEntry = {
+		if (p + 46 + nameLen > cd.length) throw damaged('a central directory entry');
+		if (exact && p + 46 + nameLen + extraLen > cd.length) throw damaged('a central directory entry');
+		const nameBytes = cd.slice(p + 46, p + 46 + nameLen);
+		const entry: DirEntry = {
 			method: cv.getUint16(p + 10, true),
 			crc: cv.getUint32(p + 16, true),
 			compressedSize: cv.getUint32(p + 20, true),
 			size: cv.getUint32(p + 24, true),
 			localOffset: cv.getUint32(p + 42, true),
-			name: ''
+			name: '',
+			nameBytes,
+			flags,
+			dosTime: cv.getUint32(p + 12, true)
 		};
-		if (p + 46 + nameLen > cd.length) throw damaged('a central directory entry');
 		try {
-			entry.name = decoder.decode(cd.subarray(p + 46, p + 46 + nameLen));
+			entry.name = decoder.decode(nameBytes);
 		} catch {
 			throw damaged('a file name');
 		}
@@ -183,7 +241,137 @@ export async function readCentralDirectory(
 		entries.push(entry);
 		p += 46 + nameLen + extraLen + commentLen;
 	}
-	return entries;
+	if (exact && p !== cd.length) throw damaged('a central directory entry');
+	return { entries, cdOffset, endAt: eocdOffset };
+}
+
+// ── An earlier directory (#413) ───────────────────────────────────────────
+//
+// Android backups saved before #391 used mode "w". A provider that doesn't
+// truncate on "w" leaves, after a save over a larger file, the old zip's
+// tail after the new zip: the end record that ends the file is the old one's,
+// and its directory doesn't read. Android restores these since #410; the
+// same rule, here: an earlier directory is read only if it agrees exactly
+// with the local headers from offset 0, holds `backup.jsonl`, and every
+// entry reads whole. Otherwise the refusal stands, never a partial read.
+
+/** Most earlier end records {@link earlierEndRecords} gives: each costs a read of its directory. */
+const MAX_EARLIER_END_RECORDS = 64;
+/** Bytes searched at a time, going backwards. */
+const SEARCH_WINDOW = 64 * KiB;
+
+/**
+ * Where `file` may hold an earlier zip's end record, last first: each
+ * signature before the end record that ends the file (or before the end,
+ * when none does) whose record is whole, unsplit, and has its directory just
+ * before it.
+ */
+export async function earlierEndRecords(file: Blob): Promise<number[]> {
+	const size = file.size;
+	const found: number[] = [];
+	const last = await findEndRecord(file);
+	let top = last ? last.tailStart + last.at : size;
+	while (top > 0 && found.length < MAX_EARLIER_END_RECORDS) {
+		const from = Math.max(0, top - SEARCH_WINDOW);
+		const buf = await bytesAt(file, from, Math.min(size, top + 3));
+		const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+		for (let i = top - from - 1; i >= 0; i--) {
+			if (i + 4 > buf.length || v.getUint32(i, true) !== EOCD) continue;
+			const at = from + i;
+			if (at + EOCD_BYTES > size) continue;
+			const r = await bytesAt(file, at, at + EOCD_BYTES);
+			const e = new DataView(r.buffer, r.byteOffset, r.byteLength);
+			const count = e.getUint16(10, true);
+			const ok =
+				e.getUint16(4, true) === 0 &&
+				e.getUint16(6, true) === 0 &&
+				e.getUint16(8, true) === count &&
+				count > 0 &&
+				e.getUint32(16, true) + e.getUint32(12, true) === at &&
+				at + EOCD_BYTES + e.getUint16(20, true) <= size;
+			if (ok) {
+				found.push(at);
+				if (found.length === MAX_EARLIER_END_RECORDS) break;
+			}
+		}
+		top = from;
+	}
+	return found;
+}
+
+/**
+ * The directory whose end record is at `endAt`, only if it agrees exactly
+ * with the local headers: its entries, in order, are the zip's records from
+ * offset 0 to the directory with nothing between them, each local header
+ * names its entry as the directory does, with the same flags, method, time,
+ * and CRC and sizes (in its header, or its data descriptor), and it holds
+ * `backup.jsonl`. Otherwise null. The caller then reads every entry whole.
+ */
+export async function exactDirectoryAt(
+	file: Blob,
+	endAt: number,
+	limits: BackupReadLimits = BACKUP_READ_LIMITS
+): Promise<ZipDirectory | null> {
+	if (endAt < 0 || endAt + EOCD_BYTES > file.size) return null;
+	const r = await bytesAt(file, endAt, endAt + EOCD_BYTES);
+	const record = new DataView(r.buffer, r.byteOffset, r.byteLength);
+	if (record.getUint32(0, true) !== EOCD) return null;
+	let d: { entries: DirEntry[]; cdOffset: number; endAt: number };
+	try {
+		d = await parseDirectory(file, endAt, record, limits, true);
+	} catch (e) {
+		if (e instanceof BackupReadError) return null;
+		throw e;
+	}
+	if (!d.entries.some((e) => e.name === 'backup.jsonl')) return null;
+	return (await agreesExactly(file, d)) ? d : null;
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+	return true;
+}
+
+async function agreesExactly(file: Blob, d: { entries: DirEntry[]; cdOffset: number }): Promise<boolean> {
+	let at = 0;
+	for (const e of d.entries) {
+		if (e.localOffset !== at || at + 30 > d.cdOffset) return false;
+		const head = await bytesAt(file, at, at + 30);
+		const h = new DataView(head.buffer, head.byteOffset, head.byteLength);
+		if (h.getUint32(0, true) !== LOCAL) return false;
+		const flags = h.getUint16(6, true);
+		if (flags !== e.flags || h.getUint16(8, true) !== e.method || h.getUint32(10, true) !== e.dosTime) return false;
+		const nameLen = h.getUint16(26, true);
+		const extraLen = h.getUint16(28, true);
+		const dataEnd = at + 30 + nameLen + extraLen + e.compressedSize;
+		if (dataEnd > d.cdOffset) return false;
+		if (!sameBytes(await bytesAt(file, at + 30, at + 30 + nameLen), e.nameBytes)) return false;
+		const crc = h.getUint32(14, true);
+		const compressed = h.getUint32(18, true);
+		const size = h.getUint32(22, true);
+		if (flags & 8) {
+			// The header may give them as 0, for its data descriptor to give.
+			if ((crc !== 0 && crc !== e.crc) || (compressed !== 0 && compressed !== e.compressedSize) || (size !== 0 && size !== e.size)) {
+				return false;
+			}
+			const n = Math.min(16, d.cdOffset - dataEnd);
+			if (n < 12) return false;
+			const desc = await bytesAt(file, dataEnd, dataEnd + n);
+			const dv = new DataView(desc.buffer, desc.byteOffset, desc.byteLength);
+			const gives = (o: number) =>
+				dv.getUint32(o, true) === e.crc &&
+				dv.getUint32(o + 4, true) === e.compressedSize &&
+				dv.getUint32(o + 8, true) === e.size;
+			if (n === 16 && dv.getUint32(0, true) === DESCRIPTOR && gives(4)) at = dataEnd + 16;
+			else if (gives(0)) at = dataEnd + 12;
+			else return false;
+		} else {
+			if (crc !== e.crc || compressed !== e.compressedSize || size !== e.size) return false;
+			at = dataEnd;
+		}
+	}
+	return at === d.cdOffset;
 }
 
 /** The entries a restore reads, refused past the limits or when a name repeats. */

@@ -63,6 +63,8 @@ import {
 	crc32,
 	entryBytes,
 	isZipStart,
+	earlierEndRecords,
+	exactDirectoryAt,
 	looksLikeZip,
 	readCentralDirectory,
 	type BackupLinePiece,
@@ -198,6 +200,9 @@ async function scanLines(lines: AsyncIterable<BackupLinePiece>, photoIds: readon
  * its central directory, or bare JSONL, a piece at a time. Every byte the
  * restore will use is read here once, checked (each zip entry's CRC and size,
  * the limits) and scanned, before a plan is made; the run reads it again.
+ * A zip whose end record's directory won't read is read through an earlier
+ * directory only if one agrees exactly and reads whole
+ * ({@link exactDirectoryAt}, #413).
  */
 export async function prepareBackupFile(
 	file: Blob,
@@ -230,10 +235,52 @@ export async function prepareBackupFile(
 		const manifestJson = await scanLines(lines(), []);
 		return { name, manifestJson, identity: identityOf(manifestJson, name), lines, photo: async () => null };
 	}
-	const entries = await readCentralDirectory(file, limits);
+	try {
+		return await prepareZip(file, name, limits, await readCentralDirectory(file, limits), false);
+	} catch (e) {
+		// A backup Android saved over a larger file before #391 can end with the
+		// old zip's tail, whose directory doesn't fit (#413, as Android since
+		// #410). An earlier directory is read only if it agrees exactly with the
+		// local headers and every entry reads whole; otherwise the refusal stands.
+		if (!(e instanceof BackupReadError) || !e.damaged) throw e;
+		for (const at of await earlierEndRecords(file)) {
+			const directory = await exactDirectoryAt(file, at, limits);
+			if (!directory) continue;
+			try {
+				return await prepareZip(file, name, limits, directory.entries, true);
+			} catch {
+				// Not this one: the next, or the first refusal.
+			}
+		}
+		throw e;
+	}
+}
+
+/**
+ * A zip's first read, through `entries`: checked within `limits`, its photos
+ * read whole, its lines scanned. `wholly` (an earlier directory) reads every
+ * entry whole first, each within its declared size, the skipped ones too.
+ */
+async function prepareZip(
+	file: Blob,
+	name: string,
+	limits: BackupReadLimits,
+	entries: ZipEntry[],
+	wholly: boolean
+): Promise<PreparedBackup> {
 	const kind = (e: ZipEntry) =>
 		e.name === BACKUP_MEMBER || e.name === LEGACY_MEMBER ? 'backup' : e.name.startsWith('images/') ? 'photo' : null;
 	checkEntries(entries, kind, limits);
+	if (wholly) {
+		let total = 0;
+		for (const e of entries) {
+			total += e.size;
+			if (total > limits.maxInflatedBytes) {
+				throw new BackupReadError(`This backup unpacks to more than ${Math.ceil(limits.maxInflatedBytes / 2 ** 20)} MB.`);
+			}
+			for await (const piece of entryBytes(file, e)) void piece;
+		}
+	}
 	const member =
 		entries.find((e) => e.name === BACKUP_MEMBER) ?? entries.find((e) => e.name === LEGACY_MEMBER);
 	if (!member) throw new Error('Not a Crema backup zip (no backup.jsonl inside).');
