@@ -4989,3 +4989,7 @@ mod tests {
 // don't move.
 #[cfg(feature = "dev-oracle")]
 mod history_oracle;
+
+// The SQLite history store (#310 C3; see history.rs). Declared after the
+// oracle for the same reason.
+mod history;
