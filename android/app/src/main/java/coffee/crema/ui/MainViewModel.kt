@@ -1068,7 +1068,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Try the history's store again: Settings' Try again after a failed move, or the unavailable banner's. */
-    fun retryHistory() = viewModelScope.launch { library.retryHistory() }
+    fun retryHistory() = viewModelScope.launch {
+        library.retryHistory()
+        library.syncHistoryIndex()
+    }
 
     /** Free up space's preview (#310 P6a): what deleting the unpinned shots before [beforeMs] would take. Null until it may run. */
     suspend fun planFreeUp(beforeMs: Long): coffee.crema.history.FreeUpPlan? = library.planFreeUp(beforeMs)
@@ -1163,7 +1166,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissStorageNotice() = library.dismissStorageNotice()
 
     /** The lost banner's choice: rebuild from the snapshot, recover the old copy, or start empty. */
-    fun resolveLostHistory(choice: LibraryController.LostChoice) = viewModelScope.launch { library.resolveLostHistory(choice) }
+    fun resolveLostHistory(choice: LibraryController.LostChoice) = viewModelScope.launch {
+        library.resolveLostHistory(choice)
+        library.syncHistoryIndex()
+    }
+
+    // ── The stage-1 history index, for the debug screen (#310 A1) ──
+
+    suspend fun historyIndexHealth(): coffee.crema.history.IndexHealth = library.historyIndexHealth()
+
+    suspend fun compareHistoryIndex(): coffee.crema.history.IndexComparison? = library.compareHistoryIndex()
+
+    suspend fun rebuildHistoryIndex(): coffee.crema.history.IndexDiffReport? = library.syncHistoryIndex(force = true)
 
     /** The banner's Set this aside: move the unreadable file with the other
      *  kept-aside copies, offer it for sharing, and carry on without it. If the
@@ -1365,6 +1379,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         historyLoad = viewModelScope.launch {
             holdStartupLoad?.await()
             library.loadHistory()
+        }
+        // The stage-1 index (#310 A1) once the rows are in: its boot check, and
+        // a full diff on a miss, a batch at a time. Nothing reads it yet.
+        viewModelScope.launch {
+            historyLoad.join()
+            library.syncHistoryIndex()
         }
         // The other persisted stores in one coroutine, sequentially.
         startupLoad = viewModelScope.launch {

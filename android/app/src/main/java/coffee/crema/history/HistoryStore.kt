@@ -136,7 +136,12 @@ class HistoryReadException(message: String) : java.io.IOException(message)
 @androidx.annotation.VisibleForTesting
 class SimulatedCrash(at: String) : Error("simulated crash at $at")
 
-class HistoryStore(private val context: Context, private val json: Json) {
+class HistoryStore(
+    private val context: Context,
+    private val json: Json,
+    /** The build's `versionCode`: the stage-1 index runs a full diff at the first boot of each (#310 A1). */
+    indexVersionCode: Long = coffee.crema.BuildConfig.VERSION_CODE.toLong(),
+) {
     private val file get() = File(context.filesDir, FILE_NAME)
     private val markerFile get() = File(context.filesDir, MARKER_NAME)
     private val snapshotFile get() = File(context.filesDir, SNAPSHOT_NAME)
@@ -146,7 +151,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
             ?: File(context.filesDir.parentFile, "databases/$NEXT_DB_NAME")
     private val seriesDir get() = File(context.filesDir, SERIES_DIR)
     private val series = SeriesFiles(File(context.filesDir, SERIES_DIR), json)
-    private val tables = HistoryTables(json)
+
+    /** `history-index.db` (#310 A1): the hook every write to `shots` goes through, and its full diff. */
+    private val index: HistoryIndex = HistoryIndex(File(context.filesDir, SQLITE_DIR), { tables }, indexVersionCode)
+    private val tables = HistoryTables(json, index)
 
     /** Loads, saves and deletes run on IO and may overlap; one at a time. */
     private val lock = Mutex()
@@ -596,7 +604,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
             }
             val hash = sha256(runCatching { file.readBytes() }.getOrDefault(ByteArray(0)))
             val db = db().writableDatabase
-            db.inTransaction {
+            tables.write(db) {
                 tables.clear(this)
                 var written = 0
                 val rows = if (fault(MigrationFault.DROP_ROW) != null) prepared.dropLast(1) else prepared
@@ -618,9 +626,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
                     val extra = StoredShot(id = "extra-${now()}", completedAtMs = 1, durationMs = 1)
                     tables.putFull(this, extra, summaryOf(extra, json))
                 }
-                verify(this, prepared)?.let { throw MigrationFailed("Verify failed: $it") }
+                verify(db, prepared)?.let { throw MigrationFailed("Verify failed: $it") }
                 tables.putMeta(
-                    this,
+                    db,
                     TABLE_META_KEY,
                     json.encodeToString(
                         MigrationRecord.serializer(),
@@ -711,7 +719,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 val late = mutableListOf<String>()
                 // A row that couldn't come in now (its series write failed) is looked at again next launch (S2).
                 var incomplete = false
-                db.inTransaction {
+                tables.write(db) {
                     for (row in blob) {
                         if (row.id in known || row.id in considered) continue
                         if (row.id in heldIds || (row.visualizerId != null && row.visualizerId in heldRemote)) {
@@ -749,7 +757,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
         // Step 9: a late row's series may have landed since.
         if (next.lateIds.isNotEmpty()) {
             val still = mutableListOf<String>()
-            db.inTransaction {
+            tables.write(db) {
                 for (id in next.lateIds) {
                     val row = tables.full(this, id) ?: continue
                     val read = series.read(id)
@@ -769,7 +777,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
     private fun mergePending(db: SQLiteDatabase) {
         if (!pendingFile.exists()) return
         val entries = journalEntries()
-        db.inTransaction {
+        tables.write(db) {
             for (e in entries) {
                 e.delete?.let { id ->
                     tables.delete(this, listOf(id))
@@ -1207,7 +1215,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
                     ensureOpenLocked()
                     when (mode) {
                         Mode.SQL -> {
-                            db().writableDatabase.inTransaction { tables.delete(this, ids) }
+                            tables.write(db().writableDatabase) { tables.delete(this, ids) }
                             for (id in ids) {
                                 series.deleteGz(id)
                                 forgetMemory(id)
@@ -1295,9 +1303,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
             val summary = if (st != null) summaryFor(shot) else stored[row.id]?.summary ?: row.summary
             Write(row, shot, st, if (row.id in curveless) summary.copy(sampleCount = null) else adoptSeries(shot, summary))
         }
-        val ok = runCatching { writeRows(writes, curveless = curveless) }.isSuccess || writes.map { one ->
+        val ok = landed { writeRows(writes, curveless = curveless) } || writes.map { one ->
             // The batch failed (a full disk, say): each row alone, as it may fit, then the journal.
-            runCatching { writeRows(listOf(one), curveless = curveless) }.isSuccess || journalRow(one.shot).let { false }
+            landed { writeRows(listOf(one), curveless = curveless) } || journalRow(one.shot).let { false }
         }.all { it }
         helper?.handler?.quarantined?.let {
             // SQLite found the file damaged mid-session and its handler kept it aside.
@@ -1308,9 +1316,19 @@ class HistoryStore(private val context: Context, private val json: Json) {
         return ok && curveless.isEmpty()
     }
 
+    /** [block] ran without throwing. A [SimulatedCrash] (tests) ends the process, as a real one would. */
+    private inline fun landed(block: () -> Unit): Boolean = try {
+        block()
+        true
+    } catch (e: SimulatedCrash) {
+        throw e
+    } catch (e: Throwable) {
+        false
+    }
+
     private fun writeRows(writes: List<Write>, profiles: Map<String, JsonObject> = emptyMap(), curveless: Set<String> = emptySet()) {
         if (fault(MigrationFault.DISK_FULL) != null) throw android.database.sqlite.SQLiteFullException("disk full (test)")
-        db().writableDatabase.inTransaction {
+        tables.write(db().writableDatabase) {
             // A part a row doesn't carry stays as stored: a light row never clears a profile or a brew series.
             for (w in writes) tables.upsert(this, w.shot, w.summary)
             for ((id, profile) in profiles) tables.putProfile(this, id, profile)
@@ -1509,10 +1527,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
     suspend fun startEmpty(): HistoryLoad = rebuild { _ -> }
 
     /** Lost: rebuild the store from the rows snapshot. */
-    suspend fun restoreSnapshot(): HistoryLoad = rebuild { db ->
+    suspend fun restoreSnapshot(): HistoryLoad = rebuild { w ->
         val snap = readSnapshot() ?: throw MigrationFailed("The rows snapshot couldn't be read")
         for ((row, summary) in snap.second) {
-            tables.putFull(db, row, summary ?: summaryOf(row.copy(samples = (series.read(row.id) as? SeriesRead.Found)?.samples ?: emptyList()), json))
+            tables.putFull(w, row, summary ?: summaryOf(row.copy(samples = (series.read(row.id) as? SeriesRead.Found)?.samples ?: emptyList()), json))
         }
     }
 
@@ -1536,7 +1554,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
     }
 
     /** A new store from [fill], marked done with the old copy as its source, so step 8 doesn't bring the old copy back. */
-    private suspend fun rebuild(fill: (SQLiteDatabase) -> Unit): HistoryLoad = withContext(Dispatchers.IO) {
+    private suspend fun rebuild(fill: (ShotsWrite) -> Unit): HistoryLoad = withContext(Dispatchers.IO) {
         lock.withLock {
             try {
                 // Whatever is there may still hold rows (a lost store that wasn't quarantined): kept aside, never deleted (S7).
@@ -1546,10 +1564,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
                     runCatching { json.decodeFromString(ListSerializer(StoredShot.serializer()), b.toString(Charsets.UTF_8)).map { it.id } }.getOrNull()
                 }.orEmpty()
                 val db = db().writableDatabase
-                db.inTransaction {
+                tables.write(db) {
                     tables.clear(this)
                     fill(this)
-                    tables.putMeta(this, TABLE_META_KEY, json.encodeToString(MigrationRecord.serializer(), MigrationRecord(STATE_DONE, bytes?.let(::sha256) ?: "", ids)))
+                    tables.putMeta(db, TABLE_META_KEY, json.encodeToString(MigrationRecord.serializer(), MigrationRecord(STATE_DONE, bytes?.let(::sha256) ?: "", ids)))
                 }
                 closeDb()
                 writeMarker(HistoryMarker(STATE_DONE, atMs = now()))
@@ -1562,6 +1580,36 @@ class HistoryStore(private val context: Context, private val json: Json) {
             if (mode == Mode.SQL) sqlLoad() else HistoryLoad(emptyList(), 0, health)
         }
     }
+
+    // ── The stage-1 index (#310 A1, SQLite SPEC §11 stage 1) ─────────────────
+
+    /** [block] under the store's lock on IO, with `shots.db` when the rows are in it this session. */
+    private suspend fun <T> withShots(block: (SQLiteDatabase?) -> T): T =
+        lock.withLock {
+            withContext(Dispatchers.IO) { block(if (mode == Mode.SQL) runCatching { db().readableDatabase }.getOrNull() else null) }
+        }
+
+    /**
+     * The boot check, and a full diff when it misses ([force]: one anyway).
+     * Each batch takes the lock, so a capture never waits on the whole diff.
+     * Null when nothing ran: the store isn't on `shots.db`, the check passed,
+     * or the index won't open. Never throws but a [SimulatedCrash].
+     */
+    suspend fun syncIndex(force: Boolean = false): IndexDiffReport? {
+        val diff = withShots { shots -> shots?.let { index.planDiff(it, force) } } ?: return null
+        while (withShots { shots -> shots != null && index.diffStep(diff, shots) }) afterDiffBatchForTest?.invoke()
+        return withShots { shots -> index.finishDiff(diff, shots) }
+    }
+
+    /** Test seam: close the index as a process death would, so another store (or the test) can open the file. */
+    @androidx.annotation.VisibleForTesting
+    internal suspend fun closeIndexForTest() = lock.withLock { index.closeAll() }
+
+    /** The index's health, for the debug screen. */
+    suspend fun indexHealth(): IndexHealth = withShots { index.health(it) }
+
+    /** The index against `shots.db`, row by row: the debug screen's check and the tests' oracle. Null when either isn't open. */
+    suspend fun compareIndex(): IndexComparison? = withShots { shots -> shots?.let { index.compare(it) } }
 
     // ── Legacy backend: shots.json, as before P3a ─────────────────────────────
 
@@ -1659,13 +1707,15 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
     /** Delete everything the history keeps (Erase all data): `shots.json` and its copies, the series,
      *  `shots.db` with its `-wal` and `-shm` and any kept-aside copy, the marker, the snapshot and the journal,
-     *  and what a newer build's SQLite history keeps ([eraseSqliteHistory]). Returns the names of what
+     *  and the SQLite history's files ([eraseSqliteHistory]), the index closed first (S11). Returns the names of what
      *  stayed, empty when everything went, so Erase all data can say so (#428). */
     suspend fun erase(): List<String> =
         lock.withLock {
             withContext(Dispatchers.IO) {
                 val stayed = mutableListOf<String>()
                 fun gone(name: String, ok: Boolean) { if (!ok) stayed += name }
+                // The index first, under the core's lock (S11): nothing writes a file this is about to remove.
+                index.closeAll()
                 closeDb()
                 gone(FILE_NAME, eraseStore(file))
                 seriesDir.listFiles()?.forEach { gone("$SERIES_DIR/${it.name}", eraseStore(it)) }
@@ -1696,13 +1746,14 @@ class HistoryStore(private val context: Context, private val json: Json) {
         }
 
     /**
-     * Remove the files a newer build's SQLite history keeps (its SPEC §11, N3), if present:
+     * Remove the files the SQLite history keeps (its SPEC §11, N3), if present:
      * `history-sqlite/` (the index, `history.db`, any `history-<n>.db`, the snapshots, their
      * `-wal`, `-shm` and `-journal`, `pending.jsonl`, `done.json`) and its marker,
-     * `history-sqlite.json`. This build writes none of them; it removes them so an erase here,
-     * after a rollback, still takes everything. The done-record goes after the rest of the
-     * directory, and the marker only once the directory is gone, so a file that stays is never
-     * left without its marker (S10). True when none of them remains.
+     * `history-sqlite.json`. This build writes only the index (#310 A1), closed before this
+     * runs; it removes the rest so an erase here, after a rollback, still takes everything.
+     * The done-record goes after the rest of the directory, and the marker only once the
+     * directory is gone, so a file that stays is never left without its marker (S10). True
+     * when none of them remains.
      */
     private fun eraseSqliteHistory(): Boolean {
         val dir = File(context.filesDir, SQLITE_DIR)
@@ -1766,6 +1817,8 @@ class HistoryStore(private val context: Context, private val json: Json) {
         } else if (!QuarantineHandler().quarantine(dbFile)) {
             throw MigrationFailed("Couldn't set the old shots.db aside")
         }
+        // Gone from under the index, outside a write: it's stale until a write that clears the table, or a full diff.
+        index.replaced()
     }
 
     private fun writeMarker(marker: HistoryMarker) {
@@ -1827,6 +1880,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
         @androidx.annotation.VisibleForTesting
         @Volatile internal var holdOpen: kotlinx.coroutines.Deferred<Unit>? = null
 
+        /** Test seam: runs between two batches of the index's full diff, outside the lock (#310 A1). */
+        @androidx.annotation.VisibleForTesting
+        @Volatile internal var afterDiffBatchForTest: (suspend () -> Unit)? = null
+
         /** Test seam: the steps that fail or stop, process-wide. */
         @androidx.annotation.VisibleForTesting
         internal val faults: MutableSet<MigrationFault> = Collections.synchronizedSet(mutableSetOf())
@@ -1860,9 +1917,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
         val NEXT_FILES = listOf(MARKER_NAME, SNAPSHOT_NAME, PENDING_NAME)
 
         /**
-         * The SQLite history's directory, done-record and marker (SQLite history SPEC §11, N3). A newer build
-         * writes them; this one only removes them, in [erase]. Never under `databases/`, so
-         * nothing that lists `context.databaseList()` can open them through the framework.
+         * The SQLite history's directory, done-record and marker (SQLite history SPEC §11, N3). This
+         * build writes only the index there ([HistoryIndex], #310 A1); a later one writes the rest, and
+         * [erase] removes them all. Never under `databases/`, so nothing that lists
+         * `context.databaseList()` can open them through the framework.
          */
         const val SQLITE_DIR = "history-sqlite"
         const val SQLITE_DONE_NAME = "done.json"

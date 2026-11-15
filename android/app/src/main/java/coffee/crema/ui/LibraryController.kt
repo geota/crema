@@ -477,6 +477,17 @@ class LibraryController(
         return dropped
     }
 
+    /**
+     * The stage-1 history index (#310 A1): its boot check, and a full diff on
+     * a miss ([force]: one anyway). Nothing reads the index yet.
+     */
+    suspend fun syncHistoryIndex(force: Boolean = false): coffee.crema.history.IndexDiffReport? = historyStore.syncIndex(force)
+
+    /** The index's health and a row-by-row check against `shots.db`, for the debug screen. */
+    suspend fun historyIndexHealth(): coffee.crema.history.IndexHealth = historyStore.indexHealth()
+
+    suspend fun compareHistoryIndex(): coffee.crema.history.IndexComparison? = historyStore.compareIndex()
+
     /** The legacy-backend notice is said once per session. */
     private var legacyNoticed = false
 
