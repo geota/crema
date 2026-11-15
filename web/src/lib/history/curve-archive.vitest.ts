@@ -591,3 +591,28 @@ describe('#420 fix check, c913b692', () => {
 		expect(fs.curves().has(archiveNameOf(shots[2].id))).toBe(true);
 	});
 });
+
+describe('#420 FC4-N3', () => {
+	it('one tab removes another tab’s tombstone file, and clears its key, without a new load', async () => {
+		const fs = memoryFs();
+		const shots = small(3).map((s) => ({ ...s, visualizerId: null }));
+		await seedStore(shots);
+		// Both tabs loaded before either delete.
+		const a = await boot(fs.opts);
+		const b = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		fs.control.failRemove = true;
+		a.delete(shots[0].id);
+		await a.flushed();
+		await new Promise((r) => setTimeout(r, 20));
+		expect(fs.curves().has(archiveNameOf(shots[0].id))).toBe(true);
+		fs.control.failRemove = false;
+		// B deletes another shot: its remove takes A's tombstone too.
+		b.delete(shots[1].id);
+		await b.flushed();
+		await until(() => !fs.curves().has(archiveNameOf(shots[1].id)));
+		await until(() => !fs.curves().has(archiveNameOf(shots[0].id)));
+		expect(localStorage.getItem(`crema.history.archiveTombstone:${shots[0].id}`)).toBeNull();
+		expect(fs.curves().has(archiveNameOf(shots[2].id))).toBe(true);
+	});
+});
