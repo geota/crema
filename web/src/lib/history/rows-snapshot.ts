@@ -180,6 +180,35 @@ export async function readRowsSnapshot(
 	}
 }
 
+/**
+ * Every daily copy merged by id, the newest copy winning a clash, in the
+ * newest copy's order and then each older copy's own; null when there's none.
+ */
+export async function readAllRowsSnapshots(root: Root = defaultRoot): Promise<{ rows: SnapshotRow[]; at: number } | null> {
+	const dir = await snapshotDir(root, false);
+	if (!dir) return null;
+	let names: string[];
+	try {
+		names = await listNames(dir);
+	} catch {
+		return null;
+	}
+	const seen = new Set<string>();
+	const rows: SnapshotRow[] = [];
+	let at: number | null = null;
+	for (const name of names) {
+		const snap = await readRowsSnapshot(root, name);
+		if (!snap) continue;
+		at ??= snap.at;
+		for (const r of snap.rows) {
+			if (seen.has(r.id)) continue;
+			seen.add(r.id);
+			rows.push(r);
+		}
+	}
+	return at === null ? null : { rows, at };
+}
+
 /** The daily copies there are, newest first, each with its date and row count read from the copy. */
 export async function listRowsSnapshots(root: Root = defaultRoot): Promise<SnapshotInfo[]> {
 	const dir = await snapshotDir(root, false);

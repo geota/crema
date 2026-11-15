@@ -126,6 +126,7 @@ import {
 	SNAPSHOT_CHUNK,
 	dayOf,
 	listRowsSnapshots,
+	readAllRowsSnapshots,
 	readRowsSnapshot,
 	snapshotWritten,
 	writeRowsSnapshot,
@@ -1722,14 +1723,17 @@ export class HistoryStore {
 	}
 
 	/**
-	 * Lost: a daily copy (`name`, the newest by default), with each row's as-run profile (S3).
+	 * Lost: a daily copy (`name`, the newest by default), or with `all` every
+	 * copy merged by id, the newest copy winning a clash; each row with its
+	 * as-run profile (S3).
 	 * Their curves were in the lost store, so the rows come back without
 	 * them, and their summaries say so (no samples), so a backfill or a merge
 	 * restore can still give each its curve.
 	 */
-	async recoverSnapshot(name?: string): Promise<RecoveryResult> {
+	async recoverSnapshot(name?: string | 'all'): Promise<RecoveryResult> {
 		if (this.healthState !== 'lost') return this.recoverWith(async () => false);
-		const snap = await readRowsSnapshot(this.opts.snapshotRoot, name);
+		const snap =
+			name === 'all' ? await readAllRowsSnapshots(this.opts.snapshotRoot) : await readRowsSnapshot(this.opts.snapshotRoot, name);
 		if (!snap) {
 			this.lastError = 'The daily copy couldn’t be read.';
 			return false;

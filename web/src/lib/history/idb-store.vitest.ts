@@ -874,6 +874,14 @@ describe('a store that is lost or can’t open', () => {
 		expect(info.map((s) => s.rows)).toEqual([6, 1, 6]);
 		expect(info[1].name).toBe(newer.name);
 		expect((await readRowsSnapshot(snapshotRoot, newer.name))!.rows.map((r) => r.id)).toEqual([made.id]);
+		// Lost once more: all copies merged by id, the newest winning a clash.
+		await deleteHistoryDb();
+		const all = await boot({ snapshotRoot, now: clock.now });
+		expect(all.health).toBe('lost');
+		expect(await all.recoverSnapshot('all')).toBe(true);
+		expect(all.rawAll.map((s) => s.id).sort()).toEqual([...shots.map((s) => s.id), made.id].sort());
+		expect(all.get(shots[1].id)!.metadata.rating).toBe(2);
+		expect(all.get(shots[0].id)!.metadata.rating).toBe(3);
 	});
 
 	it('a recovery the same day never overwrites that day’s copy, with localStorage refusing every write (F5)', async () => {

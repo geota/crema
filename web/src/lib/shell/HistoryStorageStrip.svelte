@@ -111,6 +111,11 @@
 					Daily copy ({dateOf(snap.at)}, {snap.rows} shots, without their curves)
 				</button>
 			{/each}
+			{#if snapshots.length > 1}
+				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot('all'), 'History restored from every daily copy.')}>
+					Recover from all copies (merged, newest first, without curves)
+				</button>
+			{/if}
 			<button type="button" class="hs-btn" disabled={busy} onclick={() => void restoreBackup()}>Restore a backup</button>
 			{#if history.oldCopy && history.oldCopy.rows > 0}
 				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverOldCopy(), 'History recovered from the old copy.')}>
