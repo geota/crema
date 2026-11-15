@@ -1659,17 +1659,23 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
     /** Delete everything the history keeps (Erase all data): `shots.json` and its copies, the series,
      *  `shots.db` with its `-wal` and `-shm` and any kept-aside copy, the marker, the snapshot and the journal,
-     *  and what a newer build's SQLite history keeps ([eraseSqliteHistory]). */
-    suspend fun erase() {
+     *  and what a newer build's SQLite history keeps ([eraseSqliteHistory]). Returns the names of what
+     *  stayed, empty when everything went, so Erase all data can say so (#428). */
+    suspend fun erase(): List<String> =
         lock.withLock {
             withContext(Dispatchers.IO) {
+                val stayed = mutableListOf<String>()
+                fun gone(name: String, ok: Boolean) { if (!ok) stayed += name }
                 closeDb()
-                eraseStore(file)
-                seriesDir.listFiles()?.forEach { eraseStore(it) }
+                gone(FILE_NAME, eraseStore(file))
+                seriesDir.listFiles()?.forEach { gone("$SERIES_DIR/${it.name}", eraseStore(it)) }
+                // False also when there's none: what's left on disk tells.
                 runCatching { context.deleteDatabase(NEXT_DB_NAME) }
-                dbFile.parentFile?.listFiles { f -> f.name.startsWith(NEXT_DB_NAME + QuarantineHandler.CORRUPT) }?.forEach { it.delete() }
-                NEXT_FILES.forEach { eraseStore(File(context.filesDir, it)) }
-                eraseSqliteHistory()
+                gone(NEXT_DB_NAME, !dbFile.exists())
+                dbFile.parentFile?.listFiles { f -> f.name.startsWith(NEXT_DB_NAME + QuarantineHandler.CORRUPT) }
+                    ?.forEach { gone(it.name, it.delete()) }
+                NEXT_FILES.forEach { gone(it, eraseStore(File(context.filesDir, it))) }
+                gone(SQLITE_DIR, eraseSqliteHistory())
                 Stores.forget(dbFile)
                 written.clear()
                 stored.clear(); withProfile.clear(); staged.clear(); journaledStage.clear(); legacyHeavy.clear(); seriesWritten.clear(); seen.clear();
@@ -1685,9 +1691,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 // The next save starts a new, empty store.
                 mode = Mode.UNOPENED
                 health = HistoryHealth.LOADING
+                stayed
             }
         }
-    }
 
     /**
      * Remove the files a newer build's SQLite history keeps (its SPEC §11, N3), if present:

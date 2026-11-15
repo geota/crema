@@ -2,7 +2,6 @@ package coffee.crema.ui
 
 import android.app.Application
 import android.os.Looper
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Test
@@ -44,7 +43,7 @@ class EraseAllDataTest {
     fun eraseLeavesNoCopyOfTheOldData() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val store = ViewModelStore()
-        val vm = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory.getInstance(app))[MainViewModel::class.java]
+        val vm = VmHarness.build(store)
         shadowOf(Looper.getMainLooper()).idle()
         // The startup load reads the stores, and quarantines a SAW model it
         // can't read as sawModel.corrupt.json. Seeding before it ends lets it
@@ -70,7 +69,7 @@ class EraseAllDataTest {
         File(captures, "session-20261001-120000.jsonl").writeText(old)
 
         vm.eraseAll()
-        val done = "Erased all Crema data on this device"
+        val done = MainViewModel.ERASED
         val deadline = System.currentTimeMillis() + 20_000
         while (done !in vm.ui.value.userMessages) {
             if (System.currentTimeMillis() > deadline) fail("erase did not finish")

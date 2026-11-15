@@ -3056,7 +3056,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // active-profile reseed via refreshProfiles).
         library.eraseAll()
         viewModelScope.launch {
-            library.eraseStoredData()
+            val historyStayed = library.eraseStoredData()
             guided.eraseStoredData()
             settings.erase()
             maintenance.eraseStored(freshMaintenance)
@@ -3068,12 +3068,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             drive.eraseAll()
             // The relay key store, relay-lost/ and the v3 pairing file (SR-3a).
             proxy.eraseRelayData()
-            kotlinx.coroutines.withContext(Dispatchers.IO) {
+            val left = kotlinx.coroutines.withContext(Dispatchers.IO) {
                 bleRecorder.eraseCaptures()
-                val left = coffee.crema.persist.SafeFile.eraseCopiesIn(getApplication<Application>().filesDir)
-                if (left.isNotEmpty()) appendLog("Erase: couldn't delete ${left.joinToString()}")
+                historyStayed + coffee.crema.persist.SafeFile.eraseCopiesIn(getApplication<Application>().filesDir)
             }
-            notifyUser("Erased all Crema data on this device")
+            if (left.isNotEmpty()) appendLog("Erase: couldn't delete ${left.joinToString()}")
+            notifyUser(eraseNotice(left))
         }
     }
 
@@ -3169,6 +3169,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     internal companion object {
+        /** What Erase all data tells: done, or that some of it stayed, as the web's factory reset does (#428). */
+        fun eraseNotice(left: List<String>): String =
+            if (left.isEmpty()) {
+                ERASED
+            } else {
+                "Erase all data couldn't delete ${left.size} " + (if (left.size == 1) "file" else "files") +
+                    ", so some Crema data is still on this device. Run Erase all data again."
+            }
+
+        const val ERASED = "Erased all Crema data on this device"
+
         /** An older pick's restore found the device changed after a newer pick (#413). */
         const val PICK_AGAIN = "That backup changed while restoring; pick it again."
 

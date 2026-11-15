@@ -67,7 +67,7 @@ class HistorySqliteEraseTest {
         plant(filesDir, HistoryStore.SQLITE_MARKER_NAME + ".tmp")
         others.forEach { plant(filesDir, it) }
 
-        store().erase()
+        assertEquals(emptyList(), store().erase(), "nothing stayed (#428)")
 
         assertFalse(sqliteDir.exists(), "history-sqlite/ is gone, every file in it with it")
         assertFalse(marker.exists())
@@ -94,7 +94,7 @@ class HistorySqliteEraseTest {
         held.setWritable(false)
         try {
             org.junit.Assume.assumeFalse("a read-only directory's files can't be deleted here (not root)", probe.delete())
-            store().erase()
+            assertEquals(listOf(HistoryStore.SQLITE_DIR), store().erase(), "what stayed is returned (#428)")
             assertTrue(File(held, "history.db").exists())
             assertTrue(File(sqliteDir, HistoryStore.SQLITE_DONE_NAME).exists(), "the done-record goes only after the rest")
             assertTrue(marker.exists(), "the marker goes only once the directory is gone")
@@ -102,7 +102,7 @@ class HistorySqliteEraseTest {
             held.setWritable(true)
         }
         // Once it can go, the next erase takes everything.
-        store().erase()
+        assertEquals(emptyList(), store().erase())
         assertFalse(sqliteDir.exists())
         assertFalse(marker.exists())
     }

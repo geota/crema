@@ -121,7 +121,7 @@ class ShotHistorySizeTest {
     }
 
     @Test
-    fun `at the design size the load reads no series, and each shot reads whole on demand`() = runBlocking {
+    fun `at the design size the load reads no series, and each shot reads whole on demand`(): Unit = runBlocking {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val store = HistoryStore(app, coreJson)
         store.erase()
@@ -154,7 +154,7 @@ class ShotHistorySizeTest {
     }
 
     @Test
-    fun `the store holds no series and load rejoins them`() = runBlocking {
+    fun `the store holds no series and load rejoins them`(): Unit = runBlocking {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val store = HistoryStore(app, coreJson)
         store.erase()
