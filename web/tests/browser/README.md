@@ -21,7 +21,7 @@ W0_KILLS=20 pnpm test:browser durability --project webkit
 | `failed-start.spec.ts` | Held handles, a missing pool directory, a corrupt or foreign `history.db`, an invalid slot header: each ends in SPEC §8's health state, every file byte-identical | Chromium, WebKit |
 | `connections.spec.ts` | One connection per file (S4); two files in one pool and across two, with the snapshot and flip copies; SQLite ≥ 3.54 and equal to the native pin | Chromium, WebKit |
 | `capacity.spec.ts` | A full `crema-db` adds capacity and the write goes through (S5) | Chromium, WebKit |
-| `bench.spec.ts` | The wasm under 1 MB gzip; B1's browser bench at 5,000, 20,000 and 100,000 rows, the first-page lines gated | Chromium |
+| `bench.spec.ts` | The wasm under 1 MB gzip; B1's browser bench at 5,000, 20,000 and 100,000 rows, the first-page lines gated | Chromium (project `bench`, alone, after the others) |
 
 ## How it's put together
 

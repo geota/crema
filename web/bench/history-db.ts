@@ -149,11 +149,11 @@ export async function bench(
 	lines[lines.length - 1].bytes = dbBytes;
 	w.terminate();
 
-	// ── Open to first page painted, from a new Worker, three times ───────
+	// ── Open to first page painted, from a new Worker, five times ────────
 	log(`${n}: open to first page`);
 	const opens: number[] = [];
 	let parts = '';
-	for (let i = 0; i < 3; i++) {
+	for (let i = 0; i < 5; i++) {
 		w = new W0();
 		const t0 = performance.now();
 		await w.start();
@@ -170,13 +170,13 @@ export async function bench(
 		const t5 = performance.now();
 		opens.push(t5 - t0);
 		parts = `Worker + wasm ${fmt(t1 - t0)}, install ${fmt(t2 - t1)}, open ${fmt(t3 - t2)}, count + page ${fmt(t4 - t3)}, paint ${fmt(t5 - t4)}`;
-		if (i < 2) {
+		if (i < 4) {
 			await w.call('close', { h: 'db' });
 			await w.call('uninstall', { pool: 'index' });
 			w.terminate();
 		}
 	}
-	line('Open to first page painted', 'open', median(opens), `median of 3 cold Workers (worst ${fmt(Math.max(...opens))}); last: ${parts}`);
+	line('Open to first page painted', 'open', median(opens), `median of 5 new Workers (${opens.map(fmt).join(', ')}); last: ${parts}`);
 
 	const call = (m: string, a?: unknown) => w.call('call', { h: 'db', m, a });
 

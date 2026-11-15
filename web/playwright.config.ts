@@ -5,6 +5,7 @@
  * Projects:
  * - `chromium`: desktop Chrome, headless (Playwright's Chromium).
  * - `webkit`: Playwright's WebKit, standing in for Safari.
+ * - `bench`: `bench.spec.ts` in Chromium, after the other two.
  * - `android-chrome`: Chrome on an Android device or emulator, over CDP.
  *   Only with `W0_ANDROID=1`; `tests/browser/README.md` says how to set it up.
  *
@@ -40,10 +41,19 @@ export default defineConfig({
 		reuseExistingServer: false,
 		timeout: 120_000
 	},
+	// The bench runs last, alone and one size at a time: its first-page lines
+	// are gated, and the durability runs' crashes beside it make timings noise.
 	projects: android
 		? [{ name: 'android-chrome', use: { browserName: 'chromium' } }]
 		: [
-				{ name: 'chromium', use: { browserName: 'chromium' } },
-				{ name: 'webkit', use: { browserName: 'webkit' } }
+				{ name: 'chromium', use: { browserName: 'chromium' }, testIgnore: 'bench.spec.ts' },
+				{ name: 'webkit', use: { browserName: 'webkit' }, testIgnore: 'bench.spec.ts' },
+				{
+					name: 'bench',
+					use: { browserName: 'chromium' },
+					testMatch: 'bench.spec.ts',
+					fullyParallel: false,
+					dependencies: ['chromium', 'webkit']
+				}
 			]
 });
