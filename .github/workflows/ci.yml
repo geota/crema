@@ -521,6 +521,71 @@ jobs:
           pnpm run wasm:history
           ../scripts/history-wasm-size.sh src/lib/history-db/wasm/de1_history_wasm_bg.wasm
 
+      # The build the browser tests load (history-browser, below).
+      - name: Upload the history wasm
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-wasm
+          path: web/src/lib/history-db/wasm/
+          retention-days: 3
+
+  # ─────────────────────────────────────────────────────────────────────
+  # The SQLite history's web gate (#310 PLAN W0): the history-wasm job's build
+  # in a dedicated Worker on real OPFS (sahpool), in Playwright's Chromium
+  # (desktop Chrome) and WebKit (Safari): durability under 200 tab kills per
+  # journal mode, ownership and handover, a frozen owner, failed starts and
+  # their health states, connections and the SQLite floor (3.54), capacity,
+  # the wasm's size, and B1's browser bench at 5,000, 20,000 and 100,000 rows,
+  # whose tables go to the run's summary. web/tests/browser/README.md.
+  # ─────────────────────────────────────────────────────────────────────
+  history-browser:
+    name: history browser (W0, Playwright)
+    runs-on: ubuntu-latest
+    needs: history-wasm
+    if: github.event_name != 'schedule'
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: pnpm install
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Download the history wasm
+        uses: actions/download-artifact@v8
+        with:
+          name: history-wasm
+          path: web/src/lib/history-db/wasm/
+
+      - name: Install Playwright's Chromium and WebKit
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium webkit
+
+      - name: pnpm test:browser
+        working-directory: web
+        run: pnpm test:browser
+
+      - name: Upload the browser test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-browser-results
+          path: web/test-results/
+          retention-days: 7
+
   # ─────────────────────────────────────────────────────────────────────
   # Android shell gates: JVM unit tests (incl. Robolectric), Android lint and
   # a debug APK build. Setup mirrors release.yml / nightly.yml (JDK, SDK, NDK,

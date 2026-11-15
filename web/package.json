@@ -15,12 +15,14 @@
     "prepare": "svelte-kit sync || echo ''; git config core.hooksPath .githooks 2>/dev/null || true",
     "test": "vitest run",
     "test:vitest": "vitest run",
+    "test:browser": "tsc -p tests/browser && playwright test",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "openapi": "openapi-typescript src/lib/visualizer/openapi.json -o src/lib/visualizer/openapi.d.ts"
   },
   "devDependencies": {
     "@katama-labs/vite-pwa-sveltekit": "^2.0.0",
+    "@playwright/test": "1.64.1",
     "@sveltejs/adapter-static": "^4.0.1",
     "@sveltejs/kit": "^3.1.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

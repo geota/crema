@@ -35,3 +35,7 @@ dev-dist/
 # OS / editor
 .DS_Store
 .vscode/
+# The browser tests' harness build and Playwright's output (tests/browser/README.md).
+tests/browser/.build/
+test-results/
+playwright-report/
