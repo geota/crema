@@ -471,12 +471,12 @@ describe('only a recorded delete removes a file (#420 FC2-S1)', () => {
 		await a.flushed();
 		await new Promise((r) => setTimeout(r, 20));
 		expect(fs.curves().has(archiveNameOf(shots[0].id))).toBe(true);
-		expect(JSON.parse(localStorage.getItem('crema.history.archiveTombstones')!)).toEqual([shots[0].id]);
+		expect(localStorage.getItem(`crema.history.archiveTombstone:${shots[0].id}`)).toBe('1');
 		fs.control.failRemove = false;
 		const b = await boot(fs.opts);
 		await b.archiveCatchUpNow();
 		expect(fs.curves().has(archiveNameOf(shots[0].id))).toBe(false);
-		expect(localStorage.getItem('crema.history.archiveTombstones')).toBeNull();
+		expect(localStorage.getItem(`crema.history.archiveTombstone:${shots[0].id}`)).toBeNull();
 		expect(fs.curves().has(archiveNameOf(shots[1].id))).toBe(true);
 	});
 
@@ -503,5 +503,91 @@ describe('only a recorded delete removes a file (#420 FC2-S1)', () => {
 		await b.archiveSettled();
 		await until(() => !fs.curves().has(archiveNameOf(x)));
 		expect(fs.curves().has(archiveNameOf(shots[1].id))).toBe(true);
+	});
+});
+
+describe('#420 fix check, c913b692', () => {
+	it('FC3-S1: a check cut off mid-pass goes on from where it stopped at the next load, and a new pass waits for it', async () => {
+		const fs = memoryFs();
+		const shots = small(40);
+		await seedStore(shots);
+		const a = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		// Late in id order: a file that went corrupt untouched.
+		const order = shots.map((s) => s.id).sort();
+		const late = order[order.length - 1];
+		fs.curves().set(archiveNameOf(late), new Uint8Array([1, 2, 3]));
+		// The next day's check is cut off after its second batch (the tab closed).
+		let reads = 0;
+		const day = 86_400_000;
+		const b = await boot({
+			...fs.opts,
+			now: () => Date.now() + day,
+			dbFault: (op) => {
+				if (op === 'read-details' && ++reads > 2) throw new DOMException('closed', 'InvalidStateError');
+			}
+		});
+		await b.archiveCatchUpNow();
+		expect((await new CurveArchive(fs.fsRoot).read(late)).kind).toBe('corrupt');
+		const cursor = JSON.parse(localStorage.getItem('crema.history.archiveCheck')!) as { after: string };
+		expect(cursor.after).toBe(order[15]);
+		// The next load, even another day on, goes on from there: it reads only the rest.
+		let rest = 0;
+		const c = await boot({
+			...fs.opts,
+			now: () => Date.now() + 2 * day,
+			dbFault: (op) => {
+				if (op === 'read-details') rest += 1;
+			}
+		});
+		await c.archiveCatchUpNow();
+		expect(rest).toBe(Math.ceil((40 - 16) / 8));
+		expect((await new CurveArchive(fs.fsRoot).read(late)).kind).toBe('curve');
+		expect(localStorage.getItem('crema.history.archiveCheck')).toBeNull();
+	});
+
+	it('FC3-N1: a delete while the store is lost records a tombstone, and a recovery brings no curve back with the row', async () => {
+		const fs = memoryFs();
+		const shots = small(3).map((s) => ({ ...s, visualizerId: null }));
+		await seedStore(shots);
+		const a = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		a.setRating(shots[0].id, 2);
+		await a.flushed();
+		await until(() => fs.copies() === 1);
+		await lose(a, shots[1].id);
+		const doomed = shots[2].id;
+		a.delete(doomed);
+		await a.flushed();
+		await until(() => !fs.curves().has(archiveNameOf(doomed)));
+		const b = await boot(fs.opts);
+		expect(await b.recoverSnapshot()).toBe(true);
+		expect((await stored()).details.get(doomed)?.samples ?? []).toEqual([]);
+	});
+
+	it('FC3-N3: one tab’s tombstone survives another tab writing its own', async () => {
+		const fs = memoryFs();
+		const shots = small(3).map((s) => ({ ...s, visualizerId: null }));
+		await seedStore(shots);
+		const a = await boot(fs.opts);
+		const b = await boot(fs.opts);
+		await a.archiveCatchUpNow();
+		// Both tabs' removes fail: each records its own tombstone, and B's
+		// doesn't write over A's.
+		fs.control.failRemove = true;
+		a.delete(shots[0].id);
+		await a.flushed();
+		b.delete(shots[1].id);
+		await b.flushed();
+		await new Promise((r) => setTimeout(r, 20));
+		expect(localStorage.getItem(`crema.history.archiveTombstone:${shots[0].id}`)).toBe('1');
+		expect(localStorage.getItem(`crema.history.archiveTombstone:${shots[1].id}`)).toBe('1');
+		// Both close before they try again; a later load removes both files.
+		fs.control.failRemove = false;
+		const c = await boot(fs.opts);
+		await c.archiveCatchUpNow();
+		expect(fs.curves().has(archiveNameOf(shots[0].id))).toBe(false);
+		expect(fs.curves().has(archiveNameOf(shots[1].id))).toBe(false);
+		expect(fs.curves().has(archiveNameOf(shots[2].id))).toBe(true);
 	});
 });

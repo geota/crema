@@ -344,23 +344,58 @@ function storeHeldMore(shot: StoredShot, d: DetailsRecord): boolean {
 }
 
 /** The archive's tombstones: ids a delete recorded whose file is still to go. */
-const ARCHIVE_TOMBSTONES_KEY = 'crema.history.archiveTombstones';
+const ARCHIVE_TOMBSTONE_PREFIX = 'crema.history.archiveTombstone:';
 
+/**
+ * The archive's tombstones, one `localStorage` key each, so two tabs never
+ * write one list over the other's (#420 FC3-N3).
+ */
 function readArchiveTombstones(): string[] {
+	const out: string[] = [];
 	try {
-		const v = JSON.parse(localStorage.getItem(ARCHIVE_TOMBSTONES_KEY) ?? '[]') as unknown;
-		return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+		for (let i = 0; i < localStorage.length; i++) {
+			const k = localStorage.key(i);
+			if (k?.startsWith(ARCHIVE_TOMBSTONE_PREFIX)) out.push(k.slice(ARCHIVE_TOMBSTONE_PREFIX.length));
+		}
 	} catch {
-		return [];
+		// None readable: kept in memory for this load only.
+	}
+	return out;
+}
+
+function setArchiveTombstone(id: string, on: boolean): void {
+	try {
+		if (on) localStorage.setItem(ARCHIVE_TOMBSTONE_PREFIX + id, '1');
+		else localStorage.removeItem(ARCHIVE_TOMBSTONE_PREFIX + id);
+	} catch {
+		// Kept in memory for this load; a file left behind costs space, never a curve.
 	}
 }
 
-function writeArchiveTombstones(ids: ReadonlySet<string>): void {
+/** Where the day's whole check of the archive got to, so the next load goes on from there (#420 FC3-S1). */
+const ARCHIVE_CHECK_KEY = 'crema.history.archiveCheck';
+interface ArchiveCheck {
+	/** The day the pass began. */
+	on: string;
+	/** The last id checked, in id order; '' before the first. */
+	after: string;
+}
+
+function readArchiveCheck(): ArchiveCheck | null {
 	try {
-		if (ids.size === 0) localStorage.removeItem(ARCHIVE_TOMBSTONES_KEY);
-		else localStorage.setItem(ARCHIVE_TOMBSTONES_KEY, JSON.stringify([...ids]));
+		const v = JSON.parse(localStorage.getItem(ARCHIVE_CHECK_KEY) ?? 'null') as ArchiveCheck | null;
+		return v && typeof v.on === 'string' && typeof v.after === 'string' ? v : null;
 	} catch {
-		// Kept in memory for this load; a file left behind costs space, never a curve.
+		return null;
+	}
+}
+
+function writeArchiveCheck(v: ArchiveCheck | null): void {
+	try {
+		if (v) localStorage.setItem(ARCHIVE_CHECK_KEY, JSON.stringify(v));
+		else localStorage.removeItem(ARCHIVE_CHECK_KEY);
+	} catch {
+		// Begun again at the next load.
 	}
 }
 
@@ -1811,6 +1846,14 @@ export class HistoryStore {
 					// Nothing reached the store; a journalled row went with dropPending.
 					// After a move elsewhere the store still holds it.
 					result = this.mode === 'blocked' && !this.movedAway;
+					// The store is gone, so this delete is the only record of it: its
+					// tombstone keeps the archived curve from coming back with a
+					// recovery (#420 FC3-N1). Not when the store only won't open:
+					// it still holds the row.
+					if (this.healthState === 'lost' && this.archive) {
+						for (const id of ids) this.archiveDeleted.add(id);
+						this.tombstone(ids);
+					}
 					return;
 				}
 				const seq = await db.delete(ids);
@@ -1837,7 +1880,12 @@ export class HistoryStore {
 
 	/** After the first save each day: every row, outside the database. */
 	private maybeSnapshot(): void {
-		if (this.snapshotting || !this.db) return;
+		if (!this.db) return;
+		// One already running (yesterday's, say): this save's turn comes when it ends.
+		if (this.snapshotting) {
+			this.snapshotAgain = true;
+			return;
+		}
 		// Once a day per tab, written or not: with no private file system every
 		// save would read every row again.
 		const now = this.now();
@@ -1864,9 +1912,16 @@ export class HistoryStore {
 				// Tomorrow's goes again.
 			} finally {
 				this.snapshotting = false;
+				if (this.snapshotAgain) {
+					this.snapshotAgain = false;
+					this.maybeSnapshot();
+				}
 			}
 		})();
 	}
+
+	/** A save asked for the day's copy while one was being written. */
+	private snapshotAgain = false;
 
 	// ── The curve archive (#420 S1) ───────────────────────────────────────
 
@@ -2004,8 +2059,10 @@ export class HistoryStore {
 
 	/** Record tombstones for `ids`, durably, then remove their files. */
 	private tombstone(ids: readonly string[]): void {
-		for (const id of ids) this.archiveRemoveOwed.add(id);
-		writeArchiveTombstones(this.archiveRemoveOwed);
+		for (const id of ids) {
+			this.archiveRemoveOwed.add(id);
+			setArchiveTombstone(id, true);
+		}
 		void this.removeArchived();
 	}
 
@@ -2016,17 +2073,19 @@ export class HistoryStore {
 	 */
 	private async removeArchived(): Promise<void> {
 		const archive = this.archive;
+		// Another tab's too: one whose remove failed there goes here.
+		for (const id of readArchiveTombstones()) this.archiveRemoveOwed.add(id);
 		const ids = [...this.archiveRemoveOwed];
 		if (!archive || ids.length === 0) return;
 		for (const id of ids) {
 			try {
 				await archive.remove([id]);
 				this.archiveRemoveOwed.delete(id);
+				setArchiveTombstone(id, false);
 			} catch (e) {
 				console.warn('[history] an archived curve of a deleted shot couldn’t be removed; tried again later', e);
 			}
 		}
-		writeArchiveTombstones(this.archiveRemoveOwed);
 		void this.countArchive();
 	}
 
@@ -2054,29 +2113,78 @@ export class HistoryStore {
 		// that is corrupt, or older than the store's, is rewritten (#420
 		// FC-S1, FC-S2); a write that matches rewrites nothing. Otherwise
 		// only a shot with no file, or an empty one, is owed.
-		const today = dayOf(this.now());
-		let checkAll = false;
-		try {
-			checkAll = localStorage.getItem(ARCHIVE_CHECKED_KEY) !== today;
-		} catch {
-			checkAll = false;
-		}
 		for (const [id, summary] of this.summaries) {
-			if ((!checkAll && have.has(id)) || this.archiveOwed.has(id)) continue;
+			if (have.has(id) || this.archiveOwed.has(id)) continue;
 			if ((summary.sampleCount ?? 0) > 0 || summary.brewSampleCount > 0) this.archiveOwed.set(id, null);
 		}
 		this.runArchive();
 		await this.fillFromArchive(have);
 		await this.archiveSettled();
-		if (checkAll && this.archiveOwed.size === 0) {
-			try {
-				localStorage.setItem(ARCHIVE_CHECKED_KEY, today);
-			} catch {
-				// Checked again at the next load.
-			}
-		}
 		this.archiveCaughtUpFlag = true;
+		await this.checkArchivePass(archive);
 		await this.countArchive();
+	}
+
+	/**
+	 * The daily whole check: every file against the store's curve, in id
+	 * order, a few at a time with a yield between, so one that is corrupt or
+	 * older than the store's is rewritten (#420 FC-S1, FC-S2); a file that
+	 * matches costs only a read. Where it got to is kept, so a load that ends
+	 * mid-pass leaves the next to go on from there, and a pass is finished,
+	 * across loads, before another begins (#420 FC3-S1).
+	 */
+	private async checkArchivePass(archive: CurveArchive): Promise<void> {
+		const today = dayOf(this.now());
+		let pass = readArchiveCheck();
+		if (!pass) {
+			let checkedOn: string | null = null;
+			try {
+				checkedOn = localStorage.getItem(ARCHIVE_CHECKED_KEY);
+			} catch {
+				return;
+			}
+			if (checkedOn === today) return;
+			pass = { on: today, after: '' };
+			writeArchiveCheck(pass);
+		}
+		const ids = [...this.summaries]
+			.filter(([, s]) => (s.sampleCount ?? 0) > 0 || s.brewSampleCount > 0)
+			.map(([id]) => id)
+			.filter((id) => id > pass.after)
+			.sort();
+		for (let i = 0; i < ids.length; i += 8) {
+			const db = this.db;
+			if (!db || this.mode !== 'idb') return;
+			await new Promise((r) => setTimeout(r, 0));
+			const part = ids.slice(i, i + 8);
+			let found: Map<string, DetailsRecord>;
+			try {
+				found = await db.detailsOf(part);
+			} catch {
+				// Gone on with at the next load, from here.
+				return;
+			}
+			for (const id of part) {
+				const d = found.get(id);
+				if (d && this.stored.has(id) && !this.archiveDeleted.has(id) && markerSaysDone()) {
+					try {
+						await archive.write(id, { samples: d.samples, brewSeries: d.brewSeries });
+					} catch (e) {
+						this.archiveStuck = true;
+						this.lastError = `A curve couldn’t be kept in the archive: ${errorText(e)}`;
+						return;
+					}
+				}
+				pass.after = id;
+			}
+			writeArchiveCheck(pass);
+		}
+		try {
+			localStorage.setItem(ARCHIVE_CHECKED_KEY, pass.on);
+		} catch {
+			// Checked again at the next load.
+		}
+		writeArchiveCheck(null);
 	}
 
 	/**

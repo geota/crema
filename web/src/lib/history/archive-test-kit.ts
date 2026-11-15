@@ -69,8 +69,9 @@ export function memoryFs() {
 	};
 	const fsRoot = async () => root as unknown as FileSystemDirectoryHandle;
 	const curves = () => dirs.get('crema-history-curves') ?? new Map<string, Uint8Array>();
+	const copyBytes = () => [...(dirs.get('crema-history-snapshot')?.values() ?? [])].reduce((n, b) => n + b.length, 0);
 	const copies = () => [...(dirs.get('crema-history-snapshot')?.values() ?? [])].filter((b) => b.length > 0).length;
 	const opts: HistoryStoreOptions = { snapshotRoot: fsRoot, archiveRoot: fsRoot, archiveDelayMs: 60_000 };
-	return { control, curves, copies, opts, fsRoot };
+	return { control, curves, copies, copyBytes, opts, fsRoot };
 }
 
