@@ -28,6 +28,7 @@ import {
 	resolveScroll,
 	scrollTopOf,
 	writeScroll,
+	type KeyLocator,
 	type Scroller
 } from './view-memory';
 
@@ -54,16 +55,37 @@ export interface ScrollMemoryOptions {
 	 * rows sit inside an inner scroller of their own (History's narrow layout).
 	 */
 	pixelOnly?: boolean;
+	/**
+	 * A windowed list's way to an item that isn't rendered (#310 P5w): the
+	 * offset that puts `key`'s top at the viewport's top, or `null` when the
+	 * list doesn't hold it.
+	 */
+	scrollToKey?: KeyLocator;
+}
+
+/** What a page can ask of its scroll memory. */
+export interface ScrollMemory {
+	/** Resolves once no restore is in flight: a page's own scroll (a deep link, focus return) goes after it. */
+	settled(): Promise<void>;
 }
 
 /** Remember and restore a scroller's place, keyed by list identity + filter. */
-export function useScrollMemory(opts: ScrollMemoryOptions): void {
+export function useScrollMemory(opts: ScrollMemoryOptions): ScrollMemory {
 	const waitMs = opts.waitMs ?? 2000;
 	/** The key whose rows the scroller shows now. */
 	let current: string | null = null;
 	/** Saving is off while a restore is in flight (it would record the half-way state). */
 	let armed = false;
 	let token = 0;
+	/** Waiting for the restore in flight to end. */
+	let waiters: (() => void)[] = [];
+	const wake = (): void => {
+		const now = waiters;
+		waiters = [];
+		for (const w of now) w();
+	};
+	/** Restoring now: set from the first step to the last. */
+	let restoring = false;
 
 	const scroller = (): Scroller | null => opts.container
 		? opts.container() ?? null
@@ -91,6 +113,7 @@ export function useScrollMemory(opts: ScrollMemoryOptions): void {
 	function restore(fallbackTop: number | null): void {
 		const mine = ++token;
 		armed = false;
+		restoring = true;
 		const started = performance.now();
 		let lastTop = -1;
 		let still = 0;
@@ -99,6 +122,8 @@ export function useScrollMemory(opts: ScrollMemoryOptions): void {
 			if (mine === token) {
 				token++;
 				armed = true;
+				restoring = false;
+				wake();
 			}
 		};
 		const target = s0 && s0 !== window ? s0 : window;
@@ -110,6 +135,10 @@ export function useScrollMemory(opts: ScrollMemoryOptions): void {
 		const finish = (): void => {
 			detach();
 			armed = true;
+			if (mine === token) {
+				restoring = false;
+				wake();
+			}
 		};
 		const again = (): void => {
 			requestAnimationFrame(step);
@@ -138,7 +167,7 @@ export function useScrollMemory(opts: ScrollMemoryOptions): void {
 				again();
 				return;
 			}
-			const { top } = resolveScroll(s, snap);
+			const { top } = resolveScroll(s, snap, opts.scrollToKey);
 			applyScroll(s, top);
 			const reached = Math.abs(scrollTopOf(s) - top) <= 2;
 			still = reached && Math.abs(top - lastTop) <= 1 ? still + 1 : 0;
@@ -207,4 +236,15 @@ export function useScrollMemory(opts: ScrollMemoryOptions): void {
 		save();
 		flushViewMemory();
 	});
+
+	return {
+		settled: () =>
+			new Promise<void>((resolve) => {
+				// A restore starts in a frame after a navigation: look once more then.
+				requestAnimationFrame(() => {
+					if (restoring) waiters.push(resolve);
+					else resolve();
+				});
+			})
+	};
 }

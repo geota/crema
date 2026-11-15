@@ -117,3 +117,28 @@ describe('scroll snapshots', () => {
 		expect(snap.anchors[0].offset).toBe(-200);
 	});
 });
+
+describe('resolveScroll through a windowed list (#310 P5w)', () => {
+	it('places an anchor the DOM does not hold through the locator', () => {
+		const box = list(KEYS.slice(0, 3), 0);
+		const at = { 'bean:15': 1500 } as Record<string, number>;
+		const locate = (key: string) => at[key] ?? null;
+		const snap = { top: 9, anchors: [{ key: 'bean:15', offset: 30 }] };
+		expect(resolveScroll(box, snap, locate)).toEqual({ top: 1470, anchored: true });
+		// Without the locator only the pixel offset is left.
+		expect(resolveScroll(box, snap)).toEqual({ top: 9, anchored: false });
+	});
+
+	it('skips an anchor the list no longer holds, for the next one', () => {
+		const box = list(KEYS.slice(0, 3), 0);
+		const locate = (key: string) => (key === 'bean:16' ? 1600 : null);
+		const snap = { top: 9, anchors: [{ key: 'gone', offset: 0 }, { key: 'bean:16', offset: 100 }] };
+		expect(resolveScroll(box, snap, locate)).toEqual({ top: 1500, anchored: true });
+	});
+
+	it('prefers a rendered anchor to the locator', () => {
+		const box = list(KEYS, 200);
+		const snap = { top: 0, anchors: [{ key: 'bean:4', offset: 50 }] };
+		expect(resolveScroll(box, snap, () => 99_999)).toEqual(resolveScroll(box, snap));
+	});
+});

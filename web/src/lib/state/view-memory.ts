@@ -201,21 +201,34 @@ function findKeyed(root: ParentNode, key: string): HTMLElement | null {
 }
 
 /**
- * The scroll offset that puts `snap`'s first still-rendered anchor back where
- * it was, else the raw `top`. `anchored` says which one it is.
+ * Where a windowed list's item is: the scroll offset that puts `key`'s top at
+ * the viewport's top, or `null` when the list doesn't hold it (#310 P5w).
+ * A windowed list renders only the items near the viewport, so an anchor can
+ * be in the list but not in the DOM.
+ */
+export type KeyLocator = (key: string) => number | null;
+
+/**
+ * The scroll offset that puts `snap`'s first anchor still in the list back
+ * where it was, else the raw `top`. `anchored` says which one it is. An
+ * anchor is looked for in the DOM, then through `locate` when given.
  */
 export function resolveScroll(
 	scroller: Scroller,
-	snap: ScrollSnapshot
+	snap: ScrollSnapshot,
+	locate?: KeyLocator
 ): { top: number; anchored: boolean } {
 	const view = viewportOf(scroller);
 	const root = rootOf(scroller);
 	const current = scrollTopOf(scroller);
 	for (const a of snap.anchors) {
 		const el = findKeyed(root, a.key);
-		if (!el) continue;
-		const r = el.getBoundingClientRect();
-		return { top: Math.max(0, current + (r.top - view.top) - a.offset), anchored: true };
+		if (el) {
+			const r = el.getBoundingClientRect();
+			return { top: Math.max(0, current + (r.top - view.top) - a.offset), anchored: true };
+		}
+		const at = locate?.(a.key) ?? null;
+		if (at !== null) return { top: Math.max(0, at - a.offset), anchored: true };
 	}
 	return { top: Math.max(0, snap.top), anchored: false };
 }
