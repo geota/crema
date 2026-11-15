@@ -4,6 +4,9 @@
 
 mod common;
 
+#[cfg(target_arch = "wasm32")]
+use common::test;
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
@@ -112,7 +115,7 @@ fn assert_searches(store: &mut Store, model: &Model, needles: &[String], path: T
     }
 }
 
-fn loaded() -> (tempfile::TempDir, Store, Model, Vec<String>) {
+fn loaded() -> (common::TestDir, Store, Model, Vec<String>) {
     let d = dir();
     let mut store = create(&file(&d, "history.db"));
     let rows = fixture_rows("web");
@@ -728,4 +731,49 @@ fn a_derive_rewrite_puts_every_column_back_and_keeps_holds() {
     assert!(!store.health().derive_pending);
     assert_eq!(store.maintain_all(10).expect("maintains"), 0);
     assert_eq!(store.write_seq(), seq);
+}
+
+#[test]
+fn a_reopen_on_web_sets_the_index_aside_for_a_batched_rebuild() {
+    // REVIEW-439 note 6: web never runs the one-statement check after a
+    // reopen. The index is set aside instead: searches scan, health says
+    // `reindexing`, and maintenance rebuilds it in batches.
+    let d = dir();
+    let path = file(&d, "history.db");
+    let mut opts =
+        de1_history::store::OpenOptions::new(de1_history::store::Role::Authority).create(1);
+    opts.fts_check_on_reopen = false;
+    let mut store = Store::open(&path, opts).expect("opens");
+    let rows = fixture_rows("web");
+    store.upsert(&rows_in(&rows)).expect("writes");
+    let victim = store.listed_ids(&HistoryQuery::default()).expect("ids")[10].clone();
+    plant_stale(&store, &victim);
+    let err = store.reopen_as_after_corrupt();
+    assert!(matches!(err, StoreError::Reopened), "{err:?}");
+    // Not checked, so not dropped: still `Ready` on file, but set aside.
+    assert_eq!(store.fts_status(), FtsStatus::Ready);
+    assert_eq!(store.text_path(), TextPath::Scan);
+    assert!(store.health().reindexing);
+    assert_eq!(store.maintain().expect("starts"), Maintained::FtsStarted);
+    store.maintain_all(10_000).expect("rebuilds");
+    assert_eq!(store.fts_status(), FtsStatus::Ready);
+    assert_eq!(store.text_path(), TextPath::Fts);
+    assert!(!store.health().reindexing);
+    assert!(fts_whole(&store), "the rebuilt index is whole");
+}
+
+#[test]
+fn a_reopen_natively_checks_the_index_at_once() {
+    let d = dir();
+    let path = file(&d, "history.db");
+    let mut store = create(&path);
+    store
+        .upsert(&rows_in(&fixture_rows("web")))
+        .expect("writes");
+    let victim = store.listed_ids(&HistoryQuery::default()).expect("ids")[10].clone();
+    plant_stale(&store, &victim);
+    let err = store.reopen_as_after_corrupt();
+    assert!(matches!(err, StoreError::Reopened), "{err:?}");
+    // The check ran, found the stale entry and dropped the index.
+    assert_eq!(store.fts_status(), FtsStatus::Missing);
 }

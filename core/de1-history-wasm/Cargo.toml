@@ -1,0 +1,85 @@
+# The SQLite history's store for the web Worker (#310 PLAN C4, SPEC §1, §8):
+# `de1-history`'s store over `rusqlite` and `sqlite-wasm-rs`, on OPFS through
+# `sqlite-wasm-vfs`'s `sahpool`, behind JSON-in, JSON-out `#[wasm_bindgen]`
+# methods that mirror the FFI's (C3). A second wasm, loaded in a dedicated
+# Worker: OPFS sync access handles exist only there, and the machine core
+# stays on the main thread for Web Bluetooth.
+#
+# Built with `pnpm wasm:history` (web/package.json) under the `history-wasm`
+# profile, which is `release` at `opt-level = "z"` (core/Cargo.toml). Nothing
+# but this crate's build uses that profile.
+[package]
+name = "de1-history-wasm"
+version = "0.1.0"
+description = "Crema shot history store for the web Worker: SQLite on OPFS (sahpool), JSON over wasm-bindgen"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Size first: this wasm is a store, not the per-frame decode path, so the
+# `de1-wasm` speed trade (core/Cargo.toml) doesn't apply. CI checks it stays
+# under 1 MB gzip.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ['-Oz']
+
+[package.metadata.wasm-pack.profile.custom]
+wasm-opt = ['-Oz']
+
+# Everything exists only on wasm32: natively this crate is its tests (the
+# no-deleting-calls check, the names check) and nothing more, so the
+# workspace's native build links no second SQLite.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+serde.workspace = true
+serde_json.workspace = true
+de1-history = { path = "../de1-history", features = ["store"] }
+# Exact pins (SPEC §1, N10): each bump's diff is read first. `rusqlite` 0.42
+# takes `sqlite-wasm-rs` >=0.6.3, <0.7; both compile SQLite 3.54.1.
+rusqlite = { version = "=0.42.0", default-features = false, features = ["ffi-sqlite-wasm-rs", "cache", "backup"] }
+sqlite-wasm-rs = { version = "=0.6.3", default-features = false, features = ["wasm-bindgen"] }
+sqlite-wasm-vfs = { version = "=0.3.0", features = ["sahpool"] }
+wasm-bindgen = "0.2.130"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3.107"
+web-sys = { version = "0.3.107", features = [
+    "Blob",
+    "DedicatedWorkerGlobalScope",
+    "File",
+    "FileSystemDirectoryHandle",
+    "FileSystemFileHandle",
+    "FileSystemGetDirectoryOptions",
+    "FileSystemGetFileOptions",
+    "FileSystemHandle",
+    "FileSystemHandleKind",
+    "FileSystemReadWriteOptions",
+    "FileSystemSyncAccessHandle",
+    "StorageManager",
+    "WorkerNavigator",
+] }
+# `de1-domain`'s `uuid` needs a randomness source on wasm32.
+uuid = { version = "1", features = ["js"] }
+
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+# The crate's own tests keep truth files in memory.
+de1-history-wasm = { path = ".", features = ["memory-truth"] }
+
+[features]
+# `place: "memory"` may hold an `authority` file. Tests only: in a shipped
+# build the truth never lives in RAM (REVIEW-444 note 6). `pnpm wasm:history`
+# never turns it on.
+memory-truth = []
+
+# Like de1-wasm, not `[lints] workspace = true`: wasm-bindgen's glue needs
+# `unsafe`, and so does `sahpool`'s uninstall. The rest mirrors the workspace.
+[lints.rust]
+future_incompatible = { level = "warn", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+cast_possible_truncation = "deny"
+cast_precision_loss = "deny"

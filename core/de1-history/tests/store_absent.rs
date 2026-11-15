@@ -5,6 +5,9 @@
 
 mod common;
 
+#[cfg(target_arch = "wasm32")]
+use common::test;
+
 use std::collections::BTreeSet;
 
 use common::{create, dir, file, row, rows_in, stored_rows};

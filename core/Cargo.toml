@@ -13,6 +13,7 @@ members = [
     "de1-ffi",
     "de1-wasm",
     "de1-history",
+    "de1-history-wasm",
 ]
 # The cargo-fuzz project builds on nightly with its own lockfile. The model
 # tests have their own lockfiles too: proptest would fail `cargo deny check bans`.
@@ -63,3 +64,11 @@ codegen-units = 1
 # Cargo-level strip removes that before bindgen ever runs ("No UniFFI
 # metadata found"). AGP already strips the packaged .so's debug symbols at
 # APK-build time (stripReleaseDebugSymbols) — that's the right layer for it.
+
+# The history store's wasm (`de1-history-wasm`, PLAN C4), and nothing else:
+# `pnpm wasm:history` builds with `--profile history-wasm`. Size first, since
+# it is a store and not the per-frame path; dependencies too, SQLite's C
+# included (`cc` reads the profile's level).
+[profile.history-wasm]
+inherits = "release"
+opt-level = "z"

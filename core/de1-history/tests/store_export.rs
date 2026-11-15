@@ -4,12 +4,16 @@
 
 mod common;
 
+#[cfg(target_arch = "wasm32")]
+use common::test;
+
 use std::collections::BTreeSet;
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 
 use common::{create, dir, file, fts_whole, int, reopen, row, rows_in, stored_rows};
 use de1_history::store::{
-    IndexState, IndexWrite, JournalMode, OpenOptions, Recovery, Role, RowIn, Store, StoreError,
+    IndexState, IndexWrite, OpenOptions, Recovery, Role, RowIn, Store, StoreError,
 };
 use serde_json::json;
 
@@ -328,6 +332,7 @@ fn a_restore_cut_short_at_any_batch_leaves_the_union_and_a_rerun_finishes() {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_recovery_file_starts_from_the_callers_baseline_and_never_overwrites() {
     let d = dir();
@@ -393,7 +398,7 @@ fn index_with_rows(path: &std::path::Path, n: usize) -> Store {
 
 /// Marks `path` a finished truth file, as the flip's verify does.
 fn finish(path: &std::path::Path) {
-    let c = rusqlite::Connection::open(path).expect("opens");
+    let c = common::raw_conn(path);
     c.execute_batch(
         "UPDATE meta SET value = 'authority' WHERE key = 'role';
          INSERT INTO meta (key, value) VALUES ('migration', '{\"state\":\"done\"}')
@@ -402,13 +407,14 @@ fn finish(path: &std::path::Path) {
     .expect("marks");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn the_backup_copy_moves_a_whole_file_and_never_over_a_finished_truth() {
     let d = dir();
     let index = index_with_rows(&file(&d, "history-index.db"), 300);
     let dest = file(&d, "history.db");
     index
-        .copy_to(&dest, None, JournalMode::Wal)
+        .copy_to(&dest, None, common::journal())
         .expect("copies");
     {
         let mut copy = Store::open(&dest, OpenOptions::new(Role::Index)).expect("opens");
@@ -420,7 +426,7 @@ fn the_backup_copy_moves_a_whole_file_and_never_over_a_finished_truth() {
             .expect("writes");
     }
     index
-        .copy_to(&dest, None, JournalMode::Wal)
+        .copy_to(&dest, None, common::journal())
         .expect("copies over a leftover");
     {
         let copy = Store::open(&dest, OpenOptions::new(Role::Index)).expect("opens");
@@ -430,7 +436,7 @@ fn the_backup_copy_moves_a_whole_file_and_never_over_a_finished_truth() {
     finish(&dest);
     let before = fs::read(&dest).expect("reads");
     let err = index
-        .copy_to(&dest, None, JournalMode::Wal)
+        .copy_to(&dest, None, common::journal())
         .expect_err("refused");
     assert!(matches!(err, StoreError::Refused(_)), "{err:?}");
     assert!(
@@ -441,31 +447,31 @@ fn the_backup_copy_moves_a_whole_file_and_never_over_a_finished_truth() {
     let truth = Store::open(&dest, OpenOptions::new(Role::Authority)).expect("opens");
     let snap = file(&d, "history-snapshot.db");
     truth
-        .copy_to(&snap, None, JournalMode::Wal)
+        .copy_to(&snap, None, common::journal())
         .expect("snapshots");
     truth
-        .copy_to(&snap, None, JournalMode::Wal)
+        .copy_to(&snap, None, common::journal())
         .expect("snapshots again");
     // A file a store has open, a foreign file, a file that isn't a database:
     // refused, untouched.
     assert!(matches!(
-        truth.copy_to(&dest, None, JournalMode::Wal),
+        truth.copy_to(&dest, None, common::journal()),
         Err(StoreError::AlreadyOpen(_))
     ));
     let foreign = file(&d, "foreign.db");
     {
-        let c = rusqlite::Connection::open(&foreign).expect("opens");
+        let c = common::raw_conn(&foreign);
         c.execute_batch("PRAGMA application_id = 7; CREATE TABLE t (x);")
             .expect("writes");
     }
     assert!(matches!(
-        index.copy_to(&foreign, None, JournalMode::Wal),
+        index.copy_to(&foreign, None, common::journal()),
         Err(StoreError::Foreign(_))
     ));
     let junk = file(&d, "junk.db");
     fs::write(&junk, vec![0x5a; 8192]).expect("writes");
     assert!(matches!(
-        index.copy_to(&junk, None, JournalMode::Wal),
+        index.copy_to(&junk, None, common::journal()),
         Err(StoreError::Corrupt(_))
     ));
     assert_eq!(fs::read(&junk).expect("reads"), vec![0x5a; 8192]);
@@ -648,6 +654,7 @@ fn a_held_row_written_again_is_no_longer_held() {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// REVIEW-442 note 4: the snapshot moves forward only. An older truth (a
 /// lower `write_seq` or `generation`) never replaces a newer one.
 #[test]
@@ -665,13 +672,13 @@ fn an_older_truth_never_overwrites_a_newer_one() {
     finish(&live);
     let mut truth = Store::open(&live, OpenOptions::new(Role::Authority)).expect("opens");
     truth
-        .copy_to(&snap, None, JournalMode::Wal)
+        .copy_to(&snap, None, common::journal())
         .expect("snapshots");
     truth
         .upsert(&rows_in(&[row("b", 2, json!({}))]))
         .expect("writes");
     truth
-        .copy_to(&snap, None, JournalMode::Wal)
+        .copy_to(&snap, None, common::journal())
         .expect("a newer snapshot");
     truth
         .upsert(&rows_in(&[row("c", 3, json!({}))]))
@@ -681,7 +688,7 @@ fn an_older_truth_never_overwrites_a_newer_one() {
     let before = fs::read(&live).expect("reads");
     let old = Store::open(&snap, OpenOptions::new(Role::Authority)).expect("opens");
     let err = old
-        .copy_to(&live, None, JournalMode::Wal)
+        .copy_to(&live, None, common::journal())
         .expect_err("refused");
     assert!(matches!(err, StoreError::Refused(_)), "{err:?}");
     assert!(
@@ -693,7 +700,7 @@ fn an_older_truth_never_overwrites_a_newer_one() {
     let gen2 = file(&d, "history-2.db");
     fs::copy(&live, &gen2).expect("copies");
     {
-        let c = rusqlite::Connection::open(&gen2).expect("opens");
+        let c = common::raw_conn(&gen2);
         c.execute_batch("UPDATE meta SET value = '2' WHERE key = 'generation'")
             .expect("marks");
     }
@@ -705,7 +712,7 @@ fn an_older_truth_never_overwrites_a_newer_one() {
                 .expect("writes");
         }
         let err = older
-            .copy_to(&gen2, None, JournalMode::Wal)
+            .copy_to(&gen2, None, common::journal())
             .expect_err("refused");
         assert!(matches!(err, StoreError::Refused(_)), "{err:?}");
     }
@@ -784,13 +791,13 @@ fn a_newer_generation_with_fewer_writes_may_copy_over_an_older_one() {
     {
         let old = Store::open(&old_path, OpenOptions::new(Role::Authority)).expect("opens");
         let err = old
-            .copy_to(&new_path, None, JournalMode::Wal)
+            .copy_to(&new_path, None, common::journal())
             .expect_err("refused");
         assert!(matches!(err, StoreError::Refused(_)), "{err:?}");
     }
     // The newer generation onto the older: allowed, though its seq is lower.
     let new = Store::open(&new_path, OpenOptions::new(Role::Authority)).expect("opens");
-    new.copy_to(&old_path, None, JournalMode::Wal)
+    new.copy_to(&old_path, None, common::journal())
         .expect("copies");
     drop(new);
     let copy = Store::open(&old_path, OpenOptions::new(Role::Authority)).expect("opens");

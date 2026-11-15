@@ -10,6 +10,11 @@ build/
 # Run `pnpm wasm` once before `pnpm dev`; `pnpm build` runs it automatically.
 src/lib/wasm/
 
+# The history store's wasm (`pnpm wasm:history`, core/de1-history-wasm), for
+# the history Worker. Building it needs a clang that targets wasm32 (see
+# core/de1-history-wasm/README.md).
+src/lib/history-db/wasm/
+
 # The test-seeds wasm bundle (`pnpm wasm:test`), only for the relay vitest.
 # Kept outside src/ so no app code can import it.
 .wasm-test/

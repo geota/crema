@@ -8,6 +8,9 @@
 
 mod common;
 
+#[cfg(target_arch = "wasm32")]
+use common::test;
+
 use common::{create, dir, file, fixture_rows, rows_in};
 use de1_history::sql::{self, Param, Seek, TextPath};
 use de1_history::store::Store;
@@ -83,16 +86,10 @@ fn index_for(key: SortKey) -> &'static str {
     }
 }
 
-fn store() -> (tempfile::TempDir, Store) {
+fn store() -> (common::TestDir, Store) {
     let d = dir();
     let mut store = create(&file(&d, "history.db"));
-    let live: Live = serde_json::from_str(
-        &std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/live.json"),
-        )
-        .expect("live.json"),
-    )
-    .expect("a library");
+    let live: Live = serde_json::from_str(common::fixture("live.json")).expect("a library");
     store.set_live(&live).expect("a library");
     store
         .upsert(&rows_in(&fixture_rows("web")))

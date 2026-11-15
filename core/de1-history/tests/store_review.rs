@@ -4,9 +4,18 @@
 //! poisoned store reporting `Corrupt` first, and an index that disagrees
 //! with its table found by `integrity_check`.
 
+// Two of the tests plant bytes with `std::fs` and stay native; their helpers
+// go unused on wasm32.
+#![cfg_attr(target_arch = "wasm32", allow(unused_imports, dead_code))]
+
 mod common;
 
+#[cfg(target_arch = "wasm32")]
+use common::test;
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{Seek, SeekFrom, Write as _};
 use std::path::Path;
 
@@ -14,14 +23,19 @@ use common::{dir, file, int, row, rows_in};
 use de1_history::store::{JournalMode, Maintained, OpenOptions, Role, Store, StoreError};
 use serde_json::json;
 
-/// SQLite's own `unix-dotfile` VFS has no shared memory, like `opfs-sahpool`.
+/// SQLite's own `unix-dotfile` VFS has no shared memory, like `opfs-sahpool`;
+/// nor has `memvfs`, on wasm32.
 fn no_shm(journal: JournalMode, create: bool) -> OpenOptions {
     let mut o = OpenOptions::new(Role::Authority);
     if create {
         o = o.create(1);
     }
     o.journal = journal;
-    o.vfs = Some("unix-dotfile".into());
+    o.vfs = Some(if cfg!(target_arch = "wasm32") {
+        "memvfs".into()
+    } else {
+        "unix-dotfile".into()
+    });
     o
 }
 
@@ -32,7 +46,7 @@ fn mode(store: &Store) -> String {
         .expect("a mode")
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_arch = "wasm32"))]
 #[test]
 fn exclusive_wal_reopens_on_a_vfs_without_shared_memory() {
     let d = dir();
@@ -52,7 +66,7 @@ fn exclusive_wal_reopens_on_a_vfs_without_shared_memory() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_arch = "wasm32"))]
 #[test]
 fn a_journal_mode_the_file_wont_take_is_refused() {
     let d = dir();
@@ -87,6 +101,7 @@ fn pages_of(store: &Store, name: &str, kind: &str) -> Vec<u64> {
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Overwrites bytes and moves the change counter, so the store's page cache
 /// is dropped.
 fn smash(path: &Path, offset: u64, bytes: &[u8]) {
@@ -100,6 +115,7 @@ fn smash(path: &Path, offset: u64, bytes: &[u8]) {
     f.write_all(&[0x7f, 0x7f, 0x7f, 0x7f]).expect("bumps");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_corrupt_shot_page_only_the_rebuild_reads_goes_through_quick_check() {
     let d = dir();
@@ -138,6 +154,7 @@ fn a_corrupt_shot_page_only_the_rebuild_reads_goes_through_quick_check() {
     assert!(matches!(s.maintain(), Err(StoreError::Poisoned(_))));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_poisoned_store_reports_corrupt_first() {
     let d = dir();
@@ -186,7 +203,7 @@ fn an_index_that_disagrees_with_its_table_is_found_by_integrity_check() {
     }
     {
         // The index's definition no longer matches its entries.
-        let c = rusqlite::Connection::open(&path).expect("opens");
+        let c = common::raw_conn(&path);
         c.execute_batch(
             "PRAGMA writable_schema = ON;
              UPDATE sqlite_schema SET sql = 'CREATE INDEX shot_by_vid ON shot(id) WHERE visualizer_id IS NOT NULL'

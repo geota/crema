@@ -317,6 +317,11 @@ impl Store {
             return self.derive_step();
         }
         match self.fts {
+            FtsStatus::Ready if self.fts_suspect => {
+                self.start_fts_rebuild()?;
+                self.fts_suspect = false;
+                Ok(Maintained::FtsStarted)
+            }
             FtsStatus::Missing => {
                 self.start_fts_rebuild()?;
                 Ok(Maintained::FtsStarted)

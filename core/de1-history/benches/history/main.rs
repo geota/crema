@@ -1,3 +1,6 @@
+// Native only: the benches use real files (`tempfile`), which the wasm32 test
+// build lacks. CI's `history wasm` job builds `--all-targets` for wasm32.
+#![cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 //! PLAN B1, native: the store on seeded, real-shaped databases of 5,000,
 //! 20,000 and 100,000 rows, measured against the budget table, with the
 //! longest single transaction of each kind of maintenance (S15), the database

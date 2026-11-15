@@ -325,17 +325,19 @@ pub struct HistoryOpenOptions {
 }
 
 impl HistoryOpenOptions {
+    /// From `OpenOptions::new`, so a field the store adds keeps its default
+    /// here: natively `fts_check_on_reopen` stays on (REVIEW-439 note 6 is
+    /// web's one long statement).
     fn to_store(&self) -> OpenOptions {
-        OpenOptions {
-            role: self.role.into(),
-            create: self.create,
-            generation: self.generation,
-            journal: self.journal.into(),
-            vfs: None,
-            now_ms: self.now_ms,
-            quick_check: self.quick_check,
-            busy_timeout_ms: self.busy_timeout_ms,
-        }
+        let mut o = OpenOptions::new(self.role.into());
+        o.create = self.create;
+        o.generation = self.generation;
+        o.journal = self.journal.into();
+        o.vfs = None;
+        o.now_ms = self.now_ms;
+        o.quick_check = self.quick_check;
+        o.busy_timeout_ms = self.busy_timeout_ms;
+        o
     }
 }
 
