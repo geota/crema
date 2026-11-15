@@ -98,12 +98,18 @@ fun rememberLoadedShot(row: ShotRow, load: suspend (String) -> StoredShot?): Sho
         if (value?.first != row.id) value = null
         value = row.id to load(row.id)
     }
-    val l = loaded
-    return when {
-        l == null || l.first != row.id -> ShotLoad.Loading
-        l.second == null -> ShotLoad.Unreadable
-        else -> ShotLoad.Ready(row.joined(l.second!!))
-    }
+    return shotLoadOf(row, loaded)
+}
+
+/**
+ * What the screen shows for [row] given the last load, [loaded] (the id it was
+ * for, and its shot): a result for another shot, one a quick selection left
+ * behind, is dropped, and the row shows as loading (SPEC §4).
+ */
+internal fun shotLoadOf(row: ShotRow, loaded: Pair<String, StoredShot?>?): ShotLoad = when {
+    loaded == null || loaded.first != row.id -> ShotLoad.Loading
+    loaded.second == null -> ShotLoad.Unreadable
+    else -> ShotLoad.Ready(row.joined(loaded.second!!))
 }
 
 /**

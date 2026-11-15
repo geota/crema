@@ -1051,13 +1051,29 @@ class LibraryController(
         if (rows.isEmpty()) { notify("Export — no shots"); return null }
         // Each shot whole, read one at a time (#310 P4a). A read that fails
         // stops the export: a file without that shot's curve would look whole.
+        // A read that fails just now is tried twice more, as a backup's is.
+        val missing = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         val shots = try {
-            withContext(Dispatchers.IO) { rows.map { row -> historyStore.loadFull(row) } }
+            withContext(Dispatchers.IO) {
+                rows.map { row ->
+                    var last: coffee.crema.history.HistoryReadException? = null
+                    repeat(3) {
+                        try {
+                            return@map historyStore.loadFull(row, missing)
+                        } catch (e: coffee.crema.history.HistoryReadException) {
+                            last = e
+                        }
+                    }
+                    throw last!!
+                }
+            }
         } catch (e: coffee.crema.history.HistoryReadException) {
             notify("Couldn't read every shot just now, so nothing was exported. Try again.")
             appendLog("Export shots: ${e.message}")
             return null
         }
+        // A damaged or missing curve goes without it, and says so, as a backup does (#419 N2).
+        if (missing.isNotEmpty()) notify("${missing.size} shot(s) have damaged telemetry and are exported without their curves")
         return withContext(Dispatchers.Default) {
             runCatching {
                 shotHistoryJsonl(shots, settingsGrinder(), System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME)

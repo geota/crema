@@ -106,6 +106,14 @@ class LazyHistoryVmTest {
         library.applyRemoteShot(bare.id, patch, pulled)
         VmHarness.idleUntil("the backfill") { library.findShot(bare.id)?.summary?.sampleCount == 3u }
         assertEquals(pulled.samples, VmHarness.whole(vm, bare.id).samples)
+        // SPEC P4w: the backfill recomputes the summary, the row's chart and peaks with it, on screen and stored.
+        val want = coffee.crema.history.summaryOf(whole(bare.id).copy(samples = pulled.samples, brewSeries = null), coreJson)
+        val onScreen = assertNotNull(library.findShot(bare.id)).summary
+        assertEquals(want.copy(brewSampleCount = onScreen.brewSampleCount), onScreen)
+        assertTrue(onScreen.spark != null, "the row draws the pulled curve")
+        VmHarness.idleUntil("the stored summary") {
+            runBlocking { HistoryStore(app, coreJson).loadRows() }.first { it.id == bare.id }.summary.peakPressure == want.peakPressure
+        }
     }
 
     @Test
