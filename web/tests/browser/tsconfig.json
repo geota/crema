@@ -1,0 +1,22 @@
+{
+	// The browser tests, the harness and the bench (#310 W0, B1), type-checked
+	// by `pnpm test:browser` before it runs them (it needs `pnpm wasm:history`
+	// built, which `pnpm check` does not). The DOM and WebWorker libs
+	// can't be combined, so the harness Worker types the two Worker APIs it
+	// needs beyond the DOM lib itself (`harness/worker.ts`).
+	"compilerOptions": {
+		"target": "ES2023",
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"lib": ["ES2023", "DOM", "DOM.Iterable"],
+		"types": ["node", "vite/client"],
+		"strict": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"isolatedModules": true
+	},
+	"include": ["./**/*.ts", "../../bench/**/*.ts", "../../playwright.config.ts"],
+	"exclude": ["./.build"]
+}

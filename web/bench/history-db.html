@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>History store bench</title>
+		<style>
+			:root { color-scheme: light dark; --fg: #1d1b18; --bg: #faf8f5; --muted: #6b655c; }
+			@media (prefers-color-scheme: dark) { :root { --fg: #ece8e1; --bg: #181613; --muted: #a39d93; } }
+			body { font: 15px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); margin: 0; padding: 16px; max-width: 72rem; }
+			pre { white-space: pre-wrap; font-size: 13px; }
+			#list { color: var(--muted); font-size: 12px; max-height: 12rem; overflow: hidden; }
+		</style>
+	</head>
+	<body>
+		<h1>History store bench (#310 B1, browser)</h1>
+		<p>
+			B1's budget table, through the history Worker on real OPFS. Query:
+			<code>?rows=5000,20000,100000&amp;journal=exclusiveWal|truncate&amp;auto=1</code>.
+			Each run seeds a new pool generation and leaves it in place.
+		</p>
+		<button id="run" type="button">Run</button>
+		<span id="status"></span>
+		<pre id="out"></pre>
+		<ol id="list"></ol>
+		<script type="module" src="./history-db.ts"></script>
+	</body>
+</html>
