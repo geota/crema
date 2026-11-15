@@ -62,6 +62,10 @@ for (const journal of ['truncate', 'exclusiveWal'] as Journal[]) {
 		const commitMs: number[] = [];
 		const reopenMs: number[] = [];
 		let heavyMs = 0;
+		// Where in the in-flight transaction the kill aims, as a share of
+		// `heavyMs`: it backs off after a kill that came too late, since a
+		// loaded runner's round trips vary.
+		let aim = 0.8;
 
 		for (let i = 0; i <= KILLS; i++) {
 			const t: Tab = await tab();
@@ -101,7 +105,12 @@ for (const journal of ['truncate', 'exclusiveWal'] as Journal[]) {
 			const v = Number(held[0]);
 			expect(v, `kill ${i}: acknowledged version ${lastAcked} lost`).toBeGreaterThanOrEqual(lastAcked);
 			expect(v, `kill ${i}: a version nobody wrote`).toBeLessThanOrEqual(lastBegun);
-			if (i > 0 && v < lastBegun) rolledBack++;
+			if (i > 0 && v < lastBegun) {
+				rolledBack++;
+				aim = Math.min(aim * 1.05, 0.8);
+			} else if (i > 0) {
+				aim = Math.max(aim * 0.7, 0.05);
+			}
 			expect(await t.call<number>('call', { h: 'db', m: 'count', a: {} })).toBe(K);
 			expect(await t.call<number>('call', { h: 'db', m: 'count', a: { text: `v${v} y` } })).toBe(K);
 			if (i === KILLS) break;
@@ -118,7 +127,7 @@ for (const journal of ['truncate', 'exclusiveWal'] as Journal[]) {
 			// The one in flight carries ten times the text, so the kill, whose
 			// CDP round trip is slow over adb, still lands inside it.
 			void t.call('writeVersion', { h: 'db', v: lastBegun, k: K, pad: HEAVY }).catch(() => {});
-			await sleep(Math.random() * heavyMs * 0.8);
+			await sleep(Math.random() * heavyMs * aim);
 			if (crash) await t.crash();
 			else await t.page.evaluate(() => window.w0.terminate()).catch(() => {});
 			await t.page.close().catch(() => {});
@@ -138,6 +147,7 @@ for (const journal of ['truncate', 'exclusiveWal'] as Journal[]) {
 			transactionsCommitted: commitMs.length,
 			meanCommitMs: Number(mean(commitMs).toFixed(2)),
 			inFlightTransactionMs: Math.round(heavyMs),
+			finalAim: Number(aim.toFixed(2)),
 			meanReopenMs: Number(mean(reopenMs).toFixed(1))
 		};
 		console.log(`W0 durability ${JSON.stringify(summary)}`);
