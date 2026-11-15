@@ -50,6 +50,13 @@ macro_rules! tables_v1 {
   search_text   TEXT NOT NULL
 ) STRICT;
 CREATE INDEX shot_by_date ON shot(completed_at DESC, id DESC) WHERE deleted_at IS NULL AND hold_delete = 0;
+-- One per non-date sort (B1): ties run the sort's way, so each serves both
+-- directions. Spelled with the list's partial condition, as shot_by_date.
+CREATE INDEX shot_sort_rating  ON shot(sort_rating DESC, completed_at DESC, id DESC) WHERE deleted_at IS NULL AND hold_delete = 0;
+CREATE INDEX shot_sort_profile ON shot(sort_profile DESC, completed_at DESC, id DESC) WHERE deleted_at IS NULL AND hold_delete = 0;
+CREATE INDEX shot_sort_bean    ON shot(sort_bean DESC, completed_at DESC, id DESC) WHERE deleted_at IS NULL AND hold_delete = 0;
+CREATE INDEX shot_sort_yield   ON shot(sort_yield DESC, completed_at DESC, id DESC) WHERE deleted_at IS NULL AND hold_delete = 0;
+CREATE INDEX shot_sort_time    ON shot(sort_time DESC, completed_at DESC, id DESC) WHERE deleted_at IS NULL AND hold_delete = 0;
 CREATE INDEX shot_by_vid  ON shot(visualizer_id) WHERE visualizer_id IS NOT NULL;
 CREATE INDEX shot_by_did  ON shot(decent_id) WHERE decent_id IS NOT NULL;
 CREATE INDEX shot_by_bean ON shot(bean_id, completed_at DESC);

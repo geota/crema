@@ -103,7 +103,8 @@ impl std::fmt::Display for SqlError {
 
 impl std::error::Error for SqlError {}
 
-/// The filter's dimensions, so a facet can leave its own out.
+/// The filter's dimensions, so a facet can leave its own out, and how the
+/// search set is used.
 #[derive(Clone, Copy, Default)]
 struct Skip {
     profile: bool,
@@ -111,6 +112,12 @@ struct Skip {
     method: bool,
     tags: bool,
     pinned: bool,
+    /// The statement is a page, which walks its sort index and stops at the
+    /// limit: the search set is only probed (`+rid IN …`), never the driver.
+    /// Driving from a common term's set would read and sort every match
+    /// (B1). A count or an aggregate drives from the set, so it visits only
+    /// the matches.
+    probe_text: bool,
 }
 
 /// Collects SQL text and numbered parameters.
@@ -162,6 +169,30 @@ fn from(needs_live_bean: bool) -> &'static str {
         "FROM shot s LEFT JOIN live_bean lb ON lb.bean_id = s.bean_id"
     } else {
         "FROM shot s"
+    }
+}
+
+/// The `FROM` clause of a statement that reads every row its filter lists,
+/// in no order: a count, the stats, a facet, the day groups (B1). With no
+/// order to serve, SQLite picks any partial index whose condition the filter
+/// spells, and with the sort indexes it took one in random `rid` order, which
+/// read every row out of place and doubled the stats and facets. So these
+/// statements walk `shot_by_date`, close to `rid` order, which also serves a
+/// range cut-off and answers a bare count from the index alone. Two filters
+/// have a better start of their own and get no hint: a search on the index
+/// (its match set, by `rid`) and a bag (`shot_by_bean`).
+fn from_scan(q: &HistoryQuery, skip: Skip, path: TextPath, live: bool) -> String {
+    let own_start = (path == TextPath::Fts && q.needle().is_some())
+        || (matches!(q.bean, Some(BeanScope::Bag(_))) && !skip.bean);
+    let hint = if own_start {
+        ""
+    } else {
+        " INDEXED BY shot_by_date"
+    };
+    if live {
+        format!("FROM shot s{hint} LEFT JOIN live_bean lb ON lb.bean_id = s.bean_id")
+    } else {
+        format!("FROM shot s{hint}")
     }
 }
 
@@ -232,25 +263,37 @@ fn filter(
         }
     }
     if let Some(needle) = q.needle() {
-        let (own, n) = match path {
+        match path {
             TextPath::Fts => {
+                // One set of `rid`s (B1): the index's matches, the rows of a
+                // custom method whose live label matches, and the untagged
+                // rows of a bag whose live tag matches. Each part starts from
+                // what is small (the index, the live tables), so a count
+                // visits only the matches, and a sorted page walks its sort
+                // index probing the set by `rid`, which the index holds,
+                // instead of reading every row to test the live labels.
+                // `CROSS JOIN` keeps the live table outside, so a label that
+                // matches nothing reads no shot.
                 let p = b.text(&format!("*{}*", glob_escape(&needle)));
                 let n = b.text(&needle);
-                (
-                    format!("{t}.rid IN (SELECT rowid FROM shot_fts WHERE search_text GLOB {p})"),
-                    n,
-                )
+                let probe = if skip.probe_text { "+" } else { "" };
+                terms.push(format!(
+                    "{probe}{t}.rid IN (SELECT rowid FROM shot_fts WHERE search_text GLOB {p} \
+                     UNION SELECT {t}_m.rid FROM live_method lm CROSS JOIN shot {t}_m ON {t}_m.method = lm.method \
+                     WHERE instr(lm.label_folded, {n}) > 0 \
+                     UNION SELECT {t}_b.rid FROM live_bean_tag bt CROSS JOIN shot {t}_b ON {t}_b.bean_id = bt.bean_id \
+                     WHERE {t}_b.has_tags = 0 AND instr(bt.tag_folded, {n}) > 0)"
+                ));
             }
             TextPath::Scan => {
                 let n = b.text(&needle);
-                (format!("instr({t}.search_text, {n}) > 0"), n)
+                terms.push(format!(
+                    "(instr({t}.search_text, {n}) > 0 \
+                     OR {t}.method IN (SELECT method FROM live_method WHERE instr(label_folded, {n}) > 0) \
+                     OR ({t}.has_tags = 0 AND {t}.bean_id IN (SELECT bean_id FROM live_bean_tag WHERE instr(tag_folded, {n}) > 0)))"
+                ));
             }
-        };
-        terms.push(format!(
-            "({own} \
-             OR {t}.method IN (SELECT method FROM live_method WHERE instr(label_folded, {n}) > 0) \
-             OR ({t}.has_tags = 0 AND {t}.bean_id IN (SELECT bean_id FROM live_bean_tag WHERE instr(tag_folded, {n}) > 0)))"
-        ));
+        }
     }
     terms.join(" AND ")
 }
@@ -272,46 +315,34 @@ enum Side {
 }
 
 /// The keyset predicate for rows of table `t` on `side` of the row whose sort
-/// tuple is `(vk, vc, vi)` (S7). The order is `key dir, completed_at DESC,
-/// id DESC`, so a single row-value comparison is right only when every column
-/// runs the same way: for a descending key. An ascending key, and the
-/// ascending date sort, are spelled out.
+/// tuple is `(vk, vc, vi)` (S7). Every column of the order runs the sort's
+/// way, ties included (SPEC §6), so one row-value comparison is right for
+/// every sort, and a sort index serves both directions.
 fn keyset(sort: Sort, side: Side, t: &str, vk: &str, vc: &str, vi: &str) -> String {
     let k = key_col(sort.key, t);
     let (c, i) = (format!("{t}.completed_at"), format!("{t}.id"));
-    // The operators that put a row on `side`: for the tie columns, which run
-    // descending, and for an ascending key.
-    let (tie_op, key_op) = match side {
-        Side::After => ("<", ">"),
-        Side::From => ("<=", ">"),
-        Side::Before => (">", "<"),
+    let op = match (sort.dir, side) {
+        (Dir::Desc, Side::After) | (Dir::Asc, Side::Before) => "<",
+        (Dir::Desc, Side::From) => "<=",
+        (Dir::Desc, Side::Before) | (Dir::Asc, Side::After) => ">",
+        (Dir::Asc, Side::From) => ">=",
     };
-    match (sort.key, sort.dir) {
-        (SortKey::Date, Dir::Desc) => format!("({c}, {i}) {tie_op} ({vc}, {vi})"),
-        (SortKey::Date, Dir::Asc) => {
-            // After: completed_at > ?c OR (completed_at = ?c AND id < ?i).
-            format!("({c} {key_op} {vc} OR ({c} = {vc} AND {i} {tie_op} {vi}))")
-        }
-        (_, Dir::Desc) => format!("({k}, {c}, {i}) {tie_op} ({vk}, {vc}, {vi})"),
-        (_, Dir::Asc) => {
-            // After: key > ?k OR (key = ?k AND (completed_at, id) < (?c, ?i)).
-            format!("({k} {key_op} {vk} OR ({k} = {vk} AND ({c}, {i}) {tie_op} ({vc}, {vi})))")
-        }
+    match sort.key {
+        SortKey::Date => format!("({c}, {i}) {op} ({vc}, {vi})"),
+        _ => format!("({k}, {c}, {i}) {op} ({vk}, {vc}, {vi})"),
     }
 }
 
-/// The `ORDER BY` terms for table `t`, forward or reversed.
+/// The `ORDER BY` terms for table `t`, forward or reversed: every column the
+/// sort's way (SPEC §6).
 fn order_by(sort: Sort, t: &str, reversed: bool) -> String {
-    let (key_dir, tie_dir) = match (sort.dir, reversed) {
-        (Dir::Desc, false) => ("DESC", "DESC"),
-        (Dir::Asc, false) => ("ASC", "DESC"),
-        (Dir::Desc, true) => ("ASC", "ASC"),
-        (Dir::Asc, true) => ("DESC", "ASC"),
+    let d = match (sort.dir, reversed) {
+        (Dir::Desc, false) | (Dir::Asc, true) => "DESC",
+        (Dir::Asc, false) | (Dir::Desc, true) => "ASC",
     };
-    let tie = format!("{t}.completed_at {tie_dir}, {t}.id {tie_dir}");
     match sort.key {
-        SortKey::Date => format!("{t}.completed_at {key_dir}, {t}.id {tie_dir}"),
-        key => format!("{} {key_dir}, {tie}", key_col(key, t)),
+        SortKey::Date => format!("{t}.completed_at {d}, {t}.id {d}"),
+        key => format!("{} {d}, {t}.completed_at {d}, {t}.id {d}", key_col(key, t)),
     }
 }
 
@@ -336,7 +367,12 @@ pub fn count(q: &HistoryQuery, path: TextPath) -> Stmt {
     let w = filter(&mut b, q, "s", "lb", path, Skip::default());
     let sql = format!(
         "SELECT COUNT(*) {} WHERE {w}",
-        from(needs_live_bean(q, Skip::default()))
+        from_scan(
+            q,
+            Skip::default(),
+            path,
+            needs_live_bean(q, Skip::default())
+        )
     );
     b.finish(sql)
 }
@@ -352,7 +388,17 @@ pub fn page(
     path: TextPath,
 ) -> Result<PageStmt, SqlError> {
     let mut b = Builder::default();
-    let mut w = filter(&mut b, q, "s", "lb", path, Skip::default());
+    let mut w = filter(
+        &mut b,
+        q,
+        "s",
+        "lb",
+        path,
+        Skip {
+            probe_text: true,
+            ..Skip::default()
+        },
+    );
     let mut reversed = false;
     let mut offset = None;
     match seek {
@@ -464,7 +510,12 @@ pub fn group_counts(q: &HistoryQuery, edges_ms: &[i64], path: TextPath) -> Stmt 
     let sql = format!(
         "SELECT {} {} WHERE {w}",
         cols.join(", "),
-        from(needs_live_bean(q, Skip::default()))
+        from_scan(
+            q,
+            Skip::default(),
+            path,
+            needs_live_bean(q, Skip::default())
+        )
     );
     b.finish(sql)
 }
@@ -480,7 +531,12 @@ pub fn stats(q: &HistoryQuery, path: TextPath) -> Stmt {
          SUM(s.st_dose), COUNT(s.st_dose), SUM(s.st_yield), COUNT(s.st_yield), \
          SUM(s.st_ratio), COUNT(s.st_ratio), SUM(s.st_time_s), COUNT(s.st_time_s), \
          SUM(s.st_rating), COUNT(s.st_rating) {} WHERE {w} GROUP BY s.family",
-        from(needs_live_bean(q, Skip::default()))
+        from_scan(
+            q,
+            Skip::default(),
+            path,
+            needs_live_bean(q, Skip::default())
+        )
     );
     b.finish(sql)
 }
@@ -491,7 +547,7 @@ pub fn facets(q: &HistoryQuery, path: TextPath) -> FacetStmts {
     let one = |skip: Skip, select: &dyn Fn(&str, &str) -> String| {
         let mut b = Builder::default();
         let w = filter(&mut b, q, "s", "lb", path, skip);
-        let sql = select(from(needs_live_bean(q, skip)), &w);
+        let sql = select(&from_scan(q, skip, path, needs_live_bean(q, skip)), &w);
         b.finish(sql)
     };
     let profiles = one(
@@ -532,24 +588,22 @@ pub fn facets(q: &HistoryQuery, path: TextPath) -> FacetStmts {
             )
         },
     );
-    let coffees = one(
-        Skip {
-            bean: true,
-            ..Skip::default()
-        },
-        &|_, w| {
-            format!(
-                "SELECT {} AS coffee, \
+    let skip_bean = Skip {
+        bean: true,
+        ..Skip::default()
+    };
+    let coffees = one(skip_bean, &|_, w| {
+        format!(
+            "SELECT {} AS coffee, \
                  CASE WHEN lb.bean_id IS NOT NULL THEN lb.name ELSE json_extract(s.row_json, '$.bean.name') END, \
                  CASE WHEN lb.bean_id IS NOT NULL THEN lb.roaster ELSE json_extract(s.row_json, '$.bean.roasterName') END, \
                  MAX(s.completed_at), COUNT(*), COUNT(DISTINCT s.bean_id) \
                  {} WHERE {w} GROUP BY coffee HAVING coffee IS NOT NULL \
                  ORDER BY COUNT(*) DESC, coffee",
-                coffee("s", "lb"),
-                from(true)
-            )
-        },
-    );
+            coffee("s", "lb"),
+            from_scan(q, skip_bean, path, true)
+        )
+    });
     let pinned = one(
         Skip {
             pinned: true,
@@ -660,33 +714,34 @@ mod tests {
     }
 
     #[test]
-    fn an_ascending_key_spells_out_its_newest_first_ties() {
+    fn an_ascending_key_compares_one_row_value_the_other_way() {
         let q = sorted(SortKey::Profile, Dir::Asc);
         let c = cursor(&q, SortValue::Text("turbo".into()));
         let after = page(&q, Seek::After(&c), 10, TextPath::Fts).expect("builds");
-        assert!(where_of(&after).ends_with(
-            "AND (s.sort_profile > ?1 OR (s.sort_profile = ?1 AND (s.completed_at, s.id) < (?2, ?3)))"
-        ));
+        assert!(
+            where_of(&after).ends_with("AND (s.sort_profile, s.completed_at, s.id) > (?1, ?2, ?3)")
+        );
         assert!(
             after
                 .stmt
                 .sql
-                .contains("ORDER BY s.sort_profile ASC, s.completed_at DESC, s.id DESC")
+                .contains("ORDER BY s.sort_profile ASC, s.completed_at ASC, s.id ASC")
         );
         let before = page(&q, Seek::Before(&c), 10, TextPath::Fts).expect("builds");
-        assert!(where_of(&before).ends_with(
-            "AND (s.sort_profile < ?1 OR (s.sort_profile = ?1 AND (s.completed_at, s.id) > (?2, ?3)))"
-        ));
+        assert!(
+            where_of(&before)
+                .ends_with("AND (s.sort_profile, s.completed_at, s.id) < (?1, ?2, ?3)")
+        );
         assert!(
             before
                 .stmt
                 .sql
-                .contains("ORDER BY s.sort_profile DESC, s.completed_at ASC, s.id ASC")
+                .contains("ORDER BY s.sort_profile DESC, s.completed_at DESC, s.id DESC")
         );
         let from = page(&q, Seek::From(&c), 10, TextPath::Fts).expect("builds");
-        assert!(where_of(&from).ends_with(
-            "AND (s.sort_profile > ?1 OR (s.sort_profile = ?1 AND (s.completed_at, s.id) <= (?2, ?3)))"
-        ));
+        assert!(
+            where_of(&from).ends_with("AND (s.sort_profile, s.completed_at, s.id) >= (?1, ?2, ?3)")
+        );
     }
 
     #[test]
@@ -705,26 +760,20 @@ mod tests {
         let asc = sorted(SortKey::Date, Dir::Asc);
         let c = cursor(&asc, SortValue::Date);
         let after = page(&asc, Seek::After(&c), 10, TextPath::Fts).expect("builds");
-        assert!(
-            where_of(&after)
-                .ends_with("AND (s.completed_at > ?1 OR (s.completed_at = ?1 AND s.id < ?2))")
-        );
+        assert!(where_of(&after).ends_with("AND (s.completed_at, s.id) > (?1, ?2)"));
         assert!(
             after
                 .stmt
                 .sql
-                .contains("ORDER BY s.completed_at ASC, s.id DESC")
+                .contains("ORDER BY s.completed_at ASC, s.id ASC")
         );
         let before = page(&asc, Seek::Before(&c), 10, TextPath::Fts).expect("builds");
-        assert!(
-            where_of(&before)
-                .ends_with("AND (s.completed_at < ?1 OR (s.completed_at = ?1 AND s.id > ?2))")
-        );
+        assert!(where_of(&before).ends_with("AND (s.completed_at, s.id) < (?1, ?2)"));
         assert!(
             before
                 .stmt
                 .sql
-                .contains("ORDER BY s.completed_at DESC, s.id ASC")
+                .contains("ORDER BY s.completed_at DESC, s.id DESC")
         );
     }
 
@@ -786,7 +835,12 @@ mod tests {
         let s = count(&q, TextPath::Fts);
         assert!(
             s.sql
-                .contains("s.rid IN (SELECT rowid FROM shot_fts WHERE search_text GLOB ?1)")
+                .contains("s.rid IN (SELECT rowid FROM shot_fts WHERE search_text GLOB ?1 UNION ")
+        );
+        assert!(s.sql.contains("instr(lm.label_folded, ?2) > 0"));
+        assert!(
+            s.sql
+                .contains("s_b.has_tags = 0 AND instr(bt.tag_folded, ?2) > 0")
         );
         assert_eq!(s.params[0], Param::Text("*a[*]b[?][[]c]*".into()));
         assert_eq!(s.params[1], Param::Text("a*b?[c]".into()));
@@ -871,7 +925,7 @@ mod tests {
         let q = sorted(SortKey::Rating, Dir::Asc);
         let i = index_of(&q, "a", TextPath::Fts);
         assert!(i.sql.contains(
-            "(s.sort_rating < m.sort_rating OR (s.sort_rating = m.sort_rating AND (s.completed_at, s.id) > (m.completed_at, m.id)))"
+            "(s.sort_rating, s.completed_at, s.id) < (m.sort_rating, m.completed_at, m.id)"
         ));
         assert!(
             i.sql

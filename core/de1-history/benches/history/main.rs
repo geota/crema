@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use de1_history::store::{JournalMode, Maintained, OpenOptions, Role, RowIn, Store};
-use de1_history::{Anchor, Dir, HistoryQuery, Live, Sort, SortKey};
+use de1_history::{Anchor, Dir, HistoryQuery, Live, Sort, SortKey, sql};
 use rusqlite::backup::{Backup, StepResult};
 use serde_json::{Value, json};
 
@@ -41,8 +41,9 @@ const PAGE: u32 = 64;
 /// The full diff's read batch (SPEC §11 stage 1 step 3), and the walk's and
 /// restore's batch here.
 const BATCH: usize = 500;
-/// Maintenance batch sizes tried for the derive rewrite and the FTS rebuild.
-const SWEEP: [u32; 5] = [250, 500, 1_000, 2_000, 5_000];
+/// Batch sizes tried for the FTS rebuild, and for the derive rewrite.
+const FTS_SWEEP: [u32; 4] = [500, 1_000, 2_000, 5_000];
+const DERIVE_SWEEP: [u32; 4] = [100, 200, 500, 1_000];
 /// The online backup's pages a step, as `Store::copy_to` takes them.
 const BACKUP_PAGES: i32 = 256;
 /// Searches of 3 or more characters: common, rare, accented, CJK, a bag tag
@@ -128,9 +129,20 @@ impl Steps {
     }
 
     fn median(&self) -> Duration {
+        self.quantile(50)
+    }
+
+    /// The `pct`th percentile step.
+    fn quantile(&self, pct: usize) -> Duration {
         let mut all = self.all.clone();
         all.sort();
-        all.get(all.len() / 2).copied().unwrap_or_default()
+        let i = (all.len() * pct / 100).min(all.len().saturating_sub(1));
+        all.get(i).copied().unwrap_or_default()
+    }
+
+    /// Steps longer than `cap`.
+    fn over(&self, cap: Duration) -> usize {
+        self.all.iter().filter(|d| **d > cap).count()
     }
 }
 
@@ -290,9 +302,10 @@ fn edited(row: &str, f: impl FnOnce(&mut Value)) -> String {
     v.to_string()
 }
 
-/// The full diff (SPEC §11 stage 1 step 3): `rows` in batches, then
-/// `remove_absent` with every id, keeping what the index wrote since `since`.
-fn full_diff(index: &mut Store, rows: &[String]) -> (Steps, Duration) {
+/// The full diff (SPEC §11 stage 1 step 3): `rows` in batches, then the
+/// removal by absence with every id, a step at a time, keeping what the index
+/// wrote since `since`.
+fn full_diff(index: &mut Store, rows: &[String]) -> (Steps, Steps) {
     let since = index.write_seq();
     let mut batches = Steps::default();
     for chunk in rows.chunks(BATCH) {
@@ -300,8 +313,15 @@ fn full_diff(index: &mut Store, rows: &[String]) -> (Steps, Duration) {
         batches.add(timed(|| index.diff_batch(&chunk).expect("a diff batch")).1);
     }
     let ids: Vec<String> = rows.iter().map(|r| id_of(r)).collect();
-    let (_, rm) = timed(|| index.remove_absent(&ids, since).expect("removes"));
-    (batches, rm)
+    let mut rm = Steps::default();
+    rm.add(timed(|| index.remove_absent_begin(&ids, since).expect("begins")).1);
+    loop {
+        let (step, d) = timed(|| index.remove_absent_next().expect("a step"));
+        rm.add(d);
+        if step.done {
+            return (batches, rm);
+        }
+    }
 }
 
 /// Incremental merge steps until one moves nothing (at most 10,000).
@@ -325,8 +345,10 @@ struct Rebuild {
     swap: Duration,
 }
 
-fn rebuild(store: &mut Store, batch: u32, mut during: impl FnMut(&mut Store)) -> Rebuild {
-    store.set_batch_rows(batch);
+fn rebuild(store: &mut Store, batch: Option<u32>, mut during: impl FnMut(&mut Store)) -> Rebuild {
+    if let Some(batch) = batch {
+        store.set_batch_rows(batch);
+    }
     let (_, start) = timed(|| store.start_fts_rebuild().expect("starts"));
     let mut batches = Steps::default();
     let mut first = true;
@@ -341,7 +363,6 @@ fn rebuild(store: &mut Store, batch: u32, mut during: impl FnMut(&mut Store)) ->
         match step {
             Maintained::FtsBatch { .. } => batches.add(d),
             Maintained::FtsSwapped => {
-                store.set_batch_rows(de1_history::store::DEFAULT_BATCH_ROWS);
                 return Rebuild {
                     start,
                     batches,
@@ -376,7 +397,6 @@ fn derive_rewrite(store: Store, path: &Path, batch: u32) -> (Store, Steps) {
             other => panic!("{other:?}"),
         }
     }
-    store.set_batch_rows(de1_history::store::DEFAULT_BATCH_ROWS);
     (store, s)
 }
 
@@ -454,6 +474,7 @@ fn size_line(r: &mut Report, store: &Store, path: &Path, what: &str) {
     let mut shot = 0;
     let mut id_index = 0;
     let mut indexes = 0;
+    let mut sort_indexes = 0;
     let mut fts = 0;
     let mut rest = 0;
     for (name, b) in sizes(store) {
@@ -461,47 +482,25 @@ fn size_line(r: &mut Report, store: &Store, path: &Path, what: &str) {
             "shot" => shot += b,
             "sqlite_autoindex_shot_1" => id_index += b,
             n if n.starts_with("shot_fts") => fts += b,
+            n if n.starts_with("shot_sort_") => sort_indexes += b,
             n if n.starts_with("shot_by_") || n.starts_with("shot_tag") => indexes += b,
             _ => rest += b,
         }
     }
     let rows = u64::try_from(r.rows).unwrap_or(1).max(1);
     let detail = format!(
-        "{} ({} B/row): `shot` {}, its id index {}, other indexes and tags {}, FTS {}, the rest {}, free pages {}",
+        "{} ({} B/row): `shot` {}, its id index {}, the sort indexes {}, other indexes and tags {}, FTS {}, the rest {}, free pages {}",
         fmt_bytes(file),
         file / rows,
         fmt_bytes(shot),
         fmt_bytes(id_index),
+        fmt_bytes(sort_indexes),
         fmt_bytes(indexes),
         fmt_bytes(fts),
         fmt_bytes(rest),
         fmt_bytes(free),
     );
     r.note(format!("Database size, {what}"), detail);
-}
-
-/// The candidate sort indexes (SPEC §4): one per non-date key and
-/// direction, in the list's order for that direction (ties newest first),
-/// partial like `shot_by_date`.
-fn candidate_index(key: SortKey, dir: Dir) -> (String, String) {
-    let col = match key {
-        SortKey::Rating => "sort_rating",
-        SortKey::Profile => "sort_profile",
-        SortKey::Bean => "sort_bean",
-        SortKey::Yield => "sort_yield",
-        SortKey::Time => "sort_time",
-        SortKey::Date => unreachable!("the date index exists"),
-    };
-    let (suffix, d) = match dir {
-        Dir::Desc => ("desc", "DESC"),
-        Dir::Asc => ("asc", "ASC"),
-    };
-    let name = format!("bench_by_{col}_{suffix}");
-    let sql = format!(
-        "CREATE INDEX {name} ON shot({col} {d}, completed_at DESC, id DESC) \
-         WHERE deleted_at IS NULL AND hold_delete = 0"
-    );
-    (name, sql)
 }
 
 /// New shots to insert, each newer than the last.
@@ -547,6 +546,166 @@ fn mw(p: (Duration, Duration)) -> String {
     format!("{} / {}", fmt_ms(ms(p.0)), fmt_ms(ms(p.1)))
 }
 
+/// `EXPLAIN QUERY PLAN` of `st`, its details joined by ` | `.
+fn plan(store: &Store, st: &sql::Stmt) -> String {
+    let params: Vec<rusqlite::types::Value> = st
+        .params
+        .iter()
+        .map(|p| match p {
+            sql::Param::Int(i) => rusqlite::types::Value::Integer(*i),
+            sql::Param::Real(r) => rusqlite::types::Value::Real(*r),
+            sql::Param::Text(t) => rusqlite::types::Value::Text(t.clone()),
+        })
+        .collect();
+    let mut q = store
+        .raw()
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", st.sql))
+        .expect("explains");
+    q.query_map(rusqlite::params_from_iter(params), |r| {
+        r.get::<_, String>(3)
+    })
+    .expect("runs")
+    .map(|r| r.expect("a step"))
+    .collect::<Vec<_>>()
+    .join(" | ")
+}
+
+/// The plan's top-level steps only: a subquery's own sort (a `UNION`'s
+/// merge) is not the statement's.
+fn top_plan(store: &Store, st: &sql::Stmt) -> String {
+    let params: Vec<rusqlite::types::Value> = st
+        .params
+        .iter()
+        .map(|p| match p {
+            sql::Param::Int(i) => rusqlite::types::Value::Integer(*i),
+            sql::Param::Real(r) => rusqlite::types::Value::Real(*r),
+            sql::Param::Text(t) => rusqlite::types::Value::Text(t.clone()),
+        })
+        .collect();
+    let mut q = store
+        .raw()
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", st.sql))
+        .expect("explains");
+    q.query_map(rusqlite::params_from_iter(params), |r| {
+        Ok((r.get::<_, i64>(1)?, r.get::<_, String>(3)?))
+    })
+    .expect("runs")
+    .map(|r| r.expect("a step"))
+    .filter(|(parent, _)| *parent == 0)
+    .map(|(_, d)| d)
+    .collect::<Vec<_>>()
+    .join(" | ")
+}
+
+/// The two planner traps B1 found, held by assertion on every run:
+/// - `index_of` under any sort counts a range of its sort index, so it costs
+///   about what it costs under the date sort;
+/// - a search that matches nothing costs about the same under any sort: its
+///   count reads only the matches, and its page walks the sort index probing
+///   the match set, never reading every row.
+///
+/// The plans are checked too, so a regression names its statement.
+fn planner_traps(store: &mut Store, costs: &[(String, ListCosts)], x: &mut String) {
+    let path = sql::TextPath::Fts;
+    let mid_id = {
+        let q = HistoryQuery::default();
+        let n = store.count(&q).expect("counts");
+        store
+            .page(&q, &Anchor::Offset(n / 2), 1)
+            .expect("a page")
+            .rows[0]
+            .id
+            .clone()
+    };
+    let mut failures = Vec::new();
+    for sort in all_sorts() {
+        let name = sort_name(sort);
+        let q = sorted(sort);
+        let page = sql::page(&q, sql::Seek::Start, PAGE, path)
+            .expect("builds")
+            .stmt;
+        let p = top_plan(store, &page);
+        if p.contains("TEMP B-TREE") {
+            failures.push(format!(
+                "{name}: the page sorts instead of walking an index: {p}"
+            ));
+        }
+        let io = plan(store, &sql::index_of(&q, &mid_id, path));
+        if !io.contains("SEARCH s USING INDEX") {
+            failures.push(format!(
+                "{name}: `index_of` doesn't count an index range: {io}"
+            ));
+        }
+        let none = HistoryQuery {
+            text: "zzqx".into(),
+            ..sorted(sort)
+        };
+        let c = plan(store, &sql::count(&none, path));
+        if !c.contains("SEARCH s USING INTEGER PRIMARY KEY")
+            || ["SCAN s ", "SCAN s_m", "SCAN s_b"]
+                .iter()
+                .any(|scan| format!("{c} ").contains(scan))
+        {
+            failures.push(format!(
+                "{name}: a search count reads more than its matches: {c}"
+            ));
+        }
+        let sp = top_plan(
+            store,
+            &sql::page(&none, sql::Seek::Start, PAGE, path)
+                .expect("builds")
+                .stmt,
+        );
+        if sp.contains("TEMP B-TREE") {
+            failures.push(format!("{name}: a search page sorts its matches: {sp}"));
+        }
+    }
+    // The costs, relative to the date sort, so any machine can hold them.
+    let date_io = costs[0].1.index_of.0;
+    let (w, io) = worst(costs, |c| c.index_of.0);
+    let io_cap = date_io * 4 + Duration::from_millis(2);
+    if io > io_cap {
+        failures.push(format!(
+            "`index_of` under {w} took {}, over 4 times the date sort's {} + 2 ms",
+            fmt_ms(ms(io)),
+            fmt_ms(ms(date_io))
+        ));
+    }
+    let none: Vec<(String, (Duration, Duration))> = all_sorts()
+        .into_iter()
+        .map(|sort| {
+            let q = HistoryQuery {
+                text: "zzqx".into(),
+                ..sorted(sort)
+            };
+            (sort_name(sort), repeat(|| first_page(store, &q)))
+        })
+        .collect();
+    let date_none = none[0].1.0;
+    let (wn, vn) = worst(&none, |c| c.0);
+    let none_cap = date_none * 3 + Duration::from_millis(2);
+    if vn > none_cap {
+        failures.push(format!(
+            "a search with no match under {wn} took {}, over 3 times the date sort's {} + 2 ms",
+            fmt_ms(ms(vn)),
+            fmt_ms(ms(date_none))
+        ));
+    }
+    let _ = writeln!(
+        x,
+        "\nPlanner traps: `index_of` worst {} ({w}), date desc {}; a search with no match, count + first page, worst {} ({wn}), date desc {}. Plans checked for every sort: pages and search pages walk an index (no temp sort), `index_of` counts an index range, a search count reads only its matches.",
+        fmt_ms(ms(io)),
+        fmt_ms(ms(date_io)),
+        fmt_ms(ms(vn)),
+        fmt_ms(ms(date_none)),
+    );
+    assert!(
+        failures.is_empty(),
+        "planner traps:\n{}",
+        failures.join("\n")
+    );
+}
+
 #[allow(clippy::too_many_lines)]
 fn run(n: usize) {
     let d = tempfile::tempdir().expect("a temp dir");
@@ -573,8 +732,12 @@ fn run(n: usize) {
     r.line(
         "Stage-1 rebuild (empty index, full diff)",
         Some(B_BULK),
-        build.total + build_rm,
-        format!("{} batches of {BATCH}, then `remove_absent`", build.n),
+        build.total + build_rm.total,
+        format!(
+            "{} batches of {BATCH}, then {} removal steps",
+            build.n,
+            build_rm.n - 1
+        ),
     );
     // The P3 store a boot diffs against: 1% of rows edited, 1% gone.
     let p3: Vec<String> = arrival
@@ -596,11 +759,12 @@ fn run(n: usize) {
     r.line(
         "Full diff (1% edited, 1% gone)",
         Some(B_BULK),
-        diff.total + diff_rm,
+        diff.total + diff_rm.total,
         format!(
-            "batches {}, `remove_absent` {}",
+            "batches {}, removal by absence {} in {} steps",
             fmt_ms(ms(diff.total)),
-            fmt_ms(ms(diff_rm))
+            fmt_ms(ms(diff_rm.total)),
+            diff_rm.n - 1
         ),
     );
 
@@ -646,7 +810,7 @@ fn run(n: usize) {
         .expect("the source ids");
         c.execute_batch("COMMIT").expect("commits");
     });
-    let flip_fts = rebuild(&mut flip, de1_history::store::DEFAULT_BATCH_ROWS, |_| {});
+    let flip_fts = rebuild(&mut flip, None, |_| {});
     let flip_merges = merges(&mut flip);
     let flip_total = copy + step5 + flip_fts.start + flip_fts.batches.total + flip_fts.swap;
     r.line(
@@ -829,8 +993,8 @@ fn run(n: usize) {
     // ── Maintenance (S15) ────────────────────────────────────────────────
     let mut scan = Vec::new();
     let mut fts_sweep = Vec::new();
-    for (i, batch) in SWEEP.into_iter().enumerate() {
-        let rb = rebuild(&mut store, batch, |s| {
+    for (i, batch) in FTS_SWEEP.into_iter().enumerate() {
+        let rb = rebuild(&mut store, Some(batch), |s| {
             if i == 0 {
                 scan = search(s);
             }
@@ -846,7 +1010,7 @@ fn run(n: usize) {
         format!("worst {w}"),
     );
     let mut derive_sweep = Vec::new();
-    for batch in SWEEP {
+    for batch in DERIVE_SWEEP {
         let (s, steps) = derive_rewrite(store, &flip_path, batch);
         store = s;
         let m = merges(&mut store);
@@ -901,12 +1065,14 @@ fn run(n: usize) {
     let wipe_ids: Vec<String> = wipe_ids.into_iter().map(|r| r.id).collect();
     let (_, wipe_delete) = timed(|| store.delete(&wipe_ids).expect("deletes"));
 
-    let at_default = |sweep: &[(u32, Duration)]| {
+    let at = |sweep: &[(u32, Duration)], rows: u32| {
         sweep
             .iter()
-            .find(|(b, _)| *b == de1_history::store::DEFAULT_BATCH_ROWS)
+            .find(|(b, _)| *b == rows)
             .map_or(Duration::ZERO, |(_, d)| *d)
     };
+    let fts_def = de1_history::store::FTS_BATCH_ROWS;
+    let derive_def = de1_history::store::DERIVE_BATCH_ROWS;
     let fts_batch_at: Vec<(u32, Duration)> = fts_sweep
         .iter()
         .map(|(b, rb, _)| (*b, rb.batches.longest))
@@ -932,14 +1098,13 @@ fn run(n: usize) {
         .max()
         .unwrap_or_default();
     let tx = Some(B_TX);
-    let def = de1_history::store::DEFAULT_BATCH_ROWS;
     r.line(
-        format!("Longest tx: FTS rebuild batch ({def} rows)"),
+        format!("Longest tx: FTS rebuild batch ({fts_def} rows)"),
         tx,
-        at_default(&fts_batch_at),
+        at(&fts_batch_at, fts_def),
         format!(
             "{}; per batch size below",
-            per_row(at_default(&fts_batch_at), def as usize)
+            per_row(at(&fts_batch_at, fts_def), fts_def as usize)
         ),
     );
     r.line(
@@ -965,12 +1130,12 @@ fn run(n: usize) {
         "after the builds, the diff and each rebuild",
     );
     r.line(
-        format!("Longest tx: derive rewrite batch ({def} rows)"),
+        format!("Longest tx: derive rewrite batch ({derive_def} rows)"),
         tx,
-        at_default(&derive_at),
+        at(&derive_at, derive_def),
         format!(
             "every row's columns and search text rewritten; {}",
-            per_row(at_default(&derive_at), def as usize)
+            per_row(at(&derive_at, derive_def), derive_def as usize)
         ),
     );
     r.line(
@@ -986,10 +1151,14 @@ fn run(n: usize) {
         "the boot's full diff",
     );
     r.line(
-        "Longest tx: `remove_absent` (every id, one transaction)",
+        "Longest tx: removal by absence step (≤500 deletes, ≤5,000 rows read)",
         tx,
-        diff_rm,
-        "",
+        diff_rm.longest.max(build_rm.longest),
+        format!(
+            "{} steps in the full diff, {} in all",
+            diff_rm.n,
+            fmt_ms(ms(diff_rm.total))
+        ),
     );
     r.line(
         format!("Longest tx: flip backup step ({BACKUP_PAGES} pages)"),
@@ -1042,136 +1211,72 @@ fn run(n: usize) {
         "Longest read: FTS `integrity-check`",
         tx,
         integrity,
-        "one statement; web defers it (REVIEW-439 note 6)",
+        "one statement, only when no shot runs; web defers it (REVIEW-439 note 6)",
     );
 
     // ── The batch-size sweep ─────────────────────────────────────────────
     let mut x = String::new();
     let _ = writeln!(
         x,
-        "\nMaintenance batch sizes ({n} rows): a batch's median and longest transaction, and the whole job. The longest can include a WAL auto-checkpoint, which runs in the commit that crosses 1,000 pages\n"
+        "\nMaintenance batch sizes ({n} rows): a step's median and longest, and the whole job\n"
     );
     let _ = writeln!(
         x,
-        "| Batch | FTS rebuild batch, median / longest | FTS swap | FTS rebuild total | Derive batch, median / longest | Derive total |"
+        "| FTS batch | Batch, median / longest | Swap | Rebuild total |"
     );
-    let _ = writeln!(x, "| --- | --- | --- | --- | --- | --- |");
-    for ((b, rb, _), (_, ds, _)) in fts_sweep.iter().zip(&derive_sweep) {
+    let _ = writeln!(x, "| --- | --- | --- | --- |");
+    for (b, rb, _) in &fts_sweep {
         let _ = writeln!(
             x,
-            "| {b} | {} | {} | {} | {} | {} |",
+            "| {b} | {} | {} | {} |",
             mw((rb.batches.median(), rb.batches.longest)),
             fmt_ms(ms(rb.swap)),
             fmt_ms(ms(rb.start + rb.batches.total + rb.swap)),
+        );
+    }
+    let _ = writeln!(
+        x,
+        "\n| Derive batch | Batch, median / longest | 95th percentile | Batches over 50 ms | Rewrite total |"
+    );
+    let _ = writeln!(x, "| --- | --- | --- | --- | --- |");
+    for (b, ds, _) in &derive_sweep {
+        let _ = writeln!(
+            x,
+            "| {b} | {} | {} | {} of {} | {} |",
             mw((ds.median(), ds.longest)),
+            fmt_ms(ms(ds.quantile(95))),
+            ds.over(Duration::from_millis(50)),
+            ds.n,
             fmt_ms(ms(ds.total)),
         );
     }
 
-    // ── Per sort, and the candidate sort indexes ─────────────────────────
-    // Three states: no sort index, one per key in descending order, then one
-    // per key and direction.
-    let costs_now = |store: &mut Store| -> Vec<(String, ListCosts)> {
-        all_sorts()
-            .into_iter()
-            .map(|s| (sort_name(s), list_costs(store, &sorted(s))))
-            .collect()
-    };
-    let in_use = |store: &Store| -> u64 { sizes(store).iter().map(|(_, b)| b).sum() };
-    let keys: Vec<SortKey> = SortKey::ALL
+    // ── Per sort, and the planner traps (B1) ─────────────────────────────
+    let costs: Vec<(String, ListCosts)> = all_sorts()
         .into_iter()
-        .filter(|k| *k != SortKey::Date)
+        .map(|s| (sort_name(s), list_costs(&mut store, &sorted(s))))
         .collect();
-    let worst_search = |store: &mut Store| -> String {
-        let all = search(store);
-        let (w, v) = worst(&all, |c| c.0);
-        format!("{} ({w})", fmt_ms(ms(v)))
-    };
-    let mut states = vec![(
-        costs_now(&mut store),
-        in_use(&store),
-        single_writes(&mut store, &new_shots(&arrival, "b", 21)),
-        worst_search(&mut store),
-    )];
-    let mut made = Vec::new();
-    for (dir, tag) in [(Dir::Desc, "c"), (Dir::Asc, "d")] {
-        for &key in &keys {
-            let (name, sql) = candidate_index(key, dir);
-            let (_, t) = timed(|| store.raw().execute_batch(&sql).expect("an index"));
-            made.push((name, t));
-        }
-        states.push((
-            costs_now(&mut store),
-            in_use(&store),
-            single_writes(&mut store, &new_shots(&arrival, tag, 21)),
-            worst_search(&mut store),
-        ));
-    }
-    let med = |c: &[&(Duration, Duration)]| -> String {
-        c.iter()
-            .map(|p| fmt_ms(ms(p.0)))
-            .collect::<Vec<_>>()
-            .join(" → ")
-    };
     let _ = writeln!(
         x,
-        "\nPer sort ({n} rows), medians: no sort index → one per key, descending → one per key and direction\n"
+        "\nPer sort ({n} rows), median / worst, with the sort indexes\n"
     );
     let _ = writeln!(
         x,
         "| Sort | count + first page | next page (top) | next page (middle) | offset to the end | `index_of` middle |"
     );
     let _ = writeln!(x, "| --- | --- | --- | --- | --- | --- |");
-    for (i, (name, _)) in states[0].0.iter().enumerate() {
-        let cell = |f: fn(&ListCosts) -> &(Duration, Duration)| -> String {
-            med(&states.iter().map(|s| f(&s.0[i].1)).collect::<Vec<_>>())
-        };
+    for (name, c) in &costs {
         let _ = writeln!(
             x,
             "| {name} | {} | {} | {} | {} | {} |",
-            cell(|c| &c.first),
-            cell(|c| &c.next),
-            cell(|c| &c.next_deep),
-            cell(|c| &c.offset_end),
-            cell(|c| &c.index_of),
+            mw(c.first),
+            mw(c.next),
+            mw(c.next_deep),
+            mw(c.offset_end),
+            mw(c.index_of),
         );
     }
-    let _ = writeln!(
-        x,
-        "\nCandidate sort indexes ({n} rows): `CREATE INDEX … ON shot(<key> <dir>, completed_at DESC, id DESC) WHERE deleted_at IS NULL AND hold_delete = 0`\n"
-    );
-    let _ = writeln!(x, "| Index | Size | Bytes a row | Build |");
-    let _ = writeln!(x, "| --- | --- | --- | --- |");
-    let rows_now = u64::try_from(int(&store, "SELECT count(*) FROM shot"))
-        .unwrap_or(1)
-        .max(1);
-    let sizes_now = sizes(&store);
-    for (name, t) in &made {
-        let b = sizes_now
-            .iter()
-            .find(|(n, _)| n == name)
-            .map_or(0, |(_, b)| *b);
-        let _ = writeln!(
-            x,
-            "| `{name}` | {} | {} | {} |",
-            fmt_bytes(b),
-            b / rows_now,
-            fmt_ms(ms(*t))
-        );
-    }
-    let _ = writeln!(
-        x,
-        "\nPages in use: {} → {} → {}. Insert one shot, median / worst: {} → {} → {}. Worst search (count + first page): {} → {} → {}",
-        fmt_bytes(states[0].1),
-        fmt_bytes(states[1].1),
-        fmt_bytes(states[2].1),
-        mw(states[0].2),
-        mw(states[1].2),
-        mw(states[2].2),
-        states[0].3,
-        states[1].3,
-        states[2].3,
-    );
+    planner_traps(&mut store, &costs, &mut x);
     r.extra = x;
     store.close().expect("closes");
 

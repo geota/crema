@@ -1040,6 +1040,8 @@ pub enum HistoryFtsCheck {
     Ok,
     /// Dropped; a rebuild is due.
     Damaged,
+    /// Not checked now: no whole index to check (building or missing), or a
+    /// shot is running. Try again when idle; never read it as a pass.
     NotReady,
 }
 
@@ -1568,12 +1570,15 @@ impl HistoryDb {
         self.with(|s| s.index_write(&w)).map(Into::into)
     }
 
-    /// The diff's delete by absence: the index only.
+    /// The diff's delete by absence: the index only, in steps of at most
+    /// 500 deletes, each its own transaction.
     ///
     /// # Errors
-    /// `Refused` on an `authority` file; a store error class.
+    /// `Refused` on an `authority` file; a store error class. Steps before a
+    /// failed one stay committed, and their change set doesn't cross this
+    /// boundary: after an error the shell refreshes its lists.
     pub fn remove_absent(&self, ids: Vec<String>, since_seq: u64) -> HResult<HistoryChangeSet> {
-        self.with(|s| s.remove_absent(&ids, since_seq))
+        self.with(|s| s.remove_absent(&ids, since_seq).map_err(Into::into))
             .map(Into::into)
     }
 
