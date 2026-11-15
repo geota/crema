@@ -46,14 +46,33 @@ pub const ABSENT_BATCH_ROWS: usize = 500;
 const ABSENT_SCAN_ROWS: i64 = 5_000;
 
 /// A removal by absence under way ([`Store::remove_absent_begin`]): the ids
-/// the P3 store holds, the index's `write_seq` when the diff began, and the
-/// last `rid` examined. In memory only: a reopen forgets it, and the next
-/// step is refused, so the diff runs again.
+/// the P3 store holds, with every id written since the removal began, the
+/// index's `write_seq` when the diff began, and the last `rid` examined. In
+/// memory only: a new `Store`, or a reopen after a mid-session
+/// `SQLITE_CORRUPT`, forgets it, and the next step is refused, so the diff
+/// runs again.
 #[derive(Debug, Clone)]
 pub(crate) struct AbsentScan {
     present: HashSet<String>,
     since: i64,
     after_rid: i64,
+}
+
+/// A removal by absence that failed part way ([`Store::remove_absent`]): the
+/// error, and what the steps before it deleted, which stay deleted. The shell
+/// posts `partial` as the change notice, so open lists drop those rows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AbsentError {
+    /// The failed step's error.
+    pub error: StoreError,
+    /// The committed steps' change set.
+    pub partial: ChangeSet,
+}
+
+impl From<AbsentError> for StoreError {
+    fn from(e: AbsentError) -> StoreError {
+        e.error
+    }
 }
 
 /// One step of a removal by absence ([`Store::remove_absent_next`]).
@@ -165,6 +184,7 @@ impl Store {
     /// [`StoreError::Refused`] on an `authority` file; as [`Store::upsert`].
     pub fn index_write(&mut self, w: &IndexWrite) -> Result<Written> {
         self.index_only("an index write")?;
+        self.note_written(&w.upsert);
         let walking = self.walks.any();
         let (out, st) = self.write("upsert.commit", "upsert.committed", |tx, st, f| {
             let mut out = upsert_in(tx, st, f, &w.upsert)?;
@@ -197,14 +217,35 @@ impl Store {
     /// to serve calls the steps itself and yields between them (S15).
     ///
     /// # Errors
-    /// [`StoreError::Refused`] on an `authority` file; a SQLite error class.
-    /// A failed step leaves the steps before it committed: the index is
+    /// [`AbsentError`]: [`StoreError::Refused`] on an `authority` file; a
+    /// SQLite error class. A failed step leaves the steps before it
+    /// committed, and the error carries their change set: the index is
     /// derived, and the next full diff finishes the job.
-    pub fn remove_absent(&mut self, ids: &[String], since_seq: u64) -> Result<ChangeSet> {
-        self.remove_absent_begin(ids, since_seq)?;
-        let mut all = ChangeSet::default();
+    pub fn remove_absent(
+        &mut self,
+        ids: &[String],
+        since_seq: u64,
+    ) -> std::result::Result<ChangeSet, AbsentError> {
+        let mut all = ChangeSet {
+            seq: self.write_seq,
+            ..ChangeSet::default()
+        };
+        if let Err(error) = self.remove_absent_begin(ids, since_seq) {
+            return Err(AbsentError {
+                error,
+                partial: all,
+            });
+        }
         loop {
-            let step = self.remove_absent_next()?;
+            let step = match self.remove_absent_next() {
+                Ok(step) => step,
+                Err(error) => {
+                    return Err(AbsentError {
+                        error,
+                        partial: all,
+                    });
+                }
+            };
             all.seq = step.change.seq;
             all.deleted.extend(step.change.deleted);
             all.upserted.extend(step.change.upserted);
@@ -217,20 +258,44 @@ impl Store {
 
     /// Begins a removal by absence: `ids` is every id the P3 store holds,
     /// read in one transaction, and `since_seq` the index's `write_seq` when
-    /// the diff began. Nothing is written. A removal already under way is
-    /// replaced.
+    /// the diff began, taken as at most this store's `write_seq` now. Nothing
+    /// is written. A removal already under way is replaced. Until it ends,
+    /// every id a write passes in ([`Store::upsert`], [`Store::restore_batch`],
+    /// [`Store::apply`], [`Store::index_write`]) joins the held ids, written
+    /// or unchanged, so a row put back between steps is never removed
+    /// (REVIEW-448 note 1).
     ///
     /// # Errors
     /// [`StoreError::Refused`] on an `authority` file.
     pub fn remove_absent_begin(&mut self, ids: &[String], since_seq: u64) -> Result<()> {
         self.usable()?;
         self.index_only("remove_absent")?;
+        // A `since` above what this file has written would let a row
+        // changed between steps pass for one from before the diff
+        // (REVIEW-448 note 2).
+        let since = since_seq.min(self.write_seq);
         self.absent = Some(AbsentScan {
             present: ids.iter().cloned().collect(),
-            since: i64::try_from(since_seq).unwrap_or(i64::MAX),
+            since: i64::try_from(since).unwrap_or(i64::MAX),
             after_rid: 0,
         });
         Ok(())
+    }
+
+    /// Adds the ids of `rows` to a removal under way: a row written between
+    /// its steps is held, whether the write changed it or not.
+    pub(crate) fn note_written(&mut self, rows: &[RowIn]) {
+        let Some(scan) = self.absent.as_mut() else {
+            return;
+        };
+        for r in rows {
+            let id = serde_json::from_str::<serde_json::Value>(&r.row_json)
+                .ok()
+                .and_then(|v| crate::derive::row_id(&v).map(str::to_owned));
+            if let Some(id) = id {
+                scan.present.insert(id);
+            }
+        }
     }
 
     /// One step of the removal, in one transaction: reads up to 5,000 rows by
@@ -242,7 +307,8 @@ impl Store {
     ///
     /// # Errors
     /// [`StoreError::Refused`] on an `authority` file, or with no removal
-    /// under way (none begun, finished, or forgotten by a reopen): the caller
+    /// under way (none begun, finished, or forgotten by a new `Store` or a
+    /// reopen): the caller
     /// runs the diff again. A SQLite error class otherwise, with the step
     /// rolled back and the removal where it was.
     pub fn remove_absent_next(&mut self) -> Result<AbsentStep> {

@@ -39,7 +39,7 @@ pub use error::{Result, StoreError};
 pub use export::{ExportWalk, RidId};
 pub use faults::Faults;
 pub use fts::{FtsCheck, FtsStatus, Maintained};
-pub use index::{ABSENT_BATCH_ROWS, AbsentStep, IndexState, IndexWrite};
+pub use index::{ABSENT_BATCH_ROWS, AbsentError, AbsentStep, IndexState, IndexWrite};
 pub use read::{CoffeeFacet, Destination, Facets, Page, RidRow, RowOut, SyncPage, SyncRow};
 pub use write::{Applied, Duplicate, Heavy, RowIn, Write, Written};
 
@@ -549,6 +549,7 @@ impl Store {
         let mut opts = self.opts.clone();
         opts.create = false;
         self.walks.clear();
+        self.absent = None;
         let reopened = open_conn(&self.path, &opts, check).and_then(|(conn, opened)| {
             let fts = fts::load(&conn).map_err(|e| error_of(&e, Source::Open))?;
             let derive = rewrite::State::load(&conn).map_err(|e| error_of(&e, Source::Open))?;

@@ -486,7 +486,12 @@ fn a_truth_file_refuses_every_index_upkeep_call() {
             .map(|_| ()),
     );
     refused(truth.index_write(&IndexWrite::default()).map(|_| ()));
-    refused(truth.remove_absent(&["a".into()], 0).map(|_| ()));
+    refused(
+        truth
+            .remove_absent(&["a".into()], 0)
+            .map(|_| ())
+            .map_err(Into::into),
+    );
     refused(truth.set_source_seq(1));
     refused(truth.bump_pending().map(|_| ()));
     refused(truth.finish_android_diff(1));

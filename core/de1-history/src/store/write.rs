@@ -601,6 +601,7 @@ impl Store {
     /// (nothing is written); a SQLite error class otherwise, with the
     /// transaction rolled back.
     pub fn upsert(&mut self, rows: &[RowIn]) -> Result<Written> {
+        self.note_written(rows);
         let (out, st) = self.write("upsert.commit", "upsert.committed", |tx, st, f| {
             upsert_in(tx, st, f, rows)
         })?;
@@ -648,6 +649,9 @@ impl Store {
     pub fn apply(&mut self, tab: &str, seq: u64, at_ms: i64, write: &Write) -> Result<Applied> {
         let seq_i =
             i64::try_from(seq).map_err(|_| StoreError::Refused("seq out of range".into()))?;
+        if let Write::Upsert(rows) = write {
+            self.note_written(rows);
+        }
         let walking = self.walks.any();
         let (applied, st) = self.write("apply.commit", "apply.committed", |tx, st, f| {
             let last: i64 = tx
