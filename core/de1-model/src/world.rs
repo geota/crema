@@ -989,7 +989,9 @@ impl World {
                 // DE1 reports the last shot's frame until flow begins. Before a
                 // link's first state, a sample only raises it.
                 if self.open_mode == Some(ActiveMode::Espresso)
-                    && self.heard_sub.is_some_and(|s| !de1_domain::session::is_pre_flow(s))
+                    && self
+                        .heard_sub
+                        .is_some_and(|s| !de1_domain::session::is_pre_flow(s))
                     && (self.state_heard_on_link
                         || self.last_sample_frame.is_none_or(|f| self.de1.frame > f))
                 {

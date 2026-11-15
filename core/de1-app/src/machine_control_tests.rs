@@ -1178,7 +1178,11 @@ fn a_drop_in_heating_compares_no_frame_from_the_last_shot() {
     f[17] = 1;
     f[0..2].copy_from_slice(&1_000u16.to_be_bytes());
     let o = core.on_notification(Source::De1ShotSample, &f, 8_100);
-    assert!(!o.commands.contains(&Command::CancelStop), "{:?}", o.commands);
+    assert!(
+        !o.commands.contains(&Command::CancelStop),
+        "{:?}",
+        o.commands
+    );
     assert!(!o.events.contains(&Event::ShotStarted), "the same shot");
 }
 
