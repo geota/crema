@@ -303,6 +303,36 @@ class HistorySqliteStoreTest {
         assertTrue(shotsJson.readText().contains("\"new\""))
     }
 
+    private fun gzCount() = seriesDir.listFiles().orEmpty().count { it.name.endsWith(SeriesFiles.GZ) }
+
+    @Test
+    fun `a move that fails part-way through its series takes back the gz copies it made`() = runBlocking {
+        val rows = HistoryFixtures.rows(10, samplesPer = 5)
+        HistoryFixtures.plantOldBuild(app, rows)
+        var n = 0
+        SeriesFiles.beforeWrite = { if (++n > 6) throw java.io.IOException("ENOSPC") }
+        val s = store()
+        assertEquals(HistoryHealth.LEGACY, s.loadAll().health)
+        assertContains(s.lastError.orEmpty(), "telemetry")
+        assertEquals(0, gzCount(), "a failure holds no disk (#408 F2)")
+        SeriesFiles.beforeWrite = {}
+        assertEquals(HistoryHealth.OK, store().loadAll().health)
+        assertEquals(expected(rows), store().load(), "the next run copies every curve")
+    }
+
+    @Test
+    fun `the free-space check counts the move's gz copies`() = runBlocking {
+        val rows = HistoryFixtures.rows(10, samplesPer = 60)
+        HistoryFixtures.plantOldBuild(app, rows)
+        // Room for 2.5x shots.json, and not for the series copies too.
+        val rowsOnly = shotsJson.length() * 5 / 2
+        HistoryStore.freeSpaceForTest = { rowsOnly }
+        val s = store()
+        assertEquals(HistoryHealth.LEGACY, s.loadAll().health)
+        assertContains(s.lastError.orEmpty(), "free space")
+        assertEquals(0, gzCount())
+    }
+
     @Test
     fun `a failure retries at the next two launches, then at most once a day`() = runBlocking {
         HistoryFixtures.plantOldBuild(app, HistoryFixtures.rows(3))
@@ -592,6 +622,22 @@ class HistorySqliteStoreTest {
     }
 
     @Test
+    fun `no marker and a store with rows whose meta doesn't decode is lost, never re-migrated`() = runBlocking {
+        migratedWithPostShot()
+        val db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE)
+        db.execSQL("UPDATE meta SET value = 'not json'")
+        db.close()
+        dropMarker()
+        val s = store()
+        val load = s.loadAll()
+        assertEquals(HistoryHealth.LOST, load.health, "never a silent copy over it (#408 F1)")
+        assertTrue(load.view.isEmpty())
+        assertEquals(4, rowCount(), "shots.db as it was, the post-move shot included")
+        assertFalse(dbFile.parentFile!!.listFiles()!!.any { it.name.startsWith(HistoryStore.NEXT_DB_NAME + ".corrupt-") }, "nothing moved aside yet")
+        assertEquals(HistoryHealth.LOST, store().loadAll().health, "and it stays lost")
+    }
+
+    @Test
     fun `a damaged marker with no store is lost, never re-migrated`() = runBlocking {
         migratedWithPostShot()
         dropMarker()
@@ -629,6 +675,21 @@ class HistorySqliteStoreTest {
         assertEquals(5, back["j"]?.rating, "the edit stays")
         assertEquals("edited after space freed", back["j"]?.notes)
         assertFalse(back.containsKey("k"), "a deleted shot doesn't come back")
+    }
+
+    @Test
+    fun `a delete of a journaled shot retires its line, so the shot doesn't come back`() = runBlocking {
+        store().loadAll()
+        val s = store()
+        s.loadAll()
+        val k = StoredShot(id = "k", completedAtMs = 6, durationMs = 1)
+        HistoryStore.faults += MigrationFault.DISK_FULL
+        assertFalse(s.save(listOf(k)))
+        HistoryStore.faults.clear()
+        assertEquals(setOf("k"), s.journaled)
+        // Space is back, and the shot is deleted with no save between (#408 F3).
+        s.delete(listOf(k.id))
+        assertFalse(store().load().any { it.id == k.id })
     }
 
     @Test

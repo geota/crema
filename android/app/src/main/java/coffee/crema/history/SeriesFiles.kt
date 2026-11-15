@@ -60,6 +60,9 @@ internal class SeriesFiles(val dir: File, private val json: Json) {
         return SeriesRead.Absent
     }
 
+    /** The size of [id]'s old-copy series file (`.json`, or the pre-rename name), 0 when there's none. */
+    fun sourceLength(id: String): Long = maxOf(jsonFile(id).length(), legacyFile(id).length())
+
     /** Whether any file names [id]'s series. */
     fun exists(id: String): Boolean = gzFile(id).exists() || jsonFile(id).exists() || legacyFile(id).exists()
 

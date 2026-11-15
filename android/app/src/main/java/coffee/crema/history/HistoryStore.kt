@@ -336,10 +336,20 @@ class HistoryStore(private val context: Context, private val json: Json) {
                     unavailable(probe.why)
                     return
                 }
-                StoreProbe.NotDone -> if (markerDamaged) {
-                    closeDb()
-                    lost("The shot history's marker is damaged and its database doesn't hold a finished copy.")
-                    return
+                is StoreProbe.NotDone -> when {
+                    markerDamaged -> {
+                        closeDb()
+                        lost("The shot history's marker is damaged and its database doesn't hold a finished copy.")
+                        return
+                    }
+                    // Rows with no `done` flag that reads: a migration commits both
+                    // together, so its `meta` is damaged. Never copied over (#408 F1).
+                    probe.holdsRows -> {
+                        closeDb()
+                        lost("The shot history's database holds rows but doesn't say it holds a finished copy.")
+                        return
+                    }
+                    else -> Unit
                 }
             }
         } else if (markerDamaged) {
@@ -357,7 +367,8 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
     private sealed interface StoreProbe {
         data object Done : StoreProbe
-        data object NotDone : StoreProbe
+        /** Its flag isn't `done`, or doesn't read; [holdsRows] when it has rows anyway. */
+        data class NotDone(val holdsRows: Boolean) : StoreProbe
         data object Quarantined : StoreProbe
         data class Failed(val why: String) : StoreProbe
     }
@@ -379,13 +390,17 @@ class HistoryStore(private val context: Context, private val json: Json) {
             closeDb()
             return StoreProbe.Quarantined
         }
-        val record = try {
-            decodeRecord(tables.meta(db, TABLE_META_KEY))
+        return try {
+            val record = decodeRecord(tables.meta(db, TABLE_META_KEY))
+            if (record?.state == STATE_DONE) {
+                StoreProbe.Done
+            } else {
+                StoreProbe.NotDone(holdsRows = db.rawQuery("SELECT 1 FROM shots LIMIT 1", null).use { it.moveToFirst() })
+            }
         } catch (e: Exception) {
             closeDb()
-            return StoreProbe.Failed(e.message ?: e.javaClass.simpleName)
+            StoreProbe.Failed(e.message ?: e.javaClass.simpleName)
         }
-        return if (record?.state == STATE_DONE) StoreProbe.Done else StoreProbe.NotDone
     }
 
     /** The marker says done: open the store, or say why not. Never migrates. */
@@ -493,8 +508,12 @@ class HistoryStore(private val context: Context, private val json: Json) {
         if (source.isNotEmpty()) {
             // The source as read: a recovered .bak or .tmp when the main file was moved aside (N4).
             val size = listOf(file, SafeFile.backupOf(file), File(file.path + ".tmp")).maxOf { it.length() }
-            // 1.5× the source (SPEC §6 step 3), plus the WAL, which holds the one transaction's rows until its checkpoint.
-            val need = size * 5 / 2
+            // 1.5× the source (SPEC §6 step 3), plus the WAL, which holds the one transaction's rows until its checkpoint,
+            // plus step 6's `.series.gz` copies: at most the `.json` each is read from, and for inline samples
+            // at most `shots.json` again (#408 F2).
+            val seriesBound = source.sumOf { r -> if (r.samples.isEmpty()) series.sourceLength(r.id) else 0L } +
+                if (source.any { it.samples.isNotEmpty() }) size else 0L
+            val need = size * 5 / 2 + seriesBound
             val free = freeSpace()
             if (fault(MigrationFault.DISK_FULL) != null || free < need) {
                 throw MigrationFailed("Not enough free space to move the shot history ($need bytes needed)")
@@ -518,52 +537,62 @@ class HistoryStore(private val context: Context, private val json: Json) {
             }
             Prepared(row, samples)
         }
-        // Every series read to its own `.series.gz` first, so no row names a file
-        // that isn't there, and an old build's prune of a `.json` (the old copy,
-        // left as it is) can't take a migrated curve (#408 M2).
-        var seriesWritten = 0
-        val firstCurve = prepared.firstOrNull { !it.samples.isNullOrEmpty() }
-        for (p in prepared) {
-            val samples = p.samples
-            if (samples.isNullOrEmpty()) continue
-            if (seriesWritten > 0 && fault(MigrationFault.CRASH_IN_SERIES) != null) throw SimulatedCrash("series")
-            val curve = if (fault(MigrationFault.ALTER_SERIES) != null && p === firstCurve) samples.drop(1) else samples
-            if (!series.write(p.row.id, curve)) throw MigrationFailed("Couldn't write a shot's telemetry")
-            seriesWritten += 1
-        }
-        val hash = sha256(runCatching { file.readBytes() }.getOrDefault(ByteArray(0)))
-        val db = db().writableDatabase
-        db.inTransaction {
-            tables.clear(this)
-            var written = 0
-            val rows = if (fault(MigrationFault.DROP_ROW) != null) prepared.dropLast(1) else prepared
-            for (p in rows) {
-                val withSeries = p.row.copy(samples = p.samples ?: emptyList())
-                var summary = if (p.samples == null) unknownSeriesSummary(p.row) else summaryOf(withSeries, json)
-                var row = p.row
-                if (p === rows.lastOrNull()) {
-                    if (fault(MigrationFault.ALTER_ROW) != null) row = row.copy(notes = (row.notes ?: "") + " (changed)")
-                    if (fault(MigrationFault.ALTER_PROFILE) != null) row = row.copy(profile = JsonObject(mapOf("changed" to JsonPrimitive(true))))
-                    if (fault(MigrationFault.ALTER_COUNT) != null) summary = summary.copy(sampleCount = (summary.sampleCount ?: 0u) + 1u)
-                    if (fault(MigrationFault.ALTER_FINAL_WEIGHT) != null) summary = summary.copy(finalWeight = (summary.finalWeight ?: 0f) + 1f)
+        // The gz files this run makes, so a failure takes them back (#408 F2).
+        val created = ArrayList<String>()
+        try {
+            // Every series read to its own `.series.gz` first, so no row names a file
+            // that isn't there, and an old build's prune of a `.json` (the old copy,
+            // left as it is) can't take a migrated curve (#408 M2).
+            var seriesWritten = 0
+            val firstCurve = prepared.firstOrNull { !it.samples.isNullOrEmpty() }
+            for (p in prepared) {
+                val samples = p.samples
+                if (samples.isNullOrEmpty()) continue
+                if (seriesWritten > 0 && fault(MigrationFault.CRASH_IN_SERIES) != null) throw SimulatedCrash("series")
+                val curve = if (fault(MigrationFault.ALTER_SERIES) != null && p === firstCurve) samples.drop(1) else samples
+                if (!series.gzFile(p.row.id).exists()) created += p.row.id
+                if (!series.write(p.row.id, curve)) throw MigrationFailed("Couldn't write a shot's telemetry")
+                seriesWritten += 1
+            }
+            val hash = sha256(runCatching { file.readBytes() }.getOrDefault(ByteArray(0)))
+            val db = db().writableDatabase
+            db.inTransaction {
+                tables.clear(this)
+                var written = 0
+                val rows = if (fault(MigrationFault.DROP_ROW) != null) prepared.dropLast(1) else prepared
+                for (p in rows) {
+                    val withSeries = p.row.copy(samples = p.samples ?: emptyList())
+                    var summary = if (p.samples == null) unknownSeriesSummary(p.row) else summaryOf(withSeries, json)
+                    var row = p.row
+                    if (p === rows.lastOrNull()) {
+                        if (fault(MigrationFault.ALTER_ROW) != null) row = row.copy(notes = (row.notes ?: "") + " (changed)")
+                        if (fault(MigrationFault.ALTER_PROFILE) != null) row = row.copy(profile = JsonObject(mapOf("changed" to JsonPrimitive(true))))
+                        if (fault(MigrationFault.ALTER_COUNT) != null) summary = summary.copy(sampleCount = (summary.sampleCount ?: 0u) + 1u)
+                        if (fault(MigrationFault.ALTER_FINAL_WEIGHT) != null) summary = summary.copy(finalWeight = (summary.finalWeight ?: 0f) + 1f)
+                    }
+                    tables.putFull(this, row, summary)
+                    written += 1
+                    if (written == 1 && fault(MigrationFault.CRASH_IN_TRANSACTION) != null) throw SimulatedCrash("transaction")
                 }
-                tables.putFull(this, row, summary)
-                written += 1
-                if (written == 1 && fault(MigrationFault.CRASH_IN_TRANSACTION) != null) throw SimulatedCrash("transaction")
+                if (fault(MigrationFault.EXTRA_ROW) != null) {
+                    val extra = StoredShot(id = "extra-${now()}", completedAtMs = 1, durationMs = 1)
+                    tables.putFull(this, extra, summaryOf(extra, json))
+                }
+                verify(this, prepared)?.let { throw MigrationFailed("Verify failed: $it") }
+                tables.putMeta(
+                    this,
+                    TABLE_META_KEY,
+                    json.encodeToString(
+                        MigrationRecord.serializer(),
+                        MigrationRecord(STATE_DONE, hash, firsts.keys.toList(), duplicates = duplicates),
+                    ),
+                )
             }
-            if (fault(MigrationFault.EXTRA_ROW) != null) {
-                val extra = StoredShot(id = "extra-${now()}", completedAtMs = 1, durationMs = 1)
-                tables.putFull(this, extra, summaryOf(extra, json))
-            }
-            verify(this, prepared)?.let { throw MigrationFailed("Verify failed: $it") }
-            tables.putMeta(
-                this,
-                TABLE_META_KEY,
-                json.encodeToString(
-                    MigrationRecord.serializer(),
-                    MigrationRecord(STATE_DONE, hash, firsts.keys.toList(), duplicates = duplicates),
-                ),
-            )
+        } catch (e: Throwable) {
+            // A failed move holds no disk (SPEC §6 Failure 1): the copies it made go. Each one's
+            // source is still in the old copy. A crash leaves them, and the next run writes them again.
+            if (e !is SimulatedCrash) for (id in created) series.deleteGz(id)
+            throw e
         }
         // The helper that made the file says `created`: the open after uses its own.
         closeDb()
