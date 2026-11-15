@@ -1,0 +1,9 @@
+# cargo-mutants (`just mutants`): local mutation testing; never run in CI.
+# Covers the core/ workspace only; de1-model and de1-relay/fuzz are their own workspaces.
+exclude_globs = [
+  # The UniFFI and wasm-bindgen shims: their tests run on the Kotlin and web sides.
+  "de1-ffi/**",
+  "de1-wasm/**",
+  # Generator and bindgen binaries, checked by their CI idempotency steps, not cargo test.
+  "**/src/bin/**",
+]
