@@ -41,7 +41,12 @@ internal class QuarantineHandler(private val now: () -> Long = System::currentTi
         quarantine(File(path))
     }
 
-    /** Move [main] and its siblings aside; true when the main file moved (or wasn't there). */
+    /**
+     * Move [main] and its siblings aside; true when the main file moved (or
+     * wasn't there). A sibling that won't move is copied, so the kept-aside set
+     * holds the `-wal`'s latest commits even when the original is deleted later
+     * (#408 N5).
+     */
     fun quarantine(main: File): Boolean {
         val stamp = now()
         var moved = true
@@ -50,7 +55,7 @@ internal class QuarantineHandler(private val now: () -> Long = System::currentTi
             if (!f.exists()) continue
             val to = File("${main.path}$CORRUPT$stamp$suffix")
             if (!f.renameTo(to)) {
-                if (suffix.isEmpty()) moved = false
+                if (suffix.isEmpty()) moved = false else runCatching { f.copyTo(to, overwrite = true) }
             } else if (suffix.isEmpty()) {
                 quarantined = to
             }
@@ -195,6 +200,11 @@ internal class HistoryTables(private val json: Json) {
             put("row_json", rowJson(shot, summary))
         }
         if (db.update("shots", values, "id = ?", arrayOf(shot.id)) == 0) putFull(db, shot, summary)
+    }
+
+    /** Set [id]'s profile column alone: the row and its brew series stay as stored. */
+    fun putProfile(db: SQLiteDatabase, id: String, profile: JsonObject) {
+        db.update("shots", ContentValues().apply { put("profile_json", profile.toString()) }, "id = ?", arrayOf(id))
     }
 
     fun delete(db: SQLiteDatabase, ids: Collection<String>) {

@@ -1300,8 +1300,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             visualizer.refreshPremiumIfStale()
             sharing.start()
             // Daily automatic Drive backup (issue #36) — after the prefs (the
-            // toggle); it waits for the Drive tokens itself, and for the rows,
-            // so a store that came up lost or unavailable blocks it.
+            // toggle); it waits for the Drive tokens itself, and for the rows.
+            // The rows land whatever the store's health: what holds the backup
+            // back from a store that came up lost or unavailable is
+            // `Stores.unhealthy()`, which the store's health is recorded in.
             viewModelScope.launch {
                 library.awaitRows()
                 drive.autoBackupIfDue(_ui.value.autoDriveBackup, _ui.value.driveBackupWeekly, _ui.value.driveBackupWifiOnly)

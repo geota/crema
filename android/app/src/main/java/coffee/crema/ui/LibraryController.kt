@@ -1258,10 +1258,13 @@ class LibraryController(
         if (noData && noProfileOrg && settingsDefault) {
             notify("Nothing to back up yet"); return null
         }
+        // Hidden rows the walk finds without the curve their summary names: counted for the report (#408 S5).
+        val missingCurves = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         return BackupSnapshot(
             customs, s, pinnedIds, hiddenIds, currentPrefs(), visualizer.backupPrefs(), userRecipes,
             hiddenShots = hiddenShots,
-            full = historyStore::loadFull,
+            full = { historyStore.loadFull(it, missingCurves) },
+            missingCurves = missingCurves,
         )
     }
 
@@ -1365,6 +1368,11 @@ class LibraryController(
                 built.degraded.forEach { appendLog("Backup left out the profile of shot $it") }
                 built.photosSkipped.forEach { appendLog("Backup left out the photo of bean $it") }
                 backupGapsNotice(gaps)?.let { notify(it) }
+                // Rows past the view's cap the walk read without their curve (the view's are reported before it).
+                snap.missingCurves.size.takeIf { it > 0 }?.let { n ->
+                    snap.missingCurves.forEach { appendLog("Backup left out the curve of shot $it: its telemetry is damaged or missing") }
+                    notify("$n older shot${if (n == 1) " has" else "s have"} damaged telemetry and ${if (n == 1) "is" else "are"} backed up without ${if (n == 1) "its curve" else "their curves"}")
+                }
                 BackupZip(built.file, built.counts, built.contentHash, release = { releaseBackupFile(built.file) })
             },
             onFailure = {
@@ -1436,7 +1444,12 @@ class LibraryController(
                 historyCapacity = historyStore.capacity?.toUInt(),
                 machineBusy = deps.machineBusy(),
                 health = listOf(
-                    coffee.crema.core.LocalStoreHealth("shots", coreHealth(historyStore.storeHealth)),
+                    // A lost store takes no restore until the user chooses its way back (the banner):
+                    // a merge would only go to the journal (#408 N3).
+                    coffee.crema.core.LocalStoreHealth(
+                        "shots",
+                        if (historyStore.health == HistoryHealth.LOST) coffee.crema.core.LocalHealth.Unavailable else coreHealth(historyStore.storeHealth),
+                    ),
                     health("beans", LibraryStore.FILE_NAME),
                     health("profiles", CustomProfileStore.FILE_NAME),
                     health("recipes", coffee.crema.brew.RecipeFileStore.FILE_NAME),
@@ -1549,8 +1562,10 @@ class LibraryController(
          * Step 7 on `shots.db` (SPEC §7, P3): merge, then remove. Every row the
          * plan leaves is written straight to the store, past the view's cap,
          * incoming rows over local ones with the same id; then one explicit
-         * delete of the rows not in the backup. A kill between leaves the union,
-         * and the marker's re-run finishes it. The view takes the newest rows.
+         * delete of the rows not in the backup. A kill between leaves the union:
+         * re-running the restore finishes it. Dismissing the marker instead keeps
+         * the union for good (its `runDeletes` skips ids still listed), which
+         * loses nothing. The view takes the newest rows.
          */
         private suspend fun applyShotsToStore(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords, replace: Boolean): Int? {
             val first = coffee.crema.restore.nextShots(allShots(), records.parsed.shots, plan.shots, replace, ::hasCurve)

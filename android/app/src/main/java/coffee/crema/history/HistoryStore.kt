@@ -88,6 +88,12 @@ internal data class MigrationRecord(
     val duplicates: Int = 0,
 )
 
+/** A line of `history-pending.jsonl`: a row to put, or an id to delete, applied in order. */
+@Serializable
+internal data class JournalEntry(val put: StoredShot? = null, val delete: String? = null) {
+    val id: String? get() = put?.id ?: delete
+}
+
 /** What a load gave: the rows in view, newest first, and how many are hidden past the cap. */
 data class HistoryLoad(val view: List<StoredShot>, val hiddenCount: Int, val health: HistoryHealth)
 
@@ -109,6 +115,9 @@ enum class MigrationFault {
     // A full disk while the rows are written.
     DISK_FULL,
 }
+
+/** A row or its curve couldn't be read just now: an I/O error, which says nothing about it. */
+class HistoryReadException(message: String) : java.io.IOException(message)
 
 /** The process died here (a test's stand-in for a kill). Never caught by the store. */
 @androidx.annotation.VisibleForTesting
@@ -163,6 +172,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
     /** Ids whose series is on disk, in any of its files. */
     private val onDisk: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** Rows whose stored summary says a curve their series read couldn't find: unknown now, written at the next save (S4). */
+    private val dirtySummary: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /** Rows whose series read back with another count than their stored summary: the next save corrects it. */
     private val staleSummary: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -287,34 +299,93 @@ class HistoryStore(private val context: Context, private val json: Json) {
             toLegacy()
             return
         }
-        val marker = readMarker()
-        when {
-            marker?.state == STATE_LOST -> lost(null)
-            marker?.state == STATE_DONE -> openDone()
-            else -> {
-                // A commit whose marker a kill cut off: the store's own flag says done.
-                if (dbFile.exists() && storeSaysDone()) {
+        when (val read = readMarkerOutcome()) {
+            // An I/O error says nothing about the marker: never read it as "not migrated".
+            is MarkerRead.Unreadable -> unavailable("Couldn't read the shot history's marker: ${read.error}")
+            is MarkerRead.Found -> when (read.marker.state) {
+                STATE_LOST -> lost(null)
+                STATE_DONE -> openDone()
+                else -> notDone(read.marker, force, markerDamaged = false)
+            }
+            MarkerRead.Damaged -> notDone(null, force, markerDamaged = true)
+            MarkerRead.Absent -> notDone(null, force, markerDamaged = false)
+        }
+    }
+
+    /**
+     * No `done` marker. Migrate only when the marker is absent or says
+     * `failed`, and no store is there or one opened and its own flag reads
+     * "not done". A store that won't open or read is unavailable (or lost
+     * after a quarantine), never cleared (SPEC §6 step 1). A damaged marker
+     * may have said `done` or `lost`: it never leads to a migration.
+     */
+    private fun notDone(marker: HistoryMarker?, force: Boolean, markerDamaged: Boolean) {
+        if (dbFile.exists()) {
+            when (val probe = probeStore()) {
+                StoreProbe.Done -> {
+                    // A commit whose marker a kill cut off, or a marker that was lost: the store's own flag says done.
                     writeMarker(HistoryMarker(STATE_DONE, atMs = now()))
                     openDone()
                     return
                 }
-                if (!force && marker?.state == STATE_FAILED && now() < marker.nextTryAtMs) {
-                    lastError = marker.lastError
-                    toLegacy()
+                StoreProbe.Quarantined -> {
+                    lost("The shot history's database was damaged and has been kept aside.")
                     return
                 }
-                migrate(marker)
+                is StoreProbe.Failed -> {
+                    unavailable(probe.why)
+                    return
+                }
+                StoreProbe.NotDone -> if (markerDamaged) {
+                    closeDb()
+                    lost("The shot history's marker is damaged and its database doesn't hold a finished copy.")
+                    return
+                }
             }
+        } else if (markerDamaged) {
+            // The marker may have said done: a missing store then is lost, not a first launch.
+            lost("The shot history's marker is damaged and its database is missing.")
+            return
         }
+        if (!force && marker?.state == STATE_FAILED && now() < marker.nextTryAtMs) {
+            lastError = marker.lastError
+            toLegacy()
+            return
+        }
+        migrate(marker)
     }
 
-    /** Whether an existing `shots.db` holds a finished migration. Opens nothing it can't read. */
-    private fun storeSaysDone(): Boolean = runCatching {
-        val db = db().writableDatabase
-        decodeRecord(tables.meta(db, TABLE_META_KEY))?.state == STATE_DONE
-    }.getOrElse {
-        closeDb()
-        false
+    private sealed interface StoreProbe {
+        data object Done : StoreProbe
+        data object NotDone : StoreProbe
+        data object Quarantined : StoreProbe
+        data class Failed(val why: String) : StoreProbe
+    }
+
+    /** What an existing `shots.db` says of itself. Opens it, and leaves it as it is. */
+    private fun probeStore(): StoreProbe {
+        val h = db()
+        val db = try {
+            h.writableDatabase
+        } catch (e: HistoryTooNewException) {
+            closeDb()
+            return StoreProbe.Failed(e.message ?: "update the app")
+        } catch (e: Exception) {
+            val quarantined = h.handler.quarantined != null
+            closeDb()
+            return if (quarantined) StoreProbe.Quarantined else StoreProbe.Failed(e.message ?: e.javaClass.simpleName)
+        }
+        if (h.handler.quarantined != null) {
+            closeDb()
+            return StoreProbe.Quarantined
+        }
+        val record = try {
+            decodeRecord(tables.meta(db, TABLE_META_KEY))
+        } catch (e: Exception) {
+            closeDb()
+            return StoreProbe.Failed(e.message ?: e.javaClass.simpleName)
+        }
+        return if (record?.state == STATE_DONE) StoreProbe.Done else StoreProbe.NotDone
     }
 
     /** The marker says done: open the store, or say why not. Never migrates. */
@@ -336,8 +407,8 @@ class HistoryStore(private val context: Context, private val json: Json) {
         }
         if (h.handler.quarantined != null || h.created) {
             // The framework reopened a fresh, empty file in its place: not ours to read as the history.
+            // It stays (the lost marker says what it is); deleting it could take a -wal the move left (N5).
             closeDb()
-            if (h.handler.quarantined != null) context.deleteDatabase(NEXT_DB_NAME)
             lost("The shot history's database was damaged and has been kept aside.")
             return
         }
@@ -364,9 +435,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
     private fun lost(why: String?) {
         mode = Mode.BLOCKED
         health = HistoryHealth.LOST
-        lastError = why ?: readMarker()?.lastError
-        val m = readMarker()
-        if (m?.state != STATE_LOST) writeMarker(HistoryMarker(STATE_LOST, lastError = lastError, atMs = now()))
+        val m = (readMarkerOutcome() as? MarkerRead.Found)?.marker
+        lastError = why ?: m?.lastError
+        if (m?.state != STATE_LOST) runCatching { writeMarker(HistoryMarker(STATE_LOST, lastError = lastError, atMs = now())) }
         lostChoices = choices()
         Stores.recordHealth(dbFile, WHAT, StoreHealth.DAMAGED)
     }
@@ -405,9 +476,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
     private class MigrationFailed(why: String) : Exception(why)
 
     private fun migrateOrThrow() {
-        // Clear: a restart never builds on a partial copy.
-        closeDb()
-        context.deleteDatabase(NEXT_DB_NAME)
+        // Clear: a restart never builds on a partial copy. Only ever ours, and
+        // only when it holds no rows; anything else is kept aside (M1).
+        clearNewStore()
         if (legacyOnlyForTest) throw MigrationFailed("legacy only (test)")
         val outcome = loadStore(file, WHAT, open = false) {
             json.decodeFromString(ListSerializer(StoredShot.serializer()), it)
@@ -420,7 +491,10 @@ class HistoryStore(private val context: Context, private val json: Json) {
             is SafeLoad.Unavailable -> throw MigrationFailed("Couldn't read shots.json: ${outcome.error}")
         }
         if (source.isNotEmpty()) {
-            val need = (file.length() * 3) / 2
+            // The source as read: a recovered .bak or .tmp when the main file was moved aside (N4).
+            val size = listOf(file, SafeFile.backupOf(file), File(file.path + ".tmp")).maxOf { it.length() }
+            // 1.5× the source (SPEC §6 step 3), plus the WAL, which holds the one transaction's rows until its checkpoint.
+            val need = size * 5 / 2
             val free = freeSpace()
             if (fault(MigrationFault.DISK_FULL) != null || free < need) {
                 throw MigrationFailed("Not enough free space to move the shot history ($need bytes needed)")
@@ -444,16 +518,16 @@ class HistoryStore(private val context: Context, private val json: Json) {
             }
             Prepared(row, samples)
         }
-        // Inline series to their files first, so no row names a file that isn't there.
+        // Every series read to its own `.series.gz` first, so no row names a file
+        // that isn't there, and an old build's prune of a `.json` (the old copy,
+        // left as it is) can't take a migrated curve (#408 M2).
         var seriesWritten = 0
+        val firstCurve = prepared.firstOrNull { !it.samples.isNullOrEmpty() }
         for (p in prepared) {
-            if (p.row.samples.isEmpty()) continue
+            val samples = p.samples
+            if (samples.isNullOrEmpty()) continue
             if (seriesWritten > 0 && fault(MigrationFault.CRASH_IN_SERIES) != null) throw SimulatedCrash("series")
-            val curve = if (fault(MigrationFault.ALTER_SERIES) != null && p === prepared.firstOrNull { it.row.samples.isNotEmpty() }) {
-                p.row.samples.drop(1)
-            } else {
-                p.row.samples
-            }
+            val curve = if (fault(MigrationFault.ALTER_SERIES) != null && p === firstCurve) samples.drop(1) else samples
             if (!series.write(p.row.id, curve)) throw MigrationFailed("Couldn't write a shot's telemetry")
             seriesWritten += 1
         }
@@ -537,8 +611,8 @@ class HistoryStore(private val context: Context, private val json: Json) {
     /** Failure (SPEC §6): clear the new store, run on the legacy backend, and back off. */
     private fun fail(marker: HistoryMarker?, why: String) {
         persistLine("history migration failed: $why")
-        closeDb()
-        runCatching { context.deleteDatabase(NEXT_DB_NAME) }
+        // The copy that failed: its transaction didn't commit, so this deletes an empty file.
+        runCatching { clearNewStore() }.onFailure { persistLine("clear after a failed move: ${it.message}") }
         val failures = (marker?.takeIf { it.state == STATE_FAILED }?.failures ?: 0) + 1
         // The next two launches try again; after that, at most once a day.
         val next = if (failures < 3) 0L else now() + DAY_MS
@@ -566,26 +640,41 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 val heldRemote = tables.lightRows(db).mapNotNullTo(HashSet()) { it.shot.visualizerId }
                 val considered = mutableListOf<String>()
                 val late = mutableListOf<String>()
+                // A row that couldn't come in now (its series write failed) is looked at again next launch (S2).
+                var incomplete = false
                 db.inTransaction {
                     for (row in blob) {
                         if (row.id in known || row.id in considered) continue
-                        considered += row.id
-                        if (row.id in heldIds) continue
-                        if (row.visualizerId != null && row.visualizerId in heldRemote) continue
-                        val samples = if (row.samples.isNotEmpty()) {
-                            if (!series.write(row.id, row.samples)) continue
-                            row.samples
-                        } else {
-                            when (val read = series.read(row.id)) {
+                        if (row.id in heldIds || (row.visualizerId != null && row.visualizerId in heldRemote)) {
+                            considered += row.id
+                            continue
+                        }
+                        val samples = when {
+                            row.samples.isNotEmpty() -> row.samples
+                            else -> when (val read = series.read(row.id)) {
                                 is SeriesRead.Found -> read.samples
+                                is SeriesRead.Unavailable -> {
+                                    incomplete = true
+                                    continue
+                                }
                                 else -> emptyList()
                             }
                         }
+                        // Its own gz, as at the migration (M2): the old build may prune the .json later.
+                        if (samples.isNotEmpty() && !series.write(row.id, samples)) {
+                            incomplete = true
+                            continue
+                        }
                         tables.putFull(this, row.copy(samples = emptyList()), summaryOf(row.copy(samples = samples), json))
+                        considered += row.id
                         if (samples.isEmpty() && row.brewMethod == null) late += row.id
                     }
                 }
-                next = next.copy(sourceHash = hash, sourceIds = record.sourceIds + considered, lateIds = (record.lateIds + late).distinct())
+                next = next.copy(
+                    sourceHash = if (incomplete) record.sourceHash else hash,
+                    sourceIds = record.sourceIds + considered,
+                    lateIds = (record.lateIds + late).distinct(),
+                )
             }
         }
         // Step 9: a late row's series may have landed since.
@@ -594,9 +683,11 @@ class HistoryStore(private val context: Context, private val json: Json) {
             db.inTransaction {
                 for (id in next.lateIds) {
                     val row = tables.full(this, id) ?: continue
-                    when (val read = series.read(id)) {
-                        is SeriesRead.Found -> tables.putFull(this, row.shot, summaryOf(row.shot.copy(samples = read.samples), json))
-                        else -> still += id
+                    val read = series.read(id)
+                    if (read is SeriesRead.Found && series.write(id, read.samples)) {
+                        tables.putFull(this, row.shot, summaryOf(row.shot.copy(samples = read.samples), json))
+                    } else {
+                        still += id
                     }
                 }
             }
@@ -605,14 +696,17 @@ class HistoryStore(private val context: Context, private val json: Json) {
         if (next != record) db.inTransaction { tables.putMeta(this, TABLE_META_KEY, json.encodeToString(MigrationRecord.serializer(), next)) }
     }
 
-    /** Rows that went to the pending journal while the store was out of reach, merged now it's back. */
+    /** Rows that went to the pending journal while the store was out of reach, merged now it's back, in order. */
     private fun mergePending(db: SQLiteDatabase) {
         if (!pendingFile.exists()) return
-        val rows = pendingFile.readLines().mapNotNull { line ->
-            runCatching { json.decodeFromString(StoredShot.serializer(), line) }.getOrNull()
-        }
+        val entries = journalEntries()
         db.inTransaction {
-            for (row in rows) {
+            for (e in entries) {
+                e.delete?.let { id ->
+                    tables.delete(this, listOf(id))
+                    series.deleteGz(id)
+                }
+                val row = e.put ?: continue
                 val samples = (series.read(row.id) as? SeriesRead.Found)?.samples ?: emptyList()
                 val summary = summaryOf(row.copy(samples = samples), json)
                 // A light row's journal line has no profile: the stored one stays.
@@ -620,8 +714,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 else tables.putFull(this, row.copy(samples = emptyList()), summary)
             }
         }
-        // Ours, not the old copy: it has landed in the store.
-        pendingFile.delete()
+        // Ours, not the old copy: it has landed in the store. A file that won't
+        // go is emptied, so the next launch can't merge it over newer edits (N6).
+        if (!pendingFile.delete()) runCatching { SafeFile.write(pendingFile, "", keepBackup = false) }
         journaled = emptySet()
     }
 
@@ -635,7 +730,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
         val (view, hidden) = splitView(all.map { it.shot })
         val heavy = tables.heavy(db, view.map { it.id })
         val full = view.map { row -> heavy[row.id]?.let { (p, b) -> row.copy(profile = p, brewSeries = b) } ?: row }
-        stored.clear(); summaries.clear(); light.clear(); seen.clear(); deleting.clear(); pendingHidden.clear()
+        stored.clear(); summaries.clear(); light.clear(); seen.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear()
         for (r in all) r.summary?.let { summaries[r.shot.id] = it }
         for (r in full) stored[r.id] = r
         for (r in hidden) {
@@ -672,7 +767,16 @@ class HistoryStore(private val context: Context, private val json: Json) {
 
     /** Whether [shot] has a machine curve, in memory or on disk. */
     fun hasCurve(shot: StoredShot): Boolean =
-        shot.samples.isNotEmpty() || (mode == Mode.SQL && summaries[shot.id].hasCurve())
+        shot.samples.isNotEmpty() || (mode == Mode.SQL && summaries[shot.id].hasCurve() && series.exists(shot.id))
+
+    /** [id]'s stored summary says a curve its series read didn't find: unknown now, so a restore's fill
+     *  or a pull's backfill may put one back, and the next save writes it so (S4). */
+    private fun curveNotFound(id: String) {
+        val prev = summaries[id] ?: return
+        if (!prev.hasCurve()) return
+        summaries[id] = prev.copy(sampleCount = null)
+        dirtySummary += id
+    }
 
     /** Changes to rows past the cap that are in memory and not yet written ([flushHidden]). */
     private val pendingHidden = ConcurrentHashMap<String, StoredShot>()
@@ -701,10 +805,13 @@ class HistoryStore(private val context: Context, private val json: Json) {
             withContext(Dispatchers.IO) {
                 var row = pendingHidden.remove(id) ?: return@withContext
                 if (mode != Mode.SQL || id in deleting) return@withContext
-                if (id in light && row.profile != null) {
-                    // Fill only: a stored profile stays.
+                var fill: JsonObject? = null
+                if (id in light && row.brewSeries == null && row.profile != null) {
+                    // Fill only: a stored profile stays. A fill writes the profile column alone,
+                    // so the stored brew series stays too (S3).
                     val held = runCatching { tables.full(db().readableDatabase, id) }.getOrNull()?.shot
-                    if (held?.profile != null) row = row.copy(profile = null)
+                    if (held != null && held.profile == null) fill = row.profile
+                    row = row.copy(profile = null)
                 }
                 var curveless = false
                 if (row.samples.isNotEmpty() && id !in onDisk) {
@@ -712,21 +819,33 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 }
                 val summary = summaryFor(row).let { if (curveless) it.copy(sampleCount = null) else it }
                 if (curveless) unsavedCurves = unsavedCurves + id
-                if (runCatching { writeRows(listOf(row to summary)) }.isFailure) journalRow(row)
+                val profiles = fill?.let { mapOf(id to it) }.orEmpty()
+                if (runCatching { writeRows(listOf(row to summary), profiles) }.isFailure) journalRow(row)
             }
         }
     }
 
     /** A hidden row with its profile, brew series and series, for a backup. Itself when it isn't light. */
-    fun loadFull(row: StoredShot): StoredShot {
+    fun loadFull(row: StoredShot, missingCurves: MutableSet<String>? = null): StoredShot {
         if (mode != Mode.SQL) return row
         var out = row
         if (row.id in light && row.profile == null && row.brewSeries == null) {
-            val full = runCatching { tables.full(db().readableDatabase, row.id) }.getOrNull()
+            val full = try {
+                tables.full(db().readableDatabase, row.id)
+            } catch (e: Exception) {
+                throw HistoryReadException("Couldn't read shot ${row.id}: ${e.message}")
+            }
             if (full != null) out = out.copy(profile = full.shot.profile, brewSeries = full.shot.brewSeries)
         }
         if (out.samples.isEmpty() && summaries[row.id].hasCurve()) {
-            (series.read(row.id) as? SeriesRead.Found)?.let { out = out.copy(samples = it.samples) }
+            when (val read = series.read(row.id)) {
+                is SeriesRead.Found -> out = out.copy(samples = read.samples)
+                is SeriesRead.Unavailable -> throw HistoryReadException("Couldn't read the curve of shot ${row.id}: ${read.error}")
+                SeriesRead.Corrupt, SeriesRead.Absent -> {
+                    curveNotFound(row.id)
+                    missingCurves?.add(row.id)
+                }
+            }
         }
         return out
     }
@@ -748,8 +867,12 @@ class HistoryStore(private val context: Context, private val json: Json) {
                             val count = summaries[id]?.sampleCount
                             if (mode == Mode.SQL && count != read.samples.size.toUInt()) staleSummary += id
                         }
-                        SeriesRead.Corrupt, is SeriesRead.Unavailable -> unreadableSeries = unreadableSeries + id
-                        SeriesRead.Absent -> Unit
+                        SeriesRead.Corrupt -> {
+                            unreadableSeries = unreadableSeries + id
+                            if (mode == Mode.SQL) curveNotFound(id)
+                        }
+                        is SeriesRead.Unavailable -> unreadableSeries = unreadableSeries + id
+                        SeriesRead.Absent -> if (mode == Mode.SQL) curveNotFound(id)
                     }
                 }
                 out
@@ -843,14 +966,22 @@ class HistoryStore(private val context: Context, private val json: Json) {
                                 light.remove(id)
                                 seen.remove(id)
                                 onDisk.remove(id)
+                                pendingHidden.remove(id)
                             }
                             version++
+                            // A journal line for one of these would bring it back at the next launch (M3).
+                            retireJournal(ids.toSet())
                         }
                         Mode.LEGACY -> for (id in ids) {
                             series.deleteAll(id)
                             written.removeAll(listOf(series.gzFile(id).name, series.jsonFile(id).name, series.legacyFile(id).name))
                         }
-                        else -> Unit
+                        // The store is out of reach: the delete waits in the journal with the rows made meanwhile (S1).
+                        Mode.BLOCKED -> {
+                            for (id in ids) pendingHidden.remove(id)
+                            journalDeletes(ids)
+                        }
+                        Mode.UNOPENED -> Unit
                     }
                     deleting.removeAll(ids.toSet())
                     version++
@@ -899,12 +1030,13 @@ class HistoryStore(private val context: Context, private val json: Json) {
         return ok && curveless.isEmpty()
     }
 
-    private fun writeRows(rows: List<Pair<StoredShot, ShotSummary>>) {
+    private fun writeRows(rows: List<Pair<StoredShot, ShotSummary>>, profiles: Map<String, JsonObject> = emptyMap()) {
         if (fault(MigrationFault.DISK_FULL) != null) throw android.database.sqlite.SQLiteFullException("disk full (test)")
         db().writableDatabase.inTransaction {
             for ((row, summary) in rows) {
                 if (keepsHeavy(row)) tables.putLight(this, row, summary) else tables.putFull(this, row, summary)
             }
+            for ((id, profile) in profiles) tables.putProfile(this, id, profile)
         }
         for ((row, summary) in rows) {
             stored[row.id] = row.stripped()
@@ -912,9 +1044,12 @@ class HistoryStore(private val context: Context, private val json: Json) {
             seen[row.id] = row
             if (!keepsHeavy(row)) light.remove(row.id)
             if (row.samples.isNotEmpty()) staleSummary.remove(row.id)
+            dirtySummary.remove(row.id)
             journaled = journaled - row.id
         }
         version++
+        // These rows landed: an older journal line for one would undo them at the next launch (M3).
+        retireJournal(rows.mapTo(HashSet()) { it.first.id })
     }
 
     /** A light row (loaded without them) that still has none: its stored profile and brew series stay. */
@@ -923,6 +1058,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
     /** Whether [row] is as the store has it, its series included. */
     private fun unchanged(row: StoredShot): Boolean {
         if (row.samples.isNotEmpty() && (row.id !in onDisk || row.id in staleSummary)) return false
+        if (row.id in dirtySummary) return false
         if (seen[row.id] === row) return true
         val prev = stored[row.id] ?: return false
         val same = prev == row.stripped()
@@ -956,18 +1092,51 @@ class HistoryStore(private val context: Context, private val json: Json) {
         return false
     }
 
-    /** Append [row] (without its series) to `history-pending.jsonl`. True when it's on disk. */
-    private fun journalRow(row: StoredShot): Boolean = runCatching {
-        val line = json.encodeToString(StoredShot.serializer(), row.copy(samples = emptyList())) + "\n"
+    /** Append [row] (without its series) to `history-pending.jsonl` as a `put`. True when it's on disk. */
+    private fun journalRow(row: StoredShot): Boolean =
+        appendJournal(JournalEntry(put = row.copy(samples = emptyList()))).also { if (it) journaled = journaled + row.id }
+
+    /** Append a `delete` line for each of [ids]: a delete made while the store was out of reach (S1). */
+    private fun journalDeletes(ids: Collection<String>) {
+        for (id in ids) appendJournal(JournalEntry(delete = id))
+        journaled = journaled - ids.toSet()
+    }
+
+    private fun appendJournal(entry: JournalEntry): Boolean = runCatching {
+        val line = json.encodeToString(JournalEntry.serializer(), entry) + "\n"
         java.io.FileOutputStream(pendingFile, true).use { out ->
             out.write(line.toByteArray(Charsets.UTF_8))
             out.fd.sync()
         }
-        journaled = journaled + row.id
         true
     }.getOrElse {
         persistLine("pending journal: ${it.message}")
         false
+    }
+
+    /** The journal's lines, in order; one that doesn't decode is skipped. */
+    private fun journalEntries(): List<JournalEntry> =
+        if (!pendingFile.exists()) emptyList()
+        else pendingFile.readLines().filter { it.isNotBlank() }.mapNotNull { line ->
+            runCatching { json.decodeFromString(JournalEntry.serializer(), line) }.getOrNull()
+        }
+
+    /** Drop the journal's lines for [ids], which the store now has (or has deleted) as they are. */
+    private fun retireJournal(ids: Set<String>) {
+        if (ids.isEmpty() || !pendingFile.exists()) return
+        runCatching {
+            val lines = pendingFile.readLines().filter { it.isNotBlank() }
+            val keep = lines.filter { line ->
+                val e = runCatching { json.decodeFromString(JournalEntry.serializer(), line) }.getOrNull()
+                e == null || e.id !in ids
+            }
+            if (keep.size == lines.size) return
+            if (keep.isEmpty()) {
+                if (!pendingFile.delete()) SafeFile.write(pendingFile, "", keepBackup = false)
+            } else {
+                SafeFile.write(pendingFile, keep.joinToString("\n", postfix = "\n"), keepBackup = false)
+            }
+        }.onFailure { persistLine("pending journal: couldn't retire lines: ${it.message}") }
     }
 
     // ── Rows snapshot (SPEC §6) ──────────────────────────────────────────────
@@ -1055,10 +1224,9 @@ class HistoryStore(private val context: Context, private val json: Json) {
     /** A new store from [fill], marked done with the old copy as its source, so step 8 doesn't bring the old copy back. */
     private suspend fun rebuild(fill: (SQLiteDatabase) -> Unit): HistoryLoad = withContext(Dispatchers.IO) {
         lock.withLock {
-            closeDb()
-            // The damaged file is kept aside already; this one is the empty replacement.
-            context.deleteDatabase(NEXT_DB_NAME)
             try {
+                // Whatever is there may still hold rows (a lost store that wasn't quarantined): kept aside, never deleted (S7).
+                clearNewStore()
                 val bytes = runCatching { if (file.exists()) file.readBytes() else null }.getOrNull()
                 val ids = bytes?.let { b ->
                     runCatching { json.decodeFromString(ListSerializer(StoredShot.serializer()), b.toString(Charsets.UTF_8)).map { it.id } }.getOrNull()
@@ -1123,7 +1291,7 @@ class HistoryStore(private val context: Context, private val json: Json) {
                 NEXT_FILES.forEach { eraseStore(File(context.filesDir, it)) }
                 Stores.forget(dbFile)
                 written.clear()
-                stored.clear(); summaries.clear(); light.clear(); seen.clear(); onDisk.clear(); deleting.clear(); staleSummary.clear(); pendingHidden.clear()
+                stored.clear(); summaries.clear(); light.clear(); seen.clear(); onDisk.clear(); deleting.clear(); staleSummary.clear(); pendingHidden.clear(); dirtySummary.clear()
                 version++
                 unreadableSeries = emptySet()
                 unsavedCurves = emptySet()
@@ -1149,11 +1317,43 @@ class HistoryStore(private val context: Context, private val json: Json) {
         runCatching { h.close() }
     }
 
-    private fun readMarker(): HistoryMarker? =
+    private sealed interface MarkerRead {
+        data class Found(val marker: HistoryMarker) : MarkerRead
+        data object Absent : MarkerRead
+        /** There, and none of its copies decodes. */
+        data object Damaged : MarkerRead
+        /** There, and couldn't be read: an I/O error. */
+        data class Unreadable(val error: String) : MarkerRead
+    }
+
+    private fun readMarkerOutcome(): MarkerRead =
         when (val m = SafeFile.peek(markerFile) { json.decodeFromString(HistoryMarker.serializer(), it) }) {
-            is SafeLoad.Loaded -> m.value
-            else -> null
+            is SafeLoad.Loaded -> MarkerRead.Found(m.value)
+            SafeLoad.Absent -> MarkerRead.Absent
+            is SafeLoad.Corrupt -> MarkerRead.Damaged
+            is SafeLoad.Unavailable -> MarkerRead.Unreadable(m.error)
         }
+
+    /**
+     * Take `shots.db` out of the way for a new copy: deleted when it holds no
+     * rows (a migration that didn't commit), kept aside as `shots.db.corrupt-<ms>`
+     * with its `-wal` and `-shm` otherwise, or when it can't be read to tell.
+     */
+    private fun clearNewStore() {
+        closeDb()
+        if (!dbFile.exists()) return
+        val empty = runCatching {
+            // A handler that does nothing: the framework's would delete a damaged file.
+            SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY) { }.use { db ->
+                db.rawQuery("SELECT COUNT(*) FROM shots", null).use { c -> c.moveToFirst() && c.getInt(0) == 0 }
+            }
+        }.getOrElse { e -> e is android.database.sqlite.SQLiteException && "no such table" in (e.message ?: "") }
+        if (empty) {
+            context.deleteDatabase(NEXT_DB_NAME)
+        } else if (!QuarantineHandler().quarantine(dbFile)) {
+            throw MigrationFailed("Couldn't set the old shots.db aside")
+        }
+    }
 
     private fun writeMarker(marker: HistoryMarker) {
         SafeFile.write(markerFile, json.encodeToString(HistoryMarker.serializer(), marker))

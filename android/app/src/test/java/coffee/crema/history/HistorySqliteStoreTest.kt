@@ -467,10 +467,14 @@ class HistorySqliteStoreTest {
         val dbBytes = dbFile.length()
 
         // The old build runs: it knows the old copy only, adds two shots, and prunes its own way.
+        // At its cap it drops the oldest row from its list, and its prune deletes that row's `.json` series.
+        val oldest = rows.minBy { it.completedAtMs }
+        assertTrue(oldest.samples.isNotEmpty(), "the fixture's oldest row has a curve")
         val late = StoredShot(id = "late", completedAtMs = rows.first().completedAtMs + 200, durationMs = 9, samples = HistoryFixtures.samples(7, 4))
         val noSeries = StoredShot(id = "late-curve", completedAtMs = rows.first().completedAtMs + 300, durationMs = 9)
         val pulledTwin = StoredShot(id = "shot:remote:twin", completedAtMs = 7, durationMs = 9, visualizerId = rows[1].visualizerId ?: "vis-x")
-        HistoryFixtures.oldBuildSave(app, rows + late + noSeries + pulledTwin)
+        HistoryFixtures.oldBuildSave(app, rows - oldest + late + noSeries + pulledTwin)
+        assertFalse(File(seriesDir, HistoryStore.seriesFileName(oldest.id)).exists(), "the old build pruned the oldest row's .json")
         assertTrue(gz.exists(), "the old build's prune leaves gz alone")
         assertTrue(dbFile.exists() && dbFile.length() >= dbBytes, "and the db")
 
@@ -479,6 +483,8 @@ class HistorySqliteStoreTest {
         assertTrue("late" in ids && "late-curve" in ids && "mine" in ids)
         assertFalse(rows[4].id in ids, "a shot deleted in the new store doesn't come back")
         if (rows[1].visualizerId != null) assertFalse("shot:remote:twin" in ids, "a pulled copy of a row held is skipped")
+        // The pruned row's curve is in its own `.series.gz`, written at the move (#408 M2).
+        assertEquals(oldest.samples, store().load().first { it.id == oldest.id }.samples, "a migrated curve survives the old build's capped save")
         assertEquals(7, store().load().first { it.id == "late" }.samples.size)
         assertEquals(0u, storedSummary("late-curve")?.sampleCount)
 
@@ -488,5 +494,264 @@ class HistorySqliteStoreTest {
         )
         store().loadAll()
         assertEquals(6u, storedSummary("late-curve")?.sampleCount)
+    }
+
+    @Test
+    fun `the move writes every series it read to its own gz, and leaves the json copies as they are`() = runBlocking {
+        val rows = HistoryFixtures.rows(8)
+        HistoryFixtures.plantOldBuild(app, rows)
+        val before = oldCopy()
+        store().loadAll()
+        val files = SeriesFiles(seriesDir, coreJson)
+        for (row in rows.filter { it.samples.isNotEmpty() }) {
+            assertTrue(files.gzFile(row.id).exists(), "${row.id} has its gz")
+            assertTrue(files.jsonFile(row.id).exists(), "and its json stays")
+        }
+        assertEquals(before, oldCopy())
+    }
+
+    // ── #408 review: no marker, or one that can't be read (M1) ──────────────
+
+    /** A migrated store with a shot saved after the move, which only `shots.db` holds. */
+    private suspend fun migratedWithPostShot(): List<StoredShot> {
+        val rows = HistoryFixtures.rows(3, samplesPer = 5)
+        HistoryFixtures.plantOldBuild(app, rows)
+        val s = store()
+        assertEquals(HistoryHealth.OK, s.loadAll().health)
+        assertTrue(s.save(listOf(StoredShot(id = "post", completedAtMs = 2_000_000_000_000L, durationMs = 1, notes = "after the move"))))
+        assertEquals(4, rowCount())
+        return rows
+    }
+
+    private fun dropMarker() {
+        for (suffix in listOf("", ".bak", ".tmp")) File(marker.path + suffix).delete()
+    }
+
+    private fun setDbVersion(v: Int) {
+        val db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE)
+        db.version = v
+        db.close()
+    }
+
+    @Test
+    fun `a marker that can't be read leaves the store unavailable, and nothing is cleared`() = runBlocking {
+        migratedWithPostShot()
+        dropMarker()
+        // A directory where the marker goes: it exists, and can't be read.
+        marker.mkdirs()
+        File(marker, "x").writeText("x")
+        val s = store()
+        assertEquals(HistoryHealth.UNAVAILABLE, s.loadAll().health)
+        assertContains(s.lastError.orEmpty(), "marker")
+        assertEquals(4, rowCount(), "the post-move shot is still in the store")
+        marker.deleteRecursively()
+        assertTrue(store().load().any { it.id == "post" }, "and it loads once the marker reads")
+    }
+
+    @Test
+    fun `no marker and a store a newer build wrote is unavailable, never re-migrated`() = runBlocking {
+        migratedWithPostShot()
+        dropMarker()
+        setDbVersion(HistoryDb.VERSION + 1)
+        val s = store()
+        assertEquals(HistoryHealth.UNAVAILABLE, s.loadAll().health)
+        assertContains(s.lastError.orEmpty(), "update the app")
+        setDbVersion(HistoryDb.VERSION)
+        assertEquals(4, rowCount(), "nothing was cleared")
+        // The version back: the store's own flag says done, and the marker is rewritten.
+        assertTrue(store().load().any { it.id == "post" })
+        assertContains(markerText(), "\"done\"")
+    }
+
+    @Test
+    fun `no marker and a corrupt store is lost, kept aside, and never re-migrated`() = runBlocking {
+        val rows = migratedWithPostShot()
+        File(dbFile.path + "-wal").delete()
+        File(dbFile.path + "-shm").delete()
+        dbFile.writeBytes(ByteArray(8192) { (it * 31).toByte() })
+        dropMarker()
+        val load = store().loadAll()
+        assertEquals(HistoryHealth.LOST, load.health)
+        assertTrue(load.view.isEmpty(), "the old copy's ${rows.size} rows weren't copied in its place")
+        assertTrue(dbFile.parentFile!!.listFiles()!!.any { it.name.startsWith(HistoryStore.NEXT_DB_NAME + ".corrupt-") })
+        assertEquals(HistoryHealth.LOST, store().loadAll().health, "and stays lost")
+    }
+
+    @Test
+    fun `no marker and a store that can't be opened is unavailable, and it stays`() = runBlocking {
+        migratedWithPostShot()
+        dropMarker()
+        app.deleteDatabase(HistoryStore.NEXT_DB_NAME)
+        // A directory where the database goes: it exists, and SQLite can't open it.
+        dbFile.mkdirs()
+        File(dbFile, "x").writeText("x")
+        val s = store()
+        assertEquals(HistoryHealth.UNAVAILABLE, s.loadAll().health)
+        assertTrue(dbFile.isDirectory && File(dbFile, "x").exists(), "nothing deleted")
+        assertFalse(marker.exists(), "and no marker says it moved")
+    }
+
+    @Test
+    fun `a damaged marker with no store is lost, never re-migrated`() = runBlocking {
+        migratedWithPostShot()
+        dropMarker()
+        marker.writeText("{ not json")
+        app.deleteDatabase(HistoryStore.NEXT_DB_NAME)
+        val load = store().loadAll()
+        assertEquals(HistoryHealth.LOST, load.health)
+        assertFalse(dbFile.exists(), "no new store from the old copy")
+    }
+
+    // ── #408 review: the pending journal (M3, S1) ────────────────────────────
+
+    @Test
+    fun `a save that lands after a journaled one retires its line, so the next launch keeps the edit`() = runBlocking {
+        store().loadAll()
+        val s = store()
+        s.loadAll()
+        // The disk is full: a new shot goes to the journal.
+        HistoryStore.faults += MigrationFault.DISK_FULL
+        val v1 = StoredShot(id = "j", completedAtMs = 5, durationMs = 1)
+        assertFalse(s.save(listOf(v1)))
+        HistoryStore.faults.clear()
+        // Space is back: the user rates it, and the save lands.
+        val v2 = v1.copy(rating = 5, notes = "edited after space freed")
+        assertTrue(s.save(listOf(v2)))
+        // Another shot journaled, edited, then deleted.
+        val k = StoredShot(id = "k", completedAtMs = 6, durationMs = 1)
+        HistoryStore.faults += MigrationFault.DISK_FULL
+        s.save(listOf(v2, k))
+        HistoryStore.faults.clear()
+        assertTrue(s.save(listOf(v2, k.copy(rating = 1))))
+        s.delete(listOf(k.id))
+
+        val back = store().load().associateBy { it.id }
+        assertEquals(5, back["j"]?.rating, "the edit stays")
+        assertEquals("edited after space freed", back["j"]?.notes)
+        assertFalse(back.containsKey("k"), "a deleted shot doesn't come back")
+    }
+
+    @Test
+    fun `a delete while the store is unavailable waits in the journal, and the shot doesn't come back`() = runBlocking {
+        HistoryFixtures.plantOldBuild(app, HistoryFixtures.rows(2, samplesPer = 5))
+        store().loadAll()
+        setDbVersion(HistoryDb.VERSION + 1)
+        val s = store()
+        assertEquals(HistoryHealth.UNAVAILABLE, s.loadAll().health)
+        val shot = StoredShot(id = "made-then-deleted", completedAtMs = 2_000_000_000_000L, durationMs = 1, samples = HistoryFixtures.samples(4, 2))
+        s.save(listOf(shot))
+        // The user deletes it: the view's save, then the named delete.
+        s.save(emptyList())
+        s.delete(listOf(shot.id))
+        setDbVersion(HistoryDb.VERSION)
+        assertEquals(HistoryHealth.OK, s.retry().health)
+        assertFalse(store().load().any { it.id == shot.id }, "the delete was applied with the journal")
+        assertFalse(SeriesFiles(seriesDir, coreJson).gzFile(shot.id).exists(), "with its series")
+        assertEquals(2, rowCount())
+    }
+
+    // ── #408 review: late rows (S2) ──────────────────────────────────────────
+
+    @Test
+    fun `a late row whose series write fails is imported at a later launch`() = runBlocking {
+        val rows = HistoryFixtures.rows(4, samplesPer = 5)
+        HistoryFixtures.plantOldBuild(app, rows)
+        store().loadAll()
+        // An old build wrote it with its samples inline (its own series write failed).
+        val late = StoredShot(id = "late-inline", completedAtMs = rows.first().completedAtMs + 10, durationMs = 9, samples = HistoryFixtures.samples(6, 2))
+        HistoryFixtures.plantOldBuild(app, rows + late, inline = setOf(late.id))
+        // The roll-forward's write fails too (a full disk).
+        SeriesFiles.beforeWrite = { id -> if (id == late.id) throw java.io.IOException("disk full") }
+        assertFalse(store().load().any { it.id == late.id })
+        SeriesFiles.beforeWrite = {}
+        // Space is back at the next launch.
+        assertEquals(late.samples, store().load().firstOrNull { it.id == late.id }?.samples, "it comes in, with its curve")
+    }
+
+    // ── #408 review: rows past the cap (S3) ──────────────────────────────────
+
+    @Test
+    fun `a profile filled into a hidden brew keeps its brew series`() = runBlocking {
+        val base = HistoryFixtures.rows(320, samplesPer = 3).map { it.copy(pinned = false) }
+        val brewSrc = base[9]
+        assertTrue(brewSrc.brewSeries != null && brewSrc.profile == null, "the fixture's guided brew")
+        val brew = brewSrc.copy(id = "brew-hidden", completedAtMs = 1)
+        HistoryFixtures.plantOldBuild(app, base + brew)
+        val s = store()
+        val load = s.loadAll()
+        assertFalse(load.view.any { it.id == brew.id }, "past the cap")
+        assertTrue(s.updateHidden(brew.id) { it.copy(profile = HistoryFixtures.profile(2)) })
+        s.flushHidden(brew.id)
+        val back = store().load().first { it.id == brew.id }
+        assertEquals(brew.brewSeries, back.brewSeries, "the brew series stays")
+        assertEquals(HistoryFixtures.profile(2), back.profile, "and the profile is filled")
+    }
+
+    // ── #408 review: a curve the summary names and the file doesn't hold (S4) ─
+
+    @Test
+    fun `a corrupt or missing series isn't a curve, so a restore or a pull can put one back`() = runBlocking {
+        val s0 = store()
+        s0.loadAll()
+        val corrupt = StoredShot(id = "gz-corrupt", completedAtMs = 5, durationMs = 9, samples = HistoryFixtures.samples(5, 1))
+        val gone = StoredShot(id = "gz-gone", completedAtMs = 6, durationMs = 9, samples = HistoryFixtures.samples(5, 2))
+        assertTrue(s0.save(listOf(corrupt, gone)))
+        val files = SeriesFiles(seriesDir, coreJson)
+        files.gzFile(corrupt.id).writeBytes(byteArrayOf(1, 2, 3))
+        files.gzFile(gone.id).delete()
+        val s = store()
+        val view = s.loadAll().view
+        val series = s.loadSeries(view.map { it.id })
+        assertFalse(series.containsKey(corrupt.id) || series.containsKey(gone.id))
+        for (row in view) assertFalse(s.hasCurve(row), "${row.id}: no curve to read")
+        // The next save writes the summary as unknown.
+        s.save(view)
+        assertNull(storedSummary(corrupt.id)?.sampleCount)
+        assertNull(storedSummary(gone.id)?.sampleCount)
+    }
+
+    @Test
+    fun `a hidden row read for a backup counts a curve that's gone, and throws on a read error`() = runBlocking {
+        val base = HistoryFixtures.rows(302, samplesPer = 3).map { it.copy(pinned = false, brewMethod = null, brewSeries = null) }
+        HistoryFixtures.plantOldBuild(app, base)
+        val s = store()
+        val load = s.loadAll()
+        val hidden = s.hiddenRows(load.view.mapTo(HashSet()) { it.id })
+        assertEquals(2, hidden.size)
+        val (gone, unreadable) = hidden
+        assertTrue(gone.samples.isEmpty() && s.hasCurve(gone), "a light row whose curve is on disk")
+        val files = SeriesFiles(seriesDir, coreJson)
+        files.gzFile(gone.id).delete()
+        File(seriesDir, HistoryStore.seriesFileName(gone.id)).delete()
+        val missing = HashSet<String>()
+        assertTrue(s.loadFull(gone, missing).samples.isEmpty())
+        assertEquals(setOf(gone.id), missing, "counted for the report")
+        assertFalse(s.hasCurve(gone), "and fillable now")
+        // A directory where its gz goes: there, and it can't be read just now.
+        files.gzFile(unreadable.id).delete()
+        files.gzFile(unreadable.id).mkdirs()
+        assertFailsWith<HistoryReadException> { s.loadFull(unreadable, missing) }
+        Unit
+    }
+
+    // ── #408 review: a lost store's rebuild (S7) ─────────────────────────────
+
+    @Test
+    fun `recovering the old copy over an intact store that reads as lost keeps that store aside`() = runBlocking {
+        val rows = migratedWithPostShot()
+        // Its meta row won't decode: intact rows, and no finished copy to trust.
+        val db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE)
+        db.execSQL("UPDATE meta SET value = '{ not json' WHERE key = ?", arrayOf(HistoryTables.META_MIGRATION))
+        db.close()
+        val s = store()
+        assertEquals(HistoryHealth.LOST, s.loadAll().health)
+        assertEquals(HistoryHealth.OK, s.recoverOldCopy().health)
+        assertEquals(rows.map { it.id }.toSet(), store().load().map { it.id }.toSet(), "the old copy is back")
+        val kept = dbFile.parentFile!!.listFiles()!!.filter { it.name.startsWith(HistoryStore.NEXT_DB_NAME + ".corrupt-") && !it.name.contains("-wal") && !it.name.contains("-shm") }
+        val main = kept.single()
+        val aside = SQLiteDatabase.openDatabase(main.path, null, SQLiteDatabase.OPEN_READONLY)
+        val ids = aside.rawQuery("SELECT id FROM shots", null).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
+        aside.close()
+        assertTrue("post" in ids, "the post-move shot is in the copy kept aside")
     }
 }

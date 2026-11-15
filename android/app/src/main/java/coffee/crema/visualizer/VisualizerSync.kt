@@ -1015,6 +1015,10 @@ class VisualizerSync(
         // history leaves the queue: not before the rows are there. A later
         // trigger tries again.
         if (!rowsReady()) return 0
+        // A history that came up refused, lost or unavailable shows no rows,
+        // and none of them is gone: the queue and the PATCH list wait for a
+        // later trigger (#408 S6).
+        if (historyRefused()) return 0
         if (!retryMutex.tryLock()) return 0
         var uploaded = 0
         var limited = false

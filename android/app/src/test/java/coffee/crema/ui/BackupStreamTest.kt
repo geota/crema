@@ -104,6 +104,34 @@ class BackupStreamTest {
         assertEquals(1, header.getValue("omittedCount").jsonPrimitive.int)
     }
 
+    /** [snap] with [hidden] past the view's cap, read whole by [full]. */
+    private fun withHidden(snap: BackupSnapshot, hidden: List<StoredShot>, full: (StoredShot) -> StoredShot) =
+        BackupSnapshot(snap.customs, snap.state, snap.pinned, snap.hidden, snap.prefs, snap.visualizerPrefs, snap.userRecipes, hiddenShots = hidden, full = full)
+
+    @Test
+    fun `a hidden row whose read fails just now is tried twice more`() {
+        val hidden = shot(9, samples = emptyList())
+        var fails = 2
+        val snap = withHidden(snapshot(listOf(shot(0))), listOf(hidden)) { s ->
+            if (s.id == hidden.id && fails-- > 0) throw coffee.crema.history.HistoryReadException("busy")
+            if (s.id == hidden.id) s.copy(samples = curve) else s
+        }
+        val built = stream(snap)
+        assertEquals(2u, built.counts.shots)
+        assertEquals(2u, built.counts.curves, "the hidden row went in whole")
+    }
+
+    @Test
+    fun `a hidden row that can't be read stops the backup and keeps nothing, never a backup without it`() {
+        val hidden = shot(9, samples = emptyList())
+        val snap = withHidden(snapshot(listOf(shot(0))), listOf(hidden)) { s ->
+            if (s.id == hidden.id) throw coffee.crema.history.HistoryReadException("Couldn't read shot ${s.id}") else s
+        }
+        val out = File(tmp.root, "${BACKUP_TEMP_PREFIX}1-h.zip")
+        assertFailsWith<coffee.crema.history.HistoryReadException> { stream(snap, out = out) }
+        assertFalse(out.exists())
+    }
+
     @Test
     fun `shots of which none read fail the backup and keep nothing`() {
         val out = File(tmp.root, "${BACKUP_TEMP_PREFIX}1-b.zip")

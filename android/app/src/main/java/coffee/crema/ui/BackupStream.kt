@@ -202,7 +202,9 @@ private fun walk(
 ): StreamedBackup {
     val shots = snap.shots.toList()
     val lineOf = { shot: StoredShot ->
-        runCatching { json.decodeFromString(ShotLine.serializer(), backupShotLine(shotJson(snap.full(shot)))) }.getOrNull()
+        // A read that failed is outside the runCatching: it stops the backup rather than leave the row out.
+        val whole = readWhole(snap, shot)
+        runCatching { json.decodeFromString(ShotLine.serializer(), backupShotLine(shotJson(whole))) }.getOrNull()
     }
     stop()
     // Pass 1: which shots the core can write, so the header counts them.
@@ -300,6 +302,26 @@ private fun walk(
         photosSkipped = photosSkipped,
     )
 }
+
+/**
+ * [shot] whole, from the store when it's light. A read that failed just now is
+ * tried twice more; then the backup stops and says so, as it never reports
+ * success for a backup that isn't complete (SPEC §7, #408 S5).
+ */
+internal fun readWhole(snap: BackupSnapshot, shot: StoredShot): StoredShot {
+    var last: coffee.crema.history.HistoryReadException? = null
+    repeat(BACKUP_READ_TRIES) {
+        try {
+            return snap.full(shot)
+        } catch (e: coffee.crema.history.HistoryReadException) {
+            last = e
+        }
+    }
+    throw last ?: IllegalStateException("couldn't read shot ${shot.id}")
+}
+
+/** A row's read: once, and two retries. */
+private const val BACKUP_READ_TRIES = 3
 
 /** The member name of the lines inside a `.crema.zip`. */
 internal const val BACKUP_JSONL_ENTRY = "backup.jsonl"
