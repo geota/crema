@@ -44,8 +44,8 @@ import {
 	type RestoreShotsInput
 } from './types';
 
-/** The walk's calls: each must run once on the owner it reaches (its token lives on that connection). */
-export type WalkCall = 'exportBegin' | 'exportNext' | 'exportEnd';
+/** The once-only calls: each must run once on the owner it reaches (the walk lives on that connection). */
+export type WalkCall = 'exportBegin' | 'exportNext' | 'exportEnd' | 'releaseHolds';
 
 /** What this source needs of `HistoryDbClient` (a stage-2 client of `history.db`). */
 export interface HistoryDbPort {
@@ -221,11 +221,11 @@ export class SqliteSource implements HistorySource {
 	 */
 	async settleHolds(): Promise<number> {
 		const run = async () => {
-			const ids = await this.#db.read<string[]>('releaseHolds');
+			const ids = await this.#db.once<string[]>('releaseHolds');
 			for (const part of chunks(ids, this.#batch)) {
 				await this.#details.delete(part);
 				// Only the rows still held: one an upsert brought back since is the user's again.
-				const still = new Set(await this.#db.read<string[]>('releaseHolds'));
+				const still = new Set(await this.#db.once<string[]>('releaseHolds'));
 				const rows = part.filter((id) => still.has(id));
 				if (rows.length > 0) landed(await this.#db.write({ kind: 'delete', ids: rows }));
 			}

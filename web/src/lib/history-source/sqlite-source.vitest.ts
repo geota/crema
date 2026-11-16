@@ -268,8 +268,8 @@ describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 		let armed = false;
 		const racing: HistoryDbPort = {
 			...port,
-			read: async (name, arg) => {
-				const v = await port.read(name, arg);
+			once: async (name, arg) => {
+				const v = await port.once(name, arg);
 				// An upsert of s2 (a restore's, were it not kept apart) lands between the release's reads.
 				if (name === 'releaseHolds' && armed) {
 					armed = false;

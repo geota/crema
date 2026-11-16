@@ -158,6 +158,6 @@ describe.runIf(historyWasmBuilt)('the SQLite source across an owner change (#310
 		const rows = await drive(rowsOf(b.client as unknown as HistoryClientLike));
 		expect([...rows.keys()].sort()).toEqual(['s1', 's2', 's3', 's5']);
 		expect(details.map.has('s4')).toBe(false);
-		expect(await drive(b.client.read('releaseHolds'))).toEqual([]);
+		expect(await drive(b.client.once('releaseHolds'))).toEqual([]);
 	});
 });

@@ -8,9 +8,7 @@ import type { HistoryDbClient } from '#lib/history-db/client.js';
 import type { HistoryDbPort, WalkCall } from './sqlite';
 
 /** What the port uses of a client. */
-export type HistoryClientLike = Pick<HistoryDbClient, 'read' | 'write' | 'onChange' | 'status'> & {
-	once<T = unknown>(name: WalkCall, arg?: unknown): Promise<T>;
-};
+export type HistoryClientLike = Pick<HistoryDbClient, 'read' | 'once' | 'write' | 'onChange' | 'status'>;
 
 export function clientPort(client: HistoryClientLike): HistoryDbPort {
 	return {

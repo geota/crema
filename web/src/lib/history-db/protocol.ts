@@ -88,9 +88,22 @@ export const READS = [
 	'info',
 	'health',
 	'ftsStatus',
-	'indexState'
+	'indexState',
+	// The restore's (#310 R1w, M3): reads, safe to resend.
+	'restoreBegin',
+	'idsCreatedBefore'
 ] as const;
 export type ReadName = (typeof READS)[number];
+
+/**
+ * The calls sent once and never resent (#310 R1w, SPEC §9, S6). The export
+ * walk's token and cursor live on the owner's connection: a resend after a
+ * late answer would run `exportNext` twice and skip a step, or leak a walk,
+ * and an owner change ends the walk, so the call is refused, not sent on. A
+ * hold's release (`releaseHolds`) goes with them.
+ */
+export const ONCE = ['exportBegin', 'exportNext', 'exportEnd', 'releaseHolds'] as const;
+export type OnceName = (typeof ONCE)[number];
 
 /** A client's write (C4's `WriteJson`), applied through `apply` in its tab's seq order. */
 export type Write =
@@ -115,6 +128,8 @@ interface Header {
 export type Request =
 	| (Header & { op: 'read'; name: ReadName; arg?: unknown })
 	| (Header & { op: 'write'; wseq: number; atMs: number; write: Write })
+	/** A walk call (stage 2): sent once, to the owner that has the walk. */
+	| (Header & { op: 'once'; name: OnceName; arg?: unknown })
 	/** The owner tab's drain of the pending journal (M5): insert each row whose id is absent. */
 	| (Header & { op: 'drain'; entries: JournalEntry[] });
 
