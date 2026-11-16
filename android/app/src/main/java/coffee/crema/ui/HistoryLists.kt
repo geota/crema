@@ -68,7 +68,7 @@ class HistoryListState(
 
 /**
  * [filters] over the index ([MainViewModel.historyIndexReads]) or, while it
- * can't answer, over `ui.history`. A search waits [SEARCH_DEBOUNCE_MS] for
+ * can't answer, over the history store's rows ([MainViewModel.historyRows]). A search waits [SEARCH_DEBOUNCE_MS] for
  * typing to pause. A new query keeps the last list on screen until its count
  * is in, so a filter change never flashes skeletons. [dayEdges] asks for the
  * phone's day groups.
@@ -109,9 +109,10 @@ fun rememberHistoryList(vm: MainViewModel, ui: MainUiState, filters: HistoryFilt
         }
         // The index failed mid-read (closed for an erase, say): the in-memory rows, below.
     }
-    val rows = rememberFilteredShots(ui.history, settled.search, settled, liveCoffee, liveTags) { q ->
+    // The store's rows, while the index can't answer (#310 A3b), re-read when they change.
+    val rows = rememberFilteredShots(ui.history.version, settled.search, settled, liveCoffee, liveTags) { q ->
         filterAndSortShots(
-            ui.history, q, settled.range, settled.profile, settled.sort, settled.sortDesc, settled.nowMs, settled.bean, settled.method,
+            vm.historyRows(), q, settled.range, settled.profile, settled.sort, settled.sortDesc, settled.nowMs, settled.bean, settled.method,
             coffeeOf = { shotCoffee(it, liveCoffee)?.key },
             pinnedOnly = settled.pinnedOnly,
             tagsAll = listOfNotNull(settled.tag),
@@ -120,8 +121,8 @@ fun rememberHistoryList(vm: MainViewModel, ui: MainUiState, filters: HistoryFilt
     }
     val list = remember(rows) { MemoryShotList(rows) }
     val stats by produceState<BrewHistoryStats?>(null, rows) { value = memoryStats(rows) }
-    val facets by produceState(HistoryFacetView.EMPTY, ui.history, liveCoffee, liveTags, settled.bean) {
-        value = withContext(Dispatchers.Default) { HistoryFacetView.fromRows(ui.history, liveCoffee, liveTags, settled.bean) }
+    val facets by produceState(HistoryFacetView.EMPTY, ui.history.version, liveCoffee, liveTags, settled.bean) {
+        value = withContext(Dispatchers.Default) { HistoryFacetView.fromRows(vm.historyRows(), liveCoffee, liveTags, settled.bean) }
     }
     val groups = remember(rows, dayEdges) { dayEdges?.let { DayGroups.counts(rows, it) } }
     return HistoryListState(list, stats, facets, groups, fromIndex = false)

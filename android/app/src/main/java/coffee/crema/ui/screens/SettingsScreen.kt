@@ -780,7 +780,7 @@ fun SettingsScreen(
                         if (vz.signedIn) {
                             SetGroup("Sync") {
                                 val noTelemetry = ui.sharing.noTelemetryShots
-                                val unsyncedCount = ui.history.count { it.visualizerId == null } - noTelemetry
+                                val unsyncedCount = ui.history.noVisualizerId - noTelemetry
                                 val lastSyncLabel = vz.lastShotSyncAt?.let {
                                     coffee.crema.ui.relativeAgo(it)
                                 } ?: "never"

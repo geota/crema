@@ -102,7 +102,7 @@ class BleCaptureHistoryGateTest {
         val (pinned, a, b) = sessions()
         val vm = build()
         VmHarness.idle()
-        assertTrue(vm.ui.value.history.isEmpty(), "the rows haven't loaded")
+        assertTrue(VmHarness.rows(vm).isEmpty(), "the rows haven't loaded")
         vm.setBleSessionsKeep(BleSessionRecorder.SESSIONS_OFF)
         assertTrue(pinned.exists() && a.exists() && b.exists(), "no pinned shots are known yet")
 

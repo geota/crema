@@ -191,7 +191,7 @@ fun PhoneHistoryScreen(
     val history = coffee.crema.ui.rememberHistoryList(vm, ui, filters, dayEdges)
     val filtered = history.list
 
-    val detail = detailId?.let { id -> ui.history.firstOrNull { it.id == id } }
+    val detail = detailId?.let { id -> ui.history[id] }
 
     if (detail != null) {
         BackHandler { detailId = null }
@@ -216,7 +216,7 @@ fun PhoneHistoryScreen(
 
     // Compare PUSHES full-screen (same idiom as detail); ComparePhoneScreen owns its
     // own back bar + channel selector + chart + legend cards.
-    val compareRows = sel.picked.mapNotNull { id -> ui.history.firstOrNull { it.id == id } }
+    val compareRows = sel.picked.mapNotNull { id -> ui.history[id] }
     if (compareOpen && compareRows.size >= 2) {
         BackHandler { compareOpen = false }
         // Every selected shot loads whole first (SPEC §4: load all selected, then draw).
@@ -1056,14 +1056,10 @@ private fun PhoneShotDetail(
                     // with live telemetry and re-sorted the history each time.
                     val people by remember(vm) {
                         vm.ui
-                            .map { it.history }
-                            .distinctUntilChanged { a, b -> a === b }
-                            .map { h -> recentNames(h, "barista") to recentNames(h, "drinker") }
+                            .map { it.history.baristaNames to it.history.drinkerNames }
+                            .distinctUntilChanged()
                     }.collectAsStateWithLifecycle(
-                        initialValue = remember(vm) {
-                            val h = vm.ui.value.history
-                            recentNames(h, "barista") to recentNames(h, "drinker")
-                        },
+                        initialValue = remember(vm) { vm.ui.value.history.let { it.baristaNames to it.drinkerNames } },
                     )
                     ShotPeopleFields(
                         shotId = shot.id,

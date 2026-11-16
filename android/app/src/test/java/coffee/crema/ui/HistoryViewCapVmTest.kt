@@ -97,11 +97,11 @@ class HistoryViewCapVmTest {
         plant(planted)
         val vm = vm()
         val library = VmHarness.library(vm)
-        assertEquals(5_000, vm.ui.value.history.size, "no cap from P6a: every row is in view")
+        assertEquals(5_000, VmHarness.rows(vm).size, "no cap from P6a: every row is in view")
         assertEquals(5_000, library.allShots().size, "the store keeps every row")
         assertEquals(HistoryHealth.OK, vm.ui.value.historyHealth)
         // A star tap and a new shot: the save is a diff, never a list that replaces the store.
-        val top = vm.ui.value.history.first().id
+        val top = VmHarness.rows(vm).first().id
         vm.updateShot(top, 4, "tapped")
         vm.addManualBrew(
             LibraryController.ManualBrewInput(
@@ -112,7 +112,7 @@ class HistoryViewCapVmTest {
         VmHarness.idleUntil("the saves") { dbIds().size == 5_001 && dbField(top, "rating") == "4" }
         val next = relaunch()
         assertEquals(5_001, VmHarness.library(next).allShots().size, "all rows remain after a reload")
-        assertEquals(5_001, next.ui.value.history.size)
+        assertEquals(5_001, VmHarness.rows(next).size)
     }
 
     @Test
@@ -121,7 +121,7 @@ class HistoryViewCapVmTest {
         val vm = vm()
         val library = VmHarness.library(vm)
         val hidden = library.allShots().last()
-        assertTrue(vm.ui.value.history.any { it.id == hidden.id }, "row 320, in view from P6a")
+        assertTrue(VmHarness.rows(vm).any { it.id == hidden.id }, "row 320, in view from P6a")
         val refused = library.insertPulledShots(listOf(hidden.withHeavy(emptyList(), null, null).copy(notes = "pulled again")))
         VmHarness.idle()
         assertTrue(refused.isEmpty(), "it's here, so not refused either")
@@ -203,7 +203,7 @@ class HistoryViewCapVmTest {
             release.complete(Unit)
         }
         VmHarness.awaitStartupLoaded(vm!!)
-        val history = vm!!.ui.value.history
+        val history = VmHarness.rows(vm!!)
         assertTrue(vm!!.ui.value.historyLoaded)
         assertEquals(4, history.size, history.map { it.id }.toString())
         assertTrue(history.any { it.notes == "made early" })
@@ -221,10 +221,10 @@ class HistoryViewCapVmTest {
             VmHarness.idleUntil("the prefs") { VmHarness.prefsLoaded(vm) }
             assertFalse(vm.historyLoad.isCompleted)
             assertFalse(vm.ui.value.historyLoaded, "History shows its skeleton")
-            assertTrue(vm.ui.value.history.isEmpty())
+            assertTrue(VmHarness.rows(vm).isEmpty())
             gate.complete(Unit)
             VmHarness.idleUntil("the rows") { vm.ui.value.historyLoaded }
-            assertEquals(3, vm.ui.value.history.size)
+            assertEquals(3, VmHarness.rows(vm).size)
         } finally {
             HistoryStore.holdOpen = null
             gate.complete(Unit)

@@ -257,12 +257,12 @@ fun HistoryScreen(
     // Default the detail to the top shot until the user picks one. The picked
     // shot shows from the rows in memory (an edit shows at once) while the
     // list lists it, or while it's held.
-    val pickedRow = remember(ui.history, selectedId) { selectedId?.let { id -> ui.history.firstOrNull { it.id == id } } }
+    val pickedRow = remember(ui.history.version, selectedId) { selectedId?.let { id -> ui.history[id] } }
     val pickedListed by androidx.compose.runtime.produceState<Boolean?>(null, shots, selectedId, shots.count) {
         value = selectedId?.let { shots.indexOf(it) != null }
     }
     val topId = shots.rowAt(0)?.id
-    val topRow = remember(ui.history, topId) { topId?.let { id -> ui.history.firstOrNull { it.id == id } } } ?: shots.rowAt(0)
+    val topRow = remember(ui.history.version, topId) { topId?.let { id -> ui.history[id] } } ?: shots.rowAt(0)
     val selected = pickedRow?.takeIf { pickedListed != false || it.id == heldShotId } ?: topRow
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -288,7 +288,7 @@ fun HistoryScreen(
                 // once a pourover exists the page is honestly a brew log
                 // (issue #10; web parity).
                 // Once per change of the rows, not per recomposition: at 20,000 rows each pass costs (#310 P6a).
-                val nonEsp = remember(ui.history) { ui.history.any { it.methodOf != null && it.methodOf != "espresso" } }
+                val nonEsp = ui.history.anyNonEspresso
                 val rowNoun = if (nonEsp) "brew" else "shot"
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (!shortWindow) Eyebrow("Library")
@@ -630,8 +630,8 @@ fun HistoryScreen(
                             onRate = { r, n -> vm.updateShot(selected.id, r, n) },
                             onNextPlanChange = { p -> vm.setShotNextPlan(selected.id, p) },
                             // Sorted once per history change, not per recomposition.
-                            baristaNames = remember(ui.history) { recentNames(ui.history, "barista") },
-                            drinkerNames = remember(ui.history) { recentNames(ui.history, "drinker") },
+                            baristaNames = ui.history.baristaNames,
+                            drinkerNames = ui.history.drinkerNames,
                             onPersonChange = { field, name -> vm.setShotPerson(selected.id, field, name) },
                             onStartFromShot = { vm.startFromShot(selected.id) },
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
@@ -682,7 +682,7 @@ fun HistoryScreen(
     }
 
     if (compareOpen) {
-        val compareRows = sel.picked.mapNotNull { id -> ui.history.firstOrNull { it.id == id } }
+        val compareRows = sel.picked.mapNotNull { id -> ui.history[id] }
         if (compareRows.size >= 2) {
             // Every selected shot loads whole first (SPEC §4: load all selected, then draw).
             val compareShots = coffee.crema.ui.rememberLoadedShots(compareRows, vm::loadShot)

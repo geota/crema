@@ -111,7 +111,7 @@ class StreamedRestoreVmTest {
             vm.confirmRestore()
             VmHarness.idleUntil("the restore", 120_000) { vm.ui.value.userMessages.size > before }
             assertTrue(vm.ui.value.userMessages.last().startsWith("Restored $capacity shots"), vm.ui.value.userMessages.last())
-            val history = VmHarness.ownState(vm).history
+            val history = VmHarness.rows(vm)
             assertEquals(capacity, history.size)
             assertEquals("s0", history.first().id)
         } finally {
@@ -128,8 +128,8 @@ class StreamedRestoreVmTest {
         vm.startRestoreFile(file, "big", MainViewModel.RestoreMode.MERGE)
         VmHarness.idleUntil("the restore", 240_000) { vm.ui.value.userMessages.size > before }
         assertTrue(vm.ui.value.userMessages.last().startsWith("Restored 5000 shots"), vm.ui.value.userMessages.last())
-        assertEquals(5000, VmHarness.ownState(vm).history.size)
-        assertEquals("s0", VmHarness.ownState(vm).history.first().id)
+        assertEquals(5000, VmHarness.rows(vm).size)
+        assertEquals("s0", VmHarness.rows(vm).first().id)
         assertEquals(5000, VmHarness.library(vm).allShots().size)
     }
 
@@ -143,14 +143,14 @@ class StreamedRestoreVmTest {
             assertTrue(coffee.crema.history.HistoryStore(app, json).save(rows))
         }
         val vm = vm()
-        assertEquals(300, VmHarness.ownState(vm).history.size)
+        assertEquals(300, VmHarness.rows(vm).size)
         val file = backupWithShots(20, 1_700_000_000_000)
         val before = vm.ui.value.userMessages.size
         vm.startRestoreFile(file, "old", MainViewModel.RestoreMode.WIPE)
         VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
         vm.confirmRestore()
         VmHarness.idleUntil("the restore", 120_000) { vm.ui.value.userMessages.size > before }
-        assertEquals((0 until 20).map { "s$it" }.sorted(), VmHarness.ownState(vm).history.map { it.id }.sorted())
+        assertEquals((0 until 20).map { "s$it" }.sorted(), VmHarness.rows(vm).map { it.id }.sorted())
     }
 
     @Test
@@ -178,7 +178,7 @@ class StreamedRestoreVmTest {
             val again = vm.ui.value.userMessages.size
             vm.confirmRestore()
             VmHarness.idleUntil("the restore", 60_000) { vm.ui.value.userMessages.size > again }
-            val history = VmHarness.ownState(vm).history.map { it.id }
+            val history = VmHarness.rows(vm).map { it.id }
             assertEquals((0 until 10).map { "s$it" }.toSet(), history.filter { it.startsWith("s") }.toSet(), vm.ui.value.userMessages.last())
         } finally {
             coffee.crema.history.HistoryStore.legacyOnlyForTest = false
@@ -197,7 +197,7 @@ class StreamedRestoreVmTest {
         vm.startRestoreFile(file, "bad", MainViewModel.RestoreMode.WIPE)
         VmHarness.idleUntil("the refusal") { vm.ui.value.userMessages.size > before }
         assertTrue("checksum" in vm.ui.value.userMessages.last(), vm.ui.value.userMessages.last())
-        assertTrue(VmHarness.ownState(vm).history.isEmpty())
+        assertTrue(VmHarness.rows(vm).isEmpty())
     }
 
     @Test
@@ -234,7 +234,7 @@ class StreamedRestoreVmTest {
         val vm = vm()
         val file = backupWithShots(3, 1_790_000_000_000)
         restoreAll(vm, file, MainViewModel.RestoreMode.MERGE)
-        assertEquals(setOf("s0", "s1", "s2"), VmHarness.ownState(vm).history.map { it.id }.toSet())
+        assertEquals(setOf("s0", "s1", "s2"), VmHarness.rows(vm).map { it.id }.toSet())
         vm.deleteShot("s1")
         VmHarness.idle()
 
@@ -258,7 +258,7 @@ class StreamedRestoreVmTest {
         VmHarness.idleUntil("the bring-back report") { vm.ui.value.restoreReport?.offerBringBack == false }
         vm.confirmRestore()
         VmHarness.idleUntil("the restore", 60_000) { vm.ui.value.userMessages.size > before }
-        assertEquals(setOf("s0", "s1", "s2"), VmHarness.ownState(vm).history.map { it.id }.toSet(), vm.ui.value.userMessages.last())
+        assertEquals(setOf("s0", "s1", "s2"), VmHarness.rows(vm).map { it.id }.toSet(), vm.ui.value.userMessages.last())
     }
 
     @Test
@@ -454,7 +454,7 @@ class StreamedRestoreVmTest {
             val again = vm.ui.value.userMessages.size
             vm.confirmRestore()
             VmHarness.idleUntil("the restore", 60_000) { vm.ui.value.userMessages.size > again }
-            val history = VmHarness.ownState(vm).history.map { it.id }
+            val history = VmHarness.rows(vm).map { it.id }
             assertEquals((0 until 10).map { "s$it" }.toSet(), history.filter { it.startsWith("s") }.toSet(), vm.ui.value.userMessages.last())
             // Done with, each pick's copy goes with its stage.
             VmHarness.idleUntil("the stages go") { stages.listFiles().isNullOrEmpty() }
@@ -528,7 +528,7 @@ class StreamedRestoreVmTest {
         vm.confirmRestore()
         VmHarness.idleUntil("the second restore", 60_000) { vm.ui.value.userMessages.size > again }
         assertTrue(vm.ui.value.userMessages.last().startsWith("Restored"), vm.ui.value.userMessages.last())
-        assertEquals(setOf("s0", "s1", "s2"), VmHarness.ownState(vm).history.map { it.id }.toSet())
+        assertEquals(setOf("s0", "s1", "s2"), VmHarness.rows(vm).map { it.id }.toSet())
         VmHarness.idleUntil("the stages go") { stages.listFiles().isNullOrEmpty() }
     }
 
@@ -563,7 +563,7 @@ class StreamedRestoreVmTest {
         vm.confirmRestore()
         VmHarness.idleUntil("the second restore", 60_000) { vm.ui.value.userMessages.size > again }
         assertTrue(vm.ui.value.userMessages.last().startsWith("Restored"), vm.ui.value.userMessages.last())
-        assertEquals(setOf("s0", "s1", "s2"), VmHarness.ownState(vm).history.map { it.id }.toSet())
+        assertEquals(setOf("s0", "s1", "s2"), VmHarness.rows(vm).map { it.id }.toSet())
         VmHarness.idleUntil("the stages go") { stages.listFiles().isNullOrEmpty() }
     }
 

@@ -150,6 +150,9 @@ internal object VmHarness {
     }
 
     /** The VM's [LibraryController], found by type. */
+    /** The history's rows, newest first: the store's (#310 A3b). The UI state holds no list of them. */
+    fun rows(vm: MainViewModel): List<coffee.crema.history.ShotRow> = library(vm).historyRows()
+
     fun library(vm: MainViewModel): LibraryController {
         val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == LibraryController::class.java }
             ?: error("MainViewModel no longer holds exactly one LibraryController field: update VmHarness.library")

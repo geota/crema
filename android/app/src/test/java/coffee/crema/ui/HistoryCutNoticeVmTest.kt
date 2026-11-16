@@ -73,7 +73,7 @@ class HistoryCutNoticeVmTest {
             vm.logBrew()
             VmHarness.idle()
             assertTrue(cut in vm.ui.value.userMessages, "${vm.ui.value.userMessages}")
-            assertEquals(HistoryStore.LEGACY_MAX_SHOTS, vm.ui.value.history.size)
+            assertEquals(HistoryStore.LEGACY_MAX_SHOTS, VmHarness.rows(vm).size)
         } finally {
             HistoryStore.legacyOnlyForTest = false
         }
@@ -87,10 +87,10 @@ class HistoryCutNoticeVmTest {
         vm.logBrew()
         VmHarness.idle()
         assertTrue(vm.ui.value.userMessages.none { it.startsWith("History keeps") }, "${vm.ui.value.userMessages}")
-        assertEquals(HistoryStore.LEGACY_MAX_SHOTS + 1, vm.ui.value.history.size)
+        assertEquals(HistoryStore.LEGACY_MAX_SHOTS + 1, VmHarness.rows(vm).size)
         val all = VmHarness.library(vm).allShots()
         assertEquals(HistoryStore.LEGACY_MAX_SHOTS + 1, all.size)
-        assertTrue(vm.ui.value.history.any { it.id == "r${HistoryStore.LEGACY_MAX_SHOTS - 1}" }, "the oldest row, in view")
+        assertTrue(VmHarness.rows(vm).any { it.id == "r${HistoryStore.LEGACY_MAX_SHOTS - 1}" }, "the oldest row, in view")
     }
 
     @Test
@@ -100,7 +100,7 @@ class HistoryCutNoticeVmTest {
         vm.logBrew()
         VmHarness.idle()
         assertTrue(vm.ui.value.userMessages.none { it.startsWith("History keeps") }, "${vm.ui.value.userMessages}")
-        assertEquals(HistoryStore.LEGACY_MAX_SHOTS + 1, vm.ui.value.history.size)
+        assertEquals(HistoryStore.LEGACY_MAX_SHOTS + 1, VmHarness.rows(vm).size)
     }
 
     @Test

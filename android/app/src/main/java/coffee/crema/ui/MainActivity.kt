@@ -499,7 +499,8 @@ class MainActivity : ComponentActivity() {
                         onOldCopy = { viewModel.resolveLostHistory(LibraryController.LostChoice.OLD_COPY) },
                         onStartEmpty = { viewModel.resolveLostHistory(LibraryController.LostChoice.START_EMPTY) },
                         onShareUnsaved = {
-                            ui.history.firstOrNull { it.id in ui.historyUnsaved }?.let { viewModel.exportShot(it.id) }
+                            // The newest unsaved shot, as the store holds it (#310 A3b).
+                            ui.historyUnsaved.mapNotNull(viewModel::historyRow).maxByOrNull { it.completedAtMs }?.let { viewModel.exportShot(it.id) }
                         },
                         onFreeUp = { showFreeUp = true },
                     )

@@ -407,8 +407,12 @@ data class MainUiState(
      * on save or cancel.
      */
     val draftProfile: CremaProfile? = null,
-    /** Completed-shot log (newest first), persisted via [HistoryStore]. */
-    val history: HistoryView = rowViewOf(),
+    /**
+     * The shot history as the screens show it (#310 A3b): its counts and a
+     * row by id, never a list of rows. The rows are the store's
+     * ([LibraryController.historyRows]).
+     */
+    val history: HistoryState = HistoryState(),
     /** Visualizer sync state (account / prefs / in-flight uploads) — mirrored
      *  from [MainViewModel.visualizer]'s controller flow. */
     val visualizer: VisualizerSync.UiState = VisualizerSync.UiState(),

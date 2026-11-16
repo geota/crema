@@ -95,7 +95,6 @@ class BackupCrossShellTest {
         val state = MainUiState(
             beans = rowViewOf(listOf(bean)),
             roasters = rowViewOf(listOf(roaster)),
-            history = rowViewOf(listOf(shot).rows()),
             customMethods = listOf(method),
             lastRecipeByMethod = mapOf("pourover" to recipe.id),
             maintenance = defaultMaintenanceState(1_790_000_000_000),
@@ -109,6 +108,7 @@ class BackupCrossShellTest {
             prefs = AppPrefs(tempUnit = "F", maxShotDurationS = 90f),
             visualizerPrefs = DEFAULT_VISUALIZER_SYNC_PREFS,
             userRecipes = listOf(recipe),
+            shots = listOf(shot).rows(),
         )
     }
 

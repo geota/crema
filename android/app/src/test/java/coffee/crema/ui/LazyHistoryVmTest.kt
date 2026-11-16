@@ -83,7 +83,7 @@ class LazyHistoryVmTest {
     @Test
     fun `a compare loads every selected shot whole`() {
         val vm = coldStart()
-        val rows = vm.ui.value.history.filter { r -> whole(r.id).samples.isNotEmpty() }.take(5)
+        val rows = VmHarness.rows(vm).filter { r -> whole(r.id).samples.isNotEmpty() }.take(5)
         val shots = runBlocking { loadWhole(rows) { id -> VmHarness.whole(vm, id) } }
         assertEquals(rows.map { it.id }, shots.map { it.id })
         for (s in shots) assertEquals(whole(s.id).samples, s.samples, "${s.id} draws its own curve")
@@ -93,14 +93,14 @@ class LazyHistoryVmTest {
     fun `a pull's backfill at a cold start never replaces a shot's own curve, and fills one that has none`() {
         val vm = coldStart()
         val library = VmHarness.library(vm)
-        val curved = vm.ui.value.history.first { whole(it.id).samples.isNotEmpty() && !it.isManualLog }
+        val curved = VmHarness.rows(vm).first { whole(it.id).samples.isNotEmpty() && !it.isManualLog }
         val pulled = PulledParts(samples = HistoryFixtures.samples(3, 99), durationMs = 1)
         val patch = ShotPatch(tags = null, barista = null, backfillSamples = true, fillProfile = false, remoteVersion = 1_800_000_000L)
         library.applyRemoteShot(curved.id, patch, pulled)
         VmHarness.idleUntil("the pull's version") { library.findShot(curved.id)?.visualizerUpdatedAt == 1_800_000_000L }
         assertEquals(whole(curved.id).samples, VmHarness.whole(vm, curved.id).samples, "its own curve, not the pulled one")
         // A shot whose curve file is gone has none: the pull may fill it.
-        val bare = vm.ui.value.history.first { r -> r.id != curved.id && whole(r.id).samples.isNotEmpty() && !r.isManualLog }
+        val bare = VmHarness.rows(vm).first { r -> r.id != curved.id && whole(r.id).samples.isNotEmpty() && !r.isManualLog }
         SeriesFiles(File(app.filesDir, "shot-series"), coreJson).gzFile(bare.id).delete()
         assertFalse(library.hasCurve(bare), "no file, no curve")
         library.applyRemoteShot(bare.id, patch, pulled)
@@ -132,6 +132,6 @@ class LazyHistoryVmTest {
             assertEquals(shot.samples.isNotEmpty(), local.getValue(shot.id).hasSamples, "${shot.id}: hasSamples")
         }
         // The sync's own question, wired to the same store (VisualizerSync.hasSeries).
-        assertTrue(vm.ui.value.history.all { library.hasCurve(it) == whole(it.id).samples.isNotEmpty() })
+        assertTrue(VmHarness.rows(vm).all { library.hasCurve(it) == whole(it.id).samples.isNotEmpty() })
     }
 }

@@ -53,8 +53,8 @@ internal class BackupSnapshot(
     val prefs: AppPrefs,
     val visualizerPrefs: VisualizerSyncPrefs,
     val userRecipes: List<coffee.crema.core.BrewRecipe>,
-    /** Rows past the view's cap (#310 P3a): a backup holds them too. */
-    val hiddenShots: List<ShotRow> = emptyList(),
+    /** Every shot the backup holds, newest first: the history store's rows (#310 A3b), never the UI state's. */
+    val shots: List<ShotRow> = emptyList(),
     /** A row with its profile, brew series and curve, read from the store (#310 P4a: no row holds them).
      *  Throws [coffee.crema.history.HistoryReadException] when a read failed just now. */
     val full: (ShotRow) -> StoredShot,
@@ -63,9 +63,6 @@ internal class BackupSnapshot(
     /** Where the streamed backup walks the shots (#310 R1a): null for P3a's, these rows. A5 passes the SQLite store. */
     private val source: coffee.crema.history.HistorySource? = null,
 ) {
-    /** Every shot the backup holds, in its order: the view's, then those past its cap. */
-    val shots: List<ShotRow> get() = if (hiddenShots.isEmpty()) state.history else state.history + hiddenShots
-
     /** The history the streamed backup reads ([streamBackupZip]). */
     val history: coffee.crema.history.HistorySource get() = source ?: coffee.crema.history.ShotsDbSource(shots, full)
 }

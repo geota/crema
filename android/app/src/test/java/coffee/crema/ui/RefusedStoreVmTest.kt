@@ -112,7 +112,7 @@ class RefusedStoreVmTest {
         val retry = vm.retryStore(vm.ui.value.refusedStores.single())
         VmHarness.idleUntil("the retry") { retry.isCompleted }
         assertEquals(listOf("shot history"), vm.refused())
-        assertEquals(listOf(made.id), vm.ui.value.history.map { it.id })
+        assertEquals(listOf(made.id), VmHarness.rows(vm).map { it.id })
     }
 
     @Test
@@ -147,14 +147,14 @@ class RefusedStoreVmTest {
         VmHarness.idleUntil("the read") { read }
 
         // Held after the read: a save now holds only what this session made.
-        runBlocking { HistoryStore(VmHarness.app(), coreJson).save(vm.ui.value.history) }
+        runBlocking { HistoryStore(VmHarness.app(), coreJson).save(VmHarness.rows(vm)) }
         assertEquals(raw, shots.readText(), "reading it must not lift the refusal")
 
         gate.complete(Unit)
         VmHarness.idleUntil("the reload") { retry.isCompleted }
         // A save renames the file to .bak and the .tmp over it: absent for a moment.
         VmHarness.idleUntil("the save") { made.id in runCatching { shots.readText() }.getOrDefault("") }
-        assertEquals(setOf("shot-1", "shot-2", "shot-3", made.id), vm.ui.value.history.map { it.id }.toSet())
+        assertEquals(setOf("shot-1", "shot-2", "shot-3", made.id), VmHarness.rows(vm).map { it.id }.toSet())
     }
 
     @Test
@@ -173,7 +173,7 @@ class RefusedStoreVmTest {
         VmHarness.idleUntil("the reload") { retry.isCompleted }
         assertEquals(false, landed)
         assertEquals(raw, shots.readText())
-        assertEquals(listOf("shot-1"), vm.ui.value.history.map { it.id })
+        assertEquals(listOf("shot-1"), VmHarness.rows(vm).map { it.id })
     }
 
     @Test
@@ -213,7 +213,7 @@ class RefusedStoreVmTest {
         val retry = vm.retryStore(vm.ui.value.refusedStores.single())
         VmHarness.idleUntil("the reload") { retry.isCompleted }
         val id = assertNotNull(made)
-        assertEquals(setOf("shot-1", id), vm.ui.value.history.map { it.id }.toSet())
+        assertEquals(setOf("shot-1", id), VmHarness.rows(vm).map { it.id }.toSet())
         // A save renames the file to .bak and the .tmp over it: absent for a moment.
         VmHarness.idleUntil("the save") { id in runCatching { shots.readText() }.getOrDefault("") }
     }
@@ -317,10 +317,10 @@ class RefusedStoreVmTest {
         shots.setReadable(true)
 
         vm.retryStore(vm.ui.value.refusedStores.single())
-        VmHarness.idleUntil("the reload") { vm.ui.value.history.size == 2 }
+        VmHarness.idleUntil("the reload") { VmHarness.rows(vm).size == 2 }
         // A save renames the file to .bak and the .tmp over it: absent for a moment.
         VmHarness.idleUntil("the save") { made.id in runCatching { shots.readText() }.getOrDefault("") }
-        assertEquals(setOf("shot-1", made.id), vm.ui.value.history.map { it.id }.toSet())
+        assertEquals(setOf("shot-1", made.id), VmHarness.rows(vm).map { it.id }.toSet())
     }
 
     @Test

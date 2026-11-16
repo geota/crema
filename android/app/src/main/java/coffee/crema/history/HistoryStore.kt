@@ -543,8 +543,6 @@ class HistoryStore(
     private fun toLegacy() {
         closeDb()
         mode = Mode.LEGACY
-        // The legacy backend's rows are the view's list: nothing is held here.
-        latest.clear()
         health = HistoryHealth.LEGACY
     }
 
@@ -992,30 +990,76 @@ class HistoryStore(
         }
     }
 
-    // ── What sync and upload read (#310 A3a) ─────────────────────────────────
+    // ── The rows in memory: what every reader reads (#310 A3a, A3b) ──────────
 
     /**
-     * Whether the store answers for its own rows ([syncRow], [syncRows]): on
-     * `shots.db`, or out of reach with what it holds and journaled. Not on the
-     * legacy backend, whose rows are the view's list (the file is that list),
-     * nor before the store opens.
+     * The rows as this store holds them in memory, newest first: [stored]
+     * (`shots.db`'s, or `shots.json`'s on the legacy backend) with the
+     * writes handed to it ([latest]) over them, less the rows being deleted.
+     * Every reader of the history reads these, never a list of the UI's
+     * (#310 A3b): sync's planners and backlogs, backups, the screens'
+     * counts and lookups, and the list while the index can't answer.
+     *
+     * Read in one go and without a lock: a row moves from [latest] to
+     * [stored], [stored] written first, and a read takes [latest] first, so
+     * no row is ever missing for being mid-write (SPEC S3). A deleted row is
+     * gone from the moment its delete is called ([forget]). Before the store
+     * opens, these are the rows made since launch.
+     *
+     * Cached by [version]; a rebuild starts from the last answer's order, so
+     * a change of a few rows costs a pass, not a sort (REVIEW-467 N4).
      */
-    val holdsRows: Boolean get() = mode == Mode.SQL || mode == Mode.BLOCKED
+    fun rows(): List<ShotRow> {
+        val v = version
+        val cached = syncCache
+        if (cached != null && cached.first == v) return cached.second
+        // [latest] first: a row leaves it only after [stored] has it.
+        val ahead = HashMap(latest)
+        val all = HashMap<String, ShotRow>(stored.size + ahead.size)
+        for ((id, r) in stored) all[id] = r
+        all.putAll(ahead)
+        all.keys.removeAll(deleting)
+        val out = ArrayList<ShotRow>(all.size)
+        // The last answer's order first, then what's new: mostly sorted, so the sort is a pass.
+        cached?.second?.forEach { r -> all.remove(r.id)?.let(out::add) }
+        out.addAll(all.values)
+        out.sortWith(ORDER)
+        syncCache = v to out
+        return out
+    }
+
+    /** [rows], under the name sync's callers knew it by (#310 A3a). */
+    fun syncRows(): List<ShotRow> = rows()
 
     /**
-     * Take note of [rows], a save's, at the call (#310 A3a): each the store
-     * hasn't seen goes into [latest] until it lands, so a reader of the store
-     * sees it now. [save] does this first; a caller that launches a save calls
-     * it before the launch, and tells the save whether it did (the result).
-     * Taken before the store opens too (a first load, a retry, a rebuild): a
-     * save handed in then would otherwise be in neither [latest] nor
-     * [stored] once the store opens, and an older row would read in its
-     * place until it lands (REVIEW-467 N1). Not on the legacy backend, whose
-     * rows are the view's list ([toLegacy] drops what was taken). Rows being
-     * deleted aren't taken.
+     * The row [id] as the store holds it now, the writes handed to it
+     * included ([latest]); null when it holds no such row, or is deleting
+     * it. What sync's "is it still here" and "is it bound" read (P3 spec,
+     * #354 review), and every lookup by id.
+     */
+    fun row(id: String): ShotRow? {
+        if (id in deleting) return null
+        // [latest] first: a row leaves it only after [stored] has it.
+        return latest[id] ?: stored[id]
+    }
+
+    /** [row], under the name sync's callers knew it by (#310 A3a). */
+    fun syncRow(id: String): ShotRow? = row(id)
+
+    /** Bumped on every change to the rows [rows] reads: a change notice for what derives from them. */
+    val rowsVersion: StateFlow<Long> get() = versionFlow
+
+    /** Edits of the rows in memory ([update], [put], [edit], [drop]) run one at a time, each on the rows as they stand. Reads take no lock. */
+    private val edits = Any()
+
+    /**
+     * Take note of [rows], a save's or an edit's, at the call (#310 A3a):
+     * each the store hasn't seen goes into [latest] until it lands, so a
+     * reader of the store sees it now. Taken whether or not the store is open
+     * (REVIEW-467 N1). Rows being deleted aren't taken. True: kept for the
+     * callers that pass it on to [save].
      */
     fun accept(rows: List<ShotRow>): Boolean {
-        if (mode == Mode.LEGACY) return false
         var any = false
         for (r in rows) {
             if (seen[r.id] === r || r.id in deleting) continue
@@ -1026,44 +1070,70 @@ class HistoryStore(
     }
 
     /**
-     * The row [id] as the store holds it now, the writes handed to it
-     * included ([latest]); null when it holds no such row, or is deleting it.
-     * What sync's "is it still here" and "is it bound" read (P3 spec, #354
-     * review): never the view, which may not hold a row the store does. Only
-     * meaningful while [holdsRows].
+     * Change the row [id] by [transform], on the row as it stands now, in
+     * memory at once (#310 A3b): every reader sees it from here, and the next
+     * [save] writes it. The changed row, or null when the store holds no such
+     * row (or is deleting it).
      */
-    fun syncRow(id: String): ShotRow? {
+    fun update(id: String, transform: (ShotRow) -> ShotRow): ShotRow? = synchronized(edits) {
         if (id in deleting) return null
-        // [latest] first: a row leaves it only after [stored] has it.
-        return latest[id] ?: stored[id]
+        val prev = latest[id] ?: stored[id] ?: return null
+        val next = transform(prev)
+        if (next != prev) {
+            latest[id] = next
+            bumpVersion()
+        }
+        next
+    }
+
+    /** New or replacing rows (a capture, a pull, an import, a restore), in memory at once; the next [save] writes them. */
+    fun put(rows: List<ShotRow>) {
+        if (rows.isEmpty()) return
+        synchronized(edits) { accept(rows) }
     }
 
     /**
-     * Every row the store holds, the writes handed to it included, newest
-     * first (SPEC S3): the light projection sync's planners and the upload
-     * backlogs read. Read in one go from memory, which mirrors `shots.db`
-     * with what's on its way there: a row moves from [latest] to [stored],
-     * [stored] written first, and this reads [latest] first, so no row is
-     * ever missing from it for being mid-write. A deleted row is gone from
-     * it once its delete is called. Null when the store doesn't hold its own
-     * rows ([holdsRows]).
+     * An edit of the whole list, for what works on it as a list (the legacy
+     * backend's cap, a merge of many rows): [edit] gets the rows as they
+     * stand ([rows]) and returns the list they become. Rows it adds or
+     * changes are taken ([accept]); rows it leaves out are let go ([drop]).
+     * Returns the list it made.
      */
-    fun syncRows(): List<ShotRow>? {
-        if (!holdsRows) return null
-        val v = version
-        syncCache?.let { (at, rows) -> if (at == v) return rows }
-        val ahead = HashMap(latest)
-        val all = HashMap<String, ShotRow>(stored.size + ahead.size)
-        for ((id, r) in stored) all[id] = r
-        all.putAll(ahead)
-        all.keys.removeAll(deleting)
-        val rows = all.values.sortedWith(ORDER)
-        syncCache = v to rows
-        return rows
+    fun edit(edit: (List<ShotRow>) -> List<ShotRow>): List<ShotRow> = synchronized(edits) {
+        val before = rows()
+        val after = edit(before)
+        val was = HashMap<String, ShotRow>(before.size * 2).apply { for (r in before) put(r.id, r) }
+        val changed = after.filter { was[it.id] !== it }
+        accept(changed)
+        val kept = after.mapTo(HashSet(after.size * 2)) { it.id }
+        val gone = before.filter { it.id !in kept }.map { it.id }
+        if (gone.isNotEmpty()) dropLocked(gone)
+        after
     }
 
-    /** Bumped on every change to the rows [syncRows] reads: a change notice for what derives from them. */
-    val rowsVersion: StateFlow<Long> get() = versionFlow
+    /**
+     * Let rows go from memory without deleting them (#310 A3b). A row not yet
+     * written ([latest] only) is simply gone. On the legacy backend the list
+     * is the file, so a row it lets go (its cap) is gone from memory and from
+     * the next save. On `shots.db` a written row stays: only [delete] removes
+     * one there, by name (rule 1).
+     */
+    fun drop(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        synchronized(edits) { dropLocked(ids) }
+    }
+
+    private fun dropLocked(ids: Collection<String>) {
+        var any = false
+        for (id in ids) {
+            if (latest.remove(id) != null) any = true
+            if (mode == Mode.LEGACY && stored.remove(id) != null) any = true
+        }
+        if (any) bumpVersion()
+    }
+
+    /** Rows taken ([accept]) that the store hasn't written and didn't load: the shots made here since it last opened. */
+    fun unwritten(): List<ShotRow> = latest.values.filter { !stored.containsKey(it.id) && it.id !in deleting }
 
     /** [latest]'s entries a load found as the store now holds them: nothing more to land. */
     private fun settleLatest() {
@@ -1311,6 +1381,41 @@ class HistoryStore(
                 }
             }
         }
+    }
+
+    /**
+     * Write what memory holds that the store hasn't (#310 A3b): every row
+     * handed to it ([latest]), each row whose stored summary is wrong now,
+     * and each row whose heavy parts wait in [stage]. Read under the lock,
+     * as the write runs, so a flush always writes the newest version and a
+     * later edit's flush can never be undone by an earlier one. On the legacy
+     * backend the list is the file: every row. Nothing is deleted. True when
+     * it landed.
+     */
+    suspend fun flush(): Boolean {
+        val openAtCall = SafeFile.savesOpen(file) && !SafeFile.savesHeld(file)
+        if (mode == Mode.LEGACY && !SaveFloor.admit(file, WHAT)) return false
+        return withContext(NonCancellable) {
+            lock.withLock {
+                withContext(Dispatchers.IO) {
+                    ensureOpenLocked()
+                    when (mode) {
+                        Mode.SQL -> upsertLocked(pendingLocked())
+                        Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows()) else SaveFloor.admit(file, WHAT).let { false }
+                        Mode.BLOCKED -> journalLocked(pendingLocked())
+                        Mode.UNOPENED -> false
+                    }.also { refreshReads() }
+                }
+            }
+        }
+    }
+
+    /** The rows a [flush] writes on `shots.db` or to the journal: memory's that the store may not have as they are. */
+    private fun pendingLocked(): List<ShotRow> {
+        val ids = HashSet<String>(latest.keys)
+        ids += dirtySummary
+        ids += staged.keys
+        return ids.mapNotNull(::row)
     }
 
     /** [save] of whole shots: each is [stage]d, then saved as its row. On the legacy backend the list is the file. */
@@ -1864,6 +1969,7 @@ class HistoryStore(
         unreadNow += unreachable
         unreadNow.retainAll(unreachable)
         replaceRows(rows.associateBy { it.id })
+        settleLatest()
         return rows
     }
 
@@ -1894,8 +2000,11 @@ class HistoryStore(
                 legacyHeavy[row.id] = shot.profile to shot.brewSeries
                 val st = staged[row.id]
                 stored[row.id] = row.copy(summary = if (st != null) summaryFor(shot) else stored[row.id]?.summary ?: row.summary)
+                // Landed, after [stored] has it (#310 A3b): the list is the file now.
+                latest.remove(row.id, row)
                 if (st != null && (shot.samples.isEmpty() || row.id in curves)) staged.remove(row.id, st)
             }
+            bumpVersion()
         }
         return ok
     }
