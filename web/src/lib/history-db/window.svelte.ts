@@ -211,7 +211,8 @@ export class IndexWindow<R> {
 
 	constructor(o: WindowOptions<R>) {
 		this.#o = o;
-		this.query = o.query;
+		// Plain data: it crosses `postMessage` as a structured clone.
+		this.query = $state.snapshot(o.query) as HistoryQuery;
 		this.#size = o.pageSize ?? PAGE;
 		this.#max = o.maxPages ?? MAX_PAGES;
 		this.#settle = o.settleMs ?? SETTLE_MS;

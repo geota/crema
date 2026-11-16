@@ -191,9 +191,19 @@ export class IndexList {
 		return i === null ? null : this.layout.itemOfRow(i);
 	}
 
-	/** Shot `id`'s place in the list (rows only), or null when it isn't listed. */
-	indexOf(id: string): Promise<number | null> {
-		return this.window.indexOf(id);
+	/** Shot `id`'s place in the list (rows only), or null when it isn't listed; {@link locate} knows it after. */
+	async indexOf(id: string): Promise<number | null> {
+		const gen = this.window.listGen;
+		const i = await this.window.indexOf(id);
+		if (this.window.listGen === gen) {
+			if (gen !== this.#foundFor) {
+				this.#found.clear();
+				this.#foundFor = gen;
+			}
+			this.#found.set(id, i);
+			this.#foundTick++;
+		}
+		return i;
 	}
 
 	/** The first row, if its page has loaded. */
