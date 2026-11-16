@@ -199,6 +199,14 @@ internal class HistoryFlip(
     /** The copy's target: [generation], in place over a leftover or new. */
     private class Target(val generation: Int, val file: File)
 
+    /**
+     * The generation whose file says `migration = done`, once it does: from
+     * then on it is the truth, whatever fails after (the done-record, the
+     * marker, the switch), and `shots.db` takes no more writes.
+     */
+    @Volatile var doneGeneration: Int? = null
+        private set
+
     /** Diagnostics: an unreadable leftover the flip went around (M8 step 4). */
     var leftover: String? = null
         private set
@@ -222,7 +230,7 @@ internal class HistoryFlip(
     private suspend fun runOrFail(): FlipOutcome {
         // Step 3: the copy takes about the index's size, the heavy parts about shots.db's.
         val need = index.file.length() * 2 + shotsDb.length() + File(shotsDb.path + "-wal").length()
-        if (host.freeSpace() < need) fail("Not enough free space to move the shot history to history.db ($need bytes needed)")
+        if (host.freeSpace() < need) fail("Not enough free space to move the shot history into SQLite ($need bytes needed)")
         val target = target()
         // Every write to shots.db from here, in order: only new captures may land before the marker (M2, M9).
         val writes = Collections.synchronizedList(ArrayList<ShotsWrite>())
@@ -287,6 +295,7 @@ internal class HistoryFlip(
             val done = host.locked { shots ->
                 val captured = lastWrites(shots, source, writes)
                 db.now { it.setMigrationDone(now()) }
+                doneGeneration = target.generation
                 crash(FlipFault.AFTER_DONE)
                 files.writeDone(target.generation, now())
                 crash(FlipFault.AFTER_DONE_RECORD)
@@ -309,9 +318,9 @@ internal class HistoryFlip(
         return when (val p = files.probe(first)) {
             FileProbe.Absent, FileProbe.Leftover -> Target(0, first)
             // The store checked the done-record and every finished generation before calling this.
-            is FileProbe.Finished -> fail("history.db is a finished copy the marker doesn't name")
+            is FileProbe.Finished -> fail("${Stage2Files.DB_NAME} is a finished copy the marker doesn't name")
             is FileProbe.Unreadable -> {
-                leftover = "history.db doesn't open (${p.why}); left as it is"
+                leftover = "${Stage2Files.DB_NAME} doesn't open (${p.why}); left as it is"
                 persist("flip: ${leftover!!}")
                 // The next generation no file names, or a leftover of an earlier try at it.
                 var g = files.nextGeneration()
@@ -380,7 +389,7 @@ internal class HistoryFlip(
         val sourceIds = db.now { it.migrationSourceIds() }.toHashSet()
         if (FlipFault.DROP_SOURCE_ID in FAULTS) sourceIds.remove(sourceIds.first())
         if (copyIds != source.ids) {
-            return "ids: ${(source.ids - copyIds).size} missing from history.db, ${(copyIds - source.ids).size} not in shots.db"
+            return "ids: ${(source.ids - copyIds).size} missing from ${Stage2Files.DB_NAME}, ${(copyIds - source.ids).size} not in shots.db"
         }
         if (sourceIds != source.migrationSource) {
             return "migration_source: ${(source.migrationSource - sourceIds).size} missing, ${(sourceIds - source.migrationSource).size} extra"

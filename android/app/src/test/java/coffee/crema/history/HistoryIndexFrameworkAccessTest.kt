@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
  * `openOrCreateDatabase`, `getDatabasePath`, `deleteDatabase`, an
  * `SQLiteOpenHelper`, Room) whose arguments name a `history*.db` file or the
  * `history-sqlite/` directory, and for a `history*.db` name anywhere but
- * [HistoryIndex], which hands it to the core. The scanner is checked on
+ * [HistoryIndex] and `HistoryStage2.kt` (#310 A5), which hand them to the core. The scanner is checked on
  * planted offenders, so a scan that finds nothing isn't a scan that can't.
  */
 class HistoryIndexFrameworkAccessTest {
@@ -23,7 +23,7 @@ class HistoryIndexFrameworkAccessTest {
         assertTrue(main.isNotEmpty(), "the main sources are found from ${File(".").absolutePath}")
         val files = main.flatMap { root -> root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList() }
         assertTrue(files.size > 100, "the scan reads the app's sources (${files.size} files)")
-        assertTrue(files.any { it.name == "HistoryIndex.kt" })
+        assertTrue(files.any { it.name == "HistoryIndex.kt" } && files.any { it.name == "HistoryStage2.kt" })
         val found = files.flatMap { FrameworkOpens.offenders(it.name, it.readText()) }
         assertEquals(emptyList(), found)
     }
@@ -61,8 +61,8 @@ internal object FrameworkOpens {
     private val history = Regex("""history[\w.-]*\.db|history-sqlite|HistoryIndex|SQLITE_DIR|SQLITE_DONE_NAME""")
     private val dbName = Regex("""history[\w-]*\.db""")
 
-    /** The one file that may name the index: it passes the name to the core. */
-    private const val OWNER = "HistoryIndex.kt"
+    /** The files that may name the SQLite history's files: they pass the names to the core. */
+    private val OWNERS = setOf("HistoryIndex.kt", "HistoryStage2.kt")
 
     fun offenders(name: String, source: String): List<String> {
         val (code, strings) = lex(source)
@@ -71,7 +71,7 @@ internal object FrameworkOpens {
             val args = argsAt(code, m.range.last)
             if (history.containsMatchIn(args)) out += "$name: ${m.groupValues[1]}(${args.trim()})"
         }
-        if (name != OWNER) {
+        if (name !in OWNERS) {
             for (s in strings) if (dbName.containsMatchIn(s) && !s.contains("://")) out += "$name: the name \"$s\""
         }
         return out

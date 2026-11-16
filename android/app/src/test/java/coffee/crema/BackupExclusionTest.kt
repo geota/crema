@@ -51,6 +51,23 @@ class BackupExclusionTest {
         }
     }
 
+    /** #310 A5: after the flip `history-sqlite/` holds the truth, and its marker sits beside it; both move with the device. */
+    @Test
+    fun `history-sqlite and its marker transfer with the device`() {
+        val kept = listOf(
+            "history-sqlite/history.db", "history-sqlite/history.db-wal", "history-sqlite/history-2.db",
+            "history-sqlite/done.json", "history-sqlite/pending.jsonl", "history-sqlite/history-snapshot.db",
+            "history-sqlite.json", "history-sqlite.json.bak",
+        )
+        for (section in listOf("cloud-backup", "device-transfer")) {
+            val excluded = excludedFiles(section)
+            for (path in kept) {
+                val by = excluded.firstOrNull { e -> path == e || path.startsWith(e.trimEnd('/') + "/") }
+                assertTrue("$section excludes $path (by $by)", by == null)
+            }
+        }
+    }
+
     @Test
     fun `the account tokens and the v3 pairing file stay excluded`() {
         val required = listOf("visualizer.json", "decent.json", "drive.json", "proxy-pairing.json").flatMap(::withSiblings)

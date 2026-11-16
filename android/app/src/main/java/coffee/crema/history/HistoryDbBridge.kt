@@ -63,7 +63,8 @@ import coffee.crema.core.HistoryDb as CoreHistoryDb
  * class (SPEC §12). From A1 the app's one caller is [HistoryIndex], which
  * runs inside `HistoryStore.lock` on IO and so calls through [now] and
  * [openNow] rather than switching dispatchers under the lock. From R1a
- * [SqliteHistorySource] is the backup's and restore's (not in use until A5).
+ * [SqliteHistorySource] is the backup's and restore's, and from A5
+ * [HistoryAuthority] and the flip ([HistoryFlip]) call it on `history.db`.
  */
 class HistoryDbBridge private constructor(
     private val db: CoreHistoryDb,

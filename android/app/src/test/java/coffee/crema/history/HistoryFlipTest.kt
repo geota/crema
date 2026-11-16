@@ -626,12 +626,19 @@ class HistoryFlipTest {
     @Test fun `a stage-1 build after the flip rebuilds its index, and never opens or changes history-db`() = runBlocking {
         flipped(shots("t", 6))
         val before = historyDb.readBytes()
+        // Every stage-2 file, the index aside (derived, and an older build's to rebuild).
+        fun stage2Files() = HistoryFixtures.filesUnder(sqliteDir).filterKeys { !it.startsWith(HistoryIndex.FILE_NAME) } +
+            (HistoryStore.SQLITE_MARKER_NAME to marker.readBytes())
+        val files = stage2Files()
         olderBuild { old ->
             assertFalse(old.onHistoryDb)
             assertTrue(old.save(shots("s1", 2, start = 1_700_000_000_000L)))
             assertNotNull(old.compareIndex())
         }
         assertContentEquals(before, historyDb.readBytes(), "an older build's session leaves history.db alone")
+        val now = stage2Files()
+        assertEquals(files.keys, now.keys, "its saves delete nothing new, and make nothing there")
+        for ((k, v) in files) assertContentEquals(v, now[k], k)
         assertTrue(File(sqliteDir, Stage2Files.SNAPSHOT_NAME).let { !it.exists() || it.length() > 0 })
     }
 
@@ -770,5 +777,50 @@ class HistoryFlipTest {
         val again = store()
         assertEquals(emptyList(), again.boot().view)
         again.closeForTest()
+    }
+
+    @Test fun `the rows snapshot is an online backup copy of history-db, and a lost store restores from it`() = runBlocking {
+        val rows = shots("sn", 9)
+        flipped(rows)
+        val s = store()
+        s.boot()
+        // The first write of the day takes the snapshot.
+        assertTrue(s.save(shots("today", 1, start = 1_900_000_000_000L)))
+        s.closeForTest()
+        val snap = File(sqliteDir, Stage2Files.SNAPSHOT_NAME)
+        assertTrue(snap.exists())
+        assertEquals(historyRows(), historyRows(snap), "a copy of every row and heavy part")
+        for (suffix in listOf("", "-wal", "-shm")) File(historyDb.path + suffix).delete()
+        val lost = store()
+        assertEquals(HistoryHealth.LOST, lost.boot().health)
+        assertEquals(10, lost.lostChoices?.snapshotRows)
+        val load = lost.restoreSnapshot()
+        assertEquals(HistoryHealth.OK, load.health)
+        assertEquals((rows.map { it.id } + "today-0").toSet(), load.view.map { it.id }.toSet())
+        lost.closeForTest()
+        assertEquals(1, markerGeneration())
+        assertEquals(historyRows(snap), historyRows(File(sqliteDir, "history-1.db")))
+    }
+
+    @Test fun `a failure after the copy says done never sends a write back to shots-db`() = runBlocking {
+        stage1(shots("ad", 8))
+        val old = bytesOfShotsDb()
+        HistoryStore.stage2Enabled = true
+        // The done-record's write fails: its directory can't take the file.
+        val s = store()
+        SafeFile.beforeRename = { if (it.name.startsWith(HistoryStore.SQLITE_DONE_NAME)) throw java.io.IOException("no space (test)") }
+        try {
+            s.boot()
+        } finally {
+            SafeFile.beforeRename = {}
+        }
+        assertTrue(s.onHistoryDb || s.health == HistoryHealth.UNAVAILABLE, "stage 2, whatever failed after done")
+        s.save(shots("after-done", 1, start = 1_900_000_000_000L))
+        s.closeForTest()
+        assertSameBytes(old, bytesOfShotsDb(), "shots.db took no write")
+        val next = store()
+        assertTrue(next.boot().view.any { it.id == "after-done-0" })
+        assertTrue(next.onHistoryDb)
+        next.closeForTest()
     }
 }

@@ -262,3 +262,20 @@ fn the_sync_projection_carries_the_final_weight_and_the_visualizer_version() {
     let paged = store.sync_rows(i64::MIN, 10).expect("reads");
     assert_eq!(paged.rows, page.rows, "the paged reads carry them too");
 }
+
+#[test]
+fn a_details_write_moves_write_seq_and_nothing_else() {
+    let d = dir();
+    let mut store = create(&file(&d, "history.db"));
+    store
+        .upsert(&rows_in(&[row("a", 1, json!({}))]))
+        .expect("writes");
+    let before = store.write_seq();
+    let rows = stored_rows(&store);
+    let seq = store
+        .note_details_written(1_800_000_000_000)
+        .expect("notes");
+    assert_eq!(seq, before + 1);
+    assert_eq!(store.write_seq(), seq);
+    assert_eq!(stored_rows(&store), rows, "no row changed");
+}

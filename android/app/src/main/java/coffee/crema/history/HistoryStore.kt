@@ -69,6 +69,13 @@ import java.util.zip.GZIPOutputStream
  * If the migration can't finish, the app runs on the legacy backend: today's
  * `shots.json`, with its cap, retried at the next two launches and then at most
  * once a day.
+ *
+ * From #310 A5 (SQLite SPEC §11 stage 2), when [stage2Enabled], the store's
+ * first open runs the flip ([HistoryFlip]): a verified copy of the rows,
+ * `history-sqlite/history.db`, becomes the truth, and `shots.db` the old
+ * copy, never written again. The memory above stays as it is; the rows load
+ * from, and write to, `history.db` ([HistoryAuthority]), and an older
+ * build's writes to the P3 stores come in as late rows ([HistoryLate]).
  */
 
 /** How the history's store is (SPEC §2 `history.health`). */
@@ -959,7 +966,7 @@ class HistoryStore(
         if (!stage2Enabled || flipTried || mode != Mode.SQL || health != HistoryHealth.OK) return false
         flipTried = true
         if (journaled.isNotEmpty() || File(context.filesDir, PENDING_NAME).exists()) {
-            flipError = "Rows wait in the pending journal: the move to history.db waits for them."
+            flipError = "Rows wait in the pending journal: the move into SQLite waits for them."
             return false
         }
         val m = stage2Marker
@@ -987,14 +994,28 @@ class HistoryStore(
                 flipError = null
                 persistLine("the history moved to ${stage2.db(out.generation).name} (${out.captured.size} shots captured meanwhile)")
             }
-            is FlipOutcome.Failed -> lock.withLock { flipFailed(out.why) }
+            is FlipOutcome.Failed -> lock.withLock {
+                // A failure after the file said done (a done-record or marker write that threw): the
+                // flip passed all the same, and shots.db must not take another write (rule 3).
+                val done = flip.doneGeneration ?: (stage2.state() as? Stage2State.Done)?.generation
+                if (done != null) {
+                    persistLine("the flip failed after its copy was done (${out.why}): on to ${stage2.db(done).name}")
+                    closeDb()
+                    onStage2 = true
+                    stage2Marker = null
+                    rebuildStage2Marker(done)
+                    openAuth(done)
+                } else {
+                    flipFailed(out.why)
+                }
+            }
         }
         flip.leftover?.let { persistLine("flip: $it") }
     }
 
     /** A flip that didn't pass (SPEC §11, Failure): `shots.db` stays the truth, and the marker keeps the backoff. */
     private fun flipFailed(why: String) {
-        persistLine("the move to history.db failed: $why")
+        persistLine("the move to ${Stage2Files.DB_NAME} failed: $why")
         flipError = why
         val failures = (stage2Marker?.failures ?: 0) + 1
         val next = if (failures < 3) 0L else now() + DAY_MS
@@ -1010,15 +1031,27 @@ class HistoryStore(
      * step 8 reads every id once more, whatever the prefilter says.
      */
     private fun switchToAuth(o: FlipOutcome.Done) {
-        val captured = if (o.captured.isEmpty()) emptyMap() else tables.rawFull(db().readableDatabase, o.captured)
+        // Read before the helper closes. A read that fails leaves them to step 8, which reads
+        // every id of shots.db at once below, and at each boot until it can.
+        val captured = if (o.captured.isEmpty()) emptyMap() else runCatching { tables.rawFull(db().readableDatabase, o.captured) }.getOrElse { emptyMap() }
         closeDb()
+        // From the marker on, nothing writes shots.db again (rule 3): whatever fails here leaves the
+        // store on stage 2, unavailable at worst, never back on shots.db.
         onStage2 = true
         stage2Marker = null
-        if (captured.isNotEmpty()) {
-            val rows = captured.map { (_, r) -> HistoryRowIn(r.first, HistoryHeavy(r.second, r.third), pulled = true) }
-            o.db.now { it.importLate(HistoryLateImport(rows, emptyList(), null, null)) }
+        try {
+            if (captured.isNotEmpty()) {
+                val rows = captured.map { (_, r) -> HistoryRowIn(r.first, HistoryHeavy(r.second, r.third), pulled = true) }
+                o.db.now { it.importLate(HistoryLateImport(rows, emptyList(), null, null)) }
+            }
+            attachAuth(o.generation, o.db, forceLate = true)
+        } catch (e: SimulatedCrash) {
+            throw e
+        } catch (e: Throwable) {
+            closeAuth()
+            runCatching { o.db.now { it.closeAll() } }
+            unavailable("The shot history moved to SQLite and couldn't be opened just now: ${e.message ?: e.javaClass.simpleName}")
         }
-        attachAuth(o.generation, o.db, forceLate = true)
     }
 
     /** The marker said `done` for [generation]: open it, or say why not. Never flips, never opens `shots.db` through P3a's helper. */
@@ -1042,7 +1075,7 @@ class HistoryStore(
                     val moved = stage2.quarantine(f)
                     lostAuth("The shot history's database was damaged and has been kept aside${if (moved) "" else " (it couldn't be moved)"}.")
                 }
-                is HistoryDbException.CantOpen -> if (f.exists()) unavailable(e.message ?: "history.db wouldn't open") else lostAuth("The shot history's database is missing.")
+                is HistoryDbException.CantOpen -> if (f.exists()) unavailable(e.message ?: "the shot history's database wouldn't open") else lostAuth("The shot history's database is missing.")
                 else -> unavailable(e.message ?: e.javaClass.simpleName)
             }
             return
@@ -1961,7 +1994,7 @@ class HistoryStore(
                         // history.db (#310 A5): rows first, then their series, through the source,
                         // which holds a row an open backup walk still needs (S6).
                         Mode.AUTH -> {
-                            checkNotNull(auth) { "history.db closed" }.deleteNow(ids.toList())
+                            checkNotNull(auth) { "the shot history's database is closed" }.deleteNow(ids.toList())
                             for (id in ids) forgetMemory(id)
                             bumpVersion()
                             retireJournal(ids.toSet())
@@ -2085,7 +2118,7 @@ class HistoryStore(
         if (fault(MigrationFault.DISK_FULL) != null) throw android.database.sqlite.SQLiteFullException("disk full (test)")
         if (mode == Mode.AUTH) {
             // history.db: the rows and their heavy parts in one transaction, under the source's lock (M10, #310 A5).
-            checkNotNull(auth) { "history.db closed" }.write(writes.map { it.shot to it.summary }, profiles)
+            checkNotNull(auth) { "the shot history's database is closed" }.write(writes.map { it.shot to it.summary }, profiles)
         } else {
             tables.write(db().writableDatabase) {
                 // A part a row doesn't carry stays as stored: a light row never clears a profile or a brew series.
@@ -2417,7 +2450,7 @@ class HistoryStore(
             journaled.isNotEmpty() -> "${journaled.size} rows wait in the pending journal"
             unreadableRows.isNotEmpty() -> "${unreadableRows.size} rows this build can't read"
             !liveSet -> "the live libraries aren't in the index yet"
-            reader == null && a != null -> "history.db is closed"
+            reader == null && a != null -> "the shot history's database is closed"
             reader == null -> if (index.lastError != null) "the index failed: ${index.lastError}" else "the index is stale or closed"
             else -> null
         }

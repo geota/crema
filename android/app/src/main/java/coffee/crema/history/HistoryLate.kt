@@ -6,6 +6,7 @@ import coffee.crema.core.HistoryRowIn
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
+import kotlin.concurrent.withLock
 
 /*
  * #310 A5: late rows after the flip (SQLite SPEC §11 steps 8 and 9, S13, N9).
@@ -62,7 +63,8 @@ internal class HistoryLate(
             val late = ArrayList<String>()
             fun import(rows: List<Pair<String, HistoryRowIn>>) {
                 for (chunk in rows.chunked(BATCH)) {
-                    val out = db.now { it.importLate(HistoryLateImport(chunk.map { r -> r.second }, chunk.map { r -> r.first }, null, null)) }
+                    // Under the source's lock, as every writer of history.db (REVIEW-466 note 3).
+                    val out = a.source.lock.withLock { db.now { it.importLate(HistoryLateImport(chunk.map { r -> r.second }, chunk.map { r -> r.first }, null, null)) } }
                     a.send(out.written.change)
                     val skipped = out.present.toSet() + out.written.duplicates.map { it.id }
                     imported += chunk.map { it.first }.filterNot { it in skipped }
@@ -131,7 +133,7 @@ internal class HistoryLate(
             val after = LateBaseline.now(filesDir, shotsDb, baseline.shotsJsonHash)
             // A shots.json row that couldn't come in now is looked at again next boot.
             val next = after.copy(shotsJsonHash = hash, shotsJson = if (incomplete) null else stamps.shotsJson)
-            db.now { it.importLate(HistoryLateImport(emptyList(), emptyList(), lateIds, json.encodeToString(LateBaseline.serializer(), next))) }
+            a.source.lock.withLock { db.now { it.importLate(HistoryLateImport(emptyList(), emptyList(), lateIds, json.encodeToString(LateBaseline.serializer(), next))) } }
         }
         return Report(read, imported, fillLate(a))
     }
@@ -154,7 +156,7 @@ internal class HistoryLate(
                 still += id
             }
         }
-        a.db.now { it.importLate(HistoryLateImport(emptyList(), emptyList(), still, null)) }
+        a.source.lock.withLock { a.db.now { it.importLate(HistoryLateImport(emptyList(), emptyList(), still, null)) } }
         return filled
     }
 
