@@ -878,6 +878,8 @@ class HistoryStore(
     // ── Rows past the cap ────────────────────────────────────────────────────
 
     /** The rows the store holds that aren't in [viewIds]: past the cap, newest first. */
+    // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
+    @androidx.annotation.VisibleForTesting
     fun hiddenRows(viewIds: Set<String>): List<ShotRow> {
         if (mode != Mode.SQL) return emptyList()
         val cached = hiddenCache
@@ -906,12 +908,18 @@ class HistoryStore(
     }
 
     /** Every row id the store holds (SQL), in view or not. */
+    // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
+    @androidx.annotation.VisibleForTesting
     fun storedIds(): Set<String> = if (mode == Mode.SQL) stored.keys - deleting else emptySet()
 
     /** Every row the store holds (SQL). */
+    // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
+    @androidx.annotation.VisibleForTesting
     fun storedRows(): List<ShotRow> = if (mode == Mode.SQL) stored.values.filter { it.id !in deleting } else emptyList()
 
     /** The stored row [id], hidden or not. */
+    // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
+    @androidx.annotation.VisibleForTesting
     fun storedRow(id: String): ShotRow? = if (mode == Mode.SQL && id !in deleting) stored[id] else null
 
     /**
@@ -965,6 +973,8 @@ class HistoryStore(
      * "is it gone"), and on disk by [flushHidden]. Heavy parts go through
      * [stage] first. True when the row is here.
      */
+    // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
+    @androidx.annotation.VisibleForTesting
     fun updateHidden(id: String, transform: (ShotRow) -> ShotRow): Boolean {
         if (mode != Mode.SQL || id in deleting) return false
         // A save handed in and not yet written is the newest version (#310 A3a).
@@ -980,6 +990,8 @@ class HistoryStore(
     }
 
     /** Write [id]'s change from [updateHidden]. */
+    // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
+    @androidx.annotation.VisibleForTesting
     suspend fun flushHidden(id: String) = withContext(NonCancellable) {
         lock.withLock {
             withContext(Dispatchers.IO) {
@@ -1097,7 +1109,9 @@ class HistoryStore(
      * backend's cap, a merge of many rows): [edit] gets the rows as they
      * stand ([rows]) and returns the list they become. Rows it adds or
      * changes are taken ([accept]); rows it leaves out are let go ([drop]).
-     * Returns the list it made.
+     * On `shots.db` a written row it leaves out stays, but an edit of it not
+     * yet written goes with its [latest] entry: leave out only rows being
+     * deleted, or rows never written (REVIEW-470 N2). Returns the list it made.
      */
     fun edit(edit: (List<ShotRow>) -> List<ShotRow>): List<ShotRow> = synchronized(edits) {
         val before = rows()
@@ -1392,7 +1406,14 @@ class HistoryStore(
      * backend the list is the file: every row. Nothing is deleted. True when
      * it landed.
      */
-    suspend fun flush(): Boolean {
+    suspend fun flush(): Boolean = flush(null)
+
+    /**
+     * [flush] of [ids] only (null: all it would write), each as memory holds
+     * it when the write runs: a restore's merge batch (REVIEW-470 B1). A row
+     * deleted meanwhile isn't written. On the legacy backend, the list.
+     */
+    suspend fun flush(ids: Collection<String>?): Boolean {
         val openAtCall = SafeFile.savesOpen(file) && !SafeFile.savesHeld(file)
         if (mode == Mode.LEGACY && !SaveFloor.admit(file, WHAT)) return false
         return withContext(NonCancellable) {
@@ -1400,9 +1421,9 @@ class HistoryStore(
                 withContext(Dispatchers.IO) {
                     ensureOpenLocked()
                     when (mode) {
-                        Mode.SQL -> upsertLocked(pendingLocked())
+                        Mode.SQL -> upsertLocked(ids?.mapNotNull(::row) ?: pendingLocked())
                         Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows()) else SaveFloor.admit(file, WHAT).let { false }
-                        Mode.BLOCKED -> journalLocked(pendingLocked())
+                        Mode.BLOCKED -> journalLocked(ids?.mapNotNull(::row) ?: pendingLocked())
                         Mode.UNOPENED -> false
                     }.also { refreshReads() }
                 }
@@ -1902,6 +1923,12 @@ class HistoryStore(
         val r = tables.decodeRow(rowJson)
         r.shot.toRow(r.summary ?: unknownSeriesSummary(r.shot))
     }.getOrNull()
+
+    /** Test seam: as SQLite's error handler does mid-session, the file kept aside as [aside]; the next write sees it and the store is lost. */
+    @androidx.annotation.VisibleForTesting
+    internal fun quarantineForTest(aside: File) {
+        helper?.handler?.markQuarantinedForTest(aside)
+    }
 
     /** Test seam: close the index as a process death would, so another store (or the test) can open the file. */
     @androidx.annotation.VisibleForTesting

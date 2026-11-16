@@ -73,6 +73,12 @@ internal class QuarantineHandler(private val now: () -> Long = System::currentTi
         return true
     }
 
+    /** Test seam: as [quarantine] leaves it, without moving a file. */
+    @androidx.annotation.VisibleForTesting
+    internal fun markQuarantinedForTest(aside: File) {
+        quarantined = aside
+    }
+
     /** [f] to [to] by a rename, or else a checked copy and the original deleted. False when [f] stays. */
     private fun moveAside(f: File, to: File): Boolean {
         if (renameFile(f, to)) return true

@@ -396,10 +396,15 @@ class LibraryController(
         return ok
     }
 
-    /** [rows] into the store's memory and written, as one batch: a restore's merge step, past any cap. */
+    /**
+     * Write [rows]' ids as one batch: a restore's merge step, past any cap.
+     * Memory has held every restored row since the settle, so each is written
+     * as memory holds it now ([HistoryStore.flush] of these ids, read under
+     * the lock): an edit or an upload stamp made since isn't undone, and a row
+     * deleted since stays gone (REVIEW-470 B1).
+     */
     private suspend fun persistHistoryAll(rows: List<ShotRow>): Boolean {
-        historyStore.put(rows)
-        val ok = historyStore.save(rows, accepted = true)
+        val ok = historyStore.flush(rows.map { it.id })
         noteUnsaved()
         return ok
     }
@@ -471,6 +476,7 @@ class LibraryController(
         session: List<ShotRow> = emptyList(),
     ): Int {
         var madeHere: List<ShotRow> = emptyList()
+        var newer: List<ShotRow> = emptyList()
         var dropped = 0
         try {
             // The store's memory holds the rows it loaded and the rows made here since
@@ -486,6 +492,14 @@ class LibraryController(
             madeHere = madeWhileRefused(made, loadedRows)
             val keep = madeHere.mapTo(HashSet()) { it.id }
             historyStore.put(madeHere.filter { it.id !in present })
+            // A row memory held that the load brought back as another version (a snapshot or
+            // the old copy after a mid-session loss): memory's is the newer, as the view's was
+            // (REVIEW-470 B2). The summary isn't compared, and the write keeps the stored one.
+            val loadedById = now.associateBy { it.id }
+            newer = if (merge) session.filter { m ->
+                m.id in present && m.id !in unwritten && loadedById[m.id]?.let { it != m.copy(summary = it.summary) } == true
+            } else emptyList()
+            historyStore.put(newer)
             val drop = made.map { it.id }.filterNot { it in keep }
             historyStore.drop(drop)
             historyStore.unstage(drop)
@@ -509,8 +523,8 @@ class LibraryController(
             historyStore.openSaves()
             checkStorage()
             rowsLoaded.complete(Unit)
-            // A shot made before the rows landed goes into the store now.
-            if (madeHere.isNotEmpty()) persistHistory()
+            // A shot made before the rows landed, and memory's newer versions, go into the store now.
+            if (madeHere.isNotEmpty() || newer.isNotEmpty()) persistHistory()
             if (load.health == HistoryHealth.LEGACY && !legacyNoticed) {
                 legacyNoticed = true
                 notify("Shot history stays in its old format for now, keeping the newest ${coffee.crema.history.HistoryStore.LEGACY_MAX_SHOTS}. It will try again at the next launch.")
@@ -646,6 +660,13 @@ class LibraryController(
      */
     fun findShot(id: String): ShotRow? = historyStore.row(id)
     fun syncShot(id: String): ShotRow? = findShot(id)
+
+    /** Test seam: the store's health now, and a mid-session loss as SQLite's error handler makes one ([HistoryStore.quarantineForTest]). */
+    @androidx.annotation.VisibleForTesting
+    internal val historyHealthForTest: HistoryHealth get() = historyStore.health
+
+    @androidx.annotation.VisibleForTesting
+    internal fun quarantineHistoryForTest(aside: File) = historyStore.quarantineForTest(aside)
 
     /** Bumped whenever the rows change: what derives from them follows it. */
     val syncRowsVersion: kotlinx.coroutines.flow.StateFlow<Long> get() = historyStore.rowsVersion
